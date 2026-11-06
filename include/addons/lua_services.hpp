@@ -353,6 +353,10 @@ struct LuaServices {
     /// on screen, and neither can be taken back out.
     std::function<void(const std::string& name, bool enabled)> setAddOnEnabled;
 
+    /// Discard enable changes made since the state was last saved, as
+    /// ResetDisabledAddOns does.
+    std::function<void()> resetAddOnsEnabled;
+
     /// Every icon this install carries, as paths SetTexture accepts.
     ///
     /// The macro and guild bank pickers are grids over this list: they ask how

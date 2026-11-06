@@ -57,6 +57,10 @@ public:
     /// id redraws nothing at all. That is why an item dragged to a new slot
     /// stayed drawn in its old one until the bag was closed and reopened.
     void fireBagUpdates();
+    /// SMSG_ITEM_PUSH_RESULT's tutorials (0x00523900), once the item's
+    /// template is known.
+    void triggerItemPushTutorials(uint64_t receiver, const ItemQueryResponseData& info, uint8_t bagSlot,
+                                  uint32_t slot);
 
     void registerOpcodes(DispatchTable& table);
 
@@ -252,6 +256,14 @@ public:
     // Drop the session-persistent buyback mirror (fresh character world entry).
     void clearBuybackState();
     void buyItem(uint64_t vendorGuid, uint32_t itemId, uint32_t slot, uint32_t count);
+    /// 0x006d2ea0: bought into a chosen place, CMSG_BUY_ITEM_IN_SLOT - the
+    /// vendor, the item and its vendor slot, the container's guid, the slot
+    /// in it (u8) and the count.
+    void buyItemInSlot(uint64_t vendorGuid, uint32_t itemId, uint32_t vendorSlot,
+                       uint8_t wireBag, uint8_t wireSlot, uint32_t count);
+    /// The guid of a container as the wire numbers it: the player's own for
+    /// 0xFF (backpack, bank, keyring), else the bag sitting in that slot.
+    [[nodiscard]] uint64_t containerGuid(uint8_t wireBag) const;
     void sellItem(uint64_t vendorGuid, uint64_t itemGuid, uint32_t count);
     void sellItemBySlot(int backpackIndex);
     void sellItemInBag(int bagIndex, int slotIndex);
@@ -402,6 +414,13 @@ public:
     void completeItemUseOnItem(uint64_t targetItemGuid, bool confirmed = false);
 
     void openItemBySlot(int backpackIndex);
+    /// Gift wrapping (0x00708c20 -> 0x006d67e0): using a wrapper puts it on
+    /// the cursor as the paper; the next item clicked is wrapped in it
+    /// (0x006dcf20, CMSG_WRAP_ITEM), and putting the cursor down (0x00519280
+    /// -> 0x006cef80) ends it.
+    [[nodiscard]] bool wrapping() const { return wrapPaperGuid_ != 0; }
+    void wrapItemAt(uint8_t wireBag, uint8_t wireSlot);
+    void cancelWrapping() { wrapPaperGuid_ = 0; }
     void openItemInBag(int bagIndex, int slotIndex);
     void readItemBySlot(int backpackIndex);
     void readItemInBag(int bagIndex, int slotIndex);
@@ -501,6 +520,10 @@ public:
 
     /// The chosen paper, as the Stationery.dbc id the send packet carries.
     uint32_t selectedStationery() const { return selectedStationery_; }
+    /// SelectPackage (0x0056e310): the Package.dbc row the letter goes in, 0
+    /// for none; cleared with the rest of the mail store (0x00571530).
+    void selectPackage(uint32_t packageId) { selectedPackage_ = packageId; }
+    uint32_t selectedPackage() const { return selectedPackage_; }
 
     /// Choose by the popup's one-based index. Out of range clears the choice,
     /// which is what SelectStationery does (0x0056e0e0), and clearing it is what
@@ -634,6 +657,16 @@ public:
     /// why the empty name the popup allows is refused here rather than sent.
     void setGuildBankTabInfo(uint8_t tabId, const std::string& name,
                              const std::string& icon);
+    /// 0x005a50c0's refusals of an item for the guild bank; true when refused.
+    bool guildBankRefusesDeposit(uint8_t srcBag, uint8_t srcSlot);
+    /// 0x00708c20's refusals for an item with a use spell, before the spell
+    /// goes; true when it may be used (leaving a form first where it must).
+    bool itemUseAllowed(uint8_t wowBag, uint8_t wowSlot, uint64_t itemGuid,
+                        const ItemQueryResponseData& info);
+    /// The item at the wire's bag and slot, 0 when none is known there.
+    [[nodiscard]] uint64_t itemGuidAtWire(uint8_t bag, uint8_t slot) const;
+    /// One of the player's own items put on the trade table (0x005864d0).
+    [[nodiscard]] bool itemInTrade(uint64_t itemGuid) const;
     void guildBankDepositItem(uint8_t tabId, uint8_t bankSlot, uint8_t srcBag, uint8_t srcSlot);
     // Deposit an inventory item into the first free slot of the viewed tab.
     void guildBankDepositFromInventory(uint8_t srcBag, uint8_t srcSlot);
@@ -857,6 +890,9 @@ private:
     };
     // mutable: isAwaitingItemTarget() drops the pending use when out of world.
     mutable std::optional<PendingItemTarget> pendingItemTarget_;
+    uint64_t wrapPaperGuid_ = 0;   ///< 0xc9ead0
+    uint8_t wrapPaperBag_ = 0;
+    uint8_t wrapPaperSlot_ = 0;
     /// The same, for an item waiting on a unit rather than on another item.
     mutable std::optional<PendingItemTarget> pendingUnitTarget_;
     /// The same, for a glyph waiting on a socket.
@@ -890,6 +926,9 @@ private:
     uint64_t    tradeRequestNameGuid_ = 0;
     std::string tradePeerName_;
     std::array<TradeSlot, TRADE_SLOT_COUNT> myTradeSlots_{};
+    /// The item put into each of the player's own trade slots (0xbfa620) -
+    /// the offer packet names the entry, not the copy.
+    std::array<uint64_t, TRADE_SLOT_COUNT> myTradeItemGuids_{};
     std::array<TradeSlot, TRADE_SLOT_COUNT> peerTradeSlots_{};
     uint64_t myTradeGold_   = 0;
     uint64_t peerTradeGold_ = 0;
@@ -1014,6 +1053,7 @@ private:
     /// for none, which is also what the client sends when nothing was picked
     /// (MailInfo.cpp's DAT_00beb1cc).
     uint32_t selectedStationery_ = 0;
+    uint32_t selectedPackage_ = 0;
     /// Kept as a member only so the bindings can read it through a reference;
     /// rebuilt on every read from the rows below.
     std::vector<StationeryOption> stationeryOptions_;

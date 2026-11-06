@@ -571,8 +571,14 @@ void GameHandler::registerCoreOpcodes() {
         if (!packet.hasRemaining(8)) return;
         uint32_t field = packet.readUInt32();
         uint32_t value = packet.readUInt32();
+        // The arena season (world state 3191) moving says so first
+        // (0x00549440, ARENA_SEASON_WORLD_STATE 0x230).
+        constexpr uint32_t kArenaSeason = 0xc77;
+        const auto had = worldStates_.find(field);
+        const uint32_t was = had != worldStates_.end() ? had->second : 0;
         worldStates_[field] = value;
         LOG_DEBUG("SMSG_UPDATE_WORLD_STATE: field=", field, " value=", value);
+        if (field == kArenaSeason && was != value) fireAddonEvent("ARENA_SEASON_WORLD_STATE", {});
         fireAddonEvent("UPDATE_WORLD_STATES", {});
     };
     dispatchTable_[Opcode::SMSG_WORLD_STATE_UI_TIMER_UPDATE] = [this](network::Packet& packet) {
@@ -635,6 +641,9 @@ void GameHandler::registerCoreOpcodes() {
                     timerName, std::to_string(value),
                     std::to_string(maxV), std::to_string(scale),
                     paused ? "1" : "0", timerLabel});
+            // 0x00519a50: fatigue's tutorial (0x1a), breath's (0x1c).
+            if (type == 0) triggerTutorial(0x1a);
+            else if (type == 1) triggerTutorial(0x1c);
         }
     };
     dispatchTable_[Opcode::SMSG_STOP_MIRROR_TIMER] = [this](network::Packet& packet) {
@@ -1434,32 +1443,8 @@ void GameHandler::registerCoreOpcodes() {
         }
         // The ping is drawn by this client from minimapPings_ and was never
         // announced, so a handed-over minimap heard the sound and showed
-        // nothing. The interface wants the unit that pinged and where, as
-        // 0x0057eb80 gives it: the offset from the player over the map's
-        // width, turned with the map - Minimap_SetPing scales it by the
-        // frame. The world place itself put every ping far off the map.
-        std::string unitId = guidToUnitId(senderGuid);
-        if (unitId.empty()) unitId = "player";
-        const glm::vec3 pingWire = core::coords::canonicalToServer(glm::vec3(ping.wowX, ping.wowY, 0.0f));
-        const glm::vec3 meWire =
-            core::coords::canonicalToServer(glm::vec3(movementInfo.x, movementInfo.y, movementInfo.z));
-        float viewRadius = 0.0f;
-        std::optional<float> mapFacing;
-        if (auto* renderer = services_.renderer) {
-            if (auto* minimap = renderer->getMinimap()) {
-                viewRadius = minimap->getViewRadius();
-                if (minimap->isRotateWithCamera()) {
-                    if (auto* camera = renderer->getCamera()) {
-                        // Render space is the wire's.
-                        const glm::vec3 fwd = camera->getForward();
-                        mapFacing = std::atan2(fwd.y, fwd.x);
-                    }
-                }
-            }
-        }
-        const glm::vec2 offset = ui::minimapPingEventOffset(
-            glm::vec2(pingWire.x - meWire.x, pingWire.y - meWire.y), viewRadius, mapFacing);
-        fireAddonEvent("MINIMAP_PING", {unitId, std::to_string(offset.x), std::to_string(offset.y)});
+        // nothing.
+        announceMinimapPing(senderGuid, ping.wowX, ping.wowY);
     };
     dispatchTable_[Opcode::SMSG_ZONE_UNDER_ATTACK] = [this](network::Packet& packet) {
         if (packet.hasRemaining(4)) {
@@ -1839,6 +1824,7 @@ void GameHandler::registerCoreOpcodes() {
         // exactly this. Its ranged ready ends with it (0x00807560 clears
         // +0xa38 0x200).
         autoRepeating_ = false;
+        autoRepeatSpellId_ = 0;
         fireAddonEvent("STOP_AUTOREPEAT_SPELL", {});
     };
 
@@ -1905,6 +1891,15 @@ void GameHandler::registerCoreOpcodes() {
             uint32_t key = packet.readUInt32();
             uint32_t val = packet.readUInt32();
             worldStates_[key] = val;
+        }
+        // The arena season (3191) moving, as each value is set (0x00549440).
+        {
+            constexpr uint32_t kArenaSeason = 0xc77;
+            const auto was = before.find(kArenaSeason);
+            const auto now = worldStates_.find(kArenaSeason);
+            const uint32_t wasValue = was != before.end() ? was->second : 0;
+            if (now != worldStates_.end() && now->second != wasValue)
+                fireAddonEvent("ARENA_SEASON_WORLD_STATE", {});
         }
         if (worldStates_ != before || worldStateMapId_ != mapBefore || worldStateZoneId_ != zoneBefore || placeMoved)
             fireAddonEvent("UPDATE_WORLD_STATES", {});
@@ -2031,6 +2026,19 @@ void GameHandler::registerCoreOpcodes() {
                         // Talent points are zero: the packet carries no such
                         // delta, and zero is what stops the interface claiming
                         // a point was gained.
+                        // 0x006e2e90's SMSG_LEVELUP_INFO: the tutorials a
+                        // level opens, before PLAYER_LEVEL_UP.
+                        {
+                            const uint32_t lv = newLevel;
+                            if (lv > 1) triggerTutorial(0x36);
+                            if (lv > 3) triggerTutorial(0xd);
+                            if (lv > 5) triggerTutorial(0x16);
+                            if (lv > 6) { triggerTutorial(0x15); triggerTutorial(0x25); }
+                            if (lv > 7) triggerTutorial(0x20);
+                            if (lv > 9) triggerTutorial(0xc);
+                            if (lv > 11) triggerTutorial(0x26);
+                            if (lv > 14) triggerTutorial(0x32);
+                        }
                         fireAddonEvent("PLAYER_LEVEL_UP", {
                             std::to_string(newLevel),
                             std::to_string(lastLevelUpDeltas_.hp),
@@ -4386,4 +4394,46 @@ void GameHandler::processQueuedIncomingPackets() {
 
 
 } // namespace game
+
+glm::vec2 game::GameHandler::minimapPingOffset(float wowX, float wowY) const {
+    // The offset from the player over the map's width, turned with the map
+    // when it turns - Minimap_SetPing scales it by the frame. The world place
+    // itself put every ping far off the map.
+    const glm::vec3 pingWire = core::coords::canonicalToServer(glm::vec3(wowX, wowY, 0.0f));
+    const glm::vec3 meWire =
+        core::coords::canonicalToServer(glm::vec3(movementInfo.x, movementInfo.y, movementInfo.z));
+    float viewRadius = 0.0f;
+    std::optional<float> mapFacing;
+    if (auto* renderer = services_.renderer) {
+        if (auto* minimap = renderer->getMinimap()) {
+            viewRadius = minimap->getViewRadius();
+            if (minimap->isRotateWithCamera()) {
+                if (auto* camera = renderer->getCamera()) {
+                    // Render space is the wire's.
+                    const glm::vec3 fwd = camera->getForward();
+                    mapFacing = std::atan2(fwd.y, fwd.x);
+                }
+            }
+        }
+    }
+    return ui::minimapPingEventOffset(glm::vec2(pingWire.x - meWire.x, pingWire.y - meWire.y),
+                                      viewRadius, mapFacing);
+}
+
+void game::GameHandler::announceMinimapPing(uint64_t sender, float wowX, float wowY) {
+    // 0x0057eb80: only with a player, the place kept, then the unit that
+    // pinged and where.
+    if (playerGuid == 0) return;
+    lastMinimapPing_ = {wowX, wowY};
+    std::string unitId = guidToUnitId(sender);
+    if (unitId.empty()) unitId = "player";
+    const glm::vec2 offset = minimapPingOffset(wowX, wowY);
+    fireAddonEvent("MINIMAP_PING", {unitId, std::to_string(offset.x), std::to_string(offset.y)});
+}
+
+glm::vec2 game::GameHandler::minimapPingPosition() const {
+    if (playerGuid == 0) return {0.0f, 0.0f};
+    return minimapPingOffset(lastMinimapPing_.x, lastMinimapPing_.y);
+}
+
 } // namespace wowee

@@ -120,55 +120,20 @@ static int lua_GetMoney(lua_State* L) {
 
 // ── Bags ───────────────────────────────────────────────────────────────────
 
-/// GetInventoryAlertStatus(index) → 0 for undamaged, 1 low, 2 broken.
-///
-/// The comment that used to sit here said durability was not tracked. It is,
-/// per equipped item, and GetInventoryItemDurability has been answering from
-/// the same two fields all along - so the armoured-figure warning never lit
-/// up whatever state the gear was in.
-///
-/// The index is durabilityframe.lua's own INVENTORY_ALERT_STATUS_SLOTS
-/// ordering, which is neither the equipment slot order nor a contiguous run
-/// of it: head, shoulders, chest, waist, legs, feet, wrists, hands, then the
-/// three weapon slots.
-/// UpdateInventoryAlertStatus() - recompute the durability alerts.
-///
-/// 1.12's name for the client-side refresh, and durabilityframe.lua calls it
-/// from DurabilityFrame_OnUpdate when an enchant timer runs out. Unbound, that
-/// raised inside an OnUpdate - the worst place for it, because the frame is
-/// asked again on the very next frame.
-///
-/// The durability itself is already tracked and already read through
-/// GetInventoryAlertStatus, so there is nothing here to recompute: what the
-/// caller wants is for the frame to look again. Firing the event the real one
-/// fires is the whole of it.
+/// GetInventoryAlertStatus(index) (0x005e7fa0) → 0 fine, 1 low, 2 broken:
+/// the alert the last pass held for the entry, in durabilityframe.lua's
+/// INVENTORY_ALERT_STATUS_SLOTS order - eight armour slots, the three
+/// weapons and the ammunition (inventory_alerts.hpp).
+/// UpdateInventoryAlertStatus() runs that pass (0x005eaf30 -> 0x005e90d0).
 static int lua_UpdateInventoryAlertStatus(lua_State* L) {
-    lua_getfield(L, LUA_REGISTRYINDEX, "wowee_lua_engine");
-    auto* engine = static_cast<LuaEngine*>(lua_touserdata(L, -1));
-    lua_pop(L, 1);
-    if (engine) engine->fireEvent("UPDATE_INVENTORY_ALERTS", {});
+    if (auto* gh = getGameHandler(L)) gh->updateInventoryAlerts();
     return 0;
 }
 
 static int lua_GetInventoryAlertStatus(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetInventoryAlertStatus(index)");
     auto* gh = getGameHandler(L);
-    const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
-    static const game::EquipSlot kAlertSlots[] = {
-        game::EquipSlot::HEAD,   game::EquipSlot::SHOULDERS, game::EquipSlot::CHEST,
-        game::EquipSlot::WAIST,  game::EquipSlot::LEGS,      game::EquipSlot::FEET,
-        game::EquipSlot::WRISTS, game::EquipSlot::HANDS,     game::EquipSlot::MAIN_HAND,
-        game::EquipSlot::OFF_HAND, game::EquipSlot::RANGED,
-    };
-    constexpr int kCount = static_cast<int>(sizeof(kAlertSlots) / sizeof(kAlertSlots[0]));
-    if (!gh || index < 1 || index > kCount) { lua_pushnumber(L, 0); return 1; }
-    const auto& sl = gh->getInventory().getEquipSlot(kAlertSlots[index - 1]);
-    int status = 0;
-    if (!sl.empty() && sl.item.maxDurability > 0) {
-        // WoW's own thresholds: broken at nothing left, low at a fifth.
-        if (sl.item.curDurability == 0) status = 2;
-        else if (sl.item.curDurability * 5 <= sl.item.maxDurability) status = 1;
-    }
-    lua_pushnumber(L, status);
+    lua_pushnumber(L, gh ? gh->inventoryAlert(static_cast<int>(lua_tonumber(L, 1))) : 0);
     return 1;
 }
 
@@ -907,16 +872,28 @@ static int lua_WoweeSetModelCreature(lua_State* L) {
     return 0;
 }
 
-/// __WoweeUndress(frame) - take everything tried on back off.
-static int lua_WoweeUndress(lua_State* L) {
+/// Model:Undress (0x00597e90 -> 0x00597ba0) empties every item slot and both
+/// hands, what was tried on included. Dress (0x00597ed0) and RefreshUnit
+/// (0x00597b00) build the figure from its unit again (0x005977e0), which takes
+/// off what was tried on and puts back what Undress removed.
+static int setModelDressed(lua_State* L, bool undressed) {
     auto* tree = getWidgetTree(L);
     if (!tree || !lua_istable(L, 1)) return 0;
     lua_getfield(L, 1, "__wid");
     const uint32_t id = static_cast<uint32_t>(lua_tointeger(L, -1));
     lua_pop(L, 1);
-    if (auto* w = tree->get(id)) w->tryOnItems.clear();
+    if (auto* w = tree->get(id)) {
+        w->tryOnItems.clear();
+        w->undressed = undressed;
+    }
     return 0;
 }
+
+/// __WoweeUndress(frame).
+static int lua_WoweeUndress(lua_State* L) { return setModelDressed(L, true); }
+
+/// __WoweeRedress(frame).
+static int lua_WoweeRedress(lua_State* L) { return setModelDressed(L, false); }
 
 static int lua_IsDressableItem(lua_State* L) {
     auto* gh = getGameHandler(L);
@@ -2078,20 +2055,103 @@ static int lua_AddSendMailCOD(lua_State* L) {
     return 0;
 }
 
+/// Package.dbc as the mail packages read it (0x00ad42f4 rows of 16 bytes):
+/// the id, the icon, the price and the name - the first of its locale
+/// columns that holds one.
+namespace {
+struct MailPackage {
+    uint32_t id = 0;
+    std::string icon;
+    uint32_t cost = 0;
+    std::string name;
+};
+const std::vector<MailPackage>& mailPackages() {
+    static std::vector<MailPackage> rows;
+    static bool loaded = false;
+    if (loaded) return rows;
+    auto* am = core::Application::getInstance().getAssetManager();
+    auto dbc = am ? am->loadDBCOptional("Package.dbc") : nullptr;
+    if (!dbc) return rows;  // asked again once the data is there
+    loaded = true;
+    for (uint32_t r = 0; r < dbc->getRecordCount(); ++r) {
+        MailPackage p;
+        p.id = dbc->getUInt32(r, 0);
+        if (dbc->getFieldCount() > 1) p.icon = dbc->getString(r, 1);
+        if (dbc->getFieldCount() > 2) p.cost = dbc->getUInt32(r, 2);
+        for (uint32_t f = 3; f < dbc->getFieldCount() && f < 19 && p.name.empty(); ++f) p.name = dbc->getString(r, f);
+        rows.push_back(std::move(p));
+    }
+    return rows;
+}
+}  // namespace
+
+/// GetNumPackages() (0x0056e1e0): the rows of Package.dbc.
+static int lua_GetNumPackages(lua_State* L) {
+    lua_pushnumber(L, static_cast<double>(mailPackages().size()));
+    return 1;
+}
+
+/// GetPackageInfo(index) (0x0056e210) → name, texture, cost: the row's name,
+/// its icon under StringLookups row 3 (Interface\Icons), and its price;
+/// nil, nil, 0 for an index past the rows.
+static int lua_GetPackageInfo(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetPackageInfo(index)");
+    const int index = static_cast<int>(lua_tonumber(L, 1)) - 1;
+    const auto& rows = mailPackages();
+    if (index < 0 || index >= static_cast<int>(rows.size())) {
+        lua_pushnil(L);
+        lua_pushnil(L);
+        lua_pushnumber(L, 0);
+        return 3;
+    }
+    const auto& row = rows[static_cast<size_t>(index)];
+    lua_pushstring(L, row.name.c_str());
+    lua_pushstring(L, ("Interface\\Icons\\" + row.icon).c_str());
+    lua_pushnumber(L, row.cost);
+    return 3;
+}
+
+/// SelectPackage(index) (0x0056e310): that row's id for the letter, or none
+/// for an index past the rows.
+static int lua_SelectPackage(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SelectPackage(index)");
+    const int index = static_cast<int>(lua_tonumber(L, 1)) - 1;
+    const auto& rows = mailPackages();
+    auto* gh = getGameHandler(L);
+    auto* inv = gh ? gh->getInventoryHandler() : nullptr;
+    if (inv) inv->selectPackage(index >= 0 && index < static_cast<int>(rows.size()) ? rows[static_cast<size_t>(index)].id : 0);
+    return 0;
+}
+
 /// GetSendMailPrice() (0x00571b00): 30 copper a letter, 30 an attachment once
 /// there is more than one - max(30, attachments x 30) - plus the money set to
-/// go with it (SetSendMailMoney, 0x00beb1bc). A chosen stationery or package
-/// adds its own price there; this client offers neither, so neither adds.
+/// go with it (SetSendMailMoney, 0x00beb1bc). The chosen stationery adds the
+/// paper's buy price where it is one of the offered rows the player is not
+/// carrying and its template is known (0x00beb1cc in the list at 0x00beb1f8,
+/// template +0x20), and the chosen package its own (Package.dbc +8).
 /// It was a flat 30 whatever was attached, so a letter with twelve items showed
 /// thirty copper of postage and cost three hundred and sixty.
 static int lua_GetSendMailPrice(lua_State* L) {
     uint32_t attached = 0;
+    uint64_t paper = 0;
     if (auto* gh = getGameHandler(L)) {
         for (const auto& slot : gh->getMailAttachments()) {
             if (slot.occupied()) ++attached;
         }
+        if (auto* inv = gh->getInventoryHandler(); inv && inv->selectedStationery() != 0) {
+            for (const auto& row : inv->stationeryOptions()) {
+                if (row.id != inv->selectedStationery()) continue;
+                if (row.hasCost) paper = row.cost;
+                break;
+            }
+        }
+        if (auto* inv = gh->getInventoryHandler(); inv && inv->selectedPackage() != 0) {
+            for (const auto& row : mailPackages()) {
+                if (row.id == inv->selectedPackage()) paper += row.cost;
+            }
+        }
     }
-    const uint64_t postage = std::max<uint64_t>(30, uint64_t{attached} * 30);
+    const uint64_t postage = std::max<uint64_t>(30, uint64_t{attached} * 30) + paper;
     lua_pushnumber(L, static_cast<double>(postage + s_sendMailMoney));
     return 1;
 }
@@ -3823,6 +3883,32 @@ static int lua_GetInventorySlotInfo(lua_State* L) {
     return 1;
 }
 
+/// ShowInventorySellCursor(slot) (0x005ea930): the coin bag over one of the
+/// player's inventory slots holding an item, under the same guards as the
+/// container's. The slot is a number from 1 or a slot name (0x005e7c00);
+/// one outside the equipment, bag, bank and key ring ranges does nothing.
+static int lua_ShowInventorySellCursor(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!sellCursorAllowed(gh)) return 0;
+    int slotId = 0;
+    if (lua_type(L, 1) == LUA_TNUMBER) {
+        slotId = luaToClientInt(L, 1);
+    } else if (lua_type(L, 1) == LUA_TSTRING) {
+        lua_pushcfunction(L, lua_GetInventorySlotInfo);
+        lua_pushvalue(L, 1);
+        if (lua_pcall(L, 1, 1, 0) != 0) {
+            lua_pop(L, 1);
+            return 0;
+        }
+        if (lua_isnumber(L, -1)) slotId = static_cast<int>(lua_tonumber(L, -1));
+        lua_pop(L, 1);
+    }
+    const game::ItemSlot* item = slotId >= 1 ? inventorySlotItem(gh->getInventory(), slotId) : nullptr;
+    if (!item || item->empty()) return 0;
+    ui::frameXmlSetScriptCursor(ui::kCursorKindBuy);
+    return 0;
+}
+
 /// Which of the three lists a name refers to. The panel says "list", "owner"
 /// or "bidder" and every call that acts on a row is relative to one of them.
 /// Takes a view, not a string: every caller passes the `const char*` straight
@@ -3867,6 +3953,18 @@ static void fireAuctionSellUpdate(game::GameHandler* gh) {
 
 /// The item a wire (container, slot) pair names, and its guid. Null when the
 /// pair names nothing this client is holding.
+// StartAuction (0x0059f990): an item whose template's first spell carries
+// charges is not put up once any are spent - its ITEM_FIELD_SPELL_CHARGES no
+// longer the template's - and says ERR_AUCTION_USED_CHARGES.
+static bool auctionChargesIntact(game::GameHandler* gh, uint32_t itemId, uint64_t guid) {
+    const auto* info = gh->getItemInfo(itemId);
+    if (!info || info->spells[0].spellId == 0) return true;
+    if (gh->getItemSpellCharges(guid) == info->spells[0].charges) return true;
+    gh->playGameErrorSound("ERR_AUCTION_USED_CHARGES");
+    gh->addUIError(game::interfaceString("ERR_AUCTION_USED_CHARGES", "You cannot auction an item with used charges."));
+    return false;
+}
+
 static const game::ItemSlot* auctionSellItemSlot(game::GameHandler* gh,
                                                  uint64_t* guidOut = nullptr) {
     if (guidOut) *guidOut = 0;
@@ -4462,15 +4560,18 @@ static int lua_PutItemInBag(lua_State* L) {
         lua_pushboolean(L, 1);
         return 1;
     }
-    for (int i = 0; i < size; ++i) {
-        const auto& target = isWorn ? inv.getBagSlot(bagIndex, i)
-                                    : inv.getBankBagSlot(bagIndex, i);
-        if (!target.empty()) continue;
+    // Into the bag, wherever the server puts it: CMSG_AUTOSTORE_BAG_ITEM
+    // (0x005e8d30 -> 0x006dbae0), source bag and slot and the bag. A slot
+    // chosen here and swapped into never joined a stack already in the bag,
+    // and a full bag said nothing where the server says it is full.
+    if (game::wireOpcode(game::Opcode::CMSG_AUTOSTORE_BAG_ITEM) != 0xFFFF) {
         const int container = isWorn ? game::slots::wornBagContainer(bagIndex)
                                      : game::slots::bankBagContainer(bagIndex);
-        gh->swapContainerItems(srcBag, srcSlot,
-                               static_cast<uint8_t>(container),
-                               static_cast<uint8_t>(i));
+        network::Packet packet(game::wireOpcode(game::Opcode::CMSG_AUTOSTORE_BAG_ITEM));
+        packet.writeUInt8(srcBag);
+        packet.writeUInt8(srcSlot);
+        packet.writeUInt8(static_cast<uint8_t>(container));
+        gh->sendInterfaceRequest(packet);
         cursorItemSlot() = {};
         wowee::ui::frameXmlSetCursorItem(std::string());
         lua_pushboolean(L, 1);
@@ -4686,6 +4787,26 @@ static int lua_LootSlot(lua_State* L) {
         return 0;
     }
     if (const auto* item = lootItemAtSlot(gh, slot)) {
+        // 0x00589140: by the slot's type in the loot response - a roll still
+        // going (1) and a locked slot (3) are refused with their lines, and a
+        // master looter's slot (2) opens the candidate menu rather than take
+        // the item.
+        switch (item->lootSlotType) {
+            case 1:
+                gh->playGameErrorSound("ERR_LOOT_ROLL_PENDING");
+                gh->addUIError(game::interfaceString("ERR_LOOT_ROLL_PENDING",
+                                                     "That item is still being rolled for"));
+                return 0;
+            case 3:
+                gh->playGameErrorSound("ERR_LOOT_CANT_LOOT_THAT");
+                gh->addUIError(game::interfaceString("ERR_LOOT_CANT_LOOT_THAT",
+                                                     "You can't loot that item."));
+                return 0;
+            case 2:
+                gh->fireAddonEvent("OPEN_MASTER_LOOT_LIST", {});
+                return 0;
+            default: break;
+        }
         // The server's own slot number, not the position on screen.
         gh->lootItem(item->slotIndex);
     }
@@ -4693,9 +4814,21 @@ static int lua_LootSlot(lua_State* L) {
 }
 
 // CloseLoot() - close loot window
+// CloseLoot(noUI) (0x005888b0 -> 0x00523640): the argument is the interface
+// saying its loot frame could not be shown - LootFrame answers LOOT_OPENED
+// with CloseLoot(1) when it stays hidden - and, read by 0x00815500 as a
+// truth (a number counts when it is not zero), it has the release said as
+// ERR_LOOT_NO_UI. Only for loot that was open: with none, nothing is said.
 static int lua_CloseLoot(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (gh) gh->closeLoot();
+    if (!gh) return 0;
+    const bool noUI = lua_type(L, 1) == LUA_TNUMBER ? lua_tonumber(L, 1) != 0
+                                                    : lua_toboolean(L, 1) != 0;
+    if (noUI && gh->isLootWindowOpen()) {
+        gh->playGameErrorSound("ERR_LOOT_NO_UI");
+        gh->addUIError(game::interfaceString("ERR_LOOT_NO_UI", "You can't loot right now."));
+    }
+    gh->closeLoot();
     return 0;
 }
 
@@ -5010,6 +5143,10 @@ void registerInventoryLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"ShowContainerSellCursor", lua_ShowContainerSellCursor},
+                {"ShowInventorySellCursor", lua_ShowInventorySellCursor},
+                {"GetNumPackages", lua_GetNumPackages},
+                {"GetPackageInfo", lua_GetPackageInfo},
+                {"SelectPackage", lua_SelectPackage},
                 {"ShowBuybackSellCursor", lua_ShowBuybackSellCursor},
                 // A left-click on a vendor's item goes here, and it was a
                 // no-op - so at a merchant only right-click bought anything.
@@ -5053,6 +5190,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"__WoweeTryOn",   lua_WoweeTryOn},
                 {"__WoweeSetModelCreature", lua_WoweeSetModelCreature},
                 {"__WoweeUndress", lua_WoweeUndress},
+                {"__WoweeRedress", lua_WoweeRedress},
                 {"IsDressableItem",   lua_IsDressableItem},
                 {"GetItemQualityColor", lua_GetItemQualityColor},
                 {"_GetItemTooltipData", lua_GetItemTooltipData},
@@ -5762,7 +5900,9 @@ void registerInventoryLuaAPI(lua_State* L) {
             lua_pushstring(L, icon.empty()
                 ? "Interface\\Icons\\INV_Misc_QuestionMark" : icon.c_str());
             lua_pushnumber(L, it.stackCount);
-            lua_pushboolean(L, 0);   // locked
+            // Locked while its item is on the cursor (0x005137d0).
+            const auto& held = guildBankCursorSlot();
+            lua_pushboolean(L, (held.tab == tab && held.slot == slot) ? 1 : 0);
             return 3;
         }},
                 // GetGuildBankItemLink(tab, slot) → hyperlink
@@ -6171,6 +6311,10 @@ void registerInventoryLuaAPI(lua_State* L) {
             uint64_t guid = 0;
             const auto* item = auctionSellItemSlot(gh, &guid);
             if (!item || guid == 0) return 0;
+            if (!auctionChargesIntact(gh, item->item.itemId, guid)) {
+                LOG_WARNING("StartAuction: item ", item->item.itemId, " has used charges; not posted");
+                return 0;
+            }
             // The fourth argument is the size of one stack and the fifth is how
             // many such stacks to post - and this used to read the fifth and
             // send one, on the assumption that posting several would need a

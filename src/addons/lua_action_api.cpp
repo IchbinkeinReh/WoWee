@@ -7,7 +7,9 @@
 #include "audio/audio_coordinator.hpp"
 #include "audio/ui_sound_manager.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "game/inventory_handler.hpp"
 #include "addons/lua_taint.hpp"
+#include "addons/override_bindings.hpp"
 #include "addons/lua_api_registrations.hpp"
 // For fireEvent: paging has to reach the frames as well as the addons.
 #include "addons/lua_engine.hpp"
@@ -62,7 +64,7 @@ namespace wowee::addons {
 /// AMMO is the ammunition lifted off the paperdoll's ammo slot (the client's
 /// cursor type 9): an item to the interface, holding an entry rather than an
 /// item, since the ammunition never left the bags.
-enum class CursorType { NONE, SPELL, ITEM, MACRO, MERCHANT, MONEY, GUILDBANK, EQUIPMENT_SET, AMMO };
+enum class CursorType { NONE, SPELL, ITEM, MACRO, MERCHANT, MONEY, GUILDBANK, EQUIPMENT_SET, AMMO, PET_ACTION };
 static CursorType s_cursorType = CursorType::NONE;
 static uint32_t   s_cursorId   = 0;    // spellId, itemId, or action slot
 static int        s_cursorSlot = 0;    // source slot for placement
@@ -123,25 +125,6 @@ bool cursorItemCameFromInventory() {
     // can be destroyed.
     return s_cursorType == CursorType::ITEM &&
            game::slots::cursorSourceIsInventory(s_cursorBag);
-}
-
-/// PickupPetAction(slot) - pick a pet ability up off the pet bar.
-///
-/// Defined and does nothing. The cursor here holds spells, items, actions and
-/// macros; a pet action is a fifth kind in its own slot space, and moving one
-/// is a server operation this client does not send. Inventing a cursor state
-/// that cannot be put down anywhere would be worse than not picking up.
-///
-/// Defined because it is reachable three ways - shift-clicking a pet button,
-/// dragging one, and dropping on one - and the pet bar is drawn. Undefined,
-/// the first shift-click on a pet ability takes the bar down. Clicking a pet
-/// ability to use it goes through a different path and works; only rearranging
-/// the bar is lost.
-//
-// It asks the taint check first all the same (0x005d65c0, kind 0xe).
-static int lua_PickupPetAction(lua_State* L) {
-    taint::allowed(L, 0xe);
-    return 0;
 }
 
 /// Change what the cursor is holding, and say so.
@@ -207,7 +190,11 @@ static void setCursorType(lua_State* L, CursorType type) {
     lua_getfield(L, LUA_REGISTRYINDEX, "wowee_lua_engine");
     auto* engine = static_cast<LuaEngine*>(lua_touserdata(L, -1));
     lua_pop(L, 1);
+    // A guild bank item put down lets its slot go (0x00519280 case 0xb).
+    const bool releasedBankSlot = prevType == CursorType::GUILDBANK && guildBankCursorSlot().tab != 0;
+    if (releasedBankSlot) guildBankCursorSlot() = {};
     if (!engine) return;
+    if (releasedBankSlot) engine->fireEvent("GUILDBANK_ITEM_LOCK_CHANGED", {});
     // Which side of the announcement the sound sits on follows the client:
     // ClearCursor plays the drop inside its switch and raises CURSOR_UPDATE
     // (event 275) at its tail afterwards (00510000.c:7768-7830), while a
@@ -220,19 +207,34 @@ static void setCursorType(lua_State* L, CursorType type) {
     if (wasCarrying) askCursorSound(L, prevType, false);
     engine->fireEvent("CURSOR_UPDATE", {});
     if (nowCarrying) askCursorSound(L, type, true);
-    // Picking something up shows the empty slots of the action bars, so there
-    // is somewhere visible to drop it; putting it down hides them again. Every
-    // action button registers for both and neither was ever fired, so dragging
-    // a spell towards the bar showed no targets at all - the bar looked as
-    // though it would not take it.
+    // Picking something up shows the empty slots of the bar it can go on, so
+    // there is somewhere visible to drop it; putting it down hides them again.
+    //
+    // Only what a bar takes: an item, a spell, a macro or an equipment set
+    // shows the action bars (0x00520770, 0x00520960, 0x00520be0, 0x00520dc0,
+    // 0x00522fb0), a pet action the pet bar (0x00520a80 -> PET_BAR_SHOWGRID);
+    // money, a merchant's item and a guild bank item show neither. Putting it
+    // down hides the one that was shown (0x00519280, flag 0xbd074c).
     //
     // Fired on the change rather than on every set: this function is called
     // with the same type repeatedly and the grid would flicker.
-    if (nowCarrying && !wasCarrying) {
-        engine->fireEvent("ACTIONBAR_SHOWGRID", {});
-    } else if (wasCarrying && !nowCarrying) {
-        engine->fireEvent("ACTIONBAR_HIDEGRID", {});
-    }
+    enum class Grid { None, ActionBar, PetBar };
+    auto gridOf = [](CursorType t) {
+        switch (t) {
+            case CursorType::SPELL: case CursorType::ITEM: case CursorType::MACRO:
+            case CursorType::EQUIPMENT_SET: case CursorType::AMMO:
+                return Grid::ActionBar;
+            case CursorType::PET_ACTION: return Grid::PetBar;
+            default: return Grid::None;
+        }
+    };
+    const Grid was = wasCarrying ? gridOf(prevType) : Grid::None;
+    const Grid now = nowCarrying ? gridOf(type) : Grid::None;
+    if (was == now) return;
+    if (was == Grid::ActionBar) engine->fireEvent("ACTIONBAR_HIDEGRID", {});
+    else if (was == Grid::PetBar) engine->fireEvent("PET_BAR_HIDEGRID", {});
+    if (now == Grid::ActionBar) engine->fireEvent("ACTIONBAR_SHOWGRID", {});
+    else if (now == Grid::PetBar) engine->fireEvent("PET_BAR_SHOWGRID", {});
 }
 
 /// The pet bar's slot a bonus bar slot (0-based) refers to while the bonus bar
@@ -1432,6 +1434,12 @@ static int lua_PickupAction(lua_State* L) {
         clearCursorItem(L);
         return 0;
     }
+    // A passive spell does not go on a bar (0x005ab120, Attributes 0x40):
+    // ERR_PASSIVE_ABILITY, and the slot and the cursor stay as they were.
+    if (holding && held == CursorType::SPELL && gh->isSpellPassive(heldId)) {
+        gh->addUIError(game::interfaceString("ERR_PASSIVE_ABILITY", "You can't put a passive ability in the action bar."));
+        return 0;
+    }
     if (holding) {
         gh->setActionBarSlot(slot - 1, typeForCursor(held), heldId);
     } else if (hadAction) {
@@ -1520,6 +1528,19 @@ static int lua_PickupSpell(lua_State* L) {
     // spells sat at that index.
     const uint32_t picked = spellIdForCall(L, gh);
     if (picked == 0) return 0;
+    // Out of the pet's book the cursor holds the pet's action for the spell,
+    // its entry in the pet's spell list (0x005d3410 -> 0x00520a80): the spell,
+    // type 1, and the autocast bits SMSG_PET_SPELLS gave it.
+    if (const char* book = lua_isnumber(L, 1) && !lua_isnoneornil(L, 2) ? lua_tostring(L, 2) : nullptr;
+        book && std::string(book) == "pet") {
+        clearCursorItem(L);
+        const uint32_t state = 0x01u | (gh->isPetSpellAutocastable(picked) ? 0x80u : 0u) |
+                               (gh->isPetSpellAutocast(picked) ? 0x40u : 0u);
+        setCursorType(L, CursorType::PET_ACTION);
+        s_cursorId = (picked & 0x00ffffffu) | (state << 24);
+        wowee::ui::frameXmlSetCursorItem(gh->getSpellIconPath(picked));
+        return 0;
+    }
     setCursorType(L, CursorType::SPELL);
     s_cursorId = picked;
     // On the pointer as well as in the state, the way every other pickup here
@@ -1591,6 +1612,9 @@ static int lua_PickupGuildBankItem(lua_State* L) {
         const auto* info = gh->getItemInfo(it.itemEntry);
         wowee::ui::frameXmlSetCursorItem(
             info ? gh->getItemIconPath(info->displayInfoId) : std::string());
+        // The slot is locked while its item is held (0x005137d0).
+        guildBankCursorSlot() = {tab, slot};
+        gh->fireAddonEvent("GUILDBANK_ITEM_LOCK_CHANGED", {});
         return 0;
     }
     return 0;
@@ -1681,6 +1705,8 @@ static bool cursorWireSlot(uint8_t& bag, uint8_t& slot) {
 
 /// Put the cursor down.
 static void clearCursorItem(lua_State* L) {
+    // 0x00519280 ends gift wrapping too (0x006cef80).
+    if (auto* gh = getGameHandler(L)) gh->cancelWrapping();
     s_cursorMoney = 0;
     s_cursorSplit = 0;
     setCursorType(L, CursorType::NONE);
@@ -1689,6 +1715,42 @@ static void clearCursorItem(lua_State* L) {
     s_cursorBag = -1;
     wowee::ui::frameXmlSetCursorItem(std::string());
     cursorItemSlot() = {};
+}
+
+/// PickupPetAction(slot): the pet bar's drag and drop. Reached by
+/// shift-clicking a pet button, dragging one and dropping on one.
+static int lua_PickupPetAction(lua_State* L) {
+    // 0x005d65c0, slots counted from 1.
+    const int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
+    if (slot < 0 || slot > 10) return luaL_error(L, "Invalid slot in PickupPetAction");
+    if (!taint::allowed(L, 0xe)) return 0;
+    auto* gh = getGameHandler(L);
+    if (!gh || !gh->petBarEditable()) return 0;
+    // What the cursor held, before it is put down (0xbd07e4).
+    const uint32_t held = s_cursorType == CursorType::PET_ACTION ? s_cursorId : 0;
+    clearCursorItem(L);
+    if (held != 0) {
+        // Put on the slot; what the slot held comes up instead (0x005d6020).
+        const uint32_t displaced = gh->placePetAction(slot, held);
+        if ((displaced & 0x00ffffffu) != 0) {
+            setCursorType(L, CursorType::PET_ACTION);
+            s_cursorId = displaced;
+            if (((displaced >> 24) & 0x3fu) == 1)
+                wowee::ui::frameXmlSetCursorItem(gh->getSpellIconPath(displaced & 0x00ffffffu));
+        }
+        return 0;
+    }
+    // Taken up (0x00520a80); a spell is taken off the bar (0x005d64a0),
+    // a command or reaction stays where it is.
+    const uint32_t action = slot < game::GameHandler::PET_ACTION_BAR_SLOTS ? gh->getPetActionSlot(slot) : 0;
+    if (action == 0) return 0;
+    setCursorType(L, CursorType::PET_ACTION);
+    s_cursorId = action;
+    if (((action >> 24) & 0x3fu) == 1) {
+        wowee::ui::frameXmlSetCursorItem(gh->getSpellIconPath(action & 0x00ffffffu));
+        gh->clearPetActionSlot(slot);
+    }
+    return 0;
 }
 
 static bool droppedItemFromNowhere(lua_State* L) {
@@ -1753,22 +1815,6 @@ static void soldHeldItem(lua_State* L) {
     }
     clearCursorItem(L);
 }
-
-bool boughtHeldMerchantItem(lua_State* L) {
-    if (s_cursorType != CursorType::MERCHANT) return false;
-    auto* gh = getGameHandler(L);
-    const int index = static_cast<int>(s_cursorId);
-    if (gh && index >= 1) {
-        const auto& items = gh->getVendorItems().items;
-        if (index <= static_cast<int>(items.size())) {
-            const auto& vi = items[index - 1];
-            gh->buyItem(gh->getVendorGuid(), vi.itemId, vi.slot, 1);
-        }
-    }
-    clearCursorItem(L);
-    return true;
-}
-
 
 /// Put the item in a bag slot on the cursor, with everything that goes with it:
 /// the icon, the greyed slot, and the record of where it came from.
@@ -1894,9 +1940,26 @@ static int lua_PickupContainerItem(lua_State* L) {
     // containerframe.lua has no branch of its own for it.
     if (repairedHeldItem(gh, containerSlotGuid(gh, bag, slot))) return 0;
 
-    // A bag click while the cursor holds a vendor's item is the purchase.
-    // containerframe.lua routes it here after checking GetCursorInfo.
-    if (boughtHeldMerchantItem(L)) return 0;
+    // With wrapping paper taken up, the click wraps the item in this square
+    // (0x005d7ff0 -> 0x006dcf20), unless it is locked.
+    if (s_cursorType == CursorType::NONE && gh->wrappingItem() && containerSlotGuid(gh, bag, slot) != 0) {
+        gh->wrapItemAt(containerWireBag(bag), containerWireSlot(bag, slot));
+        return 0;
+    }
+
+    // A bag click while the cursor holds a vendor's item is the purchase -
+    // into this square (0x005d7ff0 -> 0x006d2ea0, CMSG_BUY_ITEM_IN_SLOT, one).
+    if (s_cursorType == CursorType::MERCHANT) {
+        const int index = static_cast<int>(s_cursorId);
+        const auto& items = gh->getVendorItems().items;
+        if (index >= 1 && index <= static_cast<int>(items.size())) {
+            const auto& vi = items[static_cast<size_t>(index - 1)];
+            gh->buyItemInSlot(gh->getVendorGuid(), vi.itemId, vi.slot,
+                              containerWireBag(bag), containerWireSlot(bag, slot), 1);
+        }
+        clearCursorItem(L);
+        return 0;
+    }
 
     // Carrying something out of the guild bank, so this is the withdrawal.
     // The destination is this bag slot rather than the server's choice, which
@@ -2363,6 +2426,16 @@ static int lua_DeleteCursorItem(lua_State* L) {
     auto* gh = getGameHandler(L);
     uint8_t bag = 0, slot = 0;
     if (gh && cursorWireSlot(bag, slot)) {
+        // One that cannot be destroyed (ITEM_FIELD_FLAGS 0x20) is refused
+        // with ERR_ITEM_CANT_BE_DESTROYED and stays on the cursor
+        // (0x00522320).
+        if (auto* inv = gh->getInventoryHandler()) {
+            const uint64_t guid = inv->itemGuidAtWire(bag, slot);
+            if (guid != 0 && (gh->getItemFieldFlags(guid) & 0x20u) != 0) {
+                gh->addUIError(game::interfaceString("ERR_ITEM_CANT_BE_DESTROYED", "That item cannot be destroyed."));
+                return 0;
+            }
+        }
         // The whole stack: WoW asks about a partial stack before it gets here,
         // and the popup that calls this is the confirmation for all of it.
         gh->destroyItem(bag, slot, 0);
@@ -3112,7 +3185,8 @@ static int lua_GetBindingKey(lua_State* L) {
     return 2;
 }
 
-// GetBindingAction(key) → command, or "" for a key that holds nothing
+// GetBindingAction(key[, checkOverride]) → command, or "" for a key that
+// holds nothing; with checkOverride, its override first.
 //
 // Empty rather than nil, which is what the real client answers and what the
 // interface is written against. Blizzard's key binding panel reads it as
@@ -3129,6 +3203,13 @@ static int lua_GetBindingKey(lua_State* L) {
 static int lua_GetBindingAction(lua_State* L) {
     seedBindingDefaults();
     const std::string key = luaL_checkstring(L, 1);
+    // checkOverride (0x00562490): the key's overrides answer first.
+    if (lua_toboolean(L, 2)) {
+        if (const auto over = overrideBindings().lookup(key)) {
+            lua_pushstring(L, over->c_str());
+            return 1;
+        }
+    }
     for (const auto& [command, keys] : bindingKeys()) {
         if (keys[0] == key || keys[1] == key) {
             lua_pushstring(L, command.c_str());
@@ -3333,12 +3414,114 @@ static int lua_RunBinding(lua_State* L) {
 // What they do ask is the taint check (0x00563480 and 0x005604f0, kind 0xd:
 // not insecure code in combat lockdown), and that is kept: its refusal is
 // an event the interface hears.
-static int lua_SetOverrideBindingClick(lua_State* L) { taint::allowed(L, 0xd); return 0; }
-static int lua_SetOverrideBinding(lua_State* L) { taint::allowed(L, 0xd); return 0; }
-static int lua_SetOverrideBindingSpell(lua_State* L) { taint::allowed(L, 0xd); return 0; }
-static int lua_SetOverrideBindingMacro(lua_State* L) { taint::allowed(L, 0xd); return 0; }
-static int lua_SetOverrideBindingItem(lua_State* L) { taint::allowed(L, 0xd); return 0; }
-static int lua_ClearOverrideBindings(lua_State* L) { taint::allowed(L, 0xd); return 0; }
+OverrideBindings& overrideBindings() {
+    static OverrideBindings store;
+    return store;
+}
+
+namespace {
+
+/// 0x00563480: the override is put over the key unless the taint check
+/// refuses (kind 0xd); a command that is nil or empty takes the owner's away
+/// (0x005603d0).
+void putOverride(lua_State* L, bool priority, const std::string& command) {
+    if (!taint::allowed(L, 0xd)) return;
+    overrideBindings().set(lua_topointer(L, 1), priority, lua_tostring(L, 3), command);
+}
+
+/// The owner a frame (a table) and the key a string, as each of them asks.
+bool overrideArgsOk(lua_State* L) {
+    return lua_type(L, 1) == LUA_TTABLE && lua_isstring(L, 3);
+}
+
+}  // namespace
+
+/// SetOverrideBinding(owner, isPriority, "KEY"[, "COMMAND"]) (0x00563a90).
+static int lua_SetOverrideBinding(lua_State* L) {
+    if (!overrideArgsOk(L))
+        return luaL_error(L, "Usage: SetOverrideBinding(owner, isPriority, \"KEY\"[, \"COMMAND\"])");
+    const char* command = lua_isstring(L, 4) ? lua_tostring(L, 4) : "";
+    putOverride(L, lua_toboolean(L, 2) != 0, command);
+    return 0;
+}
+
+/// The Spell, Item and Macro forms (0x00563b80, 0x00563cb0, 0x00563de0):
+/// the name after its command's prefix; the name is not optional.
+template <const char* Prefix, const char* Usage>
+static int lua_SetOverrideBindingNamed(lua_State* L) {
+    if (!overrideArgsOk(L) || !lua_isstring(L, 4)) return luaL_error(L, "%s", Usage);
+    putOverride(L, lua_toboolean(L, 2) != 0, std::string(Prefix) + lua_tostring(L, 4));
+    return 0;
+}
+constexpr char kSpellPrefix[] = "SPELL ";
+constexpr char kItemPrefix[] = "ITEM ";
+constexpr char kMacroPrefix[] = "MACRO ";
+constexpr char kSpellUsage[] = "Usage: SetOverrideBindingSpell(owner, isPriority, \"KEY\", \"spellname\")";
+constexpr char kItemUsage[] = "Usage: SetOverrideBindingItem(owner, isPriority, \"KEY\", \"itemname\")";
+constexpr char kMacroUsage[] =
+    "Usage: SetOverrideBindingMacro(owner, isPriority, \"KEY\", \"macroname\"|macroid)";
+static int lua_SetOverrideBindingSpell(lua_State* L) {
+    return lua_SetOverrideBindingNamed<kSpellPrefix, kSpellUsage>(L);
+}
+static int lua_SetOverrideBindingItem(lua_State* L) {
+    return lua_SetOverrideBindingNamed<kItemPrefix, kItemUsage>(L);
+}
+static int lua_SetOverrideBindingMacro(lua_State* L) {
+    return lua_SetOverrideBindingNamed<kMacroPrefix, kMacroUsage>(L);
+}
+
+/// SetOverrideBindingClick(owner, isPriority, "KEY", "buttonName"[,
+/// "mouseButton"]) (0x00563f10): "CLICK button:mouseButton", LeftButton when
+/// none is named.
+static int lua_SetOverrideBindingClick(lua_State* L) {
+    if (!overrideArgsOk(L) || !lua_isstring(L, 4))
+        return luaL_error(L, "Usage: SetOverrideBindingClick(owner, isPriority, \"KEY\", \"buttonName\"[, "
+                             "\"mouseButton\"])");
+    const char* mouse = lua_isstring(L, 5) ? lua_tostring(L, 5) : "LeftButton";
+    putOverride(L, lua_toboolean(L, 2) != 0, std::string("CLICK ") + lua_tostring(L, 4) + ":" + mouse);
+    return 0;
+}
+
+/// SetMouselookOverrideBinding("key", "binding" or nil) (0x005fd550 ->
+/// 0x005fd440): what the key runs while the mouse looks, under the taint
+/// check (kind 0xd); nil takes it away.
+/// IsLoggedIn() (0x0060a450): 1 once this interface has seen the world
+/// entered, nil before - while it loads, and after a reload until the world
+/// is entered again.
+static int lua_IsLoggedIn(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "wowee_logged_in");
+    const bool in = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    if (in) lua_pushnumber(L, 1);
+    else lua_pushnil(L);
+    return 1;
+}
+
+/// GetPetActionsUsable() (0x005d53c0): 1 where the pet answers its actions
+/// (0x005d3e80), else nil. A stub answering false here greyed out every pet
+/// action button however the pet stood.
+static int lua_GetPetActionsUsable(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (gh && gh->petActionsUsable()) lua_pushnumber(L, 1);
+    else lua_pushnil(L);
+    return 1;
+}
+
+static int lua_SetMouselookOverrideBinding(lua_State* L) {
+    if (!lua_isstring(L, 1))
+        return luaL_error(L, "Usage: SetMouselookOverrideBinding(\"key\", \"binding\" or nil)");
+    if (!taint::allowed(L, 0xd)) return 0;
+    overrideBindings().setMouselook(lua_tostring(L, 1), lua_isstring(L, 2) ? lua_tostring(L, 2) : "");
+    return 0;
+}
+
+/// ClearOverrideBindings(owner) (0x00560560 -> 0x005604f0).
+static int lua_ClearOverrideBindings(lua_State* L) {
+    if (lua_type(L, 1) != LUA_TTABLE) return luaL_error(L, "Usage: ClearOverrideBindings(owner)");
+    if (!taint::allowed(L, 0xd)) return 0;
+    overrideBindings().clear(lua_topointer(L, 1));
+    return 0;
+}
 
 // Frame methods: SetPoint, SetSize, SetWidth, SetHeight, GetWidth, GetHeight, GetCenter, SetAlpha, GetAlpha
 
@@ -3567,6 +3750,8 @@ void registerActionLuaAPI(lua_State* L) {
             if (id == 0) return luaReturnNil(L);
             gh->setMacroText(id, body);
             gh->setMacroMeta(id, name, icon);
+            // 0x00568020 -> 0x00566240: the lists rebuilt and UPDATE_MACROS.
+            gh->fireAddonEvent("UPDATE_MACROS", {});
             lua_pushnumber(L, id);
             return 1;
         }},
@@ -3582,9 +3767,13 @@ void registerActionLuaAPI(lua_State* L) {
             // Each part is optional and nil means "leave it": EditMacro is
             // called with only a name when a macro is renamed, and writing the
             // other two as empty would erase the macro being renamed.
+            // Only a macro that is there (0x00566cd0 finds it first).
+            if (gh->getMacroText(id).empty() && gh->getMacroName(id).empty())
+                return luaReturnNil(L);
             if (body) gh->setMacroText(id, body);
             gh->setMacroMeta(id, name ? name : gh->getMacroName(id),
                                  icon ? icon : gh->getMacroIcon(id));
+            gh->fireAddonEvent("UPDATE_MACROS", {});   // 0x00566cd0
             lua_pushnumber(L, id);
             return 1;
         }},
@@ -3616,6 +3805,8 @@ void registerActionLuaAPI(lua_State* L) {
             const uint32_t first = (id >= 37u) ? 37u : 1u;
             const uint32_t last  = (id >= 37u) ? 54u : 36u;
             if (id < first || id > last) return 0;
+            // Only a macro that is there (0x00566d50 finds it first).
+            if (gh->getMacroText(id).empty() && gh->getMacroName(id).empty()) return 0;
             for (uint32_t slot = id; slot < last; ++slot) {
                 const std::string next = gh->getMacroText(slot + 1);
                 if (next.empty()) {
@@ -3630,6 +3821,7 @@ void registerActionLuaAPI(lua_State* L) {
             // The last slot in the half is never written by the loop above.
             gh->setMacroText(last, "");
             gh->setMacroMeta(last, "", "");
+            gh->fireAddonEvent("UPDATE_MACROS", {});   // 0x00566d50
             return 0;
         }},
                 // Saved as each change is made, so this has nothing to do.
@@ -3765,6 +3957,9 @@ void registerActionLuaAPI(lua_State* L) {
                 {"SetOverrideBindingMacro", lua_SetOverrideBindingMacro},
                 {"SetOverrideBindingItem",  lua_SetOverrideBindingItem},
                 {"ClearOverrideBindings", lua_ClearOverrideBindings},
+                {"SetMouselookOverrideBinding", lua_SetMouselookOverrideBinding},
+                {"GetPetActionsUsable", lua_GetPetActionsUsable},
+                {"IsLoggedIn", lua_IsLoggedIn},
                 // Paging lives here, and the getter with it. Both were
                 // defined twice - this pair against __WoweeActionBarPage and a
                 // bootstrap pair against a local - so whichever won,

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "game/tutorials.hpp"
+
 #include "game/world_packets.hpp"
 #include "game/opcode_table.hpp"
 #include "game/spell_defines.hpp"
@@ -242,6 +244,16 @@ public:
     // TotemCategory.dbc name ("Blacksmith Hammer", "Mining Pick", ...) for
     // totem-category cast failures; empty if unknown.
     const std::string& getTotemCategoryName(uint32_t categoryId);
+    /// The totem bar's element lists (totem_bar.hpp), from the known spells
+    /// by spell id: element 0 fire, 1 earth, 2 water, 3 air.
+    [[nodiscard]] std::vector<uint32_t> multiCastSpells(int element) const;
+    /// 0x007548f0: the player carries what the TotemCategory asks for.
+    [[nodiscard]] bool carriesTotemCategory(uint32_t category) const;
+    /// The totem bar's update (0x005ab9d0): an element whose list has spells
+    /// and whose bit in autoFilledMultiCastSlots is clear puts its first
+    /// spell on each of its empty slots and sets the bit; one with none
+    /// clears it. Then UPDATE_MULTI_CAST_ACTIONBAR.
+    void updateMultiCastBar();
 
     // Unit cast state (tracked per GUID for target frame + boss frames)
     [[nodiscard]] const UnitCastState* getUnitCastState(uint64_t guid) const {
@@ -320,6 +332,22 @@ public:
         return (it != learnedTalents_[spec].end()) ? it->second : 0;
     }
     void learnTalent(uint32_t talentId, uint32_t requestedRank);
+    // ---- The pet's talents (SMSG_TALENTS_INFO type 1, 0x005c98a0) ----
+    [[nodiscard]] uint8_t getPetTalentRank(uint32_t talentId) const {
+        auto it = petTalents_.find(talentId);
+        return it != petTalents_.end() ? it->second : 0;
+    }
+    [[nodiscard]] const std::unordered_map<uint32_t, uint8_t>& getPetTalents() const { return petTalents_; }
+    [[nodiscard]] uint32_t getPetUnspentTalentPoints() const { return petUnspentTalents_; }
+    [[nodiscard]] bool hasPetTalents() const { return petTalentsKnown_; }
+    /// The pet's tree (0x005c64d0): the TalentTab row whose PetTalentMask holds
+    /// the bit of the pet's family's PetTalentType; none for a family of -1.
+    [[nodiscard]] const TalentTabEntry* getPetTalentTab() const;
+    /// CMSG_PET_LEARN_TALENT: the pet, the talent and the rank, from zero.
+    void learnPetTalent(uint32_t talentId, uint32_t requestedRank);
+    /// CMSG_LEARN_PREVIEW_TALENTS_PET (0x005c6a10's pet branch): the pet, a
+    /// count, and each talent with the rank it is to have, from zero.
+    void learnPreviewPetTalents(const std::vector<std::pair<uint32_t, uint32_t>>& talentRanks);
     /// The previewed talents learned in one request, each at the rank it is
     /// to have (counted from one), in the order the trees list them.
     void learnPreviewTalents(const std::vector<std::pair<uint32_t, uint32_t>>& talentRanks);
@@ -462,6 +490,8 @@ public:
 
     // Packet handlers dispatched from GameHandler's opcode table
     void handlePetSpells(network::Packet& packet);
+    /// 0x005d6900's last step, after SMSG_PET_SPELLS set the pet.
+    void petChangedWhileDead(uint64_t petBefore);
     void handleListStabledPets(network::Packet& packet);
 
     // Pet stable commands (called via GameHandler delegation)
@@ -627,6 +657,7 @@ private:
     // --- Spell state ---
     std::unordered_set<uint32_t> knownSpells_;
     uint8_t castCount_ = 0;
+    AttackStreak attackStreak_;  ///< 0x0080cce0's tutorial counter
     /// The cast count of the player's cast the server last started: the
     /// running cast a cancel ends (0x00806200).
     uint8_t runningCastCount_ = 0;
@@ -701,6 +732,12 @@ private:
     bool auraLetsSpell(uint64_t unit, uint32_t spellId) const;
     /// The cursor holds the spell for a unit (0x0080cce0).
     void armUnitTarget(uint32_t spellId, uint64_t caster, uint32_t required);
+    /// An aimed trajectory cast (0x0080ac90 -> 0x00809f80): a spell whose
+    /// SpellMissile row has Flags bit 1. NotAimed for any other; Refused
+    /// where the caster is not the active mover or nothing could be worked
+    /// out; Built with the cast in `out`.
+    enum class TrajectoryCast { NotAimed, Refused, Built };
+    TrajectoryCast buildTrajectoryCast(uint32_t spellId, uint64_t caster, uint64_t target, network::Packet& out);
     /// CMSG_PET_CAST_SPELL at a unit or at none (0x0080ac90).
     void sendPetCast(uint32_t spellId, uint64_t caster, uint64_t target);
     /// CMSG_CAST_SPELL from the player at a unit, at none, or at an item
@@ -820,6 +857,10 @@ private:
     /// drawn before the talents are.
     uint8_t talentGroupCount_ = 0;
     uint8_t unspentTalentPoints_[2] = {0, 0};
+    std::unordered_map<uint32_t, uint8_t> petTalents_;  ///< ranks from one
+    uint32_t petUnspentTalents_ = 0;
+    bool petTalentsKnown_ = false;
+    mutable std::unordered_map<uint32_t, int32_t> petTalentTypes_;  ///< CreatureFamily -> PetTalentType
     std::unordered_map<uint32_t, uint8_t> learnedTalents_[2];
     std::array<std::array<uint16_t, MAX_GLYPH_SLOTS>, 2> learnedGlyphs_{};
     std::unordered_map<uint32_t, TalentEntry> talentCache_;

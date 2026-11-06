@@ -301,11 +301,21 @@ public:
     /// Tell the interface a quest moved - see the definition for why the
     /// three events go together.
     void announceQuestLogChanged(uint32_t questId);
+    /// A quest put in a log slot - a new one, or a failed one taken again
+    /// (0x006df370): announced once the quest is known, else when its query
+    /// answers (0x006df2b0).
+    void noteQuestAdded(uint32_t questId);
+    /// ERR_QUEST_ACCEPTED_S in chat with its sound, the group quest's and
+    /// the fourth quest's tutorials, then QUEST_ACCEPTED with the log index.
+    void announceQuestAdded(uint32_t questId);
     void announceQuestItemPushed(uint32_t itemId, uint32_t count, uint32_t totalCount,
                                  const std::string& itemName);
 
     void clearQuestStateForCharacterSwitch() {
         slotQuestIds_.fill(0);
+        slotQuestStates_.fill(0);
+        slotsSeen_ = false;
+        pendingQuestAddedNotices_.clear();
         questLog_.clear();
         pendingQuestQueryIds_.clear();
         npcQuestStatus_.clear();
@@ -318,6 +328,9 @@ public:
     // Ask every questgiver in view for its status again (rate-limited, see
     // below). Also for what changes the answer outside the quest log: the
     // player's faction or GM flag (game/quest_status_requery.hpp).
+    /// 0x006d50c0: every quest giver's status asked at once, a bare
+    /// CMSG_QUESTGIVER_STATUS_MULTIPLE_QUERY.
+    void queryAllQuestGiverStatuses();
     void requeryNearbyQuestGiverStatus();
 
 private:
@@ -373,8 +386,8 @@ private:
     bool questRequestItemsOpen_ = false;
     QuestRequestItemsData currentQuestRequestItems_;
     uint32_t pendingTurnInQuestId_ = 0;
-    uint64_t pendingTurnInNpcGuid_ = 0;
-    bool pendingTurnInRewardRequest_ = false;
+    /// The reward item GetQuestReward chose, said at the turn-in (0xc0d66c).
+    uint32_t chosenRewardItemId_ = 0;
     // QuestSort.dbc names, loaded lazily
     std::unordered_map<uint32_t, std::string> questSortNames_;
     bool questSortDbcLoaded_ = false;
@@ -392,6 +405,21 @@ private:
     /// dropped, by whatever means, and the log follows it
     /// (applyQuestStateFromFields).
     std::array<uint32_t, 25> slotQuestIds_{};
+    /// Each slot's state word at the last update, and whether the slots were
+    /// seen at all - the first sight of them (the player's create) is only
+    /// noted, as the client's watchers are not called for it.
+    std::array<uint32_t, 25> slotQuestStates_{};
+    bool slotsSeen_ = false;
+    /// What SMSG_QUEST_QUERY_RESPONSE told of a quest: its QuestInfo type
+    /// (+0x14) and title.
+    struct QueriedQuest {
+        uint32_t type = 0;
+        std::string title;
+    };
+    std::unordered_map<uint32_t, QueriedQuest> queriedQuests_;
+    std::unordered_set<uint32_t> pendingQuestAddedNotices_;
+    /// DAT_00c9eb08: quests added this session while tutorial 0x14 waits.
+    uint32_t questsAddedCount_ = 0;
     std::unordered_map<uint32_t, uint64_t> pendingQuestAcceptNpcGuids_;
     bool questOfferRewardOpen_ = false;
     QuestOfferRewardData currentQuestOfferReward_;

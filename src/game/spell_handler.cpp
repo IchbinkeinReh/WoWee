@@ -19,6 +19,10 @@
 #include "game/go_interaction_anim.hpp"
 #include "game/transport_manager.hpp"
 #include "game/spell_target_point.hpp"
+#include "game/missile_trajectory.hpp"
+#include "game/totem_bar.hpp"
+#include "game/movement_handler.hpp"
+#include "game/vehicle.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/character_renderer.hpp"
@@ -44,6 +48,7 @@
 #include <cstdio>
 #include <cstring>
 #include <iterator>
+#include <random>
 #include <sstream>
 
 namespace wowee {
@@ -809,8 +814,18 @@ void SpellHandler::registerOpcodes(DispatchTable& table) {
     // confirm dialog reads.
     table[Opcode::MSG_TALENT_WIPE_CONFIRM] = [this](network::Packet& packet) {
         if (!packet.hasRemaining(12)) { packet.skipAll(); return; }
-        talentWipeNpcGuid_ = packet.readUInt64();
-        talentWipeCost_    = packet.readUInt32();
+        const uint64_t npcGuid = packet.readUInt64();
+        const uint32_t cost    = packet.readUInt32();
+        // No trainer is the server's refusal (0x006e2e90, MSG_TALENT_WIPE_CONFIRM):
+        // ERR_TALENT_WIPE_ERROR, and no confirmation asked.
+        if (npcGuid == 0) {
+            owner_.playGameErrorSound("ERR_TALENT_WIPE_ERROR");
+            owner_.addUIError(interfaceString("ERR_TALENT_WIPE_ERROR",
+                                              "There was an error removing your talents."));
+            return;
+        }
+        talentWipeNpcGuid_ = npcGuid;
+        talentWipeCost_    = cost;
         talentWipePending_ = true;
         LOG_INFO("MSG_TALENT_WIPE_CONFIRM: npc=0x", std::hex, talentWipeNpcGuid_, std::dec,
                  " cost=", talentWipeCost_);
@@ -1286,6 +1301,8 @@ void SpellHandler::sayPetCastFailure(uint32_t spellId, uint8_t result) const {
 }
 
 void SpellHandler::showPlayerCastFailure(uint32_t spellId, uint8_t result, const std::string& text) const {
+    // 0x00808200: SPELL_FAILED_NEED_AMMO (0x34) triggers tutorial 0x2c.
+    if (result == 0x34) owner_.triggerTutorial(0x2c);
     // OsGetAsyncTimeMs's milliseconds (0x0086ae20); only their differences count.
     const auto nowMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                                  std::chrono::steady_clock::now().time_since_epoch())
@@ -1332,10 +1349,81 @@ bool SpellHandler::spellCanTargetUnit(uint64_t unitGuid) const {
            takeUnit(unitTarget_.spellId, unitTarget_.caster, unitGuid, unitTarget_.required, false).taken;
 }
 
+SpellHandler::TrajectoryCast SpellHandler::buildTrajectoryCast(uint32_t spellId, uint64_t caster, uint64_t target,
+                                                               network::Packet& out) {
+    namespace mt = missile_trajectory;
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end() || it->second.spellMissileId == 0) return TrajectoryCast::NotAimed;
+    auto* am = core::Application::getInstance().getAssetManager();
+    auto missiles = am ? am->loadDBCOptional("SpellMissile.dbc") : nullptr;
+    if (!missiles || missiles->getFieldCount() < 14) return TrajectoryCast::NotAimed;
+    const int32_t found = missiles->findRecordById(it->second.spellMissileId);
+    if (found < 0) return TrajectoryCast::NotAimed;
+    const auto r = static_cast<uint32_t>(found);
+    mt::MissileRow row;
+    row.flags = missiles->getUInt32(r, 1);
+    if ((row.flags & mt::kFlagAimed) == 0) return TrajectoryCast::NotAimed;
+    row.pitchMin = missiles->getFloat(r, 2);
+    row.pitchMax = missiles->getFloat(r, 3);
+    row.speedMin = missiles->getFloat(r, 4);
+    row.speedMax = missiles->getFloat(r, 5);
+    row.facingRandMin = missiles->getFloat(r, 6);
+    row.facingRandMax = missiles->getFloat(r, 7);
+    row.pitchRandMin = missiles->getFloat(r, 8);
+    row.pitchRandMax = missiles->getFloat(r, 9);
+    row.speedRandMin = missiles->getFloat(r, 10);
+    row.speedRandMax = missiles->getFloat(r, 11);
+    row.gravity = missiles->getFloat(r, 12);
+    row.maxDuration = missiles->getFloat(r, 13);
+    // 0x0080ac90: only the active mover casts one.
+    const uint64_t mover = owner_.activeMover();
+    MovementHandler* movement = owner_.getMovementHandler();
+    if (caster != mover || !movement) {
+        LOG_WARNING("Missile trajectory does not have active mover caster");
+        return TrajectoryCast::Refused;
+    }
+    const MovementInfo wire = movement->moverWireInfo();
+    // 0x006fcd60. The world's frame here is the wire's, as the renderer's is.
+    mt::AimInput in;
+    if (const vehicle::VehicleRecord* v = owner_.vehicleRowOf(caster)) {
+        in.hasVehicleRow = true;
+        in.vehicleFlags = v->flags;
+        in.vehiclePitchMin = v->pitchMin;
+        in.vehiclePitchMax = v->pitchMax;
+    }
+    in.unitPitch = owner_.unitPitch(caster);
+    in.aimPower = owner_.vehicleAimPower();
+    in.facing = wire.orientation;
+    rendering::SpellVisualSystem::MissileEnd from;
+    from.position = glm::vec3(wire.x, wire.y, wire.z);
+    from.renderInstanceId = owner_.resolveUnitRenderInstance(caster);
+    auto* renderer = owner_.services().renderer;
+    auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
+    const auto origin = svs ? svs->trajectoryOrigin(owner_.getSpellVisualId(spellId), from)
+                            : rendering::SpellVisualSystem::TrajectoryOrigin{from.position,
+                                                                            from.position + glm::vec3(0, 0, 1)};
+    in.launch = origin.launch;
+    static std::mt19937 rng{std::random_device{}()};
+    std::uniform_real_distribution<float> unit(0.0f, 1.0f);
+    const mt::Aim aim = mt::chooseAim(row, in, [&] { return unit(rng); });
+    const mt::Flight flight = mt::fly(row, aim, origin.middle, [renderer](const glm::vec3& a, const glm::vec3& b) {
+        return renderer ? renderer->intersectSegment(a, b) : std::nullopt;
+    });
+    out = CastSpellPacket::buildTrajectory(spellId, ++castCount_, target, aim.launch, flight.impact, aim.pitch,
+                                           aim.speed, mover, wire);
+    LOG_INFO("Aimed cast ", spellId, ": pitch ", aim.pitch, " speed ", aim.speed, " lands in ", flight.seconds, " s");
+    return TrajectoryCast::Built;
+}
+
 void SpellHandler::sendPetCast(uint32_t spellId, uint64_t caster, uint64_t target) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    const auto cast = owner_.getPacketParsers() ? owner_.getPacketParsers()->buildCastSpell(spellId, target, ++castCount_)
-                                                : CastSpellPacket::build(spellId, target, ++castCount_);
+    network::Packet aimed;
+    const TrajectoryCast how = buildTrajectoryCast(spellId, caster, target, aimed);
+    if (how == TrajectoryCast::Refused) return;
+    const auto cast = how == TrajectoryCast::Built ? aimed
+                      : owner_.getPacketParsers()
+                          ? owner_.getPacketParsers()->buildCastSpell(spellId, target, ++castCount_)
+                          : CastSpellPacket::build(spellId, target, ++castCount_);
     owner_.getSocket()->send(CastSpellPacket::asPetCast(caster, cast));
     LOG_INFO("Pet 0x", std::hex, caster, " casting spell: ", std::dec, spellId, " on 0x", std::hex, target, std::dec);
     castSent(spellId, caster);
@@ -1662,6 +1750,27 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     // on its way into or out of one, or its move held for the vehicle's
     // animation.
     if (owner_.heldBySeat(owner_.getPlayerGuid())) return;
+    // 0x0080da80: casting the spell that is repeating turns it off, the
+    // server told (0x00807560(1)), and casts nothing.
+    if (owner_.isAutoRepeating() && spellId == owner_.autoRepeatSpellId()) {
+        owner_.stopAutoRepeat(true);
+        return;
+    }
+    // 0x0080cce0: another spell, not one that repeats (AttributesEx2 0x20),
+    // stops a repeat that shoots a wand - EquippedItemClass 2 with subclass
+    // bit 19 (0x80000) - the server told (0x00807560(1)).
+    if (owner_.isAutoRepeating() && (owner_.getSpellAttributesEx2(spellId) & 0x20u) == 0) {
+        const auto rit = owner_.spellNameCacheRef().find(owner_.autoRepeatSpellId());
+        if (rit != owner_.spellNameCacheRef().end() && rit->second.equippedItemClass == 2 &&
+            (rit->second.equippedItemSubClassMask & 0x80000u) != 0)
+            owner_.stopAutoRepeat(true);
+    }
+    // 0x0080cce0: the attack counter behind tutorial 0x3b.
+    if (const auto sit = owner_.spellNameCacheRef().find(spellId); sit != owner_.spellNameCacheRef().end()) {
+        const auto& e = sit->second;
+        const bool attack = e.effectIds[0] == 78 || (e.attr & 0x2u) != 0 || (e.attrEx2 & 0x20u) != 0;
+        if (attackStreak_.note(owner_.tutorials().flagged(5), attack)) owner_.triggerTutorial(0x3b);
+    }
 
     // Auto Shot and the wand's Shoot keep going once started, and the action
     // button flashes for as long as they do. The stop half comes from the
@@ -1669,7 +1778,7 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     constexpr uint32_t kAutoShot = 75, kShoot = 5019;
     // A spell with AttributesEx2 0x20 repeats: +0xa38 0x200 while it does
     // (0x007fa2e0), which the ranged readies read (0x00714f90).
-    if ((owner_.getSpellAttributesEx2(spellId) & 0x20u) != 0) owner_.setAutoRepeating(true);
+    if ((owner_.getSpellAttributesEx2(spellId) & 0x20u) != 0) owner_.startAutoRepeat(spellId);
     if ((spellId == kAutoShot || spellId == kShoot) && owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("START_AUTOREPEAT_SPELL", {});
     }
@@ -1944,7 +2053,12 @@ void SpellHandler::sendPlayerCast(uint32_t spellId, uint64_t target, uint64_t it
         owner_.sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
     }
 
-    auto packet = item != 0
+    network::Packet aimed;
+    const TrajectoryCast how =
+        item == 0 ? buildTrajectoryCast(spellId, owner_.getPlayerGuid(), target, aimed) : TrajectoryCast::NotAimed;
+    if (how == TrajectoryCast::Refused) return;
+    auto packet = how == TrajectoryCast::Built ? aimed
+        : item != 0
         ? (owner_.getPacketParsers() ? owner_.getPacketParsers()->buildCastSpellOnItem(spellId, item)
                                      : CastSpellPacket::buildItemTarget(spellId, item, ++castCount_))
         : owner_.getPacketParsers()
@@ -2055,22 +2169,8 @@ bool SpellHandler::toolsCarried(uint32_t spellId, const Entity& player) const {
     // ... each TotemCategory met by what is carried: items whose own
     // category is of its type, their masks together covering its mask
     // (0x007548f0 -> 0x007541f0; TotemCategory.dbc type 18, mask 19).
-    auto* am = core::Application::getInstance().getAssetManager();
-    auto cats = am ? am->loadDBCOptional("TotemCategory.dbc") : nullptr;
     for (const uint32_t cat : e.totemCategories) {
-        if (cat == 0) continue;
-        const int32_t row = cats && cats->getFieldCount() > 19 ? cats->findRecordById(cat) : -1;
-        if (row < 0) return false;
-        const uint32_t type = cats->getUInt32(static_cast<uint32_t>(row), 18);
-        uint32_t need = cats->getUInt32(static_cast<uint32_t>(row), 19);
-        inv.forEachCarried([&](const ItemDef& d) {
-            const auto* info = owner_.getItemInfo(d.itemId);
-            if (!info || info->totemCategory == 0 || need == 0) return;
-            const int32_t r = cats->findRecordById(info->totemCategory);
-            if (r >= 0 && cats->getUInt32(static_cast<uint32_t>(r), 18) == type)
-                need &= ~cats->getUInt32(static_cast<uint32_t>(r), 19);
-        });
-        if (need != 0) return false;
+        if (cat != 0 && !carriesTotemCategory(cat)) return false;
     }
     // 0x00800d60: no reagents prepared (UNIT_FLAG 0x20 with AttributesEx5
     // 0x2), or for a spell of the class's family PLAYER_NO_REAGENT_COST
@@ -3010,6 +3110,12 @@ void SpellHandler::cancelAura(uint32_t spellId) {
             break;
         }
     }
+    // Waiting to Resurrect (2584) given up is leaving the spirit healer's
+    // queue, which 0x00802f80 says before the cancel goes out (event 0x1d2):
+    // the countdown dialog closes on it.
+    constexpr uint32_t kWaitingToResurrect = 0xa18;
+    if (spellId == kWaitingToResurrect && owner_.addonEventCallbackRef())
+        owner_.addonEventCallbackRef()("AREA_SPIRIT_HEALER_OUT_OF_RANGE", {});
     auto packet = CancelAuraPacket::build(spellId);
     owner_.getSocket()->send(packet);
 }
@@ -3024,6 +3130,67 @@ void SpellHandler::learnTalent(uint32_t talentId, uint32_t requestedRank) {
 
     auto packet = LearnTalentPacket::build(talentId, requestedRank);
     owner_.getSocket()->send(packet);
+}
+
+void SpellHandler::learnPetTalent(uint32_t talentId, uint32_t requestedRank) {
+    const uint64_t pet = owner_.getPetGuid();
+    if (pet == 0 || requestedRank == 0 || owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    if (wireOpcode(Opcode::CMSG_PET_LEARN_TALENT) == 0xFFFF) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_PET_LEARN_TALENT));
+    packet.writeUInt64(pet);
+    packet.writeUInt32(talentId);
+    packet.writeUInt32(requestedRank - 1);  // from zero, as CMSG_LEARN_TALENT
+    owner_.getSocket()->send(packet);
+}
+
+void SpellHandler::learnPreviewPetTalents(const std::vector<std::pair<uint32_t, uint32_t>>& talentRanks) {
+    const uint64_t pet = owner_.getPetGuid();
+    if (pet == 0 || talentRanks.empty() || owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    if (wireOpcode(Opcode::CMSG_LEARN_PREVIEW_TALENTS_PET) == 0xFFFF) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_LEARN_PREVIEW_TALENTS_PET));
+    packet.writeUInt64(pet);
+    packet.writeUInt32(static_cast<uint32_t>(talentRanks.size()));
+    for (const auto& [talentId, rank] : talentRanks) {
+        packet.writeUInt32(talentId);
+        packet.writeUInt32(rank > 0 ? rank - 1 : 0);
+    }
+    owner_.getSocket()->send(packet);
+}
+
+const TalentTabEntry* SpellHandler::getPetTalentTab() const {
+    const uint64_t pet = owner_.getPetGuid();
+    if (pet == 0) return nullptr;
+    auto entity = owner_.getEntityManager().getEntity(pet);
+    auto* unit = dynamic_cast<const Unit*>(entity.get());
+    if (!unit) return nullptr;
+    const uint32_t family = owner_.getCreatureFamily(unit->getEntry());
+    if (family == 0) return nullptr;
+    auto it = petTalentTypes_.find(family);
+    if (it == petTalentTypes_.end()) {
+        int32_t type = -1;
+        auto* am = owner_.services().assetManager;
+        auto dbc = am ? am->loadDBCOptional("CreatureFamily.dbc") : nullptr;
+        if (dbc && dbc->isLoaded()) {
+            const auto* cfL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("CreatureFamily") : nullptr;
+            const uint32_t typeField = cfL ? cfL->tryField("PetTalentType") : 0xFFFFFFFFu;
+            const uint32_t idField = cfL ? cfL->tryField("ID") : 0u;
+            if (typeField != 0xFFFFFFFFu) {
+                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                    if (dbc->getUInt32(i, idField) == family) {
+                        type = static_cast<int32_t>(dbc->getUInt32(i, typeField));
+                        break;
+                    }
+                }
+            }
+        }
+        it = petTalentTypes_.emplace(family, type).first;
+    }
+    if (it->second < 0 || it->second > 31) return nullptr;
+    const uint32_t bit = 1u << it->second;
+    for (const auto& [tabId, tab] : talentTabCache_) {
+        if ((tab.petTalentMask & bit) != 0) return &tab;
+    }
+    return nullptr;
 }
 
 void SpellHandler::learnPreviewTalents(const std::vector<std::pair<uint32_t, uint32_t>>& talentRanks) {
@@ -3329,6 +3496,8 @@ void SpellHandler::loadTalentDbc() {
         const uint32_t ttClassField = ttL ? (*ttL)["ClassMask"]      : 20;
         const uint32_t ttOrderField = ttL ? (*ttL)["OrderIndex"]     : 22;
         const uint32_t ttBgField    = ttL ? (*ttL)["BackgroundFile"] : 23;
+        // Named only in a layout that has it: before 3.x there are no pet trees.
+        const uint32_t ttPetField   = ttL ? ttL->tryField("PetTalentMask") : 0xFFFFFFFFu;
 
         uint32_t count = tabDbc->getRecordCount();
         for (uint32_t i = 0; i < count; ++i) {
@@ -3338,6 +3507,7 @@ void SpellHandler::loadTalentDbc() {
 
             entry.name = tabDbc->getString(i, ttNameField);
             entry.classMask = tabDbc->getUInt32(i, ttClassField);
+            entry.petTalentMask = ttPetField != 0xFFFFFFFFu ? tabDbc->getUInt32(i, ttPetField) : 0;
             entry.orderIndex = static_cast<uint8_t>(tabDbc->getUInt32(i, ttOrderField));
             entry.backgroundFile = tabDbc->getString(i, ttBgField);
 
@@ -3622,6 +3792,10 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     owner_.castVisuals().ended(owner_.getPlayerGuid(), data.castCount, data.spellId);
     if (owner_.isAutoRepeating() && data.result != 0x1b)
         owner_.castVisuals().autoRepeatStopped(owner_.getPlayerGuid());
+    // The repeating spell itself refused: the repeat ends and the server is
+    // told (0x00808200 -> 0x00807560(1)).
+    if (owner_.isAutoRepeating() && data.result != 0x1b && data.spellId == owner_.autoRepeatSpellId())
+        owner_.stopAutoRepeat(true);
 
     // 0x00809af0 fails the pending cast the count names (0x008051d0), not
     // whatever is casting: a spell sent during a cast and refused
@@ -3769,8 +3943,8 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
     if (owner_.spellCastBeginCallbackRef()) owner_.spellCastBeginCallbackRef()(data.casterUnit, data.spellId);
     // 0x00806700 -> 0x00805330(spell, cast time, 0) for a start not pending
     // (cast flags 0x1): the cast the caster shows. No cast object here is
-    // aimed (+0x139): only 0x00809f80 marks one, on a trajectory cast the
-    // player sends, which this client does not send.
+    // aimed (+0x139): only 0x00809f80 marks one, on the trajectory cast the
+    // player sends; buildTrajectoryCast sends it but keeps no cast object.
     if ((data.castFlags & 0x1u) == 0) {
         cast_visual::Begin begin;
         begin.castCount = data.castCount;
@@ -4566,16 +4740,59 @@ void SpellHandler::handleLearnedSpell(network::Packet& packet) {
     }
 
     if (!alreadyKnown && owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("LEARNED_SPELL_IN_TAB", {std::to_string(spellId)});
+        // 0x00542030: a companion goes to its list - tutorial 0x33 for a
+        // critter, 0x34 for a mount, and COMPANION_LEARNED, which the mounts
+        // and critters tab redraws on. Any other spell goes to its
+        // spellbook tab: LEARNED_SPELL_IN_TAB with the tab's number from 1,
+        // which the book flashes, then tutorial 0x27.
+        const auto inList = [&](bool mounts) {
+            for (const auto& c : owner_.getCompanions(mounts))
+                if (c.spellId == spellId) return true;
+            return false;
+        };
+        // 0x00542030's totem branch: a totem spell newly learned, while the
+        // player carries a totem of its category, triggers tutorial 0x2e.
+        if (const auto tit = owner_.spellNameCacheRef().find(spellId); tit != owner_.spellNameCacheRef().end()) {
+            const auto& t = tit->second;
+            if ((t.attrEx4 & 0x8000u) == 0 && (t.attrEx7 & 0x20u) != 0) {
+                for (uint32_t cat : t.totemCategories) {
+                    if (totem_bar::elementMask(cat) != 0 && carriesTotemCategory(cat)) {
+                        owner_.triggerTutorial(0x2e);
+                        break;
+                    }
+                }
+                // The lists took it: the bar is brought up to date (0x005ab9d0).
+                updateMultiCastBar();
+            }
+            // A language (SPELL_EFFECT_LANGUAGE 39, the switch's 0x27) is
+            // kept and announced: LANGUAGE_LIST_CHANGED (0x004fb530, 0xf0).
+            for (uint32_t effect : t.effectIds) {
+                if (effect == 39) {
+                    owner_.addonEventCallbackRef()("LANGUAGE_LIST_CHANGED", {});
+                    break;
+                }
+            }
+        }
+        const bool critter = inList(false);
+        const bool mount = !critter && inList(true);
+        if (critter || mount) {
+            owner_.triggerTutorial(critter ? 0x33 : 0x34);
+            owner_.addonEventCallbackRef()("COMPANION_LEARNED", {});
+        } else {
+            const auto& tabs = getSpellBookTabs();
+            for (size_t t = 0; t < tabs.size(); ++t) {
+                const auto& ids = tabs[t].spellIds;
+                if (std::find(ids.begin(), ids.end(), spellId) == ids.end()) continue;
+                owner_.addonEventCallbackRef()("LEARNED_SPELL_IN_TAB", {std::to_string(t + 1)});
+                owner_.triggerTutorial(0x27);
+                break;
+            }
+        }
         owner_.addonEventCallbackRef()("SPELLS_CHANGED", {});
         // The stance bar's list took it (0x00542563 -> event 0x178).
         if (isStanceBarSpell(owner_.getPlayerClass(), spellId)) {
             owner_.addonEventCallbackRef()("UPDATE_SHAPESHIFT_FORMS", {});
         }
-        // The mounts and critters list is built from the spellbook, so a new
-        // spell can add to it. petpaperdollframe refreshes on this and on
-        // nothing else, which is why the tab stayed as it was first drawn.
-        owner_.addonEventCallbackRef()("COMPANION_LEARNED", {});
         // A crafting window's recipes are the spells that just changed, and
         // it refreshes on its own event rather than on that one.
         if (craftingWindowOpen_) owner_.addonEventCallbackRef()("TRADE_SKILL_UPDATE", {});
@@ -4723,6 +4940,21 @@ void SpellHandler::handleTalentsInfo(network::Packet& packet) {
     if (!packet.hasRemaining(1)) return;
     uint8_t talentType = packet.readUInt8();
     if (talentType != 0) {
+        // The pet's (0x006cd770 -> 0x005c9f10, 0x005c98a0): its unspent
+        // points, then a count of talents with each one's id and rank from
+        // zero; PET_TALENT_UPDATE (0x273) after.
+        if (!packet.hasRemaining(5)) return;
+        loadTalentDbc();
+        petUnspentTalents_ = packet.readUInt32();
+        const uint8_t count = packet.readUInt8();
+        petTalents_.clear();
+        for (uint8_t i = 0; i < count && packet.hasRemaining(5); ++i) {
+            const uint32_t talentId = packet.readUInt32();
+            const uint8_t rank = packet.readUInt8();
+            petTalents_[talentId] = static_cast<uint8_t>(rank + 1u);
+        }
+        petTalentsKnown_ = true;
+        owner_.fireAddonEvent("PET_TALENT_UPDATE", {});
         return;
     }
     if (!packet.hasRemaining(6)) {
@@ -4847,6 +5079,9 @@ void SpellHandler::handleAchievementEarned(network::Packet& packet) {
 // ============================================================
 
 void SpellHandler::handlePetSpells(network::Packet& packet) {
+    // 0x005d6900 notes whether the pet changed, for the dead player's check
+    // after the bar is rebuilt.
+    const uint64_t petBefore = owner_.petGuidRef();
     // 0x005d6b90 begins by emptying the pet's spell history (0x00804420).
     petHistory_.clear();
     const size_t remaining = packet.getRemainingSize();
@@ -4869,6 +5104,7 @@ void SpellHandler::handlePetSpells(network::Packet& packet) {
         // should be redrawn.
         owner_.fireAddonEvent("PET_UI_UPDATE", {});
         owner_.updatePetActionBar();  // 0x005d4ad0
+        petChangedWhileDead(petBefore);
         return;
     }
 
@@ -4892,6 +5128,7 @@ void SpellHandler::handlePetSpells(network::Packet& packet) {
         // should be redrawn.
         owner_.fireAddonEvent("PET_UI_UPDATE", {});
         owner_.updatePetActionBar();  // 0x005d4ad0
+        petChangedWhileDead(petBefore);
         return;
     }
 
@@ -4978,6 +5215,19 @@ void SpellHandler::handlePetSpells(network::Packet& packet) {
     LOG_INFO("SMSG_PET_SPELLS: petGuid=0x", std::hex, owner_.petGuidRef(), std::dec,
              " react=", static_cast<int>(owner_.petReactRef()), " command=", static_cast<int>(owner_.petCommandRef()),
              " spells=", owner_.petSpellListRef().size());
+    // A hunter's pet (0x0071b630: a pet number, made by a hunter) closes the
+    // pet dialogs before UNIT_PET - PET_UI_CLOSE, event 0x1a6 (0x005d6900).
+    if (const auto pet = owner_.getEntityManager().getEntity(owner_.petGuidRef()); pet && pet->isUnit() &&
+        entityField(*pet, UF::UNIT_FIELD_PETNUMBER) != 0) {
+        const uint16_t createdBy = fieldIndex(UF::UNIT_FIELD_CREATEDBY);
+        const uint64_t maker = createdBy == 0xFFFF ? 0
+            : (static_cast<uint64_t>(pet->getField(static_cast<uint16_t>(createdBy + 1))) << 32) |
+                  pet->getField(createdBy);
+        const auto creator = maker ? owner_.getEntityManager().getEntity(maker) : nullptr;
+        if (creator && creator->getType() == ObjectType::PLAYER &&
+            ((entityField(*creator, UF::UNIT_FIELD_BYTES_0) >> 8) & 0xFFu) == 3u)
+            owner_.fireAddonEvent("PET_UI_CLOSE", {});
+    }
     owner_.fireAddonEvent("UNIT_PET", {"player"});
         // The pet frame and the pet action bar both rebuild from this one;
         // UNIT_PET alone tells them the pet changed but not that its interface
@@ -4986,6 +5236,19 @@ void SpellHandler::handlePetSpells(network::Packet& packet) {
     // The bonus bar takes the pet's actions or gives them back, and
     // PET_BAR_UPDATE (0x005d6xxx -> 0x005d4ad0).
     owner_.updatePetActionBar();
+    petChangedWhileDead(petBefore);
+}
+
+void SpellHandler::petChangedWhileDead(uint64_t petBefore) {
+    // 0x005d6900's tail: a pet that changed while the player has no health is
+    // a Death Knight raised as a ghoul - RAISED_AS_GHOUL (event 0x26c) - and
+    // losing it puts them back to being dead, PLAYER_DEAD (0x00520f70).
+    if (owner_.petGuidRef() == petBefore) return;
+    const auto self = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    if (!self || !self->isUnit()) return;
+    const uint16_t health = fieldIndex(UF::UNIT_FIELD_HEALTH);
+    if (health == 0xFFFF || static_cast<int32_t>(self->getField(health)) >= 1) return;
+    owner_.fireAddonEvent(owner_.petGuidRef() == 0 ? "PLAYER_DEAD" : "RAISED_AS_GHOUL", {});
 }
 
 void SpellHandler::sendPetAction(uint32_t action, uint64_t targetGuid) {
@@ -5016,7 +5279,27 @@ void SpellHandler::togglePetSpellAutocast(uint32_t spellId) {
 }
 
 void SpellHandler::renamePet(const std::string& newName) {
-    if (owner_.petGuidRef() == 0 || owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    // PetRename (0x005d5670) refuses, in order: no pet (ERR_NO_PET), one the
+    // player did not create (ERR_NOTYOURPET), and one whose UNIT_FIELD_BYTES_2
+    // byte 2 lacks UNIT_CAN_BE_RENAMED (ERR_PET_NOT_RENAMEABLE).
+    const auto pet = owner_.petGuidRef() ? owner_.getEntityManager().getEntity(owner_.petGuidRef()) : nullptr;
+    if (!pet || !pet->isUnit()) {
+        owner_.addUIError(interfaceString("ERR_NO_PET", "You don't have a pet."));
+        return;
+    }
+    const uint16_t createdBy = fieldIndex(UF::UNIT_FIELD_CREATEDBY);
+    const uint64_t maker = createdBy == 0xFFFF ? 0
+        : (static_cast<uint64_t>(pet->getField(static_cast<uint16_t>(createdBy + 1))) << 32) |
+              pet->getField(createdBy);
+    if (maker != owner_.getPlayerGuid()) {
+        owner_.addUIError(interfaceString("ERR_NOTYOURPET", "That's not your pet."));
+        return;
+    }
+    if (((entityField(*pet, UF::UNIT_FIELD_BYTES_2) >> 16) & 0x1u) == 0) {
+        owner_.addUIError(interfaceString("ERR_PET_NOT_RENAMEABLE", "Your pet can't be renamed."));
+        return;
+    }
     if (newName.empty() || newName.size() > 12) return;
     auto packet = PetRenamePacket::build(owner_.petGuidRef(), newName, 0);
     owner_.getSocket()->send(packet);
@@ -5796,6 +6079,89 @@ const std::string& SpellHandler::getSpellFocusName(uint32_t focusId) {
     return it != spellFocusNames_.end() ? it->second : kEmpty;
 }
 
+void SpellHandler::updateMultiCastBar() {
+    uint32_t bits = 0;
+    try {
+        bits = static_cast<uint32_t>(std::stoul(addons::storedCVarValue("autoFilledMultiCastSlots", "0")));
+    } catch (const std::exception&) {}
+    uint32_t now = bits;
+    const auto& bar = owner_.getActionBar();
+    for (int e = 0; e < totem_bar::kElements; ++e) {
+        const uint32_t bit = 1u << e;
+        const auto list = multiCastSpells(e);
+        if ((bits & bit) == 0) {
+            if (list.empty()) continue;
+            for (int slot = totem_bar::kFirstSlot + e; slot <= totem_bar::kLastSlot; slot += 4) {
+                if (bar[static_cast<size_t>(slot)].type == ActionBarSlot::EMPTY)
+                    owner_.setActionBarSlot(slot, ActionBarSlot::SPELL, list.front());
+            }
+            now |= bit;
+        } else if (list.empty()) {
+            now &= ~bit;
+        }
+    }
+    if (now != bits) addons::setStoredCVar("autoFilledMultiCastSlots", std::to_string(now));
+    owner_.fireAddonEvent("UPDATE_MULTI_CAST_ACTIONBAR", {});
+}
+
+bool SpellHandler::carriesTotemCategory(uint32_t cat) const {
+    // 0x007548f0 -> 0x007541f0: items carried whose own category is of the
+    // category's type, their masks together covering its mask
+    // (TotemCategory.dbc type 18, mask 19).
+    auto* am = core::Application::getInstance().getAssetManager();
+    auto cats = am ? am->loadDBCOptional("TotemCategory.dbc") : nullptr;
+    const int32_t row = cats && cats->getFieldCount() > 19 ? cats->findRecordById(cat) : -1;
+    if (row < 0) return false;
+    const uint32_t type = cats->getUInt32(static_cast<uint32_t>(row), 18);
+    uint32_t need = cats->getUInt32(static_cast<uint32_t>(row), 19);
+    owner_.getInventory().forEachCarried([&](const ItemDef& d) {
+        const auto* info = owner_.getItemInfo(d.itemId);
+        if (!info || info->totemCategory == 0 || need == 0) return;
+        const int32_t r = cats->findRecordById(info->totemCategory);
+        if (r >= 0 && cats->getUInt32(static_cast<uint32_t>(r), 18) == type)
+            need &= ~cats->getUInt32(static_cast<uint32_t>(r), 19);
+    });
+    return need == 0;
+}
+
+std::vector<uint32_t> SpellHandler::multiCastSpells(int element) const {
+    if (element < 0 || element >= totem_bar::kElements) return {};
+    const auto& cache = owner_.spellNameCacheRef();
+    std::vector<uint32_t> ids(knownSpells_.begin(), knownSpells_.end());
+    std::sort(ids.begin(), ids.end());
+    // 0x0053b540: the rank's number.
+    const auto rankOf = [&](uint32_t id) -> uint32_t {
+        const auto it = cache.find(id);
+        if (it == cache.end()) return 0;
+        uint32_t n = 0;
+        for (char c : it->second.rank) {
+            if (c >= '0' && c <= '9') n = n * 10 + static_cast<uint32_t>(c - '0');
+        }
+        return n;
+    };
+    const auto nameOf = [&](uint32_t id) -> std::string {
+        const auto it = cache.find(id);
+        return it != cache.end() ? it->second.name : std::string();
+    };
+    totem_bar::Lists lists;
+    for (uint32_t id : ids) {
+        const auto it = cache.find(id);
+        if (it == cache.end()) continue;
+        const auto& e = it->second;
+        // 0x00542030: a spell the book takes (AttributesEx4 0x8000 clear)
+        // that summons a totem (AttributesEx7 0x20).
+        if ((e.attrEx4 & 0x8000u) != 0 || (e.attrEx7 & 0x20u) == 0) continue;
+        totem_bar::Spell sp;
+        sp.id = id;
+        sp.name = e.name;
+        sp.rank = rankOf(id);
+        sp.categories[0] = e.totemCategories[0];
+        sp.categories[1] = e.totemCategories[1];
+        totem_bar::add(lists, sp, nameOf, rankOf);
+    }
+    return lists[static_cast<size_t>(element)];
+}
+
 const std::string& SpellHandler::getTotemCategoryName(uint32_t categoryId) {
     static const std::string kEmpty;
     if (!totemCategoryDbcLoaded_) {
@@ -6247,31 +6613,29 @@ void SpellHandler::extractSkillFields(const FlatFieldMap& fields) {
         newSkills[skillId] = skill;
     }
 
+    // 0x006da4a0, each skill's value field moving: a skill newly held (from
+    // nothing) is ERR_SKILL_GAINED_S with its name, one raised is
+    // ERR_SKILL_UP_SI with its name and new value - both CHAT_MSG_SKILL lines
+    // (the table's chat type 26). Only for a skill the race and class have a
+    // SkillRaceClassInfo row for whose flags lack 0x402 (the hidden ones).
+    // Not on the first read, which is the player arriving, not learning.
+    const bool firstRead = owner_.playerSkillsRef().empty();
     for (const auto& [skillId, skill] : newSkills) {
-        if (skill.value == 0) continue;
+        if (skill.value == 0 || firstRead) continue;
         auto oldIt = owner_.playerSkillsRef().find(skillId);
-        if (oldIt != owner_.playerSkillsRef().end() && skill.value > oldIt->second.value) {
-            auto catIt = owner_.skillLineCategoriesRef().find(skillId);
-            if (catIt != owner_.skillLineCategoriesRef().end()) {
-                uint32_t category = catIt->second;
-                if (category == 5 || category == 10 || category == 12) {
-                    continue;
-                }
-            }
+        const uint32_t was = oldIt != owner_.playerSkillsRef().end() ? oldIt->second.value : 0;
+        if (skill.value == was) continue;
+        if (!owner_.skillChangeAnnounced(skillId)) continue;
+        if (was != 0 && skill.value < was) continue;
 
-            const std::string& name = owner_.getSkillName(skillId);
-            std::string skillName = name.empty() ? ("Skill #" + std::to_string(skillId)) : name;
-            // CHAT_MSG_SKILL, which the interface colours blue, as the server
-            // sends it - not a system line, which is yellow. The words are the
-            // interface's SKILL_RANK_UP, so a German client says "Eure
-            // Fertigkeit '...' hat sich auf ... erhöht."; enUS only for want
-            // of one.
-            std::string format;
-            if (auto* addons = core::Application::getInstance().getAddonManager())
-                if (auto* lua = addons->getLuaEngine()) format = lua->globalText("SKILL_RANK_UP");
-            if (format.empty()) format = "Your skill in %s has increased to %d.";
+        const std::string& name = owner_.getSkillName(skillId);
+        const std::string skillName = name.empty() ? ("Skill #" + std::to_string(skillId)) : name;
+        if (was == 0) {
             owner_.addLocalChatLine(ChatType::SKILL,
-                                    formatSkillRankUp(format, skillName, skill.value));
+                interfaceFormat("ERR_SKILL_GAINED_S", "You have gained the %s skill.", {skillName}));
+        } else {
+            const std::string format = interfaceString("ERR_SKILL_UP_SI", "Your skill in %s has increased to %d.");
+            owner_.addLocalChatLine(ChatType::SKILL, formatSkillRankUp(format, skillName, skill.value));
         }
     }
 
@@ -6645,8 +7009,12 @@ void SpellHandler::handleSpellFailure(network::Packet& packet) {
         // for results 0x34..0x36 (0x00807560).
         if (!isClassic) {
             const uint64_t caster = failGuid != 0 ? failGuid : owner_.getPlayerGuid();
-            if (caster == owner_.getPlayerGuid() && rawFailReason >= 0x34 && rawFailReason <= 0x36)
+            if (caster == owner_.getPlayerGuid() && rawFailReason >= 0x34 && rawFailReason <= 0x36) {
                 owner_.castVisuals().autoRepeatStopped(caster);
+                // Not the visual alone: the repeat ends and the server is
+                // told (0x00807560(1)).
+                owner_.stopAutoRepeat(true);
+            }
             owner_.castVisuals().ended(caster, failCastCount, failSpellId);
         }
         // Classic result enum starts at 0=AFFECTING_COMBAT; shift +1 for WotLK table

@@ -2163,6 +2163,14 @@ void SocialHandler::turnInPetition(uint64_t petitionGuid, bool blankDesign) {
     owner_.getSocket()->send(pkt);
 }
 
+void SocialHandler::turnInArenaPetition(uint64_t petitionGuid, const std::array<uint32_t, 5>& design) {
+    if (!owner_.getSocket() || owner_.getState() != WorldState::IN_WORLD) return;
+    network::Packet pkt(wireOpcode(Opcode::CMSG_TURN_IN_PETITION));
+    pkt.writeUInt64(petitionGuid);
+    for (uint32_t word : design) pkt.writeUInt32(word);
+    owner_.getSocket()->send(pkt);
+}
+
 void SocialHandler::offerPetition(uint64_t petitionGuid, uint64_t targetGuid) {
     if (!owner_.getSocket() || owner_.getState() != WorldState::IN_WORLD) return;
     if (petitionGuid == 0 || targetGuid == 0) return;
@@ -2309,6 +2317,18 @@ void SocialHandler::handleDuelWinner(network::Packet& packet) {
 
 void SocialHandler::inviteToGroup(const std::string& playerName) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    // One's own name, matched without case, is refused before the request
+    // (0x006d4300): ERR_INVITE_SELF.
+    if (const Character* self = owner_.getActiveCharacter(); self && !playerName.empty()) {
+        auto lower = [](std::string v) {
+            for (char& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return v;
+        };
+        if (lower(playerName) == lower(self->name)) {
+            gameError(owner_, ErrTo::Error, "ERR_INVITE_SELF", "You can't invite yourself to a group.");
+            return;
+        }
+    }
     LOG_WARNING(">>> Sending CMSG_GROUP_INVITE to '", playerName, "'");
     auto packet = GroupInvitePacket::build(playerName);
     owner_.getSocket()->send(packet);
@@ -2664,13 +2684,10 @@ void SocialHandler::setRaidMarkLocally(uint64_t guid, uint8_t icon) {
 
 void SocialHandler::setRaidMark(uint64_t guid, uint8_t icon) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    // Raid marks are group state on the server: it drops MSG_RAID_TARGET_UPDATE
-    // from an ungrouped player and broadcasts nothing back, so a solo mark used
-    // to do nothing at all. Apply it locally instead - a deliberate divergence
-    // from Blizzlike behaviour, since a solo player marking their own targets
-    // harms nobody and the alternative is a feature that cannot be used, or
-    // tested, without a second player. Joining a group later is safe: the
-    // server's full list is authoritative and replaces these marks wholesale.
+    // Out of a group the client keeps the marks itself (SetRaidTarget,
+    // 0x00574ab0: no raid and no party, so the slot is written here and
+    // RAID_TARGET_UPDATE fired, with nothing sent). Joining a group later is
+    // safe: the server's full list replaces these marks wholesale.
     if (!isInGroup()) {
         setRaidMarkLocally(guid, icon);
         return;
@@ -2819,6 +2836,7 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
     const uint64_t prevLooterGuid = partyData.looterGuid;
     const uint8_t prevLootThreshold = partyData.lootThreshold;
     const bool wasInGroup = !partyData.isEmpty();
+    const bool wasRaid = wasInGroup && groupIsRaid(partyData.groupType);
     const std::vector<GroupMember> prevMembers = partyData.members;
     partyData = GroupListData{};
     if (!GroupListParser::parse(packet, partyData, hasRoles, hasBattleGroupFlag)) return;
@@ -2902,6 +2920,9 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
     }
 
     const bool nowInGroup = !partyData.isEmpty();
+    // A raid's list builds its roster (0x006d8870 -> 0x00574f10), which
+    // triggers tutorial 0x2d.
+    if (nowInGroup && groupIsRaid(partyData.groupType)) owner_.triggerTutorial(0x2d);
     // A member new to the roster whose player is not here is asked about
     // (0x0052d410 for the party's, 0x00574f10 for the raid's): a member
     // already listed keeps the stats it had.
@@ -2911,8 +2932,8 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
                                         [&](const GroupMember& p) { return p.guid == m.guid; });
         if (!listed && !owner_.getEntityManager().getEntity(m.guid)) requestPartyMemberStats(m.guid);
     }
-    // Who came and went, as 0x006d8870 says it - in a party only, a raid's
-    // roster being the raid frame's business: ERR_JOINED_GROUP_S for each
+    // Who came and went, as 0x006d8870 says it for a party (a raid's has its
+    // own lines, below): ERR_JOINED_GROUP_S for each
     // member not there before and ERR_LEFT_GROUP_S for each one gone, system
     // lines. A group just formed names its other member to the leader alone.
     // Leaving is said elsewhere (ERR_LEFT_GROUP_YOU, ERR_UNINVITE_YOU,
@@ -2936,6 +2957,24 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
                       {partyData.members.back().name});
         }
     }
+    // A raid's are its own lines, said by the raid roster's rebuild
+    // (0x00574f10 -> 0x00572d90, 0x00572490) once the raid already had a
+    // roster: ERR_RAID_MEMBER_ADDED_S and ERR_RAID_MEMBER_REMOVED_S, system
+    // lines. Leaving one is ERR_RAID_YOU_LEFT (0x006d8870 -> 0x00572f90).
+    if (nowInGroup && groupIsRaid(partyData.groupType) && wasRaid) {
+        const auto had = [](const std::vector<GroupMember>& list, uint64_t guid) {
+            return std::any_of(list.begin(), list.end(),
+                               [guid](const GroupMember& m) { return m.guid == guid; });
+        };
+        for (const auto& m : partyData.members)
+            if (!m.name.empty() && !had(prevMembers, m.guid))
+                gameError(owner_, ErrTo::Chat, "ERR_RAID_MEMBER_ADDED_S", "%s has joined the raid group.", {m.name});
+        for (const auto& m : prevMembers)
+            if (!m.name.empty() && !had(partyData.members, m.guid))
+                gameError(owner_, ErrTo::Chat, "ERR_RAID_MEMBER_REMOVED_S", "%s has left the raid group.", {m.name});
+    }
+    if (!nowInGroup && wasRaid)
+        gameError(owner_, ErrTo::Chat, "ERR_RAID_YOU_LEFT", "You have left the raid group.");
     if (nowInGroup != wasInGroup) LOG_INFO(nowInGroup ? "Joined group" : "Left group");
     // The loot rules, as 0x0052bd90 announces them - on joining a group, and
     // afterwards whenever one changes: ERR_SET_LOOT_* for the method,
@@ -4383,6 +4422,9 @@ void SocialHandler::handleBattlefieldStatus(network::Packet& packet) {
     const uint8_t arenaType = status.arenaType;
     const uint32_t bgTypeId = status.bgTypeId;
     const uint32_t statusId = status.statusId;
+    // 0x0054ae40: a place to join (0x30), a place in a queue (0x2f).
+    if (statusId == 2) owner_.triggerTutorial(0x30);
+    else if (statusId == 1) owner_.triggerTutorial(0x2f);
 
     // The name GetBattlefieldStatus answers with, from where 0x0054bc30 takes
     // it: the map's own (Map.dbc) once a place is offered or entered, and the
@@ -6147,6 +6189,43 @@ void SocialHandler::handlePvpLogData(network::Packet& packet) {
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("UPDATE_BATTLEFIELD_SCORE", {});
 }
 
+void SocialHandler::updateReadyCheckTimer() {
+    // 0x00573390, run each frame (and at once when the last answer is in,
+    // 0x005744f0 / 0x00574880, which the confirm handler above does by moving
+    // the deadline into the past). Only for whoever started the check: the
+    // summary in chat - who did not answer (RAID_MEMBERS_AFK), else
+    // READY_CHECK_ALL_READY or READY_CHECK_FINISHED - and then
+    // MSG_RAID_READY_CHECK_FINISHED, which ends the check for everyone.
+    if (!readyCheckDeadline_ || std::chrono::steady_clock::now() < *readyCheckDeadline_) return;
+    if (readyCheckInitiatorGuid_ == 0 || readyCheckInitiatorGuid_ != owner_.getPlayerGuid()) return;
+    readyCheckDeadline_.reset();  // DAT_00beb61c = 0
+
+    std::string afk;
+    bool allReady = true;
+    for (const auto& member : partyData.members) {
+        if (member.guid == owner_.getPlayerGuid()) continue;
+        const auto it = readyCheckAnswers_.find(member.guid);
+        const ReadyCheckAnswer answer = it != readyCheckAnswers_.end() ? it->second : ReadyCheckAnswer{};
+        if (!answer.ready) allReady = false;
+        if (answer.waiting && !member.name.empty()) {
+            if (!afk.empty()) afk += ", ";  // 0x009fc494
+            afk += member.name;
+        }
+    }
+    if (!afk.empty()) {
+        owner_.addSystemChatMessage(interfaceFormat("RAID_MEMBERS_AFK", "The following players are Away: %s", {afk}));
+    } else if (allReady) {
+        owner_.addSystemChatMessage(interfaceString("READY_CHECK_ALL_READY", "Everyone is Ready"));
+    } else {
+        owner_.addSystemChatMessage(interfaceString("READY_CHECK_FINISHED", "Ready check finished"));
+    }
+
+    if (auto* sock = owner_.getSocket(); sock && wireOpcode(Opcode::MSG_RAID_READY_CHECK_FINISHED) != 0xFFFF) {
+        network::Packet packet(wireOpcode(Opcode::MSG_RAID_READY_CHECK_FINISHED));
+        sock->send(packet);
+    }
+}
+
 void SocialHandler::updateLogoutCountdown(float deltaTime) {
     // A queue request the server let pass without a word. A realm that keeps
     // a battleground back - ChromieCraft opens the random one at level sixty,
@@ -6397,6 +6476,8 @@ void SocialHandler::handleSetFactionStanding(network::Packet& packet) {
             owner_.addLocalChatLine(ChatType::COMBAT_FACTION_CHANGE, line);
         }
     }
+    // 0x005d20a0: reputation's tutorial, past level 9.
+    if (owner_.getPlayerLevel() > 9) owner_.triggerTutorial(0xf);
 }
 
 void SocialHandler::handleSetFactionAtWar(network::Packet& packet) {
@@ -6431,27 +6512,29 @@ void SocialHandler::handleGroupSetLeader(network::Packet& packet) {
     for (const auto& m : pd.members) {
         if (m.name == leaderName) { pd.leaderGuid = m.guid; break; }
     }
-    // ERR_NEW_LEADER_YOU for the player and ERR_NEW_LEADER_S for anyone
-    // else, system lines (0x006cbd70). This was English.
-    if (!leaderName.empty()) {
-        if (leaderName == ownName(owner_))
-            gameError(owner_, ErrTo::Chat, "ERR_NEW_LEADER_YOU", "You are now the group leader.");
-        else
-            gameError(owner_, ErrTo::Chat, "ERR_NEW_LEADER_S", "%s is now the group leader.", {leaderName});
-    }
-    // Neither event this used to fire. 0x006cbd70 shows its system line and
-    // stops - it stores nothing, so nothing is fired; the new leader arrives on
-    // the roster the server sends straight after, and that is where
-    // PARTY_LEADER_CHANGED comes from (0x0052bc80, through 006d0000.c:6992). The
-    // other name it fired is not this client's at all.
+    // 0x006cbd70: the name against the player's own (0x0076ea40, without
+    // case) picks ERR_NEW_LEADER_YOU or ERR_NEW_LEADER_S naming them, system
+    // lines - and in a dungeon-finder group (the restriction flag at
+    // 0xbd19a8, the roster's lfgRestricted) the guide lines ERR_NEW_GUIDE_YOU
+    // and ERR_NEW_GUIDE_S instead.
     //
-    // What is still not matched: the client resolves the name (0x0076ea40) and
-    // picks between four message ids on the *restriction* flag and on whether the
-    // name found anyone - 0x45 and 0x47 for a leader that was found, 0x46 and 0x48
-    // for a name nobody in the group answers to (`006c0000.c:10120-10145`), always
-    // with the name as an argument. There is no you/other pair there. Settling
-    // which lines those four are needs the client's message-id table, which is a
-    // thread of its own.
+    // It stores nothing and fires nothing: the new leader arrives on the
+    // roster the server sends straight after, and that is where
+    // PARTY_LEADER_CHANGED comes from (0x0052bc80).
+    if (!leaderName.empty()) {
+        auto lower = [](std::string v) {
+            for (char& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return v;
+        };
+        const bool you = lower(leaderName) == lower(ownName(owner_));
+        if (pd.lfgRestricted) {
+            if (you) gameError(owner_, ErrTo::Chat, "ERR_NEW_GUIDE_YOU", "You are now the group guide.");
+            else gameError(owner_, ErrTo::Chat, "ERR_NEW_GUIDE_S", "%s is now the group guide.", {leaderName});
+        } else {
+            if (you) gameError(owner_, ErrTo::Chat, "ERR_NEW_LEADER_YOU", "You are now the group leader.");
+            else gameError(owner_, ErrTo::Chat, "ERR_NEW_LEADER_S", "%s is now the group leader.", {leaderName});
+        }
+    }
 }
 
 // ============================================================
@@ -6460,17 +6543,20 @@ void SocialHandler::handleGroupSetLeader(network::Packet& packet) {
 
 void SocialHandler::sendMinimapPing(float wowX, float wowY) {
     if (owner_.getState() != WorldState::IN_WORLD) return;
+    // PingLocation (0x0057ed70) sends only in a party or raid (0xbd1948,
+    // 0xbeb608), and announces the ping here either way (0x0057eb80).
+    if (owner_.isInGroup()) {
+        // MSG_MINIMAP_PING (CMSG direction): float posX + float posY
+        // Server convention: posX = east/west axis = canonical Y (west)
+        //                    posY = north/south axis = canonical X (north)
+        const float serverX = wowY;  // canonical Y (west) → server posX
+        const float serverY = wowX;  // canonical X (north) → server posY
 
-    // MSG_MINIMAP_PING (CMSG direction): float posX + float posY
-    // Server convention: posX = east/west axis = canonical Y (west)
-    //                    posY = north/south axis = canonical X (north)
-    const float serverX = wowY;  // canonical Y (west) → server posX
-    const float serverY = wowX;  // canonical X (north) → server posY
-
-    network::Packet pkt(wireOpcode(Opcode::MSG_MINIMAP_PING));
-    pkt.writeFloat(serverX);
-    pkt.writeFloat(serverY);
-    owner_.getSocket()->send(pkt);
+        network::Packet pkt(wireOpcode(Opcode::MSG_MINIMAP_PING));
+        pkt.writeFloat(serverX);
+        pkt.writeFloat(serverY);
+        owner_.getSocket()->send(pkt);
+    }
 
     // Add ping locally so the sender sees their own ping immediately
     GameHandler::MinimapPing localPing;
@@ -6479,6 +6565,7 @@ void SocialHandler::sendMinimapPing(float wowX, float wowY) {
     localPing.wowY       = wowY;
     localPing.age        = 0.0f;
     owner_.minimapPingsRef().push_back(localPing);
+    owner_.announceMinimapPing(localPing.senderGuid, wowX, wowY);
 }
 
 // ============================================================

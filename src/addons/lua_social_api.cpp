@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <initializer_list>
 #include <iterator>
 #include <vector>
 #include "game/opcode_table.hpp"
@@ -97,6 +98,80 @@ static void collectKnownLanguages(uint8_t raceId, std::vector<LanguageEntry>& ou
     if (out.empty() || out[0].id != faction.id) out.push_back(faction);
 }
 
+/// The first carried item of these entries - the backpack, then the worn bags
+/// in order, as 0x006dd3a0 and 0x006dd680 walk them - by its guid, or zero.
+static uint64_t carriedCharterGuid(game::GameHandler* gh, std::initializer_list<uint32_t> ids) {
+    const auto& inv = gh->getInventory();
+    auto wanted = [&](uint32_t id) { return std::find(ids.begin(), ids.end(), id) != ids.end(); };
+    for (int i = 0; i < inv.getBackpackSize(); ++i) {
+        if (wanted(inv.getBackpackSlot(i).item.itemId)) return gh->getBackpackItemGuid(i);
+    }
+    for (int b = 0; b < game::Inventory::NUM_BAG_SLOTS; ++b) {
+        for (int sl = 0; sl < inv.getBagSize(b); ++sl) {
+            if (wanted(inv.getBagSlot(b, sl).item.itemId)) return gh->getBagItemGuid(b, sl);
+        }
+    }
+    return 0;
+}
+
+/// BuyGuildCharter's own refusals (0x0059a050): not for a player already in a
+/// guild, nor one who cannot pay for the charter. True when it may be bought.
+static bool guildCharterPurchaseAllowed(game::GameHandler* gh) {
+    if (gh->isInGuild()) {
+        gh->playGameErrorSound("ERR_ALREADY_IN_GUILD");
+        gh->addSystemChatMessage(game::interfaceString("ERR_ALREADY_IN_GUILD", "You are already in a guild."));
+        return false;
+    }
+    if (gh->getMoneyCopper() < gh->getPetitionCost()) {
+        gh->playGameErrorSound("ERR_NOT_ENOUGH_MONEY");
+        gh->addUIError(game::interfaceString("ERR_NOT_ENOUGH_MONEY", "You don't have enough money."));
+        return false;
+    }
+    return true;
+}
+
+/// BuyPetition's (0x005a2350), in its order, for the charter a registrar
+/// offers at `row`: a guild charter is not for a player in a guild; an arena
+/// one not for a player already in a team of that size; below level 60, 70
+/// or 80 exactly the next of 70 and 80 is named - said, and the charter
+/// bought all the same; and none for a player who cannot pay. A row the
+/// registrar did not offer is refused by the lookup itself, as the client's
+/// index bound refuses it.
+static bool petitionPurchaseAllowed(game::GameHandler* gh, int row) {
+    uint32_t itemId = 0, displayId = 0, cost = 0;
+    const bool offered = gh->getPetitionCharter(row, itemId, displayId, cost);
+    const int teamSize = itemId == 23560 ? 2 : itemId == 23561 ? 3 : itemId == 23562 ? 5 : 0;
+    if (offered && teamSize == 0 && gh->isInGuild()) {
+        gh->playGameErrorSound("ERR_ALREADY_IN_GUILD");
+        gh->addSystemChatMessage(game::interfaceString("ERR_ALREADY_IN_GUILD", "You are already in a guild."));
+        return false;
+    }
+    if (offered && teamSize != 0) {
+        for (const auto& team : gh->getArenaTeamStats()) {
+            if (team.teamType == static_cast<uint32_t>(teamSize)) {
+                gh->playGameErrorSound("ERR_ALREADY_IN_ARENA_TEAM");
+                gh->addSystemChatMessage(game::interfaceString(
+                    "ERR_ALREADY_IN_ARENA_TEAM", "You are already in an arena team of that size."));
+                return false;
+            }
+        }
+        const uint32_t level = gh->getPlayerLevel();
+        if (level != 60 && level != 70 && level != 80) {
+            const int needed = (level > 70 && level < 80) ? 80 : 70;
+            gh->playGameErrorSound("ERR_ARENA_TEAM_LEVEL_TOO_LOW_I");
+            gh->addSystemChatMessage(game::interfaceFormat(
+                "ERR_ARENA_TEAM_LEVEL_TOO_LOW_I", "You must be level %d to form an arena team.",
+                {std::to_string(needed)}));
+        }
+    }
+    if (offered && gh->getMoneyCopper() < cost) {
+        gh->playGameErrorSound("ERR_NOT_ENOUGH_MONEY");
+        gh->addUIError(game::interfaceString("ERR_NOT_ENOUGH_MONEY", "You don't have enough money."));
+        return false;
+    }
+    return offered;
+}
+
 /// Whether the player's guild rank holds one right. Shared by the nine Can*
 /// queries, which differ only in which bit they ask about.
 static int luaGuildRight(lua_State* L, uint32_t bit) {
@@ -122,7 +197,12 @@ static int lua_GetLanguageByIndex(lua_State* L) {
 
     const int idx = static_cast<int>(luaL_optnumber(L, 1, 1));
     if (idx < 1 || idx > static_cast<int>(langs.size())) return 0;
-    lua_pushstring(L, langs[static_cast<size_t>(idx) - 1].name);
+    // Languages.dbc's name where the file is there - the interface hands it
+    // back to SendChatMessage, which looks it up there.
+    const std::string& dbcName =
+        gh ? gh->getLanguageName(static_cast<uint32_t>(langs[static_cast<size_t>(idx) - 1].id))
+           : std::string();
+    lua_pushstring(L, !dbcName.empty() ? dbcName.c_str() : langs[static_cast<size_t>(idx) - 1].name);
     lua_pushnumber(L, langs[static_cast<size_t>(idx) - 1].id);
     return 2;
 }
@@ -135,7 +215,6 @@ static int lua_SendChatMessage(lua_State* L) {
     if (!gh) return 0;
     const char* msg = luaL_checkstring(L, 1);
     const char* chatType = luaL_optstring(L, 2, "SAY");
-    // language arg (3) ignored - server determines language
     const char* target = luaL_optstring(L, 4, "");
 
     std::string typeStr(chatType);
@@ -191,7 +270,52 @@ static int lua_SendChatMessage(lua_State* L) {
             return 0;
         }
     }
-    gh->sendChatMessage(ct, msg, targetStr);
+    // The dead may still whisper and talk to their party, raid, guild,
+    // officers, channels and battleground, and set a DND reply; anything
+    // said aloud (say, yell, emote) or an AFK reply is refused with
+    // ERR_CHAT_WHILE_DEAD (0x0050d170).
+    // The third argument names the language (0x0050d170): a name
+    // Languages.dbc does not carry is a Lua error, and one the player does
+    // not speak (0x006e0640) is refused with ERR_CANT_SPEAK_LANGAGE.
+    uint32_t languageId = 0;
+    if (lua_type(L, 3) == LUA_TSTRING || lua_type(L, 3) == LUA_TNUMBER) {
+        const std::string name = lua_tostring(L, 3);
+        std::vector<LanguageEntry> langs;
+        collectKnownLanguages(gh->getPlayerRace(), langs);
+        languageId = gh->languageIdByName(name);
+        // Without the file, the names GetLanguageByIndex gave.
+        auto sameName = [](const char* a, const std::string& b) {
+            const size_t n = std::strlen(a);
+            if (n != b.size()) return false;
+            for (size_t i = 0; i < n; ++i) {
+                if (std::tolower(static_cast<unsigned char>(a[i])) !=
+                    std::tolower(static_cast<unsigned char>(b[i]))) return false;
+            }
+            return true;
+        };
+        for (const auto& e : langs) {
+            if (languageId == 0 && sameName(e.name, name)) languageId = static_cast<uint32_t>(e.id);
+        }
+        if (languageId == 0) return luaL_error(L, "SendChatMessage(): Unknown language");
+        const bool speaks = std::any_of(langs.begin(), langs.end(), [&](const LanguageEntry& e) {
+            return static_cast<uint32_t>(e.id) == languageId;
+        });
+        if (!speaks) {
+            gh->playGameErrorSound("ERR_CANT_SPEAK_LANGAGE");
+            gh->addUIError(game::interfaceString("ERR_CANT_SPEAK_LANGAGE",
+                                                 "You can't speak that language."));
+            return 0;
+        }
+    }
+    if (gh->isPlayerDead() || gh->isPlayerGhost()) {
+        const bool allowed = ct != game::ChatType::SAY && ct != game::ChatType::YELL &&
+                             ct != game::ChatType::EMOTE && ct != game::ChatType::AFK;
+        if (!allowed) {
+            gh->addUIError(game::interfaceString("ERR_CHAT_WHILE_DEAD", "You can't chat when you're dead!"));
+            return 0;
+        }
+    }
+    gh->sendChatMessage(ct, msg, targetStr, languageId);
     return 0;
 }
 
@@ -354,6 +478,21 @@ static int lua_GetFriendInfo(lua_State* L) {
 /// replaced wholesale whenever SMSG_GUILD_ROSTER arrives and a cache would go
 /// stale exactly when the panel redraws.
 namespace {
+/// The name the guild commands take (GuildInvite, GuildUninvite, GuildPromote,
+/// GuildDemote, GuildSetLeader - 0x00522a20 to 0x00522d60): none is
+/// ERR_COMMAND_NEEDS_TARGET in red rather than a raise, and past 48
+/// characters is the "Name too long" raise. Null when nothing is to be sent.
+const char* guildCommandName(lua_State* L, game::GameHandler* gh) {
+    const char* name = lua_isstring(L, 1) ? lua_tostring(L, 1) : nullptr;
+    if (!name) {
+        if (gh) gh->addUIError(game::interfaceString("ERR_COMMAND_NEEDS_TARGET",
+                                                     "That command requires a target."));
+        return nullptr;
+    }
+    if (std::strlen(name) > 0x30) luaL_error(L, "Name too long");
+    return name;
+}
+
 /// The direction argument these targeting commands take: Bindings.xml gives
 /// each of them two keys, one plain and one with a 1 for backwards.
 inline bool wantsReverseArg(lua_State* L) {
@@ -1346,6 +1485,30 @@ static int lua_GetGMTicket(lua_State* L) {
 // frame always passes a boolean (helpframe.lua:43 starts it at true and its
 // three buttons set true or false), so insisting costs nothing and matches what
 // the reference does to anything else.
+/// A ticket's text as 0x005ac170 takes it, for NewGMTicket and
+/// UpdateGMTicket alike: no more than 500 characters (UTF-8 lead bytes
+/// counted, 0x0076eea0) - ERR_TICKET_TEXT_TOO_LONG - and something besides
+/// spaces, tabs and line breaks - ERR_TICKET_NO_TEXT.
+static bool gmTicketTextAllowed(game::GameHandler* gh, const char* text) {
+    size_t chars = 0;
+    bool blank = true;
+    for (const char* c = text; *c; ++c) {
+        if ((static_cast<unsigned char>(*c) & 0xC0u) != 0x80u) ++chars;
+        if (*c != ' ' && *c != '\t' && *c != '\r' && *c != '\n') blank = false;
+    }
+    if (chars > 500) {
+        gh->playGameErrorSound("ERR_TICKET_TEXT_TOO_LONG");
+        gh->addUIError(game::interfaceString("ERR_TICKET_TEXT_TOO_LONG", "Your ticket text is too long."));
+        return false;
+    }
+    if (blank) {
+        gh->playGameErrorSound("ERR_TICKET_NO_TEXT");
+        gh->addUIError(game::interfaceString("ERR_TICKET_NO_TEXT", "You must enter text for your ticket."));
+        return false;
+    }
+    return true;
+}
+
 static int lua_NewGMTicket(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
@@ -1355,7 +1518,7 @@ static int lua_NewGMTicket(lua_State* L) {
     // The ticket verbs ask the taint check (0x005ad080, 0x005ad0f0,
     // 0x005ad150: kind 0x11, refused to insecure code).
     if (!taint::allowed(L, 0x11)) return 0;
-    gh->submitGmTicket(text, lua_toboolean(L, 2) != 0, false);
+    if (gmTicketTextAllowed(gh, text)) gh->submitGmTicket(text, lua_toboolean(L, 2) != 0, false);
     return 0;
 }
 
@@ -1487,17 +1650,51 @@ static int lua_SignPetition(lua_State* L) {
 
 // OfferPetition() → hand the charter to the current target to sign.
 //
-// The interface offers this only to the originator, which matches the server:
-// nobody else can present someone else's charter.
+// 0x005cf220, with a charter and a target: a target not in sight is
+// ERR_OUT_OF_RANGE; a player target is refused when it is the player
+// (ERR_PETITION_CREATOR), not of the player's side and peaceable
+// (0x00729b30, ERR_GUILD_NOT_ALLIED) or, for a guild charter, already in a
+// guild (ERR_ALREADY_IN_GUILD_S naming them); otherwise the offer goes and
+// ERR_PETITION_OFFERED_S names who it went to. Anything else targeted is
+// passed over in silence, as is no target at all.
+static bool petitionOfferAllowed(game::GameHandler* gh, const game::PetitionInfo& info, uint64_t target) {
+    auto entity = gh->getEntityManager().getEntity(target);
+    if (!entity) {
+        gh->playGameErrorSound("ERR_OUT_OF_RANGE");
+        gh->addUIError(game::interfaceString("ERR_OUT_OF_RANGE", "Out of range."));
+        return false;
+    }
+    if (entity->getType() != game::ObjectType::PLAYER) return false;
+    if (target == gh->getPlayerGuid()) {
+        gh->playGameErrorSound("ERR_PETITION_CREATOR");
+        gh->addUIError(game::interfaceString("ERR_PETITION_CREATOR", "You can't sign your own charter."));
+        return false;
+    }
+    if (!gh->unitsCooperate(gh->getPlayerGuid(), target)) {
+        gh->playGameErrorSound("ERR_GUILD_NOT_ALLIED");
+        gh->addSystemChatMessage(game::interfaceString("ERR_GUILD_NOT_ALLIED",
+                                                       "You cannot invite players from the opposing alliance."));
+        return false;
+    }
+    const std::string name = gh->lookupName(target);
+    if (!info.isArena && gh->getEntityGuildId(target) != 0) {
+        gh->playGameErrorSound("ERR_ALREADY_IN_GUILD_S");
+        gh->addSystemChatMessage(game::interfaceFormat("ERR_ALREADY_IN_GUILD_S", "%s is already in a guild.", {name}));
+        return false;
+    }
+    return true;
+}
+
 static int lua_OfferPetition(lua_State* L) {
     auto* gh = getGameHandler(L);
     const auto* info = shownPetition(L);
-    if (!gh || !info) return 0;
-    const uint64_t target = gh->getTargetGuid();
-    // No target, nothing said: 0x005cf220 returns without a word. This raised
-    // "You have no target." in English.
-    if (target == 0) return 0;
-    gh->offerPetition(info->petitionGuid, target);
+    const uint64_t target = gh ? gh->getTargetGuid() : 0;
+    if (info && target != 0 && petitionOfferAllowed(gh, *info, target)) {
+        gh->offerPetition(info->petitionGuid, target);
+        gh->playGameErrorSound("ERR_PETITION_OFFERED_S");
+        gh->addSystemChatMessage(game::interfaceFormat("ERR_PETITION_OFFERED_S", "You have requested %s's signature.",
+                                                       {gh->lookupName(target)}));
+    }
     return 0;
 }
 
@@ -1768,7 +1965,7 @@ void registerSocialLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             const char* text = luaL_optstring(L, 1, "");
             if (!taint::allowed(L, 0x11)) return 0;   // see NewGMTicket
-            if (gh && text && *text) gh->updateGmTicket(text);
+            if (gh && text && gmTicketTextAllowed(gh, text)) gh->updateGmTicket(text);
             return 0;
         }},
                 {"GetNumMacroIcons",    lua_GetNumMacroIcons},
@@ -1810,18 +2007,42 @@ void registerSocialLuaAPI(lua_State* L) {
             lua_pushnumber(L, cost);
             return 3;
         }},
-                // TurnInArenaPetition(teamSize, r,g,b, icon, ...) - the banner
-                // designer's Accept.
-                //
-                // Every argument after the first is the tabard being drawn on
-                // screen, and the server reads none of them:
-                // HandleTurnInPetitionOpcode takes the petition's guid and
-                // nothing else. So the charter whose window is open is the
-                // whole of the request, and the colours are a client-side
-                // preview of a banner the server assigns itself.
+                // TurnInArenaPetition(teamSize, bgR,bgG,bgB, icon,
+                // iconR,iconG,iconB, border, borderR,borderG,borderB)
+                // (0x005a26d0 -> 0x006dd680), at an arena registrar: the
+                // carried charter for that team size - backpack, then bags -
+                // goes out with the banner after its guid, each colour packed
+                // 0xAARRGGBB with full alpha (0x0061be50 -> 0x0048bd20) and
+                // the icon and border as numbers; with any of the eleven
+                // missing, all five words are -1. No such charter:
+                // ERR_NO_ARENA_CHARTER.
                 {"TurnInArenaPetition", [](lua_State* L) -> int {
-            if (auto* gh = getGameHandler(L))
-                gh->turnInPetition(gh->getPetitionInfo().petitionGuid);
+            auto* gh = getGameHandler(L);
+            const int teamSize = static_cast<int>(luaL_checknumber(L, 1));
+            if (!gh || gh->getPetitionNpcGuid() == 0) return 0;
+            std::array<uint32_t, 5> design{0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
+            bool complete = true;
+            for (int i = 2; i <= 12; ++i) complete = complete && lua_isnumber(L, i);
+            if (complete) {
+                auto channel = [&](int idx) {
+                    const double v = std::clamp(lua_tonumber(L, idx), 0.0, 1.0);
+                    return static_cast<uint32_t>(std::nearbyint(v * 255.0 + 0.5)) & 0xFFu;
+                };
+                auto colour = [&](int first) {
+                    return 0xFF000000u | (channel(first) << 16) | (channel(first + 1) << 8) | channel(first + 2);
+                };
+                design = {colour(2), static_cast<uint32_t>(static_cast<int32_t>(lua_tonumber(L, 5))), colour(6),
+                          static_cast<uint32_t>(static_cast<int32_t>(lua_tonumber(L, 9))), colour(10)};
+            }
+            // The 2v2, 3v3 and 5v5 charters.
+            const uint32_t charter = teamSize == 2 ? 23560u : teamSize == 3 ? 23561u : teamSize == 5 ? 23562u : 0u;
+            const uint64_t guid = charter ? carriedCharterGuid(gh, {charter}) : 0;
+            if (guid == 0) {
+                gh->playGameErrorSound("ERR_NO_ARENA_CHARTER");
+                gh->addUIError(game::interfaceString("ERR_NO_ARENA_CHARTER", "You don't have an arena charter."));
+                return 0;
+            }
+            gh->turnInArenaPetition(guid, design);
             return 0;
         }},
                 // --- The guild registrar ---
@@ -1835,7 +2056,8 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"BuyGuildCharter", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const char* name = luaL_optstring(L, 1, "");
-            if (gh && name && *name) gh->buyPetition(gh->getPetitionNpcGuid(), name);
+            if (gh && name && *name && gh->getPetitionNpcGuid() != 0 && guildCharterPurchaseAllowed(gh))
+                gh->buyPetition(gh->getPetitionNpcGuid(), name);
             return 0;
         }},
                 // BuyPetition(index, name) - the arena registrar's Purchase.
@@ -1846,7 +2068,8 @@ void registerSocialLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 1));
             const char* name = luaL_optstring(L, 2, "");
-            if (gh && name && *name && index >= 1)
+            if (gh && name && *name && index >= 1 && gh->getPetitionNpcGuid() != 0 &&
+                petitionPurchaseAllowed(gh, index - 1))
                 gh->buyPetition(gh->getPetitionNpcGuid(), name,
                                 static_cast<uint32_t>(index));
             return 0;
@@ -1952,35 +2175,32 @@ void registerSocialLuaAPI(lua_State* L) {
             if (auto* gh = getGameHandler(L)) gh->closePetitionVendor();
             return 0;
         }},
-                // HasFilledPetition() gates the arena registrar's turn-in
-                // buttons. Whether a charter has *enough* signatures is not
-                // something this client is told - SMSG_PETITION_SHOW_SIGNATURES
-                // carries a count, but only for the charter whose window is
-                // open, and the required number lives in the server's own
-                // config. What can be answered is whether the player is
-                // carrying a charter at all, which is the question that
-                // decides whether those buttons could ever do anything: an
-                // unfilled one is refused by the server with its own error,
-                // where hiding the button leaves no way to find out.
+                // HasFilledPetition() (0x005a2820 -> 0x006dd680 with no team
+                // size): whether the player carries an arena charter, the
+                // backpack walked first and then the worn bags, said nothing
+                // either way. A guild charter does not count. The client tells charters apart by the petition
+                // query's type; here they are told apart by their fixed item
+                // ids, the 2v2, 3v3 and 5v5 charters.
                 {"HasFilledPetition", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            // Guild Charter, then the 2v2, 3v3 and 5v5 arena charters. Fixed
-            // ids in every expansion that has them.
-            static const uint32_t kCharters[] = {5863, 23560, 23561, 23562};
-            bool carrying = false;
-            if (gh) {
-                const auto& inv = gh->getInventory();
-                for (uint32_t id : kCharters) {
-                    for (int i = 0; i < inv.getBackpackSize() && !carrying; ++i)
-                        carrying = inv.getBackpackSlot(i).item.itemId == id;
-                    for (int b = 0; b < game::Inventory::NUM_BAG_SLOTS && !carrying; ++b)
-                        for (int sl = 0; sl < inv.getBagSize(b) && !carrying; ++sl)
-                            carrying = inv.getBagSlot(b, sl).item.itemId == id;
-                    if (carrying) break;
-                }
-            }
+            const bool carrying = gh && carriedCharterGuid(gh, {23560, 23561, 23562}) != 0;
             lua_pushboolean(L, carrying ? 1 : 0);
             return 1;
+        }},
+                // TurnInGuildCharter() (0x0059a1c0 -> 0x006dd3a0): the first
+                // guild charter carried - backpack, then bags - is turned in
+                // (CMSG_TURN_IN_PETITION with its guid); with none,
+                // ERR_NO_GUILD_CHARTER.
+                {"TurnInGuildCharter", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (!gh) return 0;
+            if (const uint64_t guid = carriedCharterGuid(gh, {5863}); guid != 0) {
+                gh->turnInPetition(guid);
+            } else {
+                gh->playGameErrorSound("ERR_NO_GUILD_CHARTER");
+                gh->addUIError(game::interfaceString("ERR_NO_GUILD_CHARTER", "You don't have a guild charter."));
+            }
+            return 0;
         }},
                 // The guild bank tab dialog picks from the same icons under a
                 // name of its own.
@@ -3397,22 +3617,22 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"GetIgnoreName",           lua_GetIgnoreName},
                 {"GuildInvite", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (gh) gh->inviteToGuild(luaL_checkstring(L, 1));
+            if (const char* name = guildCommandName(L, gh); name && gh) gh->inviteToGuild(name);
             return 0;
         }},
                 {"GuildUninvite", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (gh) gh->kickGuildMember(luaL_checkstring(L, 1));
+            if (const char* name = guildCommandName(L, gh); name && gh) gh->kickGuildMember(name);
             return 0;
         }},
                 {"GuildPromote", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (gh) gh->promoteGuildMember(luaL_checkstring(L, 1));
+            if (const char* name = guildCommandName(L, gh); name && gh) gh->promoteGuildMember(name);
             return 0;
         }},
                 {"GuildDemote", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (gh) gh->demoteGuildMember(luaL_checkstring(L, 1));
+            if (const char* name = guildCommandName(L, gh); name && gh) gh->demoteGuildMember(name);
             return 0;
         }},
                 {"GuildLeave", [](lua_State* L) -> int {
@@ -3657,6 +3877,10 @@ void registerSocialLuaAPI(lua_State* L) {
             return selectGossipQuestAt(L, /*available=*/true);
         }},
                 {"SelectActiveQuest", [](lua_State* L) -> int {
+            // 0x0058ccb0: the greeting's one, unlike the gossip's, triggers
+            // tutorial 0x21 as it hands the quest in.
+            if (auto* gh = getGameHandler(L); gh && lua_isnumber(L, 1) && lua_tonumber(L, 1) >= 1)
+                gh->triggerTutorial(0x21);
             return selectGossipQuestAt(L, /*available=*/false);
         }},
                 // Greys the title of a quest the player has outlevelled, by
@@ -3992,12 +4216,9 @@ void registerSocialLuaAPI(lua_State* L) {
             const auto& opt = opts[static_cast<size_t>(index - 1)];
             const bool confirmed = lua_toboolean(L, 3) != 0;
 
-            // A coded option wants a string typed rather than a price agreed,
-            // and the interface asks for it with a different dialog.
-            if (!confirmed && opt.isCoded) {
-                gh->fireAddonEvent("GOSSIP_ENTER_CODE", {std::to_string(index)});
-                return 0;
-            }
+            // 0x0058af10, in its order: an option with a box asks first;
+            // then a coded one with no code typed asks for it, answered or
+            // not; then one costing more than the player has is refused.
             if (!confirmed && (opt.boxMoney > 0 || !opt.boxText.empty())) {
                 // arg1 is handed straight back to this function as the index,
                 // so it is the position rather than the option's id.
@@ -4006,7 +4227,18 @@ void registerSocialLuaAPI(lua_State* L) {
                                     std::to_string(opt.boxMoney)});
                 return 0;
             }
-            gh->selectGossipOption(opt.id, luaL_optstring(L, 2, ""));
+            const char* code = luaL_optstring(L, 2, "");
+            if (opt.isCoded && (!code || *code == '\0')) {
+                gh->fireAddonEvent("GOSSIP_ENTER_CODE", {std::to_string(index)});
+                return 0;
+            }
+            if (gh->getMoneyCopper() < opt.boxMoney) {
+                // 0x005216f0(0x28): ERR_NOT_ENOUGH_MONEY.
+                gh->addUIError(game::interfaceString("ERR_NOT_ENOUGH_MONEY", "You don't have enough money."));
+                gh->playGameErrorSound("ERR_NOT_ENOUGH_MONEY");
+                return 0;
+            }
+            gh->selectGossipOption(opt.id, code);
             // GOSSIP_CONFIRM_CANCEL (282) after the send, which is where the
             // client raises it - 0x0058af10, just past the write of
             // CMSG_GOSSIP_SELECT_OPTION (0x17c) - and with no argument at all.
@@ -4814,8 +5046,7 @@ void registerSocialLuaAPI(lua_State* L) {
         }},
                 {"GuildSetLeader", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const char* name = luaL_optstring(L, 1, "");
-            if (gh && name && *name) gh->setGuildLeader(name);
+            if (const char* name = guildCommandName(L, gh); name && gh) gh->setGuildLeader(name);
             return 0;
         }},
                 // LoggingChat([on]) (0x004fbc60 with index 0): with an

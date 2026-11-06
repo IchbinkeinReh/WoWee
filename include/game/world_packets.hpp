@@ -2599,6 +2599,14 @@ public:
     /// x, y, z in the transport's frame when transportGuid is set (0x009ab8b0).
     static network::Packet buildDestination(uint32_t spellId, float x, float y, float z, uint8_t castCount,
                                             uint64_t transportGuid = 0);
+    /// An aimed trajectory cast (0x0080ac90 with cast flags 0x2): the cast's
+    /// targets - the unit, if any - with the shot's launch (0x20) and impact
+    /// (0x40) points added, then the pitch and speed it leaves with
+    /// (0x00809f80), then the mover's movement as MSG_MOVE_STOP carries it
+    /// (0x0071f060). Points in wire coordinates, on no transport.
+    static network::Packet buildTrajectory(uint32_t spellId, uint8_t castCount, uint64_t targetGuid,
+                                           const glm::vec3& launch, const glm::vec3& impact, float pitch,
+                                           float speed, uint64_t moverGuid, const MovementInfo& moverWire);
     /// The same cast by the player's pet - a vehicle it drives among them:
     /// CMSG_PET_CAST_SPELL, the caster's guid ahead of the body
     /// (0x0080ac90).
@@ -3794,7 +3802,8 @@ public:
     static network::Packet build(uint64_t mailboxGuid, const std::string& recipient,
                                  const std::string& subject, const std::string& body,
                                  uint64_t money, uint64_t cod, uint32_t stationeryId = 0,
-                                 const std::vector<uint64_t>& itemGuids = {});
+                                 const std::vector<uint64_t>& itemGuids = {},
+                                 uint32_t packageId = 0);
 };
 
 /** CMSG_MAIL_TAKE_MONEY packet builder */
@@ -4002,12 +4011,6 @@ struct AuctionHelloData {
     /// so no id is kept and no AUCTION_HOUSE_SHOW is raised. Classic and TBC end
     /// the packet before this byte, which is why the default is the open answer.
     uint8_t enabled = 1;
-};
-
-/** MSG_AUCTION_HELLO packet builder */
-class AuctionHelloPacket {
-public:
-    static network::Packet build(uint64_t guid);
 };
 
 /** MSG_AUCTION_HELLO parser (server response) */

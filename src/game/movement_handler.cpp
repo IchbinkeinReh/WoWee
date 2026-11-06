@@ -8,6 +8,7 @@
 #include "game/vehicle.hpp"
 #include "game/vehicle_mover.hpp"
 #include "game/update_field_table.hpp"
+#include <bit>
 #include "game/transport_manager.hpp"
 #include "game/transport_local.hpp"
 #include "game/entity.hpp"
@@ -794,6 +795,9 @@ void MovementHandler::sendMovement(Opcode opcode) {
             // character looked flat to everyone else, and isSwimming() - which
             // reads this same word - answered no while the player swam.
             movementInfo.flags |= static_cast<uint32_t>(MovementFlags::SWIMMING);
+            // 0x00721210: the active mover starting to swim triggers
+            // tutorial 0x1b.
+            owner_.triggerTutorial(0x1b);
             // Entering water ends a fall, and nothing else would: FALL_LAND is
             // sent on touching ground and a swimmer never touches it, so a
             // jump into a lake left FALLING set with fallTime still climbing.
@@ -3013,6 +3017,16 @@ void MovementHandler::handleShowTaxiNodes(network::Packet& packet) {
     }
     taxiMaskInitialized_ = true;
 
+    // Fewer than two nodes known is nowhere to fly: ERR_TAXINOPATHS and no
+    // map (0x006d6050 counts the mask's bits before 0x005932e0 opens it).
+    uint32_t knownNodes = 0;
+    for (uint32_t i = 0; i < TLK_TAXI_MASK_SIZE; ++i) knownNodes += static_cast<uint32_t>(std::popcount(data.nodeMask[i]));
+    if (knownNodes < 2) {
+        owner_.raiseUiError(interfaceString("ERR_TAXINOPATHS",
+            "You don't know any flight locations connected to this one."));
+        return;
+    }
+
     currentTaxiData_ = data;
     taxiNpcGuid_ = data.npcGuid;
     taxiWindowOpen_ = true;
@@ -3030,6 +3044,8 @@ void MovementHandler::handleShowTaxiNodes(network::Packet& packet) {
     // so the original interface's map could not appear however complete the
     // functions behind it were.
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("TAXIMAP_OPENED", {});
+    // 0x005932e0: tutorial 0x22 after TAXIMAP_OPENED.
+    owner_.triggerTutorial(0x22);
 }
 
 void MovementHandler::applyTaxiMountForCurrentNode() {
@@ -4300,6 +4316,50 @@ void MovementHandler::followGuid(uint64_t guid) {
         owner_.raiseUiError(interfaceString("ERR_GENERIC_NO_TARGET", "You have no target."));
         owner_.playGameErrorSound("ERR_GENERIC_NO_TARGET");
         return;
+    }
+
+    // 0x0072b4a0's follow case: a player on the player's side (0x00729bd0 -
+    // not oneself, neither charmed, one faction group, not attackable), then
+    // the player's own state - no health, stunned (UNIT_FIELD_FLAGS 0x40000),
+    // channeling - each refused with its line.
+    auto refuse = [&](const char* key, const char* enUS) {
+        owner_.raiseUiError(interfaceString(key, enUS));
+        owner_.playGameErrorSound(key);
+    };
+    const uint64_t me = owner_.getPlayerGuid();
+    if (target->getType() != ObjectType::PLAYER || guid == me || !owner_.unitsCooperate(me, guid)) {
+        refuse("ERR_INVALID_FOLLOW_TARGET", "You can't follow that unit.");
+        return;
+    }
+    if (auto self = owner_.getEntityManager().getEntity(me)) {
+        const auto field = [&](UF f) {
+            const uint16_t i = fieldIndex(f);
+            return i == 0xFFFF ? 0u : self->getField(i);
+        };
+        if (static_cast<int32_t>(field(UF::UNIT_FIELD_HEALTH)) < 1) {
+            refuse("ERR_PLAYER_DEAD", "You can't do that when you're dead.");
+            return;
+        }
+        if ((field(UF::UNIT_FIELD_FLAGS) & 0x40000u) != 0) {
+            refuse("ERR_GENERIC_STUNNED", "You are stunned");
+            return;
+        }
+        if (field(UF::UNIT_CHANNEL_SPELL) != 0) {
+            refuse("ERR_TOOBUSYTOFOLLOW", "You're too busy to follow anything!");
+            return;
+        }
+    }
+    // ...and the follow is started only within thirty yards: 0x00715c70's
+    // table gives the follow move (kind 3) 900, the square of the distance.
+    {
+        const float dx = target->getX() - owner_.movementInfoRef().x;
+        const float dy = target->getY() - owner_.movementInfoRef().y;
+        const float dz = target->getZ() - owner_.movementInfoRef().z;
+        constexpr float kFollowStartRangeSq = 900.0f;
+        if (dx * dx + dy * dy + dz * dz >= kFollowStartRangeSq) {
+            refuse("ERR_AUTOFOLLOW_TOO_FAR", "Target is too far away.");
+            return;
+        }
     }
 
     // Set follow target

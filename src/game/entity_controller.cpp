@@ -1089,6 +1089,7 @@ bool EntityController::applyUnitFieldsOnCreate(const UpdateBlock& block,
         }
     }
     applyPlayerShapeshiftForm(block);
+    notePlayerPvpByte(block, true);
     // The predicted powers start as the fields (0x0071c320).
     unit->resetPredictedPower();
     // Initial update masks commonly omit fields whose value is zero. A dead unit
@@ -1112,6 +1113,18 @@ void EntityController::applyPlayerShapeshiftForm(const UpdateBlock& block) {
     for (const char* event : owner_.setPlayerShapeshiftForm(static_cast<uint8_t>(it->second >> 24))) {
         pendingEvents_.emit(event);
     }
+}
+
+void EntityController::notePlayerPvpByte(const UpdateBlock& block, bool isCreate) {
+    if (block.guid != owner_.getPlayerGuid() || isPreWotlk()) return;
+    const uint16_t bytes2 = fieldIndex(UF::UNIT_FIELD_BYTES_2);
+    if (bytes2 == 0xFFFF) return;
+    const auto it = block.fields.find(bytes2);
+    if (it == block.fields.end()) return;
+    const int now = static_cast<int>((it->second >> 8) & 0xFF);
+    const int was = lastPlayerPvpByte_;
+    lastPlayerPvpByte_ = now;
+    if (!isCreate && was >= 0 && was != now && (now & 0x1) != 0) owner_.triggerTutorial(0x1f);
 }
 
 // Consolidates player-death state into one place so both the health==0 and
@@ -1167,6 +1180,26 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
             // A unit dying in front of the client is a combat log entry
             // (0x007489c0 -> 0x007561e0), once, as its health runs out.
             if (val == 0 && oldHealth != 0) owner_.combatLogFeed().unitDied(block.guid);
+            // The target dying ends a repeating shot, the server told
+            // (0x00729220 -> 0x0071ee70 -> 0x00807560(1)).
+            if (val == 0 && oldHealth != 0 && block.guid == owner_.getTargetGuid())
+                owner_.stopAutoRepeat(true);
+            // A party member dying is said: ERR_PLAYER_DIED_S with the name,
+            // a system line (0x00729220 -> 0x006dc0f0) - another player in
+            // one of the party's slots (0x0052c680: the player's own
+            // subgroup), not one dynamically flagged dead (0x20) already.
+            if (val == 0 && oldHealth != 0 && entity->getType() == ObjectType::PLAYER &&
+                block.guid != owner_.getPlayerGuid() &&
+                (unit->getDynamicFlags() & 0x20u) == 0) {
+                const auto& party = owner_.getPartyData();
+                const bool inParty = std::any_of(party.members.begin(), party.members.end(),
+                    [&](const GroupMember& m) { return m.guid == block.guid && m.subGroup == party.subGroup; });
+                if (inParty) {
+                    const std::string who = owner_.lookupName(block.guid);
+                    if (!who.empty())
+                        owner_.addSystemChatMessage(interfaceFormat("ERR_PLAYER_DIED_S", "%s has died.", {who}));
+                }
+            }
             if (val == 0) {
                 if (owner_.getCombatHandler() && block.guid == owner_.getCombatHandler()->getAutoAttackTargetGuid()) {
                     owner_.stopAutoAttack();
@@ -1364,6 +1397,9 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
         else if (key == ufi.dynFlags) {
             uint32_t oldDyn = unit->getDynamicFlags();
             unit->setDynamicFlags(val);
+            // 0x00740570: a unit becoming lootable triggers tutorial 6.
+            if ((oldDyn & UNIT_DYNFLAG_LOOTABLE) == 0 && (val & UNIT_DYNFLAG_LOOTABLE) != 0)
+                owner_.triggerTutorial(6);
             if (block.guid == owner_.getPlayerGuid()) {
                 if (oldDyn != val) pendingEvents_.emit("UNIT_DYNAMIC_FLAGS", {"player"});
                 bool wasDead = (oldDyn & UNIT_DYNFLAG_DEAD) != 0;
@@ -1608,6 +1644,7 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
         owner_.addonEventCallbackRef()("UNIT_PET_EXPERIENCE", {"pet"});
     }
     applyPlayerShapeshiftForm(block);
+    notePlayerPvpByte(block, false);
     // The pet tab redraws its stat block on these, named for the pet.
     if (petStatsChanged && owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("UNIT_STATS", {"pet"});
@@ -1721,18 +1758,26 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
         else if (pfi.pBytes2 != 0xFFFF && key == pfi.pBytes2) {
             uint8_t bankBagSlots = static_cast<uint8_t>((val >> 16) & 0xFF);
             owner_.inventoryRef().setPurchasedBankBagSlots(bankBagSlots);
-            // Byte 3 (bits 24-31): REST_STATE
-            // 0 = not resting, 1 = REST_TYPE_IN_TAVERN, 2 = REST_TYPE_IN_CITY
-            uint8_t restStateByte = static_cast<uint8_t>((val >> 24) & 0xFF);
+            // Byte 3 (bits 24-31): the rest state - 1 rested, 2 normal - which
+            // is the experience bonus, not resting (PLAYER_FLAGS 0x20). Its
+            // watcher (0x006da630): UPDATE_EXHAUSTION, and ERR_EXHAUSTION_RESTED
+            // with tutorial 0x19 or ERR_EXHAUSTION_NORMAL in chat. A create
+            // only notes it.
+            const int restState = static_cast<int>((val >> 24) & 0xFF);
+            const int wasRestState = lastRestState_;
+            lastRestState_ = restState;
+            if (!isCreate && wasRestState >= 0 && restState != wasRestState) {
+                pendingEvents_.emit("UPDATE_EXHAUSTION", {});
+                if (restState == 1) {
+                    owner_.addSystemChatMessage(interfaceString("ERR_EXHAUSTION_RESTED", "You feel rested."));
+                    owner_.triggerTutorial(0x19);
+                } else if (restState == 2) {
+                    owner_.addSystemChatMessage(interfaceString("ERR_EXHAUSTION_NORMAL", "You feel normal."));
+                }
+            }
             if (isCreate) {
                 LOG_DEBUG("PLAYER_BYTES_2 (CREATE): raw=0x", std::hex, val, std::dec,
                            " bankBagSlots=", static_cast<int>(bankBagSlots));
-                bool wasResting = owner_.isRestingRef();
-                owner_.isRestingRef() = (restStateByte != 0);
-                if (owner_.isRestingRef() != wasResting) {
-                    pendingEvents_.emit("UPDATE_EXHAUSTION", {});
-                    pendingEvents_.emit("PLAYER_UPDATE_RESTING", {});
-                }
             } else {
                 // Byte 0 (bits 0-7): facial hair / piercings
                 uint8_t facialHair = static_cast<uint8_t>(val & 0xFF);
@@ -1742,7 +1787,6 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
                 LOG_DEBUG("PLAYER_BYTES_2 (VALUES): raw=0x", std::hex, val, std::dec,
                            " bankBagSlots=", static_cast<int>(bankBagSlots),
                            " facial=", static_cast<int>(facialHair));
-                owner_.isRestingRef() = (restStateByte != 0);
                 if (owner_.appearanceChangedCallbackRef())
                     owner_.appearanceChangedCallbackRef()();
                 if (owner_.playerModelRebuildCallbackRef())
@@ -1775,6 +1819,11 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
           if (nowResting != owner_.isRestingRef()) {
               owner_.isRestingRef() = nowResting;
               pendingEvents_.emit("PLAYER_UPDATE_RESTING", {});
+              // 0x006e0fd0: resting coming on triggers tutorials 0x1d, 0x1e.
+              if (nowResting && !isCreate) {
+                  owner_.triggerTutorial(0x1d);
+                  owner_.triggerTutorial(0x1e);
+              }
           }
           // The PvP flag (PLAYER_FLAGS_IN_PVP, 0x200) turning on or off:
           // ERR_PVP_TOGGLE_ON/OFF on screen in yellow and
@@ -1939,6 +1988,8 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
                 owner_.releasedSpiritRef() = true;
                 LOG_INFO("Player entered ghost form (PLAYER_FLAGS)");
                 if (owner_.ghostStateCallbackRef()) owner_.ghostStateCallbackRef()(true);
+                // 0x006df710: the ghost flag coming on triggers tutorial 0x18.
+                if (!isCreate) owner_.triggerTutorial(0x18);
             } else if (wasGhost && !nowGhost) {
                 owner_.releasedSpiritRef() = false;
                 owner_.playerDeadRef() = false;
@@ -2191,6 +2242,10 @@ void EntityController::trackItemOnCreate(const UpdateBlock& block, bool& newItem
     const uint16_t seedField = (randPropField != 0xFFFF && randPropField > 0)
         ? static_cast<uint16_t>(randPropField - 1u) : 0xFFFFu;
     auto flagsIt    = (flagsField != 0xFFFF)    ? block.fields.find(flagsField)    : block.fields.end();
+    // ITEM_FIELD_SPELL_CHARGES[0], two after STACK_COUNT (DURATION between).
+    const uint16_t chargesField = (fieldIndex(UF::ITEM_FIELD_STACK_COUNT) != 0xFFFF)
+        ? static_cast<uint16_t>(fieldIndex(UF::ITEM_FIELD_STACK_COUNT) + 2u) : 0xFFFFu;
+    auto chargesIt  = (chargesField != 0xFFFF)  ? block.fields.find(chargesField)  : block.fields.end();
     auto randPropIt = (randPropField != 0xFFFF) ? block.fields.find(randPropField) : block.fields.end();
     auto seedIt     = (seedField != 0xFFFF)     ? block.fields.find(seedField)     : block.fields.end();
     const uint16_t enchBase = (fieldIndex(UF::ITEM_FIELD_STACK_COUNT) != 0xFFFF)
@@ -2215,6 +2270,7 @@ void EntityController::trackItemOnCreate(const UpdateBlock& block, bool& newItem
         if (sock2EnchIt != block.fields.end()) info.socketEnchantIds[1]  = sock2EnchIt->second;
         if (sock3EnchIt != block.fields.end()) info.socketEnchantIds[2]  = sock3EnchIt->second;
         if (flagsIt    != block.fields.end()) info.flags                 = flagsIt->second;
+        if (chargesIt  != block.fields.end()) info.spellCharges0         = static_cast<int32_t>(chargesIt->second);
         if (randPropIt != block.fields.end()) info.randomPropertyId      = static_cast<int32_t>(randPropIt->second);
         if (seedIt     != block.fields.end()) info.suffixFactor          = seedIt->second;
         // Both halves out of one block, or neither. A create block carries the
@@ -2273,6 +2329,7 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
     // ITEM_FIELD_FLAGS (STACK+7) carries the soulbound bit that a BoE item gains on equip;
     // RANDOM_PROPERTIES_ID sits before DURABILITY (DUR-2 pre-WotLK, DUR-1 on WotLK).
     const uint16_t itemFlagsField    = (itemStackField != 0xFFFF) ? (itemStackField + 7u) : 0xFFFF;
+    const uint16_t itemChargesField  = (itemStackField != 0xFFFF) ? (itemStackField + 2u) : 0xFFFF;
     const uint16_t itemRandPropField = (itemDurField != 0xFFFF)
         ? static_cast<uint16_t>(itemDurField - (isPreWotlk() ? 2u : 1u)) : 0xFFFF;
     const uint16_t itemSeedField = (itemRandPropField != 0xFFFF && itemRandPropField > 0)
@@ -2330,6 +2387,8 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
                 it->second.socketEnchantIds[2] = val;
                 inventoryChanged = true;
             }
+        } else if (isItemInInventory && itemChargesField != 0xFFFF && key == itemChargesField) {
+            it->second.spellCharges0 = static_cast<int32_t>(val);
         } else if (isItemInInventory && itemFlagsField != 0xFFFF && key == itemFlagsField) {
             if (it->second.flags != val) {
                 it->second.flags = val;
@@ -2430,8 +2489,8 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
         // UPDATE_INVENTORY_DURABILITY. Neither was fired anywhere but at world
         // entry, so the indicator showed the durability the player logged in
         // with -- a repair changed nothing on screen, and neither did damage.
-        pendingEvents_.emit("UPDATE_INVENTORY_ALERTS", {});
-        pendingEvents_.emit("UPDATE_INVENTORY_DURABILITY", {});
+        // Through the alerts' pass, which raises both (0x005e90d0).
+        owner_.updateInventoryAlerts();
     }
 }
 
@@ -2564,6 +2623,10 @@ void EntityController::onCreatePlayer(const UpdateBlock& block, std::shared_ptr<
         // The active player made: 0x006e6150 -> 0x00528010 -> 0x005cb900,
         // the guild rights asked for with PLAYER_GUILDID now known.
         owner_.onPlayerEnteredWorldGuild();
+        // ...and, from the unit's own creation (0x0072e3a0 -> 0x006d66e0),
+        // PVPQUEUE_ANYWHERE_UPDATE_AVAILABLE (event 0x26f): the battleground
+        // queue can be asked about from anywhere again.
+        pendingEvents_.emit("PVPQUEUE_ANYWHERE_UPDATE_AVAILABLE", {});
     }
 
     // Name query + visible items
@@ -3473,10 +3536,41 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
                 if (moved) pendingEvents_.emit("KNOWN_TITLES_UPDATE", {});
             }
         }
+        // The player's own fields the client watches to ask every quest
+        // giver's status again (the watchers 0x006e5180 installs, each calling 0x006d50c0):
+        // a quest log slot (0x006df370), a quest done today (0x006d9f20), the
+        // money (0x006da070) and a skill's value - the low half of its second
+        // dword (0x006da4a0). Once per block however many moved.
+        bool questStatusMoved = false;
+        {
+            const auto moved = [&](uint16_t key, uint32_t mask) {
+                const auto now = block.fields.find(key);
+                if (now == block.fields.end()) return false;
+                const auto was = lastFields.find(key);
+                return ((was == lastFields.end() ? 0u : was->second) & mask) != (now->second & mask);
+            };
+            const auto range = [&](UF first, uint16_t count, uint16_t stride, uint16_t offset, uint32_t mask) {
+                const uint16_t base = fieldIndex(first);
+                if (base == 0xFFFF) return false;
+                for (uint16_t i = 0; i < count; ++i) {
+                    if (moved(static_cast<uint16_t>(base + i * stride + offset), mask)) return true;
+                }
+                return false;
+            };
+            questStatusMoved =
+                range(UF::PLAYER_QUEST_LOG_START, 25 * 5, 1, 0, 0xFFFFFFFFu) ||
+                range(UF::PLAYER_FIELD_DAILY_QUESTS_1, 25, 1, 0, 0xFFFFFFFFu) ||
+                range(UF::PLAYER_FIELD_COINAGE, 1, 1, 0, 0xFFFFFFFFu) ||
+                range(UF::PLAYER_SKILL_INFO_START, 128, 3, 1, 0x0000FFFFu);
+        }
+
         // Merge block fields into the persistent snapshot. Both are sorted, so
         // a simple insert_or_assign per key keeps the invariant intact.
         for (const auto& [key, val] : block.fields) {
             owner_.lastPlayerFieldsRef().insert_or_assign(key, val);
+        }
+        if (questStatusMoved) {
+            if (auto* qh = owner_.getQuestHandler()) qh->queryAllQuestGiverStatuses();
         }
         if (needCoinageDetectSnapshot) {
             maybeDetectCoinageIndex(oldFieldsSnapshot, owner_.lastPlayerFieldsRef());
@@ -3497,6 +3591,13 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
             }
             owner_.updatePossessSpell();  // 0x005d30e0 / 0x005d62a0
             owner_.updatePetActionBar();
+            // ...and said: PLAYER_FARSIGHT_FOCUS_CHANGED (event 0xa1). A
+            // player with no health is told PLAYER_DEAD again (0x00520f70),
+            // so the death frames come back to the body's view.
+            pendingEvents_.emit("PLAYER_FARSIGHT_FOCUS_CHANGED", {});
+            if (const uint16_t health = fieldIndex(UF::UNIT_FIELD_HEALTH);
+                health != 0xFFFF && static_cast<int32_t>(entity->getField(health)) < 1)
+                pendingEvents_.emit("PLAYER_DEAD", {});
         }
         PlayerFieldIndices pfi = PlayerFieldIndices::resolve();
         bool slotsChanged = applyPlayerStatFields(block.fields, pfi, false);
@@ -3777,6 +3878,20 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
                                (block.fields.find(targetLo) != block.fields.end() ||
                                 block.fields.find(targetHi) != block.fields.end());
     const uint64_t oldTarget = watchesTarget ? unitTargetGuid(*entity) : 0;
+    // The pet's name timestamp, which moves when it is renamed. The client
+    // watches the field (0x00741d00 registers 0x0072cf70 on it) and says so
+    // when the unit is the player's - its summoner, or its creator when it has
+    // none - as LOCALPLAYER_PET_RENAMED (event 0x13d).
+    const uint16_t petNameStamp = fieldIndex(UF::UNIT_FIELD_PET_NAME_TIMESTAMP);
+    const bool watchesPetName = entity->getType() == ObjectType::UNIT && petNameStamp != 0xFFFF &&
+                                block.fields.find(petNameStamp) != block.fields.end();
+    const uint32_t oldPetNameStamp = watchesPetName ? entity->getField(petNameStamp) : 0;
+    // The player's UNIT_FLAG2_COMPREHEND_LANG (0x8) turning over changes the
+    // languages they can speak: LANGUAGE_LIST_CHANGED (0x0073c5d0, 0xf0).
+    const uint16_t flags2 = fieldIndex(UF::UNIT_FIELD_FLAGS_2);
+    const bool watchesLanguages = block.guid == owner_.getPlayerGuid() && flags2 != 0xFFFF &&
+                                  block.fields.find(flags2) != block.fields.end();
+    const uint32_t oldFlags2 = watchesLanguages ? entity->getField(flags2) : 0;
 
     // Set fields (common)
     for (const auto& field : block.fields) {
@@ -3795,6 +3910,21 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
         // and a raid frame both hear of it.
         for (const auto& uid : owner_.unitTokensForGuid(block.guid))
             pendingEvents_.emit("UNIT_TARGET", {uid});
+    }
+
+    if (watchesLanguages && ((entity->getField(flags2) ^ oldFlags2) & 0x8u) != 0)
+        pendingEvents_.emit("LANGUAGE_LIST_CHANGED", {});
+    if (watchesPetName && entity->getField(petNameStamp) != oldPetNameStamp) {
+        auto guidAt = [&](UF lo) -> uint64_t {
+            const uint16_t i = fieldIndex(lo);
+            if (i == 0xFFFF) return 0;
+            return static_cast<uint64_t>(entity->getField(i)) |
+                   (static_cast<uint64_t>(entity->getField(static_cast<uint16_t>(i + 1))) << 32);
+        };
+        uint64_t owner = guidAt(UF::UNIT_FIELD_SUMMONEDBY_LO);
+        if (owner == 0) owner = guidAt(UF::UNIT_FIELD_CREATEDBY);
+        if (owner != 0 && owner == owner_.getPlayerGuid())
+            pendingEvents_.emit("LOCALPLAYER_PET_RENAMED", {});
     }
 
     flushPendingEvents();

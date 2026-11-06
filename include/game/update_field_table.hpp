@@ -48,6 +48,7 @@ enum class UF : uint16_t {
     UNIT_FIELD_PETEXPERIENCE,   // A hunter pet's experience toward its next level
     UNIT_FIELD_PETNEXTLEVELEXP, // ...and what that level costs
     UNIT_FIELD_PETNUMBER,       // Non-zero on a hunter pet; such a pet always takes its family's size
+    UNIT_FIELD_PET_NAME_TIMESTAMP, // Moves when the pet is renamed (LOCALPLAYER_PET_RENAMED, 0x0072cf70)
     UNIT_FIELD_RESISTANCES,   // Physical armor (index 0 of the resistance array)
     UNIT_FIELD_STAT0,         // Strength (effective base, includes items)
     UNIT_FIELD_STAT1,         // Agility
@@ -223,6 +224,10 @@ enum class UF : uint16_t {
     // 0x0058dd50 zeroes the reward panel's XP line the same way, and 0x0054e5b0
     // sends the "no more XP" byte with it.
     PLAYER_FIELD_MAX_LEVEL,
+    // The quests done today, PLAYER_FIELD_DAILY_QUESTS_1 and the 24 after it
+    // (blob +0x11b0..+0x1213, wire 1280..1304). The client watches each dword
+    // (0x006d9f20) and asks every quest giver's status again when one moves.
+    PLAYER_FIELD_DAILY_QUESTS_1,
     // Which currencies the realm says this character has met. WotLK only: no
     // earlier layout this client's tables were read from names it, so on those
     // layouts fieldIndex answers 0xFFFF and the token tab falls back to

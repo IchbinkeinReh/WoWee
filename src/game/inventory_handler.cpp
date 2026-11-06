@@ -1,4 +1,7 @@
 #include "game/inventory_handler.hpp"
+#include "game/tutorials.hpp"
+#include "game/totem_bar.hpp"
+#include "game/spell_handler.hpp"
 #include "game/auction_pending_sales.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "game/spell_classification.hpp"
@@ -445,15 +448,9 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
             if (!packet.hasRemaining(8)) break;
             masterLootCandidates_.push_back(packet.readUInt64());
         }
-        // The candidate list arrives because the master looter picked an item,
-        // and the menu that assigns it is built from exactly this. Parsed and
-        // stored already; nothing was told it had come, so the menu never
-        // opened. Both events: one opens it, one fills it, and they are the
-        // same frame rather than two.
-        if (owner_.addonEventCallbackRef()) {
-            owner_.addonEventCallbackRef()("OPEN_MASTER_LOOT_LIST", {});
-            owner_.addonEventCallbackRef()("UPDATE_MASTER_LOOT_LIST", {});
-        }
+        // Kept and nothing more (0x006fa690). The menu that assigns an item
+        // is opened by LootSlot on a master looter's slot (0x00589140); a
+        // list arriving with the loot is not an item picked.
     };
 
     // ---- Loot money / misc consume ----
@@ -640,7 +637,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         const bool created    = packet.readUInt32() != 0;
         const bool showInChat = packet.readUInt32() != 0;
         const uint8_t bagSlot = packet.readUInt8();
-        /*uint32_t slot          =*/ packet.readUInt32();
+        const uint32_t slot = packet.readUInt32();
         uint32_t itemId = packet.readUInt32();
         /*uint32_t suffixFactor  =*/ packet.readUInt32();
         int32_t randomProp = static_cast<int32_t>(packet.readUInt32());
@@ -669,7 +666,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
             owner_.pendingItemPushNotifsRef().push_back({.itemId = itemId, .count = count,
                 .bagButtonId = bagButtonId, .self = self, .received = received,
                 .created = created, .showInChat = showInChat, .randomProp = randomProp, .who = who,
-                .totalCount = totalCount});
+                .receiver = guid, .bagSlot = bagSlot, .slot = slot, .totalCount = totalCount});
             owner_.ensureItemInfo(itemId);
             return;
         }
@@ -681,6 +678,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         // packet's flags - and none when the server says not to show it. This
         // printed "Received item: [x] x2" as a system line for all of them.
         owner_.addLocalChatLine(ChatType::LOOT, interface_text::itemPushLine(push, link, who, uiText));
+        triggerItemPushTutorials(guid, *info, bagSlot, slot);
         if (!self) return;
         if (auto* qh = owner_.getQuestHandler())
             qh->announceQuestItemPushed(itemId, count, totalCount, info->name);
@@ -1887,6 +1885,47 @@ void InventoryHandler::buyItem(uint64_t vendorGuid, uint32_t itemId, uint32_t sl
     owner_.getSocket()->send(packet);
 }
 
+void InventoryHandler::wrapItemAt(uint8_t wireBag, uint8_t wireSlot) {
+    // 0x006dcf20: the paper's place, then the item's, each a bag and a slot
+    // byte; then wrapping ends (0x006cef80).
+    if (wrapPaperGuid_ == 0) return;
+    if (owner_.getState() == WorldState::IN_WORLD && owner_.getSocket() &&
+        wireOpcode(Opcode::CMSG_WRAP_ITEM) != 0xFFFF) {
+        network::Packet packet(wireOpcode(Opcode::CMSG_WRAP_ITEM));
+        packet.writeUInt8(wrapPaperBag_);
+        packet.writeUInt8(wrapPaperSlot_);
+        packet.writeUInt8(wireBag);
+        packet.writeUInt8(wireSlot);
+        owner_.getSocket()->send(packet);
+    }
+    wrapPaperGuid_ = 0;
+}
+
+uint64_t InventoryHandler::containerGuid(uint8_t wireBag) const {
+    if (wireBag == slots::kNoContainer) return owner_.getPlayerGuid();
+    const int bank = static_cast<int>(wireBag) - slots::bankBagFirst();
+    if (bank >= 0 && bank < static_cast<int>(bankBagSlotGuids_.size())) return bankBagSlotGuids_[static_cast<size_t>(bank)];
+    return owner_.getEquipSlotGuid(wireBag);
+}
+
+void InventoryHandler::buyItemInSlot(uint64_t vendorGuid, uint32_t itemId, uint32_t vendorSlot,
+                                     uint8_t wireBag, uint8_t wireSlot, uint32_t count) {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    if (wireOpcode(Opcode::CMSG_BUY_ITEM_IN_SLOT) == 0xFFFF) return;
+    const uint64_t bagGuid = containerGuid(wireBag);
+    if (bagGuid == 0) return;
+    pendingBuyItemId_ = itemId;
+    pendingBuyItemSlot_ = vendorSlot;
+    network::Packet packet(wireOpcode(Opcode::CMSG_BUY_ITEM_IN_SLOT));
+    packet.writeUInt64(vendorGuid);
+    packet.writeUInt32(itemId);
+    packet.writeUInt32(vendorSlot);
+    packet.writeUInt64(bagGuid);
+    packet.writeUInt8(wireSlot);
+    packet.writeUInt32(count);
+    owner_.getSocket()->send(packet);
+}
+
 void InventoryHandler::sellItem(uint64_t vendorGuid, uint64_t itemGuid, uint32_t count) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     LOG_INFO("Sell request: vendorGuid=0x", std::hex, vendorGuid,
@@ -2024,8 +2063,7 @@ void InventoryHandler::buyBackItem(uint32_t row) {
 // event rather than by polling. The optimistic repair below changes durability
 // without the server having said so yet, so it has to say so itself.
 void InventoryHandler::announceDurabilityChange() {
-    owner_.fireAddonEvent("UPDATE_INVENTORY_ALERTS", {});
-    owner_.fireAddonEvent("UPDATE_INVENTORY_DURABILITY", {});
+    owner_.updateInventoryAlerts();
 }
 
 void InventoryHandler::repairItem(uint64_t vendorGuid, uint64_t itemGuid) {
@@ -2128,6 +2166,12 @@ void InventoryHandler::equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot, boo
     // packet outright when the destination is not an equipment position, and a
     // dropped request is indistinguishable from one that was never built.
     if (equipSlot >= static_cast<uint8_t>(Inventory::FIRST_BAG_EQUIP_SLOT)) return;
+    // An item on the trade table is not put on (0x006dff90, 0x005864d0).
+    if (itemInTrade(itemGuid)) {
+        owner_.playGameErrorSound("ERR_EQUIP_TRADE_ITEM");
+        owner_.addUIError(interfaceString("ERR_EQUIP_TRADE_ITEM", "You can't equip an item you are trading."));
+        return;
+    }
 
     // Asked before the packet is built, so a bind-on-equip item named into a
     // slot no longer binds itself without the player saying so. EquipItemByName
@@ -2198,6 +2242,11 @@ void InventoryHandler::autoEquipItemBySlot(int backpackIndex, bool confirmed) {
     if (setAmmoInstead(slot.item.itemId)) return;
 
     const uint8_t wireSlot = static_cast<uint8_t>(Inventory::NUM_EQUIP_SLOTS + backpackIndex);
+    if (itemInTrade(itemGuidAtWire(0xFF, wireSlot))) {   // 0x006dff90
+        owner_.playGameErrorSound("ERR_EQUIP_TRADE_ITEM");
+        owner_.addUIError(interfaceString("ERR_EQUIP_TRADE_ITEM", "You can't equip an item you are trading."));
+        return;
+    }
     if (!confirmed && slot.item.wouldBindOnEquip()) {
         pendingSwap_ = PendingSwap{};   // only one move can be waiting
         pendingEquip_ = PendingEquip{.active = true, .fromBag = false, .bag = 0, .slot = backpackIndex, .wireSlot = wireSlot};
@@ -2225,6 +2274,12 @@ void InventoryHandler::autoEquipItemInBag(int bagIndex, int slotIndex, bool conf
     if (const auto& bagSlot = owner_.inventoryRef().getBagSlot(bagIndex, slotIndex);
         !bagSlot.empty() && setAmmoInstead(bagSlot.item.itemId))
         return;
+    if (itemInTrade(itemGuidAtWire(static_cast<uint8_t>(Inventory::FIRST_BAG_EQUIP_SLOT + bagIndex),
+                                   static_cast<uint8_t>(slotIndex)))) {   // 0x006dff90
+        owner_.playGameErrorSound("ERR_EQUIP_TRADE_ITEM");
+        owner_.addUIError(interfaceString("ERR_EQUIP_TRADE_ITEM", "You can't equip an item you are trading."));
+        return;
+    }
 
     if (!confirmed && equipWouldBindFromBag(bagIndex, slotIndex)) {
         pendingSwap_ = PendingSwap{};   // only one move can be waiting
@@ -2310,6 +2365,33 @@ void InventoryHandler::dispatchUseItem(uint8_t wowBag, uint8_t wowSlot, uint64_t
     }
 
     const auto* itemInfo = owner_.getItemInfo(item.itemId);
+    // 0x00708c20: a wrapper (ItemFlags 0x200) is no spell. A wrapped gift
+    // (ITEM_FIELD_FLAGS 0x8) is opened, CMSG_OPEN_ITEM (0x006dce70); paper is
+    // taken up to wrap the next item clicked (0x006d67e0).
+    constexpr uint32_t kItemFlagWrapper = 0x200;
+    constexpr uint32_t kItemFieldFlagWrapped = 0x8;
+    if (itemInfo && itemInfo->valid && (itemInfo->itemFlags & kItemFlagWrapper) != 0) {
+        if ((owner_.getItemFieldFlags(itemGuid) & kItemFieldFlagWrapped) != 0) {
+            owner_.getSocket()->send(OpenItemPacket::build(wowBag, wowSlot));
+        } else {
+            wrapPaperGuid_ = itemGuid;
+            wrapPaperBag_ = wowBag;
+            wrapPaperSlot_ = wowSlot;
+        }
+        return;
+    }
+    // A charter (ItemFlags 0x2000, ITEM_FLAG_PETITION) is read, not cast:
+    // CMSG_PETITION_SHOW_SIGNATURES with its guid (0x00708c20 ->
+    // 0x006d6e00), answered with the signatures it carries.
+    constexpr uint32_t kItemFlagPetition = 0x2000;
+    if (itemInfo && itemInfo->valid && (itemInfo->itemFlags & kItemFlagPetition) != 0) {
+        if (wireOpcode(Opcode::CMSG_PETITION_SHOW_SIGNATURES) != 0xFFFF) {
+            network::Packet packet(wireOpcode(Opcode::CMSG_PETITION_SHOW_SIGNATURES));
+            packet.writeUInt64(itemGuid);
+            owner_.getSocket()->send(packet);
+        }
+        return;
+    }
     uint32_t useSpellId = 0;
     if (itemInfo) {
         for (const auto& sp : itemInfo->spells) {
@@ -2321,6 +2403,9 @@ void InventoryHandler::dispatchUseItem(uint8_t wowBag, uint8_t wowSlot, uint64_t
     }
     LOG_DEBUG("useItem: bag=", (int)wowBag, " slot=", (int)wowSlot, " entry=", item.itemId,
               " spellId=", useSpellId);
+    if (useSpellId != 0 && itemInfo && itemInfo->valid &&
+        !itemUseAllowed(wowBag, wowSlot, itemGuid, *itemInfo))
+        return;
 
     // Pre-WotLK mounts are items, so the same rule applies to them: using the
     // one you are riding dismounts you rather than re-summoning it.
@@ -2934,6 +3019,43 @@ void InventoryHandler::splitItem(uint8_t srcBag, uint8_t srcSlot, uint8_t count)
     owner_.raiseUiError("Cannot split: no free inventory slots.");
 }
 
+void InventoryHandler::triggerItemPushTutorials(uint64_t receiver, const ItemQueryResponseData& info,
+                                                uint8_t bagSlot, uint32_t slot) {
+    // 0x00523900: only for a receiver this client knows.
+    const bool self = receiver == owner_.getPlayerGuid();
+    if (!self && !owner_.getEntityManager().getEntity(receiver)) return;
+    ItemPushTutorialInput in;
+    in.self = self;
+    in.itemId = info.entry;
+    in.itemClass = info.itemClass;
+    in.subClass = info.subClass;
+    in.inventoryType = info.inventoryType;
+    for (const auto& sp : info.spells) {
+        if (sp.spellId != 0 && sp.spellTrigger == 0) in.hasUseSpell = true;
+    }
+    in.bagSlot = bagSlot;
+    in.slot = slot;
+    in.playerLevel = owner_.getPlayerLevel();
+    in.playerClass = owner_.getPlayerClass();
+    in.equipTutorialSeen = owner_.tutorials().flagged(0x37);
+    for (uint32_t id : itemPushTutorials(in)) owner_.triggerTutorial(id);
+    // 0x005d9540, from the container slot's handler (0x005d9790): an item of
+    // a totem category arriving while that element's totem bar list holds
+    // spells triggers tutorial 0x2e.
+    if (self && info.totemCategory != 0) {
+        const uint32_t mask = totem_bar::elementMask(info.totemCategory);
+        auto* sh = owner_.getSpellHandler();
+        for (int e = 0; sh && e < totem_bar::kElements; ++e) {
+            if ((mask & (1u << e)) != 0 && !sh->multiCastSpells(e).empty()) {
+                owner_.triggerTutorial(0x2e);
+                break;
+            }
+        }
+        // 0x005d9540 ends with the bar's update (0x005ab9d0).
+        if (sh && mask != 0) sh->updateMultiCastBar();
+    }
+}
+
 void InventoryHandler::fireBagUpdates() {
     auto& fire = owner_.addonEventCallbackRef();
     if (!fire) return;
@@ -3255,8 +3377,10 @@ void InventoryHandler::useItemById(uint32_t itemId, uint64_t unitTarget) {
 
 void InventoryHandler::handleListInventory(network::Packet& packet) {
     ListInventoryData data;
-    data.canRepair = currentVendorItems_.canRepair;   // set by the gossip's repair option
+    data.canRepair = currentVendorItems_.canRepair;
     if (!ListInventoryParser::parse(packet, data)) return;
+    // 0x00584500: tutorial 0x13 as the merchant's list opens.
+    owner_.triggerTutorial(0x13);
     // MERCHANT_SHOW opens with the vendor (0x00584500), which first sets it
     // as the interaction object (0x0051fce0): the window open with the one
     // before closes (0x00512e60) - the merchant's own, MERCHANT_CLOSED, when
@@ -3697,6 +3821,7 @@ void InventoryHandler::closeMailbox() {
     // mail store (0x00571530 zeroes the count, the choice and the draft money
     // together), so the next letter starts with no paper picked.
     selectedStationery_ = 0;
+    selectedPackage_ = 0;
     // A paper's item that never answered is asked for again at the next mailbox.
     stationeryItemsQueried_.clear();
     clearMailAttachments();
@@ -3798,7 +3923,8 @@ void InventoryHandler::sendMail(const std::string& recipient, const std::string&
         return;
     }
     auto packet = owner_.getPacketParsers()->buildSendMail(mailboxGuid_, recipient, subject, body,
-                                                           money, cod, selectedStationery_, itemGuids);
+                                                           money, cod, selectedStationery_, itemGuids,
+                                                           selectedPackage_);
     LOG_INFO("sendMail: to='", recipient, "' subject='", subject, "' money=", money,
              " attachments=", itemGuids.size(), " stationery=", selectedStationery_,
              " mailboxGuid=", mailboxGuid_);
@@ -3857,6 +3983,33 @@ void InventoryHandler::noteMailAttachRefundable(int attachIndex) {
 /// straight over, and the one that drops it anywhere hands -1.
 bool InventoryHandler::attachAt(int attachIndex, uint64_t itemGuid, const game::ItemDef& item,
                                 uint8_t srcBag, uint8_t srcSlot) {
+    // 0x0056fff0's refusals, in its order: an item not known
+    // (ERR_ITEM_NOT_FOUND); a bound one - ERR_MAIL_QUEST_ITEM for Bonding 4,
+    // ERR_MAIL_BOUND_ITEM unless bound to the account (ItemFlags 0x8000000);
+    // a conjured one (ITEM_FIELD_FLAGS 0x2, ERR_MAIL_CONJURED_ITEM); one of
+    // limited duration (ITEM_FIELD_FLAGS 0x10000); a bag with something in it.
+    {
+        const auto* info = owner_.getItemInfo(owner_.getItemEntryByGuid(itemGuid));
+        if (!info) info = owner_.getItemInfo(item.itemId);
+        auto refuse = [&](const char* key, const char* enUS) {
+            owner_.addUIError(interfaceString(key, enUS));
+            return false;
+        };
+        if (!info || !info->valid) return refuse("ERR_ITEM_NOT_FOUND", "Item not found.");
+        const uint32_t fieldFlags = owner_.getItemFieldFlags(itemGuid);
+        if ((fieldFlags & 0x1u) != 0) {
+            if (info->bindType == 4) return refuse("ERR_MAIL_QUEST_ITEM", "You can't mail quest items.");
+            if ((info->itemFlags & 0x8000000u) == 0)
+                return refuse("ERR_MAIL_BOUND_ITEM", "You can't mail soulbound items.");
+        }
+        if ((fieldFlags & 0x2u) != 0) return refuse("ERR_MAIL_CONJURED_ITEM", "You can't mail conjured items.");
+        if ((fieldFlags & 0x10000u) != 0)
+            return refuse("ERR_MAIL_LIMITED_DURATION_ITEM", "You cannot mail an item with a limited duration.");
+        if (const auto bag = owner_.containerContentsRef().find(itemGuid); bag != owner_.containerContentsRef().end()) {
+            for (uint32_t i = 0; i < bag->second.numSlots && i < bag->second.slotGuids.size(); ++i)
+                if (bag->second.slotGuids[i] != 0) return refuse("ERR_MAIL_BAG", "You can only mail empty bags.");
+        }
+    }
     const int limit = maxSendableMailAttachments();
     int row = attachIndex;
     if (row < 0) {
@@ -4372,8 +4525,102 @@ void InventoryHandler::setGuildBankTabInfo(uint8_t tabId, const std::string& nam
     owner_.getSocket()->send(p);
 }
 
+uint64_t InventoryHandler::itemGuidAtWire(uint8_t bag, uint8_t slot) const {
+    // The wire's bag and slot: 0xFF with the equipment and bag slots below 23
+    // and the backpack from 23, or a worn bag's container (19-22).
+    if (bag == 0xFF && slot >= 23 && slot < 39) return owner_.getBackpackItemGuid(slot - 23);
+    if (bag >= 19 && bag <= 22) return owner_.getBagItemGuid(bag - 19, slot);
+    if (bag == 0xFF && slot < 23) return owner_.getEquipSlotGuid(slot);
+    return 0;
+}
+
+bool InventoryHandler::itemUseAllowed(uint8_t wowBag, uint8_t wowSlot, uint64_t itemGuid,
+                                      const ItemQueryResponseData& info) {
+    auto refuse = [this](const char* key, const char* enUS) {
+        owner_.playGameErrorSound(key);
+        owner_.addUIError(interfaceString(key, enUS));
+        return false;
+    };
+    auto me = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    const auto* player = dynamic_cast<const Unit*>(me.get());
+    // Something worn (Item.dbc InventoryType, 0x00707280): used where it is
+    // worn - the equipment and bag slots below 23 - and not broken; a weapon
+    // in either hand not while disarmed of that hand (0x00718fc0).
+    if (info.inventoryType != 0) {
+        if (wowBag != 0xFF || wowSlot > 22)
+            return refuse("ERR_MUST_EQUIP_ITEM", "You must equip that item to use it.");
+        const auto& online = owner_.onlineItemsRef();
+        if (const auto it = online.find(itemGuid);
+            it != online.end() && it->second.maxDurability != 0 && it->second.curDurability == 0)
+            return refuse("ERR_MUST_REPAIR_DURABILITY", "You must repair that item's durability to use it.");
+        const uint32_t unitFlags = player ? player->getUnitFlags() : 0u;
+        const uint16_t flags2Field = fieldIndex(UF::UNIT_FIELD_FLAGS_2);
+        const uint32_t flags2 = player && flags2Field != 0xFFFF ? player->getField(flags2Field) : 0u;
+        auto weaponIn = [&](EquipSlot slot) {
+            const auto& s = owner_.inventoryRef().getEquipSlot(slot);
+            if (s.empty()) return false;
+            const auto* w = owner_.getItemInfo(s.item.itemId);
+            return w && w->itemClass == 2;
+        };
+        const bool disarmed = (unitFlags & 0x200000u) != 0;
+        const bool mainDisarmed = disarmed && weaponIn(EquipSlot::MAIN_HAND);
+        const bool offDisarmed = (disarmed && !mainDisarmed && weaponIn(EquipSlot::OFF_HAND)) ||
+                                 (flags2 & 0x80u) != 0;
+        if ((wowSlot == 15 && mainDisarmed) || (wowSlot == 16 && offDisarmed))
+            return refuse("ERR_CANT_USE_DISARMED", "You can't use that item while disarmed.");
+    }
+    // A form that takes no items (0x00721ca0: a form whose row lacks flag 1,
+    // no cancel pending): unless its row is flagged 0x80, or 0x40 for
+    // something worn, or the item is usable shapeshifted (ItemFlags
+    // 0x800000), the player leaves the form where autoUnshift lets it and is
+    // told ERR_NO_ITEMS_WHILE_SHAPESHIFTED where it does not.
+    const uint8_t form = owner_.getShapeshiftFormId();
+    const auto* row = form != 0 ? owner_.shapeshiftFormRow(form) : nullptr;
+    if (row && (row->flags & 0x1u) == 0 && (row->flags & 0x80u) == 0 &&
+        ((row->flags & 0x40u) == 0 || info.inventoryType == 0) && (info.itemFlags & 0x800000u) == 0) {
+        if (!owner_.wouldAutoUnshift())
+            return refuse("ERR_NO_ITEMS_WHILE_SHAPESHIFTED", "You can't use items while shapeshifted.");
+        owner_.leaveShapeshiftForm();
+    }
+    return true;
+}
+
+bool InventoryHandler::guildBankRefusesDeposit(uint8_t srcBag, uint8_t srcSlot) {
+    // 0x005a50c0, before the swap goes out, in its order: a bound item is
+    // refused - a quest item (Bonding 4) with ERR_GUILD_BANK_QUEST_ITEM, any
+    // other with ERR_GUILD_BANK_BOUND_ITEM - then a conjured one (ItemFlags
+    // 0x2), a wrapped one (ITEM_FIELD_FLAGS 0x8), and one taken from the
+    // player's own equipment and bag slots (below 23).
+    const uint64_t guid = itemGuidAtWire(srcBag, srcSlot);
+    if (guid == 0) {
+        if (srcBag == 0xFF && srcSlot < 23) {
+            owner_.addUIError(interfaceString("ERR_GUILD_BANK_EQUIPPED_ITEM", "You must unequip that item first"));
+            return true;
+        }
+        return false;
+    }
+    const uint32_t fieldFlags = owner_.getItemFieldFlags(guid);
+    const auto* info = owner_.getItemInfo(owner_.getItemEntryByGuid(guid));
+    auto refuse = [&](const char* key, const char* enUS) {
+        owner_.addUIError(interfaceString(key, enUS));
+        return true;
+    };
+    if ((fieldFlags & 0x1u) != 0) {
+        if (info && info->bindType == 4) return refuse("ERR_GUILD_BANK_QUEST_ITEM", "You can't store quest items in the guild bank");
+        return refuse("ERR_GUILD_BANK_BOUND_ITEM", "You can't store soulbound items in the guild bank");
+    }
+    if (info && info->valid && (info->itemFlags & 0x2u) != 0)
+        return refuse("ERR_GUILD_BANK_CONJURED_ITEM", "You can't store conjured items in the guild bank");
+    if ((fieldFlags & 0x8u) != 0)
+        return refuse("ERR_GUILD_BANK_WRAPPED_ITEM", "You can't store wrapped items in the guild bank");
+    if (srcBag == 0xFF && srcSlot < 23)
+        return refuse("ERR_GUILD_BANK_EQUIPPED_ITEM", "You must unequip that item first");
+    return false;
+}
+
 void InventoryHandler::guildBankDepositItem(uint8_t tabId, uint8_t bankSlot, uint8_t srcBag, uint8_t srcSlot) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || guildBankerGuid_ == 0) return;
+    if (guildBankRefusesDeposit(srcBag, srcSlot)) return;
     auto packet = GuildBankSwapItemsPacket::buildInventoryToBank(guildBankerGuid_, tabId, bankSlot, srcBag, srcSlot);
     owner_.getSocket()->send(packet);
 }
@@ -4381,6 +4628,7 @@ void InventoryHandler::guildBankDepositItem(uint8_t tabId, uint8_t bankSlot, uin
 void InventoryHandler::guildBankDepositFromInventory(uint8_t srcBag, uint8_t srcSlot) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() ||
         guildBankerGuid_ == 0 || !guildBankOpen_) return;
+    if (guildBankRefusesDeposit(srcBag, srcSlot)) return;
     // CMSG_GUILD_BANK_SWAP_ITEMS has no server-side auto-store for the deposit
     // direction (that path forces bank→character), so the client picks the
     // target slot - the first empty one in the tab the player is viewing, which
@@ -4736,8 +4984,17 @@ void InventoryHandler::handleAuctionCommandResult(network::Packet& packet) {
             owner_.addSystemChatMessage(uiText("ERR_AUCTION_STARTED", "Auction created."));
         else if (action == 1)
             owner_.addSystemChatMessage(uiText("ERR_AUCTION_REMOVED", "Auction cancelled."));
-        else if (action == 2)
+        else if (action == 2) {
             owner_.addSystemChatMessage(uiText("ERR_AUCTION_BID_PLACED", "Bid accepted."));
+            // A bid taken, the player waves: CMSG_EMOTE with ONESHOT_WAVE (3)
+            // at the end of 0x0059ffb0's bid branch.
+            if (owner_.getSocket() && wireOpcode(Opcode::CMSG_EMOTE) != 0xFFFF) {
+                constexpr uint32_t kEmoteOneshotWave = 3;
+                network::Packet wave(wireOpcode(Opcode::CMSG_EMOTE));
+                wave.writeUInt32(kEmoteOneshotWave);
+                owner_.getSocket()->send(wave);
+            }
+        }
         if (owner_.addonEventCallbackRef()) {
             owner_.addonEventCallbackRef()("PLAYER_MONEY", {});
             fireBagUpdates();
@@ -4881,8 +5138,25 @@ void InventoryHandler::cancelTrade() {
 void InventoryHandler::setTradeItem(uint8_t tradeSlot, uint8_t srcBag, uint8_t srcSlot) {
     if (tradeStatus_ != TradeStatus::Open) return;
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    // A bag with anything in it is not traded (0x005877b0): ERR_TRADE_BAG.
+    if (const uint64_t guid = itemGuidAtWire(srcBag, srcSlot); guid != 0) {
+        if (const auto bag = owner_.containerContentsRef().find(guid); bag != owner_.containerContentsRef().end()) {
+            for (uint32_t i = 0; i < bag->second.numSlots && i < bag->second.slotGuids.size(); ++i) {
+                if (bag->second.slotGuids[i] != 0) {
+                    owner_.addUIError(interfaceString("ERR_TRADE_BAG", "You can't trade non-empty bags."));
+                    return;
+                }
+            }
+        }
+    }
     auto packet = SetTradeItemPacket::build(tradeSlot, srcBag, srcSlot);
     owner_.getSocket()->send(packet);
+    if (tradeSlot < TRADE_SLOT_COUNT) myTradeItemGuids_[tradeSlot] = itemGuidAtWire(srcBag, srcSlot);
+}
+
+bool InventoryHandler::itemInTrade(uint64_t itemGuid) const {
+    if (itemGuid == 0 || tradePeerGuid_ == 0) return false;
+    return std::find(myTradeItemGuids_.begin(), myTradeItemGuids_.end(), itemGuid) != myTradeItemGuids_.end();
 }
 
 void InventoryHandler::clearTradeItem(uint8_t tradeSlot) {
@@ -4890,6 +5164,7 @@ void InventoryHandler::clearTradeItem(uint8_t tradeSlot) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     auto packet = ClearTradeItemPacket::build(tradeSlot);
     owner_.getSocket()->send(packet);
+    if (tradeSlot < TRADE_SLOT_COUNT) myTradeItemGuids_[tradeSlot] = 0;
 }
 
 void InventoryHandler::setTradeGold(uint64_t amount) {
@@ -4905,6 +5180,7 @@ void InventoryHandler::resetTradeState() {
     tradeInitiated_ = false;
     tradePeerName_.clear();
     myTradeSlots_ = {};
+    myTradeItemGuids_ = {};
     peerTradeSlots_ = {};
     myTradeGold_ = 0;
     peerTradeGold_ = 0;
@@ -4973,6 +5249,16 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
             }
             if (packet.hasRemaining(8))
                 tradePeerGuid_ = packet.readUInt64();
+            // Someone on the ignore list is answered before anything else:
+            // CMSG_IGNORE_TRADE (0x005873e0 -> 0x00703ee0), no window, no line.
+            if (tradePeerGuid_ != 0 && owner_.ignoreListGuidsRef().count(tradePeerGuid_) != 0) {
+                if (owner_.getSocket() && wireOpcode(Opcode::CMSG_IGNORE_TRADE) != 0xFFFF) {
+                    network::Packet ignore(wireOpcode(Opcode::CMSG_IGNORE_TRADE));
+                    owner_.getSocket()->send(ignore);
+                }
+                resetTradeState();
+                break;
+            }
             tradeStatus_ = TradeStatus::PendingIncoming;
             // Resolve name
             auto nit = owner_.getPlayerNameCache().find(tradePeerGuid_);
@@ -5015,6 +5301,7 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
             // this player still holding the gold they had put down, for as long
             // as the realm stayed quiet about those slots.
             myTradeSlots_ = {};
+            myTradeItemGuids_ = {};
             peerTradeSlots_ = {};
             myTradeGold_ = 0;
             peerTradeGold_ = 0;
@@ -5568,6 +5855,11 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
         owner_.itemInfoCacheRef()[data.entry] = data;
         rebuildOnlineInventory();
         maybeDetectVisibleItemLayout();
+        // 0x006cd8c0: a quest reward line that was waiting on this item.
+        owner_.questRewardItemArrived(data.entry);
+        // 0x00593ca0: a trainer description that was waiting on this item.
+        if (owner_.takeTrainerDescriptionItem(data.entry) && owner_.addonEventCallbackRef())
+            owner_.addonEventCallbackRef()("TRAINER_DESCRIPTION_UPDATE", {});
 
         // The answer to a question a tooltip asked and could not wait for.
         //
@@ -5731,6 +6023,7 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
                     .created = it->created, .showInChat = it->showInChat, .count = it->count};
                 owner_.addLocalChatLine(ChatType::LOOT,
                                         interface_text::itemPushLine(push, link, it->who, uiText));
+                triggerItemPushTutorials(it->receiver, data, it->bagSlot, it->slot);
                 if (!it->self) { it = owner_.pendingItemPushNotifsRef().erase(it); continue; }
                 if (auto* qh = owner_.getQuestHandler())
                     qh->announceQuestItemPushed(data.entry, it->count, it->totalCount, data.name);
@@ -6538,6 +6831,9 @@ void InventoryHandler::fireEquipSlotEvents() {
                 owner_.addonEventCallbackRef()("ACTIONBAR_SLOT_CHANGED", {std::to_string(i + 1)});
         }
     }
+    // The item-change routine (0x006e1e10) ends with the durability alerts'
+    // pass (0x005e90d0): an item put on or taken off moves them.
+    owner_.updateInventoryAlerts();
 }
 
 void InventoryHandler::fireBankSlotEvents() {
@@ -7183,6 +7479,11 @@ void InventoryHandler::initiateTrade(uint64_t targetGuid) {
     // "You must target a player to trade with." and "Requesting trade with
     // target." in English.
     if (targetGuid == 0) return;
+    // Oneself: ERR_TRADE_SELF (0x00522600).
+    if (targetGuid == owner_.getPlayerGuid()) {
+        owner_.raiseUiError(interfaceString("ERR_TRADE_SELF", "You can't trade with yourself."));
+        return;
+    }
 
     // 0x00703cf0: not with a partner already (ERR_ALREADY_TRADING), and not
     // again within a second of the last request.

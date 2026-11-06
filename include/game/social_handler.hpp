@@ -317,6 +317,9 @@ public:
     void clearPetitionSignaturesUI() { petitionInfo_.showUI = false; }
     void signPetition(uint64_t petitionGuid);
     void turnInPetition(uint64_t petitionGuid, bool blankDesign = false);
+    /// An arena charter with its banner (0x006dd680): background colour,
+    /// icon, icon colour, border, border colour.
+    void turnInArenaPetition(uint64_t petitionGuid, const std::array<uint32_t, 5>& design);
     /// Offer the charter to another player so they can sign it.
     void offerPetition(uint64_t petitionGuid, uint64_t targetGuid);
 
@@ -531,6 +534,8 @@ public:
 
     // Utility methods for delegation from GameHandler
     void updateLogoutCountdown(float deltaTime);
+    /// 0x00573390: the ready check's timer, for the one who started it.
+    void updateReadyCheckTimer();
     void resetTransferState();
     GroupListData& mutablePartyData() { return partyData; }
     /// The player's own group as it stands outside a battleground - the "real"

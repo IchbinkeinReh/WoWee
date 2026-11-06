@@ -2714,6 +2714,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 //
                 // Once per frame per session - it means nothing is on screen,
                 // so it cannot be noisy for long.
+                w->messagesDisplayed = painted;
                 if (painted == 0) {
                     int lit = 0;
                     for (const auto& m : w->messages) {

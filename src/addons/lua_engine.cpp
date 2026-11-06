@@ -1,5 +1,6 @@
 #include "addons/lua_engine.hpp"
 #include "core/test_frame_shot.hpp"
+#include "addons/override_bindings.hpp"
 #include "addons/interface_prefetch.hpp"
 #include "ui/link_hit.hpp"
 #include "ui/text_markup.hpp"
@@ -42,6 +43,7 @@
 #include "core/app_clock.hpp"
 #include "core/config_paths.hpp"
 #include <filesystem>
+#include <unordered_set>
 
 extern "C" {
 #include <lua.h>
@@ -125,6 +127,50 @@ static int lua_wow_message(lua_State* L) {
 /// to a chat window. Addons use it more, and a no-op answering nothing is the
 /// wrong shape for a question - it reads as "no" for a frame that is
 /// registered, and re-registering is not always harmless.
+/// RegisterAllEvents (0x0049f0e0 -> 0x0081b470) registers the frame for every
+/// event the client has. Here it is kept as the frame's place in
+/// __WoweeAllEventFrames, and the dispatcher registers it for each event the
+/// first time that event fires (registerAllEventFrames) - the same frame
+/// registered for the same events, as late as it can be observed. An event the
+/// frame unregisters afterwards is remembered in __WoweeAllEventSkip[frame] so
+/// it is not registered again; RegisterEvent takes it back off.
+///
+/// Leaves nothing on the stack. `skip` true marks the name, false clears it;
+/// a frame not registered for everything has no table and nothing changes.
+void allEventsSkip(lua_State* L, int frame, const char* eventName, bool skip) {
+    lua_getglobal(L, "__WoweeAllEventSkip");
+    if (lua_istable(L, -1)) {
+        lua_pushvalue(L, frame);
+        lua_rawget(L, -2);
+        if (lua_istable(L, -1)) {
+            if (skip) lua_pushboolean(L, 1);
+            else lua_pushnil(L);
+            lua_setfield(L, -2, eventName);
+        }
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+}
+
+/// Whether the frame at `frame` is registered for everything and has not
+/// unregistered `eventName` since.
+bool allEventsCover(lua_State* L, int frame, const char* eventName) {
+    bool on = false;
+    lua_getglobal(L, "__WoweeAllEventSkip");
+    if (lua_istable(L, -1)) {
+        lua_pushvalue(L, frame);
+        lua_rawget(L, -2);
+        if (lua_istable(L, -1)) {
+            lua_getfield(L, -1, eventName);
+            on = lua_isnil(L, -1);
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+    return on;
+}
+
 static int lua_Frame_IsEventRegistered(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     const char* eventName = luaL_optstring(L, 2, nullptr);
@@ -139,6 +185,7 @@ static int lua_Frame_IsEventRegistered(lua_State* L) {
             lua_pop(L, 1);
         }
         lua_pop(L, 1);
+        if (!on) on = allEventsCover(L, 1, eventName);
     }
     lua_pushboolean(L, on ? 1 : 0);
     return 1;
@@ -167,6 +214,7 @@ static int lua_Frame_RegisterEvent(lua_State* L) {
     lua_pushboolean(L, 1);
     lua_setfield(L, -2, eventName);
     lua_pop(L, 1);
+    allEventsSkip(L, 1, eventName, false);
 
     // Also register in global __WoweeFrameEvents for dispatch
     lua_getglobal(L, "__WoweeFrameEvents");
@@ -222,6 +270,32 @@ static int lua_Frame_UnregisterEvent(lua_State* L);
 static int lua_Frame_UnregisterAllEvents(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     taint::Quiet quiet;   // as RegisterEvent
+    // Everything, which takes RegisterAllEvents back too.
+    lua_getglobal(L, "__WoweeAllEventSkip");
+    if (lua_istable(L, -1)) {
+        lua_pushvalue(L, 1);
+        lua_pushnil(L);
+        lua_rawset(L, -3);
+    }
+    lua_pop(L, 1);
+    lua_getglobal(L, "__WoweeAllEventFrames");
+    if (lua_istable(L, -1)) {
+        const int n = static_cast<int>(lua_objlen(L, -1));
+        for (int i = n; i >= 1; --i) {
+            lua_rawgeti(L, -1, i);
+            const bool isSelf = lua_rawequal(L, -1, 1);
+            lua_pop(L, 1);
+            if (!isSelf) continue;
+            for (int j = i; j < n; ++j) {
+                lua_rawgeti(L, -1, j + 1);
+                lua_rawseti(L, -2, j);
+            }
+            lua_pushnil(L);
+            lua_rawseti(L, -2, n);
+            break;
+        }
+    }
+    lua_pop(L, 1);
     lua_getfield(L, 1, "__events");
     if (!lua_istable(L, -1)) { lua_pop(L, 1); return 0; }
     // Collected first: unregistering rewrites this table, and a traversal that
@@ -249,6 +323,8 @@ static int lua_Frame_UnregisterEvent(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     const char* eventName = luaL_checkstring(L, 2);
     taint::Quiet quiet;   // as RegisterEvent
+
+    allEventsSkip(L, 1, eventName, true);
 
     // Remove from frame's own events
     lua_getfield(L, 1, "__events");
@@ -290,6 +366,74 @@ static int lua_Frame_UnregisterEvent(lua_State* L) {
     }
     lua_pop(L, 1);
     return 0;
+}
+
+static int lua_Frame_RegisterAllEvents(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    taint::Quiet quiet;   // as RegisterEvent
+    lua_getglobal(L, "__WoweeAllEventSkip");
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setglobal(L, "__WoweeAllEventSkip");
+    }
+    // A fresh start: every event again, those unregistered before included.
+    lua_pushvalue(L, 1);
+    lua_newtable(L);
+    lua_rawset(L, -3);
+    lua_pop(L, 1);
+    lua_getglobal(L, "__WoweeAllEventFrames");
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setglobal(L, "__WoweeAllEventFrames");
+    }
+    const int n = static_cast<int>(lua_objlen(L, -1));
+    bool listed = false;
+    for (int i = 1; i <= n && !listed; ++i) {
+        lua_rawgeti(L, -1, i);
+        listed = lua_rawequal(L, -1, 1);
+        lua_pop(L, 1);
+    }
+    if (!listed) {
+        lua_pushvalue(L, 1);
+        lua_rawseti(L, -2, n + 1);
+    }
+    lua_pop(L, 1);
+    return 0;
+}
+
+/// The dispatcher's half of RegisterAllEvents: each frame registered for
+/// everything is registered for `eventName` as it first fires, unless it has
+/// unregistered it since.
+void registerAllEventFrames(lua_State* L, const char* eventName) {
+    lua_getglobal(L, "__WoweeAllEventFrames");
+    if (!lua_istable(L, -1) || lua_objlen(L, -1) == 0) { lua_pop(L, 1); return; }
+    taint::Quiet quiet;
+    const int list = lua_gettop(L);
+    const int n = static_cast<int>(lua_objlen(L, list));
+    for (int i = 1; i <= n; ++i) {
+        lua_rawgeti(L, list, i);
+        const int frame = lua_gettop(L);
+        bool already = false;
+        lua_getfield(L, frame, "__events");
+        if (lua_istable(L, -1)) {
+            lua_getfield(L, -1, eventName);
+            already = lua_toboolean(L, -1) != 0;
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+        if (!already && allEventsCover(L, frame, eventName)) {
+            lua_pushcfunction(L, lua_Frame_RegisterEvent);
+            lua_pushvalue(L, frame);
+            lua_pushstring(L, eventName);
+            lua_call(L, 2, 0);
+        }
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
 }
 
 // Frame method: frame:SetScript("handler", func)
@@ -472,6 +616,60 @@ wowee::ui::Widget* widgetOf(lua_State* L, int index) {
     if (!tree) return nullptr;
     return tree->get(widgetIdOf(L, index));
 }
+
+/// HasScript("handler") (0x0049eab0): whether this kind of frame has the
+/// handler at all, set or not - the class's own name lookup (vtable slot 0xc),
+/// each falling back to its parent's: the frame's (0x0048e680, OnEvent from
+/// 0x00816830) under every one.
+bool frameTypeHasScript(const std::string& type, const std::string& handler) {
+    static const std::unordered_set<std::string> kFrame = {
+        "OnEvent", "OnLoad", "OnSizeChanged", "OnUpdate", "OnShow", "OnHide",
+        "OnEnter", "OnLeave", "OnMouseDown", "OnMouseUp", "OnMouseWheel",
+        "OnDragStart", "OnDragStop", "OnReceiveDrag", "OnChar", "OnKeyDown",
+        "OnKeyUp", "OnAttributeChanged", "OnEnable", "OnDisable"};
+    if (kFrame.count(handler)) return true;
+    using Set = std::unordered_set<std::string>;
+    static const Set kButton = {"PreClick", "OnClick", "PostClick", "OnDoubleClick"};   // 0x0096f200
+    static const Set kEditBox = {                                                        // 0x009628f0
+        "OnEnterPressed", "OnEscapePressed", "OnSpacePressed", "OnTabPressed",
+        "OnTextChanged", "OnTextSet", "OnCursorChanged", "OnInputLanguageChanged",
+        "OnEditFocusGained", "OnEditFocusLost", "OnCharComposition"};
+    static const Set kValue = {"OnValueChanged", "OnMinMaxChanged"};                     // 0x00961630, 0x0096bca0
+    static const Set kScroll = {"OnHorizontalScroll", "OnVerticalScroll", "OnScrollRangeChanged"};  // 0x0096b0b0
+    static const Set kTooltip = {                                                        // 0x0061a280
+        "OnTooltipSetDefaultAnchor", "OnTooltipCleared", "OnTooltipAddMoney",
+        "OnTooltipSetUnit", "OnTooltipSetItem", "OnTooltipSetSpell", "OnTooltipSetQuest",
+        "OnTooltipSetAchievement", "OnTooltipSetEquipmentSet", "OnTooltipSetFrameStack"};
+    static const Set kModel = {"OnUpdateModel", "OnAnimFinished"};                       // 0x0095f420
+    static const Set kMovie = {"OnMovieFinished", "OnMovieShowSubtitle", "OnMovieHideSubtitle"};  // 0x0095db80
+    static const Set kHyperlink = {"OnHyperlinkEnter", "OnHyperlinkLeave", "OnHyperlinkClick"};  // 0x00978610
+    if (type == "Button" || type == "CheckButton") return kButton.count(handler) > 0;
+    if (type == "EditBox") return kEditBox.count(handler) > 0;
+    if (type == "Slider" || type == "StatusBar") return kValue.count(handler) > 0;
+    if (type == "ScrollFrame") return kScroll.count(handler) > 0;
+    if (type == "GameTooltip") return kTooltip.count(handler) > 0;
+    if (type == "ColorSelect") return handler == "OnColorSelect";                       // 0x0096dc50
+    if (type == "MovieFrame") return kMovie.count(handler) > 0;
+    if (type == "Model" || type == "PlayerModel" || type == "DressUpModel" ||
+        type == "TabardModel" || type == "CinematicModel")
+        return kModel.count(handler) > 0;
+    if (type == "ScrollingMessageFrame")                                                 // 0x00969040
+        return handler == "OnMessageScrollChanged" || kHyperlink.count(handler) > 0;
+    if (type == "MessageFrame" || type == "SimpleHTML") return kHyperlink.count(handler) > 0;
+    return false;
+}
+
+static int lua_Frame_HasScript(lua_State* L) {
+    const char* handler = luaL_checkstring(L, 2);
+    const auto* w = widgetOf(L, 1);
+    if (w && frameTypeHasScript(w->objectType, handler)) {
+        lua_pushnumber(L, 1);
+        return 1;
+    }
+    lua_pushnil(L);
+    return 1;
+}
+
 
 /// 0x00488540: whether the running code may change the frame a method was
 /// called on. A protected frame is out of reach of insecure code during
@@ -2123,6 +2321,79 @@ int lua_Tooltip_AddDoubleLine(lua_State* L) {
 ///
 /// WoW's anchor names say which side of the owner the tooltip sits on; the
 /// pair of points that produces is the whole of the mapping.
+namespace {
+/// The anchor types, numbered as the client stores them (0x0061d650). An
+/// unknown name is 0, ANCHOR_LEFT, as the parse at 0x0061eb40 leaves it.
+constexpr const char* kTooltipAnchorTypes[] = {
+    "ANCHOR_LEFT", "ANCHOR_RIGHT", "ANCHOR_BOTTOMLEFT", "ANCHOR_BOTTOM",
+    "ANCHOR_BOTTOMRIGHT", "ANCHOR_TOPLEFT", "ANCHOR_TOP", "ANCHOR_TOPRIGHT",
+    "ANCHOR_CURSOR", "ANCHOR_NONE", "ANCHOR_PRESERVE", "ANCHOR_CURSOR_RIGHT",
+};
+constexpr int kAnchorNone = 9;
+constexpr int kAnchorPreserve = 10;
+
+int tooltipAnchorType(lua_State* L, int arg) {
+    if (!lua_isstring(L, arg)) return 0;
+    const char* name = lua_tostring(L, arg);
+    for (int i = 0; i < static_cast<int>(std::size(kTooltipAnchorTypes)); ++i)
+        if (strcmp(name, kTooltipAnchorTypes[i]) == 0) return i;
+    return 0;
+}
+
+/// 0x0061b040: the tooltip placed against its owner by its anchor type, the
+/// offsets added. NONE clears the points for the caller's own SetPoint,
+/// PRESERVE keeps them.
+void anchorTooltip(wowee::ui::WidgetTree& tree, uint32_t id, uint32_t owner, int type,
+                   float x, float y) {
+    if (type == kAnchorPreserve) return;
+    if (owner == 0 || type == kAnchorNone) {
+        // ANCHOR_NONE means the caller places the tooltip itself, and the call
+        // that follows is a SetPoint - which is how GameTooltip_SetDefaultAnchor
+        // pins an action button's tooltip to the bottom-right of the screen.
+        // Returning without clearing left the anchor from the previous owner in
+        // place, and SetPoint only replaces an anchor on the same point: a LEFT
+        // anchor to the last button and a BOTTOMRIGHT anchor to UIParent both
+        // applied, pulling the tooltip down onto the action bar it came from.
+        tree.clearPoints(id);
+        return;
+    }
+    // The two cursor types have no place against the owner: 0x0061b040 only
+    // clears the points, and every update puts the tooltip at the cursor
+    // (followCursorTooltips). Placed now as well, so it is not drawn
+    // unanchored until the next one.
+    if (type == 8 || type == 11) {
+        tree.clearPoints(id);
+        tree.followCursorTooltips(LuaEngine::lastMouseX(), LuaEngine::lastMouseY());
+        return;
+    }
+    // The tooltip's point and the owner's, by type.
+    struct Pair { const char* point; const char* rel; };
+    static const Pair kPoints[] = {
+        {"BOTTOMRIGHT", "TOPLEFT"},     // LEFT
+        {"BOTTOMLEFT",  "TOPRIGHT"},    // RIGHT
+        {"TOPRIGHT",    "BOTTOMLEFT"},  // BOTTOMLEFT
+        {"TOP",         "BOTTOM"},      // BOTTOM
+        {"TOPLEFT",     "BOTTOMRIGHT"}, // BOTTOMRIGHT
+        {"BOTTOMLEFT",  "TOPLEFT"},     // TOPLEFT
+        {"BOTTOM",      "TOP"},         // TOP
+        {"BOTTOMRIGHT", "TOPRIGHT"},    // TOPRIGHT
+    };
+    const Pair& p = kPoints[type];
+    wowee::ui::Anchor a;
+    a.point = p.point;
+    a.relativeTo = owner;
+    a.relativePoint = p.rel;
+    a.x = x;
+    a.y = y;
+    tree.clearPoints(id);
+    tree.addPoint(id, a);
+}
+
+float optNumber(lua_State* L, int arg) {
+    return lua_isnumber(L, arg) ? static_cast<float>(lua_tonumber(L, arg)) : 0.0f;
+}
+}  // namespace
+
 int lua_Tooltip_SetOwner(lua_State* L) {
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
@@ -2144,47 +2415,48 @@ int lua_Tooltip_SetOwner(lua_State* L) {
     // So the tooltip can be taken away with the frame it describes, whether or
     // not that frame ever gets the OnLeave that would have done it.
     tree->setTooltipOwner(id, owner);
-    const std::string anchor = luaL_optstring(L, 3, "ANCHOR_RIGHT");
-    // ANCHOR_PRESERVE is the one that means what it says: keep the anchors.
-    if (anchor == "ANCHOR_PRESERVE") return 0;
-    if (owner == 0 || anchor == "ANCHOR_NONE") {
-        // ANCHOR_NONE means the caller places the tooltip itself, and the call
-        // that follows is a SetPoint - which is how GameTooltip_SetDefaultAnchor
-        // pins an action button's tooltip to the bottom-right of the screen.
-        // Returning without clearing left the anchor from the previous owner in
-        // place, and SetPoint only replaces an anchor on the same point: a LEFT
-        // anchor to the last button and a BOTTOMRIGHT anchor to UIParent both
-        // applied, pulling the tooltip down onto the action bar it came from.
-        tree->clearPoints(id);
-        return 0;
-    }
+    // SetOwner(owner [, anchor [, x [, y]]]) (0x0061eb40 -> 0x0061ea00): the
+    // type defaults to ANCHOR_LEFT, and with no owner it is NONE.
+    const int type = owner ? tooltipAnchorType(L, 3) : kAnchorNone;
+    const float x = optNumber(L, 4);
+    const float y = optNumber(L, 5);
+    w->tooltipAnchorType = type;
+    w->tooltipAnchorX = x;
+    w->tooltipAnchorY = y;
+    anchorTooltip(*tree, id, owner, type, x, y);
+    return 0;
+}
 
-    struct Pair { const char* name; const char* point; const char* rel; };
-    static const Pair kAnchors[] = {
-        {"ANCHOR_TOPLEFT",     "BOTTOMLEFT",  "TOPLEFT"},
-        {"ANCHOR_TOPRIGHT",    "BOTTOMRIGHT", "TOPRIGHT"},
-        {"ANCHOR_BOTTOMLEFT",  "TOPLEFT",     "BOTTOMLEFT"},
-        {"ANCHOR_BOTTOMRIGHT", "TOPRIGHT",    "BOTTOMRIGHT"},
-        {"ANCHOR_LEFT",        "RIGHT",       "LEFT"},
-        {"ANCHOR_RIGHT",       "LEFT",        "RIGHT"},
-        {"ANCHOR_TOP",         "BOTTOM",      "TOP"},
-        {"ANCHOR_BOTTOM",      "TOP",         "BOTTOM"},
-        // The cursor is not a frame, so this lands beside the owner instead -
-        // which is where the cursor is, near enough, and better than nowhere.
-        {"ANCHOR_CURSOR",      "TOPLEFT",     "BOTTOMRIGHT"},
-    };
-    const char* point = "LEFT";
-    const char* rel = "RIGHT";
-    for (const Pair& p : kAnchors) {
-        if (anchor == p.name) { point = p.point; rel = p.rel; break; }
-    }
+/// GetAnchorType() (0x0061d650): the type SetOwner or SetAnchorType left.
+int lua_Tooltip_GetAnchorType(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    int type = w ? w->tooltipAnchorType : kAnchorNone;
+    if (type < 0 || type >= static_cast<int>(std::size(kTooltipAnchorTypes))) type = kAnchorNone;
+    lua_pushstring(L, kTooltipAnchorTypes[type]);
+    return 1;
+}
 
-    wowee::ui::Anchor a;
-    a.point = point;
-    a.relativeTo = owner;
-    a.relativePoint = rel;
-    tree->clearPoints(id);
-    tree->addPoint(id, a);
+/// SetAnchorType(type [, x [, y]]) (0x0061d3d0): the tooltip placed again
+/// with a new type and offsets; the type is only taken while it has an owner.
+int lua_Tooltip_SetAnchorType(lua_State* L) {
+    if (!lua_isstring(L, 2)) {
+        const auto* w = widgetOf(L, 1);
+        return luaL_error(L, "Usage: %s:SetAnchorType( anchorType [,Xoffset] [,Yoffset] )",
+                          (w && !w->name.empty()) ? w->name.c_str() : "<unnamed>");
+    }
+    auto* tree = wowee::addons::getWidgetTree(L);
+    const uint32_t id = widgetIdOf(L, 1);
+    auto* w = (tree && id) ? tree->get(id) : nullptr;
+    if (!w) return 0;
+    const uint32_t owner = w->tooltipOwnerId;
+    // Without an owner the layout has nothing to place it against and leaves
+    // it where it is (0x0061b040 returns first).
+    if (owner == 0) return 0;
+    const int type = tooltipAnchorType(L, 2);
+    w->tooltipAnchorType = type;
+    w->tooltipAnchorX = optNumber(L, 3);
+    w->tooltipAnchorY = optNumber(L, 4);
+    anchorTooltip(*tree, id, owner, type, w->tooltipAnchorX, w->tooltipAnchorY);
     return 0;
 }
 
@@ -3266,8 +3538,17 @@ int lua_Tooltip_SetUnit(lua_State* L) {
     // which then drew across the rotate arrows and sized the frame to fit one
     // line of text instead of the figure.
     if (w && w->objectType != "GameTooltip") {
-        lua_pushboolean(L, 0);
-        return 1;
+        // Model:SetUnit("unit") (0x005978e0): a unit that resolves has the
+        // figure built from it again (0x005977e0), as Dress does; nothing is
+        // returned either way.
+        auto* gh = wowee::addons::getGameHandler(L);
+        std::string unit = luaL_optstring(L, 2, "");
+        for (char& c : unit) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (gh && !unit.empty() && wowee::addons::resolveUnitGuid(gh, unit) != 0) {
+            w->tryOnItems.clear();
+            w->undressed = false;
+        }
+        return 0;
     }
     auto* gh = wowee::addons::getGameHandler(L);
     const char* uid = luaL_optstring(L, 2, "player");
@@ -4109,6 +4390,68 @@ int lua_MessageFrame_ScrollToBottom(lua_State* L) {
     return 0;
 }
 
+// The rest of ScrollingMessageFrame's scrolling (0x009732f0-0x009736f0). The
+// client counts in wrapped lines; this frame keeps its offset in messages, so
+// a page here is the messages the last draw fitted rather than its lines.
+namespace {
+int lastScroll(const wowee::ui::Widget& w) {
+    return w.messages.empty() ? 0 : static_cast<int>(w.messages.size()) - 1;
+}
+void scrollTo(wowee::ui::Widget& w, int offset) {
+    w.messageScroll = std::clamp(offset, 0, lastScroll(w));
+}
+}  // namespace
+
+/// PageUp (0x00973370 -> 0x0096ab50): back a page, which is the lines shown
+/// less one, so the line at the top stays in view at the bottom.
+int lua_MessageFrame_PageUp(lua_State* L) {
+    if (auto* w = widgetOf(L, 1))
+        scrollTo(*w, w->messageScroll + std::max(w->messagesDisplayed - 1, 1));
+    return 0;
+}
+/// PageDown (0x009733b0), the same page forward.
+int lua_MessageFrame_PageDown(lua_State* L) {
+    if (auto* w = widgetOf(L, 1))
+        scrollTo(*w, w->messageScroll - std::max(w->messagesDisplayed - 1, 1));
+    return 0;
+}
+/// ScrollToTop (0x009733f0): as far back as the history goes.
+int lua_MessageFrame_ScrollToTop(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->messageScroll = lastScroll(*w);
+    return 0;
+}
+/// SetScrollOffset(offset) (0x00973470): that far back from the newest.
+int lua_MessageFrame_SetScrollOffset(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (w && lua_isnumber(L, 2)) scrollTo(*w, static_cast<int>(lua_tonumber(L, 2)));
+    return 0;
+}
+/// GetCurrentScroll (0x009736f0 -> 0x009690c0): how far back it is.
+int lua_MessageFrame_GetCurrentScroll(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->messageScroll : 0);
+    return 1;
+}
+/// GetNumLinesDisplayed (0x009736a0).
+int lua_MessageFrame_GetNumLinesDisplayed(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->messagesDisplayed : 0);
+    return 1;
+}
+/// AtBottom and AtTop (0x00973530, 0x009734d0): 1 at that end, else nil.
+int lua_MessageFrame_AtBottom(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    if (!w || w->messageScroll <= 0) { lua_pushnumber(L, 1); return 1; }
+    lua_pushnil(L);
+    return 1;
+}
+int lua_MessageFrame_AtTop(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    if (!w || w->messageScroll >= lastScroll(*w)) { lua_pushnumber(L, 1); return 1; }
+    lua_pushnil(L);
+    return 1;
+}
+
 int lua_Region_GetNumPoints(lua_State* L) {
     const auto* w = widgetOf(L, 1);
     lua_pushnumber(L, w ? static_cast<lua_Number>(w->anchors.size()) : 0.0);
@@ -4182,6 +4525,16 @@ int lua_Minimap_PingLocation(lua_State* L) {
         w->pingRequested = true;
     }
     return 0;
+}
+
+/// Minimap:GetPingPosition() (0x0057efe0): where the last ping is, as the
+/// offset MINIMAP_PING gave for it but from where the player stands now.
+int lua_Minimap_GetPingPosition(lua_State* L) {
+    auto* gh = wowee::addons::getGameHandler(L);
+    const glm::vec2 at = gh ? gh->minimapPingPosition() : glm::vec2(0.0f);
+    lua_pushnumber(L, at.x);
+    lua_pushnumber(L, at.y);
+    return 2;
 }
 
 /// Enable and Disable, with the handlers that go with them.
@@ -4527,6 +4880,21 @@ int lua_Texture_SetTexCoord(lua_State* L) {
     }
     return 0;
 }
+/// GetTexCoord() (0x0048c7f0): the four corners' coordinates, upper-left,
+/// lower-left, upper-right, lower-right, eight numbers whichever form set them.
+int lua_Texture_GetTexCoord(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    float q[8] = {0, 0, 0, 1, 1, 0, 1, 1};
+    if (w && w->texCoordRotated) {
+        for (int i = 0; i < 8; ++i) q[i] = w->texCoordQuad[i];
+    } else if (w) {
+        const float l = w->texCoord[0], r = w->texCoord[1], t = w->texCoord[2], b = w->texCoord[3];
+        const float c[8] = {l, t, l, b, r, t, r, b};
+        for (int i = 0; i < 8; ++i) q[i] = c[i];
+    }
+    for (float v : q) lua_pushnumber(L, v);
+    return 8;
+}
 int lua_Texture_SetBlendMode(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) {
         const char* mode = luaL_optstring(L, 2, "BLEND");
@@ -4573,6 +4941,14 @@ int lua_Region_SetVertexColor(lua_State* L) {
         w->color[3] = static_cast<float>(luaOptNumberText(L, 5, 1.0));
     }
     return 0;
+}
+/// GetDrawLayer() (0x0048bee0): the layer's name, no sublevel.
+int lua_Region_GetDrawLayer(lua_State* L) {
+    static const char* kNames[] = {"BACKGROUND", "BORDER", "ARTWORK", "OVERLAY", "HIGHLIGHT"};
+    const auto* w = widgetOf(L, 1);
+    const auto layer = w ? (w->isStatusBar ? w->barLayer : w->layer) : wowee::ui::DrawLayer::Artwork;
+    lua_pushstring(L, kNames[static_cast<size_t>(layer)]);
+    return 1;
 }
 int lua_Region_SetDrawLayer(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) {
@@ -5060,6 +5436,8 @@ int lua_Frame_SetNormalFontObject(lua_State* L) {
     return 0;
 }
 
+int lua_Region_GetSize(lua_State* L);  // with GetChildren, below
+
 /// Attach the shared region methods to the table on top of the stack.
 void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
     auto set = [&](const char* name, lua_CFunction fn) {
@@ -5097,6 +5475,7 @@ void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
     set("GetStringHeight", lua_Region_GetTextHeight);
     set("GetFieldSize", lua_Region_GetFieldSize);
     set("GetHeight", lua_Region_GetHeight);
+    set("GetSize", lua_Region_GetSize);
     set("GetLeft", lua_Region_GetLeft);
     set("GetRight", lua_Region_GetRight);
     set("GetBottom", lua_Region_GetBottom);
@@ -5133,7 +5512,9 @@ void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
     set("GetVertexColor", lua_Region_GetVertexColor);
     set("GetFontObject", lua_FontString_GetFontObject);
     set("SetDrawLayer", lua_Region_SetDrawLayer);
+    set("GetDrawLayer", lua_Region_GetDrawLayer);
     if (isTexture) {
+        set("GetTexCoord", lua_Texture_GetTexCoord);
         set("SetTexture", lua_Texture_SetTexture);
         set("GetTexture", lua_Texture_GetTexture);
         set("SetTexCoord", lua_Texture_SetTexCoord);
@@ -5516,8 +5897,13 @@ static int lua_CreateFont(lua_State* L) {
 /// was not.
 ///
 /// Frames only. Textures and font strings are a frame's *regions* in WoW and
-/// come back from GetRegions, which nothing here calls.
-int lua_Frame_GetChildren(lua_State* L) {
+/// come back from GetRegions.
+namespace {
+/// GetChildren and GetRegions are one walk over the frame's children, split
+/// by kind: frames are its children, textures and font strings its regions.
+/// With `countOnly` the same ones are counted (GetNumChildren,
+/// GetNumRegions) rather than pushed.
+int pushChildWidgets(lua_State* L, bool regions, bool countOnly) {
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     if (!tree || id == 0) return 0;
@@ -5545,10 +5931,13 @@ int lua_Frame_GetChildren(lua_State* L) {
     int pushed = 0;
     for (const uint32_t childId : w->children) {
         const auto* child = tree->get(childId);
-        if (!child || child->kind != wowee::ui::WidgetKind::Frame) continue;
+        if (!child || (child->kind == wowee::ui::WidgetKind::Frame) == regions) continue;
         lua_pushinteger(L, static_cast<lua_Integer>(childId));
         lua_rawget(L, registry);
-        if (lua_istable(L, -1)) {
+        if (lua_istable(L, -1) && countOnly) {
+            lua_pop(L, 1);
+            ++pushed;
+        } else if (lua_istable(L, -1)) {
             lua_settaintof(L, -1, caller);   // fresh, as GetParent
             ++pushed;
         } else {
@@ -5559,8 +5948,29 @@ int lua_Frame_GetChildren(lua_State* L) {
         }
     }
     lua_remove(L, registry);    // drop the registry, keep the children above it
+    if (countOnly) {
+        lua_pushinteger(L, pushed);
+        return 1;
+    }
     return pushed;
 }
+
+/// Region:GetSize() - the width and the height, as GetWidth and GetHeight
+/// answer them.
+int lua_Region_GetSize(lua_State* L) {
+    lua_settop(L, 1);
+    lua_Region_GetWidth(L);
+    lua_pushvalue(L, 1);
+    lua_Region_GetHeight(L);
+    lua_remove(L, -2);
+    return 2;
+}
+}  // namespace
+
+int lua_Frame_GetChildren(lua_State* L) { return pushChildWidgets(L, false, false); }
+int lua_Frame_GetRegions(lua_State* L) { return pushChildWidgets(L, true, false); }
+int lua_Frame_GetNumChildren(lua_State* L) { return pushChildWidgets(L, false, true); }
+int lua_Frame_GetNumRegions(lua_State* L) { return pushChildWidgets(L, true, true); }
 
 int lua_Frame_EnableKeyboard(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
@@ -5655,6 +6065,8 @@ int lua_Frame_SetBackdrop(lua_State* L) {
     // Where only one is given the other is the sensible stand-in.
     num("tileSize", w->edgeSize);
     num("edgeSize", w->edgeSize);
+    w->backdropTileSize = 0.0f;
+    num("tileSize", w->backdropTileSize);
     lua_getfield(L, 2, "tile");
     w->tileBackground = lua_toboolean(L, -1) != 0;
     lua_pop(L, 1);
@@ -5674,6 +6086,59 @@ int lua_Frame_SetBackdrop(lua_State* L) {
     lua_pop(L, 1);
     return 0;
 }
+
+/// GetBackdrop([table]) (0x004a12d0): the backdrop as a table - the one
+/// passed, or a new one - and nothing when the frame has none.
+int lua_Frame_GetBackdrop(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    if (!w || !w->hasBackdrop) return 0;
+    if (lua_istable(L, 2)) lua_pushvalue(L, 2);
+    else lua_newtable(L);
+    lua_pushstring(L, w->bgFile.c_str());
+    lua_setfield(L, -2, "bgFile");
+    lua_pushstring(L, w->edgeFile.c_str());
+    lua_setfield(L, -2, "edgeFile");
+    if (w->tileBackground) lua_pushnumber(L, 1);
+    else lua_pushnil(L);
+    lua_setfield(L, -2, "tile");
+    lua_pushnumber(L, w->backdropTileSize);
+    lua_setfield(L, -2, "tileSize");
+    lua_pushnumber(L, w->edgeSize);
+    lua_setfield(L, -2, "edgeSize");
+    // An insets table already there is filled rather than replaced.
+    lua_getfield(L, -1, "insets");
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, -3, "insets");
+    }
+    lua_pushnumber(L, w->insetLeft);
+    lua_setfield(L, -2, "left");
+    lua_pushnumber(L, w->insetRight);
+    lua_setfield(L, -2, "right");
+    lua_pushnumber(L, w->insetTop);
+    lua_setfield(L, -2, "top");
+    lua_pushnumber(L, w->insetBottom);
+    lua_setfield(L, -2, "bottom");
+    lua_pop(L, 1);
+    return 1;
+}
+
+/// GetBackdropColor and GetBackdropBorderColor (0x004a19a0, 0x004a1af0):
+/// r, g, b, a as the colour is kept, a byte each; nothing without a backdrop.
+int pushBackdropColour(lua_State* L, bool border) {
+    const auto* w = widgetOf(L, 1);
+    if (!w || !w->hasBackdrop) return 0;
+    const float* c = border ? w->borderColor : w->backdropColor;
+    for (int i = 0; i < 4; ++i) {
+        const float v = std::clamp(c[i], 0.0f, 1.0f);
+        lua_pushnumber(L, static_cast<float>(std::lround(v * 255.0f)) * 0.00392156f);
+    }
+    return 4;
+}
+int lua_Frame_GetBackdropColor(lua_State* L) { return pushBackdropColour(L, false); }
+int lua_Frame_GetBackdropBorderColor(lua_State* L) { return pushBackdropColour(L, true); }
 
 int lua_Frame_SetBackdropColor(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) {
@@ -6791,6 +7256,8 @@ bool LuaEngine::initialize() {
     // hardware event - the taint is the process's, as the client's is, and a
     // reload must not inherit what the last interface left running.
     taint::reset();
+    // Nor the overrides its frames put on keys: those frames are gone.
+    overrideBindings().reset();
     L_ = luaL_newstate();
     ++stateGeneration_;
     if (!L_) {
@@ -7209,6 +7676,7 @@ void LuaEngine::registerCoreAPI() {
         {"IsEventRegistered", lua_Frame_IsEventRegistered},
         {"UnregisterEvent", lua_Frame_UnregisterEvent},
         {"UnregisterAllEvents", lua_Frame_UnregisterAllEvents},
+        {"RegisterAllEvents", lua_Frame_RegisterAllEvents},
         {"SetScript",       lua_Frame_SetScript},
         {"HookScript",      lua_Frame_HookScript},
         {"SetAttribute",    lua_Frame_SetAttribute},
@@ -7218,6 +7686,7 @@ void LuaEngine::registerCoreAPI() {
         {"CanChangeProtectedState", lua_Frame_CanChangeProtectedState},
         {"CanChangeAttribute", lua_Frame_CanChangeAttribute},
         {"GetScript",       lua_Frame_GetScript},
+        {"HasScript",       lua_Frame_HasScript},
         {"GetName",         lua_Frame_GetName},
         {"GetID",           lua_Frame_GetID},
         {"Show",            lua_Region_Show},
@@ -7284,6 +7753,8 @@ void LuaEngine::registerCoreAPI() {
         {"AddMessage",      lua_MessageFrame_AddMessage},
         {"AddLine",         lua_Tooltip_AddLine},
         {"SetOwner",        lua_Tooltip_SetOwner},
+        {"GetAnchorType",   lua_Tooltip_GetAnchorType},
+        {"SetAnchorType",   lua_Tooltip_SetAnchorType},
         {"SetAction",       lua_Tooltip_SetAction},
         {"SetInventoryItem", lua_Tooltip_SetInventoryItem},
         {"SetBagItem",      lua_Tooltip_SetBagItem},
@@ -7342,6 +7813,14 @@ void LuaEngine::registerCoreAPI() {
         {"ScrollUp",        lua_MessageFrame_ScrollUp},
         {"ScrollDown",      lua_MessageFrame_ScrollDown},
         {"ScrollToBottom",  lua_MessageFrame_ScrollToBottom},
+        {"ScrollToTop",     lua_MessageFrame_ScrollToTop},
+        {"PageUp",          lua_MessageFrame_PageUp},
+        {"PageDown",        lua_MessageFrame_PageDown},
+        {"SetScrollOffset", lua_MessageFrame_SetScrollOffset},
+        {"GetCurrentScroll", lua_MessageFrame_GetCurrentScroll},
+        {"GetNumLinesDisplayed", lua_MessageFrame_GetNumLinesDisplayed},
+        {"AtBottom",        lua_MessageFrame_AtBottom},
+        {"AtTop",           lua_MessageFrame_AtTop},
         {"Enable",          lua_Button_Enable},
         {"SetChecked",      lua_CheckButton_SetChecked},
         {"SetButtonState",  lua_Button_SetButtonState},
@@ -7365,6 +7844,7 @@ void LuaEngine::registerCoreAPI() {
         {"GetZoom",         lua_Minimap_GetZoom},
         {"GetZoomLevels",   lua_Minimap_GetZoomLevels},
         {"PingLocation",    lua_Minimap_PingLocation},
+        {"GetPingPosition", lua_Minimap_GetPingPosition},
         {"DrawQuestBlob",   lua_QuestBlobFrame_DrawQuestBlob},
         {"GetCenter",       lua_Region_GetCenter},
         {"SetAlpha",        lua_Region_SetAlpha},
@@ -7416,6 +7896,9 @@ void LuaEngine::registerCoreAPI() {
         {"SetClampRectInsets",    lua_Frame_SetClampRectInsets},
         {"IsClampedToScreen",     lua_Frame_IsClampedToScreen},
         {"SetBackdrop",           lua_Frame_SetBackdrop},
+        {"GetBackdrop",           lua_Frame_GetBackdrop},
+        {"GetBackdropColor",      lua_Frame_GetBackdropColor},
+        {"GetBackdropBorderColor",lua_Frame_GetBackdropBorderColor},
         {"SetBackdropColor",      lua_Frame_SetBackdropColor},
         {"SetBackdropBorderColor",lua_Frame_SetBackdropBorderColor},
         {"SetMinMaxValues",       lua_StatusBar_SetMinMaxValues},
@@ -7473,6 +7956,10 @@ void LuaEngine::registerCoreAPI() {
         {"SetParent",       lua_Region_SetParent},
         {"GetParent",       lua_Region_GetParent},
         {"GetChildren",     lua_Frame_GetChildren},
+        {"GetRegions",      lua_Frame_GetRegions},
+        {"GetNumChildren",  lua_Frame_GetNumChildren},
+        {"GetNumRegions",   lua_Frame_GetNumRegions},
+        {"GetSize",         lua_Region_GetSize},
         {"CreateTexture",   lua_Frame_CreateTexture},
         {"CreateFontString", lua_Frame_CreateFontString},
         {nullptr, nullptr}
@@ -7553,15 +8040,11 @@ void LuaEngine::registerCoreAPI() {
         // and built by the render loop, which is where the offscreen views
         // are; zero clears it.
         "function mt:SetCreature(id) __WoweeSetModelCreature(self, id) end\n"
-        "function mt:RefreshUnit() end\n"
+        "function mt:RefreshUnit() __WoweeRedress(self) end\n"
+        "function mt:Dress() __WoweeRedress(self) end\n"
         "function mt:GetInventorySlot()\n"
         "    return BankButtonIDToInvSlotID(self:GetID(), self.isBag)\n"
         "end\n"
-        // Message frames here do not scroll: every line is drawn and the frame
-        // is always showing its newest, which is what AtBottom asks. Answering
-        // false would have the interface offer a scroll-to-bottom button that
-        // does nothing.
-        "function mt:AtBottom() return true end\n"
     );
 
     // Animations. Written in Lua because it is almost entirely bookkeeping -
@@ -9443,7 +9926,6 @@ void LuaEngine::registerCoreAPI() {
         // Misc compatibility stubs
         // GetScreenWidth, GetScreenHeight, GetNumLootItems are now C functions
         // GetFramerate is now a C function
-        "function IsLoggedIn() return true end\n"
         "function StaticPopup_Show() end\n"
         "function StaticPopup_Hide() end\n"
         // UI Panel management - Show/Hide standard WoW panels
@@ -9719,7 +10201,6 @@ void LuaEngine::registerCoreAPI() {
         "CONTAINER_BAG_OFFSET = 19\n"
         "MAX_SKILLLINE_TABS = 8\n"
         "TRADE_ENCHANT_SLOT = 7\n"
-        "function GetPetActionsUsable() return false end\n"
     );
 
     // WoW table/string utility functions used by many addons
@@ -9917,6 +10398,14 @@ void LuaEngine::fireEventWith(const std::string& eventName, int nargs,
                               const std::function<void(lua_State*)>& pushArgs,
                               const std::string& traceArg) {
     if (!L_) return;
+    // 0x00528010 clears the flag IsLoggedIn reads (0x00bd0793) as the world
+    // is entered, just ahead of PLAYER_LOGIN (the first entry of an
+    // interface) and PLAYER_ENTERING_WORLD; a new interface (0x0052a980)
+    // starts with it set, so here with a new state.
+    if (eventName == "PLAYER_LOGIN" || eventName == "PLAYER_ENTERING_WORLD") {
+        lua_pushboolean(L_, 1);
+        lua_setfield(L_, LUA_REGISTRYINDEX, "wowee_logged_in");
+    }
 
     // Combat lockdown is the flag these two events announce, and 0x00524600
     // moves it on the far side of each: leaving combat lifts it before
@@ -10025,6 +10514,7 @@ void LuaEngine::fireEventWith(const std::string& eventName, int nargs,
         return out;
     }();
 
+    registerAllEventFrames(L_, eventName.c_str());
     lua_getglobal(L_, "__WoweeFrameEvents");
     if (lua_istable(L_, -1)) {
         lua_getfield(L_, -1, eventName.c_str());
@@ -10896,10 +11386,22 @@ std::string LuaEngine::bindingCommandForKey(const std::string& key) {
     // of the interface's own tables rather than restated here. GetBindingAction
     // already honours SetBinding, so a key the player rebound in game answers
     // to whatever they moved it to without this knowing anything about it.
+    // While the mouse looks, a key's mouselook override comes first
+    // (SetMouselookOverrideBinding, 0x005fd440).
+    if (const auto look = overrideBindings().mouselook(key)) {
+        lua_getglobal(L_, "IsMouselooking");
+        bool looking = false;
+        if (lua_isfunction(L_, -1) && lua_pcall(L_, 0, 1, 0) == 0) looking = lua_toboolean(L_, -1) != 0;
+        lua_pop(L_, 1);
+        if (looking) return *look;
+    }
+    // A key press asks with checkOverride: the key's overrides answer ahead
+    // of its own binding (0x00562490).
     lua_getglobal(L_, "GetBindingAction");
     if (!lua_isfunction(L_, -1)) { lua_pop(L_, 1); return ""; }
     lua_pushstring(L_, key.c_str());
-    if (lua_pcall(L_, 1, 1, 0) != 0) {
+    lua_pushboolean(L_, 1);
+    if (lua_pcall(L_, 2, 1, 0) != 0) {
         LOG_WARNING("GetBindingAction(", key, ") failed: ",
                     luaL_optstring(L_, -1, "?"));
         lua_pop(L_, 1);
@@ -12025,6 +12527,7 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
     // exactly this - the loot window closes itself - and the item's
     // description stayed on screen over nothing.
     widgets_.hideOrphanedTooltips();
+    widgets_.followCursorTooltips(x, y);
 
     // How far the cursor has travelled since last frame, which is what carries
     // a frame that is being moved and what tells a drag from a click.

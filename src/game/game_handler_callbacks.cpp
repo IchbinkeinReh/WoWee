@@ -7,6 +7,7 @@
 #include "game/unit_name_rules.hpp"
 #include "rendering/mount_transition.hpp"
 #include "game/game_handler.hpp"
+#include "game/inventory_alerts.hpp"
 #include "game/reputation_standing.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "game/spell_description_eval.hpp"
@@ -24,6 +25,8 @@
 #include "game/inventory_handler.hpp"
 #include "game/social_handler.hpp"
 #include "game/quest_handler.hpp"
+#include "game/npc_interaction.hpp"
+#include "game/pet_action_bar.hpp"
 #include "game/warden_handler.hpp"
 #include "game/warden_crypto.hpp"
 #include "game/warden_memory.hpp"
@@ -536,6 +539,8 @@ void GameHandler::playErrorSpeech(audio::PlayerErrorSpeech type) {
 }
 
 void GameHandler::playGameErrorSound(std::string_view gameErrorKey) {
+    // 0x005216f0: the game error ERR_BAG_FULL (11) triggers tutorial 0x39.
+    if (gameErrorKey == "ERR_BAG_FULL") triggerTutorial(0x39);
     if (const auto speech = audio::vocal_error::forGameError(gameErrorKey)) {
         playErrorSpeech(*speech);
         return;
@@ -999,6 +1004,29 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
         // (0x00528010 -> 0x005a56f0).
         requestGuildBankWithdrawMoney();
     }
+    // 0x00528010 -> 0x005d6e60: with a pet - the charm, else the summon -
+    // its bar and spells asked for again, a bare CMSG_REQUEST_PET_INFO.
+    if (socket && wireOpcode(Opcode::CMSG_REQUEST_PET_INFO) != 0xFFFF) {
+        if (auto me = getEntityManager().getEntity(playerGuid)) {
+            const auto guidAt = [&](UF low) -> uint64_t {
+                const uint16_t i = fieldIndex(low);
+                return i != 0xFFFF ? me->getField(i) | (static_cast<uint64_t>(me->getField(static_cast<uint16_t>(i + 1))) << 32)
+                                   : 0ull;
+            };
+            const uint64_t charm = guidAt(UF::UNIT_FIELD_CHARM);
+            const uint64_t pet = charm != 0 ? charm : guidAt(UF::UNIT_FIELD_SUMMON);
+            if (pet != 0) {
+                network::Packet pkt(wireOpcode(Opcode::CMSG_REQUEST_PET_INFO));
+                socket->send(pkt);
+            }
+        }
+    }
+    // 0x00528010's tutorials, each shown once: 0x29, 1, 2 and 0 in that order.
+    // The client runs this once the world is loaded, by when the server's
+    // flags are always in; here world entry can come first, so the four wait
+    // for SMSG_TUTORIAL_FLAGS when it has not arrived.
+    if (tutorials_.loaded()) triggerEntryTutorials();
+    else entryTutorialsPending_ = true;
     // Every way into the world (0x00528010, once per entry - 0x00528c30
     // clears it on the way out): the battleground queues' status asked for
     // (0x0054ca50, CMSG_BATTLEFIELD_STATUS), then the dungeon finder's
@@ -1102,10 +1130,10 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
             fireAddonEvent("PLAYER_DEAD", {});
         }
         // The durability warnings hide themselves when nothing is damaged, and
-        // this is the event that asks them to look. Without it the frame keeps
-        // the state its XML was written with, which is shown.
-        fireAddonEvent("UPDATE_INVENTORY_ALERTS", {});
-        fireAddonEvent("UPDATE_INVENTORY_DURABILITY", {});
+        // this is the pass that asks them to look (0x006e1e10 -> 0x005e90d0).
+        // Without it the frame keeps the state its XML was written with,
+        // which is shown.
+        updateInventoryAlerts();
     }
 }
 
@@ -1130,6 +1158,11 @@ void GameHandler::handleTutorialFlags(network::Packet& packet) {
         v = packet.readUInt32();
     }
 
+    tutorials_.loadFlags(flags);  // 0x00530920
+    if (entryTutorialsPending_) {
+        entryTutorialsPending_ = false;
+        triggerEntryTutorials();
+    }
     LOG_INFO("SMSG_TUTORIAL_FLAGS: [",
              flags[0], ", ", flags[1], ", ", flags[2], ", ", flags[3], ", ",
              flags[4], ", ", flags[5], ", ", flags[6], ", ", flags[7], "]");
@@ -1553,6 +1586,35 @@ const ListInventoryData& GameHandler::getVendorItems() const {
     if (inventoryHandler_) return inventoryHandler_->getVendorItems();
     return currentVendorItems;
 }
+void GameHandler::updateInventoryAlerts() {
+    namespace ia = inventory_alerts;
+    bool moved = false;
+    for (int i = 0; i < ia::kCount; ++i) {
+        const int slot = ia::kSlots[static_cast<size_t>(i)];
+        int status = 0;
+        if (slot < 0) {
+            const uint32_t ammo = getAmmoId();
+            status = ia::ammoAlert(ammo, ammo ? static_cast<uint32_t>(getInventory().countItem(ammo)) : 0);
+        } else {
+            const auto& s = getInventory().getEquipSlot(static_cast<EquipSlot>(slot));
+            ia::Item item;
+            item.present = !s.empty();
+            item.durability = s.item.curDurability;
+            item.maxDurability = s.item.maxDurability;
+            item.fieldFlags = getItemFieldFlags(getEquipSlotGuid(slot));
+            const ia::Result r = ia::itemAlert(item);
+            status = r.status;
+            if (r.tutorial >= 0) triggerTutorial(static_cast<uint32_t>(r.tutorial));
+        }
+        if (inventoryAlerts_[static_cast<size_t>(i)] != status) {
+            inventoryAlerts_[static_cast<size_t>(i)] = status;
+            moved = true;
+        }
+    }
+    if (moved) fireAddonEvent("UPDATE_INVENTORY_ALERTS", {});
+    fireAddonEvent("UPDATE_INVENTORY_DURABILITY", {});
+}
+
 void GameHandler::setVendorCanRepair(bool v) {
     if (inventoryHandler_) inventoryHandler_->setVendorCanRepair(v);
     else currentVendorItems.canRepair = v;
@@ -1886,8 +1948,9 @@ void GameHandler::setOrientation(float orientation) {
 // applyUpdateObjectBlock, finalizeUpdateObjectBatch, handleCompressedUpdateObject,
 // handleDestroyObject) moved to EntityController - see entity_controller.cpp
 
-void GameHandler::sendChatMessage(ChatType type, const std::string& message, const std::string& target) {
-    if (chatHandler_) chatHandler_->sendChatMessage(type, message, target);
+void GameHandler::sendChatMessage(ChatType type, const std::string& message, const std::string& target,
+                                  uint32_t language) {
+    if (chatHandler_) chatHandler_->sendChatMessage(type, message, target, language);
 }
 
 void GameHandler::sendAddonMessage(ChatType type, const std::string& message, const std::string& target) {
@@ -1970,6 +2033,46 @@ void GameHandler::setMouseoverGuid(uint64_t guid) {
 
 std::shared_ptr<Entity> GameHandler::getFocus() const {
     return combatHandler_ ? combatHandler_->getFocus() : nullptr;
+}
+
+void GameHandler::stopAutoRepeat(bool tellServer) {
+    if (!autoRepeating_) return;
+    if (tellServer && socket && isInWorld()) {
+        network::Packet packet(wireOpcode(Opcode::CMSG_CANCEL_AUTO_REPEAT_SPELL));
+        socket->send(packet);
+    }
+    autoRepeating_ = false;
+    autoRepeatSpellId_ = 0;
+    fireAddonEvent("STOP_AUTOREPEAT_SPELL", {});
+}
+
+namespace {
+std::string questRewardLine(const ItemQueryResponseData& info, uint32_t count, uint32_t level) {
+    const std::string link = buildItemLink(info.entry, info.quality, info.name, level);
+    if (count > 1)
+        return interfaceFormat("ERR_QUEST_REWARD_ITEM_MULT_IS", "Received %d of item: %s.",
+                               {std::to_string(count), link});
+    return interfaceFormat("ERR_QUEST_REWARD_ITEM_S", "Received item: %s.", {link});
+}
+}  // namespace
+
+void GameHandler::announceQuestRewardItem(uint32_t itemId, uint32_t count) {
+    if (itemId == 0) return;
+    if (const auto* info = getItemInfo(itemId); info && info->valid) {
+        addSystemChatMessage(questRewardLine(*info, count, getPlayerLevel()));
+        return;
+    }
+    pendingQuestRewardItems_.emplace_back(itemId, count);
+    ensureItemInfo(itemId);
+}
+
+void GameHandler::questRewardItemArrived(uint32_t itemId) {
+    const auto* info = getItemInfo(itemId);
+    for (auto it = pendingQuestRewardItems_.begin(); it != pendingQuestRewardItems_.end();) {
+        if (it->first != itemId) { ++it; continue; }
+        if (info && info->valid) addSystemChatMessage(questRewardLine(*info, it->second, getPlayerLevel()));
+        it = pendingQuestRewardItems_.erase(it);
+    }
 }
 
 void GameHandler::targetLastTarget() {
@@ -2979,6 +3082,47 @@ void GameHandler::sendActionBarToggles(uint8_t mask) {
     socket->send(packet);
 }
 
+void GameHandler::flagTutorial(uint32_t id) {
+    if (!tutorials_.flag(id)) return;
+    if (!socket || state != WorldState::IN_WORLD || wireOpcode(Opcode::CMSG_TUTORIAL_FLAG) == 0xFFFF) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_TUTORIAL_FLAG));
+    packet.writeUInt32(id);
+    socket->send(packet);
+}
+
+void GameHandler::triggerTutorial(uint32_t id) {
+    const bool show = addons::storedCVarValue("showTutorials", "1") != "0";
+    switch (tutorials_.trigger(id, show)) {
+    case TutorialState::Trigger::Nothing:
+        break;
+    case TutorialState::Trigger::Flag:
+        flagTutorial(id);
+        break;
+    case TutorialState::Trigger::Popup:
+        if (auto* ac = services().audioCoordinator) {
+            if (auto* sfx = ac->getUiSoundManager()) sfx->playByName("TutorialPopup");
+        }
+        fireAddonEvent("TUTORIAL_TRIGGER", {std::to_string(id + 1)});
+        break;
+    }
+}
+
+void GameHandler::triggerEntryTutorials() {
+    for (uint32_t id : {0x29u, 1u, 2u, 0u}) triggerTutorial(id);
+}
+
+void GameHandler::clearTutorials() {
+    tutorials_.setAll();
+    sendTutorialClear();
+}
+
+void GameHandler::resetTutorials() {
+    tutorials_.reset();
+    if (!socket || state != WorldState::IN_WORLD || wireOpcode(Opcode::CMSG_TUTORIAL_RESET) == 0xFFFF) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_TUTORIAL_RESET));
+    socket->send(packet);
+}
+
 void GameHandler::sendTutorialClear() {
     if (!socket || state != WorldState::IN_WORLD || wireOpcode(Opcode::CMSG_TUTORIAL_CLEAR) == 0xFFFF) return;
     network::Packet packet(wireOpcode(Opcode::CMSG_TUTORIAL_CLEAR));
@@ -3155,9 +3299,7 @@ uint32_t GameHandler::summonPropertiesFlagsOf(uint64_t unitGuid) {
     return 0;
 }
 
-void GameHandler::dismissPet() {
-    // CGPetInfo::PetDismiss (0x005d46f0).
-    if (state != WorldState::IN_WORLD || !socket) return;
+pet::DismissContext GameHandler::petDismissContext() const {
     pet::DismissContext c;
     auto player = getEntityManager().getEntity(playerGuid);
     if (player) {
@@ -3180,6 +3322,18 @@ void GameHandler::dismissPet() {
         c.seatKnown = true;
         c.seatFlags = seat->flags;
     }
+    return c;
+}
+
+bool GameHandler::petActionsUsable() const {
+    // GetPetActionsUsable (0x005d53c0) -> 0x005d3e80.
+    return pet::canDismissPet(petDismissContext());
+}
+
+void GameHandler::dismissPet() {
+    // CGPetInfo::PetDismiss (0x005d46f0).
+    if (state != WorldState::IN_WORLD || !socket) return;
+    pet::DismissContext c = petDismissContext();
     if (pet::canDismissPet(c) && !(c.pet == c.mover && c.playerTransport == c.pet))
         c.summonPropertiesFlags = summonPropertiesFlagsOf(c.pet);
     switch (pet::dismissAction(c)) {
@@ -3308,6 +3462,31 @@ void GameHandler::onPlayerEnteredWorldGuild() {
 // ============================================================
 // Talents
 // ============================================================
+
+uint8_t GameHandler::getPetTalentRank(uint32_t talentId) const {
+    return spellHandler_ ? spellHandler_->getPetTalentRank(talentId) : 0;
+}
+
+uint32_t GameHandler::getPetUnspentTalentPoints() const {
+    return spellHandler_ ? spellHandler_->getPetUnspentTalentPoints() : 0;
+}
+
+const std::unordered_map<uint32_t, uint8_t>& GameHandler::getPetTalents() const {
+    static const std::unordered_map<uint32_t, uint8_t> none;
+    return spellHandler_ ? spellHandler_->getPetTalents() : none;
+}
+
+const TalentTabEntry* GameHandler::getPetTalentTab() const {
+    return spellHandler_ ? spellHandler_->getPetTalentTab() : nullptr;
+}
+
+void GameHandler::learnPreviewPetTalents(const std::vector<std::pair<uint32_t, uint32_t>>& talentRanks) {
+    if (spellHandler_) spellHandler_->learnPreviewPetTalents(talentRanks);
+}
+
+void GameHandler::learnPetTalent(uint32_t talentId, uint32_t requestedRank) {
+    if (spellHandler_) spellHandler_->learnPetTalent(talentId, requestedRank);
+}
 
 void GameHandler::learnTalent(uint32_t talentId, uint32_t requestedRank) {
     if (spellHandler_) spellHandler_->learnTalent(talentId, requestedRank);
@@ -3619,6 +3798,10 @@ void GameHandler::signPetition(uint64_t petitionGuid) {
     if (socialHandler_) socialHandler_->signPetition(petitionGuid);
 }
 
+void GameHandler::turnInArenaPetition(uint64_t petitionGuid, const std::array<uint32_t, 5>& design) {
+    if (socialHandler_) socialHandler_->turnInArenaPetition(petitionGuid, design);
+}
+
 void GameHandler::turnInPetition(uint64_t petitionGuid, bool blankDesign) {
     if (socialHandler_) socialHandler_->turnInPetition(petitionGuid, blankDesign);
 }
@@ -3633,6 +3816,31 @@ void GameHandler::offerPetition(uint64_t petitionGuid, uint64_t targetGuid) {
 
 void GameHandler::lootTarget(uint64_t guid) {
     if (inventoryHandler_) inventoryHandler_->lootTarget(guid);
+}
+
+void GameHandler::lootCorpse(uint64_t guid) {
+    if (!isInWorld()) return;
+    // 0x006dad90: a corpse is looted standing still - while the player moves
+    // (any of the movement flags 0xc010ff) the click does nothing at all.
+    if ((movementInfo.flags & 0xc010ffu) != 0) return;
+    // A mounted player gets down first where Auto Dismount (and, in the air,
+    // Auto Dismount in Flight) lets it (0x0071b0c0), else is told so and
+    // nothing is sent.
+    if (isMounted() && !isTaxiMountActive()) {
+        auto me = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(getPlayerGuid()));
+        const uint32_t unitFlags = me ? me->getUnitFlags() : 0u;
+        const bool getsDown = (unitFlags & 0x100000u) == 0 &&
+                              addons::storedCVarValue("autoDismount", "1") != "0" &&
+                              (!isPlayerFlying() ||
+                               addons::storedCVarValue("autoDismountFlying", "0") != "0");
+        if (!getsDown) {
+            playGameErrorSound("ERR_NOT_WHILE_MOUNTED");
+            raiseUiError(interfaceString("ERR_NOT_WHILE_MOUNTED", "You can't do that while mounted."));
+            return;
+        }
+        dismount();
+    }
+    lootTarget(guid);
 }
 
 void GameHandler::lootItem(uint8_t slotIndex, bool confirmed) {
@@ -3730,6 +3938,40 @@ void GameHandler::lootMasterGive(uint8_t lootSlot, uint64_t targetGuid) {
 
 void GameHandler::interactWithNpc(uint64_t guid) {
     if (!isInWorld()) return;
+    // 0x006ddbb0 first: in a form that takes no items (0x00721ca0) whose row
+    // is missing or lacks flag 8, the player leaves it where autoUnshift lets
+    // it (0x0071b130, 0x00726ce0) and is refused ERR_CANT_INTERACT_SHAPESHIFTED
+    // where it does not.
+    if (const uint8_t form = getShapeshiftFormId(); form != 0) {
+        const auto* row = shapeshiftFormRow(form);
+        if ((!row || (row->flags & 0x1u) == 0) && (!row || (row->flags & 0x8u) == 0)) {
+            if (!wouldAutoUnshift()) {
+                playGameErrorSound("ERR_CANT_INTERACT_SHAPESHIFTED");
+                raiseUiError(interfaceString("ERR_CANT_INTERACT_SHAPESHIFTED",
+                                             "Can't speak while shapeshifted."));
+                return;
+            }
+            leaveShapeshiftForm();
+        }
+    }
+    // 0x006ddbb0: nothing past the NPC's combat reach plus four yards (a
+    // straight-line distance, height included) is spoken to. With
+    // click-to-move interaction the client walks there instead; without it -
+    // and there is none here - it says so and sends nothing.
+    if (auto entity = getEntityManager().getEntity(guid)) {
+        if (auto* unit = dynamic_cast<Unit*>(entity.get())) {
+            const float dx = movementInfo.x - entity->getX();
+            const float dy = movementInfo.y - entity->getY();
+            const float dz = movementInfo.z - entity->getZ();
+            const float reach = unit->getCombatReach() + 4.0f;
+            if (dx * dx + dy * dy + dz * dz > reach * reach) {
+                playGameErrorSound("ERR_TOO_FAR_TO_INTERACT");
+                raiseUiError(interfaceString("ERR_TOO_FAR_TO_INTERACT",
+                                             "You need to be closer to interact with that target."));
+                return;
+            }
+        }
+    }
     // A dead player at an area spirit healer is a different conversation. The
     // battleground ones do not answer a gossip hello at all - they answer
     // CMSG_AREA_SPIRIT_HEALER_QUERY with the seconds to the next mass
@@ -3777,6 +4019,12 @@ void GameHandler::interactWithNpc(uint64_t guid) {
         }
     }
 
+    // 0x006ddbb0: a questgiver with nothing for the player yet (status 1)
+    // opens its tutorial.
+    if (getQuestGiverStatus(guid) == QuestGiverStatus::UNAVAILABLE) triggerTutorial(0x2a);
+    // Past the hellos, 0x006ddbb0 clicks a spell-click unit rather than greet it.
+    if (clickUnitBeyondHellos(guid)) return;
+
     auto packet = GossipHelloPacket::build(guid);
     socket->send(packet);
 
@@ -3796,6 +4044,50 @@ void GameHandler::interactWithNpc(uint64_t guid) {
     }
     LOG_DEBUG("interactWithNpc: hello to ", pendingNpcHello_.name, " at ",
               pendingNpcHello_.distance, " yards");
+}
+
+bool GameHandler::clickUnitBeyondHellos(uint64_t guid) {
+    if (!isInWorld() || !socket || guid == 0) return false;
+    auto entity = getEntityManager().getEntity(guid);
+    auto* unit = dynamic_cast<Unit*>(entity.get());
+    if (!unit) return false;
+
+    npc_interaction::Unit u;
+    u.npcFlags = unit->getNpcFlags();
+    if (const uint16_t f = fieldIndex(UF::UNIT_FIELD_FLAGS_2); f != 0xFFFF) u.flags2 = unit->getField(f);
+    u.questStatus = static_cast<uint8_t>(getQuestGiverStatus(guid));
+    u.isPlayer = entity->getType() == ObjectType::PLAYER;
+    u.isSelf = guid == playerGuid;
+    for (const auto& m : getPartyData().members) {
+        if (m.guid == guid) { u.inGroup = true; break; }
+    }
+    u.emptySeats = vehicleRoster_.emptySeats(guid);
+
+    const auto action = npc_interaction::decide(u);
+    if (action != npc_interaction::Action::SpellClick &&
+        action != npc_interaction::Action::VehicleEnter) {
+        return false;
+    }
+    const Opcode op = action == npc_interaction::Action::SpellClick
+                          ? Opcode::CMSG_SPELLCLICK
+                          : Opcode::CMSG_PLAYER_VEHICLE_ENTER;
+    if (wireOpcode(op) == 0xFFFF) return false;
+    network::Packet packet(wireOpcode(op));
+    packet.writeUInt64(guid);
+    socket->send(packet);
+    LOG_INFO(action == npc_interaction::Action::SpellClick ? "CMSG_SPELLCLICK" : "CMSG_PLAYER_VEHICLE_ENTER",
+             ": 0x", std::hex, guid, std::dec);
+    return true;
+}
+
+void GameHandler::loadingKeepAlive(bool starting) {
+    const auto now = std::chrono::steady_clock::now();
+    if (!starting && now < nextLoadingKeepAlive_) return;
+    if (!starting && socket && wireOpcode(Opcode::CMSG_KEEP_ALIVE) != 0xFFFF) {
+        network::Packet packet(wireOpcode(Opcode::CMSG_KEEP_ALIVE));
+        socket->send(packet);
+    }
+    nextLoadingKeepAlive_ = now + std::chrono::seconds(30);
 }
 
 void GameHandler::queryAreaSpiritHealer(uint64_t guid) {
@@ -3879,6 +4171,47 @@ void GameHandler::interactWithGameObject(uint64_t guid) {
     performGameObjectInteractionNow(guid);
 }
 
+bool GameHandler::meetingStoneAllowsUse(const GameObjectQueryResponseData* goInfo) {
+    // 0x00712270, a summoning stone, in its order: a group to summon for; a
+    // target; the player's own level in the stone's range (0x007121e0, its
+    // first two data fields); the target in the party or raid; and the
+    // target's level in the range too - read off the unit, or off its group
+    // row when it is online and out of sight, and ERR_MEETING_STONE_NOT_FOUND
+    // when neither says.
+    auto refuse = [this](const char* key, const char* enUS) {
+        playGameErrorSound(key);
+        addUIError(interfaceString(key, enUS));
+        return false;
+    };
+    if (!isInGroup())
+        return refuse("ERR_MEETING_STONE_NEED_PARTY", "You must be in a party to use this meeting stone.");
+    const uint64_t target = getTargetGuid();
+    if (target == 0) return refuse("ERR_GENERIC_NO_TARGET", "You have no target.");
+    const uint32_t minLevel = goInfo && goInfo->hasData ? goInfo->data[0] : 0;
+    const uint32_t maxLevel = goInfo && goInfo->hasData ? goInfo->data[1] : 0;
+    auto inRange = [&](uint32_t level) { return level >= minLevel && level <= maxLevel; };
+    if (!inRange(getPlayerLevel()))
+        return refuse("ERR_MEETING_STONE_INVALID_LEVEL", "You are not the correct level to use this meeting stone.");
+    const GroupMember* row = nullptr;
+    for (const auto& m : getPartyData().members) {
+        if (m.guid == target) { row = &m; break; }
+    }
+    if (!row)
+        return refuse("ERR_MEETING_STONE_TARGET_NOT_IN_PARTY", "Your target is not in your party.");
+    uint32_t targetLevel = 0;
+    if (auto* unit = dynamic_cast<Unit*>(getEntityManager().getEntity(target).get())) {
+        targetLevel = unit->getLevel();
+    } else if (row->isOnline && row->level != 0) {
+        targetLevel = row->level;
+    } else {
+        return refuse("ERR_MEETING_STONE_NOT_FOUND", "Your target could not be found.");
+    }
+    if (!inRange(targetLevel))
+        return refuse("ERR_MEETING_STONE_TARGET_INVALID_LEVEL",
+                      "Your target is not the correct level to use this meeting stone.");
+    return true;
+}
+
 void GameHandler::performGameObjectInteractionNow(uint64_t guid) {
     if (guid == 0) return;
     if (!isInWorld()) return;
@@ -3919,6 +4252,7 @@ void GameHandler::performGameObjectInteractionNow(uint64_t guid) {
                          std::dec, " entry=", goEntry, " name='", goName, "'");
                 return;
             }
+            if (goType == 23 && !meetingStoneAllowsUse(goInfo)) return;
             if (goType == 5 && !goName.empty()) {
                 std::string lower = lowerCopy(goName);
                 if (lower.rfind("doodad_", 0) != 0) {
@@ -4317,6 +4651,74 @@ void GameHandler::closeVendor() {
 
 void GameHandler::buyItem(uint64_t vendorGuid, uint32_t itemId, uint32_t slot, uint32_t count) {
     if (inventoryHandler_) inventoryHandler_->buyItem(vendorGuid, itemId, slot, count);
+}
+
+void GameHandler::buyItemInSlot(uint64_t vendorGuid, uint32_t itemId, uint32_t vendorSlot,
+                                uint8_t wireBag, uint8_t wireSlot, uint32_t count) {
+    if (inventoryHandler_) inventoryHandler_->buyItemInSlot(vendorGuid, itemId, vendorSlot, wireBag, wireSlot, count);
+}
+
+bool GameHandler::petBarEditable() const {
+    if (petGuid_ == 0) return false;
+    auto pet = getEntityManager().getEntity(petGuid_);
+    auto* unit = dynamic_cast<const Unit*>(pet.get());
+    return unit && (unit->getUnitFlags() & 0x01000000u) == 0;
+}
+
+namespace {
+/// CMSG_PET_SET_ACTION (0x005d6020): the pet, the other slot that moved and
+/// its action when there is one, then the slot and its action.
+void sendPetSetAction(network::WorldSocket* socket, uint64_t pet, int moved, uint32_t movedAction,
+                      int slot, uint32_t action) {
+    if (!socket || wireOpcode(Opcode::CMSG_PET_SET_ACTION) == 0xFFFF) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_PET_SET_ACTION));
+    packet.writeUInt64(pet);
+    if (moved >= 0) {
+        packet.writeUInt32(static_cast<uint32_t>(moved));
+        packet.writeUInt32(movedAction);
+    }
+    packet.writeUInt32(static_cast<uint32_t>(slot));
+    packet.writeUInt32(action);
+    socket->send(packet);
+}
+}  // namespace
+
+uint32_t GameHandler::placePetAction(int idx, uint32_t action) {
+    namespace pab = pet_action_bar;
+    if (!petBarEditable() || idx < 0 || idx >= pab::kSlots) return 0;
+    // A passive spell is not put on the bar (Attributes 0x40).
+    if (pab::typeOf(action) == pab::kTypeSpell && pab::valueOf(action) != 0 &&
+        isSpellPassive(pab::valueOf(action))) {
+        return 0;
+    }
+    pab::Slots slots{};
+    for (int i = 0; i < pab::kSlots; ++i) slots[static_cast<size_t>(i)] = petActionSlots_[i];
+    const auto placed = pab::place(slots, idx, action);
+    if (!placed.changed) return 0;
+    for (int i = 0; i < pab::kSlots; ++i) petActionSlots_[i] = slots[static_cast<size_t>(i)];
+    if (state == WorldState::IN_WORLD)
+        sendPetSetAction(socket.get(), petGuid_, placed.moved,
+                         placed.moved >= 0 ? petActionSlots_[placed.moved] : 0, idx, petActionSlots_[idx]);
+    fireAddonEvent("PET_BAR_UPDATE", {});
+    return placed.displaced;
+}
+
+void GameHandler::clearPetActionSlot(int idx) {
+    namespace pab = pet_action_bar;
+    if (idx < 0 || idx >= pab::kSlots) return;
+    placePetAction(idx, petActionSlots_[idx] & 0xff000000u);
+}
+
+bool GameHandler::wrappingItem() const {
+    return inventoryHandler_ && inventoryHandler_->wrapping();
+}
+
+void GameHandler::wrapItemAt(uint8_t wireBag, uint8_t wireSlot) {
+    if (inventoryHandler_) inventoryHandler_->wrapItemAt(wireBag, wireSlot);
+}
+
+void GameHandler::cancelWrapping() {
+    if (inventoryHandler_) inventoryHandler_->cancelWrapping();
 }
 
 void GameHandler::buyBackItem(uint32_t row) {
@@ -5234,6 +5636,30 @@ void GameHandler::onCalendarNameKnown(uint64_t guid) {
                             calendarSortKeys(*this));
     }
     for (const auto& signal : said) fireAddonEvent(signal.event, signal.args);
+}
+
+bool GameHandler::wouldAutoUnshift() const {
+    auto me = getEntityManager().getEntity(getPlayerGuid());
+    const auto* unit = dynamic_cast<const Unit*>(me.get());
+    if (!unit || (unit->getUnitFlags() & 0x100000u) != 0) return false;
+    if (addons::storedCVarValue("autoUnshift", "1") == "0") return false;
+    if ((movementInfo.flags & 0x2000000u) != 0 && addons::storedCVarValue("autoDismountFlying", "0") == "0")
+        return false;
+    const auto* row = shapeshiftFormRow(getShapeshiftFormId());
+    return !row || (row->flags & 0x100u) == 0;
+}
+
+void GameHandler::leaveShapeshiftForm() {
+    if (getShapeshiftFormId() == 0) return;
+    std::vector<uint32_t> spells;
+    for (const auto& aura : getPlayerAuras()) {
+        if ((aura.flags & 0x10) != 0) spells.push_back(aura.spellId);
+    }
+    // The form is read again for each: the first cancel leaves it.
+    for (uint32_t spellId : spells) {
+        const uint8_t form = getShapeshiftFormId();
+        if (form != 0 && spellShapeshiftsInto(spellId, form)) cancelAura(spellId);
+    }
 }
 
 } // namespace game

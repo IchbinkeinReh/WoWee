@@ -1828,6 +1828,37 @@ register_test_target(test_interface_text_lines)
 # ever read as one.
 wowee_add_test(test_npc_flags SOURCES test_npc_flags.cpp)
 
+# ── test_npc_interaction ─────────────────────────────────────
+# A right-click past the NPC hellos (0x006ddbb0): the spell click and a group
+# member's vehicle, after every hello flag.
+wowee_add_test(test_npc_interaction SOURCES test_npc_interaction.cpp)
+
+# ── test_tutorials ───────────────────────────────────────────
+# The tutorial pop-outs' two bit sets and the session's seen list, as
+# 0x00530100..0x00530920 keep them.
+wowee_add_test(test_tutorials SOURCES test_tutorials.cpp)
+
+# ── test_pet_action_bar ──────────────────────────────────────
+# The pet bar's ten slots as 0x005d6020 moves actions between them.
+wowee_add_test(test_pet_action_bar SOURCES test_pet_action_bar.cpp)
+
+# ── test_missile_trajectory ──────────────────────────────────
+# The aimed trajectory cast's solver (0x006fcd60): the pitch, speed and facing
+# a vehicle's shot leaves with, and where its stepped path meets the world.
+wowee_add_test(test_missile_trajectory SOURCES test_missile_trajectory.cpp)
+
+# ── test_override_bindings ───────────────────────────────────
+# SetOverrideBinding's store: priority first, then the newest, per owner.
+wowee_add_test(test_override_bindings SOURCES test_override_bindings.cpp)
+
+# ── test_inventory_alerts ────────────────────────────────────
+# The durability figure's alerts (0x005e8fe0): low, broken, the ammunition.
+wowee_add_test(test_inventory_alerts SOURCES test_inventory_alerts.cpp)
+
+# ── test_totem_bar ───────────────────────────────────────────
+# The totem bar's element lists and slots (0x00542030, 0x005a7ae0).
+wowee_add_test(test_totem_bar SOURCES test_totem_bar.cpp)
+
 # ── test_scene_pick ──────────────────────────────────────────
 # Which of ScenePick's answers a caller wants. closestGuid and resolve()
 # disagree exactly where a wide object stands beside an NPC, which is where the

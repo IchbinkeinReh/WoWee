@@ -141,7 +141,8 @@
     "MaxScale": 3,
     "MaxScaleLevel": 4,
     "MinScale": 1,
-    "MinScaleLevel": 2
+    "MinScaleLevel": 2,
+    "PetTalentType": 8
   },
   "CreatureModelData": {
     "ID": 0,
@@ -624,7 +625,8 @@
     "ClassMask": 20,
     "ID": 0,
     "Name": 1,
-    "OrderIndex": 22
+    "OrderIndex": 22,
+    "PetTalentMask": 21
   },
   "TaxiNodes": {
     "ID": 0,

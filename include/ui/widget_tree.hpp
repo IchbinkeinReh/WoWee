@@ -348,6 +348,9 @@ struct Widget {
     std::string edgeFile;
     bool  tileBackground = false;
     float edgeSize = 16.0f;
+    /// The background's repeat as the backdrop table gave it, which only
+    /// GetBackdrop hands back; the draw tiles at the edge size.
+    float backdropTileSize = 0.0f;
     float insetLeft = 0.0f, insetRight = 0.0f, insetTop = 0.0f, insetBottom = 0.0f;
     float backdropColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     float borderColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
@@ -557,11 +560,20 @@ struct Widget {
     size_t maxMessages = 128;
     /// How far back through the history the frame has been scrolled, in lines.
     int   messageScroll = 0;
+    /// How many messages the last draw fitted on screen, which is the page
+    /// PageUp and PageDown turn and GetNumLinesDisplayed answers.
+    mutable int messagesDisplayed = 0;
 
     /// A tooltip holds lines the same way, but draws them from the top and
     /// sizes itself to fit them - which is the part a chat frame does not do,
     /// because a tooltip has no size of its own until it has something to say.
     bool  isTooltip = false;
+    /// The anchor type SetOwner or SetAnchorType left, numbered as the client
+    /// stores it (0x0061d650); 9 is ANCHOR_NONE.
+    int   tooltipAnchorType = 9;
+    /// The offsets SetOwner or SetAnchorType gave, which ANCHOR_CURSOR_RIGHT
+    /// adds to the cursor each frame (0x0061b2e0).
+    float tooltipAnchorX = 0.0f, tooltipAnchorY = 0.0f;
     /// The frame this tooltip was last given by SetOwner. A tooltip is hidden
     /// when its owner stops being visible - see hideOrphanedTooltips.
     uint32_t tooltipOwnerId = 0;
@@ -623,6 +635,11 @@ struct Widget {
     /// closing this one is what empties it.
     struct TryOnItem { uint32_t displayInfoId; uint8_t inventoryType; };
     std::vector<TryOnItem> tryOnItems;
+    /// Undress was asked (0x00597ba0): the frame's own figure has every item
+    /// slot and both hands emptied, under whatever is tried on after. Dress,
+    /// RefreshUnit and SetUnit build the figure from the unit again
+    /// (0x005977e0), which puts it all back.
+    bool undressed = false;
 
     /// A creature this model frame has been told to show, by display id. Set
     /// by whichever binding decides - the stable's paperdoll is told a slot
@@ -1106,6 +1123,11 @@ public:
     /// Record which frame a tooltip is describing, so it can be taken away
     /// with it. See hideOrphanedTooltips.
     void setTooltipOwner(uint32_t tooltipId, uint32_t ownerId);
+    /// Put each shown tooltip anchored to the cursor at the cursor, which the
+    /// client does on every update (0x0061b2e0): ANCHOR_CURSOR by its bottom,
+    /// ANCHOR_CURSOR_RIGHT by its bottom-left plus its offsets. `x` and `y`
+    /// are the cursor in tree space.
+    void followCursorTooltips(float x, float y);
     /// Hide any tooltip whose owner has stopped being visible.
     ///
     /// A tooltip is hidden by its owner's OnLeave, and a frame that is hidden

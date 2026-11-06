@@ -829,6 +829,18 @@ void GameHandler::update(float deltaTime) {
     updateNetworking();
     if (!socket) return;  // disconnect() may have been called
     if (state == WorldState::IN_WORLD) updatePredictedPower();
+    // The world state frame's countdowns run on the server's clock, which
+    // 0x005488f0 asks for every twenty seconds in the world:
+    // CMSG_WORLD_STATE_UI_TIMER_UPDATE (0x00548760), answered with
+    // SMSG_WORLD_STATE_UI_TIMER_UPDATE.
+    if (state == WorldState::IN_WORLD && wireOpcode(Opcode::CMSG_WORLD_STATE_UI_TIMER_UPDATE) != 0xFFFF) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= nextWorldStateTimerQuery_) {
+            nextWorldStateTimerQuery_ = now + std::chrono::seconds(20);
+            network::Packet query(wireOpcode(Opcode::CMSG_WORLD_STATE_UI_TIMER_UPDATE));
+            socket->send(query);
+        }
+    }
 
     // Sends a Warden response built off the main thread. Nothing else does:
     // without this the server's check goes unanswered and it drops the
@@ -1000,6 +1012,7 @@ void GameHandler::update(float deltaTime) {
 
         // Tick logout countdown
         if (socialHandler_) socialHandler_->updateLogoutCountdown(deltaTime);
+        if (socialHandler_) socialHandler_->updateReadyCheckTimer();
 
         updateTaxiAndMountState(deltaTime);
 
@@ -1583,6 +1596,9 @@ void GameHandler::loadCharacterConfig() {
         }
         LOG_INFO("Character config loaded from ", path);
     }
+    // The macros are read with the rest, and the client announces them once
+    // its file is read (0x00567c10 -> 0x00566240, UPDATE_MACROS 0x180).
+    fireAddonEvent("UPDATE_MACROS", {});
 }
 
 void GameHandler::setTransportAttachment(uint64_t childGuid, ObjectType type, uint64_t transportGuid,
@@ -5620,6 +5636,19 @@ const std::string& GameHandler::getLanguageName(uint32_t languageId) const {
     }
     auto it = languageNames_.find(languageId);
     return it != languageNames_.end() ? it->second : kNone;
+}
+
+uint32_t GameHandler::languageIdByName(const std::string& name) const {
+    (void)getLanguageName(1);  // the file, read on the first ask
+    auto lower = [](std::string v) {
+        for (char& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return v;
+    };
+    const std::string want = lower(name);
+    for (const auto& [id, n] : languageNames_) {
+        if (lower(n) == want) return id;
+    }
+    return 0;
 }
 
 const std::string& GameHandler::getPageTextMaterialName(uint32_t materialId) const {

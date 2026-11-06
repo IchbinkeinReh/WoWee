@@ -220,6 +220,12 @@ void QuestHandler::tickQuestGiverStatusRequery(float deltaTime) {
     }
 }
 
+void QuestHandler::queryAllQuestGiverStatuses() {
+    if (!owner_.getSocket() || wireOpcode(Opcode::CMSG_QUESTGIVER_STATUS_MULTIPLE_QUERY) == 0xFFFF) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_QUESTGIVER_STATUS_MULTIPLE_QUERY));
+    owner_.getSocket()->send(packet);
+}
+
 void QuestHandler::sendQuestGiverStatusQueries() {
     if (!owner_.getSocket()) return;
     for (const auto& [guid, entity] : owner_.getEntityManager().getEntities()) {
@@ -866,7 +872,6 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_QUESTGIVER_QUEST_INVALID] = [this](network::Packet& packet) {
         if (packet.hasRemaining(4)) {
             uint32_t failReason = packet.readUInt32();
-            pendingTurnInRewardRequest_ = false;
             const char* reasonStr = "Unknown";
             switch (failReason) {
                 case 0: reasonStr = "Don't have quest"; break;
@@ -937,15 +942,13 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             LOG_INFO("Quest completed: questId=", questId);
             if (pendingTurnInQuestId_ == questId) {
                 pendingTurnInQuestId_ = 0;
-                pendingTurnInNpcGuid_ = 0;
-                pendingTurnInRewardRequest_ = false;
             }
             // The turn-in lines 0x006d0e10 prints, in chat: ERR_QUEST_COMPLETE_S
             // with the title, then ERR_QUEST_REWARD_EXP_I and
             // ERR_QUEST_REWARD_MONEY_S for the experience and money the
             // WotLK packet carries after the id, then the honour (sent ten
             // times over), talent point and arena point lines in their own
-            // chat types. (Its reward item line is not given here.)
+            // chat types, then the reward items (below).
             for (const auto& q : questLog_) {
                 if (q.questId == questId && !q.title.empty()) {
                     owner_.addSystemChatMessage(questTitleText("ERR_QUEST_COMPLETE_S", "%s completed.", q.title));
@@ -985,6 +988,18 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                                             {std::to_string(arena)}));
                     }
                 }
+            }
+            // Then the items: each fixed reward the quest gives, and the one
+            // chosen, in that order (0x006d0e10).
+            for (const auto& q : questLog_) {
+                if (q.questId != questId) continue;
+                for (const auto& r : q.rewardItems)
+                    if (r.itemId != 0) owner_.announceQuestRewardItem(r.itemId, r.count);
+                break;
+            }
+            if (chosenRewardItemId_ != 0) {
+                owner_.announceQuestRewardItem(chosenRewardItemId_, 0);
+                chosenRewardItemId_ = 0;
             }
             for (auto it = questLog_.begin(); it != questLog_.end(); ++it) {
                 if (it->questId == questId) {
@@ -1322,6 +1337,13 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                     " kills=", objKills, " items=", objItems);
         const QuestQueryRewardsData rwds = QuestQueryRewardsParser::parse(packet.getData(), questLogStride);
         if (!parsed.endText.empty()) questEndTexts()[questId] = parsed.endText;
+        {
+            // QuestInfo (+0x14, the sixth word in WotLK's layout).
+            QueriedQuest& known = queriedQuests_[questId];
+            if (questLogStride >= 5 && packet.getData().size() >= 24)
+                known.type = network::wire::loadLE32(packet.getData(), 20);
+            if (!parsed.title.empty()) known.title = parsed.title;
+        }
 
         for (auto& q : questLog_) {
             if (q.questId != questId) continue;
@@ -1452,6 +1474,8 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
         }
 
         pendingQuestQueryIds_.erase(questId);
+        // 0x006df2b0: the quest added before it was known, now that it is.
+        if (pendingQuestAddedNotices_.erase(questId) != 0) announceQuestAdded(questId);
     };
 
     // ---- SMSG_QUESTUPDATE_ADD_PVP_KILL ----
@@ -1526,84 +1550,30 @@ void QuestHandler::selectGossipOption(uint32_t optionId, const std::string& code
                                                   currentGossip_.menuId, optionId, code);
     owner_.getSocket()->send(packet);
 
-    for (const auto& opt : currentGossip_.options) {
-        if (opt.id != optionId) continue;
-        LOG_INFO("  matched option: id=", opt.id, " icon=", (int)opt.icon, " text='", opt.text, "'");
-
-        std::string text = opt.text;
-        std::string textLower = text;
-        std::transform(textLower.begin(), textLower.end(), textLower.begin(),
-                       [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-
-        // Icon- and text-based NPC interaction fallbacks.
-        // Use flags to avoid sending the same activation packet twice when
-        // both the icon and text match (e.g., banker icon 6 + "deposit box").
-        bool sentBanker = false;
-        bool sentAuction = false;
-
-        if (opt.icon == 6) {
-            auto pkt = BankerActivatePacket::build(currentGossip_.npcGuid);
-            owner_.getSocket()->send(pkt);
-            sentBanker = true;
-            LOG_INFO("Sent CMSG_BANKER_ACTIVATE (icon) for npc=0x", std::hex, currentGossip_.npcGuid, std::dec);
-        }
-
-        if (!sentAuction && (text == "GOSSIP_OPTION_AUCTIONEER" || textLower.find("auction") != std::string::npos)) {
-            auto pkt = AuctionHelloPacket::build(currentGossip_.npcGuid);
-            owner_.getSocket()->send(pkt);
-            sentAuction = true;
-            LOG_INFO("Sent MSG_AUCTION_HELLO for npc=0x", std::hex, currentGossip_.npcGuid, std::dec);
-        }
-
-        if (!sentBanker && (text == "GOSSIP_OPTION_BANKER" || textLower.find("deposit box") != std::string::npos)) {
-            auto pkt = BankerActivatePacket::build(currentGossip_.npcGuid);
-            owner_.getSocket()->send(pkt);
-            sentBanker = true;
-            LOG_INFO("Sent CMSG_BANKER_ACTIVATE (text) for npc=0x", std::hex, currentGossip_.npcGuid, std::dec);
-        }
-
-        const bool isVendor = (text == "GOSSIP_OPTION_VENDOR" ||
-                               (textLower.find("browse") != std::string::npos &&
-                                (textLower.find("goods") != std::string::npos || textLower.find("wares") != std::string::npos)));
-        const bool isArmorer = (text == "GOSSIP_OPTION_ARMORER" || textLower.find("repair") != std::string::npos);
-        if (isVendor || isArmorer) {
-            if (isArmorer) {
-                owner_.setVendorCanRepair(true);
+    // 0x0058af10 sends only this: the window the option leads to - a vendor,
+    // a bank, a flight map, a battlemaster's list, a tabard designer - is the
+    // server's answer to it. Then the options and quests go (0x0058a7b0).
+    //
+    // One exception, kept for this client's own gossip window only: it has
+    // no confirm step for a hearthstone, so the bind is sent with the select
+    // (see differences.md). FrameXML follows the server's own flow - the
+    // select goes out, SMSG_BINDER_CONFIRM asks, the popup answers.
+    if (!ui::frameXmlOwns(ui::UiElement::Gossip)) {
+        for (const auto& opt : currentGossip_.options) {
+            if (opt.id != optionId) continue;
+            std::string textLower = opt.text;
+            std::transform(textLower.begin(), textLower.end(), textLower.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (textLower.find("make this inn your home") != std::string::npos ||
+                textLower.find("set your home") != std::string::npos) {
+                owner_.getSocket()->send(BinderActivatePacket::build(currentGossip_.npcGuid));
+                LOG_INFO("Sent CMSG_BINDER_ACTIVATE for npc=0x", std::hex, currentGossip_.npcGuid, std::dec);
             }
-            auto pkt = ListInventoryPacket::build(currentGossip_.npcGuid);
-            owner_.getSocket()->send(pkt);
-            LOG_DEBUG("Sent CMSG_LIST_INVENTORY (gossip) to npc=0x", std::hex, currentGossip_.npcGuid, std::dec);
+            break;
         }
-
-        // Only while this client draws the gossip window. It has no confirm
-        // step, so matching the option's text and sending the activate is the
-        // whole of how a hearthstone gets set there.
-        //
-        // FrameXML follows the server's own flow instead - the select goes out,
-        // the server asks with SMSG_BINDER_CONFIRM, the popup answers - so
-        // sending here as well would bind before the question was asked and
-        // then ask it anyway.
-        if (!ui::frameXmlOwns(ui::UiElement::Gossip) &&
-            (textLower.find("make this inn your home") != std::string::npos ||
-             textLower.find("set your home") != std::string::npos)) {
-            auto bindPkt = BinderActivatePacket::build(currentGossip_.npcGuid);
-            owner_.getSocket()->send(bindPkt);
-            LOG_INFO("Sent CMSG_BINDER_ACTIVATE for npc=0x", std::hex, currentGossip_.npcGuid, std::dec);
-        }
-
-        // Stable master detection
-        if (text == "GOSSIP_OPTION_STABLE" ||
-            textLower.find("stable") != std::string::npos ||
-            textLower.find("my pet") != std::string::npos) {
-            owner_.stableMasterGuidRef() = currentGossip_.npcGuid;
-            owner_.stableWindowOpenRef() = false;
-            auto listPkt = ListStabledPetsPacket::build(currentGossip_.npcGuid);
-            owner_.getSocket()->send(listPkt);
-            LOG_INFO("Sent MSG_LIST_STABLED_PETS (gossip) to npc=0x",
-                     std::hex, currentGossip_.npcGuid, std::dec);
-        }
-        break;
     }
+    currentGossip_.options.clear();
+    currentGossip_.quests.clear();
 }
 
 void QuestHandler::selectGossipQuest(uint32_t questId) {
@@ -1645,14 +1615,10 @@ void QuestHandler::selectGossipQuest(uint32_t questId) {
     const bool shouldStartProgressFlow = activeQuestConfirmedByServer;
     if (shouldStartProgressFlow) {
         pendingTurnInQuestId_ = questId;
-        pendingTurnInNpcGuid_ = currentGossip_.npcGuid;
-        pendingTurnInRewardRequest_ = activeQuest ? activeQuest->complete : false;
         auto packet = QuestgiverCompleteQuestPacket::build(currentGossip_.npcGuid, questId);
         owner_.getSocket()->send(packet);
     } else {
         pendingTurnInQuestId_ = 0;
-        pendingTurnInNpcGuid_ = 0;
-        pendingTurnInRewardRequest_ = false;
         auto packet = owner_.getPacketParsers()
             ? owner_.getPacketParsers()->buildQueryQuestPacket(currentGossip_.npcGuid, questId)
             : QuestgiverQueryQuestPacket::build(currentGossip_.npcGuid, questId);
@@ -1817,13 +1783,15 @@ void QuestHandler::offerQuestFromItem(uint64_t itemGuid, uint32_t questId) {
 void QuestHandler::completeQuest() {
     if (!questRequestItemsOpen_ || owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     pendingTurnInQuestId_ = currentQuestRequestItems_.questId;
-    pendingTurnInNpcGuid_ = currentQuestRequestItems_.npcGuid;
-    pendingTurnInRewardRequest_ = currentQuestRequestItems_.isCompletable();
 
     LOG_DEBUG("completeQuest: questId=", currentQuestRequestItems_.questId,
               " completable=", currentQuestRequestItems_.isCompletable());
 
-    auto packet = QuestgiverCompleteQuestPacket::build(
+    // CompleteQuest on the progress page (0x0058cf40): tutorial 0x21, then
+    // CMSG_QUESTGIVER_REQUEST_REWARD (0x006d4dd0). The reward page is the
+    // server's answer to it.
+    owner_.triggerTutorial(0x21);
+    auto packet = QuestgiverRequestRewardPacket::build(
         currentQuestRequestItems_.npcGuid, currentQuestRequestItems_.questId);
     owner_.getSocket()->send(packet);
     questRequestItemsOpen_ = false;
@@ -1831,7 +1799,6 @@ void QuestHandler::completeQuest() {
 }
 
 void QuestHandler::closeQuestRequestItems(bool announce) {
-    pendingTurnInRewardRequest_ = false;
     questRequestItemsOpen_ = false;
     currentQuestRequestItems_ = QuestRequestItemsData{};
     // What closes the quest frame. It opens on QUEST_DETAIL, QUEST_PROGRESS or
@@ -1848,11 +1815,16 @@ void QuestHandler::chooseQuestReward(uint32_t rewardIndex) {
     uint64_t npcGuid = currentQuestOfferReward_.npcGuid;
     LOG_INFO("Completing quest: questId=", currentQuestOfferReward_.questId,
              " npcGuid=", npcGuid, " rewardIndex=", rewardIndex);
+    // GetQuestReward (0x0058cfa0): tutorial 0x21, then the choice.
+    owner_.triggerTutorial(0x21);
+    // The item chosen, kept for the turn-in's line (0xc0d66c).
+    chosenRewardItemId_ = 0;
+    for (const auto& r : currentQuestOfferReward_.choiceRewards)
+        if (r.choiceSlot == rewardIndex) { chosenRewardItemId_ = r.itemId; break; }
     auto packet = QuestgiverChooseRewardPacket::build(
         npcGuid, currentQuestOfferReward_.questId, rewardIndex);
     owner_.getSocket()->send(packet);
     pendingTurnInQuestId_ = 0;
-    pendingTurnInNpcGuid_ = 0;
     // Announced, which is what closes the dialog. Taking the reward put the
     // three fields back and told nothing: this client's own window reads the
     // flag and closed, and the interface's quest frame hides on QUEST_FINISHED
@@ -1869,7 +1841,6 @@ void QuestHandler::chooseQuestReward(uint32_t rewardIndex) {
 }
 
 void QuestHandler::closeQuestOfferReward(bool announce) {
-    pendingTurnInRewardRequest_ = false;
     questOfferRewardOpen_ = false;
     currentQuestOfferReward_ = QuestOfferRewardData{};
     if (announce && owner_.addonEventCallbackRef()) {
@@ -2123,7 +2094,7 @@ void QuestHandler::addQuestToLocalLogIfMissing(uint32_t questId, const std::stri
     entry.objectives = normalizeQuestText(objectives, false);
     questLog_.push_back(std::move(entry));
     if (owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("QUEST_ACCEPTED", {std::to_string(questId)});
+        // QUEST_ACCEPTED is announceQuestAdded's, with the log index.
         owner_.addonEventCallbackRef()("QUEST_LOG_UPDATE", {});
         owner_.addonEventCallbackRef()("UNIT_QUEST_LOG_CHANGED", {"player"});
     }
@@ -2317,10 +2288,28 @@ void QuestHandler::syncQuestLogMembershipFromSlots(const FlatFieldMap& fields, u
     // other way showed only after a relog. A slot that changes resyncs the
     // log from all of them (resyncQuestLogFromServerSlots).
     std::array<uint32_t, 25> ids{};
+    std::array<uint32_t, 25> states{};
     for (uint16_t slot = 0; slot < 25; ++slot) {
         const auto it = fields.find(static_cast<uint16_t>(ufQuestStart + slot * qStride));
         if (it != fields.end()) ids[slot] = it->second;
+        if (qStride >= 2) {
+            const auto st = fields.find(static_cast<uint16_t>(ufQuestStart + slot * qStride + 1));
+            if (st != fields.end()) states[slot] = st->second;
+        }
     }
+    // 0x006df370, per slot: a quest that is new there, or one that was
+    // failed and is not any more.
+    std::vector<uint32_t> added;
+    if (slotsSeen_) {
+        for (size_t slot = 0; slot < ids.size(); ++slot) {
+            if (ids[slot] == 0) continue;
+            if (ids[slot] != slotQuestIds_[slot] ||
+                (!isQuestSlotFailed(qStride, states[slot]) && isQuestSlotFailed(qStride, slotQuestStates_[slot])))
+                added.push_back(ids[slot]);
+        }
+    }
+    slotsSeen_ = true;
+    slotQuestStates_ = states;
     if (ids != slotQuestIds_) {
         slotQuestIds_ = ids;
         std::unordered_set<uint32_t> before;
@@ -2343,6 +2332,44 @@ void QuestHandler::syncQuestLogMembershipFromSlots(const FlatFieldMap& fields, u
                 owner_.addonEventCallbackRef()("UNIT_QUEST_LOG_CHANGED", {"player"});
             }
         }
+    }
+    for (uint32_t questId : added) noteQuestAdded(questId);
+}
+
+void QuestHandler::noteQuestAdded(uint32_t questId) {
+    // 0x0067de90 with 0x006df2b0 to call back: at once for a quest already
+    // known, else once its query answers.
+    if (queriedQuests_.count(questId) != 0) {
+        announceQuestAdded(questId);
+        return;
+    }
+    pendingQuestAddedNotices_.insert(questId);
+    requestQuestQuery(questId, false);
+}
+
+void QuestHandler::announceQuestAdded(uint32_t questId) {
+    const auto it = queriedQuests_.find(questId);
+    if (it == queriedQuests_.end()) return;
+    // 0x005216f0(0x92): ERR_QUEST_ACCEPTED_S, a system line, with QUESTADDED.
+    std::string title = it->second.title;
+    if (title.empty()) {
+        for (const auto& q : questLog_) {
+            if (q.questId == questId) title = q.title;
+        }
+    }
+    owner_.addSystemChatMessage(interfaceFormat("ERR_QUEST_ACCEPTED_S", "Quest accepted: %s", {title}));
+    owner_.playGameErrorSound("ERR_QUEST_ACCEPTED_S");
+    // A group quest (QuestInfo 1): 0x28 and 0x26. The fourth quest while
+    // 0x14 is not flagged: 0x14.
+    if (it->second.type == 1) {
+        owner_.triggerTutorial(0x28);
+        owner_.triggerTutorial(0x26);
+    }
+    if (!owner_.tutorials().flagged(0x14) && ++questsAddedCount_ > 3) owner_.triggerTutorial(0x14);
+    // QUEST_ACCEPTED (0x270) with the quest's log index (0x005deeb0).
+    if (owner_.addonEventCallbackRef()) {
+        const int index = questLogIndexOf(questId);
+        owner_.addonEventCallbackRef()("QUEST_ACCEPTED", {std::to_string(index > 0 ? index : 0)});
     }
 }
 
@@ -2845,16 +2872,6 @@ void QuestHandler::handleQuestRequestItems(network::Packet& packet) {
     }
     clearPendingQuestAccept(data.questId);
 
-    if (pendingTurnInRewardRequest_ &&
-        data.questId == pendingTurnInQuestId_ &&
-        data.npcGuid == pendingTurnInNpcGuid_ &&
-        data.isCompletable() &&
-        owner_.getSocket()) {
-        auto rewardReq = QuestgiverRequestRewardPacket::build(data.npcGuid, data.questId);
-        owner_.getSocket()->send(rewardReq);
-        pendingTurnInRewardRequest_ = false;
-    }
-
     currentQuestRequestItems_ = data;
     questFrameFlags_ = data.questFlags;
     questRequestItemsOpen_ = true;
@@ -2915,8 +2932,6 @@ void QuestHandler::handleQuestOfferReward(network::Packet& packet) {
     LOG_INFO("Quest offer reward: questId=", data.questId, " title=\"", data.title, "\"");
     if (pendingTurnInQuestId_ == data.questId) {
         pendingTurnInQuestId_ = 0;
-        pendingTurnInNpcGuid_ = 0;
-        pendingTurnInRewardRequest_ = false;
     }
     currentQuestOfferReward_ = data;
     questFrameFlags_ = data.questFlags;

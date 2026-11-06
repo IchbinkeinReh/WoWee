@@ -300,6 +300,18 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
                 }
             }
 
+            // The player new to this unit's list (0x007416f0 -> 0x0052b370):
+            // with threat warnings on and above level 13, tutorial 0x35.
+            {
+                const uint64_t me = owner_.getPlayerGuid();
+                const auto onList = [me](const std::vector<ThreatEntry>& l) {
+                    return std::any_of(l.begin(), l.end(), [me](const ThreatEntry& e) { return e.victimGuid == me; });
+                };
+                const auto old = threatLists_.find(unitGuid);
+                const bool before = old != threatLists_.end() && onList(old->second);
+                if (!before && onList(list) && threatWarningWanted() && owner_.getPlayerLevel() > 13)
+                    owner_.triggerTutorial(0x35);
+            }
             threatLists_[unitGuid] = std::move(list);
             if (!owner_.addonEventCallbackRef()) return;
             auto fire = owner_.addonEventCallbackRef();
@@ -363,6 +375,42 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
     // Can't attack yourself
     if (targetGuid == owner_.getPlayerGuid()) return;
     if (targetGuid == 0) return;
+
+    // What the player's own state forbids, said as 0x0072bdb0 says it, in its
+    // order: dead (ERR_ATTACK_DEAD); charmed by someone else; then
+    // UNIT_FIELD_FLAGS stunned (0x40000), pacified (0x20000), fleeing
+    // (0x800000) and confused (0x400000). When an aura is the cause the
+    // client names its mechanic instead (ERR_ATTACK_PREVENTED_BY_MECHANIC_S,
+    // see differences).
+    if (owner_.isPlayerDead() || owner_.isPlayerGhost()) {
+        owner_.addUIError(interfaceString("ERR_ATTACK_DEAD", "You can't attack while dead."));
+        return;
+    }
+    if (auto self = owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
+        const uint16_t charmedBy = fieldIndex(UF::UNIT_FIELD_CHARMEDBY);
+        const uint64_t charmer = charmedBy == 0xFFFF ? 0
+            : (static_cast<uint64_t>(self->getField(static_cast<uint16_t>(charmedBy + 1))) << 32) |
+                  self->getField(charmedBy);
+        if (charmer != 0 && charmer != owner_.getPlayerGuid()) {
+            owner_.addUIError(interfaceString("ERR_ATTACK_CHARMED", "You can't attack while charmed."));
+            return;
+        }
+        const uint16_t flagsIdx = fieldIndex(UF::UNIT_FIELD_FLAGS);
+        const uint32_t flags = flagsIdx == 0xFFFF ? 0 : self->getField(flagsIdx);
+        struct Refusal { uint32_t flag; const char* key; const char* enUS; };
+        static constexpr Refusal kRefusals[] = {
+            {0x00040000u, "ERR_ATTACK_STUNNED",  "You can't attack while stunned."},
+            {0x00020000u, "ERR_ATTACK_PACIFIED", "You can't attack while pacified."},
+            {0x00800000u, "ERR_ATTACK_FLEEING",  "You can't attack while fleeing."},
+            {0x00400000u, "ERR_ATTACK_CONFUSED", "You can't attack while confused."},
+        };
+        for (const auto& r : kRefusals) {
+            if ((flags & r.flag) != 0) {
+                owner_.addUIError(interfaceString(r.key, r.enUS));
+                return;
+            }
+        }
+    }
 
     // Assist Attack: swinging at a friendly unit attacks whatever they are
     // fighting instead. The panel offers this and nothing read it, so an
@@ -465,6 +513,9 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
         auto packet = AttackSwingPacket::build(targetGuid);
         owner_.getSocket()->send(packet);
     }
+    // 0x006e2610: swinging ends a repeating shot, the server told
+    // (0x00807560(1)).
+    owner_.stopAutoRepeat(true);
     LOG_INFO("Starting auto-attack on 0x", std::hex, targetGuid, std::dec);
 }
 
@@ -484,6 +535,8 @@ void CombatHandler::stopAutoAttack() {
     LOG_INFO("Stopping auto-attack");
     if (owner_.addonEventCallbackRef())
         owner_.addonEventCallbackRef()("PLAYER_LEAVE_COMBAT", {});
+    // 0x006e1660: the stop's tutorials.
+    for (uint32_t id : attackStops_.note(owner_.getPlayerLevel(), owner_.tutorials())) owner_.triggerTutorial(id);
 }
 
 // ============================================================
@@ -1641,6 +1694,23 @@ void CombatHandler::setTarget(uint64_t guid) {
             } else if (owner_.unitMayAssist(me, guid)) {
                 lastFriendTargetGuid_ = guid;
             }
+            // Then the tutorials the choice opens (0x00524bf0): another
+            // player, the first time; else a player of the player's side at
+            // level 5 and up (0x00729b30); else one that may be attacked
+            // (0x00729740); else a flight master; else a quest giver with
+            // nothing yet.
+            const bool isPlayer = entity->getType() == ObjectType::PLAYER;
+            if (isPlayer && guid != me && owner_.tutorials().awaiting(0x12)) {
+                owner_.triggerTutorial(0x12);
+            } else if (isPlayer && owner_.unitsCooperate(me, guid) && owner_.getPlayerLevel() >= 5) {
+                owner_.triggerTutorial(0x11);
+            } else if (owner_.unitMayAttack(me, guid)) {
+                owner_.triggerTutorial(4);
+            } else if ((unit->getNpcFlags() & 0x2000u) != 0) {
+                owner_.triggerTutorial(0x22);
+            } else if (owner_.getQuestGiverStatus(guid) == QuestGiverStatus::UNAVAILABLE) {
+                owner_.triggerTutorial(0x2a);
+            }
         }
     }
 
@@ -1654,6 +1724,12 @@ void CombatHandler::setTarget(uint64_t guid) {
     if (guid != owner_.getTargetGuid() && autoAttacking_ &&
         addons::storedCVarValue("stopAutoAttackOnTargetChange", "0") != "0") {
         stopAutoAttack();
+    }
+    // The same setting stops a repeating shot too, and tells the server
+    // (0x00524bf0 -> 0x00807560(1)).
+    if (guid != owner_.getTargetGuid() &&
+        addons::storedCVarValue("stopAutoAttackOnTargetChange", "0") != "0") {
+        owner_.stopAutoRepeat(true);
     }
 
     owner_.setTargetGuidRaw(guid);
@@ -1708,6 +1784,9 @@ void CombatHandler::clearTarget() {
         // targetGuid before the event).
         owner_.setTargetGuidRaw(0);
         owner_.fireAddonEvent("PLAYER_TARGET_CHANGED", {});
+        // A repeating shot has nothing left to shoot at (0x00524bf0 with
+        // none -> 0x00807560(1)).
+        owner_.stopAutoRepeat(true);
     } else {
         owner_.setTargetGuidRaw(0);
     }
@@ -1717,6 +1796,9 @@ void CombatHandler::clearTarget() {
 
 void CombatHandler::forgetUnit(uint64_t guid) {
     if (guid == 0) return;
+    // 0x00524350 first: the target forgotten ends a repeating shot, the
+    // server told (0x00807560(1)).
+    if (guid == owner_.getTargetGuid()) owner_.stopAutoRepeat(true);
     if (guid == owner_.getTargetGuid()) {
         // 0x005241b0: let go, the server told (CMSG_SET_SELECTION) and
         // PLAYER_TARGET_CHANGED.

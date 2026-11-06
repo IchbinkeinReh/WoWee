@@ -6,6 +6,8 @@
 #include "core/coordinates.hpp"
 #include "rendering/camera.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "game/totem_bar.hpp"
+#include "game/interface_text.hpp"
 #include "addons/lua_taint.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "game/item_text.hpp"
@@ -97,12 +99,51 @@ static int lua_SpellTargetItem(lua_State* L) {
 // carries no item here, so there is nothing to drop.
 static int lua_DropItemOnUnit(lua_State* L) { lua_pushboolean(L, 0); return 1; }
 
-// The totem bar's per-slot spell choice, which needs the multi-cast action bar
-// this client does not model.
-// It asks the taint check first all the same (0x005ab8a0, kind 0xe).
+// SetMultiCastSpell(slot, spellID) (0x005ab8a0): one of the totem bar's
+// action slots, 133..144, under the taint check (kind 0xe). Spell 0 empties
+// it; a spell of the slot's element's totem category is put there
+// (0x005aae80); any other is refused with ERR_MULTI_CAST_ACTION_TOTEM_S
+// naming the category the slot wants (0x005a7bc0).
 static int lua_SetMultiCastSpell(lua_State* L) {
-    taint::allowed(L, 0xe);
+    if (!lua_isnumber(L, 1) && !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: SetMultiCastSpell(slot, spellID)");
+    if (!taint::allowed(L, 0xe)) return 0;
+    auto* gh = getGameHandler(L);
+    if (!gh) return 0;
+    const int slot = static_cast<int>(lua_tonumber(L, 1)) - 1;
+    if (slot < game::totem_bar::kFirstSlot || slot > game::totem_bar::kLastSlot) return 0;
+    const auto spellId = static_cast<uint32_t>(lua_tonumber(L, 2));
+    gh->loadSpellNameCache();
+    if (spellId == 0) {
+        gh->setActionBarSlot(slot, game::ActionBarSlot::EMPTY, 0);
+        return 0;
+    }
+    const auto& cache = gh->spellNameCacheRef();
+    const auto it = cache.find(spellId);
+    if (it == cache.end()) return 0;
+    const uint32_t cats[2] = {it->second.totemCategories[0], it->second.totemCategories[1]};
+    if (!game::totem_bar::slotTakes(slot, cats)) {
+        const std::string& name = gh->getTotemCategoryName(game::totem_bar::slotCategory(slot));
+        gh->addUIError(game::interfaceFormat("ERR_MULTI_CAST_ACTION_TOTEM_S", "Requires %s", {name}));
+        return 0;
+    }
+    gh->setActionBarSlot(slot, game::ActionBarSlot::SPELL, spellId);
     return 0;
+}
+
+// GetMultiCastTotemSpells(slot) (0x005a8330) → the element's totem spells:
+// slot 1 fire, 2 earth, 3 water, 4 air, taken modulo four.
+static int lua_GetMultiCastTotemSpells(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetMultiCastTotemSpells(slot)");
+    auto* gh = getGameHandler(L);
+    auto* sh = gh ? gh->getSpellHandler() : nullptr;
+    if (!sh) return 0;
+    gh->loadSpellNameCache();
+    const int element = (static_cast<int>(lua_tonumber(L, 1)) - 1) & 3;
+    const auto ids = sh->multiCastSpells(element);
+    if (!lua_checkstack(L, static_cast<int>(ids.size()) + 1)) return 0;
+    for (uint32_t id : ids) lua_pushnumber(L, id);
+    return static_cast<int>(ids.size());
 }
 
 
@@ -1208,6 +1249,19 @@ static int lua_SetRaidTarget(lua_State* L) {
     toLowerInPlace(uidStr);
     uint64_t guid = resolveUnitGuid(gh, uidStr);
     if (guid == 0) return 0;
+    // SetRaidTarget (0x00574ab0): a mark for a player outside the group who
+    // is not of the player's side and peaceable (0x00729b30) is refused with
+    // ERR_INVALID_RAID_TARGET - enemy players are not marked.
+    if (index >= 1 && index <= 8 && guid != gh->getPlayerGuid() && !gh->isPlayerOrGroupUnit(guid)) {
+        auto entity = gh->getEntityManager().getEntity(guid);
+        if (entity && entity->getType() == game::ObjectType::PLAYER &&
+            !gh->unitsCooperate(gh->getPlayerGuid(), guid)) {
+            gh->playGameErrorSound("ERR_INVALID_RAID_TARGET");
+            gh->addUIError(game::interfaceString("ERR_INVALID_RAID_TARGET",
+                                                 "You can't mark that target."));
+            return 0;
+        }
+    }
     if (index >= 1 && index <= 8)
         gh->setRaidMark(guid, static_cast<uint8_t>(index - 1));
     else if (index == 0)
@@ -1452,7 +1506,11 @@ void registerSpellLuaAPI(lua_State* L) {
             // step of ToggleGameMenu runs only on nil.
             const bool casting = gh && gh->isCasting();
             if (gh) gh->cancelCast();
-            if (casting) lua_pushnumber(L, 1.0);
+            // With no cast, a repeating shot is what stops: the client sends
+            // CMSG_CANCEL_AUTO_REPEAT_SPELL and answers 1 (0x00807560(1)).
+            const bool repeating = gh && !casting && gh->isAutoRepeating();
+            if (repeating) gh->stopAutoRepeat(true);
+            if (casting || repeating) lua_pushnumber(L, 1.0);
             else lua_pushnil(L);
             return 1;
         }},
@@ -1542,6 +1600,7 @@ void registerSpellLuaAPI(lua_State* L) {
                 {"SpellTargetItem",   lua_SpellTargetItem},
                 {"DropItemOnUnit",    lua_DropItemOnUnit},
                 {"SetMultiCastSpell", lua_SetMultiCastSpell},
+                {"GetMultiCastTotemSpells", lua_GetMultiCastTotemSpells},
                 {"CastSpell",         lua_CastSpell},
                 {"IsPassiveSpell",    lua_IsPassiveSpell},
                 // 1.12's name for the same question - renamed at 2.0, and
@@ -1582,8 +1641,17 @@ void registerSpellLuaAPI(lua_State* L) {
             lua_pushboolean(L, gh && gh->getCurrentCastSpellId() == spellId ? 1 : 0);
             return 1;
         }},
+                // IsAutoRepeatSpell(spell [, book]) (0x005415d0): 1 when the
+                // spell is the repeating one running (0x007fe130), else nil.
                 {"IsAutoRepeatSpell", [](lua_State* L) -> int {
-            (void)L; lua_pushboolean(L, 0); return 1; // Stub
+            auto* gh = getGameHandler(L);
+            const uint32_t spellId = gh ? spellIdForCall(L, gh) : 0;
+            if (spellId != 0 && spellId == gh->autoRepeatSpellId()) {
+                lua_pushnumber(L, 1);
+                return 1;
+            }
+            lua_pushnil(L);
+            return 1;
         }},
                 {"CastShapeshiftForm", [](lua_State* L) -> int {
             // CastShapeshiftForm(index) - cast the spell for the given form slot
@@ -1601,16 +1669,7 @@ void registerSpellLuaAPI(lua_State* L) {
             // cancel is pending), cancel each positive aura (0x10) whose
             // shapeshift effect (aura 36) names that form.
             auto* gh = getGameHandler(L);
-            if (!gh || game::isPreWotlk() || gh->getShapeshiftFormId() == 0) return 0;
-            std::vector<uint32_t> spells;
-            for (const auto& aura : gh->getPlayerAuras()) {
-                if ((aura.flags & 0x10) != 0) spells.push_back(aura.spellId);
-            }
-            // The form is read again for each: the first cancel leaves it.
-            for (uint32_t spellId : spells) {
-                const uint8_t form = gh->getShapeshiftFormId();
-                if (form != 0 && gh->spellShapeshiftsInto(spellId, form)) gh->cancelAura(spellId);
-            }
+            if (gh && !game::isPreWotlk()) gh->leaveShapeshiftForm();
             return 0;
         }},
                 // GetShapeshiftFormCooldown is defined in the bootstrap, over

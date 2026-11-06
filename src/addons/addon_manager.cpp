@@ -56,6 +56,7 @@ bool AddonManager::initialize(game::GameHandler* gameHandler, const LuaServices&
     luaServices_.setAddOnEnabled = [this](const std::string& name, bool enabled) {
         setAddonEnabled(name, enabled);
     };
+    luaServices_.resetAddOnsEnabled = [this]() { resetAddonEnabledState(); };
     if (!luaEngine_.initialize()) return false;
     luaEngine_.setGameHandler(gameHandler);
     luaEngine_.setLuaServices(luaServices_);
@@ -484,7 +485,11 @@ bool AddonManager::isAddonEnabled(const std::string& addonName) const {
 
 void AddonManager::setAddonEnabled(const std::string& addonName, bool enabled) {
     addonEnabled_[addonName] = enabled;
-    saveEnabledState();
+}
+
+void AddonManager::resetAddonEnabledState() {
+    addonEnabled_.clear();
+    loadEnabledState();
 }
 
 std::string AddonManager::enabledStatePath() {
@@ -1759,6 +1764,8 @@ void AddonManager::saveAllSavedVariables() {
 
 bool AddonManager::unloadAll() {
     saveAllSavedVariables();
+    // The world UI's teardown is where the client writes AddOns.txt.
+    saveEnabledState();
     addons_.clear();
     lodAddons_.clear();
     lodLoaded_.clear();
@@ -1802,6 +1809,7 @@ void AddonManager::reapplyStoredCVars() {
 void AddonManager::shutdown() {
     interface_prefetch::stop();
     saveAllSavedVariables();
+    saveEnabledState();
     addons_.clear();
     luaEngine_.shutdown();
 }

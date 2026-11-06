@@ -304,6 +304,16 @@ inline CursorItemSlot& cursorItemSlot() {
     return held;
 }
 
+/// The guild bank slot whose item is on the cursor, counted from one, or
+/// zeros. The client locks that slot while it is held (0x005137d0) - what
+/// GetGuildBankItemInfo answers third - and lets it go when the cursor does
+/// (0x00519280), with GUILDBANK_ITEM_LOCK_CHANGED each time.
+struct GuildBankCursorSlot { int tab = 0; int slot = 0; };
+inline GuildBankCursorSlot& guildBankCursorSlot() {
+    static GuildBankCursorSlot held;
+    return held;
+}
+
 /// The uppercase tokens WoW returns second from UnitClass, and the key every
 /// class-indexed table in FrameXML uses - CLASS_ICON_TCOORDS for the class
 /// portrait, RAID_CLASS_COLORS for a name's colour. Written out rather than
@@ -1274,10 +1284,6 @@ void pickupMerchantItem(lua_State* L, int index);
 void pickupSplitFromContainer(lua_State* L, game::GameHandler* gh,
                               int bag, int slot, int count);
 
-/// Buy whatever vendor entry the cursor is holding and put the cursor down.
-/// False when it is holding something else, so a caller can fall through to
-/// its normal handling.
-bool boughtHeldMerchantItem(lua_State* L);
 
 /// The quest at a quest log index, or null when that row is a zone header or
 /// the index is off either end.

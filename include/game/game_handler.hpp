@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/tutorials.hpp"
 #include "game/item_text.hpp"   // ItemLinkInstance - the numbers an item link carries
 #include "game/visible_item_fields.hpp"   // the visible-item pair as the client's record reads it
 #include "game/mirror_image.hpp"
@@ -76,6 +77,7 @@ namespace wowee::game {
     class SocialHandler;
     class WardenHandler;
     namespace tabard { struct Design; }
+    namespace pet { struct DismissContext; }
 }
 
 namespace wowee {
@@ -409,7 +411,8 @@ public:
      * @param message Message text
      * @param target Target name (for whispers, empty otherwise)
      */
-    void sendChatMessage(ChatType type, const std::string& message, const std::string& target = "");
+    void sendChatMessage(ChatType type, const std::string& message, const std::string& target = "",
+                         uint32_t language = 0);
     void sendAddonMessage(ChatType type, const std::string& message, const std::string& target = "");
     /// 0x006dd9e0: false when the client sends nothing.
     bool sendTextEmote(uint32_t textEmoteId, uint64_t targetGuid = 0);
@@ -911,6 +914,12 @@ public:
 
     // Minimap ping (Ctrl+click on minimap; wowX/wowY in canonical WoW coords)
     void sendMinimapPing(float wowX, float wowY);
+    /// 0x0057eb80: a ping at a canonical place, by `sender` - kept as the last
+    /// one (0xbeba8c) and announced as MINIMAP_PING with its offset.
+    void announceMinimapPing(uint64_t sender, float wowX, float wowY);
+    /// Minimap:GetPingPosition (0x0057efe0): the last ping's offset from the
+    /// player, as MINIMAP_PING gives it; zero with no player.
+    [[nodiscard]] glm::vec2 minimapPingPosition() const;
 
     // Guild commands
     void requestGuildInfo();
@@ -1244,6 +1253,7 @@ public:
     /// CMSG_TURN_IN_PETITION. With blankDesign the five tabard words follow
     /// at -1, as TurnInPetition sends them (0x005a2600).
     void turnInPetition(uint64_t petitionGuid, bool blankDesign = false);
+    void turnInArenaPetition(uint64_t petitionGuid, const std::array<uint32_t, 5>& design);
     void offerPetition(uint64_t petitionGuid, uint64_t targetGuid);
 
     // Guild name lookup for other players' nameplates
@@ -1260,6 +1270,10 @@ public:
     [[nodiscard]] uint64_t getTabardVendorGuid() const { return tabardVendorGuid_; }
     /// CloseTabardCreation, the vendor let go (0x00598ec0).
     void closeTabardVendor();
+    /// GetTabardInfo (0x0059a1f0), the guild registrar's way to the designer:
+    /// MSG_TABARDVENDOR_ACTIVATE to the registrar (0x006d2500) and then
+    /// CloseGuildRegistrar's own steps.
+    void tabardFromGuildRegistrar();
     /// The design painted on the player's own tabard while it is designed
     /// (0x004ec1c0 on the player's component).
     void previewTabard(const GuildEmblem& emblem);
@@ -1488,6 +1502,19 @@ public:
     /// ClearTutorials (0x00530820 -> 0x00530510): CMSG_TUTORIAL_CLEAR, the
     /// server's word for every tutorial seen.
     void sendTutorialClear();
+    /// The tutorial pop-outs (game/tutorials.hpp), ids counted from 0.
+    TutorialState& tutorials() { return tutorials_; }
+    /// 0x00530450: flagged once, with CMSG_TUTORIAL_FLAG (u32 id).
+    void flagTutorial(uint32_t id);
+    /// 0x00530840: TUTORIAL_TRIGGER and the TutorialPopup sound, once; with
+    /// showTutorials off, flagged instead.
+    void triggerTutorial(uint32_t id);
+    /// 0x00530510: every one set, CMSG_TUTORIAL_CLEAR.
+    void clearTutorials();
+    /// 0x00530630: every one forgotten, CMSG_TUTORIAL_RESET.
+    void resetTutorials();
+    /// 0x00528010's four (0x29, 1, 2, 0).
+    void triggerEntryTutorials();
     /// CMSG_SET_ACTIONBAR_TOGGLES: the multi-bars shown, bits 0 to 3, u8
     /// (0x005a8290).
     void sendActionBarToggles(uint8_t mask);
@@ -1515,6 +1542,21 @@ public:
         if (idx < 0 || idx >= PET_ACTION_BAR_SLOTS) return 0;
         return petActionSlots_[idx];
     }
+    /// 0x005d6020: `action` onto pet bar slot `idx` the client's way
+    /// (game/pet_action_bar.hpp), CMSG_PET_SET_ACTION and PET_BAR_UPDATE.
+    /// Answers the action the slot gives up to the cursor, 0 for none.
+    uint32_t placePetAction(int idx, uint32_t action);
+    /// 0x005d64a0: a spell taken off the bar leaves the slot empty.
+    void clearPetActionSlot(int idx);
+    /// Whether the pet's bar may be changed: a pet, and not one with
+    /// UNIT_FIELD_FLAGS 0x01000000 (0x005d65c0).
+    bool petBarEditable() const;
+    /// What 0x005d3e80 reads of the player, its pet and its seat.
+    [[nodiscard]] pet::DismissContext petDismissContext() const;
+    /// GetPetActionsUsable (0x005d53c0): the pet answers its actions - the
+    /// player's own pet in view, neither charmed nor stunned, fleeing or
+    /// confused (0x005d3e80).
+    [[nodiscard]] bool petActionsUsable() const;
     // Pet command/react state from SMSG_PET_MODE or SMSG_PET_SPELLS
     uint8_t getPetCommand() const { return petCommand_; }   // 0=stay,1=follow,2=attack,3=dismiss
     uint8_t getPetReact()   const { return petReact_; }     // 0=passive,1=defensive,2=aggressive
@@ -1715,6 +1757,13 @@ public:
     }
     void learnTalent(uint32_t talentId, uint32_t requestedRank);
     void learnPreviewTalents(const std::vector<std::pair<uint32_t, uint32_t>>& talentRanks);
+    // The pet's talents (SpellHandler).
+    uint8_t getPetTalentRank(uint32_t talentId) const;
+    uint32_t getPetUnspentTalentPoints() const;
+    const std::unordered_map<uint32_t, uint8_t>& getPetTalents() const;
+    const TalentTabEntry* getPetTalentTab() const;
+    void learnPetTalent(uint32_t talentId, uint32_t requestedRank);
+    void learnPreviewPetTalents(const std::vector<std::pair<uint32_t, uint32_t>>& talentRanks);
     void switchTalentSpec(uint8_t newSpec);
 
     // Talent DBC access
@@ -2569,6 +2618,9 @@ public:
     void convertToRaid();
     void sendSetLootMethod(uint32_t method, uint32_t threshold, uint64_t masterLooterGuid);
     bool isInGroup() const;
+    /// A summoning stone's refusals before it is used (0x00712270); true when
+    /// the use may go ahead.
+    bool meetingStoneAllowsUse(const GameObjectQueryResponseData* goInfo);
     const GroupListData& getPartyData() const;
     /// The player's own group outside a battleground (SocialHandler::RealGroup);
     /// a default one before the social handler exists.
@@ -2839,6 +2891,9 @@ public:
 
     // ---- Loot ----
     void lootTarget(uint64_t guid);
+    /// A dead unit right-clicked (0x006dad90): nothing while moving, the
+    /// mount left first, else lootTarget.
+    void lootCorpse(uint64_t guid);
     void lootItem(uint8_t slotIndex, bool confirmed = false);
     void confirmPendingLoot();
     void confirmBindOnUse();
@@ -2927,6 +2982,14 @@ public:
 
     // NPC Gossip
     void interactWithNpc(uint64_t guid);
+    /// What 0x006ddbb0 does past the NPC hellos: a spell click
+    /// (CMSG_SPELLCLICK) or a group member's vehicle entered
+    /// (CMSG_PLAYER_VEHICLE_ENTER). False when it is neither.
+    bool clickUnitBeyondHellos(uint64_t guid);
+    /// 0x00408520: on a loading screen, CMSG_KEEP_ALIVE every thirty seconds.
+    /// Starting (0x0040a990) sets the first one thirty seconds out; each
+    /// progress step after sends one once that time has come.
+    void loadingKeepAlive(bool starting);
     void interactWithGameObject(uint64_t guid);
     uint64_t getHookedFishingBobberGuid() const { return hookedFishingBobberGuid_; }
     void selectGossipOption(uint32_t optionId, const std::string& code = "");
@@ -3177,6 +3240,13 @@ public:
     uint32_t getBonusActionBarOffset() const;
     /// The form's SpellShapeshiftForm.dbc row, nothing for none or unknown.
     const ShapeshiftFormRow* shapeshiftFormRow(uint8_t form) const;
+    /// 0x0071b130: whether the player would leave its form for an action -
+    /// autoUnshift on, not UNIT_FLAG 0x100000, not flying unless
+    /// autoDismountFlying, and a form not flagged 0x100.
+    bool wouldAutoUnshift() const;
+    /// 0x00726ce0: cancel each positive aura (0x10) whose shapeshift effect
+    /// (aura 36) names the form in effect.
+    void leaveShapeshiftForm();
     /// The player's UNIT_FIELD_BYTES_2 byte 3 changed (0x006da130): the
     /// form, its preset spells, and the events to fire, in order.
     std::vector<const char*> setPlayerShapeshiftForm(uint8_t form);
@@ -3526,6 +3596,9 @@ public:
     /// the third chat argument against GetDefaultLanguage() and prefixes
     /// "[<it>] " when they differ, so a number there is printed verbatim.
     const std::string& getLanguageName(uint32_t languageId) const;
+    /// Languages.dbc's id for a name, compared without case (0x004fe2d0);
+    /// zero when the file names no such language.
+    uint32_t languageIdByName(const std::string& name) const;
 
     // Other player level-up callback - fires when another player gains a level
     using OtherPlayerLevelUpCallback = std::function<void(uint64_t guid, uint32_t newLevel)>;
@@ -3998,7 +4071,8 @@ public:
     /// What a game error sounds like, by its GlobalStrings key, as the
     /// client's table of them says (0x005216f0): the character's line where
     /// it gives one (0x00986d00), else the SoundEntries row it names
-    /// (0x004c74a0); nothing for the rest.
+    /// (0x004c74a0); nothing for the rest. ERR_BAG_FULL also triggers
+    /// tutorial 0x39 there.
     void playGameErrorSound(std::string_view gameErrorKey);
 
     // Reputation change toast: factionName, delta, new standing
@@ -4165,7 +4239,21 @@ public:
     /// set by a cast of one with AttributesEx2 0x20 (0x007fa2e0), cleared
     /// by SMSG_CANCEL_AUTO_REPEAT (0x00807560).
     [[nodiscard]] bool isAutoRepeating() const { return autoRepeating_; }
-    void setAutoRepeating(bool on) { autoRepeating_ = on; }
+    /// Whether a change to this skill is said in chat (0x006da4a0): the race
+    /// and class have a SkillRaceClassInfo row for it, without 0x402.
+    [[nodiscard]] bool skillChangeAnnounced(uint32_t skillId) {
+        const auto* rci = skillRaceClassInfo(skillId);
+        return rci != nullptr && (rci->flags & 0x402u) == 0;
+    }
+    void setAutoRepeating(bool on) { autoRepeating_ = on; if (!on) autoRepeatSpellId_ = 0; }
+    /// The repeating spell started (0x007fe130 answers it), which
+    /// IsAutoRepeatSpell compares against.
+    void startAutoRepeat(uint32_t spellId) { autoRepeating_ = true; autoRepeatSpellId_ = spellId; }
+    [[nodiscard]] uint32_t autoRepeatSpellId() const { return autoRepeating_ ? autoRepeatSpellId_ : 0; }
+    /// 0x00807560: a running auto-repeat spell (Auto Shot, Shoot) stopped -
+    /// CMSG_CANCEL_AUTO_REPEAT_SPELL first when `tellServer`, then
+    /// STOP_AUTOREPEAT_SPELL (event 0x1ae). Nothing when none is running.
+    void stopAutoRepeat(bool tellServer);
     /// VEHICLE_ANGLE_UPDATE for the mover's row (0x005fa910).
     void fireVehicleAngleUpdate(float pitch);
     /// VehicleAimUp/DownStart/Stop (0x005fc8e0 -> 0x005fa170, 0x005fb1a0).
@@ -4205,6 +4293,13 @@ public:
     void openVendor(uint64_t npcGuid);
     void closeVendor();
     void buyItem(uint64_t vendorGuid, uint32_t itemId, uint32_t slot, uint32_t count);
+    void buyItemInSlot(uint64_t vendorGuid, uint32_t itemId, uint32_t vendorSlot,
+                       uint8_t wireBag, uint8_t wireSlot, uint32_t count);
+    /// Gift wrapping (InventoryHandler): paper taken up, the item it wraps,
+    /// and the end of it.
+    bool wrappingItem() const;
+    void wrapItemAt(uint8_t wireBag, uint8_t wireSlot);
+    void cancelWrapping();
     void sellItem(uint64_t vendorGuid, uint64_t itemGuid, uint32_t count);
     void sellItemBySlot(int backpackIndex);
     void sellItemInBag(int bagIndex, int slotIndex);
@@ -4562,11 +4657,26 @@ public:
         auto it = onlineItems_.find(guid);
         return it != onlineItems_.end() && (it->second.flags & 0x1u) != 0;
     }
+    /// The durability alerts' pass (0x005e90d0): each of the twelve worked
+    /// out again, UPDATE_INVENTORY_ALERTS when one moved,
+    /// UPDATE_INVENTORY_DURABILITY always, and the low and broken tutorials.
+    void updateInventoryAlerts();
+    /// The alert GetInventoryAlertStatus answers, held since the last pass;
+    /// `index` from 1.
+    [[nodiscard]] int inventoryAlert(int index) const {
+        return index >= 1 && index <= static_cast<int>(inventoryAlerts_.size())
+                   ? inventoryAlerts_[static_cast<size_t>(index - 1)] : 0;
+    }
     /// ITEM_FIELD_FLAGS of an item this client holds: 0x1 soulbound, 0x100
     /// bound but still tradeable. 0 for one it does not.
     uint32_t getItemFieldFlags(uint64_t guid) const {
         auto it = onlineItems_.find(guid);
         return it != onlineItems_.end() ? it->second.flags : 0u;
+    }
+    /// ITEM_FIELD_SPELL_CHARGES[0] of an item this client holds, 0 when unknown.
+    int32_t getItemSpellCharges(uint64_t guid) const {
+        auto it = onlineItems_.find(guid);
+        return it != onlineItems_.end() ? it->second.spellCharges0 : 0;
     }
     uint32_t getItemEntryByGuid(uint64_t guid) const {
         auto it = onlineItems_.find(guid);
@@ -4638,6 +4748,23 @@ public:
         return (it != itemInfoCache_.end()) ? &it->second : nullptr;
     }
     const std::unordered_map<uint32_t, ItemQueryResponseData>& getItemInfoCache() const { return itemInfoCache_; }
+    /// A trainer service's description waiting on the item it makes
+    /// (0x005959d0 asks with 0x00593ca0 as the answer's callback), which
+    /// says TRAINER_DESCRIPTION_UPDATE when the item arrives.
+    void awaitTrainerDescriptionItem(uint32_t entry) {
+        if (entry == 0) return;
+        trainerDescriptionItems_.insert(entry);
+        ensureItemInfo(entry);
+    }
+    /// Whether that was waiting, and no longer is.
+    bool takeTrainerDescriptionItem(uint32_t entry) { return trainerDescriptionItems_.erase(entry) > 0; }
+    /// A quest reward item said in chat as the turn-in does (0x006d0e10 ->
+    /// 0x006cd8c0): ERR_QUEST_REWARD_ITEM_S with its link, or
+    /// ERR_QUEST_REWARD_ITEM_MULT_IS with the count above one - once the item
+    /// is known, asked for when it is not.
+    void announceQuestRewardItem(uint32_t itemId, uint32_t count);
+    /// The item a waiting reward line wanted has arrived.
+    void questRewardItemArrived(uint32_t itemId);
     // Request item info from server if not already cached/pending
     void ensureItemInfo(uint32_t entry) {
         if (entry == 0 || itemInfoCache_.count(entry) || pendingItemQueries_.count(entry)) return;
@@ -5496,6 +5623,9 @@ public:
         uint32_t temporaryEnchantId = 0;
         std::array<uint32_t, 3> socketEnchantIds{};
         uint32_t flags = 0;              // ITEM_FIELD_FLAGS (bit 0x1 = soulbound)
+        /// ITEM_FIELD_SPELL_CHARGES, the first of the five (STACK_COUNT + 2):
+        /// what is left of the template's first spell's charges.
+        int32_t  spellCharges0 = 0;
         int32_t  randomPropertyId = 0;   // ITEM_FIELD_RANDOM_PROPERTIES_ID (signed)
         uint32_t suffixFactor = 0;       // ITEM_FIELD_PROPERTY_SEED (random-suffix stat scale)
         /// ITEM_FIELD_CREATOR: who made the item, as a guid. Zero when the realm
@@ -5522,6 +5652,7 @@ private:
     /// unitsCooperate, with unitMayAttack(a, b) asked only when not given.
     [[nodiscard]] bool unitsCooperateGiven(uint64_t a, uint64_t b, std::optional<bool> aMayAttackB) const;
     bool autoRepeating_ = false;
+    uint32_t autoRepeatSpellId_ = 0;
     // Dead: autoTargetAttacker moved to CombatHandler
 
     /**
@@ -5888,6 +6019,8 @@ private:
     std::set<uint64_t> itemRefundAsked_;
     std::unordered_map<uint32_t, ItemQueryResponseData> itemInfoCache_;
     std::unordered_set<uint32_t> pendingItemQueries_;
+    std::unordered_set<uint32_t> trainerDescriptionItems_;
+    std::vector<std::pair<uint32_t, uint32_t>> pendingQuestRewardItems_;
     float pendingItemQueryTimer_ = 0.0f;
 
     // Deferred SMSG_ITEM_PUSH_RESULT notifications for items whose info wasn't
@@ -5908,6 +6041,10 @@ private:
         bool showInChat = true;
         int32_t randomProp = 0;
         std::string who;
+        /// The receiver and where the item went, for its tutorials (0x00523900).
+        uint64_t receiver = 0;
+        uint8_t bagSlot = 0;
+        uint32_t slot = 0;
         /// The stack total after the push, for the quest progress line.
         uint32_t totalCount = 0;
     };
@@ -6029,6 +6166,11 @@ private:
     uint32_t weaponProficiency_ = 0;  // bitmask from SMSG_SET_PROFICIENCY itemClass=2
     uint32_t armorProficiency_  = 0;  // bitmask from SMSG_SET_PROFICIENCY itemClass=4
     std::vector<MinimapPing> minimapPings_;
+    /// The last ping's canonical place (0xbeba8c), the world origin before one.
+    glm::vec2 lastMinimapPing_{0.0f, 0.0f};
+    /// The offset of a canonical place from the player over the map, turned
+    /// with it (0x0057eb80, 0x0057efe0).
+    [[nodiscard]] glm::vec2 minimapPingOffset(float wowX, float wowY) const;
     uint64_t pendingGameObjectInteractGuid_ = 0;
     // Owned fishing bobber whose bite animation has fired. Keeping this explicit
     // lets the UI target/reel it even while GAMEOBJECT_QUERY metadata is pending.
@@ -6275,9 +6417,14 @@ private:
     // Vehicle (WotLK): non-zero when player is seated in a vehicle
     uint32_t vehicleId_ = 0;
     vehicle::VehicleRoster vehicleRoster_;
+    TutorialState tutorials_;
+    bool entryTutorialsPending_ = false;
+    std::chrono::steady_clock::time_point nextLoadingKeepAlive_{};  ///< 0xb2fe70
+    std::chrono::steady_clock::time_point nextWorldStateTimerQuery_{};  ///< 0xbe8f40
     cast_visual::Roster castVisuals_;
     mutable std::unordered_map<uint32_t, bool> precastKitAnimates_;
     float vehicleAimPower_ = 0.0f;  ///< DAT_00c24958
+    std::array<int, 12> inventoryAlerts_{};  ///< DAT_00c24238
     VehicleMoveHoldCallback vehicleMoveHoldCallback_;
     bool petActionsOnBonusBar_ = false;
     uint32_t possessSpellId_ = 0;

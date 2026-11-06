@@ -390,6 +390,15 @@ TEST_CASE("The level the realm sets as this character's cap",
     }
 }
 
+// The quests done today: 25 dwords right after the level cap, blob +0x11b0
+// (0x006d9f20 watches each of them, 0x006e5180).
+TEST_CASE("The daily quests follow the level cap", "[updatefields][quest]") {
+    UpdateFieldTable table;
+    REQUIRE(table.loadFromJson(fieldsPath("wotlk")));
+    CHECK(table.index(UF::PLAYER_FIELD_DAILY_QUESTS_1) == 1280);
+    CHECK(table.index(UF::PLAYER_FIELD_MAX_LEVEL) + 1 == table.index(UF::PLAYER_FIELD_DAILY_QUESTS_1));
+}
+
 // What QuestXP.dbc's number becomes on the way to the panel. The table's value is
 // only a starting point: the client damps it by how far the quest sits from the
 // character, rounds it by size, and answers nothing at all once the character is
