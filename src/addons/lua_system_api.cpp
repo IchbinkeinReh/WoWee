@@ -8866,7 +8866,12 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, 1.0);
             return 1;
         }},
-                {"ConvertToRaid",            lua_ReturnNothing},
+                // ConvertToRaid() (0x00574a00): the party's leader, level 10
+                // or more, asks for a raid; anyone else, nothing.
+                {"ConvertToRaid", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) gh->convertToRaid();
+            return 0;
+        }},
                 {"FillLocalizedClassList",   lua_ReturnNothing},
                 // Sends the request rather than doing nothing. The reply is
                 // parsed, fires GUILD_EVENT_LOG_UPDATE and friendsframe

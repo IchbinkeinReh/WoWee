@@ -2488,6 +2488,7 @@ void SocialHandler::convertToRaid() {
     if (!isInGroup()) return;
     if (partyData.leaderGuid != owner_.getPlayerGuid()) return;
     if (groupIsRaid(partyData.groupType)) return;
+    if (owner_.getPlayerLevel() < 10) return;   // 9 < UNIT_FIELD_LEVEL
     auto packet = GroupRaidConvertPacket::build();
     owner_.getSocket()->send(packet);
     LOG_INFO("Sent CMSG_GROUP_RAID_CONVERT");
