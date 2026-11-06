@@ -223,6 +223,12 @@ public:
     /// secondary command buffers were recorded: one that binds the set must
     /// ask this first, when it records.
     [[nodiscard]] bool descriptorsWritten() const;
+    /// Brings this frame's set up to a buffer that grew in the other frame's
+    /// update(), for a frame about to record. Left to this frame's own update(),
+    /// the set was behind while the frame recorded, so the traced water, which
+    /// asks descriptorsWritten(), gave way to the client's for that one frame.
+    /// Call with the frame's fence waited on and before anything records.
+    void refreshDescriptors();
     /// False until at least one instance has made it into an acceleration
     /// structure; tracing an empty scene is legal but pointless.
     [[nodiscard]] bool hasContent() const { return liveInstances_ + liveDynInstances_ > 0; }

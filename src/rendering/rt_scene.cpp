@@ -1608,6 +1608,13 @@ void RtScene::uploadSlots(VkCommandBuffer cmd, RtSlotStore& store, AllocatedBuff
     cmdPipelineBarrier2(cmd, dep);
 }
 
+void RtScene::refreshDescriptors() {
+    if (!ctx_) return;
+    FrameResources& fr = frames_[ctx_->getCurrentFrame()];
+    // Only a set that has named this scene: after releaseGpu, update() writes it.
+    if (fr.set != VK_NULL_HANDLE && fr.writtenEpoch == gpuEpoch_) writeDescriptors(fr);
+}
+
 bool RtScene::descriptorsWritten() const {
     if (!ctx_) return false;
     const FrameResources& fr = frames_[ctx_->getCurrentFrame()];

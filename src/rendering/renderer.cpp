@@ -730,11 +730,20 @@ void Renderer::updatePerFrameUBO() {
     // walks the BVH twice, and the hardware's rays cost far less.
     if (waterRenderer) {
         RtWaterFrame wf;
+        if (rtScene_) rtScene_->refreshDescriptors();
         // Its set bound as the water records, on a worker, ahead of the
         // scene's update: bound before it is written after the tracing comes
         // back on, it named what had been freed and the device was lost.
         wf.on = rtWater_ && rtLighting_ && rtLighting_->active() && rtDeferredThisFrame_ && rtScene_ &&
                 rtScene_->descriptorsWritten();
+        // Test hook: a frame the setting asks for the traced water and does not
+        // get it, and which of the conditions said no.
+        static const bool waterPathLog = std::getenv("WOWEE_AUTO_LUA") != nullptr;
+        if (waterPathLog && rtWater_ && !wf.on) {
+            LOG_WARNING("Water path: client water this frame: lighting ", rtLighting_ && rtLighting_->active(),
+                        " deferred ", rtDeferredThisFrame_, " scene ", rtScene_ != nullptr, " written ",
+                        rtScene_ && rtScene_->descriptorsWritten());
+        }
         if (wf.on) {
             const bool hw = rtScene_->backend() == RtScene::Backend::Hardware;
             wf.sceneSet = rtScene_->descriptorSet();
