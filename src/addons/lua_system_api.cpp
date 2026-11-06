@@ -42,6 +42,7 @@
 #include "ui/widget_tree.hpp"
 #include "rendering/camera_controller.hpp"
 #include "pipeline/asset_manager.hpp"
+#include "pipeline/dbc_layout.hpp"
 #include "addons/lua_engine.hpp"
 #include "game/bg_score_defs.hpp"
 #include "game/calendar_month.hpp"
@@ -8872,7 +8873,37 @@ void registerSystemLuaAPI(lua_State* L) {
             if (auto* gh = getGameHandler(L)) gh->convertToRaid();
             return 0;
         }},
-                {"FillLocalizedClassList",   lua_ReturnNothing},
+                // FillLocalizedClassList(table[, isFemale]) (0x0060a510):
+                // for each ChrClasses row, table[Filename] = its name in the
+                // asked gender, the other where that one is empty
+                // (0x007159e0), the plain name where both are.
+                {"FillLocalizedClassList", [](lua_State* L) -> int {
+            if (!lua_istable(L, 1))
+                return luaL_error(L, "Usage: FillLocalizedClassList(classTable[, isFemale])");
+            const bool female = lua_toboolean(L, 2) != 0;
+            auto* gh = getGameHandler(L);
+            auto* am = gh ? gh->services().assetManager : nullptr;
+            const auto* layouts = pipeline::getActiveDBCLayout();
+            const auto* layout = layouts ? layouts->getLayout("ChrClasses") : nullptr;
+            const uint32_t nameF = layout ? layout->tryField("Name") : 0xFFFFFFFFu;
+            auto dbc = am && am->isInitialized() ? am->loadDBCOptional("ChrClasses.dbc") : nullptr;
+            // Name, Name_female, Name_male and Filename, seventeen apart (one
+            // localized block each) - the WotLK shape.
+            if (!dbc || !dbc->isLoaded() || nameF == 0xFFFFFFFFu || nameF + 51 >= dbc->getFieldCount())
+                return 0;
+            for (uint32_t r = 0; r < dbc->getRecordCount(); ++r) {
+                const std::string file = dbc->getString(r, nameF + 51);
+                if (file.empty()) continue;
+                std::string fem = dbc->getString(r, nameF + 17);
+                std::string male = dbc->getString(r, nameF + 34);
+                std::string name = female ? (!fem.empty() ? fem : male) : (!male.empty() ? male : fem);
+                if (name.empty()) name = dbc->getString(r, nameF);
+                lua_pushstring(L, file.c_str());
+                lua_pushstring(L, name.c_str());
+                lua_rawset(L, 1);
+            }
+            return 0;
+        }},
                 // Sends the request rather than doing nothing. The reply is
                 // parsed, fires GUILD_EVENT_LOG_UPDATE and friendsframe
                 // listens for it, so answering nothing here was the one link
