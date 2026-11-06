@@ -6202,9 +6202,28 @@ static int lua_VehicleAimRequestNormAngle(lua_State* L) {
     return 0;
 }
 
-// HasKey() - whether the player carries a key ring at all. The keyring exists
-// and holds keys, so the button that opens it is offered.
-static int lua_HasKey(lua_State* L) { lua_pushboolean(L, 1); return 1; }
+// HasKey() (0x0051ae80): 1 while the player carries a key - an item whose
+// BagFamily has the Keys bit (0x100) - in the keyring, the backpack or the
+// worn bags (0x00754ac0); nil otherwise, which hides the keyring button.
+static int lua_HasKey(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    bool key = false;
+    if (gh) {
+        const auto& inv = gh->getInventory();
+        auto isKey = [&](const game::ItemSlot& slot) {
+            if (slot.empty()) return false;
+            const auto* info = gh->getItemInfo(slot.item.itemId);
+            return info && info->valid && (info->bagFamily & 0x100u) != 0;
+        };
+        for (int i = 0; i < inv.getKeyringSize() && !key; ++i) key = isKey(inv.getKeyringSlot(i));
+        for (int i = 0; i < inv.getBackpackSize() && !key; ++i) key = isKey(inv.getBackpackSlot(i));
+        for (int b = 0; b < game::Inventory::NUM_BAG_SLOTS && !key; ++b)
+            for (int sl = 0; sl < inv.getBagSize(b) && !key; ++sl) key = isKey(inv.getBagSlot(b, sl));
+    }
+    if (key) lua_pushnumber(L, 1);
+    else lua_pushnil(L);
+    return 1;
+}
 
 // GetArenaTeam(index) →
 //   teamName, teamSize, teamRating, teamPlayed, teamWins, seasonTeamPlayed,
