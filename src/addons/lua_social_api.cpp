@@ -1485,6 +1485,30 @@ static int lua_GetGMTicket(lua_State* L) {
 // frame always passes a boolean (helpframe.lua:43 starts it at true and its
 // three buttons set true or false), so insisting costs nothing and matches what
 // the reference does to anything else.
+/// A ticket's text as 0x005ac170 takes it, for NewGMTicket and
+/// UpdateGMTicket alike: no more than 500 characters (UTF-8 lead bytes
+/// counted, 0x0076eea0) - ERR_TICKET_TEXT_TOO_LONG - and something besides
+/// spaces, tabs and line breaks - ERR_TICKET_NO_TEXT.
+static bool gmTicketTextAllowed(game::GameHandler* gh, const char* text) {
+    size_t chars = 0;
+    bool blank = true;
+    for (const char* c = text; *c; ++c) {
+        if ((static_cast<unsigned char>(*c) & 0xC0u) != 0x80u) ++chars;
+        if (*c != ' ' && *c != '\t' && *c != '\r' && *c != '\n') blank = false;
+    }
+    if (chars > 500) {
+        gh->playGameErrorSound("ERR_TICKET_TEXT_TOO_LONG");
+        gh->addUIError(game::interfaceString("ERR_TICKET_TEXT_TOO_LONG", "Your ticket text is too long."));
+        return false;
+    }
+    if (blank) {
+        gh->playGameErrorSound("ERR_TICKET_NO_TEXT");
+        gh->addUIError(game::interfaceString("ERR_TICKET_NO_TEXT", "You must enter text for your ticket."));
+        return false;
+    }
+    return true;
+}
+
 static int lua_NewGMTicket(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
@@ -1494,7 +1518,7 @@ static int lua_NewGMTicket(lua_State* L) {
     // The ticket verbs ask the taint check (0x005ad080, 0x005ad0f0,
     // 0x005ad150: kind 0x11, refused to insecure code).
     if (!taint::allowed(L, 0x11)) return 0;
-    gh->submitGmTicket(text, lua_toboolean(L, 2) != 0, false);
+    if (gmTicketTextAllowed(gh, text)) gh->submitGmTicket(text, lua_toboolean(L, 2) != 0, false);
     return 0;
 }
 
@@ -1907,7 +1931,7 @@ void registerSocialLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             const char* text = luaL_optstring(L, 1, "");
             if (!taint::allowed(L, 0x11)) return 0;   // see NewGMTicket
-            if (gh && text && *text) gh->updateGmTicket(text);
+            if (gh && text && gmTicketTextAllowed(gh, text)) gh->updateGmTicket(text);
             return 0;
         }},
                 {"GetNumMacroIcons",    lua_GetNumMacroIcons},
