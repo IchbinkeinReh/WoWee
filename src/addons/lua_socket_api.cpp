@@ -22,6 +22,7 @@
 #include "addons/lua_api_helpers.hpp"
 #include "game/inventory_slots.hpp"
 #include "game/game_utils.hpp"
+#include "game/interface_text.hpp"
 #include "addons/lua_engine.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_layout.hpp"
@@ -265,6 +266,27 @@ int lua_ClickSocketButton(lua_State* L) {
     // nothing on screen to say why.
     const auto* gem = gh->getItemInfo(gemItemId);
     if (!gem || gem->gemProperties == 0) return 0;
+
+    // 0x005c4780: a meta socket takes only a meta gem and a meta gem goes only
+    // in a meta socket - the Meta bit (1) of the socket's colour against the
+    // GemProperties row's Type. A gem whose row is not in the file is let in.
+    if (const auto* item = socketItemInfo(gh); item && index >= 0 && index < 3) {
+        auto* am = gh->services().assetManager;
+        auto dbc = am && am->isInitialized() ? am->loadDBC("GemProperties.dbc") : nullptr;
+        if (dbc && dbc->isLoaded() && dbc->findRecordById(gem->gemProperties) >= 0) {
+            const bool metaSocket = (item->socketColor[static_cast<size_t>(index)] & 1u) != 0;
+            const bool metaGem = (gemColorMask(gh, gemItemId) & 1u) != 0;
+            if (metaSocket != metaGem) {
+                const char* key = metaSocket ? "ERR_SOCKETING_REQUIRES_META_GEM"
+                                             : "ERR_SOCKETING_META_GEM_ONLY_IN_METASLOT";
+                gh->playGameErrorSound(key);
+                gh->addUIError(game::interfaceString(
+                    key, metaSocket ? "Only a Meta gem can be placed in this socket."
+                                    : "Meta gems can only be placed in a Meta socket."));
+                return 0;
+            }
+        }
+    }
 
     if (gh->setSocketGem(index, gemGuid, gemItemId)) {
         wowee::ui::frameXmlPutCursorDown();
