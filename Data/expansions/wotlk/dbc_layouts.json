@@ -143,6 +143,7 @@
     "MinScale": 1,
     "MinScaleLevel": 2,
     "Name": 10,
+    "PetFoodMask": 7,
     "PetTalentType": 8
   },
   "CreatureModelData": {

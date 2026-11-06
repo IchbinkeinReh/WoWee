@@ -1581,8 +1581,78 @@ static int lua_GetPetIcon(lua_State* L) {
     lua_pushstring(L, "Interface\\Icons\\Ability_Hunter_BeastTaming");
     return 1;
 }
-static int lua_GetPetTalentTree(lua_State* L) { return luaReturnNil(L); }
-static int lua_GetPetFoodTypes(lua_State* L)  { return luaReturnNil(L); }
+/// The CreatureFamily row of the player's pet when it is a hunter's
+/// (0x0071b630: a pet number, made by a hunter), else -1.
+static int32_t hunterPetFamilyRow(game::GameHandler* gh, std::shared_ptr<pipeline::DBCFile>& families,
+                                  const pipeline::DBCFieldMap*& layout) {
+    if (!gh || gh->getPetGuid() == 0) return -1;
+    auto pet = std::dynamic_pointer_cast<game::Unit>(gh->getEntityManager().getEntity(gh->getPetGuid()));
+    if (!pet || pet->getField(game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER)) == 0) return -1;
+    const uint16_t creatorF = game::fieldIndex(game::UF::UNIT_FIELD_CREATEDBY);
+    const uint64_t creator = creatorF == 0xFFFF ? 0
+        : pet->getField(creatorF) | (static_cast<uint64_t>(pet->getField(static_cast<uint16_t>(creatorF + 1))) << 32);
+    auto owner = gh->getEntityManager().getEntity(creator);
+    if (!owner || ((owner->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0)) >> 8) & 0xFFu) != 3) return -1;
+    const uint32_t family = gh->getCreatureFamily(pet->getEntry());
+    auto* am = gh->services().assetManager;
+    const auto* layouts = pipeline::getActiveDBCLayout();
+    layout = layouts ? layouts->getLayout("CreatureFamily") : nullptr;
+    families = am && am->isInitialized() && family != 0 ? am->loadDBCOptional("CreatureFamily.dbc") : nullptr;
+    if (!families || !families->isLoaded() || !layout) return -1;
+    return families->findRecordById(family);
+}
+
+/// GetPetTalentTree() (0x005d3d80): the name of the first TalentTab whose
+/// PetTalentMask holds the hunter pet's family's PetTalentType bit, nil
+/// without one.
+static int lua_GetPetTalentTree(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    std::shared_ptr<pipeline::DBCFile> families;
+    const pipeline::DBCFieldMap* layout = nullptr;
+    const int32_t row = hunterPetFamilyRow(gh, families, layout);
+    const uint32_t typeF = layout ? layout->tryField("PetTalentType") : 0xFFFFFFFFu;
+    if (row < 0 || typeF >= families->getFieldCount()) return luaReturnNil(L);
+    const auto type = static_cast<int32_t>(families->getUInt32(static_cast<uint32_t>(row), typeF));
+    if (type < 0 || type > 31) return luaReturnNil(L);
+    auto* am = gh->services().assetManager;
+    const auto* tabL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("TalentTab") : nullptr;
+    auto tabs = am ? am->loadDBCOptional("TalentTab.dbc") : nullptr;
+    const uint32_t maskF = tabL ? tabL->tryField("PetTalentMask") : 0xFFFFFFFFu;
+    const uint32_t nameF = tabL ? tabL->tryField("Name") : 0xFFFFFFFFu;
+    if (!tabs || !tabs->isLoaded() || maskF >= tabs->getFieldCount() || nameF >= tabs->getFieldCount())
+        return luaReturnNil(L);
+    for (uint32_t r = 0; r < tabs->getRecordCount(); ++r) {
+        const uint32_t mask = tabs->getUInt32(r, maskF);
+        if (mask != 0 && (mask & (1u << type)) != 0) {
+            lua_pushstring(L, tabs->getString(r, nameF).c_str());
+            return 1;
+        }
+    }
+    return luaReturnNil(L);
+}
+
+/// GetPetFoodTypes() (0x005d3bd0) → one ItemPetFood name per bit of the
+/// hunter pet's family's PetFoodMask, in the file's order (bit id - 1).
+static int lua_GetPetFoodTypes(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    std::shared_ptr<pipeline::DBCFile> families;
+    const pipeline::DBCFieldMap* layout = nullptr;
+    const int32_t row = hunterPetFamilyRow(gh, families, layout);
+    const uint32_t maskF = layout ? layout->tryField("PetFoodMask") : 0xFFFFFFFFu;
+    if (row < 0 || maskF >= families->getFieldCount()) return 0;
+    const uint32_t mask = families->getUInt32(static_cast<uint32_t>(row), maskF);
+    auto foods = gh->services().assetManager->loadDBCOptional("ItemPetFood.dbc");
+    if (!foods || !foods->isLoaded() || foods->getFieldCount() < 2) return 0;
+    int pushed = 0;
+    for (uint32_t r = 0; r < foods->getRecordCount(); ++r) {
+        const uint32_t id = foods->getUInt32(r, 0);
+        if (id == 0 || id > 32 || (mask & (1u << (id - 1))) == 0) continue;
+        if (!lua_checkstack(L, 1)) break;
+        lua_pushstring(L, foods->getString(r, 1).c_str());
+        ++pushed;
+    }
+    return pushed;
+}
 
 /// SetPetStablePaperdoll(model) - put the selected pet in the preview frame.
 ///
