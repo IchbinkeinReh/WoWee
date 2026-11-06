@@ -138,6 +138,7 @@
   },
   "CreatureFamily": {
     "ID": 0,
+    "IconFile": 27,
     "MaxScale": 3,
     "MaxScaleLevel": 4,
     "MinScale": 1,

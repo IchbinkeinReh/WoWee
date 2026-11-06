@@ -1575,12 +1575,6 @@ static int lua_ClickStablePet(lua_State* L) {
 // So these answer absent, and the frame is built for that: GetPetIcon and
 // GetPetFoodTypes are both tested before use, and the talent tree is taken as
 // `GetPetTalentTree() or ""`.
-static int lua_GetPetIcon(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    if (!gh || !activePet(gh)) { return luaReturnNil(L); }
-    lua_pushstring(L, "Interface\\Icons\\Ability_Hunter_BeastTaming");
-    return 1;
-}
 /// The CreatureFamily row of the player's pet when it is a hunter's
 /// (0x0071b630: a pet number, made by a hunter), else -1.
 static int32_t hunterPetFamilyRow(game::GameHandler* gh, std::shared_ptr<pipeline::DBCFile>& families,
@@ -1600,6 +1594,21 @@ static int32_t hunterPetFamilyRow(game::GameHandler* gh, std::shared_ptr<pipelin
     families = am && am->isInitialized() && family != 0 ? am->loadDBCOptional("CreatureFamily.dbc") : nullptr;
     if (!families || !families->isLoaded() || !layout) return -1;
     return families->findRecordById(family);
+}
+
+/// GetPetIcon() (0x005d3ce0): the hunter pet's family's IconFile, nil for any
+/// other pet or none.
+static int lua_GetPetIcon(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    std::shared_ptr<pipeline::DBCFile> families;
+    const pipeline::DBCFieldMap* layout = nullptr;
+    const int32_t row = hunterPetFamilyRow(gh, families, layout);
+    const uint32_t iconF = layout ? layout->tryField("IconFile") : 0xFFFFFFFFu;
+    if (row < 0 || iconF >= families->getFieldCount()) return luaReturnNil(L);
+    const std::string icon = families->getString(static_cast<uint32_t>(row), iconF);
+    if (icon.empty()) return luaReturnNil(L);
+    lua_pushstring(L, icon.c_str());
+    return 1;
 }
 
 /// GetPetTalentTree() (0x005d3d80): the name of the first TalentTab whose
