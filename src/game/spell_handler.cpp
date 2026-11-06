@@ -7009,8 +7009,12 @@ void SpellHandler::handleSpellFailure(network::Packet& packet) {
         // for results 0x34..0x36 (0x00807560).
         if (!isClassic) {
             const uint64_t caster = failGuid != 0 ? failGuid : owner_.getPlayerGuid();
-            if (caster == owner_.getPlayerGuid() && rawFailReason >= 0x34 && rawFailReason <= 0x36)
+            if (caster == owner_.getPlayerGuid() && rawFailReason >= 0x34 && rawFailReason <= 0x36) {
                 owner_.castVisuals().autoRepeatStopped(caster);
+                // Not the visual alone: the repeat ends and the server is
+                // told (0x00807560(1)).
+                owner_.stopAutoRepeat(true);
+            }
             owner_.castVisuals().ended(caster, failCastCount, failSpellId);
         }
         // Classic result enum starts at 0=AFFECTING_COMBAT; shift +1 for WotLK table
