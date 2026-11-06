@@ -5956,7 +5956,18 @@ static int lua_GetPVPTimer(lua_State* L) {
 // Zero is the right answer here rather than the usual trap: arenaframe compares
 // it with == and ~= against NO_ARENA_SEASON, which is itself 0, so a nil would
 // fail both tests instead of meaning "no season".
-static int lua_GetCurrentArenaSeason(lua_State* L) { lua_pushnumber(L, 0); return 1; }
+// GetCurrentArenaSeason() / GetPreviousArenaSeason() (0x005a2a40,
+// 0x005a2a70): world states 3191 and 3901 (0x00548d10), zero when absent.
+static int lua_GetCurrentArenaSeason(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    lua_pushnumber(L, gh ? gh->getWorldState(3191).value_or(0) : 0);
+    return 1;
+}
+static int lua_GetPreviousArenaSeason(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    lua_pushnumber(L, gh ? gh->getWorldState(3901).value_or(0) : 0);
+    return 1;
+}
 
 // GetPVPRankProgress() → how far through the current rank, 0..1.
 // Fed straight to HonorFrameProgressBar:SetValue, which needs a number.
@@ -8565,7 +8576,7 @@ void registerSystemLuaAPI(lua_State* L) {
         }},
                 // GetNumSockets answered zero here, which said every item has
                 // no sockets. It is real now, and in lua_socket_api.cpp.
-                {"GetPreviousArenaSeason",      lua_ReturnZero},
+                {"GetPreviousArenaSeason",      lua_GetPreviousArenaSeason},
                 // GetInstanceBootTimeRemaining() - the countdown on the
                 // "you are not in this instance's group" dialog, which reads
                 // it on show and hides itself when it is not positive.
