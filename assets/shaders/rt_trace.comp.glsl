@@ -476,7 +476,10 @@ void main() {
             // And never the unit that carries the light (rtLampEnd).
             rtUnitReach = rtUnitShadowReach(d, rng);
             rtLampEnd = light.positionEnd.xyz;
+            // Only what is carried meets the fixtures (storey.z -1: PointLight::carried).
+            rtSkipFixtures = int(light.storey.w + 0.5) != RT_LIGHT_KIND_UNIT && light.storey.z > -0.5;
             pointVis = rtOccludedBy(lampOrigin, toLight / d, reach, rng, byUnit) ? 0.0 : 1.0;
+            rtSkipFixtures = false;
             rtLampEnd = vec3(1e30);
             rtUnitReach = 1e30;
             unitHit = unitHit || byUnit;

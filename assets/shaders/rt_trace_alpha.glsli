@@ -47,6 +47,9 @@ const float RT_CARRIED_LIGHT_SLACK = 1.0;
 // Set by rtOccludedByStructure for one ray in the software tracer: only the
 // ground and the buildings stop it (the hardware tracer's ray mask).
 bool rtStructureOnly = false;
+// Set by the caller for one fixed light's ray: fixtures do not stop it
+// (RtScene::kMeshFixture, kRayNoFixtures).
+bool rtSkipFixtures = false;
 // Set by the caller for one ray: a cutout or a translucent triangle - a leaf
 // card, a fence, a banner - lets it through. The occlusion's rays
 // (rt_trace.comp): a canopy is cards standing in for a loose volume of
