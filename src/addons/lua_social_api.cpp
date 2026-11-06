@@ -1650,17 +1650,51 @@ static int lua_SignPetition(lua_State* L) {
 
 // OfferPetition() → hand the charter to the current target to sign.
 //
-// The interface offers this only to the originator, which matches the server:
-// nobody else can present someone else's charter.
+// 0x005cf220, with a charter and a target: a target not in sight is
+// ERR_OUT_OF_RANGE; a player target is refused when it is the player
+// (ERR_PETITION_CREATOR), not of the player's side and peaceable
+// (0x00729b30, ERR_GUILD_NOT_ALLIED) or, for a guild charter, already in a
+// guild (ERR_ALREADY_IN_GUILD_S naming them); otherwise the offer goes and
+// ERR_PETITION_OFFERED_S names who it went to. Anything else targeted is
+// passed over in silence, as is no target at all.
+static bool petitionOfferAllowed(game::GameHandler* gh, const game::PetitionInfo& info, uint64_t target) {
+    auto entity = gh->getEntityManager().getEntity(target);
+    if (!entity) {
+        gh->playGameErrorSound("ERR_OUT_OF_RANGE");
+        gh->addUIError(game::interfaceString("ERR_OUT_OF_RANGE", "Out of range."));
+        return false;
+    }
+    if (entity->getType() != game::ObjectType::PLAYER) return false;
+    if (target == gh->getPlayerGuid()) {
+        gh->playGameErrorSound("ERR_PETITION_CREATOR");
+        gh->addUIError(game::interfaceString("ERR_PETITION_CREATOR", "You can't sign your own charter."));
+        return false;
+    }
+    if (!gh->unitsCooperate(gh->getPlayerGuid(), target)) {
+        gh->playGameErrorSound("ERR_GUILD_NOT_ALLIED");
+        gh->addSystemChatMessage(game::interfaceString("ERR_GUILD_NOT_ALLIED",
+                                                       "You cannot invite players from the opposing alliance."));
+        return false;
+    }
+    const std::string name = gh->lookupName(target);
+    if (!info.isArena && gh->getEntityGuildId(target) != 0) {
+        gh->playGameErrorSound("ERR_ALREADY_IN_GUILD_S");
+        gh->addSystemChatMessage(game::interfaceFormat("ERR_ALREADY_IN_GUILD_S", "%s is already in a guild.", {name}));
+        return false;
+    }
+    return true;
+}
+
 static int lua_OfferPetition(lua_State* L) {
     auto* gh = getGameHandler(L);
     const auto* info = shownPetition(L);
-    if (!gh || !info) return 0;
-    const uint64_t target = gh->getTargetGuid();
-    // No target, nothing said: 0x005cf220 returns without a word. This raised
-    // "You have no target." in English.
-    if (target == 0) return 0;
-    gh->offerPetition(info->petitionGuid, target);
+    const uint64_t target = gh ? gh->getTargetGuid() : 0;
+    if (info && target != 0 && petitionOfferAllowed(gh, *info, target)) {
+        gh->offerPetition(info->petitionGuid, target);
+        gh->playGameErrorSound("ERR_PETITION_OFFERED_S");
+        gh->addSystemChatMessage(game::interfaceFormat("ERR_PETITION_OFFERED_S", "You have requested %s's signature.",
+                                                       {gh->lookupName(target)}));
+    }
     return 0;
 }
 
