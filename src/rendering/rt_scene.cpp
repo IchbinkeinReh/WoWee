@@ -187,6 +187,18 @@ bool RtScene::createDescriptors() {
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     li.bindingCount = static_cast<uint32_t>(bindings.size());
     li.pBindings = bindings.data();
+    // Written in update(), after the frame's secondaries have bound it: a set
+    // written then has to say so, or those buffers are invalid to execute.
+    const bool afterBind = ctx_->rtSetUpdateAfterBind();
+    std::vector<VkDescriptorBindingFlags> bindingFlags(bindings.size(), VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT);
+    VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{};
+    flagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+    flagsInfo.bindingCount = li.bindingCount;
+    flagsInfo.pBindingFlags = bindingFlags.data();
+    if (afterBind) {
+        li.pNext = &flagsInfo;
+        li.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+    }
     if (vkCreateDescriptorSetLayout(dev, &li, nullptr, &setLayout_) != VK_SUCCESS) return false;
 
     // Counted off the layout rather than written down beside it: the pool
@@ -208,6 +220,7 @@ bool RtScene::createDescriptors() {
     pi.maxSets = MAX_FRAMES_IN_FLIGHT;
     pi.poolSizeCount = static_cast<uint32_t>(sizes.size());
     pi.pPoolSizes = sizes.data();
+    if (afterBind) pi.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
     if (vkCreateDescriptorPool(dev, &pi, nullptr, &descriptorPool_) != VK_SUCCESS) return false;
 
     for (auto& fr : frames_) {

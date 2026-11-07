@@ -982,6 +982,11 @@ bool VkContext::createLogicalDevice() {
         if (supported12.shaderInt8) {
             enabled12.shaderInt8 = VK_TRUE;
         }
+        // The RT scene's set is rewritten when its buffers grow, by which time
+        // the frame's secondaries have bound it (RtScene::writeDescriptors).
+        rtSetUpdateAfterBind_ = supported12.descriptorBindingStorageBufferUpdateAfterBind &&
+                                (!hardwareRayQuery_ || asFeatures.descriptorBindingAccelerationStructureUpdateAfterBind);
+        if (rtSetUpdateAfterBind_) enabled12.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
         // Core in 1.2 and required of any 1.2 implementation, but the query
         // costs nothing and this block only runs when the instance reached
         // 1.2 at all -- on a 1.1 instance the frame ring stays on fences.
@@ -1017,6 +1022,8 @@ bool VkContext::createLogicalDevice() {
     enabledRayQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
     if (hardwareRayQuery_) {
         enabledAs.accelerationStructure = VK_TRUE;
+        enabledAs.descriptorBindingAccelerationStructureUpdateAfterBind =
+            rtSetUpdateAfterBind_ ? VK_TRUE : VK_FALSE;
         enabledRayQuery.rayQuery = VK_TRUE;
         deviceBuilder.add_pNext(&enabledAs);
         deviceBuilder.add_pNext(&enabledRayQuery);

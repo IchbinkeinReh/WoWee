@@ -376,6 +376,8 @@ public:
     [[nodiscard]] VkRenderPass getSceneCutCloseRenderPass() const { return sceneCutCloseRenderPass_; }
     static constexpr VkFormat kGbufferFormat = VK_FORMAT_R16G16B16A16_UNORM;
     [[nodiscard]] bool isSampleRateShadingSupported() const { return sampleRateShadingSupported_; }
+    /// Whether the RT scene's set may be written after it is bound.
+    [[nodiscard]] bool rtSetUpdateAfterBind() const { return rtSetUpdateAfterBind_; }
     [[nodiscard]] VkDescriptorPool getImGuiDescriptorPool() const { return imguiDescriptorPool; }
     [[nodiscard]] const std::vector<VkFramebuffer>& getSwapchainFramebuffers() const { return swapchainFramebuffers; }
 
@@ -780,6 +782,7 @@ private:
     VkRenderPass gbufferRenderPass_ = VK_NULL_HANDLE;
     VkRenderPass sceneResumeMsaaRenderPass_ = VK_NULL_HANDLE;
     void destroySceneCutPasses();
+    bool rtSetUpdateAfterBind_ = false;
     VkRenderPass sceneCutOpenRenderPass_ = VK_NULL_HANDLE;
     VkRenderPass sceneCutResumeRenderPass_ = VK_NULL_HANDLE;
     VkRenderPass sceneCutCloseRenderPass_ = VK_NULL_HANDLE;
