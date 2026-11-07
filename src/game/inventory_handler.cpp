@@ -1401,7 +1401,36 @@ void InventoryHandler::handleLootResponse(network::Packet& packet) {
         // 249 LOOT_OPENED, 250 LOOT_SLOT_CLEARED, 251 LOOT_SLOT_CHANGED and 252
         // LOOT_CLOSED are the whole of its loot events, and the loot window
         // registers exactly those four (lootframe.lua:6-9).
-        owner_.addonEventCallbackRef()("LOOT_OPENED", {autoLoot_ ? "1" : "0"});
+        //
+        // Only once every item in it is known (0x005896b0): each the item
+        // cache does not hold is asked for and counted (0x00bfa688), and the
+        // answer that found it - LOOT_SLOT_CHANGED for its slot, raised with
+        // the item answer - takes one off the count, the last raising the
+        // event (0x00589460). An answer that found nothing leaves it counted,
+        // as there.
+        std::vector<uint32_t> unknown;
+        for (const auto& item : currentLoot_.items) {
+            const auto* info = owner_.getItemInfo(item.itemId);
+            if (item.itemId != 0 && (!info || !info->valid) &&
+                std::find(unknown.begin(), unknown.end(), item.itemId) == unknown.end()) {
+                unknown.push_back(item.itemId);
+            }
+        }
+        if (unknown.empty()) {
+            owner_.addonEventCallbackRef()("LOOT_OPENED", {autoLoot_ ? "1" : "0"});
+        } else {
+            lootItemsAwaited_ = static_cast<int>(unknown.size());
+            const uint64_t lootGuid = currentLoot_.lootGuid;
+            for (uint32_t itemId : unknown) {
+                owner_.askItemThen(itemId, "loot open " + std::to_string(lootGuid),
+                                   [this, lootGuid](bool found) {
+                    if (!found || !lootWindowOpen_ || currentLoot_.lootGuid != lootGuid) return;
+                    if (--lootItemsAwaited_ != 0) return;
+                    if (owner_.addonEventCallbackRef())
+                        owner_.addonEventCallbackRef()("LOOT_OPENED", {autoLoot_ ? "1" : "0"});
+                });
+            }
+        }
     }
     if (currentLoot_.lootGuid == lastInteractedGoGuid) {
         lastInteractedGoGuid = 0;
