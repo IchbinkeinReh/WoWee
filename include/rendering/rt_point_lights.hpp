@@ -186,6 +186,35 @@ size_t selectLights(std::vector<PointLight>& lights, const glm::vec3& eye, float
     return lights.size();
 }
 
+/// Two lights this close are one place: never two sources there.
+inline constexpr float kCoincidentLights = 0.1f;
+[[nodiscard]] inline bool coincide(const glm::vec3& a, const glm::vec3& b) {
+    return glm::dot(a - b, a - b) < kCoincidentLights * kCoincidentLights;
+}
+
+/// Of lights standing in one place, the strongest alone. What is left for this
+/// is what no one source can see: the map placing one fire twice, a crystal's
+/// glow and the sparks over it. Summed, a doodad placed twice would burn double.
+template <class Light>
+void keepOneLightPerPlace(std::vector<Light>& lights) {
+    std::sort(lights.begin(), lights.end(),
+              [](const Light& a, const Light& b) { return a.position.x < b.position.x; });
+    const auto strength = [](const Light& l) { return std::max(l.color.r, std::max(l.color.g, l.color.b)); };
+    size_t kept = 0;
+    for (size_t i = 0; i < lights.size(); ++i) {
+        bool merged = false;
+        for (size_t k = kept; k-- > 0;) {
+            if (lights[i].position.x - lights[k].position.x >= kCoincidentLights) break;
+            if (!coincide(lights[i].position, lights[k].position)) continue;
+            if (strength(lights[i]) > strength(lights[k])) lights[k] = lights[i];
+            merged = true;
+            break;
+        }
+        if (!merged) lights[kept++] = lights[i];
+    }
+    lights.resize(kept);
+}
+
 /// The least reach an M2 light is given in the world, in yards (evaluateM2Light).
 inline constexpr float kMinM2LightReach = 3.0f;
 /// How much farther than its authored window a light reaches in the world.

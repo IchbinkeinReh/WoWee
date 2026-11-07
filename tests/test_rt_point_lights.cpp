@@ -506,3 +506,20 @@ TEST_CASE("A light on a billboard bone stays put however the camera looks", "[rt
     const glm::vec3 plain = glm::vec3(steadyBoneCarried(model, a, 2, ~0u, pivot) * glm::vec4(local, 1.0f));
     CHECK(glm::length(plain - drawnA) < 1e-5f);
 }
+
+TEST_CASE("Two lights in one place become the stronger one", "[rt_lights]") {
+    using wowee::rendering::rt_lights::PointLight;
+    using wowee::rendering::rt_lights::keepOneLightPerPlace;
+    PointLight weak, strong, apart;
+    weak.position = glm::vec3(10.0f, 0.0f, 0.0f);
+    weak.color = glm::vec3(0.2f);
+    strong.position = glm::vec3(10.05f, 0.0f, 0.0f);
+    strong.color = glm::vec3(0.9f);
+    apart.position = glm::vec3(10.5f, 0.0f, 0.0f);
+    apart.color = glm::vec3(0.5f);
+    std::vector<PointLight> lights{weak, apart, strong};
+    keepOneLightPerPlace(lights);
+    REQUIRE(lights.size() == 2);
+    CHECK(lights[0].color.r == Catch::Approx(0.9f));
+    CHECK(lights[1].color.r == Catch::Approx(0.5f));
+}

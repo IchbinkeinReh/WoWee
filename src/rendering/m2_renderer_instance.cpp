@@ -534,6 +534,13 @@ void M2Renderer::setModelParticlesOnly(uint32_t modelId) {
     // the unit it follows - posed by the same bones, so never seen, but
     // traced every frame.
     releaseRtModel(it->second);
+    // And its lights: the unit it follows has them. Kept, every lit thing a
+    // unit carries shone twice from one place, a held torch among them.
+    it->second.lights.clear();
+    it->second.glowPatches.clear();
+    it->second.isLamp = false;
+    it->second.isTorch = false;
+    it->second.isBrazierOrFire = false;
 }
 
 void M2Renderer::setInstanceExternalPose(uint32_t instanceId, const glm::mat4& model,

@@ -2628,6 +2628,7 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
             // What glows of it (M2ModelGPU::glowPatches): a light at each
             // patch, its colour times its batch's colour and transparency
             // where those move.
+            const size_t firstOfInstance = out.size();
             const float scale2 = glm::dot(glm::vec3(inst.modelMatrix[0]), glm::vec3(inst.modelMatrix[0]));
             for (const rt_lights::GlowPatch& patch : model->glowPatches) {
                 glm::vec3 color = patch.color * fade;
@@ -2644,7 +2645,19 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
                 // Inside, the glow is in the baked colours as a lamp's is -
                 // a doodad's, not a game object's.
                 l.baked = inst.interiorLit && !inst.isGameObject;
-                out.push_back(l);
+                // Patches a bone carries stand where it does: one glow, not
+                // several in one place.
+                auto same = std::find_if(out.begin() + static_cast<std::ptrdiff_t>(firstOfInstance), out.end(),
+                                         [&](const rt_lights::PointLight& o) {
+                                             return rt_lights::coincide(o.position, l.position);
+                                         });
+                if (same != out.end()) {
+                    same->color += l.color;
+                    same->attenuationEnd = std::max(same->attenuationEnd, l.attenuationEnd);
+                    same->attenuationStart = std::max(same->attenuationStart, l.attenuationStart);
+                } else {
+                    out.push_back(l);
+                }
             }
             continue;
         }
