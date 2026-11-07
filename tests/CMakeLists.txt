@@ -2992,6 +2992,16 @@ wowee_add_test(test_collision_sweep
             ${CMAKE_SOURCE_DIR}/src/rendering/collision_sweep.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_collision_walk ──────────────────────────────────────
+# The client's ground movement on the sweep: level ground, walls met head on
+# and at an angle, steps under and over the step height, an edge, slopes
+# either side of 50 degrees going up and down.
+wowee_add_test(test_collision_walk
+    SOURCES test_collision_walk.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_sweep.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_walk.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_collision_liquid ────────────────────────────────────
 # The liquid level a swimmer's depth is read from: a building group's by
 # its tiles, and the two tests on a chunk's.

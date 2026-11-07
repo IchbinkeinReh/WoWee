@@ -533,6 +533,10 @@ public:
     /// shown building whose box holds the point, the groups not flagged
     /// 0x2000 whose own box holds it, in the building's order.
     void exteriorGroupsHolding(const glm::vec3& world, std::vector<GroupRef>& out) const;
+    /// For the collision port's floor debug line: every building face
+    /// straight from `start` down to `endZ`, nearest first, as
+    /// "wmoId/group/MOGPflags/MOPY@z" (no face filter, no group skipped).
+    [[nodiscard]] std::string describeFacesAlong(const glm::vec3& start, float endZ) const;
     /// The group the area of a place is read from (0x0077fa00's ray,
     /// 0x007a30d0 with 0x10 and 0x500): the first face from `start` to `endZ`
     /// that is not detail (0x04, the face mask 0x84 0x007ae140 makes of 0x10),

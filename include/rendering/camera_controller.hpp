@@ -4,6 +4,7 @@
 #include "rendering/camera_smooth.hpp"
 #include "rendering/camera.hpp"
 #include "game/vehicle_camera.hpp"
+#include "rendering/collision_walk.hpp"
 #include "core/input.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -603,6 +604,17 @@ private:
     /// The collision port's liquid level at the feet, found where the client
     /// looks (collision_liquid.hpp, 0x007a1bc0), or none.
     [[nodiscard]] std::optional<float> portLiquidLevelAt(const glm::vec3& feet) const;
+    /// With the collision port on: the step's move from `from` toward
+    /// `wanted` made by the client's ground movement (collision_walk.hpp) or,
+    /// in the air, a sweep along the fall. Answers where the feet end up.
+    glm::vec3 portMove(const glm::vec3& from, const glm::vec3& wanted, float dt);
+    /// The facets round a box from the ground, buildings and doodads.
+    void gatherPortFacets(const glm::vec3& lo, const glm::vec3& hi, std::vector<collision::Facet>& out) const;
+    /// Set by moveFollowedCharacter when portMove made this step's move, so
+    /// the old grounding stands down.
+    bool portMovedThisStep_ = false;
+    collision::Mover portMover_;
+    float portDebugTimer_ = 0.0f;
 
     /// Put the character on the floor and publish where it ended up - the
     /// expensive half, with the floor queries and the cache that skips them.

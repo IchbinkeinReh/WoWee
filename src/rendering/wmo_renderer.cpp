@@ -40,6 +40,7 @@
 #include <fstream>
 #include <future>
 #include <limits>
+#include <sstream>
 #include <string_view>
 #include <thread>
 #include <unordered_set>
@@ -4712,6 +4713,25 @@ WMORenderer::Links WMORenderer::linksAlong(const glm::vec3& start, float endZ) c
                                out.drawn = hit;
                        });
     return out;
+}
+
+std::string WMORenderer::describeFacesAlong(const glm::vec3& start, float endZ) const {
+    struct Hit { float dist; uint32_t wmoId, group, flags; uint8_t mopy; };
+    std::vector<Hit> hits;
+    walkTrianglesAlong(start, endZ, 0u, [](uint8_t) { return true; },
+                       [&](const WMOInstance& instance, const ModelData& model, const GroupResources& group,
+                           uint32_t, uint8_t mopy, float dist, const glm::vec3&) {
+                           if (instance.hidden) return;
+                           hits.push_back({dist, model.wmoId, group.groupIndex, group.groupFlags, mopy});
+                       });
+    std::sort(hits.begin(), hits.end(), [](const Hit& a, const Hit& b) { return a.dist < b.dist; });
+    std::ostringstream s;
+    for (size_t i = 0; i < hits.size() && i < 4; ++i) {
+        if (i) s << ",";
+        s << hits[i].wmoId << "/" << hits[i].group << "/0x" << std::hex << hits[i].flags << "/0x"
+          << static_cast<unsigned>(hits[i].mopy) << std::dec << "@" << (endZ < start.z ? start.z - hits[i].dist : start.z + hits[i].dist);
+    }
+    return hits.empty() ? std::string("-") : s.str();
 }
 
 std::optional<WMORenderer::GroupAlong> WMORenderer::areaGroupAlong(const glm::vec3& start, float endZ) const {
