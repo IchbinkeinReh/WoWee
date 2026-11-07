@@ -18,6 +18,7 @@
 #include "rendering/depth_convention.hpp"
 #include "core/frame_profiler.hpp"
 #include "rendering/character_renderer.hpp"
+#include "rendering/m2_billboard.hpp"
 #include "rendering/model_memory.hpp"
 #include "pipeline/bc_encode.hpp"
 #include <cstdio>
@@ -2112,6 +2113,10 @@ bool CharacterRenderer::loadModel(const pipeline::M2Model& model, uint32_t id) {
             return ba.materialLayer < bb.materialLayer;
         });
 
+    for (const auto& bone : gpuModel.data.bones) {
+        gpuModel.hasBillboardBones = gpuModel.hasBillboardBones || (bone.flags & kM2BoneSphericalBillboard) != 0;
+    }
+
     {
         std::string lowerName = gpuModel.data.name;
         std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(),
@@ -2865,6 +2870,7 @@ void assignKeyBoneAnimations(const pipeline::M2Model& model, const KeyBoneAnimat
 }  // namespace
 
 void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::mat4* viewProjection) {
+    boneCameraPos_ = cameraPos;
     // Animate everything that can be drawn. The animation radius used to be
     // 120 yards against a 130-yard draw radius, so anything between the two
     // stood frozen in its last pose; the client animates what it shows.
@@ -3315,6 +3321,10 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
             }
             weapIt->second.overrideModelMatrix = weaponMat;
             weapIt->second.hasOverrideModelMatrix = true;
+            // Its billboard bones by where it stands this frame, not the last.
+            if (weapIt->second.cachedModel && weapIt->second.cachedModel->hasBillboardBones) {
+                calculateBoneMatrices(weapIt->second);
+            }
             // One that animates is distance-culled by its position, as an
             // effect is (below): its wielder's, not the origin it was made at.
             if (weapIt->second.animatesAttached) weapIt->second.position = instance.position;
@@ -3784,6 +3794,14 @@ void CharacterRenderer::calculateBoneMatrices(CharacterInstance& instance) {
     size_t numBones = model.bones.size();
     instance.boneMatrices.resize(numBones);
 
+    // The camera in the model's own space, for its billboard bones.
+    const bool haveCamera = instance.cachedModel->hasBillboardBones;
+    glm::vec3 camModel(0.0f);
+    if (haveCamera) {
+        const glm::mat4 toWorld = instance.hasOverrideModelMatrix ? instance.overrideModelMatrix : getModelMatrix(instance);
+        camModel = glm::vec3(glm::inverse(toWorld) * glm::vec4(boneCameraPos_, 1.0f));
+    }
+
     const auto& gsd = model.globalSequenceDurations;
 
     // One-time diagnostic: check bone ordering (parents must precede children)
@@ -3859,6 +3877,16 @@ void CharacterRenderer::calculateBoneMatrices(CharacterInstance& instance) {
                                 * glm::rotate(glm::mat4(1.0f), extraYawRad, glm::vec3(0.0f, 0.0f, 1.0f))
                                 * glm::translate(glm::mat4(1.0f), -bone.pivot);
             localTransform = extraYaw * localTransform;
+        }
+
+        // A billboard bone turns to the camera (M2Renderer poses its own the
+        // same way): a card on one, a staff's glow, was fixed in the model and
+        // seen edge on as a thin stripe. Turned about the point the bone stands
+        // at, so its own rotation goes on spinning the card in its plane.
+        if (haveCamera && (bone.flags & kM2BoneSphericalBillboard) != 0) {
+            const glm::vec3 anchor = glm::vec3(localTransform * glm::vec4(bone.pivot, 1.0f));
+            localTransform = glm::translate(glm::mat4(1.0f), anchor) * billboardFacing(camModel, bone.pivot) *
+                             glm::translate(glm::mat4(1.0f), -anchor) * localTransform;
         }
 
         // Compose with parent
@@ -5954,7 +5982,8 @@ bool CharacterRenderer::attachWeapon(uint32_t charInstanceId, uint32_t attachmen
         // dagger and the mist under his shoulders were never drawn.
         if (const auto mIt = models.find(weaponModelId); mIt != models.end()) {
             const auto& data = mIt->second.data;
-            weapIt->second.animatesAttached = !data.particleEmitters.empty() || !data.ribbonEmitters.empty();
+            weapIt->second.animatesAttached = !data.particleEmitters.empty() || !data.ribbonEmitters.empty() ||
+                                              mIt->second.hasBillboardBones;
         }
     }
 

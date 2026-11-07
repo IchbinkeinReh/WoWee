@@ -587,6 +587,7 @@ private:
 
         // Pre-classified at load time to avoid per-batch string ops in render loop
         bool isKoboldFlame = false;
+        bool hasBillboardBones = false;
         bool isSkyBird = false;
 
         /// The pose the ray tracer's whole-model proxy stands in: Stand at
@@ -898,6 +899,7 @@ private:
     void setupModelBuffers(M2ModelGPU& gpuModel);
     void calculateBindPose(M2ModelGPU& gpuModel);
     void calculateBoneMatrices(CharacterInstance& instance);
+    glm::vec3 boneCameraPos_{0.0f};  // this frame's camera, for billboard bones
     glm::mat4 getBoneTransform(const pipeline::M2Bone& bone, float animTime, float globalSeqTime,
                                int sequenceIndex, const std::vector<uint32_t>& globalSeqDurations,
                                const m2_track::BlendSample& blend);

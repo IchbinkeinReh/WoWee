@@ -2,6 +2,7 @@
 // All functions are inline to allow inclusion in multiple translation units.
 #pragma once
 
+#include "rendering/m2_billboard.hpp"
 #include "rendering/collision_geometry.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/m2_track_sampler.hpp"
@@ -208,7 +209,6 @@ inline void transformAABB(const glm::mat4& modelMatrix,
 /// loaded and never read, so those cards rendered at whatever angle the artist
 /// left them at and cut through the model they belong to. Orgrimmar's bonfire
 /// keeps its glow on bone 0, flagged 0x8.
-constexpr uint32_t kM2BoneSphericalBillboard = 0x8;
 
 /// Note a switch from the instance's sequence to `newSequence`, so its bones
 /// blend out of the old pose over the new sequence's blendTime - the doodad's
@@ -261,33 +261,13 @@ inline void computeBoneMatrices(const M2ModelGPU& model, M2Instance& instance,
             // rotation. Everything is done in model space, so the instance's
             // own rotation and scale still apply on top.
             //
-            // M2 model space is X forward, Y left, Z up, and a card is
-            // authored in the plane facing +X, so that axis is the one aimed
-            // at the viewer.
+            // The authored rotation does not go: it turns the card in its own
+            // frame, about the axis that faces the viewer, which is how a
+            // spinning flare spins. Dropping it left the power orb's swirl
+            // standing still.
             const glm::vec3 camModel =
                 glm::vec3(instance.invModelMatrix * glm::vec4(*cameraPosWorld, 1.0f));
-            glm::vec3 toCamera = camModel - bone.pivot;
-            const float len2 = glm::dot(toCamera, toCamera);
-            if (len2 > 1e-8f) {
-                toCamera *= glm::inversesqrt(len2);
-                // Up is model +Z unless the view is nearly along it, where the
-                // cross product collapses and the card would spin.
-                glm::vec3 up(0.0f, 0.0f, 1.0f);
-                if (std::abs(toCamera.z) > 0.999f) up = glm::vec3(0.0f, 1.0f, 0.0f);
-                const glm::vec3 right = glm::normalize(glm::cross(up, toCamera));
-                const glm::vec3 trueUp = glm::cross(toCamera, right);
-                glm::mat4 face(1.0f);
-                face[0] = glm::vec4(toCamera, 0.0f);
-                face[1] = glm::vec4(right, 0.0f);
-                face[2] = glm::vec4(trueUp, 0.0f);
-                // The authored rotation does not go: it turns the card in its own
-                // frame, about the axis that faces the viewer, which is how a
-                // spinning flare spins. Dropping it left the power orb's swirl
-                // standing still.
-                local *= face * glm::toMat4(rot);
-            } else {
-                local *= glm::toMat4(rot);
-            }
+            local *= billboardFacing(camModel, bone.pivot) * glm::toMat4(rot);
         } else {
             local *= glm::toMat4(rot);
         }
