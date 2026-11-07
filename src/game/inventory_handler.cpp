@@ -2779,6 +2779,28 @@ void InventoryHandler::completeItemUseOnItem(uint64_t targetItemGuid, bool confi
         }
     }
 
+    // Prospecting (effect 127) wants an item flagged prospectable (0x40000)
+    // and milling (158) one flagged millable (0x20000000); anything else is
+    // the cast's own failure before it is sent - SPELL_FAILED_CANT_BE_-
+    // PROSPECTED (0x11) or _MILLED (0x10) through 0x00808200 (0x005210d0).
+    {
+        const auto& cache = owner_.spellNameCacheRef();
+        const uint32_t targetEntry = owner_.getItemEntryByGuid(targetItemGuid);
+        const auto* targetInfo = targetEntry ? owner_.getItemInfo(targetEntry) : nullptr;
+        if (const auto it = cache.find(pending.spellId); it != cache.end() && targetInfo && targetInfo->valid) {
+            uint8_t refusal = 0;
+            for (uint32_t effect : it->second.effectIds) {
+                if (effect == 127 && (targetInfo->itemFlags & 0x40000u) == 0) refusal = 0x11;
+                if (effect == 158 && (targetInfo->itemFlags & 0x20000000u) == 0) refusal = 0x10;
+            }
+            if (refusal != 0) {
+                pendingItemTarget_.reset();
+                if (auto* spells = owner_.getSpellHandler()) spells->reportLocalCastFailure(pending.spellId, refusal);
+                return;
+            }
+        }
+    }
+
     // What it does ask instead, for a disenchant: the item is gone and there is
     // no undoing it. The real client asks nothing here, and prospecting and
     // milling keep that - they are spent five at a time from a stack, and a
