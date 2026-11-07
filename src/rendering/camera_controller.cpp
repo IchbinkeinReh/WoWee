@@ -24,6 +24,7 @@
 #include "rendering/terrain_manager.hpp"
 #include "rendering/collision_geometry.hpp"
 #include "rendering/collision_facets.hpp"
+#include "rendering/collision_sweep.hpp"
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/water_renderer.hpp"
@@ -2110,6 +2111,23 @@ void CameraController::groundFollowedCharacter(float deltaTime, FrameInput& f,
                         const size_t w = facets.size() - t;
                         if (m2Renderer) m2Renderer->gatherCollisionFacets(lo, hi, facets);
                         line << " facets=" << t << "/" << w << "/" << (facets.size() - t - w);
+                        // The port's floor: the body swept down from a yard up,
+                        // against faces gathered round that path (0x0075f9d0).
+                        {
+                            const collision::Body body(targetPos + glm::vec3(0.0f, 0.0f, 1.0f),
+                                                       collision::kPlayerHalfWidth,
+                                                       collision::kPlayerHeight);
+                            glm::vec3 lo2, hi2;
+                            collision::sweepBox(body, glm::vec3(0.0f, 0.0f, -1.0f), 3.0f, lo2, hi2);
+                            std::vector<collision::Facet> near2;
+                            if (terrainManager) terrainManager->gatherCollisionFacets(lo2, hi2, near2);
+                            if (wmoRenderer) wmoRenderer->gatherCollisionFacets(lo2, hi2, near2);
+                            if (m2Renderer) m2Renderer->gatherCollisionFacets(lo2, hi2, near2);
+                            const auto down = collision::sweep(body, glm::vec3(0.0f, 0.0f, -1.0f), 3.0f, near2);
+                            line << " sweepFloor=";
+                            if (down.hit) line << (targetPos.z + 1.0f - down.allowed);
+                            else line << "-";
+                        }
                         const auto liquid = portLiquidLevelAt(targetPos);
                         line << " liquid=" << say(liquid) << " water=" << say(
                             waterRenderer ? waterRenderer->getWaterHeightAt(targetPos.x, targetPos.y)

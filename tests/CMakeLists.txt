@@ -2984,6 +2984,14 @@ wowee_add_test(test_collision_facets
     SOURCES test_collision_facets.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_collision_sweep ─────────────────────────────────────
+# The client's body sweep: the box-on-a-pyramid body, the clip and the solve
+# it is built from, and what it answers against floors, walls and slopes.
+wowee_add_test(test_collision_sweep
+    SOURCES test_collision_sweep.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_sweep.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_collision_liquid ────────────────────────────────────
 # The liquid level a swimmer's depth is read from: a building group's by
 # its tiles, and the two tests on a chunk's.
