@@ -385,12 +385,17 @@ void main() {
         // line that moved with every particle over a cave's wall. There
         // the wrap runs it down to nothing, and a wall between stops it.
         // Faded rather than cut: the wrap below leaves a light a fifth of its
-        // strength there, so a floor whose normals lean off its face ended a
-        // carried torch's light in a hard ring round the bearer (Thunder Bluff's
-        // lift, a car smoothed toward its edge) well inside the light's reach.
+        // strength there. And by whichever of the floor's face and its smoothed
+        // normal looks at the light the more: a flat floor whose vertex normals
+        // lean some eleven degrees off its face (Thunder Bluff's lift car) turned
+        // from a carried torch at half its reach, a ring round the bearer, on
+        // boards the light still fell on. A cave's facet turned from a lamp its
+        // smooth normal faces keeps it the other way round.
         float faceFade = 1.0;
+        float faceRise = d > 1e-4 ? dot(n, toLight) / d : 1.0;
         if (d > 1e-4 && n.z >= RT_NORMAL_FLOOR_Z) {
-            faceFade = smoothstep(RT_FLOOR_FACE_FADE_LOW, RT_FLOOR_FACE_FADE_HIGH, dot(faceRef, toLight) / d);
+            faceFade = smoothstep(RT_FLOOR_FACE_FADE_LOW, RT_FLOOR_FACE_FADE_HIGH,
+                                  max(dot(faceRef, toLight) / d, faceRise));
             if (faceFade <= 0.0) continue;
         }
         // Wrapped a little past the terminator: a lamp is a flame, a glass, a
@@ -410,6 +415,12 @@ void main() {
             nl = normalize(mix(faceRef, lightN, smoothstep(RT_LAMP_DETAIL_LOW, RT_LAMP_DETAIL_HIGH, rise)));
         }
         float ndl = d > 1e-4 ? (dot(nl, toLight / d) + pass.tune3.w) / (1.0 + pass.tune3.w) : 1.0;
+        // A low light on a floor is lit as the face has it at the least, the
+        // ground's falloff on any flat floor, however its normals lean.
+        if (d > 1e-4 && n.z >= RT_NORMAL_FLOOR_Z) {
+            float low = 1.0 - smoothstep(RT_LAMP_DETAIL_LOW, RT_LAMP_DETAIL_HIGH, dot(faceRef, toLight / d));
+            ndl = max(ndl, low * (faceRise + pass.tune3.w) / (1.0 + pass.tune3.w));
+        }
         if (ndl <= 0.0) continue;
         vec3 c = light.colorStart.rgb * (rtLightFalloff(d, light.colorStart.w, end) * ndl * faceFade);
         float w = max(c.r, max(c.g, c.b));
