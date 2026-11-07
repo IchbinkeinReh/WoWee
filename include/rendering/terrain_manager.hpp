@@ -1,6 +1,7 @@
 #pragma once
 
 #include "rendering/memory_report.hpp"
+#include "rendering/collision_facets.hpp"
 
 #include "core/coordinates.hpp"
 #include "core/work_batch.hpp"
@@ -304,6 +305,11 @@ public:
     /// draws, holes left out. World-space corners, three to a triangle.
     void gatherBlobShadowGround(const glm::vec3& boxMin, const glm::vec3& boxMax,
                                 std::vector<glm::vec3>& out) const;
+    /// The ground's faces for the movement sweep (0x007d8840): the same four
+    /// triangles a quad, holes left out, facing up, each one the box reaches
+    /// (collision_facets.hpp).
+    void gatherCollisionFacets(const glm::vec3& boxMin, const glm::vec3& boxMax,
+                               std::vector<collision::Facet>& out) const;
     [[nodiscard]] std::optional<float> getHeightAt(float glX, float glY) const;
 
     /// Whether a point lies in the terrain's baked shadow: the chunk's MCSH

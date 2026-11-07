@@ -2,6 +2,7 @@
 #include "rendering/depth_convention.hpp"
 #include "rendering/light_space_cull.hpp"
 #include "rendering/collision_geometry.hpp"
+#include "rendering/collision_facets.hpp"
 #include "rendering/blob_shadow.hpp"
 #include "rendering/placement_transform.hpp"
 #include "rendering/spatial_grid.hpp"
@@ -3597,6 +3598,65 @@ void WMORenderer::gatherBlobShadowGround(const glm::vec3& boxMin, const glm::vec
                 out.push_back(wa);
                 out.push_back(wb);
                 out.push_back(wc);
+            }
+        }
+    }
+}
+
+void WMORenderer::gatherCollisionFacets(const glm::vec3& boxMin, const glm::vec3& boxMax,
+                                        std::vector<collision::Facet>& out) const {
+    // 0x007cb7b0 stops taking faces at 0x2000 a query.
+    constexpr size_t kMaxFaces = 0x2000;
+    const size_t first = out.size();
+    std::vector<size_t> candidates;
+    gatherCandidates(boxMin, boxMax, candidates);
+    std::vector<uint32_t> tris;
+    for (size_t idx : candidates) {
+        const auto& instance = instances[idx];
+        // A hidden map object (a game object's, +0xc 0x20) is not there.
+        if (instance.hidden) continue;
+        if (boxMax.x < instance.worldBoundsMin.x || boxMin.x > instance.worldBoundsMax.x ||
+            boxMax.y < instance.worldBoundsMin.y || boxMin.y > instance.worldBoundsMax.y ||
+            boxMax.z < instance.worldBoundsMin.z || boxMin.z > instance.worldBoundsMax.z) {
+            continue;
+        }
+        auto it = loadedModels.find(instance.modelId);
+        if (it == loadedModels.end()) continue;
+        const ModelData& model = it->second;
+
+        glm::vec2 lo(std::numeric_limits<float>::max()), hi(std::numeric_limits<float>::lowest());
+        for (int c = 0; c < 8; ++c) {
+            const glm::vec3 corner((c & 1) ? boxMax.x : boxMin.x, (c & 2) ? boxMax.y : boxMin.y,
+                                   (c & 4) ? boxMax.z : boxMin.z);
+            const glm::vec3 local(instance.invModelMatrix * glm::vec4(corner, 1.0f));
+            lo = glm::min(lo, glm::vec2(local));
+            hi = glm::max(hi, glm::vec2(local));
+        }
+        for (size_t gi = 0; gi < model.groups.size(); ++gi) {
+            if (gi < instance.worldGroupBounds.size()) {
+                const auto& [gMin, gMax] = instance.worldGroupBounds[gi];
+                if (boxMax.x < gMin.x || boxMin.x > gMax.x || boxMax.y < gMin.y ||
+                    boxMin.y > gMax.y || boxMax.z < gMin.z || boxMin.z > gMax.z) {
+                    continue;
+                }
+            }
+            const auto& group = model.groups[gi];
+            if (!collision::groupCollides(group.groupFlags)) continue;
+            const auto& verts = group.collisionVertices;
+            const auto& indices = group.collisionIndices;
+            group.getTrianglesInRange(lo.x, lo.y, hi.x, hi.y, tris);
+            for (uint32_t triStart : tris) {
+                if (triStart + 2 >= indices.size()) continue;
+                const uint32_t tri = triStart / 3;
+                if (tri < group.triMopyFlags.size() &&
+                    !collision::buildingFaceCollides(group.triMopyFlags[tri])) {
+                    continue;
+                }
+                const glm::vec3 wa(instance.modelMatrix * glm::vec4(verts[indices[triStart]], 1.0f));
+                const glm::vec3 wb(instance.modelMatrix * glm::vec4(verts[indices[triStart + 1]], 1.0f));
+                const glm::vec3 wc(instance.modelMatrix * glm::vec4(verts[indices[triStart + 2]], 1.0f));
+                collision::appendBuildingTriangle(wa, wb, wc, boxMin, boxMax, out);
+                if (out.size() - first >= kMaxFaces) return;
             }
         }
     }

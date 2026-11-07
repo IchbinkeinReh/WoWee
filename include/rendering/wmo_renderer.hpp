@@ -5,6 +5,7 @@
 #include "audio/zone_ambience.hpp"
 #include "rendering/minimap_indoor.hpp"
 #include "rendering/collision_geometry.hpp"
+#include "rendering/collision_facets.hpp"
 #include "rendering/vk_shader.hpp"
 #include "rendering/spatial_grid.hpp"
 #include "rendering/shadow_params.hpp"
@@ -401,6 +402,12 @@ public:
     /// to a triangle.
     void gatherBlobShadowGround(const glm::vec3& boxMin, const glm::vec3& boxMax,
                                 std::vector<glm::vec3>& out) const;
+    /// The buildings' faces for the movement sweep (0x007a55e0, 0x007aef00,
+    /// 0x007cb7b0): every face of a shown instance's groups the box reaches,
+    /// whichever way it faces, but a group flagged 0x80 and a detail face
+    /// (collision_facets.hpp). At most 0x2000 a query, as the client keeps.
+    void gatherCollisionFacets(const glm::vec3& boxMin, const glm::vec3& boxMax,
+                               std::vector<collision::Facet>& out) const;
     /// With `outGroundType`, the TerrainType id of the floor found (its
     /// triangle's MOMT ground type, 0x007b39b0), or -1.
     std::optional<float> getFloorHeight(float glX, float glY, float glZ,

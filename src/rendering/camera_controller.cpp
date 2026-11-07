@@ -23,6 +23,7 @@
 #include <imgui.h>
 #include "rendering/terrain_manager.hpp"
 #include "rendering/collision_geometry.hpp"
+#include "rendering/collision_facets.hpp"
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/water_renderer.hpp"
@@ -2065,6 +2066,21 @@ void CameraController::groundFollowedCharacter(float deltaTime, FrameInput& f,
                          << " grounded="       << grounded
                          << " vz="             << verticalVelocity
                          << " lastGroundZ="    << lastGroundZ;
+                    // With the port on, how many faces it gathers round the
+                    // body here, from the ground, buildings and doodads.
+                    if (collision::portEnabled()) {
+                        const glm::vec3 pad(1.0f / 3.0f + 1.0f / 6.0f,
+                                            1.0f / 3.0f + 1.0f / 6.0f, 1.0f / 6.0f);
+                        const glm::vec3 lo = targetPos - pad;
+                        const glm::vec3 hi = targetPos + pad + glm::vec3(0.0f, 0.0f, 73.0f / 36.0f);
+                        std::vector<collision::Facet> facets;
+                        if (terrainManager) terrainManager->gatherCollisionFacets(lo, hi, facets);
+                        const size_t t = facets.size();
+                        if (wmoRenderer) wmoRenderer->gatherCollisionFacets(lo, hi, facets);
+                        const size_t w = facets.size() - t;
+                        if (m2Renderer) m2Renderer->gatherCollisionFacets(lo, hi, facets);
+                        line << " facets=" << t << "/" << w << "/" << (facets.size() - t - w);
+                    }
                     LOG_WARNING(line.str());
                     // Also to a file. The console is where this used to go
                     // and it scrolled past - asking someone to reproduce a

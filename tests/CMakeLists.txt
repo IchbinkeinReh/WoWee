@@ -2977,6 +2977,13 @@ wowee_add_test(test_stationery
     SOURCES test_stationery.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_collision_facets ────────────────────────────────────
+# The faces the movement sweep is given: which way each source's normals
+# point, which faces each source leaves out, and the client's box test.
+wowee_add_test(test_collision_facets
+    SOURCES test_collision_facets.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_polygon_triangulate ─────────────────────────────────
 # Ear clipping for quest blob outlines, which are regularly concave. The
 # check is that the triangles cover the ring's own area and no more.
