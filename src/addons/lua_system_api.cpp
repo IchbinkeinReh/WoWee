@@ -6088,8 +6088,18 @@ static int lua_IsArenaTeamCaptain(lua_State* L) {
     return 1;
 }
 
-// Closing the battlemaster's window, which is a client-side dismissal.
-static int lua_CloseBattlefield(lua_State* L) { (void)L; return 0; }
+// CloseBattlefield() (0x00549b40) - the battlemaster's window closing:
+// BATTLEFIELDS_CLOSED, and the interaction with that battlemaster let go when
+// it is the one under way (0x00518d50), the battlemaster forgotten.
+static int lua_CloseBattlefield(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!gh) return 0;
+    gh->fireAddonEvent("BATTLEFIELDS_CLOSED", {});
+    const uint64_t battlemaster = gh->battlemasterGuid();
+    if (battlemaster != 0 && gh->getInteractionObject() == battlemaster) gh->setInteractionObject(0);
+    gh->clearBattlemasterGuid();
+    return 0;
+}
 
 // CanExitVehicle(): 1 where the player's seat has Flags 0x2000000, else nil
 // (0x005fb9c0).

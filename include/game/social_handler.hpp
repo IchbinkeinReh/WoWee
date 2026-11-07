@@ -764,6 +764,9 @@ public:
     /// The arena side byte of the last in-progress SMSG_BATTLEFIELD_STATUS.
     [[nodiscard]] uint8_t battlefieldArenaFaction() const { return battlefieldArenaFaction_; }
     [[nodiscard]] uint32_t battlefieldMapId() const { return battlefieldMapId_; }
+    /// The battlemaster whose list was opened last (0x00bea568).
+    [[nodiscard]] uint64_t battlemasterGuid() const { return battlemasterGuid_; }
+    void clearBattlemasterGuid() { battlemasterGuid_ = 0; }
     /// SetArenaTeamRosterShowOffline (0x005a2e10): on a change every roster is
     /// sorted again and ARENA_TEAM_ROSTER_UPDATE raised for each that has
     /// members.
@@ -1044,6 +1047,7 @@ private:
     /// The running battle's map (0x00bea564): written by each status 3, gone
     /// only with the owning slot's empty record.
     uint32_t battlefieldMapId_ = 0;
+    uint64_t battlemasterGuid_ = 0;
     std::vector<AvailableBgInfo> availableBgs_;
     BgScoreboardData bgScoreboard_;
     std::vector<BgPlayerPosition> bgPlayerPositions_;

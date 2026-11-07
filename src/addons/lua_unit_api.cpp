@@ -1710,7 +1710,26 @@ static int lua_UnitIsControlling(lua_State* L) {
     return 1;
 }
 static int lua_UnitIsTalking(lua_State* L) { return luaReturnFalse(L); }
-static int lua_UnitInBattleground(lua_State* L) { return luaReturnNil(L); }
+// UnitInBattleground(unit) (0x0060caa0) → the unit's place in the battle's
+// scoreboard, from 0, while the player is in a battleground or an arena
+// (instance type 3 or 4, 0x00572f50); nil otherwise.
+static int lua_UnitInBattleground(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const char* uid = lua_tostring(L, 1);
+    if (!gh || !uid) return luaReturnNil(L);
+    std::string unit(uid);
+    toLowerInPlace(unit);
+    const uint64_t guid = resolveUnitGuid(gh, unit);
+    const int type = gh->currentMapInstanceType();
+    const auto* board = gh->getBgScoreboard();
+    if (guid == 0 || !board || (type != 3 && type != 4)) return luaReturnNil(L);
+    for (size_t i = 0; i < board->players.size(); ++i) {
+        if (board->players[i].guid != guid) continue;
+        lua_pushnumber(L, static_cast<double>(i));
+        return 1;
+    }
+    return luaReturnNil(L);
+}
 
 /// True for a unit in the player's own group, and for its pet. The party
 /// frames use this to decide whether a unit is one of ours at all.
@@ -1830,7 +1849,26 @@ static int lua_PetCanBeDismissed(lua_State* L) {
     return 1;
 }
 // Abandoning is a hunter's pet, and nothing here knows which kind it has yet.
-static int lua_PetCanBeAbandoned(lua_State* L) { return luaReturnFalse(L); }
+// PetCanBeAbandoned() (0x005d3780): 1 for a pet the player summoned
+// (UNIT_FIELD_SUMMONEDBY) whose UNIT_FIELD_BYTES_2 third byte carries
+// UNIT_CAN_BE_ABANDONED (0x2); nil otherwise.
+static int lua_PetCanBeAbandoned(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    auto pet = gh && gh->getPetGuid() ? gh->getEntityManager().getEntity(gh->getPetGuid()) : nullptr;
+    if (pet) {
+        const uint16_t lo = game::fieldIndex(game::UF::UNIT_FIELD_SUMMONEDBY_LO);
+        const uint16_t hi = game::fieldIndex(game::UF::UNIT_FIELD_SUMMONEDBY_HI);
+        const uint16_t b2 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_2);
+        const uint64_t summoner = lo == 0xFFFF || hi == 0xFFFF ? 0
+            : pet->getField(lo) | (static_cast<uint64_t>(pet->getField(hi)) << 32);
+        const uint32_t bytes2 = b2 == 0xFFFF ? 0 : pet->getField(b2);
+        if (summoner == gh->getPlayerGuid() && ((bytes2 >> 16) & 0x2u) != 0) {
+            lua_pushnumber(L, 1);
+            return 1;
+        }
+    }
+    return luaReturnNil(L);
+}
 
 // InCombatLockdown() (0x00511cc0): 1 while CGGameUI +0x124c is clear, nil
 // otherwise. Not the same question as being in combat: the lockdown starts

@@ -4945,6 +4945,14 @@ uint32_t GameHandler::battlefieldMapId() const {
     return socialHandler_ ? socialHandler_->battlefieldMapId() : 0;
 }
 
+uint64_t GameHandler::battlemasterGuid() const {
+    return socialHandler_ ? socialHandler_->battlemasterGuid() : 0;
+}
+
+void GameHandler::clearBattlemasterGuid() {
+    if (socialHandler_) socialHandler_->clearBattlemasterGuid();
+}
+
 void GameHandler::setArenaRosterShowOffline(bool show) {
     if (socialHandler_) socialHandler_->setArenaRosterShowOffline(show);
 }

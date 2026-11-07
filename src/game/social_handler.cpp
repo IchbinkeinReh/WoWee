@@ -4666,6 +4666,7 @@ void SocialHandler::handleBattlefieldList(network::Packet& packet) {
         // battlemaster's own list - BATTLEFIELDS_SHOW, the battlemaster the
         // interaction object (0x005496d0).
         constexpr uint32_t kRandomBattleground = 32;
+        battlemasterGuid_ = data.battlemasterGuid;  // 0x00bea568
         if (data.bgTypeId == kRandomBattleground && data.battlemasterGuid != 0) {
             owner_.setInteractionObject(data.battlemasterGuid);
             owner_.fireAddonEvent("NPC_PVPQUEUE_ANYWHERE", {});

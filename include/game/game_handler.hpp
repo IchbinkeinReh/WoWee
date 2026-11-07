@@ -2920,6 +2920,10 @@ public:
     uint8_t battlefieldArenaFaction() const;
     /// The map of the battle the last in-progress status named (0x00bea564).
     uint32_t battlefieldMapId() const;
+    /// The battlemaster whose list was opened last (0x00bea568), and letting
+    /// it go (CloseBattlefield).
+    uint64_t battlemasterGuid() const;
+    void clearBattlemasterGuid();
 
     // ---- Loot ----
     void lootTarget(uint64_t guid);
