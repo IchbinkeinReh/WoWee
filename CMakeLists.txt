@@ -976,6 +976,7 @@ set(WOWEE_SOURCES
     src/rendering/polygon_triangulate.cpp
     src/rendering/collision_sweep.cpp
     src/rendering/collision_walk.cpp
+    src/rendering/collision_fall.cpp
     src/rendering/vk_shader.cpp
     src/rendering/vk_texture.cpp
     src/rendering/vk_buffer.cpp
@@ -2770,6 +2771,7 @@ add_executable(wowee_editor
     src/rendering/polygon_triangulate.cpp
     src/rendering/collision_sweep.cpp
     src/rendering/collision_walk.cpp
+    src/rendering/collision_fall.cpp
     src/rendering/vk_shader.cpp
     src/rendering/vk_texture.cpp
     src/rendering/vk_buffer.cpp

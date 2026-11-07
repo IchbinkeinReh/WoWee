@@ -1473,6 +1473,13 @@ void noteNormalsAgainstWinding(const std::string& modelName, uint32_t against, u
 }
 }  // namespace
 
+std::string M2Renderer::debugInstanceName(uint32_t instanceId) const {
+    const auto it = instanceIndexById.find(instanceId);
+    if (it == instanceIndexById.end() || it->second >= instances.size()) return "?";
+    const auto& instance = instances[it->second];
+    return instance.cachedModel ? instance.cachedModel->name : std::string("?");
+}
+
 void M2Renderer::gatherCollisionFacets(const glm::vec3& boxMin, const glm::vec3& boxMax,
                                        std::vector<collision::Facet>& out) const {
     std::vector<size_t> candidates;
@@ -1525,6 +1532,10 @@ void M2Renderer::gatherCollisionFacets(const glm::vec3& boxMin, const glm::vec3&
             const size_t before = out.size();
             collision::appendDoodadTriangle(instance.modelMatrix, axes, a, b, c, fileNormal, boxMin,
                                             boxMax, out);
+            if (out.size() > before) {
+                out.back().kind = collision::Facet::Kind::Doodad;
+                out.back().owner = instance.id;
+            }
             if (kCollisionPortTrace && fileNormal && out.size() > before) {
                 ++taken;
                 if (glm::dot(*fileNormal, glm::cross(b - a, c - a)) < 0.0f) ++against;

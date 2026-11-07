@@ -2458,7 +2458,9 @@ void TerrainManager::gatherCollisionFacets(const glm::vec3& boxMin, const glm::v
             const glm::vec3 c = at(x0 + 0.5f, y0 + 0.5f);
             const glm::vec3 p[4] = {at(x0, y0), at(x0 + 1.0f, y0), at(x0 + 1.0f, y0 + 1.0f),
                                     at(x0, y0 + 1.0f)};
+            const size_t before = out.size();
             collision::appendTerrainQuad(c, p, boxMin, boxMax, out);
+            for (size_t i = before; i < out.size(); ++i) out[i].kind = collision::Facet::Kind::Ground;
         }
     }
 }

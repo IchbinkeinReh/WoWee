@@ -855,6 +855,8 @@ public:
     /// a floor that should have come from a lift deck and did not left no
     /// trace at all beyond "m2=-99999".
     void debugDumpFloorCandidatesAt(float glX, float glY, float glZ) const;
+    /// An instance's model name, for the collision port's debug line.
+    [[nodiscard]] std::string debugInstanceName(uint32_t instanceId) const;
     /// Logs every doodad with authored collision within `radius` of a point:
     /// name, position, rotation and scale (WOWEE_COLLISION_TRACE).
     void debugLogCollidersNear(const glm::vec3& pos, float radius) const;

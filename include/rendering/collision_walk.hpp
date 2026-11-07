@@ -59,7 +59,13 @@ struct Mover {
     bool stepping = false;            ///< +0x44 0x4000000
     float stepBaseZ = 0.0f;           ///< +0x88, where stepping began
     bool falling = false;             ///< +0x44 0x1000
+    bool fallingFar = false;          ///< +0x44 0x2000 (0x0075cf80)
+    bool safeFall = false;            ///< +0x44 0x20000000: a slow fall
     float fallStartZ = 0.0f;          ///< +0x84
+    uint32_t fallMs = 0;              ///< +0x80, time since the fall began
+    float fallV0 = 0.0f;              ///< +0xb8, its starting speed, down positive
+    float fallSpeed = 0.0f;           ///< +0x8c, how fast it goes across the ground
+    glm::vec2 fallDir{0.0f};          ///< +0x70/+0x74, and which way
 };
 
 /// The facets round a box (the gather 0x0075f0a0 makes for a sweep).
@@ -110,6 +116,10 @@ struct WalkResult {
     bool stopped = false;    ///< the move was cut short (0x009881d0)
     int groundFacet = -1;    ///< the facet it ended on, in the last sweep's set
     glm::vec3 groundNormal{0.0f, 0.0f, 1.0f};
+    /// The last facet too steep to walk that the move met, for the debug
+    /// line.
+    bool blocked = false;
+    Facet blocking;
 };
 
 /// 0x007620f0: walk `dist` yards along the ground direction `dir` (x, y)

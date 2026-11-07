@@ -367,6 +367,12 @@ public:
         if (height > 0.1f && height < 50.0f) collisionHeight_ = height;
     }
     [[nodiscard]] bool isFlyingActive() const { return flyingActive_; }
+    /// The collision port's body half-width (0x006e9570). The port keeps a
+    /// player's height at the client's default: 0x006e9570 sets it only for
+    /// a unit this client does not move.
+    void setPortHalfWidth(float r) {
+        if (r > 0.01f && r < 25.0f) portMover_.halfWidth = r;
+    }
     /// In the air on it. Space takes off, and touching real ground without
     /// climbing lands - after which the mount runs, falls and jumps like any
     /// other until it takes off again. Flight physics, the flight animations
@@ -614,6 +620,8 @@ private:
     /// the old grounding stands down.
     bool portMovedThisStep_ = false;
     collision::Mover portMover_;
+    bool portBlocked_ = false;
+    collision::Facet portBlocking_;
     float portDebugTimer_ = 0.0f;
 
     /// Put the character on the floor and publish where it ended up - the

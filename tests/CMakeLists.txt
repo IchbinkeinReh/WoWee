@@ -2992,6 +2992,16 @@ wowee_add_test(test_collision_sweep
             ${CMAKE_SOURCE_DIR}/src/rendering/collision_sweep.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_collision_fall ──────────────────────────────────────
+# The client's fall: its curve and the time read back off it, landing, a
+# jump's arc, a ceiling, a wall slid down, a walk off an edge.
+wowee_add_test(test_collision_fall
+    SOURCES test_collision_fall.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_sweep.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_walk.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_fall.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_collision_walk ──────────────────────────────────────
 # The client's ground movement on the sweep: level ground, walls met head on
 # and at an angle, steps under and over the step height, an edge, slopes
@@ -3000,6 +3010,7 @@ wowee_add_test(test_collision_walk
     SOURCES test_collision_walk.cpp
             ${CMAKE_SOURCE_DIR}/src/rendering/collision_sweep.cpp
             ${CMAKE_SOURCE_DIR}/src/rendering/collision_walk.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_fall.cpp
             ${TEST_COMMON_SOURCES})
 
 # ── test_collision_liquid ────────────────────────────────────

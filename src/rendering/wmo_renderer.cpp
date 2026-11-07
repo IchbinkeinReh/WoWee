@@ -3656,7 +3656,13 @@ void WMORenderer::gatherCollisionFacets(const glm::vec3& boxMin, const glm::vec3
                 const glm::vec3 wa(instance.modelMatrix * glm::vec4(verts[indices[triStart]], 1.0f));
                 const glm::vec3 wb(instance.modelMatrix * glm::vec4(verts[indices[triStart + 1]], 1.0f));
                 const glm::vec3 wc(instance.modelMatrix * glm::vec4(verts[indices[triStart + 2]], 1.0f));
+                const size_t before = out.size();
                 collision::appendBuildingTriangle(wa, wb, wc, boxMin, boxMax, out);
+                if (out.size() > before) {
+                    out.back().kind = collision::Facet::Kind::Building;
+                    out.back().owner = (model.wmoId << 12) | (group.groupIndex & 0xfffu);
+                    out.back().mopy = tri < group.triMopyFlags.size() ? group.triMopyFlags[tri] : 0;
+                }
                 if (out.size() - first >= kMaxFaces) return;
             }
         }

@@ -1,4 +1,5 @@
 #include "rendering/collision_walk.hpp"
+#include "rendering/collision_fall.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -31,9 +32,12 @@ float stepBudget(const Mover& m) {
 }
 
 void startFall(Mover& m) {
+    // 0x00988370(0): from rest, here; stepping (in 0xf91fffff) cleared.
     m.falling = true;
     m.stepping = false;
     m.fallStartZ = m.pos.z;
+    m.fallMs = 0;
+    m.fallV0 = 0.0f;
 }
 
 bool contactPush(const Body& body, const std::vector<int>& contacts, glm::vec3& out) {
@@ -225,9 +229,10 @@ bool tryStepUp(Mover& m, const glm::vec2& dir, const glm::vec3& n, const Facet& 
         const SweepResult down = sweeper.run(m, glm::vec3(0.0f, 0.0f, -1.0f), rise);
         m.pos.z -= down.allowed;
         const bool landsOnWalkable = down.facet >= 0 && !tooSteep(sweeper.facet(down.facet).n);
-        // Nothing under it, or walkable ground: a step. (0x007619c0, the
-        // fall carrying the unit clear past the edge, is not ported yet.)
-        if (down.facet < 0 || landsOnWalkable) {
+        // Nothing under it, walkable ground, or a fall from there that
+        // carries the unit clear past the edge (0x007619c0): a step.
+        if (down.facet < 0 || landsOnWalkable ||
+            fallsClearOfEdge(m, way, start, rise - down.allowed, sweeper)) {
             m.pos = start;
             if (!m.stepping) m.stepBaseZ = start.z;
             m.stepping = true;
@@ -309,6 +314,10 @@ WalkResult walk(Mover& m, const glm::vec2& dirIn, float dist, uint32_t ms, Sweep
         // A facet in the way.
         const Facet hit = sweeper.facet(s.facet);
         ground = s.facet;
+        if (tooSteep(hit.n)) {
+            out.blocked = true;
+            out.blocking = hit;
+        }
         out.groundNormal = hit.n;
         const float spent = (s.allowed / remaining) * timeLeft;
         remaining -= s.allowed;

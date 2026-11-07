@@ -53,6 +53,12 @@ struct Facet {
     glm::vec3 n{0.0f, 0.0f, 1.0f};
     float d = 0.0f;
     glm::vec3 v[3]{};
+    /// What it came from, as the client's owner tags (0xadba4c) keep it:
+    /// for the debug line only.
+    enum class Kind : uint8_t { None, Ground, Building, Doodad };
+    Kind kind = Kind::None;
+    uint8_t mopy = 0;       ///< a building face's MOPY
+    uint32_t owner = 0;     ///< a building's WMO id << 12 | group; a doodad's instance id
 };
 
 /// 0xa34eec: a facet is met only by a motion into its front.
