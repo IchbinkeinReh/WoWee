@@ -446,7 +446,11 @@ void CombatLogFeed::noteCombatText(const cl::Entry& e) {
         owner_.fireAddonEventValues("COMBAT_TEXT_UPDATE", args);
     };
 
-    if (e.src.guid != 0 && e.src.guid == activePlayer()) {
+    // The unit the floating combat text follows (0x00ca1380, set by
+    // CombatTextSetActiveUnit - the vehicle while the player drives one),
+    // the player where the interface has named none.
+    const uint64_t follows = owner_.combatTextUnit() ? owner_.combatTextUnit() : activePlayer();
+    if (e.src.guid != 0 && e.src.guid == follows) {
         switch (e.event) {
             case cl::Event::SpellCastSuccess:
                 // AttributesEx6 0x40 (the record's +0x28, the same word 0x00752710
@@ -471,7 +475,7 @@ void CombatLogFeed::noteCombatText(const cl::Entry& e) {
         }
     }
 
-    if (e.dst.guid == 0 || e.dst.guid != activePlayer()) return;
+    if (e.dst.guid == 0 || e.dst.guid != follows) return;
 
     switch (e.event) {
         case cl::Event::SwingDamage:

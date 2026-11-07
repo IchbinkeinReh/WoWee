@@ -2923,6 +2923,9 @@ public:
     /// The battlemaster whose list was opened last (0x00bea568), and letting
     /// it go (CloseBattlefield).
     uint64_t battlemasterGuid() const;
+    /// CombatTextSetActiveUnit's unit (0x0074d580 -> 0x00ca1380).
+    uint64_t combatTextUnit() const { return combatTextUnit_; }
+    void setCombatTextUnit(uint64_t guid) { combatTextUnit_ = guid; }
     void clearBattlemasterGuid();
 
     // ---- Loot ----
@@ -6465,6 +6468,7 @@ private:
     std::unordered_map<uint32_t, int32_t> questWatchExpiry_;
     float questWatchSweepTimer_ = 0.0f;
     std::unordered_set<uint32_t> blobQuestIds_;
+    uint64_t combatTextUnit_ = 0;
     /// Events waiting on a player name, by guid: the event and whether only a
     /// found name raises it.
     struct NameWait {

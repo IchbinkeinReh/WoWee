@@ -6589,10 +6589,19 @@ static int lua_CombatLogClearEntries(lua_State* L) {
     return 0;
 }
 
-// CombatTextSetActiveUnit(unit) - which unit the floating combat text follows.
-// It tells the client where to aim the events it already sends; the events do
-// not change, so this is recorded by the caller and nothing is needed here.
-static int lua_CombatTextSetActiveUnit(lua_State* L) { (void)L; return 0; }
+// CombatTextSetActiveUnit(unit) (0x0074d580) - which unit the floating combat
+// text follows: COMBAT_TEXT_UPDATE is raised for what happens to that unit
+// (0x0074d430), which the interface switches to the vehicle while the player
+// drives one.
+static int lua_CombatTextSetActiveUnit(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const char* uid = lua_tostring(L, 1);
+    if (!gh) return 0;
+    std::string unit(uid ? uid : "");
+    toLowerInPlace(unit);
+    gh->setCombatTextUnit(unit.empty() ? 0 : resolveUnitGuid(gh, unit));
+    return 0;
+}
 
 // GetBattlefieldMapIconScale() (0x0054c740) → what to multiply the map's icon
 // sizes by: the minimap icon scale of the running battle's Map.dbc row (1.25
