@@ -410,6 +410,18 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
                 return;
             }
         }
+        // Then a channel in progress (UNIT_CHANNEL_SPELL): no attack starts
+        // while one runs, and ERR_ATTACK_CHANNEL says so when the channel is
+        // one an attack would break (ChannelInterruptFlags 0x1000).
+        const uint16_t channelIdx = fieldIndex(UF::UNIT_CHANNEL_SPELL);
+        if (const uint32_t channel = channelIdx == 0xFFFF ? 0 : self->getField(channelIdx); channel != 0) {
+            const auto& cache = owner_.spellNameCacheRef();
+            if (const auto it = cache.find(channel); it != cache.end()) {
+                if ((it->second.channelInterruptFlags & 0x1000u) != 0)
+                    owner_.addUIError(interfaceString("ERR_ATTACK_CHANNEL", "You can't attack while channeling."));
+                return;
+            }
+        }
     }
 
     // Assist Attack: swinging at a friendly unit attacks whatever they are
