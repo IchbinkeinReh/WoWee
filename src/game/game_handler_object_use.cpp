@@ -103,6 +103,26 @@ const std::unordered_map<uint32_t, GeoBox>& displayBoxes(pipeline::AssetManager*
     return boxes;
 }
 
+/// SpellItemEnchantment.dbc's USE_SPELL (7) effects by enchantment: the
+/// spell of the first effect of that type (Effect 2-4, EffectArg 11-13).
+const std::unordered_map<uint32_t, uint32_t>& enchantUseSpells(pipeline::AssetManager* am) {
+    static std::unordered_map<uint32_t, uint32_t> spells;
+    static bool loaded = false;
+    if (loaded || !am || !am->isInitialized()) return spells;
+    loaded = true;
+    auto dbc = am->loadDBC("SpellItemEnchantment.dbc");
+    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() < 14) return spells;
+    for (uint32_t r = 0; r < dbc->getRecordCount(); ++r) {
+        for (uint32_t k = 0; k < 3; ++k) {
+            if (dbc->getUInt32(r, 2 + k) == 7) {
+                spells[dbc->getUInt32(r, 0)] = dbc->getUInt32(r, 11 + k);
+                break;
+            }
+        }
+    }
+    return spells;
+}
+
 std::string lockTypeName(pipeline::AssetManager* am, uint32_t lockType) {
     if (auto dbc = am && am->isInitialized() ? am->loadDBC("LockType.dbc") : nullptr; dbc && dbc->isLoaded()) {
         for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
@@ -194,7 +214,8 @@ go_use::Opening GameHandler::gameObjectOpening(const GameObjectFacts& f) {
         return static_cast<int32_t>(std::lround(v));
     };
     const auto carries = [&](uint32_t itemId) { return findCarriedItem(itemId).has_value(); };
-    // 0x00707c60(0x21): the key's own use spell with an OPEN_LOCK effect.
+    // 0x00707c60(0x21): the key's own use spell with an OPEN_LOCK effect,
+    // else the spell of the first of its enchantments that is used (type 7).
     const auto keySpell = [&](uint32_t itemId) -> uint32_t {
         const ItemQueryResponseData* item = getItemInfo(itemId);
         if (!item || !item->valid) {
@@ -207,6 +228,14 @@ go_use::Opening GameHandler::gameObjectOpening(const GameObjectFacts& f) {
             if (!effects(sp.spellId, e, m)) continue;
             for (const uint32_t effect : e)
                 if (effect == go_use::kEffectOpenLock) return sp.spellId;
+        }
+        const auto key = findCarriedItem(itemId);
+        const auto online = key ? onlineItems_.find(key->guid) : onlineItems_.end();
+        if (online == onlineItems_.end()) return 0;
+        const auto& useSpells = enchantUseSpells(services_.assetManager);
+        for (const uint32_t enchant : online->second.enchantIds) {
+            if (const auto it = useSpells.find(enchant); enchant != 0 && it != useSpells.end() && it->second != 0)
+                return it->second;
         }
         return 0;
     };
@@ -238,27 +267,119 @@ bool GameHandler::gameObjectInReach(const GameObject& go, const GameObjectFacts&
     const glm::vec3 offset = core::coords::canonicalToServer(
         glm::vec3(movementInfo.x - go.getX(), movementInfo.y - go.getY(), movementInfo.z - go.getZ()));
     if (f.type == 8) return glm::dot(offset, offset) <= reach * reach;
-    const auto& boxes = displayBoxes(services_.assetManager);
-    const auto box = boxes.find(go.getDisplayId());
-    if (box == boxes.end()) return glm::dot(offset, offset) <= reach * reach;
+    // The box: a door's is its model's for the animation it plays
+    // (0x008266b0, 0x0082ced0); any other's its display's GeoBox, or its
+    // model's own bounds where the display has no row (0x00824f00,
+    // 0x004f5e20) - and with no model loaded, none, so not in reach.
+    std::optional<std::pair<glm::vec3, glm::vec3>> box;
+    if (f.type == 0) {
+        if (gameObjectBoundsCallback_) box = gameObjectBoundsCallback_(go.getGuid(), true);
+    } else {
+        const auto& boxes = displayBoxes(services_.assetManager);
+        if (const auto row = boxes.find(go.getDisplayId()); row != boxes.end())
+            box = std::make_pair(row->second.min, row->second.max);
+        else if (gameObjectBoundsCallback_)
+            box = gameObjectBoundsCallback_(go.getGuid(), false);
+    }
+    if (!box) return false;
+    const float scale = gameObjectScale(go);
+    const glm::vec3 local = glm::inverse(gameObjectRotation(go)) * offset;
+    const glm::vec3 lo = box->first * scale - glm::vec3(reach);
+    const glm::vec3 hi = box->second * scale + glm::vec3(reach);
+    return local.x >= lo.x && local.y >= lo.y && local.z >= lo.z &&
+           local.x <= hi.x && local.y <= hi.y && local.z <= hi.z;
+}
+
+float GameHandler::gameObjectScale(const GameObject& go) const {
     float scale = 1.0f;
     if (const uint16_t i = fieldIndex(UF::OBJECT_FIELD_SCALE_X); i != 0xFFFF) {
         const uint32_t bits = go.getField(i);
         std::memcpy(&scale, &bits, sizeof(float));
         if (!(scale > 0.0f)) scale = 1.0f;
     }
+    return scale;
+}
+
+glm::quat GameHandler::gameObjectRotation(const GameObject& go) const {
     namespace gor = game_object_rotation;
-    const glm::quat rotation = go.getRotation()
-        ? glm::normalize(*go.getRotation())
-        : gor::fromFacing(core::coords::canonicalToServerYaw(go.getOrientation()));
-    const glm::vec3 local = glm::inverse(rotation) * offset;
-    const glm::vec3 lo = box->second.min * scale - glm::vec3(reach);
-    const glm::vec3 hi = box->second.max * scale + glm::vec3(reach);
-    return local.x >= lo.x && local.y >= lo.y && local.z >= lo.z &&
-           local.x <= hi.x && local.y <= hi.y && local.z <= hi.z;
+    return go.getRotation() ? glm::normalize(*go.getRotation())
+                            : gor::fromFacing(core::coords::canonicalToServerYaw(go.getOrientation()));
+}
+
+bool GameHandler::playerInForm() const {
+    // 0x00721ca0: a form, and not one SpellShapeshiftForm flags 1 (a stance).
+    const uint8_t form = getShapeshiftFormId();
+    if (form == 0) return false;
+    const auto* row = shapeshiftFormRow(form);
+    return !row || (row->flags & 0x1u) == 0;
+}
+
+bool GameHandler::chairSeatInReach(const GameObject& go, const GameObjectFacts& f) const {
+    // 0x00711db0: within the handler's reach of one of the chair's seats -
+    // 0x00710240's count from its data for a chair, one for a barber chair
+    // (0x008c8de0) - placed by the chair's place, turn and scale (0x0070c700).
+    const uint32_t seats = f.type == 32 ? 1u : gameObjectData(f, go_use::Field::ChairSlots);
+    const float reach = go_use::handlerFor(f.type).reach;
+    const glm::vec3 offset = core::coords::canonicalToServer(
+        glm::vec3(movementInfo.x - go.getX(), movementInfo.y - go.getY(), movementInfo.z - go.getZ()));
+    const glm::quat rotation = gameObjectRotation(go);
+    const float scale = gameObjectScale(go);
+    for (uint32_t i = 0; i < seats; ++i) {
+        const glm::vec3 seat = rotation * glm::vec3(0.0f, go_use::seatOffset(seats, i) * scale, 0.0f);
+        const glm::vec3 d = offset - seat;
+        if (glm::dot(d, d) < reach * reach) return true;
+    }
+    return false;
+}
+
+bool GameHandler::ritualAllows(const GameObject& go, const GameObjectFacts& f) {
+    // 0x00712080: a ritual whose spell may not be cast in combat
+    // (Attributes 0x10000000) is refused in combat (0x0071afb0: UNIT_FLAG
+    // 0x800, or a unit being fought) unless an aura lets that go (0x0072aaf0:
+    // aura 262 on the spell); and one a player made only for that player and
+    // those grouped with it (0x00718ca0, 0x00718d70). Neither says why.
+    const uint32_t spellId = gameObjectData(f, go_use::Field::RitualSpell);
+    loadSpellNameCache();
+    if (const auto it = spellNameCache_.find(spellId); it != spellNameCache_.end() &&
+                                                       (it->second.attr & 0x10000000u) != 0) {
+        auto me = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(getPlayerGuid()));
+        const bool fighting = (me && (me->getUnitFlags() & 0x800u) != 0) || isAutoAttacking();
+        if (fighting && !(spellHandler_ && spellHandler_->playerAuraAffects(262, spellId))) return false;
+    }
+    uint64_t creator = 0;
+    if (const uint16_t i = fieldIndex(UF::GAMEOBJECT_FIELD_CREATED_BY); i != 0xFFFF)
+        creator = (static_cast<uint64_t>(go.getField(static_cast<uint16_t>(i + 1))) << 32) | go.getField(i);
+    if (creator != 0 && (creator >> 60) == 0) {
+        if (!getEntityManager().getEntity(creator)) return false;
+        if (creator == getPlayerGuid()) return true;
+        for (const auto& m : getPartyData().members)
+            if (m.guid == creator) return true;
+        return false;
+    }
+    return true;
 }
 
 uint16_t GameHandler::gameObjectRefusal(const GameObject& go, const GameObjectFacts& f, std::string& arg) {
+    namespace e = go_use::err;
+    // The ritual's own checks come first (0x00712080), then 0x00711470.
+    if (f.type == 18 && !ritualAllows(go, f)) return go_use::kRefusedSilently;
+    if (const uint16_t generic = gameObjectGenericRefusal(go, f, arg); generic != 0) return generic;
+    // A chair wants the player at one of its seats (0x00711db0), a barber
+    // chair the player looking as itself and in no form (0x00711eb0).
+    if ((f.type == 7 || f.type == 32) && !chairSeatInReach(go, f)) return e::kTooFar;
+    if (f.type == 32) {
+        auto me = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(getPlayerGuid()));
+        const auto field = [&](UF which) {
+            const uint16_t i = fieldIndex(which);
+            return me && i != 0xFFFF ? me->getField(i) : 0u;
+        };
+        if (field(UF::UNIT_FIELD_DISPLAYID) != field(UF::UNIT_FIELD_NATIVEDISPLAYID) || playerInForm())
+            return e::kNotWhileShapeshifted;
+    }
+    return 0;
+}
+
+uint16_t GameHandler::gameObjectGenericRefusal(const GameObject& go, const GameObjectFacts& f, std::string& arg) {
     namespace e = go_use::err;
     // 0x00711470, in its order.
     if (isPlayerDead() || isPlayerGhost()) return e::kPlayerDead;
@@ -278,8 +399,8 @@ uint16_t GameHandler::gameObjectRefusal(const GameObject& go, const GameObjectFa
                                                          addons::storedCVarValue("autoDismount", "1") != "0",
                                                          addons::storedCVarValue("autoDismountFlying", "0") != "0");
         if (isMounted() && !gameObjectAllowsMounted(f) && !getsDown) return e::kNotWhileMounted;
-        if (const uint8_t form = getShapeshiftFormId(); form != 0) {
-            const auto* row = shapeshiftFormRow(form);
+        if (playerInForm()) {
+            const auto* row = shapeshiftFormRow(getShapeshiftFormId());
             if ((!row || (row->flags & 0x8u) == 0) && !wouldAutoUnshift()) return e::kNotWhileShapeshifted;
         }
     }
@@ -307,25 +428,22 @@ bool GameHandler::useGameObjectByLock(const GameObject& go, const GameObjectFact
             // out of a form that may not use it (SpellShapeshiftForm flag 8),
             // and CMSG_GAMEOBJ_USE.
             if (isMounted() && !isTaxiMountActive() && !gameObjectAllowsMounted(f)) dismount();
-            if (const uint8_t form = getShapeshiftFormId(); form != 0) {
-                const auto* row = shapeshiftFormRow(form);
+            if (playerInForm()) {
+                const auto* row = shapeshiftFormRow(getShapeshiftFormId());
                 if (!row || (row->flags & 0x8u) == 0) leaveShapeshiftForm();
             }
             socket->send(GameObjectUsePacket::build(guid));
             return true;
         }
-        // The opening spell, cast at the object - from the key, where a key
-        // opens it.
+        // The opening spell, cast at the object through the cast entry's own
+        // checks (0x0080da40 -> 0x0080cce0, then 0x0080bc80) - from the key,
+        // where a key opens it.
+        if (!spellHandler_) return false;
         if (o.keyItem != 0) {
-            if (const auto key = findCarriedItem(o.keyItem)) {
-                socket->send(UseItemPacket::build(key->bag, key->slot, key->guid, o.spell, 0, 0, guid));
-                return true;
-            }
-            return false;
+            const auto key = findCarriedItem(o.keyItem);
+            return key && spellHandler_->castAtGameObject(o.spell, guid, key->guid, key->bag, key->slot);
         }
-        socket->send(getPacketParsers() ? getPacketParsers()->buildCastGameObjectSpell(o.spell, guid, 0)
-                                        : CastSpellPacket::buildGameObjectTarget(o.spell, guid, 0));
-        return true;
+        return spellHandler_->castAtGameObject(o.spell, guid);
     }
     // Locked: what the first slot wanted.
     const go_use::LockRow& lock = *gameObjectLock(f);

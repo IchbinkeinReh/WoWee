@@ -107,15 +107,6 @@ bool containsAnyTerm(const std::string& haystack, const char* const* terms, size
 // hole's loot, harvesting the school in one right-click.
 constexpr uint32_t kGoTypeFishingHole = 25;
 
-bool isLootContainerName(const std::string& name) {
-    const std::string lower = lowerCopy(name);
-    static constexpr const char* kContainerTerms[] = {
-        "chest", "lockbox", "strongbox", "coffer", "cache", "bundle",
-        "sack", "bag", "crate", "barrel", "basket", "oats"
-    };
-    return containsAnyTerm(lower, kContainerTerms,
-                           sizeof(kContainerTerms) / sizeof(kContainerTerms[0]));
-}
 
 uint32_t gatherSpellForGameObject(const GameObjectQueryResponseData* info, const std::string& name) {
     if (info && info->type != 3) return 0; // GAMEOBJECT_TYPE_CHEST
@@ -607,8 +598,6 @@ void GameHandler::selectCharacter(uint64_t characterGuid) {
     }
     if (combatHandler_) combatHandler_->resetAllCombatState();
     // resetCastState() already called inside resetAllState() above
-    pendingGameObjectInteractGuid_ = 0;
-    lastInteractedGoGuid_ = 0;
     playerDead_ = false;
     releasedSpirit_ = false;
     // Back to "nothing has been decided", which is what the original's own
@@ -3790,42 +3779,6 @@ void GameHandler::closeLoot() {
     if (inventoryHandler_) inventoryHandler_->closeLoot();
 }
 
-void GameHandler::scheduleGameObjectLootOpen(uint64_t guid, float delaySeconds, uint8_t attempts) {
-    if (guid == 0) return;
-    clearPendingGameObjectLootOpen(guid);
-    PendingLootOpen pending;
-    pending.guid = guid;
-    pending.timer = std::max(0.0f, delaySeconds);
-    pending.remainingAttempts = std::max<uint8_t>(attempts, 1);
-    pendingGameObjectLootOpens_.push_back(pending);
-}
-
-bool GameHandler::isFishingHoleGameObject(uint64_t guid) const {
-    if (guid == 0 || !entityController_) return false;
-    auto entity = entityController_->getEntityManager().getEntity(guid);
-    if (!entity || entity->getType() != ObjectType::GAMEOBJECT) return false;
-    const auto* info = getCachedGameObjectInfo(
-        std::static_pointer_cast<GameObject>(entity)->getEntry());
-    return info && info->type == kGoTypeFishingHole;
-}
-
-void GameHandler::clearPendingGameObjectLootOpen(uint64_t guid) {
-    pendingGameObjectLootOpens_.erase(
-        std::remove_if(pendingGameObjectLootOpens_.begin(), pendingGameObjectLootOpens_.end(),
-                       [guid](const PendingLootOpen& pending) {
-                           return guid == 0 || pending.guid == guid;
-                       }),
-        pendingGameObjectLootOpens_.end());
-}
-
-bool GameHandler::hasPendingGameObjectLootOpen(uint64_t guid) const {
-    if (guid == 0) return false;
-    return std::any_of(pendingGameObjectLootOpens_.begin(), pendingGameObjectLootOpens_.end(),
-                       [guid](const PendingLootOpen& pending) {
-                           return pending.guid == guid;
-                       });
-}
-
 bool GameHandler::isGatherGameObject(uint64_t guid) const {
     if (guid == 0 || !entityController_) return false;
     auto entity = entityController_->getEntityManager().getEntity(guid);
@@ -3834,25 +3787,6 @@ bool GameHandler::isGatherGameObject(uint64_t guid) const {
     auto go = std::static_pointer_cast<GameObject>(entity);
     const GameObjectQueryResponseData* goInfo = getCachedGameObjectInfo(go->getEntry());
     return gatherSpellForGameObject(goInfo, go->getName()) != 0;
-}
-
-void GameHandler::despawnGameObjectLocally(uint64_t guid) {
-    if (guid == 0 || !entityController_) return;
-
-    auto& entityManager = entityController_->getEntityManager();
-    auto entity = entityManager.getEntity(guid);
-    if (!entity || entity->getType() != ObjectType::GAMEOBJECT) return;
-
-    if (gameObjectDespawnCallback_) gameObjectDespawnCallback_(guid);
-    entityManager.removeEntity(guid);
-
-    clearPendingGameObjectLootOpen(guid);
-    if (lastInteractedGoGuid_ == guid) lastInteractedGoGuid_ = 0;
-    if (pendingGameObjectInteractGuid_ == guid) pendingGameObjectInteractGuid_ = 0;
-    if (getTargetGuid() == guid) setTargetGuidRaw(0);
-    tabCycleStale = true;
-
-    LOG_INFO("Locally despawned game object: 0x", std::hex, guid, std::dec);
 }
 
 void GameHandler::lootMasterGive(uint8_t lootSlot, uint64_t targetGuid) {
@@ -4034,63 +3968,7 @@ void GameHandler::queueAreaSpiritHeal() {
 }
 
 void GameHandler::interactWithGameObject(uint64_t guid) {
-    LOG_DEBUG("[GO-DIAG] interactWithGameObject called: guid=0x", std::hex, guid, std::dec);
-    if (guid == 0) { LOG_DEBUG("[GO-DIAG] BLOCKED: guid==0"); return; }
-    if (!isInWorld()) { LOG_DEBUG("[GO-DIAG] BLOCKED: not in world"); return; }
-    // Do not overlap an actual spell cast. Reeling an owned fishing bobber is
-    // the deliberate exception: the fishing spell remains channelled while the
-    // bobber is in the water, and using the hooked bobber is what ends it.
-    const bool reelingHookedFishingBobber = guid == hookedFishingBobberGuid_;
-    if (!reelingHookedFishingBobber && spellHandler_ && spellHandler_->isCasting() &&
-        spellHandler_->getCurrentCastSpellId() != 0) {
-        LOG_DEBUG("[GO-DIAG] BLOCKED: already casting spellId=", spellHandler_->getCurrentCastSpellId());
-        return;
-    }
-    // In the air, a click is not an order to get off. A node or a chest
-    // clicked by accident from a flying mount dismounted the player there and
-    // then, and they fell out of the sky. The same rule casting follows: with
-    // Auto Dismount in Flight off - the default - it is refused, and the
-    // player stays up.
-    if (isMounted() && !isTaxiMountActive() && isPlayerFlying() &&
-        addons::storedCVarValue("autoDismountFlying", "0") == "0") {
-        addUIError("You can't do that while flying.");
-        return;
-    }
-    // Always clear melee intent before GO interactions.
-    stopAutoAttack();
-    // And get off the mount. Opening a chest, gathering a node or using very
-    // nearly anything else puts a player on foot in WoW, and staying mounted
-    // through it both looks wrong and leaves the server refusing the actions
-    // that check for it.
-    //
-    // Only for something within reach. The server lets an object be used from
-    // five yards or so - ten for a few kinds - and refuses anything further,
-    // so a click on one across the valley cost the mount and did nothing.
-    //
-    // Not on a taxi: the flight's mount is not the player's to dismiss, and
-    // there is nothing to interact with mid-flight anyway.
-    if (isMounted() && !isTaxiMountActive()) {
-        constexpr float kGameObjectReach = 12.0f;
-        bool inReach = true;
-        if (auto entity = getEntityManager().getEntity(guid)) {
-            const float dx = movementInfo.x - entity->getX();
-            const float dy = movementInfo.y - entity->getY();
-            const float dz = movementInfo.z - entity->getZ();
-            inReach = dx * dx + dy * dy + dz * dz <= kGameObjectReach * kGameObjectReach;
-        }
-        if (inReach) {
-            LOG_DEBUG("[GO-DIAG] dismounting before interacting");
-            dismount();
-        }
-    }
-    // Set the pending GO guid so that:
-    // 1. cancelCast() won't send CMSG_CANCEL_CAST for GO-triggered casts
-    //    (e.g., "Opening" on a quest chest) - without this, any movement
-    //    during the cast cancels it server-side and quest credit is lost.
-    // 2. The cast-completion fallback in update() can call
-    //    performGameObjectInteractionNow after the cast timer expires.
-    // 3. isGameObjectInteractionCasting() returns true during GO casts.
-    pendingGameObjectInteractGuid_ = guid;
+    if (guid == 0 || !isInWorld()) return;
     performGameObjectInteractionNow(guid);
 }
 
@@ -4138,19 +4016,6 @@ bool GameHandler::meetingStoneAllowsUse(const GameObjectQueryResponseData* goInf
 void GameHandler::performGameObjectInteractionNow(uint64_t guid) {
     if (guid == 0) return;
     if (!isInWorld()) return;
-    // Rate-limit to prevent spamming the server
-    static uint64_t lastInteractGuid = 0;
-    static std::chrono::steady_clock::time_point lastInteractTime{};
-    auto now = std::chrono::steady_clock::now();
-    // Keep duplicate suppression, but allow quick retry clicks.
-    constexpr int64_t minRepeatMs = 150;
-    if (guid == lastInteractGuid &&
-        std::chrono::duration_cast<std::chrono::milliseconds>(now - lastInteractTime).count() < minRepeatMs) {
-        return;
-    }
-    lastInteractGuid = guid;
-    lastInteractTime = now;
-
     auto entity = entityController_->getEntityManager().getEntity(guid);
     if (!entity || entity->getType() != ObjectType::GAMEOBJECT) return;
     auto go = std::static_pointer_cast<GameObject>(entity);
@@ -4175,93 +4040,28 @@ void GameHandler::performGameObjectInteractionNow(uint64_t guid) {
     {
         std::string arg;
         if (const uint16_t refusal = gameObjectRefusal(*go, facts, arg); refusal != 0) {
-            sayGameObjectError(refusal, arg.empty() ? std::vector<std::string>{} : std::vector<std::string>{arg});
+            if (refusal != go_use::kRefusedSilently)
+                sayGameObjectError(refusal, arg.empty() ? std::vector<std::string>{} : std::vector<std::string>{arg});
             return;
         }
     }
     if (goType == 23 && !meetingStoneAllowsUse(goInfo)) return;
-    if (goType == 5 && !goName.empty()) {
-        std::string lower = lowerCopy(goName);
-        if (lower.rfind("doodad_", 0) != 0) {
-            addSystemChatMessage(goName);
-        }
-    }
-    {
-        // Face object and send heartbeat before use so strict servers don't require
-        // a nudge movement to accept interaction.
-        float dx = entity->getX() - movementInfo.x;
-        float dy = entity->getY() - movementInfo.y;
-        // Stop movement before interacting - servers may reject GO use or
-        // immediately cancel the resulting spell cast if the player is moving.
-        const uint32_t moveFlags = movementInfo.flags;
-        const bool isMoving = (moveFlags & 0x00000001u) || // FORWARD
-                              (moveFlags & 0x00000002u) || // BACKWARD
-                              (moveFlags & 0x00000004u) || // STRAFE_LEFT
-                              (moveFlags & 0x00000008u);   // STRAFE_RIGHT
-        if (isMoving) {
-            movementInfo.flags &= ~0x0000000Fu; // clear directional movement flags
-            sendMovement(Opcode::MSG_MOVE_STOP);
-        }
-        if (std::abs(dx) > 0.01f || std::abs(dy) > 0.01f) {
-            faceCanonicalYaw(std::atan2(-dy, dx));
-        }
-        sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
-    }
-
-    // The types whose handler has a use of its own: the mailbox (19), the
-    // guild vault (34) and the sign (9); a GOOBER with a page of its own in
-    // data[7] reads it besides. Every other type uses 0x007116c0.
-    const bool metadataPending = (goInfo == nullptr);
-    const bool isMailbox = goType == 19;
-    const bool isGuildBank = goType == 34;
-    const bool isReadable = goType == 9 || (goType == 10 && goInfo && goInfo->hasData && goInfo->data[7] != 0);
-    bool chestLike = goType == 3;
-    if (!chestLike && !goName.empty()) {
-        // Query metadata can arrive after the player clicks. Recognize common
-        // quest-loot containers by name so objects such as Sack of Oats still
-        // receive the delayed CMSG_LOOT sequence used by type-3 chests.
-        chestLike = isLootContainerName(goName);
-    }
-
-    LOG_INFO("GO interaction: guid=0x", std::hex, guid, std::dec,
-             " entry=", goEntry, " type=", goType,
-             " name='", goName, "' chestLike=", chestLike,
-             " metadataPending=", metadataPending, " isMailbox=", isMailbox,
-             " lockId=", gameObjectData(facts, go_use::Field::Lock));
-
-    bool used = true;
-    if (isMailbox || isGuildBank || goType == 9) {
-        socket->send(GameObjectUsePacket::build(guid));
-    } else {
-        // What the lock asks for: the opening spell cast at it, the key used
-        // on it, a plain CMSG_GAMEOBJ_USE, or the refusal of a lock nothing
-        // the player has opens.
-        used = useGameObjectByLock(*go, facts);
-    }
-    if (used) {
-        lastInteractedGoGuid_ = guid;
-        if (guid == hookedFishingBobberGuid_) {
-            LOG_WARNING("Fishing bobber reel sent: guid=0x", std::hex, guid, std::dec);
-            hookedFishingBobberGuid_ = 0;
-        }
-        if (chestLike || metadataPending) {
-            // Don't send CMSG_LOOT immediately - the server may start a timed cast
-            // (e.g., "Opening") and the GO isn't lootable until the cast finishes.
-            // Queue a delayed open: if a server-side gather cast starts, update()
-            // defers this until the cast is over; if no cast packet arrives, retry
-            // a few times so resource nodes do not fail after one early CMSG_LOOT.
-            scheduleGameObjectLootOpen(guid, 0.35f, 8);
-        } else if (isMailbox) {
-            openMailbox(guid);
-        } else if (isGuildBank) {
-            // Guild vault: the bank opens via CMSG_GUILD_BANKER_ACTIVATE, which
-            // openGuildBank() sends.
-            openGuildBank(guid);
-        } else if (isReadable) {
-            // A sign, a plaque, a gravestone: the client reads it, the page
-            // id being in the object's own data.
-            if (entityController_) entityController_->showGameObjectPageText(guid);
-        }
+    // The types whose handler has a use of its own (0x0070c850, 0x0070c9d0,
+    // 0x0070ecb0): the sign reads its page into the item text frame, the
+    // mailbox opens the mail frame and the guild vault asks the server
+    // (CMSG_GUILD_BANKER_ACTIVATE) - none sends CMSG_GAMEOBJ_USE. Every other
+    // type uses 0x007116c0.
+    LOG_INFO("GO interaction: guid=0x", std::hex, guid, std::dec, " entry=", goEntry, " type=", goType,
+             " name='", goName, "' lockId=", gameObjectData(facts, go_use::Field::Lock));
+    if (goType == 9) {
+        if (entityController_) entityController_->showGameObjectPageText(guid);
+    } else if (goType == 19) {
+        openMailbox(guid);
+    } else if (goType == 34) {
+        openGuildBank(guid);
+    } else if (useGameObjectByLock(*go, facts)) {
+        // A GOOBER's page comes back from the server (SMSG_GAMEOBJECT_PAGETEXT).
+        if (guid == hookedFishingBobberGuid_) hookedFishingBobberGuid_ = 0;
     }
 
     // 0x0070f680 reports every use it let through, whatever the use did

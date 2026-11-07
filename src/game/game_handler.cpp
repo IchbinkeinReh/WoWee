@@ -712,60 +712,6 @@ void GameHandler::updateTimers(float deltaTime) {
         }
     }
 
-    for (auto it = pendingGameObjectLootRetries_.begin(); it != pendingGameObjectLootRetries_.end();) {
-        it->timer -= deltaTime;
-        if (it->timer <= 0.0f) {
-            if (it->remainingRetries > 0 && isInWorld()) {
-                // Keep server-side position/facing fresh before retrying GO use.
-                sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
-                auto usePacket = GameObjectUsePacket::build(it->guid);
-                socket->send(usePacket);
-                if (it->sendLoot) {
-                    auto lootPacket = LootPacket::build(it->guid);
-                    socket->send(lootPacket);
-                }
-                --it->remainingRetries;
-                it->timer = 0.20f;
-            }
-        }
-        if (it->remainingRetries == 0) {
-            it = pendingGameObjectLootRetries_.erase(it);
-        } else {
-            ++it;
-        }
-    }
-
-    for (auto it = pendingGameObjectLootOpens_.begin(); it != pendingGameObjectLootOpens_.end();) {
-        it->timer -= deltaTime;
-        if (it->timer <= 0.0f) {
-            if (isInWorld()) {
-                // Avoid sending CMSG_LOOT while a timed cast is active (e.g. gathering).
-                // handleSpellGo will trigger loot after the cast completes.
-                if (spellHandler_ && spellHandler_->isCasting() && spellHandler_->getCurrentCastSpellId() != 0) {
-                    it->timer = 0.20f;
-                    ++it;
-                    continue;
-                }
-                // The click may have landed before the object's metadata did.
-                // A fishing school is never opened by looting it.
-                if (isFishingHoleGameObject(it->guid)) {
-                    it = pendingGameObjectLootOpens_.erase(it);
-                    continue;
-                }
-                lootTarget(it->guid);
-            }
-            if (it->remainingAttempts > 1) {
-                --it->remainingAttempts;
-                it->timer = 0.75f;
-                ++it;
-            } else {
-                it = pendingGameObjectLootOpens_.erase(it);
-            }
-        } else {
-            ++it;
-        }
-    }
-
     // Periodically re-query names for players whose initial CMSG_NAME_QUERY was
     // lost (server didn't respond) or whose entity was recreated while the query
     // was still pending. Runs every 5 seconds to keep overhead minimal.
@@ -964,29 +910,9 @@ void GameHandler::update(float deltaTime) {
             checkAreaTriggers();
         }
 
-        // Cancel GO interaction cast if player enters combat (auto-attack).
-        if (pendingGameObjectInteractGuid_ != 0 &&
-            combatHandler_ && (combatHandler_->isAutoAttacking() || combatHandler_->hasAutoAttackIntent())) {
-            pendingGameObjectInteractGuid_ = 0;
-            if (spellHandler_) spellHandler_->resetCastState();
-            // A cast that fails says so on the red line only, in the
-            // interface's words (SPELL_FAILED_INTERRUPTED) - not also as an
-            // English "Interrupted." in chat.
-            addUIError(interfaceString("SPELL_FAILED_INTERRUPTED", "Interrupted"));
-        }
         // Check if client-side cast timer expired (tick-down is in SpellHandler::updateTimers).
-        // Three paths depending on whether this is a GO interaction or craft-queue cast:
         if (spellHandler_ && spellHandler_->isCasting() && spellHandler_->getCastTimeRemaining() <= 0.0f) {
-            if (pendingGameObjectInteractGuid_ != 0) {
-                // GO interaction cast: do NOT call resetCastState() here. The server
-                // sends SMSG_SPELL_GO when the cast completes server-side (~50-200ms
-                // after the client timer expires due to float precision/frame timing).
-                // handleSpellGo checks `wasInTimedCast = casting_ && spellId == currentCastSpellId_`
-                // - if we clear those fields now, wasInTimedCast is false and the loot
-                // path (CMSG_LOOT via lastInteractedGoGuid_) never fires.
-                // Let the cast bar sit at 100% until SMSG_SPELL_GO arrives to clean up.
-                pendingGameObjectInteractGuid_ = 0;
-            } else if (spellHandler_->getCraftQueueRemaining() > 0 && craftCastGoGraceSec_ < 2.0f) {
+            if (spellHandler_->getCraftQueueRemaining() > 0 && craftCastGoGraceSec_ < 2.0f) {
                 // Craft queue cast: SMSG_SPELL_GO is what decrements the queue and
                 // re-casts the next item, and it races this client-side timer.
                 // resetCastState() here would wipe the queue mid-run ("Create All"
@@ -995,7 +921,7 @@ void GameHandler::update(float deltaTime) {
                 // without a result packet, e.g. reagents gone).
                 craftCastGoGraceSec_ += deltaTime;
             } else {
-                // Regular cast with no GO pending: clean up immediately.
+                // Any other cast: clean up immediately.
                 spellHandler_->resetCastState();
             }
         } else {

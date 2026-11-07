@@ -59,6 +59,13 @@ public:
 
     // --- Public API (delegated from GameHandler) ---
     void castSpell(uint32_t spellId, uint64_t targetGuid = 0);
+    /// 0x0080da40 then 0x0080bc80: the spell cast at a game object, through
+    /// the cast entry's own checks (0x0080cce0) - from the item in (bag,
+    /// slot) where `itemGuid` names one. False where a check refused it.
+    bool castAtGameObject(uint32_t spellId, uint64_t gameObjectGuid, uint64_t itemGuid = 0,
+                          uint8_t bag = 0xFF, uint8_t slot = 0);
+    /// 0x007283a0: an aura of the player's of the type, on, for the spell.
+    bool playerAuraAffects(uint32_t auraType, uint32_t spellId) const;
     /// The player's cast of a spell at an item (CMSG_CAST_SPELL, item target).
     void castSpellAtItem(uint32_t spellId, uint64_t itemGuid) { sendPlayerCast(spellId, 0, itemGuid); }
     /// A pet's spell cast by the pet itself (0x005d4210 -> 0x0080cce0,
@@ -203,7 +210,6 @@ public:
     [[nodiscard]] bool isCasting() const { return casting_ || restorationActive_; }
     [[nodiscard]] bool isChanneling() const { return casting_ ? castIsChannel_ : restorationActive_; }
     [[nodiscard]] bool isRestoring() const { return restorationActive_; }
-    [[nodiscard]] bool isGameObjectInteractionCasting() const;
     [[nodiscard]] uint32_t getCurrentCastSpellId() const {
         return casting_ ? currentCastSpellId_ : restorationSpellId_;
     }
@@ -776,8 +782,6 @@ private:
     int32_t powerCost(uint32_t spellId, const Entity& player, int depth) const;
     /// SMSG_SPELL_START / SMSG_SPELL_GO's cast flag 0x800: the caster's power.
     void castPowerSaid(uint64_t casterUnit, uint32_t spellId, uint32_t power, bool go);
-    /// 0x007283a0: an aura of the player's of the type, on, for the spell.
-    bool playerAuraAffects(uint32_t auraType, uint32_t spellId) const;
     /// 0x00812410's SupercededBySpell for the player's race and class, 0 for none.
     uint32_t supersededBy(uint32_t spellId) const;
     void loadAreaGroups() const;

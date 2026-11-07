@@ -183,6 +183,16 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
         entitySpawner_.applyGameObjectInteraction(guid, open);
     });
 
+    // A game object's model box, for the reach a use is judged by.
+    gameHandler_.setGameObjectBoundsCallback(
+        [this](uint64_t guid, bool playingSequence) -> std::optional<std::pair<glm::vec3, glm::vec3>> {
+            const auto& gos = entitySpawner_.getGameObjectInstances();
+            const auto it = gos.find(guid);
+            auto* m2 = renderer_.getM2Renderer();
+            if (it == gos.end() || it->second.isWmo || !m2) return std::nullopt;
+            return m2->localBounds(it->second.instanceId, playingSequence);
+        });
+
     // Creature move callback (online mode) - update creature positions
     gameHandler_.setCreatureMoveCallback([this](uint64_t guid, float x, float y, float z, uint32_t durationMs) {
         if (!renderer_.getCharacterRenderer()) return;

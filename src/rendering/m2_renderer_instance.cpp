@@ -314,6 +314,22 @@ std::optional<uint32_t> M2Renderer::soleSequenceId(uint32_t instanceId) const {
     return inst.cachedModel->sequences[0].id;
 }
 
+std::optional<std::pair<glm::vec3, glm::vec3>> M2Renderer::localBounds(uint32_t instanceId,
+                                                                       bool playingSequence) const {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return std::nullopt;
+    const auto& inst = instances[idxIt->second];
+    const M2ModelGPU* model = inst.cachedModel;
+    if (!model) return std::nullopt;
+    if (playingSequence) {
+        const int i = inst.currentSequenceIndex;
+        if (i < 0 || static_cast<size_t>(i) >= model->sequences.size()) return std::nullopt;
+        return std::make_pair(model->sequences[static_cast<size_t>(i)].boundMin,
+                              model->sequences[static_cast<size_t>(i)].boundMax);
+    }
+    return std::make_pair(model->boundMin, model->boundMax);
+}
+
 bool M2Renderer::getAttachmentTransform(uint32_t instanceId, uint32_t attachmentId, glm::mat4& out) const {
     auto idxIt = instanceIndexById.find(instanceId);
     if (idxIt == instanceIndexById.end()) return false;

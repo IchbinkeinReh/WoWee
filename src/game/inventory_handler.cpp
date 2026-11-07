@@ -1373,18 +1373,8 @@ void InventoryHandler::handleLootResponse(network::Packet& packet) {
     }
     if (!LootResponseParser::parse(packet, currentLoot_)) return;
     if (currentLoot_.lootGuid == pendingLootGuid_) pendingLootGuid_ = 0;
-    const bool hasLoot = !currentLoot_.items.empty() || currentLoot_.gold > 0;
     LOG_INFO("SMSG_LOOT_RESPONSE: guid=0x", std::hex, currentLoot_.lootGuid, std::dec,
              " items=", currentLoot_.items.size(), " gold=", currentLoot_.gold);
-    auto& lastInteractedGoGuid = owner_.lastInteractedGoGuidRef();
-    const bool isLastInteractedGoLoot =
-        lastInteractedGoGuid != 0 && currentLoot_.lootGuid == lastInteractedGoGuid;
-    if (!hasLoot && isLastInteractedGoLoot &&
-        ((owner_.isCasting() && owner_.getCurrentCastSpellId() != 0) ||
-         owner_.hasPendingGameObjectLootOpen(currentLoot_.lootGuid))) {
-        LOG_DEBUG("Ignoring empty SMSG_LOOT_RESPONSE during pending gather/open");
-        return;
-    }
     lootWindowOpen_ = true;
     if (owner_.addonEventCallbackRef()) {
         // Carries whether this loot is being taken automatically. The loot
@@ -1432,10 +1422,6 @@ void InventoryHandler::handleLootResponse(network::Packet& packet) {
             }
         }
     }
-    if (currentLoot_.lootGuid == lastInteractedGoGuid) {
-        lastInteractedGoGuid = 0;
-    }
-    owner_.clearPendingGameObjectLootOpen(currentLoot_.lootGuid);
     auto& localLoot = localLootState_[currentLoot_.lootGuid];
     localLoot.data = currentLoot_;
 
@@ -1467,18 +1453,12 @@ void InventoryHandler::handleLootResponse(network::Packet& packet) {
         }
     }
 
-    // Game-object quest containers are single-action pickups in normal play.
-    // Autostore their returned items even when general creature auto-loot is off;
-    // otherwise right-click opens server loot but never grants the objective item.
-    const bool autoStoreGameObjectLoot = isLastInteractedGoLoot;
-    if ((autoLoot_ || autoStoreGameObjectLoot) &&
-        owner_.getState() == WorldState::IN_WORLD && owner_.getSocket() &&
+    if (autoLoot_ && owner_.getState() == WorldState::IN_WORLD && owner_.getSocket() &&
         !localLoot.itemAutoLootSent) {
         for (const auto& item : currentLoot_.items) {
             LOG_INFO("Autostoring loot slot=", static_cast<int>(item.slotIndex),
                      " item=", item.itemId, " count=", item.count,
-                     " fromGuid=0x", std::hex, currentLoot_.lootGuid, std::dec,
-                     " gameObject=", autoStoreGameObjectLoot);
+                     " fromGuid=0x", std::hex, currentLoot_.lootGuid, std::dec);
             auto pkt = AutostoreLootItemPacket::build(item.slotIndex);
             owner_.getSocket()->send(pkt);
         }

@@ -118,3 +118,15 @@ TEST_CASE("go_use: an effect's value from the caster's skill", "[go_use]") {
     // MaxLevel caps the skill at five times it.
     CHECK(effectValue(-1, 5.0f, 300, 0, 20) == 100.0f);
 }
+
+TEST_CASE("go_use: a chair's seats are a row a yard apart, centred", "[go_use]") {
+    CHECK(seatOffset(1, 0) == 0.0f);
+    CHECK(seatOffset(2, 0) == -0.5f);
+    CHECK(seatOffset(2, 1) == 0.5f);
+    CHECK(seatOffset(3, 0) == -1.0f);
+    CHECK(seatOffset(3, 2) == 1.0f);
+    CHECK(dataIndex(7, Field::ChairSlots) == 0);
+    CHECK(dataIndex(18, Field::RitualSpell) == 1);
+    CHECK(dataIndex(3, Field::ChairSlots) == -1);
+    CHECK(handlerFor(7).reach == 3.0f);
+}

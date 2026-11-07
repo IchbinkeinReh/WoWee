@@ -4,7 +4,6 @@
 #include "addons/lua_api_registrations.hpp"
 #include "game/cast_failure_error.hpp"
 #include "game/protocol_constants.hpp"
-#include "game/gather_spells.hpp"
 #include "game/spell_classification.hpp"
 #include "game/ground_target.hpp"
 #include "game/spell_target_kind.hpp"
@@ -92,8 +91,6 @@ std::string formatSkillRankUp(const std::string& format, const std::string& skil
 
 namespace {
 constexpr uint8_t kSpellFailedNotReady = 67;
-constexpr uint8_t kSpellFailedAlreadyOpen = 8;
-constexpr uint8_t kSpellFailedChestInUse = 25;
 constexpr uint8_t kSpellFailedTryAgain = 132;
 constexpr uint8_t kSpellFailedItemNotReady = 45;
 constexpr uint8_t kSpellFailedMoving = 51;
@@ -346,14 +343,6 @@ std::string castFailureMessage(const GameHandler& owner, uint32_t spellId,
     }
     const CastFailureLine line = castFailureLine(owner, spellId, result);
     return chat_channels::luaFormat(interfaceString(line.key, line.enUS), {text});
-}
-
-bool isGatherSpellId(uint32_t spellId) {
-    return isGatherRank(spellId);
-}
-
-bool shouldDespawnGatherTarget(uint8_t result) {
-    return result == kSpellFailedAlreadyOpen || result == kSpellFailedChestInUse;
 }
 
 } // namespace
@@ -911,10 +900,6 @@ void SpellHandler::registerOpcodes(DispatchTable& table) {
 // ============================================================
 // Public API
 // ============================================================
-
-bool SpellHandler::isGameObjectInteractionCasting() const {
-    return casting_ && currentCastSpellId_ == 0 && owner_.pendingGameObjectInteractGuidRef() != 0;
-}
 
 bool SpellHandler::isTargetCasting() const {
     return getUnitCastState(owner_.getTargetGuid()) != nullptr;
@@ -1957,6 +1942,36 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
         return;
     }
     castAtUnits(spellId, owner_.getPlayerGuid(), targetGuid);
+}
+
+bool SpellHandler::castAtGameObject(uint32_t spellId, uint64_t gameObjectGuid, uint64_t itemGuid,
+                                    uint8_t bag, uint8_t slot) {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return false;
+    // 0x0080cce0, as castSpell: nothing from a seat that holds the caster;
+    // the repeating spell cast again turns the repeat off; another one stops
+    // a wand's.
+    if (owner_.heldBySeat(owner_.getPlayerGuid())) return false;
+    if (owner_.isAutoRepeating() && spellId == owner_.autoRepeatSpellId()) {
+        owner_.stopAutoRepeat(true);
+        return false;
+    }
+    if (owner_.isAutoRepeating() && (owner_.getSpellAttributesEx2(spellId) & 0x20u) == 0) {
+        const auto rit = owner_.spellNameCacheRef().find(owner_.autoRepeatSpellId());
+        if (rit != owner_.spellNameCacheRef().end() && rit->second.equippedItemClass == 2 &&
+            (rit->second.equippedItemSubClassMask & 0x80000u) != 0)
+            owner_.stopAutoRepeat(true);
+    }
+    if (restorationActive_) cancelCast();
+    cancelGroundTargeting();
+    if (!castChecksPass(spellId, 0)) return false;
+    if (itemGuid != 0) {
+        owner_.getSocket()->send(UseItemPacket::build(bag, slot, itemGuid, spellId, 0, 0, gameObjectGuid));
+    } else {
+        owner_.getSocket()->send(owner_.getPacketParsers()
+                                     ? owner_.getPacketParsers()->buildCastGameObjectSpell(spellId, gameObjectGuid, 0)
+                                     : CastSpellPacket::buildGameObjectTarget(spellId, gameObjectGuid, 0));
+    }
+    return true;
 }
 
 uint64_t SpellHandler::enchantWeapon(uint32_t spellId) const {
@@ -3040,9 +3055,7 @@ void SpellHandler::cancelCast() {
         return;
     }
     if (!casting_) return;
-    // GameObject interaction cast is client-side timing only.
-    if (owner_.pendingGameObjectInteractGuidRef() == 0 &&
-        owner_.getState() == WorldState::IN_WORLD && owner_.getSocket() &&
+    if (owner_.getState() == WorldState::IN_WORLD && owner_.getSocket() &&
         currentCastSpellId_ != 0) {
         auto packet = CancelCastPacket::build(currentCastSpellId_);
         owner_.getSocket()->send(packet);
@@ -3050,8 +3063,6 @@ void SpellHandler::cancelCast() {
     // 0x00806200 on the running cast: it ends (0x007fecc0).
     if (currentCastSpellId_ != 0)
         owner_.castVisuals().ended(owner_.getPlayerGuid(), runningCastCount_, currentCastSpellId_);
-    owner_.pendingGameObjectInteractGuidRef() = 0;
-    owner_.lastInteractedGoGuidRef() = 0;
     casting_ = false;
     castIsChannel_ = false;
     currentCastSpellId_ = 0;
@@ -3788,8 +3799,6 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
                     " selectedTarget=0x", std::hex, owner_.getTargetGuid(), std::dec);
     }
 
-    const uint64_t gatherGoGuid = owner_.lastInteractedGoGuidRef();
-    const bool gatherCast = gatherGoGuid != 0 && isGatherSpellId(data.spellId);
     // 0x00809af0 -> 0x00808200: the player's cast of that count ends
     // (0x007fecc0); auto-repeating, its auto-repeat bit goes for any result
     // but 0x1b (0x00807560, only while 0x00d397d0 - the player's
@@ -3812,8 +3821,6 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
         castIsChannel_ = false;
         currentCastSpellId_ = 0;
         castTimeRemaining_ = 0.0f;
-        owner_.lastInteractedGoGuidRef() = 0;
-        owner_.pendingGameObjectInteractGuidRef() = 0;
         craftQueueSpellId_ = 0;
         craftQueueRemaining_ = 0;
         // Remove lingering precast visual effects
@@ -3863,9 +3870,6 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     // A gathering cast fails in the same words as any other: the lines this
     // put in their place ("Failed.", "Already in use.", "Requires Mining
     // skill N.") are not the interface's.
-    if (gatherCast && shouldDespawnGatherTarget(data.result)) {
-        owner_.despawnGameObjectLocally(gatherGoGuid);
-    }
     // Not at all while it repeats the last failure within three seconds
     // (cast_failure::RepeatHold): no line, no speech, no log.
     const auto holdNowMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -3978,12 +3982,6 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
 
     // Player's own cast
     if (data.casterUnit == owner_.getPlayerGuid() && data.castTime > 0 && !rangedWeaponAttack) {
-        // Cancel pending GO retries
-        owner_.pendingGameObjectLootRetriesRef().erase(
-            std::remove_if(owner_.pendingGameObjectLootRetriesRef().begin(), owner_.pendingGameObjectLootRetriesRef().end(),
-                [](const GameHandler::PendingLootRetry&) { return true; }),
-            owner_.pendingGameObjectLootRetriesRef().end());
-
         casting_ = true;
         castIsChannel_ = false;
         currentCastSpellId_ = data.spellId;
@@ -4269,28 +4267,12 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
             }
         }
 
-        LOG_DEBUG("[GO-DIAG] SPELL_GO: spellId=", data.spellId,
-                    " casting=", casting_, " currentCast=", currentCastSpellId_,
-                    " wasInTimedCast=", wasInTimedCast,
-                    " lastGoGuid=0x", std::hex, owner_.lastInteractedGoGuidRef(),
-                    " pendingGoGuid=0x", owner_.pendingGameObjectInteractGuidRef(), std::dec);
-
         casting_ = false;
         castIsChannel_ = false;
         currentCastSpellId_ = 0;
         castTimeRemaining_ = 0.0f;
         castTimeTotal_ = 0.0f;
 
-        // Gather node looting: re-send CMSG_LOOT now that the cast completed.
-        if (wasInTimedCast && owner_.lastInteractedGoGuidRef() != 0) {
-            LOG_DEBUG("[GO-DIAG] Sending CMSG_LOOT for GO 0x", std::hex,
-                        owner_.lastInteractedGoGuidRef(), std::dec);
-            owner_.lootTarget(owner_.lastInteractedGoGuidRef());
-        }
-        // Clear the GO interaction guard so future cancelCast() calls work
-        // normally. Without this, pendingGameObjectInteractGuid_ stays stale
-        // and suppresses CMSG_CANCEL_CAST for ALL subsequent spell casts.
-        owner_.pendingGameObjectInteractGuidRef() = 0;
 
         if (owner_.spellCastAnimCallbackRef() && !rangedWeaponAttack && !restorationLoop) {
             owner_.spellCastAnimCallbackRef()(owner_.getPlayerGuid(), false, false, SpellCastType::OMNI);
@@ -5427,7 +5409,7 @@ void SpellHandler::stopCasting() {
         return;
     }
 
-    if (owner_.pendingGameObjectInteractGuidRef() == 0 && currentCastSpellId_ != 0) {
+    if (currentCastSpellId_ != 0) {
         auto packet = CancelCastPacket::build(currentCastSpellId_);
         owner_.getSocket()->send(packet);
     }
@@ -5437,8 +5419,6 @@ void SpellHandler::stopCasting() {
     currentCastSpellId_ = 0;
     castTimeRemaining_ = 0.0f;
     castTimeTotal_ = 0.0f;
-    owner_.pendingGameObjectInteractGuidRef() = 0;
-    owner_.lastInteractedGoGuidRef() = 0;
     craftQueueSpellId_ = 0;
     craftQueueRemaining_ = 0;
 
@@ -5457,13 +5437,6 @@ void SpellHandler::resetCastState() {
     castTimeTotal_ = 0.0f;  // Must match castTimeRemaining_ to keep getCastProgress() == 0
     craftQueueSpellId_ = 0;
     craftQueueRemaining_ = 0;
-    owner_.pendingGameObjectInteractGuidRef() = 0;
-    // lastInteractedGoGuid_ is intentionally NOT cleared here - it must survive
-    // until the server delivers SMSG_LOOT_RESPONSE after the cast completes.
-    // InventoryHandler::handleLootResponse() clears it once loot has opened
-    // (src/game/inventory_handler.cpp). Previously it was cleared here, which
-    // meant the client-side cast-timer fallback destroyed the guid before
-    // SMSG_SPELL_GO arrived, preventing loot from opening on quest chests.
 }
 
 void SpellHandler::resetAllState() {
@@ -6808,11 +6781,7 @@ void SpellHandler::handleCastResult(network::Packet& packet) {
                             " facing=", movement.orientation,
                             " selectedTarget=0x", std::hex, owner_.getTargetGuid(), std::dec);
             }
-            const uint64_t gatherGoGuid = owner_.lastInteractedGoGuidRef();
-            const bool gatherCast = gatherGoGuid != 0 && isGatherSpellId(castResultSpellId);
             casting_ = false; castIsChannel_ = false; currentCastSpellId_ = 0; castTimeRemaining_ = 0.0f;
-            owner_.lastInteractedGoGuidRef() = 0;
-            owner_.pendingGameObjectInteractGuidRef() = 0;
             craftQueueSpellId_ = 0; craftQueueRemaining_ = 0;
             int playerPowerType = -1;
             if (auto pe = owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
@@ -6828,9 +6797,6 @@ void SpellHandler::handleCastResult(network::Packet& packet) {
             std::string errMsg = castFailureMessage(owner_, castResultSpellId,
                                                      castResult, playerPowerType,
                                                      castResultMiscArg, castResultMiscArg2);
-            if (gatherCast && shouldDespawnGatherTarget(castResult)) {
-                owner_.despawnGameObjectLocally(gatherGoGuid);
-            }
             showPlayerCastFailure(castResultSpellId, castResult, errMsg);
             if (owner_.spellCastFailedCallbackRef()) owner_.spellCastFailedCallbackRef()(castResultSpellId);
                 owner_.fireAddonEvent("UNIT_SPELLCAST_FAILED", spellcastArgs("player", castResultSpellId));
@@ -7145,10 +7111,8 @@ void SpellHandler::handleSpellFailure(network::Packet& packet) {
         }
     }
     if (failGuid == owner_.getPlayerGuid() || failGuid == 0) {
-        // Player's own cast failed - clear gather-node loot target so the
-        // next timed cast doesn't try to loot a stale interrupted gather node.
+        // Player's own cast failed.
         casting_ = false; castIsChannel_ = false; currentCastSpellId_ = 0;
-        owner_.lastInteractedGoGuidRef() = 0;
         craftQueueSpellId_ = 0;
         craftQueueRemaining_ = 0;
         // Remove lingering precast visual effects

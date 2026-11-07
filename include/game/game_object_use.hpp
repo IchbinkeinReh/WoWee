@@ -44,7 +44,7 @@ constexpr uint16_t kPreventedByMechanic = 0x200;
 /// The data fields 0x00746190 is asked for, by the id the client gives
 /// each: the lock (4), "usable mounted" (0x5b), "not in combat" (0x3e) and
 /// "not while immune" (0x39).
-enum class Field : uint8_t { Lock, Mounted, NoCombat, NoImmune };
+enum class Field : uint8_t { Lock, Mounted, NoCombat, NoImmune, ChairSlots, RitualSpell };
 
 /// Which of a type's 24 data fields holds that field (the table at
 /// 0x00a36f34), -1 where the type has none.
@@ -67,6 +67,10 @@ enum class Field : uint8_t { Lock, Mounted, NoCombat, NoImmune };
             }
         case Field::NoCombat:
             return goType == 3 ? 12 : -1;
+        case Field::ChairSlots:   // 0xb, a chair's seats (0x00710240)
+            return goType == 7 ? 0 : -1;
+        case Field::RitualSpell:  // 0xa, the ritual's spell (0x00712080)
+            return goType == 18 ? 1 : -1;
         case Field::NoImmune:
             switch (goType) {
                 case 0: return 3;
@@ -79,6 +83,16 @@ enum class Field : uint8_t { Lock, Mounted, NoCombat, NoImmune };
             }
     }
     return -1;
+}
+
+/// A refusal 0x00711470's overrides return without naming an error (the
+/// ritual's, 0x00712080): nothing is said.
+constexpr uint16_t kRefusedSilently = 0xFFFF;
+
+/// A chair's seats in its own frame, before its scale (0x0070c700 ->
+/// 0x004f55f0): a row along y a yard apart, centred on the chair.
+[[nodiscard]] constexpr float seatOffset(uint32_t seats, uint32_t i) {
+    return -((static_cast<float>(seats) - 1.0f) * 0.5f) + static_cast<float>(i);
 }
 
 /// The type handler's reach and the error a locked object refuses with

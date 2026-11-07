@@ -723,6 +723,10 @@ public:
     /// and that animation is the opening. Undercity's lift doors are the case:
     /// one bone, one sequence, id 0, 3333ms.
     [[nodiscard]] std::optional<uint32_t> soleSequenceId(uint32_t instanceId) const;
+    /// An instance's box in its model's own frame: the model's bounds (the
+    /// M2 header's), or the bounds of the sequence it is playing (0x0082ced0).
+    [[nodiscard]] std::optional<std::pair<glm::vec3, glm::vec3>> localBounds(uint32_t instanceId,
+                                                                           bool playingSequence) const;
     /// The world frame of an instance's attachment point (0x00831410): its
     /// bone as posed now, offset to the point. False where the model has none.
     bool getAttachmentTransform(uint32_t instanceId, uint32_t attachmentId, glm::mat4& out) const;

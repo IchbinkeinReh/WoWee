@@ -1687,9 +1687,6 @@ public:
     bool isCasting() const { return spellHandler_ ? spellHandler_->isCasting() : false; }
     bool isChanneling() const { return spellHandler_ ? spellHandler_->isChanneling() : false; }
     bool isRestoring() const { return spellHandler_ ? spellHandler_->isRestoring() : false; }
-    bool isGameObjectInteractionCasting() const {
-        return spellHandler_ ? spellHandler_->isGameObjectInteractionCasting() : false;
-    }
     uint32_t getCurrentCastSpellId() const { return spellHandler_ ? spellHandler_->getCurrentCastSpellId() : 0; }
     float getCastProgress() const { return spellHandler_ ? spellHandler_->getCastProgress() : 0.0f; }
     float getCastTimeRemaining() const { return spellHandler_ ? spellHandler_->getCastTimeRemaining() : 0.0f; }
@@ -2265,6 +2262,13 @@ public:
     /// 0x0070bac0).
     using GameObjectInteractionCallback = std::function<void(uint64_t guid, bool open)>;
     void setGameObjectInteractionCallback(GameObjectInteractionCallback cb) { gameObjectInteractionCallback_ = std::move(cb); }
+    /// A game object's model box in its own frame, as the renderer has it:
+    /// the model's bounds, or with `playingSequence` those of the animation it
+    /// plays (0x00824f00/0x004f5e20, 0x008266b0/0x0082ced0). Nothing where no
+    /// M2 model of it is loaded.
+    using GameObjectBoundsCallback =
+        std::function<std::optional<std::pair<glm::vec3, glm::vec3>>(uint64_t guid, bool playingSequence)>;
+    void setGameObjectBoundsCallback(GameObjectBoundsCallback cb) { gameObjectBoundsCallback_ = std::move(cb); }
 
     // Faction hostility map (populated from FactionTemplate.dbc by Application)
     void setFactionHostileMap(std::unordered_map<uint32_t, bool> map) { factionHostileMap_ = std::move(map); }
@@ -2940,17 +2944,8 @@ public:
     void lootMoney();
     void cancelTempEnchantment(uint8_t handIndex);
     void closeLoot();
-    void scheduleGameObjectLootOpen(uint64_t guid, float delaySeconds = 0.35f, uint8_t attempts = 1);
 
-    /// True once the object is known to be a fishing school. A click on one
-    /// before its query response arrives still schedules a loot open, and by the
-    /// time that fires the metadata has usually landed - so the deferred open
-    /// re-checks rather than harvesting a school the player never fished.
-    bool isFishingHoleGameObject(uint64_t guid) const;
-    void clearPendingGameObjectLootOpen(uint64_t guid);
-    bool hasPendingGameObjectLootOpen(uint64_t guid) const;
     bool isGatherGameObject(uint64_t guid) const;
-    void despawnGameObjectLocally(uint64_t guid);
     void activateSpiritHealer(uint64_t npcGuid);
     bool isLootWindowOpen() const;
     const LootResponseData& getCurrentLoot() const;
@@ -5070,7 +5065,6 @@ public:
     auto& pendingMoneyDeltaRef() { return pendingMoneyDelta_; }
     auto& pendingMoneyDeltaTimerRef() { return pendingMoneyDeltaTimer_; }
     auto& pendingAutoInspectRef() { return pendingAutoInspect_; }
-    auto& pendingGameObjectLootRetriesRef() { return pendingGameObjectLootRetries_; }
     auto& tempEnchantTimersRef() { return tempEnchantTimers_; }
     auto& localLootStateRef() { return localLootState_; }
     static const auto& getTempEnchantSlotNames() { return kTempEnchantSlotNames; }
@@ -5274,8 +5268,6 @@ public:
     auto& activeTotemSlotsRef() { return activeTotemSlots_; }
     /// The per-unit aura lists SpellHandler keeps, which the interface reads.
     std::unordered_map<uint64_t, std::vector<AuraSlot>>& unitAurasCacheRef();
-    auto& lastInteractedGoGuidRef() { return lastInteractedGoGuid_; }
-    auto& pendingGameObjectInteractGuidRef() { return pendingGameObjectInteractGuid_; }
 
     // ── Tab Cycling ──────────────────────────────────────────────────
     auto& tabCycleIndexRef() { return tabCycleIndex; }
@@ -5484,12 +5476,6 @@ public:
         float radius = 0;
         float boxLength = 0, boxWidth = 0, boxHeight = 0;
         float boxYaw = 0;
-    };
-    struct PendingLootRetry {
-        uint64_t guid = 0;
-        float timer = 0.0f;
-        uint8_t remainingRetries = 0;
-        bool sendLoot = false;
     };
     struct SpellReagent { uint32_t itemId = 0; uint32_t count = 0; };
     struct SpellNameEntry {
@@ -6227,6 +6213,7 @@ private:
     GameObjectCustomAnimCallback gameObjectCustomAnimCallback_;
     GameObjectStateCallback gameObjectStateCallback_;
     GameObjectInteractionCallback gameObjectInteractionCallback_;
+    GameObjectBoundsCallback gameObjectBoundsCallback_;
     uint64_t interactionObject_ = 0;
     uint64_t tabardVendorGuid_ = 0;            ///< 0xc0e518
     bool tabardSavePending_ = false;           ///< 0xc9eacc
@@ -6264,7 +6251,6 @@ private:
     /// The offset of a canonical place from the player over the map, turned
     /// with it (0x0057eb80, 0x0057efe0).
     [[nodiscard]] glm::vec2 minimapPingOffset(float wowX, float wowY) const;
-    uint64_t pendingGameObjectInteractGuid_ = 0;
     // Owned fishing bobber whose bite animation has fired. Keeping this explicit
     // lets the UI target/reel it even while GAMEOBJECT_QUERY metadata is pending.
     uint64_t hookedFishingBobberGuid_ = 0;
@@ -6426,16 +6412,6 @@ private:
         bool itemAutoLootSent = false;
     };
     std::unordered_map<uint64_t, LocalLootState> localLootState_;
-    std::vector<PendingLootRetry> pendingGameObjectLootRetries_;
-    struct PendingLootOpen {
-        uint64_t guid = 0;
-        float timer = 0.0f;
-        uint8_t remainingAttempts = 1;
-    };
-    std::vector<PendingLootOpen> pendingGameObjectLootOpens_;
-    // Tracks the last GO we sent CMSG_GAMEOBJ_USE to; used in handleSpellGo
-    // to send CMSG_LOOT after a gather cast (mining/herbalism) completes.
-    uint64_t lastInteractedGoGuid_ = 0;
     std::unordered_map<uint64_t, float> recentLootMoneyAnnounceCooldowns_;
     uint64_t playerMoneyCopper_ = 0;
     uint32_t playerHonorPoints_ = 0;
@@ -6470,7 +6446,7 @@ private:
     GossipMessageData currentGossip;
 
     void performGameObjectInteractionNow(uint64_t guid);
-    // Using a game object as the client does (game_object_use.cpp): what of
+    // Using a game object as the client does (game_handler_object_use.cpp): what of
     // the object the use reads, its type's data fields, its Lock.dbc row,
     // what opens it (0x0070f160), the refusal (0x00711470, 0 for none),
     // whether the player is in its reach (0x0070fa70), and the use
@@ -6495,6 +6471,12 @@ private:
     bool gameObjectAllowsMounted(const GameObjectFacts& f) const;
     bool gameObjectInReach(const GameObject& go, const GameObjectFacts& f);
     uint16_t gameObjectRefusal(const GameObject& go, const GameObjectFacts& f, std::string& arg);
+    uint16_t gameObjectGenericRefusal(const GameObject& go, const GameObjectFacts& f, std::string& arg);
+    float gameObjectScale(const GameObject& go) const;
+    glm::quat gameObjectRotation(const GameObject& go) const;
+    bool playerInForm() const;
+    bool chairSeatInReach(const GameObject& go, const GameObjectFacts& f) const;
+    bool ritualAllows(const GameObject& go, const GameObjectFacts& f);
     void sayGameObjectError(uint16_t id, const std::vector<std::string>& args);
     bool useGameObjectByLock(const GameObject& go, const GameObjectFacts& f);
 
