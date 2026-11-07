@@ -91,6 +91,7 @@
     "SpellClassSet": 56
   },
   "ChrRaces": {
+    "ClientFileString": 11,
     "CreatureType": 8,
     "Flags": 1,
     "ID": 0,

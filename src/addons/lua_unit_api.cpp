@@ -2600,6 +2600,45 @@ static int lua_SetPortraitTexture(lua_State* L) {
          unit == "focus" || unit == "npc" || unit == "questnpc" ||
          (unit.rfind("party", 0) == 0 && unit.size() == 6 &&
           unit[5] >= '1' && unit[5] <= '4'));
+    // A player the client has no object for - a party or raid member out of
+    // sight - gets the race's stand-in face (0x006113e0 -> 0x00618180):
+    // Interface\CharacterFrame\TemporaryPortrait-<Male|Female>-<race>, the
+    // race named by ChrRaces' ClientFileString and both read off the name
+    // cache's record. Without one the texture is emptied and the record asked
+    // for; its answer raises UNIT_PORTRAIT_UPDATE for the unit (0x00608540
+    // -> 0x00618110).
+    auto* gh = getGameHandler(L);
+    const uint64_t guid = gh ? resolveUnitGuid(gh, unit) : 0;
+    const bool playerGuid = guid != 0 && ((guid >> 32) & 0xF0000000u) == 0;
+    if (playerGuid && !gh->getEntityManager().getEntity(guid)) {
+        tree->setPortraitUnit(id, std::string());
+        auto* w = tree->get(id);
+        if (!w) return 0;
+        w->solidColor = false;
+        w->texturePath.clear();
+        const uint8_t race = gh->lookupPlayerRace(guid);
+        const uint8_t gender = gh->lookupPlayerGender(guid);
+        if (race == 0 || gender > 1) {
+            gh->askNameThen(guid, "portrait", [gh, guid](bool found, const std::string&) {
+                if (!found) return;
+                for (const auto& token : gh->unitTokensForGuid(guid))
+                    gh->fireAddonEvent("UNIT_PORTRAIT_UPDATE", {token});
+            });
+            return 0;
+        }
+        auto* am = gh->services().assetManager;
+        auto races = am && am->isInitialized() ? am->loadDBC("ChrRaces.dbc") : nullptr;
+        const auto* layouts = pipeline::getActiveDBCLayout();
+        const auto* l = layouts ? layouts->getLayout("ChrRaces") : nullptr;
+        const uint32_t fileCol = l ? l->tryField("ClientFileString") : 0xFFFFFFFFu;
+        const int32_t row = races && races->isLoaded() ? races->findRecordById(race) : -1;
+        if (row >= 0 && fileCol != 0xFFFFFFFFu) {
+            w->texturePath = std::string("Interface\\CharacterFrame\\TemporaryPortrait-") +
+                             (gender == 1 ? "Female" : "Male") + "-" +
+                             races->getString(static_cast<uint32_t>(row), fileCol);
+        }
+        return 0;
+    }
     tree->setPortraitUnit(id, answerable ? unit : std::string());
     return 0;
 }
