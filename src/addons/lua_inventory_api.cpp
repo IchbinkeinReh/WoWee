@@ -5015,6 +5015,46 @@ static int lua_GiveMasterLoot(lua_State* L) {
     return 0;
 }
 
+/// The sender of a letter as the inbox names it (0x0056d960). A player's
+/// (types 0 and 5) is the name cache's, asked for when it has none - the
+/// answer raises MAIL_INBOX_UPDATE and UPDATE_PENDING_MAIL when it found the
+/// name (0x0056d460) - except a letter on the GM stationery (61), which is
+/// GM_EMAIL_NAME. An auction house's is its AuctionHouse.dbc name, a
+/// creature's and an object's their cached names. Empty - nil - otherwise.
+static std::string mailSenderName(game::GameHandler* gh, const game::MailMessage& mail) {
+    switch (mail.messageType) {
+        case 0:
+        case 5: {
+            if (mail.stationeryId == 61) return game::interfaceString("GM_EMAIL_NAME", "Game Master");
+            if (!mail.senderName.empty()) return mail.senderName;
+            if (mail.senderGuid == 0) return {};
+            const std::string name = gh->lookupName(mail.senderGuid);
+            if (!name.empty()) return name;
+            gh->askNameThen(mail.senderGuid, "mail sender", [gh](bool found, const std::string&) {
+                if (!found) return;
+                gh->fireAddonEvent("MAIL_INBOX_UPDATE", {});
+                gh->fireAddonEvent("UPDATE_PENDING_MAIL", {});
+            });
+            return {};
+        }
+        case 2: {
+            auto* am = gh->services().assetManager;
+            auto dbc = am && am->isInitialized() ? am->loadDBC("AuctionHouse.dbc") : nullptr;
+            const int32_t row = dbc && dbc->isLoaded() ? dbc->findRecordById(mail.senderEntry) : -1;
+            return row >= 0 ? dbc->getString(static_cast<uint32_t>(row), 4) : std::string();
+        }
+        case 3:
+        case 4: {
+            // The same lookup WoWee keeps for these, which asks after an
+            // entry it does not hold.
+            const std::string name = gh->getMailSenderName(mail);
+            return name == "Unknown" ? std::string() : name;
+        }
+        default:
+            return {};
+    }
+}
+
 // GetMasterLootCandidate(index) → the name of whoever can be given this loot.
 //
 // The list the server sends with the loot, which GiveMasterLoot has been
@@ -6945,7 +6985,9 @@ void registerInventoryLuaAPI(lua_State* L) {
             // into a name once the query comes back, and names the auction
             // house, a creature or an object for the other message types. The
             // raw field is empty for player mail until then.
-            lua_pushstring(L, gh->getMailSenderName(mail).c_str());  // sender
+            const std::string sender = mailSenderName(gh, mail);
+            if (sender.empty()) lua_pushnil(L);
+            else lua_pushstring(L, sender.c_str());                // sender
             const std::string subject = gh->getMailDisplaySubject(mail);
             lua_pushstring(L, subject.c_str());                   // subject
             lua_pushnumber(L, mail.money);                        // money (copper)
