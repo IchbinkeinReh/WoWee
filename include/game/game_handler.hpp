@@ -2845,6 +2845,9 @@ public:
     void askEntryThen(bool gameObject, uint32_t entry, const std::string& key,
                       std::function<void(bool found)> then);
     void onEntryAnsweredForWaits(bool gameObject, uint32_t entry, bool found);
+    /// The item cache's (0x0067ca30), the same way.
+    void askItemThen(uint32_t itemId, const std::string& key, std::function<void(bool found)> then);
+    void onItemAnsweredForWaits(uint32_t itemId, bool found);
     uint32_t getLfgProposalId() const;
     /// The proposal's dungeon and the bosses of it already done, both read off
     /// the proposal packet itself - see SocialHandler's two fields for why they
@@ -6469,7 +6472,7 @@ private:
         std::string key;
         std::function<void(bool)> then;
     };
-    /// Keyed by entry, with bit 32 set for a game object's.
+    /// Keyed by entry, with bit 32 set for a game object's, bit 33 for an item's.
     std::unordered_map<uint64_t, std::vector<EntryWait>> entryWaits_;
     bool pendingLoginQuestResync_ = false;
     float pendingLoginQuestResyncTimeout_ = 0.0f;

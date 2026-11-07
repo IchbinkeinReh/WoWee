@@ -640,10 +640,29 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
             ? ReadyCheckAnswer{false, true} : ReadyCheckAnswer{true, false};
         if (initiatedHere)
             owner_.addSystemChatMessage(interfaceString("READY_CHECK_START", "Starting ready check..."));
-        // READY_CHECK carries the initiator and the seconds left (0x005747d0).
-        if (owner_.addonEventCallbackRef())
-            owner_.addonEventCallbackRef()("READY_CHECK", {readyCheckInitiator_,
-                                                           std::to_string(readyCheckSecondsLeft())});
+        // READY_CHECK carries the initiator and the seconds left (0x005747d0),
+        // and everyone but the initiator is told who started it -
+        // ERR_RAID_LEADER_READY_CHECK_START_S, a chat line. Both wait for the
+        // initiator's name from the name cache, which is asked for when it
+        // has none (0x00574d50 -> 0x00574d00).
+        const auto announce = [this](const std::string& name) {
+            readyCheckInitiator_ = name;
+            if (owner_.addonEventCallbackRef())
+                owner_.addonEventCallbackRef()("READY_CHECK", {name, std::to_string(readyCheckSecondsLeft())});
+            if (readyCheckInitiatorGuid_ != owner_.getPlayerGuid())
+                gameError(owner_, ErrTo::Chat, "ERR_RAID_LEADER_READY_CHECK_START_S",
+                          "%s has initiated a ready check.", {name});
+        };
+        const uint64_t initiator = readyCheckInitiatorGuid_;
+        if (initiator == 0) {
+            announce(readyCheckInitiator_);
+        } else if (const std::string& cached = owner_.lookupName(initiator); !cached.empty()) {
+            announce(cached);
+        } else {
+            owner_.askNameThen(initiator, "ready check", [this, initiator, announce](bool found, const std::string& name) {
+                if (found && !name.empty() && readyCheckInitiatorGuid_ == initiator) announce(name);
+            });
+        }
     };
     table[Opcode::MSG_RAID_READY_CHECK_CONFIRM] = [this](network::Packet& packet) {
         if (!packet.hasRemaining(9)) { packet.skipAll(); return; }

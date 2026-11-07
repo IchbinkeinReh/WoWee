@@ -1624,8 +1624,34 @@ void InventoryHandler::handleLootRoll(network::Packet& packet) {
             r.female = ((bytes0 >> 16) & 0xFF) == 1;
         }
     }
-    owner_.addLocalChatLine(ChatType::LOOT,
-                            interface_text::lootRollLine(r, rollItemLink(itemId, randProp), playerName, uiText));
+    // Printed once the item and the roller are both known (0x006fbb10: the
+    // item cache with 0x006fba60, then the name cache with 0x006fb9b0, and
+    // 0x006fb700 only when both have answered): either one not known yet is
+    // asked for and the line waits on it. An answer that found nothing lets
+    // the line go.
+    const auto print = [this, r, itemId, randProp](const std::string& name) {
+        owner_.addLocalChatLine(ChatType::LOOT,
+                                interface_text::lootRollLine(r, rollItemLink(itemId, randProp), name, uiText));
+    };
+    const std::string key = "loot roll " + std::to_string(objectGuid) + ":" + std::to_string(lootSlot) +
+                            ":" + std::to_string(playerGuid) + ":" + std::to_string(rollType) +
+                            ":" + std::to_string(rollNumber);
+    const auto withName = [this, playerGuid, print, key]() {
+        if (const std::string& name = owner_.lookupName(playerGuid); !name.empty()) {
+            print(name);
+            return;
+        }
+        owner_.askNameThen(playerGuid, key, [print](bool found, const std::string& name) {
+            if (found && !name.empty()) print(name);
+        });
+    };
+    if (owner_.getItemInfo(itemId) && owner_.getItemInfo(itemId)->valid) {
+        withName();
+    } else {
+        owner_.askItemThen(itemId, key, [withName](bool found) {
+            if (found) withName();
+        });
+    }
 }
 
 std::string InventoryHandler::rollItemLink(uint32_t itemId, int32_t randomProp) {
@@ -1653,18 +1679,35 @@ void InventoryHandler::handleLootRollWon(network::Packet& packet) {
     uint8_t rollNumber  = packet.readUInt8();
     uint8_t rollType    = packet.readUInt8();
 
-    std::string winnerName;
-    auto nit = owner_.getPlayerNameCache().find(winnerGuid);
-    if (nit != owner_.getPlayerNameCache().end()) winnerName = nit->second;
-    if (winnerName.empty()) winnerName = owner_.lookupName(winnerGuid);
 
     // LOOT_ROLL_WON / LOOT_ROLL_YOU_WON, or their _NO_SPAM lines naming the
     // winning roll without showLootSpam, as CHAT_MSG_LOOT (0x006fb700). This
     // printed "X won [item] (Need - 85)" in English.
-    owner_.addLocalChatLine(ChatType::LOOT, interface_text::lootRollWonLine(
-        winnerGuid == owner_.getPlayerGuid(), rollNumber, rollType,
-        addons::storedCVarValue("showLootSpam", "1") != "0",
-        rollItemLink(itemId, wonRandProp), winnerName, uiText));
+    // Waits for the item and the winner the way the roll line does
+    // (0x006fae40: 0x006facd0's callbacks before 0x006fb700).
+    const bool self = winnerGuid == owner_.getPlayerGuid();
+    const bool spam = addons::storedCVarValue("showLootSpam", "1") != "0";
+    const auto print = [this, self, rollNumber, rollType, spam, itemId, wonRandProp](const std::string& name) {
+        owner_.addLocalChatLine(ChatType::LOOT, interface_text::lootRollWonLine(
+            self, rollNumber, rollType, spam, rollItemLink(itemId, wonRandProp), name, uiText));
+    };
+    const std::string key = "loot won " + std::to_string(wonGuid) + ":" + std::to_string(wonSlot);
+    const auto withName = [this, winnerGuid, print, key]() {
+        if (const std::string& name = owner_.lookupName(winnerGuid); !name.empty()) {
+            print(name);
+            return;
+        }
+        owner_.askNameThen(winnerGuid, key, [print](bool found, const std::string& name) {
+            if (found && !name.empty()) print(name);
+        });
+    };
+    if (owner_.getItemInfo(itemId) && owner_.getItemInfo(itemId)->valid) {
+        withName();
+    } else {
+        owner_.askItemThen(itemId, key, [withName](bool found) {
+            if (found) withName();
+        });
+    }
     endLootRoll(wonGuid, wonSlot);
 }
 
@@ -5909,6 +5952,7 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
             uint32_t rawEntry = packet.readUInt32() & ~0x80000000u;
             owner_.pendingItemQueriesRef().erase(rawEntry);
             owner_.combatLogFeed().itemAnswered(rawEntry, {}, false);
+            owner_.onItemAnsweredForWaits(rawEntry, false);
         }
         LOG_WARNING("handleItemQueryResponse: parse failed, size=", packet.getSize());
         return;
@@ -5916,6 +5960,12 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
 
     owner_.pendingItemQueriesRef().erase(data.entry);
     owner_.combatLogFeed().itemAnswered(data.entry, data.name, data.valid);
+    // The item cache's waits, run once this answer has been taken in -
+    // whichever way the handler leaves.
+    struct AnswerWaits {
+        GameHandler& gh; uint32_t entry; bool found;
+        ~AnswerWaits() { gh.onItemAnsweredForWaits(entry, found); }
+    } answerWaits{owner_, data.entry, data.valid};
     LOG_DEBUG("handleItemQueryResponse: RECV entry=", data.entry, " name='", data.name,
               "' displayInfoId=", data.displayInfoId,
               " class=", data.itemClass, " subClass=", data.subClass,
