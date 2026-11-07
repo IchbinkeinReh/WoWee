@@ -33,8 +33,8 @@ inline constexpr float kSkin = 1.0f / 720.0f;
 /// 0xa3f854: the least a sweep looks ahead.
 inline constexpr float kMinLookAhead = 1.0f / 36.0f;
 /// 0x9f1224, 0x9ea27c.
-inline constexpr float kTiny20 = 1.0f / 1048576.0f;
-inline constexpr float kTiny22 = 1.0f / 4194304.0f;
+inline constexpr float kTiny20 = 0x1p-20f;
+inline constexpr float kTiny22 = 0x1p-22f;
 /// 0xa32830: the column's foot above the point, in half-widths.
 inline constexpr float kPyramidRise = 1.8493990f;
 /// 0xa37f28, 0xa37f2c: the pyramid's face normals.
