@@ -148,7 +148,8 @@ std::string spellNameWithRank(const GameHandler& owner, uint32_t spellId) {
 /// the creature's name for a companion or mount (0x008009b0), and otherwise
 /// ERR_LEARN_ABILITY_S (0x10) or ERR_LEARN_SPELL_S. Empty where the spell, or
 /// a companion's creature, is not known - the original waits on the creature
-/// query for that one and prints when it answers; this does not.
+/// query for that one and prints when it answers, which handleLearnedSpell
+/// does as well.
 std::string learnedSpellText(const GameHandler& owner, uint32_t spellId) {
     const auto attrs = owner.getSpellAttributes(spellId);
     const std::string& name = owner.getSpellName(spellId);
@@ -4806,7 +4807,26 @@ void SpellHandler::handleLearnedSpell(network::Packet& packet) {
         const bool mount = !critter && inList(true);
         if (critter || mount) {
             owner_.triggerTutorial(critter ? 0x33 : 0x34);
-            owner_.addonEventCallbackRef()("COMPANION_LEARNED", {});
+            // COMPANION_LEARNED once the creature cache holds the companion's
+            // creature: one it does not is asked for, and the answer that
+            // found it prints ERR_LEARN_COMPANION_S (learnedSpellText, which
+            // had nothing to print until now) and then raises it (0x00542030
+            // with 0x0053ebc0).
+            uint32_t creature = 0;
+            for (const auto& c : owner_.getCompanions(mount))
+                if (c.spellId == spellId) creature = c.creatureId;
+            if (creature == 0 || owner_.getCreatureInfoCache().count(creature)) {
+                owner_.addonEventCallbackRef()("COMPANION_LEARNED", {});
+            } else {
+                GameHandler& gh = owner_;
+                owner_.askEntryThen(false, creature, "companion learned " + std::to_string(spellId),
+                                    [&gh, spellId](bool found) {
+                    if (!found) return;
+                    const std::string line = learnedSpellText(gh, spellId);
+                    if (!line.empty()) gh.addSystemChatMessage(line);
+                    gh.fireAddonEvent("COMPANION_LEARNED", {});
+                });
+            }
         } else {
             const auto& tabs = getSpellBookTabs();
             for (size_t t = 0; t < tabs.size(); ++t) {
