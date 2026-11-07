@@ -1288,6 +1288,9 @@ void pickupStablePetCursor(lua_State* L, int slot, const std::string& icon);
 std::optional<int> cursorStablePet();
 /// ClearCursor's own put-down (0x00519280), whatever is held.
 void clearCursor(lua_State* L);
+/// TRADE_SHOW's own work before the interface hears it (0x005870a0): the
+/// item dropped on the player who was asked to trade goes into the trade.
+void onTradeShown(lua_State* L);
 
 /// The paperdoll slot an item on the cursor was picked up from, or zero when it
 /// came from a bag or nothing is held. One-based, as FrameXML numbers slots.

@@ -2493,6 +2493,26 @@ static int lua_AutoEquipCursorItem(lua_State* L) {
 // is already on the table or that slot is taken - and with no trade open one
 // is asked for (0x00703cf0). On the player's pet it is fed to it with the
 // Feed Pet spell (0x0080dcf0) and the cursor put down.
+/// A trade asked for by dropping an item on the player (0x00703cf0 with 1,
+/// 0x00ca0fe4): the held item goes into it when it opens.
+static bool s_tradeDropPending = false;
+
+void onTradeShown(lua_State* L) {
+    const bool pending = s_tradeDropPending;
+    s_tradeDropPending = false;
+    auto* gh = getGameHandler(L);
+    uint8_t bag = 0, slot = 0;
+    // 0x005870a0: an item still held goes into the first slot, or the one
+    // not traded when it is bound (0x00708520), and the cursor is put down.
+    if (!pending || !gh || s_cursorType != CursorType::ITEM || !cursorWireSlot(bag, slot)) return;
+    auto* inv = gh->getInventoryHandler();
+    const uint64_t itemGuid = inv ? inv->itemGuidAtWire(bag, slot) : 0;
+    if (itemGuid == 0) return;
+    const bool bound = (gh->getItemFieldFlags(itemGuid) & 0x1u) != 0;
+    gh->setTradeItem(static_cast<uint8_t>(bound ? 6 : 0), bag, slot);
+    clearCursorItem(L);
+}
+
 static void dropCursorItemOnUnit(lua_State* L, game::GameHandler* gh, uint64_t guid,
                                  const std::shared_ptr<game::Entity>& entity) {
     uint8_t bag = 0, slot = 0;
@@ -2507,6 +2527,7 @@ static void dropCursorItemOnUnit(lua_State* L, game::GameHandler* gh, uint64_t g
     if (entity->getType() == game::ObjectType::PLAYER && gh->unitsCooperate(me, guid)) {
         if (gh->getTradePeerGuid() == 0) {
             gh->initiateTrade(guid);
+            s_tradeDropPending = true;
         } else if (gh->getTradePeerGuid() == guid && itemGuid != 0 && !inv->itemInTrade(itemGuid)) {
             const auto& mine = gh->getMyTradeSlots();
             const bool bound = (gh->getItemFieldFlags(itemGuid) & 0x1u) != 0;

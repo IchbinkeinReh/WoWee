@@ -10417,6 +10417,7 @@ void LuaEngine::fireEventWith(const std::string& eventName, int nargs,
         lua_pushboolean(L_, 1);
         lua_setfield(L_, LUA_REGISTRYINDEX, "wowee_logged_in");
     }
+    if (eventName == "TRADE_SHOW") wowee::addons::onTradeShown(L_);
 
     // Combat lockdown is the flag these two events announce, and 0x00524600
     // moves it on the far side of each: leaving combat lifts it before
