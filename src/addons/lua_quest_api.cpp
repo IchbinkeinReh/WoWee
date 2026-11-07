@@ -2134,39 +2134,105 @@ int& selectedStableSlot() {
 
 } // namespace
 
-// GetStablePetInfo(slot) → icon, name, level, family, talent
-//
-// The icon is what says a slot is occupied: the frame tests it before deciding
-// whether the slot reads as a pet or as an empty box, so an occupied slot must
-// answer something and an empty one must answer nil.
-//
-// Family and talent tree are blank. They come from the creature's family, and
-// the stable packet carries the creature entry without it - this client's own
-// stable window shows a name and a level for the same reason.
-static int lua_GetStablePetInfo(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    const int slot = static_cast<int>(luaL_optnumber(L, 1, -1));
-    if (!gh || slot < 0) { return luaReturnNil(L); }
+/// The CreatureFamily row of a creature entry the creature cache holds, or -1:
+/// for a stabled pet, whose template entry is all MSG_LIST_STABLED_PETS gives.
+static int32_t familyRowForEntry(game::GameHandler* gh, uint32_t entry,
+                                 std::shared_ptr<pipeline::DBCFile>& families,
+                                 const pipeline::DBCFieldMap*& layout) {
+    if (!gh || entry == 0) return -1;
+    const auto& cache = gh->getCreatureInfoCache();
+    const auto it = cache.find(entry);
+    if (it == cache.end() || it->second.family == 0) return -1;
+    auto* am = gh->services().assetManager;
+    const auto* layouts = pipeline::getActiveDBCLayout();
+    layout = layouts ? layouts->getLayout("CreatureFamily") : nullptr;
+    families = am && am->isInitialized() ? am->loadDBCOptional("CreatureFamily.dbc") : nullptr;
+    if (!families || !families->isLoaded() || !layout) return -1;
+    return families->findRecordById(it->second.family);
+}
 
-    const game::GameHandler::StabledPet* pet = nullptr;
-    if (slot == 0) {
-        pet = activePet(gh);
-    } else {
-        const auto stabled = stabledOnly(gh);
-        if (slot <= static_cast<int>(stabled.size())) {
-            pet = stabled[static_cast<size_t>(slot - 1)];
+/// The pet talent tree a family trains into: the first TalentTab whose pet
+/// mask holds the family's talent type. Empty when it has none.
+static std::string familyTalentTree(game::GameHandler* gh, const pipeline::DBCFile& families,
+                                    const pipeline::DBCFieldMap& layout, int32_t row) {
+    const uint32_t typeF = layout.tryField("PetTalentType");
+    if (row < 0 || typeF >= families.getFieldCount()) return {};
+    const auto type = static_cast<int32_t>(families.getUInt32(static_cast<uint32_t>(row), typeF));
+    if (type < 0 || type > 31) return {};
+    auto* am = gh->services().assetManager;
+    const auto* tabL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("TalentTab") : nullptr;
+    auto tabs = am ? am->loadDBCOptional("TalentTab.dbc") : nullptr;
+    const uint32_t maskF = tabL ? tabL->tryField("PetTalentMask") : 0xFFFFFFFFu;
+    const uint32_t nameF = tabL ? tabL->tryField("Name") : 0xFFFFFFFFu;
+    if (!tabs || !tabs->isLoaded() || maskF >= tabs->getFieldCount() || nameF >= tabs->getFieldCount())
+        return {};
+    for (uint32_t r = 0; r < tabs->getRecordCount(); ++r) {
+        const uint32_t mask = tabs->getUInt32(r, maskF);
+        if (mask != 0 && (mask & (1u << type)) != 0) return tabs->getString(r, nameF);
+    }
+    return {};
+}
+
+/// The foods a family eats, pushed one value each (ItemPetFood by the
+/// family's PetFoodMask); how many were pushed.
+static int pushFamilyFoods(lua_State* L, game::GameHandler* gh, const pipeline::DBCFile& families,
+                           const pipeline::DBCFieldMap& layout, int32_t row) {
+    const uint32_t maskF = layout.tryField("PetFoodMask");
+    if (row < 0 || maskF >= families.getFieldCount()) return 0;
+    const uint32_t mask = families.getUInt32(static_cast<uint32_t>(row), maskF);
+    auto foods = gh->services().assetManager->loadDBCOptional("ItemPetFood.dbc");
+    if (!foods || !foods->isLoaded() || foods->getFieldCount() < 2) return 0;
+    int pushed = 0;
+    for (uint32_t r = 0; r < foods->getRecordCount(); ++r) {
+        const uint32_t id = foods->getUInt32(r, 0);
+        if (id == 0 || id > 32 || (mask & (1u << (id - 1))) == 0) continue;
+        if (!lua_checkstack(L, 1)) break;
+        lua_pushstring(L, foods->getString(r, 1).c_str());
+        ++pushed;
+    }
+    return pushed;
+}
+
+// GetStablePetInfo(index) (0x005a1330) → icon, name, level, family[, talent]
+//
+// Index 0 is the pet that is out, then the stable slots. The pet's creature
+// template, from the creature cache, names its family: the family's icon,
+// the pet's own name and level, the family's name, and the talent tree it
+// trains into when it has one. A pet whose template the cache does not hold
+// yet answers nil, nil, 0, and is asked for; the answer that found it raises
+// PET_STABLE_UPDATE (0x005a0e80).
+static int lua_GetStablePetInfo(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetStablePetInfo(index)");
+    auto* gh = getGameHandler(L);
+    const int index = static_cast<int>(std::lround(lua_tonumber(L, 1))) - 1;
+    if (const auto* pet = stablePetAt(gh, index)) {
+        std::shared_ptr<pipeline::DBCFile> families;
+        const pipeline::DBCFieldMap* layout = nullptr;
+        const int32_t row = familyRowForEntry(gh, pet->entry, families, layout);
+        if (row >= 0) {
+            const uint32_t iconF = layout->tryField("IconFile");
+            const uint32_t nameF = layout->tryField("Name");
+            lua_pushstring(L, iconF < families->getFieldCount()
+                                  ? families->getString(static_cast<uint32_t>(row), iconF).c_str() : "");
+            lua_pushstring(L, pet->name.c_str());
+            lua_pushnumber(L, pet->level);
+            lua_pushstring(L, nameF < families->getFieldCount()
+                                  ? families->getString(static_cast<uint32_t>(row), nameF).c_str() : "");
+            const std::string tree = familyTalentTree(gh, *families, *layout, row);
+            if (tree.empty()) return 4;
+            lua_pushstring(L, tree.c_str());
+            return 5;
+        }
+        if (!gh->getCreatureInfoCache().count(pet->entry)) {
+            gh->askEntryThen(false, pet->entry, "stable info", [gh](bool found) {
+                if (found) gh->fireAddonEvent("PET_STABLE_UPDATE", {});
+            });
         }
     }
-    if (!pet) { return luaReturnNil(L); }
-
-    lua_pushstring(L, "Interface\\Icons\\Ability_Hunter_BeastTaming");
-    lua_pushstring(L, pet->name.empty()
-                          ? ("Pet #" + std::to_string(pet->petNumber)).c_str()
-                          : pet->name.c_str());
-    lua_pushnumber(L, pet->level);
-    lua_pushstring(L, "");   // family
-    lua_pushstring(L, "");   // pet talent tree
-    return 5;
+    lua_pushnil(L);
+    lua_pushnil(L);
+    lua_pushnumber(L, 0);
+    return 3;
 }
 
 static int lua_GetNumStablePets(lua_State* L) {
@@ -2280,25 +2346,11 @@ static int lua_GetPetTalentTree(lua_State* L) {
     std::shared_ptr<pipeline::DBCFile> families;
     const pipeline::DBCFieldMap* layout = nullptr;
     const int32_t row = hunterPetFamilyRow(gh, families, layout);
-    const uint32_t typeF = layout ? layout->tryField("PetTalentType") : 0xFFFFFFFFu;
-    if (row < 0 || typeF >= families->getFieldCount()) return luaReturnNil(L);
-    const auto type = static_cast<int32_t>(families->getUInt32(static_cast<uint32_t>(row), typeF));
-    if (type < 0 || type > 31) return luaReturnNil(L);
-    auto* am = gh->services().assetManager;
-    const auto* tabL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("TalentTab") : nullptr;
-    auto tabs = am ? am->loadDBCOptional("TalentTab.dbc") : nullptr;
-    const uint32_t maskF = tabL ? tabL->tryField("PetTalentMask") : 0xFFFFFFFFu;
-    const uint32_t nameF = tabL ? tabL->tryField("Name") : 0xFFFFFFFFu;
-    if (!tabs || !tabs->isLoaded() || maskF >= tabs->getFieldCount() || nameF >= tabs->getFieldCount())
-        return luaReturnNil(L);
-    for (uint32_t r = 0; r < tabs->getRecordCount(); ++r) {
-        const uint32_t mask = tabs->getUInt32(r, maskF);
-        if (mask != 0 && (mask & (1u << type)) != 0) {
-            lua_pushstring(L, tabs->getString(r, nameF).c_str());
-            return 1;
-        }
-    }
-    return luaReturnNil(L);
+    if (row < 0) return luaReturnNil(L);
+    const std::string tree = familyTalentTree(gh, *families, *layout, row);
+    if (tree.empty()) return luaReturnNil(L);
+    lua_pushstring(L, tree.c_str());
+    return 1;
 }
 
 /// GetPetFoodTypes() (0x005d3bd0) → one ItemPetFood name per bit of the
@@ -2308,20 +2360,8 @@ static int lua_GetPetFoodTypes(lua_State* L) {
     std::shared_ptr<pipeline::DBCFile> families;
     const pipeline::DBCFieldMap* layout = nullptr;
     const int32_t row = hunterPetFamilyRow(gh, families, layout);
-    const uint32_t maskF = layout ? layout->tryField("PetFoodMask") : 0xFFFFFFFFu;
-    if (row < 0 || maskF >= families->getFieldCount()) return 0;
-    const uint32_t mask = families->getUInt32(static_cast<uint32_t>(row), maskF);
-    auto foods = gh->services().assetManager->loadDBCOptional("ItemPetFood.dbc");
-    if (!foods || !foods->isLoaded() || foods->getFieldCount() < 2) return 0;
-    int pushed = 0;
-    for (uint32_t r = 0; r < foods->getRecordCount(); ++r) {
-        const uint32_t id = foods->getUInt32(r, 0);
-        if (id == 0 || id > 32 || (mask & (1u << (id - 1))) == 0) continue;
-        if (!lua_checkstack(L, 1)) break;
-        lua_pushstring(L, foods->getString(r, 1).c_str());
-        ++pushed;
-    }
-    return pushed;
+    if (row < 0) return 0;
+    return pushFamilyFoods(L, gh, *families, *layout, row);
 }
 
 /// SetPetStablePaperdoll(model) - put the selected pet in the preview frame.
@@ -2367,24 +2407,44 @@ static int lua_SetPetStablePaperdoll(lua_State* L) {
 static int lua_PickupStablePet(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: PickupStablePet(index)");
     const int index = static_cast<int>(std::lround(lua_tonumber(L, 1))) - 1;
-    if (const auto* pet = stablePetAt(getGameHandler(L), index); pet && pet->petNumber != 0) {
-        pickupStablePetCursor(L, index, "Interface\\Icons\\Ability_Hunter_BeastTaming");
+    auto* gh = getGameHandler(L);
+    // Only with the family's icon to put on the cursor (0x00520c60 reads it
+    // off the creature template; a pet whose template is not cached is not
+    // picked up).
+    if (const auto* pet = stablePetAt(gh, index); pet && pet->petNumber != 0) {
+        std::shared_ptr<pipeline::DBCFile> families;
+        const pipeline::DBCFieldMap* layout = nullptr;
+        const int32_t row = familyRowForEntry(gh, pet->entry, families, layout);
+        const uint32_t iconF = layout ? layout->tryField("IconFile") : 0xFFFFFFFFu;
+        const std::string icon = row >= 0 && iconF < families->getFieldCount()
+            ? families->getString(static_cast<uint32_t>(row), iconF) : std::string();
+        if (!icon.empty()) pickupStablePetCursor(L, index, icon);
     }
     return 0;
 }
 
-/// GetStablePetFoodTypes(slot) - and the one that cannot answer nil.
-///
-/// Its result goes straight into format(PET_DIET_TEMPLATE,
-/// BuildListString(...)) with no test in between. BuildListString hands nil
-/// back for nil, and string.format raises on a nil where it wants a string, so
-/// answering honestly there takes the stable window down as it opens. An empty
-/// string is the one value that says "not known" without doing that: the diet
-/// line comes out blank instead of wrong.
+// GetStablePetFoodTypes(index) (0x005a16a0) → the foods that pet eats, one
+// value each, from its family as GetStablePetInfo finds it; nothing for a pet
+// whose template the creature cache does not hold yet, which is asked for as
+// there.
 static int lua_GetStablePetFoodTypes(lua_State* L) {
-    (void)L;
-    lua_pushstring(L, "");
-    return 1;
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetStablePetInfo(index)");
+    auto* gh = getGameHandler(L);
+    const int index = static_cast<int>(std::lround(lua_tonumber(L, 1))) - 1;
+    const auto* pet = stablePetAt(gh, index);
+    if (!pet) return 0;
+    std::shared_ptr<pipeline::DBCFile> families;
+    const pipeline::DBCFieldMap* layout = nullptr;
+    const int32_t row = familyRowForEntry(gh, pet->entry, families, layout);
+    if (row < 0) {
+        if (!gh->getCreatureInfoCache().count(pet->entry)) {
+            gh->askEntryThen(false, pet->entry, "stable info", [gh](bool found) {
+                if (found) gh->fireAddonEvent("PET_STABLE_UPDATE", {});
+            });
+        }
+        return 0;
+    }
+    return pushFamilyFoods(L, gh, *families, *layout, row);
 }
 
 static int lua_ClosePetStables(lua_State* L) {

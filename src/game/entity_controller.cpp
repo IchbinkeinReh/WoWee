@@ -4382,6 +4382,12 @@ void EntityController::handleCreatureQueryResponse(network::Packet& packet) {
                     for (const auto& unitId : owner_.unitTokensForGuid(guid)) {
                         owner_.fireAddonEvent("UNIT_CLASSIFICATION_CHANGED", {unitId});
                     }
+                    // One of the player's totems: the bar redraws its slot
+                    // with the name that came (0x005139b0, PLAYER_TOTEM_UPDATE).
+                    for (int slot = 0; slot < GameHandler::NUM_TOTEM_SLOTS; ++slot) {
+                        if (owner_.getTotemSlot(slot).guid == guid)
+                            owner_.fireAddonEvent("PLAYER_TOTEM_UPDATE", {std::to_string(slot + 1)});
+                    }
                 }
             }
         }
