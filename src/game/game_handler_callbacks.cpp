@@ -117,92 +117,6 @@ bool isLootContainerName(const std::string& name) {
                            sizeof(kContainerTerms) / sizeof(kContainerTerms[0]));
 }
 
-// How the local player should open a game object, decided from its Lock.dbc row.
-enum class LockOpenMethod {
-    UseDirect,  // CMSG_GAMEOBJ_USE. Opens unlocked/quest containers and, crucially,
-                // key-item chests: the server credits the key (from a bag) and opens
-                // it. keyItemId names the key so the caller can ensure it's in a bag.
-    CastSpell,  // cast a KNOWN player OPEN_LOCK spell at the GO (rogue Pick Lock).
-                // Generic Opening spells the player does not know are rejected by
-                // the server (BAD_TARGETS), so we never fabricate a cast.
-};
-
-struct LockOpenPlan {
-    LockOpenMethod method = LockOpenMethod::UseDirect;
-    uint32_t spellId = 0;
-    uint32_t keyItemId = 0;  // required key item (LOCK_KEY_ITEM), 0 if none
-};
-
-// Decide how to open a game object from its Lock.dbc row. Only a known player
-// OPEN_LOCK spell yields CastSpell; every other case (including key-item locks)
-// is UseDirect, with keyItemId set so the caller can move the key into a bag.
-LockOpenPlan planGameObjectOpen(pipeline::AssetManager* assets,
-                                const GameObjectQueryResponseData* info,
-                                const std::unordered_set<uint32_t>& knownSpells) {
-    LockOpenPlan plan;
-    if (!assets || !info || !info->hasData || info->data[0] == 0) return plan;
-
-    auto lockDbc = assets->loadDBC("Lock.dbc");
-    auto spellDbc = assets->loadDBC("Spell.dbc");
-    // Which columns hold the spell's effects and their misc values, from the
-    // layout. They were 71 and 110, the WotLK positions, behind a demand that
-    // Spell.dbc have 234 fields - which is the WotLK file and nothing else, so
-    // on Classic (173) and TBC (216) this walked away and every locked chest
-    // went to the server as a bare USE. The effect block starts at 61 on
-    // vanilla and 65 on TBC because both carry an EffectBaseDice this one does
-    // not; the misc values are at 106 there rather than 110.
-    const auto* spellL = pipeline::getActiveDBCLayout()
-        ? pipeline::getActiveDBCLayout()->getLayout("Spell") : nullptr;
-    const uint32_t effect0Field = spellL ? spellL->field("Effect0") : 0xFFFFFFFF;
-    const uint32_t misc0Field   = spellL ? spellL->field("EffectMiscValue0") : 0xFFFFFFFF;
-    if (!lockDbc || !spellDbc || !lockDbc->isLoaded() || !spellDbc->isLoaded() ||
-        lockDbc->getFieldCount() < 33 ||
-        effect0Field == 0xFFFFFFFF || misc0Field == 0xFFFFFFFF ||
-        effect0Field + 3 > spellDbc->getFieldCount() ||
-        misc0Field + 3 > spellDbc->getFieldCount()) {
-        return plan; // Can't inspect the lock - let the server adjudicate a USE.
-    }
-
-    const uint32_t lockId = info->data[0];
-    for (uint32_t row = 0; row < lockDbc->getRecordCount(); ++row) {
-        if (lockDbc->getUInt32(row, 0) != lockId) continue;
-
-        for (uint32_t slot = 0; slot < 8; ++slot) {
-            // Lock.dbc: Type[8] at cols 1-8, Index[8] at cols 9-16.
-            constexpr uint32_t kLockKeyItem = 1;   // requires a key item
-            constexpr uint32_t kLockKeySkill = 2;  // requires a skill (LockType id)
-            const uint32_t keyType = lockDbc->getUInt32(row, 1 + slot);
-            const uint32_t keyIndex = lockDbc->getUInt32(row, 9 + slot);
-            if (keyIndex == 0) continue;
-
-            if (keyType == kLockKeyItem) {
-                plan.keyItemId = keyIndex; // remember the key so we can locate it
-                continue;
-            }
-            if (keyType != kLockKeySkill) continue;
-
-            // A known player spell whose OPEN_LOCK effect matches this LockType
-            // lets us open it directly (Lockpicking, etc.).
-            for (uint32_t spellRow = 0; spellRow < spellDbc->getRecordCount(); ++spellRow) {
-                const uint32_t spellId = spellDbc->getUInt32(spellRow, 0);
-                if (knownSpells.count(spellId) == 0) continue;
-                for (uint32_t effect = 0; effect < 3; ++effect) {
-                    constexpr uint32_t kSpellEffectOpenLock = 33;
-                    if (spellDbc->getUInt32(spellRow, effect0Field + effect) == kSpellEffectOpenLock &&
-                        spellDbc->getUInt32(spellRow, misc0Field + effect) == keyIndex) {
-                        plan.method = LockOpenMethod::CastSpell;
-                        plan.spellId = spellId;
-                        return plan;
-                    }
-                }
-            }
-        }
-        break;
-    }
-    return plan;
-}
-
-
 uint32_t gatherSpellForGameObject(const GameObjectQueryResponseData* info, const std::string& name) {
     if (info && info->type != 3) return 0; // GAMEOBJECT_TYPE_CHEST
 
@@ -223,20 +137,6 @@ uint32_t gatherSpellForGameObject(const GameObjectQueryResponseData* info, const
 
     if (containsAnyTerm(lower, kMiningTerms, sizeof(kMiningTerms) / sizeof(kMiningTerms[0]))) return kMiningBaseSpellId;
     if (containsAnyTerm(lower, kHerbTerms, sizeof(kHerbTerms) / sizeof(kHerbTerms[0]))) return kHerbBaseSpellId;
-    return 0;
-}
-
-uint32_t knownGatherRank(const SpellHandler* spellHandler, uint32_t baseSpellId) {
-    if (!spellHandler) return 0;
-
-    size_t count = 0;
-    const uint32_t* ranks = gatherRanksForBase(baseSpellId, count);
-    if (!ranks) return 0;
-
-    for (size_t i = count; i > 0; --i) {
-        const uint32_t spellId = ranks[i - 1];
-        if (spellHandler->hasKnownSpell(spellId)) return spellId;
-    }
     return 0;
 }
 
@@ -4251,52 +4151,46 @@ void GameHandler::performGameObjectInteractionNow(uint64_t guid) {
     lastInteractGuid = guid;
     lastInteractTime = now;
 
-    // Ensure GO interaction isn't blocked by stale or active melee state.
-    stopAutoAttack();
     auto entity = entityController_->getEntityManager().getEntity(guid);
-    uint32_t goEntry = 0;
-    uint32_t goType = 0;
-    std::string goName;
-    const GameObjectQueryResponseData* goInfo = nullptr;
-    float interactionDistance = -1.0f;
+    if (!entity || entity->getType() != ObjectType::GAMEOBJECT) return;
+    auto go = std::static_pointer_cast<GameObject>(entity);
+    const uint32_t goEntry = go->getEntry();
+    const std::string goName = go->getName();
+    const GameObjectQueryResponseData* goInfo = getCachedGameObjectInfo(goEntry);
+    const GameObjectFacts facts = gameObjectFacts(*go, goInfo);
+    const uint32_t goType = facts.type;
+    if (goType == kGoTypeFishingHole) {
+        // Nothing sent, and nothing scheduled: the school is fished, not
+        // opened. Silent, because retail does not respond to the click
+        // either.
+        LOG_INFO("GO fishing hole click ignored: guid=0x", std::hex, guid,
+                 std::dec, " entry=", goEntry, " name='", goName, "'");
+        return;
+    }
 
-    if (entity) {
-        if (entity->getType() == ObjectType::GAMEOBJECT) {
-            auto go = std::static_pointer_cast<GameObject>(entity);
-            goEntry = go->getEntry();
-            goName = go->getName();
-            goInfo = getCachedGameObjectInfo(goEntry);
-            if (goInfo) goType = goInfo->type;
-            if (goType == kGoTypeFishingHole) {
-                // Nothing sent, and nothing scheduled: the school is fished, not
-                // opened. Silent, because retail does not respond to the click
-                // either.
-                LOG_INFO("GO fishing hole click ignored: guid=0x", std::hex, guid,
-                         std::dec, " entry=", goEntry, " name='", goName, "'");
-                return;
-            }
-            if (goType == 23 && !meetingStoneAllowsUse(goInfo)) return;
-            if (goType == 5 && !goName.empty()) {
-                std::string lower = lowerCopy(goName);
-                if (lower.rfind("doodad_", 0) != 0) {
-                    addSystemChatMessage(goName);
-                }
-            }
+    // 0x0070f680: the type's handler is asked whether the object may be used
+    // (0x00711470) and its refusal said when not - out of reach is
+    // ERR_USE_TOO_FAR, by a box round the object's model rather than a
+    // distance from its middle.
+    {
+        std::string arg;
+        if (const uint16_t refusal = gameObjectRefusal(*go, facts, arg); refusal != 0) {
+            sayGameObjectError(refusal, arg.empty() ? std::vector<std::string>{} : std::vector<std::string>{arg});
+            return;
         }
+    }
+    if (goType == 23 && !meetingStoneAllowsUse(goInfo)) return;
+    if (goType == 5 && !goName.empty()) {
+        std::string lower = lowerCopy(goName);
+        if (lower.rfind("doodad_", 0) != 0) {
+            addSystemChatMessage(goName);
+        }
+    }
+    {
         // Face object and send heartbeat before use so strict servers don't require
         // a nudge movement to accept interaction.
         float dx = entity->getX() - movementInfo.x;
         float dy = entity->getY() - movementInfo.y;
-        float dz = entity->getZ() - movementInfo.z;
-        float dist3d = std::sqrt(dx * dx + dy * dy + dz * dz);
-        interactionDistance = dist3d;
-        // Fishing bobbers are intentionally cast beyond normal GO-use range.
-        // Only the owned bobber whose bite we observed gets the extended range.
-        const float maxInteractDistance = (guid == hookedFishingBobberGuid_) ? 30.0f : 10.0f;
-        if (dist3d > maxInteractDistance) {
-            raiseUiError("Too far away.");
-            return;
-        }
         // Stop movement before interacting - servers may reject GO use or
         // immediately cancel the resulting spell cast if the player is moving.
         const uint32_t moveFlags = movementInfo.flags;
@@ -4314,29 +4208,14 @@ void GameHandler::performGameObjectInteractionNow(uint64_t guid) {
         sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
     }
 
-    // Determine GO type for interaction strategy
-    bool isMailbox = false;
-    bool isGuildBank = false;
-    bool isReadable = false;
-    bool chestLike = false;
-    bool metadataPending = false;
-    if (entity && entity->getType() == ObjectType::GAMEOBJECT) {
-        auto go = std::static_pointer_cast<GameObject>(entity);
-        if (!goInfo) goInfo = getCachedGameObjectInfo(go->getEntry());
-        metadataPending = (goInfo == nullptr);
-        if (goInfo && goInfo->type == 19) {
-            isMailbox = true;
-        } else if (goInfo && goInfo->type == 34) { // GAMEOBJECT_TYPE_GUILD_BANK
-            isGuildBank = true;
-        } else if (goInfo && goInfo->type == 3) {
-            chestLike = true;
-        } else if (goInfo && (goInfo->type == 9 ||
-                              (goInfo->type == 10 && goInfo->hasData && goInfo->data[7] != 0))) {
-            // 9 is TEXT - a sign - and a GOOBER carries a page of its own in
-            // data[7] when it has one to show.
-            isReadable = true;
-        }
-    }
+    // The types whose handler has a use of its own: the mailbox (19), the
+    // guild vault (34) and the sign (9); a GOOBER with a page of its own in
+    // data[7] reads it besides. Every other type uses 0x007116c0.
+    const bool metadataPending = (goInfo == nullptr);
+    const bool isMailbox = goType == 19;
+    const bool isGuildBank = goType == 34;
+    const bool isReadable = goType == 9 || (goType == 10 && goInfo && goInfo->hasData && goInfo->data[7] != 0);
+    bool chestLike = goType == 3;
     if (!chestLike && !goName.empty()) {
         // Query metadata can arrive after the player clicks. Recognize common
         // quest-loot containers by name so objects such as Sack of Oats still
@@ -4348,168 +4227,51 @@ void GameHandler::performGameObjectInteractionNow(uint64_t guid) {
              " entry=", goEntry, " type=", goType,
              " name='", goName, "' chestLike=", chestLike,
              " metadataPending=", metadataPending, " isMailbox=", isMailbox,
-             " lockId=", (goInfo && goInfo->hasData ? goInfo->data[0] : 0));
+             " lockId=", gameObjectData(facts, go_use::Field::Lock));
 
-    const uint32_t gatherBaseSpellId = gatherSpellForGameObject(goInfo, goName);
-    if (gatherBaseSpellId != 0) {
-        const uint32_t gatherSpellId = knownGatherRank(spellHandler_.get(), gatherBaseSpellId);
-        if (gatherSpellId == 0) {
-            // A lock the player has no skill for is ERR_USE_LOCKED_WITH_SPELL_S
-            // on the error line, naming the LockType.dbc row (0x007116c0;
-            // 2 is herbalism, 3 mining). This printed English "Requires
-            // Mining." to chat.
-            const uint32_t lockType = gatherBaseSpellId == kMiningBaseSpellId ? 3u : 2u;
-            std::string lockName;
-            auto* am = services_.assetManager;
-            if (auto dbc = am && am->isInitialized() ? am->loadDBC("LockType.dbc") : nullptr;
-                dbc && dbc->isLoaded()) {
-                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
-                    if (dbc->getUInt32(i, 0) == lockType) { lockName = dbc->getString(i, 1); break; }
-                }
-            }
-            if (lockName.empty()) lockName = "UNKNOWN";
-            addUIError(interfaceFormat("ERR_USE_LOCKED_WITH_SPELL_S", "Requires %s", {lockName}));
-            LOG_INFO("GO gather skipped: no known rank for base spell=", gatherBaseSpellId,
-                     " guid=0x", std::hex, guid, std::dec, " name='", goName, "'");
-            return;
-        }
-        auto castPacket = getPacketParsers()
-            ? getPacketParsers()->buildCastGameObjectSpell(gatherSpellId, guid, 0)
-            : CastSpellPacket::buildGameObjectTarget(gatherSpellId, guid, 0);
-        socket->send(castPacket);
+    bool used = true;
+    if (isMailbox || isGuildBank || goType == 9) {
+        socket->send(GameObjectUsePacket::build(guid));
+    } else {
+        // What the lock asks for: the opening spell cast at it, the key used
+        // on it, a plain CMSG_GAMEOBJ_USE, or the refusal of a lock nothing
+        // the player has opens.
+        used = useGameObjectByLock(*go, facts);
+    }
+    if (used) {
         lastInteractedGoGuid_ = guid;
-        scheduleGameObjectLootOpen(guid, 0.50f, 8);
-        LOG_INFO("GO gather cast: spell=", gatherSpellId, " guid=0x",
-                 std::hex, guid, std::dec, " name='", goName, "'");
-        return;
-    }
-
-    if (chestLike && isActiveExpansion("wotlk")) {
-        // A locked type-3 chest is opened by casting an OPEN_LOCK spell at it (a
-        // known Pick Lock, or the generic Opening); the server then validates the
-        // lock. A plain CMSG_GAMEOBJ_USE only opens unlocked / server-gated quest
-        // containers (e.g. the Legend of Stalvan Sealed Crate).
-        const LockOpenPlan plan = planGameObjectOpen(
-            services_.assetManager, goInfo, spellHandler_->getKnownSpells());
-        if (plan.method == LockOpenMethod::CastSpell) {
-            auto castPacket = getPacketParsers()->buildCastGameObjectSpell(
-                plan.spellId, guid, 0);
-            socket->send(castPacket);
-            lastInteractedGoGuid_ = guid;
-            scheduleGameObjectLootOpen(guid, 0.60f, 8);
-            LOG_INFO("GO chest open-lock cast: spell=", plan.spellId,
-                     " guid=0x", std::hex, guid, std::dec,
-                     " entry=", goEntry, " name='", goName, "'");
-            return;
+        if (guid == hookedFishingBobberGuid_) {
+            LOG_WARNING("Fishing bobber reel sent: guid=0x", std::hex, guid, std::dec);
+            hookedFishingBobberGuid_ = 0;
         }
-        // Key-item lock: a warrior knows no open-lock spell. Open it by USING the
-        // key item on the chest (CMSG_USE_ITEM targeting the GO) - the server casts
-        // the key's on-use OPEN_LOCK spell because the player holds the key. A plain
-        // USE does not open a locked type-3 chest, and casting the item's spell via
-        // CMSG_CAST_SPELL is rejected (the player doesn't "know" it).
-        if (plan.keyItemId != 0) {
-            const ItemQueryResponseData* keyInfo = getItemInfo(plan.keyItemId);
-            uint32_t keyUseSpell = 0;
-            if (keyInfo) {
-                for (const auto& sp : keyInfo->spells)
-                    if (sp.spellTrigger == 0 && sp.spellId != 0 && keyUseSpell == 0)
-                        keyUseSpell = sp.spellId;
-            } else {
-                ensureItemInfo(plan.keyItemId); // not cached yet - request for next click
-            }
-
-            // Locate the key: wire (bag, slot) + item GUID. Keyring wire slots
-            // start at 86; backpack at 23 in bag 0xFF; equipped bags are 19..22.
-            const Inventory& inv = getInventory();
-            uint8_t keyBag = 0xFF, keySlot = 0; uint64_t keyGuid = 0; bool keyFound = false;
-            for (int i = 0; i < inv.getBackpackSize() && !keyFound; ++i)
-                if (inv.getBackpackSlot(i).item.itemId == plan.keyItemId) {
-                    keyBag = 0xFF; keySlot = static_cast<uint8_t>(game::slots::backpackWireSlot(i));
-                    keyGuid = inv.getBackpackSlot(i).item.guid; keyFound = true;
-                }
-            for (int b = 0; b < Inventory::NUM_BAG_SLOTS && !keyFound; ++b)
-                for (int s = 0; s < inv.getBagSize(b) && !keyFound; ++s)
-                    if (inv.getBagSlot(b, s).item.itemId == plan.keyItemId) {
-                        keyBag = static_cast<uint8_t>(game::slots::wornBagContainer(b)); keySlot = static_cast<uint8_t>(s);
-                        keyGuid = inv.getBagSlot(b, s).item.guid; keyFound = true;
-                    }
-            for (int i = 0; i < inv.getKeyringSize() && !keyFound; ++i)
-                if (inv.getKeyringSlot(i).item.itemId == plan.keyItemId) {
-                    keyBag = 0xFF; keySlot = static_cast<uint8_t>(game::slots::keyringWireSlot(i));
-                    keyGuid = inv.getKeyringSlot(i).item.guid; keyFound = true;
-                }
-
-            if (keyFound && keyUseSpell != 0) {
-                auto usePacket = UseItemPacket::build(keyBag, keySlot, keyGuid,
-                                                      keyUseSpell, 0, 0, guid);
-                socket->send(usePacket);
-                lastInteractedGoGuid_ = guid;
-                scheduleGameObjectLootOpen(guid, 0.60f, 8);
-                LOG_INFO("GO chest key-item use: keyItem=", plan.keyItemId,
-                         " spell=", keyUseSpell, " keySlot(bag=", (int)keyBag,
-                         " slot=", (int)keySlot, ") guid=0x", std::hex, guid, std::dec,
-                         " entry=", goEntry, " name='", goName, "'");
-                return;
-            }
+        if (chestLike || metadataPending) {
+            // Don't send CMSG_LOOT immediately - the server may start a timed cast
+            // (e.g., "Opening") and the GO isn't lootable until the cast finishes.
+            // Queue a delayed open: if a server-side gather cast starts, update()
+            // defers this until the cast is over; if no cast packet arrives, retry
+            // a few times so resource nodes do not fail after one early CMSG_LOOT.
+            scheduleGameObjectLootOpen(guid, 0.35f, 8);
+        } else if (isMailbox) {
+            openMailbox(guid);
+        } else if (isGuildBank) {
+            // Guild vault: the bank opens via CMSG_GUILD_BANKER_ACTIVATE, which
+            // openGuildBank() sends.
+            openGuildBank(guid);
+        } else if (isReadable) {
+            // A sign, a plaque, a gravestone: the client reads it, the page
+            // id being in the object's own data.
+            if (entityController_) entityController_->showGameObjectPageText(guid);
         }
-        // LockOpenMethod::UseDirect - fall through to CMSG_GAMEOBJ_USE.
-        LOG_INFO("GO chest opens via direct USE: lockId=",
-                 goInfo && goInfo->hasData ? goInfo->data[0] : 0,
-                 " keyItem=", plan.keyItemId,
-                 " guid=0x", std::hex, guid, std::dec,
-                 " entry=", goEntry, " name='", goName, "'");
     }
 
-    // Every expansion activates game objects through CMSG_GAMEOBJ_USE.
-    auto usePacket = GameObjectUsePacket::build(guid);
-    socket->send(usePacket);
-    lastInteractedGoGuid_ = guid;
-    if (guid == hookedFishingBobberGuid_) {
-        LOG_WARNING("Fishing bobber reel sent: guid=0x", std::hex, guid, std::dec,
-                    " distance=", interactionDistance);
-        hookedFishingBobberGuid_ = 0;
-    }
-
-    if (chestLike || metadataPending) {
-        // Don't send CMSG_LOOT immediately - the server may start a timed cast
-        // (e.g., "Opening") and the GO isn't lootable until the cast finishes.
-        // Sending LOOT prematurely gets an empty response or is silently dropped,
-        // which can interfere with the server's loot state machine.
-        // Queue a delayed open: if a server-side gather cast starts, update()
-        // defers this until the cast is over; if no cast packet arrives, retry
-        // a few times so resource nodes do not fail after one early CMSG_LOOT.
-        // Unknown metadata is common immediately after a GO spawn. A delayed
-        // loot probe is harmless for non-loot objects and prevents the first
-        // click on quest containers from being lost while their query is pending.
-        scheduleGameObjectLootOpen(guid, 0.35f, 8);
-    } else if (isMailbox) {
-        openMailbox(guid);
-    } else if (isGuildBank) {
-        // Guild vault: CMSG_GAMEOBJ_USE above is a no-op on the server; the bank
-        // opens via CMSG_GUILD_BANKER_ACTIVATE, which openGuildBank() sends.
-        openGuildBank(guid);
-    } else if (isReadable) {
-        // A sign, a plaque, a gravestone: the client reads it.
-        //
-        // Nothing happened when one was clicked because this waited for
-        // SMSG_GAMEOBJECT_PAGETEXT, which is the server offering a page - and
-        // for a type 9 the server has nothing to offer, the page id being in
-        // the object's own data where the real client reads it from. Stormwind
-        // is full of signs that answered a click with silence.
-        if (entityController_) entityController_->showGameObjectPageText(guid);
-    }
-
-    // CMSG_GAMEOBJ_REPORT_USE triggers GO AI scripts (SmartAI, ScriptAI) which
-    // is where many quest objectives grant credit. Previously this was only sent
-    // for non-chest GOs, so chest-type quest objectives (Bundle of Wood, etc.)
-    // never triggered the server-side quest credit script.
-    if (!isMailbox && !isGuildBank) {
-        const auto* table = getActiveOpcodeTable();
-        if (table && table->hasOpcode(Opcode::CMSG_GAMEOBJ_REPORT_USE)) {
-            network::Packet reportUse(wireOpcode(Opcode::CMSG_GAMEOBJ_REPORT_USE));
-            reportUse.writeUInt64(guid);
-            socket->send(reportUse);
-        }
+    // 0x0070f680 reports every use it let through, whatever the use did
+    // (CMSG_GAMEOBJ_REPORT_USE, 0x481) - which is what GO scripts give quest
+    // credit from.
+    const auto* table = getActiveOpcodeTable();
+    if (table && table->hasOpcode(Opcode::CMSG_GAMEOBJ_REPORT_USE)) {
+        network::Packet reportUse(wireOpcode(Opcode::CMSG_GAMEOBJ_REPORT_USE));
+        reportUse.writeUInt64(guid);
+        socket->send(reportUse);
     }
 }
 

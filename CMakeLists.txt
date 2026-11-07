@@ -747,6 +747,7 @@ set(WOWEE_SOURCES
     src/game/trainer_service_list.cpp
     src/game/quest_poi_icons.cpp
     src/game/quest_poi_blobs.cpp
+    src/game/game_object_use.cpp
     src/game/macro_eval.cpp
     src/game/macro_options.cpp
     src/game/game_handler_skill_ups.cpp

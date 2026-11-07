@@ -2252,6 +2252,16 @@ target_link_libraries(test_cast_checks PRIVATE catch2_main)
 add_test(NAME cast_checks COMMAND test_cast_checks)
 register_test_target(test_cast_checks)
 
+# ── test_game_object_use ────────────────────────────────────
+add_executable(test_game_object_use
+    test_game_object_use.cpp
+)
+target_include_directories(test_game_object_use PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_game_object_use SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_game_object_use PRIVATE catch2_main)
+add_test(NAME game_object_use COMMAND test_game_object_use)
+register_test_target(test_game_object_use)
+
 # ── test_cast_spells ────────────────────────────────────────
 add_executable(test_cast_spells
     test_cast_spells.cpp

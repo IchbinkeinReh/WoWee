@@ -217,6 +217,7 @@
     "ID": 0
   },
   "GameObjectDisplayInfo": {
+    "GeoBoxMinX": 12,
     "ID": 0,
     "ModelName": 1
   },
@@ -445,6 +446,8 @@
     "EffectApplyAuraName1": 96,
     "EffectApplyAuraName2": 97,
     "EffectBasePoints0": 80,
+    "EffectDieSides0": 74,
+    "EffectRealPointsPerLevel0": 77,
     "EffectBasePoints1": 81,
     "EffectBasePoints2": 82,
     "EffectImplicitTargetA": 86,

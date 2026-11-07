@@ -5543,7 +5543,7 @@ struct CastCheckColumns {
     uint32_t mechanic, stances, stancesNot, casterState, casterStateNot, casterAura, excludeAura, interrupt,
         auraInterrupt, channelInterrupt, powerType, manaCost, perLevel, costPct, baseLevel, maxLevel,
         castTimeIndex, effectMechanic, trigger, prevention, minFaction, minRep, auraVision, areaGroup, itemClass,
-        itemSubClassMask, runeCost, targetStateNot, targetAura, excludeTargetAura, totem, totemCategory;
+        itemSubClassMask, runeCost, targetStateNot, targetAura, excludeTargetAura, totem, totemCategory, dieSides, pointsPerLevel;
 
     template <class Layout>
     explicit CastCheckColumns(const Layout* l) {
@@ -5563,6 +5563,7 @@ struct CastCheckColumns {
         targetStateNot = named("TargetAuraStateNot"), targetAura = named("TargetAuraSpell");
         excludeTargetAura = named("ExcludeTargetAuraSpell"), totem = named("Totem");
         totemCategory = named("TotemCategory");
+        dieSides = named("EffectDieSides0"), pointsPerLevel = named("EffectRealPointsPerLevel0");
     }
 
     void read(GameHandler::SpellNameEntry& entry, const pipeline::DBCFile& dbc, uint32_t i) const {
@@ -5591,6 +5592,11 @@ struct CastCheckColumns {
         entry.maxLevel = n(maxLevel);
         entry.castingTimeIndex = u(castTimeIndex);
         for (uint32_t k = 0; k < 3; ++k) {
+            if (dieSides < fieldCount) entry.effectDieSides[k] = n(dieSides + k);
+            if (pointsPerLevel < fieldCount) {
+                const uint32_t bits = u(pointsPerLevel + k);
+                std::memcpy(&entry.effectPointsPerLevel[k], &bits, sizeof(float));
+            }
             if (effectMechanic < fieldCount) entry.effectMechanic[k] = u(effectMechanic + k);
             if (trigger < fieldCount) entry.effectTriggerSpell[k] = u(trigger + k);
         }

@@ -25,6 +25,7 @@
 #include "game/shapeshift_forms.hpp"
 #include "game/update_field_table.hpp"
 #include "game/go_interaction_anim.hpp"
+#include "game/game_object_use.hpp"
 #include "game/inventory.hpp"
 #include "game/spell_defines.hpp"
 #include "game/group_defines.hpp"
@@ -5538,6 +5539,10 @@ public:
         /// none.
         uint32_t descriptionVariableId = 0;
         int32_t effectBasePoints[3] = {0, 0, 0};
+        /// Spell.dbc EffectDieSides and EffectRealPointsPerLevel (+0x128,
+        /// +0x134): with the base points, an effect's value (0x007ff770).
+        int32_t effectDieSides[3] = {0, 0, 0};
+        float effectPointsPerLevel[3] = {0.0f, 0.0f, 0.0f};
         uint32_t effectIds[3] = {0, 0, 0};
         // Spell.dbc EffectApplyAuraName - which aura an APPLY_AURA effect
         // applies. The effect id above only says that one is applied; this
@@ -6465,6 +6470,33 @@ private:
     GossipMessageData currentGossip;
 
     void performGameObjectInteractionNow(uint64_t guid);
+    // Using a game object as the client does (game_object_use.cpp): what of
+    // the object the use reads, its type's data fields, its Lock.dbc row,
+    // what opens it (0x0070f160), the refusal (0x00711470, 0 for none),
+    // whether the player is in its reach (0x0070fa70), and the use
+    // (0x007116c0), true when it sent something.
+    struct GameObjectFacts {
+        uint32_t type = 0;
+        uint32_t state = 0;
+        uint32_t flags = 0;
+        int32_t level = 0;
+        const GameObjectQueryResponseData* info = nullptr;
+    };
+    struct CarriedItem {
+        uint8_t bag = 0xFF;
+        uint8_t slot = 0;
+        uint64_t guid = 0;
+    };
+    GameObjectFacts gameObjectFacts(const GameObject& go, const GameObjectQueryResponseData* info) const;
+    uint32_t gameObjectData(const GameObjectFacts& f, go_use::Field which) const;
+    const go_use::LockRow* gameObjectLock(const GameObjectFacts& f) const;
+    std::optional<CarriedItem> findCarriedItem(uint32_t itemId) const;
+    go_use::Opening gameObjectOpening(const GameObjectFacts& f);
+    bool gameObjectAllowsMounted(const GameObjectFacts& f) const;
+    bool gameObjectInReach(const GameObject& go, const GameObjectFacts& f);
+    uint16_t gameObjectRefusal(const GameObject& go, const GameObjectFacts& f, std::string& arg);
+    void sayGameObjectError(uint16_t id, const std::vector<std::string>& args);
+    bool useGameObjectByLock(const GameObject& go, const GameObjectFacts& f);
 
     // Quest details
     bool questDetailsOpen = false;
