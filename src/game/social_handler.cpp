@@ -3016,9 +3016,17 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
         }
         if ((methodChanged || partyData.looterGuid != prevLooterGuid) &&
             partyData.lootMethod == 2 && partyData.looterGuid != 0) {
+            // A looter the name cache does not hold yet is asked for, and the
+            // line waits for the answer that found the name (0x0052bbc0).
             const std::string looter = owner_.lookupName(partyData.looterGuid);
-            if (!looter.empty())
+            if (!looter.empty()) {
                 gameError(owner_, ErrTo::Chat, "ERR_NEW_LOOT_MASTER_S", "%s is now the loot master.", {looter});
+            } else {
+                owner_.askNameThen(partyData.looterGuid, "loot master", [this](bool found, const std::string& name) {
+                    if (found && !name.empty())
+                        gameError(owner_, ErrTo::Chat, "ERR_NEW_LOOT_MASTER_S", "%s is now the loot master.", {name});
+                });
+            }
         }
         if (fresh || partyData.lootThreshold != prevLootThreshold) {
             const std::string qualityKey = "ITEM_QUALITY" + std::to_string(partyData.lootThreshold) + "_DESC";
