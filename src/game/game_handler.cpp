@@ -5324,6 +5324,25 @@ void GameHandler::askNameThen(uint64_t guid, const std::string& key,
     queryPlayerName(guid);
 }
 
+void GameHandler::askEntryThen(bool gameObject, uint32_t entry, const std::string& key,
+                               std::function<void(bool)> then) {
+    if (entry == 0) return;
+    auto& waits = entryWaits_[(gameObject ? (1ull << 32) : 0ull) | entry];
+    const bool waiting = std::any_of(waits.begin(), waits.end(),
+                                     [&key](const EntryWait& w) { return w.key == key; });
+    if (!waiting) waits.push_back({key, std::move(then)});
+    if (gameObject) queryGameObjectInfo(entry, 0);
+    else queryCreatureInfo(entry, 0);
+}
+
+void GameHandler::onEntryAnsweredForWaits(bool gameObject, uint32_t entry, bool found) {
+    const auto it = entryWaits_.find((gameObject ? (1ull << 32) : 0ull) | entry);
+    if (it == entryWaits_.end()) return;
+    const auto waits = std::move(it->second);
+    entryWaits_.erase(it);
+    for (const auto& w : waits) w.then(found);
+}
+
 void GameHandler::onNameAnsweredForWaits(uint64_t guid, bool found) {
     const auto it = nameWaits_.find(guid);
     if (it == nameWaits_.end()) return;

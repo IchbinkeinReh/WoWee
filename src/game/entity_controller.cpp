@@ -4406,11 +4406,9 @@ void EntityController::handleCreatureQueryResponse(network::Packet& packet) {
     } else {
         owner_.combatLogFeed().creatureAnswered(data.entry, data.name, false);
     }
+    // The caches' waits, found or not (the mail inbox's sender, 0x0056d460).
+    owner_.onEntryAnsweredForWaits(false, data.entry, data.isValid());
 }
-
-// ============================================================
-// GameObject Query
-// ============================================================
 
 void EntityController::handleGameObjectQueryResponse(network::Packet& packet) {
     GameObjectQueryResponseData data;
@@ -4501,6 +4499,7 @@ void EntityController::handleGameObjectQueryResponse(network::Packet& packet) {
             }
         }
     }
+    owner_.onEntryAnsweredForWaits(true, data.entry, data.isValid());
 }
 
 void EntityController::handleGameObjectPageText(network::Packet& packet) {

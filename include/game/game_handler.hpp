@@ -2839,6 +2839,12 @@ public:
                      std::function<void(bool found, const std::string& name)> then);
     /// The answer for those waits (from the name query response).
     void onNameAnsweredForWaits(uint64_t guid, bool found);
+    /// The creature and game object caches' asks with a callback (0x0067b6a0,
+    /// 0x0067bd40): the query goes out and `then` runs with whether the
+    /// answer found the entry. One wait per entry and key.
+    void askEntryThen(bool gameObject, uint32_t entry, const std::string& key,
+                      std::function<void(bool found)> then);
+    void onEntryAnsweredForWaits(bool gameObject, uint32_t entry, bool found);
     uint32_t getLfgProposalId() const;
     /// The proposal's dungeon and the bosses of it already done, both read off
     /// the proposal packet itself - see SocialHandler's two fields for why they
@@ -6459,6 +6465,12 @@ private:
         std::function<void(bool, const std::string&)> then;
     };
     std::unordered_map<uint64_t, std::vector<NameWait>> nameWaits_;
+    struct EntryWait {
+        std::string key;
+        std::function<void(bool)> then;
+    };
+    /// Keyed by entry, with bit 32 set for a game object's.
+    std::unordered_map<uint64_t, std::vector<EntryWait>> entryWaits_;
     bool pendingLoginQuestResync_ = false;
     float pendingLoginQuestResyncTimeout_ = 0.0f;
 

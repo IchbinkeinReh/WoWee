@@ -5045,10 +5045,16 @@ static std::string mailSenderName(game::GameHandler* gh, const game::MailMessage
         }
         case 3:
         case 4: {
-            // The same lookup WoWee keeps for these, which asks after an
-            // entry it does not hold.
+            // The creature's or the object's cached name; one not cached yet
+            // is asked for, and the found answer redraws the inbox.
             const std::string name = gh->getMailSenderName(mail);
-            return name == "Unknown" ? std::string() : name;
+            if (name != "Unknown") return name;
+            gh->askEntryThen(mail.messageType == 4, mail.senderEntry, "mail sender", [gh](bool found) {
+                if (!found) return;
+                gh->fireAddonEvent("MAIL_INBOX_UPDATE", {});
+                gh->fireAddonEvent("UPDATE_PENDING_MAIL", {});
+            });
+            return {};
         }
         default:
             return {};
