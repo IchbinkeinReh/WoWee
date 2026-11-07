@@ -11,7 +11,6 @@
 #include "game/reputation_standing.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "game/spell_description_eval.hpp"
-#include "game/gather_spells.hpp"
 #include "game/spell_target_kind.hpp"
 #include "game/spell_visual_choice.hpp"
 #include "game/packed_time.hpp"
@@ -87,49 +86,7 @@ namespace game {
 
 namespace {
 
-std::string lowerCopy(std::string value) {
-    std::transform(value.begin(), value.end(), value.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return value;
-}
 
-bool containsAnyTerm(const std::string& haystack, const char* const* terms, size_t count) {
-    for (size_t i = 0; i < count; ++i) {
-        if (haystack.find(terms[i]) != std::string::npos) return true;
-    }
-    return false;
-}
-
-// GAMEOBJECT_TYPE_FISHINGHOLE. A fishing school is not a container: retail
-// gives it no interact cursor at all, and the only way to take from it is to
-// fish in it. Clicking one here sent CMSG_GAMEOBJ_USE and, while its metadata
-// was still pending, a CMSG_LOOT as well - which the server answers with the
-// hole's loot, harvesting the school in one right-click.
-constexpr uint32_t kGoTypeFishingHole = 25;
-
-
-uint32_t gatherSpellForGameObject(const GameObjectQueryResponseData* info, const std::string& name) {
-    if (info && info->type != 3) return 0; // GAMEOBJECT_TYPE_CHEST
-
-    const std::string lower = lowerCopy(name);
-    static constexpr const char* kMiningTerms[] = {
-        "vein", "deposit", "mineral"
-    };
-    static constexpr const char* kHerbTerms[] = {
-        "peacebloom", "silverleaf", "earthroot", "mageroyal", "briarthorn",
-        "stranglekelp", "bruiseweed", "steelbloom", "grave moss", "kingsblood",
-        "liferoot", "fadeleaf", "goldthorn", "khadgar", "wintersbite",
-        "firebloom", "purple lotus", "arthas", "sungrass", "blindweed",
-        "ghost mushroom", "gromsblood", "dreamfoil", "silversage",
-        "plaguebloom", "icecap", "black lotus", "felweed", "dreaming glory",
-        "terocone", "ragveil", "ancient lichen", "netherbloom",
-        "nightmare vine", "mana thistle"
-    };
-
-    if (containsAnyTerm(lower, kMiningTerms, sizeof(kMiningTerms) / sizeof(kMiningTerms[0]))) return kMiningBaseSpellId;
-    if (containsAnyTerm(lower, kHerbTerms, sizeof(kHerbTerms) / sizeof(kHerbTerms[0]))) return kHerbBaseSpellId;
-    return 0;
-}
 
 } // end anonymous namespace
 
@@ -3780,13 +3737,19 @@ void GameHandler::closeLoot() {
 }
 
 bool GameHandler::isGatherGameObject(uint64_t guid) const {
+    // A herb or a vein: its lock opens to Herbalism (LockType 2) or Mining
+    // (3), the lock types the client's resource tracking finds them by
+    // (0x006dca90) - not its name.
     if (guid == 0 || !entityController_) return false;
     auto entity = entityController_->getEntityManager().getEntity(guid);
     if (!entity || entity->getType() != ObjectType::GAMEOBJECT) return false;
-
     auto go = std::static_pointer_cast<GameObject>(entity);
-    const GameObjectQueryResponseData* goInfo = getCachedGameObjectInfo(go->getEntry());
-    return gatherSpellForGameObject(goInfo, go->getName()) != 0;
+    const GameObjectFacts f = gameObjectFacts(*go, getCachedGameObjectInfo(go->getEntry()));
+    const go_use::LockRow* lock = gameObjectLock(f);
+    if (!lock) return false;
+    for (int i = 0; i < 8; ++i)
+        if (lock->type[i] == 2 && (lock->index[i] == 2 || lock->index[i] == 3)) return true;
+    return false;
 }
 
 void GameHandler::lootMasterGive(uint8_t lootSlot, uint64_t targetGuid) {
@@ -4024,14 +3987,12 @@ void GameHandler::performGameObjectInteractionNow(uint64_t guid) {
     const GameObjectQueryResponseData* goInfo = getCachedGameObjectInfo(goEntry);
     const GameObjectFacts facts = gameObjectFacts(*go, goInfo);
     const uint32_t goType = facts.type;
-    if (goType == kGoTypeFishingHole) {
-        // Nothing sent, and nothing scheduled: the school is fished, not
-        // opened. Silent, because retail does not respond to the click
-        // either.
-        LOG_INFO("GO fishing hole click ignored: guid=0x", std::hex, guid,
-                 std::dec, " entry=", goEntry, " name='", goName, "'");
-        return;
-    }
+    // 0x00711140: an object its handler says cannot be clicked - a fishing
+    // school, a transport, someone else's bobber, an unselectable or busy
+    // one - takes no click at all. One that can lets go of the loot open
+    // (0x00523640, CMSG_LOOT_RELEASE) before it is used.
+    if (!gameObjectClickable(*go, facts)) return;
+    closeLoot();
 
     // 0x0070f680: the type's handler is asked whether the object may be used
     // (0x00711470) and its refusal said when not - out of reach is

@@ -2946,6 +2946,15 @@ public:
     void closeLoot();
 
     bool isGatherGameObject(uint64_t guid) const;
+    /// What the pointer makes of a game object: whether it may rest on it -
+    /// a tooltip, a highlight (0x0070f580, with the quest it is kept for in
+    /// the log) - and whether a click on it is a use (the type handler's
+    /// slot +0x18, 0x00711140).
+    struct GameObjectPointer {
+        bool tracked = false;
+        bool interactive = false;
+    };
+    GameObjectPointer gameObjectPointer(uint64_t guid);
     void activateSpiritHealer(uint64_t npcGuid);
     bool isLootWindowOpen() const;
     const LootResponseData& getCurrentLoot() const;
@@ -6477,6 +6486,10 @@ private:
     bool playerInForm() const;
     bool chairSeatInReach(const GameObject& go, const GameObjectFacts& f) const;
     bool ritualAllows(const GameObject& go, const GameObjectFacts& f);
+    int gameObjectReactionToPlayer(const GameObject& go) const;
+    bool gameObjectClickable(const GameObject& go, const GameObjectFacts& f);
+    bool gameObjectUsableNow(const GameObject& go, const GameObjectFacts& f);
+    bool isPlayersBobber(const GameObject& go) const;
     void sayGameObjectError(uint16_t id, const std::vector<std::string>& args);
     bool useGameObjectByLock(const GameObject& go, const GameObjectFacts& f);
 

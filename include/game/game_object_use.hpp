@@ -44,7 +44,7 @@ constexpr uint16_t kPreventedByMechanic = 0x200;
 /// The data fields 0x00746190 is asked for, by the id the client gives
 /// each: the lock (4), "usable mounted" (0x5b), "not in combat" (0x3e) and
 /// "not while immune" (0x39).
-enum class Field : uint8_t { Lock, Mounted, NoCombat, NoImmune, ChairSlots, RitualSpell };
+enum class Field : uint8_t { Lock, Mounted, NoCombat, NoImmune, ChairSlots, RitualSpell, CreatorOnly };
 
 /// Which of a type's 24 data fields holds that field (the table at
 /// 0x00a36f34), -1 where the type has none.
@@ -71,6 +71,8 @@ enum class Field : uint8_t { Lock, Mounted, NoCombat, NoImmune, ChairSlots, Ritu
             return goType == 7 ? 0 : -1;
         case Field::RitualSpell:  // 0xa, the ritual's spell (0x00712080)
             return goType == 18 ? 1 : -1;
+        case Field::CreatorOnly:  // 0x5e, only for the one who made it (0x00710410)
+            return goType == 7 ? 2 : -1;
         case Field::NoImmune:
             switch (goType) {
                 case 0: return 3;
@@ -93,6 +95,91 @@ constexpr uint16_t kRefusedSilently = 0xFFFF;
 /// 0x004f55f0): a row along y a yard apart, centred on the chair.
 [[nodiscard]] constexpr float seatOffset(uint32_t seats, uint32_t i) {
     return -((static_cast<float>(seats) - 1.0f) * 0.5f) + static_cast<float>(i);
+}
+
+/// What the type's handler answers when asked whether the object can be
+/// clicked at all (its slot +0x18, which 0x00711140 asks first): the common
+/// test (0x007112a0), the fishing bobber's (0x00712030), a chair's
+/// (0x00711ce0), or never (0x00427a90).
+enum class Clickable : uint8_t { Never, Common, Bobber, Chair };
+[[nodiscard]] constexpr Clickable clickableBy(uint32_t goType) {
+    switch (goType) {
+        case 0: case 1: case 2: case 3: case 4: case 6: case 9: case 10: case 12: case 13:
+        case 18: case 19: case 22: case 23: case 24: case 26: case 27: case 34:
+            return Clickable::Common;
+        case 7: case 32: return Clickable::Chair;
+        case 17: return Clickable::Bobber;
+        default: return Clickable::Never;
+    }
+}
+
+/// GAMEOBJECT_DYNAMIC's GO_DYNFLAG_LO_ACTIVATE and _NO_INTERACT, and
+/// GAMEOBJECT_FLAGS' IN_USE, INTERACT_COND and NOT_SELECTABLE (0x007112a0).
+constexpr uint32_t kDynActivate = 0x1;
+constexpr uint32_t kDynNoInteract = 0x4;
+constexpr uint32_t kFlagInUse = 0x1;
+constexpr uint32_t kFlagInteractCond = 0x4;
+constexpr uint32_t kFlagNotSelectable = 0x10;
+
+/// 0x007112a0's last part, on the object's own state: not with the dynamic
+/// NO_INTERACT, not in use or unselectable, and with INTERACT_COND only
+/// while the dynamic ACTIVATE is set.
+[[nodiscard]] constexpr bool stateLetsClick(uint32_t dynamic, uint32_t flags) {
+    if ((dynamic & kDynNoInteract) != 0) return false;
+    if ((flags & (kFlagInUse | kFlagNotSelectable)) != 0) return false;
+    if ((flags & kFlagInteractCond) != 0 && (dynamic & kDynActivate) == 0) return false;
+    return true;
+}
+
+/// 0x007112a0 on what the object itself says: `reaction` is how it regards
+/// the player (0x0070edd0, 0 hated to 7 exalted). Any type but a trap wants
+/// it no worse than unfriendly-but-not-hostile (2 and up); a trap wants a
+/// lock and an enemy that set it (1 or worse). What a trap a player set asks
+/// of that player, and an object for its maker alone, the caller adds.
+[[nodiscard]] constexpr bool usableByState(uint32_t goType, bool hasLock, uint32_t flags, uint32_t dynamic,
+                                           int reaction) {
+    if (goType == 6) {
+        if (!hasLock || reaction > 1) return false;
+    } else if (reaction < 2) {
+        return false;
+    }
+    return stateLetsClick(dynamic, flags);
+}
+
+/// Whether the pointer may rest on an object at all (0x0070f580, asking the
+/// type's handler, slot +0xc; CGWorldFrame drops what it refuses,
+/// 0x004f8190): never, always, only with the template's highlight set
+/// (0x0070ff80: data1 for a generic object, data19 for a capture point), the
+/// player's own bobber while usable (0x00712030), or whenever usable
+/// (0x007112a0).
+enum class Mouseover : uint8_t { Never, Always, Highlight, Bobber, Usable };
+[[nodiscard]] constexpr Mouseover mouseoverBy(uint32_t goType) {
+    switch (goType) {
+        case 11: case 14: case 15: case 20: case 21: case 28: case 31: case 33: case 35:
+            return Mouseover::Never;
+        case 8: case 16: case 25: case 30:
+            return Mouseover::Always;
+        case 5: case 29: return Mouseover::Highlight;
+        case 17: return Mouseover::Bobber;
+        default: return Mouseover::Usable;
+    }
+}
+/// The data field holding a type's highlight: data1, or data19 for a
+/// capture point.
+[[nodiscard]] constexpr int highlightIndex(uint32_t goType) { return goType == 29 ? 19 : 1; }
+
+/// The quest an object of this type is only there for (the property table,
+/// property 0x14): a chest's data8, a generic object's data5, a spell
+/// focus's data4, a goober's data1; 0 for none. An object with one is
+/// tracked only while that quest is in the log (0x0070f580).
+[[nodiscard]] constexpr int requiredQuestIndex(uint32_t goType) {
+    switch (goType) {
+        case 3: return 8;
+        case 5: return 5;
+        case 8: return 4;
+        case 10: return 1;
+        default: return -1;
+    }
 }
 
 /// The type handler's reach and the error a locked object refuses with

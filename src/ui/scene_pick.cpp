@@ -32,25 +32,6 @@ bool isDeadUnit(const std::shared_ptr<game::Entity>& entity) {
     return unit && unit->getHealth() == 0 && unit->getMaxHealth() > 0;
 }
 
-/// How a game object regards the player (0x0070edd0), numbered as
-/// UnitReaction numbers it: as the unit that made it does, if that unit is
-/// here; else as its GAMEOBJECT_FACTION does; else neutral.
-int gameObjectReactionToPlayer(game::GameHandler& gameHandler, const game::Entity& object,
-                               uint64_t createdBy) {
-    if (createdBy != 0) {
-        // The player's own: 0x007251c0 answers a unit asked about itself
-        // with friendly.
-        if (createdBy == gameHandler.getPlayerGuid()) return 5;
-        auto maker = gameHandler.getEntityManager().getEntity(createdBy);
-        if (maker && maker->isUnit()) {
-            return gameHandler.unitReactionToPlayer(static_cast<const game::Unit&>(*maker));
-        }
-    }
-    const uint16_t factionField = game::fieldIndex(game::UF::GAMEOBJECT_FACTION);
-    if (factionField == 0xFFFF) return 4;
-    return gameHandler.factionReactionToPlayer(object.getField(factionField));
-}
-
 } // namespace
 
 ScenePick pickScene(game::GameHandler& gameHandler,
@@ -186,39 +167,12 @@ ScenePick pickScene(game::GameHandler& gameHandler,
                 livingHits.push_back({guid, centerT, std::max(centerT - hitRadius, 0.0f)});
             }
         } else if (type == game::ObjectType::GAMEOBJECT) {
-            // What the real client lets the pointer rest on, and of that what
-            // a click can use: by type, by template, and by the flags the
-            // server keeps current (in use, not selectable, a conditional one
-            // that is not lit). An object whose template has not arrived yet
-            // is taken as usable until it does, and not named, having no name.
-            const uint16_t ufFlags = game::fieldIndex(game::UF::GAMEOBJECT_FLAGS);
-            const uint16_t ufDynamic = game::fieldIndex(game::UF::GAMEOBJECT_DYNAMIC);
-            const uint32_t goFlags = ufFlags == 0xFFFF ? 0u : entity->getField(ufFlags);
-            const uint32_t goDynamicLow = ufDynamic == 0xFFFF ? 0u : (entity->getField(ufDynamic) & 0xFFFFu);
-            bool tracked = false;
-            int reaction = 4;
-            if (goInfo) {
-                const uint32_t* data = goInfo->hasData ? goInfo->data : nullptr;
-                // GAMEOBJECT_FIELD_CREATED_BY, fields 6 and 7 (OBJECT_END is 6
-                // in every expansion), as the bobber's bite handler reads it.
-                const uint64_t createdBy = static_cast<uint64_t>(entity->getField(6)) |
-                                           (static_cast<uint64_t>(entity->getField(7)) << 32);
-                reaction = gameObjectReactionToPlayer(gameHandler, *entity, createdBy);
-                tracked = gameObjectTakesMouseover(goInfo->type, data, goFlags, goDynamicLow,
-                                                   createdBy == myGuid, reaction);
-                // 0x0070f580: an object kept for a quest is tracked only while
-                // that quest is in the log.
-                const uint32_t quest = gameObjectRequiredQuest(goInfo->type, data);
-                if (tracked && quest != 0) {
-                    const auto& log = gameHandler.getQuestLog();
-                    tracked = std::any_of(log.begin(), log.end(),
-                                          [quest](const auto& q) { return q.questId == quest; });
-                }
-            }
-            const bool interactive =
-                !goInfo || (tracked && gameObjectTakesClick(goInfo->type,
-                                                            goInfo->hasData ? goInfo->data : nullptr,
-                                                            goFlags, goDynamicLow, reaction));
+            // What the real client lets the pointer rest on (0x0070f580), and
+            // of that what a click uses (the type handler's slot +0x18) - the
+            // game's own answer, which the use asks again.
+            const auto pointer = gameHandler.gameObjectPointer(guid);
+            const bool tracked = pointer.tracked;
+            const bool interactive = pointer.interactive;
             // How well the ray is aimed at this one, as a fraction of its own
             // size: nought is dead centre and one is a graze. Ranked by that
             // rather than by which centre is nearest along the ray, because

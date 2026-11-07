@@ -307,7 +307,9 @@ glm::quat GameHandler::gameObjectRotation(const GameObject& go) const {
 }
 
 bool GameHandler::playerInForm() const {
-    // 0x00721ca0: a form, and not one SpellShapeshiftForm flags 1 (a stance).
+    // 0x00721ca0: a form, and not one SpellShapeshiftForm flags 1 (a stance)
+    // - nor one the player is already leaving (+0x9f4, which
+    // getShapeshiftFormId reads as no form).
     const uint8_t form = getShapeshiftFormId();
     if (form == 0) return false;
     const auto* row = shapeshiftFormRow(form);
@@ -330,6 +332,116 @@ bool GameHandler::chairSeatInReach(const GameObject& go, const GameObjectFacts& 
         if (glm::dot(d, d) < reach * reach) return true;
     }
     return false;
+}
+
+int GameHandler::gameObjectReactionToPlayer(const GameObject& go) const {
+    // 0x0070edd0: the unit that made it, as that unit regards the player;
+    // else its faction's (0x0071f770, 0-based); 3 with neither.
+    const uint16_t c = fieldIndex(UF::GAMEOBJECT_FIELD_CREATED_BY);
+    const uint64_t creator = c == 0xFFFF ? 0
+        : (static_cast<uint64_t>(go.getField(static_cast<uint16_t>(c + 1))) << 32) | go.getField(c);
+    const auto self = getEntityManager().getEntity(getPlayerGuid());
+    if (creator != 0 && self) {
+        if (auto unit = getEntityManager().getEntity(creator); unit && unit->isUnit())
+            return unitReaction(*unit, *self);
+    }
+    const uint16_t fi = fieldIndex(UF::GAMEOBJECT_FACTION);
+    const uint32_t faction = fi == 0xFFFF ? 0 : go.getField(fi);
+    if (faction == 0) return 3;
+    return factionReactionToPlayer(faction) - 1;
+}
+
+bool GameHandler::gameObjectUsableNow(const GameObject& go, const GameObjectFacts& f) {
+    // 0x007112a0.
+    namespace gu = go_use;
+    const uint16_t di = fieldIndex(UF::GAMEOBJECT_DYNAMIC);
+    const uint32_t dynamic = di == 0xFFFF ? 0 : go.getField(di) & 0xFFFFu;
+    if (!gu::usableByState(f.type, gameObjectLock(f) != nullptr, f.flags, dynamic,
+                           gameObjectReactionToPlayer(go)))
+        return false;
+    const uint16_t c = fieldIndex(UF::GAMEOBJECT_FIELD_CREATED_BY);
+    const uint64_t creator = c == 0xFFFF ? 0
+        : (static_cast<uint64_t>(go.getField(static_cast<uint16_t>(c + 1))) << 32) | go.getField(c);
+    if (f.type == 6 && creator != 0 && (creator >> 60) == 0) {
+        // A trap a player set: only where that player may fight this one,
+        // or is free-for-all and not grouped with it.
+        auto setter = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(creator));
+        if (!setter) return false;
+        const uint16_t b2 = fieldIndex(UF::UNIT_FIELD_BYTES_2);
+        const uint32_t pvp = b2 == 0xFFFF ? 0 : (setter->getField(b2) >> 8) & 0xFFu;
+        bool grouped = false;
+        for (const auto& m : getPartyData().members)
+            if (m.guid == creator) grouped = true;
+        const bool freeForAll = (pvp & 0x4u) != 0 && !grouped;
+        if ((pvp & 0x1u) == 0 && !unitMayAttack(creator, getPlayerGuid()) && !freeForAll) return false;
+    }
+    // 0x00710410: one made for its maker alone.
+    if (gameObjectData(f, gu::Field::CreatorOnly) != 0 && creator != getPlayerGuid()) return false;
+    return true;
+}
+
+bool GameHandler::isPlayersBobber(const GameObject& go) const {
+    // 0x00712030: the bobber the player channels at.
+    auto me = getEntityManager().getEntity(getPlayerGuid());
+    const uint16_t ch = fieldIndex(UF::UNIT_FIELD_CHANNEL_OBJECT);
+    if (!me || ch == 0xFFFF) return false;
+    const uint64_t channel =
+        (static_cast<uint64_t>(me->getField(static_cast<uint16_t>(ch + 1))) << 32) | me->getField(ch);
+    return channel == go.getGuid();
+}
+
+GameHandler::GameObjectPointer GameHandler::gameObjectPointer(uint64_t guid) {
+    GameObjectPointer p;
+    auto entity = getEntityManager().getEntity(guid);
+    if (!entity || entity->getType() != ObjectType::GAMEOBJECT) return p;
+    const auto& go = static_cast<const GameObject&>(*entity);
+    const GameObjectFacts f = gameObjectFacts(go, getCachedGameObjectInfo(go.getEntry()));
+    namespace gu = go_use;
+    const auto data = [&](int i) { return f.info && f.info->hasData && i >= 0 && i < 24 ? f.info->data[i] : 0u; };
+    switch (gu::mouseoverBy(f.type)) {
+        case gu::Mouseover::Never: p.tracked = false; break;
+        case gu::Mouseover::Always: p.tracked = true; break;
+        case gu::Mouseover::Highlight: p.tracked = data(gu::highlightIndex(f.type)) != 0; break;
+        case gu::Mouseover::Bobber: p.tracked = isPlayersBobber(go) && gameObjectUsableNow(go, f); break;
+        case gu::Mouseover::Usable: p.tracked = gameObjectUsableNow(go, f); break;
+    }
+    if (p.tracked) {
+        if (const uint32_t quest = data(gu::requiredQuestIndex(f.type)); quest != 0) {
+            const auto& log = getQuestLog();
+            p.tracked = std::any_of(log.begin(), log.end(), [quest](const auto& q) { return q.questId == quest; });
+        }
+    }
+    p.interactive = p.tracked && gameObjectClickable(go, f);
+    return p;
+}
+
+bool GameHandler::gameObjectClickable(const GameObject& go, const GameObjectFacts& f) {
+    // The handler's slot +0x18, which a right click asks before anything
+    // else (0x00711140).
+    namespace gu = go_use;
+    const gu::Clickable kind = gu::clickableBy(f.type);
+    if (kind == gu::Clickable::Never) return false;
+    auto me = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(getPlayerGuid()));
+    if (!me) return false;
+    if (kind == gu::Clickable::Bobber && !isPlayersBobber(go)) return false;
+    if (!gameObjectUsableNow(go, f)) return false;
+    if (kind == gu::Clickable::Chair) {
+        // 0x00711ce0: not the chair the player already sits in - sitting
+        // (stand states 4-6) within sqrt(1/6) yd of one of its seats.
+        const uint8_t stand = me->getStandState();
+        if (stand > 3 && stand < 7) {
+            const uint32_t seats = f.type == 32 ? 1u : gameObjectData(f, gu::Field::ChairSlots);
+            const glm::vec3 offset = core::coords::canonicalToServer(
+                glm::vec3(movementInfo.x - go.getX(), movementInfo.y - go.getY(), movementInfo.z - go.getZ()));
+            const glm::quat rotation = gameObjectRotation(go);
+            const float scale = gameObjectScale(go);
+            for (uint32_t i = 0; i < seats; ++i) {
+                const glm::vec3 d = offset - rotation * glm::vec3(0.0f, gu::seatOffset(seats, i) * scale, 0.0f);
+                if (glm::dot(d, d) < 1.0f / 6.0f) return false;
+            }
+        }
+    }
+    return true;
 }
 
 bool GameHandler::ritualAllows(const GameObject& go, const GameObjectFacts& f) {
@@ -427,7 +539,13 @@ bool GameHandler::useGameObjectByLock(const GameObject& go, const GameObjectFact
             // Nothing to cast: off the mount where the object wants that,
             // out of a form that may not use it (SpellShapeshiftForm flag 8),
             // and CMSG_GAMEOBJ_USE.
-            if (isMounted() && !isTaxiMountActive() && !gameObjectAllowsMounted(f)) dismount();
+            // 0x007116c0 dismounts where no dismount is already waiting on the
+            // mount's animation (+0xa30 0x10000000, which this client never
+            // holds: it dismounts at once), and the request itself
+            // (0x007412e0) is nothing on a flight path (UNIT_FLAG 0x100000).
+            auto me = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(getPlayerGuid()));
+            const bool onFlight = me && (me->getUnitFlags() & 0x100000u) != 0;
+            if (isMounted() && !gameObjectAllowsMounted(f) && !onFlight) dismount();
             if (playerInForm()) {
                 const auto* row = shapeshiftFormRow(getShapeshiftFormId());
                 if (!row || (row->flags & 0x8u) == 0) leaveShapeshiftForm();

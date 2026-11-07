@@ -130,3 +130,64 @@ TEST_CASE("go_use: a chair's seats are a row a yard apart, centred", "[go_use]")
     CHECK(dataIndex(3, Field::ChairSlots) == -1);
     CHECK(handlerFor(7).reach == 3.0f);
 }
+
+TEST_CASE("go_use: which types a click reaches", "[go_use]") {
+    CHECK(clickableBy(3) == Clickable::Common);
+    CHECK(clickableBy(25) == Clickable::Never);  // a fishing school
+    CHECK(clickableBy(15) == Clickable::Never);  // a transport
+    CHECK(clickableBy(17) == Clickable::Bobber);
+    CHECK(clickableBy(7) == Clickable::Chair);
+    CHECK(clickableBy(32) == Clickable::Chair);
+    CHECK(stateLetsClick(0, 0));
+    CHECK_FALSE(stateLetsClick(kDynNoInteract, 0));
+    CHECK_FALSE(stateLetsClick(0, kFlagInUse));
+    CHECK_FALSE(stateLetsClick(0, kFlagNotSelectable));
+    CHECK_FALSE(stateLetsClick(0, kFlagInteractCond));
+    CHECK(stateLetsClick(kDynActivate, kFlagInteractCond));
+    CHECK(dataIndex(7, Field::CreatorOnly) == 2);
+}
+
+// How the object regards the player, 0 hated to 7 exalted (0x0070edd0).
+namespace {
+constexpr int kNeutral = 3;
+constexpr int kHostile = 1;
+}  // namespace
+
+TEST_CASE("go_use: what the pointer may rest on", "[go_use]") {
+    // Scenery: a generic object or a capture point only with its highlight.
+    CHECK(mouseoverBy(5) == Mouseover::Highlight);
+    CHECK(highlightIndex(5) == 1);
+    CHECK(mouseoverBy(29) == Mouseover::Highlight);
+    CHECK(highlightIndex(29) == 19);
+    for (uint32_t t : {11u, 14u, 15u, 31u, 35u}) CHECK(mouseoverBy(t) == Mouseover::Never);
+    // An anvil is named though nothing uses it.
+    for (uint32_t t : {8u, 16u, 25u, 30u}) {
+        CHECK(mouseoverBy(t) == Mouseover::Always);
+        CHECK(clickableBy(t) == Clickable::Never);
+    }
+    CHECK(mouseoverBy(17) == Mouseover::Bobber);
+    CHECK(mouseoverBy(3) == Mouseover::Usable);
+}
+
+TEST_CASE("go_use: an object that counts the player as an enemy is not for its hands", "[go_use]") {
+    CHECK(usableByState(3, false, 0, 0, kNeutral));
+    CHECK_FALSE(usableByState(3, false, 0x10, 0, kNeutral));  // not selectable
+    CHECK_FALSE(usableByState(10, false, 0, 0x4, kNeutral));  // no-interact
+    CHECK(usableByState(10, false, 0x4, 0x1, kNeutral));      // conditional, lit
+    // Dalaran's fountain: a button of a faction hostile to the player.
+    CHECK_FALSE(usableByState(1, false, 0x20, 0, kHostile));
+    CHECK(usableByState(1, false, 0x20, 0, kNeutral));
+    CHECK(usableByState(3, false, 0, 0, 2));  // unfriendly is not yet an enemy
+    // A trap the other way round: only a hostile one with a lock.
+    CHECK_FALSE(usableByState(6, true, 0, 0, kNeutral));
+    CHECK_FALSE(usableByState(6, false, 0, 0, kHostile));
+    CHECK(usableByState(6, true, 0, 0, kHostile));
+}
+
+TEST_CASE("go_use: the quest an object is kept for", "[go_use]") {
+    CHECK(requiredQuestIndex(3) == 8);
+    CHECK(requiredQuestIndex(5) == 5);
+    CHECK(requiredQuestIndex(8) == 4);
+    CHECK(requiredQuestIndex(10) == 1);
+    CHECK(requiredQuestIndex(19) == -1);
+}
