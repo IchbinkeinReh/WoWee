@@ -571,14 +571,30 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         // The roll id the interface will ask every later question by. Its own
         // number: the slot plus one was unique only while one roll was open,
         // and two corpses both rolling their first item shared it.
-        if (owner_.addonEventCallbackRef()) {
-            // ...and the time to roll in, which the packet carried all along
-            // and this read past. GroupLootFrame_OpenNewFrame takes it as the
-            // second argument and sizes the countdown bar from it; without one
-            // the bar had no length and the window could not time out.
-            owner_.addonEventCallbackRef()("START_LOOT_ROLL",
-                                           {std::to_string(roll.rollId),
-                                            std::to_string(countdown)});
+        //
+        // Only once the item is known (0x006fb2c0 asks the item cache with
+        // 0x006fb1f0): an item not cached yet is asked for, the found answer
+        // opens the frame, and one that found nothing drops the roll unseen.
+        if (info && info->valid) {
+            openLootRollFrame(roll.rollId);
+        } else {
+            const int rollId = roll.rollId;
+            owner_.askItemThen(itemId, "start loot roll " + std::to_string(rollId),
+                               [this, rollId](bool found) {
+                for (auto it = lootRolls_.begin(); it != lootRolls_.end(); ++it) {
+                    if (it->rollId != rollId) continue;
+                    if (!found) {
+                        lootRolls_.erase(it);
+                        return;
+                    }
+                    if (const auto* got = owner_.getItemInfo(it->itemId)) {
+                        it->itemName = got->name;
+                        it->itemQuality = static_cast<uint8_t>(got->quality);
+                    }
+                    openLootRollFrame(rollId);
+                    return;
+                }
+            });
         }
     };
 
@@ -1530,17 +1546,50 @@ LootRollEntry* InventoryHandler::findLootRoll(uint64_t objectGuid, uint32_t slot
 }
 
 /// Close one roll and take its window down with it.
+void InventoryHandler::openLootRollFrame(int rollId) {
+    for (auto& roll : lootRolls_) {
+        if (roll.rollId != rollId) continue;
+        roll.started = true;
+        if (lootRollFramesUp_ >= 4) {
+            roll.queued = true;
+            return;
+        }
+        ++lootRollFramesUp_;
+        roll.queued = false;
+        // ...and the time to roll in, which the packet carried all along and
+        // this read past. GroupLootFrame_OpenNewFrame takes it as the second
+        // argument and sizes the countdown bar from it; without one the bar
+        // had no length and the window could not time out.
+        if (owner_.addonEventCallbackRef()) {
+            owner_.addonEventCallbackRef()("START_LOOT_ROLL",
+                                           {std::to_string(roll.rollId),
+                                            std::to_string(roll.rollCountdownMs)});
+        }
+        return;
+    }
+}
+
 void InventoryHandler::endLootRoll(uint64_t objectGuid, uint32_t slot) {
     for (auto it = lootRolls_.begin(); it != lootRolls_.end(); ++it) {
         if (it->objectGuid != objectGuid || it->slot != slot) continue;
         const int rollId = it->rollId;
+        const bool started = it->started;
         lootRolls_.erase(it);
         // Named, so the window that closes is the one this roll opened. It was
         // the slot plus one here as well, which closed a different roll's
-        // window whenever two were up.
+        // window whenever two were up. Only for a roll whose start was
+        // raised - queued ones as well, which count off the frames the same
+        // way in the client (0x006fb470) - and then the next queued roll takes
+        // the frame (0x006fb180).
+        if (!started) return;
         if (owner_.addonEventCallbackRef()) {
             owner_.addonEventCallbackRef()("CANCEL_LOOT_ROLL",
                                            {std::to_string(rollId)});
+        }
+        if (lootRollFramesUp_ > 0) --lootRollFramesUp_;
+        for (auto& next : lootRolls_) {
+            if (lootRollFramesUp_ >= 4) break;
+            if (next.queued) openLootRollFrame(next.rollId);
         }
         return;
     }
@@ -1565,6 +1614,7 @@ void InventoryHandler::passLootRollsForWorldport() {
     // window shown (+0x41 clear).
     const std::vector<LootRollEntry> rolls = std::move(lootRolls_);
     lootRolls_.clear();
+    lootRollFramesUp_ = 0;
     for (const LootRollEntry& roll : rolls) {
         if (owner_.getState() == WorldState::IN_WORLD && owner_.getSocket()) {
             network::Packet pkt(wireOpcode(Opcode::CMSG_LOOT_ROLL));
@@ -1573,10 +1623,12 @@ void InventoryHandler::passLootRollsForWorldport() {
             pkt.writeUInt8(0);  // pass
             owner_.getSocket()->send(pkt);
         }
-        if (owner_.addonEventCallbackRef()) {
+        if (roll.started && !roll.queued && owner_.addonEventCallbackRef()) {
             owner_.addonEventCallbackRef()("CANCEL_LOOT_ROLL", {std::to_string(roll.rollId)});
         }
     }
+    // Every frame is down (0x006fafd0 zeroes 0x00ca0694).
+    lootRollFramesUp_ = 0;
 }
 
 void InventoryHandler::handleLootRoll(network::Packet& packet) {
@@ -6116,6 +6168,16 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
                 owner_.addonEventCallbackRef()("MERCHANT_UPDATE", {});
                 break;
             }
+        }
+
+        // The trade window, which asks the item cache for each slot it draws
+        // and redraws on the answer (GetTradePlayerItemInfo /
+        // GetTradeTargetItemInfo with 0x00586080, TRADE_UPDATE).
+        if (isTradeOpen() && owner_.addonEventCallbackRef()) {
+            bool shown = false;
+            for (const auto& slot : myTradeSlots_) shown = shown || (slot.itemId != 0 && slot.itemId == data.entry);
+            for (const auto& slot : peerTradeSlots_) shown = shown || (slot.itemId != 0 && slot.itemId == data.entry);
+            if (shown) owner_.addonEventCallbackRef()("TRADE_UPDATE", {});
         }
 
         // Auction lines that were waiting on this item's name (0x0059a400).

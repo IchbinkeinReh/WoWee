@@ -971,6 +971,11 @@ private:
 
     // Group loot roll state
     std::vector<LootRollEntry> lootRolls_;
+    /// The roll frames up (0x00ca0694): START_LOOT_ROLL is raised for at most
+    /// four rolls at once, the rest waiting until one ends (0x006fb180).
+    int lootRollFramesUp_ = 0;
+    /// Raise START_LOOT_ROLL for a roll, or queue it behind the four up.
+    void openLootRollFrame(int rollId);
     /// Never reused within a session, so a window that outlives its roll finds
     /// nothing rather than somebody else's item.
     int           nextLootRollId_ = 1;
