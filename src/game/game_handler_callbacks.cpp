@@ -678,7 +678,7 @@ void GameHandler::selectCharacter(uint64_t characterGuid) {
     // And the pet's information (0x005d6d90): no pet, its spell list emptied
     // (0x005d64f0(0)), its bar and its combo points with it. The server
     // sends SMSG_PET_SPELLS only for a pet there is.
-    petGuid_ = 0;
+    setActivePet(0);
     petSpellList_.clear();
     petAutocastSpells_.clear();
     petAutocastableSpells_.clear();
@@ -5337,6 +5337,14 @@ std::string GameHandler::formatSpellDescription(uint32_t selfSpellId,
         prevSpace = isSpace;
     }
     return cleaned;
+}
+
+const std::string* GameHandler::getSpellMechanicName(uint32_t mechanicId) const {
+    return spellHandler_ ? spellHandler_->getSpellMechanicName(mechanicId) : nullptr;
+}
+
+uint32_t GameHandler::playerAuraMechanic(std::initializer_list<uint32_t> auraTypes) const {
+    return spellHandler_ ? spellHandler_->playerAuraMechanic(auraTypes) : 0;
 }
 
 const std::string& GameHandler::getSpellFocusName(uint32_t focusId) const {

@@ -3232,7 +3232,16 @@ void GameHandler::registerRemainingOpcodes() {
     // These pet opcodes have incompatible formats - just consume the packet.
     // Previously they shared the unlearn handler, which misinterpreted sound IDs
     // or GUID lists as unlearn costs and could trigger a bogus unlearn dialog.
-    dispatchTable_[Opcode::SMSG_PET_GUIDS] = [](network::Packet& packet) { packet.skipAll(); };
+    // The player's controlled units, the pet first (0x005d6550): a count and
+    // that many guids, which become the list the pet is read from.
+    dispatchTable_[Opcode::SMSG_PET_GUIDS] = [this](network::Packet& packet) {
+        if (!packet.hasRemaining(4)) { packet.skipAll(); return; }
+        const uint32_t count = std::min<uint32_t>(packet.readUInt32(), 64u);
+        std::vector<uint64_t> guids;
+        for (uint32_t i = 0; i < count && packet.hasRemaining(8); ++i) guids.push_back(packet.readUInt64());
+        setPetGuidList(std::move(guids));
+        packet.skipAll();
+    };
     // A pet's answer to the order it was just given. 0x00716b90 takes a guid
     // and one value out of it and resolves a unit (type mask 8) by the guid,
     // Unit_C.cpp:0x636 - value 0 asks the pet's Order line, 1 its Kill line,

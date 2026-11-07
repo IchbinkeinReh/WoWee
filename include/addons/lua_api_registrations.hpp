@@ -3,12 +3,19 @@
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
 struct lua_State;
 
+namespace wowee::game { class GameHandler; }
+
 namespace wowee::addons {
+
+/// A quest's open objectives as the map reads them (0x005e2950): a bit per
+/// objective still to do, 0xffffffff once complete, 0 when not in the log.
+uint32_t questObjectiveMask(game::GameHandler* gh, uint32_t questId);
 
 void registerUnitLuaAPI(lua_State* L);
 void registerSpellLuaAPI(lua_State* L);

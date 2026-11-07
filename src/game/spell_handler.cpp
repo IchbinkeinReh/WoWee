@@ -5138,7 +5138,7 @@ void SpellHandler::handlePetSpells(network::Packet& packet) {
     // for a pet in combat (0x0071afb0: UNIT_FLAG_PET_IN_COMBAT).
     owner_.setPetAttacking(false);
     if (remaining < 8) {
-        owner_.petGuidRef() = 0;
+        owner_.setActivePet(0);
         // No pet: its combo points go (0x005d6900 -> 0x005d34b0).
         owner_.petComboTargetRef() = 0;
         owner_.petComboPointsRef() = 0;
@@ -5157,7 +5157,7 @@ void SpellHandler::handlePetSpells(network::Packet& packet) {
         return;
     }
 
-    owner_.petGuidRef() = packet.readUInt64();
+    owner_.setActivePet(packet.readUInt64());
     // Ask what it is called. Nothing else does, and the name a player gave a
     // pet comes back in answer to this and nothing else.
     if (owner_.petGuidRef() != 0) requestPetName(owner_.petGuidRef());
@@ -6126,6 +6126,43 @@ const std::string& SpellHandler::getSpellFocusName(uint32_t focusId) {
     }
     auto it = spellFocusNames_.find(focusId);
     return it != spellFocusNames_.end() ? it->second : kEmpty;
+}
+
+const std::string* SpellHandler::getSpellMechanicName(uint32_t mechanicId) {
+    if (!spellMechanicDbcLoaded_) {
+        spellMechanicDbcLoaded_ = true;
+        auto* am = owner_.services().assetManager;
+        if (am && am->isInitialized()) {
+            auto dbc = am->loadDBC("SpellMechanic.dbc");
+            // ID(0) + StateName locstring at field 1.
+            if (dbc && dbc->isLoaded() && dbc->getFieldCount() >= 2) {
+                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
+                    spellMechanicNames_[dbc->getUInt32(i, 0)] = dbc->getString(i, 1);
+            }
+        }
+    }
+    const auto it = spellMechanicNames_.find(mechanicId);
+    return it != spellMechanicNames_.end() ? &it->second : nullptr;
+}
+
+uint32_t SpellHandler::playerAuraMechanic(std::initializer_list<uint32_t> auraTypes) {
+    namespace cc = cast_check;
+    const auto& cache = owner_.spellNameCacheRef();
+    std::vector<cc::Spell> auraSpells;
+    for (const auto& a : playerAuras_) {
+        if (a.spellId == 0) continue;
+        if (const auto it = cache.find(a.spellId); it != cache.end()) auraSpells.push_back(checkSpellOf(it->second));
+    }
+    const auto auras = [&](auto&& fn) {
+        for (const auto& a : auraSpells)
+            if (!fn(a)) return;
+    };
+    // No spell is cast (0x0072bdb0 passes none), so nothing clears a hold.
+    const cc::Spell none{};
+    uint32_t mechanic = 0;
+    for (const uint32_t t : auraTypes)
+        if (cc::aurasLet(none, auras, t, mechanic)) break;
+    return mechanic;
 }
 
 void SpellHandler::updateMultiCastBar() {

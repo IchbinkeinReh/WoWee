@@ -4671,6 +4671,10 @@ public:
     // SpellFocusObject.dbc name ("Anvil", "Cooking Fire", ...) for
     // requires-spell-focus cast failures; empty if unknown.
     const std::string& getSpellFocusName(uint32_t focusId) const;
+    /// SpellMechanic.dbc's name for a mechanic, null when it has no row.
+    const std::string* getSpellMechanicName(uint32_t mechanicId) const;
+    /// The mechanic of the player's first aura of those types (0x00804430).
+    uint32_t playerAuraMechanic(std::initializer_list<uint32_t> auraTypes) const;
     // TotemCategory.dbc name ("Blacksmith Hammer", "Mining Pick", ...) for
     // totem-category cast failures; empty if unknown.
     const std::string& getTotemCategoryName(uint32_t categoryId) const;
@@ -5237,6 +5241,24 @@ public:
     auto& petAutocastableSpellsRef() { return petAutocastableSpells_; }
     auto& petCommandRef() { return petCommand_; }
     auto& petGuidRef() { return petGuid_; }
+    /// The player's controlled units as the client lists them (0x00c23500,
+    /// 0x005d3390(i)); the pet is the first. SMSG_PET_GUIDS sets the list
+    /// (0x005d6550); the pet SMSG_PET_SPELLS names moves to its front, a
+    /// list of its own when it is not on it, and none empties it (0x005d6900).
+    void setActivePet(uint64_t guid) {
+        if (guid == 0) {
+            petGuidList_.clear();
+        } else if (auto it = std::find(petGuidList_.begin(), petGuidList_.end(), guid); it != petGuidList_.end()) {
+            std::iter_swap(petGuidList_.begin(), it);
+        } else {
+            petGuidList_.assign(1, guid);
+        }
+        petGuid_ = petGuidList_.empty() ? 0 : petGuidList_.front();
+    }
+    void setPetGuidList(std::vector<uint64_t> guids) {
+        petGuidList_ = std::move(guids);
+        petGuid_ = petGuidList_.empty() ? 0 : petGuidList_.front();
+    }
     auto& petReactRef() { return petReact_; }
     auto& petSpellListRef() { return petSpellList_; }
     auto& stabledPetsRef() { return stabledPets_; }
@@ -6265,6 +6287,7 @@ private:
     std::vector<AuraSlot> playerAuras;
     std::vector<AuraSlot> targetAuras;
     uint64_t petGuid_ = 0;
+    std::vector<uint64_t> petGuidList_;
     uint32_t petActionSlots_[10] = {};   // SMSG_PET_SPELLS action bar (10 slots)
     uint8_t  petCommand_ = 1;            // 0=stay,1=follow,2=attack,3=dismiss
     uint8_t  petReact_   = 1;            // 0=passive,1=defensive,2=aggressive

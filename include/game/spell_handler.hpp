@@ -244,6 +244,14 @@ public:
     // SpellFocusObject.dbc name ("Anvil", "Cooking Fire", ...) for
     // requires-spell-focus cast failures; empty if unknown.
     const std::string& getSpellFocusName(uint32_t focusId);
+    /// SpellMechanic.dbc's name for a mechanic (table 0xad4910, +4), or null
+    /// when it has no row.
+    const std::string* getSpellMechanicName(uint32_t mechanicId);
+    /// The mechanic 0x00804430 finds on the player's auras of the types given,
+    /// tried in turn as the client's holds try them (0x008046c0 and siblings)
+    /// with no spell being cast: the first such aura's effect mechanic, else
+    /// its spell's. 0 for none.
+    uint32_t playerAuraMechanic(std::initializer_list<uint32_t> auraTypes);
 
     // TotemCategory.dbc name ("Blacksmith Hammer", "Mining Pick", ...) for
     // totem-category cast failures; empty if unknown.
@@ -837,6 +845,8 @@ private:
     // SpellFocusObject.dbc names, loaded lazily
     std::unordered_map<uint32_t, std::string> spellFocusNames_;
     bool spellFocusDbcLoaded_ = false;
+    std::unordered_map<uint32_t, std::string> spellMechanicNames_;
+    bool spellMechanicDbcLoaded_ = false;
 
     // TotemCategory.dbc names, loaded lazily
     std::unordered_map<uint32_t, std::string> totemCategoryNames_;

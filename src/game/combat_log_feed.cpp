@@ -447,9 +447,9 @@ void CombatLogFeed::noteCombatText(const cl::Entry& e) {
     };
 
     // The unit the floating combat text follows (0x00ca1380, set by
-    // CombatTextSetActiveUnit - the vehicle while the player drives one),
-    // the player where the interface has named none.
-    const uint64_t follows = owner_.combatTextUnit() ? owner_.combatTextUnit() : activePlayer();
+    // CombatTextSetActiveUnit - the vehicle while the player drives one).
+    // None until the interface names one, and then nothing is raised.
+    const uint64_t follows = owner_.combatTextUnit();
     if (e.src.guid != 0 && e.src.guid == follows) {
         switch (e.event) {
             case cl::Event::SpellCastSuccess:
