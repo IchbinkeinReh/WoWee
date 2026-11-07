@@ -2125,11 +2125,32 @@ const game::GameHandler::StabledPet* stablePetAt(game::GameHandler* gh, int inde
     return stabled[static_cast<size_t>(index)];
 }
 
-/// Which slot the player has clicked. Held here because it is a fact about the
-/// window rather than about the character, and the server is never told.
-int& selectedStableSlot() {
-    static int slot = 0;
-    return slot;
+/// The pet the player has clicked, held as the client holds it (0x00c0f6d0):
+/// -1 for the pet that is out, else the stabled pet's number, 0 for none - so
+/// the selection follows the pet when the list is sent again in another
+/// order. Window state, which the server is never told.
+int32_t& selectedStablePet() {
+    static int32_t pet = 0;
+    return pet;
+}
+
+/// 0x005a0e00: select the pet at an index (-1 the one that is out).
+void selectStableIndex(game::GameHandler* gh, int index) {
+    if (index == -1) { selectedStablePet() = -1; return; }
+    const auto* pet = stablePetAt(gh, index);
+    selectedStablePet() = pet ? static_cast<int32_t>(pet->petNumber) : 0;
+}
+
+/// 0x005a0e40: the selected pet's index (-1 the one that is out), -2 when
+/// nothing is selected or the pet is no longer listed.
+int selectedStableIndex(game::GameHandler* gh) {
+    const int32_t sel = selectedStablePet();
+    if (sel == -1) return -1;
+    if (sel == 0 || !gh) return -2;
+    const auto stabled = stabledOnly(gh);
+    for (size_t i = 0; i < stabled.size(); ++i)
+        if (static_cast<int32_t>(stabled[i]->petNumber) == sel) return static_cast<int>(i);
+    return -2;
 }
 
 } // namespace
@@ -2246,8 +2267,10 @@ static int lua_GetNumStableSlots(lua_State* L) {
     return 1;
 }
 
+// GetSelectedStablePet() (0x005a1060) → the selected index + 1: 0 for the
+// pet that is out, -1 for none.
 static int lua_GetSelectedStablePet(lua_State* L) {
-    lua_pushnumber(L, selectedStableSlot());
+    lua_pushnumber(L, selectedStableIndex(getGameHandler(L)) + 1);
     return 1;
 }
 
@@ -2279,14 +2302,9 @@ static int lua_ClickStablePet(lua_State* L) {
         clearCursor(L);
         return luaReturnNil(L);
     }
-    selectedStableSlot() = index + 1;
-    // The model preview shows whichever pet is selected, so selecting a
-    // different one is exactly when it has to be redrawn. Nothing else changes
-    // it, and the frame will not redraw on its own.
-    lua_getfield(L, LUA_REGISTRYINDEX, "wowee_lua_engine");
-    auto* engine = static_cast<LuaEngine*>(lua_touserdata(L, -1));
-    lua_pop(L, 1);
-    if (engine) engine->fireEvent("PET_STABLE_UPDATE_PAPERDOLL", {});
+    // Selected (0x005a0e00), and answered 1, which is what the slot's click
+    // reads as "redraw"; the client raises nothing here.
+    selectStableIndex(getGameHandler(L), index);
     lua_pushnumber(L, 1);
     return 1;
 }
@@ -2394,7 +2412,7 @@ static int lua_SetPetStablePaperdoll(lua_State* L) {
     // one the creature cache does not hold yet is asked for, and the found
     // answer raises PET_STABLE_UPDATE_PAPERDOLL (0x005a1530 -> 0x005a0ea0).
     w->modelDisplayId = 0;
-    if (const auto* pet = stablePetAt(gh, selectedStableSlot() - 1)) {
+    if (const auto* pet = stablePetAt(gh, selectedStableIndex(gh))) {
         if (gh->getCreatureInfoCache().count(pet->entry)) {
             w->modelDisplayId = gh->getCreatureDisplayIdForEntry(pet->entry);
         } else {
