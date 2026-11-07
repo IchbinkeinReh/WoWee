@@ -2347,14 +2347,24 @@ static int lua_IsAtStableMaster(lua_State* L) {
     return 1;
 }
 
-// GetNextStableSlotCost() → what the next slot costs, in copper.
-//
-// Zero, because the server never says. It reaches a money frame, which divides
-// it into gold and silver the moment the window opens, so it has to be a number
-// - and a made-up price shown as though the server had quoted it is worse than
-// a visible nothing.
+// GetNextStableSlotCost() → what the next slot costs, in copper (0x005a14d0):
+// StableSlotPrices.dbc's Cost for the row one past the slots the stable
+// list says are bought (0x00c0f6cc), 0 past the table's end.
 static int lua_GetNextStableSlotCost(lua_State* L) {
-    lua_pushnumber(L, 0);
+    auto* gh = getGameHandler(L);
+    static std::unordered_map<uint32_t, uint32_t> prices;
+    static bool loaded = false;
+    if (!loaded && gh) {
+        if (auto* am = gh->services().assetManager; am && am->isInitialized()) {
+            loaded = true;
+            if (auto dbc = am->loadDBC("StableSlotPrices.dbc"); dbc && dbc->isLoaded() && dbc->getFieldCount() >= 2)
+                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
+                    prices[dbc->getUInt32(i, 0)] = dbc->getUInt32(i, 1);
+        }
+    }
+    const uint32_t next = gh ? gh->getStableSlots() + 1u : 1u;
+    const auto it = prices.find(next);
+    lua_pushnumber(L, it != prices.end() ? static_cast<double>(it->second) : 0.0);
     return 1;
 }
 

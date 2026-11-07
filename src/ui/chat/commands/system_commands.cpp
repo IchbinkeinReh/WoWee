@@ -172,6 +172,18 @@ public:
     [[nodiscard]] std::string helpText() const override { return "Stop macro execution"; }
 };
 
+// --- /UpdatePOI ---
+// The console's "Updates Quest POI from User Server" (0x005e7170).
+class UpdatePoiCommand : public IChatCommand {
+public:
+    ChatCommandResult execute(ChatCommandContext& ctx) override {
+        if (auto* quests = ctx.gameHandler.getQuestHandler()) quests->refreshQuestPois();
+        return {};
+    }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"updatepoi"}; }
+    [[nodiscard]] std::string helpText() const override { return "Updates Quest POI from User Server"; }
+};
+
 // --- /clear ---
 class ClearCommand : public IChatCommand {
 public:
@@ -908,6 +920,7 @@ void registerSystemCommands(ChatCommandRegistry& reg) {
     reg.registerCommand(std::make_unique<FrameXmlCheckCommand>());
     reg.registerCommand(std::make_unique<StopMacroCommand>());
     reg.registerCommand(std::make_unique<ClearCommand>());
+    reg.registerCommand(std::make_unique<UpdatePoiCommand>());
     reg.registerCommand(std::make_unique<DifficultyCommand>());
     reg.registerCommand(std::make_unique<CVarListCommand>());
     reg.registerCommand(std::make_unique<CVarResetCommand>());

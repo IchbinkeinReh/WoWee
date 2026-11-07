@@ -3,6 +3,7 @@
 #include "game/item_text.hpp"
 #include "game/interface_text.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "game/text_tokens.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/lua_engine.hpp"
 #include "addons/lua_api_registrations.hpp"
@@ -154,14 +155,43 @@ static int lua_GetInventoryAlertStatus(lua_State* L) {
 // then ten, twenty-five, fifty, a hundred and two hundred and fifty. Past the
 // last one there is nothing left to sell, and zero is what the real client
 // answers there.
+// (0x0057bb30) The next slot's: BankBagSlotPrices.dbc's Cost for the row one
+// past the player's own count of bought slots (PLAYER_BYTES_2 byte 2) -
+// whatever is passed in, which the client reads not at all. 0 past the
+// table's end.
+/// MailTemplate.dbc's body for a templated letter (0x00570bd0 reads +8),
+/// nothing for a template it has no row for.
+static std::optional<std::string> mailTemplateBody(game::GameHandler* gh, uint32_t templateId) {
+    static std::unordered_map<uint32_t, std::string> bodies;
+    static bool loaded = false;
+    if (!loaded && gh) {
+        if (auto* am = gh->services().assetManager; am && am->isInitialized()) {
+            loaded = true;
+            if (auto dbc = am->loadDBC("MailTemplate.dbc"); dbc && dbc->isLoaded() && dbc->getFieldCount() >= 19)
+                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
+                    bodies[dbc->getUInt32(i, 0)] = dbc->getString(i, 18);
+        }
+    }
+    const auto it = bodies.find(templateId);
+    if (it == bodies.end()) return std::nullopt;
+    return it->second;
+}
+
 static int lua_GetBankSlotCost(lua_State* L) {
-    static constexpr uint32_t kSlotPrices[] = {
-        1'000, 10'000, 100'000, 250'000, 500'000, 1'000'000, 2'500'000,
-    };
-    constexpr int kNumBuyable = static_cast<int>(std::size(kSlotPrices));
-    const int owned = static_cast<int>(luaL_optnumber(L, 1, 0));
-    const bool haveAll = owned < 0 || owned >= kNumBuyable;
-    lua_pushnumber(L, haveAll ? 0.0 : static_cast<double>(kSlotPrices[owned]));
+    auto* gh = getGameHandler(L);
+    static std::unordered_map<uint32_t, uint32_t> prices;
+    static bool loaded = false;
+    if (!loaded && gh) {
+        if (auto* am = gh->services().assetManager; am && am->isInitialized()) {
+            loaded = true;
+            if (auto dbc = am->loadDBC("BankBagSlotPrices.dbc"); dbc && dbc->isLoaded() && dbc->getFieldCount() >= 2)
+                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
+                    prices[dbc->getUInt32(i, 0)] = dbc->getUInt32(i, 1);
+        }
+    }
+    const uint32_t next = gh ? gh->getInventory().getPurchasedBankBagSlots() + 1u : 1u;
+    const auto it = prices.find(next);
+    lua_pushnumber(L, it != prices.end() ? static_cast<double>(it->second) : 0.0);
     return 1;
 }
 
@@ -7003,7 +7033,10 @@ void registerInventoryLuaAPI(lua_State* L) {
             const std::string sender = mailSenderName(gh, mail);
             if (sender.empty()) lua_pushnil(L);
             else lua_pushstring(L, sender.c_str());                // sender
-            const std::string subject = gh->getMailDisplaySubject(mail);
+            // A COD payment's letter is titled COD_PAYMENT (mail flag 0x8).
+            std::string subject = gh->getMailDisplaySubject(mail);
+            if ((mail.flags & 0x8u) != 0)
+                subject = game::interfaceFormat("COD_PAYMENT", "COD Payment: %s", {subject});
             lua_pushstring(L, subject.c_str());                   // subject
             lua_pushnumber(L, mail.money);                        // money (copper)
             lua_pushnumber(L, mail.cod);                          // COD
@@ -7019,10 +7052,15 @@ void registerInventoryLuaAPI(lua_State* L) {
             if (mail.attachments.empty()) lua_pushnil(L);
             else lua_pushnumber(L, static_cast<lua_Number>(mail.attachments.size()));
             lua_pushboolean(L, mail.read ? 1 : 0);               // wasRead
-            lua_pushboolean(L, 0);                                // wasReturned
+            // Returned (mail flag 0x2) or sent back unopened (0x200).
+            lua_pushboolean(L, (mail.flags & 0x202u) != 0 ? 1 : 0); // wasReturned
             lua_pushboolean(L, !mail.body.empty() ? 1 : 0);      // textCreated
-            lua_pushboolean(L, mail.messageType == 0 ? 1 : 0);   // canReply (player mail only)
-            lua_pushboolean(L, 0);                                // isGM
+            // A player's letter, unless on the GM's stationery (61), which is
+            // a GM's and says so instead (0x0056e520).
+            constexpr uint32_t kGmStationery = 0x3d;
+            const bool fromGm = mail.stationeryId == kGmStationery;
+            lua_pushboolean(L, mail.messageType == 0 && !fromGm ? 1 : 0); // canReply
+            lua_pushboolean(L, fromGm ? 1 : 0);                   // isGM
             // How many of the first attachment there are, which is what the
             // inbox button prints in its corner.
             lua_pushnumber(L, mail.attachments.empty()
@@ -7058,7 +7096,17 @@ void registerInventoryLuaAPI(lua_State* L) {
             const auto* mail = mailAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
             if (!mail) { return luaReturnNil(L); }
             if (!mail->read && mail->messageId != 0) gh->mailMarkAsRead(mail->messageId);
-            lua_pushstring(L, mail->body.c_str());
+            // A templated letter has no text of its own: MailTemplate's body,
+            // its $-tokens filled for the player (0x00579590), or nothing at all
+            // for a template with no row.
+            if (mail->body.empty() && mail->mailTemplateId != 0) {
+                if (const auto body = mailTemplateBody(gh, mail->mailTemplateId))
+                    lua_pushstring(L, game::resolveTextTokens(*body, *gh).c_str());
+                else
+                    lua_pushnil(L);
+            } else {
+                lua_pushstring(L, mail->body.c_str());
+            }
             lua_pushstring(L, game::stationeryTexture(mail->stationeryId, mail->messageType));
             lua_pushboolean(L, (mail->money > 0 || !mail->attachments.empty()) ? 1 : 0);
             // Whether this is an auction house invoice, which was answered no

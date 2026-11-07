@@ -95,6 +95,10 @@ public:
     using GossipPoi = game::GossipPoi;
     [[nodiscard]] const std::vector<GossipPoi>& getGossipPois() const { return gossipPois_; }
     void clearGossipPois() { gossipPois_.clear(); }
+    /// The console's UpdatePOI (0x005e7170 -> 0x005e70d0): every quest's
+    /// points of interest dropped and asked for again, the whole log in one
+    /// CMSG_QUEST_POI_QUERY (0x005e6940).
+    void refreshQuestPois();
     /// The client's 25-entry quest POI icon list, filled from
     /// SMSG_QUEST_POI_QUERY_RESPONSE (0x005e7370) for every map.
     [[nodiscard]] QuestPoiIconList& questPoiIcons() { return questPoiIcons_; }

@@ -1869,7 +1869,7 @@ static bool muteRowNamed(const game::ContactEntry& c, const std::string& name) {
 bool mailIsComplainable(game::GameHandler* gh, const game::MailMessage& mail) {
     if (mail.messageType != 0) return false;
     if ((mail.flags & 0x2) != 0) return false;
-    if (mail.mailTemplateId == 0x3d) return false;
+    if (mail.stationeryId == 0x3d) return false;  // the GM's stationery
     if (mail.senderGuid == gh->getPlayerGuid()) return false;
     for (const auto& contact : gh->getContacts())
         if (contact.isFriend() && contact.guid == mail.senderGuid) return false;
