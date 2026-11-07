@@ -99,9 +99,10 @@ int pushGemInfo(lua_State* L, game::GameHandler* gh, uint32_t gemItemId, int soc
     if (gemItemId == 0) return pushEmpty();
     const auto* gem = gh->getItemInfo(gemItemId);
     if (!gem || !gem->valid) {
-        // Not queried yet. Ask, and answer nothing this frame - the panel
-        // redraws on the next SOCKET_INFO_UPDATE with the name filled in.
-        gh->ensureItemInfo(gemItemId);
+        // Not queried yet. Ask, and answer nothing this frame - the answer
+        // raises SOCKET_INFO_UPDATE (0x005c44d0) and the panel redraws with
+        // the name filled in.
+        askItemForEvent(gh, gemItemId, "SOCKET_INFO_UPDATE");
         return pushEmpty();
     }
     lua_pushstring(L, gem->name.c_str());
@@ -124,7 +125,7 @@ int pushGemLink(lua_State* L, game::GameHandler* gh, uint32_t gemItemId) {
     if (!gh || gemItemId == 0) return 0;
     const auto* gem = gh->getItemInfo(gemItemId);
     if (!gem || !gem->valid) {
-        gh->ensureItemInfo(gemItemId);
+        askItemForEvent(gh, gemItemId, "SOCKET_INFO_UPDATE");
         return 0;
     }
     lua_pushstring(L, game::buildItemLink(gemItemId, gem->quality, gem->name, gh->getPlayerLevel()).c_str());

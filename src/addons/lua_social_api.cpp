@@ -2000,7 +2000,8 @@ void registerSocialLuaAPI(lua_State* L) {
             uint32_t itemId = 0, displayId = 0, cost = 0;
             if (!gh || !gh->getPetitionCharter(index, itemId, displayId, cost)) return 0;
             const auto* info = gh->getItemInfo(itemId);
-            if (!info || !info->valid) { gh->ensureItemInfo(itemId); return 0; }
+            // Asked for; the answer raises PETITION_VENDOR_UPDATE (0x005a1f30).
+            if (!info || !info->valid) { askItemForEvent(gh, itemId, "PETITION_VENDOR_UPDATE"); return 0; }
             lua_pushstring(L, info->name.c_str());
             lua_pushstring(L, gh->getItemIconPath(
                 displayId ? displayId : info->displayInfoId).c_str());

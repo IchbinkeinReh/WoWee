@@ -5,6 +5,7 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 #include <utility>
 #include <optional>
 #include <chrono>
@@ -778,6 +779,18 @@ struct QuestSpecialItem {
     uint32_t itemId = 0;
     uint32_t count = 0;
 };
+
+/// The item cache asked with a callback that raises an event (0x0067ca30 with
+/// the getter's own function): the item queried, and `event` raised, with
+/// `args`, by the answer that found it. One wait per item and event.
+inline void askItemForEvent(game::GameHandler* gh, uint32_t itemId, const char* event,
+                            std::vector<std::string> args = {}) {
+    if (!gh || itemId == 0) return;
+    const std::string ev = event;
+    gh->askItemThen(itemId, ev, [gh, ev, args](bool found) {
+        if (found) gh->fireAddonEvent(ev, args);
+    });
+}
 
 inline QuestSpecialItem questSpecialItemAt(game::GameHandler* gh, int questIndex) {
     QuestSpecialItem found;

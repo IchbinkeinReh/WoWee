@@ -1862,6 +1862,9 @@ static int lua_GetSendMailItem(lua_State* L) {
     if (!att.occupied()) { return emptySlot(L); }
 
     const auto* info = gh->getItemInfo(att.item.itemId);
+    // An item the cache does not hold is asked for, and its answer raises
+    // MAIL_SEND_INFO_UPDATE (0x0056d490).
+    if (!info || !info->valid) askItemForEvent(gh, att.item.itemId, "MAIL_SEND_INFO_UPDATE");
     lua_pushstring(L, info ? info->name.c_str() : "");
     lua_pushstring(L, gh->getItemIconPath(
         info && info->displayInfoId ? info->displayInfoId : att.item.displayInfoId).c_str());
@@ -4295,6 +4298,9 @@ static int lua_GetInventoryItemQuality(lua_State* L) {
         entry = inspectedItemEntry(gh, uid, slotId);
     }
     const auto* info = entry != 0 ? gh->getItemInfo(entry) : nullptr;
+    // Asked for when not cached; the answer raises UNIT_INVENTORY_CHANGED for
+    // the player whichever unit asked (0x005e7660).
+    if (entry != 0 && (!info || !info->valid)) askItemForEvent(gh, entry, "UNIT_INVENTORY_CHANGED", {"player"});
     if (!info) return luaReturnNil(L);
     lua_pushnumber(L, info->inventoryType == 0 ? -1 : static_cast<int>(info->quality));
     return 1;
@@ -6511,6 +6517,9 @@ void registerInventoryLuaAPI(lua_State* L) {
             }
             const auto& s = *held;
             const auto* info = gh->getItemInfo(s.item.itemId);
+            // NEW_AUCTION_UPDATE when an item not cached yet is answered
+            // (0x0059a3e0).
+            if (!info || !info->valid) askItemForEvent(gh, s.item.itemId, "NEW_AUCTION_UPDATE");
             const uint32_t inStack = s.item.stackCount ? s.item.stackCount : 1;
             // price is the vendor value of the whole stack and pricePerUnit of
             // one of them - the tab offers a starting bid of one or the other
