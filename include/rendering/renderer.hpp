@@ -273,6 +273,11 @@ public:
     void setCharacterFollow(uint32_t instanceId);
     glm::vec3& getCharacterPosition() { return characterPosition; }
     uint32_t getCharacterInstanceId() const { return characterInstanceId; }
+    /// Whether the player's instance is the model of its display rather than
+    /// its character (a form or a morph, 0x00717a20): nothing of the
+    /// character's - its gear, its weapons, its skin - goes on it.
+    void setCharacterShownAsDisplay(bool shown) { characterShownAsDisplay_ = shown; }
+    bool characterShownAsDisplay() const { return characterShownAsDisplay_; }
     /// The player's movement facing, in degrees: what the server is told and
     /// what the map arrows point along. Not where the body is drawn - see
     /// getCharacterBodyYaw.
@@ -994,6 +999,7 @@ private:
     // Third-person character state
     glm::vec3 characterPosition = glm::vec3(0.0f);
     uint32_t characterInstanceId = 0;
+    bool characterShownAsDisplay_ = false;
     float characterYaw = 0.0f;
     // The drawn body's yaw behind the facing (body_yaw::update), and the
     // instance it was last turned for: another instance starts at the facing.

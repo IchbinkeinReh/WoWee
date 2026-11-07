@@ -200,6 +200,13 @@ private:
     /// The player's unit onto its instance, and its base animation asked
     /// again where what it reads has changed.
     void syncPlayerAnimation(const game::Unit& self);
+    /// The player drawn as its display (0x00717a20): its character while
+    /// UNIT_FIELD_DISPLAYID is UNIT_FIELD_NATIVEDISPLAYID, else the model that
+    /// display names - a form, a morph - swapped in and out as it changes.
+    void syncPlayerDisplayModel(const game::Unit& self);
+    /// The display the player's instance shows other than its character, 0
+    /// for the character.
+    uint32_t shownPlayerDisplay_ = 0;
     /// An event of the player's own movement, on its animation (0x0073ed10).
     void animatePlayerMovement(game::Opcode op, uint32_t flagsBefore, bool launchedBefore);
     /// In the air off a ledge, long enough to be falling far.

@@ -345,6 +345,7 @@ void AppearanceComposer::loadEquippedHelm(game::Inventory& inventory) {
     auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
     const uint32_t charInstanceId = renderer_ ? renderer_->getCharacterInstanceId() : 0;
     if (!charRenderer || charInstanceId == 0 || !assetManager_ || !gameHandler_) return;
+    if (renderer_->characterShownAsDisplay()) return;
 
     // Only the helm point. Detaching 0 as well would drop the shield.
     charRenderer->detachWeapon(charInstanceId, kAttachHelm);
@@ -426,7 +427,7 @@ void AppearanceComposer::attachEquippedWeapons() {
 
     auto* charRenderer = renderer_->getCharacterRenderer();
     uint32_t charInstanceId = renderer_->getCharacterInstanceId();
-    if (charInstanceId == 0) return;
+    if (charInstanceId == 0 || renderer_->characterShownAsDisplay()) return;
 
     auto& inventory = gameHandler_->getInventory();
 

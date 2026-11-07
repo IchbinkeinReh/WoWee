@@ -4803,6 +4803,61 @@ bool Application::playerFallsFar() const {
 // turn on the spot started or stopped (0x0073dab0), alive or dead, looting,
 // stealth, a melee target taken or dropped. Its movement events ask it as
 // they come (animatePlayerMovement).
+void Application::syncPlayerDisplayModel(const game::Unit& self) {
+    if (!playerCharacterSpawned || !renderer || !entitySpawner_ || !gameHandler) return;
+    auto* cr = renderer->getCharacterRenderer();
+    if (!cr) return;
+    const auto field = [&](game::UF f) {
+        const uint16_t i = game::fieldIndex(f);
+        return i == 0xFFFF ? 0u : self.getField(i);
+    };
+    const uint32_t display = field(game::UF::UNIT_FIELD_DISPLAYID);
+    const uint32_t native = field(game::UF::UNIT_FIELD_NATIVEDISPLAYID);
+    const uint32_t want = display != 0 && native != 0 && display != native ? display : 0;
+    if (want == shownPlayerDisplay_) return;
+    const glm::vec3 pos = renderer->getCharacterPosition();
+    if (want == 0) {
+        // Back to the character: built again from the look, with its gear.
+        shownPlayerDisplay_ = 0;
+        if (const uint32_t old = renderer->getCharacterInstanceId(); old != 0) {
+            renderer->setCharacterFollow(0);
+            cr->removeInstance(old);
+        }
+        renderer->setCharacterShownAsDisplay(false);
+        playerCharacterSpawned = false;
+        spawnedPlayerGuid_ = 0;
+        spawnSnapToGround = false;
+        spawnPlayerCharacter();
+        renderer->getCharacterPosition() = pos;
+        gameHandler->resetEquipmentDirtyTracking();
+        return;
+    }
+    float scale = 1.0f;
+    if (const uint32_t raw = field(game::UF::OBJECT_FIELD_SCALE_X); raw != 0) {
+        float f = 1.0f;
+        std::memcpy(&f, &raw, sizeof(f));
+        if (f > 0.01f && f < 100.0f) scale = f;
+    }
+    const uint32_t instanceId = entitySpawner_->createDisplayInstance(want, pos, 0.0f, scale);
+    shownPlayerDisplay_ = want;
+    if (instanceId == 0) {
+        LOG_WARNING("Player display ", want, " has no model to draw; the character stays");
+        return;
+    }
+    if (const uint32_t old = renderer->getCharacterInstanceId(); old != 0) {
+        renderer->setCharacterFollow(0);
+        if (auto* ac = renderer->getAnimationController()) ac->clearMount();
+        cr->removeInstance(old);
+    }
+    renderer->setCharacterShownAsDisplay(true);
+    renderer->getCharacterPosition() = pos;
+    renderer->setCharacterFollow(instanceId);
+    if (renderer->getCameraController()) renderer->getCameraController()->setCharacterRenderer(cr, instanceId);
+    cr->playAnimation(instanceId, rendering::anim::STAND, true);
+    playerAnimationSeen_ = {};
+    LOG_INFO("Player shown as display ", want, " (native ", native, ")");
+}
+
 void Application::syncPlayerAnimation(const game::Unit& self) {
     auto* cr = renderer ? renderer->getCharacterRenderer() : nullptr;
     const uint32_t instanceId = renderer ? renderer->getCharacterInstanceId() : 0;
@@ -4918,6 +4973,7 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
             havePlayerPos = true;
             if (auto self = gameHandler->getEntityManager().getEntity(gameHandler->getPlayerGuid());
                 self && self->isUnit()) {
+                syncPlayerDisplayModel(static_cast<const game::Unit&>(*self));
                 syncPlayerAnimation(static_cast<const game::Unit&>(*self));
             }
         }
@@ -4937,7 +4993,8 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
         const uint32_t floorFrameNo = ++creatureFloorFrame;
         for (const auto& [guid, instanceId] : _creatureInstances) {
             auto entity = gameHandler->getEntityManager().getEntity(guid);
-            if (!entity || entity->getType() != game::ObjectType::UNIT) continue;
+            // A unit, or a player drawn as its display (a form or a morph).
+            if (!entity || !entity->isUnit()) continue;
 
             // Distance check uses getLatestX/Y/Z (server-authoritative destination) to
             // avoid false-culling entities that moved while getX/Y/Z was stale.
@@ -7215,6 +7272,10 @@ void Application::setupUICallbacks() {
 
 void Application::spawnPlayerCharacter() {
     if (playerCharacterSpawned) return;
+    // The character, whatever the display: a form or a morph is put back on
+    // it by syncPlayerDisplayModel the next frame.
+    if (renderer) renderer->setCharacterShownAsDisplay(false);
+    shownPlayerDisplay_ = 0;
     if (!renderer || !renderer->getCharacterRenderer() || !renderer->getCamera()) return;
 
     auto* charRenderer = renderer->getCharacterRenderer();

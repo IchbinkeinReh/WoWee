@@ -441,6 +441,11 @@ public:
     /// A display's model for the character renderer, as a mount's is loaded
     /// (its skins from CreatureDisplayInfo); 0 where it cannot be.
     uint32_t loadMountModel(uint32_t displayId);
+    /// A unit's model as its display draws it (0x00717a20: CreatureDisplayInfo
+    /// -> CreatureModelData), loaded now and skinned as a creature's, with an
+    /// instance at `renderPos` - for the player while a form or a morph shows
+    /// it as something else than its character. 0 where it cannot be drawn.
+    uint32_t createDisplayInstance(uint32_t displayId, const glm::vec3& renderPos, float renderYaw, float scale);
     /// The size a unit's model is drawn at (0x0071c0e0 while it rides
     /// nothing): what its instance was given, 1 for one drawn at 1.
     float unitModelScale(uint64_t guid) const;

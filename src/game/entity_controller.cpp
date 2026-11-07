@@ -2152,6 +2152,8 @@ void EntityController::dispatchEntitySpawn(uint64_t guid, ObjectType objectType,
         return;  // Skip local player - spawned separately via spawnPlayerCharacter()
     }
     if (objectType == ObjectType::PLAYER) {
+        // Asked again whenever its display changes: a form or a morph swaps
+        // the character for the display's creature and back (0x00717a20).
         if (owner_.playerSpawnCallbackRef()) {
             uint8_t race = 0, gender = 0, facial = 0;
             uint32_t appearanceBytes = 0;

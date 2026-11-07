@@ -1945,6 +1945,46 @@ void EntitySpawner::processPendingMount() {
     LOG_INFO("processPendingMount: DONE displayId=", mountDisplayId, " model=", m2Path, " heightOffset=", heightOffset);
 }
 
+uint32_t EntitySpawner::createDisplayInstance(uint32_t displayId, const glm::vec3& renderPos, float renderYaw,
+                                              float scale) {
+    if (!renderer_ || !renderer_->getCharacterRenderer() || !assetManager_) return 0;
+    auto* cr = renderer_->getCharacterRenderer();
+    const std::string modelPath = getModelPathForDisplayId(displayId);
+    if (modelPath.empty()) return 0;
+    uint32_t modelId = 0;
+    if (auto cached = displayIdModelCache_.find(displayId);
+        cached != displayIdModelCache_.end() && cr->getModelData(cached->second)) {
+        modelId = cached->second;
+    } else {
+        auto m2Data = assetManager_->readFile(modelPath);
+        if (m2Data.empty()) return 0;
+        pipeline::M2Model model = pipeline::M2Loader::load(m2Data);
+        if (model.name.empty()) model.name = modelPath;
+        if (model.vertices.empty()) return 0;
+        if (model.version >= 264) {
+            auto skinData = assetManager_->readFile(pipeline::skinPathForM2(modelPath));
+            if (!skinData.empty()) pipeline::M2Loader::loadSkin(skinData, model);
+        }
+        if (!model.isValid()) return 0;
+        pipeline::loadExternalAnimations(*assetManager_, modelPath, m2Data, model);
+        modelId = nextCreatureModelId_++;
+        if (!cr->loadModel(model, modelId)) return 0;
+        displayIdModelCache_[displayId] = modelId;
+    }
+    // Kept while the player wears it.
+    cr->setModelEvictable(modelId, false);
+    if (!displayIdTexturesApplied_.count(displayId)) {
+        if (auto data = displayDataMap_.find(displayId); data != displayDataMap_.end())
+            applyCreatureDisplayTextures(displayId, modelId, data->second);
+    }
+    const uint32_t instanceId = cr->createInstance(modelId, renderPos, glm::vec3(0.0f, 0.0f, renderYaw),
+                                                   scale * creatureDisplayScale(displayId));
+    if (instanceId == 0) return 0;
+    applyHumanoidInstanceOverrides(instanceId, modelId, displayId);
+    normalizeHumanoidClothingGeosets(instanceId, modelId, displayId);
+    return instanceId;
+}
+
 bool EntitySpawner::loadRemoteMountModel(uint32_t displayId, uint32_t& modelId,
                                          std::string& modelPath, float& riderHeight) {
     modelId = 0;

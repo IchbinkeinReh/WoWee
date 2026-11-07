@@ -85,7 +85,7 @@ void GameScreen::updateCharacterGeosets(game::Inventory& inventory) {
     if (!renderer) return;
 
     uint32_t instanceId = renderer->getCharacterInstanceId();
-    if (instanceId == 0) return;
+    if (instanceId == 0 || renderer->characterShownAsDisplay()) return;
 
     auto* charRenderer = renderer->getCharacterRenderer();
     auto* gh = app.getGameHandler();
@@ -116,6 +116,8 @@ void GameScreen::updateCharacterGeosets(game::Inventory& inventory) {
 }
 
 void GameScreen::updateCharacterTextures(game::Inventory& inventory) {
+    // A form or a morph wears nothing of the character's (0x00717a20).
+    if (auto* r = core::Application::getInstance().getRenderer(); r && r->characterShownAsDisplay()) return;
     auto& app = core::Application::getInstance();
     auto* renderer = app.getRenderer();
     if (!renderer) return;
