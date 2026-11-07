@@ -600,6 +600,9 @@ private:
     /// Ask terrain, WMO and doodads where the floor is - two of them on other
     /// threads - or answer from the cache when the character has barely moved.
     FloorSample sampleFloorUnderFeet(const glm::vec3& targetPos, float stepUpBudget);
+    /// The collision port's liquid level at the feet, found where the client
+    /// looks (collision_liquid.hpp, 0x007a1bc0), or none.
+    [[nodiscard]] std::optional<float> portLiquidLevelAt(const glm::vec3& feet) const;
 
     /// Put the character on the floor and publish where it ended up - the
     /// expensive half, with the floor queries and the cache that skips them.

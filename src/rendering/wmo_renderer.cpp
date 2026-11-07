@@ -4934,6 +4934,30 @@ void WMORenderer::walkTrianglesAlong(const glm::vec3& start, float endZ, uint32_
     }
 }
 
+void WMORenderer::exteriorGroupsHolding(const glm::vec3& world, std::vector<GroupRef>& out) const {
+    std::vector<size_t> candidates;
+    gatherCandidates(world, world, candidates);
+    for (size_t idx : candidates) {
+        const auto& instance = instances[idx];
+        if (instance.hidden) continue;
+        if (glm::any(glm::lessThan(world, instance.worldBoundsMin)) ||
+            glm::any(glm::greaterThan(world, instance.worldBoundsMax))) {
+            continue;
+        }
+        auto it = loadedModels.find(instance.modelId);
+        if (it == loadedModels.end()) continue;
+        const glm::vec3 local(instance.invModelMatrix * glm::vec4(world, 1.0f));
+        for (const auto& group : it->second.groups) {
+            if ((group.groupFlags & 0x2000u) != 0) continue;
+            if (glm::any(glm::lessThan(local, group.boundingBoxMin)) ||
+                glm::any(glm::greaterThan(local, group.boundingBoxMax))) {
+                continue;
+            }
+            out.push_back(GroupRef{instance.id, group.groupIndex});
+        }
+    }
+}
+
 std::optional<WMORenderer::ObjectFloor> WMORenderer::floorAlong(const glm::vec3& start, float endZ) const {
     // The first WMO triangles met going straight from `start` to `endZ`,
     // across every WMO there (0x007c2700 asks each, 0x007c25d0 each group).

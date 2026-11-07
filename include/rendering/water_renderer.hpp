@@ -278,6 +278,14 @@ public:
     liquidCellsNear(const glm::vec3& at, float radius, bool ground,
                     const std::vector<minimap_indoor::GroupRef>& groups) const;
     bool isWmoWaterAt(float glX, float glY) const;
+    /// The movement's liquid lookups (collision_liquid.hpp). A building
+    /// group's level over a point under it (0x007c8360), in the world.
+    [[nodiscard]] std::optional<float> buildingLiquidLevelAt(uint32_t instanceId, uint32_t group,
+                                                             const glm::vec3& world) const;
+    /// The ground's: the first chunk liquid with a tile at the point that
+    /// the point is under, and the ground under the point (0x007a0820).
+    [[nodiscard]] std::optional<float> groundLiquidLevelAt(const glm::vec3& world,
+                                                           const std::optional<float>& groundZ) const;
 
     int getSurfaceCount() const { return static_cast<int>(surfaces.size()); }
 

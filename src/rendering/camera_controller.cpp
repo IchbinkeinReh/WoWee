@@ -27,6 +27,7 @@
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/water_renderer.hpp"
+#include "pipeline/wmo_doodad_light.hpp"
 #include "rendering/character_renderer.hpp"
 #include "game/opcodes.hpp"
 #include "core/logger.hpp"
@@ -36,6 +37,35 @@
 
 namespace wowee {
 namespace rendering {
+
+std::optional<float> CameraController::portLiquidLevelAt(const glm::vec3& feet) const {
+    if (!waterRenderer) return std::nullopt;
+    namespace wl = pipeline::wmo_doodad_light;
+    std::optional<float> ground;
+    if (terrainManager && !terrainManager->isHoleAt(feet.x, feet.y)) {
+        ground = terrainManager->getHeightAt(feet.x, feet.y);
+    }
+    if (wmoRenderer) {
+        // In a building's group when the world object's floor search finds
+        // one under the feet and the ground is not nearer (0x007c2f80 from a
+        // tenth above them, 0x007c28f0): that group's liquid and no other
+        // (0x007a1a30).
+        const float startZ = feet.z + wl::kUnitFloorAbove;
+        const auto links = wmoRenderer->linksAlong(glm::vec3(feet.x, feet.y, startZ), startZ - wl::kFloorReach);
+        if (links.collides && !wl::terrainNearer(startZ, ground, startZ - links.collides->dist)) {
+            const auto& ref = links.collides->ref;
+            return waterRenderer->buildingLiquidLevelAt(ref.instanceId, ref.group, feet);
+        }
+        // Out of any: a building's exterior group's liquid first (0x007a09d0).
+        std::vector<WMORenderer::GroupRef> groups;
+        wmoRenderer->exteriorGroupsHolding(feet, groups);
+        for (const auto& ref : groups) {
+            if (auto level = waterRenderer->buildingLiquidLevelAt(ref.instanceId, ref.group, feet)) return level;
+        }
+    }
+    // Then the ground's (0x007a0820).
+    return waterRenderer->groundLiquidLevelAt(feet, ground);
+}
 
 namespace {
 
@@ -2080,6 +2110,10 @@ void CameraController::groundFollowedCharacter(float deltaTime, FrameInput& f,
                         const size_t w = facets.size() - t;
                         if (m2Renderer) m2Renderer->gatherCollisionFacets(lo, hi, facets);
                         line << " facets=" << t << "/" << w << "/" << (facets.size() - t - w);
+                        const auto liquid = portLiquidLevelAt(targetPos);
+                        line << " liquid=" << say(liquid) << " water=" << say(
+                            waterRenderer ? waterRenderer->getWaterHeightAt(targetPos.x, targetPos.y)
+                                          : std::optional<float>{});
                     }
                     LOG_WARNING(line.str());
                     // Also to a file. The console is where this used to go

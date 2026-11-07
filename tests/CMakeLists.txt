@@ -2984,6 +2984,13 @@ wowee_add_test(test_collision_facets
     SOURCES test_collision_facets.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_collision_liquid ────────────────────────────────────
+# The liquid level a swimmer's depth is read from: a building group's by
+# its tiles, and the two tests on a chunk's.
+wowee_add_test(test_collision_liquid
+    SOURCES test_collision_liquid.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_polygon_triangulate ─────────────────────────────────
 # Ear clipping for quest blob outlines, which are regularly concave. The
 # check is that the triangles cover the ring's own area and no more.

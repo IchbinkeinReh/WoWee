@@ -529,6 +529,10 @@ public:
         std::optional<GroupAlong> drawn;
     };
     [[nodiscard]] Links linksAlong(const glm::vec3& start, float endZ) const;
+    /// The groups 0x007aeb90 asks for liquid when a unit is in none: of each
+    /// shown building whose box holds the point, the groups not flagged
+    /// 0x2000 whose own box holds it, in the building's order.
+    void exteriorGroupsHolding(const glm::vec3& world, std::vector<GroupRef>& out) const;
     /// The group the area of a place is read from (0x0077fa00's ray,
     /// 0x007a30d0 with 0x10 and 0x500): the first face from `start` to `endZ`
     /// that is not detail (0x04, the face mask 0x84 0x007ae140 makes of 0x10),
