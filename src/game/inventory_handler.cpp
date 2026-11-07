@@ -1376,103 +1376,100 @@ void InventoryHandler::handleLootResponse(network::Packet& packet) {
     LOG_INFO("SMSG_LOOT_RESPONSE: guid=0x", std::hex, currentLoot_.lootGuid, std::dec,
              " items=", currentLoot_.items.size(), " gold=", currentLoot_.gold);
     lootWindowOpen_ = true;
-    if (owner_.addonEventCallbackRef()) {
-        // Carries whether this loot is being taken automatically. The loot
-        // frame reads it on the path where it could not show itself, and
-        // closes with CloseLoot(autoLoot == 0) - so an absent argument
-        // compares false and tells the server the window opened when it did
-        // not.
-        // The argument is a number, not text: the client fires LOOT_OPENED
-        // (249) with "%d" and a 1 or a 0 (00580000.c:6466, :6710;
-        // 006e0000.c:2674), and LootFrame_OnEvent's `autoLoot == 0` compares it
-        // as one (lootframe.lua:15-21).
-        //
-        // LOOT_READY, which this used to add, is not a name this client has -
-        // 249 LOOT_OPENED, 250 LOOT_SLOT_CLEARED, 251 LOOT_SLOT_CHANGED and 252
-        // LOOT_CLOSED are the whole of its loot events, and the loot window
-        // registers exactly those four (lootframe.lua:6-9).
-        //
-        // Only once every item in it is known (0x005896b0): each the item
-        // cache does not hold is asked for and counted (0x00bfa688), and the
-        // answer that found it - LOOT_SLOT_CHANGED for its slot, raised with
-        // the item answer - takes one off the count, the last raising the
-        // event (0x00589460). An answer that found nothing leaves it counted,
-        // as there.
-        std::vector<uint32_t> unknown;
-        for (const auto& item : currentLoot_.items) {
-            const auto* info = owner_.getItemInfo(item.itemId);
-            if (item.itemId != 0 && (!info || !info->valid) &&
-                std::find(unknown.begin(), unknown.end(), item.itemId) == unknown.end()) {
-                unknown.push_back(item.itemId);
-            }
-        }
-        if (unknown.empty()) {
-            owner_.addonEventCallbackRef()("LOOT_OPENED", {autoLoot_ ? "1" : "0"});
-        } else {
-            lootItemsAwaited_ = static_cast<int>(unknown.size());
-            const uint64_t lootGuid = currentLoot_.lootGuid;
-            for (uint32_t itemId : unknown) {
-                owner_.askItemThen(itemId, "loot open " + std::to_string(lootGuid),
-                                   [this, lootGuid](bool found) {
-                    if (!found || !lootWindowOpen_ || currentLoot_.lootGuid != lootGuid) return;
-                    if (--lootItemsAwaited_ != 0) return;
-                    if (owner_.addonEventCallbackRef())
-                        owner_.addonEventCallbackRef()("LOOT_OPENED", {autoLoot_ ? "1" : "0"});
-                });
-            }
-        }
-    }
     auto& localLoot = localLootState_[currentLoot_.lootGuid];
     localLoot.data = currentLoot_;
-
+    // Only once every item in it is known (0x005896b0): each the item cache
+    // does not hold is asked for and counted (0x00bfa688), and the answer that
+    // found it - LOOT_SLOT_CHANGED for its slot, raised with the item answer -
+    // takes one off the count, the last making the loot ready (0x00589460).
+    // An answer that found nothing leaves it counted, as there.
+    std::vector<uint32_t> unknown;
     for (const auto& item : currentLoot_.items) {
-        owner_.queryItemInfo(item.itemId, 0);
+        const auto* info = owner_.getItemInfo(item.itemId);
+        if (item.itemId != 0 && (!info || !info->valid) &&
+            std::find(unknown.begin(), unknown.end(), item.itemId) == unknown.end()) {
+            unknown.push_back(item.itemId);
+        }
     }
+    lootItemsAwaited_ = static_cast<int>(unknown.size());
+    if (unknown.empty()) {
+        lootReady();
+    } else {
+        const uint64_t lootGuid = currentLoot_.lootGuid;
+        for (uint32_t itemId : unknown) {
+            owner_.askItemThen(itemId, "loot open " + std::to_string(lootGuid),
+                               [this, lootGuid](bool found) {
+                if (!found || !lootWindowOpen_ || currentLoot_.lootGuid != lootGuid) return;
+                if (--lootItemsAwaited_ != 0) return;
+                lootReady();
+            });
+        }
+    }
+}
 
-    if (currentLoot_.gold > 0) {
-        if (owner_.getState() == WorldState::IN_WORLD && owner_.getSocket()) {
-            bool suppressFallback = false;
-            auto cooldownIt = recentLootMoneyAnnounceCooldowns_.find(currentLoot_.lootGuid);
-            if (cooldownIt != recentLootMoneyAnnounceCooldowns_.end() && cooldownIt->second > 0.0f) {
-                suppressFallback = true;
+void InventoryHandler::lootReady() {
+    // 0x005896b0 / 0x00589460: taken at once where this loot is auto looted
+    // (the player's +0x18e8, set by what began it), else LOOT_OPENED with a 0.
+    //
+    // The argument is a number, not text: the client fires LOOT_OPENED (249)
+    // with "%d", and LootFrame_OnEvent's `autoLoot == 0` compares it as one.
+    if (autoLoot_) {
+        autoTakeLoot();
+        return;
+    }
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LOOT_OPENED", {"0"});
+}
+
+void InventoryHandler::autoTakeLoot() {
+    // 0x00588f90, once every item is known: the coin (0x006d4b90), then each
+    // slot the player may take - free (type 0) or the player's own (4). A
+    // bind-on-pickup item better than common that is not party loot (template
+    // flag 0x800), in a free slot, is asked about instead - the first such
+    // only, LOOT_BIND_CONFIRM with its slot on screen - and the rest are
+    // stored (CMSG_AUTOSTORE_LOOT_ITEM, 0x006d2c20). The loot is then no
+    // longer auto looted; with nothing in it at all it is let go
+    // (0x00523640), else it opens with a 1.
+    if (lootItemsAwaited_ != 0) return;
+    if (!lootWindowOpen_ || owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) {
+        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LOOT_OPENED", {"1"});
+        return;
+    }
+    if (currentLoot_.goldLeft()) {
+        bool suppressFallback = false;
+        auto cooldownIt = recentLootMoneyAnnounceCooldowns_.find(currentLoot_.lootGuid);
+        if (cooldownIt != recentLootMoneyAnnounceCooldowns_.end() && cooldownIt->second > 0.0f)
+            suppressFallback = true;
+        pendingLootMoneyGuid_ = suppressFallback ? 0 : currentLoot_.lootGuid;
+        pendingLootMoneyAmount_ = suppressFallback ? 0 : currentLoot_.gold;
+        pendingLootMoneyNotifyTimer_ = suppressFallback ? 0.0f : 0.4f;
+        owner_.getSocket()->send(LootMoneyPacket::build());
+    }
+    bool asked = false;
+    int display = currentLoot_.hasCoinSlot() ? 1 : 0;
+    for (const auto& item : currentLoot_.items) {
+        ++display;
+        if (item.looted || (item.lootSlotType != 0 && item.lootSlotType != 4)) continue;
+        const auto* info = owner_.getItemInfo(item.itemId);
+        const bool confirm = info && info->valid && info->bindType == 1 && info->quality > 1 &&
+                             (info->itemFlags & 0x800u) == 0 && item.lootSlotType != 4;
+        if (confirm) {
+            if (!asked) {
+                asked = true;
+                pendingLootActive_ = true;
+                pendingLootSlot_ = item.slotIndex;
+                if (owner_.addonEventCallbackRef())
+                    owner_.addonEventCallbackRef()("LOOT_BIND_CONFIRM", {std::to_string(display)});
             }
-            pendingLootMoneyGuid_ = suppressFallback ? 0 : currentLoot_.lootGuid;
-            pendingLootMoneyAmount_ = suppressFallback ? 0 : currentLoot_.gold;
-            pendingLootMoneyNotifyTimer_ = suppressFallback ? 0.0f : 0.4f;
-            auto pkt = LootMoneyPacket::build();
-            owner_.getSocket()->send(pkt);
-            // The coin stays in the window until the server says it is taken.
-            //
-            // Clearing it here emptied the slot the interface had just been
-            // told about: the loot frame builds its buttons on LOOT_OPENED,
-            // which fires above, and the coin is display slot one with the
-            // items after it. Dropping the coin out from under that renumbered
-            // every item - GetLootSlotInfo(2) answered the *second* item, or
-            // nothing at all - so the window went on showing a coin that had
-            // been taken and an item button that did nothing when clicked.
+            continue;
         }
+        owner_.getSocket()->send(AutostoreLootItemPacket::build(item.slotIndex));
     }
-
-    if (autoLoot_ && owner_.getState() == WorldState::IN_WORLD && owner_.getSocket() &&
-        !localLoot.itemAutoLootSent) {
-        for (const auto& item : currentLoot_.items) {
-            LOG_INFO("Autostoring loot slot=", static_cast<int>(item.slotIndex),
-                     " item=", item.itemId, " count=", item.count,
-                     " fromGuid=0x", std::hex, currentLoot_.lootGuid, std::dec);
-            auto pkt = AutostoreLootItemPacket::build(item.slotIndex);
-            owner_.getSocket()->send(pkt);
-        }
-        localLoot.itemAutoLootSent = true;
-    }
-
-    // A corpse that held only money is already empty, so close it here rather
-    // than waiting for a slot to clear that will never clear. Only when there
-    // are no items: an item loot's slots have not been confirmed cleared yet,
-    // and releasing before the server stores them would drop them - that case
-    // closes from handleLootRemoved once the last slot is gone.
-    if (lootWindowOpen_ && currentLoot_.items.empty() && currentLoot_.gold == 0) {
+    autoLoot_ = false;
+    if (!currentLoot_.hasCoinSlot() && currentLoot_.items.empty()) {
         closeLoot();
+        return;
     }
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LOOT_OPENED", {"1"});
 }
 
 void InventoryHandler::handleLootReleaseResponse(network::Packet& packet) {
@@ -2476,6 +2473,7 @@ void InventoryHandler::dispatchUseItem(uint8_t wowBag, uint8_t wowSlot, uint64_t
     constexpr uint32_t kItemFieldFlagWrapped = 0x8;
     if (itemInfo && itemInfo->valid && (itemInfo->itemFlags & kItemFlagWrapper) != 0) {
         if ((owner_.getItemFieldFlags(itemGuid) & kItemFieldFlagWrapped) != 0) {
+            beginOpenItem();
             owner_.getSocket()->send(OpenItemPacket::build(wowBag, wowSlot));
         } else {
             wrapPaperGuid_ = itemGuid;
@@ -3043,10 +3041,18 @@ bool InventoryHandler::placePendingGlyph(uint32_t socketIndex) {
     return true;
 }
 
+void InventoryHandler::beginOpenItem() {
+    // 0x006dcd70: the open loot let go (0x00523640), and whether what the
+    // item holds is taken at once (0x00513700).
+    closeLoot();
+    autoLoot_ = owner_.clickAutoLoots();
+}
+
 void InventoryHandler::openItemBySlot(int backpackIndex) {
     if (backpackIndex < 0 || backpackIndex >= owner_.inventoryRef().getBackpackSize()) return;
     if (owner_.inventoryRef().getBackpackSlot(backpackIndex).empty()) return;
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    beginOpenItem();
     auto packet = OpenItemPacket::build(0xFF, static_cast<uint8_t>(Inventory::NUM_EQUIP_SLOTS + backpackIndex));
     LOG_INFO("openItemBySlot: CMSG_OPEN_ITEM bag=0xFF slot=", (Inventory::NUM_EQUIP_SLOTS + backpackIndex));
     owner_.getSocket()->send(packet);
@@ -3058,6 +3064,7 @@ void InventoryHandler::openItemInBag(int bagIndex, int slotIndex) {
     if (owner_.inventoryRef().getBagSlot(bagIndex, slotIndex).empty()) return;
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     uint8_t wowBag = static_cast<uint8_t>(Inventory::FIRST_BAG_EQUIP_SLOT + bagIndex);
+    beginOpenItem();
     auto packet = OpenItemPacket::build(wowBag, static_cast<uint8_t>(slotIndex));
     LOG_INFO("openItemInBag: CMSG_OPEN_ITEM bag=", (int)wowBag, " slot=", slotIndex);
     owner_.getSocket()->send(packet);

@@ -3637,7 +3637,20 @@ static int lua_ClearOverrideBindings(lua_State* L) {
 
 // Frame methods: SetPoint, SetSize, SetWidth, SetHeight, GetWidth, GetHeight, GetCenter, SetAlpha, GetAlpha
 
+namespace {
+lua_State* g_modifiedClickState = nullptr;
+}  // namespace
+
+void setModifiedClickState(lua_State* L) { g_modifiedClickState = L; }
+
+bool modifiedClickHeld(const std::string& action) {
+    if (!g_modifiedClickState) return false;
+    const std::string binding = modifiedClickBinding(g_modifiedClickState, action);
+    return binding.empty() ? shiftHeld() : modifiersHeldFor(binding);
+}
+
 void registerActionLuaAPI(lua_State* L) {
+    setModifiedClickState(L);
     static const struct { const char* name; lua_CFunction func; } api[] = {
                 {"HasAction",           lua_HasAction},
                 // A macro's name, which only a macro has; ActionButton_Update

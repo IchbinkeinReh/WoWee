@@ -2959,6 +2959,9 @@ public:
     bool isLootWindowOpen() const;
     const LootResponseData& getCurrentLoot() const;
     void setAutoLoot(bool enabled);
+    /// 0x00513700: whether a click auto loots - autoLootDefault, the other
+    /// way round while AUTOLOOTTOGGLE's modifier is held.
+    bool clickAutoLoots() const;
     bool isAutoLoot() const;
     /// Turn the player to face the target when an attack or a targeted spell
     /// starts. Off by default, as the original client has it: a target behind

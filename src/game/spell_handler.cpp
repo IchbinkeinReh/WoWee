@@ -4216,6 +4216,21 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
         if (restorationLoop) {
             owner_.setStandState(1); // UNIT_STAND_STATE_SIT
         }
+        // 0x0080e1b0: a spell that ends in loot - pick pocket (71), skinning
+        // (95, 116), and disenchanting, prospecting and milling (99, 127,
+        // 158) while a click would auto loot (0x00513700) - has its loot
+        // taken at once per autoLootDefault, where nothing began it already.
+        if (const auto it = owner_.spellNameCacheRef().find(data.spellId);
+            it != owner_.spellNameCacheRef().end() && !owner_.isAutoLoot()) {
+            for (const uint32_t effect : it->second.effectIds) {
+                const bool loots = effect == 71 || effect == 95 || effect == 116;
+                const bool breaks = effect == 99 || effect == 127 || effect == 158;
+                if (loots || (breaks && owner_.clickAutoLoots())) {
+                    owner_.setAutoLoot(addons::storedCVarValue("autoLootDefault", "0") != "0");
+                    break;
+                }
+            }
+        }
         // Ranged auto-attack spells (Auto Shot, Shoot, Throw) complete as timed
         // casts and are NOT classified as instant melee abilities, so trigger the
         // ranged shot animation explicitly here.

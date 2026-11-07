@@ -81,6 +81,14 @@ void noteClientSettingChanged(const std::string& settingKey, const std::string& 
 void setStoredCVar(const std::string& key, const std::string& value);
 void registerActionLuaAPI(lua_State* L);
 
+/// Whether the modifiers a modified click action is bound to are held now
+/// (IsModifiedClick's answer, for the client's own code - 0x00513700 asks it
+/// of AUTOLOOTTOGGLE). False with no interface loaded.
+bool modifiedClickHeld(const std::string& action);
+/// The state modifiedClickHeld asks, set when the action API is registered
+/// and cleared before the state closes.
+void setModifiedClickState(lua_State* L);
+
 /// One line of the CVar listing the client's own console command prints
 /// (`FUN_00769100("cvarlist", 0x00767220, 5, "List cvars")`).
 ///

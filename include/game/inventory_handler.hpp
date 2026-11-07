@@ -179,7 +179,11 @@ public:
     void closeLoot();
     bool isLootWindowOpen() const { return lootWindowOpen_; }
     const LootResponseData& getCurrentLoot() const { return currentLoot_; }
+    /// The player's +0x18e8: whether the loot the player is opening now is
+    /// taken at once (0x006cde50) - set by what begins it.
     void setAutoLoot(bool enabled) { autoLoot_ = enabled; }
+    /// 0x00588f90: the open loot taken, as far as it may be.
+    void autoTakeLoot();
     bool isAutoLoot() const { return autoLoot_; }
     void setAutoSellGrey(bool enabled) { autoSellGrey_ = enabled; }
     bool isAutoSellGrey() const { return autoSellGrey_; }
@@ -961,6 +965,8 @@ private:
     // ---- Loot state ----
     bool lootWindowOpen_ = false;
     bool autoLoot_ = false;
+    void lootReady();
+    void beginOpenItem();
     bool autoSellGrey_ = false;
     bool autoRepair_ = false;
     LootResponseData currentLoot_;

@@ -1415,6 +1415,10 @@ void GameHandler::setAutoLoot(bool enabled) {
     if (inventoryHandler_) inventoryHandler_->setAutoLoot(enabled);
     else autoLoot_ = enabled;
 }
+bool GameHandler::clickAutoLoots() const {
+    const bool byDefault = addons::storedCVarValue("autoLootDefault", "0") != "0";
+    return byDefault != addons::modifiedClickHeld("AUTOLOOTTOGGLE");
+}
 bool GameHandler::isAutoLoot() const {
     return inventoryHandler_ ? inventoryHandler_->isAutoLoot() : autoLoot_;
 }
@@ -3709,6 +3713,9 @@ void GameHandler::lootCorpse(uint64_t guid) {
         }
         dismount();
     }
+    // 0x00706010: whether this loot is taken at once (0x006cde50 with
+    // 0x00513700).
+    setAutoLoot(clickAutoLoots());
     lootTarget(guid);
 }
 
@@ -3993,6 +4000,7 @@ void GameHandler::performGameObjectInteractionNow(uint64_t guid) {
     // (0x00523640, CMSG_LOOT_RELEASE) before it is used.
     if (!gameObjectClickable(*go, facts)) return;
     closeLoot();
+    setAutoLoot(clickAutoLoots());  // 0x006cde50(0x00513700())
 
     // 0x0070f680: the type's handler is asked whether the object may be used
     // (0x00711470) and its refusal said when not - out of reach is
