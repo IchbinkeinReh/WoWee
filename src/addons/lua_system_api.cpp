@@ -1529,6 +1529,10 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     // so only GetCVarDefault was left on "0" - the value the Combat panel's
     // Defaults button would have restored, turning off a feature that is on.
     else if (n == "autoselfcast") lua_pushstring(L, "1");
+    // Stopping an attack stops Auto Shot with it, as the client registers it
+    // (0x00510000 "autoRangedCombat" "1") and as CombatHandler::stopAutoAttack
+    // reads it.
+    else if (n == "autorangedcombat") lua_pushstring(L, "1");
     // Offline guild members are listed, as the client registers it (0x00510000
     // "guildShowOffline" "1") and as this client's roster shows them
     // (guildShowOffline() starts true, and the roster it is given holds

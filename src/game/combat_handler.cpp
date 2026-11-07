@@ -532,6 +532,18 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
 }
 
 void CombatHandler::stopAutoAttack() {
+    // 0x006e1660: with autoRangedCombat on, an attack stopped stops Auto Shot
+    // with it - the repeating spell the client recorded off a spell carrying
+    // AttributesEx4 0x01000000 (0x00542030, 0x00be5d84) - whether or not a
+    // swing was going.
+    if (const uint32_t repeating = owner_.autoRepeatSpellId();
+        repeating != 0 && addons::storedCVarValue("autoRangedCombat", "1") != "0") {
+        const auto& cache = owner_.spellNameCacheRef();
+        if (const auto it = cache.find(repeating);
+            it != cache.end() && (it->second.attrEx4 & 0x01000000u) != 0) {
+            owner_.stopAutoRepeat(true);
+        }
+    }
     if (!autoAttacking_ && !autoAttackRequested_) return;
     autoAttackRequested_ = false;
     autoAttacking_ = false;
