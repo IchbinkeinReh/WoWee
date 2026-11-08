@@ -4398,8 +4398,11 @@ void Application::applyServerMovementState(float deltaTime) {
                 rideTurnLogTimer += deltaTime;
                 if (kRideTurnDebug && cc && rideTurnLogTimer >= 1.0f) {
                     rideTurnLogTimer = 0.0f;
+                    const auto* ac = renderer->getAnimationController();
+                    const int shuffle = ac ? static_cast<int>(ac->turnShuffle()) : -1;
                     LOG_WARNING("RIDE TURN: facing=", tr->facing, " turnDeg=", turnDeg, " camYaw=", cc->getYaw(),
-                                " facingYaw=", cc->getFacingYaw(), " clientAnim=", tr->useClientAnimation,
+                                " facingYaw=", cc->getFacingYaw(), " body=", renderer->getCharacterBodyYaw(),
+                                " shuffle=", shuffle, " clientAnim=", tr->useClientAnimation,
                                 " serverYaw=", tr->hasServerYaw);
                 }
             }
