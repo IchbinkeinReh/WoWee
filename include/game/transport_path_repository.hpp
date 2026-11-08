@@ -138,6 +138,7 @@ struct TaxiRouteNode {
     glm::vec3 position;      ///< canonical world coordinates
     uint32_t mapId = 0;
     uint32_t dwellMs = 0;    ///< authored stop at this node
+    uint32_t flags = 0;      ///< TaxiPathNode flags: 1 teleport after, 2 stop
 };
 
 /// A transport's whole route, across every map it touches.

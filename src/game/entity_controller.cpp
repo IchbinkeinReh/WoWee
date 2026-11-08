@@ -4530,7 +4530,9 @@ void EntityController::handleGameObjectQueryResponse(network::Packet& packet) {
                                 owner_.getTransportManager()->hasTaxiPath(taxiPathId) ? 1 : 0, ")");
                 }
             } else if (owner_.getTransportManager()->assignTaxiPathToTransport(
-                           data.entry, taxiPathId, mapId)) {
+                           data.entry, taxiPathId, mapId,
+                           // moveSpeed and accelRate, data1 and data2 (0x00711b50).
+                           static_cast<float>(data.data[1]), static_cast<float>(data.data[2]))) {
                 if (sayThis) {
                     LOG_WARNING("MO_TRANSPORT entry=", data.entry, " assigned TaxiPathNode path ",
                                 taxiPathId, " on map ", mapId);

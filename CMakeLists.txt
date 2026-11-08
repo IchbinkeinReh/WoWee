@@ -763,6 +763,7 @@ set(WOWEE_SOURCES
     src/game/transport_path_repository.cpp
     src/game/transport_clock_sync.cpp
     src/game/transport_animator.cpp
+    src/game/ship_path.cpp
     src/game/world.cpp
     src/game/player.cpp
     src/game/entity.cpp

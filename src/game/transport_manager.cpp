@@ -737,6 +737,12 @@ void TransportManager::updateTransportMovement(ActiveTransport& transport, float
         return;
     }
 
+    // A ship or zeppelin with its route as the client flies it.
+    if (transport.shipPath && transport.shipPath->valid()) {
+        poseShip(transport, pathTimeMs, spline.durationMs());
+        return;
+    }
+
     // A cross-continent route spends part of its cycle on the other map. The
     // slice holds the hull still there rather than sweeping it across, and
     // there is nothing here to draw, stand on, or board until it returns.
@@ -801,6 +807,49 @@ void TransportManager::updateTransportMovement(ActiveTransport& transport, float
                  " mode=", (transport.useClientAnimation ? "client" : "server"),
                  " isM2=", transport.isM2);
     }
+}
+
+// A ship or zeppelin posed as 0x007134a0 poses it: 0x007f82b0 gives the map,
+// the place and the facing - the route's direction there, reversed, which
+// for these hulls is the direction plus the bow offset - at the path time.
+// The path time is the server's share of the cycle on the client's timeline.
+void TransportManager::poseShip(ActiveTransport& transport, uint32_t splineTimeMs,
+                                uint32_t splineDurationMs) {
+    const ShipPath& ship = *transport.shipPath;
+    const uint32_t period = ship.periodMs();
+    const uint32_t t = splineDurationMs > 0
+        ? static_cast<uint32_t>((static_cast<uint64_t>(splineTimeMs) * period / splineDurationMs) % period)
+        : 0u;
+    const ShipPath::Pose pose = ship.evaluate(t);
+
+    // Not hidden under a rider: only the server carries one across.
+    const bool carryingRider = riderTransportGuid_ != 0 && transport.guid == riderTransportGuid_;
+    const bool here = pose.mapId == transport.shipMapId;
+    const bool presentNow = here || carryingRider;
+    if (presentNow != transport.onThisMap) {
+        transport.onThisMap = presentNow;
+        LOG_INFO("Transport 0x", std::hex, transport.guid, std::dec, " entry=", transport.entry,
+                 (presentNow ? " arrived on this map" : " left for the other map"),
+                 " at route time ", t, "ms of ", period, "ms");
+    }
+    if (!presentNow) {
+        setInstanceHidden(transport, true);
+        applyDoodadMotionState(transport, /*moving=*/false);
+        return;
+    }
+    if (here) {
+        transport.position = core::coords::serverToCanonical(pose.server);
+        if (glm::dot(pose.direction, pose.direction) > 1e-8f) {
+            const float yaw = std::atan2(pose.direction.y, pose.direction.x) +
+                              transportModelBowOffset(transport.displayId);
+            transport.rotation = glm::angleAxis(yaw, glm::vec3(0.0f, 0.0f, 1.0f));
+            transport.facing = core::coords::normalizeAngleRad(yaw);
+        }
+    }
+    transport.atDockDwell = pose.motion == ShipPath::Motion::Stopped;
+    updateTransformMatrices(transport);
+    pushTransform(transport);
+    applyDoodadMotionState(transport, /*moving=*/!transport.atDockDwell);
 }
 
 // Push transform to the appropriate renderer (WMO or M2).
@@ -1006,7 +1055,8 @@ bool TransportManager::hasTaxiPathForMap(uint32_t taxiPathId, uint32_t mapId) co
     return pathRepo_.hasTaxiPathForMap(taxiPathId, mapId);
 }
 
-bool TransportManager::assignTaxiPathToTransport(uint32_t entry, uint32_t taxiPathId, uint32_t mapId) {
+bool TransportManager::assignTaxiPathToTransport(uint32_t entry, uint32_t taxiPathId, uint32_t mapId,
+                                                 float moveSpeed, float accelRate) {
     auto* taxiEntry = pathRepo_.findTaxiPath(taxiPathId, mapId);
     if (!taxiEntry) {
         LOG_WARNING("No TaxiPathNode segment for taxiPathId=", taxiPathId, " on mapId=", mapId,
@@ -1059,6 +1109,26 @@ bool TransportManager::assignTaxiPathToTransport(uint32_t entry, uint32_t taxiPa
             }
         }
         pathRepo_.storePath(entry, std::move(copied));
+
+        // The route as the client flies it (0x00711b50 -> 0x007f92f0): its
+        // taxi path with the template's moveSpeed and accelRate.
+        transport.shipPath.reset();
+        if (route && moveSpeed > 0.0f && accelRate > 0.0f) {
+            std::vector<ShipPathNode> nodes;
+            nodes.reserve(route->nodes.size());
+            for (const auto& nd : route->nodes) {
+                nodes.push_back({core::coords::canonicalToServer(nd.position), nd.mapId, nd.flags,
+                                 nd.dwellMs / 1000u});
+            }
+            auto ship = std::make_shared<ShipPath>(ShipPath::build(nodes, moveSpeed, accelRate));
+            if (ship->valid()) {
+                LOG_INFO("Transport entry=", entry, " route ", taxiPathId, " flown as the client does: ",
+                         ship->periodMs(), "ms at ", moveSpeed, " yd/s, ", accelRate, " yd/s2 (server ",
+                         transport.routePeriodMs, "ms)");
+                transport.shipPath = std::move(ship);
+                transport.shipMapId = mapId;
+            }
+        }
 
         auto* storedEntry = pathRepo_.findPath(entry);
 
