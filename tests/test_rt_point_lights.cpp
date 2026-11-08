@@ -523,3 +523,43 @@ TEST_CASE("Two lights in one place become the stronger one", "[rt_lights]") {
     CHECK(lights[0].color.r == Catch::Approx(0.9f));
     CHECK(lights[1].color.r == Catch::Approx(0.5f));
 }
+
+TEST_CASE("a fire's light goes among its particles, not into its coals", "[rt][lights]") {
+    pipeline::M2ParticleEmitter flame{};
+    flame.emitterType = 1;   // a plane, straight up
+    flame.blendingType = 4;
+    EmitterStart start;
+    start.speed = 2.0f;
+    start.lifespan = 5.0f;
+    // Born evenly over a second and none gone yet: half a second old on
+    // average, a yard up at two yards a second.
+    glm::vec3 cloud = particleCloudOffset(flame, start, 0.0f);
+    CHECK(cloud.x == Catch::Approx(0.0f).margin(1e-4));
+    CHECK(cloud.z == Catch::Approx(1.0f).margin(1e-3));
+    // Gone after a quarter of a second: an eighth of a second old, a quarter
+    // of a yard up.
+    start.lifespan = 0.25f;
+    cloud = particleCloudOffset(flame, start, 0.0f);
+    CHECK(cloud.z == Catch::Approx(0.25f).margin(0.02));
+    // Gravity pulls them back towards the emitter.
+    start.lifespan = 5.0f;
+    start.gravity = 2.0f;
+    CHECK(particleCloudOffset(flame, start, 0.0f).z < 1.0f);
+    // A spread sideways lifts them less but keeps them centred.
+    start.gravity = 0.0f;
+    start.verticalRange = 0.6f;
+    start.horizontalRange = 3.14159f;
+    cloud = particleCloudOffset(flame, start, 0.0f);
+    CHECK(cloud.z < 1.0f);
+    CHECK(std::abs(cloud.x) < 0.05f);
+    CHECK(std::abs(cloud.y) < 0.05f);
+
+    // flameCentre puts the light there.
+    const auto carried = [](uint32_t) { return glm::mat4(1.0f); };
+    flame.position = glm::vec3(0.0f, 0.0f, 0.5f);
+    const std::vector<pipeline::M2ParticleEmitter> brazier = {flame};
+    const std::vector<glm::vec3> clouds = {glm::vec3(0.0f, 0.0f, 1.0f)};
+    const auto at = flameCentre(brazier, carried, &clouds);
+    REQUIRE(at);
+    CHECK(at->z == Catch::Approx(1.5f));
+}

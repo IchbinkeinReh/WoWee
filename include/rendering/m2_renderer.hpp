@@ -145,6 +145,10 @@ struct M2ModelGPU {
     /// lantern on its chain swings away from its bind pose, and a light left
     /// there sat beside it, shadowed by the lantern's own frame.
     uint32_t lampBone = ~0u;
+    /// Where each particle emitter's particles are on average a second after
+    /// it starts, from the emitter (rt_lights::particleCloudOffset): a fire's
+    /// or a lamp's light goes there, among its flames, not into its coals.
+    std::vector<glm::vec3> flameClouds;
     /// What of it glows - its unlit and additive batches, its glow cards -
     /// in a few patches of its own space (rt_lights::GlowBuilder), each a
     /// light while an instance is near (rt_lights::glowLight). Gathered at
@@ -1248,6 +1252,8 @@ private:
     /// A lamp with no light of its own and where its glass glows
     /// (M2ModelGPU::isLamp, lampLocal, lampBone).
     static void detectLamp(M2ModelGPU& gpuModel, const pipeline::M2Model& model);
+    /// M2ModelGPU::flameClouds, from the emitters' tracks at the start.
+    void computeFlameClouds(M2ModelGPU& gpuModel);
     // The pass over every instance is spread over a few frames: where it has
     // got to. The instances placed in the dynamic level - moving ones - are
     // brought up to date every frame from rtDynamicOwnerIds_ (M2Instance ids).
