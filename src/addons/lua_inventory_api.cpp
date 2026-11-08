@@ -3323,6 +3323,7 @@ static int lua_WoweeContainerItemInstance(lua_State* L) {
     lua_setfield(L, -2, "durability");
     lua_pushnumber(L, static_cast<lua_Number>(s->item.maxDurability));
     lua_setfield(L, -2, "maxDurability");
+    pushSocketedGems(L, gh, s->item.guid, s->item.itemId);
     return 1;
 }
 
@@ -3498,6 +3499,14 @@ static int lua_GetItemTooltipData(lua_State* L) {
             }
         }
         lua_setfield(L, -2, "sockets");
+    }
+    // The socket bonus, as ITEM_SOCKET_BONUS words it (the enchant's name).
+    if (info->socketBonus != 0) {
+        const std::string bonus = gh->getEnchantName(info->socketBonus);
+        if (!bonus.empty()) {
+            lua_pushstring(L, bonus.c_str());
+            lua_setfield(L, -2, "socketBonus");
+        }
     }
     // Item set
     if (info->itemSetId != 0) {

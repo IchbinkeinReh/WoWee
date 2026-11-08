@@ -2252,6 +2252,17 @@ target_link_libraries(test_cast_checks PRIVATE catch2_main)
 add_test(NAME cast_checks COMMAND test_cast_checks)
 register_test_target(test_cast_checks)
 
+# ── test_gem_conditions ─────────────────────────────────────
+add_executable(test_gem_conditions
+    test_gem_conditions.cpp
+    ${CMAKE_SOURCE_DIR}/src/game/gem_conditions.cpp
+)
+target_include_directories(test_gem_conditions PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_gem_conditions SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_gem_conditions PRIVATE catch2_main)
+add_test(NAME gem_conditions COMMAND test_gem_conditions)
+register_test_target(test_gem_conditions)
+
 # ── test_game_object_use ────────────────────────────────────
 add_executable(test_game_object_use
     test_game_object_use.cpp

@@ -70,6 +70,13 @@ inline void toLowerInPlace(std::string& s) {
     for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 }
 
+/// The gems socketed into one held item, for _WoweePopulateItemTooltip's
+/// `inst` (lua_socket_api.cpp): sets `gems` (per socket index: the gem's
+/// enchant text, its skill and level requirements and its meta conditions,
+/// 0x0061c0b0) and `socketBonusMatched` on the table at the top of the stack.
+void pushSocketedGems(lua_State* L, game::GameHandler* gh, uint64_t itemGuid,
+                      uint32_t itemId);
+
 /// Which interface is loaded, as its manifest's `## Interface:` number - 11200
 /// for 1.12, 20400 for 2.4.3, 30300 for 3.3.5a, 40300 for 4.3.4 - or 0 where
 /// none said.

@@ -3872,6 +3872,9 @@ static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
             lua_setfield(L, -2, "durability");
             lua_pushnumber(L, static_cast<lua_Number>(instance->maxDurability));
             lua_setfield(L, -2, "maxDurability");
+            // The gems in its sockets, which the template only has the
+            // colours of (0x006277f0's enchantment walk).
+            pushSocketedGems(L, gh, instance->guid, itemId);
         } else {
             lua_pushnil(L);
         }
@@ -9683,12 +9686,56 @@ void LuaEngine::registerCoreAPI() {
         "        if data.resistLines then\n"
         "            for _, text in ipairs(data.resistLines) do self:AddLine(text, 1, 1, 1) end\n"
         "        end\n"
-        "        if data.sockets then\n"
-        "            local socketKeys = {[1]='EMPTY_SOCKET_META',[2]='EMPTY_SOCKET_RED',[4]='EMPTY_SOCKET_YELLOW',[8]='EMPTY_SOCKET_BLUE'}\n"
-        "            for _, sock in ipairs(data.sockets) do\n"
-        "                local key = socketKeys[sock.color] or 'EMPTY_SOCKET_NO_COLOR'\n"
-        "                self:AddLine(_G[key] or key, 0.5, 0.5, 0.5)\n"
+        // Each socket: the gem in it when the tooltip is of one held item,
+        // else the empty socket of its colour (0x006277f0). A gem's line is
+        // red while its skill or level is short, then white once its meta
+        // conditions all hold and grey while one does not; each condition
+        // follows it, white or grey on its own (0x0061c0b0). The socket bonus
+        // closes the block: green when every socket holds a gem of its
+        // colour, grey otherwise and always on a bare template.
+        "        local gems = inst and inst.gems\n"
+        "        local function gemLines(g)\n"
+        "            local r, gc, b = 1, 1, 1\n"
+        "            if not (g.skillOk and g.levelOk) then r, gc, b = 1, 0.125, 0.125\n"
+        "            elseif not g.conditionsMet then r, gc, b = 0.5, 0.5, 0.5 end\n"
+        "            self:AddLine(g.text, r, gc, b)\n"
+        "            for _, c in ipairs(g.conditions or {}) do\n"
+        "                local text = ''\n"
+        "                local fmt = c.key and _G[c.key]\n"
+        "                local ca, cb = _G[c.colorA] or c.colorA, _G[c.colorB] or c.colorB\n"
+        "                if fmt then\n"
+        "                    if c.valueForm then text = format(fmt, c.number, ca) else text = format(fmt, ca, cb) end\n"
+        "                end\n"
+        "                local req = format(ENCHANT_CONDITION_REQUIRES or 'Requires %s', text)\n"
+        "                if c.met then self:AddLine('  '..req, 1, 1, 1) else self:AddLine('  '..req, 0.5, 0.5, 0.5) end\n"
         "            end\n"
+        "            if not g.skillOk and g.skillName then\n"
+        "                if g.skillRank and g.skillRank > 0 then\n"
+        "                    self:AddLine(format(ENCHANT_ITEM_MIN_SKILL or 'Requires %s (%d)', g.skillName, g.skillRank), 1, 0.125, 0.125)\n"
+        "                else\n"
+        "                    self:AddLine(format(ENCHANT_ITEM_REQ_SKILL or 'Requires %s', g.skillName), 1, 0.125, 0.125)\n"
+        "                end\n"
+        "            end\n"
+        "            if not g.levelOk then\n"
+        "                self:AddLine(format(ENCHANT_ITEM_REQ_LEVEL or 'Requires Level %d', g.minLevel), 1, 0.125, 0.125)\n"
+        "            end\n"
+        "        end\n"
+        "        if data.sockets or gems then\n"
+        "            local socketKeys = {[1]='EMPTY_SOCKET_META',[2]='EMPTY_SOCKET_RED',[4]='EMPTY_SOCKET_YELLOW',[8]='EMPTY_SOCKET_BLUE'}\n"
+        "            local socks = data.sockets or {}\n"
+        "            for i = 1, 3 do\n"
+        "                local g = gems and gems[i]\n"
+        "                if g then gemLines(g)\n"
+        "                elseif socks[i] then\n"
+        "                    local key = socketKeys[socks[i].color] or 'EMPTY_SOCKET_NO_COLOR'\n"
+        "                    self:AddLine(_G[key] or key, 0.5, 0.5, 0.5)\n"
+        "                end\n"
+        "            end\n"
+        "        end\n"
+        "        if data.socketBonus then\n"
+        "            local text = format(ITEM_SOCKET_BONUS or 'Socket Bonus: %s', data.socketBonus)\n"
+        "            if inst and inst.socketBonusMatched then self:AddLine(text, 0, 1, 0)\n"
+        "            else self:AddLine(text, 0.5, 0.5, 0.5) end\n"
         "        end\n"
         // The durability, between what the item is and what it asks for
         // (0x006277f0): white, red once broken.
