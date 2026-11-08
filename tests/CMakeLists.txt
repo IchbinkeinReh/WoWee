@@ -3003,6 +3003,13 @@ wowee_add_test(test_collision_hover
             ${CMAKE_SOURCE_DIR}/src/rendering/collision_hover.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_collision_safety ────────────────────────────────────
+# The collision port's test safety: the place last stood on belongs to one
+# world, and a map change, a teleport or a transport makes it forgotten.
+wowee_add_test(test_collision_safety
+    SOURCES test_collision_safety.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_collision_swim ──────────────────────────────────────
 # Swimming and flying: when a unit swims, the surface holding a swimmer
 # under it, the jump out, and the plain sweep a flyer makes.

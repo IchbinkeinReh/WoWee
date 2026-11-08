@@ -4,6 +4,7 @@
 #include "rendering/camera_smooth.hpp"
 #include "rendering/camera.hpp"
 #include "game/vehicle_camera.hpp"
+#include "rendering/collision_safety.hpp"
 #include "rendering/collision_walk.hpp"
 #include "core/input.hpp"
 #include <SDL3/SDL.h>
@@ -123,6 +124,14 @@ public:
     void reset();
     void resetAngles();
     void teleportTo(const glm::vec3& pos);
+    /// The collision port's world changed under the unit - a map change, a
+    /// teleport, a transport boarded or left: the place it last stood (the
+    /// test safety's) is not this world's, and the world round the new
+    /// place waits to be loaded before the unit moves.
+    void forgetPortPlace() {
+        portSafe_.forget();
+        portWorldReady_ = false;
+    }
     void setOnlineMode(bool online) { onlineMode = online; }
 
     // Last known safe position (grounded, not falling)
@@ -632,8 +641,7 @@ private:
     uint32_t portFlyMs_ = 0;
     /// The test safety: where the unit last stood, and whether the port has
     /// been switched off for the session after a runaway fall.
-    glm::vec3 portSafePos_{0.0f};
-    bool portSafeValid_ = false;
+    collision::SafePlace portSafe_;
     bool portAborted_ = false;
     collision::Facet portBlocking_;
     float portDebugTimer_ = 0.0f;

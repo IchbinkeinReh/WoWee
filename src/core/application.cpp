@@ -4300,6 +4300,8 @@ void Application::applyServerMovementState(float deltaTime) {
                  " isM2=", isM2Transport,
                  " guid=0x", std::hex, gameHandler->getPlayerTransportGuid(), std::dec);
         wasOnTransport = onTransportNowDbg;
+        // Boarded or left: where the player last stood was another frame's.
+        if (auto* cc = renderer->getCameraController()) cc->forgetPortPlace();
     }
 
     if (onTaxi) {

@@ -7468,7 +7468,8 @@ void LuaEngine::registerCoreAPI() {
         // __WoweeTestNearestTransport(): for a scripted ride, the nearest
         // transport on this map: its horizontal distance from the player,
         // its height over the player, its entry, and whether the player is
-        // riding a transport now. Nothing when there is none.
+        // riding a transport now, then the transport's height and the
+        // player's. Nothing when there is none.
         lua_pushcfunction(L_, [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             auto* tm = gh ? gh->getTransportManager() : nullptr;
@@ -7490,7 +7491,9 @@ void LuaEngine::registerCoreAPI() {
             lua_pushnumber(L, nearest->position.z - me.z);
             lua_pushinteger(L, static_cast<lua_Integer>(nearest->entry));
             lua_pushboolean(L, gh->isOnTransport() ? 1 : 0);
-            return 4;
+            lua_pushnumber(L, nearest->position.z);
+            lua_pushnumber(L, me.z);
+            return 6;
         });
         lua_setglobal(L_, "__WoweeTestNearestTransport");
     }

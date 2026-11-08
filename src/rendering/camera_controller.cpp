@@ -67,7 +67,7 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
         // And the test safety's last standing place is not this one's: a
         // transport's map change (or any teleport) put the unit far from
         // it, and a fall measured against it read as a runaway.
-        portSafeValid_ = false;
+        portSafe_.forget();
     }
     if (!portWorldReady_) {
         std::vector<collision::Facet> below;
@@ -167,10 +167,7 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
             if (down.facet >= 0) m.pos.z -= down.allowed;
         }
         verticalVelocity = 0.0f;
-        if (!fell) {
-            portSafePos_ = m.pos;
-            portSafeValid_ = true;
-        }
+        if (!fell) portSafe_.stoodAt(m.pos);
         if (fell) {
             grounded = false;
             // 0x00988370 leaves +0x8c and the direction as the walk had them.
@@ -197,20 +194,20 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
         // all below it, is a fault of the port. Stop using it for the rest
         // of the session and put the character back where it stood; the
         // movement this client had before takes over.
-        if (!r.landed && m.falling && portSafeValid_) {
+        if (!r.landed && m.falling && portSafe_.valid()) {
             std::vector<collision::Facet> below;
             gatherPortFacets(m.pos - glm::vec3(1.0f, 1.0f, 60.0f), m.pos + glm::vec3(1.0f, 1.0f, 1.0f), below);
-            if (m.pos.z < portSafePos_.z - 40.0f || below.empty()) {
+            if (const auto back = portSafe_.runawayRestore(m.pos, below.empty())) {
                 LOG_WARNING("PORT ABORT: fell to (", m.pos.x, ", ", m.pos.y, ", ", m.pos.z, ") from (",
-                            portSafePos_.x, ", ", portSafePos_.y, ", ", portSafePos_.z, "), facets below ",
+                            back->x, ", ", back->y, ", ", back->z, "), facets below ",
                             below.size(), " - collision port off for this session");
                 portAborted_ = true;
                 m = collision::Mover{};
-                m.pos = portSafePos_;
+                m.pos = *back;
                 verticalVelocity = 0.0f;
                 grounded = true;
-                lastGroundZ = portSafePos_.z;
-                return portSafePos_;
+                lastGroundZ = back->z;
+                return *back;
             }
         }
         if (r.landed || !m.falling) {
@@ -4520,6 +4517,7 @@ void CameraController::reset() {
     pitch = defaultPitch;
     verticalVelocity = 0.0f;
     grounded = true;
+    forgetPortPlace();
     jumpLocked_ = false;
     swimming = false;
     sitting = false;
@@ -4774,6 +4772,7 @@ void CameraController::teleportTo(const glm::vec3& pos) {
     // is not this one.
     lastGroundZ = pos.z;
     hasCachedFloor_ = false;
+    forgetPortPlace();
     noGroundTimer_ = 0.0f;  // Reset grace period so terrain has time to stream
     autoUnstuckFired_ = false;
     continuousFallTime_ = 0.0f;
