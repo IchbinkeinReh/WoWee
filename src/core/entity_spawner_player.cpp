@@ -1046,6 +1046,8 @@ void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_
         }
         // ...and a custom animation asked for meanwhile (0x00713f50, +0x208).
         applyPendingGameObjectCustomAnim(guid);
+        // ...and its art kit's models (0x00713f50 -> 0x00713da0).
+        applyGameObjectArtKit(guid);
 
         // Notify transport system for M2 transports (e.g. Deeprun Tram cars)
         if (gameHandler_ && gameHandler_->isTransportGuid(guid)) {

@@ -3746,6 +3746,9 @@ public:
         /// team rating it asks for (+0x38), which the tooltip states (0x006277f0).
         uint32_t arenaBracket = 0;
         uint32_t requiredArenaRating = 0;
+        /// ItemPurchaseGroup.dbc id (+0x3c): the vendor item also wants the
+        /// player to own one of that group's items (ITEM_REQ_PURCHASE_GROUP).
+        uint32_t purchaseGroup = 0;
     };
     /// 0x005a37b0: whether one of the player's arena teams at least the
     /// bracket's size (2, 3, 5) has both the player's personal rating and the
@@ -5473,6 +5476,16 @@ public:
         loadLfgDungeonDbc();
         return lfgDungeons_;
     }
+    /// A dungeon's level ranges as the client shows and sorts them: the
+    /// LfgDungeonExpansion row for this account's expansion where there is one
+    /// (its hard and target ranges, 0x006349f0 as 0x00554e60 reads it), else
+    /// the dungeon's own.
+    struct LfgLevels { uint32_t minLevel = 0, maxLevel = 0, minRecLevel = 0, maxRecLevel = 0; };
+    struct LfgGroupRow { std::string name; uint32_t orderIndex = 0; };
+    LfgLevels lfgDungeonLevels(const LfgDungeon& d) const;
+    /// LfgDungeonGroup.dbc: a category's name and its place in the list.
+    const std::string& lfgGroupName(uint32_t groupId) const;
+    uint32_t lfgGroupOrder(uint32_t groupId) const;
     void queryItemInfo(uint32_t entry, uint64_t guid);
 
     // --- Inner types exposed for former friend classes ---
@@ -6806,6 +6819,9 @@ private:
     // LFG dungeon name cache (lazy-loaded from LFGDungeons.dbc; WotLK only)
     mutable std::unordered_map<uint32_t, std::string> lfgDungeonNameCache_;
     mutable std::vector<LfgDungeon> lfgDungeons_;
+    mutable std::unordered_map<uint32_t, LfgGroupRow> lfgGroups_;
+    /// LfgDungeonExpansion rows by (dungeon id << 8 | expansion level).
+    mutable std::unordered_map<uint64_t, LfgLevels> lfgExpansionLevels_;
     mutable std::vector<Companion> mountSpells_;
     mutable std::vector<Companion> critterSpells_;
     mutable size_t companionsBuiltFromSpellCount_ = static_cast<size_t>(-1);

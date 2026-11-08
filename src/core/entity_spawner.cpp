@@ -117,6 +117,7 @@ void EntitySpawner::update() {
     syncGroundTargetModel();
     updateGameObjectCustomAnims();
     updateGameObjectDestroyPending();
+    updateGameObjectArtKits();
     stage(6);
 }
 

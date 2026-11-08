@@ -2523,7 +2523,8 @@ int lua_Tooltip_SetText(lua_State* L) {
 static bool fillItemTooltipById(wowee::ui::Widget* w, game::GameHandler* gh,
                                 uint32_t itemId);
 static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
-                                uint32_t itemId, const game::ItemDef* instance = nullptr);
+                                uint32_t itemId, const game::ItemDef* instance = nullptr,
+                                const std::array<uint32_t, 3>* linkGems = nullptr);
 static void appendRandomSuffix(wowee::ui::Widget* w, game::GameHandler* gh,
                                const game::ItemDef& item);
 static void appendDurabilityLine(wowee::ui::Widget* w, const game::ItemDef& item);
@@ -3110,13 +3111,18 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
     // walked past. A linked weapon read as a plain one wherever a link is
     // shown - chat, the auction house, a guild bank - because the tooltip was
     // built from the id alone, and the id is a template.
+    // The three after it are the gems in its sockets, by enchant id.
     uint32_t enchantId = 0;
+    std::array<uint32_t, 3> linkGems{};
     if (kind == "item") {
         size_t at = colon + 1;
         while (at < link.size() && link[at] >= '0' && link[at] <= '9') ++at;
-        if (at < link.size() && link[at] == ':') {
+        for (int field = 0; field < 4 && at < link.size() && link[at] == ':'; ++field) {
+            uint32_t v = 0;
             for (++at; at < link.size() && link[at] >= '0' && link[at] <= '9'; ++at)
-                enchantId = enchantId * 10 + static_cast<uint32_t>(link[at] - '0');
+                v = v * 10 + static_cast<uint32_t>(link[at] - '0');
+            if (field == 0) enchantId = v;
+            else linkGems[static_cast<size_t>(field - 1)] = v;
         }
     }
 
@@ -3124,7 +3130,7 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
     if (kind == "spell" || kind == "enchant" || kind == "talent")
         filled = fillSpellTooltip(L, w, gh, id);
     else if (kind == "item") {
-        filled = fillItemTooltipById(L, gh, id);
+        filled = fillItemTooltipById(L, gh, id, nullptr, &linkGems);
         if (filled) appendEnchantLineById(w, gh, enchantId);
         // Asked for whether it was found or not: the answer is what turns a
         // name into a tooltip, and the miss is exactly when it is needed.
@@ -3852,7 +3858,8 @@ static bool fillItemTooltipById(wowee::ui::Widget* w, game::GameHandler* gh,
 /// isTooltip is set before the call because SetText refuses a frame that is not
 /// one, and the builder opens with SetText.
 static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
-                                uint32_t itemId, const game::ItemDef* instance) {
+                                uint32_t itemId, const game::ItemDef* instance,
+                                const std::array<uint32_t, 3>* linkGems) {
     auto* w = widgetOf(L, 1);
     if (!w || !gh || itemId == 0) return false;
     const int top = lua_gettop(L);
@@ -3875,6 +3882,12 @@ static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
             // The gems in its sockets, which the template only has the
             // colours of (0x006277f0's enchantment walk).
             pushSocketedGems(L, gh, instance->guid, itemId);
+        } else if (linkGems && ((*linkGems)[0] | (*linkGems)[1] | (*linkGems)[2])) {
+            // A link's gems: its fields 3-5 are the sockets' enchant ids, as
+            // 0x0061e3a0 wrote them off the item, and the tooltip of the link
+            // shows them as it would the item's own.
+            lua_newtable(L);
+            pushSocketedGems(L, gh, *linkGems, itemId);
         } else {
             lua_pushnil(L);
         }
@@ -9788,6 +9801,12 @@ void LuaEngine::registerCoreAPI() {
         "                local key = bracket == 2 and 'ITEM_REQ_ARENA_RATING_5V5' or bracket == 1 and 'ITEM_REQ_ARENA_RATING_3V3' or 'ITEM_REQ_ARENA_RATING'\n"
         "                req(format(_G[key] or 'Requires personal and team arena rating of %d', rating), met)\n"
         "            end\n"
+        "        end\n"
+        // And the purchase group it may name (+0x3c): owning one of its
+        // items is the requirement, white when met (0x006277f0).
+        "        if __WoweeTooltipMerchantIndex and _GetMerchantItemPurchaseGroup then\n"
+        "            local group, met = _GetMerchantItemPurchaseGroup(__WoweeTooltipMerchantIndex)\n"
+        "            if group then req(format(ITEM_REQ_PURCHASE_GROUP or 'Requires %s', group), met) end\n"
         "        end\n"
         "        if data.requiredFactionName then\n"
         "            local standing = _G['FACTION_STANDING_LABEL'..data.requiredFactionStanding] or ''\n"

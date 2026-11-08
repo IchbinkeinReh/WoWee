@@ -3455,6 +3455,42 @@ void GameHandler::loadDungeonEncounterDbc() const {
 }
 
 // ---------------------------------------------------------------------------
+// The two tables the dungeon list reads beside LFGDungeons (0x005536a0,
+// 0x00554e60). LfgDungeonGroup: ID, Name (sixteen locales and flags, 1-17),
+// OrderIndex 18, ParentGroupId 19, TypeId 20. LfgDungeonExpansion: ID,
+// LfgId 1, ExpansionLevel 2, RandomId 3, HardLevelMin 4, HardLevelMax 5,
+// TargetLevelMin 6, TargetLevelMax 7.
+namespace {
+void loadLfgSideTables(pipeline::AssetManager* am,
+                       std::unordered_map<uint32_t, GameHandler::LfgGroupRow>& groups,
+                       std::unordered_map<uint64_t, GameHandler::LfgLevels>& levels) {
+    if (!am || !am->isInitialized()) return;
+    if (auto dbc = am->loadDBC("LfgDungeonGroup.dbc"); dbc && dbc->isLoaded() &&
+        dbc->getFieldCount() > 18) {
+        for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+            GameHandler::LfgGroupRow row;
+            row.name = dbc->getString(i, 1);
+            row.orderIndex = dbc->getUInt32(i, 18);
+            groups[dbc->getUInt32(i, 0)] = std::move(row);
+        }
+    }
+    if (auto dbc = am->loadDBC("LfgDungeonExpansion.dbc"); dbc && dbc->isLoaded() &&
+        dbc->getFieldCount() >= 8) {
+        for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+            GameHandler::LfgLevels l;
+            l.minLevel = dbc->getUInt32(i, 4);
+            l.maxLevel = dbc->getUInt32(i, 5);
+            l.minRecLevel = dbc->getUInt32(i, 6);
+            l.maxRecLevel = dbc->getUInt32(i, 7);
+            const uint64_t key = (static_cast<uint64_t>(dbc->getUInt32(i, 1)) << 8) |
+                                 (dbc->getUInt32(i, 2) & 0xFFu);
+            // 0x006349f0 takes the first row for the pair.
+            levels.emplace(key, l);
+        }
+    }
+}
+}  // namespace
+
 // LFG dungeon name cache (WotLK: LFGDungeons.dbc)
 // ---------------------------------------------------------------------------
 
@@ -3467,6 +3503,7 @@ void GameHandler::loadLfgDungeonDbc() const {
     // meant one early call disabled this file for the whole session.
     if (!am || !am->isInitialized()) return;
     lfgDungeonNameCacheLoaded_ = true;
+    loadLfgSideTables(am, lfgGroups_, lfgExpansionLevels_);
 
     auto dbc = am->loadDBC("LFGDungeons.dbc");
     if (!dbc || !dbc->isLoaded()) return;
@@ -3547,6 +3584,28 @@ void GameHandler::loadLfgDungeonDbc() const {
               });
     LOG_INFO("LFGDungeons.dbc: loaded ", lfgDungeonNameCache_.size(), " dungeon names, ",
              lfgDungeons_.size(), " listable entries");
+}
+
+
+GameHandler::LfgLevels GameHandler::lfgDungeonLevels(const LfgDungeon& d) const {
+    loadLfgDungeonDbc();
+    auto it = lfgExpansionLevels_.find((static_cast<uint64_t>(d.id) << 8) |
+                                       accountState().accountExpansion);
+    if (it != lfgExpansionLevels_.end()) return it->second;
+    return {d.minLevel, d.maxLevel, d.minRecLevel, d.maxRecLevel};
+}
+
+const std::string& GameHandler::lfgGroupName(uint32_t groupId) const {
+    static const std::string kNone;
+    loadLfgDungeonDbc();
+    auto it = lfgGroups_.find(groupId);
+    return it == lfgGroups_.end() ? kNone : it->second.name;
+}
+
+uint32_t GameHandler::lfgGroupOrder(uint32_t groupId) const {
+    loadLfgDungeonDbc();
+    auto it = lfgGroups_.find(groupId);
+    return it == lfgGroups_.end() ? 0u : it->second.orderIndex;
 }
 
 // ---------------------------------------------------------------------------
@@ -5894,6 +5953,8 @@ GameHandler::getExtendedCost(uint32_t extendedCostId) const {
                         e.arenaBracket = dbc->getUInt32(i, 3);
                         e.requiredArenaRating = dbc->getUInt32(i, 14);
                     }
+                    if (dbc->getFieldCount() > 15)
+                        e.purchaseGroup = dbc->getUInt32(i, 15);
                     extendedCostCache_[id] = e;
                 }
                 LOG_INFO("ItemExtendedCost.dbc: loaded ", extendedCostCache_.size(),

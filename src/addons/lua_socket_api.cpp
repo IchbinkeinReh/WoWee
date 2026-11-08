@@ -443,7 +443,12 @@ void pushConditionLines(lua_State* L, const game::gem_conditions::Result& res) {
 void pushSocketedGems(lua_State* L, game::GameHandler* gh, uint64_t itemGuid,
                       uint32_t itemId) {
     if (!gh || itemGuid == 0) return;
-    const auto enchants = gh->getItemSocketEnchantIds(itemGuid);
+    pushSocketedGems(L, gh, gh->getItemSocketEnchantIds(itemGuid), itemId);
+}
+
+void pushSocketedGems(lua_State* L, game::GameHandler* gh,
+                      const std::array<uint32_t, 3>& enchants, uint32_t itemId) {
+    if (!gh) return;
     const auto* info = gh->getItemInfo(itemId);
     bool any = false;
     for (uint32_t e : enchants) any = any || e != 0;

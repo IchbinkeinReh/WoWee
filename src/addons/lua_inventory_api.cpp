@@ -485,6 +485,42 @@ static int lua_GetMerchantItemArenaRequirement(lua_State* L) {
     return 3;
 }
 
+/// _GetMerchantItemPurchaseGroup(index) → name, met - the ItemPurchaseGroup a
+/// vendor item's extended cost names (+0x3c) and whether the player owns one
+/// of its eight items (0x006277f0 asks 0x00754a20 with flag 8: the carried
+/// set plus the bank, a broken item not counting). Nothing when it names none.
+static int lua_GetMerchantItemPurchaseGroup(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const auto* cost = merchantCost(L, static_cast<int>(luaL_optnumber(L, 1, 0)));
+    if (!gh || !cost || cost->purchaseGroup == 0) return 0;
+    auto* am = gh->services().assetManager;
+    if (!am || !am->isInitialized()) return 0;
+    auto dbc = am->loadDBC("ItemPurchaseGroup.dbc");
+    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() < 10) return 0;
+    const int32_t row = dbc->findRecordById(cost->purchaseGroup);
+    if (row < 0) return 0;
+    const auto r = static_cast<uint32_t>(row);
+    std::array<uint32_t, 8> wanted{};
+    for (uint32_t i = 0; i < 8; ++i) wanted[i] = dbc->getUInt32(r, 1 + i);
+    bool met = false;
+    auto look = [&](const game::ItemDef& d) {
+        if (d.maxDurability > 0 && d.curDurability == 0) return;
+        for (uint32_t w : wanted) if (w != 0 && d.itemId == w) met = true;
+    };
+    const auto& inv = gh->getInventory();
+    inv.forEachCarried(look);
+    for (int i = 0; i < game::Inventory::BANK_SLOTS; ++i)
+        if (const auto& s = inv.getBankSlot(i); !s.empty()) look(s.item);
+    for (int b = 0; b < game::Inventory::BANK_BAG_SLOTS; ++b) {
+        if (const auto& bag = inv.getBankBagItem(b); !bag.empty()) look(bag.item);
+        for (int i = 0; i < inv.getBankBagSize(b); ++i)
+            if (const auto& s = inv.getBankBagSlot(b, i); !s.empty()) look(s.item);
+    }
+    lua_pushstring(L, dbc->getString(r, 9).c_str());
+    lua_pushboolean(L, met ? 1 : 0);
+    return 2;
+}
+
 // GetMerchantItemCostInfo(index) → honorPoints, arenaPoints, itemCount
 //
 // Three values, not one. The merchant frame reads all three and then tests
@@ -5271,6 +5307,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"CloseMerchant",           lua_CloseMerchant},
                 {"GetMerchantItemMaxStack", lua_GetMerchantItemMaxStack},
                 {"_GetMerchantItemArenaRequirement", lua_GetMerchantItemArenaRequirement},
+                {"_GetMerchantItemPurchaseGroup", lua_GetMerchantItemPurchaseGroup},
                 {"GetMerchantItemCostInfo", lua_GetMerchantItemCostInfo},
                 {"GetMerchantItemCostItem", lua_GetMerchantItemCostItem},
                 {"GetItemInfo",       lua_GetItemInfo},

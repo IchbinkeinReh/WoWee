@@ -1318,6 +1318,19 @@ private:
     /// (GameObject_C +0x208), played as it arrives (0x00713f50).
     std::unordered_map<uint64_t, uint8_t> gameObjectPendingCustomAnim_;
     void applyPendingGameObjectCustomAnim(uint64_t guid);
+    /// GameObjectArtKit (GAMEOBJECT_BYTES_1 byte 2, 0x00713da0): the models the
+    /// object's art kit hangs on its model's attachment points 0..3 - the
+    /// faction flag on a capture tower, a bonfire's lit or unlit state.
+    struct GameObjectArtKitState {
+        uint32_t artKit = 0;
+        uint32_t parentInstance = 0;
+        std::vector<std::pair<uint32_t, uint32_t>> attached;   // {attachment id, instance}
+        std::vector<glm::mat4> lastFrame;
+    };
+    std::unordered_map<uint64_t, GameObjectArtKitState> gameObjectArtKits_;
+    void applyGameObjectArtKit(uint64_t guid);
+    void clearGameObjectArtKit(uint64_t guid);
+    void updateGameObjectArtKits();
     /// Taken away by the server while an animation held them (+0xbc
     /// 0x100000); see destroyGameObject.
     std::unordered_set<uint64_t> gameObjectDestroyPending_;

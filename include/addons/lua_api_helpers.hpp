@@ -3,6 +3,7 @@
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #pragma once
 
+#include <array>
 #include <functional>
 #include <string>
 #include <vector>
@@ -76,6 +77,9 @@ inline void toLowerInPlace(std::string& s) {
 /// 0x0061c0b0) and `socketBonusMatched` on the table at the top of the stack.
 void pushSocketedGems(lua_State* L, game::GameHandler* gh, uint64_t itemGuid,
                       uint32_t itemId);
+/// The same for gems named by their enchant ids - an item link's gem fields.
+void pushSocketedGems(lua_State* L, game::GameHandler* gh,
+                      const std::array<uint32_t, 3>& enchants, uint32_t itemId);
 
 /// Which interface is loaded, as its manifest's `## Interface:` number - 11200
 /// for 1.12, 20400 for 2.4.3, 30300 for 3.3.5a, 40300 for 4.3.4 - or 0 where

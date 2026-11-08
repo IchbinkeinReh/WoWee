@@ -2416,6 +2416,9 @@ void EntitySpawner::applyGameObjectState(uint64_t guid, uint8_t goState) {
         gameObjectPendingState_[guid] = goState;
         return;
     }
+    // The same field carries the art kit; a change re-dresses the model
+    // (0x00713ed0 -> 0x00713da0), and an unchanged one costs a compare.
+    applyGameObjectArtKit(guid);
     // A WMO has no animation sequences to hold a pose with.
     if (it->second.isWmo) return;
     auto* m2 = renderer_ ? renderer_->getM2Renderer() : nullptr;
@@ -2747,6 +2750,7 @@ void EntitySpawner::despawnGameObject(uint64_t guid) {
                        [guid](const PendingTransportDoodadBatch& b) { return b.guid == guid; }),
         pendingTransportDoodadBatches_.end());
 
+    clearGameObjectArtKit(guid);
     auto it = gameObjectInstances_.find(guid);
     if (it == gameObjectInstances_.end()) return;
 

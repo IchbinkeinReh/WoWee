@@ -39,6 +39,7 @@
 #include "game/interface_text.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <string>
 #include <unordered_map>
@@ -55,23 +56,10 @@ namespace {
 /// dungeon has to be the header's id, not the raw number from the DBC.
 int headerIdFor(uint32_t groupId) { return -static_cast<int>(groupId); }
 
-/// LFGDungeons.dbc has no name for a category. The real client carries these
-/// itself; they are the standard names for the groups the file actually uses,
-/// and group 10 is absent from the data rather than omitted here.
-const char* groupName(uint32_t groupId) {
-    switch (groupId) {
-        case 1:  return "Classic Dungeons";
-        case 2:  return "Burning Crusade Dungeons";
-        case 3:  return "Burning Crusade Heroic Dungeons";
-        case 4:  return "Wrath of the Lich King Dungeons";
-        case 5:  return "Wrath of the Lich King Heroic Dungeons";
-        case 6:  return "Classic Raids";
-        case 7:  return "Burning Crusade Raids";
-        case 8:  return "Wrath of the Lich King Raids (10)";
-        case 9:  return "Wrath of the Lich King Raids (25)";
-        case 11: return "Holiday Dungeons";
-        default: return "Dungeons";
-    }
+/// A category's name: its LfgDungeonGroup.dbc row (0x005536a0 and the list
+/// builder read the same table), in the client's own locale.
+const char* groupName(game::GameHandler* gh, uint32_t groupId) {
+    return gh ? gh->lfgGroupName(groupId).c_str() : "";
 }
 
 /// How many the group is built for. The file does not say, so it comes from
@@ -211,12 +199,35 @@ void pushChoiceOrder(lua_State* L, game::GameHandler* gh, bool dungeonSide) {
     if (!gh) return;
     int n = 0;
     uint32_t lastGroup = 0;
+    std::vector<const game::LfgDungeon*> rows;
     for (const auto& d : gh->getLfgDungeons()) {
         // groupId 0 is a row that belongs under no header - the old
         // per-zone entries - and LFDList_DefaultFilterFunction drops them
         // anyway. Leaving them out here keeps the list honest either way.
         if (d.groupId == 0) continue;
         if (dungeonSide ? !isDungeonSide(d) : !isRaidSide(d)) continue;
+        rows.push_back(&d);
+    }
+    // The client's order (0x005536a0): by the group's OrderIndex, a header
+    // before its dungeons, then the dungeon's own OrderIndex, then the middle
+    // of its level range for this account's expansion, then its name.
+    std::stable_sort(rows.begin(), rows.end(), [gh](const game::LfgDungeon* a,
+                                                    const game::LfgDungeon* b) {
+        if (a->groupId != b->groupId) {
+            const uint32_t ga = gh->lfgGroupOrder(a->groupId), gb = gh->lfgGroupOrder(b->groupId);
+            if (ga != gb) return ga < gb;
+        }
+        if (a->orderIndex != b->orderIndex) return a->orderIndex < b->orderIndex;
+        const auto la = gh->lfgDungeonLevels(*a), lb = gh->lfgDungeonLevels(*b);
+        const int ma = static_cast<int>(la.minLevel + la.maxLevel) / 2;
+        const int mb = static_cast<int>(lb.minLevel + lb.maxLevel) / 2;
+        if (ma != mb) return ma < mb;
+        return std::lexicographical_compare(
+            a->name.begin(), a->name.end(), b->name.begin(), b->name.end(),
+            [](unsigned char x, unsigned char y) { return std::tolower(x) < std::tolower(y); });
+    });
+    for (const game::LfgDungeon* row : rows) {
+        const auto& d = *row;
         if (d.groupId != lastGroup) {
             lastGroup = d.groupId;
             lua_pushinteger(L, headerIdFor(d.groupId));
@@ -288,15 +299,16 @@ void registerLfgLuaAPI(lua_State* L) {
                 // The header's own row. Its groupID is itself, which is how
                 // LFDList_SetHeaderCollapsed matches children to the header
                 // that was clicked.
-                pushInfoRow(L, groupName(d.groupId), 0, 0, 0, 0, 0, 0,
+                pushInfoRow(L, groupName(gh, d.groupId), 0, 0, 0, 0, 0, 0,
                             static_cast<int>(d.expansion), headerIdFor(d.groupId),
                             "", 0, 0);
                 lua_rawseti(L, -2, headerIdFor(d.groupId));
             }
+            const auto lv = gh->lfgDungeonLevels(d);
             pushInfoRow(L, d.name.c_str(), static_cast<int>(d.typeId),
-                        static_cast<int>(d.minLevel), static_cast<int>(d.maxLevel),
-                        static_cast<int>(d.recLevel), static_cast<int>(d.minRecLevel),
-                        static_cast<int>(d.maxRecLevel), static_cast<int>(d.expansion),
+                        static_cast<int>(lv.minLevel), static_cast<int>(lv.maxLevel),
+                        static_cast<int>(d.recLevel), static_cast<int>(lv.minRecLevel),
+                        static_cast<int>(lv.maxRecLevel), static_cast<int>(d.expansion),
                         headerIdFor(d.groupId), d.texture.c_str(),
                         static_cast<int>(d.difficulty), maxPlayersFor(d));
             lua_rawseti(L, -2, static_cast<lua_Integer>(d.id));
@@ -965,11 +977,12 @@ void registerLfgLuaAPI(lua_State* L) {
             if (d.id != id) continue;
             lua_pushstring(L, d.name.c_str());
             lua_pushinteger(L, static_cast<lua_Integer>(d.typeId));
-            lua_pushinteger(L, static_cast<lua_Integer>(d.minLevel));
-            lua_pushinteger(L, static_cast<lua_Integer>(d.maxLevel));
+            const auto lv = gh->lfgDungeonLevels(d);
+            lua_pushinteger(L, static_cast<lua_Integer>(lv.minLevel));
+            lua_pushinteger(L, static_cast<lua_Integer>(lv.maxLevel));
             lua_pushinteger(L, static_cast<lua_Integer>(d.recLevel));
-            lua_pushinteger(L, static_cast<lua_Integer>(d.minRecLevel));
-            lua_pushinteger(L, static_cast<lua_Integer>(d.maxRecLevel));
+            lua_pushinteger(L, static_cast<lua_Integer>(lv.minRecLevel));
+            lua_pushinteger(L, static_cast<lua_Integer>(lv.maxRecLevel));
             lua_pushinteger(L, static_cast<lua_Integer>(d.expansion));
             lua_pushinteger(L, headerIdFor(d.groupId));
             lua_pushstring(L, d.texture.c_str());
