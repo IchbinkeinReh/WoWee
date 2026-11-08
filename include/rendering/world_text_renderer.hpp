@@ -20,6 +20,7 @@
 #include <vk_mem_alloc.h>
 
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 struct ImTextureData;
@@ -56,11 +57,30 @@ public:
     /// moment, they read garbage for the frame. The texture's descriptor is
     /// read when the text is drawn - one made this frame has none until the
     /// interface has drawn.
-    void setText(std::vector<Vertex> triangles, ImTextureData* texture);
+    /// One unit's name among the triangles: whose it is, where the unit was
+    /// drawn when it was laid out, and which vertices are its.
+    struct Run {
+        uint64_t guid = 0;
+        glm::vec3 base{0.0f};
+        size_t first = 0;
+        size_t count = 0;
+    };
+    void setText(std::vector<Vertex> triangles, ImTextureData* texture, std::vector<Run> runs = {});
     void clear() {
         triangles_.clear();
+        runs_.clear();
         texture_ = nullptr;
     }
+
+    /// Each name moved with its unit to where the unit is drawn this frame.
+    ///
+    /// The names are laid out by the interface after the world is drawn, so
+    /// the scene draws the last frame's: on a zeppelin under way, thirty
+    /// yards a second, every name over its deck hung a frame's travel behind
+    /// the unit it belongs to. `drawnAt` gives a unit's position now (false
+    /// for one not drawn); a name's anchors move by how far it has gone since
+    /// the layout. Called before the world is drawn.
+    void followUnits(const std::function<bool(uint64_t, glm::vec3&)>& drawnAt);
 
     /// Drawn into the scene's pass, after its geometry, once: the text is
     /// handed over again for every frame it should stand in.
@@ -82,6 +102,7 @@ private:
     void* vertexMapped_[kFrames] = {};
 
     std::vector<Vertex> triangles_;
+    std::vector<Run> runs_;
     ImTextureData* texture_ = nullptr;
     int textFrame_ = -1;  ///< the interface frame the text was laid out in
 };

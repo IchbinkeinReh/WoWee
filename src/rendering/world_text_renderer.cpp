@@ -109,6 +109,7 @@ void WorldTextRenderer::shutdown() {
     destroy(device, textureLayout_);
     vkCtx_ = nullptr;
     triangles_.clear();
+    runs_.clear();
     texture_ = nullptr;
 }
 
@@ -118,10 +119,23 @@ void WorldTextRenderer::recreatePipelines() {
     buildPipeline();
 }
 
-void WorldTextRenderer::setText(std::vector<Vertex> triangles, ImTextureData* texture) {
+void WorldTextRenderer::setText(std::vector<Vertex> triangles, ImTextureData* texture, std::vector<Run> runs) {
     triangles_ = std::move(triangles);
+    runs_ = std::move(runs);
     texture_ = texture;
     textFrame_ = ImGui::GetFrameCount();
+}
+
+void WorldTextRenderer::followUnits(const std::function<bool(uint64_t, glm::vec3&)>& drawnAt) {
+    for (Run& run : runs_) {
+        glm::vec3 now;
+        if (run.guid == 0 || !drawnAt(run.guid, now)) continue;
+        const glm::vec3 moved = now - run.base;
+        if (moved == glm::vec3(0.0f)) continue;
+        const size_t end = std::min(run.first + run.count, triangles_.size());
+        for (size_t i = run.first; i < end; ++i) triangles_[i].anchor += moved;
+        run.base = now;
+    }
 }
 
 void WorldTextRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet) {
