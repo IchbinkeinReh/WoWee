@@ -327,6 +327,36 @@ static int calendarInviteType(const CalendarRecord& rec) {
 
 /// 0x005b8040: a holiday's (flags 8) day of a run of two or more - its
 /// first "START", its last "END", the rest "ONGOING" - else "".
+/// A Holidays.dbc row's name, description and texture (0x005b9430,
+/// 0x005b9490): through HolidayNames (column 49) and HolidayDescriptions (50),
+/// nothing where either is missing.
+struct HolidayText { std::string name, description, texture; };
+static const HolidayText* holidayText(wowee::game::GameHandler* gh, uint32_t holidayId) {
+    static std::unordered_map<uint32_t, HolidayText> texts;
+    static bool loaded = false;
+    if (!loaded && gh) {
+        if (auto* am = gh->services().assetManager; am && am->isInitialized()) {
+            loaded = true;
+            std::unordered_map<uint32_t, std::string> names, descriptions;
+            if (auto d = am->loadDBC("HolidayNames.dbc"); d && d->isLoaded() && d->getFieldCount() >= 2)
+                for (uint32_t i = 0; i < d->getRecordCount(); ++i) names[d->getUInt32(i, 0)] = d->getString(i, 1);
+            if (auto d = am->loadDBC("HolidayDescriptions.dbc"); d && d->isLoaded() && d->getFieldCount() >= 2)
+                for (uint32_t i = 0; i < d->getRecordCount(); ++i)
+                    descriptions[d->getUInt32(i, 0)] = d->getString(i, 1);
+            if (auto d = am->loadDBC("Holidays.dbc"); d && d->isLoaded() && d->getFieldCount() > 51) {
+                for (uint32_t i = 0; i < d->getRecordCount(); ++i) {
+                    const auto n = names.find(d->getUInt32(i, 49));
+                    const auto ds = descriptions.find(d->getUInt32(i, 50));
+                    if (n == names.end() || ds == descriptions.end()) continue;
+                    texts[d->getUInt32(i, 0)] = {n->second, ds->second, d->getString(i, 51)};
+                }
+            }
+        }
+    }
+    const auto it = texts.find(holidayId);
+    return it != texts.end() ? &it->second : nullptr;
+}
+
 static const char* calendarSequenceType(uint32_t flags, uint32_t index, uint32_t count) {
     if ((flags & wowee::game::calendar_flag::kHoliday) == 0 || count < 2) return "";
     if (index == 0) return "START";
@@ -10921,7 +10951,9 @@ void registerSystemLuaAPI(lua_State* L) {
             }
             if (row.kind == wowee::game::CalendarEntryKind::Holiday) {
                 const auto& holiday = cal.holidays[row.index];
-                lua_pushstring(L, holiday.textureFilename.c_str());
+                // Its HolidayNames name (0x005b9430).
+                const HolidayText* text = holidayText(gh, holiday.id);
+                lua_pushstring(L, text ? text->name.c_str() : "");
                 lua_pushnumber(L, 0);              // hour
                 lua_pushnumber(L, 0);              // minute
                 lua_pushstring(L, "HOLIDAY");
@@ -10981,9 +11013,21 @@ void registerSystemLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
             const auto& holiday = gh->getCalendarData().holidays[row.index];
-            lua_pushstring(L, holiday.textureFilename.c_str());
-            lua_pushstring(L, "");
-            lua_pushstring(L, holiday.textureFilename.c_str());
+            // 0x005c1480: the Holidays row's name and description, through
+            // HolidayNames (column 49) and HolidayDescriptions (50) - three
+            // nils where either is missing - and the texture the server named
+            // for it (+0xe0), else the row's own (51).
+            const HolidayText* text = holidayText(gh, holiday.id);
+            if (!text) {
+                lua_pushnil(L);
+                lua_pushnil(L);
+                lua_pushnil(L);
+                return 3;
+            }
+            lua_pushstring(L, text->name.c_str());
+            lua_pushstring(L, text->description.c_str());
+            lua_pushstring(L, holiday.textureFilename.empty() ? text->texture.c_str()
+                                                              : holiday.textureFilename.c_str());
             return 3;
         }},
                 // name, calendarType, raidID, hour, minute, difficulty,
