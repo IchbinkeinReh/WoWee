@@ -66,6 +66,7 @@ struct Mover {
     float fallV0 = 0.0f;              ///< +0xb8, its starting speed, down positive
     float fallSpeed = 0.0f;           ///< +0x8c, how fast it goes across the ground
     glm::vec2 fallDir{0.0f};          ///< +0x70/+0x74, and which way
+    float hoverHeight = 0.0f;         ///< +0xb4
     bool swimming = false;            ///< +0x44 0x200000
     bool flying = false;              ///< +0x44 0x2000000
 };
@@ -79,7 +80,7 @@ using FacetGather = std::function<void(const glm::vec3& boxMin, const glm::vec3&
 class Sweeper {
 public:
     explicit Sweeper(FacetGather gather) : gather_(std::move(gather)) {}
-    SweepResult run(const Mover& m, const glm::vec3& dir, float dist);
+    SweepResult run(const Mover& m, const glm::vec3& dir, float dist, bool pyramidOnly = false);
     [[nodiscard]] const Facet& facet(int index) const { return facets_[static_cast<size_t>(index)]; }
     /// The body planes of the last sweep, for its contacts.
     [[nodiscard]] const Body& body() const { return body_; }

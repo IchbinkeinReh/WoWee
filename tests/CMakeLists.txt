@@ -2992,6 +2992,17 @@ wowee_add_test(test_collision_sweep
             ${CMAKE_SOURCE_DIR}/src/rendering/collision_sweep.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_collision_hover ─────────────────────────────────────
+# Hovering: held the hover height over the ground, made up at 3.5 yards a
+# second, a fall where the ground drops away, a slide along a wall.
+wowee_add_test(test_collision_hover
+    SOURCES test_collision_hover.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_sweep.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_walk.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_fall.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_hover.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_collision_swim ──────────────────────────────────────
 # Swimming and flying: when a unit swims, the surface holding a swimmer
 # under it, the jump out, and the plain sweep a flyer makes.

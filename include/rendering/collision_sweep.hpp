@@ -104,9 +104,11 @@ struct SweepResult {
 };
 
 /// 0x0075f9d0: move `body` along the unit `dir` by up to `dist` through the
-/// facets, and answer how far it may go. The body is not moved.
+/// facets, and answer how far it may go. The body is not moved. With
+/// `pyramidOnly`, only the pyramid's faces are swept (0x0075cd70 alone, as
+/// the hover probe 0x0075f520 does).
 SweepResult sweep(const Body& body, const glm::vec3& dir, float dist,
-                  const std::vector<Facet>& facets);
+                  const std::vector<Facet>& facets, bool pyramidOnly = false);
 
 /// The box 0x0075f0a0 gathers facets from for a sweep: the body at its
 /// start and at its end, with 1/6 yard round both.

@@ -14,13 +14,13 @@ constexpr float kTinyDist = 9.536743e-07f;  // 2^-20
 glm::vec2 xy(const glm::vec3& v) { return {v.x, v.y}; }
 }  // namespace
 
-SweepResult Sweeper::run(const Mover& m, const glm::vec3& dir, float dist) {
+SweepResult Sweeper::run(const Mover& m, const glm::vec3& dir, float dist, bool pyramidOnly) {
     body_ = Body(m.pos, m.halfWidth, m.height);
     glm::vec3 lo, hi;
     sweepBox(body_, dir, dist, lo, hi);
     facets_.clear();
     if (gather_) gather_(lo, hi, facets_);
-    return sweep(body_, dir, dist, facets_);
+    return sweep(body_, dir, dist, facets_, pyramidOnly);
 }
 
 float stepHeightOf(const Mover& m) { return m.player ? m.stepHeight : 2.0f; }

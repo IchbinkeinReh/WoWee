@@ -140,7 +140,7 @@ bool solveFace(const Body& body, int face, const glm::vec3& dir, std::vector<glm
 }
 
 SweepResult sweep(const Body& body, const glm::vec3& dir, float dist,
-                  const std::vector<Facet>& facets) {
+                  const std::vector<Facet>& facets, bool pyramidOnly) {
     SweepResult result;
     if (std::abs(dist) < kTiny20) return result;
     const glm::vec3 m = dir * std::max(dist, kMinLookAhead);
@@ -152,6 +152,7 @@ SweepResult sweep(const Body& body, const glm::vec3& dir, float dist,
     // 0x0075bc50).
     static constexpr int kOrder[9] = {5, 6, 7, 8, 0, 1, 2, 3, 4};
     for (int face : kOrder) {
+        if (pyramidOnly && face < 5) continue;
         const Plane& fp = body.p[face];
         if (glm::dot(fp.n, m) <= 0.0f) continue;
         const int* fv = kBodyFaces[face];

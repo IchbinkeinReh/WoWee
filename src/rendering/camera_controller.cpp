@@ -27,6 +27,7 @@
 #include "rendering/collision_sweep.hpp"
 #include "rendering/collision_fall.hpp"
 #include "rendering/collision_swim.hpp"
+#include "rendering/collision_hover.hpp"
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/water_renderer.hpp"
@@ -114,6 +115,25 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
             if (grounded) lastGroundZ = m.pos.z - down.allowed;
         }
         if (!m.flying) portFlyMs_ = 0;
+    } else if (hoverActive_ && !m.falling) {
+        // 0x00762980: held the hover height (+0xb4, UNIT_FIELD_HOVERHEIGHT,
+        // which this client does not read: its default of one yard) over
+        // the ground; with none under it, a fall.
+        how = "hover";
+        m.hoverHeight = 1.0f;
+        const glm::vec3 disp = wanted - from;
+        const float len = glm::length(glm::vec2(disp));
+        const glm::vec3 d = len > 1e-6f ? glm::vec3(glm::vec2(disp) / len, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
+        if (collision::hoverStep(m, ms, len, d, sweeper, gravityDisabled_)) {
+            grounded = true;
+            verticalVelocity = 0.0f;
+            lastGroundZ = m.pos.z;
+        } else {
+            grounded = false;
+            verticalVelocity = 0.0f;
+            m.fallSpeed = dt > 0.0f ? dist / dt : 0.0f;
+            m.fallDir = dist > 1e-6f ? horiz / dist : glm::vec2(0.0f);
+        }
     } else if (grounded && verticalVelocity <= 0.0f) {
         m.falling = false;
         if (dist > 1e-6f) {
