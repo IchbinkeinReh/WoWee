@@ -128,6 +128,25 @@ struct WalkResult {
 /// over `ms` milliseconds.
 WalkResult walk(Mover& m, const glm::vec2& dir, float dist, uint32_t ms, Sweeper& sweeper);
 
+/// What the last step-up probe (0x00761b00) found, for the port's debug
+/// line: how far it rose, how far across it got of how far it tried, the
+/// face it met going across, and how far down it then came and onto what.
+struct StepUpTrace {
+    bool tried = false;
+    float rise = 0.0f;
+    float went = 0.0f;
+    float across = 0.0f;
+    bool sideHit = false;
+    glm::vec3 sideN{0.0f};
+    bool wentDown = false;
+    float down = 0.0f;
+    bool downHit = false;
+    glm::vec3 downN{0.0f};
+    bool stepped = false;
+};
+/// The last probe's trace (one mover is walked at a time).
+StepUpTrace& lastStepUpTrace();
+
 /// 0x00761b00: try the face with normal `n`, met walking along `dir`, as a
 /// step. False only when a sweep could not be made at all.
 bool tryStepUp(Mover& m, const glm::vec2& dir, const glm::vec3& n, const Facet& met, Sweeper& sweeper);

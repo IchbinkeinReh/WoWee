@@ -624,6 +624,7 @@ private:
     bool portMovedThisStep_ = false;
     collision::Mover portMover_;
     bool portBlocked_ = false;
+    collision::StepUpTrace portStepTrace_;
     bool portWorldReady_ = false;
     /// The unit rising (+0x44 0x400000) while it swims or flies: jump held.
     bool portAscending_ = false;

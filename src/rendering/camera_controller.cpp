@@ -122,6 +122,7 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
             how = "walk";
             if (r.blocked) portBlocking_ = r.blocking;
             portBlocked_ = r.blocked;
+            portStepTrace_ = collision::lastStepUpTrace();
         } else if (m.stepping) {
             // Stopping while stepping up something: 0x0098c8d0 (and its
             // strafing twin 0x0098bf80) clears the stepping and, unless the
@@ -227,6 +228,16 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
                     default: line << "?"; break;
                 }
                 line << " n=(" << b.n.x << "," << b.n.y << "," << b.n.z << ")";
+                const auto& t = portStepTrace_;
+                if (t.tried) {
+                    line << " stepup rise=" << t.rise << " across=" << t.across << " sideHit=" << t.sideHit
+                         << " sideN=(" << t.sideN.x << "," << t.sideN.y << "," << t.sideN.z << ")";
+                    if (t.wentDown) {
+                        line << " went=" << t.went << " down=" << t.down << " downHit=" << t.downHit
+                             << " downN=(" << t.downN.x << "," << t.downN.y << "," << t.downN.z << ")";
+                    }
+                    line << " stepped=" << t.stepped;
+                }
             }
             if (wmoRenderer) {
                 const glm::vec3 up = m.pos + glm::vec3(0.0f, 0.0f, 0.5f);

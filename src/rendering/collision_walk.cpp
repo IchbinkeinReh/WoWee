@@ -180,7 +180,15 @@ bool classify(Mover& m, const Facet& f, bool* fallNow) {
 
 }  // namespace
 
+StepUpTrace& lastStepUpTrace() {
+    static StepUpTrace trace;
+    return trace;
+}
+
 bool tryStepUp(Mover& m, const glm::vec2& dir, const glm::vec3& n, const Facet& met, Sweeper& sweeper) {
+    StepUpTrace& trace = lastStepUpTrace();
+    trace = StepUpTrace{};
+    trace.tried = true;
     const glm::vec3 start = m.pos;
     const float across = std::max(m.halfWidth + kSkin, stepHeightOf(m) * kStepAcross);
     glm::vec2 way = dir;
@@ -200,10 +208,14 @@ bool tryStepUp(Mover& m, const glm::vec2& dir, const glm::vec3& n, const Facet& 
         return true;
     }
     m.pos.z += rise;
+    trace.rise = rise;
     // Across.
     SweepResult side = sweeper.run(m, glm::vec3(way, 0.0f), across);
     float went = side.allowed;
     m.pos += glm::vec3(way * went, 0.0f);
+    trace.across = across;
+    trace.sideHit = side.facet >= 0;
+    if (side.facet >= 0) trace.sideN = sweeper.facet(side.facet).n;
     if (std::abs(went - across) >= kTinyDist && side.facet >= 0) {
         const Facet ahead = sweeper.facet(side.facet);
         bool fallNow = false;
@@ -228,6 +240,11 @@ bool tryStepUp(Mover& m, const glm::vec2& dir, const glm::vec3& n, const Facet& 
         // Down again by as much as it went up.
         const SweepResult down = sweeper.run(m, glm::vec3(0.0f, 0.0f, -1.0f), rise);
         m.pos.z -= down.allowed;
+        trace.went = went;
+        trace.wentDown = true;
+        trace.down = down.allowed;
+        trace.downHit = down.facet >= 0;
+        if (down.facet >= 0) trace.downN = sweeper.facet(down.facet).n;
         const bool landsOnWalkable = down.facet >= 0 && !tooSteep(sweeper.facet(down.facet).n);
         // Nothing under it, walkable ground, or a fall from there that
         // carries the unit clear past the edge (0x007619c0): a step.
@@ -236,6 +253,7 @@ bool tryStepUp(Mover& m, const glm::vec2& dir, const glm::vec3& n, const Facet& 
             m.pos = start;
             if (!m.stepping) m.stepBaseZ = start.z;
             m.stepping = true;
+            trace.stepped = true;
             return true;
         }
     }
