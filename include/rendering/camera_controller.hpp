@@ -176,7 +176,11 @@ public:
     // silently built up over the whole ride would then unleash all at once the
     // instant the external Z lock releases at disembark, clipping the player
     // through the floor.
-    void suppressVerticalPhysics() { verticalVelocity = 0.0f; grounded = true; }
+    void suppressVerticalPhysics() {
+        verticalVelocity = 0.0f;
+        grounded = true;
+        deckHeld_ = true;
+    }
     [[nodiscard]] bool isJumpKeyPressed() const { return jumpBufferTimer > 0.0f; }
     [[nodiscard]] float collisionHeight() const { return collisionHeight_; }
     [[nodiscard]] bool isMovingForward() const { return moveForwardActive; }
@@ -603,6 +607,10 @@ private:
     /// Ask terrain, WMO and doodads where the floor is - two of them on other
     /// threads - or answer from the cache when the character has barely moved.
     FloorSample sampleFloorUnderFeet(const glm::vec3& targetPos, float stepUpBudget);
+    /// The transport's deck held the rider where the application last placed
+    /// it (suppressVerticalPhysics): standing on a lift, however fast it runs
+    /// down, which the fall checks here read as the floor dropping away.
+    bool deckHeld_ = false;
 
     /// Put the character on the floor and publish where it ended up - the
     /// expensive half, with the floor queries and the cache that skips them.
