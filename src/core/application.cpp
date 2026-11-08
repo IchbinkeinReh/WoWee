@@ -6923,16 +6923,21 @@ void Application::render() {
     if (const char* autoLua = std::getenv("WOWEE_AUTO_LUA"); autoLua != nullptr && *autoLua != '\0') {
         static double inWorldSince = -1.0;
         static double nextRun = -1.0;
+        // Which world entry of this process the run is in, for a run that
+        // logs out and back in: __WoweeTestSession, set before each run.
+        static int session = 0;
         const bool inWorld = gameHandler && gameHandler->getState() == game::WorldState::IN_WORLD;
         const double now = core::appTimeSeconds();
         if (!inWorld) {
             inWorldSince = -1.0;
         } else if (inWorldSince < 0.0) {
             inWorldSince = now;
+            ++session;
             const char* delay = std::getenv("WOWEE_AUTO_LUA_DELAY");
             nextRun = now + ((delay && *delay) ? std::atof(delay) : 10.0);
         } else if (nextRun >= 0.0 && now >= nextRun && addonManager_ && addonManager_->getLuaEngine()) {
             LOG_WARNING("WOWEE_AUTO_LUA: running ", autoLua);
+            addonManager_->getLuaEngine()->executeString("__WoweeTestSession=" + std::to_string(session));
             addonManager_->getLuaEngine()->executeString(autoLua);
             const char* repeat = std::getenv("WOWEE_AUTO_LUA_REPEAT");
             const double every = (repeat && *repeat) ? std::atof(repeat) : 0.0;
