@@ -712,6 +712,7 @@ bool TransportPathRepository::loadTaxiPathNodeDBC(pipeline::AssetManager* assetM
         uint32_t mapId;
         float x, y, z;
         uint32_t delaySeconds;
+        uint32_t flags;
     };
     std::map<uint32_t, std::vector<TaxiNode>> nodesByPath;
 
@@ -723,10 +724,11 @@ bool TransportPathRepository::loadTaxiPathNodeDBC(pipeline::AssetManager* assetM
         float posY = dbc.getFloat(i, 5);          // Y (server coords)
         float posZ = dbc.getFloat(i, 6);          // Z (server coords)
         uint32_t delaySeconds = dbc.getUInt32(i, 8); // Dock dwell time
+        uint32_t flags = dbc.getUInt32(i, 7);        // 1 teleport, 2 stop
 
         nodesByPath[pathId].push_back({.nodeIndex = nodeIdx, .mapId = mapId,
                                        .x = posX, .y = posY, .z = posZ,
-                                       .delaySeconds = delaySeconds});
+                                       .delaySeconds = delaySeconds, .flags = flags});
     }
 
     int pathsLoaded = 0;
@@ -741,7 +743,8 @@ bool TransportPathRepository::loadTaxiPathNodeDBC(pipeline::AssetManager* assetM
             route.nodes.push_back({
                 .position = core::coords::serverToCanonical(glm::vec3(node.x, node.y, node.z)),
                 .mapId = node.mapId,
-                .dwellMs = node.delaySeconds * 1000u});
+                .dwellMs = node.delaySeconds * 1000u,
+                .flags = node.flags});
         }
         route.circuit = taxiRouteIsCircuit(route);
 
