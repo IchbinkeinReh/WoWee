@@ -62,7 +62,13 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
     // player is placed, and a fall through a floor not loaded yet goes on
     // until the unit dies: so after a jump in position, hold still until
     // there is something within reach below.
-    if (glm::length(m.pos - from) > 5.0f) portWorldReady_ = false;
+    if (glm::length(m.pos - from) > 5.0f) {
+        portWorldReady_ = false;
+        // And the test safety's last standing place is not this one's: a
+        // transport's map change (or any teleport) put the unit far from
+        // it, and a fall measured against it read as a runaway.
+        portSafeValid_ = false;
+    }
     if (!portWorldReady_) {
         std::vector<collision::Facet> below;
         gatherPortFacets(from - glm::vec3(1.0f, 1.0f, 30.0f), from + glm::vec3(1.0f, 1.0f, 2.0f), below);
