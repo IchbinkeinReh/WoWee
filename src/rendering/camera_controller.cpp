@@ -303,9 +303,18 @@ glm::vec3 CameraController::sweepAgainstWalls(const glm::vec3& from, const glm::
     for (int i = 0; i < steps; i++) {
         glm::vec3 candidate = stepPos + stepDelta;
 
+        static const bool kPushDebug = [] {
+            const char* v = std::getenv("WOWEE_FLOOR_DEBUG");
+            return v && v[0] && v[0] != '0';
+        }();
         if (wmoRenderer) {
             glm::vec3 adjusted;
             if (wmoRenderer->checkWallCollision(stepPos, candidate, adjusted, cachedInsideWMO)) {
+                if (kPushDebug && glm::length(glm::vec2(adjusted - candidate)) > 0.6f) {
+                    LOG_WARNING("WALL PUSH wmo: step (", stepPos.x, ", ", stepPos.y, ", ", stepPos.z, ") -> (",
+                                candidate.x, ", ", candidate.y, ") pushed to (", adjusted.x, ", ", adjusted.y,
+                                ") inside=", cachedInsideWMO);
+                }
                 candidate.x = adjusted.x;
                 candidate.y = adjusted.y;
                 // Up is a ramp; down would be a wall pulling the feet under the floor.
@@ -316,6 +325,10 @@ glm::vec3 CameraController::sweepAgainstWalls(const glm::vec3& from, const glm::
         if (includeDoodads && m2Renderer && !externalFollow_) {
             glm::vec3 adjusted;
             if (m2Renderer->checkCollision(stepPos, candidate, adjusted)) {
+                if (kPushDebug && glm::length(glm::vec2(adjusted - candidate)) > 0.6f) {
+                    LOG_WARNING("WALL PUSH m2: step (", stepPos.x, ", ", stepPos.y, ", ", stepPos.z, ") -> (",
+                                candidate.x, ", ", candidate.y, ") pushed to (", adjusted.x, ", ", adjusted.y, ")");
+                }
                 candidate.x = adjusted.x;
                 candidate.y = adjusted.y;
             }
@@ -323,7 +336,11 @@ glm::vec3 CameraController::sweepAgainstWalls(const glm::vec3& from, const glm::
 
         stepPos = candidate;
     }
-    return stepPos;
+    // A hold, not a throw (movement::holdWithinStep): the walls take motion
+    // away and never carry the body farther than the step and a radius of
+    // push-out each way. The widest radius either wall test uses.
+    constexpr float kBodyRadius = 0.5f;
+    return movement::holdWithinStep(from, to, stepPos, kBodyRadius);
 }
 
 // The camera that orbits a character and moves it.
@@ -2782,8 +2799,25 @@ void CameraController::updateThirdPersonCamera(float deltaTime, FrameInput& f) {
         f.nowJump = inputJump && step == 0;
 
         glm::vec3 prevTargetPos(0.0f);
+        const glm::vec3 stepStart = *followTarget;
         targetPos = moveFollowedCharacter(stepTime, f, prevTargetPos);
+        const glm::vec3 stepMoved = targetPos;
         groundFollowedCharacter(stepTime, f, targetPos, prevTargetPos);
+        // WOWEE_FLOOR_DEBUG: a step that carried the character further across
+        // than its speed allows, and which stage did it.
+        {
+            static const bool kJumpDebug = [] {
+                const char* v = std::getenv("WOWEE_FLOOR_DEBUG");
+                return v && v[0] && v[0] != '0';
+            }();
+            const glm::vec2 across(followTarget->x - stepStart.x, followTarget->y - stepStart.y);
+            if (kJumpDebug && glm::length(across) > inputSpeed * stepTime + 0.3f) {
+                LOG_WARNING("MOVE JUMP: from (", stepStart.x, ", ", stepStart.y, ", ", stepStart.z,
+                            ") moved (", stepMoved.x, ", ", stepMoved.y, ", ", stepMoved.z,
+                            ") grounded (", followTarget->x, ", ", followTarget->y, ", ", followTarget->z,
+                            ") speed=", inputSpeed, " dt=", stepTime);
+            }
+        }
         // Landing: flying down onto real ground, or skimming it, without climbing.
         // Grounding has just put the feet on the floor if they were within reach
         // of it; on a floor that was actually found, that is touching down.
