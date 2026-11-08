@@ -2669,6 +2669,12 @@ void EntitySpawner::despawnGameObject(uint64_t guid) {
         }
     }
 
+    // A transport goes with its hull: the manager would move what is left
+    // of it - its machinery, its passengers' frame - along a route it is no
+    // longer on.
+    if (gameHandler_ && gameHandler_->isTransportGuid(guid)) {
+        if (auto* transportManager = gameHandler_->getTransportManager()) transportManager->removeTransport(guid);
+    }
     gameObjectInstances_.erase(it);
     gameObjectServerState_.erase(guid);
     gameObjectAnimState_.erase(guid);

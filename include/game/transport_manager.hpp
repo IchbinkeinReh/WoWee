@@ -284,6 +284,9 @@ public:
     // active instances on map transitions so a reused GUID cannot retain the
     // previous map's entry/path while merely rebinding to a new render model.
     void clearTransports();
+    /// One transport gone from this map (out of range, destroyed): nothing
+    /// of it is moved or drawn again.
+    void removeTransport(uint64_t guid);
 
     ActiveTransport* getTransport(uint64_t guid);
     // MAIN-THREAD-ONLY: this reference is not lock-protected, matching EntityManager's
