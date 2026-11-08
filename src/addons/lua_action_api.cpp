@@ -7,6 +7,7 @@
 #include "audio/audio_coordinator.hpp"
 #include "audio/ui_sound_manager.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "pipeline/asset_manager.hpp"
 #include "game/inventory_handler.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/override_bindings.hpp"
@@ -4276,16 +4277,21 @@ void registerActionLuaAPI(lua_State* L) {
             if (!pet || !hunterPetOf(getGameHandler(L), pet)) {
                 lua_pushnil(L); lua_pushnumber(L, 100); return 2;
             }
-            const uint32_t maxHappiness = pet->getMaxPowerByType(4);
-            if (maxHappiness == 0) { lua_pushnil(L); lua_pushnumber(L, 100); return 2; }
-
-            const uint32_t happiness = pet->getPowerByType(4);
-            const int level = (happiness * 3 >= maxHappiness * 2) ? 3
-                            : (happiness * 3 >= maxHappiness)     ? 2
-                                                                  : 1;
-            static const int kDamagePercent[4] = {0, 75, 100, 125};
+            // 0x005d3b00 -> 0x0071f390/0x0071f400: a hunter's pet reads
+            // PetPersonality row 1 - its level is how many of the row's
+            // HappinessThreshold[1..2] the pet's happiness (power 5) reaches,
+            // plus one, and the damage its HappinessDamage of that level.
+            auto* gh = getGameHandler(L);
+            auto* am = gh ? gh->services().assetManager : nullptr;
+            auto dbc = am && am->isInitialized() ? am->loadDBC("PetPersonality.dbc") : nullptr;
+            const int32_t row = dbc && dbc->isLoaded() && dbc->getFieldCount() >= 24 ? dbc->findRecordById(1) : -1;
+            if (row < 0) { lua_pushnil(L); lua_pushnumber(L, 100); return 2; }
+            const auto r = static_cast<uint32_t>(row);
+            const int32_t happiness = static_cast<int32_t>(pet->getPowerByType(4));
+            uint32_t level = 1;
+            while (level < 3 && happiness >= dbc->getInt32(r, 18 + level)) ++level;
             lua_pushnumber(L, level);
-            lua_pushnumber(L, kDamagePercent[level]);
+            lua_pushnumber(L, static_cast<double>(dbc->getFloat(r, 20 + level)) * 100.0);
             return 2;
         }},
                 // Only referenced from commented-out code in 3.3.5, but a
