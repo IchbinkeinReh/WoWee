@@ -433,7 +433,14 @@ public:
     void setVehicleCollisionOrigin(const std::optional<glm::vec3>& origin);
     /// The camera's yaw is its vehicle camera's facing and its own turn on
     /// top (0x00604490): as that facing turns, so does the camera.
-    void turnWithVehicle(float degrees) { yaw += degrees; }
+    void turnWithVehicle(float degrees) {
+        yaw += degrees;
+        // The camera looks by its own rotation, which only the input paths
+        // set: turned here alone, the zeppelin's curve moved the yaw the
+        // camera is placed by but not the way it looked, and the view stayed
+        // fixed in the world while the deck turned under it.
+        if (camera) camera->setRotation(yaw, pitch);
+    }
     /// The driver's camera turns with its vehicle camera's facing, not with
     /// the keys (0x00604490 adds +0x84): the turn keys turn the vehicle
     /// alone, and the camera follows its facing as it is chased (0x0075a1c0).
