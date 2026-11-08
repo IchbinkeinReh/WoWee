@@ -77,6 +77,7 @@
 #include "game/minimap_tracking.hpp"
 #include "rendering/footprint_renderer.hpp"
 #include "rendering/loading_screen.hpp"
+#include "rendering/world_text_renderer.hpp"
 #include "audio/music_manager.hpp"
 #include "audio/footstep_manager.hpp"
 #include "audio/activity_sound_manager.hpp"
@@ -5958,6 +5959,11 @@ void Application::render() {
 
     // Only render 3D world when in-game
     if (state == AppState::IN_GAME) {
+        // The names laid out last frame, moved with their units to where
+        // they are drawn now (see WorldTextRenderer::followUnits).
+        if (auto* worldText = renderer->getWorldTextRenderer()) {
+            worldText->followUnits([this](uint64_t guid, glm::vec3& at) { return getRenderPositionForGuid(guid, at); });
+        }
         runRenderStage("renderWorld", [&] {
             renderer->renderWorld(world ? world.get() : nullptr, gameHandler.get());
         });

@@ -308,11 +308,16 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
     if (worldText && !nameList) nameList = IM_NEW(ImDrawList)(ImGui::GetDrawListSharedData());
     static thread_local std::vector<rendering::WorldTextRenderer::Vertex> nameTriangles;
     nameTriangles.clear();
+    static thread_local std::vector<rendering::WorldTextRenderer::Run> nameRuns;
+    nameRuns.clear();
     // The names of this frame, laid out once all are known: measuring them
     // bakes their glyphs, and a bake can repack the atlas into a new texture,
     // which moves every glyph. Laid out after the last of them was measured,
     // the triangles all hold the packing of the texture handed on with them.
     struct NameJob {
+        uint64_t guid = 0;
+        glm::vec3 base{0.0f};     // where the unit was drawn, for followUnits
+        bool hasBase = false;
         glm::vec3 anchor;
         glm::vec2 anchorPx;
         std::string text;
@@ -462,7 +467,11 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         const ImVec2 size(bakedSize.x * px / bake, bakedSize.y * px / bake);
         if (worldText && nameList) {
             const float perYard = rendering::unit_name_anchor::pixelsPerYard(proj[1][1], screenH, clipW);
-            nameJobs.push_back({.anchor = anchor,
+            const glm::vec3* drawnAt = modelBase(place);
+            nameJobs.push_back({.guid = guid,
+                                .base = drawnAt ? *drawnAt : glm::vec3(0.0f),
+                                .hasBase = drawnAt != nullptr,
+                                .anchor = anchor,
                                 .anchorPx = glm::vec2(at->x, at->y),
                                 .text = text,
                                 .bake = bake,
@@ -607,8 +616,10 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
                 glyphsPackedIn = packedIn;
             }
             nameTriangles.clear();
+            nameRuns.clear();
             std::string key;
             for (const NameJob& job : nameJobs) {
+                const size_t runFirst = nameTriangles.size();
                 key.assign(std::to_string(static_cast<int>(job.bake)));
                 key.push_back('\x1f');
                 key.append(job.text);
@@ -664,10 +675,16 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
                              .colour = colour});
                     }
                 }
+                if (job.hasBase) {
+                    nameRuns.push_back({.guid = job.guid,
+                                        .base = job.base,
+                                        .first = runFirst,
+                                        .count = nameTriangles.size() - runFirst});
+                }
             }
             if (atlas->TexData == packedIn) break;
         }
-        worldText->setText(std::move(nameTriangles), atlas->TexData);
+        worldText->setText(std::move(nameTriangles), atlas->TexData, std::move(nameRuns));
     }
 
     // Forget the units whose plates are gone.
