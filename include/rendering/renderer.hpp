@@ -278,6 +278,12 @@ public:
     /// getCharacterBodyYaw.
     float getCharacterYaw() const { return characterYaw; }
     void setCharacterYaw(float yawDeg) { characterYaw = yawDeg; }
+    /// The transport under the player turned by `degrees`: the body turns
+    /// with the deck as the facing does (0x004f42a0), so the turn is not
+    /// read as a turn on the spot.
+    void turnCharacterBody(float degrees) {
+        characterBody_.body = body_yaw::wrap(characterBody_.body + glm::radians(degrees));
+    }
     /// The yaw the player's body is drawn at, in degrees (the client's +0xa94,
     /// FUN_007156a0): behind the facing while the spine and head look round,
     /// to the side strafing. For what is placed by the drawn model.
