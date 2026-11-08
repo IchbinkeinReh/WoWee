@@ -325,6 +325,12 @@ void TransportManager::clearTransports() {
     }
 }
 
+void TransportManager::removeTransport(uint64_t guid) {
+    if (transports_.erase(guid) != 0) LOG_INFO("TransportManager: removed transport 0x", std::hex, guid, std::dec);
+    pendingRouteClocks_.erase(guid);
+    parentRotations_.erase(guid);
+}
+
 void TransportManager::resolveAndRegisterSpawn(uint64_t guid,
                                                uint32_t entry,
                                                uint32_t displayId,

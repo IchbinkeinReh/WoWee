@@ -260,12 +260,20 @@ void EntityController::processOutOfRangeObjects(const std::vector<uint64_t>& gui
             const bool playerAboardNow = (owner_.playerTransportGuidRef() == guid);
             const bool stickyAboard = (owner_.playerTransportStickyGuidRef() == guid && owner_.playerTransportStickyTimerRef() > 0.0f);
             const bool movementSaysAboard = (owner_.movementInfoRef().transportGuid == guid);
-            LOG_INFO("Preserving transport on out-of-range: 0x",
-                     std::hex, guid, std::dec,
-                     " now=", playerAboardNow,
-                     " sticky=", stickyAboard,
-                     " movement=", movementSaysAboard);
-            continue;
+            // Only the one the player is riding: the client removes whatever
+            // the server takes out of range (0x004d7230), and a zeppelin
+            // that crossed to its other map is taken out of range for
+            // everyone it left behind. Kept, it went on being drawn - hull,
+            // machinery, passengers - flying a route it was no longer on.
+            if (playerAboardNow || stickyAboard || movementSaysAboard) {
+                LOG_INFO("Preserving transport on out-of-range: 0x",
+                         std::hex, guid, std::dec,
+                         " now=", playerAboardNow,
+                         " sticky=", stickyAboard,
+                         " movement=", movementSaysAboard);
+                continue;
+            }
+            LOG_INFO("Transport out of range, removed: 0x", std::hex, guid, std::dec);
         }
 
         LOG_DEBUG("Entity went out of range: 0x", std::hex, guid, std::dec);
