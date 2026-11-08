@@ -1254,7 +1254,16 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
             // In cities like Stormwind, players stand on WMO floors, not terrain.
             // Check BOTH terrain AND WMO floor - require at least one to be valid.
             bool groundReady = false;
-            if (renderer_) {
+            // A passenger's ground is the transport: a zeppelin or a ship
+            // carries the player across the map change, and the spawn is a
+            // place on its deck in the air or over the sea, where no
+            // terrain, building or doodad will ever answer. Waiting for one
+            // held the Thundercaller's passengers behind the loading screen
+            // for the whole ninety-second cap on every map change (106 s on
+            // 2026-11-08). The transport is the floor once the player is
+            // back on it (completePlayerTransportWorldTransfer).
+            if (gameHandler_ && gameHandler_->isOnTransport()) groundReady = true;
+            if (renderer_ && !groundReady) {
                 // spawnRender already went server -> canonical -> render above.
                 // Applying canonicalToRender directly to the server tuple here
                 // swapped X/Y a second time, so WMO-only instances checked for a
