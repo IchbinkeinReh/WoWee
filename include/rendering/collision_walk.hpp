@@ -66,6 +66,8 @@ struct Mover {
     float fallV0 = 0.0f;              ///< +0xb8, its starting speed, down positive
     float fallSpeed = 0.0f;           ///< +0x8c, how fast it goes across the ground
     glm::vec2 fallDir{0.0f};          ///< +0x70/+0x74, and which way
+    bool swimming = false;            ///< +0x44 0x200000
+    bool flying = false;              ///< +0x44 0x2000000
 };
 
 /// The facets round a box (the gather 0x0075f0a0 makes for a sweep).

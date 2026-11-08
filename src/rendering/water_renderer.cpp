@@ -4,6 +4,8 @@
 #include "rendering/water_mask.hpp"
 #include "rendering/water_renderer.hpp"
 #include "rendering/collision_liquid.hpp"
+#include "rendering/collision_facets.hpp"
+#include <array>
 #include <unordered_set>
 #include "rendering/water_mask.hpp"
 #include "rendering/vk_context.hpp"
@@ -1812,6 +1814,41 @@ std::optional<float> WaterRenderer::groundLiquidLevelAt(const glm::vec3& world,
         if (collision::groundLiquidHolds(world.z, *level, groundZ)) return *level;
     }
     return std::nullopt;
+}
+
+void WaterRenderer::gatherLiquidFacets(const glm::vec3& boxMin, const glm::vec3& boxMax,
+                                       std::vector<collision::Facet>& out) const {
+    for (const auto& surface : surfaces) {
+        if (surface.heights.empty() || surface.width == 0 || surface.height == 0) continue;
+        if (surface.maxHeight < boxMin.z - 1.0f || surface.minHeight > boxMax.z + 1.0f) continue;
+        const int gw = static_cast<int>(surface.width) + 1;
+        for (int iy = 0; iy < static_cast<int>(surface.height); ++iy) {
+            for (int ix = 0; ix < static_cast<int>(surface.width); ++ix) {
+                if (!waterCellRendered(surface.mask, surface.wmoId, surface.width, surface.xOffset,
+                                       surface.yOffset, ix, iy)) {
+                    continue;
+                }
+                const auto corner = [&](int cx, int cy) {
+                    const size_t i = static_cast<size_t>(cy * gw + cx);
+                    glm::vec3 p = surface.origin + surface.stepX * static_cast<float>(cx) +
+                                  surface.stepY * static_cast<float>(cy);
+                    p.z = i < surface.heights.size() ? surface.heights[i] : surface.origin.z;
+                    return p;
+                };
+                const glm::vec3 a = corner(ix, iy), b = corner(ix + 1, iy), c = corner(ix + 1, iy + 1),
+                                d = corner(ix, iy + 1);
+                for (const auto& t : {std::array<glm::vec3, 3>{a, b, c}, std::array<glm::vec3, 3>{a, c, d}}) {
+                    if (collision::outsideBox(t[0], t[1], t[2], boxMin, boxMax)) continue;
+                    glm::vec3 n = collision::windingNormal(t[0], t[1], t[2]);
+                    if (n.z < 0.0f) {
+                        out.push_back(collision::makeFacet(-n, t[0], t[2], t[1]));
+                    } else {
+                        out.push_back(collision::makeFacet(n, t[0], t[1], t[2]));
+                    }
+                }
+            }
+        }
+    }
 }
 
 bool WaterRenderer::isWmoWaterAt(float glX, float glY) const {

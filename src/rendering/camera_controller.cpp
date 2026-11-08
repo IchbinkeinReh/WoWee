@@ -26,6 +26,7 @@
 #include "rendering/collision_facets.hpp"
 #include "rendering/collision_sweep.hpp"
 #include "rendering/collision_fall.hpp"
+#include "rendering/collision_swim.hpp"
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/water_renderer.hpp"
@@ -77,7 +78,43 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
     const float dist = glm::length(horiz);
     bool fell = false;
     const char* how = "stand";
-    if (grounded && verticalVelocity <= 0.0f) {
+    m.flying = isFlightAirborne();
+    if (m.swimming || m.flying) {
+        // 0x00760b40: a plain sweep along the move in three dimensions; a
+        // swimmer also against the liquid's surface turned over.
+        how = m.swimming ? "swim" : "fly";
+        collision::Sweeper liquid([this](const glm::vec3& lo, const glm::vec3& hi,
+                                         std::vector<collision::Facet>& out) {
+            if (!waterRenderer) return;
+            std::vector<collision::Facet> up;
+            waterRenderer->gatherLiquidFacets(lo, hi, up);
+            for (const auto& f : up) out.push_back(collision::underside(f));
+        });
+        const glm::vec3 disp = wanted - from;
+        const float len = glm::length(disp);
+        bool jumped = false;
+        if (len > 1e-6f) {
+            jumped = collision::swimFlyStep(m, ms, len, disp / len, sweeper, m.swimming ? &liquid : nullptr,
+                                            gravityDisabled_, portAscending_);
+        }
+        if (jumped) {
+            how = "swimjump";
+            swimming = false;
+            grounded = false;
+            verticalVelocity = -m.fallV0;
+            m.fallSpeed = dt > 0.0f ? dist / dt : 0.0f;
+            m.fallDir = dist > 1e-6f ? horiz / dist : glm::vec2(0.0f);
+        } else if (m.flying) {
+            // 0x0073a890: a flyer lands where the ground is within half a
+            // yard under its feet (0x00714b60's ray from a yard over them to
+            // a yard under), two seconds or more after it took off.
+            portFlyMs_ += ms;
+            const auto down = sweeper.run(m, glm::vec3(0.0f, 0.0f, -1.0f), 0.5f);
+            grounded = down.facet >= 0 && portFlyMs_ > 2000;
+            if (grounded) lastGroundZ = m.pos.z - down.allowed;
+        }
+        if (!m.flying) portFlyMs_ = 0;
+    } else if (grounded && verticalVelocity <= 0.0f) {
         m.falling = false;
         if (dist > 1e-6f) {
             const auto r = collision::walk(m, horiz / dist, dist, ms, sweeper);
@@ -721,6 +758,17 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
             inWater = false;
         }
 
+        // The collision port decides swimming as the client does (0x00730d10)
+        // from the liquid where it looks (portLiquidLevelAt); a jump out is
+        // the swim step's (0x00760b40), so the old one stands down.
+        if (collision::portEnabled() && !portAborted_) {
+            portMover_.pos = *followTarget;
+            collision::updateSwimming(portMover_, portLiquidLevelAt(*followTarget), true, gravityDisabled_);
+            inWater = portMover_.swimming;
+            swimJump = false;
+        }
+        portAscending_ = f.spaceHeld && !f.noAscendDescend;
+
         if (inWater) {
         swimming = true;
         jumpLocked_ = false;
@@ -1160,7 +1208,7 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
     // The collision port, behind its toggle: the client's own movement makes
     // the move, and none of the heuristics below or in the grounding runs.
     portMovedThisStep_ = false;
-    if (collision::portEnabled() && !portAborted_ && !externalFollow_ && !swimming && !isFlightAirborne() &&
+    if (collision::portEnabled() && !portAborted_ && !externalFollow_ &&
         !gravityDisabled_ && !waterWalkActive_ && !groundNotStreamedYet(targetPos.x, targetPos.y)) {
         targetPos = portMove(*followTarget, targetPos, f.physicsDeltaTime);
         portMovedThisStep_ = true;

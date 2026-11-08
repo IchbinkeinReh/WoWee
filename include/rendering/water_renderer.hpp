@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vector>
+#include "rendering/collision_facets.hpp"
 #include <memory>
 #include <optional>
 #include <cstdint>
@@ -286,6 +287,12 @@ public:
     /// the point is under, and the ground under the point (0x007a0820).
     [[nodiscard]] std::optional<float> groundLiquidLevelAt(const glm::vec3& world,
                                                            const std::optional<float>& groundZ) const;
+    /// The liquid surfaces in a box as facets facing up, two a tile with
+    /// liquid: the ground's and the buildings' alike (0x00783910 with the
+    /// mask 0x20000; 0x007a5a60 -> 0x007ce5d0 for a chunk, 0x007ca110 for a
+    /// building group). The swim step turns them over (collision_swim.hpp).
+    void gatherLiquidFacets(const glm::vec3& boxMin, const glm::vec3& boxMax,
+                            std::vector<collision::Facet>& out) const;
 
     int getSurfaceCount() const { return static_cast<int>(surfaces.size()); }
 

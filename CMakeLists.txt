@@ -977,6 +977,7 @@ set(WOWEE_SOURCES
     src/rendering/collision_sweep.cpp
     src/rendering/collision_walk.cpp
     src/rendering/collision_fall.cpp
+    src/rendering/collision_swim.cpp
     src/rendering/vk_shader.cpp
     src/rendering/vk_texture.cpp
     src/rendering/vk_buffer.cpp
@@ -2772,6 +2773,7 @@ add_executable(wowee_editor
     src/rendering/collision_sweep.cpp
     src/rendering/collision_walk.cpp
     src/rendering/collision_fall.cpp
+    src/rendering/collision_swim.cpp
     src/rendering/vk_shader.cpp
     src/rendering/vk_texture.cpp
     src/rendering/vk_buffer.cpp

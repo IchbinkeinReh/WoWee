@@ -2992,6 +2992,17 @@ wowee_add_test(test_collision_sweep
             ${CMAKE_SOURCE_DIR}/src/rendering/collision_sweep.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_collision_swim ──────────────────────────────────────
+# Swimming and flying: when a unit swims, the surface holding a swimmer
+# under it, the jump out, and the plain sweep a flyer makes.
+wowee_add_test(test_collision_swim
+    SOURCES test_collision_swim.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_sweep.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_walk.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_fall.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_swim.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_collision_fall ──────────────────────────────────────
 # The client's fall: its curve and the time read back off it, landing, a
 # jump's arc, a ceiling, a wall slid down, a walk off an edge.

@@ -622,6 +622,10 @@ private:
     collision::Mover portMover_;
     bool portBlocked_ = false;
     bool portWorldReady_ = false;
+    /// The unit rising (+0x44 0x400000) while it swims or flies: jump held.
+    bool portAscending_ = false;
+    /// How long the port's unit has flown, for 0x0073a890's two seconds.
+    uint32_t portFlyMs_ = 0;
     /// The test safety: where the unit last stood, and whether the port has
     /// been switched off for the session after a runaway fall.
     glm::vec3 portSafePos_{0.0f};
