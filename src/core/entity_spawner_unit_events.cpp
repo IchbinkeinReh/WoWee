@@ -484,6 +484,49 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
             }
             break;
         }
+        case ue::Kind::DeathThud: {
+            // The unit's size class: its display's, else its model's.
+            const int32_t drow = displays->findRecordById(unit.getDisplayId());
+            if (drow < 0) break;
+            int32_t size = displays->getFieldCount() > ue::kDisplaySizeClassColumn
+                               ? displays->getInt32(static_cast<uint32_t>(drow), ue::kDisplaySizeClassColumn)
+                               : -1;
+            if (size == -1) {
+                const int32_t mrow = models->findRecordById(displays->getUInt32(static_cast<uint32_t>(drow), 1));
+                if (mrow >= 0 && models->getFieldCount() > ue::kModelSizeClassColumn)
+                    size = models->getInt32(static_cast<uint32_t>(mrow), ue::kModelSizeClassColumn);
+            }
+            if (!deathThudSounds_) {
+                deathThudSounds_ = std::make_shared<ue::DeathThudSounds>();
+                uint32_t maxId = 0;
+                if (auto ts = assetManager_->loadDBCOptional("TerrainTypeSounds.dbc"))
+                    for (uint32_t i = 0; i < ts->getRecordCount(); ++i) maxId = std::max(maxId, ts->getUInt32(i, 0));
+                deathThudSounds_->setTerrainSoundCount(maxId + 1);
+                // ID, SizeClass, TerrainTypeSoundID, SoundEntryID, SoundEntryIDWater.
+                if (auto dbc = assetManager_->loadDBCOptional("DeathThudLookups.dbc");
+                    dbc && dbc->getFieldCount() >= 5) {
+                    for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
+                        deathThudSounds_->add(dbc->getUInt32(i, 1), dbc->getUInt32(i, 2), dbc->getUInt32(i, 3),
+                                              dbc->getUInt32(i, 4));
+                }
+            }
+            // The ground's TerrainType and its sound column.
+            uint32_t terrainSound = 0;
+            const int32_t terrainType = groundTerrainType(unitPosition);
+            if (auto types = assetManager_->loadDBCOptional("TerrainType.dbc");
+                types && terrainType >= 0 && types->getFieldCount() > ue::kTerrainTypeSoundColumn) {
+                const int32_t trow = types->findRecordById(static_cast<uint32_t>(terrainType));
+                if (trow >= 0) terrainSound = types->getUInt32(static_cast<uint32_t>(trow), ue::kTerrainTypeSoundColumn);
+            }
+            // In liquid: the water sound, and none at all deeper than two yards.
+            std::optional<float> liquid;
+            if (auto* water = renderer_->getWaterRenderer()) liquid = water->getWaterHeightAt(unitPosition.x, unitPosition.y);
+            const bool inWater = liquid && *liquid > unitPosition.z;
+            if (inWater && *liquid - unitPosition.z > ue::kDeathThudMaxDepth) break;
+            const uint32_t sound = deathThudSounds_->sound(size, terrainSound, inWater);
+            if (sound != 0) player.playOnce(sound, &unitPosition, 1.0f, assetManager_);
+            break;
+        }
         case ue::Kind::None:
             break;
         }

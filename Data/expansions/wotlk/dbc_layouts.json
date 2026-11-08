@@ -493,6 +493,7 @@
     "Speed": 47,
     "SpellMissileID": 227,
     "PowerDisplayId": 228,
+    "SpellDifficultyId": 233,
     "SpellVisualID": 131,
     "StackAmount": 49,
     "TargetAuraState": 21,

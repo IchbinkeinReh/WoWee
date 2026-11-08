@@ -205,3 +205,20 @@ TEST_CASE("a unit splashes crossing four tenths of its height in water", "[unit_
     // A creature not sized by its model is 73/36 tall.
     CHECK(us::kDefaultCollisionHeight == Catch::Approx(2.0277778f));
 }
+
+TEST_CASE("$DTH: the death thud by size and ground, water and the default", "[unit_events]") {
+    using namespace wowee::rendering::unit_event;
+    CHECK(classify(fourCC("$DTH")).kind == Kind::DeathThud);
+    DeathThudSounds t;
+    t.setTerrainSoundCount(7);
+    t.add(0, 1, 907, 1266);   // DeathThudLookups row 1
+    t.add(1, 2, 920, 0);      // row 51: no water sound
+    CHECK(t.sound(0, 1, false) == 907);
+    CHECK(t.sound(0, 1, true) == 1266);
+    // A row with no sound for the case takes the size's default.
+    CHECK(t.sound(1, 2, true) == 912);
+    // A pair the file leaves out: the default; past the table: silent.
+    CHECK(t.sound(3, 4, false) == 922);
+    CHECK(t.sound(1, 7, false) == 0);
+    CHECK(t.sound(-1, 1, false) == 0);
+}

@@ -1508,6 +1508,7 @@ private:
     /// FootstepTerrainLookup by creature footstep id and terrain type, built
     /// once its tables are read (0x004cf990).
     std::shared_ptr<const rendering::unit_event::FootstepTerrainSounds> footstepSounds_;
+    std::shared_ptr<rendering::unit_event::DeathThudSounds> deathThudSounds_;
     uint32_t mountModelId_ = 0;
     uint32_t mountDisplayId_ = 0;  ///< the display mountInstanceId_ draws
     uint32_t pendingMountDisplayId_ = 0;

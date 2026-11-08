@@ -32,6 +32,7 @@
 #include <cstdint>
 #include <optional>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace wowee::rendering::unit_event {
@@ -54,6 +55,8 @@ enum class Kind : uint8_t {
     AtEvent,
     /// A footfall, by the ground under the unit (0x00747240).
     Footstep,
+    /// $DTH: the body meeting the ground (0x00746610).
+    DeathThud,
 };
 
 struct Action {
@@ -130,6 +133,7 @@ constexpr Action classify(uint32_t eventId) {
     if (eventId == fourCC("$SMG")) return {Kind::AtEvent, kColumnSubmerge};
     if (eventId == fourCC("$SMD")) return {Kind::AtEvent, kColumnSubmerged};
     if (eventId == fourCC("$FSD")) return {Kind::Footstep, kColumnFootstep};
+    if (eventId == fourCC("$DTH")) return {Kind::DeathThud, 0};
     return {};
 }
 
@@ -322,5 +326,39 @@ inline uint32_t emoteSoundId(const std::vector<EmoteSoundRow>& rows, uint32_t em
         if (row.emotesTextId == emotesTextId && row.race == race && row.sex == sex) return row.soundId;
     return 0;
 }
+
+/// $DTH, a dying unit's body meeting the ground (0x00756240 -> 0x00746610):
+/// DeathThudLookups by the unit's size class (CreatureDisplayInfo SizeClass,
+/// else its model's) and the TerrainType sound of the ground under it - the
+/// row's water sound when the unit is in liquid, nothing when the liquid is
+/// more than two yards over it. A row whose sound is 0 takes the size's
+/// default, 907 + 5 * size (and the client says so in its log).
+constexpr uint32_t kDisplaySizeClassColumn = 10;
+constexpr uint32_t kModelSizeClassColumn = 3;
+constexpr uint32_t kTerrainTypeSoundColumn = 4;
+constexpr float kDeathThudMaxDepth = 2.0f;
+struct DeathThudSounds {
+    /// [size class][TerrainType sound] -> {ground, water}.
+    std::vector<std::vector<std::pair<uint32_t, uint32_t>>> bySize =
+        std::vector<std::vector<std::pair<uint32_t, uint32_t>>>(5);
+    /// Every size's table spans the TerrainTypeSounds ids, 0..maxId
+    /// (0x00747760 sizes all five to it), so a pair the file leaves out is
+    /// the default rather than silence.
+    void setTerrainSoundCount(uint32_t count) {
+        for (auto& row : bySize) row.resize(count);
+    }
+    void add(uint32_t size, uint32_t terrainSound, uint32_t ground, uint32_t water) {
+        if (size >= bySize.size() || terrainSound >= bySize[size].size()) return;
+        bySize[size][terrainSound] = {ground, water};
+    }
+    /// 0 for no sound at all.
+    uint32_t sound(int32_t size, uint32_t terrainSound, bool inWater) const {
+        if (size < 0 || size >= 5) return 0;
+        const auto& row = bySize[static_cast<size_t>(size)];
+        if (terrainSound >= row.size()) return 0;
+        const uint32_t s = inWater ? row[terrainSound].second : row[terrainSound].first;
+        return s != 0 ? s : 907u + 5u * static_cast<uint32_t>(size);
+    }
+};
 
 }  // namespace wowee::rendering::unit_event

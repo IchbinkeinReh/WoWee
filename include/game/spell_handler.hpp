@@ -470,6 +470,9 @@ public:
     /// back to the gem that is in the socket - the item fields carry the
     /// enchantment id and nothing else.
     [[nodiscard]] uint32_t getEnchantGemItem(uint32_t enchantId) const;
+    /// 0x00802850: the spell this one is in the current instance's difficulty
+    /// (SpellDifficulty.dbc by its SpellDifficultyID), else itself.
+    [[nodiscard]] uint32_t difficultySpell(uint32_t spellId) const;
     [[nodiscard]] uint8_t getSpellDispelType(uint32_t spellId) const;
     [[nodiscard]] bool isSpellInterruptible(uint32_t spellId) const;
     [[nodiscard]] bool isSpellPassive(uint32_t spellId) const;
@@ -883,6 +886,9 @@ private:
     uint32_t petUnspentTalents_ = 0;
     bool petTalentsKnown_ = false;
     mutable std::unordered_map<uint32_t, int32_t> petTalentTypes_;  ///< CreatureFamily -> PetTalentType
+    /// SpellDifficulty.dbc: DifficultySpellID[4] by row id (difficultySpell).
+    mutable std::unordered_map<uint32_t, std::array<uint32_t, 4>> spellDifficulties_;
+    mutable bool spellDifficultyLoaded_ = false;
     std::unordered_map<uint32_t, uint8_t> learnedTalents_[2];
     std::array<std::array<uint16_t, MAX_GLYPH_SLOTS>, 2> learnedGlyphs_{};
     std::unordered_map<uint32_t, TalentEntry> talentCache_;

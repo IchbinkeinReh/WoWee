@@ -5681,6 +5681,9 @@ public:
         uint32_t targetAuraStateNot = 0;
         uint32_t targetAuraSpell = 0;
         uint32_t excludeTargetAuraSpell = 0;
+        /// Spell.dbc SpellDifficultyID [233]: its SpellDifficulty row, the
+        /// spell an instance's difficulty swaps it for (0x00802850).
+        uint32_t spellDifficultyId = 0;
         uint32_t totems[2] = {0, 0};
         uint32_t totemCategories[2] = {0, 0};
     };

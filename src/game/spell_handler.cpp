@@ -2297,8 +2297,10 @@ bool SpellHandler::spellUsable(uint32_t spellId, const ItemQueryResponseData* it
     // its first effect wants. With autoSelfCast, no target, or a friend
     // wanted and the target no friend, the player stands for it.
     const auto spellKnown = [&](uint32_t id) { return id != 0 && owner_.spellNameCacheRef().count(id) != 0; };
-    if (e.targetAuraState != 0 || e.targetAuraStateNot != 0 || spellKnown(e.targetAuraSpell) ||
-        spellKnown(e.excludeTargetAuraSpell)) {
+    const uint32_t targetAuraSpell = difficultySpell(e.targetAuraSpell);
+    const uint32_t excludeTargetAuraSpell = difficultySpell(e.excludeTargetAuraSpell);
+    if (e.targetAuraState != 0 || e.targetAuraStateNot != 0 || spellKnown(targetAuraSpell) ||
+        spellKnown(excludeTargetAuraSpell)) {
         auto& em = owner_.getEntityManager();
         auto target = owner_.getTargetGuid() != 0 ? em.getEntity(owner_.getTargetGuid()) : nullptr;
         if (target && !target->isUnit()) target = nullptr;
@@ -2308,7 +2310,7 @@ bool SpellHandler::spellUsable(uint32_t spellId, const ItemQueryResponseData* it
             (!target || (friendWanted && !relationsOf(owner_, player, target, 0).mayAssist)))
             target = player;
         if (!target) {
-            if (e.targetAuraState != 0 || spellKnown(e.targetAuraSpell)) u.target = false;
+            if (e.targetAuraState != 0 || spellKnown(targetAuraSpell)) u.target = false;
         } else {
             const uint16_t st = fieldIndex(UF::UNIT_FIELD_AURASTATE);
             const uint32_t states = st != 0xFFFF ? target->getField(st) : 0u;
@@ -2324,8 +2326,8 @@ bool SpellHandler::spellUsable(uint32_t spellId, const ItemQueryResponseData* it
             const bool lets = c.ignoresAuraState;
             if (e.targetAuraState != 0 && !hasState(e.targetAuraState) && !lets) u.target = false;
             if (e.targetAuraStateNot != 0 && hasState(e.targetAuraStateNot) && !lets) u.target = false;
-            if (spellKnown(e.targetAuraSpell) && !carries(e.targetAuraSpell) && !lets) u.target = false;
-            if (spellKnown(e.excludeTargetAuraSpell) && carries(e.excludeTargetAuraSpell) && !lets) u.target = false;
+            if (spellKnown(targetAuraSpell) && !carries(targetAuraSpell) && !lets) u.target = false;
+            if (spellKnown(excludeTargetAuraSpell) && carries(excludeTargetAuraSpell) && !lets) u.target = false;
             const auto r = relationsOf(owner_, player, target, 0);
             if (a0 == 6 && !r.mayAttack) u.target = false;
             if (a0 == 21 && !r.mayAssist) u.target = false;
@@ -2717,8 +2719,10 @@ cast_check::Caster SpellHandler::casterState(uint32_t spellId, const Entity& pla
             if (a.spellId == id) return true;
         return false;
     };
-    c.hasCasterAuraSpell = carries(e.casterAuraSpell);
-    c.hasExcludedAuraSpell = carries(e.excludeCasterAuraSpell);
+    // The aura spells as this instance's difficulty has them (0x0080b5d0
+    // asks 0x00802850 of each).
+    c.hasCasterAuraSpell = carries(difficultySpell(e.casterAuraSpell));
+    c.hasExcludedAuraSpell = carries(difficultySpell(e.excludeCasterAuraSpell));
     // 0x005d05b0: the standing in MinFactionId, 0 where it has none.
     if (e.minFactionId != 0) {
         const uint32_t i = owner_.getRepListIdByFactionId(e.minFactionId);
@@ -5531,7 +5535,8 @@ struct CastCheckColumns {
     uint32_t mechanic, stances, stancesNot, casterState, casterStateNot, casterAura, excludeAura, interrupt,
         auraInterrupt, channelInterrupt, powerType, manaCost, perLevel, costPct, baseLevel, maxLevel,
         castTimeIndex, effectMechanic, trigger, prevention, minFaction, minRep, auraVision, areaGroup, itemClass,
-        itemSubClassMask, runeCost, targetStateNot, targetAura, excludeTargetAura, totem, totemCategory, dieSides, pointsPerLevel;
+        itemSubClassMask, runeCost, targetStateNot, targetAura, excludeTargetAura, totem, totemCategory, dieSides, pointsPerLevel,
+        spellDifficulty;
 
     template <class Layout>
     explicit CastCheckColumns(const Layout* l) {
@@ -5549,6 +5554,7 @@ struct CastCheckColumns {
         areaGroup = named("AreaGroupId"), itemClass = named("EquippedItemClass");
         itemSubClassMask = named("EquippedItemSubClassMask"), runeCost = named("RuneCostID");
         targetStateNot = named("TargetAuraStateNot"), targetAura = named("TargetAuraSpell");
+        spellDifficulty = named("SpellDifficultyId");
         excludeTargetAura = named("ExcludeTargetAuraSpell"), totem = named("Totem");
         totemCategory = named("TotemCategory");
         dieSides = named("EffectDieSides0"), pointsPerLevel = named("EffectRealPointsPerLevel0");
@@ -5599,9 +5605,44 @@ struct CastCheckColumns {
         entry.targetAuraStateNot = u(targetStateNot);
         entry.targetAuraSpell = u(targetAura);
         entry.excludeTargetAuraSpell = u(excludeTargetAura);
+        entry.spellDifficultyId = u(spellDifficulty);
     }
 };
 }  // namespace
+
+uint32_t SpellHandler::difficultySpell(uint32_t spellId) const {
+    if (spellId == 0) return 0;
+    loadSpellNameCache();
+    const auto& cache = owner_.spellNameCacheRef();
+    auto it = cache.find(spellId);
+    if (it == cache.end() || it->second.spellDifficultyId == 0) return spellId;
+    if (!spellDifficultyLoaded_) {
+        spellDifficultyLoaded_ = true;
+        auto* am = owner_.services().assetManager;
+        // ID, DifficultySpellID[4].
+        if (auto dbc = am && am->isInitialized() ? am->loadDBC("SpellDifficulty.dbc") : nullptr;
+            dbc && dbc->isLoaded() && dbc->getFieldCount() >= 5) {
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
+                spellDifficulties_[dbc->getUInt32(i, 0)] = {dbc->getUInt32(i, 1), dbc->getUInt32(i, 2),
+                                                            dbc->getUInt32(i, 3), dbc->getUInt32(i, 4)};
+        }
+    }
+    auto row = spellDifficulties_.find(it->second.spellDifficultyId);
+    if (row == spellDifficulties_.end()) return spellId;
+    // The map's InstanceType picks the difficulty: a dungeon's in force
+    // (0x005138d0), a raid's (0x00519680); anywhere else the spell is itself.
+    const auto info = owner_.getInstanceInfo();
+    uint32_t difficulty;
+    if (info.type == "party") difficulty = owner_.getDungeonDifficulty().first;
+    else if (info.type == "raid") difficulty = owner_.getRaidDifficulty().first;
+    else return spellId;
+    const auto& v = row->second;
+    uint32_t pick = difficulty < 4 ? v[difficulty] : 0;
+    // Heroic 25 falls back to normal 25, then anything to normal.
+    if (pick == 0 && difficulty == 3) pick = v[1];
+    if (pick == 0) pick = v[0];
+    return pick != 0 ? pick : spellId;
+}
 
 void SpellHandler::loadSpellNameCache() const {
     if (owner_.spellNameCacheLoadedRef()) return;
