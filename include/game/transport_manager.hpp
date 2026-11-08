@@ -451,7 +451,7 @@ private:
     /// A transport is registered once its model has loaded, several frames
     /// after its create block arrives - and the create block is where the
     /// server puts the route phase. See applyServerRouteClock.
-    struct PendingRouteClock { float phase; uint32_t periodMs; };
+    struct PendingRouteClock { float phase; uint32_t periodMs; double receivedAt; };
     std::unordered_map<uint64_t, PendingRouteClock> pendingRouteClocks_;
     /// noteServerPathTime's samples: the path time, and nowSteadyMs() on arrival.
     struct ServerPathTime { uint32_t pathTimeMs; int64_t receivedSteadyMs; };

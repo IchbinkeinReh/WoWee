@@ -283,9 +283,11 @@ void TransportManager::registerTransport(uint64_t guid,
     // A route phase the server published before this was registered.
     if (auto pendingClock = pendingRouteClocks_.find(guid);
         pendingClock != pendingRouteClocks_.end()) {
-        const auto [phase, periodMs] = pendingClock->second;
+        const auto [phase, periodMs, receivedAt] = pendingClock->second;
         pendingRouteClocks_.erase(pendingClock);
-        applyServerRouteClock(guid, phase, periodMs);
+        // Moved on by the time the model took to load.
+        const double since = std::max(0.0, elapsedTime_ - receivedAt) * 1000.0 / static_cast<double>(periodMs);
+        applyServerRouteClock(guid, static_cast<float>(std::fmod(static_cast<double>(phase) + since, 1.0)), periodMs);
     }
 
     glm::vec3 renderPos = core::coords::canonicalToRender(transport.position);
@@ -527,7 +529,7 @@ void TransportManager::applyServerRouteClock(uint64_t transportGuid, float phase
         // is created and rarely again, so dropping it here meant a hull that
         // never adopted the server's clock at all and invented one from
         // distance over speed instead. Held until registerTransport asks.
-        pendingRouteClocks_[transportGuid] = {phase, periodMs};
+        pendingRouteClocks_[transportGuid] = {phase, periodMs, elapsedTime_};
         return;
     }
 
