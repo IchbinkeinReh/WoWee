@@ -1499,8 +1499,12 @@ void M2Renderer::gatherCollisionFacets(const glm::vec3& boxMin, const glm::vec3&
             continue;
         }
         const M2ModelGPU& model = *instance.cachedModel;
-        // A spell's model is attached to a unit, not placed in the world.
-        if (model.isSpellEffect || !model.collision.valid()) continue;
+        // A spell's model is attached to a unit, not placed in the world;
+        // nor is a unit's particle twin (setModelParticlesOnly marks it an
+        // invisible trap) - a mount's, a creature's - which drew a mounted
+        // player's own steed round it as a wall. Units are not in the
+        // client's collision lists at all.
+        if (model.isSpellEffect || model.isInvisibleTrap || !model.collision.valid()) continue;
 
         glm::vec2 lo(std::numeric_limits<float>::max()), hi(std::numeric_limits<float>::lowest());
         for (int c = 0; c < 8; ++c) {
