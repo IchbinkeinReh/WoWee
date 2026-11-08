@@ -3471,6 +3471,7 @@ void loadLfgSideTables(pipeline::AssetManager* am,
             GameHandler::LfgGroupRow row;
             row.name = dbc->getString(i, 1);
             row.orderIndex = dbc->getUInt32(i, 18);
+            if (dbc->getFieldCount() > 20) row.typeId = dbc->getUInt32(i, 20);
             groups[dbc->getUInt32(i, 0)] = std::move(row);
         }
     }

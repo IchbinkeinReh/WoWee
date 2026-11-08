@@ -5481,7 +5481,11 @@ public:
     /// (its hard and target ranges, 0x006349f0 as 0x00554e60 reads it), else
     /// the dungeon's own.
     struct LfgLevels { uint32_t minLevel = 0, maxLevel = 0, minRecLevel = 0, maxRecLevel = 0; };
-    struct LfgGroupRow { std::string name; uint32_t orderIndex = 0; };
+    struct LfgGroupRow { std::string name; uint32_t orderIndex = 0; uint32_t typeId = 0; };
+    const std::unordered_map<uint32_t, LfgGroupRow>& lfgGroups() const {
+        loadLfgDungeonDbc();
+        return lfgGroups_;
+    }
     LfgLevels lfgDungeonLevels(const LfgDungeon& d) const;
     /// LfgDungeonGroup.dbc: a category's name and its place in the list.
     const std::string& lfgGroupName(uint32_t groupId) const;
