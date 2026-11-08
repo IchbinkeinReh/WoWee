@@ -268,6 +268,16 @@ void CharacterScreen::render(game::GameHandler& gameHandler) {
         static const bool autoEnter = core::envIntClamped("WOWEE_AUTO_LOGIN", 0, 0, 2) >= 2;
         static bool autoEntered = false;
         static double firstSeen = -1.0;
+        // A scripted run that logs out (WOWEE_AUTO_LUA with
+        // WOWEE_AUTO_RELOGIN=1) is carried back in once more.
+        static int autoEntriesLeft = (std::getenv("WOWEE_AUTO_LUA") && *std::getenv("WOWEE_AUTO_LUA") &&
+                                      core::envIntClamped("WOWEE_AUTO_RELOGIN", 0, 0, 1) > 0) ? 1 : 0;
+        if (autoEntered && autoEntriesLeft > 0 && gameHandler.getState() != game::WorldState::IN_WORLD &&
+            !characterSelected) {
+            --autoEntriesLeft;
+            autoEntered = false;
+            firstSeen = -1.0;
+        }
         if (autoEnter && !autoEntered && haveSelection && !modalUp && !characterSelected &&
             (gameHandler.getState() == game::WorldState::READY ||
              gameHandler.getState() == game::WorldState::CHAR_LIST_RECEIVED)) {

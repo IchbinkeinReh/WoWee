@@ -7465,11 +7465,11 @@ void LuaEngine::registerCoreAPI() {
             return 0;
         });
         lua_setglobal(L_, "__WoweeTestFrameShot");
-        // __WoweeTestNearestTransport(): for a scripted ride, the nearest
+        // __WoweeTestNearestTransport([entry]): for a scripted ride, the nearest
         // transport on this map: its horizontal distance from the player,
         // its height over the player, its entry, and whether the player is
         // riding a transport now, then the transport's height and the
-        // player's. Nothing when there is none.
+        // player's, then its x, y and yaw. Nothing when there is none.
         lua_pushcfunction(L_, [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             auto* tm = gh ? gh->getTransportManager() : nullptr;
@@ -7478,8 +7478,11 @@ void LuaEngine::registerCoreAPI() {
             const glm::vec3 me(mi.x, mi.y, mi.z);
             float best = FLT_MAX;
             const wowee::game::ActiveTransport* nearest = nullptr;
+            // An entry asked for: that transport only, wherever it is.
+            const lua_Integer onlyEntry = luaL_optinteger(L, 1, 0);
             for (const auto& [guid, t] : tm->getTransports()) {
                 if (!t.onThisMap) continue;
+                if (onlyEntry != 0 && static_cast<lua_Integer>(t.entry) != onlyEntry) continue;
                 const float d = glm::length(glm::vec2(t.position) - glm::vec2(me));
                 if (d < best) {
                     best = d;
@@ -7493,7 +7496,13 @@ void LuaEngine::registerCoreAPI() {
             lua_pushboolean(L, gh->isOnTransport() ? 1 : 0);
             lua_pushnumber(L, nearest->position.z);
             lua_pushnumber(L, me.z);
-            return 6;
+            // Then where it is and which way it faces, canonical, so a
+            // scripted watch can aim the camera at it and see it turn.
+            lua_pushnumber(L, nearest->position.x);
+            lua_pushnumber(L, nearest->position.y);
+            const glm::vec3 fwd = nearest->rotation * glm::vec3(1.0f, 0.0f, 0.0f);
+            lua_pushnumber(L, std::atan2(fwd.y, fwd.x));
+            return 9;
         });
         lua_setglobal(L_, "__WoweeTestNearestTransport");
     }
