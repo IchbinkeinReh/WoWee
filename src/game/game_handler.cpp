@@ -243,6 +243,8 @@ void GameHandler::disconnect() {
     shapeshiftFormId_ = 0;
     shapeshiftFormPending_ = false;
     petActionsOnBonusBar_ = false;
+    overrideBarActive_ = false;
+    overrideSpellsId_ = 0;
     setState(WorldState::DISCONNECTED);
     LOG_INFO("Disconnected from world server");
 }
@@ -3755,7 +3757,7 @@ bool GameHandler::formSpellInEffect(uint32_t spellId) const {
 
 uint32_t GameHandler::getBonusActionBarOffset() const {
     // 0x005a83c0 (DAT_00c1e59c).
-    return bonusBarOffset(petActionsOnBonusBar_, shapeshiftFormRow(shapeshiftFormId_));
+    return bonusBarOffset(petActionsOnBonusBar_ || overrideBarActive_, shapeshiftFormRow(shapeshiftFormId_));
 }
 
 std::vector<const char*> GameHandler::setPlayerShapeshiftForm(uint8_t form) {
@@ -4054,6 +4056,47 @@ void GameHandler::updatePetActionBar() {
         fireAddonEvent(event, {});
     }
     fireAddonEvent("PET_BAR_UPDATE", {});
+}
+
+void GameHandler::updateOverrideSpellBar() {
+    auto player = getEntityManager().getEntity(playerGuid);
+    const uint16_t idx = fieldIndex(UF::PLAYER_FIELD_BYTES2);
+    if (!player || idx == 0xFFFF) return;
+    const uint32_t id = player->getField(idx) & 0xFFFFu;
+    if (id == overrideSpellsId_) return;
+    overrideSpellsId_ = id;
+    // OverrideSpellData: ID, Spells[10], Flags.
+    std::array<uint32_t, 10> spells{};
+    bool any = false;
+    if (id != 0) {
+        auto* am = services_.assetManager;
+        if (auto dbc = am && am->isInitialized() ? am->loadDBC("OverrideSpellData.dbc") : nullptr;
+            dbc && dbc->isLoaded() && dbc->getFieldCount() >= 11) {
+            if (const int32_t row = dbc->findRecordById(id); row >= 0) {
+                for (uint32_t i = 0; i < 10; ++i) {
+                    spells[i] = dbc->getUInt32(static_cast<uint32_t>(row), 1 + i);
+                    any = any || spells[i] != 0;
+                }
+            }
+        }
+    }
+    const uint32_t before = getBonusActionBarOffset();
+    if (any) {
+        // 0x005ab800 with 0x005a7cf0: twelve slots from 121, the row's ten
+        // and two empty.
+        for (int i = 0; i < 12; ++i) {
+            ActionBarSlot& slot = actionBar[kBonusPetSlotFirst + i];
+            slot = ActionBarSlot{};
+            const uint32_t spell = i < 10 ? spells[static_cast<size_t>(i)] : 0;
+            if (spell != 0) {
+                slot.type = ActionBarSlot::SPELL;
+                slot.id = spell;
+            }
+        }
+    }
+    overrideBarActive_ = any;
+    for (const char* event : bonusBarOffsetEvents(before, getBonusActionBarOffset())) fireAddonEvent(event, {});
+    fireAddonEvent("ACTIONBAR_SLOT_CHANGED", {"0"});
 }
 
 void GameHandler::announceCompanionChange() {

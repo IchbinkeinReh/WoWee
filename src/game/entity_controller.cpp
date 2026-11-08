@@ -2718,6 +2718,8 @@ void EntityController::onCreatePlayer(const UpdateBlock& block, std::shared_ptr<
 
         owner_.lastPlayerFieldsRef() = block.fields;
         owner_.detectInventorySlotBases(block.fields);
+        // An override bar the player comes into the world under (0x005abb40).
+        owner_.updateOverrideSpellBar();
 
         if (kVerboseUpdateObject) {
             uint16_t maxField = 0;
@@ -3599,6 +3601,12 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
         owner_.maybeDetectVisibleItemLayout();
         owner_.detectInventorySlotBases(block.fields);
 
+        // The override spells (PLAYER_FIELD_BYTES2's low word, 0x006d1c5d ->
+        // 0x005abb40).
+        if (const uint16_t b2 = fieldIndex(UF::PLAYER_FIELD_BYTES2);
+            b2 != 0xFFFF && block.fields.find(b2) != block.fields.end()) {
+            owner_.updateOverrideSpellBar();
+        }
         // The unit the player looks through (0x006e4fd0): whether the bonus
         // bar holds the pet's actions is asked again (0x005d4ad0).
         if (const uint16_t farsight = fieldIndex(UF::PLAYER_FARSIGHT); farsight != 0xFFFF &&

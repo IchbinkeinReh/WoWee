@@ -4137,7 +4137,7 @@ void registerActionLuaAPI(lua_State* L) {
                 // an hour ago.
                 {"GetActionBarPage", [](lua_State* L) -> int {
             // 1 while the bonus bar holds the pet's actions (0x005a7fd0).
-            if (auto* gh = getGameHandler(L); gh && gh->petActionsOnBonusBar()) {
+            if (auto* gh = getGameHandler(L); gh && (gh->petActionsOnBonusBar() || gh->overrideBarActive())) {
                 lua_pushnumber(L, 1);
                 return 1;
             }

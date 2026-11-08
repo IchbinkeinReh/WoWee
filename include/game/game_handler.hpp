@@ -3358,6 +3358,13 @@ public:
     /// (0x005ab800 with 0x005d3240), the offset is 5 (0x005a83c0) and the
     /// page reads 1 (0x005a7fd0).
     bool petActionsOnBonusBar() const { return petActionsOnBonusBar_; }
+    /// The override bar (DAT_00c1e5a0 0x4, 0x005abb40): PLAYER_FIELD_BYTES2's
+    /// low word names an OverrideSpellData row - an aura of type 332 sets it -
+    /// and while that row names a spell its ten fill slots 121..130, 131 and
+    /// 132 empty; the offset is 5 and the page 1 as for the pet's bar.
+    bool overrideBarActive() const { return overrideBarActive_; }
+    /// Asked again as the player's PLAYER_FIELD_BYTES2 changes (0x006d1c5d).
+    void updateOverrideSpellBar();
     static constexpr int kBonusPetSlotFirst = 120;
     /// 0x005d4ad0: on where the player looks through its pet (PLAYER_FARSIGHT)
     /// and the pet lives, and - where the pet is the vehicle it sits in - its
@@ -6589,6 +6596,8 @@ private:
     std::array<int, 12> inventoryAlerts_{};  ///< DAT_00c24238
     VehicleMoveHoldCallback vehicleMoveHoldCallback_;
     bool petActionsOnBonusBar_ = false;
+    bool overrideBarActive_ = false;
+    uint32_t overrideSpellsId_ = 0;
     uint32_t possessSpellId_ = 0;
     void setPossessSpell(uint32_t spellId);
 
