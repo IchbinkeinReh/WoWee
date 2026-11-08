@@ -181,3 +181,50 @@ TEST_CASE("a slide pushes off the face and keeps within what is left", "[collisi
     // A face overhead does not slide.
     CHECK(slideAlong(d, 1.0f, 1.0f, glm::normalize(glm::vec3(-1, 0, -0.3f))) == glm::vec3(0.0f));
 }
+
+namespace {
+
+// A thin railing along y at x in [x0, x0 + thick], `h` high over the floor at
+// z 0: its near face (facing -x), its far face (facing +x) and its top. The
+// floor ends at the railing; beyond it the ground is `drop` below.
+void addRailingAtEdge(std::vector<Facet>& f, float x0, float thick, float h, float drop) {
+    addFloor(f, -20, x0 + thick, 0);
+    addQuad(f, {x0, -10, 0}, {x0, -10, h}, {x0, 10, h}, {x0, 10, 0});
+    const float x1 = x0 + thick;
+    addQuad(f, {x1, 10, 0}, {x1, 10, h}, {x1, -10, h}, {x1, -10, 0});
+    addQuad(f, {x0, -10, h}, {x1, -10, h}, {x1, 10, h}, {x0, 10, h});
+    addFloor(f, x1, 30, -drop);
+}
+
+}  // namespace
+
+// Silvermoon's Court of the Sun: a gold railing, a hand's width thick and
+// about a yard high, at the edge of a platform forty yards up. The step-up
+// (0x00761b00) lifts the body by the step height, across, and back down by as
+// much as it rose; on a railing that thin the way down meets nothing within
+// the rise, and the client takes that as a step (to a fall clear of an edge,
+// 0x007619c0). The step only lets the walk climb the face it met, and no
+// higher than the step height over where the stepping began: a railing taller
+// than the body can climb in that holds.
+TEST_CASE("a thin railing at a platform's edge is not walked over", "[collision_walk]") {
+    std::vector<Facet> world;
+    addRailingAtEdge(world, 1.0f, 0.08f, 1.1f, 40.0f);
+    auto s = sweeperOver(world);
+    Mover m;
+    for (int i = 0; i < 60 && !m.falling; ++i) walk(m, {1, 0}, 0.25f, 35, s);
+    CHECK_FALSE(m.falling);
+    CHECK(m.pos.x < 1.0f);
+    CHECK(m.pos.z < 1.2f);
+}
+
+TEST_CASE("a thin railing met at an angle is slid along, not crossed", "[collision_walk]") {
+    std::vector<Facet> world;
+    addRailingAtEdge(world, 1.0f, 0.08f, 1.1f, 40.0f);
+    auto s = sweeperOver(world);
+    Mover m;
+    const glm::vec2 dir = glm::normalize(glm::vec2(1.0f, 0.6f));
+    for (int i = 0; i < 60 && !m.falling; ++i) walk(m, dir, 0.25f, 35, s);
+    CHECK_FALSE(m.falling);
+    CHECK(m.pos.x < 1.0f);
+    CHECK(m.pos.y > 2.0f);
+}
