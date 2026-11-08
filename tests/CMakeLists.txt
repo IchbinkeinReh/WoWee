@@ -2977,6 +2977,13 @@ wowee_add_test(test_stationery
     SOURCES test_stationery.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_loading_screen_route ───────────────────────────────
+# A transport crossing's loading screen: its stops on the world map, the
+# spline through the leg's points and the dots coming in with the load.
+wowee_add_test(test_loading_screen_route
+    SOURCES test_loading_screen_route.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_polygon_triangulate ─────────────────────────────────
 # Ear clipping for quest blob outlines, which are regularly concave. The
 # check is that the triangles cover the ring's own area and no more.
