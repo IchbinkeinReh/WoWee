@@ -7,6 +7,7 @@
 #include <set>
 #include "addons/lua_api_registrations.hpp"
 #include "game/chat_filters.hpp"
+#include "game/chat_language.hpp"
 #include "game/text_tokens.hpp"
 #include "game/game_handler.hpp"
 #include "game/game_utils.hpp"
@@ -700,6 +701,58 @@ void ChatHandler::sendAddonMessage(ChatType type, const std::string& message, co
     owner_.getSocket()->send(packet);
 }
 
+uint32_t ChatHandler::languageComprehension(uint32_t language) {
+    owner_.loadSpellNameCache();
+    const auto& cache = owner_.spellNameCacheRef();
+    auto teaches = [&](uint32_t spellId, uint32_t effect, bool aura) {
+        auto it = cache.find(spellId);
+        if (it == cache.end()) return false;
+        for (int i = 0; i < 3; ++i) {
+            const uint32_t id = aura ? it->second.effectAuraIds[i] : it->second.effectIds[i];
+            if (id == effect && it->second.effectMiscValues[i] == language) return true;
+        }
+        return false;
+    };
+    for (uint32_t spellId : owner_.getKnownSpells()) {
+        if (!teaches(spellId, 39u, false)) continue;
+        owner_.loadSkillLineAbilityDbc();
+        auto line = owner_.spellToSkillLineRef().find(spellId);
+        if (line == owner_.spellToSkillLineRef().end()) return 0;
+        const auto& skills = owner_.getPlayerSkills();
+        auto sk = skills.find(line->second);
+        return sk == skills.end() ? 0u : sk->second.effectiveValue();
+    }
+    for (const auto& aura : owner_.getPlayerAuras()) {
+        if (aura.spellId != 0 && teaches(aura.spellId, 244u, true)) return 300;
+    }
+    return 0;
+}
+
+std::string ChatHandler::hearInLanguage(uint32_t language, const std::string& text) {
+    const uint32_t comprehension = languageComprehension(language);
+    if (comprehension > 299) return text;
+    if (!languageWordsLoaded_) {
+        auto* am = owner_.services().assetManager;
+        if (!am || !am->isInitialized()) return text;
+        languageWordsLoaded_ = true;
+        // ID, LanguageID, Word.
+        if (auto dbc = am->loadDBC("LanguageWords.dbc"); dbc && dbc->isLoaded() &&
+            dbc->getFieldCount() >= 3) {
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                std::string word = dbc->getString(i, 2);
+                if (word.empty()) continue;
+                const uint32_t key = (dbc->getUInt32(i, 1) << 8) |
+                                     static_cast<uint32_t>(std::min<size_t>(word.size(), 0xff));
+                languageWords_[key].push_back(std::move(word));
+            }
+        }
+    }
+    return chat_language::garble(text, comprehension, [&](uint32_t len) -> const std::vector<std::string>* {
+        auto it = languageWords_.find((language << 8) | len);
+        return it == languageWords_.end() ? nullptr : &it->second;
+    });
+}
+
 void ChatHandler::handleMessageChat(network::Packet& packet, const std::string& gmName) {
     LOG_DEBUG("Handling SMSG_MESSAGECHAT");
     if (chatPacketDiagEnabled()) {
@@ -730,6 +783,12 @@ void ChatHandler::handleMessageChat(network::Packet& packet, const std::string& 
     // for: the reader tests its own ignore list as soon as the body is read, and
     // reads no name for a line it is about to drop.
     if (dropAsIgnored(data)) return;
+
+    // Heard as the character hears it: a language it does not speak comes out
+    // as that language's words (0x00509dd0). Universal and addon lines are
+    // nobody's language.
+    if (data.language != ChatLanguage::UNIVERSAL && data.language != ChatLanguage::ADDON)
+        data.message = hearInLanguage(static_cast<uint32_t>(data.language), data.message);
 
     // The player's own lines come back this way, a whisper as WHISPER_INFORM
     // (sendChatMessage shows nothing of its own).

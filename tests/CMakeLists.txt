@@ -2252,6 +2252,17 @@ target_link_libraries(test_cast_checks PRIVATE catch2_main)
 add_test(NAME cast_checks COMMAND test_cast_checks)
 register_test_target(test_cast_checks)
 
+# ── test_chat_language ──────────────────────────────────────
+add_executable(test_chat_language
+    test_chat_language.cpp
+    ${CMAKE_SOURCE_DIR}/src/game/chat_language.cpp
+)
+target_include_directories(test_chat_language PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_chat_language SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_chat_language PRIVATE catch2_main)
+add_test(NAME chat_language COMMAND test_chat_language)
+register_test_target(test_chat_language)
+
 # ── test_gem_conditions ─────────────────────────────────────
 add_executable(test_gem_conditions
     test_gem_conditions.cpp
