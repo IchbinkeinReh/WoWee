@@ -288,4 +288,24 @@ inline std::optional<float> teleportLandingFloor(std::initializer_list<std::opti
     return best;
 }
 
+/// Whether what the walls made of a step is a hold, or a throw.
+///
+/// The client sweeps the body along the step and stops it where it first
+/// touches (0x0075f9d0), sliding what is left along the face: a wall only
+/// ever takes motion away, so the body ends no farther from where it began
+/// than the step was long. The push-out the walls here do instead can add
+/// motion - each face it overlaps moves it out by up to a body's radius, and
+/// faces packed close (a statue's, a railing's) hand it on from one to the
+/// next - and in Silvermoon's Court of the Sun it carried a character eight
+/// yards in a frame, past the gold railing at the platform's edge, where it
+/// fell. A result farther from `from` than the step plus a body's width of
+/// push-out is not the walls holding the body back: it stays where it was.
+inline glm::vec3 holdWithinStep(const glm::vec3& from, const glm::vec3& to, const glm::vec3& held, float radius) {
+    const glm::vec2 step(to.x - from.x, to.y - from.y);
+    const glm::vec2 went(held.x - from.x, held.y - from.y);
+    const float reach = glm::length(step) + 2.0f * radius;
+    if (glm::dot(went, went) <= reach * reach) return held;
+    return glm::vec3(from.x, from.y, held.z);
+}
+
 } // namespace wowee::rendering::movement

@@ -376,3 +376,22 @@ TEST_CASE("a mover on ground too steep to stand on slides, faster the steeper", 
     for (int i = 0; i < 1000; ++i) v = slideSpeedOn(v, normal(80.0f), 0.1f);
     CHECK(v == Catch::Approx(60.148003f));
 }
+// Silvermoon's Court of the Sun: the wall push-out carried a character eight
+// yards sideways in one frame, past the gold railing at the platform's edge.
+TEST_CASE("walls hold a step back but never throw the body past it", "[movement]") {
+    using wowee::rendering::movement::holdWithinStep;
+    const glm::vec3 from(9919.67f, -7113.83f, 47.85f);
+    const glm::vec3 to(9919.43f, -7113.38f, 47.85f);   // a quarter of a yard
+    // Slid along a wall, and pushed out a little: kept.
+    const glm::vec3 slid(9919.55f, -7113.30f, 47.86f);
+    CHECK(holdWithinStep(from, to, slid, 0.5f) == slid);
+    // Pushed out of a face by a whole radius on top of the step: kept.
+    const glm::vec3 pushed(from.x - 0.7f, from.y, from.z);
+    CHECK(holdWithinStep(from, to, pushed, 0.5f) == pushed);
+    // The frame that crossed the railing: eight yards away. Stays put.
+    const glm::vec3 thrown(9915.01f, -7120.09f, 47.84f);
+    const glm::vec3 held = holdWithinStep(from, to, thrown, 0.5f);
+    CHECK(held.x == from.x);
+    CHECK(held.y == from.y);
+    CHECK(held.z == thrown.z);
+}
