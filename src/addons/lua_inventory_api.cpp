@@ -3902,60 +3902,34 @@ static int lua_GetContainerNumFreeSlots(lua_State* L) {
 // 13=Trinket1,14=Trinket2,15=Back,16=MainHand,17=OffHand,18=Ranged,19=Tabard
 
 // GetInventorySlotInfo("slotName") → slotId, textureName, checkRelic
-// Maps WoW slot names (e.g. "HeadSlot", "HEADSLOT") to inventory slot IDs
+// GetInventorySlotInfo(name) -> slot, icon, checkRelic.
 static int lua_GetInventorySlotInfo(lua_State* L) {
+    // 0x005e7d60: PaperDollItemFrame.dbc (ItemButtonName, SlotIcon,
+    // SlotNumber), the name matched without regard to case - the slot, its
+    // icon as the file names it, and 1 for the ranged slot (18) else nil.
+    // A name the file does not have is the client's error.
     const char* name = luaL_checkstring(L, 1);
-    std::string slot(name);
-    // Normalize: uppercase, strip trailing "SLOT" if present
-    for (char& c : slot) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    if (slot.size() > 4 && slot.substr(slot.size() - 4) == "SLOT")
-        slot = slot.substr(0, slot.size() - 4);
-
-    // WoW inventory slots are 1-indexed
-    struct SlotMap { const char* name; int id; const char* texture; };
-    static const SlotMap mapping[] = {
-        {"HEAD",          1,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Head"},
-        {"NECK",          2,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Neck"},
-        {"SHOULDER",      3,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Shoulder"},
-        {"SHIRT",         4,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Shirt"},
-        {"CHEST",         5,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Chest"},
-        {"WAIST",         6,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Waist"},
-        {"LEGS",          7,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Legs"},
-        {"FEET",          8,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Feet"},
-        {"WRIST",         9,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Wrists"},
-        {"HANDS",        10,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Hands"},
-        {"FINGER0",      11,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Finger"},
-        {"FINGER1",      12,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Finger"},
-        {"TRINKET0",     13,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Trinket"},
-        {"TRINKET1",     14,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Trinket"},
-        {"BACK",         15,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Chest"},
-        {"MAINHAND",     16,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-MainHand"},
-        {"SECONDARYHAND",17,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-SecondaryHand"},
-        {"RANGED",       18,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Ranged"},
-        {"TABARD",       19,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Tabard"},
-        // The bag buttons along the main bar ask for these by name at load, and
-        // paperdollframe.lua does it in an OnLoad - so a gap here does not just
-        // lose the bags, it loses the file.
-        {"BAG0",         20,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Bag"},
-        {"BAG1",         21,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Bag"},
-        {"BAG2",         22,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Bag"},
-        {"BAG3",         23,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Bag"},
-        {"AMMO",          0,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Ammo"},
-    };
-    for (const auto& m : mapping) {
-        if (slot == m.name) {
-            lua_pushnumber(L, m.id);
-            lua_pushstring(L, m.texture);
-            lua_pushboolean(L, m.id == 18 ? 1 : 0); // checkRelic: only ranged slot
+    auto* gh = getGameHandler(L);
+    auto* am = gh ? gh->services().assetManager : nullptr;
+    auto dbc = am && am->isInitialized() ? am->loadDBC("PaperDollItemFrame.dbc") : nullptr;
+    if (dbc && dbc->isLoaded() && dbc->getFieldCount() >= 3) {
+        for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+            const std::string row = dbc->getString(i, 0);
+            const std::string_view want(name);
+            if (row.empty() || row.size() != want.size() ||
+                !std::equal(row.begin(), row.end(), want.begin(), [](char x, char y) {
+                    return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
+                }))
+                continue;
+            const uint32_t slot = dbc->getUInt32(i, 2);
+            lua_pushnumber(L, slot);
+            lua_pushstring(L, dbc->getString(i, 1).c_str());
+            if (slot == 18) lua_pushnumber(L, 1);
+            else lua_pushnil(L);
             return 3;
         }
     }
-    // nil rather than an error, which is what the real client returns. Raising
-    // here takes down the whole file that asked, and a name we do not know is
-    // a gap in the table above rather than a reason to lose an interface.
-    LOG_WARNING("GetInventorySlotInfo: unknown slot ", name);
-    lua_pushnil(L);
-    return 1;
+    return luaL_error(L, "Invalid inventory slot in GetInventorySlotInfo");
 }
 
 /// ShowInventorySellCursor(slot) (0x005ea930): the coin bag over one of the
