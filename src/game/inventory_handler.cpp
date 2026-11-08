@@ -59,6 +59,28 @@ struct GameErrorText {
 
 /// SMSG_INVENTORY_CHANGE_FAILURE's code as 0x00753bb0 turns it into a game
 /// error. Codes 0, 81 (a bind confirmation) and 83 have none.
+GameErrorText inventoryChangeError(uint8_t code);
+}  // namespace
+
+std::string InventoryHandler::wrongBagFamilyName(uint8_t slot) const {
+    // The bag in that inventory slot: one worn (19..22) or one in the bank's
+    // bag slots (67..73).
+    const Inventory& inv = owner_.getInventory();
+    const ItemSlot* bag = nullptr;
+    if (slot >= 19 && slot <= 22) bag = &inv.getEquipSlot(static_cast<EquipSlot>(slot));
+    else if (slot >= 67 && slot < 67 + Inventory::BANK_BAG_SLOTS) bag = &inv.getBankBagItem(slot - 67);
+    if (!bag || bag->empty()) return {};
+    const auto* info = owner_.getItemInfo(bag->item.itemId);
+    if (!info || info->bagFamily == 0) return {};
+    const int row = static_cast<int>(std::lround(std::log2(static_cast<double>(info->bagFamily)))) + 1;
+    auto* am = owner_.services().assetManager;
+    auto dbc = am && am->isInitialized() ? am->loadDBC("ItemBagFamily.dbc") : nullptr;
+    if (!dbc || !dbc->isLoaded()) return {};
+    const int32_t r = dbc->findRecordById(static_cast<uint32_t>(row));
+    return r < 0 ? std::string() : dbc->getString(static_cast<uint32_t>(r), 1);
+}
+
+namespace {
 GameErrorText inventoryChangeError(uint8_t code) {
     switch (code) {
         case 0: case 81: case 83: return {};
@@ -848,10 +870,11 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         // level wanted (1, 87) or the ItemLimitCategory (84, 85, 89) -
         // 0x006e2e90 reads them in that order.
         uint32_t arg = 0;
+        uint8_t bagSlot = 0xFF;
         if (packet.hasRemaining(17)) {
             packet.readUInt64();
             packet.readUInt64();
-            packet.readUInt8();
+            bagSlot = packet.readUInt8();
             if ((error == 1 || error == 87 || error == 84 || error == 85 || error == 89) &&
                 packet.hasRemaining(4))
                 arg = packet.readUInt32();
@@ -864,6 +887,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         const GameErrorText err = inventoryChangeError(error);
         if (!err.key) return;
         std::string msg;
+        const char* shownKey = err.key;
         if (error == 1 || error == 87) {
             msg = interfaceFormat(err.key, err.enUS, {std::to_string(arg)});
         } else if (error == 84 || error == 85 || error == 89) {
@@ -873,6 +897,12 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
             const auto [name, quantity] = itemLimitCategory(owner_, arg);
             if (name.empty()) return;
             msg = interfaceFormat(err.key, err.enUS, {std::to_string(quantity), name});
+        } else if (const std::string family = error == 16 ? wrongBagFamilyName(bagSlot) : std::string();
+                   !family.empty()) {
+            // 0x006d6720: the bag the item was put in names what it holds -
+            // ItemBagFamily round(log2(its BagFamily)) + 1, in its own words.
+            msg = interfaceFormat("ERR_WRONG_BAG_TYPE_SUBCLASS", "Only %s can be placed in that bag.", {family});
+            shownKey = "ERR_WRONG_BAG_TYPE_SUBCLASS";
         } else {
             msg = uiText(err.key, err.enUS);
         }
@@ -880,7 +910,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         // And the line the game error speaks, where the client's table
         // gives it one (0x005216f0): a full bag's for every code that ends
         // in ERR_BAG_FULL, a missing proficiency's own, none for a full bank.
-        owner_.playGameErrorSound(err.key);
+        owner_.playGameErrorSound(shownKey);
         if (error == 1) return;
         if (auto* ac = owner_.services().audioCoordinator) {
             if (auto* sfx = ac->getUiSoundManager())

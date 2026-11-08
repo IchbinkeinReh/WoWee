@@ -825,6 +825,9 @@ public:
     void emitAllOtherPlayerEquipment();
     void handleItemQueryResponse(network::Packet& packet);
 
+    /// The family a bag in inventory slot `slot` holds, by name, for
+    /// ERR_WRONG_BAG_TYPE_SUBCLASS (0x006d6720); empty for none.
+    std::string wrongBagFamilyName(uint8_t slot) const;
 private:
     /// What the currency items the player holds summed to at the last
     /// CURRENCY_DISPLAY_UPDATE fireBagUpdates raised (~0: none raised yet).
