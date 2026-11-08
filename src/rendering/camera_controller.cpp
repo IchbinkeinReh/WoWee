@@ -452,7 +452,7 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
                     bool nearSurface = depthFromFeet <= swimFloatDepth() + 0.55f;
                     bool reachableRamp = (floorDelta >= -0.30f && floorDelta <= 1.10f);
                     bool shallowRampWater = waterOverFloor <= swimFloatDepth() + 0.10f;
-                    bool notDiving = f.forward3D.z > -0.20f && !f.xDown;
+                    bool notDiving = f.swimForward3D.z > -0.20f && !f.xDown;
                     if (nearSurface && reachableRamp && shallowRampWater && notDiving) {
                         inWater = false;
                     }
@@ -460,7 +460,7 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
 
                 // Forward plank/ramp assist: sample structure floors ahead so water exit
                 // can happen when the ramp is in front of us (not only under our feet).
-                if (swimming && inWater && f.nowForward && f.forward3D.z > -0.20f && !f.xDown) {
+                if (swimming && inWater && f.nowForward && f.swimForward3D.z > -0.20f && !f.xDown) {
                     auto queryFloorAt = [&](float x, float y, float probeZ) -> std::optional<float> {
                         std::optional<float> best;
                         if (terrainManager) {
@@ -553,7 +553,7 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
             swimForward = f.forward;
         } else {
             // Manual control: use camera's 3D direction (swim where you look)
-            swimForward = glm::normalize(f.forward3D);
+            swimForward = glm::normalize(f.swimForward3D);
             if (glm::dot(swimForward, swimForward) < 1e-8f) {
                 swimForward = f.forward;
             }
@@ -583,7 +583,7 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
         // Spacebar = swim up, X = swim down (both continuous, not a jump)
         // Flags2 0x1 holds the rise and the dive as well (0x009898e0).
         bool diveKey = f.xDown && !f.noAscendDescend;
-        bool diveIntent = diveKey || (f.nowForward && (f.forward3D.z < -0.28f));
+        bool diveIntent = diveKey || (f.nowForward && (f.swimForward3D.z < -0.28f));
         // The swim-up and swim-down keys held, which tilt the body 45
         // degrees as it swims (swim_pitch.hpp).
         swimRising_ = f.spaceHeld && !f.noAscendDescend;
@@ -3458,6 +3458,7 @@ void CameraController::update(float deltaTime) {
         pitch = glm::clamp(pitch + pitched, pitchLimitMinDeg_, pitchLimitMaxDeg_);
         if (isFlightAirborne())
             flightPitchDeg_ = glm::clamp(flightPitchDeg_ + pitched, -90.0f, 90.0f);
+        if (swimming) swimPitchDeg_ = glm::clamp(swimPitchDeg_ + pitched, -90.0f, 90.0f);
         camera->setRotation(yaw, pitch);
     }
 
@@ -3581,7 +3582,24 @@ void CameraController::update(float deltaTime) {
             flightPitchDeg_ = glm::degrees(std::asin(std::clamp(forward3D.z / len, -1.0f, 1.0f)));
         }
     }
+    // Not "swimming and moving", which turns the facing here: the pitch
+    // follows the camera only while the camera steers.
+    if ((rightMouseDown || mouseAutorun || steering_) && !externalFollow_) {
+        const float len = glm::length(forward3D);
+        if (len > 1e-4f) swimPitchDeg_ = glm::degrees(std::asin(std::clamp(forward3D.z / len, -1.0f, 1.0f)));
+    }
     if (!isFlightAirborne()) flightPitchDeg_ = 0.0f;
+    // A swimmer's pitch is the unit's, as a flyer's is: it follows the
+    // camera only while the camera steers (mouselook, 0x005fa110 gating
+    // 0x006023d0 -> 0x005fbe70), and the pitch keys move it; swimming
+    // forward with the keyboard under a camera that only looks around goes
+    // level, not where the camera looks. Stopping swimming levels it
+    // (0x0098bff0).
+    if (!swimming) swimPitchDeg_ = 0.0f;
+    const float swimPitchRad = glm::radians(swimPitchDeg_);
+    const glm::vec3 swimForward3D(std::cos(moveYawRad) * std::cos(swimPitchRad),
+                                  std::sin(moveYawRad) * std::cos(swimPitchRad),
+                                  std::sin(swimPitchRad));
     const float flightPitchRad = glm::radians(flightPitchDeg_);
     const glm::vec3 flightForward(std::cos(moveYawRad) * std::cos(flightPitchRad),
                                   std::sin(moveYawRad) * std::cos(flightPitchRad),
@@ -3675,6 +3693,7 @@ void CameraController::update(float deltaTime) {
     f.forward = forward;
     f.right = right;
     f.forward3D = forward3D;
+    f.swimForward3D = swimForward3D;
     f.flightForward = flightForward;
     f.movement = movement;
     f.nowForward = nowForward;
