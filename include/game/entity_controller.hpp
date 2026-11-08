@@ -156,6 +156,8 @@ private:
         bool newItemCreated = false;
     };
     std::deque<PendingUpdateObjectWork> pendingUpdateObjectWork_;
+    // The read time of the update whose blocks are being applied.
+    int64_t currentUpdateReceivedMs_ = 0;
 
     // --- Transport GUID tracking ---
     std::unordered_set<uint64_t> transportGuids_;  // GUIDs of known transport GameObjects

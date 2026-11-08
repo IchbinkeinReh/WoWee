@@ -132,7 +132,12 @@ public:
     [[nodiscard]] bool hasData() const { return readPos < data.size(); }
     void skipAll() { readPos = data.size(); }
 
+    /// When the socket read it (steady clock, ms; 0 for a packet made here).
+    void setReceivedMs(int64_t ms) { receivedMs_ = ms; }
+    [[nodiscard]] int64_t receivedMs() const { return receivedMs_; }
+
 private:
+    int64_t receivedMs_ = 0;
     uint16_t opcode = 0;
     std::vector<uint8_t> data;
     size_t readPos = 0;
