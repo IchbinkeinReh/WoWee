@@ -3003,6 +3003,13 @@ wowee_add_test(test_collision_hover
             ${CMAKE_SOURCE_DIR}/src/rendering/collision_hover.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_loading_screen_route ───────────────────────────────
+# A transport crossing's loading screen: its stops on the world map, the
+# spline through the leg's points and the dots coming in with the load.
+wowee_add_test(test_loading_screen_route
+    SOURCES test_loading_screen_route.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_collision_safety ────────────────────────────────────
 # The collision port's test safety: the place last stood on belongs to one
 # world, and a map change, a teleport or a transport makes it forgotten.
