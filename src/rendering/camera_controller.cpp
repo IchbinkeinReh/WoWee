@@ -3878,8 +3878,13 @@ void CameraController::update(float deltaTime) {
         const float len = glm::length(forward3D);
         if (len > 1e-4f) {
             flightPitchDeg_ = glm::degrees(std::asin(std::clamp(forward3D.z / len, -1.0f, 1.0f)));
-            swimPitchDeg_ = flightPitchDeg_;
         }
+    }
+    // Not "swimming and moving", which turns the facing here: the pitch
+    // follows the camera only while the camera steers.
+    if ((rightMouseDown || mouseAutorun || steering_) && !externalFollow_) {
+        const float len = glm::length(forward3D);
+        if (len > 1e-4f) swimPitchDeg_ = glm::degrees(std::asin(std::clamp(forward3D.z / len, -1.0f, 1.0f)));
     }
     if (!isFlightAirborne()) flightPitchDeg_ = 0.0f;
     // A swimmer's pitch is the unit's, as a flyer's is: it follows the
