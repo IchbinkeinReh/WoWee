@@ -6717,18 +6717,46 @@ static int lua_GetBattlegroundInfo(lua_State* L) {
     if (index < 1 || index > static_cast<int>(list.size())) return luaReturnNil(L);
     const auto& bg = list[static_cast<size_t>(index - 1)];
 
-    // A row naming no level range - the random battleground is the only one -
-    // is not a row saying nobody qualifies.
+    // 0x0054ba00: the random battleground (32) at level 80 only; any other
+    // where a PvpDifficulty.dbc bracket of its first map holds the player's
+    // level - the rows of one map lie together, and the walk stops after them.
+    constexpr uint32_t kRandomBattleground = 32;
     const uint32_t level = gh->getPlayerLevel();
-    const bool hasRange = bg.minLevel != 0 || bg.maxLevel != 0;
-    const bool canEnter = !hasRange || (level >= bg.minLevel && level <= bg.maxLevel);
+    struct Bracket { uint32_t map, minLevel, maxLevel; };
+    static std::vector<Bracket> brackets;
+    static bool bracketsLoaded = false;
+    if (!bracketsLoaded) {
+        if (auto* am = gh->services().assetManager; am && am->isInitialized()) {
+            bracketsLoaded = true;
+            if (auto dbc = am->loadDBC("PvpDifficulty.dbc"); dbc && dbc->isLoaded() && dbc->getFieldCount() >= 5)
+                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
+                    brackets.push_back({dbc->getUInt32(i, 1), dbc->getUInt32(i, 3), dbc->getUInt32(i, 4)});
+        }
+    }
+    bool canEnter = false;
+    if (bg.id == kRandomBattleground) {
+        canEnter = level == 80;
+    } else if (!bg.mapIds.empty()) {
+        bool inMap = false;
+        for (const auto& b : brackets) {
+            if (b.map != bg.mapIds.front()) {
+                if (inMap) break;
+                continue;
+            }
+            inMap = true;
+            if (b.minLevel <= level && level <= b.maxLevel) {
+                canEnter = true;
+                break;
+            }
+        }
+    }
 
     lua_pushstring(L, bg.name.c_str());
     lua_pushboolean(L, canEnter ? 1 : 0);
     // isHoliday: the value of the world state the row names (0x00548d10).
     const bool holiday = bg.holidayWorldState != 0 && gh->getWorldState(bg.holidayWorldState).value_or(0) != 0;
     lua_pushboolean(L, holiday ? 1 : 0);
-    lua_pushboolean(L, bg.mapCount > 1 ? 1 : 0); // several maps means a pool, i.e. random
+    lua_pushboolean(L, bg.id == kRandomBattleground ? 1 : 0); // isRandom (0x0054e010)
     lua_pushnumber(L, bg.id);
     return 5;
 }
