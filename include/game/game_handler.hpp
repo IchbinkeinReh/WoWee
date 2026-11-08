@@ -5426,6 +5426,9 @@ public:
         // movement's own, on the transport (0x0098c770), and placed through
         // the transport as it is each frame (0x004f4460).
         std::optional<glm::vec3> moveFromLocal;
+        // The transport's facing when its passenger was last carried: the
+        // deck's turn turns the passenger's drawn facing with it.
+        std::optional<float> carriedFacing;
     };
     struct AreaTriggerEntry {
         uint32_t id = 0;

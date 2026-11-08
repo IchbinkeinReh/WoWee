@@ -4208,6 +4208,14 @@ void MovementHandler::updateAttachedTransportChildren(float /*deltaTime*/) {
             continue;
         }
 
+        // The deck's turn since last carried turns the passenger's drawn
+        // facing with it (Entity::carryModelFacing): its facing on the
+        // transport is its own (0x004f42a0), the world one the deck's plus it.
+        if (attachment.carriedFacing) {
+            entity->carryModelFacing(core::coords::normalizeAngleRad(transport->facing - *attachment.carriedFacing));
+        }
+        attachment.carriedFacing = transport->facing;
+
         if (attachment.offsetNeedsTransportResolution) {
             attachment.localOffset = owner_.getTransportManager()->serverToTransportLocal(
                 attachment.transportGuid, attachment.localOffset);
