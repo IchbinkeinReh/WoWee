@@ -152,13 +152,13 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
             fell = true;
             how = "stopstep";
         } else {
-            // Standing: kept on the ground as a walk's end keeps it.
+            // Standing: settled onto ground within a twentieth of a yard,
+            // and never made to fall. The client moves a unit only while
+            // it moves (0x00762e00 runs for flags 0x40c0100f), so a unit
+            // standing still on a transport's deck as it carries it, or at
+            // the edge of anything, stays as it is.
             const auto down = sweeper.run(m, glm::vec3(0.0f, 0.0f, -1.0f), 0.05f);
-            m.pos.z -= down.allowed;
-            if (down.facet < 0 && !m.stepping) {
-                collision::startFall(m);
-                fell = true;
-            }
+            if (down.facet >= 0) m.pos.z -= down.allowed;
         }
         verticalVelocity = 0.0f;
         if (!fell) {
