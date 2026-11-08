@@ -905,6 +905,17 @@ void CombatHandler::handleAttackerStateUpdate(network::Packet& packet) {
         addCombatText(CombatTextEntry::DEFLECT, 0, 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
     }
 
+    // 0x00755e40: a victim not yet lootable bleeds from a blow that reached it
+    // (HITINFO 0x2) and did damage (or carried 0x1000000), where it was hit
+    // (victim state 1) or the hit interrupted it (4).
+    if (owner_.bloodSpurtCallbackRef() && (data.hitInfo & 0x2u) != 0 &&
+        (data.totalDamage != 0 || (data.hitInfo & 0x1000000u) != 0) &&
+        (data.victimState == 1 || data.victimState == 4)) {
+        auto victim = std::dynamic_pointer_cast<Unit>(owner_.getEntityManager().getEntity(data.targetGuid));
+        if (victim && (victim->getDynamicFlags() & 0x1u) == 0)
+            owner_.bloodSpurtCallbackRef()(data.targetGuid, data.attackerGuid, (data.hitInfo & 0x8000u) != 0);
+    }
+
     // Fire hit reaction animation on the victim
     if (owner_.hitReactionCallbackRef() && !data.isMiss()) {
         using HR = GameHandler::HitReaction;

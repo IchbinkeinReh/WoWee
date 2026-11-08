@@ -502,6 +502,11 @@ public:
     void shutdown();
 
     [[nodiscard]] bool hasModel(uint32_t modelId) const;
+    /// One texture file swapped for another wherever a model loads it
+    /// (0x004b5730, read by 0x004b5210): its name, case aside, replaced and
+    /// its folder kept. Empty names undo it. violenceLevel sets it for the
+    /// blood spurt (0x007f39b0).
+    static void setTextureSubstitution(std::string fileName, std::string replacement);
     /// A loaded model's vertex radius (the M2 header's +0xb8), 0 without one.
     [[nodiscard]] float getModelVertexRadius(uint32_t modelId) const;
     bool loadModel(const pipeline::M2Model& model, uint32_t modelId);

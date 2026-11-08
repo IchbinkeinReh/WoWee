@@ -446,6 +446,10 @@ public:
     /// instance at `renderPos` - for the player while a form or a morph shows
     /// it as something else than its character. 0 where it cannot be drawn.
     uint32_t createDisplayInstance(uint32_t displayId, const glm::vec3& renderPos, float renderYaw, float scale);
+    /// A melee blow the victim bleeds from (0x00755380): the spurt its blood
+    /// names, front or back of its chest as the attacker stands, larger for a
+    /// crushing blow, on `renderInstanceId`.
+    void playBloodSpurt(uint64_t victimGuid, uint64_t attackerGuid, bool crushing, uint32_t renderInstanceId);
     /// The size a unit's model is drawn at (0x0071c0e0 while it rides
     /// nothing): what its instance was given, 1 for one drawn at 1.
     float unitModelScale(uint64_t guid) const;

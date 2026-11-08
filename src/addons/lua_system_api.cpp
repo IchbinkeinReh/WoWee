@@ -1,6 +1,8 @@
 // lua_system_api.cpp - System, time, sound, locale, map, addons, instances, and utilities Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include <array>
+#include "rendering/m2_renderer.hpp"
+#include "game/spell_visual_choice.hpp"
 #include <chrono>
 #include <algorithm>
 #include <cctype>
@@ -2089,6 +2091,14 @@ static void applyCVarSideEffects(lua_State* L, const std::string& key,
     // client setting, and not the ImGui window scale beside it in the settings
     // window. Those are two different interfaces that happen to share a word.
     // The power UnitPower and the cast read (0x0071c2e0).
+    // 0x007f39b0: below level 2 the blood spurt's texture is its low or
+    // medium one.
+    if (key == "violencelevel") {
+        const int level = game::spell_visual::violenceLevel(value);
+        static constexpr const char* kSpurt[2] = {"BloodSpurtSmall01_Low.blp", "BloodSpurtSmall01_Medium.blp"};
+        if (level >= 2) rendering::M2Renderer::setTextureSubstitution({}, {});
+        else rendering::M2Renderer::setTextureSubstitution("BloodSpurtSmall01.blp", kSpurt[level]);
+    }
     if (key == "predictedpower") {
         if (auto* gh = getGameHandler(L)) gh->setPredictedPowerEnabled(value != "0");
     }

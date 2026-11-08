@@ -1151,7 +1151,28 @@ size_t M2Renderer::evictUnreferencedTextures(size_t bytesNeeded) {
     return freed;
 }
 
-VkTexture* M2Renderer::loadTexture(const std::string& path, uint32_t texFlags) {
+namespace {
+std::string g_substituteFrom;  // lower-cased file name
+std::string g_substituteTo;
+}  // namespace
+
+void M2Renderer::setTextureSubstitution(std::string fileName, std::string replacement) {
+    std::transform(fileName.begin(), fileName.end(), fileName.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    g_substituteFrom = std::move(fileName);
+    g_substituteTo = std::move(replacement);
+}
+
+VkTexture* M2Renderer::loadTexture(const std::string& requested, uint32_t texFlags) {
+    std::string path = requested;
+    if (!g_substituteFrom.empty()) {
+        const size_t slash = path.find_last_of("\\/");
+        const size_t start = slash == std::string::npos ? 0 : slash + 1;
+        std::string name = path.substr(start);
+        std::transform(name.begin(), name.end(), name.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (name == g_substituteFrom) path = path.substr(0, start) + g_substituteTo;
+    }
     constexpr uint64_t kFailedTextureRetryLookups = 512;
     auto normalizeKey = [](std::string key) {
         std::replace(key.begin(), key.end(), '/', '\\');

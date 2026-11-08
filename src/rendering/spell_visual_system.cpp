@@ -97,6 +97,7 @@ void SpellVisualSystem::loadSpellVisualDbc() {
             // shipped is .m2.
             p = pipeline::modelPathToM2(p);
             effectPaths[id] = p;
+            effectNamePaths_[id] = p;
             if (fxScaleField < fxDbc->getFieldCount())
                 effectScales[id] = fxDbc->getFloat(i, fxScaleField);
             if (fxMinScaleField < fxDbc->getFieldCount() && fxMaxScaleField < fxDbc->getFieldCount())
@@ -1465,6 +1466,26 @@ std::vector<SpellVisualSystem::KitModelInstance> SpellVisualSystem::playKitModel
                     model.local);
     }
     return shown;
+}
+
+void SpellVisualSystem::playEffectModelOnUnit(uint32_t effectNameId, uint32_t renderInstanceId, int32_t attachment) {
+    loadSpellVisualDbc();
+    if (!m2Renderer_ || renderInstanceId == 0) return;
+    const auto path = effectNamePaths_.find(effectNameId);
+    if (path == effectNamePaths_.end()) return;
+    glm::mat4 transform(1.0f);
+    float scale = 1.0f;
+    if (!kitModelTransform(renderInstanceId, attachment, glm::mat4(1.0f), 1.0f, 0.0f, 1e30f, transform, scale))
+        return;
+    const uint32_t modelId = acquireEffectModel(path->second);
+    if (modelId == 0) return;
+    const uint32_t instanceId = m2Renderer_->createInstance(modelId, glm::vec3(transform[3]), glm::vec3(0.0f), 1.0f);
+    if (instanceId == 0) return;
+    m2Renderer_->restartInstanceAnimation(instanceId);
+    setEffectEventOwner(instanceId, renderInstanceId);
+    m2Renderer_->setInstanceTransform(instanceId, transform);
+    addKitModel(instanceId, spell_kit::KitModelLife::Once, false, 0, true,
+                static_cast<uint32_t>(attachment), renderInstanceId, scale, glm::mat4(1.0f));
 }
 
 void SpellVisualSystem::hideAuraKitModels(AuraKit& aura) {

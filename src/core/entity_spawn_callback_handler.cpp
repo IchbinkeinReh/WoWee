@@ -229,6 +229,15 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
         entitySpawner_.applyGameObjectInteraction(guid, open);
     });
 
+    // A melee blow the victim bleeds from: its spurt on whichever model draws it.
+    gameHandler_.setBloodSpurtCallback([this](uint64_t victim, uint64_t attacker, bool crushing) {
+        uint32_t instance = 0;
+        if (isLocalPlayerGuid_(victim)) instance = renderer_.getCharacterInstanceId();
+        if (instance == 0) instance = entitySpawner_.getCreatureInstanceId(victim);
+        if (instance == 0) instance = entitySpawner_.getPlayerInstanceId(victim);
+        entitySpawner_.playBloodSpurt(victim, attacker, crushing, instance);
+    });
+
     // A game object's model box, for the reach a use is judged by.
     gameHandler_.setGameObjectBoundsCallback(
         [this](uint64_t guid, bool playingSequence) -> std::optional<std::pair<glm::vec3, glm::vec3>> {

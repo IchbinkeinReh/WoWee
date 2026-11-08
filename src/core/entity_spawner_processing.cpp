@@ -5,6 +5,8 @@
 #include "rendering/m2_model_classifier.hpp"
 #include "game/transport_path_repository.hpp"
 #include "core/coordinates.hpp"
+#include "addons/lua_api_registrations.hpp"
+#include "game/spell_visual_choice.hpp"
 #include "core/logger.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/spell_visual_system.hpp"
@@ -1983,6 +1985,75 @@ uint32_t EntitySpawner::createDisplayInstance(uint32_t displayId, const glm::vec
     applyHumanoidInstanceOverrides(instanceId, modelId, displayId);
     normalizeHumanoidClothingGeosets(instanceId, modelId, displayId);
     return instanceId;
+}
+
+void EntitySpawner::playBloodSpurt(uint64_t victimGuid, uint64_t attackerGuid, bool crushing,
+                                    uint32_t renderInstanceId) {
+    if (!gameHandler_ || !assetManager_ || !renderer_ || renderInstanceId == 0) return;
+    auto* svs = renderer_->getSpellVisualSystem();
+    if (!svs) return;
+    // CreatureDisplayInfo BloodLevel (column 11), else its CreatureModelData's
+    // BloodID (column 5), else the first UnitBloodLevels row (0x0072d940);
+    // that row's entry for violenceLevel names the UnitBlood row (0x00719ff0).
+    struct Tables {
+        std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> displays;  // display -> {model, level}
+        std::unordered_map<uint32_t, uint32_t> models;                          // model -> level
+        std::unordered_map<uint32_t, std::array<uint32_t, 3>> levels;           // level -> blood per violence
+        uint32_t firstLevel = 0;
+        std::unordered_map<uint32_t, std::array<uint32_t, 4>> bloods;           // blood -> front x2, back x2
+    };
+    static Tables t;
+    static bool loaded = false;
+    if (!loaded) {
+        loaded = true;
+        if (auto d = assetManager_->loadDBC("CreatureDisplayInfo.dbc"); d && d->isLoaded() && d->getFieldCount() > 11)
+            for (uint32_t i = 0; i < d->getRecordCount(); ++i)
+                t.displays[d->getUInt32(i, 0)] = {d->getUInt32(i, 1), d->getUInt32(i, 11)};
+        if (auto d = assetManager_->loadDBC("CreatureModelData.dbc"); d && d->isLoaded() && d->getFieldCount() > 5)
+            for (uint32_t i = 0; i < d->getRecordCount(); ++i) t.models[d->getUInt32(i, 0)] = d->getUInt32(i, 5);
+        if (auto d = assetManager_->loadDBC("UnitBloodLevels.dbc"); d && d->isLoaded() && d->getFieldCount() >= 4)
+            for (uint32_t i = 0; i < d->getRecordCount(); ++i) {
+                const uint32_t id = d->getUInt32(i, 0);
+                if (i == 0) t.firstLevel = id;
+                t.levels[id] = {d->getUInt32(i, 1), d->getUInt32(i, 2), d->getUInt32(i, 3)};
+            }
+        if (auto d = assetManager_->loadDBC("UnitBlood.dbc"); d && d->isLoaded() && d->getFieldCount() >= 5)
+            for (uint32_t i = 0; i < d->getRecordCount(); ++i)
+                t.bloods[d->getUInt32(i, 0)] = {d->getUInt32(i, 1), d->getUInt32(i, 2), d->getUInt32(i, 3),
+                                                d->getUInt32(i, 4)};
+    }
+    auto victim = gameHandler_->getEntityManager().getEntity(victimGuid);
+    if (!victim || !victim->isUnit()) return;
+    const uint16_t di = game::fieldIndex(game::UF::UNIT_FIELD_DISPLAYID);
+    const uint32_t display = di == 0xFFFF ? 0 : victim->getField(di);
+    uint32_t level = 0;
+    if (const auto it = t.displays.find(display); it != t.displays.end()) {
+        level = it->second.second;
+        if (!t.levels.count(level)) {
+            const auto model = t.models.find(it->second.first);
+            level = model != t.models.end() ? model->second : 0;
+        }
+    }
+    if (!t.levels.count(level)) level = t.firstLevel;
+    const auto row = t.levels.find(level);
+    if (row == t.levels.end()) return;
+    // violenceLevel as the client clamps it (0x007f39b0).
+    const int violence = std::clamp(game::spell_visual::violenceLevel(addons::storedCVarValue(
+                                        "violenceLevel", std::to_string(game::spell_visual::kViolenceLevelLimit))),
+                                    0, 2);
+    const auto blood = t.bloods.find(row->second[static_cast<size_t>(violence)]);
+    if (blood == t.bloods.end()) return;
+    // ChestBloodFront (15) where the attacker is ahead of the victim's
+    // facing, ChestBloodBack (16) where behind it.
+    int32_t attachment = 15;
+    if (auto attacker = gameHandler_->getEntityManager().getEntity(attackerGuid)) {
+        const glm::vec3 to = core::coords::canonicalToServer(glm::vec3(
+            attacker->getX() - victim->getX(), attacker->getY() - victim->getY(), 0.0f));
+        const float yaw = core::coords::canonicalToServerYaw(victim->getOrientation());
+        if (to.x * std::cos(yaw) + to.y * std::sin(yaw) < 0.0f) attachment = 16;
+    }
+    const size_t slot = (attachment == 15 ? 0u : 2u) + (crushing ? 1u : 0u);
+    svs->playEffectModelOnUnit(blood->second[slot], renderInstanceId, attachment);
 }
 
 bool EntitySpawner::loadRemoteMountModel(uint32_t displayId, uint32_t& modelId,
