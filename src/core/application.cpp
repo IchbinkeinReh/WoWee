@@ -197,9 +197,22 @@ bool jumpHoldsAnimation(rendering::CharacterRenderer& charRenderer, uint32_t ins
 // FUN_0071de90 turns it down over an emote or a cast and the combat stance
 // is asked first (FUN_0071e0d0), and stops back into the stand. Returns
 // the body yaw, in the render yaw's frame `facing` is given in.
+// The transport a unit stands on, for its body to turn with (turnUnitBody).
+uint64_t unitRideGuidOf(game::GameHandler& gh, uint64_t guid) {
+    const auto& attached = gh.transportAttachmentsRef();
+    const auto it = attached.find(guid);
+    return it != attached.end() ? it->second.transportGuid : 0;
+}
+const game::ActiveTransport* unitRideOf(game::GameHandler& gh, uint64_t guid) {
+    const uint64_t rideGuid = unitRideGuidOf(gh, guid);
+    auto* transports = gh.getTransportManager();
+    return (rideGuid != 0 && transports) ? transports->getTransport(rideGuid) : nullptr;
+}
+
 float turnUnitBody(rendering::CharacterRenderer& cr, uint32_t instanceId,
                    EntitySpawner::UnitBody& body, float facing, uint32_t moveFlags,
-                   float deltaTime, bool snap, bool mayShuffle) {
+                   float deltaTime, bool snap, bool mayShuffle, const game::ActiveTransport* ride = nullptr,
+                   uint64_t rideGuid = 0) {
     namespace by = rendering::body_yaw;
     if (body.instanceId != instanceId) {
         body = {};
@@ -208,6 +221,17 @@ float turnUnitBody(rendering::CharacterRenderer& cr, uint32_t instanceId,
         body.hasSpine = cr.hasKeyBone(instanceId, 4);
         body.hasHead = cr.hasKeyBone(instanceId, 6);
     }
+    // A passenger's facing is the transport's plus its own on it
+    // (0x004f42a0): as a zeppelin turns in a curve, the facing of everyone
+    // standing on its deck turns with it, and so does the body under that
+    // facing. Measured in the world, the body lagged the deck's turn and the
+    // lag read as a turn on the spot - every passenger shuffled its feet
+    // through the curve.
+    if (ride && body.rideGuid == rideGuid) {
+        body.state.body = by::wrap(body.state.body + core::coords::normalizeAngleRad(ride->facing - body.rideFacing));
+    }
+    body.rideGuid = ride ? rideGuid : 0;
+    body.rideFacing = ride ? ride->facing : 0.0f;
     by::Input in;
     in.facing = facing;
     in.dt = deltaTime;
@@ -4369,6 +4393,19 @@ void Application::applyServerMovementState(float deltaTime) {
                     cc->turnWithVehicle(turnDeg);
                     cc->setFacingYaw(cc->getFacingYaw() + turnDeg);
                     renderer->setCharacterYaw(cc->getFacingYaw());
+                    renderer->turnCharacterBody(turnDeg);
+                }
+                static const bool kRideTurnDebug = [] {
+                    const char* v = std::getenv("WOWEE_FLOOR_DEBUG");
+                    return v && v[0] && v[0] != '0';
+                }();
+                static float rideTurnLogTimer = 0.0f;
+                rideTurnLogTimer += deltaTime;
+                if (kRideTurnDebug && cc && rideTurnLogTimer >= 1.0f) {
+                    rideTurnLogTimer = 0.0f;
+                    LOG_WARNING("RIDE TURN: facing=", tr->facing, " turnDeg=", turnDeg, " camYaw=", cc->getYaw(),
+                                " facingYaw=", cc->getFacingYaw(), " clientAnim=", tr->useClientAnimation,
+                                " serverYaw=", tr->hasServerYaw);
                 }
             }
             lastWMORideFacing_ = tr->facing;
@@ -5167,7 +5204,8 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                                        unitBodyFlags(*entity, isMovingNow, isSwimmingNow, isFlyingNow),
                                        deltaTime, deadOrCorpse || creatureMount != nullptr,
                                        !jumpHolds && !isMovingNow && !deadOrCorpse && !creatureMount &&
-                                           unitPtr->getStandState() == 0);
+                                           unitPtr->getStandState() == 0,
+                                       unitRideOf(*gameHandler, guid), unitRideGuidOf(*gameHandler, guid));
             }
             // Tilted by its pitch while it swims or flies forward or back
             // (swim_pitch::otherUnit, 0x00719a90): the model's own Y axis,
@@ -5405,7 +5443,8 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                                        unitBodyFlags(*entity, isMovingNow, isSwimmingNow, isFlyingNow),
                                        deltaTime, deadOrCorpse || remoteMount != nullptr,
                                        !jumpHolds && !isMovingNow && !deadOrCorpse && !remoteMount &&
-                                           unitPtr->getStandState() == 0);
+                                           unitPtr->getStandState() == 0,
+                                       unitRideOf(*gameHandler, guid), unitRideGuidOf(*gameHandler, guid));
             }
             const float unitTilt = unitSwimTilt(*gameHandler, *entity, guid,
                                                 _pCreatureSwimmingState.count(guid) > 0 ||
