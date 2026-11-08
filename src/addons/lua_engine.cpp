@@ -29,6 +29,7 @@
 #include "game/interface_text.hpp"
 #include "game/item_stat_text.hpp"
 #include "rendering/minimap_zoom.hpp"
+#include "game/transport_manager.hpp"
 #include <cmath>
 #include "addons/lua_handler_globals.hpp"
 #include "addons/lua_taint.hpp"
@@ -7464,6 +7465,34 @@ void LuaEngine::registerCoreAPI() {
             return 0;
         });
         lua_setglobal(L_, "__WoweeTestFrameShot");
+        // __WoweeTestNearestTransport(): for a scripted ride, the nearest
+        // transport on this map: its horizontal distance from the player,
+        // its height over the player, its entry, and whether the player is
+        // riding a transport now. Nothing when there is none.
+        lua_pushcfunction(L_, [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            auto* tm = gh ? gh->getTransportManager() : nullptr;
+            if (!tm) return 0;
+            const auto& mi = gh->getMovementInfo();
+            const glm::vec3 me(mi.x, mi.y, mi.z);
+            float best = FLT_MAX;
+            const wowee::game::ActiveTransport* nearest = nullptr;
+            for (const auto& [guid, t] : tm->getTransports()) {
+                if (!t.onThisMap) continue;
+                const float d = glm::length(glm::vec2(t.position) - glm::vec2(me));
+                if (d < best) {
+                    best = d;
+                    nearest = &t;
+                }
+            }
+            if (!nearest) return 0;
+            lua_pushnumber(L, best);
+            lua_pushnumber(L, nearest->position.z - me.z);
+            lua_pushinteger(L, static_cast<lua_Integer>(nearest->entry));
+            lua_pushboolean(L, gh->isOnTransport() ? 1 : 0);
+            return 4;
+        });
+        lua_setglobal(L_, "__WoweeTestNearestTransport");
     }
 
     // The micro menu's game-menu button reaches this client's own settings.
