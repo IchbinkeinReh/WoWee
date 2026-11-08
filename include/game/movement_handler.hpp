@@ -393,6 +393,21 @@ private:
     // The last SMSG_TRANSFER_PENDING named a transport: the player goes to
     // the next map on it, and SMSG_NEW_WORLD carries their place on its deck.
     bool transferPendingOnTransport_ = false;
+public:
+    /// The transport and the map it leaves, of the last
+    /// SMSG_TRANSFER_PENDING that named one, for the loading screen's route
+    /// (0x0040ad50); taken once.
+    struct TransportTransfer {
+        uint32_t entry = 0;
+        uint32_t fromMap = 0;
+    };
+    [[nodiscard]] std::optional<TransportTransfer> takeTransportTransfer() {
+        auto out = transportTransfer_;
+        transportTransfer_.reset();
+        return out;
+    }
+private:
+    std::optional<TransportTransfer> transportTransfer_;
     // Previous checkAreaTriggers() sample for swept-path testing (canonical
     // coords). Mounted speed covers ~3 yd per 0.25s check, enough to straddle
     // small portal boxes when only the instantaneous position is tested.

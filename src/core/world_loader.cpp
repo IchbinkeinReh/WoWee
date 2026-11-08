@@ -24,6 +24,8 @@
 #include "rendering/quest_giver_markers.hpp"
 #include "rendering/footprint_renderer.hpp"
 #include "rendering/loading_screen.hpp"
+#include "game/movement_handler.hpp"
+#include "game/world_packets.hpp"
 #include "addons/addon_manager.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "pipeline/asset_manager.hpp"
@@ -786,6 +788,17 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     rendering::LoadingScreen& loadingScreen = *loadingScreenOwned;
     loadingScreen.setVkContext(window_->getVkContext());
     loadingScreen.setSDLWindow(window_->getSDLWindow());
+    // A crossing on a transport shows its route on the world map
+    // (0x0040ad50): the transport's TaxiPath is its game object's data0.
+    if (gameHandler_) {
+        if (auto* movement = gameHandler_->getMovementHandler()) {
+            if (const auto transfer = movement->takeTransportTransfer()) {
+                const auto* info = gameHandler_->getCachedGameObjectInfo(transfer->entry);
+                const uint32_t taxiPath = (info && info->hasData) ? info->data[0] : 0u;
+                if (taxiPath != 0) loadingScreen.setTransportRoute(taxiPath, transfer->fromMap);
+            }
+        }
+    }
     bool loadingScreenOk = loadingScreen.initialize(assetManager_, mapId);
     // 0x0040a990: the loading screen starts the keep-alive's thirty seconds.
     if (gameHandler_) gameHandler_->loadingKeepAlive(/*starting=*/true);

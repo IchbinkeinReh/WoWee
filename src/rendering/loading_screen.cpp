@@ -1,5 +1,6 @@
 #include "rendering/loading_screen.hpp"
 #include "rendering/loading_screen_layout.hpp"
+#include "rendering/loading_screen_route.hpp"
 #include "audio/audio_engine.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/blp_loader.hpp"
@@ -17,7 +18,9 @@
 #ifdef WOWEE_VR
 #include "vr/vr_runtime.hpp"
 #endif
+#include <algorithm>
 #include <cstring>
+#include <map>
 
 // The one definition of stb_image the other image readers link against.
 #define STB_IMAGE_IMPLEMENTATION
@@ -76,7 +79,9 @@ bool LoadingScreen::initialize(pipeline::AssetManager* assets, uint32_t mapId) {
     if (!widePicture_ && !fileName.empty()) loadTexture(assets, fileName, picture_);
     if (!picture_.descriptor) loadTexture(assets, ls::kDefaultPicture, picture_);
     for (size_t i = 0; i < ls::kBar.size(); ++i) loadTexture(assets, ls::kBar[i].texture, bar_[i]);
-    LOG_INFO("Loading screen initialized: map ", mapId, " picture '", fileName, "'", widePicture_ ? " (wide)" : "");
+    routeReady_ = routePathId_ != 0 && buildRoute(assets);
+    LOG_INFO("Loading screen initialized: map ", mapId, " picture '", fileName, "'", widePicture_ ? " (wide)" : "",
+             routeReady_ ? " with the transport's route" : "");
     return true;
 }
 
@@ -100,11 +105,88 @@ void LoadingScreen::shutdown() {
         holdsWorldSound_ = false;
         audio::AudioEngine::instance().endWorldSoundHold();
     }
+    // A route is for the one crossing it was set for.
+    routeReady_ = false;
+    routePathId_ = 0;
     if (!vkCtx) return;
     if (!picture_.image && !bar_[0].image && !bar_[1].image) return;
     ::wowee::rendering::deviceWaitIdle(vkCtx->getDevice());
     release(picture_);
     for (Texture& tex : bar_) release(tex);
+    for (Texture& tex : worldTiles_) release(tex);
+    release(dynamicElements_);
+}
+
+bool LoadingScreen::buildRoute(pipeline::AssetManager* assets) {
+    namespace lr = loading_route;
+    if (!assets || !assets->isInitialized()) return false;
+    auto nodes = assets->loadDBC("TaxiPathNode.dbc");
+    auto continents = assets->loadDBC("WorldMapContinent.dbc");
+    auto splines = assets->loadDBC("LoadingScreenTaxiSplines.dbc");
+    if (!nodes || !nodes->isLoaded() || nodes->getFieldCount() < 8 || !continents || !continents->isLoaded() ||
+        continents->getFieldCount() < 9 || !splines || !splines->isLoaded() || splines->getFieldCount() < 19) {
+        return false;
+    }
+    // The path's stops (TaxiPathNode flag 2), by node index: ID, PathID,
+    // NodeIndex, ContinentID, LocX, LocY, LocZ, Flags.
+    struct Stop {
+        uint32_t map;
+        float x, y;
+    };
+    std::map<uint32_t, Stop> byIndex;
+    for (uint32_t r = 0; r < nodes->getRecordCount(); ++r) {
+        if (nodes->getUInt32(r, 1) != routePathId_ || (nodes->getUInt32(r, 7) & 2u) == 0) continue;
+        byIndex[nodes->getUInt32(r, 2)] = {nodes->getUInt32(r, 3), nodes->getFloat(r, 4), nodes->getFloat(r, 5)};
+    }
+    std::vector<Stop> stops;
+    for (const auto& entry : byIndex) stops.push_back(entry.second);
+    if (stops.size() < 2) return false;
+    // 0x00408cd0: the leg that starts on the map it leaves.
+    int leg = -1;
+    for (size_t i = 0; i < stops.size(); ++i) {
+        if (stops[i].map == routeFromMap_) {
+            leg = static_cast<int>(i);
+            break;
+        }
+    }
+    if (leg < 0) return false;
+    const Stop& from = stops[static_cast<size_t>(leg)];
+    const Stop& to = stops[(static_cast<size_t>(leg) + 1) % stops.size()];
+    // WorldMapContinent: ID, MapID, four boundaries, OffsetX, OffsetY, Scale.
+    auto continentOf = [&](uint32_t map, lr::Continent& out) {
+        for (uint32_t r = 0; r < continents->getRecordCount(); ++r) {
+            if (continents->getUInt32(r, 1) != map) continue;
+            out = {continents->getFloat(r, 6), continents->getFloat(r, 7), continents->getFloat(r, 8)};
+            return true;
+        }
+        return false;
+    };
+    lr::Continent cFrom, cTo;
+    if (!continentOf(from.map, cFrom) || !continentOf(to.map, cTo)) return false;
+    routeStart_ = lr::worldMapPoint(cFrom, from.x, from.y);
+    routeEnd_ = lr::worldMapPoint(cTo, to.x, to.y);
+    // LoadingScreenTaxiSplines: ID, PathID, LocX[8], LocY[8], LegIndex.
+    std::vector<glm::vec2> legPoints;
+    for (uint32_t r = 0; r < splines->getRecordCount(); ++r) {
+        if (splines->getUInt32(r, 1) != routePathId_ || static_cast<int>(splines->getUInt32(r, 18)) != leg) continue;
+        for (uint32_t k = 0; k < 8; ++k) legPoints.emplace_back(splines->getFloat(r, 2 + k), splines->getFloat(r, 10 + k));
+        break;
+    }
+    const auto cps = lr::controlPoints(routeStart_, legPoints, routeEnd_);
+    const int segments = lr::dotSegments(lr::length(cps));
+    routeDots_.clear();
+    for (int i = 0; i <= segments; ++i) routeDots_.push_back(lr::evaluate(cps, static_cast<float>(i) / segments));
+    // 0x0040a160: the marks and dots, and the world map's tiles.
+    if (!loadTexture(assets, "Interface\\Glues\\LoadingScreens\\DynamicElements", dynamicElements_)) return false;
+    for (int t = 0; t < lr::kTiles; ++t) {
+        if (!loadTexture(assets, "Interface\\WorldMap\\World\\World" + std::to_string(t + 1),
+                         worldTiles_[static_cast<size_t>(t)])) {
+            return false;
+        }
+    }
+    LOG_INFO("Loading screen route: path ", routePathId_, " leg ", leg, " from map ", from.map, " to map ", to.map,
+             ", ", routeDots_.size(), " dots, ", legPoints.empty() ? "no" : "with", " spline points");
+    return true;
 }
 
 static uint32_t findMemoryType(VkPhysicalDevice physDevice, uint32_t typeFilter, VkMemoryPropertyFlags properties) {
@@ -277,7 +359,61 @@ bool LoadingScreen::upload(const uint8_t* rgba, int imageWidth, int imageHeight,
     return true;
 }
 
+void LoadingScreen::drawRoute(ImDrawList* drawList, float screenW, float screenH) const {
+    namespace ls = loading_screen;
+    namespace lr = loading_route;
+    // The 4:3 viewport (0x0040a270 with 0x00b2fed8 clear), 0..1, y up.
+    const float aspect = screenH > 0.0f ? screenW / screenH : 0.0f;
+    const ls::Rect view = ls::pictureViewport(aspect, false);
+    auto toScreen = [&](float x0, float y0, float x1, float y1, ImVec2& p0, ImVec2& p1) {
+        const float vx = view.x0 * screenW, vw = (view.x1 - view.x0) * screenW;
+        const float vy = view.y0 * screenH, vh = (view.y1 - view.y0) * screenH;
+        p0 = ImVec2(vx + x0 * vw, screenH - (vy + y1 * vh));
+        p1 = ImVec2(vx + x1 * vw, screenH - (vy + y0 * vh));
+    };
+    ImVec2 c0, c1;
+    toScreen(0.0f, 0.0f, 1.0f, 1.0f, c0, c1);
+    drawList->PushClipRect(c0, c1, true);
+    for (int t = 0; t < lr::kTiles; ++t) {
+        const Texture& tex = worldTiles_[static_cast<size_t>(t)];
+        if (!tex.descriptor) continue;
+        const float col = static_cast<float>(t % 4), row = static_cast<float>(t / 4);
+        ImVec2 p0, p1;
+        toScreen(col * lr::kTileU, 1.0f - (row + 1.0f) * lr::kTileV, (col + 1.0f) * lr::kTileU,
+                 1.0f - row * lr::kTileV, p0, p1);
+        drawList->AddImage(reinterpret_cast<ImTextureID>(tex.descriptor), p0, p1);
+    }
+    if (dynamicElements_.descriptor) {
+        const auto id = reinterpret_cast<ImTextureID>(dynamicElements_.descriptor);
+        auto quad = [&](const glm::vec2& at, const glm::vec2& half, ImVec2 uv0, ImVec2 uv1) {
+            ImVec2 p0, p1;
+            toScreen(at.x - half.x, at.y - half.y, at.x + half.x, at.y + half.y, p0, p1);
+            drawList->AddImage(id, p0, p1, uv0, uv1);
+        };
+        // The dots so far, then the start's mark and the end's (0x00408e10).
+        const int shown = lr::dotsShown(static_cast<int>(routeDots_.size()), loadProgress);
+        for (int i = 0; i < shown; ++i)
+            quad(routeDots_[static_cast<size_t>(i)], lr::kDotHalf, ImVec2(0.0f, 0.5f), ImVec2(0.5f, 1.0f));
+        quad(routeStart_, lr::kMarkHalf, ImVec2(0.5f, 0.0f), ImVec2(1.0f, 0.5f));
+        quad(routeEnd_, lr::kMarkHalf, ImVec2(0.0f, 0.0f), ImVec2(0.5f, 0.5f));
+    }
+    drawList->PopClipRect();
+    // The bar over it, as on any loading screen.
+    for (size_t i = 0; i < ls::kBar.size(); ++i) {
+        if (!bar_[i].descriptor) continue;
+        const ls::Rect r = ls::barPieceRect(ls::kBar[i], loadProgress);
+        ImVec2 p0, p1;
+        toScreen(r.x0, r.y0, r.x1, r.y1, p0, p1);
+        if (p1.x <= p0.x) continue;
+        drawList->AddImage(reinterpret_cast<ImTextureID>(bar_[i].descriptor), p0, p1);
+    }
+}
+
 void LoadingScreen::drawPicture(ImDrawList* drawList, float screenW, float screenH) const {
+    if (routeReady_) {
+        drawRoute(drawList, screenW, screenH);
+        return;
+    }
     // 0x0040a270: the screen black, the picture in a viewport of its own
     // shape, and on it the bar - its fill, then its border (0x004090c0).
     namespace ls = loading_screen;

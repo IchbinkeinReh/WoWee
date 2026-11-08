@@ -26,6 +26,7 @@
 #include <glm/gtx/quaternion.hpp>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <optional>
 #include <zlib.h>
@@ -942,6 +943,20 @@ void MovementHandler::sendMovement(Opcode opcode) {
         movementInfo.flags &= ~static_cast<uint32_t>(MovementFlags::ONTRANSPORT);
         movementInfo.transportGuid = 0;
         movementInfo.transportSeat = -1;
+    }
+    {
+        // WOWEE_FLOOR_DEBUG: what a jump and a landing tell the server, which
+        // reckons fall damage from the world height between them.
+        static const bool kFallDebug = [] {
+            const char* v = std::getenv("WOWEE_FLOOR_DEBUG");
+            return v && v[0] && v[0] != '0';
+        }();
+        if (kFallDebug && moverIsPlayer &&
+            (opcode == Opcode::MSG_MOVE_JUMP || opcode == Opcode::MSG_MOVE_FALL_LAND)) {
+            LOG_WARNING("FALL SENT: ", opcode == Opcode::MSG_MOVE_JUMP ? "JUMP" : "FALL_LAND", " z=", movementInfo.z,
+                        " fallTime=", movementInfo.fallTime, " transport=", includeTransportInWire ? 1 : 0,
+                        " tz=", movementInfo.transportZ);
+        }
     }
 
     if (opcode == Opcode::MSG_MOVE_HEARTBEAT && isClassicLikeExpansion()) {
@@ -2580,12 +2595,14 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
 // teleport from a transport has none: the server took the player off it.
 void MovementHandler::handleTransferPending(network::Packet& packet) {
     transferPendingOnTransport_ = false;
+    transportTransfer_.reset();
     if (!packet.hasRemaining(4)) { packet.skipAll(); return; }
     const uint32_t pendingMapId = packet.readUInt32();
     if (packet.hasRemaining(8)) {
         const uint32_t transportEntry = packet.readUInt32();
         const uint32_t transportMapId = packet.readUInt32();
         transferPendingOnTransport_ = true;
+        transportTransfer_ = TransportTransfer{transportEntry, transportMapId};
         LOG_INFO("SMSG_TRANSFER_PENDING: map ", pendingMapId, " on transport ", transportEntry,
                  " from map ", transportMapId);
     }
