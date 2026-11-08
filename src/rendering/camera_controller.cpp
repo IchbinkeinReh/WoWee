@@ -4129,9 +4129,20 @@ void CameraController::update(float deltaTime) {
         // Jump. Not in flight, where space climbs - and where grounded is held
         // true only to keep the fall-damage checks quiet, so every press sent
         // the server a jump from mid-air.
-        if (nowJump && !wasJumping && grounded && !isFlightAirborne()) {
+        //
+        // Nor only when the fall checks here call the feet grounded: on a lift
+        // running down at 27 yd/s the deck drops away from them between the
+        // application's placements, and a jump there went out as no jump at
+        // all. The server then measured the fall from the last place it had
+        // been told of - the top of the shaft, where the rider boarded - to
+        // the landing at the bottom, and killed the player. The client never
+        // marks a passenger standing on its transport as falling, so it jumps
+        // from the deck with MSG_MOVE_JUMP (fall time 0, its height now) and
+        // the server measures from there.
+        if (nowJump && !wasJumping && (grounded || deckHeld_) && !isFlightAirborne()) {
             movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_JUMP));
         }
+        deckHeld_ = false;
 
         // Fall landing, for a fall that actually happened.
         //

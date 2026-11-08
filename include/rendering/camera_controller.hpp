@@ -186,7 +186,11 @@ public:
     // silently built up over the whole ride would then unleash all at once the
     // instant the external Z lock releases at disembark, clipping the player
     // through the floor.
-    void suppressVerticalPhysics() { verticalVelocity = 0.0f; grounded = true; }
+    void suppressVerticalPhysics() {
+        verticalVelocity = 0.0f;
+        grounded = true;
+        deckHeld_ = true;
+    }
     [[nodiscard]] bool isJumpKeyPressed() const { return jumpBufferTimer > 0.0f; }
     [[nodiscard]] float collisionHeight() const { return collisionHeight_; }
     [[nodiscard]] bool isMovingForward() const { return moveForwardActive; }
@@ -643,6 +647,10 @@ private:
     /// been switched off for the session after a runaway fall.
     collision::SafePlace portSafe_;
     bool portAborted_ = false;
+    /// The transport's deck held the rider where the application last placed
+    /// it (suppressVerticalPhysics): standing on a lift, however fast it runs
+    /// down, which the fall checks here read as the floor dropping away.
+    bool deckHeld_ = false;
     collision::Facet portBlocking_;
     float portDebugTimer_ = 0.0f;
 
