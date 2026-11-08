@@ -837,6 +837,15 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     bool hasRendererData = renderer_ && (renderer_->getWMORenderer() || renderer_->getM2Renderer());
     if (loadedMapId_ != 0xFFFFFFFF || hasRendererData) {
         LOG_WARNING("Map change: cleaning up old map ", loadedMapId_, " before loading map ", mapId);
+        // A far move on the same map is rebuilt here as a map change, but to
+        // the server nothing left: what it shows the whole map - Undercity's
+        // lifts and their gates are static transports it sends once - is
+        // still known to the client and never sent again. Dropped with the
+        // old world's instances and transports below, the lifts were gone
+        // after any teleport away and back until the next real map change.
+        // The known entities are spawned again into the rebuilt world, as
+        // after a lost device.
+        if (loadedMapId_ == mapId) respawnKnownEntitiesOnLoad_ = true;
 
         // Clear pending queues first (these don't touch GPU resources)
         entitySpawner_->clearAllQueues();
