@@ -6725,7 +6725,9 @@ static int lua_GetBattlegroundInfo(lua_State* L) {
 
     lua_pushstring(L, bg.name.c_str());
     lua_pushboolean(L, canEnter ? 1 : 0);
-    lua_pushboolean(L, 0);                       // isHoliday: world state not parsed
+    // isHoliday: the value of the world state the row names (0x00548d10).
+    const bool holiday = bg.holidayWorldState != 0 && gh->getWorldState(bg.holidayWorldState).value_or(0) != 0;
+    lua_pushboolean(L, holiday ? 1 : 0);
     lua_pushboolean(L, bg.mapCount > 1 ? 1 : 0); // several maps means a pool, i.e. random
     lua_pushnumber(L, bg.id);
     return 5;

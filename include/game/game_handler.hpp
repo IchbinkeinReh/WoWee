@@ -3820,6 +3820,9 @@ public:
         uint32_t    maxGroupSize = 0;
         uint32_t    minLevel = 0;
         uint32_t    maxLevel = 0;
+        /// HolidayWorldState (column 29, +0x34): the world state whose value
+        /// says the battleground is this weekend's holiday (0x00548d10).
+        uint32_t    holidayWorldState = 0;
         /// 3 = battleground, 4 = arena. The two share this table and the
         /// battleground list must not offer arenas.
         uint32_t    instanceType = 0;

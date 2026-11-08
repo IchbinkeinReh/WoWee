@@ -1282,6 +1282,13 @@ void InventoryHandler::lootItem(uint8_t slotIndex, bool confirmed) {
     }
 
     pendingLootActive_ = false;
+    // The item's pick-up sound as it is taken (0x00589140, 0x00589300).
+    for (const auto& item : owner_.getCurrentLoot().items) {
+        if (item.slotIndex != slotIndex) continue;
+        if (const auto* info = owner_.getItemInfo(item.itemId); info && info->valid)
+            playItemSound(info->displayInfoId, 0);
+        break;
+    }
     auto packet = AutostoreLootItemPacket::build(slotIndex);
     owner_.getSocket()->send(packet);
 }
@@ -1462,6 +1469,8 @@ void InventoryHandler::autoTakeLoot() {
             }
             continue;
         }
+        // Its pick-up sound, then the take (0x00588f90).
+        if (info && info->valid) playItemSound(info->displayInfoId, 0);
         owner_.getSocket()->send(AutostoreLootItemPacket::build(item.slotIndex));
     }
     autoLoot_ = false;
@@ -3197,6 +3206,11 @@ void InventoryHandler::splitItem(uint8_t srcBag, uint8_t srcSlot, uint8_t count)
     owner_.raiseUiError("Cannot split: no free inventory slots.");
 }
 
+void InventoryHandler::playItemSound(uint32_t displayInfoId, int which) {
+    if (auto* ac = owner_.services().audioCoordinator)
+        if (auto* sfx = ac->getUiSoundManager()) sfx->playItemSound(displayInfoId, which);
+}
+
 void InventoryHandler::triggerItemPushTutorials(uint64_t receiver, const ItemQueryResponseData& info,
                                                 uint8_t bagSlot, uint32_t slot) {
     // 0x00523900: only for a receiver this client knows.
@@ -3217,6 +3231,9 @@ void InventoryHandler::triggerItemPushTutorials(uint64_t receiver, const ItemQue
     in.playerClass = owner_.getPlayerClass();
     in.equipTutorialSeen = owner_.tutorials().flagged(0x37);
     for (uint32_t id : itemPushTutorials(in)) owner_.triggerTutorial(id);
+    // The item's put-down sound as it arrives in the player's bags
+    // (0x00523900 -> 0x004d0090(1)).
+    if (self) playItemSound(info.displayInfoId, 1);
     // 0x005d9540, from the container slot's handler (0x005d9790): an item of
     // a totem category arriving while that element's totem bar list holds
     // spells triggers tutorial 0x2e.

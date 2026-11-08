@@ -2310,6 +2310,7 @@ const GameHandler::BattlemasterEntry* GameHandler::getBattlemasterInfo(uint32_t 
                 e.id           = id;
                 e.name         = dbc->getString(i, 11);
                 e.maxGroupSize = dbc->getUInt32(i, 28);
+                e.holidayWorldState = dbc->getUInt32(i, 29);
                 e.minLevel     = dbc->getUInt32(i, 30);
                 e.maxLevel     = dbc->getUInt32(i, 31);
                 // Fields 1-8 are map ids, 0xFFFFFFFF where unused, and field 9

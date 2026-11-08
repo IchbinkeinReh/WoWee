@@ -967,6 +967,8 @@ private:
     bool autoLoot_ = false;
     void lootReady();
     void beginOpenItem();
+    /// An item's own sound, 0 picked up, 1 put down (0x004d0090).
+    void playItemSound(uint32_t displayInfoId, int which);
     bool autoSellGrey_ = false;
     bool autoRepair_ = false;
     LootResponseData currentLoot_;

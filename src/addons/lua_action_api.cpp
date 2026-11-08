@@ -187,19 +187,51 @@ static std::string equipmentSetIcon(const game::EquipmentSetInfo* set);
 /// sides; the kind that hands an item back to the world, 1, plays nothing).
 /// All three names are rows of SoundEntries.dbc, which is how they are asked
 /// here too.
-static void askCursorSound(lua_State* L, CursorType type, bool pickedUp) {
+/// The display of the item on the cursor, for its sound as it is put down.
+static uint32_t s_cursorItemDisplay = 0;
+
+static bool cursorHoldsItem(CursorType type) {
+    return type == CursorType::ITEM || type == CursorType::MERCHANT || type == CursorType::GUILDBANK ||
+           type == CursorType::AMMO;
+}
+
+static audio::UiSoundManager* cursorSounds(lua_State* L) {
     // Silent while the interface is building itself, as PlaySound is.
-    if (LuaEngine::uiSoundsSuppressed()) return;
+    if (LuaEngine::uiSoundsSuppressed()) return nullptr;
     auto* svc = getLuaServices(L);
     auto* ac = svc ? svc->audioCoordinator : nullptr;
-    auto* sfx = ac ? ac->getUiSoundManager() : nullptr;
+    return ac ? ac->getUiSoundManager() : nullptr;
+}
+
+static void askCursorSound(lua_State* L, CursorType type, bool pickedUp) {
+    auto* sfx = cursorSounds(L);
     if (!sfx) return;
     if (type == CursorType::MONEY) {
         sfx->playByName("LOOTWINDOWCOINSOUND");
         return;
     }
+    if (cursorHoldsItem(type)) {
+        // An item makes its own sound (0x004d0090): picked up, its
+        // ItemGroupSounds' first - played where the item is known
+        // (cursorItemPickedUp) - and nothing more; put down, its second and
+        // then the drop (0x00519280 cases 5, 6, 7, 9 and 0xb).
+        if (pickedUp) return;
+        if (s_cursorItemDisplay != 0) sfx->playItemSound(s_cursorItemDisplay, 1);
+        s_cursorItemDisplay = 0;
+        sfx->playByName("INTERFACESOUND_CURSORDROPOBJECT");
+        return;
+    }
     sfx->playByName(pickedUp ? "INTERFACESOUND_CURSORGRABOBJECT"
                              : "INTERFACESOUND_CURSORDROPOBJECT");
+}
+
+/// The item just put on the cursor: its pick-up sound (0x00520d30,
+/// 0x00522fb0), and its display kept for the drop.
+static void cursorItemPickedUp(lua_State* L, uint32_t itemId) {
+    auto* gh = getGameHandler(L);
+    const auto* info = gh && itemId != 0 ? gh->getItemInfo(itemId) : nullptr;
+    s_cursorItemDisplay = info ? info->displayInfoId : 0;
+    if (auto* sfx = cursorSounds(L); sfx && s_cursorItemDisplay != 0) sfx->playItemSound(s_cursorItemDisplay, 0);
 }
 
 static void setCursorType(lua_State* L, CursorType type) {
@@ -1631,6 +1663,7 @@ static int lua_PickupGuildBankItem(lua_State* L) {
         if (it.slotId != slot - 1 || it.itemEntry == 0) continue;
         setCursorType(L, CursorType::GUILDBANK);
         s_cursorId = it.itemEntry;
+        cursorItemPickedUp(L, it.itemEntry);
         s_cursorBag = tab;
         s_cursorSlot = slot;
         s_cursorSplit = 0;   // the whole stack, unless SplitGuildBankItem says otherwise
@@ -1811,6 +1844,11 @@ void pickupMerchantItem(lua_State* L, int index) {
         if (index <= static_cast<int>(items.size())) {
             ui::frameXmlSetCursorItem(
                 gh->getItemIconPath(items[index - 1].displayInfoId));
+            // Its pick-up sound, by the display the vendor list names
+            // (0x00522fb0).
+            s_cursorItemDisplay = items[index - 1].displayInfoId;
+            if (auto* sfx = cursorSounds(L); sfx && s_cursorItemDisplay != 0)
+                sfx->playItemSound(s_cursorItemDisplay, 0);
         }
     }
 }
@@ -1859,6 +1897,7 @@ static void pickupFromContainerSlot(lua_State* L, game::GameHandler* gh,
     if (itemSlot && !itemSlot->empty()) {
         setCursorType(L, CursorType::ITEM);
         s_cursorId = itemSlot->item.itemId;
+        cursorItemPickedUp(L, itemSlot->item.itemId);
         s_cursorBag = bag;
         s_cursorSlot = slot;
         uint32_t displayId = itemSlot->item.displayInfoId;
@@ -2303,6 +2342,7 @@ static int lua_PickupBagFromSlot(lua_State* L) {
     }
     setCursorType(L, CursorType::ITEM);
     s_cursorId = held.item.itemId;
+    cursorItemPickedUp(L, held.item.itemId);
     s_cursorSlot = slot;
     s_cursorBag = -1;
     // The shared cursor as well as this file's own. Everything that receives a
@@ -2373,6 +2413,7 @@ static int lua_PickupInventoryItem(lua_State* L) {
         }
         setCursorType(L, CursorType::AMMO);
         s_cursorId = ammo;
+        cursorItemPickedUp(L, ammo);
         s_cursorSlot = 0;
         s_cursorBag = -1;
         uint32_t displayId = 0;
@@ -2409,6 +2450,7 @@ static int lua_PickupInventoryItem(lua_State* L) {
     if (!eq.empty()) {
         setCursorType(L, CursorType::ITEM);
         s_cursorId = eq.item.itemId;
+        cursorItemPickedUp(L, eq.item.itemId);
         s_cursorSlot = slot;
         s_cursorBag = -1;
         // The same three things a container pickup does, which this had none
