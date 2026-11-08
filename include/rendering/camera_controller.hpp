@@ -621,6 +621,12 @@ private:
     bool portMovedThisStep_ = false;
     collision::Mover portMover_;
     bool portBlocked_ = false;
+    bool portWorldReady_ = false;
+    /// The test safety: where the unit last stood, and whether the port has
+    /// been switched off for the session after a runaway fall.
+    glm::vec3 portSafePos_{0.0f};
+    bool portSafeValid_ = false;
+    bool portAborted_ = false;
     collision::Facet portBlocking_;
     float portDebugTimer_ = 0.0f;
 

@@ -55,6 +55,22 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
     // The mover follows the character wherever something else put it (a
     // teleport, a transport); its stepping state only holds where it left it.
     if (glm::length(m.pos - from) > 0.01f) m.stepping = false;
+    // The client does not move a unit before the world round it is loaded
+    // (it is behind the loading screen). Here buildings stream in after the
+    // player is placed, and a fall through a floor not loaded yet goes on
+    // until the unit dies: so after a jump in position, hold still until
+    // there is something within reach below.
+    if (glm::length(m.pos - from) > 5.0f) portWorldReady_ = false;
+    if (!portWorldReady_) {
+        std::vector<collision::Facet> below;
+        gatherPortFacets(from - glm::vec3(1.0f, 1.0f, 30.0f), from + glm::vec3(1.0f, 1.0f, 2.0f), below);
+        if (below.empty()) {
+            m.pos = from;
+            verticalVelocity = 0.0f;
+            return from;
+        }
+        portWorldReady_ = true;
+    }
     m.pos = from;
     const uint32_t ms = std::max<uint32_t>(1u, static_cast<uint32_t>(std::lround(dt * 1000.0f)));
     const glm::vec2 horiz(wanted.x - from.x, wanted.y - from.y);
@@ -69,6 +85,14 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
             how = "walk";
             if (r.blocked) portBlocking_ = r.blocking;
             portBlocked_ = r.blocked;
+        } else if (m.stepping) {
+            // Stopping while stepping up something: 0x0098c8d0 (and its
+            // strafing twin 0x0098bf80) clears the stepping and, unless the
+            // unit swims, flies or rides (0x006eaba0), drops it from where
+            // it climbed to (0x00988370(0)).
+            collision::startFall(m);
+            fell = true;
+            how = "stopstep";
         } else {
             // Standing: kept on the ground as a walk's end keeps it.
             const auto down = sweeper.run(m, glm::vec3(0.0f, 0.0f, -1.0f), 0.05f);
@@ -79,6 +103,10 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
             }
         }
         verticalVelocity = 0.0f;
+        if (!fell) {
+            portSafePos_ = m.pos;
+            portSafeValid_ = true;
+        }
         if (fell) {
             grounded = false;
             // 0x00988370 leaves +0x8c and the direction as the walk had them.
@@ -100,6 +128,27 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
             m.fallDir = dist > 1e-6f ? horiz / dist : glm::vec2(0.0f);
         }
         const auto r = collision::fallStep(m, ms, m.fallSpeed * dt, m.fallDir, sweeper);
+        // A safety for testing the port, not the client's: a fall more than
+        // 40 yards below where the unit last stood, or one with nothing at
+        // all below it, is a fault of the port. Stop using it for the rest
+        // of the session and put the character back where it stood; the
+        // movement this client had before takes over.
+        if (!r.landed && m.falling && portSafeValid_) {
+            std::vector<collision::Facet> below;
+            gatherPortFacets(m.pos - glm::vec3(1.0f, 1.0f, 60.0f), m.pos + glm::vec3(1.0f, 1.0f, 1.0f), below);
+            if (m.pos.z < portSafePos_.z - 40.0f || below.empty()) {
+                LOG_WARNING("PORT ABORT: fell to (", m.pos.x, ", ", m.pos.y, ", ", m.pos.z, ") from (",
+                            portSafePos_.x, ", ", portSafePos_.y, ", ", portSafePos_.z, "), facets below ",
+                            below.size(), " - collision port off for this session");
+                portAborted_ = true;
+                m = collision::Mover{};
+                m.pos = portSafePos_;
+                verticalVelocity = 0.0f;
+                grounded = true;
+                lastGroundZ = portSafePos_.z;
+                return portSafePos_;
+            }
+        }
         if (r.landed || !m.falling) {
             grounded = true;
             verticalVelocity = 0.0f;
@@ -1111,7 +1160,7 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
     // The collision port, behind its toggle: the client's own movement makes
     // the move, and none of the heuristics below or in the grounding runs.
     portMovedThisStep_ = false;
-    if (collision::portEnabled() && !externalFollow_ && !swimming && !isFlightAirborne() &&
+    if (collision::portEnabled() && !portAborted_ && !externalFollow_ && !swimming && !isFlightAirborne() &&
         !gravityDisabled_ && !waterWalkActive_ && !groundNotStreamedYet(targetPos.x, targetPos.y)) {
         targetPos = portMove(*followTarget, targetPos, f.physicsDeltaTime);
         portMovedThisStep_ = true;
