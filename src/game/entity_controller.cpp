@@ -28,6 +28,7 @@
 #include "rendering/animation_controller.hpp"
 #include <algorithm>
 #include <bit>
+#include <optional>
 #include <set>
 #include <cstring>
 #include <zlib.h>
@@ -2848,6 +2849,8 @@ void EntityController::onCreateGameObject(const UpdateBlock& block, std::shared_
                  " displayId=", go->getDisplayId(),
                  " pos=(", go->getX(), ", ", go->getY(), ", ", go->getZ(), ")");
         // Note: TransportSpawnCallback will be invoked from Application after WMO instance is created
+        // Where on its route the server has it, from this block.
+        applyTransportRouteClock(block);
     }
     if (go->getDisplayId() != 0 && owner_.gameObjectSpawnCallbackRef()) {
         float goScale = 1.0f;
@@ -3714,22 +3717,57 @@ void EntityController::applyTransportRouteClock(const UpdateBlock& block) {
     //
     // Both fields are WotLK-only. Nothing earlier published a transport's phase,
     // so on those expansions fieldIndex returns 0xFFFF and this does nothing.
+    //
+    // The create block says it exactly: a moving transport's UPDATEFLAG_TRANSPORT
+    // time is its path progress in milliseconds (the server's
+    // MotionTransport::GetPathProgress, counted from its start and never
+    // wrapped), so the place on the route is that modulo the period. DYNAMIC's
+    // 16-bit fraction is that progress over the period, cast to int16: past
+    // half a period after the server started it no longer fits and comes out
+    // negative, so on a server that has run a while it never said anything -
+    // the Thundercaller ran on a clock of its own, arriving at the end of its
+    // map-0 leg twenty seconds before the server moved its passengers to
+    // Kalimdor on one trip and still docked when it did on the next.
+    //
+    // Not only for a registered transport: the create block comes before the
+    // model has loaded, and applyServerRouteClock holds it until then.
     auto* tm = owner_.getTransportManager();
-    if (!tm || !tm->getTransport(block.guid)) return;
+    if (!tm || !transportGuids_.count(block.guid)) return;
+    // A moving transport only (GAMEOBJECT_TYPE_MO_TRANSPORT, BYTES_1 byte 1):
+    // a lift's DYNAMIC is its progress to or from its pause, not a route's.
+    constexpr uint32_t kMoTransport = 15;
+    const uint16_t ufBytes1 = fieldIndex(UF::GAMEOBJECT_BYTES_1);
+    if (ufBytes1 == 0xFFFF) return;
+    std::optional<uint32_t> bytes1;
+    if (auto it = block.fields.find(ufBytes1); it != block.fields.end()) {
+        bytes1 = it->second;
+    } else if (auto e = owner_.getEntityManager().getEntity(block.guid); e && e->hasField(ufBytes1)) {
+        bytes1 = e->getField(ufBytes1);
+    }
+    if (!bytes1 || ((*bytes1 >> 8) & 0xFF) != kMoTransport) return;
 
     const uint16_t ufLevel = fieldIndex(UF::GAMEOBJECT_LEVEL);
     const uint16_t ufDynamic = fieldIndex(UF::GAMEOBJECT_DYNAMIC);
-    if (ufLevel == 0xFFFF || ufDynamic == 0xFFFF) return;
+    if (ufLevel == 0xFFFF) return;
 
     auto itPeriod = block.fields.find(ufLevel);
-    auto itDynamic = block.fields.find(ufDynamic);
-    if (itPeriod == block.fields.end() || itDynamic == block.fields.end()) return;
-
+    if (itPeriod == block.fields.end()) return;
     const uint32_t periodMs = itPeriod->second;
+    if (periodMs == 0) return;
+
+    if (block.hasTransportTime && block.transportTime != 0) {
+        const float phase = static_cast<float>(block.transportTime % periodMs) / static_cast<float>(periodMs);
+        tm->applyServerRouteClock(block.guid, phase, periodMs);
+        return;
+    }
+
+    if (ufDynamic == 0xFFFF) return;
+    auto itDynamic = block.fields.find(ufDynamic);
+    if (itDynamic == block.fields.end()) return;
     // Signed on the wire: -1 means "this object has no path progress to report",
     // which every non-transport GameObject sends.
     const int16_t rawProgress = static_cast<int16_t>((itDynamic->second >> 16) & 0xFFFF);
-    if (periodMs == 0 || rawProgress < 0) return;
+    if (rawProgress < 0) return;
 
     const float phase = static_cast<float>(rawProgress) / 65535.0f;
     tm->applyServerRouteClock(block.guid, phase, periodMs);
