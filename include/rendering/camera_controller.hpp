@@ -568,6 +568,9 @@ private:
         glm::vec3 forward{0.0f};      ///< movement axes, flattened onto XY
         glm::vec3 right{0.0f};
         glm::vec3 forward3D{0.0f};    ///< the camera's own forward, with pitch
+        /// A swimmer's forward: its facing tilted by the unit's pitch
+        /// (swimPitchDeg_), not the camera's.
+        glm::vec3 swimForward3D{0.0f};
         glm::vec3 flightForward{0.0f};   ///< where W flies: the facing, at the flight pitch
         glm::vec3 movement{0.0f};     ///< the horizontal move this frame; the modes adjust it
         bool nowForward = false;
@@ -1138,6 +1141,8 @@ private:
     bool flyingActive_ = false;
     bool flightAirborne_ = false;
     float flightPitchDeg_ = 0.0f;
+    /// The swimming unit's pitch (mover +0x24), in degrees, nose up.
+    float swimPitchDeg_ = 0.0f;
     // Server-driven hover (HOVER flag): float at fixed height above ground.
     bool hoverActive_ = false;
     bool mounted_ = false;
