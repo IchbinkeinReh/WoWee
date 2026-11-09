@@ -7505,6 +7505,30 @@ void LuaEngine::registerCoreAPI() {
             return 9;
         });
         lua_setglobal(L_, "__WoweeTestNearestTransport");
+        // __WoweeTestTargetEntry(entry, radius): the nearest non-player unit of
+        // that creature entry within radius yards made the target - for a
+        // scripted run to select the temporary spawn it made and remove it
+        // again. Its guid, or nothing.
+        lua_pushcfunction(L_, [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (!gh) return 0;
+            const uint32_t entry = static_cast<uint32_t>(luaL_checkinteger(L, 1));
+            const float radius = static_cast<float>(luaL_optnumber(L, 2, 5.0));
+            const auto& mi = gh->getMovementInfo();
+            uint64_t best = 0;
+            float bestD = radius;
+            for (const auto& [guid, e] : gh->getEntityManager().getEntities()) {
+                if (!e || e->getType() != wowee::game::ObjectType::UNIT) continue;
+                const auto* u = static_cast<const wowee::game::Unit*>(e.get());
+                if (u->getEntry() != entry) continue;
+                const float d = std::hypot(e->getX() - mi.x, e->getY() - mi.y);
+                if (d <= bestD) { bestD = d; best = guid; }
+            }
+            if (best == 0 || !gh->targetUnit(best)) return 0;
+            lua_pushstring(L, std::to_string(best).c_str());
+            return 1;
+        });
+        lua_setglobal(L_, "__WoweeTestTargetEntry");
     }
 
     // The micro menu's game-menu button reaches this client's own settings.
