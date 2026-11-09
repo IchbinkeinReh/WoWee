@@ -51,6 +51,9 @@ const uint RT_GB_TRANSITION = 64u; // a WMO transition batch's two passes in
                                    // one: the sun's shade scales only the
                                    // outside pass's share, the baked shade
                                    // only the inside pass's (rtSurfaceMix)
+// Not a transition, in the outside share's bits (RtSurface::storeyBound):
+const uint RT_GB_SHARE_STOREY = 1u;   // a building's baked colour
+const uint RT_GB_SHARE_TERRAIN = 2u;  // the ground
 
 vec2 rtOctEncode(vec3 n) {
     n /= abs(n.x) + abs(n.y) + abs(n.z);
@@ -76,9 +79,11 @@ struct RtSurface {
     vec3 occE;     // E
     vec3 kp;       // Kp
     float outside; // RT_GB_TRANSITION: the outside pass's share of G
-    // Not a transition: 1 for a building's baked colour - an interior
+    // Not a transition: bit 0 for a building's baked colour - an interior
     // group's baked pass, an interior doodad's - which the building's own
-    // lights shade only from their storey (rt_light_storey.hpp, rt_trace).
+    // lights shade only from their storey (rt_light_storey.hpp, rt_trace);
+    // bit 1 (RT_GB_SHARE_TERRAIN) for the ground, whose smooth normal the
+    // lamps light it by (rt_trace).
     uint storeyBound;
 };
 
@@ -145,7 +150,7 @@ void rtSurfacePack(RtSurface s, vec3 c0, out vec4 gb0, out vec4 gb1) {
                      s.occY.g > 1e-6 ? s.occE.g / s.occY.g : 1.0,
                      s.occY.b > 1e-6 ? s.occE.b / s.occY.b : 1.0);
     vec3 kp = s.kp * 0.5;
-    uint f = (s.flags & RT_GB_TRANSITION) != 0u ? rtBits6(s.outside) : (s.storeyBound != 0u ? 1u : 0u);
+    uint f = (s.flags & RT_GB_TRANSITION) != 0u ? rtBits6(s.outside) : (s.storeyBound & 3u);
     uint w0 = rtBits10(oct.x) | (rtBits5(knee.r) << 10) | ((f & 1u) << 15);
     uint w1 = rtBits10(oct.y) | (rtBits5(knee.g) << 10) | (((f >> 1) & 1u) << 15);
     uint w2 = rtByte(s.map) | ((s.flags & 127u) << 8) | (((f >> 2) & 1u) << 15);

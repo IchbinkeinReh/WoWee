@@ -239,7 +239,11 @@ void main() {
     vec3 n = rtGbufNormal(g);
     vec4 normalIn = imageLoad(uPointOut, px);
     vec3 shadingN = rtOctDecode(normalIn.xy);
-    bool storeyBound = normalIn.z > 0.5;
+    // rt_prepare's share bits (RtSurface::storeyBound): a building's baked
+    // colour, or the ground.
+    uint shareBits = uint(normalIn.z + 0.5);
+    bool storeyBound = (shareBits & RT_GB_SHARE_STOREY) != 0u;
+    bool terrain = (shareBits & RT_GB_SHARE_TERRAIN) != 0u;
     // A room's baked colour: its normal already blended toward its face in
     // the G-buffer (rtInteriorLampNormal), so not again here.
     bool normalResolved = normalIn.w > 0.5;
@@ -337,7 +341,7 @@ void main() {
     // smoothing stays: their normals lie within some fifteen degrees of
     // their faces (rtNormalAgreement). A room's baked colour comes with the
     // same rule applied already, to its vertex normal (normalResolved).
-    vec3 lightN = normalize(mix(n, shadingN, normalResolved ? 1.0 : rtNormalAgreement(n, shadingN, pass.tune4.xy)));
+    vec3 lightN = normalize(mix(n, shadingN, (normalResolved || terrain) ? 1.0 : rtNormalAgreement(n, shadingN, pass.tune4.xy)));
     // What "behind the surface" and "a lamp low over it" below are measured
     // against: a floor's face, as they were written for (a plank, a step, a
     // curb); a room's wall its smooth normal (rtInteriorLampNormal leaves
@@ -356,7 +360,15 @@ void main() {
     // where it was smoothed with the walls. Measured by the face, a low light
     // lit a cave floor triangle by triangle (the Pools of Vision).
     float floorLean = smoothstep(RT_FLOOR_BUMP_COS, RT_FLOOR_LEAN_COS, dot(n, lightN));
-    vec3 faceRef = n.z >= RT_NORMAL_FLOOR_Z ? (normalResolved ? lightN : normalize(mix(n, lightN, floorLean))) : normalResolved ? lightN : normalize(n + lightN);
+    // The ground by its smooth normal outright: a heightfield's vertex
+    // normals are the shape of the hill its triangles cut through, not a
+    // building floor's smoothed with its walls. Measured by the faces, a lamp
+    // low over the ground - Camp Narache's tauren lamp posts, their flames
+    // half a yard up - lit the triangles a degree or two turned toward it and
+    // faded those turned away, and the edge of its light ran round it as a
+    // ring of hard triangular wedges.
+    vec3 faceRef = (normalResolved || terrain) ? lightN
+                 : n.z >= RT_NORMAL_FLOOR_Z ? normalize(mix(n, lightN, floorLean)) : normalize(n + lightN);
     vec3 pointSum = vec3(0.0);
     float bakedSum = 0.0;
     float weightSum = 0.0;
@@ -392,7 +404,7 @@ void main() {
         // boards the light still fell on. A cave's facet turned from a lamp its
         // smooth normal faces keeps it the other way round.
         float faceFade = 1.0;
-        float faceRise = d > 1e-4 ? dot(n, toLight) / d : 1.0;
+        float faceRise = d > 1e-4 ? dot(terrain ? faceRef : n, toLight) / d : 1.0;
         if (d > 1e-4 && n.z >= RT_NORMAL_FLOOR_Z) {
             faceFade = smoothstep(RT_FLOOR_FACE_FADE_LOW, RT_FLOOR_FACE_FADE_HIGH,
                                   max(dot(faceRef, toLight) / d, faceRise));
