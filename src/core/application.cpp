@@ -5536,7 +5536,15 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
             gameHandler->update(deltaTime);
         }
     });
-    if (addonManager_ && addonsLoaded_) {
+    // Not behind the loading screen. The client loads a world inside one
+    // call (0x00403b70 -> 0x00781430) whose progress callbacks (0x0040aef0,
+    // 0x0040af40 -> 0x0040a920) pump the sound and draw the loading screen
+    // and nothing else: no frame's OnUpdate runs until the screen is gone.
+    // The world settling behind it here (stepWorldSettle) ran them, and a
+    // script's timer ran out there - a jump it pressed went to a mover held
+    // still behind the screen, and neither the jump nor its MSG_MOVE_JUMP
+    // happened.
+    if (addonManager_ && addonsLoaded_ && !settleScreen_) {
         addonManager_->update(deltaTime);
     }
     inGameStep = "auto-unsheathe";
