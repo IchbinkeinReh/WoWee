@@ -1244,6 +1244,21 @@ TEST_CASE("An edit box is built as it was declared", "[framexml][emit]") {
     REQUIRE(has(lua, ":SetMultiLine(true)"));
 }
 
+TEST_CASE("A password box, its caret's blink and a message frame's fade are carried",
+          "[framexml][emit]") {
+    // CSimpleEditBox reads password="" and blinkSpeed="" (never below zero),
+    // CSimpleScrollingMessageFrame reads fade="", and a maxLines that is not
+    // a positive number is left out, as the client skips it.
+    XmlNode root = parseOrFail(
+        "<Ui><EditBox name=\"P\" password=\"true\" blinkSpeed=\"-2\"/>"
+        "<ScrollingMessageFrame name=\"M\" fade=\"false\" maxLines=\"0\"/></Ui>");
+    const std::string lua = emitFrameXml(root).lua;
+    REQUIRE(has(lua, ":SetPassword(true)"));
+    REQUIRE(has(lua, ":SetBlinkSpeed(0.0"));
+    REQUIRE(has(lua, ":SetFading(false)"));
+    REQUIRE_FALSE(has(lua, ":SetMaxLines"));
+}
+
 TEST_CASE("An edit box that says nothing about itself is left alone",
           "[framexml][emit]") {
     // The defaults belong to the widget, not to the emitter: writing

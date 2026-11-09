@@ -458,6 +458,13 @@ struct Widget {
     /// default is no, and four boxes in the interface ask for yes - the macro
     /// editor among them, where the escapes are the point.
     bool  countInvisibleLetters = false;
+    /// SetPassword / password="true" (CSimpleEditBox flag 8): the text drawn
+    /// as one '*' a byte, and copying it puts nothing on the clipboard.
+    bool  editPassword = false;
+    /// SetBlinkSpeed / blinkSpeed="": the caret shows and hides once every
+    /// this many seconds, 0.5 from the constructor (0x00966b70); 0 never
+    /// blinks.
+    float editBlinkSpeed = 0.5f;
 
     /// Whether a label too long for its box breaks onto another line. On, as
     /// WoW has it - a FontString given a width wraps inside it, and nothing
@@ -560,6 +567,12 @@ struct Widget {
     /// Whether a new message goes above the ones already there. UIErrorsFrame
     /// asks for insertMode="TOP"; a chat frame does not.
     bool  messagesInsertTop = false;
+    /// SetFading / fade="": whether lines fade at all once their time is up -
+    /// on from the constructor (0x0096a2f0).
+    bool  messageFading = true;
+    /// GetCurrentLine: the slot of the newest line in the client's ring of
+    /// maxLines (+0x2c4), -1 with none.
+    int   messageRingLine = -1;
     /// Extra space between message lines, which SetPadding sets. WoW's default
     /// is none; the 15% used here is the leading a line already carries.
     float messagePadding = 0.0f;

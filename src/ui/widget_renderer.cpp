@@ -59,6 +59,13 @@ uint32_t textureColor(const Widget& w) {
 using TextRun = wowee::ui::WrapRun;
 using wowee::ui::parseMarkup;
 
+/// Whether a focused edit box's caret is showing: it shows and hides once
+/// every blink-speed seconds, and a speed of 0 leaves it shown (0x00967670).
+bool caretBlinkOn(const Widget& w) {
+    if (!(w.editBlinkSpeed > 0.0f)) return true;
+    return std::fmod(ImGui::GetTime(), 2.0 * w.editBlinkSpeed) < w.editBlinkSpeed;
+}
+
 /// The same string with every escape taken out, for measuring.
 std::string strippedText(const std::string& in) {
     std::string out;
@@ -2807,14 +2814,19 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 const float boxBottom = y1 - w->textInsetBottom * s;
                 const float ty = boxTop + ((boxBottom - boxTop) - size) * 0.5f;
                 const float pad = w->textInsetLeft * s;
+                // A password box draws a '*' for each byte it holds
+                // (0x00966710: '*' over the text's length).
+                const std::string masked = w->editPassword
+                    ? std::string(w->editText.size(), '*') : std::string();
+                const std::string& shown = w->editPassword ? masked : w->editText;
                 // The highlighted run, under the words: Shift with the arrows,
                 // Ctrl+A, or HighlightText from the interface. Measured against
                 // what is drawn, as the caret is below. Only while the box has
                 // focus, which is the only time the run means anything.
                 if (w->editFocused && w->hasSelection && w->selEnd > w->selStart &&
                     font && w->selEnd <= w->editText.size()) {
-                    const std::string before = strippedText(w->editText.substr(0, w->selStart));
-                    const std::string upTo = strippedText(w->editText.substr(0, w->selEnd));
+                    const std::string before = strippedText(shown.substr(0, w->selStart));
+                    const std::string upTo = strippedText(shown.substr(0, w->selEnd));
                     const float sa = font->CalcTextSizeA(size, FLT_MAX, 0.0f, before.c_str()).x;
                     const float sb = font->CalcTextSizeA(size, FLT_MAX, 0.0f, upTo.c_str()).x;
                     if (sb > sa) {
@@ -2837,7 +2849,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                                        ImVec2(x0 + pad + w->shadowX * s,
                                               ty - w->shadowY * s),
                                        packColor(sc, w->alpha * w->shadowColor[3]),
-                                       w->alpha, w->editText, 0.0f, false,
+                                       w->alpha, shown, 0.0f, false,
                                        nullptr, true);
                     }
                     // Through the markup parser like everything else. An edit
@@ -2848,14 +2860,14 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     // Links are only clickable at all as of this branch, so
                     // this became reachable at the same moment.
                     drawMarkupText(dl, font, size, ImVec2(x0 + pad, ty), col,
-                                   w->alpha, w->editText);
+                                   w->alpha, shown);
                 }
-                if (w->editFocused) {
+                if (w->editFocused && caretBlinkOn(*w)) {
                     // Measured against what is drawn, not what is held. The
                     // caret sits after the text to its left, and to the left of
                     // a link is its display name - measuring the raw string
                     // would put the caret an escape sequence too far right.
-                    const std::string upTo = strippedText(w->editText.substr(
+                    const std::string upTo = strippedText(shown.substr(
                         0, std::min(w->cursorPos, w->editText.size())));
                     const float caret = font
                         ? font->CalcTextSizeA(size, FLT_MAX, 0.0f, upTo.c_str()).x

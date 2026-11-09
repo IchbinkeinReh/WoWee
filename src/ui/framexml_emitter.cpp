@@ -1088,13 +1088,18 @@ struct Emitter {
         // A message frame holds as many lines as it says it does. Twenty-two
         // of them ask for three; without this each kept a hundred and
         // twenty-eight and drew far past the box drawn for it.
-        if (const std::string* ml = node.attr("maxLines"); ml && !ml->empty()) {
-            line(var + ":SetMaxLines(" + *ml + ")");
+        if (const std::string* ml = node.attr("maxLines");
+            ml && !ml->empty() && node.attrFloat("maxLines", 0.0f) >= 1.0f) {
+            line(var + ":SetMaxLines(" + std::to_string(static_cast<int>(node.attrFloat("maxLines", 0.0f))) + ")");
         }
         // How long a line stays, and which end a new one goes on. UIErrorsFrame
         // declares displayDuration="5" and insertMode="TOP"; both were dropped,
         // so every server refusal stayed on screen for good and they stacked
         // upward from the wrong end.
+        // fade="" on a scrolling message frame: whether its lines fade at all.
+        if (node.attr("fade")) {
+            line(var + ":SetFading(" + (node.attrBool("fade") ? "true" : "false") + ")");
+        }
         if (const std::string* dd = node.attr("displayDuration"); dd && !dd->empty()) {
             line(var + ":SetTimeVisible(" + *dd + ")");
         }
@@ -1403,6 +1408,14 @@ struct Emitter {
         if (node.attr("spacing")) {
             line(var + ":SetSpacing(" +
                  std::to_string(static_cast<int>(node.attrFloat("spacing", 0.0f))) + ")");
+        }
+        // password="true" and blinkSpeed="" on an edit box (0x00966b70's
+        // loader): the latter never below zero.
+        if (node.attr("password")) {
+            line(var + ":SetPassword(" + (node.attrBool("password") ? "true" : "false") + ")");
+        }
+        if (const std::string* bs = node.attr("blinkSpeed"); bs && !bs->empty()) {
+            line(var + ":SetBlinkSpeed(" + std::to_string(std::max(0.0f, node.attrFloat("blinkSpeed", 0.0f))) + ")");
         }
         if (node.attr("autoFocus")) {
             line(var + ":SetAutoFocus(" + (node.attrBool("autoFocus") ? "true" : "false") + ")");

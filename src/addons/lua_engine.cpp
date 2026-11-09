@@ -2242,6 +2242,8 @@ int lua_MessageFrame_AddMessage(lua_State* L) {
     // A new line at the bottom means the view follows it, which is what a
     // chat frame does unless someone has scrolled up.
     if (w->messageScroll > 0) ++w->messageScroll;
+    // The slot the line took in the client's ring of maxLines.
+    w->messageRingLine = (w->messageRingLine + 1) % static_cast<int>(std::max<size_t>(w->maxMessages, 1));
     return 0;
 }
 /// GetMessageInfo(index[, accessID]) → text, accessID, lineID, extraData.
@@ -2289,9 +2291,17 @@ int lua_MessageFrame_RemoveMessagesByAccessID(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
     const double id = luaL_optnumber(L, 2, 0.0);
+    const size_t before = w->messages.size();
     for (auto it = w->messages.begin(); it != w->messages.end();) {
         if (it->accessId == id) it = w->messages.erase(it);
         else                    ++it;
+    }
+    // The ring closes up behind the newest line kept (0x0096a510).
+    if (w->messages.empty()) {
+        w->messageRingLine = -1;
+    } else if (const auto removed = static_cast<int>(before - w->messages.size()); removed > 0) {
+        w->messageRingLine -= removed;
+        if (w->messageRingLine < 0) w->messageRingLine += static_cast<int>(w->maxMessages);
     }
     return 0;
 }
@@ -4581,7 +4591,11 @@ int lua_Tooltip_NumLines(lua_State* L) {
 }
 
 int lua_MessageFrame_Clear(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) { w->messages.clear(); w->messageScroll = 0; }
+    if (auto* w = widgetOf(L, 1)) {
+        w->messages.clear();
+        w->messageScroll = 0;
+        w->messageRingLine = -1;
+    }
     return 0;
 }
 /// GetNumMessages([accessID]) - how many lines, or how many belonging to one
@@ -4606,11 +4620,17 @@ int lua_MessageFrame_GetNumMessages(lua_State* L) {
     lua_pushnumber(L, static_cast<lua_Number>(w->messages.size()));
     return 1;
 }
+/// SetMaxLines(maxLines) - a new ring of that many lines (0x009737f0 ->
+/// 0x009698e0): what the frame held is dropped with the old one.
 int lua_MessageFrame_SetMaxLines(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) {
-        const int n = static_cast<int>(luaL_optnumber(L, 2, 128));
-        w->maxMessages = (n > 0) ? static_cast<size_t>(n) : 1;
-    }
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    const int n = lua_isnumber(L, 2) ? static_cast<int>(lua_tonumber(L, 2)) : 0;
+    if (n <= 0) return luaL_error(L, "Usage: %s:SetMaxLines(maxLines)", w->name.c_str());
+    w->maxMessages = static_cast<size_t>(n);
+    w->messages.clear();
+    w->messageScroll = 0;
+    w->messageRingLine = -1;
     return 0;
 }
 int lua_MessageFrame_ScrollUp(lua_State* L) {
@@ -4634,6 +4654,7 @@ int lua_MessageFrame_ScrollToBottom(lua_State* L) {
 // The rest of ScrollingMessageFrame's scrolling (0x009732f0-0x009736f0). The
 // client counts in wrapped lines; this frame keeps its offset in messages, so
 // a page here is the messages the last draw fitted rather than its lines.
+
 namespace {
 int lastScroll(const wowee::ui::Widget& w) {
     return w.messages.empty() ? 0 : static_cast<int>(w.messages.size()) - 1;
@@ -5723,6 +5744,26 @@ int lua_Frame_SetNormalFontObject(lua_State* L) {
 int lua_Region_GetSize(lua_State* L);  // with GetChildren, below
 
 /// Attach the shared region methods to the table on top of the stack.
+/// FontString:GetShadowColor (0x0048d9e0) and GetShadowOffset (0x0048db20),
+/// CanNonSpaceWrap (0x0048e010).
+int lua_FontString_GetShadowColor(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    for (int i = 0; i < 4; ++i) lua_pushnumber(L, w ? static_cast<double>(std::lround(std::clamp(w->shadowColor[i], 0.0f, 1.0f) * 255.0f)) / 255.0 : (i == 3 ? 1.0 : 0.0));
+    return 4;
+}
+int lua_FontString_GetShadowOffset(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    const bool has = w && w->hasShadow;
+    lua_pushnumber(L, has ? w->shadowX : 0.0);
+    lua_pushnumber(L, has ? w->shadowY : 0.0);
+    return 2;
+}
+int lua_FontString_CanNonSpaceWrap(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->nonSpaceWrap);
+    return 1;
+}
+
 void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
     auto set = [&](const char* name, lua_CFunction fn) {
         lua_pushcfunction(L, fn);
@@ -5838,6 +5879,9 @@ void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
         set("SetWordWrap", lua_FontString_SetWordWrap);
         set("CanWordWrap", lua_FontString_CanWordWrap);
         set("SetNonSpaceWrap", lua_FontString_SetNonSpaceWrap);
+        set("CanNonSpaceWrap", lua_FontString_CanNonSpaceWrap);
+        set("GetShadowColor", lua_FontString_GetShadowColor);
+        set("GetShadowOffset", lua_FontString_GetShadowOffset);
     }
     // Anything still unimplemented stays a no-op rather than an error, which is
     // what keeps a large addon running while the surface is filled in.
@@ -7025,6 +7069,168 @@ int lua_StatusBar_SetOrientation(lua_State* L) {
     }
     return 0;
 }
+
+// ── Getters the client registers (each pushes what its setter stored) ──────
+namespace {
+/// A colour channel kept as a byte, as the client keeps it (0x00487ab0).
+double asByte(float c) {
+    return static_cast<double>(std::lround(std::clamp(c, 0.0f, 1.0f) * 255.0f)) * (1.0 / 255.0);
+}
+}  // namespace
+
+/// EditBox:IsAutoFocus/IsMultiLine/IsNumeric/IsPassword/IsCountInvisibleLetters
+/// - flags 1, 2, 4, 8 and 0x20 of +0x2a0 (0x00975a20 .. 0x00975ce0).
+int lua_EditBox_IsAutoFocus(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->editAutoFocus);
+    return 1;
+}
+int lua_EditBox_IsMultiLine(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->editMultiLine);
+    return 1;
+}
+int lua_EditBox_IsNumeric(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->editNumeric);
+    return 1;
+}
+int lua_EditBox_IsPassword(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->editPassword);
+    return 1;
+}
+int lua_EditBox_IsCountInvisibleLetters(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->countInvisibleLetters);
+    return 1;
+}
+/// SetPassword(on) (0x00975c90).
+int lua_EditBox_SetPassword(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->editPassword = lua_toboolean(L, 2) != 0;
+    return 0;
+}
+/// GetBlinkSpeed / SetBlinkSpeed(speed) (0x00975dc0, 0x00975d40).
+int lua_EditBox_GetBlinkSpeed(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->editBlinkSpeed : 0.5);
+    return 1;
+}
+int lua_EditBox_SetBlinkSpeed(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetBlinkSpeed(speed)", w->name.c_str());
+    w->editBlinkSpeed = static_cast<float>(lua_tonumber(L, 2));
+    return 0;
+}
+
+/// StatusBar/Slider:GetOrientation (0x00971240 through the table at 0x00a44040).
+int lua_StatusBar_GetOrientation(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushstring(L, (w && w->barVertical) ? "VERTICAL" : "HORIZONTAL");
+    return 1;
+}
+/// GetStatusBarColor (0x00971800): the bar texture's colour, white with none.
+int lua_StatusBar_GetStatusBarColor(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    const bool has = w && !w->barTexture.empty();
+    for (int i = 0; i < 4; ++i) lua_pushnumber(L, has ? asByte(w->barColor[i]) : 1.0);
+    return 4;
+}
+
+/// Frame:GetMinResize / GetMaxResize (0x004a0480, 0x004a0640).
+int lua_Frame_GetMinResize(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->minResizeW : 0.0);
+    lua_pushnumber(L, w ? w->minResizeH : 0.0);
+    return 2;
+}
+int lua_Frame_GetMaxResize(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->maxResizeW : 0.0);
+    lua_pushnumber(L, w ? w->maxResizeH : 0.0);
+    return 2;
+}
+/// GetClampRectInsets (0x004a0230): left, right, top, bottom.
+int lua_Frame_GetClampRectInsets(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->clampInsetL : 0.0);
+    lua_pushnumber(L, w ? w->clampInsetR : 0.0);
+    lua_pushnumber(L, w ? w->clampInsetT : 0.0);
+    lua_pushnumber(L, w ? w->clampInsetB : 0.0);
+    return 4;
+}
+/// IsMouseWheelEnabled (0x004a1160).
+int lua_Frame_IsMouseWheelEnabled(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->wheelEnabled);
+    return 1;
+}
+/// GetEffectiveAlpha (0x0049f900): the frame's alpha byte times its parent's
+/// effective one, over 255, as a fraction.
+int lua_Frame_GetEffectiveAlpha(lua_State* L) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    const auto* w = widgetOf(L, 1);
+    unsigned eff = 255;
+    std::vector<const wowee::ui::Widget*> chain;
+    for (const auto* p = w; p && tree && chain.size() < 256; p = p->parent ? tree->get(p->parent) : nullptr)
+        chain.push_back(p);
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+        const auto own = static_cast<unsigned>(std::lround(std::clamp((*it)->alpha, 0.0f, 1.0f) * 255.0f));
+        eff = (own * eff) / 255u;
+    }
+    lua_pushnumber(L, static_cast<double>(eff) * 0.00392156862745098);
+    return 1;
+}
+
+/// MessageFrame getters (0x00973750 .. 0x00973ca0) and SetFading (0x00973880).
+int lua_MessageFrame_GetCurrentLine(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->messageRingLine : -1);
+    return 1;
+}
+int lua_MessageFrame_GetMaxLines(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? static_cast<double>(w->maxMessages) : 0.0);
+    return 1;
+}
+int lua_MessageFrame_SetFading(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->messageFading = lua_toboolean(L, 2) != 0;
+    return 0;
+}
+int lua_MessageFrame_GetFading(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->messageFading);
+    return 1;
+}
+int lua_MessageFrame_GetFadeDuration(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->messageFadeDuration : 3.0);
+    return 1;
+}
+int lua_MessageFrame_GetInsertMode(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushstring(L, (w && w->messagesInsertTop) ? "TOP" : "BOTTOM");
+    return 1;
+}
+int lua_Frame_GetHyperlinksEnabled(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->hyperlinksEnabled);
+    return 1;
+}
+
+/// Cooldown:GetReverse / GetDrawEdge (0x005ec9f0, 0x005eca80): booleans.
+int lua_Cooldown_GetReverse(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushboolean(L, w && w->cooldownReverse);
+    return 1;
+}
+int lua_Cooldown_GetDrawEdge(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushboolean(L, w && w->cooldownDrawEdge);
+    return 1;
+}
+
 
 // Frame method: frame:CreateTexture(name, layer) → a real region
 static int lua_Frame_CreateTexture(lua_State* L) {
@@ -8226,6 +8432,33 @@ void LuaEngine::registerCoreAPI() {
         {"SetStatusBarTexture",   lua_StatusBar_SetStatusBarTexture},
         {"SetStatusBarColor",     lua_StatusBar_SetStatusBarColor},
         {"SetOrientation",        lua_StatusBar_SetOrientation},
+        {"GetOrientation",        lua_StatusBar_GetOrientation},
+        {"GetStatusBarColor",     lua_StatusBar_GetStatusBarColor},
+        {"IsAutoFocus",           lua_EditBox_IsAutoFocus},
+        {"IsMultiLine",           lua_EditBox_IsMultiLine},
+        {"IsNumeric",             lua_EditBox_IsNumeric},
+        {"IsPassword",            lua_EditBox_IsPassword},
+        {"SetPassword",           lua_EditBox_SetPassword},
+        {"IsCountInvisibleLetters", lua_EditBox_IsCountInvisibleLetters},
+        {"GetBlinkSpeed",         lua_EditBox_GetBlinkSpeed},
+        {"SetBlinkSpeed",         lua_EditBox_SetBlinkSpeed},
+        {"GetMinResize",          lua_Frame_GetMinResize},
+        {"GetMaxResize",          lua_Frame_GetMaxResize},
+        {"GetClampRectInsets",    lua_Frame_GetClampRectInsets},
+        {"IsMouseWheelEnabled",   lua_Frame_IsMouseWheelEnabled},
+        {"GetEffectiveAlpha",     lua_Frame_GetEffectiveAlpha},
+        {"GetCurrentLine",        lua_MessageFrame_GetCurrentLine},
+        {"GetMaxLines",           lua_MessageFrame_GetMaxLines},
+        {"SetFading",             lua_MessageFrame_SetFading},
+        {"GetFading",             lua_MessageFrame_GetFading},
+        {"GetFadeDuration",       lua_MessageFrame_GetFadeDuration},
+        {"GetInsertMode",         lua_MessageFrame_GetInsertMode},
+        {"GetHyperlinksEnabled",  lua_Frame_GetHyperlinksEnabled},
+        {"GetReverse",            lua_Cooldown_GetReverse},
+        {"GetDrawEdge",           lua_Cooldown_GetDrawEdge},
+        {"GetShadowColor",        lua_FontString_GetShadowColor},
+        {"GetShadowOffset",       lua_FontString_GetShadowOffset},
+        {"CanNonSpaceWrap",       lua_FontString_CanNonSpaceWrap},
         {"SetValueStep",          lua_Slider_SetValueStep},
         {"GetValueStep",          lua_Slider_GetValueStep},
         {"SetThumbTexture",       lua_Slider_SetThumbTexture},
@@ -12076,7 +12309,8 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
                      sdlKeycode == 'x' || sdlKeycode == 'X')) {
         // The highlighted run, or the whole line when nothing is highlighted -
         // which is what a player copying a link out of chat wants.
-        std::string text = w->editText;
+        // A password box copies nothing (0x009632d0 hands the clipboard "").
+        std::string text = w->editPassword ? std::string() : w->editText;
         const bool selected = w->hasSelection && w->selEnd > w->selStart &&
                               w->selEnd <= w->editText.size();
         if (w->hasSelection) {
@@ -12084,7 +12318,7 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
             const size_t to   = std::min(std::max(w->selStart, w->selEnd), text.size());
             text = (from < to) ? text.substr(from, to - from) : std::string();
         }
-        if (!text.empty()) SDL_SetClipboardText(text.c_str());
+        if (!text.empty() || w->editPassword) SDL_SetClipboardText(text.c_str());
         // Ctrl+X cuts, the highlighted run only - as the edit box's own key
         // handler does (0x00967760): with nothing highlighted it copies and
         // leaves the line alone.
@@ -13524,7 +13758,7 @@ void LuaEngine::runInterfaceProbe() {
 void LuaEngine::expireMessages(float elapsed) {
     for (size_t id = 1; id < widgets_.size(); ++id) {
         auto* w = widgets_.get(static_cast<uint32_t>(id));
-        if (!w || !w->isMessageFrame || w->messageDuration <= 0.0f) continue;
+        if (!w || !w->isMessageFrame || !w->messageFading || w->messageDuration <= 0.0f) continue;
         const bool readingBack = w->messageScroll > 0;
         const float life = w->messageDuration;
         const float fade = w->messageFadeDuration > 0.0f ? w->messageFadeDuration : 0.0f;
