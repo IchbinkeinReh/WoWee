@@ -200,6 +200,18 @@ inline OutgoingJump outgoingJumpBlock(uint32_t flags, float orientation, float w
     return j;
 }
 
+/// Whether a landing goes out as MSG_MOVE_FALL_LAND: only one that ends a
+/// fall. The client's land (0x00988490) does nothing for a mover without
+/// FALLING (0x1000), and its caller sends the landing (0x006eba60 ->
+/// 0x0073d3d0) only when the step took FALLING off. A fall is started by a
+/// jump or a walk off a ledge (0x00988370) or by the fall step itself
+/// (0x00987410); a mover set down on a lift's car by a teleport, or put on
+/// a transport, has started none, and lands on nothing.
+inline bool landingSent(uint32_t flagsBefore) {
+    constexpr uint32_t kFalling = 0x1000;
+    return (flagsBefore & kFalling) != 0;
+}
+
 /**
  * Base entity class for all game objects
  */
