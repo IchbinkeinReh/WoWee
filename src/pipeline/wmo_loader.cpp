@@ -24,6 +24,7 @@ constexpr uint32_t MOPV = 0x4D4F5056;  // Portal vertices
 constexpr uint32_t MOPT = 0x4D4F5054;  // Portal info
 constexpr uint32_t MOPR = 0x4D4F5052;  // Portal references
 constexpr uint32_t MFOG = 0x4D464F47;  // Fog
+constexpr uint32_t MCVP = 0x4D435650;  // Convex volume planes (a transport's hold)
 
 // WMO group chunk identifiers
 constexpr uint32_t MOGP = 0x4D4F4750;  // Group header
@@ -497,6 +498,22 @@ WMOModel WMOLoader::load(const std::vector<uint8_t>& wmoData) {
                     fog.startFactor2 = read<float>(wmoData, offset);
                     fog.color2 = bgra(read<uint32_t>(wmoData, offset));
                     model.fogs.push_back(fog);
+                }
+                break;
+            }
+
+            case MCVP: {
+                // The convex volume a transport holds its passengers in
+                // (0x007aea10): C4Plane - normal, then distance - 16 bytes.
+                const uint32_t nPlanes = chunkSize / 16;
+                model.convexVolumePlanes.reserve(nPlanes);
+                for (uint32_t i = 0; i < nPlanes; i++) {
+                    glm::vec4 plane;
+                    plane.x = read<float>(wmoData, offset);
+                    plane.y = read<float>(wmoData, offset);
+                    plane.z = read<float>(wmoData, offset);
+                    plane.w = read<float>(wmoData, offset);
+                    model.convexVolumePlanes.push_back(plane);
                 }
                 break;
             }

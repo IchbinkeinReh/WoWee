@@ -1775,24 +1775,26 @@ void GameHandler::updateM2TransportBoarding(const glm::vec3& playerCanonical) {
     // transport holds it: every step of it asks to be taken off (0x007618b0
     // -> 0x006ec7b0(0, 0)), refused while the mover is within the model
     // (0x0074b5e0 -> vtable +0xf0 -> 0x0070b360 -> 0x0077ffb0), so a jump
-    // in a lift's car stays on it and one out of its door does not. Only an
-    // M2's hold is known here (its collision box); a ship's is its WMO's
-    // (0x007aea10), not ported, and a ship keeps its passenger through a
-    // fall as before.
+    // in a lift's car stays on it and one out of its door does not. An M2's
+    // hold is its collision box; a ship's or a zeppelin's its WMO's convex
+    // volume (MCVP, 0x007aea10), so a jump off the deck leaves the ship once
+    // it is out of the hull's volume. A WMO without that volume keeps its
+    // passenger through a fall as before (stillHoldsPassenger).
     if (owner == 0 && movementInfo.hasFlag(MovementFlags::FALLING)) {
         const uint64_t riding = getPlayerTransportGuid();
         const auto* transport = riding != 0 ? tm->getTransport(riding) : nullptr;
-        if (transport && transport->isM2 &&
+        if (transport && tm->hasPassengerHold(riding) &&
             transport_boarding::afterFallStep(riding, tm->stillHoldsPassenger(riding, playerCanonical)) == 0) {
             LOG_DEBUG("Transport left in a fall: guid=0x", std::hex, riding, std::dec,
-                      " - outside the model's box");
+                      transport->isM2 ? " - outside the model's box" : " - outside the hull's volume");
             static const bool kFallDebug = [] {
                 const char* v = std::getenv("WOWEE_FLOOR_DEBUG");
                 return v && v[0] && v[0] != '0';
             }();
             if (kFallDebug) {
                 LOG_WARNING("FALL TRANSPORT: off 0x", std::hex, riding, std::dec, " at (", playerCanonical.x,
-                            ", ", playerCanonical.y, ", ", playerCanonical.z, ") - outside its box");
+                            ", ", playerCanonical.y, ", ", playerCanonical.z, ") - outside its ",
+                            transport->isM2 ? "box" : "convex volume");
             }
             clearPlayerTransport();
         }

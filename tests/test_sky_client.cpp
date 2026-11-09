@@ -390,3 +390,20 @@ TEST_CASE("MCSH's bits are read low bit first, edges fixed", "[adt][mcsh]") {
     CHECK(chunk.shadowMap[62 * 64 + 63] == 1);
     CHECK(chunk.shadowMap[63 * 64 + 62] == 1);
 }
+
+TEST_CASE("MCVP, a transport's convex volume, is read (0x007d7470)", "[wmo][mcvp]") {
+    std::vector<uint8_t> root;
+    put32(root, 0x4D564552);  // MVER
+    put32(root, 4);
+    put32(root, 17);
+    put32(root, 0x4D435650);  // MCVP
+    put32(root, 32);
+    putF(root, 0.0f); putF(root, 0.0f); putF(root, -1.0f); putF(root, 2.04f);
+    putF(root, 0.992f); putF(root, 0.111f); putF(root, -0.058f); putF(root, -43.88f);
+    const auto model = wowee::pipeline::WMOLoader::load(root);
+    REQUIRE(model.convexVolumePlanes.size() == 2);
+    CHECK(model.convexVolumePlanes[0].z == Catch::Approx(-1.0f));
+    CHECK(model.convexVolumePlanes[0].w == Catch::Approx(2.04f));
+    CHECK(model.convexVolumePlanes[1].x == Catch::Approx(0.992f));
+    CHECK(model.convexVolumePlanes[1].w == Catch::Approx(-43.88f));
+}
