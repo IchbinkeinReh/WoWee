@@ -2618,6 +2618,33 @@ static int lua_GetInventoryItemCooldown(lua_State* L) {
 // The texture is remembered rather than filled here: the handle is rebuilt
 // whenever the portrait's render target is, so it has to be assigned every
 // frame, which the render loop does for everything on this list.
+/// SetLootPortrait(texture) (0x00588f00): the face of whoever the open loot is
+/// from (0x00bfa8d8) on the texture, and 1; with no such unit the texture is
+/// emptied (0x00481520) and nil.
+static int lua_SetLootPortrait(lua_State* L) {
+    auto* tree = getWidgetTree(L);
+    auto* gh = getGameHandler(L);
+    if (!tree || !lua_istable(L, 1)) { lua_pushnil(L); return 1; }
+    lua_getfield(L, 1, "__wid");
+    const uint32_t id = static_cast<uint32_t>(lua_tointeger(L, -1));
+    lua_pop(L, 1);
+    const uint64_t guid = gh && gh->isLootWindowOpen() ? gh->getCurrentLoot().lootGuid : 0;
+    if (id != 0 && guid != 0 && gh->getEntityManager().getEntity(guid)) {
+        tree->setPortraitUnit(id, "loot");
+        lua_pushnumber(L, 1);
+        return 1;
+    }
+    if (id != 0) {
+        tree->setPortraitUnit(id, std::string());
+        if (auto* w = tree->get(id)) {
+            w->solidColor = false;
+            w->texturePath.clear();
+        }
+    }
+    lua_pushnil(L);
+    return 1;
+}
+
 static int lua_SetPortraitTexture(lua_State* L) {
     auto* tree = getWidgetTree(L);
     if (!tree || !lua_istable(L, 1)) return 0;
@@ -4247,6 +4274,7 @@ void registerUnitLuaAPI(lua_State* L) {
                 {"GetUnitMaxHealthModifier", lua_GetUnitMaxHealthModifier},
                 {"GetInventoryItemCooldown", lua_GetInventoryItemCooldown},
                 {"SetPortraitTexture",         lua_SetPortraitTexture},
+                {"SetLootPortrait",            lua_SetLootPortrait},
                 {"GetHairCustomization",       lua_GetHairCustomization},
                 {"GetFacialHairCustomization", lua_GetFacialHairCustomization},
                 {"CanAlterSkin",               lua_CanAlterSkin},

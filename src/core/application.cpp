@@ -6552,6 +6552,9 @@ void Application::render() {
                     {"target", &targetPortrait_,   gameHandler->getTargetGuid()},
                     {"pet",    &petPortrait_,      gameHandler->getPetGuid()},
                     {"focus",  &focusPortrait_,    gameHandler->getFocusGuid()},
+                    // SetLootPortrait's (0x00588f00): the loot's own unit.
+                    {"loot",   &lootPortrait_,
+                     gameHandler->isLootWindowOpen() ? gameHandler->getCurrentLoot().lootGuid : 0},
                     {"party1", &partyPortraits_[0], partyGuids[0]},
                     {"party2", &partyPortraits_[1], partyGuids[1]},
                     {"party3", &partyPortraits_[2], partyGuids[2]},

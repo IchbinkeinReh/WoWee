@@ -371,6 +371,8 @@ private:
     ui::UnitPortrait targetPortrait_;
     /// And the focus, which is deliberate enough to be worth its own pass.
     ui::UnitPortrait focusPortrait_;
+    /// SetLootPortrait's face: whoever the open loot is from (0x00588f00).
+    ui::UnitPortrait lootPortrait_;
     /// The dressing room's figure, and its frame. The player plus whatever
     /// has been tried on, which is the paperdoll with an overlay.
     ui::UnitPortrait dressUpModel_;
