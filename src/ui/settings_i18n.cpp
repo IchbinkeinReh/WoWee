@@ -205,7 +205,7 @@ constexpr SettingGerman kGerman[] = {
      "Flächen - die Kante einer Stufe, ein Bordstein - ein wenig erhellt statt dunkel.",
      nullptr, nullptr, nullptr},
     {"rtpointselfshadow",
-     "Eigenschatten der Punktlichter",
+     "Punktlicht-Eigenschatten",
      "Eine Lampe, Fackel oder Feuerschale wird auch von ihrem eigenen Modell beschattet: ihre "
      "Schale, ihr Rahmen und ihre Streben werfen Schatten ihres Lichts. Nur ihre dem Licht "
      "zugewandten Flächen tun es, so scheint ein Licht in einer Laterne weiter durch ihr Glas "

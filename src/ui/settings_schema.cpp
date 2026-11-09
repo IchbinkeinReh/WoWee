@@ -313,7 +313,7 @@ constexpr SettingDesc kSchema[] = {
      "they shine on: softer, flatter lamp light, and the faces just\n"
      "turned away from a low candle - the bevel of a step, a curb -\n"
      "lit a little instead of dark.", "", 0, "raytracedlighting"},
-    {"rtpointselfshadow", "Self-shadowing for point lights", SettingKind::Bool, 0, 0, 0,
+    {"rtpointselfshadow", "Point light self-shadowing", SettingKind::Bool, 0, 0, 0,
      "Ray Tracing", "",
      "A lamp, torch or brazier is shadowed by its own model too: its\n"
      "bowl, its frame and its bars cast shadows of its light. Only its\n"
