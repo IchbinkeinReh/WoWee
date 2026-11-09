@@ -194,23 +194,28 @@ void DataRepository::loadZones(const std::string& mapName,
         zone.defaultDungeonFloorRowId =
             static_cast<int32_t>(wmaDbc->getUInt32(i, floorField));
         if (recMapID != static_cast<uint32_t>(mapID) && displayMapID == static_cast<uint32_t>(mapID)) {
-            const float centerX = (zone.bounds.locLeft + zone.bounds.locRight) * 0.5f;
-            const float centerY = (zone.bounds.locTop + zone.bounds.locBottom) * 0.5f;
+            // 0x00543920 as the highlight asks it (0x00545110): the zone's top
+            // left corner - LocTop is world X, LocLeft world Y - inside the
+            // region (minX < x <= maxX, minY <= y < maxY), and the region's
+            // offset moves X onto top and bottom, Y onto left and right. This
+            // tested the left and right against the X range and the top and
+            // bottom against the Y range, which no zone passes: Azuremyst,
+            // Bloodmyst and the Exodar were never moved onto Kalimdor.
+            const float x = zone.bounds.locTop;
+            const float y = zone.bounds.locLeft;
             for (const MapTransform& tr : mapTransforms_) {
-                const float minX = std::min(tr.minX, tr.maxX);
-                const float maxX = std::max(tr.minX, tr.maxX);
-                const float minY = std::min(tr.minY, tr.maxY);
-                const float maxY = std::max(tr.minY, tr.maxY);
                 if (tr.sourceMapId != recMapID || tr.targetMapId != displayMapID ||
-                    centerX < minX || centerX > maxX || centerY < minY || centerY > maxY) {
+                    !(tr.minX < x && x <= tr.maxX && tr.minY <= y && y < tr.maxY)) {
                     continue;
                 }
-                zone.virtualOffsetWowX = tr.offsetX;
-                zone.virtualOffsetWowY = tr.offsetY;
-                zone.bounds.locLeft += tr.offsetX;
-                zone.bounds.locRight += tr.offsetX;
-                zone.bounds.locTop += tr.offsetY;
-                zone.bounds.locBottom += tr.offsetY;
+                // In canonical axes (x is the wire Y): what a canonical
+                // position on the zone is moved by.
+                zone.virtualOffsetWowX = tr.offsetY;
+                zone.virtualOffsetWowY = tr.offsetX;
+                zone.bounds.locTop += tr.offsetX;
+                zone.bounds.locBottom += tr.offsetX;
+                zone.bounds.locLeft += tr.offsetY;
+                zone.bounds.locRight += tr.offsetY;
                 break;
             }
         }
@@ -435,17 +440,17 @@ glm::vec3 DataRepository::transformRenderPosition(
     if (currentMapId_ < 0 || sourceMapId == static_cast<uint32_t>(currentMapId_)) {
         return renderPos;
     }
-    const float wowX = renderPos.y;
-    const float wowY = renderPos.x;
+    // WorldMapTransforms is in the wire's axes (0x00543920): its X is the
+    // wire X, which is canonical y and render x here, its Y the wire Y
+    // (canonical x, render y). Tested the other way round, no position
+    // matched and nothing on Azuremyst or Bloodmyst reached Kalimdor's map.
+    const float wireX = renderPos.x;
+    const float wireY = renderPos.y;
     for (const MapTransform& tr : mapTransforms_) {
-        const float minX = std::min(tr.minX, tr.maxX);
-        const float maxX = std::max(tr.minX, tr.maxX);
-        const float minY = std::min(tr.minY, tr.maxY);
-        const float maxY = std::max(tr.minY, tr.maxY);
         if (tr.sourceMapId == sourceMapId &&
             tr.targetMapId == static_cast<uint32_t>(currentMapId_) &&
-            wowX >= minX && wowX <= maxX && wowY >= minY && wowY <= maxY) {
-            return glm::vec3(wowY + tr.offsetY, wowX + tr.offsetX, renderPos.z);
+            tr.minX < wireX && wireX <= tr.maxX && tr.minY <= wireY && wireY < tr.maxY) {
+            return glm::vec3(wireX + tr.offsetX, wireY + tr.offsetY, renderPos.z);
         }
     }
     return renderPos;
