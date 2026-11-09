@@ -973,6 +973,14 @@ void MovementHandler::sendMovement(Opcode opcode) {
     // object's GAMEOBJECT_FLAGS & GO_FLAG_TRANSPORT, 0x00712f20), M2 or WMO,
     // and writes the block whenever it has one (0x00987140).
     bool includeTransportInWire = moverIsPlayer && owner_.isOnTransport();
+    // Carried to another map on a transport, the player is on it before the
+    // transport is known there: the movement keeps its transport (the
+    // client's mover keeps the guid and offset it was sent, 0x00987140
+    // writes the block whenever it has one). A packet without it took the
+    // player off the transport on the server, which then left them behind at
+    // the next map change - the ride back never came.
+    const bool transferOnTransport = moverIsPlayer && owner_.hasPendingPlayerTransportWorldTransfer() &&
+                                     owner_.pendingPlayerTransportGuid() != 0;
 
     // Add transport data if player is on a server-recognized transport
     if (includeTransportInWire) {
@@ -987,7 +995,9 @@ void MovementHandler::sendMovement(Opcode opcode) {
                 movementInfo.z = composed.z;
             }
         }
-        if (!transportResolved) {
+        if (!transportResolved && transferOnTransport) {
+            // Kept, with the offset the transfer gave (below).
+        } else if (!transportResolved) {
             // Transport not tracked - don't send ONTRANSPORT to the server.
             // Sending stale transport GUID + local offset causes the server to
             // compute a bad world position and teleport us to map origin.
@@ -997,7 +1007,20 @@ void MovementHandler::sendMovement(Opcode opcode) {
             owner_.clearPlayerTransport();
         }
     }
-    if (includeTransportInWire) {
+    const bool pendingTransportWire =
+        transferOnTransport && (!includeTransportInWire || !owner_.getTransportManager() ||
+                                !owner_.getTransportManager()->getTransport(owner_.playerTransportGuidRef()));
+    if (pendingTransportWire) {
+        includeTransportInWire = true;
+        movementInfo.flags |= static_cast<uint32_t>(MovementFlags::ONTRANSPORT);
+        movementInfo.transportGuid = owner_.pendingPlayerTransportGuid();
+        movementInfo.transportX = owner_.pendingPlayerTransportWireOffset().x;
+        movementInfo.transportY = owner_.pendingPlayerTransportWireOffset().y;
+        movementInfo.transportZ = owner_.pendingPlayerTransportWireOffset().z;
+        movementInfo.transportTime = movementInfo.time;
+        movementInfo.transportSeat = -1;
+        movementInfo.transportTime2 = movementInfo.time;
+    } else if (includeTransportInWire) {
         movementInfo.flags |= static_cast<uint32_t>(MovementFlags::ONTRANSPORT);
         movementInfo.transportGuid = owner_.playerTransportGuidRef();
         movementInfo.transportX = owner_.playerTransportOffsetRef().x;
@@ -1016,6 +1039,20 @@ void MovementHandler::sendMovement(Opcode opcode) {
         movementInfo.transportSeat = -1;
     }
     {
+        // WOWEE_MOVE_TRACE: every movement packet as it goes out - its
+        // opcode, flags and transport - for following what the server is told
+        // across a transport's map change.
+        static const bool kMoveTrace = [] {
+            const char* v = std::getenv("WOWEE_MOVE_TRACE");
+            return v && v[0] && v[0] != '0';
+        }();
+        if (kMoveTrace) {
+            LOG_WARNING("MOVE SENT: op=0x", std::hex, wireOpcode(opcode), " flags=0x", movementInfo.flags,
+                        " transport=0x", (includeTransportInWire ? movementInfo.transportGuid : 0ull), std::dec,
+                        " pos=(", movementInfo.x, ", ", movementInfo.y, ", ", movementInfo.z, ") local=(",
+                        movementInfo.transportX, ", ", movementInfo.transportY, ", ", movementInfo.transportZ,
+                        ") time=", movementInfo.time);
+        }
         // WOWEE_FLOOR_DEBUG: what a jump and a landing tell the server, which
         // reckons fall damage from the world height between them.
         static const bool kFallDebug = [] {
@@ -2942,8 +2979,14 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
         LOG_INFO("Sent MSG_MOVE_WORLDPORT_ACK");
 
         // Sync position immediately so the server doesn't keep stale coordinates.
-        sendMovement(Opcode::MSG_MOVE_STOP);
-        sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
+        // Not when a transport carried the player here: the client sends the
+        // acknowledgement at the end of its load (0x00403b70, 0xdc) and no
+        // movement with it, and the server already has the player on the
+        // transport, at the offset it sent.
+        if (!crossMapTransportTransfer) {
+            sendMovement(Opcode::MSG_MOVE_STOP);
+            sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
+        }
     }
 
     owner_.timeSinceLastPingRef() = 0.0f;
