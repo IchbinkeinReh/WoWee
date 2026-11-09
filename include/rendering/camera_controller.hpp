@@ -4,6 +4,7 @@
 #include "rendering/camera_smooth.hpp"
 #include "rendering/camera.hpp"
 #include "game/vehicle_camera.hpp"
+#include "rendering/collision_walk.hpp"
 #include "core/input.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -122,16 +123,15 @@ public:
     void reset();
     void resetAngles();
     void teleportTo(const glm::vec3& pos);
+    /// The world changed under the unit - a map change, a teleport, a
+    /// transport boarded or left: the world round the new place waits to be
+    /// loaded before the unit moves.
+    void forgetPortPlace() { portWorldReady_ = false; }
     void setOnlineMode(bool online) { onlineMode = online; }
 
     // Last known safe position (grounded, not falling)
     [[nodiscard]] bool hasLastSafePosition() const { return hasLastSafe_; }
     [[nodiscard]] const glm::vec3& getLastSafePosition() const { return lastSafePos_; }
-    [[nodiscard]] float getContinuousFallTime() const { return continuousFallTime_; }
-
-    // Auto-unstuck callback (triggered when falling too long)
-    using AutoUnstuckCallback = std::function<void()>;
-    void setAutoUnstuckCallback(AutoUnstuckCallback cb) { autoUnstuckCallback_ = std::move(cb); }
     void startIntroPan(float durationSec = 2.8f, float orbitDegrees = 140.0f);
     [[nodiscard]] bool isIntroActive() const { return introActive; }
     [[nodiscard]] bool isIdleOrbit() const { return idleOrbit_; }
@@ -282,12 +282,6 @@ public:
         }
     }
     [[nodiscard]] bool isBarberShopView() const { return barberView_; }
-    /// Ignore the slope limit, so any face can be walked straight up.
-    ///
-    /// For reaching a place to look at it, not for playing. Off by default and
-    /// never saved: it is a thing you turn on for a minute.
-    void setIgnoreSlopeLimit(bool ignore) { ignoreSlopeLimit_ = ignore; }
-    [[nodiscard]] bool ignoresSlopeLimit() const { return ignoreSlopeLimit_; }
     [[nodiscard]] bool isOnTaxi() const { return externalFollow_; }
     [[nodiscard]] const glm::vec3* getFollowTarget() const { return followTarget; }
     /// The character's eyes for a view that is not this rig's - a headset's:
@@ -377,6 +371,12 @@ public:
         if (height > 0.1f && height < 50.0f) collisionHeight_ = height;
     }
     [[nodiscard]] bool isFlyingActive() const { return flyingActive_; }
+    /// The collision port's body half-width (0x006e9570). The port keeps a
+    /// player's height at the client's default: 0x006e9570 sets it only for
+    /// a unit this client does not move.
+    void setPortHalfWidth(float r) {
+        if (r > 0.01f && r < 25.0f) portMover_.halfWidth = r;
+    }
     /// In the air on it. Space takes off, and touching real ground without
     /// climbing lands - after which the mount runs, falls and jumps like any
     /// other until it takes off again. Flight physics, the flight animations
@@ -510,19 +510,6 @@ public:
     void suppressHeldMovementFor(float seconds) { movementSuppressTimer_ = seconds; }
     void suspendGravityFor(float seconds) { gravitySuspendTimer_ = seconds; }
 
-    /// Where the server says the player is, on entering a world.
-    ///
-    /// Nothing under them has streamed in yet, so for a moment the heightfield
-    /// is the only floor there is - and over a WMO that runs underground it
-    /// lies well above where they actually stand. Logging out in the Undercity
-    /// entrance tunnel and back in put the player on its roof. Until the
-    /// buildings arrive, no floor far above the position the server gave is
-    /// their floor.
-    void setEntryFloorAnchor(float renderZ, float seconds) {
-        entryFloorAnchorZ_ = renderZ;
-        entryFloorAnchorTimer_ = seconds;
-    }
-
     // Auto-follow: walk toward a target position each frame (WoW /follow).
     // The caller updates *targetPos every frame with the followed entity's render position.
     // Stops within FOLLOW_STOP_DIST; cancels on manual WASD input.
@@ -613,19 +600,33 @@ private:
     /// intent and the swept wall collision. The floor is not consulted yet.
     glm::vec3 moveFollowedCharacter(float deltaTime, FrameInput& f, glm::vec3& prevTargetPos);
 
-    /// What the floor queries answer directly under the character: the floor
-    /// that was chosen, and the three surfaces that were offered. The recovery
-    /// probes need to know which existed at all, not just which one won.
-    struct FloorSample {
-        std::optional<float> floor;
-        std::optional<float> terrain;
-        std::optional<float> wmo;
-        std::optional<float> m2;
-    };
-
-    /// Ask terrain, WMO and doodads where the floor is - two of them on other
-    /// threads - or answer from the cache when the character has barely moved.
-    FloorSample sampleFloorUnderFeet(const glm::vec3& targetPos, float stepUpBudget);
+    /// The collision port's liquid level at the feet, found where the client
+    /// looks (collision_liquid.hpp, 0x007a1bc0), or none.
+    [[nodiscard]] std::optional<float> portLiquidLevelAt(const glm::vec3& feet) const;
+    /// The step's move from `from` toward
+    /// `wanted` made by the client's ground movement (collision_walk.hpp) or,
+    /// in the air, a sweep along the fall. Answers where the feet end up.
+    glm::vec3 portMove(const glm::vec3& from, const glm::vec3& wanted, float dt);
+    /// The facets round a box from the ground, buildings and doodads.
+    void gatherPortFacets(const glm::vec3& lo, const glm::vec3& hi, std::vector<collision::Facet>& out) const;
+    /// No face at all in the column under `at`: the ground's tile, or the
+    /// building there, not streamed in yet. A fall over it is held.
+    [[nodiscard]] bool fallOverUnloadedWorld(const glm::vec3& at) const;
+    /// A fall is being held over a world not loaded yet (logged once).
+    bool portFallHeld_ = false;
+    collision::Mover portMover_;
+    /// Where portMove last put the unit: what moved it since (a transport
+    /// carrying it) is the difference to the next step's start. The mover's
+    /// own place is set to the character's elsewhere (the swim check).
+    glm::vec3 portLastOut_{0.0f};
+    bool portLastOutValid_ = false;
+    bool portBlocked_ = false;
+    collision::StepUpTrace portStepTrace_;
+    bool portWorldReady_ = false;
+    /// The unit rising (+0x44 0x400000) while it swims or flies: jump held.
+    bool portAscending_ = false;
+    /// How long the port's unit has flown, for 0x0073a890's two seconds.
+    uint32_t portFlyMs_ = 0;
     /// The transport's deck held the rider where the application last placed
     /// it (suppressVerticalPhysics): standing on a lift, however fast it runs
     /// down, which the fall checks here read as the floor dropping away.
@@ -637,14 +638,11 @@ private:
     /// frame, until the deck placed them back - the rider, and the camera
     /// with them, stepping to the side and back during the flight.
     bool rideHeld_ = false;
+    collision::Facet portBlocking_;
+    float portDebugTimer_ = 0.0f;
     // The physics started a jump from the ground this frame: the jump packet
     // goes out for it whatever the ground reads by the time the packets do.
     bool jumpStarted_ = false;
-
-    /// Put the character on the floor and publish where it ended up - the
-    /// expensive half, with the floor queries and the cache that skips them.
-    void groundFollowedCharacter(float deltaTime, FrameInput& f, glm::vec3& targetPos,
-                                 const glm::vec3& prevTargetPos);
 
     /// Where the camera sits relative to the character it follows: pivot, zoom,
     /// the pullback that keeps it out of walls, and the first-person threshold.
@@ -932,8 +930,6 @@ private:
     static constexpr float CROUCH_EYE_HEIGHT = 0.6f; // Crouching eye height
     float eyeHeight = STAND_EYE_HEIGHT;
     float lastGroundZ = 0.0f;  // Last known ground height (fallback when no terrain)
-    glm::vec3 lastGroundedPos_{0.0f};  // Last position that had ground under it (void recovery)
-    bool hasLastGroundedPos_ = false;
     static constexpr float GRAVITY = -30.0f;
     static constexpr float JUMP_VELOCITY = 15.0f;
     float jumpBufferTimer = 0.0f;   // Time since space was pressed
@@ -944,8 +940,6 @@ private:
     // Cached isInsideWMO result (throttled to avoid per-frame cost)
     bool cachedInsideWMO = false;
     bool cachedInsideInteriorWMO = false;
-    /// How fast the character is sliding down ground too steep to stand on.
-    float slideSpeed_ = 0.0f;
     /// How much of the zoom the collision sweep has taken, and how long
     /// nothing has been in the way. See the pull in updateOrbitCamera.
     float collisionZoomDebt_ = 0.0f;
@@ -969,12 +963,6 @@ private:
     static constexpr float PIVOT_LIFT_POS_THRESHOLD = 0.5f;
     static constexpr float PIVOT_LIFT_DIST_THRESHOLD = 0.5f;
 
-    // Cached floor height queries (update every 5 frames or 2 unit movement)
-    glm::vec3 lastFloorQueryPos = glm::vec3(0.0f);
-    std::optional<float> cachedFloorHeight;
-    int floorQueryFrameCounter = 0;
-    static constexpr float FLOOR_QUERY_DISTANCE_THRESHOLD = 2.0f;  // Increased from 1.0
-    static constexpr int FLOOR_QUERY_FRAME_INTERVAL = 5;  // Increased from 3
 
 
     // Ray-march the terrain heightfield along pivot→camDir and return the
@@ -992,9 +980,6 @@ private:
     // Swimming
     bool swimming = false;
     bool wasSwimming = false;
-    /// Jumped out of the water and still rising (swim_jump.hpp): not taken
-    /// back into it until the jump turns to a fall.
-    bool swimJumpRising_ = false;
     /// The swim jump's MSG_MOVE_JUMP, sent with this frame's messages.
     bool swimJumpPending_ = false;
     static constexpr float SWIM_SPEED_FACTOR = 0.67f;
@@ -1026,8 +1011,6 @@ private:
     float jumpSuppressTimer_ = 0.0f;
     // Gravity suspension (after world entry, hold Z until ground detected)
     float gravitySuspendTimer_ = 0.0f;
-    float entryFloorAnchorZ_ = 0.0f;
-    float entryFloorAnchorTimer_ = 0.0f;
 
     // State
     bool enabled = true;
@@ -1041,7 +1024,6 @@ private:
     float savedBarberPitch_ = 0.0f;
     float savedBarberDistance_ = 10.0f;
     float savedBarberPivot_ = 0.0f;
-    bool ignoreSlopeLimit_ = false;
     float maxDistanceFactor_ = 1.0f;
     bool xKeyWasDown = false;
     bool rKeyWasDown = false;
@@ -1077,7 +1059,7 @@ private:
     float airborneSeconds_ = 0.0f;
     /// How many physics steps this frame is split into (updateThirdPersonCamera):
     /// the client moves a unit by the whole frame at once, and keeps it to the
-    /// ground by that whole move (groundFollowReach).
+    /// ground by that whole move (collision::walk).
     int physicsStepsThisFrame_ = 1;
     bool swimRising_ = false;
     bool swimDiving_ = false;
@@ -1143,9 +1125,8 @@ private:
     bool gravityDisabled_ = false;
     // Server-driven feather fall: cap downward velocity to slow-fall terminal.
     bool featherFallActive_ = false;
-    // Server-driven water walk: treat water surface as ground (don't swim).
+    // Server-driven water walk: the liquid's surface is ground (portMove).
     bool waterWalkActive_ = false;
-    std::optional<float> waterWalkSurface_;  // this frame, the water it stands on
     // Player-controlled flight (CAN_FLY + FLYING): 3D movement, no gravity.
     bool flyingActive_ = false;
     bool flightAirborne_ = false;
@@ -1194,28 +1175,6 @@ private:
     float safePosSaveTimer_ = 0.0f;
     bool hasRealGround_ = false; // True only when terrain/WMO/M2 floor is detected
     static constexpr float SAFE_POS_SAVE_INTERVAL = 2.0f; // Save every 2 seconds
-
-    // No-ground timer: after grace period, let the player fall instead of hovering
-    float noGroundTimer_ = 0.0f;
-    // Edge trigger for the terrain-penetration rescue's log line. It fires every
-    // frame of a steep climb, and the interesting event is that it started -
-    // above all if it ever starts somewhere it should not, like a crypt.
-    bool terrainRescueActive_ = false;
-    /// Throttle for the WOWEE_FLOOR_DEBUG trace.
-    float floorDebugTimer_ = 0.0f;
-    static constexpr float NO_GROUND_GRACE = 0.5f; // 500ms grace for terrain streaming
-
-    // Continuous fall time (for auto-unstuck detection)
-    float continuousFallTime_ = 0.0f;
-    bool autoUnstuckFired_ = false;
-    AutoUnstuckCallback autoUnstuckCallback_;
-    static constexpr float AUTO_UNSTUCK_FALL_TIME = 5.0f; // 5 seconds of falling
-
-    // Collision query cache (skip expensive checks if position barely changed)
-    glm::vec3 lastCollisionCheckPos_ = glm::vec3(0.0f);
-    float cachedFloorHeight_ = 0.0f;
-    bool hasCachedFloor_ = false;
-    static constexpr float COLLISION_CACHE_DISTANCE = 0.15f;  // Re-check every 15cm
 
     // Server-driven knockback state.
     // When the server sends SMSG_MOVE_KNOCK_BACK, we apply horizontal + vertical

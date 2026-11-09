@@ -29,6 +29,7 @@
 #include "game/interface_text.hpp"
 #include "game/item_stat_text.hpp"
 #include "rendering/minimap_zoom.hpp"
+#include "game/transport_manager.hpp"
 #include <cmath>
 #include "addons/lua_handler_globals.hpp"
 #include "addons/lua_taint.hpp"
@@ -7464,6 +7465,70 @@ void LuaEngine::registerCoreAPI() {
             return 0;
         });
         lua_setglobal(L_, "__WoweeTestFrameShot");
+        // __WoweeTestNearestTransport([entry]): for a scripted ride, the nearest
+        // transport on this map: its horizontal distance from the player,
+        // its height over the player, its entry, and whether the player is
+        // riding a transport now, then the transport's height and the
+        // player's, then its x, y and yaw. Nothing when there is none.
+        lua_pushcfunction(L_, [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            auto* tm = gh ? gh->getTransportManager() : nullptr;
+            if (!tm) return 0;
+            const auto& mi = gh->getMovementInfo();
+            const glm::vec3 me(mi.x, mi.y, mi.z);
+            float best = FLT_MAX;
+            const wowee::game::ActiveTransport* nearest = nullptr;
+            // An entry asked for: that transport only, wherever it is.
+            const lua_Integer onlyEntry = luaL_optinteger(L, 1, 0);
+            for (const auto& [guid, t] : tm->getTransports()) {
+                if (!t.onThisMap) continue;
+                if (onlyEntry != 0 && static_cast<lua_Integer>(t.entry) != onlyEntry) continue;
+                const float d = glm::length(glm::vec2(t.position) - glm::vec2(me));
+                if (d < best) {
+                    best = d;
+                    nearest = &t;
+                }
+            }
+            if (!nearest) return 0;
+            lua_pushnumber(L, best);
+            lua_pushnumber(L, nearest->position.z - me.z);
+            lua_pushinteger(L, static_cast<lua_Integer>(nearest->entry));
+            lua_pushboolean(L, gh->isOnTransport() ? 1 : 0);
+            lua_pushnumber(L, nearest->position.z);
+            lua_pushnumber(L, me.z);
+            // Then where it is and which way it faces, canonical, so a
+            // scripted watch can aim the camera at it and see it turn.
+            lua_pushnumber(L, nearest->position.x);
+            lua_pushnumber(L, nearest->position.y);
+            const glm::vec3 fwd = nearest->rotation * glm::vec3(1.0f, 0.0f, 0.0f);
+            lua_pushnumber(L, std::atan2(fwd.y, fwd.x));
+            return 9;
+        });
+        lua_setglobal(L_, "__WoweeTestNearestTransport");
+        // __WoweeTestTargetEntry(entry, radius): the nearest non-player unit of
+        // that creature entry within radius yards made the target - for a
+        // scripted run to select the temporary spawn it made and remove it
+        // again. Its guid, or nothing.
+        lua_pushcfunction(L_, [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (!gh) return 0;
+            const uint32_t entry = static_cast<uint32_t>(luaL_checkinteger(L, 1));
+            const float radius = static_cast<float>(luaL_optnumber(L, 2, 5.0));
+            const auto& mi = gh->getMovementInfo();
+            uint64_t best = 0;
+            float bestD = radius;
+            for (const auto& [guid, e] : gh->getEntityManager().getEntities()) {
+                if (!e || e->getType() != wowee::game::ObjectType::UNIT) continue;
+                const auto* u = static_cast<const wowee::game::Unit*>(e.get());
+                if (u->getEntry() != entry) continue;
+                const float d = std::hypot(e->getX() - mi.x, e->getY() - mi.y);
+                if (d <= bestD) { bestD = d; best = guid; }
+            }
+            if (best == 0 || !gh->targetUnit(best)) return 0;
+            lua_pushstring(L, std::to_string(best).c_str());
+            return 1;
+        });
+        lua_setglobal(L_, "__WoweeTestTargetEntry");
     }
 
     // The micro menu's game-menu button reaches this client's own settings.

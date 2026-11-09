@@ -206,11 +206,6 @@ void WorldEntryCallbackHandler::setupCallbacks() {
                 renderer_.getCameraController()->clearMovementInputs();
                 renderer_.getCameraController()->suppressMovementFor(1.0f);
                 renderer_.getCameraController()->suspendGravityFor(10.0f);
-                // The heightfield loads before the buildings do, and over
-                // anything underground it sits well above where the player
-                // actually is. Hold the floor to what the server said until
-                // the WMOs have had time to arrive.
-                renderer_.getCameraController()->setEntryFloorAnchor(renderPos.z, 10.0f);
             }
             worldEntryMovementGraceTimer_ = 2.0f;
             taxiLandingClampTimer_ = 0.0f;
@@ -247,7 +242,6 @@ void WorldEntryCallbackHandler::setupCallbacks() {
                     renderer_.getCameraController()->clearMovementInputs();
                     renderer_.getCameraController()->suppressMovementFor(1.0f);
                     renderer_.getCameraController()->suspendGravityFor(10.0f);
-                    renderer_.getCameraController()->setEntryFloorAnchor(renderPos.z, 10.0f);
                 }
                 faceServerOrientation();
                 if (worldLoader_) worldLoader_->setPendingEntry(mapId, x, y, z);
@@ -442,27 +436,6 @@ void WorldEntryCallbackHandler::setupCallbacks() {
         hearthTeleportTimer_ = 15.0f;  // 15s safety timeout
         LOG_INFO("Unstuck hearth: teleporting to bind point, waiting for terrain...");
     });
-
-    // Auto-unstuck: falling for > 5 seconds = void fall, teleport to map entry
-    if (renderer_.getCameraController()) {
-        renderer_.getCameraController()->setAutoUnstuckCallback([this]() {
-            const char* allowAutoUnstuck = std::getenv("WOWEE_ALLOW_AUTO_UNSTUCK");
-            if (!allowAutoUnstuck || std::string(allowAutoUnstuck) != "1") {
-                LOG_WARNING("Auto-unstuck suppressed. Set WOWEE_ALLOW_AUTO_UNSTUCK=1 to teleport to the map entry point after long falls.");
-                return;
-            }
-            if (!renderer_.getCameraController()) return;
-            clearMountForUnstuck();
-            auto* cc = renderer_.getCameraController();
-
-            // Last resort: teleport to map entry point (terrain guaranteed loaded here)
-            glm::vec3 spawnPos = cc->getDefaultPosition();
-            spawnPos.z += 5.0f;
-            cc->teleportTo(spawnPos);
-            forceServerTeleportCommand(spawnPos);
-            LOG_INFO("Auto-unstuck: teleported to map entry point (server synced)");
-        });
-    }
 
     // Bind point update (innkeeper) - position stored in gameHandler->getHomeBind()
     gameHandler_.setBindPointCallback([](uint32_t mapId, float x, float y, float z) {

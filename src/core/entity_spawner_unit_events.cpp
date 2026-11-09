@@ -516,6 +516,12 @@ float EntitySpawner::playerCollisionHeight() {
     collisionHeight_ = us::collisionHeight(models->getFloat(mrow, us::kModelCollisionHeightColumn), objectScale,
                                            displays->getFloat(drow, us::kDisplayScaleColumn),
                                            models->getFloat(mrow, us::kModelScaleColumn));
+    if (models->getFieldCount() > us::kModelCollisionWidthColumn) {
+        const float width = us::collisionHeight(models->getFloat(mrow, us::kModelCollisionWidthColumn), objectScale,
+                                                displays->getFloat(drow, us::kDisplayScaleColumn),
+                                                models->getFloat(mrow, us::kModelScaleColumn));
+        if (width > 0.01f && width < 50.0f) collisionHalfWidth_ = width * 0.5f;
+    }
     collisionHeightDisplay_ = unit.getDisplayId();
     collisionHeightScaleBits_ = scaleBits;
     return collisionHeight_;

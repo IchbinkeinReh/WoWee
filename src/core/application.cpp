@@ -3940,6 +3940,8 @@ void Application::applyServerMovementState(float deltaTime) {
         // How deep the water must be to swim in, and how deep it treads.
         if (entitySpawner_)
             renderer->getCameraController()->setCollisionHeight(entitySpawner_->playerCollisionHeight());
+        if (entitySpawner_)
+            renderer->getCameraController()->setPortHalfWidth(entitySpawner_->playerCollisionHalfWidth());
         // And whether the player is up in it, which the camera worked out
         // last frame: take-off and landing are decided where the floor is.
         gameHandler->setFlightAirborne(renderer->getCameraController()->isFlightAirborne());
@@ -4323,6 +4325,8 @@ void Application::applyServerMovementState(float deltaTime) {
                  " isM2=", isM2Transport,
                  " guid=0x", std::hex, gameHandler->getPlayerTransportGuid(), std::dec);
         wasOnTransport = onTransportNowDbg;
+        // Boarded or left: where the player last stood was another frame's.
+        if (auto* cc = renderer->getCameraController()) cc->forgetPortPlace();
     }
 
     if (onTaxi) {
