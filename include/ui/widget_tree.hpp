@@ -660,6 +660,14 @@ struct Widget {
     /// Held at the middle of its frame (0x005446f0, 0x00545ff0): the world
     /// map's arrows and its ping. The frame loop sets the position.
     bool modelCentered = false;
+    /// Model:SetLight (0x00960d20 -> 0x00960a10, the M2Light at +0x2b0):
+    /// enabled, omni (a point at lightVec, else a direction along it), and
+    /// the ambient and diffuse colours already times their intensities.
+    bool modelLightEnabled = false;
+    bool modelLightOmni = true;
+    float modelLightVec[3] = {0.0f, 0.0f, 0.0f};
+    float modelLightAmbient[3] = {0.0f, 0.0f, 0.0f};
+    float modelLightDiffuse[3] = {0.0f, 0.0f, 0.0f};
 
     /// A TabardModel's design (+0x380..+0x390): emblem style and colour,
     /// border style and colour, background colour - game/tabard_design.hpp.

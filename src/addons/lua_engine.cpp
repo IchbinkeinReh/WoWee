@@ -1168,6 +1168,71 @@ int lua_Model_SetCamera(lua_State* L) {
     w->modelCamera = static_cast<int>(std::llround(lua_tonumber(L, 2)));
     return 0;
 }
+// SetLight(enabled[, omni, dirX, dirY, dirZ, ambIntensity[, ambR, ambG, ambB],
+// dirIntensity[, dirR, dirG, dirB]]) (0x00960d20): the light reset
+// (0x00834a40), then filled as far as the arguments go; each colour white
+// unless an intensity above 0 is followed by three numbers.
+int lua_Model_SetLight(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isnumber(L, 2)) {
+        return luaL_error(L, "Usage: %s:SetLight(enabled[, omni, dirX, dirY, dirZ, ambIntensity[, ambR, ambG, "
+                             "ambB], dirIntensity[, dirR, dirG, dirB]])",
+                          w->name.empty() ? "<unnamed>" : w->name.c_str());
+    }
+    w->modelLightEnabled = lua_tonumber(L, 2) != 0.0;
+    w->modelLightOmni = true;
+    for (int i = 0; i < 3; ++i) {
+        w->modelLightVec[i] = 0.0f;
+        w->modelLightAmbient[i] = 0.0f;
+        w->modelLightDiffuse[i] = 0.0f;
+    }
+    if (!w->modelLightEnabled) return 0;
+    for (int i = 3; i <= 7; ++i)
+        if (!lua_isnumber(L, i)) return 0;
+    w->modelLightOmni = lua_tonumber(L, 3) != 0.0;
+    for (int i = 0; i < 3; ++i) w->modelLightVec[i] = static_cast<float>(lua_tonumber(L, 4 + i));
+    auto colour = [&](int at, float (&out)[3]) -> int {
+        const float intensity = static_cast<float>(lua_tonumber(L, at));
+        float rgb[3] = {1.0f, 1.0f, 1.0f};
+        int next = at + 1;
+        if (intensity > 0.0f && lua_isnumber(L, at + 1) && lua_isnumber(L, at + 2) && lua_isnumber(L, at + 3)) {
+            // 0x0061be50 packs them as bytes.
+            for (int i = 0; i < 3; ++i) {
+                const double c = std::clamp(lua_tonumber(L, at + 1 + i), 0.0, 1.0);
+                rgb[i] = static_cast<float>(std::lround(c * 255.0)) / 255.0f;
+            }
+            next = at + 4;
+        }
+        for (int i = 0; i < 3; ++i) out[i] = rgb[i] * intensity;
+        return next;
+    };
+    const int next = colour(7, w->modelLightAmbient);
+    if (lua_isnumber(L, next)) colour(next, w->modelLightDiffuse);
+    return 0;
+}
+// GetLight() (0x00960dd0): enabled, omni, x, y, z, then for the ambient and the
+// diffuse a 1 and its colour where any of it is above 0, else a 0.
+int lua_Model_GetLight(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    lua_pushnumber(L, w->modelLightEnabled ? 1 : 0);
+    lua_pushnumber(L, w->modelLightOmni ? 1 : 0);
+    for (float v : w->modelLightVec) lua_pushnumber(L, v);
+    int n = 5;
+    for (const float* c : {w->modelLightAmbient, w->modelLightDiffuse}) {
+        if (c[0] > 0.0f || c[1] > 0.0f || c[2] > 0.0f) {
+            lua_pushnumber(L, 1);
+            for (int i = 0; i < 3; ++i) lua_pushnumber(L, c[i]);
+            n += 4;
+        } else {
+            lua_pushnumber(L, 0);
+            n += 1;
+        }
+    }
+    return n;
+}
+
 int lua_Model_SetSequence(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) w->modelSequence = static_cast<int>(luaL_optnumber(L, 2, 0));
     return 0;
@@ -7817,6 +7882,8 @@ void LuaEngine::registerCoreAPI() {
         {"GetModelScale",   lua_Model_GetModelScale},
         {"SetCamera",       lua_Model_SetCamera},
         {"SetSequence",     lua_Model_SetSequence},
+        {"SetLight",        lua_Model_SetLight},
+        {"GetLight",        lua_Model_GetLight},
         {"IsMovable",       lua_Frame_IsMovable},
         {"RegisterForDrag", lua_Frame_RegisterForDrag},
         {"StartMoving",     lua_Frame_StartMoving},

@@ -155,9 +155,21 @@ void ModelFrameView::compositePass(VkCommandBuffer cmd, uint32_t frameIndex) {
     ubo.lightSpaceMatrix = glm::mat4(1.0f);
     // The interface's light: the model frame's default (0x0095f650) is white
     // from the viewer's side.
-    ubo.lightDir = glm::vec4(glm::normalize(glm::vec3(0.0f, 0.0f, -1.0f)), 0.0f);
-    ubo.lightColor = glm::vec4(1.0f, 1.0f, 1.0f, 0.0f);
-    ubo.ambientColor = glm::vec4(0.6f, 0.6f, 0.6f, 0.0f);
+    if (light_.enabled) {
+        // SetLight's: a point light shines from where it is toward the
+        // model, a directional one along its vector.
+        glm::vec3 dir = light_.omni ? -light_.vec : light_.vec;
+        if (glm::dot(dir, dir) < 1e-12f) dir = glm::vec3(0.0f, 0.0f, -1.0f);
+        ubo.lightDir = glm::vec4(glm::normalize(dir), 0.0f);
+        ubo.lightColor = glm::vec4(light_.diffuse, 0.0f);
+        ubo.ambientColor = glm::vec4(light_.ambient, 0.0f);
+    } else {
+        // No light set (the frame's M2Light starts disabled, 0x00834a40):
+        // a plain white stand-in from the viewer's side.
+        ubo.lightDir = glm::vec4(glm::normalize(glm::vec3(0.0f, 0.0f, -1.0f)), 0.0f);
+        ubo.lightColor = glm::vec4(1.0f, 1.0f, 1.0f, 0.0f);
+        ubo.ambientColor = glm::vec4(0.6f, 0.6f, 0.6f, 0.0f);
+    }
     ubo.viewPos = glm::vec4(camera_->getPosition(), 0.0f);
     ubo.fogColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
     ubo.fogParams = glm::vec4(99999.0f, 100000.0f, 0.0f, 0.0f);

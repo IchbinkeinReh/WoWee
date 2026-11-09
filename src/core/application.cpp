@@ -6252,6 +6252,15 @@ void Application::render() {
                         pose.effectiveScale = frame->effScale;
                         view->setFrame(frame->rectW * ddcPerUnit, frame->rectH * ddcPerUnit, pose, ddcH,
                                        frame->modelCamera, frame->modelSequence);
+                        rendering::ModelFrameView::Light light;
+                        light.enabled = frame->modelLightEnabled;
+                        light.omni = frame->modelLightOmni;
+                        light.vec = glm::vec3(frame->modelLightVec[0], frame->modelLightVec[1], frame->modelLightVec[2]);
+                        light.ambient = glm::vec3(frame->modelLightAmbient[0], frame->modelLightAmbient[1],
+                                                  frame->modelLightAmbient[2]);
+                        light.diffuse = glm::vec3(frame->modelLightDiffuse[0], frame->modelLightDiffuse[1],
+                                                  frame->modelLightDiffuse[2]);
+                        view->setLight(light);
                         view->update(io.DeltaTime);
                         view->requestComposite();
                         frame->externalTexture = view->textureId();

@@ -78,6 +78,17 @@ public:
     bool setModel(const std::string& path);
     /// The frame's rect in DDC (its width and height) and its pose; the
     /// camera index (-1 none) and sequence (-1 the model's own).
+    /// Model:SetLight's light (the M2Light at +0x2b0): off, the view's own
+    /// stand-in; on, its ambient and diffuse, from a point (omni) or along a
+    /// direction, in the frame's space.
+    struct Light {
+        bool enabled = false;
+        bool omni = true;
+        glm::vec3 vec{0.0f};
+        glm::vec3 ambient{0.0f};
+        glm::vec3 diffuse{0.0f};
+    };
+    void setLight(const Light& light) { light_ = light; }
     void setFrame(float widthDdc, float heightDdc, const model_frame::Pose& pose, float ddcScreenHeight,
                   int camera, int sequence);
     void update(float deltaTime);
@@ -116,6 +127,7 @@ private:
     uint32_t instanceId_ = 0;
     int sequence_ = -1;
     bool compositeRequested_ = false;
+    Light light_;
     bool composited_ = false;
     bool registered_ = false;
 };
