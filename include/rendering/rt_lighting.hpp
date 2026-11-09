@@ -182,6 +182,10 @@ public:
         /// frame's width, from the left, drawn with the tracing; the rest is
         /// drawn as without it. 0 for none.
         float splitAt = 0.0f;
+        /// A point light shadowed by its own model's faces turned toward it
+        /// (the Ray Tracing page's "Self-shadowing for point lights", a
+        /// WoWee-only option).
+        bool pointSelfShadow = false;
         /// Rays a pixel of each kind, 1 to kMaxRtRaysPerPixel (Ray Tracing
         /// settings): toward the sun, for the occlusion, toward a point
         /// light, and a probe's rays for the bounced light. One is the

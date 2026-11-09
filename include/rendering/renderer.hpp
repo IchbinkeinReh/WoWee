@@ -785,6 +785,9 @@ public:
     /// Debug Graphics (a WoWee-only view): the left half of the picture with
     /// the ray tracing, the right half as without it.
     void setRtSplitView(bool split) { rtSplitView_ = split; }
+    /// Point lights shadowed by their own model's faces turned toward them
+    /// (a WoWee-only option; rt_trace's rtFixtureFacesOnly).
+    void setRtPointSelfShadow(bool on) { rtPointSelfShadow_ = on; }
     /// The Ray Tracing page's "Unit shadow reach" (rtUnitShadowReach).
     void setRtUnitShadowReach(float yards) { rtUnitShadowReach_ = yards; }
     /// The Ray Tracing page's "Minimum brightness (%)" (rt_min_brightness.hpp).
@@ -1185,6 +1188,7 @@ private:
     LightingTune lightingTune_{};
     bool rtSoftLamps_ = false;
     bool rtSplitView_ = false;
+    bool rtPointSelfShadow_ = false;
     float rtUnitShadowReach_ = 5.0f;
     bool rtWater_ = true;  ///< "Ray traced water" (water_rt.glsli)
     float rtWaveAmp_ = 1.0f;

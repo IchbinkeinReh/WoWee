@@ -204,6 +204,13 @@ constexpr SettingGerman kGerman[] = {
      "weicheres, flacheres Lampenlicht, und die von einer niedrigen Kerze knapp abgewandten "
      "Flächen - die Kante einer Stufe, ein Bordstein - ein wenig erhellt statt dunkel.",
      nullptr, nullptr, nullptr},
+    {"rtpointselfshadow",
+     "Punktlicht-Eigenschatten",
+     "Eine Lampe, Fackel oder Feuerschale wird auch von ihrem eigenen Modell beschattet: ihre "
+     "Schale, ihr Rahmen und ihre Streben werfen Schatten ihres Lichts. Nur ihre dem Licht "
+     "zugewandten Flächen tun es, so scheint ein Licht in einer Laterne weiter durch ihr Glas "
+     "nach außen. Nicht im ursprünglichen Client.",
+     nullptr, nullptr, nullptr},
     {"rtunitshadowreach",
      "Figurenschattenweite (m)",
      "Wie weit vom Körper der Schatten einer Figur oder Kreatur von einer Lampe, einem Feuer "
