@@ -4378,6 +4378,15 @@ void Application::applyServerMovementState(float deltaTime) {
             if (!sameRideFrame && !tr->isM2) {
                 deckFloorPending_ = true;
             }
+            // Carried to another map on it: the hull flew on through the
+            // load, and the ground the camera remembers is where the transfer
+            // set the rider down, at the edge of the map. Its floor probe
+            // reached up from there and stood the rider on the top of the
+            // zeppelin's envelope, inside it. The rider is where the offset on
+            // the deck puts them now (0x004f4460), and the ground with them.
+            if (!tr->isM2 && gameHandler->takeTransportTransferArrival()) {
+                if (auto* cc = renderer->getCameraController()) cc->teleportTo(expectedRender);
+            }
             // The rider's facing is kept on the deck, not in the world: the
             // world one is the ship's plus it (0x004f42a0), so as the ship
             // turns, so does whoever is standing on it, and the camera behind.
@@ -4715,7 +4724,10 @@ void Application::applyServerMovementState(float deltaTime) {
         // a frame is no fall. Not on a transport, where the client does not
         // mark a passenger standing on it as falling and the server measured
         // a lift's whole descent as one.
-        if (playerFallsFar() && !gameHandler->isOnTransport() && !gameHandler->isOnTaxiFlight()) {
+        // Nor while a transport carries the player to another map: it is off
+        // the transport only until the transport is known there.
+        if (playerFallsFar() && !gameHandler->isOnTransport() && !gameHandler->isOnTaxiFlight() &&
+            !gameHandler->hasPendingPlayerTransportWorldTransfer()) {
             if (auto* mh = gameHandler->getMovementHandler()) {
                 const float airborne = renderer->getCameraController()->airborneSeconds();
                 mh->startFall(static_cast<uint32_t>(std::lround(airborne * 1000.0f)));

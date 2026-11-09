@@ -1754,6 +1754,7 @@ bool GameHandler::completePlayerTransportWorldTransfer(
     pendingPlayerTransportGuid_ = 0;
     pendingPlayerTransportEntry_ = 0;
     pendingPlayerTransportMapId_ = 0xFFFFFFFFu;
+    transportTransferArrived_ = true;
     return true;
 }
 
