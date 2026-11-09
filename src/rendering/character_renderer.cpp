@@ -389,7 +389,8 @@ void CharacterRenderer::buildMainPassPipelines(VkDevice device, VkRenderPass mai
     auto buildCharPipeline = [&](VkPipelineColorBlendAttachmentState blendState,
                                   bool depthWrite, bool alphaToCoverage = false,
                                   VkCullModeFlags cullMode = VK_CULL_MODE_NONE,
-                                  bool depthTest = true, bool gbuffer = false) -> VkPipeline {
+                                  bool depthTest = true, bool gbuffer = false,
+                                  VkCompareOp compare = depth::kNearer) -> VkPipeline {
         auto builder = PipelineBuilder()
             .setShaders(charVert.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
                         charFrag.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT))
@@ -398,7 +399,7 @@ void CharacterRenderer::buildMainPassPipelines(VkDevice device, VkRenderPass mai
             // Counter-clockwise front, as the M2 renderer's: the camera flips
             // Y for Vulkan, which turns the model's outward winding around.
             .setRasterization(VK_POLYGON_MODE_FILL, cullMode, VK_FRONT_FACE_COUNTER_CLOCKWISE)
-            .setDepthTest(depthTest, depthWrite, depth::kNearer)
+            .setDepthTest(depthTest, depthWrite, compare)
             .setDepthBias(0.0f, 0.0f)
             .setColorBlendAttachment(blendState)
             .setMultisample(samples);
@@ -417,6 +418,19 @@ void CharacterRenderer::buildMainPassPipelines(VkDevice device, VkRenderPass mai
     alphaPipeline_ = buildCharPipeline(PipelineBuilder::blendAlpha(), false);
     additivePipeline_ = buildCharPipeline(PipelineBuilder::blendAdditive(), false);
     translucentPipeline_ = buildCharPipeline(PipelineBuilder::blendAlpha(), true);
+    // The faded model's z-fill and its colour over it (zfillPipeline_).
+    // Depth only: the colour blended to nothing - the destination kept
+    // (ZERO, ONE) - rather than a write mask of none, which the NVIDIA
+    // driver's shader compiler crashed on building (nvgpucomp64.dll, twice,
+    // on a cold pipeline cache).
+    VkPipelineColorBlendAttachmentState depthOnly = PipelineBuilder::blendAlpha();
+    depthOnly.srcColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+    depthOnly.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    depthOnly.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    depthOnly.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    zfillPipeline_ = buildCharPipeline(depthOnly, true);
+    fadedOverZfillPipeline_ = buildCharPipeline(PipelineBuilder::blendAlpha(), false, false, VK_CULL_MODE_NONE,
+                                                true, false, depth::kNearerOrEqual);
     // Colour-only blends; the destination's alpha is left as it is.
     auto colourBlend = [](VkBlendFactor src, VkBlendFactor dst) {
         VkPipelineColorBlendAttachmentState st = PipelineBuilder::blendAdditive();
@@ -439,6 +453,8 @@ void CharacterRenderer::buildMainPassPipelines(VkDevice device, VkRenderPass mai
         VkPipeline base;
         VkPipelineColorBlendAttachmentState blend;
         bool alphaToCoverage;
+        VkCompareOp compare = depth::kNearer;
+        bool neverWrite = false;
     };
     const VariantSpec variantSpecs[] = {
         {.base = opaquePipeline_, .blend = PipelineBuilder::blendDisabled(), .alphaToCoverage = false},
@@ -448,6 +464,9 @@ void CharacterRenderer::buildMainPassPipelines(VkDevice device, VkRenderPass mai
         {.base = noAlphaAddPipeline_, .blend = colourBlend(VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE), .alphaToCoverage = false},
         {.base = modPipeline_, .blend = colourBlend(VK_BLEND_FACTOR_DST_COLOR, VK_BLEND_FACTOR_ZERO), .alphaToCoverage = false},
         {.base = mod2xPipeline_, .blend = colourBlend(VK_BLEND_FACTOR_DST_COLOR, VK_BLEND_FACTOR_SRC_COLOR), .alphaToCoverage = false},
+        {.base = zfillPipeline_, .blend = depthOnly, .alphaToCoverage = false},
+        {.base = fadedOverZfillPipeline_, .blend = PipelineBuilder::blendAlpha(), .alphaToCoverage = false,
+         .compare = depth::kNearerOrEqual, .neverWrite = true},
     };
     constexpr VkCullModeFlags kCullModes[3] = {VK_CULL_MODE_NONE, VK_CULL_MODE_BACK_BIT,
                                                VK_CULL_MODE_FRONT_BIT};
@@ -458,8 +477,8 @@ void CharacterRenderer::buildMainPassPipelines(VkDevice device, VkRenderPass mai
             const uint32_t cull = v % 3;
             const bool noTest = ((v / 3) & 1) != 0;
             const bool noWrite = ((v / 6) & 1) != 0;
-            variants[v] = buildCharPipeline(spec.blend, !noWrite, spec.alphaToCoverage,
-                                            kCullModes[cull], !noTest);
+            variants[v] = buildCharPipeline(spec.blend, !noWrite && !spec.neverWrite, spec.alphaToCoverage,
+                                            kCullModes[cull], !noTest, false, spec.compare);
         }
         pipelineVariants_[spec.base] = variants;
     }
@@ -751,6 +770,8 @@ void CharacterRenderer::shutdown() {
     destroyPipeline(mod2xPipeline_);
     destroyPipelineVariants();
     destroyPipeline(translucentPipeline_);
+    destroyPipeline(zfillPipeline_);
+    destroyPipeline(fadedOverZfillPipeline_);
 
     destroy(device, pipelineLayout_);
 
@@ -4139,7 +4160,35 @@ std::vector<CharacterRenderer::BlendedDraw> CharacterRenderer::planBlended(const
     }
     std::sort(plan.begin(), plan.end(),
               [](const BlendedDraw& a, const BlendedDraw& b) { return a.distSq > b.distSq; });
+    fadedToZfill_.clear();
+    for (const auto& d : plan) {
+        const auto it = instances.find(d.instanceId);
+        if (it != instances.end() &&
+            instanceDrawnFaded(it->second.opacity, it->second.kitAlpha, it->second.cameraAlpha)) {
+            fadedToZfill_.push_back(d.instanceId);
+        }
+    }
     return plan;
+}
+
+void CharacterRenderer::zfillFadedInstances(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
+                                            const Camera& camera) {
+    zfillDraw_ = true;
+    for (const uint32_t id : fadedToZfill_) render(cmd, perFrameSet, camera, Phase::Blended, id);
+    zfillDraw_ = false;
+    zfilledFaded_ = std::move(fadedToZfill_);
+    fadedToZfill_.clear();
+}
+
+void CharacterRenderer::renderBlendedInstance(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
+                                              const Camera& camera, uint32_t instanceId) {
+    // The faded ones' depth first, together (zfillPipeline_).
+    if (std::find(fadedToZfill_.begin(), fadedToZfill_.end(), instanceId) != fadedToZfill_.end()) {
+        zfillFadedInstances(cmd, perFrameSet, camera);
+    }
+    overZfill_ = std::find(zfilledFaded_.begin(), zfilledFaded_.end(), instanceId) != zfilledFaded_.end();
+    render(cmd, perFrameSet, camera, Phase::Blended, instanceId);
+    overZfill_ = false;
 }
 
 void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
@@ -4608,6 +4657,14 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 }
                 // Cull, depth test and depth write from the material's flags, as
                 // the client sets them for every blend mode (FUN_0081fe90).
+                // A faded model's z-fill: its opaque and alpha-key batches'
+                // depth alone (those that write it); its colour then over it.
+                if (zfillDraw_) {
+                    if (!faded || blendMode >= 2 || (materialFlags & 0x10) != 0) continue;
+                    desiredPipeline = zfillPipeline_;
+                } else if (overZfill_ && faded && desiredPipeline == translucentPipeline_) {
+                    desiredPipeline = fadedOverZfillPipeline_;
+                }
                 desiredPipeline = gbuffer ? gbufferVariant(desiredPipeline, materialFlags, mirroredInstance)
                                           : pipelineVariant(desiredPipeline, materialFlags, mirroredInstance);
                 if (!desiredPipeline) continue;
@@ -4632,6 +4689,11 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 CharMaterialUBO matData{};
                 matData.instanceFade = instance.opacity * instance.kitAlpha * instance.cameraAlpha;
                 matData.opacity = matData.instanceFade * batchColorAlpha;
+                // The z-fill keeps what the cutout keeps, at full strength.
+                if (zfillDraw_) {
+                    matData.instanceFade = 1.0f;
+                    matData.opacity = 1.0f;
+                }
                 // 1: the client's alpha-key test. 2: a blended mode, which the
                 // client tests at 1/255 - only what is fully transparent goes.
                 matData.alphaTest = blendNeedsCutout ? 1 : (blendMode >= 2 ? 2 : 0);
@@ -4761,12 +4823,21 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
 
                 // Per-batch depth bias from materialLayer to separate coplanar
                 // armor pieces (chest/legs/gloves) that share identical depth.
-                vkCmdSetDepthBias(cmd, depth::biasFromStandard(static_cast<float>(batch.materialLayer) * 0.5f), 0.0f, 0.0f);
+                // The z-fill a hair farther than the colour drawn over it, so
+                // a surface passes its own depth whatever the two pipelines
+                // make of the same vertices; what lies behind it by more than
+                // that still fails.
+                if (zfillDraw_) {
+                    vkCmdSetDepthBias(cmd, depth::biasFromStandard(static_cast<float>(batch.materialLayer) * 0.5f + 16.0f),
+                                      0.0f, depth::biasFromStandard(1.5f));
+                } else {
+                    vkCmdSetDepthBias(cmd, depth::biasFromStandard(static_cast<float>(batch.materialLayer) * 0.5f), 0.0f, 0.0f);
+                }
 
                 vkCmdDrawIndexed(cmd, batch.indexCount, 1, batch.indexStart, 0, 0);
             }
             } // end pass loop
-        } else if ((phase == Phase::Blended) == faded) {
+        } else if ((phase == Phase::Blended) == faded && !zfillDraw_) {
             // Draw entire model with first texture: in the opaque phase, or
             // faded in the blended one (instanceDrawnFaded)
             VkTexture* texPtr = !gpuModel.textureIds.empty() ? gpuModel.textureIds[0] : whiteTexture_.get();
@@ -6373,6 +6444,8 @@ void CharacterRenderer::recreatePipelines() {
     destroy(device, mod2xPipeline_);
     destroyPipelineVariants();
     destroy(device, translucentPipeline_);
+    destroy(device, zfillPipeline_);
+    destroy(device, fadedOverZfillPipeline_);
 
     // --- Load shaders ---
     rendering::VkShaderModule charVert, charFrag;
