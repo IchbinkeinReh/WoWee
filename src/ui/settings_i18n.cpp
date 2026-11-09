@@ -329,6 +329,11 @@ constexpr SettingGerman kGerman[] = {
      "ein Boden, dessen Normalen mit den Wänden geglättet wurden, nicht fleckig dunkel wird. "
      "Dazwischen eine weiche Mischung; nie weniger als der erste Wert.",
      nullptr, nullptr, nullptr},
+    {"dbgsplitrt",
+     "Geteilt: linke Hälfte mit Raytracing",
+     "Die linke Hälfte des Bildes mit dem Raytracing-Licht zeichnen und die rechte ohne, um "
+     "beides nebeneinander zu vergleichen. Nicht im ursprünglichen Client.",
+     nullptr, nullptr, nullptr},
     {"dbgtimeoverride",
      "Diese Tageszeit verwenden",
      "Die Welt zur unten gewählten Zeit beleuchten statt zu der des Servers. Nur was gezeichnet "

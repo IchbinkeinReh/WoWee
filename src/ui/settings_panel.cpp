@@ -976,7 +976,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "rteyesensitivity",
     "rtsunrays", "rtaorays", "rtpointrays", "rtbouncerays",
     // The Debug Graphics settings: each applies all of them.
-    "dbgview", "dbgtimeoverride", "dbgtime", "dbgambient", "dbgsun", "dbgbakedlight", "dbgpointlights", "dbgbounce", "dbgshadowdarkness",
+    "dbgview", "dbgsplitrt", "dbgtimeoverride", "dbgtime", "dbgambient", "dbgsun", "dbgbakedlight", "dbgpointlights", "dbgbounce", "dbgshadowdarkness",
     "dbgmodellightintensity", "dbgmodellightreach", "dbgfirelightintensity", "dbgfirelightreach", "dbglamplightintensity", "dbglamplightreach", "dbgbuildinglightintensity", "dbgbuildinglightreach", "dbgunitlightintensity", "dbgunitlightreach",
     "dbgemissivelightintensity", "dbgemissivelightreach", "dbgparticlelightintensity", "dbgparticlelightreach",
     "dbginteriorbase", "dbginteriorfullat", "dbgmaxlight", "dbglightcountlimit",
@@ -1189,6 +1189,7 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "rtpointrays", .asInt = &SettingsPanel::pendingRtPointRays},
     {.key = "rtbouncerays", .asInt = &SettingsPanel::pendingRtBounceRays},
     {.key = "dbgview", .asInt = &SettingsPanel::pendingDbgView},
+    {.key = "dbgsplitrt", .asBool = &SettingsPanel::pendingDbgSplitRt},
     {.key = "dbgtimeoverride", .asBool = &SettingsPanel::pendingDbgTimeOverride},
     {.key = "dbgtime", .asFloat = &SettingsPanel::pendingDbgTime},
     {.key = "dbgambient", .asInt = &SettingsPanel::pendingDbgAmbient},
@@ -1687,6 +1688,8 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         if (renderer) renderer->setRtFullResolution(pendingRtFullRes);
     } else if (key == "rtsoftlamps") {
         if (renderer) renderer->setRtSoftLamps(pendingRtSoftLamps);
+    } else if (key == "dbgsplitrt") {
+        if (renderer) renderer->setRtSplitView(pendingDbgSplitRt);
     } else if (key == "rtunitshadowreach") {
         if (renderer) renderer->setRtUnitShadowReach(static_cast<float>(pendingRtUnitShadowReach));
     } else if (key == "rtminbrightness") {

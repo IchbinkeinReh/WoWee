@@ -176,6 +176,17 @@ void main() {
     vec3 rel = rtRelFromDepth(uv, depth);
     float expected = length(rel);
     Traced r = findTraced(vec2(pix) + 0.5, rel, geometricNormal(pix, s, depth, rel), expected);
+    // The Debug Graphics split (a WoWee-only view): right of the share of
+    // the width in tune4.w, no result - drawn as without the tracing.
+    if (pass.tune4.w > 0.0 && uv.x >= pass.tune4.w) {
+        r.weight = 0.0;
+        r.sun = 1.0;
+        r.ao = 1.0;
+        r.point = vec3(0.0);
+        r.pointOwn = vec3(0.0);
+        r.bakedShade = 1.0;
+        r.interiorShade = 1.0;
+    }
 
     // The sun's shadow scale over the one C0 was drawn with: the shadow
     // variants' (1 - k) + k x the light let through, the lesser of the map's

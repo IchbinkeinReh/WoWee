@@ -432,7 +432,7 @@ void main() {
         // body jump from the dusk outside to the baked room colour at the
         // threshold of Silvermoon's royal market. Without the tracing, the
         // client's switch as it is.
-        const bool traced = rtParams.x > 0.5;
+        const bool traced = rtMode() > 0.5;
         const bool known = !traced && pc.interiorAmbient.w > 0.5;
         const vec3 direct = (known ? pc.interiorDirect.rgb * pc.lightFlags.y : lightColor.rgb) * pc.diffuseColour.rgb;
         if (!traced && pc.interiorAmbient.w > 1.5) {

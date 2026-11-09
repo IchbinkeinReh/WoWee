@@ -2060,6 +2060,7 @@ void GameScreen::saveSettings() {
     // the "Probe light ratio" view came back at the next start and drew the
     // whole world flat grey and white, which read as a fogged night.
     out << "dbg_time_override=" << (settingsPanel_.pendingDbgTimeOverride ? 1 : 0) << "\n";
+    out << "dbg_split_rt=" << (settingsPanel_.pendingDbgSplitRt ? 1 : 0) << "\n";
     out << "dbg_time=" << settingsPanel_.pendingDbgTime << "\n";
     out << "dbg_ambient=" << settingsPanel_.pendingDbgAmbient << "\n";
     out << "dbg_sun=" << settingsPanel_.pendingDbgSun << "\n";
@@ -2421,6 +2422,7 @@ void GameScreen::loadSettings() {
             else if (key == "rt_bounce_rays") settingsPanel_.pendingRtBounceRays = rendering::clampRtRays(std::stoi(val));
             // dbg_view, saved by older builds, is not read: see the save.
             else if (key == "dbg_time_override") settingsPanel_.pendingDbgTimeOverride = (val == "1");
+            else if (key == "dbg_split_rt") settingsPanel_.pendingDbgSplitRt = (val == "1");
             else if (key == "dbg_time") settingsPanel_.pendingDbgTime = std::clamp(std::stof(val), 0.0f, 24.0f);
             else if (key == "dbg_ambient") settingsPanel_.pendingDbgAmbient = std::clamp(std::stoi(val), 0, 300);
             else if (key == "dbg_sun") settingsPanel_.pendingDbgSun = std::clamp(std::stoi(val), 0, 300);
