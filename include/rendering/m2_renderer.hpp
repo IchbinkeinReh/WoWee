@@ -2,6 +2,7 @@
 
 #include "rendering/memory_report.hpp"
 #include "rendering/collision_geometry.hpp"
+#include "rendering/collision_facets.hpp"
 #include "rendering/client_ribbon.hpp"
 #include "rendering/spatial_grid.hpp"
 #include "rendering/shadow_params.hpp"
@@ -845,16 +846,15 @@ public:
     /// way they face unless `facingUpOnly`.
     void gatherCollisionTriangles(const glm::vec3& boxMin, const glm::vec3& boxMax,
                                   std::vector<glm::vec3>& out, bool facingUpOnly = false) const;
+    /// The doodads' and game objects' faces for the movement sweep
+    /// (0x007a50c0 -> 0x007a4af0 -> 0x0082ec30): each bounding triangle of
+    /// an instance whose box meets the query's, with the file's normal for
+    /// it (collision_facets.hpp).
+    void gatherCollisionFacets(const glm::vec3& boxMin, const glm::vec3& boxMax,
+                               std::vector<collision::Facet>& out) const;
 
-    /// Every doodad the floor query would consider here, and what each one
-    /// contributes. The WMO side has had debugDumpGroupsAtPosition for this
-    /// since the Undercity pull was first chased; the M2 side had nothing, so
-    /// a floor that should have come from a lift deck and did not left no
-    /// trace at all beyond "m2=-99999".
-    void debugDumpFloorCandidatesAt(float glX, float glY, float glZ) const;
-    /// Logs every doodad with authored collision within `radius` of a point:
-    /// name, position, rotation and scale (WOWEE_COLLISION_TRACE).
-    void debugLogCollidersNear(const glm::vec3& pos, float radius) const;
+    /// An instance's model name, for the collision port's debug line.
+    [[nodiscard]] std::string debugInstanceName(uint32_t instanceId) const;
     [[nodiscard]] float raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3& direction, float maxDistance) const;
     void setCollisionFocus(const glm::vec3& worldPos, float radius);
 

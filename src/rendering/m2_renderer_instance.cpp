@@ -1,5 +1,6 @@
 #include <cstdlib>
 #include "rendering/m2_renderer.hpp"
+#include "rendering/collision_facets.hpp"
 #include "core/frame_profiler.hpp"
 #include "rendering/m2_renderer_internal.h"
 #include "rendering/m2_model_classifier.hpp"
@@ -1285,58 +1286,6 @@ uint32_t M2Renderer::getTotalTriangleCount() const {
     return total;
 }
 
-void M2Renderer::debugLogCollidersNear(const glm::vec3& pos, float radius) const {
-    for (const auto& instance : instances) {
-        if (!instance.cachedModel || !instance.cachedModel->collision.valid()) continue;
-        if (glm::length(glm::vec2(instance.position - pos)) > radius) continue;
-        LOG_WARNING("COLLIDER '", instance.cachedModel->name, "' pos ", instance.position.x, " ",
-                    instance.position.y, " ", instance.position.z, " rot ", instance.rotation.x,
-                    " ", instance.rotation.y, " ", instance.rotation.z, " scale ", instance.scale,
-                    " tris ", instance.cachedModel->collision.triCount);
-    }
-}
-
-void M2Renderer::debugDumpFloorCandidatesAt(float glX, float glY, float glZ) const {
-    LOG_WARNING("=== M2 Floor Debug at render(", glX, ", ", glY, ", ", glZ, ") ===");
-    glm::vec3 queryMin(glX - 2.0f, glY - 2.0f, glZ - 6.0f);
-    glm::vec3 queryMax(glX + 2.0f, glY + 2.0f, glZ + 8.0f);
-    gatherCandidates(queryMin, queryMax, tl_m2_candidateScratch);
-    int reported = 0;
-    for (size_t idx : tl_m2_candidateScratch) {
-        const auto& instance = instances[idx];
-        const char* rejected = nullptr;
-        if (collisionFocus.excludes(instance.worldBoundsMin, instance.worldBoundsMax)) {
-            rejected = "outside the collision focus";
-        } else if (!instance.cachedModel) {
-            rejected = "no model";
-        } else if (instance.scale <= 0.001f) {
-            rejected = "zero scale";
-        } else if (instance.skipCollision) {
-            rejected = "skipCollision";
-        }
-        const M2ModelGPU* model = instance.cachedModel;
-        const bool authored = model && model->collision.valid();
-        if (!rejected && model) {
-            if ((model->collisionNoBlock && !authored) || model->isInvisibleTrap ||
-                model->isSpellEffect) {
-                rejected = "classified as non-blocking";
-            }
-        }
-        if (++reported > 12) { LOG_WARNING("  ... and more"); break; }
-        LOG_WARNING("  '", model ? model->name : std::string("?"),
-                    "' isGameObject=", instance.isGameObject ? 1 : 0,
-                    " authoredCollision=", authored ? 1 : 0,
-                    " tris=", authored ? model->collision.triCount : 0u,
-                    " bounds z ", instance.worldBoundsMin.z, "..", instance.worldBoundsMax.z,
-                    (rejected ? "  REJECTED: " : "  considered"), (rejected ? rejected : ""));
-    }
-    if (reported == 0) {
-        LOG_WARNING("  nothing at all - no doodad instance overlaps this spot,"
-                    " so a deck underfoot is not in the spatial grid here");
-    }
-    LOG_WARNING("=== Total: ", reported, " M2 candidates ===");
-}
-
 bool M2Renderer::getInstanceCollisionBox(uint32_t instanceId, glm::vec3& outMin,
                                          glm::vec3& outMax) const {
     auto idxIt = instanceIndexById.find(instanceId);
@@ -1454,6 +1403,97 @@ void M2Renderer::gatherCollisionTriangles(const glm::vec3& boxMin, const glm::ve
             out.push_back(wb);
             out.push_back(wc);
         }
+    }
+}
+
+namespace {
+// WOWEE_COLLISION_PORT_TRACE: each model whose file normals point against
+// their triangles' winding, once. The sweep takes a face from the side its
+// normal points to, so such a model would be solid from the inside only.
+const bool kCollisionPortTrace = std::getenv("WOWEE_COLLISION_PORT_TRACE") != nullptr;
+void noteNormalsAgainstWinding(const std::string& modelName, uint32_t against, uint32_t total) {
+    static std::mutex mutex;
+    static std::set<std::string> seen;
+    std::lock_guard<std::mutex> lock(mutex);
+    if (!seen.insert(modelName).second) return;
+    LOG_WARNING("M2 facets: '", modelName, "' has ", against, " of ", total,
+                " file normals against the winding");
+}
+}  // namespace
+
+std::string M2Renderer::debugInstanceName(uint32_t instanceId) const {
+    const auto it = instanceIndexById.find(instanceId);
+    if (it == instanceIndexById.end() || it->second >= instances.size()) return "?";
+    const auto& instance = instances[it->second];
+    return instance.cachedModel ? instance.cachedModel->name : std::string("?");
+}
+
+void M2Renderer::gatherCollisionFacets(const glm::vec3& boxMin, const glm::vec3& boxMax,
+                                       std::vector<collision::Facet>& out) const {
+    std::vector<size_t> candidates;
+    gatherCandidates(boxMin, boxMax, candidates);
+    std::vector<uint32_t> tris, walls;
+    for (size_t idx : candidates) {
+        const auto& instance = instances[idx];
+        // Ground cover is no world object; an instance the game has taken
+        // out of collision (a closed door's open state, a corpse, the sky)
+        // stands in for the client's +0x0C 0x100.
+        if (!instance.cachedModel || instance.detailDoodad || instance.skipCollision) continue;
+        if (instance.scale <= 0.001f) continue;
+        // The box test is closed (0x007a50c0).
+        if (boxMax.x < instance.worldBoundsMin.x || boxMin.x > instance.worldBoundsMax.x ||
+            boxMax.y < instance.worldBoundsMin.y || boxMin.y > instance.worldBoundsMax.y ||
+            boxMax.z < instance.worldBoundsMin.z || boxMin.z > instance.worldBoundsMax.z) {
+            continue;
+        }
+        const M2ModelGPU& model = *instance.cachedModel;
+        // A spell's model is attached to a unit, not placed in the world;
+        // nor is a unit's particle twin (setModelParticlesOnly marks it an
+        // invisible trap) - a mount's, a creature's - which drew a mounted
+        // player's own steed round it as a wall. Units are not in the
+        // client's collision lists at all.
+        if (model.isSpellEffect || model.isInvisibleTrap || !model.collision.valid()) continue;
+
+        glm::vec2 lo(std::numeric_limits<float>::max()), hi(std::numeric_limits<float>::lowest());
+        for (int c = 0; c < 8; ++c) {
+            const glm::vec3 corner((c & 1) ? boxMax.x : boxMin.x, (c & 2) ? boxMax.y : boxMin.y,
+                                   (c & 4) ? boxMax.z : boxMin.z);
+            const glm::vec3 local(instance.invModelMatrix * glm::vec4(corner, 1.0f));
+            lo = glm::min(lo, glm::vec2(local));
+            hi = glm::max(hi, glm::vec2(local));
+        }
+        // The two cell lists overlap (a face between 0.35 and 0.65 is in
+        // both), so take each triangle once.
+        model.collision.getFloorTrisInRange(lo.x, lo.y, hi.x, hi.y, tris);
+        model.collision.getWallTrisInRange(lo.x, lo.y, hi.x, hi.y, walls);
+        tris.insert(tris.end(), walls.begin(), walls.end());
+        std::sort(tris.begin(), tris.end());
+        tris.erase(std::unique(tris.begin(), tris.end()), tris.end());
+
+        const auto& verts = model.collision.vertices;
+        const auto& indices = model.collision.indices;
+        const auto& normals = model.collision.normals;
+        const glm::mat3 axes = collision::unitAxes(instance.modelMatrix);
+        uint32_t against = 0, taken = 0;
+        for (uint32_t ti : tris) {
+            if (ti >= model.collision.triCount) continue;
+            const glm::vec3& a = verts[indices[ti * 3]];
+            const glm::vec3& b = verts[indices[ti * 3 + 1]];
+            const glm::vec3& c = verts[indices[ti * 3 + 2]];
+            const glm::vec3* fileNormal = ti < normals.size() ? &normals[ti] : nullptr;
+            const size_t before = out.size();
+            collision::appendDoodadTriangle(instance.modelMatrix, axes, a, b, c, fileNormal, boxMin,
+                                            boxMax, out);
+            if (out.size() > before) {
+                out.back().kind = collision::Facet::Kind::Doodad;
+                out.back().owner = instance.id;
+            }
+            if (kCollisionPortTrace && fileNormal && out.size() > before) {
+                ++taken;
+                if (glm::dot(*fileNormal, glm::cross(b - a, c - a)) < 0.0f) ++against;
+            }
+        }
+        if (kCollisionPortTrace && against > 0) noteNormalsAgainstWinding(model.name, against, taken);
     }
 }
 
