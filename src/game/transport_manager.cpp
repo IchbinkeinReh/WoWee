@@ -837,13 +837,18 @@ void TransportManager::updateTransportMovement(ActiveTransport& transport, float
     // The model plays each key's SequenceID from that key on (0x0070daa0 ->
     // 0x0077fec0): an Undercity lift's ShipStart (162) as it sets off and
     // ShipStop (164) as it arrives, its gears and gates moving with it.
-    // Played when it changes, once and held, as a transition; 0 is the
+    // Played when it changes, once, as a transition; 0 is the
     // model's resting loop.
     if (transport.isM2 && m2Renderer_ && transport.wmoInstanceId != 0 && !pathEntry->keySequences.empty()) {
         const uint32_t seq = pathEntry->sequenceAt(pathTimeMs);
         if (static_cast<int>(seq) != transport.appliedNodeSequence) {
             transport.appliedNodeSequence = static_cast<int>(seq);
+            // ShipStart and ShipStop go on, when they end, into ShipMoving
+            // and Stand: the animation-end callback the client registers on
+            // a transport's model (0x0070b2b0, from 0x0070b580/0x0070d980).
             if (seq == 0) m2Renderer_->setInstanceAnimation(transport.wmoInstanceId, 0, true);
+            else if (seq == 162u) m2Renderer_->setInstanceAnimationThen(transport.wmoInstanceId, 162u, 163u);
+            else if (seq == 164u) m2Renderer_->setInstanceAnimationThen(transport.wmoInstanceId, 164u, 0u);
             else m2Renderer_->setInstanceAnimationHeld(transport.wmoInstanceId, seq, false);
             LOG_INFO("Transport 0x", std::hex, transport.guid, std::dec, " entry=", transport.entry,
                      " plays sequence ", seq, " at ", pathTimeMs, "ms (model has it: ",
