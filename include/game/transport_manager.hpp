@@ -14,6 +14,8 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include "game/transport_physics.hpp"
+
 namespace wowee::rendering {
     class WMORenderer;
     class M2Renderer;
@@ -30,6 +32,12 @@ struct ActiveTransport {
     uint32_t wmoInstanceId;     // WMO renderer instance ID
     uint32_t pathId;            // Current path
     uint32_t entry = 0;         // GameObject entry (for MO_TRANSPORT path updates)
+    // The rotation before the sway went on, and with it: where a frame
+    // leaves the rotation as it was (a dock dwell), the sway goes on the
+    // unswayed one again rather than on top of itself.
+    glm::quat unswayedRotation{1.0f, 0.0f, 0.0f, 0.0f};
+    glm::quat swayedRotation{1.0f, 0.0f, 0.0f, 0.0f};
+    bool swayed = false;
     uint32_t displayId = 0;     // GameObject display id, used for model-family-specific behavior
     glm::vec3 basePosition;     // Spawn position (base offset for path)
     glm::vec3 position;         // Current world position
@@ -372,6 +380,11 @@ public:
 
     // Load transport paths from TaxiPathNode.dbc (world-coordinate paths for MO_TRANSPORT)
     bool loadTaxiPathNodeDBC(pipeline::AssetManager* assetMgr);
+    /// TransportPhysics.dbc, the sway rows (0x00711b50).
+    bool loadTransportPhysicsDBC(pipeline::AssetManager* assetMgr);
+    /// The TransportPhysics row an MO_TRANSPORT template names (its sixth
+    /// datum); 0 for none.
+    void setTransportPhysicsForEntry(uint32_t entry, uint32_t physicsId);
 
     // Check if a TaxiPathNode path exists for a given taxiPathId (on any map)
     [[nodiscard]] bool hasTaxiPath(uint32_t taxiPathId) const;
@@ -458,6 +471,10 @@ private:
     std::unordered_map<uint64_t, ServerPathTime> serverPathTimes_;
     std::unordered_map<uint64_t, glm::quat> parentRotations_;
     uint64_t riderTransportGuid_ = 0;
+    std::unordered_map<uint32_t, transport_physics::Physics> physicsRows_;
+    std::unordered_map<uint32_t, uint32_t> physicsByEntry_;
+    /// 0x007f7dd0: the sway of a ship on its own route at `pathTimeMs`.
+    void applySway(ActiveTransport& transport, const PathEntry& path, uint32_t pathTimeMs);
     rendering::WMORenderer* wmoRenderer_ = nullptr;
     rendering::M2Renderer* m2Renderer_ = nullptr;
     bool clientSideAnimation_ = false;  // DISABLED - use server positions instead of client prediction

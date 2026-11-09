@@ -4525,6 +4525,9 @@ void EntityController::handleGameObjectQueryResponse(network::Packet& packet) {
             static std::set<uint32_t> saidRoute;
             const bool sayThis = saidRoute.insert(data.entry).second;
             const uint32_t taxiPathId = data.hasData ? data.data[0] : 0u;
+            // Its sway: the TransportPhysics row of the sixth datum (0x00711b50).
+            owner_.getTransportManager()->setTransportPhysicsForEntry(
+                data.entry, data.hasData ? data.data[5] : 0u);
             if (taxiPathId == 0) {
                 if (sayThis) {
                     LOG_WARNING("MO_TRANSPORT entry=", data.entry,

@@ -987,6 +987,7 @@ bool Application::initialize() {
             gameHandler->getTransportManager()->loadTransportAnimationDBC(assetManager.get());
             gameHandler->getTransportManager()->loadTransportRotationDBC(assetManager.get());
             gameHandler->getTransportManager()->loadTaxiPathNodeDBC(assetManager.get());
+            gameHandler->getTransportManager()->loadTransportPhysicsDBC(assetManager.get());
         }
 
         // Initialize addon system

@@ -3695,3 +3695,8 @@ wowee_add_test(test_swim_wave SOURCES test_swim_wave.cpp)
 # A ship's crossing on its loading screen (0x00409880, 0x0040b0b0).
 wowee_add_test(test_loading_screen_route
     SOURCES test_loading_screen_route.cpp)
+
+# ── test_transport_physics ───────────────────────────
+# A ship's sway on its route (0x007f7dd0, 0x007f7b30).
+wowee_add_test(test_transport_physics
+    SOURCES test_transport_physics.cpp)
