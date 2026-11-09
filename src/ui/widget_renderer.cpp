@@ -2350,6 +2350,11 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
     }
 
     for (const Widget* w : order) {
+        // A region in a layer its frame has disabled is not drawn.
+        if ((w->kind == WidgetKind::Texture || w->kind == WidgetKind::FontString) && w->parent) {
+            const Widget* owner = tree.get(w->parent);
+            if (owner && (owner->drawLayersOff >> static_cast<unsigned>(w->layer)) & 1u) continue;
+        }
         // Anything inside a scroll frame is bounded by it. Without this a
         // scroll child taller than its window draws over everything above and
         // below, which is not a window onto it at all.

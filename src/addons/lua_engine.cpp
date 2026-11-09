@@ -7219,6 +7219,31 @@ int lua_Frame_GetHyperlinksEnabled(lua_State* L) {
     return 1;
 }
 
+/// Frame:EnableDrawLayer / DisableDrawLayer(layer) (0x0049fc90, 0x0049fd00):
+/// the layer named, ARTWORK when none is.
+int lua_Frame_SetDrawLayerEnabled(lua_State* L, bool on) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    const auto layer = lua_isstring(L, 2) ? wowee::ui::parseDrawLayer(lua_tostring(L, 2))
+                                          : wowee::ui::DrawLayer::Artwork;
+    const auto bit = static_cast<uint8_t>(1u << static_cast<unsigned>(layer));
+    if (on) w->drawLayersOff = static_cast<uint8_t>(w->drawLayersOff & ~bit);
+    else    w->drawLayersOff = static_cast<uint8_t>(w->drawLayersOff | bit);
+    return 0;
+}
+int lua_Frame_EnableDrawLayer(lua_State* L) { return lua_Frame_SetDrawLayerEnabled(L, true); }
+int lua_Frame_DisableDrawLayer(lua_State* L) { return lua_Frame_SetDrawLayerEnabled(L, false); }
+/// Set/GetDontSavePosition (0x004a08c0, 0x004a0910).
+int lua_Frame_SetDontSavePosition(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->dontSavePosition = lua_toboolean(L, 2) != 0;
+    return 0;
+}
+int lua_Frame_GetDontSavePosition(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->dontSavePosition);
+    return 1;
+}
+
 /// Cooldown:GetReverse / GetDrawEdge (0x005ec9f0, 0x005eca80): booleans.
 int lua_Cooldown_GetReverse(lua_State* L) {
     const auto* w = widgetOf(L, 1);
@@ -8455,6 +8480,10 @@ void LuaEngine::registerCoreAPI() {
         {"GetInsertMode",         lua_MessageFrame_GetInsertMode},
         {"GetHyperlinksEnabled",  lua_Frame_GetHyperlinksEnabled},
         {"GetReverse",            lua_Cooldown_GetReverse},
+        {"EnableDrawLayer",       lua_Frame_EnableDrawLayer},
+        {"DisableDrawLayer",      lua_Frame_DisableDrawLayer},
+        {"SetDontSavePosition",   lua_Frame_SetDontSavePosition},
+        {"GetDontSavePosition",   lua_Frame_GetDontSavePosition},
         {"GetDrawEdge",           lua_Cooldown_GetDrawEdge},
         {"GetShadowColor",        lua_FontString_GetShadowColor},
         {"GetShadowOffset",       lua_FontString_GetShadowOffset},

@@ -171,6 +171,12 @@ struct Widget {
     uint32_t creationOrder = 0;
 
     std::vector<Anchor> anchors;
+    /// DisableDrawLayer(layer): a bit per DrawLayer whose regions this frame
+    /// does not draw (CSimpleFrame +500, 0x00490620); EnableDrawLayer clears
+    /// it (0x00490600).
+    uint8_t drawLayersOff = 0;
+    /// SetDontSavePosition (flag 0x80000 of +0xb4, 0x004a08c0).
+    bool dontSavePosition = false;
     float width = 0.0f;
     float height = 0.0f;
     bool shown = true;
