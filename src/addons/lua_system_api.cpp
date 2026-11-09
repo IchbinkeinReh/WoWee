@@ -3809,15 +3809,17 @@ static int& selectedDisplayChannel() { static int selected = 0; return selected;
 
 /// One row of the channel pane, as 0x00504840 lays them out (0x20 bytes each
 /// at 0xb74468): the Group, World and Custom headers in that order, each
-/// followed - unless collapsed - by its rows. Group holds a Party row while
-/// the player's party has anyone else in it and a Battleground row in a raid
-/// on a battleground or arena map (0x00572f50); the Raid row and the voice
-/// sessions behind both are voice chat's, which this client has none of.
+/// followed - unless collapsed - by its rows. Group holds, off a battleground,
+/// a Raid row in a raid (GetNumRaidMembers, 0xbeb608) and else a Party row
+/// while the player's party has anyone else in it; on a battleground or arena
+/// map (0x00572f50) the Party row and a Battleground row - the Raid row there
+/// is voice chat's, which this client has none of. The header counts the
+/// three flags, so a raid's Group says 2 over its one row, as the client's.
 /// World holds the joined zone channels (slot +0x94), Custom the others not
 /// being left (+0xa0). A header's count is every row of its kind, shown or
 /// collapsed.
 struct ChannelDisplayRow {
-    enum class Kind { Header, Channel, Party, Battleground } kind = Kind::Header;
+    enum class Kind { Header, Channel, Party, Raid, Battleground } kind = Kind::Header;
     int category = 0;                                      // header: 0 group, 1 world, 2 custom
     const game::chat_channels::Slot* slot = nullptr;       // channel rows
     uint32_t count = 0;                                    // header: rows of its kind; group rows: members
@@ -3836,13 +3838,19 @@ static std::vector<ChannelDisplayRow> channelDisplayRows(game::GameHandler* gh) 
     uint32_t subgroupOthers = 0;
     for (const auto& m : party.members)
         if (m.guid != self && (!raid || m.subGroup == party.subGroup)) ++subgroupOthers;
-    const bool partyRow = inGroup && subgroupOthers > 0;
+    const bool partyFlag = inGroup && subgroupOthers > 0;
     const int mapType = gh->currentMapInstanceType();
     const bool bgRow = raid && (mapType == 3 || mapType == 4);
+    const bool raidRow = raid && !bgRow;
+    const uint32_t raidCount = static_cast<uint32_t>(party.members.size()) + 1;
     rows.push_back({ChannelDisplayRow::Kind::Header, 0, nullptr,
-                    static_cast<uint32_t>(partyRow) + static_cast<uint32_t>(bgRow), false});
+                    static_cast<uint32_t>(partyFlag) + static_cast<uint32_t>(raidRow) +
+                        static_cast<uint32_t>(bgRow),
+                    false});
     if (!collapsed[0]) {
-        if (partyRow) rows.push_back({ChannelDisplayRow::Kind::Party, 0, nullptr, subgroupOthers + 1, false});
+        if (raidRow) rows.push_back({ChannelDisplayRow::Kind::Raid, 0, nullptr, raidCount, false});
+        else if (partyFlag)
+            rows.push_back({ChannelDisplayRow::Kind::Party, 0, nullptr, subgroupOthers + 1, false});
         if (bgRow)
             rows.push_back({ChannelDisplayRow::Kind::Battleground, 0, nullptr,
                             static_cast<uint32_t>(party.members.size()) + 1, false});
@@ -9569,7 +9577,8 @@ void registerSystemLuaAPI(lua_State* L) {
                 // voiceEnabled, voiceActive for the pane's row: a header names
                 // its category (CHANNEL_CATEGORY_GROUP/WORLD/CUSTOM, localized)
                 // with its collapse flag and count; the group rows are
-                // CHAT_MSG_PARTY and CHAT_MSG_BATTLEGROUND with their members;
+                // CHAT_MSG_PARTY, CHAT_MSG_RAID and CHAT_MSG_BATTLEGROUND with
+                // their members;
                 // a channel row gives its name and number under WORLD or
                 // CUSTOM. The last is the selected row's 1.
                 {"GetChannelDisplayInfo", [](lua_State* L) -> int {
@@ -9606,7 +9615,9 @@ void registerSystemLuaAPI(lua_State* L) {
                 if (active) lua_pushnumber(L, 1); else lua_pushnil(L);
                 lua_pushstring(L, row.world ? kCategories[1] : kCategories[2]);
             } else {
-                const char* key = row.kind == ChannelDisplayRow::Kind::Party ? "CHAT_MSG_PARTY" : "CHAT_MSG_BATTLEGROUND";
+                const char* key = row.kind == ChannelDisplayRow::Kind::Party ? "CHAT_MSG_PARTY"
+                                  : row.kind == ChannelDisplayRow::Kind::Raid  ? "CHAT_MSG_RAID"
+                                                                               : "CHAT_MSG_BATTLEGROUND";
                 lua_pushstring(L, game::interfaceString(key, key).c_str());
                 lua_pushnil(L);
                 lua_pushnil(L);
