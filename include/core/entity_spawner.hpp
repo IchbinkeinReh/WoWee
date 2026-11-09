@@ -1337,12 +1337,39 @@ private:
         uint32_t state = 0;
         uint32_t display = 0;
         std::vector<uint32_t> sets;
+        bool hasRow = false;
+        std::array<uint32_t, 4> stateDisplay{};
+        std::array<uint32_t, 4> ambientSet{}, firstSet{}, impactSet{};
+        uint32_t repairFx = 0;
+        uint32_t healEffect = 0;
+        int32_t healSpeed = 0;
     };
+    /// A change of look being played: the look it came from, kept until the
+    /// new one is up (and through a rise), the rise and its repair effect.
+    struct DestructibleRun {
+        std::string wmoPath, fromWmoPath;
+        int pendingFrom = -1;
+        uint32_t oldInstance = 0;
+        bool oldIsWmo = true;
+        bool rising = false;
+        uint32_t healEffect = 0;
+        uint32_t newInstance = 0;
+        glm::mat4 newBase{1.0f}, oldBase{1.0f};
+        float height = 0.0f, oldHeight = 0.0f;
+        uint32_t riseStartMs = 0, riseMs = 0;
+        uint32_t fxInstance = 0;
+    };
+    struct DoodadAnimChain { uint32_t instance = 0; uint32_t endMs = 0; uint32_t then = 0; };
     bool destructibleLook(uint64_t guid, uint32_t entry, DestructibleLook& out) const;
+    const pipeline::WMOModel* destructibleRoot(const std::string& wmoPath);
+    std::vector<uint32_t> hangDoodadSet(uint32_t wmoInstance, const pipeline::WMOModel& root, uint32_t set);
+    void startDoodadChain(uint32_t instance, uint32_t once, uint32_t then);
     void spawnDestructibleDoodads(uint64_t guid, const std::string& wmoPath);
     void clearDestructible(uint64_t guid);
+    void updateDestructibles();
     std::unordered_map<uint64_t, uint32_t> destructibleStates_;
-    std::unordered_map<uint64_t, std::vector<uint32_t>> destructibleDoodads_;
+    std::unordered_map<uint64_t, DestructibleRun> destructibleRuns_;
+    std::vector<DoodadAnimChain> destructibleAnimChains_;
     std::unordered_map<std::string, std::shared_ptr<pipeline::WMOModel>> destructibleWmoRoots_;
     void applyGameObjectArtKit(uint64_t guid);
     void clearGameObjectArtKit(uint64_t guid);

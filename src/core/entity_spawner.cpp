@@ -118,6 +118,7 @@ void EntitySpawner::update() {
     updateGameObjectCustomAnims();
     updateGameObjectDestroyPending();
     updateGameObjectArtKits();
+    updateDestructibles();
     stage(6);
 }
 

@@ -1045,6 +1045,7 @@ void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_
 
         gameObjectInstances_[guid] = {.modelId = modelId, .instanceId = instanceId, .isWmo = false,
                                       .scale = scale};
+        spawnDestructibleDoodads(guid, {});
 
         // ...and the pose the server described before this model existed.
         if (auto pending = gameObjectPendingState_.find(guid);
