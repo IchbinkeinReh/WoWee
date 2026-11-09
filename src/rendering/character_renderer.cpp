@@ -4816,7 +4816,16 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
 
                 // Per-batch depth bias from materialLayer to separate coplanar
                 // armor pieces (chest/legs/gloves) that share identical depth.
-                vkCmdSetDepthBias(cmd, depth::biasFromStandard(static_cast<float>(batch.materialLayer) * 0.5f), 0.0f, 0.0f);
+                // The z-fill a hair farther than the colour drawn over it, so
+                // a surface passes its own depth whatever the two pipelines
+                // make of the same vertices; what lies behind it by more than
+                // that still fails.
+                if (zfillDraw_) {
+                    vkCmdSetDepthBias(cmd, depth::biasFromStandard(static_cast<float>(batch.materialLayer) * 0.5f + 16.0f),
+                                      0.0f, depth::biasFromStandard(1.5f));
+                } else {
+                    vkCmdSetDepthBias(cmd, depth::biasFromStandard(static_cast<float>(batch.materialLayer) * 0.5f), 0.0f, 0.0f);
+                }
 
                 vkCmdDrawIndexed(cmd, batch.indexCount, 1, batch.indexStart, 0, 0);
             }
