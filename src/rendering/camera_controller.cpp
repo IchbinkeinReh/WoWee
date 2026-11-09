@@ -3639,6 +3639,8 @@ void CameraController::update(float deltaTime) {
         movementSuppressTimer_ -= deltaTime;
     }
     bool movementSuppressed = movementSuppressTimer_ > 0.0f;
+    if (jumpSuppressTimer_ > 0.0f) jumpSuppressTimer_ -= deltaTime;
+    const bool jumpSuppressed = jumpSuppressTimer_ > 0.0f;
 
     // Determine current key states
     // Arrow keys mirror WASD the way the original client maps them:
@@ -3658,7 +3660,7 @@ void CameraController::update(float deltaTime) {
     bool ctrlDown = !useWoWSpeed && !uiWantsKeyboard &&
                     (input.isKeyPressed(SDL_SCANCODE_LCTRL) || input.isKeyPressed(SDL_SCANCODE_RCTRL));
     // JumpOrAscendStart() presses it once, as the key does.
-    bool nowJump = !uiWantsKeyboard && !sitting && !movementSuppressed &&
+    bool nowJump = !uiWantsKeyboard && !sitting && !jumpSuppressed &&
                    (input.isKeyJustPressed(SDL_SCANCODE_SPACE) || bindingJump_);
     bindingJump_ = false;
     // Swimming and flying need the held state, not the press edge: on land
