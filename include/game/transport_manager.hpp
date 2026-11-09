@@ -275,10 +275,17 @@ public:
     /// Whether a transport still holds a passenger at a point though the
     /// ground under it is the world's (vtable +0xf0, 0x0070b360 ->
     /// 0x0077ffb0): an M2 one while the point is inside its model's
-    /// collision box, its top raised a head's height; a WMO one never, as it
-    /// has no convex volume here to say so (0x007aea10 answers 0 without).
+    /// collision box, its top raised a head's height; a WMO one - a ship, a
+    /// zeppelin - while the point is inside the convex volume its root's MCVP
+    /// planes bound (0x007aea10). A WMO without them (most elevators) holds
+    /// nobody here, as before: the client's answer for one is that it holds
+    /// everyone, which here would carry a rider who walked off it along with
+    /// it wherever it went.
     [[nodiscard]] bool stillHoldsPassenger(uint64_t transportGuid,
                                            const glm::vec3& canonicalPosition) const;
+    /// Whether a transport's hold on its passengers is known here: an M2's
+    /// box, or a WMO's convex volume (MCVP) once its model has loaded.
+    [[nodiscard]] bool hasPassengerHold(uint64_t transportGuid) const;
     void registerTransport(uint64_t guid,
                            uint32_t wmoInstanceId,
                            uint32_t pathId,

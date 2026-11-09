@@ -653,7 +653,20 @@ bool TransportManager::stillHoldsPassenger(uint64_t transportGuid,
     const auto it = transports_.find(transportGuid);
     if (it == transports_.end()) return false;
     const ActiveTransport& transport = it->second;
-    if (!transport.isM2) return false;
+    if (!transport.isM2) {
+        // A ship's or a zeppelin's hold is its WMO's (0x0077ffb0, the model's
+        // flag 0x8 -> 0x007aea10): the mover's place in the model's own
+        // space, inside the volume its MCVP planes bound. A model not loaded
+        // holds nobody (0x007aea10's +0x1e0); one without planes holds nobody
+        // here (see the declaration).
+        if (transport.wmoInstanceId == 0 || !wmoRenderer_) return false;
+        std::vector<glm::vec4> planes;
+        if (!wmoRenderer_->getInstanceConvexVolume(transport.wmoInstanceId, planes) || planes.empty())
+            return false;
+        const glm::vec3 local = transport_local::toWire(
+            true, transport_local::toLocal(true, passengerFrame(transport), canonicalPosition));
+        return transport_boarding::insideConvexVolume(local, planes);
+    }
     // No model to ask: 0x0070b360 keeps the passenger.
     if (transport.wmoInstanceId == 0 || !m2Renderer_) return true;
     glm::vec3 boxMin, boxMax;
@@ -663,6 +676,15 @@ bool TransportManager::stillHoldsPassenger(uint64_t transportGuid,
     const glm::vec3 local = transport_local::toWire(
         false, transport_local::toLocal(false, passengerFrame(transport), canonicalPosition));
     return transport_boarding::insideCollisionBox(local, boxMin, boxMax);
+}
+
+bool TransportManager::hasPassengerHold(uint64_t transportGuid) const {
+    const auto it = transports_.find(transportGuid);
+    if (it == transports_.end()) return false;
+    if (it->second.isM2) return true;
+    std::vector<glm::vec4> planes;
+    return it->second.wmoInstanceId != 0 && wmoRenderer_ &&
+           wmoRenderer_->getInstanceConvexVolume(it->second.wmoInstanceId, planes) && !planes.empty();
 }
 
 std::optional<float> TransportManager::getTransportDeckFloorHeight(

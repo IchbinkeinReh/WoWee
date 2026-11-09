@@ -964,6 +964,7 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
         modelData.minimapLinks.assign(count, {});
         modelData.liquidWalk.assign(count, {});
         modelData.wmoId = model.wmoId;
+        modelData.convexVolumePlanes = model.convexVolumePlanes;
         for (size_t gi = 0; gi < count; ++gi) {
             auto& info = modelData.minimapGroups[gi];
             if (gi < model.groupInfo.size()) {
@@ -3883,6 +3884,16 @@ std::optional<float> WMORenderer::getFloorHeight(float glX, float glY, float glZ
 
     if (outGroundType) *outGroundType = bestFloor ? bestGroundType : -1;
     return bestFloor;
+}
+
+bool WMORenderer::getInstanceConvexVolume(uint32_t instanceId, std::vector<glm::vec4>& outPlanes) const {
+    outPlanes.clear();
+    const auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end() || idxIt->second >= instances.size()) return false;
+    const auto modelIt = loadedModels.find(instances[idxIt->second].modelId);
+    if (modelIt == loadedModels.end()) return false;
+    outPlanes = modelIt->second.convexVolumePlanes;
+    return true;
 }
 
 std::optional<float> WMORenderer::getInstanceFloorHeight(uint32_t instanceId,

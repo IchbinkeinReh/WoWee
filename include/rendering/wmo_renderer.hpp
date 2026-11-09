@@ -410,6 +410,12 @@ public:
                                         int32_t* outGroundType = nullptr) const;
 
     /** Query floor collision from one moving WMO instance. */
+    /// The planes of an instance's model's convex volume (MCVP), in the
+    /// model's own space - a transport's hold on its passengers (0x007aea10).
+    /// False for an instance or model not loaded; true with no planes for a
+    /// model that has none.
+    bool getInstanceConvexVolume(uint32_t instanceId, std::vector<glm::vec4>& outPlanes) const;
+
     std::optional<float> getInstanceFloorHeight(uint32_t instanceId,
                                                 float glX, float glY, float glZ,
                                                 float* outNormalZ = nullptr) const;
@@ -910,6 +916,8 @@ private:
         uint32_t wmoId = 0;
         // MFOG, and each group's four indices into it (0 = none)
         std::vector<pipeline::WMOFog> fogs;
+        /// MCVP: the convex volume a transport holds its passengers in.
+        std::vector<glm::vec4> convexVolumePlanes;
         std::vector<std::array<uint8_t, 4>> groupFogIndices;
 
         // Set once the textures and materials below have been populated, so a
