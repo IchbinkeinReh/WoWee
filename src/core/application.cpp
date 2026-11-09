@@ -1186,6 +1186,18 @@ bool Application::initialize() {
             auto* wmap = r ? r->getWorldMap() : nullptr;
             return wmap ? wmap->zoneNameAtMapPoint(u, v) : std::string();
         };
+        luaSvc.getMapHighlightAt = [r = renderer.get()](float u, float v) {
+            addons::LuaServices::MapHighlightAnswer a;
+            auto* wmap = r ? r->getWorldMap() : nullptr;
+            if (!wmap) return a;
+            const auto h = wmap->mapHighlightAt(u, v);
+            a.name = h.name;
+            a.fileName = h.fileName;
+            a.texCoordX = h.texCoordX; a.texCoordY = h.texCoordY;
+            a.textureX = h.textureX;   a.textureY = h.textureY;
+            a.scrollX = h.scrollX;     a.scrollY = h.scrollY;
+            return a;
+        };
         luaSvc.clickMapPoint = [r = renderer.get()](float u, float v) -> bool {
             auto* wmap = r ? r->getWorldMap() : nullptr;
             return wmap ? wmap->clickMapPoint(u, v) : false;

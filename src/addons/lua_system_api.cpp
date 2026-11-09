@@ -10042,11 +10042,17 @@ void registerSystemLuaAPI(lua_State* L) {
             auto* svc = getLuaServices(L);
             const float u = static_cast<float>(luaL_optnumber(L, 1, -1.0));
             const float v = static_cast<float>(luaL_optnumber(L, 2, -1.0));
-            std::string name;
-            if (svc && svc->getMapZoneNameAt) name = svc->getMapZoneNameAt(u, v);
-            if (name.empty()) lua_pushnil(L);
-            else              lua_pushstring(L, name.c_str());
-            for (int i = 0; i < 7; ++i) lua_pushnil(L);
+            // 0x00545110: the name, and where the highlight is to be drawn -
+            // its texture's folder, the part of the texture used, its size
+            // and its place on the map - which WorldMapButton_OnUpdate hands
+            // WorldMapHighlight. Nil for the texture and zeros where there
+            // is no highlight, and two nils where there is nothing at all.
+            LuaServices::MapHighlightAnswer a;
+            if (svc && svc->getMapHighlightAt) a = svc->getMapHighlightAt(u, v);
+            if (a.name.empty()) lua_pushnil(L); else lua_pushstring(L, a.name.c_str());
+            if (a.fileName.empty()) lua_pushnil(L); else lua_pushstring(L, a.fileName.c_str());
+            for (float f : {a.texCoordX, a.texCoordY, a.textureX, a.textureY, a.scrollX, a.scrollY})
+                lua_pushnumber(L, f);
             return 8;
         }},
                 // Clicking a continent drills into the zone under the point.

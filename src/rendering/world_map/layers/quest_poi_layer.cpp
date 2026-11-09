@@ -67,6 +67,9 @@ void QuestPOILayer::render(const LayerContext& ctx) {
                                   kBlobEdge, ImDrawFlags_Closed, 1.5f);
         ctx.drawList->PopClipRect();
     }
+    // In FrameXML's frame the markers are its own QuestPOI buttons; the
+    // shaded areas are WorldMapBlobFrame's, which the client draws itself.
+    if (ctx.hostedInFrame) return;
     for (const auto& qp : *pois_) {
         glm::vec3 rPos = core::coords::canonicalToRender(
             glm::vec3(qp.wowX, qp.wowY, 0.0f));

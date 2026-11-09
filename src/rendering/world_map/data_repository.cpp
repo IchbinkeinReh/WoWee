@@ -710,6 +710,17 @@ void DataRepository::buildAzerothView(pipeline::AssetManager& assetManager) {
             e.uvRight = static_cast<float>(wmc->getInt32(r, 3) + 1) * scale / 62.625f + fx;
             e.uvTop = static_cast<float>(wmc->getInt32(r, 4)) * scale / 41.75f + fy;
             e.uvBottom = static_cast<float>(wmc->getInt32(r, 5) + 1) * scale / 41.75f + fy;
+            // Its highlight (0x00545110's Azeroth branch): the grid's own
+            // width and height, the longer side the whole texture.
+            const float w = static_cast<float>(wmc->getInt32(r, 3) - wmc->getInt32(r, 2) + 1);
+            const float h = static_cast<float>(wmc->getInt32(r, 5) - wmc->getInt32(r, 4) + 1);
+            e.fileName = wma->getString(i, 3);
+            if (w <= h) { e.texCoordX = w / h; e.texCoordY = 1.0f; }
+            else        { e.texCoordX = 1.0f; e.texCoordY = h / w; }
+            e.textureX = scale * w / 62.625f;
+            e.textureY = scale * h / 41.75f;
+            e.scrollX = e.uvLeft;
+            e.scrollY = e.uvTop;
             azerothRegions_.push_back(std::move(e));
             break;
         }

@@ -131,6 +131,8 @@ public:
 
     /// The name of that zone, or empty.
     [[nodiscard]] std::string zoneNameAtMapPoint(float u, float v) const;
+    /// UpdateMapHighlight's answer for a point (0x00545110).
+    [[nodiscard]] MapHighlight mapHighlightAt(float u, float v) const;
 
     /// Drill into the zone under that point, as clicking it would.
     bool clickMapPoint(float u, float v);

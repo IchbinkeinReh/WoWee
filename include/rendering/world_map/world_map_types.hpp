@@ -42,6 +42,18 @@ struct CosmicMapEntry {
     std::string label;
     // Clickable region in UV space (0-1 range on the cosmic composite)
     float uvLeft = 0, uvTop = 0, uvRight = 0, uvBottom = 0;
+    /// An Azeroth-map continent's highlight as UpdateMapHighlight answers it
+    /// (0x00545110): its WorldMapArea row's texture name, the part of the
+    /// highlight texture used, and its size and place on the map.
+    std::string fileName;
+    float texCoordX = 0, texCoordY = 0, textureX = 0, textureY = 0, scrollX = 0, scrollY = 0;
+};
+
+/// UpdateMapHighlight's eight answers (0x00545110).
+struct MapHighlight {
+    std::string name;
+    std::string fileName;
+    float texCoordX = 0, texCoordY = 0, textureX = 0, textureY = 0, scrollX = 0, scrollY = 0;
 };
 
 // ── Zone bounds (shared between Zone and coordinate projection) ──
