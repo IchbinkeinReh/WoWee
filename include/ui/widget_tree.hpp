@@ -186,6 +186,9 @@ struct Widget {
     /// that keeps it out of the drawing and out of GetRegions.
     uint32_t titleRegion = 0;
     bool isTitleRegion = false;
+    /// SetIndentedWordWrap / indented="": every wrapped line after the first
+    /// set in (font instance flag 0x20000, 0x0048e0e0/0x0048e600).
+    bool indentedWordWrap = false;
     float width = 0.0f;
     float height = 0.0f;
     bool shown = true;

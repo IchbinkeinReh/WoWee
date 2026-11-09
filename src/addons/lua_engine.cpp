@@ -2322,6 +2322,16 @@ int lua_FontString_CanWordWrap(lua_State* L) {
     lua_pushboolean(L, (w && w->wordWrap) ? 1 : 0);
     return 1;
 }
+int lua_FontString_SetIndentedWordWrap(lua_State* L) {
+    auto* w = widgetToRemeasure(L, 1);
+    if (w) w->indentedWordWrap = lua_toboolean(L, 2) != 0;
+    return 0;
+}
+int lua_FontString_GetIndentedWordWrap(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->indentedWordWrap);
+    return 1;
+}
 int lua_FontString_SetNonSpaceWrap(lua_State* L) {
     auto* w = widgetToRemeasure(L, 1);
     if (w) w->nonSpaceWrap = lua_toboolean(L, 2) != 0;
@@ -5881,6 +5891,8 @@ void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
         set("CanWordWrap", lua_FontString_CanWordWrap);
         set("SetNonSpaceWrap", lua_FontString_SetNonSpaceWrap);
         set("CanNonSpaceWrap", lua_FontString_CanNonSpaceWrap);
+        set("SetIndentedWordWrap", lua_FontString_SetIndentedWordWrap);
+        set("GetIndentedWordWrap", lua_FontString_GetIndentedWordWrap);
         set("GetShadowColor", lua_FontString_GetShadowColor);
         set("GetShadowOffset", lua_FontString_GetShadowOffset);
     }
@@ -8649,6 +8661,8 @@ void LuaEngine::registerCoreAPI() {
         {"GetShadowColor",        lua_FontString_GetShadowColor},
         {"GetShadowOffset",       lua_FontString_GetShadowOffset},
         {"CanNonSpaceWrap",       lua_FontString_CanNonSpaceWrap},
+        {"SetIndentedWordWrap",   lua_FontString_SetIndentedWordWrap},
+        {"GetIndentedWordWrap",   lua_FontString_GetIndentedWordWrap},
         {"SetValueStep",          lua_Slider_SetValueStep},
         {"GetValueStep",          lua_Slider_GetValueStep},
         {"SetThumbTexture",       lua_Slider_SetThumbTexture},

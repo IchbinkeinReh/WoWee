@@ -1709,6 +1709,7 @@ wowee_add_test(test_world_map_zone_metadata
 # ── test_text_wrap ───────────────────────────────────────────
 add_executable(test_text_wrap
     test_text_wrap.cpp
+    test_text_wrap_indent.cpp
 )
 target_include_directories(test_text_wrap PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(test_text_wrap SYSTEM PRIVATE

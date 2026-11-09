@@ -328,6 +328,10 @@ struct Emitter {
         if (const std::string* j = node.attr("justifyH")) {
             line(var + ":SetJustifyH(" + quote(*j) + ")");
         }
+        if (!isTexture && node.attr("indented")) {
+            line(var + ":SetIndentedWordWrap(" +
+                 (node.attrBool("indented") ? "true" : "false") + ")");
+        }
         if (node.attrBool("setAllPoints")) {
             line(var + ":SetAllPoints(" + parentVar + ")");
         }
@@ -1130,6 +1134,12 @@ struct Emitter {
         if (node.attr("nonspacewrap")) {
             line(var + ":SetNonSpaceWrap(" +
                  (node.attrBool("nonspacewrap") ? "true" : "false") + ")");
+        }
+        // indented="": wrapped lines after the first set in (the font
+        // instance's loader, beside wordwrap and nonspacewrap).
+        if (node.attr("indented")) {
+            line(var + ":SetIndentedWordWrap(" +
+                 (node.attrBool("indented") ? "true" : "false") + ")");
         }
         // The keyboard, on the same principle as the mouse and the wheel: a
         // frame that declares OnKeyDown or OnKeyUp wants keys. Every one that

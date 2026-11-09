@@ -374,7 +374,9 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
         w->wrapsToWidth = true;
         const int rows = static_cast<int>(
             wrapText(parseMarkup(w->text), w->width, w->nonSpaceWrap,
-                     measureRun).size());
+                     measureRun,
+                     w->indentedWordWrap && linkScale_ > 0.0f ? kIndentedWrapPixels / linkScale_ : 0.0f)
+                .size());
         w->wrappedLines = rows > 0 ? rows : 1;
         w->height = size * 1.2f * static_cast<float>(w->wrappedLines);
         w->measuredText = w->text;
@@ -702,12 +704,17 @@ float WidgetRenderer::drawMarkupText(ImDrawList* dl, ImFont* font, float size,
                                      const std::string& text, float wrapWidth,
                                      bool nonSpaceWrap, const char* justifyH,
                                      bool forceColor, WidgetTree* linkSink,
-                                     uint32_t linkOwner) {
+                                     uint32_t linkOwner, float indent) {
     const auto lines = wrapText(parseMarkup(text), wrapWidth, nonSpaceWrap,
                                 [&](const std::string& piece) {
                                     return font->CalcTextSizeA(size, FLT_MAX, 0.0f,
                                                                piece.c_str()).x;
-                                });
+                                }, indent);
+    // An indented line's offset (0x006c7b10): in from the left for LEFT, in
+    // from the right for RIGHT, none for a centred one.
+    const bool justRight = justifyH && std::strcmp(justifyH, "RIGHT") == 0;
+    const bool justCenter = justifyH && std::strcmp(justifyH, "CENTER") == 0;
+    bool firstLine = true;
     const float lineH = size * 1.2f;
     float y = at.y;
     for (const auto& line : lines) {
@@ -726,6 +733,8 @@ float WidgetRenderer::drawMarkupText(ImDrawList* dl, ImFont* font, float size,
         // Each line justifies inside the box on its own, which is what makes a
         // centred paragraph look centred rather than ragged from one offset.
         float x = at.x + justifyOffset(justifyH, wrapWidth, lineW);
+        if (!firstLine && indent > 0.0f && !justCenter) x += justRight ? -indent : indent;
+        firstLine = false;
         for (const TextRun& run : line) {
             if (!run.texture.empty()) {
                 const float w = runWidth(run);
@@ -2615,7 +2624,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                         [&](const std::string& piece) {
                             return font->CalcTextSizeA(size, FLT_MAX, 0.0f,
                                                        piece.c_str()).x;
-                        });
+                        }, (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f));
                     return lines.empty() ? size_t{1} : lines.size();
                 };
                 // A plain MessageFrame - UIErrorsFrame is the one the interface
@@ -2699,7 +2708,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                                        ImVec2(bx + shadowPx(w->shadowX * s), by - shadowPx(w->shadowY * s)),
                                        packColor(sc, w->alpha * w->shadowColor[3] * rgba[3]),
                                        w->alpha, m.text, wrapW, false,
-                                       w->justifyH.c_str(), true);
+                                       w->justifyH.c_str(), true, nullptr, 0, (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f));
                     }
                     // Justified the way the frame's own font instance says,
                     // inside the frame's width - each line of a message on its
@@ -2712,7 +2721,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     drawMarkupText(dl, font, size, ImVec2(bx, by),
                                    packColor(rgba, w->alpha), w->alpha, m.text,
                                    wrapW, false, w->justifyH.c_str(), false,
-                                   &tree, w->id);
+                                   &tree, w->id, (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f));
                     if (topDown) y += lineH * static_cast<float>(rows);
                     else         y -= lineH * static_cast<float>(rows);
                     ++painted;
@@ -3186,7 +3195,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     [&](const std::string& piece) {
                         return font->CalcTextSizeA(size, FLT_MAX, 0.0f,
                                                    piece.c_str()).x;
-                    });
+                    }, (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f));
                 w->wrappedLines = static_cast<int>(lines.size());
                 if (wrapW > 0.0f) {
                     extent.x = wrapW;
@@ -3264,7 +3273,8 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     // the ones on top of it.
                     drawMarkupText(dl, font, size, ImVec2(tx + o.x, ty + o.y),
                                    shadow, w->alpha, shown, wrapW,
-                                   w->nonSpaceWrap, w->justifyH.c_str(), true);
+                                   w->nonSpaceWrap, w->justifyH.c_str(), true,
+                                   nullptr, 0, (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f));
                 }
             }
             // The shadow sits under the text and over the outline: it is a
@@ -3278,7 +3288,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                                ImVec2(tx + w->shadowX * s, ty - w->shadowY * s),
                                packColor(sc, w->alpha * w->shadowColor[3]),
                                w->alpha, shown, wrapW, w->nonSpaceWrap,
-                               w->justifyH.c_str(), true);
+                               w->justifyH.c_str(), true, nullptr, 0, (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f));
             }
             // A button's label takes its colour from the button's state. The
             // colour lives on the parent because that is where the template
@@ -3296,7 +3306,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             drawMarkupText(dl, font, size, ImVec2(tx, ty),
                            packColor(textColor, w->alpha), w->alpha, shown,
                            wrapW, w->nonSpaceWrap, w->justifyH.c_str(), false,
-                           &tree, w->id);
+                           &tree, w->id, (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f));
         }
     }
 }

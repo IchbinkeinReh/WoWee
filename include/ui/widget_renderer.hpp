@@ -136,7 +136,8 @@ private:
                         uint32_t fallback, float alpha, const std::string& text,
                         float wrapWidth = 0.0f, bool nonSpaceWrap = false,
                         const char* justifyH = nullptr, bool forceColor = false,
-                        WidgetTree* linkSink = nullptr, uint32_t linkOwner = 0);
+                        WidgetTree* linkSink = nullptr, uint32_t linkOwner = 0,
+                        float indent = 0.0f);
     /// A SimpleHTML page holding a document rather than a string: its blocks
     /// stacked down the frame, text justified per block and each picture on a
     /// line of its own. See simple_html.hpp.

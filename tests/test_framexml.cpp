@@ -1144,6 +1144,13 @@ TEST_CASE("An Animations block becomes group and animation calls",
     REQUIRE_FALSE(has(r.lua, "local __w["));
 }
 
+TEST_CASE("indented= sets a font string's wrapped lines in", "[framexml][emit]") {
+    XmlNode root = parseOrFail(
+        "<Ui><Frame name=\"F\"><Layers><Layer><FontString name=\"T\" indented=\"true\"/>"
+        "</Layer></Layers></Frame></Ui>");
+    REQUIRE(has(emitFrameXml(root).lua, ":SetIndentedWordWrap(true)"));
+}
+
 TEST_CASE("A TitleRegion is the frame's own title region", "[framexml][emit]") {
     // The client builds a region and lays it out (0x004932c0); a press in it
     // moves the frame. No drag scripts are written for it, and a window that
