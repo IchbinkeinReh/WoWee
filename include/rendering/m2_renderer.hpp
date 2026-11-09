@@ -315,6 +315,11 @@ struct M2Instance {
     // Idle variation state
     int idleSequenceIndex = 0;   // Default idle sequence index
     bool playingVariation = false;// Currently playing a one-shot variation
+    /// The sequence a one-shot hands over to when it ends, looping, in place
+    /// of the idle one; -1 for the idle. A transport's model is told this by
+    /// its animation-end callback (0x0070b2b0: ShipStart 162 goes on into
+    /// ShipMoving 163, ShipStop 164 into Stand 0).
+    int afterOneShotIndex = -1;
 
     /// Stop at the end of the sequence and stay there.
     ///
@@ -684,6 +689,9 @@ public:
     /// Set the animation sequence by animation ID (e.g. anim::OPEN, anim::CLOSE).
     /// Finds the first sequence with matching ID. Unfreezes the instance and resets time.
     void setInstanceAnimation(uint32_t instanceId, uint32_t animationId, bool loop = true);
+    /// Play an animation once and then loop `thenAnimationId` (by id, as the
+    /// model shows it) rather than going back to the idle sequence.
+    void setInstanceAnimationThen(uint32_t instanceId, uint32_t animationId, uint32_t thenAnimationId);
     /// Check if a model instance has a specific animation ID in its sequence table.
     [[nodiscard]] bool hasAnimation(uint32_t instanceId, uint32_t animationId) const;
     /// Whether the animation's sequence has flag 0x1, which the client plays
@@ -698,7 +706,7 @@ public:
     [[nodiscard]] float getInstanceAnimDuration(uint32_t instanceId) const;
     /// Where an instance's current sequence has got to: its time and length
     /// (ms) and its speed, what the client reads of one with 0x008266b0.
-    struct AnimPlayback { float timeMs = 0.0f; float durationMs = 0.0f; float speed = 0.0f; };
+    struct AnimPlayback { float timeMs = 0.0f; float durationMs = 0.0f; float speed = 0.0f; uint32_t sequenceId = 0; };
     [[nodiscard]] std::optional<AnimPlayback> getInstanceAnimPlayback(uint32_t instanceId) const;
     /// Moves the current sequence to timeMs, within its length: one started
     /// part-way (0x0070d1e0's start offset into 0x00832ab0).

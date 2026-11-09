@@ -560,18 +560,44 @@ void TransportManager::applyServerRouteClock(uint64_t transportGuid, float phase
 void TransportManager::applyDoodadMotionState(ActiveTransport& transport, bool moving) {
     if (transport.isM2 || !wmoRenderer_ || transport.wmoInstanceId == 0) return;
 
-    // 163 = ShipMoving, 164 = ShipStop. Stopping is a one-shot that settles into
-    // the model's idle pose; running is a loop.
+    // The hull's machinery (a zeppelin's propellers and balloon) plays the
+    // route's ship sequences, and the transport's animation-end callback
+    // (0x0070b2b0, registered by 0x007134a0 with 0x0077ff10) carries each
+    // one-shot on: ShipStart (162) into ShipMoving (163), ShipStop (164)
+    // into Stand (0), which loops. Playing ShipStop and then going back to
+    // the model's first sequence - ShipStart on the Horde zeppelin's - ran
+    // the propellers' spin-up over and over at the dock.
+    //
+    // Only the doodads that have the ship sequences: the benches and lamps
+    // on the deck keep their own.
+    constexpr uint32_t kStand = 0u;
+    constexpr uint32_t kShipStart = 162u;
     constexpr uint32_t kShipMoving = 163u;
     constexpr uint32_t kShipStop = 164u;
-    const uint32_t want = moving ? kShipMoving : kShipStop;
+    const uint32_t state = moving ? kShipMoving : kShipStop;
 
-    const bool sameState = (transport.appliedDoodadAnim == static_cast<int>(want));
+    const bool sameState = (transport.appliedDoodadAnim == static_cast<int>(state));
     if (sameState && transport.appliedDoodadCount != 0) return;
 
-    const size_t touched =
-        wmoRenderer_->setInstanceDoodadAnimation(transport.wmoInstanceId, want, moving);
-    transport.appliedDoodadAnim = static_cast<int>(want);
+    // First seen: already under way or already docked, so the sequence it
+    // is in, not the change into it.
+    const bool firstSeen = transport.appliedDoodadAnim < 0 || transport.appliedDoodadCount == 0;
+    size_t touched = 0;
+    if (firstSeen) {
+        touched = wmoRenderer_->setInstanceShipDoodadAnimation(transport.wmoInstanceId, kShipStop,
+                                                               moving ? kShipMoving : kStand, -1);
+    } else if (moving) {
+        touched = wmoRenderer_->setInstanceShipDoodadAnimation(transport.wmoInstanceId, kShipStop, kShipStart,
+                                                               static_cast<int>(kShipMoving));
+    } else {
+        touched = wmoRenderer_->setInstanceShipDoodadAnimation(transport.wmoInstanceId, kShipStop, kShipStop,
+                                                               static_cast<int>(kStand));
+    }
+    LOG_INFO("Transport 0x", std::hex, transport.guid, std::dec, " entry=", transport.entry, " machinery ",
+             firstSeen ? (moving ? "under way: ShipMoving" : "docked: Stand")
+                       : (moving ? "sets off: ShipStart then ShipMoving" : "arrives: ShipStop then Stand"),
+             " (", touched, " doodads)");
+    transport.appliedDoodadAnim = static_cast<int>(state);
     transport.appliedDoodadCount = touched;
 }
 
@@ -887,6 +913,16 @@ void TransportManager::poseShip(ActiveTransport& transport, uint32_t splineTimeM
             LOG_WARNING("SHIP POSE: guid=0x", std::hex, transport.guid, std::dec, " t=", t, " pos=(",
                         transport.position.x, ", ", transport.position.y, ", ", transport.position.z,
                         ") yaw=", transport.facing);
+            // And what its machinery plays: the sequence and how far in.
+            if (wmoRenderer_ && m2Renderer_ && !transport.isM2) {
+                if (const uint32_t d = wmoRenderer_->firstDoodadWithAnimation(transport.wmoInstanceId, 164u)) {
+                    if (const auto p = m2Renderer_->getInstanceAnimPlayback(d)) {
+                        LOG_WARNING("SHIP MACHINERY: guid=0x", std::hex, transport.guid, std::dec,
+                                    " seq=", p->sequenceId, " time=", p->timeMs, "/", p->durationMs,
+                                    " docked=", transport.atDockDwell);
+                    }
+                }
+            }
         }
     }
     updateTransformMatrices(transport);
