@@ -34,6 +34,7 @@
 #include "addons/lua_taint.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "addons/toc_parser.hpp"
+#include "ui/layout_cache.hpp"
 #include "addons/button_label_lua.hpp"
 #include "addons/binding_command.hpp"
 #include "pipeline/asset_manager.hpp"
@@ -13784,6 +13785,63 @@ void LuaEngine::runInterfaceProbe() {
 /// history and comes back when the frame is scrolled, which is why nothing is
 /// erased here and why scrolling lights everything again - the player reading
 /// back wants what was said, not what is still fresh.
+std::string LuaEngine::layoutCacheText() const {
+    namespace lc = wowee::ui::layout_cache;
+    std::vector<lc::Entry> entries;
+    for (size_t id = 1; id < widgets_.size(); ++id) {
+        const auto* w = widgets_.get(static_cast<uint32_t>(id));
+        // Named, placed by the player, movable or resizable, and not told to
+        // keep out of the file (0x00517e00).
+        if (!w || w->kind != wowee::ui::WidgetKind::Frame || w->name.empty()) continue;
+        if (!w->userMoved || w->dontSavePosition || !(w->movable || w->resizable)) continue;
+        const auto* parent = w->parent ? widgets_.get(w->parent) : nullptr;
+        if (!parent || w->rectW <= 0.0f || w->rectH <= 0.0f || parent->rectW <= 0.0f || parent->rectH <= 0.0f)
+            continue;
+        lc::Saved s;
+        s.name = w->name;
+        s.rect = {w->left, w->bottom, w->left + w->rectW, w->bottom + w->rectH};
+        s.parentRect = {parent->left, parent->bottom, parent->left + parent->rectW, parent->bottom + parent->rectH};
+        s.effectiveScale = w->effScale;
+        s.level = w->effLevel;
+        entries.push_back(lc::entryFor(s));
+    }
+    return lc::serialize(entries);
+}
+
+void LuaEngine::applyLayoutCache(const std::string& text) {
+    namespace lc = wowee::ui::layout_cache;
+    if (!L_) return;
+    // 0x00518280, through the frame's own methods: its level when one was
+    // saved, one point to its parent if it is movable, its size if it is
+    // resizable, and either way placed by the player.
+    static const char* kApply =
+        "local name, level, point, x, y, w, h = ...\n"
+        "local f = _G[name]\n"
+        "if type(f) ~= 'table' or type(f.IsMovable) ~= 'function' then return end\n"
+        "if level >= 0 then f:SetFrameLevel(level) end\n"
+        "if f:IsMovable() then\n"
+        "  f:ClearAllPoints(); f:SetPoint(point, f:GetParent(), point, x, y); f:SetUserPlaced(true)\n"
+        "end\n"
+        "if f:IsResizable() then f:SetWidth(w); f:SetHeight(h); f:SetUserPlaced(true) end\n";
+    for (const lc::Entry& e : lc::parse(text)) {
+        if (luaL_loadstring(L_, kApply) != 0) {
+            lua_pop(L_, 1);
+            return;
+        }
+        lua_pushstring(L_, e.name.c_str());
+        lua_pushnumber(L_, e.level);
+        lua_pushstring(L_, lc::kPoints[static_cast<size_t>(e.point)]);
+        lua_pushnumber(L_, e.x);
+        lua_pushnumber(L_, e.y);
+        lua_pushnumber(L_, e.w);
+        lua_pushnumber(L_, e.h);
+        if (lua_pcall(L_, 7, 0, 0) != 0) {
+            LOG_WARNING("layout-local.txt: ", e.name, ": ", lua_tostring(L_, -1));
+            lua_pop(L_, 1);
+        }
+    }
+}
+
 void LuaEngine::expireMessages(float elapsed) {
     for (size_t id = 1; id < widgets_.size(); ++id) {
         auto* w = widgets_.get(static_cast<uint32_t>(id));

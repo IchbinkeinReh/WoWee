@@ -3710,3 +3710,8 @@ wowee_add_test(test_object_effect
 # A UI model frame's pose (0x0095fba0) and the DDC screen (0x0047bf90).
 wowee_add_test(test_model_frame_pose
     SOURCES test_model_frame_pose.cpp)
+
+# ── test_layout_cache ────────────────────────────────
+# layout-local.txt, the frames the player placed (0x00517e00, 0x005183a0).
+wowee_add_test(test_layout_cache
+    SOURCES test_layout_cache.cpp)

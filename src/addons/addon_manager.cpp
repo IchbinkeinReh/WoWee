@@ -471,6 +471,16 @@ void AddonManager::loadAllAddons() {
         else failed++;
     }
     addonsLoaded_ = true;
+    // The frames the player placed, put back once the interface has loaded
+    // (0x0052adbe reads layout-local.txt after it).
+    if (const std::string path = layoutCachePath(); !path.empty()) {
+        std::ifstream in(path);
+        if (in) {
+            std::stringstream text;
+            text << in.rdbuf();
+            luaEngine_.applyLayoutCache(text.str());
+        }
+    }
     LOG_INFO("AddonManager: loaded ", loaded, " addons",
              (failed > 0 ? (", " + std::to_string(failed) + " failed") : ""),
              (skipped > 0 ? (", " + std::to_string(skipped) + " disabled") : ""));
@@ -531,6 +541,11 @@ std::string AddonManager::blizzardSavedVariablesPath(bool perCharacter) const {
 std::string AddonManager::chatCachePath() const {
     if (characterName_.empty()) return "";
     return core::getConfigRoot() + "/characters/" + characterName_ + ".chat-cache.txt";
+}
+
+std::string AddonManager::layoutCachePath() const {
+    if (characterName_.empty()) return "";
+    return core::getConfigRoot() + "/characters/" + characterName_ + ".layout-local.txt";
 }
 
 std::string AddonManager::getSavedVariablesPath(const TocFile& addon) const {
@@ -1738,6 +1753,13 @@ void AddonManager::saveAllSavedVariables() {
         const std::string path = blizzardSavedVariablesPath(perCharacter);
         if (!path.empty()) luaEngine_.saveSavedVariables(path, names);
         names.clear();
+    }
+    // Where the player put their frames, as layout-local.txt (0x005234a0).
+    if (const std::string path = layoutCachePath(); !path.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
+        std::ofstream out(path, std::ios::trunc);
+        if (out) out << luaEngine_.layoutCacheText();
     }
     // The chat colour table, as chat-cache.txt's COLORS section (0x004fd300).
     if (const std::string path = chatCachePath(); !path.empty()) {
