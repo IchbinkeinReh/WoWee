@@ -3167,6 +3167,12 @@ void CameraController::updateThirdPersonCamera(float deltaTime, FrameInput& f) {
             *followTarget = targetPos;
         } else {
             groundFollowedCharacter(stepTime, f, targetPos, prevTargetPos);
+        if (rideHeld_ && !f.nowJump) {
+            targetPos.x = stepStart.x;
+            targetPos.y = stepStart.y;
+            followTarget->x = stepStart.x;
+            followTarget->y = stepStart.y;
+        }
         }
         // WOWEE_FLOOR_DEBUG: a step that carried the character further across
         // than its speed allows, and which stage did it.
