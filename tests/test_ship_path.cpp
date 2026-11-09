@@ -98,3 +98,31 @@ TEST_CASE("ShipPath without a speed or an acceleration is empty", "[ship_path]")
     REQUIRE_FALSE(ShipPath::build(straightRoute(), 0.0f, 1.0f).valid());
     REQUIRE_FALSE(ShipPath::build(straightRoute(), 30.0f, 0.0f).valid());
 }
+
+TEST_CASE("ShipPath measures a segment by twenty chords and keeps the spline's pace", "[ship_path]") {
+    // Uneven nodes along x: the segments from 100 to 200, 200 to 300, 300
+    // to 600 and 600 to 900 (the first and last nodes only steer).
+    std::vector<ShipPathNode> nodes;
+    for (float x : {0.0f, 100.0f, 200.0f, 300.0f, 600.0f, 900.0f, 1000.0f}) {
+        ShipPathNode n;
+        n.server = glm::vec3(x, 0.0f, 0.0f);
+        nodes.push_back(n);
+    }
+    const ShipPath path = ShipPath::build(nodes, 30.0f, 1.0f);
+    REQUIRE(path.valid());
+    // 0x004c3b10's twenty chords of each segment, at a steady 30 yd/s with no
+    // stop: a straight route's lengths are its chords, 800 yd in all.
+    REQUIRE(path.periodMs() == static_cast<uint32_t>(std::lround(800.0f / 30.0f * 1000.0f)));
+    // 0x004c3bd0: the parameter in proportion to the distance into a
+    // segment. Through the node at 300, from a segment a third as long as
+    // the next, the hull's pace through the world drops at once.
+    const uint32_t atNode = static_cast<uint32_t>(std::lround(200.0f / 30.0f * 1000.0f));
+    auto pace = [&](uint32_t t0) {
+        return (path.evaluate(t0 + 20u).server.x - path.evaluate(t0).server.x) / 0.02f;
+    };
+    const float before = pace(atNode - 40u);
+    const float after = pace(atNode + 20u);
+    REQUIRE(before > 2.0f * after);
+    // Facing along the route all the way.
+    for (uint32_t t = 0; t < path.periodMs(); t += 500) REQUIRE(path.evaluate(t).direction.x > 0.0f);
+}
