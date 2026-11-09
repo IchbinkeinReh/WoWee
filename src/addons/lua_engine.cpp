@@ -1283,8 +1283,44 @@ int lua_Model_ClearFog(lua_State* L) {
     return 0;
 }
 
+// 0x009607e0: an AnimationData id under 506 (0x1fa), started from its start.
 int lua_Model_SetSequence(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->modelSequence = static_cast<int>(luaL_optnumber(L, 2, 0));
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetSequence(sequence)", w->name.c_str());
+    const long long seq = std::llround(lua_tonumber(L, 2));
+    if (seq < 0 || seq > 0x1f9) {
+        return luaL_error(L, "Error: %s:SetSequence(sequence) exceeds valid range of 0 - %d", w->name.c_str(), 0x1fa);
+    }
+    w->modelSequence = static_cast<int>(seq);
+    w->modelSequenceTime = 0;
+    ++w->modelSequenceSerial;
+    return 0;
+}
+// 0x009608b0: the sequence started at a time (0x0095f610).
+int lua_Model_SetSequenceTime(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isnumber(L, 2) || !lua_isnumber(L, 3))
+        return luaL_error(L, "Usage: %s:SetSequenceTime(sequence, time)", w->name.c_str());
+    w->modelSequence = static_cast<int>(std::llround(lua_tonumber(L, 2)));
+    w->modelSequenceTime = static_cast<int>(std::llround(lua_tonumber(L, 3)));
+    ++w->modelSequenceSerial;
+    return 0;
+}
+// 0x00961120: a texture into the model's type-14 slots.
+int lua_Model_ReplaceIconTexture(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:ReplaceIconTexture(\"texture\")", w->name.c_str());
+    w->modelIconTexture = lua_tostring(L, 2);
+    return 0;
+}
+// SetGlow (0x009614b0) asks the frame's vtable +0xf0, which a model frame
+// leaves the base's empty 0x00632050; AdvanceTime (0x009610e0) does nothing.
+int lua_Model_SetGlow(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    if (w && !lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetGlow(value)", w->name.c_str());
     return 0;
 }
 
@@ -7932,6 +7968,9 @@ void LuaEngine::registerCoreAPI() {
         {"GetModelScale",   lua_Model_GetModelScale},
         {"SetCamera",       lua_Model_SetCamera},
         {"SetSequence",     lua_Model_SetSequence},
+        {"SetSequenceTime", lua_Model_SetSequenceTime},
+        {"ReplaceIconTexture", lua_Model_ReplaceIconTexture},
+        {"SetGlow",         lua_Model_SetGlow},
         {"SetLight",        lua_Model_SetLight},
         {"GetLight",        lua_Model_GetLight},
         {"SetFogColor",     lua_Model_SetFogColor},

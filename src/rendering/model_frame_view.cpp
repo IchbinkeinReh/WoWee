@@ -63,12 +63,12 @@ bool ModelFrameView::ensureSize(pipeline::AssetManager* assets, int width, int h
     return true;
 }
 
-bool ModelFrameView::setModel(const std::string& path) {
+bool ModelFrameView::setModel(const std::string& path, const std::string& iconTexture) {
     if (!m2_ || !assets_) return false;
     // .mdx/.mdl read as .m2, and a bare name as one.
     std::string m2Path = path.empty() ? std::string() : pipeline::modelPathToM2(path);
     if (!m2Path.empty() && m2Path.find('.') == std::string::npos) m2Path += ".m2";
-    if (m2Path == modelPath_) return instanceId_ != 0 || m2Path.empty();
+    if (m2Path == modelPath_ && iconTexture == iconTexture_) return instanceId_ != 0 || m2Path.empty();
     if (instanceId_ != 0) {
         ::wowee::rendering::deviceWaitIdle(vkCtx_->getDevice());
         m2_->removeInstance(instanceId_);
@@ -79,7 +79,9 @@ bool ModelFrameView::setModel(const std::string& path) {
         modelId_ = 0;
     }
     modelPath_ = m2Path;
+    iconTexture_ = iconTexture;
     cameras_.clear();
+    sequenceDurations_.clear();
     if (m2Path.empty()) return true;
     pipeline::M2Model model;
     if (!pipeline::loadM2WithAllAnimations(*assets_, m2Path, model) || !model.isValid()) {
@@ -87,6 +89,15 @@ bool ModelFrameView::setModel(const std::string& path) {
         return false;
     }
     cameras_ = model.cameras;
+    for (const auto& seq : model.sequences) sequenceDurations_.emplace_back(seq.id, seq.duration);
+    // ReplaceIconTexture's texture in the model's type-14 slots.
+    if (!iconTexture.empty()) {
+        for (auto& tex : model.textures) {
+            if (tex.type != 14) continue;
+            tex.type = 0;
+            tex.filename = iconTexture;
+        }
+    }
     modelId_ = 1;
     if (!m2_->loadModel(model, modelId_)) {
         modelId_ = 0;
@@ -94,11 +105,13 @@ bool ModelFrameView::setModel(const std::string& path) {
     }
     instanceId_ = m2_->createInstance(modelId_, glm::vec3(0.0f), glm::vec3(0.0f), 1.0f, false);
     sequence_ = -1;
+    sequenceSerial_ = 0;
     return instanceId_ != 0;
 }
 
 void ModelFrameView::setFrame(float widthDdc, float heightDdc, const model_frame::Pose& pose,
-                              float ddcScreenHeight, int camera, int sequence) {
+                              float ddcScreenHeight, int camera, int sequence, int sequenceTimeMs,
+                              uint32_t sequenceSerial) {
     if (!m2_ || !camera_ || instanceId_ == 0 || widthDdc <= 0.0f || heightDdc <= 0.0f) return;
     const auto& cams = cameras_;
     if (camera >= 0 && static_cast<size_t>(camera) < cams.size()) {
@@ -133,9 +146,20 @@ void ModelFrameView::setFrame(float widthDdc, float heightDdc, const model_frame
         proj[1][1] *= -1.0f;
         camera_->setProjectionOverride(proj);
     }
-    if (sequence != sequence_) {
+    if (sequence != sequence_ || sequenceSerial != sequenceSerial_) {
         sequence_ = sequence;
-        m2_->setInstanceAnimation(instanceId_, sequence >= 0 ? static_cast<uint32_t>(sequence) : 0u, true);
+        sequenceSerial_ = sequenceSerial;
+        const uint32_t anim = sequence >= 0 ? static_cast<uint32_t>(sequence) : 0u;
+        m2_->setInstanceAnimation(instanceId_, anim, true);
+        if (sequenceTimeMs > 0) {
+            for (const auto& [id, duration] : sequenceDurations_) {
+                if (id != anim || duration == 0) continue;
+                m2_->setInstanceAnimationFraction(
+                    instanceId_, static_cast<float>(static_cast<uint32_t>(sequenceTimeMs) % duration) /
+                                     static_cast<float>(duration));
+                break;
+            }
+        }
     }
 }
 

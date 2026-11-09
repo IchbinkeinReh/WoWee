@@ -75,7 +75,9 @@ public:
     bool ensureSize(pipeline::AssetManager* assets, int width, int height);
     /// The model shown, by file (.mdx/.mdl read as .m2); empty clears it.
     /// False when it will not load.
-    bool setModel(const std::string& path);
+    /// `iconTexture`, where given, is ReplaceIconTexture's: the model's
+    /// textures of replaceable type 14 drawn with it (0x00960320).
+    bool setModel(const std::string& path, const std::string& iconTexture = std::string());
     /// The frame's rect in DDC (its width and height) and its pose; the
     /// camera index (-1 none) and sequence (-1 the model's own).
     /// Model:SetLight's light (the M2Light at +0x2b0): off, the view's own
@@ -97,8 +99,11 @@ public:
         float nearDist = 0.0f, farDist = 1.0f;
     };
     void setFog(const Fog& fog) { fog_ = fog; }
+    /// The pose, projection and animation: `sequence` (-1 the model's own)
+    /// started at `sequenceTimeMs` each time `sequenceSerial` changes
+    /// (SetSequence, SetSequenceTime: 0x0095f5e0, 0x0095f610).
     void setFrame(float widthDdc, float heightDdc, const model_frame::Pose& pose, float ddcScreenHeight,
-                  int camera, int sequence);
+                  int camera, int sequence, int sequenceTimeMs = 0, uint32_t sequenceSerial = 0);
     void update(float deltaTime);
     /// Records the draw; Renderer calls it outside the scene's passes.
     void compositePass(VkCommandBuffer cmd, uint32_t frameIndex);
@@ -134,6 +139,9 @@ private:
     uint32_t modelId_ = 0;
     uint32_t instanceId_ = 0;
     int sequence_ = -1;
+    uint32_t sequenceSerial_ = 0;
+    std::string iconTexture_;
+    std::vector<std::pair<uint32_t, uint32_t>> sequenceDurations_;  ///< animation id, ms
     bool compositeRequested_ = false;
     Light light_;
     Fog fog_;

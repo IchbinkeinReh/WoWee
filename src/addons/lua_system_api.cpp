@@ -6533,45 +6533,75 @@ static int runChunk(lua_State* L, const char* key, const char* code) {
     lua_call(L, lua_gettop(L) - 1, 0);
     return 0;
 }
-// 0x00545e60 -> 0x00544750.
+// The two arrow pairs' names and model scale factors: the world map's
+// (0x00544750, * 1.6666) and the battlefield minimap's (0x005448a0, * 1.1111).
+struct ArrowPair { const char* arrow; const char* effect; double factor; };
+static constexpr ArrowPair kWorldArrows{"PlayerArrowFrame", "PlayerArrowEffectFrame", 1.6666666};
+static constexpr ArrowPair kMiniArrows{"PlayerMiniArrowFrame", "PlayerMiniArrowEffectFrame", 1.1111112};
+/// runChunk with the pair's names (and factor) ahead of the call's arguments.
+static int runArrowChunk(lua_State* L, const ArrowPair& pair, bool withFactor, const char* key, const char* code) {
+    int at = 1;
+    lua_pushstring(L, pair.arrow);
+    lua_insert(L, at++);
+    lua_pushstring(L, pair.effect);
+    lua_insert(L, at++);
+    if (withFactor) {
+        lua_pushnumber(L, pair.factor);
+        lua_insert(L, at++);
+    }
+    return runChunk(L, key, code);
+}
+static constexpr const char* kCreateArrowsLua =
+    "local an, en, factor, parent = ...\n"
+    "if type(parent) ~= 'table' then error('Usage: CreateWorldMapArrowFrame(parent)') end\n"
+    "local w, h = GetScreenWidth(), GetScreenHeight()\n"
+    "local a = (h and h > 0) and w / h or 4 / 3\n"
+    "for _, name in ipairs({an, en}) do\n"
+    "  local f = _G[name]\n"
+    "  if not f then f = CreateFrame('Model', name, parent) else f:SetParent(parent) end\n"
+    "  f:SetModel('Interface\\\\Minimap\\\\MinimapArrow.mdx')\n"
+    "  f:SetModelScale(1 / math.sqrt(a * a + 1) * factor)\n"
+    "  __WoweeModelCentered(f)\n"
+    "end\n";
+static constexpr const char* kShowArrowsLua =
+    "local an, en, show = ...\n"
+    "local a, e = _G[an], _G[en]\n"
+    "if not a or not e or not a.GetModel or not a:GetModel() then return end\n"
+    "if show then a:Show() e:Show() else a:Hide() e:Hide() end\n";
+// The offsets are the screen's units, not the frames' own
+// (x / (1024 * ar * 0.75) of the DDC width, 0x005430a0 / 0x005432c0).
+static constexpr const char* kPositionArrowsLua =
+    "local an, en, point, rel, relPoint, x, y = ...\n"
+    "local a, e = _G[an], _G[en]\n"
+    "if not a or not e or not a:GetModel() then return end\n"
+    "if type(point) ~= 'string' or type(rel) ~= 'string' then\n"
+    "  error('Usage: PositionWorldMapArrowFrame(\"point\" \"frame\" [, relativePoint] [, offsetX, offsetY])')\n"
+    "end\n"
+    "if not _G[rel] then error(\"Couldn't find frame named '\" .. rel .. \"'\") end\n"
+    "for _, f in ipairs({a, e}) do\n"
+    "  local s = f:GetEffectiveScale()\n"
+    "  if not s or s <= 0 then s = 1 end\n"
+    "  f:SetPoint(point, rel, relPoint or point, (tonumber(x) or 0) / s, (tonumber(y) or 0) / s)\n"
+    "end\n";
+// 0x00545e60 -> 0x00544750; 0x00545f20 -> 0x005448a0.
 static int lua_CreateWorldMapArrowFrame(lua_State* L) {
-    return runChunk(L, "wowee.CreateWorldMapArrowFrame",
-        "local parent = ...\n"
-        "if type(parent) ~= 'table' then error('Usage: CreateWorldMapArrowFrame(parent)') end\n"
-        "local w, h = GetScreenWidth(), GetScreenHeight()\n"
-        "local a = (h and h > 0) and w / h or 4 / 3\n"
-        "for _, name in ipairs({'PlayerArrowFrame', 'PlayerArrowEffectFrame'}) do\n"
-        "  local f = _G[name]\n"
-        "  if not f then f = CreateFrame('Model', name, parent) else f:SetParent(parent) end\n"
-        "  f:SetModel('Interface\\\\Minimap\\\\MinimapArrow.mdx')\n"
-        "  f:SetModelScale(1 / math.sqrt(a * a + 1) * 1.6666666)\n"
-        "  __WoweeModelCentered(f)\n"
-        "end\n");
+    return runArrowChunk(L, kWorldArrows, true, "wowee.CreateArrows", kCreateArrowsLua);
 }
-// 0x005434e0: both shown or both hidden.
+static int lua_CreateMiniWorldMapArrowFrame(lua_State* L) {
+    return runArrowChunk(L, kMiniArrows, true, "wowee.CreateArrows", kCreateArrowsLua);
+}
+// 0x005434e0 / 0x00543540: both shown or both hidden.
 static int lua_ShowWorldMapArrowFrame(lua_State* L) {
-    return runChunk(L, "wowee.ShowWorldMapArrowFrame",
-        "local show = ...\n"
-        "local a, e = PlayerArrowFrame, PlayerArrowEffectFrame\n"
-        "if not a or not e or not a.GetModel or not a:GetModel() then return end\n"
-        "if show then a:Show() e:Show() else a:Hide() e:Hide() end\n");
+    return runArrowChunk(L, kWorldArrows, false, "wowee.ShowArrows", kShowArrowsLua);
 }
-// 0x005430a0: both anchored alike; the offsets are the screen's units, not
-// the frames' own (x / (1024 * ar * 0.75) of the DDC width).
+static int lua_ShowMiniWorldMapArrowFrame(lua_State* L) {
+    return runArrowChunk(L, kMiniArrows, false, "wowee.ShowArrows", kShowArrowsLua);
+}
 static int lua_PositionWorldMapArrowFrame(lua_State* L) {
-    return runChunk(L, "wowee.PositionWorldMapArrowFrame",
-        "local point, rel, relPoint, x, y = ...\n"
-        "local a, e = PlayerArrowFrame, PlayerArrowEffectFrame\n"
-        "if not a or not e or not a:GetModel() then return end\n"
-        "if type(point) ~= 'string' or type(rel) ~= 'string' then\n"
-        "  error('Usage: PositionWorldMapArrowFrame(\"point\" \"frame\" [, relativePoint] [, offsetX, offsetY])')\n"
-        "end\n"
-        "if not _G[rel] then error(\"Couldn't find frame named '\" .. rel .. \"'\") end\n"
-        "for _, f in ipairs({a, e}) do\n"
-        "  local s = f:GetEffectiveScale()\n"
-        "  if not s or s <= 0 then s = 1 end\n"
-        "  f:SetPoint(point, rel, relPoint or point, (tonumber(x) or 0) / s, (tonumber(y) or 0) / s)\n"
-        "end\n");
+    return runArrowChunk(L, kWorldArrows, false, "wowee.PositionArrows", kPositionArrowsLua);
+}
+static int lua_PositionMiniWorldMapArrowFrame(lua_State* L) {
+    return runArrowChunk(L, kMiniArrows, false, "wowee.PositionArrows", kPositionArrowsLua);
 }
 // 0x00545ff0: the parent's WorldMapPing, held at the middle of its frame.
 static int lua_InitWorldMapPing(lua_State* L) {
@@ -6584,16 +6614,12 @@ static int lua_InitWorldMapPing(lua_State* L) {
 static int lua_UpdateWorldMapArrowFrames(lua_State* L) {
     return runChunk(L, "wowee.UpdateWorldMapArrowFrames",
         "local facing = GetPlayerFacing()\n"
-        "for _, f in ipairs({PlayerArrowFrame, PlayerArrowEffectFrame}) do\n"
+        "for _, name in ipairs({'PlayerArrowFrame', 'PlayerArrowEffectFrame', 'PlayerMiniArrowFrame',\n"
+        "                       'PlayerMiniArrowEffectFrame'}) do\n"
+        "  local f = _G[name]\n"
         "  if f and f.SetFacing then f:SetFacing(facing) end\n"
         "end\n");
 }
-
-// The battlefield minimap's own copy of the arrow, for the same reason and
-// with the same answer as the world map's above.
-static int lua_CreateMiniWorldMapArrowFrame(lua_State* L) { (void)L; return 0; }
-static int lua_PositionMiniWorldMapArrowFrame(lua_State* L) { (void)L; return 0; }
-static int lua_ShowMiniWorldMapArrowFrame(lua_State* L) { (void)L; return 0; }
 
 // ---- The stored combat log (UnitCombatLog_C.cpp) ----
 //

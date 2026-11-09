@@ -6232,7 +6232,7 @@ void Application::render() {
                         if (!view) view = std::make_unique<rendering::ModelFrameView>();
                         const int pw = static_cast<int>(frame->rectW * uiScale + 0.5f);
                         const int ph = static_cast<int>(frame->rectH * uiScale + 0.5f);
-                        if (!view->ensureSize(assetManager.get(), pw, ph) || !view->setModel(frame->modelFile)) {
+                        if (!view->ensureSize(assetManager.get(), pw, ph) || !view->setModel(frame->modelFile, frame->modelIconTexture)) {
                             frame->externalTexture = 0;
                             continue;
                         }
@@ -6251,7 +6251,8 @@ void Application::render() {
                         pose.modelScale = frame->modelScale;
                         pose.effectiveScale = frame->effScale;
                         view->setFrame(frame->rectW * ddcPerUnit, frame->rectH * ddcPerUnit, pose, ddcH,
-                                       frame->modelCamera, frame->modelSequence);
+                                       frame->modelCamera, frame->modelSequence, frame->modelSequenceTime,
+                                       frame->modelSequenceSerial);
                         rendering::ModelFrameView::Light light;
                         light.enabled = frame->modelLightEnabled;
                         light.omni = frame->modelLightOmni;

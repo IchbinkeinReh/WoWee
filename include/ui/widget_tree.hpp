@@ -657,6 +657,9 @@ struct Widget {
     float modelScale = 1.0f;
     int modelCamera = -1;
     int modelSequence = -1;
+    int modelSequenceTime = 0;          ///< SetSequenceTime's time, ms
+    uint32_t modelSequenceSerial = 0;   ///< bumped by each SetSequence/SetSequenceTime
+    std::string modelIconTexture;       ///< ReplaceIconTexture (0x00960320)
     /// Held at the middle of its frame (0x005446f0, 0x00545ff0): the world
     /// map's arrows and its ping. The frame loop sets the position.
     bool modelCentered = false;
