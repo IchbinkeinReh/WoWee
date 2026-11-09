@@ -228,3 +228,20 @@ TEST_CASE("a thin railing met at an angle is slid along, not crossed", "[collisi
     CHECK(m.pos.x < 1.0f);
     CHECK(m.pos.y > 2.0f);
 }
+
+TEST_CASE("the step down reaches by the move the client makes at once", "[collision_walk]") {
+    // A ledge a third of a yard down a yard ahead: walked in one move the
+    // step down (1.849399 x the move) reaches the lower floor; the same move
+    // split into tenths, each kept to the ground by its own length, falls.
+    std::vector<Facet> world;
+    addFloor(world, -20, 0.05f, 0);
+    addFloor(world, 0.05f, 20, -0.33f);
+    auto s = sweeperOver(world);
+    Mover whole;
+    const WalkResult a = walk(whole, {1, 0}, 1.0f, 140, s);
+    CHECK_FALSE(a.fell);
+    CHECK(whole.pos.z == Approx(-0.33f).margin(1e-3f));
+    Mover split;
+    const WalkResult b = walk(split, {1, 0}, 1.0f, 140, s, 0.1f);
+    CHECK(b.fell);
+}

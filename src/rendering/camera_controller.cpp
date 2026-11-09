@@ -161,7 +161,11 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
     } else if (grounded && verticalVelocity <= 0.0f) {
         m.falling = false;
         if (dist > 1e-6f) {
-            const auto r = collision::walk(m, horiz / dist, dist, ms, sweeper);
+            // Kept to the ground by the frame's whole move, as the client
+            // moves by a frame at once (0x00762e00 -> 0x007620f0); the frame
+            // is split into equal steps here.
+            const auto r = collision::walk(m, horiz / dist, dist, ms, sweeper,
+                                           dist * static_cast<float>(physicsStepsThisFrame_));
             fell = r.fell;
             how = "walk";
             if (r.blocked) portBlocking_ = r.blocking;

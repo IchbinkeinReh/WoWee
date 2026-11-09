@@ -262,7 +262,7 @@ bool tryStepUp(Mover& m, const glm::vec2& dir, const glm::vec3& n, const Facet& 
     return true;
 }
 
-WalkResult walk(Mover& m, const glm::vec2& dirIn, float dist, uint32_t ms, Sweeper& sweeper) {
+WalkResult walk(Mover& m, const glm::vec2& dirIn, float dist, uint32_t ms, Sweeper& sweeper, float downMove) {
     WalkResult out;
     if (std::abs(dist) < kTinyDist) return out;
     const float total = static_cast<float>(ms);
@@ -298,7 +298,8 @@ WalkResult walk(Mover& m, const glm::vec2& dirIn, float dist, uint32_t ms, Sweep
             const float left = total - timeUsed;
             if (left < 1.0f) {
                 // Keep to the ground: down by the pyramid's slope over the move.
-                const SweepResult down = sweeper.run(m, glm::vec3(0.0f, 0.0f, -1.0f), dist * kStepDownPerMove);
+                const SweepResult down = sweeper.run(m, glm::vec3(0.0f, 0.0f, -1.0f),
+                                                     (downMove >= 0.0f ? downMove : dist) * kStepDownPerMove);
                 m.pos.z -= down.allowed;
                 if (down.facet < 0) {
                     if (!m.stepping) {

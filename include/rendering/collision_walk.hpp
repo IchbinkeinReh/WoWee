@@ -126,8 +126,11 @@ struct WalkResult {
 };
 
 /// 0x007620f0: walk `dist` yards along the ground direction `dir` (x, y)
-/// over `ms` milliseconds.
-WalkResult walk(Mover& m, const glm::vec2& dir, float dist, uint32_t ms, Sweeper& sweeper);
+/// over `ms` milliseconds. The step down at the end reaches 1.849399 times
+/// `downMove` - the move the client makes at once, a whole frame's (the
+/// caller splits a frame into steps); `dist` when not given.
+WalkResult walk(Mover& m, const glm::vec2& dir, float dist, uint32_t ms, Sweeper& sweeper,
+                float downMove = -1.0f);
 
 /// What the last step-up probe (0x00761b00) found, for the port's debug
 /// line: how far it rose, how far across it got of how far it tried, the
