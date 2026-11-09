@@ -4500,6 +4500,30 @@ void Application::applyServerMovementState(float deltaTime) {
                 *followTarget = renderPos;
             }
         }
+        {
+            // WOWEE_TRANSPORT_POSE: every tenth of a second on a transport,
+            // the hull, the rider (world and on the deck) and the camera.
+            static const bool kRideTrace = [] {
+                const char* v = std::getenv("WOWEE_TRANSPORT_POSE");
+                return v && v[0] && v[0] != '0';
+            }();
+            static auto lastRideLog = std::chrono::steady_clock::time_point{};
+            const auto nowRide = std::chrono::steady_clock::now();
+            if (kRideTrace && nowRide - lastRideLog >= std::chrono::milliseconds(100)) {
+                lastRideLog = nowRide;
+                const auto* trLog = gameHandler->getTransportManager()
+                    ? gameHandler->getTransportManager()->getTransport(gameHandler->getPlayerTransportGuid()) : nullptr;
+                const auto* camLog = renderer->getCamera();
+                const glm::vec3 off = gameHandler->getPlayerTransportOffset();
+                const glm::vec3 cp = camLog ? camLog->getPosition() : glm::vec3(0.0f);
+                const glm::vec3 cf = camLog ? camLog->getForward() : glm::vec3(0.0f);
+                LOG_WARNING("RIDE POSE: hull=(", trLog ? trLog->position.x : 0.0f, ", ", trLog ? trLog->position.y : 0.0f,
+                            ", ", trLog ? trLog->position.z : 0.0f, ") yaw=", trLog ? trLog->facing : 0.0f,
+                            " player=(", canonical.x, ", ", canonical.y, ", ", canonical.z, ") off=(", off.x, ", ",
+                            off.y, ", ", off.z, ") cam=(", cp.x, ", ", cp.y, ", ", cp.z, ") fwd=(", cf.x, ", ", cf.y,
+                            ", ", cf.z, ")");
+            }
+        }
         gameHandler->updateM2TransportBoarding(canonical);
     } else if (splineCarried) {
         // Where the spline has the player's own entity (0x0073c8e0), to its
