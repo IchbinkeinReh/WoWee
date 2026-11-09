@@ -206,11 +206,6 @@ void WorldEntryCallbackHandler::setupCallbacks() {
                 renderer_.getCameraController()->clearMovementInputs();
                 renderer_.getCameraController()->suppressMovementFor(1.0f);
                 renderer_.getCameraController()->suspendGravityFor(10.0f);
-                // The heightfield loads before the buildings do, and over
-                // anything underground it sits well above where the player
-                // actually is. Hold the floor to what the server said until
-                // the WMOs have had time to arrive.
-                renderer_.getCameraController()->setEntryFloorAnchor(renderPos.z, 10.0f);
             }
             worldEntryMovementGraceTimer_ = 2.0f;
             taxiLandingClampTimer_ = 0.0f;
@@ -247,7 +242,6 @@ void WorldEntryCallbackHandler::setupCallbacks() {
                     renderer_.getCameraController()->clearMovementInputs();
                     renderer_.getCameraController()->suppressMovementFor(1.0f);
                     renderer_.getCameraController()->suspendGravityFor(10.0f);
-                    renderer_.getCameraController()->setEntryFloorAnchor(renderPos.z, 10.0f);
                 }
                 faceServerOrientation();
                 if (worldLoader_) worldLoader_->setPendingEntry(mapId, x, y, z);

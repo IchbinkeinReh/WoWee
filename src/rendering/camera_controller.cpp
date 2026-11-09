@@ -76,14 +76,12 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
     if (glm::length(m.pos - from) > 0.01f) m.stepping = false;
     // The client does not move a unit before the world round it is loaded
     // (it is behind the loading screen). Here buildings stream in after the
-    // player is placed, and a fall through a floor not loaded yet goes on
-    // until the unit dies: so after a jump in position, hold still until
-    // there is something within reach below.
+    // player is placed: so after a jump in position, hold still until
+    // there is something loaded below - anywhere below, so a teleport into
+    // the air still falls to the ground far under it.
     if (glm::length(m.pos - from) > 5.0f) portWorldReady_ = false;
     if (!portWorldReady_) {
-        std::vector<collision::Facet> below;
-        gatherPortFacets(from - glm::vec3(1.0f, 1.0f, 30.0f), from + glm::vec3(1.0f, 1.0f, 2.0f), below);
-        if (below.empty()) {
+        if (fallOverUnloadedWorld(from + glm::vec3(0.0f, 0.0f, 1.0f))) {
             m.pos = from;
             verticalVelocity = 0.0f;
             return from;
@@ -2167,7 +2165,6 @@ void CameraController::update(float deltaTime) {
 
     // Tick down gravity suspension timer (used after world entry to prevent
     // falling through WMO floors before collision is loaded)
-    if (entryFloorAnchorTimer_ > 0.0f) entryFloorAnchorTimer_ -= deltaTime;
     if (gravitySuspendTimer_ > 0.0f) {
         gravitySuspendTimer_ -= deltaTime;
     }
