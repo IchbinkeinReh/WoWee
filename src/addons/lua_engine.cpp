@@ -1233,6 +1233,56 @@ int lua_Model_GetLight(lua_State* L) {
     return n;
 }
 
+// The model frame's fog (0x009611a0 .. 0x00961470): its colour, each part
+// held to 0..1 and alpha 1 unless given (0x00960420), turns it on.
+int lua_Model_SetFogColor(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    auto part = [&](int at, double fallback) {
+        const double v = lua_isnumber(L, at) ? lua_tonumber(L, at) : fallback;
+        return static_cast<float>(v < 0.0 ? 0.0 : (v >= 1.0 ? 1.0 : v));
+    };
+    w->modelFogColor[0] = part(2, 0.0);
+    w->modelFogColor[1] = part(3, 0.0);
+    w->modelFogColor[2] = part(4, 0.0);
+    w->modelFogColor[3] = part(5, 1.0);
+    w->modelFogEnabled = true;
+    return 0;
+}
+int lua_Model_GetFogColor(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    for (int i = 0; i < 4; ++i) lua_pushnumber(L, w ? w->modelFogColor[i] : 0.0);
+    return 4;
+}
+int lua_Model_SetFogNear(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetFogNear(value)", w->name.c_str());
+    w->modelFogNear = static_cast<float>(lua_tonumber(L, 2));
+    return 0;
+}
+int lua_Model_GetFogNear(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->modelFogNear : 0.0);
+    return 1;
+}
+int lua_Model_SetFogFar(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetFogFar(value)", w->name.c_str());
+    w->modelFogFar = static_cast<float>(lua_tonumber(L, 2));
+    return 0;
+}
+int lua_Model_GetFogFar(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->modelFogFar : 1.0);
+    return 1;
+}
+int lua_Model_ClearFog(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->modelFogEnabled = false;
+    return 0;
+}
+
 int lua_Model_SetSequence(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) w->modelSequence = static_cast<int>(luaL_optnumber(L, 2, 0));
     return 0;
@@ -7884,6 +7934,13 @@ void LuaEngine::registerCoreAPI() {
         {"SetSequence",     lua_Model_SetSequence},
         {"SetLight",        lua_Model_SetLight},
         {"GetLight",        lua_Model_GetLight},
+        {"SetFogColor",     lua_Model_SetFogColor},
+        {"GetFogColor",     lua_Model_GetFogColor},
+        {"SetFogNear",      lua_Model_SetFogNear},
+        {"GetFogNear",      lua_Model_GetFogNear},
+        {"SetFogFar",       lua_Model_SetFogFar},
+        {"GetFogFar",       lua_Model_GetFogFar},
+        {"ClearFog",        lua_Model_ClearFog},
         {"IsMovable",       lua_Frame_IsMovable},
         {"RegisterForDrag", lua_Frame_RegisterForDrag},
         {"StartMoving",     lua_Frame_StartMoving},

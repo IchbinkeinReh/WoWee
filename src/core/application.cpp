@@ -6261,6 +6261,13 @@ void Application::render() {
                         light.diffuse = glm::vec3(frame->modelLightDiffuse[0], frame->modelLightDiffuse[1],
                                                   frame->modelLightDiffuse[2]);
                         view->setLight(light);
+                        rendering::ModelFrameView::Fog fog;
+                        fog.enabled = frame->modelFogEnabled;
+                        fog.color = glm::vec3(frame->modelFogColor[0], frame->modelFogColor[1],
+                                              frame->modelFogColor[2]);
+                        fog.nearDist = frame->modelFogNear;
+                        fog.farDist = frame->modelFogFar;
+                        view->setFog(fog);
                         view->update(io.DeltaTime);
                         view->requestComposite();
                         frame->externalTexture = view->textureId();

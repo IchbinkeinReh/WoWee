@@ -1233,6 +1233,16 @@ struct Emitter {
                 line(var + ":SetModel(" + quote(*file) + ")");
             if (const std::string* sc = node.attr("scale"))
                 line(var + ":SetModelScale(" + *sc + ")");
+            // fogNear and fogFar, at least 0, and a FogColor child that turns
+            // the fog on (0x0095f800).
+            if (const std::string* fn = node.attr("fogNear"))
+                line(var + ":SetFogNear(math.max(0, " + *fn + "))");
+            if (const std::string* ff = node.attr("fogFar"))
+                line(var + ":SetFogFar(math.max(0, " + *ff + "))");
+            if (const XmlNode* fog = node.child("FogColor")) {
+                line(var + ":SetFogColor(" + fog->attrOr("r", "0") + ", " + fog->attrOr("g", "0") + ", " +
+                     fog->attrOr("b", "0") + ", " + fog->attrOr("a", "1") + ")");
+            }
         }
         if (node.attr("toplevel")) {
             line(var + ":SetToplevel(" +

@@ -89,6 +89,14 @@ public:
         glm::vec3 diffuse{0.0f};
     };
     void setLight(const Light& light) { light_ = light; }
+    /// The frame's fog, set into the model's lighting by its callback
+    /// (0x00960070 -> 0x00834940): colour, near and far, while it is on.
+    struct Fog {
+        bool enabled = false;
+        glm::vec3 color{0.0f};
+        float nearDist = 0.0f, farDist = 1.0f;
+    };
+    void setFog(const Fog& fog) { fog_ = fog; }
     void setFrame(float widthDdc, float heightDdc, const model_frame::Pose& pose, float ddcScreenHeight,
                   int camera, int sequence);
     void update(float deltaTime);
@@ -128,6 +136,7 @@ private:
     int sequence_ = -1;
     bool compositeRequested_ = false;
     Light light_;
+    Fog fog_;
     bool composited_ = false;
     bool registered_ = false;
 };

@@ -174,8 +174,13 @@ void ModelFrameView::compositePass(VkCommandBuffer cmd, uint32_t frameIndex) {
         ubo.ambientColor = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
     }
     ubo.viewPos = glm::vec4(camera_->getPosition(), 0.0f);
-    ubo.fogColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-    ubo.fogParams = glm::vec4(99999.0f, 100000.0f, 0.0f, 0.0f);
+    if (fog_.enabled && fog_.farDist > fog_.nearDist) {
+        ubo.fogColor = glm::vec4(fog_.color, 1.0f);
+        ubo.fogParams = glm::vec4(fog_.nearDist, fog_.farDist, 0.0f, 0.0f);
+    } else {
+        ubo.fogColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+        ubo.fogParams = glm::vec4(99999.0f, 100000.0f, 0.0f, 0.0f);
+    }
     ubo.shadowParams = glm::vec4(0.0f);
     ubo.cascadeInfo = glm::vec4(0.0f);
     std::memcpy(uboMapped_[fi], &ubo, sizeof(GPUPerFrameData));

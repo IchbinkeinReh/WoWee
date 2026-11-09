@@ -668,6 +668,12 @@ struct Widget {
     float modelLightVec[3] = {0.0f, 0.0f, 0.0f};
     float modelLightAmbient[3] = {0.0f, 0.0f, 0.0f};
     float modelLightDiffuse[3] = {0.0f, 0.0f, 0.0f};
+    /// The frame's fog (+0x330 bit 0, colour +0x334, near +0x338, far +0x33c):
+    /// SetFogColor turns it on, ClearFog off; near starts at 0, far at 1.
+    bool modelFogEnabled = false;
+    float modelFogColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float modelFogNear = 0.0f;
+    float modelFogFar = 1.0f;
 
     /// A TabardModel's design (+0x380..+0x390): emblem style and colour,
     /// border style and colour, background colour - game/tabard_design.hpp.
