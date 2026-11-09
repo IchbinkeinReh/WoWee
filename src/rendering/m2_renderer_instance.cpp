@@ -454,6 +454,17 @@ bool M2Renderer::hasAnimation(uint32_t instanceId, uint32_t animationId) const {
     return false;
 }
 
+std::optional<uint32_t> M2Renderer::currentAnimationId(uint32_t instanceId) const {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return std::nullopt;
+    const auto& inst = instances[idxIt->second];
+    if (!inst.cachedModel || inst.currentSequenceIndex < 0 ||
+        static_cast<size_t>(inst.currentSequenceIndex) >= inst.cachedModel->sequences.size()) {
+        return std::nullopt;
+    }
+    return inst.cachedModel->sequences[static_cast<size_t>(inst.currentSequenceIndex)].id;
+}
+
 bool M2Renderer::sequencePlaysOnce(uint32_t instanceId, uint32_t animationId) const {
     auto idxIt = instanceIndexById.find(instanceId);
     if (idxIt == instanceIndexById.end()) return false;

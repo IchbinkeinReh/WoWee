@@ -1345,8 +1345,10 @@ private:
         glm::vec3 lastPosition{0.0f};
         bool hasLastPosition = false;
         float speed = 0.0f;
+        bool gameObject = false;
     };
     std::unordered_map<uint64_t, ObjectEffectState> objectEffects_;
+    std::unordered_map<uint32_t, uint32_t> objectEffectPackageByGoDisplay_;
     std::shared_ptr<const game::object_effect::Tables> objectEffectTables_;
     std::unordered_map<uint32_t, uint32_t> objectEffectPackageByDisplay_;
     bool objectEffectTablesLoaded_ = false;
