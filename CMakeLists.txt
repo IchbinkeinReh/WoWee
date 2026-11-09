@@ -666,6 +666,7 @@ set(WOWEE_SOURCES
     src/core/entity_spawner.cpp
     src/core/entity_spawner_player.cpp
     src/core/entity_spawner_artkit.cpp
+    src/core/entity_spawner_object_effect.cpp
     src/core/entity_spawner_destructible.cpp
     src/core/entity_spawner_blob.cpp
     src/core/entity_spawner_unit_events.cpp

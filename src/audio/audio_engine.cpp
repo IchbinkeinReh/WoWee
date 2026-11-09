@@ -755,6 +755,16 @@ void AudioEngine::setSoundVolume(uint32_t id, float volume) {
     }
 }
 
+void AudioEngine::setSoundPitch(uint32_t id, float pitch) {
+    if (id == 0) return;
+    for (auto& active : activeSounds_) {
+        if (active.id == id) {
+            ma_sound_set_pitch(active.sound, pitch);
+            return;
+        }
+    }
+}
+
 void AudioEngine::stopSoundWithFade(uint32_t id, float seconds) {
     if (id == 0) return;
     for (auto& active : activeSounds_) {

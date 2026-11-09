@@ -3700,3 +3700,8 @@ wowee_add_test(test_loading_screen_route
 # A ship's sway on its route (0x007f7dd0, 0x007f7b30).
 wowee_add_test(test_transport_physics
     SOURCES test_transport_physics.cpp)
+
+# ── test_object_effect ───────────────────────────────
+# A model's object effects (0x006f7270, 0x006f61d0, 0x00721300).
+wowee_add_test(test_object_effect
+    SOURCES test_object_effect.cpp)

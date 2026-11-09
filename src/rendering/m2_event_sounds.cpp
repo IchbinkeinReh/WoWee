@@ -272,6 +272,18 @@ void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets, const
     }
 }
 
+uint32_t M2EventSounds::playLoop(uint32_t soundId, const glm::vec3& at, float fadeInSeconds,
+                                 pipeline::AssetManager* assets) {
+    const Kit* k = kit(soundId, assets);
+    if (!k || k->files.empty()) return 0;
+    const std::vector<uint8_t>* file = pickFile(*k);
+    if (!file) return 0;
+    float minDistance = 0.0f, maxDistance = 0.0f;
+    audio::sound_distance::entryDistance(k->minDistance, k->cutoff, minDistance, maxDistance);
+    return audio::AudioEngine::instance().playSound3DLooping(*file, at, k->volume, maxDistance, minDistance,
+                                                            fadeInSeconds, audio::Channel::Effects);
+}
+
 void M2EventSounds::clear() {
     for (const auto& [id, loop] : loops_) audio::AudioEngine::instance().stopSound(loop.handle);
     loops_.clear();

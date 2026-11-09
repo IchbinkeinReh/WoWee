@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/object_effect.hpp"
 #include "game/character.hpp"
 #include "game/mirror_image.hpp"
 #include "game/guild_emblem.hpp"
@@ -374,6 +375,10 @@ public:
     /// mount's (0x0073d5d0 hands the mount the unit's callback).
     /// `localPlayerInstance` is the renderer's own character.
     void playUnitModelEvents(uint32_t localPlayerInstance);
+    /// A unit's object effects (entity_spawner_object_effect.cpp,
+    /// game/object_effect.hpp): the sounds its display's package gives the
+    /// states its movement and its animation put it in.
+    void updateObjectEffects(float deltaTime);
     /// The race splash of each unit wading across four tenths of its height
     /// into or out of water (rendering/unit_splash.hpp).
     void playUnitSplashes(uint32_t localPlayerInstance);
@@ -1331,6 +1336,21 @@ private:
         std::vector<glm::mat4> lastFrame;
     };
     std::unordered_map<uint64_t, GameObjectArtKitState> gameObjectArtKits_;
+    /// One unit's object effects: its package, the states it is in, the
+    /// loops it plays (effect id -> sound handle, effect) and where it was.
+    struct ObjectEffectState {
+        uint32_t package = 0;
+        game::object_effect::Runner runner;
+        std::unordered_map<uint32_t, std::pair<uint32_t, const game::object_effect::Effect*>> loops;
+        glm::vec3 lastPosition{0.0f};
+        bool hasLastPosition = false;
+        float speed = 0.0f;
+    };
+    std::unordered_map<uint64_t, ObjectEffectState> objectEffects_;
+    std::shared_ptr<const game::object_effect::Tables> objectEffectTables_;
+    std::unordered_map<uint32_t, uint32_t> objectEffectPackageByDisplay_;
+    bool objectEffectTablesLoaded_ = false;
+    void clearObjectEffects(uint64_t guid);
     /// A destructible building's look (entity_spawner_destructible.cpp): its
     /// state by GAMEOBJECT_FLAGS, that state's display and doodad sets.
     struct DestructibleLook {

@@ -251,6 +251,11 @@ public:
     void playOnce(uint32_t soundId, const glm::vec3* at, float volumeScale, pipeline::AssetManager* assets,
                   audio::PlayLimit limit = audio::PlayLimit::None, bool absolute = false,
                   int priority = audio::voice_priority::kDefault, uint32_t* outHandle = nullptr);
+    /// A SoundEntries kit looping at `at` until stopped, owned by its caller
+    /// (an object effect's loop, 0x006f1ef0): rising over `fadeInSeconds`.
+    /// Its handle for AudioEngine's setSoundPosition / setSoundPitch /
+    /// stopSoundWithFade, 0 where nothing started.
+    uint32_t playLoop(uint32_t soundId, const glm::vec3& at, float fadeInSeconds, pipeline::AssetManager* assets);
     /// A SoundEntries row by its Name (0x004ccaa0), 0 for none.
     uint32_t idByName(const std::string& name, pipeline::AssetManager* assets);
 
