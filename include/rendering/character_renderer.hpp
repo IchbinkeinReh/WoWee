@@ -221,10 +221,10 @@ public:
     /// The instances render(Phase::Blended) would draw, furthest first.
     std::vector<BlendedDraw> planBlended(const Camera& camera) const;
     /// The blended batches of one instance.
+    /// A faded one over its z-fill, laid down with the other faded ones'
+    /// before the first of them (zfillPipeline_).
     void renderBlendedInstance(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
-                               const Camera& camera, uint32_t instanceId) {
-        render(cmd, perFrameSet, camera, Phase::Blended, instanceId);
-    }
+                               const Camera& camera, uint32_t instanceId);
     void recreatePipelines();
     /// The five main-pass pipelines, which initialize() and
     /// recreatePipelines() both need and each used to describe.
@@ -980,6 +980,25 @@ private:
     // write kept on, so the faded model still self-occludes instead of showing
     // backfaces and under-armor skin through the body.
     VkPipeline translucentPipeline_ = VK_NULL_HANDLE;
+    /// A faded model as the client draws it (its "objectFadeZFill" CVar,
+    /// on by default: 0x0078dbe0 sets world flag 0x8000): first its depth
+    /// alone - a draw entry with the colour write off (0x0081fe90's colour
+    /// mask 0 for an entry flagged 1) - then its colour blended over it,
+    /// so only its nearest surface shows, nothing of its far side through
+    /// it. zfillPipeline_ writes depth only; fadedOverZfillPipeline_ blends
+    /// where the depth is the model's own (nearer or equal), writing none.
+    VkPipeline zfillPipeline_ = VK_NULL_HANDLE;
+    VkPipeline fadedOverZfillPipeline_ = VK_NULL_HANDLE;
+    /// The faded instances of this frame's blended plan, whose depth goes
+    /// down together before the first of them draws its colour (a weapon is
+    /// its own instance, and the client's z-fill hides what of it is behind
+    /// the body); set by planBlended, cleared as they are filled.
+    mutable std::vector<uint32_t> fadedToZfill_;
+    std::vector<uint32_t> zfilledFaded_;
+    /// Inside render(): drawing the z-fill, or a faded colour over it.
+    bool zfillDraw_ = false;
+    bool overZfill_ = false;
+    void zfillFadedInstances(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera);
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
 
     // Descriptor set layouts
