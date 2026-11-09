@@ -181,6 +181,11 @@ struct Widget {
     /// stereo depth, summed down through its parents (0x00491740).
     float depth = 0.0f;
     bool ignoreDepth = false;
+    /// CreateTitleRegion / <TitleRegion> (+0xa8): the region a press inside
+    /// of moves the frame (0x00495470), and on the region itself the mark
+    /// that keeps it out of the drawing and out of GetRegions.
+    uint32_t titleRegion = 0;
+    bool isTitleRegion = false;
     float width = 0.0f;
     float height = 0.0f;
     bool shown = true;

@@ -6262,7 +6262,7 @@ int pushChildWidgets(lua_State* L, bool regions, bool countOnly) {
     int pushed = 0;
     for (const uint32_t childId : w->children) {
         const auto* child = tree->get(childId);
-        if (!child || (child->kind == wowee::ui::WidgetKind::Frame) == regions) continue;
+        if (!child || (child->kind == wowee::ui::WidgetKind::Frame) == regions || child->isTitleRegion) continue;
         lua_pushinteger(L, static_cast<lua_Integer>(childId));
         lua_rawget(L, registry);
         if (lua_istable(L, -1) && countOnly) {
@@ -7343,6 +7343,70 @@ int lua_Cooldown_GetDrawEdge(lua_State* L) {
     return 1;
 }
 
+
+/// The title regions' Lua objects, by the region's widget id; the frame's
+/// widget holds which one is its own.
+static void pushTitleRegionTable(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "wowee_title_regions");
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, LUA_REGISTRYINDEX, "wowee_title_regions");
+    }
+}
+/// Push the frame's title region object, or nothing; true when pushed.
+static bool pushTitleRegion(lua_State* L, const wowee::ui::Widget* f) {
+    if (!f || f->titleRegion == 0) return false;
+    pushTitleRegionTable(L);
+    lua_pushinteger(L, static_cast<lua_Integer>(f->titleRegion));
+    lua_rawget(L, -2);
+    lua_remove(L, -2);
+    if (lua_istable(L, -1)) return true;
+    lua_pop(L, 1);
+    return false;
+}
+
+/// CreateTitleRegion (0x0049e630): the frame's title region, made the first
+/// time - a region that draws nothing - and on later calls the same one with
+/// its points cleared. GetTitleRegion (0x0049e5b0) answers it or nil.
+static int lua_Frame_CreateTitleRegion(lua_State* L) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    const uint32_t parent = widgetIdOf(L, 1);
+    if (!tree || parent == 0) return 0;
+    if (pushTitleRegion(L, tree->get(parent))) {
+        lua_getfield(L, -1, "ClearAllPoints");
+        if (lua_isfunction(L, -1)) {
+            lua_pushvalue(L, -2);
+            lua_call(L, 1, 0);
+        } else {
+            lua_pop(L, 1);
+        }
+        return 1;
+    }
+    lua_newtable(L);
+    const uint32_t id = tree->create(wowee::ui::WidgetKind::Texture, parent, "");
+    if (auto* w = tree->get(id)) {
+        w->objectType = "Region";
+        w->isTitleRegion = true;
+    }
+    if (auto* f = tree->get(parent)) f->titleRegion = id;
+    lua_pushinteger(L, static_cast<lua_Integer>(id));
+    lua_setfield(L, -2, "__wid");
+    lua_pushvalue(L, 1);
+    lua_setfield(L, -2, "__parent");
+    installRegionMethods(L, /*isTexture=*/false, /*isFontString=*/false);
+    pushTitleRegionTable(L);
+    lua_pushinteger(L, static_cast<lua_Integer>(id));
+    lua_pushvalue(L, -3);
+    lua_rawset(L, -3);
+    lua_pop(L, 1);
+    return 1;
+}
+static int lua_Frame_GetTitleRegion(lua_State* L) {
+    if (!pushTitleRegion(L, widgetOf(L, 1))) lua_pushnil(L);
+    return 1;
+}
 
 // Frame method: frame:CreateTexture(name, layer) → a real region
 static int lua_Frame_CreateTexture(lua_State* L) {
@@ -8570,6 +8634,8 @@ void LuaEngine::registerCoreAPI() {
         {"GetReverse",            lua_Cooldown_GetReverse},
         {"EnableDrawLayer",       lua_Frame_EnableDrawLayer},
         {"IsDragging",            lua_Frame_IsDragging},
+        {"CreateTitleRegion",     lua_Frame_CreateTitleRegion},
+        {"GetTitleRegion",        lua_Frame_GetTitleRegion},
         {"SetDepth",              lua_Frame_SetDepth},
         {"GetDepth",              lua_Frame_GetDepth},
         {"GetEffectiveDepth",     lua_Frame_GetEffectiveDepth},
@@ -13515,7 +13581,23 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
                     }
                 }
             }
-            if (pressedWid_[i] != 0)
+            // A press inside the title region of the frame under the cursor
+            // moves that frame and goes no further (0x00495470 ->
+            // 0x00494060): no OnMouseDown, and nothing is pressed.
+            bool heldByTitle = false;
+            if (auto* f = widgets_.get(hit); f && f->titleRegion != 0 &&
+                                             !wowee::ui::isFixedSettingsWindow(f->name)) {
+                const auto* tr = widgets_.get(f->titleRegion);
+                if (tr && tr->rectW > 0.0f && tr->rectH > 0.0f && x >= tr->left &&
+                    x <= tr->left + tr->rectW && y >= tr->bottom && y <= tr->bottom + tr->rectH) {
+                    widgets_.pinToCurrentPosition(hit);
+                    widgets_.setMovingWidget(hit);
+                    f->userMoved = true;
+                    pressedWid_[i] = 0;
+                    heldByTitle = true;
+                }
+            }
+            if (!heldByTitle && pressedWid_[i] != 0)
                 callFrameScript(pressedWid_[i], "OnMouseDown", b.name);
         } else if (!b.down && buttonDown_[i]) {
             buttonDown_[i] = false;

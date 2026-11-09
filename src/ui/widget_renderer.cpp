@@ -2350,6 +2350,8 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
     }
 
     for (const Widget* w : order) {
+        // A title region draws nothing; it is only where the frame is held.
+        if (w->isTitleRegion) continue;
         // A region in a layer its frame has disabled is not drawn.
         if ((w->kind == WidgetKind::Texture || w->kind == WidgetKind::FontString) && w->parent) {
             const Widget* owner = tree.get(w->parent);

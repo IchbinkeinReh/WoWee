@@ -1144,25 +1144,18 @@ TEST_CASE("An Animations block becomes group and animation calls",
     REQUIRE_FALSE(has(r.lua, "local __w["));
 }
 
-TEST_CASE("A TitleRegion makes a frame draggable", "[framexml][emit]") {
+TEST_CASE("A TitleRegion is the frame's own title region", "[framexml][emit]") {
+    // The client builds a region and lays it out (0x004932c0); a press in it
+    // moves the frame. No drag scripts are written for it, and a window that
+    // is merely toplevel and movable is not given a body drag.
     XmlNode root = parseOrFail(
-        "<Ui><Frame name=\"Loot\"><TitleRegion setAllPoints=\"true\"/></Frame></Ui>");
+        "<Ui><Frame name=\"Loot\" toplevel=\"true\" movable=\"true\">"
+        "<TitleRegion setAllPoints=\"true\"/></Frame>"
+        "<Frame name=\"Sheet\" toplevel=\"true\" movable=\"true\"/></Ui>");
     const EmitResult r = emitFrameXml(root);
-    REQUIRE(has(r.lua, "SetMovable(true)"));
-    REQUIRE(has(r.lua, "RegisterForDrag(\"LeftButton\")"));
-    REQUIRE(has(r.lua, "StartMoving()"));
-}
-
-TEST_CASE("A frame with its own drag scripts keeps them", "[framexml][emit]") {
-    // The chat frame has a title region and five OnDragStart handlers; the
-    // generic pair must not replace behaviour that is deliberately specific.
-    XmlNode root = parseOrFail(
-        "<Ui><Frame name=\"Chat\">"
-        "<TitleRegion setAllPoints=\"true\"/>"
-        "<Scripts><OnDragStart>Special(self)</OnDragStart></Scripts>"
-        "</Frame></Ui>");
-    const EmitResult r = emitFrameXml(root);
-    REQUIRE(has(r.lua, "SetMovable(true)"));
+    REQUIRE(has(r.lua, ":CreateTitleRegion()"));
+    REQUIRE(has(r.lua, ":GetTitleRegion():SetAllPoints("));
+    REQUIRE_FALSE(has(r.lua, "RegisterForDrag(\"LeftButton\")"));
     REQUIRE_FALSE(has(r.lua, "StartMoving()"));
 }
 

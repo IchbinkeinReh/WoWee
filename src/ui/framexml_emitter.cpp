@@ -1162,46 +1162,19 @@ struct Emitter {
             }
             break;
         }
-        // <TitleRegion> - the part of a frame you can drag it by. All three in
-        // FrameXML cover the whole frame, and the loot window is one of them:
-        // without this it cannot be moved at all.
-        //
-        // Only wired when the frame declares no drag handling of its own. The
-        // chat frame has a title region and five OnDragStart scripts, and
-        // overwriting those with the generic pair would replace behaviour that
-        // is deliberately more specific.
-        // A window that says it is toplevel and movable counts too, title region
-        // or not. Only three frames in FrameXML declare one, so keying on it
-        // alone left the character sheet and the spellbook - both 384x512
-        // panels declaring toplevel and movable, neither with a title region -
-        // unable to be moved, along with thirty more windows.
-        //
-        // Both attributes, not just movable: forty-nine frames declare movable
-        // and the set includes the unit frames, which declare it so that addons
-        // can reposition them. Giving those a body drag would turn a click that
-        // slipped four units from "target this party member" into "move their
-        // frame". Pairing it with toplevel narrows it to the actual windows.
-        {
-            bool ownDrag = false;
-            bool titleRegion = false;
-            for (const XmlNode& child : node.children) {
-                if (child.name == "TitleRegion") titleRegion = true;
-                if (child.name != "Scripts") continue;
-                for (const XmlNode& sc : child.children) {
-                    if (sc.name == "OnDragStart" || sc.name == "OnDragStop") {
-                        ownDrag = true;
-                    }
-                }
+        // <TitleRegion>: the part of the frame a press moves it by - a
+        // region of its own, laid out like any other (CSimpleFrame's loader,
+        // 0x004932c0; CreateTitleRegion 0x0049e630).
+        if (const XmlNode* tr = node.child("TitleRegion")) {
+            const std::string trVar = var + ":GetTitleRegion()";
+            line(var + ":CreateTitleRegion()");
+            if (tr->attrBool("setAllPoints")) line(trVar + ":SetAllPoints(" + var + ")");
+            if (const XmlNode* size = tr->child("Size")) {
+                float w = 0, h = 0;
+                if (readDimension(*size, w, h))
+                    line(trVar + ":SetSize(" + std::to_string(w) + ", " + std::to_string(h) + ")");
             }
-            const bool window = node.attrBool("toplevel") && node.attrBool("movable");
-            if (titleRegion || window) {
-                line(var + ":SetMovable(true)");
-                if (!ownDrag) {
-                    line(var + ":RegisterForDrag(\"LeftButton\")");
-                    line(var + ":SetScript(\"OnDragStart\", function(self) self:StartMoving() end)");
-                    line(var + ":SetScript(\"OnDragStop\", function(self) self:StopMovingOrSizing() end)");
-                }
-            }
+            if (const XmlNode* anchors = tr->child("Anchors")) emitAnchors(*anchors, trVar, var, name);
         }
         emitAnimations(node, var, name);
 
