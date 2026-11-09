@@ -1102,6 +1102,10 @@ private:
     /// range plays as a landing, so a mounted player crossing a field looked to
     /// everyone else like one landing over and over.
     float airborneSeconds_ = 0.0f;
+    /// How many physics steps this frame is split into (updateThirdPersonCamera):
+    /// the client moves a unit by the whole frame at once, and keeps it to the
+    /// ground by that whole move (groundFollowReach).
+    int physicsStepsThisFrame_ = 1;
     bool swimRising_ = false;
     bool swimDiving_ = false;
     bool wasAscending_ = false;   // Space held while flyingActive_
