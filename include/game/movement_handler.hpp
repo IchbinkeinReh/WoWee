@@ -238,6 +238,10 @@ public:
     // its final waypoint. Only treat those signals as authoritative near arrival.
     [[nodiscard]] bool isNearTaxiDestination(float maxDistance = 24.0f) const;
     uint32_t nextMovementTimestampMs();
+    /// The movement clock as it reads now, for what only looks at it: never
+    /// moved on past the real time (nextMovementTimestampMs gives each packet
+    /// its own millisecond, and asked every frame it ran ahead).
+    [[nodiscard]] uint32_t movementClockMs() const;
     void sanitizeMovementForTaxi();
 
     // Heartbeat / movement timing (for GameHandler::update())

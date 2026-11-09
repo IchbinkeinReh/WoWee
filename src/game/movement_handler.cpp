@@ -538,6 +538,15 @@ uint32_t MovementHandler::nextMovementTimestampMs() {
     return candidate;
 }
 
+uint32_t MovementHandler::movementClockMs() const {
+    const uint64_t elapsed = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                       std::chrono::steady_clock::now() - movementClockStart_)
+                                                       .count()) +
+                             1ULL;
+    return std::max(static_cast<uint32_t>(std::min<uint64_t>(elapsed, std::numeric_limits<uint32_t>::max())),
+                    lastMovementTimestampMs_);
+}
+
 bool MovementHandler::restoreWorldTransferFallbackIfNearOrigin(const char* context) {
     if (!worldTransferFallbackValid_ || owner_.getCurrentMapId() != worldTransferFallbackMapId_) {
         return false;
@@ -4522,7 +4531,7 @@ bool MovementHandler::unitHasClientControl(uint64_t guid) const {
 }
 
 void MovementHandler::noteMoveSpline(uint64_t guid, bool hasPath, uint32_t splineFlags, uint32_t durationMs) {
-    const uint32_t now = nextMovementTimestampMs();
+    const uint32_t now = movementClockMs();
     if (auto spline = vehicle::moveSplineFrom(hasPath, splineFlags, durationMs, now))
         moveSplines_[guid] = *spline;
     else
@@ -4535,7 +4544,7 @@ void MovementHandler::noteMoveSpline(uint64_t guid, bool hasPath, uint32_t splin
 bool MovementHandler::onMoveSpline(uint64_t guid) {
     const auto it = moveSplines_.find(guid);
     if (it == moveSplines_.end()) return false;
-    if (vehicle::moveSplineRunning(it->second, nextMovementTimestampMs())) return true;
+    if (vehicle::moveSplineRunning(it->second, movementClockMs())) return true;
     moveSplines_.erase(it);
     return false;
 }
@@ -4820,7 +4829,7 @@ void MovementHandler::requestMoverPitch(float pitch) {
     const auto way = vehicle::pitchOverTime(movementInfo.pitch, pitch, moverPitchRate());
     pitchTarget_ = pitch;
     pitchingToTarget_ = true;
-    pitchStopMs_ = nextMovementTimestampMs() + way.durationMs;
+    pitchStopMs_ = movementClockMs() + way.durationMs;
     startMoverPitch(way.up);
 }
 
@@ -4844,7 +4853,7 @@ void MovementHandler::setAimKey(bool up, bool held) {
 }
 
 bool MovementHandler::updateMoverPitch(float deltaTime) {
-    const uint32_t now = nextMovementTimestampMs();
+    const uint32_t now = movementClockMs();
     // 0x00721b90: a full-speed pitcher's START_PITCH after 100 ms.
     if (heldPitchStart_ && now - heldPitchStartMs_ > vehicle::kPitchStartHoldMs) {
         const Opcode held = *heldPitchStart_;
