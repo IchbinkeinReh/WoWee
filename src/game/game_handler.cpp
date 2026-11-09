@@ -1770,9 +1770,34 @@ void GameHandler::updateM2TransportBoarding(const glm::vec3& playerCanonical) {
 
     float ownerDeckZ = 0.0f;
     const uint64_t owner = tm->groundTransportUnder(playerCanonical, &ownerDeckZ);
-    // A fall changes nothing until it lands on something an object owns
-    // (0x007612b0), so a jump on the deck keeps the transport.
-    if (owner == 0 && movementInfo.hasFlag(MovementFlags::FALLING)) return;
+    // A fall attaches to nothing until it lands on something an object owns
+    // (0x007612b0), and keeps the transport it is on only while the
+    // transport holds it: every step of it asks to be taken off (0x007618b0
+    // -> 0x006ec7b0(0, 0)), refused while the mover is within the model
+    // (0x0074b5e0 -> vtable +0xf0 -> 0x0070b360 -> 0x0077ffb0), so a jump
+    // in a lift's car stays on it and one out of its door does not. Only an
+    // M2's hold is known here (its collision box); a ship's is its WMO's
+    // (0x007aea10), not ported, and a ship keeps its passenger through a
+    // fall as before.
+    if (owner == 0 && movementInfo.hasFlag(MovementFlags::FALLING)) {
+        const uint64_t riding = getPlayerTransportGuid();
+        const auto* transport = riding != 0 ? tm->getTransport(riding) : nullptr;
+        if (transport && transport->isM2 &&
+            transport_boarding::afterFallStep(riding, tm->stillHoldsPassenger(riding, playerCanonical)) == 0) {
+            LOG_DEBUG("Transport left in a fall: guid=0x", std::hex, riding, std::dec,
+                      " - outside the model's box");
+            static const bool kFallDebug = [] {
+                const char* v = std::getenv("WOWEE_FLOOR_DEBUG");
+                return v && v[0] && v[0] != '0';
+            }();
+            if (kFallDebug) {
+                LOG_WARNING("FALL TRANSPORT: off 0x", std::hex, riding, std::dec, " at (", playerCanonical.x,
+                            ", ", playerCanonical.y, ", ", playerCanonical.z, ") - outside its box");
+            }
+            clearPlayerTransport();
+        }
+        return;
+    }
 
     const uint64_t current = getPlayerTransportGuid();
     // A hull whose collision is still uploading has no deck to find yet;
