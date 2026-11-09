@@ -123,10 +123,33 @@ void EntitySpawner::updateObjectEffects(float deltaTime) {
         return pkg != objectEffectPackageByGoDisplay_.end() ? pkg->second : 0;
     };
 
+    // The mount a player rides: its instance and display.
+    const uint64_t self = gameHandler_->getPlayerGuid();
+    auto mountOf = [&](uint64_t rider, uint32_t& instance, uint32_t& display) {
+        if (rider == self) {
+            instance = mountInstanceId_;
+            display = mountDisplayId_;
+        } else if (const auto it = remotePlayerMounts_.find(rider); it != remotePlayerMounts_.end()) {
+            instance = it->second.instanceId;
+            display = it->second.displayId;
+        } else {
+            instance = display = 0;
+        }
+        return instance != 0;
+    };
+    auto mountPackage = [&](uint64_t rider) -> uint32_t {
+        uint32_t instance = 0, display = 0;
+        if (!mountOf(rider, instance, display)) return 0;
+        const auto pkg = objectEffectPackageByDisplay_.find(display);
+        return pkg != objectEffectPackageByDisplay_.end() ? pkg->second : 0;
+    };
+
     // Objects gone, or whose display no longer has that package, let go.
     for (auto it = objectEffects_.begin(); it != objectEffects_.end();) {
         const uint64_t guid = it->first;
-        const uint32_t now = it->second.gameObject ? goPackage(guid) : unitPackage(guid);
+        const uint32_t now = it->second.gameObject ? goPackage(guid)
+                             : it->second.mount   ? mountPackage(guid ^ kMountEffectKey)
+                                                  : unitPackage(guid);
         ++it;
         if (now != objectEffects_[guid].package) clearObjectEffects(guid);
     }
@@ -175,12 +198,13 @@ void EntitySpawner::updateObjectEffects(float deltaTime) {
     // Its state on the frame: made with states 1 and 0x26 (0x006f7420), and
     // the speed it travels at.
     auto stateFor = [&](uint64_t guid, uint32_t package, bool gameObject, const glm::vec3& position,
-                        std::vector<oe::Action>& actions) -> ObjectEffectState& {
+                        std::vector<oe::Action>& actions, bool mount = false) -> ObjectEffectState& {
         auto [it, made] = objectEffects_.try_emplace(guid);
         ObjectEffectState& st = it->second;
         if (made) {
             st.package = package;
             st.gameObject = gameObject;
+            st.mount = mount;
             st.runner.enter(tables, package, 1, actions);
             st.runner.enter(tables, package, 0x26, actions);
         }
@@ -190,17 +214,17 @@ void EntitySpawner::updateObjectEffects(float deltaTime) {
         return st;
     };
 
-    const uint64_t self = gameHandler_->getPlayerGuid();
-    for (const auto& [guid, instance] : creatureInstances_) {
-        const uint32_t package = unitPackage(guid);
-        if (package == 0) continue;
+    // A unit, or a rider's mount: the mount's model with the rider's
+    // movement, as the client's unit drives the effects of the mount it
+    // draws under itself.
+    auto runUnit = [&](uint64_t guid, uint64_t key, uint32_t package, uint32_t instance, bool mount) {
         auto entity = gameHandler_->getEntityManager().getEntity(guid);
-        if (!entity || !entity->isUnit()) continue;
+        if (!entity || !entity->isUnit()) return;
         const auto& unit = static_cast<const game::Unit&>(*entity);
         glm::vec3 position;
-        if (!cr->getInstancePosition(instance, position)) continue;
+        if (!cr->getInstancePosition(instance, position)) return;
         std::vector<oe::Action> actions;
-        ObjectEffectState& st = stateFor(guid, package, false, position, actions);
+        ObjectEffectState& st = stateFor(key, package, false, position, actions, mount);
         // The animation's state (0x0071e5b0), and Death's end of every
         // movement state.
         oe::States animWanted;
@@ -229,6 +253,16 @@ void EntitySpawner::updateObjectEffects(float deltaTime) {
                 return glm::vec3(frame * glm::vec4(offset, 1.0f));
             return position + offset;
         });
+    };
+    for (const auto& [guid, instance] : creatureInstances_) {
+        if (const uint32_t package = unitPackage(guid)) runUnit(guid, guid, package, instance, false);
+    }
+    std::vector<uint64_t> riders{self};
+    for (const auto& [guid, mount] : remotePlayerMounts_) riders.push_back(guid);
+    for (const uint64_t rider : riders) {
+        uint32_t instance = 0, display = 0;
+        if (rider == 0 || !mountOf(rider, instance, display)) continue;
+        if (const uint32_t package = mountPackage(rider)) runUnit(rider, rider ^ kMountEffectKey, package, instance, true);
     }
 
     // Game objects: a lift's, a tram car's, a gunship's. The animation the

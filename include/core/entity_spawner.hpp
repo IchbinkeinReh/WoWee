@@ -1346,7 +1346,9 @@ private:
         bool hasLastPosition = false;
         float speed = 0.0f;
         bool gameObject = false;
+        bool mount = false;   ///< a rider's mount, keyed by the rider ^ kMountEffectKey
     };
+    static constexpr uint64_t kMountEffectKey = 0x4000000000000000ull;
     std::unordered_map<uint64_t, ObjectEffectState> objectEffects_;
     std::unordered_map<uint32_t, uint32_t> objectEffectPackageByGoDisplay_;
     std::shared_ptr<const game::object_effect::Tables> objectEffectTables_;
