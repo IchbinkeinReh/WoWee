@@ -1647,6 +1647,17 @@ void GameHandler::beginPlayerTransportWorldTransfer(
                 " wire offset=(", wireOffset.x, ",", wireOffset.y, ",", wireOffset.z, ")");
 }
 
+void GameHandler::armLoadingScreenCrossing(uint32_t entry, uint32_t fromMap) {
+    loadingScreenCrossing_.reset();
+    if (entry == 0) return;
+    // The player's transport is the one named (0x0040ad50 compares its
+    // entry), and its template's first datum the taxi path it runs.
+    if (pendingPlayerTransportEntry_ != entry) return;
+    const auto* info = getCachedGameObjectInfo(entry);
+    if (!info || info->type != 15 || !info->hasData || info->data[0] == 0) return;
+    loadingScreenCrossing_ = LoadingScreenCrossing{info->data[0], fromMap};
+}
+
 bool GameHandler::completePlayerTransportWorldTransfer(
     uint64_t transportGuid, glm::vec3& worldPosition) {
     if (!pendingPlayerTransportTransfer_ || !transportManager_ ||

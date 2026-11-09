@@ -2434,6 +2434,20 @@ public:
     // down the origin map's transport and constructs its destination instance.
     void beginPlayerTransportWorldTransfer(uint32_t destinationMapId,
                                            const glm::vec3& wireOffset);
+    /// SMSG_TRANSFER_PENDING named transport `entry` leaving map `fromMap`,
+    /// the one the player rides (0x0040ad50): its taxi path is the crossing
+    /// the next loading screen draws. Entry 0 clears it.
+    void armLoadingScreenCrossing(uint32_t entry, uint32_t fromMap);
+    struct LoadingScreenCrossing {
+        uint32_t taxiPathId = 0;
+        uint32_t fromMapId = 0;
+    };
+    /// The crossing armed for the loading screen, once.
+    std::optional<LoadingScreenCrossing> takeLoadingScreenCrossing() {
+        auto c = loadingScreenCrossing_;
+        loadingScreenCrossing_.reset();
+        return c;
+    }
     bool hasPendingPlayerTransportWorldTransfer() const {
         return pendingPlayerTransportTransfer_;
     }
@@ -6293,6 +6307,7 @@ private:
     bool pendingPlayerTransportTransfer_ = false;
     uint64_t pendingPlayerTransportGuid_ = 0;
     uint32_t pendingPlayerTransportEntry_ = 0;
+    std::optional<LoadingScreenCrossing> loadingScreenCrossing_;
     uint32_t pendingPlayerTransportMapId_ = 0xFFFFFFFFu;
     glm::vec3 pendingPlayerTransportOffset_ = glm::vec3(0.0f);  ///< as the wire has it
     std::unique_ptr<TransportManager> transportManager_;  // Transport movement manager

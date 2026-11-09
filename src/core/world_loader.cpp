@@ -786,6 +786,10 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     rendering::LoadingScreen& loadingScreen = *loadingScreenOwned;
     loadingScreen.setVkContext(window_->getVkContext());
     loadingScreen.setSDLWindow(window_->getSDLWindow());
+    if (gameHandler_) {
+        if (const auto crossing = gameHandler_->takeLoadingScreenCrossing())
+            loadingScreen.setTransportCrossing(crossing->taxiPathId, crossing->fromMapId);
+    }
     bool loadingScreenOk = loadingScreen.initialize(assetManager_, mapId);
     // 0x0040a990: the loading screen starts the keep-alive's thirty seconds.
     if (gameHandler_) gameHandler_->loadingKeepAlive(/*starting=*/true);

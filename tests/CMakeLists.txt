@@ -3690,3 +3690,8 @@ wowee_add_test(test_water_ripple SOURCES test_water_ripple.cpp)
 # ── test_swim_wave ──
 # A swimmer's waves: header-only logic.
 wowee_add_test(test_swim_wave SOURCES test_swim_wave.cpp)
+
+# ── test_loading_screen_route ────────────────────────
+# A ship's crossing on its loading screen (0x00409880, 0x0040b0b0).
+wowee_add_test(test_loading_screen_route
+    SOURCES test_loading_screen_route.cpp)

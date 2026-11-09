@@ -39,6 +39,14 @@ bool LoadingScreen::initialize(pipeline::AssetManager* assets, uint32_t mapId) {
         holdsWorldSound_ = true;
     }
     namespace ls = loading_screen;
+    // 0x0040ad50: a crossing that can be drawn is the whole screen - the
+    // map's picture is not loaded (0x00ab63bc goes to -1) and no bar is drawn.
+    crossing_.reset();
+    if (crossingPath_ != 0 && loadCrossing(assets)) {
+        LOG_INFO("Loading screen initialized: map ", mapId, " - the crossing of taxi path ",
+                 crossingPath_, " from map ", crossingFromMap_);
+        return true;
+    }
     // 0x00409ed0: the map's LoadingScreens row (Map +0x24), its "Wide"
     // version on a screen wider than 4:3 where it has one, else the row's
     // picture, else the default.
@@ -101,10 +109,107 @@ void LoadingScreen::shutdown() {
         audio::AudioEngine::instance().endWorldSoundHold();
     }
     if (!vkCtx) return;
-    if (!picture_.image && !bar_[0].image && !bar_[1].image) return;
+    bool any = picture_.image || bar_[0].image || bar_[1].image || dynamicElements_.image;
+    for (const Texture& tex : worldTiles_) any = any || tex.image;
+    if (!any) return;
     ::wowee::rendering::deviceWaitIdle(vkCtx->getDevice());
     release(picture_);
     for (Texture& tex : bar_) release(tex);
+    release(dynamicElements_);
+    for (Texture& tex : worldTiles_) release(tex);
+    crossing_.reset();
+}
+
+bool LoadingScreen::loadCrossing(pipeline::AssetManager* assets) {
+    namespace lr = loading_screen_route;
+    if (!assets || !assets->isInitialized()) return false;
+    auto nodeDbc = assets->loadDBC("TaxiPathNode.dbc");
+    auto splineDbc = assets->loadDBC("LoadingScreenTaxiSplines.dbc");
+    auto continentDbc = assets->loadDBC("WorldMapContinent.dbc");
+    if (!nodeDbc || !nodeDbc->isLoaded() || nodeDbc->getFieldCount() < 8 || !splineDbc ||
+        !splineDbc->isLoaded() || splineDbc->getFieldCount() < 19 || !continentDbc ||
+        !continentDbc->isLoaded() || continentDbc->getFieldCount() < 9) {
+        return false;
+    }
+    std::vector<lr::PathNode> nodes;
+    nodes.reserve(nodeDbc->getRecordCount());
+    for (uint32_t i = 0; i < nodeDbc->getRecordCount(); ++i) {
+        lr::PathNode n;
+        n.id = nodeDbc->getUInt32(i, 0);
+        n.pathId = nodeDbc->getUInt32(i, 1);
+        n.mapId = nodeDbc->getUInt32(i, 3);
+        n.x = nodeDbc->getFloat(i, 4);
+        n.y = nodeDbc->getFloat(i, 5);
+        n.flags = nodeDbc->getUInt32(i, 7);
+        nodes.push_back(n);
+    }
+    std::vector<lr::SplineRow> rows;
+    for (uint32_t i = 0; i < splineDbc->getRecordCount(); ++i) {
+        if (splineDbc->getUInt32(i, 1) != crossingPath_) continue;
+        lr::SplineRow r;
+        r.pathId = crossingPath_;
+        for (uint32_t k = 0; k < 8; ++k) {
+            r.x[k] = splineDbc->getFloat(i, 2 + k);
+            r.y[k] = splineDbc->getFloat(i, 10 + k);
+        }
+        r.legIndex = splineDbc->getUInt32(i, 18);
+        rows.push_back(r);
+    }
+    // 0x00544090: the last WorldMapContinent row for the map.
+    auto continentOf = [&](uint32_t map) -> std::optional<lr::Continent> {
+        for (uint32_t i = continentDbc->getRecordCount(); i-- > 0;) {
+            if (continentDbc->getUInt32(i, 1) != map) continue;
+            return lr::Continent{continentDbc->getFloat(i, 6), continentDbc->getFloat(i, 7),
+                                 continentDbc->getFloat(i, 8)};
+        }
+        return std::nullopt;
+    };
+    auto route = lr::build(nodes, rows, crossingPath_, crossingFromMap_, continentOf);
+    if (!route) return false;
+    // 0x0040a160: the trail's sprites and the twelve tiles, all or none.
+    bool ok = loadTexture(assets, lr::kDynamicElements, dynamicElements_);
+    for (size_t i = 0; ok && i < worldTiles_.size(); ++i) {
+        ok = loadTexture(assets, "Interface\\WorldMap\\World\\World" + std::to_string(i + 1),
+                         worldTiles_[i]);
+    }
+    if (!ok) {
+        if (vkCtx) ::wowee::rendering::deviceWaitIdle(vkCtx->getDevice());
+        release(dynamicElements_);
+        for (Texture& tex : worldTiles_) release(tex);
+        return false;
+    }
+    crossing_ = std::move(route);
+    return true;
+}
+
+void LoadingScreen::drawCrossing(ImDrawList* drawList, float screenW, float screenH) const {
+    // 0x00409010: the tiles, then 0x00408e10: the dots the progress has
+    // reached and the two markers over them, in the 4:3 viewport.
+    namespace lr = loading_screen_route;
+    const float aspect = screenH > 0.0f ? screenW / screenH : 0.0f;
+    const loading_screen::Rect view = loading_screen::pictureViewport(aspect, false);
+    const float vx = view.x0 * screenW, vw = (view.x1 - view.x0) * screenW;
+    const float vy = view.y0 * screenH, vh = (view.y1 - view.y0) * screenH;
+    auto at = [&](float x, float y) { return ImVec2(vx + x * vw, screenH - (vy + y * vh)); };
+    for (int row = 0; row < 3; ++row) {
+        for (int col = 0; col < 4; ++col) {
+            const Texture& tex = worldTiles_[static_cast<size_t>(row * 4 + col)];
+            if (!tex.descriptor) continue;
+            const lr::Tile t = lr::tile(col, row);
+            drawList->AddImage(reinterpret_cast<ImTextureID>(tex.descriptor), at(t.x0, t.yTop),
+                               at(t.x1, t.yBottom), ImVec2(0.0f, 0.0f), ImVec2(t.uMax, t.vMax));
+        }
+    }
+    if (!dynamicElements_.descriptor || !crossing_) return;
+    const auto id = reinterpret_cast<ImTextureID>(dynamicElements_.descriptor);
+    auto sprite = [&](const lr::Sprite& s, const lr::Point& p) {
+        drawList->AddImage(id, at(p.x - s.halfW, p.y + s.halfH), at(p.x + s.halfW, p.y - s.halfH),
+                           ImVec2(s.u0, s.v0), ImVec2(s.u1, s.v1));
+    };
+    const size_t shown = crossing_->shownDots(loadProgress);
+    for (size_t k = 0; k < shown; ++k) sprite(lr::kDot, crossing_->dots[k]);
+    sprite(lr::kStart, crossing_->start);
+    sprite(lr::kEnd, crossing_->end);
 }
 
 static uint32_t findMemoryType(VkPhysicalDevice physDevice, uint32_t typeFilter, VkMemoryPropertyFlags properties) {
@@ -280,6 +385,10 @@ bool LoadingScreen::upload(const uint8_t* rgba, int imageWidth, int imageHeight,
 void LoadingScreen::drawPicture(ImDrawList* drawList, float screenW, float screenH) const {
     // 0x0040a270: the screen black, the picture in a viewport of its own
     // shape, and on it the bar - its fill, then its border (0x004090c0).
+    if (crossing_) {
+        drawCrossing(drawList, screenW, screenH);
+        return;
+    }
     namespace ls = loading_screen;
     const float aspect = screenH > 0.0f ? screenW / screenH : 0.0f;
     const ls::Rect view = ls::pictureViewport(aspect, widePicture_);
