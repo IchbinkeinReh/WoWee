@@ -302,6 +302,13 @@ struct WMOModel {
     // Fog
     std::vector<WMOFog> fogs;
 
+    /// MCVP, the root's last chunk where it has one: the planes (normal,
+    /// distance; 16 bytes each) of the convex volume a transport holds its
+    /// passengers in, in the model's own space (0x007d7470 reads it after
+    /// the root's other chunks, +0x15c / +0x198; 0x007aea10 asks it). Ships and
+    /// zeppelins carry one; most other WMOs none.
+    std::vector<glm::vec4> convexVolumePlanes;
+
     // Group names
     std::vector<std::string> groupNames;
     std::vector<uint8_t> groupNameRaw;  // Raw MOGN chunk for offset-based name lookup

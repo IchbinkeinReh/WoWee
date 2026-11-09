@@ -54,3 +54,18 @@ TEST_CASE("a fall keeps the transport only while it holds the mover (0x007618b0,
     CHECK(afterFallStep(0, true) == 0);
     CHECK(afterFallStep(0, false) == 0);
 }
+
+TEST_CASE("a WMO transport holds a passenger inside its MCVP volume (0x007aea10)", "[transport_boarding]") {
+    // A box 10 x 6 x 4 about the origin as six planes, outward normals:
+    // inside where normal . p + d <= 0.
+    const std::vector<glm::vec4> box = {
+        {1, 0, 0, -5}, {-1, 0, 0, -5}, {0, 1, 0, -3}, {0, -1, 0, -3}, {0, 0, 1, -4}, {0, 0, -1, 0}};
+    CHECK(insideConvexVolume(glm::vec3(0.0f, 0.0f, 1.0f), box));
+    CHECK(insideConvexVolume(glm::vec3(5.0f, 3.0f, 4.0f), box));   // on the faces: inside
+    CHECK_FALSE(insideConvexVolume(glm::vec3(5.1f, 0.0f, 1.0f), box));   // over the rail
+    CHECK_FALSE(insideConvexVolume(glm::vec3(0.0f, -3.2f, 1.0f), box));
+    CHECK_FALSE(insideConvexVolume(glm::vec3(0.0f, 0.0f, -0.5f), box));   // under the hull
+    CHECK_FALSE(insideConvexVolume(glm::vec3(0.0f, 0.0f, 4.5f), box));    // above its top
+    // No planes: holds everyone.
+    CHECK(insideConvexVolume(glm::vec3(100.0f, 0.0f, 0.0f), {}));
+}
