@@ -495,7 +495,12 @@ public:
     /// ones a lost seat change left behind are eased out over half a second,
     /// rather than turning the camera on foot.
     void releaseVehicleCameraOffsets();
-    void suppressMovementFor(float seconds) { movementSuppressTimer_ = seconds; }
+    void suppressMovementFor(float seconds) { movementSuppressTimer_ = jumpSuppressTimer_ = seconds; }
+    /// The held keys only: a jump pressed in the time is a jump. After a
+    /// teleport on the same map the client holds no input back - 0x006ecf80
+    /// -> 0x0098ba90 sets the place and clears the movement flags - and a
+    /// press is a press, where a key still held from before is not.
+    void suppressHeldMovementFor(float seconds) { movementSuppressTimer_ = seconds; }
     void suspendGravityFor(float seconds) { gravitySuspendTimer_ = seconds; }
 
     /// Where the server says the player is, on entering a world.
@@ -1004,6 +1009,7 @@ private:
 
     // Movement input suppression (after teleport/portal, ignore held keys)
     float movementSuppressTimer_ = 0.0f;
+    float jumpSuppressTimer_ = 0.0f;
     // Gravity suspension (after world entry, hold Z until ground detected)
     float gravitySuspendTimer_ = 0.0f;
     float entryFloorAnchorZ_ = 0.0f;
