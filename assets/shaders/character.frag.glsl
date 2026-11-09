@@ -424,9 +424,18 @@ void main() {
         // direct light by its scale (halved in the terrain's baked shadow,
         // 0x007c1730 multiplies by +0x8c) and the unit's colour (CM2Model
         // +0x180).
-        const bool known = pc.interiorAmbient.w > 0.5;
+        //
+        // With the tracing on, a unit is lit by the scene's lights alone: the
+        // zone's sun and sky, which the trace lets in where they reach it -
+        // through a doorway, a window, under an open roof - and the lamps. No
+        // switch to the building's light on an interior floor, which made the
+        // body jump from the dusk outside to the baked room colour at the
+        // threshold of Silvermoon's royal market. Without the tracing, the
+        // client's switch as it is.
+        const bool traced = rtParams.x > 0.5;
+        const bool known = !traced && pc.interiorAmbient.w > 0.5;
         const vec3 direct = (known ? pc.interiorDirect.rgb * pc.lightFlags.y : lightColor.rgb) * pc.diffuseColour.rgb;
-        if (pc.interiorAmbient.w > 1.5) {
+        if (!traced && pc.interiorAmbient.w > 1.5) {
             light = modelBakedLight(rt, norm, pc.interiorAmbient.rgb, direct, pc.interiorDirect.w, true, rtSurface);
         } else {
             float shadow = 1.0;
