@@ -500,6 +500,13 @@ constexpr SettingDesc kSchema[] = {
      "it a crowded view keeps the most important near the camera, and a\n"
      "light can drop out as the camera moves. More costs trace time.\n"
      "512 is the default.", "", 512},
+    {"rtpointselfshadow", "Point light self-shadowing", SettingKind::Bool, 0, 0, 0,
+     "Debug Lights", "",
+     "A lamp, torch or brazier is shadowed by its own model too: its\n"
+     "bowl, its frame and its bars cast shadows of its light. Only its\n"
+     "faces turned toward the light do, so a light inside a lantern\n"
+     "still shines out through the lantern's glass. Not in the\n"
+     "original client.", "", 0, "raytracedlighting"},
     {"dbgemissivelightintensity", "Glowing surfaces: intensity (%)", SettingKind::Float, 0.001f, 1000, 0.001f, "Debug Glow", "What glows",
      "What glows of models and buildings: lamp glass, glow cards,\n"
      "lava, crystals, glowing batches.\n"

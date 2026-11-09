@@ -972,7 +972,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "animatedportraits",
     "fogskyblend", "fogstrength", "sharpstars", "lightshafts", "mistdensity", "sunshafts",
     "lensflare",
-    "screenglow", "raytracedlighting", "rtfullres", "rtsoftlamps", "rtroomsun", "rtunitshadowreach", "rtminbrightness", "rtwater", "rtswimwaves", "rtwaveamp", "rtwavefreq", "rtnormalkeep", "rtnormalface", "rteyebrighten", "rteyeseconds",
+    "screenglow", "raytracedlighting", "rtfullres", "rtsoftlamps", "rtpointselfshadow", "rtroomsun", "rtunitshadowreach", "rtminbrightness", "rtwater", "rtswimwaves", "rtwaveamp", "rtwavefreq", "rtnormalkeep", "rtnormalface", "rteyebrighten", "rteyeseconds",
     "rteyesensitivity",
     "rtsunrays", "rtaorays", "rtpointrays", "rtbouncerays",
     // The Debug Graphics settings: each applies all of them.
@@ -1172,6 +1172,7 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "raytracedlighting", .asInt = &SettingsPanel::pendingRtLighting},
     {.key = "rtfullres", .asBool = &SettingsPanel::pendingRtFullRes},
     {.key = "rtsoftlamps", .asBool = &SettingsPanel::pendingRtSoftLamps},
+    {.key = "rtpointselfshadow", .asBool = &SettingsPanel::pendingRtPointSelfShadow},
     {.key = "rtunitshadowreach", .asInt = &SettingsPanel::pendingRtUnitShadowReach},
     {.key = "rtminbrightness", .asInt = &SettingsPanel::pendingRtMinBrightness},
     {.key = "rtwater", .asBool = &SettingsPanel::pendingRtWater},
@@ -1690,6 +1691,8 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         if (renderer) renderer->setRtSoftLamps(pendingRtSoftLamps);
     } else if (key == "dbgsplitrt") {
         if (renderer) renderer->setRtSplitView(pendingDbgSplitRt);
+    } else if (key == "rtpointselfshadow") {
+        if (renderer) renderer->setRtPointSelfShadow(pendingRtPointSelfShadow);
     } else if (key == "rtunitshadowreach") {
         if (renderer) renderer->setRtUnitShadowReach(static_cast<float>(pendingRtUnitShadowReach));
     } else if (key == "rtminbrightness") {

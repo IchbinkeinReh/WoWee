@@ -492,7 +492,11 @@ void main() {
         float d = length(toLight);
         // Short of the light by the standoff, and by the jitter's reach so a
         // point picked at the source's edge does not land inside the lamp.
-        float reach = d - min(RT_LIGHT_STANDOFF + radius, 0.5 * d);
+        // With the lights shadowing themselves (pass.tune5.x, a WoWee-only
+        // option) only the jitter's reach: the lamp's own faces turned
+        // toward the light stop the ray (rtFixtureFacesOnly).
+        bool selfShadow = pass.tune5.x > 0.5;
+        float reach = d - min((selfShadow ? 0.05 : RT_LIGHT_STANDOFF) + radius, 0.5 * d);
         if (d > 1e-3 && reach > 0.0) {
             // The units cast their shadows near them (rtUnitShadowReach).
             bool byUnit;
@@ -501,7 +505,9 @@ void main() {
             rtLampEnd = light.positionEnd.xyz;
             // Only what is carried meets the fixtures (storey.z -1: PointLight::carried).
             rtSkipFixtures = int(light.storey.w + 0.5) != RT_LIGHT_KIND_UNIT && light.storey.z > -0.5;
+            rtFixtureFacesOnly = selfShadow;
             pointVis = rtOccludedBy(lampOrigin, toLight / d, reach, rng, byUnit) ? 0.0 : 1.0;
+            rtFixtureFacesOnly = false;
             rtSkipFixtures = false;
             rtLampEnd = vec3(1e30);
             rtUnitReach = 1e30;
