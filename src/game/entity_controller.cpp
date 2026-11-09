@@ -187,6 +187,7 @@ void EntityController::processPendingUpdateObjectWork(const std::chrono::steady_
             }
 
             const UpdateBlock& block = work.data.blocks[work.nextBlockIndex];
+            currentUpdateReceivedMs_ = work.data.receivedMs;
             auto blockStart = std::chrono::steady_clock::now();
             applyUpdateObjectBlock(block, work.newItemCreated);
             float blockMs = std::chrono::duration<float, std::milli>(
@@ -229,6 +230,7 @@ void EntityController::handleUpdateObject(network::Packet& packet) {
         // Fall through: process any blocks that were successfully parsed before the failure.
     }
 
+    data.receivedMs = packet.receivedMs();
     enqueueUpdateObjectWork(std::move(data));
 }
 
@@ -260,12 +262,20 @@ void EntityController::processOutOfRangeObjects(const std::vector<uint64_t>& gui
             const bool playerAboardNow = (owner_.playerTransportGuidRef() == guid);
             const bool stickyAboard = (owner_.playerTransportStickyGuidRef() == guid && owner_.playerTransportStickyTimerRef() > 0.0f);
             const bool movementSaysAboard = (owner_.movementInfoRef().transportGuid == guid);
-            LOG_INFO("Preserving transport on out-of-range: 0x",
-                     std::hex, guid, std::dec,
-                     " now=", playerAboardNow,
-                     " sticky=", stickyAboard,
-                     " movement=", movementSaysAboard);
-            continue;
+            // Only the one the player is riding: the client removes whatever
+            // the server takes out of range (0x004d7230), and a zeppelin
+            // that crossed to its other map is taken out of range for
+            // everyone it left behind. Kept, it went on being drawn - hull,
+            // machinery, passengers - flying a route it was no longer on.
+            if (playerAboardNow || stickyAboard || movementSaysAboard) {
+                LOG_INFO("Preserving transport on out-of-range: 0x",
+                         std::hex, guid, std::dec,
+                         " now=", playerAboardNow,
+                         " sticky=", stickyAboard,
+                         " movement=", movementSaysAboard);
+                continue;
+            }
+            LOG_INFO("Transport out of range, removed: 0x", std::hex, guid, std::dec);
         }
 
         LOG_DEBUG("Entity went out of range: 0x", std::hex, guid, std::dec);
@@ -3664,7 +3674,12 @@ void EntityController::onValuesUpdateGameObject(const UpdateBlock& block, std::s
     }
 
     if (transportGuids_.count(block.guid)) applyParentRotation(block, *entity, owner_.getTransportManager());
-    applyTransportRouteClock(block);
+    // Not the route clock: the client takes a transport's path time once,
+    // from its create block (0x00714250: GO +0x200 = the UPDATEFLAG_TRANSPORT
+    // time less the client's), and never from a later update. DYNAMIC's
+    // 16-bit share of the period, which a values update carries, put the
+    // Thundercaller back forty seconds at its dock - after the create block
+    // had it right - so the server took it away before it had left.
 }
 
 void EntityController::trackActiveCritter(const UpdateBlock& block) {
@@ -3756,7 +3771,16 @@ void EntityController::applyTransportRouteClock(const UpdateBlock& block) {
     if (periodMs == 0) return;
 
     if (block.hasTransportTime && block.transportTime != 0) {
-        const float phase = static_cast<float>(block.transportTime % periodMs) / static_cast<float>(periodMs);
+        // The progress as the server sent it, plus how long the packet waited
+        // here: one read during a world load is handled half a minute later,
+        // and taken as it stood the Thundercaller ran forty seconds behind
+        // the server - still at its dock when the server took it away.
+        const int64_t now = TransportManager::nowSteadyMs();
+        const uint64_t waitedMs = (currentUpdateReceivedMs_ > 0 && now > currentUpdateReceivedMs_)
+            ? static_cast<uint64_t>(std::min<int64_t>(now - currentUpdateReceivedMs_, 600000))
+            : 0u;
+        const float phase = static_cast<float>((block.transportTime + waitedMs) % periodMs) /
+                            static_cast<float>(periodMs);
         tm->applyServerRouteClock(block.guid, phase, periodMs);
         return;
     }
@@ -4098,6 +4122,7 @@ void EntityController::handleCompressedUpdateObject(network::Packet& packet) {
 
     // Create packet from decompressed data and parse it
     network::Packet decompressedPacket(wireOpcode(Opcode::SMSG_UPDATE_OBJECT), decompressed);
+    decompressedPacket.setReceivedMs(packet.receivedMs());
     handleUpdateObject(decompressedPacket);
 }
 void EntityController::handleDestroyObject(network::Packet& packet) {
@@ -4522,7 +4547,9 @@ void EntityController::handleGameObjectQueryResponse(network::Packet& packet) {
                                 owner_.getTransportManager()->hasTaxiPath(taxiPathId) ? 1 : 0, ")");
                 }
             } else if (owner_.getTransportManager()->assignTaxiPathToTransport(
-                           data.entry, taxiPathId, mapId)) {
+                           data.entry, taxiPathId, mapId,
+                           // moveSpeed and accelRate, data1 and data2 (0x00711b50).
+                           static_cast<float>(data.data[1]), static_cast<float>(data.data[2]))) {
                 if (sayThis) {
                     LOG_WARNING("MO_TRANSPORT entry=", data.entry, " assigned TaxiPathNode path ",
                                 taxiPathId, " on map ", mapId);

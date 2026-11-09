@@ -644,6 +644,9 @@ struct UpdateObjectData {
 
     // Out-of-range GUIDs (for OUT_OF_RANGE_OBJECTS)
     std::vector<uint64_t> outOfRangeGuids;
+
+    // When its packet was read (network::Packet::receivedMs), 0 unknown.
+    int64_t receivedMs = 0;
 };
 
 /**

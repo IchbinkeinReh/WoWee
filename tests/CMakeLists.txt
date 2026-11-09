@@ -1667,6 +1667,11 @@ wowee_add_test(test_transport_components
             ${CMAKE_SOURCE_DIR}/src/game/transport_animator.cpp
             ${CMAKE_SOURCE_DIR}/src/math/spline.cpp)
 
+# ── test_ship_path ───────────────────────────────────────────
+wowee_add_test(test_ship_path
+    SOURCES test_ship_path.cpp
+            ${CMAKE_SOURCE_DIR}/src/game/ship_path.cpp)
+
 # ── test_world_map ────────────────────────────────────────────
 wowee_add_test(test_world_map
     SOURCES test_world_map.cpp)

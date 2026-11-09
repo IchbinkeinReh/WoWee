@@ -821,7 +821,13 @@ void WorldSocket::tryParsePackets(size_t callbackRoom) {
     // Queue parsed packets for main-thread dispatch.
     if (!parsedPackets->empty()) {
         std::lock_guard<std::mutex> callbackLock(callbackMutex_);
+        // Stamped as read: a world load holds the main thread for half a
+        // minute while this thread keeps reading, and what the server timed
+        // (a transport's path progress) is that much older when it is handled.
+        const int64_t readMs = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
         for (auto& packet : *parsedPackets) {
+            packet.setReceivedMs(readMs);
             pendingPacketCallbacks_.push_back(std::move(packet));
         }
     }

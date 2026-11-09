@@ -610,6 +610,13 @@ public:
     /// never stepping past the target, and sets it when within 0.01. The
     /// per-frame update is updateMovement.
     [[nodiscard]] float getModelFacing() const { return modelFacingSet_ ? modelFacing_ : orientation; }
+    /// The transport under it turned by `radians`: the drawn facing turns
+    /// with the deck rather than easing after it (updateModelFacing eases
+    /// only the unit's own turns), so a passenger standing still on a
+    /// zeppelin in a curve does not turn on the spot.
+    void carryModelFacing(float radians) {
+        if (modelFacingSet_) modelFacing_ = wrapAngle(modelFacing_ + radians);
+    }
 
     /// The speed of the current movement, in yards a second, while the
     /// entity is actively moving; zero otherwise. Set from each segment's

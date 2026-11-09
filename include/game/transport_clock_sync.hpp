@@ -23,7 +23,8 @@ public:
         const math::CatmullRomSpline& spline,
         double elapsedTime,
         float deltaTime,
-        uint32_t& outPathTimeMs) const;
+        uint32_t& outPathTimeMs,
+        double routeClockNow = -1.0) const;
 
     /// Process a server position update: update clock offset, bootstrap
     /// velocity, and switch between client/server driven modes.
