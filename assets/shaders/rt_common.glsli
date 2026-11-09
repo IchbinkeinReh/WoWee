@@ -45,7 +45,8 @@ layout(set = 0, binding = 0) uniform RtPassData {
     vec4 tune4;          // xy the normal blend's cosines, near and far
                          // (rtNormalAgreement, rt_normal_blend.hpp); z how
                          // far a unit's lamp shadow reaches, yards
-                         // (rtUnitShadowReach)
+                         // (rtUnitShadowReach); w the split view's share of
+                         // the width drawn traced, 0 none (rt_apply)
     // The probe volume (rt_gi.glsli), read only by the probe passes.
     vec4 giVolume[2];        // the grid this frame's update writes
     vec4 giVolumeMod[2];

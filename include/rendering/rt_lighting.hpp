@@ -178,6 +178,10 @@ public:
         /// The normal blend's cosines (rt_normal_blend.hpp), near and far.
         float normalBlendNear = 0.8660f;
         float normalBlendFar = 0.6428f;
+        /// The Debug Graphics split (a WoWee-only view): the share of the
+        /// frame's width, from the left, drawn with the tracing; the rest is
+        /// drawn as without it. 0 for none.
+        float splitAt = 0.0f;
         /// Rays a pixel of each kind, 1 to kMaxRtRaysPerPixel (Ray Tracing
         /// settings): toward the sun, for the occlusion, toward a point
         /// light, and a probe's rays for the bounced light. One is the
@@ -207,6 +211,9 @@ public:
         RtGiProbes::ConsumerData gi;
     };
     [[nodiscard]] ConsumerData consumerData(bool traced) const;
+    /// The split view's share of the width drawn traced (FrameInputs::splitAt)
+    /// for what draws after the trace; 0 for none.
+    void setSplitAt(float share) { splitAt_ = share; }
     /// Its images and buffers, and the probes' (/mem).
     void memoryReport(std::vector<MemoryEntry>& out) const;
 
@@ -251,6 +258,7 @@ private:
     // scene's size and sample count, and the passes over it.
     AllocatedImage gbuf0_{}, gbuf1_{};
     VkExtent2D gbufExtent_{};
+    float splitAt_ = 0.0f;
     VkSampleCountFlagBits gbufSamples_ = VK_SAMPLE_COUNT_1_BIT;
     // Keyed by the scene's view handles, which a rebuild can hand out again
     // for new images: emptied whenever the scene's targets change
