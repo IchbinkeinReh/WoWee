@@ -17,6 +17,7 @@ struct RtMesh { uint nodeOffset; uint triOffset; uint pad0; uint pad1; };
 struct RtInstance { vec4 worldToObject[3]; uint mesh; uint flags; uint group; uint pad2; };
 const uint RT_MESH_TERRAIN = 1u;  // RtScene::kMeshTerrain
 const uint RT_RAY_NO_FIXTURES = 0xFBu;  // RtScene::kRayNoFixtures
+const uint RT_RAY_FIXTURE = 0x04u;      // RtScene::kRayFixture
 const uint RT_MESH_BUILDING = 2u;  // RtScene::kMeshBuilding
 
 #ifndef RT_SCENE_SET
@@ -59,6 +60,16 @@ bool rtAcceptCandidate(uint inst, uint prim, vec2 bary, vec3 origin, float t, in
 // Whether anything stops the ray, and whether what did was a unit (a
 // grouped instance) - which moves, so its shadow must not linger in the
 // history (rt_temporal).
+// A fixture's triangle as a light that shadows itself takes it
+// (rtFixtureFacesOnly): its winding normal, in the world, along the ray.
+bool rtFacesAlongRay(uint inst, uint prim, vec3 dir) {
+    RtTri tri = rtTris[rtTriIndex(inst, prim)];
+    RtInstance ri = rtInstances[inst];
+    vec3 n = cross(tri.v1.xyz - tri.v0.xyz, tri.v2.xyz - tri.v0.xyz);
+    n = ri.worldToObject[0].xyz * n.x + ri.worldToObject[1].xyz * n.y + ri.worldToObject[2].xyz * n.z;
+    return dot(n, dir) > 0.0;
+}
+
 bool rtOccludedBy(vec3 origin, vec3 dir, float tMax, inout uint rng, out bool unit) {
     unit = false;
     uint mask = rtSkipFixtures ? RT_RAY_NO_FIXTURES : 0xFFu;
@@ -67,6 +78,25 @@ bool rtOccludedBy(vec3 origin, vec3 dir, float tMax, inout uint rng, out bool un
                           origin, 0.0, dir, tMax);
     RT_RESOLVE_CANDIDATES(q, rng);
     if (rayQueryGetIntersectionTypeEXT(q, true) != gl_RayQueryCommittedIntersectionNoneEXT) return true;
+    if (rtSkipFixtures && rtFixtureFacesOnly) {
+        // The fixtures, each triangle to the loop (NoOpaque), by their faces
+        // turned toward the light only.
+        rayQueryEXT f;
+        rayQueryInitializeEXT(f, rtTlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsNoOpaqueEXT,
+                              RT_RAY_FIXTURE, origin, 0.0, dir, tMax);
+        while (rayQueryProceedEXT(f)) {
+            if (rayQueryGetIntersectionTypeEXT(f, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
+                rtFacesAlongRay(rayQueryGetIntersectionInstanceCustomIndexEXT(f, false),
+                                rayQueryGetIntersectionPrimitiveIndexEXT(f, false), dir) &&
+                rtAcceptCandidate(rayQueryGetIntersectionInstanceCustomIndexEXT(f, false),
+                                  rayQueryGetIntersectionPrimitiveIndexEXT(f, false),
+                                  rayQueryGetIntersectionBarycentricsEXT(f, false),
+                                  rayQueryGetWorldRayOriginEXT(f),
+                                  rayQueryGetIntersectionTEXT(f, false), rng))
+                rayQueryConfirmIntersectionEXT(f);
+        }
+        if (rayQueryGetIntersectionTypeEXT(f, true) != gl_RayQueryCommittedIntersectionNoneEXT) return true;
+    }
     rayQueryEXT d;
     rayQueryInitializeEXT(d, rtDynamicTlas, gl_RayFlagsTerminateOnFirstHitEXT, mask,
                           origin, 0.0, dir, tMax);

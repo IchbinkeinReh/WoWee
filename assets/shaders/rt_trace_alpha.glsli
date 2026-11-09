@@ -50,6 +50,13 @@ bool rtStructureOnly = false;
 // Set by the caller for one fixed light's ray: fixtures do not stop it
 // (RtScene::kMeshFixture, kRayNoFixtures).
 bool rtSkipFixtures = false;
+// Set with it when point lights shadow themselves (the Ray Tracing page's
+// "Self-shadowing for point lights", a WoWee-only option): the fixtures
+// still stop the ray, but only by their faces turned toward the light -
+// whose winding normal points along the ray, which runs from the surface to
+// the light - so a light inside a lantern shines out through its outer
+// faces and its bars and frame still cast shadows.
+bool rtFixtureFacesOnly = false;
 // Set by the caller for one ray: a cutout or a translucent triangle - a leaf
 // card, a fence, a banner - lets it through. The occlusion's rays
 // (rt_trace.comp): a canopy is cards standing in for a loose volume of
