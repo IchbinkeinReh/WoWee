@@ -2426,6 +2426,9 @@ public:
     /// offset SMSG_NEW_WORLD gave on it as the wire has it - what the player's
     /// movement says until the transport is known on the new map.
     uint64_t pendingPlayerTransportGuid() const { return pendingPlayerTransportGuid_; }
+    /// Once, after a transfer on a transport has put the player back on it:
+    /// the first ride on the new map places the rider afresh.
+    bool takeTransportTransferArrival() { return std::exchange(transportTransferArrived_, false); }
     const glm::vec3& pendingPlayerTransportWireOffset() const { return pendingPlayerTransportOffset_; }
     bool completePlayerTransportWorldTransfer(uint64_t transportGuid,
                                               glm::vec3& worldPosition);
@@ -6205,6 +6208,7 @@ private:
     uint64_t playerTransportStickyGuid_ = 0;       // Last transport player was on (temporary retention)
     float playerTransportStickyTimer_ = 0.0f;      // Seconds to keep sticky transport alive after transient clears
     bool pendingPlayerTransportTransfer_ = false;
+    bool transportTransferArrived_ = false;
     uint64_t pendingPlayerTransportGuid_ = 0;
     uint32_t pendingPlayerTransportEntry_ = 0;
     uint32_t pendingPlayerTransportMapId_ = 0xFFFFFFFFu;
