@@ -263,6 +263,7 @@ void main() {
         surface.normal = norm;
         surface.map = lit;
         surface.flags = RT_GB_VALID | RT_GB_SUN;
+        surface.storeyBound = RT_GB_SHARE_TERRAIN;
         surface.g = result;
         rtSurfaceOcclusion(surface, ambientLit, ndl * lightColor.rgb, vec3(1.0));
         surface.occY *= litColor * Shading * shadowScale;

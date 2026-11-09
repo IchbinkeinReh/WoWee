@@ -25,6 +25,7 @@
 
 #include "pipeline/m2_loader.hpp"
 #include "rendering/m2_track_sampler.hpp"
+#include "rendering/m2_particle_motion.hpp"
 
 namespace wowee::rendering::rt_lights {
 
@@ -303,20 +304,105 @@ inline bool isFlameEmitter(const pipeline::M2ParticleEmitter& emitter) {
 /// the geometry can reach far above the flame - Orgrimmar's bonfire's box
 /// goes up 23 of its yards where the flames burn one up, so its light hung
 /// forty yards over the Valley of Strength, out of the view, and was culled.
+///
+/// `clouds`, one per emitter where given (particleCloudOffset), puts each
+/// emitter's point at its particles rather than at the emitter itself.
 template <class Carried>
 std::optional<glm::vec3> flameCentre(const std::vector<pipeline::M2ParticleEmitter>& emitters,
-                                     Carried&& carried) {
+                                     Carried&& carried,
+                                     const std::vector<glm::vec3>* clouds = nullptr) {
     const bool anyFlame = std::any_of(emitters.begin(), emitters.end(), isFlameEmitter);
     glm::vec3 sum(0.0f);
     int count = 0;
-    for (const pipeline::M2ParticleEmitter& e : emitters) {
+    for (size_t i = 0; i < emitters.size(); ++i) {
+        const pipeline::M2ParticleEmitter& e = emitters[i];
         if (anyFlame && !isFlameEmitter(e)) continue;
         const glm::mat4 toWorld = carried(e.bone);
-        sum += glm::vec3(toWorld * glm::vec4(e.position, 1.0f));
+        const glm::vec3 cloud = clouds && i < clouds->size() ? (*clouds)[i] : glm::vec3(0.0f);
+        sum += glm::vec3(toWorld * glm::vec4(e.position + cloud, 1.0f));
         ++count;
     }
     if (count == 0) return std::nullopt;
     return sum / static_cast<float>(count);
+}
+
+/// What an emitter starts its particles with, read off its tracks at the
+/// start of its animation (the values the cloud below is worked out from).
+struct EmitterStart {
+    float speed = 0.0f;
+    float verticalRange = 0.0f;
+    float horizontalRange = 0.0f;
+    float gravity = 0.0f;
+    float lifespan = 1.0f;
+    float areaLength = 0.0f;
+    float areaWidth = 0.0f;
+    float zSource = 0.0f;
+};
+
+/// Where an emitter's particles are on average a second after it starts, in
+/// its own space, from its emitter position: each particle given the mean
+/// of the emitter's spreads instead of a roll of them - a grid of directions
+/// over its vertical and horizontal ranges, born evenly over the second and
+/// moved by the client's particle step (m2_particle::step) for its age - and
+/// those still alive averaged. A fire's light at its emitter sat in the coals
+/// of Camp Narache's braziers, under the flames it gives the light of, and
+/// the bowl's rim threw long wedges of shadow over the ground from there; the
+/// flames themselves are this far above it. The emitter's shape is taken as
+/// the client gives it (0x009815c0 plane, 0x00981950 sphere); a spline's
+/// particles are left at the emitter.
+inline glm::vec3 particleCloudOffset(const pipeline::M2ParticleEmitter& emitter, const EmitterStart& start,
+                                     float dragPerSecond) {
+    if (emitter.emitterType == 3) return glm::vec3(0.0f);
+    constexpr int kGrid = 5;          // directions across each range
+    constexpr int kBirths = 24;       // birth times over the second
+    constexpr float kWindow = 1.0f;   // seconds of emission
+    constexpr float kStep = 1.0f / 60.0f;
+    const float life = std::max(start.lifespan, 0.001f);
+    m2_particle::StepParams params;
+    params.gravity = start.gravity;
+    params.drag = dragPerSecond;
+    params.wind = emitter.windVector;
+    params.windTime = emitter.windTime;
+    const float zSource = m2_particle::zSourceValue(start.zSource);
+    glm::dvec3 sum(0.0);
+    double alive = 0.0;
+    for (int b = 0; b < kBirths; ++b) {
+        const float age = kWindow * (1.0f - (static_cast<float>(b) + 0.5f) / kBirths);
+        if (age >= life) continue;
+        for (int gi = 0; gi < kGrid; ++gi) {
+            for (int gj = 0; gj < kGrid; ++gj) {
+                const float u = -1.0f + 2.0f * (static_cast<float>(gi) + 0.5f) / kGrid;
+                const float v = -1.0f + 2.0f * (static_cast<float>(gj) + 0.5f) / kGrid;
+                const float pol = u * start.verticalRange;
+                const float az = v * start.horizontalRange;
+                glm::vec3 offset(0.0f);
+                glm::vec3 dir(0.0f, 0.0f, 1.0f);
+                if (emitter.emitterType == 2) {
+                    const glm::vec3 out(std::cos(az) * std::cos(pol), std::sin(az) * std::cos(pol), std::sin(pol));
+                    offset = out * (0.5f * (start.areaLength + start.areaWidth));
+                    if (zSource != 0.0f) dir = m2_particle::sphereZSourceDirection(offset, zSource);
+                    else if (emitter.flags & 0x8000) dir = glm::vec3(0.0f, 0.0f, 1.0f);
+                    else dir = out;
+                } else if (zSource != 0.0f) {
+                    dir = m2_particle::zSourceDirection(offset, zSource);
+                } else {
+                    dir = glm::vec3(std::cos(az) * std::sin(pol), std::sin(az) * std::sin(pol), std::cos(pol));
+                }
+                glm::vec3 pos = offset;
+                glm::vec3 vel = dir * start.speed;
+                float t = 0.0f;
+                while (t + 1e-6f < age) {
+                    const float dt = std::min(kStep, age - t);
+                    m2_particle::step(pos, vel, t, dt, params);
+                    t += dt;
+                }
+                sum += glm::dvec3(pos);
+                alive += 1.0;
+            }
+        }
+    }
+    if (alive <= 0.0) return glm::vec3(0.0f);
+    return glm::vec3(sum / alive);
 }
 
 /// The light of a lamp that carries none of its own: a street lamp, a

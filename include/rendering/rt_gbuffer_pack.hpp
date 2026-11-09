@@ -39,9 +39,10 @@ struct Surface {
     glm::vec3 occE{0.0f};
     glm::vec3 kp{0.0f};
     float outside = 1.0f;  ///< kTransition: the outside pass's share of g
-    /// Otherwise: 1 for a building's baked colour, which its building's
-    /// lights shade from their own storey only (rt_light_storey.hpp). It
-    /// takes the outside share's bits.
+    /// Otherwise: bit 0 for a building's baked colour, which its building's
+    /// lights shade from their own storey only (rt_light_storey.hpp); bit 1
+    /// for the ground, which the lamps light by its smooth normal
+    /// (rt_trace). It takes the outside share's bits.
     uint32_t storeyBound = 0;
 };
 
@@ -81,7 +82,7 @@ inline Words pack(const Surface& s, const glm::vec3& c0) {
     const glm::vec3 kp = s.kp * 0.5f;
     const auto byte = [](float v) { return quantise(v, 255.0f); };
     Words w{};
-    const uint32_t f = (s.flags & kTransition) != 0 ? quantise(s.outside, 63.0f) : (s.storeyBound != 0 ? 1u : 0u);
+    const uint32_t f = (s.flags & kTransition) != 0 ? quantise(s.outside, 63.0f) : (s.storeyBound & 3u);
     w[0] = static_cast<uint16_t>(quantise(oct.x, 1023.0f) | (quantise(knee.r, 31.0f) << 10) | ((f & 1u) << 15));
     w[1] = static_cast<uint16_t>(quantise(oct.y, 1023.0f) | (quantise(knee.g, 31.0f) << 10) |
                                  (((f >> 1) & 1u) << 15));

@@ -1983,6 +1983,7 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
     if (!skyMode_) {
         detectLamp(gpuModel, model);
         computeGlow(gpuModel, model, whiteTexture_.get());
+        computeFlameClouds(gpuModel);
     }
     registerRtModel(gpuModel, model);
     models[modelId] = std::move(gpuModel);
@@ -2025,7 +2026,7 @@ void M2Renderer::logRtLightDiag(const glm::vec3& eye, float radius) const {
             const glm::vec3 bmax = model->hasVertexBox ? model->vertexBoxMax : model->boundMax;
             const rt_lights::PointLight l = rt_lights::fireLight(bmin, bmax, inst.modelMatrix, model->isTorch, 0.0f, 0.0f);
             const auto flame = rt_lights::flameCentre(
-                model->particleEmitters, [&](uint32_t bone) { return rtSteadyCarried(*model, inst, bone); });
+                model->particleEmitters, [&](uint32_t bone) { return rtSteadyCarried(*model, inst, bone); }, &model->flameClouds);
             const glm::vec3 at = flame ? *flame : l.position;
             LOG_WARNING("RT doodad fire light at (", at.x, ", ", at.y, ", ", at.z, ")", flame ? " flames" : " box top",
                         " reach ", l.attenuationEnd, " fade ", inst.fade);
@@ -2083,6 +2084,28 @@ void M2Renderer::computeGlow(M2ModelGPU& gpuModel, const pipeline::M2Model& mode
         }
     }
     gpuModel.glowPatches = builder.finish();
+}
+
+void M2Renderer::computeFlameClouds(M2ModelGPU& gpuModel) {
+    gpuModel.flameClouds.clear();
+    if (gpuModel.particleEmitters.empty()) return;
+    if (gpuModel.lights.size() > 0 || !(gpuModel.isLamp || gpuModel.isBrazierOrFire || gpuModel.isTorch)) return;
+    gpuModel.flameClouds.reserve(gpuModel.particleEmitters.size());
+    for (const pipeline::M2ParticleEmitter& em : gpuModel.particleEmitters) {
+        const auto at0 = [&](const pipeline::M2AnimationTrack& t) {
+            return interpFloat(t, 0.0f, 0.0f, 0, gpuModel.globalSequenceDurations);
+        };
+        rt_lights::EmitterStart start;
+        start.speed = at0(em.emissionSpeed);
+        start.verticalRange = at0(em.verticalRange);
+        start.horizontalRange = at0(em.horizontalRange);
+        start.gravity = at0(em.gravity);
+        start.lifespan = at0(em.lifespan);
+        start.areaLength = at0(em.emissionAreaLength);
+        start.areaWidth = at0(em.emissionAreaWidth);
+        start.zSource = at0(em.zSource);
+        gpuModel.flameClouds.push_back(rt_lights::particleCloudOffset(em, start, em.drag));
+    }
 }
 
 void M2Renderer::detectLamp(M2ModelGPU& gpuModel, const pipeline::M2Model& model) {
@@ -2598,6 +2621,18 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
             // Where the bones hold the glass this frame (a lantern swings).
             rt_lights::PointLight l = rt_lights::lampLight(
                 model->lampLocal, rtSteadyCarried(*model, inst, model->lampBone));
+            // A lamp with particles - a brazier's flames, a candle's - gives
+            // its light among them (rt_lights::particleCloudOffset), its
+            // flames' where it has any: Camp Narache's tauren lamp posts lit
+            // the ground from their foot.
+            if (!model->flameClouds.empty()) {
+                if (const auto flame = rt_lights::flameCentre(
+                        model->particleEmitters,
+                        [&](uint32_t bone) { return rtSteadyCarried(*model, inst, bone); },
+                        &model->flameClouds)) {
+                    l.position = *flame;
+                }
+            }
             l.color *= fade;
             // A lamp of a WMO interior is in the interior's baked colours
             // already: there it only casts its shadows (PointLight::baked).
@@ -2617,7 +2652,8 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
             // At its flames where it has any (rt_lights::flameCentre).
             if (const auto flame = rt_lights::flameCentre(
                     model->particleEmitters,
-                    [&](uint32_t bone) { return rtSteadyCarried(*model, inst, bone); })) {
+                    [&](uint32_t bone) { return rtSteadyCarried(*model, inst, bone); },
+                    &model->flameClouds)) {
                 l.position = *flame;
             }
             l.color *= fade;
