@@ -889,6 +889,7 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
         bool canJump = (coyoteTimer > 0.0f) && (jumpBufferTimer > 0.0f) && !mounted_;
         if (canJump) {
             verticalVelocity = f.jumpVel;
+            jumpStarted_ = true;
             jumpLocked_ = true;
             jumpMoveDir_ = f.movement;
             jumpMoveSpeed_ = f.speed;
@@ -2945,6 +2946,7 @@ void CameraController::updateFreeFlyCamera(float /*deltaTime*/, FrameInput& f) {
 
         if (coyoteTimer > 0.0f && jumpBufferTimer > 0.0f && !mounted_) {
             verticalVelocity = f.jumpVel;
+            jumpStarted_ = true;
             jumpLocked_ = true;
             jumpMoveDir_ = f.movement;
             jumpMoveSpeed_ = f.speed;
@@ -3807,9 +3809,17 @@ void CameraController::update(float deltaTime) {
         // marks a passenger standing on its transport as falling, so it jumps
         // from the deck with MSG_MOVE_JUMP (fall time 0, its height now) and
         // the server measures from there.
-        if (nowJump && !wasJumping && (grounded || deckHeld_) && !isFlightAirborne()) {
+        //
+        // And for the jump the physics above started this frame: it leaves
+        // the ground in the same update (grounded false), so asking grounded
+        // here sent no MSG_MOVE_JUMP for a jump from level ground at all - the
+        // server heard of it only from the heartbeats, and the client's jump
+        // (0x009883f0 -> 0x00988370 with -7.955547, MSG_MOVE_JUMP 0xbb from
+        // the event, 0x006ef860 case 10) never went out.
+        if (!isFlightAirborne() && (jumpStarted_ || (nowJump && !wasJumping && (grounded || deckHeld_)))) {
             movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_JUMP));
         }
+        jumpStarted_ = false;
         deckHeld_ = false;
 
         // Fall landing, for a fall that actually happened.
