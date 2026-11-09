@@ -30,6 +30,7 @@
 #include "game/item_stat_text.hpp"
 #include "rendering/minimap_zoom.hpp"
 #include "core/application.hpp"
+#include "core/input.hpp"
 #include "core/coordinates.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/camera.hpp"
@@ -7504,14 +7505,22 @@ void LuaEngine::registerCoreAPI() {
             return 3;
         });
         lua_setglobal(L_, "__WoweeTestScreenPosOf");
-        // __WoweeTestMouse(x, y, button, down): the pointer moved to (x, y)
-        // in window pixels and a button (1 left, 3 right) pressed or let go,
-        // through SDL's event queue as a mouse would.
+        // __WoweeTestMouse(x, y, button, down): the pointer put at (x, y)
+        // in window pixels and a button (1 left, 3 right) held or let go,
+        // as the game's input reads them (Input's virtual pointer and
+        // button), and through SDL's event queue for the interface.
+        // __WoweeTestMouse(-1) gives the pointer back to the device.
         lua_pushcfunction(L_, [](lua_State* L) -> int {
             const float x = static_cast<float>(luaL_checknumber(L, 1));
+            if (x < 0.0f) {
+                core::Input::getInstance().clearVirtualMousePosition();
+                return 0;
+            }
             const float y = static_cast<float>(luaL_checknumber(L, 2));
             const int button = static_cast<int>(luaL_checkinteger(L, 3));
             const bool down = lua_toboolean(L, 4) != 0;
+            core::Input::getInstance().setVirtualMousePosition(glm::vec2(x, y));
+            core::Input::getInstance().setVirtualMouseButton(button, down);
             SDL_Window* w = SDL_GetKeyboardFocus();
             if (!w) {
                 int count = 0;
