@@ -1,3 +1,10 @@
+// The same libstdc++ <regex> misfire chat_spam_filter.cpp silences: GCC 13's
+// -Wmaybe-uninitialized under the sanitizers, in the library's instantiations
+// emitted at the end of the unit, so it has to hold for the whole file.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
+
 #include "game/chat_profanity.hpp"
 
 #include <array>
