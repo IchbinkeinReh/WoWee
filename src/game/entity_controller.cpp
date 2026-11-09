@@ -3659,6 +3659,32 @@ void EntityController::onValuesUpdateGameObject(const UpdateBlock& block, std::s
         }
     }
 
+    // A new display id is a new model (the client reloads it, and the
+    // reload re-dresses it, 0x00713ed0): how a destructible building goes
+    // from whole to damaged to rubble when the realm swaps its display.
+    if (const uint16_t ufDisplay = fieldIndex(UF::GAMEOBJECT_DISPLAYID); ufDisplay != 0xFFFF) {
+        auto itD = block.fields.find(ufDisplay);
+        auto go = std::static_pointer_cast<GameObject>(entity);
+        if (itD != block.fields.end() && itD->second != 0 && itD->second != go->getDisplayId() &&
+            !transportGuids_.count(block.guid)) {
+            const bool shown = go->getDisplayId() != 0;
+            go->setDisplayId(itD->second);
+            if (shown && owner_.gameObjectDespawnCallbackRef()) owner_.gameObjectDespawnCallbackRef()(block.guid);
+            if (owner_.gameObjectSpawnCallbackRef()) {
+                float scale = 1.0f;
+                if (const uint16_t sc = fieldIndex(UF::OBJECT_FIELD_SCALE_X); sc != 0xFFFF) {
+                    const uint32_t raw = entity->getField(sc);
+                    if (raw != 0) {
+                        scale = bitsToFloat(raw);
+                        if (scale <= 0.01f || scale > 100.0f) scale = 1.0f;
+                    }
+                }
+                owner_.gameObjectSpawnCallbackRef()(block.guid, go->getEntry(), go->getDisplayId(), go->getX(),
+                                                    go->getY(), go->getZ(), go->getOrientation(), scale);
+            }
+        }
+    }
+
     // Detect GO state changes from GAMEOBJECT_BYTES_1 (packed: byte0=state, byte1=type, byte2=artKit, byte3=animProgress)
     const uint16_t ufGoBytes1 = fieldIndex(UF::GAMEOBJECT_BYTES_1);
     if (ufGoBytes1 != 0xFFFF) {
