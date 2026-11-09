@@ -2422,6 +2422,11 @@ public:
     bool hasPendingPlayerTransportWorldTransfer() const {
         return pendingPlayerTransportTransfer_;
     }
+    /// The transport a continent transfer carries the player on, and the
+    /// offset SMSG_NEW_WORLD gave on it as the wire has it - what the player's
+    /// movement says until the transport is known on the new map.
+    uint64_t pendingPlayerTransportGuid() const { return pendingPlayerTransportGuid_; }
+    const glm::vec3& pendingPlayerTransportWireOffset() const { return pendingPlayerTransportOffset_; }
     bool completePlayerTransportWorldTransfer(uint64_t transportGuid,
                                               glm::vec3& worldPosition);
 
