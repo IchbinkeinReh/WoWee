@@ -286,7 +286,8 @@ void TransportManager::registerTransport(uint64_t guid,
         const auto [phase, periodMs, receivedAt] = pendingClock->second;
         pendingRouteClocks_.erase(pendingClock);
         // Moved on by the time the model took to load.
-        const double since = std::max(0.0, elapsedTime_ - receivedAt) * 1000.0 / static_cast<double>(periodMs);
+        const double since = std::max(0.0, static_cast<double>(nowSteadyMs()) * 0.001 - receivedAt) * 1000.0 /
+                             static_cast<double>(periodMs);
         applyServerRouteClock(guid, static_cast<float>(std::fmod(static_cast<double>(phase) + since, 1.0)), periodMs);
     }
 
@@ -535,7 +536,7 @@ void TransportManager::applyServerRouteClock(uint64_t transportGuid, float phase
         // is created and rarely again, so dropping it here meant a hull that
         // never adopted the server's clock at all and invented one from
         // distance over speed instead. Held until registerTransport asks.
-        pendingRouteClocks_[transportGuid] = {phase, periodMs, elapsedTime_};
+        pendingRouteClocks_[transportGuid] = {phase, periodMs, static_cast<double>(nowSteadyMs()) * 0.001};
         return;
     }
 
@@ -543,7 +544,7 @@ void TransportManager::applyServerRouteClock(uint64_t transportGuid, float phase
     transport->hasServerRouteClock = true;
     transport->routePhase = phase;
     transport->routePeriodMs = periodMs;
-    transport->routePhaseAtTime = elapsedTime_;
+    transport->routePhaseAtTime = static_cast<double>(nowSteadyMs()) * 0.001;
 
     if (firstSample) {
         LOG_WARNING("Transport 0x", std::hex, transportGuid, std::dec,
@@ -730,7 +731,10 @@ void TransportManager::updateTransportMovement(ActiveTransport& transport, float
 
     // Compute path time via ClockSync
     uint32_t pathTimeMs = 0;
-    if (!clockSync_.computePathTime(transport, spline, elapsedTime_, deltaTime, pathTimeMs)) {
+    // The server's route clock on the steady clock: a loading screen stops
+    // this manager's updates, and the transports go on moving meanwhile.
+    if (!clockSync_.computePathTime(transport, spline, elapsedTime_, deltaTime, pathTimeMs,
+                                    static_cast<double>(nowSteadyMs()) * 0.001)) {
         // Strict server-authoritative mode: do not guess movement between server snapshots.
         updateTransformMatrices(transport);
         pushTransform(transport);
