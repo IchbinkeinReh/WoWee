@@ -23,16 +23,18 @@ glm::vec3 catmullRomDerivative(const glm::vec3& p0, const glm::vec3& p1, const g
                    (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * (3.0f * t * t));
 }
 
-// A segment's length, walked in short steps.
+// A segment's length as 0x004c3b10 measures it: twenty chords, at every
+// twentieth of the segment's parameter (0.05 added up, as a float).
 float segmentLength(const glm::vec3& p0, const glm::vec3& p1, const glm::vec3& p2,
                     const glm::vec3& p3) {
-    constexpr int kSteps = 32;
     float length = 0.0f;
-    glm::vec3 prev = p1;
-    for (int s = 1; s <= kSteps; ++s) {
-        const glm::vec3 q = catmullRom(p0, p1, p2, p3, static_cast<float>(s) / kSteps);
+    glm::vec3 prev = catmullRom(p0, p1, p2, p3, 0.0f);
+    float t = 0.05f;
+    for (int s = 0; s < 20; ++s) {
+        const glm::vec3 q = catmullRom(p0, p1, p2, p3, t);
         length += glm::length(q - prev);
         prev = q;
+        t += 0.05f;
     }
     return length;
 }
@@ -53,6 +55,13 @@ void ShipPath::Leg::sample(float fraction, glm::vec3& pos, glm::vec3& dir) const
         dir = glm::vec3(0.0f);
         return;
     }
+    // 0x004c3bd0: the segment the distance falls in, and the spline's
+    // parameter in it in proportion to the distance into it. The parameter
+    // does not run at an even pace along a Catmull-Rom segment, so a hull
+    // moving at a steady pace along its route goes faster or slower through
+    // the world as a segment is longer or shorter than its neighbours - and
+    // changes speed at once at a node between two of unequal length, as the
+    // client's does.
     float d = std::clamp(fraction, 0.0f, 1.0f) * length;
     size_t j = 0;
     while (j + 1 < segmentLength.size() && d > segmentLength[j]) {
@@ -61,7 +70,19 @@ void ShipPath::Leg::sample(float fraction, glm::vec3& pos, glm::vec3& dir) const
     }
     const float t = segmentLength[j] > 0.0f ? std::clamp(d / segmentLength[j], 0.0f, 1.0f) : 0.0f;
     pos = catmullRom(points[j], points[j + 1], points[j + 2], points[j + 3], t);
-    dir = catmullRomDerivative(points[j], points[j + 1], points[j + 2], points[j + 3], t);
+    // 0x004c43b0: the way along is the chord the segment spans, unless the
+    // spline's own direction there is within sixty degrees of it (their
+    // cosine at least a half), when it is that.
+    glm::vec3 chord = points[j + 2] - points[j + 1];
+    const float chordLen2 = glm::dot(chord, chord);
+    if (chordLen2 > 2.3841858e-07f) chord /= std::sqrt(chordLen2);
+    dir = chord;
+    const glm::vec3 tangent = catmullRomDerivative(points[j], points[j + 1], points[j + 2], points[j + 3], t);
+    const float tangentLen2 = glm::dot(tangent, tangent);
+    if (tangentLen2 > 0.0001f) {
+        const glm::vec3 unit = tangent / std::sqrt(tangentLen2);
+        if (glm::dot(unit, chord) >= 0.5f) dir = unit;
+    }
 }
 
 ShipPath ShipPath::build(const std::vector<ShipPathNode>& nodes, float speed, float accel) {
