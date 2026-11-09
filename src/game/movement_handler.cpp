@@ -759,10 +759,17 @@ void MovementHandler::sendMovement(Opcode opcode) {
                                     static_cast<uint32_t>(MovementFlags::TURN_RIGHT));
             break;
         case Opcode::MSG_MOVE_FALL_LAND:
+            // The landing carries how long the fall lasted: the client's land
+            // (0x00988490) clears FALLING and FALLING_FAR and leaves the fall
+            // time (+0x80) as the fall step counted it (0x007618b0,
+            // 0x007612b0); only a fall's start zeroes it (0x00988370,
+            // 0x00987410). It went out as 0.
+            if (isFalling_ && movementInfo.time >= fallStartMs_) {
+                movementInfo.fallTime = movementInfo.time - fallStartMs_;
+            }
             movementInfo.flags &= ~static_cast<uint32_t>(MovementFlags::FALLING);
             isFalling_ = false;
             fallStartMs_ = 0;
-            movementInfo.fallTime = 0;
             movementInfo.jumpVelocity = 0.0f;
             movementInfo.jumpSinAngle = 0.0f;
             movementInfo.jumpCosAngle = 0.0f;
@@ -888,7 +895,9 @@ void MovementHandler::sendMovement(Opcode opcode) {
             isFalling_ = false;
             fallStartMs_ = 0;
         }
-        movementInfo.fallTime = 0;
+        // Not falling, the last fall's time stays as the landing left it
+        // (0x00988490 does not clear +0x80), and every packet after it
+        // carries it until the next fall starts.
     }
 
     if (onTaxiFlight_ || taxiMountActive_ || taxiActivatePending_ || taxiClientActive_) {
