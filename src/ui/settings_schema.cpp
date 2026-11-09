@@ -313,13 +313,6 @@ constexpr SettingDesc kSchema[] = {
      "they shine on: softer, flatter lamp light, and the faces just\n"
      "turned away from a low candle - the bevel of a step, a curb -\n"
      "lit a little instead of dark.", "", 0, "raytracedlighting"},
-    {"rtpointselfshadow", "Point light self-shadowing", SettingKind::Bool, 0, 0, 0,
-     "Ray Tracing", "",
-     "A lamp, torch or brazier is shadowed by its own model too: its\n"
-     "bowl, its frame and its bars cast shadows of its light. Only its\n"
-     "faces turned toward the light do, so a light inside a lantern\n"
-     "still shines out through the lantern's glass. Not in the\n"
-     "original client.", "", 0, "raytracedlighting"},
     // How far a unit's shadow of a lamp reaches from its body
     // (rtUnitShadowReach in rt_trace.comp): 5 as it always was.
     {"rtunitshadowreach", "Unit shadow reach (yards)", SettingKind::Int, 1, 100, 1,
@@ -503,6 +496,13 @@ constexpr SettingDesc kSchema[] = {
      "it a crowded view keeps the most important near the camera, and a\n"
      "light can drop out as the camera moves. More costs trace time.\n"
      "512 is the default.", "", 512},
+    {"rtpointselfshadow", "Point light self-shadowing", SettingKind::Bool, 0, 0, 0,
+     "Debug Lights", "",
+     "A lamp, torch or brazier is shadowed by its own model too: its\n"
+     "bowl, its frame and its bars cast shadows of its light. Only its\n"
+     "faces turned toward the light do, so a light inside a lantern\n"
+     "still shines out through the lantern's glass. Not in the\n"
+     "original client.", "", 0, "raytracedlighting"},
     {"dbgemissivelightintensity", "Glowing surfaces: intensity (%)", SettingKind::Float, 0.001f, 1000, 0.001f, "Debug Glow", "What glows",
      "What glows of models and buildings: lamp glass, glow cards,\n"
      "lava, crystals, glowing batches.\n"
