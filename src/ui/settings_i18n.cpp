@@ -330,7 +330,7 @@ constexpr SettingGerman kGerman[] = {
      "Dazwischen eine weiche Mischung; nie weniger als der erste Wert.",
      nullptr, nullptr, nullptr},
     {"dbgsplitrt",
-     "Geteilt: linke Hälfte mit Raytracing",
+     "Geteilt: links Raytracing",
      "Die linke Hälfte des Bildes mit dem Raytracing-Licht zeichnen und die rechte ohne, um "
      "beides nebeneinander zu vergleichen. Nicht im ursprünglichen Client.",
      nullptr, nullptr, nullptr},
