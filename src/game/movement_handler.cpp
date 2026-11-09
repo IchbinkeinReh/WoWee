@@ -538,6 +538,51 @@ uint32_t MovementHandler::nextMovementTimestampMs() {
     return candidate;
 }
 
+uint32_t MovementHandler::movementClockMs() const {
+    const uint64_t elapsed = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                       std::chrono::steady_clock::now() - movementClockStart_)
+                                                       .count()) +
+                             1ULL;
+    return std::max(static_cast<uint32_t>(std::min<uint64_t>(elapsed, std::numeric_limits<uint32_t>::max())),
+                    lastMovementTimestampMs_);
+}
+
+void MovementHandler::startFall(uint32_t sinceMs) {
+    if (activeMover() != owner_.getPlayerGuid()) return;
+    if (isFalling_ || movementInfo.hasFlag(MovementFlags::FALLING)) return;
+    // 0x00988370 does not start a fall for a rooted mover (flags & 0x800).
+    if (movementInfo.hasFlag(MovementFlags::ROOT)) return;
+    const uint32_t now = movementClockMs();
+    isFalling_ = true;
+    fallStartMs_ = now > sinceMs ? now - sinceMs : 0u;
+    movementInfo.fallTime = 0;
+    // 0x00988370: FALLING on; swimming, ascending, descending and flying off
+    // (flags & 0xf91fffff), and the pitch's two flags with them unless the
+    // mover may pitch (flags2 & 0x20; 0xf91fff3f).
+    uint32_t flags = movementInfo.flags & 0xf91fffffu;
+    if ((movementInfo.flags2 & 0x0020) == 0) flags &= 0xf91fff3fu;
+    movementInfo.flags = flags | static_cast<uint32_t>(MovementFlags::FALLING);
+    // Its jump block: +0xb8 the speed it was given, 0 here; the direction
+    // the keys move it (0x009881d0 -> 0x00987ef0) and its speed (+0x8c) as
+    // the walk had them - the jump's block (outgoingJumpBlock) without the
+    // jump's upward speed.
+    const OutgoingJump jump = outgoingJumpBlock(movementInfo.flags, movementInfo.orientation, serverWalkSpeed_,
+                                                serverRunSpeed_ > 0.0f ? serverRunSpeed_ : 7.0f,
+                                                serverRunBackSpeed_);
+    movementInfo.jumpVelocity = 0.0f;
+    movementInfo.jumpSinAngle = jump.dirX;
+    movementInfo.jumpCosAngle = jump.dirY;
+    movementInfo.jumpXYSpeed = jump.horizontalSpeed;
+    static const bool kFallDebug = [] {
+        const char* v = std::getenv("WOWEE_FLOOR_DEBUG");
+        return v && v[0] && v[0] != '0';
+    }();
+    if (kFallDebug) {
+        LOG_WARNING("FALL START: walk-off z=", movementInfo.z, " since=", sinceMs, "ms start=", fallStartMs_,
+                    " now=", now, " flags=0x", std::hex, movementInfo.flags, std::dec);
+    }
+}
+
 bool MovementHandler::restoreWorldTransferFallbackIfNearOrigin(const char* context) {
     if (!worldTransferFallbackValid_ || owner_.getCurrentMapId() != worldTransferFallbackMapId_) {
         return false;
@@ -759,10 +804,17 @@ void MovementHandler::sendMovement(Opcode opcode) {
                                     static_cast<uint32_t>(MovementFlags::TURN_RIGHT));
             break;
         case Opcode::MSG_MOVE_FALL_LAND:
+            // The landing carries how long the fall lasted: the client's land
+            // (0x00988490) clears FALLING and FALLING_FAR and leaves the fall
+            // time (+0x80) as the fall step counted it (0x007618b0,
+            // 0x007612b0); only a fall's start zeroes it (0x00988370,
+            // 0x00987410). It went out as 0.
+            if (isFalling_ && movementInfo.time >= fallStartMs_) {
+                movementInfo.fallTime = movementInfo.time - fallStartMs_;
+            }
             movementInfo.flags &= ~static_cast<uint32_t>(MovementFlags::FALLING);
             isFalling_ = false;
             fallStartMs_ = 0;
-            movementInfo.fallTime = 0;
             movementInfo.jumpVelocity = 0.0f;
             movementInfo.jumpSinAngle = 0.0f;
             movementInfo.jumpCosAngle = 0.0f;
@@ -888,7 +940,9 @@ void MovementHandler::sendMovement(Opcode opcode) {
             isFalling_ = false;
             fallStartMs_ = 0;
         }
-        movementInfo.fallTime = 0;
+        // Not falling, the last fall's time stays as the landing left it
+        // (0x00988490 does not clear +0x80), and every packet after it
+        // carries it until the next fall starts.
     }
 
     if (onTaxiFlight_ || taxiMountActive_ || taxiActivatePending_ || taxiClientActive_) {
@@ -955,7 +1009,11 @@ void MovementHandler::sendMovement(Opcode opcode) {
             (opcode == Opcode::MSG_MOVE_JUMP || opcode == Opcode::MSG_MOVE_FALL_LAND)) {
             LOG_WARNING("FALL SENT: ", opcode == Opcode::MSG_MOVE_JUMP ? "JUMP" : "FALL_LAND", " z=", movementInfo.z,
                         " fallTime=", movementInfo.fallTime, " transport=", includeTransportInWire ? 1 : 0,
-                        " tz=", movementInfo.transportZ);
+                        " tz=", movementInfo.transportZ, " time=", movementInfo.time);
+        } else if (kFallDebug && moverIsPlayer && movementInfo.hasFlag(MovementFlags::FALLING)) {
+            LOG_WARNING("FALL SENT: op=0x", std::hex, wireOpcode(opcode), std::dec, " falling z=", movementInfo.z,
+                        " fallTime=", movementInfo.fallTime, " vz=", movementInfo.jumpVelocity,
+                        " time=", movementInfo.time);
         }
     }
 
@@ -4513,7 +4571,7 @@ bool MovementHandler::unitHasClientControl(uint64_t guid) const {
 }
 
 void MovementHandler::noteMoveSpline(uint64_t guid, bool hasPath, uint32_t splineFlags, uint32_t durationMs) {
-    const uint32_t now = nextMovementTimestampMs();
+    const uint32_t now = movementClockMs();
     if (auto spline = vehicle::moveSplineFrom(hasPath, splineFlags, durationMs, now))
         moveSplines_[guid] = *spline;
     else
@@ -4526,7 +4584,7 @@ void MovementHandler::noteMoveSpline(uint64_t guid, bool hasPath, uint32_t splin
 bool MovementHandler::onMoveSpline(uint64_t guid) {
     const auto it = moveSplines_.find(guid);
     if (it == moveSplines_.end()) return false;
-    if (vehicle::moveSplineRunning(it->second, nextMovementTimestampMs())) return true;
+    if (vehicle::moveSplineRunning(it->second, movementClockMs())) return true;
     moveSplines_.erase(it);
     return false;
 }
@@ -4811,7 +4869,7 @@ void MovementHandler::requestMoverPitch(float pitch) {
     const auto way = vehicle::pitchOverTime(movementInfo.pitch, pitch, moverPitchRate());
     pitchTarget_ = pitch;
     pitchingToTarget_ = true;
-    pitchStopMs_ = nextMovementTimestampMs() + way.durationMs;
+    pitchStopMs_ = movementClockMs() + way.durationMs;
     startMoverPitch(way.up);
 }
 
@@ -4835,7 +4893,7 @@ void MovementHandler::setAimKey(bool up, bool held) {
 }
 
 bool MovementHandler::updateMoverPitch(float deltaTime) {
-    const uint32_t now = nextMovementTimestampMs();
+    const uint32_t now = movementClockMs();
     // 0x00721b90: a full-speed pitcher's START_PITCH after 100 ms.
     if (heldPitchStart_ && now - heldPitchStartMs_ > vehicle::kPitchStartHoldMs) {
         const Opcode held = *heldPitchStart_;

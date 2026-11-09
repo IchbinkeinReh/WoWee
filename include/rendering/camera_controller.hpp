@@ -618,6 +618,9 @@ private:
     /// it (suppressVerticalPhysics): standing on a lift, however fast it runs
     /// down, which the fall checks here read as the floor dropping away.
     bool deckHeld_ = false;
+    // The physics started a jump from the ground this frame: the jump packet
+    // goes out for it whatever the ground reads by the time the packets do.
+    bool jumpStarted_ = false;
 
     /// Put the character on the floor and publish where it ended up - the
     /// expensive half, with the floor queries and the cache that skips them.

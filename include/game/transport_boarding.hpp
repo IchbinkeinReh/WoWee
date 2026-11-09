@@ -36,6 +36,15 @@ inline uint64_t afterGroundStep(uint64_t current, uint64_t owner, bool ownerIsTr
     return ownerIsTransport ? owner : current;
 }
 
+// A step of a fall (0x007618b0) that lands on nothing an object owns: while
+// attached it asks 0x006ec7b0(0, 0) to take the mover off, which leaves it
+// on only while the transport still holds it (0x0074b5e0 -> vtable +0xf0
+// -> 0x0070b360 -> 0x0077ffb0). A fall attaches to nothing new until it
+// lands on what an object owns (0x007612b0 -> 0x006ec7b0(owner)).
+inline uint64_t afterFallStep(uint64_t current, bool currentStillHolds) {
+    return (current != 0 && currentStillHolds) ? current : 0;
+}
+
 // 0x0077ffb0 for an M2 transport: the mover's place on it, in its frame,
 // inside the model's collision box (the header's +0xbc) with its top raised
 // by 1.6404123 + 0.013888889 - room for someone standing on top.

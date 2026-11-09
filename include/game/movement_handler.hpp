@@ -238,6 +238,18 @@ public:
     // its final waypoint. Only treat those signals as authoritative near arrival.
     [[nodiscard]] bool isNearTaxiDestination(float maxDistance = 24.0f) const;
     uint32_t nextMovementTimestampMs();
+    /// The movement clock as it reads now, for what only looks at it: never
+    /// moved on past the real time (nextMovementTimestampMs gives each packet
+    /// its own millisecond, and asked every frame it ran ahead).
+    [[nodiscard]] uint32_t movementClockMs() const;
+    /// A fall that starts without a jump: the ground gone from under the
+    /// player's feet (0x00762980 finds none -> 0x00988370(0)). FALLING is
+    /// set, the fall time (+0x80) counts from \p sinceMs ago, and the jump
+    /// block carries no upward speed (+0xb8 = 0), the direction and speed it
+    /// was moving with. No packet of its own: the next one out - a heartbeat
+    /// while it falls (0x006f09f0 sends them for flags & 0xc0100f), the
+    /// landing - carries it. Nothing while a fall is already on.
+    void startFall(uint32_t sinceMs);
     void sanitizeMovementForTaxi();
 
     // Heartbeat / movement timing (for GameHandler::update())

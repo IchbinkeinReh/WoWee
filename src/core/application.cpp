@@ -4707,6 +4707,21 @@ void Application::applyServerMovementState(float deltaTime) {
         glm::vec3 canonical = core::coords::renderToCanonical(renderPos);
         gameHandler->setPosition(canonical.x, canonical.y, canonical.z);
 
+        // Off a ledge without a jump: the client falls from the step its
+        // ground went missing in (0x00762980 -> 0x00988370(0)), FALLING set
+        // and the fall time counting from there. Here once the drop has
+        // lasted as long as a fall the landing is sent for (playerFallsFar),
+        // counted from when the ground went: a bump that breaks contact for
+        // a frame is no fall. Not on a transport, where the client does not
+        // mark a passenger standing on it as falling and the server measured
+        // a lift's whole descent as one.
+        if (playerFallsFar() && !gameHandler->isOnTransport() && !gameHandler->isOnTaxiFlight()) {
+            if (auto* mh = gameHandler->getMovementHandler()) {
+                const float airborne = renderer->getCameraController()->airborneSeconds();
+                mh->startFall(static_cast<uint32_t>(std::lround(airborne * 1000.0f)));
+            }
+        }
+
         // Sync orientation: camera yaw (degrees) → WoW orientation (radians)
         float yawDeg = renderer->getCharacterYaw();
         // Keep all game-side orientation in canonical space.
