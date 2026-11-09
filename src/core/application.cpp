@@ -4481,6 +4481,14 @@ void Application::applyServerMovementState(float deltaTime) {
         lastWMORideTransportGuid_ = gameHandler->getPlayerTransportGuid();
         lastWMORideMapId_ = gameHandler->getCurrentMapId();
         gameHandler->setPosition(canonical.x, canonical.y, canonical.z);
+        // The facing in the world, which turns with the ship (the turn is
+        // added to the character's yaw above): the client's unit facing is
+        // the transport's plus the one kept on it (vtable +0x34, 0x006e6f40
+        // -> 0x004f42a0), and GetPlayerFacing (0x0060a490) reads that. Left
+        // as it was at boarding, it stood still while the hull turned, and
+        // the facing on the deck worked out from it for the wire
+        // (transportFacingToWire) drifted the other way.
+        gameHandler->setOrientation(core::coords::characterYawDegToCanonical(renderer->getCharacterYaw()));
         if (renderer->getCameraController()) {
             glm::vec3* followTarget = renderer->getCameraController()->getFollowTargetMutable();
             if (followTarget) {
