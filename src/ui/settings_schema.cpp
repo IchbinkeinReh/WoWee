@@ -407,6 +407,10 @@ constexpr SettingDesc kSchema[] = {
      "Point light added|Baked colour factor|Kind of each light|"
      "Ray traced water: reflection|Ray traced water: what comes through|"
      "Ray traced water: reflection, traced only", 0},
+    {"dbgsplitrt", "Split: left half ray traced", SettingKind::Bool, 0, 0, 0, "Debug Graphics", "",
+     "Draw the left half of the picture with the ray traced lighting\n"
+     "and the right half as without it, to compare the two side by\n"
+     "side. Not in the original client.", "", 0},
     {"dbgambient", "Ambient light (%)", SettingKind::Int, 0, 300, 5, "Debug Graphics", "Light",
      "The zone's ambient light, the base every surface starts from\n"
      "before the sun and the lamps. 100 is the zone's own.", "", 100},
@@ -1391,7 +1395,7 @@ bool settingNeedsRayTracing(const std::string& key) {
     // The rest of the Debug pages also tune the light without it; these are
     // the rows whose labels or tooltips say ray traced.
     static constexpr const char* kTraced[] = {
-        "dbgview",          "dbgpointlights",     "dbgbounce",       "dbginteriorbase",
+        "dbgview",          "dbgsplitrt",         "dbgpointlights",     "dbgbounce",       "dbginteriorbase",
         "dbginteriorfullat", "dbgshadowdarkness", "rtnormalkeep", "rtnormalface", "rtwater", "rtwaveamp", "rtwavefreq", "dbgtracedsunshadow", "dbgpointshadow",
         "dbgbakedlampshadow", "dbgocclusion",
     };

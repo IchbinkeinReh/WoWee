@@ -709,6 +709,7 @@ void Renderer::updatePerFrameUBO() {
     if (rtLighting_) {
         // The mode when this frame is traced, which is when what draws after
         // the trace reads its result (rt_lighting.glsli).
+        rtLighting_->setSplitAt(rtSplitView_ ? 0.5f : 0.0f);
         const RtLighting::ConsumerData rt = rtLighting_->consumerData(rtDeferredThisFrame_);
         currentFrameData.rtParams = rt.params;
         for (int c = 0; c < 2; ++c) {
@@ -6699,6 +6700,7 @@ void Renderer::recordRtLighting() {
         in.normalBlendFar = blend.farCos;
     }
     in.rays = rtRays_;
+    in.splitAt = rtSplitView_ ? 0.5f : 0.0f;
     in.occlusion = currentFrameData.lightTune.w;
     in.debugView = static_cast<int>(currentFrameData.giParams.y + 0.5f);
     {

@@ -757,7 +757,8 @@ void RtLighting::record(VkCommandBuffer cmd, const SceneTarget& target, const Fr
     d.tune3 = glm::vec4(in.interiorBase, in.interiorFullAt, in.maxLight, in.lampWrap);
     d.rays = glm::vec4(clampRtRays(in.rays.sun), clampRtRays(in.rays.occlusion),
                        clampRtRays(in.rays.pointLights), clampRtRays(in.rays.bounce));
-    d.tune4 = glm::vec4(in.normalBlendNear, in.normalBlendFar, std::max(in.unitShadowReach, 0.0f), 0.0f);
+    d.tune4 = glm::vec4(in.normalBlendNear, in.normalBlendFar, std::max(in.unitShadowReach, 0.0f),
+                        std::clamp(in.splitAt, 0.0f, 1.0f));
     const bool probes = mode_ == Mode::Full && probes_.hasResources();
     if (probes) {
         // The open field the zone's flat ambient was set for: that ambient as
@@ -881,7 +882,12 @@ RtLighting::ConsumerData RtLighting::consumerData(bool traced) const {
     // The atlas keeps its light whether or not this frame traces, and is read
     // with the grid it was last written for.
     if (active() && mode_ == Mode::Full) c.gi = probes_.consumerData();
-    if (traced && active()) c.params = glm::vec4(static_cast<float>(mode_), 0.0f, 0.0f, 0.0f);
+    // z, w: the split view - the reciprocal of the scene's width and the
+    // share of it drawn traced (rt_lighting.glsli's rtSplitOff).
+    if (traced && active()) {
+        const float invWidth = gbufExtent_.width > 0 ? 1.0f / static_cast<float>(gbufExtent_.width) : 0.0f;
+        c.params = glm::vec4(static_cast<float>(mode_), 0.0f, invWidth, splitAt_ > 0.0f ? splitAt_ : 0.0f);
+    }
     return c;
 }
 

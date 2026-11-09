@@ -21,7 +21,7 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 playerPos;   // xyz = player world position, w = horizontal speed
     vec4 playerWake;  // xyz = trailing player position (springback reference)
     vec4 volumetricParams;  // x = on, y = near, z = 1 / ln(far / near), w = slices
-    vec4 rtParams;          // unread here; declared for the field after it
+    vec4 rtParams;          // z, w: the Debug Graphics split (rt_lighting.glsli's rtSplitOff)
     vec4 cameraFogColor;    // the camera's fog, its interior's blended in
 };
 
@@ -509,7 +509,9 @@ void main() {
     // the water, what comes through comes from the air - and past the
     // critical angle all of it is reflection.
     // Water and ocean; magma and slime are opaque and keep their own look.
-    bool rtOn = rtWater.x > 0.5 && basicType < 1.5;
+    // Right of the Debug Graphics split (a WoWee-only view), as without it.
+    bool rtSplitRight = rtParams.w > 0.0 && gl_FragCoord.x * rtParams.z >= rtParams.w;
+    bool rtOn = rtWater.x > 0.5 && basicType < 1.5 && !rtSplitRight;
     vec3 rtReflect = vec3(0.0);
     float rtFresnel = 0.0;
     // Whether the sun reaches this point of the surface, for its glint and

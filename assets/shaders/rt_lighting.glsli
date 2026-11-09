@@ -77,6 +77,13 @@ struct RtLight {
 // other lamps too, and it is a vertex colour - an average over a polygon
 // that may reach well past the shadow. The Debug Graphics settings can move
 // it (rtTune.z).
+// The Debug Graphics split (a WoWee-only view): right of the share of the
+// scene's width in rtParams.w (rtParams.z its reciprocal width), drawn as
+// without the tracing - no traced result, no probes' light.
+bool rtSplitOff() { return rtParams.w > 0.0 && gl_FragCoord.x * rtParams.z >= rtParams.w; }
+float rtMode() { return rtSplitOff() ? 0.0 : rtParams.x; }
+bool rtGiOff() { return giParams.x < 0.5 || rtSplitOff(); }
+
 const float RT_BAKED_SHADOW = 0.6;
 float rtBakedShadowStrength() { return rtTune.w > 0.5 ? rtTune.z : RT_BAKED_SHADOW; }
 float rtPointStrength() { return rtTune.w > 0.5 ? rtTune.y : 1.0; }
@@ -182,7 +189,7 @@ RtLight rtLightFrom(float weight, float wsum, vec2 sunAo, vec4 point, float bake
 // tracing.
 RtLight rtLightAt(vec3 worldPos) {
     RtLight r = RtLight(0.0, 1.0, 1.0, vec3(0.0), vec3(0.0), 1.0, 1.0);
-    if (rtParams.x < 0.5) return r;
+    if (rtMode() < 0.5) return r;
     vec4 clip = projection * (view * vec4(worldPos, 1.0));
     if (clip.w <= 0.0) return rtLightDebug(r);
     vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
@@ -234,7 +241,7 @@ RtLight rtLightAt(vec3 worldPos) {
 // of it is opaque there), those.
 RtLight rtLightBehind(vec3 worldPos) {
     RtLight own = rtLightAt(worldPos);
-    if (own.weight > 0.0 || rtParams.x < 0.5) return own;
+    if (own.weight > 0.0 || rtMode() < 0.5) return own;
     RtLight r = RtLight(0.0, 1.0, 1.0, vec3(0.0), vec3(0.0), 1.0, 1.0);
     vec4 clip = projection * (view * vec4(worldPos, 1.0));
     if (clip.w <= 0.0) return own;
@@ -337,7 +344,7 @@ float rtShadowScale(RtLight r, float shadow) {
 // The flat ambient darkened by the traced occlusion: for what the probes must
 // not light (an interior's own ambient), and the rest of it below Full.
 vec3 rtAmbient(RtLight r, vec3 flatAmbient) {
-    if (rtParams.x < 1.5) return flatAmbient;
+    if (rtMode() < 1.5) return flatAmbient;
     return mix(flatAmbient, flatAmbient * r.ao, r.weight * rtAoStrength());
 }
 
@@ -376,7 +383,7 @@ vec3 rtGiRatio(vec3 worldPos, vec3 n) {
 // The ambient of a surface lit by the zone's light, the flat ambient with
 // the probes' ratio over it in Full mode: what the occlusion darkens.
 vec3 rtProbeAmbient(vec3 flatAmbient, vec3 worldPos, vec3 n) {
-    if (giParams.x < 0.5) return flatAmbient;
+    if (rtGiOff()) return flatAmbient;
     vec3 a = flatAmbient * rtGiRatio(worldPos, n);
     if (int(giParams.y + 0.5) == 3) rtGiDebugColour = a;
     return a;
@@ -386,7 +393,7 @@ vec3 rtProbeAmbient(vec3 flatAmbient, vec3 worldPos, vec3 n) {
 // traced occlusion, and in Full mode the probes' ratio over it.
 vec3 rtAmbient(RtLight r, vec3 flatAmbient, vec3 worldPos, vec3 n) {
     vec3 a = rtAmbient(r, flatAmbient);
-    if (giParams.x < 0.5) return a;
+    if (rtGiOff()) return a;
     a *= rtGiRatio(worldPos, n);
     if (int(giParams.y + 0.5) == 3) rtGiDebugColour = a;
     return a;

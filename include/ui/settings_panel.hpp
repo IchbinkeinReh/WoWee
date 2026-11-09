@@ -114,6 +114,7 @@ public:
     /// A time of day to light the world at instead of the server's, in
     /// hours, used while the switch is on (Renderer::setGameTimeOverride).
     bool pendingDbgTimeOverride = false;
+    bool pendingDbgSplitRt = false;  ///< Debug Graphics: left half traced, right not
     float pendingDbgTime = 12.0f;
     /// Per kind of point light (rt_lights::Source), in percent of its own.
     float pendingDbgModelLightIntensity = 100.0f;
