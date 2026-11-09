@@ -2854,10 +2854,21 @@ void EntityController::onCreateGameObject(const UpdateBlock& block, std::shared_
     if (block.updateFlags & 0x0002) {
         transportGuids_.insert(block.guid);
         applyParentRotation(block, *entity, owner_.getTransportManager());
+        // And the fields its path time is read by (0x00710640: LEVEL, the
+        // stop time, and BYTES_1's state), with the block's own time.
+        const auto fieldOr = [&](UF f) -> int64_t {
+            const uint16_t i = fieldIndex(f);
+            if (i == 0xFFFF) return -1;
+            auto it = block.fields.find(i);
+            return it == block.fields.end() ? -1 : static_cast<int64_t>(it->second);
+        };
         LOG_INFO("Detected transport GameObject: 0x", std::hex, block.guid, std::dec,
                  " entry=", go->getEntry(),
                  " displayId=", go->getDisplayId(),
-                 " pos=(", go->getX(), ", ", go->getY(), ", ", go->getZ(), ")");
+                 " pos=(", go->getX(), ", ", go->getY(), ", ", go->getZ(), ")",
+                 " level=", fieldOr(UF::GAMEOBJECT_LEVEL), " bytes1=0x", std::hex, fieldOr(UF::GAMEOBJECT_BYTES_1),
+                 " dynamic=0x", fieldOr(UF::GAMEOBJECT_DYNAMIC), std::dec,
+                 " time=", block.hasTransportTime ? static_cast<int64_t>(block.transportTime) : -1);
         // Note: TransportSpawnCallback will be invoked from Application after WMO instance is created
         // Where on its route the server has it, from this block.
         applyTransportRouteClock(block);
