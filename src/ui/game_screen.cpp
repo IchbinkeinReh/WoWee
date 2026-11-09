@@ -2326,6 +2326,10 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
     // Record the press position; the action only fires on release for a tap (below),
     // never for a right-drag camera rotate - otherwise turning the view toward a nearby
     // mob would auto-attack it without the player intending to engage.
+    if (input.isMouseButtonJustPressed(SDL_BUTTON_RIGHT)) {
+        LOG_DEBUG("Right-click pressed: imgui wants mouse ", io.WantCaptureMouse, ", interface owns it ",
+                  frameXmlOwnsMouse(), ", left held ", input.isMouseButtonPressed(SDL_BUTTON_LEFT));
+    }
     if (!io.WantCaptureMouse && !frameXmlOwnsMouse() &&
         input.isMouseButtonJustPressed(SDL_BUTTON_RIGHT) && !input.isMouseButtonPressed(SDL_BUTTON_LEFT)) {
         rightClickPressPos_ = input.getMousePosition();
@@ -2336,6 +2340,8 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
     if (rightClickWasPress_ && input.isMouseButtonJustReleased(SDL_BUTTON_RIGHT)) {
         rightClickWasPress_ = false;
         glm::vec2 rDragDelta = input.getMousePosition() - rightClickPressPos_;
+        LOG_DEBUG("Right-click released at (", input.getMousePosition().x, ", ", input.getMousePosition().y,
+                  ") drag ", glm::length(rDragDelta));
         const float RCLICK_THRESHOLD = clickDragThreshold();
         if (glm::dot(rDragDelta, rDragDelta) >= RCLICK_THRESHOLD * RCLICK_THRESHOLD) {
             // Treated as a camera rotate - do not interact/attack.
@@ -2423,13 +2429,14 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                 float screenH = static_cast<float>(window->getHeight());
                 rendering::Ray ray = camera->screenToWorldRay(mousePos.x, mousePos.y, screenW, screenH);
                 // The right-click picker wants a slightly taller, tighter fallback
-                // sphere than the target picker, and must ignore chairs: their wide
-                // sphere is easy to catch while right-drag-rotating the camera, which
-                // sits the player down.
+                // sphere than the target picker. A chair under the cursor is used
+                // like any object - the client sits the player on a bench or a
+                // chair right-clicked (CMSG_GAMEOBJ_USE; the server picks the
+                // seat, turns and seats them). A right-drag that turns the
+                // camera is no click (above), so it sits nobody down.
                 ui::ScenePickParams params;
                 params.unitHitRadius = 1.5f;
                 params.unitHeightOffset = 1.5f;
-                params.skipChairs = true;
 
                 float closestQuestGoT = 1e30f;
                 uint64_t closestQuestGoGuid = 0;
@@ -2473,6 +2480,8 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                                       : game::ObjectType::UNIT;
                 }
 
+                LOG_DEBUG("Right-click picked 0x", std::hex, closestGuid, std::dec,
+                          closestType == game::ObjectType::GAMEOBJECT ? " (object)" : " (unit or none)");
                 if (closestGuid != 0) {
                     if (closestType == game::ObjectType::GAMEOBJECT) {
                         LOG_DEBUG("[GO-DIAG] Right-click: raypick hit GO 0x",
