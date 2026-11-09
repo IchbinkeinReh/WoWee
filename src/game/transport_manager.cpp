@@ -16,6 +16,7 @@
 #include <glm/gtc/constants.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include <chrono>
+#include <cstdlib>
 #include <cmath>
 #include <limits>
 
@@ -873,6 +874,21 @@ void TransportManager::poseShip(ActiveTransport& transport, uint32_t splineTimeM
         }
     }
     transport.atDockDwell = pose.motion == ShipPath::Motion::Stopped;
+    {
+        // WOWEE_TRANSPORT_POSE: the hull's pose every tenth of a second.
+        static const bool kPoseTrace = [] {
+            const char* v = std::getenv("WOWEE_TRANSPORT_POSE");
+            return v && v[0] && v[0] != '0';
+        }();
+        static std::unordered_map<uint64_t, double> lastPoseLog;
+        const double now = static_cast<double>(nowSteadyMs()) * 0.001;
+        if (kPoseTrace && here && now - lastPoseLog[transport.guid] >= 0.1) {
+            lastPoseLog[transport.guid] = now;
+            LOG_WARNING("SHIP POSE: guid=0x", std::hex, transport.guid, std::dec, " t=", t, " pos=(",
+                        transport.position.x, ", ", transport.position.y, ", ", transport.position.z,
+                        ") yaw=", transport.facing);
+        }
+    }
     updateTransformMatrices(transport);
     pushTransform(transport);
     applyDoodadMotionState(transport, /*moving=*/!transport.atDockDwell);
@@ -950,6 +966,31 @@ void TransportManager::updateServerTransport(uint64_t guid, const glm::vec3& pos
     if (!transport->isM2 && !transport->worldCoords) {
         transport->dockYaw = orientation;
         transport->hasDockYaw = true;
+    }
+
+    // A ship or a zeppelin sailing its route is posed by the route alone:
+    // the client moves a transport by its own path time (0x007139e0 ->
+    // 0x007106d0 -> 0x0070dc10; a ship's place and facing from 0x007f82b0),
+    // and a position the server sends for it does not move it. Applied here
+    // it drew the hull - and everyone on it - at the server's place for a
+    // frame, a step to the side and back, until the route posed it again.
+    if (transport->shipPath && transport->shipPath->valid() && !transport->borrowedPath && pathEntry &&
+        pathEntry->spline.durationMs() > 0) {
+        transport->serverUpdateCount++;
+        transport->lastServerUpdate = elapsedTime_;
+        transport->serverYaw = orientation;
+        transport->hasServerYaw = true;
+        static const bool kPoseTrace = [] {
+            const char* v = std::getenv("WOWEE_TRANSPORT_POSE");
+            return v && v[0] && v[0] != '0';
+        }();
+        if (kPoseTrace) {
+            const glm::vec3 d = position - transport->position;
+            LOG_WARNING("SHIP SERVER POS ignored: guid=0x", std::hex, guid, std::dec, " server=(", position.x, ", ",
+                        position.y, ", ", position.z, ") path=(", transport->position.x, ", ", transport->position.y,
+                        ", ", transport->position.z, ") off=", glm::length(d));
+        }
+        return;
     }
 
     if (!pathEntry || pathEntry->spline.durationMs() == 0) {
