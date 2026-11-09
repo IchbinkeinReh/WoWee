@@ -23,9 +23,15 @@
 #include <imgui.h>
 #include "rendering/terrain_manager.hpp"
 #include "rendering/collision_geometry.hpp"
+#include "rendering/collision_facets.hpp"
+#include "rendering/collision_sweep.hpp"
+#include "rendering/collision_fall.hpp"
+#include "rendering/collision_swim.hpp"
+#include "rendering/collision_hover.hpp"
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/water_renderer.hpp"
+#include "pipeline/wmo_doodad_light.hpp"
 #include "rendering/character_renderer.hpp"
 #include "game/opcodes.hpp"
 #include "core/logger.hpp"
@@ -35,6 +41,288 @@
 
 namespace wowee {
 namespace rendering {
+
+void CameraController::gatherPortFacets(const glm::vec3& lo, const glm::vec3& hi,
+                                        std::vector<collision::Facet>& out) const {
+    if (terrainManager) terrainManager->gatherCollisionFacets(lo, hi, out);
+    if (wmoRenderer) wmoRenderer->gatherCollisionFacets(lo, hi, out);
+    if (m2Renderer) m2Renderer->gatherCollisionFacets(lo, hi, out);
+}
+
+glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wanted, float dt) {
+    collision::Sweeper sweeper([this](const glm::vec3& lo, const glm::vec3& hi,
+                                      std::vector<collision::Facet>& out) { gatherPortFacets(lo, hi, out); });
+    collision::Mover& m = portMover_;
+    portBlocked_ = false;
+    // The mover follows the character wherever something else put it (a
+    // teleport, a transport); its stepping state only holds where it left it.
+    if (glm::length(m.pos - from) > 0.01f) m.stepping = false;
+    // The client does not move a unit before the world round it is loaded
+    // (it is behind the loading screen). Here buildings stream in after the
+    // player is placed, and a fall through a floor not loaded yet goes on
+    // until the unit dies: so after a jump in position, hold still until
+    // there is something within reach below.
+    if (glm::length(m.pos - from) > 5.0f) {
+        portWorldReady_ = false;
+        // And the test safety's last standing place is not this one's: a
+        // transport's map change (or any teleport) put the unit far from
+        // it, and a fall measured against it read as a runaway.
+        portSafe_.forget();
+    }
+    if (!portWorldReady_) {
+        std::vector<collision::Facet> below;
+        gatherPortFacets(from - glm::vec3(1.0f, 1.0f, 30.0f), from + glm::vec3(1.0f, 1.0f, 2.0f), below);
+        if (below.empty()) {
+            m.pos = from;
+            verticalVelocity = 0.0f;
+            return from;
+        }
+        portWorldReady_ = true;
+    }
+    // In the air, where the fall began moves with whatever moved the unit
+    // since the last step. The client keeps a passenger's place, and the
+    // height its fall began at (+0x84, 0x00988370), on its transport while
+    // it is attached (0x007618b0 steps it there and leaves it attached while
+    // the transport keeps it, 0x006ec7b0 -> 0x0074b5e0), so a lift or a ship
+    // carries a jump along. Here both are in the world, the application
+    // carries the unit, and the fall (0x00987050, fallDrop) is measured from
+    // where it began: the start left behind pulled a rider jumping on the
+    // Undercity lift back to the height it jumped at, out of the car running
+    // down beneath it, through its floor (PORT ABORT).
+    // And the test safety's last standing place with it: on a lift the
+    // place it stood goes down with the car, not left at the top of the
+    // shaft for a jump to fall forty yards below.
+    // Up to ten yards a step: a lift running at 27 yd/s through a slow frame.
+    if (m.falling && portLastOutValid_ && glm::length(from - portLastOut_) <= 10.0f) {
+        m.fallStartZ += from.z - portLastOut_.z;
+        portSafe_.carry(from - portLastOut_);
+    }
+    m.pos = from;
+    const uint32_t ms = std::max<uint32_t>(1u, static_cast<uint32_t>(std::lround(dt * 1000.0f)));
+    const glm::vec2 horiz(wanted.x - from.x, wanted.y - from.y);
+    const float dist = glm::length(horiz);
+    bool fell = false;
+    const char* how = "stand";
+    m.flying = isFlightAirborne();
+    if (m.swimming || m.flying) {
+        // 0x00760b40: a plain sweep along the move in three dimensions; a
+        // swimmer also against the liquid's surface turned over.
+        how = m.swimming ? "swim" : "fly";
+        collision::Sweeper liquid([this](const glm::vec3& lo, const glm::vec3& hi,
+                                         std::vector<collision::Facet>& out) {
+            if (!waterRenderer) return;
+            std::vector<collision::Facet> up;
+            waterRenderer->gatherLiquidFacets(lo, hi, up);
+            for (const auto& f : up) out.push_back(collision::underside(f));
+        });
+        const glm::vec3 disp = wanted - from;
+        const float len = glm::length(disp);
+        bool jumped = false;
+        if (len > 1e-6f) {
+            jumped = collision::swimFlyStep(m, ms, len, disp / len, sweeper, m.swimming ? &liquid : nullptr,
+                                            gravityDisabled_, portAscending_);
+        }
+        if (jumped) {
+            how = "swimjump";
+            swimming = false;
+            grounded = false;
+            verticalVelocity = -m.fallV0;
+            m.fallSpeed = dt > 0.0f ? dist / dt : 0.0f;
+            m.fallDir = dist > 1e-6f ? horiz / dist : glm::vec2(0.0f);
+        } else if (m.flying) {
+            // 0x0073a890: a flyer lands where the ground is within half a
+            // yard under its feet (0x00714b60's ray from a yard over them to
+            // a yard under), two seconds or more after it took off.
+            portFlyMs_ += ms;
+            const auto down = sweeper.run(m, glm::vec3(0.0f, 0.0f, -1.0f), 0.5f);
+            grounded = down.facet >= 0 && portFlyMs_ > 2000;
+            if (grounded) lastGroundZ = m.pos.z - down.allowed;
+        }
+        if (!m.flying) portFlyMs_ = 0;
+    } else if (hoverActive_ && !m.falling) {
+        // 0x00762980: held the hover height (+0xb4, UNIT_FIELD_HOVERHEIGHT,
+        // which this client does not read: its default of one yard) over
+        // the ground; with none under it, a fall.
+        how = "hover";
+        m.hoverHeight = 1.0f;
+        const glm::vec3 disp = wanted - from;
+        const float len = glm::length(glm::vec2(disp));
+        const glm::vec3 d = len > 1e-6f ? glm::vec3(glm::vec2(disp) / len, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
+        if (collision::hoverStep(m, ms, len, d, sweeper, gravityDisabled_)) {
+            grounded = true;
+            verticalVelocity = 0.0f;
+            lastGroundZ = m.pos.z;
+        } else {
+            grounded = false;
+            verticalVelocity = 0.0f;
+            m.fallSpeed = dt > 0.0f ? dist / dt : 0.0f;
+            m.fallDir = dist > 1e-6f ? horiz / dist : glm::vec2(0.0f);
+        }
+    } else if (grounded && verticalVelocity <= 0.0f) {
+        m.falling = false;
+        if (dist > 1e-6f) {
+            // Kept to the ground by the frame's whole move, as the client
+            // moves by a frame at once (0x00762e00 -> 0x007620f0); the frame
+            // is split into equal steps here.
+            const auto r = collision::walk(m, horiz / dist, dist, ms, sweeper,
+                                           dist * static_cast<float>(physicsStepsThisFrame_));
+            fell = r.fell;
+            how = "walk";
+            if (r.blocked) portBlocking_ = r.blocking;
+            portBlocked_ = r.blocked;
+            portStepTrace_ = collision::lastStepUpTrace();
+        } else if (m.stepping) {
+            // Stopping while stepping up something: 0x0098c8d0 (and its
+            // strafing twin 0x0098bf80) clears the stepping and, unless the
+            // unit swims, flies or rides (0x006eaba0), drops it from where
+            // it climbed to (0x00988370(0)).
+            collision::startFall(m);
+            fell = true;
+            how = "stopstep";
+        } else {
+            // Standing: settled onto ground within a twentieth of a yard,
+            // and never made to fall. The client moves a unit only while
+            // it moves (0x00762e00 runs for flags 0x40c0100f), so a unit
+            // standing still on a transport's deck as it carries it, or at
+            // the edge of anything, stays as it is.
+            const auto down = sweeper.run(m, glm::vec3(0.0f, 0.0f, -1.0f), 0.05f);
+            if (down.facet >= 0) m.pos.z -= down.allowed;
+        }
+        verticalVelocity = 0.0f;
+        if (!fell) portSafe_.stoodAt(m.pos);
+        if (fell) {
+            grounded = false;
+            // 0x00988370 leaves +0x8c and the direction as the walk had them.
+            m.fallSpeed = dt > 0.0f ? dist / dt : 0.0f;
+            m.fallDir = dist > 1e-6f ? horiz / dist : glm::vec2(0.0f);
+        } else {
+            lastGroundZ = m.pos.z;
+            hasRealGround_ = true;
+        }
+    } else {
+        // In the air: the client's fall (0x007618b0). It starts with the
+        // speed the unit leaves the ground with - a jump's, or none walking
+        // off an edge - and carries on across the ground at the speed and
+        // in the direction it was going then; no steering in the air.
+        how = "air";
+        if (!m.falling) {
+            collision::startFallAt(m, -verticalVelocity);
+            m.fallSpeed = dt > 0.0f ? dist / dt : 0.0f;
+            m.fallDir = dist > 1e-6f ? horiz / dist : glm::vec2(0.0f);
+        }
+        const auto r = collision::fallStep(m, ms, m.fallSpeed * dt, m.fallDir, sweeper);
+        // A safety for testing the port, not the client's: a fall more than
+        // 40 yards below where the unit last stood, or one with nothing at
+        // all below it, is a fault of the port. Stop using it for the rest
+        // of the session and put the character back where it stood; the
+        // movement this client had before takes over.
+        if (!r.landed && m.falling && portSafe_.valid()) {
+            std::vector<collision::Facet> below;
+            gatherPortFacets(m.pos - glm::vec3(1.0f, 1.0f, 60.0f), m.pos + glm::vec3(1.0f, 1.0f, 1.0f), below);
+            if (const auto back = portSafe_.runawayRestore(m.pos, below.empty())) {
+                LOG_WARNING("PORT ABORT: fell to (", m.pos.x, ", ", m.pos.y, ", ", m.pos.z, ") from (",
+                            back->x, ", ", back->y, ", ", back->z, "), facets below ",
+                            below.size(), " - collision port off for this session");
+                portAborted_ = true;
+                m = collision::Mover{};
+                m.pos = *back;
+                verticalVelocity = 0.0f;
+                grounded = true;
+                lastGroundZ = back->z;
+                return *back;
+            }
+        }
+        if (r.landed || !m.falling) {
+            grounded = true;
+            verticalVelocity = 0.0f;
+            lastGroundZ = m.pos.z;
+            hasRealGround_ = true;
+            how = "land";
+        } else {
+            // The fall's speed now, up positive, for whatever reads it.
+            const float t = static_cast<float>(m.fallMs) * 0.001f;
+            const float T = m.safeFall ? collision::kSafeFallSpeed : collision::kTerminalSpeed;
+            verticalVelocity = -std::min(m.fallV0 + collision::kGravity * t, T);
+            grounded = false;
+        }
+    }
+    static const bool kFloorDebug = [] {
+        const char* v = std::getenv("WOWEE_FLOOR_DEBUG");
+        return v && v[0] && v[0] != '0';
+    }();
+    if (kFloorDebug) {
+        portDebugTimer_ += dt;
+        if (portDebugTimer_ >= 0.25f) {
+            portDebugTimer_ = 0.0f;
+            std::ostringstream line;
+            line << "FLOOR at (" << m.pos.x << ", " << m.pos.y << ", " << m.pos.z << ") terrain=- wmo=port"
+                 << " m2=- chose=" << m.pos.z << " port=" << how << " r=" << m.halfWidth << " stepping=" << m.stepping
+                 << " fell=" << fell << " grounded=" << grounded << " vz=" << verticalVelocity;
+            if (portBlocked_) {
+                const auto& b = portBlocking_;
+                line << " blocked=";
+                switch (b.kind) {
+                    case collision::Facet::Kind::Ground: line << "ground"; break;
+                    case collision::Facet::Kind::Building:
+                        line << "wmo" << (b.owner >> 12) << "/" << (b.owner & 0xfffu) << "/mopy0x" << std::hex
+                             << static_cast<unsigned>(b.mopy) << std::dec;
+                        break;
+                    case collision::Facet::Kind::Doodad:
+                        line << "m2:" << (m2Renderer ? m2Renderer->debugInstanceName(b.owner) : std::string("?"));
+                        break;
+                    default: line << "?"; break;
+                }
+                line << " n=(" << b.n.x << "," << b.n.y << "," << b.n.z << ")";
+                const auto& t = portStepTrace_;
+                if (t.tried) {
+                    line << " stepup rise=" << t.rise << " across=" << t.across << " sideHit=" << t.sideHit
+                         << " sideN=(" << t.sideN.x << "," << t.sideN.y << "," << t.sideN.z << ")";
+                    if (t.wentDown) {
+                        line << " went=" << t.went << " down=" << t.down << " downHit=" << t.downHit
+                             << " downN=(" << t.downN.x << "," << t.downN.y << "," << t.downN.z << ")";
+                    }
+                    line << " stepped=" << t.stepped;
+                }
+            }
+            if (wmoRenderer) {
+                const glm::vec3 up = m.pos + glm::vec3(0.0f, 0.0f, 0.5f);
+                line << " below=" << wmoRenderer->describeFacesAlong(up, up.z - 30.0f)
+                     << " above=" << wmoRenderer->describeFacesAlong(up, up.z + 30.0f);
+            }
+            LOG_WARNING(line.str());
+        }
+    }
+    return m.pos;
+}
+
+std::optional<float> CameraController::portLiquidLevelAt(const glm::vec3& feet) const {
+    if (!waterRenderer) return std::nullopt;
+    namespace wl = pipeline::wmo_doodad_light;
+    std::optional<float> ground;
+    if (terrainManager && !terrainManager->isHoleAt(feet.x, feet.y)) {
+        ground = terrainManager->getHeightAt(feet.x, feet.y);
+    }
+    if (wmoRenderer) {
+        // In a building's group when the world object's floor search finds
+        // one under the feet and the ground is not nearer (0x007c2f80 from a
+        // tenth above them, 0x007c28f0): that group's liquid and no other
+        // (0x007a1a30).
+        const float startZ = feet.z + wl::kUnitFloorAbove;
+        const auto links = wmoRenderer->linksAlong(glm::vec3(feet.x, feet.y, startZ), startZ - wl::kFloorReach);
+        if (links.collides && !wl::terrainNearer(startZ, ground, startZ - links.collides->dist)) {
+            const auto& ref = links.collides->ref;
+            return waterRenderer->buildingLiquidLevelAt(ref.instanceId, ref.group, feet);
+        }
+        // Out of any: a building's exterior group's liquid first (0x007a09d0).
+        std::vector<WMORenderer::GroupRef> groups;
+        wmoRenderer->exteriorGroupsHolding(feet, groups);
+        for (const auto& ref : groups) {
+            if (auto level = waterRenderer->buildingLiquidLevelAt(ref.instanceId, ref.group, feet)) return level;
+        }
+    }
+    // Then the ground's (0x007a0820).
+    return waterRenderer->groundLiquidLevelAt(feet, ground);
+}
 
 namespace {
 
@@ -543,6 +831,17 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
             inWater = false;
         }
 
+        // The collision port decides swimming as the client does (0x00730d10)
+        // from the liquid where it looks (portLiquidLevelAt); a jump out is
+        // the swim step's (0x00760b40), so the old one stands down.
+        if (collision::portEnabled() && !portAborted_) {
+            portMover_.pos = *followTarget;
+            collision::updateSwimming(portMover_, portLiquidLevelAt(*followTarget), true, gravityDisabled_);
+            inWater = portMover_.swimming;
+            swimJump = false;
+        }
+        portAscending_ = f.spaceHeld && !f.noAscendDescend;
+
         if (inWater) {
         swimming = true;
         jumpLocked_ = false;
@@ -978,6 +1277,18 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
                 cachedPivotLift_ = 0.0f;
             }
         }
+    }
+
+    // The collision port, behind its toggle: the client's own movement makes
+    // the move, and none of the heuristics below or in the grounding runs.
+    portMovedThisStep_ = false;
+    if (collision::portEnabled() && !portAborted_ && !externalFollow_ &&
+        !gravityDisabled_ && !waterWalkActive_ && !groundNotStreamedYet(targetPos.x, targetPos.y)) {
+        targetPos = portMove(*followTarget, targetPos, f.physicsDeltaTime);
+        portLastOut_ = targetPos;
+        portLastOutValid_ = true;
+        portMovedThisStep_ = true;
+        return targetPos;
     }
 
     // Sweep collisions in small steps to reduce tunneling through thin walls/floors.
@@ -2083,6 +2394,47 @@ void CameraController::groundFollowedCharacter(float deltaTime, FrameInput& f,
                          << " grounded="       << grounded
                          << " vz="             << verticalVelocity
                          << " lastGroundZ="    << lastGroundZ;
+                    // With the port on, how many faces it gathers round the
+                    // body here, from the ground, buildings and doodads.
+                    if (collision::portEnabled()) {
+                        const glm::vec3 pad(1.0f / 3.0f + 1.0f / 6.0f,
+                                            1.0f / 3.0f + 1.0f / 6.0f, 1.0f / 6.0f);
+                        const glm::vec3 lo = targetPos - pad;
+                        const glm::vec3 hi = targetPos + pad + glm::vec3(0.0f, 0.0f, 73.0f / 36.0f);
+                        std::vector<collision::Facet> facets;
+                        if (terrainManager) terrainManager->gatherCollisionFacets(lo, hi, facets);
+                        const size_t t = facets.size();
+                        if (wmoRenderer) wmoRenderer->gatherCollisionFacets(lo, hi, facets);
+                        const size_t w = facets.size() - t;
+                        if (m2Renderer) m2Renderer->gatherCollisionFacets(lo, hi, facets);
+                        line << " facets=" << t << "/" << w << "/" << (facets.size() - t - w);
+                        // The port's floor: the body swept down from a yard up,
+                        // against faces gathered round that path (0x0075f9d0).
+                        {
+                            const collision::Body body(targetPos + glm::vec3(0.0f, 0.0f, 1.0f),
+                                                       collision::kPlayerHalfWidth,
+                                                       collision::kPlayerHeight);
+                            glm::vec3 lo2, hi2;
+                            collision::sweepBox(body, glm::vec3(0.0f, 0.0f, -1.0f), 3.0f, lo2, hi2);
+                            std::vector<collision::Facet> near2;
+                            if (terrainManager) terrainManager->gatherCollisionFacets(lo2, hi2, near2);
+                            if (wmoRenderer) wmoRenderer->gatherCollisionFacets(lo2, hi2, near2);
+                            if (m2Renderer) m2Renderer->gatherCollisionFacets(lo2, hi2, near2);
+                            const auto down = collision::sweep(body, glm::vec3(0.0f, 0.0f, -1.0f), 3.0f, near2);
+                            line << " sweepFloor=";
+                            if (down.hit) line << (targetPos.z + 1.0f - down.allowed);
+                            else line << "-";
+                        }
+                        if (wmoRenderer) {
+                            const glm::vec3 up = targetPos + glm::vec3(0.0f, 0.0f, 0.5f);
+                            line << " below=" << wmoRenderer->describeFacesAlong(up, up.z - 30.0f)
+                                 << " above=" << wmoRenderer->describeFacesAlong(up, up.z + 30.0f);
+                        }
+                        const auto liquid = portLiquidLevelAt(targetPos);
+                        line << " liquid=" << say(liquid) << " water=" << say(
+                            waterRenderer ? waterRenderer->getWaterHeightAt(targetPos.x, targetPos.y)
+                                          : std::optional<float>{});
+                    }
                     LOG_WARNING(line.str());
                     // Also to a file. The console is where this used to go
                     // and it scrolled past - asking someone to reproduce a
@@ -2811,12 +3163,16 @@ void CameraController::updateThirdPersonCamera(float deltaTime, FrameInput& f) {
         const glm::vec3 stepStart = *followTarget;
         targetPos = moveFollowedCharacter(stepTime, f, prevTargetPos);
         const glm::vec3 stepMoved = targetPos;
-        groundFollowedCharacter(stepTime, f, targetPos, prevTargetPos);
+        if (portMovedThisStep_) {
+            *followTarget = targetPos;
+        } else {
+            groundFollowedCharacter(stepTime, f, targetPos, prevTargetPos);
         if (rideHeld_ && !f.nowJump) {
             targetPos.x = stepStart.x;
             targetPos.y = stepStart.y;
             followTarget->x = stepStart.x;
             followTarget->y = stepStart.y;
+        }
         }
         // WOWEE_FLOOR_DEBUG: a step that carried the character further across
         // than its speed allows, and which stage did it.
@@ -2830,7 +3186,7 @@ void CameraController::updateThirdPersonCamera(float deltaTime, FrameInput& f) {
                 LOG_WARNING("MOVE JUMP: from (", stepStart.x, ", ", stepStart.y, ", ", stepStart.z,
                             ") moved (", stepMoved.x, ", ", stepMoved.y, ", ", stepMoved.z,
                             ") grounded (", followTarget->x, ", ", followTarget->y, ", ", followTarget->z,
-                            ") speed=", inputSpeed, " dt=", stepTime);
+                            ") port=", portMovedThisStep_, " speed=", inputSpeed, " dt=", stepTime);
             }
         }
         // Landing: flying down onto real ground, or skimming it, without climbing.
@@ -4256,6 +4612,7 @@ void CameraController::reset() {
     pitch = defaultPitch;
     verticalVelocity = 0.0f;
     grounded = true;
+    forgetPortPlace();
     jumpLocked_ = false;
     swimming = false;
     sitting = false;
@@ -4510,6 +4867,7 @@ void CameraController::teleportTo(const glm::vec3& pos) {
     // is not this one.
     lastGroundZ = pos.z;
     hasCachedFloor_ = false;
+    forgetPortPlace();
     noGroundTimer_ = 0.0f;  // Reset grace period so terrain has time to stream
     autoUnstuckFired_ = false;
     continuousFallTime_ = 0.0f;

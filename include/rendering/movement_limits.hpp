@@ -108,14 +108,19 @@ inline glm::vec2 stepAgainstSteepGround(const glm::vec2& step, const glm::vec3& 
     return step - uphill * into;
 }
 
+/// The client's fall (0x00986f00): gravity, and the terminal speed it is
+/// held to, in yards and seconds.
+inline constexpr float kFallGravity = 19.291105f;
+inline constexpr float kFallTerminal = 60.148003f;
+
 /// How fast the mover slides down ground too steep to stand on, given how
 /// fast it was sliding and the ground's normal: gravity along the slope
 /// (g sin of its angle), held to the client's terminal fall speed.
 /// On walkable ground, nothing.
 inline float slideSpeedOn(float speed, const glm::vec3& n, float dt) {
     if (n.z >= kMinWalkableNormalZ) return 0.0f;
-    constexpr float kGravity = 19.291105f;   // yards/s^2 (0x00986f00)
-    constexpr float kTerminal = 60.148003f;  // yards/s
+    constexpr float kGravity = kFallGravity;
+    constexpr float kTerminal = kFallTerminal;
     const float sinSlope = std::sqrt(std::max(0.0f, 1.0f - n.z * n.z));
     return std::min(speed + kGravity * sinSlope * dt, kTerminal);
 }

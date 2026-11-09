@@ -36,6 +36,9 @@ constexpr uint32_t kChrRacesSplashSoundColumn = 10;
 constexpr uint32_t kDisplayScaleColumn = 4;
 constexpr uint32_t kModelScaleColumn = 4;
 constexpr uint32_t kModelCollisionHeightColumn = 15;
+/// And CollisionWidth, half of which at the unit's scale is its body's
+/// half-width (0x006e9570: +0xc8 = width x scale x 0.5).
+constexpr uint32_t kModelCollisionWidthColumn = 14;
 
 inline float collisionHeight(float modelHeight, float objectScale, float displayScale, float modelScale) {
     float shape = displayScale * modelScale;

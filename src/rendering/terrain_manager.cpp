@@ -1,4 +1,5 @@
 #include "rendering/terrain_manager.hpp"
+#include "rendering/collision_facets.hpp"
 #include "rendering/model_memory.hpp"
 #include <cstdio>
 #include "pipeline/detail_doodad_shade.hpp"
@@ -2422,6 +2423,44 @@ void TerrainManager::gatherBlobShadowGround(const glm::vec3& boxMin, const glm::
                 out.push_back(a);
                 out.push_back(b);
             }
+        }
+    }
+}
+
+void TerrainManager::gatherCollisionFacets(const glm::vec3& boxMin, const glm::vec3& boxMax,
+                                           std::vector<collision::Facet>& out) const {
+    // The quads the box reaches, on the one grid across the map, as
+    // gatherBlobShadowGround finds them; the corners and the centre read
+    // from the chunk's own heights, so the faces are the ones drawn.
+    const float unit = CHUNK_SIZE / 8.0f;
+    const float origin = core::coords::ZEROPOINT;
+    const int kMin = static_cast<int>(std::floor((origin - boxMax.x) / unit));
+    const int kMax = static_cast<int>(std::floor((origin - boxMin.x) / unit));
+    const int lMin = static_cast<int>(std::floor((origin - boxMax.y) / unit));
+    const int lMax = static_cast<int>(std::floor((origin - boxMin.y) / unit));
+    if (kMax - kMin > 64 || lMax - lMin > 64) return;
+    for (int k = kMin; k <= kMax; ++k) {
+        const float cx = origin - (static_cast<float>(k) + 0.5f) * unit;
+        for (int l = lMin; l <= lMax; ++l) {
+            const float cy = origin - (static_cast<float>(l) + 0.5f) * unit;
+            float fracX = 0.0f, fracY = 0.0f;
+            const pipeline::MapChunk* chunk = findChunkAt(cx, cy, fracX, fracY);
+            if (!chunk) continue;
+            const int qx = glm::clamp(static_cast<int>(std::floor(fracX)), 0, 7);
+            const int qy = glm::clamp(static_cast<int>(std::floor(fracY)), 0, 7);
+            // 0xa3faf0: the hole bit of a quad is (row>>1)*4 + (col>>1).
+            if (chunk->holes != 0 && chunk->isHole(qy, qx)) continue;
+            auto at = [&](float fx, float fy) {
+                return pipeline::TerrainMeshGenerator::chunkSurfacePoint(
+                    chunk->position, chunk->heightMap, fx, fy, unit);
+            };
+            const float x0 = static_cast<float>(qx), y0 = static_cast<float>(qy);
+            const glm::vec3 c = at(x0 + 0.5f, y0 + 0.5f);
+            const glm::vec3 p[4] = {at(x0, y0), at(x0 + 1.0f, y0), at(x0 + 1.0f, y0 + 1.0f),
+                                    at(x0, y0 + 1.0f)};
+            const size_t before = out.size();
+            collision::appendTerrainQuad(c, p, boxMin, boxMax, out);
+            for (size_t i = before; i < out.size(); ++i) out[i].kind = collision::Facet::Kind::Ground;
         }
     }
 }

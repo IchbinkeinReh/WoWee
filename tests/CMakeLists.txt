@@ -2982,11 +2982,83 @@ wowee_add_test(test_stationery
     SOURCES test_stationery.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_collision_facets ────────────────────────────────────
+# The faces the movement sweep is given: which way each source's normals
+# point, which faces each source leaves out, and the client's box test.
+wowee_add_test(test_collision_facets
+    SOURCES test_collision_facets.cpp
+            ${TEST_COMMON_SOURCES})
+
+# ── test_collision_sweep ─────────────────────────────────────
+# The client's body sweep: the box-on-a-pyramid body, the clip and the solve
+# it is built from, and what it answers against floors, walls and slopes.
+wowee_add_test(test_collision_sweep
+    SOURCES test_collision_sweep.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_sweep.cpp
+            ${TEST_COMMON_SOURCES})
+
+# ── test_collision_hover ─────────────────────────────────────
+# Hovering: held the hover height over the ground, made up at 3.5 yards a
+# second, a fall where the ground drops away, a slide along a wall.
+wowee_add_test(test_collision_hover
+    SOURCES test_collision_hover.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_sweep.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_walk.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_fall.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_hover.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_loading_screen_route ───────────────────────────────
 # A transport crossing's loading screen: its stops on the world map, the
 # spline through the leg's points and the dots coming in with the load.
 wowee_add_test(test_loading_screen_route
     SOURCES test_loading_screen_route.cpp
+            ${TEST_COMMON_SOURCES})
+
+# ── test_collision_safety ────────────────────────────────────
+# The collision port's test safety: the place last stood on belongs to one
+# world, and a map change, a teleport or a transport makes it forgotten.
+wowee_add_test(test_collision_safety
+    SOURCES test_collision_safety.cpp
+            ${TEST_COMMON_SOURCES})
+
+# ── test_collision_swim ──────────────────────────────────────
+# Swimming and flying: when a unit swims, the surface holding a swimmer
+# under it, the jump out, and the plain sweep a flyer makes.
+wowee_add_test(test_collision_swim
+    SOURCES test_collision_swim.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_sweep.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_walk.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_fall.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_swim.cpp
+            ${TEST_COMMON_SOURCES})
+
+# ── test_collision_fall ──────────────────────────────────────
+# The client's fall: its curve and the time read back off it, landing, a
+# jump's arc, a ceiling, a wall slid down, a walk off an edge.
+wowee_add_test(test_collision_fall
+    SOURCES test_collision_fall.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_sweep.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_walk.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_fall.cpp
+            ${TEST_COMMON_SOURCES})
+
+# ── test_collision_walk ──────────────────────────────────────
+# The client's ground movement on the sweep: level ground, walls met head on
+# and at an angle, steps under and over the step height, an edge, slopes
+# either side of 50 degrees going up and down.
+wowee_add_test(test_collision_walk
+    SOURCES test_collision_walk.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_sweep.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_walk.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_fall.cpp
+            ${TEST_COMMON_SOURCES})
+
+# ── test_collision_liquid ────────────────────────────────────
+# The liquid level a swimmer's depth is read from: a building group's by
+# its tiles, and the two tests on a chunk's.
+wowee_add_test(test_collision_liquid
+    SOURCES test_collision_liquid.cpp
             ${TEST_COMMON_SOURCES})
 
 # ── test_polygon_triangulate ─────────────────────────────────

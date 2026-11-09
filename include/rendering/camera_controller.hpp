@@ -4,6 +4,8 @@
 #include "rendering/camera_smooth.hpp"
 #include "rendering/camera.hpp"
 #include "game/vehicle_camera.hpp"
+#include "rendering/collision_safety.hpp"
+#include "rendering/collision_walk.hpp"
 #include "core/input.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -122,6 +124,14 @@ public:
     void reset();
     void resetAngles();
     void teleportTo(const glm::vec3& pos);
+    /// The collision port's world changed under the unit - a map change, a
+    /// teleport, a transport boarded or left: the place it last stood (the
+    /// test safety's) is not this world's, and the world round the new
+    /// place waits to be loaded before the unit moves.
+    void forgetPortPlace() {
+        portSafe_.forget();
+        portWorldReady_ = false;
+    }
     void setOnlineMode(bool online) { onlineMode = online; }
 
     // Last known safe position (grounded, not falling)
@@ -377,6 +387,12 @@ public:
         if (height > 0.1f && height < 50.0f) collisionHeight_ = height;
     }
     [[nodiscard]] bool isFlyingActive() const { return flyingActive_; }
+    /// The collision port's body half-width (0x006e9570). The port keeps a
+    /// player's height at the client's default: 0x006e9570 sets it only for
+    /// a unit this client does not move.
+    void setPortHalfWidth(float r) {
+        if (r > 0.01f && r < 25.0f) portMover_.halfWidth = r;
+    }
     /// In the air on it. Space takes off, and touching real ground without
     /// climbing lands - after which the mount runs, falls and jumps like any
     /// other until it takes off again. Flight physics, the flight animations
@@ -626,6 +642,35 @@ private:
     /// Ask terrain, WMO and doodads where the floor is - two of them on other
     /// threads - or answer from the cache when the character has barely moved.
     FloorSample sampleFloorUnderFeet(const glm::vec3& targetPos, float stepUpBudget);
+    /// The collision port's liquid level at the feet, found where the client
+    /// looks (collision_liquid.hpp, 0x007a1bc0), or none.
+    [[nodiscard]] std::optional<float> portLiquidLevelAt(const glm::vec3& feet) const;
+    /// With the collision port on: the step's move from `from` toward
+    /// `wanted` made by the client's ground movement (collision_walk.hpp) or,
+    /// in the air, a sweep along the fall. Answers where the feet end up.
+    glm::vec3 portMove(const glm::vec3& from, const glm::vec3& wanted, float dt);
+    /// The facets round a box from the ground, buildings and doodads.
+    void gatherPortFacets(const glm::vec3& lo, const glm::vec3& hi, std::vector<collision::Facet>& out) const;
+    /// Set by moveFollowedCharacter when portMove made this step's move, so
+    /// the old grounding stands down.
+    bool portMovedThisStep_ = false;
+    collision::Mover portMover_;
+    /// Where portMove last put the unit: what moved it since (a transport
+    /// carrying it) is the difference to the next step's start. The mover's
+    /// own place is set to the character's elsewhere (the swim check).
+    glm::vec3 portLastOut_{0.0f};
+    bool portLastOutValid_ = false;
+    bool portBlocked_ = false;
+    collision::StepUpTrace portStepTrace_;
+    bool portWorldReady_ = false;
+    /// The unit rising (+0x44 0x400000) while it swims or flies: jump held.
+    bool portAscending_ = false;
+    /// How long the port's unit has flown, for 0x0073a890's two seconds.
+    uint32_t portFlyMs_ = 0;
+    /// The test safety: where the unit last stood, and whether the port has
+    /// been switched off for the session after a runaway fall.
+    collision::SafePlace portSafe_;
+    bool portAborted_ = false;
     /// The transport's deck held the rider where the application last placed
     /// it (suppressVerticalPhysics): standing on a lift, however fast it runs
     /// down, which the fall checks here read as the floor dropping away.
@@ -637,6 +682,8 @@ private:
     /// frame, until the deck placed them back - the rider, and the camera
     /// with them, stepping to the side and back during the flight.
     bool rideHeld_ = false;
+    collision::Facet portBlocking_;
+    float portDebugTimer_ = 0.0f;
     // The physics started a jump from the ground this frame: the jump packet
     // goes out for it whatever the ground reads by the time the packets do.
     bool jumpStarted_ = false;
