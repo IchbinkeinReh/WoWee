@@ -846,3 +846,16 @@ TEST_CASE("UnitIsCorpse: a dead creature is a unit, not a corpse", "[entity]") {
     REQUIRE(isCorpseObject(&corpse));
     REQUIRE_FALSE(isCorpseObject(nullptr));
 }
+
+// A landing goes out only for a fall that started (0x00988490, 0x006eba60 ->
+// 0x0073d3d0): set down on a lift's car by a teleport, the mover never fell,
+// and its landing carried the last fall's time.
+TEST_CASE("A landing is sent only for a fall that started", "[entity][fall]") {
+    constexpr uint32_t kForward = 0x1, kOnTransport = 0x200, kFalling = 0x1000, kFallingFar = 0x2000;
+    CHECK(landingSent(kFalling));
+    CHECK(landingSent(kFalling | kForward | kOnTransport));
+    CHECK(landingSent(kFalling | kFallingFar));
+    CHECK_FALSE(landingSent(0));
+    CHECK_FALSE(landingSent(kOnTransport));
+    CHECK_FALSE(landingSent(kForward | kFallingFar));
+}

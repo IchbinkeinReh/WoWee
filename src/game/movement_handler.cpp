@@ -644,6 +644,23 @@ void MovementHandler::sendMovement(Opcode opcode) {
         return;
     }
 
+    // A landing that ends no fall is no landing (landingSent): put on a
+    // lift's car by a teleport, or arriving on a transport, the mover never
+    // started a fall, and the landing went out anyway with the last fall's
+    // time - which only a fall's start zeroes (+0x80, 0x00988370).
+    if (opcode == Opcode::MSG_MOVE_FALL_LAND && !landingSent(movementInfo.flags)) {
+        static const bool kFallDebug = [] {
+            const char* v = std::getenv("WOWEE_FLOOR_DEBUG");
+            return v && v[0] && v[0] != '0';
+        }();
+        if (kFallDebug) {
+            LOG_WARNING("FALL LAND: none sent - no fall started z=", movementInfo.z,
+                        " fallTime=", movementInfo.fallTime, " flags=0x", std::hex, movementInfo.flags,
+                        std::dec);
+        }
+        return;
+    }
+
     // Block manual movement while taxi is active/mounted, but always allow
     // stop/heartbeat opcodes so stuck states can be recovered.
     bool taxiAllowed =
