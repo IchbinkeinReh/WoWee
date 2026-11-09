@@ -395,3 +395,17 @@ TEST_CASE("walls hold a step back but never throw the body past it", "[movement]
     CHECK(held.y == from.y);
     CHECK(held.z == thrown.z);
 }
+
+TEST_CASE("a walk keeps to the ground as far down as its move reaches (0x007620f0)", "[movement_limits]") {
+    using namespace wowee::rendering::movement;
+    // Standing, or barely moving: the quarter yard.
+    CHECK(groundFollowReach(0.0f) == Catch::Approx(kGroundHoldBelow));
+    CHECK(groundFollowReach(0.1f) == Catch::Approx(kGroundHoldBelow));
+    // A run's step at 30 steps a second: 1.849399 times the move.
+    const float step = 7.0f / 30.0f;
+    CHECK(groundFollowReach(step) == Catch::Approx(1.849399f * step));
+    // Down an Undercity ramp (1.23 yd down per yard across) the feet keep to it;
+    // a half-yard ledge is still a fall.
+    CHECK(1.23f * step < groundFollowReach(step));
+    CHECK(0.5f > groundFollowReach(step));
+}

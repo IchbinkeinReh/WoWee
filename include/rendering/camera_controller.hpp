@@ -176,10 +176,17 @@ public:
     // silently built up over the whole ride would then unleash all at once the
     // instant the external Z lock releases at disembark, clipping the player
     // through the floor.
+    /// A rider standing still on a transport's deck: the deck places them,
+    /// and this frame's step does not move them across it (see rideHeld_).
+    void setRideHeld(bool held) { rideHeld_ = held; }
     void suppressVerticalPhysics() {
         verticalVelocity = 0.0f;
         grounded = true;
         deckHeld_ = true;
+        // Standing on the deck: no time in the air. Counted on through a
+        // ride, it read as a walk off a ledge minutes long the moment the
+        // transport let go at a map change - a fall of 89 s sent with FALLING.
+        airborneSeconds_ = 0.0f;
     }
     [[nodiscard]] bool isJumpKeyPressed() const { return jumpBufferTimer > 0.0f; }
     [[nodiscard]] float collisionHeight() const { return collisionHeight_; }
@@ -495,7 +502,12 @@ public:
     /// ones a lost seat change left behind are eased out over half a second,
     /// rather than turning the camera on foot.
     void releaseVehicleCameraOffsets();
-    void suppressMovementFor(float seconds) { movementSuppressTimer_ = seconds; }
+    void suppressMovementFor(float seconds) { movementSuppressTimer_ = jumpSuppressTimer_ = seconds; }
+    /// The held keys only: a jump pressed in the time is a jump. After a
+    /// teleport on the same map the client holds no input back - 0x006ecf80
+    /// -> 0x0098ba90 sets the place and clears the movement flags - and a
+    /// press is a press, where a key still held from before is not.
+    void suppressHeldMovementFor(float seconds) { movementSuppressTimer_ = seconds; }
     void suspendGravityFor(float seconds) { gravitySuspendTimer_ = seconds; }
 
     /// Where the server says the player is, on entering a world.
@@ -618,6 +630,13 @@ private:
     /// it (suppressVerticalPhysics): standing on a lift, however fast it runs
     /// down, which the fall checks here read as the floor dropping away.
     bool deckHeld_ = false;
+    /// Standing still on a transport's deck (setRideHeld). The client moves
+    /// a unit only while it moves (0x00762e00 runs for flags 0x40c0100f), so
+    /// nothing here shifts a rider who is not walking: the wall push-out and
+    /// the floor probes against the hull did, by up to half a yard for a
+    /// frame, until the deck placed them back - the rider, and the camera
+    /// with them, stepping to the side and back during the flight.
+    bool rideHeld_ = false;
     // The physics started a jump from the ground this frame: the jump packet
     // goes out for it whatever the ground reads by the time the packets do.
     bool jumpStarted_ = false;
@@ -1004,6 +1023,7 @@ private:
 
     // Movement input suppression (after teleport/portal, ignore held keys)
     float movementSuppressTimer_ = 0.0f;
+    float jumpSuppressTimer_ = 0.0f;
     // Gravity suspension (after world entry, hold Z until ground detected)
     float gravitySuspendTimer_ = 0.0f;
     float entryFloorAnchorZ_ = 0.0f;
@@ -1055,6 +1075,10 @@ private:
     /// range plays as a landing, so a mounted player crossing a field looked to
     /// everyone else like one landing over and over.
     float airborneSeconds_ = 0.0f;
+    /// How many physics steps this frame is split into (updateThirdPersonCamera):
+    /// the client moves a unit by the whole frame at once, and keeps it to the
+    /// ground by that whole move (groundFollowReach).
+    int physicsStepsThisFrame_ = 1;
     bool swimRising_ = false;
     bool swimDiving_ = false;
     bool wasAscending_ = false;   // Space held while flyingActive_

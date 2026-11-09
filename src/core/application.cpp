@@ -4378,6 +4378,15 @@ void Application::applyServerMovementState(float deltaTime) {
             if (!sameRideFrame && !tr->isM2) {
                 deckFloorPending_ = true;
             }
+            // Carried to another map on it: the hull flew on through the
+            // load, and the ground the camera remembers is where the transfer
+            // set the rider down, at the edge of the map. Its floor probe
+            // reached up from there and stood the rider on the top of the
+            // zeppelin's envelope, inside it. The rider is where the offset on
+            // the deck puts them now (0x004f4460), and the ground with them.
+            if (!tr->isM2 && gameHandler->takeTransportTransferArrival()) {
+                if (auto* cc = renderer->getCameraController()) cc->teleportTo(expectedRender);
+            }
             // The rider's facing is kept on the deck, not in the world: the
             // world one is the ship's plus it (0x004f42a0), so as the ship
             // turns, so does whoever is standing on it, and the camera behind.
@@ -4432,6 +4441,11 @@ void Application::applyServerMovementState(float deltaTime) {
             // walking up onto a higher deck just follows the collision. An upward
             // jump remains fully controlled by vertical physics (skipped below).
             auto* cameraController = renderer->getCameraController();
+            // Standing still on it: the deck alone places the rider.
+            if (cameraController) {
+                cameraController->setRideHeld(!tr->isM2 && !cameraController->isMoving() &&
+                                              cameraController->isGrounded());
+            }
             if (!tr->isM2 && cameraController &&
                 !cameraController->isJumping()) {
                 const glm::vec3 intendedCanonical =
@@ -4495,6 +4509,30 @@ void Application::applyServerMovementState(float deltaTime) {
                 *followTarget = renderPos;
             }
         }
+        {
+            // WOWEE_TRANSPORT_POSE: every tenth of a second on a transport,
+            // the hull, the rider (world and on the deck) and the camera.
+            static const bool kRideTrace = [] {
+                const char* v = std::getenv("WOWEE_TRANSPORT_POSE");
+                return v && v[0] && v[0] != '0';
+            }();
+            static auto lastRideLog = std::chrono::steady_clock::time_point{};
+            const auto nowRide = std::chrono::steady_clock::now();
+            if (kRideTrace && nowRide - lastRideLog >= std::chrono::milliseconds(100)) {
+                lastRideLog = nowRide;
+                const auto* trLog = gameHandler->getTransportManager()
+                    ? gameHandler->getTransportManager()->getTransport(gameHandler->getPlayerTransportGuid()) : nullptr;
+                const auto* camLog = renderer->getCamera();
+                const glm::vec3 off = gameHandler->getPlayerTransportOffset();
+                const glm::vec3 cp = camLog ? camLog->getPosition() : glm::vec3(0.0f);
+                const glm::vec3 cf = camLog ? camLog->getForward() : glm::vec3(0.0f);
+                LOG_WARNING("RIDE POSE: hull=(", trLog ? trLog->position.x : 0.0f, ", ", trLog ? trLog->position.y : 0.0f,
+                            ", ", trLog ? trLog->position.z : 0.0f, ") yaw=", trLog ? trLog->facing : 0.0f,
+                            " player=(", canonical.x, ", ", canonical.y, ", ", canonical.z, ") off=(", off.x, ", ",
+                            off.y, ", ", off.z, ") cam=(", cp.x, ", ", cp.y, ", ", cp.z, ") fwd=(", cf.x, ", ", cf.y,
+                            ", ", cf.z, ")");
+            }
+        }
         gameHandler->updateM2TransportBoarding(canonical);
     } else if (splineCarried) {
         // Where the spline has the player's own entity (0x0073c8e0), to its
@@ -4519,6 +4557,7 @@ void Application::applyServerMovementState(float deltaTime) {
                 *followTarget = renderPos;
         }
     } else {
+        if (auto* cc = renderer ? renderer->getCameraController() : nullptr) cc->setRideHeld(false);
         hasWMORideLock_ = false;
         lastWMORideTransportGuid_ = 0;
         lastWMORideMapId_ = 0xFFFFFFFFu;
@@ -4715,7 +4754,10 @@ void Application::applyServerMovementState(float deltaTime) {
         // a frame is no fall. Not on a transport, where the client does not
         // mark a passenger standing on it as falling and the server measured
         // a lift's whole descent as one.
-        if (playerFallsFar() && !gameHandler->isOnTransport() && !gameHandler->isOnTaxiFlight()) {
+        // Nor while a transport carries the player to another map: it is off
+        // the transport only until the transport is known there.
+        if (playerFallsFar() && !gameHandler->isOnTransport() && !gameHandler->isOnTaxiFlight() &&
+            !gameHandler->hasPendingPlayerTransportWorldTransfer()) {
             if (auto* mh = gameHandler->getMovementHandler()) {
                 const float airborne = renderer->getCameraController()->airborneSeconds();
                 mh->startFall(static_cast<uint32_t>(std::lround(airborne * 1000.0f)));
@@ -5540,7 +5582,15 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
             gameHandler->update(deltaTime);
         }
     });
-    if (addonManager_ && addonsLoaded_) {
+    // Not behind the loading screen. The client loads a world inside one
+    // call (0x00403b70 -> 0x00781430) whose progress callbacks (0x0040aef0,
+    // 0x0040af40 -> 0x0040a920) pump the sound and draw the loading screen
+    // and nothing else: no frame's OnUpdate runs until the screen is gone.
+    // The world settling behind it here (stepWorldSettle) ran them, and a
+    // script's timer ran out there - a jump it pressed went to a mover held
+    // still behind the screen, and neither the jump nor its MSG_MOVE_JUMP
+    // happened.
+    if (addonManager_ && addonsLoaded_ && !settleScreen_) {
         addonManager_->update(deltaTime);
     }
     inGameStep = "auto-unsheathe";
@@ -5901,6 +5951,31 @@ void Application::update(float deltaTime) {
             std::chrono::steady_clock::now() - rendererUpdateStart).count();
         if (ruMs > 50.0f) {
             LOG_WARNING("SLOW update stage 'renderer->update': ", ruMs, "ms");
+        }
+    }
+    {
+        // WOWEE_TRANSPORT_POSE: on a transport, every tenth of a second, the
+        // frame as it is drawn - the hull, the character and the camera, all
+        // placed for this frame.
+        static const bool kViewTrace = [] {
+            const char* v = std::getenv("WOWEE_TRANSPORT_POSE");
+            return v && v[0] && v[0] != '0';
+        }();
+        static auto lastViewLog = std::chrono::steady_clock::time_point{};
+        const auto nowView = std::chrono::steady_clock::now();
+        if (kViewTrace && renderer && gameHandler && gameHandler->isOnTransport() &&
+            nowView - lastViewLog >= std::chrono::milliseconds(100)) {
+            lastViewLog = nowView;
+            auto* tm = gameHandler->getTransportManager();
+            const auto* tr = tm ? tm->getTransport(gameHandler->getPlayerTransportGuid()) : nullptr;
+            const glm::vec3 hull = tr ? core::coords::canonicalToRender(tr->position) : glm::vec3(0.0f);
+            const glm::vec3 ch = renderer->getCharacterPosition();
+            const auto* cam = renderer->getCamera();
+            const glm::vec3 cp = cam ? cam->getPosition() : glm::vec3(0.0f);
+            const glm::vec3 cf = cam ? cam->getForward() : glm::vec3(0.0f);
+            LOG_WARNING("RIDE VIEW: hull=(", hull.x, ", ", hull.y, ", ", hull.z, ") yaw=", tr ? tr->facing : 0.0f,
+                        " char=(", ch.x, ", ", ch.y, ", ", ch.z, ") cam=(", cp.x, ", ", cp.y, ", ", cp.z,
+                        ") fwd=(", cf.x, ", ", cf.y, ", ", cf.z, ")");
         }
     }
     // Update UI

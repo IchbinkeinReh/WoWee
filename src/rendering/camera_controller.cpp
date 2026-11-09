@@ -2126,8 +2126,15 @@ void CameraController::groundFollowedCharacter(float deltaTime, FrameInput& f,
             // Not while climbing in flight: a frame's climb at a high frame
             // rate is less than the quarter yard this reaches down, so taking
             // off was pulled back to the ground every frame and never left it.
+            // As far down as the frame's move reaches (groundFollowReach,
+            // 0x007620f0): the client moves by the whole frame at once, and
+            // this frame is split into equal steps.
+            const float movedAcross = glm::length(glm::vec2(targetPos.x - prevTargetPos.x,
+                                                            targetPos.y - prevTargetPos.y)) *
+                                      static_cast<float>(physicsStepsThisFrame_);
             bool slopeGrace = (grounded && verticalVelocity > -1.0f &&
-                               dz >= -0.25f && dz <= stepUp * 1.5f) &&
+                               dz >= -movement::groundFollowReach(movedAcross) &&
+                               dz <= stepUp * 1.5f) &&
                               !(isFlightAirborne() && f.spaceHeld);
 
             if (dz >= -fallCatch && (nearGround || airFalling || slopeGrace)) {
@@ -2783,6 +2790,7 @@ void CameraController::updateThirdPersonCamera(float deltaTime, FrameInput& f) {
         steps = std::max(steps, 1);
     }
     const float stepTime = deltaTime / static_cast<float>(steps);
+    physicsStepsThisFrame_ = steps;
 
     // Each step starts from this frame's input, as the next frame would:
     // moving overwrites f.movement and f.speed (the jump's held takeoff
@@ -2804,6 +2812,12 @@ void CameraController::updateThirdPersonCamera(float deltaTime, FrameInput& f) {
         targetPos = moveFollowedCharacter(stepTime, f, prevTargetPos);
         const glm::vec3 stepMoved = targetPos;
         groundFollowedCharacter(stepTime, f, targetPos, prevTargetPos);
+        if (rideHeld_ && !f.nowJump) {
+            targetPos.x = stepStart.x;
+            targetPos.y = stepStart.y;
+            followTarget->x = stepStart.x;
+            followTarget->y = stepStart.y;
+        }
         // WOWEE_FLOOR_DEBUG: a step that carried the character further across
         // than its speed allows, and which stage did it.
         {
@@ -3275,6 +3289,8 @@ void CameraController::update(float deltaTime) {
         movementSuppressTimer_ -= deltaTime;
     }
     bool movementSuppressed = movementSuppressTimer_ > 0.0f;
+    if (jumpSuppressTimer_ > 0.0f) jumpSuppressTimer_ -= deltaTime;
+    const bool jumpSuppressed = jumpSuppressTimer_ > 0.0f;
 
     // Determine current key states
     // Arrow keys mirror WASD the way the original client maps them:
@@ -3294,7 +3310,7 @@ void CameraController::update(float deltaTime) {
     bool ctrlDown = !useWoWSpeed && !uiWantsKeyboard &&
                     (input.isKeyPressed(SDL_SCANCODE_LCTRL) || input.isKeyPressed(SDL_SCANCODE_RCTRL));
     // JumpOrAscendStart() presses it once, as the key does.
-    bool nowJump = !uiWantsKeyboard && !sitting && !movementSuppressed &&
+    bool nowJump = !uiWantsKeyboard && !sitting && !jumpSuppressed &&
                    (input.isKeyJustPressed(SDL_SCANCODE_SPACE) || bindingJump_);
     bindingJump_ = false;
     // Swimming and flying need the held state, not the press edge: on land

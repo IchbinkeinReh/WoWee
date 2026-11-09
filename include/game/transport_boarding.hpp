@@ -14,6 +14,7 @@
 // nothing.
 
 #include <cstdint>
+#include <vector>
 #include <glm/glm.hpp>
 
 namespace wowee::game::transport_boarding {
@@ -53,6 +54,17 @@ inline bool insideCollisionBox(const glm::vec3& localWire, const glm::vec3& boxM
     constexpr float kHeadroom = 1.6404123f + 0.013888889f;
     return localWire.x <= boxMax.x && localWire.y <= boxMax.y && localWire.z <= boxMax.z + kHeadroom &&
            localWire.x >= boxMin.x && localWire.y >= boxMin.y && localWire.z >= boxMin.z;
+}
+
+// 0x007aea10 for a WMO transport (0x0077ffb0 with the model's flag 0x8):
+// the mover's place in the model's own space within the convex volume its
+// root's MCVP planes bound - on no plane's outer side (normal . p + d > 0
+// is outside). A model with no planes holds everyone.
+inline bool insideConvexVolume(const glm::vec3& local, const std::vector<glm::vec4>& planes) {
+    for (const glm::vec4& plane : planes) {
+        if (plane.x * local.x + plane.z * local.z + plane.y * local.y + plane.w > 0.0f) return false;
+    }
+    return true;
 }
 
 }  // namespace wowee::game::transport_boarding
