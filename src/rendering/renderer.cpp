@@ -3523,6 +3523,19 @@ void Renderer::runDeferredWorldInitStep(float deltaTime) {
 
 void Renderer::loadDeferredWorldTextures() {
     if (skySystem) skySystem->loadTextures(cachedAssetManager);
+    // The swim effects keep the render pass they draw into as a bare handle,
+    // set when they were last told (syncSwimEffectsTargetPass). That pass is
+    // the scene continuation or ImGui pass of the context, or the water's
+    // single-sampled one, and a swapchain rebuild destroys the context's
+    // passes and makes new ones. The loading screen rebuilds the swapchain
+    // whenever it finds it dirty (a resize, a capture hook hiding the window
+    // for a moment), and the world loader's warm-up keeps calling update(),
+    // which reaches this step, without a beginFrame in between to hand the
+    // spray the new pass. The ripple pipeline was then built against a
+    // destroyed VkRenderPass, and the driver faulted inside
+    // vkCreateGraphicsPipelines: two world entries in ten on 2026-11-08.
+    // Asked again here, as beginFrame asks, so the build gets a live pass.
+    refreshSwimEffectsPass();
     if (swimEffects) swimEffects->loadRippleTextures(cachedAssetManager);
     if (footprintRenderer && !footprintRenderer->initialize(this, vkCtx, perFrameSetLayout, cachedAssetManager))
         LOG_WARNING("Footprint renderer re-init failed (non-fatal)");
