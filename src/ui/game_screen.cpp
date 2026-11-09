@@ -2423,13 +2423,14 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                 float screenH = static_cast<float>(window->getHeight());
                 rendering::Ray ray = camera->screenToWorldRay(mousePos.x, mousePos.y, screenW, screenH);
                 // The right-click picker wants a slightly taller, tighter fallback
-                // sphere than the target picker, and must ignore chairs: their wide
-                // sphere is easy to catch while right-drag-rotating the camera, which
-                // sits the player down.
+                // sphere than the target picker. A chair under the cursor is used
+                // like any object - the client sits the player on a bench or a
+                // chair right-clicked (CMSG_GAMEOBJ_USE; the server picks the
+                // seat, turns and seats them). A right-drag that turns the
+                // camera is no click (above), so it sits nobody down.
                 ui::ScenePickParams params;
                 params.unitHitRadius = 1.5f;
                 params.unitHeightOffset = 1.5f;
-                params.skipChairs = true;
 
                 float closestQuestGoT = 1e30f;
                 uint64_t closestQuestGoGuid = 0;

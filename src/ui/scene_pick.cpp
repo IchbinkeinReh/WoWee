@@ -24,8 +24,6 @@ constexpr float kMaxGameObjectPickRadius = 3.0f;
 /// scenery beside the player does not stand in front of what is being aimed
 /// at, large enough that a small object is not a pixel hunt.
 constexpr float kMinGameObjectPickRadius = 0.6f;
-/// GAMEOBJECT_TYPE_CHAIR.
-constexpr uint32_t kGoTypeChair = 7;
 
 bool isDeadUnit(const std::shared_ptr<game::Entity>& entity) {
     auto unit = std::dynamic_pointer_cast<game::Unit>(entity);
@@ -113,7 +111,6 @@ ScenePick pickScene(game::GameHandler& gameHandler,
         if (type == game::ObjectType::GAMEOBJECT) {
             auto go = std::static_pointer_cast<game::GameObject>(entity);
             goInfo = gameHandler.getCachedGameObjectInfo(go->getEntry());
-            if (params.skipChairs && goInfo && goInfo->type == kGoTypeChair) continue;
             // The client finds an object only on the triangles its model
             // draws (0x004f9550, 0x0081daf0), so a model that draws none is
             // never under the pointer, whatever its type would allow.

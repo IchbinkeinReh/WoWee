@@ -29,6 +29,11 @@
 #include "game/interface_text.hpp"
 #include "game/item_stat_text.hpp"
 #include "rendering/minimap_zoom.hpp"
+#include "core/application.hpp"
+#include "core/coordinates.hpp"
+#include "rendering/renderer.hpp"
+#include "rendering/camera.hpp"
+#include "game/entity.hpp"
 #include <cmath>
 #include "addons/lua_handler_globals.hpp"
 #include "addons/lua_taint.hpp"
@@ -7464,6 +7469,76 @@ void LuaEngine::registerCoreAPI() {
             return 0;
         });
         lua_setglobal(L_, "__WoweeTestFrameShot");
+        // __WoweeTestScreenPosOf(entry[, lift]): where on the screen the
+        // nearest game object of that entry stands, `lift` yards over its
+        // base (half a yard by default): x and y in window pixels, and its
+        // distance. Nothing when there is none or it is behind the camera.
+        lua_pushcfunction(L_, [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            auto& app = core::Application::getInstance();
+            auto* renderer = app.getRenderer();
+            auto* camera = renderer ? renderer->getCamera() : nullptr;
+            auto* window = app.getWindow();
+            if (!gh || !camera || !window) return 0;
+            const lua_Integer entry = luaL_checkinteger(L, 1);
+            const float lift = static_cast<float>(luaL_optnumber(L, 2, 0.5));
+            const auto& mi = gh->getMovementInfo();
+            const glm::vec3 me(mi.x, mi.y, mi.z);
+            std::shared_ptr<game::Entity> best;
+            float bestD = FLT_MAX;
+            for (const auto& [guid, e] : gh->getEntityManager().getEntities()) {
+                if (!e || e->getType() != game::ObjectType::GAMEOBJECT) continue;
+                if (static_cast<lua_Integer>(std::static_pointer_cast<game::GameObject>(e)->getEntry()) != entry) continue;
+                const float d = glm::length(glm::vec3(e->getX(), e->getY(), e->getZ()) - me);
+                if (d < bestD) { bestD = d; best = e; }
+            }
+            if (!best) return 0;
+            const glm::vec3 at = core::coords::canonicalToRender(
+                glm::vec3(best->getX(), best->getY(), best->getZ() + lift));
+            const glm::vec4 clip = camera->getViewProjectionMatrix() * glm::vec4(at, 1.0f);
+            if (clip.w <= 0.0f) return 0;
+            const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+            lua_pushnumber(L, (ndc.x + 1.0f) * 0.5f * static_cast<float>(window->getWidth()));
+            lua_pushnumber(L, (ndc.y + 1.0f) * 0.5f * static_cast<float>(window->getHeight()));
+            lua_pushnumber(L, bestD);
+            return 3;
+        });
+        lua_setglobal(L_, "__WoweeTestScreenPosOf");
+        // __WoweeTestMouse(x, y, button, down): the pointer moved to (x, y)
+        // in window pixels and a button (1 left, 3 right) pressed or let go,
+        // through SDL's event queue as a mouse would.
+        lua_pushcfunction(L_, [](lua_State* L) -> int {
+            const float x = static_cast<float>(luaL_checknumber(L, 1));
+            const float y = static_cast<float>(luaL_checknumber(L, 2));
+            const int button = static_cast<int>(luaL_checkinteger(L, 3));
+            const bool down = lua_toboolean(L, 4) != 0;
+            SDL_Window* w = SDL_GetKeyboardFocus();
+            if (!w) {
+                int count = 0;
+                if (SDL_Window** all = SDL_GetWindows(&count)) {
+                    if (count > 0) w = all[0];
+                    SDL_free(all);
+                }
+            }
+            const SDL_WindowID id = w ? SDL_GetWindowID(w) : 0;
+            SDL_Event m{};
+            m.type = SDL_EVENT_MOUSE_MOTION;
+            m.motion.windowID = id;
+            m.motion.x = x;
+            m.motion.y = y;
+            SDL_PushEvent(&m);
+            SDL_Event b{};
+            b.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+            b.button.windowID = id;
+            b.button.button = static_cast<Uint8>(button);
+            b.button.down = down;
+            b.button.clicks = 1;
+            b.button.x = x;
+            b.button.y = y;
+            SDL_PushEvent(&b);
+            return 0;
+        });
+        lua_setglobal(L_, "__WoweeTestMouse");
     }
 
     // The micro menu's game-menu button reaches this client's own settings.
