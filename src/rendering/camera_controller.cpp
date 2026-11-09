@@ -1044,15 +1044,18 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
         // a beam that is a model rather than part of the building: the
         // camera's trace flags (0x100171) take bit 0x1, which walks each map
         // chunk's doodads and keeps every one whose model has collision
-        // (0x007a2760 on the model's +0x10 bit 1). Their triangles, as the
-        // world has them, gathered once for the frame around the lines below.
+        // (0x007a2760 on the model's +0x10 bit 1) - and its 0x100000 keeps a
+        // game object's model with collision as well (the same walk, for a
+        // doodad with an object's GUID at +0xb8): a bench, a crate, a door.
+        // Their triangles, as the world has them, gathered once for the frame
+        // around the lines below.
         static thread_local std::vector<glm::vec3> doodadTris;
         doodadTris.clear();
         if (m2Renderer) {
             const glm::vec3 tip = pivot + camDir * probeDistance;
             const glm::vec3 pad(1.5f);
             m2Renderer->gatherCollisionTriangles(glm::min(pivot, tip) - pad, glm::max(pivot, tip) + pad,
-                                                 doodadTris);
+                                                 doodadTris, false, /*includeGameObjects=*/true);
         }
         auto doodadHit = [&](const glm::vec3& from, const glm::vec3& dir, float reach) -> float {
             float nearest = reach;
@@ -1199,6 +1202,34 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
 
     // Use collision distance (don't exceed user target)
     float actualDist = std::min(currentDistance, collisionDistance);
+
+    // WOWEE_CAMCOL_DIAG: once a second, what the camera's line from the pivot
+    // meets, unfiltered, beside the distance the collision gave.
+    static const bool kCamColDiag = std::getenv("WOWEE_CAMCOL_DIAG") != nullptr;
+    if (kCamColDiag) {
+        static float diagT = 0.0f;
+        diagT += deltaTime;
+        if (diagT >= 1.0f) {
+            diagT = 0.0f;
+            const float reach = std::max(currentDistance, 1.0f) + 1.0f;
+            LOG_WARNING("CAMCOL pivot=(", pivot.x, ", ", pivot.y, ", ", pivot.z, ") dir=(", camDir.x, ", ", camDir.y,
+                        ", ", camDir.z, ") cur=", currentDistance, " probe=", probeDistance, " coll=", collisionDistance,
+                        " actual=", actualDist, " interior=", cachedInsideInteriorWMO ? 1 : 0, " near=",
+                        camera ? camera->getNearPlane() : -1.0f);
+            if (wmoRenderer) LOG_WARNING("CAMCOL wmo ", wmoRenderer->describeRay(pivot, camDir, reach));
+            if (m2Renderer) LOG_WARNING("CAMCOL m2 ", m2Renderer->describeRay(pivot, camDir, std::max(actualDist, 0.1f)));
+            if (wmoRenderer) {
+                const glm::vec3 eye = pivot + camDir * actualDist;
+                if (auto fog = wmoRenderer->interiorFogAt(eye)) {
+                    LOG_WARNING("CAMCOL fog end=", fog->end, " startScalar=", fog->startScalar, " color=(",
+                                fog->color.r, ", ", fog->color.g, ", ", fog->color.b, ") inside=", fog->distanceInside,
+                                " flags=0x", std::hex, fog->flags, std::dec);
+                } else {
+                    LOG_WARNING("CAMCOL fog none");
+                }
+            }
+        }
+    }
 
     // Compute actual camera position
     glm::vec3 actualCam;

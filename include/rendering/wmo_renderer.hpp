@@ -619,6 +619,9 @@ public:
      */
     float raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3& direction, float maxDistance,
                                bool ignoreCollisionFocus = false, uint32_t* hitInstanceId = nullptr) const;
+    /// WOWEE_CAMCOL_DIAG: every building face the segment crosses, nearest
+    /// first, unfiltered, as "dist:wmoId/group/MOPY/mat/texture".
+    [[nodiscard]] std::string describeRay(const glm::vec3& origin, const glm::vec3& direction, float maxDistance) const;
 
     /**
      * Limit expensive collision/raycast queries to objects near a focus point.
