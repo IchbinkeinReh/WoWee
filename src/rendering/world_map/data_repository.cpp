@@ -89,6 +89,17 @@ void DataRepository::loadZones(const std::string& mapName,
         }
     }
 
+    // DungeonMapChunk: ID, MapID, WMOGroupID (MOGP's group id),
+    // DungeonMapID, MinZ - in the file's order, which 0x005439e0 keeps.
+    dungeonChunks_.clear();
+    if (auto chunks = assetManager.loadDBC("DungeonMapChunk.dbc"); chunks && chunks->isLoaded() &&
+        chunks->getFieldCount() >= 5) {
+        for (uint32_t i = 0; i < chunks->getRecordCount(); ++i) {
+            dungeonChunks_.push_back({chunks->getUInt32(i, 1), chunks->getUInt32(i, 2),
+                                      chunks->getInt32(i, 3), chunks->getFloat(i, 4)});
+        }
+    }
+
     // Physical-map regions that the UI presents on another continent. In
     // particular, Azuremyst/Bloodmyst use map 530 terrain but are projected
     // onto Kalimdor (map 1) with a +10133.333/+17600 coordinate offset.
@@ -433,6 +444,25 @@ void DataRepository::loadZones(const std::string& mapName,
     // Build views based on active expansion
     buildCosmicView();
     buildAzerothView(assetManager);
+}
+
+int DataRepository::dungeonMapForChunk(uint32_t mapId, uint32_t wmoId, float z) const {
+    int found = -1;
+    bool inMap = false, inBuilding = false;
+    for (const DungeonChunk& c : dungeonChunks_) {
+        if (c.mapId != mapId) {
+            if (inMap) break;      // past the map's run of rows
+            continue;
+        }
+        inMap = true;
+        if (c.wmoId != wmoId) {
+            if (inBuilding) break; // past the building's run
+            continue;
+        }
+        inBuilding = true;
+        if (c.minZ <= z) found = c.dungeonMap;
+    }
+    return found;
 }
 
 glm::vec3 DataRepository::transformRenderPosition(

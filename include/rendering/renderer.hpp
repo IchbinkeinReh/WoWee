@@ -246,6 +246,7 @@ public:
     SkySystem* getSkySystem() const { return skySystem.get(); }
     const std::string& getCurrentZoneName() const;
     uint32_t getCurrentZoneId() const;
+    uint32_t getPlayerAreaWmoId() const { return playerAreaWmoId_; }
     /// The area under the player, asked of AreaTable rather than resolved to a
     /// zone first - the world PvP flag is on the subzone. See ZoneManager.
     bool isOnOutdoorPvpObjective() const;
@@ -1308,6 +1309,9 @@ private:
     /// first of them (0x00782560, none where it names none), and the texts.
     std::vector<minimap_indoor::GroupRef> playerLinks_;
     uint32_t playerLinkedArea_ = 0;
+    /// The WMO group id (MOGP's, WMOAreaTable's WMOGroupID) the area ray under
+    /// the player met (0x00bd080c as SetMapToCurrentZone reads it), 0 outdoors.
+    uint32_t playerAreaWmoId_ = 0;
     /// Where the ambience is for (0x0078f020), none until first known.
     std::optional<audio::zone_ambience::Place> ambiencePlace_;
     /// The liquid the camera is in for the ambience (0x00780620), 0 for none.

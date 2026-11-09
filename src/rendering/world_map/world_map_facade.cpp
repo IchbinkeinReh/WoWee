@@ -142,6 +142,7 @@ struct WorldMapFacade::Impl {
     // default back in its place - which is why it is keyed by the area id and
     // reset on the ask rather than from each navigation path.
     int dungeonLevelRowId = -1;
+    uint32_t playerWmoId = 0;
     uint32_t dungeonLevelAreaId = 0;
 
     DataRepository data;
@@ -602,6 +603,19 @@ void WorldMapFacade::render(const glm::vec3& playerRenderPos,
             // own, which is all there is to show.
             d.showIndex(playerZone, ViewLevel::ZONE);
         }
+        // The floor the player is on (0x00547170 -> 0x005439e0): the building
+        // they stand in and their height pick the DungeonMap row. Where no
+        // row answers, the area's own default stands.
+        if (!d.taxiMode && d.playerWmoId != 0 && playerZone >= 0 &&
+            playerZone < static_cast<int>(d.data.zones().size()) &&
+            d.viewState.currentLevel() == ViewLevel::ZONE && d.viewState.currentZoneIdx() == playerZone) {
+            const Zone& z = d.data.zones()[static_cast<size_t>(playerZone)];
+            const int row = d.data.dungeonMapForChunk(z.mapID, d.playerWmoId, displayPlayerRenderPos.z);
+            if (row > 0) {
+                d.dungeonLevelAreaId = z.wmaID;
+                d.dungeonLevelRowId = row;
+            }
+        }
         // The view has only now become the player's zone, and the interface
         // asked before it did.
         //
@@ -1047,6 +1061,8 @@ std::vector<WorldMapFacade::Landmark> WorldMapFacade::currentLandmarks() const {
     }
     return out;
 }
+
+void WorldMapFacade::setPlayerWmoId(uint32_t wmoId) { impl_->playerWmoId = wmoId; }
 
 void WorldMapFacade::setPlayerZoneId(uint32_t zoneId) {
     impl_->playerZoneId = zoneId;

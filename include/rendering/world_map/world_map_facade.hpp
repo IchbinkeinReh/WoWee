@@ -44,6 +44,9 @@ public:
     /// The zone the server says the player is in. Used in preference to working
     /// it out from map geometry, which can only guess between overlapping zones.
     void setPlayerZoneId(uint32_t zoneId);
+    /// The WMO group the player stands in (MOGP's group id, 0 outdoors), which
+    /// with the height picks the floor the map opens on (DungeonMapChunk).
+    void setPlayerWmoId(uint32_t wmoId);
     void setPartyDots(std::vector<PartyDot> dots);
     void setTaxiNodes(std::vector<TaxiNode> nodes);
     void setQuestPois(std::vector<QuestPOI> pois);

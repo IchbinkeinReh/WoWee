@@ -259,6 +259,7 @@ void GameScreen::feedWorldMap(game::GameHandler& gameHandler,
     // and the map opened on the zone the player had just walked out of.
     const uint32_t liveZone = renderer->getCurrentZoneId();
     wm->setPlayerZoneId(liveZone != 0 ? liveZone : gameHandler.getWorldStateZoneId());
+    wm->setPlayerWmoId(renderer->getPlayerAreaWmoId());
 
     // Party member dots on world map
     {

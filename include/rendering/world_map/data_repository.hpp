@@ -83,6 +83,10 @@ public:
         float x = 0.0f, y = 0.0f;
     };
     [[nodiscard]] const Entrance& entrance() const { return entrance_; }
+    /// 0x005439e0: the DungeonMap row a map's building gives a height - of
+    /// the DungeonMapChunk rows for the map and the WMO group id, the last whose MinZ
+    /// the height reaches - or -1 for none.
+    [[nodiscard]] int dungeonMapForChunk(uint32_t mapId, uint32_t wmoId, float z) const;
 
 private:
     struct MapTransform {
@@ -94,6 +98,8 @@ private:
 
     std::vector<Zone> zones_;
     std::vector<MapTransform> mapTransforms_;
+    struct DungeonChunk { uint32_t mapId = 0, wmoId = 0; int32_t dungeonMap = 0; float minZ = 0.0f; };
+    std::vector<DungeonChunk> dungeonChunks_;
     std::vector<POI> poiMarkers_;
     std::vector<CosmicMapEntry> cosmicMaps_;
     std::vector<CosmicMapEntry> azerothRegions_;

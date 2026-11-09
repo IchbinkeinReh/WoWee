@@ -2568,10 +2568,12 @@ void Renderer::updatePlayerArea() {
     uint32_t wmoArea = 0;
     const float nameStartZ = feet.z + 0.33f;
     const float nameEndZ = feet.z - 1760.0f;
+    playerAreaWmoId_ = 0;
     if (wmoRenderer) {
         if (const auto hit = wmoRenderer->areaGroupAlong(glm::vec3(feet.x, feet.y, nameStartZ), nameEndZ)) {
             wmoDist = hit->dist;
             if (const auto g = wmoRenderer->groupArea(hit->ref)) {
+                playerAreaWmoId_ = static_cast<uint32_t>(g->areaGroupId);
                 if (const auto* row = mi::areaRow(rows, g->wmoId, g->nameSet, g->areaGroupId)) wmoArea = row->areaId;
             }
         }
