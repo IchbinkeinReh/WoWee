@@ -427,7 +427,7 @@ void DataRepository::loadZones(const std::string& mapName,
 
     // Build views based on active expansion
     buildCosmicView();
-    buildAzerothView();
+    buildAzerothView(assetManager);
 }
 
 glm::vec3 DataRepository::transformRenderPosition(
@@ -676,34 +676,43 @@ void DataRepository::buildCosmicView(int /*expLevel*/) {
     LOG_INFO("DataRepository: cosmic view built with ", cosmicMaps_.size(), " landmasses");
 }
 
-void DataRepository::buildAzerothView(int /*expLevel*/) {
+void DataRepository::buildAzerothView(pipeline::AssetManager& assetManager) {
     azerothRegions_.clear();
 
-    // Clickable continent regions on the Azeroth world map (azeroth1-12.blp).
-    // UV coordinates are approximate positions of each landmass on the combined map.
-
-    // Eastern Kingdoms - right side of the Azeroth map
-    // Measured off the world map art rather than rounded to a twentieth. Eastern
-    // Kingdoms began at 0.55 - the middle of the ocean, overlapping Northrend's
-    // box - so pointing at Northrend's eastern half highlighted the wrong
-    // continent, and whichever was listed first won.
-    azerothRegions_.push_back({.mapId = 0, .label = mapDisplayName(0),
-                               .uvLeft = 0.700f, .uvTop = 0.155f,
-                               .uvRight = 0.960f, .uvBottom = 0.915f});
-
-    // Kalimdor - left side of the Azeroth map
-    azerothRegions_.push_back({.mapId = 1, .label = mapDisplayName(1),
-                               .uvLeft = 0.085f, .uvTop = 0.185f,
-                               .uvRight = 0.355f, .uvBottom = 0.935f});
-
-    if (game::isActiveExpansion("wotlk")) {
-        // WotLK: Northrend - top-center of the Azeroth map
-        // Its western tip and Kalimdor's eastern islands are a whisker apart,
-        // so the two boxes are parted over open sea where neither is being
-        // pointed at.
-        azerothRegions_.push_back({.mapId = 571, .label = mapDisplayName(571),
-                                   .uvLeft = 0.365f, .uvTop = 0.020f,
-                                   .uvRight = 0.690f, .uvBottom = 0.310f});
+    // The continents on the Azeroth map are where WorldMapContinent puts them
+    // (0x00547eb0): each row's grid bounds (Left, Right, Top, Bottom, +8..+0x14)
+    // scaled by its Scale (+0x20) and moved by its ContinentOffset (+0x18,
+    // +0x1c), in the 1002x668 map frame:
+    //   x = ((31.3125 - 32*scale) + offsetX + col*scale) / 62.625
+    //   y = ((20.875  - 32*scale) + offsetY + row*scale) / 41.75
+    // with the right and bottom edges one cell past. A row whose column 13 is
+    // clear (Outland's) is not on this map, and the first rectangle holding the
+    // point is the one picked (0x00544420), in WorldMapArea's order.
+    auto wmc = assetManager.loadDBC("WorldMapContinent.dbc");
+    auto wma = assetManager.loadDBC("WorldMapArea.dbc");
+    if (!wmc || !wmc->isLoaded() || wmc->getFieldCount() < 14 || !wma || !wma->isLoaded()) {
+        LOG_WARNING("DataRepository: WorldMapContinent.dbc missing - no continents on the Azeroth map");
+        return;
+    }
+    for (uint32_t i = 0; i < wma->getRecordCount(); ++i) {
+        if (wma->getUInt32(i, 2) != 0) continue;   // a continent's own row: AreaID 0
+        const int mapId = static_cast<int>(wma->getUInt32(i, 1));
+        for (uint32_t r = 0; r < wmc->getRecordCount(); ++r) {
+            if (static_cast<int>(wmc->getUInt32(r, 1)) != mapId) continue;
+            if (wmc->getUInt32(r, 13) == 0) break;
+            const float scale = wmc->getFloat(r, 8);
+            const float fx = ((31.3125f - scale * 32.0f) + wmc->getFloat(r, 6)) / 62.625f;
+            const float fy = ((20.875f - scale * 32.0f) + wmc->getFloat(r, 7)) / 41.75f;
+            CosmicMapEntry e;
+            e.mapId = mapId;
+            e.label = mapDisplayName(static_cast<uint32_t>(mapId));
+            e.uvLeft = static_cast<float>(wmc->getInt32(r, 2)) * scale / 62.625f + fx;
+            e.uvRight = static_cast<float>(wmc->getInt32(r, 3) + 1) * scale / 62.625f + fx;
+            e.uvTop = static_cast<float>(wmc->getInt32(r, 4)) * scale / 41.75f + fy;
+            e.uvBottom = static_cast<float>(wmc->getInt32(r, 5) + 1) * scale / 41.75f + fy;
+            azerothRegions_.push_back(std::move(e));
+            break;
+        }
     }
 
     LOG_INFO("DataRepository: Azeroth view built with ", azerothRegions_.size(), " continent regions");

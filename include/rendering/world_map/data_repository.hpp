@@ -27,7 +27,7 @@ public:
     void buildCosmicView(int expansionLevel = 0);
 
     /// Build Azeroth world-view continent regions for the active expansion.
-    void buildAzerothView(int expansionLevel = 0);
+    void buildAzerothView(pipeline::AssetManager& assetManager);
 
     /// Load ZMP pixel map for the given continent name (e.g. "Azeroth").
     /// The ZMP is a 128x128 grid of uint32 AreaTable IDs.

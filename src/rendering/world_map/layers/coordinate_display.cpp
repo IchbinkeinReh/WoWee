@@ -11,6 +11,9 @@ namespace rendering {
 namespace world_map {
 
 void CoordinateDisplay::render(const LayerContext& ctx) {
+    // The client's world map has no cursor coordinates; this client's own map
+    // window keeps them.
+    if (ctx.hostedInFrame) return;
     const auto projection = currentProjection(ctx);
     if (!projection) return;
 

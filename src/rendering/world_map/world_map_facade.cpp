@@ -807,6 +807,29 @@ int WorldMapFacade::zoneAtMapPoint(float u, float v) const {
 }
 
 std::string WorldMapFacade::zoneNameAtMapPoint(float u, float v) const {
+    // A zone map names the explored part of it under the point (0x00545110's
+    // first branch): the first explored WorldMapOverlay whose HitRect, in the
+    // 1002x668 map frame, holds the point - in the file's order - by its first
+    // area's name.
+    if (impl_->viewState.currentLevel() == ViewLevel::ZONE) {
+        const int zi = impl_->viewState.currentZoneIdx();
+        const auto& zones = impl_->data.zones();
+        if (zi < 0 || zi >= static_cast<int>(zones.size()) || u < 0.0f || v < 0.0f) return {};
+        const float px = u * 1002.0f, py = v * 668.0f;
+        const auto& explored = impl_->exploration.exploredOverlays();
+        const auto& names = impl_->data.areaNameByAreaId();
+        const auto& overlays = zones[static_cast<size_t>(zi)].overlays;
+        for (int oi = 0; oi < static_cast<int>(overlays.size()); ++oi) {
+            const auto& ov = overlays[static_cast<size_t>(oi)];
+            if (!explored.count(oi)) continue;
+            if (ov.hitRectRight <= ov.hitRectLeft || ov.hitRectBottom <= ov.hitRectTop) continue;
+            if (px < ov.hitRectLeft || px > ov.hitRectRight || py < ov.hitRectTop || py > ov.hitRectBottom)
+                continue;
+            auto it = names.find(ov.areaIDs[0]);
+            return it != names.end() ? it->second : std::string();
+        }
+        return {};
+    }
     const int idx = zoneAtMapPoint(u, v);
     const auto& zones = impl_->data.zones();
     if (idx < 0 || idx >= static_cast<int>(zones.size())) return {};
@@ -1206,6 +1229,7 @@ void WorldMapFacade::Impl::renderImGuiOverlay(const glm::vec3& playerRenderPos,
         layerCtx.exploredZones = &exploration.exploredZones();
         layerCtx.exploredOverlays = &exploration.exploredOverlays();
         layerCtx.areaNameByAreaId = &data.areaNameByAreaId();
+        layerCtx.hostedInFrame = hasFrameRect;
         layerCtx.fboW = CompositeRenderer::FBO_W;
         layerCtx.fboH = CompositeRenderer::FBO_H;
 
