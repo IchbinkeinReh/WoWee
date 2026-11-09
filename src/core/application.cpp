@@ -4615,8 +4615,16 @@ void Application::applyServerMovementState(float deltaTime) {
                     // walking animation) so gravity noise while stationary is ignored
                     // instead of accumulated; only apply the delta when the player is
                     // actually pressing a movement key.
+                    //
+                    // The camera's own locomotion this frame counts as well as
+                    // the keys: for two seconds after a teleport the keys are
+                    // let go every frame (the world-entry grace) while the
+                    // camera still walks the character on them, and a walk on
+                    // a lift's car then went nowhere - the car held its rider
+                    // at the middle while the character ran on the spot.
                     const bool hasMovementInput = renderer->getCameraController() &&
-                        renderer->getCameraController()->isMoving();
+                        (renderer->getCameraController()->isMoving() ||
+                         renderer->getCameraController()->getLocomotionSpeed() > 0.0f);
                     if (hasMovementInput) {
                         riderCanonical.x += walkDelta.x;
                         riderCanonical.y += walkDelta.y;
