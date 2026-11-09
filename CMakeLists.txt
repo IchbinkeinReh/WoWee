@@ -751,6 +751,7 @@ set(WOWEE_SOURCES
     src/game/quest_poi_blobs.cpp
     src/game/gem_conditions.cpp
     src/game/chat_language.cpp
+    src/game/chat_profanity.cpp
     src/game/game_handler_object_use.cpp
     src/game/macro_eval.cpp
     src/game/macro_options.cpp

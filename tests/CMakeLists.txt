@@ -2252,6 +2252,17 @@ target_link_libraries(test_cast_checks PRIVATE catch2_main)
 add_test(NAME cast_checks COMMAND test_cast_checks)
 register_test_target(test_cast_checks)
 
+# ── test_chat_profanity ─────────────────────────────────────
+add_executable(test_chat_profanity
+    test_chat_profanity.cpp
+    ${CMAKE_SOURCE_DIR}/src/game/chat_profanity.cpp
+)
+target_include_directories(test_chat_profanity PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_chat_profanity SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_chat_profanity PRIVATE catch2_main)
+add_test(NAME chat_profanity COMMAND test_chat_profanity)
+register_test_target(test_chat_profanity)
+
 # ── test_chat_language ──────────────────────────────────────
 add_executable(test_chat_language
     test_chat_language.cpp

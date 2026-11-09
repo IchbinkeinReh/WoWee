@@ -8,6 +8,8 @@
 #include "addons/lua_api_registrations.hpp"
 #include "game/chat_filters.hpp"
 #include "game/chat_language.hpp"
+#include "game/chat_profanity.hpp"
+#include "game/expansion_profile.hpp"
 #include "game/text_tokens.hpp"
 #include "game/game_handler.hpp"
 #include "game/game_utils.hpp"
@@ -701,6 +703,40 @@ void ChatHandler::sendAddonMessage(ChatType type, const std::string& message, co
     owner_.getSocket()->send(packet);
 }
 
+void ChatHandler::filterProfanity(ChatType type, std::string& text) {
+    switch (type) {
+        case ChatType::SYSTEM: case ChatType::SAY: case ChatType::PARTY: case ChatType::PARTY_LEADER:
+        case ChatType::RAID: case ChatType::RAID_LEADER: case ChatType::GUILD: case ChatType::OFFICER:
+        case ChatType::YELL: case ChatType::WHISPER: case ChatType::WHISPER_INFORM: case ChatType::EMOTE:
+        case ChatType::CHANNEL: case ChatType::AFK: case ChatType::DND: case ChatType::RAID_WARNING:
+        case ChatType::BATTLEGROUND: case ChatType::BATTLEGROUND_LEADER:
+            break;
+        default:
+            return;
+    }
+    if (text.empty() || addons::storedCVarValue("profanityFilter", "1") == "0") return;
+    if (!profanityLoaded_) {
+        auto* am = owner_.services().assetManager;
+        if (!am || !am->isInitialized()) return;
+        profanityLoaded_ = true;
+        const auto* profile = owner_.services().expansionRegistry
+                                  ? owner_.services().expansionRegistry->getActive() : nullptr;
+        const int locale = chat_profanity::localeIndex(profile ? profile->locale : std::string("enUS"));
+        // ID, Text, Language (the locale index, -1 for every locale).
+        std::vector<std::string> expressions;
+        if (auto dbc = am->loadDBCOptional("ChatProfanity.dbc"); dbc && dbc->getFieldCount() >= 3) {
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                const int32_t lang = static_cast<int32_t>(dbc->getUInt32(i, 2));
+                if (lang != locale && lang != -1) continue;
+                std::string e = dbc->getString(i, 1);
+                if (!e.empty()) expressions.push_back(std::move(e));
+            }
+        }
+        profanity_.load(expressions);
+    }
+    profanity_.apply(text);
+}
+
 uint32_t ChatHandler::languageComprehension(uint32_t language) {
     owner_.loadSpellNameCache();
     const auto& cache = owner_.spellNameCacheRef();
@@ -789,6 +825,9 @@ void ChatHandler::handleMessageChat(network::Packet& packet, const std::string& 
     // nobody's language.
     if (data.language != ChatLanguage::UNIVERSAL && data.language != ChatLanguage::ADDON)
         data.message = hearInLanguage(static_cast<uint32_t>(data.language), data.message);
+    // The mature-language filter on what is heard, after the language
+    // (0x00509dd0): the chat types of the client's table at 0x009fa510.
+    filterProfanity(data.type, data.message);
 
     // The player's own lines come back this way, a whisper as WHISPER_INFORM
     // (sendChatMessage shows nothing of its own).

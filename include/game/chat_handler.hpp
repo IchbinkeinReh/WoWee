@@ -1,5 +1,7 @@
 #pragma once
 
+#include "game/chat_profanity.hpp"
+
 #include <deque>
 
 #include "game/chat_channels.hpp"
@@ -335,6 +337,11 @@ private:
     uint32_t languageComprehension(uint32_t language);
     /// LanguageWords.dbc by (language << 8 | byte length), in file order.
     std::unordered_map<uint32_t, std::vector<std::string>> languageWords_;
+    /// The mature-language filter (chat_profanity.hpp), its expressions for
+    /// the client's locale loaded on first use.
+    void filterProfanity(ChatType type, std::string& text);
+    chat_profanity::Filter profanity_;
+    bool profanityLoaded_ = false;
     bool languageWordsLoaded_ = false;
     /// Long enough for a name query to come back, and longer than the chat line
     /// wait: a roster is not being read this second, and re-asking the panel on

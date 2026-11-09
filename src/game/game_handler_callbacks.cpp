@@ -7,6 +7,7 @@
 #include "game/unit_name_rules.hpp"
 #include "rendering/mount_transition.hpp"
 #include "game/game_handler.hpp"
+#include "game/chat_profanity.hpp"
 #include "game/inventory_alerts.hpp"
 #include "game/reputation_standing.hpp"
 #include "addons/lua_api_registrations.hpp"
@@ -3467,14 +3468,9 @@ void GameHandler::setGmSurveyComment(const std::string& comment) { gmSurveyComme
 GameHandler::GmSurvey GameHandler::currentGmSurvey() const {
     // The client's locale index (0x00405dd0, the table at 0x00ad2fe0); enGB
     // reads as enUS.
-    static constexpr const char* kLocales[] = {"enUS", "koKR", "frFR", "deDE", "zhCN",
-                                               "zhTW", "esES", "esMX", "ruRU"};
     const auto* profile = services_.expansionRegistry ? services_.expansionRegistry->getActive() : nullptr;
-    uint32_t localeIndex = 0;
-    if (profile) {
-        for (uint32_t i = 0; i < std::size(kLocales); ++i)
-            if (profile->locale == kLocales[i]) localeIndex = i;
-    }
+    const uint32_t localeIndex =
+        static_cast<uint32_t>(chat_profanity::localeIndex(profile ? profile->locale : std::string("enUS")));
     GmSurvey survey;
     if (auto* am = services_.assetManager; am && am->isInitialized()) {
         auto current = am->loadDBCOptional("GMSurveyCurrentSurvey.dbc");
