@@ -643,6 +643,11 @@ private:
     /// the old grounding stands down.
     bool portMovedThisStep_ = false;
     collision::Mover portMover_;
+    /// Where portMove last put the unit: what moved it since (a transport
+    /// carrying it) is the difference to the next step's start. The mover's
+    /// own place is set to the character's elsewhere (the swim check).
+    glm::vec3 portLastOut_{0.0f};
+    bool portLastOutValid_ = false;
     bool portBlocked_ = false;
     collision::StepUpTrace portStepTrace_;
     bool portWorldReady_ = false;

@@ -31,6 +31,8 @@ public:
     /// Gone with the world it was in: a map change, a teleport, a transport
     /// boarded or left.
     void forget() { valid_ = false; }
+    /// Moved with what carries the unit (a transport), as the unit was.
+    void carry(const glm::vec3& by) { pos_ += by; }
     [[nodiscard]] bool valid() const { return valid_; }
 
     /// Where a fall at `at` puts the unit back: the place it last stood, if

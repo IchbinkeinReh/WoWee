@@ -79,6 +79,24 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
         }
         portWorldReady_ = true;
     }
+    // In the air, where the fall began moves with whatever moved the unit
+    // since the last step. The client keeps a passenger's place, and the
+    // height its fall began at (+0x84, 0x00988370), on its transport while
+    // it is attached (0x007618b0 steps it there and leaves it attached while
+    // the transport keeps it, 0x006ec7b0 -> 0x0074b5e0), so a lift or a ship
+    // carries a jump along. Here both are in the world, the application
+    // carries the unit, and the fall (0x00987050, fallDrop) is measured from
+    // where it began: the start left behind pulled a rider jumping on the
+    // Undercity lift back to the height it jumped at, out of the car running
+    // down beneath it, through its floor (PORT ABORT).
+    // And the test safety's last standing place with it: on a lift the
+    // place it stood goes down with the car, not left at the top of the
+    // shaft for a jump to fall forty yards below.
+    // Up to ten yards a step: a lift running at 27 yd/s through a slow frame.
+    if (m.falling && portLastOutValid_ && glm::length(from - portLastOut_) <= 10.0f) {
+        m.fallStartZ += from.z - portLastOut_.z;
+        portSafe_.carry(from - portLastOut_);
+    }
     m.pos = from;
     const uint32_t ms = std::max<uint32_t>(1u, static_cast<uint32_t>(std::lround(dt * 1000.0f)));
     const glm::vec2 horiz(wanted.x - from.x, wanted.y - from.y);
@@ -1262,6 +1280,8 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
     if (collision::portEnabled() && !portAborted_ && !externalFollow_ &&
         !gravityDisabled_ && !waterWalkActive_ && !groundNotStreamedYet(targetPos.x, targetPos.y)) {
         targetPos = portMove(*followTarget, targetPos, f.physicsDeltaTime);
+        portLastOut_ = targetPos;
+        portLastOutValid_ = true;
         portMovedThisStep_ = true;
         return targetPos;
     }
