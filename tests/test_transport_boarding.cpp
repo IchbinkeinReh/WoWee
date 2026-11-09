@@ -46,3 +46,11 @@ TEST_CASE("an M2 transport holds a passenger inside its collision box (0x0077ffb
     CHECK_FALSE(insideCollisionBox(glm::vec3(0.0f, -4.1f, 1.0f), boxMin, boxMax));
     CHECK_FALSE(insideCollisionBox(glm::vec3(0.0f, 0.0f, -0.1f), boxMin, boxMax));
 }
+
+TEST_CASE("a fall keeps the transport only while it holds the mover (0x007618b0, 0x0074b5e0)",
+          "[transport_boarding]") {
+    CHECK(afterFallStep(kLift, true) == kLift);
+    CHECK(afterFallStep(kLift, false) == 0);
+    CHECK(afterFallStep(0, true) == 0);
+    CHECK(afterFallStep(0, false) == 0);
+}
