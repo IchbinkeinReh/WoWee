@@ -2011,6 +2011,10 @@ static glm::mat4 rtSteadyCarried(const M2ModelGPU& model, const M2Instance& inst
     return rt_lights::steadyBoneCarried(inst.modelMatrix, inst.boneMatrices, bone, owner, pivot);
 }
 
+namespace {
+bool fireBurning(const M2ModelGPU& model, const M2Instance& inst);
+}  // namespace
+
 void M2Renderer::logRtLightDiag(const glm::vec3& eye, float radius) const {
     for (const M2Instance& inst : instances) {
         const M2ModelGPU* model = inst.cachedModel;
@@ -2029,7 +2033,8 @@ void M2Renderer::logRtLightDiag(const glm::vec3& eye, float radius) const {
                 model->particleEmitters, [&](uint32_t bone) { return rtSteadyCarried(*model, inst, bone); }, &model->flameClouds);
             const glm::vec3 at = flame ? *flame : l.position;
             LOG_WARNING("RT doodad fire light at (", at.x, ", ", at.y, ", ", at.z, ")", flame ? " flames" : " box top",
-                        " reach ", l.attenuationEnd, " fade ", inst.fade);
+                        " reach ", l.attenuationEnd, " fade ", inst.fade,
+                        fireBurning(*model, inst) ? " burning" : " NOT burning (no light)");
         }
     }
 }
@@ -2603,6 +2608,39 @@ void M2Renderer::syncRtScene() {
     }
 }
 
+namespace {
+/// Whether a fire model burns as it stands now (a WoWee-only rule for the
+/// ray-traced light; the client has no light for these). Named a fire is not
+/// enough: a cold log pile, and a goober bonfire before it is lit (Thunder
+/// Bluff's G_Bonfire, whose flames are its two emitters, on only in the
+/// sequence its game object's state plays), are the same model or name with
+/// nothing burning. It burns while one of its emitters is on and emitting in
+/// the sequence it plays (the on/off track as the particle pass reads it,
+/// 0x0082d2f0, and a rate above nothing), while flames it emitted are still
+/// alive, or while it shows a glow card (a batch drawn as one, its colour
+/// track not faded out). A model with none of these is a model, not a fire.
+bool fireBurning(const M2ModelGPU& model, const M2Instance& inst) {
+    for (const auto& em : model.particleEmitters) {
+        if (!em.enabled) continue;
+        if (m2_track::sampleFloat(em.enabledTrack, inst.currentSequenceIndex, inst.animTime,
+                                  inst.globalSequenceTime, model.globalSequenceDurations, 1.0f) < 0.5f) {
+            continue;
+        }
+        const float rate = m2_track::sampleFloat(em.emissionRate, inst.currentSequenceIndex, inst.animTime,
+                                                 inst.globalSequenceTime, model.globalSequenceDurations, 0.0f);
+        if (rate + std::max(0.0f, em.emissionRateVary) > 0.0f) return true;
+    }
+    if (!inst.particles.empty()) return true;
+    for (const auto& batch : model.batches) {
+        if (!batch.glowCardLike) continue;
+        const glm::vec4 mul = m2_internal::batchColorMul(model, batch, inst.currentSequenceIndex, inst.animTime,
+                                                         inst.globalSequenceTime);
+        if (mul.a < 0.0f || mul.a > 0.01f) return true;
+    }
+    return false;
+}
+}  // namespace
+
 void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
                                  std::vector<rt_lights::PointLight>& out) const {
     for (uint32_t id : rtLitInstances_) {
@@ -2643,7 +2681,9 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
             continue;
         }
         if (model->lights.empty() && (model->isBrazierOrFire || model->isTorch)) {
-            // A fire with no light of its own (rt_lights::fireLight).
+            // A fire with no light of its own (rt_lights::fireLight), while
+            // it burns (fireBurning).
+            if (!fireBurning(*model, inst)) continue;
             const glm::vec3 bmin = model->hasVertexBox ? model->vertexBoxMin : model->boundMin;
             const glm::vec3 bmax = model->hasVertexBox ? model->vertexBoxMax : model->boundMax;
             rt_lights::PointLight l = rt_lights::fireLight(bmin, bmax, inst.modelMatrix, model->isTorch,
