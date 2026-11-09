@@ -39,6 +39,11 @@ public:
     /// the left button SDL made of it - read as held, it would turn the right
     /// click into both buttons, which is walking forward.
     void setMouseButtonMasked(int button, bool masked);
+    /// Where a scripted test run puts the pointer (__WoweeTestMouse, only
+    /// with WOWEE_AUTO_LUA), read in place of the device's; cleared to give
+    /// the device's back.
+    void setVirtualMousePosition(const glm::vec2& at) { virtualMousePos_ = at; hasVirtualMousePos_ = true; }
+    void clearVirtualMousePosition() { hasVirtualMousePos_ = false; }
     [[nodiscard]] bool isKeyJustPressed(SDL_Scancode key) const;
 
     // Mouse
@@ -70,6 +75,8 @@ private:
     std::array<bool, NUM_MOUSE_BUTTONS> previousMouseState = {};
 
     glm::vec2 mousePosition = glm::vec2(0.0f);
+    glm::vec2 virtualMousePos_ = glm::vec2(0.0f);
+    bool hasVirtualMousePos_ = false;
     glm::vec2 previousMousePosition = glm::vec2(0.0f);
     glm::vec2 mouseDelta = glm::vec2(0.0f);
     bool mouseLocked = false;
