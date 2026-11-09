@@ -176,6 +176,9 @@ public:
     // silently built up over the whole ride would then unleash all at once the
     // instant the external Z lock releases at disembark, clipping the player
     // through the floor.
+    /// A rider standing still on a transport's deck: the deck places them,
+    /// and this frame's step does not move them across it (see rideHeld_).
+    void setRideHeld(bool held) { rideHeld_ = held; }
     void suppressVerticalPhysics() {
         verticalVelocity = 0.0f;
         grounded = true;
@@ -627,6 +630,13 @@ private:
     /// it (suppressVerticalPhysics): standing on a lift, however fast it runs
     /// down, which the fall checks here read as the floor dropping away.
     bool deckHeld_ = false;
+    /// Standing still on a transport's deck (setRideHeld). The client moves
+    /// a unit only while it moves (0x00762e00 runs for flags 0x40c0100f), so
+    /// nothing here shifts a rider who is not walking: the wall push-out and
+    /// the floor probes against the hull did, by up to half a yard for a
+    /// frame, until the deck placed them back - the rider, and the camera
+    /// with them, stepping to the side and back during the flight.
+    bool rideHeld_ = false;
     // The physics started a jump from the ground this frame: the jump packet
     // goes out for it whatever the ground reads by the time the packets do.
     bool jumpStarted_ = false;
