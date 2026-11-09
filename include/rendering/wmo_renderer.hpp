@@ -221,11 +221,14 @@ public:
      * @param modelId WMO model ID
      * @return Vector of doodad templates (empty if no doodads or model not found)
      */
-    /// Set an animation on every child doodad of an instance. Returns how many
-    /// doodads were addressed, so a caller streaming them in over several frames
-    /// can tell when the set has grown and re-apply. A doodad lacking the
-    /// sequence is left as it is.
-    size_t setInstanceDoodadAnimation(uint32_t instanceId, uint32_t animationId, bool loop);
+    /// A transport's doodads: only those with `onlyWith` among their own
+    /// sequences (the hull's machinery, not its benches and lamps) play
+    /// `animationId` - once and then `thenAnimationId` looping when one is
+    /// given (>= 0), else looping. Returns how many doodads the instance has.
+    size_t setInstanceShipDoodadAnimation(uint32_t instanceId, uint32_t onlyWith, uint32_t animationId,
+                                          int thenAnimationId);
+    /// The first such doodad's M2 instance, for a trace of what it plays; 0 if none.
+    [[nodiscard]] uint32_t firstDoodadWithAnimation(uint32_t instanceId, uint32_t animationId) const;
     const std::vector<DoodadTemplate>* getDoodadTemplates(uint32_t modelId) const;
 
     /**

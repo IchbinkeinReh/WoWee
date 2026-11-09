@@ -1316,18 +1316,33 @@ void WMORenderer::addDoodadToInstance(uint32_t instanceId, uint32_t m2InstanceId
     }
 }
 
-size_t WMORenderer::setInstanceDoodadAnimation(uint32_t instanceId, uint32_t animationId,
-                                               bool loop) {
+size_t WMORenderer::setInstanceShipDoodadAnimation(uint32_t instanceId, uint32_t onlyWith,
+                                                   uint32_t animationId, int thenAnimationId) {
     if (!m2Renderer_) return 0;
     auto it = std::find_if(instances.begin(), instances.end(),
                            [instanceId](const WMOInstance& inst) { return inst.id == instanceId; });
     if (it == instances.end()) return 0;
     for (const auto& doodad : it->doodads) {
-        // A no-op for a doodad without that sequence, so the barrels and
-        // lanterns sharing the deck are left alone.
-        m2Renderer_->setInstanceAnimation(doodad.m2InstanceId, animationId, loop);
+        if (!m2Renderer_->hasAnimation(doodad.m2InstanceId, onlyWith)) continue;
+        if (thenAnimationId >= 0) {
+            m2Renderer_->setInstanceAnimationThen(doodad.m2InstanceId, animationId,
+                                                  static_cast<uint32_t>(thenAnimationId));
+        } else {
+            m2Renderer_->setInstanceAnimation(doodad.m2InstanceId, animationId, true);
+        }
     }
     return it->doodads.size();
+}
+
+uint32_t WMORenderer::firstDoodadWithAnimation(uint32_t instanceId, uint32_t animationId) const {
+    if (!m2Renderer_) return 0;
+    auto it = std::find_if(instances.begin(), instances.end(),
+                           [instanceId](const WMOInstance& inst) { return inst.id == instanceId; });
+    if (it == instances.end()) return 0;
+    for (const auto& doodad : it->doodads) {
+        if (m2Renderer_->hasAnimation(doodad.m2InstanceId, animationId)) return doodad.m2InstanceId;
+    }
+    return 0;
 }
 
 const std::vector<WMORenderer::DoodadTemplate>* WMORenderer::getDoodadTemplates(uint32_t modelId) const {

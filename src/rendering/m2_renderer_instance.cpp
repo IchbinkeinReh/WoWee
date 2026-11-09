@@ -374,6 +374,7 @@ void M2Renderer::setInstanceAnimationHeld(uint32_t instanceId, uint32_t animatio
     inst.currentSequenceIndex = i;
     inst.animDuration = static_cast<float>(seqs[i].duration);
     inst.playingVariation = false;   // not a variation: it does not go back
+    inst.afterOneShotIndex = -1;
     inst.holdAtEnd = true;
     // Its end is its first frame where it stands in reversed; one held
     // stands where it is held.
@@ -403,6 +404,7 @@ void M2Renderer::setInstanceAnimation(uint32_t instanceId, uint32_t animationId,
     inst.animDuration = static_cast<float>(seqs[i].duration);
     // Use playingVariation=true for one-shot (returns to idle when done)
     inst.playingVariation = !loop;
+    inst.afterOneShotIndex = -1;
     inst.holdAtEnd = false;
     switch (shown.mode) {
         case anim::PlayMode::Forward:
@@ -426,6 +428,17 @@ void M2Renderer::setInstanceAnimation(uint32_t instanceId, uint32_t animationId,
             inst.holdAtEnd = true;
             break;
     }
+}
+
+void M2Renderer::setInstanceAnimationThen(uint32_t instanceId, uint32_t animationId,
+                                          uint32_t thenAnimationId) {
+    setInstanceAnimation(instanceId, animationId, false);
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return;
+    auto& inst = instances[idxIt->second];
+    if (!inst.cachedModel || !inst.playingVariation) return;
+    const ShownSequence then = shownSequence(inst.cachedModel->sequences, thenAnimationId);
+    inst.afterOneShotIndex = then.index;
 }
 
 bool M2Renderer::hasAnimation(uint32_t instanceId, uint32_t animationId) const {
@@ -476,7 +489,12 @@ std::optional<M2Renderer::AnimPlayback> M2Renderer::getInstanceAnimPlayback(uint
     auto idxIt = instanceIndexById.find(instanceId);
     if (idxIt == instanceIndexById.end()) return std::nullopt;
     const auto& inst = instances[idxIt->second];
-    return AnimPlayback{inst.animTime, inst.animDuration, inst.animSpeed};
+    uint32_t id = 0;
+    if (inst.cachedModel && inst.currentSequenceIndex >= 0 &&
+        inst.currentSequenceIndex < static_cast<int>(inst.cachedModel->sequences.size())) {
+        id = inst.cachedModel->sequences[inst.currentSequenceIndex].id;
+    }
+    return AnimPlayback{inst.animTime, inst.animDuration, inst.animSpeed, id};
 }
 
 void M2Renderer::setInstanceAnimTime(uint32_t instanceId, float timeMs) {

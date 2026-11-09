@@ -93,6 +93,15 @@ struct M2PushConstants {
 // There is no sway any more: the client moves a doodad only through its
 // own bones and texture tracks, so a tree, a banner or a field of clutter
 // moves exactly as its artist keyed it and the shader adds nothing.
+/// The sequence a finished one-shot goes on to: the one it was told to
+/// hand over to (M2Instance::afterOneShotIndex), else the idle one.
+int afterOneShot(M2Instance& instance, const M2ModelGPU& model) {
+    const int then = instance.afterOneShotIndex;
+    instance.afterOneShotIndex = -1;
+    if (then >= 0 && then < static_cast<int>(model.sequences.size())) return then;
+    return instance.idleSequenceIndex;
+}
+
 void fillModelPush(M2PushConstants& pc, bool sky) {
     pc.isFoliage = sky ? -1 : 0;
     pc.swayRefHeight = 0.0f;
@@ -592,12 +601,13 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
                     instance.animSpeed = 0.0f;
                 } else if (instance.playingVariation) {
                     instance.eventsFromStart = true;
-                    blendIntoSequence(model, instance, instance.idleSequenceIndex);
+                    const int next = afterOneShot(instance, model);
+                    blendIntoSequence(model, instance, next);
                     instance.playingVariation = false;
-                    instance.currentSequenceIndex = instance.idleSequenceIndex;
-                    if (instance.idleSequenceIndex < static_cast<int>(model.sequences.size()))
+                    instance.currentSequenceIndex = next;
+                    if (next < static_cast<int>(model.sequences.size()))
                         instance.animDuration =
-                            static_cast<float>(model.sequences[instance.idleSequenceIndex].duration);
+                            static_cast<float>(model.sequences[next].duration);
                     instance.animTime = 0.0f;
                     instance.animSpeed = 1.0f;
                 } else {
@@ -615,11 +625,12 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
             } else if (instance.playingVariation) {
                 stepEvents(eventsSequence, eventsFrom, instance.animDuration);
                 instance.eventsFromStart = true;
-                blendIntoSequence(model, instance, instance.idleSequenceIndex);
+                const int next = afterOneShot(instance, model);
+                blendIntoSequence(model, instance, next);
                 instance.playingVariation = false;
-                instance.currentSequenceIndex = instance.idleSequenceIndex;
-                if (instance.idleSequenceIndex < static_cast<int>(model.sequences.size())) {
-                    instance.animDuration = static_cast<float>(model.sequences[instance.idleSequenceIndex].duration);
+                instance.currentSequenceIndex = next;
+                if (next < static_cast<int>(model.sequences.size())) {
+                    instance.animDuration = static_cast<float>(model.sequences[next].duration);
                 }
                 instance.animTime = 0.0f;
             } else {
