@@ -853,17 +853,8 @@ public:
     void gatherCollisionFacets(const glm::vec3& boxMin, const glm::vec3& boxMax,
                                std::vector<collision::Facet>& out) const;
 
-    /// Every doodad the floor query would consider here, and what each one
-    /// contributes. The WMO side has had debugDumpGroupsAtPosition for this
-    /// since the Undercity pull was first chased; the M2 side had nothing, so
-    /// a floor that should have come from a lift deck and did not left no
-    /// trace at all beyond "m2=-99999".
-    void debugDumpFloorCandidatesAt(float glX, float glY, float glZ) const;
     /// An instance's model name, for the collision port's debug line.
     [[nodiscard]] std::string debugInstanceName(uint32_t instanceId) const;
-    /// Logs every doodad with authored collision within `radius` of a point:
-    /// name, position, rotation and scale (WOWEE_COLLISION_TRACE).
-    void debugLogCollidersNear(const glm::vec3& pos, float radius) const;
     [[nodiscard]] float raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3& direction, float maxDistance) const;
     void setCollisionFocus(const glm::vec3& worldPos, float radius);
 

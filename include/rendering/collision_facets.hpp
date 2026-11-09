@@ -38,16 +38,6 @@
 
 namespace wowee::rendering::collision {
 
-/// WOWEE_COLLISION_PORT=1 turns the port on. Off by default until it has
-/// been walked in the world.
-inline bool portEnabled() {
-    static const bool on = [] {
-        const char* v = std::getenv("WOWEE_COLLISION_PORT");
-        return v && v[0] && v[0] != '0';
-    }();
-    return on;
-}
-
 /// One record of 0xadba34's list.
 struct Facet {
     glm::vec3 n{0.0f, 0.0f, 1.0f};

@@ -443,27 +443,6 @@ void WorldEntryCallbackHandler::setupCallbacks() {
         LOG_INFO("Unstuck hearth: teleporting to bind point, waiting for terrain...");
     });
 
-    // Auto-unstuck: falling for > 5 seconds = void fall, teleport to map entry
-    if (renderer_.getCameraController()) {
-        renderer_.getCameraController()->setAutoUnstuckCallback([this]() {
-            const char* allowAutoUnstuck = std::getenv("WOWEE_ALLOW_AUTO_UNSTUCK");
-            if (!allowAutoUnstuck || std::string(allowAutoUnstuck) != "1") {
-                LOG_WARNING("Auto-unstuck suppressed. Set WOWEE_ALLOW_AUTO_UNSTUCK=1 to teleport to the map entry point after long falls.");
-                return;
-            }
-            if (!renderer_.getCameraController()) return;
-            clearMountForUnstuck();
-            auto* cc = renderer_.getCameraController();
-
-            // Last resort: teleport to map entry point (terrain guaranteed loaded here)
-            glm::vec3 spawnPos = cc->getDefaultPosition();
-            spawnPos.z += 5.0f;
-            cc->teleportTo(spawnPos);
-            forceServerTeleportCommand(spawnPos);
-            LOG_INFO("Auto-unstuck: teleported to map entry point (server synced)");
-        });
-    }
-
     // Bind point update (innkeeper) - position stored in gameHandler->getHomeBind()
     gameHandler_.setBindPointCallback([](uint32_t mapId, float x, float y, float z) {
         LOG_INFO("Bindpoint set: mapId=", mapId, " pos=(", x, ", ", y, ", ", z, ")");

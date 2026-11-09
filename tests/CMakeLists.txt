@@ -1468,10 +1468,6 @@ wowee_add_test(test_camera_smooth
 wowee_add_test(test_is_falling
     SOURCES test_is_falling.cpp)
 
-# -- test_swim_jump: jumping out of the water.
-wowee_add_test(test_swim_jump
-    SOURCES test_swim_jump.cpp)
-
 # -- test_swim_pitch: the tilt of a swimming or flying player's body.
 wowee_add_test(test_swim_pitch
     SOURCES test_swim_pitch.cpp)
@@ -2399,13 +2395,6 @@ wowee_add_test(test_helper_creature_models
     SOURCES test_helper_creature_models.cpp
             ${CMAKE_SOURCE_DIR}/src/rendering/m2_model_classifier.cpp)
 
-# ── test_terrain_slope_limit ────────────────────────────────
-# The 50 degree limit as it applies to the ground. It governed WMO and M2
-# floors; the terrain query answers a height and no normal, so it was never
-# applied there and any mountain could be walked straight up.
-wowee_add_test(test_terrain_slope_limit
-    SOURCES test_terrain_slope_limit.cpp)
-
 # ── test_particle_density_floor ─────────────────────────────
 # Particle density against the floor that holds a flame together. Applying
 # the setting after the floor instead of before it takes every candle in the
@@ -2585,11 +2574,6 @@ register_test_target(test_settings_apply_on_load)
 wowee_add_test(test_light_coords
     SOURCES test_light_coords.cpp
             ${TEST_COMMON_SOURCES})
-
-# ── test_swim_wall ─────────────────────────────────────────────────────
-# The shoreline rule a swimmer meets. Header-only, so it links nothing: a
-# heightmap is a lambda here.
-wowee_add_test(test_swim_wall SOURCES test_swim_wall.cpp)
 
 # ── test_light_bands ─────────────────────────────────────────
 # Which LightParams row and channel a light band belongs to, and where its
@@ -3013,13 +2997,6 @@ wowee_add_test(test_collision_hover
 # spline through the leg's points and the dots coming in with the load.
 wowee_add_test(test_loading_screen_route
     SOURCES test_loading_screen_route.cpp
-            ${TEST_COMMON_SOURCES})
-
-# ── test_collision_safety ────────────────────────────────────
-# The collision port's test safety: the place last stood on belongs to one
-# world, and a map change, a teleport or a transport makes it forgotten.
-wowee_add_test(test_collision_safety
-    SOURCES test_collision_safety.cpp
             ${TEST_COMMON_SOURCES})
 
 # ── test_collision_swim ──────────────────────────────────────

@@ -3,9 +3,7 @@
 #include "game/vehicle_mover.hpp"
 #include "game/vehicle_camera.hpp"
 
-#include "core/env_flag.hpp"
-#include "rendering/swim_jump.hpp"
-#include "rendering/swim_wall.hpp"
+
 #include "core/click_drag.hpp"
 #include "core/coordinates.hpp"
 #include "ui/keybinding_manager.hpp"
@@ -49,10 +47,29 @@ void CameraController::gatherPortFacets(const glm::vec3& lo, const glm::vec3& hi
     if (m2Renderer) m2Renderer->gatherCollisionFacets(lo, hi, out);
 }
 
+bool CameraController::fallOverUnloadedWorld(const glm::vec3& at) const {
+    if (groundNotStreamedYet(at.x, at.y)) return true;
+    // Any face at all in the column under the unit, down to the bottom of
+    // the world: the ground's, a building's, a doodad's.
+    constexpr float kColumnDepth = 2000.0f;
+    std::vector<collision::Facet> below;
+    gatherPortFacets(at - glm::vec3(1.0f, 1.0f, kColumnDepth), at + glm::vec3(1.0f, 1.0f, 1.0f), below);
+    return below.empty();
+}
+
 glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wanted, float dt) {
-    collision::Sweeper sweeper([this](const glm::vec3& lo, const glm::vec3& hi,
-                                      std::vector<collision::Facet>& out) { gatherPortFacets(lo, hi, out); });
     collision::Mover& m = portMover_;
+    // A water walker's ground includes the liquid's surface: 0x0075e3d0 adds
+    // liquid (0x10000) to the faces gathered for a mover with WATERWALKING
+    // (0x10000000) that does not swim. (The client also leaves it out when
+    // the unit is pitched down past -0.6457718 rad, a swimmer's dive; a
+    // walker here is not pitched.)
+    const bool waterWalkFloor = waterWalkActive_ && !m.swimming && waterRenderer;
+    collision::Sweeper sweeper([this, waterWalkFloor](const glm::vec3& lo, const glm::vec3& hi,
+                                                      std::vector<collision::Facet>& out) {
+        gatherPortFacets(lo, hi, out);
+        if (waterWalkFloor) waterRenderer->gatherLiquidFacets(lo, hi, out);
+    });
     portBlocked_ = false;
     // The mover follows the character wherever something else put it (a
     // teleport, a transport); its stepping state only holds where it left it.
@@ -62,13 +79,7 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
     // player is placed, and a fall through a floor not loaded yet goes on
     // until the unit dies: so after a jump in position, hold still until
     // there is something within reach below.
-    if (glm::length(m.pos - from) > 5.0f) {
-        portWorldReady_ = false;
-        // And the test safety's last standing place is not this one's: a
-        // transport's map change (or any teleport) put the unit far from
-        // it, and a fall measured against it read as a runaway.
-        portSafe_.forget();
-    }
+    if (glm::length(m.pos - from) > 5.0f) portWorldReady_ = false;
     if (!portWorldReady_) {
         std::vector<collision::Facet> below;
         gatherPortFacets(from - glm::vec3(1.0f, 1.0f, 30.0f), from + glm::vec3(1.0f, 1.0f, 2.0f), below);
@@ -88,14 +99,10 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
     // carries the unit, and the fall (0x00987050, fallDrop) is measured from
     // where it began: the start left behind pulled a rider jumping on the
     // Undercity lift back to the height it jumped at, out of the car running
-    // down beneath it, through its floor (PORT ABORT).
-    // And the test safety's last standing place with it: on a lift the
-    // place it stood goes down with the car, not left at the top of the
-    // shaft for a jump to fall forty yards below.
+    // down beneath it, through its floor.
     // Up to ten yards a step: a lift running at 27 yd/s through a slow frame.
     if (m.falling && portLastOutValid_ && glm::length(from - portLastOut_) <= 10.0f) {
         m.fallStartZ += from.z - portLastOut_.z;
-        portSafe_.carry(from - portLastOut_);
     }
     m.pos = from;
     const uint32_t ms = std::max<uint32_t>(1u, static_cast<uint32_t>(std::lround(dt * 1000.0f)));
@@ -103,7 +110,9 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
     const float dist = glm::length(horiz);
     bool fell = false;
     const char* how = "stand";
-    m.flying = isFlightAirborne();
+    // A flyer, and a unit with gravity disabled (MOVEMENTFLAG 0x400,
+    // levitating), move by the swim-and-fly step (0x0075eda0 -> 0x00760b40).
+    m.flying = isFlightAirborne() || gravityDisabled_;
     if (m.swimming || m.flying) {
         // 0x00760b40: a plain sweep along the move in three dimensions; a
         // swimmer also against the liquid's surface turned over.
@@ -125,6 +134,9 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
         if (jumped) {
             how = "swimjump";
             swimming = false;
+            // Out of the water by a jump: MSG_MOVE_JUMP alone, in place of
+            // a STOP_SWIM (0x00988370 clears SWIMMING).
+            swimJumpPending_ = true;
             grounded = false;
             verticalVelocity = -m.fallV0;
             m.fallSpeed = dt > 0.0f ? dist / dt : 0.0f;
@@ -189,7 +201,15 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
             if (down.facet >= 0) m.pos.z -= down.allowed;
         }
         verticalVelocity = 0.0f;
-        if (!fell) portSafe_.stoodAt(m.pos);
+        // Where /unstuckgy puts the character back to.
+        if (!fell) {
+            safePosSaveTimer_ += dt;
+            if (safePosSaveTimer_ >= SAFE_POS_SAVE_INTERVAL || !hasLastSafe_) {
+                safePosSaveTimer_ = 0.0f;
+                lastSafePos_ = m.pos;
+                hasLastSafe_ = true;
+            }
+        }
         if (fell) {
             grounded = false;
             // 0x00988370 leaves +0x8c and the direction as the walk had them.
@@ -210,28 +230,28 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
             m.fallSpeed = dt > 0.0f ? dist / dt : 0.0f;
             m.fallDir = dist > 1e-6f ? horiz / dist : glm::vec2(0.0f);
         }
-        const auto r = collision::fallStep(m, ms, m.fallSpeed * dt, m.fallDir, sweeper);
-        // A safety for testing the port, not the client's: a fall more than
-        // 40 yards below where the unit last stood, or one with nothing at
-        // all below it, is a fault of the port. Stop using it for the rest
-        // of the session and put the character back where it stood; the
-        // movement this client had before takes over.
-        if (!r.landed && m.falling && portSafe_.valid()) {
-            std::vector<collision::Facet> below;
-            gatherPortFacets(m.pos - glm::vec3(1.0f, 1.0f, 60.0f), m.pos + glm::vec3(1.0f, 1.0f, 1.0f), below);
-            if (const auto back = portSafe_.runawayRestore(m.pos, below.empty())) {
-                LOG_WARNING("PORT ABORT: fell to (", m.pos.x, ", ", m.pos.y, ", ", m.pos.z, ") from (",
-                            back->x, ", ", back->y, ", ", back->z, "), facets below ",
-                            below.size(), " - collision port off for this session");
-                portAborted_ = true;
-                m = collision::Mover{};
-                m.pos = *back;
-                verticalVelocity = 0.0f;
-                grounded = true;
-                lastGroundZ = back->z;
-                return *back;
+        // Nothing loaded below - the ground's tile or a building not
+        // streamed in yet - is no ground to fall to: the unit is held
+        // where it is, its fall's time with it, until something is there
+        // (as at a teleport, above). The client has the world loaded
+        // behind its loading screen before it moves anything; a long fall
+        // onto ground that is there plays out as the client's does.
+        if (fallOverUnloadedWorld(m.pos)) {
+            if (!portFallHeld_) {
+                portFallHeld_ = true;
+                LOG_INFO("Collision: a fall at (", m.pos.x, ", ", m.pos.y, ", ", m.pos.z,
+                         ") is held until the world below it has loaded");
             }
+            verticalVelocity = 0.0f;
+            grounded = false;
+            return m.pos;
         }
+        if (portFallHeld_) {
+            portFallHeld_ = false;
+            LOG_INFO("Collision: the world below has loaded, the fall goes on at (", m.pos.x, ", ",
+                     m.pos.y, ", ", m.pos.z, ")");
+        }
+        const auto r = collision::fallStep(m, ms, m.fallSpeed * dt, m.fallDir, sweeper);
         if (r.landed || !m.falling) {
             grounded = true;
             verticalVelocity = 0.0f;
@@ -386,85 +406,6 @@ std::optional<float> selectClosestFloor(const std::optional<float>& a,
     return std::nullopt;
 }
 
-std::optional<float> selectReachableFloor3(const std::optional<float>& a,
-                                           const std::optional<float>& b,
-                                           const std::optional<float>& c,
-                                           float refZ,
-                                           float maxStepUp) {
-    std::optional<float> best;
-    auto consider = [&](const std::optional<float>& h) {
-        if (!h) return;
-        if (*h > refZ + maxStepUp) return;
-        if (!best || *h > *best) best = h;
-    };
-    consider(a);
-    consider(b);
-    consider(c);
-    return best;
-}
-
-
-/// How flat a surface has to be to stand on rather than slide off.
-///
-/// Three names for one number. They are kept apart because the surfaces are:
-/// a WMO tunnel or bridge ramp is authored steeper than outdoor terrain, and if
-/// that ever needs different limits this is where they part. Today they agree.
-constexpr float MIN_WALKABLE_NORMAL_TERRAIN = movement::kMinWalkableNormalZ;
-constexpr float MIN_WALKABLE_NORMAL_WMO = movement::kMinWalkableNormalZ;
-constexpr float MIN_WALKABLE_NORMAL_M2 = movement::kMinWalkableNormalZ;
-
-/// The points around the feet a floor probe samples.
-///
-/// One ray straight down at the character's centre falls between two planks, or
-/// misses a stair tread, and the character drops through a floor that is plainly
-/// there. Sampling a ring around the feet instead is what stops it. Five points
-/// for a cheap check, nine when something has already gone wrong and a wider
-/// footprint is worth the queries.
-///
-/// The ring was written out five times, each with its own footprint constant
-/// spelled into nine brace pairs.
-std::array<glm::vec2, 5> feetCross(float footprint) {
-    return {{ {0.0f, 0.0f},
-              { footprint, 0.0f}, {-footprint, 0.0f},
-              {0.0f,  footprint}, {0.0f, -footprint} }};
-}
-
-std::array<glm::vec2, 9> feetRing(float footprint) {
-    return {{ {0.0f, 0.0f},
-              { footprint, 0.0f}, {-footprint, 0.0f},
-              {0.0f,  footprint}, {0.0f, -footprint},
-              { footprint,  footprint}, { footprint, -footprint},
-              {-footprint,  footprint}, {-footprint, -footprint} }};
-}
-
-/// The band a floor has to be in to be believed: high enough to step onto,
-/// low enough not to be the ceiling or another storey.
-struct FloorBand {
-    float minZ;
-    float maxZ;
-};
-
-/// The highest walkable floor among the sampled points, if any.
-///
-/// `query` is a renderer's getFloorHeight - it answers a height and writes the
-/// surface normal's Z, and a normal flatter than `minNormalZ` is a wall rather
-/// than something to stand on.
-template <typename Offsets, typename Query>
-std::optional<float> highestWalkableFloor(Query&& query, float x, float y,
-                                          const Offsets& offsets, float probeZ,
-                                          float minNormalZ, FloorBand band) {
-    std::optional<float> best;
-    for (const auto& o : offsets) {
-        float normalZ = 1.0f;
-        auto h = query(x + o.x, y + o.y, probeZ, &normalZ);
-        if (!h) continue;
-        if (normalZ < minNormalZ) continue;
-        if (*h > band.maxZ || *h < band.minZ) continue;
-        if (!best || *h > *best) best = h;
-    }
-    return best;
-}
-
 } // namespace
 
 CameraController::CameraController(Camera* cam) : camera(cam) {
@@ -472,21 +413,6 @@ CameraController::CameraController(Camera* cam) : camera(cam) {
     facingYaw = defaultYaw;
     pitch = defaultPitch;
     reset();
-}
-
-/// The floor dumps, which are a hunt rather than a fault.
-///
-/// Each is ten lines of every WMO group and doodad near a position, written
-/// whenever a floor probe comes up empty - which happens in ordinary play and
-/// is recovered from. In one six-minute session they were ninety-one lines of
-/// eleven hundred, at the level these logs carry, describing something that
-/// then worked. The one-line statement that a probe found nothing stays; the
-/// inventory behind it is asked for.
-///
-/// F8 still dumps on demand, which is somebody asking for exactly this.
-bool floorDiagEnabled() {
-    static const bool on = core::envFlagEnabled("WOWEE_FLOOR_DIAG", false);
-    return on;
 }
 
 void CameraController::startIntroPan(float durationSec, float orbitDegrees) {
@@ -669,192 +595,22 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
     }
 
     if (!externalFollow_) {
-        // Enter swim only when water is deep enough (waist-deep+),
-        // not for shallow wading.
+        // The water's surface here, for the swimmer's float to it.
         std::optional<float> waterH;
         if (waterRenderer) {
             waterH = waterRenderer->getWaterHeightAt(targetPos.x, targetPos.y);
         }
-        constexpr float MAX_SWIM_DEPTH_FROM_SURFACE = 12.0f;
-        // Deep enough to swim in: over three quarters of the collision height
-        // to start, and a thirty-sixth of a yard less to go on (0x00730d10).
-        // The client's own margin keeps a character wading at the boundary
-        // from flipping between swim and walk: 1.15 and 0.85 made one swim
-        // in a pond the client wades through, a yard and a quarter deep.
-        const float MIN_SWIM_WATER_DEPTH = swimming ? swimExitDepth() : swimFloatDepth();
-        bool inWater = false;
-        // Water Walk: treat water surface as ground - player walks on top, not through.
-        // Only from at the surface and not on the way up: from anywhere above
-        // it, a bridge or a jump, this pulled the character down to the water.
-        waterWalkSurface_.reset();
-        if (waterWalkActive_ && waterH && targetPos.z >= *waterH - 0.5f &&
-            targetPos.z <= *waterH + 0.25f && verticalVelocity <= 0.0f) {
-            // Clamp to water surface so the player stands on it
-            targetPos.z = *waterH;
-            verticalVelocity = 0.0f;
-            grounded = true;
-            inWater = false;
-            waterWalkSurface_ = *waterH;
-        } else if (waterH && targetPos.z < *waterH) {
-            std::optional<uint16_t> waterType;
-            if (waterRenderer) {
-                waterType = waterRenderer->getWaterTypeAt(targetPos.x, targetPos.y);
-            }
-            bool isOcean = false;
-            if (waterType && *waterType != 0) {
-                isOcean = (((*waterType - 1) % 4) == 1);
-            }
-            // Depth gate only applies when ENTERING swim (e.g. don't start
-            // swimming in a dry cave beneath a lake's water plane). Once
-            // swimming, any depth is fine - you can only get deep by
-            // deliberately diving through the water column.
-            bool depthAllowed = swimming || isOcean ||
-                                ((*waterH - targetPos.z) <= MAX_SWIM_DEPTH_FROM_SURFACE);
-            if (depthAllowed) {
-                std::optional<float> terrainH;
-                std::optional<float> wmoH;
-                std::optional<float> m2H;
-                if (terrainManager) terrainH = terrainManager->getHeightAt(targetPos.x, targetPos.y);
-                if (wmoRenderer) wmoH = wmoRenderer->getFloorHeight(targetPos.x, targetPos.y, targetPos.z + 2.0f);
-                if (m2Renderer) m2H = m2Renderer->getFloorHeight(targetPos.x, targetPos.y, targetPos.z + 1.0f);
-                // A building's liquid under the ground - the Undercity's
-                // slime, Ironforge's magma, the Pools of Vision under
-                // Thunder Bluff - has the hill's terrain far over the head:
-                // taken as the floor, the water was "below" it and the
-                // character walked the bottom, out of breath, instead of
-                // swimming. The terrain counts only where it is under the
-                // feet; for the ground's own water it still keeps a dry cave
-                // under a lake's plane from swimming.
-                if (terrainH && *terrainH > targetPos.z + 2.0f && waterRenderer &&
-                    waterRenderer->isWmoWaterAt(targetPos.x, targetPos.y)) {
-                    terrainH.reset();
-                }
-                auto floorH = selectHighestFloor(terrainH, wmoH, m2H);
-
-                // Prefer measured depth from floor; if floor sample is missing,
-                // fall back to feet-to-surface depth.
-                float depthFromFeet = (*waterH - targetPos.z);
-                inWater = (floorH && ((*waterH - *floorH) >= MIN_SWIM_WATER_DEPTH)) ||
-                          (!floorH && (depthFromFeet >= MIN_SWIM_WATER_DEPTH));
-
-                // Ramp exit assist: when swimming forward near the surface toward a
-                // reachable floor (dock/shore ramp), switch to walking sooner.
-                if (swimming && inWater && floorH && f.nowForward) {
-                    float floorDelta = *floorH - targetPos.z;
-                    float waterOverFloor = *waterH - *floorH;
-                    // Measured from where a swimmer actually floats, not from
-                    // a bare number.
-                    //
-                    // depthFromFeet is swimFloatDepth() exactly while
-                    // swimming - the feet are pinned that far under the
-                    // surface - so this constant was really "the float depth
-                    // plus a little". It was 1.45 against a float depth of 0.9.
-                    // Raising the float depth to 1.45 so the character treads at
-                    // chest height put the test exactly on its own threshold,
-                    // and the assist that walks a swimmer up a shore stopped
-                    // firing: the character stayed swimming in ankle-deep water,
-                    // shuddering on the boundary, and never fully left it.
-                    bool nearSurface = depthFromFeet <= swimFloatDepth() + 0.55f;
-                    bool reachableRamp = (floorDelta >= -0.30f && floorDelta <= 1.10f);
-                    bool shallowRampWater = waterOverFloor <= swimFloatDepth() + 0.10f;
-                    bool notDiving = f.swimForward3D.z > -0.20f && !f.xDown;
-                    if (nearSurface && reachableRamp && shallowRampWater && notDiving) {
-                        inWater = false;
-                    }
-                }
-
-                // Forward plank/ramp assist: sample structure floors ahead so water exit
-                // can happen when the ramp is in front of us (not only under our feet).
-                if (swimming && inWater && f.nowForward && f.swimForward3D.z > -0.20f && !f.xDown) {
-                    auto queryFloorAt = [&](float x, float y, float probeZ) -> std::optional<float> {
-                        std::optional<float> best;
-                        if (terrainManager) {
-                            best = terrainManager->getHeightAt(x, y);
-                        }
-                        if (wmoRenderer) {
-                            float nz = 1.0f;
-                            auto wh = wmoRenderer->getFloorHeight(x, y, probeZ, &nz);
-                            if (wh && nz >= 0.40f && (!best || *wh > *best)) best = wh;
-                        }
-                        if (m2Renderer && !externalFollow_) {
-                            float nz = 1.0f;
-                            auto mh = m2Renderer->getFloorHeight(x, y, probeZ, &nz);
-                            if (mh && nz >= 0.35f && (!best || *mh > *best)) best = mh;
-                        }
-                        return best;
-                    };
-
-                    glm::vec2 fwd2(f.forward.x, f.forward.y);
-                    float fwdLenSq = glm::dot(fwd2, fwd2);
-                    if (fwdLenSq > 1e-8f) {
-                        fwd2 *= glm::inversesqrt(fwdLenSq);
-                        std::optional<float> aheadFloor;
-                        const float probeZ = targetPos.z + 2.0f;
-                        const float dists[] = {0.45f, 0.90f, 1.25f};
-                        for (float d : dists) {
-                            float sx = targetPos.x + fwd2.x * d;
-                            float sy = targetPos.y + fwd2.y * d;
-                            auto h = queryFloorAt(sx, sy, probeZ);
-                            if (h && (!aheadFloor || *h > *aheadFloor)) aheadFloor = h;
-                        }
-
-                        if (aheadFloor) {
-                            float floorDelta = *aheadFloor - targetPos.z;
-                            float waterOverFloor = *waterH - *aheadFloor;
-                            bool nearSurface = depthFromFeet <= 1.65f;
-                            bool reachableRamp = (floorDelta >= -0.35f && floorDelta <= 1.25f);
-                            bool shallowRampWater = waterOverFloor <= swimFloatDepth() + 0.30f;
-                            if (nearSurface && reachableRamp && shallowRampWater) {
-                                inWater = false;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        // Keep swimming through water-data gaps at chunk boundaries.
-        if (!inWater && swimming && !waterH) {
-            inWater = true;
-        }
-
-        // Out of the water by a jump (swim_jump.hpp): risen from it, the
-        // body is not taken back in until the jump turns to a fall - the
-        // water is still under the feet for the first few frames of it.
-        if (swimJumpRising_) {
-            if (verticalVelocity > 0.0f && !grounded) inWater = false;
-            else swimJumpRising_ = false;
-        }
-        bool swimJump = false;
-        if (swimming && inWater && waterH &&
-            swim_jump::allowed(f.spaceHeld && !f.noAscendDescend, *waterH - targetPos.z, swimFloatDepth())) {
-            swimJump = true;
-            inWater = false;
-        }
-
-        // The collision port decides swimming as the client does (0x00730d10)
-        // from the liquid where it looks (portLiquidLevelAt); a jump out is
-        // the swim step's (0x00760b40), so the old one stands down.
-        if (collision::portEnabled() && !portAborted_) {
-            portMover_.pos = *followTarget;
-            collision::updateSwimming(portMover_, portLiquidLevelAt(*followTarget), true, gravityDisabled_);
-            inWater = portMover_.swimming;
-            swimJump = false;
-        }
+        // Whether the unit swims is the client's decision (0x00730d10) from
+        // the liquid where it looks (portLiquidLevelAt); a jump out of the
+        // water is the swim step's (0x00760b40, portMove).
+        portMover_.pos = *followTarget;
+        collision::updateSwimming(portMover_, portLiquidLevelAt(*followTarget), true, gravityDisabled_);
+        const bool inWater = portMover_.swimming;
         portAscending_ = f.spaceHeld && !f.noAscendDescend;
 
         if (inWater) {
         swimming = true;
         jumpLocked_ = false;
-        // In a building's liquid under the ground - the Undercity's slime
-        // canals - the hill's heightmap lies far over the head. It is no
-        // floor there and no wall: taken as a wall (below) every stroke
-        // ran into it, and the swimmer turned on the spot without moving.
-        const bool underTerrain = [&] {
-            if (!terrainManager || !waterRenderer || !waterRenderer->isWmoWaterAt(targetPos.x, targetPos.y))
-                return false;
-            const auto th = terrainManager->getHeightAt(targetPos.x, targetPos.y);
-            return th && *th > targetPos.z + 2.0f;
-        }();
         // Swim movement follows look pitch (f.forward/back), while strafe stays
         // lateral for stable control.
         float swimSpeed = (swimSpeedOverride_ > 0.0f && swimSpeedOverride_ < 100.0f && !std::isnan(swimSpeedOverride_))
@@ -940,146 +696,13 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
             if (verticalVelocity > 0.0f) verticalVelocity = 0.0f;
         }
 
-        // Prevent sinking/clipping through world floor while swimming.
-        // Cache floor queries (update every 3 frames or 1 unit f.movement)
-        std::optional<float> floorH;
-        float dx2D = targetPos.x - lastFloorQueryPos.x;
-        float dy2D = targetPos.y - lastFloorQueryPos.y;
-        float dist2DSq = dx2D * dx2D + dy2D * dy2D;
-        constexpr float kFloorDistSq = FLOOR_QUERY_DISTANCE_THRESHOLD * FLOOR_QUERY_DISTANCE_THRESHOLD;
-        bool updateFloorCache = (floorQueryFrameCounter++ >= FLOOR_QUERY_FRAME_INTERVAL) ||
-                                 (dist2DSq > kFloorDistSq);
-
-        if (updateFloorCache) {
-            floorQueryFrameCounter = 0;
-            lastFloorQueryPos = targetPos;
-            constexpr float MAX_SWIM_FLOOR_ABOVE_FEET = 0.25f;
-            constexpr float MIN_SWIM_CEILING_ABOVE_FEET = 0.30f;
-            constexpr float MAX_SWIM_CEILING_ABOVE_FEET = 1.80f;
-            std::optional<float> ceilingH;
-            auto considerFloor = [&](const std::optional<float>& h) {
-                if (!h) return;
-                // Swim-floor guard: only accept surfaces at or very slightly above feet.
-                if (*h <= targetPos.z + MAX_SWIM_FLOOR_ABOVE_FEET) {
-                    if (!floorH || *h > *floorH) floorH = h;
-                }
-                // Swim-ceiling guard: detect structures just above feet so upward swim
-                // can't clip through docks/platform undersides.
-                float dz = *h - targetPos.z;
-                if (dz >= MIN_SWIM_CEILING_ABOVE_FEET && dz <= MAX_SWIM_CEILING_ABOVE_FEET) {
-                    if (!ceilingH || *h < *ceilingH) ceilingH = h;
-                }
-            };
-
-            if (terrainManager && !underTerrain) {
-                considerFloor(terrainManager->getHeightAt(targetPos.x, targetPos.y));
-            }
-            if (wmoRenderer) {
-                auto wh = wmoRenderer->getFloorHeight(targetPos.x, targetPos.y, targetPos.z + 2.0f);
-                considerFloor(wh);
-            }
-            if (m2Renderer && !externalFollow_) {
-                auto mh = m2Renderer->getFloorHeight(targetPos.x, targetPos.y, targetPos.z + 2.0f);
-                considerFloor(mh);
-            }
-
-            // Terrain is not a surface a swimmer can be underneath.
-            //
-            // considerFloor only takes a floor at or just above the feet, so a
-            // dive can pass under a dock rather than being held on top of it.
-            // Terrain has no underside to pass under, and once the feet are
-            // below the heightmap its sample is far above them: the guard drops
-            // it, no floor is left, and nothing pushes back. One fast frame
-            // through the surface and the swimmer is under the map for good.
-            //
-            // A structure floor found beneath the feet still owns the vertical,
-            // so a cave or an interior that genuinely sits below the heightmap
-            // keeps swimming as it did.
-            if (terrainManager && !floorH && !underTerrain) {
-                auto th = terrainManager->getHeightAt(targetPos.x, targetPos.y);
-                if (th && *th > targetPos.z) floorH = th;
-            }
-
-            if (ceilingH && verticalVelocity > 0.0f) {
-                float ceilingLimit = *ceilingH - 0.35f;
-                if (targetPos.z > ceilingLimit) {
-                    targetPos.z = ceilingLimit;
-                    verticalVelocity = 0.0f;
-                }
-            }
-
-            cachedFloorHeight = floorH;
-        } else {
-            floorH = cachedFloorHeight;
-        }
-        if (floorH) {
-            float swimFloor = *floorH + 0.5f;
-            if (targetPos.z < swimFloor) {
-                targetPos.z = swimFloor;
-                if (verticalVelocity < 0.0f) verticalVelocity = 0.0f;
-            }
-        }
-
-        // Enforce collision while swimming too (horizontal only), skip when stationary.
-        {
-            // Horizontal only: the swim clamp owns the vertical.
-            glm::vec3 stepPos = sweepAgainstWalls(*followTarget, targetPos, true);
-
-            // Terrain is a wall to a swimmer, not only a floor.
-            //
-            // sweepAgainstWalls knows WMO walls and doodad collision, and a
-            // shoreline is neither: it is the heightmap, which the swim path
-            // only ever consulted downward, for something to float above. So
-            // nothing stopped a swimmer crossing into a hillside - and the
-            // floor probe above will not push them out of it either, because
-            // it takes a floor only at or just above the feet and a cliff face
-            // ahead is far above them. Leaving the water inside the hill then
-            // drops them through the world.
-            //
-            // Only a rise the swimmer could not float over counts. The clamp
-            // holds them half a yard above the floor, so a beach shelving up
-            // under them stays passable and they swim ashore as before.
-            constexpr float SWIM_TERRAIN_WALL_CLEARANCE = 0.9f;
-            if (terrainManager && !underTerrain) {
-                const SwimStep allowed = swimStepAgainstTerrain(
-                    {followTarget->x, followTarget->y}, {stepPos.x, stepPos.y},
-                    targetPos.z + SWIM_TERRAIN_WALL_CLEARANCE,
-                    [&](float x, float y) { return terrainManager->getHeightAt(x, y); });
-                stepPos.x = allowed.x;
-                stepPos.y = allowed.y;
-            }
-
-            targetPos.x = stepPos.x;
-            targetPos.y = stepPos.y;
-        }
-
         grounded = false;
         } else {
-        // Exiting water - boost upward to help climb onto shore/stairs.
-        if (wasSwimming && !swimJump) {
-            // Anchor lastGroundZ to current position so WMO floor probes
-            // start from a sensible height instead of stale pre-swim values.
-            lastGroundZ = targetPos.z;
-            grounded = true;  // Treat as grounded so step-up budget is full
-            // Small upward boost to clear stair lip geometry
-            if (verticalVelocity < 1.5f) {
-                verticalVelocity = 1.5f;
-            }
-        }
+        // Out of the water: the client starts a fall where the swimming
+        // ended (0x0098bff0 -> 0x00988370, updateSwimming), so the step
+        // below is a fall's, not a walk's.
+        if (swimming) grounded = false;
         swimming = false;
-        if (swimJump) {
-            // The jump itself: the swimmer's impulse, the way the keys move
-            // it, and MSG_MOVE_JUMP in place of a STOP_SWIM (below).
-            verticalVelocity = swim_jump::kVerticalSpeed;
-            grounded = false;
-            jumpLocked_ = true;
-            jumpMoveDir_ = glm::vec3(f.movement.x, f.movement.y, 0.0f);
-            jumpMoveSpeed_ = f.speed;
-            coyoteTimer = 0.0f;
-            jumpBufferTimer = 0.0f;
-            swimJumpRising_ = true;
-            swimJumpPending_ = true;
-        }
 
         // Taking off: space, on something allowed to fly. It climbs from the
         // first frame rather than jumping first, which is what the key means
@@ -1102,7 +725,6 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
             // flightForward. The camera's own look direction is not it.
             glm::vec3 flyFwd = f.flightForward;
             if (glm::dot(flyFwd, flyFwd) < 1e-8f) flyFwd = f.forward;
-            const glm::vec3 flightFrom = targetPos;
             glm::vec3 flyMove(0.0f);
             if (f.nowForward)     flyMove += flyFwd;
             if (f.nowBackward)    flyMove -= flyFwd;
@@ -1129,25 +751,6 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
             }
             targetPos.z += verticalVelocity * f.physicsDeltaTime;
 
-            // The ground holds a flying mount up - see flightStepAgainstGround.
-            // Not where a WMO floor lies at the feet under the heightfield: that
-            // is a tunnel burrowing under unholed ground, flown into, not over.
-            if (terrainManager) {
-                // Half a heightfield cell, as the slope reading in
-                // sampleFloorUnderFeet uses, for the same reason.
-                constexpr float kGroundNormalSpacing = 2.0f;
-                const glm::vec3 slid = movement::flightStepAgainstGround(
-                    [this](float x, float y) -> std::optional<float> {
-                        if (terrainManager->isHoleAt(x, y)) return std::nullopt;
-                        return terrainManager->getHeightAt(x, y);
-                    },
-                    flightFrom, targetPos, kGroundNormalSpacing);
-                if (slid != targetPos &&
-                    !(wmoRenderer && wmoRenderer->getFloorHeight(
-                          targetPos.x, targetPos.y, targetPos.z + 1.5f))) {
-                    targetPos = slid;
-                }
-            }
             // Skip all ground physics - go straight to collision/WMO sections
         } else {
 
@@ -1272,1330 +875,24 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
             cachedInsideInteriorWMO = cachedInsideWMO &&
                 wmoRenderer->isInsideInteriorWMO(targetPos.x, targetPos.y, targetPos.z + 1.0f);
             if (cachedInsideWMO != prevInside || cachedInsideInteriorWMO != prevInsideInterior) {
-                hasCachedFloor_ = false;
                 hasCachedCamFloor = false;
                 cachedPivotLift_ = 0.0f;
             }
         }
     }
 
-    // The collision port, behind its toggle: the client's own movement makes
-    // the move, and none of the heuristics below or in the grounding runs.
-    portMovedThisStep_ = false;
-    if (collision::portEnabled() && !portAborted_ && !externalFollow_ &&
-        !gravityDisabled_ && !waterWalkActive_ && !groundNotStreamedYet(targetPos.x, targetPos.y)) {
-        targetPos = portMove(*followTarget, targetPos, f.physicsDeltaTime);
-        portLastOut_ = targetPos;
-        portLastOutValid_ = true;
-        portMovedThisStep_ = true;
-        return targetPos;
-    }
-
-    // Sweep collisions in small steps to reduce tunneling through thin walls/floors.
-    // Skip entirely when stationary to avoid wasting collision calls.
-    // Use tighter steps when inside WMO for more precise collision.
-    targetPos = sweepAgainstWalls(*followTarget, targetPos, true);
-
-    // Ground too steep to stand on is a wall, and a mover on it slides.
-    //
-    // The client tests the contact normal against cos 50 degrees (0x0075e0c0,
-    // 0x0075e250): steeper, and the surface stops the part of the move that
-    // climbs it. The heightfield went unchecked here - the limit had been
-    // taken off because it removed the ground rather than the step - so a
-    // run up a mesa's face went straight up it, and down another, at full
-    // speed (Thunder Bluff). A building's or a doodad's floor over the slope
-    // is walked on as it is; only the ground's own slope is judged.
-    if (!externalFollow_ && !swimming && !isFlightAirborne() && terrainManager && !ignoreSlopeLimit_) {
-        const glm::vec3 from = *followTarget;
-        auto ground = [this](float sx, float sy) { return terrainManager->getHeightAt(sx, sy); };
-        auto structureFloorAt = [&](float x, float y, float z) {
-            if (wmoRenderer) {
-                const auto h = wmoRenderer->getFloorHeight(x, y, z + 1.0f);
-                if (h && *h > z - 2.0f) return true;
-            }
-            if (m2Renderer) {
-                const auto h = m2Renderer->getFloorHeight(x, y, z + 1.0f);
-                if (h && *h > z - 2.0f) return true;
-            }
-            return false;
-        };
-        constexpr float kSlopeSpacing = 1.0f;
-        // The step, against the slope where it lands.
-        glm::vec2 step(targetPos.x - from.x, targetPos.y - from.y);
-        if (glm::dot(step, step) > 1e-8f) {
-            const auto toGround = ground(targetPos.x, targetPos.y);
-            // Ground rising under the feet, not ground far overhead - under
-            // a city or in a cave the heightfield is the world above.
-            if (toGround && *toGround > from.z + 0.05f && *toGround < from.z + movement::kMaxStepUp + 1.0f &&
-                !structureFloorAt(targetPos.x, targetPos.y, from.z)) {
-                const glm::vec3 n = movement::heightfieldNormal(ground, targetPos.x, targetPos.y, kSlopeSpacing);
-                const glm::vec2 kept = movement::stepAgainstSteepGround(step, n);
-                if (kept != step) {
-                    targetPos.x = from.x + kept.x;
-                    targetPos.y = from.y + kept.y;
-                }
-            }
-        }
-        // Standing on it: slide down, gathering speed as a fall does.
-        const auto underGround = ground(from.x, from.y);
-        const bool onGround = underGround && std::abs(from.z - *underGround) <= 0.3f;
-        if (onGround && !structureFloorAt(from.x, from.y, from.z)) {
-            const glm::vec3 n = movement::heightfieldNormal(ground, from.x, from.y, kSlopeSpacing);
-            slideSpeed_ = movement::slideSpeedOn(slideSpeed_, n, f.physicsDeltaTime);
-            const glm::vec2 downhill(n.x, n.y);
-            const float len = glm::length(downhill);
-            if (slideSpeed_ > 0.0f && len > 1e-6f) {
-                const glm::vec2 d = downhill / len * slideSpeed_ * f.physicsDeltaTime;
-                targetPos.x += d.x;
-                targetPos.y += d.y;
-            }
-        } else if (grounded) {
-            slideSpeed_ = 0.0f;
-        }
-    } else {
-        slideSpeed_ = 0.0f;
-    }
-
-    return targetPos;
-}
-
-// Put the character on the floor, and publish where it ended up.
-//
-// The expensive half: terrain, WMO and doodad floor queries, the step-up
-// budget, the slope limit, the cache that skips all of it when barely moving.
-// Then the follow target is written, and a fall through the world is caught.
-// What the floor queries answer directly under the character.
-//
-// The expensive part of grounding: three renderers asked where their surface
-// is, two of them on other threads, and a cache that skips all of it when the
-// character has barely moved. The three centre samples come back with the
-// chosen floor because the recovery probes above need to know which surfaces
-// existed at all, not just which one won.
-CameraController::FloorSample CameraController::sampleFloorUnderFeet(const glm::vec3& targetPos,
-                                                                     float stepUpBudget) {
-    std::optional<float> groundH;
-    std::optional<float> centerTerrainH;
-    std::optional<float> centerWmoH;
-    std::optional<float> centerM2H;
-    // Collision cache: skip expensive checks if barely moved (15cm threshold)
-    float dmx = targetPos.x - lastCollisionCheckPos_.x;
-    float dmy = targetPos.y - lastCollisionCheckPos_.y;
-    float distMovedSq = dmx * dmx + dmy * dmy;
-    constexpr float kCollisionCacheDistSq = COLLISION_CACHE_DISTANCE * COLLISION_CACHE_DISTANCE;
-    bool useCached = grounded && hasCachedFloor_ && distMovedSq < kCollisionCacheDistSq;
-    if (useCached) {
-        // Never trust cached ground while actively descending or when
-        // vertical drift from cached floor is meaningful.
-        float dzCached = std::abs(targetPos.z - cachedFloorHeight_);
-        if (verticalVelocity < -0.4f || dzCached > 0.35f) {
-            useCached = false;
-        }
-    }
-
-    if (useCached) {
-        groundH = cachedFloorHeight_;
-    } else {
-        // Full collision check - run terrain/WMO/M2 queries in parallel
-        std::optional<float> terrainH;
-        std::optional<float> wmoH;
-        std::optional<float> m2H;
-        // When airborne, anchor probe to last ground level so the
-        // ceiling doesn't rise with the jump and catch roof geometry.
-        float wmoBaseZ = grounded ? std::max(targetPos.z, lastGroundZ) : lastGroundZ;
-        float wmoProbeZ = wmoBaseZ + stepUpBudget + 0.5f;
-        float wmoNormalZ = 1.0f;
-
-        // Launch WMO + M2 floor queries asynchronously while terrain runs on this thread.
-        // Collision scratch buffers are thread_local so concurrent calls are safe.
-        using FloorResult = std::pair<std::optional<float>, float>;
-        std::future<FloorResult> wmoFuture;
-        std::future<FloorResult> m2Future;
-        bool wmoAsync = false, m2Async = false;
-        float px = targetPos.x, py = targetPos.y;
-        if (wmoRenderer) {
-            wmoAsync = true;
-            // Closest to the feet, not the highest below the probe.
-            //
-            // Under an overhang - the doorways and portals of
-            // Undercity - the floor of the level above sits about a
-            // metre over the one you stand on, both inside the
-            // step-up window. The default highest-floor pick snapped
-            // the player up to the level above even standing still,
-            // the server pulled them back to the real floor, and the
-            // two fought once a second. Anchoring the pick to the
-            // player's own ground keeps them where they are; a real
-            // step onto a ledge still wins once the feet are level
-            // with it.
-            //
-            // The reference is the feet themselves, NOT wmoBaseZ:
-            // wmoBaseZ is max(z, lastGroundZ) so the probe can reach
-            // up for a step, but feeding that same raised value back
-            // as the arbitration anchor ratchets the pick upward -
-            // one stray upper-floor frame lifts lastGroundZ, and the
-            // reference then stays on the level above even after the
-            // server drags the player back down, which is the very
-            // yo-yo this pick was meant to stop. Grounded, the true
-            // feet are targetPos.z; airborne, aim at the last ground.
-            //
-            // Except that a player cannot be standing on a floor while
-            // their feet are a long way under it, and the flag says
-            // grounded anyway. At the Undercity elevator ramp the feet
-            // were 2.81 below the landing they had been standing on -
-            // still a candidate, at -41.4273 against a last ground of
-            // -41.4245 - and 2.39 above the Trade Quarter floor five
-            // yards further down. Measured from the feet the lower one
-            // is nearer by 0.42, so the pick took it and the player
-            // dropped through the ramp.
-            //
-            // Below the last ground by more than a step is falling,
-            // whatever the flag says, so anchor where the airborne case
-            // already anchors: the ground they were last on. That floor
-            // then wins by 5.2 instead of losing by 0.42. It cannot pull
-            // anyone up onto a floor they truly left, because a floor
-            // they have walked off is not a candidate at their feet.
-            const float feetRef = movement::floorArbitrationAnchor(
-                grounded, targetPos.z, lastGroundZ);
-            wmoFuture = core::ThreadPool::frameWorkers().submit(
-                [this, px, py, wmoProbeZ, feetRef]() -> FloorResult {
-                    float nz = 1.0f;
-                    auto h = wmoRenderer->getFloorHeight(px, py, wmoProbeZ, &nz, feetRef);
-                    return {h, nz};
-                });
-        }
-        if (m2Renderer && !externalFollow_) {
-            m2Async = true;
-            m2Future = core::ThreadPool::frameWorkers().submit(
-                [this, px, py, wmoProbeZ]() -> FloorResult {
-                    float nz = 1.0f;
-                    auto h = m2Renderer->getFloorHeight(px, py, wmoProbeZ, &nz);
-                    return {h, nz};
-                });
-        }
-        if (terrainManager) {
-            terrainH = terrainManager->getHeightAt(targetPos.x, targetPos.y);
-            // ...and how steep it is there, which the height alone cannot say.
-            // Sampled at a third of a yard: wide enough not to read the
-            // interpolation inside one heightfield cell as a cliff, narrow
-            // enough to still see the face of one.
-            if (terrainH) {
-                // Half a heightfield cell, so the difference measures the
-                // slope of the ground rather than the seam between two of the
-                // triangles it is built from.
-                //
-                // This was a third of a yard, chosen when the floor query
-                // interpolated the four corners of a cell and was smooth
-                // across it. It samples the real surface now - four triangles
-                // fanned from the cell's centre vertex - and at that spacing
-                // the two samples routinely land in different wedges, so the
-                // difference reads the crease between them and calls a walkable
-                // hillside a cliff. A cell is 4.17 yards; a real cliff spans
-                // several of them and is still seen.
-                constexpr float kSlopeSampleSpacing = 2.0f;
-                const float nz = movement::heightfieldNormalZ(
-                    [this](float sx, float sy) {
-                        return terrainManager->getHeightAt(sx, sy);
-                    },
-                    targetPos.x, targetPos.y, kSlopeSampleSpacing);
-                // The slope limit does NOT remove the ground.
-                //
-                // It used to: too steep, and terrainH was cleared. But a floor
-                // that is not there is not a wall - the player does not fail to
-                // climb the hill, they fall through it and keep going, which is
-                // how this was reported. Whatever the limit is worth, it is not
-                // worth dropping someone out of the world.
-                //
-                // A slope limit belongs on the movement: refuse the step onto
-                // ground too steep to stand on, and leave the ground where it
-                // is. Until that is written, a steep hillside is climbable
-                // again, which is what it was before the limit was added and is
-                // the lesser of the two faults.
-                (void)nz;
-            }
-        }
-        if (wmoAsync) {
-            try { auto [h, nz] = wmoFuture.get(); wmoH = h; wmoNormalZ = nz; }
-            catch (const std::exception& e) { LOG_ERROR("WMO floor query: ", e.what()); }
-        }
-        if (m2Async) {
-            try {
-                auto [h, nz] = m2Future.get();
-                m2H = h;
-                if (m2H && !ignoreSlopeLimit_ && nz < MIN_WALKABLE_NORMAL_M2) {
-                    m2H = std::nullopt;
-                }
-            } catch (const std::exception& e) { LOG_ERROR("M2 floor query: ", e.what()); }
-        }
-
-        // A tunnel mouth can overlap the outdoor heightfield before the
-        // player's eye point is inside the WMO bounds.  Treat a nearby WMO
-        // floor below that terrain as transition space immediately; waiting
-        // for cachedInsideWMO makes the outdoor terrain win one frame at a
-        // time (climbing through the roof), while rejecting a steep entrance
-        // ramp here makes the player fall through it.
-        bool atTunnelSeam = false;
-        if (terrainH && wmoH) {
-            const float terrainAboveWmo = *terrainH - *wmoH;
-            const float wmoDropFromPlayer = targetPos.z - *wmoH;
-            atTunnelSeam = terrainAboveWmo > 1.2f && terrainAboveWmo < 12.0f &&
-                           wmoDropFromPlayer >= -0.4f && wmoDropFromPlayer < 1.8f;
-        }
-        // A real tunnel mouth burrows into rising ground: the heightfield
-        // just ahead climbs above head height (or stops in a hole cut for
-        // the passage). WMO ramps that merely run beneath flat walkable
-        // streets must not steal the player from the terrain above them -
-        // that pulled players through the ground at the Stormwind gate
-        // ramparts and down ramps into the void. Inside an interior WMO
-        // group (tram entrance buildings) the heightfield under the city
-        // is meaningless, so it gets no veto - otherwise entry becomes
-        // dependent on approach angle.
-        if (atTunnelSeam && !cachedInsideInteriorWMO && terrainManager) {
-            glm::vec3 moveDir = targetPos - lastCollisionCheckPos_;
-            moveDir.z = 0.0f;
-            const float moveLen = glm::length(moveDir);
-            if (moveLen < 1e-3f) {
-                atTunnelSeam = false;  // stationary - nothing to enter
-            } else {
-                const glm::vec3 aheadPos = targetPos + moveDir * (2.5f / moveLen);
-                auto terrainAhead = terrainManager->getHeightAt(aheadPos.x, aheadPos.y);
-                atTunnelSeam = !terrainAhead ||
-                               *terrainAhead > targetPos.z + 2.2f;
-            }
-        }
-
-        // Reject steep WMO slopes. Tunnel ramps use the more permissive WMO
-        // limit even at the boundary, where isInsideWMO is not reliable yet.
-        float minWalkableWmo = (cachedInsideWMO || atTunnelSeam)
-            ? MIN_WALKABLE_NORMAL_WMO : MIN_WALKABLE_NORMAL_TERRAIN;
-        // A steep crease between walkable faces is crossed, not fallen
-        // through. Where a deck meets a ramp a strip of triangles can be too
-        // steep to stand on while walkable floor lies a foot either side of
-        // it; dropped, it left no floor at all, the probe found the wall
-        // under it, anchored lower each frame, and Blackrock's bridge let the
-        // player through to the walkway twelve yards below - a little forward
-        // and back over the crease was enough. So a steep face within a step
-        // of the feet still holds them up where walkable floor at that
-        // height is within half a yard of them. A steep face on its own - a
-        // roof, a slanted wall - is still no floor, and a fall still passes
-        // it by.
-        if (wmoH && !ignoreSlopeLimit_ && wmoNormalZ < minWalkableWmo) {
-            bool crease = false;
-            if (verticalVelocity > -3.0f && *wmoH >= targetPos.z - 0.35f && *wmoH <= targetPos.z + stepUpBudget) {
-                const auto cross = feetCross(0.5f);
-                for (std::size_t i = 1; i < cross.size() && !crease; ++i) {
-                    float nz = 0.0f;
-                    const auto h = wmoRenderer->getFloorHeight(targetPos.x + cross[i].x, targetPos.y + cross[i].y,
-                                                               wmoProbeZ, &nz);
-                    crease = h && nz >= minWalkableWmo && std::abs(*h - *wmoH) <= 0.6f;
-                }
-            }
-            if (!crease) wmoH = std::nullopt;  // Treat as unwalkable
-        }
-
-        // Reject WMO floors far above last known ground when airborne
-        // (prevents snapping to roof/ceiling surfaces during jumps)
-        if (wmoH && !grounded && *wmoH > lastGroundZ + stepUpBudget + 0.5f) {
-            wmoH = std::nullopt;
-            centerWmoH = std::nullopt;
-        }
-        // An M2 doodad's collision sitting well below a valid WMO
-        // floor is BENEATH that floor - a decoration or structural
-        // base under the walkway, not a surface to stand on. Letting
-        // it win drops the player through the WMO floor: in Undercity
-        // the pick took an m2 floor ~6m below the wmo one (feet -48.8,
-        // wmo -48.15, m2 -54.23) and fell. When a WMO floor is present
-        // here, reject an m2 floor more than 1.5m below it. (If the
-        // player were standing ON the m2 platform, the higher WMO
-        // floor would be above the probe and not returned, so this
-        // cannot strand them off a legitimate lower deck.)
-        if (m2H && wmoH && *m2H < *wmoH - 1.5f) {
-            m2H = std::nullopt;
-        }
-        // A terrain hole is the artist saying there is no ground
-        // here - it is how cave mouths and sunken entrances get
-        // opened up, and the mesh builder already skips those
-        // quads, so nothing is drawn over them. getHeightAt does
-        // not ask: it interpolates straight across the gap and
-        // reports a surface right at the player's feet, which then
-        // wins the floor selection against the real floor below.
-        // At Gadgetzan's auction house that put the player out over
-        // the stairwell on ground that is not there, unable to walk
-        // down the steps and looking into a hole they were standing
-        // on. Every seam guard below is downstream of this and none
-        // of them could see it, because to them the terrain sample
-        // was real.
-        //
-        // Only ever hand the floor to the building underneath - a
-        // hole with nothing below it keeps the heightfield it has
-        // always had, so this cannot open a pit anywhere new.
-        if (terrainH && wmoH && terrainManager &&
-            terrainManager->isHoleAt(targetPos.x, targetPos.y)) {
-            terrainH = std::nullopt;
-        }
-
-        // Inside an interior WMO group - Undercity's halls, a
-        // building's rooms - the outdoor heightfield is the roof far
-        // overhead, never the floor. Veto it there so a brief gap in
-        // the WMO floor query does not kick the player up to the
-        // surface. (The seam case is handled above and keeps
-        // cachedInsideInteriorWMO false at entrances.)
-        //
-        // Only when it really is overhead, though. isInsideInteriorWMO
-        // is a bounding-box containment test, and an underground WMO's
-        // interior box reaches up through the ground above it - so
-        // standing on the grass over a cave counted as being inside
-        // it. Vetoing terrain there left the WMO as the only
-        // candidate, and the nearest WMO surface below is the cave's
-        // ceiling: the player dropped through the hillside they were
-        // walking on and stood on the roof of the room underneath.
-        //
-        // Higher than the player could step onto is the test, because
-        // that is the whole of what the veto meant: ground you cannot
-        // reach is not the ground you are standing on. Undercity's
-        // surface sits ~113m over the halls and is still vetoed; the
-        // hillside at your feet is not. The rule itself lives in
-        // movement_limits.hpp, where it is pinned by a test.
-        if (terrainH && movement::terrainIsOverheadRoof(
-                cachedInsideInteriorWMO, *terrainH,
-                targetPos.z, stepUpBudget)) {
-            terrainH = std::nullopt;
-        }
-
-        centerTerrainH = terrainH;
-        centerWmoH = wmoH;
-        centerM2H = m2H;
-
-        // Guard against extremely bad WMO void ramps, but keep normal tunnel
-        // transitions valid. Only reject when the WMO sample is implausibly far
-        // below terrain and player is not already descending.
-        if (terrainH && wmoH && !cachedInsideWMO) {
-            float terrainMinusWmo = *terrainH - *wmoH;
-            if (terrainMinusWmo > 12.0f && verticalVelocity > -8.0f) {
-                wmoH = std::nullopt;
-                centerWmoH = std::nullopt;
-            }
-        }
-
-        if ((cachedInsideWMO || atTunnelSeam) && wmoH) {
-            // The terrain wins at a seam unless it is not really there.
-            //
-            // Two ways it can fail to be. The quad is cut by a hole, which is
-            // how the map opens a cave mouth or a below-ground entrance - that
-            // is vetoed further up, before any of this, so there is simply no
-            // terrain candidate left here. Or it is standing overhead out of
-            // reach, which is what the heightfield is once the player is
-            // inside a passage burrowing under unholed ground: taking it would
-            // lift them back out. See wmoFloorIsWayIn.
-            //
-            // Anything else is real ground under real feet, and a WMO floor
-            // that happens to run beneath it is not a way in. Orgrimmar's
-            // valley entrance is the case: its ramp passes about 1.3 yards
-            // under the ground beside it, and there is no hole anywhere in
-            // that tile.
-            const bool preferWmoAtSeam =
-                atTunnelSeam &&
-                (!terrainH ||
-                 movement::wmoFloorIsWayIn(*terrainH, targetPos.z, stepUpBudget));
-            if (preferWmoAtSeam) {
-                groundH = wmoH;
-            } else if (terrainH) {
-                // Both real and both reachable: whichever is actually under the
-                // feet, rather than oscillating between the ground above and a
-                // deep WMO floor below.
-                groundH = selectClosestFloor(terrainH, wmoH, targetPos.z);
-            } else {
-                groundH = selectReachableFloor3(terrainH, wmoH, m2H, targetPos.z, stepUpBudget);
-            }
-        } else {
-            groundH = selectReachableFloor3(terrainH, wmoH, m2H, targetPos.z, stepUpBudget);
-        }
-
-        // Nothing to stand on at all, with a building overhead.
-        //
-        // The jump dump below only fires when a floor is chosen and it is a
-        // long way from the last one. Stepping onto an Undercity lift produces
-        // no floor whatsoever - the deck is an M2 transport and the shaft has
-        // no WMO floor under it - so the player simply falls, and the one dump
-        // that would name the deck never ran. UndeadElevator ships 68
-        // collision triangles and is not marked skipCollision, so what is
-        // wanted here is which test the instance fails, or whether it is a
-        // candidate at all.
-        if (!groundH && m2Renderer) {
-            // Once per place, and the clock only as a floor under that.
-            //
-            // The interval on its own was no bound at all: standing over an
-            // Undercity lift shaft is a condition that *holds*, so the same
-            // sentence with the same feet height arrived every five seconds for
-            // as long as the player stood there, which is how this block was
-            // meant to name one deck and ended up naming the same deck a
-            // hundred times. What makes the line worth reading again is a
-            // different place, so the yard square underneath has to change; the
-            // interval stays because a player walking along the edge of a hole
-            // changes place every frame.
-            static std::chrono::steady_clock::time_point lastNoFloorDump{};
-            static int lastNoFloorX = std::numeric_limits<int>::min();
-            static int lastNoFloorY = std::numeric_limits<int>::min();
-            const int placeX = static_cast<int>(std::lround(targetPos.x));
-            const int placeY = static_cast<int>(std::lround(targetPos.y));
-            const auto nowNoFloor = std::chrono::steady_clock::now();
-            if ((placeX != lastNoFloorX || placeY != lastNoFloorY) &&
-                nowNoFloor - lastNoFloorDump > std::chrono::seconds(5)) {
-                lastNoFloorDump = nowNoFloor;
-                lastNoFloorX = placeX;
-                lastNoFloorY = placeY;
-                // The centre pick's answer, not the final one: the recovery
-                // passes in groundFollowedCharacter run after this and often
-                // find a floor the one ray missed. Said plainly because the
-                // first wording read as "the player is over a void" and is
-                // what sent this hunt after the wrong thing.
-                LOG_WARNING("Centre floor probe found nothing (feet ", targetPos.z,
-                            ") - the recovery passes have not run yet");
-                if (floorDiagEnabled()) {
-                    if (wmoRenderer) {
-                        wmoRenderer->debugDumpGroupsAtPosition(
-                            targetPos.x, targetPos.y, targetPos.z);
-                    }
-                    m2Renderer->debugDumpFloorCandidatesAt(
-                        targetPos.x, targetPos.y, targetPos.z);
-                }
-            }
-        }
-
-        // Just arrived, and the buildings have not.
-        //
-        // On entering a world the heightfield is there before the WMOs are, and
-        // over anything that runs underground it lies well above where the
-        // player actually is. Logging out in the Undercity entrance tunnel and
-        // back in put them on its roof, and once the tunnel loaded its roof was
-        // a perfectly good floor to keep them there. Nothing far above the
-        // position the server gave is their floor while that is still true.
-        //
-        // Generous, because the server's Z and the floor under it disagree by a
-        // little at the best of times; two yards admits that and refuses forty.
-        if (entryFloorAnchorTimer_ > 0.0f && groundH &&
-            *groundH > entryFloorAnchorZ_ + 2.0f) {
-            groundH = std::nullopt;
-        }
-
-        // A storey down, with the floor still under the next step.
-        //
-        // One ray at the character's centre misses the lip of a surface, and
-        // the answer it comes back with is not "no floor" but whatever lies at
-        // the bottom of the room - at the top of the Undercity lift that is the
-        // shaft floor, ninety-six yards down. groundFollowedCharacter samples a
-        // foot cross afterwards and recovers, which is why this reads as almost
-        // falling rather than falling, but the frame in between is a dip the
-        // player sees.
-        //
-        // So before handing back a drop of more than a few yards, ask the four
-        // points around the feet. Only on that frame, so the hot path still
-        // casts one ray. A drop nothing around the feet can account for is a
-        // real one and is passed through untouched - walking off a ledge still
-        // works.
-        if (groundH && grounded && wmoRenderer &&
-            *groundH < lastGroundZ - 4.0f && targetPos.z > lastGroundZ - 4.0f) {
-            const float lipProbeZ = std::max(targetPos.z, lastGroundZ) + stepUpBudget + 0.6f;
-            auto lip = highestWalkableFloor(
-                [this](float x, float y, float z, float* nz) {
-                    return wmoRenderer->getFloorHeight(x, y, z, nz);
-                },
-                targetPos.x, targetPos.y, feetCross(0.35f), lipProbeZ,
-                MIN_WALKABLE_NORMAL_WMO,
-                {.minZ = lastGroundZ - 3.5f, .maxZ = targetPos.z + stepUpBudget});
-            if (lip) groundH = lip;
-        }
-
-        // The local player's own floor pick, named when it jumps.
-        //
-        // The movingEntityFloor log covers creatures and other
-        // players; this is the reporter's own character in
-        // Undercity. It says which floor was chosen for the player
-        // and the three candidates it chose among, so a jump that
-        // survived the closest-to-feet change shows what is still
-        // competing - and whether both floors are even offered here
-        // or only one is, which decides whether the fix belongs in
-        // the selection or deeper in the WMO query.
-        // Threshold sits below a floor gap (~1m) on purpose: the
-        // ratchet oscillation the feetRef fix targets stays under a
-        // metre frame to frame, so a 1.0 gate saw nothing while the
-        // player visibly bobbed. 0.4 catches the sub-metre bob.
-        if (groundH && std::abs(*groundH - lastGroundZ) > 0.4f) {
-            static std::chrono::steady_clock::time_point lastPlayerFloorLog{};
-            const auto now = std::chrono::steady_clock::now();
-            if (now - lastPlayerFloorLog > std::chrono::seconds(1)) {
-                lastPlayerFloorLog = now;
-                core::Logger::getInstance().warning(
-                    "Player floor jump: feet=", targetPos.z,
-                    " lastGround=", lastGroundZ, " -> chose ", *groundH,
-                    " grounded=", grounded ? 1 : 0,
-                    " (terrain=", terrainH ? *terrainH : -99999.0f,
-                    " wmo=", wmoH ? *wmoH : -99999.0f,
-                    " m2=", m2H ? *m2H : -99999.0f,
-                    " seam=", atTunnelSeam ? 1 : 0, ")");
-            }
-            // A jump - the floor query landed a level away, not a
-            // step - is the Undercity pull, and the one thing needed
-            // to solve it is which WMO groups and floors exist under
-            // the player when it happens. That is exactly what F8's
-            // dump prints, so dump it here automatically on a jump
-            // (rate-limited hard, it is verbose): the log then carries
-            // the answer from ordinary play, with no key to remember.
-            // Threshold matches the line above it, not a metre.
-            //
-            // 0.9 was chosen for a pull that crossed an overhang, and it
-            // never fired for the one actually reported in Undercity: the
-            // sink there is 0.41, 0.60, 0.56, 0.40 - the thickness of the
-            // floor slab, the player dropping onto the ceiling of the room
-            // beneath - and every one of those passed under the gate with
-            // the jump line printed and no group data behind it. Whatever
-            // is worth naming is worth dumping; the five second limiter is
-            // what keeps it cheap, not the size of the drop.
-            if (wmoRenderer && std::abs(*groundH - lastGroundZ) > 0.35f) {
-                static std::chrono::steady_clock::time_point lastFloorDump{};
-                if (floorDiagEnabled() && now - lastFloorDump > std::chrono::seconds(5)) {
-                    lastFloorDump = now;
-                    core::Logger::getInstance().warning(
-                        "Player floor jump: dumping WMO groups at the "
-                        "pull (feet ", targetPos.z, " -> ", *groundH, ")");
-                    wmoRenderer->debugDumpGroupsAtPosition(
-                        targetPos.x, targetPos.y, targetPos.z);
-                    // And the doodads, which is where the Undercity pull
-                    // actually lives: every one of these jumps happens while
-                    // the player is attached to a lift, and m2 comes back
-                    // empty each time even though UndeadElevator ships 68
-                    // collision triangles. The WMO dump alone could never say
-                    // why, because the deck it is looking for is not a WMO.
-                    if (m2Renderer) {
-                        m2Renderer->debugDumpFloorCandidatesAt(
-                            targetPos.x, targetPos.y, targetPos.z);
-                    }
-                }
-            }
-        }
-
-        // Update cache
-        lastCollisionCheckPos_ = targetPos;
-        if (groundH) {
-            cachedFloorHeight_ = *groundH;
-            hasCachedFloor_ = true;
-            // Ground found - cancel gravity suspension (WMO floor loaded)
-            if (gravitySuspendTimer_ > 0.0f) gravitySuspendTimer_ = 0.0f;
-        } else {
-            hasCachedFloor_ = false;
-        }
-    }
-    return {.floor = groundH, .terrain = centerTerrainH, .wmo = centerWmoH, .m2 = centerM2H};
-}
-
-void CameraController::groundFollowedCharacter(float deltaTime, FrameInput& f,
-                                               glm::vec3& targetPos,
-                                               const glm::vec3& prevTargetPos) {
-    // Seated: the server placed the character, and this pass would place them
-    // again from whatever is underneath.
-    //
-    // A chair is an M2 with collision whose seat is about a metre off the
-    // floor and nothing here can tell a seat from a step, so the feet went on
-    // top of the chair and the character sat in the air above it. Dropping the
-    // chair from the floor candidates was not enough: it only applied to the
-    // stand states that name a chair, and a server that answers a chair with a
-    // plain SIT - which is what the inn's chairs did - left the whole rule
-    // switched off while the pose said otherwise.
-    //
-    // Nothing drifts while this stands down: movement is blocked for as long
-    // as the character is seated, and the moment they stand up the pass runs
-    // again from wherever the server left them.
-    //
-    // One thing is still enforced: the floor. Standing the pass down entirely
-    // left nothing to catch a seat that ends up under the ground - a tile that
-    // streamed in after the sit, a server seating the character at a Z the
-    // floor here does not agree with - and a character below the floor is a
-    // character who falls through it when they stand. So the floor under the
-    // feet is still sampled and used one way only, upward, and never from the
-    // chair's own M2, which is what standing on the furniture was.
-    if (sitting) {
-        const FloorSample seated = sampleFloorUnderFeet(targetPos, movement::kMaxStepUp);
-        const std::optional<float> under = selectReachableFloor3(
-            seated.terrain, seated.wmo, std::nullopt, targetPos.z, movement::kMaxStepUp);
-        if (under && targetPos.z < *under) {
-            targetPos.z = *under;
-            lastGroundZ = *under;
-            hasRealGround_ = true;
-            grounded = true;
-            verticalVelocity = 0.0f;
-        }
-        return;
-    }
-
-    // Ground the character to terrain or WMO floor
-    // Skip entirely while swimming - the swim floor clamp handles vertical bounds.
-    if (!swimming) {
-        float stepUpBudget = grounded ? movement::kMaxStepUp : 1.2f;
-        // 1. Center-only sample for terrain/WMO floor selection.
-        //    Using only the center prevents tunnel entrances from snapping
-        //    to terrain when offset samples miss the WMO floor geometry.
-        // Slope limit: reject surfaces too steep to walk (prevent clipping).
-        // WMO tunnel/bridge ramps are often steeper than outdoor terrain ramps.
-        // The floor directly under the feet, and the surfaces that answered.
-        FloorSample sample = sampleFloorUnderFeet(targetPos, stepUpBudget);
-        std::optional<float> groundH = sample.floor;
-        const std::optional<float> centerTerrainH = sample.terrain;
-        const std::optional<float> centerWmoH = sample.wmo;
-        const std::optional<float> centerM2H = sample.m2;
-
-        // Transition safety: if no reachable floor was selected, choose the higher
-        // of terrain/WMO center surfaces when it is still near the player.
-        // This avoids dropping into void gaps at terrain<->WMO seams.
-        // Whether there is structure here at all, which gates every recovery
-        // below it - the multi-sample pass, the wider rescue rings, all of it.
-        //
-        // It rested on a ray at the character's centre, and a centre ray is the
-        // one thing that misses the lip of a surface: at the top of the
-        // Undercity lift the landing lies a third of a yard away in +y at the
-        // height of the feet, the centre finds nothing, so this said there is
-        // no structure nearby and shut off the passes that would have found it.
-        // The player steps off the deck and dips into the gap.
-        //
-        // The hint asks the foot cross now, the same four points the pass it
-        // guards would use. It is the last thing standing between the player
-        // and a fall, so it should not fail for the reason those passes exist.
-        const bool nearWmoSpace = cachedInsideWMO || centerWmoH.has_value();
-        bool nearStructureSpace = nearWmoSpace || centerM2H.has_value();
-        if (!nearStructureSpace && hasRealGround_) {
-            const auto nearLastGround = [&](std::optional<float> h) {
-                return h && std::abs(*h - lastGroundZ) <= 2.0f;
-            };
-            if (wmoRenderer) {
-                if (nearLastGround(highestWalkableFloor(
-                        [this](float x, float y, float z, float* nz) {
-                            return wmoRenderer->getFloorHeight(x, y, z, nz);
-                        },
-                        targetPos.x, targetPos.y, feetCross(0.35f), lastGroundZ + 1.5f,
-                        MIN_WALKABLE_NORMAL_WMO,
-                        {.minZ = lastGroundZ - 2.0f, .maxZ = lastGroundZ + 2.0f}))) {
-                    nearStructureSpace = true;
-                }
-            }
-            if (!nearStructureSpace && m2Renderer && !externalFollow_) {
-                if (nearLastGround(highestWalkableFloor(
-                        [this](float x, float y, float z, float* nz) {
-                            return m2Renderer->getFloorHeight(x, y, z, nz);
-                        },
-                        targetPos.x, targetPos.y, feetCross(0.35f), lastGroundZ + 1.5f,
-                        MIN_WALKABLE_NORMAL_M2,
-                        {.minZ = lastGroundZ - 2.0f, .maxZ = lastGroundZ + 2.0f}))) {
-                    nearStructureSpace = true;
-                }
-            }
-        }
-        if (!groundH) {
-            auto highestCenter = selectHighestFloor(centerTerrainH, centerWmoH, centerM2H);
-            if (highestCenter) {
-                float dz = targetPos.z - *highestCenter;
-                // Keep this fallback narrow: only for WMO seam cases, or very short
-                // transient misses while still almost touching the last floor.
-                bool allowFallback = nearStructureSpace || (noGroundTimer_ < 0.10f && dz < 0.6f);
-                if (allowFallback && dz >= -0.5f && dz < 2.0f) {
-                    groundH = highestCenter;
-                }
-            }
-        }
-
-        // Continuity guard only for WMO seam overlap: avoid instantly switching to a
-        // much lower floor sample at tunnel mouths (bad WMO ramp chains into void).
-        if (groundH && hasRealGround_ && nearWmoSpace && !cachedInsideInteriorWMO) {
-            float dropFromLast = lastGroundZ - *groundH;
-            if (dropFromLast > 1.5f) {
-                if (centerTerrainH && *centerTerrainH > *groundH + 1.5f) {
-                    groundH = centerTerrainH;
-                }
-            }
-        }
-
-        // Seam stability: while overlapping WMO shells, cap how fast floor height can
-        // step downward in a single frame to avoid following bad ramp samples into void.
-        if (groundH && nearWmoSpace && !cachedInsideInteriorWMO && lastGroundZ > 1.0f) {
-            float maxDropPerFrame = (verticalVelocity < -8.0f) ? 2.0f : 0.60f;
-            float minAllowed = lastGroundZ - maxDropPerFrame;
-            // Extra seam guard: outside interior groups, avoid accepting floors that
-            // are far below nearby terrain. Keeps shark-mouth transitions from
-            // following erroneous WMO ramps into void.
-            // Not while standing inside a building. Terrain is the ground
-            // *outside*, and a staircase descending below it - Gadgetzan's
-            // auction house, any cellar - is a legitimate floor far under
-            // nearby terrain, which is exactly what this refuses. The
-            // player hovered over the steps and sank at the clamp's rate
-            // instead of walking down them.
-            //
-            // The interior test above is not enough on its own: it wants
-            // the point a metre over the player's head inside a group
-            // flagged 0x2000, and at the top of a stairwell that group's
-            // box has not started yet. Being inside the WMO at all is the
-            // question this guard should have asked.
-            if (centerTerrainH && !cachedInsideWMO) {
-                // Never let terrain-based seam guard push floor above current feet;
-                // it should only prevent excessive downward drops.
-                float terrainGuard = std::min(*centerTerrainH - 1.0f, targetPos.z - 0.15f);
-                minAllowed = std::max(minAllowed, terrainGuard);
-            }
-            if (*groundH < minAllowed) {
-                *groundH = minAllowed;
-            }
-        }
-
-        // Structure continuity guard: if a floor query suddenly jumps far below
-        // recent support while near dock/bridge geometry, keep a conservative
-        // support height to avoid dropping through sparse collision seams.
-        if (groundH && hasRealGround_ && nearStructureSpace && !f.nowJump) {
-            float dropFromLast = lastGroundZ - *groundH;
-            // Only reject the lower sample while the feet are still up near
-            // lastGroundZ - that is the transient bad-ramp case this guard is
-            // for. Once the feet have actually descended below the clamp
-            // target the player is standing on the lower floor, and pinning
-            // groundH back up to lastGroundZ leaves the ground reference
-            // hanging above the feet so gravity and the snap fight over the
-            // gap forever. That is the Undercity overhang yo-yo: walk under
-            // the level above, lastGroundZ stays stuck on it (-43) while the
-            // real floor (-47) is refused, and the feet bob in between. If
-            // the feet are already past the target, let the real floor
-            // through so lastGroundZ can follow the player down onto it.
-            if (dropFromLast > 1.0f && verticalVelocity > -6.0f &&
-                targetPos.z > lastGroundZ - 0.20f) {
-                *groundH = std::max(*groundH, lastGroundZ - 0.20f);
-            }
-        }
-
-        // Void recovery: far beneath the terrain heightfield with no structure
-        // floor anywhere below usually means a seam heuristic already failed.
-        // Never use the heightfield as a rescue target while WMO containment says
-        // the player is inside, though: Ironforge's valid interior floor is over
-        // 200 units below the mountain terrain, and a transient floor-query miss
-        // must not teleport the player onto the mountain above the city.
-        if (!groundH && centerTerrainH && !cachedInsideWMO &&
-            targetPos.z < *centerTerrainH - 60.0f) {
-            LOG_WARNING("Void recovery: player at z=", targetPos.z,
-                        " with terrain at ", *centerTerrainH, " and no floor below");
-            targetPos.z = *centerTerrainH + 0.5f;
-            verticalVelocity = 0.0f;
-            groundH = centerTerrainH;
-        }
-
-        // WMO-only maps (Deeprun Tram, instances), and deep WMO interiors on
-        // terrain maps (Ironforge), must recover to the last structural floor
-        // rather than the unrelated outdoor heightfield above them.
-        if (!groundH && (!centerTerrainH || cachedInsideWMO) && hasLastGroundedPos_ &&
-            noGroundTimer_ > 2.5f && targetPos.z < lastGroundZ - 40.0f) {
-            LOG_WARNING("Void recovery (WMO/ no heightfield): player at z=", targetPos.z,
-                        " returning to last grounded pos (", lastGroundedPos_.x, ", ",
-                        lastGroundedPos_.y, ", ", lastGroundedPos_.z, ")");
-            targetPos = lastGroundedPos_ + glm::vec3(0.0f, 0.0f, 0.5f);
-            verticalVelocity = 0.0f;
-            groundH = lastGroundedPos_.z;
-        }
-
-        // 1b. Multi-sample WMO floors when in/near WMO space to avoid
-        // falling through narrow board/plank gaps where center ray misses.
-        if (wmoRenderer && nearWmoSpace) {
-            const float wmoMultiBaseZ = grounded ? std::max(targetPos.z, lastGroundZ) : lastGroundZ;
-            const float wmoProbeZ = wmoMultiBaseZ + stepUpBudget + 0.6f;
-            const float minWalkableWmo =
-                cachedInsideWMO ? MIN_WALKABLE_NORMAL_WMO : MIN_WALKABLE_NORMAL_TERRAIN;
-            // Airborne, anything above the last known ground is a roof rather
-            // than a step, so the ceiling of the band comes down - and an edge
-            // above the feet is the side of something, not a floor
-            // (movement::edgeFloorCeiling). The centre was asked already.
-            float maxZ = movement::edgeFloorCeiling(grounded, targetPos.z, stepUpBudget, verticalVelocity);
-            if (!grounded) maxZ = std::min(maxZ, lastGroundZ + stepUpBudget + 0.5f);
-
-            auto wh = highestWalkableFloor(
-                [this](float x, float y, float z, float* nz) {
-                    return wmoRenderer->getFloorHeight(x, y, z, nz);
-                },
-                targetPos.x, targetPos.y, feetCross(0.35f), wmoProbeZ, minWalkableWmo,
-                {.minZ = lastGroundZ - 3.5f, .maxZ = maxZ});
-            if (wh && (!groundH || *wh > *groundH)) groundH = wh;
-        }
-
-        // WMO recovery probe: when no floor is found while descending, do a wider
-        // footprint sample around the player to catch narrow plank/stair misses.
-        if (!groundH && wmoRenderer && hasRealGround_ && verticalVelocity <= 0.0f) {
-            const float rescueProbeZ = std::max(lastGroundZ, targetPos.z) + stepUpBudget + 1.2f;
-            auto rescueFloor = highestWalkableFloor(
-                [this](float x, float y, float z, float* nz) {
-                    return wmoRenderer->getFloorHeight(x, y, z, nz);
-                },
-                targetPos.x, targetPos.y, feetRing(0.65f), rescueProbeZ,
-                MIN_WALKABLE_NORMAL_WMO,
-                {.minZ = lastGroundZ - 6.0f, .maxZ = lastGroundZ + stepUpBudget + 0.75f});
-            if (rescueFloor) groundH = rescueFloor;
-        }
-
-        // M2 recovery probe: Booty Bay-style wooden platforms can be represented
-        // as M2 collision where center probes intermittently miss.
-        if (!groundH && m2Renderer && !externalFollow_ && hasRealGround_ && verticalVelocity <= 0.0f) {
-            const float rescueProbeZ = std::max(lastGroundZ, targetPos.z) + stepUpBudget + 1.4f;
-            auto rescueFloor = highestWalkableFloor(
-                [this](float x, float y, float z, float* nz) {
-                    return m2Renderer->getFloorHeight(x, y, z, nz);
-                },
-                targetPos.x, targetPos.y, feetRing(0.75f), rescueProbeZ,
-                MIN_WALKABLE_NORMAL_M2,
-                {.minZ = lastGroundZ - 6.0f, .maxZ = lastGroundZ + stepUpBudget + 0.90f});
-            if (rescueFloor) groundH = rescueFloor;
-        }
-
-        // Path recovery probe: sample structure floors along the movement segment
-        // (prev -> current) to catch narrow plank gaps missed at endpoints.
-        if (!groundH && hasRealGround_ && (wmoRenderer || (m2Renderer && !externalFollow_))) {
-            std::optional<float> segmentFloor;
-            const float probeZ = std::max(lastGroundZ, targetPos.z) + stepUpBudget + 1.2f;
-            const float ts[] = {0.25f, 0.5f, 0.75f};
-            for (float t : ts) {
-                float sx = prevTargetPos.x + (targetPos.x - prevTargetPos.x) * t;
-                float sy = prevTargetPos.y + (targetPos.y - prevTargetPos.y) * t;
-
-                if (wmoRenderer) {
-                    float nz = 1.0f;
-                    auto wh = wmoRenderer->getFloorHeight(sx, sy, probeZ, &nz);
-                    if (wh && nz >= MIN_WALKABLE_NORMAL_WMO &&
-                        *wh <= lastGroundZ + stepUpBudget + 0.9f &&
-                        *wh >= lastGroundZ - 3.0f) {
-                        if (!segmentFloor || *wh > *segmentFloor) segmentFloor = wh;
-                    }
-                }
-                if (m2Renderer && !externalFollow_) {
-                    float nz = 1.0f;
-                    auto mh = m2Renderer->getFloorHeight(sx, sy, probeZ, &nz);
-                    if (mh && nz >= MIN_WALKABLE_NORMAL_M2 &&
-                        *mh <= lastGroundZ + stepUpBudget + 0.9f &&
-                        *mh >= lastGroundZ - 3.0f) {
-                        if (!segmentFloor || *mh > *segmentFloor) segmentFloor = mh;
-                    }
-                }
-            }
-            if (segmentFloor) {
-                groundH = segmentFloor;
-            }
-        }
-
-        // 2. Multi-sample for M2 objects (rugs, planks, bridges, ships) -
-        //    these are narrow and need offset probes to detect reliably.
-        if (m2Renderer && !externalFollow_) {
-            // Not highestWalkableFloor: this one prefers an M2 floor even when
-            // it is slightly lower than the terrain, so a ship's deck wins over
-            // the water under it.
-            // In the air the body's own width, not the plank-catching ring
-            // that walking uses: a crate beside a jump is beside it.
-            const auto offsets = feetRing(grounded ? 0.6f : 0.35f);
-            float m2ProbeZ = std::max(targetPos.z, lastGroundZ) + 6.0f;
-            for (const auto& o : offsets) {
-                // Off the centre, airborne, only an edge the body comes down
-                // onto (movement::edgeFloorCeiling); under the centre, the
-                // step's height as before.
-                const bool centre = o.x == 0.0f && o.y == 0.0f;
-                const float ceilingZ = centre ? targetPos.z + stepUpBudget
-                                              : movement::edgeFloorCeiling(grounded, targetPos.z, stepUpBudget, verticalVelocity);
-                float m2NormalZ = 1.0f;
-                auto m2H = m2Renderer->getFloorHeight(
-                    targetPos.x + o.x, targetPos.y + o.y, m2ProbeZ, &m2NormalZ);
-
-                // Reject steep M2 slopes
-                if (m2H && m2NormalZ < MIN_WALKABLE_NORMAL_TERRAIN) {
-                    continue;  // Skip unwalkable M2 surface
-                }
-
-                // Prefer M2 floors (ships, platforms) even if slightly lower than terrain
-                // to prevent falling through ship decks to water below
-                if (m2H && *m2H <= ceilingZ) {
-                    if (!groundH || *m2H > *groundH ||
-                        (*m2H >= targetPos.z - 0.5f && *groundH < targetPos.z - 1.0f)) {
-                        groundH = m2H;
-                    }
-                }
-            }
-        }
-
-        // Outdoors the heightfield has exactly one surface per column, so feet
-        // below it means the player is inside the hill, which is never a valid
-        // position. Climbing a slope that rises faster than the step-up budget
-        // - a steep hill, or an ordinary one crossed in a long frame - got the
-        // terrain rejected as unreachable by selectReachableFloor3. Once inside,
-        // every later sample was rejected the same way and the gap only widened
-        // as the player fell, so nothing recovered until the void check fired 60
-        // yards down. Push back out to the surface instead.
-        //
-        // Only where there is nothing else the player could be standing in or
-        // under: a cave, a tunnel or Ironforge is legitimately beneath the
-        // heightfield, and must never be yanked up onto the mountain above it.
-        // Standing on something settles it before any of the probing below.
-        // Grounding has already resolved a floor for this exact position; if
-        // that floor sits under the heightfield and is right at the feet, the
-        // player is on a structure beneath the terrain, not buried inside it.
-        // That is better evidence than the probe further down, which asks
-        // from a fixed height above the feet and can miss what grounding
-        // already found.
-        //
-        // Stairs descending below ground are the case that needs it: a
-        // stairwell cut into a keep passes under the heightfield within a step
-        // or two, and being hauled back to the surface each time reads as not
-        // being able to walk down them at all.
-        const bool standingOnStructure =
-            groundH && centerTerrainH &&
-            *groundH < *centerTerrainH - 0.5f &&
-            *groundH >= targetPos.z - 2.0f &&
-            *groundH <= targetPos.z + 0.6f;
-
-        // In flight as well: flightStepAgainstGround keeps a mount from flying
-        // into a hill, and this is what brings one back out that is already in
-        // it.
-        if (!swimming && !hoverActive_ && !externalFollow_ &&
-            !cachedInsideWMO && !nearStructureSpace && !standingOnStructure &&
-            centerTerrainH && verticalVelocity <= 0.0f) {
-            const float penetration = *centerTerrainH - targetPos.z;
-            // Below the shallow bound is ordinary contact and sampling jitter;
-            // above the deep bound is somewhere this heuristic cannot vouch for,
-            // which the void recovery above already handles.
-            constexpr float kMinPenetration = 0.10f;
-            constexpr float kMaxPenetration = 12.0f;
-            if (penetration > kMinPenetration && penetration < kMaxPenetration) {
-                // Everywhere the player may legitimately stand below the
-                // heightfield - the Darkshire crypts, the tunnel under the hill
-                // into Booty Bay, any cave - is a structure sitting under the
-                // terrain at this column. Probe for one directly instead of
-                // trusting cachedInsideWMO and centerWmoH: the first lags by
-                // design, and the second is cleared outright for floors more
-                // than 12 yards below terrain while containment still reads
-                // false, which is exactly what descending a tunnel mouth looks
-                // like. Finding anything at all here means hands off - the
-                // player belongs under the terrain, and lifting them out would
-                // put them on the hillside above the entrance they just walked
-                // into.
-                // Probed from the player, not from the terrain surface: the
-                // floor query culls any group whose top sits more than 4 yards
-                // below the probe height, so probing from up at the heightfield
-                // would skip the crypt or the tunnel entirely and report clear
-                // ground - the exact opposite of the truth. From here the
-                // structure the player is standing in is right above them.
-                const float probeZ = targetPos.z + 1.5f;
-                bool structureBelowTerrain = false;
-                if (wmoRenderer &&
-                    wmoRenderer->getFloorHeight(targetPos.x, targetPos.y, probeZ)) {
-                    structureBelowTerrain = true;
-                }
-                if (!structureBelowTerrain && m2Renderer &&
-                    m2Renderer->getFloorHeight(targetPos.x, targetPos.y, probeZ)) {
-                    structureBelowTerrain = true;
-                }
-                // A hole-cut chunk is how a cave mouth or a below-ground
-                // entrance is opened in the first place. getHeightAt
-                // interpolates straight across the hole, so the surface this
-                // rescue would push up to is not there at all - and the
-                // structure underneath may still be too far below to have been
-                // found by the probes above.
-                if (!structureBelowTerrain && terrainManager &&
-                    terrainManager->chunkHasHoles(targetPos.x, targetPos.y)) {
-                    structureBelowTerrain = true;
-                }
-
-                if (!structureBelowTerrain) {
-                    if (!terrainRescueActive_) {
-                        terrainRescueActive_ = true;
-                        LOG_INFO("Terrain penetration rescue: feet ", penetration,
-                                 " below the heightfield at (", targetPos.x, ", ",
-                                 targetPos.y, ") with no structure under it");
-                    }
-                    targetPos.z = *centerTerrainH;
-                    verticalVelocity = 0.0f;
-                    groundH = centerTerrainH;
-                    lastGroundZ = *centerTerrainH;
-                } else {
-                    terrainRescueActive_ = false;
-                }
-            } else {
-                terrainRescueActive_ = false;
-            }
-        } else {
-            terrainRescueActive_ = false;
-        }
-
-        // On the ground under a building's floor.
-        //
-        // A raised floor sits a yard or so over the heightfield it is built on,
-        // which is more than a step. Once the feet are down on that ground -
-        // one frame at the doorway where the floor query misses the threshold
-        // is enough - the floor is out of reach of the step-up, so it is never
-        // chosen again, and the player walks about inside the building sunk to
-        // the chest in its floor. Reported entering a house at an angle.
-        //
-        // Nowhere legitimate to stand has a walkable floor across the whole
-        // footprint at waist height: the body would be inside it. Put the feet
-        // back on it. The centre is asked first, so the four around it cost
-        // nothing on the frames that matter least - every one where the answer
-        // is no.
-        if (!isFlightAirborne() && !hoverActive_ && !externalFollow_ && wmoRenderer &&
-            nearWmoSpace && groundH && centerTerrainH && *groundH == *centerTerrainH) {
-            constexpr float kWaistHeight = 1.8f;
-            const float feetZ = targetPos.z;
-            const auto slabAt = [&](const glm::vec2& o) -> std::optional<float> {
-                float nz = 1.0f;
-                const auto h = wmoRenderer->getFloorHeight(
-                    targetPos.x + o.x, targetPos.y + o.y, feetZ + kWaistHeight, &nz);
-                if (!h || nz < MIN_WALKABLE_NORMAL_WMO) return std::nullopt;
-                if (*h <= feetZ + stepUpBudget || *h >= feetZ + kWaistHeight) return std::nullopt;
-                return h;
-            };
-            const auto cross = feetCross(0.35f);
-            std::optional<float> slab = slabAt(cross[0]);
-            for (std::size_t i = 1; slab && i < cross.size(); ++i) {
-                if (!slabAt(cross[i])) slab = std::nullopt;
-            }
-            if (slab) {
-                LOG_WARNING("Under a floor: feet ", feetZ, " on the ground at (", targetPos.x,
-                            ", ", targetPos.y, ") with a WMO floor at ", *slab,
-                            " across the footprint - back onto it");
-                targetPos.z = *slab;
-                groundH = slab;
-                lastGroundZ = *slab;
-                verticalVelocity = 0.0f;
-            }
-        }
-
-        // WOWEE_FLOOR_DEBUG=1 - what every floor query answered and which
-        // one won, four times a second.
-        //
-        // Two fixes for one report of not being able to walk down a
-        // staircase were both aimed at the wrong thing, because from the
-        // outside "standing on nothing" looks the same whether the floor
-        // below was never found, was found and rejected, or was found and
-        // lost a selection. Those are different bugs in different places
-        // and this is the line that tells them apart.
-        {
-            static constexpr const char* kFloorDebugPath = "/tmp/wowee_floor.log";
-            static const bool kFloorDebug = [] {
-                const char* v = std::getenv("WOWEE_FLOOR_DEBUG");
-                return v && v[0] && v[0] != '0';
-            }();
-            if (kFloorDebug) {
-                floorDebugTimer_ += deltaTime;
-                if (floorDebugTimer_ >= 0.25f) {
-                    floorDebugTimer_ = 0.0f;
-                    auto say = [](const std::optional<float>& v) {
-                        return v ? std::to_string(*v) : std::string("-");
-                    };
-                    std::ostringstream line;
-                    line << "FLOOR at (" << targetPos.x << ", " << targetPos.y
-                         << ", " << targetPos.z << ")"
-                         << " terrain=" << say(centerTerrainH)
-                         << " wmo="     << say(centerWmoH)
-                         << " m2="      << say(centerM2H)
-                         << " chose="   << say(groundH)
-                         << " hole="    << (terrainManager &&
-                                terrainManager->isHoleAt(targetPos.x, targetPos.y))
-                         << " insideWMO="      << cachedInsideWMO
-                         << " insideInterior=" << cachedInsideInteriorWMO
-                         << " grounded="       << grounded
-                         << " vz="             << verticalVelocity
-                         << " lastGroundZ="    << lastGroundZ;
-                    // With the port on, how many faces it gathers round the
-                    // body here, from the ground, buildings and doodads.
-                    if (collision::portEnabled()) {
-                        const glm::vec3 pad(1.0f / 3.0f + 1.0f / 6.0f,
-                                            1.0f / 3.0f + 1.0f / 6.0f, 1.0f / 6.0f);
-                        const glm::vec3 lo = targetPos - pad;
-                        const glm::vec3 hi = targetPos + pad + glm::vec3(0.0f, 0.0f, 73.0f / 36.0f);
-                        std::vector<collision::Facet> facets;
-                        if (terrainManager) terrainManager->gatherCollisionFacets(lo, hi, facets);
-                        const size_t t = facets.size();
-                        if (wmoRenderer) wmoRenderer->gatherCollisionFacets(lo, hi, facets);
-                        const size_t w = facets.size() - t;
-                        if (m2Renderer) m2Renderer->gatherCollisionFacets(lo, hi, facets);
-                        line << " facets=" << t << "/" << w << "/" << (facets.size() - t - w);
-                        // The port's floor: the body swept down from a yard up,
-                        // against faces gathered round that path (0x0075f9d0).
-                        {
-                            const collision::Body body(targetPos + glm::vec3(0.0f, 0.0f, 1.0f),
-                                                       collision::kPlayerHalfWidth,
-                                                       collision::kPlayerHeight);
-                            glm::vec3 lo2, hi2;
-                            collision::sweepBox(body, glm::vec3(0.0f, 0.0f, -1.0f), 3.0f, lo2, hi2);
-                            std::vector<collision::Facet> near2;
-                            if (terrainManager) terrainManager->gatherCollisionFacets(lo2, hi2, near2);
-                            if (wmoRenderer) wmoRenderer->gatherCollisionFacets(lo2, hi2, near2);
-                            if (m2Renderer) m2Renderer->gatherCollisionFacets(lo2, hi2, near2);
-                            const auto down = collision::sweep(body, glm::vec3(0.0f, 0.0f, -1.0f), 3.0f, near2);
-                            line << " sweepFloor=";
-                            if (down.hit) line << (targetPos.z + 1.0f - down.allowed);
-                            else line << "-";
-                        }
-                        if (wmoRenderer) {
-                            const glm::vec3 up = targetPos + glm::vec3(0.0f, 0.0f, 0.5f);
-                            line << " below=" << wmoRenderer->describeFacesAlong(up, up.z - 30.0f)
-                                 << " above=" << wmoRenderer->describeFacesAlong(up, up.z + 30.0f);
-                        }
-                        const auto liquid = portLiquidLevelAt(targetPos);
-                        line << " liquid=" << say(liquid) << " water=" << say(
-                            waterRenderer ? waterRenderer->getWaterHeightAt(targetPos.x, targetPos.y)
-                                          : std::optional<float>{});
-                    }
-                    LOG_WARNING(line.str());
-                    // Also to a file. The console is where this used to go
-                    // and it scrolled past - asking someone to reproduce a
-                    // bug and then hand back terminal scrollback is asking
-                    // twice. Truncated on the first line of a run so the
-                    // file is always this session's.
-                    static std::ofstream trace(kFloorDebugPath,
-                                               std::ios::out | std::ios::trunc);
-                    if (trace) trace << line.str() << '\n' << std::flush;
-                }
-            }
-        }
-
-        if (groundH) {
-            hasRealGround_ = true;
-            noGroundTimer_ = 0.0f;
-            lastGroundedPos_ = glm::vec3(targetPos.x, targetPos.y, *groundH);
-            hasLastGroundedPos_ = true;
-            float feetZ = targetPos.z;
-            float stepUp = stepUpBudget;
-            stepUp += 0.05f;
-            float fallCatch = 3.0f;
-            float dz = *groundH - feetZ;
-
-            // Only snap when:
-            // 1. Near ground (within step-up range above) - handles walking
-            // 2. Actually falling from height (was airborne + falling fast)
-            //    Scale snap range with fall speed so slow falls don't teleport
-            //    while extreme speeds still catch geometry penetration.
-            // 3. Was grounded + ground is close (grace for slopes)
-            bool nearGround = (dz >= 0.0f && dz <= stepUp);
-            // No further than the fall would carry the feet by the next step:
-            // a jump lands on the frame it reaches the ground. This reached at
-            // least half a yard, so every jump came down to a hand's breadth
-            // above the floor and was put on it from there - a visible drop at
-            // the end of each one.
-            float airSnapRange = std::min(fallCatch,
-                std::abs(verticalVelocity) * f.physicsDeltaTime + 0.02f);
-            bool airFalling = (!grounded && verticalVelocity < -5.0f
-                               && dz >= -airSnapRange);
-            // Not while climbing in flight: a frame's climb at a high frame
-            // rate is less than the quarter yard this reaches down, so taking
-            // off was pulled back to the ground every frame and never left it.
-            // As far down as the frame's move reaches (groundFollowReach,
-            // 0x007620f0): the client moves by the whole frame at once, and
-            // this frame is split into equal steps.
-            const float movedAcross = glm::length(glm::vec2(targetPos.x - prevTargetPos.x,
-                                                            targetPos.y - prevTargetPos.y)) *
-                                      static_cast<float>(physicsStepsThisFrame_);
-            bool slopeGrace = (grounded && verticalVelocity > -1.0f &&
-                               dz >= -movement::groundFollowReach(movedAcross) &&
-                               dz <= stepUp * 1.5f) &&
-                              !(isFlightAirborne() && f.spaceHeld);
-
-            if (dz >= -fallCatch && (nearGround || airFalling || slopeGrace)) {
-                // HOVER: float at fixed height above ground instead of standing on it
-                static constexpr float HOVER_HEIGHT = 4.0f;  // ~4 yards above ground
-                const float snapH = hoverActive_ ? (*groundH + HOVER_HEIGHT) : *groundH;
-                targetPos.z = snapH;
-                if (movement::risesOffGround(grounded, verticalVelocity, dz)) {
-                    // Lifted with the slope, still on its way up.
-                } else {
-                    verticalVelocity = 0.0f;
-                    grounded = true;
-                }
-                lastGroundZ = *groundH;
-            } else {
-                grounded = false;
-                lastGroundZ = *groundH;
-            }
-            } else {
-                hasRealGround_ = false;
-                noGroundTimer_ += f.physicsDeltaTime;
-
-                float dropFromLastGround = lastGroundZ - targetPos.z;
-                bool seamSizedGap = dropFromLastGround <= (nearStructureSpace ? 2.5f : 0.35f);
-                if (noGroundTimer_ < NO_GROUND_GRACE && seamSizedGap) {
-                    // Near WMO floors, prefer continuity over falling on transient
-                    // floor-query misses (stairs/planks/portal seams).
-                    float maxSlip = nearStructureSpace ? 1.0f : 0.10f;
-                    targetPos.z = std::max(targetPos.z, lastGroundZ - maxSlip);
-                    if (nearStructureSpace && verticalVelocity < -2.0f) {
-                        verticalVelocity = -2.0f;
-                    }
-                    grounded = false;
-                } else if (nearStructureSpace && noGroundTimer_ < 1.0f && dropFromLastGround <= 3.0f) {
-                    // Extended WMO rescue window: hold close to last valid floor so we
-                    // do not tunnel through walkable geometry during short hitches.
-                    targetPos.z = std::max(targetPos.z, lastGroundZ - 0.35f);
-                    if (verticalVelocity < -1.5f) {
-                        verticalVelocity = -1.5f;
-                    }
-                    grounded = false;
-                } else if (nearStructureSpace && noGroundTimer_ < 1.20f && dropFromLastGround <= 4.0f && !f.nowJump) {
-                    // Extended adhesion for sparse dock/bridge collision: keep us on the
-                    // last valid support long enough for adjacent structure probes to hit.
-                    targetPos.z = std::max(targetPos.z, lastGroundZ - 0.10f);
-                    if (verticalVelocity < -0.5f) verticalVelocity = -0.5f;
-                    grounded = true;
-                } else {
-                    grounded = false;
-                }
-            }
-        }
-
-    // The water is the ground under a water walker. The step above looks for
-    // the bed, far below, and found the character in the air: the fall
-    // animation, over the surface, for as long as it walked there.
-    if (waterWalkSurface_) {
-        targetPos.z = *waterWalkSurface_;
+    // The client's own movement makes the move (collision_*.hpp, portMove).
+    // A unit over ground that has not streamed in yet is held where it is,
+    // as the client holds it behind its loading screen.
+    if (externalFollow_) return targetPos;
+    if (groundNotStreamedYet(targetPos.x, targetPos.y)) {
         verticalVelocity = 0.0f;
-        grounded = true;
+        return *followTarget;
     }
-
-    // Update follow target position
-    *followTarget = targetPos;
-
-    // WOWEE_COLLISION_TRACE: where the character is, every frame up to 50 a
-    // second, and the doodads with collision around it whenever it has moved 30
-    // yards - what an in-game "can I walk through this" test is read from.
-    static const bool kCollisionTrace = std::getenv("WOWEE_COLLISION_TRACE") != nullptr;
-    if (kCollisionTrace) {
-        static float traceClock = 0.0f;
-        static glm::vec3 lastDump(1e9f);
-        traceClock += f.physicsDeltaTime;
-        if (traceClock >= 0.02f) {
-            traceClock = 0.0f;
-            LOG_WARNING("TRACE pos ", targetPos.x, " ", targetPos.y, " ", targetPos.z,
-                        " grounded=", grounded ? 1 : 0);
-        }
-        if (m2Renderer && glm::length(targetPos - lastDump) > 30.0f) {
-            lastDump = targetPos;
-            m2Renderer->debugLogCollidersNear(targetPos, 40.0f);
-        }
-    }
-
-    // --- Safe position caching + void fall detection ---
-    if (grounded && hasRealGround_ && !swimming && verticalVelocity >= 0.0f) {
-        // Player is safely on real geometry - save periodically
-        continuousFallTime_ = 0.0f;
-        autoUnstuckFired_ = false;
-        safePosSaveTimer_ += f.physicsDeltaTime;
-        if (safePosSaveTimer_ >= SAFE_POS_SAVE_INTERVAL) {
-            safePosSaveTimer_ = 0.0f;
-            lastSafePos_ = targetPos;
-            hasLastSafe_ = true;
-        }
-    } else if (swimming) {
-        // In the water is no fall, however it was reached: hopping out of it
-        // and back in (swim_jump.hpp) added each hop's air time to one fall.
-        continuousFallTime_ = 0.0f;
-    } else if (!grounded && !swimming && !externalFollow_) {
-        // Falling (or standing on nothing past grace period) - accumulate fall time
-        continuousFallTime_ += f.physicsDeltaTime;
-        if (continuousFallTime_ >= AUTO_UNSTUCK_FALL_TIME && !autoUnstuckFired_) {
-            autoUnstuckFired_ = true;
-            if (autoUnstuckCallback_) {
-                autoUnstuckCallback_();
-            }
-        }
-    }
+    targetPos = portMove(*followTarget, targetPos, f.physicsDeltaTime);
+    portLastOut_ = targetPos;
+    portLastOutValid_ = true;
+    return targetPos;
 }
 
 // The camera itself: where it sits relative to the character it follows.
@@ -3163,16 +1460,15 @@ void CameraController::updateThirdPersonCamera(float deltaTime, FrameInput& f) {
         const glm::vec3 stepStart = *followTarget;
         targetPos = moveFollowedCharacter(stepTime, f, prevTargetPos);
         const glm::vec3 stepMoved = targetPos;
-        if (portMovedThisStep_) {
-            *followTarget = targetPos;
-        } else {
-            groundFollowedCharacter(stepTime, f, targetPos, prevTargetPos);
+        *followTarget = targetPos;
+        // A rider standing still on a transport is where the deck puts them:
+        // the client moves a unit only while it moves (0x00762e00 runs for
+        // flags 0x40c0100f).
         if (rideHeld_ && !f.nowJump) {
             targetPos.x = stepStart.x;
             targetPos.y = stepStart.y;
             followTarget->x = stepStart.x;
             followTarget->y = stepStart.y;
-        }
         }
         // WOWEE_FLOOR_DEBUG: a step that carried the character further across
         // than its speed allows, and which stage did it.
@@ -3186,7 +1482,7 @@ void CameraController::updateThirdPersonCamera(float deltaTime, FrameInput& f) {
                 LOG_WARNING("MOVE JUMP: from (", stepStart.x, ", ", stepStart.y, ", ", stepStart.z,
                             ") moved (", stepMoved.x, ", ", stepMoved.y, ", ", stepMoved.z,
                             ") grounded (", followTarget->x, ", ", followTarget->y, ", ", followTarget->z,
-                            ") port=", portMovedThisStep_, " speed=", inputSpeed, " dt=", stepTime);
+                            ") speed=", inputSpeed, " dt=", stepTime);
             }
         }
         // Landing: flying down onto real ground, or skimming it, without climbing.
@@ -3252,7 +1548,6 @@ void CameraController::updateFreeFlyCamera(float /*deltaTime*/, FrameInput& f) {
         inWater = (floorH && ((*waterH - *floorH) >= MIN_SWIM_WATER_DEPTH)) || (isOcean && !floorH);
         }
     }
-
 
     if (inWater) {
         swimming = true;
@@ -4617,8 +2912,6 @@ void CameraController::reset() {
     swimming = false;
     sitting = false;
     autoRunning = false;
-    noGroundTimer_ = 0.0f;
-    autoUnstuckFired_ = false;
 
     // Clear edge-state so movement packets can re-start cleanly after respawn.
     wasMovingForward = false;
@@ -4688,7 +2981,6 @@ void CameraController::reset() {
         }
         // else: keep server Z as-is
         lastGroundZ = spawnPos.z - 0.05f;
-        hasCachedFloor_ = false;
 
         camera->setRotation(yaw, pitch);
         glm::vec3 forward3D = camera->getForward();
@@ -4866,11 +3158,7 @@ void CameraController::teleportTo(const glm::vec3& pos) {
     // (movement::teleportLandingFloor), and a floor cached at the old place
     // is not this one.
     lastGroundZ = pos.z;
-    hasCachedFloor_ = false;
     forgetPortPlace();
-    noGroundTimer_ = 0.0f;  // Reset grace period so terrain has time to stream
-    autoUnstuckFired_ = false;
-    continuousFallTime_ = 0.0f;
 
     // Invalidate active WMO group so it's re-detected at new position
     if (wmoRenderer) {
