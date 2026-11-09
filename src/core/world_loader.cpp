@@ -858,7 +858,14 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         // after any teleport away and back until the next real map change.
         // The known entities are spawned again into the rebuilt world, as
         // after a lost device.
-        if (loadedMapId_ == mapId) respawnKnownEntitiesOnLoad_ = true;
+        //
+        // The first entry after a logout comes here too, the renderers being
+        // there from the last session: the server sends what it shows the
+        // whole map as soon as the character is in, ahead of this load, and
+        // the queues and transports dropped below took the lifts with them -
+        // Undercity's were gone after any relog until the client restarted.
+        // What this session knows was all sent for this entry.
+        if (loadedMapId_ == mapId || loadedMapId_ == 0xFFFFFFFF) respawnKnownEntitiesOnLoad_ = true;
 
         // Clear pending queues first (these don't touch GPU resources)
         entitySpawner_->clearAllQueues();
