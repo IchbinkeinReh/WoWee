@@ -419,8 +419,15 @@ void CharacterRenderer::buildMainPassPipelines(VkDevice device, VkRenderPass mai
     additivePipeline_ = buildCharPipeline(PipelineBuilder::blendAdditive(), false);
     translucentPipeline_ = buildCharPipeline(PipelineBuilder::blendAlpha(), true);
     // The faded model's z-fill and its colour over it (zfillPipeline_).
-    VkPipelineColorBlendAttachmentState depthOnly = PipelineBuilder::blendDisabled();
-    depthOnly.colorWriteMask = 0;
+    // Depth only: the colour blended to nothing - the destination kept
+    // (ZERO, ONE) - rather than a write mask of none, which the NVIDIA
+    // driver's shader compiler crashed on building (nvgpucomp64.dll, twice,
+    // on a cold pipeline cache).
+    VkPipelineColorBlendAttachmentState depthOnly = PipelineBuilder::blendAlpha();
+    depthOnly.srcColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+    depthOnly.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    depthOnly.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    depthOnly.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     zfillPipeline_ = buildCharPipeline(depthOnly, true);
     fadedOverZfillPipeline_ = buildCharPipeline(PipelineBuilder::blendAlpha(), false, false, VK_CULL_MODE_NONE,
                                                 true, false, depth::kNearerOrEqual);
