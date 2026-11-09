@@ -7245,6 +7245,92 @@ int lua_Frame_GetDontSavePosition(lua_State* L) {
     return 1;
 }
 
+/// IsDragging (0x0049e0b0 -> 0x0048eb70): this frame, or one it sits in, is
+/// the one a drag belongs to.
+int lua_Frame_IsDragging(lua_State* L) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    const uint32_t dragged = tree ? tree->draggedWidget() : 0;
+    bool on = false;
+    for (const auto* w = widgetOf(L, 1); w && tree && dragged; w = w->parent ? tree->get(w->parent) : nullptr) {
+        if (w->id == dragged) {
+            on = true;
+            break;
+        }
+    }
+    lua_pushboolean(L, on);
+    return 1;
+}
+/// SetDepth(additiveDepth) (0x004a1c40), GetDepth (0x004a1cc0) and
+/// GetEffectiveDepth (0x004a1d20): its own and its own plus its parents'.
+int lua_Frame_SetDepth(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetDepth(additiveDepth)", w->name.c_str());
+    w->depth = static_cast<float>(lua_tonumber(L, 2));
+    return 0;
+}
+int lua_Frame_GetDepth(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->depth : 0.0);
+    return 1;
+}
+int lua_Frame_GetEffectiveDepth(lua_State* L) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    float sum = 0.0f;
+    int guard = 0;
+    for (const auto* w = widgetOf(L, 1); w && guard < 256; w = (tree && w->parent) ? tree->get(w->parent) : nullptr, ++guard)
+        sum += w->depth;
+    lua_pushnumber(L, sum);
+    return 1;
+}
+/// IgnoreDepth(ignore) (0x004a1d80): a boolean and nothing else.
+int lua_Frame_IgnoreDepth(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (lua_type(L, 2) != LUA_TBOOLEAN) return luaL_error(L, "Usage: %s:IgnoreDepth(ignore)", w->name.c_str());
+    w->ignoreDepth = lua_toboolean(L, 2) != 0;
+    return 0;
+}
+int lua_Frame_IsIgnoringDepth(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->ignoreDepth);
+    return 1;
+}
+/// GetBoundsRect (0x0049e700 -> 0x004913c0): the box round the frame, its
+/// shown regions and its shown child frames and theirs - left, bottom,
+/// width, height in the frame's units; nothing when there is none.
+int lua_Frame_GetBoundsRect(lua_State* L) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    const auto* w = widgetOf(L, 1);
+    if (!tree || !w) return 0;
+    float l = 3.4028235e+38f, b = 3.4028235e+38f, r = 0.0f, t = 0.0f;
+    auto grow = [&](const wowee::ui::Widget& x) {
+        if (x.rectW <= 0.0f && x.rectH <= 0.0f) return;
+        l = std::min(l, x.left);
+        b = std::min(b, x.bottom);
+        r = std::max(r, x.left + x.rectW);
+        t = std::max(t, x.bottom + x.rectH);
+    };
+    std::vector<const wowee::ui::Widget*> frames{w};
+    for (size_t i = 0; i < frames.size() && i < 4096; ++i) {
+        const auto* f = frames[i];
+        grow(*f);
+        for (uint32_t cid : f->children) {
+            const auto* c = tree->get(cid);
+            if (!c || !c->visible) continue;
+            if (c->kind == wowee::ui::WidgetKind::Frame) frames.push_back(c);
+            else grow(*c);
+        }
+    }
+    if (!(l < r && b < t)) return 0;
+    const double inv = 1.0 / ((w->effScale > 0.0f) ? w->effScale : 1.0f);
+    lua_pushnumber(L, l * inv);
+    lua_pushnumber(L, b * inv);
+    lua_pushnumber(L, (r - l) * inv);
+    lua_pushnumber(L, (t - b) * inv);
+    return 4;
+}
+
 /// Cooldown:GetReverse / GetDrawEdge (0x005ec9f0, 0x005eca80): booleans.
 int lua_Cooldown_GetReverse(lua_State* L) {
     const auto* w = widgetOf(L, 1);
@@ -7857,6 +7943,7 @@ void LuaEngine::shutdown() {
         lastClickTime_ = 0.0;
         focusedWid_ = 0;
         draggingWid_ = 0;
+        widgets_.setDraggedWidget(draggingWid_);
         draggingButton_ = -1;
         lastMouseHit_ = 0;
         pickerPart_ = 0;
@@ -8482,6 +8569,13 @@ void LuaEngine::registerCoreAPI() {
         {"GetHyperlinksEnabled",  lua_Frame_GetHyperlinksEnabled},
         {"GetReverse",            lua_Cooldown_GetReverse},
         {"EnableDrawLayer",       lua_Frame_EnableDrawLayer},
+        {"IsDragging",            lua_Frame_IsDragging},
+        {"SetDepth",              lua_Frame_SetDepth},
+        {"GetDepth",              lua_Frame_GetDepth},
+        {"GetEffectiveDepth",     lua_Frame_GetEffectiveDepth},
+        {"IgnoreDepth",           lua_Frame_IgnoreDepth},
+        {"IsIgnoringDepth",       lua_Frame_IsIgnoringDepth},
+        {"GetBoundsRect",         lua_Frame_GetBoundsRect},
         {"DisableDrawLayer",      lua_Frame_DisableDrawLayer},
         {"SetDontSavePosition",   lua_Frame_SetDontSavePosition},
         {"GetDontSavePosition",   lua_Frame_GetDontSavePosition},
@@ -13180,6 +13274,7 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
         widgets_.setMovingWidget(0);
         widgets_.setSizingWidget(0, "");
         draggingWid_ = 0;
+        widgets_.setDraggedWidget(draggingWid_);
         draggingButton_ = -1;
     }
     if (const uint32_t moving = widgets_.movingWidget()) {
@@ -13254,6 +13349,7 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
             }
             if (!movedEnough) continue;
             draggingWid_ = owner;
+            widgets_.setDraggedWidget(draggingWid_);
             draggingButton_ = i;
             callFrameScript(draggingWid_, "OnDragStart",
                             i == 0 ? "LeftButton" : "RightButton");
@@ -13601,6 +13697,7 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
                                 under && !under->name.empty() ? under->name.c_str()
                                        : (hit ? "(unnamed)" : "no frame"));
                     draggingWid_ = 0;
+                    widgets_.setDraggedWidget(draggingWid_);
                     draggingButton_ = -1;
                 }
 

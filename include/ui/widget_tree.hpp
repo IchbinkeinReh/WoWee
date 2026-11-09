@@ -177,6 +177,10 @@ struct Widget {
     uint8_t drawLayersOff = 0;
     /// SetDontSavePosition (flag 0x80000 of +0xb4, 0x004a08c0).
     bool dontSavePosition = false;
+    /// SetDepth (+0xc4) and IgnoreDepth (+0xcc): the frame's additive
+    /// stereo depth, summed down through its parents (0x00491740).
+    float depth = 0.0f;
+    bool ignoreDepth = false;
     float width = 0.0f;
     float height = 0.0f;
     bool shown = true;
@@ -944,6 +948,10 @@ public:
     /// loop, because that is what the bindings can already reach.
     [[nodiscard]] uint32_t movingWidget() const { return movingWid_; }
     void setMovingWidget(uint32_t id) { movingWid_ = id; }
+    /// The frame a drag belongs to while its OnDragStart has run and not yet
+    /// been stopped - what IsDragging asks after (0x0048eb70).
+    [[nodiscard]] uint32_t draggedWidget() const { return draggedWid_; }
+    void setDraggedWidget(uint32_t id) { draggedWid_ = id; }
 
     /// The frame a size grabber is dragging, and which corner it took hold of.
     ///
@@ -1365,6 +1373,7 @@ private:
     uint32_t rootId_ = 0;
     uint32_t uiParentId_ = 0;
     uint32_t movingWid_ = 0;
+    uint32_t draggedWid_ = 0;
     uint32_t sizingWid_ = 0;
     std::string sizingPoint_;
     uint32_t nextOrder_ = 1;
