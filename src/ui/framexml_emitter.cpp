@@ -309,6 +309,18 @@ struct Emitter {
         if (const std::string* mode = node.attr("alphaMode")) {
             if (isTexture) line(var + ":SetBlendMode(" + quote(*mode) + ")");
         }
+        // <Gradient orientation=""><MinColor/><MaxColor/></Gradient> on a texture.
+        if (const XmlNode* grad = isTexture ? node.child("Gradient") : nullptr) {
+            const XmlNode* mn = grad->child("MinColor");
+            const XmlNode* mx = grad->child("MaxColor");
+            auto rgba = [](const XmlNode* c) {
+                if (!c) return std::string("1, 1, 1, 1");
+                return c->attrOr("r", "0") + ", " + c->attrOr("g", "0") + ", " + c->attrOr("b", "0") + ", " +
+                       c->attrOr("a", "1");
+            };
+            line(var + ":SetGradientAlpha(" + quote(grad->attrOr("orientation", "HORIZONTAL")) + ", " + rgba(mn) +
+                 ", " + rgba(mx) + ")");
+        }
         emitTextAttr(node, var);
         if (const std::string* jv = node.attr("justifyV")) {
             line(var + ":SetJustifyV(" + quote(*jv) + ")");

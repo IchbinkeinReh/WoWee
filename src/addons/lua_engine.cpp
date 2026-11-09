@@ -5180,9 +5180,52 @@ int lua_Region_SetVertexColor(lua_State* L) {
         w->color[1] = static_cast<float>(luaOptNumberText(L, 3, 1.0));
         w->color[2] = static_cast<float>(luaOptNumberText(L, 4, 1.0));
         w->color[3] = static_cast<float>(luaOptNumberText(L, 5, 1.0));
+        w->gradient = false;
     }
     return 0;
 }
+
+// SetGradient("orientation", minR, minG, minB, maxR, maxG, maxB) (0x0048c240)
+// and SetGradientAlpha with each colour's alpha after it (0x0048c310): each part
+// held to 0..1 (0x0061be50, 0x00960420), alpha 1 for the first. HORIZONTAL
+// puts the minimum on the left, VERTICAL at the bottom (0x00487b00).
+static int setGradient(lua_State* L, bool withAlpha) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    const char* usage = withAlpha
+        ? "Usage: %s:SetGradientAlpha(\"orientation\", minR, minG, minB, minA, maxR, maxG, maxB, maxA)"
+        : "Usage: %s:SetGradient(\"orientation\", minR, minG, minB, maxR, maxG, maxB)";
+    const char* orient = lua_isstring(L, 2) ? lua_tostring(L, 2) : nullptr;
+    int vertical = -1;
+    if (orient) {
+        std::string o(orient);
+        std::transform(o.begin(), o.end(), o.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+        if (o == "HORIZONTAL") vertical = 0;
+        else if (o == "VERTICAL") vertical = 1;
+    }
+    if (vertical < 0) return luaL_error(L, usage, w->name.empty() ? "<unnamed>" : w->name.c_str());
+    auto part = [&](int at, double fallback) {
+        const double v = lua_isnumber(L, at) ? lua_tonumber(L, at) : fallback;
+        return static_cast<float>(v < 0.0 ? 0.0 : (v >= 1.0 ? 1.0 : v));
+    };
+    const int per = withAlpha ? 4 : 3;
+    float minC[4], maxC[4];
+    for (int i = 0; i < 3; ++i) {
+        minC[i] = part(3 + i, 0.0);
+        maxC[i] = part(3 + per + i, 0.0);
+    }
+    minC[3] = withAlpha ? part(6, 1.0) : 1.0f;
+    maxC[3] = withAlpha ? part(10, 1.0) : 1.0f;
+    // Upper-left, lower-left, upper-right, lower-right.
+    const float* corners[4] = {vertical ? maxC : minC, minC, maxC, vertical ? minC : maxC};
+    if (vertical) { corners[0] = maxC; corners[1] = minC; corners[2] = maxC; corners[3] = minC; }
+    for (int c = 0; c < 4; ++c)
+        for (int i = 0; i < 4; ++i) w->gradientColor[c][i] = corners[c][i];
+    w->gradient = true;
+    return 0;
+}
+int lua_Texture_SetGradient(lua_State* L) { return setGradient(L, false); }
+int lua_Texture_SetGradientAlpha(lua_State* L) { return setGradient(L, true); }
 /// GetDrawLayer() (0x0048bee0): the layer's name, no sublevel.
 int lua_Region_GetDrawLayer(lua_State* L) {
     static const char* kNames[] = {"BACKGROUND", "BORDER", "ARTWORK", "OVERLAY", "HIGHLIGHT"};
@@ -5763,6 +5806,8 @@ void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
         set("GetBlendMode", lua_Texture_GetBlendMode);
         set("SetDesaturated", lua_Texture_SetDesaturated);
         set("IsDesaturated", lua_Texture_IsDesaturated);
+        set("SetGradient", lua_Texture_SetGradient);
+        set("SetGradientAlpha", lua_Texture_SetGradientAlpha);
     }
     if (isFontString) {
         set("GetFont", lua_FontString_GetFont);
@@ -7971,6 +8016,8 @@ void LuaEngine::registerCoreAPI() {
         {"SetSequenceTime", lua_Model_SetSequenceTime},
         {"ReplaceIconTexture", lua_Model_ReplaceIconTexture},
         {"SetGlow",         lua_Model_SetGlow},
+        // AdvanceTime (0x009610e0) answers nothing and does nothing.
+        {"AdvanceTime",     [](lua_State*) -> int { return 0; }},
         {"SetLight",        lua_Model_SetLight},
         {"GetLight",        lua_Model_GetLight},
         {"SetFogColor",     lua_Model_SetFogColor},

@@ -2904,6 +2904,17 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             // painted every undecided region in the default white, which for a
             // full-width backdrop is a white slab across the screen.
             if (w->solidColor) {
+                if (w->gradient) {
+                    // The colour as the texture, times each corner's gradient.
+                    auto corner = [&](int c) {
+                        float rgba[4];
+                        for (int i = 0; i < 4; ++i) rgba[i] = w->color[i] * w->gradientColor[c][i];
+                        return packColor(rgba, w->alpha);
+                    };
+                    dl->AddRectFilledMultiColor(ImVec2(x0, y0), ImVec2(x1, y1), corner(0), corner(2), corner(3),
+                                                corner(1));
+                    continue;
+                }
                 dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1),
                                   packColor(w->color, w->alpha));
                 continue;
@@ -2970,7 +2981,38 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     uv1 = ImVec2(0.5f + halfU, 0.5f + halfV);
                 }
             }
-            if (!live && w->texCoordRotated) {
+            if (!live && w->gradient) {
+                // SetGradient's colours, one per corner (0x00487b00), times the
+                // texture's alpha; a desaturated texture keeps their alpha only.
+                ImVec2 uvUL(uv0.x, uv0.y), uvLL(uv0.x, uv1.y), uvUR(uv1.x, uv0.y), uvLR(uv1.x, uv1.y);
+                if (w->texCoordRotated) {
+                    const float* q = w->texCoordQuad;
+                    uvUL = ImVec2(q[0], q[1]);
+                    uvLL = ImVec2(q[2], q[3]);
+                    uvUR = ImVec2(q[4], q[5]);
+                    uvLR = ImVec2(q[6], q[7]);
+                }
+                auto corner = [&](int c) {
+                    float rgba[4] = {w->gradientColor[c][0], w->gradientColor[c][1], w->gradientColor[c][2],
+                                     w->gradientColor[c][3]};
+                    if (w->desaturated) rgba[0] = rgba[1] = rgba[2] = 1.0f;
+                    return packColor(rgba, w->alpha);
+                };
+                dl->PushTextureID(reinterpret_cast<ImTextureID>(tex));
+                dl->PrimReserve(6, 4);
+                const auto base = static_cast<ImDrawIdx>(dl->_VtxCurrentIdx);
+                dl->PrimWriteVtx(ImVec2(x0, y0), uvUL, corner(0));
+                dl->PrimWriteVtx(ImVec2(x1, y0), uvUR, corner(2));
+                dl->PrimWriteVtx(ImVec2(x1, y1), uvLR, corner(3));
+                dl->PrimWriteVtx(ImVec2(x0, y1), uvLL, corner(1));
+                dl->PrimWriteIdx(base);
+                dl->PrimWriteIdx(static_cast<ImDrawIdx>(base + 1));
+                dl->PrimWriteIdx(static_cast<ImDrawIdx>(base + 2));
+                dl->PrimWriteIdx(base);
+                dl->PrimWriteIdx(static_cast<ImDrawIdx>(base + 2));
+                dl->PrimWriteIdx(static_cast<ImDrawIdx>(base + 3));
+                dl->PopTextureID();
+            } else if (!live && w->texCoordRotated) {
                 // A UV per corner, so the art can sit in the frame at any
                 // angle. WoW's order is upper-left, lower-left, upper-right,
                 // lower-right; the quad wants them going round the rect.

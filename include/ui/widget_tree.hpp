@@ -330,6 +330,11 @@ struct Widget {
     /// the wrong angle, which drew as a pale vertical bar beside the slot.
     bool  texCoordRotated = false;
     float texCoordQuad[8] = {0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f};
+    /// A texture's per-corner colours from SetGradient / SetGradientAlpha
+    /// (0x00487b00), in its vertex order: upper-left, lower-left, upper-right,
+    /// lower-right. SetVertexColor puts the four back to one.
+    bool gradient = false;
+    float gradientColor[4][4] = {};
     float color[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     bool solidColor = false;    ///< SetTexture(r,g,b[,a]) rather than a file.
     /// A unit's face, claimed by SetPortraitTexture.
