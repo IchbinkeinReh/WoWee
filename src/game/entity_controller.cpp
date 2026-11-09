@@ -3674,7 +3674,12 @@ void EntityController::onValuesUpdateGameObject(const UpdateBlock& block, std::s
     }
 
     if (transportGuids_.count(block.guid)) applyParentRotation(block, *entity, owner_.getTransportManager());
-    applyTransportRouteClock(block);
+    // Not the route clock: the client takes a transport's path time once,
+    // from its create block (0x00714250: GO +0x200 = the UPDATEFLAG_TRANSPORT
+    // time less the client's), and never from a later update. DYNAMIC's
+    // 16-bit share of the period, which a values update carries, put the
+    // Thundercaller back forty seconds at its dock - after the create block
+    // had it right - so the server took it away before it had left.
 }
 
 void EntityController::trackActiveCritter(const UpdateBlock& block) {
