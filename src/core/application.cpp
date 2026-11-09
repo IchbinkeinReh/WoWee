@@ -4432,6 +4432,11 @@ void Application::applyServerMovementState(float deltaTime) {
             // walking up onto a higher deck just follows the collision. An upward
             // jump remains fully controlled by vertical physics (skipped below).
             auto* cameraController = renderer->getCameraController();
+            // Standing still on it: the deck alone places the rider.
+            if (cameraController) {
+                cameraController->setRideHeld(!tr->isM2 && !cameraController->isMoving() &&
+                                              cameraController->isGrounded());
+            }
             if (!tr->isM2 && cameraController &&
                 !cameraController->isJumping()) {
                 const glm::vec3 intendedCanonical =
@@ -4543,6 +4548,7 @@ void Application::applyServerMovementState(float deltaTime) {
                 *followTarget = renderPos;
         }
     } else {
+        if (auto* cc = renderer ? renderer->getCameraController() : nullptr) cc->setRideHeld(false);
         hasWMORideLock_ = false;
         lastWMORideTransportGuid_ = 0;
         lastWMORideMapId_ = 0xFFFFFFFFu;
@@ -5925,6 +5931,31 @@ void Application::update(float deltaTime) {
             std::chrono::steady_clock::now() - rendererUpdateStart).count();
         if (ruMs > 50.0f) {
             LOG_WARNING("SLOW update stage 'renderer->update': ", ruMs, "ms");
+        }
+    }
+    {
+        // WOWEE_TRANSPORT_POSE: on a transport, every tenth of a second, the
+        // frame as it is drawn - the hull, the character and the camera, all
+        // placed for this frame.
+        static const bool kViewTrace = [] {
+            const char* v = std::getenv("WOWEE_TRANSPORT_POSE");
+            return v && v[0] && v[0] != '0';
+        }();
+        static auto lastViewLog = std::chrono::steady_clock::time_point{};
+        const auto nowView = std::chrono::steady_clock::now();
+        if (kViewTrace && renderer && gameHandler && gameHandler->isOnTransport() &&
+            nowView - lastViewLog >= std::chrono::milliseconds(100)) {
+            lastViewLog = nowView;
+            auto* tm = gameHandler->getTransportManager();
+            const auto* tr = tm ? tm->getTransport(gameHandler->getPlayerTransportGuid()) : nullptr;
+            const glm::vec3 hull = tr ? core::coords::canonicalToRender(tr->position) : glm::vec3(0.0f);
+            const glm::vec3 ch = renderer->getCharacterPosition();
+            const auto* cam = renderer->getCamera();
+            const glm::vec3 cp = cam ? cam->getPosition() : glm::vec3(0.0f);
+            const glm::vec3 cf = cam ? cam->getForward() : glm::vec3(0.0f);
+            LOG_WARNING("RIDE VIEW: hull=(", hull.x, ", ", hull.y, ", ", hull.z, ") yaw=", tr ? tr->facing : 0.0f,
+                        " char=(", ch.x, ", ", ch.y, ", ", ch.z, ") cam=(", cp.x, ", ", cp.y, ", ", cp.z,
+                        ") fwd=(", cf.x, ", ", cf.y, ", ", cf.z, ")");
         }
     }
     // Update UI
