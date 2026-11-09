@@ -28,6 +28,7 @@
 #include "rendering/animation_controller.hpp"
 #include <algorithm>
 #include <bit>
+#include <optional>
 #include <set>
 #include <cstring>
 #include <zlib.h>
@@ -186,6 +187,7 @@ void EntityController::processPendingUpdateObjectWork(const std::chrono::steady_
             }
 
             const UpdateBlock& block = work.data.blocks[work.nextBlockIndex];
+            currentUpdateReceivedMs_ = work.data.receivedMs;
             auto blockStart = std::chrono::steady_clock::now();
             applyUpdateObjectBlock(block, work.newItemCreated);
             float blockMs = std::chrono::duration<float, std::milli>(
@@ -228,6 +230,7 @@ void EntityController::handleUpdateObject(network::Packet& packet) {
         // Fall through: process any blocks that were successfully parsed before the failure.
     }
 
+    data.receivedMs = packet.receivedMs();
     enqueueUpdateObjectWork(std::move(data));
 }
 
@@ -259,12 +262,20 @@ void EntityController::processOutOfRangeObjects(const std::vector<uint64_t>& gui
             const bool playerAboardNow = (owner_.playerTransportGuidRef() == guid);
             const bool stickyAboard = (owner_.playerTransportStickyGuidRef() == guid && owner_.playerTransportStickyTimerRef() > 0.0f);
             const bool movementSaysAboard = (owner_.movementInfoRef().transportGuid == guid);
-            LOG_INFO("Preserving transport on out-of-range: 0x",
-                     std::hex, guid, std::dec,
-                     " now=", playerAboardNow,
-                     " sticky=", stickyAboard,
-                     " movement=", movementSaysAboard);
-            continue;
+            // Only the one the player is riding: the client removes whatever
+            // the server takes out of range (0x004d7230), and a zeppelin
+            // that crossed to its other map is taken out of range for
+            // everyone it left behind. Kept, it went on being drawn - hull,
+            // machinery, passengers - flying a route it was no longer on.
+            if (playerAboardNow || stickyAboard || movementSaysAboard) {
+                LOG_INFO("Preserving transport on out-of-range: 0x",
+                         std::hex, guid, std::dec,
+                         " now=", playerAboardNow,
+                         " sticky=", stickyAboard,
+                         " movement=", movementSaysAboard);
+                continue;
+            }
+            LOG_INFO("Transport out of range, removed: 0x", std::hex, guid, std::dec);
         }
 
         LOG_DEBUG("Entity went out of range: 0x", std::hex, guid, std::dec);
@@ -2848,6 +2859,8 @@ void EntityController::onCreateGameObject(const UpdateBlock& block, std::shared_
                  " displayId=", go->getDisplayId(),
                  " pos=(", go->getX(), ", ", go->getY(), ", ", go->getZ(), ")");
         // Note: TransportSpawnCallback will be invoked from Application after WMO instance is created
+        // Where on its route the server has it, from this block.
+        applyTransportRouteClock(block);
     }
     if (go->getDisplayId() != 0 && owner_.gameObjectSpawnCallbackRef()) {
         float goScale = 1.0f;
@@ -3661,7 +3674,12 @@ void EntityController::onValuesUpdateGameObject(const UpdateBlock& block, std::s
     }
 
     if (transportGuids_.count(block.guid)) applyParentRotation(block, *entity, owner_.getTransportManager());
-    applyTransportRouteClock(block);
+    // Not the route clock: the client takes a transport's path time once,
+    // from its create block (0x00714250: GO +0x200 = the UPDATEFLAG_TRANSPORT
+    // time less the client's), and never from a later update. DYNAMIC's
+    // 16-bit share of the period, which a values update carries, put the
+    // Thundercaller back forty seconds at its dock - after the create block
+    // had it right - so the server took it away before it had left.
 }
 
 void EntityController::trackActiveCritter(const UpdateBlock& block) {
@@ -3714,22 +3732,66 @@ void EntityController::applyTransportRouteClock(const UpdateBlock& block) {
     //
     // Both fields are WotLK-only. Nothing earlier published a transport's phase,
     // so on those expansions fieldIndex returns 0xFFFF and this does nothing.
+    //
+    // The create block says it exactly: a moving transport's UPDATEFLAG_TRANSPORT
+    // time is its path progress in milliseconds (the server's
+    // MotionTransport::GetPathProgress, counted from its start and never
+    // wrapped), so the place on the route is that modulo the period. DYNAMIC's
+    // 16-bit fraction is that progress over the period, cast to int16: past
+    // half a period after the server started it no longer fits and comes out
+    // negative, so on a server that has run a while it never said anything -
+    // the Thundercaller ran on a clock of its own, arriving at the end of its
+    // map-0 leg twenty seconds before the server moved its passengers to
+    // Kalimdor on one trip and still docked when it did on the next.
+    //
+    // Not only for a registered transport: the create block comes before the
+    // model has loaded, and applyServerRouteClock holds it until then.
     auto* tm = owner_.getTransportManager();
-    if (!tm || !tm->getTransport(block.guid)) return;
+    if (!tm || !transportGuids_.count(block.guid)) return;
+    // A moving transport only (GAMEOBJECT_TYPE_MO_TRANSPORT, BYTES_1 byte 1):
+    // a lift's DYNAMIC is its progress to or from its pause, not a route's.
+    constexpr uint32_t kMoTransport = 15;
+    const uint16_t ufBytes1 = fieldIndex(UF::GAMEOBJECT_BYTES_1);
+    if (ufBytes1 == 0xFFFF) return;
+    std::optional<uint32_t> bytes1;
+    if (auto it = block.fields.find(ufBytes1); it != block.fields.end()) {
+        bytes1 = it->second;
+    } else if (auto e = owner_.getEntityManager().getEntity(block.guid); e && e->hasField(ufBytes1)) {
+        bytes1 = e->getField(ufBytes1);
+    }
+    if (!bytes1 || ((*bytes1 >> 8) & 0xFF) != kMoTransport) return;
 
     const uint16_t ufLevel = fieldIndex(UF::GAMEOBJECT_LEVEL);
     const uint16_t ufDynamic = fieldIndex(UF::GAMEOBJECT_DYNAMIC);
-    if (ufLevel == 0xFFFF || ufDynamic == 0xFFFF) return;
+    if (ufLevel == 0xFFFF) return;
 
     auto itPeriod = block.fields.find(ufLevel);
-    auto itDynamic = block.fields.find(ufDynamic);
-    if (itPeriod == block.fields.end() || itDynamic == block.fields.end()) return;
-
+    if (itPeriod == block.fields.end()) return;
     const uint32_t periodMs = itPeriod->second;
+    if (periodMs == 0) return;
+
+    if (block.hasTransportTime && block.transportTime != 0) {
+        // The progress as the server sent it, plus how long the packet waited
+        // here: one read during a world load is handled half a minute later,
+        // and taken as it stood the Thundercaller ran forty seconds behind
+        // the server - still at its dock when the server took it away.
+        const int64_t now = TransportManager::nowSteadyMs();
+        const uint64_t waitedMs = (currentUpdateReceivedMs_ > 0 && now > currentUpdateReceivedMs_)
+            ? static_cast<uint64_t>(std::min<int64_t>(now - currentUpdateReceivedMs_, 600000))
+            : 0u;
+        const float phase = static_cast<float>((block.transportTime + waitedMs) % periodMs) /
+                            static_cast<float>(periodMs);
+        tm->applyServerRouteClock(block.guid, phase, periodMs);
+        return;
+    }
+
+    if (ufDynamic == 0xFFFF) return;
+    auto itDynamic = block.fields.find(ufDynamic);
+    if (itDynamic == block.fields.end()) return;
     // Signed on the wire: -1 means "this object has no path progress to report",
     // which every non-transport GameObject sends.
     const int16_t rawProgress = static_cast<int16_t>((itDynamic->second >> 16) & 0xFFFF);
-    if (periodMs == 0 || rawProgress < 0) return;
+    if (rawProgress < 0) return;
 
     const float phase = static_cast<float>(rawProgress) / 65535.0f;
     tm->applyServerRouteClock(block.guid, phase, periodMs);
@@ -4060,6 +4122,7 @@ void EntityController::handleCompressedUpdateObject(network::Packet& packet) {
 
     // Create packet from decompressed data and parse it
     network::Packet decompressedPacket(wireOpcode(Opcode::SMSG_UPDATE_OBJECT), decompressed);
+    decompressedPacket.setReceivedMs(packet.receivedMs());
     handleUpdateObject(decompressedPacket);
 }
 void EntityController::handleDestroyObject(network::Packet& packet) {
@@ -4484,7 +4547,9 @@ void EntityController::handleGameObjectQueryResponse(network::Packet& packet) {
                                 owner_.getTransportManager()->hasTaxiPath(taxiPathId) ? 1 : 0, ")");
                 }
             } else if (owner_.getTransportManager()->assignTaxiPathToTransport(
-                           data.entry, taxiPathId, mapId)) {
+                           data.entry, taxiPathId, mapId,
+                           // moveSpeed and accelRate, data1 and data2 (0x00711b50).
+                           static_cast<float>(data.data[1]), static_cast<float>(data.data[2]))) {
                 if (sayThis) {
                     LOG_WARNING("MO_TRANSPORT entry=", data.entry, " assigned TaxiPathNode path ",
                                 taxiPathId, " on map ", mapId);

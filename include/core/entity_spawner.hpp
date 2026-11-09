@@ -558,6 +558,10 @@ public:
         uint32_t instanceId = 0;
         bool hasSpine = false;
         bool hasHead = false;
+        /// The transport it stands on and that transport's facing when its
+        /// body was last turned: the body turns with the deck it stands on.
+        uint64_t rideGuid = 0;
+        float rideFacing = 0.0f;
         /// Shuffling round on the spot (+0xa38 0x1800), as last turned, and
         /// to the left (0x800).
         bool turning = false;

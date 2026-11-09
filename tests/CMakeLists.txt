@@ -1667,6 +1667,11 @@ wowee_add_test(test_transport_components
             ${CMAKE_SOURCE_DIR}/src/game/transport_animator.cpp
             ${CMAKE_SOURCE_DIR}/src/math/spline.cpp)
 
+# ── test_ship_path ───────────────────────────────────────────
+wowee_add_test(test_ship_path
+    SOURCES test_ship_path.cpp
+            ${CMAKE_SOURCE_DIR}/src/game/ship_path.cpp)
+
 # ── test_world_map ────────────────────────────────────────────
 wowee_add_test(test_world_map
     SOURCES test_world_map.cpp)
@@ -2975,6 +2980,13 @@ wowee_add_test(test_party_slots
 # body's dark brown font on an empty black frame.
 wowee_add_test(test_stationery
     SOURCES test_stationery.cpp
+            ${TEST_COMMON_SOURCES})
+
+# ── test_loading_screen_route ───────────────────────────────
+# A transport crossing's loading screen: its stops on the world map, the
+# spline through the leg's points and the dots coming in with the load.
+wowee_add_test(test_loading_screen_route
+    SOURCES test_loading_screen_route.cpp
             ${TEST_COMMON_SOURCES})
 
 # ── test_polygon_triangulate ─────────────────────────────────

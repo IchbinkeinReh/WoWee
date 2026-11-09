@@ -4,6 +4,8 @@
 #include "core/coordinates.hpp"
 #include "game/transport_clock_sync.hpp"
 #include "game/transport_animator.hpp"
+#include "game/ship_path.hpp"
+#include <memory>
 #include <chrono>
 #include <cstdint>
 #include <vector>
@@ -27,6 +29,11 @@ namespace wowee::game {
 
 struct ActiveTransport {
     uint64_t guid;              // Entity GUID
+    // A ship's or zeppelin's route as the client flies it (ShipPath), from
+    // its taxi path and its template's speed and acceleration, and the map
+    // this client is on; posed from it rather than from the keyed spline.
+    std::shared_ptr<const ShipPath> shipPath;
+    uint32_t shipMapId = 0;
     uint32_t wmoInstanceId;     // WMO renderer instance ID
     uint32_t pathId;            // Current path
     uint32_t entry = 0;         // GameObject entry (for MO_TRANSPORT path updates)
@@ -284,6 +291,9 @@ public:
     // active instances on map transitions so a reused GUID cannot retain the
     // previous map's entry/path while merely rebinding to a new render model.
     void clearTransports();
+    /// One transport gone from this map (out of range, destroyed): nothing
+    /// of it is moved or drawn again.
+    void removeTransport(uint64_t guid);
 
     ActiveTransport* getTransport(uint64_t guid);
     // MAIN-THREAD-ONLY: this reference is not lock-protected, matching EntityManager's
@@ -381,7 +391,8 @@ public:
     // Assign a TaxiPathNode path to an existing transport (called when GO query response arrives).
     // mapId selects the per-map segment (cross-map boat paths only have valid world
     // geometry on the transport's current map). Returns true if the transport was updated.
-    bool assignTaxiPathToTransport(uint32_t entry, uint32_t taxiPathId, uint32_t mapId);
+    bool assignTaxiPathToTransport(uint32_t entry, uint32_t taxiPathId, uint32_t mapId,
+                                   float moveSpeed = 0.0f, float accelRate = 0.0f);
 
     // Check if a path exists for a given GameObject entry
     [[nodiscard]] bool hasPathForEntry(uint32_t entry) const;
@@ -433,6 +444,7 @@ public:
     [[nodiscard]] bool isClientSideAnimation() const { return clientSideAnimation_; }
 
 private:
+    void poseShip(ActiveTransport& transport, uint32_t splineTimeMs, uint32_t splineDurationMs);
     void updateTransportMovement(ActiveTransport& transport, float deltaTime);
     void updateTransformMatrices(ActiveTransport& transport);
     void pushTransform(ActiveTransport& transport);
@@ -451,7 +463,7 @@ private:
     /// A transport is registered once its model has loaded, several frames
     /// after its create block arrives - and the create block is where the
     /// server puts the route phase. See applyServerRouteClock.
-    struct PendingRouteClock { float phase; uint32_t periodMs; };
+    struct PendingRouteClock { float phase; uint32_t periodMs; double receivedAt; };
     std::unordered_map<uint64_t, PendingRouteClock> pendingRouteClocks_;
     /// noteServerPathTime's samples: the path time, and nowSteadyMs() on arrival.
     struct ServerPathTime { uint32_t pathTimeMs; int64_t receivedSteadyMs; };

@@ -4,6 +4,9 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
+
+#include <glm/glm.hpp>
 
 struct SDL_Window;
 struct ImDrawList;
@@ -38,6 +41,15 @@ public:
     /// What is being loaded, for the log: the client's screen says nothing.
     void setStatus(const std::string& status);
 
+    /// A transport's crossing (SMSG_TRANSFER_PENDING with one): its TaxiPath
+    /// and the map it leaves. Set before initialize(): the screen is then the
+    /// world map with the leg drawn on it (loading_screen_route.hpp,
+    /// 0x0040ad50), where its data allows.
+    void setTransportRoute(uint32_t taxiPathId, uint32_t fromMap) {
+        routePathId_ = taxiPathId;
+        routeFromMap_ = fromMap;
+    }
+
     // Must be set before initialize() for Vulkan texture upload
     void setVkContext(VkContext* ctx) { vkCtx = ctx; }
     void setSDLWindow(SDL_Window* win) { sdlWindow = win; }
@@ -53,6 +65,10 @@ private:
     bool upload(const uint8_t* rgba, int width, int height, Texture& out);
     void drawPicture(ImDrawList* drawList, float screenW, float screenH) const;
     void release(Texture& tex);
+    /// 0x00409880 and 0x0040a160: the leg and the world map; false leaves the
+    /// map's own picture (0x004094e0).
+    bool buildRoute(pipeline::AssetManager* assets);
+    void drawRoute(ImDrawList* drawList, float screenW, float screenH) const;
 
     VkContext* vkCtx = nullptr;
     SDL_Window* sdlWindow = nullptr;
@@ -61,6 +77,15 @@ private:
     /// The picture is the 16:10 "Wide" one (0x00b2fed8).
     bool widePicture_ = false;
     std::array<Texture, 2> bar_;  ///< loading_screen::kBar's pieces
+
+    uint32_t routePathId_ = 0;
+    uint32_t routeFromMap_ = 0;
+    bool routeReady_ = false;
+    glm::vec2 routeStart_{0.0f};
+    glm::vec2 routeEnd_{0.0f};
+    std::vector<glm::vec2> routeDots_;
+    std::array<Texture, 12> worldTiles_;
+    Texture dynamicElements_;
 
     float loadProgress = 0.0f;
     /// This screen holds the world's sound (AudioEngine::beginWorldSoundHold).

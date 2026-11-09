@@ -77,6 +77,7 @@
 #include "game/minimap_tracking.hpp"
 #include "rendering/footprint_renderer.hpp"
 #include "rendering/loading_screen.hpp"
+#include "rendering/world_text_renderer.hpp"
 #include "audio/music_manager.hpp"
 #include "audio/footstep_manager.hpp"
 #include "audio/activity_sound_manager.hpp"
@@ -196,9 +197,22 @@ bool jumpHoldsAnimation(rendering::CharacterRenderer& charRenderer, uint32_t ins
 // FUN_0071de90 turns it down over an emote or a cast and the combat stance
 // is asked first (FUN_0071e0d0), and stops back into the stand. Returns
 // the body yaw, in the render yaw's frame `facing` is given in.
+// The transport a unit stands on, for its body to turn with (turnUnitBody).
+uint64_t unitRideGuidOf(game::GameHandler& gh, uint64_t guid) {
+    const auto& attached = gh.transportAttachmentsRef();
+    const auto it = attached.find(guid);
+    return it != attached.end() ? it->second.transportGuid : 0;
+}
+const game::ActiveTransport* unitRideOf(game::GameHandler& gh, uint64_t guid) {
+    const uint64_t rideGuid = unitRideGuidOf(gh, guid);
+    auto* transports = gh.getTransportManager();
+    return (rideGuid != 0 && transports) ? transports->getTransport(rideGuid) : nullptr;
+}
+
 float turnUnitBody(rendering::CharacterRenderer& cr, uint32_t instanceId,
                    EntitySpawner::UnitBody& body, float facing, uint32_t moveFlags,
-                   float deltaTime, bool snap, bool mayShuffle) {
+                   float deltaTime, bool snap, bool mayShuffle, const game::ActiveTransport* ride = nullptr,
+                   uint64_t rideGuid = 0) {
     namespace by = rendering::body_yaw;
     if (body.instanceId != instanceId) {
         body = {};
@@ -207,6 +221,17 @@ float turnUnitBody(rendering::CharacterRenderer& cr, uint32_t instanceId,
         body.hasSpine = cr.hasKeyBone(instanceId, 4);
         body.hasHead = cr.hasKeyBone(instanceId, 6);
     }
+    // A passenger's facing is the transport's plus its own on it
+    // (0x004f42a0): as a zeppelin turns in a curve, the facing of everyone
+    // standing on its deck turns with it, and so does the body under that
+    // facing. Measured in the world, the body lagged the deck's turn and the
+    // lag read as a turn on the spot - every passenger shuffled its feet
+    // through the curve.
+    if (ride && body.rideGuid == rideGuid) {
+        body.state.body = by::wrap(body.state.body + core::coords::normalizeAngleRad(ride->facing - body.rideFacing));
+    }
+    body.rideGuid = ride ? rideGuid : 0;
+    body.rideFacing = ride ? ride->facing : 0.0f;
     by::Input in;
     in.facing = facing;
     in.dt = deltaTime;
@@ -4364,6 +4389,22 @@ void Application::applyServerMovementState(float deltaTime) {
                     cc->turnWithVehicle(turnDeg);
                     cc->setFacingYaw(cc->getFacingYaw() + turnDeg);
                     renderer->setCharacterYaw(cc->getFacingYaw());
+                    renderer->turnCharacterBody(turnDeg);
+                }
+                static const bool kRideTurnDebug = [] {
+                    const char* v = std::getenv("WOWEE_FLOOR_DEBUG");
+                    return v && v[0] && v[0] != '0';
+                }();
+                static float rideTurnLogTimer = 0.0f;
+                rideTurnLogTimer += deltaTime;
+                if (kRideTurnDebug && cc && rideTurnLogTimer >= 1.0f) {
+                    rideTurnLogTimer = 0.0f;
+                    const auto* ac = renderer->getAnimationController();
+                    const int shuffle = ac ? static_cast<int>(ac->turnShuffle()) : -1;
+                    LOG_WARNING("RIDE TURN: facing=", tr->facing, " turnDeg=", turnDeg, " camYaw=", cc->getYaw(),
+                                " facingYaw=", cc->getFacingYaw(), " body=", renderer->getCharacterBodyYaw(),
+                                " shuffle=", shuffle, " clientAnim=", tr->useClientAnimation,
+                                " serverYaw=", tr->hasServerYaw);
                 }
             }
             lastWMORideFacing_ = tr->facing;
@@ -5162,7 +5203,8 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                                        unitBodyFlags(*entity, isMovingNow, isSwimmingNow, isFlyingNow),
                                        deltaTime, deadOrCorpse || creatureMount != nullptr,
                                        !jumpHolds && !isMovingNow && !deadOrCorpse && !creatureMount &&
-                                           unitPtr->getStandState() == 0);
+                                           unitPtr->getStandState() == 0,
+                                       unitRideOf(*gameHandler, guid), unitRideGuidOf(*gameHandler, guid));
             }
             // Tilted by its pitch while it swims or flies forward or back
             // (swim_pitch::otherUnit, 0x00719a90): the model's own Y axis,
@@ -5400,7 +5442,8 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                                        unitBodyFlags(*entity, isMovingNow, isSwimmingNow, isFlyingNow),
                                        deltaTime, deadOrCorpse || remoteMount != nullptr,
                                        !jumpHolds && !isMovingNow && !deadOrCorpse && !remoteMount &&
-                                           unitPtr->getStandState() == 0);
+                                           unitPtr->getStandState() == 0,
+                                       unitRideOf(*gameHandler, guid), unitRideGuidOf(*gameHandler, guid));
             }
             const float unitTilt = unitSwimTilt(*gameHandler, *entity, guid,
                                                 _pCreatureSwimmingState.count(guid) > 0 ||
@@ -5958,6 +6001,11 @@ void Application::render() {
 
     // Only render 3D world when in-game
     if (state == AppState::IN_GAME) {
+        // The names laid out last frame, moved with their units to where
+        // they are drawn now (see WorldTextRenderer::followUnits).
+        if (auto* worldText = renderer->getWorldTextRenderer()) {
+            worldText->followUnits([this](uint64_t guid, glm::vec3& at) { return getRenderPositionForGuid(guid, at); });
+        }
         runRenderStage("renderWorld", [&] {
             renderer->renderWorld(world ? world.get() : nullptr, gameHandler.get());
         });
@@ -6923,16 +6971,21 @@ void Application::render() {
     if (const char* autoLua = std::getenv("WOWEE_AUTO_LUA"); autoLua != nullptr && *autoLua != '\0') {
         static double inWorldSince = -1.0;
         static double nextRun = -1.0;
+        // Which world entry of this process the run is in, for a run that
+        // logs out and back in: __WoweeTestSession, set before each run.
+        static int session = 0;
         const bool inWorld = gameHandler && gameHandler->getState() == game::WorldState::IN_WORLD;
         const double now = core::appTimeSeconds();
         if (!inWorld) {
             inWorldSince = -1.0;
         } else if (inWorldSince < 0.0) {
             inWorldSince = now;
+            ++session;
             const char* delay = std::getenv("WOWEE_AUTO_LUA_DELAY");
             nextRun = now + ((delay && *delay) ? std::atof(delay) : 10.0);
         } else if (nextRun >= 0.0 && now >= nextRun && addonManager_ && addonManager_->getLuaEngine()) {
             LOG_WARNING("WOWEE_AUTO_LUA: running ", autoLua);
+            addonManager_->getLuaEngine()->executeString("__WoweeTestSession=" + std::to_string(session));
             addonManager_->getLuaEngine()->executeString(autoLua);
             const char* repeat = std::getenv("WOWEE_AUTO_LUA_REPEAT");
             const double every = (repeat && *repeat) ? std::atof(repeat) : 0.0;

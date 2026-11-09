@@ -18,7 +18,8 @@ bool TransportClockSync::computePathTime(
     const math::CatmullRomSpline& spline,
     double elapsedTime,
     float deltaTime,
-    uint32_t& outPathTimeMs) const
+    uint32_t& outPathTimeMs,
+    double routeClockNow) const
 {
     uint32_t nowMs = static_cast<uint32_t>(elapsedTime * 1000.0);
     uint32_t durationMs = spline.durationMs();
@@ -35,7 +36,7 @@ bool TransportClockSync::computePathTime(
     // schedule caught up.
     if (transport.hasServerRouteClock && transport.routePeriodMs > 0 && durationMs > 0) {
         const double sinceSampleMs =
-            std::max(0.0, (elapsedTime - transport.routePhaseAtTime) * 1000.0);
+            std::max(0.0, ((routeClockNow >= 0.0 ? routeClockNow : elapsedTime) - transport.routePhaseAtTime) * 1000.0);
         const double serverMs =
             static_cast<double>(transport.routePhase) * transport.routePeriodMs + sinceSampleMs;
         double wrapped = std::fmod(serverMs, static_cast<double>(transport.routePeriodMs));
