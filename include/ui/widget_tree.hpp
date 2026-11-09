@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -647,6 +648,19 @@ struct Widget {
     /// model is actually built. Zero is "nothing chosen".
     uint32_t modelDisplayId = 0;
 
+    /// A model frame's model file (Model:SetModel, <Model file="">,
+    /// 0x0095f990) and the client's pose for it (0x0095fba0): SetPosition
+    /// (+0x31c), SetModelScale (+0x32c), SetCamera (+0x2a8, -1 none) and
+    /// SetSequence. Drawn by the frame loop through a ModelFrameView.
+    std::string modelFile;
+    float modelPosition[3] = {0.0f, 0.0f, 0.0f};
+    float modelScale = 1.0f;
+    int modelCamera = -1;
+    int modelSequence = -1;
+    /// Held at the middle of its frame (0x005446f0, 0x00545ff0): the world
+    /// map's arrows and its ping. The frame loop sets the position.
+    bool modelCentered = false;
+
     /// A TabardModel's design (+0x380..+0x390): emblem style and colour,
     /// border style and colour, background colour - game/tabard_design.hpp.
     std::array<int32_t, 5> tabardDesign{};
@@ -1100,6 +1114,9 @@ public:
     /// An empty unit releases it. Releasing clears the handle too - dropping
     /// off a list only stops the updates, and the last face would stay.
     void setPortraitUnit(uint32_t id, const std::string& unit);
+    /// The model frames given a model file, for the frame loop to draw.
+    void setModelFile(uint32_t id, const std::string& file);
+    [[nodiscard]] const std::set<uint32_t>& modelFileFrames() const { return modelFileFrames_; }
     /// Every texture claimed for this unit, or an empty list.
     [[nodiscard]] const std::vector<uint32_t>& portraitsFor(const std::string& unit) const;
 
@@ -1277,6 +1294,7 @@ private:
     /// texture already had so it can be released from it.
     std::map<std::string, std::vector<uint32_t>> portraitsByUnit_;
     std::map<uint32_t, std::string> portraitUnitOf_;
+    std::set<uint32_t> modelFileFrames_;
     uint32_t hoveredId_ = 0;
     /// Tooltips that have been given an owner, so the check is over a handful
     /// of frames rather than every widget in the tree.

@@ -1114,6 +1114,72 @@ int lua_Model_GetFacing(lua_State* L) {
     return 1;
 }
 
+// A model frame's model file and its pose (CSimpleModel, 0x00960530 ..
+// 0x009607e0): kept on the widget for the frame loop, which draws it.
+int lua_Model_SetModel(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:SetModel(\"file\")", w->name.c_str());
+    if (auto* tree = getWidgetTree(L)) tree->setModelFile(w->id, lua_tostring(L, 2));
+    return 0;
+}
+int lua_Model_GetModel(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    if (w && !w->modelFile.empty()) lua_pushstring(L, w->modelFile.c_str());
+    else lua_pushnil(L);
+    return 1;
+}
+int lua_Model_ClearModel(lua_State* L) {
+    if (auto* w = widgetOf(L, 1))
+        if (auto* tree = getWidgetTree(L)) tree->setModelFile(w->id, std::string());
+    return 0;
+}
+// 0x00960660: the three numbers as given, into +0x31c.
+int lua_Model_SetPosition(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) {
+        w->modelPosition[0] = static_cast<float>(luaL_optnumber(L, 2, 0.0));
+        w->modelPosition[1] = static_cast<float>(luaL_optnumber(L, 3, 0.0));
+        w->modelPosition[2] = static_cast<float>(luaL_optnumber(L, 4, 0.0));
+    }
+    return 0;
+}
+int lua_Model_GetPosition(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    for (int i = 0; i < 3; ++i) lua_pushnumber(L, w ? w->modelPosition[i] : 0.0);
+    return 3;
+}
+int lua_Model_SetModelScale(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) {
+        const float scale = static_cast<float>(luaL_optnumber(L, 2, 1.0));
+        if (scale > 0.0f) w->modelScale = scale;
+    }
+    return 0;
+}
+int lua_Model_GetModelScale(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->modelScale : 1.0);
+    return 1;
+}
+// 0x00960970 -> 0x0095f9f0: the model's camera by index.
+int lua_Model_SetCamera(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetCamera(index)", w->name.c_str());
+    w->modelCamera = static_cast<int>(std::llround(lua_tonumber(L, 2)));
+    return 0;
+}
+int lua_Model_SetSequence(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->modelSequence = static_cast<int>(luaL_optnumber(L, 2, 0));
+    return 0;
+}
+
+// __WoweeModelCentered(frame): the frame's model held at its middle, as the
+// client's WorldMap.cpp holds its arrows and ping (0x005446f0).
+int lua_WoweeModelCentered(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->modelCentered = true;
+    return 0;
+}
+
 int lua_Frame_SetMovable(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) w->movable = lua_toboolean(L, 2) != 0;
     return 0;
@@ -7400,6 +7466,7 @@ void LuaEngine::registerCoreAPI() {
     // 0x00817170), and first, because bootstrap code below hooks with it.
     taint::registerLuaApi(L_);
     lua_register(L_, "__WoweeSetProtected", lua_WoweeSetProtected);
+    lua_register(L_, "__WoweeModelCentered", lua_WoweeModelCentered);
     // __WoweeNoticeFallback(word, locale): chat_channels::noticeFallbackFormat.
     lua_register(L_, "__WoweeNoticeFallback", [](lua_State* L) -> int {
         const char* word = luaL_optstring(L, 1, "");
@@ -7741,6 +7808,15 @@ void LuaEngine::registerCoreAPI() {
         {"SetRotation",     lua_Model_SetFacing},
         {"SetFacing",       lua_Model_SetFacing},
         {"GetFacing",       lua_Model_GetFacing},
+        {"SetModel",        lua_Model_SetModel},
+        {"GetModel",        lua_Model_GetModel},
+        {"ClearModel",      lua_Model_ClearModel},
+        {"SetPosition",     lua_Model_SetPosition},
+        {"GetPosition",     lua_Model_GetPosition},
+        {"SetModelScale",   lua_Model_SetModelScale},
+        {"GetModelScale",   lua_Model_GetModelScale},
+        {"SetCamera",       lua_Model_SetCamera},
+        {"SetSequence",     lua_Model_SetSequence},
         {"IsMovable",       lua_Frame_IsMovable},
         {"RegisterForDrag", lua_Frame_RegisterForDrag},
         {"StartMoving",     lua_Frame_StartMoving},
@@ -9214,9 +9290,9 @@ void LuaEngine::registerCoreAPI() {
         // the objective font metrics, and WorldMapFrame.numQuests, which later
         // code counts up from and cannot when it is nil.
         //
-        // Empty is the honest shape for both. This client draws the player
-        // arrow and the quest areas itself, so what these need to do is exist,
-        // take their scale and frame level, and draw nothing.
+        // Made here so they exist from the start; CreateWorldMapArrowFrame
+        // then takes the arrow's over as the client's model frames
+        // (0x00544750), and the quest areas are drawn by the map itself.
         "PlayerArrowEffectFrame = CreateFrame('Frame', 'PlayerArrowEffectFrame')\n"
         // The battlefield minimap's own copy of that arrow, for the same
         // reason. Its OnLoad addresses it with no guard either - and unlike

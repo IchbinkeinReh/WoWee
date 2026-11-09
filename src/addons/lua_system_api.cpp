@@ -6514,23 +6514,80 @@ static int lua_LeaveBattlefield(lua_State* L) {
 
 // ---- World map player arrow and ping ----
 //
-// In the real client these manage a rotating 3D arrow model showing where the
-// player is standing and which way they face, plus the ping that plays when a
-// party member signals a spot on the map.
-//
-// This client already draws its own player marker, party dots and quest POIs
-// over the map, so the arrow would be a second marker on top of the first.
-// They are defined anyway because two of them are called from
-// WorldMapFrame_OnLoad: without them that function raised on its fifth line,
-// so the black separator never got its colour, the ping never initialised, and
-// the WorldMapFrame_Update() call that ends OnLoad never ran at all.
-//
-// UpdateWorldMapArrowFrames is not among them: it was already registered
-// elsewhere in this file, which is why it never appeared as missing.
-static int lua_CreateWorldMapArrowFrame(lua_State* L) { (void)L; return 0; }
-static int lua_ShowWorldMapArrowFrame(lua_State* L) { (void)L; return 0; }
-static int lua_PositionWorldMapArrowFrame(lua_State* L) { (void)L; return 0; }
-static int lua_InitWorldMapPing(lua_State* L) { (void)L; return 0; }
+// The world map's arrow and ping as the client makes them (WorldMap.cpp):
+// two model frames, PlayerArrowFrame and PlayerArrowEffectFrame, showing
+// Interface\Minimap\MinimapArrow.mdx at a model scale of the screen's DDC
+// height * 1.6666 (0x00544750), held at the middle of their frames
+// (0x005446f0) and turned to the player's facing (0x005449f0); and the
+// FrameXML's WorldMapPing model held at the middle of its frame (0x00545ff0).
+// Each is a short chunk run with the call's arguments, compiled once.
+static int runChunk(lua_State* L, const char* key, const char* code) {
+    lua_getfield(L, LUA_REGISTRYINDEX, key);
+    if (!lua_isfunction(L, -1)) {
+        lua_pop(L, 1);
+        if (luaL_loadstring(L, code) != 0) return lua_error(L);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, LUA_REGISTRYINDEX, key);
+    }
+    lua_insert(L, 1);
+    lua_call(L, lua_gettop(L) - 1, 0);
+    return 0;
+}
+// 0x00545e60 -> 0x00544750.
+static int lua_CreateWorldMapArrowFrame(lua_State* L) {
+    return runChunk(L, "wowee.CreateWorldMapArrowFrame",
+        "local parent = ...\n"
+        "if type(parent) ~= 'table' then error('Usage: CreateWorldMapArrowFrame(parent)') end\n"
+        "local w, h = GetScreenWidth(), GetScreenHeight()\n"
+        "local a = (h and h > 0) and w / h or 4 / 3\n"
+        "for _, name in ipairs({'PlayerArrowFrame', 'PlayerArrowEffectFrame'}) do\n"
+        "  local f = _G[name]\n"
+        "  if not f then f = CreateFrame('Model', name, parent) else f:SetParent(parent) end\n"
+        "  f:SetModel('Interface\\\\Minimap\\\\MinimapArrow.mdx')\n"
+        "  f:SetModelScale(1 / math.sqrt(a * a + 1) * 1.6666666)\n"
+        "  __WoweeModelCentered(f)\n"
+        "end\n");
+}
+// 0x005434e0: both shown or both hidden.
+static int lua_ShowWorldMapArrowFrame(lua_State* L) {
+    return runChunk(L, "wowee.ShowWorldMapArrowFrame",
+        "local show = ...\n"
+        "local a, e = PlayerArrowFrame, PlayerArrowEffectFrame\n"
+        "if not a or not e or not a.GetModel or not a:GetModel() then return end\n"
+        "if show then a:Show() e:Show() else a:Hide() e:Hide() end\n");
+}
+// 0x005430a0: both anchored alike; the offsets are the screen's units, not
+// the frames' own (x / (1024 * ar * 0.75) of the DDC width).
+static int lua_PositionWorldMapArrowFrame(lua_State* L) {
+    return runChunk(L, "wowee.PositionWorldMapArrowFrame",
+        "local point, rel, relPoint, x, y = ...\n"
+        "local a, e = PlayerArrowFrame, PlayerArrowEffectFrame\n"
+        "if not a or not e or not a:GetModel() then return end\n"
+        "if type(point) ~= 'string' or type(rel) ~= 'string' then\n"
+        "  error('Usage: PositionWorldMapArrowFrame(\"point\" \"frame\" [, relativePoint] [, offsetX, offsetY])')\n"
+        "end\n"
+        "if not _G[rel] then error(\"Couldn't find frame named '\" .. rel .. \"'\") end\n"
+        "for _, f in ipairs({a, e}) do\n"
+        "  local s = f:GetEffectiveScale()\n"
+        "  if not s or s <= 0 then s = 1 end\n"
+        "  f:SetPoint(point, rel, relPoint or point, (tonumber(x) or 0) / s, (tonumber(y) or 0) / s)\n"
+        "end\n");
+}
+// 0x00545ff0: the parent's WorldMapPing, held at the middle of its frame.
+static int lua_InitWorldMapPing(lua_State* L) {
+    return runChunk(L, "wowee.InitWorldMapPing",
+        "local parent = ...\n"
+        "if type(parent) ~= 'table' then error('Usage: InitWorldMapPing(parent)') end\n"
+        "if WorldMapPing then __WoweeModelCentered(WorldMapPing) end\n");
+}
+// 0x00545fe0 -> 0x005449f0: the arrows turned to the player's facing.
+static int lua_UpdateWorldMapArrowFrames(lua_State* L) {
+    return runChunk(L, "wowee.UpdateWorldMapArrowFrames",
+        "local facing = GetPlayerFacing()\n"
+        "for _, f in ipairs({PlayerArrowFrame, PlayerArrowEffectFrame}) do\n"
+        "  if f and f.SetFacing then f:SetFacing(facing) end\n"
+        "end\n");
+}
 
 // The battlefield minimap's own copy of the arrow, for the same reason and
 // with the same answer as the world map's above.
@@ -9973,7 +10030,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 // the quest pins this tree moves are named frames, and the two
                 // verbs for those (ShowWorldMapArrowFrame and
                 // PositionWorldMapArrowFrame, above) are both answered.
-                {"UpdateWorldMapArrowFrames",   lua_ReturnNothing},
+                {"UpdateWorldMapArrowFrames",   lua_UpdateWorldMapArrowFrames},
                 {"SetSelectedSkill", [](lua_State* L) -> int {
             selectedSkill() = static_cast<int>(luaL_optnumber(L, 1, 0)); return 0; }},
                 {"Sound_GameSystem_GetOutputDriverNameByIndex", lua_Sound_GetOutputDriverNameByIndex},

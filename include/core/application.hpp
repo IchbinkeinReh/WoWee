@@ -5,6 +5,8 @@
 #include <chrono>
 #include "core/gamepad.hpp"
 #include "ui/unit_portrait.hpp"
+
+namespace wowee::rendering { class ModelFrameView; }
 #include "ui/widget_renderer.hpp"
 #include "core/input.hpp"
 #include "core/entity_spawner.hpp"
@@ -419,6 +421,9 @@ private:
     /// offscreen pass rather than a shared one: the portrait shows the face
     /// and this shows the whole figure, and they are on screen together.
     ui::UnitPortrait paperdollModel_;
+    /// The model frames showing a model file (Model:SetModel), by widget id:
+    /// each drawn through its own view (rendering/model_frame_view.hpp).
+    std::unordered_map<uint32_t, std::unique_ptr<rendering::ModelFrameView>> modelFrameViews_;
     /// The facing already applied to the paperdoll, so only the change since
     /// last frame is turned.
     float paperdollFacing_ = 0.0f;

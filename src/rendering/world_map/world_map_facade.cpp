@@ -143,6 +143,7 @@ struct WorldMapFacade::Impl {
     // reset on the ask rather than from each navigation path.
     int dungeonLevelRowId = -1;
     uint32_t playerWmoId = 0;
+    bool interfaceDrawsPlayerArrow = false;
     uint32_t dungeonLevelAreaId = 0;
 
     DataRepository data;
@@ -1063,6 +1064,7 @@ std::vector<WorldMapFacade::Landmark> WorldMapFacade::currentLandmarks() const {
 }
 
 void WorldMapFacade::setPlayerWmoId(uint32_t wmoId) { impl_->playerWmoId = wmoId; }
+void WorldMapFacade::setInterfaceDrawsPlayerArrow(bool drawn) { impl_->interfaceDrawsPlayerArrow = drawn; }
 
 void WorldMapFacade::setPlayerZoneId(uint32_t zoneId) {
     impl_->playerZoneId = zoneId;
@@ -1348,7 +1350,7 @@ void WorldMapFacade::Impl::renderImGuiOverlay(const glm::vec3& playerRenderPos,
 
         if (hostedDraw) {
             if (questPOILayer) questPOILayer->render(layerCtx);
-            if (playerMarkerLayer) playerMarkerLayer->render(layerCtx);
+            if (playerMarkerLayer && !interfaceDrawsPlayerArrow) playerMarkerLayer->render(layerCtx);
             ImGui::End();
             if (!windowOpen) closeMap();
             ImGui::PopStyleVar(3);

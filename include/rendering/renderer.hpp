@@ -672,6 +672,10 @@ public:
     // Character preview registration (for off-screen composite pass)
     void registerPreview(CharacterPreview* preview);
     void unregisterPreview(CharacterPreview* preview);
+    /// A UI model frame's view (model_frame_view.hpp), drawn with the
+    /// previews outside the scene's passes.
+    void registerModelFrame(class ModelFrameView* view);
+    void unregisterModelFrame(class ModelFrameView* view);
 
     /// Whether the lighting reads the shadow map. Off, as the client's
     /// extShadowQuality 0 is, the casters are still drawn - skipping them is
@@ -1153,6 +1157,7 @@ private:
 
     // Active character previews for off-screen rendering
     std::vector<CharacterPreview*> activePreviews_;
+    std::vector<class ModelFrameView*> activeModelFrames_;
 
     bool terrainEnabled = true;
     bool terrainLoaded = false;

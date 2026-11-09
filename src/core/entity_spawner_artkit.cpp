@@ -12,6 +12,7 @@
 #include "game/game_handler.hpp"
 #include "game/update_field_table.hpp"
 #include "pipeline/asset_manager.hpp"
+#include "pipeline/m2_loader.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/m2_renderer.hpp"
 
@@ -21,18 +22,6 @@
 namespace wowee::core {
 
 namespace {
-
-/// The model file a DBC names, as the archive holds it: .mdx/.mdl are .m2.
-std::string m2PathOf(std::string path) {
-    const size_t dot = path.find_last_of('.');
-    if (dot != std::string::npos) {
-        std::string ext = path.substr(dot);
-        std::transform(ext.begin(), ext.end(), ext.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if (ext == ".mdx" || ext == ".mdl") path = path.substr(0, dot) + ".m2";
-    }
-    return path;
-}
 
 /// The model cache is keyed by display id; an art kit's models take keys no
 /// display id reaches.
@@ -87,7 +76,7 @@ void EntitySpawner::applyGameObjectArtKit(uint64_t guid) {
         if (!m2->getAttachmentTransform(parent, i, frame)) continue;
         const uint32_t key = artKitModelKey(artKit, i);
         if (gameObjectDisplayIdFailedCache_.count(key)) continue;
-        PreparedGameObjectM2 prepared = prepareGameObjectM2(*assetManager_, key, m2PathOf(path));
+        PreparedGameObjectM2 prepared = prepareGameObjectM2(*assetManager_, key, pipeline::modelPathToM2(path));
         const uint32_t modelId = uploadGameObjectM2(prepared);
         if (modelId == 0) continue;
         const uint32_t instance = m2->createInstanceWithMatrix(modelId, frame, glm::vec3(frame[3]));

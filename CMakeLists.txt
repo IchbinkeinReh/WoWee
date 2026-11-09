@@ -1017,6 +1017,7 @@ set(WOWEE_SOURCES
     src/rendering/character_renderer.cpp
     src/rendering/character_renderer_rt.cpp
     src/rendering/character_preview.cpp
+    src/rendering/model_frame_view.cpp
     src/rendering/wmo_renderer.cpp
     src/rendering/imgui_texture.cpp
     src/rendering/imgui_blend.cpp

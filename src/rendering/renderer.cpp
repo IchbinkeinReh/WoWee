@@ -1,6 +1,7 @@
 #include "rendering/swim_pitch.hpp"
 #include "core/platform.hpp"
 #include "rendering/renderer.hpp"
+#include "rendering/model_frame_view.hpp"
 #include "rendering/shadow_sun.hpp"
 #include "rendering/rt_lamp_wrap.hpp"
 #include "rendering/rt_min_brightness.hpp"
@@ -1382,6 +1383,16 @@ void Renderer::unregisterPreview(CharacterPreview* preview) {
     if (it != activePreviews_.end()) {
         activePreviews_.erase(it);
     }
+}
+
+void Renderer::registerModelFrame(ModelFrameView* view) {
+    if (view && std::find(activeModelFrames_.begin(), activeModelFrames_.end(), view) == activeModelFrames_.end())
+        activeModelFrames_.push_back(view);
+}
+
+void Renderer::unregisterModelFrame(ModelFrameView* view) {
+    activeModelFrames_.erase(std::remove(activeModelFrames_.begin(), activeModelFrames_.end(), view),
+                             activeModelFrames_.end());
 }
 
 void Renderer::setMsaaSamples(VkSampleCountFlagBits samples) {
@@ -7563,10 +7574,13 @@ void Renderer::recordPreviewComposites() {
     // passes is legal until something draws with it. After the scene, the
     // only pass left to open is the single-sampled overlay - which is also
     // the pass that samples the previews, so they are still drawn first.
-    if (activePreviews_.empty() || !vkCtx || currentCmd == VK_NULL_HANDLE) return;
+    if ((activePreviews_.empty() && activeModelFrames_.empty()) || !vkCtx || currentCmd == VK_NULL_HANDLE) return;
     const uint32_t frame = vkCtx->getCurrentFrame();
     for (auto* preview : activePreviews_) {
         if (preview && preview->isModelLoaded()) preview->compositePass(currentCmd, frame);
+    }
+    for (auto* view : activeModelFrames_) {
+        if (view) view->compositePass(currentCmd, frame);
     }
     vkCtx->gpuMark(currentCmd, "character previews");
 }

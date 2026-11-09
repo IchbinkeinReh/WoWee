@@ -497,6 +497,12 @@ public:
 
     [[nodiscard]] bool initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout,
                     pipeline::AssetManager* assets);
+    /// Build the pipelines for an off-screen pass instead of the scene's,
+    /// before initialize(): a UI model frame's own view.
+    void setRenderPassOverride(VkRenderPass pass, VkSampleCountFlagBits samples) {
+        renderPassOverride_ = pass;
+        samplesOverride_ = samples;
+    }
     /** Configure this renderer for camera-centered sky M2s before initialize(). */
     void setSkyMode(bool enabled) { skyMode_ = enabled; }
     void shutdown();
@@ -1598,6 +1604,8 @@ private:
     /// each frame in update().
     float furthestDrawnSq_ = 0.0f;
     bool forceNoCull_ = false;
+    VkRenderPass renderPassOverride_ = VK_NULL_HANDLE;
+    VkSampleCountFlagBits samplesOverride_ = VK_SAMPLE_COUNT_1_BIT;
 
     // Thread count for parallel bone animation
     uint32_t numAnimThreads_ = 1;

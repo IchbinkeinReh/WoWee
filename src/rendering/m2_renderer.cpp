@@ -144,7 +144,11 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
         return false;
     }
 
-    VkRenderPass mainPass = vkCtx_->getImGuiRenderPass();
+    // The scene's pass, or an off-screen one this renderer was given (a UI
+    // model frame's view, ui/model_frame_view).
+    VkRenderPass mainPass = renderPassOverride_ ? renderPassOverride_ : vkCtx_->getImGuiRenderPass();
+    const VkSampleCountFlagBits passSamples =
+        renderPassOverride_ ? samplesOverride_ : vkCtx_->getMsaaSamples();
 
     // --- Build M2 model pipelines ---
     // Vertex input: 18 floats = 72 bytes stride
@@ -182,7 +186,7 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
             // everything drawn after.
             .setDepthTest(depthTest, skyMode_ ? false : depthWrite, depth::kNearerOrEqual)
             .setColorBlendAttachment(blendState)
-            .setMultisample(vkCtx_->getMsaaSamples());
+            .setMultisample(passSamples);
         // MSAA alpha-to-coverage dithers the shader's sharpened cutout alpha
         // across samples for smooth foliage/leaf silhouettes.
         if (alphaToCoverage) builder.setAlphaToCoverage(true);
@@ -318,7 +322,7 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
                 .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
                 .setDepthTest(true, false, depth::kNearerOrEqual)
                 .setColorBlendAttachment(blend)
-                .setMultisample(vkCtx_->getMsaaSamples())
+                .setMultisample(passSamples)
                 .setLayout(particlePipelineLayout_)
                 .setRenderPass(mainPass)
                 .setDynamicStates(viewportAndScissorDynamic())
@@ -393,7 +397,7 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
                     .setRasterization(VK_POLYGON_MODE_FILL, cull, VK_FRONT_FACE_COUNTER_CLOCKWISE)
                     .setDepthTest(depthTest, depthWrite, depth::kNearerOrEqual)
                     .setColorBlendAttachment(blend)
-                    .setMultisample(vkCtx_->getMsaaSamples())
+                    .setMultisample(passSamples)
                     .setLayout(ribbonPipelineLayout_)
                     .setRenderPass(mainPass)
                     .setDynamicStates(viewportAndScissorDynamic())

@@ -2,6 +2,7 @@
 #include "core/stall_report.hpp"
 #include "core/platform.hpp"
 #include "core/application.hpp"
+#include "rendering/model_frame_view.hpp"
 #include "core/rt_session_marker.hpp"
 #include "core/config_paths.hpp"
 #include "core/world_settle.hpp"
@@ -6209,6 +6210,67 @@ void Application::render() {
                     view.setTargetSize(clampDim(frame->rectW * scale),
                                        clampDim(frame->rectH * scale));
                 };
+
+            runRenderStage("addonWidgets/modelFiles", [&] {
+                // Model frames given a model file (CSimpleModel, 0x0095fc30):
+                // each its own off-screen view of the frame's size, posed and
+                // projected as the client does in DDC, the screen with a
+                // diagonal of 1 (0x0047bf90) - a frame's rect, SetPosition and
+                // model scale all measured in it.
+                const float screenW = io.DisplaySize.x, screenH = io.DisplaySize.y;
+                const float uiScale = widgets.uiScale();
+                std::unordered_set<uint32_t> shown;
+                if (screenW > 0.0f && screenH > 0.0f && uiScale > 0.0f) {
+                    const float ddcH = rendering::model_frame::ddcHeight(screenW / screenH);
+                    const float ddcPerUnit = ddcH / (screenH / uiScale);
+                    for (const uint32_t id : widgets.modelFileFrames()) {
+                        ui::Widget* frame = widgets.get(id);
+                        if (!frame || !frame->visible || frame->modelFile.empty() || frame->rectW <= 0.0f ||
+                            frame->rectH <= 0.0f)
+                            continue;
+                        auto& view = modelFrameViews_[id];
+                        if (!view) view = std::make_unique<rendering::ModelFrameView>();
+                        const int pw = static_cast<int>(frame->rectW * uiScale + 0.5f);
+                        const int ph = static_cast<int>(frame->rectH * uiScale + 0.5f);
+                        if (!view->ensureSize(assetManager.get(), pw, ph) || !view->setModel(frame->modelFile)) {
+                            frame->externalTexture = 0;
+                            continue;
+                        }
+                        rendering::model_frame::Pose pose;
+                        // Held at the frame's middle, in its own units: half its
+                        // width and height (0x005446f0).
+                        if (frame->modelCentered) {
+                            const float eff = frame->effScale > 0.0f ? frame->effScale : 1.0f;
+                            frame->modelPosition[0] = frame->rectW * ddcPerUnit / eff * 0.5f;
+                            frame->modelPosition[1] = frame->rectH * ddcPerUnit / eff * 0.5f;
+                            frame->modelPosition[2] = 0.0f;
+                        }
+                        pose.position = glm::vec3(frame->modelPosition[0], frame->modelPosition[1],
+                                                  frame->modelPosition[2]);
+                        pose.facing = frame->modelFacing;
+                        pose.modelScale = frame->modelScale;
+                        pose.effectiveScale = frame->effScale;
+                        view->setFrame(frame->rectW * ddcPerUnit, frame->rectH * ddcPerUnit, pose, ddcH,
+                                       frame->modelCamera, frame->modelSequence);
+                        view->update(io.DeltaTime);
+                        view->requestComposite();
+                        frame->externalTexture = view->textureId();
+                        shown.insert(id);
+                    }
+                }
+                // The interface's own player arrow on the world map, when it
+                // draws: the map shows none of its own under it.
+                if (auto* wm = renderer ? renderer->getWorldMap() : nullptr) {
+                    const ui::Widget* arrow = widgets.findByName("PlayerArrowFrame");
+                    wm->setInterfaceDrawsPlayerArrow(arrow && arrow->visible && arrow->externalTexture != 0);
+                }
+                // A frame hidden, gone or cleared lets its view go.
+                for (auto it = modelFrameViews_.begin(); it != modelFrameViews_.end();) {
+                    if (shown.count(it->first)) { ++it; continue; }
+                    if (ui::Widget* frame = widgets.get(it->first)) frame->externalTexture = 0;
+                    it = modelFrameViews_.erase(it);
+                }
+            });
 
             runRenderStage("addonWidgets/paperdoll", [&] {
                 // The paperdoll's figure, on the same terms as the portrait:

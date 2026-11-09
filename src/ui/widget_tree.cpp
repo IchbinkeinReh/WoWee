@@ -105,6 +105,7 @@ void WidgetTree::reset() {
     ownedTooltips_.clear();
     portraitsByUnit_.clear();
     portraitUnitOf_.clear();
+    modelFileFrames_.clear();
     // Every one of these names a widget by id, and the ids are about to mean
     // something else. A drag or a focus held across the reset would be held on
     // whatever frame the new load happens to give that number to.
@@ -267,6 +268,18 @@ void WidgetTree::followCursorTooltips(float x, float y) {
         }
         clearPoints(id);
         addPoint(id, a);
+    }
+}
+
+void WidgetTree::setModelFile(uint32_t id, const std::string& file) {
+    auto* w = get(id);
+    if (!w) return;
+    w->modelFile = file;
+    if (file.empty()) {
+        modelFileFrames_.erase(id);
+        w->externalTexture = 0;
+    } else {
+        modelFileFrames_.insert(id);
     }
 }
 

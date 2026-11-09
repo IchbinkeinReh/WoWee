@@ -3705,3 +3705,8 @@ wowee_add_test(test_transport_physics
 # A model's object effects (0x006f7270, 0x006f61d0, 0x00721300).
 wowee_add_test(test_object_effect
     SOURCES test_object_effect.cpp)
+
+# ── test_model_frame_pose ────────────────────────────
+# A UI model frame's pose (0x0095fba0) and the DDC screen (0x0047bf90).
+wowee_add_test(test_model_frame_pose
+    SOURCES test_model_frame_pose.cpp)

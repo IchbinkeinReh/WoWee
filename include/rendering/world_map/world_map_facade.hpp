@@ -47,6 +47,10 @@ public:
     /// The WMO group the player stands in (MOGP's group id, 0 outdoors), which
     /// with the height picks the floor the map opens on (DungeonMapChunk).
     void setPlayerWmoId(uint32_t wmoId);
+    /// The interface draws the player's arrow itself - FrameXML's
+    /// PlayerArrowFrame model (CreateWorldMapArrowFrame, 0x00544750) - so
+    /// the map in its frame draws none of its own.
+    void setInterfaceDrawsPlayerArrow(bool drawn);
     void setPartyDots(std::vector<PartyDot> dots);
     void setTaxiNodes(std::vector<TaxiNode> nodes);
     void setQuestPois(std::vector<QuestPOI> pois);
