@@ -273,7 +273,7 @@ void WorldEntryCallbackHandler::setupCallbacks() {
             // Stop any movement that was active before the teleport
             if (renderer_.getCameraController()) {
                 renderer_.getCameraController()->clearMovementInputs();
-                renderer_.getCameraController()->suppressMovementFor(0.5f);
+                renderer_.getCameraController()->suppressHeldMovementFor(0.5f);
             }
             // Kick off async upload for any tiles that finished background
             // parsing. Bounded on purpose: finalizing every ready tile here
