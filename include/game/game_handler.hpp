@@ -2226,6 +2226,11 @@ public:
     void setGameObjectInfoCallback(GameObjectInfoCallback cb) { gameObjectInfoCallback_ = std::move(cb); }
 
     // GameObject despawn callback (online mode - triggered when gameobject leaves view)
+    /// A game object's GAMEOBJECT_FLAGS changed (a destructible building's
+    /// state, 0x0070e0d0).
+    using GameObjectFlagsCallback = std::function<void(uint64_t guid)>;
+    void setGameObjectFlagsCallback(GameObjectFlagsCallback cb) { gameObjectFlagsCallback_ = std::move(cb); }
+    auto& gameObjectFlagsCallbackRef() { return gameObjectFlagsCallback_; }
     using GameObjectDespawnCallback = std::function<void(uint64_t guid)>;
     void setGameObjectDespawnCallback(GameObjectDespawnCallback cb) { gameObjectDespawnCallback_ = std::move(cb); }
     /// The server took a game object away (SMSG_DESTROY_OBJECT 0x004d7610,
@@ -6253,6 +6258,7 @@ private:
     GameObjectSpawnCallback gameObjectSpawnCallback_;
     GameObjectMoveCallback gameObjectMoveCallback_;
     GameObjectDespawnCallback gameObjectDespawnCallback_;
+    GameObjectFlagsCallback gameObjectFlagsCallback_;
     GameObjectDespawnCallback gameObjectDestroyCallback_;
     DynamicObjectSpawnCallback dynamicObjectSpawnCallback_;
     DynamicObjectDespawnCallback dynamicObjectDespawnCallback_;

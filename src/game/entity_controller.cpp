@@ -3665,8 +3665,12 @@ void EntityController::onValuesUpdateGameObject(const UpdateBlock& block, std::s
     if (const uint16_t ufDisplay = fieldIndex(UF::GAMEOBJECT_DISPLAYID); ufDisplay != 0xFFFF) {
         auto itD = block.fields.find(ufDisplay);
         auto go = std::static_pointer_cast<GameObject>(entity);
+        // Not a destructible building (type 33): its look follows its flags
+        // (0x0070e0d0), not its display field.
+        const uint16_t b1 = fieldIndex(UF::GAMEOBJECT_BYTES_1);
+        const bool destructible = b1 != 0xFFFF && ((entity->getField(b1) >> 8) & 0xFFu) == 33u;
         if (itD != block.fields.end() && itD->second != 0 && itD->second != go->getDisplayId() &&
-            !transportGuids_.count(block.guid)) {
+            !transportGuids_.count(block.guid) && !destructible) {
             const bool shown = go->getDisplayId() != 0;
             go->setDisplayId(itD->second);
             if (shown && owner_.gameObjectDespawnCallbackRef()) owner_.gameObjectDespawnCallbackRef()(block.guid);
@@ -3683,6 +3687,12 @@ void EntityController::onValuesUpdateGameObject(const UpdateBlock& block, std::s
                                                     go->getY(), go->getZ(), go->getOrientation(), scale);
             }
         }
+    }
+
+    // GAMEOBJECT_FLAGS: a destructible building's state is in them.
+    if (const uint16_t ufFlags = fieldIndex(UF::GAMEOBJECT_FLAGS);
+        ufFlags != 0xFFFF && block.fields.find(ufFlags) != block.fields.end() && owner_.gameObjectFlagsCallbackRef()) {
+        owner_.gameObjectFlagsCallbackRef()(block.guid);
     }
 
     // Detect GO state changes from GAMEOBJECT_BYTES_1 (packed: byte0=state, byte1=type, byte2=artKit, byte3=animProgress)

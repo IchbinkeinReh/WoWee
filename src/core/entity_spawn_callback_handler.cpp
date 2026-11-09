@@ -219,6 +219,8 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
     // GameObject state change callback: a door, a chest, a destructible is a
     // pose the server describes, and the spawner holds it - including the one
     // that arrives before the model does.
+    gameHandler_.setGameObjectFlagsCallback([this](uint64_t guid) { entitySpawner_.applyDestructibleFlags(guid); });
+
     gameHandler_.setGameObjectStateCallback([this](uint64_t guid, uint8_t goState) {
         entitySpawner_.applyGameObjectState(guid, goState);
     });

@@ -754,6 +754,12 @@ void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_
     }
     if (!gameObjectLookupsBuilt_) return;
 
+    // A destructible building shows its state's look, not its display field.
+    if (DestructibleLook look; destructibleLook(guid, entry, look)) {
+        destructibleStates_[guid] = look.state;
+        if (look.display != 0) displayId = look.display;
+    }
+
     LOG_DEBUG("GO spawn attempt: guid=0x", std::hex, guid, std::dec,
              " displayId=", displayId, " entry=", entry,
              " pos=(", x, ", ", y, ", ", z, ")");
@@ -930,6 +936,7 @@ void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_
 
             gameObjectInstances_[guid] = {.modelId = modelId, .instanceId = instanceId, .isWmo = true,
                                           .scale = scale};
+            spawnDestructibleDoodads(guid, modelPath);
             LOG_DEBUG("Spawned gameobject WMO: guid=0x", std::hex, guid, std::dec,
                      " displayId=", displayId, " at (", x, ", ", y, ", ", z, ")");
 

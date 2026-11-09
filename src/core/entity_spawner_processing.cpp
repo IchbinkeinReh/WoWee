@@ -2735,11 +2735,31 @@ void EntitySpawner::updateGameObjectDestroyPending() {
     for (uint64_t guid : done) despawnGameObject(guid);
 }
 
-void EntitySpawner::onGameObjectInfoReceived(uint32_t /*entry*/) {
+void EntitySpawner::onGameObjectInfoReceived(uint32_t entry) {
     // The client animates game objects by their state (see
     // applyGameObjectState) and, as the interaction object, by their type
     // (applyGameObjectInteraction, which asks for the template then); the
-    // template arriving does not change it.
+    // template arriving does not change that. A destructible building drawn
+    // before it came is drawn again in its state's look.
+    if (!gameHandler_) return;
+    const auto* info = gameHandler_->getCachedGameObjectInfo(entry);
+    if (!info || info->type != 33) return;
+    std::vector<uint64_t> redo;
+    for (const auto& [guid, inst] : gameObjectInstances_) {
+        if (destructibleStates_.count(guid)) continue;
+        auto e = gameHandler_->getEntityManager().getEntity(guid);
+        if (e && e->getType() == game::ObjectType::GAMEOBJECT &&
+            static_cast<const game::GameObject&>(*e).getEntry() == entry)
+            redo.push_back(guid);
+    }
+    for (uint64_t guid : redo) {
+        auto e = gameHandler_->getEntityManager().getEntity(guid);
+        const auto& go = static_cast<const game::GameObject&>(*e);
+        const float scale = gameObjectInstances_[guid].scale;
+        despawnGameObject(guid);
+        queueGameObjectSpawn(guid, entry, go.getDisplayId(), go.getX(), go.getY(), go.getZ(), go.getOrientation(),
+                             scale);
+    }
 }
 
 void EntitySpawner::despawnGameObject(uint64_t guid) {
@@ -2751,6 +2771,7 @@ void EntitySpawner::despawnGameObject(uint64_t guid) {
         pendingTransportDoodadBatches_.end());
 
     clearGameObjectArtKit(guid);
+    clearDestructible(guid);
     auto it = gameObjectInstances_.find(guid);
     if (it == gameObjectInstances_.end()) return;
 

@@ -159,6 +159,9 @@ public:
     /// model existed and was dropped, so every door in the world was drawn in
     /// its closed pose however the server had it.
     void applyGameObjectState(uint64_t guid, uint8_t goState);
+    /// GAMEOBJECT_FLAGS changed: a destructible building whose state it moves
+    /// takes the state's look (0x0070e0d0).
+    void applyDestructibleFlags(uint64_t guid);
     /// The object became the one a window is open with (open), or stopped
     /// being it: its type's OPEN (slot 0x98) or CLOSE (slot 0x9c) - see
     /// game/go_interaction_anim.hpp.
@@ -1328,6 +1331,19 @@ private:
         std::vector<glm::mat4> lastFrame;
     };
     std::unordered_map<uint64_t, GameObjectArtKitState> gameObjectArtKits_;
+    /// A destructible building's look (entity_spawner_destructible.cpp): its
+    /// state by GAMEOBJECT_FLAGS, that state's display and doodad sets.
+    struct DestructibleLook {
+        uint32_t state = 0;
+        uint32_t display = 0;
+        std::vector<uint32_t> sets;
+    };
+    bool destructibleLook(uint64_t guid, uint32_t entry, DestructibleLook& out) const;
+    void spawnDestructibleDoodads(uint64_t guid, const std::string& wmoPath);
+    void clearDestructible(uint64_t guid);
+    std::unordered_map<uint64_t, uint32_t> destructibleStates_;
+    std::unordered_map<uint64_t, std::vector<uint32_t>> destructibleDoodads_;
+    std::unordered_map<std::string, std::shared_ptr<pipeline::WMOModel>> destructibleWmoRoots_;
     void applyGameObjectArtKit(uint64_t guid);
     void clearGameObjectArtKit(uint64_t guid);
     void updateGameObjectArtKits();
