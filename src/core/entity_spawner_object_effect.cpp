@@ -1,12 +1,16 @@
-// entity_spawner_object_effect.cpp - a unit's object effects (ObjectEffect.cpp).
+// entity_spawner_object_effect.cpp - an object's effects (ObjectEffect.cpp).
 //
-// A unit whose CreatureDisplayInfo names an ObjectEffectPackage (column 15) -
-// a siege engine, a demolisher, a flying machine, Mimiron's head - sounds of
-// the states it is in (game/object_effect.hpp): its movement flags' states
-// (0x00721300) and its animation's (0x0071e5b0), each one's effects played
-// once on the way in or out, or looped while any state holds them, a loop's
-// pitch following the unit's speed where its modifier says (0x006f1790). A
-// loop rises over 0.7 s and dies away over 0.7 s (0x006f1ef0, 0x006f61d0).
+// A unit's effects come from its display's ObjectEffectPackage (column 15) -
+// the mount's display while it rides one (UNIT_FIELD_MOUNTDISPLAYID,
+// 0x00725df0) - and a game object's from GameObjectDisplayInfo's (column 18):
+// siege engines, rocket mounts, lifts, gunships (game/object_effect.hpp).
+// A unit's states are its movement flags' (0x00721300) and those of the up to
+// three animations it plays - the mount's, its body's, its arm's
+// (0x0071e5b0, 0x007173f0); a game object's its animation's (0x0070bb10), its
+// route's (0x0070b390) and its doodads' events' (0x007bd5a0). Each state's
+// effects play once on the way in or out, or loop while any state holds them,
+// a loop rising and dying away over 0.7 s (0x006f1ef0, 0x006f61d0) and its
+// pitch set by its modifier from the object's answer (0x006f1790).
 #include "core/entity_spawner.hpp"
 
 #include "audio/audio_engine.hpp"
@@ -20,6 +24,7 @@
 #include "rendering/m2_renderer.hpp"
 #include "rendering/wmo_renderer.hpp"
 #include "game/update_field_table.hpp"
+#include "game/transport_manager.hpp"
 
 #include <functional>
 #include <glm/gtc/matrix_transform.hpp>
@@ -78,7 +83,17 @@ void EntitySpawner::clearObjectEffects(uint64_t guid) {
     objectEffects_.erase(it);
 }
 
+void EntitySpawner::noteDoodadOwner(uint32_t doodadInstance, uint32_t wmoInstance) {
+    for (const auto& [guid, info] : gameObjectInstances_) {
+        if (info.isWmo && info.instanceId == wmoInstance) {
+            doodadOwnerGo_[doodadInstance] = guid;
+            return;
+        }
+    }
+}
+
 void EntitySpawner::updateObjectEffects(float deltaTime) {
+    (void)deltaTime;
     rendering::CharacterRenderer* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
     if (!cr || !gameHandler_ || !assetManager_) return;
     if (!objectEffectTablesLoaded_) {
@@ -99,21 +114,42 @@ void EntitySpawner::updateObjectEffects(float deltaTime) {
             }
         }
     }
+    rendering::M2EventSounds& sounds = renderer_->getM2EventSounds();
+    std::vector<rendering::M2EventSounds::ObjectStateEvent> doodadEvents = sounds.takeObjectStateEvents();
     if (!objectEffectTables_) return;
     const oe::Tables& tables = *objectEffectTables_;
     auto& audio = audio::AudioEngine::instance();
-    rendering::M2EventSounds& sounds = renderer_->getM2EventSounds();
     rendering::M2Renderer* m2 = renderer_->getM2Renderer();
     rendering::WMORenderer* wmo = renderer_->getWMORenderer();
+    game::TransportManager* transports = gameHandler_->getTransportManager();
     static const oe::States kAnimationScope = oe::animationScope();
     const uint16_t goDisplayField = game::fieldIndex(game::UF::GAMEOBJECT_DISPLAYID);
+    const uint64_t self = gameHandler_->getPlayerGuid();
+    const uint32_t selfInstance = renderer_->getCharacterInstanceId();
 
-    // The package an object's display names now, 0 for none.
-    auto unitPackage = [&](uint64_t guid) -> uint32_t {
-        const auto display = creatureDisplayIds_.find(guid);
-        if (display == creatureDisplayIds_.end() || !creatureInstances_.count(guid)) return 0;
-        const auto pkg = objectEffectPackageByDisplay_.find(display->second);
+    auto packageOfDisplay = [&](uint32_t display) -> uint32_t {
+        const auto pkg = objectEffectPackageByDisplay_.find(display);
         return pkg != objectEffectPackageByDisplay_.end() ? pkg->second : 0;
+    };
+    // A unit's render instance, and its mount's while it rides one.
+    auto unitInstance = [&](uint64_t guid) -> uint32_t {
+        if (guid == self) return selfInstance;
+        if (auto it = creatureInstances_.find(guid); it != creatureInstances_.end()) return it->second;
+        if (auto it = playerInstances_.find(guid); it != playerInstances_.end()) return it->second;
+        return 0;
+    };
+    auto mountInstance = [&](uint64_t guid) -> uint32_t {
+        if (guid == self) return mountInstanceId_;
+        if (auto it = remotePlayerMounts_.find(guid); it != remotePlayerMounts_.end()) return it->second.instanceId;
+        return 0;
+    };
+    // 0x00725df0: the mount's display while mounted, else the unit's own.
+    auto unitPackage = [&](uint64_t guid) -> uint32_t {
+        if (unitInstance(guid) == 0) return 0;
+        auto entity = gameHandler_->getEntityManager().getEntity(guid);
+        if (!entity || !entity->isUnit()) return 0;
+        const auto& unit = static_cast<const game::Unit&>(*entity);
+        return packageOfDisplay(unit.getMountDisplayId() != 0 ? unit.getMountDisplayId() : unit.getDisplayId());
     };
     auto goPackage = [&](uint64_t guid) -> uint32_t {
         if (!gameObjectInstances_.count(guid) || goDisplayField == 0xFFFF) return 0;
@@ -123,43 +159,30 @@ void EntitySpawner::updateObjectEffects(float deltaTime) {
         return pkg != objectEffectPackageByGoDisplay_.end() ? pkg->second : 0;
     };
 
-    // The mount a player rides: its instance and display.
-    const uint64_t self = gameHandler_->getPlayerGuid();
-    auto mountOf = [&](uint64_t rider, uint32_t& instance, uint32_t& display) {
-        if (rider == self) {
-            instance = mountInstanceId_;
-            display = mountDisplayId_;
-        } else if (const auto it = remotePlayerMounts_.find(rider); it != remotePlayerMounts_.end()) {
-            instance = it->second.instanceId;
-            display = it->second.displayId;
-        } else {
-            instance = display = 0;
-        }
-        return instance != 0;
-    };
-    auto mountPackage = [&](uint64_t rider) -> uint32_t {
-        uint32_t instance = 0, display = 0;
-        if (!mountOf(rider, instance, display)) return 0;
-        const auto pkg = objectEffectPackageByDisplay_.find(display);
-        return pkg != objectEffectPackageByDisplay_.end() ? pkg->second : 0;
-    };
-
-    // Objects gone, or whose display no longer has that package, let go.
+    // Objects gone, or whose display no longer names that package, let go;
+    // a doodad whose owner is gone forgotten.
     for (auto it = objectEffects_.begin(); it != objectEffects_.end();) {
         const uint64_t guid = it->first;
-        const uint32_t now = it->second.gameObject ? goPackage(guid)
-                             : it->second.mount   ? mountPackage(guid ^ kMountEffectKey)
-                                                  : unitPackage(guid);
+        const uint32_t now = it->second.gameObject ? goPackage(guid) : unitPackage(guid);
+        const uint32_t had = it->second.package;
         ++it;
-        if (now != objectEffects_[guid].package) clearObjectEffects(guid);
+        if (now != had) clearObjectEffects(guid);
+    }
+    for (auto it = doodadOwnerGo_.begin(); it != doodadOwnerGo_.end();) {
+        if (gameObjectInstances_.count(it->second)) ++it;
+        else it = doodadOwnerGo_.erase(it);
     }
 
-    // An object's effects this frame: its states moved to what it wants, its
-    // sounds played, its loops kept with it.
+    // An object's effects this frame: its sounds played, its loops kept with
+    // it and pitched by its modifier from `input` (0x006f1fb0, 0x006f1790).
     using PlaceOf = std::function<glm::vec3(const oe::Effect&)>;
-    auto run = [&](ObjectEffectState& st, const glm::vec3& position, std::vector<oe::Action>& actions,
-                   const PlaceOf& placeOf) {
-        (void)position;
+    auto run = [&](ObjectEffectState& st, std::vector<oe::Action>& actions, const PlaceOf& placeOf,
+                   std::optional<float> input) {
+        auto pitchOf = [&](const oe::Effect& e, float& pitch) {
+            if (!input || e.modifier == 0) return false;
+            const auto m = tables.modifier.find(e.modifier);
+            return m != tables.modifier.end() && oe::modifiedPitch(m->second, *input, pitch);
+        };
         for (const oe::Action& a : actions) {
             const oe::Effect& e = *a.effect;
             if (e.recType != oe::kRecSound || e.recId == 0) continue;
@@ -184,59 +207,63 @@ void EntitySpawner::updateObjectEffects(float deltaTime) {
             }
             }
         }
-        // The loops follow the object, and their pitch its speed (0x006f1fb0).
         for (const auto& [effectId, loop] : st.loops) {
             const auto [handle, e] = loop;
             audio.setSoundPosition(handle, placeOf(*e));
-            if (e->modifier == 0) continue;
-            const auto m = tables.modifier.find(e->modifier);
             float pitch = 1.0f;
-            if (m != tables.modifier.end() && oe::modifiedPitch(m->second, st.speed, pitch))
-                audio.setSoundPitch(handle, pitch);
+            if (pitchOf(*e, pitch)) audio.setSoundPitch(handle, pitch);
         }
     };
-    // Its state on the frame: made with states 1 and 0x26 (0x006f7420), and
-    // the speed it travels at.
-    auto stateFor = [&](uint64_t guid, uint32_t package, bool gameObject, const glm::vec3& position,
-                        std::vector<oe::Action>& actions, bool mount = false) -> ObjectEffectState& {
+    // Made in states 1 and 0x26 (0x006f7420).
+    auto stateFor = [&](uint64_t guid, uint32_t package, bool gameObject,
+                        std::vector<oe::Action>& actions) -> ObjectEffectState& {
         auto [it, made] = objectEffects_.try_emplace(guid);
         ObjectEffectState& st = it->second;
         if (made) {
             st.package = package;
             st.gameObject = gameObject;
-            st.mount = mount;
             st.runner.enter(tables, package, 1, actions);
             st.runner.enter(tables, package, 0x26, actions);
         }
-        if (st.hasLastPosition && deltaTime > 0.0f) st.speed = glm::length(position - st.lastPosition) / deltaTime;
-        st.lastPosition = position;
-        st.hasLastPosition = true;
         return st;
     };
 
-    // A unit, or a rider's mount: the mount's model with the rider's
-    // movement, as the client's unit drives the effects of the mount it
-    // draws under itself.
-    auto runUnit = [&](uint64_t guid, uint64_t key, uint32_t package, uint32_t instance, bool mount) {
+    // Units: creatures, players, the player.
+    std::vector<uint64_t> units;
+    units.reserve(creatureInstances_.size() + playerInstances_.size() + 1);
+    for (const auto& [guid, instance] : creatureInstances_) units.push_back(guid);
+    for (const auto& [guid, instance] : playerInstances_) units.push_back(guid);
+    if (self != 0 && !playerInstances_.count(self)) units.push_back(self);
+    for (const uint64_t guid : units) {
+        const uint32_t package = unitPackage(guid);
+        if (package == 0) continue;
+        const uint32_t instance = unitInstance(guid);
         auto entity = gameHandler_->getEntityManager().getEntity(guid);
-        if (!entity || !entity->isUnit()) return;
         const auto& unit = static_cast<const game::Unit&>(*entity);
+        const uint32_t mount = unit.getMountDisplayId() != 0 ? mountInstance(guid) : 0;
+        // Sounded where the model it rides on is: the mount's under a rider.
+        const uint32_t placeInstance = mount != 0 ? mount : instance;
         glm::vec3 position;
-        if (!cr->getInstancePosition(instance, position)) return;
+        if (!cr->getInstancePosition(placeInstance, position)) continue;
         std::vector<oe::Action> actions;
-        ObjectEffectState& st = stateFor(key, package, false, position, actions, mount);
-        // The animation's state (0x0071e5b0), and Death's end of every
-        // movement state.
+        ObjectEffectState& st = stateFor(guid, package, false, actions);
+        // The up to three animations' states (0x007173f0 -> 0x0071e5b0): the
+        // mount's, the body's and an arm's, each by its shown sequence and
+        // variation; Death's takes the unit out of every movement state.
         oe::States animWanted;
-        uint32_t anim = 0;
-        float animTime = 0.0f, animDuration = 0.0f;
         bool dead = false;
-        if (cr->getAnimationState(instance, anim, animTime, animDuration)) {
-            if (const uint32_t s = oe::animationState(anim)) {
+        auto slotState = [&](const std::optional<rendering::CharacterRenderer::AnimationSlot>& slot) {
+            if (!slot) return;
+            if (const uint32_t s = oe::animationState(slot->animationId, slot->variation)) {
                 animWanted[s] = true;
-                dead = oe::endsMovementStates(s);
+                dead = dead || oe::endsMovementStates(s);
             }
-        }
+        };
+        if (mount != 0) slotState(cr->animationSlot(mount));
+        slotState(cr->animationSlot(instance));
+        auto arm = cr->animationSlot(instance, 0);
+        if (!arm) arm = cr->animationSlot(instance, 1);
+        slotState(arm);
         st.runner.apply(tables, package, animWanted, kAnimationScope, actions);
         // The movement flags' states (0x00721300).
         oe::States moveWanted, moveScope;
@@ -246,27 +273,24 @@ void EntitySpawner::updateObjectEffects(float deltaTime) {
         st.runner.apply(tables, package, moveWanted, moveScope, actions);
         // Where an effect sounds: its attachment's place on the model, else
         // the model's, moved by its offset (0x006f1d70).
-        run(st, position, actions, [&](const oe::Effect& e) {
+        run(st, actions, [&](const oe::Effect& e) {
             glm::mat4 frame(1.0f);
             const glm::vec3 offset(e.offset[0], e.offset[1], e.offset[2]);
-            if (e.attachment >= 0 && cr->getAttachmentTransform(instance, static_cast<uint32_t>(e.attachment), frame))
+            if (e.attachment >= 0 &&
+                cr->getAttachmentTransform(placeInstance, static_cast<uint32_t>(e.attachment), frame))
                 return glm::vec3(frame * glm::vec4(offset, 1.0f));
             return position + offset;
-        });
-    };
-    for (const auto& [guid, instance] : creatureInstances_) {
-        if (const uint32_t package = unitPackage(guid)) runUnit(guid, guid, package, instance, false);
-    }
-    std::vector<uint64_t> riders{self};
-    for (const auto& [guid, mount] : remotePlayerMounts_) riders.push_back(guid);
-    for (const uint64_t rider : riders) {
-        uint32_t instance = 0, display = 0;
-        if (rider == 0 || !mountOf(rider, instance, display)) continue;
-        if (const uint32_t package = mountPackage(rider)) runUnit(rider, rider ^ kMountEffectKey, package, instance, true);
+        }, oe::kUnitModifierInput);
     }
 
-    // Game objects: a lift's, a tram car's, a gunship's. The animation the
-    // model plays names its state, one at a time (0x0070bb10).
+    // The doodads' events, by whose doodad it is (0x007bd5a0).
+    std::unordered_map<uint64_t, std::vector<uint32_t>> doodadStates;
+    for (const auto& ev : doodadEvents) {
+        if (auto owner = doodadOwnerGo_.find(ev.instanceId); owner != doodadOwnerGo_.end())
+            doodadStates[owner->second].push_back(ev.state);
+    }
+
+    // Game objects: a lift's, a tram car's, a gunship's.
     for (const auto& [guid, info] : gameObjectInstances_) {
         const uint32_t package = goPackage(guid);
         if (package == 0) continue;
@@ -282,21 +306,31 @@ void EntitySpawner::updateObjectEffects(float deltaTime) {
         }
         const glm::vec3 position(model[3]);
         std::vector<oe::Action> actions;
-        ObjectEffectState& st = stateFor(guid, package, true, position, actions);
+        ObjectEffectState& st = stateFor(guid, package, true, actions);
+        // The animation the model plays, one state at a time (0x0070bb10).
         if (!info.isWmo && m2) {
             oe::States animWanted;
             if (const auto anim = m2->currentAnimationId(info.instanceId))
-                if (const uint32_t s = oe::animationState(*anim)) animWanted[s] = true;
+                if (const uint32_t s = oe::animationState(*anim, 0)) animWanted[s] = true;
             st.runner.apply(tables, package, animWanted, kAnimationScope, actions);
         }
-        run(st, position, actions, [&](const oe::Effect& e) {
+        // Its route's state (0x007134a0 -> 0x0070b390).
+        if (transports) {
+            if (const auto route = transports->routeState(guid))
+                oe::moveState(st.runner, tables, package, oe::routeMoveState(*route), actions);
+        }
+        // Its doodads' $EWT/$EAC/$EMV/$EDC (0x007bd5a0).
+        if (auto ev = doodadStates.find(guid); ev != doodadStates.end()) {
+            for (uint32_t state : ev->second) oe::moveState(st.runner, tables, package, state, actions);
+        }
+        run(st, actions, [&](const oe::Effect& e) {
             const glm::vec3 offset(e.offset[0], e.offset[1], e.offset[2]);
             glm::mat4 frame(1.0f);
             if (!info.isWmo && e.attachment >= 0 &&
                 m2->getAttachmentTransform(info.instanceId, static_cast<uint32_t>(e.attachment), frame))
                 return glm::vec3(frame * glm::vec4(offset, 1.0f));
             return glm::vec3(model * glm::vec4(offset, 1.0f));
-        });
+        }, std::nullopt);
     }
 }
 

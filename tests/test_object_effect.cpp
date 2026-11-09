@@ -73,12 +73,14 @@ TEST_CASE("movement flags name the states (0x00721300)", "[object_effect]") {
 }
 
 TEST_CASE("animations name states (0x006f17f0)", "[object_effect]") {
-    CHECK(oe::animationState(0) == 19);
-    CHECK(oe::animationState(0, true) == 41);
-    CHECK(oe::animationState(1) == 15);
-    CHECK(oe::animationState(5) == 12);
-    CHECK(oe::animationState(162) == 68);
-    CHECK(oe::animationState(2) == 0);
+    CHECK(oe::animationState(0, 0) == 19);
+    CHECK(oe::animationState(0, 1) == 41);
+    CHECK(oe::animationState(0, 2) == 19);
+    CHECK(oe::animationState(5, 1) == 0);   // no second column for Run
+    CHECK(oe::animationState(1, 0) == 15);
+    CHECK(oe::animationState(5, 0) == 12);
+    CHECK(oe::animationState(162, 0) == 68);
+    CHECK(oe::animationState(2, 0) == 0);
     CHECK(oe::animationScope()[70]);
     CHECK(oe::endsMovementStates(15));
 }
@@ -93,4 +95,37 @@ TEST_CASE("the speed sets a loop's pitch (0x006f1790)", "[object_effect]") {
     oe::modifiedPitch(m, 40.0f, pitch);
     CHECK(pitch == Catch::Approx(1.3f));
     CHECK_FALSE(oe::modifiedPitch(oe::Modifier{2, 1, 1, {}}, 1.0f, pitch));
+}
+
+TEST_CASE("a moving object's four states, one at a time (0x0070b390, 0x007bd5a0)", "[object_effect]") {
+    oe::Tables t;
+    t.package[12] = {{3, 1}, {4, 2}, {5, 3}};
+    t.group[1] = {{10, 1, oe::kTriggerOnEnter, 1, 900, 0, {}, 0}};
+    t.group[2] = {{11, 2, oe::kTriggerLoop, 1, 901, 0, {}, 0}};
+    t.group[3] = {{12, 3, oe::kTriggerOnEnter, 1, 902, 0, {}, 0}};
+    oe::Runner r;
+    std::vector<oe::Action> out;
+    oe::moveState(r, t, 12, oe::routeMoveState(0xa2), out);
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].effect->id == 10);
+    out.clear();
+    oe::moveState(r, t, 12, oe::routeMoveState(0xa3), out);
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].kind == oe::Action::Kind::StartLoop);
+    out.clear();
+    oe::moveState(r, t, 12, oe::routeMoveState(0xa4), out);
+    REQUIRE(out.size() == 2);
+    CHECK(out[0].effect->id == 12);
+    CHECK(out[1].kind == oe::Action::Kind::StopLoop);
+    CHECK(r.states()[5]);
+    CHECK_FALSE(r.states()[4]);
+    CHECK(oe::routeMoveState(0) == 2);
+    CHECK(oe::routeMoveState(7) == 0);
+}
+
+TEST_CASE("a unit's modifier input is the base's -1 (0x006f1700)", "[object_effect]") {
+    const oe::Modifier m{1, 1, 1, {5.0f, 30.0f, 0.7f, 1.3f}};
+    float pitch = 0.0f;
+    REQUIRE(oe::modifiedPitch(m, oe::kUnitModifierInput, pitch));
+    CHECK(pitch == Catch::Approx(0.7f));
 }

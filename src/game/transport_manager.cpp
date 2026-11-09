@@ -762,6 +762,31 @@ void TransportManager::updateTransportMovement(ActiveTransport& transport, float
     // its TransportAnimation path (0x007139e0 -> 0x007106d0 -> 0x0070dc10).
     // A ship on its TaxiPath route is not one.
     if (pathEntry->fromDBC && !pathEntry->worldCoords) applyPathRotation(transport, pathTimeMs);
+    // Its route state (0x007f82b0 -> 0x0070b390): stopped at a dock, else
+    // speeding up, at speed or slowing down by the route's travel either side
+    // of now.
+    if (pathEntry->worldCoords) {
+        const auto& sp = pathEntry->spline;
+        const uint32_t dur = sp.durationMs();
+        auto travelAt = [&](int64_t t) {
+            const int64_t a = std::clamp<int64_t>(t - 50, 0, dur);
+            const int64_t b = std::clamp<int64_t>(t + 50, 0, dur);
+            if (b <= a) return 0.0f;
+            return glm::length(sp.evaluatePosition(static_cast<uint32_t>(b)) -
+                               sp.evaluatePosition(static_cast<uint32_t>(a))) *
+                   (1000.0f / static_cast<float>(b - a));
+        };
+        if (transport.atDockDwell) {
+            transport.routeState = 0;
+        } else {
+            const float before = travelAt(static_cast<int64_t>(pathTimeMs) - 250);
+            const float after = travelAt(static_cast<int64_t>(pathTimeMs) + 250);
+            constexpr float kSteady = 0.05f;   // yd/s per half second
+            transport.routeState = after > before + kSteady ? 0xa2 : after < before - kSteady ? 0xa4 : 0xa3;
+        }
+    } else {
+        transport.routeState = -1;
+    }
     // A ship on its TaxiPath route sways as its TransportPhysics row says.
     if (pathEntry->worldCoords && !transport.isM2) applySway(transport, *pathEntry, pathTimeMs);
 
@@ -1009,6 +1034,12 @@ bool TransportManager::loadTransportPhysicsDBC(pipeline::AssetManager* assetMgr)
         physicsRows_[dbc->getUInt32(i, 0)] = p;
     }
     return true;
+}
+
+std::optional<uint32_t> TransportManager::routeState(uint64_t guid) const {
+    const auto it = transports_.find(guid);
+    if (it == transports_.end() || it->second.routeState < 0) return std::nullopt;
+    return static_cast<uint32_t>(it->second.routeState);
 }
 
 void TransportManager::setTransportPhysicsForEntry(uint32_t entry, uint32_t physicsId) {

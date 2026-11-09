@@ -5715,6 +5715,26 @@ bool CharacterRenderer::getAnimationState(uint32_t instanceId, uint32_t& animati
     return true;
 }
 
+std::optional<CharacterRenderer::AnimationSlot> CharacterRenderer::animationSlot(uint32_t instanceId,
+                                                                               int arm) const {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return std::nullopt;
+    const CharacterInstance& instance = it->second;
+    auto modelIt = models.find(instance.modelId);
+    if (modelIt == models.end()) return std::nullopt;
+    const auto& sequences = modelIt->second.data.sequences;
+    int index = instance.currentSequenceIndex;
+    if (arm >= 0) {
+        if (arm > 1) return std::nullopt;
+        index = instance.armSequenceIndex[arm];
+    }
+    if (index < 0 || index >= static_cast<int>(sequences.size())) return std::nullopt;
+    const auto& seq = sequences[static_cast<size_t>(index)];
+    if (arm < 0 && !instance.animationLoop && instance.animationTime >= static_cast<float>(seq.duration))
+        return std::nullopt;
+    return AnimationSlot{seq.id, seq.variationIndex};
+}
+
 void CharacterRenderer::stepInstanceEvents(uint32_t instanceId, const CharacterInstance& inst, int sequence,
                                            float from, float to) {
     // A unit's model: not a login scene's, nor an effect hung on a unit.

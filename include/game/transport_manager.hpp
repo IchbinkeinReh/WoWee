@@ -38,6 +38,10 @@ struct ActiveTransport {
     glm::quat unswayedRotation{1.0f, 0.0f, 0.0f, 0.0f};
     glm::quat swayedRotation{1.0f, 0.0f, 0.0f, 0.0f};
     bool swayed = false;
+    /// The route state 0x007f82b0 hands an MO_TRANSPORT's ObjectEffects
+    /// (0x0070b390): 0 stopped, 0xa2 speeding up, 0xa3 at speed, 0xa4
+    /// slowing down; -1 while it is not on a route of its own.
+    int32_t routeState = -1;
     uint32_t displayId = 0;     // GameObject display id, used for model-family-specific behavior
     glm::vec3 basePosition;     // Spawn position (base offset for path)
     glm::vec3 position;         // Current world position
@@ -385,6 +389,9 @@ public:
     /// The TransportPhysics row an MO_TRANSPORT template names (its sixth
     /// datum); 0 for none.
     void setTransportPhysicsForEntry(uint32_t entry, uint32_t physicsId);
+    /// The transport's route state (ActiveTransport::routeState), none off a
+    /// route of its own.
+    [[nodiscard]] std::optional<uint32_t> routeState(uint64_t guid) const;
 
     // Check if a TaxiPathNode path exists for a given taxiPathId (on any map)
     [[nodiscard]] bool hasTaxiPath(uint32_t taxiPathId) const;

@@ -174,9 +174,10 @@ inline void movementStates(uint32_t flags, bool airborne, bool nearGround, State
 }
 
 /// The table at 0x006f17f0 (filled at 0x006f1840): the state an animation
-/// puts a model in, 0 for none. `alt` is the second column, which Stand and
-/// Stand 41 have their own of.
-inline uint32_t animationState(uint32_t animationId, bool alt = false) {
+/// puts a model in, 0 for none. The second column is read for variation 1 of
+/// the sequence (0x008266b0's +0x94, passed as 0x006f17f0's second
+/// argument); only Stand and anim 41 have anything in it.
+inline uint32_t animationState(uint32_t animationId, uint32_t variation) {
     struct Row { uint16_t anim; uint8_t state, altState; };
     static constexpr Row kRows[] = {
         {0, 19, 41}, {1, 15, 0}, {4, 13, 0}, {5, 12, 0}, {6, 81, 0}, {8, 17, 0}, {9, 14, 0},
@@ -189,7 +190,7 @@ inline uint32_t animationState(uint32_t animationId, bool alt = false) {
         {164, 70, 0}, {187, 35, 0}, {193, 46, 0}, {226, 67, 0},
     };
     for (const Row& r : kRows)
-        if (r.anim == animationId) return alt ? r.altState : r.state;
+        if (r.anim == animationId) return variation == 1 ? r.altState : r.state;
     return 0;
 }
 
@@ -197,11 +198,37 @@ inline uint32_t animationState(uint32_t animationId, bool alt = false) {
 inline States animationScope() {
     States s;
     for (uint32_t a = 0; a < 0x1fa; ++a) {
-        if (uint32_t st = animationState(a)) s[st] = true;
-        if (uint32_t st = animationState(a, true)) s[st] = true;
+        if (uint32_t st = animationState(a, 0)) s[st] = true;
+        if (uint32_t st = animationState(a, 1)) s[st] = true;
     }
     return s;
 }
+
+/// A moving object's state among 2..5 - waiting, speeding up, moving,
+/// slowing down - entered and the others left in the client's order: a
+/// transport's route state (0x0070b390: 0, 0xa2, 0xa3, 0xa4) and a doodad's
+/// $EWT, $EAC, $EMV and $EDC (0x007bd5a0) say the same four.
+inline void moveState(Runner& r, const Tables& t, uint32_t packageId, uint32_t state, std::vector<Action>& out) {
+    static constexpr uint32_t kLeave[4][3] = {{3, 4, 5}, {2, 4, 5}, {3, 2, 5}, {3, 4, 2}};
+    if (state < 2 || state > 5) return;
+    r.enter(t, packageId, state, out);
+    for (uint32_t s : kLeave[state - 2]) r.leave(t, packageId, s, out);
+}
+/// The route state 0x007f82b0 hands 0x0070b390, as a state.
+inline uint32_t routeMoveState(uint32_t routeState) {
+    switch (routeState) {
+    case 0: return 2;
+    case 0xa2: return 3;
+    case 0xa3: return 4;
+    case 0xa4: return 5;
+    default: return 0;
+    }
+}
+
+/// What a unit answers as its modifier input (InputType 1, the object's
+/// vtable +0xf8): CGUnit_C and CGPlayer_C both leave it the base's
+/// 0x006f1700, -1 - so a unit's loop sits at the mapping's low end.
+inline constexpr float kUnitModifierInput = -1.0f;
 
 /// Death (15) or 0x51 among the animations' states takes the unit out of
 /// every movement state (0x0071e5b0).

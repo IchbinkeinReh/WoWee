@@ -34,8 +34,9 @@
 // camera where the event is (0x0070c050, 0x00704c30 -> 0x00606410).
 //
 // A doodad's $EAC, $EDC, $EWT and $EMV set the ObjectEffect state of the
-// game object the doodad belongs to (0x006f7270, 0x006f61d0); wowee has no
-// ObjectEffect, and they do nothing here.
+// game object the doodad belongs to (0x007bd5a0 -> 0x006f7270, 0x006f61d0):
+// they are handed on (takeObjectStateEvents) for the spawner, which knows
+// whose doodad it is.
 
 #include <algorithm>
 #include <array>
@@ -73,6 +74,19 @@ constexpr uint32_t kDoodadSoundOnce = fourCC("$DSO"); // 0x4f534424
 constexpr uint32_t kDoodadSoundLoop = fourCC("$DSL"); // 0x4c534424
 constexpr uint32_t kDoodadSoundEnd = fourCC("$DSE");  // 0x45534424
 constexpr uint32_t kCameraShake = fourCC("$SHK");     // 0x4b485324
+constexpr uint32_t kDoodadWait = fourCC("$EWT");        // 0x54574524 -> state 2
+constexpr uint32_t kDoodadAccelerate = fourCC("$EAC");  // 0x43414524 -> state 3
+constexpr uint32_t kDoodadMove = fourCC("$EMV");        // 0x564d4524 -> state 4
+constexpr uint32_t kDoodadDecelerate = fourCC("$EDC");  // 0x43444524 -> state 5
+
+/// The ObjectEffect state a doodad's event puts its game object in
+/// (0x007bd5a0), 0 for an event that sets none.
+constexpr uint32_t doodadObjectState(uint32_t eventId) {
+    return eventId == kDoodadWait ? 2u
+         : eventId == kDoodadAccelerate ? 3u
+         : eventId == kDoodadMove ? 4u
+         : eventId == kDoodadDecelerate ? 5u : 0u;
+}
 
 /// How long a loop takes to fade once its owner goes (0x008799e0 sets a
 /// looping sound's fade out to 0.5 as its sound object lets it go).
@@ -256,6 +270,13 @@ public:
     /// Its handle for AudioEngine's setSoundPosition / setSoundPitch /
     /// stopSoundWithFade, 0 where nothing started.
     uint32_t playLoop(uint32_t soundId, const glm::vec3& at, float fadeInSeconds, pipeline::AssetManager* assets);
+    /// A doodad's event that sets its game object's ObjectEffect state.
+    struct ObjectStateEvent {
+        uint32_t instanceId = 0;
+        uint32_t state = 0;
+    };
+    /// The ones fired since this was last asked, in order.
+    std::vector<ObjectStateEvent> takeObjectStateEvents() { return std::move(objectStateEvents_); }
     /// A SoundEntries row by its Name (0x004ccaa0), 0 for none.
     uint32_t idByName(const std::string& name, pipeline::AssetManager* assets);
 
@@ -283,6 +304,7 @@ private:
         float fadeOut = 0.0f;      ///< how long a $DSE takes to end it
     };
     std::unordered_map<uint32_t, Kit> kits_;
+    std::vector<ObjectStateEvent> objectStateEvents_;
     MoverInstanceQuery moverInstanceQuery_;
     std::unordered_map<std::string, uint32_t> idsByName_;
     bool idsByNameLoaded_ = false;

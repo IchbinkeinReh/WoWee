@@ -159,6 +159,12 @@ void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets, const
             if (shakeCamera) shakeCamera(fired.data, fired.position);
             continue;
         }
+        if (fired.owner == m2_event::Owner::Doodad) {
+            if (const uint32_t state = m2_event::doodadObjectState(fired.id)) {
+                objectStateEvents_.push_back({fired.instanceId, state});
+                continue;
+            }
+        }
         if (fired.owner == m2_event::Owner::FallingModel && !m2_event::fallingEventPlays(fallingEvents_)) continue;
         const m2_event::SoundPlan plan = m2_event::planSound(fired.owner, fired.id, fired.data);
         if (plan.play == m2_event::Play::None) continue;

@@ -146,6 +146,7 @@ std::vector<uint32_t> EntitySpawner::hangDoodadSet(uint32_t wmoInstance, const p
         if (inst == 0) continue;
         m2->setSkipCollision(inst, true);
         m2->setInstanceEventOwner(inst, rendering::m2_event::Owner::Doodad, 0);
+        noteDoodadOwner(inst, wmoInstance);
         const glm::quat q(doodad.rotation.w, doodad.rotation.x, doodad.rotation.y, doodad.rotation.z);
         const glm::mat4 local = glm::translate(glm::mat4(1.0f), doodad.position) * glm::mat4_cast(q) *
                                 glm::scale(glm::mat4(1.0f), glm::vec3(doodad.scale));

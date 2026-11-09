@@ -1342,19 +1342,18 @@ private:
         uint32_t package = 0;
         game::object_effect::Runner runner;
         std::unordered_map<uint32_t, std::pair<uint32_t, const game::object_effect::Effect*>> loops;
-        glm::vec3 lastPosition{0.0f};
-        bool hasLastPosition = false;
-        float speed = 0.0f;
         bool gameObject = false;
-        bool mount = false;   ///< a rider's mount, keyed by the rider ^ kMountEffectKey
     };
-    static constexpr uint64_t kMountEffectKey = 0x4000000000000000ull;
     std::unordered_map<uint64_t, ObjectEffectState> objectEffects_;
     std::unordered_map<uint32_t, uint32_t> objectEffectPackageByGoDisplay_;
     std::shared_ptr<const game::object_effect::Tables> objectEffectTables_;
     std::unordered_map<uint32_t, uint32_t> objectEffectPackageByDisplay_;
     bool objectEffectTablesLoaded_ = false;
     void clearObjectEffects(uint64_t guid);
+    /// The game object a WMO's doodad belongs to, for its $EWT/$EAC/$EMV/$EDC
+    /// (0x007bd5a0 reads the doodad's owner, +0xb8).
+    std::unordered_map<uint32_t, uint64_t> doodadOwnerGo_;
+    void noteDoodadOwner(uint32_t doodadInstance, uint32_t wmoInstance);
     /// A destructible building's look (entity_spawner_destructible.cpp): its
     /// state by GAMEOBJECT_FLAGS, that state's display and doodad sets.
     struct DestructibleLook {
