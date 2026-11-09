@@ -164,11 +164,14 @@ void ModelFrameView::compositePass(VkCommandBuffer cmd, uint32_t frameIndex) {
         ubo.lightColor = glm::vec4(light_.diffuse, 0.0f);
         ubo.ambientColor = glm::vec4(light_.ambient, 0.0f);
     } else {
-        // No light set (the frame's M2Light starts disabled, 0x00834a40):
-        // a plain white stand-in from the viewer's side.
-        ubo.lightDir = glm::vec4(glm::normalize(glm::vec3(0.0f, 0.0f, -1.0f)), 0.0f);
-        ubo.lightColor = glm::vec4(1.0f, 1.0f, 1.0f, 0.0f);
-        ubo.ambientColor = glm::vec4(0.6f, 0.6f, 0.6f, 0.0f);
+        // No light set: the model's lighting starts at nothing each frame
+        // (0x00831af0 -> 0x00834900) and the frame's callback adds its
+        // M2Light only while SetLight has it on (0x00960070), so a lit
+        // surface is dark and only unlit batches and particles show. The
+        // direction is the one 0x00835280 falls back to, straight down.
+        ubo.lightDir = glm::vec4(0.0f, 0.0f, -1.0f, 0.0f);
+        ubo.lightColor = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
+        ubo.ambientColor = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
     }
     ubo.viewPos = glm::vec4(camera_->getPosition(), 0.0f);
     ubo.fogColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
