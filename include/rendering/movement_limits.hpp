@@ -29,6 +29,22 @@ inline bool isWalkableNormal(float normalZ) {
     return normalZ >= kMinWalkableNormalZ;
 }
 
+/// How far below the feet a walk keeps to the ground. The client's ground
+/// step (0x007620f0), its move done, sweeps the body straight down by
+/// 1.849399 times the length of the move (the pyramid's slope; the call
+/// with param_4 * 1.849399): a ramp or a stair going down is followed as far
+/// as the move is long, and only ground further below than that is a fall
+/// (0x00988370). Running at 7 yd/s that is 0.43 yd in a 1/30 s frame - down
+/// an Undercity ramp, which drops 1.23 yd for every yard across, the feet
+/// kept to the ramp, where the quarter yard held to here let them leave it
+/// and every step there was a fall. Never less than that quarter yard, for
+/// a body standing still and a floor query's seams.
+inline constexpr float kStepDownPerMove = 1.849399f;
+inline constexpr float kGroundHoldBelow = 0.25f;
+inline float groundFollowReach(float movedAcross) {
+    return std::max(kGroundHoldBelow, kStepDownPerMove * movedAcross);
+}
+
 /// Whether a body the ground has caught up with is still rising off it: a
 /// jump on its way up, which the slope under it lifts and does not land.
 /// Running uphill the ground climbs faster in a frame than a jump's first
