@@ -180,6 +180,10 @@ public:
         verticalVelocity = 0.0f;
         grounded = true;
         deckHeld_ = true;
+        // Standing on the deck: no time in the air. Counted on through a
+        // ride, it read as a walk off a ledge minutes long the moment the
+        // transport let go at a map change - a fall of 89 s sent with FALLING.
+        airborneSeconds_ = 0.0f;
     }
     [[nodiscard]] bool isJumpKeyPressed() const { return jumpBufferTimer > 0.0f; }
     [[nodiscard]] float collisionHeight() const { return collisionHeight_; }
