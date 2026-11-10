@@ -36,7 +36,7 @@ TEST_CASE("one limb waits between rings, and the oldest ring gives way", "[swim_
     limbMoved(waves, limb, glm::vec3(x += 0.2f, 0.0f, 10.0f), 10.0f, 0.05f);
     limbMoved(waves, limb, glm::vec3(x += 0.2f, 0.0f, 10.0f), 10.0f, 0.05f);
     REQUIRE(waves.size() == 1);
-    for (int i = 0; i < 200; ++i) limbMoved(waves, limb, glm::vec3(x += 0.2f, 0.0f, 10.0f), 10.0f, 0.2f);
+    for (size_t i = 0; i < kMaxWaves + 72; ++i) limbMoved(waves, limb, glm::vec3(x += 0.2f, 0.0f, 10.0f), 10.0f, 0.2f);
     REQUIRE(waves.size() == kMaxWaves);
 }
 
@@ -127,13 +127,35 @@ TEST_CASE("one unit alone has its natural rings and trail", "[swim_wave]") {
     REQUIRE(s[0].wakePoints == share::kMostWakePoints);
 }
 
-TEST_CASE("past the pool the farthest go without", "[swim_wave]") {
-    std::vector<float> yards(40, 100.0f);
+TEST_CASE("a crowd too big for a few each still gives every unit a ring and a trail", "[swim_wave]") {
+    // Forty, then a hundred units out to 150 yards: more than the pool holds
+    // at three rings each, and every one of them still has some.
+    for (int count : {40, 100}) {
+        std::vector<float> yards;
+        for (int i = 0; i < count; ++i) yards.push_back(150.0f * static_cast<float>(i + 1) / static_cast<float>(count));
+        const auto s = share::shareOut(yards, kMaxWaves - kOwnRings, 448);
+        size_t rings = 0, points = 0;
+        for (const auto& u : s) {
+            REQUIRE(u.rings >= share::kFewestRings);
+            REQUIRE(u.wakePoints >= share::kFewestWakePoints);
+            rings += u.rings;
+            points += u.wakePoints;
+        }
+        REQUIRE(rings <= kMaxWaves - kOwnRings);
+        REQUIRE(points <= 448);
+        // Nearer ones still more.
+        REQUIRE(s.front().rings >= s.back().rings);
+    }
+}
+
+TEST_CASE("past one ring each the farthest go without", "[swim_wave]") {
+    std::vector<float> yards(120, 100.0f);
     const auto s = share::shareOut(yards, 96, 192);
     size_t rings = 0;
     for (const auto& u : s) rings += u.rings;
     REQUIRE(rings <= 96);
-    REQUIRE(s.front().rings == share::kMinRings);
+    REQUIRE(s.front().rings == share::kFewestRings);
+    REQUIRE(s[95].rings == share::kFewestRings);
     REQUIRE(s.back().rings == 0);
 }
 

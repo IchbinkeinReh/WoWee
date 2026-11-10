@@ -246,7 +246,11 @@ void main() {
     // colour, or the ground.
     uint shareBits = uint(normalIn.z + 0.5);
     bool storeyBound = (shareBits & RT_GB_SHARE_STOREY) != 0u;
-    bool terrain = (shareBits & RT_GB_SHARE_TERRAIN) != 0u;
+    // And a building's floor outside its rooms, by the smooth normal the
+    // G-buffer resolved for it (RT_GB_SHARE_LAMP_NORMAL): measured by the
+    // faces, a fire low over Orgrimmar's streets faded the triangles turned
+    // a degree from it to nothing.
+    bool terrain = (shareBits & (RT_GB_SHARE_TERRAIN | RT_GB_SHARE_LAMP_NORMAL)) != 0u;
     // A room's baked colour: its normal already blended toward its face in
     // the G-buffer (rtInteriorLampNormal), so not again here.
     bool normalResolved = normalIn.w > 0.5;

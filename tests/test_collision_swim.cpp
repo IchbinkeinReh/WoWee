@@ -115,6 +115,30 @@ TEST_CASE("ascending into the surface jumps out of the water", "[collision_swim]
     CHECK(m.fallV0 == Approx(kSwimJumpSpeed));
 }
 
+TEST_CASE("rising near the surface while moving along jumps out, whatever is in front", "[collision_swim]") {
+    Mover m;
+    m.swimming = true;
+    const float start = kPlayerHeight * kSwimDepthShare;
+    m.pos.z = 0.0f;
+    // At the depth it floats at, rising and swimming on.
+    CHECK(surfaceJumpDue(m, start, true, true, false));
+    // A third of a yard deeper still; past that, not yet.
+    CHECK(surfaceJumpDue(m, start + kSurfaceJumpReach - 0.01f, true, true, false));
+    CHECK_FALSE(surfaceJumpDue(m, start + kSurfaceJumpReach + 0.01f, true, true, false));
+    // Not rising, not moving along, gravity off, or not swimming: no jump.
+    CHECK_FALSE(surfaceJumpDue(m, start, false, true, false));
+    CHECK_FALSE(surfaceJumpDue(m, start, true, false, false));
+    CHECK_FALSE(surfaceJumpDue(m, start, true, true, true));
+    Mover dry = m;
+    dry.swimming = false;
+    CHECK_FALSE(surfaceJumpDue(dry, start, true, true, false));
+    // The jump: swimming over, falling up at the swimmer's speed.
+    startSwimJump(m);
+    CHECK_FALSE(m.swimming);
+    CHECK(m.falling);
+    CHECK(m.fallV0 == Approx(kSwimJumpSpeed));
+}
+
 TEST_CASE("a flyer slides along a wall and keeps its height", "[collision_swim]") {
     std::vector<Facet> world;
     // A wall across x = 1, facing -x; nothing under it.

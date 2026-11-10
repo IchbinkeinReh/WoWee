@@ -115,7 +115,8 @@ void main() {
         if (dot(shading, n) < 0.0) shading = -shading;
         if (dot(shading, n) < 0.5) shading = n;
         storeyBound = rtGbufStoreyBound(gb0, texelFetch(uSceneGbuf1, sp, 0));
-        resolved = (rtGbufFlags(gb0) & RT_GB_INTERIOR) != 0u ? 1.0 : 0.0;
+        resolved = (rtGbufFlags(gb0) & RT_GB_INTERIOR) != 0u || (storeyBound & RT_GB_SHARE_LAMP_NORMAL) != 0u
+                       ? 1.0 : 0.0;
     }
     imageStore(uPointNormal, px, vec4(rtOctEncode(shading), float(storeyBound), resolved));
     imageStore(uGbuf, px, vec4(rtOctEncode(n), length(p), float(sub) + (valid ? 4.0 : 0.0)));

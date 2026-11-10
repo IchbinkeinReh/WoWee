@@ -54,6 +54,14 @@ const uint RT_GB_TRANSITION = 64u; // a WMO transition batch's two passes in
 // Not a transition, in the outside share's bits (RtSurface::storeyBound):
 const uint RT_GB_SHARE_STOREY = 1u;   // a building's baked colour
 const uint RT_GB_SHARE_TERRAIN = 2u;  // the ground
+// A building's floor outside its rooms whose normal is the one the lamps light
+// it by already (rtInteriorLampNormal, as a room's baked colour is), and is
+// measured by: its smooth normal where that agrees with its face. Orgrimmar's
+// streets are a building's floor (the city's WMO), triangles yards across that
+// bend a few degrees from each other: measured by its faces, a fire a few
+// yards over the Valley of Strength faded the triangles turned a degree from
+// it to nothing, hard dark wedges in its light (1594 -4402, 19:30).
+const uint RT_GB_SHARE_LAMP_NORMAL = 4u;
 
 vec2 rtOctEncode(vec3 n) {
     n /= abs(n.x) + abs(n.y) + abs(n.z);
@@ -150,7 +158,7 @@ void rtSurfacePack(RtSurface s, vec3 c0, out vec4 gb0, out vec4 gb1) {
                      s.occY.g > 1e-6 ? s.occE.g / s.occY.g : 1.0,
                      s.occY.b > 1e-6 ? s.occE.b / s.occY.b : 1.0);
     vec3 kp = s.kp * 0.5;
-    uint f = (s.flags & RT_GB_TRANSITION) != 0u ? rtBits6(s.outside) : (s.storeyBound & 3u);
+    uint f = (s.flags & RT_GB_TRANSITION) != 0u ? rtBits6(s.outside) : (s.storeyBound & 7u);
     uint w0 = rtBits10(oct.x) | (rtBits5(knee.r) << 10) | ((f & 1u) << 15);
     uint w1 = rtBits10(oct.y) | (rtBits5(knee.g) << 10) | (((f >> 1) & 1u) << 15);
     uint w2 = rtByte(s.map) | ((s.flags & 127u) << 8) | (((f >> 2) & 1u) << 15);

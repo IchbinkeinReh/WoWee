@@ -1064,6 +1064,16 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     // Snap player to loaded terrain so they don't spawn underground
     if (renderer_->getCameraController()) {
         renderer_->getCameraController()->reset();
+        // And the game handler where the player now is. Through the load it
+        // kept the place the player left on the last map (the frames drawn
+        // behind the loading screen sync the character's old position), and
+        // the first packet sent here - MSG_MOVE_START_SWIM for a player put
+        // into water - went out from there: from Mulgore's lake, on the
+        // Undercity's map.
+        if (gameHandler_) {
+            const glm::vec3 placed = core::coords::renderToCanonical(renderer_->getCharacterPosition());
+            gameHandler_->setPosition(placed.x, placed.y, placed.z);
+        }
     }
     renderer_->setCharacterYaw(spawnYawDeg);
     // Drawn facing that way from the start, not shuffled round from the last world.

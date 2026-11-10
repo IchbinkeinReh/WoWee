@@ -402,11 +402,17 @@ void main() {
     outColor = vec4(rtGiDebug(result), alpha);
     // A room's baked colour: lit by its own normal where it agrees with
     // its face, by the face's past that (rtInteriorLampNormal).
-    rtSurface.normal = (rtSurface.flags & RT_GB_INTERIOR) != 0u
+    // A floor outside the rooms the same way (RT_GB_SHARE_LAMP_NORMAL): its
+    // faces bend a few degrees from each other where it is the ground of a
+    // city, and a low lamp measured by them faded whole triangles out.
+    const bool outsideFloor = (rtSurface.flags & (RT_GB_INTERIOR | RT_GB_TRANSITION)) == 0u &&
+                              faceNormal.z >= RT_NORMAL_FLOOR_Z;
+    rtSurface.normal = (rtSurface.flags & RT_GB_INTERIOR) != 0u || outsideFloor
                            ? rtInteriorLampNormal(faceNormal, vertexNormal, norm,
                                                   rtTune.w > 0.5 ? windowLight.yz
                                                                  : vec2(RT_NORMAL_AGREE_NEAR, RT_NORMAL_AGREE_FAR))
                            : norm;
+    if (outsideFloor) rtSurface.storeyBound |= RT_GB_SHARE_LAMP_NORMAL;
     rtSurface.map = mapLit;
     rtWriteGbuffer(rtSurface, outColor.rgb);
 }
