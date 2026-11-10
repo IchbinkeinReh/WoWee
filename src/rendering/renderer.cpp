@@ -6829,6 +6829,17 @@ void Renderer::recordRtLighting() {
     in.maxLight = currentFrameData.rtTune2.w;
     in.lampWrap = lampWrap(rtSoftLamps_);
     in.pointSelfShadow = rtPointSelfShadow_;
+    // An enclosed place in a building flagged outdoors takes the building's
+    // interior ambient for the zone's (rt_apply): the building round the
+    // camera, whose stairwell or hall the camera most often looks into.
+    in.haveEnclosedAmbient = false;
+    if (wmoRenderer && camera) {
+        if (const auto inside = wmoRenderer->buildingAmbientAt(camera->getPosition())) {
+            const glm::vec3 outdoor = glm::max(glm::vec3(currentFrameData.ambientColor), glm::vec3(0.02f));
+            in.enclosedAmbientRatio = glm::clamp(*inside / outdoor, glm::vec3(0.0f), glm::vec3(4.0f));
+            in.haveEnclosedAmbient = true;
+        }
+    }
     in.unitShadowReach = rtUnitShadowReach_;
     in.minBrightness = rtMinBrightnessFactor(rtMinBrightnessPercent_);
     // By the drawn sun's own height: at night in.sunDir is the light's

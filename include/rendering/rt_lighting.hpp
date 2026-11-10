@@ -186,6 +186,11 @@ public:
         /// (the Ray Tracing page's "Self-shadowing for point lights", a
         /// WoWee-only option).
         bool pointSelfShadow = false;
+        /// An enclosed place's ambient over the outdoor one (rt_apply): the
+        /// interior ambient (MOHD) of the building round the camera divided
+        /// by the zone's, and whether there is such a building.
+        glm::vec3 enclosedAmbientRatio{1.0f};
+        bool haveEnclosedAmbient = false;
         /// Rays a pixel of each kind, 1 to kMaxRtRaysPerPixel (Ray Tracing
         /// settings): toward the sun, for the occlusion, toward a point
         /// light, and a probe's rays for the bounced light. One is the
