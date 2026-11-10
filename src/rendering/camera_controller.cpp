@@ -112,6 +112,9 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
             verticalVelocity = 0.0f;
             m.falling = false;
             m.stepping = false;
+            // Its fall time from here (0x00988370: +0x80 = 0), not from
+            // whenever it last stood: swimming before a teleport counted.
+            airborneSeconds_ = 0.0f;
         }
     }
     // In the air, where the fall began moves with whatever moved the unit
