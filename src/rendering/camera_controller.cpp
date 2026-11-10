@@ -717,8 +717,14 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
 
         targetPos.z += verticalVelocity * f.physicsDeltaTime;
 
-        // Don't rise above water surface
-        if (waterH && targetPos.z > *waterH - swimFloatDepth()) {
+        // Don't rise above water surface - unless rising: the swim step
+        // (0x00760b40, portMove) holds the swimmer under the surface itself,
+        // the liquid swept as a ceiling three quarters of a body over its
+        // feet, and a swimmer rising (+0x44 0x400000) into that ceiling
+        // jumps out of the water (0x009883f0, at 9.1 yd/s). Clamped here,
+        // the rise never reached the ceiling and the swimmer could not
+        // leave the water at the surface nor hop onto a ledge from it.
+        if (waterH && targetPos.z > *waterH - swimFloatDepth() && !portAscending_) {
             targetPos.z = *waterH - swimFloatDepth();
             if (verticalVelocity > 0.0f) verticalVelocity = 0.0f;
         }
@@ -2576,7 +2582,15 @@ void CameraController::update(float deltaTime) {
     if (movementCallback) {
         if (swimJumpPending_) {
             // Out of the water by a jump: the client sends the jump alone,
-            // its flags without SWIMMING (0x00988370 clears it).
+            // its flags without SWIMMING (0x00988370 clears it). A rise begun
+            // this very frame went out first: the key starts the ascent and
+            // tells the server (0x006ef860 case 6, 0x009898e0) before the
+            // swim step meets the surface with it.
+            // Only for a swimmer: one that fell back in and out again in the
+            // same frame never swam there, and sends the jump alone.
+            if (wasSwimming && spaceHeld && !wasAscending_ && !moverNoStrafe_) {
+                movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_START_ASCEND));
+            }
             movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_JUMP));
         } else if (swimming && !wasSwimming) {
             movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_START_SWIM));
