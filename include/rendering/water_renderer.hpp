@@ -13,9 +13,11 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 #include "rendering/rt_point_lights.hpp"
 #include "rendering/swim_wave.hpp"
+#include "rendering/water_unit_share.hpp"
 #include "audio/zone_ambience.hpp"
 #include "rendering/client_liquid.hpp"
 #include "rendering/client_proc_water.hpp"
@@ -115,9 +117,16 @@ struct WaterSurface {
  * on the traced water with Gerstner waves,
  * GGX specular, shoreline foam, and subsurface scattering.
  */
-// Matches set 2 binding 3 in water.frag.glsl. Keep kMaxWakePoints in step with
-// the MAX_WAKE_POINTS constant declared there.
-constexpr int kMaxWakePoints = 64;
+// Matches set 2 binding 3 in water.frag.glsl. Keep kMaxWakePoints,
+// kOwnWakePoints' place and kMaxWaterGroups in step with MAX_WAKE_POINTS and
+// MAX_WATER_GROUPS there. The character keeps kOwnWakePoints of the trail's
+// points; the other units share the rest (water_unit_share.hpp), enough for a
+// crowd out to 150 yards.
+constexpr int kMaxWakePoints = 256;
+constexpr int kOwnWakePoints = 64;
+/// The groups of one owner's points (water_share::Group) the shader looks
+/// through, for the trail and for the rings each.
+constexpr int kMaxWaterGroups = 32;
 
 /// The traced water's waves at their default (rtwaveamp 100%): half the
 /// height they were first made with, which in the traced mirror read as a
@@ -127,7 +136,7 @@ inline constexpr float kRtWaveAmpScale = 0.5f;
 inline constexpr size_t kMaxWaterLamps = 8;
 
 struct WaterFrameUBOData {
-    glm::vec4 wakeBounds{0.0f};              // xy = centre, z = cull radius, w = count
+    glm::vec4 wakeBounds{0.0f};              // x = trail groups, y = ring groups, w = trail points
     glm::vec4 wakePoints[kMaxWakePoints]{};  // xy = pos, z = age 0..1, w = strength
     // The ray traced water (water_rt.glsli): x on, y the view (1 the
     // reflection alone, 2 what comes through alone), z how far a reflected
@@ -141,6 +150,8 @@ struct WaterFrameUBOData {
     glm::vec4 swimWaves[swim_wave::kMaxWaves]{};        // xy = where, z = age, w = strength
     glm::vec4 waterLampAt[kMaxWaterLamps]{};            // xyz = where, w = reach
     glm::vec4 waterLampColour[kMaxWaterLamps]{};        // rgb, a = where it starts to fall off
+    glm::vec4 wakeGroups[kMaxWaterGroups]{};            // xy = centre, z = reach, w = first point
+    glm::vec4 swimWaveGroups[kMaxWaterGroups]{};        // xy = centre, z = reach, w = first ring
 };
 
 /// What the ray traced water needs from the frame (Renderer, each frame).
@@ -225,14 +236,29 @@ public:
         glm::vec2 travelDir{0.0f};
         float intensity = 0.0f;
         bool wading = false;
+        size_t share = 0;  ///< the most points it may have (water_unit_share.hpp)
     };
     void unitWake(const WakeSource& source) { pendingUnitWakes_.push_back(source); }
     /// The trail's points now: the character's and the other units'.
     [[nodiscard]] std::pair<size_t, size_t> wakePointCounts() const {
         size_t units = 0;
-        for (const auto& p : wakePoints_) units += p.unit ? 1u : 0u;
+        for (const auto& p : wakePoints_) units += p.key != 0 ? 1u : 0u;
         return {wakePoints_.size() - units, units};
     }
+    /// One unit's trail points now.
+    [[nodiscard]] size_t wakePointsOf(uint64_t key) const {
+        size_t n = 0;
+        for (const auto& p : wakePoints_) n += p.key == key ? 1u : 0u;
+        return n;
+    }
+    /// The units' trail points not laid since the last asked: for want of
+    /// room in the units' part (dropped), and a unit's own oldest given way
+    /// to its newest at its share (shortened).
+    struct WakeLosses {
+        size_t dropped = 0;
+        size_t shortened = 0;
+    };
+    [[nodiscard]] WakeLosses takeWakeLosses() { return std::exchange(wakeLosses_, {}); }
 
     bool hasSurfaces() const { return !surfaces.empty(); }
 
@@ -248,13 +274,8 @@ public:
     /// The lamps the traced water takes this frame, nearest first.
     void setWaterLamps(const std::vector<rt_lights::PointLight>& lights, const glm::vec3& from);
     /// The swimmer's rings this frame (swim_wave.hpp).
-    void setSwimWaves(const std::vector<swim_wave::Wave>& waves) {
-        const size_t n = std::min(waves.size(), swim_wave::kMaxWaves);
-        frameUBO_.swimWaveInfo.x = static_cast<float>(n);
-        for (size_t i = 0; i < n; ++i) {
-            frameUBO_.swimWaves[i] = glm::vec4(waves[i].position, waves[i].age, waves[i].strength);
-        }
-    }
+    /// Grouped by owner for the shader (water_share::groupByOwner).
+    void setSwimWaves(const std::vector<swim_wave::Wave>& waves);
     /// Whether this frame's water and ocean are the traced ones: on, with
     /// what they need. Otherwise every liquid is the client's own (its
     /// LiquidType textures, depth ramps and blending, client_liquid.hpp), as
@@ -492,7 +513,7 @@ private:
         float age = 0.0f;        // seconds
         float life = 1.0f;       // seconds
         float strength = 0.0f;
-        bool unit = false;       // laid by another unit, not the character
+        uint64_t key = 0;        // the unit that laid it, 0 the character
     };
     std::vector<WakePoint> wakePoints_;
     WaterFrameUBOData frameUBO_{};
@@ -508,7 +529,8 @@ private:
     std::vector<WakeSource> pendingUnitWakes_;
     float wakeClock_ = 0.0f;
     void emitWake(WakeEmitter& emitter, const glm::vec2& pos, const glm::vec2& travelDir, float intensity,
-                  bool wading, bool unit);
+                  bool wading, uint64_t key, size_t share);
+    WakeLosses wakeLosses_;
 
     void uploadFrameUBO();
 

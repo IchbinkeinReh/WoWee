@@ -9,13 +9,18 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 #include <glm/glm.hpp>
 
 namespace wowee::rendering::swim_wave {
 
-inline constexpr size_t kMaxWaves = 32;
+/// Rings at once: the character's reserve (kOwnRings; its three limbs make
+/// at most kLife / kCooldown each, 30) and the other units' share of the rest
+/// (water_unit_share.hpp), enough for a crowd out to 150 yards.
+inline constexpr size_t kMaxWaves = 128;
+inline constexpr size_t kOwnRings = 32;
 inline constexpr float kLife = 1.6f;          // seconds a ring lasts
 inline constexpr float kNearSurface = 0.35f;  // how close a limb must be
 inline constexpr float kMinSpeed = 0.8f;      // yards a second, slower makes none
@@ -26,6 +31,7 @@ struct Wave {
     glm::vec2 position{0.0f};
     float age = 0.0f;
     float strength = 0.0f;
+    uint64_t owner = 0;  ///< the unit's guid, 0 the character's
 };
 
 /// One moving part: a hand, or the body.
@@ -41,29 +47,65 @@ inline void age(std::vector<Wave>& waves, float dt) {
     std::erase_if(waves, [](const Wave& w) { return w.age >= kLife; });
 }
 
-/// A limb's move this frame: a ring if it is at the surface and quick enough.
-/// With the rings full, the oldest gives way, or with `mayEvict` false (a
-/// unit other than the character) the ring is not made.
-inline void limbMoved(std::vector<Wave>& waves, Limb& limb, const glm::vec3& now, float waterZ, float dt,
-                      bool mayEvict = true) {
+/// Why a limb's move made no ring, or that it made one.
+enum class Made { Ring, None, OverShare, Full };
+
+/// A limb's move this frame: a ring if it is at the surface and quick enough,
+/// and its cooldown over (`cooldown` seconds after its last).
+inline bool limbReady(Limb& limb, const glm::vec3& now, float waterZ, float dt, float cooldown, float& speed) {
     limb.cooldown -= dt;
     const glm::vec3 was = limb.last;
     const bool seen = limb.seen;
     limb.last = now;
     limb.seen = true;
-    if (!seen || dt <= 0.0f || limb.cooldown > 0.0f) return;
-    if (std::abs(now.z - waterZ) > kNearSurface) return;
-    const float speed = glm::length(now - was) / dt;
-    if (speed < kMinSpeed) return;
-    if (waves.size() >= kMaxWaves) {
-        if (!mayEvict) return;
-        waves.erase(waves.begin());
-    }
+    if (!seen || dt <= 0.0f || limb.cooldown > 0.0f) return false;
+    if (std::abs(now.z - waterZ) > kNearSurface) return false;
+    speed = glm::length(now - was) / dt;
+    if (speed < kMinSpeed) return false;
+    limb.cooldown = cooldown;
+    return true;
+}
+
+inline Wave ringAt(const glm::vec3& now, float speed, uint64_t owner) {
     Wave w;
     w.position = glm::vec2(now);
     w.strength = std::clamp(speed / kFullSpeed, 0.15f, 1.0f);
-    waves.push_back(w);
-    limb.cooldown = kCooldown;
+    w.owner = owner;
+    return w;
+}
+
+/// The character's limb. With the rings full, another unit's oldest ring
+/// gives way, or with none the character's oldest.
+inline Made limbMoved(std::vector<Wave>& waves, Limb& limb, const glm::vec3& now, float waterZ, float dt) {
+    float speed = 0.0f;
+    if (!limbReady(limb, now, waterZ, dt, kCooldown, speed)) return Made::None;
+    if (waves.size() >= kMaxWaves) {
+        auto unitRing = std::find_if(waves.begin(), waves.end(), [](const Wave& w) { return w.owner != 0; });
+        waves.erase(unitRing != waves.end() ? unitRing : waves.begin());
+    }
+    waves.push_back(ringAt(now, speed, 0));
+    return Made::Ring;
+}
+
+/// Another unit's limb (`owner` its guid), within its share of `share` rings
+/// (water_unit_share.hpp): it waits between rings as long as `limbs` limbs
+/// keep to the share, and makes none while the share or the units' part of
+/// the rings (all but kOwnRings) is spent - nothing of another's gives way.
+inline Made unitLimbMoved(std::vector<Wave>& waves, Limb& limb, const glm::vec3& now, float waterZ, float dt,
+                          uint64_t owner, size_t share, int limbs) {
+    const float cooldown =
+        share > 0 ? std::max(kCooldown, kLife * static_cast<float>(limbs) / static_cast<float>(share)) : kLife;
+    float speed = 0.0f;
+    if (!limbReady(limb, now, waterZ, dt, cooldown, speed)) return Made::None;
+    size_t mine = 0, units = 0;
+    for (const Wave& w : waves) {
+        mine += w.owner == owner ? 1u : 0u;
+        units += w.owner != 0 ? 1u : 0u;
+    }
+    if (mine >= share) return Made::OverShare;
+    if (units >= kMaxWaves - kOwnRings || waves.size() >= kMaxWaves) return Made::Full;
+    waves.push_back(ringAt(now, speed, owner));
+    return Made::Ring;
 }
 
 }  // namespace wowee::rendering::swim_wave

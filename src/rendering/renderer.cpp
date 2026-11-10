@@ -1,6 +1,7 @@
 #include "rendering/swim_pitch.hpp"
 #include "core/platform.hpp"
 #include "rendering/renderer.hpp"
+#include "rendering/water_unit_share.hpp"
 #include "rendering/shadow_sun.hpp"
 #include "rendering/rt_lamp_wrap.hpp"
 #include "rendering/rt_min_brightness.hpp"
@@ -3257,16 +3258,26 @@ void Renderer::update(float deltaTime) {
         // its ripples not drawn over the traced water they disturb it as the
         // character does - a trail by the same rules, wading or swimming.
         rtWaterUnitClock_ += deltaTime;
-        // Nearest first: the trail's points and the rings are laid while
-        // there is room, the character's kept, so the nearer units have it.
+        // Nearest first: the character keeps its own part of the trail's
+        // points and of the rings, and the units share the rest, a nearer
+        // one more than a far one, each at least a few (water_unit_share.hpp),
+        // so a crowd out to 150 yards all disturb the water.
         std::sort(rtWaterUnits_.begin(), rtWaterUnits_.end(), [&](const RtWaterUnit& a, const RtWaterUnit& b) {
             const glm::vec2 da(a.feet - charPos);
             const glm::vec2 db(b.feet - charPos);
             return glm::dot(da, da) < glm::dot(db, db);
         });
-        for (const RtWaterUnit& u : rtWaterUnits_) {
+        std::vector<float> unitYards;
+        unitYards.reserve(rtWaterUnits_.size());
+        for (const RtWaterUnit& u : rtWaterUnits_) unitYards.push_back(glm::length(glm::vec2(u.feet - charPos)));
+        const auto shares = water_share::shareOut(unitYards, swim_wave::kMaxWaves - swim_wave::kOwnRings,
+                                                  static_cast<size_t>(kMaxWakePoints - kOwnWakePoints));
+        for (size_t ui = 0; ui < rtWaterUnits_.size(); ++ui) {
+            const RtWaterUnit& u = rtWaterUnits_[ui];
             RtWaterUnitState& st = rtWaterUnitStates_[u.guid];
             st.seen = rtWaterUnitClock_;
+            st.share = shares[ui];
+            st.yards = unitYards[ui];
             const glm::vec2 at(u.feet.x, u.feet.y);
             if (st.hasLast) {
                 const glm::vec2 step = at - st.last;
@@ -3285,7 +3296,7 @@ void Renderer::update(float deltaTime) {
                     unitIntensity = glm::clamp(depth / 0.6f, 0.3f, 1.0f);
                 }
             }
-            waterRenderer->unitWake({u.guid, at, st.travelDir, unitIntensity, unitWading});
+            waterRenderer->unitWake({u.guid, at, st.travelDir, unitIntensity, unitWading, st.share.wakePoints});
         }
         waterRenderer->updateWake(deltaTime, glm::vec2(charPos.x, charPos.y),
                                   travelDir, intensity, wading);
@@ -3307,22 +3318,29 @@ void Renderer::update(float deltaTime) {
             }
         }
         // The other units' rings, from their hands and a swimmer's body, as
-        // the character's; while there is room, the character's kept.
+        // the character's; each within its share, the character's kept.
         if (rtSwimWaves_) {
             for (const RtWaterUnit& u : rtWaterUnits_) {
                 RtWaterUnitState& st = rtWaterUnitStates_[u.guid];
+                const bool body = u.swimming || u.waterZ - u.feet.z >= 1.8f;
+                const int limbs = body ? 3 : 2;
+                auto count = [&](sw::Made made) {
+                    if (made == sw::Made::Ring) ++st.ringsMade;
+                    if (made == sw::Made::OverShare) ++st.ringsOverShare;
+                    if (made == sw::Made::Full) ++st.ringsDropped;
+                };
                 if (characterRenderer && u.instanceId != 0) {
                     for (uint32_t hand : {1u, 2u}) {
                         glm::mat4 at(1.0f);
                         if (characterRenderer->getAttachmentTransform(u.instanceId, hand, at)) {
-                            sw::limbMoved(swimWaves_, st.limbs[hand - 1], glm::vec3(at[3]), u.waterZ, deltaTime,
-                                          false);
+                            count(sw::unitLimbMoved(swimWaves_, st.limbs[hand - 1], glm::vec3(at[3]), u.waterZ,
+                                                    deltaTime, u.guid, st.share.rings, limbs));
                         }
                     }
                 }
-                if (u.swimming || u.waterZ - u.feet.z >= 1.8f) {
-                    sw::limbMoved(swimWaves_, st.limbs[2], glm::vec3(u.feet.x, u.feet.y, u.waterZ), u.waterZ,
-                                  deltaTime, false);
+                if (body) {
+                    count(sw::unitLimbMoved(swimWaves_, st.limbs[2], glm::vec3(u.feet.x, u.feet.y, u.waterZ),
+                                            u.waterZ, deltaTime, u.guid, st.share.rings, limbs));
                 }
             }
         }
@@ -3345,12 +3363,31 @@ void Renderer::update(float deltaTime) {
                 }
             }
             const auto [ownPoints, unitPoints] = waterRenderer->wakePointCounts();
+            const auto losses = waterRenderer->takeWakeLosses();
+            size_t ownRings = 0;
+            for (const sw::Wave& w : swimWaves_) ownRings += w.owner == 0 ? 1u : 0u;
             LOG_WARNING("RT water ripples: drawn=", waterRenderer->rtWaterDrawn() ? 1 : 0, " ",
                         rtWaterUnits_.size(), " units in the water (peak ", rtWaterUnitsPeak_, "; farthest ",
                         farthest, " yd, depth ", farUnit ? farUnit->waterZ - farUnit->feet.z : 0.0f, " moving ",
                         farUnit && farUnit->moving ? 1 : 0, " swimming ", farUnit && farUnit->swimming ? 1 : 0, "), ",
                         rtWaterUnitStates_.size(), " tracked, wake points ", ownPoints, " own + ", unitPoints,
-                        " units of ", kMaxWakePoints, ", rings ", swimWaves_.size(), " of ", sw::kMaxWaves);
+                        " units of ", kMaxWakePoints, " (units' points dropped ", losses.dropped, ", shortened ",
+                        losses.shortened, "), rings ", ownRings, " own + ", swimWaves_.size() - ownRings,
+                        " units of ", sw::kMaxWaves);
+            // Each unit in the water: how far, its share, what it has now,
+            // and its rings since the last line - made, not made at its
+            // share (its cooldown keeps it under), not made for want of room.
+            for (const RtWaterUnit& u : rtWaterUnits_) {
+                RtWaterUnitState& st = rtWaterUnitStates_[u.guid];
+                size_t rings = 0;
+                for (const sw::Wave& w : swimWaves_) rings += w.owner == u.guid ? 1u : 0u;
+                LOG_WARNING("RT water unit 0x", std::hex, u.guid, std::dec, " ", st.yards, " yd moving ",
+                            u.moving ? 1 : 0, " swimming ", u.swimming ? 1 : 0, " share rings ", st.share.rings,
+                            " points ", st.share.wakePoints, ": rings ", rings, " points ",
+                            waterRenderer->wakePointsOf(u.guid), "; rings made ", st.ringsMade, " at share ",
+                            st.ringsOverShare, " dropped ", st.ringsDropped);
+                st.ringsMade = st.ringsOverShare = st.ringsDropped = 0;
+            }
             rtWaterUnitsPeak_ = rtWaterUnits_.size();
         }
         std::erase_if(rtWaterUnitStates_,
