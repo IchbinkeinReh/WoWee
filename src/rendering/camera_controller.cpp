@@ -3236,6 +3236,20 @@ void CameraController::teleportTo(const glm::vec3& pos, bool onTransport) {
     // And it falls from there unless it is on ground (0x006ecf80 ->
     // 0x0098b710; portMove), or a passenger.
     portPlacedFall_ = !onTransport;
+    // The place it is put at keeps only +0x44 & 0xf9003f00 of its movement
+    // flags (0x0098ba90): swimming, rising and sinking are gone, and the
+    // acknowledgement and the heartbeat after it tell the server so
+    // (MovementHandler, MSG_MOVE_TELEPORT_ACK). Put into water, the unit
+    // starts to swim again on its next update (0x00730d10 -> 0x00721210):
+    // MSG_MOVE_START_SWIM, and the rise again for a key still held
+    // (0x005face0). Remembered as swimming, a .go from the water into the
+    // water sent nothing, and the server had the swimmer walking.
+    if (!onTransport) {
+        portMover_.swimming = false;
+        wasSwimming = false;
+        wasAscending_ = false;
+        wasDescending_ = false;
+    }
 
     // Invalidate active WMO group so it's re-detected at new position
     if (wmoRenderer) {
