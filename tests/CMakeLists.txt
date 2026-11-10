@@ -3708,3 +3708,7 @@ wowee_add_test(test_water_ripple SOURCES test_water_ripple.cpp)
 # ── test_swim_wave ──
 # A swimmer's waves: header-only logic.
 wowee_add_test(test_swim_wave SOURCES test_swim_wave.cpp)
+
+# ── test_rt_unit_cast ──
+# Which units cast traced shadows: header-only logic.
+wowee_add_test(test_rt_unit_cast SOURCES test_rt_unit_cast.cpp)
