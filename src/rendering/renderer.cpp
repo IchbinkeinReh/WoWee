@@ -3252,6 +3252,41 @@ void Renderer::update(float deltaTime) {
         const float yawRad = glm::radians(cameraController->getYaw());
         const glm::vec2 travelDir(std::sin(yawRad), -std::cos(yawRad));
         WOWEE_PROFILE_SCOPE("water wake", Cpu);
+        // The other units in the traced water (unitInRtWater): the client's
+        // every unit in liquid ripples (0x0071cba0, SwimEffects), and with
+        // its ripples not drawn over the traced water they disturb it as the
+        // character does - a trail by the same rules, wading or swimming.
+        rtWaterUnitClock_ += deltaTime;
+        // Nearest first: the trail's points and the rings are laid while
+        // there is room, the character's kept, so the nearer units have it.
+        std::sort(rtWaterUnits_.begin(), rtWaterUnits_.end(), [&](const RtWaterUnit& a, const RtWaterUnit& b) {
+            const glm::vec2 da(a.feet - charPos);
+            const glm::vec2 db(b.feet - charPos);
+            return glm::dot(da, da) < glm::dot(db, db);
+        });
+        for (const RtWaterUnit& u : rtWaterUnits_) {
+            RtWaterUnitState& st = rtWaterUnitStates_[u.guid];
+            st.seen = rtWaterUnitClock_;
+            const glm::vec2 at(u.feet.x, u.feet.y);
+            if (st.hasLast) {
+                const glm::vec2 step = at - st.last;
+                if (glm::dot(step, step) > 1e-4f) st.travelDir = glm::normalize(step);
+            }
+            st.last = at;
+            st.hasLast = true;
+            const float depth = u.waterZ - u.feet.z;
+            float unitIntensity = 0.0f;
+            bool unitWading = false;
+            if (u.moving) {
+                if (u.swimming || depth >= 1.8f) {
+                    unitIntensity = glm::clamp(1.0f - (depth - 0.6f) / 1.4f, 0.0f, 1.0f);
+                } else if (depth > 0.03f) {
+                    unitWading = true;
+                    unitIntensity = glm::clamp(depth / 0.6f, 0.3f, 1.0f);
+                }
+            }
+            waterRenderer->unitWake({u.guid, at, st.travelDir, unitIntensity, unitWading});
+        }
         waterRenderer->updateWake(deltaTime, glm::vec2(charPos.x, charPos.y),
                                   travelDir, intensity, wading);
 
@@ -3271,8 +3306,57 @@ void Renderer::update(float deltaTime) {
                               deltaTime);
             }
         }
+        // The other units' rings, from their hands and a swimmer's body, as
+        // the character's; while there is room, the character's kept.
+        if (rtSwimWaves_) {
+            for (const RtWaterUnit& u : rtWaterUnits_) {
+                RtWaterUnitState& st = rtWaterUnitStates_[u.guid];
+                if (characterRenderer && u.instanceId != 0) {
+                    for (uint32_t hand : {1u, 2u}) {
+                        glm::mat4 at(1.0f);
+                        if (characterRenderer->getAttachmentTransform(u.instanceId, hand, at)) {
+                            sw::limbMoved(swimWaves_, st.limbs[hand - 1], glm::vec3(at[3]), u.waterZ, deltaTime,
+                                          false);
+                        }
+                    }
+                }
+                if (u.swimming || u.waterZ - u.feet.z >= 1.8f) {
+                    sw::limbMoved(swimWaves_, st.limbs[2], glm::vec3(u.feet.x, u.feet.y, u.waterZ), u.waterZ,
+                                  deltaTime, false);
+                }
+            }
+        }
         waterRenderer->setSwimWaves(swimWaves_);
+
+        // WOWEE_RIPPLE_DIAG=1: every five seconds, the other units in the
+        // traced water (the most at once, the farthest from the character)
+        // and the trail's points and rings they and the character have.
+        static const bool kRippleDiag = std::getenv("WOWEE_RIPPLE_DIAG") != nullptr;
+        rtWaterUnitsPeak_ = std::max(rtWaterUnitsPeak_, rtWaterUnits_.size());
+        if (kRippleDiag && rtWaterUnitClock_ - rtWaterDiagClock_ >= 5.0f) {
+            rtWaterDiagClock_ = rtWaterUnitClock_;
+            const RtWaterUnit* farUnit = nullptr;
+            float farthest = 0.0f;
+            for (const RtWaterUnit& u : rtWaterUnits_) {
+                const float d = glm::length(glm::vec2(u.feet - charPos));
+                if (!farUnit || d > farthest) {
+                    farUnit = &u;
+                    farthest = d;
+                }
+            }
+            const auto [ownPoints, unitPoints] = waterRenderer->wakePointCounts();
+            LOG_WARNING("RT water ripples: drawn=", waterRenderer->rtWaterDrawn() ? 1 : 0, " ",
+                        rtWaterUnits_.size(), " units in the water (peak ", rtWaterUnitsPeak_, "; farthest ",
+                        farthest, " yd, depth ", farUnit ? farUnit->waterZ - farUnit->feet.z : 0.0f, " moving ",
+                        farUnit && farUnit->moving ? 1 : 0, " swimming ", farUnit && farUnit->swimming ? 1 : 0, "), ",
+                        rtWaterUnitStates_.size(), " tracked, wake points ", ownPoints, " own + ", unitPoints,
+                        " units of ", kMaxWakePoints, ", rings ", swimWaves_.size(), " of ", sw::kMaxWaves);
+            rtWaterUnitsPeak_ = rtWaterUnits_.size();
+        }
+        std::erase_if(rtWaterUnitStates_,
+                      [&](const auto& entry) { return rtWaterUnitClock_ - entry.second.seen > 5.0f; });
     }
+    rtWaterUnits_.clear();
 
     // Update mount dust effects
     if (mountDust) {
