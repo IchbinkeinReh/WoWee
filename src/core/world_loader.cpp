@@ -874,11 +874,19 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         // the transports stay on their routes and clocks and are bound to the
         // models spawned for them again.
         if (gameHandler_) {
-            gameHandler_->clearPlayerTransport();
             if (auto* tm = gameHandler_->getTransportManager()) {
                 if (loadedMapId_ == mapId || loadedMapId_ == 0xFFFFFFFF) {
+                    // And the player stays on the transport the move left
+                    // them on: the server takes a ship's passengers along
+                    // when it moves the ship to another part of its route
+                    // on the same map (MSG_MOVE_TELEPORT with the transport
+                    // in it - the Grom'gol zeppelin from Tirisfal to
+                    // Stranglethorn), and that move is rebuilt as this.
+                    // Let go here, the rider stood in the air after the
+                    // loading screen and fell into the sea.
                     tm->releaseRenderInstances("world rebuilt on the same map");
                 } else {
+                    gameHandler_->clearPlayerTransport();
                     const std::string reason = "map change " + std::to_string(loadedMapId_) + " -> " +
                                                std::to_string(mapId) + " (SMSG_NEW_WORLD)";
                     tm->clearTransports(reason.c_str());
