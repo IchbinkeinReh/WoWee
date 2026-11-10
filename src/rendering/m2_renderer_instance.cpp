@@ -1370,15 +1370,19 @@ void M2Renderer::gatherBlobShadowGround(const glm::vec3& boxMin, const glm::vec3
 }
 
 void M2Renderer::gatherCollisionTriangles(const glm::vec3& boxMin, const glm::vec3& boxMax,
-                                          std::vector<glm::vec3>& out, bool facingUpOnly) const {
+                                          std::vector<glm::vec3>& out, bool facingUpOnly,
+                                          bool includeGameObjects) const {
     std::vector<size_t> candidates;
     gatherCandidates(boxMin, boxMax, candidates);
     std::vector<uint32_t> tris, walls;
     for (size_t idx : candidates) {
         const auto& instance = instances[idx];
-        // The map's doodads, in chunks and in buildings: not a game object,
-        // which is an entity of its own, and not the ground clutter.
-        if (!instance.cachedModel || instance.isGameObject || instance.detailDoodad) continue;
+        // The map's doodads, in chunks and in buildings, and not the ground
+        // clutter. A game object's model only when asked: 0x007a2760 takes a
+        // doodad that belongs to an object (a GUID at +0xb8) only for a trace
+        // with 0x100000 - the camera's (0x100171) - or 0x600000.
+        if (!instance.cachedModel || instance.detailDoodad) continue;
+        if (instance.isGameObject && !includeGameObjects) continue;
         if (instance.scale <= 0.001f || instance.skipCollision) continue;
         if (boxMax.x < instance.worldBoundsMin.x || boxMin.x > instance.worldBoundsMax.x ||
             boxMax.y < instance.worldBoundsMin.y || boxMin.y > instance.worldBoundsMax.y ||
@@ -1422,6 +1426,56 @@ void M2Renderer::gatherCollisionTriangles(const glm::vec3& boxMin, const glm::ve
             out.push_back(wc);
         }
     }
+}
+
+std::string M2Renderer::describeRay(const glm::vec3& origin, const glm::vec3& direction, float maxDistance) const {
+    const glm::vec3 end = origin + direction * maxDistance;
+    std::vector<size_t> candidates;
+    gatherCandidates(glm::min(origin, end), glm::max(origin, end), candidates);
+    std::string out;
+    for (size_t idx : candidates) {
+        const auto& instance = instances[idx];
+        if (!instance.cachedModel) continue;
+        // Slab test of the segment against the world box.
+        float t0 = 0.0f, t1 = maxDistance;
+        bool hit = true;
+        for (int a = 0; a < 3 && hit; ++a) {
+            if (std::abs(direction[a]) < 1e-6f) {
+                if (origin[a] < instance.worldBoundsMin[a] || origin[a] > instance.worldBoundsMax[a]) hit = false;
+                continue;
+            }
+            float ta = (instance.worldBoundsMin[a] - origin[a]) / direction[a];
+            float tb = (instance.worldBoundsMax[a] - origin[a]) / direction[a];
+            if (ta > tb) std::swap(ta, tb);
+            t0 = std::max(t0, ta);
+            t1 = std::min(t1, tb);
+            if (t0 > t1) hit = false;
+        }
+        if (!hit) continue;
+        const M2ModelGPU& model = *instance.cachedModel;
+        out += (out.empty() ? "" : " | ") + std::to_string(t0) + ":" + model.name + "/col" +
+               std::to_string(model.collision.valid() ? 1 : 0) + "/go" + std::to_string(instance.isGameObject ? 1 : 0) +
+               "/det" + std::to_string(instance.detailDoodad ? 1 : 0) + "/skip" +
+               std::to_string(instance.skipCollision ? 1 : 0);
+    }
+    // And what stands about the far end: every model whose box, a yard
+    // wider, holds it.
+    std::string nearEnd;
+    std::vector<size_t> nearCands;
+    gatherCandidates(end - glm::vec3(3.0f), end + glm::vec3(3.0f), nearCands);
+    for (size_t idx : nearCands) {
+        const auto& instance = instances[idx];
+        if (!instance.cachedModel) continue;
+        if (glm::any(glm::lessThan(end, instance.worldBoundsMin - glm::vec3(1.0f))) ||
+            glm::any(glm::greaterThan(end, instance.worldBoundsMax + glm::vec3(1.0f))))
+            continue;
+        const auto& b0 = instance.worldBoundsMin;
+        const auto& b1 = instance.worldBoundsMax;
+        nearEnd += " | " + instance.cachedModel->name + " box=(" + std::to_string(b0.x) + "," + std::to_string(b0.y) +
+                   "," + std::to_string(b0.z) + ")-(" + std::to_string(b1.x) + "," + std::to_string(b1.y) + "," +
+                   std::to_string(b1.z) + ") fade=" + std::to_string(instance.fade);
+    }
+    return (out.empty() ? std::string("-") : out) + " NEAR_END" + nearEnd;
 }
 
 namespace {
