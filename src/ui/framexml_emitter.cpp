@@ -477,6 +477,11 @@ struct Emitter {
                 if (const std::string* loop = group.attr("looping")) {
                     line(gvar + ":SetLooping(" + quote(*loop) + ")");
                 }
+                // initialOffsetX/Y (CSimpleAnimGroup's loader, 0x0049a060).
+                if (group.attr("initialOffsetX") || group.attr("initialOffsetY")) {
+                    line(gvar + ":SetInitialOffset(" + group.attrOr("initialOffsetX", "0") + ", " +
+                         group.attrOr("initialOffsetY", "0") + ")");
+                }
                 if (const std::string* pk = group.attr("parentKey")) {
                     line(var + "." + *pk + " = " + gvar);
                 }
@@ -486,7 +491,7 @@ struct Emitter {
                 for (const XmlNode& a : group.children) {
                     if (a.name != "Alpha" && a.name != "Translation" &&
                         a.name != "Scale" && a.name != "Rotation" &&
-                        a.name != "Animation") {
+                        a.name != "Path" && a.name != "Animation") {
                         continue;
                     }
                     const std::string avar = nextVar();
@@ -501,6 +506,38 @@ struct Emitter {
                         line(avar + ":SetOrder(" + *o + ")");
                     if (const std::string* sd = a.attr("startDelay"))
                         line(avar + ":SetStartDelay(" + *sd + ")");
+                    if (const std::string* ed = a.attr("endDelay"))
+                        line(avar + ":SetEndDelay(" + *ed + ")");
+                    if (const std::string* sm = a.attr("smoothing"))
+                        line(avar + ":SetSmoothing(" + quote(*sm) + ")");
+                    if (const std::string* fr = a.attr("maxFramerate"))
+                        line(avar + ":SetMaxFramerate(" + *fr + ")");
+                    if (const std::string* deg = a.attr("degrees"))
+                        line(avar + ":SetDegrees(" + *deg + ")");
+                    if (const std::string* rad = a.attr("radians"))
+                        line(avar + ":SetRadians(" + *rad + ")");
+                    if (const XmlNode* origin = a.child("Origin")) {
+                        float ox = 0.0f, oy = 0.0f;
+                        if (const XmlNode* off = origin->child("Offset")) readDimension(*off, ox, oy);
+                        line(avar + ":SetOrigin(" + quote(origin->attrOr("point", "CENTER")) + ", " +
+                             std::to_string(ox) + ", " + std::to_string(oy) + ")");
+                    }
+                    // A Path's curve and its <ControlPoints>.
+                    if (const std::string* cv = a.attr("curve"))
+                        line(avar + ":SetCurve(" + quote(*cv) + ")");
+                    if (const XmlNode* cps = a.child("ControlPoints")) {
+                        for (const XmlNode& cp : cps->children) {
+                            if (cp.name != "ControlPoint") continue;
+                            const std::string cpName = substituteParent(cp.attrOr("name", ""), name);
+                            const std::string cpVar = nextVar();
+                            line(cpVar + " = " + avar + ":CreateControlPoint(" +
+                                 (cpName.empty() ? "nil" : quote(cpName)) + ", nil, " +
+                                 cp.attrOr("order", "nil") + ")");
+                            if (cp.attr("offsetX") || cp.attr("offsetY"))
+                                line(cpVar + ":SetOffset(" + cp.attrOr("offsetX", "0") + ", " +
+                                     cp.attrOr("offsetY", "0") + ")");
+                        }
+                    }
                     if (const std::string* c = a.attr("change"))
                         line(avar + ":SetChange(" + *c + ")");
                     if (a.attr("offsetX") || a.attr("offsetY")) {

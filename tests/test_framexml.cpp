@@ -1144,6 +1144,23 @@ TEST_CASE("An Animations block becomes group and animation calls",
     REQUIRE_FALSE(has(r.lua, "local __w["));
 }
 
+TEST_CASE("An animation's delays, rotation and path are carried", "[framexml][emit]") {
+    XmlNode root = parseOrFail(
+        "<Ui><Frame name=\"F\"><Animations><AnimationGroup initialOffsetX=\"3\">"
+        "<Rotation degrees=\"90\" endDelay=\"0.5\"><Origin point=\"TOP\"/></Rotation>"
+        "<Path curve=\"SMOOTH\"><ControlPoints><ControlPoint offsetX=\"10\" order=\"1\"/></ControlPoints></Path>"
+        "</AnimationGroup></Animations></Frame></Ui>");
+    const std::string lua = emitFrameXml(root).lua;
+    REQUIRE(has(lua, ":SetInitialOffset(3, 0)"));
+    REQUIRE(has(lua, ":SetEndDelay(0.5)"));
+    REQUIRE(has(lua, ":SetDegrees(90)"));
+    REQUIRE(has(lua, ":SetOrigin(\"TOP\""));
+    REQUIRE(has(lua, ":CreateAnimation(\"Path\")"));
+    REQUIRE(has(lua, ":SetCurve(\"SMOOTH\")"));
+    REQUIRE(has(lua, ":CreateControlPoint(nil, nil, 1)"));
+    REQUIRE(has(lua, ":SetOffset(10, 0)"));
+}
+
 TEST_CASE("horizTile= and vertTile= tile a texture", "[framexml][emit]") {
     XmlNode root = parseOrFail(
         "<Ui><Frame name=\"F\"><Layers><Layer><Texture name=\"T\" file=\"x\" horizTile=\"true\" vertTile=\"false\"/>"
