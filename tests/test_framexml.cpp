@@ -1144,6 +1144,15 @@ TEST_CASE("An Animations block becomes group and animation calls",
     REQUIRE_FALSE(has(r.lua, "local __w["));
 }
 
+TEST_CASE("horizTile= and vertTile= tile a texture", "[framexml][emit]") {
+    XmlNode root = parseOrFail(
+        "<Ui><Frame name=\"F\"><Layers><Layer><Texture name=\"T\" file=\"x\" horizTile=\"true\" vertTile=\"false\"/>"
+        "</Layer></Layers></Frame></Ui>");
+    const std::string lua = emitFrameXml(root).lua;
+    REQUIRE(has(lua, ":SetHorizTile(true)"));
+    REQUIRE(has(lua, ":SetVertTile(false)"));
+}
+
 TEST_CASE("indented= sets a font string's wrapped lines in", "[framexml][emit]") {
     XmlNode root = parseOrFail(
         "<Ui><Frame name=\"F\"><Layers><Layer><FontString name=\"T\" indented=\"true\"/>"

@@ -2322,6 +2322,26 @@ int lua_FontString_CanWordWrap(lua_State* L) {
     lua_pushboolean(L, (w && w->wordWrap) ? 1 : 0);
     return 1;
 }
+/// Texture:Set/GetHorizTile, Set/GetVertTile (0x0048cb60, 0x0048cbc0,
+/// 0x0048cc30, 0x0048cc90).
+int lua_Texture_SetHorizTile(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->horizTile = lua_toboolean(L, 2) != 0;
+    return 0;
+}
+int lua_Texture_GetHorizTile(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->horizTile);
+    return 1;
+}
+int lua_Texture_SetVertTile(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->vertTile = lua_toboolean(L, 2) != 0;
+    return 0;
+}
+int lua_Texture_GetVertTile(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->vertTile);
+    return 1;
+}
 int lua_FontString_SetIndentedWordWrap(lua_State* L) {
     auto* w = widgetToRemeasure(L, 1);
     if (w) w->indentedWordWrap = lua_toboolean(L, 2) != 0;
@@ -5860,6 +5880,10 @@ void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
         set("IsDesaturated", lua_Texture_IsDesaturated);
         set("SetGradient", lua_Texture_SetGradient);
         set("SetGradientAlpha", lua_Texture_SetGradientAlpha);
+        set("SetHorizTile", lua_Texture_SetHorizTile);
+        set("GetHorizTile", lua_Texture_GetHorizTile);
+        set("SetVertTile", lua_Texture_SetVertTile);
+        set("GetVertTile", lua_Texture_GetVertTile);
     }
     if (isFontString) {
         set("GetFont", lua_FontString_GetFont);

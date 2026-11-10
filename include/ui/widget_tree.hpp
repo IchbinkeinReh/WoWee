@@ -189,6 +189,10 @@ struct Widget {
     /// SetIndentedWordWrap / indented="": every wrapped line after the first
     /// set in (font instance flag 0x20000, 0x0048e0e0/0x0048e600).
     bool indentedWordWrap = false;
+    /// SetHorizTile / SetVertTile / horizTile="" vertTile="" (texture +0x160
+    /// flags 4 and 8, 0x0048cb60/0x0048cc30): the image repeats at its own size.
+    bool horizTile = false;
+    bool vertTile = false;
     float width = 0.0f;
     float height = 0.0f;
     bool shown = true;

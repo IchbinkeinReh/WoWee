@@ -3009,6 +3009,24 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     uv1 = ImVec2(0.5f + halfU, 0.5f + halfV);
                 }
             }
+            // SetHorizTile / SetVertTile (0x004847a0): every coordinate across
+            // that is not 0 becomes the region's size in interface units over
+            // the image's in pixels, so the image repeats at its own size.
+            if (!live && (w->horizTile || w->vertTile) && s > 0.0f) {
+                float iw = 0.0f, ih = 0.0f;
+                if (textureSize(w->texturePath, iw, ih)) {
+                    if (w->horizTile && iw > 0.0f && x1 > x0) {
+                        const float tu = ((x1 - x0) / s) / iw;
+                        if (uv0.x != 0.0f) uv0.x = tu;
+                        if (uv1.x != 0.0f) uv1.x = tu;
+                    }
+                    if (w->vertTile && ih > 0.0f && y1 > y0) {
+                        const float tv = ((y1 - y0) / s) / ih;
+                        if (uv0.y != 0.0f) uv0.y = tv;
+                        if (uv1.y != 0.0f) uv1.y = tv;
+                    }
+                }
+            }
             if (!live && w->gradient) {
                 // SetGradient's colours, one per corner (0x00487b00), times the
                 // texture's alpha; a desaturated texture keeps their alpha only.

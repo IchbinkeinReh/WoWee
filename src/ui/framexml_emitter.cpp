@@ -328,6 +328,10 @@ struct Emitter {
         if (const std::string* j = node.attr("justifyH")) {
             line(var + ":SetJustifyH(" + quote(*j) + ")");
         }
+        if (isTexture && node.attr("horizTile"))
+            line(var + ":SetHorizTile(" + (node.attrBool("horizTile") ? "true" : "false") + ")");
+        if (isTexture && node.attr("vertTile"))
+            line(var + ":SetVertTile(" + (node.attrBool("vertTile") ? "true" : "false") + ")");
         if (!isTexture && node.attr("indented")) {
             line(var + ":SetIndentedWordWrap(" +
                  (node.attrBool("indented") ? "true" : "false") + ")");
@@ -1383,11 +1387,7 @@ struct Emitter {
         // Declared false on nearly every box in FrameXML, which is the whole
         // point of it: a box that takes focus when it appears swallows the
         // keyboard from whatever the player was doing.
-        // A font string's line spacing. The only one of the remaining unread
-        // attributes with a method behind it - nonspacewrap, horizTile,
-        // vertTile and reverse have none, and emitting a call to a method that
-        // does not exist is "attempt to call method", which is worse than
-        // ignoring the attribute.
+        // A font string's line spacing.
         if (node.attr("spacing")) {
             line(var + ":SetSpacing(" +
                  std::to_string(static_cast<int>(node.attrFloat("spacing", 0.0f))) + ")");
