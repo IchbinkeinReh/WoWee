@@ -8870,7 +8870,82 @@ void LuaEngine::registerCoreAPI() {
         "function animMeta:SetEndDelay(d) self.endDelay = d or 0 end\n"
         "function animMeta:SetSmoothing(s) self.smoothing = s end\n"
         "function animMeta:SetScale(x, y) self.scaleX, self.scaleY = x, y end\n"
-        "function animMeta:SetDegrees(d) self.degrees = d end\n"
+        // A Rotation keeps radians (+0xa4): SetRadians sets them, GetDegrees
+        // answers them times 57.29578 (0x004a6410, 0x004a63c0, 0x004a6490).
+        "function animMeta:SetDegrees(d) self.radians = (tonumber(d) or 0) / 57.29578 end\n"
+        "function animMeta:GetDegrees() return (self.radians or 0) * 57.29578 end\n"
+        "function animMeta:SetRadians(r)\n"
+        "    if type(r) ~= 'number' then error(('Usage: %s:SetRadians(radians)'):format(tostring(self.name or '<unnamed>')), 2) end\n"
+        "    self.radians = r\n"
+        "end\n"
+        "function animMeta:GetRadians() return self.radians or 0 end\n"
+        // SetOrigin(point, x, y) / GetOrigin (0x004a61f0, 0x004a62c0).
+        "function animMeta:SetOrigin(point, x, y)\n"
+        "    if type(point) ~= 'string' or type(x) ~= 'number' or type(y) ~= 'number' then\n"
+        "        error(('Usage: %s:SetOrigin(point, offsetX, offsetY)'):format(tostring(self.name or '<unnamed>')), 2)\n"
+        "    end\n"
+        "    self.originPoint, self.originX, self.originY = point:upper(), x, y\n"
+        "end\n"
+        "function animMeta:GetOrigin() return self.originPoint or 'CENTER', self.originX or 0, self.originY or 0 end\n"
+        "function animMeta:GetEndDelay() return self.endDelay or 0 end\n"
+        // The state the client keeps at +0x34: 0 stopped, 2 paused
+        // (0x004a5100, 0x004a50b0).
+        "function animMeta:IsStopped() return not (self.group and self.group.isPlaying) end\n"
+        "function animMeta:IsPaused() return (self.group and self.group.isPlaying and self.group.paused) and true or false end\n"
+        // SetSmoothProgress (0x004a5430 -> 0x00497670) writes the value
+        // GetSmoothProgress answers until the next tick works it out again.
+        "function animMeta:SetSmoothProgress(v)\n"
+        "    if type(v) ~= 'number' then error(('Usage: %s:SetSmoothProgress(smoothProgress)'):format(tostring(self.name or '<unnamed>')), 2) end\n"
+        "    self.smoothOverride = v\n"
+        "end\n"
+        // GetProgressWithDelay (0x004a5500): the elapsed time over start delay,
+        // duration and end delay together (0x004985f0).
+        "function animMeta:GetProgressWithDelay() return self.progressWithDelay or 0 end\n"
+        // Set/GetMaxFramerate (0x004a5550 -> 0x00497680, 0x004a55d0): at most
+        // this many progress updates a second; 0.0001 or less is no limit.
+        "function animMeta:SetMaxFramerate(f)\n"
+        "    if type(f) ~= 'number' then error(('Usage: %s:SetMaxFramerate(framesPerSec)'):format(tostring(self.name or '<unnamed>')), 2) end\n"
+        "    self.maxFramerate = (f > 0.0001) and f or 0\n"
+        "end\n"
+        "function animMeta:GetMaxFramerate() return self.maxFramerate or 0 end\n"
+        // A Path's curve, NONE or SMOOTH (0x004a6c10, 0x004a6cd0, the table at
+        // 0x00a440d4), and its control points (0x004a7bf0, 0x004a79d0):
+        // GetMaxOrder is the highest order among them, 0 with none
+        // (0x004a6d20 -> 0x00498260).
+        "function animMeta:SetCurve(c)\n"
+        "    if type(c) ~= 'string' then error(('Usage: %s:SetCurve(\\\"curveType\\\")'):format(tostring(self.name or '<unnamed>')), 2) end\n"
+        "    c = c:upper()\n"
+        "    if c ~= 'NONE' and c ~= 'SMOOTH' then error(('%s:SetCurve(): Unknown curve type specified'):format(tostring(self.name or '<unnamed>')), 2) end\n"
+        "    self.curve = c\n"
+        "end\n"
+        "function animMeta:GetCurve() return self.curve or 'NONE' end\n"
+        "local pointMeta = {}\n"
+        "pointMeta.__index = pointMeta\n"
+        "function pointMeta:SetOffset(x, y) self.offsetX, self.offsetY = x or 0, y or 0 end\n"
+        "function pointMeta:GetOffset() return self.offsetX or 0, self.offsetY or 0 end\n"
+        "function pointMeta:SetOrder(o) self.order = o or 1 end\n"
+        "function pointMeta:GetOrder() return self.order or 1 end\n"
+        "function pointMeta:GetParent() return self.path end\n"
+        "function pointMeta:GetRegionParent() return self.path and self.path:GetRegionParent() end\n"
+        "function pointMeta:GetName() return self.name end\n"
+        "function pointMeta:GetObjectType() return 'ControlPoint' end\n"
+        "function animMeta:CreateControlPoint(name, inherits, order)\n"
+        "    local cp = setmetatable({path = self, name = name, order = tonumber(order) or 1}, pointMeta)\n"
+        "    if type(inherits) == 'string' and __WoweeTemplates and __WoweeTemplates[inherits] then\n"
+        "        __WoweeTemplates[inherits](cp)\n"
+        "    end\n"
+        "    self.controlPoints = self.controlPoints or {}\n"
+        "    table.insert(self.controlPoints, cp)\n"
+        "    table.sort(self.controlPoints, function(a, b) return (a.order or 1) < (b.order or 1) end)\n"
+        "    if name then _G[name] = cp end\n"
+        "    return cp\n"
+        "end\n"
+        "function animMeta:GetControlPoints() return unpack(self.controlPoints or {}) end\n"
+        "function animMeta:GetMaxOrder()\n"
+        "    local cps = self.controlPoints\n"
+        "    if not cps or #cps == 0 then return 0 end\n"
+        "    return cps[#cps].order or 1\n"
+        "end\n"
         "function animMeta:GetProgress() return self.progress or 0 end\n"
         // The same progress with the animation's own easing applied, which is
         // what anything driving a value off an animation actually wants.
@@ -8880,6 +8955,7 @@ void LuaEngine::registerCoreAPI() {
         // nil to be checked but a hard error, so the whole event view went
         // down on the line that makes a highlight pulse.
         "function animMeta:GetSmoothProgress()\n"
+        "    if self.smoothOverride then return self.smoothOverride end\n"
         "    local t = self.progress or 0\n"
         "    if t < 0 then t = 0 elseif t > 1 then t = 1 end\n"
         "    local s = self.smoothing\n"
@@ -8952,6 +9028,7 @@ void LuaEngine::registerCoreAPI() {
         // frame is then.
         "function groupMeta:Play()\n"
         "    self.isPlaying = true\n"
+        "    self.pendingFinish = nil\n"
         "    self.reversed = false\n"
         "    self.baseAlpha = self.parent and self.parent:GetAlpha() or 1\n"
         "    for _, a in ipairs(self.animations) do a.elapsed = 0 a.progress = 0 a.finished = nil end\n"
@@ -8960,6 +9037,7 @@ void LuaEngine::registerCoreAPI() {
         "end\n"
         "function groupMeta:Stop()\n"
         "    self.isPlaying = false\n"
+        "    self.pendingFinish = nil\n"
         "    playing[self] = nil\n"
         // Put back what the animations moved, or a stopped group leaves the
         // frame transparent or displaced with nothing to restore it.
@@ -8969,11 +9047,34 @@ void LuaEngine::registerCoreAPI() {
         "    end\n"
         "    __WoweeRunScriptSlot(self, 'OnStop')\n"
         "end\n"
+        // Finish asks a playing group to stop at the end of the loop it is
+        // in (the pending-finish flag, +0x88 bit 2, 0x004a7090); a group
+        // that is not playing has nothing to finish.
         "function groupMeta:Finish()\n"
-        "    self.isPlaying = false\n"
-        "    playing[self] = nil\n"
-        "    __WoweeRunScriptSlot(self, 'OnFinished')\n"
+        "    if self.isPlaying then self.pendingFinish = true end\n"
         "end\n"
+        "function groupMeta:IsPendingFinish() return self.pendingFinish == true end\n"
+        "local function finishNow(g)\n"
+        "    g.isPlaying = false\n"
+        "    g.pendingFinish = nil\n"
+        "    playing[g] = nil\n"
+        "    __WoweeRunScriptSlot(g, 'OnFinished')\n"
+        "end\n"
+        // GetLoopState (0x004a7240, the table at 0x00a440bc): which way the
+        // group is playing, NONE when it is not.
+        "function groupMeta:GetLoopState()\n"
+        "    if not self.isPlaying then return 'NONE' end\n"
+        "    return self.reversed and 'REVERSE' or 'FORWARD'\n"
+        "end\n"
+        // Set/GetInitialOffset (0x004a72f0, 0x004a73e0): where the group's
+        // translation starts from.
+        "function groupMeta:SetInitialOffset(x, y)\n"
+        "    if type(x) ~= 'number' or type(y) ~= 'number' then\n"
+        "        error(('Usage: %s:SetInitialOffset(x, y)'):format(tostring(self.name or '<unnamed>')), 2)\n"
+        "    end\n"
+        "    self.initialX, self.initialY = x, y\n"
+        "end\n"
+        "function groupMeta:GetInitialOffset() return self.initialX or 0, self.initialY or 0 end\n"
         "function groupMeta:Pause() self.paused = true end\n"
         "function groupMeta:Resume() self.paused = nil end\n"
 
@@ -9014,20 +9115,36 @@ void LuaEngine::registerCoreAPI() {
         "        if g.paused then\n"
         "        else\n"
         "            local anyRunning = false\n"
-        "            local dx, dy = 0, 0\n"
+        "            local dx, dy = g.initialX or 0, g.initialY or 0\n"
         "            local alpha = g.baseAlpha or 1\n"
         "            for _, a in ipairs(g.animations) do\n"
         "                a.elapsed = (a.elapsed or 0) + elapsed\n"
-        "                local t = a.elapsed - (a.startDelay or 0)\n"
+        "                a.smoothOverride = nil\n"
+        // 0x004985f0: an animation runs through its start delay, its
+        // duration and its end delay - the delay it is led by is the end
+        // one when it plays backwards - and its progress moves only as often
+        // as its frame rate allows.
         "                local d = a.duration or 0\n"
+        "                local total = (a.startDelay or 0) + d + (a.endDelay or 0)\n"
+        "                local lead = g.reversed and (a.endDelay or 0) or (a.startDelay or 0)\n"
+        "                a.progressWithDelay = (total > 0 and a.elapsed < total) and a.elapsed / total or 1\n"
+        "                local t = a.elapsed - lead\n"
+        "                if a.elapsed < total then anyRunning = true end\n"
         "                if t < 0 then\n"
-        "                    anyRunning = true\n"
         "                elseif d <= 0 then\n"
         "                    a.progress = 1\n"
         "                else\n"
         "                    local p = t / d\n"
-        "                    local done = false\n"
-        "                    if p >= 1 then p = 1 done = true else anyRunning = true end\n"
+        "                    if p > 1 then p = 1 end\n"
+        "                    local done = a.elapsed >= total\n"
+        "                    a.frameAcc = (a.frameAcc or 0) + elapsed\n"
+        "                    local fps = a.maxFramerate or 0\n"
+        "                    if fps > 0 and a.frameAcc < 1 / fps and not done and a.lastP then\n"
+        "                        p = a.lastP\n"
+        "                    else\n"
+        "                        a.frameAcc = 0\n"
+        "                    end\n"
+        "                    a.lastP = p\n"
         "                    if g.reversed then p = 1 - p end\n"
         "                    a.progress = p\n"
         // Once per run, and before the group finishes, because the frame this
@@ -9063,11 +9180,15 @@ void LuaEngine::registerCoreAPI() {
         "                if mode == 'REPEAT' or mode == 'BOUNCE' then\n"
         // BOUNCE plays back the way it came; REPEAT starts over. Either way the
         // clocks reset, or the next round finishes instantly.
-        "                    if mode == 'BOUNCE' then g.reversed = not g.reversed end\n"
-        "                    for _, a in ipairs(g.animations) do a.elapsed = 0 a.finished = nil end\n"
-        "                    __WoweeRunScriptSlot(g, 'OnLoop')\n"
+        "                    if g.pendingFinish then\n"
+        "                        finishNow(g)\n"
+        "                    else\n"
+        "                        if mode == 'BOUNCE' then g.reversed = not g.reversed end\n"
+        "                        for _, a in ipairs(g.animations) do a.elapsed = 0 a.finished = nil a.lastP = nil end\n"
+        "                        __WoweeRunScriptSlot(g, 'OnLoop')\n"
+        "                    end\n"
         "                else\n"
-        "                    g:Finish()\n"
+        "                    finishNow(g)\n"
         "                end\n"
         "            end\n"
         "        end\n"
