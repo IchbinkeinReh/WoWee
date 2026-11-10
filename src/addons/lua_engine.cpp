@@ -8868,7 +8868,15 @@ void LuaEngine::registerCoreAPI() {
         "function animMeta:SetStartDelay(d) self.startDelay = d or 0 end\n"
         "function animMeta:GetStartDelay() return self.startDelay or 0 end\n"
         "function animMeta:SetEndDelay(d) self.endDelay = d or 0 end\n"
-        "function animMeta:SetSmoothing(s) self.smoothing = s end\n"
+        // SetSmoothing (0x004a5740): one of NONE, IN, OUT, IN_OUT, OUT_IN.
+        "function animMeta:SetSmoothing(s)\n"
+        "    if type(s) ~= 'string' then error(('Usage: %s:SetSmoothing(\"smoothingType\")'):format(tostring(self.name or '<unnamed>')), 2) end\n"
+        "    s = s:upper()\n"
+        "    if s ~= 'NONE' and s ~= 'IN' and s ~= 'OUT' and s ~= 'IN_OUT' and s ~= 'OUT_IN' then\n"
+        "        error(('%s:SetSmoothing(): Unknown smoothing type specified'):format(tostring(self.name or '<unnamed>')), 2)\n"
+        "    end\n"
+        "    self.smoothing = s\n"
+        "end\n"
         "function animMeta:SetScale(x, y) self.scaleX, self.scaleY = x, y end\n"
         // A Rotation keeps radians (+0xa4): SetRadians sets them, GetDegrees
         // answers them times 57.29578 (0x004a6410, 0x004a63c0, 0x004a6490).
@@ -8954,26 +8962,21 @@ void LuaEngine::registerCoreAPI() {
         // on an <Animation smoothing="OUT"> - and a missing *method* is not a
         // nil to be checked but a hard error, so the whole event view went
         // down on the line that makes a highlight pulse.
+        // The client's easing (0x00497ba0): IN 1 - cos(t*pi/2), OUT
+        // -cos((t+1)*pi/2), IN_OUT and OUT_IN alike 0.5 - 0.5*cos(t*pi)
+        // (the table at 0x00a44068 gives both the same pair), none t.
+        "local function ease(s, t)\n"
+        "    if s == 'IN' then return 1 - math.cos(t * 1.5707964) end\n"
+        "    if s == 'OUT' then return -math.cos((t + 1) * 1.5707964) end\n"
+        "    if s == 'IN_OUT' or s == 'OUT_IN' then return 0.5 - math.cos(t * 3.1415927) * 0.5 end\n"
+        "    return t\n"
+        "end\n"
+        "__WoweeAnimEase = ease\n"
         "function animMeta:GetSmoothProgress()\n"
         "    if self.smoothOverride then return self.smoothOverride end\n"
         "    local t = self.progress or 0\n"
         "    if t < 0 then t = 0 elseif t > 1 then t = 1 end\n"
-        "    local s = self.smoothing\n"
-        "    if s == 'IN' then return t * t end\n"
-        "    if s == 'OUT' then return t * (2 - t) end\n"
-        "    if s == 'IN_OUT' then\n"
-        "        if t < 0.5 then return 2 * t * t end\n"
-        "        local u = 1 - t\n"
-        "        return 1 - 2 * u * u\n"
-        "    end\n"
-        "    if s == 'OUT_IN' then\n"
-        "        if t < 0.5 then local u = t * 2 return u * (2 - u) * 0.5 end\n"
-        "        local u = (t - 0.5) * 2\n"
-        "        return 0.5 + u * u * 0.5\n"
-        "    end\n"
-        // No smoothing named, or one this does not model: the linear progress
-        // is the honest answer and reads as a steady fade rather than nothing.
-        "    return t\n"
+        "    return ease(self.smoothing, t)\n"
         "end\n"
         "function animMeta:GetElapsed() return self.elapsed or 0 end\n"
         "function animMeta:SetParent(p) self.parent = p end\n"
@@ -9216,7 +9219,7 @@ void LuaEngine::registerCoreAPI() {
         "                    end\n"
         "                end\n"
         "                if started and a.progress then\n"
-        "                    local pr = a.progress\n"
+        "                    local pr = __WoweeAnimEase(a.smoothing, a.progress)\n"
         "                    if a.kind == 'Alpha' then\n"
         "                        if a.fromAlpha and a.toAlpha then\n"
         "                            alpha = a.fromAlpha + (a.toAlpha - a.fromAlpha) * pr\n"
