@@ -185,6 +185,11 @@ vec3 rtwReflection(vec3 origin, vec3 dir, vec3 toSun, inout uint rng) {
     return mix(mix(c, fogColor.rgb, haze), shown, onScreen);
 }
 
+// How deep under the surface the bed the last refracted ray met lies, when it
+// met the bed or anything else standing in the water but a unit: -1 for none
+// (water.frag: the water's own colour over the path and the shore's masks).
+float rtwBedDepth = -1.0;
+
 // What comes up through the water along the refracted `dir` from `origin`:
 // rgb, and in a the path length the water absorbed over (rtWater2.x where
 // nothing was met).
@@ -197,6 +202,7 @@ vec4 rtwRefraction(vec3 origin, vec3 dir, vec3 toSun, vec3 sigma, vec3 scatterCo
     float reach = max(rtWater2.x, 1.0);
     vec3 bed = vec3(0.0);
     float d = reach;
+    rtwBedDepth = -1.0;
     // Seen from above, every ray under a wader leaves the surface inside the
     // wader's box, and a ray from inside a unit's box passes the unit by: the
     // body under the water was not there to meet.
@@ -223,6 +229,7 @@ vec4 rtwRefraction(vec3 origin, vec3 dir, vec3 toSun, vec3 sigma, vec3 scatterCo
         // facet by facet, bands of light and shade with straight edges between.
         bool ground = (rtInstances[rtHitInstance].flags & RT_MESH_TERRAIN) != 0u;
         float depth = max(origin.z - hit.z, 0.0);
+        if (rtInstances[rtHitInstance].group == 0u) rtwBedDepth = depth;
         float tracedShare = ground ? smoothstep(0.0, RTW_BED_SHORE, depth) : 0.0;
         vec3 traced = vec3(0.0);
         if (onScreen < 1.0 || tracedShare > 0.0) {
