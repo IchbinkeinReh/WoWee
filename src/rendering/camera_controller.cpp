@@ -2585,9 +2585,10 @@ void CameraController::update(float deltaTime) {
         // real drop - a jump is airborne for about a second - so nothing a
         // player would call a fall is lost.
         constexpr float kFallReportSeconds = 0.15f;
-        if (wasFalling && grounded && airborneSeconds_ >= kFallReportSeconds) {
+        if ((wasFalling && grounded && airborneSeconds_ >= kFallReportSeconds) || deckLandingPending_) {
             movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_FALL_LAND));
         }
+        deckLandingPending_ = false;
     }
 
     // The pitch keys' way (0x005fb1a0): MSG_MOVE_START_PITCH_UP or _DOWN
