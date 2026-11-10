@@ -476,7 +476,12 @@ void main() {
         // the walls round its flame - Camp Narache's tauren lamp post, whose
         // flame burns a third of a yard inside its walls, lit the ground all
         // round it instead of out of its one opening only.
-        bool selfShadow = pass.tune5.x > 0.5;
+        // Always, whatever the option says: everything casts while tracing
+        // (the user's rule) - a lamp's or a brazier's own model too, by its
+        // faces turned toward the light (rtFixtureFacesOnly). Passed by
+        // whole, a fixture cast no shadow of any fixed light: a lantern none
+        // of the torch beside it, a fire bowl none of its own fire.
+        bool selfShadow = true;
         if (selfShadow && int(light.storey.w + 0.5) != RT_LIGHT_KIND_PARTICLE) {
             radius = min(radius, RT_SELF_SHADOW_SOURCE_RADIUS);
         }
@@ -514,10 +519,11 @@ void main() {
         // toward the light stop the ray (rtFixtureFacesOnly).
         float reach = d - min((selfShadow ? 0.05 : RT_LIGHT_STANDOFF) + radius, 0.5 * d);
         if (d > 1e-3 && reach > 0.0) {
-            // The units cast their shadows near them (rtUnitShadowReach).
+            // The units cast their shadows as far as anything else does: the
+            // reach they were held to (rtUnitShadowReach) let a unit's shadow
+            // stop short of the wall the lamp threw it on.
             bool byUnit;
             // And never the unit that carries the light (rtLampEnd).
-            rtUnitReach = rtUnitShadowReach(d, rng);
             rtLampEnd = light.positionEnd.xyz;
             // Only what is carried meets the fixtures (storey.z -1: PointLight::carried).
             rtSkipFixtures = int(light.storey.w + 0.5) != RT_LIGHT_KIND_UNIT && light.storey.z > -0.5;

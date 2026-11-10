@@ -349,7 +349,9 @@ void CharacterRenderer::syncRtScene(const glm::vec3& cameraPos) {
     std::vector<Candidate> bodies, carried;
     std::unordered_map<uint32_t, uint32_t> parentOf;
     for (auto& [id, inst] : instances) {
-        if (!inst.visible || inst.heldBack || inst.isSceneModel || inst.isEffectModel) continue;
+        // A weapon's enchantment model casts as the weapon does: its blended
+        // batches are see-through and left out with the rest.
+        if (!inst.visible || inst.heldBack || inst.isSceneModel) continue;
         if (!inst.posedOnce && !inst.hasOverrideModelMatrix) continue;
         // Nor what is drawn see-through - a ghost, a stealthed or GM-invisible
         // unit, one fading in or out (instanceDrawnFaded). Such a body is in
