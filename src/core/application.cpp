@@ -425,15 +425,18 @@ void playRiderMountAnimation(rendering::CharacterRenderer& cr, rendering::SpellV
 
 // Another unit's animation tier and what 0x007385c0 reads of it, onto its
 // instance, from what the sync has worked out of how it moves.
-// A unit's ripples, near the character: the client's every unit in liquid
-// (0x0071cba0), at its own scale and collision height.
+// A unit's ripples, within reach of the character: the client's every unit in
+// liquid (0x0071cba0), at its own scale and collision height. Out to 150
+// yards (rendering::SwimEffects::kUnitRippleRange): at 60 a swimmer across a
+// lake or a canal left the water still.
 void feedUnitRipple(rendering::Renderer& renderer, EntitySpawner& spawner, uint64_t guid, const game::Unit& unit,
                     const glm::vec3& feet, bool moving, bool dead, float deltaTime) {
     auto* swim = renderer.getSwimEffects();
     auto* water = renderer.getWaterRenderer();
     if (dead || !swim || !water || !swim->surfaceRipplesShown()) return;
     const glm::vec3 away = feet - renderer.getCharacterPosition();
-    if (glm::dot(away, away) > 60.0f * 60.0f) return;
+    constexpr float kRange = rendering::SwimEffects::kUnitRippleRange;
+    if (glm::dot(away, away) > kRange * kRange) return;
     const auto waterZ = water->getWaterHeightAt(feet.x, feet.y);
     if (!waterZ) return;
     const auto size = spawner.unitRippleSize(unit);

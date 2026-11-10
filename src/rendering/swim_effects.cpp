@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "rendering/swim_effects.hpp"
 #include "rendering/depth_convention.hpp"
 #include "rendering/camera.hpp"
@@ -808,6 +809,19 @@ void SwimEffects::updateSurfaceRipples(const CameraController& cc, const glm::ve
     // A unit out of the water, or gone, for a few seconds is forgotten.
     rippleClock_ += deltaTime;
     std::erase_if(unitRipples_, [&](const auto& entry) { return rippleClock_ - entry.second.seen > 5.0f; });
+    // WOWEE_RIPPLE_DIAG=1: every five seconds, the units making ripples, the
+    // ripples alive (and the most at once), and any a full pool refused.
+    static const bool kRippleDiag = std::getenv("WOWEE_RIPPLE_DIAG") != nullptr;
+    surfaceRipplesPeak_ = std::max(surfaceRipplesPeak_, surfaceRipples_.size());
+    if (kRippleDiag && rippleClock_ - surfaceRippleDiagClock_ >= 5.0f) {
+        surfaceRippleDiagClock_ = rippleClock_;
+        size_t inWater = 0;
+        for (const auto& [guid, state] : unitRipples_) inWater += rippleClock_ - state.seen < 0.5f ? 1u : 0u;
+        LOG_WARNING("Ripples: ", inWater, " units in water, ", surfaceRipples_.size(), " alive (peak ",
+                    surfaceRipplesPeak_, " of ", kMaxSurfaceRipples, "), ", surfaceRipplesDropped_, " dropped");
+        surfaceRipplesPeak_ = surfaceRipples_.size();
+        surfaceRipplesDropped_ = 0;
+    }
     surfaceRippleDelay_ -= deltaTime;
     if (!waterH || !surfaceRipplesShown_ || *waterH <= charPos.z) {
         surfaceRippleLastDepth_ = 0.0f;
@@ -838,8 +852,12 @@ void SwimEffects::updateSurfaceRipples(const CameraController& cc, const glm::ve
     const wr::Rolls rolls{rippleRoll(), rippleRoll(), rippleRoll(), rippleRoll(), rippleRoll()};
     wr::Ripple ripple;
     float next = 0.0f;
-    if (wr::spawn(u, rolls, ripple, next) && surfaceRipples_.size() < 96) {
-        surfaceRipples_.push_back(ripple);
+    if (wr::spawn(u, rolls, ripple, next)) {
+        if (surfaceRipples_.size() < kMaxSurfaceRipples) {
+            surfaceRipples_.push_back(ripple);
+        } else {
+            ++surfaceRipplesDropped_;
+        }
         surfaceRippleDelay_ = next;
     }
 }
@@ -870,8 +888,12 @@ void SwimEffects::unitInWater(uint64_t guid, const glm::vec3& feet, float waterZ
     const wr::Rolls rolls{rippleRoll(), rippleRoll(), rippleRoll(), rippleRoll(), rippleRoll()};
     wr::Ripple ripple;
     float next = 0.0f;
-    if (wr::spawn(u, rolls, ripple, next) && surfaceRipples_.size() < 96) {
-        surfaceRipples_.push_back(ripple);
+    if (wr::spawn(u, rolls, ripple, next)) {
+        if (surfaceRipples_.size() < kMaxSurfaceRipples) {
+            surfaceRipples_.push_back(ripple);
+        } else {
+            ++surfaceRipplesDropped_;
+        }
         state.delay = next;
     }
 }
