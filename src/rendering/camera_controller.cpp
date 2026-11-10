@@ -717,8 +717,14 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
 
         targetPos.z += verticalVelocity * f.physicsDeltaTime;
 
-        // Don't rise above water surface
-        if (waterH && targetPos.z > *waterH - swimFloatDepth()) {
+        // Don't rise above water surface - unless rising: the swim step
+        // (0x00760b40, portMove) holds the swimmer under the surface itself,
+        // the liquid swept as a ceiling three quarters of a body over its
+        // feet, and a swimmer rising (+0x44 0x400000) into that ceiling
+        // jumps out of the water (0x009883f0, at 9.1 yd/s). Clamped here,
+        // the rise never reached the ceiling and the swimmer could not
+        // leave the water at the surface nor hop onto a ledge from it.
+        if (waterH && targetPos.z > *waterH - swimFloatDepth() && !portAscending_) {
             targetPos.z = *waterH - swimFloatDepth();
             if (verticalVelocity > 0.0f) verticalVelocity = 0.0f;
         }
