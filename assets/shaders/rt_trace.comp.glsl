@@ -316,6 +316,34 @@ void main() {
             unitHit = unitHit || byUnit;
         }
         sun /= float(sunRays);
+        // An enclosed place in a building flagged as outdoors - the
+        // Tirisfal zeppelin tower's stairwell, one exterior group with its
+        // open platforms - is lit as a room: no sun or moon at all where it
+        // cannot reach. The shadow only scales the sun's light down by its
+        // darkness (rt_apply: (1 - k) + k x lit), so the walls facing the
+        // moon kept a third of it in a closed stairwell, bright beside the
+        // black ones facing away. How open the place is: the share of rays
+        // over its hemisphere, every direction alike, that reach the open
+        // sky. Where it is closed in, the share of the sun's rays that were
+        // stopped goes below nothing, to where the scale leaves none of the
+        // sun's light; open, as it was. The ground keeps its sun - a
+        // canyon's floor is no room - and what the sun does reach keeps it.
+        if (!terrain && sun < 1.0) {
+            const uint RT_OPEN_RAYS = 2u;
+            const float RT_OPEN_REACH = 150.0;
+            float open = 0.0;
+            rtSkipUnits = true;
+            rtCutoutsOpen = true;
+            for (uint k = 0u; k < RT_OPEN_RAYS; ++k) {
+                vec3 od = rtUniformHemisphere(n, rng);
+                open += rtOccluded(origin, od, RT_OPEN_REACH, rng) ? 0.0 : 1.0;
+            }
+            rtCutoutsOpen = false;
+            open = smoothstep(0.10, 0.35, open / float(RT_OPEN_RAYS));
+            float k = clamp(pass.tune.x, 0.05, 1.0);
+            float noSun = -(1.0 - k) / k;
+            sun += (1.0 - sun) * noSun * (1.0 - open);
+        }
         rtSkipUnits = false;
     }
 
