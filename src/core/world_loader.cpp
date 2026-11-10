@@ -867,10 +867,22 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         // GUIDs become Deeprun tram GUIDs). The renderer instances are map-local,
         // so the logical transport/path state must be map-local too; otherwise a
         // newly spawned SubwayCar is rebound to the old elevator path.
+        //
+        // Only on another map, though. On the same map - a far move rebuilt as
+        // a map change, or the first entry after a logout, whose transports
+        // were all sent for this entry - the server has taken nothing away:
+        // the transports stay on their routes and clocks and are bound to the
+        // models spawned for them again.
         if (gameHandler_) {
             gameHandler_->clearPlayerTransport();
             if (auto* tm = gameHandler_->getTransportManager()) {
-                tm->clearTransports();
+                if (loadedMapId_ == mapId || loadedMapId_ == 0xFFFFFFFF) {
+                    tm->releaseRenderInstances("world rebuilt on the same map");
+                } else {
+                    const std::string reason = "map change " + std::to_string(loadedMapId_) + " -> " +
+                                               std::to_string(mapId) + " (SMSG_NEW_WORLD)";
+                    tm->clearTransports(reason.c_str());
+                }
             }
         }
 

@@ -215,6 +215,8 @@ void GameHandler::disconnect() {
     friendGuids_.clear();
     contacts_.clear();
     transportAttachments_.clear();
+    // The session's transports go with it.
+    if (transportManager_) transportManager_->clearTransports("disconnect");
     // Warden state is WardenHandler's; this used to clear a second copy of it
     // that nothing ever filled.
     if (wardenHandler_) wardenHandler_->reset();

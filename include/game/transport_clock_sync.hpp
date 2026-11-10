@@ -18,13 +18,15 @@ class TransportClockSync {
 public:
     /// Compute pathTimeMs for a transport given current elapsed time and deltaTime.
     /// Returns false if the transport should use raw server position (no interpolation).
+    /// steadyNowMs is the steady clock the server's route and path clocks are
+    /// anchored to; negative means the elapsed time stands in for it.
     [[nodiscard]] bool computePathTime(
         ActiveTransport& transport,
         const math::CatmullRomSpline& spline,
         double elapsedTime,
         float deltaTime,
         uint32_t& outPathTimeMs,
-        double routeClockNow = -1.0) const;
+        int64_t steadyNowMs = -1) const;
 
     /// Process a server position update: update clock offset, bootstrap
     /// velocity, and switch between client/server driven modes.
