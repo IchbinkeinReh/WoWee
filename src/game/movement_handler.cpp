@@ -2641,6 +2641,10 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
                     ") - acknowledging so the server stops discarding our "
                     "movement, then telling it where we really are");
     } else {
+        // Where the move took the player from, on the wire: a passenger moved
+        // along a one-map route (below) crossed from the leg ending there.
+        const glm::vec3 leftFrom =
+            core::coords::canonicalToServer(glm::vec3(movementInfo.x, movementInfo.y, movementInfo.z));
         movementInfo.x = canonical.x;
         movementInfo.y = canonical.y;
         movementInfo.z = canonical.z;
@@ -2661,6 +2665,14 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
             owner_.setPlayerOnTransport(
                 teleportTransportGuid,
                 transports->serverToTransportLocal(teleportTransportGuid, teleportTransportOffset));
+            // The transport's loading screen, as the client shows it when the
+            // leg of the transport it carries changes (0x007134a0 ->
+            // 0x0040ae30): used where the move is far enough to load the
+            // world (WorldEntryCallbackHandler), let go where it is not.
+            if (const auto* carried = transports->getTransport(teleportTransportGuid)) {
+                owner_.armTransportLegCrossing(carried->entry, owner_.getCurrentMapId(),
+                                               glm::vec2(leftFrom.x, leftFrom.y));
+            }
         } else if (owner_.isOnTransport()) {
             owner_.clearPlayerTransport();
         }

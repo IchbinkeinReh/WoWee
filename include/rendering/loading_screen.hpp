@@ -41,9 +41,13 @@ public:
     /// (SMSG_TRANSFER_PENDING's transport, 0x0040ad50): the transport's taxi
     /// path and the map it leaves. Before initialize(); where the crossing
     /// can be drawn the screen is the Azeroth map with it, else the map's own.
-    void setTransportCrossing(uint32_t taxiPathId, uint32_t fromMapId) {
+    /// `leftFrom` (wire X and Y), for a route that stays on one map: where
+    /// the passenger left from (loading_screen_route::build).
+    void setTransportCrossing(uint32_t taxiPathId, uint32_t fromMapId,
+                              std::optional<loading_screen_route::Point> leftFrom = std::nullopt) {
         crossingPath_ = taxiPathId;
         crossingFromMap_ = fromMapId;
+        crossingLeftFrom_ = leftFrom;
     }
 
     void setProgress(float progress) { loadProgress = progress; }
@@ -79,6 +83,7 @@ private:
 
     uint32_t crossingPath_ = 0;
     uint32_t crossingFromMap_ = 0;
+    std::optional<loading_screen_route::Point> crossingLeftFrom_;
     std::optional<loading_screen_route::Route> crossing_;
     Texture dynamicElements_;
     std::array<Texture, 12> worldTiles_;

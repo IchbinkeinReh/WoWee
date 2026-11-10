@@ -2438,9 +2438,16 @@ public:
     /// the one the player rides (0x0040ad50): its taxi path is the crossing
     /// the next loading screen draws. Entry 0 clears it.
     void armLoadingScreenCrossing(uint32_t entry, uint32_t fromMap);
+    /// The same for a passenger moved along a route that stays on one map
+    /// (MSG_MOVE_TELEPORT with the transport in it): the transport of entry
+    /// `entry` the player is now on, and where they were (wire X and Y) -
+    /// 0x007134a0 shows the transport's screen (0x0040ae30) when its leg
+    /// changes under the player.
+    void armTransportLegCrossing(uint32_t entry, uint32_t mapId, const glm::vec2& leftFromWire);
     struct LoadingScreenCrossing {
         uint32_t taxiPathId = 0;
         uint32_t fromMapId = 0;
+        std::optional<glm::vec2> leftFromWire;  ///< the leg left, for a one-map route
     };
     /// The crossing armed for the loading screen, once.
     std::optional<LoadingScreenCrossing> takeLoadingScreenCrossing() {

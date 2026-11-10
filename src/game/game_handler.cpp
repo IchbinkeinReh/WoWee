@@ -1660,6 +1660,14 @@ void GameHandler::armLoadingScreenCrossing(uint32_t entry, uint32_t fromMap) {
     loadingScreenCrossing_ = LoadingScreenCrossing{info->data[0], fromMap};
 }
 
+void GameHandler::armTransportLegCrossing(uint32_t entry, uint32_t mapId, const glm::vec2& leftFromWire) {
+    loadingScreenCrossing_.reset();
+    if (entry == 0) return;
+    const auto* info = getCachedGameObjectInfo(entry);
+    if (!info || info->type != 15 || !info->hasData || info->data[0] == 0) return;
+    loadingScreenCrossing_ = LoadingScreenCrossing{info->data[0], mapId, leftFromWire};
+}
+
 bool GameHandler::completePlayerTransportWorldTransfer(
     uint64_t transportGuid, glm::vec3& worldPosition) {
     if (!pendingPlayerTransportTransfer_ || !transportManager_ ||
