@@ -4927,11 +4927,11 @@ const game::LootRollEntry* rollFor(game::GameHandler* gh, int rollId) {
     return gh ? gh->getLootRoll(rollId) : nullptr;
 }
 
-// Which buttons the server said it would accept. The same three bits the
-// roll packet carries.
-constexpr uint8_t kRollNeed       = 0x01;
-constexpr uint8_t kRollGreed      = 0x02;
-constexpr uint8_t kRollDisenchant = 0x04;
+// Which buttons the server said it would accept: the roll packet's vote
+// mask as 0x005889d0 reads it (0x01 is pass, always offered).
+constexpr uint8_t kRollNeed       = 0x02;
+constexpr uint8_t kRollGreed      = 0x04;
+constexpr uint8_t kRollDisenchant = 0x08;
 
 } // namespace
 
@@ -4939,32 +4939,29 @@ constexpr uint8_t kRollDisenchant = 0x04;
 //   canNeed, canGreed, canDisenchant, reasonNeed, reasonGreed,
 //   reasonDisenchant, deSkillRequired
 //
-// All twelve, because the roll window unpacks all twelve and uses the tail of
-// them: a reason is concatenated into a global's name when its button is
-// disabled, and the count is compared against one. Nil in either place raises.
-// The reasons are the generic "your class may not" line - this client is not
-// told why the server refused a button, only that it did.
+// All twelve, as 0x005889d0 gives them: the stack the roll packet carried,
+// the template's quality, bind-on-pickup and the three offers as 1 or nil,
+// the three reasons worked out when the roll arrived (0x006fa7a0), and the
+// template's disenchanting skill. Nothing for an item not yet known.
 static int lua_GetLootRollItemInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
     const auto* roll = rollFor(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
     if (!roll) { return luaReturnNil(L); }
 
     const auto* info = gh->getItemInfo(roll->itemId);
-    lua_pushstring(L, gh->getItemIconPath(info ? info->displayInfoId : 0).c_str());
+    if (!info || !info->valid) return 0;
+    lua_pushstring(L, gh->getItemIconPath(info->displayInfoId).c_str());
     lua_pushstring(L, roll->itemName.c_str());
-    // The roll packet does not carry a stack size. One is right for nearly
-    // everything rolled for, and the window only reads it to decide whether to
-    // print a number in the corner at all.
-    lua_pushnumber(L, 1);
-    lua_pushnumber(L, roll->itemQuality);
-    lua_pushboolean(L, info && info->bindType == 1 ? 1 : 0);  // bind on pickup
-    lua_pushboolean(L, (roll->voteMask & kRollNeed) ? 1 : 0);
-    lua_pushboolean(L, (roll->voteMask & kRollGreed) ? 1 : 0);
-    lua_pushboolean(L, (roll->voteMask & kRollDisenchant) ? 1 : 0);
-    lua_pushnumber(L, 1);   // reasonNeed        → "Your class may not roll need"
-    lua_pushnumber(L, 1);   // reasonGreed
-    lua_pushnumber(L, 3);   // reasonDisenchant  → "may not be disenchanted"
-    lua_pushnumber(L, 0);   // disenchanting skill the group would need
+    lua_pushnumber(L, roll->itemCount);
+    lua_pushnumber(L, info->quality);
+    luaPushOneOrNil(L, info->bindType == 1);
+    luaPushOneOrNil(L, (roll->voteMask & kRollNeed) != 0);
+    luaPushOneOrNil(L, (roll->voteMask & kRollGreed) != 0);
+    luaPushOneOrNil(L, (roll->voteMask & kRollDisenchant) != 0);
+    lua_pushnumber(L, roll->reasonNeed);
+    lua_pushnumber(L, roll->reasonGreed);
+    lua_pushnumber(L, roll->reasonDisenchant);
+    lua_pushnumber(L, info->requiredDisenchantSkill);
     return 12;
 }
 

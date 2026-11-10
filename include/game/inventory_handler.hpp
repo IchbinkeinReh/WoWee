@@ -728,6 +728,11 @@ public:
                                uint32_t buyout, uint32_t duration);
     /// PlaceAuctionBid's checks and request (0x0059da40).
     void auctionBid(const AuctionEntry& auction, uint32_t bid);
+    /// 0x00754dd0: whether `count` more of the item fit its MaxCount and its
+    /// ItemLimitCategory against what the player owns, saying why not when
+    /// `speak`.
+    bool canOwnMore(const ItemQueryResponseData& item, uint32_t count, bool speak);
+    void assessLootRoll(LootRollEntry& roll, const ItemQueryResponseData& item);
     void auctionCancelItem(uint32_t auctionId);
     void auctionListOwnerItems(uint32_t offset = 0);
     void auctionListBidderItems(uint32_t offset = 0);

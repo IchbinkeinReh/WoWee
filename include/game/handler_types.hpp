@@ -548,6 +548,11 @@ struct LootRollEntry {
     uint8_t  itemQuality   = 0;
     uint32_t rollCountdownMs = 60000;
     uint8_t  voteMask      = 0xFF;
+    /// The stack rolled for (+0x28).
+    uint32_t itemCount     = 1;
+    /// Why need, greed and disenchant are not offered (+0x52..+0x54, set by
+    /// 0x006fa7a0 once the item is known): LOOT_ROLL_INELIGIBLE_REASON%d.
+    uint8_t  reasonNeed = 0, reasonGreed = 0, reasonDisenchant = 0;
     std::chrono::steady_clock::time_point rollStartedAt{};
     /// START_LOOT_ROLL has been raised for it (0x006fb2c0 counts these).
     bool started = false;

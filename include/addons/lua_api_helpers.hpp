@@ -141,6 +141,11 @@ inline int32_t luaToClientInt(lua_State* L, int idx) {
 }
 
 inline int luaReturnNil(lua_State* L)  { lua_pushnil(L); return 1; }
+/// 1 or nil, the way the client answers many of its yes-or-no questions.
+inline void luaPushOneOrNil(lua_State* L, bool yes) {
+    if (yes) lua_pushnumber(L, 1);
+    else     lua_pushnil(L);
+}
 inline int luaReturnZero(lua_State* L) { lua_pushnumber(L, 0); return 1; }
 inline int luaReturnFalse(lua_State* L){ lua_pushboolean(L, 0); return 1; }
 

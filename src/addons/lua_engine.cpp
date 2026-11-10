@@ -820,10 +820,7 @@ void recordScriptError(lua_State* L, const char* script) {
 // The protected-frame methods: IsProtected (0x0049cad0), CanChangeProtectedState
 // (0x0049cb60) and CanChangeAttribute (0x0049f260), answered 1 or nil as the
 // client answers them.
-static void pushFlag(lua_State* L, bool on) {
-    if (on) lua_pushnumber(L, 1);
-    else lua_pushnil(L);
-}
+static void pushFlag(lua_State* L, bool on) { wowee::addons::luaPushOneOrNil(L, on); }
 // IsProtected() -> protected, explicitly. Only the explicit kind is kept here
 // (see Widget::protectedFrame), so the two answers agree.
 static int lua_Frame_IsProtected(lua_State* L) {
