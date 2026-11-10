@@ -5865,11 +5865,8 @@ void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
     // they are copied off the globals the animation bootstrap published. Absent
     // before the bootstrap has run, which is only true of regions built during
     // engine start-up, and those declare no animations.
-    for (const char* name : {"CreateAnimationGroup", "StopAnimating"}) {
-        lua_getglobal(L, (std::string("__Wowee") +
-                          (std::strcmp(name, "StopAnimating") == 0
-                               ? "StopAnimating"
-                               : "CreateAnimationGroup")).c_str());
+    for (const char* name : {"CreateAnimationGroup", "StopAnimating", "GetAnimationGroups"}) {
+        lua_getglobal(L, (std::string("__Wowee") + name).c_str());
         if (lua_isfunction(L, -1)) lua_setfield(L, -2, name);
         else                       lua_pop(L, 1);
     }
@@ -7183,11 +7180,22 @@ int lua_ColorSelect_SetValueThumbTexture(lua_State* L) {
     return setColorRole(L, wowee::ui::Widget::ColorRole::ValueThumb);
 }
 
+/// SetThumbTexture(texture or "texture" or nil) (0x00971b10): a texture
+/// becomes the grip, a path goes onto the grip there is (0x0096bfe0), and nil
+/// takes the grip away (0x0096bd90 with none).
 int lua_Slider_SetThumbTexture(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
     if (lua_isstring(L, 2)) {
         w->thumbTexture = lua_tostring(L, 2);
+        auto* tree = wowee::addons::getWidgetTree(L);
+        if (auto* grip = tree && w->thumbRegion ? tree->get(w->thumbRegion) : nullptr) {
+            grip->solidColor = false;
+            grip->texturePath = w->thumbTexture;
+        }
+    } else if (lua_isnoneornil(L, 2)) {
+        w->thumbTexture.clear();
+        w->thumbRegion = 0;
     } else if (lua_istable(L, 2)) {
         auto* tree = wowee::addons::getWidgetTree(L);
         const uint32_t tid = widgetIdOf(L, 2);
@@ -7204,6 +7212,47 @@ int lua_Slider_SetThumbTexture(lua_State* L) {
         }
     }
     return 0;
+}
+
+/// SetRotatesTexture(flag) and GetRotatesTexture() (0x009719d0, 0x00971970).
+int lua_StatusBar_SetRotatesTexture(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->barRotatesTexture = lua_toboolean(L, 2) != 0;
+    return 0;
+}
+int lua_StatusBar_GetRotatesTexture(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    if (w && w->barRotatesTexture) lua_pushnumber(L, 1.0);
+    else                           lua_pushnil(L);
+    return 1;
+}
+
+/// SetHyperlinkFormat("format") and GetHyperlinkFormat() (0x00975120,
+/// 0x009751a0): how the frame writes an <A href> - href, then the words.
+int lua_SimpleHTML_SetHyperlinkFormat(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isstring(L, 2)) {
+        return luaL_error(L, "Usage: %s:SetHyperlinkFormat(\"format\")",
+                          w->name.empty() ? "<unnamed>" : w->name.c_str());
+    }
+    w->htmlLinkFormat = lua_tostring(L, 2);
+    return 0;
+}
+int lua_SimpleHTML_GetHyperlinkFormat(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushstring(L, w ? w->htmlLinkFormat.c_str() : wowee::ui::kDefaultHyperlinkFormat);
+    return 1;
+}
+
+/// GetThumbTexture() (0x00971a90): the grip's texture, nil without one.
+int lua_Slider_GetThumbTexture(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    if (!w || w->thumbRegion == 0) {
+        lua_pushnil(L);
+        return 1;
+    }
+    pushFrameByWid(L, w->thumbRegion);
+    return 1;
 }
 
 int lua_StatusBar_GetValue(lua_State* L) {
@@ -8971,6 +9020,8 @@ void LuaEngine::registerCoreAPI() {
         {"SetStatusBarTexture",   lua_StatusBar_SetStatusBarTexture},
         {"SetStatusBarColor",     lua_StatusBar_SetStatusBarColor},
         {"SetOrientation",        lua_StatusBar_SetOrientation},
+        {"SetRotatesTexture",     lua_StatusBar_SetRotatesTexture},
+        {"GetRotatesTexture",     lua_StatusBar_GetRotatesTexture},
         {"GetOrientation",        lua_StatusBar_GetOrientation},
         {"GetStatusBarColor",     lua_StatusBar_GetStatusBarColor},
         {"IsAutoFocus",           lua_EditBox_IsAutoFocus},
@@ -9016,6 +9067,9 @@ void LuaEngine::registerCoreAPI() {
         {"SetValueStep",          lua_Slider_SetValueStep},
         {"GetValueStep",          lua_Slider_GetValueStep},
         {"SetThumbTexture",       lua_Slider_SetThumbTexture},
+        {"GetThumbTexture",       lua_Slider_GetThumbTexture},
+        {"SetHyperlinkFormat",    lua_SimpleHTML_SetHyperlinkFormat},
+        {"GetHyperlinkFormat",    lua_SimpleHTML_GetHyperlinkFormat},
         {"SetColorWheelTexture",      lua_ColorSelect_SetWheelTexture},
         {"SetColorWheelThumbTexture", lua_ColorSelect_SetWheelThumbTexture},
         {"SetColorValueTexture",      lua_ColorSelect_SetValueTexture},
@@ -9453,6 +9507,13 @@ void LuaEngine::registerCoreAPI() {
         "    end\n"
         "end\n"
         "mt.StopAnimating = __WoweeStopAnimating\n"
+
+        // Every group the region made, in the order it made them, as the
+        // region's list holds them (0x0049e260).
+        "function __WoweeGetAnimationGroups(self)\n"
+        "    if self.__animGroups then return unpack(self.__animGroups) end\n"
+        "end\n"
+        "mt.GetAnimationGroups = __WoweeGetAnimationGroups\n"
 
         // A texture animates itself as readily as a frame does, so this is a
         // plain function both get rather than a frame method. The achievement
