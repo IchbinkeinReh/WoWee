@@ -263,6 +263,12 @@ struct Widget {
     /// stopped or interrupted leaves no trace in them - nudging the anchors
     /// instead would make every played animation permanent.
     float animOffsetX = 0.0f, animOffsetY = 0.0f;
+    /// A Rotation animation's angle and the point it turns about (fractions
+    /// of the region across and up, then an offset in its units): the
+    /// region's art is drawn turned by it while the group plays.
+    float animRadians = 0.0f;
+    float animOriginFx = 0.5f, animOriginFy = 0.5f;
+    float animOriginX = 0.0f, animOriginY = 0.0f;
 
     /// The rect this frame last reported through OnSizeChanged. Kept on the
     /// widget rather than in a map beside it: the pass runs every frame over

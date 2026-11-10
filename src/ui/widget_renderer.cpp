@@ -61,6 +61,14 @@ using wowee::ui::parseMarkup;
 
 /// Whether a focused edit box's caret is showing: it shows and hides once
 /// every blink-speed seconds, and a speed of 0 leaves it shown (0x00967670).
+/// The widget whose playing Rotation turns this texture: the texture itself
+/// or the frame it is drawn in.
+const Widget* rotationOwner(const WidgetTree& tree, const Widget& w) {
+    if (w.animRadians != 0.0f) return &w;
+    if (const Widget* p = w.parent ? tree.get(w.parent) : nullptr; p && p->animRadians != 0.0f) return p;
+    return nullptr;
+}
+
 bool caretBlinkOn(const Widget& w) {
     if (!(w.editBlinkSpeed > 0.0f)) return true;
     return std::fmod(ImGui::GetTime(), 2.0 * w.editBlinkSpeed) < w.editBlinkSpeed;
@@ -3112,6 +3120,23 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                         static_cast<ImDrawIdx>(base + 1 + ((i + 1) % kSegments)));
                 }
                 dl->PopTextureID();
+            } else if (const Widget* turner = rotationOwner(tree, *w)) {
+                // Turned by a playing Rotation, its own or its frame's, about
+                // that one's origin (screen y runs down, so the angle flips).
+                const float tx0 = turner->left * s;
+                const float ty1 = screenH - turner->bottom * s;
+                const float px = tx0 + turner->animOriginFx * turner->rectW * s + turner->animOriginX * s;
+                const float py = ty1 - turner->animOriginFy * turner->rectH * s - turner->animOriginY * s;
+                const float cs = std::cos(-turner->animRadians), sn = std::sin(-turner->animRadians);
+                auto turn = [&](float x, float y) {
+                    const float dx = x - px, dy = y - py;
+                    return ImVec2(px + dx * cs - dy * sn, py + dx * sn + dy * cs);
+                };
+                dl->AddImageQuad(reinterpret_cast<ImTextureID>(tex),
+                                 turn(x0, y0), turn(x1, y0), turn(x1, y1), turn(x0, y1),
+                                 ImVec2(uv0.x, uv0.y), ImVec2(uv1.x, uv0.y),
+                                 ImVec2(uv1.x, uv1.y), ImVec2(uv0.x, uv1.y),
+                                 textureColor(*w));
             } else {
                 dl->AddImage(reinterpret_cast<ImTextureID>(tex),
                              ImVec2(x0, y0), ImVec2(x1, y1), uv0, uv1,

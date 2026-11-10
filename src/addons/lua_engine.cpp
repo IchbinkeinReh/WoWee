@@ -5953,6 +5953,19 @@ void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
 /// Not a WoW function: it is how the animation system, which is written in Lua,
 /// reaches the one thing it cannot do from there. Displacing the anchors would
 /// leave the movement behind after the animation stopped.
+/// __WoweeSetAnimRotation(region, radians, point, x, y): what the playing
+/// Rotation animations turn the region by, and about which point.
+int lua_wowee_setAnimRotation(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) {
+        w->animRadians = static_cast<float>(luaL_optnumber(L, 2, 0.0));
+        const auto at = wowee::ui::resolveAnchorPoint(luaL_optstring(L, 3, "CENTER"));
+        w->animOriginFx = at.fx;
+        w->animOriginFy = at.fy;
+        w->animOriginX = static_cast<float>(luaL_optnumber(L, 4, 0.0));
+        w->animOriginY = static_cast<float>(luaL_optnumber(L, 5, 0.0));
+    }
+    return 0;
+}
 int lua_wowee_setAnimOffset(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) {
         w->animOffsetX = static_cast<float>(luaL_optnumber(L, 2, 0.0));
@@ -8193,6 +8206,8 @@ void LuaEngine::registerCoreAPI() {
 
     lua_pushcfunction(L_, lua_wowee_setAnimOffset);
     lua_setglobal(L_, "__WoweeSetAnimOffset");
+    lua_pushcfunction(L_, lua_wowee_setAnimRotation);
+    lua_setglobal(L_, "__WoweeSetAnimRotation");
 
     // The script slots the animation system keeps its scripts in, and runs
     // them through one at a time - see lua_handler_globals.hpp.
@@ -9048,6 +9063,7 @@ void LuaEngine::registerCoreAPI() {
         "    if self.parent then\n"
         "        if self.baseAlpha then self.parent:SetAlpha(self.baseAlpha) end\n"
         "        __WoweeSetAnimOffset(self.parent, 0, 0)\n"
+        "        __WoweeSetAnimRotation(self.parent, 0)\n"
         "    end\n"
         "    __WoweeRunScriptSlot(self, 'OnStop')\n"
         "end\n"
@@ -9181,6 +9197,7 @@ void LuaEngine::registerCoreAPI() {
         "            local orderRunning = false\n"
         "            local dx, dy = g.initialX or 0, g.initialY or 0\n"
         "            local alpha = g.baseAlpha or 1\n"
+        "            local rad, rotAnim = 0, nil\n"
         "            for _, a in ipairs(g.animations) do\n"
         "                local o = a.order or 1\n"
         "                local started\n"
@@ -9229,6 +9246,9 @@ void LuaEngine::registerCoreAPI() {
         "                    elseif a.kind == 'Translation' then\n"
         "                        dx = dx + (a.offsetX or 0) * pr\n"
         "                        dy = dy + (a.offsetY or 0) * pr\n"
+        "                    elseif a.kind == 'Rotation' then\n"
+        "                        rad = rad + (a.radians or 0) * pr\n"
+        "                        rotAnim = a\n"
         "                    elseif a.kind == 'Path' then\n"
         "                        local px, py = pathOffset(a, pr)\n"
         "                        dx, dy = dx + px, dy + py\n"
@@ -9242,6 +9262,9 @@ void LuaEngine::registerCoreAPI() {
         "                if alpha < 0 then alpha = 0 elseif alpha > 1 then alpha = 1 end\n"
         "                g.parent:SetAlpha(alpha)\n"
         "                __WoweeSetAnimOffset(g.parent, dx, dy)\n"
+        "                if rotAnim then\n"
+        "                    __WoweeSetAnimRotation(g.parent, rad, rotAnim.originPoint or 'CENTER', rotAnim.originX or 0, rotAnim.originY or 0)\n"
+        "                end\n"
         "            end\n"
         "            if not orderRunning then\n"
         "                local nxt = nextOrder(orders, cur, g.reversed)\n"
