@@ -62,9 +62,9 @@ layout(set = 2, binding = 1) uniform sampler2D SceneDepth;
 // of froth rather than a disc stuck under its feet.
 // The character's and a crowd's out to 150 yards (water_unit_share.hpp),
 // grouped by who made them: a group's circle says where its points reach.
-const int MAX_WAKE_POINTS = 256;
-const int MAX_SWIM_WAVES = 128;
-const int MAX_WATER_GROUPS = 32;
+const int MAX_WAKE_POINTS = 512;
+const int MAX_SWIM_WAVES = 256;
+const int MAX_WATER_GROUPS = 64;
 const int MAX_WATER_LAMPS = 8;
 // An interior liquid (the end of main): how fast its colour takes over with the
 // depth along the view, per yard (the underwater fade's above); how far over the

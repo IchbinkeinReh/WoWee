@@ -18,8 +18,9 @@ namespace wowee::rendering::swim_wave {
 
 /// Rings at once: the character's reserve (kOwnRings; its three limbs make
 /// at most kLife / kCooldown each, 30) and the other units' share of the rest
-/// (water_unit_share.hpp), enough for a crowd out to 150 yards.
-inline constexpr size_t kMaxWaves = 128;
+/// (water_unit_share.hpp), enough for a crowd out to 150 yards: 224 units at
+/// one ring each (WaterFrameUBOData stays under a 16 KB uniform block).
+inline constexpr size_t kMaxWaves = 256;
 inline constexpr size_t kOwnRings = 32;
 inline constexpr float kLife = 1.6f;          // seconds a ring lasts
 inline constexpr float kNearSurface = 0.35f;  // how close a limb must be
