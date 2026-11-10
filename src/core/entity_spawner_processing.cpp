@@ -1235,15 +1235,19 @@ void EntitySpawner::processPendingTransportRegistrations() {
             // transport registration is queued. Erasing on the first miss
             // silently raced the spawn queue and left transports (Deeprun
             // Tram cars) permanently unregistered. Retry until the instance
-            // exists; give up loudly after ~30s (despawned/failed model).
-            if (++it->retryFrames > 1800) {
-                LOG_WARNING("Transport registration dropped: GO render instance never "
-                            "spawned for GUID 0x", std::hex, pending.guid, std::dec,
-                            " entry=", pending.entry, " displayId=", pending.displayId);
-                it = pendingTransportRegistrations_.erase(it);
-            } else {
-                ++it;
+            // exists. Not given up on: a model that is slow to come is no
+            // reason for the client to drop a transport the server sent -
+            // only the server's removal takes the registration away
+            // (despawnGameObject). Said once, after about thirty seconds.
+            if (it->retryFrames < 1800) {
+                ++it->retryFrames;
+            } else if (it->retryFrames == 1800) {
+                ++it->retryFrames;
+                LOG_WARNING("TRANSPORT KEEP guid=0x", std::hex, pending.guid, std::dec,
+                            " entry=", pending.entry, " displayId=", pending.displayId,
+                            " reason=registration still waiting for its model after ~30s (kept, retrying)");
             }
+            ++it;
             continue;
         }
 
@@ -2676,7 +2680,7 @@ void EntitySpawner::updateGameObjectCustomAnims() {
         // 0x0070d7e0: not with +0xbc 0x100000 - it was taken away, and goes
         // as the hold the animation had is let go (0x004d77e0).
         if (gameObjectDestroyPending_.count(guid)) {
-            despawnGameObject(guid);
+            despawnGameObject(guid, "server destroy or out-of-range (after its animation)");
             continue;
         }
         // Despawn has no case there: the model is left as it is.
@@ -2728,7 +2732,7 @@ void EntitySpawner::destroyGameObject(uint64_t guid) {
         gameObjectDestroyPending_.insert(guid);
         return;
     }
-    despawnGameObject(guid);
+    despawnGameObject(guid, "server destroy or out-of-range");
 }
 
 void EntitySpawner::updateGameObjectDestroyPending() {
@@ -2737,7 +2741,7 @@ void EntitySpawner::updateGameObjectDestroyPending() {
     for (uint64_t guid : gameObjectDestroyPending_) {
         if (!gameObjectAnimationHolds(guid)) done.push_back(guid);
     }
-    for (uint64_t guid : done) despawnGameObject(guid);
+    for (uint64_t guid : done) despawnGameObject(guid, "server destroy or out-of-range (after its animation)");
 }
 
 void EntitySpawner::onGameObjectInfoReceived(uint32_t entry) {
@@ -2767,7 +2771,7 @@ void EntitySpawner::onGameObjectInfoReceived(uint32_t entry) {
     }
 }
 
-void EntitySpawner::despawnGameObject(uint64_t guid) {
+void EntitySpawner::despawnGameObject(uint64_t guid, const char* serverRemovalReason) {
     gameObjectPendingCustomAnim_.erase(guid);
     gameObjectDestroyPending_.erase(guid);
     pendingTransportDoodadBatches_.erase(
@@ -2777,23 +2781,40 @@ void EntitySpawner::despawnGameObject(uint64_t guid) {
 
     clearGameObjectArtKit(guid);
     clearDestructible(guid);
-    auto it = gameObjectInstances_.find(guid);
-    if (it == gameObjectInstances_.end()) return;
 
-    if (gameHandler_ && gameHandler_->isTransportGuid(guid)) {
-        if (auto* transportManager = gameHandler_->getTransportManager()) {
-            if (auto* transport = transportManager->getTransport(guid)) {
-                const bool isDeeprunTram =
-                    game::TransportManager::isDeeprunTramTransport(*transport);
-                if (transport->isM2 && isDeeprunTram && game::isPreWotlk()) {
-                    LOG_DEBUG("Keeping Deeprun tram render instance through server despawn: guid=0x",
-                                std::hex, guid, std::dec,
-                                " entry=", transport->entry,
-                                " displayId=", transport->displayId,
-                                " pathId=", transport->pathId,
-                                " instanceId=", it->second.instanceId);
-                    return;
-                }
+    auto* transportManager = gameHandler_ ? gameHandler_->getTransportManager() : nullptr;
+    // Taken away by the server: a registration still waiting for its model
+    // goes too, and so does the transport, whether or not a model was ever
+    // drawn for it - the server's word is all that removes one. Asked first,
+    // before the model, so a transport whose model never spawned is not left
+    // moving with nothing to say it was taken.
+    if (serverRemovalReason) {
+        pendingTransportRegistrations_.erase(
+            std::remove_if(pendingTransportRegistrations_.begin(), pendingTransportRegistrations_.end(),
+                           [guid](const PendingTransportRegistration& r) { return r.guid == guid; }),
+            pendingTransportRegistrations_.end());
+        pendingTransportMoves_.erase(guid);
+    }
+    auto it = gameObjectInstances_.find(guid);
+    if (it == gameObjectInstances_.end()) {
+        if (serverRemovalReason && transportManager) transportManager->removeTransport(guid, serverRemovalReason);
+        return;
+    }
+
+    // A pre-WotLK server's despawn of a Deeprun tram car is not believed: its
+    // visibility is judged from the car's static spawn point, not where the
+    // car is. Only the server's despawn - a model the client drops for itself
+    // is dropped.
+    if (serverRemovalReason && transportManager && gameHandler_ && gameHandler_->isTransportGuid(guid)) {
+        if (auto* transport = transportManager->getTransport(guid)) {
+            const bool isDeeprunTram =
+                game::TransportManager::isDeeprunTramTransport(*transport);
+            if (transport->isM2 && isDeeprunTram && game::isPreWotlk()) {
+                LOG_INFO("TRANSPORT KEEP guid=0x", std::hex, guid, std::dec,
+                         " entry=", transport->entry,
+                         " reason=pre-WotLK Deeprun tram despawn (", serverRemovalReason, ") ignored",
+                         " instance=", it->second.instanceId);
+                return;
             }
         }
     }
@@ -2810,11 +2831,17 @@ void EntitySpawner::despawnGameObject(uint64_t guid) {
         }
     }
 
-    // A transport goes with its hull: the manager would move what is left
-    // of it - its machinery, its passengers' frame - along a route it is no
-    // longer on.
-    if (gameHandler_ && gameHandler_->isTransportGuid(guid)) {
-        if (auto* transportManager = gameHandler_->getTransportManager()) transportManager->removeTransport(guid);
+    // A transport the server took goes with its hull: the manager would move
+    // what is left of it - its machinery, its passengers' frame - along a
+    // route it is no longer on. One whose model the client dropped for itself
+    // stays, unbound, moving on the server's clock until a model is spawned
+    // for it again (processPendingTransportRegistrations rebinds it).
+    if (transportManager && transportManager->getTransport(guid)) {
+        if (serverRemovalReason) {
+            transportManager->removeTransport(guid, serverRemovalReason);
+        } else {
+            transportManager->unbindRenderInstance(guid, "client dropped the model (despawnGameObject without a server removal)");
+        }
     }
     gameObjectInstances_.erase(it);
     gameObjectServerState_.erase(guid);

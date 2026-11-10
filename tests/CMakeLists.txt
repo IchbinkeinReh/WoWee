@@ -1660,8 +1660,16 @@ wowee_add_test(test_transport_components
     SOURCES test_transport_components.cpp
             ${TEST_COMMON_SOURCES}
             ${CMAKE_SOURCE_DIR}/src/game/transport_clock_sync.cpp
+            ${CMAKE_SOURCE_DIR}/src/game/transport_route_clock.cpp
             ${CMAKE_SOURCE_DIR}/src/game/transport_animator.cpp
             ${CMAKE_SOURCE_DIR}/src/math/spline.cpp)
+
+# ── test_transport_route_clock ───────────────────────────────
+# A transport's server path time on the steady clock: wrap-safe ms, the
+# path-time modulo, and the resync's slew and snap.
+wowee_add_test(test_transport_route_clock
+    SOURCES test_transport_route_clock.cpp
+            ${CMAKE_SOURCE_DIR}/src/game/transport_route_clock.cpp)
 
 # ── test_ship_path ───────────────────────────────────────────
 wowee_add_test(test_ship_path

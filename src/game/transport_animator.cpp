@@ -307,7 +307,7 @@ void TransportAnimator::evaluateAndApply(
 }
 
 float TransportAnimator::clampZOffset(float z, bool worldCoords, bool clientAnim,
-                                       int serverUpdateCount, bool hasServerClock)
+                                       uint32_t serverUpdateCount, bool hasServerClock)
 {
     // Skip Z clamping for world-coordinate paths (TaxiPathNode) where values are absolute positions.
     if (worldCoords) return z;

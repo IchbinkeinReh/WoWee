@@ -19,74 +19,68 @@ bool TransportClockSync::computePathTime(
     double elapsedTime,
     float deltaTime,
     uint32_t& outPathTimeMs,
-    double routeClockNow) const
+    int64_t steadyNowMs) const
 {
-    uint32_t nowMs = static_cast<uint32_t>(elapsedTime * 1000.0);
-    uint32_t durationMs = spline.durationMs();
+    const uint32_t durationMs = spline.durationMs();
+    if (durationMs == 0) return false;
+    // In 64-bit milliseconds: a 32-bit cast of the elapsed seconds times a
+    // thousand is undefined once a session has run 49.7 days.
+    const int64_t elapsedMs = static_cast<int64_t>(std::llround(std::max(0.0, elapsedTime) * 1000.0));
+    const int64_t nowMs = steadyNowMs >= 0 ? steadyNowMs : elapsedMs;
 
     // The server's own route clock wins over anything the client worked out for
-    // itself. It publishes the phase as a fraction of the route period, so it
-    // maps onto whatever timeline this spline happens to have without needing the
-    // two periods to agree - and it keeps agreeing as the ride goes on, because
-    // the phase advances at the server's rate rather than one derived from
+    // itself. Its path time is a share of the route period, so it maps onto
+    // whatever timeline this spline happens to have without needing the two
+    // periods to agree - and it keeps agreeing as the ride goes on, because the
+    // phase advances at the server's rate rather than one derived from
     // distance over speed.
     //
     // Without it the client picked its own period, and a ferry whose period came
     // out shorter than the server's simply lapped its shore until the server's
     // schedule caught up.
-    if (transport.hasServerRouteClock && transport.routePeriodMs > 0 && durationMs > 0) {
-        const double sinceSampleMs =
-            std::max(0.0, ((routeClockNow >= 0.0 ? routeClockNow : elapsedTime) - transport.routePhaseAtTime) * 1000.0);
-        const double serverMs =
-            static_cast<double>(transport.routePhase) * transport.routePeriodMs + sinceSampleMs;
-        double wrapped = std::fmod(serverMs, static_cast<double>(transport.routePeriodMs));
-        if (wrapped < 0.0) wrapped += transport.routePeriodMs;
-        const double fraction = wrapped / static_cast<double>(transport.routePeriodMs);
-        outPathTimeMs = static_cast<uint32_t>(fraction * durationMs) % durationMs;
+    if (transport.routeClock.valid() && transport.routeClock.periodMs() > 0) {
+        const double fraction =
+            transport.routeClock.pathTimeAt(nowMs) / static_cast<double>(transport.routeClock.periodMs());
+        outPathTimeMs = static_cast<uint32_t>(fraction * static_cast<double>(durationMs)) % durationMs;
         return true;
     }
 
     if (transport.hasServerClock) {
         // Predict server time using clock offset (works for both client and server-driven modes)
-        int64_t serverTimeMs = static_cast<int64_t>(nowMs) + transport.serverClockOffsetMs;
-        int64_t mod = static_cast<int64_t>(durationMs);
-        int64_t wrapped = serverTimeMs % mod;
-        if (wrapped < 0) wrapped += mod;
-        outPathTimeMs = static_cast<uint32_t>(wrapped);
+        outPathTimeMs = positiveModMs(elapsedMs + transport.serverClockOffsetMs, durationMs);
         return true;
     }
 
-    if (transport.useClientAnimation && transport.hasPathClockAnchor &&
+    if (transport.useClientAnimation && transport.pathClock.valid() &&
         !transport.clientAnimationReverse) {
-        // A lift on the server's path time: the clock plus its offset, modulo
-        // the path (0x00710640).
-        const int64_t mod = static_cast<int64_t>(durationMs);
-        int64_t t = (TransportManager::nowSteadyMs() + transport.pathClockAnchorMs) % mod;
-        if (t < 0) t += mod;
-        transport.localClockMs = static_cast<uint32_t>(t);
+        // A lift on the server's path time: the clock plus its offset, in
+        // 32 bits as the server keeps it, modulo the path (0x00710640).
+        transport.localClockMs = transport.pathClock.periodMs() == durationMs
+            ? static_cast<uint32_t>(transport.pathClock.pathTimeAt(nowMs)) % durationMs
+            : transport.pathClock.serverProgressAt(nowMs) % durationMs;
         outPathTimeMs = transport.localClockMs;
         return true;
     }
 
     if (transport.useClientAnimation) {
         // Pure local clock (no server sync yet, client-driven), counting
-        // whole milliseconds and carrying the rest to the next frame.
+        // whole milliseconds and carrying the rest to the next frame. Kept
+        // inside the path, so the counter never reaches the 32-bit wrap,
+        // where a modulo of the wrapped sum would jump.
         transport.localClockRemainderMs += std::max(0.0, static_cast<double>(deltaTime) * 1000.0);
-        uint32_t dtMs = static_cast<uint32_t>(transport.localClockRemainderMs);
-        transport.localClockRemainderMs -= dtMs;
+        const double wholeMs = std::floor(transport.localClockRemainderMs);
+        transport.localClockRemainderMs -= wholeMs;
+        const uint32_t dtMs = static_cast<uint32_t>(
+            static_cast<uint64_t>(wholeMs) % static_cast<uint64_t>(durationMs));
+        const uint32_t current = transport.localClockMs % durationMs;
         if (!transport.clientAnimationReverse) {
-            transport.localClockMs += dtMs;
+            transport.localClockMs = static_cast<uint32_t>(
+                (static_cast<uint64_t>(current) + dtMs) % durationMs);
         } else {
-            if (dtMs > durationMs) {
-                dtMs %= durationMs;
-            }
-            if (transport.localClockMs >= dtMs) {
-                transport.localClockMs -= dtMs;
-            } else {
-                transport.localClockMs = durationMs - (dtMs - transport.localClockMs);
-            }
+            transport.localClockMs = current >= dtMs ? current - dtMs : durationMs - (dtMs - current);
         }
-        outPathTimeMs = transport.localClockMs % durationMs;
+        transport.localClockMs %= durationMs;
+        outPathTimeMs = transport.localClockMs;
         return true;
     }
 

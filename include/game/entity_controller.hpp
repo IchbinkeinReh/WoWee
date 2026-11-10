@@ -1,6 +1,7 @@
 #pragma once
 
 #include "game/world_packets.hpp"
+#include "game/transport_route_clock.hpp"
 #include "game/entity.hpp"
 #include "game/opcode_table.hpp"
 #include "network/packet.hpp"
@@ -210,8 +211,12 @@ private:
     void handleValuesUpdate(const UpdateBlock& block);
     void handleMovementUpdate(const UpdateBlock& block);
     /// Seed a transport's route phase from the server's own path clock, so the
-    /// client stops animating on a period it invented for itself.
-    void applyTransportRouteClock(const UpdateBlock& block);
+    /// client stops animating on a period it invented for itself; and again,
+    /// as a resync, whenever a later block carries it.
+    void applyTransportRouteClock(const UpdateBlock& block, RouteClockSource source);
+    /// The steady-clock moment the update being applied stands for: when its
+    /// packet was read, or now if that is unknown or implausible.
+    [[nodiscard]] int64_t currentUpdateSampleSteadyMs() const;
     /// Note which non-combat companion is out and what called it, so casting
     /// that spell again dismisses instead of summoning another.
     void trackActiveCritter(const UpdateBlock& block);
