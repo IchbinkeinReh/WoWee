@@ -36,6 +36,7 @@
 #include "rendering/clouds.hpp"
 #include "rendering/lens_flare.hpp"
 #include "rendering/weather.hpp"
+#include "rendering/rain_ripple.hpp"
 #include "rendering/lightning.hpp"
 #include "rendering/lighting_manager.hpp"
 #include "core/profiler.hpp"
@@ -763,6 +764,13 @@ void Renderer::updatePerFrameUBO() {
                 wf.skyTop = sky.skyTopColor;
                 wf.skyHorizon = sky.skySmogColor;
                 wf.sunDir = shadow_sun::towardSun(-sky.directionalDir, sky.sunDir, kShadowSunMinHeight);
+            }
+            // Rain's rings on the water, under the swimmer's waves' setting:
+            // while it rains and the weather is drawn (rain_ripple.hpp).
+            if (weather) {
+                wf.rain = rain_ripple::strength(weather->getWeatherType() == Weather::Type::RAIN,
+                                                weather->getIntensity(), weather->densityLevel(), weatherIndoors_,
+                                                rtSwimWaves_);
             }
         }
         waterRenderer->setRtWaterFrame(wf);

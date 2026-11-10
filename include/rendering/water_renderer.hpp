@@ -142,7 +142,7 @@ struct WaterFrameUBOData {
     // reflection alone, 2 what comes through alone), z how far a reflected
     // ray goes, w 1 while the traced scene holds anything.
     glm::vec4 rtWater{0.0f};
-    glm::vec4 rtWater2{0.0f};      // x how far a refracted ray goes, z/w the waves' height and frequency
+    glm::vec4 rtWater2{0.0f};      // x how far a refracted ray goes, y the rain, z/w the waves' height and frequency
     glm::vec4 rtSkyTop{0.0f};      // the sky a reflection leaving the scene meets, overhead
     glm::vec4 rtSkyHorizon{0.0f};  // and at the horizon
     glm::vec4 rtSunRay{0.0f, 0.0f, 1.0f, 0.0f};  // xyz toward the sun the traced shadows follow
@@ -167,6 +167,7 @@ struct RtWaterFrame {
     glm::vec3 skyTop{0.5f, 0.7f, 1.0f};
     glm::vec3 skyHorizon{0.7f, 0.75f, 0.8f};
     glm::vec3 sunDir{0.0f, 0.0f, 1.0f};  ///< toward the sun the traced lighting's shadows follow
+    float rain = 0.0f;          ///< how hard it rains on the water, 0 none (rain_ripple.hpp)
 };
 
 class WaterRenderer {
