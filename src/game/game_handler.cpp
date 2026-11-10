@@ -2367,17 +2367,30 @@ const GameHandler::BattlemasterEntry* GameHandler::getBattlemasterInfo(uint32_t 
                 if (e.instanceType == 3 && !e.name.empty()) battlegroundTypes_.push_back(e);
                 battlemasterList_[id] = std::move(e);
             }
-            // Ordered by id, so an index handed to the interface still means
-            // the same battleground the next time it asks.
-            std::sort(battlegroundTypes_.begin(), battlegroundTypes_.end(),
-                      [](const BattlemasterEntry& a, const BattlemasterEntry& b) {
-                          return a.id < b.id;
-                      });
+            sortBattlegroundTypes();
             LOG_INFO("Battleground: ", battlemasterList_.size(), " from BattlemasterList.dbc");
         }
     }
     auto it = battlemasterList_.find(bgTypeId);
     return it != battlemasterList_.end() ? &it->second : nullptr;
+}
+
+void GameHandler::sortBattlegroundTypes() {
+    auto holiday = [this](const BattlemasterEntry& e) {
+        return e.holidayWorldState != 0 && getWorldState(e.holidayWorldState).value_or(0) != 0;
+    };
+    // 0x0054a650 answers "first" for a holiday whatever the other row is; two
+    // holidays at once fall through to the level and the id here, so the
+    // order stays a strict one.
+    std::sort(battlegroundTypes_.begin(), battlegroundTypes_.end(),
+              [&](const BattlemasterEntry& a, const BattlemasterEntry& b) {
+                  if (a.id == kRandomBattleground || b.id == kRandomBattleground)
+                      return a.id == kRandomBattleground && b.id != kRandomBattleground;
+                  const bool ha = holiday(a), hb = holiday(b);
+                  if (ha != hb) return ha;
+                  if (a.minLevel != b.minLevel) return a.minLevel < b.minLevel;
+                  return a.id < b.id;
+              });
 }
 
 bool GameHandler::isBattlegroundMap(uint32_t mapId) {

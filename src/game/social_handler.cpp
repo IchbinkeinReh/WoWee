@@ -4665,7 +4665,7 @@ void SocialHandler::handleBattlefieldList(network::Packet& packet) {
         // asked for from elsewhere PVPQUEUE_ANYWHERE_SHOW, and otherwise the
         // battlemaster's own list - BATTLEFIELDS_SHOW, the battlemaster the
         // interaction object (0x005496d0).
-        constexpr uint32_t kRandomBattleground = 32;
+        constexpr uint32_t kRandomBattleground = GameHandler::kRandomBattleground;
         battlemasterGuid_ = data.battlemasterGuid;  // 0x00bea568
         if (data.bgTypeId == kRandomBattleground && data.battlemasterGuid != 0) {
             owner_.setInteractionObject(data.battlemasterGuid);

@@ -3879,9 +3879,15 @@ public:
     };
     const BattlemasterEntry* getBattlemasterInfo(uint32_t bgTypeId);
 
-    /// Every battleground in BattlemasterList.dbc, arenas excluded, ordered by
-    /// id so an index into it means the same thing from one call to the next.
+    /// BattlemasterList's "Random Battleground" row.
+    static constexpr uint32_t kRandomBattleground = 32;
+    /// Every battleground in BattlemasterList.dbc, arenas excluded, in the
+    /// client's order (see sortBattlegroundTypes).
     const std::vector<BattlemasterEntry>& getBattlegroundTypes();
+    /// SortBGList (0x0054c9f0), also run when the list is built (0x0054e720):
+    /// the random battleground first, then one whose holiday world state is
+    /// set, then by lowest level, then by id (0x0054a650).
+    void sortBattlegroundTypes();
 
     /// Whether a map id belongs to a battleground, from the same table.
     bool isBattlegroundMap(uint32_t mapId);

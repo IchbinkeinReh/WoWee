@@ -6819,7 +6819,7 @@ static int lua_GetBattlefieldInfo(lua_State* L) {
     const uint32_t level = gh->getPlayerLevel();
     const bool inBracket = (bg.minLevel == 0 || level >= bg.minLevel) &&
                            (bg.maxLevel == 0 || level <= bg.maxLevel);
-    constexpr uint32_t kRandomBattleground = 32;
+    constexpr uint32_t kRandomBattleground = game::GameHandler::kRandomBattleground;
     lua_pushboolean(L, inBracket ? 1 : 0);                        // 4: canEnter
     lua_pushboolean(L, bg.isHoliday ? 1 : 0);                     // 5: isHoliday
     lua_pushboolean(L, bg.bgTypeId == kRandomBattleground ? 1 : 0); // 6: isRandom
@@ -6859,7 +6859,7 @@ static int lua_GetBattlegroundInfo(lua_State* L) {
     // 0x0054ba00: the random battleground (32) at level 80 only; any other
     // where a PvpDifficulty.dbc bracket of its first map holds the player's
     // level - the rows of one map lie together, and the walk stops after them.
-    constexpr uint32_t kRandomBattleground = 32;
+    constexpr uint32_t kRandomBattleground = game::GameHandler::kRandomBattleground;
     const uint32_t level = gh->getPlayerLevel();
     struct Bracket { uint32_t map, minLevel, maxLevel; };
     static std::vector<Bracket> brackets;
@@ -8132,11 +8132,16 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"GetHolidayBGHonorCurrencyBonuses", lua_BattlegroundHonorBonusesNone},
                 {"GetBattlefieldInstanceInfo",       lua_GetBattlefieldInstanceInfo},
                 {"GetNumBattlefields",       lua_GetNumBattlefields},
-                // Sorting the battleground list. This client sorts its own, so
-                // there is nothing to do - but the name has to exist, because
-                // PVPBattlegroundFrame_OnShow calls it and a nil global raises
-                // as the panel opens.
-                {"SortBGList",               lua_ReturnNothing},
+                // SortBGList() (0x0054c9f0): the battleground list put back in
+                // the client's order, so a holiday that started since the list
+                // was built moves up. PVPBattlegroundFrame_OnShow calls it.
+                {"SortBGList", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) {
+                gh->getBattlegroundTypes();
+                gh->sortBattlegroundTypes();
+            }
+            return 0;
+        }},
                 // How many papers the compose frame offers. That is Stationery
                 // .dbc filtered by the client's own rule - the row whose flag
                 // says no paper need be bought, plus every row whose item is
