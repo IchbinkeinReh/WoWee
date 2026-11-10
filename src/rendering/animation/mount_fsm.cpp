@@ -244,7 +244,7 @@ MountFSM::Output MountFSM::evaluate(const Input& in) {
                 actionPhase_ = 1;
                 actionAnimId_ = 0;
                 out.mountAnimId = in.curMountAnim;
-            } else if (actionPhase_ == 1 && landed && anims_.jumpEnd > 0) {
+            } else if (actionPhase_ == 1 && landed && anims_.jumpEnd > 0 && !in.moving) {
                 actionPhase_ = 2;
                 actionAnimId_ = anims_.jumpEnd;
                 out.mountAnimId = anims_.jumpEnd;
@@ -252,6 +252,13 @@ MountFSM::Output MountFSM::evaluate(const Input& in) {
                 out.mountAnimChanged = true;
                 out.playLandSound = true;
             } else if (actionPhase_ == 1 && landed) {
+                // Landed moving, or with no JumpEnd: the run (or the stand)
+                // at once. The client has no landing of its own for a mover:
+                // once the fall is over (0x00724200) its base animation is
+                // the moving one (0x00717050), and JumpEnd is what a landing
+                // standing still is left with. Played moving, the mount ran
+                // on in its landing to the end with forward held.
+                if (anims_.jumpEnd > 0) out.playLandSound = true;
                 action_ = MountAction::None;
                 actionAnimId_ = 0;
                 out.mountAnimId = in.moving ? anims_.run : anims_.stand;
