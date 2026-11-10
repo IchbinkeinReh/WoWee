@@ -2582,7 +2582,13 @@ void CameraController::update(float deltaTime) {
     if (movementCallback) {
         if (swimJumpPending_) {
             // Out of the water by a jump: the client sends the jump alone,
-            // its flags without SWIMMING (0x00988370 clears it).
+            // its flags without SWIMMING (0x00988370 clears it). A rise begun
+            // this very frame went out first: the key starts the ascent and
+            // tells the server (0x006ef860 case 6, 0x009898e0) before the
+            // swim step meets the surface with it.
+            if (spaceHeld && !wasAscending_ && !moverNoStrafe_) {
+                movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_START_ASCEND));
+            }
             movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_JUMP));
         } else if (swimming && !wasSwimming) {
             movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_START_SWIM));
