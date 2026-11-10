@@ -6897,6 +6897,20 @@ int lua_EditBox_GetHistoryLines(lua_State* L) {
     lua_pushnumber(L, w ? w->editHistoryLines : 0);
     return 1;
 }
+/// SetAltArrowKeyMode / GetAltArrowKeyMode (0x00976890, 0x009768e0): the
+/// box's flag 0x10, the same one ignoreArrows="" sets - the arrows go to the
+/// game unless Alt is held.
+int lua_EditBox_GetAltArrowKeyMode(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->editIgnoreArrows);
+    return 1;
+}
+/// IsInIMECompositionMode (0x00976940): whether an input method is part way
+/// through composing - never here, where there is no input method.
+int lua_EditBox_IsInIMECompositionMode(lua_State* L) {
+    pushFlag(L, false);
+    return 1;
+}
 int lua_EditBox_SetIgnoreArrows(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (w) w->editIgnoreArrows = lua_toboolean(L, 2) != 0;
@@ -9022,6 +9036,9 @@ void LuaEngine::registerCoreAPI() {
         {"GetCountInvisibleLetters", lua_EditBox_GetCountInvisibleLetters},
         {"GetHistoryLines",       lua_EditBox_GetHistoryLines},
         {"SetIgnoreArrows",       lua_EditBox_SetIgnoreArrows},
+        {"SetAltArrowKeyMode",    lua_EditBox_SetIgnoreArrows},
+        {"GetAltArrowKeyMode",    lua_EditBox_GetAltArrowKeyMode},
+        {"IsInIMECompositionMode", lua_EditBox_IsInIMECompositionMode},
         {"Insert",                lua_EditBox_Insert},
         {"SetMaxLetters",         lua_EditBox_SetMaxLetters},        // The limit here is applied against the text's size in bytes, which is
         // what SetMaxBytes asks for; SetMaxLetters is the same field because
