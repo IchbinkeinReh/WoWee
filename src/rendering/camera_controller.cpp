@@ -2586,7 +2586,9 @@ void CameraController::update(float deltaTime) {
             // this very frame went out first: the key starts the ascent and
             // tells the server (0x006ef860 case 6, 0x009898e0) before the
             // swim step meets the surface with it.
-            if (spaceHeld && !wasAscending_ && !moverNoStrafe_) {
+            // Only for a swimmer: one that fell back in and out again in the
+            // same frame never swam there, and sends the jump alone.
+            if (wasSwimming && spaceHeld && !wasAscending_ && !moverNoStrafe_) {
                 movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_START_ASCEND));
             }
             movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_JUMP));
