@@ -22,6 +22,14 @@ class VkContext;
 
 class SwimEffects {
 public:
+    /// How far from the character another unit's ripples are made (yards).
+    static constexpr float kUnitRippleRange = 150.0f;
+    /// The surface ripples alive at once, the character's and every unit's
+    /// within kUnitRippleRange together. Each lives about two thirds of a
+    /// second and a unit makes one every 0.05-0.45 s (water_ripple::spawn),
+    /// so this holds a hundred-odd units wading at once. Each is drawn with
+    /// its own push constants, so nothing else is sized from it.
+    static constexpr size_t kMaxSurfaceRipples = 2048;
     SwimEffects();
     ~SwimEffects();
 
@@ -91,14 +99,6 @@ private:
         float heightOffset; // height above plant
     };
 
-    /// How far from the character another unit's ripples are made (yards).
-    static constexpr float kUnitRippleRange = 150.0f;
-    /// The surface ripples alive at once, the character's and every unit's
-    /// within kUnitRippleRange together. Each lives about two thirds of a
-    /// second and a unit makes one every 0.05-0.45 s (water_ripple::spawn),
-    /// so this holds a hundred-odd units wading at once. Each is drawn with
-    /// its own push constants, so nothing else is sized from it.
-    static constexpr size_t kMaxSurfaceRipples = 2048;
     static constexpr int MAX_RIPPLE_PARTICLES = 200;
     static constexpr int MAX_BUBBLE_PARTICLES = 150;
     static constexpr int MAX_INSECT_PARTICLES = 50;
