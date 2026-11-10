@@ -27,6 +27,7 @@
 #include "game/movement_handler.hpp"
 #include "game/world_packets.hpp"
 #include "addons/addon_manager.hpp"
+#include "addons/lua_api_registrations.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_layout.hpp"
@@ -1064,6 +1065,13 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     // Snap player to loaded terrain so they don't spawn underground
     if (renderer_->getCameraController()) {
         renderer_->getCameraController()->reset();
+        // Where the player left the camera last time (0x005ff3e0), or the
+        // client's own defaults for its default camera style (5.55 yards,
+        // 10 degrees down: the table at 0x00ad1ba8, row 2). The CVar counts
+        // pitch down as positive; this camera counts it up.
+        const float dist = std::strtof(addons::storedCVarValue("cameraSavedDistance", "5.55").c_str(), nullptr);
+        const float pitch = std::strtof(addons::storedCVarValue("cameraSavedPitch", "10.0").c_str(), nullptr);
+        renderer_->getCameraController()->restoreSaved(dist, -pitch);
     }
     renderer_->setCharacterYaw(spawnYawDeg);
     // Drawn facing that way from the start, not shuffled round from the last world.

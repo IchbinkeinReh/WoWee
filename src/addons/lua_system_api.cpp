@@ -1168,6 +1168,10 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     else if (n == "autodismountflying") lua_pushstring(L, "0");
     // On, as the client registers it (0x0051d9b0: autoDismount "1").
     else if (n == "autodismount") lua_pushstring(L, "1");
+    // The saved camera (0x005ff320/0x005ff3e0), at the client's defaults for
+    // its default camera style (the table at 0x00ad1ba8, row 2).
+    else if (n == "camerasaveddistance") lua_pushstring(L, "5.55");
+    else if (n == "camerasavedpitch") lua_pushstring(L, "10.0");
     // On, as the client registers them (0x0051d9b0: autoStand and
     // autoUnshift "1"), which 0x00739650 reads.
     else if (n == "autostand") lua_pushstring(L, "1");

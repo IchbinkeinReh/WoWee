@@ -121,6 +121,16 @@ public:
     }
 
     void reset();
+    /// The camera's distance and pitch as the client saves them on leaving
+    /// the world (0x005ff320, cameraSavedDistance / cameraSavedPitch) and puts
+    /// back when it is reset on entering it (0x005ff3e0, the distance held to
+    /// 0..50).
+    [[nodiscard]] float savedDistance() const { return userTargetDistance; }
+    [[nodiscard]] float savedPitch() const { return pitch; }
+    void restoreSaved(float distance, float pitchDeg) {
+        userTargetDistance = currentDistance = clampedZoomDistance(std::clamp(distance, 0.0f, 50.0f));
+        pitch = pitchDeg;
+    }
     void resetAngles();
     /// Put the unit at `pos`; it then falls from there unless on ground
     /// (portMove), not when `onTransport` - 0x00988370 starts no fall for a

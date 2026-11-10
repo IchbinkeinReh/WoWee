@@ -3791,6 +3791,13 @@ void Application::processDeferredLogoutToLogin() {
 }
 
 void Application::fireInterfaceLeaving() {
+    // The camera's distance and pitch, kept for the next time the world is
+    // entered (0x005ff320 writes cameraSavedDistance and cameraSavedPitch).
+    if (renderer && renderer->getCameraController()) {
+        const auto* cam = renderer->getCameraController();
+        addons::setStoredCVar("cameraSavedDistance", std::to_string(cam->savedDistance()));
+        addons::setStoredCVar("cameraSavedPitch", std::to_string(-cam->savedPitch()));
+    }
     if (!addonManager_) return;
     {
         // A player still in combat is first told the fight is over
