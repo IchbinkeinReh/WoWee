@@ -3213,8 +3213,36 @@ void Application::connectWorldHooks() {
             // controller asks for the landing in the frame it lands, before
             // the frame's position reaches the game handler (update, after
             // the renderer's): the packet carried the frame before's height,
-            // 1.3 to 1.8 yards over the floor at a long fall's speed. Not on a
-            // transport, where the place sent is the one kept on it.
+            // 1.3 to 1.8 yards over the floor at a long fall's speed.
+            //
+            // On a transport the client keeps the passenger's place on it
+            // and lands it there in the same step (0x007618b0 steps it on
+            // the transport, 0x00988490 ends the fall), so the landing goes
+            // out with the place on the deck where the feet came down - and
+            // the world position made from it (sendMovement). The place kept
+            // on it here is the frame before's, taken from the world after
+            // the renderer's update: a jump on the Undercity lift landed half
+            // a yard over the car's floor.
+            if (opcode == static_cast<uint32_t>(game::Opcode::MSG_MOVE_FALL_LAND) && renderer &&
+                gameHandler->isOnTransport()) {
+                const glm::vec3 landed = core::coords::renderToCanonical(renderer->getCharacterPosition());
+                auto* transports = gameHandler->getTransportManager();
+                const auto local = transports ? transports->worldToTransportLocal(
+                                                    gameHandler->getPlayerTransportGuid(), landed)
+                                              : std::nullopt;
+                static const bool kFloorDebugTr = [] {
+                    const char* v = std::getenv("WOWEE_FLOOR_DEBUG");
+                    return v && v[0] && v[0] != '0';
+                }();
+                if (local) {
+                    if (kFloorDebugTr) {
+                        const glm::vec3 was = gameHandler->getPlayerTransportOffset();
+                        LOG_WARNING("FALL LAND: on the transport where the feet landed tz=", local->z,
+                                    " (the frame before tz=", was.z, ")");
+                    }
+                    gameHandler->setPlayerTransportOffset(*local);
+                }
+            }
             if (opcode == static_cast<uint32_t>(game::Opcode::MSG_MOVE_FALL_LAND) && renderer &&
                 !gameHandler->isOnTransport()) {
                 const glm::vec3 landed = core::coords::renderToCanonical(renderer->getCharacterPosition());
