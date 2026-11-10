@@ -1476,6 +1476,15 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     // The ray tracing's scene, built while the loading screen is still up:
     // left to the first frames, every mesh in view was built a share a frame
     // and the first seconds in the world crawled.
+    // Still on the transport through a same-map rebuild (the Grom'gol
+    // zeppelin's leg change): the rider stands where the offset on the deck
+    // puts them now, not where the teleport did. The route went on through
+    // the load - some seventeen seconds, near five hundred yards - and from
+    // the teleport's place the rider fell, the hull out of reach, and the
+    // first step off "the ground" let go of the zeppelin (0x004f4460: the
+    // passenger's world place is the transport's matrix times the offset).
+    if (gameHandler_ && gameHandler_->isOnTransport()) gameHandler_->markTransportArrival();
+
     renderer_->warmUpRayTracing();
 
     // No pan around the player on the way in: the client enters the world with
