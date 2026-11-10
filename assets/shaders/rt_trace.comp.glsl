@@ -97,6 +97,9 @@ float rtLightRadius(float reach) {
 // A light sits inside its lamp - a lantern's glass, a brazier's bowl - so a
 // shadow ray stops this short of it rather than finding the lamp itself.
 const float RT_LIGHT_STANDOFF = 0.45;
+// The most a lamp's source is wide, and the ray stopped short of it, when
+// the lights shadow themselves: well inside the walls round a flame.
+const float RT_SELF_SHADOW_SOURCE_RADIUS = 0.08;
 // How far a unit's point-light shadow reaches from its body: no farther than
 // pass.tune4.z yards (the Ray Tracing page's "Unit shadow reach", 5 by
 // default), nor than three quarters of the way from the
@@ -463,6 +466,16 @@ void main() {
         // the triangles came and went from frame to frame (Thunder Bluff's
         // Pools of Vision, 37 particle lights off its pool and mushrooms).
         if (int(light.storey.w + 0.5) == RT_LIGHT_KIND_PARTICLE) radius = max(radius, RT_PARTICLE_SOURCE_RADIUS);
+        // With the lights shadowing themselves (pass.tune5.x) a lamp's light
+        // is taken from within its lamp: a source up to half a yard wide,
+        // and the ray stopped that far short of it, reached through and past
+        // the walls round its flame - Camp Narache's tauren lamp post, whose
+        // flame burns a third of a yard inside its walls, lit the ground all
+        // round it instead of out of its one opening only.
+        bool selfShadow = pass.tune5.x > 0.5;
+        if (selfShadow && int(light.storey.w + 0.5) != RT_LIGHT_KIND_PARTICLE) {
+            radius = min(radius, RT_SELF_SHADOW_SOURCE_RADIUS);
+        }
         vec3 jitter = (vec3(rtRandom(rng), rtRandom(rng), rtRandom(rng)) * 2.0 - 1.0) * radius;
         // Lifted off its triangle toward the smooth surface as the sun's ray
         // is (RT_TERMINATOR_LIFT): a lamp low over a rounded floor or a
@@ -495,7 +508,6 @@ void main() {
         // With the lights shadowing themselves (pass.tune5.x, a WoWee-only
         // option) only the jitter's reach: the lamp's own faces turned
         // toward the light stop the ray (rtFixtureFacesOnly).
-        bool selfShadow = pass.tune5.x > 0.5;
         float reach = d - min((selfShadow ? 0.05 : RT_LIGHT_STANDOFF) + radius, 0.5 * d);
         if (d > 1e-3 && reach > 0.0) {
             // The units cast their shadows near them (rtUnitShadowReach).
