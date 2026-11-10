@@ -4392,7 +4392,7 @@ void Application::applyServerMovementState(float deltaTime) {
             // zeppelin's envelope, inside it. The rider is where the offset on
             // the deck puts them now (0x004f4460), and the ground with them.
             if (!tr->isM2 && gameHandler->takeTransportTransferArrival()) {
-                if (auto* cc = renderer->getCameraController()) cc->teleportTo(expectedRender);
+                if (auto* cc = renderer->getCameraController()) cc->teleportTo(expectedRender, true);
             }
             // The rider's facing is kept on the deck, not in the world: the
             // world one is the ship's plus it (0x004f42a0), so as the ship

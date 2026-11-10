@@ -88,6 +88,32 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
         }
         portWorldReady_ = true;
     }
+    // Put somewhere by a teleport or a world entry, a unit that is not
+    // moving starts to fall. The same-map teleport (0x006ecf80) sets the
+    // place (0x0098ba90, which keeps only +0x44 & 0xf9003f00 of the
+    // movement flags) and then, for the active mover, calls 0x0098b710; a
+    // unit placed from a movement block (0x006f1520, the player's object at
+    // a world entry) with no movement flags (+0x44 & 0xc010ff) does the
+    // same, or queues the event that does (0x006eccf0, event 9 in
+    // 0x006ef860). 0x0098b710 starts the fall (0x00988370(0): FALLING on,
+    // fall time 0, the fall begun at the unit's height) unless it swims,
+    // flies, levitates or already falls (0x006eaba0: +0x44 & 0x2201400) or
+    // is rooted or on a transport (0x00988370: +0x44 & 0xa00); no ground is
+    // asked for first. The fall's step (0x00762e00 -> 0x007618b0) lands it
+    // in the same step where there is ground under its feet, and a unit
+    // placed in the air falls. Only here is a standing unit made to fall:
+    // a unit standing still is not moved (0x00762e00 runs for +0x44 &
+    // 0x40c0100f), so ground going from under it does not.
+    if (portPlacedFall_) {
+        portPlacedFall_ = false;
+        if (grounded && !m.swimming && !swimming && !gravityDisabled_ && !isFlightAirborne() &&
+            !movementRooted_) {
+            grounded = false;
+            verticalVelocity = 0.0f;
+            m.falling = false;
+            m.stepping = false;
+        }
+    }
     // In the air, where the fall began moves with whatever moved the unit
     // since the last step. The client keeps a passenger's place, and the
     // height its fall began at (+0x84, 0x00988370), on its transport while
@@ -2936,6 +2962,9 @@ void CameraController::reset() {
     verticalVelocity = 0.0f;
     grounded = true;
     forgetPortPlace();
+    // Entering the world, the player's unit falls from where it is put
+    // unless it moves (0x006f1520 -> 0x0098b710; portMove).
+    portPlacedFall_ = true;
     jumpLocked_ = false;
     swimming = false;
     sitting = false;
@@ -3173,7 +3202,7 @@ void CameraController::reset() {
     LOG_INFO("Camera reset to default position");
 }
 
-void CameraController::teleportTo(const glm::vec3& pos) {
+void CameraController::teleportTo(const glm::vec3& pos, bool onTransport) {
     if (!camera) return;
 
     verticalVelocity = 0.0f;
@@ -3187,6 +3216,9 @@ void CameraController::teleportTo(const glm::vec3& pos) {
     // is not this one.
     lastGroundZ = pos.z;
     forgetPortPlace();
+    // And it falls from there unless it is on ground (0x006ecf80 ->
+    // 0x0098b710; portMove), or a passenger.
+    portPlacedFall_ = !onTransport;
 
     // Invalidate active WMO group so it's re-detected at new position
     if (wmoRenderer) {
