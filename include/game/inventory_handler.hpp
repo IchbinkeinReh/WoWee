@@ -1191,6 +1191,9 @@ private:
     };
     std::vector<EquipmentSet> equipmentSets_;
     std::string pendingSaveSetName_;
+    /// The set a CMSG_EQUIPMENT_SET_USE is out for (0x00c1e958), whose name
+    /// EQUIPMENT_SWAP_FINISHED carries when the answer comes (0x005af710).
+    uint32_t pendingUseSetId_ = 0;
     std::string pendingSaveSetIcon_;
     std::vector<EquipmentSetInfo> equipmentSetInfo_;
 

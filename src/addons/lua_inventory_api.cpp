@@ -2533,10 +2533,10 @@ static int lua_UseEquipmentSet(lua_State* L) {
     auto* gh = getGameHandler(L);
     const auto* set = equipmentSetByName(gh, luaL_optstring(L, 1, ""));
     if (!gh || !set) { lua_pushboolean(L, 0); return 1; }
+    // EQUIPMENT_SWAP_PENDING goes out with the request and
+    // EQUIPMENT_SWAP_FINISHED with the server's answer (0x005ada20,
+    // 0x005af710), which is when the manager refreshes.
     gh->useEquipmentSet(set->setId);
-    // The manager waits on this before refreshing and clearing the slots it was
-    // told to ignore.
-    gh->fireAddonEvent("EQUIPMENT_SWAP_FINISHED", {"1", set->name});
     lua_pushboolean(L, 1);
     return 1;
 }

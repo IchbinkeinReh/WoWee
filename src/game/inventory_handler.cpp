@@ -1250,6 +1250,15 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_EQUIPMENT_SET_USE_RESULT] = [this](network::Packet& packet) {
         if (packet.hasRemaining(1)) {
             uint8_t result = packet.readUInt8();
+            // 0x005af710: EQUIPMENT_SWAP_FINISHED - 1 for a swap that went
+            // through, 0 for one that did not - with the set's name.
+            std::string setName = kEventNil;
+            for (const auto& es : equipmentSets_) {
+                if (es.setId == pendingUseSetId_) { setName = es.name; break; }
+            }
+            pendingUseSetId_ = 0;
+            if (owner_.addonEventCallbackRef())
+                owner_.addonEventCallbackRef()("EQUIPMENT_SWAP_FINISHED", {result == 0 ? "1" : "0", setName});
             // 0x005af710 has words for one failure only - bags too full to
             // take what comes off, EQUIPMENT_MANAGER_BAGS_FULL on screen - and
             // none for the rest. This printed "Failed to equip item set."
@@ -5927,6 +5936,9 @@ void InventoryHandler::useEquipmentSet(uint32_t setId) {
         pkt.writeUInt8(srcSlot);
     }
     owner_.getSocket()->send(pkt);
+    // 0x005ada20: the swap is pending until the server answers.
+    pendingUseSetId_ = setId;
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("EQUIPMENT_SWAP_PENDING", {});
 }
 
 void InventoryHandler::saveEquipmentSet(const std::string& name, const std::string& iconName,
