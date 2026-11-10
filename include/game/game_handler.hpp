@@ -2465,6 +2465,9 @@ public:
     /// Once, after a transfer on a transport has put the player back on it:
     /// the first ride on the new map places the rider afresh.
     bool takeTransportTransferArrival() { return std::exchange(transportTransferArrived_, false); }
+    /// A same-map move on the transport (a leg change on a one-map route,
+    /// rebuilt as a world load): the rider is placed afresh on the deck too.
+    void markTransportArrival() { transportTransferArrived_ = true; }
     const glm::vec3& pendingPlayerTransportWireOffset() const { return pendingPlayerTransportOffset_; }
     bool completePlayerTransportWorldTransfer(uint64_t transportGuid,
                                               glm::vec3& worldPosition);
