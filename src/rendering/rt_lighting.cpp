@@ -760,7 +760,7 @@ void RtLighting::record(VkCommandBuffer cmd, const SceneTarget& target, const Fr
                        clampRtRays(in.rays.pointLights), clampRtRays(in.rays.bounce));
     d.tune4 = glm::vec4(in.normalBlendNear, in.normalBlendFar, std::max(in.unitShadowReach, 0.0f),
                         std::clamp(in.splitAt, 0.0f, 1.0f));
-    d.tune5 = glm::vec4(in.pointSelfShadow ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
+    d.tune5 = glm::vec4(in.pointSelfShadow ? 1.0f : 0.0f, in.unitSelfShadow ? 1.0f : 0.0f, 0.0f, 0.0f);
     const bool probes = mode_ == Mode::Full && probes_.hasResources();
     if (probes) {
         // The open field the zone's flat ambient was set for: that ambient as

@@ -2165,12 +2165,12 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
     // Only while tracing; switched on, every loaded model is registered then
     // (onRtActive).
     if (!rtScene_ || !rtScene_->isActive() || model.vertices.empty() || model.indices.empty()) return;
-    // What the renderer never draws. Everything drawn casts its shadow while
-    // tracing - ground clutter, a spell's model, a bird, a light shaft, a
-    // rug - but what is see-through: a blended batch, and an alpha key's
-    // cut-away texels (below). A model's class, size or flags exempt
-    // nothing (the user's rule for the ray traced lighting).
-    if (gpuModel.isInvisibleTrap) return;
+    // What the renderer never draws, a spell's model and a light shaft cast
+    // no shadow (the user's rule for the ray traced lighting: those are
+    // effects, not things). Everything else drawn casts while tracing -
+    // ground clutter, a bird, a rug - but what is see-through: a blended
+    // batch, and an alpha key's cut-away texels (below).
+    if (gpuModel.isInvisibleTrap || gpuModel.isSpellEffect || gpuModel.isLightBeam) return;
     // An animated model - a door, a chest, a banner, a lantern on its chain -
     // as one mesh would cast its bind pose, not the pose on screen. It is
     // cut into pieces by bone instead, which syncRtScene places by this

@@ -309,13 +309,46 @@ void main() {
         // As many rays as the settings ask, each to its own point on the
         // sun's disc; the share that gets through.
         uint sunRays = rtRayCount(pass.rays.x);
+        // A unit's own body shadows itself while the option asks for it
+        // (pass.tune5.y) - where the trace takes the units' sun shadows,
+        // past the shadow map's reach.
+        rtMeetsOwnGroup = pass.tune5.y > 0.5;
         for (uint k = 0u; k < sunRays; ++k) {
             vec3 sd = rtConeSample(L, pass.sunDir.w, rng);
             bool byUnit;
             sun += rtOccludedBy(sunOrigin, sd, pass.params.w, rng, byUnit) ? 0.0 : 1.0;
             unitHit = unitHit || byUnit;
         }
+        rtMeetsOwnGroup = false;
         sun /= float(sunRays);
+        // An enclosed place in a building flagged as outdoors - the
+        // Tirisfal zeppelin tower's stairwell, one exterior group with its
+        // open platforms - is lit as a room: no sun or moon at all where it
+        // cannot reach. The shadow only scales the sun's light down by its
+        // darkness (rt_apply: (1 - k) + k x lit), so the walls facing the
+        // moon kept a third of it in a closed stairwell, bright beside the
+        // black ones facing away. How open the place is: the share of rays
+        // over its hemisphere, every direction alike, that reach the open
+        // sky. Where it is closed in, the share of the sun's rays that were
+        // stopped goes below nothing, to where the scale leaves none of the
+        // sun's light; open, as it was. The ground keeps its sun - a
+        // canyon's floor is no room - and what the sun does reach keeps it.
+        if (!terrain && sun < 1.0) {
+            const uint RT_OPEN_RAYS = 2u;
+            const float RT_OPEN_REACH = 150.0;
+            float open = 0.0;
+            rtSkipUnits = true;
+            rtCutoutsOpen = true;
+            for (uint k = 0u; k < RT_OPEN_RAYS; ++k) {
+                vec3 od = rtUniformHemisphere(n, rng);
+                open += rtOccluded(origin, od, RT_OPEN_REACH, rng) ? 0.0 : 1.0;
+            }
+            rtCutoutsOpen = false;
+            open = smoothstep(0.10, 0.35, open / float(RT_OPEN_RAYS));
+            float k = clamp(pass.tune.x, 0.05, 1.0);
+            float noSun = -(1.0 - k) / k;
+            sun += (1.0 - sun) * noSun * (1.0 - open);
+        }
         rtSkipUnits = false;
     }
 
@@ -476,12 +509,14 @@ void main() {
         // the walls round its flame - Camp Narache's tauren lamp post, whose
         // flame burns a third of a yard inside its walls, lit the ground all
         // round it instead of out of its one opening only.
-        // Always, whatever the option says: everything casts while tracing
-        // (the user's rule) - a lamp's or a brazier's own model too, by its
-        // faces turned toward the light (rtFixtureFacesOnly). Passed by
-        // whole, a fixture cast no shadow of any fixed light: a lantern none
-        // of the torch beside it, a fire bowl none of its own fire.
-        bool selfShadow = true;
+        // The fixtures themselves cast always, whatever the option says:
+        // everything casts while tracing (the user's rule) - a lamp's or a
+        // brazier's own model too, by its faces turned toward the light
+        // (rtFixtureFacesOnly, below). Passed by whole, a fixture cast no
+        // shadow of any fixed light: a lantern none of the torch beside it,
+        // a fire bowl none of its own fire. The option keeps the source
+        // small and inside its lamp.
+        bool selfShadow = pass.tune5.x > 0.5;
         if (selfShadow && int(light.storey.w + 0.5) != RT_LIGHT_KIND_PARTICLE) {
             radius = min(radius, RT_SELF_SHADOW_SOURCE_RADIUS);
         }
@@ -523,20 +558,25 @@ void main() {
             // reach they were held to (rtUnitShadowReach) let a unit's shadow
             // stop short of the wall the lamp threw it on.
             bool byUnit;
-            // And never the unit that carries the light (rtLampEnd).
-            rtLampEnd = light.positionEnd.xyz;
-            // Only what is carried meets the fixtures (storey.z -1: PointLight::carried).
+            // The unit that carries the light shadows it too: its body may
+            // stand between the light and what it lights (the user's rule;
+            // rtLampEnd passed the carrier by).
+            // The fixtures by their faces turned toward the light, for every
+            // fixed light (storey.z -1: PointLight::carried meets them whole).
             rtSkipFixtures = int(light.storey.w + 0.5) != RT_LIGHT_KIND_UNIT && light.storey.z > -0.5;
-            rtFixtureFacesOnly = selfShadow;
+            rtFixtureFacesOnly = true;
             // The units' boxes asked about the surface's point, not the
             // lifted one (rtGroupFrom).
             rtGroupFrom = origin;
             rtGroupFromSet = true;
+            // A unit's own body shadows itself while the option asks for it
+            // (pass.tune5.y): a ray leaving from inside its box meets it.
+            rtMeetsOwnGroup = pass.tune5.y > 0.5;
             pointVis = rtOccludedBy(lampOrigin, toLight / d, reach, rng, byUnit) ? 0.0 : 1.0;
+            rtMeetsOwnGroup = false;
             rtGroupFromSet = false;
             rtFixtureFacesOnly = false;
             rtSkipFixtures = false;
-            rtLampEnd = vec3(1e30);
             rtUnitReach = 1e30;
             unitHit = unitHit || byUnit;
             // Stopped by the ground or a building - a floor, a wall: the

@@ -116,6 +116,22 @@ TEST_CASE("the settings the user reported are on the applied list",
     }
 }
 
+TEST_CASE("unit self-shadowing is an option of its own, kept and applied",
+          "[settings]") {
+    // Asked for apart from the point lights' self-shadowing: its own key on
+    // the applied list, its own line in the config file, its own label.
+    const std::string panel = wowee::test::slurp("src/ui/settings_panel.cpp");
+    const auto applyKeys = namesIn(panel, "ApplyKeys");
+    CHECK(applyKeys.count("rtunitselfshadow") == 1);
+    CHECK(applyKeys.count("rtpointselfshadow") == 1);
+    CHECK(panel.find("setRtUnitSelfShadow(pendingRtUnitSelfShadow)") != std::string::npos);
+    const std::string cfg = wowee::test::slurp("src/ui/game_screen_minimap.cpp");
+    CHECK(cfg.find("\"rt_unit_self_shadow=\"") != std::string::npos);
+    CHECK(cfg.find("key == \"rt_unit_self_shadow\"") != std::string::npos);
+    const std::string i18n = wowee::test::slurp("src/ui/settings_i18n.cpp");
+    CHECK(i18n.find("Eigenschatten von Figuren") != std::string::npos);
+}
+
 TEST_CASE("the graphics defaults have one home", "[settings]") {
     // The same two numbers were written in the settings panel, in the login
     // screen's copy of the same struct, and in the reset button's constant.
