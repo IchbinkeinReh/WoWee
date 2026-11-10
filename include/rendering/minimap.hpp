@@ -198,6 +198,8 @@ private:
     VkDescriptorSet maskDescSet = VK_NULL_HANDLE;
     bool maskTried_ = false;
     bool maskLoaded_ = false;
+    std::string maskPath_;
+    uint32_t maskGeneration_ = 0;
     void loadMask();
 
     int mapSize = 200;

@@ -3716,3 +3716,8 @@ wowee_add_test(test_model_frame_pose
 # layout-local.txt, the frames the player placed (0x00517e00, 0x005183a0).
 wowee_add_test(test_layout_cache
     SOURCES test_layout_cache.cpp)
+
+# ── test_minimap_art ─────────────────────────────────
+# The minimap's replaceable textures (0x00583860 .. 0x00583f60, 0x0057e100).
+wowee_add_test(test_minimap_art
+    SOURCES test_minimap_art.cpp)

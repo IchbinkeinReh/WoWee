@@ -35,6 +35,7 @@
 #include "addons/lua_api_registrations.hpp"
 #include "addons/toc_parser.hpp"
 #include "ui/layout_cache.hpp"
+#include "rendering/minimap_art.hpp"
 #include "addons/button_label_lua.hpp"
 #include "addons/binding_command.hpp"
 #include "pipeline/asset_manager.hpp"
@@ -7553,6 +7554,33 @@ static int lua_Frame_GetTitleRegion(lua_State* L) {
     return 1;
 }
 
+/// Minimap:SetMaskTexture and the six other art setters, and SetPlayerTexture
+/// (0x00583860 .. 0x00583f60, 0x0057e100): the file the minimap draws that
+/// part with from now on; a name that is not a string is a usage error, an
+/// empty one changes nothing.
+static int setMinimapArt(lua_State* L, wowee::rendering::minimap_art::Slot slot, const char* method) {
+    const auto* w = widgetOf(L, 1);
+    if (!lua_isstring(L, 2))
+        return luaL_error(L, "Usage: %s:%s(\"file\")", (w && !w->name.empty()) ? w->name.c_str() : "<unnamed>", method);
+    wowee::rendering::minimap_art::set(slot, lua_tostring(L, 2));
+    return 0;
+}
+namespace mma = wowee::rendering::minimap_art;
+static int lua_Minimap_SetMaskTexture(lua_State* L) { return setMinimapArt(L, mma::Mask, "SetMaskTexture"); }
+static int lua_Minimap_SetIconTexture(lua_State* L) { return setMinimapArt(L, mma::Icons, "SetIconTexture"); }
+static int lua_Minimap_SetBlipTexture(lua_State* L) { return setMinimapArt(L, mma::Blips, "SetBlipTexture"); }
+static int lua_Minimap_SetClassBlipTexture(lua_State* L) {
+    return setMinimapArt(L, mma::ClassBlips, "SetClassBlipTexture");
+}
+static int lua_Minimap_SetStaticPOIArrowTexture(lua_State* L) {
+    return setMinimapArt(L, mma::StaticPOIArrow, "SetStaticPOITexture");
+}
+static int lua_Minimap_SetPOIArrowTexture(lua_State* L) { return setMinimapArt(L, mma::POIArrow, "SetPOITexture"); }
+static int lua_Minimap_SetCorpsePOIArrowTexture(lua_State* L) {
+    return setMinimapArt(L, mma::CorpseArrow, "SetCorpsePOITexture");
+}
+static int lua_Minimap_SetPlayerTexture(lua_State* L) { return setMinimapArt(L, mma::Player, "SetPlayerTexture"); }
+
 // Frame method: frame:CreateTexture(name, layer) → a real region
 static int lua_Frame_CreateTexture(lua_State* L) {
     auto* tree = wowee::addons::getWidgetTree(L);
@@ -8684,6 +8712,14 @@ void LuaEngine::registerCoreAPI() {
         {"SetZoom",         lua_Minimap_SetZoom},
         {"GetZoom",         lua_Minimap_GetZoom},
         {"GetZoomLevels",   lua_Minimap_GetZoomLevels},
+        {"SetMaskTexture",           lua_Minimap_SetMaskTexture},
+        {"SetIconTexture",           lua_Minimap_SetIconTexture},
+        {"SetBlipTexture",           lua_Minimap_SetBlipTexture},
+        {"SetClassBlipTexture",      lua_Minimap_SetClassBlipTexture},
+        {"SetStaticPOIArrowTexture", lua_Minimap_SetStaticPOIArrowTexture},
+        {"SetPOIArrowTexture",       lua_Minimap_SetPOIArrowTexture},
+        {"SetCorpsePOIArrowTexture", lua_Minimap_SetCorpsePOIArrowTexture},
+        {"SetPlayerTexture",         lua_Minimap_SetPlayerTexture},
         {"PingLocation",    lua_Minimap_PingLocation},
         {"GetPingPosition", lua_Minimap_GetPingPosition},
         {"DrawQuestBlob",   lua_QuestBlobFrame_DrawQuestBlob},
