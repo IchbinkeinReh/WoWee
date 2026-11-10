@@ -26,6 +26,7 @@
 // parent's group: a body and what it carries never shadow each other.
 
 #include "rendering/character_renderer.hpp"
+#include "rendering/rt_unit_cast.hpp"
 
 #include "core/logger.hpp"
 #include "rendering/m2_texture_combiner.hpp"
@@ -350,7 +351,14 @@ void CharacterRenderer::syncRtScene(const glm::vec3& cameraPos) {
     for (auto& [id, inst] : instances) {
         if (!inst.visible || inst.heldBack || inst.isSceneModel || inst.isEffectModel) continue;
         if (!inst.posedOnce && !inst.hasOverrideModelMatrix) continue;
-        if (inst.opacity * inst.kitAlpha <= 0.01f) continue;
+        // Nor what is drawn see-through - a ghost, a stealthed or GM-invisible
+        // unit, one fading in or out (instanceDrawnFaded). Such a body is in
+        // no G-buffer and takes the traced light of what stands behind it
+        // (rtLightBehind); with the light behind it that is the ground in its
+        // own shadow, and the body went black where it stood and lit up
+        // when it jumped clear of that shadow (Darrow Hill's brazier, the
+        // player GM-invisible). A see-through body casts no shadow of its own.
+        if (!rt_unit_cast::castsTracedShadow(inst.opacity, inst.kitAlpha)) continue;
         if (!inst.cachedModel || !inst.cachedModel->vertexBuffer) continue;
         const glm::vec3 at = inst.hasOverrideModelMatrix ? glm::vec3(inst.overrideModelMatrix[3]) : inst.position;
         const glm::vec3 d = at - cameraPos;

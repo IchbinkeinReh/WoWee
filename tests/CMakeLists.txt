@@ -3712,3 +3712,7 @@ wowee_add_test(test_swim_wave SOURCES test_swim_wave.cpp)
 # ── test_rain_ripple ──
 # Rain's rings on the traced water: header-only logic.
 wowee_add_test(test_rain_ripple SOURCES test_rain_ripple.cpp)
+
+# ── test_rt_unit_cast ──
+# Which units cast traced shadows: header-only logic.
+wowee_add_test(test_rt_unit_cast SOURCES test_rt_unit_cast.cpp)
