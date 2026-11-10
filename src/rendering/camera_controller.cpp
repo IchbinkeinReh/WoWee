@@ -3202,7 +3202,7 @@ void CameraController::reset() {
     LOG_INFO("Camera reset to default position");
 }
 
-void CameraController::teleportTo(const glm::vec3& pos) {
+void CameraController::teleportTo(const glm::vec3& pos, bool onTransport) {
     if (!camera) return;
 
     verticalVelocity = 0.0f;
@@ -3217,8 +3217,8 @@ void CameraController::teleportTo(const glm::vec3& pos) {
     lastGroundZ = pos.z;
     forgetPortPlace();
     // And it falls from there unless it is on ground (0x006ecf80 ->
-    // 0x0098b710; portMove).
-    portPlacedFall_ = true;
+    // 0x0098b710; portMove), or a passenger.
+    portPlacedFall_ = !onTransport;
 
     // Invalidate active WMO group so it's re-detected at new position
     if (wmoRenderer) {

@@ -1407,7 +1407,7 @@ void EntitySpawner::processPendingTransportRegistrations() {
                     core::coords::canonicalToRender(restoredWorldPosition);
                 renderer_->getCharacterPosition() = renderPosition;
                 if (auto* camera = renderer_->getCameraController()) {
-                    camera->teleportTo(renderPosition);
+                    camera->teleportTo(renderPosition, true);
                     camera->clearMovementInputs();
                     camera->suspendGravityFor(2.0f);
                     if (auto* followTarget = camera->getFollowTargetMutable()) {
