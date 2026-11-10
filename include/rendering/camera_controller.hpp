@@ -938,6 +938,11 @@ private:
     /// below, the water surface. Eased both ways so crossing the water's
     /// edge does not jump the view.
     float waterNudgeZ_ = 0.0f;
+    /// Which side of the water's surface the camera was on last frame, for
+    /// the pitch it takes as it crosses (0x00606f90, camera flags 0x200000
+    /// under and 0x100000 above).
+    bool cameraUnderWater_ = false;
+    bool cameraWaterKnown_ = false;
 
     // Gravity / grounding
     float verticalVelocity = 0.0f;
