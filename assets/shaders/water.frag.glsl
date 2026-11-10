@@ -60,8 +60,8 @@ layout(set = 2, binding = 1) uniform sampler2D SceneDepth;
 // Wake points are laid down behind anything wading through the shallows. Each
 // is a churn site that spreads and dies, so a running character leaves a trail
 // of froth rather than a disc stuck under its feet.
-const int MAX_WAKE_POINTS = 32;
-const int MAX_SWIM_WAVES = 16;
+const int MAX_WAKE_POINTS = 64;
+const int MAX_SWIM_WAVES = 32;
 const int MAX_WATER_LAMPS = 8;
 // An interior liquid (the end of main): how fast its colour takes over with the
 // depth along the view, per yard (the underwater fade's above); how far over the

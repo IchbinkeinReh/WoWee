@@ -428,17 +428,26 @@ void playRiderMountAnimation(rendering::CharacterRenderer& cr, rendering::SpellV
 // A unit's ripples, within reach of the character: the client's every unit in
 // liquid (0x0071cba0), at its own scale and collision height. Out to 150
 // yards (rendering::SwimEffects::kUnitRippleRange): at 60 a swimmer across a
-// lake or a canal left the water still.
-void feedUnitRipple(rendering::Renderer& renderer, EntitySpawner& spawner, uint64_t guid, const game::Unit& unit,
-                    const glm::vec3& feet, bool moving, bool dead, float deltaTime) {
+// lake or a canal left the water still. Over the traced water, whose sprite
+// ripples are not drawn, the unit disturbs the traced surface as the
+// character does there (Renderer::unitInRtWater), to the same range.
+void feedUnitRipple(rendering::Renderer& renderer, EntitySpawner& spawner, uint64_t guid, uint32_t instanceId,
+                    const game::Unit& unit, const glm::vec3& feet, bool moving, bool dead, float deltaTime) {
     auto* swim = renderer.getSwimEffects();
     auto* water = renderer.getWaterRenderer();
-    if (dead || !swim || !water || !swim->surfaceRipplesShown()) return;
+    if (dead || !swim || !water) return;
     const glm::vec3 away = feet - renderer.getCharacterPosition();
     constexpr float kRange = rendering::SwimEffects::kUnitRippleRange;
     if (glm::dot(away, away) > kRange * kRange) return;
     const auto waterZ = water->getWaterHeightAt(feet.x, feet.y);
-    if (!waterZ) return;
+    if (!waterZ || *waterZ <= feet.z) return;
+    if (!swim->surfaceRipplesShown()) {
+        constexpr uint32_t kSwimming = static_cast<uint32_t>(game::MovementFlags::SWIMMING);
+        const bool swimming = (unit.getReportedMoveFlags() & kSwimming) != 0 ||
+                              spawner.getCreatureSwimmingState().count(guid) > 0;
+        renderer.unitInRtWater(guid, instanceId, feet, *waterZ, moving, swimming);
+        return;
+    }
     const auto size = spawner.unitRippleSize(unit);
     swim->unitInWater(guid, feet, *waterZ, moving, unit.getMoveSpeed(), unit.getModelFacing(), size.first,
                       size.second, deltaTime);
@@ -5182,7 +5191,7 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 // the renderer to the correct destination via the spline packet.
                 posIt->second = renderPos;
 
-                feedUnitRipple(*renderer, *entitySpawner_, guid, *unitPtr, renderPos, isMovingNow && !deadOrCorpse,
+                feedUnitRipple(*renderer, *entitySpawner_, guid, instanceId, *unitPtr, renderPos, isMovingNow && !deadOrCorpse,
                                deadOrCorpse, deltaTime);
 
                 // The speed its movement animation plays to: the spline's,
@@ -5427,7 +5436,7 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                     }
                 }
                 posIt->second = renderPos;
-                feedUnitRipple(*renderer, *entitySpawner_, guid, *unitPtr, renderPos, isMovingNow && !deadOrCorpse,
+                feedUnitRipple(*renderer, *entitySpawner_, guid, instanceId, *unitPtr, renderPos, isMovingNow && !deadOrCorpse,
                                deadOrCorpse, deltaTime);
 
                 // The speed the player's (or its mount's) movement animation

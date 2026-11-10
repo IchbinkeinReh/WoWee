@@ -327,6 +327,14 @@ public:
     LevelUpEffect* getLevelUpEffect() const { syncWorldRecording(); return levelUpEffect.get(); }
     LootSparkles* getLootSparkles() const { syncWorldRecording(); return lootSparkles_.get(); }
     SwimEffects* getSwimEffects() const { syncWorldRecording(); return swimEffects.get(); }
+    /// Another unit in the water this frame while the traced water is
+    /// drawn (its sprite ripples are not): it disturbs the surface as the
+    /// character does there - a trail of froth and the rings of its hands and
+    /// body (update). `instanceId` its model's, 0 for none.
+    void unitInRtWater(uint64_t guid, uint32_t instanceId, const glm::vec3& feet, float waterZ, bool moving,
+                       bool swimming) {
+        rtWaterUnits_.push_back({guid, instanceId, feet, waterZ, moving, swimming});
+    }
 
     // Selection circle for targeted entity
     /// The target's circle (0x00725980): the unit's position, its radius
@@ -1196,6 +1204,30 @@ private:
     bool rtRoomSun_ = true;
     std::vector<swim_wave::Wave> swimWaves_;
     std::array<swim_wave::Limb, 3> swimLimbs_{};
+    /// This frame's other units in the traced water (unitInRtWater), and
+    /// what is kept of each between frames: its limbs' last places and
+    /// where it last stood, for the way it goes. Forgotten five seconds
+    /// after it was last in the water.
+    struct RtWaterUnit {
+        uint64_t guid = 0;
+        uint32_t instanceId = 0;
+        glm::vec3 feet{0.0f};
+        float waterZ = 0.0f;
+        bool moving = false;
+        bool swimming = false;
+    };
+    std::vector<RtWaterUnit> rtWaterUnits_;
+    struct RtWaterUnitState {
+        std::array<swim_wave::Limb, 3> limbs{};
+        glm::vec2 last{0.0f};
+        bool hasLast = false;
+        glm::vec2 travelDir{0.0f, 1.0f};
+        float seen = 0.0f;
+    };
+    std::unordered_map<uint64_t, RtWaterUnitState> rtWaterUnitStates_;
+    float rtWaterUnitClock_ = 0.0f;
+    float rtWaterDiagClock_ = 0.0f;
+    size_t rtWaterUnitsPeak_ = 0;
     float rtWaveFreq_ = 1.0f;
     bool rtListenerAdded_ = false;
     // The memory guard (rt_memory_guard.hpp): run each frame before the ray
