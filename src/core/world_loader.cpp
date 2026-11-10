@@ -1186,6 +1186,7 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
             stageStart = t;
         };
         float lastWarmupLogTime = 0.0f;
+        bool areaLoadedLogged = false;
         int warmupIterations = 0;
         const auto logWarmup = [&](float elapsed, const char* what) {
             std::string stages;
@@ -1347,6 +1348,26 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
                         if (tH.has_value() && *tH < rz + 15.0f &&
                             *tH >= rz - rendering::movement::kTeleportFloorReachDown) {
                             groundReady = true;
+                        }
+                    }
+                }
+                // The map's area around the spawn loaded: the client drops its
+                // loading screen once the area about the new position has been
+                // read in (SMSG_NEW_WORLD -> 0x00403b70 -> 0x00781430 ->
+                // 0x007bfce0 -> 0x007b6b00, which loads the chunks and objects
+                // around 0xcd7778 until none are pending and calls the
+                // progress back with 1.0), and asks nothing of the height:
+                // a teleport into the air enters the world in the air and
+                // falls. Waiting here for a floor near the server's height
+                // held a teleport above empty ground behind the loading
+                // screen for the whole ninety-second cap.
+                if (!groundReady) {
+                    if (auto* tm = renderer_->getTerrainManager(); tm && tm->getRemainingTileCount() == 0) {
+                        groundReady = true;
+                        if (!areaLoadedLogged) {
+                            areaLoadedLogged = true;
+                            LOG_INFO("Warmup: the area around the spawn is loaded (", tm->getLoadedTileCount(),
+                                     " tiles) after ", elapsed, "s");
                         }
                     }
                 }
