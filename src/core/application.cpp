@@ -3190,9 +3190,31 @@ void Application::connectWorldHooks() {
     if (renderer && renderer->getCameraController()) {
         auto* cc = renderer->getCameraController();
         cc->setMovementCallback([this](uint32_t opcode) {
-            if (gameHandler) {
-                gameHandler->sendMovement(static_cast<game::Opcode>(opcode));
+            if (!gameHandler) return;
+            // A landing goes out from where the feet landed. The client moves
+            // the unit by the fall step's collided move and lands it in that
+            // same step (0x007618b0 -> 0x007612b0: the position at +0x10 is
+            // advanced, then 0x00988490 takes it as the fall's end), and
+            // MSG_MOVE_FALL_LAND carries that position. The camera
+            // controller asks for the landing in the frame it lands, before
+            // the frame's position reaches the game handler (update, after
+            // the renderer's): the packet carried the frame before's height,
+            // 1.3 to 1.8 yards over the floor at a long fall's speed. Not on a
+            // transport, where the place sent is the one kept on it.
+            if (opcode == static_cast<uint32_t>(game::Opcode::MSG_MOVE_FALL_LAND) && renderer &&
+                !gameHandler->isOnTransport()) {
+                const glm::vec3 landed = core::coords::renderToCanonical(renderer->getCharacterPosition());
+                static const bool kFloorDebug = [] {
+                    const char* v = std::getenv("WOWEE_FLOOR_DEBUG");
+                    return v && v[0] && v[0] != '0';
+                }();
+                if (kFloorDebug) {
+                    LOG_WARNING("FALL LAND: from where the feet landed z=", landed.z, " (the frame before z=",
+                                gameHandler->getMovementInfo().z, ")");
+                }
+                gameHandler->setPosition(landed.x, landed.y, landed.z);
             }
+            gameHandler->sendMovement(static_cast<game::Opcode>(opcode));
         });
         // The player sitting down or getting up: the request to the server,
         // and the animation at once (0x006d SetStandState -> 0x0073f060).

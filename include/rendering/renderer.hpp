@@ -1,6 +1,7 @@
 #pragma once
 
 #include "rendering/swim_wave.hpp"
+#include "rendering/water_unit_share.hpp"
 #include "rendering/rt_normal_blend.hpp"
 #include "rendering/rt_memory_guard.hpp"
 #include "core/platform.hpp"
@@ -1223,6 +1224,9 @@ private:
         bool hasLast = false;
         glm::vec2 travelDir{0.0f, 1.0f};
         float seen = 0.0f;
+        water_share::UnitShare share;  ///< this frame's (water_unit_share.hpp)
+        float yards = 0.0f;            ///< from the character
+        size_t ringsMade = 0, ringsOverShare = 0, ringsDropped = 0;  ///< since the last WOWEE_RIPPLE_DIAG line
     };
     std::unordered_map<uint64_t, RtWaterUnitState> rtWaterUnitStates_;
     float rtWaterUnitClock_ = 0.0f;
