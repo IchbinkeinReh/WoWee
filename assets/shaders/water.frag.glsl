@@ -100,8 +100,11 @@ layout(location = 1) in vec3 Normal;
 layout(location = 2) in vec2 TexCoord;
 layout(location = 3) in float WaveOffset;
 layout(location = 4) in vec2 ScreenUV;
+layout(location = 5) in vec2 WaveBase;
 
 layout(location = 0) out vec4 outColor;
+
+#include "water_waves.glsli"
 
 // ============================================================
 // Dual-scroll detail normals (multi-octave ripple overlay)
@@ -427,7 +430,16 @@ void main() {
     float dist = length(viewPos.xyz - FragPos);
 
     // --- Normal computation ---
-    vec3 meshNorm = normalize(Normal);
+    // The waves' normal taken here, where this pixel stood before they
+    // moved it, not the vertices' normals blended across the triangle: the
+    // liquid's grid is coarse, and blended its normal bent at every
+    // triangle's edge - a straight crease the sun's or the moon's glint was
+    // cut along, which crept over the lake as the waves ran (Stonebull
+    // Lake at 22:00). The same waves, so the same normal at the vertices.
+    GerstnerResult pixelWaves = evaluateGerstnerWaves(WaveBase, time, push.waveAmp, push.waveFreq,
+                                                      push.waveSpeed, push.liquidBasicType);
+    vec3 meshNorm = normalize(cross(pixelWaves.binormal, pixelWaves.tangent));
+    // The vertex stage's (Normal) is the same at the vertices.
     vec3 detailNorm = dualScrollWaveNormal(FragPos.xy, time, rtWater2.z, rtWater2.w);
     // Wave detail is a scrolling pattern with a finite period. Held at full
     // strength to the horizon it does two things the eye picks up immediately:
