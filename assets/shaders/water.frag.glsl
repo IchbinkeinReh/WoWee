@@ -81,7 +81,7 @@ layout(set = 2, binding = 3) uniform WaterFrameData {
     // 1 its reflection alone, 2 what comes up through it alone), z how far
     // a reflected ray goes, w 1 while the traced scene holds anything.
     vec4 rtWater;
-    vec4 rtWater2;      // x how far a refracted ray goes, z the waves' height, w their frequency (1 default)
+    vec4 rtWater2;      // x how far a refracted ray goes, y the rain on it (rain_ripple.hpp), z the waves' height, w their frequency (1 default)
     vec4 rtSkyTop;      // the sky a reflection that leaves the scene meets: overhead
     vec4 rtSkyHorizon;  // and at the horizon
     vec4 rtSunRay;      // xyz toward the sun the traced lighting's shadows follow
@@ -311,6 +311,62 @@ vec3 applyFog(vec3 color, vec3 worldPos, float dist, vec3 distanceFog) {
 #endif
 #include "water_rt.glsli"
 
+// Rain on the traced water (rain_ripple.hpp, which holds these numbers and
+// the ring): the surface cut into cells, one drop a cycle in each at a place
+// and a moment of its own, falling in a cycle only while that cycle's draw
+// lies under the rain's strength. Two layers of cells, offset and of
+// different sizes, so the drops keep no grid. Slope only, as the swimmer's.
+const float RAIN_CELL = 0.55;
+const float RAIN_PERIOD = 0.9;
+const float RAIN_MAX_RADIUS = 0.3;
+const float RAIN_RING_WIDTH = 0.045;
+const float RAIN_SECOND_LAYER = 0.73;
+const float RAIN_RING_SLOPE = 0.35;
+const float RAIN_FADE_NEAR = 25.0;
+const float RAIN_FADE_FAR = 70.0;
+
+float rainHash1(vec2 p) {
+    p = fract(p * vec2(0.1031, 0.1030));
+    p += dot(p, p.yx + 33.33);
+    return fract((p.x + p.y) * p.x);
+}
+
+vec2 rainHash2(vec2 p) {
+    vec3 q = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+    q += dot(q, q.yzx + 33.33);
+    return fract((q.xx + q.yz) * q.zy);
+}
+
+float rainRingSlope(float dist, float age) {
+    float x = (dist - age * RAIN_MAX_RADIUS) / RAIN_RING_WIDTH;
+    float fade = (1.0 - age) * (1.0 - age);
+    return exp(-x * x) * sin(x * 3.0) * fade * RAIN_RING_SLOPE;
+}
+
+vec2 rainRippleTilt(vec2 p, float t, float strength) {
+    vec2 tilt = vec2(0.0);
+    for (int layer = 0; layer < 2; ++layer) {
+        float cell = RAIN_CELL * (layer == 0 ? 1.0 : RAIN_SECOND_LAYER);
+        vec2 offset = layer == 0 ? vec2(0.0) : vec2(17.31, 41.73);
+        vec2 q = p / cell + offset;
+        vec2 base = floor(q);
+        for (int j = -1; j <= 1; ++j) {
+            for (int i = -1; i <= 1; ++i) {
+                vec2 c = base + vec2(float(i), float(j));
+                float cycle = t / RAIN_PERIOD + rainHash1(c);
+                float n = floor(cycle);
+                float age = cycle - n;
+                if (rainHash1(c + n * vec2(3.17, 7.73) + 0.5) >= strength) continue;
+                vec2 at = (c + 0.15 + 0.7 * rainHash2(c + n * vec2(5.31, 1.97))) - offset;
+                vec2 from = p - at * cell;
+                float d = length(from);
+                tilt -= (from / max(d, 0.001)) * rainRingSlope(d, age);
+            }
+        }
+    }
+    return tilt;
+}
+
 void main() {
     float time = fogParams.z;
     float basicType = push.liquidBasicType;
@@ -402,6 +458,21 @@ void main() {
             float crest = exp(-along * along) * sin(along * 4.0);
             float slope = crest * w.w * 0.22 * (1.0 - w.z / 1.6);
             swimTilt -= (fromWave / max(d, 0.01)) * slope;
+        }
+    }
+    // Rain's rings (rainRippleTilt), on the traced water and ocean seen from
+    // above, near enough to show, and only where the rain reaches the
+    // surface: one ray straight up, which the ground and the buildings stop
+    // (a roof, a bridge, the rock over a cave). Not on a building's interior
+    // water, nor right of the Debug Graphics split.
+    float rainStrength = rtWater2.y;
+    if (rainStrength > 0.0 && rtWater.x > 0.5 && basicType < 1.5 && push.interiorFog < 0.5 &&
+        viewPos.z > FragPos.z && dist < RAIN_FADE_FAR &&
+        !(rtParams.w > 0.0 && gl_FragCoord.x * rtParams.z >= rtParams.w)) {
+        uint rainRng = uint(gl_FragCoord.x) * 7919u + uint(gl_FragCoord.y) * 104729u;
+        if (!rtOccludedByStructure(FragPos + vec3(0.0, 0.0, 0.1), vec3(0.0, 0.0, 1.0), 150.0, rainRng)) {
+            float rainNear = 1.0 - smoothstep(RAIN_FADE_NEAR, RAIN_FADE_FAR, dist);
+            swimTilt += rainRippleTilt(FragPos.xy, time, rainStrength) * rainNear;
         }
     }
     norm = normalize(norm + vec3(swimTilt, 0.0));

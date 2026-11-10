@@ -155,7 +155,8 @@ constexpr SettingGerman kGerman[] = {
     {"rtswimwaves",
      "Schwimmwellen",
      "Auf dem Wasser mit Raytracing: kleine Wellen von Armen und Körper eines Schwimmers, wo sie "
-     "sich an der Oberfläche bewegen. Ein Experiment.",
+     "sich an der Oberfläche bewegen, und Ringe, wo Regen darauf fällt (nicht unter einem Dach). "
+     "Ein Experiment.",
      nullptr, nullptr, nullptr},
     {"rtwater",
      "Wasser mit Raytracing",

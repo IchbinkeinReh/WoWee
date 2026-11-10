@@ -1191,7 +1191,7 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                                   rtFrame_.sceneHasContent ? 1.0f : 0.0f);
     // The waves' height at half what they were made with: the mirror showed
     // them as a choppy sea on a still pond.
-    frameUBO_.rtWater2 = glm::vec4(rtFrame_.refractReach, 0.0f, kRtWaveAmpScale * rtFrame_.waveAmp,
+    frameUBO_.rtWater2 = glm::vec4(rtFrame_.refractReach, rtFrame_.rain, kRtWaveAmpScale * rtFrame_.waveAmp,
                                    rtFrame_.waveFreq);
     frameUBO_.rtSkyTop = glm::vec4(rtFrame_.skyTop, 1.0f);
     frameUBO_.rtSkyHorizon = glm::vec4(rtFrame_.skyHorizon, 1.0f);
