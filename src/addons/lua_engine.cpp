@@ -8953,6 +8953,29 @@ void LuaEngine::registerCoreAPI() {
         // The button is on the minimap, which is drawn by FrameXML on the
         // default tier, so the empty tooltip a no-op left was on screen for
         // anyone who hovered it.
+        // QuestPOI:UpdateQuestPOI does nothing in the client (0x0058e990).
+        "function mt:UpdateQuestPOI() end\n"
+        // GameTooltip:AddFontStrings(left, right) (0x006201f0): a line made of
+        // the two font strings' text and colours. Both must be font strings.
+        "function mt:AddFontStrings(l, r)\n"
+        "    local function ok(fs) return type(fs) == 'table' and fs.GetObjectType and fs:GetObjectType() == 'FontString' end\n"
+        "    if type(l) ~= 'table' or type(r) ~= 'table' then\n"
+        "        error(('Usage: %s:AddFontStrings(leftstring, rightstring)'):format(self:GetName() or '<unnamed>'), 2)\n"
+        "    end\n"
+        "    if not ok(l) or not ok(r) then\n"
+        "        error(('%s:AddFontStrings(): Wrong object type, expected fontstring'):format(self:GetName() or '<unnamed>'), 2)\n"
+        "    end\n"
+        "    local lr, lg, lb = l:GetTextColor()\n"
+        "    local rr, rg, rb = r:GetTextColor()\n"
+        "    self:AddDoubleLine(l:GetText() or '', r:GetText() or '', lr, lg, lb, rr, rg, rb)\n"
+        "end\n"
+        // SetInventoryPortraitTexture(texture, unit, slot) (0x005ea9b0): the
+        // texture shows the icon of what the unit wears in that slot.
+        "function SetInventoryPortraitTexture(tex, unit, slot)\n"
+        "    if type(tex) ~= 'table' then error('Usage: SetInventoryPortraitTexture(texture, unit, slot)', 2) end\n"
+        "    local icon = GetInventoryItemTexture(unit, slot)\n"
+        "    if icon then tex:SetTexture(icon) end\n"
+        "end\n"
         "function mt:SetTracking()\n"
         "    local active\n"
         "    for i = 1, GetNumTrackingTypes() do\n"
