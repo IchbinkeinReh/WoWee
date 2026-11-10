@@ -851,9 +851,15 @@ public:
     void gatherBlobShadowGround(const glm::vec3& boxMin, const glm::vec3& boxMax,
                                 std::vector<glm::vec3>& out) const;
     /// The same doodads' collision triangles that reach the box, whichever
-    /// way they face unless `facingUpOnly`.
+    /// way they face unless `facingUpOnly`; with `includeGameObjects` the
+    /// game objects' models with collision too (the camera's trace, flag
+    /// 0x100000 in 0x007a2760).
     void gatherCollisionTriangles(const glm::vec3& boxMin, const glm::vec3& boxMax,
-                                  std::vector<glm::vec3>& out, bool facingUpOnly = false) const;
+                                  std::vector<glm::vec3>& out, bool facingUpOnly = false,
+                                  bool includeGameObjects = false) const;
+    /// WOWEE_CAMCOL_DIAG: every doodad whose box the segment crosses, as
+    /// "tEnter:name/collision/gameObject/skip".
+    [[nodiscard]] std::string describeRay(const glm::vec3& origin, const glm::vec3& direction, float maxDistance) const;
     /// The doodads' and game objects' faces for the movement sweep
     /// (0x007a50c0 -> 0x007a4af0 -> 0x0082ec30): each bounding triangle of
     /// an instance whose box meets the query's, with the file's normal for

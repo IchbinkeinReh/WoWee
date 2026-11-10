@@ -5418,6 +5418,60 @@ float WMORenderer::raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3
     return closestHit;
 }
 
+std::string WMORenderer::describeRay(const glm::vec3& origin, const glm::vec3& direction, float maxDistance) const {
+    struct Hit { float dist; uint32_t wmoId, group, mopy, mat; std::string tex; float align; };
+    std::vector<Hit> hits;
+    const glm::vec3 rayEnd = origin + direction * maxDistance;
+    std::vector<size_t> cands;
+    gatherCandidates(glm::min(origin, rayEnd) - glm::vec3(1.0f), glm::max(origin, rayEnd) + glm::vec3(1.0f), cands);
+    for (size_t idx : cands) {
+        const auto& instance = instances[idx];
+        if (instance.hidden) continue;
+        auto it = loadedModels.find(instance.modelId);
+        if (it == loadedModels.end()) continue;
+        const ModelData& model = it->second;
+        const glm::vec3 lo(instance.invModelMatrix * glm::vec4(origin, 1.0f));
+        const glm::vec3 le(instance.invModelMatrix * glm::vec4(rayEnd, 1.0f));
+        const float llen = glm::length(le - lo);
+        if (llen < 1e-5f) continue;
+        const glm::vec3 ld = (le - lo) / llen;
+        for (const auto& group : model.groups) {
+            const auto& verts = group.collisionVertices;
+            const auto& indices = group.collisionIndices;
+            for (size_t ts = 0; ts + 2 < indices.size(); ts += 3) {
+                const glm::vec3& v0 = verts[indices[ts]];
+                const glm::vec3& v1 = verts[indices[ts + 1]];
+                const glm::vec3& v2 = verts[indices[ts + 2]];
+                float t = rayTriangleIntersect(lo, ld, v0, v1, v2);
+                if (t <= 0.0f) t = rayTriangleIntersect(lo, ld, v0, v2, v1);
+                if (t <= 0.0f || t > llen) continue;
+                const size_t tri = ts / 3;
+                Hit h;
+                h.dist = t * maxDistance / llen;
+                h.wmoId = model.wmoId;
+                h.group = group.groupIndex;
+                h.mopy = tri < group.triMopyFlags.size() ? group.triMopyFlags[tri] : 0xffff;
+                h.mat = tri < group.triMaterials.size() ? group.triMaterials[tri] : 0xffff;
+                if (h.mat < model.materialTextureIndices.size()) {
+                    const uint32_t ti = model.materialTextureIndices[h.mat];
+                    if (ti < model.textureNames.size()) h.tex = model.textureNames[ti];
+                }
+                const glm::vec3 n = tri < group.triNormals.size() ? group.triNormals[tri] : glm::vec3(0.0f);
+                h.align = glm::dot(n, ld);
+                hits.push_back(std::move(h));
+            }
+        }
+    }
+    std::sort(hits.begin(), hits.end(), [](const Hit& a, const Hit& b) { return a.dist < b.dist; });
+    std::ostringstream s;
+    for (size_t i = 0; i < hits.size() && i < 6; ++i) {
+        if (i) s << " | ";
+        s << hits[i].dist << ":" << hits[i].wmoId << "/" << hits[i].group << "/0x" << std::hex << hits[i].mopy
+          << std::dec << "/m" << hits[i].mat << "/" << hits[i].tex << "/a" << hits[i].align;
+    }
+    return hits.empty() ? std::string("-") : s.str();
+}
+
 // Occlusion queries stubbed out in Vulkan (were disabled by default anyway)
 
 void WMORenderer::recreatePipelines() {
