@@ -1710,7 +1710,26 @@ static int lua_UnitIsControlling(lua_State* L) {
     return 1;
 }
 static int lua_UnitIsTalking(lua_State* L) { return luaReturnFalse(L); }
-static int lua_UnitInBattleground(lua_State* L) { return luaReturnNil(L); }
+// UnitInBattleground(unit) (0x0060caa0) → the unit's place in the battle's
+// scoreboard, from 0, while the player is in a battleground or an arena
+// (instance type 3 or 4, 0x00572f50); nil otherwise.
+static int lua_UnitInBattleground(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const char* uid = lua_tostring(L, 1);
+    if (!gh || !uid) return luaReturnNil(L);
+    std::string unit(uid);
+    toLowerInPlace(unit);
+    const uint64_t guid = resolveUnitGuid(gh, unit);
+    const int type = gh->currentMapInstanceType();
+    const auto* board = gh->getBgScoreboard();
+    if (guid == 0 || !board || (type != 3 && type != 4)) return luaReturnNil(L);
+    for (size_t i = 0; i < board->players.size(); ++i) {
+        if (board->players[i].guid != guid) continue;
+        lua_pushnumber(L, static_cast<double>(i));
+        return 1;
+    }
+    return luaReturnNil(L);
+}
 
 /// True for a unit in the player's own group, and for its pet. The party
 /// frames use this to decide whether a unit is one of ours at all.
@@ -1830,7 +1849,26 @@ static int lua_PetCanBeDismissed(lua_State* L) {
     return 1;
 }
 // Abandoning is a hunter's pet, and nothing here knows which kind it has yet.
-static int lua_PetCanBeAbandoned(lua_State* L) { return luaReturnFalse(L); }
+// PetCanBeAbandoned() (0x005d3780): 1 for a pet the player summoned
+// (UNIT_FIELD_SUMMONEDBY) whose UNIT_FIELD_BYTES_2 third byte carries
+// UNIT_CAN_BE_ABANDONED (0x2); nil otherwise.
+static int lua_PetCanBeAbandoned(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    auto pet = gh && gh->getPetGuid() ? gh->getEntityManager().getEntity(gh->getPetGuid()) : nullptr;
+    if (pet) {
+        const uint16_t lo = game::fieldIndex(game::UF::UNIT_FIELD_SUMMONEDBY_LO);
+        const uint16_t hi = game::fieldIndex(game::UF::UNIT_FIELD_SUMMONEDBY_HI);
+        const uint16_t b2 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_2);
+        const uint64_t summoner = lo == 0xFFFF || hi == 0xFFFF ? 0
+            : pet->getField(lo) | (static_cast<uint64_t>(pet->getField(hi)) << 32);
+        const uint32_t bytes2 = b2 == 0xFFFF ? 0 : pet->getField(b2);
+        if (summoner == gh->getPlayerGuid() && ((bytes2 >> 16) & 0x2u) != 0) {
+            lua_pushnumber(L, 1);
+            return 1;
+        }
+    }
+    return luaReturnNil(L);
+}
 
 // InCombatLockdown() (0x00511cc0): 1 while CGGameUI +0x124c is clear, nil
 // otherwise. Not the same question as being in combat: the lockdown starts
@@ -2580,6 +2618,33 @@ static int lua_GetInventoryItemCooldown(lua_State* L) {
 // The texture is remembered rather than filled here: the handle is rebuilt
 // whenever the portrait's render target is, so it has to be assigned every
 // frame, which the render loop does for everything on this list.
+/// SetLootPortrait(texture) (0x00588f00): the face of whoever the open loot is
+/// from (0x00bfa8d8) on the texture, and 1; with no such unit the texture is
+/// emptied (0x00481520) and nil.
+static int lua_SetLootPortrait(lua_State* L) {
+    auto* tree = getWidgetTree(L);
+    auto* gh = getGameHandler(L);
+    if (!tree || !lua_istable(L, 1)) { lua_pushnil(L); return 1; }
+    lua_getfield(L, 1, "__wid");
+    const uint32_t id = static_cast<uint32_t>(lua_tointeger(L, -1));
+    lua_pop(L, 1);
+    const uint64_t guid = gh && gh->isLootWindowOpen() ? gh->getCurrentLoot().lootGuid : 0;
+    if (id != 0 && guid != 0 && gh->getEntityManager().getEntity(guid)) {
+        tree->setPortraitUnit(id, "loot");
+        lua_pushnumber(L, 1);
+        return 1;
+    }
+    if (id != 0) {
+        tree->setPortraitUnit(id, std::string());
+        if (auto* w = tree->get(id)) {
+            w->solidColor = false;
+            w->texturePath.clear();
+        }
+    }
+    lua_pushnil(L);
+    return 1;
+}
+
 static int lua_SetPortraitTexture(lua_State* L) {
     auto* tree = getWidgetTree(L);
     if (!tree || !lua_istable(L, 1)) return 0;
@@ -2600,6 +2665,45 @@ static int lua_SetPortraitTexture(lua_State* L) {
          unit == "focus" || unit == "npc" || unit == "questnpc" ||
          (unit.rfind("party", 0) == 0 && unit.size() == 6 &&
           unit[5] >= '1' && unit[5] <= '4'));
+    // A player the client has no object for - a party or raid member out of
+    // sight - gets the race's stand-in face (0x006113e0 -> 0x00618180):
+    // Interface\CharacterFrame\TemporaryPortrait-<Male|Female>-<race>, the
+    // race named by ChrRaces' ClientFileString and both read off the name
+    // cache's record. Without one the texture is emptied and the record asked
+    // for; its answer raises UNIT_PORTRAIT_UPDATE for the unit (0x00608540
+    // -> 0x00618110).
+    auto* gh = getGameHandler(L);
+    const uint64_t guid = gh ? resolveUnitGuid(gh, unit) : 0;
+    const bool playerGuid = guid != 0 && ((guid >> 32) & 0xF0000000u) == 0;
+    if (playerGuid && !gh->getEntityManager().getEntity(guid)) {
+        tree->setPortraitUnit(id, std::string());
+        auto* w = tree->get(id);
+        if (!w) return 0;
+        w->solidColor = false;
+        w->texturePath.clear();
+        const uint8_t race = gh->lookupPlayerRace(guid);
+        const uint8_t gender = gh->lookupPlayerGender(guid);
+        if (race == 0 || gender > 1) {
+            gh->askNameThen(guid, "portrait", [gh, guid](bool found, const std::string&) {
+                if (!found) return;
+                for (const auto& token : gh->unitTokensForGuid(guid))
+                    gh->fireAddonEvent("UNIT_PORTRAIT_UPDATE", {token});
+            });
+            return 0;
+        }
+        auto* am = gh->services().assetManager;
+        auto races = am && am->isInitialized() ? am->loadDBC("ChrRaces.dbc") : nullptr;
+        const auto* layouts = pipeline::getActiveDBCLayout();
+        const auto* l = layouts ? layouts->getLayout("ChrRaces") : nullptr;
+        const uint32_t fileCol = l ? l->tryField("ClientFileString") : 0xFFFFFFFFu;
+        const int32_t row = races && races->isLoaded() ? races->findRecordById(race) : -1;
+        if (row >= 0 && fileCol != 0xFFFFFFFFu) {
+            w->texturePath = std::string("Interface\\CharacterFrame\\TemporaryPortrait-") +
+                             (gender == 1 ? "Female" : "Male") + "-" +
+                             races->getString(static_cast<uint32_t>(row), fileCol);
+        }
+        return 0;
+    }
     tree->setPortraitUnit(id, answerable ? unit : std::string());
     return 0;
 }
@@ -4170,6 +4274,7 @@ void registerUnitLuaAPI(lua_State* L) {
                 {"GetUnitMaxHealthModifier", lua_GetUnitMaxHealthModifier},
                 {"GetInventoryItemCooldown", lua_GetInventoryItemCooldown},
                 {"SetPortraitTexture",         lua_SetPortraitTexture},
+                {"SetLootPortrait",            lua_SetLootPortrait},
                 {"GetHairCustomization",       lua_GetHairCustomization},
                 {"GetFacialHairCustomization", lua_GetFacialHairCustomization},
                 {"CanAlterSkin",               lua_CanAlterSkin},

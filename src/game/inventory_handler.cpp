@@ -59,6 +59,28 @@ struct GameErrorText {
 
 /// SMSG_INVENTORY_CHANGE_FAILURE's code as 0x00753bb0 turns it into a game
 /// error. Codes 0, 81 (a bind confirmation) and 83 have none.
+GameErrorText inventoryChangeError(uint8_t code);
+}  // namespace
+
+std::string InventoryHandler::wrongBagFamilyName(uint8_t slot) const {
+    // The bag in that inventory slot: one worn (19..22) or one in the bank's
+    // bag slots (67..73).
+    const Inventory& inv = owner_.getInventory();
+    const ItemSlot* bag = nullptr;
+    if (slot >= 19 && slot <= 22) bag = &inv.getEquipSlot(static_cast<EquipSlot>(slot));
+    else if (slot >= 67 && slot < 67 + Inventory::BANK_BAG_SLOTS) bag = &inv.getBankBagItem(slot - 67);
+    if (!bag || bag->empty()) return {};
+    const auto* info = owner_.getItemInfo(bag->item.itemId);
+    if (!info || info->bagFamily == 0) return {};
+    const int row = static_cast<int>(std::lround(std::log2(static_cast<double>(info->bagFamily)))) + 1;
+    auto* am = owner_.services().assetManager;
+    auto dbc = am && am->isInitialized() ? am->loadDBC("ItemBagFamily.dbc") : nullptr;
+    if (!dbc || !dbc->isLoaded()) return {};
+    const int32_t r = dbc->findRecordById(static_cast<uint32_t>(row));
+    return r < 0 ? std::string() : dbc->getString(static_cast<uint32_t>(r), 1);
+}
+
+namespace {
 GameErrorText inventoryChangeError(uint8_t code) {
     switch (code) {
         case 0: case 81: case 83: return {};
@@ -571,14 +593,30 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         // The roll id the interface will ask every later question by. Its own
         // number: the slot plus one was unique only while one roll was open,
         // and two corpses both rolling their first item shared it.
-        if (owner_.addonEventCallbackRef()) {
-            // ...and the time to roll in, which the packet carried all along
-            // and this read past. GroupLootFrame_OpenNewFrame takes it as the
-            // second argument and sizes the countdown bar from it; without one
-            // the bar had no length and the window could not time out.
-            owner_.addonEventCallbackRef()("START_LOOT_ROLL",
-                                           {std::to_string(roll.rollId),
-                                            std::to_string(countdown)});
+        //
+        // Only once the item is known (0x006fb2c0 asks the item cache with
+        // 0x006fb1f0): an item not cached yet is asked for, the found answer
+        // opens the frame, and one that found nothing drops the roll unseen.
+        if (info && info->valid) {
+            openLootRollFrame(roll.rollId);
+        } else {
+            const int rollId = roll.rollId;
+            owner_.askItemThen(itemId, "start loot roll " + std::to_string(rollId),
+                               [this, rollId](bool found) {
+                for (auto it = lootRolls_.begin(); it != lootRolls_.end(); ++it) {
+                    if (it->rollId != rollId) continue;
+                    if (!found) {
+                        lootRolls_.erase(it);
+                        return;
+                    }
+                    if (const auto* got = owner_.getItemInfo(it->itemId)) {
+                        it->itemName = got->name;
+                        it->itemQuality = static_cast<uint8_t>(got->quality);
+                    }
+                    openLootRollFrame(rollId);
+                    return;
+                }
+            });
         }
     };
 
@@ -832,10 +870,11 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         // level wanted (1, 87) or the ItemLimitCategory (84, 85, 89) -
         // 0x006e2e90 reads them in that order.
         uint32_t arg = 0;
+        uint8_t bagSlot = 0xFF;
         if (packet.hasRemaining(17)) {
             packet.readUInt64();
             packet.readUInt64();
-            packet.readUInt8();
+            bagSlot = packet.readUInt8();
             if ((error == 1 || error == 87 || error == 84 || error == 85 || error == 89) &&
                 packet.hasRemaining(4))
                 arg = packet.readUInt32();
@@ -848,6 +887,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         const GameErrorText err = inventoryChangeError(error);
         if (!err.key) return;
         std::string msg;
+        const char* shownKey = err.key;
         if (error == 1 || error == 87) {
             msg = interfaceFormat(err.key, err.enUS, {std::to_string(arg)});
         } else if (error == 84 || error == 85 || error == 89) {
@@ -857,6 +897,12 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
             const auto [name, quantity] = itemLimitCategory(owner_, arg);
             if (name.empty()) return;
             msg = interfaceFormat(err.key, err.enUS, {std::to_string(quantity), name});
+        } else if (const std::string family = error == 16 ? wrongBagFamilyName(bagSlot) : std::string();
+                   !family.empty()) {
+            // 0x006d6720: the bag the item was put in names what it holds -
+            // ItemBagFamily round(log2(its BagFamily)) + 1, in its own words.
+            msg = interfaceFormat("ERR_WRONG_BAG_TYPE_SUBCLASS", "Only %s can be placed in that bag.", {family});
+            shownKey = "ERR_WRONG_BAG_TYPE_SUBCLASS";
         } else {
             msg = uiText(err.key, err.enUS);
         }
@@ -864,7 +910,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         // And the line the game error speaks, where the client's table
         // gives it one (0x005216f0): a full bag's for every code that ends
         // in ERR_BAG_FULL, a missing proficiency's own, none for a full bank.
-        owner_.playGameErrorSound(err.key);
+        owner_.playGameErrorSound(shownKey);
         if (error == 1) return;
         if (auto* ac = owner_.services().audioCoordinator) {
             if (auto* sfx = ac->getUiSoundManager())
@@ -1204,6 +1250,15 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_EQUIPMENT_SET_USE_RESULT] = [this](network::Packet& packet) {
         if (packet.hasRemaining(1)) {
             uint8_t result = packet.readUInt8();
+            // 0x005af710: EQUIPMENT_SWAP_FINISHED - 1 for a swap that went
+            // through, 0 for one that did not - with the set's name.
+            std::string setName = kEventNil;
+            for (const auto& es : equipmentSets_) {
+                if (es.setId == pendingUseSetId_) { setName = es.name; break; }
+            }
+            pendingUseSetId_ = 0;
+            if (owner_.addonEventCallbackRef())
+                owner_.addonEventCallbackRef()("EQUIPMENT_SWAP_FINISHED", {result == 0 ? "1" : "0", setName});
             // 0x005af710 has words for one failure only - bags too full to
             // take what comes off, EQUIPMENT_MANAGER_BAGS_FULL on screen - and
             // none for the rest. This printed "Failed to equip item set."
@@ -1266,6 +1321,13 @@ void InventoryHandler::lootItem(uint8_t slotIndex, bool confirmed) {
     }
 
     pendingLootActive_ = false;
+    // The item's pick-up sound as it is taken (0x00589140, 0x00589300).
+    for (const auto& item : owner_.getCurrentLoot().items) {
+        if (item.slotIndex != slotIndex) continue;
+        if (const auto* info = owner_.getItemInfo(item.itemId); info && info->valid)
+            playItemSound(info->displayInfoId, 0);
+        break;
+    }
     auto packet = AutostoreLootItemPacket::build(slotIndex);
     owner_.getSocket()->send(packet);
 }
@@ -1357,97 +1419,105 @@ void InventoryHandler::handleLootResponse(network::Packet& packet) {
     }
     if (!LootResponseParser::parse(packet, currentLoot_)) return;
     if (currentLoot_.lootGuid == pendingLootGuid_) pendingLootGuid_ = 0;
-    const bool hasLoot = !currentLoot_.items.empty() || currentLoot_.gold > 0;
     LOG_INFO("SMSG_LOOT_RESPONSE: guid=0x", std::hex, currentLoot_.lootGuid, std::dec,
              " items=", currentLoot_.items.size(), " gold=", currentLoot_.gold);
-    auto& lastInteractedGoGuid = owner_.lastInteractedGoGuidRef();
-    const bool isLastInteractedGoLoot =
-        lastInteractedGoGuid != 0 && currentLoot_.lootGuid == lastInteractedGoGuid;
-    if (!hasLoot && isLastInteractedGoLoot &&
-        ((owner_.isCasting() && owner_.getCurrentCastSpellId() != 0) ||
-         owner_.hasPendingGameObjectLootOpen(currentLoot_.lootGuid))) {
-        LOG_DEBUG("Ignoring empty SMSG_LOOT_RESPONSE during pending gather/open");
-        return;
-    }
     lootWindowOpen_ = true;
-    if (owner_.addonEventCallbackRef()) {
-        // Carries whether this loot is being taken automatically. The loot
-        // frame reads it on the path where it could not show itself, and
-        // closes with CloseLoot(autoLoot == 0) - so an absent argument
-        // compares false and tells the server the window opened when it did
-        // not.
-        // The argument is a number, not text: the client fires LOOT_OPENED
-        // (249) with "%d" and a 1 or a 0 (00580000.c:6466, :6710;
-        // 006e0000.c:2674), and LootFrame_OnEvent's `autoLoot == 0` compares it
-        // as one (lootframe.lua:15-21).
-        //
-        // LOOT_READY, which this used to add, is not a name this client has -
-        // 249 LOOT_OPENED, 250 LOOT_SLOT_CLEARED, 251 LOOT_SLOT_CHANGED and 252
-        // LOOT_CLOSED are the whole of its loot events, and the loot window
-        // registers exactly those four (lootframe.lua:6-9).
-        owner_.addonEventCallbackRef()("LOOT_OPENED", {autoLoot_ ? "1" : "0"});
-    }
-    if (currentLoot_.lootGuid == lastInteractedGoGuid) {
-        lastInteractedGoGuid = 0;
-    }
-    owner_.clearPendingGameObjectLootOpen(currentLoot_.lootGuid);
     auto& localLoot = localLootState_[currentLoot_.lootGuid];
     localLoot.data = currentLoot_;
-
+    // Only once every item in it is known (0x005896b0): each the item cache
+    // does not hold is asked for and counted (0x00bfa688), and the answer that
+    // found it - LOOT_SLOT_CHANGED for its slot, raised with the item answer -
+    // takes one off the count, the last making the loot ready (0x00589460).
+    // An answer that found nothing leaves it counted, as there.
+    std::vector<uint32_t> unknown;
     for (const auto& item : currentLoot_.items) {
-        owner_.queryItemInfo(item.itemId, 0);
+        const auto* info = owner_.getItemInfo(item.itemId);
+        if (item.itemId != 0 && (!info || !info->valid) &&
+            std::find(unknown.begin(), unknown.end(), item.itemId) == unknown.end()) {
+            unknown.push_back(item.itemId);
+        }
     }
+    lootItemsAwaited_ = static_cast<int>(unknown.size());
+    if (unknown.empty()) {
+        lootReady();
+    } else {
+        const uint64_t lootGuid = currentLoot_.lootGuid;
+        for (uint32_t itemId : unknown) {
+            owner_.askItemThen(itemId, "loot open " + std::to_string(lootGuid),
+                               [this, lootGuid](bool found) {
+                if (!found || !lootWindowOpen_ || currentLoot_.lootGuid != lootGuid) return;
+                if (--lootItemsAwaited_ != 0) return;
+                lootReady();
+            });
+        }
+    }
+}
 
-    if (currentLoot_.gold > 0) {
-        if (owner_.getState() == WorldState::IN_WORLD && owner_.getSocket()) {
-            bool suppressFallback = false;
-            auto cooldownIt = recentLootMoneyAnnounceCooldowns_.find(currentLoot_.lootGuid);
-            if (cooldownIt != recentLootMoneyAnnounceCooldowns_.end() && cooldownIt->second > 0.0f) {
-                suppressFallback = true;
+void InventoryHandler::lootReady() {
+    // 0x005896b0 / 0x00589460: taken at once where this loot is auto looted
+    // (the player's +0x18e8, set by what began it), else LOOT_OPENED with a 0.
+    //
+    // The argument is a number, not text: the client fires LOOT_OPENED (249)
+    // with "%d", and LootFrame_OnEvent's `autoLoot == 0` compares it as one.
+    if (autoLoot_) {
+        autoTakeLoot();
+        return;
+    }
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LOOT_OPENED", {"0"});
+}
+
+void InventoryHandler::autoTakeLoot() {
+    // 0x00588f90, once every item is known: the coin (0x006d4b90), then each
+    // slot the player may take - free (type 0) or the player's own (4). A
+    // bind-on-pickup item better than common that is not party loot (template
+    // flag 0x800), in a free slot, is asked about instead - the first such
+    // only, LOOT_BIND_CONFIRM with its slot on screen - and the rest are
+    // stored (CMSG_AUTOSTORE_LOOT_ITEM, 0x006d2c20). The loot is then no
+    // longer auto looted; with nothing in it at all it is let go
+    // (0x00523640), else it opens with a 1.
+    if (lootItemsAwaited_ != 0) return;
+    if (!lootWindowOpen_ || owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) {
+        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LOOT_OPENED", {"1"});
+        return;
+    }
+    if (currentLoot_.goldLeft()) {
+        bool suppressFallback = false;
+        auto cooldownIt = recentLootMoneyAnnounceCooldowns_.find(currentLoot_.lootGuid);
+        if (cooldownIt != recentLootMoneyAnnounceCooldowns_.end() && cooldownIt->second > 0.0f)
+            suppressFallback = true;
+        pendingLootMoneyGuid_ = suppressFallback ? 0 : currentLoot_.lootGuid;
+        pendingLootMoneyAmount_ = suppressFallback ? 0 : currentLoot_.gold;
+        pendingLootMoneyNotifyTimer_ = suppressFallback ? 0.0f : 0.4f;
+        owner_.getSocket()->send(LootMoneyPacket::build());
+    }
+    bool asked = false;
+    int display = currentLoot_.hasCoinSlot() ? 1 : 0;
+    for (const auto& item : currentLoot_.items) {
+        ++display;
+        if (item.looted || (item.lootSlotType != 0 && item.lootSlotType != 4)) continue;
+        const auto* info = owner_.getItemInfo(item.itemId);
+        const bool confirm = info && info->valid && info->bindType == 1 && info->quality > 1 &&
+                             (info->itemFlags & 0x800u) == 0 && item.lootSlotType != 4;
+        if (confirm) {
+            if (!asked) {
+                asked = true;
+                pendingLootActive_ = true;
+                pendingLootSlot_ = item.slotIndex;
+                if (owner_.addonEventCallbackRef())
+                    owner_.addonEventCallbackRef()("LOOT_BIND_CONFIRM", {std::to_string(display)});
             }
-            pendingLootMoneyGuid_ = suppressFallback ? 0 : currentLoot_.lootGuid;
-            pendingLootMoneyAmount_ = suppressFallback ? 0 : currentLoot_.gold;
-            pendingLootMoneyNotifyTimer_ = suppressFallback ? 0.0f : 0.4f;
-            auto pkt = LootMoneyPacket::build();
-            owner_.getSocket()->send(pkt);
-            // The coin stays in the window until the server says it is taken.
-            //
-            // Clearing it here emptied the slot the interface had just been
-            // told about: the loot frame builds its buttons on LOOT_OPENED,
-            // which fires above, and the coin is display slot one with the
-            // items after it. Dropping the coin out from under that renumbered
-            // every item - GetLootSlotInfo(2) answered the *second* item, or
-            // nothing at all - so the window went on showing a coin that had
-            // been taken and an item button that did nothing when clicked.
+            continue;
         }
+        // Its pick-up sound, then the take (0x00588f90).
+        if (info && info->valid) playItemSound(info->displayInfoId, 0);
+        owner_.getSocket()->send(AutostoreLootItemPacket::build(item.slotIndex));
     }
-
-    // Game-object quest containers are single-action pickups in normal play.
-    // Autostore their returned items even when general creature auto-loot is off;
-    // otherwise right-click opens server loot but never grants the objective item.
-    const bool autoStoreGameObjectLoot = isLastInteractedGoLoot;
-    if ((autoLoot_ || autoStoreGameObjectLoot) &&
-        owner_.getState() == WorldState::IN_WORLD && owner_.getSocket() &&
-        !localLoot.itemAutoLootSent) {
-        for (const auto& item : currentLoot_.items) {
-            LOG_INFO("Autostoring loot slot=", static_cast<int>(item.slotIndex),
-                     " item=", item.itemId, " count=", item.count,
-                     " fromGuid=0x", std::hex, currentLoot_.lootGuid, std::dec,
-                     " gameObject=", autoStoreGameObjectLoot);
-            auto pkt = AutostoreLootItemPacket::build(item.slotIndex);
-            owner_.getSocket()->send(pkt);
-        }
-        localLoot.itemAutoLootSent = true;
-    }
-
-    // A corpse that held only money is already empty, so close it here rather
-    // than waiting for a slot to clear that will never clear. Only when there
-    // are no items: an item loot's slots have not been confirmed cleared yet,
-    // and releasing before the server stores them would drop them - that case
-    // closes from handleLootRemoved once the last slot is gone.
-    if (lootWindowOpen_ && currentLoot_.items.empty() && currentLoot_.gold == 0) {
+    autoLoot_ = false;
+    if (!currentLoot_.hasCoinSlot() && currentLoot_.items.empty()) {
         closeLoot();
+        return;
     }
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LOOT_OPENED", {"1"});
 }
 
 void InventoryHandler::handleLootReleaseResponse(network::Packet& packet) {
@@ -1530,17 +1600,50 @@ LootRollEntry* InventoryHandler::findLootRoll(uint64_t objectGuid, uint32_t slot
 }
 
 /// Close one roll and take its window down with it.
+void InventoryHandler::openLootRollFrame(int rollId) {
+    for (auto& roll : lootRolls_) {
+        if (roll.rollId != rollId) continue;
+        roll.started = true;
+        if (lootRollFramesUp_ >= 4) {
+            roll.queued = true;
+            return;
+        }
+        ++lootRollFramesUp_;
+        roll.queued = false;
+        // ...and the time to roll in, which the packet carried all along and
+        // this read past. GroupLootFrame_OpenNewFrame takes it as the second
+        // argument and sizes the countdown bar from it; without one the bar
+        // had no length and the window could not time out.
+        if (owner_.addonEventCallbackRef()) {
+            owner_.addonEventCallbackRef()("START_LOOT_ROLL",
+                                           {std::to_string(roll.rollId),
+                                            std::to_string(roll.rollCountdownMs)});
+        }
+        return;
+    }
+}
+
 void InventoryHandler::endLootRoll(uint64_t objectGuid, uint32_t slot) {
     for (auto it = lootRolls_.begin(); it != lootRolls_.end(); ++it) {
         if (it->objectGuid != objectGuid || it->slot != slot) continue;
         const int rollId = it->rollId;
+        const bool started = it->started;
         lootRolls_.erase(it);
         // Named, so the window that closes is the one this roll opened. It was
         // the slot plus one here as well, which closed a different roll's
-        // window whenever two were up.
+        // window whenever two were up. Only for a roll whose start was
+        // raised - queued ones as well, which count off the frames the same
+        // way in the client (0x006fb470) - and then the next queued roll takes
+        // the frame (0x006fb180).
+        if (!started) return;
         if (owner_.addonEventCallbackRef()) {
             owner_.addonEventCallbackRef()("CANCEL_LOOT_ROLL",
                                            {std::to_string(rollId)});
+        }
+        if (lootRollFramesUp_ > 0) --lootRollFramesUp_;
+        for (auto& next : lootRolls_) {
+            if (lootRollFramesUp_ >= 4) break;
+            if (next.queued) openLootRollFrame(next.rollId);
         }
         return;
     }
@@ -1565,6 +1668,7 @@ void InventoryHandler::passLootRollsForWorldport() {
     // window shown (+0x41 clear).
     const std::vector<LootRollEntry> rolls = std::move(lootRolls_);
     lootRolls_.clear();
+    lootRollFramesUp_ = 0;
     for (const LootRollEntry& roll : rolls) {
         if (owner_.getState() == WorldState::IN_WORLD && owner_.getSocket()) {
             network::Packet pkt(wireOpcode(Opcode::CMSG_LOOT_ROLL));
@@ -1573,10 +1677,12 @@ void InventoryHandler::passLootRollsForWorldport() {
             pkt.writeUInt8(0);  // pass
             owner_.getSocket()->send(pkt);
         }
-        if (owner_.addonEventCallbackRef()) {
+        if (roll.started && !roll.queued && owner_.addonEventCallbackRef()) {
             owner_.addonEventCallbackRef()("CANCEL_LOOT_ROLL", {std::to_string(roll.rollId)});
         }
     }
+    // Every frame is down (0x006fafd0 zeroes 0x00ca0694).
+    lootRollFramesUp_ = 0;
 }
 
 void InventoryHandler::handleLootRoll(network::Packet& packet) {
@@ -1624,8 +1730,34 @@ void InventoryHandler::handleLootRoll(network::Packet& packet) {
             r.female = ((bytes0 >> 16) & 0xFF) == 1;
         }
     }
-    owner_.addLocalChatLine(ChatType::LOOT,
-                            interface_text::lootRollLine(r, rollItemLink(itemId, randProp), playerName, uiText));
+    // Printed once the item and the roller are both known (0x006fbb10: the
+    // item cache with 0x006fba60, then the name cache with 0x006fb9b0, and
+    // 0x006fb700 only when both have answered): either one not known yet is
+    // asked for and the line waits on it. An answer that found nothing lets
+    // the line go.
+    const auto print = [this, r, itemId, randProp](const std::string& name) {
+        owner_.addLocalChatLine(ChatType::LOOT,
+                                interface_text::lootRollLine(r, rollItemLink(itemId, randProp), name, uiText));
+    };
+    const std::string key = "loot roll " + std::to_string(objectGuid) + ":" + std::to_string(lootSlot) +
+                            ":" + std::to_string(playerGuid) + ":" + std::to_string(rollType) +
+                            ":" + std::to_string(rollNumber);
+    const auto withName = [this, playerGuid, print, key]() {
+        if (const std::string& name = owner_.lookupName(playerGuid); !name.empty()) {
+            print(name);
+            return;
+        }
+        owner_.askNameThen(playerGuid, key, [print](bool found, const std::string& name) {
+            if (found && !name.empty()) print(name);
+        });
+    };
+    if (owner_.getItemInfo(itemId) && owner_.getItemInfo(itemId)->valid) {
+        withName();
+    } else {
+        owner_.askItemThen(itemId, key, [withName](bool found) {
+            if (found) withName();
+        });
+    }
 }
 
 std::string InventoryHandler::rollItemLink(uint32_t itemId, int32_t randomProp) {
@@ -1653,18 +1785,35 @@ void InventoryHandler::handleLootRollWon(network::Packet& packet) {
     uint8_t rollNumber  = packet.readUInt8();
     uint8_t rollType    = packet.readUInt8();
 
-    std::string winnerName;
-    auto nit = owner_.getPlayerNameCache().find(winnerGuid);
-    if (nit != owner_.getPlayerNameCache().end()) winnerName = nit->second;
-    if (winnerName.empty()) winnerName = owner_.lookupName(winnerGuid);
 
     // LOOT_ROLL_WON / LOOT_ROLL_YOU_WON, or their _NO_SPAM lines naming the
     // winning roll without showLootSpam, as CHAT_MSG_LOOT (0x006fb700). This
     // printed "X won [item] (Need - 85)" in English.
-    owner_.addLocalChatLine(ChatType::LOOT, interface_text::lootRollWonLine(
-        winnerGuid == owner_.getPlayerGuid(), rollNumber, rollType,
-        addons::storedCVarValue("showLootSpam", "1") != "0",
-        rollItemLink(itemId, wonRandProp), winnerName, uiText));
+    // Waits for the item and the winner the way the roll line does
+    // (0x006fae40: 0x006facd0's callbacks before 0x006fb700).
+    const bool self = winnerGuid == owner_.getPlayerGuid();
+    const bool spam = addons::storedCVarValue("showLootSpam", "1") != "0";
+    const auto print = [this, self, rollNumber, rollType, spam, itemId, wonRandProp](const std::string& name) {
+        owner_.addLocalChatLine(ChatType::LOOT, interface_text::lootRollWonLine(
+            self, rollNumber, rollType, spam, rollItemLink(itemId, wonRandProp), name, uiText));
+    };
+    const std::string key = "loot won " + std::to_string(wonGuid) + ":" + std::to_string(wonSlot);
+    const auto withName = [this, winnerGuid, print, key]() {
+        if (const std::string& name = owner_.lookupName(winnerGuid); !name.empty()) {
+            print(name);
+            return;
+        }
+        owner_.askNameThen(winnerGuid, key, [print](bool found, const std::string& name) {
+            if (found && !name.empty()) print(name);
+        });
+    };
+    if (owner_.getItemInfo(itemId) && owner_.getItemInfo(itemId)->valid) {
+        withName();
+    } else {
+        owner_.askItemThen(itemId, key, [withName](bool found) {
+            if (found) withName();
+        });
+    }
     endLootRoll(wonGuid, wonSlot);
 }
 
@@ -2372,6 +2521,7 @@ void InventoryHandler::dispatchUseItem(uint8_t wowBag, uint8_t wowSlot, uint64_t
     constexpr uint32_t kItemFieldFlagWrapped = 0x8;
     if (itemInfo && itemInfo->valid && (itemInfo->itemFlags & kItemFlagWrapper) != 0) {
         if ((owner_.getItemFieldFlags(itemGuid) & kItemFieldFlagWrapped) != 0) {
+            beginOpenItem();
             owner_.getSocket()->send(OpenItemPacket::build(wowBag, wowSlot));
         } else {
             wrapPaperGuid_ = itemGuid;
@@ -2655,6 +2805,28 @@ void InventoryHandler::completeItemUseOnItem(uint64_t targetItemGuid, bool confi
         }
     }
 
+    // Prospecting (effect 127) wants an item flagged prospectable (0x40000)
+    // and milling (158) one flagged millable (0x20000000); anything else is
+    // the cast's own failure before it is sent - SPELL_FAILED_CANT_BE_-
+    // PROSPECTED (0x11) or _MILLED (0x10) through 0x00808200 (0x005210d0).
+    {
+        const auto& cache = owner_.spellNameCacheRef();
+        const uint32_t targetEntry = owner_.getItemEntryByGuid(targetItemGuid);
+        const auto* targetInfo = targetEntry ? owner_.getItemInfo(targetEntry) : nullptr;
+        if (const auto it = cache.find(pending.spellId); it != cache.end() && targetInfo && targetInfo->valid) {
+            uint8_t refusal = 0;
+            for (uint32_t effect : it->second.effectIds) {
+                if (effect == 127 && (targetInfo->itemFlags & 0x40000u) == 0) refusal = 0x11;
+                if (effect == 158 && (targetInfo->itemFlags & 0x20000000u) == 0) refusal = 0x10;
+            }
+            if (refusal != 0) {
+                pendingItemTarget_.reset();
+                if (auto* spells = owner_.getSpellHandler()) spells->reportLocalCastFailure(pending.spellId, refusal);
+                return;
+            }
+        }
+    }
+
     // What it does ask instead, for a disenchant: the item is gone and there is
     // no undoing it. The real client asks nothing here, and prospecting and
     // milling keep that - they are spent five at a time from a stack, and a
@@ -2917,10 +3089,18 @@ bool InventoryHandler::placePendingGlyph(uint32_t socketIndex) {
     return true;
 }
 
+void InventoryHandler::beginOpenItem() {
+    // 0x006dcd70: the open loot let go (0x00523640), and whether what the
+    // item holds is taken at once (0x00513700).
+    closeLoot();
+    autoLoot_ = owner_.clickAutoLoots();
+}
+
 void InventoryHandler::openItemBySlot(int backpackIndex) {
     if (backpackIndex < 0 || backpackIndex >= owner_.inventoryRef().getBackpackSize()) return;
     if (owner_.inventoryRef().getBackpackSlot(backpackIndex).empty()) return;
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    beginOpenItem();
     auto packet = OpenItemPacket::build(0xFF, static_cast<uint8_t>(Inventory::NUM_EQUIP_SLOTS + backpackIndex));
     LOG_INFO("openItemBySlot: CMSG_OPEN_ITEM bag=0xFF slot=", (Inventory::NUM_EQUIP_SLOTS + backpackIndex));
     owner_.getSocket()->send(packet);
@@ -2932,6 +3112,7 @@ void InventoryHandler::openItemInBag(int bagIndex, int slotIndex) {
     if (owner_.inventoryRef().getBagSlot(bagIndex, slotIndex).empty()) return;
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     uint8_t wowBag = static_cast<uint8_t>(Inventory::FIRST_BAG_EQUIP_SLOT + bagIndex);
+    beginOpenItem();
     auto packet = OpenItemPacket::build(wowBag, static_cast<uint8_t>(slotIndex));
     LOG_INFO("openItemInBag: CMSG_OPEN_ITEM bag=", (int)wowBag, " slot=", slotIndex);
     owner_.getSocket()->send(packet);
@@ -3064,6 +3245,11 @@ void InventoryHandler::splitItem(uint8_t srcBag, uint8_t srcSlot, uint8_t count)
     owner_.raiseUiError("Cannot split: no free inventory slots.");
 }
 
+void InventoryHandler::playItemSound(uint32_t displayInfoId, int which) {
+    if (auto* ac = owner_.services().audioCoordinator)
+        if (auto* sfx = ac->getUiSoundManager()) sfx->playItemSound(displayInfoId, which);
+}
+
 void InventoryHandler::triggerItemPushTutorials(uint64_t receiver, const ItemQueryResponseData& info,
                                                 uint8_t bagSlot, uint32_t slot) {
     // 0x00523900: only for a receiver this client knows.
@@ -3084,6 +3270,9 @@ void InventoryHandler::triggerItemPushTutorials(uint64_t receiver, const ItemQue
     in.playerClass = owner_.getPlayerClass();
     in.equipTutorialSeen = owner_.tutorials().flagged(0x37);
     for (uint32_t id : itemPushTutorials(in)) owner_.triggerTutorial(id);
+    // The item's put-down sound as it arrives in the player's bags
+    // (0x00523900 -> 0x004d0090(1)).
+    if (self) playItemSound(info.displayInfoId, 1);
     // 0x005d9540, from the container slot's handler (0x005d9790): an item of
     // a totem category arriving while that element's totem bar list holds
     // spells triggers tutorial 0x2e.
@@ -5747,6 +5936,9 @@ void InventoryHandler::useEquipmentSet(uint32_t setId) {
         pkt.writeUInt8(srcSlot);
     }
     owner_.getSocket()->send(pkt);
+    // 0x005ada20: the swap is pending until the server answers.
+    pendingUseSetId_ = setId;
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("EQUIPMENT_SWAP_PENDING", {});
 }
 
 void InventoryHandler::saveEquipmentSet(const std::string& name, const std::string& iconName,
@@ -5909,6 +6101,7 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
             uint32_t rawEntry = packet.readUInt32() & ~0x80000000u;
             owner_.pendingItemQueriesRef().erase(rawEntry);
             owner_.combatLogFeed().itemAnswered(rawEntry, {}, false);
+            owner_.onItemAnsweredForWaits(rawEntry, false);
         }
         LOG_WARNING("handleItemQueryResponse: parse failed, size=", packet.getSize());
         return;
@@ -5916,6 +6109,12 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
 
     owner_.pendingItemQueriesRef().erase(data.entry);
     owner_.combatLogFeed().itemAnswered(data.entry, data.name, data.valid);
+    // The item cache's waits, run once this answer has been taken in -
+    // whichever way the handler leaves.
+    struct AnswerWaits {
+        GameHandler& gh; uint32_t entry; bool found;
+        ~AnswerWaits() { gh.onItemAnsweredForWaits(entry, found); }
+    } answerWaits{owner_, data.entry, data.valid};
     LOG_DEBUG("handleItemQueryResponse: RECV entry=", data.entry, " name='", data.name,
               "' displayInfoId=", data.displayInfoId,
               " class=", data.itemClass, " subClass=", data.subClass,
@@ -6066,6 +6265,16 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
                 owner_.addonEventCallbackRef()("MERCHANT_UPDATE", {});
                 break;
             }
+        }
+
+        // The trade window, which asks the item cache for each slot it draws
+        // and redraws on the answer (GetTradePlayerItemInfo /
+        // GetTradeTargetItemInfo with 0x00586080, TRADE_UPDATE).
+        if (isTradeOpen() && owner_.addonEventCallbackRef()) {
+            bool shown = false;
+            for (const auto& slot : myTradeSlots_) shown = shown || (slot.itemId != 0 && slot.itemId == data.entry);
+            for (const auto& slot : peerTradeSlots_) shown = shown || (slot.itemId != 0 && slot.itemId == data.entry);
+            if (shown) owner_.addonEventCallbackRef()("TRADE_UPDATE", {});
         }
 
         // Auction lines that were waiting on this item's name (0x0059a400).

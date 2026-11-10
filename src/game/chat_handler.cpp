@@ -7,6 +7,9 @@
 #include <set>
 #include "addons/lua_api_registrations.hpp"
 #include "game/chat_filters.hpp"
+#include "game/chat_language.hpp"
+#include "game/chat_profanity.hpp"
+#include "game/expansion_profile.hpp"
 #include "game/text_tokens.hpp"
 #include "game/game_handler.hpp"
 #include "game/game_utils.hpp"
@@ -700,6 +703,92 @@ void ChatHandler::sendAddonMessage(ChatType type, const std::string& message, co
     owner_.getSocket()->send(packet);
 }
 
+void ChatHandler::filterProfanity(ChatType type, std::string& text) {
+    switch (type) {
+        case ChatType::SYSTEM: case ChatType::SAY: case ChatType::PARTY: case ChatType::PARTY_LEADER:
+        case ChatType::RAID: case ChatType::RAID_LEADER: case ChatType::GUILD: case ChatType::OFFICER:
+        case ChatType::YELL: case ChatType::WHISPER: case ChatType::WHISPER_INFORM: case ChatType::EMOTE:
+        case ChatType::CHANNEL: case ChatType::AFK: case ChatType::DND: case ChatType::RAID_WARNING:
+        case ChatType::BATTLEGROUND: case ChatType::BATTLEGROUND_LEADER:
+            break;
+        default:
+            return;
+    }
+    if (text.empty() || addons::storedCVarValue("profanityFilter", "1") == "0") return;
+    if (!profanityLoaded_) {
+        auto* am = owner_.services().assetManager;
+        if (!am || !am->isInitialized()) return;
+        profanityLoaded_ = true;
+        const auto* profile = owner_.services().expansionRegistry
+                                  ? owner_.services().expansionRegistry->getActive() : nullptr;
+        const int locale = chat_profanity::localeIndex(profile ? profile->locale : std::string("enUS"));
+        // ID, Text, Language (the locale index, -1 for every locale).
+        std::vector<std::string> expressions;
+        if (auto dbc = am->loadDBCOptional("ChatProfanity.dbc"); dbc && dbc->getFieldCount() >= 3) {
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                const int32_t lang = static_cast<int32_t>(dbc->getUInt32(i, 2));
+                if (lang != locale && lang != -1) continue;
+                std::string e = dbc->getString(i, 1);
+                if (!e.empty()) expressions.push_back(std::move(e));
+            }
+        }
+        profanity_.load(expressions);
+    }
+    profanity_.apply(text);
+}
+
+uint32_t ChatHandler::languageComprehension(uint32_t language) {
+    owner_.loadSpellNameCache();
+    const auto& cache = owner_.spellNameCacheRef();
+    auto teaches = [&](uint32_t spellId, uint32_t effect, bool aura) {
+        auto it = cache.find(spellId);
+        if (it == cache.end()) return false;
+        for (int i = 0; i < 3; ++i) {
+            const uint32_t id = aura ? it->second.effectAuraIds[i] : it->second.effectIds[i];
+            if (id == effect && it->second.effectMiscValues[i] == language) return true;
+        }
+        return false;
+    };
+    for (uint32_t spellId : owner_.getKnownSpells()) {
+        if (!teaches(spellId, 39u, false)) continue;
+        owner_.loadSkillLineAbilityDbc();
+        auto line = owner_.spellToSkillLineRef().find(spellId);
+        if (line == owner_.spellToSkillLineRef().end()) return 0;
+        const auto& skills = owner_.getPlayerSkills();
+        auto sk = skills.find(line->second);
+        return sk == skills.end() ? 0u : sk->second.effectiveValue();
+    }
+    for (const auto& aura : owner_.getPlayerAuras()) {
+        if (aura.spellId != 0 && teaches(aura.spellId, 244u, true)) return 300;
+    }
+    return 0;
+}
+
+std::string ChatHandler::hearInLanguage(uint32_t language, const std::string& text) {
+    const uint32_t comprehension = languageComprehension(language);
+    if (comprehension > 299) return text;
+    if (!languageWordsLoaded_) {
+        auto* am = owner_.services().assetManager;
+        if (!am || !am->isInitialized()) return text;
+        languageWordsLoaded_ = true;
+        // ID, LanguageID, Word.
+        if (auto dbc = am->loadDBC("LanguageWords.dbc"); dbc && dbc->isLoaded() &&
+            dbc->getFieldCount() >= 3) {
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                std::string word = dbc->getString(i, 2);
+                if (word.empty()) continue;
+                const uint32_t key = (dbc->getUInt32(i, 1) << 8) |
+                                     static_cast<uint32_t>(std::min<size_t>(word.size(), 0xff));
+                languageWords_[key].push_back(std::move(word));
+            }
+        }
+    }
+    return chat_language::garble(text, comprehension, [&](uint32_t len) -> const std::vector<std::string>* {
+        auto it = languageWords_.find((language << 8) | len);
+        return it == languageWords_.end() ? nullptr : &it->second;
+    });
+}
+
 void ChatHandler::handleMessageChat(network::Packet& packet, const std::string& gmName) {
     LOG_DEBUG("Handling SMSG_MESSAGECHAT");
     if (chatPacketDiagEnabled()) {
@@ -730,6 +819,15 @@ void ChatHandler::handleMessageChat(network::Packet& packet, const std::string& 
     // for: the reader tests its own ignore list as soon as the body is read, and
     // reads no name for a line it is about to drop.
     if (dropAsIgnored(data)) return;
+
+    // Heard as the character hears it: a language it does not speak comes out
+    // as that language's words (0x00509dd0). Universal and addon lines are
+    // nobody's language.
+    if (data.language != ChatLanguage::UNIVERSAL && data.language != ChatLanguage::ADDON)
+        data.message = hearInLanguage(static_cast<uint32_t>(data.language), data.message);
+    // The mature-language filter on what is heard, after the language
+    // (0x00509dd0): the chat types of the client's table at 0x009fa510.
+    filterProfanity(data.type, data.message);
 
     // The player's own lines come back this way, a whisper as WHISPER_INFORM
     // (sendChatMessage shows nothing of its own).

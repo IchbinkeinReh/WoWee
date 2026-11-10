@@ -549,6 +549,10 @@ struct LootRollEntry {
     uint32_t rollCountdownMs = 60000;
     uint8_t  voteMask      = 0xFF;
     std::chrono::steady_clock::time_point rollStartedAt{};
+    /// START_LOOT_ROLL has been raised for it (0x006fb2c0 counts these).
+    bool started = false;
+    /// Waiting for a frame: four rolls are up already (+0x41).
+    bool queued = false;
 
     struct PlayerRollResult {
         std::string playerName;

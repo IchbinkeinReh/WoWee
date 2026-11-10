@@ -309,12 +309,32 @@ struct Emitter {
         if (const std::string* mode = node.attr("alphaMode")) {
             if (isTexture) line(var + ":SetBlendMode(" + quote(*mode) + ")");
         }
+        // <Gradient orientation=""><MinColor/><MaxColor/></Gradient> on a texture.
+        if (const XmlNode* grad = isTexture ? node.child("Gradient") : nullptr) {
+            const XmlNode* mn = grad->child("MinColor");
+            const XmlNode* mx = grad->child("MaxColor");
+            auto rgba = [](const XmlNode* c) {
+                if (!c) return std::string("1, 1, 1, 1");
+                return c->attrOr("r", "0") + ", " + c->attrOr("g", "0") + ", " + c->attrOr("b", "0") + ", " +
+                       c->attrOr("a", "1");
+            };
+            line(var + ":SetGradientAlpha(" + quote(grad->attrOr("orientation", "HORIZONTAL")) + ", " + rgba(mn) +
+                 ", " + rgba(mx) + ")");
+        }
         emitTextAttr(node, var);
         if (const std::string* jv = node.attr("justifyV")) {
             line(var + ":SetJustifyV(" + quote(*jv) + ")");
         }
         if (const std::string* j = node.attr("justifyH")) {
             line(var + ":SetJustifyH(" + quote(*j) + ")");
+        }
+        if (isTexture && node.attr("horizTile"))
+            line(var + ":SetHorizTile(" + (node.attrBool("horizTile") ? "true" : "false") + ")");
+        if (isTexture && node.attr("vertTile"))
+            line(var + ":SetVertTile(" + (node.attrBool("vertTile") ? "true" : "false") + ")");
+        if (!isTexture && node.attr("indented")) {
+            line(var + ":SetIndentedWordWrap(" +
+                 (node.attrBool("indented") ? "true" : "false") + ")");
         }
         if (node.attrBool("setAllPoints")) {
             line(var + ":SetAllPoints(" + parentVar + ")");
@@ -457,6 +477,11 @@ struct Emitter {
                 if (const std::string* loop = group.attr("looping")) {
                     line(gvar + ":SetLooping(" + quote(*loop) + ")");
                 }
+                // initialOffsetX/Y (CSimpleAnimGroup's loader, 0x0049a060).
+                if (group.attr("initialOffsetX") || group.attr("initialOffsetY")) {
+                    line(gvar + ":SetInitialOffset(" + group.attrOr("initialOffsetX", "0") + ", " +
+                         group.attrOr("initialOffsetY", "0") + ")");
+                }
                 if (const std::string* pk = group.attr("parentKey")) {
                     line(var + "." + *pk + " = " + gvar);
                 }
@@ -466,7 +491,7 @@ struct Emitter {
                 for (const XmlNode& a : group.children) {
                     if (a.name != "Alpha" && a.name != "Translation" &&
                         a.name != "Scale" && a.name != "Rotation" &&
-                        a.name != "Animation") {
+                        a.name != "Path" && a.name != "Animation") {
                         continue;
                     }
                     const std::string avar = nextVar();
@@ -481,6 +506,38 @@ struct Emitter {
                         line(avar + ":SetOrder(" + *o + ")");
                     if (const std::string* sd = a.attr("startDelay"))
                         line(avar + ":SetStartDelay(" + *sd + ")");
+                    if (const std::string* ed = a.attr("endDelay"))
+                        line(avar + ":SetEndDelay(" + *ed + ")");
+                    if (const std::string* sm = a.attr("smoothing"))
+                        line(avar + ":SetSmoothing(" + quote(*sm) + ")");
+                    if (const std::string* fr = a.attr("maxFramerate"))
+                        line(avar + ":SetMaxFramerate(" + *fr + ")");
+                    if (const std::string* deg = a.attr("degrees"))
+                        line(avar + ":SetDegrees(" + *deg + ")");
+                    if (const std::string* rad = a.attr("radians"))
+                        line(avar + ":SetRadians(" + *rad + ")");
+                    if (const XmlNode* origin = a.child("Origin")) {
+                        float ox = 0.0f, oy = 0.0f;
+                        if (const XmlNode* off = origin->child("Offset")) readDimension(*off, ox, oy);
+                        line(avar + ":SetOrigin(" + quote(origin->attrOr("point", "CENTER")) + ", " +
+                             std::to_string(ox) + ", " + std::to_string(oy) + ")");
+                    }
+                    // A Path's curve and its <ControlPoints>.
+                    if (const std::string* cv = a.attr("curve"))
+                        line(avar + ":SetCurve(" + quote(*cv) + ")");
+                    if (const XmlNode* cps = a.child("ControlPoints")) {
+                        for (const XmlNode& cp : cps->children) {
+                            if (cp.name != "ControlPoint") continue;
+                            const std::string cpName = substituteParent(cp.attrOr("name", ""), name);
+                            const std::string cpVar = nextVar();
+                            line(cpVar + " = " + avar + ":CreateControlPoint(" +
+                                 (cpName.empty() ? "nil" : quote(cpName)) + ", nil, " +
+                                 cp.attrOr("order", "nil") + ")");
+                            if (cp.attr("offsetX") || cp.attr("offsetY"))
+                                line(cpVar + ":SetOffset(" + cp.attrOr("offsetX", "0") + ", " +
+                                     cp.attrOr("offsetY", "0") + ")");
+                        }
+                    }
                     if (const std::string* c = a.attr("change"))
                         line(avar + ":SetChange(" + *c + ")");
                     if (a.attr("offsetX") || a.attr("offsetY")) {
@@ -1076,13 +1133,18 @@ struct Emitter {
         // A message frame holds as many lines as it says it does. Twenty-two
         // of them ask for three; without this each kept a hundred and
         // twenty-eight and drew far past the box drawn for it.
-        if (const std::string* ml = node.attr("maxLines"); ml && !ml->empty()) {
-            line(var + ":SetMaxLines(" + *ml + ")");
+        if (const std::string* ml = node.attr("maxLines");
+            ml && !ml->empty() && node.attrFloat("maxLines", 0.0f) >= 1.0f) {
+            line(var + ":SetMaxLines(" + std::to_string(static_cast<int>(node.attrFloat("maxLines", 0.0f))) + ")");
         }
         // How long a line stays, and which end a new one goes on. UIErrorsFrame
         // declares displayDuration="5" and insertMode="TOP"; both were dropped,
         // so every server refusal stayed on screen for good and they stacked
         // upward from the wrong end.
+        // fade="" on a scrolling message frame: whether its lines fade at all.
+        if (node.attr("fade")) {
+            line(var + ":SetFading(" + (node.attrBool("fade") ? "true" : "false") + ")");
+        }
         if (const std::string* dd = node.attr("displayDuration"); dd && !dd->empty()) {
             line(var + ":SetTimeVisible(" + *dd + ")");
         }
@@ -1113,6 +1175,12 @@ struct Emitter {
         if (node.attr("nonspacewrap")) {
             line(var + ":SetNonSpaceWrap(" +
                  (node.attrBool("nonspacewrap") ? "true" : "false") + ")");
+        }
+        // indented="": wrapped lines after the first set in (the font
+        // instance's loader, beside wordwrap and nonspacewrap).
+        if (node.attr("indented")) {
+            line(var + ":SetIndentedWordWrap(" +
+                 (node.attrBool("indented") ? "true" : "false") + ")");
         }
         // The keyboard, on the same principle as the mouse and the wheel: a
         // frame that declares OnKeyDown or OnKeyUp wants keys. Every one that
@@ -1145,46 +1213,19 @@ struct Emitter {
             }
             break;
         }
-        // <TitleRegion> - the part of a frame you can drag it by. All three in
-        // FrameXML cover the whole frame, and the loot window is one of them:
-        // without this it cannot be moved at all.
-        //
-        // Only wired when the frame declares no drag handling of its own. The
-        // chat frame has a title region and five OnDragStart scripts, and
-        // overwriting those with the generic pair would replace behaviour that
-        // is deliberately more specific.
-        // A window that says it is toplevel and movable counts too, title region
-        // or not. Only three frames in FrameXML declare one, so keying on it
-        // alone left the character sheet and the spellbook - both 384x512
-        // panels declaring toplevel and movable, neither with a title region -
-        // unable to be moved, along with thirty more windows.
-        //
-        // Both attributes, not just movable: forty-nine frames declare movable
-        // and the set includes the unit frames, which declare it so that addons
-        // can reposition them. Giving those a body drag would turn a click that
-        // slipped four units from "target this party member" into "move their
-        // frame". Pairing it with toplevel narrows it to the actual windows.
-        {
-            bool ownDrag = false;
-            bool titleRegion = false;
-            for (const XmlNode& child : node.children) {
-                if (child.name == "TitleRegion") titleRegion = true;
-                if (child.name != "Scripts") continue;
-                for (const XmlNode& sc : child.children) {
-                    if (sc.name == "OnDragStart" || sc.name == "OnDragStop") {
-                        ownDrag = true;
-                    }
-                }
+        // <TitleRegion>: the part of the frame a press moves it by - a
+        // region of its own, laid out like any other (CSimpleFrame's loader,
+        // 0x004932c0; CreateTitleRegion 0x0049e630).
+        if (const XmlNode* tr = node.child("TitleRegion")) {
+            const std::string trVar = var + ":GetTitleRegion()";
+            line(var + ":CreateTitleRegion()");
+            if (tr->attrBool("setAllPoints")) line(trVar + ":SetAllPoints(" + var + ")");
+            if (const XmlNode* size = tr->child("Size")) {
+                float w = 0, h = 0;
+                if (readDimension(*size, w, h))
+                    line(trVar + ":SetSize(" + std::to_string(w) + ", " + std::to_string(h) + ")");
             }
-            const bool window = node.attrBool("toplevel") && node.attrBool("movable");
-            if (titleRegion || window) {
-                line(var + ":SetMovable(true)");
-                if (!ownDrag) {
-                    line(var + ":RegisterForDrag(\"LeftButton\")");
-                    line(var + ":SetScript(\"OnDragStart\", function(self) self:StartMoving() end)");
-                    line(var + ":SetScript(\"OnDragStop\", function(self) self:StopMovingOrSizing() end)");
-                }
-            }
+            if (const XmlNode* anchors = tr->child("Anchors")) emitAnchors(*anchors, trVar, var, name);
         }
         emitAnimations(node, var, name);
 
@@ -1224,6 +1265,25 @@ struct Emitter {
         }
         if (const std::string* sc = node.attr("scale")) {
             line(var + ":SetScale(" + *sc + ")");
+        }
+        // A model frame's model and its model scale (CSimpleModel's XML,
+        // 0x0095f800: file, and scale into +0x32c when above 0).
+        if (node.name == "Model" || node.name == "PlayerModel" || node.name == "DressUpModel" ||
+            node.name == "TabardModel" || node.name == "CinematicModel") {
+            if (const std::string* file = node.attr("file"); file && !file->empty())
+                line(var + ":SetModel(" + quote(*file) + ")");
+            if (const std::string* sc = node.attr("scale"))
+                line(var + ":SetModelScale(" + *sc + ")");
+            // fogNear and fogFar, at least 0, and a FogColor child that turns
+            // the fog on (0x0095f800).
+            if (const std::string* fn = node.attr("fogNear"))
+                line(var + ":SetFogNear(math.max(0, " + *fn + "))");
+            if (const std::string* ff = node.attr("fogFar"))
+                line(var + ":SetFogFar(math.max(0, " + *ff + "))");
+            if (const XmlNode* fog = node.child("FogColor")) {
+                line(var + ":SetFogColor(" + fog->attrOr("r", "0") + ", " + fog->attrOr("g", "0") + ", " +
+                     fog->attrOr("b", "0") + ", " + fog->attrOr("a", "1") + ")");
+            }
         }
         if (node.attr("toplevel")) {
             line(var + ":SetToplevel(" +
@@ -1364,14 +1424,18 @@ struct Emitter {
         // Declared false on nearly every box in FrameXML, which is the whole
         // point of it: a box that takes focus when it appears swallows the
         // keyboard from whatever the player was doing.
-        // A font string's line spacing. The only one of the remaining unread
-        // attributes with a method behind it - nonspacewrap, horizTile,
-        // vertTile and reverse have none, and emitting a call to a method that
-        // does not exist is "attempt to call method", which is worse than
-        // ignoring the attribute.
+        // A font string's line spacing.
         if (node.attr("spacing")) {
             line(var + ":SetSpacing(" +
                  std::to_string(static_cast<int>(node.attrFloat("spacing", 0.0f))) + ")");
+        }
+        // password="true" and blinkSpeed="" on an edit box (0x00966b70's
+        // loader): the latter never below zero.
+        if (node.attr("password")) {
+            line(var + ":SetPassword(" + (node.attrBool("password") ? "true" : "false") + ")");
+        }
+        if (const std::string* bs = node.attr("blinkSpeed"); bs && !bs->empty()) {
+            line(var + ":SetBlinkSpeed(" + std::to_string(std::max(0.0f, node.attrFloat("blinkSpeed", 0.0f))) + ")");
         }
         if (node.attr("autoFocus")) {
             line(var + ":SetAutoFocus(" + (node.attrBool("autoFocus") ? "true" : "false") + ")");

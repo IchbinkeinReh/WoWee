@@ -7,6 +7,7 @@
 #include "audio/audio_coordinator.hpp"
 #include "audio/ui_sound_manager.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "pipeline/asset_manager.hpp"
 #include "game/inventory_handler.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/override_bindings.hpp"
@@ -187,19 +188,51 @@ static std::string equipmentSetIcon(const game::EquipmentSetInfo* set);
 /// sides; the kind that hands an item back to the world, 1, plays nothing).
 /// All three names are rows of SoundEntries.dbc, which is how they are asked
 /// here too.
-static void askCursorSound(lua_State* L, CursorType type, bool pickedUp) {
+/// The display of the item on the cursor, for its sound as it is put down.
+static uint32_t s_cursorItemDisplay = 0;
+
+static bool cursorHoldsItem(CursorType type) {
+    return type == CursorType::ITEM || type == CursorType::MERCHANT || type == CursorType::GUILDBANK ||
+           type == CursorType::AMMO;
+}
+
+static audio::UiSoundManager* cursorSounds(lua_State* L) {
     // Silent while the interface is building itself, as PlaySound is.
-    if (LuaEngine::uiSoundsSuppressed()) return;
+    if (LuaEngine::uiSoundsSuppressed()) return nullptr;
     auto* svc = getLuaServices(L);
     auto* ac = svc ? svc->audioCoordinator : nullptr;
-    auto* sfx = ac ? ac->getUiSoundManager() : nullptr;
+    return ac ? ac->getUiSoundManager() : nullptr;
+}
+
+static void askCursorSound(lua_State* L, CursorType type, bool pickedUp) {
+    auto* sfx = cursorSounds(L);
     if (!sfx) return;
     if (type == CursorType::MONEY) {
         sfx->playByName("LOOTWINDOWCOINSOUND");
         return;
     }
+    if (cursorHoldsItem(type)) {
+        // An item makes its own sound (0x004d0090): picked up, its
+        // ItemGroupSounds' first - played where the item is known
+        // (cursorItemPickedUp) - and nothing more; put down, its second and
+        // then the drop (0x00519280 cases 5, 6, 7, 9 and 0xb).
+        if (pickedUp) return;
+        if (s_cursorItemDisplay != 0) sfx->playItemSound(s_cursorItemDisplay, 1);
+        s_cursorItemDisplay = 0;
+        sfx->playByName("INTERFACESOUND_CURSORDROPOBJECT");
+        return;
+    }
     sfx->playByName(pickedUp ? "INTERFACESOUND_CURSORGRABOBJECT"
                              : "INTERFACESOUND_CURSORDROPOBJECT");
+}
+
+/// The item just put on the cursor: its pick-up sound (0x00520d30,
+/// 0x00522fb0), and its display kept for the drop.
+static void cursorItemPickedUp(lua_State* L, uint32_t itemId) {
+    auto* gh = getGameHandler(L);
+    const auto* info = gh && itemId != 0 ? gh->getItemInfo(itemId) : nullptr;
+    s_cursorItemDisplay = info ? info->displayInfoId : 0;
+    if (auto* sfx = cursorSounds(L); sfx && s_cursorItemDisplay != 0) sfx->playItemSound(s_cursorItemDisplay, 0);
 }
 
 static void setCursorType(lua_State* L, CursorType type) {
@@ -1631,6 +1664,7 @@ static int lua_PickupGuildBankItem(lua_State* L) {
         if (it.slotId != slot - 1 || it.itemEntry == 0) continue;
         setCursorType(L, CursorType::GUILDBANK);
         s_cursorId = it.itemEntry;
+        cursorItemPickedUp(L, it.itemEntry);
         s_cursorBag = tab;
         s_cursorSlot = slot;
         s_cursorSplit = 0;   // the whole stack, unless SplitGuildBankItem says otherwise
@@ -1811,6 +1845,11 @@ void pickupMerchantItem(lua_State* L, int index) {
         if (index <= static_cast<int>(items.size())) {
             ui::frameXmlSetCursorItem(
                 gh->getItemIconPath(items[index - 1].displayInfoId));
+            // Its pick-up sound, by the display the vendor list names
+            // (0x00522fb0).
+            s_cursorItemDisplay = items[index - 1].displayInfoId;
+            if (auto* sfx = cursorSounds(L); sfx && s_cursorItemDisplay != 0)
+                sfx->playItemSound(s_cursorItemDisplay, 0);
         }
     }
 }
@@ -1859,6 +1898,7 @@ static void pickupFromContainerSlot(lua_State* L, game::GameHandler* gh,
     if (itemSlot && !itemSlot->empty()) {
         setCursorType(L, CursorType::ITEM);
         s_cursorId = itemSlot->item.itemId;
+        cursorItemPickedUp(L, itemSlot->item.itemId);
         s_cursorBag = bag;
         s_cursorSlot = slot;
         uint32_t displayId = itemSlot->item.displayInfoId;
@@ -2303,6 +2343,7 @@ static int lua_PickupBagFromSlot(lua_State* L) {
     }
     setCursorType(L, CursorType::ITEM);
     s_cursorId = held.item.itemId;
+    cursorItemPickedUp(L, held.item.itemId);
     s_cursorSlot = slot;
     s_cursorBag = -1;
     // The shared cursor as well as this file's own. Everything that receives a
@@ -2373,6 +2414,7 @@ static int lua_PickupInventoryItem(lua_State* L) {
         }
         setCursorType(L, CursorType::AMMO);
         s_cursorId = ammo;
+        cursorItemPickedUp(L, ammo);
         s_cursorSlot = 0;
         s_cursorBag = -1;
         uint32_t displayId = 0;
@@ -2409,6 +2451,7 @@ static int lua_PickupInventoryItem(lua_State* L) {
     if (!eq.empty()) {
         setCursorType(L, CursorType::ITEM);
         s_cursorId = eq.item.itemId;
+        cursorItemPickedUp(L, eq.item.itemId);
         s_cursorSlot = slot;
         s_cursorBag = -1;
         // The same three things a container pickup does, which this had none
@@ -2493,6 +2536,26 @@ static int lua_AutoEquipCursorItem(lua_State* L) {
 // is already on the table or that slot is taken - and with no trade open one
 // is asked for (0x00703cf0). On the player's pet it is fed to it with the
 // Feed Pet spell (0x0080dcf0) and the cursor put down.
+/// A trade asked for by dropping an item on the player (0x00703cf0 with 1,
+/// 0x00ca0fe4): the held item goes into it when it opens.
+static bool s_tradeDropPending = false;
+
+void onTradeShown(lua_State* L) {
+    const bool pending = s_tradeDropPending;
+    s_tradeDropPending = false;
+    auto* gh = getGameHandler(L);
+    uint8_t bag = 0, slot = 0;
+    // 0x005870a0: an item still held goes into the first slot, or the one
+    // not traded when it is bound (0x00708520), and the cursor is put down.
+    if (!pending || !gh || s_cursorType != CursorType::ITEM || !cursorWireSlot(bag, slot)) return;
+    auto* inv = gh->getInventoryHandler();
+    const uint64_t itemGuid = inv ? inv->itemGuidAtWire(bag, slot) : 0;
+    if (itemGuid == 0) return;
+    const bool bound = (gh->getItemFieldFlags(itemGuid) & 0x1u) != 0;
+    gh->setTradeItem(static_cast<uint8_t>(bound ? 6 : 0), bag, slot);
+    clearCursorItem(L);
+}
+
 static void dropCursorItemOnUnit(lua_State* L, game::GameHandler* gh, uint64_t guid,
                                  const std::shared_ptr<game::Entity>& entity) {
     uint8_t bag = 0, slot = 0;
@@ -2507,6 +2570,7 @@ static void dropCursorItemOnUnit(lua_State* L, game::GameHandler* gh, uint64_t g
     if (entity->getType() == game::ObjectType::PLAYER && gh->unitsCooperate(me, guid)) {
         if (gh->getTradePeerGuid() == 0) {
             gh->initiateTrade(guid);
+            s_tradeDropPending = true;
         } else if (gh->getTradePeerGuid() == guid && itemGuid != 0 && !inv->itemInTrade(itemGuid)) {
             const auto& mine = gh->getMyTradeSlots();
             const bool bound = (gh->getItemFieldFlags(itemGuid) & 0x1u) != 0;
@@ -3616,7 +3680,20 @@ static int lua_ClearOverrideBindings(lua_State* L) {
 
 // Frame methods: SetPoint, SetSize, SetWidth, SetHeight, GetWidth, GetHeight, GetCenter, SetAlpha, GetAlpha
 
+namespace {
+lua_State* g_modifiedClickState = nullptr;
+}  // namespace
+
+void setModifiedClickState(lua_State* L) { g_modifiedClickState = L; }
+
+bool modifiedClickHeld(const std::string& action) {
+    if (!g_modifiedClickState) return false;
+    const std::string binding = modifiedClickBinding(g_modifiedClickState, action);
+    return binding.empty() ? shiftHeld() : modifiersHeldFor(binding);
+}
+
 void registerActionLuaAPI(lua_State* L) {
+    setModifiedClickState(L);
     static const struct { const char* name; lua_CFunction func; } api[] = {
                 {"HasAction",           lua_HasAction},
                 // A macro's name, which only a macro has; ActionButton_Update
@@ -4061,7 +4138,7 @@ void registerActionLuaAPI(lua_State* L) {
                 // an hour ago.
                 {"GetActionBarPage", [](lua_State* L) -> int {
             // 1 while the bonus bar holds the pet's actions (0x005a7fd0).
-            if (auto* gh = getGameHandler(L); gh && gh->petActionsOnBonusBar()) {
+            if (auto* gh = getGameHandler(L); gh && (gh->petActionsOnBonusBar() || gh->overrideBarActive())) {
                 lua_pushnumber(L, 1);
                 return 1;
             }
@@ -4200,16 +4277,21 @@ void registerActionLuaAPI(lua_State* L) {
             if (!pet || !hunterPetOf(getGameHandler(L), pet)) {
                 lua_pushnil(L); lua_pushnumber(L, 100); return 2;
             }
-            const uint32_t maxHappiness = pet->getMaxPowerByType(4);
-            if (maxHappiness == 0) { lua_pushnil(L); lua_pushnumber(L, 100); return 2; }
-
-            const uint32_t happiness = pet->getPowerByType(4);
-            const int level = (happiness * 3 >= maxHappiness * 2) ? 3
-                            : (happiness * 3 >= maxHappiness)     ? 2
-                                                                  : 1;
-            static const int kDamagePercent[4] = {0, 75, 100, 125};
+            // 0x005d3b00 -> 0x0071f390/0x0071f400: a hunter's pet reads
+            // PetPersonality row 1 - its level is how many of the row's
+            // HappinessThreshold[1..2] the pet's happiness (power 5) reaches,
+            // plus one, and the damage its HappinessDamage of that level.
+            auto* gh = getGameHandler(L);
+            auto* am = gh ? gh->services().assetManager : nullptr;
+            auto dbc = am && am->isInitialized() ? am->loadDBC("PetPersonality.dbc") : nullptr;
+            const int32_t row = dbc && dbc->isLoaded() && dbc->getFieldCount() >= 24 ? dbc->findRecordById(1) : -1;
+            if (row < 0) { lua_pushnil(L); lua_pushnumber(L, 100); return 2; }
+            const auto r = static_cast<uint32_t>(row);
+            const int32_t happiness = static_cast<int32_t>(pet->getPowerByType(4));
+            uint32_t level = 1;
+            while (level < 3 && happiness >= dbc->getInt32(r, 18 + level)) ++level;
             lua_pushnumber(L, level);
-            lua_pushnumber(L, kDamagePercent[level]);
+            lua_pushnumber(L, static_cast<double>(dbc->getFloat(r, 20 + level)) * 100.0);
             return 2;
         }},
                 // Only referenced from commented-out code in 3.3.5, but a

@@ -81,6 +81,10 @@ public:
     void drainPendingAnimFinished();
     /// Age message-frame lines and drop the expired ones.
     void expireMessages(float elapsed);
+    /// layout-local.txt's text for the frames the player placed (0x005234a0).
+    [[nodiscard]] std::string layoutCacheText() const;
+    /// Put those frames back where layout-local.txt says (0x005183a0).
+    void applyLayoutCache(const std::string& text);
 
     /// Feed the mouse to the widget tree: hover changes fire OnEnter/OnLeave,
     /// and a press and release on the same frame is a click. Coordinates are

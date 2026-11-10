@@ -1230,6 +1230,12 @@ void WMORenderer::setInstanceIsTransport(uint32_t instanceId, bool isTransport) 
     instances[idxIt->second].isTransport = isTransport;
 }
 
+std::optional<glm::mat4> WMORenderer::getInstanceModelMatrix(uint32_t instanceId) const {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return std::nullopt;
+    return instances[idxIt->second].modelMatrix;
+}
+
 void WMORenderer::setInstanceHidden(uint32_t instanceId, bool hidden) {
     auto idxIt = instanceIndexById.find(instanceId);
     if (idxIt == instanceIndexById.end()) return;

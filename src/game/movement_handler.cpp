@@ -2707,14 +2707,14 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
 // teleport from a transport has none: the server took the player off it.
 void MovementHandler::handleTransferPending(network::Packet& packet) {
     transferPendingOnTransport_ = false;
-    transportTransfer_.reset();
     if (!packet.hasRemaining(4)) { packet.skipAll(); return; }
     const uint32_t pendingMapId = packet.readUInt32();
     if (packet.hasRemaining(8)) {
         const uint32_t transportEntry = packet.readUInt32();
         const uint32_t transportMapId = packet.readUInt32();
         transferPendingOnTransport_ = true;
-        transportTransfer_ = TransportTransfer{transportEntry, transportMapId};
+        transferPendingTransportEntry_ = transportEntry;
+        transferPendingTransportMapId_ = transportMapId;
         LOG_INFO("SMSG_TRANSFER_PENDING: map ", pendingMapId, " on transport ", transportEntry,
                  " from map ", transportMapId);
     }
@@ -2757,6 +2757,10 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
         // The wire's offset: the ship's kind on the new map decides its
         // axes (TransportManager::serverToTransportLocal).
         owner_.beginPlayerTransportWorldTransfer(mapId, glm::vec3(serverX, serverY, serverZ));
+        // 0x0040ad50: the loading screen draws the crossing.
+        owner_.armLoadingScreenCrossing(transferPendingTransportEntry_, transferPendingTransportMapId_);
+    } else {
+        owner_.armLoadingScreenCrossing(0, 0);
     }
     const uint32_t transferAreaTriggerId = lastAreaTriggerId_;
     lastAreaTriggerId_ = 0;

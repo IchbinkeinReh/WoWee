@@ -3,6 +3,7 @@
 #include "ui/game_screen.hpp"
 #include "ui/safe_area.hpp"
 #include "addons/lua_api_registrations.hpp"
+#include "game/quest_poi_blobs.hpp"
 #include "ui/ui_texture_load.hpp"
 #include "ui/ui_upload_budget.hpp"
 #include "core/helm_visual.hpp"
@@ -84,7 +85,7 @@ void GameScreen::updateCharacterGeosets(game::Inventory& inventory) {
     if (!renderer) return;
 
     uint32_t instanceId = renderer->getCharacterInstanceId();
-    if (instanceId == 0) return;
+    if (instanceId == 0 || renderer->characterShownAsDisplay()) return;
 
     auto* charRenderer = renderer->getCharacterRenderer();
     auto* gh = app.getGameHandler();
@@ -115,6 +116,8 @@ void GameScreen::updateCharacterGeosets(game::Inventory& inventory) {
 }
 
 void GameScreen::updateCharacterTextures(game::Inventory& inventory) {
+    // A form or a morph wears nothing of the character's (0x00717a20).
+    if (auto* r = core::Application::getInstance().getRenderer(); r && r->characterShownAsDisplay()) return;
     auto& app = core::Application::getInstance();
     auto* renderer = app.getRenderer();
     if (!renderer) return;
@@ -256,6 +259,7 @@ void GameScreen::feedWorldMap(game::GameHandler& gameHandler,
     // and the map opened on the zone the player had just walked out of.
     const uint32_t liveZone = renderer->getCurrentZoneId();
     wm->setPlayerZoneId(liveZone != 0 ? liveZone : gameHandler.getWorldStateZoneId());
+    wm->setPlayerWmoId(renderer->getPlayerAreaWmoId());
 
     // Party member dots on world map
     {
@@ -384,8 +388,55 @@ void GameScreen::feedWorldMap(game::GameHandler& gameHandler,
         for (const auto& quest : gameHandler.getQuestLog()) {
             if (quest.questId != 0) questsInLog.insert(quest.questId);
         }
+        // The shaded areas as the client draws them (0x005901c0): each quest's
+        // POI areas become blobs - smoothed and merged as WorldMapBlobFrame is
+        // set (game::quest_blobs) - and a blob is drawn when shown and its
+        // objective is open, or for a quest already complete. Worked in the
+        // map's own coordinates: the frame the client lays them on is an
+        // affine view of these, which neither the spline nor the merge sees.
+        std::unordered_map<size_t, std::vector<std::pair<float, float>>> blobAreas;
+        {
+            namespace qb = game::quest_blobs;
+            const auto& pois = gameHandler.getGossipPois();
+            std::unordered_map<uint32_t, std::vector<size_t>> byQuest;
+            for (size_t i = 0; i < pois.size(); ++i) {
+                const auto& poi = pois[i];
+                if (poi.questObjectiveIndex >= -1 && poi.area.size() >= 3 &&
+                    questsInLog.count(poi.data) && questAreaShown(poi.data)) {
+                    byQuest[poi.data].push_back(i);
+                }
+            }
+            const qb::Settings& set = qb::settings();
+            for (const auto& [questId, indices] : byQuest) {
+                const uint32_t mask = addons::questObjectiveMask(&gameHandler, questId);
+                std::vector<qb::Blob> blobs;
+                for (size_t i : indices) {
+                    const auto& poi = pois[i];
+                    std::vector<std::pair<int32_t, int32_t>> ring;
+                    for (const auto& pt : poi.area)
+                        ring.emplace_back(static_cast<int32_t>(std::lround(pt.first)),
+                                          static_cast<int32_t>(std::lround(pt.second)));
+                    if (set.smoothing) ring = qb::smoothArea(ring, set.splinePoints);
+                    qb::Blob b;
+                    b.objectiveIndex = poi.questObjectiveIndex;
+                    b.objectives.push_back(poi.questObjectiveIndex);
+                    for (const auto& p : ring) b.pts.emplace_back(static_cast<float>(p.first), static_cast<float>(p.second));
+                    b.shown = !b.pts.empty();
+                    b.bound();
+                    blobs.push_back(std::move(b));
+                }
+                qb::merge(blobs, mask);
+                for (size_t k = 0; k < blobs.size(); ++k) {
+                    const auto& b = blobs[k];
+                    if (b.shown && (mask == 0xffffffffu || qb::objectiveOpen(mask, b.objectiveIndex)))
+                        blobAreas[indices[k]] = b.pts;
+                }
+            }
+        }
         size_t objectivePois = 0;
+        size_t poiIndex = static_cast<size_t>(-1);
         for (const auto& poi : gameHandler.getGossipPois()) {
+            ++poiIndex;
             // Keep ordinary gossip navigation POIs, and quest points for a
             // quest in the log.
             //
@@ -414,13 +465,11 @@ void GameScreen::feedWorldMap(game::GameHandler& gameHandler,
             qp.wowX = poi.x;
             qp.wowY = poi.y;
             qp.name = poi.name;
-            // The shaded area, for the quest the map has selected. Every
-            // objective of that quest gets its own, which is what the real
-            // client shades: DrawQuestBlob names a quest, not an objective.
-            if (poi.questObjectiveIndex >= 0 && !poi.area.empty() &&
-                questAreaShown(poi.data)) {
-                qp.area.reserve(poi.area.size());
-                for (const auto& pt : poi.area) qp.area.emplace_back(pt.first, pt.second);
+            // The shaded area, for the quest the map has selected - its blob
+            // as worked out above, where it is one the client draws.
+            if (const auto blob = blobAreas.find(poiIndex); blob != blobAreas.end()) {
+                qp.area.reserve(blob->second.size());
+                for (const auto& pt : blob->second) qp.area.emplace_back(pt.first, pt.second);
             }
             if (poi.questObjectiveIndex == -1) {
                 // A quest POI with no objective index is the quest endpoint,

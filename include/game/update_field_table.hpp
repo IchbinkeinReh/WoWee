@@ -39,6 +39,7 @@ enum class UF : uint16_t {
     UNIT_FIELD_BOUNDINGRADIUS,
     UNIT_FIELD_COMBATREACH,
     UNIT_FIELD_DISPLAYID,
+    UNIT_FIELD_NATIVEDISPLAYID,
     UNIT_FIELD_MOUNTDISPLAYID,
     UNIT_FIELD_AURAS,           // Start of aura spell ID array (48 consecutive uint32 slots, pre-WotLK clients)
     UNIT_FIELD_AURAFLAGS,       // Aura flags packed 4-per-uint32 (12 uint32 slots); 0x01=cancelable,0x02=harmful,0x04=helpful

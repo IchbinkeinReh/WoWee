@@ -1,6 +1,7 @@
 #pragma once
 
 #include <unordered_map>
+#include <array>
 #include <vector>
 #include <memory>
 #include <string>
@@ -44,6 +45,10 @@ public:
     /// 0x004c8fc0). As playByName, and Refused when the row asks for one at a
     /// time and this id is already playing.
     UiPlayResult playById(uint32_t soundId);
+    /// An item's own sound (0x004d0090): its ItemDisplayInfo row's
+    /// GroupSoundIndex (column 12) names an ItemGroupSounds row, whose
+    /// Sound[which] is played - 0 as it is picked up, 1 as it is put down.
+    UiPlayResult playItemSound(uint32_t displayInfoId, int which);
 
     /// Play a sound by path, which is what PlaySoundFile takes (0x009859b0 ->
     /// 0x004c9110 on the SCRIPTSOUND channel, once, at full volume). Cached
@@ -194,6 +199,9 @@ private:
     std::unordered_map<uint32_t, UISample> idSamples_;
     std::unordered_map<std::string, UISample> namedSamples_;
     pipeline::AssetManager* assets_ = nullptr;
+    std::unordered_map<uint32_t, uint32_t> itemSoundGroups_;            ///< display -> group
+    std::unordered_map<uint32_t, std::array<uint32_t, 4>> itemGroupSounds_;
+    bool itemSoundsLoaded_ = false;
     void playSound(const std::vector<UISample>& library);
 };
 

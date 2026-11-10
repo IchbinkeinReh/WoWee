@@ -1,5 +1,7 @@
 #pragma once
 
+#include "game/chat_profanity.hpp"
+
 #include <deque>
 
 #include "game/chat_channels.hpp"
@@ -324,6 +326,23 @@ private:
         double deadline = 0.0;
     };
     std::unordered_map<std::string, RosterNameWait> rosterNameWaits_;
+
+    /// What the player hears of a line said in `language` (0x00509dd0 ->
+    /// 0x00505930): the words of a language the character does not know come
+    /// out as LanguageWords.dbc words. See chat_language.hpp.
+    std::string hearInLanguage(uint32_t language, const std::string& text);
+    /// 0x006e0640: the language's skill - by the spell that teaches it
+    /// (SPELL_EFFECT_LANGUAGE 39) and that spell's skill line - or 300 under
+    /// an aura that comprehends it (244); 0 otherwise.
+    uint32_t languageComprehension(uint32_t language);
+    /// LanguageWords.dbc by (language << 8 | byte length), in file order.
+    std::unordered_map<uint32_t, std::vector<std::string>> languageWords_;
+    /// The mature-language filter (chat_profanity.hpp), its expressions for
+    /// the client's locale loaded on first use.
+    void filterProfanity(ChatType type, std::string& text);
+    chat_profanity::Filter profanity_;
+    bool profanityLoaded_ = false;
+    bool languageWordsLoaded_ = false;
     /// Long enough for a name query to come back, and longer than the chat line
     /// wait: a roster is not being read this second, and re-asking the panel on
     /// the way costs less than drawing it twice.

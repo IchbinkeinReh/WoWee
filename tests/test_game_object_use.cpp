@@ -1,0 +1,193 @@
+#include <catch_amalgamated.hpp>
+
+#include "game/game_object_use.hpp"
+
+#include <vector>
+
+using namespace wowee::game::go_use;
+
+// GameObject_C.cpp's use of an object: 0x0070ef90, 0x0070f160, 0x007116c0.
+
+namespace {
+
+// A herb's lock: LockType 2 (herbalism), skill 70, action 0.
+LockRow herb(uint32_t skill) {
+    LockRow r;
+    r.type[0] = 2;
+    r.index[0] = 2;
+    r.skill[0] = skill;
+    return r;
+}
+
+// Herb Gathering: OPEN_LOCK for LockType 2.
+bool herbEffects(uint32_t id, uint32_t (&e)[3], uint32_t (&m)[3]) {
+    if (id != 2366) return false;
+    e[0] = kEffectOpenLock;
+    m[0] = 2;
+    return true;
+}
+
+}  // namespace
+
+TEST_CASE("go_use: a slot's action against the object's state", "[go_use]") {
+    CHECK(actionFits(0, 1, 0));
+    CHECK_FALSE(actionFits(0, 1, kFlagLocked));
+    CHECK(actionFits(1, 1, kFlagLocked));
+    CHECK_FALSE(actionFits(0, 0, 0));   // 0 wants state 1
+    CHECK(actionFits(2, 0, 0));
+    CHECK_FALSE(actionFits(2, 2, 0));
+    CHECK(actionFits(4, 2, 0));          // only 4 is done in state 2
+    CHECK_FALSE(actionFits(4, 1, 0));
+}
+
+TEST_CASE("go_use: the lock field by type", "[go_use]") {
+    CHECK(dataIndex(0, Field::Lock) == 1);   // door
+    CHECK(dataIndex(3, Field::Lock) == 0);   // chest
+    CHECK(dataIndex(25, Field::Lock) == 4);  // fishing hole
+    CHECK(dataIndex(19, Field::Lock) == -1); // a mailbox has none
+    CHECK(handlerFor(0).lockedError == err::kDoorLocked);
+    CHECK(handlerFor(17).reach == 100.0f);
+}
+
+TEST_CASE("go_use: a known spell opens the lock when strong enough", "[go_use]") {
+    const std::vector<uint32_t> known = {133, 2366};
+    const auto value = [](uint32_t, int) { return 75; };
+    const auto none = [](uint32_t) { return false; };
+    const auto noKey = [](uint32_t) { return 0u; };
+    auto o = evaluate(herb(70), 1, 0, 10, known, 0, herbEffects, value, none, noKey);
+    CHECK_FALSE(o.locked);
+    CHECK(o.spell == 2366);
+    CHECK(o.slot == 0);
+
+    // Too weak: locked, with the spell kept for ERR_USE_LOCKED_WITH_SPELL_KNOWN_SI.
+    o = evaluate(herb(100), 1, 0, 10, known, 0, herbEffects, value, none, noKey);
+    CHECK(o.locked);
+    CHECK(o.spell == 2366);
+    CHECK(o.required == 100);
+    CHECK(lockedRefusal(herb(100), 3, 1, 0, o.spell != 0) == err::kLockedWithSpellKnown);
+
+    // No skill on the slot: the object's level times five.
+    o = evaluate(herb(0), 1, 0, 20, known, 0, herbEffects, value, none, noKey);
+    CHECK(o.locked);
+    CHECK(o.required == 100);
+
+    // Nothing known for it: ERR_USE_LOCKED_WITH_SPELL_S.
+    const std::vector<uint32_t> mage = {133};
+    o = evaluate(herb(1), 1, 0, 10, mage, 0, herbEffects, value, none, noKey);
+    CHECK(o.locked);
+    CHECK(o.spell == 0);
+    CHECK(lockedRefusal(herb(1), 3, 1, 0, false) == err::kLockedWithSpell);
+}
+
+TEST_CASE("go_use: a carried key opens with its own spell", "[go_use]") {
+    LockRow r;
+    r.type[0] = 1;
+    r.index[0] = 5396;
+    const std::vector<uint32_t> known;
+    const auto effects = [](uint32_t, uint32_t (&)[3], uint32_t (&)[3]) { return false; };
+    const auto value = [](uint32_t, int) { return 0; };
+    auto o = evaluate(r, 1, 0, 0, known, 0, effects, value, [](uint32_t i) { return i == 5396; },
+                      [](uint32_t) { return 6477u; });
+    CHECK_FALSE(o.locked);
+    CHECK(o.keyItem == 5396);
+    CHECK(o.spell == 6477);
+    o = evaluate(r, 1, 0, 0, known, 0, effects, value, [](uint32_t) { return false; },
+                 [](uint32_t) { return 6477u; });
+    CHECK(o.locked);
+    CHECK(lockedRefusal(r, 3, 1, 0, false) == err::kLockedWithItem);
+}
+
+TEST_CASE("go_use: no lock slot wanting anything is no lock", "[go_use]") {
+    const LockRow empty;
+    const std::vector<uint32_t> known;
+    const auto o = evaluate(empty, 1, 0, 0, known, 0, herbEffects, [](uint32_t, int) { return 0; },
+                            [](uint32_t) { return false; }, [](uint32_t) { return 0u; });
+    CHECK_FALSE(o.locked);
+    CHECK(o.spell == 0);
+    // A first slot whose action does not fit: a chest in state 0 is in use.
+    CHECK(lockedRefusal(herb(1), 3, 0, 0, false) == err::kChestInUse);
+    CHECK(lockedRefusal(herb(1), 10, 0, 0, false) == 0);
+}
+
+TEST_CASE("go_use: an effect's value from the caster's skill", "[go_use]") {
+    // Herb Gathering: base points -1, 5 a level, the skill over five.
+    CHECK(effectValue(-1, 5.0f, 300, 0, 0) == 300.0f);
+    CHECK(effectValue(-1, 5.0f, 72, 0, 0) == 70.0f);
+    // Pick Lock: base 4, BaseLevel 1.
+    CHECK(effectValue(4, 5.0f, 100, 1, 0) == 100.0f);
+    // MaxLevel caps the skill at five times it.
+    CHECK(effectValue(-1, 5.0f, 300, 0, 20) == 100.0f);
+}
+
+TEST_CASE("go_use: a chair's seats are a row a yard apart, centred", "[go_use]") {
+    CHECK(seatOffset(1, 0) == 0.0f);
+    CHECK(seatOffset(2, 0) == -0.5f);
+    CHECK(seatOffset(2, 1) == 0.5f);
+    CHECK(seatOffset(3, 0) == -1.0f);
+    CHECK(seatOffset(3, 2) == 1.0f);
+    CHECK(dataIndex(7, Field::ChairSlots) == 0);
+    CHECK(dataIndex(18, Field::RitualSpell) == 1);
+    CHECK(dataIndex(3, Field::ChairSlots) == -1);
+    CHECK(handlerFor(7).reach == 3.0f);
+}
+
+TEST_CASE("go_use: which types a click reaches", "[go_use]") {
+    CHECK(clickableBy(3) == Clickable::Common);
+    CHECK(clickableBy(25) == Clickable::Never);  // a fishing school
+    CHECK(clickableBy(15) == Clickable::Never);  // a transport
+    CHECK(clickableBy(17) == Clickable::Bobber);
+    CHECK(clickableBy(7) == Clickable::Chair);
+    CHECK(clickableBy(32) == Clickable::Chair);
+    CHECK(stateLetsClick(0, 0));
+    CHECK_FALSE(stateLetsClick(kDynNoInteract, 0));
+    CHECK_FALSE(stateLetsClick(0, kFlagInUse));
+    CHECK_FALSE(stateLetsClick(0, kFlagNotSelectable));
+    CHECK_FALSE(stateLetsClick(0, kFlagInteractCond));
+    CHECK(stateLetsClick(kDynActivate, kFlagInteractCond));
+    CHECK(dataIndex(7, Field::CreatorOnly) == 2);
+}
+
+// How the object regards the player, 0 hated to 7 exalted (0x0070edd0).
+namespace {
+constexpr int kNeutral = 3;
+constexpr int kHostile = 1;
+}  // namespace
+
+TEST_CASE("go_use: what the pointer may rest on", "[go_use]") {
+    // Scenery: a generic object or a capture point only with its highlight.
+    CHECK(mouseoverBy(5) == Mouseover::Highlight);
+    CHECK(highlightIndex(5) == 1);
+    CHECK(mouseoverBy(29) == Mouseover::Highlight);
+    CHECK(highlightIndex(29) == 19);
+    for (uint32_t t : {11u, 14u, 15u, 31u, 35u}) CHECK(mouseoverBy(t) == Mouseover::Never);
+    // An anvil is named though nothing uses it.
+    for (uint32_t t : {8u, 16u, 25u, 30u}) {
+        CHECK(mouseoverBy(t) == Mouseover::Always);
+        CHECK(clickableBy(t) == Clickable::Never);
+    }
+    CHECK(mouseoverBy(17) == Mouseover::Bobber);
+    CHECK(mouseoverBy(3) == Mouseover::Usable);
+}
+
+TEST_CASE("go_use: an object that counts the player as an enemy is not for its hands", "[go_use]") {
+    CHECK(usableByState(3, false, 0, 0, kNeutral));
+    CHECK_FALSE(usableByState(3, false, 0x10, 0, kNeutral));  // not selectable
+    CHECK_FALSE(usableByState(10, false, 0, 0x4, kNeutral));  // no-interact
+    CHECK(usableByState(10, false, 0x4, 0x1, kNeutral));      // conditional, lit
+    // Dalaran's fountain: a button of a faction hostile to the player.
+    CHECK_FALSE(usableByState(1, false, 0x20, 0, kHostile));
+    CHECK(usableByState(1, false, 0x20, 0, kNeutral));
+    CHECK(usableByState(3, false, 0, 0, 2));  // unfriendly is not yet an enemy
+    // A trap the other way round: only a hostile one with a lock.
+    CHECK_FALSE(usableByState(6, true, 0, 0, kNeutral));
+    CHECK_FALSE(usableByState(6, false, 0, 0, kHostile));
+    CHECK(usableByState(6, true, 0, 0, kHostile));
+}
+
+TEST_CASE("go_use: the quest an object is kept for", "[go_use]") {
+    CHECK(requiredQuestIndex(3) == 8);
+    CHECK(requiredQuestIndex(5) == 5);
+    CHECK(requiredQuestIndex(8) == 4);
+    CHECK(requiredQuestIndex(10) == 1);
+    CHECK(requiredQuestIndex(19) == -1);
+}

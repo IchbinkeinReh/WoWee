@@ -368,6 +368,15 @@ public:
                                float frameDirectScale = 1.0f);
     void removeInstance(uint32_t instanceId);
     bool getAnimationState(uint32_t instanceId, uint32_t& animationId, float& animationTimeMs, float& animationDurationMs) const;
+    /// What a model plays on a slot, as 0x008266b0 reads it: the shown
+    /// sequence's AnimationData id and variation index. `arm` -1 is the body,
+    /// 0 / 1 an arm on its own sequence. None for an arm following the body,
+    /// and for a one-shot that has run out (0x008266b0's +0x1c).
+    struct AnimationSlot {
+        uint32_t animationId = 0;
+        uint32_t variation = 0;
+    };
+    [[nodiscard]] std::optional<AnimationSlot> animationSlot(uint32_t instanceId, int arm = -1) const;
     /// Everything an M2 instance needs to pose its particles as this one is
     /// posed: world matrix, bones, and the sequence and times tracks sample at.
     bool getInstancePose(uint32_t instanceId, glm::mat4& model,

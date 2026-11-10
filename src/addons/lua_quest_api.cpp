@@ -14,6 +14,7 @@
 #include "game/quest_progress.hpp"
 #include "game/quest_objectives.hpp"
 #include "game/quest_poi_icons.hpp"
+#include "game/quest_poi_blobs.hpp"
 #include "game/quest_rewards.hpp"
 #include "game/glyph_socket.hpp"
 #include "game/interface_text.hpp"
@@ -1385,6 +1386,143 @@ static bool sortQuestWatches(lua_State* L) {
 // The questPOI switch is not consulted: 0x005e2b60 does not consult it either,
 // and with the switch off the areas were never asked for, so the list answers
 // zeroes on its own.
+// ---- The world map's quest blobs, as the hover test sees them ----
+//
+// WorldMapBlobFrame is a QuestPOIFrame. DrawQuestBlob gives a quest one of four
+// slots (0x00590560), and each of its POI areas becomes a blob (0x005900f0 ->
+// 0x0058f1a0): the area's points, run through a closed Catmull-Rom spline when
+// smoothing is on (0x0058ed80 - the last point, the points, the first two, as
+// control points; numSplinePoints samples from t = 0.01, each placed by
+// arc length and rounded to whole units), then put on the shown map
+// (0x00544140). A point off the map, or within a thousandth of its top or left
+// edge, leaves the blob unshown. With merging on, two shown blobs of a quest
+// still in progress whose objectives are both open and whose bounding boxes
+// overlap are weighed (0x0058e310): when more than the merge threshold of the
+// smaller one's points fall inside the larger, the smaller is hidden and its
+// objectives join the larger's, up to four.
+//
+// UpdateMouseOverTooltip(x, y) (0x0058e9c0 -> 0x0058e0d0) then asks which blob
+// is under the cursor - 0..1 across the map both ways - among a quest's shown
+// blobs whose objective is open and whose area is on the map, the last of a
+// slot that has one and the first slot that does, and answers the quest's log
+// index and how many objectives that blob carries. GetNumTooltips and
+// GetTooltipIndex read that answer back. The map is the same affine frame for
+// cursor and points, so the test is made in map space.
+namespace {
+namespace qb = game::quest_blobs;
+
+struct BlobHover { uint32_t questId = 0; std::vector<int32_t> objectives; };
+BlobHover& blobHover() { static BlobHover h; return h; }
+
+/// The quest's blobs on the shown map, one per POI area in the icon's order.
+std::vector<qb::Blob> buildQuestBlobs(const game::QuestPoiIcon& icon, const game::QuestPoiMapView& view,
+                                      uint32_t mask) {
+    const qb::Settings& set = qb::settings();
+    std::vector<qb::Blob> blobs;
+    for (const auto& area : icon.areas) {
+        qb::Blob b;
+        b.objectiveIndex = area.objectiveIndex;
+        b.objectives.push_back(area.objectiveIndex);
+        if (area.points.size() >= 3 && view.valid && view.project) {
+            const auto ring = set.smoothing ? qb::smoothArea(area.points, set.splinePoints) : area.points;
+            bool off = false;
+            for (const auto& p : ring) {
+                float u = 0.0f, v = 0.0f;
+                if (!view.project(static_cast<float>(p.first), static_cast<float>(p.second), u, v) ||
+                    std::fabs(u * v) < 0.001f) {
+                    off = true;
+                    break;
+                }
+                b.pts.emplace_back(u, v);
+            }
+            b.shown = !off && !b.pts.empty();
+            if (b.shown) b.bound();
+        }
+        blobs.push_back(std::move(b));
+    }
+    qb::merge(blobs, mask);
+    return blobs;
+}
+}  // namespace
+
+int lua_QuestBlob_EnableSmoothing(lua_State* L) {
+    qb::settings().smoothing = lua_toboolean(L, 2) != 0;
+    return 0;
+}
+int lua_QuestBlob_EnableMerging(lua_State* L) {
+    qb::settings().merging = lua_toboolean(L, 2) != 0;
+    return 0;
+}
+int lua_QuestBlob_SetMergeThreshold(lua_State* L) {
+    const float v = static_cast<float>(luaL_optnumber(L, 2, 0.25));
+    qb::settings().mergeThreshold = std::clamp(v, 0.1f, 0.5f);
+    return 0;
+}
+int lua_QuestBlob_SetNumSplinePoints(lua_State* L) {
+    const int n = static_cast<int>(luaL_optnumber(L, 2, 20));
+    qb::settings().splinePoints = std::clamp(n, 8, 30);
+    return 0;
+}
+int lua_QuestBlob_UpdateMouseOverTooltip(lua_State* L) {
+    BlobHover& hover = blobHover();
+    hover = {};
+    auto* gh = getGameHandler(L);
+    auto* list = questPoiList(gh);
+    const float x = static_cast<float>(luaL_optnumber(L, 2, -1.0));
+    const float y = static_cast<float>(luaL_optnumber(L, 3, -1.0));
+    if (!list || x < 0.0f || y < 0.0f || x > 1.0f || y > 1.0f) return 0;
+    const auto view = questPoiMapView(L);
+    if (!view.valid) return 0;
+    const auto rows = questRows(gh);
+    int slots = 0;
+    for (const auto& icon : list->icons()) {
+        if (icon.questId <= 0 || !gh->isQuestBlobShown(static_cast<uint32_t>(icon.questId))) continue;
+        if (++slots > 4) break;
+        const uint32_t mask = questPoiState(gh, rows, icon.questId).objectiveMask;
+        if (mask == 0xffffffffu) continue;
+        const auto blobs = buildQuestBlobs(icon, view, mask);
+        const std::vector<int32_t>* found = nullptr;
+        for (size_t i = 0; i < blobs.size(); ++i) {
+            const auto& b = blobs[i];
+            const auto& area = icon.areas[i];
+            if (!b.shown || b.pts.size() < 2 || !qb::objectiveOpen(mask, area.objectiveIndex)) continue;
+            // 0x005e0110: the area's map is the one shown and its centre is on it.
+            float u = 0.0f, v = 0.0f;
+            if (area.mapId != view.mapId ||
+                !view.project(static_cast<float>(area.centerX), static_cast<float>(area.centerY), u, v) ||
+                std::fabs(u * v) < 0.001f) {
+                continue;
+            }
+            if (qb::pointInPolygon(x, y, b.pts)) found = &b.objectives;
+        }
+        if (found) {
+            hover.questId = static_cast<uint32_t>(icon.questId);
+            hover.objectives = *found;
+            break;
+        }
+    }
+    if (hover.questId == 0) return 0;
+    lua_pushnumber(L, questPoiState(gh, rows, static_cast<int32_t>(hover.questId)).logIndex);
+    lua_pushnumber(L, static_cast<double>(hover.objectives.size()));
+    return 2;
+}
+int lua_QuestBlob_GetNumTooltips(lua_State* L) {
+    lua_pushnumber(L, static_cast<double>(blobHover().objectives.size()));
+    return 1;
+}
+int lua_QuestBlob_GetTooltipIndex(lua_State* L) {
+    const auto i = static_cast<long long>(luaL_optnumber(L, 2, 0)) - 1;
+    const auto& objectives = blobHover().objectives;
+    lua_pushnumber(L, i >= 0 && i < static_cast<long long>(objectives.size())
+                          ? objectives[static_cast<size_t>(i)] : 0);
+    return 1;
+}
+
+uint32_t questObjectiveMask(game::GameHandler* gh, uint32_t questId) {
+    if (!gh) return 0;
+    return questPoiState(gh, questRows(gh), static_cast<int32_t>(questId)).objectiveMask;
+}
+
 std::pair<uint32_t, uint32_t> questPoiOpenTarget(lua_State* L, int32_t questId) {
     auto* gh = getGameHandler(L);
     auto* list = questPoiList(gh);
@@ -1853,48 +1991,135 @@ const game::GameHandler::StabledPet* stablePetAt(game::GameHandler* gh, int inde
     return stabled[static_cast<size_t>(index)];
 }
 
-/// Which slot the player has clicked. Held here because it is a fact about the
-/// window rather than about the character, and the server is never told.
-int& selectedStableSlot() {
-    static int slot = 0;
-    return slot;
+/// The pet the player has clicked, held as the client holds it (0x00c0f6d0):
+/// -1 for the pet that is out, else the stabled pet's number, 0 for none - so
+/// the selection follows the pet when the list is sent again in another
+/// order. Window state, which the server is never told.
+int32_t& selectedStablePet() {
+    static int32_t pet = 0;
+    return pet;
+}
+
+/// 0x005a0e00: select the pet at an index (-1 the one that is out).
+void selectStableIndex(game::GameHandler* gh, int index) {
+    if (index == -1) { selectedStablePet() = -1; return; }
+    const auto* pet = stablePetAt(gh, index);
+    selectedStablePet() = pet ? static_cast<int32_t>(pet->petNumber) : 0;
+}
+
+/// 0x005a0e40: the selected pet's index (-1 the one that is out), -2 when
+/// nothing is selected or the pet is no longer listed.
+int selectedStableIndex(game::GameHandler* gh) {
+    const int32_t sel = selectedStablePet();
+    if (sel == -1) return -1;
+    if (sel == 0 || !gh) return -2;
+    const auto stabled = stabledOnly(gh);
+    for (size_t i = 0; i < stabled.size(); ++i)
+        if (static_cast<int32_t>(stabled[i]->petNumber) == sel) return static_cast<int>(i);
+    return -2;
 }
 
 } // namespace
 
-// GetStablePetInfo(slot) → icon, name, level, family, talent
-//
-// The icon is what says a slot is occupied: the frame tests it before deciding
-// whether the slot reads as a pet or as an empty box, so an occupied slot must
-// answer something and an empty one must answer nil.
-//
-// Family and talent tree are blank. They come from the creature's family, and
-// the stable packet carries the creature entry without it - this client's own
-// stable window shows a name and a level for the same reason.
-static int lua_GetStablePetInfo(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    const int slot = static_cast<int>(luaL_optnumber(L, 1, -1));
-    if (!gh || slot < 0) { return luaReturnNil(L); }
+/// The CreatureFamily row of a creature entry the creature cache holds, or -1:
+/// for a stabled pet, whose template entry is all MSG_LIST_STABLED_PETS gives.
+static int32_t familyRowForEntry(game::GameHandler* gh, uint32_t entry,
+                                 std::shared_ptr<pipeline::DBCFile>& families,
+                                 const pipeline::DBCFieldMap*& layout) {
+    if (!gh || entry == 0) return -1;
+    const auto& cache = gh->getCreatureInfoCache();
+    const auto it = cache.find(entry);
+    if (it == cache.end() || it->second.family == 0) return -1;
+    auto* am = gh->services().assetManager;
+    const auto* layouts = pipeline::getActiveDBCLayout();
+    layout = layouts ? layouts->getLayout("CreatureFamily") : nullptr;
+    families = am && am->isInitialized() ? am->loadDBCOptional("CreatureFamily.dbc") : nullptr;
+    if (!families || !families->isLoaded() || !layout) return -1;
+    return families->findRecordById(it->second.family);
+}
 
-    const game::GameHandler::StabledPet* pet = nullptr;
-    if (slot == 0) {
-        pet = activePet(gh);
-    } else {
-        const auto stabled = stabledOnly(gh);
-        if (slot <= static_cast<int>(stabled.size())) {
-            pet = stabled[static_cast<size_t>(slot - 1)];
+/// The pet talent tree a family trains into: the first TalentTab whose pet
+/// mask holds the family's talent type. Empty when it has none.
+static std::string familyTalentTree(game::GameHandler* gh, const pipeline::DBCFile& families,
+                                    const pipeline::DBCFieldMap& layout, int32_t row) {
+    const uint32_t typeF = layout.tryField("PetTalentType");
+    if (row < 0 || typeF >= families.getFieldCount()) return {};
+    const auto type = static_cast<int32_t>(families.getUInt32(static_cast<uint32_t>(row), typeF));
+    if (type < 0 || type > 31) return {};
+    auto* am = gh->services().assetManager;
+    const auto* tabL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("TalentTab") : nullptr;
+    auto tabs = am ? am->loadDBCOptional("TalentTab.dbc") : nullptr;
+    const uint32_t maskF = tabL ? tabL->tryField("PetTalentMask") : 0xFFFFFFFFu;
+    const uint32_t nameF = tabL ? tabL->tryField("Name") : 0xFFFFFFFFu;
+    if (!tabs || !tabs->isLoaded() || maskF >= tabs->getFieldCount() || nameF >= tabs->getFieldCount())
+        return {};
+    for (uint32_t r = 0; r < tabs->getRecordCount(); ++r) {
+        const uint32_t mask = tabs->getUInt32(r, maskF);
+        if (mask != 0 && (mask & (1u << type)) != 0) return tabs->getString(r, nameF);
+    }
+    return {};
+}
+
+/// The foods a family eats, pushed one value each (ItemPetFood by the
+/// family's PetFoodMask); how many were pushed.
+static int pushFamilyFoods(lua_State* L, game::GameHandler* gh, const pipeline::DBCFile& families,
+                           const pipeline::DBCFieldMap& layout, int32_t row) {
+    const uint32_t maskF = layout.tryField("PetFoodMask");
+    if (row < 0 || maskF >= families.getFieldCount()) return 0;
+    const uint32_t mask = families.getUInt32(static_cast<uint32_t>(row), maskF);
+    auto foods = gh->services().assetManager->loadDBCOptional("ItemPetFood.dbc");
+    if (!foods || !foods->isLoaded() || foods->getFieldCount() < 2) return 0;
+    int pushed = 0;
+    for (uint32_t r = 0; r < foods->getRecordCount(); ++r) {
+        const uint32_t id = foods->getUInt32(r, 0);
+        if (id == 0 || id > 32 || (mask & (1u << (id - 1))) == 0) continue;
+        if (!lua_checkstack(L, 1)) break;
+        lua_pushstring(L, foods->getString(r, 1).c_str());
+        ++pushed;
+    }
+    return pushed;
+}
+
+// GetStablePetInfo(index) (0x005a1330) → icon, name, level, family[, talent]
+//
+// Index 0 is the pet that is out, then the stable slots. The pet's creature
+// template, from the creature cache, names its family: the family's icon,
+// the pet's own name and level, the family's name, and the talent tree it
+// trains into when it has one. A pet whose template the cache does not hold
+// yet answers nil, nil, 0, and is asked for; the answer that found it raises
+// PET_STABLE_UPDATE (0x005a0e80).
+static int lua_GetStablePetInfo(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetStablePetInfo(index)");
+    auto* gh = getGameHandler(L);
+    const int index = static_cast<int>(std::lround(lua_tonumber(L, 1))) - 1;
+    if (const auto* pet = stablePetAt(gh, index)) {
+        std::shared_ptr<pipeline::DBCFile> families;
+        const pipeline::DBCFieldMap* layout = nullptr;
+        const int32_t row = familyRowForEntry(gh, pet->entry, families, layout);
+        if (row >= 0) {
+            const uint32_t iconF = layout->tryField("IconFile");
+            const uint32_t nameF = layout->tryField("Name");
+            lua_pushstring(L, iconF < families->getFieldCount()
+                                  ? families->getString(static_cast<uint32_t>(row), iconF).c_str() : "");
+            lua_pushstring(L, pet->name.c_str());
+            lua_pushnumber(L, pet->level);
+            lua_pushstring(L, nameF < families->getFieldCount()
+                                  ? families->getString(static_cast<uint32_t>(row), nameF).c_str() : "");
+            const std::string tree = familyTalentTree(gh, *families, *layout, row);
+            if (tree.empty()) return 4;
+            lua_pushstring(L, tree.c_str());
+            return 5;
+        }
+        if (!gh->getCreatureInfoCache().count(pet->entry)) {
+            gh->askEntryThen(false, pet->entry, "stable info", [gh](bool found) {
+                if (found) gh->fireAddonEvent("PET_STABLE_UPDATE", {});
+            });
         }
     }
-    if (!pet) { return luaReturnNil(L); }
-
-    lua_pushstring(L, "Interface\\Icons\\Ability_Hunter_BeastTaming");
-    lua_pushstring(L, pet->name.empty()
-                          ? ("Pet #" + std::to_string(pet->petNumber)).c_str()
-                          : pet->name.c_str());
-    lua_pushnumber(L, pet->level);
-    lua_pushstring(L, "");   // family
-    lua_pushstring(L, "");   // pet talent tree
-    return 5;
+    lua_pushnil(L);
+    lua_pushnil(L);
+    lua_pushnumber(L, 0);
+    return 3;
 }
 
 static int lua_GetNumStablePets(lua_State* L) {
@@ -1908,8 +2133,10 @@ static int lua_GetNumStableSlots(lua_State* L) {
     return 1;
 }
 
+// GetSelectedStablePet() (0x005a1060) → the selected index + 1: 0 for the
+// pet that is out, -1 for none.
 static int lua_GetSelectedStablePet(lua_State* L) {
-    lua_pushnumber(L, selectedStableSlot());
+    lua_pushnumber(L, selectedStableIndex(getGameHandler(L)) + 1);
     return 1;
 }
 
@@ -1941,14 +2168,9 @@ static int lua_ClickStablePet(lua_State* L) {
         clearCursor(L);
         return luaReturnNil(L);
     }
-    selectedStableSlot() = index + 1;
-    // The model preview shows whichever pet is selected, so selecting a
-    // different one is exactly when it has to be redrawn. Nothing else changes
-    // it, and the frame will not redraw on its own.
-    lua_getfield(L, LUA_REGISTRYINDEX, "wowee_lua_engine");
-    auto* engine = static_cast<LuaEngine*>(lua_touserdata(L, -1));
-    lua_pop(L, 1);
-    if (engine) engine->fireEvent("PET_STABLE_UPDATE_PAPERDOLL", {});
+    // Selected (0x005a0e00), and answered 1, which is what the slot's click
+    // reads as "redraw"; the client raises nothing here.
+    selectStableIndex(getGameHandler(L), index);
     lua_pushnumber(L, 1);
     return 1;
 }
@@ -2008,25 +2230,11 @@ static int lua_GetPetTalentTree(lua_State* L) {
     std::shared_ptr<pipeline::DBCFile> families;
     const pipeline::DBCFieldMap* layout = nullptr;
     const int32_t row = hunterPetFamilyRow(gh, families, layout);
-    const uint32_t typeF = layout ? layout->tryField("PetTalentType") : 0xFFFFFFFFu;
-    if (row < 0 || typeF >= families->getFieldCount()) return luaReturnNil(L);
-    const auto type = static_cast<int32_t>(families->getUInt32(static_cast<uint32_t>(row), typeF));
-    if (type < 0 || type > 31) return luaReturnNil(L);
-    auto* am = gh->services().assetManager;
-    const auto* tabL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("TalentTab") : nullptr;
-    auto tabs = am ? am->loadDBCOptional("TalentTab.dbc") : nullptr;
-    const uint32_t maskF = tabL ? tabL->tryField("PetTalentMask") : 0xFFFFFFFFu;
-    const uint32_t nameF = tabL ? tabL->tryField("Name") : 0xFFFFFFFFu;
-    if (!tabs || !tabs->isLoaded() || maskF >= tabs->getFieldCount() || nameF >= tabs->getFieldCount())
-        return luaReturnNil(L);
-    for (uint32_t r = 0; r < tabs->getRecordCount(); ++r) {
-        const uint32_t mask = tabs->getUInt32(r, maskF);
-        if (mask != 0 && (mask & (1u << type)) != 0) {
-            lua_pushstring(L, tabs->getString(r, nameF).c_str());
-            return 1;
-        }
-    }
-    return luaReturnNil(L);
+    if (row < 0) return luaReturnNil(L);
+    const std::string tree = familyTalentTree(gh, *families, *layout, row);
+    if (tree.empty()) return luaReturnNil(L);
+    lua_pushstring(L, tree.c_str());
+    return 1;
 }
 
 /// GetPetFoodTypes() (0x005d3bd0) → one ItemPetFood name per bit of the
@@ -2036,20 +2244,8 @@ static int lua_GetPetFoodTypes(lua_State* L) {
     std::shared_ptr<pipeline::DBCFile> families;
     const pipeline::DBCFieldMap* layout = nullptr;
     const int32_t row = hunterPetFamilyRow(gh, families, layout);
-    const uint32_t maskF = layout ? layout->tryField("PetFoodMask") : 0xFFFFFFFFu;
-    if (row < 0 || maskF >= families->getFieldCount()) return 0;
-    const uint32_t mask = families->getUInt32(static_cast<uint32_t>(row), maskF);
-    auto foods = gh->services().assetManager->loadDBCOptional("ItemPetFood.dbc");
-    if (!foods || !foods->isLoaded() || foods->getFieldCount() < 2) return 0;
-    int pushed = 0;
-    for (uint32_t r = 0; r < foods->getRecordCount(); ++r) {
-        const uint32_t id = foods->getUInt32(r, 0);
-        if (id == 0 || id > 32 || (mask & (1u << (id - 1))) == 0) continue;
-        if (!lua_checkstack(L, 1)) break;
-        lua_pushstring(L, foods->getString(r, 1).c_str());
-        ++pushed;
-    }
-    return pushed;
+    if (row < 0) return 0;
+    return pushFamilyFoods(L, gh, *families, *layout, row);
 }
 
 /// SetPetStablePaperdoll(model) - put the selected pet in the preview frame.
@@ -2077,14 +2273,19 @@ static int lua_SetPetStablePaperdoll(lua_State* L) {
     auto* w = tree->get(id);
     if (!w) return 0;
 
-    // Slots count from one and the active pet is slot zero, which the stable
-    // list carries as its own entry rather than as a slot.
-    const int slot = selectedStableSlot();
-    const auto& pets = gh->getStabledPets();
+    // The selected index, counted as ClickStablePet counts it: 0 the pet that
+    // is out, then the stable slots. Its model is its creature template's;
+    // one the creature cache does not hold yet is asked for, and the found
+    // answer raises PET_STABLE_UPDATE_PAPERDOLL (0x005a1530 -> 0x005a0ea0).
     w->modelDisplayId = 0;
-    if (slot >= 1 && slot <= static_cast<int>(pets.size())) {
-        w->modelDisplayId = gh->getCreatureDisplayIdForEntry(
-            pets[static_cast<size_t>(slot) - 1].entry);
+    if (const auto* pet = stablePetAt(gh, selectedStableIndex(gh))) {
+        if (gh->getCreatureInfoCache().count(pet->entry)) {
+            w->modelDisplayId = gh->getCreatureDisplayIdForEntry(pet->entry);
+        } else {
+            gh->askEntryThen(false, pet->entry, "stable paperdoll", [gh](bool found) {
+                if (found) gh->fireAddonEvent("PET_STABLE_UPDATE_PAPERDOLL", {});
+            });
+        }
     }
     return 0;
 }
@@ -2095,24 +2296,44 @@ static int lua_SetPetStablePaperdoll(lua_State* L) {
 static int lua_PickupStablePet(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: PickupStablePet(index)");
     const int index = static_cast<int>(std::lround(lua_tonumber(L, 1))) - 1;
-    if (const auto* pet = stablePetAt(getGameHandler(L), index); pet && pet->petNumber != 0) {
-        pickupStablePetCursor(L, index, "Interface\\Icons\\Ability_Hunter_BeastTaming");
+    auto* gh = getGameHandler(L);
+    // Only with the family's icon to put on the cursor (0x00520c60 reads it
+    // off the creature template; a pet whose template is not cached is not
+    // picked up).
+    if (const auto* pet = stablePetAt(gh, index); pet && pet->petNumber != 0) {
+        std::shared_ptr<pipeline::DBCFile> families;
+        const pipeline::DBCFieldMap* layout = nullptr;
+        const int32_t row = familyRowForEntry(gh, pet->entry, families, layout);
+        const uint32_t iconF = layout ? layout->tryField("IconFile") : 0xFFFFFFFFu;
+        const std::string icon = row >= 0 && iconF < families->getFieldCount()
+            ? families->getString(static_cast<uint32_t>(row), iconF) : std::string();
+        if (!icon.empty()) pickupStablePetCursor(L, index, icon);
     }
     return 0;
 }
 
-/// GetStablePetFoodTypes(slot) - and the one that cannot answer nil.
-///
-/// Its result goes straight into format(PET_DIET_TEMPLATE,
-/// BuildListString(...)) with no test in between. BuildListString hands nil
-/// back for nil, and string.format raises on a nil where it wants a string, so
-/// answering honestly there takes the stable window down as it opens. An empty
-/// string is the one value that says "not known" without doing that: the diet
-/// line comes out blank instead of wrong.
+// GetStablePetFoodTypes(index) (0x005a16a0) → the foods that pet eats, one
+// value each, from its family as GetStablePetInfo finds it; nothing for a pet
+// whose template the creature cache does not hold yet, which is asked for as
+// there.
 static int lua_GetStablePetFoodTypes(lua_State* L) {
-    (void)L;
-    lua_pushstring(L, "");
-    return 1;
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetStablePetInfo(index)");
+    auto* gh = getGameHandler(L);
+    const int index = static_cast<int>(std::lround(lua_tonumber(L, 1))) - 1;
+    const auto* pet = stablePetAt(gh, index);
+    if (!pet) return 0;
+    std::shared_ptr<pipeline::DBCFile> families;
+    const pipeline::DBCFieldMap* layout = nullptr;
+    const int32_t row = familyRowForEntry(gh, pet->entry, families, layout);
+    if (row < 0) {
+        if (!gh->getCreatureInfoCache().count(pet->entry)) {
+            gh->askEntryThen(false, pet->entry, "stable info", [gh](bool found) {
+                if (found) gh->fireAddonEvent("PET_STABLE_UPDATE", {});
+            });
+        }
+        return 0;
+    }
+    return pushFamilyFoods(L, gh, *families, *layout, row);
 }
 
 static int lua_ClosePetStables(lua_State* L) {
@@ -2126,14 +2347,24 @@ static int lua_IsAtStableMaster(lua_State* L) {
     return 1;
 }
 
-// GetNextStableSlotCost() → what the next slot costs, in copper.
-//
-// Zero, because the server never says. It reaches a money frame, which divides
-// it into gold and silver the moment the window opens, so it has to be a number
-// - and a made-up price shown as though the server had quoted it is worse than
-// a visible nothing.
+// GetNextStableSlotCost() → what the next slot costs, in copper (0x005a14d0):
+// StableSlotPrices.dbc's Cost for the row one past the slots the stable
+// list says are bought (0x00c0f6cc), 0 past the table's end.
 static int lua_GetNextStableSlotCost(lua_State* L) {
-    lua_pushnumber(L, 0);
+    auto* gh = getGameHandler(L);
+    static std::unordered_map<uint32_t, uint32_t> prices;
+    static bool loaded = false;
+    if (!loaded && gh) {
+        if (auto* am = gh->services().assetManager; am && am->isInitialized()) {
+            loaded = true;
+            if (auto dbc = am->loadDBC("StableSlotPrices.dbc"); dbc && dbc->isLoaded() && dbc->getFieldCount() >= 2)
+                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
+                    prices[dbc->getUInt32(i, 0)] = dbc->getUInt32(i, 1);
+        }
+    }
+    const uint32_t next = gh ? gh->getStableSlots() + 1u : 1u;
+    const auto it = prices.find(next);
+    lua_pushnumber(L, it != prices.end() ? static_cast<double>(it->second) : 0.0);
     return 1;
 }
 

@@ -41,6 +41,8 @@
 #include "addons/lua_taint.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "addons/toc_parser.hpp"
+#include "ui/layout_cache.hpp"
+#include "rendering/minimap_art.hpp"
 #include "addons/button_label_lua.hpp"
 #include "addons/binding_command.hpp"
 #include "pipeline/asset_manager.hpp"
@@ -1121,6 +1123,223 @@ int lua_Model_GetFacing(lua_State* L) {
     return 1;
 }
 
+// A model frame's model file and its pose (CSimpleModel, 0x00960530 ..
+// 0x009607e0): kept on the widget for the frame loop, which draws it.
+int lua_Model_SetModel(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:SetModel(\"file\")", w->name.c_str());
+    if (auto* tree = getWidgetTree(L)) tree->setModelFile(w->id, lua_tostring(L, 2));
+    return 0;
+}
+int lua_Model_GetModel(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    if (w && !w->modelFile.empty()) lua_pushstring(L, w->modelFile.c_str());
+    else lua_pushnil(L);
+    return 1;
+}
+int lua_Model_ClearModel(lua_State* L) {
+    if (auto* w = widgetOf(L, 1))
+        if (auto* tree = getWidgetTree(L)) tree->setModelFile(w->id, std::string());
+    return 0;
+}
+// 0x00960660: the three numbers as given, into +0x31c.
+int lua_Model_SetPosition(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) {
+        w->modelPosition[0] = static_cast<float>(luaL_optnumber(L, 2, 0.0));
+        w->modelPosition[1] = static_cast<float>(luaL_optnumber(L, 3, 0.0));
+        w->modelPosition[2] = static_cast<float>(luaL_optnumber(L, 4, 0.0));
+    }
+    return 0;
+}
+int lua_Model_GetPosition(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    for (int i = 0; i < 3; ++i) lua_pushnumber(L, w ? w->modelPosition[i] : 0.0);
+    return 3;
+}
+int lua_Model_SetModelScale(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) {
+        const float scale = static_cast<float>(luaL_optnumber(L, 2, 1.0));
+        if (scale > 0.0f) w->modelScale = scale;
+    }
+    return 0;
+}
+int lua_Model_GetModelScale(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->modelScale : 1.0);
+    return 1;
+}
+// 0x00960970 -> 0x0095f9f0: the model's camera by index.
+int lua_Model_SetCamera(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetCamera(index)", w->name.c_str());
+    w->modelCamera = static_cast<int>(std::llround(lua_tonumber(L, 2)));
+    return 0;
+}
+// SetLight(enabled[, omni, dirX, dirY, dirZ, ambIntensity[, ambR, ambG, ambB],
+// dirIntensity[, dirR, dirG, dirB]]) (0x00960d20): the light reset
+// (0x00834a40), then filled as far as the arguments go; each colour white
+// unless an intensity above 0 is followed by three numbers.
+int lua_Model_SetLight(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isnumber(L, 2)) {
+        return luaL_error(L, "Usage: %s:SetLight(enabled[, omni, dirX, dirY, dirZ, ambIntensity[, ambR, ambG, "
+                             "ambB], dirIntensity[, dirR, dirG, dirB]])",
+                          w->name.empty() ? "<unnamed>" : w->name.c_str());
+    }
+    w->modelLightEnabled = lua_tonumber(L, 2) != 0.0;
+    w->modelLightOmni = true;
+    for (int i = 0; i < 3; ++i) {
+        w->modelLightVec[i] = 0.0f;
+        w->modelLightAmbient[i] = 0.0f;
+        w->modelLightDiffuse[i] = 0.0f;
+    }
+    if (!w->modelLightEnabled) return 0;
+    for (int i = 3; i <= 7; ++i)
+        if (!lua_isnumber(L, i)) return 0;
+    w->modelLightOmni = lua_tonumber(L, 3) != 0.0;
+    for (int i = 0; i < 3; ++i) w->modelLightVec[i] = static_cast<float>(lua_tonumber(L, 4 + i));
+    auto colour = [&](int at, float (&out)[3]) -> int {
+        const float intensity = static_cast<float>(lua_tonumber(L, at));
+        float rgb[3] = {1.0f, 1.0f, 1.0f};
+        int next = at + 1;
+        if (intensity > 0.0f && lua_isnumber(L, at + 1) && lua_isnumber(L, at + 2) && lua_isnumber(L, at + 3)) {
+            // 0x0061be50 packs them as bytes.
+            for (int i = 0; i < 3; ++i) {
+                const double c = std::clamp(lua_tonumber(L, at + 1 + i), 0.0, 1.0);
+                rgb[i] = static_cast<float>(std::lround(c * 255.0)) / 255.0f;
+            }
+            next = at + 4;
+        }
+        for (int i = 0; i < 3; ++i) out[i] = rgb[i] * intensity;
+        return next;
+    };
+    const int next = colour(7, w->modelLightAmbient);
+    if (lua_isnumber(L, next)) colour(next, w->modelLightDiffuse);
+    return 0;
+}
+// GetLight() (0x00960dd0): enabled, omni, x, y, z, then for the ambient and the
+// diffuse a 1 and its colour where any of it is above 0, else a 0.
+int lua_Model_GetLight(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    lua_pushnumber(L, w->modelLightEnabled ? 1 : 0);
+    lua_pushnumber(L, w->modelLightOmni ? 1 : 0);
+    for (float v : w->modelLightVec) lua_pushnumber(L, v);
+    int n = 5;
+    for (const float* c : {w->modelLightAmbient, w->modelLightDiffuse}) {
+        if (c[0] > 0.0f || c[1] > 0.0f || c[2] > 0.0f) {
+            lua_pushnumber(L, 1);
+            for (int i = 0; i < 3; ++i) lua_pushnumber(L, c[i]);
+            n += 4;
+        } else {
+            lua_pushnumber(L, 0);
+            n += 1;
+        }
+    }
+    return n;
+}
+
+// The model frame's fog (0x009611a0 .. 0x00961470): its colour, each part
+// held to 0..1 and alpha 1 unless given (0x00960420), turns it on.
+int lua_Model_SetFogColor(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    auto part = [&](int at, double fallback) {
+        const double v = lua_isnumber(L, at) ? lua_tonumber(L, at) : fallback;
+        return static_cast<float>(v < 0.0 ? 0.0 : (v >= 1.0 ? 1.0 : v));
+    };
+    w->modelFogColor[0] = part(2, 0.0);
+    w->modelFogColor[1] = part(3, 0.0);
+    w->modelFogColor[2] = part(4, 0.0);
+    w->modelFogColor[3] = part(5, 1.0);
+    w->modelFogEnabled = true;
+    return 0;
+}
+int lua_Model_GetFogColor(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    for (int i = 0; i < 4; ++i) lua_pushnumber(L, w ? w->modelFogColor[i] : 0.0);
+    return 4;
+}
+int lua_Model_SetFogNear(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetFogNear(value)", w->name.c_str());
+    w->modelFogNear = static_cast<float>(lua_tonumber(L, 2));
+    return 0;
+}
+int lua_Model_GetFogNear(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->modelFogNear : 0.0);
+    return 1;
+}
+int lua_Model_SetFogFar(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetFogFar(value)", w->name.c_str());
+    w->modelFogFar = static_cast<float>(lua_tonumber(L, 2));
+    return 0;
+}
+int lua_Model_GetFogFar(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->modelFogFar : 1.0);
+    return 1;
+}
+int lua_Model_ClearFog(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->modelFogEnabled = false;
+    return 0;
+}
+
+// 0x009607e0: an AnimationData id under 506 (0x1fa), started from its start.
+int lua_Model_SetSequence(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetSequence(sequence)", w->name.c_str());
+    const long long seq = std::llround(lua_tonumber(L, 2));
+    if (seq < 0 || seq > 0x1f9) {
+        return luaL_error(L, "Error: %s:SetSequence(sequence) exceeds valid range of 0 - %d", w->name.c_str(), 0x1fa);
+    }
+    w->modelSequence = static_cast<int>(seq);
+    w->modelSequenceTime = 0;
+    ++w->modelSequenceSerial;
+    return 0;
+}
+// 0x009608b0: the sequence started at a time (0x0095f610).
+int lua_Model_SetSequenceTime(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isnumber(L, 2) || !lua_isnumber(L, 3))
+        return luaL_error(L, "Usage: %s:SetSequenceTime(sequence, time)", w->name.c_str());
+    w->modelSequence = static_cast<int>(std::llround(lua_tonumber(L, 2)));
+    w->modelSequenceTime = static_cast<int>(std::llround(lua_tonumber(L, 3)));
+    ++w->modelSequenceSerial;
+    return 0;
+}
+// 0x00961120: a texture into the model's type-14 slots.
+int lua_Model_ReplaceIconTexture(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:ReplaceIconTexture(\"texture\")", w->name.c_str());
+    w->modelIconTexture = lua_tostring(L, 2);
+    return 0;
+}
+// SetGlow (0x009614b0) asks the frame's vtable +0xf0, which a model frame
+// leaves the base's empty 0x00632050; AdvanceTime (0x009610e0) does nothing.
+int lua_Model_SetGlow(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    if (w && !lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetGlow(value)", w->name.c_str());
+    return 0;
+}
+
+// __WoweeModelCentered(frame): the frame's model held at its middle, as the
+// client's WorldMap.cpp holds its arrows and ping (0x005446f0).
+int lua_WoweeModelCentered(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->modelCentered = true;
+    return 0;
+}
+
 int lua_Frame_SetMovable(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) w->movable = lua_toboolean(L, 2) != 0;
     return 0;
@@ -2032,6 +2251,8 @@ int lua_MessageFrame_AddMessage(lua_State* L) {
     // A new line at the bottom means the view follows it, which is what a
     // chat frame does unless someone has scrolled up.
     if (w->messageScroll > 0) ++w->messageScroll;
+    // The slot the line took in the client's ring of maxLines.
+    w->messageRingLine = (w->messageRingLine + 1) % static_cast<int>(std::max<size_t>(w->maxMessages, 1));
     return 0;
 }
 /// GetMessageInfo(index[, accessID]) → text, accessID, lineID, extraData.
@@ -2079,9 +2300,17 @@ int lua_MessageFrame_RemoveMessagesByAccessID(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
     const double id = luaL_optnumber(L, 2, 0.0);
+    const size_t before = w->messages.size();
     for (auto it = w->messages.begin(); it != w->messages.end();) {
         if (it->accessId == id) it = w->messages.erase(it);
         else                    ++it;
+    }
+    // The ring closes up behind the newest line kept (0x0096a510).
+    if (w->messages.empty()) {
+        w->messageRingLine = -1;
+    } else if (const auto removed = static_cast<int>(before - w->messages.size()); removed > 0) {
+        w->messageRingLine -= removed;
+        if (w->messageRingLine < 0) w->messageRingLine += static_cast<int>(w->maxMessages);
     }
     return 0;
 }
@@ -2099,6 +2328,46 @@ int lua_FontString_SetWordWrap(lua_State* L) {
 int lua_FontString_CanWordWrap(lua_State* L) {
     const auto* w = widgetOf(L, 1);
     lua_pushboolean(L, (w && w->wordWrap) ? 1 : 0);
+    return 1;
+}
+/// Texture:Set/GetHorizTile, Set/GetVertTile (0x0048cb60, 0x0048cbc0,
+/// 0x0048cc30, 0x0048cc90).
+int lua_Texture_SetHorizTile(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->horizTile = lua_toboolean(L, 2) != 0;
+    return 0;
+}
+int lua_Texture_GetHorizTile(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->horizTile);
+    return 1;
+}
+int lua_Texture_SetVertTile(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->vertTile = lua_toboolean(L, 2) != 0;
+    return 0;
+}
+int lua_Texture_GetVertTile(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->vertTile);
+    return 1;
+}
+/// Texture:Set/GetNonBlocking (0x0048caa0, 0x0048cb00).
+int lua_Texture_SetNonBlocking(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->nonBlocking = lua_toboolean(L, 2) != 0;
+    return 0;
+}
+int lua_Texture_GetNonBlocking(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->nonBlocking);
+    return 1;
+}
+int lua_FontString_SetIndentedWordWrap(lua_State* L) {
+    auto* w = widgetToRemeasure(L, 1);
+    if (w) w->indentedWordWrap = lua_toboolean(L, 2) != 0;
+    return 0;
+}
+int lua_FontString_GetIndentedWordWrap(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->indentedWordWrap);
     return 1;
 }
 int lua_FontString_SetNonSpaceWrap(lua_State* L) {
@@ -2530,7 +2799,8 @@ int lua_Tooltip_SetText(lua_State* L) {
 static bool fillItemTooltipById(wowee::ui::Widget* w, game::GameHandler* gh,
                                 uint32_t itemId);
 static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
-                                uint32_t itemId, const game::ItemDef* instance = nullptr);
+                                uint32_t itemId, const game::ItemDef* instance = nullptr,
+                                const std::array<uint32_t, 3>* linkGems = nullptr);
 static void appendRandomSuffix(wowee::ui::Widget* w, game::GameHandler* gh,
                                const game::ItemDef& item);
 static void appendDurabilityLine(wowee::ui::Widget* w, const game::ItemDef& item);
@@ -3117,13 +3387,18 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
     // walked past. A linked weapon read as a plain one wherever a link is
     // shown - chat, the auction house, a guild bank - because the tooltip was
     // built from the id alone, and the id is a template.
+    // The three after it are the gems in its sockets, by enchant id.
     uint32_t enchantId = 0;
+    std::array<uint32_t, 3> linkGems{};
     if (kind == "item") {
         size_t at = colon + 1;
         while (at < link.size() && link[at] >= '0' && link[at] <= '9') ++at;
-        if (at < link.size() && link[at] == ':') {
+        for (int field = 0; field < 4 && at < link.size() && link[at] == ':'; ++field) {
+            uint32_t v = 0;
             for (++at; at < link.size() && link[at] >= '0' && link[at] <= '9'; ++at)
-                enchantId = enchantId * 10 + static_cast<uint32_t>(link[at] - '0');
+                v = v * 10 + static_cast<uint32_t>(link[at] - '0');
+            if (field == 0) enchantId = v;
+            else linkGems[static_cast<size_t>(field - 1)] = v;
         }
     }
 
@@ -3131,7 +3406,7 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
     if (kind == "spell" || kind == "enchant" || kind == "talent")
         filled = fillSpellTooltip(L, w, gh, id);
     else if (kind == "item") {
-        filled = fillItemTooltipById(L, gh, id);
+        filled = fillItemTooltipById(L, gh, id, nullptr, &linkGems);
         if (filled) appendEnchantLineById(w, gh, enchantId);
         // Asked for whether it was found or not: the answer is what turns a
         // name into a tooltip, and the miss is exactly when it is needed.
@@ -3859,7 +4134,8 @@ static bool fillItemTooltipById(wowee::ui::Widget* w, game::GameHandler* gh,
 /// isTooltip is set before the call because SetText refuses a frame that is not
 /// one, and the builder opens with SetText.
 static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
-                                uint32_t itemId, const game::ItemDef* instance) {
+                                uint32_t itemId, const game::ItemDef* instance,
+                                const std::array<uint32_t, 3>* linkGems) {
     auto* w = widgetOf(L, 1);
     if (!w || !gh || itemId == 0) return false;
     const int top = lua_gettop(L);
@@ -3879,6 +4155,15 @@ static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
             lua_setfield(L, -2, "durability");
             lua_pushnumber(L, static_cast<lua_Number>(instance->maxDurability));
             lua_setfield(L, -2, "maxDurability");
+            // The gems in its sockets, which the template only has the
+            // colours of (0x006277f0's enchantment walk).
+            pushSocketedGems(L, gh, instance->guid, itemId);
+        } else if (linkGems && ((*linkGems)[0] | (*linkGems)[1] | (*linkGems)[2])) {
+            // A link's gems: its fields 3-5 are the sockets' enchant ids, as
+            // 0x0061e3a0 wrote them off the item, and the tooltip of the link
+            // shows them as it would the item's own.
+            lua_newtable(L);
+            pushSocketedGems(L, gh, *linkGems, itemId);
         } else {
             lua_pushnil(L);
         }
@@ -4355,7 +4640,11 @@ int lua_Tooltip_NumLines(lua_State* L) {
 }
 
 int lua_MessageFrame_Clear(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) { w->messages.clear(); w->messageScroll = 0; }
+    if (auto* w = widgetOf(L, 1)) {
+        w->messages.clear();
+        w->messageScroll = 0;
+        w->messageRingLine = -1;
+    }
     return 0;
 }
 /// GetNumMessages([accessID]) - how many lines, or how many belonging to one
@@ -4380,11 +4669,17 @@ int lua_MessageFrame_GetNumMessages(lua_State* L) {
     lua_pushnumber(L, static_cast<lua_Number>(w->messages.size()));
     return 1;
 }
+/// SetMaxLines(maxLines) - a new ring of that many lines (0x009737f0 ->
+/// 0x009698e0): what the frame held is dropped with the old one.
 int lua_MessageFrame_SetMaxLines(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) {
-        const int n = static_cast<int>(luaL_optnumber(L, 2, 128));
-        w->maxMessages = (n > 0) ? static_cast<size_t>(n) : 1;
-    }
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    const int n = lua_isnumber(L, 2) ? static_cast<int>(lua_tonumber(L, 2)) : 0;
+    if (n <= 0) return luaL_error(L, "Usage: %s:SetMaxLines(maxLines)", w->name.c_str());
+    w->maxMessages = static_cast<size_t>(n);
+    w->messages.clear();
+    w->messageScroll = 0;
+    w->messageRingLine = -1;
     return 0;
 }
 int lua_MessageFrame_ScrollUp(lua_State* L) {
@@ -4408,6 +4703,7 @@ int lua_MessageFrame_ScrollToBottom(lua_State* L) {
 // The rest of ScrollingMessageFrame's scrolling (0x009732f0-0x009736f0). The
 // client counts in wrapped lines; this frame keeps its offset in messages, so
 // a page here is the messages the last draw fitted rather than its lines.
+
 namespace {
 int lastScroll(const wowee::ui::Widget& w) {
     return w.messages.empty() ? 0 : static_cast<int>(w.messages.size()) - 1;
@@ -4954,9 +5250,52 @@ int lua_Region_SetVertexColor(lua_State* L) {
         w->color[1] = static_cast<float>(luaOptNumberText(L, 3, 1.0));
         w->color[2] = static_cast<float>(luaOptNumberText(L, 4, 1.0));
         w->color[3] = static_cast<float>(luaOptNumberText(L, 5, 1.0));
+        w->gradient = false;
     }
     return 0;
 }
+
+// SetGradient("orientation", minR, minG, minB, maxR, maxG, maxB) (0x0048c240)
+// and SetGradientAlpha with each colour's alpha after it (0x0048c310): each part
+// held to 0..1 (0x0061be50, 0x00960420), alpha 1 for the first. HORIZONTAL
+// puts the minimum on the left, VERTICAL at the bottom (0x00487b00).
+static int setGradient(lua_State* L, bool withAlpha) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    const char* usage = withAlpha
+        ? "Usage: %s:SetGradientAlpha(\"orientation\", minR, minG, minB, minA, maxR, maxG, maxB, maxA)"
+        : "Usage: %s:SetGradient(\"orientation\", minR, minG, minB, maxR, maxG, maxB)";
+    const char* orient = lua_isstring(L, 2) ? lua_tostring(L, 2) : nullptr;
+    int vertical = -1;
+    if (orient) {
+        std::string o(orient);
+        std::transform(o.begin(), o.end(), o.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+        if (o == "HORIZONTAL") vertical = 0;
+        else if (o == "VERTICAL") vertical = 1;
+    }
+    if (vertical < 0) return luaL_error(L, usage, w->name.empty() ? "<unnamed>" : w->name.c_str());
+    auto part = [&](int at, double fallback) {
+        const double v = lua_isnumber(L, at) ? lua_tonumber(L, at) : fallback;
+        return static_cast<float>(v < 0.0 ? 0.0 : (v >= 1.0 ? 1.0 : v));
+    };
+    const int per = withAlpha ? 4 : 3;
+    float minC[4], maxC[4];
+    for (int i = 0; i < 3; ++i) {
+        minC[i] = part(3 + i, 0.0);
+        maxC[i] = part(3 + per + i, 0.0);
+    }
+    minC[3] = withAlpha ? part(6, 1.0) : 1.0f;
+    maxC[3] = withAlpha ? part(10, 1.0) : 1.0f;
+    // Upper-left, lower-left, upper-right, lower-right.
+    const float* corners[4] = {vertical ? maxC : minC, minC, maxC, vertical ? minC : maxC};
+    if (vertical) { corners[0] = maxC; corners[1] = minC; corners[2] = maxC; corners[3] = minC; }
+    for (int c = 0; c < 4; ++c)
+        for (int i = 0; i < 4; ++i) w->gradientColor[c][i] = corners[c][i];
+    w->gradient = true;
+    return 0;
+}
+int lua_Texture_SetGradient(lua_State* L) { return setGradient(L, false); }
+int lua_Texture_SetGradientAlpha(lua_State* L) { return setGradient(L, true); }
 /// GetDrawLayer() (0x0048bee0): the layer's name, no sublevel.
 int lua_Region_GetDrawLayer(lua_State* L) {
     static const char* kNames[] = {"BACKGROUND", "BORDER", "ARTWORK", "OVERLAY", "HIGHLIGHT"};
@@ -5454,6 +5793,26 @@ int lua_Frame_SetNormalFontObject(lua_State* L) {
 int lua_Region_GetSize(lua_State* L);  // with GetChildren, below
 
 /// Attach the shared region methods to the table on top of the stack.
+/// FontString:GetShadowColor (0x0048d9e0) and GetShadowOffset (0x0048db20),
+/// CanNonSpaceWrap (0x0048e010).
+int lua_FontString_GetShadowColor(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    for (int i = 0; i < 4; ++i) lua_pushnumber(L, w ? static_cast<double>(std::lround(std::clamp(w->shadowColor[i], 0.0f, 1.0f) * 255.0f)) / 255.0 : (i == 3 ? 1.0 : 0.0));
+    return 4;
+}
+int lua_FontString_GetShadowOffset(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    const bool has = w && w->hasShadow;
+    lua_pushnumber(L, has ? w->shadowX : 0.0);
+    lua_pushnumber(L, has ? w->shadowY : 0.0);
+    return 2;
+}
+int lua_FontString_CanNonSpaceWrap(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->nonSpaceWrap);
+    return 1;
+}
+
 void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
     auto set = [&](const char* name, lua_CFunction fn) {
         lua_pushcfunction(L, fn);
@@ -5537,6 +5896,14 @@ void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
         set("GetBlendMode", lua_Texture_GetBlendMode);
         set("SetDesaturated", lua_Texture_SetDesaturated);
         set("IsDesaturated", lua_Texture_IsDesaturated);
+        set("SetGradient", lua_Texture_SetGradient);
+        set("SetGradientAlpha", lua_Texture_SetGradientAlpha);
+        set("SetHorizTile", lua_Texture_SetHorizTile);
+        set("GetHorizTile", lua_Texture_GetHorizTile);
+        set("SetVertTile", lua_Texture_SetVertTile);
+        set("GetVertTile", lua_Texture_GetVertTile);
+        set("SetNonBlocking", lua_Texture_SetNonBlocking);
+        set("GetNonBlocking", lua_Texture_GetNonBlocking);
     }
     if (isFontString) {
         set("GetFont", lua_FontString_GetFont);
@@ -5567,6 +5934,11 @@ void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
         set("SetWordWrap", lua_FontString_SetWordWrap);
         set("CanWordWrap", lua_FontString_CanWordWrap);
         set("SetNonSpaceWrap", lua_FontString_SetNonSpaceWrap);
+        set("CanNonSpaceWrap", lua_FontString_CanNonSpaceWrap);
+        set("SetIndentedWordWrap", lua_FontString_SetIndentedWordWrap);
+        set("GetIndentedWordWrap", lua_FontString_GetIndentedWordWrap);
+        set("GetShadowColor", lua_FontString_GetShadowColor);
+        set("GetShadowOffset", lua_FontString_GetShadowOffset);
     }
     // Anything still unimplemented stays a no-op rather than an error, which is
     // what keeps a large addon running while the surface is filled in.
@@ -5601,6 +5973,19 @@ void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
 /// Not a WoW function: it is how the animation system, which is written in Lua,
 /// reaches the one thing it cannot do from there. Displacing the anchors would
 /// leave the movement behind after the animation stopped.
+/// __WoweeSetAnimRotation(region, radians, point, x, y): what the playing
+/// Rotation animations turn the region by, and about which point.
+int lua_wowee_setAnimRotation(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) {
+        w->animRadians = static_cast<float>(luaL_optnumber(L, 2, 0.0));
+        const auto at = wowee::ui::resolveAnchorPoint(luaL_optstring(L, 3, "CENTER"));
+        w->animOriginFx = at.fx;
+        w->animOriginFy = at.fy;
+        w->animOriginX = static_cast<float>(luaL_optnumber(L, 4, 0.0));
+        w->animOriginY = static_cast<float>(luaL_optnumber(L, 5, 0.0));
+    }
+    return 0;
+}
 int lua_wowee_setAnimOffset(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) {
         w->animOffsetX = static_cast<float>(luaL_optnumber(L, 2, 0.0));
@@ -5635,14 +6020,40 @@ static void applyStateColor(lua_State* L, int fontIndex, float out[4], bool& fla
 int lua_Frame_SetHighlightFontObject(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) {
         applyStateColor(L, 2, w->highlightColor, w->hasHighlightColor);
+        w->highlightFontName = lua_type(L, 2) == LUA_TSTRING ? lua_tostring(L, 2) : "";
     }
     return 0;
 }
 int lua_Frame_SetDisabledFontObject(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) {
         applyStateColor(L, 2, w->disabledColor, w->hasDisabledColor);
+        w->disabledFontName = lua_type(L, 2) == LUA_TSTRING ? lua_tostring(L, 2) : "";
     }
     return 0;
+}
+/// GetHighlightFontObject / GetDisabledFontObject: the font object named,
+/// or nothing.
+static int pushNamedFontObject(lua_State* L, const std::string& name) {
+    if (name.empty()) return 0;
+    lua_getglobal(L, name.c_str());
+    return 1;
+}
+int lua_Frame_GetHighlightFontObject(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    return w ? pushNamedFontObject(L, w->highlightFontName) : 0;
+}
+int lua_Frame_GetDisabledFontObject(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    return w ? pushNamedFontObject(L, w->disabledFontName) : 0;
+}
+int lua_Frame_EnableJoystick(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->joystickEnabled = lua_toboolean(L, 2) != 0;
+    return 0;
+}
+int lua_Frame_IsJoystickEnabled(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->joystickEnabled);
+    return 1;
 }
 
 /// The four components of a state colour, as SetTextColor takes them.
@@ -5946,7 +6357,7 @@ int pushChildWidgets(lua_State* L, bool regions, bool countOnly) {
     int pushed = 0;
     for (const uint32_t childId : w->children) {
         const auto* child = tree->get(childId);
-        if (!child || (child->kind == wowee::ui::WidgetKind::Frame) == regions) continue;
+        if (!child || (child->kind == wowee::ui::WidgetKind::Frame) == regions || child->isTitleRegion) continue;
         lua_pushinteger(L, static_cast<lua_Integer>(childId));
         lua_rawget(L, registry);
         if (lua_istable(L, -1) && countOnly) {
@@ -6240,6 +6651,7 @@ int lua_StatusBar_SetValue(lua_State* L) {
 /// ChangeChatColor from the chat colour menu, the arena tabard's three
 /// swatches, the chat config panel. They were handing nil to functions that
 /// take r, g, b, so accepting a colour set the colour to nothing.
+static int fireColorSelect(lua_State* L, float r, float g, float b);
 int lua_ColorSelect_SetColorRGB(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
@@ -6261,7 +6673,11 @@ int lua_ColorSelect_SetColorRGB(lua_State* L) {
     // reached the bottom.
     if (w->pickerHSV[1] <= 0.0f) w->pickerHSV[0] = hueBefore;
     if (!changed) return 0;
+    return fireColorSelect(L, r, g, b);
+}
 
+/// Run the picker's OnColorSelect with its colour, as a change to it does.
+static int fireColorSelect(lua_State* L, float r, float g, float b) {
     taint::Quiet quiet;   // see callScriptOnTable
     lua_getfield(L, 1, "__scripts");
     if (lua_istable(L, -1)) {
@@ -6281,6 +6697,33 @@ int lua_ColorSelect_SetColorRGB(lua_State* L) {
     return 0;
 }
 
+/// SetColorHSV(h, s, v) / GetColorHSV (0x00970f50, 0x00970fd0): the hue in
+/// degrees, saturation and value 0 to 1; setting it moves the colour and
+/// runs OnColorSelect as SetColorRGB does (0x0096e3d0).
+int lua_ColorSelect_SetColorHSV(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    float hsv[3] = {static_cast<float>(luaL_optnumber(L, 2, 0.0)) / 360.0f,
+                    static_cast<float>(luaL_optnumber(L, 3, 0.0)),
+                    static_cast<float>(luaL_optnumber(L, 4, 0.0))};
+    hsv[0] -= std::floor(hsv[0]);
+    float rgb[3];
+    wowee::ui::hsvToRgb(hsv, rgb);
+    const bool changed = rgb[0] != w->pickerColor[0] || rgb[1] != w->pickerColor[1] || rgb[2] != w->pickerColor[2];
+    for (int i = 0; i < 3; ++i) {
+        w->pickerHSV[i] = hsv[i];
+        w->pickerColor[i] = rgb[i];
+    }
+    if (!changed) return 0;
+    return fireColorSelect(L, rgb[0], rgb[1], rgb[2]);
+}
+int lua_ColorSelect_GetColorHSV(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->pickerHSV[0] * 360.0 : 0.0);
+    lua_pushnumber(L, w ? w->pickerHSV[1] : 0.0);
+    lua_pushnumber(L, w ? w->pickerHSV[2] : 1.0);
+    return 3;
+}
 int lua_ColorSelect_GetColorRGB(lua_State* L) {
     const auto* w = widgetOf(L, 1);
     for (int i = 0; i < 3; ++i) lua_pushnumber(L, w ? w->pickerColor[i] : 1.0);
@@ -6684,8 +7127,34 @@ int lua_Slider_GetValueStep(lua_State* L) {
 static int setColorRole(lua_State* L, wowee::ui::Widget::ColorRole role) {
     auto* tree = wowee::addons::getWidgetTree(L);
     if (!tree) return 0;
-    if (auto* region = tree->get(widgetIdOf(L, 2))) region->colorRole = role;
+    const uint32_t rid = widgetIdOf(L, 2);
+    if (auto* region = tree->get(rid)) region->colorRole = role;
+    if (auto* picker = widgetOf(L, 1)) picker->pickerRegion[static_cast<int>(role)] = rid;
     return 0;
+}
+/// GetColorWheelTexture and the other three (0x00970830, 0x009709e0,
+/// 0x00970bc0, 0x00970d70): the region set for that role, or nil.
+static int getColorRole(lua_State* L, wowee::ui::Widget::ColorRole role) {
+    const auto* picker = widgetOf(L, 1);
+    const uint32_t rid = picker ? picker->pickerRegion[static_cast<int>(role)] : 0;
+    if (rid == 0) {
+        lua_pushnil(L);
+        return 1;
+    }
+    pushFrameByWid(L, rid);
+    return 1;
+}
+int lua_ColorSelect_GetWheelTexture(lua_State* L) {
+    return getColorRole(L, wowee::ui::Widget::ColorRole::Wheel);
+}
+int lua_ColorSelect_GetWheelThumbTexture(lua_State* L) {
+    return getColorRole(L, wowee::ui::Widget::ColorRole::WheelThumb);
+}
+int lua_ColorSelect_GetValueTexture(lua_State* L) {
+    return getColorRole(L, wowee::ui::Widget::ColorRole::Value);
+}
+int lua_ColorSelect_GetValueThumbTexture(lua_State* L) {
+    return getColorRole(L, wowee::ui::Widget::ColorRole::ValueThumb);
 }
 int lua_ColorSelect_SetWheelTexture(lua_State* L) {
     return setColorRole(L, wowee::ui::Widget::ColorRole::Wheel);
@@ -6754,6 +7223,370 @@ int lua_StatusBar_SetOrientation(lua_State* L) {
     }
     return 0;
 }
+
+// ── Getters the client registers (each pushes what its setter stored) ──────
+namespace {
+/// A colour channel kept as a byte, as the client keeps it (0x00487ab0).
+double asByte(float c) {
+    return static_cast<double>(std::lround(std::clamp(c, 0.0f, 1.0f) * 255.0f)) * (1.0 / 255.0);
+}
+}  // namespace
+
+/// EditBox:IsAutoFocus/IsMultiLine/IsNumeric/IsPassword/IsCountInvisibleLetters
+/// - flags 1, 2, 4, 8 and 0x20 of +0x2a0 (0x00975a20 .. 0x00975ce0).
+int lua_EditBox_IsAutoFocus(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->editAutoFocus);
+    return 1;
+}
+int lua_EditBox_IsMultiLine(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->editMultiLine);
+    return 1;
+}
+int lua_EditBox_IsNumeric(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->editNumeric);
+    return 1;
+}
+int lua_EditBox_IsPassword(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->editPassword);
+    return 1;
+}
+int lua_EditBox_IsCountInvisibleLetters(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->countInvisibleLetters);
+    return 1;
+}
+/// SetPassword(on) (0x00975c90).
+int lua_EditBox_SetPassword(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->editPassword = lua_toboolean(L, 2) != 0;
+    return 0;
+}
+/// GetBlinkSpeed / SetBlinkSpeed(speed) (0x00975dc0, 0x00975d40).
+int lua_EditBox_GetBlinkSpeed(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->editBlinkSpeed : 0.5);
+    return 1;
+}
+int lua_EditBox_SetBlinkSpeed(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetBlinkSpeed(speed)", w->name.c_str());
+    w->editBlinkSpeed = static_cast<float>(lua_tonumber(L, 2));
+    return 0;
+}
+
+/// StatusBar/Slider:GetOrientation (0x00971240 through the table at 0x00a44040).
+int lua_StatusBar_GetOrientation(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushstring(L, (w && w->barVertical) ? "VERTICAL" : "HORIZONTAL");
+    return 1;
+}
+/// GetStatusBarColor (0x00971800): the bar texture's colour, white with none.
+int lua_StatusBar_GetStatusBarColor(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    const bool has = w && !w->barTexture.empty();
+    for (int i = 0; i < 4; ++i) lua_pushnumber(L, has ? asByte(w->barColor[i]) : 1.0);
+    return 4;
+}
+
+/// Frame:GetMinResize / GetMaxResize (0x004a0480, 0x004a0640).
+int lua_Frame_GetMinResize(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->minResizeW : 0.0);
+    lua_pushnumber(L, w ? w->minResizeH : 0.0);
+    return 2;
+}
+int lua_Frame_GetMaxResize(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->maxResizeW : 0.0);
+    lua_pushnumber(L, w ? w->maxResizeH : 0.0);
+    return 2;
+}
+/// GetClampRectInsets (0x004a0230): left, right, top, bottom.
+int lua_Frame_GetClampRectInsets(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->clampInsetL : 0.0);
+    lua_pushnumber(L, w ? w->clampInsetR : 0.0);
+    lua_pushnumber(L, w ? w->clampInsetT : 0.0);
+    lua_pushnumber(L, w ? w->clampInsetB : 0.0);
+    return 4;
+}
+/// IsMouseWheelEnabled (0x004a1160).
+int lua_Frame_IsMouseWheelEnabled(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->wheelEnabled);
+    return 1;
+}
+/// GetEffectiveAlpha (0x0049f900): the frame's alpha byte times its parent's
+/// effective one, over 255, as a fraction.
+int lua_Frame_GetEffectiveAlpha(lua_State* L) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    const auto* w = widgetOf(L, 1);
+    unsigned eff = 255;
+    std::vector<const wowee::ui::Widget*> chain;
+    for (const auto* p = w; p && tree && chain.size() < 256; p = p->parent ? tree->get(p->parent) : nullptr)
+        chain.push_back(p);
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+        const auto own = static_cast<unsigned>(std::lround(std::clamp((*it)->alpha, 0.0f, 1.0f) * 255.0f));
+        eff = (own * eff) / 255u;
+    }
+    lua_pushnumber(L, static_cast<double>(eff) * 0.00392156862745098);
+    return 1;
+}
+
+/// MessageFrame getters (0x00973750 .. 0x00973ca0) and SetFading (0x00973880).
+int lua_MessageFrame_GetCurrentLine(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->messageRingLine : -1);
+    return 1;
+}
+int lua_MessageFrame_GetMaxLines(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? static_cast<double>(w->maxMessages) : 0.0);
+    return 1;
+}
+int lua_MessageFrame_SetFading(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->messageFading = lua_toboolean(L, 2) != 0;
+    return 0;
+}
+int lua_MessageFrame_GetFading(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->messageFading);
+    return 1;
+}
+int lua_MessageFrame_GetFadeDuration(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->messageFadeDuration : 3.0);
+    return 1;
+}
+int lua_MessageFrame_GetInsertMode(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushstring(L, (w && w->messagesInsertTop) ? "TOP" : "BOTTOM");
+    return 1;
+}
+int lua_Frame_GetHyperlinksEnabled(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->hyperlinksEnabled);
+    return 1;
+}
+
+/// Frame:EnableDrawLayer / DisableDrawLayer(layer) (0x0049fc90, 0x0049fd00):
+/// the layer named, ARTWORK when none is.
+int lua_Frame_SetDrawLayerEnabled(lua_State* L, bool on) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    const auto layer = lua_isstring(L, 2) ? wowee::ui::parseDrawLayer(lua_tostring(L, 2))
+                                          : wowee::ui::DrawLayer::Artwork;
+    const auto bit = static_cast<uint8_t>(1u << static_cast<unsigned>(layer));
+    if (on) w->drawLayersOff = static_cast<uint8_t>(w->drawLayersOff & ~bit);
+    else    w->drawLayersOff = static_cast<uint8_t>(w->drawLayersOff | bit);
+    return 0;
+}
+int lua_Frame_EnableDrawLayer(lua_State* L) { return lua_Frame_SetDrawLayerEnabled(L, true); }
+int lua_Frame_DisableDrawLayer(lua_State* L) { return lua_Frame_SetDrawLayerEnabled(L, false); }
+/// Set/GetDontSavePosition (0x004a08c0, 0x004a0910).
+int lua_Frame_SetDontSavePosition(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->dontSavePosition = lua_toboolean(L, 2) != 0;
+    return 0;
+}
+int lua_Frame_GetDontSavePosition(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->dontSavePosition);
+    return 1;
+}
+
+/// IsDragging (0x0049e0b0 -> 0x0048eb70): this frame, or one it sits in, is
+/// the one a drag belongs to.
+int lua_Frame_IsDragging(lua_State* L) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    const uint32_t dragged = tree ? tree->draggedWidget() : 0;
+    bool on = false;
+    for (const auto* w = widgetOf(L, 1); w && tree && dragged; w = w->parent ? tree->get(w->parent) : nullptr) {
+        if (w->id == dragged) {
+            on = true;
+            break;
+        }
+    }
+    lua_pushboolean(L, on);
+    return 1;
+}
+/// SetDepth(additiveDepth) (0x004a1c40), GetDepth (0x004a1cc0) and
+/// GetEffectiveDepth (0x004a1d20): its own and its own plus its parents'.
+int lua_Frame_SetDepth(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetDepth(additiveDepth)", w->name.c_str());
+    w->depth = static_cast<float>(lua_tonumber(L, 2));
+    return 0;
+}
+int lua_Frame_GetDepth(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->depth : 0.0);
+    return 1;
+}
+int lua_Frame_GetEffectiveDepth(lua_State* L) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    float sum = 0.0f;
+    int guard = 0;
+    for (const auto* w = widgetOf(L, 1); w && guard < 256; w = (tree && w->parent) ? tree->get(w->parent) : nullptr, ++guard)
+        sum += w->depth;
+    lua_pushnumber(L, sum);
+    return 1;
+}
+/// IgnoreDepth(ignore) (0x004a1d80): a boolean and nothing else.
+int lua_Frame_IgnoreDepth(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (lua_type(L, 2) != LUA_TBOOLEAN) return luaL_error(L, "Usage: %s:IgnoreDepth(ignore)", w->name.c_str());
+    w->ignoreDepth = lua_toboolean(L, 2) != 0;
+    return 0;
+}
+int lua_Frame_IsIgnoringDepth(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->ignoreDepth);
+    return 1;
+}
+/// GetBoundsRect (0x0049e700 -> 0x004913c0): the box round the frame, its
+/// shown regions and its shown child frames and theirs - left, bottom,
+/// width, height in the frame's units; nothing when there is none.
+int lua_Frame_GetBoundsRect(lua_State* L) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    const auto* w = widgetOf(L, 1);
+    if (!tree || !w) return 0;
+    float l = 3.4028235e+38f, b = 3.4028235e+38f, r = 0.0f, t = 0.0f;
+    auto grow = [&](const wowee::ui::Widget& x) {
+        if (x.rectW <= 0.0f && x.rectH <= 0.0f) return;
+        l = std::min(l, x.left);
+        b = std::min(b, x.bottom);
+        r = std::max(r, x.left + x.rectW);
+        t = std::max(t, x.bottom + x.rectH);
+    };
+    std::vector<const wowee::ui::Widget*> frames{w};
+    for (size_t i = 0; i < frames.size() && i < 4096; ++i) {
+        const auto* f = frames[i];
+        grow(*f);
+        for (uint32_t cid : f->children) {
+            const auto* c = tree->get(cid);
+            if (!c || !c->visible) continue;
+            if (c->kind == wowee::ui::WidgetKind::Frame) frames.push_back(c);
+            else grow(*c);
+        }
+    }
+    if (!(l < r && b < t)) return 0;
+    const double inv = 1.0 / ((w->effScale > 0.0f) ? w->effScale : 1.0f);
+    lua_pushnumber(L, l * inv);
+    lua_pushnumber(L, b * inv);
+    lua_pushnumber(L, (r - l) * inv);
+    lua_pushnumber(L, (t - b) * inv);
+    return 4;
+}
+
+/// Cooldown:GetReverse / GetDrawEdge (0x005ec9f0, 0x005eca80): booleans.
+int lua_Cooldown_GetReverse(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushboolean(L, w && w->cooldownReverse);
+    return 1;
+}
+int lua_Cooldown_GetDrawEdge(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushboolean(L, w && w->cooldownDrawEdge);
+    return 1;
+}
+
+
+/// The title regions' Lua objects, by the region's widget id; the frame's
+/// widget holds which one is its own.
+static void pushTitleRegionTable(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "wowee_title_regions");
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, LUA_REGISTRYINDEX, "wowee_title_regions");
+    }
+}
+/// Push the frame's title region object, or nothing; true when pushed.
+static bool pushTitleRegion(lua_State* L, const wowee::ui::Widget* f) {
+    if (!f || f->titleRegion == 0) return false;
+    pushTitleRegionTable(L);
+    lua_pushinteger(L, static_cast<lua_Integer>(f->titleRegion));
+    lua_rawget(L, -2);
+    lua_remove(L, -2);
+    if (lua_istable(L, -1)) return true;
+    lua_pop(L, 1);
+    return false;
+}
+
+/// CreateTitleRegion (0x0049e630): the frame's title region, made the first
+/// time - a region that draws nothing - and on later calls the same one with
+/// its points cleared. GetTitleRegion (0x0049e5b0) answers it or nil.
+static int lua_Frame_CreateTitleRegion(lua_State* L) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    const uint32_t parent = widgetIdOf(L, 1);
+    if (!tree || parent == 0) return 0;
+    if (pushTitleRegion(L, tree->get(parent))) {
+        lua_getfield(L, -1, "ClearAllPoints");
+        if (lua_isfunction(L, -1)) {
+            lua_pushvalue(L, -2);
+            lua_call(L, 1, 0);
+        } else {
+            lua_pop(L, 1);
+        }
+        return 1;
+    }
+    lua_newtable(L);
+    const uint32_t id = tree->create(wowee::ui::WidgetKind::Texture, parent, "");
+    if (auto* w = tree->get(id)) {
+        w->objectType = "Region";
+        w->isTitleRegion = true;
+    }
+    if (auto* f = tree->get(parent)) f->titleRegion = id;
+    lua_pushinteger(L, static_cast<lua_Integer>(id));
+    lua_setfield(L, -2, "__wid");
+    lua_pushvalue(L, 1);
+    lua_setfield(L, -2, "__parent");
+    installRegionMethods(L, /*isTexture=*/false, /*isFontString=*/false);
+    pushTitleRegionTable(L);
+    lua_pushinteger(L, static_cast<lua_Integer>(id));
+    lua_pushvalue(L, -3);
+    lua_rawset(L, -3);
+    lua_pop(L, 1);
+    return 1;
+}
+static int lua_Frame_GetTitleRegion(lua_State* L) {
+    if (!pushTitleRegion(L, widgetOf(L, 1))) lua_pushnil(L);
+    return 1;
+}
+
+/// Minimap:SetMaskTexture and the six other art setters, and SetPlayerTexture
+/// (0x00583860 .. 0x00583f60, 0x0057e100): the file the minimap draws that
+/// part with from now on; a name that is not a string is a usage error, an
+/// empty one changes nothing.
+static int setMinimapArt(lua_State* L, wowee::rendering::minimap_art::Slot slot, const char* method) {
+    const auto* w = widgetOf(L, 1);
+    if (!lua_isstring(L, 2))
+        return luaL_error(L, "Usage: %s:%s(\"file\")", (w && !w->name.empty()) ? w->name.c_str() : "<unnamed>", method);
+    wowee::rendering::minimap_art::set(slot, lua_tostring(L, 2));
+    return 0;
+}
+namespace mma = wowee::rendering::minimap_art;
+static int lua_Minimap_SetMaskTexture(lua_State* L) { return setMinimapArt(L, mma::Mask, "SetMaskTexture"); }
+static int lua_Minimap_SetIconTexture(lua_State* L) { return setMinimapArt(L, mma::Icons, "SetIconTexture"); }
+static int lua_Minimap_SetBlipTexture(lua_State* L) { return setMinimapArt(L, mma::Blips, "SetBlipTexture"); }
+static int lua_Minimap_SetClassBlipTexture(lua_State* L) {
+    return setMinimapArt(L, mma::ClassBlips, "SetClassBlipTexture");
+}
+static int lua_Minimap_SetStaticPOIArrowTexture(lua_State* L) {
+    return setMinimapArt(L, mma::StaticPOIArrow, "SetStaticPOITexture");
+}
+static int lua_Minimap_SetPOIArrowTexture(lua_State* L) { return setMinimapArt(L, mma::POIArrow, "SetPOITexture"); }
+static int lua_Minimap_SetCorpsePOIArrowTexture(lua_State* L) {
+    return setMinimapArt(L, mma::CorpseArrow, "SetCorpsePOITexture");
+}
+static int lua_Minimap_SetPlayerTexture(lua_State* L) { return setMinimapArt(L, mma::Player, "SetPlayerTexture"); }
 
 // Frame method: frame:CreateTexture(name, layer) → a real region
 static int lua_Frame_CreateTexture(lua_State* L) {
@@ -7339,6 +8172,7 @@ void LuaEngine::shutdown() {
         // client's own windows can ask what FrameXML is carrying, and calling
         // through it after the close would be reading a freed state.
         ui::frameXmlSetCursorBridge(nullptr, nullptr);
+        setModifiedClickState(nullptr);
         taint::setEventSink(nullptr);
         lua_close(L_);
         L_ = nullptr;
@@ -7353,6 +8187,7 @@ void LuaEngine::shutdown() {
         lastClickTime_ = 0.0;
         focusedWid_ = 0;
         draggingWid_ = 0;
+        widgets_.setDraggedWidget(draggingWid_);
         draggingButton_ = -1;
         lastMouseHit_ = 0;
         pickerPart_ = 0;
@@ -7390,6 +8225,7 @@ void LuaEngine::registerCoreAPI() {
     // 0x00817170), and first, because bootstrap code below hooks with it.
     taint::registerLuaApi(L_);
     lua_register(L_, "__WoweeSetProtected", lua_WoweeSetProtected);
+    lua_register(L_, "__WoweeModelCentered", lua_WoweeModelCentered);
     // __WoweeNoticeFallback(word, locale): chat_channels::noticeFallbackFormat.
     lua_register(L_, "__WoweeNoticeFallback", [](lua_State* L) -> int {
         const char* word = luaL_optstring(L, 1, "");
@@ -7655,6 +8491,8 @@ void LuaEngine::registerCoreAPI() {
 
     lua_pushcfunction(L_, lua_wowee_setAnimOffset);
     lua_setglobal(L_, "__WoweeSetAnimOffset");
+    lua_pushcfunction(L_, lua_wowee_setAnimRotation);
+    lua_setglobal(L_, "__WoweeSetAnimRotation");
 
     // The script slots the animation system keeps its scripts in, and runs
     // them through one at a time - see lua_handler_globals.hpp.
@@ -7885,6 +8723,29 @@ void LuaEngine::registerCoreAPI() {
         {"SetRotation",     lua_Model_SetFacing},
         {"SetFacing",       lua_Model_SetFacing},
         {"GetFacing",       lua_Model_GetFacing},
+        {"SetModel",        lua_Model_SetModel},
+        {"GetModel",        lua_Model_GetModel},
+        {"ClearModel",      lua_Model_ClearModel},
+        {"SetPosition",     lua_Model_SetPosition},
+        {"GetPosition",     lua_Model_GetPosition},
+        {"SetModelScale",   lua_Model_SetModelScale},
+        {"GetModelScale",   lua_Model_GetModelScale},
+        {"SetCamera",       lua_Model_SetCamera},
+        {"SetSequence",     lua_Model_SetSequence},
+        {"SetSequenceTime", lua_Model_SetSequenceTime},
+        {"ReplaceIconTexture", lua_Model_ReplaceIconTexture},
+        {"SetGlow",         lua_Model_SetGlow},
+        // AdvanceTime (0x009610e0) answers nothing and does nothing.
+        {"AdvanceTime",     [](lua_State*) -> int { return 0; }},
+        {"SetLight",        lua_Model_SetLight},
+        {"GetLight",        lua_Model_GetLight},
+        {"SetFogColor",     lua_Model_SetFogColor},
+        {"GetFogColor",     lua_Model_GetFogColor},
+        {"SetFogNear",      lua_Model_SetFogNear},
+        {"GetFogNear",      lua_Model_GetFogNear},
+        {"SetFogFar",       lua_Model_SetFogFar},
+        {"GetFogFar",       lua_Model_GetFogFar},
+        {"ClearFog",        lua_Model_ClearFog},
         {"IsMovable",       lua_Frame_IsMovable},
         {"RegisterForDrag", lua_Frame_RegisterForDrag},
         {"StartMoving",     lua_Frame_StartMoving},
@@ -8012,9 +8873,24 @@ void LuaEngine::registerCoreAPI() {
         {"SetZoom",         lua_Minimap_SetZoom},
         {"GetZoom",         lua_Minimap_GetZoom},
         {"GetZoomLevels",   lua_Minimap_GetZoomLevels},
+        {"SetMaskTexture",           lua_Minimap_SetMaskTexture},
+        {"SetIconTexture",           lua_Minimap_SetIconTexture},
+        {"SetBlipTexture",           lua_Minimap_SetBlipTexture},
+        {"SetClassBlipTexture",      lua_Minimap_SetClassBlipTexture},
+        {"SetStaticPOIArrowTexture", lua_Minimap_SetStaticPOIArrowTexture},
+        {"SetPOIArrowTexture",       lua_Minimap_SetPOIArrowTexture},
+        {"SetCorpsePOIArrowTexture", lua_Minimap_SetCorpsePOIArrowTexture},
+        {"SetPlayerTexture",         lua_Minimap_SetPlayerTexture},
         {"PingLocation",    lua_Minimap_PingLocation},
         {"GetPingPosition", lua_Minimap_GetPingPosition},
         {"DrawQuestBlob",   lua_QuestBlobFrame_DrawQuestBlob},
+        {"EnableSmoothing",        wowee::addons::lua_QuestBlob_EnableSmoothing},
+        {"EnableMerging",          wowee::addons::lua_QuestBlob_EnableMerging},
+        {"SetMergeThreshold",      wowee::addons::lua_QuestBlob_SetMergeThreshold},
+        {"SetNumSplinePoints",     wowee::addons::lua_QuestBlob_SetNumSplinePoints},
+        {"UpdateMouseOverTooltip", wowee::addons::lua_QuestBlob_UpdateMouseOverTooltip},
+        {"GetNumTooltips",         wowee::addons::lua_QuestBlob_GetNumTooltips},
+        {"GetTooltipIndex",        wowee::addons::lua_QuestBlob_GetTooltipIndex},
         {"GetCenter",       lua_Region_GetCenter},
         {"SetAlpha",        lua_Region_SetAlpha},
         {"GetAlpha",        lua_Region_GetAlpha},
@@ -8046,6 +8922,10 @@ void LuaEngine::registerCoreAPI() {
         {"SetTextFontObject",     lua_Frame_SetNormalFontObject},
         {"SetHighlightFontObject", lua_Frame_SetHighlightFontObject},
         {"SetDisabledFontObject",  lua_Frame_SetDisabledFontObject},
+        {"GetHighlightFontObject", lua_Frame_GetHighlightFontObject},
+        {"GetDisabledFontObject",  lua_Frame_GetDisabledFontObject},
+        {"EnableJoystick",         lua_Frame_EnableJoystick},
+        {"IsJoystickEnabled",      lua_Frame_IsJoystickEnabled},
         {"SetDisabledTextColor",   lua_Frame_SetDisabledTextColor},
         {"SetHighlightTextColor",  lua_Frame_SetHighlightTextColor},
         {"SetPushedTextOffset",   lua_Frame_SetPushedTextOffset},
@@ -8077,6 +8957,48 @@ void LuaEngine::registerCoreAPI() {
         {"SetStatusBarTexture",   lua_StatusBar_SetStatusBarTexture},
         {"SetStatusBarColor",     lua_StatusBar_SetStatusBarColor},
         {"SetOrientation",        lua_StatusBar_SetOrientation},
+        {"GetOrientation",        lua_StatusBar_GetOrientation},
+        {"GetStatusBarColor",     lua_StatusBar_GetStatusBarColor},
+        {"IsAutoFocus",           lua_EditBox_IsAutoFocus},
+        {"IsMultiLine",           lua_EditBox_IsMultiLine},
+        {"IsNumeric",             lua_EditBox_IsNumeric},
+        {"IsPassword",            lua_EditBox_IsPassword},
+        {"SetPassword",           lua_EditBox_SetPassword},
+        {"IsCountInvisibleLetters", lua_EditBox_IsCountInvisibleLetters},
+        {"GetBlinkSpeed",         lua_EditBox_GetBlinkSpeed},
+        {"SetBlinkSpeed",         lua_EditBox_SetBlinkSpeed},
+        {"GetMinResize",          lua_Frame_GetMinResize},
+        {"GetMaxResize",          lua_Frame_GetMaxResize},
+        {"GetClampRectInsets",    lua_Frame_GetClampRectInsets},
+        {"IsMouseWheelEnabled",   lua_Frame_IsMouseWheelEnabled},
+        {"GetEffectiveAlpha",     lua_Frame_GetEffectiveAlpha},
+        {"GetCurrentLine",        lua_MessageFrame_GetCurrentLine},
+        {"GetMaxLines",           lua_MessageFrame_GetMaxLines},
+        {"SetFading",             lua_MessageFrame_SetFading},
+        {"GetFading",             lua_MessageFrame_GetFading},
+        {"GetFadeDuration",       lua_MessageFrame_GetFadeDuration},
+        {"GetInsertMode",         lua_MessageFrame_GetInsertMode},
+        {"GetHyperlinksEnabled",  lua_Frame_GetHyperlinksEnabled},
+        {"GetReverse",            lua_Cooldown_GetReverse},
+        {"EnableDrawLayer",       lua_Frame_EnableDrawLayer},
+        {"IsDragging",            lua_Frame_IsDragging},
+        {"CreateTitleRegion",     lua_Frame_CreateTitleRegion},
+        {"GetTitleRegion",        lua_Frame_GetTitleRegion},
+        {"SetDepth",              lua_Frame_SetDepth},
+        {"GetDepth",              lua_Frame_GetDepth},
+        {"GetEffectiveDepth",     lua_Frame_GetEffectiveDepth},
+        {"IgnoreDepth",           lua_Frame_IgnoreDepth},
+        {"IsIgnoringDepth",       lua_Frame_IsIgnoringDepth},
+        {"GetBoundsRect",         lua_Frame_GetBoundsRect},
+        {"DisableDrawLayer",      lua_Frame_DisableDrawLayer},
+        {"SetDontSavePosition",   lua_Frame_SetDontSavePosition},
+        {"GetDontSavePosition",   lua_Frame_GetDontSavePosition},
+        {"GetDrawEdge",           lua_Cooldown_GetDrawEdge},
+        {"GetShadowColor",        lua_FontString_GetShadowColor},
+        {"GetShadowOffset",       lua_FontString_GetShadowOffset},
+        {"CanNonSpaceWrap",       lua_FontString_CanNonSpaceWrap},
+        {"SetIndentedWordWrap",   lua_FontString_SetIndentedWordWrap},
+        {"GetIndentedWordWrap",   lua_FontString_GetIndentedWordWrap},
         {"SetValueStep",          lua_Slider_SetValueStep},
         {"GetValueStep",          lua_Slider_GetValueStep},
         {"SetThumbTexture",       lua_Slider_SetThumbTexture},
@@ -8084,6 +9006,12 @@ void LuaEngine::registerCoreAPI() {
         {"SetColorWheelThumbTexture", lua_ColorSelect_SetWheelThumbTexture},
         {"SetColorValueTexture",      lua_ColorSelect_SetValueTexture},
         {"SetColorValueThumbTexture", lua_ColorSelect_SetValueThumbTexture},
+        {"GetColorWheelTexture",      lua_ColorSelect_GetWheelTexture},
+        {"GetColorWheelThumbTexture", lua_ColorSelect_GetWheelThumbTexture},
+        {"GetColorValueTexture",      lua_ColorSelect_GetValueTexture},
+        {"GetColorValueThumbTexture", lua_ColorSelect_GetValueThumbTexture},
+        {"SetColorHSV",               lua_ColorSelect_SetColorHSV},
+        {"GetColorHSV",               lua_ColorSelect_GetColorHSV},
         {"SetCooldown",           lua_Cooldown_SetCooldown},
         {"GetNumber",             lua_EditBox_GetNumber},
         {"SetNumber",             lua_EditBox_SetNumber},
@@ -8186,6 +9114,29 @@ void LuaEngine::registerCoreAPI() {
         // The button is on the minimap, which is drawn by FrameXML on the
         // default tier, so the empty tooltip a no-op left was on screen for
         // anyone who hovered it.
+        // QuestPOI:UpdateQuestPOI does nothing in the client (0x0058e990).
+        "function mt:UpdateQuestPOI() end\n"
+        // GameTooltip:AddFontStrings(left, right) (0x006201f0): a line made of
+        // the two font strings' text and colours. Both must be font strings.
+        "function mt:AddFontStrings(l, r)\n"
+        "    local function ok(fs) return type(fs) == 'table' and fs.GetObjectType and fs:GetObjectType() == 'FontString' end\n"
+        "    if type(l) ~= 'table' or type(r) ~= 'table' then\n"
+        "        error(('Usage: %s:AddFontStrings(leftstring, rightstring)'):format(self:GetName() or '<unnamed>'), 2)\n"
+        "    end\n"
+        "    if not ok(l) or not ok(r) then\n"
+        "        error(('%s:AddFontStrings(): Wrong object type, expected fontstring'):format(self:GetName() or '<unnamed>'), 2)\n"
+        "    end\n"
+        "    local lr, lg, lb = l:GetTextColor()\n"
+        "    local rr, rg, rb = r:GetTextColor()\n"
+        "    self:AddDoubleLine(l:GetText() or '', r:GetText() or '', lr, lg, lb, rr, rg, rb)\n"
+        "end\n"
+        // SetInventoryPortraitTexture(texture, unit, slot) (0x005ea9b0): the
+        // texture shows the icon of what the unit wears in that slot.
+        "function SetInventoryPortraitTexture(tex, unit, slot)\n"
+        "    if type(tex) ~= 'table' then error('Usage: SetInventoryPortraitTexture(texture, unit, slot)', 2) end\n"
+        "    local icon = GetInventoryItemTexture(unit, slot)\n"
+        "    if icon then tex:SetTexture(icon) end\n"
+        "end\n"
         "function mt:SetTracking()\n"
         "    local active\n"
         "    for i = 1, GetNumTrackingTypes() do\n"
@@ -8258,9 +9209,92 @@ void LuaEngine::registerCoreAPI() {
         "function animMeta:SetStartDelay(d) self.startDelay = d or 0 end\n"
         "function animMeta:GetStartDelay() return self.startDelay or 0 end\n"
         "function animMeta:SetEndDelay(d) self.endDelay = d or 0 end\n"
-        "function animMeta:SetSmoothing(s) self.smoothing = s end\n"
+        // SetSmoothing (0x004a5740): one of NONE, IN, OUT, IN_OUT, OUT_IN.
+        "function animMeta:SetSmoothing(s)\n"
+        "    if type(s) ~= 'string' then error(('Usage: %s:SetSmoothing(\"smoothingType\")'):format(tostring(self.name or '<unnamed>')), 2) end\n"
+        "    s = s:upper()\n"
+        "    if s ~= 'NONE' and s ~= 'IN' and s ~= 'OUT' and s ~= 'IN_OUT' and s ~= 'OUT_IN' then\n"
+        "        error(('%s:SetSmoothing(): Unknown smoothing type specified'):format(tostring(self.name or '<unnamed>')), 2)\n"
+        "    end\n"
+        "    self.smoothing = s\n"
+        "end\n"
         "function animMeta:SetScale(x, y) self.scaleX, self.scaleY = x, y end\n"
-        "function animMeta:SetDegrees(d) self.degrees = d end\n"
+        // A Rotation keeps radians (+0xa4): SetRadians sets them, GetDegrees
+        // answers them times 57.29578 (0x004a6410, 0x004a63c0, 0x004a6490).
+        "function animMeta:SetDegrees(d) self.radians = (tonumber(d) or 0) / 57.29578 end\n"
+        "function animMeta:GetDegrees() return (self.radians or 0) * 57.29578 end\n"
+        "function animMeta:SetRadians(r)\n"
+        "    if type(r) ~= 'number' then error(('Usage: %s:SetRadians(radians)'):format(tostring(self.name or '<unnamed>')), 2) end\n"
+        "    self.radians = r\n"
+        "end\n"
+        "function animMeta:GetRadians() return self.radians or 0 end\n"
+        // SetOrigin(point, x, y) / GetOrigin (0x004a61f0, 0x004a62c0).
+        "function animMeta:SetOrigin(point, x, y)\n"
+        "    if type(point) ~= 'string' or type(x) ~= 'number' or type(y) ~= 'number' then\n"
+        "        error(('Usage: %s:SetOrigin(point, offsetX, offsetY)'):format(tostring(self.name or '<unnamed>')), 2)\n"
+        "    end\n"
+        "    self.originPoint, self.originX, self.originY = point:upper(), x, y\n"
+        "end\n"
+        "function animMeta:GetOrigin() return self.originPoint or 'CENTER', self.originX or 0, self.originY or 0 end\n"
+        "function animMeta:GetEndDelay() return self.endDelay or 0 end\n"
+        // The state the client keeps at +0x34: 0 stopped, 2 paused
+        // (0x004a5100, 0x004a50b0).
+        "function animMeta:IsStopped() return not (self.group and self.group.isPlaying) end\n"
+        "function animMeta:IsPaused() return (self.group and self.group.isPlaying and self.group.paused) and true or false end\n"
+        // SetSmoothProgress (0x004a5430 -> 0x00497670) writes the value
+        // GetSmoothProgress answers until the next tick works it out again.
+        "function animMeta:SetSmoothProgress(v)\n"
+        "    if type(v) ~= 'number' then error(('Usage: %s:SetSmoothProgress(smoothProgress)'):format(tostring(self.name or '<unnamed>')), 2) end\n"
+        "    self.smoothOverride = v\n"
+        "end\n"
+        // GetProgressWithDelay (0x004a5500): the elapsed time over start delay,
+        // duration and end delay together (0x004985f0).
+        "function animMeta:GetProgressWithDelay() return self.progressWithDelay or 0 end\n"
+        // Set/GetMaxFramerate (0x004a5550 -> 0x00497680, 0x004a55d0): at most
+        // this many progress updates a second; 0.0001 or less is no limit.
+        "function animMeta:SetMaxFramerate(f)\n"
+        "    if type(f) ~= 'number' then error(('Usage: %s:SetMaxFramerate(framesPerSec)'):format(tostring(self.name or '<unnamed>')), 2) end\n"
+        "    self.maxFramerate = (f > 0.0001) and f or 0\n"
+        "end\n"
+        "function animMeta:GetMaxFramerate() return self.maxFramerate or 0 end\n"
+        // A Path's curve, NONE or SMOOTH (0x004a6c10, 0x004a6cd0, the table at
+        // 0x00a440d4), and its control points (0x004a7bf0, 0x004a79d0):
+        // GetMaxOrder is the highest order among them, 0 with none
+        // (0x004a6d20 -> 0x00498260).
+        "function animMeta:SetCurve(c)\n"
+        "    if type(c) ~= 'string' then error(('Usage: %s:SetCurve(\\\"curveType\\\")'):format(tostring(self.name or '<unnamed>')), 2) end\n"
+        "    c = c:upper()\n"
+        "    if c ~= 'NONE' and c ~= 'SMOOTH' then error(('%s:SetCurve(): Unknown curve type specified'):format(tostring(self.name or '<unnamed>')), 2) end\n"
+        "    self.curve = c\n"
+        "end\n"
+        "function animMeta:GetCurve() return self.curve or 'NONE' end\n"
+        "local pointMeta = {}\n"
+        "pointMeta.__index = pointMeta\n"
+        "function pointMeta:SetOffset(x, y) self.offsetX, self.offsetY = x or 0, y or 0 end\n"
+        "function pointMeta:GetOffset() return self.offsetX or 0, self.offsetY or 0 end\n"
+        "function pointMeta:SetOrder(o) self.order = o or 1 end\n"
+        "function pointMeta:GetOrder() return self.order or 1 end\n"
+        "function pointMeta:GetParent() return self.path end\n"
+        "function pointMeta:GetRegionParent() return self.path and self.path:GetRegionParent() end\n"
+        "function pointMeta:GetName() return self.name end\n"
+        "function pointMeta:GetObjectType() return 'ControlPoint' end\n"
+        "function animMeta:CreateControlPoint(name, inherits, order)\n"
+        "    local cp = setmetatable({path = self, name = name, order = tonumber(order) or 1}, pointMeta)\n"
+        "    if type(inherits) == 'string' and __WoweeTemplates and __WoweeTemplates[inherits] then\n"
+        "        __WoweeTemplates[inherits](cp)\n"
+        "    end\n"
+        "    self.controlPoints = self.controlPoints or {}\n"
+        "    table.insert(self.controlPoints, cp)\n"
+        "    table.sort(self.controlPoints, function(a, b) return (a.order or 1) < (b.order or 1) end)\n"
+        "    if name then _G[name] = cp end\n"
+        "    return cp\n"
+        "end\n"
+        "function animMeta:GetControlPoints() return unpack(self.controlPoints or {}) end\n"
+        "function animMeta:GetMaxOrder()\n"
+        "    local cps = self.controlPoints\n"
+        "    if not cps or #cps == 0 then return 0 end\n"
+        "    return cps[#cps].order or 1\n"
+        "end\n"
         "function animMeta:GetProgress() return self.progress or 0 end\n"
         // The same progress with the animation's own easing applied, which is
         // what anything driving a value off an animation actually wants.
@@ -8269,25 +9303,21 @@ void LuaEngine::registerCoreAPI() {
         // on an <Animation smoothing="OUT"> - and a missing *method* is not a
         // nil to be checked but a hard error, so the whole event view went
         // down on the line that makes a highlight pulse.
+        // The client's easing (0x00497ba0): IN 1 - cos(t*pi/2), OUT
+        // -cos((t+1)*pi/2), IN_OUT and OUT_IN alike 0.5 - 0.5*cos(t*pi)
+        // (the table at 0x00a44068 gives both the same pair), none t.
+        "local function ease(s, t)\n"
+        "    if s == 'IN' then return 1 - math.cos(t * 1.5707964) end\n"
+        "    if s == 'OUT' then return -math.cos((t + 1) * 1.5707964) end\n"
+        "    if s == 'IN_OUT' or s == 'OUT_IN' then return 0.5 - math.cos(t * 3.1415927) * 0.5 end\n"
+        "    return t\n"
+        "end\n"
+        "__WoweeAnimEase = ease\n"
         "function animMeta:GetSmoothProgress()\n"
+        "    if self.smoothOverride then return self.smoothOverride end\n"
         "    local t = self.progress or 0\n"
         "    if t < 0 then t = 0 elseif t > 1 then t = 1 end\n"
-        "    local s = self.smoothing\n"
-        "    if s == 'IN' then return t * t end\n"
-        "    if s == 'OUT' then return t * (2 - t) end\n"
-        "    if s == 'IN_OUT' then\n"
-        "        if t < 0.5 then return 2 * t * t end\n"
-        "        local u = 1 - t\n"
-        "        return 1 - 2 * u * u\n"
-        "    end\n"
-        "    if s == 'OUT_IN' then\n"
-        "        if t < 0.5 then local u = t * 2 return u * (2 - u) * 0.5 end\n"
-        "        local u = (t - 0.5) * 2\n"
-        "        return 0.5 + u * u * 0.5\n"
-        "    end\n"
-        // No smoothing named, or one this does not model: the linear progress
-        // is the honest answer and reads as a steady fade rather than nothing.
-        "    return t\n"
+        "    return ease(self.smoothing, t)\n"
         "end\n"
         "function animMeta:GetElapsed() return self.elapsed or 0 end\n"
         "function animMeta:SetParent(p) self.parent = p end\n"
@@ -8342,7 +9372,9 @@ void LuaEngine::registerCoreAPI() {
         // frame is then.
         "function groupMeta:Play()\n"
         "    self.isPlaying = true\n"
+        "    self.pendingFinish = nil\n"
         "    self.reversed = false\n"
+        "    self.curOrder = nil\n"
         "    self.baseAlpha = self.parent and self.parent:GetAlpha() or 1\n"
         "    for _, a in ipairs(self.animations) do a.elapsed = 0 a.progress = 0 a.finished = nil end\n"
         "    playing[self] = true\n"
@@ -8350,20 +9382,45 @@ void LuaEngine::registerCoreAPI() {
         "end\n"
         "function groupMeta:Stop()\n"
         "    self.isPlaying = false\n"
+        "    self.pendingFinish = nil\n"
         "    playing[self] = nil\n"
         // Put back what the animations moved, or a stopped group leaves the
         // frame transparent or displaced with nothing to restore it.
         "    if self.parent then\n"
         "        if self.baseAlpha then self.parent:SetAlpha(self.baseAlpha) end\n"
         "        __WoweeSetAnimOffset(self.parent, 0, 0)\n"
+        "        __WoweeSetAnimRotation(self.parent, 0)\n"
         "    end\n"
         "    __WoweeRunScriptSlot(self, 'OnStop')\n"
         "end\n"
+        // Finish asks a playing group to stop at the end of the loop it is
+        // in (the pending-finish flag, +0x88 bit 2, 0x004a7090); a group
+        // that is not playing has nothing to finish.
         "function groupMeta:Finish()\n"
-        "    self.isPlaying = false\n"
-        "    playing[self] = nil\n"
-        "    __WoweeRunScriptSlot(self, 'OnFinished')\n"
+        "    if self.isPlaying then self.pendingFinish = true end\n"
         "end\n"
+        "function groupMeta:IsPendingFinish() return self.pendingFinish == true end\n"
+        "local function finishNow(g)\n"
+        "    g.isPlaying = false\n"
+        "    g.pendingFinish = nil\n"
+        "    playing[g] = nil\n"
+        "    __WoweeRunScriptSlot(g, 'OnFinished')\n"
+        "end\n"
+        // GetLoopState (0x004a7240, the table at 0x00a440bc): which way the
+        // group is playing, NONE when it is not.
+        "function groupMeta:GetLoopState()\n"
+        "    if not self.isPlaying then return 'NONE' end\n"
+        "    return self.reversed and 'REVERSE' or 'FORWARD'\n"
+        "end\n"
+        // Set/GetInitialOffset (0x004a72f0, 0x004a73e0): where the group's
+        // translation starts from.
+        "function groupMeta:SetInitialOffset(x, y)\n"
+        "    if type(x) ~= 'number' or type(y) ~= 'number' then\n"
+        "        error(('Usage: %s:SetInitialOffset(x, y)'):format(tostring(self.name or '<unnamed>')), 2)\n"
+        "    end\n"
+        "    self.initialX, self.initialY = x, y\n"
+        "end\n"
+        "function groupMeta:GetInitialOffset() return self.initialX or 0, self.initialY or 0 end\n"
         "function groupMeta:Pause() self.paused = true end\n"
         "function groupMeta:Resume() self.paused = nil end\n"
 
@@ -8399,47 +9456,131 @@ void LuaEngine::registerCoreAPI() {
         "mt.CreateAnimationGroup = __WoweeCreateAnimationGroup\n"
 
         // Advanced once a frame from dispatchOnUpdate.
+        // One order at a time: the animations sharing the lowest order play
+        // together, the next order starts when they are all through, and a
+        // bouncing group walks the orders back (the group keeps them in
+        // per-order buckets, 0x00498a70/0x00499a20). A Path moves along its
+        // control points (0x00499140): straight from one to the next, or on
+        // a Catmull-Rom curve through them when SMOOTH.
+        "local function pathOffset(a, p)\n"
+        "    local cps = a.controlPoints\n"
+        "    local n = cps and #cps or 0\n"
+        "    if n == 0 then return 0, 0 end\n"
+        "    p = math.abs(p)\n"
+        "    local k = math.floor(n * p)\n"
+        "    local function pt(i)\n"
+        "        if i < 0 then return 0, 0 end\n"
+        "        local c = cps[i + 1]\n"
+        "        return c.offsetX or 0, c.offsetY or 0\n"
+        "    end\n"
+        "    if k >= n then return pt(n - 1) end\n"
+        "    local t = (p - k / n) * n\n"
+        "    if (a.curve or 'NONE') ~= 'SMOOTH' or n < 2 then\n"
+        "        local x0, y0 = pt(k - 1)\n"
+        "        local x1, y1 = pt(k)\n"
+        "        return x0 + (x1 - x0) * t, y0 + (y1 - y0) * t\n"
+        "    end\n"
+        "    local mx, my, ax, ay, bx, by, cx, cy\n"
+        "    if k == 0 then\n"
+        "        ax, ay = 0, 0\n"
+        "        bx, by = pt(0)\n"
+        "        mx, my = -bx, -by\n"
+        "        cx, cy = pt(1)\n"
+        "    else\n"
+        "        ax, ay = pt(k - 1)\n"
+        "        bx, by = pt(k)\n"
+        "        if k == 1 then mx, my = 0, 0 else mx, my = pt(k - 2) end\n"
+        "        if k == n - 1 then cx, cy = 2 * bx - ax, 2 * by - ay else cx, cy = pt(k + 1) end\n"
+        "    end\n"
+        "    local t2, t3 = t * t, t * t * t\n"
+        "    local function cr(m, a0, b0, c0)\n"
+        "        return 0.5 * (2 * a0 + (b0 - m) * t + (2 * m - 5 * a0 + 4 * b0 - c0) * t2 + (3 * a0 - m - 3 * b0 + c0) * t3)\n"
+        "    end\n"
+        "    return cr(mx, ax, bx, cx), cr(my, ay, by, cy)\n"
+        "end\n"
+        "local function ordersOf(g)\n"
+        "    local seen, list = {}, {}\n"
+        "    for _, a in ipairs(g.animations) do\n"
+        "        local o = a.order or 1\n"
+        "        if not seen[o] then seen[o] = true list[#list + 1] = o end\n"
+        "    end\n"
+        "    table.sort(list)\n"
+        "    return list\n"
+        "end\n"
+        "local function nextOrder(list, cur, back)\n"
+        "    if back then\n"
+        "        for i = #list, 1, -1 do if list[i] < cur then return list[i] end end\n"
+        "    else\n"
+        "        for i = 1, #list do if list[i] > cur then return list[i] end end\n"
+        "    end\n"
+        "end\n"
         "function __WoweeTickAnimations(elapsed)\n"
         "    for g in pairs(playing) do\n"
-        "        if g.paused then\n"
-        "        else\n"
-        "            local anyRunning = false\n"
-        "            local dx, dy = 0, 0\n"
+        "        if not g.paused then\n"
+        "            local orders = ordersOf(g)\n"
+        "            if not g.curOrder then g.curOrder = g.reversed and orders[#orders] or orders[1] end\n"
+        "            local cur = g.curOrder or 1\n"
+        "            local orderRunning = false\n"
+        "            local dx, dy = g.initialX or 0, g.initialY or 0\n"
         "            local alpha = g.baseAlpha or 1\n"
+        "            local rad, rotAnim = 0, nil\n"
         "            for _, a in ipairs(g.animations) do\n"
-        "                a.elapsed = (a.elapsed or 0) + elapsed\n"
-        "                local t = a.elapsed - (a.startDelay or 0)\n"
-        "                local d = a.duration or 0\n"
-        "                if t < 0 then\n"
-        "                    anyRunning = true\n"
-        "                elseif d <= 0 then\n"
-        "                    a.progress = 1\n"
-        "                else\n"
-        "                    local p = t / d\n"
-        "                    local done = false\n"
-        "                    if p >= 1 then p = 1 done = true else anyRunning = true end\n"
-        "                    if g.reversed then p = 1 - p end\n"
-        "                    a.progress = p\n"
-        // Once per run, and before the group finishes, because the frame this
-        // hides is the one the group is still animating.
+        "                local o = a.order or 1\n"
+        "                local started\n"
+        "                if g.reversed then started = o >= cur else started = o <= cur end\n"
+        "                if o == cur then\n"
+        "                    a.elapsed = (a.elapsed or 0) + elapsed\n"
+        "                    a.smoothOverride = nil\n"
+        "                    local d = a.duration or 0\n"
+        "                    local total = (a.startDelay or 0) + d + (a.endDelay or 0)\n"
+        "                    local lead = g.reversed and (a.endDelay or 0) or (a.startDelay or 0)\n"
+        "                    a.progressWithDelay = (total > 0 and a.elapsed < total) and a.elapsed / total or 1\n"
+        "                    local t = a.elapsed - lead\n"
+        "                    local done = a.elapsed >= total\n"
+        "                    if not done then orderRunning = true end\n"
+        "                    if t < 0 then\n"
+        "                        started = false\n"
+        "                    elseif d <= 0 then\n"
+        "                        a.progress = g.reversed and 0 or 1\n"
+        "                    else\n"
+        "                        local pr = t / d\n"
+        "                        if pr > 1 then pr = 1 end\n"
+        "                        a.frameAcc = (a.frameAcc or 0) + elapsed\n"
+        "                        local fps = a.maxFramerate or 0\n"
+        "                        if fps > 0 and a.frameAcc < 1 / fps and not done and a.lastP then\n"
+        "                            pr = a.lastP\n"
+        "                        else\n"
+        "                            a.frameAcc = 0\n"
+        "                        end\n"
+        "                        a.lastP = pr\n"
+        "                        if g.reversed then pr = 1 - pr end\n"
+        "                        a.progress = pr\n"
+        "                    end\n"
         "                    if done and not a.finished then\n"
         "                        a.finished = true\n"
         "                        __WoweeRunScriptSlot(a, 'OnFinished')\n"
         "                    end\n"
+        "                end\n"
+        "                if started and a.progress then\n"
+        "                    local pr = __WoweeAnimEase(a.smoothing, a.progress)\n"
         "                    if a.kind == 'Alpha' then\n"
         "                        if a.fromAlpha and a.toAlpha then\n"
-        "                            alpha = a.fromAlpha + (a.toAlpha - a.fromAlpha) * p\n"
+        "                            alpha = a.fromAlpha + (a.toAlpha - a.fromAlpha) * pr\n"
         "                        elseif a.change then\n"
-        "                            alpha = (g.baseAlpha or 1) + a.change * p\n"
+        "                            alpha = (g.baseAlpha or 1) + a.change * pr\n"
         "                        end\n"
         "                    elseif a.kind == 'Translation' then\n"
-        "                        dx = dx + (a.offsetX or 0) * p\n"
-        "                        dy = dy + (a.offsetY or 0) * p\n"
+        "                        dx = dx + (a.offsetX or 0) * pr\n"
+        "                        dy = dy + (a.offsetY or 0) * pr\n"
+        "                    elseif a.kind == 'Rotation' then\n"
+        "                        rad = rad + (a.radians or 0) * pr\n"
+        "                        rotAnim = a\n"
+        "                    elseif a.kind == 'Path' then\n"
+        "                        local px, py = pathOffset(a, pr)\n"
+        "                        dx, dy = dx + px, dy + py\n"
         "                    elseif a.kind == 'Scale' then\n"
         "                        local sx = a.scaleX\n"
-        "                        if sx and g.parent then\n"
-        "                            g.parent:SetScale(1 + (sx - 1) * p)\n"
-        "                        end\n"
+        "                        if sx and g.parent then g.parent:SetScale(1 + (sx - 1) * pr) end\n"
         "                    end\n"
         "                end\n"
         "            end\n"
@@ -8447,17 +9588,24 @@ void LuaEngine::registerCoreAPI() {
         "                if alpha < 0 then alpha = 0 elseif alpha > 1 then alpha = 1 end\n"
         "                g.parent:SetAlpha(alpha)\n"
         "                __WoweeSetAnimOffset(g.parent, dx, dy)\n"
+        "                if rotAnim then\n"
+        "                    __WoweeSetAnimRotation(g.parent, rad, rotAnim.originPoint or 'CENTER', rotAnim.originX or 0, rotAnim.originY or 0)\n"
+        "                end\n"
         "            end\n"
-        "            if not anyRunning then\n"
-        "                local mode = g.looping or 'NONE'\n"
-        "                if mode == 'REPEAT' or mode == 'BOUNCE' then\n"
-        // BOUNCE plays back the way it came; REPEAT starts over. Either way the
-        // clocks reset, or the next round finishes instantly.
-        "                    if mode == 'BOUNCE' then g.reversed = not g.reversed end\n"
-        "                    for _, a in ipairs(g.animations) do a.elapsed = 0 a.finished = nil end\n"
-        "                    __WoweeRunScriptSlot(g, 'OnLoop')\n"
+        "            if not orderRunning then\n"
+        "                local nxt = nextOrder(orders, cur, g.reversed)\n"
+        "                if nxt then\n"
+        "                    g.curOrder = nxt\n"
         "                else\n"
-        "                    g:Finish()\n"
+        "                    local mode = g.looping or 'NONE'\n"
+        "                    if (mode == 'REPEAT' or mode == 'BOUNCE') and not g.pendingFinish then\n"
+        "                        if mode == 'BOUNCE' then g.reversed = not g.reversed end\n"
+        "                        for _, a in ipairs(g.animations) do a.elapsed = 0 a.finished = nil a.lastP = nil end\n"
+        "                        g.curOrder = nil\n"
+        "                        __WoweeRunScriptSlot(g, 'OnLoop')\n"
+        "                    else\n"
+        "                        finishNow(g)\n"
+        "                    end\n"
         "                end\n"
         "            end\n"
         "        end\n"
@@ -9351,9 +10499,9 @@ void LuaEngine::registerCoreAPI() {
         // the objective font metrics, and WorldMapFrame.numQuests, which later
         // code counts up from and cannot when it is nil.
         //
-        // Empty is the honest shape for both. This client draws the player
-        // arrow and the quest areas itself, so what these need to do is exist,
-        // take their scale and frame level, and draw nothing.
+        // Made here so they exist from the start; CreateWorldMapArrowFrame
+        // then takes the arrow's over as the client's model frames
+        // (0x00544750), and the quest areas are drawn by the map itself.
         "PlayerArrowEffectFrame = CreateFrame('Frame', 'PlayerArrowEffectFrame')\n"
         // The battlefield minimap's own copy of that arrow, for the same
         // reason. Its OnLoad addresses it with no guard either - and unlike
@@ -9373,12 +10521,8 @@ void LuaEngine::registerCoreAPI() {
         // from the widget metatable.
         "function WorldMapBlobFrame:SetFillAlpha() end\n"
         "function WorldMapBlobFrame:SetBorderAlpha() end\n"
-        // Nil rather than zero: the caller reads it as "are there blob
-        // tooltips to use instead of the quest log's own objectives", and
-        // takes the quest log path when there are none. Zero is true in Lua
-        // and would send it down the blob path with nothing in it.
-        "function WorldMapBlobFrame:GetNumTooltips() return nil end\n"
-        "function WorldMapBlobFrame:GetTooltipIndex(i) return i end\n"
+        // GetNumTooltips, GetTooltipIndex and UpdateMouseOverTooltip are the
+        // widget's own now (lua_QuestBlob_*), reading the hover test.
         // GameTooltip: global tooltip frame used by virtually all addons
         // Created as a GameTooltip, not a Frame, so it is one as far as the
         // widget tree is concerned and its lines are drawn.
@@ -9840,12 +10984,56 @@ void LuaEngine::registerCoreAPI() {
         "        if data.resistLines then\n"
         "            for _, text in ipairs(data.resistLines) do self:AddLine(text, 1, 1, 1) end\n"
         "        end\n"
-        "        if data.sockets then\n"
-        "            local socketKeys = {[1]='EMPTY_SOCKET_META',[2]='EMPTY_SOCKET_RED',[4]='EMPTY_SOCKET_YELLOW',[8]='EMPTY_SOCKET_BLUE'}\n"
-        "            for _, sock in ipairs(data.sockets) do\n"
-        "                local key = socketKeys[sock.color] or 'EMPTY_SOCKET_NO_COLOR'\n"
-        "                self:AddLine(_G[key] or key, 0.5, 0.5, 0.5)\n"
+        // Each socket: the gem in it when the tooltip is of one held item,
+        // else the empty socket of its colour (0x006277f0). A gem's line is
+        // red while its skill or level is short, then white once its meta
+        // conditions all hold and grey while one does not; each condition
+        // follows it, white or grey on its own (0x0061c0b0). The socket bonus
+        // closes the block: green when every socket holds a gem of its
+        // colour, grey otherwise and always on a bare template.
+        "        local gems = inst and inst.gems\n"
+        "        local function gemLines(g)\n"
+        "            local r, gc, b = 1, 1, 1\n"
+        "            if not (g.skillOk and g.levelOk) then r, gc, b = 1, 0.125, 0.125\n"
+        "            elseif not g.conditionsMet then r, gc, b = 0.5, 0.5, 0.5 end\n"
+        "            self:AddLine(g.text, r, gc, b)\n"
+        "            for _, c in ipairs(g.conditions or {}) do\n"
+        "                local text = ''\n"
+        "                local fmt = c.key and _G[c.key]\n"
+        "                local ca, cb = _G[c.colorA] or c.colorA, _G[c.colorB] or c.colorB\n"
+        "                if fmt then\n"
+        "                    if c.valueForm then text = format(fmt, c.number, ca) else text = format(fmt, ca, cb) end\n"
+        "                end\n"
+        "                local req = format(ENCHANT_CONDITION_REQUIRES or 'Requires %s', text)\n"
+        "                if c.met then self:AddLine('  '..req, 1, 1, 1) else self:AddLine('  '..req, 0.5, 0.5, 0.5) end\n"
         "            end\n"
+        "            if not g.skillOk and g.skillName then\n"
+        "                if g.skillRank and g.skillRank > 0 then\n"
+        "                    self:AddLine(format(ENCHANT_ITEM_MIN_SKILL or 'Requires %s (%d)', g.skillName, g.skillRank), 1, 0.125, 0.125)\n"
+        "                else\n"
+        "                    self:AddLine(format(ENCHANT_ITEM_REQ_SKILL or 'Requires %s', g.skillName), 1, 0.125, 0.125)\n"
+        "                end\n"
+        "            end\n"
+        "            if not g.levelOk then\n"
+        "                self:AddLine(format(ENCHANT_ITEM_REQ_LEVEL or 'Requires Level %d', g.minLevel), 1, 0.125, 0.125)\n"
+        "            end\n"
+        "        end\n"
+        "        if data.sockets or gems then\n"
+        "            local socketKeys = {[1]='EMPTY_SOCKET_META',[2]='EMPTY_SOCKET_RED',[4]='EMPTY_SOCKET_YELLOW',[8]='EMPTY_SOCKET_BLUE'}\n"
+        "            local socks = data.sockets or {}\n"
+        "            for i = 1, 3 do\n"
+        "                local g = gems and gems[i]\n"
+        "                if g then gemLines(g)\n"
+        "                elseif socks[i] then\n"
+        "                    local key = socketKeys[socks[i].color] or 'EMPTY_SOCKET_NO_COLOR'\n"
+        "                    self:AddLine(_G[key] or key, 0.5, 0.5, 0.5)\n"
+        "                end\n"
+        "            end\n"
+        "        end\n"
+        "        if data.socketBonus then\n"
+        "            local text = format(ITEM_SOCKET_BONUS or 'Socket Bonus: %s', data.socketBonus)\n"
+        "            if inst and inst.socketBonusMatched then self:AddLine(text, 0, 1, 0)\n"
+        "            else self:AddLine(text, 0.5, 0.5, 0.5) end\n"
         "        end\n"
         // The durability, between what the item is and what it asks for
         // (0x006277f0): white, red once broken.
@@ -9898,6 +11086,12 @@ void LuaEngine::registerCoreAPI() {
         "                local key = bracket == 2 and 'ITEM_REQ_ARENA_RATING_5V5' or bracket == 1 and 'ITEM_REQ_ARENA_RATING_3V3' or 'ITEM_REQ_ARENA_RATING'\n"
         "                req(format(_G[key] or 'Requires personal and team arena rating of %d', rating), met)\n"
         "            end\n"
+        "        end\n"
+        // And the purchase group it may name (+0x3c): owning one of its
+        // items is the requirement, white when met (0x006277f0).
+        "        if __WoweeTooltipMerchantIndex and _GetMerchantItemPurchaseGroup then\n"
+        "            local group, met = _GetMerchantItemPurchaseGroup(__WoweeTooltipMerchantIndex)\n"
+        "            if group then req(format(ITEM_REQ_PURCHASE_GROUP or 'Requires %s', group), met) end\n"
         "        end\n"
         "        if data.requiredFactionName then\n"
         "            local standing = _G['FACTION_STANDING_LABEL'..data.requiredFactionStanding] or ''\n"
@@ -10273,6 +11467,16 @@ void LuaEngine::registerCoreAPI() {
         // A font object is its own font object, which is what SetFontObject
         // being handed one relies on.
         "    GetFontObject = function(self) return self end,\n"
+        // CopyFontObject(font or name) (0x004a4350): take another font's
+        // face, size, flags, colour, shadow, spacing and justification.
+        "    CopyFontObject = function(self, src)\n"
+        "        if type(src) == 'string' then src = _G[src] end\n"
+        "        if type(src) ~= 'table' then return end\n"
+        "        for _, k in ipairs({'font', 'height', 'outline', 'r', 'g', 'b', 'a', 'justifyH', 'justifyV',\n"
+        "                            'spacing', 'shadowR', 'shadowG', 'shadowB', 'shadowA', 'shadowX', 'shadowY'}) do\n"
+        "            self[k] = src[k]\n"
+        "        end\n"
+        "    end,\n"
         "} }\n"
         // Exposed, because the emitter has to put it back. A <Font> in the
         // interface with inherits= is built as a fresh table copying the base's
@@ -10575,6 +11779,7 @@ void LuaEngine::fireEventWith(const std::string& eventName, int nargs,
         lua_pushboolean(L_, 1);
         lua_setfield(L_, LUA_REGISTRYINDEX, "wowee_logged_in");
     }
+    if (eventName == "TRADE_SHOW") wowee::addons::onTradeShown(L_);
 
     // Combat lockdown is the flag these two events announce, and 0x00524600
     // moves it on the far side of each: leaving combat lifts it before
@@ -11880,7 +13085,8 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
                      sdlKeycode == 'x' || sdlKeycode == 'X')) {
         // The highlighted run, or the whole line when nothing is highlighted -
         // which is what a player copying a link out of chat wants.
-        std::string text = w->editText;
+        // A password box copies nothing (0x009632d0 hands the clipboard "").
+        std::string text = w->editPassword ? std::string() : w->editText;
         const bool selected = w->hasSelection && w->selEnd > w->selStart &&
                               w->selEnd <= w->editText.size();
         if (w->hasSelection) {
@@ -11888,7 +13094,7 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
             const size_t to   = std::min(std::max(w->selStart, w->selEnd), text.size());
             text = (from < to) ? text.substr(from, to - from) : std::string();
         }
-        if (!text.empty()) SDL_SetClipboardText(text.c_str());
+        if (!text.empty() || w->editPassword) SDL_SetClipboardText(text.c_str());
         // Ctrl+X cuts, the highlighted run only - as the edit box's own key
         // handler does (0x00967760): with nothing highlighted it copies and
         // leaves the line alone.
@@ -12720,6 +13926,7 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
         widgets_.setMovingWidget(0);
         widgets_.setSizingWidget(0, "");
         draggingWid_ = 0;
+        widgets_.setDraggedWidget(draggingWid_);
         draggingButton_ = -1;
     }
     if (const uint32_t moving = widgets_.movingWidget()) {
@@ -12794,6 +14001,7 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
             }
             if (!movedEnough) continue;
             draggingWid_ = owner;
+            widgets_.setDraggedWidget(draggingWid_);
             draggingButton_ = i;
             callFrameScript(draggingWid_, "OnDragStart",
                             i == 0 ? "LeftButton" : "RightButton");
@@ -12959,7 +14167,23 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
                     }
                 }
             }
-            if (pressedWid_[i] != 0)
+            // A press inside the title region of the frame under the cursor
+            // moves that frame and goes no further (0x00495470 ->
+            // 0x00494060): no OnMouseDown, and nothing is pressed.
+            bool heldByTitle = false;
+            if (auto* f = widgets_.get(hit); f && f->titleRegion != 0 &&
+                                             !wowee::ui::isFixedSettingsWindow(f->name)) {
+                const auto* tr = widgets_.get(f->titleRegion);
+                if (tr && tr->rectW > 0.0f && tr->rectH > 0.0f && x >= tr->left &&
+                    x <= tr->left + tr->rectW && y >= tr->bottom && y <= tr->bottom + tr->rectH) {
+                    widgets_.pinToCurrentPosition(hit);
+                    widgets_.setMovingWidget(hit);
+                    f->userMoved = true;
+                    pressedWid_[i] = 0;
+                    heldByTitle = true;
+                }
+            }
+            if (!heldByTitle && pressedWid_[i] != 0)
                 callFrameScript(pressedWid_[i], "OnMouseDown", b.name);
         } else if (!b.down && buttonDown_[i]) {
             buttonDown_[i] = false;
@@ -13141,6 +14365,7 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
                                 under && !under->name.empty() ? under->name.c_str()
                                        : (hit ? "(unnamed)" : "no frame"));
                     draggingWid_ = 0;
+                    widgets_.setDraggedWidget(draggingWid_);
                     draggingButton_ = -1;
                 }
 
@@ -13325,10 +14550,67 @@ void LuaEngine::runInterfaceProbe() {
 /// history and comes back when the frame is scrolled, which is why nothing is
 /// erased here and why scrolling lights everything again - the player reading
 /// back wants what was said, not what is still fresh.
+std::string LuaEngine::layoutCacheText() const {
+    namespace lc = wowee::ui::layout_cache;
+    std::vector<lc::Entry> entries;
+    for (size_t id = 1; id < widgets_.size(); ++id) {
+        const auto* w = widgets_.get(static_cast<uint32_t>(id));
+        // Named, placed by the player, movable or resizable, and not told to
+        // keep out of the file (0x00517e00).
+        if (!w || w->kind != wowee::ui::WidgetKind::Frame || w->name.empty()) continue;
+        if (!w->userMoved || w->dontSavePosition || !(w->movable || w->resizable)) continue;
+        const auto* parent = w->parent ? widgets_.get(w->parent) : nullptr;
+        if (!parent || w->rectW <= 0.0f || w->rectH <= 0.0f || parent->rectW <= 0.0f || parent->rectH <= 0.0f)
+            continue;
+        lc::Saved s;
+        s.name = w->name;
+        s.rect = {w->left, w->bottom, w->left + w->rectW, w->bottom + w->rectH};
+        s.parentRect = {parent->left, parent->bottom, parent->left + parent->rectW, parent->bottom + parent->rectH};
+        s.effectiveScale = w->effScale;
+        s.level = w->effLevel;
+        entries.push_back(lc::entryFor(s));
+    }
+    return lc::serialize(entries);
+}
+
+void LuaEngine::applyLayoutCache(const std::string& text) {
+    namespace lc = wowee::ui::layout_cache;
+    if (!L_) return;
+    // 0x00518280, through the frame's own methods: its level when one was
+    // saved, one point to its parent if it is movable, its size if it is
+    // resizable, and either way placed by the player.
+    static const char* kApply =
+        "local name, level, point, x, y, w, h = ...\n"
+        "local f = _G[name]\n"
+        "if type(f) ~= 'table' or type(f.IsMovable) ~= 'function' then return end\n"
+        "if level >= 0 then f:SetFrameLevel(level) end\n"
+        "if f:IsMovable() then\n"
+        "  f:ClearAllPoints(); f:SetPoint(point, f:GetParent(), point, x, y); f:SetUserPlaced(true)\n"
+        "end\n"
+        "if f:IsResizable() then f:SetWidth(w); f:SetHeight(h); f:SetUserPlaced(true) end\n";
+    for (const lc::Entry& e : lc::parse(text)) {
+        if (luaL_loadstring(L_, kApply) != 0) {
+            lua_pop(L_, 1);
+            return;
+        }
+        lua_pushstring(L_, e.name.c_str());
+        lua_pushnumber(L_, e.level);
+        lua_pushstring(L_, lc::kPoints[static_cast<size_t>(e.point)]);
+        lua_pushnumber(L_, e.x);
+        lua_pushnumber(L_, e.y);
+        lua_pushnumber(L_, e.w);
+        lua_pushnumber(L_, e.h);
+        if (lua_pcall(L_, 7, 0, 0) != 0) {
+            LOG_WARNING("layout-local.txt: ", e.name, ": ", lua_tostring(L_, -1));
+            lua_pop(L_, 1);
+        }
+    }
+}
+
 void LuaEngine::expireMessages(float elapsed) {
     for (size_t id = 1; id < widgets_.size(); ++id) {
         auto* w = widgets_.get(static_cast<uint32_t>(id));
-        if (!w || !w->isMessageFrame || w->messageDuration <= 0.0f) continue;
+        if (!w || !w->isMessageFrame || !w->messageFading || w->messageDuration <= 0.0f) continue;
         const bool readingBack = w->messageScroll > 0;
         const float life = w->messageDuration;
         const float fade = w->messageFadeDuration > 0.0f ? w->messageFadeDuration : 0.0f;

@@ -191,6 +191,8 @@ public:
     /// continent. Hidden instances are skipped by drawing and by every spatial
     /// query, which is where collision comes from.
     void setInstanceHidden(uint32_t instanceId, bool hidden);
+    /// The instance's placement, null where there is no such instance.
+    [[nodiscard]] std::optional<glm::mat4> getInstanceModelMatrix(uint32_t instanceId) const;
     /// The game object highlight (0x00743c70 records the object's GUID; the
     /// WMO whose GUID it is gets the light's ambient added into c29 by
     /// 0x007964a0 / 0x007a8430). One at a time: clear, then set.

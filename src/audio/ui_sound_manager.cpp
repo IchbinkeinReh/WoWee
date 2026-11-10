@@ -284,6 +284,30 @@ UiSoundManager::UiPlayResult UiSoundManager::playByName(const std::string& sound
     return playById(it->second);
 }
 
+UiSoundManager::UiPlayResult UiSoundManager::playItemSound(uint32_t displayInfoId, int which) {
+    if (!initialized_ || !assets_ || displayInfoId == 0 || which < 0 || which > 3) return UiPlayResult::Unavailable;
+    if (!itemSoundsLoaded_) {
+        itemSoundsLoaded_ = true;
+        if (auto dbc = assets_->loadDBC("ItemDisplayInfo.dbc"); dbc && dbc->isLoaded() && dbc->getFieldCount() > 12) {
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
+                if (const uint32_t group = dbc->getUInt32(i, 12); group != 0)
+                    itemSoundGroups_[dbc->getUInt32(i, 0)] = group;
+        }
+        if (auto dbc = assets_->loadDBC("ItemGroupSounds.dbc"); dbc && dbc->isLoaded() && dbc->getFieldCount() >= 5) {
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                std::array<uint32_t, 4> sounds{};
+                for (uint32_t k = 0; k < 4; ++k) sounds[k] = dbc->getUInt32(i, 1 + k);
+                itemGroupSounds_[dbc->getUInt32(i, 0)] = sounds;
+            }
+        }
+    }
+    const auto group = itemSoundGroups_.find(displayInfoId);
+    if (group == itemSoundGroups_.end()) return UiPlayResult::Unavailable;
+    const auto row = itemGroupSounds_.find(group->second);
+    if (row == itemGroupSounds_.end()) return UiPlayResult::Unavailable;
+    return playById(row->second[static_cast<size_t>(which)]);
+}
+
 UiSoundManager::UiPlayResult UiSoundManager::playById(uint32_t soundId) {
     if (!initialized_ || soundId == 0) return UiPlayResult::Unavailable;
     ensureSoundEntriesLoaded();

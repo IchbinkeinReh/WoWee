@@ -754,6 +754,12 @@ void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_
     }
     if (!gameObjectLookupsBuilt_) return;
 
+    // A destructible building shows its state's look, not its display field.
+    if (DestructibleLook look; destructibleLook(guid, entry, look)) {
+        destructibleStates_[guid] = look.state;
+        if (look.display != 0) displayId = look.display;
+    }
+
     LOG_DEBUG("GO spawn attempt: guid=0x", std::hex, guid, std::dec,
              " displayId=", displayId, " entry=", entry,
              " pos=(", x, ", ", y, ", ", z, ")");
@@ -930,6 +936,7 @@ void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_
 
             gameObjectInstances_[guid] = {.modelId = modelId, .instanceId = instanceId, .isWmo = true,
                                           .scale = scale};
+            spawnDestructibleDoodads(guid, modelPath);
             LOG_DEBUG("Spawned gameobject WMO: guid=0x", std::hex, guid, std::dec,
                      " displayId=", displayId, " at (", x, ", ", y, ", ", z, ")");
 
@@ -1038,6 +1045,7 @@ void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_
 
         gameObjectInstances_[guid] = {.modelId = modelId, .instanceId = instanceId, .isWmo = false,
                                       .scale = scale};
+        spawnDestructibleDoodads(guid, {});
 
         // ...and the pose the server described before this model existed.
         if (auto pending = gameObjectPendingState_.find(guid);
@@ -1046,6 +1054,8 @@ void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_
         }
         // ...and a custom animation asked for meanwhile (0x00713f50, +0x208).
         applyPendingGameObjectCustomAnim(guid);
+        // ...and its art kit's models (0x00713f50 -> 0x00713da0).
+        applyGameObjectArtKit(guid);
 
         // Notify transport system for M2 transports (e.g. Deeprun Tram cars)
         if (gameHandler_ && gameHandler_->isTransportGuid(guid)) {

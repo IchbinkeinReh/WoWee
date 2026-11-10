@@ -1,4 +1,5 @@
 #include "game/transport_manager.hpp"
+#include "pipeline/asset_manager.hpp"
 #include "game/game_object_rotation.hpp"
 #include "game/transport_local.hpp"
 #include "game/transport_boarding.hpp"
@@ -828,6 +829,33 @@ void TransportManager::updateTransportMovement(ActiveTransport& transport, float
     // its TransportAnimation path (0x007139e0 -> 0x007106d0 -> 0x0070dc10).
     // A ship on its TaxiPath route is not one.
     if (pathEntry->fromDBC && !pathEntry->worldCoords) applyPathRotation(transport, pathTimeMs);
+    // Its route state (0x007f82b0 -> 0x0070b390): stopped at a dock, else
+    // speeding up, at speed or slowing down by the route's travel either side
+    // of now.
+    if (pathEntry->worldCoords) {
+        const auto& sp = pathEntry->spline;
+        const uint32_t dur = sp.durationMs();
+        auto travelAt = [&](int64_t t) {
+            const int64_t a = std::clamp<int64_t>(t - 50, 0, dur);
+            const int64_t b = std::clamp<int64_t>(t + 50, 0, dur);
+            if (b <= a) return 0.0f;
+            return glm::length(sp.evaluatePosition(static_cast<uint32_t>(b)) -
+                               sp.evaluatePosition(static_cast<uint32_t>(a))) *
+                   (1000.0f / static_cast<float>(b - a));
+        };
+        if (transport.atDockDwell) {
+            transport.routeState = 0;
+        } else {
+            const float before = travelAt(static_cast<int64_t>(pathTimeMs) - 250);
+            const float after = travelAt(static_cast<int64_t>(pathTimeMs) + 250);
+            constexpr float kSteady = 0.05f;   // yd/s per half second
+            transport.routeState = after > before + kSteady ? 0xa2 : after < before - kSteady ? 0xa4 : 0xa3;
+        }
+    } else {
+        transport.routeState = -1;
+    }
+    // A ship on its TaxiPath route sways as its TransportPhysics row says.
+    if (pathEntry->worldCoords && !transport.isM2) applySway(transport, *pathEntry, pathTimeMs);
 
     // Update transform matrices
     updateTransformMatrices(transport);
@@ -1149,6 +1177,91 @@ bool TransportManager::applyPathRotation(ActiveTransport& transport, uint32_t pa
     const glm::quat basis = glm::angleAxis(glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
     transport.rotation = glm::conjugate(basis) * *rotation * basis;
     return true;
+}
+
+bool TransportManager::loadTransportPhysicsDBC(pipeline::AssetManager* assetMgr) {
+    physicsRows_.clear();
+    if (!assetMgr) return false;
+    auto dbc = assetMgr->loadDBC("TransportPhysics.dbc");
+    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() < 11) return false;
+    for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+        transport_physics::Physics p;
+        p.waveAmp = dbc->getFloat(i, 1);
+        p.waveTimeScale = dbc->getFloat(i, 2);
+        p.rollAmp = dbc->getFloat(i, 3);
+        p.rollTimeScale = dbc->getFloat(i, 4);
+        p.pitchAmp = dbc->getFloat(i, 5);
+        p.pitchTimeScale = dbc->getFloat(i, 6);
+        p.maxBank = dbc->getFloat(i, 7);
+        p.maxBankTurnSpeed = dbc->getFloat(i, 8);
+        p.speedDampThresh = dbc->getFloat(i, 9);
+        p.speedDamp = dbc->getFloat(i, 10);
+        physicsRows_[dbc->getUInt32(i, 0)] = p;
+    }
+    return true;
+}
+
+std::optional<uint32_t> TransportManager::routeState(uint64_t guid) const {
+    const auto it = transports_.find(guid);
+    if (it == transports_.end() || it->second.routeState < 0) return std::nullopt;
+    return static_cast<uint32_t>(it->second.routeState);
+}
+
+void TransportManager::setTransportPhysicsForEntry(uint32_t entry, uint32_t physicsId) {
+    if (physicsId == 0) physicsByEntry_.erase(entry);
+    else physicsByEntry_[entry] = physicsId;
+}
+
+void TransportManager::applySway(ActiveTransport& transport, const PathEntry& path, uint32_t pathTimeMs) {
+    namespace tp = transport_physics;
+    const auto byEntry = physicsByEntry_.find(transport.entry);
+    if (byEntry == physicsByEntry_.end()) return;
+    const auto row = physicsRows_.find(byEntry->second);
+    if (row == physicsRows_.end()) return;
+    const tp::Physics& phys = row->second;
+    const auto& spline = path.spline;
+    const uint32_t duration = spline.durationMs();
+    if (duration == 0) return;
+    // The route's travel at a time: its direction over a tenth of a second.
+    auto travel = [&](int64_t t) {
+        const int64_t a = std::clamp<int64_t>(t - 50, 0, duration);
+        const int64_t b = std::clamp<int64_t>(t + 50, 0, duration);
+        if (b <= a) return glm::vec3(0.0f);
+        return (spline.evaluatePosition(static_cast<uint32_t>(b)) -
+                spline.evaluatePosition(static_cast<uint32_t>(a))) *
+               (1000.0f / static_cast<float>(b - a));
+    };
+    // The client's heading: the travel reversed, on the wire's axes
+    // (0x007f82b0) - canonical x is the wire's y.
+    auto heading = [](const glm::vec3& v) { return std::atan2(-v.x, -v.y); };
+    const glm::vec3 now = travel(pathTimeMs);
+    const float rawSpeed = glm::length(now);
+    const float speed = tp::effectiveSpeed(phys, rawSpeed);
+    float turn = 0.0f;
+    if (speed > 0.0f && rawSpeed > 0.0f) {
+        // Four places behind, 0.45 s apart at this speed.
+        float h[5] = {heading(now), 0, 0, 0, 0};
+        const float stepMs = 450.0f * speed / rawSpeed;
+        for (int k = 1; k < 5; ++k) {
+            const int64_t t = std::max<int64_t>(
+                0, static_cast<int64_t>(pathTimeMs) - static_cast<int64_t>(stepMs * static_cast<float>(k)));
+            const glm::vec3 v = travel(t);
+            h[k] = glm::dot(v, v) > 1e-8f ? heading(v) : h[k - 1];
+        }
+        turn = tp::turnRate(h);
+    }
+    const tp::Sway s = tp::sway(phys, pathTimeMs, speed, turn);
+    transport.position.z += s.lift;
+    // Pitch about the wire's y and roll about its x, in the hull's frame
+    // (0x007134a0: yaw, then pitch, then roll); the transform's basis change
+    // takes canonical +x to the wire's y and -y to its x.
+    if (!transport.swayed || transport.rotation != transport.swayedRotation)
+        transport.unswayedRotation = transport.rotation;
+    transport.rotation = transport.unswayedRotation *
+                         glm::angleAxis(s.pitch, glm::vec3(1.0f, 0.0f, 0.0f)) *
+                         glm::angleAxis(s.roll, glm::vec3(0.0f, -1.0f, 0.0f));
+    transport.swayedRotation = transport.rotation;
+    transport.swayed = true;
 }
 
 bool TransportManager::loadTaxiPathNodeDBC(pipeline::AssetManager* assetMgr) {

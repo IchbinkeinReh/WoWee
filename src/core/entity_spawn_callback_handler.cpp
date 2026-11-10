@@ -2,6 +2,8 @@
 #include "core/entity_spawner.hpp"
 #include "core/coordinates.hpp"
 #include "core/logger.hpp"
+#include <array>
+#include <cstring>
 #include "rendering/renderer.hpp"
 #include "rendering/character_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
@@ -52,7 +54,7 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
 
     // Player spawn callback (online mode) - spawn player models with correct textures
     gameHandler_.setPlayerSpawnCallback([this](uint64_t guid,
-                                              uint32_t /*displayId*/,
+                                              uint32_t displayId,
                                               uint8_t raceId,
                                               uint8_t genderId,
                                               uint32_t appearanceBytes,
@@ -63,9 +65,51 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
                     " pos=(", x, ",", y, ",", z, ")");
         // Skip local player - already spawned as the main character
         if (isLocalPlayerGuid_(guid)) return;
+        // A player is drawn as its display (0x00717a20) - its character only
+        // while that display is its own (UNIT_FIELD_NATIVEDISPLAYID). A form
+        // or a morph is drawn as the creature that display names.
+        uint32_t nativeDisplay = 0;
+        float scale = 1.0f;
+        if (auto entity = gameHandler_.getEntityManager().getEntity(guid)) {
+            if (const uint16_t ni = game::fieldIndex(game::UF::UNIT_FIELD_NATIVEDISPLAYID); ni != 0xFFFF)
+                nativeDisplay = entity->getField(ni);
+            if (const uint16_t si = game::fieldIndex(game::UF::OBJECT_FIELD_SCALE_X); si != 0xFFFF) {
+                const uint32_t raw = entity->getField(si);
+                float f = 1.0f;
+                std::memcpy(&f, &raw, sizeof(f));
+                if (raw != 0 && f > 0.01f && f < 100.0f) scale = f;
+            }
+        }
+        if (displayId != 0 && nativeDisplay != 0 && displayId != nativeDisplay) {
+            if (entitySpawner_.isPlayerSpawned(guid) || entitySpawner_.isPlayerPending(guid))
+                entitySpawner_.despawnPlayer(guid);
+            if (entitySpawner_.isCreatureSpawned(guid)) {
+                const auto& shown = entitySpawner_.getCreatureDisplayIds();
+                if (auto it = shown.find(guid); it != shown.end() && it->second == displayId) return;
+                entitySpawner_.despawnCreature(guid);
+            }
+            entitySpawner_.queueCreatureSpawn(guid, displayId, x, y, z, orientation, scale);
+            return;
+        }
+        // Back from a form or a morph: its creature, shown or still queued,
+        // goes (despawnCreature would take a spawned player with it).
+        bool wasDisplay = false;
+        if (!entitySpawner_.isPlayerSpawned(guid) && !entitySpawner_.isPlayerPending(guid)) {
+            // Its gear went with the player model when it changed, even if
+            // the creature never got as far as drawing.
+            wasDisplay = true;
+            entitySpawner_.despawnCreature(guid);
+        }
         if (entitySpawner_.isPlayerSpawned(guid)) return;
         if (entitySpawner_.isPlayerPending(guid)) return;
         entitySpawner_.queuePlayerSpawn(guid, raceId, genderId, appearanceBytes, facialFeatures, x, y, z, orientation);
+        // Back from a form: its gear again, which went with the player model.
+        if (wasDisplay) {
+            std::array<uint32_t, 19> displayIds{};
+            std::array<uint8_t, 19> inventoryTypes{};
+            if (gameHandler_.getOtherPlayerEquipment(guid, displayIds, inventoryTypes))
+                entitySpawner_.queuePlayerEquipmentFromServer(guid, displayIds, inventoryTypes);
+        }
     });
 
     // Online player equipment callback - apply armor geosets/skin overlays per player instance.
@@ -117,6 +161,8 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
     gameHandler_.setPlayerDespawnCallback([this](uint64_t guid) {
         entitySpawner_.despawnCorpse(guid);
         entitySpawner_.despawnPlayer(guid);
+        // One drawn as its display (a form or a morph) is a creature instance.
+        entitySpawner_.despawnCreature(guid);
     });
 
     gameHandler_.setCorpseSpawnCallback([this](uint64_t guid, const game::CorpseLook& look, float x, float y,
@@ -173,6 +219,8 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
     // GameObject state change callback: a door, a chest, a destructible is a
     // pose the server describes, and the spawner holds it - including the one
     // that arrives before the model does.
+    gameHandler_.setGameObjectFlagsCallback([this](uint64_t guid) { entitySpawner_.applyDestructibleFlags(guid); });
+
     gameHandler_.setGameObjectStateCallback([this](uint64_t guid, uint8_t goState) {
         entitySpawner_.applyGameObjectState(guid, goState);
     });
@@ -182,6 +230,25 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
     gameHandler_.setGameObjectInteractionCallback([this](uint64_t guid, bool open) {
         entitySpawner_.applyGameObjectInteraction(guid, open);
     });
+
+    // A melee blow the victim bleeds from: its spurt on whichever model draws it.
+    gameHandler_.setBloodSpurtCallback([this](uint64_t victim, uint64_t attacker, bool crushing) {
+        uint32_t instance = 0;
+        if (isLocalPlayerGuid_(victim)) instance = renderer_.getCharacterInstanceId();
+        if (instance == 0) instance = entitySpawner_.getCreatureInstanceId(victim);
+        if (instance == 0) instance = entitySpawner_.getPlayerInstanceId(victim);
+        entitySpawner_.playBloodSpurt(victim, attacker, crushing, instance);
+    });
+
+    // A game object's model box, for the reach a use is judged by.
+    gameHandler_.setGameObjectBoundsCallback(
+        [this](uint64_t guid, bool playingSequence) -> std::optional<std::pair<glm::vec3, glm::vec3>> {
+            const auto& gos = entitySpawner_.getGameObjectInstances();
+            const auto it = gos.find(guid);
+            auto* m2 = renderer_.getM2Renderer();
+            if (it == gos.end() || it->second.isWmo || !m2) return std::nullopt;
+            return m2->localBounds(it->second.instanceId, playingSequence);
+        });
 
     // Creature move callback (online mode) - update creature positions
     gameHandler_.setCreatureMoveCallback([this](uint64_t guid, float x, float y, float z, uint32_t durationMs) {

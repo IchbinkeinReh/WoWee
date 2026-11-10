@@ -640,10 +640,29 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
             ? ReadyCheckAnswer{false, true} : ReadyCheckAnswer{true, false};
         if (initiatedHere)
             owner_.addSystemChatMessage(interfaceString("READY_CHECK_START", "Starting ready check..."));
-        // READY_CHECK carries the initiator and the seconds left (0x005747d0).
-        if (owner_.addonEventCallbackRef())
-            owner_.addonEventCallbackRef()("READY_CHECK", {readyCheckInitiator_,
-                                                           std::to_string(readyCheckSecondsLeft())});
+        // READY_CHECK carries the initiator and the seconds left (0x005747d0),
+        // and everyone but the initiator is told who started it -
+        // ERR_RAID_LEADER_READY_CHECK_START_S, a chat line. Both wait for the
+        // initiator's name from the name cache, which is asked for when it
+        // has none (0x00574d50 -> 0x00574d00).
+        const auto announce = [this](const std::string& name) {
+            readyCheckInitiator_ = name;
+            if (owner_.addonEventCallbackRef())
+                owner_.addonEventCallbackRef()("READY_CHECK", {name, std::to_string(readyCheckSecondsLeft())});
+            if (readyCheckInitiatorGuid_ != owner_.getPlayerGuid())
+                gameError(owner_, ErrTo::Chat, "ERR_RAID_LEADER_READY_CHECK_START_S",
+                          "%s has initiated a ready check.", {name});
+        };
+        const uint64_t initiator = readyCheckInitiatorGuid_;
+        if (initiator == 0) {
+            announce(readyCheckInitiator_);
+        } else if (const std::string& cached = owner_.lookupName(initiator); !cached.empty()) {
+            announce(cached);
+        } else {
+            owner_.askNameThen(initiator, "ready check", [this, initiator, announce](bool found, const std::string& name) {
+                if (found && !name.empty() && readyCheckInitiatorGuid_ == initiator) announce(name);
+            });
+        }
     };
     table[Opcode::MSG_RAID_READY_CHECK_CONFIRM] = [this](network::Packet& packet) {
         if (!packet.hasRemaining(9)) { packet.skipAll(); return; }
@@ -2997,9 +3016,17 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
         }
         if ((methodChanged || partyData.looterGuid != prevLooterGuid) &&
             partyData.lootMethod == 2 && partyData.looterGuid != 0) {
+            // A looter the name cache does not hold yet is asked for, and the
+            // line waits for the answer that found the name (0x0052bbc0).
             const std::string looter = owner_.lookupName(partyData.looterGuid);
-            if (!looter.empty())
+            if (!looter.empty()) {
                 gameError(owner_, ErrTo::Chat, "ERR_NEW_LOOT_MASTER_S", "%s is now the loot master.", {looter});
+            } else {
+                owner_.askNameThen(partyData.looterGuid, "loot master", [this](bool found, const std::string& name) {
+                    if (found && !name.empty())
+                        gameError(owner_, ErrTo::Chat, "ERR_NEW_LOOT_MASTER_S", "%s is now the loot master.", {name});
+                });
+            }
         }
         if (fresh || partyData.lootThreshold != prevLootThreshold) {
             const std::string qualityKey = "ITEM_QUALITY" + std::to_string(partyData.lootThreshold) + "_DESC";
@@ -4285,9 +4312,16 @@ void SocialHandler::handleFriendStatus(network::Packet& packet) {
     // list's ERR_IGNORE_*, which share this packet and said nothing here.
     // The lines that name a player wait for the name, as the original's do.
     // These were English.
+    // A line that names a player and has no name yet asks for it, and the
+    // answer prints it (0x006b6760 / 0x006b68b0 / 0x006b6630): with the
+    // realm as "Name-Realm" when there is one, and the name written into the
+    // list's row. An answer that found nobody prints ERR_FRIEND_ERROR and
+    // takes the row off the list instead.
+    const uint8_t status = data.status;
+    const auto emit = [this, status](const std::string& playerName) {
     const std::vector<std::string> who = {playerName};
     const bool named = !playerName.empty();
-    switch (data.status) {
+    switch (status) {
         case kDbError:
         case kNotFound:     gameError(owner_, ErrTo::Chat, "ERR_FRIEND_NOT_FOUND", "Player not found."); break;
         case kListFull:     gameError(owner_, ErrTo::Chat, "ERR_FRIEND_LIST_FULL", "Your friends list is full."); break;
@@ -4310,6 +4344,31 @@ void SocialHandler::handleFriendStatus(network::Packet& packet) {
         case 0x10:          if (named) gameError(owner_, ErrTo::Chat, "ERR_IGNORE_REMOVED_S", "%s is no longer being ignored.", who); break;
         case 0x11:          gameError(owner_, ErrTo::Chat, "ERR_IGNORE_AMBIGUOUS", "That name is ambiguous, type more of the player's server name."); break;
         default: break;
+    }
+    };
+    const bool namesPlayer = status == kOnline || status == kOffline || status == kRemoved ||
+                             status == kAddedOnline || status == kAddedOffline || status == kAlready ||
+                             status == 0x0E || status == 0x0F || status == 0x10;
+    if (!namesPlayer || !playerName.empty()) {
+        emit(playerName);
+    } else {
+        const uint64_t guid = data.guid;
+        owner_.askNameThen(guid, "friend status " + std::to_string(status),
+                           [this, guid, emit](bool found, const std::string& name) {
+            auto& contacts = owner_.contactsRef();
+            const auto row = std::find_if(contacts.begin(), contacts.end(),
+                                          [guid](const ContactEntry& e) { return e.guid == guid; });
+            if (!found || name.empty()) {
+                gameError(owner_, ErrTo::Chat, "ERR_FRIEND_ERROR", "Unknown friend response from server.");
+                if (row != contacts.end()) contacts.erase(row);
+            } else {
+                const std::string& realm = owner_.getCachedPlayerRealm(guid);
+                const std::string full = realm.empty() ? name : name + "-" + realm;
+                if (row != contacts.end()) row->name = full;
+                emit(full);
+            }
+            if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("FRIENDLIST_UPDATE", {});
+        });
     }
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("FRIENDLIST_UPDATE", {});
 }
@@ -4607,6 +4666,7 @@ void SocialHandler::handleBattlefieldList(network::Packet& packet) {
         // battlemaster's own list - BATTLEFIELDS_SHOW, the battlemaster the
         // interaction object (0x005496d0).
         constexpr uint32_t kRandomBattleground = 32;
+        battlemasterGuid_ = data.battlemasterGuid;  // 0x00bea568
         if (data.bgTypeId == kRandomBattleground && data.battlemasterGuid != 0) {
             owner_.setInteractionObject(data.battlemasterGuid);
             owner_.fireAddonEvent("NPC_PVPQUEUE_ANYWHERE", {});

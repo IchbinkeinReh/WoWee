@@ -2,6 +2,7 @@
 #include "core/stall_report.hpp"
 #include "core/platform.hpp"
 #include "core/application.hpp"
+#include "rendering/model_frame_view.hpp"
 #include "core/rt_session_marker.hpp"
 #include "core/config_paths.hpp"
 #include "core/world_settle.hpp"
@@ -1024,6 +1025,7 @@ bool Application::initialize() {
             gameHandler->getTransportManager()->loadTransportAnimationDBC(assetManager.get());
             gameHandler->getTransportManager()->loadTransportRotationDBC(assetManager.get());
             gameHandler->getTransportManager()->loadTaxiPathNodeDBC(assetManager.get());
+            gameHandler->getTransportManager()->loadTransportPhysicsDBC(assetManager.get());
         }
 
         // Initialize addon system
@@ -1222,6 +1224,18 @@ bool Application::initialize() {
         luaSvc.getMapZoneNameAt = [r = renderer.get()](float u, float v) -> std::string {
             auto* wmap = r ? r->getWorldMap() : nullptr;
             return wmap ? wmap->zoneNameAtMapPoint(u, v) : std::string();
+        };
+        luaSvc.getMapHighlightAt = [r = renderer.get()](float u, float v) {
+            addons::LuaServices::MapHighlightAnswer a;
+            auto* wmap = r ? r->getWorldMap() : nullptr;
+            if (!wmap) return a;
+            const auto h = wmap->mapHighlightAt(u, v);
+            a.name = h.name;
+            a.fileName = h.fileName;
+            a.texCoordX = h.texCoordX; a.texCoordY = h.texCoordY;
+            a.textureX = h.textureX;   a.textureY = h.textureY;
+            a.scrollX = h.scrollX;     a.scrollY = h.scrollY;
+            return a;
         };
         luaSvc.clickMapPoint = [r = renderer.get()](float u, float v) -> bool {
             auto* wmap = r ? r->getWorldMap() : nullptr;
@@ -4955,6 +4969,61 @@ bool Application::playerFallsFar() const {
 // turn on the spot started or stopped (0x0073dab0), alive or dead, looting,
 // stealth, a melee target taken or dropped. Its movement events ask it as
 // they come (animatePlayerMovement).
+void Application::syncPlayerDisplayModel(const game::Unit& self) {
+    if (!playerCharacterSpawned || !renderer || !entitySpawner_ || !gameHandler) return;
+    auto* cr = renderer->getCharacterRenderer();
+    if (!cr) return;
+    const auto field = [&](game::UF f) {
+        const uint16_t i = game::fieldIndex(f);
+        return i == 0xFFFF ? 0u : self.getField(i);
+    };
+    const uint32_t display = field(game::UF::UNIT_FIELD_DISPLAYID);
+    const uint32_t native = field(game::UF::UNIT_FIELD_NATIVEDISPLAYID);
+    const uint32_t want = display != 0 && native != 0 && display != native ? display : 0;
+    if (want == shownPlayerDisplay_) return;
+    const glm::vec3 pos = renderer->getCharacterPosition();
+    if (want == 0) {
+        // Back to the character: built again from the look, with its gear.
+        shownPlayerDisplay_ = 0;
+        if (const uint32_t old = renderer->getCharacterInstanceId(); old != 0) {
+            renderer->setCharacterFollow(0);
+            cr->removeInstance(old);
+        }
+        renderer->setCharacterShownAsDisplay(false);
+        playerCharacterSpawned = false;
+        spawnedPlayerGuid_ = 0;
+        spawnSnapToGround = false;
+        spawnPlayerCharacter();
+        renderer->getCharacterPosition() = pos;
+        gameHandler->resetEquipmentDirtyTracking();
+        return;
+    }
+    float scale = 1.0f;
+    if (const uint32_t raw = field(game::UF::OBJECT_FIELD_SCALE_X); raw != 0) {
+        float f = 1.0f;
+        std::memcpy(&f, &raw, sizeof(f));
+        if (f > 0.01f && f < 100.0f) scale = f;
+    }
+    const uint32_t instanceId = entitySpawner_->createDisplayInstance(want, pos, 0.0f, scale);
+    shownPlayerDisplay_ = want;
+    if (instanceId == 0) {
+        LOG_WARNING("Player display ", want, " has no model to draw; the character stays");
+        return;
+    }
+    if (const uint32_t old = renderer->getCharacterInstanceId(); old != 0) {
+        renderer->setCharacterFollow(0);
+        if (auto* ac = renderer->getAnimationController()) ac->clearMount();
+        cr->removeInstance(old);
+    }
+    renderer->setCharacterShownAsDisplay(true);
+    renderer->getCharacterPosition() = pos;
+    renderer->setCharacterFollow(instanceId);
+    if (renderer->getCameraController()) renderer->getCameraController()->setCharacterRenderer(cr, instanceId);
+    cr->playAnimation(instanceId, rendering::anim::STAND, true);
+    playerAnimationSeen_ = {};
+    LOG_INFO("Player shown as display ", want, " (native ", native, ")");
+}
+
 void Application::syncPlayerAnimation(const game::Unit& self) {
     auto* cr = renderer ? renderer->getCharacterRenderer() : nullptr;
     const uint32_t instanceId = renderer ? renderer->getCharacterInstanceId() : 0;
@@ -5070,6 +5139,7 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
             havePlayerPos = true;
             if (auto self = gameHandler->getEntityManager().getEntity(gameHandler->getPlayerGuid());
                 self && self->isUnit()) {
+                syncPlayerDisplayModel(static_cast<const game::Unit&>(*self));
                 syncPlayerAnimation(static_cast<const game::Unit&>(*self));
             }
         }
@@ -5089,7 +5159,8 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
         const uint32_t floorFrameNo = ++creatureFloorFrame;
         for (const auto& [guid, instanceId] : _creatureInstances) {
             auto entity = gameHandler->getEntityManager().getEntity(guid);
-            if (!entity || entity->getType() != game::ObjectType::UNIT) continue;
+            // A unit, or a player drawn as its display (a form or a morph).
+            if (!entity || !entity->isUnit()) continue;
 
             // Distance check uses getLatestX/Y/Z (server-authoritative destination) to
             // avoid false-culling entities that moved while getX/Y/Z was stale.
@@ -5581,6 +5652,7 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
         entitySpawner_->updateBlobShadows(renderer->getCharacterInstanceId());
         entitySpawner_->playUnitModelEvents(renderer->getCharacterInstanceId());
         entitySpawner_->playUnitSplashes(renderer->getCharacterInstanceId());
+        entitySpawner_->updateObjectEffects(deltaTime);
     }
 }
 
@@ -6331,6 +6403,84 @@ void Application::render() {
                                        clampDim(frame->rectH * scale));
                 };
 
+            runRenderStage("addonWidgets/modelFiles", [&] {
+                // Model frames given a model file (CSimpleModel, 0x0095fc30):
+                // each its own off-screen view of the frame's size, posed and
+                // projected as the client does in DDC, the screen with a
+                // diagonal of 1 (0x0047bf90) - a frame's rect, SetPosition and
+                // model scale all measured in it.
+                const float screenW = io.DisplaySize.x, screenH = io.DisplaySize.y;
+                const float uiScale = widgets.uiScale();
+                std::unordered_set<uint32_t> shown;
+                if (screenW > 0.0f && screenH > 0.0f && uiScale > 0.0f) {
+                    const float ddcH = rendering::model_frame::ddcHeight(screenW / screenH);
+                    const float ddcPerUnit = ddcH / (screenH / uiScale);
+                    for (const uint32_t id : widgets.modelFileFrames()) {
+                        ui::Widget* frame = widgets.get(id);
+                        if (!frame || !frame->visible || frame->modelFile.empty() || frame->rectW <= 0.0f ||
+                            frame->rectH <= 0.0f)
+                            continue;
+                        auto& view = modelFrameViews_[id];
+                        if (!view) view = std::make_unique<rendering::ModelFrameView>();
+                        const int pw = static_cast<int>(frame->rectW * uiScale + 0.5f);
+                        const int ph = static_cast<int>(frame->rectH * uiScale + 0.5f);
+                        if (!view->ensureSize(assetManager.get(), pw, ph) || !view->setModel(frame->modelFile, frame->modelIconTexture)) {
+                            frame->externalTexture = 0;
+                            continue;
+                        }
+                        rendering::model_frame::Pose pose;
+                        // Held at the frame's middle, in its own units: half its
+                        // width and height (0x005446f0).
+                        if (frame->modelCentered) {
+                            const float eff = frame->effScale > 0.0f ? frame->effScale : 1.0f;
+                            frame->modelPosition[0] = frame->rectW * ddcPerUnit / eff * 0.5f;
+                            frame->modelPosition[1] = frame->rectH * ddcPerUnit / eff * 0.5f;
+                            frame->modelPosition[2] = 0.0f;
+                        }
+                        pose.position = glm::vec3(frame->modelPosition[0], frame->modelPosition[1],
+                                                  frame->modelPosition[2]);
+                        pose.facing = frame->modelFacing;
+                        pose.modelScale = frame->modelScale;
+                        pose.effectiveScale = frame->effScale;
+                        view->setFrame(frame->rectW * ddcPerUnit, frame->rectH * ddcPerUnit, pose, ddcH,
+                                       frame->modelCamera, frame->modelSequence, frame->modelSequenceTime,
+                                       frame->modelSequenceSerial);
+                        rendering::ModelFrameView::Light light;
+                        light.enabled = frame->modelLightEnabled;
+                        light.omni = frame->modelLightOmni;
+                        light.vec = glm::vec3(frame->modelLightVec[0], frame->modelLightVec[1], frame->modelLightVec[2]);
+                        light.ambient = glm::vec3(frame->modelLightAmbient[0], frame->modelLightAmbient[1],
+                                                  frame->modelLightAmbient[2]);
+                        light.diffuse = glm::vec3(frame->modelLightDiffuse[0], frame->modelLightDiffuse[1],
+                                                  frame->modelLightDiffuse[2]);
+                        view->setLight(light);
+                        rendering::ModelFrameView::Fog fog;
+                        fog.enabled = frame->modelFogEnabled;
+                        fog.color = glm::vec3(frame->modelFogColor[0], frame->modelFogColor[1],
+                                              frame->modelFogColor[2]);
+                        fog.nearDist = frame->modelFogNear;
+                        fog.farDist = frame->modelFogFar;
+                        view->setFog(fog);
+                        view->update(io.DeltaTime);
+                        view->requestComposite();
+                        frame->externalTexture = view->textureId();
+                        shown.insert(id);
+                    }
+                }
+                // The interface's own player arrow on the world map, when it
+                // draws: the map shows none of its own under it.
+                if (auto* wm = renderer ? renderer->getWorldMap() : nullptr) {
+                    const ui::Widget* arrow = widgets.findByName("PlayerArrowFrame");
+                    wm->setInterfaceDrawsPlayerArrow(arrow && arrow->visible && arrow->externalTexture != 0);
+                }
+                // A frame hidden, gone or cleared lets its view go.
+                for (auto it = modelFrameViews_.begin(); it != modelFrameViews_.end();) {
+                    if (shown.count(it->first)) { ++it; continue; }
+                    if (ui::Widget* frame = widgets.get(it->first)) frame->externalTexture = 0;
+                    it = modelFrameViews_.erase(it);
+                }
+            });
+
             runRenderStage("addonWidgets/paperdoll", [&] {
                 // The paperdoll's figure, on the same terms as the portrait:
                 // rendered only while a frame is there to show it, and told to
@@ -6673,6 +6823,9 @@ void Application::render() {
                     {"target", &targetPortrait_,   gameHandler->getTargetGuid()},
                     {"pet",    &petPortrait_,      gameHandler->getPetGuid()},
                     {"focus",  &focusPortrait_,    gameHandler->getFocusGuid()},
+                    // SetLootPortrait's (0x00588f00): the loot's own unit.
+                    {"loot",   &lootPortrait_,
+                     gameHandler->isLootWindowOpen() ? gameHandler->getCurrentLoot().lootGuid : 0},
                     {"party1", &partyPortraits_[0], partyGuids[0]},
                     {"party2", &partyPortraits_[1], partyGuids[1]},
                     {"party3", &partyPortraits_[2], partyGuids[2]},
@@ -7412,6 +7565,10 @@ void Application::setupUICallbacks() {
 
 void Application::spawnPlayerCharacter() {
     if (playerCharacterSpawned) return;
+    // The character, whatever the display: a form or a morph is put back on
+    // it by syncPlayerDisplayModel the next frame.
+    if (renderer) renderer->setCharacterShownAsDisplay(false);
+    shownPlayerDisplay_ = 0;
     if (!renderer || !renderer->getCharacterRenderer() || !renderer->getCamera()) return;
 
     auto* charRenderer = renderer->getCharacterRenderer();

@@ -3,12 +3,19 @@
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
 struct lua_State;
 
+namespace wowee::game { class GameHandler; }
+
 namespace wowee::addons {
+
+/// A quest's open objectives as the map reads them (0x005e2950): a bit per
+/// objective still to do, 0xffffffff once complete, 0 when not in the log.
+uint32_t questObjectiveMask(game::GameHandler* gh, uint32_t questId);
 
 void registerUnitLuaAPI(lua_State* L);
 void registerSpellLuaAPI(lua_State* L);
@@ -73,6 +80,14 @@ void noteClientSettingChanged(const std::string& settingKey, const std::string& 
 /// a player can rely on, and this client is exited every way there is.
 void setStoredCVar(const std::string& key, const std::string& value);
 void registerActionLuaAPI(lua_State* L);
+
+/// Whether the modifiers a modified click action is bound to are held now
+/// (IsModifiedClick's answer, for the client's own code - 0x00513700 asks it
+/// of AUTOLOOTTOGGLE). False with no interface loaded.
+bool modifiedClickHeld(const std::string& action);
+/// The state modifiedClickHeld asks, set when the action API is registered
+/// and cleared before the state closes.
+void setModifiedClickState(lua_State* L);
 
 /// One line of the CVar listing the client's own console command prints
 /// (`FUN_00769100("cvarlist", 0x00767220, 5, "List cvars")`).

@@ -167,6 +167,13 @@ struct LuaServices {
     /// The zone under a point on the map, in [0,1] map space, or empty. This
     /// is what names the label under the cursor.
     std::function<std::string(float, float)> getMapZoneNameAt;
+    /// UpdateMapHighlight's eight answers for the point (0x00545110): name,
+    /// fileName (empty for none), texCoordX/Y, textureX/Y, scrollChildX/Y.
+    struct MapHighlightAnswer {
+        std::string name, fileName;
+        float texCoordX = 0, texCoordY = 0, textureX = 0, textureY = 0, scrollX = 0, scrollY = 0;
+    };
+    std::function<MapHighlightAnswer(float, float)> getMapHighlightAt;
     /// Drill into that zone, as clicking it does. False when there is none.
     std::function<bool(float, float)> clickMapPoint;
     /// Step out one level: zone to continent, continent to world.

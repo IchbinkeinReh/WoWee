@@ -5,6 +5,8 @@
 #include <chrono>
 #include "core/gamepad.hpp"
 #include "ui/unit_portrait.hpp"
+
+namespace wowee::rendering { class ModelFrameView; }
 #include "ui/widget_renderer.hpp"
 #include "core/input.hpp"
 #include "core/entity_spawner.hpp"
@@ -200,6 +202,13 @@ private:
     /// The player's unit onto its instance, and its base animation asked
     /// again where what it reads has changed.
     void syncPlayerAnimation(const game::Unit& self);
+    /// The player drawn as its display (0x00717a20): its character while
+    /// UNIT_FIELD_DISPLAYID is UNIT_FIELD_NATIVEDISPLAYID, else the model that
+    /// display names - a form, a morph - swapped in and out as it changes.
+    void syncPlayerDisplayModel(const game::Unit& self);
+    /// The display the player's instance shows other than its character, 0
+    /// for the character.
+    uint32_t shownPlayerDisplay_ = 0;
     /// An event of the player's own movement, on its animation (0x0073ed10).
     void animatePlayerMovement(game::Opcode op, uint32_t flagsBefore, bool launchedBefore);
     /// In the air off a ledge, long enough to be falling far.
@@ -364,6 +373,8 @@ private:
     ui::UnitPortrait targetPortrait_;
     /// And the focus, which is deliberate enough to be worth its own pass.
     ui::UnitPortrait focusPortrait_;
+    /// SetLootPortrait's face: whoever the open loot is from (0x00588f00).
+    ui::UnitPortrait lootPortrait_;
     /// The dressing room's figure, and its frame. The player plus whatever
     /// has been tried on, which is the paperdoll with an overlay.
     ui::UnitPortrait dressUpModel_;
@@ -410,6 +421,9 @@ private:
     /// offscreen pass rather than a shared one: the portrait shows the face
     /// and this shows the whole figure, and they are on screen together.
     ui::UnitPortrait paperdollModel_;
+    /// The model frames showing a model file (Model:SetModel), by widget id:
+    /// each drawn through its own view (rendering/model_frame_view.hpp).
+    std::unordered_map<uint32_t, std::unique_ptr<rendering::ModelFrameView>> modelFrameViews_;
     /// The facing already applied to the paperdoll, so only the change since
     /// last frame is turned.
     float paperdollFacing_ = 0.0f;

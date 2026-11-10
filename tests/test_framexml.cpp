@@ -1144,25 +1144,51 @@ TEST_CASE("An Animations block becomes group and animation calls",
     REQUIRE_FALSE(has(r.lua, "local __w["));
 }
 
-TEST_CASE("A TitleRegion makes a frame draggable", "[framexml][emit]") {
+TEST_CASE("An animation's delays, rotation and path are carried", "[framexml][emit]") {
     XmlNode root = parseOrFail(
-        "<Ui><Frame name=\"Loot\"><TitleRegion setAllPoints=\"true\"/></Frame></Ui>");
-    const EmitResult r = emitFrameXml(root);
-    REQUIRE(has(r.lua, "SetMovable(true)"));
-    REQUIRE(has(r.lua, "RegisterForDrag(\"LeftButton\")"));
-    REQUIRE(has(r.lua, "StartMoving()"));
+        "<Ui><Frame name=\"F\"><Animations><AnimationGroup initialOffsetX=\"3\">"
+        "<Rotation degrees=\"90\" endDelay=\"0.5\"><Origin point=\"TOP\"/></Rotation>"
+        "<Path curve=\"SMOOTH\"><ControlPoints><ControlPoint offsetX=\"10\" order=\"1\"/></ControlPoints></Path>"
+        "</AnimationGroup></Animations></Frame></Ui>");
+    const std::string lua = emitFrameXml(root).lua;
+    REQUIRE(has(lua, ":SetInitialOffset(3, 0)"));
+    REQUIRE(has(lua, ":SetEndDelay(0.5)"));
+    REQUIRE(has(lua, ":SetDegrees(90)"));
+    REQUIRE(has(lua, ":SetOrigin(\"TOP\""));
+    REQUIRE(has(lua, ":CreateAnimation(\"Path\")"));
+    REQUIRE(has(lua, ":SetCurve(\"SMOOTH\")"));
+    REQUIRE(has(lua, ":CreateControlPoint(nil, nil, 1)"));
+    REQUIRE(has(lua, ":SetOffset(10, 0)"));
 }
 
-TEST_CASE("A frame with its own drag scripts keeps them", "[framexml][emit]") {
-    // The chat frame has a title region and five OnDragStart handlers; the
-    // generic pair must not replace behaviour that is deliberately specific.
+TEST_CASE("horizTile= and vertTile= tile a texture", "[framexml][emit]") {
     XmlNode root = parseOrFail(
-        "<Ui><Frame name=\"Chat\">"
-        "<TitleRegion setAllPoints=\"true\"/>"
-        "<Scripts><OnDragStart>Special(self)</OnDragStart></Scripts>"
-        "</Frame></Ui>");
+        "<Ui><Frame name=\"F\"><Layers><Layer><Texture name=\"T\" file=\"x\" horizTile=\"true\" vertTile=\"false\"/>"
+        "</Layer></Layers></Frame></Ui>");
+    const std::string lua = emitFrameXml(root).lua;
+    REQUIRE(has(lua, ":SetHorizTile(true)"));
+    REQUIRE(has(lua, ":SetVertTile(false)"));
+}
+
+TEST_CASE("indented= sets a font string's wrapped lines in", "[framexml][emit]") {
+    XmlNode root = parseOrFail(
+        "<Ui><Frame name=\"F\"><Layers><Layer><FontString name=\"T\" indented=\"true\"/>"
+        "</Layer></Layers></Frame></Ui>");
+    REQUIRE(has(emitFrameXml(root).lua, ":SetIndentedWordWrap(true)"));
+}
+
+TEST_CASE("A TitleRegion is the frame's own title region", "[framexml][emit]") {
+    // The client builds a region and lays it out (0x004932c0); a press in it
+    // moves the frame. No drag scripts are written for it, and a window that
+    // is merely toplevel and movable is not given a body drag.
+    XmlNode root = parseOrFail(
+        "<Ui><Frame name=\"Loot\" toplevel=\"true\" movable=\"true\">"
+        "<TitleRegion setAllPoints=\"true\"/></Frame>"
+        "<Frame name=\"Sheet\" toplevel=\"true\" movable=\"true\"/></Ui>");
     const EmitResult r = emitFrameXml(root);
-    REQUIRE(has(r.lua, "SetMovable(true)"));
+    REQUIRE(has(r.lua, ":CreateTitleRegion()"));
+    REQUIRE(has(r.lua, ":GetTitleRegion():SetAllPoints("));
+    REQUIRE_FALSE(has(r.lua, "RegisterForDrag(\"LeftButton\")"));
     REQUIRE_FALSE(has(r.lua, "StartMoving()"));
 }
 
@@ -1242,6 +1268,21 @@ TEST_CASE("An edit box is built as it was declared", "[framexml][emit]") {
     const std::string lua = emitFrameXml(root).lua;
     REQUIRE(has(lua, ":SetMaxLetters(500)"));
     REQUIRE(has(lua, ":SetMultiLine(true)"));
+}
+
+TEST_CASE("A password box, its caret's blink and a message frame's fade are carried",
+          "[framexml][emit]") {
+    // CSimpleEditBox reads password="" and blinkSpeed="" (never below zero),
+    // CSimpleScrollingMessageFrame reads fade="", and a maxLines that is not
+    // a positive number is left out, as the client skips it.
+    XmlNode root = parseOrFail(
+        "<Ui><EditBox name=\"P\" password=\"true\" blinkSpeed=\"-2\"/>"
+        "<ScrollingMessageFrame name=\"M\" fade=\"false\" maxLines=\"0\"/></Ui>");
+    const std::string lua = emitFrameXml(root).lua;
+    REQUIRE(has(lua, ":SetPassword(true)"));
+    REQUIRE(has(lua, ":SetBlinkSpeed(0.0"));
+    REQUIRE(has(lua, ":SetFading(false)"));
+    REQUIRE_FALSE(has(lua, ":SetMaxLines"));
 }
 
 TEST_CASE("An edit box that says nothing about itself is left alone",

@@ -379,9 +379,21 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
     // What the player's own state forbids, said as 0x0072bdb0 says it, in its
     // order: dead (ERR_ATTACK_DEAD); charmed by someone else; then
     // UNIT_FIELD_FLAGS stunned (0x40000), pacified (0x20000), fleeing
-    // (0x800000) and confused (0x400000). When an aura is the cause the
-    // client names its mechanic instead (ERR_ATTACK_PREVENTED_BY_MECHANIC_S,
-    // see differences).
+    // (0x800000) and confused (0x400000). Each looks for the aura behind it
+    // (0x008046c0, 0x00804590, 0x00804610, 0x00804660, 0x00804690) and, where
+    // that aura has a mechanic, names it with ERR_ATTACK_PREVENTED_BY_MECHANIC_S
+    // - "UNKNOWN" for a mechanic SpellMechanic.dbc has no row for.
+    const auto refuse = [&](std::initializer_list<uint32_t> auraTypes, const char* key, const char* enUS) {
+        const uint32_t mechanic = owner_.playerAuraMechanic(auraTypes);
+        if (mechanic == 0) {
+            owner_.addUIError(interfaceString(key, enUS));
+            return;
+        }
+        const std::string* name = owner_.getSpellMechanicName(mechanic);
+        owner_.addUIError(chat_channels::luaFormat(
+            interfaceString("ERR_ATTACK_PREVENTED_BY_MECHANIC_S", "Can't attack while %s."),
+            {name ? *name : std::string("UNKNOWN")}));
+    };
     if (owner_.isPlayerDead() || owner_.isPlayerGhost()) {
         owner_.addUIError(interfaceString("ERR_ATTACK_DEAD", "You can't attack while dead."));
         return;
@@ -392,21 +404,36 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
             : (static_cast<uint64_t>(self->getField(static_cast<uint16_t>(charmedBy + 1))) << 32) |
                   self->getField(charmedBy);
         if (charmer != 0 && charmer != owner_.getPlayerGuid()) {
-            owner_.addUIError(interfaceString("ERR_ATTACK_CHARMED", "You can't attack while charmed."));
+            refuse({6u, 177u, 2u}, "ERR_ATTACK_CHARMED", "You can't attack while charmed.");
             return;
         }
         const uint16_t flagsIdx = fieldIndex(UF::UNIT_FIELD_FLAGS);
         const uint32_t flags = flagsIdx == 0xFFFF ? 0 : self->getField(flagsIdx);
-        struct Refusal { uint32_t flag; const char* key; const char* enUS; };
-        static constexpr Refusal kRefusals[] = {
-            {0x00040000u, "ERR_ATTACK_STUNNED",  "You can't attack while stunned."},
-            {0x00020000u, "ERR_ATTACK_PACIFIED", "You can't attack while pacified."},
-            {0x00800000u, "ERR_ATTACK_FLEEING",  "You can't attack while fleeing."},
-            {0x00400000u, "ERR_ATTACK_CONFUSED", "You can't attack while confused."},
-        };
-        for (const auto& r : kRefusals) {
-            if ((flags & r.flag) != 0) {
-                owner_.addUIError(interfaceString(r.key, r.enUS));
+        if ((flags & 0x00040000u) != 0) {
+            refuse({12u}, "ERR_ATTACK_STUNNED", "You can't attack while stunned.");
+            return;
+        }
+        if ((flags & 0x00020000u) != 0) {
+            refuse({25u, 60u}, "ERR_ATTACK_PACIFIED", "You can't attack while pacified.");
+            return;
+        }
+        if ((flags & 0x00800000u) != 0) {
+            refuse({7u}, "ERR_ATTACK_FLEEING", "You can't attack while fleeing.");
+            return;
+        }
+        if ((flags & 0x00400000u) != 0) {
+            refuse({5u}, "ERR_ATTACK_CONFUSED", "You can't attack while confused.");
+            return;
+        }
+        // Then a channel in progress (UNIT_CHANNEL_SPELL): no attack starts
+        // while one runs, and ERR_ATTACK_CHANNEL says so when the channel is
+        // one an attack would break (ChannelInterruptFlags 0x1000).
+        const uint16_t channelIdx = fieldIndex(UF::UNIT_CHANNEL_SPELL);
+        if (const uint32_t channel = channelIdx == 0xFFFF ? 0 : self->getField(channelIdx); channel != 0) {
+            const auto& cache = owner_.spellNameCacheRef();
+            if (const auto it = cache.find(channel); it != cache.end()) {
+                if ((it->second.channelInterruptFlags & 0x1000u) != 0)
+                    owner_.addUIError(interfaceString("ERR_ATTACK_CHANNEL", "You can't attack while channeling."));
                 return;
             }
         }
@@ -520,6 +547,18 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
 }
 
 void CombatHandler::stopAutoAttack() {
+    // 0x006e1660: with autoRangedCombat on, an attack stopped stops Auto Shot
+    // with it - the repeating spell the client recorded off a spell carrying
+    // AttributesEx4 0x01000000 (0x00542030, 0x00be5d84) - whether or not a
+    // swing was going.
+    if (const uint32_t repeating = owner_.autoRepeatSpellId();
+        repeating != 0 && addons::storedCVarValue("autoRangedCombat", "1") != "0") {
+        const auto& cache = owner_.spellNameCacheRef();
+        if (const auto it = cache.find(repeating);
+            it != cache.end() && (it->second.attrEx4 & 0x01000000u) != 0) {
+            owner_.stopAutoRepeat(true);
+        }
+    }
     if (!autoAttacking_ && !autoAttackRequested_) return;
     autoAttackRequested_ = false;
     autoAttacking_ = false;
@@ -864,6 +903,17 @@ void CombatHandler::handleAttackerStateUpdate(network::Packet& packet) {
         addCombatText(CombatTextEntry::IMMUNE, 0, 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
     } else if (data.victimState == 8) {
         addCombatText(CombatTextEntry::DEFLECT, 0, 0, isPlayerAttacker, 0, data.attackerGuid, data.targetGuid);
+    }
+
+    // 0x00755e40: a victim not yet lootable bleeds from a blow that reached it
+    // (HITINFO 0x2) and did damage (or carried 0x1000000), where it was hit
+    // (victim state 1) or the hit interrupted it (4).
+    if (owner_.bloodSpurtCallbackRef() && (data.hitInfo & 0x2u) != 0 &&
+        (data.totalDamage != 0 || (data.hitInfo & 0x1000000u) != 0) &&
+        (data.victimState == 1 || data.victimState == 4)) {
+        auto victim = std::dynamic_pointer_cast<Unit>(owner_.getEntityManager().getEntity(data.targetGuid));
+        if (victim && (victim->getDynamicFlags() & 0x1u) == 0)
+            owner_.bloodSpurtCallbackRef()(data.targetGuid, data.attackerGuid, (data.hitInfo & 0x8000u) != 0);
     }
 
     // Fire hit reaction animation on the victim
@@ -1527,7 +1577,7 @@ void CombatHandler::handlePetCastFailed(network::Packet& packet) {
 
 void CombatHandler::handlePetBroken(network::Packet& packet) {
     // Pet bond broken (died or forcibly dismissed) - clear pet state
-    owner_.petGuidRef() = 0;
+    owner_.setActivePet(0);
     owner_.petSpellListRef().clear();
     owner_.petAutocastSpellsRef().clear();
     owner_.petAutocastableSpellsRef().clear();

@@ -5,6 +5,8 @@
 #include "rendering/m2_model_classifier.hpp"
 #include "game/transport_path_repository.hpp"
 #include "core/coordinates.hpp"
+#include "addons/lua_api_registrations.hpp"
+#include "game/spell_visual_choice.hpp"
 #include "core/logger.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/spell_visual_system.hpp"
@@ -1527,6 +1529,8 @@ void EntitySpawner::processPendingTransportDoodads() {
             // The WMO's doodads are map doodads (0x007bf740 -> 0x007bef40,
             // which registers 0x007bd5a0 for their events).
             m2Renderer->setInstanceEventOwner(m2InstanceId, rendering::m2_event::Owner::Doodad, 0);
+            // Its owner, whose ObjectEffect state its $EWT/$EAC/$EMV/$EDC set.
+            doodadOwnerGo_[m2InstanceId] = it->guid;
             if (doodadTemplate.interiorLit) {
                 m2Renderer->setInstanceInteriorLight(m2InstanceId, doodadTemplate.interiorAmbient,
                                                      doodadTemplate.interiorDirect);
@@ -1948,6 +1952,115 @@ void EntitySpawner::processPendingMount() {
     LOG_INFO("processPendingMount: DONE displayId=", mountDisplayId, " model=", m2Path, " heightOffset=", heightOffset);
 }
 
+uint32_t EntitySpawner::createDisplayInstance(uint32_t displayId, const glm::vec3& renderPos, float renderYaw,
+                                              float scale) {
+    if (!renderer_ || !renderer_->getCharacterRenderer() || !assetManager_) return 0;
+    auto* cr = renderer_->getCharacterRenderer();
+    const std::string modelPath = getModelPathForDisplayId(displayId);
+    if (modelPath.empty()) return 0;
+    uint32_t modelId = 0;
+    if (auto cached = displayIdModelCache_.find(displayId);
+        cached != displayIdModelCache_.end() && cr->getModelData(cached->second)) {
+        modelId = cached->second;
+    } else {
+        auto m2Data = assetManager_->readFile(modelPath);
+        if (m2Data.empty()) return 0;
+        pipeline::M2Model model = pipeline::M2Loader::load(m2Data);
+        if (model.name.empty()) model.name = modelPath;
+        if (model.vertices.empty()) return 0;
+        if (model.version >= 264) {
+            auto skinData = assetManager_->readFile(pipeline::skinPathForM2(modelPath));
+            if (!skinData.empty()) pipeline::M2Loader::loadSkin(skinData, model);
+        }
+        if (!model.isValid()) return 0;
+        pipeline::loadExternalAnimations(*assetManager_, modelPath, m2Data, model);
+        modelId = nextCreatureModelId_++;
+        if (!cr->loadModel(model, modelId)) return 0;
+        displayIdModelCache_[displayId] = modelId;
+    }
+    // Kept while the player wears it.
+    cr->setModelEvictable(modelId, false);
+    if (!displayIdTexturesApplied_.count(displayId)) {
+        if (auto data = displayDataMap_.find(displayId); data != displayDataMap_.end())
+            applyCreatureDisplayTextures(displayId, modelId, data->second);
+    }
+    const uint32_t instanceId = cr->createInstance(modelId, renderPos, glm::vec3(0.0f, 0.0f, renderYaw),
+                                                   scale * creatureDisplayScale(displayId));
+    if (instanceId == 0) return 0;
+    applyHumanoidInstanceOverrides(instanceId, modelId, displayId);
+    normalizeHumanoidClothingGeosets(instanceId, modelId, displayId);
+    return instanceId;
+}
+
+void EntitySpawner::playBloodSpurt(uint64_t victimGuid, uint64_t attackerGuid, bool crushing,
+                                    uint32_t renderInstanceId) {
+    if (!gameHandler_ || !assetManager_ || !renderer_ || renderInstanceId == 0) return;
+    auto* svs = renderer_->getSpellVisualSystem();
+    if (!svs) return;
+    // CreatureDisplayInfo BloodLevel (column 11), else its CreatureModelData's
+    // BloodID (column 5), else the first UnitBloodLevels row (0x0072d940);
+    // that row's entry for violenceLevel names the UnitBlood row (0x00719ff0).
+    struct Tables {
+        std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> displays;  // display -> {model, level}
+        std::unordered_map<uint32_t, uint32_t> models;                          // model -> level
+        std::unordered_map<uint32_t, std::array<uint32_t, 3>> levels;           // level -> blood per violence
+        uint32_t firstLevel = 0;
+        std::unordered_map<uint32_t, std::array<uint32_t, 4>> bloods;           // blood -> front x2, back x2
+    };
+    static Tables t;
+    static bool loaded = false;
+    if (!loaded) {
+        loaded = true;
+        if (auto d = assetManager_->loadDBC("CreatureDisplayInfo.dbc"); d && d->isLoaded() && d->getFieldCount() > 11)
+            for (uint32_t i = 0; i < d->getRecordCount(); ++i)
+                t.displays[d->getUInt32(i, 0)] = {d->getUInt32(i, 1), d->getUInt32(i, 11)};
+        if (auto d = assetManager_->loadDBC("CreatureModelData.dbc"); d && d->isLoaded() && d->getFieldCount() > 5)
+            for (uint32_t i = 0; i < d->getRecordCount(); ++i) t.models[d->getUInt32(i, 0)] = d->getUInt32(i, 5);
+        if (auto d = assetManager_->loadDBC("UnitBloodLevels.dbc"); d && d->isLoaded() && d->getFieldCount() >= 4)
+            for (uint32_t i = 0; i < d->getRecordCount(); ++i) {
+                const uint32_t id = d->getUInt32(i, 0);
+                if (i == 0) t.firstLevel = id;
+                t.levels[id] = {d->getUInt32(i, 1), d->getUInt32(i, 2), d->getUInt32(i, 3)};
+            }
+        if (auto d = assetManager_->loadDBC("UnitBlood.dbc"); d && d->isLoaded() && d->getFieldCount() >= 5)
+            for (uint32_t i = 0; i < d->getRecordCount(); ++i)
+                t.bloods[d->getUInt32(i, 0)] = {d->getUInt32(i, 1), d->getUInt32(i, 2), d->getUInt32(i, 3),
+                                                d->getUInt32(i, 4)};
+    }
+    auto victim = gameHandler_->getEntityManager().getEntity(victimGuid);
+    if (!victim || !victim->isUnit()) return;
+    const uint16_t di = game::fieldIndex(game::UF::UNIT_FIELD_DISPLAYID);
+    const uint32_t display = di == 0xFFFF ? 0 : victim->getField(di);
+    uint32_t level = 0;
+    if (const auto it = t.displays.find(display); it != t.displays.end()) {
+        level = it->second.second;
+        if (!t.levels.count(level)) {
+            const auto model = t.models.find(it->second.first);
+            level = model != t.models.end() ? model->second : 0;
+        }
+    }
+    if (!t.levels.count(level)) level = t.firstLevel;
+    const auto row = t.levels.find(level);
+    if (row == t.levels.end()) return;
+    // violenceLevel as the client clamps it (0x007f39b0).
+    const int violence = std::clamp(game::spell_visual::violenceLevel(addons::storedCVarValue(
+                                        "violenceLevel", std::to_string(game::spell_visual::kViolenceLevelLimit))),
+                                    0, 2);
+    const auto blood = t.bloods.find(row->second[static_cast<size_t>(violence)]);
+    if (blood == t.bloods.end()) return;
+    // ChestBloodFront (15) where the attacker is ahead of the victim's
+    // facing, ChestBloodBack (16) where behind it.
+    int32_t attachment = 15;
+    if (auto attacker = gameHandler_->getEntityManager().getEntity(attackerGuid)) {
+        const glm::vec3 to = core::coords::canonicalToServer(glm::vec3(
+            attacker->getX() - victim->getX(), attacker->getY() - victim->getY(), 0.0f));
+        const float yaw = core::coords::canonicalToServerYaw(victim->getOrientation());
+        if (to.x * std::cos(yaw) + to.y * std::sin(yaw) < 0.0f) attachment = 16;
+    }
+    const size_t slot = (attachment == 15 ? 0u : 2u) + (crushing ? 1u : 0u);
+    svs->playEffectModelOnUnit(blood->second[slot], renderInstanceId, attachment);
+}
+
 bool EntitySpawner::loadRemoteMountModel(uint32_t displayId, uint32_t& modelId,
                                          std::string& modelPath, float& riderHeight) {
     modelId = 0;
@@ -2308,6 +2421,9 @@ void EntitySpawner::applyGameObjectState(uint64_t guid, uint8_t goState) {
         gameObjectPendingState_[guid] = goState;
         return;
     }
+    // The same field carries the art kit; a change re-dresses the model
+    // (0x00713ed0 -> 0x00713da0), and an unchanged one costs a compare.
+    applyGameObjectArtKit(guid);
     // A WMO has no animation sequences to hold a pose with.
     if (it->second.isWmo) return;
     auto* m2 = renderer_ ? renderer_->getM2Renderer() : nullptr;
@@ -2624,11 +2740,31 @@ void EntitySpawner::updateGameObjectDestroyPending() {
     for (uint64_t guid : done) despawnGameObject(guid);
 }
 
-void EntitySpawner::onGameObjectInfoReceived(uint32_t /*entry*/) {
+void EntitySpawner::onGameObjectInfoReceived(uint32_t entry) {
     // The client animates game objects by their state (see
     // applyGameObjectState) and, as the interaction object, by their type
     // (applyGameObjectInteraction, which asks for the template then); the
-    // template arriving does not change it.
+    // template arriving does not change that. A destructible building drawn
+    // before it came is drawn again in its state's look.
+    if (!gameHandler_) return;
+    const auto* info = gameHandler_->getCachedGameObjectInfo(entry);
+    if (!info || info->type != 33) return;
+    std::vector<uint64_t> redo;
+    for (const auto& [guid, inst] : gameObjectInstances_) {
+        if (destructibleStates_.count(guid)) continue;
+        auto e = gameHandler_->getEntityManager().getEntity(guid);
+        if (e && e->getType() == game::ObjectType::GAMEOBJECT &&
+            static_cast<const game::GameObject&>(*e).getEntry() == entry)
+            redo.push_back(guid);
+    }
+    for (uint64_t guid : redo) {
+        auto e = gameHandler_->getEntityManager().getEntity(guid);
+        const auto& go = static_cast<const game::GameObject&>(*e);
+        const float scale = gameObjectInstances_[guid].scale;
+        despawnGameObject(guid);
+        queueGameObjectSpawn(guid, entry, go.getDisplayId(), go.getX(), go.getY(), go.getZ(), go.getOrientation(),
+                             scale);
+    }
 }
 
 void EntitySpawner::despawnGameObject(uint64_t guid) {
@@ -2639,6 +2775,8 @@ void EntitySpawner::despawnGameObject(uint64_t guid) {
                        [guid](const PendingTransportDoodadBatch& b) { return b.guid == guid; }),
         pendingTransportDoodadBatches_.end());
 
+    clearGameObjectArtKit(guid);
+    clearDestructible(guid);
     auto it = gameObjectInstances_.find(guid);
     if (it == gameObjectInstances_.end()) return;
 

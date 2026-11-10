@@ -59,6 +59,13 @@ public:
 
     // --- Public API (delegated from GameHandler) ---
     void castSpell(uint32_t spellId, uint64_t targetGuid = 0);
+    /// 0x0080da40 then 0x0080bc80: the spell cast at a game object, through
+    /// the cast entry's own checks (0x0080cce0) - from the item in (bag,
+    /// slot) where `itemGuid` names one. False where a check refused it.
+    bool castAtGameObject(uint32_t spellId, uint64_t gameObjectGuid, uint64_t itemGuid = 0,
+                          uint8_t bag = 0xFF, uint8_t slot = 0);
+    /// 0x007283a0: an aura of the player's of the type, on, for the spell.
+    bool playerAuraAffects(uint32_t auraType, uint32_t spellId) const;
     /// The player's cast of a spell at an item (CMSG_CAST_SPELL, item target).
     void castSpellAtItem(uint32_t spellId, uint64_t itemGuid) { sendPlayerCast(spellId, 0, itemGuid); }
     /// A pet's spell cast by the pet itself (0x005d4210 -> 0x0080cce0,
@@ -203,7 +210,6 @@ public:
     [[nodiscard]] bool isCasting() const { return casting_ || restorationActive_; }
     [[nodiscard]] bool isChanneling() const { return casting_ ? castIsChannel_ : restorationActive_; }
     [[nodiscard]] bool isRestoring() const { return restorationActive_; }
-    [[nodiscard]] bool isGameObjectInteractionCasting() const;
     [[nodiscard]] uint32_t getCurrentCastSpellId() const {
         return casting_ ? currentCastSpellId_ : restorationSpellId_;
     }
@@ -244,6 +250,14 @@ public:
     // SpellFocusObject.dbc name ("Anvil", "Cooking Fire", ...) for
     // requires-spell-focus cast failures; empty if unknown.
     const std::string& getSpellFocusName(uint32_t focusId);
+    /// SpellMechanic.dbc's name for a mechanic (table 0xad4910, +4), or null
+    /// when it has no row.
+    const std::string* getSpellMechanicName(uint32_t mechanicId);
+    /// The mechanic 0x00804430 finds on the player's auras of the types given,
+    /// tried in turn as the client's holds try them (0x008046c0 and siblings)
+    /// with no spell being cast: the first such aura's effect mechanic, else
+    /// its spell's. 0 for none.
+    uint32_t playerAuraMechanic(std::initializer_list<uint32_t> auraTypes);
 
     // TotemCategory.dbc name ("Blacksmith Hammer", "Mining Pick", ...) for
     // totem-category cast failures; empty if unknown.
@@ -456,6 +470,9 @@ public:
     /// back to the gem that is in the socket - the item fields carry the
     /// enchantment id and nothing else.
     [[nodiscard]] uint32_t getEnchantGemItem(uint32_t enchantId) const;
+    /// 0x00802850: the spell this one is in the current instance's difficulty
+    /// (SpellDifficulty.dbc by its SpellDifficultyID), else itself.
+    [[nodiscard]] uint32_t difficultySpell(uint32_t spellId) const;
     [[nodiscard]] uint8_t getSpellDispelType(uint32_t spellId) const;
     [[nodiscard]] bool isSpellInterruptible(uint32_t spellId) const;
     [[nodiscard]] bool isSpellPassive(uint32_t spellId) const;
@@ -768,8 +785,6 @@ private:
     int32_t powerCost(uint32_t spellId, const Entity& player, int depth) const;
     /// SMSG_SPELL_START / SMSG_SPELL_GO's cast flag 0x800: the caster's power.
     void castPowerSaid(uint64_t casterUnit, uint32_t spellId, uint32_t power, bool go);
-    /// 0x007283a0: an aura of the player's of the type, on, for the spell.
-    bool playerAuraAffects(uint32_t auraType, uint32_t spellId) const;
     /// 0x00812410's SupercededBySpell for the player's race and class, 0 for none.
     uint32_t supersededBy(uint32_t spellId) const;
     void loadAreaGroups() const;
@@ -837,6 +852,8 @@ private:
     // SpellFocusObject.dbc names, loaded lazily
     std::unordered_map<uint32_t, std::string> spellFocusNames_;
     bool spellFocusDbcLoaded_ = false;
+    std::unordered_map<uint32_t, std::string> spellMechanicNames_;
+    bool spellMechanicDbcLoaded_ = false;
 
     // TotemCategory.dbc names, loaded lazily
     std::unordered_map<uint32_t, std::string> totemCategoryNames_;
@@ -869,6 +886,9 @@ private:
     uint32_t petUnspentTalents_ = 0;
     bool petTalentsKnown_ = false;
     mutable std::unordered_map<uint32_t, int32_t> petTalentTypes_;  ///< CreatureFamily -> PetTalentType
+    /// SpellDifficulty.dbc: DifficultySpellID[4] by row id (difficultySpell).
+    mutable std::unordered_map<uint32_t, std::array<uint32_t, 4>> spellDifficulties_;
+    mutable bool spellDifficultyLoaded_ = false;
     std::unordered_map<uint32_t, uint8_t> learnedTalents_[2];
     std::array<std::array<uint16_t, MAX_GLYPH_SLOTS>, 2> learnedGlyphs_{};
     std::unordered_map<uint32_t, TalentEntry> talentCache_;

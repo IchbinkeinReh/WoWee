@@ -10,6 +10,9 @@ namespace world_map {
 
 void SubzoneTooltipLayer::render(const LayerContext& ctx) {
     if (ctx.viewLevel != ViewLevel::ZONE) return;
+    // In FrameXML's frame the area label is the client's, fed by
+    // UpdateMapHighlight; this one is this client's own for its own window.
+    if (ctx.hostedInFrame) return;
     if (ctx.currentZoneIdx < 0 || !ctx.zones) return;
 
     ImVec2 mp = ImGui::GetIO().MousePos;

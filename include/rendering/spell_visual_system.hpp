@@ -68,6 +68,10 @@ public:
     /// type 0 through 0x00800610) and SMSG_PLAY_SPELL_IMPACT (0x1F7, type 1
     /// through 0x008006c0) play one on a unit.
     void playKit(uint32_t kitId, spell_kit::KitType type, const glm::vec3& worldPosition, uint32_t renderInstanceId);
+    /// One SpellVisualEffectName model on a unit's attachment, played once as
+    /// a kit's impact model is (0x006f94c0 with 0x00744870) - a blood spurt.
+    /// Nothing where the unit's model has no such attachment.
+    void playEffectModelOnUnit(uint32_t effectNameId, uint32_t renderInstanceId, int32_t attachment);
 
     /// A ground-aimed cast's area kits at its destination (0x0080e1b0): the
     /// InstantAreaKit (+0x5c), and the ImpactAreaKit (+0x60) unless a
@@ -947,6 +951,8 @@ private:
     void playKitWeaponEffects(const std::vector<KitWeaponEffect>& effects, uint32_t attachInstanceId,
                               bool isPrecast, uint32_t castTimeMs);
     WeaponEffectHolder weaponEffectHolder_;
+    /// SpellVisualEffectName's models by id, kept for playEffectModelOnUnit.
+    std::unordered_map<uint32_t, std::string> effectNamePaths_;
     /// A unit's CreatureModelData WorldEffectScale (+0x5c), which sizes
     /// the kit models it places in the world (0x006f7950).
     AttachedEffectScale worldEffectScale_;

@@ -1,6 +1,8 @@
 // lua_system_api.cpp - System, time, sound, locale, map, addons, instances, and utilities Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include <array>
+#include "rendering/m2_renderer.hpp"
+#include "game/spell_visual_choice.hpp"
 #include <chrono>
 #include <algorithm>
 #include <cctype>
@@ -325,6 +327,36 @@ static int calendarInviteType(const CalendarRecord& rec) {
 
 /// 0x005b8040: a holiday's (flags 8) day of a run of two or more - its
 /// first "START", its last "END", the rest "ONGOING" - else "".
+/// A Holidays.dbc row's name, description and texture (0x005b9430,
+/// 0x005b9490): through HolidayNames (column 49) and HolidayDescriptions (50),
+/// nothing where either is missing.
+struct HolidayText { std::string name, description, texture; };
+static const HolidayText* holidayText(wowee::game::GameHandler* gh, uint32_t holidayId) {
+    static std::unordered_map<uint32_t, HolidayText> texts;
+    static bool loaded = false;
+    if (!loaded && gh) {
+        if (auto* am = gh->services().assetManager; am && am->isInitialized()) {
+            loaded = true;
+            std::unordered_map<uint32_t, std::string> names, descriptions;
+            if (auto d = am->loadDBC("HolidayNames.dbc"); d && d->isLoaded() && d->getFieldCount() >= 2)
+                for (uint32_t i = 0; i < d->getRecordCount(); ++i) names[d->getUInt32(i, 0)] = d->getString(i, 1);
+            if (auto d = am->loadDBC("HolidayDescriptions.dbc"); d && d->isLoaded() && d->getFieldCount() >= 2)
+                for (uint32_t i = 0; i < d->getRecordCount(); ++i)
+                    descriptions[d->getUInt32(i, 0)] = d->getString(i, 1);
+            if (auto d = am->loadDBC("Holidays.dbc"); d && d->isLoaded() && d->getFieldCount() > 51) {
+                for (uint32_t i = 0; i < d->getRecordCount(); ++i) {
+                    const auto n = names.find(d->getUInt32(i, 49));
+                    const auto ds = descriptions.find(d->getUInt32(i, 50));
+                    if (n == names.end() || ds == descriptions.end()) continue;
+                    texts[d->getUInt32(i, 0)] = {n->second, ds->second, d->getString(i, 51)};
+                }
+            }
+        }
+    }
+    const auto it = texts.find(holidayId);
+    return it != texts.end() ? &it->second : nullptr;
+}
+
 static const char* calendarSequenceType(uint32_t flags, uint32_t index, uint32_t count) {
     if ((flags & wowee::game::calendar_flag::kHoliday) == 0 || count < 2) return "";
     if (index == 0) return "START";
@@ -1529,6 +1561,10 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     // so only GetCVarDefault was left on "0" - the value the Combat panel's
     // Defaults button would have restored, turning off a feature that is on.
     else if (n == "autoselfcast") lua_pushstring(L, "1");
+    // Stopping an attack stops Auto Shot with it, as the client registers it
+    // (0x00510000 "autoRangedCombat" "1") and as CombatHandler::stopAutoAttack
+    // reads it.
+    else if (n == "autorangedcombat") lua_pushstring(L, "1");
     // Offline guild members are listed, as the client registers it (0x00510000
     // "guildShowOffline" "1") and as this client's roster shows them
     // (guildShowOffline() starts true, and the roster it is given holds
@@ -2085,6 +2121,14 @@ static void applyCVarSideEffects(lua_State* L, const std::string& key,
     // client setting, and not the ImGui window scale beside it in the settings
     // window. Those are two different interfaces that happen to share a word.
     // The power UnitPower and the cast read (0x0071c2e0).
+    // 0x007f39b0: below level 2 the blood spurt's texture is its low or
+    // medium one.
+    if (key == "violencelevel") {
+        const int level = game::spell_visual::violenceLevel(value);
+        static constexpr const char* kSpurt[2] = {"BloodSpurtSmall01_Low.blp", "BloodSpurtSmall01_Medium.blp"};
+        if (level >= 2) rendering::M2Renderer::setTextureSubstitution({}, {});
+        else rendering::M2Renderer::setTextureSubstitution("BloodSpurtSmall01.blp", kSpurt[level]);
+    }
     if (key == "predictedpower") {
         if (auto* gh = getGameHandler(L)) gh->setPredictedPowerEnabled(value != "0");
     }
@@ -3765,15 +3809,17 @@ static int& selectedDisplayChannel() { static int selected = 0; return selected;
 
 /// One row of the channel pane, as 0x00504840 lays them out (0x20 bytes each
 /// at 0xb74468): the Group, World and Custom headers in that order, each
-/// followed - unless collapsed - by its rows. Group holds a Party row while
-/// the player's party has anyone else in it and a Battleground row in a raid
-/// on a battleground or arena map (0x00572f50); the Raid row and the voice
-/// sessions behind both are voice chat's, which this client has none of.
+/// followed - unless collapsed - by its rows. Group holds, off a battleground,
+/// a Raid row in a raid (GetNumRaidMembers, 0xbeb608) and else a Party row
+/// while the player's party has anyone else in it; on a battleground or arena
+/// map (0x00572f50) the Party row and a Battleground row - the Raid row there
+/// is voice chat's, which this client has none of. The header counts the
+/// three flags, so a raid's Group says 2 over its one row, as the client's.
 /// World holds the joined zone channels (slot +0x94), Custom the others not
 /// being left (+0xa0). A header's count is every row of its kind, shown or
 /// collapsed.
 struct ChannelDisplayRow {
-    enum class Kind { Header, Channel, Party, Battleground } kind = Kind::Header;
+    enum class Kind { Header, Channel, Party, Raid, Battleground } kind = Kind::Header;
     int category = 0;                                      // header: 0 group, 1 world, 2 custom
     const game::chat_channels::Slot* slot = nullptr;       // channel rows
     uint32_t count = 0;                                    // header: rows of its kind; group rows: members
@@ -3792,13 +3838,19 @@ static std::vector<ChannelDisplayRow> channelDisplayRows(game::GameHandler* gh) 
     uint32_t subgroupOthers = 0;
     for (const auto& m : party.members)
         if (m.guid != self && (!raid || m.subGroup == party.subGroup)) ++subgroupOthers;
-    const bool partyRow = inGroup && subgroupOthers > 0;
+    const bool partyFlag = inGroup && subgroupOthers > 0;
     const int mapType = gh->currentMapInstanceType();
     const bool bgRow = raid && (mapType == 3 || mapType == 4);
+    const bool raidRow = raid && !bgRow;
+    const uint32_t raidCount = static_cast<uint32_t>(party.members.size()) + 1;
     rows.push_back({ChannelDisplayRow::Kind::Header, 0, nullptr,
-                    static_cast<uint32_t>(partyRow) + static_cast<uint32_t>(bgRow), false});
+                    static_cast<uint32_t>(partyFlag) + static_cast<uint32_t>(raidRow) +
+                        static_cast<uint32_t>(bgRow),
+                    false});
     if (!collapsed[0]) {
-        if (partyRow) rows.push_back({ChannelDisplayRow::Kind::Party, 0, nullptr, subgroupOthers + 1, false});
+        if (raidRow) rows.push_back({ChannelDisplayRow::Kind::Raid, 0, nullptr, raidCount, false});
+        else if (partyFlag)
+            rows.push_back({ChannelDisplayRow::Kind::Party, 0, nullptr, subgroupOthers + 1, false});
         if (bgRow)
             rows.push_back({ChannelDisplayRow::Kind::Battleground, 0, nullptr,
                             static_cast<uint32_t>(party.members.size()) + 1, false});
@@ -4030,7 +4082,9 @@ static int lua_GetBattlefieldPosition(lua_State* L) {
             svc->mapUVForWorldPos(p->wowX, p->wowY, 0.0f, u, v)) {
             lua_pushnumber(L, u);
             lua_pushnumber(L, v);
-            lua_pushstring(L, gh->lookupName(p->guid).c_str());
+            // A name not yet known is asked for, and its answer raises
+            // WORLD_MAP_NAME_UPDATE (0x0054c2e0 -> 0x005496c0).
+            lua_pushstring(L, gh->nameOrAsk(p->guid, "WORLD_MAP_NAME_UPDATE", false).c_str());
             return 3;
         }
     }
@@ -6086,8 +6140,18 @@ static int lua_IsArenaTeamCaptain(lua_State* L) {
     return 1;
 }
 
-// Closing the battlemaster's window, which is a client-side dismissal.
-static int lua_CloseBattlefield(lua_State* L) { (void)L; return 0; }
+// CloseBattlefield() (0x00549b40) - the battlemaster's window closing:
+// BATTLEFIELDS_CLOSED, and the interaction with that battlemaster let go when
+// it is the one under way (0x00518d50), the battlemaster forgotten.
+static int lua_CloseBattlefield(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!gh) return 0;
+    gh->fireAddonEvent("BATTLEFIELDS_CLOSED", {});
+    const uint64_t battlemaster = gh->battlemasterGuid();
+    if (battlemaster != 0 && gh->getInteractionObject() == battlemaster) gh->setInteractionObject(0);
+    gh->clearBattlemasterGuid();
+    return 0;
+}
 
 // CanExitVehicle(): 1 where the player's seat has Flags 0x2000000, else nil
 // (0x005fb9c0).
@@ -6450,29 +6514,112 @@ static int lua_LeaveBattlefield(lua_State* L) {
 
 // ---- World map player arrow and ping ----
 //
-// In the real client these manage a rotating 3D arrow model showing where the
-// player is standing and which way they face, plus the ping that plays when a
-// party member signals a spot on the map.
-//
-// This client already draws its own player marker, party dots and quest POIs
-// over the map, so the arrow would be a second marker on top of the first.
-// They are defined anyway because two of them are called from
-// WorldMapFrame_OnLoad: without them that function raised on its fifth line,
-// so the black separator never got its colour, the ping never initialised, and
-// the WorldMapFrame_Update() call that ends OnLoad never ran at all.
-//
-// UpdateWorldMapArrowFrames is not among them: it was already registered
-// elsewhere in this file, which is why it never appeared as missing.
-static int lua_CreateWorldMapArrowFrame(lua_State* L) { (void)L; return 0; }
-static int lua_ShowWorldMapArrowFrame(lua_State* L) { (void)L; return 0; }
-static int lua_PositionWorldMapArrowFrame(lua_State* L) { (void)L; return 0; }
-static int lua_InitWorldMapPing(lua_State* L) { (void)L; return 0; }
-
-// The battlefield minimap's own copy of the arrow, for the same reason and
-// with the same answer as the world map's above.
-static int lua_CreateMiniWorldMapArrowFrame(lua_State* L) { (void)L; return 0; }
-static int lua_PositionMiniWorldMapArrowFrame(lua_State* L) { (void)L; return 0; }
-static int lua_ShowMiniWorldMapArrowFrame(lua_State* L) { (void)L; return 0; }
+// The world map's arrow and ping as the client makes them (WorldMap.cpp):
+// two model frames, PlayerArrowFrame and PlayerArrowEffectFrame, showing
+// Interface\Minimap\MinimapArrow.mdx at a model scale of the screen's DDC
+// height * 1.6666 (0x00544750), held at the middle of their frames
+// (0x005446f0) and turned to the player's facing (0x005449f0); and the
+// FrameXML's WorldMapPing model held at the middle of its frame (0x00545ff0).
+// Each is a short chunk run with the call's arguments, compiled once.
+static int runChunk(lua_State* L, const char* key, const char* code) {
+    lua_getfield(L, LUA_REGISTRYINDEX, key);
+    if (!lua_isfunction(L, -1)) {
+        lua_pop(L, 1);
+        if (luaL_loadstring(L, code) != 0) return lua_error(L);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, LUA_REGISTRYINDEX, key);
+    }
+    lua_insert(L, 1);
+    lua_call(L, lua_gettop(L) - 1, 0);
+    return 0;
+}
+// The two arrow pairs' names and model scale factors: the world map's
+// (0x00544750, * 1.6666) and the battlefield minimap's (0x005448a0, * 1.1111).
+struct ArrowPair { const char* arrow; const char* effect; double factor; };
+static constexpr ArrowPair kWorldArrows{"PlayerArrowFrame", "PlayerArrowEffectFrame", 1.6666666};
+static constexpr ArrowPair kMiniArrows{"PlayerMiniArrowFrame", "PlayerMiniArrowEffectFrame", 1.1111112};
+/// runChunk with the pair's names (and factor) ahead of the call's arguments.
+static int runArrowChunk(lua_State* L, const ArrowPair& pair, bool withFactor, const char* key, const char* code) {
+    int at = 1;
+    lua_pushstring(L, pair.arrow);
+    lua_insert(L, at++);
+    lua_pushstring(L, pair.effect);
+    lua_insert(L, at++);
+    if (withFactor) {
+        lua_pushnumber(L, pair.factor);
+        lua_insert(L, at++);
+    }
+    return runChunk(L, key, code);
+}
+static constexpr const char* kCreateArrowsLua =
+    "local an, en, factor, parent = ...\n"
+    "if type(parent) ~= 'table' then error('Usage: CreateWorldMapArrowFrame(parent)') end\n"
+    "local w, h = GetScreenWidth(), GetScreenHeight()\n"
+    "local a = (h and h > 0) and w / h or 4 / 3\n"
+    "for _, name in ipairs({an, en}) do\n"
+    "  local f = _G[name]\n"
+    "  if not f then f = CreateFrame('Model', name, parent) else f:SetParent(parent) end\n"
+    "  f:SetModel('Interface\\\\Minimap\\\\MinimapArrow.mdx')\n"
+    "  f:SetModelScale(1 / math.sqrt(a * a + 1) * factor)\n"
+    "  __WoweeModelCentered(f)\n"
+    "end\n";
+static constexpr const char* kShowArrowsLua =
+    "local an, en, show = ...\n"
+    "local a, e = _G[an], _G[en]\n"
+    "if not a or not e or not a.GetModel or not a:GetModel() then return end\n"
+    "if show then a:Show() e:Show() else a:Hide() e:Hide() end\n";
+// The offsets are the screen's units, not the frames' own
+// (x / (1024 * ar * 0.75) of the DDC width, 0x005430a0 / 0x005432c0).
+static constexpr const char* kPositionArrowsLua =
+    "local an, en, point, rel, relPoint, x, y = ...\n"
+    "local a, e = _G[an], _G[en]\n"
+    "if not a or not e or not a:GetModel() then return end\n"
+    "if type(point) ~= 'string' or type(rel) ~= 'string' then\n"
+    "  error('Usage: PositionWorldMapArrowFrame(\"point\" \"frame\" [, relativePoint] [, offsetX, offsetY])')\n"
+    "end\n"
+    "if not _G[rel] then error(\"Couldn't find frame named '\" .. rel .. \"'\") end\n"
+    "for _, f in ipairs({a, e}) do\n"
+    "  local s = f:GetEffectiveScale()\n"
+    "  if not s or s <= 0 then s = 1 end\n"
+    "  f:SetPoint(point, rel, relPoint or point, (tonumber(x) or 0) / s, (tonumber(y) or 0) / s)\n"
+    "end\n";
+// 0x00545e60 -> 0x00544750; 0x00545f20 -> 0x005448a0.
+static int lua_CreateWorldMapArrowFrame(lua_State* L) {
+    return runArrowChunk(L, kWorldArrows, true, "wowee.CreateArrows", kCreateArrowsLua);
+}
+static int lua_CreateMiniWorldMapArrowFrame(lua_State* L) {
+    return runArrowChunk(L, kMiniArrows, true, "wowee.CreateArrows", kCreateArrowsLua);
+}
+// 0x005434e0 / 0x00543540: both shown or both hidden.
+static int lua_ShowWorldMapArrowFrame(lua_State* L) {
+    return runArrowChunk(L, kWorldArrows, false, "wowee.ShowArrows", kShowArrowsLua);
+}
+static int lua_ShowMiniWorldMapArrowFrame(lua_State* L) {
+    return runArrowChunk(L, kMiniArrows, false, "wowee.ShowArrows", kShowArrowsLua);
+}
+static int lua_PositionWorldMapArrowFrame(lua_State* L) {
+    return runArrowChunk(L, kWorldArrows, false, "wowee.PositionArrows", kPositionArrowsLua);
+}
+static int lua_PositionMiniWorldMapArrowFrame(lua_State* L) {
+    return runArrowChunk(L, kMiniArrows, false, "wowee.PositionArrows", kPositionArrowsLua);
+}
+// 0x00545ff0: the parent's WorldMapPing, held at the middle of its frame.
+static int lua_InitWorldMapPing(lua_State* L) {
+    return runChunk(L, "wowee.InitWorldMapPing",
+        "local parent = ...\n"
+        "if type(parent) ~= 'table' then error('Usage: InitWorldMapPing(parent)') end\n"
+        "if WorldMapPing then __WoweeModelCentered(WorldMapPing) end\n");
+}
+// 0x00545fe0 -> 0x005449f0: the arrows turned to the player's facing.
+static int lua_UpdateWorldMapArrowFrames(lua_State* L) {
+    return runChunk(L, "wowee.UpdateWorldMapArrowFrames",
+        "local facing = GetPlayerFacing()\n"
+        "for _, name in ipairs({'PlayerArrowFrame', 'PlayerArrowEffectFrame', 'PlayerMiniArrowFrame',\n"
+        "                       'PlayerMiniArrowEffectFrame'}) do\n"
+        "  local f = _G[name]\n"
+        "  if f and f.SetFacing then f:SetFacing(facing) end\n"
+        "end\n");
+}
 
 // ---- The stored combat log (UnitCombatLog_C.cpp) ----
 //
@@ -6577,10 +6724,19 @@ static int lua_CombatLogClearEntries(lua_State* L) {
     return 0;
 }
 
-// CombatTextSetActiveUnit(unit) - which unit the floating combat text follows.
-// It tells the client where to aim the events it already sends; the events do
-// not change, so this is recorded by the caller and nothing is needed here.
-static int lua_CombatTextSetActiveUnit(lua_State* L) { (void)L; return 0; }
+// CombatTextSetActiveUnit(unit) (0x0074d580) - which unit the floating combat
+// text follows: COMBAT_TEXT_UPDATE is raised for what happens to that unit
+// (0x0074d430), which the interface switches to the vehicle while the player
+// drives one.
+static int lua_CombatTextSetActiveUnit(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const char* uid = lua_tostring(L, 1);
+    if (!gh) return 0;
+    std::string unit(uid ? uid : "");
+    toLowerInPlace(unit);
+    gh->setCombatTextUnit(unit.empty() ? 0 : resolveUnitGuid(gh, unit));
+    return 0;
+}
 
 // GetBattlefieldMapIconScale() (0x0054c740) → what to multiply the map's icon
 // sizes by: the minimap icon scale of the running battle's Map.dbc row (1.25
@@ -6692,16 +6848,46 @@ static int lua_GetBattlegroundInfo(lua_State* L) {
     if (index < 1 || index > static_cast<int>(list.size())) return luaReturnNil(L);
     const auto& bg = list[static_cast<size_t>(index - 1)];
 
-    // A row naming no level range - the random battleground is the only one -
-    // is not a row saying nobody qualifies.
+    // 0x0054ba00: the random battleground (32) at level 80 only; any other
+    // where a PvpDifficulty.dbc bracket of its first map holds the player's
+    // level - the rows of one map lie together, and the walk stops after them.
+    constexpr uint32_t kRandomBattleground = 32;
     const uint32_t level = gh->getPlayerLevel();
-    const bool hasRange = bg.minLevel != 0 || bg.maxLevel != 0;
-    const bool canEnter = !hasRange || (level >= bg.minLevel && level <= bg.maxLevel);
+    struct Bracket { uint32_t map, minLevel, maxLevel; };
+    static std::vector<Bracket> brackets;
+    static bool bracketsLoaded = false;
+    if (!bracketsLoaded) {
+        if (auto* am = gh->services().assetManager; am && am->isInitialized()) {
+            bracketsLoaded = true;
+            if (auto dbc = am->loadDBC("PvpDifficulty.dbc"); dbc && dbc->isLoaded() && dbc->getFieldCount() >= 5)
+                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
+                    brackets.push_back({dbc->getUInt32(i, 1), dbc->getUInt32(i, 3), dbc->getUInt32(i, 4)});
+        }
+    }
+    bool canEnter = false;
+    if (bg.id == kRandomBattleground) {
+        canEnter = level == 80;
+    } else if (!bg.mapIds.empty()) {
+        bool inMap = false;
+        for (const auto& b : brackets) {
+            if (b.map != bg.mapIds.front()) {
+                if (inMap) break;
+                continue;
+            }
+            inMap = true;
+            if (b.minLevel <= level && level <= b.maxLevel) {
+                canEnter = true;
+                break;
+            }
+        }
+    }
 
     lua_pushstring(L, bg.name.c_str());
     lua_pushboolean(L, canEnter ? 1 : 0);
-    lua_pushboolean(L, 0);                       // isHoliday: world state not parsed
-    lua_pushboolean(L, bg.mapCount > 1 ? 1 : 0); // several maps means a pool, i.e. random
+    // isHoliday: the value of the world state the row names (0x00548d10).
+    const bool holiday = bg.holidayWorldState != 0 && gh->getWorldState(bg.holidayWorldState).value_or(0) != 0;
+    lua_pushboolean(L, holiday ? 1 : 0);
+    lua_pushboolean(L, bg.id == kRandomBattleground ? 1 : 0); // isRandom (0x0054e010)
     lua_pushnumber(L, bg.id);
     return 5;
 }
@@ -9474,7 +9660,8 @@ void registerSystemLuaAPI(lua_State* L) {
                 // voiceEnabled, voiceActive for the pane's row: a header names
                 // its category (CHANNEL_CATEGORY_GROUP/WORLD/CUSTOM, localized)
                 // with its collapse flag and count; the group rows are
-                // CHAT_MSG_PARTY and CHAT_MSG_BATTLEGROUND with their members;
+                // CHAT_MSG_PARTY, CHAT_MSG_RAID and CHAT_MSG_BATTLEGROUND with
+                // their members;
                 // a channel row gives its name and number under WORLD or
                 // CUSTOM. The last is the selected row's 1.
                 {"GetChannelDisplayInfo", [](lua_State* L) -> int {
@@ -9511,7 +9698,9 @@ void registerSystemLuaAPI(lua_State* L) {
                 if (active) lua_pushnumber(L, 1); else lua_pushnil(L);
                 lua_pushstring(L, row.world ? kCategories[1] : kCategories[2]);
             } else {
-                const char* key = row.kind == ChannelDisplayRow::Kind::Party ? "CHAT_MSG_PARTY" : "CHAT_MSG_BATTLEGROUND";
+                const char* key = row.kind == ChannelDisplayRow::Kind::Party ? "CHAT_MSG_PARTY"
+                                  : row.kind == ChannelDisplayRow::Kind::Raid  ? "CHAT_MSG_RAID"
+                                                                               : "CHAT_MSG_BATTLEGROUND";
                 lua_pushstring(L, game::interfaceString(key, key).c_str());
                 lua_pushnil(L);
                 lua_pushnil(L);
@@ -9867,7 +10056,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 // the quest pins this tree moves are named frames, and the two
                 // verbs for those (ShowWorldMapArrowFrame and
                 // PositionWorldMapArrowFrame, above) are both answered.
-                {"UpdateWorldMapArrowFrames",   lua_ReturnNothing},
+                {"UpdateWorldMapArrowFrames",   lua_UpdateWorldMapArrowFrames},
                 {"SetSelectedSkill", [](lua_State* L) -> int {
             selectedSkill() = static_cast<int>(luaL_optnumber(L, 1, 0)); return 0; }},
                 {"Sound_GameSystem_GetOutputDriverNameByIndex", lua_Sound_GetOutputDriverNameByIndex},
@@ -9947,11 +10136,17 @@ void registerSystemLuaAPI(lua_State* L) {
             auto* svc = getLuaServices(L);
             const float u = static_cast<float>(luaL_optnumber(L, 1, -1.0));
             const float v = static_cast<float>(luaL_optnumber(L, 2, -1.0));
-            std::string name;
-            if (svc && svc->getMapZoneNameAt) name = svc->getMapZoneNameAt(u, v);
-            if (name.empty()) lua_pushnil(L);
-            else              lua_pushstring(L, name.c_str());
-            for (int i = 0; i < 7; ++i) lua_pushnil(L);
+            // 0x00545110: the name, and where the highlight is to be drawn -
+            // its texture's folder, the part of the texture used, its size
+            // and its place on the map - which WorldMapButton_OnUpdate hands
+            // WorldMapHighlight. Nil for the texture and zeros where there
+            // is no highlight, and two nils where there is nothing at all.
+            LuaServices::MapHighlightAnswer a;
+            if (svc && svc->getMapHighlightAt) a = svc->getMapHighlightAt(u, v);
+            if (a.name.empty()) lua_pushnil(L); else lua_pushstring(L, a.name.c_str());
+            if (a.fileName.empty()) lua_pushnil(L); else lua_pushstring(L, a.fileName.c_str());
+            for (float f : {a.texCoordX, a.texCoordY, a.textureX, a.textureY, a.scrollX, a.scrollY})
+                lua_pushnumber(L, f);
             return 8;
         }},
                 // Clicking a continent drills into the zone under the point.
@@ -10856,7 +11051,9 @@ void registerSystemLuaAPI(lua_State* L) {
             }
             if (row.kind == wowee::game::CalendarEntryKind::Holiday) {
                 const auto& holiday = cal.holidays[row.index];
-                lua_pushstring(L, holiday.textureFilename.c_str());
+                // Its HolidayNames name (0x005b9430).
+                const HolidayText* text = holidayText(gh, holiday.id);
+                lua_pushstring(L, text ? text->name.c_str() : "");
                 lua_pushnumber(L, 0);              // hour
                 lua_pushnumber(L, 0);              // minute
                 lua_pushstring(L, "HOLIDAY");
@@ -10916,9 +11113,21 @@ void registerSystemLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
             const auto& holiday = gh->getCalendarData().holidays[row.index];
-            lua_pushstring(L, holiday.textureFilename.c_str());
-            lua_pushstring(L, "");
-            lua_pushstring(L, holiday.textureFilename.c_str());
+            // 0x005c1480: the Holidays row's name and description, through
+            // HolidayNames (column 49) and HolidayDescriptions (50) - three
+            // nils where either is missing - and the texture the server named
+            // for it (+0xe0), else the row's own (51).
+            const HolidayText* text = holidayText(gh, holiday.id);
+            if (!text) {
+                lua_pushnil(L);
+                lua_pushnil(L);
+                lua_pushnil(L);
+                return 3;
+            }
+            lua_pushstring(L, text->name.c_str());
+            lua_pushstring(L, text->description.c_str());
+            lua_pushstring(L, holiday.textureFilename.empty() ? text->texture.c_str()
+                                                              : holiday.textureFilename.c_str());
             return 3;
         }},
                 // name, calendarType, raidID, hour, minute, difficulty,

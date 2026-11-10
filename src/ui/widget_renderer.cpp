@@ -59,6 +59,21 @@ uint32_t textureColor(const Widget& w) {
 using TextRun = wowee::ui::WrapRun;
 using wowee::ui::parseMarkup;
 
+/// Whether a focused edit box's caret is showing: it shows and hides once
+/// every blink-speed seconds, and a speed of 0 leaves it shown (0x00967670).
+/// The widget whose playing Rotation turns this texture: the texture itself
+/// or the frame it is drawn in.
+const Widget* rotationOwner(const WidgetTree& tree, const Widget& w) {
+    if (w.animRadians != 0.0f) return &w;
+    if (const Widget* p = w.parent ? tree.get(w.parent) : nullptr; p && p->animRadians != 0.0f) return p;
+    return nullptr;
+}
+
+bool caretBlinkOn(const Widget& w) {
+    if (!(w.editBlinkSpeed > 0.0f)) return true;
+    return std::fmod(ImGui::GetTime(), 2.0 * w.editBlinkSpeed) < w.editBlinkSpeed;
+}
+
 /// The same string with every escape taken out, for measuring.
 std::string strippedText(const std::string& in) {
     std::string out;
@@ -367,7 +382,9 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
         w->wrapsToWidth = true;
         const int rows = static_cast<int>(
             wrapText(parseMarkup(w->text), w->width, w->nonSpaceWrap,
-                     measureRun).size());
+                     measureRun,
+                     w->indentedWordWrap && linkScale_ > 0.0f ? kIndentedWrapPixels / linkScale_ : 0.0f)
+                .size());
         w->wrappedLines = rows > 0 ? rows : 1;
         w->height = size * 1.2f * static_cast<float>(w->wrappedLines);
         w->measuredText = w->text;
@@ -695,12 +712,17 @@ float WidgetRenderer::drawMarkupText(ImDrawList* dl, ImFont* font, float size,
                                      const std::string& text, float wrapWidth,
                                      bool nonSpaceWrap, const char* justifyH,
                                      bool forceColor, WidgetTree* linkSink,
-                                     uint32_t linkOwner) {
+                                     uint32_t linkOwner, float indent) {
     const auto lines = wrapText(parseMarkup(text), wrapWidth, nonSpaceWrap,
                                 [&](const std::string& piece) {
                                     return font->CalcTextSizeA(size, FLT_MAX, 0.0f,
                                                                piece.c_str()).x;
-                                });
+                                }, indent);
+    // An indented line's offset (0x006c7b10): in from the left for LEFT, in
+    // from the right for RIGHT, none for a centred one.
+    const bool justRight = justifyH && std::strcmp(justifyH, "RIGHT") == 0;
+    const bool justCenter = justifyH && std::strcmp(justifyH, "CENTER") == 0;
+    bool firstLine = true;
     const float lineH = size * 1.2f;
     float y = at.y;
     for (const auto& line : lines) {
@@ -719,6 +741,8 @@ float WidgetRenderer::drawMarkupText(ImDrawList* dl, ImFont* font, float size,
         // Each line justifies inside the box on its own, which is what makes a
         // centred paragraph look centred rather than ragged from one offset.
         float x = at.x + justifyOffset(justifyH, wrapWidth, lineW);
+        if (!firstLine && indent > 0.0f && !justCenter) x += justRight ? -indent : indent;
+        firstLine = false;
         for (const TextRun& run : line) {
             if (!run.texture.empty()) {
                 const float w = runWidth(run);
@@ -2343,6 +2367,13 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
     }
 
     for (const Widget* w : order) {
+        // A title region draws nothing; it is only where the frame is held.
+        if (w->isTitleRegion) continue;
+        // A region in a layer its frame has disabled is not drawn.
+        if ((w->kind == WidgetKind::Texture || w->kind == WidgetKind::FontString) && w->parent) {
+            const Widget* owner = tree.get(w->parent);
+            if (owner && (owner->drawLayersOff >> static_cast<unsigned>(w->layer)) & 1u) continue;
+        }
         // Anything inside a scroll frame is bounded by it. Without this a
         // scroll child taller than its window draws over everything above and
         // below, which is not a window onto it at all.
@@ -2601,7 +2632,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                         [&](const std::string& piece) {
                             return font->CalcTextSizeA(size, FLT_MAX, 0.0f,
                                                        piece.c_str()).x;
-                        });
+                        }, (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f));
                     return lines.empty() ? size_t{1} : lines.size();
                 };
                 // A plain MessageFrame - UIErrorsFrame is the one the interface
@@ -2685,7 +2716,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                                        ImVec2(bx + shadowPx(w->shadowX * s), by - shadowPx(w->shadowY * s)),
                                        packColor(sc, w->alpha * w->shadowColor[3] * rgba[3]),
                                        w->alpha, m.text, wrapW, false,
-                                       w->justifyH.c_str(), true);
+                                       w->justifyH.c_str(), true, nullptr, 0, (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f));
                     }
                     // Justified the way the frame's own font instance says,
                     // inside the frame's width - each line of a message on its
@@ -2698,7 +2729,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     drawMarkupText(dl, font, size, ImVec2(bx, by),
                                    packColor(rgba, w->alpha), w->alpha, m.text,
                                    wrapW, false, w->justifyH.c_str(), false,
-                                   &tree, w->id);
+                                   &tree, w->id, (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f));
                     if (topDown) y += lineH * static_cast<float>(rows);
                     else         y -= lineH * static_cast<float>(rows);
                     ++painted;
@@ -2807,14 +2838,19 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 const float boxBottom = y1 - w->textInsetBottom * s;
                 const float ty = boxTop + ((boxBottom - boxTop) - size) * 0.5f;
                 const float pad = w->textInsetLeft * s;
+                // A password box draws a '*' for each byte it holds
+                // (0x00966710: '*' over the text's length).
+                const std::string masked = w->editPassword
+                    ? std::string(w->editText.size(), '*') : std::string();
+                const std::string& shown = w->editPassword ? masked : w->editText;
                 // The highlighted run, under the words: Shift with the arrows,
                 // Ctrl+A, or HighlightText from the interface. Measured against
                 // what is drawn, as the caret is below. Only while the box has
                 // focus, which is the only time the run means anything.
                 if (w->editFocused && w->hasSelection && w->selEnd > w->selStart &&
                     font && w->selEnd <= w->editText.size()) {
-                    const std::string before = strippedText(w->editText.substr(0, w->selStart));
-                    const std::string upTo = strippedText(w->editText.substr(0, w->selEnd));
+                    const std::string before = strippedText(shown.substr(0, w->selStart));
+                    const std::string upTo = strippedText(shown.substr(0, w->selEnd));
                     const float sa = font->CalcTextSizeA(size, FLT_MAX, 0.0f, before.c_str()).x;
                     const float sb = font->CalcTextSizeA(size, FLT_MAX, 0.0f, upTo.c_str()).x;
                     if (sb > sa) {
@@ -2837,7 +2873,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                                        ImVec2(x0 + pad + w->shadowX * s,
                                               ty - w->shadowY * s),
                                        packColor(sc, w->alpha * w->shadowColor[3]),
-                                       w->alpha, w->editText, 0.0f, false,
+                                       w->alpha, shown, 0.0f, false,
                                        nullptr, true);
                     }
                     // Through the markup parser like everything else. An edit
@@ -2848,14 +2884,14 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     // Links are only clickable at all as of this branch, so
                     // this became reachable at the same moment.
                     drawMarkupText(dl, font, size, ImVec2(x0 + pad, ty), col,
-                                   w->alpha, w->editText);
+                                   w->alpha, shown);
                 }
-                if (w->editFocused) {
+                if (w->editFocused && caretBlinkOn(*w)) {
                     // Measured against what is drawn, not what is held. The
                     // caret sits after the text to its left, and to the left of
                     // a link is its display name - measuring the raw string
                     // would put the caret an escape sequence too far right.
-                    const std::string upTo = strippedText(w->editText.substr(
+                    const std::string upTo = strippedText(shown.substr(
                         0, std::min(w->cursorPos, w->editText.size())));
                     const float caret = font
                         ? font->CalcTextSizeA(size, FLT_MAX, 0.0f, upTo.c_str()).x
@@ -2904,6 +2940,17 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             // painted every undecided region in the default white, which for a
             // full-width backdrop is a white slab across the screen.
             if (w->solidColor) {
+                if (w->gradient) {
+                    // The colour as the texture, times each corner's gradient.
+                    auto corner = [&](int c) {
+                        float rgba[4];
+                        for (int i = 0; i < 4; ++i) rgba[i] = w->color[i] * w->gradientColor[c][i];
+                        return packColor(rgba, w->alpha);
+                    };
+                    dl->AddRectFilledMultiColor(ImVec2(x0, y0), ImVec2(x1, y1), corner(0), corner(2), corner(3),
+                                                corner(1));
+                    continue;
+                }
                 dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1),
                                   packColor(w->color, w->alpha));
                 continue;
@@ -2970,7 +3017,56 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     uv1 = ImVec2(0.5f + halfU, 0.5f + halfV);
                 }
             }
-            if (!live && w->texCoordRotated) {
+            // SetHorizTile / SetVertTile (0x004847a0): every coordinate across
+            // that is not 0 becomes the region's size in interface units over
+            // the image's in pixels, so the image repeats at its own size.
+            if (!live && (w->horizTile || w->vertTile) && s > 0.0f) {
+                float iw = 0.0f, ih = 0.0f;
+                if (textureSize(w->texturePath, iw, ih)) {
+                    if (w->horizTile && iw > 0.0f && x1 > x0) {
+                        const float tu = ((x1 - x0) / s) / iw;
+                        if (uv0.x != 0.0f) uv0.x = tu;
+                        if (uv1.x != 0.0f) uv1.x = tu;
+                    }
+                    if (w->vertTile && ih > 0.0f && y1 > y0) {
+                        const float tv = ((y1 - y0) / s) / ih;
+                        if (uv0.y != 0.0f) uv0.y = tv;
+                        if (uv1.y != 0.0f) uv1.y = tv;
+                    }
+                }
+            }
+            if (!live && w->gradient) {
+                // SetGradient's colours, one per corner (0x00487b00), times the
+                // texture's alpha; a desaturated texture keeps their alpha only.
+                ImVec2 uvUL(uv0.x, uv0.y), uvLL(uv0.x, uv1.y), uvUR(uv1.x, uv0.y), uvLR(uv1.x, uv1.y);
+                if (w->texCoordRotated) {
+                    const float* q = w->texCoordQuad;
+                    uvUL = ImVec2(q[0], q[1]);
+                    uvLL = ImVec2(q[2], q[3]);
+                    uvUR = ImVec2(q[4], q[5]);
+                    uvLR = ImVec2(q[6], q[7]);
+                }
+                auto corner = [&](int c) {
+                    float rgba[4] = {w->gradientColor[c][0], w->gradientColor[c][1], w->gradientColor[c][2],
+                                     w->gradientColor[c][3]};
+                    if (w->desaturated) rgba[0] = rgba[1] = rgba[2] = 1.0f;
+                    return packColor(rgba, w->alpha);
+                };
+                dl->PushTextureID(reinterpret_cast<ImTextureID>(tex));
+                dl->PrimReserve(6, 4);
+                const auto base = static_cast<ImDrawIdx>(dl->_VtxCurrentIdx);
+                dl->PrimWriteVtx(ImVec2(x0, y0), uvUL, corner(0));
+                dl->PrimWriteVtx(ImVec2(x1, y0), uvUR, corner(2));
+                dl->PrimWriteVtx(ImVec2(x1, y1), uvLR, corner(3));
+                dl->PrimWriteVtx(ImVec2(x0, y1), uvLL, corner(1));
+                dl->PrimWriteIdx(base);
+                dl->PrimWriteIdx(static_cast<ImDrawIdx>(base + 1));
+                dl->PrimWriteIdx(static_cast<ImDrawIdx>(base + 2));
+                dl->PrimWriteIdx(base);
+                dl->PrimWriteIdx(static_cast<ImDrawIdx>(base + 2));
+                dl->PrimWriteIdx(static_cast<ImDrawIdx>(base + 3));
+                dl->PopTextureID();
+            } else if (!live && w->texCoordRotated) {
                 // A UV per corner, so the art can sit in the frame at any
                 // angle. WoW's order is upper-left, lower-left, upper-right,
                 // lower-right; the quad wants them going round the rect.
@@ -3024,6 +3120,23 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                         static_cast<ImDrawIdx>(base + 1 + ((i + 1) % kSegments)));
                 }
                 dl->PopTextureID();
+            } else if (const Widget* turner = rotationOwner(tree, *w)) {
+                // Turned by a playing Rotation, its own or its frame's, about
+                // that one's origin (screen y runs down, so the angle flips).
+                const float tx0 = turner->left * s;
+                const float ty1 = screenH - turner->bottom * s;
+                const float px = tx0 + turner->animOriginFx * turner->rectW * s + turner->animOriginX * s;
+                const float py = ty1 - turner->animOriginFy * turner->rectH * s - turner->animOriginY * s;
+                const float cs = std::cos(-turner->animRadians), sn = std::sin(-turner->animRadians);
+                auto turn = [&](float x, float y) {
+                    const float dx = x - px, dy = y - py;
+                    return ImVec2(px + dx * cs - dy * sn, py + dx * sn + dy * cs);
+                };
+                dl->AddImageQuad(reinterpret_cast<ImTextureID>(tex),
+                                 turn(x0, y0), turn(x1, y0), turn(x1, y1), turn(x0, y1),
+                                 ImVec2(uv0.x, uv0.y), ImVec2(uv1.x, uv0.y),
+                                 ImVec2(uv1.x, uv1.y), ImVec2(uv0.x, uv1.y),
+                                 textureColor(*w));
             } else {
                 dl->AddImage(reinterpret_cast<ImTextureID>(tex),
                              ImVec2(x0, y0), ImVec2(x1, y1), uv0, uv1,
@@ -3125,7 +3238,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     [&](const std::string& piece) {
                         return font->CalcTextSizeA(size, FLT_MAX, 0.0f,
                                                    piece.c_str()).x;
-                    });
+                    }, (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f));
                 w->wrappedLines = static_cast<int>(lines.size());
                 if (wrapW > 0.0f) {
                     extent.x = wrapW;
@@ -3203,7 +3316,8 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     // the ones on top of it.
                     drawMarkupText(dl, font, size, ImVec2(tx + o.x, ty + o.y),
                                    shadow, w->alpha, shown, wrapW,
-                                   w->nonSpaceWrap, w->justifyH.c_str(), true);
+                                   w->nonSpaceWrap, w->justifyH.c_str(), true,
+                                   nullptr, 0, (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f));
                 }
             }
             // The shadow sits under the text and over the outline: it is a
@@ -3217,7 +3331,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                                ImVec2(tx + w->shadowX * s, ty - w->shadowY * s),
                                packColor(sc, w->alpha * w->shadowColor[3]),
                                w->alpha, shown, wrapW, w->nonSpaceWrap,
-                               w->justifyH.c_str(), true);
+                               w->justifyH.c_str(), true, nullptr, 0, (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f));
             }
             // A button's label takes its colour from the button's state. The
             // colour lives on the parent because that is where the template
@@ -3235,7 +3349,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             drawMarkupText(dl, font, size, ImVec2(tx, ty),
                            packColor(textColor, w->alpha), w->alpha, shown,
                            wrapW, w->nonSpaceWrap, w->justifyH.c_str(), false,
-                           &tree, w->id);
+                           &tree, w->id, (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f));
         }
     }
 }

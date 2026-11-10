@@ -159,6 +159,12 @@ void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets, const
             if (shakeCamera) shakeCamera(fired.data, fired.position);
             continue;
         }
+        if (fired.owner == m2_event::Owner::Doodad) {
+            if (const uint32_t state = m2_event::doodadObjectState(fired.id)) {
+                objectStateEvents_.push_back({fired.instanceId, state});
+                continue;
+            }
+        }
         if (fired.owner == m2_event::Owner::FallingModel && !m2_event::fallingEventPlays(fallingEvents_)) continue;
         const m2_event::SoundPlan plan = m2_event::planSound(fired.owner, fired.id, fired.data);
         if (plan.play == m2_event::Play::None) continue;
@@ -270,6 +276,18 @@ void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets, const
         }
         ++it;
     }
+}
+
+uint32_t M2EventSounds::playLoop(uint32_t soundId, const glm::vec3& at, float fadeInSeconds,
+                                 pipeline::AssetManager* assets) {
+    const Kit* k = kit(soundId, assets);
+    if (!k || k->files.empty()) return 0;
+    const std::vector<uint8_t>* file = pickFile(*k);
+    if (!file) return 0;
+    float minDistance = 0.0f, maxDistance = 0.0f;
+    audio::sound_distance::entryDistance(k->minDistance, k->cutoff, minDistance, maxDistance);
+    return audio::AudioEngine::instance().playSound3DLooping(*file, at, k->volume, maxDistance, minDistance,
+                                                            fadeInSeconds, audio::Channel::Effects);
 }
 
 void M2EventSounds::clear() {

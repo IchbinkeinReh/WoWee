@@ -89,6 +89,17 @@ void DataRepository::loadZones(const std::string& mapName,
         }
     }
 
+    // DungeonMapChunk: ID, MapID, WMOGroupID (MOGP's group id),
+    // DungeonMapID, MinZ - in the file's order, which 0x005439e0 keeps.
+    dungeonChunks_.clear();
+    if (auto chunks = assetManager.loadDBC("DungeonMapChunk.dbc"); chunks && chunks->isLoaded() &&
+        chunks->getFieldCount() >= 5) {
+        for (uint32_t i = 0; i < chunks->getRecordCount(); ++i) {
+            dungeonChunks_.push_back({chunks->getUInt32(i, 1), chunks->getUInt32(i, 2),
+                                      chunks->getInt32(i, 3), chunks->getFloat(i, 4)});
+        }
+    }
+
     // Physical-map regions that the UI presents on another continent. In
     // particular, Azuremyst/Bloodmyst use map 530 terrain but are projected
     // onto Kalimdor (map 1) with a +10133.333/+17600 coordinate offset.
@@ -194,23 +205,28 @@ void DataRepository::loadZones(const std::string& mapName,
         zone.defaultDungeonFloorRowId =
             static_cast<int32_t>(wmaDbc->getUInt32(i, floorField));
         if (recMapID != static_cast<uint32_t>(mapID) && displayMapID == static_cast<uint32_t>(mapID)) {
-            const float centerX = (zone.bounds.locLeft + zone.bounds.locRight) * 0.5f;
-            const float centerY = (zone.bounds.locTop + zone.bounds.locBottom) * 0.5f;
+            // 0x00543920 as the highlight asks it (0x00545110): the zone's top
+            // left corner - LocTop is world X, LocLeft world Y - inside the
+            // region (minX < x <= maxX, minY <= y < maxY), and the region's
+            // offset moves X onto top and bottom, Y onto left and right. This
+            // tested the left and right against the X range and the top and
+            // bottom against the Y range, which no zone passes: Azuremyst,
+            // Bloodmyst and the Exodar were never moved onto Kalimdor.
+            const float x = zone.bounds.locTop;
+            const float y = zone.bounds.locLeft;
             for (const MapTransform& tr : mapTransforms_) {
-                const float minX = std::min(tr.minX, tr.maxX);
-                const float maxX = std::max(tr.minX, tr.maxX);
-                const float minY = std::min(tr.minY, tr.maxY);
-                const float maxY = std::max(tr.minY, tr.maxY);
                 if (tr.sourceMapId != recMapID || tr.targetMapId != displayMapID ||
-                    centerX < minX || centerX > maxX || centerY < minY || centerY > maxY) {
+                    !(tr.minX < x && x <= tr.maxX && tr.minY <= y && y < tr.maxY)) {
                     continue;
                 }
-                zone.virtualOffsetWowX = tr.offsetX;
-                zone.virtualOffsetWowY = tr.offsetY;
-                zone.bounds.locLeft += tr.offsetX;
-                zone.bounds.locRight += tr.offsetX;
-                zone.bounds.locTop += tr.offsetY;
-                zone.bounds.locBottom += tr.offsetY;
+                // In canonical axes (x is the wire Y): what a canonical
+                // position on the zone is moved by.
+                zone.virtualOffsetWowX = tr.offsetY;
+                zone.virtualOffsetWowY = tr.offsetX;
+                zone.bounds.locTop += tr.offsetX;
+                zone.bounds.locBottom += tr.offsetX;
+                zone.bounds.locLeft += tr.offsetY;
+                zone.bounds.locRight += tr.offsetY;
                 break;
             }
         }
@@ -427,7 +443,26 @@ void DataRepository::loadZones(const std::string& mapName,
 
     // Build views based on active expansion
     buildCosmicView();
-    buildAzerothView();
+    buildAzerothView(assetManager);
+}
+
+int DataRepository::dungeonMapForChunk(uint32_t mapId, uint32_t wmoId, float z) const {
+    int found = -1;
+    bool inMap = false, inBuilding = false;
+    for (const DungeonChunk& c : dungeonChunks_) {
+        if (c.mapId != mapId) {
+            if (inMap) break;      // past the map's run of rows
+            continue;
+        }
+        inMap = true;
+        if (c.wmoId != wmoId) {
+            if (inBuilding) break; // past the building's run
+            continue;
+        }
+        inBuilding = true;
+        if (c.minZ <= z) found = c.dungeonMap;
+    }
+    return found;
 }
 
 glm::vec3 DataRepository::transformRenderPosition(
@@ -435,17 +470,17 @@ glm::vec3 DataRepository::transformRenderPosition(
     if (currentMapId_ < 0 || sourceMapId == static_cast<uint32_t>(currentMapId_)) {
         return renderPos;
     }
-    const float wowX = renderPos.y;
-    const float wowY = renderPos.x;
+    // WorldMapTransforms is in the wire's axes (0x00543920): its X is the
+    // wire X, which is canonical y and render x here, its Y the wire Y
+    // (canonical x, render y). Tested the other way round, no position
+    // matched and nothing on Azuremyst or Bloodmyst reached Kalimdor's map.
+    const float wireX = renderPos.x;
+    const float wireY = renderPos.y;
     for (const MapTransform& tr : mapTransforms_) {
-        const float minX = std::min(tr.minX, tr.maxX);
-        const float maxX = std::max(tr.minX, tr.maxX);
-        const float minY = std::min(tr.minY, tr.maxY);
-        const float maxY = std::max(tr.minY, tr.maxY);
         if (tr.sourceMapId == sourceMapId &&
             tr.targetMapId == static_cast<uint32_t>(currentMapId_) &&
-            wowX >= minX && wowX <= maxX && wowY >= minY && wowY <= maxY) {
-            return glm::vec3(wowY + tr.offsetY, wowX + tr.offsetX, renderPos.z);
+            tr.minX < wireX && wireX <= tr.maxX && tr.minY <= wireY && wireY < tr.maxY) {
+            return glm::vec3(wireX + tr.offsetX, wireY + tr.offsetY, renderPos.z);
         }
     }
     return renderPos;
@@ -676,34 +711,54 @@ void DataRepository::buildCosmicView(int /*expLevel*/) {
     LOG_INFO("DataRepository: cosmic view built with ", cosmicMaps_.size(), " landmasses");
 }
 
-void DataRepository::buildAzerothView(int /*expLevel*/) {
+void DataRepository::buildAzerothView(pipeline::AssetManager& assetManager) {
     azerothRegions_.clear();
 
-    // Clickable continent regions on the Azeroth world map (azeroth1-12.blp).
-    // UV coordinates are approximate positions of each landmass on the combined map.
-
-    // Eastern Kingdoms - right side of the Azeroth map
-    // Measured off the world map art rather than rounded to a twentieth. Eastern
-    // Kingdoms began at 0.55 - the middle of the ocean, overlapping Northrend's
-    // box - so pointing at Northrend's eastern half highlighted the wrong
-    // continent, and whichever was listed first won.
-    azerothRegions_.push_back({.mapId = 0, .label = mapDisplayName(0),
-                               .uvLeft = 0.700f, .uvTop = 0.155f,
-                               .uvRight = 0.960f, .uvBottom = 0.915f});
-
-    // Kalimdor - left side of the Azeroth map
-    azerothRegions_.push_back({.mapId = 1, .label = mapDisplayName(1),
-                               .uvLeft = 0.085f, .uvTop = 0.185f,
-                               .uvRight = 0.355f, .uvBottom = 0.935f});
-
-    if (game::isActiveExpansion("wotlk")) {
-        // WotLK: Northrend - top-center of the Azeroth map
-        // Its western tip and Kalimdor's eastern islands are a whisker apart,
-        // so the two boxes are parted over open sea where neither is being
-        // pointed at.
-        azerothRegions_.push_back({.mapId = 571, .label = mapDisplayName(571),
-                                   .uvLeft = 0.365f, .uvTop = 0.020f,
-                                   .uvRight = 0.690f, .uvBottom = 0.310f});
+    // The continents on the Azeroth map are where WorldMapContinent puts them
+    // (0x00547eb0): each row's grid bounds (Left, Right, Top, Bottom, +8..+0x14)
+    // scaled by its Scale (+0x20) and moved by its ContinentOffset (+0x18,
+    // +0x1c), in the 1002x668 map frame:
+    //   x = ((31.3125 - 32*scale) + offsetX + col*scale) / 62.625
+    //   y = ((20.875  - 32*scale) + offsetY + row*scale) / 41.75
+    // with the right and bottom edges one cell past. A row whose column 13 is
+    // clear (Outland's) is not on this map, and the first rectangle holding the
+    // point is the one picked (0x00544420), in WorldMapArea's order.
+    auto wmc = assetManager.loadDBC("WorldMapContinent.dbc");
+    auto wma = assetManager.loadDBC("WorldMapArea.dbc");
+    if (!wmc || !wmc->isLoaded() || wmc->getFieldCount() < 14 || !wma || !wma->isLoaded()) {
+        LOG_WARNING("DataRepository: WorldMapContinent.dbc missing - no continents on the Azeroth map");
+        return;
+    }
+    for (uint32_t i = 0; i < wma->getRecordCount(); ++i) {
+        if (wma->getUInt32(i, 2) != 0) continue;   // a continent's own row: AreaID 0
+        const int mapId = static_cast<int>(wma->getUInt32(i, 1));
+        for (uint32_t r = 0; r < wmc->getRecordCount(); ++r) {
+            if (static_cast<int>(wmc->getUInt32(r, 1)) != mapId) continue;
+            if (wmc->getUInt32(r, 13) == 0) break;
+            const float scale = wmc->getFloat(r, 8);
+            const float fx = ((31.3125f - scale * 32.0f) + wmc->getFloat(r, 6)) / 62.625f;
+            const float fy = ((20.875f - scale * 32.0f) + wmc->getFloat(r, 7)) / 41.75f;
+            CosmicMapEntry e;
+            e.mapId = mapId;
+            e.label = mapDisplayName(static_cast<uint32_t>(mapId));
+            e.uvLeft = static_cast<float>(wmc->getInt32(r, 2)) * scale / 62.625f + fx;
+            e.uvRight = static_cast<float>(wmc->getInt32(r, 3) + 1) * scale / 62.625f + fx;
+            e.uvTop = static_cast<float>(wmc->getInt32(r, 4)) * scale / 41.75f + fy;
+            e.uvBottom = static_cast<float>(wmc->getInt32(r, 5) + 1) * scale / 41.75f + fy;
+            // Its highlight (0x00545110's Azeroth branch): the grid's own
+            // width and height, the longer side the whole texture.
+            const float w = static_cast<float>(wmc->getInt32(r, 3) - wmc->getInt32(r, 2) + 1);
+            const float h = static_cast<float>(wmc->getInt32(r, 5) - wmc->getInt32(r, 4) + 1);
+            e.fileName = wma->getString(i, 3);
+            if (w <= h) { e.texCoordX = w / h; e.texCoordY = 1.0f; }
+            else        { e.texCoordX = 1.0f; e.texCoordY = h / w; }
+            e.textureX = scale * w / 62.625f;
+            e.textureY = scale * h / 41.75f;
+            e.scrollX = e.uvLeft;
+            e.scrollY = e.uvTop;
+            azerothRegions_.push_back(std::move(e));
+            break;
+        }
     }
 
     LOG_INFO("DataRepository: Azeroth view built with ", azerothRegions_.size(), " continent regions");

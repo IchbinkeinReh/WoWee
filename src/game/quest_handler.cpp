@@ -2718,6 +2718,25 @@ const std::string& QuestHandler::getNpcText(uint32_t textId) const {
     return (it != npcTextCache_.end()) ? it->second : empty;
 }
 
+void QuestHandler::refreshQuestPois() {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    std::vector<uint32_t> quests;
+    for (const auto& q : questLog_) {
+        if (q.questId == 0) continue;
+        gossipPois_.erase(std::remove_if(gossipPois_.begin(), gossipPois_.end(),
+                                         [&](const GossipPoi& p) { return p.data == q.questId; }),
+                          gossipPois_.end());
+        if (quests.size() < 25) quests.push_back(q.questId);
+    }
+    questPoiIcons_.clear();
+    const uint16_t wire = wireOpcode(Opcode::CMSG_QUEST_POI_QUERY);
+    if (wire == 0xFFFF || quests.empty()) return;
+    network::Packet pkt(wire);
+    pkt.writeUInt32(static_cast<uint32_t>(quests.size()));
+    for (const uint32_t id : quests) pkt.writeUInt32(id);
+    owner_.getSocket()->send(pkt);
+}
+
 void QuestHandler::handleQuestPoiQueryResponse(network::Packet& packet) {
     // WotLK 3.3.5a SMSG_QUEST_POI_QUERY_RESPONSE format:
     //   uint32 questCount

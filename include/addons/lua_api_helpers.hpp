@@ -3,8 +3,10 @@
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #pragma once
 
+#include <array>
 #include <functional>
 #include <string>
+#include <vector>
 #include <utility>
 #include <optional>
 #include <chrono>
@@ -68,6 +70,16 @@ namespace wowee::addons {
 inline void toLowerInPlace(std::string& s) {
     for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 }
+
+/// The gems socketed into one held item, for _WoweePopulateItemTooltip's
+/// `inst` (lua_socket_api.cpp): sets `gems` (per socket index: the gem's
+/// enchant text, its skill and level requirements and its meta conditions,
+/// 0x0061c0b0) and `socketBonusMatched` on the table at the top of the stack.
+void pushSocketedGems(lua_State* L, game::GameHandler* gh, uint64_t itemGuid,
+                      uint32_t itemId);
+/// The same for gems named by their enchant ids - an item link's gem fields.
+void pushSocketedGems(lua_State* L, game::GameHandler* gh,
+                      const std::array<uint32_t, 3>& enchants, uint32_t itemId);
 
 /// Which interface is loaded, as its manifest's `## Interface:` number - 11200
 /// for 1.12, 20400 for 2.4.3, 30300 for 3.3.5a, 40300 for 4.3.4 - or 0 where
@@ -779,6 +791,18 @@ struct QuestSpecialItem {
     uint32_t count = 0;
 };
 
+/// The item cache asked with a callback that raises an event (0x0067ca30 with
+/// the getter's own function): the item queried, and `event` raised, with
+/// `args`, by the answer that found it. One wait per item and event.
+inline void askItemForEvent(game::GameHandler* gh, uint32_t itemId, const char* event,
+                            std::vector<std::string> args = {}) {
+    if (!gh || itemId == 0) return;
+    const std::string ev = event;
+    gh->askItemThen(itemId, ev, [gh, ev, args](bool found) {
+        if (found) gh->fireAddonEvent(ev, args);
+    });
+}
+
 inline QuestSpecialItem questSpecialItemAt(game::GameHandler* gh, int questIndex) {
     QuestSpecialItem found;
     if (!gh || questIndex < 1) return found;
@@ -1275,6 +1299,9 @@ void pickupStablePetCursor(lua_State* L, int slot, const std::string& icon);
 std::optional<int> cursorStablePet();
 /// ClearCursor's own put-down (0x00519280), whatever is held.
 void clearCursor(lua_State* L);
+/// TRADE_SHOW's own work before the interface hears it (0x005870a0): the
+/// item dropped on the player who was asked to trade goes into the trade.
+void onTradeShown(lua_State* L);
 
 /// The paperdoll slot an item on the cursor was picked up from, or zero when it
 /// came from a bag or nothing is held. One-based, as FrameXML numbers slots.
@@ -1325,6 +1352,16 @@ const game::GameHandler::QuestLogEntry* questAtLogRow(game::GameHandler* gh, int
 /// is", which is also what the caller tests: nil is not what it asks for, and
 /// `nil ~= 0` is true in Lua.
 std::pair<uint32_t, uint32_t> questPoiOpenTarget(lua_State* L, int32_t questId);
+/// WorldMapBlobFrame's own methods (QuestPOIFrame, 0x0058e6f0 onwards):
+/// the blob settings, the hover test and its answers. Defined with the quest
+/// POI list they are built from, registered with the widget methods.
+int lua_QuestBlob_EnableSmoothing(lua_State* L);
+int lua_QuestBlob_EnableMerging(lua_State* L);
+int lua_QuestBlob_SetMergeThreshold(lua_State* L);
+int lua_QuestBlob_SetNumSplinePoints(lua_State* L);
+int lua_QuestBlob_UpdateMouseOverTooltip(lua_State* L);
+int lua_QuestBlob_GetNumTooltips(lua_State* L);
+int lua_QuestBlob_GetTooltipIndex(lua_State* L);
 
 /// The recipe a drawn trade skill row stands for, or null for a heading, an
 /// index past the end, or no open profession.

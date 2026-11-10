@@ -1,3 +1,4 @@
+#include "rendering/minimap_art.hpp"
 #include "rendering/rt_rays.hpp"
 #include "core/platform.hpp"
 #include "rendering/rt_min_brightness.hpp"
@@ -130,7 +131,13 @@ namespace {
         static MinimapArt art;
         static bool gaveUp[14] = {};
         static uint32_t generationSeen = 0;
-        if (wowee::ui::uiTexturesReplaced(generationSeen)) {
+        // The interface's own replacements (Minimap:SetBlipTexture and the
+        // rest) as well as a reload of the textures.
+        namespace art_ = wowee::rendering::minimap_art;
+        static uint32_t artGeneration = 0;
+        const bool replaced = wowee::ui::uiTexturesReplaced(generationSeen);
+        if (replaced || artGeneration != art_::state().generation) {
+            artGeneration = art_::state().generation;
             art = {};
             std::fill(std::begin(gaveUp), std::end(gaveUp), false);
         }
@@ -144,16 +151,16 @@ namespace {
                 LOG_WARNING("Minimap: could not load ", path);
             }
         };
-        load(0, art.objectIcons, "Interface\\Minimap\\ObjectIcons.blp");
-        load(1, art.partyRaidBlips, "Interface\\Minimap\\PartyRaidBlips.blp");
+        load(0, art.objectIcons, art_::pathOf(art_::Blips).c_str());
+        load(1, art.partyRaidBlips, art_::pathOf(art_::ClassBlips).c_str());
         load(2, art.groupArrow, "Interface\\Minimap\\Rotating-MinimapGroupArrow.blp");
-        load(3, art.playerArrow, "Interface\\Minimap\\MinimapArrow.blp",
+        load(3, art.playerArrow, art_::pathOf(art_::Player).c_str(),
              &art.playerArrowWidth, &art.playerArrowHeight);
-        load(4, art.poiIcons, "Interface\\Minimap\\POIIcons.blp",
+        load(4, art.poiIcons, art_::pathOf(art_::Icons).c_str(),
              &art.poiIconsWidth, &art.poiIconsHeight);
-        load(5, art.corpseArrow, "Interface\\Minimap\\Rotating-MinimapCorpseArrow.blp");
-        load(6, art.guideArrow, "Interface\\Minimap\\Rotating-MinimapGuideArrow.blp");
-        load(7, art.poiArrow, "Interface\\Minimap\\Rotating-MinimapArrow.blp");
+        load(5, art.corpseArrow, art_::pathOf(art_::CorpseArrow).c_str());
+        load(6, art.guideArrow, art_::pathOf(art_::POIArrow).c_str());
+        load(7, art.poiArrow, art_::pathOf(art_::StaticPOIArrow).c_str());
         static constexpr const char* kVehicleArt[wowee::rendering::minimap_blips::kVehicleIconCount] = {
             "Interface\\Minimap\\Vehicle-Ground-Unoccupied.blp",
             "Interface\\Minimap\\Vehicle-Ground-Occupied.blp",

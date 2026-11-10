@@ -1,3 +1,4 @@
+#include "rendering/minimap_art.hpp"
 #include "rendering/minimap.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/vk_texture.hpp"
@@ -548,14 +549,30 @@ void Minimap::updateTileDescriptors(uint32_t frameIdx, int centerTileX, int cent
 // --------------------------------------------------------
 
 void Minimap::loadMask() {
+    // Read again when the interface names another (Minimap:SetMaskTexture).
+    if (maskGeneration_ != minimap_art::state().generation) {
+        maskGeneration_ = minimap_art::state().generation;
+        const std::string want = minimap_art::pathOf(minimap_art::Mask);
+        if (want != maskPath_) {
+            maskPath_ = want;
+            maskTried_ = false;
+        }
+    }
     if (maskTried_ || !assetManager || !vkCtx || maskDescSet == VK_NULL_HANDLE) return;
     maskTried_ = true;
     // The round mask the client draws the map through, in the second texture
     // stage (0x005832f0 loads it, 0x00581740 binds it).
-    auto image = assetManager->loadTexture("Textures\\MinimapMask.blp");
+    if (maskPath_.empty()) maskPath_ = minimap_art::pathOf(minimap_art::Mask);
+    auto image = assetManager->loadTexture(maskPath_);
     if (!image.isValid()) {
-        LOG_WARNING("Minimap: Textures\\MinimapMask.blp not found - cut round without it");
+        LOG_WARNING("Minimap: ", maskPath_, " not found - cut round without it");
         return;
+    }
+    // The upload just below replaces one the last display draw may still
+    // hold, so the queue is let go of it first.
+    if (maskTexture_) {
+        ::wowee::rendering::deviceWaitIdle(vkCtx->getDevice());
+        maskTexture_->destroy(vkCtx->getDevice(), vkCtx->getAllocator());
     }
     maskTexture_ = std::make_unique<VkTexture>();
     if (!maskTexture_->upload(*vkCtx, image.data.data(), image.width, image.height,

@@ -2,6 +2,7 @@
 #include "core/platform.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/water_unit_share.hpp"
+#include "rendering/model_frame_view.hpp"
 #include "rendering/shadow_sun.hpp"
 #include "rendering/rt_lamp_wrap.hpp"
 #include "rendering/rt_min_brightness.hpp"
@@ -1394,6 +1395,16 @@ void Renderer::unregisterPreview(CharacterPreview* preview) {
     }
 }
 
+void Renderer::registerModelFrame(ModelFrameView* view) {
+    if (view && std::find(activeModelFrames_.begin(), activeModelFrames_.end(), view) == activeModelFrames_.end())
+        activeModelFrames_.push_back(view);
+}
+
+void Renderer::unregisterModelFrame(ModelFrameView* view) {
+    activeModelFrames_.erase(std::remove(activeModelFrames_.begin(), activeModelFrames_.end(), view),
+                             activeModelFrames_.end());
+}
+
 void Renderer::setMsaaSamples(VkSampleCountFlagBits samples) {
     if (!vkCtx) return;
 
@@ -2578,10 +2589,12 @@ void Renderer::updatePlayerArea() {
     uint32_t wmoArea = 0;
     const float nameStartZ = feet.z + 0.33f;
     const float nameEndZ = feet.z - 1760.0f;
+    playerAreaWmoId_ = 0;
     if (wmoRenderer) {
         if (const auto hit = wmoRenderer->areaGroupAlong(glm::vec3(feet.x, feet.y, nameStartZ), nameEndZ)) {
             wmoDist = hit->dist;
             if (const auto g = wmoRenderer->groupArea(hit->ref)) {
+                playerAreaWmoId_ = static_cast<uint32_t>(g->areaGroupId);
                 if (const auto* row = mi::areaRow(rows, g->wmoId, g->nameSet, g->areaGroupId)) wmoArea = row->areaId;
             }
         }
@@ -7707,10 +7720,13 @@ void Renderer::recordPreviewComposites() {
     // passes is legal until something draws with it. After the scene, the
     // only pass left to open is the single-sampled overlay - which is also
     // the pass that samples the previews, so they are still drawn first.
-    if (activePreviews_.empty() || !vkCtx || currentCmd == VK_NULL_HANDLE) return;
+    if ((activePreviews_.empty() && activeModelFrames_.empty()) || !vkCtx || currentCmd == VK_NULL_HANDLE) return;
     const uint32_t frame = vkCtx->getCurrentFrame();
     for (auto* preview : activePreviews_) {
         if (preview && preview->isModelLoaded()) preview->compositePass(currentCmd, frame);
+    }
+    for (auto* view : activeModelFrames_) {
+        if (view) view->compositePass(currentCmd, frame);
     }
     vkCtx->gpuMark(currentCmd, "character previews");
 }

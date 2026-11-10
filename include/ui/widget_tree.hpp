@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -170,6 +171,28 @@ struct Widget {
     uint32_t creationOrder = 0;
 
     std::vector<Anchor> anchors;
+    /// DisableDrawLayer(layer): a bit per DrawLayer whose regions this frame
+    /// does not draw (CSimpleFrame +500, 0x00490620); EnableDrawLayer clears
+    /// it (0x00490600).
+    uint8_t drawLayersOff = 0;
+    /// SetDontSavePosition (flag 0x80000 of +0xb4, 0x004a08c0).
+    bool dontSavePosition = false;
+    /// SetDepth (+0xc4) and IgnoreDepth (+0xcc): the frame's additive
+    /// stereo depth, summed down through its parents (0x00491740).
+    float depth = 0.0f;
+    bool ignoreDepth = false;
+    /// CreateTitleRegion / <TitleRegion> (+0xa8): the region a press inside
+    /// of moves the frame (0x00495470), and on the region itself the mark
+    /// that keeps it out of the drawing and out of GetRegions.
+    uint32_t titleRegion = 0;
+    bool isTitleRegion = false;
+    /// SetIndentedWordWrap / indented="": every wrapped line after the first
+    /// set in (font instance flag 0x20000, 0x0048e0e0/0x0048e600).
+    bool indentedWordWrap = false;
+    /// SetHorizTile / SetVertTile / horizTile="" vertTile="" (texture +0x160
+    /// flags 4 and 8, 0x0048cb60/0x0048cc30): the image repeats at its own size.
+    bool horizTile = false;
+    bool vertTile = false;
     float width = 0.0f;
     float height = 0.0f;
     bool shown = true;
@@ -240,6 +263,12 @@ struct Widget {
     /// stopped or interrupted leaves no trace in them - nudging the anchors
     /// instead would make every played animation permanent.
     float animOffsetX = 0.0f, animOffsetY = 0.0f;
+    /// A Rotation animation's angle and the point it turns about (fractions
+    /// of the region across and up, then an offset in its units): the
+    /// region's art is drawn turned by it while the group plays.
+    float animRadians = 0.0f;
+    float animOriginFx = 0.5f, animOriginFy = 0.5f;
+    float animOriginX = 0.0f, animOriginY = 0.0f;
 
     /// The rect this frame last reported through OnSizeChanged. Kept on the
     /// widget rather than in a map beside it: the pass runs every frame over
@@ -329,6 +358,11 @@ struct Widget {
     /// the wrong angle, which drew as a pale vertical bar beside the slot.
     bool  texCoordRotated = false;
     float texCoordQuad[8] = {0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f};
+    /// A texture's per-corner colours from SetGradient / SetGradientAlpha
+    /// (0x00487b00), in its vertex order: upper-left, lower-left, upper-right,
+    /// lower-right. SetVertexColor puts the four back to one.
+    bool gradient = false;
+    float gradientColor[4][4] = {};
     float color[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     bool solidColor = false;    ///< SetTexture(r,g,b[,a]) rather than a file.
     /// A unit's face, claimed by SetPortraitTexture.
@@ -452,6 +486,13 @@ struct Widget {
     /// default is no, and four boxes in the interface ask for yes - the macro
     /// editor among them, where the escapes are the point.
     bool  countInvisibleLetters = false;
+    /// SetPassword / password="true" (CSimpleEditBox flag 8): the text drawn
+    /// as one '*' a byte, and copying it puts nothing on the clipboard.
+    bool  editPassword = false;
+    /// SetBlinkSpeed / blinkSpeed="": the caret shows and hides once every
+    /// this many seconds, 0.5 from the constructor (0x00966b70); 0 never
+    /// blinks.
+    float editBlinkSpeed = 0.5f;
 
     /// Whether a label too long for its box breaks onto another line. On, as
     /// WoW has it - a FontString given a width wraps inside it, and nothing
@@ -554,6 +595,12 @@ struct Widget {
     /// Whether a new message goes above the ones already there. UIErrorsFrame
     /// asks for insertMode="TOP"; a chat frame does not.
     bool  messagesInsertTop = false;
+    /// SetFading / fade="": whether lines fade at all once their time is up -
+    /// on from the constructor (0x0096a2f0).
+    bool  messageFading = true;
+    /// GetCurrentLine: the slot of the newest line in the client's ring of
+    /// maxLines (+0x2c4), -1 with none.
+    int   messageRingLine = -1;
     /// Extra space between message lines, which SetPadding sets. WoW's default
     /// is none; the 15% used here is the leading a line already carries.
     float messagePadding = 0.0f;
@@ -647,6 +694,36 @@ struct Widget {
     /// model is actually built. Zero is "nothing chosen".
     uint32_t modelDisplayId = 0;
 
+    /// A model frame's model file (Model:SetModel, <Model file="">,
+    /// 0x0095f990) and the client's pose for it (0x0095fba0): SetPosition
+    /// (+0x31c), SetModelScale (+0x32c), SetCamera (+0x2a8, -1 none) and
+    /// SetSequence. Drawn by the frame loop through a ModelFrameView.
+    std::string modelFile;
+    float modelPosition[3] = {0.0f, 0.0f, 0.0f};
+    float modelScale = 1.0f;
+    int modelCamera = -1;
+    int modelSequence = -1;
+    int modelSequenceTime = 0;          ///< SetSequenceTime's time, ms
+    uint32_t modelSequenceSerial = 0;   ///< bumped by each SetSequence/SetSequenceTime
+    std::string modelIconTexture;       ///< ReplaceIconTexture (0x00960320)
+    /// Held at the middle of its frame (0x005446f0, 0x00545ff0): the world
+    /// map's arrows and its ping. The frame loop sets the position.
+    bool modelCentered = false;
+    /// Model:SetLight (0x00960d20 -> 0x00960a10, the M2Light at +0x2b0):
+    /// enabled, omni (a point at lightVec, else a direction along it), and
+    /// the ambient and diffuse colours already times their intensities.
+    bool modelLightEnabled = false;
+    bool modelLightOmni = true;
+    float modelLightVec[3] = {0.0f, 0.0f, 0.0f};
+    float modelLightAmbient[3] = {0.0f, 0.0f, 0.0f};
+    float modelLightDiffuse[3] = {0.0f, 0.0f, 0.0f};
+    /// The frame's fog (+0x330 bit 0, colour +0x334, near +0x338, far +0x33c):
+    /// SetFogColor turns it on, ClearFog off; near starts at 0, far at 1.
+    bool modelFogEnabled = false;
+    float modelFogColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float modelFogNear = 0.0f;
+    float modelFogFar = 1.0f;
+
     /// A TabardModel's design (+0x380..+0x390): emblem style and colour,
     /// border style and colour, background colour - game/tabard_design.hpp.
     std::array<int32_t, 5> tabardDesign{};
@@ -668,6 +745,9 @@ struct Widget {
     /// colour its ColorSelect parent holds.
     enum class ColorRole : uint8_t { None, Wheel, WheelThumb, Value, ValueThumb };
     ColorRole colorRole = ColorRole::None;
+    /// On the ColorSelect: the region set for each of the four roles (+0x2a0
+    /// ..), which GetColorWheelTexture and the rest hand back (0x00970830..).
+    uint32_t pickerRegion[5] = {0, 0, 0, 0, 0};
 
     /// Which named font object this region's type settings came from, so
     /// GetFontObject can hand it back. The fields copied out of one do not add
@@ -675,6 +755,15 @@ struct Widget {
     /// options panels read a control's font object to get the colour to put a
     /// label back to when the control is re-enabled.
     std::string fontObjectName;
+    /// The font objects SetHighlightFontObject / SetDisabledFontObject were
+    /// given by name, which GetHighlightFontObject / GetDisabledFontObject
+    /// hand back (0x00977750, 0x009775d0).
+    std::string highlightFontName;
+    std::string disabledFontName;
+    /// SetNonBlocking (texture flag 1, 0x0048caa0) and EnableJoystick (frame
+    /// flag 0x10 of +0xd8, 0x004a11d0).
+    bool nonBlocking = false;
+    bool joystickEnabled = false;
     /// Drawn added to what is under it rather than over it. Art authored for
     /// this has no alpha channel at all - it is a glow on black, and black is
     /// what adds nothing. Drawn the ordinary way it is a black slab instead,
@@ -889,6 +978,10 @@ public:
     /// loop, because that is what the bindings can already reach.
     [[nodiscard]] uint32_t movingWidget() const { return movingWid_; }
     void setMovingWidget(uint32_t id) { movingWid_ = id; }
+    /// The frame a drag belongs to while its OnDragStart has run and not yet
+    /// been stopped - what IsDragging asks after (0x0048eb70).
+    [[nodiscard]] uint32_t draggedWidget() const { return draggedWid_; }
+    void setDraggedWidget(uint32_t id) { draggedWid_ = id; }
 
     /// The frame a size grabber is dragging, and which corner it took hold of.
     ///
@@ -1100,6 +1193,9 @@ public:
     /// An empty unit releases it. Releasing clears the handle too - dropping
     /// off a list only stops the updates, and the last face would stay.
     void setPortraitUnit(uint32_t id, const std::string& unit);
+    /// The model frames given a model file, for the frame loop to draw.
+    void setModelFile(uint32_t id, const std::string& file);
+    [[nodiscard]] const std::set<uint32_t>& modelFileFrames() const { return modelFileFrames_; }
     /// Every texture claimed for this unit, or an empty list.
     [[nodiscard]] const std::vector<uint32_t>& portraitsFor(const std::string& unit) const;
 
@@ -1277,6 +1373,7 @@ private:
     /// texture already had so it can be released from it.
     std::map<std::string, std::vector<uint32_t>> portraitsByUnit_;
     std::map<uint32_t, std::string> portraitUnitOf_;
+    std::set<uint32_t> modelFileFrames_;
     uint32_t hoveredId_ = 0;
     /// Tooltips that have been given an owner, so the check is over a handful
     /// of frames rather than every widget in the tree.
@@ -1306,6 +1403,7 @@ private:
     uint32_t rootId_ = 0;
     uint32_t uiParentId_ = 0;
     uint32_t movingWid_ = 0;
+    uint32_t draggedWid_ = 0;
     uint32_t sizingWid_ = 0;
     std::string sizingPoint_;
     uint32_t nextOrder_ = 1;

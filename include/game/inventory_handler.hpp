@@ -179,7 +179,11 @@ public:
     void closeLoot();
     bool isLootWindowOpen() const { return lootWindowOpen_; }
     const LootResponseData& getCurrentLoot() const { return currentLoot_; }
+    /// The player's +0x18e8: whether the loot the player is opening now is
+    /// taken at once (0x006cde50) - set by what begins it.
     void setAutoLoot(bool enabled) { autoLoot_ = enabled; }
+    /// 0x00588f90: the open loot taken, as far as it may be.
+    void autoTakeLoot();
     bool isAutoLoot() const { return autoLoot_; }
     void setAutoSellGrey(bool enabled) { autoSellGrey_ = enabled; }
     bool isAutoSellGrey() const { return autoSellGrey_; }
@@ -821,6 +825,9 @@ public:
     void emitAllOtherPlayerEquipment();
     void handleItemQueryResponse(network::Packet& packet);
 
+    /// The family a bag in inventory slot `slot` holds, by name, for
+    /// ERR_WRONG_BAG_TYPE_SUBCLASS (0x006d6720); empty for none.
+    std::string wrongBagFamilyName(uint8_t slot) const;
 private:
     /// What the currency items the player holds summed to at the last
     /// CURRENCY_DISPLAY_UPDATE fireBagUpdates raised (~0: none raised yet).
@@ -961,6 +968,10 @@ private:
     // ---- Loot state ----
     bool lootWindowOpen_ = false;
     bool autoLoot_ = false;
+    void lootReady();
+    void beginOpenItem();
+    /// An item's own sound, 0 picked up, 1 put down (0x004d0090).
+    void playItemSound(uint32_t displayInfoId, int which);
     bool autoSellGrey_ = false;
     bool autoRepair_ = false;
     LootResponseData currentLoot_;
@@ -971,6 +982,13 @@ private:
 
     // Group loot roll state
     std::vector<LootRollEntry> lootRolls_;
+    /// The roll frames up (0x00ca0694): START_LOOT_ROLL is raised for at most
+    /// four rolls at once, the rest waiting until one ends (0x006fb180).
+    int lootRollFramesUp_ = 0;
+    /// Items of the open loot the item cache is still to answer (0x00bfa688).
+    int lootItemsAwaited_ = 0;
+    /// Raise START_LOOT_ROLL for a roll, or queue it behind the four up.
+    void openLootRollFrame(int rollId);
     /// Never reused within a session, so a window that outlives its roll finds
     /// nothing rather than somebody else's item.
     int           nextLootRollId_ = 1;
@@ -1173,6 +1191,9 @@ private:
     };
     std::vector<EquipmentSet> equipmentSets_;
     std::string pendingSaveSetName_;
+    /// The set a CMSG_EQUIPMENT_SET_USE is out for (0x00c1e958), whose name
+    /// EQUIPMENT_SWAP_FINISHED carries when the answer comes (0x005af710).
+    uint32_t pendingUseSetId_ = 0;
     std::string pendingSaveSetIcon_;
     std::vector<EquipmentSetInfo> equipmentSetInfo_;
 

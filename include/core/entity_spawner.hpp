@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/object_effect.hpp"
 #include "game/character.hpp"
 #include "game/mirror_image.hpp"
 #include "game/guild_emblem.hpp"
@@ -159,6 +160,9 @@ public:
     /// model existed and was dropped, so every door in the world was drawn in
     /// its closed pose however the server had it.
     void applyGameObjectState(uint64_t guid, uint8_t goState);
+    /// GAMEOBJECT_FLAGS changed: a destructible building whose state it moves
+    /// takes the state's look (0x0070e0d0).
+    void applyDestructibleFlags(uint64_t guid);
     /// The object became the one a window is open with (open), or stopped
     /// being it: its type's OPEN (slot 0x98) or CLOSE (slot 0x9c) - see
     /// game/go_interaction_anim.hpp.
@@ -371,6 +375,10 @@ public:
     /// mount's (0x0073d5d0 hands the mount the unit's callback).
     /// `localPlayerInstance` is the renderer's own character.
     void playUnitModelEvents(uint32_t localPlayerInstance);
+    /// A unit's object effects (entity_spawner_object_effect.cpp,
+    /// game/object_effect.hpp): the sounds its display's package gives the
+    /// states its movement and its animation put it in.
+    void updateObjectEffects(float deltaTime);
     /// The race splash of each unit wading across four tenths of its height
     /// into or out of water (rendering/unit_splash.hpp).
     void playUnitSplashes(uint32_t localPlayerInstance);
@@ -444,6 +452,15 @@ public:
     /// A display's model for the character renderer, as a mount's is loaded
     /// (its skins from CreatureDisplayInfo); 0 where it cannot be.
     uint32_t loadMountModel(uint32_t displayId);
+    /// A unit's model as its display draws it (0x00717a20: CreatureDisplayInfo
+    /// -> CreatureModelData), loaded now and skinned as a creature's, with an
+    /// instance at `renderPos` - for the player while a form or a morph shows
+    /// it as something else than its character. 0 where it cannot be drawn.
+    uint32_t createDisplayInstance(uint32_t displayId, const glm::vec3& renderPos, float renderYaw, float scale);
+    /// A melee blow the victim bleeds from (0x00755380): the spurt its blood
+    /// names, front or back of its chest as the attacker stands, larger for a
+    /// crushing blow, on `renderInstanceId`.
+    void playBloodSpurt(uint64_t victimGuid, uint64_t attackerGuid, bool crushing, uint32_t renderInstanceId);
     /// The size a unit's model is drawn at (0x0071c0e0 while it rides
     /// nothing): what its instance was given, 1 for one drawn at 1.
     float unitModelScale(uint64_t guid) const;
@@ -1316,6 +1333,77 @@ private:
     /// (GameObject_C +0x208), played as it arrives (0x00713f50).
     std::unordered_map<uint64_t, uint8_t> gameObjectPendingCustomAnim_;
     void applyPendingGameObjectCustomAnim(uint64_t guid);
+    /// GameObjectArtKit (GAMEOBJECT_BYTES_1 byte 2, 0x00713da0): the models the
+    /// object's art kit hangs on its model's attachment points 0..3 - the
+    /// faction flag on a capture tower, a bonfire's lit or unlit state.
+    struct GameObjectArtKitState {
+        uint32_t artKit = 0;
+        uint32_t parentInstance = 0;
+        std::vector<std::pair<uint32_t, uint32_t>> attached;   // {attachment id, instance}
+        std::vector<glm::mat4> lastFrame;
+    };
+    std::unordered_map<uint64_t, GameObjectArtKitState> gameObjectArtKits_;
+    /// One unit's object effects: its package, the states it is in, the
+    /// loops it plays (effect id -> sound handle, effect) and where it was.
+    struct ObjectEffectState {
+        uint32_t package = 0;
+        game::object_effect::Runner runner;
+        std::unordered_map<uint32_t, std::pair<uint32_t, const game::object_effect::Effect*>> loops;
+        bool gameObject = false;
+    };
+    std::unordered_map<uint64_t, ObjectEffectState> objectEffects_;
+    std::unordered_map<uint32_t, uint32_t> objectEffectPackageByGoDisplay_;
+    std::shared_ptr<const game::object_effect::Tables> objectEffectTables_;
+    std::unordered_map<uint32_t, uint32_t> objectEffectPackageByDisplay_;
+    bool objectEffectTablesLoaded_ = false;
+    void clearObjectEffects(uint64_t guid);
+    /// The game object a WMO's doodad belongs to, for its $EWT/$EAC/$EMV/$EDC
+    /// (0x007bd5a0 reads the doodad's owner, +0xb8).
+    std::unordered_map<uint32_t, uint64_t> doodadOwnerGo_;
+    void noteDoodadOwner(uint32_t doodadInstance, uint32_t wmoInstance);
+    /// A destructible building's look (entity_spawner_destructible.cpp): its
+    /// state by GAMEOBJECT_FLAGS, that state's display and doodad sets.
+    struct DestructibleLook {
+        uint32_t state = 0;
+        uint32_t display = 0;
+        std::vector<uint32_t> sets;
+        bool hasRow = false;
+        std::array<uint32_t, 4> stateDisplay{};
+        std::array<uint32_t, 4> ambientSet{}, firstSet{}, impactSet{};
+        uint32_t repairFx = 0;
+        uint32_t healEffect = 0;
+        int32_t healSpeed = 0;
+    };
+    /// A change of look being played: the look it came from, kept until the
+    /// new one is up (and through a rise), the rise and its repair effect.
+    struct DestructibleRun {
+        std::string wmoPath, fromWmoPath;
+        int pendingFrom = -1;
+        uint32_t oldInstance = 0;
+        bool oldIsWmo = true;
+        bool rising = false;
+        uint32_t healEffect = 0;
+        uint32_t newInstance = 0;
+        glm::mat4 newBase{1.0f}, oldBase{1.0f};
+        float height = 0.0f, oldHeight = 0.0f;
+        uint32_t riseStartMs = 0, riseMs = 0;
+        uint32_t fxInstance = 0;
+    };
+    struct DoodadAnimChain { uint32_t instance = 0; uint32_t endMs = 0; uint32_t then = 0; };
+    bool destructibleLook(uint64_t guid, uint32_t entry, DestructibleLook& out) const;
+    const pipeline::WMOModel* destructibleRoot(const std::string& wmoPath);
+    std::vector<uint32_t> hangDoodadSet(uint32_t wmoInstance, const pipeline::WMOModel& root, uint32_t set);
+    void startDoodadChain(uint32_t instance, uint32_t once, uint32_t then);
+    void spawnDestructibleDoodads(uint64_t guid, const std::string& wmoPath);
+    void clearDestructible(uint64_t guid);
+    void updateDestructibles();
+    std::unordered_map<uint64_t, uint32_t> destructibleStates_;
+    std::unordered_map<uint64_t, DestructibleRun> destructibleRuns_;
+    std::vector<DoodadAnimChain> destructibleAnimChains_;
+    std::unordered_map<std::string, std::shared_ptr<pipeline::WMOModel>> destructibleWmoRoots_;
+    void applyGameObjectArtKit(uint64_t guid);
+    void clearGameObjectArtKit(uint64_t guid);
+    void updateGameObjectArtKits();
     /// Taken away by the server while an animation held them (+0xbc
     /// 0x100000); see destroyGameObject.
     std::unordered_set<uint64_t> gameObjectDestroyPending_;
@@ -1494,6 +1582,7 @@ private:
     /// FootstepTerrainLookup by creature footstep id and terrain type, built
     /// once its tables are read (0x004cf990).
     std::shared_ptr<const rendering::unit_event::FootstepTerrainSounds> footstepSounds_;
+    std::shared_ptr<rendering::unit_event::DeathThudSounds> deathThudSounds_;
     uint32_t mountModelId_ = 0;
     uint32_t mountDisplayId_ = 0;  ///< the display mountInstanceId_ draws
     uint32_t pendingMountDisplayId_ = 0;

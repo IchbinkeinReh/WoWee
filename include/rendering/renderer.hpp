@@ -247,6 +247,7 @@ public:
     SkySystem* getSkySystem() const { return skySystem.get(); }
     const std::string& getCurrentZoneName() const;
     uint32_t getCurrentZoneId() const;
+    uint32_t getPlayerAreaWmoId() const { return playerAreaWmoId_; }
     /// The area under the player, asked of AreaTable rather than resolved to a
     /// zone first - the world PvP flag is on the subzone. See ZoneManager.
     bool isOnOutdoorPvpObjective() const;
@@ -274,6 +275,11 @@ public:
     void setCharacterFollow(uint32_t instanceId);
     glm::vec3& getCharacterPosition() { return characterPosition; }
     uint32_t getCharacterInstanceId() const { return characterInstanceId; }
+    /// Whether the player's instance is the model of its display rather than
+    /// its character (a form or a morph, 0x00717a20): nothing of the
+    /// character's - its gear, its weapons, its skin - goes on it.
+    void setCharacterShownAsDisplay(bool shown) { characterShownAsDisplay_ = shown; }
+    bool characterShownAsDisplay() const { return characterShownAsDisplay_; }
     /// The player's movement facing, in degrees: what the server is told and
     /// what the map arrows point along. Not where the body is drawn - see
     /// getCharacterBodyYaw.
@@ -681,6 +687,10 @@ public:
     // Character preview registration (for off-screen composite pass)
     void registerPreview(CharacterPreview* preview);
     void unregisterPreview(CharacterPreview* preview);
+    /// A UI model frame's view (model_frame_view.hpp), drawn with the
+    /// previews outside the scene's passes.
+    void registerModelFrame(class ModelFrameView* view);
+    void unregisterModelFrame(class ModelFrameView* view);
 
     /// Whether the lighting reads the shadow map. Off, as the client's
     /// extShadowQuality 0 is, the casters are still drawn - skipping them is
@@ -1015,6 +1025,7 @@ private:
     // Third-person character state
     glm::vec3 characterPosition = glm::vec3(0.0f);
     uint32_t characterInstanceId = 0;
+    bool characterShownAsDisplay_ = false;
     float characterYaw = 0.0f;
     // The drawn body's yaw behind the facing (body_yaw::update), and the
     // instance it was last turned for: another instance starts at the facing.
@@ -1167,6 +1178,7 @@ private:
 
     // Active character previews for off-screen rendering
     std::vector<CharacterPreview*> activePreviews_;
+    std::vector<class ModelFrameView*> activeModelFrames_;
 
     bool terrainEnabled = true;
     bool terrainLoaded = false;
@@ -1352,6 +1364,9 @@ private:
     /// first of them (0x00782560, none where it names none), and the texts.
     std::vector<minimap_indoor::GroupRef> playerLinks_;
     uint32_t playerLinkedArea_ = 0;
+    /// The WMO group id (MOGP's, WMOAreaTable's WMOGroupID) the area ray under
+    /// the player met (0x00bd080c as SetMapToCurrentZone reads it), 0 outdoors.
+    uint32_t playerAreaWmoId_ = 0;
     /// Where the ambience is for (0x0078f020), none until first known.
     std::optional<audio::zone_ambience::Place> ambiencePlace_;
     /// The liquid the camera is in for the ambience (0x00780620), 0 for none.

@@ -1710,6 +1710,7 @@ wowee_add_test(test_world_map_zone_metadata
 # ── test_text_wrap ───────────────────────────────────────────
 add_executable(test_text_wrap
     test_text_wrap.cpp
+    test_text_wrap_indent.cpp
 )
 target_include_directories(test_text_wrap PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(test_text_wrap SYSTEM PRIVATE
@@ -2252,6 +2253,49 @@ target_include_directories(test_cast_checks SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE
 target_link_libraries(test_cast_checks PRIVATE catch2_main)
 add_test(NAME cast_checks COMMAND test_cast_checks)
 register_test_target(test_cast_checks)
+
+# ── test_chat_profanity ─────────────────────────────────────
+add_executable(test_chat_profanity
+    test_chat_profanity.cpp
+    ${CMAKE_SOURCE_DIR}/src/game/chat_profanity.cpp
+)
+target_include_directories(test_chat_profanity PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_chat_profanity SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_chat_profanity PRIVATE catch2_main)
+add_test(NAME chat_profanity COMMAND test_chat_profanity)
+register_test_target(test_chat_profanity)
+
+# ── test_chat_language ──────────────────────────────────────
+add_executable(test_chat_language
+    test_chat_language.cpp
+    ${CMAKE_SOURCE_DIR}/src/game/chat_language.cpp
+)
+target_include_directories(test_chat_language PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_chat_language SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_chat_language PRIVATE catch2_main)
+add_test(NAME chat_language COMMAND test_chat_language)
+register_test_target(test_chat_language)
+
+# ── test_gem_conditions ─────────────────────────────────────
+add_executable(test_gem_conditions
+    test_gem_conditions.cpp
+    ${CMAKE_SOURCE_DIR}/src/game/gem_conditions.cpp
+)
+target_include_directories(test_gem_conditions PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_gem_conditions SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_gem_conditions PRIVATE catch2_main)
+add_test(NAME gem_conditions COMMAND test_gem_conditions)
+register_test_target(test_gem_conditions)
+
+# ── test_game_object_use ────────────────────────────────────
+add_executable(test_game_object_use
+    test_game_object_use.cpp
+)
+target_include_directories(test_game_object_use PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_game_object_use SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_game_object_use PRIVATE catch2_main)
+add_test(NAME game_object_use COMMAND test_game_object_use)
+register_test_target(test_game_object_use)
 
 # ── test_cast_spells ────────────────────────────────────────
 add_executable(test_cast_spells
@@ -2992,13 +3036,6 @@ wowee_add_test(test_collision_hover
             ${CMAKE_SOURCE_DIR}/src/rendering/collision_hover.cpp
             ${TEST_COMMON_SOURCES})
 
-# ── test_loading_screen_route ───────────────────────────────
-# A transport crossing's loading screen: its stops on the world map, the
-# spline through the leg's points and the dots coming in with the load.
-wowee_add_test(test_loading_screen_route
-    SOURCES test_loading_screen_route.cpp
-            ${TEST_COMMON_SOURCES})
-
 # ── test_collision_swim ──────────────────────────────────────
 # Swimming and flying: when a unit swims, the surface holding a swimmer
 # under it, the jump out, and the plain sweep a flyer makes.
@@ -3716,3 +3753,32 @@ wowee_add_test(test_rain_ripple SOURCES test_rain_ripple.cpp)
 # ── test_rt_unit_cast ──
 # Which units cast traced shadows: header-only logic.
 wowee_add_test(test_rt_unit_cast SOURCES test_rt_unit_cast.cpp)
+# ── test_loading_screen_route ────────────────────────
+# A ship's crossing on its loading screen (0x00409880, 0x0040b0b0).
+wowee_add_test(test_loading_screen_route
+    SOURCES test_loading_screen_route.cpp)
+
+# ── test_transport_physics ───────────────────────────
+# A ship's sway on its route (0x007f7dd0, 0x007f7b30).
+wowee_add_test(test_transport_physics
+    SOURCES test_transport_physics.cpp)
+
+# ── test_object_effect ───────────────────────────────
+# A model's object effects (0x006f7270, 0x006f61d0, 0x00721300).
+wowee_add_test(test_object_effect
+    SOURCES test_object_effect.cpp)
+
+# ── test_model_frame_pose ────────────────────────────
+# A UI model frame's pose (0x0095fba0) and the DDC screen (0x0047bf90).
+wowee_add_test(test_model_frame_pose
+    SOURCES test_model_frame_pose.cpp)
+
+# ── test_layout_cache ────────────────────────────────
+# layout-local.txt, the frames the player placed (0x00517e00, 0x005183a0).
+wowee_add_test(test_layout_cache
+    SOURCES test_layout_cache.cpp)
+
+# ── test_minimap_art ─────────────────────────────────
+# The minimap's replaceable textures (0x00583860 .. 0x00583f60, 0x0057e100).
+wowee_add_test(test_minimap_art
+    SOURCES test_minimap_art.cpp)

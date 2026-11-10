@@ -25,6 +25,7 @@
 #include "game/shapeshift_forms.hpp"
 #include "game/update_field_table.hpp"
 #include "game/go_interaction_anim.hpp"
+#include "game/game_object_use.hpp"
 #include "game/inventory.hpp"
 #include "game/spell_defines.hpp"
 #include "game/group_defines.hpp"
@@ -1686,9 +1687,6 @@ public:
     bool isCasting() const { return spellHandler_ ? spellHandler_->isCasting() : false; }
     bool isChanneling() const { return spellHandler_ ? spellHandler_->isChanneling() : false; }
     bool isRestoring() const { return spellHandler_ ? spellHandler_->isRestoring() : false; }
-    bool isGameObjectInteractionCasting() const {
-        return spellHandler_ ? spellHandler_->isGameObjectInteractionCasting() : false;
-    }
     uint32_t getCurrentCastSpellId() const { return spellHandler_ ? spellHandler_->getCurrentCastSpellId() : 0; }
     float getCastProgress() const { return spellHandler_ ? spellHandler_->getCastProgress() : 0.0f; }
     float getCastTimeRemaining() const { return spellHandler_ ? spellHandler_->getCastTimeRemaining() : 0.0f; }
@@ -2000,6 +1998,11 @@ public:
     enum class HitReaction : uint8_t { WOUND, CRIT_WOUND, DODGE, PARRY, BLOCK, SHIELD_BLOCK };
     using HitReactionCallback = std::function<void(uint64_t victimGuid, HitReaction reaction)>;
     void setHitReactionCallback(HitReactionCallback cb) { hitReactionCallback_ = std::move(cb); }
+    /// A melee hit the victim bleeds from (0x00755e40 -> 0x00755380): who was
+    /// hit, by whom, and whether the blow crushed (HITINFO 0x8000).
+    using BloodSpurtCallback = std::function<void(uint64_t victimGuid, uint64_t attackerGuid, bool crushing)>;
+    void setBloodSpurtCallback(BloodSpurtCallback cb) { bloodSpurtCallback_ = std::move(cb); }
+    auto& bloodSpurtCallbackRef() { return bloodSpurtCallback_; }
 
     // NPC greeting callback (plays voice line when NPC is clicked)
     using NpcGreetingCallback = std::function<void(uint64_t guid, const glm::vec3& position)>;
@@ -2223,6 +2226,11 @@ public:
     void setGameObjectInfoCallback(GameObjectInfoCallback cb) { gameObjectInfoCallback_ = std::move(cb); }
 
     // GameObject despawn callback (online mode - triggered when gameobject leaves view)
+    /// A game object's GAMEOBJECT_FLAGS changed (a destructible building's
+    /// state, 0x0070e0d0).
+    using GameObjectFlagsCallback = std::function<void(uint64_t guid)>;
+    void setGameObjectFlagsCallback(GameObjectFlagsCallback cb) { gameObjectFlagsCallback_ = std::move(cb); }
+    auto& gameObjectFlagsCallbackRef() { return gameObjectFlagsCallback_; }
     using GameObjectDespawnCallback = std::function<void(uint64_t guid)>;
     void setGameObjectDespawnCallback(GameObjectDespawnCallback cb) { gameObjectDespawnCallback_ = std::move(cb); }
     /// The server took a game object away (SMSG_DESTROY_OBJECT 0x004d7610,
@@ -2264,6 +2272,13 @@ public:
     /// 0x0070bac0).
     using GameObjectInteractionCallback = std::function<void(uint64_t guid, bool open)>;
     void setGameObjectInteractionCallback(GameObjectInteractionCallback cb) { gameObjectInteractionCallback_ = std::move(cb); }
+    /// A game object's model box in its own frame, as the renderer has it:
+    /// the model's bounds, or with `playingSequence` those of the animation it
+    /// plays (0x00824f00/0x004f5e20, 0x008266b0/0x0082ced0). Nothing where no
+    /// M2 model of it is loaded.
+    using GameObjectBoundsCallback =
+        std::function<std::optional<std::pair<glm::vec3, glm::vec3>>(uint64_t guid, bool playingSequence)>;
+    void setGameObjectBoundsCallback(GameObjectBoundsCallback cb) { gameObjectBoundsCallback_ = std::move(cb); }
 
     // Faction hostility map (populated from FactionTemplate.dbc by Application)
     void setFactionHostileMap(std::unordered_map<uint32_t, bool> map) { factionHostileMap_ = std::move(map); }
@@ -2419,6 +2434,20 @@ public:
     // down the origin map's transport and constructs its destination instance.
     void beginPlayerTransportWorldTransfer(uint32_t destinationMapId,
                                            const glm::vec3& wireOffset);
+    /// SMSG_TRANSFER_PENDING named transport `entry` leaving map `fromMap`,
+    /// the one the player rides (0x0040ad50): its taxi path is the crossing
+    /// the next loading screen draws. Entry 0 clears it.
+    void armLoadingScreenCrossing(uint32_t entry, uint32_t fromMap);
+    struct LoadingScreenCrossing {
+        uint32_t taxiPathId = 0;
+        uint32_t fromMapId = 0;
+    };
+    /// The crossing armed for the loading screen, once.
+    std::optional<LoadingScreenCrossing> takeLoadingScreenCrossing() {
+        auto c = loadingScreenCrossing_;
+        loadingScreenCrossing_.reset();
+        return c;
+    }
     bool hasPendingPlayerTransportWorldTransfer() const {
         return pendingPlayerTransportTransfer_;
     }
@@ -2836,6 +2865,26 @@ public:
     /// A name answer landed for that guid, and a raid browser row may have been
     /// waiting on it — see SocialHandler::onLfgNameAnswered for what it does.
     void onLfgNameAnswered(uint64_t guid);
+    /// The name cache's ask with a callback (0x0067d770 handed a function):
+    /// the name when it is known; otherwise the query goes out and `event` is
+    /// raised when the answer comes - only for an answer that found the name
+    /// when `onlyFound`. One wait per guid and event.
+    const std::string& nameOrAsk(uint64_t guid, const char* event, bool onlyFound);
+    /// The same ask with any callback, which the answer runs with whether it
+    /// found the name and the name; one wait per guid and key.
+    void askNameThen(uint64_t guid, const std::string& key,
+                     std::function<void(bool found, const std::string& name)> then);
+    /// The answer for those waits (from the name query response).
+    void onNameAnsweredForWaits(uint64_t guid, bool found);
+    /// The creature and game object caches' asks with a callback (0x0067b6a0,
+    /// 0x0067bd40): the query goes out and `then` runs with whether the
+    /// answer found the entry. One wait per entry and key.
+    void askEntryThen(bool gameObject, uint32_t entry, const std::string& key,
+                      std::function<void(bool found)> then);
+    void onEntryAnsweredForWaits(bool gameObject, uint32_t entry, bool found);
+    /// The item cache's (0x0067ca30), the same way.
+    void askItemThen(uint32_t itemId, const std::string& key, std::function<void(bool found)> then);
+    void onItemAnsweredForWaits(uint32_t itemId, bool found);
     uint32_t getLfgProposalId() const;
     /// The proposal's dungeon and the bosses of it already done, both read off
     /// the proposal packet itself - see SocialHandler's two fields for why they
@@ -2908,6 +2957,13 @@ public:
     uint8_t battlefieldArenaFaction() const;
     /// The map of the battle the last in-progress status named (0x00bea564).
     uint32_t battlefieldMapId() const;
+    /// The battlemaster whose list was opened last (0x00bea568), and letting
+    /// it go (CloseBattlefield).
+    uint64_t battlemasterGuid() const;
+    /// CombatTextSetActiveUnit's unit (0x0074d580 -> 0x00ca1380).
+    uint64_t combatTextUnit() const { return combatTextUnit_; }
+    void setCombatTextUnit(uint64_t guid) { combatTextUnit_ = guid; }
+    void clearBattlemasterGuid();
 
     // ---- Loot ----
     void lootTarget(uint64_t guid);
@@ -2920,21 +2976,24 @@ public:
     void lootMoney();
     void cancelTempEnchantment(uint8_t handIndex);
     void closeLoot();
-    void scheduleGameObjectLootOpen(uint64_t guid, float delaySeconds = 0.35f, uint8_t attempts = 1);
 
-    /// True once the object is known to be a fishing school. A click on one
-    /// before its query response arrives still schedules a loot open, and by the
-    /// time that fires the metadata has usually landed - so the deferred open
-    /// re-checks rather than harvesting a school the player never fished.
-    bool isFishingHoleGameObject(uint64_t guid) const;
-    void clearPendingGameObjectLootOpen(uint64_t guid);
-    bool hasPendingGameObjectLootOpen(uint64_t guid) const;
     bool isGatherGameObject(uint64_t guid) const;
-    void despawnGameObjectLocally(uint64_t guid);
+    /// What the pointer makes of a game object: whether it may rest on it -
+    /// a tooltip, a highlight (0x0070f580, with the quest it is kept for in
+    /// the log) - and whether a click on it is a use (the type handler's
+    /// slot +0x18, 0x00711140).
+    struct GameObjectPointer {
+        bool tracked = false;
+        bool interactive = false;
+    };
+    GameObjectPointer gameObjectPointer(uint64_t guid);
     void activateSpiritHealer(uint64_t npcGuid);
     bool isLootWindowOpen() const;
     const LootResponseData& getCurrentLoot() const;
     void setAutoLoot(bool enabled);
+    /// 0x00513700: whether a click auto loots - autoLootDefault, the other
+    /// way round while AUTOLOOTTOGGLE's modifier is held.
+    bool clickAutoLoots() const;
     bool isAutoLoot() const;
     /// Turn the player to face the target when an attack or a targeted spell
     /// starts. Off by default, as the original client has it: a target behind
@@ -3326,6 +3385,13 @@ public:
     /// (0x005ab800 with 0x005d3240), the offset is 5 (0x005a83c0) and the
     /// page reads 1 (0x005a7fd0).
     bool petActionsOnBonusBar() const { return petActionsOnBonusBar_; }
+    /// The override bar (DAT_00c1e5a0 0x4, 0x005abb40): PLAYER_FIELD_BYTES2's
+    /// low word names an OverrideSpellData row - an aura of type 332 sets it -
+    /// and while that row names a spell its ten fill slots 121..130, 131 and
+    /// 132 empty; the offset is 5 and the page 1 as for the pet's bar.
+    bool overrideBarActive() const { return overrideBarActive_; }
+    /// Asked again as the player's PLAYER_FIELD_BYTES2 changes (0x006d1c5d).
+    void updateOverrideSpellBar();
     static constexpr int kBonusPetSlotFirst = 120;
     /// 0x005d4ad0: on where the player looks through its pet (PLAYER_FARSIGHT)
     /// and the pet lives, and - where the pet is the vehicle it sits in - its
@@ -3714,6 +3780,9 @@ public:
         /// team rating it asks for (+0x38), which the tooltip states (0x006277f0).
         uint32_t arenaBracket = 0;
         uint32_t requiredArenaRating = 0;
+        /// ItemPurchaseGroup.dbc id (+0x3c): the vendor item also wants the
+        /// player to own one of that group's items (ITEM_REQ_PURCHASE_GROUP).
+        uint32_t purchaseGroup = 0;
     };
     /// 0x005a37b0: whether one of the player's arena teams at least the
     /// bracket's size (2, 3, 5) has both the player's personal rating and the
@@ -3793,6 +3862,9 @@ public:
         uint32_t    maxGroupSize = 0;
         uint32_t    minLevel = 0;
         uint32_t    maxLevel = 0;
+        /// HolidayWorldState (column 29, +0x34): the world state whose value
+        /// says the battleground is this weekend's holiday (0x00548d10).
+        uint32_t    holidayWorldState = 0;
         /// 3 = battleground, 4 = arena. The two share this table and the
         /// battleground list must not offer arenas.
         uint32_t    instanceType = 0;
@@ -4652,6 +4724,10 @@ public:
     // SpellFocusObject.dbc name ("Anvil", "Cooking Fire", ...) for
     // requires-spell-focus cast failures; empty if unknown.
     const std::string& getSpellFocusName(uint32_t focusId) const;
+    /// SpellMechanic.dbc's name for a mechanic, null when it has no row.
+    const std::string* getSpellMechanicName(uint32_t mechanicId) const;
+    /// The mechanic of the player's first aura of those types (0x00804430).
+    uint32_t playerAuraMechanic(std::initializer_list<uint32_t> auraTypes) const;
     // TotemCategory.dbc name ("Blacksmith Hammer", "Mining Pick", ...) for
     // totem-category cast failures; empty if unknown.
     const std::string& getTotemCategoryName(uint32_t categoryId) const;
@@ -5046,7 +5122,6 @@ public:
     auto& pendingMoneyDeltaRef() { return pendingMoneyDelta_; }
     auto& pendingMoneyDeltaTimerRef() { return pendingMoneyDeltaTimer_; }
     auto& pendingAutoInspectRef() { return pendingAutoInspect_; }
-    auto& pendingGameObjectLootRetriesRef() { return pendingGameObjectLootRetries_; }
     auto& tempEnchantTimersRef() { return tempEnchantTimers_; }
     auto& localLootStateRef() { return localLootState_; }
     static const auto& getTempEnchantSlotNames() { return kTempEnchantSlotNames; }
@@ -5218,6 +5293,24 @@ public:
     auto& petAutocastableSpellsRef() { return petAutocastableSpells_; }
     auto& petCommandRef() { return petCommand_; }
     auto& petGuidRef() { return petGuid_; }
+    /// The player's controlled units as the client lists them (0x00c23500,
+    /// 0x005d3390(i)); the pet is the first. SMSG_PET_GUIDS sets the list
+    /// (0x005d6550); the pet SMSG_PET_SPELLS names moves to its front, a
+    /// list of its own when it is not on it, and none empties it (0x005d6900).
+    void setActivePet(uint64_t guid) {
+        if (guid == 0) {
+            petGuidList_.clear();
+        } else if (auto it = std::find(petGuidList_.begin(), petGuidList_.end(), guid); it != petGuidList_.end()) {
+            std::iter_swap(petGuidList_.begin(), it);
+        } else {
+            petGuidList_.assign(1, guid);
+        }
+        petGuid_ = petGuidList_.empty() ? 0 : petGuidList_.front();
+    }
+    void setPetGuidList(std::vector<uint64_t> guids) {
+        petGuidList_ = std::move(guids);
+        petGuid_ = petGuidList_.empty() ? 0 : petGuidList_.front();
+    }
     auto& petReactRef() { return petReact_; }
     auto& petSpellListRef() { return petSpellList_; }
     auto& stabledPetsRef() { return stabledPets_; }
@@ -5232,8 +5325,6 @@ public:
     auto& activeTotemSlotsRef() { return activeTotemSlots_; }
     /// The per-unit aura lists SpellHandler keeps, which the interface reads.
     std::unordered_map<uint64_t, std::vector<AuraSlot>>& unitAurasCacheRef();
-    auto& lastInteractedGoGuidRef() { return lastInteractedGoGuid_; }
-    auto& pendingGameObjectInteractGuidRef() { return pendingGameObjectInteractGuid_; }
 
     // ── Tab Cycling ──────────────────────────────────────────────────
     auto& tabCycleIndexRef() { return tabCycleIndex; }
@@ -5419,6 +5510,20 @@ public:
         loadLfgDungeonDbc();
         return lfgDungeons_;
     }
+    /// A dungeon's level ranges as the client shows and sorts them: the
+    /// LfgDungeonExpansion row for this account's expansion where there is one
+    /// (its hard and target ranges, 0x006349f0 as 0x00554e60 reads it), else
+    /// the dungeon's own.
+    struct LfgLevels { uint32_t minLevel = 0, maxLevel = 0, minRecLevel = 0, maxRecLevel = 0; };
+    struct LfgGroupRow { std::string name; uint32_t orderIndex = 0; uint32_t typeId = 0; };
+    const std::unordered_map<uint32_t, LfgGroupRow>& lfgGroups() const {
+        loadLfgDungeonDbc();
+        return lfgGroups_;
+    }
+    LfgLevels lfgDungeonLevels(const LfgDungeon& d) const;
+    /// LfgDungeonGroup.dbc: a category's name and its place in the list.
+    const std::string& lfgGroupName(uint32_t groupId) const;
+    uint32_t lfgGroupOrder(uint32_t groupId) const;
     void queryItemInfo(uint32_t entry, uint64_t guid);
 
     // --- Inner types exposed for former friend classes ---
@@ -5445,12 +5550,6 @@ public:
         float radius = 0;
         float boxLength = 0, boxWidth = 0, boxHeight = 0;
         float boxYaw = 0;
-    };
-    struct PendingLootRetry {
-        uint64_t guid = 0;
-        float timer = 0.0f;
-        uint8_t remainingRetries = 0;
-        bool sendLoot = false;
     };
     struct SpellReagent { uint32_t itemId = 0; uint32_t count = 0; };
     struct SpellNameEntry {
@@ -5500,6 +5599,10 @@ public:
         /// none.
         uint32_t descriptionVariableId = 0;
         int32_t effectBasePoints[3] = {0, 0, 0};
+        /// Spell.dbc EffectDieSides and EffectRealPointsPerLevel (+0x128,
+        /// +0x134): with the base points, an effect's value (0x007ff770).
+        int32_t effectDieSides[3] = {0, 0, 0};
+        float effectPointsPerLevel[3] = {0.0f, 0.0f, 0.0f};
         uint32_t effectIds[3] = {0, 0, 0};
         // Spell.dbc EffectApplyAuraName - which aura an APPLY_AURA effect
         // applies. The effect id above only says that one is applied; this
@@ -5615,6 +5718,9 @@ public:
         uint32_t targetAuraStateNot = 0;
         uint32_t targetAuraSpell = 0;
         uint32_t excludeTargetAuraSpell = 0;
+        /// Spell.dbc SpellDifficultyID [233]: its SpellDifficulty row, the
+        /// spell an instance's difficulty swaps it for (0x00802850).
+        uint32_t spellDifficultyId = 0;
         uint32_t totems[2] = {0, 0};
         uint32_t totemCategories[2] = {0, 0};
     };
@@ -6177,6 +6283,7 @@ private:
     GameObjectSpawnCallback gameObjectSpawnCallback_;
     GameObjectMoveCallback gameObjectMoveCallback_;
     GameObjectDespawnCallback gameObjectDespawnCallback_;
+    GameObjectFlagsCallback gameObjectFlagsCallback_;
     GameObjectDespawnCallback gameObjectDestroyCallback_;
     DynamicObjectSpawnCallback dynamicObjectSpawnCallback_;
     DynamicObjectDespawnCallback dynamicObjectDespawnCallback_;
@@ -6184,6 +6291,7 @@ private:
     GameObjectCustomAnimCallback gameObjectCustomAnimCallback_;
     GameObjectStateCallback gameObjectStateCallback_;
     GameObjectInteractionCallback gameObjectInteractionCallback_;
+    GameObjectBoundsCallback gameObjectBoundsCallback_;
     uint64_t interactionObject_ = 0;
     uint64_t tabardVendorGuid_ = 0;            ///< 0xc0e518
     bool tabardSavePending_ = false;           ///< 0xc9eacc
@@ -6211,6 +6319,7 @@ private:
     bool transportTransferArrived_ = false;
     uint64_t pendingPlayerTransportGuid_ = 0;
     uint32_t pendingPlayerTransportEntry_ = 0;
+    std::optional<LoadingScreenCrossing> loadingScreenCrossing_;
     uint32_t pendingPlayerTransportMapId_ = 0xFFFFFFFFu;
     glm::vec3 pendingPlayerTransportOffset_ = glm::vec3(0.0f);  ///< as the wire has it
     std::unique_ptr<TransportManager> transportManager_;  // Transport movement manager
@@ -6222,7 +6331,6 @@ private:
     /// The offset of a canonical place from the player over the map, turned
     /// with it (0x0057eb80, 0x0057efe0).
     [[nodiscard]] glm::vec2 minimapPingOffset(float wowX, float wowY) const;
-    uint64_t pendingGameObjectInteractGuid_ = 0;
     // Owned fishing bobber whose bite animation has fired. Keeping this explicit
     // lets the UI target/reel it even while GAMEOBJECT_QUERY metadata is pending.
     uint64_t hookedFishingBobberGuid_ = 0;
@@ -6250,6 +6358,7 @@ private:
     std::vector<AuraSlot> playerAuras;
     std::vector<AuraSlot> targetAuras;
     uint64_t petGuid_ = 0;
+    std::vector<uint64_t> petGuidList_;
     uint32_t petActionSlots_[10] = {};   // SMSG_PET_SPELLS action bar (10 slots)
     uint8_t  petCommand_ = 1;            // 0=stay,1=follow,2=attack,3=dismiss
     uint8_t  petReact_   = 1;            // 0=passive,1=defensive,2=aggressive
@@ -6383,16 +6492,6 @@ private:
         bool itemAutoLootSent = false;
     };
     std::unordered_map<uint64_t, LocalLootState> localLootState_;
-    std::vector<PendingLootRetry> pendingGameObjectLootRetries_;
-    struct PendingLootOpen {
-        uint64_t guid = 0;
-        float timer = 0.0f;
-        uint8_t remainingAttempts = 1;
-    };
-    std::vector<PendingLootOpen> pendingGameObjectLootOpens_;
-    // Tracks the last GO we sent CMSG_GAMEOBJ_USE to; used in handleSpellGo
-    // to send CMSG_LOOT after a gather cast (mining/herbalism) completes.
-    uint64_t lastInteractedGoGuid_ = 0;
     std::unordered_map<uint64_t, float> recentLootMoneyAnnounceCooldowns_;
     uint64_t playerMoneyCopper_ = 0;
     uint32_t playerHonorPoints_ = 0;
@@ -6427,6 +6526,43 @@ private:
     GossipMessageData currentGossip;
 
     void performGameObjectInteractionNow(uint64_t guid);
+    // Using a game object as the client does (game_handler_object_use.cpp): what of
+    // the object the use reads, its type's data fields, its Lock.dbc row,
+    // what opens it (0x0070f160), the refusal (0x00711470, 0 for none),
+    // whether the player is in its reach (0x0070fa70), and the use
+    // (0x007116c0), true when it sent something.
+    struct GameObjectFacts {
+        uint32_t type = 0;
+        uint32_t state = 0;
+        uint32_t flags = 0;
+        int32_t level = 0;
+        const GameObjectQueryResponseData* info = nullptr;
+    };
+    struct CarriedItem {
+        uint8_t bag = 0xFF;
+        uint8_t slot = 0;
+        uint64_t guid = 0;
+    };
+    GameObjectFacts gameObjectFacts(const GameObject& go, const GameObjectQueryResponseData* info) const;
+    uint32_t gameObjectData(const GameObjectFacts& f, go_use::Field which) const;
+    const go_use::LockRow* gameObjectLock(const GameObjectFacts& f) const;
+    std::optional<CarriedItem> findCarriedItem(uint32_t itemId) const;
+    go_use::Opening gameObjectOpening(const GameObjectFacts& f);
+    bool gameObjectAllowsMounted(const GameObjectFacts& f) const;
+    bool gameObjectInReach(const GameObject& go, const GameObjectFacts& f);
+    uint16_t gameObjectRefusal(const GameObject& go, const GameObjectFacts& f, std::string& arg);
+    uint16_t gameObjectGenericRefusal(const GameObject& go, const GameObjectFacts& f, std::string& arg);
+    float gameObjectScale(const GameObject& go) const;
+    glm::quat gameObjectRotation(const GameObject& go) const;
+    bool playerInForm() const;
+    bool chairSeatInReach(const GameObject& go, const GameObjectFacts& f) const;
+    bool ritualAllows(const GameObject& go, const GameObjectFacts& f);
+    int gameObjectReactionToPlayer(const GameObject& go) const;
+    bool gameObjectClickable(const GameObject& go, const GameObjectFacts& f);
+    bool gameObjectUsableNow(const GameObject& go, const GameObjectFacts& f);
+    bool isPlayersBobber(const GameObject& go) const;
+    void sayGameObjectError(uint16_t id, const std::vector<std::string>& args);
+    bool useGameObjectByLock(const GameObject& go, const GameObjectFacts& f);
 
     // Quest details
     bool questDetailsOpen = false;
@@ -6453,6 +6589,20 @@ private:
     std::unordered_map<uint32_t, int32_t> questWatchExpiry_;
     float questWatchSweepTimer_ = 0.0f;
     std::unordered_set<uint32_t> blobQuestIds_;
+    uint64_t combatTextUnit_ = 0;
+    /// Events waiting on a player name, by guid: the event and whether only a
+    /// found name raises it.
+    struct NameWait {
+        std::string key;
+        std::function<void(bool, const std::string&)> then;
+    };
+    std::unordered_map<uint64_t, std::vector<NameWait>> nameWaits_;
+    struct EntryWait {
+        std::string key;
+        std::function<void(bool)> then;
+    };
+    /// Keyed by entry, with bit 32 set for a game object's, bit 33 for an item's.
+    std::unordered_map<uint64_t, std::vector<EntryWait>> entryWaits_;
     bool pendingLoginQuestResync_ = false;
     float pendingLoginQuestResyncTimeout_ = 0.0f;
 
@@ -6479,6 +6629,8 @@ private:
     std::array<int, 12> inventoryAlerts_{};  ///< DAT_00c24238
     VehicleMoveHoldCallback vehicleMoveHoldCallback_;
     bool petActionsOnBonusBar_ = false;
+    bool overrideBarActive_ = false;
+    uint32_t overrideSpellsId_ = 0;
     uint32_t possessSpellId_ = 0;
     void setPossessSpell(uint32_t spellId);
 
@@ -6716,6 +6868,9 @@ private:
     // LFG dungeon name cache (lazy-loaded from LFGDungeons.dbc; WotLK only)
     mutable std::unordered_map<uint32_t, std::string> lfgDungeonNameCache_;
     mutable std::vector<LfgDungeon> lfgDungeons_;
+    mutable std::unordered_map<uint32_t, LfgGroupRow> lfgGroups_;
+    /// LfgDungeonExpansion rows by (dungeon id << 8 | expansion level).
+    mutable std::unordered_map<uint64_t, LfgLevels> lfgExpansionLevels_;
     mutable std::vector<Companion> mountSpells_;
     mutable std::vector<Companion> critterSpells_;
     mutable size_t companionsBuiltFromSpellCount_ = static_cast<size_t>(-1);
@@ -6873,6 +7028,7 @@ private:
     UnitMoveFlagsCallback unitMoveFlagsCallback_;
     NpcSwingCallback npcSwingCallback_;
     HitReactionCallback hitReactionCallback_;
+    BloodSpurtCallback bloodSpurtCallback_;
     NpcGreetingCallback npcGreetingCallback_;
     NpcFarewellCallback npcFarewellCallback_;
     NpcVendorCallback npcVendorCallback_;

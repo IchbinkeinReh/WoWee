@@ -44,6 +44,13 @@ public:
     /// The zone the server says the player is in. Used in preference to working
     /// it out from map geometry, which can only guess between overlapping zones.
     void setPlayerZoneId(uint32_t zoneId);
+    /// The WMO group the player stands in (MOGP's group id, 0 outdoors), which
+    /// with the height picks the floor the map opens on (DungeonMapChunk).
+    void setPlayerWmoId(uint32_t wmoId);
+    /// The interface draws the player's arrow itself - FrameXML's
+    /// PlayerArrowFrame model (CreateWorldMapArrowFrame, 0x00544750) - so
+    /// the map in its frame draws none of its own.
+    void setInterfaceDrawsPlayerArrow(bool drawn);
     void setPartyDots(std::vector<PartyDot> dots);
     void setTaxiNodes(std::vector<TaxiNode> nodes);
     void setQuestPois(std::vector<QuestPOI> pois);
@@ -131,6 +138,8 @@ public:
 
     /// The name of that zone, or empty.
     [[nodiscard]] std::string zoneNameAtMapPoint(float u, float v) const;
+    /// UpdateMapHighlight's answer for a point (0x00545110).
+    [[nodiscard]] MapHighlight mapHighlightAt(float u, float v) const;
 
     /// Drill into the zone under that point, as clicking it would.
     bool clickMapPoint(float u, float v);

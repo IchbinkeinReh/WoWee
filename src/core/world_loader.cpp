@@ -788,16 +788,9 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     rendering::LoadingScreen& loadingScreen = *loadingScreenOwned;
     loadingScreen.setVkContext(window_->getVkContext());
     loadingScreen.setSDLWindow(window_->getSDLWindow());
-    // A crossing on a transport shows its route on the world map
-    // (0x0040ad50): the transport's TaxiPath is its game object's data0.
     if (gameHandler_) {
-        if (auto* movement = gameHandler_->getMovementHandler()) {
-            if (const auto transfer = movement->takeTransportTransfer()) {
-                const auto* info = gameHandler_->getCachedGameObjectInfo(transfer->entry);
-                const uint32_t taxiPath = (info && info->hasData) ? info->data[0] : 0u;
-                if (taxiPath != 0) loadingScreen.setTransportRoute(taxiPath, transfer->fromMap);
-            }
-        }
+        if (const auto crossing = gameHandler_->takeLoadingScreenCrossing())
+            loadingScreen.setTransportCrossing(crossing->taxiPathId, crossing->fromMapId);
     }
     bool loadingScreenOk = loadingScreen.initialize(assetManager_, mapId);
     // 0x0040a990: the loading screen starts the keep-alive's thirty seconds.

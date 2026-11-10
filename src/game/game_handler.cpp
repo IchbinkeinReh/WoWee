@@ -243,6 +243,8 @@ void GameHandler::disconnect() {
     shapeshiftFormId_ = 0;
     shapeshiftFormPending_ = false;
     petActionsOnBonusBar_ = false;
+    overrideBarActive_ = false;
+    overrideSpellsId_ = 0;
     setState(WorldState::DISCONNECTED);
     LOG_INFO("Disconnected from world server");
 }
@@ -712,60 +714,6 @@ void GameHandler::updateTimers(float deltaTime) {
         }
     }
 
-    for (auto it = pendingGameObjectLootRetries_.begin(); it != pendingGameObjectLootRetries_.end();) {
-        it->timer -= deltaTime;
-        if (it->timer <= 0.0f) {
-            if (it->remainingRetries > 0 && isInWorld()) {
-                // Keep server-side position/facing fresh before retrying GO use.
-                sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
-                auto usePacket = GameObjectUsePacket::build(it->guid);
-                socket->send(usePacket);
-                if (it->sendLoot) {
-                    auto lootPacket = LootPacket::build(it->guid);
-                    socket->send(lootPacket);
-                }
-                --it->remainingRetries;
-                it->timer = 0.20f;
-            }
-        }
-        if (it->remainingRetries == 0) {
-            it = pendingGameObjectLootRetries_.erase(it);
-        } else {
-            ++it;
-        }
-    }
-
-    for (auto it = pendingGameObjectLootOpens_.begin(); it != pendingGameObjectLootOpens_.end();) {
-        it->timer -= deltaTime;
-        if (it->timer <= 0.0f) {
-            if (isInWorld()) {
-                // Avoid sending CMSG_LOOT while a timed cast is active (e.g. gathering).
-                // handleSpellGo will trigger loot after the cast completes.
-                if (spellHandler_ && spellHandler_->isCasting() && spellHandler_->getCurrentCastSpellId() != 0) {
-                    it->timer = 0.20f;
-                    ++it;
-                    continue;
-                }
-                // The click may have landed before the object's metadata did.
-                // A fishing school is never opened by looting it.
-                if (isFishingHoleGameObject(it->guid)) {
-                    it = pendingGameObjectLootOpens_.erase(it);
-                    continue;
-                }
-                lootTarget(it->guid);
-            }
-            if (it->remainingAttempts > 1) {
-                --it->remainingAttempts;
-                it->timer = 0.75f;
-                ++it;
-            } else {
-                it = pendingGameObjectLootOpens_.erase(it);
-            }
-        } else {
-            ++it;
-        }
-    }
-
     // Periodically re-query names for players whose initial CMSG_NAME_QUERY was
     // lost (server didn't respond) or whose entity was recreated while the query
     // was still pending. Runs every 5 seconds to keep overhead minimal.
@@ -964,29 +912,9 @@ void GameHandler::update(float deltaTime) {
             checkAreaTriggers();
         }
 
-        // Cancel GO interaction cast if player enters combat (auto-attack).
-        if (pendingGameObjectInteractGuid_ != 0 &&
-            combatHandler_ && (combatHandler_->isAutoAttacking() || combatHandler_->hasAutoAttackIntent())) {
-            pendingGameObjectInteractGuid_ = 0;
-            if (spellHandler_) spellHandler_->resetCastState();
-            // A cast that fails says so on the red line only, in the
-            // interface's words (SPELL_FAILED_INTERRUPTED) - not also as an
-            // English "Interrupted." in chat.
-            addUIError(interfaceString("SPELL_FAILED_INTERRUPTED", "Interrupted"));
-        }
         // Check if client-side cast timer expired (tick-down is in SpellHandler::updateTimers).
-        // Three paths depending on whether this is a GO interaction or craft-queue cast:
         if (spellHandler_ && spellHandler_->isCasting() && spellHandler_->getCastTimeRemaining() <= 0.0f) {
-            if (pendingGameObjectInteractGuid_ != 0) {
-                // GO interaction cast: do NOT call resetCastState() here. The server
-                // sends SMSG_SPELL_GO when the cast completes server-side (~50-200ms
-                // after the client timer expires due to float precision/frame timing).
-                // handleSpellGo checks `wasInTimedCast = casting_ && spellId == currentCastSpellId_`
-                // - if we clear those fields now, wasInTimedCast is false and the loot
-                // path (CMSG_LOOT via lastInteractedGoGuid_) never fires.
-                // Let the cast bar sit at 100% until SMSG_SPELL_GO arrives to clean up.
-                pendingGameObjectInteractGuid_ = 0;
-            } else if (spellHandler_->getCraftQueueRemaining() > 0 && craftCastGoGraceSec_ < 2.0f) {
+            if (spellHandler_->getCraftQueueRemaining() > 0 && craftCastGoGraceSec_ < 2.0f) {
                 // Craft queue cast: SMSG_SPELL_GO is what decrements the queue and
                 // re-casts the next item, and it races this client-side timer.
                 // resetCastState() here would wipe the queue mid-run ("Create All"
@@ -995,7 +923,7 @@ void GameHandler::update(float deltaTime) {
                 // without a result packet, e.g. reagents gone).
                 craftCastGoGraceSec_ += deltaTime;
             } else {
-                // Regular cast with no GO pending: clean up immediately.
+                // Any other cast: clean up immediately.
                 spellHandler_->resetCastState();
             }
         } else {
@@ -1719,6 +1647,17 @@ void GameHandler::beginPlayerTransportWorldTransfer(
                 " wire offset=(", wireOffset.x, ",", wireOffset.y, ",", wireOffset.z, ")");
 }
 
+void GameHandler::armLoadingScreenCrossing(uint32_t entry, uint32_t fromMap) {
+    loadingScreenCrossing_.reset();
+    if (entry == 0) return;
+    // The player's transport is the one named (0x0040ad50 compares its
+    // entry), and its template's first datum the taxi path it runs.
+    if (pendingPlayerTransportEntry_ != entry) return;
+    const auto* info = getCachedGameObjectInfo(entry);
+    if (!info || info->type != 15 || !info->hasData || info->data[0] == 0) return;
+    loadingScreenCrossing_ = LoadingScreenCrossing{info->data[0], fromMap};
+}
+
 bool GameHandler::completePlayerTransportWorldTransfer(
     uint64_t transportGuid, glm::vec3& worldPosition) {
     if (!pendingPlayerTransportTransfer_ || !transportManager_ ||
@@ -2412,6 +2351,7 @@ const GameHandler::BattlemasterEntry* GameHandler::getBattlemasterInfo(uint32_t 
                 e.id           = id;
                 e.name         = dbc->getString(i, 11);
                 e.maxGroupSize = dbc->getUInt32(i, 28);
+                e.holidayWorldState = dbc->getUInt32(i, 29);
                 e.minLevel     = dbc->getUInt32(i, 30);
                 e.maxLevel     = dbc->getUInt32(i, 31);
                 // Fields 1-8 are map ids, 0xFFFFFFFF where unused, and field 9
@@ -3556,6 +3496,43 @@ void GameHandler::loadDungeonEncounterDbc() const {
 }
 
 // ---------------------------------------------------------------------------
+// The two tables the dungeon list reads beside LFGDungeons (0x005536a0,
+// 0x00554e60). LfgDungeonGroup: ID, Name (sixteen locales and flags, 1-17),
+// OrderIndex 18, ParentGroupId 19, TypeId 20. LfgDungeonExpansion: ID,
+// LfgId 1, ExpansionLevel 2, RandomId 3, HardLevelMin 4, HardLevelMax 5,
+// TargetLevelMin 6, TargetLevelMax 7.
+namespace {
+void loadLfgSideTables(pipeline::AssetManager* am,
+                       std::unordered_map<uint32_t, GameHandler::LfgGroupRow>& groups,
+                       std::unordered_map<uint64_t, GameHandler::LfgLevels>& levels) {
+    if (!am || !am->isInitialized()) return;
+    if (auto dbc = am->loadDBC("LfgDungeonGroup.dbc"); dbc && dbc->isLoaded() &&
+        dbc->getFieldCount() > 18) {
+        for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+            GameHandler::LfgGroupRow row;
+            row.name = dbc->getString(i, 1);
+            row.orderIndex = dbc->getUInt32(i, 18);
+            if (dbc->getFieldCount() > 20) row.typeId = dbc->getUInt32(i, 20);
+            groups[dbc->getUInt32(i, 0)] = std::move(row);
+        }
+    }
+    if (auto dbc = am->loadDBC("LfgDungeonExpansion.dbc"); dbc && dbc->isLoaded() &&
+        dbc->getFieldCount() >= 8) {
+        for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+            GameHandler::LfgLevels l;
+            l.minLevel = dbc->getUInt32(i, 4);
+            l.maxLevel = dbc->getUInt32(i, 5);
+            l.minRecLevel = dbc->getUInt32(i, 6);
+            l.maxRecLevel = dbc->getUInt32(i, 7);
+            const uint64_t key = (static_cast<uint64_t>(dbc->getUInt32(i, 1)) << 8) |
+                                 (dbc->getUInt32(i, 2) & 0xFFu);
+            // 0x006349f0 takes the first row for the pair.
+            levels.emplace(key, l);
+        }
+    }
+}
+}  // namespace
+
 // LFG dungeon name cache (WotLK: LFGDungeons.dbc)
 // ---------------------------------------------------------------------------
 
@@ -3568,6 +3545,7 @@ void GameHandler::loadLfgDungeonDbc() const {
     // meant one early call disabled this file for the whole session.
     if (!am || !am->isInitialized()) return;
     lfgDungeonNameCacheLoaded_ = true;
+    loadLfgSideTables(am, lfgGroups_, lfgExpansionLevels_);
 
     auto dbc = am->loadDBC("LFGDungeons.dbc");
     if (!dbc || !dbc->isLoaded()) return;
@@ -3648,6 +3626,28 @@ void GameHandler::loadLfgDungeonDbc() const {
               });
     LOG_INFO("LFGDungeons.dbc: loaded ", lfgDungeonNameCache_.size(), " dungeon names, ",
              lfgDungeons_.size(), " listable entries");
+}
+
+
+GameHandler::LfgLevels GameHandler::lfgDungeonLevels(const LfgDungeon& d) const {
+    loadLfgDungeonDbc();
+    auto it = lfgExpansionLevels_.find((static_cast<uint64_t>(d.id) << 8) |
+                                       accountState().accountExpansion);
+    if (it != lfgExpansionLevels_.end()) return it->second;
+    return {d.minLevel, d.maxLevel, d.minRecLevel, d.maxRecLevel};
+}
+
+const std::string& GameHandler::lfgGroupName(uint32_t groupId) const {
+    static const std::string kNone;
+    loadLfgDungeonDbc();
+    auto it = lfgGroups_.find(groupId);
+    return it == lfgGroups_.end() ? kNone : it->second.name;
+}
+
+uint32_t GameHandler::lfgGroupOrder(uint32_t groupId) const {
+    loadLfgDungeonDbc();
+    auto it = lfgGroups_.find(groupId);
+    return it == lfgGroups_.end() ? 0u : it->second.orderIndex;
 }
 
 // ---------------------------------------------------------------------------
@@ -3796,7 +3796,7 @@ bool GameHandler::formSpellInEffect(uint32_t spellId) const {
 
 uint32_t GameHandler::getBonusActionBarOffset() const {
     // 0x005a83c0 (DAT_00c1e59c).
-    return bonusBarOffset(petActionsOnBonusBar_, shapeshiftFormRow(shapeshiftFormId_));
+    return bonusBarOffset(petActionsOnBonusBar_ || overrideBarActive_, shapeshiftFormRow(shapeshiftFormId_));
 }
 
 std::vector<const char*> GameHandler::setPlayerShapeshiftForm(uint8_t form) {
@@ -4095,6 +4095,47 @@ void GameHandler::updatePetActionBar() {
         fireAddonEvent(event, {});
     }
     fireAddonEvent("PET_BAR_UPDATE", {});
+}
+
+void GameHandler::updateOverrideSpellBar() {
+    auto player = getEntityManager().getEntity(playerGuid);
+    const uint16_t idx = fieldIndex(UF::PLAYER_FIELD_BYTES2);
+    if (!player || idx == 0xFFFF) return;
+    const uint32_t id = player->getField(idx) & 0xFFFFu;
+    if (id == overrideSpellsId_) return;
+    overrideSpellsId_ = id;
+    // OverrideSpellData: ID, Spells[10], Flags.
+    std::array<uint32_t, 10> spells{};
+    bool any = false;
+    if (id != 0) {
+        auto* am = services_.assetManager;
+        if (auto dbc = am && am->isInitialized() ? am->loadDBC("OverrideSpellData.dbc") : nullptr;
+            dbc && dbc->isLoaded() && dbc->getFieldCount() >= 11) {
+            if (const int32_t row = dbc->findRecordById(id); row >= 0) {
+                for (uint32_t i = 0; i < 10; ++i) {
+                    spells[i] = dbc->getUInt32(static_cast<uint32_t>(row), 1 + i);
+                    any = any || spells[i] != 0;
+                }
+            }
+        }
+    }
+    const uint32_t before = getBonusActionBarOffset();
+    if (any) {
+        // 0x005ab800 with 0x005a7cf0: twelve slots from 121, the row's ten
+        // and two empty.
+        for (int i = 0; i < 12; ++i) {
+            ActionBarSlot& slot = actionBar[kBonusPetSlotFirst + i];
+            slot = ActionBarSlot{};
+            const uint32_t spell = i < 10 ? spells[static_cast<size_t>(i)] : 0;
+            if (spell != 0) {
+                slot.type = ActionBarSlot::SPELL;
+                slot.id = spell;
+            }
+        }
+    }
+    overrideBarActive_ = any;
+    for (const char* event : bonusBarOffsetEvents(before, getBonusActionBarOffset())) fireAddonEvent(event, {});
+    fireAddonEvent("ACTIONBAR_SLOT_CHANGED", {"0"});
 }
 
 void GameHandler::announceCompanionChange() {
@@ -4973,6 +5014,14 @@ uint32_t GameHandler::battlefieldMapId() const {
     return socialHandler_ ? socialHandler_->battlefieldMapId() : 0;
 }
 
+uint64_t GameHandler::battlemasterGuid() const {
+    return socialHandler_ ? socialHandler_->battlemasterGuid() : 0;
+}
+
+void GameHandler::clearBattlemasterGuid() {
+    if (socialHandler_) socialHandler_->clearBattlemasterGuid();
+}
+
 void GameHandler::setArenaRosterShowOffline(bool show) {
     if (socialHandler_) socialHandler_->setArenaRosterShowOffline(show);
 }
@@ -5330,6 +5379,71 @@ uint32_t GameHandler::getLfgSearchListId() const {
 
 void GameHandler::sortLfgBrowser(std::string_view word) {
     if (socialHandler_) socialHandler_->sortLfgBrowser(word);
+}
+
+const std::string& GameHandler::nameOrAsk(uint64_t guid, const char* event, bool onlyFound) {
+    const std::string& name = lookupName(guid);
+    if (!name.empty() || guid == 0) return name;
+    const std::string ev = event;
+    askNameThen(guid, ev, [this, ev, onlyFound](bool found, const std::string&) {
+        if (found || !onlyFound) fireAddonEvent(ev, {});
+    });
+    return name;
+}
+
+void GameHandler::askNameThen(uint64_t guid, const std::string& key,
+                              std::function<void(bool, const std::string&)> then) {
+    if (guid == 0) return;
+    auto& waits = nameWaits_[guid];
+    const bool waiting = std::any_of(waits.begin(), waits.end(),
+                                     [&key](const NameWait& w) { return w.key == key; });
+    if (!waiting) waits.push_back({key, std::move(then)});
+    queryPlayerName(guid);
+}
+
+void GameHandler::askEntryThen(bool gameObject, uint32_t entry, const std::string& key,
+                               std::function<void(bool)> then) {
+    if (entry == 0) return;
+    auto& waits = entryWaits_[(gameObject ? (1ull << 32) : 0ull) | entry];
+    const bool waiting = std::any_of(waits.begin(), waits.end(),
+                                     [&key](const EntryWait& w) { return w.key == key; });
+    if (!waiting) waits.push_back({key, std::move(then)});
+    if (gameObject) queryGameObjectInfo(entry, 0);
+    else queryCreatureInfo(entry, 0);
+}
+
+void GameHandler::askItemThen(uint32_t itemId, const std::string& key, std::function<void(bool)> then) {
+    if (itemId == 0) return;
+    auto& waits = entryWaits_[(1ull << 33) | itemId];
+    const bool waiting = std::any_of(waits.begin(), waits.end(),
+                                     [&key](const EntryWait& w) { return w.key == key; });
+    if (!waiting) waits.push_back({key, std::move(then)});
+    ensureItemInfo(itemId);
+}
+
+void GameHandler::onItemAnsweredForWaits(uint32_t itemId, bool found) {
+    const auto it = entryWaits_.find((1ull << 33) | itemId);
+    if (it == entryWaits_.end()) return;
+    const auto waits = std::move(it->second);
+    entryWaits_.erase(it);
+    for (const auto& w : waits) w.then(found);
+}
+
+void GameHandler::onEntryAnsweredForWaits(bool gameObject, uint32_t entry, bool found) {
+    const auto it = entryWaits_.find((gameObject ? (1ull << 32) : 0ull) | entry);
+    if (it == entryWaits_.end()) return;
+    const auto waits = std::move(it->second);
+    entryWaits_.erase(it);
+    for (const auto& w : waits) w.then(found);
+}
+
+void GameHandler::onNameAnsweredForWaits(uint64_t guid, bool found) {
+    const auto it = nameWaits_.find(guid);
+    if (it == nameWaits_.end()) return;
+    const auto waits = std::move(it->second);
+    nameWaits_.erase(it);
+    const std::string name = lookupName(guid);
+    for (const auto& w : waits) w.then(found, name);
 }
 
 void GameHandler::onLfgNameAnswered(uint64_t guid) {
@@ -5922,6 +6036,8 @@ GameHandler::getExtendedCost(uint32_t extendedCostId) const {
                         e.arenaBracket = dbc->getUInt32(i, 3);
                         e.requiredArenaRating = dbc->getUInt32(i, 14);
                     }
+                    if (dbc->getFieldCount() > 15)
+                        e.purchaseGroup = dbc->getUInt32(i, 15);
                     extendedCostCache_[id] = e;
                 }
                 LOG_INFO("ItemExtendedCost.dbc: loaded ", extendedCostCache_.size(),

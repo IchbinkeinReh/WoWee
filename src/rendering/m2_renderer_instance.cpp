@@ -315,6 +315,22 @@ std::optional<uint32_t> M2Renderer::soleSequenceId(uint32_t instanceId) const {
     return inst.cachedModel->sequences[0].id;
 }
 
+std::optional<std::pair<glm::vec3, glm::vec3>> M2Renderer::localBounds(uint32_t instanceId,
+                                                                       bool playingSequence) const {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return std::nullopt;
+    const auto& inst = instances[idxIt->second];
+    const M2ModelGPU* model = inst.cachedModel;
+    if (!model) return std::nullopt;
+    if (playingSequence) {
+        const int i = inst.currentSequenceIndex;
+        if (i < 0 || static_cast<size_t>(i) >= model->sequences.size()) return std::nullopt;
+        return std::make_pair(model->sequences[static_cast<size_t>(i)].boundMin,
+                              model->sequences[static_cast<size_t>(i)].boundMax);
+    }
+    return std::make_pair(model->boundMin, model->boundMax);
+}
+
 bool M2Renderer::getAttachmentTransform(uint32_t instanceId, uint32_t attachmentId, glm::mat4& out) const {
     auto idxIt = instanceIndexById.find(instanceId);
     if (idxIt == instanceIndexById.end()) return false;
@@ -450,6 +466,17 @@ bool M2Renderer::hasAnimation(uint32_t instanceId, uint32_t animationId) const {
         if (seq.id == animationId) return true;
     }
     return false;
+}
+
+std::optional<uint32_t> M2Renderer::currentAnimationId(uint32_t instanceId) const {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return std::nullopt;
+    const auto& inst = instances[idxIt->second];
+    if (!inst.cachedModel || inst.currentSequenceIndex < 0 ||
+        static_cast<size_t>(inst.currentSequenceIndex) >= inst.cachedModel->sequences.size()) {
+        return std::nullopt;
+    }
+    return inst.cachedModel->sequences[static_cast<size_t>(inst.currentSequenceIndex)].id;
 }
 
 bool M2Renderer::sequencePlaysOnce(uint32_t instanceId, uint32_t animationId) const {
@@ -1161,7 +1188,28 @@ size_t M2Renderer::evictUnreferencedTextures(size_t bytesNeeded) {
     return freed;
 }
 
-VkTexture* M2Renderer::loadTexture(const std::string& path, uint32_t texFlags) {
+namespace {
+std::string g_substituteFrom;  // lower-cased file name
+std::string g_substituteTo;
+}  // namespace
+
+void M2Renderer::setTextureSubstitution(std::string fileName, std::string replacement) {
+    std::transform(fileName.begin(), fileName.end(), fileName.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    g_substituteFrom = std::move(fileName);
+    g_substituteTo = std::move(replacement);
+}
+
+VkTexture* M2Renderer::loadTexture(const std::string& requested, uint32_t texFlags) {
+    std::string path = requested;
+    if (!g_substituteFrom.empty()) {
+        const size_t slash = path.find_last_of("\\/");
+        const size_t start = slash == std::string::npos ? 0 : slash + 1;
+        std::string name = path.substr(start);
+        std::transform(name.begin(), name.end(), name.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (name == g_substituteFrom) path = path.substr(0, start) + g_substituteTo;
+    }
     constexpr uint64_t kFailedTextureRetryLookups = 512;
     auto normalizeKey = [](std::string key) {
         std::replace(key.begin(), key.end(), '/', '\\');

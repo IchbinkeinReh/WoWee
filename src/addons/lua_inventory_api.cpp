@@ -3,6 +3,7 @@
 #include "game/item_text.hpp"
 #include "game/interface_text.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "game/text_tokens.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/lua_engine.hpp"
 #include "addons/lua_api_registrations.hpp"
@@ -154,14 +155,43 @@ static int lua_GetInventoryAlertStatus(lua_State* L) {
 // then ten, twenty-five, fifty, a hundred and two hundred and fifty. Past the
 // last one there is nothing left to sell, and zero is what the real client
 // answers there.
+// (0x0057bb30) The next slot's: BankBagSlotPrices.dbc's Cost for the row one
+// past the player's own count of bought slots (PLAYER_BYTES_2 byte 2) -
+// whatever is passed in, which the client reads not at all. 0 past the
+// table's end.
+/// MailTemplate.dbc's body for a templated letter (0x00570bd0 reads +8),
+/// nothing for a template it has no row for.
+static std::optional<std::string> mailTemplateBody(game::GameHandler* gh, uint32_t templateId) {
+    static std::unordered_map<uint32_t, std::string> bodies;
+    static bool loaded = false;
+    if (!loaded && gh) {
+        if (auto* am = gh->services().assetManager; am && am->isInitialized()) {
+            loaded = true;
+            if (auto dbc = am->loadDBC("MailTemplate.dbc"); dbc && dbc->isLoaded() && dbc->getFieldCount() >= 19)
+                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
+                    bodies[dbc->getUInt32(i, 0)] = dbc->getString(i, 18);
+        }
+    }
+    const auto it = bodies.find(templateId);
+    if (it == bodies.end()) return std::nullopt;
+    return it->second;
+}
+
 static int lua_GetBankSlotCost(lua_State* L) {
-    static constexpr uint32_t kSlotPrices[] = {
-        1'000, 10'000, 100'000, 250'000, 500'000, 1'000'000, 2'500'000,
-    };
-    constexpr int kNumBuyable = static_cast<int>(std::size(kSlotPrices));
-    const int owned = static_cast<int>(luaL_optnumber(L, 1, 0));
-    const bool haveAll = owned < 0 || owned >= kNumBuyable;
-    lua_pushnumber(L, haveAll ? 0.0 : static_cast<double>(kSlotPrices[owned]));
+    auto* gh = getGameHandler(L);
+    static std::unordered_map<uint32_t, uint32_t> prices;
+    static bool loaded = false;
+    if (!loaded && gh) {
+        if (auto* am = gh->services().assetManager; am && am->isInitialized()) {
+            loaded = true;
+            if (auto dbc = am->loadDBC("BankBagSlotPrices.dbc"); dbc && dbc->isLoaded() && dbc->getFieldCount() >= 2)
+                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
+                    prices[dbc->getUInt32(i, 0)] = dbc->getUInt32(i, 1);
+        }
+    }
+    const uint32_t next = gh ? gh->getInventory().getPurchasedBankBagSlots() + 1u : 1u;
+    const auto it = prices.find(next);
+    lua_pushnumber(L, it != prices.end() ? static_cast<double>(it->second) : 0.0);
     return 1;
 }
 
@@ -453,6 +483,42 @@ static int lua_GetMerchantItemArenaRequirement(lua_State* L) {
     lua_pushnumber(L, bracket);
     lua_pushboolean(L, gh->meetsArenaRating(cost->requiredArenaRating, bracket) ? 1 : 0);
     return 3;
+}
+
+/// _GetMerchantItemPurchaseGroup(index) → name, met - the ItemPurchaseGroup a
+/// vendor item's extended cost names (+0x3c) and whether the player owns one
+/// of its eight items (0x006277f0 asks 0x00754a20 with flag 8: the carried
+/// set plus the bank, a broken item not counting). Nothing when it names none.
+static int lua_GetMerchantItemPurchaseGroup(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const auto* cost = merchantCost(L, static_cast<int>(luaL_optnumber(L, 1, 0)));
+    if (!gh || !cost || cost->purchaseGroup == 0) return 0;
+    auto* am = gh->services().assetManager;
+    if (!am || !am->isInitialized()) return 0;
+    auto dbc = am->loadDBC("ItemPurchaseGroup.dbc");
+    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() < 10) return 0;
+    const int32_t row = dbc->findRecordById(cost->purchaseGroup);
+    if (row < 0) return 0;
+    const auto r = static_cast<uint32_t>(row);
+    std::array<uint32_t, 8> wanted{};
+    for (uint32_t i = 0; i < 8; ++i) wanted[i] = dbc->getUInt32(r, 1 + i);
+    bool met = false;
+    auto look = [&](const game::ItemDef& d) {
+        if (d.maxDurability > 0 && d.curDurability == 0) return;
+        for (uint32_t w : wanted) if (w != 0 && d.itemId == w) met = true;
+    };
+    const auto& inv = gh->getInventory();
+    inv.forEachCarried(look);
+    for (int i = 0; i < game::Inventory::BANK_SLOTS; ++i)
+        if (const auto& s = inv.getBankSlot(i); !s.empty()) look(s.item);
+    for (int b = 0; b < game::Inventory::BANK_BAG_SLOTS; ++b) {
+        if (const auto& bag = inv.getBankBagItem(b); !bag.empty()) look(bag.item);
+        for (int i = 0; i < inv.getBankBagSize(b); ++i)
+            if (const auto& s = inv.getBankBagSlot(b, i); !s.empty()) look(s.item);
+    }
+    lua_pushstring(L, dbc->getString(r, 9).c_str());
+    lua_pushboolean(L, met ? 1 : 0);
+    return 2;
 }
 
 // GetMerchantItemCostInfo(index) → honorPoints, arenaPoints, itemCount
@@ -1862,6 +1928,9 @@ static int lua_GetSendMailItem(lua_State* L) {
     if (!att.occupied()) { return emptySlot(L); }
 
     const auto* info = gh->getItemInfo(att.item.itemId);
+    // An item the cache does not hold is asked for, and its answer raises
+    // MAIL_SEND_INFO_UPDATE (0x0056d490).
+    if (!info || !info->valid) askItemForEvent(gh, att.item.itemId, "MAIL_SEND_INFO_UPDATE");
     lua_pushstring(L, info ? info->name.c_str() : "");
     lua_pushstring(L, gh->getItemIconPath(
         info && info->displayInfoId ? info->displayInfoId : att.item.displayInfoId).c_str());
@@ -2464,10 +2533,10 @@ static int lua_UseEquipmentSet(lua_State* L) {
     auto* gh = getGameHandler(L);
     const auto* set = equipmentSetByName(gh, luaL_optstring(L, 1, ""));
     if (!gh || !set) { lua_pushboolean(L, 0); return 1; }
+    // EQUIPMENT_SWAP_PENDING goes out with the request and
+    // EQUIPMENT_SWAP_FINISHED with the server's answer (0x005ada20,
+    // 0x005af710), which is when the manager refreshes.
     gh->useEquipmentSet(set->setId);
-    // The manager waits on this before refreshing and clearing the slots it was
-    // told to ignore.
-    gh->fireAddonEvent("EQUIPMENT_SWAP_FINISHED", {"1", set->name});
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -3290,6 +3359,7 @@ static int lua_WoweeContainerItemInstance(lua_State* L) {
     lua_setfield(L, -2, "durability");
     lua_pushnumber(L, static_cast<lua_Number>(s->item.maxDurability));
     lua_setfield(L, -2, "maxDurability");
+    pushSocketedGems(L, gh, s->item.guid, s->item.itemId);
     return 1;
 }
 
@@ -3465,6 +3535,14 @@ static int lua_GetItemTooltipData(lua_State* L) {
             }
         }
         lua_setfield(L, -2, "sockets");
+    }
+    // The socket bonus, as ITEM_SOCKET_BONUS words it (the enchant's name).
+    if (info->socketBonus != 0) {
+        const std::string bonus = gh->getEnchantName(info->socketBonus);
+        if (!bonus.empty()) {
+            lua_pushstring(L, bonus.c_str());
+            lua_setfield(L, -2, "socketBonus");
+        }
     }
     // Item set
     if (info->itemSetId != 0) {
@@ -3824,60 +3902,34 @@ static int lua_GetContainerNumFreeSlots(lua_State* L) {
 // 13=Trinket1,14=Trinket2,15=Back,16=MainHand,17=OffHand,18=Ranged,19=Tabard
 
 // GetInventorySlotInfo("slotName") → slotId, textureName, checkRelic
-// Maps WoW slot names (e.g. "HeadSlot", "HEADSLOT") to inventory slot IDs
+// GetInventorySlotInfo(name) -> slot, icon, checkRelic.
 static int lua_GetInventorySlotInfo(lua_State* L) {
+    // 0x005e7d60: PaperDollItemFrame.dbc (ItemButtonName, SlotIcon,
+    // SlotNumber), the name matched without regard to case - the slot, its
+    // icon as the file names it, and 1 for the ranged slot (18) else nil.
+    // A name the file does not have is the client's error.
     const char* name = luaL_checkstring(L, 1);
-    std::string slot(name);
-    // Normalize: uppercase, strip trailing "SLOT" if present
-    for (char& c : slot) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    if (slot.size() > 4 && slot.substr(slot.size() - 4) == "SLOT")
-        slot = slot.substr(0, slot.size() - 4);
-
-    // WoW inventory slots are 1-indexed
-    struct SlotMap { const char* name; int id; const char* texture; };
-    static const SlotMap mapping[] = {
-        {"HEAD",          1,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Head"},
-        {"NECK",          2,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Neck"},
-        {"SHOULDER",      3,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Shoulder"},
-        {"SHIRT",         4,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Shirt"},
-        {"CHEST",         5,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Chest"},
-        {"WAIST",         6,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Waist"},
-        {"LEGS",          7,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Legs"},
-        {"FEET",          8,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Feet"},
-        {"WRIST",         9,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Wrists"},
-        {"HANDS",        10,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Hands"},
-        {"FINGER0",      11,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Finger"},
-        {"FINGER1",      12,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Finger"},
-        {"TRINKET0",     13,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Trinket"},
-        {"TRINKET1",     14,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Trinket"},
-        {"BACK",         15,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Chest"},
-        {"MAINHAND",     16,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-MainHand"},
-        {"SECONDARYHAND",17,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-SecondaryHand"},
-        {"RANGED",       18,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Ranged"},
-        {"TABARD",       19,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Tabard"},
-        // The bag buttons along the main bar ask for these by name at load, and
-        // paperdollframe.lua does it in an OnLoad - so a gap here does not just
-        // lose the bags, it loses the file.
-        {"BAG0",         20,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Bag"},
-        {"BAG1",         21,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Bag"},
-        {"BAG2",         22,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Bag"},
-        {"BAG3",         23,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Bag"},
-        {"AMMO",          0,  "Interface\\PaperDoll\\UI-PaperDoll-Slot-Ammo"},
-    };
-    for (const auto& m : mapping) {
-        if (slot == m.name) {
-            lua_pushnumber(L, m.id);
-            lua_pushstring(L, m.texture);
-            lua_pushboolean(L, m.id == 18 ? 1 : 0); // checkRelic: only ranged slot
+    auto* gh = getGameHandler(L);
+    auto* am = gh ? gh->services().assetManager : nullptr;
+    auto dbc = am && am->isInitialized() ? am->loadDBC("PaperDollItemFrame.dbc") : nullptr;
+    if (dbc && dbc->isLoaded() && dbc->getFieldCount() >= 3) {
+        for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+            const std::string row = dbc->getString(i, 0);
+            const std::string_view want(name);
+            if (row.empty() || row.size() != want.size() ||
+                !std::equal(row.begin(), row.end(), want.begin(), [](char x, char y) {
+                    return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
+                }))
+                continue;
+            const uint32_t slot = dbc->getUInt32(i, 2);
+            lua_pushnumber(L, slot);
+            lua_pushstring(L, dbc->getString(i, 1).c_str());
+            if (slot == 18) lua_pushnumber(L, 1);
+            else lua_pushnil(L);
             return 3;
         }
     }
-    // nil rather than an error, which is what the real client returns. Raising
-    // here takes down the whole file that asked, and a name we do not know is
-    // a gap in the table above rather than a reason to lose an interface.
-    LOG_WARNING("GetInventorySlotInfo: unknown slot ", name);
-    lua_pushnil(L);
-    return 1;
+    return luaL_error(L, "Invalid inventory slot in GetInventorySlotInfo");
 }
 
 /// ShowInventorySellCursor(slot) (0x005ea930): the coin bag over one of the
@@ -4295,6 +4347,9 @@ static int lua_GetInventoryItemQuality(lua_State* L) {
         entry = inspectedItemEntry(gh, uid, slotId);
     }
     const auto* info = entry != 0 ? gh->getItemInfo(entry) : nullptr;
+    // Asked for when not cached; the answer raises UNIT_INVENTORY_CHANGED for
+    // the player whichever unit asked (0x005e7660).
+    if (entry != 0 && (!info || !info->valid)) askItemForEvent(gh, entry, "UNIT_INVENTORY_CHANGED", {"player"});
     if (!info) return luaReturnNil(L);
     lua_pushnumber(L, info->inventoryType == 0 ? -1 : static_cast<int>(info->quality));
     return 1;
@@ -5015,6 +5070,52 @@ static int lua_GiveMasterLoot(lua_State* L) {
     return 0;
 }
 
+/// The sender of a letter as the inbox names it (0x0056d960). A player's
+/// (types 0 and 5) is the name cache's, asked for when it has none - the
+/// answer raises MAIL_INBOX_UPDATE and UPDATE_PENDING_MAIL when it found the
+/// name (0x0056d460) - except a letter on the GM stationery (61), which is
+/// GM_EMAIL_NAME. An auction house's is its AuctionHouse.dbc name, a
+/// creature's and an object's their cached names. Empty - nil - otherwise.
+static std::string mailSenderName(game::GameHandler* gh, const game::MailMessage& mail) {
+    switch (mail.messageType) {
+        case 0:
+        case 5: {
+            if (mail.stationeryId == 61) return game::interfaceString("GM_EMAIL_NAME", "Game Master");
+            if (!mail.senderName.empty()) return mail.senderName;
+            if (mail.senderGuid == 0) return {};
+            const std::string name = gh->lookupName(mail.senderGuid);
+            if (!name.empty()) return name;
+            gh->askNameThen(mail.senderGuid, "mail sender", [gh](bool found, const std::string&) {
+                if (!found) return;
+                gh->fireAddonEvent("MAIL_INBOX_UPDATE", {});
+                gh->fireAddonEvent("UPDATE_PENDING_MAIL", {});
+            });
+            return {};
+        }
+        case 2: {
+            auto* am = gh->services().assetManager;
+            auto dbc = am && am->isInitialized() ? am->loadDBC("AuctionHouse.dbc") : nullptr;
+            const int32_t row = dbc && dbc->isLoaded() ? dbc->findRecordById(mail.senderEntry) : -1;
+            return row >= 0 ? dbc->getString(static_cast<uint32_t>(row), 4) : std::string();
+        }
+        case 3:
+        case 4: {
+            // The creature's or the object's cached name; one not cached yet
+            // is asked for, and the found answer redraws the inbox.
+            const std::string name = gh->getMailSenderName(mail);
+            if (name != "Unknown") return name;
+            gh->askEntryThen(mail.messageType == 4, mail.senderEntry, "mail sender", [gh](bool found) {
+                if (!found) return;
+                gh->fireAddonEvent("MAIL_INBOX_UPDATE", {});
+                gh->fireAddonEvent("UPDATE_PENDING_MAIL", {});
+            });
+            return {};
+        }
+        default:
+            return {};
+    }
+}
+
 // GetMasterLootCandidate(index) → the name of whoever can be given this loot.
 //
 // The list the server sends with the loot, which GiveMasterLoot has been
@@ -5033,10 +5134,10 @@ static int lua_GetMasterLootCandidate(lua_State* L) {
     if (index > static_cast<int>(candidates.size())) return luaReturnNil(L);
 
     const uint64_t guid = candidates[static_cast<size_t>(index) - 1];
-    std::string name = gh->lookupName(guid);
-    // A name this client has not learned yet would come back empty, and an
-    // empty string is true in Lua - the menu would show a blank row that gives
-    // the item to someone unnamed. Nil skips the row instead.
+    // A name this client has not learned yet answers nil, and is asked for:
+    // the answer raises UPDATE_MASTER_LOOT_LIST when it found the name
+    // (0x00588920 -> 0x00588150), which redraws the menu with it.
+    const std::string name = gh->nameOrAsk(guid, "UPDATE_MASTER_LOOT_LIST", true);
     if (name.empty()) return luaReturnNil(L);
     lua_pushstring(L, name.c_str());
     return 1;
@@ -5180,6 +5281,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"CloseMerchant",           lua_CloseMerchant},
                 {"GetMerchantItemMaxStack", lua_GetMerchantItemMaxStack},
                 {"_GetMerchantItemArenaRequirement", lua_GetMerchantItemArenaRequirement},
+                {"_GetMerchantItemPurchaseGroup", lua_GetMerchantItemPurchaseGroup},
                 {"GetMerchantItemCostInfo", lua_GetMerchantItemCostInfo},
                 {"GetMerchantItemCostItem", lua_GetMerchantItemCostItem},
                 {"GetItemInfo",       lua_GetItemInfo},
@@ -6465,6 +6567,9 @@ void registerInventoryLuaAPI(lua_State* L) {
             }
             const auto& s = *held;
             const auto* info = gh->getItemInfo(s.item.itemId);
+            // NEW_AUCTION_UPDATE when an item not cached yet is answered
+            // (0x0059a3e0).
+            if (!info || !info->valid) askItemForEvent(gh, s.item.itemId, "NEW_AUCTION_UPDATE");
             const uint32_t inStack = s.item.stackCount ? s.item.stackCount : 1;
             // price is the vendor value of the whole stack and pricePerUnit of
             // one of them - the tab offers a starting bid of one or the other
@@ -6945,8 +7050,13 @@ void registerInventoryLuaAPI(lua_State* L) {
             // into a name once the query comes back, and names the auction
             // house, a creature or an object for the other message types. The
             // raw field is empty for player mail until then.
-            lua_pushstring(L, gh->getMailSenderName(mail).c_str());  // sender
-            const std::string subject = gh->getMailDisplaySubject(mail);
+            const std::string sender = mailSenderName(gh, mail);
+            if (sender.empty()) lua_pushnil(L);
+            else lua_pushstring(L, sender.c_str());                // sender
+            // A COD payment's letter is titled COD_PAYMENT (mail flag 0x8).
+            std::string subject = gh->getMailDisplaySubject(mail);
+            if ((mail.flags & 0x8u) != 0)
+                subject = game::interfaceFormat("COD_PAYMENT", "COD Payment: %s", {subject});
             lua_pushstring(L, subject.c_str());                   // subject
             lua_pushnumber(L, mail.money);                        // money (copper)
             lua_pushnumber(L, mail.cod);                          // COD
@@ -6962,10 +7072,15 @@ void registerInventoryLuaAPI(lua_State* L) {
             if (mail.attachments.empty()) lua_pushnil(L);
             else lua_pushnumber(L, static_cast<lua_Number>(mail.attachments.size()));
             lua_pushboolean(L, mail.read ? 1 : 0);               // wasRead
-            lua_pushboolean(L, 0);                                // wasReturned
+            // Returned (mail flag 0x2) or sent back unopened (0x200).
+            lua_pushboolean(L, (mail.flags & 0x202u) != 0 ? 1 : 0); // wasReturned
             lua_pushboolean(L, !mail.body.empty() ? 1 : 0);      // textCreated
-            lua_pushboolean(L, mail.messageType == 0 ? 1 : 0);   // canReply (player mail only)
-            lua_pushboolean(L, 0);                                // isGM
+            // A player's letter, unless on the GM's stationery (61), which is
+            // a GM's and says so instead (0x0056e520).
+            constexpr uint32_t kGmStationery = 0x3d;
+            const bool fromGm = mail.stationeryId == kGmStationery;
+            lua_pushboolean(L, mail.messageType == 0 && !fromGm ? 1 : 0); // canReply
+            lua_pushboolean(L, fromGm ? 1 : 0);                   // isGM
             // How many of the first attachment there are, which is what the
             // inbox button prints in its corner.
             lua_pushnumber(L, mail.attachments.empty()
@@ -7001,7 +7116,17 @@ void registerInventoryLuaAPI(lua_State* L) {
             const auto* mail = mailAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
             if (!mail) { return luaReturnNil(L); }
             if (!mail->read && mail->messageId != 0) gh->mailMarkAsRead(mail->messageId);
-            lua_pushstring(L, mail->body.c_str());
+            // A templated letter has no text of its own: MailTemplate's body,
+            // its $-tokens filled for the player (0x00579590), or nothing at all
+            // for a template with no row.
+            if (mail->body.empty() && mail->mailTemplateId != 0) {
+                if (const auto body = mailTemplateBody(gh, mail->mailTemplateId))
+                    lua_pushstring(L, game::resolveTextTokens(*body, *gh).c_str());
+                else
+                    lua_pushnil(L);
+            } else {
+                lua_pushstring(L, mail->body.c_str());
+            }
             lua_pushstring(L, game::stationeryTexture(mail->stationeryId, mail->messageType));
             lua_pushboolean(L, (mail->money > 0 || !mail->attachments.empty()) ? 1 : 0);
             // Whether this is an auction house invoice, which was answered no

@@ -665,6 +665,9 @@ set(WOWEE_SOURCES
     src/core/screen_recorder.cpp
     src/core/entity_spawner.cpp
     src/core/entity_spawner_player.cpp
+    src/core/entity_spawner_artkit.cpp
+    src/core/entity_spawner_object_effect.cpp
+    src/core/entity_spawner_destructible.cpp
     src/core/entity_spawner_blob.cpp
     src/core/entity_spawner_unit_events.cpp
     src/core/entity_spawner_melee_sounds.cpp
@@ -746,6 +749,11 @@ set(WOWEE_SOURCES
     src/game/skill_ups.cpp
     src/game/trainer_service_list.cpp
     src/game/quest_poi_icons.cpp
+    src/game/quest_poi_blobs.cpp
+    src/game/gem_conditions.cpp
+    src/game/chat_language.cpp
+    src/game/chat_profanity.cpp
+    src/game/game_handler_object_use.cpp
     src/game/macro_eval.cpp
     src/game/macro_options.cpp
     src/game/game_handler_skill_ups.cpp
@@ -1015,6 +1023,7 @@ set(WOWEE_SOURCES
     src/rendering/character_renderer.cpp
     src/rendering/character_renderer_rt.cpp
     src/rendering/character_preview.cpp
+    src/rendering/model_frame_view.cpp
     src/rendering/wmo_renderer.cpp
     src/rendering/imgui_texture.cpp
     src/rendering/imgui_blend.cpp

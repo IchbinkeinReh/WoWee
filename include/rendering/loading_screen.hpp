@@ -3,10 +3,10 @@
 #include <vulkan/vulkan.h>
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
-#include <vector>
 
-#include <glm/glm.hpp>
+#include "rendering/loading_screen_route.hpp"
 
 struct SDL_Window;
 struct ImDrawList;
@@ -37,18 +37,18 @@ public:
     /// behind it, as everything before them did (Application::worldSettle).
     void drawOverlay();
 
+    /// The player crosses to another continent on a ship or zeppelin
+    /// (SMSG_TRANSFER_PENDING's transport, 0x0040ad50): the transport's taxi
+    /// path and the map it leaves. Before initialize(); where the crossing
+    /// can be drawn the screen is the Azeroth map with it, else the map's own.
+    void setTransportCrossing(uint32_t taxiPathId, uint32_t fromMapId) {
+        crossingPath_ = taxiPathId;
+        crossingFromMap_ = fromMapId;
+    }
+
     void setProgress(float progress) { loadProgress = progress; }
     /// What is being loaded, for the log: the client's screen says nothing.
     void setStatus(const std::string& status);
-
-    /// A transport's crossing (SMSG_TRANSFER_PENDING with one): its TaxiPath
-    /// and the map it leaves. Set before initialize(): the screen is then the
-    /// world map with the leg drawn on it (loading_screen_route.hpp,
-    /// 0x0040ad50), where its data allows.
-    void setTransportRoute(uint32_t taxiPathId, uint32_t fromMap) {
-        routePathId_ = taxiPathId;
-        routeFromMap_ = fromMap;
-    }
 
     // Must be set before initialize() for Vulkan texture upload
     void setVkContext(VkContext* ctx) { vkCtx = ctx; }
@@ -65,10 +65,9 @@ private:
     bool upload(const uint8_t* rgba, int width, int height, Texture& out);
     void drawPicture(ImDrawList* drawList, float screenW, float screenH) const;
     void release(Texture& tex);
-    /// 0x00409880 and 0x0040a160: the leg and the world map; false leaves the
-    /// map's own picture (0x004094e0).
-    bool buildRoute(pipeline::AssetManager* assets);
-    void drawRoute(ImDrawList* drawList, float screenW, float screenH) const;
+    /// 0x00409880 and 0x0040a160: the crossing and its textures, or nothing.
+    bool loadCrossing(pipeline::AssetManager* assets);
+    void drawCrossing(ImDrawList* drawList, float screenW, float screenH) const;
 
     VkContext* vkCtx = nullptr;
     SDL_Window* sdlWindow = nullptr;
@@ -78,14 +77,11 @@ private:
     bool widePicture_ = false;
     std::array<Texture, 2> bar_;  ///< loading_screen::kBar's pieces
 
-    uint32_t routePathId_ = 0;
-    uint32_t routeFromMap_ = 0;
-    bool routeReady_ = false;
-    glm::vec2 routeStart_{0.0f};
-    glm::vec2 routeEnd_{0.0f};
-    std::vector<glm::vec2> routeDots_;
-    std::array<Texture, 12> worldTiles_;
+    uint32_t crossingPath_ = 0;
+    uint32_t crossingFromMap_ = 0;
+    std::optional<loading_screen_route::Route> crossing_;
     Texture dynamicElements_;
+    std::array<Texture, 12> worldTiles_;
 
     float loadProgress = 0.0f;
     /// This screen holds the world's sound (AudioEngine::beginWorldSoundHold).

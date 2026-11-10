@@ -512,11 +512,22 @@ public:
 
     [[nodiscard]] bool initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout,
                     pipeline::AssetManager* assets);
+    /// Build the pipelines for an off-screen pass instead of the scene's,
+    /// before initialize(): a UI model frame's own view.
+    void setRenderPassOverride(VkRenderPass pass, VkSampleCountFlagBits samples) {
+        renderPassOverride_ = pass;
+        samplesOverride_ = samples;
+    }
     /** Configure this renderer for camera-centered sky M2s before initialize(). */
     void setSkyMode(bool enabled) { skyMode_ = enabled; }
     void shutdown();
 
     [[nodiscard]] bool hasModel(uint32_t modelId) const;
+    /// One texture file swapped for another wherever a model loads it
+    /// (0x004b5730, read by 0x004b5210): its name, case aside, replaced and
+    /// its folder kept. Empty names undo it. violenceLevel sets it for the
+    /// blood spurt (0x007f39b0).
+    static void setTextureSubstitution(std::string fileName, std::string replacement);
     /// A loaded model's vertex radius (the M2 header's +0xb8), 0 without one.
     [[nodiscard]] float getModelVertexRadius(uint32_t modelId) const;
     bool loadModel(const pipeline::M2Model& model, uint32_t modelId);
@@ -695,6 +706,8 @@ public:
     void setInstanceAnimationThen(uint32_t instanceId, uint32_t animationId, uint32_t thenAnimationId);
     /// Check if a model instance has a specific animation ID in its sequence table.
     [[nodiscard]] bool hasAnimation(uint32_t instanceId, uint32_t animationId) const;
+    /// The AnimationData id of the sequence the instance plays now.
+    [[nodiscard]] std::optional<uint32_t> currentAnimationId(uint32_t instanceId) const;
     /// Whether the animation's sequence has flag 0x1, which the client plays
     /// once and holds at its end rather than round again (0x00831fc0 sets
     /// +0x4a, which 0x00832260 then leaves alone).
@@ -741,6 +754,10 @@ public:
     /// and that animation is the opening. Undercity's lift doors are the case:
     /// one bone, one sequence, id 0, 3333ms.
     [[nodiscard]] std::optional<uint32_t> soleSequenceId(uint32_t instanceId) const;
+    /// An instance's box in its model's own frame: the model's bounds (the
+    /// M2 header's), or the bounds of the sequence it is playing (0x0082ced0).
+    [[nodiscard]] std::optional<std::pair<glm::vec3, glm::vec3>> localBounds(uint32_t instanceId,
+                                                                           bool playingSequence) const;
     /// The world frame of an instance's attachment point (0x00831410): its
     /// bone as posed now, offset to the point. False where the model has none.
     bool getAttachmentTransform(uint32_t instanceId, uint32_t attachmentId, glm::mat4& out) const;
@@ -1612,6 +1629,8 @@ private:
     /// each frame in update().
     float furthestDrawnSq_ = 0.0f;
     bool forceNoCull_ = false;
+    VkRenderPass renderPassOverride_ = VK_NULL_HANDLE;
+    VkSampleCountFlagBits samplesOverride_ = VK_SAMPLE_COUNT_1_BIT;
 
     // Thread count for parallel bone animation
     uint32_t numAnimThreads_ = 1;

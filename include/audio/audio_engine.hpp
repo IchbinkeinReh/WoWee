@@ -136,6 +136,10 @@ public:
     /// Change the volume of a sound started with a handle (no-op once it has
     /// finished or is fading out).
     void setSoundVolume(uint32_t id, float volume);
+    /// Change the pitch of a sound started with a handle (no-op once it has
+    /// finished) - an object effect's loop following its object's speed
+    /// (0x004cfb50).
+    void setSoundPitch(uint32_t id, float pitch);
     /// Stop a sound started with a handle over `seconds`, after which it is
     /// cleaned up like a sound that ended (no-op once it has finished).
     void stopSoundWithFade(uint32_t id, float seconds);

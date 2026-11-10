@@ -2163,6 +2163,8 @@ void EntityController::dispatchEntitySpawn(uint64_t guid, ObjectType objectType,
         return;  // Skip local player - spawned separately via spawnPlayerCharacter()
     }
     if (objectType == ObjectType::PLAYER) {
+        // Asked again whenever its display changes: a form or a morph swaps
+        // the character for the display's creature and back (0x00717a20).
         if (owner_.playerSpawnCallbackRef()) {
             uint8_t race = 0, gender = 0, facial = 0;
             uint32_t appearanceBytes = 0;
@@ -2727,6 +2729,8 @@ void EntityController::onCreatePlayer(const UpdateBlock& block, std::shared_ptr<
 
         owner_.lastPlayerFieldsRef() = block.fields;
         owner_.detectInventorySlotBases(block.fields);
+        // An override bar the player comes into the world under (0x005abb40).
+        owner_.updateOverrideSpellBar();
 
         if (kVerboseUpdateObject) {
             uint16_t maxField = 0;
@@ -3621,6 +3625,12 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
         owner_.maybeDetectVisibleItemLayout();
         owner_.detectInventorySlotBases(block.fields);
 
+        // The override spells (PLAYER_FIELD_BYTES2's low word, 0x006d1c5d ->
+        // 0x005abb40).
+        if (const uint16_t b2 = fieldIndex(UF::PLAYER_FIELD_BYTES2);
+            b2 != 0xFFFF && block.fields.find(b2) != block.fields.end()) {
+            owner_.updateOverrideSpellBar();
+        }
         // The unit the player looks through (0x006e4fd0): whether the bonus
         // bar holds the pet's actions is asked again (0x005d4ad0).
         if (const uint16_t farsight = fieldIndex(UF::PLAYER_FARSIGHT); farsight != 0xFFFF &&
@@ -3671,6 +3681,42 @@ void EntityController::onValuesUpdateGameObject(const UpdateBlock& block, std::s
             owner_.gameObjectMoveCallbackRef()(block.guid, entity->getX(), entity->getY(),
                                     entity->getZ(), entity->getOrientation());
         }
+    }
+
+    // A new display id is a new model (the client reloads it, and the
+    // reload re-dresses it, 0x00713ed0): how a destructible building goes
+    // from whole to damaged to rubble when the realm swaps its display.
+    if (const uint16_t ufDisplay = fieldIndex(UF::GAMEOBJECT_DISPLAYID); ufDisplay != 0xFFFF) {
+        auto itD = block.fields.find(ufDisplay);
+        auto go = std::static_pointer_cast<GameObject>(entity);
+        // Not a destructible building (type 33): its look follows its flags
+        // (0x0070e0d0), not its display field.
+        const uint16_t b1 = fieldIndex(UF::GAMEOBJECT_BYTES_1);
+        const bool destructible = b1 != 0xFFFF && ((entity->getField(b1) >> 8) & 0xFFu) == 33u;
+        if (itD != block.fields.end() && itD->second != 0 && itD->second != go->getDisplayId() &&
+            !transportGuids_.count(block.guid) && !destructible) {
+            const bool shown = go->getDisplayId() != 0;
+            go->setDisplayId(itD->second);
+            if (shown && owner_.gameObjectDespawnCallbackRef()) owner_.gameObjectDespawnCallbackRef()(block.guid);
+            if (owner_.gameObjectSpawnCallbackRef()) {
+                float scale = 1.0f;
+                if (const uint16_t sc = fieldIndex(UF::OBJECT_FIELD_SCALE_X); sc != 0xFFFF) {
+                    const uint32_t raw = entity->getField(sc);
+                    if (raw != 0) {
+                        scale = bitsToFloat(raw);
+                        if (scale <= 0.01f || scale > 100.0f) scale = 1.0f;
+                    }
+                }
+                owner_.gameObjectSpawnCallbackRef()(block.guid, go->getEntry(), go->getDisplayId(), go->getX(),
+                                                    go->getY(), go->getZ(), go->getOrientation(), scale);
+            }
+        }
+    }
+
+    // GAMEOBJECT_FLAGS: a destructible building's state is in them.
+    if (const uint16_t ufFlags = fieldIndex(UF::GAMEOBJECT_FLAGS);
+        ufFlags != 0xFFFF && block.fields.find(ufFlags) != block.fields.end() && owner_.gameObjectFlagsCallbackRef()) {
+        owner_.gameObjectFlagsCallbackRef()(block.guid);
     }
 
     // Detect GO state changes from GAMEOBJECT_BYTES_1 (packed: byte0=state, byte1=type, byte2=artKit, byte3=animProgress)
@@ -4373,15 +4419,12 @@ void EntityController::handleNameQueryResponse(network::Packet& packet) {
             owner_.ignoreCacheRef()[data.name] = data.guid;
         }
 
-        // Fire UNIT_NAME_UPDATE so nameplate/unit frame addons know the name is available
-        if (owner_.addonEventCallbackRef()) {
-            std::string unitId;
-            if (data.guid == owner_.getTargetGuid()) unitId = "target";
-            else if (data.guid == owner_.focusGuidRef()) unitId = "focus";
-            else if (data.guid == owner_.getPlayerGuid()) unitId = "player";
-            if (!unitId.empty())
-                owner_.fireAddonEvent("UNIT_NAME_UPDATE", {unitId});
-        }
+        // UNIT_NAME_UPDATE once for every token that names the unit
+        // (0x00512b00 -> 0x0060bf10): a party or raid member's frame, the
+        // pet's, mouseover and the arena and boss frames as well as target,
+        // focus and player.
+        for (const auto& unitId : owner_.unitTokensForGuid(data.guid))
+            owner_.fireAddonEvent("UNIT_NAME_UPDATE", {unitId});
     }
 
     // Asked only once the name is cached above: both read it from the cache.
@@ -4391,6 +4434,9 @@ void EntityController::handleNameQueryResponse(network::Packet& packet) {
     // whether or not it found a name — otherwise a row whose guid names nobody would
     // hold the list un-announced for as long as it is browsed.
     owner_.onLfgNameAnswered(data.guid);
+    // GetMasterLootCandidate's and GetBattlefieldPosition's waits
+    // (0x00588150 raises only for a found name, 0x005496c0 for any answer).
+    owner_.onNameAnsweredForWaits(data.guid, data.isValid());
     // A channel invite whose inviter is a stranger. 0x0050e120 case 0x18 asks for
     // the name and lets 0x004fb5c0 raise the popup with it. As there, only an
     // answer that found the name ends the wait (0x004fb5c0 clears it on success).
@@ -4447,9 +4493,20 @@ void EntityController::handleCreatureQueryResponse(network::Packet& packet) {
                     // compares the argument against its own unit and ignores
                     // anything else, and most of a zone is neither targeted nor
                     // focused.
-                    const std::string unitId = owner_.guidToUnitId(guid);
-                    if (!unitId.empty() && owner_.addonEventCallbackRef()) {
-                        owner_.addonEventCallbackRef()("UNIT_CLASSIFICATION_CHANGED", {unitId});
+                    //
+                    // 0x0072cde0: the name first, then the classification,
+                    // each to every token the unit has (0x0060bf10).
+                    for (const auto& unitId : owner_.unitTokensForGuid(guid)) {
+                        owner_.fireAddonEvent("UNIT_NAME_UPDATE", {unitId});
+                    }
+                    for (const auto& unitId : owner_.unitTokensForGuid(guid)) {
+                        owner_.fireAddonEvent("UNIT_CLASSIFICATION_CHANGED", {unitId});
+                    }
+                    // One of the player's totems: the bar redraws its slot
+                    // with the name that came (0x005139b0, PLAYER_TOTEM_UPDATE).
+                    for (int slot = 0; slot < GameHandler::NUM_TOTEM_SLOTS; ++slot) {
+                        if (owner_.getTotemSlot(slot).guid == guid)
+                            owner_.fireAddonEvent("PLAYER_TOTEM_UPDATE", {std::to_string(slot + 1)});
                     }
                 }
             }
@@ -4475,11 +4532,9 @@ void EntityController::handleCreatureQueryResponse(network::Packet& packet) {
     } else {
         owner_.combatLogFeed().creatureAnswered(data.entry, data.name, false);
     }
+    // The caches' waits, found or not (the mail inbox's sender, 0x0056d460).
+    owner_.onEntryAnsweredForWaits(false, data.entry, data.isValid());
 }
-
-// ============================================================
-// GameObject Query
-// ============================================================
 
 void EntityController::handleGameObjectQueryResponse(network::Packet& packet) {
     GameObjectQueryResponseData data;
@@ -4544,6 +4599,9 @@ void EntityController::handleGameObjectQueryResponse(network::Packet& packet) {
             static std::set<uint32_t> saidRoute;
             const bool sayThis = saidRoute.insert(data.entry).second;
             const uint32_t taxiPathId = data.hasData ? data.data[0] : 0u;
+            // Its sway: the TransportPhysics row of the sixth datum (0x00711b50).
+            owner_.getTransportManager()->setTransportPhysicsForEntry(
+                data.entry, data.hasData ? data.data[5] : 0u);
             if (taxiPathId == 0) {
                 if (sayThis) {
                     LOG_WARNING("MO_TRANSPORT entry=", data.entry,
@@ -4572,6 +4630,7 @@ void EntityController::handleGameObjectQueryResponse(network::Packet& packet) {
             }
         }
     }
+    owner_.onEntryAnsweredForWaits(true, data.entry, data.isValid());
 }
 
 void EntityController::handleGameObjectPageText(network::Packet& packet) {

@@ -25,6 +25,9 @@ namespace world_map {
 /// Context passed to each overlay layer during rendering.
 struct LayerContext {
     ImDrawList* drawList = nullptr;
+    /// Drawn inside FrameXML's WorldMapFrame, whose own area label names what
+    /// is under the cursor (UpdateMapHighlight).
+    bool hostedInFrame = false;
     ImVec2 imgMin;           // top-left of map image in screen space
     float displayW = 0, displayH = 0;
     glm::vec3 playerRenderPos;

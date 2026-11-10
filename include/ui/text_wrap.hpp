@@ -67,13 +67,23 @@ inline bool sameStyle(const WrapRun& a, const WrapRun& b) {
 /// Words, not characters, unless a single word is wider than the whole box and
 /// nonSpaceWrap says it may be broken. Thirty-six labels in FrameXML ask for
 /// that, all of them prose in a narrow column.
+///
+/// `indent` is SetIndentedWordWrap's: every line after the first is that much
+/// narrower (the client's text layout, 0x006bd390/0x006bdb10, takes 15 screen pixels
+/// off the width from the second line on - see kIndentedWrapPixels).
 template <typename Measure>
 std::vector<std::vector<WrapRun>> wrapText(const std::vector<WrapRun>& runs,
                                            float wrapWidth, bool nonSpaceWrap,
-                                           Measure measure) {
+                                           Measure measure, float indent = 0.0f) {
     std::vector<std::vector<WrapRun>> lines;
     lines.emplace_back();
     float x = 0.0f;
+    const float firstWidth = wrapWidth;
+    // The width the current line may use: the whole of it on the first line,
+    // less the indent on every line after.
+    auto widthNow = [&] {
+        return (lines.size() > 1 && indent > 0.0f && firstWidth > indent) ? firstWidth - indent : firstWidth;
+    };
     auto place = [&](const WrapRun& style, const std::string& piece) {
         if (!lines.back().empty() && sameStyle(lines.back().back(), style)) {
             lines.back().back().text += piece;
@@ -95,7 +105,7 @@ std::vector<std::vector<WrapRun>> wrapText(const std::vector<WrapRun>& runs,
             const float w = run.texWidth > 0.0f    ? run.texWidth
                           : run.texHeight > 0.0f   ? run.texHeight
                                                    : measure("W");
-            if (wrapWidth > 0.0f && x > 0.0f && x + w > wrapWidth) {
+            if (wrapWidth > 0.0f && x > 0.0f && x + w > widthNow()) {
                 lines.emplace_back();
                 x = 0.0f;
             }
@@ -137,7 +147,7 @@ std::vector<std::vector<WrapRun>> wrapText(const std::vector<WrapRun>& runs,
             at = end;
 
             float w = measure(word);
-            if (x > 0.0f && x + w > wrapWidth) {
+            if (x > 0.0f && x + w > widthNow()) {
                 lines.emplace_back();
                 x = 0.0f;
                 // The break stands in for the space that separated them.
@@ -145,12 +155,12 @@ std::vector<std::vector<WrapRun>> wrapText(const std::vector<WrapRun>& runs,
                 w = measure(word);
             }
 
-            if (w > wrapWidth && nonSpaceWrap) {
+            if (w > widthNow() && nonSpaceWrap) {
                 // One word wider than the whole box. Broken by character,
                 // which is the only thing left and what the attribute asks for.
                 std::string part;
                 for (char c : word) {
-                    if (!part.empty() && x + measure(part + c) > wrapWidth) {
+                    if (!part.empty() && x + measure(part + c) > widthNow()) {
                         place(run, part);
                         lines.emplace_back();
                         x = 0.0f;
@@ -171,6 +181,12 @@ std::vector<std::vector<WrapRun>> wrapText(const std::vector<WrapRun>& runs,
     }
     return lines;
 }
+
+/// How far SetIndentedWordWrap sets in every wrapped line after the first, in
+/// screen pixels (0x006be020); 0x006c7b10 sets such a line 15 pixels in from
+/// the left when it is justified left, from the right when right, and a
+/// centred one not at all.
+inline constexpr float kIndentedWrapPixels = 15.0f;
 
 /// One line of plain text cut to fit a width, ending in "..." where it had to
 /// be cut - what WoW does with a label too long for the width it was given.

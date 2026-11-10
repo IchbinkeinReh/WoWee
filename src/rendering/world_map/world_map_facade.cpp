@@ -142,6 +142,8 @@ struct WorldMapFacade::Impl {
     // default back in its place - which is why it is keyed by the area id and
     // reset on the ask rather than from each navigation path.
     int dungeonLevelRowId = -1;
+    uint32_t playerWmoId = 0;
+    bool interfaceDrawsPlayerArrow = false;
     uint32_t dungeonLevelAreaId = 0;
 
     DataRepository data;
@@ -602,6 +604,19 @@ void WorldMapFacade::render(const glm::vec3& playerRenderPos,
             // own, which is all there is to show.
             d.showIndex(playerZone, ViewLevel::ZONE);
         }
+        // The floor the player is on (0x00547170 -> 0x005439e0): the building
+        // they stand in and their height pick the DungeonMap row. Where no
+        // row answers, the area's own default stands.
+        if (!d.taxiMode && d.playerWmoId != 0 && playerZone >= 0 &&
+            playerZone < static_cast<int>(d.data.zones().size()) &&
+            d.viewState.currentLevel() == ViewLevel::ZONE && d.viewState.currentZoneIdx() == playerZone) {
+            const Zone& z = d.data.zones()[static_cast<size_t>(playerZone)];
+            const int row = d.data.dungeonMapForChunk(z.mapID, d.playerWmoId, displayPlayerRenderPos.z);
+            if (row > 0) {
+                d.dungeonLevelAreaId = z.wmaID;
+                d.dungeonLevelRowId = row;
+            }
+        }
         // The view has only now become the player's zone, and the interface
         // asked before it did.
         //
@@ -631,6 +646,10 @@ void WorldMapFacade::render(const glm::vec3& playerRenderPos,
     if (d.taxiMode && inputResult.action != InputAction::CLOSE) {
         inputResult.action = InputAction::NONE;
     }
+    // In FrameXML's WorldMapFrame the clicks are its WorldMapButton's
+    // (ProcessMapClick, ZoomOut, SetMapZoom), as in the client; this map
+    // takes none of its own there.
+    if (d.hasFrameRect && !d.taxiMode) inputResult.action = InputAction::NONE;
 
     switch (inputResult.action) {
         case InputAction::CLOSE:
@@ -806,7 +825,96 @@ int WorldMapFacade::zoneAtMapPoint(float u, float v) const {
     return zoneIdx;
 }
 
+MapHighlight WorldMapFacade::mapHighlightAt(float u, float v) const {
+    MapHighlight out;
+    const auto& d = *impl_;
+    const ViewLevel level = d.viewState.currentLevel();
+    if (level == ViewLevel::ZONE) {
+        out.name = zoneNameAtMapPoint(u, v);   // the name alone (0x00545316)
+        return out;
+    }
+    if (level == ViewLevel::WORLD) {
+        // The first continent rectangle holding the point (0x00544420).
+        for (const auto& r : d.data.azerothRegions()) {
+            if (u >= r.uvLeft && u < r.uvRight && v > r.uvTop && v <= r.uvBottom) {
+                out.name = r.label;
+                out.fileName = r.fileName;
+                out.texCoordX = r.texCoordX;
+                out.texCoordY = r.texCoordY;
+                out.textureX = r.textureX;
+                out.textureY = r.textureY;
+                out.scrollX = r.scrollX;
+                out.scrollY = r.scrollY;
+                return out;
+            }
+        }
+        return out;
+    }
+    if (level != ViewLevel::CONTINENT) return out;
+    const int zi = zoneAtMapPoint(u, v);
+    const int ci = d.viewState.continentIdx();
+    const auto& zones = d.data.zones();
+    if (zi < 0 || ci < 0 || zi >= static_cast<int>(zones.size()) || ci >= static_cast<int>(zones.size())) return out;
+    const Zone& zone = zones[static_cast<size_t>(zi)];
+    const Zone& cont = zones[static_cast<size_t>(ci)];
+    out.name = zoneNameAtMapPoint(u, v);
+    out.fileName = zone.areaName;
+    // The highlight is 128 wide and as tall as the zone is for that; its
+    // texture the power of two that holds it (0x00545110).
+    const float zw = zone.bounds.locLeft - zone.bounds.locRight;
+    const float zh = zone.bounds.locTop - zone.bounds.locBottom;
+    if (zw == 0.0f || zh == 0.0f) return out;
+    const uint32_t tall = static_cast<uint32_t>(std::lround(zh * 128.0f / zw));
+    uint32_t tex = tall;
+    const uint32_t low = tall & 0xffu;
+    if (low != 0) {
+        tex = low;
+        if ((low & (low - 1)) != 0) {
+            for (int bit = 7; bit >= 0; --bit) {
+                if (low & (1u << bit)) { tex = 1u << (bit + 1); break; }
+            }
+        }
+        uint32_t probe = tex * 8;
+        while (probe < low) { probe = tex * 16; tex *= 2; }
+        if (tall > 0x100) tex = tex + 0x100 + (tall & ~0xffu);
+    }
+    out.texCoordX = 1.0f;
+    out.texCoordY = tex != 0 ? static_cast<float>(tall) / static_cast<float>(tex) : 1.0f;
+    // Its size and place against the continent's own row.
+    const float cw = cont.bounds.locLeft - cont.bounds.locRight;
+    const float ch = cont.bounds.locTop - cont.bounds.locBottom;
+    if (cw == 0.0f || ch == 0.0f) return out;
+    out.textureX = zw / cw;
+    out.textureY = zh / ch;
+    out.scrollX = (cont.bounds.locLeft - zone.bounds.locLeft) / cw;
+    out.scrollY = (cont.bounds.locTop - zone.bounds.locTop) / ch;
+    return out;
+}
+
 std::string WorldMapFacade::zoneNameAtMapPoint(float u, float v) const {
+    // A zone map names the explored part of it under the point (0x00545110's
+    // first branch): the first explored WorldMapOverlay whose HitRect, in the
+    // 1002x668 map frame, holds the point - in the file's order - by its first
+    // area's name.
+    if (impl_->viewState.currentLevel() == ViewLevel::ZONE) {
+        const int zi = impl_->viewState.currentZoneIdx();
+        const auto& zones = impl_->data.zones();
+        if (zi < 0 || zi >= static_cast<int>(zones.size()) || u < 0.0f || v < 0.0f) return {};
+        const float px = u * 1002.0f, py = v * 668.0f;
+        const auto& explored = impl_->exploration.exploredOverlays();
+        const auto& names = impl_->data.areaNameByAreaId();
+        const auto& overlays = zones[static_cast<size_t>(zi)].overlays;
+        for (int oi = 0; oi < static_cast<int>(overlays.size()); ++oi) {
+            const auto& ov = overlays[static_cast<size_t>(oi)];
+            if (!explored.count(oi)) continue;
+            if (ov.hitRectRight <= ov.hitRectLeft || ov.hitRectBottom <= ov.hitRectTop) continue;
+            if (px < ov.hitRectLeft || px > ov.hitRectRight || py < ov.hitRectTop || py > ov.hitRectBottom)
+                continue;
+            auto it = names.find(ov.areaIDs[0]);
+            return it != names.end() ? it->second : std::string();
+        }
+        return {};
+    }
     const int idx = zoneAtMapPoint(u, v);
     const auto& zones = impl_->data.zones();
     if (idx < 0 || idx >= static_cast<int>(zones.size())) return {};
@@ -876,7 +984,14 @@ std::vector<OverlayEntry> WorldMapFacade::currentOverlays() const {
     // A continent has no overlay art of its own; its detail is the child
     // zones' maps, which the interface reaches by drilling in.
     if (zones[static_cast<size_t>(idx)].areaID == 0) return {};
-    return zones[static_cast<size_t>(idx)].overlays;
+    // Only the parts the character has explored (0x00546310 lists an overlay
+    // once one of its areas is) - the rest of the zone is FrameXML's fog.
+    const auto& all = zones[static_cast<size_t>(idx)].overlays;
+    const auto& explored = impl_->exploration.exploredOverlays();
+    std::vector<OverlayEntry> out;
+    for (int i = 0; i < static_cast<int>(all.size()); ++i)
+        if (explored.count(i)) out.push_back(all[static_cast<size_t>(i)]);
+    return out;
 }
 bool WorldMapFacade::mapUVForCanonical(float wowX, float wowY, float wowZ,
                                        float& u, float& v) const {
@@ -947,6 +1062,9 @@ std::vector<WorldMapFacade::Landmark> WorldMapFacade::currentLandmarks() const {
     }
     return out;
 }
+
+void WorldMapFacade::setPlayerWmoId(uint32_t wmoId) { impl_->playerWmoId = wmoId; }
+void WorldMapFacade::setInterfaceDrawsPlayerArrow(bool drawn) { impl_->interfaceDrawsPlayerArrow = drawn; }
 
 void WorldMapFacade::setPlayerZoneId(uint32_t zoneId) {
     impl_->playerZoneId = zoneId;
@@ -1063,6 +1181,12 @@ void WorldMapFacade::Impl::renderImGuiOverlay(const glm::vec3& playerRenderPos,
     // Hosted inside a frame someone else drew: fill exactly that rect, keep no
     // title bar of its own, and follow the frame rather than staying where it
     // was first put - the frame is what moves now.
+    // Inside FrameXML's frame the map is FrameXML's to draw - the tiles, the
+    // explored overlays, the highlight, the pins and the party, as in the
+    // client - and this one draws only what the client draws itself: the
+    // player's arrow (PlayerArrowFrame) and the quest areas
+    // (WorldMapBlobFrame). It takes no input there.
+    const bool hostedDraw = hasFrameRect && !taxiMode;
     if (hasFrameRect) {
         mapX = frameRectX;
         mapY = frameRectY;
@@ -1070,6 +1194,7 @@ void WorldMapFacade::Impl::renderImGuiOverlay(const glm::vec3& playerRenderPos,
         windowH = frameRectH;
         flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
                  ImGuiWindowFlags_NoBackground;
+        if (hostedDraw) flags |= ImGuiWindowFlags_NoInputs;
         ImGui::SetNextWindowPos(ImVec2(mapX, mapY), ImGuiCond_Always);
     } else {
         // Map window - styled like the character selection window
@@ -1110,7 +1235,9 @@ void WorldMapFacade::Impl::renderImGuiOverlay(const glm::vec3& playerRenderPos,
         // A zone change is not this case: invalidateComposite() only says the
         // picture is stale, and a stale map for one frame is the right thing
         // to show.
-        if (compositor.everComposited()) {
+        if (hostedDraw) {
+            ImGui::Dummy(ImVec2(displayW, displayH));
+        } else if (compositor.everComposited()) {
             ImGui::Image(
                 reinterpret_cast<ImTextureID>(compositor.displayDescriptorSet()),
                 ImVec2(displayW, displayH),
@@ -1125,7 +1252,7 @@ void WorldMapFacade::Impl::renderImGuiOverlay(const glm::vec3& playerRenderPos,
 
         // Transition fade overlay
         const auto& trans = viewState.transition();
-        if (trans.active) {
+        if (trans.active && !hostedDraw) {
             float alpha = std::max(0.0f, 1.0f - trans.progress);
             if (alpha > 0.01f) {
                 uint8_t fadeAlpha = static_cast<uint8_t>(alpha * 180.0f);
@@ -1206,6 +1333,7 @@ void WorldMapFacade::Impl::renderImGuiOverlay(const glm::vec3& playerRenderPos,
         layerCtx.exploredZones = &exploration.exploredZones();
         layerCtx.exploredOverlays = &exploration.exploredOverlays();
         layerCtx.areaNameByAreaId = &data.areaNameByAreaId();
+        layerCtx.hostedInFrame = hasFrameRect;
         layerCtx.fboW = CompositeRenderer::FBO_W;
         layerCtx.fboH = CompositeRenderer::FBO_H;
 
@@ -1218,6 +1346,15 @@ void WorldMapFacade::Impl::renderImGuiOverlay(const glm::vec3& playerRenderPos,
             };
             layerCtx.zmpRepoPtr = &data;
             layerCtx.zmpZoneBounds = &data.zmpZoneBounds();
+        }
+
+        if (hostedDraw) {
+            if (questPOILayer) questPOILayer->render(layerCtx);
+            if (playerMarkerLayer && !interfaceDrawsPlayerArrow) playerMarkerLayer->render(layerCtx);
+            ImGui::End();
+            if (!windowOpen) closeMap();
+            ImGui::PopStyleVar(3);
+            return;
         }
 
         // Flight-map mode: just the map, the player marker, and the

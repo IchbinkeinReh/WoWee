@@ -39,6 +39,7 @@
 #include "game/interface_text.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <string>
 #include <unordered_map>
@@ -55,23 +56,10 @@ namespace {
 /// dungeon has to be the header's id, not the raw number from the DBC.
 int headerIdFor(uint32_t groupId) { return -static_cast<int>(groupId); }
 
-/// LFGDungeons.dbc has no name for a category. The real client carries these
-/// itself; they are the standard names for the groups the file actually uses,
-/// and group 10 is absent from the data rather than omitted here.
-const char* groupName(uint32_t groupId) {
-    switch (groupId) {
-        case 1:  return "Classic Dungeons";
-        case 2:  return "Burning Crusade Dungeons";
-        case 3:  return "Burning Crusade Heroic Dungeons";
-        case 4:  return "Wrath of the Lich King Dungeons";
-        case 5:  return "Wrath of the Lich King Heroic Dungeons";
-        case 6:  return "Classic Raids";
-        case 7:  return "Burning Crusade Raids";
-        case 8:  return "Wrath of the Lich King Raids (10)";
-        case 9:  return "Wrath of the Lich King Raids (25)";
-        case 11: return "Holiday Dungeons";
-        default: return "Dungeons";
-    }
+/// A category's name: its LfgDungeonGroup.dbc row (0x005536a0 and the list
+/// builder read the same table), in the client's own locale.
+const char* groupName(game::GameHandler* gh, uint32_t groupId) {
+    return gh ? gh->lfgGroupName(groupId).c_str() : "";
 }
 
 /// How many the group is built for. The file does not say, so it comes from
@@ -141,17 +129,6 @@ uint32_t partyBackfillEntry(game::GameHandler* gh) {
     return party.lfgDungeonEntry;
 }
 
-/// The dungeon finder lists dungeons and the raid browser lists raids, so each
-/// asks for its own half of the same file.
-bool isDungeonSide(const game::LfgDungeon& d) {
-    return d.typeId == static_cast<uint32_t>(game::LfgTypeId::Dungeon) ||
-           d.typeId == static_cast<uint32_t>(game::LfgTypeId::Heroic) ||
-           d.typeId == static_cast<uint32_t>(game::LfgTypeId::Random);
-}
-bool isRaidSide(const game::LfgDungeon& d) {
-    return d.typeId == static_cast<uint32_t>(game::LfgTypeId::Raid);
-}
-
 /// UnitHasLFGDeserter and UnitHasLFGRandomCooldown, which are the same question
 /// asked of two different spells. The client looks the unit up and then asks one
 /// thing of it: does its aura list hold 0x11581 = 71041 ("Deserter") or
@@ -209,20 +186,45 @@ uint8_t offeredRoles(game::GameHandler* gh) {
 void pushChoiceOrder(lua_State* L, game::GameHandler* gh, bool dungeonSide) {
     lua_newtable(L);
     if (!gh) return;
-    int n = 0;
-    uint32_t lastGroup = 0;
+    // The two lists as the client builds them. The dungeon side (0x00558350):
+    // every row flagged 0x2 that is not a random dungeon (type 6) and not a
+    // holiday (flag 0x4), and a header for every LfgDungeonGroup whose TypeID
+    // is set. The raid side (0x00558520): every raid (type 2) and a header for
+    // every group. A header is the group's id negated.
+    struct Entry { int id; uint32_t group; const game::LfgDungeon* d; };
+    std::vector<Entry> rows;
     for (const auto& d : gh->getLfgDungeons()) {
-        // groupId 0 is a row that belongs under no header - the old
-        // per-zone entries - and LFDList_DefaultFilterFunction drops them
-        // anyway. Leaving them out here keeps the list honest either way.
-        if (d.groupId == 0) continue;
-        if (dungeonSide ? !isDungeonSide(d) : !isRaidSide(d)) continue;
-        if (d.groupId != lastGroup) {
-            lastGroup = d.groupId;
-            lua_pushinteger(L, headerIdFor(d.groupId));
-            lua_rawseti(L, -2, ++n);
+        const bool listed = dungeonSide
+            ? ((d.flags & 0x2u) != 0 && d.typeId != 6 && (d.flags & 0x4u) == 0)
+            : d.typeId == static_cast<uint32_t>(game::LfgTypeId::Raid);
+        if (listed) rows.push_back({static_cast<int>(d.id), d.groupId, &d});
+    }
+    for (const auto& [id, g] : gh->lfgGroups()) {
+        if (dungeonSide && g.typeId == 0) continue;
+        rows.push_back({headerIdFor(id), id, nullptr});
+    }
+    // And sorted as 0x005536a0 sorts them: by the group's OrderIndex, a
+    // header before its own group's rows, then the dungeon's OrderIndex, then
+    // the middle of its level range for this account's expansion, then name.
+    std::sort(rows.begin(), rows.end(), [gh](const Entry& a, const Entry& b) {
+        if (a.group != b.group) {
+            const uint32_t ga = gh->lfgGroupOrder(a.group), gb = gh->lfgGroupOrder(b.group);
+            if (ga != gb) return ga < gb;
         }
-        lua_pushinteger(L, static_cast<lua_Integer>(d.id));
+        if ((a.d == nullptr) != (b.d == nullptr)) return a.d == nullptr;
+        if (!a.d || !b.d) return a.id < b.id;
+        if (a.d->orderIndex != b.d->orderIndex) return a.d->orderIndex < b.d->orderIndex;
+        const auto la = gh->lfgDungeonLevels(*a.d), lb = gh->lfgDungeonLevels(*b.d);
+        const int ma = static_cast<int>(la.minLevel + la.maxLevel) / 2;
+        const int mb = static_cast<int>(lb.minLevel + lb.maxLevel) / 2;
+        if (ma != mb) return ma < mb;
+        return std::lexicographical_compare(
+            a.d->name.begin(), a.d->name.end(), b.d->name.begin(), b.d->name.end(),
+            [](unsigned char x, unsigned char y) { return std::tolower(x) < std::tolower(y); });
+    });
+    int n = 0;
+    for (const Entry& e : rows) {
+        lua_pushinteger(L, e.id);
         lua_rawseti(L, -2, ++n);
     }
 }
@@ -288,18 +290,25 @@ void registerLfgLuaAPI(lua_State* L) {
                 // The header's own row. Its groupID is itself, which is how
                 // LFDList_SetHeaderCollapsed matches children to the header
                 // that was clicked.
-                pushInfoRow(L, groupName(d.groupId), 0, 0, 0, 0, 0, 0,
+                pushInfoRow(L, groupName(gh, d.groupId), 0, 0, 0, 0, 0, 0,
                             static_cast<int>(d.expansion), headerIdFor(d.groupId),
                             "", 0, 0);
                 lua_rawseti(L, -2, headerIdFor(d.groupId));
             }
+            const auto lv = gh->lfgDungeonLevels(d);
             pushInfoRow(L, d.name.c_str(), static_cast<int>(d.typeId),
-                        static_cast<int>(d.minLevel), static_cast<int>(d.maxLevel),
-                        static_cast<int>(d.recLevel), static_cast<int>(d.minRecLevel),
-                        static_cast<int>(d.maxRecLevel), static_cast<int>(d.expansion),
+                        static_cast<int>(lv.minLevel), static_cast<int>(lv.maxLevel),
+                        static_cast<int>(d.recLevel), static_cast<int>(lv.minRecLevel),
+                        static_cast<int>(lv.maxRecLevel), static_cast<int>(d.expansion),
                         headerIdFor(d.groupId), d.texture.c_str(),
                         static_cast<int>(d.difficulty), maxPlayersFor(d));
             lua_rawseti(L, -2, static_cast<lua_Integer>(d.id));
+        }
+        // A header for every group the order lists, rows or no rows.
+        for (const auto& [id, g] : gh->lfgGroups()) {
+            if (std::find(groupsSeen.begin(), groupsSeen.end(), id) != groupsSeen.end()) continue;
+            pushInfoRow(L, g.name.c_str(), 0, 0, 0, 0, 0, 0, 0, headerIdFor(id), "", 0, 0);
+            lua_rawseti(L, -2, headerIdFor(id));
         }
         return 1;
     }},
@@ -907,14 +916,37 @@ void registerLfgLuaAPI(lua_State* L) {
     {"GetRandomDungeonBestChoice", [](lua_State* L) -> int {
         auto* gh = getGameHandler(L);
         if (!gh) return luaReturnNil(L);
+        // 0x00559ea0: of the random dungeons the realm offered, the unlocked
+        // one 0x00559da0 ranks best - the highest expansion, then the highest
+        // middle of the target range, then the highest minimum level, each
+        // range taken for this account's expansion (0x006349f0). A later row
+        // wins a tie only by being strictly better, so the first stays.
         const auto& locks = gh->getLfgLocks();
+        const game::LfgDungeon* best = nullptr;
         for (const auto& r : gh->getLfgRewards()) {
             auto it = locks.find(r.dungeonId);
             if (it != locks.end() && it->second != 0) continue;
-            lua_pushinteger(L, static_cast<lua_Integer>(r.dungeonId));
-            return 1;
+            const game::LfgDungeon* d = lfgDungeonById(gh, r.dungeonId & 0xffffffu);
+            if (!d || d->typeId != 6) continue;
+            if (best) {
+                if (d->expansion != best->expansion) {
+                    if (d->expansion < best->expansion) continue;
+                } else {
+                    const auto ld = gh->lfgDungeonLevels(*d), lb = gh->lfgDungeonLevels(*best);
+                    const int md = static_cast<int>(ld.minRecLevel + ld.maxRecLevel) / 2;
+                    const int mb = static_cast<int>(lb.minRecLevel + lb.maxRecLevel) / 2;
+                    if (md != mb) {
+                        if (md < mb) continue;
+                    } else if (!(lb.minLevel < ld.minLevel)) {
+                        continue;
+                    }
+                }
+            }
+            best = d;
         }
-        return luaReturnNil(L);
+        if (!best) return luaReturnNil(L);
+        lua_pushinteger(L, static_cast<lua_Integer>(best->id));
+        return 1;
     }},
     // The random dungeon's own row, which the picker shows above the list.
     // GetNumRandomDungeons() - how many of the catalogue are the random kind.
@@ -965,11 +997,12 @@ void registerLfgLuaAPI(lua_State* L) {
             if (d.id != id) continue;
             lua_pushstring(L, d.name.c_str());
             lua_pushinteger(L, static_cast<lua_Integer>(d.typeId));
-            lua_pushinteger(L, static_cast<lua_Integer>(d.minLevel));
-            lua_pushinteger(L, static_cast<lua_Integer>(d.maxLevel));
+            const auto lv = gh->lfgDungeonLevels(d);
+            lua_pushinteger(L, static_cast<lua_Integer>(lv.minLevel));
+            lua_pushinteger(L, static_cast<lua_Integer>(lv.maxLevel));
             lua_pushinteger(L, static_cast<lua_Integer>(d.recLevel));
-            lua_pushinteger(L, static_cast<lua_Integer>(d.minRecLevel));
-            lua_pushinteger(L, static_cast<lua_Integer>(d.maxRecLevel));
+            lua_pushinteger(L, static_cast<lua_Integer>(lv.minRecLevel));
+            lua_pushinteger(L, static_cast<lua_Integer>(lv.maxRecLevel));
             lua_pushinteger(L, static_cast<lua_Integer>(d.expansion));
             lua_pushinteger(L, headerIdFor(d.groupId));
             lua_pushstring(L, d.texture.c_str());
