@@ -745,6 +745,9 @@ struct Widget {
     /// colour its ColorSelect parent holds.
     enum class ColorRole : uint8_t { None, Wheel, WheelThumb, Value, ValueThumb };
     ColorRole colorRole = ColorRole::None;
+    /// On the ColorSelect: the region set for each of the four roles (+0x2a0
+    /// ..), which GetColorWheelTexture and the rest hand back (0x00970830..).
+    uint32_t pickerRegion[5] = {0, 0, 0, 0, 0};
 
     /// Which named font object this region's type settings came from, so
     /// GetFontObject can hand it back. The fields copied out of one do not add
@@ -752,6 +755,15 @@ struct Widget {
     /// options panels read a control's font object to get the colour to put a
     /// label back to when the control is re-enabled.
     std::string fontObjectName;
+    /// The font objects SetHighlightFontObject / SetDisabledFontObject were
+    /// given by name, which GetHighlightFontObject / GetDisabledFontObject
+    /// hand back (0x00977750, 0x009775d0).
+    std::string highlightFontName;
+    std::string disabledFontName;
+    /// SetNonBlocking (texture flag 1, 0x0048caa0) and EnableJoystick (frame
+    /// flag 0x10 of +0xd8, 0x004a11d0).
+    bool nonBlocking = false;
+    bool joystickEnabled = false;
     /// Drawn added to what is under it rather than over it. Art authored for
     /// this has no alpha channel at all - it is a glow on black, and black is
     /// what adds nothing. Drawn the ordinary way it is a black slab instead,

@@ -2342,6 +2342,16 @@ int lua_Texture_GetVertTile(lua_State* L) {
     pushFlag(L, w && w->vertTile);
     return 1;
 }
+/// Texture:Set/GetNonBlocking (0x0048caa0, 0x0048cb00).
+int lua_Texture_SetNonBlocking(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->nonBlocking = lua_toboolean(L, 2) != 0;
+    return 0;
+}
+int lua_Texture_GetNonBlocking(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->nonBlocking);
+    return 1;
+}
 int lua_FontString_SetIndentedWordWrap(lua_State* L) {
     auto* w = widgetToRemeasure(L, 1);
     if (w) w->indentedWordWrap = lua_toboolean(L, 2) != 0;
@@ -5884,6 +5894,8 @@ void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
         set("GetHorizTile", lua_Texture_GetHorizTile);
         set("SetVertTile", lua_Texture_SetVertTile);
         set("GetVertTile", lua_Texture_GetVertTile);
+        set("SetNonBlocking", lua_Texture_SetNonBlocking);
+        set("GetNonBlocking", lua_Texture_GetNonBlocking);
     }
     if (isFontString) {
         set("GetFont", lua_FontString_GetFont);
@@ -6000,14 +6012,40 @@ static void applyStateColor(lua_State* L, int fontIndex, float out[4], bool& fla
 int lua_Frame_SetHighlightFontObject(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) {
         applyStateColor(L, 2, w->highlightColor, w->hasHighlightColor);
+        w->highlightFontName = lua_type(L, 2) == LUA_TSTRING ? lua_tostring(L, 2) : "";
     }
     return 0;
 }
 int lua_Frame_SetDisabledFontObject(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) {
         applyStateColor(L, 2, w->disabledColor, w->hasDisabledColor);
+        w->disabledFontName = lua_type(L, 2) == LUA_TSTRING ? lua_tostring(L, 2) : "";
     }
     return 0;
+}
+/// GetHighlightFontObject / GetDisabledFontObject: the font object named,
+/// or nothing.
+static int pushNamedFontObject(lua_State* L, const std::string& name) {
+    if (name.empty()) return 0;
+    lua_getglobal(L, name.c_str());
+    return 1;
+}
+int lua_Frame_GetHighlightFontObject(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    return w ? pushNamedFontObject(L, w->highlightFontName) : 0;
+}
+int lua_Frame_GetDisabledFontObject(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    return w ? pushNamedFontObject(L, w->disabledFontName) : 0;
+}
+int lua_Frame_EnableJoystick(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->joystickEnabled = lua_toboolean(L, 2) != 0;
+    return 0;
+}
+int lua_Frame_IsJoystickEnabled(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->joystickEnabled);
+    return 1;
 }
 
 /// The four components of a state colour, as SetTextColor takes them.
@@ -6605,6 +6643,7 @@ int lua_StatusBar_SetValue(lua_State* L) {
 /// ChangeChatColor from the chat colour menu, the arena tabard's three
 /// swatches, the chat config panel. They were handing nil to functions that
 /// take r, g, b, so accepting a colour set the colour to nothing.
+static int fireColorSelect(lua_State* L, float r, float g, float b);
 int lua_ColorSelect_SetColorRGB(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
@@ -6626,7 +6665,11 @@ int lua_ColorSelect_SetColorRGB(lua_State* L) {
     // reached the bottom.
     if (w->pickerHSV[1] <= 0.0f) w->pickerHSV[0] = hueBefore;
     if (!changed) return 0;
+    return fireColorSelect(L, r, g, b);
+}
 
+/// Run the picker's OnColorSelect with its colour, as a change to it does.
+static int fireColorSelect(lua_State* L, float r, float g, float b) {
     taint::Quiet quiet;   // see callScriptOnTable
     lua_getfield(L, 1, "__scripts");
     if (lua_istable(L, -1)) {
@@ -6646,6 +6689,33 @@ int lua_ColorSelect_SetColorRGB(lua_State* L) {
     return 0;
 }
 
+/// SetColorHSV(h, s, v) / GetColorHSV (0x00970f50, 0x00970fd0): the hue in
+/// degrees, saturation and value 0 to 1; setting it moves the colour and
+/// runs OnColorSelect as SetColorRGB does (0x0096e3d0).
+int lua_ColorSelect_SetColorHSV(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    float hsv[3] = {static_cast<float>(luaL_optnumber(L, 2, 0.0)) / 360.0f,
+                    static_cast<float>(luaL_optnumber(L, 3, 0.0)),
+                    static_cast<float>(luaL_optnumber(L, 4, 0.0))};
+    hsv[0] -= std::floor(hsv[0]);
+    float rgb[3];
+    wowee::ui::hsvToRgb(hsv, rgb);
+    const bool changed = rgb[0] != w->pickerColor[0] || rgb[1] != w->pickerColor[1] || rgb[2] != w->pickerColor[2];
+    for (int i = 0; i < 3; ++i) {
+        w->pickerHSV[i] = hsv[i];
+        w->pickerColor[i] = rgb[i];
+    }
+    if (!changed) return 0;
+    return fireColorSelect(L, rgb[0], rgb[1], rgb[2]);
+}
+int lua_ColorSelect_GetColorHSV(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->pickerHSV[0] * 360.0 : 0.0);
+    lua_pushnumber(L, w ? w->pickerHSV[1] : 0.0);
+    lua_pushnumber(L, w ? w->pickerHSV[2] : 1.0);
+    return 3;
+}
 int lua_ColorSelect_GetColorRGB(lua_State* L) {
     const auto* w = widgetOf(L, 1);
     for (int i = 0; i < 3; ++i) lua_pushnumber(L, w ? w->pickerColor[i] : 1.0);
@@ -7049,8 +7119,34 @@ int lua_Slider_GetValueStep(lua_State* L) {
 static int setColorRole(lua_State* L, wowee::ui::Widget::ColorRole role) {
     auto* tree = wowee::addons::getWidgetTree(L);
     if (!tree) return 0;
-    if (auto* region = tree->get(widgetIdOf(L, 2))) region->colorRole = role;
+    const uint32_t rid = widgetIdOf(L, 2);
+    if (auto* region = tree->get(rid)) region->colorRole = role;
+    if (auto* picker = widgetOf(L, 1)) picker->pickerRegion[static_cast<int>(role)] = rid;
     return 0;
+}
+/// GetColorWheelTexture and the other three (0x00970830, 0x009709e0,
+/// 0x00970bc0, 0x00970d70): the region set for that role, or nil.
+static int getColorRole(lua_State* L, wowee::ui::Widget::ColorRole role) {
+    const auto* picker = widgetOf(L, 1);
+    const uint32_t rid = picker ? picker->pickerRegion[static_cast<int>(role)] : 0;
+    if (rid == 0) {
+        lua_pushnil(L);
+        return 1;
+    }
+    pushFrameByWid(L, rid);
+    return 1;
+}
+int lua_ColorSelect_GetWheelTexture(lua_State* L) {
+    return getColorRole(L, wowee::ui::Widget::ColorRole::Wheel);
+}
+int lua_ColorSelect_GetWheelThumbTexture(lua_State* L) {
+    return getColorRole(L, wowee::ui::Widget::ColorRole::WheelThumb);
+}
+int lua_ColorSelect_GetValueTexture(lua_State* L) {
+    return getColorRole(L, wowee::ui::Widget::ColorRole::Value);
+}
+int lua_ColorSelect_GetValueThumbTexture(lua_State* L) {
+    return getColorRole(L, wowee::ui::Widget::ColorRole::ValueThumb);
 }
 int lua_ColorSelect_SetWheelTexture(lua_State* L) {
     return setColorRole(L, wowee::ui::Widget::ColorRole::Wheel);
@@ -8629,6 +8725,10 @@ void LuaEngine::registerCoreAPI() {
         {"SetTextFontObject",     lua_Frame_SetNormalFontObject},
         {"SetHighlightFontObject", lua_Frame_SetHighlightFontObject},
         {"SetDisabledFontObject",  lua_Frame_SetDisabledFontObject},
+        {"GetHighlightFontObject", lua_Frame_GetHighlightFontObject},
+        {"GetDisabledFontObject",  lua_Frame_GetDisabledFontObject},
+        {"EnableJoystick",         lua_Frame_EnableJoystick},
+        {"IsJoystickEnabled",      lua_Frame_IsJoystickEnabled},
         {"SetDisabledTextColor",   lua_Frame_SetDisabledTextColor},
         {"SetHighlightTextColor",  lua_Frame_SetHighlightTextColor},
         {"SetPushedTextOffset",   lua_Frame_SetPushedTextOffset},
@@ -8709,6 +8809,12 @@ void LuaEngine::registerCoreAPI() {
         {"SetColorWheelThumbTexture", lua_ColorSelect_SetWheelThumbTexture},
         {"SetColorValueTexture",      lua_ColorSelect_SetValueTexture},
         {"SetColorValueThumbTexture", lua_ColorSelect_SetValueThumbTexture},
+        {"GetColorWheelTexture",      lua_ColorSelect_GetWheelTexture},
+        {"GetColorWheelThumbTexture", lua_ColorSelect_GetWheelThumbTexture},
+        {"GetColorValueTexture",      lua_ColorSelect_GetValueTexture},
+        {"GetColorValueThumbTexture", lua_ColorSelect_GetValueThumbTexture},
+        {"SetColorHSV",               lua_ColorSelect_SetColorHSV},
+        {"GetColorHSV",               lua_ColorSelect_GetColorHSV},
         {"SetCooldown",           lua_Cooldown_SetCooldown},
         {"GetNumber",             lua_EditBox_GetNumber},
         {"SetNumber",             lua_EditBox_SetNumber},
@@ -11141,6 +11247,16 @@ void LuaEngine::registerCoreAPI() {
         // A font object is its own font object, which is what SetFontObject
         // being handed one relies on.
         "    GetFontObject = function(self) return self end,\n"
+        // CopyFontObject(font or name) (0x004a4350): take another font's
+        // face, size, flags, colour, shadow, spacing and justification.
+        "    CopyFontObject = function(self, src)\n"
+        "        if type(src) == 'string' then src = _G[src] end\n"
+        "        if type(src) ~= 'table' then return end\n"
+        "        for _, k in ipairs({'font', 'height', 'outline', 'r', 'g', 'b', 'a', 'justifyH', 'justifyV',\n"
+        "                            'spacing', 'shadowR', 'shadowG', 'shadowB', 'shadowA', 'shadowX', 'shadowY'}) do\n"
+        "            self[k] = src[k]\n"
+        "        end\n"
+        "    end,\n"
         "} }\n"
         // Exposed, because the emitter has to put it back. A <Font> in the
         // interface with inherits= is built as a fresh table copying the base's
