@@ -183,6 +183,17 @@ public:
     /// and this frame's step does not move them across it (see rideHeld_).
     void setRideHeld(bool held) { rideHeld_ = held; }
     void suppressVerticalPhysics() {
+        // Caught by a ship's deck on the way down from a jump on it: that is
+        // its landing (0x00988490 ends the fall, MSG_MOVE_FALL_LAND), and it
+        // goes out on the next update. The deck held the rider before the
+        // landing test there saw any time in the air, and a jump on a
+        // zeppelin's deck sent MSG_MOVE_JUMP and never landed - FALLING stayed
+        // on every packet after it. Only a fall of the length a jump takes:
+        // the time a transport let go of the rider at a map change is not one.
+        if (!grounded && verticalVelocity <= 0.0f && airborneSeconds_ >= kDeckLandingMinSeconds &&
+            airborneSeconds_ < kDeckLandingMaxSeconds) {
+            deckLandingPending_ = true;
+        }
         verticalVelocity = 0.0f;
         grounded = true;
         deckHeld_ = true;
@@ -653,6 +664,11 @@ private:
     /// frame, until the deck placed them back - the rider, and the camera
     /// with them, stepping to the side and back during the flight.
     bool rideHeld_ = false;
+    /// A jump on a ship's deck that the deck caught (suppressVerticalPhysics):
+    /// its landing goes out on the next update.
+    bool deckLandingPending_ = false;
+    static constexpr float kDeckLandingMinSeconds = 0.15f;
+    static constexpr float kDeckLandingMaxSeconds = 10.0f;
     collision::Facet portBlocking_;
     float portDebugTimer_ = 0.0f;
     // The physics started a jump from the ground this frame: the jump packet
