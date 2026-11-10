@@ -715,9 +715,31 @@ void ChatHandler::filterProfanity(ChatType type, std::string& text) {
             return;
     }
     if (text.empty() || addons::storedCVarValue("profanityFilter", "1") == "0") return;
+    if (loadProfanity()) profanity_.apply(text);
+}
+
+std::optional<chat_channels::Join> ChatHandler::joinChannelByName(const std::string& name,
+                                                                  const std::string& password, bool byPlayer) {
+    constexpr size_t kMaxLength = 128;
+    if (name.empty() || name.find(' ') != std::string::npos || name.size() >= kMaxLength ||
+        password.size() >= kMaxLength)
+        return std::nullopt;
+    if (isProfane(name)) {
+        owner_.addUIError(interfaceString("ERR_PROFANE_CHAT_NAME", "Channel names can't contain profanity."));
+        owner_.playGameErrorSound("ERR_PROFANE_CHAT_NAME");
+        return std::nullopt;
+    }
+    return joinChannel(name, password, false, byPlayer);
+}
+
+bool ChatHandler::isProfane(std::string text) {
+    return !text.empty() && loadProfanity() && profanity_.apply(text);
+}
+
+bool ChatHandler::loadProfanity() {
     if (!profanityLoaded_) {
         auto* am = owner_.services().assetManager;
-        if (!am || !am->isInitialized()) return;
+        if (!am || !am->isInitialized()) return false;
         profanityLoaded_ = true;
         const auto* profile = owner_.services().expansionRegistry
                                   ? owner_.services().expansionRegistry->getActive() : nullptr;
@@ -734,7 +756,7 @@ void ChatHandler::filterProfanity(ChatType type, std::string& text) {
         }
         profanity_.load(expressions);
     }
-    profanity_.apply(text);
+    return true;
 }
 
 uint32_t ChatHandler::languageComprehension(uint32_t language) {

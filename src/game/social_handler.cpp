@@ -2209,10 +2209,16 @@ void SocialHandler::offerPetition(uint64_t petitionGuid, uint64_t targetGuid) {
 
 void SocialHandler::initiateReadyCheck() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    // DoReadyCheck (0x005732b0) says nothing either way: without the lead
-    // it returns, and READY_CHECK_START comes back with the server's
-    // MSG_RAID_READY_CHECK. These were English lines.
-    if (!isInGroup()) return;
+    // DoReadyCheck (0x005732b0): without the lead - or a raid assistant's
+    // rank - it returns without a word, and while a check is still running it
+    // says ERR_READY_CHECK_IN_PROGRESS. READY_CHECK comes back with the
+    // server's MSG_RAID_READY_CHECK.
+    if (!leadsOrAssists(owner_.getPartyData(), owner_.getPlayerGuid())) return;
+    if (readyCheckRunning()) {
+        owner_.addUIError(interfaceString("ERR_READY_CHECK_IN_PROGRESS", "A ready check is already in progress."));
+        owner_.playGameErrorSound("ERR_READY_CHECK_IN_PROGRESS");
+        return;
+    }
     auto packet = ReadyCheckPacket::build();
     owner_.getSocket()->send(packet);
 }
@@ -2993,6 +2999,10 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
             if (!m.name.empty() && !had(partyData.members, m.guid))
                 gameError(owner_, ErrTo::Chat, "ERR_RAID_MEMBER_REMOVED_S", "%s has left the raid group.", {m.name});
     }
+    // A raid roster arriving with none before - joining a raid, or the party
+    // turned into one - is ERR_RAID_YOU_JOINED (0x00574f10 at 0x005751e7).
+    if (nowInGroup && groupIsRaid(partyData.groupType) && !wasRaid)
+        gameError(owner_, ErrTo::Chat, "ERR_RAID_YOU_JOINED", "You have joined a raid group.");
     if (!nowInGroup && wasRaid)
         gameError(owner_, ErrTo::Chat, "ERR_RAID_YOU_LEFT", "You have left the raid group.");
     if (nowInGroup != wasInGroup) LOG_INFO(nowInGroup ? "Joined group" : "Left group");

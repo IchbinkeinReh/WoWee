@@ -354,18 +354,16 @@ static int lua_JoinChannelByName(lua_State* L) {
     auto* ch = gh ? gh->getChatHandler() : nullptr;
     const char* name = luaL_optstring(L, 1, "");
     const char* pass = luaL_optstring(L, 2, "");
-    // One word, and neither half of it 128 bytes long, as the client checks
-    // before anything else: 0x0050d900 runs the name and the password each
-    // through the strlen at 0x0076ee30 and turns either down at 0x80 - so a
-    // long password is refused here as a long name is, rather than going out.
-    if (!ch || !name || !*name || std::strchr(name, ' ') || std::strlen(name) >= 128 ||
-        std::strlen(pass ? pass : "") >= 128)
-        return 0;
+    if (!ch) return 0;
+    // The name and password checks are the handler's (0x0050d900): one word,
+    // neither half 128 bytes long - a long password is refused as a long name
+    // is, rather than going out - and no profanity in the name.
+    //
     // The fourth argument goes on the wire rather than being dropped: the byte
     // over the name that says whether this was a join somebody asked for, which
     // every call site in the installed tree spells as 1 and a nil as 0.
     const bool byPlayer = lua_toboolean(L, 4) != 0;
-    const auto join = ch->joinChannel(name, pass ? pass : "", false, byPlayer);
+    const auto join = ch->joinChannelByName(name ? name : "", pass ? pass : "", byPlayer);
     if (!join) return 0;
     lua_pushnumber(L, join->zoneChannelId);
     if (join->shortcut.empty()) lua_pushnil(L);
@@ -616,14 +614,7 @@ bool isGroupLeader(game::GameHandler* gh) {
 /// which is what UnitIsRaidOfficer reads too. A party has no raid roster to be
 /// an officer of, so there it is the leader alone.
 bool maySetPartyAssignment(game::GameHandler* gh) {
-    if (!gh) return false;
-    const auto& pd = gh->getPartyData();
-    if (pd.members.empty() && pd.memberCount == 0) return false;
-    if (pd.leaderGuid != 0 && pd.leaderGuid == gh->getPlayerGuid()) return true;
-    if (!game::groupIsRaid(pd.groupType)) return false;
-    for (const auto& m : pd.members)
-        if (m.guid == gh->getPlayerGuid()) return (m.flags & 0x01) != 0;
-    return false;
+    return gh && game::leadsOrAssists(gh->getPartyData(), gh->getPlayerGuid());
 }
 
 /// Whether the group has any members at all, which is what the three verbs
