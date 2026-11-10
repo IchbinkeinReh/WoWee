@@ -614,6 +614,10 @@ private:
     [[nodiscard]] bool fallOverUnloadedWorld(const glm::vec3& at) const;
     /// A fall is being held over a world not loaded yet (logged once).
     bool portFallHeld_ = false;
+    /// Placed by a teleport or a world entry: the unit starts falling once
+    /// the world under it is loaded (0x006ecf80 / 0x006f1520 -> 0x0098b710
+    /// -> 0x00988370), landing at once where it stands on ground.
+    bool portPlacedFall_ = false;
     collision::Mover portMover_;
     /// Where portMove last put the unit: what moved it since (a transport
     /// carrying it) is the difference to the next step's start. The mover's
