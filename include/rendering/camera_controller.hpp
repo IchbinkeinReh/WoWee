@@ -122,7 +122,10 @@ public:
 
     void reset();
     void resetAngles();
-    void teleportTo(const glm::vec3& pos);
+    /// Put the unit at `pos`; it then falls from there unless on ground
+    /// (portMove), not when `onTransport` - 0x00988370 starts no fall for a
+    /// passenger (+0x44 & 0x200).
+    void teleportTo(const glm::vec3& pos, bool onTransport = false);
     /// The world changed under the unit - a map change, a teleport, a
     /// transport boarded or left: the world round the new place waits to be
     /// loaded before the unit moves.
@@ -183,6 +186,8 @@ public:
         verticalVelocity = 0.0f;
         grounded = true;
         deckHeld_ = true;
+        // On a transport: no fall from a placing (0x00988370, +0x44 & 0x200).
+        portPlacedFall_ = false;
         // Standing on the deck: no time in the air. Counted on through a
         // ride, it read as a walk off a ledge minutes long the moment the
         // transport let go at a map change - a fall of 89 s sent with FALLING.
@@ -614,6 +619,10 @@ private:
     [[nodiscard]] bool fallOverUnloadedWorld(const glm::vec3& at) const;
     /// A fall is being held over a world not loaded yet (logged once).
     bool portFallHeld_ = false;
+    /// Placed by a teleport or a world entry: the unit starts falling once
+    /// the world under it is loaded (0x006ecf80 / 0x006f1520 -> 0x0098b710
+    /// -> 0x00988370), landing at once where it stands on ground.
+    bool portPlacedFall_ = false;
     collision::Mover portMover_;
     /// Where portMove last put the unit: what moved it since (a transport
     /// carrying it) is the difference to the next step's start. The mover's

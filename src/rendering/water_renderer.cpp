@@ -1957,37 +1957,24 @@ void WaterRenderer::setWaterLamps(const std::vector<rt_lights::PointLight>& ligh
     }
 }
 
-void WaterRenderer::updateWake(float deltaTime, const glm::vec2& pos,
-                               const glm::vec2& travelDir, float intensity, bool wading) {
-    // Age the existing trail. Drift is what spreads a swimmer's two emission
-    // lines apart with distance behind, which is the V.
-    for (auto& p : wakePoints_) {
-        p.age += deltaTime;
-        p.pos += p.drift * deltaTime;
-        // Barely any drag. A wake's arms are straight because the separation
-        // keeps growing with distance behind; damping the drift collapsed the
-        // two arms back onto each other and the V read as a single line.
-        p.drift *= std::max(0.0f, 1.0f - 0.25f * deltaTime);
-    }
-    wakePoints_.erase(std::remove_if(wakePoints_.begin(), wakePoints_.end(),
-                                     [](const WakePoint& p) { return p.age >= p.life; }),
-                      wakePoints_.end());
-
+// One trail's points for this frame: laid by distance travelled.
+void WaterRenderer::emitWake(WakeEmitter& emitter, const glm::vec2& pos, const glm::vec2& travelDir,
+                             float intensity, bool wading, bool unit) {
     if (intensity > 0.0f) {
         // Emit by distance travelled, not by time: standing still in the
         // shallows should settle rather than pile froth up in one spot.
         // Close enough together that the patches overlap into a continuous
         // trail. Spaced out, each one reads as its own blob.
         const float spacing = wading ? 0.40f : 0.60f;
-        bool emit = !hasWakeEmitPos_;
+        bool emit = !emitter.has;
         if (!emit) {
-            const glm::vec2 delta = pos - lastWakeEmitPos_;
+            const glm::vec2 delta = pos - emitter.last;
             emit = glm::dot(delta, delta) >= spacing * spacing;
         }
 
         if (emit) {
-            hasWakeEmitPos_ = true;
-            lastWakeEmitPos_ = pos;
+            emitter.has = true;
+            emitter.last = pos;
 
             glm::vec2 fwd = travelDir;
             const float fwdLenSq = glm::dot(fwd, fwd);
@@ -1997,6 +1984,9 @@ void WaterRenderer::updateWake(float deltaTime, const glm::vec2& pos,
             auto push = [&](const glm::vec2& at, const glm::vec2& drift,
                             float life, float strength) {
                 if (static_cast<int>(wakePoints_.size()) >= kMaxWakePoints) {
+                    // Another unit's only while there is room; the
+                    // character's in place of the oldest.
+                    if (unit) return;
                     wakePoints_.erase(wakePoints_.begin());  // oldest goes first
                 }
                 WakePoint wp;
@@ -2004,6 +1994,7 @@ void WaterRenderer::updateWake(float deltaTime, const glm::vec2& pos,
                 wp.drift = drift;
                 wp.life = life;
                 wp.strength = strength;
+                wp.unit = unit;
                 wakePoints_.push_back(wp);
             };
 
@@ -2026,8 +2017,38 @@ void WaterRenderer::updateWake(float deltaTime, const glm::vec2& pos,
             }
         }
     } else {
-        hasWakeEmitPos_ = false;
+        emitter.has = false;
     }
+
+}
+
+void WaterRenderer::updateWake(float deltaTime, const glm::vec2& pos,
+                               const glm::vec2& travelDir, float intensity, bool wading) {
+    // Age the existing trail. Drift is what spreads a swimmer's two emission
+    // lines apart with distance behind, which is the V.
+    for (auto& p : wakePoints_) {
+        p.age += deltaTime;
+        p.pos += p.drift * deltaTime;
+        // Barely any drag. A wake's arms are straight because the separation
+        // keeps growing with distance behind; damping the drift collapsed the
+        // two arms back onto each other and the V read as a single line.
+        p.drift *= std::max(0.0f, 1.0f - 0.25f * deltaTime);
+    }
+    wakePoints_.erase(std::remove_if(wakePoints_.begin(), wakePoints_.end(),
+                                     [](const WakePoint& p) { return p.age >= p.life; }),
+                      wakePoints_.end());
+
+    emitWake(ownWake_, pos, travelDir, intensity, wading, false);
+    // The other units in the water (unitWake), each by its own trail; one
+    // not fed for five seconds is forgotten.
+    wakeClock_ += deltaTime;
+    for (const WakeSource& u : pendingUnitWakes_) {
+        WakeEmitter& e = unitWakes_[u.key];
+        e.seen = wakeClock_;
+        emitWake(e, u.pos, u.travelDir, u.intensity, u.wading, true);
+    }
+    pendingUnitWakes_.clear();
+    std::erase_if(unitWakes_, [&](const auto& entry) { return wakeClock_ - entry.second.seen > 5.0f; });
 
     // Pack for the shader, and build the bounding circle the fragment shader
     // uses to reject the rest of the sheet in one test.

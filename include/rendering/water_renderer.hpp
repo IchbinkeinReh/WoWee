@@ -117,7 +117,7 @@ struct WaterSurface {
  */
 // Matches set 2 binding 3 in water.frag.glsl. Keep kMaxWakePoints in step with
 // the MAX_WAKE_POINTS constant declared there.
-constexpr int kMaxWakePoints = 32;
+constexpr int kMaxWakePoints = 64;
 
 /// The traced water's waves at their default (rtwaveamp 100%): half the
 /// height they were first made with, which in the traced mirror read as a
@@ -215,6 +215,24 @@ public:
     /// shoulders. Call once per frame.
     void updateWake(float deltaTime, const glm::vec2& pos, const glm::vec2& travelDir,
                     float intensity, bool wading);
+    /// Another unit in the water this frame, for the traced water: it leaves
+    /// a trail as the character does (updateWake), taken by the next
+    /// updateWake. The character's own trail keeps its points; a unit's are
+    /// laid while there is room.
+    struct WakeSource {
+        uint64_t key = 0;
+        glm::vec2 pos{0.0f};
+        glm::vec2 travelDir{0.0f};
+        float intensity = 0.0f;
+        bool wading = false;
+    };
+    void unitWake(const WakeSource& source) { pendingUnitWakes_.push_back(source); }
+    /// The trail's points now: the character's and the other units'.
+    [[nodiscard]] std::pair<size_t, size_t> wakePointCounts() const {
+        size_t units = 0;
+        for (const auto& p : wakePoints_) units += p.unit ? 1u : 0u;
+        return {wakePoints_.size() - units, units};
+    }
 
     bool hasSurfaces() const { return !surfaces.empty(); }
 
@@ -474,11 +492,23 @@ private:
         float age = 0.0f;        // seconds
         float life = 1.0f;       // seconds
         float strength = 0.0f;
+        bool unit = false;       // laid by another unit, not the character
     };
     std::vector<WakePoint> wakePoints_;
     WaterFrameUBOData frameUBO_{};
-    glm::vec2 lastWakeEmitPos_{0.0f};
-    bool hasWakeEmitPos_ = false;
+    /// Where a trail last laid its points: the character's, and each other
+    /// unit's by its guid (forgotten five seconds after it was last fed).
+    struct WakeEmitter {
+        glm::vec2 last{0.0f};
+        bool has = false;
+        float seen = 0.0f;
+    };
+    WakeEmitter ownWake_;
+    std::unordered_map<uint64_t, WakeEmitter> unitWakes_;
+    std::vector<WakeSource> pendingUnitWakes_;
+    float wakeClock_ = 0.0f;
+    void emitWake(WakeEmitter& emitter, const glm::vec2& pos, const glm::vec2& travelDir, float intensity,
+                  bool wading, bool unit);
 
     void uploadFrameUBO();
 

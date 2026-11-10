@@ -15,7 +15,7 @@
 
 namespace wowee::rendering::swim_wave {
 
-inline constexpr size_t kMaxWaves = 16;
+inline constexpr size_t kMaxWaves = 32;
 inline constexpr float kLife = 1.6f;          // seconds a ring lasts
 inline constexpr float kNearSurface = 0.35f;  // how close a limb must be
 inline constexpr float kMinSpeed = 0.8f;      // yards a second, slower makes none
@@ -42,7 +42,10 @@ inline void age(std::vector<Wave>& waves, float dt) {
 }
 
 /// A limb's move this frame: a ring if it is at the surface and quick enough.
-inline void limbMoved(std::vector<Wave>& waves, Limb& limb, const glm::vec3& now, float waterZ, float dt) {
+/// With the rings full, the oldest gives way, or with `mayEvict` false (a
+/// unit other than the character) the ring is not made.
+inline void limbMoved(std::vector<Wave>& waves, Limb& limb, const glm::vec3& now, float waterZ, float dt,
+                      bool mayEvict = true) {
     limb.cooldown -= dt;
     const glm::vec3 was = limb.last;
     const bool seen = limb.seen;
@@ -52,7 +55,10 @@ inline void limbMoved(std::vector<Wave>& waves, Limb& limb, const glm::vec3& now
     if (std::abs(now.z - waterZ) > kNearSurface) return;
     const float speed = glm::length(now - was) / dt;
     if (speed < kMinSpeed) return;
-    if (waves.size() >= kMaxWaves) waves.erase(waves.begin());
+    if (waves.size() >= kMaxWaves) {
+        if (!mayEvict) return;
+        waves.erase(waves.begin());
+    }
     Wave w;
     w.position = glm::vec2(now);
     w.strength = std::clamp(speed / kFullSpeed, 0.15f, 1.0f);

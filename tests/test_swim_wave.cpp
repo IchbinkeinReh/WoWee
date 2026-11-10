@@ -38,6 +38,20 @@ TEST_CASE("one limb waits between rings, and the oldest ring gives way", "[swim_
     REQUIRE(waves.size() == kMaxWaves);
 }
 
+TEST_CASE("another unit's limb makes no ring once the rings are full", "[swim_wave]") {
+    std::vector<Wave> waves(kMaxWaves);
+    waves.front().strength = 0.5f;
+    Limb limb;
+    limbMoved(waves, limb, glm::vec3(0.0f, 0.0f, 10.0f), 10.0f, 0.1f, false);
+    limbMoved(waves, limb, glm::vec3(1.0f, 0.0f, 10.0f), 10.0f, 0.1f, false);
+    REQUIRE(waves.size() == kMaxWaves);
+    REQUIRE(waves.front().strength == 0.5f);
+    waves.pop_back();
+    limbMoved(waves, limb, glm::vec3(2.0f, 0.0f, 10.0f), 10.0f, 0.1f, false);
+    REQUIRE(waves.size() == kMaxWaves);
+    REQUIRE(waves.back().position == glm::vec2(2.0f, 0.0f));
+}
+
 TEST_CASE("a ring ends", "[swim_wave]") {
     std::vector<Wave> waves(1);
     age(waves, kLife * 0.5f);
