@@ -37,6 +37,30 @@ namespace ue = rendering::unit_event;
 constexpr uint32_t kDisplayModelColumn = 1;
 constexpr uint32_t kDisplaySoundColumn = 2;
 constexpr uint32_t kModelSoundColumn = 13;
+/// CreatureModelData's FoleyMaterialID (+0x28) and Material's FoleySoundID
+/// (+0x8), which 0x007464d0 plays.
+constexpr uint32_t kModelFoleyMaterialColumn = 10;
+constexpr uint32_t kMaterialFoleySoundColumn = 2;
+
+/// The SoundEntries id of a unit's armour foley: its display's model's
+/// FoleyMaterialID, then that Material's FoleySoundID (0x007464d0 ->
+/// 0x004cfc10); 0 for none.
+uint32_t foleySoundFor(pipeline::AssetManager& assets, uint32_t displayId) {
+    auto displays = assets.loadDBCOptional("CreatureDisplayInfo.dbc");
+    auto models = assets.loadDBCOptional("CreatureModelData.dbc");
+    auto materials = assets.loadDBCOptional("Material.dbc");
+    if (!displays || !models || !materials || models->getFieldCount() <= kModelFoleyMaterialColumn ||
+        materials->getFieldCount() <= kMaterialFoleySoundColumn)
+        return 0;
+    const int32_t display = displays->findRecordById(displayId);
+    if (display < 0) return 0;
+    const int32_t model =
+        models->findRecordById(displays->getUInt32(static_cast<uint32_t>(display), kDisplayModelColumn));
+    if (model < 0) return 0;
+    const int32_t material =
+        materials->findRecordById(models->getUInt32(static_cast<uint32_t>(model), kModelFoleyMaterialColumn));
+    return material < 0 ? 0 : materials->getUInt32(static_cast<uint32_t>(material), kMaterialFoleySoundColumn);
+}
 
 /// xorshift32: the draws a slot's chance takes (the client's own generator
 /// is 0x00464580; only the chance it gives matters).
@@ -356,6 +380,7 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
     if (!displays || !models || !sounds || sounds->getFieldCount() < ue::kColumnCount) return;
 
     const auto soundRow = [&](const game::Unit& unit, bool petRow) { return unitSoundRow(unit, petRow); };
+    const auto armourFoleySound = [&](const game::Unit& unit) { return foleySoundFor(*assetManager_, unit.getDisplayId()); };
 
     const bool listenerAtCharacter = addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0";
 
@@ -443,8 +468,8 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
         }
         case ue::Kind::Footstep: {
             // 0x00747240: not a hovering unit's, one using a vehicle or a
-            // player's ghost; with FootstepSounds on.
-            if (addons::storedCVarValue("FootstepSounds", "1") == "0") break;
+            // player's ghost; the armour's rustle first (CGUnit_C vtable
+            // +0x11c), then the step itself with FootstepSounds on.
             const bool activePlayer = guid == self;
             const uint32_t moveFlags =
                 activePlayer ? gameHandler_->getMovementInfo().flags : unit.getReportedMoveFlags();
@@ -456,6 +481,16 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
                                    isPlayer && playerFlags != 0xFFFF ? unit.getField(playerFlags) : 0u)) {
                 break;
             }
+            // 0x007464d0: the model's foley material's sound, two yards above
+            // the unit, while Sound_EnableArmorFoleySoundForOthers is on -
+            // every unit's, the player's own too (nothing reads ...ForSelf).
+            if (addons::storedCVarValue("Sound_EnableArmorFoleySoundForOthers", "1") != "0") {
+                if (const uint32_t foley = armourFoleySound(unit)) {
+                    const glm::vec3 at = unitPosition + glm::vec3(0.0f, 0.0f, 2.0f);
+                    player.playOnce(foley, &at, 1.0f, assetManager_);
+                }
+            }
+            if (addons::storedCVarValue("FootstepSounds", "1") == "0") break;
             const int32_t row = soundRow(unit, true);
             if (row < 0) break;
             const uint32_t footstepId = sounds->getUInt32(static_cast<uint32_t>(row), ue::kColumnFootstep);
