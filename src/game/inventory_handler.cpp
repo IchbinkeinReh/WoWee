@@ -5043,15 +5043,39 @@ void InventoryHandler::auctionSellItemByGuid(uint64_t itemGuid, uint32_t stackCo
     owner_.getSocket()->send(packet);
 }
 
-void InventoryHandler::auctionPlaceBid(uint32_t auctionId, uint32_t amount) {
+void InventoryHandler::auctionBid(const AuctionEntry& a, uint32_t bid) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || auctioneerGuid_ == 0) return;
-    auto packet = AuctionPlaceBidPacket::build(auctioneerGuid_, auctionId, amount);
-    owner_.getSocket()->send(packet);
-}
-
-void InventoryHandler::auctionBuyout(uint32_t auctionId, uint32_t buyoutPrice) {
-    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || auctioneerGuid_ == 0) return;
-    auto packet = AuctionPlaceBidPacket::build(auctioneerGuid_, auctionId, buyoutPrice);
+    auto refuse = [&](const char* key, const char* enUS) {
+        owner_.addUIError(uiText(key, enUS));
+        owner_.playGameErrorSound(key);
+    };
+    // A bid past the buyout is the buyout - there is no other way to buy one
+    // out, the same request carries both.
+    if (a.buyoutPrice != 0 && a.buyoutPrice < bid) bid = a.buyoutPrice;
+    if (bid < a.startBid) {
+        refuse("ERR_AUCTION_MIN_BID", "Your bid is below the minimum bid.");
+        return;
+    }
+    if (bid <= a.currentBid) {
+        refuse("ERR_AUCTION_HIGHER_BID", "There is already a higher bid on that item.");
+        return;
+    }
+    const uint64_t nextBid = static_cast<uint64_t>(a.currentBid) + a.minBidIncrement;
+    if (a.currentBid != 0 && bid < nextBid && (a.buyoutPrice == 0 || bid < a.buyoutPrice)) {
+        refuse("ERR_AUCTION_BID_INCREMENT", "Your bid increment is too small.");
+        return;
+    }
+    // Two thousand million copper is as far as a bid goes, short of the next
+    // step up from the current one; past it nothing is said or sent.
+    constexpr uint32_t kMaxBid = 2000000000u;
+    if (bid > kMaxBid && bid > nextBid) return;
+    // Raising your own bid costs only the difference.
+    const uint64_t cost = a.bidderGuid == owner_.getPlayerGuid() ? bid - a.currentBid : bid;
+    if (cost > owner_.getMoneyCopper()) {
+        refuse("ERR_NOT_ENOUGH_MONEY", "You don't have enough money.");
+        return;
+    }
+    auto packet = AuctionPlaceBidPacket::build(auctioneerGuid_, a.auctionId, bid);
     owner_.getSocket()->send(packet);
 }
 

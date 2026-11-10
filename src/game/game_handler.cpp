@@ -1901,12 +1901,8 @@ void GameHandler::auctionSellItemByGuid(uint64_t itemGuid, uint32_t stackCount, 
     if (inventoryHandler_) inventoryHandler_->auctionSellItemByGuid(itemGuid, stackCount, bid, buyout, duration);
 }
 
-void GameHandler::auctionPlaceBid(uint32_t auctionId, uint32_t amount) {
-    if (inventoryHandler_) inventoryHandler_->auctionPlaceBid(auctionId, amount);
-}
-
-void GameHandler::auctionBuyout(uint32_t auctionId, uint32_t buyoutPrice) {
-    if (inventoryHandler_) inventoryHandler_->auctionBuyout(auctionId, buyoutPrice);
+void GameHandler::auctionBid(const AuctionEntry& auction, uint32_t bid) {
+    if (inventoryHandler_) inventoryHandler_->auctionBid(auction, bid);
 }
 
 void GameHandler::auctionCancelItem(uint32_t auctionId) {

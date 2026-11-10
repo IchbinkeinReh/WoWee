@@ -4014,6 +4014,19 @@ static bool auctionChargesIntact(game::GameHandler* gh, uint32_t itemId, uint64_
     return false;
 }
 
+/// StartAuction's first refusal (0x0059f990): a worn item that is not gift
+/// wrapped (ITEM_FIELD_FLAGS 0x8) is repaired before it is sold - its
+/// durability (0x00584ac0) short of its maximum (0x00584ae0) is refused.
+static bool auctionItemRepaired(game::GameHandler* gh, const game::ItemSlot& slot, uint64_t guid) {
+    constexpr uint32_t kItemWrapped = 0x8;
+    if (gh->getItemFieldFlags(guid) & kItemWrapped) return true;
+    const auto& item = slot.item;
+    if (item.maxDurability == 0 || item.curDurability >= item.maxDurability) return true;
+    gh->playGameErrorSound("ERR_AUCTION_REPAIR_ITEM");
+    gh->addUIError(game::interfaceString("ERR_AUCTION_REPAIR_ITEM", "You must repair that item before you can auction it."));
+    return false;
+}
+
 static const game::ItemSlot* auctionSellItemSlot(game::GameHandler* gh,
                                                  uint64_t* guidOut = nullptr) {
     if (guidOut) *guidOut = 0;
@@ -6354,7 +6367,8 @@ void registerInventoryLuaAPI(lua_State* L) {
             return 0;
         }},
                 // PlaceAuctionBid(list, index, bid) - a bid equal to the
-                // buyout is a buyout, which is how the panel asks for one.
+                // buyout is a buyout, which is how the panel asks for one
+                // (0x0059da40; the checks are GameHandler::auctionBid's).
                 {"PlaceAuctionBid", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const char* list = luaL_optstring(L, 1, "list");
@@ -6365,12 +6379,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             if (!taint::allowed(L, 8)) return 0;
             const auto& res = auctionListFor(gh, list);
             if (index < 1 || index > static_cast<int>(res.auctions.size())) return 0;
-            const auto& a = res.auctions[index - 1];
-            if (a.buyoutPrice != 0 && bid >= a.buyoutPrice) {
-                gh->auctionBuyout(a.auctionId, a.buyoutPrice);
-            } else {
-                gh->auctionPlaceBid(a.auctionId, bid);
-            }
+            gh->auctionBid(res.auctions[index - 1], bid);
             return 0;
         }},
                 {"CancelAuction", [](lua_State* L) -> int {
@@ -6410,6 +6419,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             uint64_t guid = 0;
             const auto* item = auctionSellItemSlot(gh, &guid);
             if (!item || guid == 0) return 0;
+            if (!auctionItemRepaired(gh, *item, guid)) return 0;
             if (!auctionChargesIntact(gh, item->item.itemId, guid)) {
                 LOG_WARNING("StartAuction: item ", item->item.itemId, " has used charges; not posted");
                 return 0;

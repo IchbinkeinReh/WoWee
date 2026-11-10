@@ -726,8 +726,8 @@ public:
                           uint32_t buyout, uint32_t duration);
     void auctionSellItemByGuid(uint64_t itemGuid, uint32_t stackCount, uint32_t bid,
                                uint32_t buyout, uint32_t duration);
-    void auctionPlaceBid(uint32_t auctionId, uint32_t amount);
-    void auctionBuyout(uint32_t auctionId, uint32_t buyoutPrice);
+    /// PlaceAuctionBid's checks and request (0x0059da40).
+    void auctionBid(const AuctionEntry& auction, uint32_t bid);
     void auctionCancelItem(uint32_t auctionId);
     void auctionListOwnerItems(uint32_t offset = 0);
     void auctionListBidderItems(uint32_t offset = 0);
