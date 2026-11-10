@@ -2143,9 +2143,10 @@ void GameHandler::registerCoreOpcodes() {
                 if (cpit != criteriaProgress_.end()) oldProgress = cpit->second;
                 criteriaProgress_[criteriaId] = progress;
                 LOG_DEBUG("SMSG_CRITERIA_UPDATE: id=", criteriaId, " progress=", progress);
-                // Fire addon event for achievement tracking addons
+                // CRITERIA_UPDATE, with nothing: the client signals it bare
+                // (0x005b3160), and the interface asks GetAchievementCriteriaInfo.
                 if (progress != oldProgress)
-                    fireAddonEvent("CRITERIA_UPDATE", {std::to_string(criteriaId), std::to_string(progress)});
+                    fireAddonEvent("CRITERIA_UPDATE", {});
 
                 // A timed criteria also drives the tracker's countdown. The
                 // message says how far into the window the player is; how long

@@ -5019,6 +5019,9 @@ void SpellHandler::handleTalentsInfo(network::Packet& packet) {
 
     loadTalentDbc();
 
+    // What 0x005c9e50 compares the new active group against.
+    const uint8_t wasActive = activeTalentSpec_;
+    const uint8_t wasCount = talentGroupCount_;
     activeTalentSpec_ = activeTalentGroup;
     // Kept as the packet said it. 0x005c9740 stores this byte into the same
     // block as the active group (DAT_00c20ff8 beside DAT_00c20ff4), and
@@ -5060,8 +5063,16 @@ void SpellHandler::handleTalentsInfo(network::Packet& packet) {
         // error against nothing. These fire on a full refresh rather than an
         // increment, so nothing was gained and nothing is announced.
         owner_.addonEventCallbackRef()("CHARACTER_POINTS_CHANGED", {"0", "0"});
-        owner_.addonEventCallbackRef()("ACTIVE_TALENT_GROUP_CHANGED", {});
+        // 0x005c9e50: PLAYER_TALENT_UPDATE, then - only when the active group
+        // moved - ACTIVE_TALENT_GROUP_CHANGED with the new and old groups
+        // counted from one (0 where there were none).
         owner_.addonEventCallbackRef()("PLAYER_TALENT_UPDATE", {});
+        if (wasActive != activeTalentGroup) {
+            const int now = talentGroupCount ? activeTalentGroup + 1 : 0;
+            const int was = wasCount ? wasActive + 1 : 0;
+            owner_.addonEventCallbackRef()("ACTIVE_TALENT_GROUP_CHANGED",
+                                          {std::to_string(now), std::to_string(was)});
+        }
     }
 
     // No line about unspent points: 0x006cd770 -> 0x005c9e50 only updates the
