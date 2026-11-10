@@ -7602,6 +7602,16 @@ void LuaEngine::registerCoreAPI() {
             m.motion.windowID = id;
             m.motion.x = x;
             m.motion.y = y;
+            // The step from the hook's last pointer, as a mouse's own motion
+            // carries it: the camera's drag turns by xrel and yrel alone.
+            static float lastX = -1.0f;
+            static float lastY = -1.0f;
+            if (lastX >= 0.0f) {
+                m.motion.xrel = x - lastX;
+                m.motion.yrel = y - lastY;
+            }
+            lastX = x;
+            lastY = y;
             SDL_PushEvent(&m);
             SDL_Event b{};
             b.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
