@@ -634,6 +634,12 @@ private:
     bool portWorldReady_ = false;
     /// The unit rising (+0x44 0x400000) while it swims or flies: jump held.
     bool portAscending_ = false;
+    /// The unit moving along (+0x44 & 0xf: forward, back or sideways) this
+    /// frame, for the swimmer's jump out at the surface (surfaceJumpDue).
+    bool portMovingAlong_ = false;
+    /// The swim check found the swimmer due to jump out (surfaceJumpDue):
+    /// the swim step jumps this frame.
+    bool portSurfaceJump_ = false;
     /// How long the port's unit has flown, for 0x0073a890's two seconds.
     uint32_t portFlyMs_ = 0;
     /// The transport's deck held the rider where the application last placed

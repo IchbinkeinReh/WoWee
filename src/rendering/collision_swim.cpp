@@ -15,6 +15,19 @@ bool risingInJump(const Mover& m) {
            static_cast<float>(m.fallMs) * 0.001f < m.fallV0 * -(1.0f / kGravity);
 }
 
+bool surfaceJumpDue(const Mover& m, const std::optional<float>& liquidLevel, bool ascending, bool movingAlong,
+                    bool gravityDisabled) {
+    if (!m.swimming || !ascending || !movingAlong || gravityDisabled) return false;
+    const float depth = liquidLevel ? *liquidLevel - m.pos.z : 0.0f;
+    return depth - m.height * kSwimDepthShare <= kSurfaceJumpReach;
+}
+
+void startSwimJump(Mover& m) {
+    startFall(m);
+    m.fallV0 = kSwimJumpSpeed;
+    m.swimming = false;
+}
+
 bool updateSwimming(Mover& m, const std::optional<float>& liquidLevel, bool canSwim, bool gravityDisabled) {
     const float depth = liquidLevel ? *liquidLevel - m.pos.z : 0.0f;
     const float start = m.height * kSwimDepthShare;
@@ -82,9 +95,7 @@ bool swimFlyStep(Mover& m, uint32_t ms, float dist, const glm::vec3& dirIn, Swee
         if (!hadSolid && ascending) {
             // Rising into the surface: out of the water by a jump (0x009883f0
             // at the swimmer's speed; 0x00988370 clears swimming).
-            startFall(m);
-            m.fallV0 = kSwimJumpSpeed;
-            m.swimming = false;
+            startSwimJump(m);
             return true;
         }
         if (T - used < 1.0f) return false;
