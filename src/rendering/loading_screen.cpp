@@ -164,7 +164,7 @@ bool LoadingScreen::loadCrossing(pipeline::AssetManager* assets) {
         }
         return std::nullopt;
     };
-    auto route = lr::build(nodes, rows, crossingPath_, crossingFromMap_, continentOf);
+    auto route = lr::build(nodes, rows, crossingPath_, crossingFromMap_, continentOf, crossingLeftFrom_);
     if (!route) return false;
     // 0x0040a160: the trail's sprites and the twelve tiles, all or none.
     bool ok = loadTexture(assets, lr::kDynamicElements, dynamicElements_);
