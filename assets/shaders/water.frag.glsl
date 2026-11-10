@@ -462,15 +462,22 @@ void main() {
     }
     // Rain's rings (rainRippleTilt), on the traced water and ocean seen from
     // above, near enough to show, and only where the rain reaches the
-    // surface: one ray straight up, which the ground and the buildings stop
-    // (a roof, a bridge, the rock over a cave). Not on a building's interior
-    // water, nor right of the Debug Graphics split.
+    // surface: one ray straight up, which the ground, the buildings and the
+    // doodads stop (a roof, a bridge, the rock over a cave, a pavilion's or a
+    // dock's boards - a doodad's, which the ground and the buildings alone
+    // left out: the rings fell under a pavilion standing in a lake). A cutout
+    // by its mask, as the sun's shadow takes it: a tent's cloth is one, and
+    // let all the rain through; a canopy's gaps still do. Not a unit, nor on
+    // a building's interior water, nor right of the Debug Graphics split.
     float rainStrength = rtWater2.y;
     if (rainStrength > 0.0 && rtWater.x > 0.5 && basicType < 1.5 && push.interiorFog < 0.5 &&
         viewPos.z > FragPos.z && dist < RAIN_FADE_FAR &&
         !(rtParams.w > 0.0 && gl_FragCoord.x * rtParams.z >= rtParams.w)) {
         uint rainRng = uint(gl_FragCoord.x) * 7919u + uint(gl_FragCoord.y) * 104729u;
-        if (!rtOccludedByStructure(FragPos + vec3(0.0, 0.0, 0.1), vec3(0.0, 0.0, 1.0), 150.0, rainRng)) {
+        rtSkipUnits = true;
+        bool covered = rtOccluded(FragPos + vec3(0.0, 0.0, 0.1), vec3(0.0, 0.0, 1.0), 150.0, rainRng);
+        rtSkipUnits = false;
+        if (!covered) {
             float rainNear = 1.0 - smoothstep(RAIN_FADE_NEAR, RAIN_FADE_FAR, dist);
             swimTilt += rainRippleTilt(FragPos.xy, time, rainStrength) * rainNear;
         }
