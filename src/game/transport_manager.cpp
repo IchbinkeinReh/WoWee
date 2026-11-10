@@ -648,10 +648,26 @@ uint64_t TransportManager::groundTransportUnder(const glm::vec3& canonicalPositi
                 if (deck && d.x == 0.0f && d.y == 0.0f) break;
             }
         } else {
-            deck = getTransportDeckFloorHeight(guid, canonicalPosition);
-            if (deck) {
-                const float delta = canonicalPosition.z - *deck;
-                if (delta < -0.35f || delta > 1.25f) deck.reset();
+            // A ship's or a zeppelin's floor the same way: under the feet,
+            // the centre and a cross about it, within a step of them. Asked
+            // at the centre alone and taken only within a third of a yard
+            // above the feet, the first tread of a stair into the hull was
+            // no deck at all: the rider was let go there ("walk-off"), and
+            // the hull, which only its rider stands on, let them fall
+            // through it - off the Grom'gol zeppelin by the stairs down to
+            // its navigator, docked or flying.
+            constexpr float kFootprint = 0.35f;
+            const glm::vec2 cross[5] = {{0.0f, 0.0f}, {kFootprint, 0.0f}, {-kFootprint, 0.0f},
+                                        {0.0f, kFootprint}, {0.0f, -kFootprint}};
+            for (const glm::vec2& d : cross) {
+                const glm::vec3 at(canonicalPosition.x + d.x, canonicalPosition.y + d.y, canonicalPosition.z);
+                std::optional<float> floor = getTransportDeckFloorHeight(guid, at);
+                if (floor) {
+                    const float delta = canonicalPosition.z - *floor;
+                    if (delta < -rendering::movement::kMaxStepUp || delta > 2.0f) floor.reset();
+                }
+                if (floor && (!deck || *floor > *deck)) deck = floor;
+                if (deck && d.x == 0.0f && d.y == 0.0f) break;
             }
         }
         if (deck && *deck > ownerDeck) {
@@ -726,9 +742,13 @@ std::optional<float> TransportManager::getTransportDeckFloorHeight(
 
     const glm::vec3 renderPosition = core::coords::canonicalToRender(canonicalPosition);
     float normalZ = 0.0f;
+    // From a step above the feet (kMaxStepUp, the most the movement steps
+    // up): from a third of a yard the next tread of a stair stood above the
+    // probe, which went on down to the one under it - the rider could not
+    // climb the stairs into a hull, and walked into them.
     const auto floor = wmoRenderer_->getInstanceFloorHeight(
         it->second.wmoInstanceId,
-        renderPosition.x, renderPosition.y, renderPosition.z + 0.35f,
+        renderPosition.x, renderPosition.y, renderPosition.z + rendering::movement::kMaxStepUp,
         &normalZ);
     if (!floor || normalZ < 0.55f) return std::nullopt;
     return floor;
