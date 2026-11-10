@@ -154,7 +154,15 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
         const glm::vec3 disp = wanted - from;
         const float len = glm::length(disp);
         bool jumped = false;
-        if (len > 1e-6f) {
+        // Rising near the surface while moving along: out of the water by
+        // a jump, whatever stands in front (0x00730d10 -> 0x0072eb80 ->
+        // 0x009883f0(1)), decided with the swim check (portSurfaceJump_).
+        const bool surfaceJump = portSurfaceJump_;
+        portSurfaceJump_ = false;
+        if (m.swimming && surfaceJump) {
+            collision::startSwimJump(m);
+            jumped = true;
+        } else if (len > 1e-6f) {
             jumped = collision::swimFlyStep(m, ms, len, disp / len, sweeper, m.swimming ? &liquid : nullptr,
                                             gravityDisabled_, portAscending_);
         }
@@ -630,8 +638,16 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
         // Whether the unit swims is the client's decision (0x00730d10) from
         // the liquid where it looks (portLiquidLevelAt); a jump out of the
         // water is the swim step's (0x00760b40, portMove).
+        // The swimmer's check jumps out first (0x00730d10 asks it before
+        // whether the unit still swims): rising near the surface while moving
+        // along, the swim step below jumps instead of the swim stopping. The
+        // rise is the one the server was told of (wasAscending_).
         portMover_.pos = *followTarget;
-        collision::updateSwimming(portMover_, portLiquidLevelAt(*followTarget), true, gravityDisabled_);
+        const std::optional<float> liquidLevel = portLiquidLevelAt(*followTarget);
+        portMovingAlong_ = f.nowForward || f.nowBackward || f.nowStrafeLeft || f.nowStrafeRight;
+        portSurfaceJump_ = collision::surfaceJumpDue(portMover_, liquidLevel, wasAscending_, portMovingAlong_,
+                                                     gravityDisabled_);
+        if (!portSurfaceJump_) collision::updateSwimming(portMover_, liquidLevel, true, gravityDisabled_);
         const bool inWater = portMover_.swimming;
         portAscending_ = f.spaceHeld && !f.noAscendDescend;
 
@@ -2596,6 +2612,12 @@ void CameraController::update(float deltaTime) {
             movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_START_SWIM));
         } else if (!swimming && wasSwimming) {
             movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_STOP_SWIM));
+            // Out of the water: the rise and the dive went with swimming
+            // (0x0098bff0, +0x44 & 0xff1fff3f), on the STOP_SWIM itself,
+            // and nothing follows it - a STOP_ASCEND after it told the
+            // server of a rise it had already ended.
+            wasAscending_ = false;
+            wasDescending_ = false;
         }
     }
 
@@ -3236,6 +3258,20 @@ void CameraController::teleportTo(const glm::vec3& pos, bool onTransport) {
     // And it falls from there unless it is on ground (0x006ecf80 ->
     // 0x0098b710; portMove), or a passenger.
     portPlacedFall_ = !onTransport;
+    // The place it is put at keeps only +0x44 & 0xf9003f00 of its movement
+    // flags (0x0098ba90): swimming, rising and sinking are gone, and the
+    // acknowledgement and the heartbeat after it tell the server so
+    // (MovementHandler, MSG_MOVE_TELEPORT_ACK). Put into water, the unit
+    // starts to swim again on its next update (0x00730d10 -> 0x00721210):
+    // MSG_MOVE_START_SWIM, and the rise again for a key still held
+    // (0x005face0). Remembered as swimming, a .go from the water into the
+    // water sent nothing, and the server had the swimmer walking.
+    if (!onTransport) {
+        portMover_.swimming = false;
+        wasSwimming = false;
+        wasAscending_ = false;
+        wasDescending_ = false;
+    }
 
     // Invalidate active WMO group so it's re-detected at new position
     if (wmoRenderer) {

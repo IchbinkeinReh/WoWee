@@ -122,11 +122,11 @@ struct WaterSurface {
 // MAX_WATER_GROUPS there. The character keeps kOwnWakePoints of the trail's
 // points; the other units share the rest (water_unit_share.hpp), enough for a
 // crowd out to 150 yards.
-constexpr int kMaxWakePoints = 256;
+constexpr int kMaxWakePoints = 512;
 constexpr int kOwnWakePoints = 64;
 /// The groups of one owner's points (water_share::Group) the shader looks
 /// through, for the trail and for the rings each.
-constexpr int kMaxWaterGroups = 32;
+constexpr int kMaxWaterGroups = 64;
 
 /// The traced water's waves at their default (rtwaveamp 100%): half the
 /// height they were first made with, which in the traced mirror read as a
@@ -135,6 +135,8 @@ inline constexpr float kRtWaveAmpScale = 0.5f;
 
 inline constexpr size_t kMaxWaterLamps = 8;
 
+// What the water shader's uniform block holds: under the 16 KB that every
+// device gives a uniform block (maxUniformBufferRange's least is 16384).
 struct WaterFrameUBOData {
     glm::vec4 wakeBounds{0.0f};              // x = trail groups, y = ring groups, w = trail points
     glm::vec4 wakePoints[kMaxWakePoints]{};  // xy = pos, z = age 0..1, w = strength
@@ -153,6 +155,7 @@ struct WaterFrameUBOData {
     glm::vec4 wakeGroups[kMaxWaterGroups]{};            // xy = centre, z = reach, w = first point
     glm::vec4 swimWaveGroups[kMaxWaterGroups]{};        // xy = centre, z = reach, w = first ring
 };
+static_assert(sizeof(WaterFrameUBOData) <= 16384, "the water's uniform block must fit 16 KB");
 
 /// What the ray traced water needs from the frame (Renderer, each frame).
 struct RtWaterFrame {

@@ -881,7 +881,11 @@ void MovementHandler::sendMovement(Opcode opcode) {
             movementInfo.jumpXYSpeed = 0.0f;
             break;
         case Opcode::MSG_MOVE_STOP_SWIM:
-            movementInfo.flags &= ~static_cast<uint32_t>(MovementFlags::SWIMMING);
+            // 0x0098bff0: swimming, rising and sinking end together
+            // (+0x44 & 0xff1fff3f), before the packet goes out.
+            movementInfo.flags &= ~(static_cast<uint32_t>(MovementFlags::SWIMMING) |
+                                    static_cast<uint32_t>(MovementFlags::ASCENDING) |
+                                    static_cast<uint32_t>(MovementFlags::DESCENDING));
             // Out of the water level again, so the next packet that does carry
             // a pitch - a flying mount - starts from horizontal rather than
             // from however the swimmer was last angled.

@@ -62,9 +62,9 @@ layout(set = 2, binding = 1) uniform sampler2D SceneDepth;
 // of froth rather than a disc stuck under its feet.
 // The character's and a crowd's out to 150 yards (water_unit_share.hpp),
 // grouped by who made them: a group's circle says where its points reach.
-const int MAX_WAKE_POINTS = 256;
-const int MAX_SWIM_WAVES = 128;
-const int MAX_WATER_GROUPS = 32;
+const int MAX_WAKE_POINTS = 512;
+const int MAX_SWIM_WAVES = 256;
+const int MAX_WATER_GROUPS = 64;
 const int MAX_WATER_LAMPS = 8;
 // An interior liquid (the end of main): how fast its colour takes over with the
 // depth along the view, per yard (the underwater fade's above); how far over the
@@ -644,8 +644,27 @@ void main() {
                 // Started under the bed, as a fixed step down from the surface does
                 // where the water is thinner than it, the ray met nothing and the
                 // pixel took all the water's own colour: a dark band along the shore.
-                refractedColor = rtwRefraction(FragPos - n * min(0.05, 0.5 * shoreDepth), t, ldir, absorptionCoeff, litBase, rng,
-                                               bedShown).rgb;
+                vec4 traced = rtwRefraction(FragPos - n * min(0.05, 0.5 * shoreDepth), t, ldir, absorptionCoeff, litBase,
+                                            rng, bedShown);
+                refractedColor = traced.rgb;
+                // The water's own colour over the path by the bed's depth where
+                // the trace met it, not by what the frame shows straight down:
+                // that is a swimmer's body wherever one is under the surface,
+                // and the water over it took the shallows' colour, lighter -
+                // the submerged body drawn a second time, unbent, under the
+                // bent one (Mulgore's Stonebull Lake at 19:30). The shore's
+                // masks below go by the same depth.
+                // The floor of the water's own colour below and the lamps' light
+                // through the water likewise.
+                vec3 bodyBase = litBase;
+                if (rtwBedDepth >= 0.0) {
+                    float bedFade = max(1.0 - exp(-rtwBedDepth * 0.15), bodyFloor);
+                    bodyBase = mix(shallowColor, deepColor, bedFade) *
+                               (ambientColor.rgb * 0.7 + NdotL * lightColor.rgb * 0.5);
+                    refractedColor += (bodyBase - litBase) * (1.0 - exp(-absorptionCoeff * traced.a));
+                    shoreDepth = max(shoreDepth, rtwBedDepth);
+                    absorbed = exp(-absorptionCoeff * rtwBedDepth);
+                }
                 // A canal's or a building's water keeps the floor of its own
                 // colour it has drawn without the tracing (bodyFloor): the
                 // client draws it as its ramp colour at the river's alpha
@@ -655,7 +674,7 @@ void main() {
                 // A building's interior water as the client draws it there:
                 // unlit, its ramp colour whole (0x00793d20 passes it the
                 // white light).
-                refractedColor = mix(refractedColor, push.interiorFog > 0.5 ? waterBody : litBase, bodyFloor);
+                refractedColor = mix(refractedColor, push.interiorFog > 0.5 ? waterBody : bodyBase, bodyFloor);
             }
         } else {
             rtReflect = rtwRefraction(FragPos + n * 0.05, r, ldir, absorptionCoeff, litBase, rng, bedShown).rgb;

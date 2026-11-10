@@ -35,8 +35,29 @@ inline constexpr float kSwimStopSlack = kMinLookAhead;
 /// 0x009883f0: the jump speed out of water (0xc1118c48).
 inline constexpr float kSwimJumpSpeed = -9.096748f;
 
+/// 0x00730d10: a swimmer rising this close over the depth it swims from, or
+/// less, is near enough to the surface to jump out of it.
+inline constexpr float kSurfaceJumpReach = 1.0f / 3.0f;
+
 /// 0x00986ea0: still rising in a jump.
 bool risingInJump(const Mover& m);
+
+/// 0x00730d10, for the active player before it asks whether the unit still
+/// swims: one swimming and rising (+0x44 0x400000) whose depth (the liquid
+/// level over its feet, 0 with none) is no more than kSurfaceJumpReach over
+/// the depth it swims from jumps out of the water (0x0072eb80 -> event 10 ->
+/// 0x009883f0(1)) - when it moves along (+0x44 & 0xf) and gravity holds it
+/// (0x006e9ad0). Whatever is in front of it: the swim step's own jump out
+/// (swimFlyStep) is only for a rise that meets the surface before anything
+/// solid, and against a wall too high to climb the rise went on past the
+/// depth swimming stops at, and swimming stopped and started again every
+/// few frames.
+bool surfaceJumpDue(const Mover& m, const std::optional<float>& liquidLevel, bool ascending, bool movingAlong,
+                    bool gravityDisabled);
+
+/// 0x009883f0(1) for a swimmer: the fall begun at kSwimJumpSpeed, swimming
+/// cleared (0x00988370).
+void startSwimJump(Mover& m);
 
 /// 0x00730d10 with 0x00989660 / 0x0098bff0: start or stop swimming for the
 /// liquid level at the feet (none: not in liquid). `canSwim` is the unit's
