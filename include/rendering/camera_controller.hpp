@@ -127,6 +127,9 @@ public:
     /// 0..50).
     [[nodiscard]] float savedDistance() const { return userTargetDistance; }
     [[nodiscard]] float savedPitch() const { return pitch; }
+    /// The vehicle mode's distance (cameraSavedVehicleDistance, -1 for none).
+    [[nodiscard]] float savedVehicleDistance() const { return savedVehicleDistance_; }
+    void restoreSavedVehicleDistance(float distance) { savedVehicleDistance_ = distance; }
     void restoreSaved(float distance, float pitchDeg) {
         userTargetDistance = currentDistance = clampedZoomDistance(std::clamp(distance, 0.0f, 50.0f));
         pitch = pitchDeg;

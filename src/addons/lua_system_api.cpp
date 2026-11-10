@@ -1172,6 +1172,7 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     // its default camera style (the table at 0x00ad1ba8, row 2).
     else if (n == "camerasaveddistance") lua_pushstring(L, "5.55");
     else if (n == "camerasavedpitch") lua_pushstring(L, "10.0");
+    else if (n == "camerasavedvehicledistance") lua_pushstring(L, "-1.0");
     // On, as the client registers them (0x0051d9b0: autoStand and
     // autoUnshift "1"), which 0x00739650 reads.
     else if (n == "autostand") lua_pushstring(L, "1");

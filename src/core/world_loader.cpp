@@ -1072,6 +1072,8 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         const float dist = std::strtof(addons::storedCVarValue("cameraSavedDistance", "5.55").c_str(), nullptr);
         const float pitch = std::strtof(addons::storedCVarValue("cameraSavedPitch", "10.0").c_str(), nullptr);
         renderer_->getCameraController()->restoreSaved(dist, -pitch);
+        renderer_->getCameraController()->restoreSavedVehicleDistance(
+            std::strtof(addons::storedCVarValue("cameraSavedVehicleDistance", "-1.0").c_str(), nullptr));
     }
     renderer_->setCharacterYaw(spawnYawDeg);
     // Drawn facing that way from the start, not shuffled round from the last world.

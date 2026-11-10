@@ -3797,6 +3797,7 @@ void Application::fireInterfaceLeaving() {
         const auto* cam = renderer->getCameraController();
         addons::setStoredCVar("cameraSavedDistance", std::to_string(cam->savedDistance()));
         addons::setStoredCVar("cameraSavedPitch", std::to_string(-cam->savedPitch()));
+        addons::setStoredCVar("cameraSavedVehicleDistance", std::to_string(cam->savedVehicleDistance()));
     }
     if (!addonManager_) return;
     {
