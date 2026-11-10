@@ -9,11 +9,13 @@ layout(set = 1, binding = 0) uniform sampler2D uTexture;
 
 layout(location = 0) in vec2 vUV;
 layout(location = 1) in vec4 vColor;
+layout(location = 2) in float vFog;  // the share left by the fog (weather_streak.vert)
 
 layout(location = 0) out vec4 outColor;
 
 void main() {
     vec4 c = texture(uTexture, vUV) * vColor;
     if (c.a < 1.0 / 255.0) discard;
-    outColor = c;
+    // Fogged toward the mid grey Mod2x leaves the picture alone with.
+    outColor = vec4(mix(vec3(0.5), c.rgb, vFog), c.a);
 }
