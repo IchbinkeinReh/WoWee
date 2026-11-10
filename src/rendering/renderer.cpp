@@ -3523,6 +3523,14 @@ void Renderer::update(float deltaTime) {
         // The circle under the target, laid on the ground the same way
         // (0x00725980 through 0x007e4370), turned with the camera's bearing.
         std::optional<blob_shadow::Projection> circle;
+        // Where the target stands this frame, as its model is drawn
+        // (setSelectionCircleTarget).
+        selectionCircle_.reset();
+        if (selectionTarget_ != 0 && selectionCirclePlace_) {
+            if (const auto place = selectionCirclePlace_(selectionTarget_)) {
+                selectionCircle_ = SelectionCircle{place->first, place->second, selectionColor_};
+            }
+        }
         if (selectionCircle_ && camera) {
             circle = selection_circle::project(selectionCircle_->position, selectionCircle_->radius,
                                                camera->getPosition());
@@ -3687,8 +3695,9 @@ void Renderer::loadDeferredWorldTextures() {
     if (weather) weather->loadAssets(cachedAssetManager);
 }
 
-void Renderer::setSelectionCircle(const glm::vec3& pos, float radius, const glm::vec4& color) {
-    selectionCircle_ = SelectionCircle{pos, radius, color};
+void Renderer::setSelectionCircleTarget(uint64_t guid, const glm::vec4& color) {
+    selectionTarget_ = guid;
+    selectionColor_ = color;
 }
 
 void Renderer::setSpellTargetCircle(const glm::vec3& pos, float radius, bool unacceptable) {
@@ -3842,6 +3851,7 @@ std::optional<glm::vec3> Renderer::pickGround(const glm::vec3& origin, const glm
 }
 
 void Renderer::clearSelectionCircle() {
+    selectionTarget_ = 0;
     selectionCircle_.reset();
 }
 

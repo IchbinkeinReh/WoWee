@@ -805,6 +805,7 @@ bool Application::initialize() {
         LOG_FATAL("Failed to initialize renderer");
         return false;
     }
+    renderer->setSelectionCirclePlace([this](uint64_t guid) { return getSelectionCircle(guid); });
 
     // Create and initialize audio coordinator (owns all audio managers)
     audioCoordinator_ = std::make_unique<audio::AudioCoordinator>();
@@ -3100,6 +3101,7 @@ bool Application::recoverFromDeviceLoss() {
         LOG_ERROR("Renderer would not initialize on the rebuilt device");
         return false;
     }
+    renderer->setSelectionCirclePlace([this](uint64_t guid) { return getSelectionCircle(guid); });
     if (uiManager) uiManager->restoreGpu();
 
     // The world, loaded again where the player is. The session never left it:

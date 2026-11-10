@@ -344,10 +344,20 @@ public:
     }
 
     // Selection circle for targeted entity
-    /// The target's circle (0x00725980): the unit's position, its radius
-    /// (selection_circle::radius) and its selection colour.
-    void setSelectionCircle(const glm::vec3& pos, float radius, const glm::vec4& color);
+    /// The target's circle (0x00725980): the unit and its selection colour.
+    /// Where it stands and its radius (selection_circle::radius) are asked
+    /// when the circle is laid down (update), of the frame its model is
+    /// drawn at in that frame (setSelectionCirclePlace). Handed over as a
+    /// place by the interface, which is drawn after the world, the circle
+    /// stood where the unit had been the frame before: on a flying zeppelin
+    /// a part of a yard behind it, by however long that frame took - a
+    /// circle wobbling under a vendor on the deck.
+    void setSelectionCircleTarget(uint64_t guid, const glm::vec4& color);
     void clearSelectionCircle();
+    /// The unit's place and the circle's radius, or none while it is not
+    /// drawn (Application::getSelectionCircle).
+    using SelectionCirclePlace = std::function<std::optional<std::pair<glm::vec3, float>>(uint64_t)>;
+    void setSelectionCirclePlace(SelectionCirclePlace place) { selectionCirclePlace_ = std::move(place); }
 
     /// The circle of a spell waiting for a place (0x004f8a40): where, its
     /// radius, and whether the place is out of the spell's reach.
@@ -523,6 +533,9 @@ private:
         glm::vec4 color{0.0f};
     };
     std::optional<SelectionCircle> selectionCircle_;
+    uint64_t selectionTarget_ = 0;
+    glm::vec4 selectionColor_{0.0f};
+    SelectionCirclePlace selectionCirclePlace_;
     struct SpellTargetCircle {
         glm::vec3 position{0.0f};
         float radius = 0.0f;
