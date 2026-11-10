@@ -522,7 +522,12 @@ void main() {
             // Only what is carried meets the fixtures (storey.z -1: PointLight::carried).
             rtSkipFixtures = int(light.storey.w + 0.5) != RT_LIGHT_KIND_UNIT && light.storey.z > -0.5;
             rtFixtureFacesOnly = selfShadow;
+            // The units' boxes asked about the surface's point, not the
+            // lifted one (rtGroupFrom).
+            rtGroupFrom = origin;
+            rtGroupFromSet = true;
             pointVis = rtOccludedBy(lampOrigin, toLight / d, reach, rng, byUnit) ? 0.0 : 1.0;
+            rtGroupFromSet = false;
             rtFixtureFacesOnly = false;
             rtSkipFixtures = false;
             rtLampEnd = vec3(1e30);

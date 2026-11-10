@@ -78,6 +78,13 @@ uint rtHitInstance = 0u;
 // unit is its own (the water's surface, through a wader's waist).
 bool rtMeetsOwnGroup = false;
 
+// Set by the caller for one ray that starts somewhere else than on the
+// surface it is for - lifted off it (rt_trace's terminator lift): the
+// surface's own point, which the units' boxes are asked about instead
+// (rtInGroup). Out of use while rtGroupFromSet is false.
+vec3 rtGroupFrom = vec3(0.0);
+bool rtGroupFromSet = false;
+
 // Whether a ray from p passes the instances of `group` by: it starts inside
 // the group's box - on the character the group is, which never shadows or
 // occludes itself.
@@ -87,7 +94,13 @@ bool rtInGroup(uint group, vec3 p) {
     if (rtMeetsOwnGroup) return false;
     vec3 lo = rtGroups[group * 2u].xyz;
     vec3 hi = rtGroups[group * 2u + 1u].xyz;
-    if (all(greaterThanEqual(p, lo)) && all(lessThanEqual(p, hi))) return true;
+    // The surface's point, not where the ray was lifted to: the floor at a
+    // character's feet, its ray lifted toward a low lamp into the
+    // character's box, was taken for the character itself and passed it by -
+    // its shadow began a hand or two from its feet (Orgrimmar's Valley of
+    // Strength by the brazier at 19:30).
+    vec3 q = rtGroupFromSet ? rtGroupFrom : p;
+    if (all(greaterThanEqual(q, lo)) && all(lessThanEqual(q, hi))) return true;
     // Nor the light it carries (rtLampEnd).
     return all(greaterThanEqual(rtLampEnd, lo - RT_CARRIED_LIGHT_SLACK)) &&
            all(lessThanEqual(rtLampEnd, hi + RT_CARRIED_LIGHT_SLACK));
