@@ -936,13 +936,11 @@ void GameScreen::render(game::GameHandler& gameHandler) {
                 // colour it (0x00521bf0), sized by the model (0x00720330).
                 const bool isUnit = target->getType() == game::ObjectType::UNIT ||
                                     target->getType() == game::ObjectType::PLAYER;
-                const auto circle = isUnit && target->getGuid() != gameHandler.getPlayerGuid()
-                    ? core::Application::getInstance().getSelectionCircle(target->getGuid())
-                    : std::nullopt;
-                if (circle) {
+                // Its place is asked by the renderer as it lays the circle
+                // down (Renderer::setSelectionCircleTarget).
+                if (isUnit && target->getGuid() != gameHandler.getPlayerGuid()) {
                     const auto& unit = static_cast<const game::Unit&>(*target);
-                    renderer->setSelectionCircle(circle->first, circle->second,
-                                                 targetCircleColor(gameHandler, unit));
+                    renderer->setSelectionCircleTarget(target->getGuid(), targetCircleColor(gameHandler, unit));
                 } else {
                     renderer->clearSelectionCircle();
                 }
