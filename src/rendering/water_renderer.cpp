@@ -1959,13 +1959,22 @@ void WaterRenderer::setWaterLamps(const std::vector<rt_lights::PointLight>& ligh
 
 // One trail's points for this frame: laid by distance travelled.
 void WaterRenderer::emitWake(WakeEmitter& emitter, const glm::vec2& pos, const glm::vec2& travelDir,
-                             float intensity, bool wading, bool unit) {
+                             float intensity, bool wading, uint64_t key, size_t share) {
+    const bool unit = key != 0;
     if (intensity > 0.0f) {
         // Emit by distance travelled, not by time: standing still in the
         // shallows should settle rather than pile froth up in one spot.
         // Close enough together that the patches overlap into a continuous
         // trail. Spaced out, each one reads as its own blob.
-        const float spacing = wading ? 0.40f : 0.60f;
+        float spacing = wading ? 0.40f : 0.60f;
+        // Another unit with a share smaller than its natural trail (wading,
+        // 1.5 s of points every 0.4 yd; swimming, a pair for 1.9 s every
+        // 0.6 yd; at 7 yd/s, as a creature following runs) lays its points
+        // farther apart, so its share holds a trail of the same length.
+        if (unit && share > 0) {
+            const float natural = wading ? 1.5f * 7.0f / 0.40f : 2.0f * 1.9f * 7.0f / 0.60f;
+            spacing *= std::max(1.0f, natural / static_cast<float>(share));
+        }
         bool emit = !emitter.has;
         if (!emit) {
             const glm::vec2 delta = pos - emitter.last;
@@ -1983,18 +1992,40 @@ void WaterRenderer::emitWake(WakeEmitter& emitter, const glm::vec2& pos, const g
 
             auto push = [&](const glm::vec2& at, const glm::vec2& drift,
                             float life, float strength) {
-                if (static_cast<int>(wakePoints_.size()) >= kMaxWakePoints) {
-                    // Another unit's only while there is room; the
-                    // character's in place of the oldest.
-                    if (unit) return;
-                    wakePoints_.erase(wakePoints_.begin());  // oldest goes first
+                if (unit) {
+                    // Another unit's: at its share its own oldest gives way;
+                    // otherwise only while the units' part has room.
+                    size_t mine = 0, units = 0;
+                    auto oldest = wakePoints_.end();
+                    for (auto it = wakePoints_.begin(); it != wakePoints_.end(); ++it) {
+                        if (it->key == key && mine++ == 0) oldest = it;
+                        units += it->key != 0 ? 1u : 0u;
+                    }
+                    if (mine >= share) {
+                        if (oldest == wakePoints_.end()) {
+                            ++wakeLosses_.dropped;
+                            return;
+                        }
+                        wakePoints_.erase(oldest);
+                        ++wakeLosses_.shortened;
+                    } else if (units >= static_cast<size_t>(kMaxWakePoints - kOwnWakePoints) ||
+                               static_cast<int>(wakePoints_.size()) >= kMaxWakePoints) {
+                        ++wakeLosses_.dropped;
+                        return;
+                    }
+                } else if (static_cast<int>(wakePoints_.size()) >= kMaxWakePoints) {
+                    // The character's in place of a unit's oldest, or with
+                    // none its own oldest.
+                    auto unitPoint = std::find_if(wakePoints_.begin(), wakePoints_.end(),
+                                                  [](const WakePoint& p) { return p.key != 0; });
+                    wakePoints_.erase(unitPoint != wakePoints_.end() ? unitPoint : wakePoints_.begin());
                 }
                 WakePoint wp;
                 wp.pos = at;
                 wp.drift = drift;
                 wp.life = life;
                 wp.strength = strength;
-                wp.unit = unit;
+                wp.key = key;
                 wakePoints_.push_back(wp);
             };
 
@@ -2038,39 +2069,70 @@ void WaterRenderer::updateWake(float deltaTime, const glm::vec2& pos,
                                      [](const WakePoint& p) { return p.age >= p.life; }),
                       wakePoints_.end());
 
-    emitWake(ownWake_, pos, travelDir, intensity, wading, false);
+    emitWake(ownWake_, pos, travelDir, intensity, wading, 0, 0);
     // The other units in the water (unitWake), each by its own trail; one
     // not fed for five seconds is forgotten.
     wakeClock_ += deltaTime;
     for (const WakeSource& u : pendingUnitWakes_) {
         WakeEmitter& e = unitWakes_[u.key];
         e.seen = wakeClock_;
-        emitWake(e, u.pos, u.travelDir, u.intensity, u.wading, true);
+        emitWake(e, u.pos, u.travelDir, u.intensity, u.wading, u.key, u.share);
     }
     pendingUnitWakes_.clear();
     std::erase_if(unitWakes_, [&](const auto& entry) { return wakeClock_ - entry.second.seen > 5.0f; });
 
-    // Pack for the shader, and build the bounding circle the fragment shader
-    // uses to reject the rest of the sheet in one test.
+    // Pack for the shader grouped by who laid them, each group with the
+    // circle its froth reaches, so a pixel looks only at the points of the
+    // trails near it (water_share::groupByOwner).
+    std::stable_sort(wakePoints_.begin(), wakePoints_.end(),
+                     [](const WakePoint& a, const WakePoint& b) { return a.key < b.key; });
     const int count = std::min(static_cast<int>(wakePoints_.size()), kMaxWakePoints);
-    glm::vec2 centre(0.0f);
-    for (int i = 0; i < count; ++i) centre += wakePoints_[i].pos;
-    if (count > 0) centre /= static_cast<float>(count);
-
-    float cullRadius = 0.0f;
     for (int i = 0; i < count; ++i) {
         const WakePoint& p = wakePoints_[i];
         const float age01 = std::min(1.0f, p.age / p.life);
-        // Must cover the point's own spread, or froth is clipped mid-patch.
-        constexpr float kMaxPatchRadius = 1.45f;
-        cullRadius = std::max(cullRadius, glm::length(p.pos - centre) + kMaxPatchRadius);
         frameUBO_.wakePoints[i] = glm::vec4(p.pos.x, p.pos.y, age01, p.strength);
     }
-    frameUBO_.wakeBounds = glm::vec4(centre.x, centre.y, cullRadius, static_cast<float>(count));
+    // Must cover a point's own spread, or froth is clipped mid-patch.
+    constexpr float kMaxPatchRadius = 1.45f;
+    const auto groups = water_share::groupByOwner(
+        static_cast<size_t>(count), kMaxWaterGroups, kMaxPatchRadius,
+        [&](size_t i) { return wakePoints_[i].key; }, [&](size_t i) { return wakePoints_[i].pos; });
+    for (size_t g = 0; g < groups.size(); ++g) {
+        frameUBO_.wakeGroups[g] = glm::vec4(groups[g].x, groups[g].y, groups[g].radius,
+                                            static_cast<float>(groups[g].first));
+    }
+    frameUBO_.wakeBounds.x = static_cast<float>(groups.size());
+    frameUBO_.wakeBounds.w = static_cast<float>(count);
     // Uploaded when the frame is recorded, not here: this runs before the frame
     // has waited for its slot, and the slot it would name is still being read
     // by the frame the GPU is drawing.
     
+}
+
+void WaterRenderer::setSwimWaves(const std::vector<swim_wave::Wave>& waves) {
+    // By owner, the character's first, each owner's oldest first.
+    std::vector<const swim_wave::Wave*> sorted;
+    sorted.reserve(waves.size());
+    for (const auto& w : waves) sorted.push_back(&w);
+    std::stable_sort(sorted.begin(), sorted.end(),
+                     [](const swim_wave::Wave* a, const swim_wave::Wave* b) { return a->owner < b->owner; });
+    const size_t n = std::min(sorted.size(), swim_wave::kMaxWaves);
+    frameUBO_.swimWaveInfo.x = static_cast<float>(n);
+    for (size_t i = 0; i < n; ++i) {
+        frameUBO_.swimWaves[i] = glm::vec4(sorted[i]->position, sorted[i]->age, sorted[i]->strength);
+    }
+    // A ring's crest has gone out at most 0.15 + 1.6 * 1.7 yards when it
+    // ends, and is (0.28 + 1.6 * 0.25) wide either side; three widths more
+    // and it is gone (water.frag.glsl).
+    constexpr float kRingReach = 0.15f + swim_wave::kLife * 1.7f + 3.0f * (0.28f + swim_wave::kLife * 0.25f);
+    const auto groups = water_share::groupByOwner(
+        n, kMaxWaterGroups, kRingReach, [&](size_t i) { return sorted[i]->owner; },
+        [&](size_t i) { return sorted[i]->position; });
+    for (size_t g = 0; g < groups.size(); ++g) {
+        frameUBO_.swimWaveGroups[g] = glm::vec4(groups[g].x, groups[g].y, groups[g].radius,
+                                                static_cast<float>(groups[g].first));
+    }
+    frameUBO_.wakeBounds.y = static_cast<float>(groups.size());
 }
 
 // ==============================================================

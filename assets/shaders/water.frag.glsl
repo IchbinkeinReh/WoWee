@@ -60,8 +60,11 @@ layout(set = 2, binding = 1) uniform sampler2D SceneDepth;
 // Wake points are laid down behind anything wading through the shallows. Each
 // is a churn site that spreads and dies, so a running character leaves a trail
 // of froth rather than a disc stuck under its feet.
-const int MAX_WAKE_POINTS = 64;
-const int MAX_SWIM_WAVES = 32;
+// The character's and a crowd's out to 150 yards (water_unit_share.hpp),
+// grouped by who made them: a group's circle says where its points reach.
+const int MAX_WAKE_POINTS = 256;
+const int MAX_SWIM_WAVES = 128;
+const int MAX_WATER_GROUPS = 32;
 const int MAX_WATER_LAMPS = 8;
 // An interior liquid (the end of main): how fast its colour takes over with the
 // depth along the view, per yard (the underwater fade's above); how far over the
@@ -72,7 +75,7 @@ const float RT_INTERIOR_SLOPE = 1.0;
 const float RT_INTERIOR_MIRROR = 0.6;
 
 layout(set = 2, binding = 3) uniform WaterFrameData {
-    vec4 wakeBounds;                  // xy = centre, z = cull radius, w = count
+    vec4 wakeBounds;                  // x = trail groups, y = ring groups, w = trail points
     vec4 wakePoints[MAX_WAKE_POINTS]; // xy = world pos, z = age 0..1, w = strength
     // The ray traced water (water_rt.glsli): x on, y the view (0 the water,
     // 1 its reflection alone, 2 what comes up through it alone), z how far
@@ -88,6 +91,8 @@ layout(set = 2, binding = 3) uniform WaterFrameData {
     // starts to fall off. swimWaveInfo.y says how many.
     vec4 waterLampAt[MAX_WATER_LAMPS];
     vec4 waterLampColour[MAX_WATER_LAMPS];
+    vec4 wakeGroups[MAX_WATER_GROUPS];     // xy = centre, z = reach, w = first point
+    vec4 swimWaveGroups[MAX_WATER_GROUPS]; // xy = centre, z = reach, w = first ring
 };
 
 layout(location = 0) in vec3 FragPos;
@@ -380,15 +385,24 @@ void main() {
     // The swimmer's small waves (swim_wave.hpp): a ring going out from where
     // a hand or the body moved at the surface, slope only.
     vec2 swimTilt = vec2(0.0);
+    // Clamped, not trusted, as the trail's below.
     int swimWaveCount = clamp(int(swimWaveInfo.x), 0, MAX_SWIM_WAVES);
-    for (int i = 0; i < swimWaveCount; ++i) {
-        vec4 w = swimWaves[i];
-        vec2 fromWave = FragPos.xy - w.xy;
-        float d = length(fromWave);
-        float along = (d - (0.15 + w.z * 1.7)) / (0.28 + w.z * 0.25);
-        float crest = exp(-along * along) * sin(along * 4.0);
-        float slope = crest * w.w * 0.22 * (1.0 - w.z / 1.6);
-        swimTilt -= (fromWave / max(d, 0.01)) * slope;
+    int swimGroupCount = clamp(int(wakeBounds.y), 0, MAX_WATER_GROUPS);
+    for (int g = 0; g < swimGroupCount; ++g) {
+        vec4 grp = swimWaveGroups[g];
+        vec2 toGroup = FragPos.xy - grp.xy;
+        if (dot(toGroup, toGroup) >= grp.z * grp.z) continue;
+        int first = clamp(int(grp.w), 0, swimWaveCount);
+        int end = g + 1 < swimGroupCount ? clamp(int(swimWaveGroups[g + 1].w), first, swimWaveCount) : swimWaveCount;
+        for (int i = first; i < end; ++i) {
+            vec4 w = swimWaves[i];
+            vec2 fromWave = FragPos.xy - w.xy;
+            float d = length(fromWave);
+            float along = (d - (0.15 + w.z * 1.7)) / (0.28 + w.z * 0.25);
+            float crest = exp(-along * along) * sin(along * 4.0);
+            float slope = crest * w.w * 0.22 * (1.0 - w.z / 1.6);
+            swimTilt -= (fromWave / max(d, 0.01)) * slope;
+        }
     }
     norm = normalize(norm + vec3(swimTilt, 0.0));
 
@@ -673,14 +687,21 @@ void main() {
     // ============================================================
     float wakeFoam = 0.0;
     if (wakeBounds.w > 0.5) {
-        // One cheap reject for the whole trail keeps this off every other water
-        // pixel on screen - the trail covers a few yards, the sheet covers miles.
-        vec2 toWake = FragPos.xy - wakeBounds.xy;
-        if (dot(toWake, toWake) < wakeBounds.z * wakeBounds.z) {
-            // Clamped, not trusted: an unmapped UBO would leave a garbage count
-            // here and run this loop off the end of the array.
-            int wakeCount = clamp(int(wakeBounds.w), 0, MAX_WAKE_POINTS);
-            for (int i = 0; i < wakeCount; ++i) {
+        // One cheap reject per trail keeps this off every other water pixel
+        // on screen - a trail covers a few yards, the sheet covers miles.
+        // Clamped, not trusted: an unmapped UBO would leave a garbage count
+        // here and run this loop off the end of the array.
+        int wakeCount = clamp(int(wakeBounds.w), 0, MAX_WAKE_POINTS);
+        int wakeGroupCount = clamp(int(wakeBounds.x), 0, MAX_WATER_GROUPS);
+        bool nearWake = false;
+        for (int g = 0; g < wakeGroupCount; ++g) {
+            vec4 grp = wakeGroups[g];
+            vec2 toWake = FragPos.xy - grp.xy;
+            if (dot(toWake, toWake) >= grp.z * grp.z) continue;
+            nearWake = true;
+            int first = clamp(int(grp.w), 0, wakeCount);
+            int end = g + 1 < wakeGroupCount ? clamp(int(wakeGroups[g + 1].w), first, wakeCount) : wakeCount;
+            for (int i = first; i < end; ++i) {
                 vec4 wp = wakePoints[i];
                 // Churn spreads as it dies, the way a disturbed patch does.
                 float radius = mix(0.40, 1.45, wp.z);
@@ -690,6 +711,8 @@ void main() {
                 float disc = 1.0 - smoothstep(0.0, radius, d);
                 wakeFoam += disc * disc * wp.w * (1.0 - wp.z);
             }
+        }
+        if (nearWake) {
             wakeFoam = clamp(wakeFoam, 0.0, 1.0);
 
             if (wakeFoam > 0.002) {
