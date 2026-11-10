@@ -508,6 +508,12 @@ constexpr SettingDesc kSchema[] = {
      "faces turned toward the light do, so a light inside a lantern\n"
      "still shines out through the lantern's glass. Not in the\n"
      "original client.", "", 0, "raytracedlighting"},
+    {"rtunitselfshadow", "Unit self-shadowing", SettingKind::Bool, 0, 0, 0,
+     "Debug Lights", "",
+     "A character's or creature's own body shadows itself: an arm\n"
+     "over its chest, its head over its shoulders, for the sun and\n"
+     "for torches and lamps alike. Off, a body never shadows itself,\n"
+     "as in the original client.", "", 0, "raytracedlighting"},
     {"dbgemissivelightintensity", "Glowing surfaces: intensity (%)", SettingKind::Float, 0.001f, 1000, 0.001f, "Debug Glow", "What glows",
      "What glows of models and buildings: lamp glass, glow cards,\n"
      "lava, crystals, glowing batches.\n"

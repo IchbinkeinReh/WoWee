@@ -6829,6 +6829,7 @@ void Renderer::recordRtLighting() {
     in.maxLight = currentFrameData.rtTune2.w;
     in.lampWrap = lampWrap(rtSoftLamps_);
     in.pointSelfShadow = rtPointSelfShadow_;
+    in.unitSelfShadow = rtUnitSelfShadow_;
     in.unitShadowReach = rtUnitShadowReach_;
     in.minBrightness = rtMinBrightnessFactor(rtMinBrightnessPercent_);
     // By the drawn sun's own height: at night in.sunDir is the light's
