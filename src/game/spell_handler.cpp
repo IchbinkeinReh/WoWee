@@ -6775,6 +6775,22 @@ void SpellHandler::extractSkillFields(const FlatFieldMap& fields) {
         }
     }
 
+    // 0x006d1bc0, each skill's temporary bonus moving (what gear and buffs
+    // add to a weapon skill or Defense): UNIT_ATTACK and UNIT_DEFENSE for the
+    // player, whose sheet reads its hit and defense numbers off them.
+    if (!firstRead) {
+        bool bonusMoved = false;
+        for (const auto& [skillId, skill] : newSkills) {
+            auto oldIt = owner_.playerSkillsRef().find(skillId);
+            const uint16_t was = oldIt != owner_.playerSkillsRef().end() ? oldIt->second.bonusTemp : 0;
+            if (skill.bonusTemp != was) { bonusMoved = true; break; }
+        }
+        if (bonusMoved) {
+            owner_.fireAddonEvent("UNIT_ATTACK", {"player"});
+            owner_.fireAddonEvent("UNIT_DEFENSE", {"player"});
+        }
+    }
+
     bool skillsChanged = (newSkills.size() != owner_.playerSkillsRef().size());
     if (!skillsChanged) {
         for (const auto& [id, sk] : newSkills) {
