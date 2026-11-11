@@ -317,6 +317,43 @@ void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt
     }
 }
 
+std::optional<M2Renderer::ParticleMeanPath> M2Renderer::particleMeanPath(const M2Instance& inst,
+                                                                         const M2ModelGPU& gpu,
+                                                                         size_t emitterIndex) const {
+    if (emitterIndex >= gpu.particleEmitters.size()) return std::nullopt;
+    const auto& em = gpu.particleEmitters[emitterIndex];
+    const auto track = [&](const pipeline::M2AnimationTrack& t) {
+        return m2_track::sampleFloat(t, inst.currentSequenceIndex, inst.animTime, inst.globalSequenceTime,
+                                     gpu.globalSequenceDurations, 0.0f);
+    };
+    ParticleMeanPath path;
+    path.life = track(em.lifespan);
+    if (!(path.life > 0.0f) || !std::isfinite(path.life)) return std::nullopt;
+    // As emitParticles launches one, its rolls at their means.
+    const rt_lights::MeanLaunch launch = rt_lights::meanLaunch(
+        em.emitterType, track(em.emissionSpeed), track(em.verticalRange), track(em.horizontalRange),
+        track(em.emissionAreaLength), track(em.emissionAreaWidth), m2_particle::zSourceValue(track(em.zSource)),
+        (em.flags & 0x8000) != 0);
+    glm::mat4 toWorld = inst.modelMatrix;
+    if (em.bone < inst.boneMatrices.size()) toWorld = toWorld * inst.boneMatrices[em.bone];
+    path.toWorld = toWorld;
+    path.gravity = track(em.gravity);
+    path.drag = em.drag;
+    const glm::vec3 spawnLocal = em.position + launch.offset;
+    // Flag 0x10 keeps the particles in the bone's space, gravity and all
+    // (updateParticles); otherwise they fly in the world from where they
+    // were let go.
+    path.modelSpace = (em.flags & 0x10) != 0;
+    if (path.modelSpace) {
+        path.start = spawnLocal;
+        path.velocity = launch.velocity;
+    } else {
+        path.start = glm::vec3(toWorld * glm::vec4(spawnLocal, 1.0f));
+        path.velocity = glm::mat3(toWorld) * launch.velocity;
+    }
+    return path;
+}
+
 void M2Renderer::updateParticles(M2Instance& inst, float dt) {
     if (!inst.cachedModel) return;
     const auto& gpu = *inst.cachedModel;
@@ -695,11 +732,37 @@ void M2Renderer::prepareM2Particles() {
             const float fade = std::clamp(inst.fade, 0.0f, 1.0f);
             const size_t firstLight = rtParticleLights_.size();
             const float modelScale = glm::length(glm::vec3(inst.modelMatrix[0]));
-            for (const rt_lights::ParticleGlow& glow : rtEmitterGlowScratch_) {
+            const std::vector<float> weights = rt_lights::particleLightWeights(particleLightsPerEmitter_);
+            const int perEmitter = static_cast<int>(weights.size());
+            for (size_t ei = 0; ei < rtEmitterGlowScratch_.size(); ++ei) {
+                const rt_lights::ParticleGlow& glow = rtEmitterGlowScratch_[ei];
                 auto l = glow.light(modelScale);
                 if (!l) continue;
                 l->color *= fade;
-                rtParticleLights_.push_back(*l);
+                // On the particles' mean path (rt_particle_lights.hpp): at
+                // ages L * i / (N + 1), the youngest the strongest, together
+                // the one light's strength. Where the path cannot be worked
+                // out, the one light at the particles' middle as before.
+                const auto path = particleMeanPath(inst, gpu, ei);
+                if (!path) {
+                    rtParticleLights_.push_back(*l);
+                    continue;
+                }
+                // A part too faint for the trace to keep (selectLights drops
+                // a light under kMinParticlePartStrength) gives its share to
+                // the first, so all of them together stay the one light.
+                const size_t first = rtParticleLights_.size();
+                for (int k = 0; k < perEmitter; ++k) {
+                    rt_lights::PointLight part = *l;
+                    part.position = path->at(rt_lights::particleLightAge(k, perEmitter, path->life));
+                    part.color *= weights[static_cast<size_t>(k)];
+                    const float strength = std::max(part.color.r, std::max(part.color.g, part.color.b));
+                    if (k > 0 && strength < rt_lights::kMinParticlePartStrength) {
+                        rtParticleLights_[first].color += part.color;
+                        continue;
+                    }
+                    rtParticleLights_.push_back(part);
+                }
             }
             // One model's emitters together no brighter than a fire.
             rt_lights::capTotalStrength(rtParticleLights_, firstLight, rt_lights::kMaxParticleModelStrength);

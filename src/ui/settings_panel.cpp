@@ -980,7 +980,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "dbgmodellightintensity", "dbgmodellightreach", "dbgfirelightintensity", "dbgfirelightreach", "dbglamplightintensity", "dbglamplightreach", "dbgbuildinglightintensity", "dbgbuildinglightreach", "dbgunitlightintensity", "dbgunitlightreach",
     "dbgemissivelightintensity", "dbgemissivelightreach", "dbgparticlelightintensity", "dbgparticlelightreach",
     "dbgglowpulse", "dbgfireflicker", "dbgmodelflicker", "dbgglowanim",
-    "dbginteriorbase", "dbginteriorfullat", "dbgmaxlight", "dbglightcountlimit",
+    "dbginteriorbase", "dbginteriorfullat", "dbgmaxlight", "dbglightcountlimit", "rtparticlelights",
     "dbgtracedsunshadow", "dbgmapsunshadow", "dbgpointshadow", "dbgbakedlampshadow", "dbgocclusion", "dbgterrainshadow", "dbgblobshadow",
     // Moved off the game's own Effects panel, so this list is now what
     // applies them at startup; the cvar store used to do it.
@@ -1223,6 +1223,7 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "dbginteriorfullat", .asInt = &SettingsPanel::pendingDbgInteriorFullAt},
     {.key = "dbgmaxlight", .asInt = &SettingsPanel::pendingDbgMaxLight},
     {.key = "dbglightcountlimit", .asInt = &SettingsPanel::pendingDbgLightCountLimit},
+    {.key = "rtparticlelights", .asInt = &SettingsPanel::pendingRtParticleLights},
     {.key = "dbgshadowdarkness", .asInt = &SettingsPanel::pendingDbgShadowDarkness},
     {.key = "dbgtracedsunshadow", .asInt = &SettingsPanel::pendingDbgTracedSunShadow},
     {.key = "dbgmapsunshadow", .asInt = &SettingsPanel::pendingDbgMapSunShadow},
@@ -1701,6 +1702,8 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
             renderer->setRtPulseStrengths(pendingDbgGlowPulse, pendingDbgFireFlicker, pendingDbgModelFlicker,
                                           pendingDbgGlowAnim);
         }
+    } else if (key == "rtparticlelights") {
+        if (renderer) renderer->setRtParticleLights(pendingRtParticleLights);
     } else if (key == "rtunitshadowreach") {
         if (renderer) renderer->setRtUnitShadowReach(static_cast<float>(pendingRtUnitShadowReach));
     } else if (key == "rtminbrightness") {
