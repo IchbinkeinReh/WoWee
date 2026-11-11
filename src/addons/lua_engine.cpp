@@ -11185,6 +11185,13 @@ void LuaEngine::registerCoreAPI() {
         // flag 0x1 first). A quest item stays a quest item.
         // Bound to the account (item flag 0x8000000): ITEM_ACCOUNTBOUND once
         // bound, ITEM_BIND_TO_ACCOUNT before. A class 10 item says nothing.
+        // Ahead of the binding (0x006277f0): ITEM_SIGNABLE in green for an
+        // item to be signed (flag 0x2000), then in white the zone and the
+        // instance it works in alone, and ITEM_CONJURED.
+        "        if data.signable then self:AddLine(ITEM_SIGNABLE or '<Right Click for Additional Information>', 0, 1, 0) end\n"
+        "        if data.limitArea then self:AddLine(data.limitArea, 1, 1, 1) end\n"
+        "        if data.limitMap then self:AddLine(data.limitMap, 1, 1, 1) end\n"
+        "        if data.conjured then self:AddLine(ITEM_CONJURED or 'Conjured Item', 1, 1, 1) end\n"
         "        local bind\n"
         "        if inst and inst.soulbound then\n"
         "            if data.bindType == 4 then bind = 'ITEM_BIND_QUEST'\n"
@@ -11196,8 +11203,6 @@ void LuaEngine::registerCoreAPI() {
         "        if bind and _G[bind] then self:AddLine(_G[bind], 1, 1, 1) end\n"
         "        if data.isUnique then self:AddLine(ITEM_UNIQUE or 'Unique', 1, 1, 1)\n"
         "        elseif data.isUniqueEquipped then self:AddLine(ITEM_UNIQUE_EQUIPPABLE or 'Unique-Equipped', 1, 1, 1) end\n"
-        // An item to be signed (flag 0x2000): ITEM_SIGNABLE in green.
-        "        if data.signable then self:AddLine(ITEM_SIGNABLE or '<Right Click for Additional Information>', 0, 1, 0) end\n"
         "    end\n"
         "    if equipSlot and equipSlot ~= '' then\n"
         "        local slotText = _G[equipSlot] or ''\n"

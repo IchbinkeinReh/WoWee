@@ -583,7 +583,9 @@ bool ItemQueryResponseParser::parse(network::Packet& packet, ItemQueryResponseDa
         data.block = static_cast<int32_t>(packet.readUInt32());
         data.itemSetId = packet.readUInt32(); // ItemSet(6)
         // MaxDurability(7), Area(8), Map(9)
-        for (size_t i = 0; i < 3; ++i) packet.readUInt32();
+        packet.readUInt32();
+        data.limitArea = packet.readUInt32();
+        data.limitMap = packet.readUInt32();
         // BagFamily(10) - kept rather than skipped. GetItemFamily answers from
         // it, and an addon asking what a bag holds gets nil without it.
         data.bagFamily = packet.readUInt32();

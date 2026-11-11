@@ -2184,6 +2184,10 @@ struct ItemQueryResponseData {
     /// RandomProperty or RandomSuffix named: the item rolls its stats when it
     /// drops, so the template alone says ITEM_RANDOM_ENCHANT (0x006277f0).
     bool randomEnchant = false;
+    /// Area and Map: the zone and the instance the item works in alone
+    /// (0x006277f0 names each in white), 0 for none.
+    uint32_t limitArea = 0;
+    uint32_t limitMap = 0;
     /// Which of PageTextMaterial.dbc's seven backings the page is drawn on -
     /// Parchment, Stone, Marble, Silver, Bronze, Valentine, Illidan. Read off
     /// the same four post-description words as pageTextId and thrown away

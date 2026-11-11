@@ -3531,6 +3531,21 @@ static int lua_GetItemTooltipData(lua_State* L) {
         lua_pushnumber(L, info->block);
         lua_setfield(L, -2, "block");
     }
+    // Where it works, if only somewhere: the zone (AreaTable) and the
+    // instance (Map) it is limited to, by name.
+    if (info->limitArea != 0) {
+        const std::string area = gh->getAreaName(info->limitArea);
+        if (!area.empty()) { lua_pushstring(L, area.c_str()); lua_setfield(L, -2, "limitArea"); }
+    }
+    if (info->limitMap != 0) {
+        const std::string map = gh->getMapName(info->limitMap);
+        if (!map.empty()) { lua_pushstring(L, map.c_str()); lua_setfield(L, -2, "limitMap"); }
+    }
+    // Conjured (flag 0x2): ITEM_CONJURED.
+    if ((info->itemFlags & 0x2u) != 0) {
+        lua_pushboolean(L, 1);
+        lua_setfield(L, -2, "conjured");
+    }
     if ((info->itemFlags & 0x2000u) != 0) {
         lua_pushboolean(L, 1);
         lua_setfield(L, -2, "signable");
