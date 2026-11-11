@@ -75,6 +75,9 @@ const float RTW_BED_SHORE = 0.5;
 // their filter (rt_filter), this pass has none.
 const uint RTW_BED_SUN_RAYS = 4u;
 const float RTW_BED_SUN_TAN = 0.03;  // yards under the surface the ground's own sun has taken over by
+// The bed's sun below which its rays are not traced (rtwRefraction): a
+// quarter of an 8-bit step.
+const float RTW_BED_SUN_UNSEEN = 1.0 / 1024.0;
 bool rtwScreenReuse = true;  // off for the traced-only debug view and interior water
 // (Interior water's mirror reads the capture by its own rules: rtwMirrorSeen.)
 const float RTW_MIRROR_EDGE = 0.12;   // of the screen, the fade at its edge
@@ -259,17 +262,31 @@ vec4 rtwRefraction(vec3 origin, vec3 dir, vec3 toSun, vec3 sigma, vec3 scatterCo
             // few pixels wide - the screen's rows and the masks' texels
             // (Stonebull Lake at 17:00).
             float vis = 0.0;
-            if (sunRay.z > 0.0) {
+            // The most the sun can add to this bed seen through the water:
+            // the triangle's colour in the sun's light on it, dimmed over the
+            // sun's way down and the view's way back up. Under a step of the
+            // output's last bit it cannot show whichever way the rays go -
+            // deep water, a dark bed, a face turned from the sun - and they
+            // are not traced.
+            vec3 litN = ground ? vec3(0.0, 0.0, 1.0) : hn;
+            vec3 sunGain = hs.rgb * lightColor.rgb * max(dot(litN, toSun), 0.0) * exp(-sigma * (sunPath + t));
+            bool sunShows = max(sunGain.r, max(sunGain.g, sunGain.b)) > RTW_BED_SUN_UNSEEN;
+            if (sunRay.z > 0.0 && sunShows) {
                 rtMaskJitter = true;
+                uint sunRays = 0u;
                 for (uint k = 0u; k < RTW_BED_SUN_RAYS; ++k) {
                     vec3 under = rtConeSample(sunUnder, RTW_BED_SUN_TAN, rng);
                     vec3 air = rtConeSample(sunRay, RTW_BED_SUN_TAN, rng);
                     bool blocked = rtOccluded(hit + hn * 0.05, under, sunPath, rng) ||
                                    rtOccluded(hit + under * sunPath + vec3(0.0, 0.0, 0.1), air, 400.0, rng);
                     vis += blocked ? 0.0 : 1.0;
+                    ++sunRays;
+                    // Half the disc in agreement - all lit or all shaded - is
+                    // the bed outside a shadow's edge; only an edge takes all.
+                    if (sunRays == RTW_BED_SUN_RAYS / 2u && (vis == 0.0 || vis == float(sunRays))) break;
                 }
                 rtMaskJitter = false;
-                vis /= float(RTW_BED_SUN_RAYS);
+                vis /= float(sunRays);
             }
             rtGroupFromSet = false;
             traced = rtwLitHit(hs, ground ? vec3(0.0, 0.0, 1.0) : hn, toSun, exp(-sigma * sunPath) * vis);
