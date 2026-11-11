@@ -249,7 +249,8 @@ inline std::optional<PointLight> evaluateM2Light(const pipeline::M2Light& light,
                                                  float timeMs, float globalTimeMs,
                                                  const std::vector<uint32_t>& globalSequenceDurations,
                                                  const glm::mat4& modelMatrix,
-                                                 const std::vector<glm::mat4>& bones) {
+                                                 const std::vector<glm::mat4>& bones,
+                                                 float flickerStrength = 1.0f) {
     if (light.type != 1) return std::nullopt;
     const auto& gs = globalSequenceDurations;
     if (m2_track::sampleFloat(light.visibility, sequence, timeMs, globalTimeMs, gs, 1.0f) == 0.0f)
@@ -260,6 +261,15 @@ inline std::optional<PointLight> evaluateM2Light(const pipeline::M2Light& light,
         m2_track::sampleFloat(light.diffuseIntensity, sequence, timeMs, globalTimeMs, gs, 0.0f);
     PointLight out;
     out.color = glm::max(color, glm::vec3(0.0f)) * std::max(intensity, 0.0f);
+    // Debug Glow, "Model light flicker strength": the tracks' swing about
+    // their own means (m2_track::meanFloat) scaled; 1 as they are.
+    if (flickerStrength != 1.0f) {
+        const float meanI = m2_track::meanFloat(light.diffuseIntensity, sequence, gs, 0.0f);
+        const glm::vec3 meanC = m2_track::meanVec3(light.diffuseColor, sequence, gs, glm::vec3(0.0f));
+        const float i = std::max(meanI + (intensity - meanI) * flickerStrength, 0.0f);
+        const glm::vec3 c = glm::max(meanC + (color - meanC) * flickerStrength, glm::vec3(0.0f));
+        out.color = glm::max(c, glm::vec3(0.0f)) * i;
+    }
     if (std::max(out.color.r, std::max(out.color.g, out.color.b)) <= 0.0f) return std::nullopt;
 
     glm::mat4 toWorld = modelMatrix;
@@ -287,9 +297,11 @@ inline std::optional<PointLight> evaluateM2Light(const pipeline::M2Light& light,
 /// torch (the classifier's isBrazierOrFire and isTorch), whose glow the
 /// original draws only as a card. At the top of its box, warm, reaching
 /// some three times its size; flickering with `timeMs` and a phase of its
-/// own so a row of torches does not breathe in step.
+/// own so a row of torches does not breathe in step. `flickerScale` (Debug
+/// Glow, "Fire flicker strength"): how much of the flicker's swing about its
+/// mean 0.88 is kept, 1 as it is, 0 a steady light.
 inline PointLight fireLight(const glm::vec3& boxMin, const glm::vec3& boxMax, const glm::mat4& modelMatrix,
-                            bool torch, float timeMs, float phase) {
+                            bool torch, float timeMs, float phase, float flickerScale = 1.0f) {
     const glm::vec3 size = boxMax - boxMin;
     const glm::vec3 local(0.5f * (boxMin.x + boxMax.x), 0.5f * (boxMin.y + boxMax.y), boxMax.z - 0.2f * size.z);
     const float scale = glm::length(glm::vec3(modelMatrix[0]));
@@ -297,7 +309,8 @@ inline PointLight fireLight(const glm::vec3& boxMin, const glm::vec3& boxMax, co
     PointLight out;
     out.position = glm::vec3(modelMatrix * glm::vec4(local, 1.0f));
     const float t = timeMs * 0.001f;
-    const float flicker = 0.88f + 0.08f * std::sin(t * 7.3f + phase) + 0.04f * std::sin(t * 17.9f + 2.1f * phase);
+    const float swing = 0.08f * std::sin(t * 7.3f + phase) + 0.04f * std::sin(t * 17.9f + 2.1f * phase);
+    const float flicker = std::max(0.88f + swing * flickerScale, 0.0f);
     out.color = (torch ? glm::vec3(1.0f, 0.62f, 0.3f) : glm::vec3(1.0f, 0.55f, 0.22f)) * flicker;
     out.attenuationEnd = std::clamp(extent * 3.0f, torch ? 4.0f : 5.0f, 14.0f) * kWorldReachScale;
     out.attenuationStart = 0.25f * out.attenuationEnd;

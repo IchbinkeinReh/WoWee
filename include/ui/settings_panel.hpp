@@ -143,6 +143,10 @@ public:
     int pendingDbgMaxLight = 100;
     /// How many point lights the trace keeps at most, 8-512
     /// (Renderer::LightingTune::lightCountLimit).
+    int pendingDbgGlowPulse = 100;    ///< Debug Glow: glow pulse strength, percent
+    int pendingDbgFireFlicker = 100;  ///< Debug Glow: fire flicker strength, percent
+    int pendingDbgModelFlicker = 100;  ///< Debug Glow: model light flicker strength, percent
+    int pendingDbgGlowAnim = 100;      ///< Debug Glow: glow colour animation strength, percent
     int pendingDbgLightCountLimit = 512;
     int pendingDbgShadowDarkness = 65;
     int pendingDbgTracedSunShadow = 100;

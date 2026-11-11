@@ -838,6 +838,9 @@ public:
     void setRtUnitSelfShadow(bool on) { rtUnitSelfShadow_ = on; }
     /// The Ray Tracing page's "Unit shadow reach" (rtUnitShadowReach).
     void setRtUnitShadowReach(float yards) { rtUnitShadowReach_ = yards; }
+    /// Debug Glow: the glow pulse's and the fire flicker's strength, percent.
+    void setRtPulseStrengths(int glowPulsePercent, int fireFlickerPercent, int modelFlickerPercent,
+                             int glowAnimationPercent);
     /// The Ray Tracing page's "Minimum brightness (%)" (rt_min_brightness.hpp).
     void setRtMinBrightness(int percent) { rtMinBrightnessPercent_ = percent; }
     /// The Ray Tracing page's two "Normal blend" angles (rt_normal_blend.hpp).

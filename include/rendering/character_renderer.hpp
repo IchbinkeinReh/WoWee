@@ -556,6 +556,11 @@ public:
     /// The point lights the characters' models carry - a fire elemental's
     /// glow, a held torch - placed for this frame, within `range` of `eye`.
     void collectRtLights(const glm::vec3& eye, float range, std::vector<rt_lights::PointLight>& out) const;
+    /// Debug Glow, "Glow pulse strength": how much of a held light's card
+    /// pulse the traced light keeps (rt_glow_pulse.hpp), 1 as it is.
+    void setRtGlowPulseStrength(float s) { rtGlowPulseStrength_ = s; }
+    /// Debug Glow, "Model light flicker strength" (rt_lights::evaluateM2Light).
+    void setRtModelFlickerStrength(float s) { rtModelFlickerStrength_ = s; }
     struct RtStats {
         uint32_t characters = 0;  // casting
         uint32_t posed = 0;       // of those, cut into bone pieces
@@ -576,6 +581,10 @@ private:
         uint32_t vertexCount = 0;
 
         pipeline::M2Model data;  // Original model data
+        /// A model with a light of its own and a pulsing glow card (a held
+        /// torch, a lantern): the card's bone, whose pulse the light follows
+        /// while its own tracks hold still (rt_glow_pulse.hpp); ~0 for none.
+        uint32_t glowPulseBone = ~0u;
         std::vector<glm::mat4> bindPose;  // Inverse bind pose matrices
 
         // Tight bind-pose bounds from rendered vertices. M2 header
@@ -1146,6 +1155,8 @@ private:
     float normalMapStrength_ = 0.3f;
 
     // Maximum bones supported
+    float rtGlowPulseStrength_ = 1.0f;
+    float rtModelFlickerStrength_ = 1.0f;
     static constexpr int MAX_BONES = 240;
     uint32_t numAnimThreads_ = 1;
     std::vector<std::future<void>> animFutures_;

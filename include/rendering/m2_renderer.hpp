@@ -16,6 +16,7 @@
 #include "rendering/m2_particle_motion.hpp"
 #include "rendering/m2_event_sounds.hpp"
 #include "rendering/rt_glow.hpp"
+#include "rendering/rt_glow_pulse.hpp"
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
@@ -162,6 +163,14 @@ struct M2ModelGPU {
     /// load (computeGlow); empty for a model that carries a light of its own
     /// or is given one (a fire, a lamp).
     std::vector<rt_lights::GlowPatch> glowPatches;
+    /// Per bone, whether its scale or a parent's moves (rt_glow_pulse.hpp):
+    /// a glow patch on such a bone lights by the area it is drawn at.
+    std::vector<uint8_t> pulsingBones;
+    /// The pulsing bone that carries most of the model's glowing batches,
+    /// ~0 for none: the light of a model that gives one of its own (an M2
+    /// light whose own tracks hold still, a lamp's, a fire's) follows its
+    /// card's pulse by it.
+    uint32_t glowPulseBone = ~0u;
 
     // Collision mesh with spatial grid (from M2 bounding geometry)
     struct CollisionMesh {
@@ -614,6 +623,15 @@ public:
     /// Where loaded models register their geometry for the ray traced
     /// lighting. Static doodads only - animated models would cast their
     /// bind pose. Not given to the sky's renderer.
+    /// Debug Glow: how much of a glow card's pulse (rt_glow_pulse.hpp) and of
+    /// a fire's flicker (rt_lights::fireLight) the traced light keeps, 1 as
+    /// it is.
+    void setRtPulseStrengths(float glowPulse, float fireFlicker, float modelFlicker, float glowAnimation) {
+        rtGlowPulseStrength_ = glowPulse;
+        rtFireFlickerStrength_ = fireFlicker;
+        rtModelFlickerStrength_ = modelFlicker;
+        rtGlowAnimationStrength_ = glowAnimation;
+    }
     void setRtScene(RtScene* scene) { rtScene_ = scene; }
     /// Bring the scene's instances in line with this renderer's, once a frame
     /// while the lighting is on. An instance that moves - a transport, a
@@ -1747,6 +1765,10 @@ private:
     /// Drop the sky model's baked star layer, because something else is
     /// drawing stars. See BatchGPU::starLayer.
     bool suppressBakedStars_ = false;
+    float rtGlowPulseStrength_ = 1.0f;
+    float rtFireFlickerStrength_ = 1.0f;
+    float rtModelFlickerStrength_ = 1.0f;
+    float rtGlowAnimationStrength_ = 1.0f;
     float particleDensity_ = 1.0f;
     /// What a particle's size is multiplied by to give the point size the vertex
     /// shader draws: the shader divides by distance after a fixed 500, while a

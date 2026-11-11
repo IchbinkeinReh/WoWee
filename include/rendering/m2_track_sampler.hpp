@@ -115,6 +115,54 @@ inline glm::vec3 sampleVec3(const pipeline::M2AnimationTrack& track,
         : safe(keys.vec3Values[lower]);
 }
 
+/// The mean of a float or vec3 track over the timeline `animationSequenceIndex`
+/// reads (a global sequence's own), weighted by time between its keys as
+/// they are interpolated linearly: what a flickering light gives on
+/// average, from the file alone. One key, that key; none, the default.
+template <class T, class Get>
+inline T trackMean(const pipeline::M2AnimationTrack& track, int animationSequenceIndex,
+                   const std::vector<uint32_t>& globalSequenceDurations, const T& defaultValue,
+                   size_t valueCount, Get&& get) {
+    const auto sampleTime = resolveTime(track, animationSequenceIndex, 0.0f, 0.0f, globalSequenceDurations);
+    const int timeline = resolveTimeline(track, sampleTime.sequenceIndex);
+    if (timeline < 0) return defaultValue;
+    const auto& keys = track.sequences[static_cast<size_t>(timeline)];
+    const size_t count = std::min(keys.timestamps.size(), valueCount == 0 ? size_t(0) : get.size(keys));
+    if (count == 0) return defaultValue;
+    if (count == 1) return get.at(keys, 0);
+    T sum = T(0);
+    float span = 0.0f;
+    for (size_t i = 0; i + 1 < count; ++i) {
+        const float dt = static_cast<float>(keys.timestamps[i + 1]) - static_cast<float>(keys.timestamps[i]);
+        if (!(dt > 0.0f)) continue;
+        sum += (get.at(keys, i) + get.at(keys, i + 1)) * (0.5f * dt);
+        span += dt;
+    }
+    if (!(span > 0.0f)) return get.at(keys, 0);
+    return sum / span;
+}
+
+struct FloatKeys {
+    size_t size(const pipeline::M2AnimationTrack::SequenceKeys& k) const { return k.floatValues.size(); }
+    float at(const pipeline::M2AnimationTrack::SequenceKeys& k, size_t i) const {
+        return std::isfinite(k.floatValues[i]) ? k.floatValues[i] : 0.0f;
+    }
+};
+struct Vec3Keys {
+    size_t size(const pipeline::M2AnimationTrack::SequenceKeys& k) const { return k.vec3Values.size(); }
+    glm::vec3 at(const pipeline::M2AnimationTrack::SequenceKeys& k, size_t i) const { return k.vec3Values[i]; }
+};
+
+inline float meanFloat(const pipeline::M2AnimationTrack& track, int animationSequenceIndex,
+                       const std::vector<uint32_t>& globalSequenceDurations, float defaultValue) {
+    return trackMean<float>(track, animationSequenceIndex, globalSequenceDurations, defaultValue, 1, FloatKeys{});
+}
+
+inline glm::vec3 meanVec3(const pipeline::M2AnimationTrack& track, int animationSequenceIndex,
+                          const std::vector<uint32_t>& globalSequenceDurations, const glm::vec3& defaultValue) {
+    return trackMean<glm::vec3>(track, animationSequenceIndex, globalSequenceDurations, defaultValue, 1, Vec3Keys{});
+}
+
 inline glm::quat sampleQuat(const pipeline::M2AnimationTrack& track,
                             int animationSequenceIndex, float animationTimeMs,
                             float globalTimeMs,

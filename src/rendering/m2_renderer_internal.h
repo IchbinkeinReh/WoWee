@@ -306,6 +306,27 @@ inline glm::vec4 batchColorMul(const M2ModelGPU& model, const M2ModelGPU::BatchG
     return glm::vec4(glm::max(rgb, glm::vec3(0.0f)), glm::clamp(alpha, 0.0f, 1.0f));
 }
 
+// batchColorMul's mean over the batch's tracks (m2_track::meanVec3 and
+// meanFloat): what its animated colour and alpha give on average.
+inline glm::vec4 batchColorMulMean(const M2ModelGPU& model, const M2ModelGPU::BatchGPU& batch, int sequenceIndex) {
+    if (!batch.colorAnimated) return glm::vec4(1.0f, 1.0f, 1.0f, -1.0f);
+    glm::vec3 rgb = batch.tint;
+    float alpha = 1.0f;
+    if (batch.colorTrackIndex < model.colorRGBTracks.size()) {
+        rgb = m2_track::meanVec3(model.colorRGBTracks[batch.colorTrackIndex], sequenceIndex,
+                                 model.globalSequenceDurations, rgb);
+    }
+    if (batch.colorTrackIndex < model.colorAlphaTracks.size()) {
+        alpha *= m2_track::meanFloat(model.colorAlphaTracks[batch.colorTrackIndex], sequenceIndex,
+                                     model.globalSequenceDurations, 1.0f);
+    }
+    if (batch.weightTrackIndex < model.textureWeightTracks.size()) {
+        alpha *= m2_track::meanFloat(model.textureWeightTracks[batch.weightTrackIndex], sequenceIndex,
+                                     model.globalSequenceDurations, 1.0f);
+    }
+    return glm::vec4(glm::max(rgb, glm::vec3(0.0f)), glm::clamp(alpha, 0.0f, 1.0f));
+}
+
 } // namespace m2_internal
 
 // Pull all symbols into the rendering namespace so existing code compiles unchanged

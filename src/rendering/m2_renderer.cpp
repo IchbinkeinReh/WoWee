@@ -2126,7 +2126,65 @@ void M2Renderer::logRtLightDiag(const glm::vec3& eye, float radius) const {
 
 void M2Renderer::computeGlow(M2ModelGPU& gpuModel, const pipeline::M2Model& model, const VkTexture* standIn) {
     gpuModel.glowPatches.clear();
+    gpuModel.glowPulseBone = ~0u;
+    gpuModel.pulsingBones = rt_lights::pulsingBones(model.bones);
     if (model.vertices.empty() || model.indices.empty()) return;
+    const bool anyPulse = std::find(gpuModel.pulsingBones.begin(), gpuModel.pulsingBones.end(), uint8_t{1}) !=
+                          gpuModel.pulsingBones.end();
+    // What of a glowing batch each vertex's bone carries, by area.
+    auto forEachGlowTriangle = [&](auto&& onTriangle) {
+        for (uint32_t bi = 0; bi < gpuModel.batches.size(); ++bi) {
+            const auto& batch = gpuModel.batches[bi];
+            // A batch on the white stand-in says nothing of its colour: a slot
+            // somebody else fills (an item's or a creature's skin, which a
+            // unit's particle twin never gets - those batches are the character
+            // renderer's to draw) or a texture that did not load. Taken as white
+            // it gave Perdition's Blade, whose unlit blade is orange, a white
+            // light on the ground under it.
+            if (!batch.texture || batch.texture == standIn) continue;
+            // What it shows (rt_lights::batchGlowColor): the texture's mean over
+            // what of it is visible, times the batch's colour - here where it
+            // does not move, per frame where it does (collectRtLights).
+            const glm::vec3 texel = batch.texture->averageColor();
+            const float coverage = batch.texture->alphaCoverage();
+            const glm::vec3 tint = batch.colorAnimated ? glm::vec3(1.0f) : batch.tint * batch.staticAlpha;
+            const auto glow = rt_lights::batchGlowColor(batch.blendMode, (batch.materialFlags & 0x01u) != 0,
+                                                        batch.glowCardLike, batch.batchOpacity, texel, coverage, tint);
+            if (!glow) continue;
+            const size_t end = std::min<size_t>(size_t(batch.indexStart) + batch.indexCount, model.indices.size());
+            for (size_t i = batch.indexStart; i + 2 < end; i += 3) {
+                const uint16_t a = model.indices[i], b = model.indices[i + 1], c = model.indices[i + 2];
+                if (a >= model.vertices.size() || b >= model.vertices.size() || c >= model.vertices.size()) continue;
+                // The bone of the triangle's first vertex, heaviest weight.
+                const auto& va = model.vertices[a];
+                int heaviest = -1;
+                for (int k = 0; k < 4; ++k) {
+                    if (va.boneWeights[k] > 0 && (heaviest < 0 || va.boneWeights[k] > va.boneWeights[heaviest])) heaviest = k;
+                }
+                const uint32_t bone = heaviest >= 0 ? va.boneIndices[heaviest] : ~0u;
+                onTriangle(bi, batch, *glow, model.vertices[a].position, model.vertices[b].position,
+                           model.vertices[c].position, bone);
+            }
+        }
+    };
+    // The pulsing bone that carries most glowing area: a lamp's or a torch's
+    // card, whose light (given by the model's own light, a lamp's or a
+    // fire's) follows its pulse (rt_glow_pulse.hpp).
+    if (anyPulse) {
+        std::unordered_map<uint32_t, float> areaByBone;
+        forEachGlowTriangle([&](uint32_t, const auto&, const glm::vec3&, const glm::vec3& a, const glm::vec3& b,
+                                const glm::vec3& c, uint32_t bone) {
+            if (bone >= gpuModel.pulsingBones.size() || !gpuModel.pulsingBones[bone]) return;
+            areaByBone[bone] += 0.5f * glm::length(glm::cross(b - a, c - a));
+        });
+        float best = 0.0f;
+        for (const auto& [bone, area] : areaByBone) {
+            if (area > best) {
+                best = area;
+                gpuModel.glowPulseBone = bone;
+            }
+        }
+    }
     // What gives a light already (an M2 light, fireLight, lampLight) - its
     // glow is that light, and a second would light it twice - and a trap the
     // renderer never draws. Nothing else is left out by what it is or what
@@ -2139,40 +2197,10 @@ void M2Renderer::computeGlow(M2ModelGPU& gpuModel, const pipeline::M2Model& mode
         return;
     }
     rt_lights::GlowBuilder builder;
-    for (uint32_t bi = 0; bi < gpuModel.batches.size(); ++bi) {
-        const auto& batch = gpuModel.batches[bi];
-        // A batch on the white stand-in says nothing of its colour: a slot
-        // somebody else fills (an item's or a creature's skin, which a
-        // unit's particle twin never gets - those batches are the character
-        // renderer's to draw) or a texture that did not load. Taken as white
-        // it gave Perdition's Blade, whose unlit blade is orange, a white
-        // light on the ground under it.
-        if (!batch.texture || batch.texture == standIn) continue;
-        // What it shows (rt_lights::batchGlowColor): the texture's mean over
-        // what of it is visible, times the batch's colour - here where it
-        // does not move, per frame where it does (collectRtLights).
-        const glm::vec3 texel = batch.texture ? batch.texture->averageColor() : glm::vec3(1.0f);
-        const float coverage = batch.texture ? batch.texture->alphaCoverage() : 1.0f;
-        const glm::vec3 tint = batch.colorAnimated ? glm::vec3(1.0f) : batch.tint * batch.staticAlpha;
-        const auto glow = rt_lights::batchGlowColor(batch.blendMode, (batch.materialFlags & 0x01u) != 0,
-                                                    batch.glowCardLike, batch.batchOpacity, texel, coverage, tint);
-        if (!glow) continue;
-        const glm::vec3 color = *glow;
-        const size_t end = std::min<size_t>(size_t(batch.indexStart) + batch.indexCount, model.indices.size());
-        for (size_t i = batch.indexStart; i + 2 < end; i += 3) {
-            const uint16_t a = model.indices[i], b = model.indices[i + 1], c = model.indices[i + 2];
-            if (a >= model.vertices.size() || b >= model.vertices.size() || c >= model.vertices.size()) continue;
-            // The bone of the triangle's first vertex, heaviest weight.
-            const auto& va = model.vertices[a];
-            int heaviest = -1;
-            for (int k = 0; k < 4; ++k) {
-                if (va.boneWeights[k] > 0 && (heaviest < 0 || va.boneWeights[k] > va.boneWeights[heaviest])) heaviest = k;
-            }
-            const uint32_t bone = heaviest >= 0 ? va.boneIndices[heaviest] : ~0u;
-            builder.addTriangle(model.vertices[a].position, model.vertices[b].position, model.vertices[c].position,
-                                color, bi, batch.colorAnimated, bone);
-        }
-    }
+    forEachGlowTriangle([&](uint32_t bi, const auto& batch, const glm::vec3& color, const glm::vec3& a,
+                            const glm::vec3& b, const glm::vec3& c, uint32_t bone) {
+        builder.addTriangle(a, b, c, color, bi, batch.colorAnimated, bone);
+    });
     gpuModel.glowPatches = builder.finish();
 }
 
@@ -2881,6 +2909,16 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
         const glm::vec3 d = inst.position - eye;
         if (glm::dot(d, d) > reach * reach) continue;
         const float fade = std::clamp(inst.fade, 0.0f, 1.0f);
+        // The pulse of a glow card's bone (rt_glow_pulse.hpp): the area the
+        // bone's matrix, with its parents', draws it at this frame.
+        const auto pulseOf = [&](uint32_t bone) {
+            return bone < inst.boneMatrices.size()
+                       ? rt_lights::scaledPulse(rt_lights::boneAreaFactor(inst.boneMatrices[bone]), rtGlowPulseStrength_)
+                       : 1.0f;
+        };
+        // The light a model gives of its own (a lamp's, a fire's, an M2
+        // light whose tracks hold still) follows its card's pulse.
+        const float cardPulse = model->glowPulseBone != ~0u ? pulseOf(model->glowPulseBone) : 1.0f;
         // Every light here shines only while its source shows that it emits
         // (emission): its particles, or its glowing surface. Glow patches
         // below carry the same rule batch by batch.
@@ -2902,7 +2940,7 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
                     l.position = *flame;
                 }
             }
-            l.color *= fade;
+            l.color *= fade * cardPulse;
             // A lamp of a WMO interior is in the interior's baked colours
             // already: there it only casts its shadows (PointLight::baked).
             // Not a game object's: a server's object (Hallow's End's lit
@@ -2919,7 +2957,7 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
             const glm::vec3 bmax = model->hasVertexBox ? model->vertexBoxMax : model->boundMax;
             rt_lights::PointLight l = rt_lights::fireLight(bmin, bmax, inst.modelMatrix, model->isTorch,
                                                            inst.globalSequenceTime,
-                                                           static_cast<float>(inst.id % 97u));
+                                                           static_cast<float>(inst.id % 97u), rtFireFlickerStrength_);
             // At its flames where it has any (rt_lights::flameCentre).
             if (const auto flame = rt_lights::flameCentre(
                     model->particleEmitters,
@@ -2927,7 +2965,7 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
                     &model->flameClouds)) {
                 l.position = *flame;
             }
-            l.color *= fade;
+            l.color *= fade * cardPulse;
             out.push_back(l);
             continue;
         }
@@ -2939,11 +2977,26 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
             const float scale2 = glm::dot(glm::vec3(inst.modelMatrix[0]), glm::vec3(inst.modelMatrix[0]));
             for (const rt_lights::GlowPatch& patch : model->glowPatches) {
                 glm::vec3 color = patch.color * fade;
+                if (patch.bone < model->pulsingBones.size() && model->pulsingBones[patch.bone]) {
+                    color *= pulseOf(patch.bone);
+                }
                 if (patch.animatedBatch < model->batches.size()) {
                     const glm::vec4 mul = batchColorMul(*model, model->batches[patch.animatedBatch],
                                                         inst.currentSequenceIndex, inst.animTime,
                                                         inst.globalSequenceTime);
-                    if (mul.a >= 0.0f) color *= glm::vec3(mul) * mul.a;
+                    if (mul.a >= 0.0f) {
+                        // Debug Glow, "Glow colour animation strength": the
+                        // swing about the tracks' own means scaled.
+                        glm::vec4 m = mul;
+                        if (rtGlowAnimationStrength_ != 1.0f) {
+                            const glm::vec4 mean = batchColorMulMean(*model, model->batches[patch.animatedBatch],
+                                                                     inst.currentSequenceIndex);
+                            m = glm::vec4(rt_lights::scaledAboutMean(glm::vec3(mul), glm::vec3(mean),
+                                                                     rtGlowAnimationStrength_),
+                                          rt_lights::scaledAboutMean(mul.a, mean.a, rtGlowAnimationStrength_));
+                        }
+                        color *= glm::vec3(m) * m.a;
+                    }
                 }
                 const glm::mat4 carried = rtSteadyCarried(*model, inst, patch.bone);
                 rt_lights::PointLight l = rt_lights::glowLight(glm::vec3(carried * glm::vec4(patch.centre, 1.0f)), color,
@@ -2978,9 +3031,15 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
                 light, inst.currentSequenceIndex, inst.animTime, inst.globalSequenceTime,
                 model->globalSequenceDurations,
                 turned ? rtSteadyCarried(*model, inst, static_cast<uint32_t>(light.bone)) : inst.modelMatrix,
-                turned ? kNoBones : inst.boneMatrices);
+                turned ? kNoBones : inst.boneMatrices, rtModelFlickerStrength_);
             if (!l) continue;
             l->color *= fade;
+            // A light whose own colour and strength hold still pulses with
+            // its glow card (rt_glow_pulse.hpp).
+            if (cardPulse != 1.0f && !rt_lights::trackMoves(light.diffuseColor) &&
+                !rt_lights::trackMoves(light.diffuseIntensity)) {
+                l->color *= cardPulse;
+            }
             // Carried: it meets the fixtures, as a character's own lights do.
             l->carried = inst.rtMoved;
             out.push_back(*l);

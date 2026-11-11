@@ -33,6 +33,7 @@
 #include "rendering/rt_bvh.hpp"
 #include "rendering/rt_lighting.hpp"
 #include "rendering/rt_point_lights.hpp"
+#include "rendering/rt_glow_pulse.hpp"
 #include "rendering/rt_rigid_parts.hpp"
 #include "rendering/rt_scene.hpp"
 #include "rendering/vk_texture.hpp"
@@ -508,9 +509,18 @@ void CharacterRenderer::collectRtLights(const glm::vec3& eye, float range,
         for (const auto& light : data.lights) {
             auto l = rt_lights::evaluateM2Light(light, inst.currentSequenceIndex, lightTime,
                                                 inst.globalSequenceTime, data.globalSequenceDurations, modelMat,
-                                                inst.boneMatrices);
+                                                inst.boneMatrices, rtModelFlickerStrength_);
             if (!l) continue;
             l->color *= fade;
+            // A light whose own colour and strength hold still pulses with
+            // its glow card (rt_glow_pulse.hpp): the card bone's area as the
+            // frame posed it.
+            const uint32_t card = inst.cachedModel->glowPulseBone;
+            if (card < inst.boneMatrices.size() && !rt_lights::trackMoves(light.diffuseColor) &&
+                !rt_lights::trackMoves(light.diffuseIntensity)) {
+                l->color *= rt_lights::scaledPulse(rt_lights::boneAreaFactor(inst.boneMatrices[card]),
+                                                   rtGlowPulseStrength_);
+            }
             l->source = rt_lights::Source::Unit;
             out.push_back(*l);
         }

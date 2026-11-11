@@ -2095,6 +2095,10 @@ void GameScreen::saveSettings() {
     out << "dbg_interior_full_at=" << settingsPanel_.pendingDbgInteriorFullAt << "\n";
     out << "dbg_max_light=" << settingsPanel_.pendingDbgMaxLight << "\n";
     out << "dbg_light_count_limit=" << settingsPanel_.pendingDbgLightCountLimit << "\n";
+    out << "dbg_glow_pulse=" << settingsPanel_.pendingDbgGlowPulse << "\n";
+    out << "dbg_fire_flicker=" << settingsPanel_.pendingDbgFireFlicker << "\n";
+    out << "dbg_model_flicker=" << settingsPanel_.pendingDbgModelFlicker << "\n";
+    out << "dbg_glow_anim=" << settingsPanel_.pendingDbgGlowAnim << "\n";
     out << "dbg_shadow_darkness=" << settingsPanel_.pendingDbgShadowDarkness << "\n";
     out << "dbg_traced_sun_shadow=" << settingsPanel_.pendingDbgTracedSunShadow << "\n";
     out << "dbg_map_sun_shadow=" << settingsPanel_.pendingDbgMapSunShadow << "\n";
@@ -2463,6 +2467,10 @@ void GameScreen::loadSettings() {
             else if (key == "dbg_interior_full_at") settingsPanel_.pendingDbgInteriorFullAt = std::clamp(std::stoi(val), 5, 300);
             else if (key == "dbg_max_light") settingsPanel_.pendingDbgMaxLight = std::clamp(std::stoi(val), 10, 1000);
             else if (key == "dbg_light_count_limit") settingsPanel_.pendingDbgLightCountLimit = std::clamp(std::stoi(val), 8, 2048);
+            else if (key == "dbg_glow_pulse") settingsPanel_.pendingDbgGlowPulse = std::clamp(std::stoi(val), 0, 300);
+            else if (key == "dbg_fire_flicker") settingsPanel_.pendingDbgFireFlicker = std::clamp(std::stoi(val), 0, 300);
+            else if (key == "dbg_model_flicker") settingsPanel_.pendingDbgModelFlicker = std::clamp(std::stoi(val), 0, 300);
+            else if (key == "dbg_glow_anim") settingsPanel_.pendingDbgGlowAnim = std::clamp(std::stoi(val), 0, 300);
             else if (key == "dbg_shadow_darkness") settingsPanel_.pendingDbgShadowDarkness = std::clamp(std::stoi(val), 0, 100);
             else if (key == "dbg_traced_sun_shadow") settingsPanel_.pendingDbgTracedSunShadow = std::clamp(std::stoi(val), 0, 100);
             else if (key == "dbg_map_sun_shadow") settingsPanel_.pendingDbgMapSunShadow = std::clamp(std::stoi(val), 0, 100);

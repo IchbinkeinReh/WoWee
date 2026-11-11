@@ -1435,6 +1435,12 @@ wowee_add_test(test_rt_point_lights
             ${CMAKE_SOURCE_DIR}/src/pipeline/m2_loader.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_rt_glow_pulse ───────────────────────────────────────
+# A glow card's bone pulse for its traced light.
+wowee_add_test(test_rt_glow_pulse
+    SOURCES test_rt_glow_pulse.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_rt_light_kinds ──────────────────────────────────────
 # The Debug Graphics view of the lights' kinds: a name and a colour of its
 # own for each, the trace shader's list the same, the kind in the GPU record.

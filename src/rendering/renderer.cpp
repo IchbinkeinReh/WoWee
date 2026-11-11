@@ -6798,6 +6798,19 @@ void Renderer::leaveGbufferPhase() {
     }
 }
 
+void Renderer::setRtPulseStrengths(int glowPulsePercent, int fireFlickerPercent, int modelFlickerPercent,
+                                   int glowAnimationPercent) {
+    const auto f = [](int percent) { return static_cast<float>(std::clamp(percent, 0, 300)) / 100.0f; };
+    if (m2Renderer) {
+        m2Renderer->setRtPulseStrengths(f(glowPulsePercent), f(fireFlickerPercent), f(modelFlickerPercent),
+                                        f(glowAnimationPercent));
+    }
+    if (characterRenderer) {
+        characterRenderer->setRtGlowPulseStrength(f(glowPulsePercent));
+        characterRenderer->setRtModelFlickerStrength(f(modelFlickerPercent));
+    }
+}
+
 void Renderer::recordRtLighting() {
     if (!rtLighting_ || !rtLighting_->active() || !camera) return;
     RtLighting::FrameInputs in{};

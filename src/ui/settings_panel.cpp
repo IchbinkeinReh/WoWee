@@ -979,6 +979,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "dbgview", "dbgsplitrt", "dbgtimeoverride", "dbgtime", "dbgambient", "dbgsun", "dbgbakedlight", "dbgpointlights", "dbgbounce", "dbgshadowdarkness",
     "dbgmodellightintensity", "dbgmodellightreach", "dbgfirelightintensity", "dbgfirelightreach", "dbglamplightintensity", "dbglamplightreach", "dbgbuildinglightintensity", "dbgbuildinglightreach", "dbgunitlightintensity", "dbgunitlightreach",
     "dbgemissivelightintensity", "dbgemissivelightreach", "dbgparticlelightintensity", "dbgparticlelightreach",
+    "dbgglowpulse", "dbgfireflicker", "dbgmodelflicker", "dbgglowanim",
     "dbginteriorbase", "dbginteriorfullat", "dbgmaxlight", "dbglightcountlimit",
     "dbgtracedsunshadow", "dbgmapsunshadow", "dbgpointshadow", "dbgbakedlampshadow", "dbgocclusion", "dbgterrainshadow", "dbgblobshadow",
     // Moved off the game's own Effects panel, so this list is now what
@@ -1213,6 +1214,10 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "dbgemissivelightintensity", .asFloat = &SettingsPanel::pendingDbgEmissiveLightIntensity},
     {.key = "dbgemissivelightreach", .asInt = &SettingsPanel::pendingDbgEmissiveLightReach},
     {.key = "dbgparticlelightintensity", .asFloat = &SettingsPanel::pendingDbgParticleLightIntensity},
+    {.key = "dbgglowpulse", .asInt = &SettingsPanel::pendingDbgGlowPulse},
+    {.key = "dbgfireflicker", .asInt = &SettingsPanel::pendingDbgFireFlicker},
+    {.key = "dbgmodelflicker", .asInt = &SettingsPanel::pendingDbgModelFlicker},
+    {.key = "dbgglowanim", .asInt = &SettingsPanel::pendingDbgGlowAnim},
     {.key = "dbgparticlelightreach", .asInt = &SettingsPanel::pendingDbgParticleLightReach},
     {.key = "dbginteriorbase", .asInt = &SettingsPanel::pendingDbgInteriorBase},
     {.key = "dbginteriorfullat", .asInt = &SettingsPanel::pendingDbgInteriorFullAt},
@@ -1691,6 +1696,11 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         if (renderer) renderer->setRtPointSelfShadow(pendingRtPointSelfShadow);
     } else if (key == "rtunitselfshadow") {
         if (renderer) renderer->setRtUnitSelfShadow(pendingRtUnitSelfShadow);
+    } else if (key == "dbgglowpulse" || key == "dbgfireflicker" || key == "dbgmodelflicker" || key == "dbgglowanim") {
+        if (renderer) {
+            renderer->setRtPulseStrengths(pendingDbgGlowPulse, pendingDbgFireFlicker, pendingDbgModelFlicker,
+                                          pendingDbgGlowAnim);
+        }
     } else if (key == "rtunitshadowreach") {
         if (renderer) renderer->setRtUnitShadowReach(static_cast<float>(pendingRtUnitShadowReach));
     } else if (key == "rtminbrightness") {

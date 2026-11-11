@@ -19,6 +19,7 @@
 #include "core/frame_profiler.hpp"
 #include "rendering/character_renderer.hpp"
 #include "rendering/m2_billboard.hpp"
+#include "rendering/rt_glow_pulse.hpp"
 #include "rendering/model_memory.hpp"
 #include "pipeline/bc_encode.hpp"
 #include <cstdio>
@@ -2043,6 +2044,9 @@ bool CharacterRenderer::loadModel(const pipeline::M2Model& model, uint32_t id) {
 
     M2ModelGPU gpuModel;
     gpuModel.data = model;
+    if (!model.lights.empty()) {
+        gpuModel.glowPulseBone = rt_lights::cardPulseBone(model, rt_lights::pulsingBones(model.bones));
+    }
     if (!model.vertices.empty()) {
         gpuModel.visualBoundMin = glm::vec3(std::numeric_limits<float>::max());
         gpuModel.visualBoundMax = glm::vec3(-std::numeric_limits<float>::max());

@@ -519,6 +519,24 @@ constexpr SettingDesc kSchema[] = {
      "Particle effects that glow - spells, flames, candles - one\n"
      "light per emitter at the middle of its particles.\n"
      "Ray traced. 100 is its own.", "", 100},
+    // How much of a glow card's bone pulse and of a fire's flicker the traced
+    // light keeps (rt_glow_pulse.hpp scaledPulse, rt_lights::fireLight).
+    {"dbgglowpulse", "Glow pulse strength (%)", SettingKind::Int, 0, 300, 10, "Debug Glow", "",
+     "How strongly a pulsing glow's light swells and fades with it - a\n"
+     "street lamp's halo, a torch's glow. 100 as the model pulses, 0 a\n"
+     "steady light, 300 three times the swing. Ray traced.", "", 100, "raytracedlighting"},
+    {"dbgfireflicker", "Fire flicker strength (%)", SettingKind::Int, 0, 300, 10, "Debug Glow", "",
+     "How strongly a fire's light flickers - a brazier's, a bonfire's,\n"
+     "a torch's with no light of its own. 100 as it is, 0 a steady\n"
+     "light, 300 three times the swing. Ray traced.", "", 100, "raytracedlighting"},
+    {"dbgmodelflicker", "Model light flicker strength (%)", SettingKind::Int, 0, 300, 10, "Debug Glow", "",
+     "How strongly a model's own light flickers as its file animates it -\n"
+     "a brazier's, a fire pit's, a guard tower's. 100 as the model has\n"
+     "it, 0 its average, 300 three times the swing. Ray traced.", "", 100, "raytracedlighting"},
+    {"dbgglowanim", "Glow colour animation strength (%)", SettingKind::Int, 0, 300, 10, "Debug Glow", "",
+     "How strongly the light of a glow whose colour or transparency the\n"
+     "model animates follows it. 100 as the model has it, 0 its average,\n"
+     "300 three times the swing. Ray traced.", "", 100, "raytracedlighting"},
     {"dbgparticlelightreach", "Particles: reach (%)", SettingKind::Int, 100, 1000, 10, "Debug Glow", "",
      "How far its light reaches: where the falloff starts and ends.\n"
      "Ray traced. 100 is its own.", "", 100},
