@@ -11148,13 +11148,21 @@ void LuaEngine::registerCoreAPI() {
         "    local qColors = {[0]={0.62,0.62,0.62},[1]={1,1,1},[2]={0.12,1,0},[3]={0,0.44,0.87},[4]={0.64,0.21,0.93},[5]={1,0.5,0},[6]={0.9,0.8,0.5},[7]={0,0.8,1}}\n"
         "    local c = qColors[quality or 1] or {1,1,1}\n"
         "    self:SetText(name, c[1], c[2], c[3])\n"
-        "    if GetCVar('colorblindMode') == '1' then\n"
-        "        local qn = _G['ITEM_QUALITY'..(quality or 1)..'_DESC']\n"
-        "        if qn then self:AddLine(qn, c[1], c[2], c[3]) end\n"
-        "    end\n"
         "    local data = _GetItemTooltipData(itemId)\n"
+        // Colour-blind mode names the quality under the title, in white, and a
+        // heroic item's as ITEM_HEROIC_EPIC in place of both that and the
+        // green ITEM_HEROIC line (0x006277f0).
+        "    local colorblind = GetCVar('colorblindMode') == '1'\n"
+        "    if colorblind then\n"
+        "        if data and data.isHeroic then\n"
+        "            self:AddLine(ITEM_HEROIC_EPIC or 'Heroic Epic', 1, 1, 1)\n"
+        "        else\n"
+        "            local qn = _G['ITEM_QUALITY'..(quality or 1)..'_DESC']\n"
+        "            if qn then self:AddLine(qn, 1, 1, 1) end\n"
+        "        end\n"
+        "    end\n"
         "    if data then\n"
-        "        if data.isHeroic then self:AddLine(ITEM_HEROIC or 'Heroic', 0, 1, 0) end\n"
+        "        if data.isHeroic and not colorblind then self:AddLine(ITEM_HEROIC or 'Heroic', 0, 1, 0) end\n"
         // A bound item says so, whatever its template's binding: the line
         // is ITEM_SOULBOUND in its place (0x006277f0 tests the instance's
         // flag 0x1 first). A quest item stays a quest item.
@@ -11171,6 +11179,8 @@ void LuaEngine::registerCoreAPI() {
         "        if bind and _G[bind] then self:AddLine(_G[bind], 1, 1, 1) end\n"
         "        if data.isUnique then self:AddLine(ITEM_UNIQUE or 'Unique', 1, 1, 1)\n"
         "        elseif data.isUniqueEquipped then self:AddLine(ITEM_UNIQUE_EQUIPPABLE or 'Unique-Equipped', 1, 1, 1) end\n"
+        // An item to be signed (flag 0x2000): ITEM_SIGNABLE in green.
+        "        if data.signable then self:AddLine(ITEM_SIGNABLE or '<Right Click for Additional Information>', 0, 1, 0) end\n"
         "    end\n"
         "    if equipSlot and equipSlot ~= '' then\n"
         "        local slotText = _G[equipSlot] or ''\n"

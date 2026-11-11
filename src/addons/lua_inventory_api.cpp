@@ -3531,6 +3531,10 @@ static int lua_GetItemTooltipData(lua_State* L) {
         lua_pushnumber(L, info->block);
         lua_setfield(L, -2, "block");
     }
+    if ((info->itemFlags & 0x2000u) != 0) {
+        lua_pushboolean(L, 1);
+        lua_setfield(L, -2, "signable");
+    }
     if (info->randomEnchant) {
         lua_pushboolean(L, 1);
         lua_setfield(L, -2, "randomEnchant");
