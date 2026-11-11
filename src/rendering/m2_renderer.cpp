@@ -2021,7 +2021,61 @@ static glm::mat4 rtSteadyCarried(const M2ModelGPU& model, const M2Instance& inst
 }
 
 namespace {
-bool fireBurning(const M2ModelGPU& model, const M2Instance& inst);
+/// What of a model visibly gives off light as it stands now - the rule for
+/// every light a model carries while ray tracing (the user's; the client
+/// lights nothing with these at runtime): a light shines exactly while its
+/// source shows that it emits. Its particles: an emitter on and emitting in
+/// the sequence it plays (the on/off track as the particle pass reads it,
+/// 0x0082d2f0, and a rate above nothing), or flames it emitted still alive.
+/// Or its glowing surface: a batch drawn to glow - a glow card, an unlit
+/// material (flag 0x01) or an additive one (blend 3, 4) - whose colour and
+/// transparency tracks leave it showing. A cold log pile, a goober bonfire
+/// before it is lit (Thunder Bluff's G_Bonfire, whose flames are on only in
+/// the sequence its game object's state plays), a lamp whose glass is dark
+/// by day: nothing burns, nothing lights. Where the model's own glow or
+/// emitter follows the hour, its light does with it. No hour of its own.
+struct Emission {
+    bool emitting = false;  ///< an emitter on and emitting
+    bool live = false;      ///< particles still alive
+    bool glowing = false;   ///< a glow batch showing
+    bool hasSource = false; ///< any emitter or glow batch at all
+    bool any() const { return emitting || live || glowing; }
+};
+
+bool glowBatch(const M2ModelGPU::BatchGPU& batch) {
+    return batch.glowCardLike || (batch.materialFlags & 0x01u) != 0 || batch.blendMode == 3 ||
+           batch.blendMode == 4;
+}
+
+Emission emission(const M2ModelGPU& model, const M2Instance& inst) {
+    Emission e;
+    e.hasSource = !model.particleEmitters.empty();
+    for (const auto& em : model.particleEmitters) {
+        if (!em.enabled) continue;
+        if (m2_track::sampleFloat(em.enabledTrack, inst.currentSequenceIndex, inst.animTime,
+                                  inst.globalSequenceTime, model.globalSequenceDurations, 1.0f) < 0.5f) {
+            continue;
+        }
+        const float rate = m2_track::sampleFloat(em.emissionRate, inst.currentSequenceIndex, inst.animTime,
+                                                 inst.globalSequenceTime, model.globalSequenceDurations, 0.0f);
+        if (rate + std::max(0.0f, em.emissionRateVary) > 0.0f) {
+            e.emitting = true;
+            break;
+        }
+    }
+    e.live = !inst.particles.empty();
+    for (const auto& batch : model.batches) {
+        if (!glowBatch(batch) || batch.batchOpacity < 0.01f) continue;
+        e.hasSource = true;
+        const glm::vec4 mul = m2_internal::batchColorMul(model, batch, inst.currentSequenceIndex, inst.animTime,
+                                                         inst.globalSequenceTime);
+        if (mul.a < 0.0f || (mul.a > 0.01f && std::max(mul.r, std::max(mul.g, mul.b)) > 0.01f)) {
+            e.glowing = true;
+            break;
+        }
+    }
+    return e;
+}
 }  // namespace
 
 void M2Renderer::logRtLightDiag(const glm::vec3& eye, float radius) const {
@@ -2034,6 +2088,13 @@ void M2Renderer::logRtLightDiag(const glm::vec3& eye, float radius) const {
                  model->isLamp ? " lamp" : "", " glow ", model->glowPatches.size(), " emitters ",
                  model->particleEmitters.size(), " live ", inst.particles.size(),
                  inst.interiorLit ? " interior" : "", listed ? " listed" : "", " lampBone ", model->lampBone, " bones ", inst.boneMatrices.size());
+        {
+            const Emission e = emission(*model, inst);
+            int glowBatches = 0;
+            for (const auto& batch : model->batches) glowBatches += glowBatch(batch) && batch.batchOpacity >= 0.01f;
+            LOG_WARNING("RT doodad emits: ", e.any() ? "yes" : "NO", " (emitting ", e.emitting, ", live ", e.live,
+                        ", glow ", e.glowing, " of ", glowBatches, " glow batches", e.hasSource ? "" : ", no source at all", ")");
+        }
         if (model->lights.empty() && (model->isBrazierOrFire || model->isTorch)) {
             const glm::vec3 bmin = model->hasVertexBox ? model->vertexBoxMin : model->boundMin;
             const glm::vec3 bmax = model->hasVertexBox ? model->vertexBoxMax : model->boundMax;
@@ -2043,7 +2104,7 @@ void M2Renderer::logRtLightDiag(const glm::vec3& eye, float radius) const {
             const glm::vec3 at = flame ? *flame : l.position;
             LOG_WARNING("RT doodad fire light at (", at.x, ", ", at.y, ", ", at.z, ")", flame ? " flames" : " box top",
                         " reach ", l.attenuationEnd, " fade ", inst.fade,
-                        fireBurning(*model, inst) ? " burning" : " NOT burning (no light)");
+                        emission(*model, inst).any() ? " burning" : " NOT burning (no light)");
         }
     }
 }
@@ -2718,38 +2779,7 @@ void M2Renderer::releaseRtSkinned() {
     rtSkinned_.clear();
 }
 
-namespace {
-/// Whether a fire model burns as it stands now (a WoWee-only rule for the
-/// ray-traced light; the client has no light for these). Named a fire is not
-/// enough: a cold log pile, and a goober bonfire before it is lit (Thunder
-/// Bluff's G_Bonfire, whose flames are its two emitters, on only in the
-/// sequence its game object's state plays), are the same model or name with
-/// nothing burning. It burns while one of its emitters is on and emitting in
-/// the sequence it plays (the on/off track as the particle pass reads it,
-/// 0x0082d2f0, and a rate above nothing), while flames it emitted are still
-/// alive, or while it shows a glow card (a batch drawn as one, its colour
-/// track not faded out). A model with none of these is a model, not a fire.
-bool fireBurning(const M2ModelGPU& model, const M2Instance& inst) {
-    for (const auto& em : model.particleEmitters) {
-        if (!em.enabled) continue;
-        if (m2_track::sampleFloat(em.enabledTrack, inst.currentSequenceIndex, inst.animTime,
-                                  inst.globalSequenceTime, model.globalSequenceDurations, 1.0f) < 0.5f) {
-            continue;
-        }
-        const float rate = m2_track::sampleFloat(em.emissionRate, inst.currentSequenceIndex, inst.animTime,
-                                                 inst.globalSequenceTime, model.globalSequenceDurations, 0.0f);
-        if (rate + std::max(0.0f, em.emissionRateVary) > 0.0f) return true;
-    }
-    if (!inst.particles.empty()) return true;
-    for (const auto& batch : model.batches) {
-        if (!batch.glowCardLike) continue;
-        const glm::vec4 mul = m2_internal::batchColorMul(model, batch, inst.currentSequenceIndex, inst.animTime,
-                                                         inst.globalSequenceTime);
-        if (mul.a < 0.0f || mul.a > 0.01f) return true;
-    }
-    return false;
-}
-}  // namespace
+
 
 void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
                                  std::vector<rt_lights::PointLight>& out) const {
@@ -2764,6 +2794,10 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
         const glm::vec3 d = inst.position - eye;
         if (glm::dot(d, d) > reach * reach) continue;
         const float fade = std::clamp(inst.fade, 0.0f, 1.0f);
+        // Every light here shines only while its source shows that it emits
+        // (emission): its particles, or its glowing surface. Glow patches
+        // below carry the same rule batch by batch.
+        if ((model->isLamp || !model->lights.empty()) && !emission(*model, inst).any()) continue;
         if (model->lights.empty() && model->isLamp) {
             // A lamp with no light of its own (rt_lights::lampLight).
             // Where the bones hold the glass this frame (a lantern swings).
@@ -2792,8 +2826,8 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
         }
         if (model->lights.empty() && (model->isBrazierOrFire || model->isTorch)) {
             // A fire with no light of its own (rt_lights::fireLight), while
-            // it burns (fireBurning).
-            if (!fireBurning(*model, inst)) continue;
+            // it burns (emission).
+            if (!emission(*model, inst).any()) continue;
             const glm::vec3 bmin = model->hasVertexBox ? model->vertexBoxMin : model->boundMin;
             const glm::vec3 bmax = model->hasVertexBox ? model->vertexBoxMax : model->boundMax;
             rt_lights::PointLight l = rt_lights::fireLight(bmin, bmax, inst.modelMatrix, model->isTorch,
