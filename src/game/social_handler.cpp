@@ -6340,18 +6340,46 @@ void SocialHandler::handleArenaError(network::Packet& packet) {
 
 void SocialHandler::handlePvpLogData(network::Packet& packet) {
     if (!PvpLogDataParser::parse(packet, bgScoreboard_)) return;
-    for (auto& ps : bgScoreboard_.players) {
-        auto ent = owner_.getEntityManager().getEntity(ps.guid);
-        if (ent && (ent->getType() == game::ObjectType::PLAYER || ent->getType() == game::ObjectType::UNIT)) {
-            auto u = std::static_pointer_cast<game::Unit>(ent);
-            if (!u->getName().empty()) ps.name = u->getName();
+    // Every row's name: from the name cache, or a unit in view.
+    const auto fillNames = [this]() {
+        for (auto& ps : bgScoreboard_.players) {
+            if (const std::string& cached = owner_.lookupName(ps.guid); !cached.empty()) {
+                ps.name = cached;
+                continue;
+            }
+            auto ent = owner_.getEntityManager().getEntity(ps.guid);
+            if (ent && (ent->getType() == game::ObjectType::PLAYER || ent->getType() == game::ObjectType::UNIT)) {
+                auto u = std::static_pointer_cast<game::Unit>(ent);
+                if (!u->getName().empty()) ps.name = u->getName();
+            }
         }
-    }
+    };
+    fillNames();
     // The scoreboard is drawn from this and asked for it by name -
     // RequestBattlefieldScoreData sends the query, UPDATE_BATTLEFIELD_SCORE is
-    // the answer arriving. Every row, every column and the winner were parsed
-    // and stored, and the frame that displays them was never told.
-    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("UPDATE_BATTLEFIELD_SCORE", {});
+    // the answer arriving. The client asks for every player it has no name
+    // for and announces the board once the last answer is back, found or not
+    // (0x0054ca30, then 0x0054aa30); a row announced before its name was a
+    // row by nobody until the next update. A newer board takes over.
+    const uint32_t generation = ++bgScoreGeneration_;
+    bgScorePending_ = 0;
+    const auto announce = [this]() {
+        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("UPDATE_BATTLEFIELD_SCORE", {});
+    };
+    for (size_t row = 0; row < bgScoreboard_.players.size(); ++row) {
+        const auto& ps = bgScoreboard_.players[row];
+        if (!ps.name.empty() || ps.guid == 0) continue;
+        bgScorePending_ += 1;
+        owner_.askNameThen(ps.guid, "pvp log " + std::to_string(generation) + ":" + std::to_string(row),
+                           [this, generation, fillNames, announce](bool, const std::string&) {
+                               if (generation != bgScoreGeneration_ || bgScorePending_ == 0) return;
+                               bgScorePending_ -= 1;
+                               if (bgScorePending_ != 0) return;
+                               fillNames();
+                               announce();
+                           });
+    }
+    if (bgScorePending_ == 0) announce();
 }
 
 void SocialHandler::updateReadyCheckTimer() {

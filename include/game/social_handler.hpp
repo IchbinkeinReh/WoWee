@@ -1072,6 +1072,11 @@ private:
     uint64_t battlemasterGuid_ = 0;
     std::vector<AvailableBgInfo> availableBgs_;
     BgScoreboardData bgScoreboard_;
+    /// UPDATE_BATTLEFIELD_SCORE waits for every row's name (0x0054ca30
+    /// counts the answers down): the answers still owed for the latest
+    /// scoreboard, and which one that was.
+    uint32_t bgScorePending_ = 0;
+    uint32_t bgScoreGeneration_ = 0;
     std::vector<BgPlayerPosition> bgPlayerPositions_;
     std::chrono::steady_clock::time_point lastBgPositionRequest_{};
     std::chrono::steady_clock::time_point lastContactListRequest_{};
