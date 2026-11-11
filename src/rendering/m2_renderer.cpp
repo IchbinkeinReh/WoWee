@@ -2081,7 +2081,11 @@ Emission emission(const M2ModelGPU& model, const M2Instance& inst) {
 void M2Renderer::logRtLightDiag(const glm::vec3& eye, float radius) const {
     for (const M2Instance& inst : instances) {
         const M2ModelGPU* model = inst.cachedModel;
-        if (!model || glm::length(inst.position - eye) > radius) continue;
+        if (!model) continue;
+        // Every fixture with a light of its own out to the lights' range;
+        // the rest within the radius.
+        const bool fixture = !model->lights.empty() || model->isLamp || model->isBrazierOrFire || model->isTorch;
+        if (glm::length(inst.position - eye) > (fixture ? std::max(radius, 120.0f) : radius)) continue;
         const bool listed = std::find(rtLitInstances_.begin(), rtLitInstances_.end(), inst.id) != rtLitInstances_.end();
         LOG_WARNING("RT doodad '", model->name, "' at ", glm::length(inst.position - eye), " yd (", inst.position.x, ", ", inst.position.y, ", ", inst.position.z, "): lights ",
                  model->lights.size(), model->isBrazierOrFire ? " fire" : "", model->isTorch ? " torch" : "",
