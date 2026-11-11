@@ -4062,16 +4062,23 @@ void registerUnitLuaAPI(lua_State* L) {
             lua_pushnumber(L, p.bonusHonor);        // honorGained
             lua_pushnumber(L, p.team);              // faction (0=Horde,1=Alliance)
             lua_pushnumber(L, 0);                   // rank
-            lua_pushstring(L, "");                  // race
-            lua_pushstring(L, "");                  // class
-            // Nil, not a class. The packet carries none - AppendToPacket sends
-            // a guid and six numbers - and the scoreboard asks for exactly
-            // this case: `if (classToken) then ... else buttonClass:Hide()`.
-            // So absence is an answer it handles, and "WARRIOR" was not a
-            // safer default than nil but a wrong one that looks like data: it
-            // drew a warrior's icon beside all forty players in the
-            // battleground, every one of them.
-            lua_pushnil(L);                         // classToken
+            // race, class and classToken from the name cache (0x0054be90):
+            // the race's name, then class and token, nil and nil while the
+            // class is not known - the scoreboard hides the class icon for a
+            // nil token, and a guessed one drew a warrior beside everybody.
+            {
+                const int gender = gh->lookupPlayerGender(p.guid) == 1 ? 1 : 0;
+                const uint8_t raceId = gh->lookupPlayerRace(p.guid);
+                lua_pushstring(L, raceId ? localizedRaceName(gh, raceId, gender).c_str() : "");
+                const uint8_t classId = gh->lookupPlayerClass(p.guid);
+                if (const char* token = luaClassToken(classId)) {
+                    lua_pushstring(L, localizedClassName(gh, classId, gender).c_str());
+                    lua_pushstring(L, token);
+                } else {
+                    lua_pushnil(L);
+                    lua_pushnil(L);
+                }
+            }
             lua_pushnumber(L, p.damageDone);        // damageDone
             lua_pushnumber(L, p.healingDone);       // healingDone
             return 12;

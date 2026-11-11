@@ -4093,13 +4093,16 @@ static int lua_GetBattlefieldPosition(lua_State* L) {
             lua_pushnumber(L, v);
             // A name not yet known is asked for, and its answer raises
             // WORLD_MAP_NAME_UPDATE (0x0054c2e0 -> 0x005496c0).
-            lua_pushstring(L, gh->nameOrAsk(p->guid, "WORLD_MAP_NAME_UPDATE", false).c_str());
+            // nil until it arrives.
+            const std::string name = gh->nameOrAsk(p->guid, "WORLD_MAP_NAME_UPDATE", false);
+            if (name.empty()) lua_pushnil(L);
+            else lua_pushstring(L, name.c_str());
             return 3;
         }
     }
     lua_pushnumber(L, 0.0);
     lua_pushnumber(L, 0.0);
-    lua_pushstring(L, "");
+    lua_pushnil(L);
     return 3;
 }
 
@@ -4153,7 +4156,7 @@ static int lua_GetBattlefieldFlagPosition(lua_State* L) {
     }
     lua_pushnumber(L, 0.0);
     lua_pushnumber(L, 0.0);
-    lua_pushstring(L, "");
+    lua_pushnil(L);   // nobody carrying it (0x0054dcc0)
     return 3;
 }
 

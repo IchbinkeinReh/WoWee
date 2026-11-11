@@ -772,12 +772,12 @@ static int lua_GetQuestLogTitle(lua_State* L) {
         lua_pushnumber(L, 0);                                              // 2: level
         lua_pushnil(L);                                                    // 3: questTag
         lua_pushnumber(L, 0);                                              // 4: suggestedGroup
-        lua_pushboolean(L, 1);                                             // 5: isHeader
-        lua_pushboolean(L, collapsedQuestGroups().count(row.group) ? 1 : 0); // 6: isCollapsed
+        luaPushOneOrNil(L, 1);                                             // 5: isHeader
+        luaPushOneOrNil(L, collapsedQuestGroups().count(row.group) ? 1 : 0); // 6: isCollapsed
         lua_pushnil(L);                                                    // 7: isComplete
-        lua_pushboolean(L, 0);                                             // 8: isDaily
+        luaPushOneOrNil(L, 0);                                             // 8: isDaily
         lua_pushnumber(L, 0);                                              // 9: questID
-        lua_pushboolean(L, 0);                                             // 10: displayQuestID
+        luaPushOneOrNil(L, 0);                                             // 10: displayQuestID
         return 10;
     }
     // An index off either end gets an empty row, not a bare nil.
@@ -804,12 +804,12 @@ static int lua_GetQuestLogTitle(lua_State* L) {
         lua_pushnumber(L, 0);    // 2: level
         lua_pushnil(L);          // 3: questTag
         lua_pushnumber(L, 0);    // 4: suggestedGroup
-        lua_pushboolean(L, 0);   // 5: isHeader
-        lua_pushboolean(L, 0);   // 6: isCollapsed
+        luaPushOneOrNil(L, 0);   // 5: isHeader
+        luaPushOneOrNil(L, 0);   // 6: isCollapsed
         lua_pushnil(L);          // 7: isComplete
-        lua_pushboolean(L, 0);   // 8: isDaily
+        luaPushOneOrNil(L, 0);   // 8: isDaily
         lua_pushnumber(L, 0);    // 9: questID
-        lua_pushboolean(L, 0);   // 10: displayQuestID
+        luaPushOneOrNil(L, 0);   // 10: displayQuestID
         return 10;
     }
     const auto& q = *qp;
@@ -829,8 +829,8 @@ static int lua_GetQuestLogTitle(lua_State* L) {
     lua_pushnumber(L, q.level);          // 2: level
     lua_pushnil(L);                      // 3: questTag ("Elite", "PvP", …)
     lua_pushnumber(L, 0);                // 4: suggestedGroup
-    lua_pushboolean(L, 0);               // 5: isHeader
-    lua_pushboolean(L, 0);               // 6: isCollapsed
+    luaPushOneOrNil(L, 0);               // 5: isHeader
+    luaPushOneOrNil(L, 0);               // 6: isCollapsed
     // A number, not a boolean: 1 for complete, -1 for failed, nil otherwise.
     // watchframe.lua writes `if ( isComplete and isComplete < 0 )` to tell a
     // failed quest from a finished one, and comparing a boolean with a number
@@ -842,14 +842,14 @@ static int lua_GetQuestLogTitle(lua_State* L) {
     if (q.failed)        lua_pushnumber(L, -1);
     else if (q.complete) lua_pushnumber(L, 1);
     else                 lua_pushnil(L);                        // 7: isComplete
-    lua_pushboolean(L, 0);               // 8: isDaily
+    luaPushOneOrNil(L, 0);               // 8: isDaily
     lua_pushnumber(L, q.questId);        // 9: questID
     // Not the id again: this is the developer switch that asks for the id to
     // be *shown*, and the quest log writes "26102 - Wolves Across the Border"
     // when it is set. An id is a large number and therefore true, so every
     // quest in the log wore its own number. Off is what the real client
     // ships.
-    lua_pushboolean(L, 0);               // 10: displayQuestID
+    luaPushOneOrNil(L, 0);               // 10: displayQuestID
     return 10;
 }
 
@@ -5120,8 +5120,7 @@ void registerQuestLuaAPI(lua_State* L) {
                     }
                 }
             }
-            lua_pushstring(L, "");
-            return 1;
+            return luaReturnNil(L);   // no quest set to abandon: nil (0x005df0e0)
         }},
                 // What is destroyed along with the quest. Nothing here knows
                 // which items a quest would take back, and an invented list

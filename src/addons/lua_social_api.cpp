@@ -1591,7 +1591,9 @@ static int lua_GetPetitionInfo(lua_State* L) {
     lua_pushstring(L, info->guildName.c_str());
     lua_pushstring(L, "");                                   // body text: not sent
     lua_pushnumber(L, info->signaturesRequired);
-    lua_pushstring(L, owner.empty() ? "Unknown" : owner.c_str());
+    // The owner's name, nil while not known (0x005cece0).
+    if (owner.empty()) lua_pushnil(L);
+    else lua_pushstring(L, owner.c_str());
     luaPushOneOrNil(L, isOwner ? 1 : 0);
     lua_pushnumber(L, info->signaturesRequired);
     return 7;
