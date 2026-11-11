@@ -4154,6 +4154,42 @@ static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
             lua_setfield(L, -2, "durability");
             lua_pushnumber(L, static_cast<lua_Number>(instance->maxDurability));
             lua_setfield(L, -2, "maxDurability");
+            // What is left of its first spell's charges (ITEM_FIELD_SPELL_CHARGES).
+            lua_pushnumber(L, gh->getItemSpellCharges(instance->guid));
+            lua_setfield(L, -2, "charges0");
+            // The one action line the instance gets (0x006277f0): openable -
+            // a lootable item (flag 0x4) not locked or unlocked (instance
+            // 0x4), or flag 0x200 with instance 0x8 - else readable (a page,
+            // or instance 0x200), else socketable (any socket).
+            if (const auto* tmpl = gh->getItemInfo(itemId); tmpl && tmpl->valid) {
+                const uint32_t own = gh->getItemFieldFlags(instance->guid);
+                const char* action = nullptr;
+                if (((tmpl->itemFlags & 0x4u) != 0 && (tmpl->lockId == 0 || (own & 0x4u) != 0)) ||
+                    ((tmpl->itemFlags & 0x200u) != 0 && (own & 0x8u) != 0)) {
+                    action = "ITEM_OPENABLE";
+                } else if (tmpl->pageTextId != 0 || (own & 0x200u) != 0) {
+                    action = "ITEM_READABLE";
+                } else if (tmpl->socketColor[0] != 0 || tmpl->socketColor[1] != 0 || tmpl->socketColor[2] != 0) {
+                    action = "ITEM_SOCKETABLE";
+                }
+                if (action) {
+                    lua_pushstring(L, action);
+                    lua_setfield(L, -2, "action");
+                }
+                // No price at a vendor for one the player carries rather than
+                // wears: ITEM_UNSELLABLE where the price would be.
+                if (tmpl->sellPrice == 0 && gh->isVendorWindowOpen()) {
+                    bool worn = false;
+                    for (int e = 0; e < 19 && !worn; ++e) {
+                        const auto& slot = gh->getInventory().getEquipSlot(static_cast<game::EquipSlot>(e));
+                        worn = !slot.empty() && slot.item.guid == instance->guid;
+                    }
+                    if (!worn) {
+                        lua_pushboolean(L, 1);
+                        lua_setfield(L, -2, "unsellable");
+                    }
+                }
+            }
             // Who made it (ITEM_FIELD_CREATOR), named once the name cache has
             // them - asked for otherwise, and the owner's UpdateTooltip fills
             // the line in, as the client's callback 0x00626650 does - and
@@ -11230,6 +11266,13 @@ void LuaEngine::registerCoreAPI() {
         "                    local label = key and _G[key]\n"
         "                    if label then text = label .. ' ' .. text end\n"
         "                    self:AddLine(text, 0, 1, 0, 1)\n"
+        "                    if sp.charges then\n"
+        "                        local n = sp.charges\n"
+        "                        if inst and sp.slot == 0 and inst.charges0 then n = inst.charges0 end\n"
+        "                        n = math.abs(n)\n"
+        "                        if n == 0 then self:AddLine(ITEM_SPELL_CHARGES_NONE or 'No charges', 1, 1, 1)\n"
+        "                        else self:AddLine(format(ITEM_SPELL_CHARGES or '%d Charges', n), 1, 1, 1) end\n"
+        "                    end\n"
         "                end\n"
         "            end\n"
         "        end\n"
@@ -11264,10 +11307,24 @@ void LuaEngine::registerCoreAPI() {
         "            local key = inst.written and 'ITEM_WRITTEN_BY' or 'ITEM_CREATED_BY'\n"
         "            self:AddLine(format(_G[key] or (inst.written and '<Written by %s>' or '<Made by %s>'), inst.creator), 1, 1, 1)\n"
         "        end\n"
+        // Then the one action line - open, read or socket it - in green, and
+        // while Disenchant waits for an item what disenchanting this takes.
+        "        if inst and inst.action and _G[inst.action] then self:AddLine(_G[inst.action], 0, 1, 0) end\n"
+        "        if data.disenchant then\n"
+        "            local d = data.disenchant\n"
+        "            if d.rank < 0 then self:AddLine(ITEM_DISENCHANT_NOT_DISENCHANTABLE or 'Cannot be disenchanted', 1, 0.125, 0.125)\n"
+        "            elseif d.rank == 0 then self:AddLine(ITEM_DISENCHANT_ANY_SKILL or 'Disenchantable', 0.533, 0.667, 1)\n"
+        "            else\n"
+        "                local t = format(ITEM_DISENCHANT_MIN_SKILL or 'Disenchanting requires %s (%d)', d.skill, d.rank)\n"
+        "                if d.met then self:AddLine(t, 0.533, 0.667, 1) else self:AddLine(t, 1, 0.125, 0.125) end\n"
+        "            end\n"
+        "        end\n"
         "        if data.startsQuest then self:AddLine(ITEM_STARTS_QUEST or 'This Item Begins a Quest', 1, 1, 1) end\n"
         "    end\n"
         "    if sellPrice and sellPrice > 0 then\n"
         "        self:AddLine(format('%s: ', SELL_PRICE or 'Sell Price')..GetCoinTextureString(sellPrice), 1, 1, 1)\n"
+        "    elseif inst and inst.unsellable then\n"
+        "        self:AddLine(ITEM_UNSELLABLE or 'No sell price', 1, 1, 1)\n"
         "    end\n"
         "    self.__itemId = itemId\n"
         "    return true\n"

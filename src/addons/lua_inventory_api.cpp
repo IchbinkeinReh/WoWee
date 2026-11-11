@@ -3609,6 +3609,14 @@ static int lua_GetItemTooltipData(lua_State* L) {
             lua_setfield(L, -2, "spellId");
             lua_pushnumber(L, info->spells[i].spellTrigger);
             lua_setfield(L, -2, "trigger");
+            // Its place among the five, and the template's charges: the line
+            // after it counts them unless they are 0 or -1 (0x006277f0).
+            lua_pushnumber(L, i);
+            lua_setfield(L, -2, "slot");
+            if (info->spells[i].charges != 0 && info->spells[i].charges != -1) {
+                lua_pushnumber(L, info->spells[i].charges);
+                lua_setfield(L, -2, "charges");
+            }
             // Get spell name for display
             const std::string& sName = gh->getSpellName(info->spells[i].spellId);
             if (!sName.empty()) { lua_pushstring(L, sName.c_str()); lua_setfield(L, -2, "name"); }
@@ -3626,6 +3634,33 @@ static int lua_GetItemTooltipData(lua_State* L) {
         else lua_pop(L, 1);
     }
     if (info->itemSetId != 0) pushItemSet(L, gh, info->itemSetId);
+    // While Disenchant waits on the cursor for an item (0x00d3f4e4, effect
+    // 99), what disenchanting this one takes: RequiredDisenchantSkill under
+    // zero cannot be disenchanted, zero takes any skill, otherwise that rank
+    // of Enchanting.
+    if (auto* inv = gh->getInventoryHandler()) {
+        if (const uint32_t pending = inv->getPendingItemTargetSpellId(); pending != 0) {
+            const auto& cache = gh->spellNameCacheRef();
+            const auto sp = cache.find(pending);
+            constexpr uint32_t kEffectDisenchant = 99;
+            constexpr uint32_t kSkillEnchanting = 333;
+            if (sp != cache.end() && std::find(std::begin(sp->second.effectIds), std::end(sp->second.effectIds),
+                                               kEffectDisenchant) != std::end(sp->second.effectIds)) {
+                lua_newtable(L);
+                lua_pushnumber(L, info->requiredDisenchantSkill);
+                lua_setfield(L, -2, "rank");
+                const std::string& skill = gh->getSkillLineName(kSkillEnchanting);
+                lua_pushstring(L, skill.empty() ? "UNKNOWN" : skill.c_str());
+                lua_setfield(L, -2, "skill");
+                const auto& skills = gh->getPlayerSkills();
+                const auto known = skills.find(kSkillEnchanting);
+                const int have = known != skills.end() ? known->second.effectiveValue() : -1;
+                lua_pushboolean(L, have >= info->requiredDisenchantSkill ? 1 : 0);
+                lua_setfield(L, -2, "met");
+                lua_setfield(L, -2, "disenchant");
+            }
+        }
+    }
     // Gem sockets (WotLK/TBC)
     int numSockets = 0;
     for (int i = 0; i < 3; ++i) {

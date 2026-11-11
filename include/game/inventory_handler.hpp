@@ -406,6 +406,8 @@ public:
     // ---- Item-targeted item use (sharpening stones, weightstones, weapon oils) ----
     /// True while a used item is waiting for the player to pick the item it applies to.
     bool isAwaitingItemTarget() const;
+    /// The spell waiting on the cursor for an item (0x00d3f4e4), 0 for none.
+    uint32_t getPendingItemTargetSpellId() const;
     /// Entry of the item awaiting a target (0 if none) - drives the targeting cursor.
     uint32_t getPendingItemTargetSourceItemId() const;
     void cancelItemTargeting();

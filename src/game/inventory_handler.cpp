@@ -2717,6 +2717,10 @@ void InventoryHandler::completeItemUseOnUnit(uint64_t targetUnitGuid) {
                 targetUnitGuid, 0);
 }
 
+uint32_t InventoryHandler::getPendingItemTargetSpellId() const {
+    return isAwaitingItemTarget() && pendingItemTarget_->fromSpell ? pendingItemTarget_->spellId : 0u;
+}
+
 bool InventoryHandler::isAwaitingItemTarget() const {
     if (!pendingItemTarget_) return false;
     // Leaving the world abandons the pending use - the slot and GUID would be
