@@ -57,6 +57,7 @@ bool AddonManager::initialize(game::GameHandler* gameHandler, const LuaServices&
         setAddonEnabled(name, enabled);
     };
     luaServices_.resetAddOnsEnabled = [this]() { resetAddonEnabledState(); };
+    luaServices_.isAddOnEnabled = [this](const std::string& name) { return isAddonEnabled(name); };
     if (!luaEngine_.initialize()) return false;
     luaEngine_.setGameHandler(gameHandler);
     luaEngine_.setLuaServices(luaServices_);

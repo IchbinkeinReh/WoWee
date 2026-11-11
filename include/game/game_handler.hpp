@@ -783,6 +783,9 @@ public:
     using InspectArenaTeam = game::InspectArenaTeam;
     using InspectResult = game::InspectResult;
     const InspectResult* getInspectResult() const;
+    /// SocialHandler::arenaTeamQuery: a team's name, size and banner, asked
+    /// for once when not known.
+    const ArenaTeamQueryData* arenaTeamQuery(uint32_t teamId);
     const std::array<uint32_t, 19>* getOtherPlayerVisibleEquipment(uint64_t guid) const {
         auto it = otherPlayerVisibleItemEntries_.find(guid);
         return (it != otherPlayerVisibleItemEntries_.end()) ? &it->second : nullptr;
@@ -4030,6 +4033,13 @@ public:
     void setAchievementTracked(uint32_t id, bool tracked) {
         if (tracked) trackedAchievements_.insert(id); else trackedAchievements_.erase(id);
     }
+    /// An achievement's reward line (Achievement.dbc Reward), or empty.
+    const std::string& getAchievementRewardText(uint32_t id) const {
+        auto it = achievementRewardCache_.find(id);
+        if (it != achievementRewardCache_.end()) return it->second;
+        static const std::string kEmpty;
+        return kEmpty;
+    }
     /// Returns the description of an achievement by ID, or empty string if unknown.
     const std::string& getAchievementDescription(uint32_t id) const {
         auto it = achievementDescCache_.find(id);
@@ -6786,6 +6796,7 @@ private:
     /// opinion about it, so it is saved with the rest of the character config.
     std::unordered_set<uint32_t> collapsedFactionIds_;
     std::unordered_map<uint32_t, std::string> achievementDescCache_;
+    std::unordered_map<uint32_t, std::string> achievementRewardCache_;
     std::unordered_map<uint32_t, uint32_t>    achievementPointsCache_;
     std::unordered_map<uint32_t, uint32_t>    achievementIconCache_;  // achievementId → SpellIcon.dbc ID
     std::unordered_map<uint32_t, uint32_t>    achievementFlagsCache_; // achievementId → Achievement.dbc Flags

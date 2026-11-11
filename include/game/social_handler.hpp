@@ -750,6 +750,11 @@ public:
 
     // Arena
     [[nodiscard]] const std::vector<ArenaTeamStats>& getArenaTeamStats() const { return arenaTeamStats_; }
+    /// A team's name, size and banner as the server answered a query for it
+    /// (0x00680170's cache); nullptr until then, the query sent once
+    /// (CMSG_ARENA_TEAM_QUERY) - the answer raises INSPECT_HONOR_UPDATE
+    /// (0x005e7640).
+    const ArenaTeamQueryData* arenaTeamQuery(uint32_t teamId);
     void requestArenaTeamRoster(uint32_t teamId);
     [[nodiscard]] const ArenaTeamRoster* getArenaTeamRoster(uint32_t teamId) const {
         for (const auto& r : arenaTeamRosters_)
@@ -1016,6 +1021,10 @@ private:
 
     // Arena
     std::vector<ArenaTeamStats>  arenaTeamStats_;
+    std::unordered_map<uint32_t, ArenaTeamQueryData> arenaTeamQueries_;
+    /// Teams asked about for somebody else's arena teams, which are not the
+    /// player's own and stay out of arenaTeamStats_.
+    std::unordered_set<uint32_t> arenaTeamQueriesAsked_;
     std::vector<ArenaTeamRoster> arenaTeamRosters_;
     /// The column the arena rosters are sorted by, so clicking it again knows
     /// to reverse rather than re-sort the same way.

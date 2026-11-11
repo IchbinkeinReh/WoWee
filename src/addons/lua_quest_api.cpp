@@ -7413,7 +7413,8 @@ void registerQuestLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"GetAchievementInfo", [](lua_State* L) -> int {
-            // GetAchievementInfo(id) → id, name, points, completed, month, day, year, description, flags, icon, rewardText, isGuildAch
+            // GetAchievementInfo(id) → id, name, points, completed, month, day,
+            //   year, description, flags, icon, rewardText (0x005b3fc0).
             auto* gh = getGameHandler(L);
             uint32_t id = static_cast<uint32_t>(luaL_checknumber(L, 1));
             if (!gh) { return luaReturnNil(L); }
@@ -7436,23 +7437,31 @@ void registerQuestLuaAPI(lua_State* L) {
             uint32_t points = gh->getAchievementPoints(id);
             const std::string& desc = gh->getAchievementDescription(id);
             const game::WowDate earned = game::unpackWowPackedTime(date);
-            int month = completed ? earned.month : 0;
-            int day   = completed ? earned.day : 0;
-            // Short form: SHORTDATE is "%2$d/%1$02d/%3$02d".
-            int year  = completed ? earned.yearSince2000 : 0;
+            // An achievement with flag 0x800 is nothing until it is earned.
+            constexpr uint32_t kHiddenUntilEarned = 0x800;
+            const uint32_t flags = gh->getAchievementFlags(id);
+            if ((flags & kHiddenUntilEarned) && !completed) return 0;
             lua_pushnumber(L, id);                 // 1: id
             lua_pushstring(L, name.c_str());       // 2: name
             lua_pushnumber(L, points);             // 3: points
-            lua_pushboolean(L, completed ? 1 : 0); // 4: completed
-            lua_pushnumber(L, month);              // 5: month
-            lua_pushnumber(L, day);                // 6: day
-            lua_pushnumber(L, year);               // 7: year
+            // 4: completed, a true boolean here - and 5-7 the date it was
+            // earned, nil, nil and nil when it was not.
+            lua_pushboolean(L, completed ? 1 : 0);
+            if (completed) {
+                lua_pushnumber(L, earned.month);
+                lua_pushnumber(L, earned.day);
+                // Short form: SHORTDATE is "%2$d/%1$02d/%3$02d".
+                lua_pushnumber(L, earned.yearSince2000);
+            } else {
+                lua_pushnil(L);
+                lua_pushnil(L);
+                lua_pushnil(L);
+            }
             lua_pushstring(L, desc.c_str());       // 8: description
-            lua_pushnumber(L, gh->getAchievementFlags(id)); // 9: flags
+            lua_pushnumber(L, flags);              // 9: flags
             lua_pushstring(L, achievementIconPath(gh, id).c_str()); // 10: icon
-            lua_pushstring(L, "");                 // 11: rewardText
-            lua_pushboolean(L, 0);                 // 12: isGuildAchievement
-            return 12;
+            lua_pushstring(L, gh->getAchievementRewardText(id).c_str()); // 11: rewardText
+            return 11;
         }},
     };
     for (const auto& [name, func] : api) {

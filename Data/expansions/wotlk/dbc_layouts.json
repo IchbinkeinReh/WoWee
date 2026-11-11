@@ -2,8 +2,10 @@
   "Achievement": {
     "Description": 21,
     "ID": 0,
+    "Flags": 41,
     "IconID": 42,
     "Points": 39,
+    "RewardText": 43,
     "Title": 4
   },
   "AchievementCriteria": {

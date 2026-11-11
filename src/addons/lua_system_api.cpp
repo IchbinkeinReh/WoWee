@@ -2704,18 +2704,16 @@ static int lua_GetAddOnInfo(lua_State* L) {
     lua_rawgeti(L, -1, idx);
     if (!lua_istable(L, -1)) { lua_pop(L, 2); lua_pushnil(L); return 1; }
 
-    // name, title, notes, url, loadable, reason, security, newVersion.
-    //
-    // Five were returned and the fourth was not url, so everything from there
-    // shifted: the loadable flag landed in url's place, the security string in
-    // loadable's - truthy, so addons read as loadable by accident - and the
-    // last three came back nil. addonlist.lua reads security seventh.
+    // name, title, notes, enabled, loadable, reason, security - seven, as
+    // 0x00511240 gives them. addonlist.lua reads them in that order, the
+    // fourth as the checkbox: a url there (a later client's) read every
+    // addon as switched off.
     lua_getfield(L, -1, "name");
     lua_getfield(L, -2, "title");
     lua_getfield(L, -3, "notes");
 
-    // The registry table and the entry are still underneath, and `return 8`
-    // takes the top eight of the stack whatever they are. Leaving them there
+    // The registry table and the entry are still underneath, and `return 7`
+    // takes the top seven of the stack whatever they are. Leaving them there
     // shifted the answer by one: the entry table arrived as the name, the name
     // as the title, and loadable came back nil - falsy - so every addon read
     // as unloadable while the security string landed in newVersion. The pop
@@ -2723,12 +2721,16 @@ static int lua_GetAddOnInfo(lua_State* L) {
     lua_remove(L, -4);              // the addon info entry
     lua_remove(L, -4);              // the registry table
 
-    lua_pushnil(L);                 // 4: url - not in a 3.3.5 manifest
+    // 4: enabled for this character, 1 or nil.
+    {
+        const char* name = lua_tostring(L, -3);
+        auto* svc = getLuaServices(L);
+        luaPushOneOrNil(L, !name || !svc || !svc->isAddOnEnabled || svc->isAddOnEnabled(name));
+    }
     luaPushOneOrNil(L, 1);          // 5: loadable
     lua_pushnil(L);                 // 6: reason it is not, and it is
     lua_pushstring(L, "INSECURE");  // 7: security
-    lua_pushnil(L);                 // 8: newVersion
-    return 8;
+    return 7;
 }
 
 /// The addon entry an IsAddOnLoadOnDemand or GetAddOnDependencies argument
@@ -10685,31 +10687,39 @@ void registerSystemLuaAPI(lua_State* L) {
             if (gh) gh->sendSetTitle(static_cast<int32_t>(luaL_optnumber(L, 1, -1)));
             return 0;
         }},
-                // GetInspectArenaTeamData(index) →
-                //   name, size, rating, weekPlayed, weekWins, seasonPlayed,
-                //   seasonWins, playerRating
-                //
-                // Real: the inspect reply carries these and this client already
-                // parses them into InspectResult.
+                // GetInspectArenaTeamData(index) → name, size, rating,
+                //   played, won, playerPlayed, playerRating, then the banner:
+                //   background r, g, b, emblem, its r, g, b, border, its r, g, b
+                //   (0x005e8030). The slot's figures came with the inspect; the
+                //   name, size and banner are the team's query answer, asked
+                //   for when not known - nothing until it arrives, and its
+                //   arrival raises INSPECT_HONOR_UPDATE to ask again.
                 {"GetInspectArenaTeamData", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const auto* ir = gh ? gh->getInspectResult() : nullptr;
-            const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
-            if (!ir || index < 1 ||
-                index > static_cast<int>(ir->arenaTeams.size())) {
-                return 0;   // nothing, which is how WoW says "no team here"
-            }
-            const auto& t = ir->arenaTeams[index - 1];
-            // The type is the team size: 2, 3 or 5.
-            lua_pushstring(L, t.name.c_str());
-            lua_pushnumber(L, t.type);
-            lua_pushnumber(L, t.personalRating);
-            lua_pushnumber(L, t.weekGames);
-            lua_pushnumber(L, t.weekWins);
+            const int index = static_cast<int>(luaL_checknumber(L, 1));
+            if (!ir || index < 1 || index > 3) return 0;
+            const auto& t = ir->arenaTeams[static_cast<size_t>(index - 1)];
+            const auto* team = t.teamId ? gh->arenaTeamQuery(t.teamId) : nullptr;
+            if (!team) return 0;
+            const auto colour = [L](uint32_t argb) {
+                lua_pushnumber(L, ((argb >> 16) & 0xFF) / 255.0);
+                lua_pushnumber(L, ((argb >> 8) & 0xFF) / 255.0);
+                lua_pushnumber(L, (argb & 0xFF) / 255.0);
+            };
+            lua_pushstring(L, team->name.c_str());
+            lua_pushnumber(L, team->size);
+            lua_pushnumber(L, t.rating);
             lua_pushnumber(L, t.seasonGames);
             lua_pushnumber(L, t.seasonWins);
+            lua_pushnumber(L, t.playerSeasonGames);
             lua_pushnumber(L, t.personalRating);
-            return 8;
+            colour(team->background);
+            lua_pushnumber(L, team->emblem);
+            colour(team->emblemColor);
+            lua_pushnumber(L, team->border);
+            colour(team->borderColor);
+            return 18;
         }},
                 // CanInspect(unit [, showError]) - 0x00522710. The answer is
                 // 0x00520410's: the unit has to be a player object, the player

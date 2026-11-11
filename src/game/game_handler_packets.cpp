@@ -2369,39 +2369,30 @@ void GameHandler::registerRemainingOpcodes() {
             combatLogFeed_->setReplayDelay(0);
         }
     };
-    // WotLK: uint64 playerGuid + uint8 teamCount + per-team fields
+    // One team a packet (0x005e7b00): the inspected guid, the slot, the
+    // team id, its rating, season games and wins, then the player's season
+    // games and personal rating - for the player being inspected only.
+    // Each one raises INSPECT_HONOR_UPDATE.
     dispatchTable_[Opcode::MSG_INSPECT_ARENA_TEAMS] = [this](network::Packet& packet) {
-        // WotLK: uint64 playerGuid + uint8 teamCount + per-team fields
-        if (!packet.hasRemaining(9)) {
+        if (!packet.hasRemaining(8 + 1 + 6 * 4) || !socialHandler_) {
             packet.skipAll();
             return;
         }
-        uint64_t inspGuid  = packet.readUInt64();
-        uint8_t  teamCount = packet.readUInt8();
-        if (teamCount > 3) teamCount = 3; // 2v2, 3v3, 5v5
-        if (socialHandler_) {
-            auto& ir = socialHandler_->mutableInspectResult();
-            if (inspGuid == ir.guid || ir.guid == 0) {
-                ir.guid = inspGuid;
-                ir.arenaTeams.clear();
-                for (uint8_t t = 0; t < teamCount; ++t) {
-                    if (!packet.hasRemaining(21)) break;
-                    SocialHandler::InspectArenaTeam team;
-                    team.teamId         = packet.readUInt32();
-                    team.type           = packet.readUInt8();
-                    team.weekGames      = packet.readUInt32();
-                    team.weekWins       = packet.readUInt32();
-                    team.seasonGames    = packet.readUInt32();
-                    team.seasonWins     = packet.readUInt32();
-                    team.name           = packet.readString();
-                    if (!packet.hasRemaining(4)) break;
-                    team.personalRating = packet.readUInt32();
-                    ir.arenaTeams.push_back(std::move(team));
-                }
-            }
+        const uint64_t inspGuid = packet.readUInt64();
+        const uint8_t slot = packet.readUInt8();
+        auto& ir = socialHandler_->mutableInspectResult();
+        if (inspGuid != ir.guid || slot >= ir.arenaTeams.size()) {
+            packet.skipAll();
+            return;
         }
-        LOG_DEBUG("MSG_INSPECT_ARENA_TEAMS: guid=0x", std::hex, inspGuid, std::dec,
-                  " teams=", static_cast<int>(teamCount));
+        auto& team = ir.arenaTeams[slot];
+        team.teamId            = packet.readUInt32();
+        team.rating            = packet.readUInt32();
+        team.seasonGames       = packet.readUInt32();
+        team.seasonWins        = packet.readUInt32();
+        team.playerSeasonGames = packet.readUInt32();
+        team.personalRating    = packet.readUInt32();
+        if (addonEventCallback_) addonEventCallback_("INSPECT_HONOR_UPDATE", {});
     };
     // auctionId(u32) + action(u32) + error(u32) + itemEntry(u32) + randomPropertyId(u32) + ...
     // action: 0=sold/won, 1=expired, 2=bid placed on your auction

@@ -6048,12 +6048,40 @@ void SocialHandler::handleArenaTeamCommandResult(network::Packet& packet) {
     }
 }
 
+const ArenaTeamQueryData* SocialHandler::arenaTeamQuery(uint32_t teamId) {
+    if (teamId == 0) return nullptr;
+    if (auto it = arenaTeamQueries_.find(teamId); it != arenaTeamQueries_.end()) return &it->second;
+    if (arenaTeamQueriesAsked_.insert(teamId).second && owner_.getSocket()) {
+        network::Packet pkt(wireOpcode(Opcode::CMSG_ARENA_TEAM_QUERY));
+        pkt.writeUInt32(teamId);
+        owner_.getSocket()->send(pkt);
+    }
+    return nullptr;
+}
+
 void SocialHandler::handleArenaTeamQueryResponse(network::Packet& packet) {
     if (!packet.hasRemaining(4)) return;
     uint32_t teamId = packet.readUInt32();
     std::string teamName = packet.readString();
     uint32_t teamType = 0;
     if (packet.hasRemaining(4)) teamType = packet.readUInt32();
+    // The banner: background, emblem and its colour, border and its colour.
+    ArenaTeamQueryData& cached = arenaTeamQueries_[teamId];
+    cached.name = teamName;
+    cached.size = teamType;
+    if (packet.hasRemaining(20)) {
+        cached.background  = packet.readUInt32();
+        cached.emblem      = packet.readUInt32();
+        cached.emblemColor = packet.readUInt32();
+        cached.border      = packet.readUInt32();
+        cached.borderColor = packet.readUInt32();
+    }
+    // A team asked about for an inspect is somebody else's: it answers the
+    // inspect window, not the player's own list.
+    if (arenaTeamQueriesAsked_.erase(teamId)) {
+        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("INSPECT_HONOR_UPDATE", {});
+        return;
+    }
     bool known = false;
     for (auto& s : arenaTeamStats_) { if (s.teamId == teamId) { s.teamName = teamName; s.teamType = teamType; known = true; break; } }
     if (!known) {

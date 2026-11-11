@@ -359,6 +359,9 @@ struct LuaServices {
     /// addon already loaded has its functions in the Lua state and its frames
     /// on screen, and neither can be taken back out.
     std::function<void(const std::string& name, bool enabled)> setAddOnEnabled;
+    /// Whether an addon is on for this character, as GetAddOnInfo's fourth
+    /// value reads it (0x005f7d70).
+    std::function<bool(const std::string& name)> isAddOnEnabled;
 
     /// Discard enable changes made since the state was last saved, as
     /// ResetDisabledAddOns does.

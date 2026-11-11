@@ -2004,6 +2004,10 @@ const GameHandler::InspectResult* GameHandler::getInspectResult() const {
     return socialHandler_ ? socialHandler_->getInspectResult() : nullptr;
 }
 
+const ArenaTeamQueryData* GameHandler::arenaTeamQuery(uint32_t teamId) {
+    return socialHandler_ ? socialHandler_->arenaTeamQuery(teamId) : nullptr;
+}
+
 void GameHandler::sendZoneUpdate(uint32_t zoneId) {
     if (zoneId == 0 || state != WorldState::IN_WORLD || !socket) return;
     if (wireOpcode(Opcode::CMSG_ZONEUPDATE) == 0xFFFF) return;
