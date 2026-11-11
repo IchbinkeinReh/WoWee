@@ -5736,7 +5736,10 @@ static int lua_GetLFGInfoServer(lua_State* L) {
     lua_pushboolean(L, 0);                 // 5: achievements
     lua_pushstring(L, "");                 // 6: lfgComment
     lua_pushnumber(L, queued ? 1 : 0);     // 7: slotCount
-    return 7;
+    // 8-10: three bytes the client keeps beside the flags (+6..+8 of its
+    // LFG state, 0x00552f30), which nothing here sets.
+    for (int i = 0; i < 3; ++i) lua_pushnumber(L, 0);
+    return 10;
 }
 
 // GetLFGRoleUpdate() → roleCheckInProgress, slots, members
@@ -6096,7 +6099,7 @@ static int lua_GetArenaTeamRosterInfo(lua_State* L) {
         lua_pushstring(L, localizedClassName(gh, m.classId, gh->lookupPlayerGender(m.guid) == 1 ? 1 : 0).c_str());
     else
         lua_pushnil(L);
-    lua_pushboolean(L, m.online ? 1 : 0);    // 5: online
+    luaPushOneOrNil(L, m.online ? 1 : 0);    // 5: online
     lua_pushnumber(L, m.weekGames);          // 6: played
     lua_pushnumber(L, m.weekWins);           // 7: win
     lua_pushnumber(L, m.seasonGames);        // 8: seasonPlayed
@@ -6509,12 +6512,18 @@ static int lua_HearthAndResurrectFromArea(lua_State* L) {
 // anything.
 //
 // There is no Wintergrasp queue in this client, so "none" is also the true
-// answer. mapName and queueID stay nil, which is what an empty slot answers.
+// answer.
+//
+// The client's shape (0x0054c8a0): index 1 alone answers - status, the
+// zone's name (nil for none), the queue id and the seconds left to accept,
+// both numbers, both 0 with nothing queued.
 static int lua_GetWorldPVPQueueStatus(lua_State* L) {
+    if (static_cast<int>(luaL_checknumber(L, 1)) != 1) return 0;
     lua_pushstring(L, "none");
     lua_pushnil(L);
-    lua_pushnil(L);
-    return 3;
+    lua_pushnumber(L, 0);
+    lua_pushnumber(L, 0);
+    return 4;
 }
 
 // LeaveBattlefield() - walk out of the battleground currently being played.
@@ -11282,9 +11291,9 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, ev.eventTime.minute);
             // CALENDAR_FLAG_INVITES_LOCKED is 0x10, the bit the calendar's
             // own handlers test (0x005c29c0, 0x005bf590); 0x1000 was read here.
-            lua_pushboolean(L, (ev.flags & wowee::game::calendar_flag::kInvitesLocked) ? 1 : 0);
-            lua_pushboolean(L, 0);              // autoApprove
-            lua_pushboolean(L, 0);              // pendingInvite
+            luaPushOneOrNil(L, (ev.flags & wowee::game::calendar_flag::kInvitesLocked) ? 1 : 0);
+            luaPushOneOrNil(L, 0);              // autoApprove
+            luaPushOneOrNil(L, 0);              // pendingInvite
             lua_pushnumber(L, calendarInviteStatusFor(gh->getCalendarData(),
                                                       ev.eventId) + 1);
             // CALENDAR_INVITETYPE_NORMAL, which is 1 - the interface's range
@@ -11311,8 +11320,9 @@ void registerSystemLuaAPI(lua_State* L) {
                 gh->getCalendarEventDetail().invitees.size()) : 0);
             return 1;
         }},
-                // name, level, className, classFilename, inviteStatus - the
-                // five the invite list reads.
+                // CalendarEventGetInvite(index) → name, level, className,
+                //   classFilename, inviteStatus, modStatus, inviteIsMine,
+                //   inviteType, note (0x005ba220).
                 {"CalendarEventGetInvite", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
@@ -11322,12 +11332,23 @@ void registerSystemLuaAPI(lua_State* L) {
             const auto& inv = list[static_cast<size_t>(index) - 1];
             lua_pushstring(L, gh->lookupName(inv.guid).c_str());
             lua_pushnumber(L, inv.level);
-            lua_pushstring(L, "");              // className
-            lua_pushstring(L, "");              // classFilename
+            // The class from the name cache, "" and "" while it is not known.
+            const uint8_t classId = gh->lookupPlayerClass(inv.guid);
+            if (const char* token = luaClassToken(classId)) {
+                lua_pushstring(L, localizedClassName(gh, classId, 2).c_str());
+                lua_pushstring(L, token);
+            } else {
+                lua_pushstring(L, "");
+                lua_pushstring(L, "");
+            }
             lua_pushnumber(L, inv.status + 1);   // wire counts from zero
-            lua_pushnumber(L, inv.rank);
-            lua_pushboolean(L, inv.isGuildMember ? 1 : 0);
-            return 7;
+            // The moderation rank as the list's word for it.
+            constexpr uint8_t kModerator = 1, kCreator = 2;
+            lua_pushstring(L, inv.rank == kModerator ? "MODERATOR" : inv.rank == kCreator ? "CREATOR" : "");
+            lua_pushboolean(L, inv.guid == gh->getPlayerGuid() ? 1 : 0);  // inviteIsMine
+            lua_pushnumber(L, inv.isGuildMember ? 2 : 1);                // inviteType
+            lua_pushstring(L, inv.note.c_str());
+            return 9;
         }},
                 // The open event's own questions (0x005b8a50, 0x005b8aa0):
                 // whether the player may edit it, and its calendarType - nil

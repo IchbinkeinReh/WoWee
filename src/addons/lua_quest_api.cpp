@@ -6999,7 +6999,7 @@ void registerQuestLuaAPI(lua_State* L) {
             return static_cast<int>(n);
         }},
                 // GetAchievementInfoFromCriteria(criteriaID) → the achievement
-                // that criterion belongs to, in GetAchievementInfo's shape.
+                // that criterion belongs to.
                 {"GetAchievementInfoFromCriteria", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const auto critId = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
@@ -7011,30 +7011,17 @@ void registerQuestLuaAPI(lua_State* L) {
             for (const auto& [achId, list] : gh->getAchievementCriteriaMap()) {
                 for (const auto& c : list) {
                     if (c.id != critId) continue;
-                    // Ten, the same shape as GetAchievementInfo: the panel
-                    // unpacks it into the same ten names and puts the last one
-                    // on a button as its texture.
-                    const bool done = gh->getEarnedAchievements().count(achId) > 0;
-                    const uint32_t date = gh->getAchievementDate(achId);
-                    lua_pushnumber(L, achId);                                    // 1: id
-                    lua_pushstring(L, gh->getAchievementName(achId).c_str());    // 2: name
-                    lua_pushnumber(L, gh->getAchievementPoints(achId));          // 3: points
-                    lua_pushboolean(L, done ? 1 : 0);                            // 4: completed
-                    const game::WowDate on = game::unpackWowPackedTime(date);
-                    lua_pushnumber(L, done ? on.month : 0);                      // 5: month
-                    lua_pushnumber(L, done ? on.day : 0);                        // 6: day
-                    // SHORTDATE formats the year "%02d", so it wants the short
-                    // form rather than a four-digit one.
-                    lua_pushnumber(L, done ? on.yearSince2000 : 0);              // 7: year
-                    lua_pushstring(L, gh->getAchievementDescription(achId).c_str()); // 8
-                    lua_pushnumber(L, gh->getAchievementFlags(achId));            // 9: flags
-                    // A path, not the id. The panel puts this straight on a
-                    // button as its texture, and a number is not a texture in
-                    // 3.3.5 - the icon id was already cached, and the resolver
-                    // that turns one into a path was already here for the
-                    // spellbook's tabs.
-                    lua_pushstring(L, achievementIconPath(gh, achId).c_str());   // 10: icon
-                    return 10;
+                    // Seven (0x005b1720): id, name, points, description,
+                    // flags, icon and reward text - not GetAchievementInfo's
+                    // shape, there is no earned state or date here.
+                    lua_pushnumber(L, achId);
+                    lua_pushstring(L, gh->getAchievementName(achId).c_str());
+                    lua_pushnumber(L, gh->getAchievementPoints(achId));
+                    lua_pushstring(L, gh->getAchievementDescription(achId).c_str());
+                    lua_pushnumber(L, gh->getAchievementFlags(achId));
+                    lua_pushstring(L, achievementIconPath(gh, achId).c_str());
+                    lua_pushstring(L, gh->getAchievementRewardText(achId).c_str());
+                    return 7;
                 }
             }
             return luaReturnNil(L);
@@ -7139,7 +7126,7 @@ void registerQuestLuaAPI(lua_State* L) {
             for (const uint32_t id : ids) lua_pushnumber(L, id);
             return static_cast<int>(ids.size());
         }},
-                // GetAchievementComparisonInfo(id) → completed, month, day, year.
+                // GetAchievementComparisonInfo(id) → completed, month, day, year, flags.
                 //
                 // Nil when nobody is being compared, which is what the tab reads
                 // as "no data yet" - distinct from a false that would claim the
@@ -7151,18 +7138,17 @@ void registerQuestLuaAPI(lua_State* L) {
             const auto* set = gh->getInspectedPlayerAchievements(
                 gh->getAchievementComparisonGuid());
             if (!set) return luaReturnNil(L);
+            // Earned: true, the date and the achievement's flags; not earned,
+            // nothing (0x005b4770).
             const auto it = set->find(id);
-            if (it == set->end()) {
-                lua_pushboolean(L, 0);
-                lua_pushnumber(L, 0); lua_pushnumber(L, 0); lua_pushnumber(L, 0);
-                return 4;
-            }
+            if (it == set->end()) return 0;
             const game::WowDate on = game::unpackWowPackedTime(it->second);
             lua_pushboolean(L, 1);
             lua_pushnumber(L, on.month);
             lua_pushnumber(L, on.day);
             lua_pushnumber(L, on.yearSince2000);
-            return 4;
+            lua_pushnumber(L, gh->getAchievementFlags(id));
+            return 5;
         }},
                 // GetComparisonStatistic(achievementID) → one string (0x005b5e70).
                 //

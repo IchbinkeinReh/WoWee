@@ -613,7 +613,7 @@ static int lua_GetMerchantItemInfo(lua_State* L) {
     // race, the armour or weapon type, skill, spell, reputation. The merchant
     // frame tints the icon red where it is false. Usable while the item is
     // not known yet, as the client answers for an entry it has no record of.
-    lua_pushboolean(L, !info || gh->judgeItemRequirements(*info).usable());
+    luaPushOneOrNil(L, !info || gh->judgeItemRequirements(*info).usable());
     // The extended cost - tokens, honour, arena points - which merchantframe
     // reads as `if ( extendedCost and (price <= 0) )` to decide whether to
     // show a token price instead of a coin one. It was not returned at all, so
@@ -3787,10 +3787,10 @@ static int lua_GetContainerItemInfo(lua_State* L) {
     // greys the slot from this, which is what shows the item has been picked up
     // out of it rather than still sitting there.
     const auto& held = cursorItemSlot();
-    lua_pushboolean(L, (!held.equipped && held.bag == container && held.slot == slot) ? 1 : 0);
+    luaPushOneOrNil(L, (!held.equipped && held.bag == container && held.slot == slot) ? 1 : 0);
     lua_pushnumber(L, info ? info->quality : 0);  // quality
-    lua_pushboolean(L, 0);  // readable
-    lua_pushboolean(L, 0);  // lootable
+    luaPushOneOrNil(L, 0);  // readable
+    luaPushOneOrNil(L, 0);  // lootable
     // Build item link with quality color
     std::string name = info ? info->name : ("Item #" + std::to_string(itemSlot->item.itemId));
     uint32_t q = info ? info->quality : 0;
@@ -7036,16 +7036,16 @@ void registerInventoryLuaAPI(lua_State* L) {
             // caller here tests it for truth.
             if (mail.attachments.empty()) lua_pushnil(L);
             else lua_pushnumber(L, static_cast<lua_Number>(mail.attachments.size()));
-            lua_pushboolean(L, mail.read ? 1 : 0);               // wasRead
+            luaPushOneOrNil(L, mail.read ? 1 : 0);               // wasRead
             // Returned (mail flag 0x2) or sent back unopened (0x200).
-            lua_pushboolean(L, (mail.flags & 0x202u) != 0 ? 1 : 0); // wasReturned
-            lua_pushboolean(L, !mail.body.empty() ? 1 : 0);      // textCreated
+            luaPushOneOrNil(L, (mail.flags & 0x202u) != 0 ? 1 : 0); // wasReturned
+            luaPushOneOrNil(L, !mail.body.empty() ? 1 : 0);      // textCreated
             // A player's letter, unless on the GM's stationery (61), which is
             // a GM's and says so instead (0x0056e520).
             constexpr uint32_t kGmStationery = 0x3d;
             const bool fromGm = mail.stationeryId == kGmStationery;
-            lua_pushboolean(L, mail.messageType == 0 && !fromGm ? 1 : 0); // canReply
-            lua_pushboolean(L, fromGm ? 1 : 0);                   // isGM
+            luaPushOneOrNil(L, mail.messageType == 0 && !fromGm ? 1 : 0); // canReply
+            luaPushOneOrNil(L, fromGm ? 1 : 0);                   // isGM
             // How many of the first attachment there are, which is what the
             // inbox button prints in its corner.
             lua_pushnumber(L, mail.attachments.empty()

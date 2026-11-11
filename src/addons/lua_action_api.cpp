@@ -4414,12 +4414,12 @@ void registerActionLuaAPI(lua_State* L) {
                 lua_pushstring(L, tokenName);       // 1: name - a global's name
                 lua_pushstring(L, "");              // 2: subtext
                 lua_pushstring(L, tokenTexture);    // 3: texture - likewise
-                lua_pushboolean(L, 1);              // 4: isToken
-                lua_pushboolean(L, active ? 1 : 0); // 5: isActive
+                luaPushOneOrNil(L, 1);              // 4: isToken
+                luaPushOneOrNil(L, active ? 1 : 0); // 5: isActive
                 // A command or a stance has nothing to cast automatically, and
                 // saying otherwise puts the autocast ring on all six of them.
-                lua_pushboolean(L, 0);              // 6: autoCastAllowed
-                lua_pushboolean(L, 0);              // 7: autoCastEnabled
+                luaPushOneOrNil(L, 0);              // 6: autoCastAllowed
+                luaPushOneOrNil(L, 0);              // 7: autoCastEnabled
                 return 7;
             }
 
@@ -4431,13 +4431,13 @@ void registerActionLuaAPI(lua_State* L) {
             lua_pushstring(L, "");
             lua_pushstring(L, iconPath.empty() ? "Interface\\Icons\\INV_Misc_QuestionMark"
                                                : iconPath.c_str());
-            lua_pushboolean(L, 0);                                      // isToken
+            luaPushOneOrNil(L, 0);                                      // isToken
             // A pet spell is never "active" - that is the checked ring, which
             // belongs to the stance. Reading the autocast bits as active put
             // it on every spell the pet knows.
-            lua_pushboolean(L, 0);                                      // isActive
-            lua_pushboolean(L, 1);                                      // autoCastAllowed
-            lua_pushboolean(L, gh->isPetSpellAutocast(spellId) ? 1 : 0);
+            luaPushOneOrNil(L, 0);                                      // isActive
+            luaPushOneOrNil(L, 1);                                      // autoCastAllowed
+            luaPushOneOrNil(L, gh->isPetSpellAutocast(spellId) ? 1 : 0);
             return 7;
         }},
                 // IsPetAttackAction(index) - which slot is the attack command,

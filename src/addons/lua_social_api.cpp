@@ -1592,7 +1592,7 @@ static int lua_GetPetitionInfo(lua_State* L) {
     lua_pushstring(L, "");                                   // body text: not sent
     lua_pushnumber(L, info->signaturesRequired);
     lua_pushstring(L, owner.empty() ? "Unknown" : owner.c_str());
-    lua_pushboolean(L, isOwner ? 1 : 0);
+    luaPushOneOrNil(L, isOwner ? 1 : 0);
     lua_pushnumber(L, info->signaturesRequired);
     return 7;
 }
