@@ -823,8 +823,9 @@ static int lua_CanMerchantRepair(lua_State* L) {
 
 // UnitStat(unit, statIndex) → base, effective, posBuff, negBuff
 
-/// An item id from either an id or a link, which is what every one of these
-/// functions is documented to accept.
+/// An item id from an id, an "item:" link or the name of a cached item,
+/// compared without case (0x00709de0) - what every one of these functions
+/// is documented to accept.
 static uint32_t itemIdFromArg(lua_State* L, int index) {
     if (lua_isnumber(L, index)) {
         return static_cast<uint32_t>(lua_tonumber(L, index));
@@ -834,7 +835,15 @@ static uint32_t itemIdFromArg(lua_State* L, int index) {
         std::string str(s ? s : "");
         const auto pos = str.find("item:");
         if (pos != std::string::npos) {
-            try { return static_cast<uint32_t>(std::stoul(str.substr(pos + 5))); } catch (...) {}
+            return static_cast<uint32_t>(std::strtoul(str.c_str() + pos + 5, nullptr, 10));
+        }
+        auto* gh = getGameHandler(L);
+        if (!gh) return 0;
+        toLowerInPlace(str);
+        for (const auto& [id, info] : gh->getItemInfoCache()) {
+            std::string name = info.name;
+            toLowerInPlace(name);
+            if (name == str) return id;
         }
     }
     return 0;
@@ -847,22 +856,7 @@ static uint32_t itemIdFromArg(lua_State* L, int index) {
 // none (0x0070a910). Nothing at all, not even nil, for an id Item.dbc lacks.
 static int lua_GetItemIcon(lua_State* L) {
     auto* gh = getGameHandler(L);
-    int32_t itemId = 0;
-    if (lua_isnumber(L, 1)) {
-        itemId = static_cast<int32_t>(lua_tointeger(L, 1));
-    } else if (lua_isstring(L, 1) && gh) {
-        const std::string str = lua_tostring(L, 1);
-        const auto pos = str.find("item:");
-        if (pos != std::string::npos) {
-            itemId = static_cast<int32_t>(std::strtol(str.c_str() + pos + 5, nullptr, 10));
-        } else {
-            const auto lower = [](std::string t) { toLowerInPlace(t); return t; };
-            const std::string want = lower(str);
-            for (const auto& [id, info] : gh->getItemInfoCache()) {
-                if (lower(info.name) == want) { itemId = static_cast<int32_t>(id); break; }
-            }
-        }
-    }
+    const int32_t itemId = static_cast<int32_t>(itemIdFromArg(L, 1));
     auto* am = gh ? gh->services().assetManager : nullptr;
     if (itemId <= 0 || !am || !am->isInitialized()) return 0;
     auto items = am->loadDBCOptional("Item.dbc");
@@ -1745,11 +1739,26 @@ uint32_t backpackCurrencyItemId(lua_State* L, int index) {
     return 0;
 }
 
+// GetItemCount(item[, includeBank[, includeCharges]]) (0x0051c2e0): the item
+// by id, link or name, counted where the client's searches look - worn,
+// carried, the worn bags and the keyring - and the bank when asked, a broken
+// item left out unless the charges are asked for too (0x00754d00).
 static int lua_GetItemCount(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnZero(L); }
-    const uint32_t itemId = static_cast<uint32_t>(luaL_checknumber(L, 1));
-    lua_pushnumber(L, gh->getInventory().countItem(itemId));
+    const uint32_t itemId = itemIdFromArg(L, 1);
+    const bool bank = lua_toboolean(L, 2) != 0;
+    const bool withBroken = lua_toboolean(L, 3) != 0;
+    uint32_t count = 0;
+    const auto add = [&](const game::ItemDef& d) {
+        if (d.itemId != itemId) return;
+        if (!withBroken && d.maxDurability != 0 && d.curDurability == 0) return;
+        count += d.stackCount > 0 ? d.stackCount : 1;
+    };
+    const auto& inv = gh->getInventory();
+    inv.forEachCarried(add);
+    if (bank) inv.forEachBanked(add);
+    lua_pushnumber(L, count);
     return 1;
 }
 
