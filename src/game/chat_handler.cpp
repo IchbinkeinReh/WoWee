@@ -1499,40 +1499,50 @@ void ChatHandler::handleTextEmote(network::Packet& packet) {
         }
     }
 
+    // The narration, once there is a name to put in it.
+    const auto narrate = [this, data](const std::string& senderName) {
+        const std::string* targetPtr = data.targetName.empty() ? nullptr : &data.targetName;
+        std::string emoteText = rendering::AnimationController::getEmoteTextByDbcId(data.textEmoteId, senderName, targetPtr);
+        if (emoteText.empty()) {
+            emoteText = data.targetName.empty()
+                ? senderName + " performs an emote."
+                : senderName + " performs an emote at " + data.targetName + ".";
+        }
+
+        MessageChatData chatMsg;
+        chatMsg.type = ChatType::TEXT_EMOTE;
+        // Universal: an emote is seen, not spoken, and anything else is printed
+        // as a language header in front of it.
+        chatMsg.language = ChatLanguage::UNIVERSAL;
+        chatMsg.senderGuid = data.senderGuid;
+        chatMsg.senderName = senderName;
+        chatMsg.message = emoteText;
+
+        addLocalChatMessage(chatMsg);
+
+        // And the emote's own voice line, which the client asks of the sender at
+        // the same moment it narrates it: EmotesTextSound picks the clip by the
+        // emote text and the sender's race and sex, and the sender's own sound
+        // path plays it - gates for emote and pet sounds included.
+        if (owner_.emoteSoundCallbackRef()) owner_.emoteSoundCallbackRef()(data.senderGuid, data.textEmoteId);
+
+        LOG_INFO("TEXT_EMOTE from ", senderName, " (emoteId=", data.textEmoteId, ")");
+    };
+
+    // A player not yet named is asked for and the line waits for the answer:
+    // the client keeps it on its pending text emote list until the name cache
+    // calls back (0x00503fb0), and drops it only when no name comes. This
+    // dropped it at once, so an emote from anyone not yet met never showed.
     if (senderName.empty()) {
-        if (isPlayerGuid(data.senderGuid)) owner_.queryPlayerName(data.senderGuid);
-        LOG_DEBUG("Deferred chat text for unresolved SMSG_TEXT_EMOTE sender=0x",
-                  std::hex, data.senderGuid, std::dec,
-                  " emoteId=", data.textEmoteId);
+        if (!isPlayerGuid(data.senderGuid)) return;
+        static uint32_t emoteWaits = 0;
+        owner_.askNameThen(data.senderGuid, "text emote " + std::to_string(++emoteWaits),
+                           [narrate](bool found, const std::string& name) {
+                               if (found && !name.empty()) narrate(name);
+                           });
         return;
     }
-
-    const std::string* targetPtr = data.targetName.empty() ? nullptr : &data.targetName;
-    std::string emoteText = rendering::AnimationController::getEmoteTextByDbcId(data.textEmoteId, senderName, targetPtr);
-    if (emoteText.empty()) {
-        emoteText = data.targetName.empty()
-            ? senderName + " performs an emote."
-            : senderName + " performs an emote at " + data.targetName + ".";
-    }
-
-    MessageChatData chatMsg;
-    chatMsg.type = ChatType::TEXT_EMOTE;
-    // Universal: an emote is seen, not spoken, and anything else is printed
-    // as a language header in front of it.
-    chatMsg.language = ChatLanguage::UNIVERSAL;
-    chatMsg.senderGuid = data.senderGuid;
-    chatMsg.senderName = senderName;
-    chatMsg.message = emoteText;
-
-    addLocalChatMessage(chatMsg);
-
-    // And the emote's own voice line, which the client asks of the sender at
-    // the same moment it narrates it: EmotesTextSound picks the clip by the
-    // emote text and the sender's race and sex, and the sender's own sound
-    // path plays it - gates for emote and pet sounds included.
-    if (owner_.emoteSoundCallbackRef()) owner_.emoteSoundCallbackRef()(data.senderGuid, data.textEmoteId);
-
-    LOG_INFO("TEXT_EMOTE from ", senderName, " (emoteId=", data.textEmoteId, ")");
+    narrate(senderName);
 }
 
 const std::vector<chat_channels::Row>& ChatHandler::channelRows() const {
