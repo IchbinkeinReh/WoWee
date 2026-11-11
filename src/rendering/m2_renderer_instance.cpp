@@ -119,6 +119,9 @@ void M2Renderer::setInstancePosition(uint32_t instanceId, const glm::vec3& posit
     refileBounds(spatialGrid, oldBoundsMin, oldBoundsMax,
                  inst.worldBoundsMin, inst.worldBoundsMax, instanceId);
     refreshShadowCullEntry(idxIt->second);
+    // Moved, it no longer sits in its chunk's box: the chunk is drawn an
+    // instance at a time again.
+    if (inst.clutterChunk != 0) releaseDetailChunk(inst.clutterChunk);
 }
 
 void M2Renderer::setInstanceFade(uint32_t instanceId, float alpha) {
@@ -136,6 +139,7 @@ void M2Renderer::setInstanceDetailShade(uint32_t instanceId, const glm::vec4& co
     inst.detailDoodad = true;
     inst.detailColor = color;
     inst.detailNormal = normal;
+    if (inst.clutterChunk != 0) writeClutterEntry(inst);
 }
 
 void M2Renderer::setInstanceInteriorLight(uint32_t instanceId, const glm::vec3& ambient,
@@ -174,7 +178,10 @@ void M2Renderer::refreshGameObjectLights(const FloorQuery& floorAt, const Interi
             auto& inst = instances[i];
             if (inst.isGameObject || inst.interiorPassGeneration == passGeneration) continue;
             inst.interiorPassGeneration = passGeneration;
+            const bool was = inst.interiorPass;
             inst.interiorPass = inInteriorPass && inInteriorPass(inst.position);
+            // Chunked ground cover carries the flag in its static entry.
+            if (inst.clutterChunk != 0 && inst.interiorPass != was) writeClutterEntry(inst);
         }
         lightsCursor_ = end;
     }
@@ -248,6 +255,7 @@ void M2Renderer::setInstanceHighlight(uint32_t instanceId, float amount) {
     auto idxIt = instanceIndexById.find(instanceId);
     if (idxIt == instanceIndexById.end()) return;
     instances[idxIt->second].highlight = amount;
+    if (instances[idxIt->second].clutterChunk != 0) writeClutterEntry(instances[idxIt->second]);
 }
 
 void M2Renderer::clearInstanceHighlights() {
@@ -688,6 +696,7 @@ void M2Renderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& tran
     refileBounds(spatialGrid, oldBoundsMin, oldBoundsMax,
                  inst.worldBoundsMin, inst.worldBoundsMax, instanceId);
     // No spatialIndexDirty_ = true - handled incrementally
+    if (inst.clutterChunk != 0) releaseDetailChunk(inst.clutterChunk);
 }
 
 void M2Renderer::removeInstance(uint32_t instanceId) {
@@ -696,6 +705,8 @@ void M2Renderer::removeInstance(uint32_t instanceId) {
     size_t idx = idxIt->second;
     if (idx >= instances.size()) return;
 
+    // Its chunk goes back to being drawn an instance at a time.
+    if (instances[idx].clutterChunk != 0) releaseDetailChunk(instances[idx].clutterChunk);
     auto& inst = instances[idx];
 
     // Remove from spatial grid incrementally (same pattern as the move-update path)
@@ -781,6 +792,7 @@ void M2Renderer::removeInstances(const std::vector<uint32_t>& instanceIds) {
         if (!toRemove.insert(id).second) continue;
         const size_t idx = idxIt->second;
         removedIndices.push_back(idx);
+        if (instances[idx].clutterChunk != 0) releaseDetailChunk(instances[idx].clutterChunk);
         auto& inst = instances[idx];
         const GridCell minCell = toSpatialCell(inst.worldBoundsMin);
         const GridCell maxCell = toSpatialCell(inst.worldBoundsMax);
@@ -917,6 +929,7 @@ void M2Renderer::clear() {
     rtUnsettledIds_.clear();
     rtLitInstances_.clear();
     instances.clear();
+    resetClutterChunks();
     shadowCullDirty_ = true;
     spatialGrid.clear();
     instanceIndexById.clear();
@@ -950,6 +963,7 @@ void M2Renderer::clearInstances() {
     rtUnsettledIds_.clear();
     rtLitInstances_.clear();
     instances.clear();
+    resetClutterChunks();
     shadowCullDirty_ = true;
     spatialGrid.clear();
     instanceIndexById.clear();

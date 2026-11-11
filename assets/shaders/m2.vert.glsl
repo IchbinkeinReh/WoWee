@@ -20,9 +20,22 @@ layout(push_constant) uniform Push {
     int texCoordSet;         // per stage: 0 UV0, 1 UV1, 2 env map; stage 0 in bits 0-1, stage 1 in 2-3
     int isFoliage;           // -1 sky, 0 everything else
     int instanceDataOffset;  // Base index into InstanceSSBO for this draw group
-    float swayRefHeight;     // Unused; kept so the push layout does not move
-    float swayAmp;           // Unused; kept so the push layout does not move
-    float plantHeight;       // Unused; kept so the layout holds
+    // Ground cover by chunk: where this draw's entries start in ClutterList,
+    // or -1 for an ordinary draw from InstanceSSBO.
+    int clutterList;
+    // The view distance squared, and the model's box centre in its own space:
+    // a chunk's tuft whose centre is past it is not drawn, as the cull did
+    // for one instance at a time.
+    float clutterDistSq;
+    float centerX;
+    float centerY;
+    float centerZ;
+    // The batch's texture matrices for a chunk's draw - the same for every
+    // tuft, as only a model whose texture tracks hold still is drawn this way:
+    // the two stages' linear rows, then their translations (xy, zw).
+    vec4 clutterUvLinear;
+    vec4 clutterUvLinear2;
+    vec4 clutterUvOffsets;
 } push;
 
 layout(set = 2, binding = 0) readonly buffer BoneSSBO {
@@ -61,6 +74,15 @@ struct InstanceData {
 layout(set = 3, binding = 0) readonly buffer InstanceSSBO {
     InstanceData instanceData[];
 };
+// This frame's chunked ground cover: x the entry in ClutterStatic, y the
+// base of its bones this frame.
+layout(set = 3, binding = 1) readonly buffer ClutterListSSBO {
+    ivec2 clutterList[];
+};
+// Every placed tuft's entry, written once when its chunk is placed.
+layout(set = 3, binding = 2) readonly buffer ClutterStaticSSBO {
+    InstanceData clutterData[];
+};
 
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;
@@ -84,12 +106,32 @@ layout(location = 12) flat out float vDetailLit;  // ground cover's baked shadow
 
 void main() {
     // Fetch per-instance data from SSBO
-    int instIdx = push.instanceDataOffset + gl_InstanceIndex;
-    mat4 model = instanceData[instIdx].model;
-    vec2 uvOff = instanceData[instIdx].uvOffset;
-    float fade = instanceData[instIdx].fadeAlpha;
-    int uBones = instanceData[instIdx].useBones;
-    int bBase  = instanceData[instIdx].boneBase;
+    InstanceData inst;
+    int bBase;
+    if (push.clutterList >= 0) {
+        ivec2 entry = clutterList[push.clutterList + gl_InstanceIndex];
+        inst = clutterData[entry.x];
+        bBase = entry.y;
+        inst.uvLinear = push.clutterUvLinear;
+        inst.uvOffset = push.clutterUvOffsets.xy;
+        inst.uvLinear2 = push.clutterUvLinear2;
+        inst.uvOffset2 = vec4(push.clutterUvOffsets.zw, 0.0, 0.0);
+        vec3 centre = (inst.model * vec4(push.centerX, push.centerY, push.centerZ, 1.0)).xyz;
+        vec3 toCam = centre - viewPos.xyz;
+        if (dot(toCam, toCam) > push.clutterDistSq) {
+            // Every vertex of the instance at one point outside the clip
+            // volume: nothing of it is drawn.
+            gl_Position = vec4(0.0, 0.0, -2.0, 1.0);
+            return;
+        }
+    } else {
+        inst = instanceData[push.instanceDataOffset + gl_InstanceIndex];
+        bBase = inst.boneBase;
+    }
+    mat4 model = inst.model;
+    vec2 uvOff = inst.uvOffset;
+    float fade = inst.fadeAlpha;
+    int uBones = inst.useBones;
 
     vec4 pos = vec4(aPos, 1.0);
     vec4 norm = vec4(aNormal, 0.0);
@@ -98,7 +140,7 @@ void main() {
         // Clamp to the range this instance actually owns. A model whose bone
         // count exceeds the ceiling would otherwise index into the next
         // instance's matrices and fling its vertices across the world.
-        int bCount = max(instanceData[instIdx].boneCount, 1);
+        int bCount = max(inst.boneCount, 1);
         ivec4 bi = clamp(ivec4(aBoneIndicesF), ivec4(0), ivec4(bCount - 1));
         mat4 skinMat = bones[bBase + bi.x] * aBoneWeights.x
                      + bones[bBase + bi.y] * aBoneWeights.y
@@ -131,23 +173,23 @@ void main() {
     int src1 = (push.texCoordSet >> 2) & 3;
     vec2 uv0 = src0 == 1 ? aTexCoord2 : aTexCoord;
     vec2 uv1 = src1 == 1 ? aTexCoord2 : aTexCoord;
-    vec4 uvLin = instanceData[instIdx].uvLinear;
+    vec4 uvLin = inst.uvLinear;
     TexCoord = src0 == 2 ? envUV : vec2(dot(uvLin.xy, uv0), dot(uvLin.zw, uv0)) + uvOff;
-    vec4 uvLin2 = instanceData[instIdx].uvLinear2;
+    vec4 uvLin2 = inst.uvLinear2;
     // 3: Diffuse_Env_T2's second stage, the first UV set through the identity
     // the env stage left in its matrix slot (0x0081f450, 0x00873550).
     TexCoord2 = src1 == 2 ? envUV
               : src1 == 3 ? aTexCoord
-              : vec2(dot(uvLin2.xy, uv1), dot(uvLin2.zw, uv1)) + instanceData[instIdx].uvOffset2.xy;
+              : vec2(dot(uvLin2.xy, uv1), dot(uvLin2.zw, uv1)) + inst.uvOffset2.xy;
 
     vFadeAlpha = fade;
-    vColorMul = instanceData[instIdx].colorMul;
+    vColorMul = inst.colorMul;
     vSkyMode = push.isFoliage < 0 ? 1 : 0;
-    vHighlight = instanceData[instIdx].highlight;
-    vInteriorLit = instanceData[instIdx].flags;
-    vInteriorAmbient = instanceData[instIdx].interiorAmbient.rgb;
-    vInteriorDirect = instanceData[instIdx].interiorDirect;
-    vDetailLit = instanceData[instIdx].interiorAmbient.a;
+    vHighlight = inst.highlight;
+    vInteriorLit = inst.flags;
+    vInteriorAmbient = inst.interiorAmbient.rgb;
+    vInteriorDirect = inst.interiorDirect;
+    vDetailLit = inst.interiorAmbient.a;
 
     gl_Position = projection * view * worldPos;
     // A sky model sits on the far plane whatever its radius, so the depth

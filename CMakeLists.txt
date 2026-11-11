@@ -1034,6 +1034,7 @@ set(WOWEE_SOURCES
     src/rendering/m2_renderer_render.cpp
     src/rendering/m2_renderer_particles.cpp
     src/rendering/m2_renderer_ribbons.cpp
+    src/rendering/m2_renderer_clutter.cpp
     src/rendering/m2_renderer_instance.cpp
     src/rendering/m2_event_sounds.cpp
     src/rendering/m2_model_classifier.cpp
@@ -2800,6 +2801,7 @@ add_executable(wowee_editor
     src/rendering/animation/animation_data.cpp
     src/rendering/m2_renderer_particles.cpp
     src/rendering/m2_renderer_ribbons.cpp
+    src/rendering/m2_renderer_clutter.cpp
     src/rendering/m2_renderer_render.cpp
     src/rendering/m2_model_classifier.cpp
     src/rendering/wmo_renderer.cpp

@@ -22,6 +22,7 @@
 #include <atomic>
 #include <memory>
 #include <array>
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -43,6 +44,7 @@ namespace pipeline {
 namespace rendering {
 
 class Camera;
+class Frustum;
 class VkContext;
 class VkTexture;
 class RtScene;
@@ -468,6 +470,12 @@ struct M2Instance {
     // Mega bone SSBO offset - base bone index for this instance (set per-frame in prepareRender)
     uint32_t megaBoneOffset = 0;
 
+    /// Ground cover drawn from its chunk's static store (registerDetailChunk):
+    /// the chunk's handle, 0 while it is drawn one instance at a time, and
+    /// the slot of its entry in that store.
+    uint32_t clutterChunk = 0;
+    uint32_t clutterSlot = 0;
+
     void updateModelMatrix();
 };
 
@@ -814,6 +822,13 @@ public:
     /// M2Instance::particleColors.
     void setInstanceParticleColors(uint32_t instanceId, const std::array<glm::vec3, 9>& colors);
     void removeInstances(const std::vector<uint32_t>& instanceIds);
+    /// One terrain chunk's ground cover, just placed: its instances' static
+    /// data (model matrix, colour, normal, flags) goes once into a persistent
+    /// buffer, and each frame the chunk is tested as a whole and drawn from
+    /// there. Whatever animates its texture or colour, or has blended
+    /// layers, stays drawn an instance at a time. Removing any of its
+    /// instances takes the chunk back to that.
+    void registerDetailChunk(const std::vector<uint32_t>& instanceIds);
     /// Mark an instance as a server game object, which the doodad size-class
     /// distances do not hold.
     void setInstanceIsGameObject(uint32_t instanceId, bool isGameObject);
@@ -1255,6 +1270,73 @@ private:
     // verge looked down a road, which reached 65536 with clutter alone; so
     // twice that, and the clutter is what gives way should even that fill.
     static constexpr uint32_t MAX_INSTANCE_DATA = 131072;
+
+    // Ground cover by chunk (registerDetailChunk).
+    //
+    // Per frame it was a few tens of thousands of tufts each classified,
+    // sorted and written out at 192 bytes - most of the doodad worker's time
+    // in a forest at 300 yards. What a tuft draws with never changes once it
+    // is placed, so it is written once into clutterStatic, and a frame
+    // writes only which entries it draws and their bones' base (8 bytes) into
+    // its clutterList. The vertex shader drops an entry past the view
+    // distance, as the cull did one instance at a time.
+    struct ClutterGroup {
+        const M2ModelGPU* model = nullptr;
+        uint32_t modelId = 0;
+        uint32_t first = 0;   // slot of its first entry in clutterStatic
+        uint32_t count = 0;
+        bool animated = false;
+        std::vector<uint32_t> ids;  // the instances, by slot (animated only)
+    };
+    struct ClutterChunk {
+        glm::vec3 boxMin{0.0f}, boxMax{0.0f};
+        uint32_t first = 0, count = 0;  // its range in clutterStatic
+        std::vector<ClutterGroup> groups;
+        std::vector<uint32_t> ids;  // every instance it holds
+    };
+    std::unordered_map<uint32_t, ClutterChunk> clutterChunks_;
+    uint32_t nextClutterChunk_ = 1;
+    uint32_t clutterLive_ = 0;  // entries held by live chunks
+    std::vector<M2InstanceGPU> clutterStaticCpu_;  // what the buffer holds, for growing it
+    ::VkBuffer clutterStaticBuffer_ = VK_NULL_HANDLE;
+    VmaAllocation clutterStaticAlloc_ = VK_NULL_HANDLE;
+    void* clutterStaticMapped_ = nullptr;
+    uint32_t clutterStaticCapacity_ = 0;
+    uint32_t clutterStaticEnd_ = 0;  // past the last slot ever handed out
+    uint32_t clutterStaticGen_ = 0;  // bumped when the buffer is replaced
+    std::map<uint32_t, uint32_t> clutterFree_;  // free ranges, first -> count
+    struct ClutterPendingFree { uint64_t frame; uint32_t first, count; };
+    std::vector<ClutterPendingFree> clutterPendingFree_;
+    uint64_t clutterFrame_ = 0;
+    ::VkBuffer clutterListBuffer_[2] = {};
+    VmaAllocation clutterListAlloc_[2] = {};
+    void* clutterListMapped_[2] = {};
+    uint32_t clutterListCapacity_[2] = {};
+    uint32_t clutterListGen_[2] = {};
+    uint32_t instanceSetStaticGen_[2] = {UINT32_MAX, UINT32_MAX};
+    uint32_t instanceSetListGen_[2] = {UINT32_MAX, UINT32_MAX};
+    float clutterWrittenDistance_ = -1.0f;
+    struct ClutterDraw { uint32_t modelId; const ClutterGroup* group; };
+    std::vector<ClutterDraw> clutterDraws_;
+    uint32_t clutterVisible_ = 0;  // entries drawn last frame, for the diag
+    bool initClutterBuffers();
+    /// Why a ground cover model cannot be drawn from the chunk store, or null.
+    const char* clutterUnchunkable(const M2ModelGPU& model) const;
+    void destroyClutterBuffers();
+    bool growClutterStatic(uint32_t needed);
+    bool ensureClutterList(uint32_t frameIndex, uint32_t needed);
+    void bindClutterBuffers(uint32_t frameIndex);
+    uint32_t allocClutterRange(uint32_t count);
+    void freeClutterRange(uint32_t first, uint32_t count);
+    void reclaimClutterRanges();
+    void writeClutterEntry(const M2Instance& inst);
+    void releaseDetailChunk(uint32_t handle);
+    void resetClutterChunks();
+    /// Draws the chunked ground cover into the opaque pass; returns the
+    /// entries drawn.
+    uint32_t renderClutterChunks(VkCommandBuffer cmd, const Frustum& frustum,
+                                 const glm::vec3& camPos, bool gbuffer, VkPipeline& currentPipeline,
+                                 VkDescriptorSet& currentMaterialSet, uint32_t frameIndex);
     VkDescriptorSetLayout instanceSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool instanceDescPool_ = VK_NULL_HANDLE;
     ::VkBuffer instanceBuffer_[2] = {};

@@ -2232,6 +2232,8 @@ void TerrainManager::updateDetailDoodads(const glm::vec3& camPos, const glm::vec
                     m2Renderer->setInstanceDetailShade(id, doodad.color, doodad.normal);
                     dc.instanceIds.push_back(id);
                 }
+                // Drawn by the chunk from here on (M2Renderer::registerDetailChunk).
+                m2Renderer->registerDetailChunk(dc.instanceIds);
                 dc.instanced = true;
                 outOfTime = std::chrono::duration<float, std::milli>(
                     std::chrono::steady_clock::now() - start).count() >= kBudgetMs;

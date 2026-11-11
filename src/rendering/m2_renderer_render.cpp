@@ -83,10 +83,50 @@ struct M2PushConstants {
     int32_t texCoordSet;        // each stage's coordinate source (m2PackCoordSources)
     int32_t isFoliage;          // -1 = sky, 0 = everything else
     int32_t instanceDataOffset; // Base index into instance SSBO for this draw group
-    float swayRefHeight;        // Unused, zero; kept so the shader's layout holds
-    float swayAmp;              // Unused, zero; kept so the shader's layout holds
-    float plantHeight;          // Unused, zero; kept so the shader's layout holds
+    int32_t clutterList;        // chunked ground cover: first list entry; -1 otherwise
+    float clutterDistSq;        // its view distance squared
+    float centerX, centerY, centerZ;  // the model's box centre, in its own space
+    // A chunk draw's texture matrices (both stages), the batch's for every tuft.
+    glm::vec4 uvLinear;
+    glm::vec4 uvLinear2;
+    glm::vec4 uvOffsets;  // xy stage 0, zw stage 1
 };
+static_assert(sizeof(M2PushConstants) == 80, "matches m2.vert's push block");
+
+// Whether a texture track gives one value whatever the sequence and time:
+// every key of every timeline the same, and no timeline without keys beside
+// ones with (that one would read the default).
+bool vec3TrackConstant(const pipeline::M2AnimationTrack& track) {
+    bool any = false, anyEmpty = false;
+    glm::vec3 value(0.0f);
+    for (size_t i = 0; i < track.sequences.size(); ++i) {
+        const auto& keys = track.sequences[i];
+        const size_t n = std::min(keys.timestamps.size(), keys.vec3Values.size());
+        if (n == 0) { anyEmpty = true; continue; }
+        for (size_t k = 0; k < n; ++k) {
+            if (!any) { value = keys.vec3Values[k]; any = true; }
+            else if (keys.vec3Values[k] != value) return false;
+        }
+    }
+    return !(any && anyEmpty);
+}
+bool quatTrackConstant(const pipeline::M2AnimationTrack& track) {
+    bool any = false, anyEmpty = false;
+    pipeline::PackedQuat value;
+    for (size_t i = 0; i < track.sequences.size(); ++i) {
+        const auto& keys = track.sequences[i];
+        const size_t n = std::min(keys.timestamps.size(), keys.quatValues.size());
+        if (n == 0) { anyEmpty = true; continue; }
+        for (size_t k = 0; k < n; ++k) {
+            if (!any) { value = keys.quatValues[k]; any = true; }
+            else if (std::memcmp(&keys.quatValues[k], &value, sizeof(value)) != 0) return false;
+        }
+    }
+    return !(any && anyEmpty);
+}
+bool textureTransformConstant(const pipeline::M2TextureTransform& tt) {
+    return vec3TrackConstant(tt.translation) && quatTrackConstant(tt.rotation) && vec3TrackConstant(tt.scale);
+}
 
 // Fill the model half of the push constants.
 //
@@ -104,9 +144,11 @@ int afterOneShot(M2Instance& instance, const M2ModelGPU& model) {
 
 void fillModelPush(M2PushConstants& pc, bool sky) {
     pc.isFoliage = sky ? -1 : 0;
-    pc.swayRefHeight = 0.0f;
-    pc.swayAmp = 0.0f;
-    pc.plantHeight = 0.0f;
+    pc.clutterList = -1;
+    pc.clutterDistSq = 0.0f;
+    pc.centerX = pc.centerY = pc.centerZ = 0.0f;
+    pc.uvLinear = pc.uvLinear2 = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+    pc.uvOffsets = glm::vec4(0.0f);
 }
 
 } // namespace
@@ -803,7 +845,27 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
 static const bool kM2NoSkinning = envFlagEnabled("WOWEE_M2_NO_SKINNING");
 
 void M2Renderer::prepareRender(uint32_t frameIndex) {
-    if (!initialized_ || instances.empty()) return;
+    if (!initialized_) return;
+    // The chunked ground cover's store and this frame's list (main thread,
+    // with this slot's last frame fenced): ranges freed long enough ago go
+    // back to the store, a changed clutter distance into every entry, and
+    // the list has room for every entry there is.
+    reclaimClutterRanges();
+    if (groundDetailMaxDistance_ != clutterWrittenDistance_) {
+        clutterWrittenDistance_ = groundDetailMaxDistance_;
+        for (const auto& [handle, chunk] : clutterChunks_) {
+            for (uint32_t s = chunk.first; s < chunk.first + chunk.count; ++s) {
+                clutterStaticCpu_[s].interiorDirect.w = groundDetailMaxDistance_;
+                if (clutterStaticMapped_) {
+                    std::memcpy(static_cast<M2InstanceGPU*>(clutterStaticMapped_) + s, &clutterStaticCpu_[s],
+                                sizeof(M2InstanceGPU));
+                }
+            }
+        }
+    }
+    ensureClutterList(frameIndex, clutterLive_);
+    bindClutterBuffers(frameIndex);
+    if (instances.empty()) return;
     WOWEE_PROFILE_SCOPE("prepare: m2 bones", Cpu);
 
     // --- Mega bone SSBO: assign ranges and upload all animated instance bones ---
@@ -957,7 +1019,10 @@ void M2Renderer::renderOpaque(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, 
                  " bonesReady=", totalBonesReady,
                  " megaBoneOk=", totalMegaBoneOk,
                  " visible=", sortedVisible_.size(),
-                 " draws=", lastDrawCallCount);
+                 " draws=", lastDrawCallCount,
+                 " clutterChunks=", clutterChunks_.size(),
+                 " clutterEntries=", clutterLive_,
+                 " clutterDrawn=", clutterVisible_);
     }
 
     lastDrawCallCount = 0;
@@ -1022,6 +1087,8 @@ void M2Renderer::renderOpaque(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, 
         out.transparent.reserve((end - begin) / 12);
         for (uint32_t i = begin; i < end; ++i) {
             const auto& instance = instances[i];
+            // Ground cover drawn by its chunk (renderClutterChunks).
+            if (instance.clutterChunk != 0) continue;
             float distSq;
             float effectiveMaxDistSq;
 
@@ -1543,6 +1610,30 @@ void M2Renderer::renderOpaque(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, 
         }
     }
 
+    // Ground cover by chunk, last as the instance-at-a-time clutter was.
+    {
+        phaseScope.reset();
+        phaseScope.emplace("m2: ground cover chunks",
+                           core::FrameProfiler::isMainThread() ? core::ProfileKind::Cpu : core::ProfileKind::Worker);
+        clutterVisible_ = renderClutterChunks(cmd, frustum, camPos, gbuffer, currentPipeline,
+                                              currentMaterialSet, frameIndex);
+        // Whether the one buffer every instance shared, as it was, would have
+        // run out with these: the clutter it could not hold was dropped,
+        // farthest first. Drawn from its chunks, none is.
+        const size_t sharedNeed = instanceDataCount_ + transparentVisible_.size() + clutterVisible_;
+        if (sharedNeed > MAX_INSTANCE_DATA) {
+            static auto lastSaid = std::chrono::steady_clock::time_point{};
+            const auto now = std::chrono::steady_clock::now();
+            if (now - lastSaid > std::chrono::seconds(10)) {
+                lastSaid = now;
+                LOG_WARNING("Ground cover: ", clutterVisible_, " tufts drawn from their chunks; the shared "
+                            "instance buffer (", MAX_INSTANCE_DATA, ") would have dropped ",
+                            sharedNeed - MAX_INSTANCE_DATA, " of them, the farthest");
+            }
+        }
+    }
+    phaseScope.reset();
+
     // The opaque half ends here, for the frame profiler. Taken and cleared so
     // the sky's model renderers, which share this code, never write it.
     if (gpuOpaqueMark_ != UINT32_MAX) {
@@ -1561,6 +1652,153 @@ void M2Renderer::renderOpaque(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, 
                    .visible = sortedVisible_.size(),
                    .instances = instances.size()});
     }
+}
+
+// Whether a ground cover model can be drawn from the chunk store: nothing of
+// what it draws with may change per frame but its bones. A batch whose colour
+// or texture animates, or a blended layer drawn back to front with the rest,
+// keeps the model on the instance-at-a-time path. Every detail model of
+// Mulgore carries a texture transform, but one whose tracks hold still.
+const char* M2Renderer::clutterUnchunkable(const M2ModelGPU& model) const {
+    if (model.hasTransparentBatches) return "blended layers";
+    if (model.isSpellEffect) return "spell effect";
+    if (!model.vertexBuffer || !model.indexBuffer) return "no buffers";
+    for (const auto& batch : model.batches) {
+        if (batch.blendMode >= 2) continue;
+        if (batch.colorAnimated) return "animated colour";
+        for (uint32_t stage = 0; stage < 2; ++stage) {
+            const auto* tt = batchStageTransform(model, batch, stage);
+            if (tt && !textureTransformConstant(*tt)) return "texture animation";
+        }
+    }
+    return nullptr;
+}
+
+uint32_t M2Renderer::renderClutterChunks(VkCommandBuffer cmd, const Frustum& frustum, const glm::vec3& camPos,
+                                         bool gbuffer, VkPipeline& currentPipeline,
+                                         VkDescriptorSet& currentMaterialSet, uint32_t frameIndex) {
+    clutterDraws_.clear();
+    if (clutterChunks_.empty() || frameIndex >= 2 || !clutterListMapped_[frameIndex]) return 0;
+
+    // A chunk whose box is in the frustum and comes within the view distance;
+    // within it, the shader drops each tuft whose centre is past that
+    // distance, which is the test the instance-at-a-time cull made.
+    const float viewDist = cappedViewDistance();
+    const float distSq = viewDist * viewDist;
+    for (const auto& [handle, chunk] : clutterChunks_) {
+        const glm::vec3 nearest = glm::clamp(camPos, chunk.boxMin, chunk.boxMax);
+        const glm::vec3 d = nearest - camPos;
+        if (!forceNoCull_) {
+            if (glm::dot(d, d) > distSq) continue;
+            if (!frustum.intersectsAABB(chunk.boxMin, chunk.boxMax)) continue;
+        }
+        for (const auto& group : chunk.groups) clutterDraws_.push_back({group.modelId, &group});
+    }
+    if (clutterDraws_.empty()) return 0;
+    std::sort(clutterDraws_.begin(), clutterDraws_.end(), [](const ClutterDraw& a, const ClutterDraw& b) {
+        if (a.modelId != b.modelId) return a.modelId < b.modelId;
+        return a.group->first < b.group->first;
+    });
+
+    auto* list = static_cast<glm::ivec2*>(clutterListMapped_[frameIndex]);
+    const uint32_t capacity = clutterListCapacity_[frameIndex];
+    uint32_t written = 0;
+    for (size_t run = 0; run < clutterDraws_.size();) {
+        const uint32_t modelId = clutterDraws_[run].modelId;
+        size_t runEnd = run;
+        while (runEnd < clutterDraws_.size() && clutterDraws_[runEnd].modelId == modelId) ++runEnd;
+        const M2ModelGPU& model = *clutterDraws_[run].group->model;
+        if (skipGroundDetail_ && model.isGroundDetail) { run = runEnd; continue; }
+
+        // This model's entries, chunk after chunk; an animated tuft with its
+        // bones' base this frame, or left out while it has none, as the
+        // instance-at-a-time pass leaves it.
+        const uint32_t listStart = written;
+        for (size_t g = run; g < runEnd; ++g) {
+            const ClutterGroup& group = *clutterDraws_[g].group;
+            if (written + group.count > capacity) break;
+            if (!group.animated) {
+                for (uint32_t k = 0; k < group.count; ++k) list[written++] = glm::ivec2(group.first + k, 0);
+                continue;
+            }
+            for (uint32_t k = 0; k < group.count; ++k) {
+                auto idxIt = instanceIndexById.find(group.ids[k]);
+                if (idxIt == instanceIndexById.end() || idxIt->second >= instances.size()) continue;
+                const M2Instance& inst = instances[idxIt->second];
+                if (inst.boneMatrices.empty() || inst.megaBoneOffset == 0) continue;
+                list[written++] = glm::ivec2(group.first + k, static_cast<int32_t>(inst.megaBoneOffset));
+            }
+        }
+        const uint32_t count = written - listStart;
+        run = runEnd;
+        if (count == 0) continue;
+
+        VkDeviceSize vbOffset = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &model.vertexBuffer, &vbOffset);
+        vkCmdBindIndexBuffer(cmd, model.indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+        const glm::vec3 centre = (model.boundMin + model.boundMax) * 0.5f;
+        for (const auto& batch : model.batches) {
+            if (batch.indexCount == 0 || batch.batchOpacity < 0.01f) continue;
+            if (suppressBakedStars_ && batch.starLayer) continue;
+            if (batch.blendMode >= 2) continue;
+            // DetailDoodad's own state (0x007b2d30), as for the instance-at-
+            // a-time clutter: alpha-tested, depth written, nothing culled.
+            VkPipeline desiredPipeline = gbuffer ? gbufferVariant(alphaTestPipeline_, 0x04)
+                                                 : pipelineVariant(alphaTestPipeline_, 0x04, false);
+            if (!desiredPipeline) continue;
+            if (desiredPipeline != currentPipeline) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, desiredPipeline);
+                currentPipeline = desiredPipeline;
+            }
+            if (batch.materialUBOMapped) {
+                auto* mat = static_cast<M2MaterialUBO*>(batch.materialUBOMapped);
+                mat->alphaTest = 0;
+                mat->blendMode = batch.blendMode;
+            }
+            if (!batch.materialSet) continue;
+            if (batch.materialSet != currentMaterialSet) {
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 1, 1,
+                                        &batch.materialSet, 0, nullptr);
+                currentMaterialSet = batch.materialSet;
+            }
+            M2PushConstants pc;
+            pc.texCoordSet = batch.coordSources;
+            fillModelPush(pc, skyMode_);
+            pc.instanceDataOffset = 0;
+            pc.clutterList = static_cast<int32_t>(listStart);
+            pc.clutterDistSq = forceNoCull_ ? std::numeric_limits<float>::max() : distSq;
+            pc.centerX = centre.x;
+            pc.centerY = centre.y;
+            pc.centerZ = centre.z;
+            // A texture track that holds still (clutterUnchunkable): its one
+            // matrix, which the instance-at-a-time pass wrote for every tuft.
+            if (const auto* tt = batchStageTransform(model, batch, 0)) {
+                glm::vec2 off(0.0f);
+                setUvTransform(pc.uvLinear, off,
+                               m2_track::textureTransformMatrix(*tt, 0, 0.0f, 0.0f, model.globalSequenceDurations));
+                pc.uvOffsets.x = off.x;
+                pc.uvOffsets.y = off.y;
+            }
+            if (const auto* tt = batchStageTransform(model, batch, 1)) {
+                glm::vec2 off(0.0f);
+                setUvTransform(pc.uvLinear2, off,
+                               m2_track::textureTransformMatrix(*tt, 0, 0.0f, 0.0f, model.globalSequenceDurations));
+                pc.uvOffsets.z = off.x;
+                pc.uvOffsets.w = off.y;
+            }
+            vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
+            vkCmdDrawIndexed(cmd, batch.indexCount, count, batch.indexStart, 0, 0);
+            lastDrawCallCount++;
+        }
+    }
+    if (written >= capacity) {
+        static bool said = false;
+        if (!said) {
+            said = true;
+            LOG_WARNING("Ground cover: the frame's chunk list is full at ", capacity, " entries");
+        }
+    }
+    return written;
 }
 
 void M2Renderer::renderBlended(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
@@ -1952,7 +2190,9 @@ bool M2Renderer::initializeInstancedShadow(
     };
 
     const VkDeviceSize bufSize = kMaxShadowInstances * sizeof(glm::mat4);
-    VkDescriptorPoolSize poolSize{.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 2};
+    // Three buffers a set: the layout is the main pass's set 3, whose ground
+    // cover bindings this shader does not read.
+    VkDescriptorPoolSize poolSize{.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 6};
     VkDescriptorPoolCreateInfo poolCi{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     poolCi.maxSets = 2;
     poolCi.poolSizeCount = 1;
