@@ -1767,31 +1767,41 @@ void VkContext::readGpuTimings(uint32_t slot) {
         sizeof(uint64_t) * 2, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
     if (r != VK_SUCCESS && r != VK_NOT_READY) return;
 
-    gpuTimings_.clear();
-    bool havePrev = false;
-    uint64_t prev = 0;
-    uint64_t first = 0;
+    // Marks are reserved in recording order, which is not the order they run:
+    // the scene pass's marks are reserved as one block, but with the traced
+    // lighting its opaque half runs before the trace and its blended half
+    // after it, and the trace's own marks are reserved after the block. Read
+    // in index order, the first mark after the trace took everything before
+    // it - the G-buffer, the trace, the apply pass - and the marks that ran
+    // earlier but sit later in the pool were dropped as "out of order". So
+    // each pass is measured from the mark that ran just before it, by time.
+    // A stable sort keeps marks with equal stamps (all of one render pass, on
+    // a driver that resolves them at the pass's end) in recording order.
+    struct Stamp { uint64_t value; const char* label; };
+    Stamp ordered[kMaxGpuMarks];
+    uint32_t count = 0;
     for (uint32_t i = 0; i < n; ++i) {
-        const uint64_t value = stamps[i * 2];
         const bool available = stamps[i * 2 + 1] != 0;
         if (!available || gpuMarkLabels_[slot][i] == nullptr) continue;
-        if (!havePrev) {
-            havePrev = true;
-            prev = first = value;
-            continue;
-        }
-        // Unsigned subtraction, so a wrapped or out-of-order pair reads as an
-        // enormous positive number rather than a negative one. Drop those
-        // rather than reporting a pass that took four seconds.
-        if (value < prev) continue;
-        const double ms = static_cast<double>(value - prev) *
-                          static_cast<double>(timestampPeriodNs_) / 1.0e6;
-        prev = value;
-        if (ms > 1000.0) continue;
-        gpuTimings_.emplace_back(gpuMarkLabels_[slot][i], ms);
+        ordered[count++] = {stamps[i * 2], gpuMarkLabels_[slot][i]};
     }
-    if (havePrev && prev > first) {
-        const double frameMs = static_cast<double>(prev - first) *
+    std::stable_sort(ordered, ordered + count,
+                     [](const Stamp& a, const Stamp& b) { return a.value < b.value; });
+
+    gpuTimings_.clear();
+    if (count < 2) return;
+    const uint64_t first = ordered[0].value;
+    for (uint32_t i = 1; i < count; ++i) {
+        const double ms = static_cast<double>(ordered[i].value - ordered[i - 1].value) *
+                          static_cast<double>(timestampPeriodNs_) / 1.0e6;
+        // A stamp from a wrapped counter or another frame: drop the whole
+        // frame's reading rather than report a pass that took four seconds.
+        if (ms > 1000.0) { gpuTimings_.clear(); return; }
+        gpuTimings_.emplace_back(ordered[i].label, ms);
+    }
+    const uint64_t last = ordered[count - 1].value;
+    if (last > first) {
+        const double frameMs = static_cast<double>(last - first) *
                                static_cast<double>(timestampPeriodNs_) / 1.0e6;
         if (frameMs < 1000.0) core::FrameProfiler::get().addGpuFrame(gpuTimings_, frameMs);
     }
