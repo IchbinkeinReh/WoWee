@@ -2786,7 +2786,7 @@ static int lua_CanAlterSkin(lua_State* L) {
 // come from WindowManager through LuaServices now, from a version that runs
 // whether or not this client is drawing the chair.
 
-/// GetBarberShopStyleInfo(selector) → name, category, cost, isCurrent
+/// GetBarberShopStyleInfo(selector) → name, description, cost, isCurrent
 ///
 /// blizzard_barbershopui.lua reads the first and the fourth, and reads the
 /// fourth through select(4, ...) - so all four have to be there for the index
@@ -2794,16 +2794,24 @@ static int lua_CanAlterSkin(lua_State* L) {
 static int lua_GetBarberShopStyleInfo(lua_State* L) {
     const int selector = static_cast<int>(luaL_optinteger(L, 1, 0));
     auto* svc = getLuaServices(L);
-    std::string name;
+    std::string name, description;
+    uint32_t cost = 0;
     bool isCurrent = false;
     if (!svc || !svc->getBarberStyleInfo ||
-        !svc->getBarberStyleInfo(selector, name, isCurrent)) {
+        !svc->getBarberStyleInfo(selector, name, description, cost, isCurrent)) {
         return 0;
     }
-    lua_pushstring(L, name.c_str());
-    lua_pushstring(L, "");     // category, which this client does not name
-    lua_pushinteger(L, 0);     // per-selector cost; the total is the one asked for
-    luaPushOneOrNil(L, isCurrent ? 1 : 0);
+    // name and description, nil and nil for a hair colour (0x0052e850); the
+    // style's price; whether it is the one the player came in with.
+    if (selector == 2) {
+        lua_pushnil(L);
+        lua_pushnil(L);
+    } else {
+        lua_pushstring(L, name.c_str());
+        lua_pushstring(L, description.c_str());
+    }
+    lua_pushinteger(L, static_cast<lua_Integer>(cost));
+    luaPushOneOrNil(L, isCurrent);
     return 4;
 }
 

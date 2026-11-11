@@ -310,7 +310,10 @@ struct LuaServices {
     /// to be built inside this client's own barber window, so with the panel
     /// handed over nothing had built it - these reach a version that does not
     /// depend on who is drawing.
-    std::function<bool(int selector, std::string& name, bool& isCurrent)> getBarberStyleInfo;
+    /// A barber selector's name, description (both empty for none), price
+    /// and whether it is what the player came in with.
+    std::function<bool(int selector, std::string& name, std::string& description, uint32_t& cost,
+                       bool& isCurrent)> getBarberStyleInfo;
     std::function<void(int selector, int direction)> setNextBarberStyle;
     std::function<uint32_t()> getBarberTotalCost;
     std::function<void()> barberReset;

@@ -1367,10 +1367,16 @@ bool Application::initialize() {
             else cc->setBindingTurnRight(held);
         };
         luaSvc.getBarberStyleInfo = [uim = uiManager.get(), gh = gameHandler.get()](
-                int selector, std::string& name, bool& isCurrent) -> bool {
+                int selector, std::string& name, std::string& description, uint32_t& cost,
+                bool& isCurrent) -> bool {
             if (!uim || !gh) return false;
-            return uim->getGameScreen().windowManager()
-                      .barberStyleInfo(*gh, selector, name, isCurrent);
+            ui::WindowManager::BarberStyleInfo info;
+            if (!uim->getGameScreen().windowManager().barberStyleInfo(*gh, selector, info)) return false;
+            name = std::move(info.name);
+            description = std::move(info.description);
+            cost = info.cost;
+            isCurrent = info.isCurrent;
+            return true;
         };
         luaSvc.setNextBarberStyle = [uim = uiManager.get(), gh = gameHandler.get()](
                 int selector, int direction) {
