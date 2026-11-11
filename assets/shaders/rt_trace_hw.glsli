@@ -39,7 +39,6 @@ bool rtAcceptCandidate(uint inst, uint prim, vec2 bary, vec3 origin, float t, in
     uint group = rtInstances[inst].group;
     if (rtInGroup(group, origin)) return false;
     if (group != 0u && t > rtUnitReach) return false;  // a unit, past its reach
-    if (t < rtGroupNear(group, origin)) return false;   // its own body, at the ray's start
     return rtSolidAt(rtTris[rtTriIndex(inst, prim)], bary, rng);
 }
 
@@ -78,6 +77,16 @@ bool rtFacesAlongRay(uint inst, uint prim, vec3 dir) {
 
 bool rtOccludedBy(vec3 origin, vec3 dir, float tMax, inout uint rng, out bool unit) {
     unit = false;
+    if (rtOwnGroupOnly) {
+        // The character the ray starts on, in the per-frame level only, every
+        // candidate to the loop so that none but its own is taken.
+        rayQueryEXT o;
+        rayQueryInitializeEXT(o, rtDynamicTlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsNoOpaqueEXT,
+                              0xFFu, origin, 0.0, dir, tMax);
+        RT_RESOLVE_CANDIDATES(o, rng);
+        unit = rayQueryGetIntersectionTypeEXT(o, true) != gl_RayQueryCommittedIntersectionNoneEXT;
+        return unit;
+    }
     uint mask = rtSkipFixtures ? RT_RAY_NO_FIXTURES : 0xFFu;
     rayQueryEXT q;
     rayQueryInitializeEXT(q, rtTlas, gl_RayFlagsTerminateOnFirstHitEXT, mask,
