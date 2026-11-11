@@ -2956,6 +2956,34 @@ uint32_t EntitySpawner::spawnParticleTwin(uint32_t displayId, uint32_t charModel
 }
 
 void EntitySpawner::syncCreatureParticleTwins() {
+    poseCreatureParticleTwins();
+}
+
+void EntitySpawner::poseParticleTwins() {
+    // After the units are posed for this frame (Renderer::update, past the
+    // character animation): the twins' emitters stand where the bodies and
+    // the hands are drawn this frame, not where they were the frame before -
+    // a running bearer's torch flame trailed behind the hand.
+    poseCreatureParticleTwins();
+    poseAttachmentParticleTwins();
+}
+
+void EntitySpawner::poseAttachmentParticleTwins() {
+    auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    auto* m2 = renderer_ ? renderer_->getM2Renderer() : nullptr;
+    if (!charRenderer || !m2) return;
+    for (const auto& [attached, twin] : attachmentParticleTwins_) {
+        glm::mat4 model(1.0f);
+        const std::vector<glm::mat4>* bones = nullptr;
+        int seq = 0;
+        float t = 0.0f, gt = 0.0f;
+        if (charRenderer->getInstancePose(attached, model, bones, seq, t, gt) && bones) {
+            m2->setInstanceExternalPose(twin, model, *bones, seq, t, gt);
+        }
+    }
+}
+
+void EntitySpawner::poseCreatureParticleTwins() {
     if (creatureParticleTwins_.empty() && mountParticleTwins_.empty()) return;
     auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
     auto* m2 = renderer_ ? renderer_->getM2Renderer() : nullptr;
@@ -2970,7 +2998,8 @@ void EntitySpawner::syncCreatureParticleTwins() {
         if (charRenderer->getInstancePose(it->second, model, bones, seq, t, gt) && bones) {
             m2->setInstanceExternalPose(twin, model, *bones, seq, t, gt);
         }
-    }    for (const auto& [mountInstance, twin] : mountParticleTwins_) {
+    }
+    for (const auto& [mountInstance, twin] : mountParticleTwins_) {
         glm::mat4 model(1.0f);
         const std::vector<glm::mat4>* bones = nullptr;
         int seq = 0;

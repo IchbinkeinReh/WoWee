@@ -316,6 +316,9 @@ struct M2Instance {
     // on rtLitInstances_ (its model carries a light).
     bool rtUnsettled = false;
     bool rtLit = false;
+    // Posed from a unit or a worn model (setInstanceExternalPose): its
+    // particles step after the units are animated (stepPosedParticles).
+    bool externallyPosed = false;
     glm::vec3 worldBoundsMin;
     glm::vec3 worldBoundsMax;
 
@@ -819,6 +822,11 @@ public:
     void setModelParticlesOnly(uint32_t modelId);
     /// Pose an instance of a particles-only model from outside: its world
     /// matrix, its bones, and the sequence and times its tracks sample at.
+    /// The particles of the instances posed from units (particle twins),
+    /// stepped once their poses are this frame's: Renderer::update calls it
+    /// after the units are animated and the twins posed, so an emitter on a
+    /// running unit's hand emits from the hand as it is drawn this frame.
+    void stepPosedParticles(float deltaTime);
     void setInstanceExternalPose(uint32_t instanceId, const glm::mat4& model,
                                  const std::vector<glm::mat4>& bones, int sequenceIndex,
                                  float animTimeMs, float globalTimeMs);

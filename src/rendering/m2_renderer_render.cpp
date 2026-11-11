@@ -830,6 +830,8 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
         float distSq = glm::dot(toCam, toCam);
         if (distSq > instanceMaxDistSq(instance)) continue;
         if (!instance.cachedModel) continue;
+        // A unit's twin steps once the unit is posed (stepPosedParticles).
+        if (instance.externallyPosed) continue;
         emitParticles(instance, *instance.cachedModel, deltaTime);
         updateParticles(instance, deltaTime);
         if (!instance.cachedModel->ribbonEmitters.empty()) {
@@ -837,6 +839,21 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
         }
     }
 
+}
+
+void M2Renderer::stepPosedParticles(float deltaTime) {
+    for (size_t idx : particleInstanceIndices_) {
+        if (idx >= instances.size()) continue;
+        auto& instance = instances[idx];
+        if (!instance.externallyPosed || !instance.cachedModel) continue;
+        const glm::vec3 toCam = instance.cachedCullCenter - cachedCamPos_;
+        if (glm::dot(toCam, toCam) > instanceMaxDistSq(instance)) continue;
+        emitParticles(instance, *instance.cachedModel, deltaTime);
+        updateParticles(instance, deltaTime);
+        if (!instance.cachedModel->ribbonEmitters.empty()) {
+            updateClientRibbons(instance, *instance.cachedModel, deltaTime);
+        }
+    }
 }
 
 // Diagnostic: WOWEE_M2_NO_SKINNING=1 renders every M2 in its bind pose by

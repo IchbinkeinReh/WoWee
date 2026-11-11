@@ -989,6 +989,11 @@ bool Application::initialize() {
         entitySpawner_ = std::make_unique<EntitySpawner>(
             renderer.get(), assetManager.get(), gameHandler.get(), &gameServices_);
         entitySpawner_->initialize();
+        // The units' particle twins posed once the units are animated each
+        // frame (Renderer::update), not before it.
+        renderer->setParticleTwinPoser([this] {
+            if (entitySpawner_) entitySpawner_->poseParticleTwins();
+        });
         // A move into or out of a seat waits on the vehicle's animation
         // (0x0074c040).
         gameHandler->setVehicleMoveHoldCallback([this](uint64_t mover, uint64_t transport, uint8_t seat) {

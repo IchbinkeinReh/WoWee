@@ -609,6 +609,7 @@ void M2Renderer::setInstanceExternalPose(uint32_t instanceId, const glm::mat4& m
     if (idxIt == instanceIndexById.end()) return;
     setInstanceTransform(instanceId, model);
     auto& inst = instances[idxIt->second];
+    inst.externallyPosed = true;
     inst.scale = glm::length(glm::vec3(model[0]));
     inst.boneMatrices = bones;
     refreshShadowCullEntry(idxIt->second);

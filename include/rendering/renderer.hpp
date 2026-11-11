@@ -116,6 +116,10 @@ public:
     /// Recorded after the interface is drawn and before the frame is submitted,
     /// into the frame's own command buffer. A second window draws here - see
     /// AuxSwapchain - so the frame's one fence covers it. Empty clears it.
+    /// Poses the units' particle twins (EntitySpawner::poseParticleTwins),
+    /// called each frame once the units are animated, before the twins'
+    /// particles step (M2Renderer::stepPosedParticles).
+    void setParticleTwinPoser(std::function<void()> poser) { particleTwinPoser_ = std::move(poser); }
     void setAfterInterfaceRecorder(std::function<void(VkCommandBuffer)> recorder) {
         afterInterface_ = std::move(recorder);
     }
@@ -393,6 +397,7 @@ public:
 
 private:
     std::function<void(VkCommandBuffer)> afterInterface_;
+    std::function<void()> particleTwinPoser_;
 
     // True when water is drawn in the scene continuation pass rather than in
     // the scene pass itself (see renderWorld).

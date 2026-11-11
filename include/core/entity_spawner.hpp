@@ -66,6 +66,9 @@ public:
     // Lifecycle
     void initialize();   // Build DBC lookups
     void update();       // Process all spawn/despawn queues (called from Application::update)
+    /// Pose every particle twin from its unit or worn model as drawn this
+    /// frame: called by the renderer once the units are animated.
+    void poseParticleTwins();
     void shutdown();     // Clear all instances and queues
 
     // Queue-based spawn API (called from GameHandler callbacks)
@@ -1001,6 +1004,8 @@ private:
     void spawnCreatureParticleTwin(uint64_t guid, uint32_t displayId, uint32_t charModelId,
                                    uint32_t charInstanceId);
     void syncCreatureParticleTwins();
+    void poseCreatureParticleTwins();
+    void poseAttachmentParticleTwins();
     /// A particles-only twin of a character-renderer instance; 0 when its
     /// model has no emitters. See creatureParticleTwins_.
     uint32_t spawnParticleTwin(uint32_t displayId, uint32_t charModelId, uint32_t charInstanceId);

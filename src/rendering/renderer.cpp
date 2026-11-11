@@ -3484,6 +3484,14 @@ void Renderer::update(float deltaTime) {
         catch (const std::exception& e) { LOG_ERROR("M2 animation worker: ", e.what()); }
         m2AnimLaunched = false;
     }
+    // The units' particle twins, posed from the units as they were just
+    // animated, and only then their particles stepped: a torch's flame on a
+    // running bearer's hand emits from the hand as it is drawn this frame.
+    if (m2Renderer) {
+        WOWEE_PROFILE_SCOPE("particle twins", Cpu);
+        if (particleTwinPoser_) particleTwinPoser_();
+        m2Renderer->stepPosedParticles(deltaTime);
+    }
 
     // What the models' events play, now the step that found them is done -
     // and the camera shakes they start, by SpellEffectCameraShakes as a
