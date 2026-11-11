@@ -236,8 +236,23 @@ vec4 rtwRefraction(vec3 origin, vec3 dir, vec3 toSun, vec3 sigma, vec3 scatterCo
             hs.rgb = rtHitColor(origin, dir, t, rtwFootprint(origin, t), hs.rgb);
             vec3 sunRay = normalize(rtSunRay.xyz);
             float sunPath = rtwSunPath(depth);
-            vec3 entry = hit + rtwSunUnderwater() * sunPath;
-            float vis = sunRay.z > 0.0 && !rtOccluded(entry + vec3(0.0, 0.0, 0.1), sunRay, 400.0, rng) ? 1.0 : 0.0;
+            vec3 sunUnder = rtwSunUnderwater();
+            vec3 entry = hit + sunUnder * sunPath;
+            // Both stretches of the sun's way: through the water from the bed
+            // to the surface, and on from the surface through the air. Only
+            // the second was asked, from the surface: a swimmer under it,
+            // its body all in the first, cast no shadow on the bed, and a
+            // wader's box held the surface point the ray left from, so it
+            // passed the wader by too (rtInGroup) - in the water a character
+            // had no shadow, or a part of one (Stonebull Lake). The units'
+            // boxes are asked about the bed's own point (rtGroupFrom).
+            rtGroupFrom = hit;
+            rtGroupFromSet = true;
+            bool sunBlocked = sunRay.z <= 0.0 ||
+                              rtOccluded(hit + hn * 0.05, sunUnder, sunPath, rng) ||
+                              rtOccluded(entry + vec3(0.0, 0.0, 0.1), sunRay, 400.0, rng);
+            rtGroupFromSet = false;
+            float vis = sunBlocked ? 0.0 : 1.0;
             traced = rtwLitHit(hs, ground ? vec3(0.0, 0.0, 1.0) : hn, toSun, exp(-sigma * sunPath) * vis);
         }
         bed = shown;

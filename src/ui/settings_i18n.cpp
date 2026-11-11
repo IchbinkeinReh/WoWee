@@ -205,6 +205,12 @@ constexpr SettingGerman kGerman[] = {
      "weicheres, flacheres Lampenlicht, und die von einer niedrigen Kerze knapp abgewandten "
      "Flächen - die Kante einer Stufe, ein Bordstein - ein wenig erhellt statt dunkel.",
      nullptr, nullptr, nullptr},
+    {"rtunitselfshadow",
+     "Eigenschatten von Figuren",
+     "Der eigene Körper einer Figur oder Kreatur beschattet sie selbst: ein Arm vor ihrer Brust, "
+     "ihr Kopf über ihren Schultern, für die Sonne wie für Fackeln und Lampen. Aus wirft ein "
+     "Körper nie einen Schatten auf sich selbst, wie im ursprünglichen Client.",
+     nullptr, nullptr, nullptr},
     {"rtpointselfshadow",
      "Punktlicht-Eigenschatten",
      "Eine Lampe, Fackel oder Feuerschale wird auch von ihrem eigenen Modell beschattet: ihre "

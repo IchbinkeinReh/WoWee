@@ -287,6 +287,11 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
                      m.pos.y, ", ", m.pos.z, ")");
         }
         const auto r = collision::fallStep(m, ms, m.fallSpeed * dt, m.fallDir, sweeper);
+        // WOWEE_FLOOR_DEBUG: a rise stopped by a ceiling over the body (0x0075de40).
+        static const bool kCeilingDebug = std::getenv("WOWEE_FLOOR_DEBUG") != nullptr;
+        if (kCeilingDebug && r.ceiling) {
+            LOG_WARNING("FALL CEILING: the rise stopped at (", m.pos.x, ", ", m.pos.y, ", ", m.pos.z, ")");
+        }
         if (r.landed || !m.falling) {
             grounded = true;
             verticalVelocity = 0.0f;
@@ -2580,9 +2585,10 @@ void CameraController::update(float deltaTime) {
         // real drop - a jump is airborne for about a second - so nothing a
         // player would call a fall is lost.
         constexpr float kFallReportSeconds = 0.15f;
-        if (wasFalling && grounded && airborneSeconds_ >= kFallReportSeconds) {
+        if ((wasFalling && grounded && airborneSeconds_ >= kFallReportSeconds) || deckLandingPending_) {
             movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_FALL_LAND));
         }
+        deckLandingPending_ = false;
     }
 
     // The pitch keys' way (0x005fb1a0): MSG_MOVE_START_PITCH_UP or _DOWN

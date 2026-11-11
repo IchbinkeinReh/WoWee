@@ -31,6 +31,12 @@ layout(location = 2) in vec2 aTimes;  // start, end
 
 layout(location = 0) out vec2 vUV;
 layout(location = 1) out vec4 vColor;
+// The fog over it: the share of the drop's own colour left at its distance,
+// fogged toward the mid grey that Mod2x leaves the picture alone with - the
+// fog colour 0x80808080 the client sets for its rain and splashes
+// (0x0078a640, 0x0078a030; render state 10). So a drop far off, or any drop
+// seen from under water through the liquid's short fog, fades to nothing.
+layout(location = 2) out float vFog;
 
 // c12..c14, c15..c17, c18..c20.
 const vec2 kUV[3] = vec2[](vec2(0.0, 1.0), vec2(1.0, 1.0), vec2(0.5, 0.0));
@@ -48,6 +54,8 @@ void main() {
     vec3 side = normalize(cross(toEye, back));
     p += side * kSide[corner] + back * kBack[corner];
     gl_Position = projection * view * vec4(p, 1.0);
+    float dist = length(viewPos.xyz - p);
+    vFog = pow(clamp((fogParams.y - dist) / max(fogParams.y - fogParams.x, 1e-3), 0.0, 1.0), max(fogColor.w, 1.0));
     vUV = kUV[corner];
     float alive = (aTimes.x < now && now < tipEnd) ? 1.0 : 0.0;
     vColor = vec4(push.color.rgb, alive);

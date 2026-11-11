@@ -215,6 +215,8 @@ void GameHandler::disconnect() {
     friendGuids_.clear();
     contacts_.clear();
     transportAttachments_.clear();
+    // The session's transports go with it.
+    if (transportManager_) transportManager_->clearTransports("disconnect");
     // Warden state is WardenHandler's; this used to clear a second copy of it
     // that nothing ever filled.
     if (wardenHandler_) wardenHandler_->reset();
@@ -1656,6 +1658,14 @@ void GameHandler::armLoadingScreenCrossing(uint32_t entry, uint32_t fromMap) {
     const auto* info = getCachedGameObjectInfo(entry);
     if (!info || info->type != 15 || !info->hasData || info->data[0] == 0) return;
     loadingScreenCrossing_ = LoadingScreenCrossing{info->data[0], fromMap};
+}
+
+void GameHandler::armTransportLegCrossing(uint32_t entry, uint32_t mapId, const glm::vec2& leftFromWire) {
+    loadingScreenCrossing_.reset();
+    if (entry == 0) return;
+    const auto* info = getCachedGameObjectInfo(entry);
+    if (!info || info->type != 15 || !info->hasData || info->data[0] == 0) return;
+    loadingScreenCrossing_ = LoadingScreenCrossing{info->data[0], mapId, leftFromWire};
 }
 
 bool GameHandler::completePlayerTransportWorldTransfer(

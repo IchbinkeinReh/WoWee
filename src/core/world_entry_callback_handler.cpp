@@ -226,6 +226,10 @@ void WorldEntryCallbackHandler::setupCallbacks() {
             // Past 150 yards the client shows a loading screen, and its end
             // stops the world's music and ambience (0x0074b620 -> 0x00409550).
             // A far teleport reloads here and stops them at its own end.
+            // A transport's crossing armed for this move (a passenger moved
+            // along a one-map route) is for a world load; a move too short
+            // for one has none.
+            if (!farTeleport) (void)gameHandler_.takeLoadingScreenCrossing();
             if (!farTeleport && teleportShowsLoadingScreen(oldPos, renderPos)) {
                 if (auto* ac = renderer_.getAudioCoordinator()) ac->leaveWorld();
             }

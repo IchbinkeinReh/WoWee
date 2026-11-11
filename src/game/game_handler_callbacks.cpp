@@ -574,6 +574,8 @@ void GameHandler::selectCharacter(uint64_t characterGuid) {
     lastTargetGuid = 0;
     tabCycleStale = true;
     entityController_->clearAll();
+    // A new character's session starts with no transports.
+    if (transportManager_) transportManager_->clearTransports("character login");
 
     // Build CMSG_PLAYER_LOGIN packet
     auto packet = PlayerLoginPacket::build(characterGuid);

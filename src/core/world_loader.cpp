@@ -790,7 +790,12 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     loadingScreen.setSDLWindow(window_->getSDLWindow());
     if (gameHandler_) {
         if (const auto crossing = gameHandler_->takeLoadingScreenCrossing())
-            loadingScreen.setTransportCrossing(crossing->taxiPathId, crossing->fromMapId);
+            loadingScreen.setTransportCrossing(
+                crossing->taxiPathId, crossing->fromMapId,
+                crossing->leftFromWire
+                    ? std::optional<rendering::loading_screen_route::Point>(
+                          rendering::loading_screen_route::Point{crossing->leftFromWire->x, crossing->leftFromWire->y})
+                    : std::nullopt);
     }
     bool loadingScreenOk = loadingScreen.initialize(assetManager_, mapId);
     // 0x0040a990: the loading screen starts the keep-alive's thirty seconds.
@@ -867,10 +872,30 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         // GUIDs become Deeprun tram GUIDs). The renderer instances are map-local,
         // so the logical transport/path state must be map-local too; otherwise a
         // newly spawned SubwayCar is rebound to the old elevator path.
+        //
+        // Only on another map, though. On the same map - a far move rebuilt as
+        // a map change, or the first entry after a logout, whose transports
+        // were all sent for this entry - the server has taken nothing away:
+        // the transports stay on their routes and clocks and are bound to the
+        // models spawned for them again.
         if (gameHandler_) {
-            gameHandler_->clearPlayerTransport();
             if (auto* tm = gameHandler_->getTransportManager()) {
-                tm->clearTransports();
+                if (loadedMapId_ == mapId || loadedMapId_ == 0xFFFFFFFF) {
+                    // And the player stays on the transport the move left
+                    // them on: the server takes a ship's passengers along
+                    // when it moves the ship to another part of its route
+                    // on the same map (MSG_MOVE_TELEPORT with the transport
+                    // in it - the Grom'gol zeppelin from Tirisfal to
+                    // Stranglethorn), and that move is rebuilt as this.
+                    // Let go here, the rider stood in the air after the
+                    // loading screen and fell into the sea.
+                    tm->releaseRenderInstances("world rebuilt on the same map");
+                } else {
+                    gameHandler_->clearPlayerTransport();
+                    const std::string reason = "map change " + std::to_string(loadedMapId_) + " -> " +
+                                               std::to_string(mapId) + " (SMSG_NEW_WORLD)";
+                    tm->clearTransports(reason.c_str());
+                }
             }
         }
 
@@ -1451,6 +1476,15 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     // The ray tracing's scene, built while the loading screen is still up:
     // left to the first frames, every mesh in view was built a share a frame
     // and the first seconds in the world crawled.
+    // Still on the transport through a same-map rebuild (the Grom'gol
+    // zeppelin's leg change): the rider stands where the offset on the deck
+    // puts them now, not where the teleport did. The route went on through
+    // the load - some seventeen seconds, near five hundred yards - and from
+    // the teleport's place the rider fell, the hull out of reach, and the
+    // first step off "the ground" let go of the zeppelin (0x004f4460: the
+    // passenger's world place is the transport's matrix times the offset).
+    if (gameHandler_ && gameHandler_->isOnTransport()) gameHandler_->markTransportArrival();
+
     renderer_->warmUpRayTracing();
 
     // No pan around the player on the way in: the client enters the world with

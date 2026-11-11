@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -170,10 +171,17 @@ struct Route {
 /// leg whose first stop is on that map (0x00408cd0), from its last stop to
 /// the next leg's first stop, through the row for that path and leg. Nothing
 /// where any piece is missing: then the screen is the map's own.
+///
+/// `leftFrom`, where given (wire X and Y): the leg crossed from is the one
+/// whose last stop is nearest it, on that map. A route that stays on one
+/// map - the Grom'gol zeppelin, Tirisfal to Stranglethorn - has its every
+/// leg's first stop there, and the client names the leg it left instead
+/// (0x007134a0 hands 0x0040ae30 the transport's leg before the change).
 inline std::optional<Route> build(const std::vector<PathNode>& nodes,
                                   const std::vector<SplineRow>& rows, uint32_t pathId,
                                   uint32_t fromMap,
-                                  const std::function<std::optional<Continent>(uint32_t)>& continentOf) {
+                                  const std::function<std::optional<Continent>(uint32_t)>& continentOf,
+                                  std::optional<Point> leftFrom = std::nullopt) {
     const std::vector<Leg> legs = legsOf(nodes, pathId);
     if (legs.empty()) return std::nullopt;
     auto node = [&](uint32_t id) -> const PathNode* {
@@ -183,8 +191,17 @@ inline std::optional<Route> build(const std::vector<PathNode>& nodes,
         return nullptr;
     };
     size_t leg = legs.size();
+    float nearest = std::numeric_limits<float>::max();
     for (size_t i = 0; i < legs.size(); ++i) {
         if (legs[i].firstStop == 0 || legs[i].lastStop == 0) return std::nullopt;
+        if (leftFrom) {
+            const PathNode* last = node(legs[i].lastStop);
+            if (!last || last->mapId != fromMap) continue;
+            const float dx = last->x - leftFrom->x, dy = last->y - leftFrom->y;
+            const float d = dx * dx + dy * dy;
+            if (d < nearest) { nearest = d; leg = i; }
+            continue;
+        }
         const PathNode* n = node(legs[i].firstStop);
         if (n && n->mapId == fromMap) { leg = i; break; }
     }

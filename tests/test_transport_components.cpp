@@ -590,34 +590,35 @@ TEST_CASE("Animator: Z clamping on non-world-coord client anim", "[transport_ani
 // ══════════════════════════════════════════════════════════════════
 
 TEST_CASE("ClockSync: the server's route phase drives the path time", "[transport_clock_sync]") {
-    // The server publishes phase as a fraction of its own route period, so it maps
-    // onto whatever timeline the client's spline has without the two periods
-    // needing to agree. That is the point: the client's period was invented from
-    // distance over speed, and when it came out short the ferry lapped its shore.
+    // The server publishes its progress through its own route period, so it
+    // maps onto whatever timeline the client's spline has without the two
+    // periods needing to agree. That is the point: the client's period was
+    // invented from distance over speed, and when it came out short the ferry
+    // lapped its shore.
     TransportClockSync sync;
     auto path = makeCirclePath();          // 4000ms client-side
     const uint32_t clientMs = path.spline.durationMs();
-
-    auto t = makeTransport();
-    t.useClientAnimation = true;
-    t.hasServerRouteClock = true;
-    t.routePeriodMs = 200000;              // server route is far longer
-    t.routePhaseAtTime = 100.0;
+    constexpr uint32_t kPeriod = 200000;   // server route is far longer
+    constexpr int64_t kNow = 100000;
 
     uint32_t out = 0;
-
-    t.routePhase = 0.0f;
-    REQUIRE(sync.computePathTime(t, path.spline, 100.0, 0.0f, out));
-    REQUIRE(out == 0u);
-
-    t.routePhase = 0.5f;
-    REQUIRE(sync.computePathTime(t, path.spline, 100.0, 0.0f, out));
-    REQUIRE(out == clientMs / 2u);
-
-    // A quarter of the server's period later, a quarter further along the spline.
-    t.routePhase = 0.0f;
-    REQUIRE(sync.computePathTime(t, path.spline, 100.0 + 50.0, 0.0f, out));
-    REQUIRE(out == Catch::Approx(clientMs / 4u).margin(2));
+    {
+        auto t = makeTransport();
+        t.useClientAnimation = true;
+        t.routeClock.apply(0, kPeriod, kNow, true);
+        REQUIRE(sync.computePathTime(t, path.spline, 0.0, 0.0f, out, kNow));
+        REQUIRE(out == 0u);
+        // A quarter of the server's period later, a quarter further along the spline.
+        REQUIRE(sync.computePathTime(t, path.spline, 0.0, 0.0f, out, kNow + kPeriod / 4));
+        REQUIRE(out == Catch::Approx(clientMs / 4u).margin(2));
+    }
+    {
+        auto t = makeTransport();
+        t.useClientAnimation = true;
+        t.routeClock.apply(kPeriod / 2, kPeriod, kNow, true);
+        REQUIRE(sync.computePathTime(t, path.spline, 0.0, 0.0f, out, kNow));
+        REQUIRE(out == clientMs / 2u);
+    }
 }
 
 TEST_CASE("ClockSync: the server route phase wraps rather than running off the end",
@@ -628,15 +629,12 @@ TEST_CASE("ClockSync: the server route phase wraps rather than running off the e
 
     auto t = makeTransport();
     t.useClientAnimation = true;
-    t.hasServerRouteClock = true;
-    t.routePeriodMs = 10000;
-    t.routePhase = 0.9f;
-    t.routePhaseAtTime = 0.0;
+    t.routeClock.apply(9000, 10000, 0, true);   // 0.9 of the period
 
     uint32_t out = 0;
     // 2.5 server periods on from a 0.9 phase - must land inside the spline, not
     // beyond it, and not at zero by accident.
-    REQUIRE(sync.computePathTime(t, path.spline, 25.0, 0.0f, out));
+    REQUIRE(sync.computePathTime(t, path.spline, 0.0, 0.0f, out, 25000));
     REQUIRE(out < clientMs);
     REQUIRE(out == Catch::Approx(static_cast<uint32_t>(0.4f * clientMs)).margin(2));
 }
@@ -649,8 +647,8 @@ TEST_CASE("ClockSync: without a server route clock the client keeps its own",
     auto path = makeCirclePath();
     auto t = makeTransport();
     t.useClientAnimation = true;
-    t.hasServerRouteClock = false;
     t.localClockMs = 0;
+    REQUIRE_FALSE(t.hasServerRouteClock());
 
     uint32_t out = 0;
     REQUIRE(sync.computePathTime(t, path.spline, 0.0, 1.0f, out));
@@ -663,10 +661,9 @@ TEST_CASE("ClockSync: a zero period is ignored rather than dividing by it",
     auto path = makeCirclePath();
     auto t = makeTransport();
     t.useClientAnimation = true;
-    t.hasServerRouteClock = true;
-    t.routePeriodMs = 0;               // a GameObject with nothing to report
-    t.routePhase = 0.5f;
+    t.routeClock.apply(5000, 0, 0, true);   // a GameObject with nothing to report
     t.localClockMs = 0;
+    REQUIRE_FALSE(t.routeClock.valid());
 
     uint32_t out = 0;
     REQUIRE(sync.computePathTime(t, path.spline, 0.0, 1.0f, out));
@@ -802,15 +799,78 @@ TEST_CASE("ClockSync: a lift on the server's path time is the clock plus its off
     auto path = makeCirclePath();  // 4000 ms
     auto t = makeTransport();
     t.useClientAnimation = true;
-    t.hasPathClockAnchor = true;
-    t.pathClockAnchorMs = 1234 - TransportManager::nowSteadyMs();
+    t.pathClock.apply(1234, path.spline.durationMs(), 50000, true);
     uint32_t pathTimeMs = 0;
     // However long the frame was said to be: the time is read off the clock.
-    REQUIRE(sync.computePathTime(t, path.spline, 1.0, 0.1f, pathTimeMs));
-    CHECK(pathTimeMs >= 1234u);
-    CHECK(pathTimeMs < 1234u + 200u);
+    REQUIRE(sync.computePathTime(t, path.spline, 1.0, 0.1f, pathTimeMs, 50000));
+    CHECK(pathTimeMs == 1234u);
+    REQUIRE(sync.computePathTime(t, path.spline, 1.0, 0.1f, pathTimeMs, 50100));
+    CHECK(pathTimeMs == 1334u);
     // And it wraps at the path's end.
-    t.pathClockAnchorMs = 8000 + 3990 - TransportManager::nowSteadyMs();
-    REQUIRE(sync.computePathTime(t, path.spline, 1.0, 0.0f, pathTimeMs));
-    CHECK((pathTimeMs >= 3990u || pathTimeMs < 200u));
+    REQUIRE(sync.computePathTime(t, path.spline, 1.0, 0.0f, pathTimeMs, 50000 + 2766 + 10));
+    CHECK(pathTimeMs == 10u);
+}
+
+TEST_CASE("ClockSync: fifty days of elapsed time do not overflow the server-clock path time",
+          "[transport_clock_sync]") {
+    // Past 2^32 ms a 32-bit cast of the elapsed milliseconds is undefined.
+    TransportClockSync sync;
+    auto path = makeCirclePath();  // 4000 ms
+    auto t = makeTransport();
+    t.hasServerClock = true;
+    t.serverClockOffsetMs = -250;
+    const double elapsed = 50.0 * 24.0 * 3600.0 + 1.5;   // 4'320'001'500 ms
+    uint32_t out = 0;
+    REQUIRE(sync.computePathTime(t, path.spline, elapsed, 0.016f, out));
+    CHECK(out == static_cast<uint32_t>((4320001500LL - 250) % 4000));
+}
+
+TEST_CASE("ClockSync: the local clock stays inside the path near the 32-bit wrap",
+          "[transport_clock_sync]") {
+    // A counter left to run to 2^32 and then taken modulo the path jumps by
+    // 2^32 mod the duration at the wrap.
+    TransportClockSync sync;
+    auto path = makeCirclePath();  // 4000 ms
+    auto t = makeTransport();
+    t.useClientAnimation = true;
+    t.localClockMs = 4294967290u;   // 4294967290 % 4000 == 3290
+    uint32_t out = 0;
+    REQUIRE(sync.computePathTime(t, path.spline, 0.0, 1.0f, out));
+    CHECK(out == 290u);
+    CHECK(t.localClockMs == 290u);
+}
+
+TEST_CASE("ClockSync: hours of frames keep the local clock to the millisecond",
+          "[transport_clock_sync]") {
+    // A million frames at 60 fps, about four and a half hours: a float
+    // accumulator of elapsed seconds no longer resolves a millisecond there.
+    TransportClockSync sync;
+    auto path = makeCirclePath();  // 4000 ms
+    auto t = makeTransport();
+    t.useClientAnimation = true;
+    t.localClockMs = 0;
+    uint32_t out = 0;
+    constexpr int kFrames = 1000000;
+    for (int i = 0; i < kFrames; ++i) {
+        REQUIRE(sync.computePathTime(t, path.spline, 0.0, 1.0f / 60.0f, out));
+    }
+    const double expectedMs = std::fmod(static_cast<double>(kFrames) * (1000.0 / 60.0), 4000.0);
+    CHECK(static_cast<double>(out) == Catch::Approx(expectedMs).margin(2.0));
+}
+
+TEST_CASE("ClockSync: a route clock forty days into the steady clock maps onto the spline",
+          "[transport_clock_sync]") {
+    TransportClockSync sync;
+    auto path = makeCirclePath();  // 4000 ms
+    auto t = makeTransport();
+    t.useClientAnimation = true;
+    const int64_t uptime = 40LL * 24 * 3600 * 1000;
+    t.routeClock.apply(4294960000u, 400000, uptime, true);
+    uint32_t out = 0;
+    // 10 s on the server's counter wraps; its path time is the wrapped sum's.
+    const uint32_t progress = 4294960000u + 10000u;   // wraps to 2704
+    REQUIRE(sync.computePathTime(t, path.spline, 0.0, 0.0f, out, uptime + 10000));
+    const uint32_t expected = static_cast<uint32_t>(
+        static_cast<double>(progress % 400000u) / 400000.0 * 4000.0);
+    CHECK(out == expected);
 }

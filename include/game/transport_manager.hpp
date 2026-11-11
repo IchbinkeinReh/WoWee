@@ -3,6 +3,7 @@
 #include "game/transport_path_repository.hpp"
 #include "core/coordinates.hpp"
 #include "game/transport_clock_sync.hpp"
+#include "game/transport_route_clock.hpp"
 #include "game/transport_animator.hpp"
 #include "game/ship_path.hpp"
 #include <memory>
@@ -73,10 +74,11 @@ struct ActiveTransport {
     double localClockRemainderMs = 0.0;
     // A lift's path time as the client keeps it (0x007139e0): the clock's ms
     // plus the offset taken when its create block gave the server's path
-    // time. Read off a real clock every frame, it cannot fall behind through
-    // capped frame times or loading hitches the way a summed delta does.
-    bool hasPathClockAnchor = false;
-    int64_t pathClockAnchorMs = 0;
+    // time (0x00714250), modulo the path (0x00710640). Read off a real clock
+    // every frame, it cannot fall behind through capped frame times or
+    // loading hitches the way a summed delta does; and taken again, slewed
+    // or snapped, whenever the server sends the time again.
+    TransportRouteClock pathClock;
     bool hasServerClock;            // Whether we've synced with server time
     int32_t serverClockOffsetMs;   // Offset: serverClock - localNow
     bool useClientAnimation;        // Use client-side path animation
@@ -110,7 +112,7 @@ struct ActiveTransport {
     std::optional<glm::quat> pathRotation;
 
     double lastServerUpdate;         // Time of last server movement update
-    int serverUpdateCount;          // Number of server updates received
+    uint32_t serverUpdateCount;     // Number of server updates received
 
     // Dead-reckoning from latest authoritative updates (used only when updates are sparse).
     glm::vec3 serverLinearVelocity;
@@ -178,15 +180,14 @@ struct ActiveTransport {
     int appliedNodeSequence = -1;
     size_t appliedDoodadCount = 0;
 
-    // The server's own route clock, when it publishes one (WotLK MO_TRANSPORT).
-    // routePhase is the fraction of the route period the hull was at as of
-    // routePhaseAtTime; routePeriodMs is that period. Preferred over the client's
-    // invented period, which is what let a ferry lap its shore while the server's
-    // schedule caught up.
-    bool hasServerRouteClock = false;
-    float routePhase = 0.0f;
-    uint32_t routePeriodMs = 0;
-    double routePhaseAtTime = 0.0;
+    // The server's own route clock, when it publishes one (WotLK MO_TRANSPORT):
+    // its path progress and route period (GAMEOBJECT_LEVEL), anchored to the
+    // steady clock and re-anchored whenever the server sends them again.
+    // Preferred over the client's invented period, which is what let a ferry
+    // lap its shore while the server's schedule caught up.
+    TransportRouteClock routeClock;
+    [[nodiscard]] bool hasServerRouteClock() const { return routeClock.valid(); }
+    [[nodiscard]] uint32_t routePeriodMs() const { return routeClock.periodMs(); }
 };
 
 class TransportManager {
@@ -309,10 +310,24 @@ public:
     // Logical transport GUIDs are only unique within the current map. Clear all
     // active instances on map transitions so a reused GUID cannot retain the
     // previous map's entry/path while merely rebinding to a new render model.
-    void clearTransports();
+    //
+    // Only for the player leaving the map or the session (SMSG_NEW_WORLD to
+    // another map, a disconnect, a logout, a character login): the reason is
+    // logged with every transport it takes ("TRANSPORT REMOVE").
+    void clearTransports(const char* reason);
     /// One transport gone from this map (out of range, destroyed): nothing
-    /// of it is moved or drawn again.
-    void removeTransport(uint64_t guid);
+    /// of it is moved or drawn again. Only the server takes a transport away
+    /// - SMSG_DESTROY_OBJECT or SMSG_UPDATE_OBJECT's out-of-range list - and
+    /// the reason is logged ("TRANSPORT REMOVE").
+    void removeTransport(uint64_t guid, const char* reason);
+    /// The transport's render model is gone while the transport is not: the
+    /// client dropped the model itself (a world rebuild, a lost device, a
+    /// model reloaded). It goes on along its route on the server's clock,
+    /// carrying its passengers' frame, and the next model spawned for it is
+    /// bound to it (rebindTransportInstance). Logged ("TRANSPORT KEEP").
+    void unbindRenderInstance(uint64_t guid, const char* reason);
+    /// unbindRenderInstance for every transport.
+    void releaseRenderInstances(const char* reason);
 
     ActiveTransport* getTransport(uint64_t guid);
     // MAIN-THREAD-ONLY: this reference is not lock-protected, matching EntityManager's
@@ -353,15 +368,30 @@ public:
     /// The transport's facing as the client has it (ActiveTransport::facing),
     /// for its passengers' facings. None for a transport not known.
     [[nodiscard]] std::optional<float> transportFacing(uint64_t transportGuid) const;
-    // Adopt the server's published route phase for a transport. phase is a
-    // fraction in [0,1) of periodMs. Cheap and idempotent - safe to call on every
-    // object update that carries the fields.
-    void applyServerRouteClock(uint64_t transportGuid, float phase, uint32_t periodMs);
+    using RouteClockSource = ::wowee::game::RouteClockSource;
+    [[nodiscard]] static const char* routeClockSourceName(RouteClockSource source);
+    /// A create or movement block's time is the server's progress itself; a
+    /// values update's DYNAMIC is a 16-bit share some servers get wrong.
+    [[nodiscard]] static bool isAuthoritativeSource(RouteClockSource source) {
+        return source != RouteClockSource::DynamicField;
+    }
+    // Adopt the server's route clock for a transport: its path progress in ms
+    // as the wire has it (not wrapped to the period) and the route's period,
+    // as of the steady-clock moment sampleSteadyMs. Re-anchors the client's
+    // path time every time it is called - slewing a small error out, snapping
+    // a large one - and logs it ("TRANSPORT RESYNC").
+    void applyServerRouteClock(uint64_t transportGuid, uint32_t progressMs, uint32_t periodMs,
+                               RouteClockSource source, int64_t sampleSteadyMs);
     /// The path time an elevator's create block carries (UPDATEFLAG_TRANSPORT).
     /// The client runs a route-less transport at that time plus what has
     /// passed since, modulo the path (0x00710640) - the same timeline the
     /// server opens and shuts the doors on.
-    void noteServerPathTime(uint64_t transportGuid, uint32_t pathTimeMs);
+    /// sampleSteadyMs is the steady-clock moment the time stands for (when
+    /// its packet was read); negative means now. Every later sample is a
+    /// resync of the lift's clock.
+    void noteServerPathTime(uint64_t transportGuid, uint32_t pathTimeMs,
+                            RouteClockSource source = RouteClockSource::CreateBlock,
+                            int64_t sampleSteadyMs = -1);
 
     // Ship machinery follows the hull: ShipMoving while under way, ShipStop when
     // holding at a dock. Cheap to call every frame - it only reaches the
@@ -479,6 +509,13 @@ private:
     void setInstanceHidden(const ActiveTransport& transport, bool hidden);
     /// Put an elevator at the server's path time, if its create block gave one.
     void seedFromServerPathTime(ActiveTransport& transport);
+    /// The periodic check that a transport's drawn path time has not wandered
+    /// from the server's time base it was last anchored to.
+    void checkClockBounds(ActiveTransport& transport, int64_t steadyNowMs);
+    /// Erases one transport and everything held for it; the caller logs.
+    void eraseTransportState(uint64_t guid);
+    /// The steady-clock moment of the last sanity check.
+    int64_t lastClockCheckSteadyMs_ = 0;
 
     TransportPathRepository pathRepo_;
     TransportClockSync clockSync_;
@@ -490,10 +527,15 @@ private:
     /// A transport is registered once its model has loaded, several frames
     /// after its create block arrives - and the create block is where the
     /// server puts the route phase. See applyServerRouteClock.
-    struct PendingRouteClock { float phase; uint32_t periodMs; double receivedAt; };
+    struct PendingRouteClock {
+        uint32_t progressMs;
+        uint32_t periodMs;
+        int64_t sampleSteadyMs;
+        RouteClockSource source;
+    };
     std::unordered_map<uint64_t, PendingRouteClock> pendingRouteClocks_;
     /// noteServerPathTime's samples: the path time, and nowSteadyMs() on arrival.
-    struct ServerPathTime { uint32_t pathTimeMs; int64_t receivedSteadyMs; };
+    struct ServerPathTime { uint32_t pathTimeMs; int64_t receivedSteadyMs; RouteClockSource source; };
     std::unordered_map<uint64_t, ServerPathTime> serverPathTimes_;
     std::unordered_map<uint64_t, glm::quat> parentRotations_;
     uint64_t riderTransportGuid_ = 0;

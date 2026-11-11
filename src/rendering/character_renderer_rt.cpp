@@ -349,6 +349,8 @@ void CharacterRenderer::syncRtScene(const glm::vec3& cameraPos) {
     std::vector<Candidate> bodies, carried;
     std::unordered_map<uint32_t, uint32_t> parentOf;
     for (auto& [id, inst] : instances) {
+        // A weapon's enchantment model is an effect and casts no shadow
+        // (the user's rule for the ray traced lighting).
         if (!inst.visible || inst.heldBack || inst.isSceneModel || inst.isEffectModel) continue;
         if (!inst.posedOnce && !inst.hasOverrideModelMatrix) continue;
         // Nor what is drawn see-through - a ghost, a stealthed or GM-invisible

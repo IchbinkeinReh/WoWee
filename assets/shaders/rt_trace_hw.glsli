@@ -70,6 +70,11 @@ bool rtFacesAlongRay(uint inst, uint prim, vec3 dir) {
     return dot(n, dir) > 0.0;
 }
 
+// The fixtures of one top level, each triangle to the loop (NoOpaque), by
+// their faces turned toward the light only; whether one stopped the ray. A
+// macro for the same reason as RT_RESOLVE_CANDIDATES.
+#define RT_FIXTURE_FACES_HIT(f, tlas, origin, dir, tMax, rng, hit)                                      {                                                                                                       rayQueryEXT f;                                                                                      rayQueryInitializeEXT(f, tlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsNoOpaqueEXT,                                RT_RAY_FIXTURE, origin, 0.0, dir, tMax);                                      while (rayQueryProceedEXT(f)) {                                                                         if (rayQueryGetIntersectionTypeEXT(f, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&                 rtFacesAlongRay(rayQueryGetIntersectionInstanceCustomIndexEXT(f, false),                                            rayQueryGetIntersectionPrimitiveIndexEXT(f, false), dir) &&                         rtAcceptCandidate(rayQueryGetIntersectionInstanceCustomIndexEXT(f, false),                                            rayQueryGetIntersectionPrimitiveIndexEXT(f, false),                                                 rayQueryGetIntersectionBarycentricsEXT(f, false),                                                   rayQueryGetWorldRayOriginEXT(f),                                                                    rayQueryGetIntersectionTEXT(f, false), rng))                                      rayQueryConfirmIntersectionEXT(f);                                                          }                                                                                                   hit = rayQueryGetIntersectionTypeEXT(f, true) != gl_RayQueryCommittedIntersectionNoneEXT;       }
+
 bool rtOccludedBy(vec3 origin, vec3 dir, float tMax, inout uint rng, out bool unit) {
     unit = false;
     uint mask = rtSkipFixtures ? RT_RAY_NO_FIXTURES : 0xFFu;
@@ -78,32 +83,29 @@ bool rtOccludedBy(vec3 origin, vec3 dir, float tMax, inout uint rng, out bool un
                           origin, 0.0, dir, tMax);
     RT_RESOLVE_CANDIDATES(q, rng);
     if (rayQueryGetIntersectionTypeEXT(q, true) != gl_RayQueryCommittedIntersectionNoneEXT) return true;
+    // In both top levels: an animated fixture - a brazier whose flame is a
+    // bone of its own, a lantern on its chain - is placed piece by piece in
+    // the dynamic one (M2Renderer::syncRtScene), and asked of the static
+    // one only, Camp Narache's fire bowls let their fire through their own
+    // bowls onto the floor and the lower walls beneath them.
+    bool fixtureHit = false;
     if (rtSkipFixtures && rtFixtureFacesOnly) {
-        // The fixtures, each triangle to the loop (NoOpaque), by their faces
-        // turned toward the light only.
-        rayQueryEXT f;
-        rayQueryInitializeEXT(f, rtTlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsNoOpaqueEXT,
-                              RT_RAY_FIXTURE, origin, 0.0, dir, tMax);
-        while (rayQueryProceedEXT(f)) {
-            if (rayQueryGetIntersectionTypeEXT(f, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
-                rtFacesAlongRay(rayQueryGetIntersectionInstanceCustomIndexEXT(f, false),
-                                rayQueryGetIntersectionPrimitiveIndexEXT(f, false), dir) &&
-                rtAcceptCandidate(rayQueryGetIntersectionInstanceCustomIndexEXT(f, false),
-                                  rayQueryGetIntersectionPrimitiveIndexEXT(f, false),
-                                  rayQueryGetIntersectionBarycentricsEXT(f, false),
-                                  rayQueryGetWorldRayOriginEXT(f),
-                                  rayQueryGetIntersectionTEXT(f, false), rng))
-                rayQueryConfirmIntersectionEXT(f);
-        }
-        if (rayQueryGetIntersectionTypeEXT(f, true) != gl_RayQueryCommittedIntersectionNoneEXT) return true;
+        RT_FIXTURE_FACES_HIT(f, rtTlas, origin, dir, tMax, rng, fixtureHit);
+        if (fixtureHit) return true;
     }
     rayQueryEXT d;
     rayQueryInitializeEXT(d, rtDynamicTlas, gl_RayFlagsTerminateOnFirstHitEXT, mask,
                           origin, 0.0, dir, tMax);
     RT_RESOLVE_CANDIDATES(d, rng);
-    if (rayQueryGetIntersectionTypeEXT(d, true) == gl_RayQueryCommittedIntersectionNoneEXT) return false;
-    unit = rtInstances[rayQueryGetIntersectionInstanceCustomIndexEXT(d, true)].group != 0u;
-    return true;
+    if (rayQueryGetIntersectionTypeEXT(d, true) != gl_RayQueryCommittedIntersectionNoneEXT) {
+        unit = rtInstances[rayQueryGetIntersectionInstanceCustomIndexEXT(d, true)].group != 0u;
+        return true;
+    }
+    if (rtSkipFixtures && rtFixtureFacesOnly) {
+        RT_FIXTURE_FACES_HIT(g, rtDynamicTlas, origin, dir, tMax, rng, fixtureHit);
+        if (fixtureHit) return true;
+    }
+    return false;
 }
 
 bool rtOccluded(vec3 origin, vec3 dir, float tMax, inout uint rng) {

@@ -95,3 +95,33 @@ TEST_CASE("the twelve tiles cover the 1002x668 frame (0x00407c50)", "[loading_sc
     CHECK(last.uMax == 0.9140625f);
     CHECK(last.vMax == 0.609375f);
 }
+
+TEST_CASE("a one-map route crosses from the leg the passenger left", "[loading_screen_route]") {
+    // The Grom'gol zeppelin's shape: two legs on map 0, a teleport between
+    // them - Stranglethorn's stop on the one, Tirisfal's on the other.
+    std::vector<lr::PathNode> n;
+    n.push_back({1, 301, 0, -12400.0f, 200.0f, 2u});   // Grom'gol
+    n.push_back({2, 301, 0, -11400.0f, -400.0f, 1u});  // the teleport
+    n.push_back({3, 301, 0, 2060.0f, 235.0f, 2u});     // Tirisfal
+    n.push_back({4, 301, 0, 1800.0f, -540.0f, 0u});
+    n.push_back({9, 302, 1, 0.0f, 0.0f, 2u});           // the next path closes the leg
+    lr::SplineRow r0, r1;
+    r0.pathId = r1.pathId = 301;
+    r0.legIndex = 0;
+    r1.legIndex = 1;
+    r0.x = r1.x = {0.5f};
+    r0.y = r1.y = {0.5f};
+    const lr::Point grom = lr::mapPoint(*continents(0), -12400.0f, 200.0f);
+    const lr::Point tiri = lr::mapPoint(*continents(0), 2060.0f, 235.0f);
+
+    // Left from Tirisfal's leg: from Tirisfal to Grom'gol.
+    const auto fromTirisfal = lr::build(n, {r0, r1}, 301, 0, continents, lr::Point{1900.0f, -300.0f});
+    REQUIRE(fromTirisfal);
+    CHECK(fromTirisfal->start.x == Catch::Approx(tiri.x));
+    CHECK(fromTirisfal->end.x == Catch::Approx(grom.x));
+    // Left from Stranglethorn's leg: the other way.
+    const auto fromGromgol = lr::build(n, {r0, r1}, 301, 0, continents, lr::Point{-11500.0f, -350.0f});
+    REQUIRE(fromGromgol);
+    CHECK(fromGromgol->start.x == Catch::Approx(grom.x));
+    CHECK(fromGromgol->end.x == Catch::Approx(tiri.x));
+}

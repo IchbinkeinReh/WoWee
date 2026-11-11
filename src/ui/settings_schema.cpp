@@ -526,6 +526,12 @@ constexpr SettingDesc kSchema[] = {
     {"dbgshadowdarkness", "Shadow darkness, ray traced (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "Ray traced",
      "How much of the light a shadow takes where the ray tracing has a\n"
      "result. Without it the client's own 30% applies.", "", 65},
+    {"rtunitselfshadow", "Unit self-shadowing", SettingKind::Bool, 0, 0, 0,
+     "Debug Shadows", "",
+     "A character's or creature's own body shadows itself: an arm\n"
+     "over its chest, its head over its shoulders, for the sun and\n"
+     "for torches and lamps alike. Off, a body never shadows itself,\n"
+     "as in the original client.", "", 0, "raytracedlighting"},
     {"dbgtracedsunshadow", "Sun shadows, traced (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "",
      "How much of the traced sun shadows shows. Units near you cast\n"
      "theirs through the shadow map instead.", "", 100},

@@ -78,11 +78,31 @@ TEST_CASE("a short hop lands before JumpStart is through", "[mount_fsm]") {
     CHECK(out.mountAnimId == 37u);
     out = fsm.evaluate(frame(false, 37, 200.0f, 667.0f, true));
     CHECK(out.mountAnimId == 37u);
-    // Landed while JumpStart still plays: JumpEnd, then the run.
+    // Landed moving while JumpStart still plays: straight into the run,
+    // no JumpEnd (the base animation's moving one, 0x00717050), the land
+    // sound still.
     out = fsm.evaluate(frame(true, 37, 400.0f, 667.0f, true));
-    CHECK(out.mountAnimId == 39u);
-    out = fsm.evaluate(frame(true, 39, 500.0f, 500.0f, true));
+    CHECK(out.mountAnimChanged);
     CHECK(out.mountAnimId == 5u);
+    CHECK(out.mountAnimLoop);
+    CHECK(out.playLandSound);
+    CHECK(fsm.getAction() == MountFSM::MountAction::None);
+}
+
+TEST_CASE("a jump landed standing still plays JumpEnd, moving the run", "[mount_fsm]") {
+    for (const bool moving : {false, true}) {
+        MountFSM fsm;
+        fsm.configure(anims(), false);
+        auto in = frame(true, moving ? 5 : 0, 0.0f, 600.0f, moving);
+        in.jumpKeyPressed = true;
+        auto out = fsm.evaluate(in);
+        out = fsm.evaluate(frame(false, 37, 700.0f, 667.0f, moving));
+        out = fsm.evaluate(frame(false, 38, 100.0f, 800.0f, moving));
+        out = fsm.evaluate(frame(true, 38, 300.0f, 800.0f, moving));
+        INFO("moving " << moving);
+        CHECK(out.mountAnimChanged);
+        CHECK(out.mountAnimId == (moving ? 5u : 39u));
+    }
 }
 
 TEST_CASE("a mount with no JumpStart starts on Jump", "[mount_fsm]") {

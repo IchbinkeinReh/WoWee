@@ -27,7 +27,7 @@ public:
 private:
     /// Guard against bad fallback Z offsets on non-world-coordinate paths.
     static float clampZOffset(float z, bool worldCoords, bool clientAnim,
-                              int serverUpdateCount, bool hasServerClock);
+                              uint32_t serverUpdateCount, bool hasServerClock);
 };
 
 } // namespace wowee::game

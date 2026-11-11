@@ -2165,12 +2165,12 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
     // Only while tracing; switched on, every loaded model is registered then
     // (onRtActive).
     if (!rtScene_ || !rtScene_->isActive() || model.vertices.empty() || model.indices.empty()) return;
-    // What the renderer never draws, and what is too small and numerous to be
-    // worth its triangles (ground clutter).
-    if (gpuModel.isInvisibleTrap || gpuModel.isSpellEffect ||
-        gpuModel.isGroundDetail || gpuModel.isSkyBird || gpuModel.isLightBeam) {
-        return;
-    }
+    // What the renderer never draws, a spell's model and a light shaft cast
+    // no shadow (the user's rule for the ray traced lighting: those are
+    // effects, not things). Everything else drawn casts while tracing -
+    // ground clutter, a bird, a rug - but what is see-through: a blended
+    // batch, and an alpha key's cut-away texels (below).
+    if (gpuModel.isInvisibleTrap || gpuModel.isSpellEffect || gpuModel.isLightBeam) return;
     // An animated model - a door, a chest, a banner, a lantern on its chain -
     // as one mesh would cast its bind pose, not the pose on screen. It is
     // cut into pieces by bone instead, which syncRtScene places by this
@@ -2188,15 +2188,6 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
     // mailbox with a crystal in it cast no shadow from a torch beside it.
     gpuModel.rtFixture = gpuModel.isLamp || !gpuModel.glowPatches.empty() || !gpuModel.lights.empty();
 
-    // A flat sheet on the floor - a rug, a doormat, a map on a table - casts
-    // no shadow worth its triangles, and lying a few hundredths of a yard
-    // over what it covers it shadowed that whole. The ray traced lighting
-    // traces from the opaque surfaces it has in its G-buffer, a short way off
-    // them: a sheet not among them (drawn blended, or thinner than the
-    // offset) covered every ray from the floor beneath, which went black to
-    // the lamps in the rug's exact outline (StormwindRug01 in the Goldshire
-    // inn's rooms). rt_lights::isFlatSheet.
-    if (rt_lights::isFlatSheet(model.vertices)) return;
 
     RtScene::MeshSource src;
     src.positions.reserve(model.vertices.size());
@@ -2208,8 +2199,8 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
     src.uvs.assign(model.vertices.size(), glm::vec2(0.0f));
     for (size_t i = 0; i < model.vertices.size(); ++i) src.uvs[i] = model.vertices[i].texCoords[0];
     for (const auto& batch : gpuModel.batches) {
-        if (batch.blendMode >= 2 || batch.batchOpacity < 0.01f ||
-            batch.starLayer || batch.glowCardLike) {
+        // See-through: blended, or not shown at all.
+        if (batch.blendMode >= 2 || batch.batchOpacity < 0.01f || batch.starLayer) {
             continue;
         }
         glm::vec3 albedo = batch.tint;

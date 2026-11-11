@@ -100,7 +100,13 @@ public:
     // Immediate despawn
     void despawnCreature(uint64_t guid);
     void despawnPlayer(uint64_t guid);
-    void despawnGameObject(uint64_t guid);
+    /// Takes a game object's model away. A transport's own state - its route,
+    /// its clock, its passengers' frame - goes with it only when the server
+    /// took it away, which serverRemovalReason names (SMSG_DESTROY_OBJECT, the
+    /// out-of-range list); without one the client is only dropping the model
+    /// (a world rebuild, a lost device, a reload), and the transport moves on
+    /// to be bound to the next model spawned for it.
+    void despawnGameObject(uint64_t guid, const char* serverRemovalReason = nullptr);
     /// The server took a game object away (0x004d7610, 0x004d7230). While an
     /// animation state holds it - 0x0070d1e0 takes a hold for any state but
     /// Closed, Opened and Destroyed, 0x0070d7e0 lets it go as the state ends

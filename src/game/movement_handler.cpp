@@ -1,4 +1,5 @@
 #include "game/movement_handler.hpp"
+#include "game/transport_route_clock.hpp"
 #include "game/game_handler.hpp"
 #include "game/game_utils.hpp"
 #include "game/inventory_handler.hpp"
@@ -706,8 +707,8 @@ void MovementHandler::sendMovement(Opcode opcode) {
         const float facingDelta = core::coords::normalizeAngleRad(
             movementInfo.orientation - lastFacingSentOrientation_);
         const uint32_t sinceLastFacingMs =
-            lastFacingSendTimeMs_ != 0 && movementTime >= lastFacingSendTimeMs_
-                ? (movementTime - lastFacingSendTimeMs_)
+            lastFacingSendTimeMs_ != 0 && wrapMsDiff(movementTime, lastFacingSendTimeMs_) >= 0
+                ? static_cast<uint32_t>(wrapMsDiff(movementTime, lastFacingSendTimeMs_))
                 : std::numeric_limits<uint32_t>::max();
         if (std::abs(facingDelta) < 0.02f && sinceLastFacingMs < 200U) {
             return;
@@ -826,8 +827,8 @@ void MovementHandler::sendMovement(Opcode opcode) {
             // time (+0x80) as the fall step counted it (0x007618b0,
             // 0x007612b0); only a fall's start zeroes it (0x00988370,
             // 0x00987410). It went out as 0.
-            if (isFalling_ && movementInfo.time >= fallStartMs_) {
-                movementInfo.fallTime = movementInfo.time - fallStartMs_;
+            if (isFalling_ && wrapMsDiff(movementInfo.time, fallStartMs_) >= 0) {
+                movementInfo.fallTime = static_cast<uint32_t>(wrapMsDiff(movementInfo.time, fallStartMs_));
             }
             movementInfo.flags &= ~static_cast<uint32_t>(MovementFlags::FALLING);
             isFalling_ = false;
@@ -952,9 +953,9 @@ void MovementHandler::sendMovement(Opcode opcode) {
 
     // Keep fallTime current
     if (isFalling_ && movementInfo.hasFlag(MovementFlags::FALLING)) {
-        uint32_t elapsed = (movementInfo.time >= fallStartMs_)
-                               ? (movementInfo.time - fallStartMs_)
-                               : 0u;
+        // Across the movement clock's 32-bit wrap as well.
+        const int32_t sinceFallStart = wrapMsDiff(movementInfo.time, fallStartMs_);
+        uint32_t elapsed = sinceFallStart >= 0 ? static_cast<uint32_t>(sinceFallStart) : 0u;
         movementInfo.fallTime = elapsed;
     } else if (!movementInfo.hasFlag(MovementFlags::FALLING)) {
         if (isFalling_) {
@@ -1084,8 +1085,8 @@ void MovementHandler::sendMovement(Opcode opcode) {
             !includeTransportInWire &&
             (movementInfo.flags & kLocomotionFlags) == 0;
         const uint32_t sinceLastHeartbeatMs =
-            lastHeartbeatSendTimeMs_ != 0 && movementTime >= lastHeartbeatSendTimeMs_
-                ? (movementTime - lastHeartbeatSendTimeMs_)
+            lastHeartbeatSendTimeMs_ != 0 && wrapMsDiff(movementTime, lastHeartbeatSendTimeMs_) >= 0
+                ? static_cast<uint32_t>(wrapMsDiff(movementTime, lastHeartbeatSendTimeMs_))
                 : std::numeric_limits<uint32_t>::max();
         const bool unchangedState =
             std::abs(movementInfo.x - lastHeartbeatX_) < 0.01f &&
@@ -1098,8 +1099,8 @@ void MovementHandler::sendMovement(Opcode opcode) {
             return;
         }
         const uint32_t sinceLastNonHeartbeatMoveMs =
-            lastNonHeartbeatMoveSendTimeMs_ != 0 && movementTime >= lastNonHeartbeatMoveSendTimeMs_
-                ? (movementTime - lastNonHeartbeatMoveSendTimeMs_)
+            lastNonHeartbeatMoveSendTimeMs_ != 0 && wrapMsDiff(movementTime, lastNonHeartbeatMoveSendTimeMs_) >= 0
+                ? static_cast<uint32_t>(wrapMsDiff(movementTime, lastNonHeartbeatMoveSendTimeMs_))
                 : std::numeric_limits<uint32_t>::max();
         if (sinceLastNonHeartbeatMoveMs < 350U) {
             timeSinceLastMoveHeartbeat_ = 0.0f;
@@ -2640,6 +2641,10 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
                     ") - acknowledging so the server stops discarding our "
                     "movement, then telling it where we really are");
     } else {
+        // Where the move took the player from, on the wire: a passenger moved
+        // along a one-map route (below) crossed from the leg ending there.
+        const glm::vec3 leftFrom =
+            core::coords::canonicalToServer(glm::vec3(movementInfo.x, movementInfo.y, movementInfo.z));
         movementInfo.x = canonical.x;
         movementInfo.y = canonical.y;
         movementInfo.z = canonical.z;
@@ -2660,6 +2665,14 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
             owner_.setPlayerOnTransport(
                 teleportTransportGuid,
                 transports->serverToTransportLocal(teleportTransportGuid, teleportTransportOffset));
+            // The transport's loading screen, as the client shows it when the
+            // leg of the transport it carries changes (0x007134a0 ->
+            // 0x0040ae30): used where the move is far enough to load the
+            // world (WorldEntryCallbackHandler), let go where it is not.
+            if (const auto* carried = transports->getTransport(teleportTransportGuid)) {
+                owner_.armTransportLegCrossing(carried->entry, owner_.getCurrentMapId(),
+                                               glm::vec2(leftFrom.x, leftFrom.y));
+            }
         } else if (owner_.isOnTransport()) {
             owner_.clearPlayerTransport();
         }

@@ -720,6 +720,8 @@ void AnimationController::updateMountedAnimation(float deltaTime) {
         }
     } else if (mountOut.mountAnimChanged && mountInstanceId_ > 0 && characterRenderer) {
         characterRenderer->playAnimation(mountInstanceId_, mountOut.mountAnimId, mountOut.mountAnimLoop);
+        LOG_INFO("Mount animation ", mountOut.mountAnimId, mountOut.mountAnimLoop ? " (loop)" : " (once)",
+                 mountIn.moving ? " moving" : " standing", mountIn.grounded ? " grounded" : " airborne");
     }
 
     // The rider holds its pose (+0xb7c: Mount, or a mount aura kit's,

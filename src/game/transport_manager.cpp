@@ -121,13 +121,59 @@ bool seedDeeprunTramStationPhase(ActiveTransport& transport,
     return true;
 }
 
+// One line per resync, for the log to be grepped by ("TRANSPORT RESYNC").
+void logResync(const ActiveTransport& transport, const char* clock, const char* source,
+               const TransportRouteClock::Result& r, uint32_t periodMs, uint32_t clientPeriodMs) {
+    const double period = periodMs > 0 ? static_cast<double>(periodMs) : 1.0;
+    const bool notable = r.outcome != TransportRouteClock::Outcome::Ignored ||
+                         std::abs(r.errorMs) > TransportRouteClock::kSnapThresholdMs;
+    if (!notable) {
+        LOG_DEBUG("TRANSPORT RESYNC guid=0x", std::hex, transport.guid, std::dec, " entry=", transport.entry,
+                  " clock=", clock, " source=", source, " outcome=ignored errorMs=",
+                  std::llround(r.errorMs));
+        return;
+    }
+    LOG_INFO("TRANSPORT RESYNC guid=0x", std::hex, transport.guid, std::dec,
+             " entry=", transport.entry,
+             " clock=", clock,
+             " source=", source,
+             " outcome=", routeClockOutcomeName(r.outcome),
+             " oldPhase=", r.oldPathMs / period,
+             " newPhase=", r.newPathMs / period,
+             " oldMs=", std::llround(r.oldPathMs),
+             " newMs=", std::llround(r.newPathMs),
+             " errorMs=", std::llround(r.errorMs),
+             " slewMs=", r.slewMs,
+             " periodMs=", periodMs,
+             (r.periodChanged ? " periodChanged=1" : ""),
+             " clientPeriodMs=", clientPeriodMs);
+}
+
 } // namespace
+
+const char* TransportManager::routeClockSourceName(RouteClockSource source) {
+    switch (source) {
+        case RouteClockSource::CreateBlock: return "create-block";
+        case RouteClockSource::MovementBlock: return "movement-block";
+        case RouteClockSource::DynamicField: return "values-dynamic";
+    }
+    return "?";
+}
 
 TransportManager::TransportManager() = default;
 TransportManager::~TransportManager() = default;
 
 void TransportManager::update(float deltaTime) {
     elapsedTime_ += deltaTime;
+
+    // Every few seconds, each transport's drawn path time against the
+    // server's time base it was last anchored to.
+    constexpr int64_t kClockCheckIntervalMs = 5000;
+    const int64_t steadyNow = nowSteadyMs();
+    if (steadyNow - lastClockCheckSteadyMs_ >= kClockCheckIntervalMs) {
+        lastClockCheckSteadyMs_ = steadyNow;
+        for (auto& [guid, transport] : transports_) checkClockBounds(transport, steadyNow);
+    }
 
     for (auto& [guid, transport] : transports_) {
         // Once we have server clock offset, we can predict server time indefinitely
@@ -280,17 +326,27 @@ void TransportManager::registerTransport(uint64_t guid,
     if (const auto parent = parentRotations_.find(guid); parent != parentRotations_.end())
         transport.parentRotation = parent->second;
 
-    transports_[guid] = transport;
+    // Registered again over itself: the server's clocks it already had stay
+    // with it - only a new sample from the server moves them.
+    if (const auto* existing = getTransport(guid)) {
+        if (existing->routeClock.valid()) transport.routeClock = existing->routeClock;
+        if (existing->pathClock.valid() && !transport.pathClock.valid()) transport.pathClock = existing->pathClock;
+        LOG_INFO("TRANSPORT KEEP guid=0x", std::hex, guid, std::dec, " entry=", entry,
+                 " reason=registered again over itself (server clocks kept)");
+    }
 
-    // A route phase the server published before this was registered.
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        transports_[guid] = transport;
+    }
+
+    // A route clock the server published before this was registered, moved
+    // on by the time the model took to load.
     if (auto pendingClock = pendingRouteClocks_.find(guid);
         pendingClock != pendingRouteClocks_.end()) {
-        const auto [phase, periodMs, receivedAt] = pendingClock->second;
+        const PendingRouteClock held = pendingClock->second;
         pendingRouteClocks_.erase(pendingClock);
-        // Moved on by the time the model took to load.
-        const double since = std::max(0.0, static_cast<double>(nowSteadyMs()) * 0.001 - receivedAt) * 1000.0 /
-                             static_cast<double>(periodMs);
-        applyServerRouteClock(guid, static_cast<float>(std::fmod(static_cast<double>(phase) + since, 1.0)), periodMs);
+        applyServerRouteClock(guid, held.progressMs, held.periodMs, held.source, held.sampleSteadyMs);
     }
 
     glm::vec3 renderPos = core::coords::canonicalToRender(transport.position);
@@ -316,22 +372,73 @@ void TransportManager::registerTransport(uint64_t guid,
                     " base=(", transport.basePosition.x, ",", transport.basePosition.y, ",", transport.basePosition.z, ")");
     }
 }
-void TransportManager::clearTransports() {
+void TransportManager::clearTransports(const char* reason) {
+    for (const auto& [guid, transport] : transports_) {
+        LOG_INFO("TRANSPORT REMOVE guid=0x", std::hex, guid, std::dec, " entry=", transport.entry,
+                 " reason=", reason, " (server-driven: the player left the map or the session)");
+    }
     const size_t count = transports_.size();
-    transports_.clear();
-    // Held phases belong to the map that published them; a reused GUID on the
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        transports_.clear();
+    }
+    // Held clocks belong to the map that published them; a reused GUID on the
     // next map must not inherit one.
     pendingRouteClocks_.clear();
+    serverPathTimes_.clear();
     parentRotations_.clear();
     if (count != 0) {
-        LOG_INFO("TransportManager: Cleared ", count, " transports for map transition");
+        LOG_INFO("TransportManager: Cleared ", count, " transports: ", reason);
     }
 }
 
-void TransportManager::removeTransport(uint64_t guid) {
-    if (transports_.erase(guid) != 0) LOG_INFO("TransportManager: removed transport 0x", std::hex, guid, std::dec);
+void TransportManager::eraseTransportState(uint64_t guid) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        transports_.erase(guid);
+    }
     pendingRouteClocks_.erase(guid);
+    serverPathTimes_.erase(guid);
     parentRotations_.erase(guid);
+}
+
+void TransportManager::removeTransport(uint64_t guid, const char* reason) {
+    if (const auto* transport = getTransport(guid)) {
+        LOG_INFO("TRANSPORT REMOVE guid=0x", std::hex, guid, std::dec, " entry=", transport->entry,
+                 " reason=", reason);
+    } else if (pendingRouteClocks_.count(guid) || serverPathTimes_.count(guid)) {
+        LOG_INFO("TRANSPORT REMOVE guid=0x", std::hex, guid, std::dec,
+                 " (not yet registered) reason=", reason);
+    }
+    eraseTransportState(guid);
+}
+
+void TransportManager::unbindRenderInstance(uint64_t guid, const char* reason) {
+    auto* transport = getTransport(guid);
+    if (!transport || transport->wmoInstanceId == 0) return;
+    LOG_INFO("TRANSPORT KEEP guid=0x", std::hex, guid, std::dec, " entry=", transport->entry,
+             " instance=", transport->wmoInstanceId, " reason=", reason,
+             " (client-side: model dropped, route and passengers kept)");
+    // Nothing to draw until a model is bound again; the renderers hand the
+    // old number out to other models. The next model's machinery and
+    // sequence are set afresh.
+    transport->wmoInstanceId = 0;
+    transport->appliedDoodadAnim = -1;
+    transport->appliedDoodadCount = 0;
+    transport->appliedNodeSequence = -1;
+}
+
+void TransportManager::releaseRenderInstances(const char* reason) {
+    for (auto& [guid, transport] : transports_) {
+        if (transport.wmoInstanceId == 0) continue;
+        LOG_INFO("TRANSPORT KEEP guid=0x", std::hex, guid, std::dec, " entry=", transport.entry,
+                 " instance=", transport.wmoInstanceId, " reason=", reason,
+                 " (client-side: renderers rebuilt, route and passengers kept)");
+        transport.wmoInstanceId = 0;
+        transport.appliedDoodadAnim = -1;
+        transport.appliedDoodadCount = 0;
+        transport.appliedNodeSequence = -1;
+    }
 }
 
 void TransportManager::resolveAndRegisterSpawn(uint64_t guid,
@@ -496,8 +603,9 @@ bool TransportManager::isPointOnTransportDeck(uint64_t transportGuid,
     return floorDelta >= -0.35f && floorDelta <= maxFloorDelta;
 }
 
-void TransportManager::noteServerPathTime(uint64_t transportGuid, uint32_t pathTimeMs) {
-    serverPathTimes_[transportGuid] = {pathTimeMs, nowSteadyMs()};
+void TransportManager::noteServerPathTime(uint64_t transportGuid, uint32_t pathTimeMs,
+                                          RouteClockSource source, int64_t sampleSteadyMs) {
+    serverPathTimes_[transportGuid] = {pathTimeMs, sampleSteadyMs >= 0 ? sampleSteadyMs : nowSteadyMs(), source};
     if (auto* transport = getTransport(transportGuid)) seedFromServerPathTime(*transport);
 }
 
@@ -505,30 +613,35 @@ void TransportManager::seedFromServerPathTime(ActiveTransport& transport) {
     // Elevators only - a z-only path played on the client's clock. A ship's or
     // a zeppelin's block carries the server's own ms instead, and its phase
     // comes from the route fields (applyServerRouteClock).
-    if (!transport.useClientAnimation || transport.hasServerRouteClock) return;
+    if (!transport.useClientAnimation || transport.routeClock.valid()) return;
     auto it = serverPathTimes_.find(transport.guid);
     if (it == serverPathTimes_.end()) return;
     const auto* pathEntry = pathRepo_.findPath(transport.pathId);
     if (!pathEntry || !pathEntry->zOnly) return;
     const uint32_t durationMs = pathEntry->spline.durationMs();
     if (durationMs == 0) return;
+    const ServerPathTime sample = it->second;
+    // Taken once: the clock holds it from here, and the next sample the
+    // server sends is the next resync.
+    serverPathTimes_.erase(it);
     // Seeded from the wall clock, the lift ran at an arbitrary offset from
     // the server's, so the doors - which the server opens on its own
-    // timeline - shut just as the car arrived.
-    transport.pathClockAnchorMs =
-        static_cast<int64_t>(it->second.pathTimeMs) - it->second.receivedSteadyMs;
-    transport.hasPathClockAnchor = true;
-    const int64_t now = nowSteadyMs() + transport.pathClockAnchorMs;
-    transport.localClockMs = static_cast<uint32_t>(
-        ((now % durationMs) + durationMs) % durationMs);
-    LOG_INFO("Transport 0x", std::hex, transport.guid, std::dec, " at the server's path time ",
-             transport.localClockMs, "ms of ", durationMs, "ms");
+    // timeline - shut just as the car arrived. The server's ms plus the time
+    // since it arrived, in 32 bits as the server keeps it (0x00714250 keeps
+    // the offset, 0x00710640 adds it to the clock).
+    const int64_t now = nowSteadyMs();
+    const uint32_t progressNow =
+        sample.pathTimeMs + static_cast<uint32_t>(std::max<int64_t>(0, now - sample.receivedSteadyMs));
+    const auto result =
+        transport.pathClock.apply(progressNow, durationMs, now, isAuthoritativeSource(sample.source));
+    transport.localClockMs = static_cast<uint32_t>(transport.pathClock.pathTimeAt(now)) % durationMs;
+    logResync(transport, "path", routeClockSourceName(sample.source), result, durationMs, durationMs);
 }
 
-void TransportManager::applyServerRouteClock(uint64_t transportGuid, float phase,
-                                             uint32_t periodMs) {
+void TransportManager::applyServerRouteClock(uint64_t transportGuid, uint32_t progressMs,
+                                             uint32_t periodMs, RouteClockSource source,
+                                             int64_t sampleSteadyMs) {
     if (periodMs == 0) return;
-    if (!(phase >= 0.0f) || phase >= 1.0f) return;   // also rejects NaN
 
     auto* transport = getTransport(transportGuid);
     if (!transport) {
@@ -537,25 +650,51 @@ void TransportManager::applyServerRouteClock(uint64_t transportGuid, float phase
         // takes several frames. The server publishes the phase when the object
         // is created and rarely again, so dropping it here meant a hull that
         // never adopted the server's clock at all and invented one from
-        // distance over speed instead. Held until registerTransport asks.
-        pendingRouteClocks_[transportGuid] = {phase, periodMs, static_cast<double>(nowSteadyMs()) * 0.001};
+        // distance over speed instead. Held until registerTransport asks; a
+        // weak sample does not replace an authoritative one held.
+        auto held = pendingRouteClocks_.find(transportGuid);
+        if (held != pendingRouteClocks_.end() && isAuthoritativeSource(held->second.source) &&
+            !isAuthoritativeSource(source)) {
+            return;
+        }
+        pendingRouteClocks_[transportGuid] = {progressMs, periodMs, sampleSteadyMs, source};
         return;
     }
 
-    const bool firstSample = !transport->hasServerRouteClock;
-    transport->hasServerRouteClock = true;
-    transport->routePhase = phase;
-    transport->routePeriodMs = periodMs;
-    transport->routePhaseAtTime = static_cast<double>(nowSteadyMs()) * 0.001;
+    // Moved on by however long it has been since the moment the sample
+    // stands for; in 32 bits, as the server's progress counter wraps.
+    const int64_t now = nowSteadyMs();
+    const uint32_t progressNow =
+        progressMs + static_cast<uint32_t>(std::max<int64_t>(0, now - sampleSteadyMs));
+    const auto result =
+        transport->routeClock.apply(progressNow, periodMs, now, isAuthoritativeSource(source));
+    const auto* path = pathRepo_.findPath(transport->pathId);
+    logResync(*transport, "route", routeClockSourceName(source), result, periodMs,
+              path ? path->spline.durationMs() : 0u);
+}
 
-    if (firstSample) {
-        LOG_WARNING("Transport 0x", std::hex, transportGuid, std::dec,
-                 " adopted server route clock: period=", periodMs, "ms phase=", phase,
-                 " (client period was ", [&]() -> uint32_t {
-                     const auto* p = pathRepo_.findPath(transport->pathId);
-                     return p ? p->spline.durationMs() : 0u;
-                 }(), "ms)");
-    }
+void TransportManager::checkClockBounds(ActiveTransport& transport, int64_t steadyNowMs) {
+    auto check = [&](TransportRouteClock& clock, const char* which) {
+        if (!clock.valid()) return;
+        const double before = clock.pathTimeAt(steadyNowMs);
+        double errorMs = 0.0;
+        if (!clock.enforceBound(steadyNowMs, TransportRouteClock::kSanityBoundMs, &errorMs)) return;
+        const double period = static_cast<double>(std::max(1u, clock.periodMs()));
+        const double after = clock.pathTimeAt(steadyNowMs);
+        LOG_INFO("TRANSPORT RESYNC guid=0x", std::hex, transport.guid, std::dec,
+                 " entry=", transport.entry,
+                 " clock=", which,
+                 " source=sanity-check outcome=snapped",
+                 " oldPhase=", before / period,
+                 " newPhase=", after / period,
+                 " oldMs=", std::llround(before),
+                 " newMs=", std::llround(after),
+                 " errorMs=", std::llround(-errorMs),
+                 " boundMs=", TransportRouteClock::kSanityBoundMs,
+                 " periodMs=", clock.periodMs());
+    };
+    check(transport.routeClock, "route");
+    check(transport.pathClock, "path");
 }
 
 void TransportManager::applyDoodadMotionState(ActiveTransport& transport, bool moving) {
@@ -648,10 +787,26 @@ uint64_t TransportManager::groundTransportUnder(const glm::vec3& canonicalPositi
                 if (deck && d.x == 0.0f && d.y == 0.0f) break;
             }
         } else {
-            deck = getTransportDeckFloorHeight(guid, canonicalPosition);
-            if (deck) {
-                const float delta = canonicalPosition.z - *deck;
-                if (delta < -0.35f || delta > 1.25f) deck.reset();
+            // A ship's or a zeppelin's floor the same way: under the feet,
+            // the centre and a cross about it, within a step of them. Asked
+            // at the centre alone and taken only within a third of a yard
+            // above the feet, the first tread of a stair into the hull was
+            // no deck at all: the rider was let go there ("walk-off"), and
+            // the hull, which only its rider stands on, let them fall
+            // through it - off the Grom'gol zeppelin by the stairs down to
+            // its navigator, docked or flying.
+            constexpr float kFootprint = 0.35f;
+            const glm::vec2 cross[5] = {{0.0f, 0.0f}, {kFootprint, 0.0f}, {-kFootprint, 0.0f},
+                                        {0.0f, kFootprint}, {0.0f, -kFootprint}};
+            for (const glm::vec2& d : cross) {
+                const glm::vec3 at(canonicalPosition.x + d.x, canonicalPosition.y + d.y, canonicalPosition.z);
+                std::optional<float> floor = getTransportDeckFloorHeight(guid, at);
+                if (floor) {
+                    const float delta = canonicalPosition.z - *floor;
+                    if (delta < -rendering::movement::kMaxStepUp || delta > 2.0f) floor.reset();
+                }
+                if (floor && (!deck || *floor > *deck)) deck = floor;
+                if (deck && d.x == 0.0f && d.y == 0.0f) break;
             }
         }
         if (deck && *deck > ownerDeck) {
@@ -726,9 +881,13 @@ std::optional<float> TransportManager::getTransportDeckFloorHeight(
 
     const glm::vec3 renderPosition = core::coords::canonicalToRender(canonicalPosition);
     float normalZ = 0.0f;
+    // From a step above the feet (kMaxStepUp, the most the movement steps
+    // up): from a third of a yard the next tread of a stair stood above the
+    // probe, which went on down to the one under it - the rider could not
+    // climb the stairs into a hull, and walked into them.
     const auto floor = wmoRenderer_->getInstanceFloorHeight(
         it->second.wmoInstanceId,
-        renderPosition.x, renderPosition.y, renderPosition.z + 0.35f,
+        renderPosition.x, renderPosition.y, renderPosition.z + rendering::movement::kMaxStepUp,
         &normalZ);
     if (!floor || normalZ < 0.55f) return std::nullopt;
     return floor;
@@ -784,7 +943,7 @@ void TransportManager::updateTransportMovement(ActiveTransport& transport, float
     // The server's route clock on the steady clock: a loading screen stops
     // this manager's updates, and the transports go on moving meanwhile.
     if (!clockSync_.computePathTime(transport, spline, elapsedTime_, deltaTime, pathTimeMs,
-                                    static_cast<double>(nowSteadyMs()) * 0.001)) {
+                                    nowSteadyMs())) {
         // Strict server-authoritative mode: do not guess movement between server snapshots.
         updateTransformMatrices(transport);
         pushTransform(transport);
@@ -885,7 +1044,7 @@ void TransportManager::updateTransportMovement(ActiveTransport& transport, float
     }
 
     // Debug logging every 600 frames (~10 seconds at 60fps)
-    static int debugFrameCount = 0;
+    static uint32_t debugFrameCount = 0;
     if (debugFrameCount++ % 600 == 0) {
         LOG_DEBUG("Transport 0x", std::hex, transport.guid, std::dec,
                  " pathTime=", pathTimeMs, "ms / ", spline.durationMs(), "ms",
@@ -968,12 +1127,15 @@ void TransportManager::setInstanceHidden(const ActiveTransport& transport, bool 
     // Only WMO hulls. An M2 transport is a tram car or a lift, which never
     // leaves its map, so onThisMap is always true for one and this is never
     // asked to hide it.
-    if (!transport.isM2 && wmoRenderer_) {
+    if (!transport.isM2 && wmoRenderer_ && transport.wmoInstanceId != 0) {
         wmoRenderer_->setInstanceHidden(transport.wmoInstanceId, hidden);
     }
 }
 
 void TransportManager::pushTransform(ActiveTransport& transport) {
+    // No model bound (see unbindRenderInstance): the transport moves on, and
+    // there is nothing to place until one is.
+    if (transport.wmoInstanceId == 0) return;
     setInstanceHidden(transport, !transport.onThisMap);
     if (transport.isM2) {
         if (m2Renderer_) m2Renderer_->setInstanceTransform(transport.wmoInstanceId, transport.transform);
@@ -1314,16 +1476,16 @@ bool TransportManager::assignTaxiPathToTransport(uint32_t entry, uint32_t taxiPa
         PathEntry copied(taxiEntry->spline, entry, taxiEntry->zOnly,
                          /*dbc=*/false, taxiEntry->worldCoords);
         copied.presentMs = taxiEntry->presentMs;
-        if (route && transport.hasServerRouteClock) {
+        if (route && transport.hasServerRouteClock()) {
             const float speed =
-                TransportPathRepository::taxiRouteSpeedFor(*route, transport.routePeriodMs);
+                TransportPathRepository::taxiRouteSpeedFor(*route, transport.routePeriodMs());
             if (speed > 0.0f) {
                 PathEntry retimed =
                     TransportPathRepository::buildTaxiRouteSlice(*route, mapId, speed);
                 if (retimed.spline.keyCount() >= 2) {
                     retimed.pathId = entry;
                     LOG_INFO("Transport entry=", entry, " route ", taxiPathId,
-                             " retimed to the server's ", transport.routePeriodMs,
+                             " retimed to the server's ", transport.routePeriodMs(),
                              "ms period at ", speed, " yd/s");
                     copied = std::move(retimed);
                 }
@@ -1345,7 +1507,7 @@ bool TransportManager::assignTaxiPathToTransport(uint32_t entry, uint32_t taxiPa
             if (ship->valid()) {
                 LOG_INFO("Transport entry=", entry, " route ", taxiPathId, " flown as the client does: ",
                          ship->periodMs(), "ms at ", moveSpeed, " yd/s, ", accelRate, " yd/s2 (server ",
-                         transport.routePeriodMs, "ms)");
+                         transport.routePeriodMs(), "ms)");
                 transport.shipPath = std::move(ship);
                 transport.shipMapId = mapId;
             }
@@ -1372,11 +1534,11 @@ bool TransportManager::assignTaxiPathToTransport(uint32_t entry, uint32_t taxiPa
             // phase overrides this the moment it lands; this is what the hull
             // does until then, and the position the server spawned it at is
             // the only evidence there is.
-            if (!transport.hasServerRouteClock && transport.serverUpdateCount > 0 &&
+            if (!transport.hasServerRouteClock() && transport.serverUpdateCount > 0 &&
                 !storedEntry->spline.keys().empty()) {
                 const size_t nearest = storedEntry->spline.findNearestKey(serverSpawnPosition);
                 transport.localClockMs = storedEntry->spline.keys()[nearest].timeMs;
-            } else if (!transport.hasServerRouteClock) {
+            } else if (!transport.hasServerRouteClock()) {
                 transport.localClockMs = static_cast<uint32_t>(
                     nowEpochMs() % storedEntry->spline.durationMs());
             }

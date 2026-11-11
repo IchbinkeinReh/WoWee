@@ -2048,6 +2048,7 @@ void GameScreen::saveSettings() {
     out << "rt_full_resolution=" << (settingsPanel_.pendingRtFullRes ? 1 : 0) << "\n";
     out << "rt_soft_lamps=" << (settingsPanel_.pendingRtSoftLamps ? 1 : 0) << "\n";
     out << "rt_point_self_shadow=" << (settingsPanel_.pendingRtPointSelfShadow ? 1 : 0) << "\n";
+    out << "rt_unit_self_shadow=" << (settingsPanel_.pendingRtUnitSelfShadow ? 1 : 0) << "\n";
     out << "rt_unit_shadow_reach=" << settingsPanel_.pendingRtUnitShadowReach << "\n";
     out << "rt_min_brightness=" << settingsPanel_.pendingRtMinBrightness << "\n";
     out << "rt_water=" << (settingsPanel_.pendingRtWater ? 1 : 0) << "\n";
@@ -2406,6 +2407,7 @@ void GameScreen::loadSettings() {
             else if (key == "rt_full_resolution") settingsPanel_.pendingRtFullRes = (std::stoi(val) != 0);
             else if (key == "rt_soft_lamps") settingsPanel_.pendingRtSoftLamps = (std::stoi(val) != 0);
             else if (key == "rt_point_self_shadow") settingsPanel_.pendingRtPointSelfShadow = (std::stoi(val) != 0);
+            else if (key == "rt_unit_self_shadow") settingsPanel_.pendingRtUnitSelfShadow = (std::stoi(val) != 0);
             else if (key == "rt_unit_shadow_reach")
                 settingsPanel_.pendingRtUnitShadowReach = std::clamp(std::stoi(val), 1, 100);
             else if (key == "rt_normal_keep")

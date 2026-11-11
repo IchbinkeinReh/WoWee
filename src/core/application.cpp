@@ -805,6 +805,7 @@ bool Application::initialize() {
         LOG_FATAL("Failed to initialize renderer");
         return false;
     }
+    renderer->setSelectionCirclePlace([this](uint64_t guid) { return getSelectionCircle(guid); });
 
     // Create and initialize audio coordinator (owns all audio managers)
     audioCoordinator_ = std::make_unique<audio::AudioCoordinator>();
@@ -3046,9 +3047,12 @@ void Application::releaseGpuForDeviceRebuild() {
         tm->setWMORenderer(nullptr);
         tm->setM2Renderer(nullptr);
         // Each transport names the instance it moves, and the rebuilt
-        // renderers hand those numbers out again to other models. They are
-        // registered afresh as their game objects are spawned again.
-        tm->clearTransports();
+        // renderers hand those numbers out again to other models. The
+        // transports themselves stay - the server has not taken them, and a
+        // passenger is still aboard - and go on along their routes on the
+        // server's clock, bound to new models as their game objects are
+        // spawned again (processPendingTransportRegistrations).
+        tm->releaseRenderInstances("device lost: renderers rebuilt");
     }
     if (entitySpawner_) entitySpawner_->resetAllState();
     playerCharacterSpawned = false;
@@ -3100,6 +3104,7 @@ bool Application::recoverFromDeviceLoss() {
         LOG_ERROR("Renderer would not initialize on the rebuilt device");
         return false;
     }
+    renderer->setSelectionCirclePlace([this](uint64_t guid) { return getSelectionCircle(guid); });
     if (uiManager) uiManager->restoreGpu();
 
     // The world, loaded again where the player is. The session never left it:
@@ -3919,6 +3924,10 @@ void Application::performLogoutToLogin() {
         LOG_DEBUG("Waiting for GPU idle before logout scene cleanup...");
         ::wowee::rendering::deviceWaitIdle(renderer->getVkContext()->getDevice());
     }
+
+    // The session's transports go with it.
+    if (gameHandler && gameHandler->getTransportManager())
+        gameHandler->getTransportManager()->clearTransports("logout to the login screen");
 
     // --- Reset all EntitySpawner state (mount, creatures, players, GOs, queues, caches) ---
     if (entitySpawner_) entitySpawner_->resetAllState();
