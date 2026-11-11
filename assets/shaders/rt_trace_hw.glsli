@@ -39,6 +39,7 @@ bool rtAcceptCandidate(uint inst, uint prim, vec2 bary, vec3 origin, float t, in
     uint group = rtInstances[inst].group;
     if (rtInGroup(group, origin)) return false;
     if (group != 0u && t > rtUnitReach) return false;  // a unit, past its reach
+    if (t < rtGroupNear(group, origin)) return false;   // its own body, at the ray's start
     return rtSolidAt(rtTris[rtTriIndex(inst, prim)], bary, rng);
 }
 

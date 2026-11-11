@@ -51,6 +51,8 @@ float rtBoxEntry(vec3 bmin, vec3 bmax, vec3 o, vec3 invD, float tMax) {
 // Set while one fixture's mesh is walked for a light that shadows itself:
 // only its triangles whose winding normal points along the ray count.
 bool rtFacesAlong = false;
+// The nearest a hit counts in the instance being walked (rtGroupNear).
+float rtNearT = 0.0;
 
 // Moller-Trumbore, two-sided. Returns t, or -1 for a miss; bary is the hit's
 // weights of v1 and v2.
@@ -92,7 +94,7 @@ bool rtTraceMesh(RtMesh mesh, vec3 o, vec3 d, inout float tMax, inout uint hitTr
                 float t = rtTriHit(tri, o, d, bary);
                 // Only faces turned along the ray (rtFixtureFacesOnly).
                 if (rtFacesAlong && dot(cross(tri.v1.xyz - tri.v0.xyz, tri.v2.xyz - tri.v0.xyz), d) <= 0.0) continue;
-                if (t > 0.0 && t < tMax && rtSolidAt(tri, bary, rng)) {
+                if (t > rtNearT && t < tMax && rtSolidAt(tri, bary, rng)) {
                     tMax = t;
                     hitTri = mesh.triOffset + i;
                     found = true;
@@ -149,6 +151,7 @@ bool rtTraceScene(vec3 o, vec3 d, inout float tMax, out uint hitTri, out uint hi
                 bool fixture = (inst.flags & RT_MESH_FIXTURE) != 0u;
                 if (rtSkipFixtures && fixture && !rtFixtureFacesOnly) continue;
                 if (rtInGroup(inst.group, o)) continue;
+                rtNearT = max(rtGroupNear(inst.group, o), 0.0);
                 // The object-space direction is left unnormalised so t stays
                 // a world-space distance.
                 vec3 oo = rtToObject(inst, vec4(o, 1.0));
@@ -158,6 +161,7 @@ bool rtTraceScene(vec3 o, vec3 d, inout float tMax, out uint hitTri, out uint hi
                 rtFacesAlong = rtSkipFixtures && fixture && rtFixtureFacesOnly;
                 bool meshHit = rtTraceMesh(rtMeshes[inst.mesh], oo, od, tHit, hitTri, anyHit, rng);
                 rtFacesAlong = false;
+                rtNearT = 0.0;
                 if (meshHit) {
                     tMax = tHit;
                     found = true;

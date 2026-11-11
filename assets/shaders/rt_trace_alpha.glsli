@@ -85,6 +85,23 @@ bool rtMeetsOwnGroup = false;
 vec3 rtGroupFrom = vec3(0.0);
 bool rtGroupFromSet = false;
 
+// How near the ray's start a character's own body may not stop it, where it
+// meets itself (rtMeetsOwnGroup): its traced body is low-poly and lit by
+// smooth normals, and a ray leaving a flat triangle toward the light met the
+// triangles beside it - the self-shadow followed the mesh in hard facets. An
+// arm over the torso, a hand's breadth off and more, still shades it.
+const float RT_SELF_HIT_MIN = 0.12;
+
+// The nearest a hit on `group` counts for a ray from p: RT_SELF_HIT_MIN on
+// the character the ray leaves, while it meets itself; none otherwise.
+float rtGroupNear(uint group, vec3 p) {
+    if (group == 0u || !rtMeetsOwnGroup || rtSkipUnits) return 0.0;
+    vec3 lo = rtGroups[group * 2u].xyz;
+    vec3 hi = rtGroups[group * 2u + 1u].xyz;
+    vec3 q = rtGroupFromSet ? rtGroupFrom : p;
+    return all(greaterThanEqual(q, lo)) && all(lessThanEqual(q, hi)) ? RT_SELF_HIT_MIN : 0.0;
+}
+
 // Whether a ray from p passes the instances of `group` by: it starts inside
 // the group's box - on the character the group is, which never shadows or
 // occludes itself.
