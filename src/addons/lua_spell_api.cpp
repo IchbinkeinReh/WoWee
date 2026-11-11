@@ -1358,10 +1358,24 @@ static int lua_GetSpellLink(lua_State* L) {
     const uint32_t spellId = spellIdForCall(L, gh);
     if (spellId == 0) { return luaReturnNil(L); }
     std::string name = gh->getSpellName(spellId);
-    if (name.empty()) { return luaReturnNil(L); }
-    const std::string link = game::spellChatLink(spellId, name);
-    lua_pushstring(L, link.c_str());
-    return 1;
+    // A spell with Attributes 0x80 and 0x100 both has no link (0x005408e0).
+    const auto& cache = gh->spellNameCacheRef();
+    const auto it = cache.find(spellId);
+    constexpr uint32_t kHiddenA = 0x80, kHiddenB = 0x100;
+    if (name.empty() || (it != cache.end() && (it->second.attr & kHiddenA) && (it->second.attr & kHiddenB))) {
+        lua_pushnil(L);
+        lua_pushnil(L);
+        return 2;
+    }
+    lua_pushstring(L, game::spellChatLink(spellId, name).c_str());
+    // The second: a trade skill's (effect 47 first) list of the player's
+    // recipes as a trade link (0x005db060), nil for any other spell.
+    constexpr uint32_t kEffectTradeSkill = 47;
+    const std::string trade = it != cache.end() && it->second.effectIds[0] == kEffectTradeSkill
+        ? tradeSkillLink(gh, spellId) : std::string();
+    if (trade.empty()) lua_pushnil(L);
+    else lua_pushstring(L, trade.c_str());
+    return 2;
 }
 
 /// CancelUnitBuff(unit, indexOrName [, filterOrRank]) - both forms.

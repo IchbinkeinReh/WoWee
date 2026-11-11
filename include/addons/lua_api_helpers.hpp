@@ -963,6 +963,10 @@ std::string localizedRaceName(game::GameHandler* gh, uint32_t raceId, int gender
 /// UI's +0x1234, which GetMouseButtonClicked reads - 0x0050f950).
 std::string& lastClickButton();
 std::string localizedClassName(game::GameHandler* gh, uint32_t classId, int gender);
+/// A profession's trade link for the player (0x005db060): the spell's skill
+/// line, the player's rank in it and a bit per known recipe - "" when the
+/// spell's line has none.
+std::string tradeSkillLink(game::GameHandler* gh, uint32_t spellId);
 
 inline uint8_t unitRaceOf(game::GameHandler* gh, const std::string& lowerUid) {
     if (!gh) return 0;

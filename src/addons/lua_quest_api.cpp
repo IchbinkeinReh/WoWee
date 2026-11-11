@@ -587,11 +587,9 @@ static int lua_ShiftQuestWatches(lua_State* L) {
 // lists a run per line), and only a line SkillLine marks linkable has one.
 // Nil when the window's spell is not a trade skill's, or its line cannot be
 // linked.
-static int lua_GetTradeSkillListLink(lua_State* L) {
-    auto* gh = getGameHandler(L);
+std::string tradeSkillLink(game::GameHandler* gh, uint32_t spellId) {
     auto* am = gh ? gh->services().assetManager : nullptr;
-    const uint32_t spellId = gh ? gh->getCraftingSpellId() : 0;
-    if (!am || !am->isInitialized() || spellId == 0) return luaReturnNil(L);
+    if (!am || !am->isInitialized() || spellId == 0) return {};
     const auto abilities = am->loadDBC("SkillLineAbility.dbc");
     const auto lines = am->loadDBC("SkillLine.dbc");
     const auto* layouts = pipeline::getActiveDBCLayout();
@@ -651,6 +649,12 @@ static int lua_GetTradeSkillListLink(lua_State* L) {
             link += "|h[" + gh->getSpellName(spellId) + "]|h|r";
         }
     }
+    return link;
+}
+
+static int lua_GetTradeSkillListLink(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const std::string link = tradeSkillLink(gh, gh ? gh->getCraftingSpellId() : 0);
     if (link.empty()) return luaReturnNil(L);
     lua_pushstring(L, link.c_str());
     return 1;
