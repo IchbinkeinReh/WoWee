@@ -376,6 +376,7 @@ private:
     ImU32 dragging_ = 0;    ///< sweeping a selection through it
     ImU32 openPopup_ = 0;
     ImU32 justFocused_ = 0; ///< took focus this frame; used by selectAllOnFocus
+    int tabTakenFrame_ = -1; ///< the frame whose Tab press moved the focus already
 
     // Tab order, rebuilt every frame from the order fields are drawn in.
     ImU32 firstField_ = 0;
