@@ -2181,6 +2181,9 @@ struct ItemQueryResponseData {
     /// Duration: how long the item lasts once had, in seconds; 0 for ever
     /// (ITEM_DURATION, 0x006277f0).
     uint32_t itemDuration = 0;
+    /// RandomProperty or RandomSuffix named: the item rolls its stats when it
+    /// drops, so the template alone says ITEM_RANDOM_ENCHANT (0x006277f0).
+    bool randomEnchant = false;
     /// Which of PageTextMaterial.dbc's seven backings the page is drawn on -
     /// Parchment, Stone, Marble, Silver, Bronze, Valentine, Illidan. Read off
     /// the same four post-description words as pageTextId and thrown away

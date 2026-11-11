@@ -575,8 +575,11 @@ bool ItemQueryResponseParser::parse(network::Packet& packet, ItemQueryResponseDa
         data.lockId = packet.readUInt32();
         data.material = packet.readUInt32();
         data.sheath = packet.readUInt32();
-        packet.readUInt32();  // RandomProperty and RandomSuffix: the link
-        packet.readUInt32();  // names the one rolled
+        // RandomProperty and RandomSuffix: the link names the one rolled;
+        // that there is one to roll is what a template's tooltip says.
+        const uint32_t randomProperty = packet.readUInt32();
+        const uint32_t randomSuffix = packet.readUInt32();
+        data.randomEnchant = randomProperty != 0 || randomSuffix != 0;
         data.block = static_cast<int32_t>(packet.readUInt32());
         data.itemSetId = packet.readUInt32(); // ItemSet(6)
         // MaxDurability(7), Area(8), Map(9)

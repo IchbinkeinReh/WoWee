@@ -3389,9 +3389,23 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
     // The three after it are the gems in its sockets, by enchant id.
     uint32_t enchantId = 0;
     std::array<uint32_t, 3> linkGems{};
+    bool linkRolled = false;
     if (kind == "item") {
         size_t at = colon + 1;
         while (at < link.size() && link[at] >= '0' && link[at] <= '9') ++at;
+        // item:id:enchant:gem1:gem2:gem3:gem4:suffix - the suffix, which a
+        // rolled item's link carries and a template's does not.
+        {
+            size_t f = at;
+            for (int field = 0; field < 5 && f < link.size(); ++field) {
+                f = link.find(':', f + 1);
+                if (f == std::string::npos) break;
+            }
+            if (f != std::string::npos && f < link.size()) {
+                const char* p = link.c_str() + f + 1;
+                linkRolled = *p != '\0' && *p != ':' && std::strtol(p, nullptr, 10) != 0;
+            }
+        }
         for (int field = 0; field < 4 && at < link.size() && link[at] == ':'; ++field) {
             uint32_t v = 0;
             for (++at; at < link.size() && link[at] >= '0' && link[at] <= '9'; ++at)
@@ -3405,7 +3419,13 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
     if (kind == "spell" || kind == "enchant" || kind == "talent")
         filled = fillSpellTooltip(L, w, gh, id);
     else if (kind == "item") {
+        // Whether the link names a rolled suffix, which the builder asks
+        // before saying ITEM_RANDOM_ENCHANT for the template.
+        lua_pushboolean(L, linkRolled ? 1 : 0);
+        lua_setfield(L, 1, "__linkRolled");
         filled = fillItemTooltipById(L, gh, id, nullptr, &linkGems);
+        lua_pushnil(L);
+        lua_setfield(L, 1, "__linkRolled");
         if (filled) appendEnchantLineById(w, gh, enchantId);
         // Asked for whether it was found or not: the answer is what turns a
         // name into a tooltip, and the miss is exactly when it is needed.
@@ -11273,6 +11293,11 @@ void LuaEngine::registerCoreAPI() {
         "            local text = format(ITEM_SOCKET_BONUS or 'Socket Bonus: %s', data.socketBonus)\n"
         "            if inst and inst.socketBonusMatched then self:AddLine(text, 0, 1, 0)\n"
         "            else self:AddLine(text, 0.5, 0.5, 0.5) end\n"
+        "        end\n"
+        // A template that rolls its stats on drop, seen as a template - not
+        // one held, nor a link naming its roll: ITEM_RANDOM_ENCHANT in green.
+        "        if data.randomEnchant and not inst and not rawget(self, '__linkRolled') then\n"
+        "            self:AddLine(ITEM_RANDOM_ENCHANT or '<Random enchantment>', 0, 1, 0)\n"
         "        end\n"
         // The durability, between what the item is and what it asks for
         // (0x006277f0): white, red once broken.

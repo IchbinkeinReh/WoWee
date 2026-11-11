@@ -3531,6 +3531,10 @@ static int lua_GetItemTooltipData(lua_State* L) {
         lua_pushnumber(L, info->block);
         lua_setfield(L, -2, "block");
     }
+    if (info->randomEnchant) {
+        lua_pushboolean(L, 1);
+        lua_setfield(L, -2, "randomEnchant");
+    }
     if (info->itemDuration > 0) {
         lua_pushnumber(L, info->itemDuration);
         lua_setfield(L, -2, "duration");
