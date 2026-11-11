@@ -29,6 +29,8 @@ struct TalentEntry {
     uint32_t prereqTalent[3] = {};
     uint8_t prereqRank[3] = {};
     uint8_t maxRank = 0;
+    /// Talent.dbc Flags: 0x1 is GetTalentInfo's isExceptional (0x005c7800).
+    uint32_t flags = 0;
 };
 
 struct TalentTabEntry {
