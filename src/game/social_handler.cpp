@@ -4388,14 +4388,29 @@ void SocialHandler::handleRandomRoll(network::Packet& packet) {
     RandomRollData data;
     if (!RandomRollParser::parse(packet, data)) return;
     // RANDOM_ROLL_RESULT with the roller's name - the player's own too - the
-    // number and the range, a system line (0x006e2e90, MSG_RANDOM_ROLL); none
-    // for a roller whose name is not known. This printed "You roll" /
-    // "Someone rolls" in English.
+    // number and the range, a system line (0x006e2e90, MSG_RANDOM_ROLL). A
+    // roller whose name is not known yet is asked for and the line waits for
+    // the answer (0x006cb990); it is dropped only when no name comes back.
+    // This printed "You roll" / "Someone rolls" in English.
+    const auto print = [this, data](const std::string& name) {
+        owner_.addSystemChatMessage(interfaceFormat("RANDOM_ROLL_RESULT", "%s rolls %d (%d-%d)",
+            {name, std::to_string(data.result), std::to_string(data.minRoll),
+             std::to_string(data.maxRoll)}));
+    };
     std::string rollerName = owner_.lookupName(data.rollerGuid);
     if (rollerName.empty() && data.rollerGuid == owner_.getPlayerGuid()) rollerName = ownName(owner_);
-    if (rollerName.empty()) return;
-    owner_.addSystemChatMessage(interfaceFormat("RANDOM_ROLL_RESULT", "%s rolls %d (%d-%d)",
-        {rollerName, std::to_string(data.result), std::to_string(data.minRoll), std::to_string(data.maxRoll)}));
+    if (!rollerName.empty()) {
+        print(rollerName);
+        return;
+    }
+    if (data.rollerGuid == 0) return;
+    // Each roll waits on its own, as each of the client's carries its own
+    // copy of the numbers: two from one stranger must both be said.
+    static uint32_t rollWaits = 0;
+    owner_.askNameThen(data.rollerGuid, "random roll " + std::to_string(++rollWaits),
+                       [print](bool found, const std::string& name) {
+                           if (found && !name.empty()) print(name);
+                       });
 }
 
 // ============================================================
