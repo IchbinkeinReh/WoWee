@@ -247,6 +247,10 @@ void GameHandler::handleCharEnum(network::Packet& packet) {
     LOG_INFO("   CHARACTER LIST RECEIVED");
     LOG_INFO("========================================");
     LOG_INFO("Found ", characters.size(), " character(s)");
+    // The test harness's watchdog waits for this line: a run that has not
+    // reached the character list soon after its start is hung (login, realm
+    // list or the world server's connect) and is killed and tried again.
+    LOG_INFO("CHARLIST reached");
 
     if (characters.empty()) {
         LOG_INFO("No characters on this account");
