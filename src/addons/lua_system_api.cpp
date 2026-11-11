@@ -1014,6 +1014,13 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     // "1" - that rule swallows every name it starts with, so a default of any
     // other value has to be stated before it rather than after.
     if (n == "sound_enablesoundwhengameisinbg") lua_pushstring(L, "0");
+    // Five more the client registers off (0x004d0000): backend modes this
+    // client has no equivalent of, answered as the original has them.
+    else if (n == "sound_enablehardware" || n == "sound_enablemixmode2" ||
+             n == "sound_enablemode2" || n == "sound_enablereverb" ||
+             n == "sound_enablesoftwarehrtf") {
+        lua_pushstring(L, "0");
+    }
     else if (n.rfind("sound_enable", 0) == 0) lua_pushstring(L, "1");
     // Master at full, but the client registers its other three scales at
     // different levels (0x004d0000): music 0.4 and ambience 0.6 against master
@@ -1580,6 +1587,13 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     else if (n == "guildshowoffline") lua_pushstring(L, "1");
     // Nothing stated this name: the stand-in, and the one answer here that is not
     // something the client registered the CVar with.
+    // Everything else as the client registers it. Answering "0" for all of
+    // these turned on what the client has off and the reverse: the clock, the
+    // Real ID toasts, the spellbook's ranks and the calendar's filters were all
+    // off on a fresh profile, and the Defaults button switched them off.
+    else if (auto registered = clientCVarDefault(n)) {
+        lua_pushlstring(L, registered->data(), registered->size());
+    }
     else { lua_pushstring(L, "0"); if (stated) *stated = false; }
 }
 
@@ -1771,6 +1785,8 @@ static int registerForSave(lua_State* L, bool perCharacter) {
 static int lua_RegisterForSave(lua_State* L) { return registerForSave(L, false); }
 static int lua_RegisterForSavePerCharacter(lua_State* L) { return registerForSave(L, true); }
 
+static int lua_GetLocale(lua_State* L);
+
 static int lua_GetCVar(lua_State* L) {
     const char* name = luaL_checkstring(L, 1);
     // Folded to lower case, because the client's CVar names are not
@@ -1781,6 +1797,9 @@ static int lua_GetCVar(lua_State* L) {
     // drawn, and invisible.
     std::string n(name);
     toLowerInPlace(n);
+    // The language the client is running in: registered as "****" and
+    // overwritten with it before anything can ask, so it is what GetLocale says.
+    if (n == "locale") return lua_GetLocale(L);
     // Asked of the client before the store, for the settings it owns outright.
     // Enemy nameplates and the minimap's rotation used to be here too - the V
     // key and the minimap's menu turn them without SetCVar - and are rows
