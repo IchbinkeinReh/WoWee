@@ -112,7 +112,7 @@ void RtGiProbes::shutdown() {
     VkDevice dev = ctx_->getDevice();
     ::wowee::rendering::deviceWaitIdle(dev);
     destroyResources();
-    for (VkPipeline* p : {&trace_, &update_, &exposure_}) {
+    for (VkPipeline* p : {&relocate_, &trace_, &update_, &exposure_}) {
         if (*p) vkDestroyPipeline(dev, *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
@@ -210,7 +210,9 @@ bool RtGiProbes::createPipelines() {
         return ok;
     };
     const bool hw = scene_->backend() == RtScene::Backend::Hardware;
-    pipelinesOk_ = make(hw ? "assets/shaders/rt_gi_trace_hw.comp.spv"
+    pipelinesOk_ = make(hw ? "assets/shaders/rt_gi_relocate_hw.comp.spv"
+                           : "assets/shaders/rt_gi_relocate.comp.spv", relocate_) &&
+                   make(hw ? "assets/shaders/rt_gi_trace_hw.comp.spv"
                            : "assets/shaders/rt_gi_trace.comp.spv", trace_) &&
                    make("assets/shaders/rt_gi_update.comp.spv", update_) &&
                    make("assets/shaders/rt_gi_exposure.comp.spv", exposure_);
@@ -363,6 +365,13 @@ void RtGiProbes::record(VkCommandBuffer cmd, uint32_t slot, VkBuffer ubo, VkDevi
     VkDescriptorSet sets[2] = {sets_[slot], scene_->descriptorSet()};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout_, 0, 2, sets, 0,
                             nullptr);
+    // Where each listed probe traces from (rt_gi_relocate): worked out from
+    // its grid point and the scene, never from what it was last frame.
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, relocate_);
+    vkCmdDispatch(cmd, listCount_, 1, 1);
+    memoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                  VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                  VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, trace_);
     vkCmdDispatch(cmd, listCount_, 1, 1);
     ctx_->gpuMark(cmd, "rt gi probe rays");

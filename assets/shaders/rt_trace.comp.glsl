@@ -306,8 +306,8 @@ vec4 rtGiSampleCascadeSeen(int cascade, vec4 vol, vec4 volMod, vec3 p, vec3 n, v
     for (int i = 0; i < 8; ++i) {
         ivec3 off = ivec3(i & 1, (i >> 1) & 1, i >> 2);
         ivec3 local = base + off;
-        vec3 probe = giProbeWorld(vol, local);
         ivec3 st = giStorage(volMod, local);
+        vec3 probe = giProbeWorld(vol, local) + giProbeOffset(uGiAtlas, cascade, st);
         vec3 toProbe = normalize(probe - p);
         float back = (dot(toProbe, n) + 1.0) * 0.5;
         float w = back * back + 0.2;

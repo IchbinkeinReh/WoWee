@@ -53,7 +53,9 @@ void main() {
                     int(slot) / (GI_PROBES.x * GI_PROBES.y));
     vec4 vol = pass.giVolume[cascade];
     ivec3 local = (s - ivec3(pass.giVolumeMod[cascade].xyz) + GI_PROBES) % GI_PROBES;
-    vec3 origin = giProbeWorld(vol, local);
+    // From where the probe was moved to, clear of the surface it stood by
+    // (rt_gi_relocate, recorded just before this).
+    vec3 origin = giProbeWorld(vol, local) + giProbeOffset(uGiAtlas, cascade, s);
 
     uint r = gl_LocalInvocationIndex;
     vec3 dir = normalize(mat3(pass.giRotation) * giFibonacci(r));

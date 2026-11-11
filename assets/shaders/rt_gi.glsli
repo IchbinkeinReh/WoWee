@@ -68,6 +68,21 @@ vec3 giProbeWorld(vec4 vol, ivec3 local) {
     return (vol.xyz + vec3(local)) * vol.w;
 }
 
+// Where a probe's relocation offset is kept (rt_gi_relocate): one texel per
+// probe in the atlas's free strip beside the irradiance tiles, past the
+// exposure texel - xyz the offset in yards from its grid point, which the
+// probe traces from and the readers weigh it at. Written each time the probe
+// is updated, from the scene alone (rt_gi_volume.hpp's kOffset*).
+const int GI_OFFSET_X = 32 * 16 * GI_IRR_TILE + 16;
+const int GI_OFFSET_Y = 128;
+ivec2 giOffsetTexel(int cascade, ivec3 s) {
+    return ivec2(GI_OFFSET_X + s.x + GI_PROBES.x * s.z, cascade * GI_BAND_HEIGHT + GI_OFFSET_Y + s.y);
+}
+vec3 giProbeOffset(sampler2D atlas, int cascade, ivec3 s) {
+    vec3 o = texelFetch(atlas, giOffsetTexel(cascade, s), 0).xyz;
+    return any(isnan(o)) || any(isinf(o)) ? vec3(0.0) : o;
+}
+
 // How far inside a cascade p is: 1 more than two cells in from every face,
 // falling to 0 at the outermost probes, so the cascade beyond takes over
 // without a seam.
@@ -100,8 +115,8 @@ vec4 giSampleCascade(sampler2D atlas, int cascade, vec4 vol, vec4 volMod, vec3 p
     for (int i = 0; i < 8; ++i) {
         ivec3 off = ivec3(i & 1, (i >> 1) & 1, i >> 2);
         ivec3 local = base + off;
-        vec3 probe = giProbeWorld(vol, local);
         ivec3 s = giStorage(volMod, local);
+        vec3 probe = giProbeWorld(vol, local) + giProbeOffset(atlas, cascade, s);
 
         vec3 toProbe = normalize(probe - p);
         float back = (dot(toProbe, n) + 1.0) * 0.5;

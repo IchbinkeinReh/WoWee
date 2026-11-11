@@ -42,6 +42,11 @@ inline constexpr int kAtlasHeight = kCascades * kBandHeight;
 /// last irradiance tile.
 inline constexpr int kExposureTexelX = kProbes.x * kProbes.z * kIrradianceTile;
 inline constexpr int kExposureTexelY = 0;
+/// Each probe's relocation offset (rt_gi_relocate, rt_gi.glsli's
+/// giOffsetTexel): a texel of the strip beside the irradiance tiles, at
+/// x kOffsetX + s.x + 32 s.z, y cascade's band + kOffsetY + s.y.
+inline constexpr int kOffsetX = kExposureTexelX + 16;
+inline constexpr int kOffsetY = 128;
 
 /// A list entry: the storage slot, the cascade, and whether the probe has just
 /// come into the volume and must forget what its slot held.

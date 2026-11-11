@@ -588,6 +588,7 @@ function(compile_shaders TARGET_NAME)
         "rt_prepare.comp.glsl|rt_prepare_ms.comp.spv|-DRT_MSAA"
         "rt_trace.comp.glsl|rt_trace_hw.comp.spv|-DRT_HARDWARE --target-env=vulkan1.2"
         "rt_gi_trace.comp.glsl|rt_gi_trace_hw.comp.spv|-DRT_HARDWARE --target-env=vulkan1.2"
+        "rt_gi_relocate.comp.glsl|rt_gi_relocate_hw.comp.spv|-DRT_HARDWARE --target-env=vulkan1.2"
         # The ray traced water (water_rt.glsli) through ray queries; as it
         # is, water.frag.spv, it goes through the software tracer.
         "water.frag.glsl|water_rt_hw.frag.spv|-DRT_HARDWARE --target-env=vulkan1.2"

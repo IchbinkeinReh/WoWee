@@ -143,6 +143,7 @@ private:
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool pool_ = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
+    VkPipeline relocate_ = VK_NULL_HANDLE;
     VkPipeline trace_ = VK_NULL_HANDLE;
     VkPipeline update_ = VK_NULL_HANDLE;
     VkPipeline exposure_ = VK_NULL_HANDLE;
