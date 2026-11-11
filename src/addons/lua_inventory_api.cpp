@@ -26,6 +26,7 @@
 #include "game/item_stat_text.hpp"
 #include "game/reputation_standing.hpp"
 #include "game/server_notices.hpp"
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -36,6 +37,7 @@
 #include <map>
 #include <set>
 #include <string_view>
+#include <unordered_map>
 
 namespace wowee::addons {
 
@@ -290,7 +292,7 @@ static int lua_SetPortraitToTexture(lua_State* L) {
 /// there was no way to finish any of them once the bags were handed over.
 static int lua_SpellCanTargetItem(lua_State* L) {
     auto* gh = getGameHandler(L);
-    lua_pushboolean(L, gh && gh->isAwaitingItemTarget());
+    luaPushOneOrNil(L, gh && gh->isAwaitingItemTarget());
     return 1;
 }
 
@@ -324,7 +326,7 @@ static int lua_GetBuybackItemInfo(lua_State* L) {
         lua_pushnumber(L, 0);
         lua_pushnumber(L, 1);
         lua_pushnumber(L, 0);
-        lua_pushboolean(L, 1);
+        luaPushOneOrNil(L, 1);
         return 6;
     }
     const auto& bi = *row;
@@ -349,7 +351,7 @@ static int lua_GetBuybackItemInfo(lua_State* L) {
     lua_pushnumber(L, 0);
     // isUsable, as for a merchant's own items (0x00585070 asks 0x006dc3f0).
     const auto* binfo = gh->getItemInfo(bi.item.itemId);
-    lua_pushboolean(L, !binfo || gh->judgeItemRequirements(*binfo).usable());
+    luaPushOneOrNil(L, !binfo || gh->judgeItemRequirements(*binfo).usable());
     return 6;
 }
 
@@ -428,7 +430,7 @@ static int lua_GetRepairAllCost(lua_State* L) {
     auto* gh = getGameHandler(L);
     const uint32_t cost = gh ? gh->estimateRepairAllCost() : 0;
     lua_pushnumber(L, cost);
-    lua_pushboolean(L, gh && gh->getMoneyCopper() >= cost);
+    luaPushOneOrNil(L, gh && gh->getMoneyCopper() >= cost);
     return 2;
 }
 
@@ -613,7 +615,7 @@ static int lua_GetMerchantItemInfo(lua_State* L) {
     // race, the armour or weapon type, skill, spell, reputation. The merchant
     // frame tints the icon red where it is false. Usable while the item is
     // not known yet, as the client answers for an entry it has no record of.
-    lua_pushboolean(L, !info || gh->judgeItemRequirements(*info).usable());
+    luaPushOneOrNil(L, !info || gh->judgeItemRequirements(*info).usable());
     // The extended cost - tokens, honour, arena points - which merchantframe
     // reads as `if ( extendedCost and (price <= 0) )` to decide whether to
     // show a token price instead of a coin one. It was not returned at all, so
@@ -817,14 +819,15 @@ static int lua_ShowContainerSellCursor(lua_State* L) {
 
 static int lua_CanMerchantRepair(lua_State* L) {
     auto* gh = getGameHandler(L);
-    lua_pushboolean(L, gh && gh->getVendorItems().canRepair ? 1 : 0);
+    luaPushOneOrNil(L, gh && gh->getVendorItems().canRepair ? 1 : 0);
     return 1;
 }
 
 // UnitStat(unit, statIndex) → base, effective, posBuff, negBuff
 
-/// An item id from either an id or a link, which is what every one of these
-/// functions is documented to accept.
+/// An item id from an id, an "item:" link or the name of a cached item,
+/// compared without case (0x00709de0) - what every one of these functions
+/// is documented to accept.
 static uint32_t itemIdFromArg(lua_State* L, int index) {
     if (lua_isnumber(L, index)) {
         return static_cast<uint32_t>(lua_tonumber(L, index));
@@ -834,7 +837,15 @@ static uint32_t itemIdFromArg(lua_State* L, int index) {
         std::string str(s ? s : "");
         const auto pos = str.find("item:");
         if (pos != std::string::npos) {
-            try { return static_cast<uint32_t>(std::stoul(str.substr(pos + 5))); } catch (...) {}
+            return static_cast<uint32_t>(std::strtoul(str.c_str() + pos + 5, nullptr, 10));
+        }
+        auto* gh = getGameHandler(L);
+        if (!gh) return 0;
+        toLowerInPlace(str);
+        for (const auto& [id, info] : gh->getItemInfoCache()) {
+            std::string name = info.name;
+            toLowerInPlace(name);
+            if (name == str) return id;
         }
     }
     return 0;
@@ -847,22 +858,7 @@ static uint32_t itemIdFromArg(lua_State* L, int index) {
 // none (0x0070a910). Nothing at all, not even nil, for an id Item.dbc lacks.
 static int lua_GetItemIcon(lua_State* L) {
     auto* gh = getGameHandler(L);
-    int32_t itemId = 0;
-    if (lua_isnumber(L, 1)) {
-        itemId = static_cast<int32_t>(lua_tointeger(L, 1));
-    } else if (lua_isstring(L, 1) && gh) {
-        const std::string str = lua_tostring(L, 1);
-        const auto pos = str.find("item:");
-        if (pos != std::string::npos) {
-            itemId = static_cast<int32_t>(std::strtol(str.c_str() + pos + 5, nullptr, 10));
-        } else {
-            const auto lower = [](std::string t) { toLowerInPlace(t); return t; };
-            const std::string want = lower(str);
-            for (const auto& [id, info] : gh->getItemInfoCache()) {
-                if (lower(info.name) == want) { itemId = static_cast<int32_t>(id); break; }
-            }
-        }
-    }
+    const int32_t itemId = static_cast<int32_t>(itemIdFromArg(L, 1));
     auto* am = gh ? gh->services().assetManager : nullptr;
     if (itemId <= 0 || !am || !am->isInitialized()) return 0;
     auto items = am->loadDBCOptional("Item.dbc");
@@ -967,7 +963,7 @@ static int lua_IsDressableItem(lua_State* L) {
     const auto* info = (gh && itemId) ? gh->getItemInfo(itemId) : nullptr;
     // 2 is weapon and 4 is armour, as the item class is sent.
     const bool dressable = info && (info->itemClass == 2 || info->itemClass == 4);
-    lua_pushboolean(L, dressable ? 1 : 0);
+    luaPushOneOrNil(L, dressable ? 1 : 0);
     return 1;
 }
 
@@ -1731,11 +1727,40 @@ uint32_t currencyListItemId(lua_State* L, int index) {
     return rows[static_cast<size_t>(index) - 1].itemId;
 }
 
+uint32_t backpackCurrencyItemId(lua_State* L, int index) {
+    auto* gh = getGameHandler(L);
+    if (!gh || index < 1) return 0;
+    uint32_t knownLow = 0, knownHigh = 0;
+    const bool named = knownCurrencyPair(gh, knownLow, knownHigh);
+    const game::CurrencyWatch& watch = currencyWatched();
+    for (int seen = 0; const auto& c : gh->getCurrencyTypes()) {
+        if (named && !game::currencyIsKnown(knownLow, knownHigh, c.id)) continue;
+        if (!watch.has(c.id)) continue;
+        if (++seen == index) return c.itemId;
+    }
+    return 0;
+}
+
+// GetItemCount(item[, includeBank[, includeCharges]]) (0x0051c2e0): the item
+// by id, link or name, counted where the client's searches look - worn,
+// carried, the worn bags and the keyring - and the bank when asked, a broken
+// item left out unless the charges are asked for too (0x00754d00).
 static int lua_GetItemCount(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnZero(L); }
-    const uint32_t itemId = static_cast<uint32_t>(luaL_checknumber(L, 1));
-    lua_pushnumber(L, gh->getInventory().countItem(itemId));
+    const uint32_t itemId = itemIdFromArg(L, 1);
+    const bool bank = lua_toboolean(L, 2) != 0;
+    const bool withBroken = lua_toboolean(L, 3) != 0;
+    uint32_t count = 0;
+    const auto add = [&](const game::ItemDef& d) {
+        if (d.itemId != itemId) return;
+        if (!withBroken && d.maxDurability != 0 && d.curDurability == 0) return;
+        count += d.stackCount > 0 ? d.stackCount : 1;
+    };
+    const auto& inv = gh->getInventory();
+    inv.forEachCarried(add);
+    if (bank) inv.forEachBanked(add);
+    lua_pushnumber(L, count);
     return 1;
 }
 
@@ -1834,7 +1859,7 @@ static int lua_GetInboxItem(lua_State* L) {
     lua_pushstring(L, info ? gh->getItemIconPath(info->displayInfoId).c_str() : "");
     lua_pushnumber(L, att->stackCount);
     lua_pushnumber(L, info ? info->quality : 1);
-    lua_pushboolean(L, 1);
+    luaPushOneOrNil(L, 1);
     return 5;
 }
 
@@ -1877,7 +1902,7 @@ static int lua_DeleteInboxItem(lua_State* L) {
 
 // InboxItemCanDelete(index) - nothing here refuses a deletion
 static int lua_InboxItemCanDelete(lua_State* L) {
-    lua_pushboolean(L, 1);
+    luaPushOneOrNil(L, 1);
     return 1;
 }
 
@@ -2082,7 +2107,7 @@ static int lua_CloseMail(lua_State* L) {
 /// money had not finished syncing.
 static int lua_SetSendMailMoney(lua_State* L) {
     s_sendMailMoney = copperArg(L, 1);
-    lua_pushboolean(L, 1);
+    luaPushOneOrNil(L, 1);
     return 1;
 }
 
@@ -2268,46 +2293,6 @@ const game::EquipmentSetInfo* equipmentSetByName(game::GameHandler* gh,
     return nullptr;
 }
 
-/// How much of a set is worn, and how much is merely to hand.
-struct SetTally { int items = 0, equipped = 0, inBags = 0, missing = 0, ignored = 0; };
-
-SetTally tallySet(game::GameHandler* gh, const game::EquipmentSetInfo& set) {
-    SetTally t;
-    const auto* guids = gh ? gh->getEquipmentSetItems(set.setId) : nullptr;
-    if (!gh || !guids) return t;
-    const uint32_t ignoreMask = gh->getEquipmentSetIgnoreMask(set.setId);
-    const auto& inv = gh->getInventory();
-
-    for (int i = 0; i < kEquipSlots; ++i) {
-        if (ignoreMask & (1u << i)) { ++t.ignored; continue; }
-        const uint32_t want = gh->getItemIdByGuid((*guids)[i]);
-        if (want == 0) { ++t.ignored; continue; }
-        ++t.items;
-        // Worn anywhere counts as worn: a ring saved from one ring slot and put
-        // back on in the other is on the player either way.
-        bool onBody = false;
-        for (int w = 0; w < kEquipSlots && !onBody; ++w) {
-            const auto& worn = inv.getEquipSlot(static_cast<game::EquipSlot>(w));
-            onBody = !worn.empty() && worn.item.itemId == want;
-        }
-        if (onBody) { ++t.equipped; continue; }
-
-        bool found = false;
-        for (int b = 0; b < inv.getBackpackSize() && !found; ++b) {
-            const auto& sl = inv.getBackpackSlot(b);
-            found = !sl.empty() && sl.item.itemId == want;
-        }
-        for (int bag = 0; bag < game::Inventory::NUM_BAG_SLOTS && !found; ++bag) {
-            for (int sl = 0; sl < inv.getBagSize(bag) && !found; ++sl) {
-                const auto& s2 = inv.getBagSlot(bag, sl);
-                found = !s2.empty() && s2.item.itemId == want;
-            }
-        }
-        if (found) ++t.inBags; else ++t.missing;
-    }
-    return t;
-}
-
 /// Slots the player marked to leave alone before the next save. A choice about
 /// the save to come rather than part of any set, so it is kept here.
 std::set<int>& pendingIgnoredSlots() {
@@ -2353,39 +2338,31 @@ static int lua_GetNumEquipmentSets(lua_State* L) {
     return 1;
 }
 
-static void pushSetInfo(lua_State* L, game::GameHandler* gh,
-                        const game::EquipmentSetInfo& set) {
-    const SetTally t = tallySet(gh, set);
-    lua_pushstring(L, set.name.c_str());
-    // The server names the icon; the interface wants something SetTexture can
-    // use, and every one of them lives under the same directory.
-    if (set.iconName.empty()) lua_pushnil(L);
-    else lua_pushstring(L, ("Interface\\Icons\\" + set.iconName).c_str());
-    lua_pushnumber(L, set.setId);
-    lua_pushboolean(L, (t.items > 0 && t.equipped == t.items) ? 1 : 0);
-    lua_pushnumber(L, t.items);
-    lua_pushnumber(L, t.equipped);
-    lua_pushnumber(L, t.inBags);
-    lua_pushnumber(L, t.missing);
-    lua_pushnumber(L, t.ignored);
-}
-
+// GetEquipmentSetInfo(index) → name, icon, setID (0x005af120): the icon as a
+// path SetTexture takes, under the directory every one of them lives in.
 static int lua_GetEquipmentSetInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
     if (!gh) { return luaReturnNil(L); }
     const auto& sets = gh->getEquipmentSets();
     if (index < 1 || index > static_cast<int>(sets.size())) { return luaReturnNil(L); }
-    pushSetInfo(L, gh, sets[index - 1]);
-    return 9;
+    const auto& set = sets[index - 1];
+    lua_pushstring(L, set.name.c_str());
+    if (set.iconName.empty()) lua_pushnil(L);
+    else lua_pushstring(L, ("Interface\\Icons\\" + set.iconName).c_str());
+    lua_pushnumber(L, set.setId);
+    return 3;
 }
 
+// GetEquipmentSetInfoByName(name) → icon, setID (0x005af1d0): the icon as the
+// server named it, without the directory, and nothing for no such set.
 static int lua_GetEquipmentSetInfoByName(lua_State* L) {
     auto* gh = getGameHandler(L);
     const auto* set = equipmentSetByName(gh, luaL_optstring(L, 1, ""));
-    if (!set) { return luaReturnNil(L); }
-    pushSetInfo(L, gh, *set);
-    return 9;
+    if (!set) return 0;
+    lua_pushstring(L, set->iconName.c_str());
+    lua_pushnumber(L, set->setId);
+    return 2;
 }
 
 // GetEquipmentSetItemIDs(name) → one entry per slot, walked with ipairs
@@ -2789,7 +2766,7 @@ static int lua_IsEquippableItem(lua_State* L) {
     const uint32_t itemId = itemIdFromArg(L, 1);
     const auto* info = (gh && itemId) ? gh->getItemInfo(itemId) : nullptr;
     // Zero is "nowhere to wear it" - reagents, food, quest items.
-    lua_pushboolean(L, (info && info->inventoryType != 0) ? 1 : 0);
+    luaPushOneOrNil(L, (info && info->inventoryType != 0) ? 1 : 0);
     return 1;
 }
 
@@ -2805,7 +2782,7 @@ static int lua_IsEquippedItem(lua_State* L) {
             worn = !sl.empty() && sl.item.itemId == itemId;
         }
     }
-    lua_pushboolean(L, worn ? 1 : 0);
+    luaPushOneOrNil(L, worn ? 1 : 0);
     return 1;
 }
 
@@ -3363,6 +3340,135 @@ static int lua_WoweeContainerItemInstance(lua_State* L) {
     return 1;
 }
 
+/// One ItemSet.dbc row: the set's name, its seventeen item ids, its eight
+/// bonuses and the thresholds they come at, and the skill it may ask for
+/// (WotLK: Name 1, Item 18-34, Spell 35-42, Threshold 43-50, skill 51-52).
+struct ItemSetRow {
+    std::string name;
+    std::array<uint32_t, 17> items{};
+    std::array<uint32_t, 8> spells{};
+    std::array<uint32_t, 8> thresholds{};
+    uint32_t skill = 0;
+    uint32_t skillRank = 0;
+};
+
+static const ItemSetRow* itemSetRow(game::GameHandler* gh, uint32_t setId) {
+    static std::unordered_map<uint32_t, ItemSetRow> rows;
+    static bool loaded = false;
+    if (!loaded && gh) {
+        auto* am = gh->services().assetManager;
+        const auto* layouts = pipeline::getActiveDBCLayout();
+        const auto* l = layouts ? layouts->getLayout("ItemSet") : nullptr;
+        if (am && am->isInitialized() && l) {
+            loaded = true;
+            if (auto dbc = am->loadDBC("ItemSet.dbc"); dbc && dbc->isLoaded()) {
+                const auto col = [&](const std::string& k) { return l->tryField(k); };
+                for (uint32_t r = 0; r < dbc->getRecordCount(); ++r) {
+                    const uint32_t id = dbc->getUInt32(r, col("ID"));
+                    if (id == 0) continue;
+                    ItemSetRow row;
+                    row.name = dbc->getString(r, col("Name"));
+                    for (size_t i = 0; i < row.items.size(); ++i)
+                        row.items[i] = dbc->getUInt32(r, col("Item" + std::to_string(i)));
+                    for (size_t i = 0; i < row.spells.size(); ++i) {
+                        row.spells[i] = dbc->getUInt32(r, col("Spell" + std::to_string(i)));
+                        row.thresholds[i] = dbc->getUInt32(r, col("Threshold" + std::to_string(i)));
+                    }
+                    row.skill = dbc->getUInt32(r, col("RequiredSkill"));
+                    row.skillRank = dbc->getUInt32(r, col("RequiredSkillRank"));
+                    rows[id] = std::move(row);
+                }
+            }
+        }
+    }
+    const auto it = rows.find(setId);
+    return it == rows.end() ? nullptr : &it->second;
+}
+
+/// The item set block of an item's tooltip (0x006277f0): the set's name with
+/// how many of its pieces the player wears out of how many there are, the
+/// skill it may require, each piece by name - lit when worn, grey when not -
+/// and its bonuses by threshold, green once reached and grey with the
+/// threshold in front until then.
+static void pushItemSet(lua_State* L, game::GameHandler* gh, uint32_t setId) {
+    const ItemSetRow* set = itemSetRow(gh, setId);
+    if (!set || set->name.empty()) return;
+    const auto& inv = gh->getInventory();
+    std::vector<uint32_t> worn;
+    uint32_t count = 0;
+    for (int s = 0; s < 19; ++s) {
+        const auto& slot = inv.getEquipSlot(static_cast<game::EquipSlot>(s));
+        if (slot.empty()) continue;
+        worn.push_back(slot.item.itemId);
+        if (const auto* w = gh->getItemInfo(slot.item.itemId); w && w->valid && w->itemSetId == setId) ++count;
+    }
+    uint32_t total = 0;
+    for (const uint32_t item : set->items) total += item != 0 ? 1u : 0u;
+
+    lua_newtable(L);
+    lua_pushstring(L, set->name.c_str());
+    lua_setfield(L, -2, "name");
+    lua_pushnumber(L, count);
+    lua_setfield(L, -2, "count");
+    lua_pushnumber(L, total);
+    lua_setfield(L, -2, "total");
+    if (set->skill != 0) {
+        const std::string& skill = gh->getSkillLineName(set->skill);
+        lua_pushstring(L, skill.empty() ? "UNKNOWN" : skill.c_str());
+        lua_setfield(L, -2, "skillName");
+        if (set->skillRank != 0) {
+            lua_pushnumber(L, set->skillRank);
+            lua_setfield(L, -2, "skillRank");
+        }
+        const auto& skills = gh->getPlayerSkills();
+        const auto known = skills.find(set->skill);
+        const bool ok = known != skills.end() && known->second.effectiveValue() >= set->skillRank;
+        lua_pushboolean(L, ok ? 1 : 0);
+        lua_setfield(L, -2, "skillOk");
+    }
+    lua_newtable(L);
+    int pieces = 0;
+    for (const uint32_t item : set->items) {
+        if (item == 0) continue;
+        const auto* info = gh->getItemInfo(item);
+        if (!info || !info->valid) {
+            gh->ensureItemInfo(item);
+            continue;
+        }
+        lua_newtable(L);
+        lua_pushstring(L, info->name.c_str());
+        lua_setfield(L, -2, "name");
+        const bool on = std::find(worn.begin(), worn.end(), item) != worn.end();
+        lua_pushboolean(L, on ? 1 : 0);
+        lua_setfield(L, -2, "equipped");
+        lua_rawseti(L, -2, ++pieces);
+    }
+    lua_setfield(L, -2, "pieces");
+    // By threshold, then by place (0x0061a600).
+    std::array<size_t, 8> order{};
+    for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        return set->thresholds[a] < set->thresholds[b];
+    });
+    lua_newtable(L);
+    int bonuses = 0;
+    for (const size_t i : order) {
+        if (set->spells[i] == 0) continue;
+        const std::string text = gh->formatSpellDescription(set->spells[i], gh->getSpellDescription(set->spells[i]));
+        if (text.empty()) continue;
+        lua_newtable(L);
+        lua_pushstring(L, text.c_str());
+        lua_setfield(L, -2, "text");
+        lua_pushnumber(L, set->thresholds[i]);
+        lua_setfield(L, -2, "threshold");
+        lua_pushboolean(L, count >= set->thresholds[i] ? 1 : 0);
+        lua_setfield(L, -2, "active");
+        lua_rawseti(L, -2, ++bonuses);
+    }
+    lua_setfield(L, -2, "bonuses");
+    lua_setfield(L, -2, "itemSet");
+}
+
 static int lua_GetItemTooltipData(lua_State* L) {
     auto* gh = getGameHandler(L);
     uint32_t itemId = static_cast<uint32_t>(luaL_checknumber(L, 1));
@@ -3406,6 +3512,25 @@ static int lua_GetItemTooltipData(lua_State* L) {
     lua_setfield(L, -2, "damageMax");
     lua_pushnumber(L, info->delayMs);
     lua_setfield(L, -2, "speed");
+    // Both damage entries as sent - minimum, maximum and school - which the
+    // tooltip says one line each (0x006277f0), and the shield's block.
+    lua_newtable(L);
+    int damageEntries = 0;
+    for (const auto& d : info->damages) {
+        lua_newtable(L);
+        lua_pushnumber(L, d.min);
+        lua_setfield(L, -2, "min");
+        lua_pushnumber(L, d.max);
+        lua_setfield(L, -2, "max");
+        lua_pushnumber(L, d.type);
+        lua_setfield(L, -2, "school");
+        lua_rawseti(L, -2, ++damageEntries);
+    }
+    lua_setfield(L, -2, "damages");
+    if (info->block > 0) {
+        lua_pushnumber(L, info->block);
+        lua_setfield(L, -2, "block");
+    }
     // Primary stats
     if (info->stamina != 0) { lua_pushnumber(L, info->stamina); lua_setfield(L, -2, "stamina"); }
     if (info->strength != 0) { lua_pushnumber(L, info->strength); lua_setfield(L, -2, "strength"); }
@@ -3503,6 +3628,29 @@ static int lua_GetItemTooltipData(lua_State* L) {
             lua_setfield(L, -2, "spellId");
             lua_pushnumber(L, info->spells[i].spellTrigger);
             lua_setfield(L, -2, "trigger");
+            // Its place among the five, and the template's charges: the line
+            // after it counts them unless they are 0 or -1 (0x006277f0).
+            lua_pushnumber(L, i);
+            lua_setfield(L, -2, "slot");
+            // A Use spell's cooldown, said at the end of its line
+            // (ITEM_COOLDOWN_TOTAL): the template's when it is above zero;
+            // when it and the category's are both under zero, the spell's.
+            if (info->spells[i].spellTrigger == 0) {
+                int32_t cd = info->spells[i].cooldown;
+                if (cd < 0 && info->spells[i].categoryCooldown < 0) {
+                    gh->loadSpellNameCache();
+                    const auto* sh = gh->getSpellHandler();
+                    cd = sh ? sh->itemUseCooldownMs(info->spells[i].spellId) : 0;
+                }
+                if (cd > 0) {
+                    lua_pushnumber(L, cd);
+                    lua_setfield(L, -2, "cooldown");
+                }
+            }
+            if (info->spells[i].charges != 0 && info->spells[i].charges != -1) {
+                lua_pushnumber(L, info->spells[i].charges);
+                lua_setfield(L, -2, "charges");
+            }
             // Get spell name for display
             const std::string& sName = gh->getSpellName(info->spells[i].spellId);
             if (!sName.empty()) { lua_pushstring(L, sName.c_str()); lua_setfield(L, -2, "name"); }
@@ -3518,6 +3666,34 @@ static int lua_GetItemTooltipData(lua_State* L) {
         }
         if (spellCount > 0) lua_setfield(L, -2, "itemSpells");
         else lua_pop(L, 1);
+    }
+    if (info->itemSetId != 0) pushItemSet(L, gh, info->itemSetId);
+    // While Disenchant waits on the cursor for an item (0x00d3f4e4, effect
+    // 99), what disenchanting this one takes: RequiredDisenchantSkill under
+    // zero cannot be disenchanted, zero takes any skill, otherwise that rank
+    // of Enchanting.
+    if (auto* inv = gh->getInventoryHandler()) {
+        if (const uint32_t pending = inv->getPendingItemTargetSpellId(); pending != 0) {
+            const auto& cache = gh->spellNameCacheRef();
+            const auto sp = cache.find(pending);
+            constexpr uint32_t kEffectDisenchant = 99;
+            constexpr uint32_t kSkillEnchanting = 333;
+            if (sp != cache.end() && std::find(std::begin(sp->second.effectIds), std::end(sp->second.effectIds),
+                                               kEffectDisenchant) != std::end(sp->second.effectIds)) {
+                lua_newtable(L);
+                lua_pushnumber(L, info->requiredDisenchantSkill);
+                lua_setfield(L, -2, "rank");
+                const std::string& skill = gh->getSkillLineName(kSkillEnchanting);
+                lua_pushstring(L, skill.empty() ? "UNKNOWN" : skill.c_str());
+                lua_setfield(L, -2, "skill");
+                const auto& skills = gh->getPlayerSkills();
+                const auto known = skills.find(kSkillEnchanting);
+                const int have = known != skills.end() ? known->second.effectiveValue() : -1;
+                lua_pushboolean(L, have >= info->requiredDisenchantSkill ? 1 : 0);
+                lua_setfield(L, -2, "met");
+                lua_setfield(L, -2, "disenchant");
+            }
+        }
     }
     // Gem sockets (WotLK/TBC)
     int numSockets = 0;
@@ -3568,7 +3744,12 @@ static int lua_GetContainerNumSlots(lua_State* L) {
     // KEYRING_CONTAINER made GetKeyRingSize loop zero times, so the keyring
     // frame was generated with no slots and opened empty - while the keys were
     // being tracked out of PLAYER_FIELD_KEYRING_SLOT_1 the whole time.
-    lua_pushnumber(L, containerSlotCount(gh->getInventory(), container));
+    // Container -4, the currency tokens' (PLAYER_FIELD_CURRENCYTOKEN_SLOT),
+    // is 32 slots as the keyring is (0x005d74a0).
+    constexpr int kCurrencyTokenContainer = -4;
+    constexpr int kCurrencyTokenSlots = 32;
+    lua_pushnumber(L, container == kCurrencyTokenContainer ? kCurrencyTokenSlots
+                                                           : containerSlotCount(gh->getInventory(), container));
     return 1;
 }
 
@@ -3821,10 +4002,14 @@ static int lua_GetContainerItemInfo(lua_State* L) {
     // greys the slot from this, which is what shows the item has been picked up
     // out of it rather than still sitting there.
     const auto& held = cursorItemSlot();
-    lua_pushboolean(L, (!held.equipped && held.bag == container && held.slot == slot) ? 1 : 0);
-    lua_pushnumber(L, info ? info->quality : 0);  // quality
-    lua_pushboolean(L, 0);  // readable
-    lua_pushboolean(L, 0);  // lootable
+    luaPushOneOrNil(L, (!held.equipped && held.bag == container && held.slot == slot) ? 1 : 0);
+    // quality, -1 while the template is not known (0x005d7a90).
+    lua_pushnumber(L, info ? static_cast<double>(info->quality) : -1.0);
+    // readable: the item has a page to read, or its ITEM_FIELD_FLAGS 0x200.
+    constexpr uint32_t kItemFieldReadable = 0x200;
+    const uint32_t pageText = itemSlot->item.pageTextId ? itemSlot->item.pageTextId : (info ? info->pageTextId : 0);
+    luaPushOneOrNil(L, pageText != 0 || (gh->getItemFieldFlags(itemSlot->item.guid) & kItemFieldReadable));
+    luaPushOneOrNil(L, 0);  // lootable
     // Build item link with quality color
     std::string name = info ? info->name : ("Item #" + std::to_string(itemSlot->item.itemId));
     uint32_t q = info ? info->quality : 0;
@@ -3876,23 +4061,36 @@ static int lua_GetContainerItemLink(lua_State* L) {
 }
 
 // GetContainerNumFreeSlots(container) → numFreeSlots, bagType
+// GetContainerNumFreeSlots(container) (0x005d7590): the free slots and the
+// bag's family (its template's BagFamily) for the backpack (family 0), a
+// worn or banked bag, and the bank while a banker is open; one 0 for
+// anything else - no bag there, the bank shut, the keyring.
 static int lua_GetContainerNumFreeSlots(lua_State* L) {
     auto* gh = getGameHandler(L);
-    int container = static_cast<int>(luaL_checknumber(L, 1));
-    if (!gh) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); return 2; }
-
+    const int container = static_cast<int>(luaL_checknumber(L, 1));
+    if (!gh) return luaReturnZero(L);
     const auto& inv = gh->getInventory();
+    // The bag in a worn or bank bag slot, which a bag container must have.
+    const game::ItemSlot* bag = nullptr;
+    if (container >= 1 && container <= 4)
+        bag = &inv.getEquipSlot(static_cast<game::EquipSlot>(static_cast<int>(game::EquipSlot::BAG1) + container - 1));
+    else if (isBankBagContainer(container))
+        bag = &inv.getBankBagItem(container - kFirstBankBagContainer);
+    const bool answers = container == 0 || (container == kBankContainer && gh->isBankOpen()) ||
+                         (bag && !bag->empty());
+    if (!answers) return luaReturnZero(L);
     int freeSlots = 0;
-    int totalSlots = 0;
-
-    totalSlots = containerSlotCount(inv, container);
-    for (int i = 1; i <= totalSlots; ++i) {
+    const int total = containerSlotCount(inv, container);
+    for (int i = 1; i <= total; ++i) {
         const game::ItemSlot* sl = containerItemSlot(inv, container, i);
         if (sl && sl->empty()) ++freeSlots;
     }
-
+    uint32_t family = 0;
+    if (bag) {
+        if (const auto* info = gh->getItemInfo(bag->item.itemId)) family = info->bagFamily;
+    }
     lua_pushnumber(L, freeSlots);
-    lua_pushnumber(L, 0);  // bagType (0 = normal)
+    lua_pushnumber(L, family);
     return 2;
 }
 
@@ -4011,6 +4209,19 @@ static bool auctionChargesIntact(game::GameHandler* gh, uint32_t itemId, uint64_
     if (gh->getItemSpellCharges(guid) == info->spells[0].charges) return true;
     gh->playGameErrorSound("ERR_AUCTION_USED_CHARGES");
     gh->addUIError(game::interfaceString("ERR_AUCTION_USED_CHARGES", "You cannot auction an item with used charges."));
+    return false;
+}
+
+/// StartAuction's first refusal (0x0059f990): a worn item that is not gift
+/// wrapped (ITEM_FIELD_FLAGS 0x8) is repaired before it is sold - its
+/// durability (0x00584ac0) short of its maximum (0x00584ae0) is refused.
+static bool auctionItemRepaired(game::GameHandler* gh, const game::ItemSlot& slot, uint64_t guid) {
+    constexpr uint32_t kItemWrapped = 0x8;
+    if (gh->getItemFieldFlags(guid) & kItemWrapped) return true;
+    const auto& item = slot.item;
+    if (item.maxDurability == 0 || item.curDurability >= item.maxDurability) return true;
+    gh->playGameErrorSound("ERR_AUCTION_REPAIR_ITEM");
+    gh->addUIError(game::interfaceString("ERR_AUCTION_REPAIR_ITEM", "You must repair that item before you can auction it."));
     return false;
 }
 
@@ -4640,7 +4851,7 @@ static int lua_PutItemInBackpack(lua_State* L) {
     auto* gh = getGameHandler(L);
     uint8_t srcBag = 0, srcSlot = 0;
     if (!gh || !heldWireSlot(srcBag, srcSlot)) {
-        lua_pushboolean(L, 0);
+        luaPushOneOrNil(L, 0);
         return 1;
     }
     const int free = gh->getInventory().findFreeBackpackSlot();
@@ -4652,7 +4863,7 @@ static int lua_PutItemInBackpack(lua_State* L) {
         cursorItemSlot() = {};
         wowee::ui::frameXmlSetCursorItem(std::string());
     }
-    lua_pushboolean(L, 1);
+    luaPushOneOrNil(L, 1);
     return 1;
 }
 
@@ -4715,13 +4926,13 @@ static const game::LootItem* lootItemAtSlot(game::GameHandler* gh, int slot) {
 static int lua_LootSlotIsCoin(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int slot = static_cast<int>(luaL_optnumber(L, 1, 0));
-    lua_pushboolean(L, (lootHasCoin(gh) && slot == 1) ? 1 : 0);
+    luaPushOneOrNil(L, (lootHasCoin(gh) && slot == 1) ? 1 : 0);
     return 1;
 }
 
 // LootSlotIsItem(slot) → whether this slot is a real item
 static int lua_LootSlotIsItem(lua_State* L) {
-    lua_pushboolean(L, lootItemAtSlot(getGameHandler(L),
+    luaPushOneOrNil(L, lootItemAtSlot(getGameHandler(L),
                                       static_cast<int>(luaL_optnumber(L, 1, 0))) ? 1 : 0);
     return 1;
 }
@@ -4732,7 +4943,7 @@ static int lua_IsFishingLoot(lua_State* L) {
     // LOOT_TYPE_FISHING, as the server sends it.
     const bool fishing = gh && gh->isLootWindowOpen() &&
                          gh->getCurrentLoot().lootType == 2;
-    lua_pushboolean(L, fishing ? 1 : 0);
+    luaPushOneOrNil(L, fishing ? 1 : 0);
     return 1;
 }
 
@@ -4774,7 +4985,7 @@ static int lua_GetLootSlotInfo(lua_State* L) {
         lua_pushstring(L, lootCoinText(loot.gold).c_str());
         lua_pushnumber(L, loot.gold);
         lua_pushnumber(L, 1);
-        lua_pushboolean(L, 0);
+        luaPushOneOrNil(L, 0);
         return 5;
     }
     const auto* itemPtr = lootItemAtSlot(gh, slot);
@@ -4808,7 +5019,7 @@ static int lua_GetLootSlotInfo(lua_State* L) {
     constexpr uint8_t kAllowLoot = 0, kOwner = 4;
     const bool locked = item.lootSlotType != kAllowLoot &&
                         item.lootSlotType != kOwner;
-    lua_pushboolean(L, locked ? 1 : 0);
+    luaPushOneOrNil(L, locked ? 1 : 0);
     return 5;
 }
 
@@ -4914,11 +5125,11 @@ const game::LootRollEntry* rollFor(game::GameHandler* gh, int rollId) {
     return gh ? gh->getLootRoll(rollId) : nullptr;
 }
 
-// Which buttons the server said it would accept. The same three bits the
-// roll packet carries.
-constexpr uint8_t kRollNeed       = 0x01;
-constexpr uint8_t kRollGreed      = 0x02;
-constexpr uint8_t kRollDisenchant = 0x04;
+// Which buttons the server said it would accept: the roll packet's vote
+// mask as 0x005889d0 reads it (0x01 is pass, always offered).
+constexpr uint8_t kRollNeed       = 0x02;
+constexpr uint8_t kRollGreed      = 0x04;
+constexpr uint8_t kRollDisenchant = 0x08;
 
 } // namespace
 
@@ -4926,32 +5137,29 @@ constexpr uint8_t kRollDisenchant = 0x04;
 //   canNeed, canGreed, canDisenchant, reasonNeed, reasonGreed,
 //   reasonDisenchant, deSkillRequired
 //
-// All twelve, because the roll window unpacks all twelve and uses the tail of
-// them: a reason is concatenated into a global's name when its button is
-// disabled, and the count is compared against one. Nil in either place raises.
-// The reasons are the generic "your class may not" line - this client is not
-// told why the server refused a button, only that it did.
+// All twelve, as 0x005889d0 gives them: the stack the roll packet carried,
+// the template's quality, bind-on-pickup and the three offers as 1 or nil,
+// the three reasons worked out when the roll arrived (0x006fa7a0), and the
+// template's disenchanting skill. Nothing for an item not yet known.
 static int lua_GetLootRollItemInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
     const auto* roll = rollFor(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
     if (!roll) { return luaReturnNil(L); }
 
     const auto* info = gh->getItemInfo(roll->itemId);
-    lua_pushstring(L, gh->getItemIconPath(info ? info->displayInfoId : 0).c_str());
+    if (!info || !info->valid) return 0;
+    lua_pushstring(L, gh->getItemIconPath(info->displayInfoId).c_str());
     lua_pushstring(L, roll->itemName.c_str());
-    // The roll packet does not carry a stack size. One is right for nearly
-    // everything rolled for, and the window only reads it to decide whether to
-    // print a number in the corner at all.
-    lua_pushnumber(L, 1);
-    lua_pushnumber(L, roll->itemQuality);
-    lua_pushboolean(L, info && info->bindType == 1 ? 1 : 0);  // bind on pickup
-    lua_pushboolean(L, (roll->voteMask & kRollNeed) ? 1 : 0);
-    lua_pushboolean(L, (roll->voteMask & kRollGreed) ? 1 : 0);
-    lua_pushboolean(L, (roll->voteMask & kRollDisenchant) ? 1 : 0);
-    lua_pushnumber(L, 1);   // reasonNeed        → "Your class may not roll need"
-    lua_pushnumber(L, 1);   // reasonGreed
-    lua_pushnumber(L, 3);   // reasonDisenchant  → "may not be disenchanted"
-    lua_pushnumber(L, 0);   // disenchanting skill the group would need
+    lua_pushnumber(L, roll->itemCount);
+    lua_pushnumber(L, info->quality);
+    luaPushOneOrNil(L, info->bindType == 1);
+    luaPushOneOrNil(L, (roll->voteMask & kRollNeed) != 0);
+    luaPushOneOrNil(L, (roll->voteMask & kRollGreed) != 0);
+    luaPushOneOrNil(L, (roll->voteMask & kRollDisenchant) != 0);
+    lua_pushnumber(L, roll->reasonNeed);
+    lua_pushnumber(L, roll->reasonGreed);
+    lua_pushnumber(L, roll->reasonDisenchant);
+    lua_pushnumber(L, info->requiredDisenchantSkill);
     return 12;
 }
 
@@ -5482,19 +5690,12 @@ void registerInventoryLuaAPI(lua_State* L) {
                 for (int i = 0; i < 5; ++i) lua_pushnil(L);
                 return 5;
             };
-            if (!gh || asked < 1) return answerNil(L);
-
-            uint32_t knownLow = 0, knownHigh = 0;
-            const bool named = knownCurrencyPair(gh, knownLow, knownHigh);
-            const game::CurrencyWatch& watch = currencyWatched();
-            for (int seen = 0; const auto& c : gh->getCurrencyTypes()) {
-                if (named && !game::currencyIsKnown(knownLow, knownHigh, c.id)) continue;
-                if (!watch.has(c.id)) continue;
-                if (++seen != asked) continue;
-
-                const auto* info = gh->getItemInfo(c.itemId);
+            const uint32_t itemId = backpackCurrencyItemId(L, asked);
+            if (!gh || itemId == 0) return answerNil(L);
+            {
+                const auto* info = gh->getItemInfo(itemId);
                 if (!info) return answerNil(L);
-                const auto [shown, extraType] = currencyAmount(gh, c.itemId);
+                const auto [shown, extraType] = currencyAmount(gh, itemId);
                 // The name is not gated on whether the character is holding the
                 // item. The client asks for the item's handle and then tests the
                 // dword at handle +0x1f4, which is the first slot of that item's
@@ -5513,10 +5714,9 @@ void registerInventoryLuaAPI(lua_State* L) {
                     ? gh->getItemIconPath(info->displayInfoId) : std::string();
                 if (icon.empty()) lua_pushstring(L, "Interface\\Icons\\INV_Misc_QuestionMark");
                 else              lua_pushstring(L, icon.c_str());   // 4: icon
-                lua_pushnumber(L, c.itemId);           // 5: itemID
+                lua_pushnumber(L, itemId);             // 5: itemID
                 return 5;
             }
-            return answerNil(L);
         }},
                 // The three that change how the list is displayed.
                 //
@@ -6001,7 +6201,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             lua_pushnumber(L, it.stackCount);
             // Locked while its item is on the cursor (0x005137d0).
             const auto& held = guildBankCursorSlot();
-            lua_pushboolean(L, (held.tab == tab && held.slot == slot) ? 1 : 0);
+            luaPushOneOrNil(L, (held.tab == tab && held.slot == slot) ? 1 : 0);
             return 3;
         }},
                 // GetGuildBankItemLink(tab, slot) → hyperlink
@@ -6065,7 +6265,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // Rank zero is the guild master; an unknown rank is not.
                 {"IsGuildLeader", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushboolean(L, gh && gh->getPlayerGuildRankIndex() == 0 ? 1 : 0);
+            luaPushOneOrNil(L, gh && gh->getPlayerGuildRankIndex() == 0 ? 1 : 0);
             return 1;
         }},
                 // The transaction log, the tab text and the tabard are not in
@@ -6283,8 +6483,8 @@ void registerInventoryLuaAPI(lua_State* L) {
             // server for every auction at once and is rate-limited to once
             // every fifteen minutes even where it is allowed.
             const bool open = gh && gh->isAuctionHouseOpen();
-            lua_pushboolean(L, open && gh->getAuctionSearchDelay() <= 0.0f);
-            lua_pushboolean(L, 0);
+            luaPushOneOrNil(L, open && gh->getAuctionSearchDelay() <= 0.0f);
+            luaPushOneOrNil(L, 0);
             return 2;
         }},
                 // QueryAuctionItems(name, minLevel, maxLevel, invType, class,
@@ -6354,7 +6554,8 @@ void registerInventoryLuaAPI(lua_State* L) {
             return 0;
         }},
                 // PlaceAuctionBid(list, index, bid) - a bid equal to the
-                // buyout is a buyout, which is how the panel asks for one.
+                // buyout is a buyout, which is how the panel asks for one
+                // (0x0059da40; the checks are GameHandler::auctionBid's).
                 {"PlaceAuctionBid", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const char* list = luaL_optstring(L, 1, "list");
@@ -6365,12 +6566,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             if (!taint::allowed(L, 8)) return 0;
             const auto& res = auctionListFor(gh, list);
             if (index < 1 || index > static_cast<int>(res.auctions.size())) return 0;
-            const auto& a = res.auctions[index - 1];
-            if (a.buyoutPrice != 0 && bid >= a.buyoutPrice) {
-                gh->auctionBuyout(a.auctionId, a.buyoutPrice);
-            } else {
-                gh->auctionPlaceBid(a.auctionId, bid);
-            }
+            gh->auctionBid(res.auctions[index - 1], bid);
             return 0;
         }},
                 {"CancelAuction", [](lua_State* L) -> int {
@@ -6392,7 +6588,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             const bool ok = res && index >= 1 &&
                             index <= static_cast<int>(res->auctions.size()) &&
                             res->auctions[index - 1].currentBid == 0;
-            lua_pushboolean(L, ok ? 1 : 0);
+            luaPushOneOrNil(L, ok ? 1 : 0);
             return 1;
         }},
                 // StartAuction(minBid, buyout, duration, stackSize, numStacks)
@@ -6410,6 +6606,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             uint64_t guid = 0;
             const auto* item = auctionSellItemSlot(gh, &guid);
             if (!item || guid == 0) return 0;
+            if (!auctionItemRepaired(gh, *item, guid)) return 0;
             if (!auctionChargesIntact(gh, item->item.itemId, guid)) {
                 LOG_WARNING("StartAuction: item ", item->item.itemId, " has used charges; not posted");
                 return 0;
@@ -6583,7 +6780,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             lua_pushnumber(L, inStack);
             lua_pushnumber(L, info && info->valid ? info->quality
                                   : static_cast<uint32_t>(s.item.quality));
-            lua_pushboolean(L, 1);
+            luaPushOneOrNil(L, 1);
             lua_pushnumber(L, static_cast<lua_Number>(unitPrice) * inStack);
             lua_pushnumber(L, unitPrice);
             lua_pushnumber(L, (info && info->valid && info->maxStack > 0)
@@ -6704,7 +6901,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             if (index < 1 || index > static_cast<int>(keys.size())) return 0;
             const auto& k = keys[keys.size() - static_cast<size_t>(index)];
             lua_pushstring(L, k.column.c_str());
-            lua_pushboolean(L, k.reverse ? 1 : 0);
+            luaPushOneOrNil(L, k.reverse ? 1 : 0);
             return 2;
         }},
                 // Applied least significant first, each pass stable, which is
@@ -6907,7 +7104,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             lua_pushstring(L, icon.empty() ? "Interface\\Icons\\INV_Misc_QuestionMark" : icon.c_str()); // texture
             lua_pushnumber(L, a.stackCount);        // count
             lua_pushnumber(L, quality);             // quality
-            lua_pushboolean(L, 1);                  // canUse
+            luaPushOneOrNil(L, 1);                  // canUse
             lua_pushnumber(L, info ? info->requiredLevel : 0); // level
             lua_pushnumber(L, a.startBid);          // minBid
             lua_pushnumber(L, a.minBidIncrement);   // minIncrement
@@ -6919,7 +7116,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             // Bid", printed over the price it sits in front of.
             const bool isHighBidder =
                 a.bidderGuid != 0 && a.bidderGuid == gh->getPlayerGuid();
-            lua_pushboolean(L, isHighBidder ? 1 : 0); // highBidder
+            luaPushOneOrNil(L, isHighBidder ? 1 : 0); // highBidder
             // The seller column, which was two empty strings. The names are
             // asked for when the list arrives (handleAuctionListResult queries
             // every owner guid it does not know), so by the time a row is
@@ -7071,16 +7268,16 @@ void registerInventoryLuaAPI(lua_State* L) {
             // caller here tests it for truth.
             if (mail.attachments.empty()) lua_pushnil(L);
             else lua_pushnumber(L, static_cast<lua_Number>(mail.attachments.size()));
-            lua_pushboolean(L, mail.read ? 1 : 0);               // wasRead
+            luaPushOneOrNil(L, mail.read ? 1 : 0);               // wasRead
             // Returned (mail flag 0x2) or sent back unopened (0x200).
-            lua_pushboolean(L, (mail.flags & 0x202u) != 0 ? 1 : 0); // wasReturned
-            lua_pushboolean(L, !mail.body.empty() ? 1 : 0);      // textCreated
+            luaPushOneOrNil(L, (mail.flags & 0x202u) != 0 ? 1 : 0); // wasReturned
+            luaPushOneOrNil(L, !mail.body.empty() ? 1 : 0);      // textCreated
             // A player's letter, unless on the GM's stationery (61), which is
             // a GM's and says so instead (0x0056e520).
             constexpr uint32_t kGmStationery = 0x3d;
             const bool fromGm = mail.stationeryId == kGmStationery;
-            lua_pushboolean(L, mail.messageType == 0 && !fromGm ? 1 : 0); // canReply
-            lua_pushboolean(L, fromGm ? 1 : 0);                   // isGM
+            luaPushOneOrNil(L, mail.messageType == 0 && !fromGm ? 1 : 0); // canReply
+            luaPushOneOrNil(L, fromGm ? 1 : 0);                   // isGM
             // How many of the first attachment there are, which is what the
             // inbox button prints in its corner.
             lua_pushnumber(L, mail.attachments.empty()
@@ -7128,7 +7325,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 lua_pushstring(L, mail->body.c_str());
             }
             lua_pushstring(L, game::stationeryTexture(mail->stationeryId, mail->messageType));
-            lua_pushboolean(L, (mail->money > 0 || !mail->attachments.empty()) ? 1 : 0);
+            luaPushOneOrNil(L, (mail->money > 0 || !mail->attachments.empty()) ? 1 : 0);
             // Whether this is an auction house invoice, which was answered no
             // for every letter. OpenMail_Update asks here first and only calls
             // GetInboxInvoiceInfo `if ( isInvoice )`, so saying no kept the
@@ -7140,7 +7337,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             game::AuctionMailInvoice invoice;
             const bool isInvoice = mail->messageType == 2 &&
                                    game::parseAuctionMailBody(mail->body, invoice);
-            lua_pushboolean(L, isInvoice ? 1 : 0);
+            luaPushOneOrNil(L, isInvoice ? 1 : 0);
             return 4;
         }},
                 // Whether there is unread mail waiting, which is what the
@@ -7158,14 +7355,14 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // there is what the letters themselves say.
                 {"HasNewMail", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (!gh) { return luaReturnFalse(L); }
+            if (!gh) { return luaReturnNil(L); }
             bool hasNew = gh->hasNewMail();
             if (!hasNew) {
                 for (const auto& m : gh->getMailInbox()) {
                     if (!m.read) { hasNew = true; break; }
                 }
             }
-            lua_pushboolean(L, hasNew ? 1 : 0);
+            luaPushOneOrNil(L, hasNew ? 1 : 0);
             return 1;
         }},
     };

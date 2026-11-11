@@ -158,12 +158,19 @@ void WindowManager::ensureBarberState(game::GameHandler& gameHandler) {
                     continue;
                 const uint32_t appearance = dbc->getUInt32(row, 39);
                 if (appearance > 255) continue;
+                // DisplayName and Description, each a block of locale
+                // columns (2-17, 19-34), then CostModifier (36).
                 std::string name;
                 for (uint32_t field = 2; field <= 17 && name.empty(); ++field)
                     name = dbc->getString(row, field);
                 if (name.empty()) name = "Style " + std::to_string(appearance);
+                std::string description;
+                for (uint32_t field = 19; field <= 34 && description.empty(); ++field)
+                    description = dbc->getString(row, field);
                 BarberStyleOption option{.entryId = dbc->getUInt32(row, 0),
-                                         .appearanceId = static_cast<uint8_t>(appearance), .name = std::move(name)};
+                                         .appearanceId = static_cast<uint8_t>(appearance), .name = std::move(name),
+                                         .description = std::move(description),
+                                         .costModifier = dbc->getFloat(row, 36)};
                 switch (dbc->getUInt32(row, 1)) {
                     case 0: barberHairStyles_.push_back(std::move(option)); break;
                     case 2: barberFacialStyles_.push_back(std::move(option)); break;
@@ -241,14 +248,39 @@ WindowManager::BarberSelection WindowManager::barberSelection(game::GameHandler&
     return out;
 }
 
+namespace {
+/// The option a selector stands on, nullptr for none.
+template <typename Option>
+const Option* barberOptionAt(const std::vector<Option>& list, int index) {
+    return index >= 0 && index < static_cast<int>(list.size()) ? &list[static_cast<size_t>(index)] : nullptr;
+}
+/// A style's price: the level's base, rounded, times its modifier, rounded.
+uint32_t barberPrice(float base, float modifier) {
+    return static_cast<uint32_t>(std::lround(static_cast<float>(std::lround(base)) * modifier));
+}
+}  // namespace
+
+// GetBarberShopTotalCost (0x0052eba0): a new hair style at its own price, or
+// else a new colour at half the base; a new facial style and a new skin at
+// theirs.
 uint32_t WindowManager::barberTotalCostCopper(game::GameHandler& gameHandler) {
     const BarberSelection sel = barberSelection(gameHandler);
-    float cost = 0.0f;
-    if (sel.hairStyle != barberOrigHairStyle_)      cost += barberBaseCost_;
-    else if (sel.hairColor != barberOrigHairColor_) cost += barberBaseCost_ * 0.5f;
-    if (sel.facialHair != barberOrigFacialHair_)    cost += barberBaseCost_ * 0.75f;
-    if (sel.skin != barberOrigSkinColor_)           cost += barberBaseCost_ * 0.75f;
-    return static_cast<uint32_t>(cost);
+    uint32_t cost = 0;
+    if (sel.hairStyle != barberOrigHairStyle_) {
+        if (const auto* o = barberOptionAt(barberHairStyles_, barberHairStyle_))
+            cost += barberPrice(barberBaseCost_, o->costModifier);
+    } else if (sel.hairColor != barberOrigHairColor_) {
+        cost += barberPrice(barberBaseCost_, 0.5f);
+    }
+    if (sel.facialHair != barberOrigFacialHair_) {
+        if (const auto* o = barberOptionAt(barberFacialStyles_, barberFacialHair_))
+            cost += barberPrice(barberBaseCost_, o->costModifier);
+    }
+    if (sel.skin != barberOrigSkinColor_) {
+        if (const auto* o = barberOptionAt(barberSkinStyles_, barberSkinColor_))
+            cost += barberPrice(barberBaseCost_, o->costModifier);
+    }
+    return cost;
 }
 
 void WindowManager::barberResetSelections(game::GameHandler& gameHandler) {
@@ -282,38 +314,32 @@ void WindowManager::barberApplySelection(game::GameHandler& gameHandler) {
                                     entryOf(barberSkinStyles_, barberSkinColor_));
 }
 
-bool WindowManager::barberStyleInfo(game::GameHandler& gameHandler, int selector,
-                                    std::string& name, bool& isCurrent) {
+bool WindowManager::barberStyleInfo(game::GameHandler& gameHandler, int selector, BarberStyleInfo& out) {
     ensureBarberState(gameHandler);
     const BarberSelection sel = barberSelection(gameHandler);
+    auto fromOption = [&](const BarberStyleOption* o, bool current) {
+        if (!o) return false;
+        out = {.name = o->name, .description = o->description,
+               .cost = barberPrice(barberBaseCost_, o->costModifier), .isCurrent = current};
+        return true;
+    };
     switch (selector) {
         case 1:
-            if (barberHairStyle_ < 0 ||
-                barberHairStyle_ >= static_cast<int>(barberHairStyles_.size())) return false;
-            name = barberHairStyles_[static_cast<size_t>(barberHairStyle_)].name;
-            isCurrent = sel.hairStyle == barberOrigHairStyle_;
+            return fromOption(barberOptionAt(barberHairStyles_, barberHairStyle_),
+                              sel.hairStyle == barberOrigHairStyle_);
+        case 2:
+            // A colour has no name or description of its own, and costs half.
+            if (barberHairColor_ < 0 || barberHairColor_ >= static_cast<int>(barberHairColors_.size()))
+                return false;
+            out = {.name = {}, .description = {}, .cost = barberPrice(barberBaseCost_, 0.5f),
+                   .isCurrent = sel.hairColor == barberOrigHairColor_};
             return true;
-        case 2: {
-            if (barberHairColor_ < 0 ||
-                barberHairColor_ >= static_cast<int>(barberHairColors_.size())) return false;
-            // The colours have no names of their own in the data, so they are
-            // numbered the way the character creation screen numbers them.
-            name = "Color " + std::to_string(barberHairColor_ + 1);
-            isCurrent = sel.hairColor == barberOrigHairColor_;
-            return true;
-        }
         case 3:
-            if (barberFacialHair_ < 0 ||
-                barberFacialHair_ >= static_cast<int>(barberFacialStyles_.size())) return false;
-            name = barberFacialStyles_[static_cast<size_t>(barberFacialHair_)].name;
-            isCurrent = sel.facialHair == barberOrigFacialHair_;
-            return true;
+            return fromOption(barberOptionAt(barberFacialStyles_, barberFacialHair_),
+                              sel.facialHair == barberOrigFacialHair_);
         case 4:
-            if (barberSkinColor_ < 0 ||
-                barberSkinColor_ >= static_cast<int>(barberSkinStyles_.size())) return false;
-            name = barberSkinStyles_[static_cast<size_t>(barberSkinColor_)].name;
-            isCurrent = sel.skin == barberOrigSkinColor_;
-            return true;
+            return fromOption(barberOptionAt(barberSkinStyles_, barberSkinColor_),
+                              sel.skin == barberOrigSkinColor_);
         default:
             return false;
     }

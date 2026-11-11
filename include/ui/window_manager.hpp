@@ -74,6 +74,8 @@ public:
         uint32_t entryId = 0;       // BarberShopStyle.dbc ID sent to the server
         uint8_t appearanceId = 0;   // CharSections/geoset variation used by preview
         std::string name;
+        std::string description;    // BarberShopStyle.dbc Description (+0xc)
+        float costModifier = 1.0f;  // its CostModifier (+0x10)
     };
     std::vector<BarberStyleOption> barberHairStyles_;
     std::vector<BarberStyleOption> barberFacialStyles_;
@@ -119,8 +121,17 @@ public:
     /// The interface's own barber panel reads these through LuaServices.
     /// Selectors follow FrameXML's BarberShopFrameSelector IDs: 1 hair style,
     /// 2 hair colour, 3 facial hair, 4 skin.
-    bool barberStyleInfo(game::GameHandler& gameHandler, int selector,
-                         std::string& name, bool& isCurrent);
+    /// One selector as GetBarberShopStyleInfo answers it (0x0052e850): the
+    /// style's name and description - both empty for hair colour, which has
+    /// none - and its price, the level's base times the style's modifier
+    /// (half the base for a colour).
+    struct BarberStyleInfo {
+        std::string name;
+        std::string description;
+        uint32_t cost = 0;
+        bool isCurrent = false;
+    };
+    bool barberStyleInfo(game::GameHandler& gameHandler, int selector, BarberStyleInfo& out);
     void barberCycleStyle(game::GameHandler& gameHandler, int selector, int direction);
     /// Show the current selection on the character, without sending it.
     void barberPreview(game::GameHandler& gameHandler);

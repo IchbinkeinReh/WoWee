@@ -131,6 +131,11 @@ public:
     [[nodiscard]] spell_history::History::Cooldown historyCooldown(uint32_t spellId, uint32_t itemId, bool pet) const;
     /// 0x00809030: an item's - its first use spell's (trigger 0), cast from it.
     [[nodiscard]] spell_history::History::Cooldown itemCooldown(uint32_t itemId) const;
+    /// An item's record arrived for a cooldown query that was waiting on it
+    /// (0x0080abe0): when its use spell is on cooldown, the bars and the bags
+    /// are told, as any change to the history tells them (0x0053bac0,
+    /// 0x005d6f10).
+    void itemCooldownArrived(uint32_t itemId);
     /// The client's clock for the history, in milliseconds (0x0086ae20):
     /// GetTime()'s, a thousandth of a second at a time.
     static int64_t historyNowMs();
@@ -267,6 +272,13 @@ public:
     [[nodiscard]] std::vector<uint32_t> multiCastSpells(int element) const;
     /// 0x007548f0: the player carries what the TotemCategory asks for.
     [[nodiscard]] bool carriesTotemCategory(uint32_t category) const;
+    /// The cooldown an item's Use spell is shown with when the item names none
+    /// of its own (0x006277f0): RecoveryTime and CategoryRecoveryTime through
+    /// the spell's Cooldown modifiers (op 11, the category's unless
+    /// AttributesEx6 0x80000000), whichever is longer. Milliseconds.
+    [[nodiscard]] int32_t itemUseCooldownMs(uint32_t spellId) const;
+    /// The first area an AreaGroup names, 0 for none.
+    [[nodiscard]] uint32_t firstAreaOfGroup(uint32_t group) const;
     /// The totem bar's update (0x005ab9d0): an element whose list has spells
     /// and whose bit in autoFilledMultiCastSlots is clear puts its first
     /// spell on each of its empty slots and sets the bit; one with none
@@ -663,10 +675,10 @@ private:
     void logExecuteEntry(const SpellLogExecuteEntry& entry, uint64_t caster, uint32_t spellId);
     void logEffectPowerDrain(const SpellLogExecuteEntry& entry, uint64_t caster, uint32_t spellId,
                              bool isPlayerCaster);
-    void logEffectCreateItem(const SpellLogExecuteEntry& entry, uint32_t spellId, bool isPlayerCaster);
+    void logEffectCreateItem(const SpellLogExecuteEntry& entry, uint32_t spellId, uint64_t casterGuid);
     void logEffectInterruptCast(const SpellLogExecuteEntry& entry, uint64_t caster, uint32_t spellId,
                                 bool isPlayerCaster);
-    void logEffectFeedPet(const SpellLogExecuteEntry& entry, bool isPlayerCaster);
+    void logEffectFeedPet(const SpellLogExecuteEntry& entry, uint64_t casterGuid);
 
     // Find the on-use spell for an item (trigger=0 Use or trigger=5 NoDelay).
     // CMSG_USE_ITEM requires a valid spellId or the server silently ignores it.

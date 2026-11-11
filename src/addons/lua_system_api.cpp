@@ -1014,6 +1014,13 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     // "1" - that rule swallows every name it starts with, so a default of any
     // other value has to be stated before it rather than after.
     if (n == "sound_enablesoundwhengameisinbg") lua_pushstring(L, "0");
+    // Five more the client registers off (0x004d0000): backend modes this
+    // client has no equivalent of, answered as the original has them.
+    else if (n == "sound_enablehardware" || n == "sound_enablemixmode2" ||
+             n == "sound_enablemode2" || n == "sound_enablereverb" ||
+             n == "sound_enablesoftwarehrtf") {
+        lua_pushstring(L, "0");
+    }
     else if (n.rfind("sound_enable", 0) == 0) lua_pushstring(L, "1");
     // Master at full, but the client registers its other three scales at
     // different levels (0x004d0000): music 0.4 and ambience 0.6 against master
@@ -1168,6 +1175,14 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     else if (n == "autodismountflying") lua_pushstring(L, "0");
     // On, as the client registers it (0x0051d9b0: autoDismount "1").
     else if (n == "autodismount") lua_pushstring(L, "1");
+    // The saved camera (0x005ff320/0x005ff3e0), at the client's defaults for
+    // its default camera style (the table at 0x00ad1ba8, row 2).
+    else if (n == "camerasaveddistance") lua_pushstring(L, "5.55");
+    else if (n == "camerasavedpitch") lua_pushstring(L, "10.0");
+    else if (n == "camerasavedvehicledistance") lua_pushstring(L, "-1.0");
+    // On, as the client registers it; 0x007464d0 plays a model's armour
+    // foley while it is.
+    else if (n == "sound_enablearmorfoleysoundforothers") lua_pushstring(L, "1");
     // On, as the client registers them (0x0051d9b0: autoStand and
     // autoUnshift "1"), which 0x00739650 reads.
     else if (n == "autostand") lua_pushstring(L, "1");
@@ -1572,6 +1587,13 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     else if (n == "guildshowoffline") lua_pushstring(L, "1");
     // Nothing stated this name: the stand-in, and the one answer here that is not
     // something the client registered the CVar with.
+    // Everything else as the client registers it. Answering "0" for all of
+    // these turned on what the client has off and the reverse: the clock, the
+    // Real ID toasts, the spellbook's ranks and the calendar's filters were all
+    // off on a fresh profile, and the Defaults button switched them off.
+    else if (auto registered = clientCVarDefault(n)) {
+        lua_pushlstring(L, registered->data(), registered->size());
+    }
     else { lua_pushstring(L, "0"); if (stated) *stated = false; }
 }
 
@@ -1763,6 +1785,8 @@ static int registerForSave(lua_State* L, bool perCharacter) {
 static int lua_RegisterForSave(lua_State* L) { return registerForSave(L, false); }
 static int lua_RegisterForSavePerCharacter(lua_State* L) { return registerForSave(L, true); }
 
+static int lua_GetLocale(lua_State* L);
+
 static int lua_GetCVar(lua_State* L) {
     const char* name = luaL_checkstring(L, 1);
     // Folded to lower case, because the client's CVar names are not
@@ -1773,6 +1797,9 @@ static int lua_GetCVar(lua_State* L) {
     // drawn, and invisible.
     std::string n(name);
     toLowerInPlace(n);
+    // The language the client is running in: registered as "****" and
+    // overwritten with it before anything can ask, so it is what GetLocale says.
+    if (n == "locale") return lua_GetLocale(L);
     // Asked of the client before the store, for the settings it owns outright.
     // Enemy nameplates and the minimap's rotation used to be here too - the V
     // key and the minimap's menu turn them without SetCVar - and are rows
@@ -1907,7 +1934,7 @@ static int lua_GetCVarBool(lua_State* L) {
     const char* v = lua_tostring(L, -1);
     const bool on = v && *v && std::string(v) != "0";
     lua_pop(L, 1);
-    lua_pushboolean(L, on);
+    luaPushOneOrNil(L, on);
     return 1;
 }
 
@@ -2696,18 +2723,16 @@ static int lua_GetAddOnInfo(lua_State* L) {
     lua_rawgeti(L, -1, idx);
     if (!lua_istable(L, -1)) { lua_pop(L, 2); lua_pushnil(L); return 1; }
 
-    // name, title, notes, url, loadable, reason, security, newVersion.
-    //
-    // Five were returned and the fourth was not url, so everything from there
-    // shifted: the loadable flag landed in url's place, the security string in
-    // loadable's - truthy, so addons read as loadable by accident - and the
-    // last three came back nil. addonlist.lua reads security seventh.
+    // name, title, notes, enabled, loadable, reason, security - seven, as
+    // 0x00511240 gives them. addonlist.lua reads them in that order, the
+    // fourth as the checkbox: a url there (a later client's) read every
+    // addon as switched off.
     lua_getfield(L, -1, "name");
     lua_getfield(L, -2, "title");
     lua_getfield(L, -3, "notes");
 
-    // The registry table and the entry are still underneath, and `return 8`
-    // takes the top eight of the stack whatever they are. Leaving them there
+    // The registry table and the entry are still underneath, and `return 7`
+    // takes the top seven of the stack whatever they are. Leaving them there
     // shifted the answer by one: the entry table arrived as the name, the name
     // as the title, and loadable came back nil - falsy - so every addon read
     // as unloadable while the security string landed in newVersion. The pop
@@ -2715,12 +2740,16 @@ static int lua_GetAddOnInfo(lua_State* L) {
     lua_remove(L, -4);              // the addon info entry
     lua_remove(L, -4);              // the registry table
 
-    lua_pushnil(L);                 // 4: url - not in a 3.3.5 manifest
-    lua_pushboolean(L, 1);          // 5: loadable
+    // 4: enabled for this character, 1 or nil.
+    {
+        const char* name = lua_tostring(L, -3);
+        auto* svc = getLuaServices(L);
+        luaPushOneOrNil(L, !name || !svc || !svc->isAddOnEnabled || svc->isAddOnEnabled(name));
+    }
+    luaPushOneOrNil(L, 1);          // 5: loadable
     lua_pushnil(L);                 // 6: reason it is not, and it is
     lua_pushstring(L, "INSECURE");  // 7: security
-    lua_pushnil(L);                 // 8: newVersion
-    return 8;
+    return 7;
 }
 
 /// The addon entry an IsAddOnLoadOnDemand or GetAddOnDependencies argument
@@ -3429,7 +3458,7 @@ static int lua_GetTrackingInfo(lua_State* L) {
         const uint32_t sid = spells[static_cast<size_t>(index - 1)];
         lua_pushstring(L, gh->getSpellName(sid).c_str());
         lua_pushstring(L, gh->getSpellIconPath(sid).c_str());
-        lua_pushboolean(L, trackingActive(gh, sid) ? 1 : 0);
+        luaPushOneOrNil(L, trackingActive(gh, sid) ? 1 : 0);
         lua_pushstring(L, "spell");
         return 4;
     }
@@ -3444,7 +3473,7 @@ static int lua_GetTrackingInfo(lua_State* L) {
         lua_pushstring(L, key);
     }
     lua_pushstring(L, otherTrackingTexture(entry).c_str());
-    lua_pushboolean(L, otherTrackingActive(L, gh) == entry ? 1 : 0);
+    luaPushOneOrNil(L, otherTrackingActive(L, gh) == entry ? 1 : 0);
     lua_pushstring(L, "other");
     return 4;
 }
@@ -3522,9 +3551,9 @@ static int lua_GetGameTime(lua_State* L) {
 
 static int lua_IsInInstance(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) { lua_pushboolean(L, 0); lua_pushstring(L, "none"); return 2; }
+    if (!gh) { luaPushOneOrNil(L, 0); lua_pushstring(L, "none"); return 2; }
     bool inInstance = gh->isInInstance();
-    lua_pushboolean(L, inInstance);
+    luaPushOneOrNil(L, inInstance);
     lua_pushstring(L, inInstance ? "party" : "none");  // simplified: "none", "party", "raid", "pvp", "arena"
     return 2;
 }
@@ -3794,7 +3823,6 @@ static int lua_wow_gettime(lua_State* L) {
 // caller takes the branch it would take on a client where that feature is off,
 // rather than dividing by a nil.
 static int lua_ReturnFalse(lua_State* L) { lua_pushboolean(L, 0); return 1; }
-static int lua_ReturnTrue(lua_State* L)  { lua_pushboolean(L, 1); return 1; }
 static int lua_ReturnNil(lua_State* L)   { lua_pushnil(L); return 1; }
 static int lua_ReturnZero(lua_State* L)  { lua_pushnumber(L, 0.0); return 1; }
 
@@ -4084,13 +4112,16 @@ static int lua_GetBattlefieldPosition(lua_State* L) {
             lua_pushnumber(L, v);
             // A name not yet known is asked for, and its answer raises
             // WORLD_MAP_NAME_UPDATE (0x0054c2e0 -> 0x005496c0).
-            lua_pushstring(L, gh->nameOrAsk(p->guid, "WORLD_MAP_NAME_UPDATE", false).c_str());
+            // nil until it arrives.
+            const std::string name = gh->nameOrAsk(p->guid, "WORLD_MAP_NAME_UPDATE", false);
+            if (name.empty()) lua_pushnil(L);
+            else lua_pushstring(L, name.c_str());
             return 3;
         }
     }
     lua_pushnumber(L, 0.0);
     lua_pushnumber(L, 0.0);
-    lua_pushstring(L, "");
+    lua_pushnil(L);
     return 3;
 }
 
@@ -4144,7 +4175,7 @@ static int lua_GetBattlefieldFlagPosition(lua_State* L) {
     }
     lua_pushnumber(L, 0.0);
     lua_pushnumber(L, 0.0);
-    lua_pushstring(L, "");
+    lua_pushnil(L);   // nobody carrying it (0x0054dcc0)
     return 3;
 }
 
@@ -4966,7 +4997,7 @@ static int lua_GetWeaponEnchantInfo(lua_State* L) {
             const uint64_t guid = gh->getEquipSlotGuid(static_cast<int>(hand));
             if (guid != 0) enchanted = gh->getItemEnchantIds(guid).second != 0;
         }
-        lua_pushboolean(L, enchanted ? 1 : 0);   // hasEnchant
+        luaPushOneOrNil(L, enchanted ? 1 : 0);   // hasEnchant
         lua_pushnumber(L, 0.0);                  // expiration, not tracked
         lua_pushnumber(L, 0.0);                  // charges
     }
@@ -4977,20 +5008,20 @@ static int lua_GetWeaponEnchantInfo(lua_State* L) {
 /// falsely, because a shift-click means something different from a click and
 /// FrameXML asks these on every button press.
 static int lua_IsShiftKeyDown(lua_State* L) {
-    lua_pushboolean(L, (SDL_GetModState() & SDL_KMOD_SHIFT) != 0);
+    luaPushOneOrNil(L, (SDL_GetModState() & SDL_KMOD_SHIFT) != 0);
     return 1;
 }
 static int lua_IsControlKeyDown(lua_State* L) {
-    lua_pushboolean(L, (SDL_GetModState() & SDL_KMOD_CTRL) != 0);
+    luaPushOneOrNil(L, (SDL_GetModState() & SDL_KMOD_CTRL) != 0);
     return 1;
 }
 static int lua_IsAltKeyDown(lua_State* L) {
-    lua_pushboolean(L, (SDL_GetModState() & SDL_KMOD_ALT) != 0);
+    luaPushOneOrNil(L, (SDL_GetModState() & SDL_KMOD_ALT) != 0);
     return 1;
 }
 static int lua_IsModifierKeyDown(lua_State* L) {
     const SDL_Keymod m = SDL_GetModState();
-    lua_pushboolean(L, (m & (SDL_KMOD_SHIFT | SDL_KMOD_CTRL | SDL_KMOD_ALT)) != 0);
+    luaPushOneOrNil(L, (m & (SDL_KMOD_SHIFT | SDL_KMOD_CTRL | SDL_KMOD_ALT)) != 0);
     return 1;
 }
 
@@ -5000,10 +5031,10 @@ static int lua_IsModifierKeyDown(lua_State* L) {
 /// hides an addon from the interface that is meant to work with it.
 static int lua_IsAddOnLoaded(lua_State* L) {
     const char* wanted = lua_isstring(L, 1) ? lua_tostring(L, 1) : nullptr;
-    if (!wanted) { lua_pushboolean(L, 0); return 1; }
+    if (!wanted) { luaPushOneOrNil(L, 0); return 1; }
 
     lua_getfield(L, LUA_REGISTRYINDEX, "wowee_addon_info");
-    if (!lua_istable(L, -1)) { lua_pop(L, 1); lua_pushboolean(L, 0); return 1; }
+    if (!lua_istable(L, -1)) { lua_pop(L, 1); luaPushOneOrNil(L, 0); return 1; }
     const int count = static_cast<int>(lua_objlen(L, -1));
     bool found = false;
     for (int i = 1; i <= count && !found; ++i) {
@@ -5029,8 +5060,11 @@ static int lua_IsAddOnLoaded(lua_State* L) {
         auto* svc = getLuaServices(L);
         if (svc && svc->isAddOnLoaded) found = svc->isAddOnLoaded(wanted);
     }
-    lua_pushboolean(L, found ? 1 : 0);
-    return 1;
+    // loaded, then finished (0x00511b30): an addon here has run its files by
+    // the time anything can ask, so the two agree.
+    luaPushOneOrNil(L, found);
+    luaPushOneOrNil(L, found);
+    return 2;
 }
 
 /// GetTime() → seconds since the client started, as a float.
@@ -5057,7 +5091,7 @@ static int lua_LoadAddOn(lua_State* L) {
     const char* name = lua_isstring(L, 1) ? lua_tostring(L, 1) : nullptr;
     auto* svc = getLuaServices(L);
     if (!name || !svc || !svc->loadAddOn) {
-        lua_pushboolean(L, 0);
+        luaPushOneOrNil(L, 0);
         lua_pushstring(L, "MISSING");
         return 2;
     }
@@ -5074,7 +5108,7 @@ static int lua_LoadAddOn(lua_State* L) {
     // an event does nothing rather than breaking the window it is in.
     std::string reason;
     const bool ok = svc->loadAddOn(name, reason);
-    lua_pushboolean(L, ok ? 1 : 0);
+    luaPushOneOrNil(L, ok ? 1 : 0);
     if (ok) { lua_pushnil(L); return 2; }
     // Only a reason the interface has a string for. UIParentLoadAddOn does
     //
@@ -5212,7 +5246,7 @@ static int lua_IsMouseButtonDown(lua_State* L) {
         else if (name == "rightbutton" || name == "right") down = ImGui::IsMouseDown(ImGuiMouseButton_Right);
         else if (name == "middlebutton" || name == "middle") down = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
     }
-    lua_pushboolean(L, down ? 1 : 0);
+    luaPushOneOrNil(L, down ? 1 : 0);
     return 1;
 }
 
@@ -5724,7 +5758,10 @@ static int lua_GetLFGInfoServer(lua_State* L) {
     lua_pushboolean(L, 0);                 // 5: achievements
     lua_pushstring(L, "");                 // 6: lfgComment
     lua_pushnumber(L, queued ? 1 : 0);     // 7: slotCount
-    return 7;
+    // 8-10: three bytes the client keeps beside the flags (+6..+8 of its
+    // LFG state, 0x00552f30), which nothing here sets.
+    for (int i = 0; i < 3; ++i) lua_pushnumber(L, 0);
+    return 10;
 }
 
 // GetLFGRoleUpdate() → roleCheckInProgress, slots, members
@@ -6084,7 +6121,7 @@ static int lua_GetArenaTeamRosterInfo(lua_State* L) {
         lua_pushstring(L, localizedClassName(gh, m.classId, gh->lookupPlayerGender(m.guid) == 1 ? 1 : 0).c_str());
     else
         lua_pushnil(L);
-    lua_pushboolean(L, m.online ? 1 : 0);    // 5: online
+    luaPushOneOrNil(L, m.online ? 1 : 0);    // 5: online
     lua_pushnumber(L, m.weekGames);          // 6: played
     lua_pushnumber(L, m.weekWins);           // 7: win
     lua_pushnumber(L, m.seasonGames);        // 8: seasonPlayed
@@ -6442,7 +6479,7 @@ static int lua_LFGTeleport(lua_State* L) {
 // each read as "not an arena". That is right until the player is in one.
 static int lua_IsBattlefieldArena(lua_State* L) {
     auto* gh = getGameHandler(L);
-    lua_pushboolean(L, gh && gh->isArenaMap(gh->getCurrentMapId()) ? 1 : 0);
+    luaPushOneOrNil(L, gh && gh->isArenaMap(gh->getCurrentMapId()) ? 1 : 0);
     return 1;
 }
 
@@ -6453,7 +6490,7 @@ static int lua_IsBattlefieldArena(lua_State* L) {
 // nil, and the frame treats that as unregistered - which a skirmish is.
 static int lua_IsActiveBattlefieldArena(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (gh && gh->isArenaMap(gh->getCurrentMapId())) lua_pushboolean(L, 1);
+    if (gh && gh->isArenaMap(gh->getCurrentMapId())) luaPushOneOrNil(L, 1);
     else lua_pushnil(L);
     lua_pushnil(L);
     return 2;
@@ -6497,12 +6534,18 @@ static int lua_HearthAndResurrectFromArea(lua_State* L) {
 // anything.
 //
 // There is no Wintergrasp queue in this client, so "none" is also the true
-// answer. mapName and queueID stay nil, which is what an empty slot answers.
+// answer.
+//
+// The client's shape (0x0054c8a0): index 1 alone answers - status, the
+// zone's name (nil for none), the queue id and the seconds left to accept,
+// both numbers, both 0 with nothing queued.
 static int lua_GetWorldPVPQueueStatus(lua_State* L) {
+    if (static_cast<int>(luaL_checknumber(L, 1)) != 1) return 0;
     lua_pushstring(L, "none");
     lua_pushnil(L);
-    lua_pushnil(L);
-    return 3;
+    lua_pushnumber(L, 0);
+    lua_pushnumber(L, 0);
+    return 4;
 }
 
 // LeaveBattlefield() - walk out of the battleground currently being played.
@@ -6811,10 +6854,10 @@ static int lua_GetBattlefieldInfo(lua_State* L) {
     const uint32_t level = gh->getPlayerLevel();
     const bool inBracket = (bg.minLevel == 0 || level >= bg.minLevel) &&
                            (bg.maxLevel == 0 || level <= bg.maxLevel);
-    constexpr uint32_t kRandomBattleground = 32;
-    lua_pushboolean(L, inBracket ? 1 : 0);                        // 4: canEnter
-    lua_pushboolean(L, bg.isHoliday ? 1 : 0);                     // 5: isHoliday
-    lua_pushboolean(L, bg.bgTypeId == kRandomBattleground ? 1 : 0); // 6: isRandom
+    constexpr uint32_t kRandomBattleground = game::GameHandler::kRandomBattleground;
+    luaPushOneOrNil(L, inBracket ? 1 : 0);                        // 4: canEnter
+    luaPushOneOrNil(L, bg.isHoliday ? 1 : 0);                     // 5: isHoliday
+    luaPushOneOrNil(L, bg.bgTypeId == kRandomBattleground ? 1 : 0); // 6: isRandom
     return 6;
 }
 
@@ -6851,7 +6894,7 @@ static int lua_GetBattlegroundInfo(lua_State* L) {
     // 0x0054ba00: the random battleground (32) at level 80 only; any other
     // where a PvpDifficulty.dbc bracket of its first map holds the player's
     // level - the rows of one map lie together, and the walk stops after them.
-    constexpr uint32_t kRandomBattleground = 32;
+    constexpr uint32_t kRandomBattleground = game::GameHandler::kRandomBattleground;
     const uint32_t level = gh->getPlayerLevel();
     struct Bracket { uint32_t map, minLevel, maxLevel; };
     static std::vector<Bracket> brackets;
@@ -6883,11 +6926,11 @@ static int lua_GetBattlegroundInfo(lua_State* L) {
     }
 
     lua_pushstring(L, bg.name.c_str());
-    lua_pushboolean(L, canEnter ? 1 : 0);
+    luaPushOneOrNil(L, canEnter ? 1 : 0);
     // isHoliday: the value of the world state the row names (0x00548d10).
     const bool holiday = bg.holidayWorldState != 0 && gh->getWorldState(bg.holidayWorldState).value_or(0) != 0;
-    lua_pushboolean(L, holiday ? 1 : 0);
-    lua_pushboolean(L, bg.id == kRandomBattleground ? 1 : 0); // isRandom (0x0054e010)
+    luaPushOneOrNil(L, holiday ? 1 : 0);
+    luaPushOneOrNil(L, bg.id == kRandomBattleground ? 1 : 0); // isRandom (0x0054e010)
     lua_pushnumber(L, bg.id);
     return 5;
 }
@@ -7569,13 +7612,13 @@ static int lua_SetTerrainMip(lua_State* L) {
 }
 
 static int lua_GetVideoCaps(lua_State* L) {
-    lua_pushboolean(L, 1);   // 1: anisotropic
-    lua_pushboolean(L, 1);   // 2: pixelShaders
-    lua_pushboolean(L, 1);   // 3: vertexShaders
-    lua_pushboolean(L, 1);   // 4: trilinear
-    lua_pushboolean(L, 1);   // 5: buffering
+    luaPushOneOrNil(L, 1);   // 1: anisotropic
+    luaPushOneOrNil(L, 1);   // 2: pixelShaders
+    luaPushOneOrNil(L, 1);   // 3: vertexShaders
+    luaPushOneOrNil(L, 1);   // 4: trilinear
+    luaPushOneOrNil(L, 1);   // 5: buffering
     lua_pushnumber(L, 16);   // 6: maxAnisotropy
-    lua_pushboolean(L, 1);   // 7: hardwareCursor
+    luaPushOneOrNil(L, 1);   // 7: hardwareCursor
     return 7;
 }
 
@@ -7679,7 +7722,7 @@ static int lua_GetCVarMax(lua_State* L) {
 // rather than left missing because the panels that ask are otherwise perfectly
 // usable: the audio options page reads the microphone level from an OnUpdate,
 // so one absent global there raises every frame the page is open.
-static int lua_IsVoiceChatAllowedByServer(lua_State* L) { lua_pushboolean(L, 0); return 1; }
+static int lua_IsVoiceChatAllowedByServer(lua_State* L) { luaPushOneOrNil(L, 0); return 1; }
 static int lua_VoiceChat_IsRecordingLoopbackSound(lua_State* L) { lua_pushboolean(L, 0); return 1; }
 static int lua_VoiceChat_IsPlayingLoopbackSound(lua_State* L) { lua_pushboolean(L, 0); return 1; }
 static int lua_VoiceChat_GetCurrentMicrophoneSignalLevel(lua_State* L) { lua_pushnumber(L, 0); return 1; }
@@ -8124,11 +8167,16 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"GetHolidayBGHonorCurrencyBonuses", lua_BattlegroundHonorBonusesNone},
                 {"GetBattlefieldInstanceInfo",       lua_GetBattlefieldInstanceInfo},
                 {"GetNumBattlefields",       lua_GetNumBattlefields},
-                // Sorting the battleground list. This client sorts its own, so
-                // there is nothing to do - but the name has to exist, because
-                // PVPBattlegroundFrame_OnShow calls it and a nil global raises
-                // as the panel opens.
-                {"SortBGList",               lua_ReturnNothing},
+                // SortBGList() (0x0054c9f0): the battleground list put back in
+                // the client's order, so a holiday that started since the list
+                // was built moves up. PVPBattlegroundFrame_OnShow calls it.
+                {"SortBGList", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) {
+                gh->getBattlegroundTypes();
+                gh->sortBattlegroundTypes();
+            }
+            return 0;
+        }},
                 // How many papers the compose frame offers. That is Stationery
                 // .dbc filtered by the client's own rule - the row whose flag
                 // says no paper need be bought, plus every row whose item is
@@ -8539,7 +8587,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 // A separate render scale for the player model, which this
                 // client does not have. False disables the control rather than
                 // leaving it offering something that would do nothing.
-                {"IsPlayerResolutionAvailable", lua_ReturnFalse},
+                {"IsPlayerResolutionAvailable", luaReturnNil},
                 // Which extra action bars are shown. FrameXML draws the bars
                 // and MultiActionBar_Update decides from the SHOW_MULTI_ACTIONBAR_*
                 // globals, which are CVars and persist on their own - so the
@@ -8629,13 +8677,13 @@ void registerSystemLuaAPI(lua_State* L) {
                 shown[2] = readBool("showrightbar", shown[2]);
                 shown[3] = readBool("showleftbar", shown[3]);
             }
-            for (bool on : shown) lua_pushboolean(L, on ? 1 : 0);
+            for (bool on : shown) luaPushOneOrNil(L, on ? 1 : 0);
             return 4;
         }},
                 // Voice chat, which this client has none of. The enumerations
                 // hand back lists, so they answer with nothing rather than with
                 // a zero; IsVoiceChatEnabled already answers false beside them.
-                {"VoiceIsDisabledByClient",  lua_ReturnTrue},
+                {"VoiceIsDisabledByClient",  luaReturnOne},
                 {"VoiceEnumerateCaptureDevices", lua_ReturnNothing},
                 {"VoiceEnumerateOutputDevices",  lua_ReturnNothing},
                 {"VoiceSelectCaptureDevice", lua_ReturnNothing},
@@ -8684,7 +8732,7 @@ void registerSystemLuaAPI(lua_State* L) {
             for (const auto& a : gh->getPlayerAuras()) {
                 if (a.spellId == c.spellId) { active = true; break; }
             }
-            lua_pushboolean(L, active ? 1 : 0);
+            luaPushOneOrNil(L, active ? 1 : 0);
             return 5;
         }},
                 // Counts, and the count is the whole point: each of these is
@@ -8752,7 +8800,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 // returns early unless KBSetup_IsLoaded, the MOTD and notice
                 // are both `if ( x )`, and the article lists are walked by the
                 // counts. Never loaded, nothing in it.
-                {"KBSetup_IsLoaded",            lua_ReturnFalse},
+                {"KBSetup_IsLoaded",            luaReturnNil},
                 {"KBSetup_BeginLoading",        lua_ReturnNothing},
                 {"KBQuery_BeginLoading",        lua_ReturnNothing},
                 {"KBArticle_BeginLoading",      lua_ReturnNothing},
@@ -8819,10 +8867,10 @@ void registerSystemLuaAPI(lua_State* L) {
                 // player leads. Solo, there is no group to bring.
                 {"CanJoinBattlefieldAsGroup", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (!gh) { lua_pushboolean(L, 0); return 1; }
+            if (!gh) { luaPushOneOrNil(L, 0); return 1; }
             const auto& pd = gh->getPartyData();
             const bool leadsAParty = !pd.isEmpty() && pd.leaderGuid == gh->getPlayerGuid();
-            lua_pushboolean(L, leadsAParty ? 1 : 0);
+            luaPushOneOrNil(L, leadsAParty ? 1 : 0);
             return 1;
         }},
                 // The instance's own two clocks, answered in **milliseconds**:
@@ -9032,8 +9080,8 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, done);
             return 1;
         }},
-                {"GetVoiceStatus",           lua_ReturnFalse},
-                {"GetMuteStatus",            lua_ReturnFalse},
+                {"GetVoiceStatus",           luaReturnNil},
+                {"GetMuteStatus",            luaReturnNil},
                 {"GetActiveVoiceChannel",    lua_ReturnNil},
                 {"GetVoiceCurrentSessionID", lua_ReturnNil},
                 // GetPartyMember(1-4) -> 1 when that party slot holds someone,
@@ -9110,12 +9158,12 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"IsAttackAction", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const int slot = static_cast<int>(luaL_optnumber(L, 1, 0)) - 1;
-            if (!gh || slot < 0) { lua_pushboolean(L, 0); return 1; }
+            if (!gh || slot < 0) { luaPushOneOrNil(L, 0); return 1; }
             const auto& bar = gh->getActionBar();
             // 6603 is Auto Attack, the one action that flashes the button red
             // for as long as the swing keeps going.
             constexpr uint32_t kAutoAttack = game::SPELL_ID_ATTACK;
-            lua_pushboolean(L, slot < static_cast<int>(bar.size()) &&
+            luaPushOneOrNil(L, slot < static_cast<int>(bar.size()) &&
                                bar[slot].type == game::ActionBarSlot::SPELL &&
                                bar[slot].id == kAutoAttack);
             return 1;
@@ -9123,7 +9171,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"IsConsumableAction", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const int slot = static_cast<int>(luaL_optnumber(L, 1, 0)) - 1;
-            if (!gh || slot < 0) { lua_pushboolean(L, 0); return 1; }
+            if (!gh || slot < 0) { luaPushOneOrNil(L, 0); return 1; }
             const auto& bar = gh->getActionBar();
             bool consumable = false;
             if (slot < static_cast<int>(bar.size()) &&
@@ -9131,13 +9179,13 @@ void registerSystemLuaAPI(lua_State* L) {
                 const auto* info = gh->getItemInfo(bar[slot].id);
                 consumable = info && info->valid && info->itemClass == 0;  // Consumable
             }
-            lua_pushboolean(L, consumable);
+            luaPushOneOrNil(L, consumable);
             return 1;
         }},
                 {"IsEquippedAction", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const int slot = static_cast<int>(luaL_optnumber(L, 1, 0)) - 1;
-            if (!gh || slot < 0) { lua_pushboolean(L, 0); return 1; }
+            if (!gh || slot < 0) { luaPushOneOrNil(L, 0); return 1; }
             const auto& bar = gh->getActionBar();
             bool worn = false;
             if (slot < static_cast<int>(bar.size()) &&
@@ -9148,13 +9196,13 @@ void registerSystemLuaAPI(lua_State* L) {
                     worn = !s.empty() && s.item.itemId == bar[slot].id;
                 }
             }
-            lua_pushboolean(L, worn);
+            luaPushOneOrNil(L, worn);
             return 1;
         }},
                 {"IsStackableAction", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const int slot = static_cast<int>(luaL_optnumber(L, 1, 0)) - 1;
-            if (!gh || slot < 0) { lua_pushboolean(L, 0); return 1; }
+            if (!gh || slot < 0) { luaPushOneOrNil(L, 0); return 1; }
             const auto& bar = gh->getActionBar();
             bool stackable = false;
             if (slot < static_cast<int>(bar.size()) &&
@@ -9162,7 +9210,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 const auto* info = gh->getItemInfo(bar[slot].id);
                 stackable = info && info->valid && info->maxStack > 1;
             }
-            lua_pushboolean(L, stackable);
+            luaPushOneOrNil(L, stackable);
             return 1;
         }},
                 {"IsFlyableArea",            lua_IsFlyableArea},
@@ -9171,12 +9219,12 @@ void registerSystemLuaAPI(lua_State* L) {
                 // all along. These two answered a flat false and a flat true.
                 {"IsIndoors", [](lua_State* L) -> int {
             auto* svc = getLuaServices(L);
-            lua_pushboolean(L, svc && svc->isPlayerIndoors && svc->isPlayerIndoors());
+            luaPushOneOrNil(L, svc && svc->isPlayerIndoors && svc->isPlayerIndoors());
             return 1;
         }},
                 {"IsOutdoors", [](lua_State* L) -> int {
             auto* svc = getLuaServices(L);
-            lua_pushboolean(L, !(svc && svc->isPlayerIndoors && svc->isPlayerIndoors()));
+            luaPushOneOrNil(L, !(svc && svc->isPlayerIndoors && svc->isPlayerIndoors()));
             return 1;
         }},
                 // IsPossessBarVisible() (0x005a8820): the possess bar's spell
@@ -9247,22 +9295,22 @@ void registerSystemLuaAPI(lua_State* L) {
                 // to send a raid warning at all.
                 {"IsRaidOfficer", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (!gh) { lua_pushboolean(L, 0); return 1; }
+            if (!gh) { luaPushOneOrNil(L, 0); return 1; }
             const uint64_t self = gh->getPlayerGuid();
             constexpr uint8_t kMemberFlagAssistant = 0x01;
             for (const auto& mem : gh->getPartyData().members) {
                 if (mem.guid == self) {
-                    lua_pushboolean(L, (mem.flags & kMemberFlagAssistant) ? 1 : 0);
+                    luaPushOneOrNil(L, (mem.flags & kMemberFlagAssistant) ? 1 : 0);
                     return 1;
                 }
             }
-            lua_pushboolean(L, 0);
+            luaPushOneOrNil(L, 0);
             return 1;
         }},
                 // IsReferAFriendLinked moved to lua_unit_api.cpp: it is one bit
                 // of UNIT_DYNAMIC_FLAGS (0x40) read off the guid's own object.
-                {"IsStereoVideoAvailable",   lua_ReturnFalse},
-                {"IsVoiceChatEnabled",       lua_ReturnFalse},
+                {"IsStereoVideoAvailable",   luaReturnNil},
+                {"IsVoiceChatEnabled",       luaReturnNil},
                 // False always, which is what disabled the zoom-out button at
                 // every level of the map. The only way back out of a zone was
                 // the right-click that reaches the same handler without
@@ -9276,7 +9324,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 // False, which is what the client answers - a shared 3-byte
                 // `return 0` for this name and GetMapDebugObjectInfo; the note
                 // sits at GetNumMapDebugObjects.
-                {"HasDebugZoneMap",          lua_ReturnFalse},
+                {"HasDebugZoneMap",          luaReturnNil},
                 // IsDesaturateSupported() (0x00511fb0): 1 where the device
                 // can draw a texture desaturated (0x00483290), as every one
                 // here does; nothing otherwise.
@@ -9359,8 +9407,8 @@ void registerSystemLuaAPI(lua_State* L) {
                 // is hidden, and leaving it hidden is the honest outcome.
                 {"AchievementMicroButton_Update", [](lua_State* L) -> int {
             (void)L; return 0; }},
-                {"BNFeaturesEnabled",        lua_ReturnFalse},
-                {"BNFeaturesEnabledAndConnected", lua_ReturnFalse},
+                {"BNFeaturesEnabled",        luaReturnNil},
+                {"BNFeaturesEnabledAndConnected", luaReturnNil},
                 {"BNGetMaxPlayersInConversation", lua_ReturnZero},
                 {"GetSummonFriendCooldown",  lua_ReturnNoCooldown},
                 {"GetScreenResolutions",     lua_GetScreenResolutions},
@@ -9642,7 +9690,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"DungeonUsesTerrainMap", [](lua_State* L) -> int {
             auto* svc = getLuaServices(L);
             if (svc && svc->mapDungeonUsesTerrainMap && svc->mapDungeonUsesTerrainMap()) {
-                lua_pushboolean(L, 1);
+                luaPushOneOrNil(L, 1);
                 return 1;
             }
             return 0;
@@ -9730,7 +9778,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 case 3: on = true; break;
                 default: on = false; break;   // 0, and anything unrecognised
             }
-            lua_pushboolean(L, on ? 1 : 0);
+            luaPushOneOrNil(L, on ? 1 : 0);
             return 1;
         }},
                 // IsAutoRepeatAction(slot) - the button flashes for as long as
@@ -9750,7 +9798,7 @@ void registerSystemLuaAPI(lua_State* L) {
                     repeating = bar[slot].id == kAutoShot || bar[slot].id == kShoot;
                 }
             }
-            lua_pushboolean(L, repeating);
+            luaPushOneOrNil(L, repeating);
             return 1;
         }},
                 // No, and deliberately no even on macOS, which this client does
@@ -9770,7 +9818,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 // IsWindowsClient() (0x004dce40): 1. IsDebugBuild()
                 // (0x0050fe80): false.
                 {"IsWindowsClient", [](lua_State* L) -> int { lua_pushnumber(L, 1); return 1; }},
-                {"IsDebugBuild",             lua_ReturnFalse},
+                {"IsDebugBuild",             luaReturnNil},
                 // GameMovieFinished() (0x0051d590 -> 0x00518870): only while a
                 // movie plays (0x00bd0800), which none does here -
                 // SMSG_TRIGGER_MOVIE is answered with CMSG_COMPLETE_MOVIE at
@@ -9793,9 +9841,9 @@ void registerSystemLuaAPI(lua_State* L) {
                 // right-click menus and the loot-method controls.
                 {"IsPartyLeader", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (!gh) { lua_pushboolean(L, 0); return 1; }
+            if (!gh) { luaPushOneOrNil(L, 0); return 1; }
             const uint64_t leader = gh->getPartyData().leaderGuid;
-            lua_pushboolean(L, leader != 0 && leader == gh->getPlayerGuid());
+            luaPushOneOrNil(L, leader != 0 && leader == gh->getPlayerGuid());
             return 1;
         }},
                 {"UnitFactionGroup",         lua_UnitFactionGroup},
@@ -9880,9 +9928,9 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"IsDisplayChannelOwner", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const int sel = selectedDisplayChannel();
-            if (!gh || sel < 1) { lua_pushboolean(L, 0); return 1; }
+            if (!gh || sel < 1) { luaPushOneOrNil(L, 0); return 1; }
             const auto* slot = displayChannelSlot(gh, sel);
-            lua_pushboolean(L, slot && gh->ownsChatChannel(slot->name) ? 1 : 0);
+            luaPushOneOrNil(L, slot && gh->ownsChatChannel(slot->name) ? 1 : 0);
             return 1;
         }},
                 // IsDisplayChannelModerator() (0x004ffae0): the same channel
@@ -9926,7 +9974,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 moderator = m.owner || m.moderator;
                 break;
             }
-            lua_pushboolean(L, moderator ? 1 : 0);
+            luaPushOneOrNil(L, moderator ? 1 : 0);
             return 1;
         }},
                 {"SetSelectedDisplayChannel", [](lua_State* L) -> int {
@@ -9976,11 +10024,11 @@ void registerSystemLuaAPI(lua_State* L) {
             if (member > static_cast<int>(roster.size())) { return luaReturnNil(L); }
             const auto& m = roster[static_cast<size_t>(member) - 1];
             lua_pushstring(L, m.name.c_str());          // 1: name
-            lua_pushboolean(L, m.owner ? 1 : 0);        // 2: owner
-            lua_pushboolean(L, m.moderator ? 1 : 0);    // 3: moderator
-            lua_pushboolean(L, m.muted ? 1 : 0);        // 4: muted
-            lua_pushboolean(L, 0);                      // 5: active (voice)
-            lua_pushboolean(L, 0);                      // 6: enabled (voice)
+            luaPushOneOrNil(L, m.owner ? 1 : 0);        // 2: owner
+            luaPushOneOrNil(L, m.moderator ? 1 : 0);    // 3: moderator
+            luaPushOneOrNil(L, m.muted ? 1 : 0);        // 4: muted
+            luaPushOneOrNil(L, 0);                      // 5: active (voice)
+            luaPushOneOrNil(L, 0);                      // 6: enabled (voice)
             return 6;
         }},
                 // The countdown the Wintergrasp zone-info line and the
@@ -10029,7 +10077,7 @@ void registerSystemLuaAPI(lua_State* L) {
             auto* svc = getLuaServices(L);
             const bool on = svc && svc->isOnOutdoorPvpObjective &&
                             svc->isOnOutdoorPvpObjective();
-            lua_pushboolean(L, on ? 1 : 0);
+            luaPushOneOrNil(L, on ? 1 : 0);
             return 1;
         }},
                 {"GetNumVoiceSessions",      lua_ReturnZero},
@@ -10403,18 +10451,18 @@ void registerSystemLuaAPI(lua_State* L) {
                 // the Display panel was built.
                 {"ShowingHelm", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushboolean(L, (gh && gh->isHelmVisible()) ? 1 : 0);
+            luaPushOneOrNil(L, (gh && gh->isHelmVisible()) ? 1 : 0);
             return 1;
         }},
                 {"ShowingCloak", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushboolean(L, (gh && gh->isCloakVisible()) ? 1 : 0);
+            luaPushOneOrNil(L, (gh && gh->isCloakVisible()) ? 1 : 0);
             return 1;
         }},
                 // The equipment manager exists here - GetNumEquipmentSets and
                 // the rest of its API are bound - so the panel's checkbox is
                 // offering something real.
-                {"CanUseEquipmentSets",         lua_ReturnTrue},
+                {"CanUseEquipmentSets",         luaReturnOne},
                 // 0x00530700: 1 when any has been triggered, else nil.
                 {"CanResetTutorials", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
@@ -10428,7 +10476,7 @@ void registerSystemLuaAPI(lua_State* L) {
             return 0;
         }},
                 // A Mac-only mouse this build does not look for.
-                {"DetectWowMouse",              lua_ReturnFalse},
+                {"DetectWowMouse",              luaReturnNil},
                 // No Battle.net, so no chat to filter.
                 {"BNSetMatureLanguageFilter",   lua_ReturnNothing},
                 {"ShowHelm", [](lua_State* L) -> int {
@@ -10627,9 +10675,8 @@ void registerSystemLuaAPI(lua_State* L) {
             uint32_t ms = gh ? gh->getLatencyMs() : 0;
             lua_pushnumber(L, 0);   // bandwidthIn
             lua_pushnumber(L, 0);   // bandwidthOut
-            lua_pushnumber(L, ms);  // latencyHome
-            lua_pushnumber(L, ms);  // latencyWorld
-            return 4;
+            lua_pushnumber(L, ms);  // latency - three values, as 0x00510ac0
+            return 3;
         }},
                 {"GetCurrentTitle", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
@@ -10671,31 +10718,39 @@ void registerSystemLuaAPI(lua_State* L) {
             if (gh) gh->sendSetTitle(static_cast<int32_t>(luaL_optnumber(L, 1, -1)));
             return 0;
         }},
-                // GetInspectArenaTeamData(index) →
-                //   name, size, rating, weekPlayed, weekWins, seasonPlayed,
-                //   seasonWins, playerRating
-                //
-                // Real: the inspect reply carries these and this client already
-                // parses them into InspectResult.
+                // GetInspectArenaTeamData(index) → name, size, rating,
+                //   played, won, playerPlayed, playerRating, then the banner:
+                //   background r, g, b, emblem, its r, g, b, border, its r, g, b
+                //   (0x005e8030). The slot's figures came with the inspect; the
+                //   name, size and banner are the team's query answer, asked
+                //   for when not known - nothing until it arrives, and its
+                //   arrival raises INSPECT_HONOR_UPDATE to ask again.
                 {"GetInspectArenaTeamData", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const auto* ir = gh ? gh->getInspectResult() : nullptr;
-            const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
-            if (!ir || index < 1 ||
-                index > static_cast<int>(ir->arenaTeams.size())) {
-                return 0;   // nothing, which is how WoW says "no team here"
-            }
-            const auto& t = ir->arenaTeams[index - 1];
-            // The type is the team size: 2, 3 or 5.
-            lua_pushstring(L, t.name.c_str());
-            lua_pushnumber(L, t.type);
-            lua_pushnumber(L, t.personalRating);
-            lua_pushnumber(L, t.weekGames);
-            lua_pushnumber(L, t.weekWins);
+            const int index = static_cast<int>(luaL_checknumber(L, 1));
+            if (!ir || index < 1 || index > 3) return 0;
+            const auto& t = ir->arenaTeams[static_cast<size_t>(index - 1)];
+            const auto* team = t.teamId ? gh->arenaTeamQuery(t.teamId) : nullptr;
+            if (!team) return 0;
+            const auto colour = [L](uint32_t argb) {
+                lua_pushnumber(L, ((argb >> 16) & 0xFF) / 255.0);
+                lua_pushnumber(L, ((argb >> 8) & 0xFF) / 255.0);
+                lua_pushnumber(L, (argb & 0xFF) / 255.0);
+            };
+            lua_pushstring(L, team->name.c_str());
+            lua_pushnumber(L, team->size);
+            lua_pushnumber(L, t.rating);
             lua_pushnumber(L, t.seasonGames);
             lua_pushnumber(L, t.seasonWins);
+            lua_pushnumber(L, t.playerSeasonGames);
             lua_pushnumber(L, t.personalRating);
-            return 8;
+            colour(team->background);
+            lua_pushnumber(L, team->emblem);
+            colour(team->emblemColor);
+            lua_pushnumber(L, team->border);
+            colour(team->borderColor);
+            return 18;
         }},
                 // CanInspect(unit [, showError]) - 0x00522710. The answer is
                 // 0x00520410's: the unit has to be a player object, the player
@@ -10719,7 +10774,7 @@ void registerSystemLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             const char* uid = luaL_optstring(L, 1, "target");
             const bool showError = lua_toboolean(L, 2) != 0;
-            if (!gh) { lua_pushboolean(L, 0); return 1; }
+            if (!gh) { luaPushOneOrNil(L, 0); return 1; }
             const auto complain = [&](const server_notice::GameError& why) {
                 if (showError) gh->sayGameError(why);
             };
@@ -10735,7 +10790,7 @@ void registerSystemLuaAPI(lua_State* L) {
             const uint64_t guid = resolveUnitGuid(gh, uidStr);
             if (guid == 0) {
                 nobodyHere();
-                lua_pushboolean(L, 0);
+                luaPushOneOrNil(L, 0);
                 return 1;
             }
             // High word 0x0000 marks a player guid in this range; creatures
@@ -10745,7 +10800,7 @@ void registerSystemLuaAPI(lua_State* L) {
             const bool isPlayer = ((guid >> 48) & 0xFFFF) == 0;
             if (!isPlayer || gh->unitMayAttack(gh->getPlayerGuid(), guid)) {
                 complain(server_notice::kInspectInvalidTarget);
-                lua_pushboolean(L, 0);
+                luaPushOneOrNil(L, 0);
                 return 1;
             }
             // A unit this client has no object for is the one thing the
@@ -10758,7 +10813,7 @@ void registerSystemLuaAPI(lua_State* L) {
             const auto theirs = em.getEntity(guid);
             if (!mine || !theirs) {
                 nobodyHere();
-                lua_pushboolean(L, 0);
+                luaPushOneOrNil(L, 0);
                 return 1;
             }
             const float dx = mine->getX() - theirs->getX();
@@ -10768,7 +10823,7 @@ void registerSystemLuaAPI(lua_State* L) {
             const bool reachable =
                 dx * dx + dy * dy + dz * dz <= kInspectRange * kInspectRange;
             if (!reachable) complain(server_notice::kInspectOutOfRange);
-            lua_pushboolean(L, reachable ? 1 : 0);
+            luaPushOneOrNil(L, reachable ? 1 : 0);
             return 1;
         }},
                 // Honour data for an inspected player is not in the reply this
@@ -10779,7 +10834,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"HasInspectHonorData", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const auto* r = gh ? gh->getInspectResult() : nullptr;
-            lua_pushboolean(L, (r && r->hasHonorData) ? 1 : 0);
+            luaPushOneOrNil(L, (r && r->hasHonorData) ? 1 : 0);
             return 1;
         }},
                 // The tab asks for these when it opens and redraws on
@@ -11181,7 +11236,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 // half of it, which is the half that gates the button.
                 {"CanEditGuildEvent", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushboolean(L, (gh && !gh->getGuildName().empty()) ? 1 : 0);
+            luaPushOneOrNil(L, (gh && !gh->getGuildName().empty()) ? 1 : 0);
             return 1;
         }},
                 // Arena team events need a team. No arena team is tracked, so
@@ -11258,9 +11313,9 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, ev.eventTime.minute);
             // CALENDAR_FLAG_INVITES_LOCKED is 0x10, the bit the calendar's
             // own handlers test (0x005c29c0, 0x005bf590); 0x1000 was read here.
-            lua_pushboolean(L, (ev.flags & wowee::game::calendar_flag::kInvitesLocked) ? 1 : 0);
-            lua_pushboolean(L, 0);              // autoApprove
-            lua_pushboolean(L, 0);              // pendingInvite
+            luaPushOneOrNil(L, (ev.flags & wowee::game::calendar_flag::kInvitesLocked) ? 1 : 0);
+            luaPushOneOrNil(L, 0);              // autoApprove
+            luaPushOneOrNil(L, 0);              // pendingInvite
             lua_pushnumber(L, calendarInviteStatusFor(gh->getCalendarData(),
                                                       ev.eventId) + 1);
             // CALENDAR_INVITETYPE_NORMAL, which is 1 - the interface's range
@@ -11287,8 +11342,9 @@ void registerSystemLuaAPI(lua_State* L) {
                 gh->getCalendarEventDetail().invitees.size()) : 0);
             return 1;
         }},
-                // name, level, className, classFilename, inviteStatus - the
-                // five the invite list reads.
+                // CalendarEventGetInvite(index) → name, level, className,
+                //   classFilename, inviteStatus, modStatus, inviteIsMine,
+                //   inviteType, note (0x005ba220).
                 {"CalendarEventGetInvite", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
@@ -11298,12 +11354,23 @@ void registerSystemLuaAPI(lua_State* L) {
             const auto& inv = list[static_cast<size_t>(index) - 1];
             lua_pushstring(L, gh->lookupName(inv.guid).c_str());
             lua_pushnumber(L, inv.level);
-            lua_pushstring(L, "");              // className
-            lua_pushstring(L, "");              // classFilename
+            // The class from the name cache, "" and "" while it is not known.
+            const uint8_t classId = gh->lookupPlayerClass(inv.guid);
+            if (const char* token = luaClassToken(classId)) {
+                lua_pushstring(L, localizedClassName(gh, classId, 2).c_str());
+                lua_pushstring(L, token);
+            } else {
+                lua_pushstring(L, "");
+                lua_pushstring(L, "");
+            }
             lua_pushnumber(L, inv.status + 1);   // wire counts from zero
-            lua_pushnumber(L, inv.rank);
-            lua_pushboolean(L, inv.isGuildMember ? 1 : 0);
-            return 7;
+            // The moderation rank as the list's word for it.
+            constexpr uint8_t kModerator = 1, kCreator = 2;
+            lua_pushstring(L, inv.rank == kModerator ? "MODERATOR" : inv.rank == kCreator ? "CREATOR" : "");
+            lua_pushboolean(L, inv.guid == gh->getPlayerGuid() ? 1 : 0);  // inviteIsMine
+            lua_pushnumber(L, inv.isGuildMember ? 2 : 1);                // inviteType
+            lua_pushstring(L, inv.note.c_str());
+            return 9;
         }},
                 // The open event's own questions (0x005b8a50, 0x005b8aa0):
                 // whether the player may edit it, and its calendarType - nil

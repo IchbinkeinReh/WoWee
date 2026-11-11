@@ -1351,8 +1351,27 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
                 actualCam.y += outward.y * waterNudgeZ_ * 0.6f;
             }
         }
+        // 0x00606f90: with cameraWaterCollision on, the camera going under the
+        // surface turns to cameraSubmergeFinalPitch and coming up out of it to
+        // cameraSurfaceFinalPitch, eased at cameraPitchSmoothSpeed
+        // (0x00601190); a pitch of 0 asks for nothing.
+        const bool underNow = surfaceZ && actualCam.z < *surfaceZ;
+        if (camera_smooth::kWaterCollision && cameraWaterKnown_ && underNow != cameraUnderWater_) {
+            const float target = underNow ? camera_smooth::kSubmergeFinalPitch : camera_smooth::kSurfaceFinalPitch;
+            const float pitchTo = -target;   // the client counts down as positive
+            if (target != 0.0f && std::fabs(pitch - pitchTo) >= camera_smooth::kAtRest) {
+                const auto ms = static_cast<uint32_t>(std::fabs(pitch - pitchTo) / camera_smooth::kPitchSpeed * 1000.0f);
+                viewPitch_.startMs = viewPitch_.endMs;
+                viewPitch_.value = pitch;
+                viewPitch_.set(pitchTo, cameraClockMs_, cameraClockMs_ + ms);
+                viewBlending_ = true;
+            }
+        }
+        cameraUnderWater_ = underNow;
+        cameraWaterKnown_ = true;
     } else {
         waterNudgeZ_ = 0.0f;
+        cameraWaterKnown_ = false;
     }
 
     // The camera sits exactly where it was computed, after collision has

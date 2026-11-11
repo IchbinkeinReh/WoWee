@@ -121,6 +121,19 @@ public:
     }
 
     void reset();
+    /// The camera's distance and pitch as the client saves them on leaving
+    /// the world (0x005ff320, cameraSavedDistance / cameraSavedPitch) and puts
+    /// back when it is reset on entering it (0x005ff3e0, the distance held to
+    /// 0..50).
+    [[nodiscard]] float savedDistance() const { return userTargetDistance; }
+    [[nodiscard]] float savedPitch() const { return pitch; }
+    /// The vehicle mode's distance (cameraSavedVehicleDistance, -1 for none).
+    [[nodiscard]] float savedVehicleDistance() const { return savedVehicleDistance_; }
+    void restoreSavedVehicleDistance(float distance) { savedVehicleDistance_ = distance; }
+    void restoreSaved(float distance, float pitchDeg) {
+        userTargetDistance = currentDistance = clampedZoomDistance(std::clamp(distance, 0.0f, 50.0f));
+        pitch = pitchDeg;
+    }
     void resetAngles();
     /// Put the unit at `pos`; it then falls from there unless on ground
     /// (portMove), not when `onTransport` - 0x00988370 starts no fall for a
@@ -947,6 +960,11 @@ private:
     /// below, the water surface. Eased both ways so crossing the water's
     /// edge does not jump the view.
     float waterNudgeZ_ = 0.0f;
+    /// Which side of the water's surface the camera was on last frame, for
+    /// the pitch it takes as it crosses (0x00606f90, camera flags 0x200000
+    /// under and 0x100000 above).
+    bool cameraUnderWater_ = false;
+    bool cameraWaterKnown_ = false;
 
     // Gravity / grounding
     float verticalVelocity = 0.0f;

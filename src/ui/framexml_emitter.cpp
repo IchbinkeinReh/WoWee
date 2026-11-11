@@ -1059,6 +1059,14 @@ struct Emitter {
         if (const std::string* o = node.attr("orientation")) {
             line(var + ":SetOrientation(" + quote(*o) + ")");
         }
+        // A non-empty hyperlinkFormat replaces the SimpleHTML's (0x0096dbdd).
+        if (const std::string* f = node.attr("hyperlinkFormat"); f && !f->empty()) {
+            line(var + ":SetHyperlinkFormat(" + quote(*f) + ")");
+        }
+        // A non-empty rotatesTexture is handed to the setter (0x009620a9).
+        if (const std::string* r = node.attr("rotatesTexture"); r && !r->empty()) {
+            line(var + ":SetRotatesTexture(" + (node.attrBool("rotatesTexture") ? "true" : "false") + ")");
+        }
         if (node.attr("defaultValue")) {
             line(var + ":SetValue(" +
                  std::to_string(node.attrFloat("defaultValue", 0.0f)) + ")");

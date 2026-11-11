@@ -86,3 +86,17 @@ TEST_CASE("Entities are decoded and unknown tags dropped", "[simple_html]") {
     REQUIRE(blocks.size() == 1);
     CHECK(blocks[0].text == "a <b> & c & d");
 }
+
+TEST_CASE("A link is written through the frame's hyperlink format", "[simple_html]") {
+    const auto blocks = parseSimpleHtml(
+        "<HTML><BODY><P>See <A href=\"quest:123\">this</A>.</P></BODY></HTML>",
+        "|cff00ff00|H%s|h[%s]|h|r 100%%");
+    REQUIRE(blocks.size() == 1);
+    CHECK(blocks[0].text == "See |cff00ff00|Hquest:123|h[this]|h|r 100%.");
+}
+
+TEST_CASE("A link with no words is left out", "[simple_html]") {
+    const auto blocks = parseSimpleHtml("<HTML><BODY><P>a<A href=\"x\"></A>b</P></BODY></HTML>");
+    REQUIRE(blocks.size() == 1);
+    CHECK(blocks[0].text == "ab");
+}

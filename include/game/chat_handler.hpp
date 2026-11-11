@@ -62,6 +62,14 @@ public:
     std::optional<chat_channels::Join> joinChannel(const std::string& channelName,
                                                    const std::string& password = "",
                                                    bool byClient = false, bool byPlayer = true);
+    /// JoinChannelByName (0x0050d900): one word, name and password each under
+    /// 128 bytes - otherwise nothing, as the client says nothing - and a name
+    /// the mature-language filter would mask, filter on or off (0x00509a50
+    /// with its third argument 1), refused with ERR_PROFANE_CHAT_NAME.
+    std::optional<chat_channels::Join> joinChannelByName(const std::string& channelName,
+                                                         const std::string& password, bool byPlayer);
+    /// A line in each joined defense channel the area concerns (0x0050c850).
+    void postToDefenseChannels(uint32_t areaId, const std::string& text);
     /// Leave a channel by its number, its name or its shortcut (0x005093f0).
     void leaveChannel(const std::string& channelName);
     /// Ask the server for a channel's members; the answer arrives as
@@ -340,6 +348,11 @@ private:
     /// The mature-language filter (chat_profanity.hpp), its expressions for
     /// the client's locale loaded on first use.
     void filterProfanity(ChatType type, std::string& text);
+    /// ChatProfanity.dbc read for the client's locale, once.
+    bool loadProfanity();
+    /// Whether the filter would mask anything in `text`, whatever
+    /// profanityFilter says.
+    bool isProfane(std::string text);
     chat_profanity::Filter profanity_;
     bool profanityLoaded_ = false;
     bool languageWordsLoaded_ = false;

@@ -535,7 +535,11 @@ public:
     }
 
     // Spell data resolver: spellId -> {castTimeMs, minRange, maxRange}
-    struct SpellDataInfo { uint32_t castTimeMs = 0; float minRange = 0; float maxRange = 0; uint32_t manaCost = 0; uint8_t powerType = 0; };
+    struct SpellDataInfo {
+        uint32_t castTimeMs = 0; float minRange = 0; float maxRange = 0; uint32_t manaCost = 0; uint8_t powerType = 0;
+        /// Spell.dbc ManaPerSecond (44): a channel's cost each second.
+        uint32_t manaPerSecond = 0;
+    };
     using SpellDataResolver = std::function<SpellDataInfo(uint32_t)>;
     void setSpellDataResolver(SpellDataResolver r) { spellDataResolver_ = std::move(r); }
     SpellDataInfo getSpellData(uint32_t spellId) const {
@@ -783,6 +787,9 @@ public:
     using InspectArenaTeam = game::InspectArenaTeam;
     using InspectResult = game::InspectResult;
     const InspectResult* getInspectResult() const;
+    /// SocialHandler::arenaTeamQuery: a team's name, size and banner, asked
+    /// for once when not known.
+    const ArenaTeamQueryData* arenaTeamQuery(uint32_t teamId);
     const std::array<uint32_t, 19>* getOtherPlayerVisibleEquipment(uint64_t guid) const {
         auto it = otherPlayerVisibleItemEntries_.find(guid);
         return (it != otherPlayerVisibleItemEntries_.end()) ? &it->second : nullptr;
@@ -3889,9 +3896,15 @@ public:
     };
     const BattlemasterEntry* getBattlemasterInfo(uint32_t bgTypeId);
 
-    /// Every battleground in BattlemasterList.dbc, arenas excluded, ordered by
-    /// id so an index into it means the same thing from one call to the next.
+    /// BattlemasterList's "Random Battleground" row.
+    static constexpr uint32_t kRandomBattleground = 32;
+    /// Every battleground in BattlemasterList.dbc, arenas excluded, in the
+    /// client's order (see sortBattlegroundTypes).
     const std::vector<BattlemasterEntry>& getBattlegroundTypes();
+    /// SortBGList (0x0054c9f0), also run when the list is built (0x0054e720):
+    /// the random battleground first, then one whose holiday world state is
+    /// set, then by lowest level, then by id (0x0054a650).
+    void sortBattlegroundTypes();
 
     /// Whether a map id belongs to a battleground, from the same table.
     bool isBattlegroundMap(uint32_t mapId);
@@ -4033,6 +4046,13 @@ public:
     const std::unordered_set<uint32_t>& getTrackedAchievements() const { return trackedAchievements_; }
     void setAchievementTracked(uint32_t id, bool tracked) {
         if (tracked) trackedAchievements_.insert(id); else trackedAchievements_.erase(id);
+    }
+    /// An achievement's reward line (Achievement.dbc Reward), or empty.
+    const std::string& getAchievementRewardText(uint32_t id) const {
+        auto it = achievementRewardCache_.find(id);
+        if (it != achievementRewardCache_.end()) return it->second;
+        static const std::string kEmpty;
+        return kEmpty;
     }
     /// Returns the description of an achievement by ID, or empty string if unknown.
     const std::string& getAchievementDescription(uint32_t id) const {
@@ -4667,8 +4687,8 @@ public:
                           uint32_t buyout, uint32_t duration);
     void auctionSellItemByGuid(uint64_t itemGuid, uint32_t stackCount, uint32_t bid,
                                uint32_t buyout, uint32_t duration);
-    void auctionPlaceBid(uint32_t auctionId, uint32_t amount);
-    void auctionBuyout(uint32_t auctionId, uint32_t buyoutPrice);
+    /// PlaceAuctionBid's checks and request (0x0059da40).
+    void auctionBid(const AuctionEntry& auction, uint32_t bid);
     void auctionCancelItem(uint32_t auctionId);
     void auctionListOwnerItems(uint32_t offset = 0);
     void auctionListBidderItems(uint32_t offset = 0);
@@ -5733,6 +5753,8 @@ public:
         uint32_t spellDifficultyId = 0;
         uint32_t totems[2] = {0, 0};
         uint32_t totemCategories[2] = {0, 0};
+        /// RequiresSpellFocus: the SpellFocusObject the spell needs nearby.
+        uint32_t requiresSpellFocus = 0;
     };
     static constexpr size_t PLAYER_EXPLORED_ZONES_COUNT = 128;
     std::string getAreaName(uint32_t areaId) const;
@@ -6790,6 +6812,7 @@ private:
     /// opinion about it, so it is saved with the rest of the character config.
     std::unordered_set<uint32_t> collapsedFactionIds_;
     std::unordered_map<uint32_t, std::string> achievementDescCache_;
+    std::unordered_map<uint32_t, std::string> achievementRewardCache_;
     std::unordered_map<uint32_t, uint32_t>    achievementPointsCache_;
     std::unordered_map<uint32_t, uint32_t>    achievementIconCache_;  // achievementId → SpellIcon.dbc ID
     std::unordered_map<uint32_t, uint32_t>    achievementFlagsCache_; // achievementId → Achievement.dbc Flags

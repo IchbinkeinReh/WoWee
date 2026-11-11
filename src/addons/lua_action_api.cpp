@@ -390,20 +390,20 @@ static void castPetSlot(lua_State* L, game::GameHandler* gh, uint32_t packed, in
 
 static int lua_HasAction(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnFalse(L); }
+    if (!gh) { return luaReturnNil(L); }
     int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1; // WoW uses 1-indexed slots
     if (const auto ref = petActionRef(gh, slot)) {
         // 0x005a8160: a command or a stance, or a spell.
         const uint32_t state = (ref->packed >> 24) & 0x3f;
-        lua_pushboolean(L, ref->packed != 0 && (state == 6 || state == 7 || petSlotSpell(ref->packed) != 0));
+        luaPushOneOrNil(L, ref->packed != 0 && (state == 6 || state == 7 || petSlotSpell(ref->packed) != 0));
         return 1;
     }
     const auto& bar = gh->getActionBar();
     if (slot < 0 || slot >= static_cast<int>(bar.size())) {
-        lua_pushboolean(L, 0);
+        luaPushOneOrNil(L, 0);
         return 1;
     }
-    lua_pushboolean(L, !bar[slot].isEmpty());
+    luaPushOneOrNil(L, !bar[slot].isEmpty());
     return 1;
 }
 
@@ -964,7 +964,7 @@ static int lua_GetActionTexture(lua_State* L) {
 static int lua_IsCurrentAction(lua_State* L) {
     // Currently no "active action" tracking; return false
     (void)L;
-    lua_pushboolean(L, 0);
+    luaPushOneOrNil(L, 0);
     return 1;
 }
 
@@ -998,8 +998,8 @@ static int lua_IsUsableAction(lua_State* L) {
                 }
             }
         }
-        lua_pushboolean(L, usable ? 1 : 0);
-        lua_pushboolean(L, noPower ? 1 : 0);
+        luaPushOneOrNil(L, usable ? 1 : 0);
+        luaPushOneOrNil(L, noPower ? 1 : 0);
         return 2;
     }
     const auto& bar = gh->getActionBar();
@@ -1421,14 +1421,14 @@ static int lua_CursorHasItem(lua_State* L) {
     // item stuck on the cursor with nowhere that would take it.
     // The ammunition off the ammo slot is an item too (0x00515100 answers 1
     // for cursor type 9 as for type 1).
-    lua_pushboolean(L, (s_cursorType == CursorType::ITEM ||
+    luaPushOneOrNil(L, (s_cursorType == CursorType::ITEM ||
                         s_cursorType == CursorType::GUILDBANK ||
                         s_cursorType == CursorType::AMMO) ? 1 : 0);
     return 1;
 }
 
 static int lua_CursorHasSpell(lua_State* L) {
-    lua_pushboolean(L, s_cursorType == CursorType::SPELL ? 1 : 0);
+    luaPushOneOrNil(L, s_cursorType == CursorType::SPELL ? 1 : 0);
     return 1;
 }
 
@@ -2733,7 +2733,7 @@ static int lua_IsModifiedClick(lua_State* L) {
         // OnModifiedClick and the plain OnClick. Answering with shift alone
         // sent every ctrl-click down the plain path, so ctrl-clicking a worn
         // item picked it up instead of putting it in the dressing room.
-        lua_pushboolean(L, (shiftHeld() || ctrlHeld() || altHeld()) ? 1 : 0);
+        luaPushOneOrNil(L, (shiftHeld() || ctrlHeld() || altHeld()) ? 1 : 0);
         return 1;
     }
     const std::string binding = modifiedClickBinding(L, act);
@@ -2756,7 +2756,7 @@ static int lua_IsModifiedClick(lua_State* L) {
                         "', shift held ", shiftHeld() ? "yes" : "no");
         }
     }
-    lua_pushboolean(L, answer ? 1 : 0);
+    luaPushOneOrNil(L, answer ? 1 : 0);
     return 1;
 }
 
@@ -2951,7 +2951,7 @@ static int lua_GetTradeTargetItemInfo(lua_State* L) {
     // nothing when it says no.  WoWee has no such measure for an item it was
     // never offered, so it keeps answering the usable answer, which is what the
     // client gives for an item that meets its requirements.
-    lua_pushboolean(L, 1);
+    luaPushOneOrNil(L, 1);
     if (i - 1 == game::GameHandler::TRADE_SLOT_NONTRADED) pushTradeEnchantment(L, gh, false);
     else lua_pushnil(L);
     return 6;
@@ -3410,7 +3410,7 @@ static int lua_SetBinding(lua_State* L) {
     const std::string key = luaL_checkstring(L, 1);
     const char* command = lua_isnoneornil(L, 2) ? nullptr : luaL_checkstring(L, 2);
     if (!bindKey(L, key, command)) return 0;
-    lua_pushboolean(L, 1);
+    luaPushOneOrNil(L, 1);
     return 1;
 }
 
@@ -3723,7 +3723,7 @@ void registerActionLuaAPI(lua_State* L) {
                 // here tracks that yet, and false is what "no range check"
                 // looks like - the button simply never dims for distance.
                 {"ActionHasRange",      [](lua_State* L) -> int {
-                    lua_pushboolean(L, 0);
+                    luaPushOneOrNil(L, 0);
                     return 1;
                 }},
                 {"GetActionTexture",    lua_GetActionTexture},
@@ -4193,9 +4193,9 @@ void registerActionLuaAPI(lua_State* L) {
                 {"HasPetUI", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const bool has = gh && gh->hasPet();
-            lua_pushboolean(L, has ? 1 : 0);
+            luaPushOneOrNil(L, has ? 1 : 0);
             const bool hunterPet = hunterPetOf(gh, resolveUnit(L, "pet"));
-            lua_pushboolean(L, hunterPet ? 1 : 0);
+            luaPushOneOrNil(L, hunterPet ? 1 : 0);
             return 2;
         }},
                 // Happiness, for a hunter's pet only. Nil is the honest answer
@@ -4337,7 +4337,7 @@ void registerActionLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
             if (!gh || index < 1 || index > game::GameHandler::PET_ACTION_BAR_SLOTS) {
-                lua_pushboolean(L, 0);
+                luaPushOneOrNil(L, 0);
                 return 1;
             }
             const uint32_t packed = gh->getPetActionSlot(index - 1);
@@ -4414,12 +4414,12 @@ void registerActionLuaAPI(lua_State* L) {
                 lua_pushstring(L, tokenName);       // 1: name - a global's name
                 lua_pushstring(L, "");              // 2: subtext
                 lua_pushstring(L, tokenTexture);    // 3: texture - likewise
-                lua_pushboolean(L, 1);              // 4: isToken
-                lua_pushboolean(L, active ? 1 : 0); // 5: isActive
+                luaPushOneOrNil(L, 1);              // 4: isToken
+                luaPushOneOrNil(L, active ? 1 : 0); // 5: isActive
                 // A command or a stance has nothing to cast automatically, and
                 // saying otherwise puts the autocast ring on all six of them.
-                lua_pushboolean(L, 0);              // 6: autoCastAllowed
-                lua_pushboolean(L, 0);              // 7: autoCastEnabled
+                luaPushOneOrNil(L, 0);              // 6: autoCastAllowed
+                luaPushOneOrNil(L, 0);              // 7: autoCastEnabled
                 return 7;
             }
 
@@ -4431,13 +4431,13 @@ void registerActionLuaAPI(lua_State* L) {
             lua_pushstring(L, "");
             lua_pushstring(L, iconPath.empty() ? "Interface\\Icons\\INV_Misc_QuestionMark"
                                                : iconPath.c_str());
-            lua_pushboolean(L, 0);                                      // isToken
+            luaPushOneOrNil(L, 0);                                      // isToken
             // A pet spell is never "active" - that is the checked ring, which
             // belongs to the stance. Reading the autocast bits as active put
             // it on every spell the pet knows.
-            lua_pushboolean(L, 0);                                      // isActive
-            lua_pushboolean(L, 1);                                      // autoCastAllowed
-            lua_pushboolean(L, gh->isPetSpellAutocast(spellId) ? 1 : 0);
+            luaPushOneOrNil(L, 0);                                      // isActive
+            luaPushOneOrNil(L, 1);                                      // autoCastAllowed
+            luaPushOneOrNil(L, gh->isPetSpellAutocast(spellId) ? 1 : 0);
             return 7;
         }},
                 // IsPetAttackAction(index) - which slot is the attack command,

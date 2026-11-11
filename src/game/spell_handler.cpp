@@ -1554,6 +1554,11 @@ void SpellHandler::playerCooldownsChanged() {
 // PetActionBar_UpdateCooldowns (172), which asks GetPetActionCooldown for every
 // slot - the call WoWee already answers from its pet history, so the numbers
 // were there and only the word about them was missing.
+void SpellHandler::itemCooldownArrived(uint32_t itemId) {
+    const auto cd = itemCooldown(itemId);
+    if (cd.running || !cd.enabled) cooldownHistoryChanged(false);
+}
+
 void SpellHandler::cooldownHistoryChanged(bool forPet) {
     if (!owner_.addonEventCallbackRef()) return;
     playerCooldownsChanged();
@@ -1646,6 +1651,16 @@ spell_history::History::Cooldown SpellHandler::historyCooldown(uint32_t spellId,
         .query(spellId, category, it->second.startRecoveryCategory, historyNowMs(),
                [this](uint32_t c) { return (spellCategoryFlags(c) & 0x2u) != 0; }, runesReady, sharesRunes,
                itemId);
+}
+
+int32_t SpellHandler::itemUseCooldownMs(uint32_t spellId) const {
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return 0;
+    const auto& e = it->second;
+    const int32_t own = moddedCooldown(spellId, static_cast<int32_t>(e.recoveryMs));
+    int32_t cat = static_cast<int32_t>(e.categoryRecoveryMs);
+    if ((e.attrEx6 & 0x80000000u) == 0) cat = moddedCooldown(spellId, cat);
+    return std::max(own, cat);
 }
 
 int32_t SpellHandler::moddedCooldown(uint32_t spellId, int32_t ms) const {
@@ -2813,6 +2828,12 @@ uint32_t SpellHandler::supersededBy(uint32_t spellId) const {
     return 0;
 }
 
+uint32_t SpellHandler::firstAreaOfGroup(uint32_t group) const {
+    loadAreaGroups();
+    const auto it = areaGroups_.find(group);
+    return it == areaGroups_.end() ? 0u : it->second[0];
+}
+
 void SpellHandler::loadAreaGroups() const {
     if (areaGroupsLoaded_) return;
     areaGroupsLoaded_ = true;
@@ -3472,6 +3493,7 @@ void SpellHandler::loadTalentDbc() {
         const uint32_t tRank0 = talL ? (*talL)["RankSpell0"] : 4;
         const uint32_t tPrereq0 = talL ? (*talL)["PrereqTalent0"] : 9;
         const uint32_t tPrereqR0 = talL ? (*talL)["PrereqRank0"] : 12;
+        const uint32_t tFlags = talL ? talL->tryField("Flags") : 0xFFFFFFFFu;
 
         uint32_t count = talentDbc->getRecordCount();
         for (uint32_t i = 0; i < count; ++i) {
@@ -3491,6 +3513,8 @@ void SpellHandler::loadTalentDbc() {
                 entry.prereqTalent[p] = talentDbc->getUInt32(i, tPrereq0 + p);
                 entry.prereqRank[p] = static_cast<uint8_t>(talentDbc->getUInt32(i, tPrereqR0 + p));
             }
+
+            if (tFlags != 0xFFFFFFFFu) entry.flags = talentDbc->getUInt32(i, tFlags);
 
             entry.maxRank = 0;
             for (int r = 0; r < 5; ++r) {
@@ -3863,11 +3887,23 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
         if (playerHistory_.dropGlobalCooldown(data.spellId, now)) playerCooldownsChanged();
         if (heldLetGo) cooldownHistoryChanged(false);
     }
-    // Totem failures name tool item ids; request their info so a retry of the
-    // craft can show the tool's name even if it wasn't cached yet.
-    if (data.result == kCastResultTotems) {
-        if (data.miscArg != 0) owner_.ensureItemInfo(data.miscArg);
-        if (data.miscArg2 != 0) owner_.ensureItemInfo(data.miscArg2);
+    // A failure that names an item the cache does not have - NEED_MORE_ITEMS,
+    // REAGENTS, TOTEMS - waits for it: the client hands the item cache a
+    // callback and raises the line from there (0x00808200 -> 0x007feb50,
+    // 0x007fea80). Asked of here it came back empty and was never shown.
+    if ((data.result == 0x37 || data.result == 0x64 || data.result == kCastResultTotems) &&
+        data.miscArg != 0 &&
+        !(owner_.getItemInfo(data.miscArg) && owner_.getItemInfo(data.miscArg)->valid)) {
+        static uint32_t failureWaits = 0;
+        owner_.askItemThen(data.miscArg, "cast failure " + std::to_string(++failureWaits),
+                           [this, data, powerType](bool found) {
+                               if (!found) return;
+                               const std::string late = castFailureMessage(owner_, data.spellId, data.result,
+                                                                           powerType, data.miscArg, data.miscArg2);
+                               if (late.empty()) return;
+                               owner_.addUIError(late);
+                               sayCastFailure(data.spellId, data.result);
+                           });
     }
     std::string errMsg = castFailureMessage(owner_, data.spellId, data.result, powerType,
                                             data.miscArg, data.miscArg2);
@@ -5019,6 +5055,9 @@ void SpellHandler::handleTalentsInfo(network::Packet& packet) {
 
     loadTalentDbc();
 
+    // What 0x005c9e50 compares the new active group against.
+    const uint8_t wasActive = activeTalentSpec_;
+    const uint8_t wasCount = talentGroupCount_;
     activeTalentSpec_ = activeTalentGroup;
     // Kept as the packet said it. 0x005c9740 stores this byte into the same
     // block as the active group (DAT_00c20ff8 beside DAT_00c20ff4), and
@@ -5060,8 +5099,16 @@ void SpellHandler::handleTalentsInfo(network::Packet& packet) {
         // error against nothing. These fire on a full refresh rather than an
         // increment, so nothing was gained and nothing is announced.
         owner_.addonEventCallbackRef()("CHARACTER_POINTS_CHANGED", {"0", "0"});
-        owner_.addonEventCallbackRef()("ACTIVE_TALENT_GROUP_CHANGED", {});
+        // 0x005c9e50: PLAYER_TALENT_UPDATE, then - only when the active group
+        // moved - ACTIVE_TALENT_GROUP_CHANGED with the new and old groups
+        // counted from one (0 where there were none).
         owner_.addonEventCallbackRef()("PLAYER_TALENT_UPDATE", {});
+        if (wasActive != activeTalentGroup) {
+            const int now = talentGroupCount ? activeTalentGroup + 1 : 0;
+            const int was = wasCount ? wasActive + 1 : 0;
+            owner_.addonEventCallbackRef()("ACTIVE_TALENT_GROUP_CHANGED",
+                                          {std::to_string(now), std::to_string(was)});
+        }
     }
 
     // No line about unspent points: 0x006cd770 -> 0x005c9e50 only updates the
@@ -5536,7 +5583,7 @@ struct CastCheckColumns {
         auraInterrupt, channelInterrupt, powerType, manaCost, perLevel, costPct, baseLevel, maxLevel,
         castTimeIndex, effectMechanic, trigger, prevention, minFaction, minRep, auraVision, areaGroup, itemClass,
         itemSubClassMask, runeCost, targetStateNot, targetAura, excludeTargetAura, totem, totemCategory, dieSides, pointsPerLevel,
-        spellDifficulty;
+        spellDifficulty, spellFocus;
 
     template <class Layout>
     explicit CastCheckColumns(const Layout* l) {
@@ -5556,7 +5603,7 @@ struct CastCheckColumns {
         targetStateNot = named("TargetAuraStateNot"), targetAura = named("TargetAuraSpell");
         spellDifficulty = named("SpellDifficultyId");
         excludeTargetAura = named("ExcludeTargetAuraSpell"), totem = named("Totem");
-        totemCategory = named("TotemCategory");
+        totemCategory = named("TotemCategory"), spellFocus = named("RequiresSpellFocus");
         dieSides = named("EffectDieSides0"), pointsPerLevel = named("EffectRealPointsPerLevel0");
     }
 
@@ -5599,6 +5646,7 @@ struct CastCheckColumns {
         entry.minReputation = u(minRep);
         entry.requiredAuraVision = u(auraVision);
         entry.areaGroupId = u(areaGroup);
+        entry.requiresSpellFocus = u(spellFocus);
         if (itemClass < fieldCount) entry.equippedItemClass = n(itemClass);
         entry.equippedItemSubClassMask = u(itemSubClassMask);
         entry.runeCostId = u(runeCost);
@@ -6775,6 +6823,22 @@ void SpellHandler::extractSkillFields(const FlatFieldMap& fields) {
         }
     }
 
+    // 0x006d1bc0, each skill's temporary bonus moving (what gear and buffs
+    // add to a weapon skill or Defense): UNIT_ATTACK and UNIT_DEFENSE for the
+    // player, whose sheet reads its hit and defense numbers off them.
+    if (!firstRead) {
+        bool bonusMoved = false;
+        for (const auto& [skillId, skill] : newSkills) {
+            auto oldIt = owner_.playerSkillsRef().find(skillId);
+            const uint16_t was = oldIt != owner_.playerSkillsRef().end() ? oldIt->second.bonusTemp : 0;
+            if (skill.bonusTemp != was) { bonusMoved = true; break; }
+        }
+        if (bonusMoved) {
+            owner_.fireAddonEvent("UNIT_ATTACK", {"player"});
+            owner_.fireAddonEvent("UNIT_DEFENSE", {"player"});
+        }
+    }
+
     bool skillsChanged = (newSkills.size() != owner_.playerSkillsRef().size());
     if (!skillsChanged) {
         for (const auto& [id, sk] : newSkills) {
@@ -7801,18 +7865,38 @@ void SpellHandler::logEffectPowerDrain(const SpellLogExecuteEntry& entry, uint64
                              powerByte, caster, caster);
 }
 
-void SpellHandler::logEffectCreateItem(const SpellLogExecuteEntry& entry, uint32_t spellId, bool isPlayerCaster) {
-    // SPELL_EFFECT_CREATE_ITEM / CREATE_RANDOM_ITEM / CREATE_ITEM_2: the item
+void SpellHandler::logEffectCreateItem(const SpellLogExecuteEntry& entry, uint32_t spellId, uint64_t casterGuid) {
+    // SPELL_EFFECT_CREATE_ITEM / CREATE_RANDOM_ITEM / CREATE_ITEM_2: the item.
+    // A TRADESKILLS line for whoever cast it (0x006d3220's case -> 0x0050bd90):
+    // TRADESKILL_LOG_FIRSTPERSON with the item's name for the player,
+    // TRADESKILL_LOG_THIRDPERSON with the caster's (0x0074d750) for anyone
+    // else, once the item is known - the cache's callback (0x004fb970) says it
+    // when the answer finds it. This was taken out as combat-log-only.
     const uint32_t itemEntry = entry.value1;
-    if (!isPlayerCaster || itemEntry == 0) return;
-    // No chat line here: SMSG_SPELLLOGEXECUTE is combat log only
-    // (0x006d3730), and the item is announced by the item push that
-    // brings it (LOOT_ITEM_CREATED_SELF). This printed "You create X
-    // using Y." in English.
-    owner_.ensureItemInfo(itemEntry);
+    if (itemEntry == 0) return;
+    const auto say = [this, itemEntry, casterGuid]() {
+        const auto* info = owner_.getItemInfo(itemEntry);
+        if (!info || !info->valid) return;
+        std::string line;
+        if (casterGuid == owner_.getPlayerGuid()) {
+            line = interfaceFormat("TRADESKILL_LOG_FIRSTPERSON", "You create %s.", {info->name});
+        } else {
+            std::string caster = owner_.lookupName(casterGuid);
+            if (caster.empty()) caster = interfaceString("UNKNOWN", "Unknown");
+            line = interfaceFormat("TRADESKILL_LOG_THIRDPERSON", "%s creates %s.",
+                                   {caster, info->name});
+        }
+        owner_.addLocalChatLine(ChatType::TRADESKILLS, line);
+    };
+    if (const auto* info = owner_.getItemInfo(itemEntry); info && info->valid) {
+        say();
+    } else {
+        static uint32_t createdWaits = 0;
+        owner_.askItemThen(itemEntry, "created " + std::to_string(++createdWaits),
+                           [say](bool found) { if (found) say(); });
+    }
     LOG_DEBUG("SMSG_SPELLLOGEXECUTE CREATE_ITEM: spell=", spellId, " item=", itemEntry);
 }
-
 void SpellHandler::logEffectInterruptCast(const SpellLogExecuteEntry& entry, uint64_t caster, uint32_t spellId,
                                           bool isPlayerCaster) {
     // SPELL_EFFECT_INTERRUPT_CAST: target + interrupted_spell_id
@@ -7829,14 +7913,35 @@ void SpellHandler::logEffectInterruptCast(const SpellLogExecuteEntry& entry, uin
     LOG_DEBUG("SMSG_SPELLLOGEXECUTE INTERRUPT_CAST: spell=", spellId,
               " interrupted=", icSpellId, " target=0x", std::hex, icTarget, std::dec);
 }
-
-void SpellHandler::logEffectFeedPet(const SpellLogExecuteEntry& entry, bool isPlayerCaster) {
-    // SPELL_EFFECT_FEED_PET: the item
+void SpellHandler::logEffectFeedPet(const SpellLogExecuteEntry& entry, uint64_t casterGuid) {
+    // SPELL_EFFECT_FEED_PET: the item. A PET_INFO line (0x0050baf0):
+    // FEEDPET_LOG_FIRSTPERSON with the food's name for the player, and
+    // FEEDPET_LOG_THIRDPERSON with the feeder's name for another player - only
+    // when the name cache already has it - once the food is known (callback
+    // 0x004fb950). This was taken out as combat-log-only.
     const uint32_t feedItem = entry.value1;
-    if (!isPlayerCaster || feedItem == 0) return;
-    // No chat line: combat log only (0x006d3730). This printed "You feed
-    // your pet X." in English.
-    owner_.ensureItemInfo(feedItem);
+    if (feedItem == 0) return;
+    const auto say = [this, feedItem, casterGuid]() {
+        const auto* info = owner_.getItemInfo(feedItem);
+        if (!info || !info->valid) return;
+        std::string line;
+        if (casterGuid == owner_.getPlayerGuid()) {
+            line = interfaceFormat("FEEDPET_LOG_FIRSTPERSON", "Your pet begins eating the %s.", {info->name});
+        } else {
+            const std::string& feeder = owner_.lookupName(casterGuid);
+            if (feeder.empty()) return;
+            line = interfaceFormat("FEEDPET_LOG_THIRDPERSON", "%s's pet begins eating a %s.",
+                                   {feeder, info->name});
+        }
+        owner_.addLocalChatLine(ChatType::PET_INFO, line);
+    };
+    if (const auto* info = owner_.getItemInfo(feedItem); info && info->valid) {
+        say();
+    } else {
+        static uint32_t feedWaits = 0;
+        owner_.askItemThen(feedItem, "fed " + std::to_string(++feedWaits),
+                           [say](bool found) { if (found) say(); });
+    }
     LOG_DEBUG("SMSG_SPELLLOGEXECUTE FEED_PET: item=", feedItem);
 }
 
@@ -7896,13 +8001,13 @@ void SpellHandler::handleSpellLogExecute(network::Packet& packet) {
             case SpellEffect::CREATE_ITEM:
             case SpellEffect::CREATE_RANDOM_ITEM:
             case SpellEffect::CREATE_ITEM2:
-                logEffectCreateItem(entry, data.spellId, isPlayerCaster);
+                logEffectCreateItem(entry, data.spellId, data.casterGuid);
                 break;
             case SpellEffect::INTERRUPT_CAST:
                 logEffectInterruptCast(entry, data.casterGuid, data.spellId, isPlayerCaster);
                 break;
             case SpellEffect::FEED_PET:
-                logEffectFeedPet(entry, isPlayerCaster);
+                logEffectFeedPet(entry, data.casterGuid);
                 break;
             default:
                 break;

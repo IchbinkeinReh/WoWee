@@ -1529,6 +1529,8 @@ public:
 struct GuildRosterMember {
     uint64_t guid = 0;
     bool online = false;
+    /// The roster's status byte: 0x01 online, 0x02 away, 0x04 busy (+0x50).
+    uint8_t statusFlags = 0;
     std::string name;
     uint32_t rankIndex = 0;
     uint8_t level = 0;
@@ -2113,6 +2115,11 @@ struct ItemQueryResponseData {
     /// disenchant roll is confirmed against (0x006fbc70).
     uint32_t quality = 0;
     uint32_t itemFlags = 0;     // Item flag bitmask (Heroic=0x8, Unique-Equipped=0x1000000)
+    /// Flags2 (+0x1c): 0x100 is "no need roll" (0x006fa7a0).
+    uint32_t itemFlags2 = 0;
+    /// RequiredDisenchantSkill (+0x1e0), -1 for an item that cannot be
+    /// disenchanted.
+    int32_t requiredDisenchantSkill = -1;
     /// The template's Sheath: where the weapon hangs put away (1 two-hand,
     /// 2 staff, 3 one-hand, 4 shield, ...); see core::weaponAttachmentPoint.
     uint32_t sheath = 0;
@@ -2168,6 +2175,9 @@ struct ItemQueryResponseData {
     uint32_t bindType = 0;      // 0=none, 1=BoP, 2=BoE, 3=BoU, 4=BoQ
     std::string description;    // Flavor/lore text
     uint32_t pageTextId = 0;     // Non-zero: item can be read via CMSG_READ_ITEM + page query
+    /// LockID: a lock that must be opened before the item is (0x006277f0
+    /// says ITEM_OPENABLE only for an unlocked one).
+    uint32_t lockId = 0;
     /// Which of PageTextMaterial.dbc's seven backings the page is drawn on -
     /// Parchment, Stone, Marble, Silver, Bronze, Valentine, Illidan. Read off
     /// the same four post-description words as pageTextId and thrown away

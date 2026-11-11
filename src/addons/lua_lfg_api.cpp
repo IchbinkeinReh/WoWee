@@ -171,7 +171,6 @@ std::unordered_map<int, bool>& collapsedHeaders() {
     return collapsed;
 }
 
-int luaReturnTrue(lua_State* L)    { lua_pushboolean(L, 1); return 1; }
 int luaReturnNothing(lua_State* L) { (void)L; return 0; }
 
 /// The roles the player has offered. Kept on the handler now - the ready
@@ -632,7 +631,7 @@ void registerLfgLuaAPI(lua_State* L) {
     }},
     // Whether a row can be queued for at all. Nothing is locked here - see
     // GetLFDChoiceLockedState - so the answer is yes and the server decides.
-    {"IsLFGDungeonJoinable", luaReturnTrue},
+    {"IsLFGDungeonJoinable", luaReturnOne},
     // GetLFGQueueStats() → hasData, leaderNeeds, tankNeeds, healerNeeds,
     //   dpsNeeds, instanceType, instanceName, averageWait, tankWait,
     //   healerWait, damageWait, myWait, queuedTime
@@ -899,9 +898,12 @@ void registerLfgLuaAPI(lua_State* L) {
             if (e.dungeonId != dungeonId) continue;
             if (index > static_cast<int>(e.items.size())) return luaReturnNil(L);
             const auto& item = e.items[static_cast<size_t>(index) - 1];
-            gh->ensureItemInfo(item.itemId);
             const auto* info = gh->getItemInfo(item.itemId);
-            lua_pushstring(L, info ? info->name.c_str() : "");
+            // An item not known yet answers an empty name and is asked for;
+            // the answer that finds it raises LFG_UPDATE_RANDOM_INFO, so the
+            // reward list fills itself in (0x00557be0 with 0x00552950).
+            if (!info || !info->valid) askItemForEvent(gh, item.itemId, "LFG_UPDATE_RANDOM_INFO");
+            lua_pushstring(L, info && info->valid ? info->name.c_str() : "");
             const std::string icon = gh->getItemIconPath(item.displayInfoId);
             if (icon.empty()) lua_pushnil(L); else lua_pushstring(L, icon.c_str());
             lua_pushnumber(L, item.count);

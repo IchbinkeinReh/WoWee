@@ -310,7 +310,10 @@ struct LuaServices {
     /// to be built inside this client's own barber window, so with the panel
     /// handed over nothing had built it - these reach a version that does not
     /// depend on who is drawing.
-    std::function<bool(int selector, std::string& name, bool& isCurrent)> getBarberStyleInfo;
+    /// A barber selector's name, description (both empty for none), price
+    /// and whether it is what the player came in with.
+    std::function<bool(int selector, std::string& name, std::string& description, uint32_t& cost,
+                       bool& isCurrent)> getBarberStyleInfo;
     std::function<void(int selector, int direction)> setNextBarberStyle;
     std::function<uint32_t()> getBarberTotalCost;
     std::function<void()> barberReset;
@@ -359,6 +362,9 @@ struct LuaServices {
     /// addon already loaded has its functions in the Lua state and its frames
     /// on screen, and neither can be taken back out.
     std::function<void(const std::string& name, bool enabled)> setAddOnEnabled;
+    /// Whether an addon is on for this character, as GetAddOnInfo's fourth
+    /// value reads it (0x005f7d70).
+    std::function<bool(const std::string& name)> isAddOnEnabled;
 
     /// Discard enable changes made since the state was last saved, as
     /// ResetDisabledAddOns does.

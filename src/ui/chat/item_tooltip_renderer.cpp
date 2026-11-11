@@ -201,9 +201,9 @@ void ItemTooltipRenderer::render(
                     SetEntry e;
                     e.name = dbc->getString(r, nameF);
                     for (int i = 0; i < 10; ++i) {
-                        e.itemIds[i]    = dbc->getUInt32(r, layout ? (*layout)[itemKeys[i]]  : uint32_t(18 + i));
-                        e.spellIds[i]   = dbc->getUInt32(r, layout ? (*layout)[spellKeys[i]] : uint32_t(28 + i));
-                        e.thresholds[i] = dbc->getUInt32(r, layout ? (*layout)[thrKeys[i]]   : uint32_t(38 + i));
+                        e.itemIds[i]    = dbc->getUInt32(r, layout ? layout->tryField(itemKeys[i])  : uint32_t(18 + i));
+                        e.spellIds[i]   = dbc->getUInt32(r, layout ? layout->tryField(spellKeys[i]) : (i < 8 ? uint32_t(35 + i) : 0xFFFFFFFFu));
+                        e.thresholds[i] = dbc->getUInt32(r, layout ? layout->tryField(thrKeys[i])   : (i < 8 ? uint32_t(43 + i) : 0xFFFFFFFFu));
                     }
                     s_setData[id] = std::move(e);
                 }

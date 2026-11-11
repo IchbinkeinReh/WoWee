@@ -1911,12 +1911,8 @@ void GameHandler::auctionSellItemByGuid(uint64_t itemGuid, uint32_t stackCount, 
     if (inventoryHandler_) inventoryHandler_->auctionSellItemByGuid(itemGuid, stackCount, bid, buyout, duration);
 }
 
-void GameHandler::auctionPlaceBid(uint32_t auctionId, uint32_t amount) {
-    if (inventoryHandler_) inventoryHandler_->auctionPlaceBid(auctionId, amount);
-}
-
-void GameHandler::auctionBuyout(uint32_t auctionId, uint32_t buyoutPrice) {
-    if (inventoryHandler_) inventoryHandler_->auctionBuyout(auctionId, buyoutPrice);
+void GameHandler::auctionBid(const AuctionEntry& auction, uint32_t bid) {
+    if (inventoryHandler_) inventoryHandler_->auctionBid(auction, bid);
 }
 
 void GameHandler::auctionCancelItem(uint32_t auctionId) {
@@ -2305,6 +2301,7 @@ void GameHandler::loadAchievementNameCache() {
     // IconID references SpellIcon.dbc for the achievement's artwork. Field 42 in the
     // stock 3.3.5a Achievement.dbc when the layout doesn't name it.
     uint32_t iconField = achL ? achL->field("IconID") : 0xFFFFFFFF;
+    const uint32_t rewardField = achL ? achL->tryField("RewardText") : 0xFFFFFFFF;
     if (iconField == 0xFFFFFFFF && dbc->getFieldCount() > 42) iconField = 42;
 
     uint32_t fieldCount = dbc->getFieldCount();
@@ -2316,6 +2313,10 @@ void GameHandler::loadAchievementNameCache() {
         if (descField != 0xFFFFFFFF && descField < fieldCount) {
             std::string desc = dbc->getString(i, descField);
             if (!desc.empty()) achievementDescCache_[id] = std::move(desc);
+        }
+        if (rewardField != 0xFFFFFFFF && rewardField < fieldCount) {
+            std::string reward = dbc->getString(i, rewardField);
+            if (!reward.empty()) achievementRewardCache_[id] = std::move(reward);
         }
         if (ptsField != 0xFFFFFFFF && ptsField < fieldCount) {
             uint32_t pts = dbc->getUInt32(i, ptsField);
@@ -2377,17 +2378,30 @@ const GameHandler::BattlemasterEntry* GameHandler::getBattlemasterInfo(uint32_t 
                 if (e.instanceType == 3 && !e.name.empty()) battlegroundTypes_.push_back(e);
                 battlemasterList_[id] = std::move(e);
             }
-            // Ordered by id, so an index handed to the interface still means
-            // the same battleground the next time it asks.
-            std::sort(battlegroundTypes_.begin(), battlegroundTypes_.end(),
-                      [](const BattlemasterEntry& a, const BattlemasterEntry& b) {
-                          return a.id < b.id;
-                      });
+            sortBattlegroundTypes();
             LOG_INFO("Battleground: ", battlemasterList_.size(), " from BattlemasterList.dbc");
         }
     }
     auto it = battlemasterList_.find(bgTypeId);
     return it != battlemasterList_.end() ? &it->second : nullptr;
+}
+
+void GameHandler::sortBattlegroundTypes() {
+    auto holiday = [this](const BattlemasterEntry& e) {
+        return e.holidayWorldState != 0 && getWorldState(e.holidayWorldState).value_or(0) != 0;
+    };
+    // 0x0054a650 answers "first" for a holiday whatever the other row is; two
+    // holidays at once fall through to the level and the id here, so the
+    // order stays a strict one.
+    std::sort(battlegroundTypes_.begin(), battlegroundTypes_.end(),
+              [&](const BattlemasterEntry& a, const BattlemasterEntry& b) {
+                  if (a.id == kRandomBattleground || b.id == kRandomBattleground)
+                      return a.id == kRandomBattleground && b.id != kRandomBattleground;
+                  const bool ha = holiday(a), hb = holiday(b);
+                  if (ha != hb) return ha;
+                  if (a.minLevel != b.minLevel) return a.minLevel < b.minLevel;
+                  return a.id < b.id;
+              });
 }
 
 bool GameHandler::isBattlegroundMap(uint32_t mapId) {

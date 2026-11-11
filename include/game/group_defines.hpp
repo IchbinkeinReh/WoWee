@@ -171,6 +171,19 @@ struct GroupListData {
     return *dungeonMapId != mapId;
 }
 
+/// 0x00572740: whether the player leads the group or, in a raid, is an
+/// assistant (a roster rank of 1 or above, kept as the member flag 0x01) -
+/// what DoReadyCheck and the assignment setters ask. A party has no officers,
+/// so there it is the leader alone; no group, nobody.
+inline bool leadsOrAssists(const GroupListData& group, uint64_t playerGuid) {
+    if (group.members.empty() && group.memberCount == 0) return false;
+    if (group.leaderGuid != 0 && group.leaderGuid == playerGuid) return true;
+    if (!groupIsRaid(group.groupType)) return false;
+    for (const auto& m : group.members)
+        if (m.guid == playerGuid) return (m.flags & 0x01) != 0;
+    return false;
+}
+
 /// Who sits in party slot `slot` (1-4), or 0 for nobody.
 ///
 /// The client keeps four party guids (0xbd1948): "party1".."party4" and

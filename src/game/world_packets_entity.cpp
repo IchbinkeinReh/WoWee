@@ -453,7 +453,7 @@ bool ItemQueryResponseParser::parse(network::Packet& packet, ItemQueryResponseDa
         return false;
     }
     data.itemFlags = packet.readUInt32(); // Flags
-    packet.readUInt32();                  // Flags2
+    data.itemFlags2 = packet.readUInt32(); // Flags2
     data.buyPrice = packet.readUInt32();  // BuyPrice
     data.sellPrice = packet.readUInt32(); // SellPrice
     data.inventoryType = packet.readUInt32();
@@ -572,7 +572,7 @@ bool ItemQueryResponseParser::parse(network::Packet& packet, ItemQueryResponseDa
     constexpr size_t kPreSocketSkip = 48;
     if (packet.getReadPos() + kPreSocketSkip + 28 <= packet.getSize()) {
         // LockID(0), Material(1), Sheath(2), RandomProperty(3), RandomSuffix(4), Block(5)
-        packet.readUInt32();
+        data.lockId = packet.readUInt32();
         data.material = packet.readUInt32();
         data.sheath = packet.readUInt32();
         packet.readUInt32();  // RandomProperty and RandomSuffix: the link
@@ -607,7 +607,7 @@ bool ItemQueryResponseParser::parse(network::Packet& packet, ItemQueryResponseDa
         // RequiredDisenchantSkill, ArmorDamageModifier, Duration, then
         // ItemLimitCategory - GetItemUniqueness's (0x00516ed0).
         if (packet.hasRemaining(16)) {
-            packet.readUInt32();
+            data.requiredDisenchantSkill = static_cast<int32_t>(packet.readUInt32());
             packet.readFloat();
             packet.readUInt32();
             data.itemLimitCategory = packet.readUInt32();

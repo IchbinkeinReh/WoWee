@@ -70,7 +70,11 @@ IGNORED = {"0xffffffff", "0xffff", "0x0000", "0x00000000", "0xfffffffe",
 
 # The .w* format headers are a written-down file format: every value in them is
 # a definition, and a definition repeated is what a format table is.
-SKIP_PREFIX = "include/pipeline/wowee_"
+#
+# The client CVar registry is the same kind of thing: each row is copied out of
+# a registration call in the binary, defaults and all, so a byte count such as
+# 1048576 there is the client's number rather than a fact this code repeats.
+SKIP_PREFIX = ("include/pipeline/wowee_", "src/addons/client_cvar_registry.cpp")
 
 
 def distinctive_literals(line):

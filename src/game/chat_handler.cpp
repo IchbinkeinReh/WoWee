@@ -547,32 +547,9 @@ void ChatHandler::registerOpcodes(DispatchTable& table) {
         // each joined defense channel (ChatChannels.dbc flag 0x10000) - of a
         // zone-dependent one only when the area's zone is the player's.
         if (!packet.hasRemaining(8)) return;
-        uint32_t areaId = packet.readUInt32();
+        const uint32_t areaId = packet.readUInt32();
         /*uint32_t length =*/ packet.readUInt32();
-        const std::string text = packet.readString();
-        auto* renderer = core::Application::getInstance().getRenderer();
-        // The area's parent where it has one (AreaTable +8), compared with
-        // the zone the player is in (0x00bd080c).
-        if (auto* zm = renderer ? renderer->getZoneManager() : nullptr) {
-            if (const auto parent = zm->areaParent(areaId); parent && *parent != 0) areaId = *parent;
-        }
-        const auto* place = renderer ? renderer->getZoneTexts() : nullptr;
-        const uint32_t playerZone = place ? place->zoneId : 0;
-        for (const auto& slot : channelSlots_.all()) {
-            if (slot.number == 0 || slot.pending || slot.zoneChannelId == 0) continue;
-            const chat_channels::Row* row = nullptr;
-            for (const auto& r : channelRows()) if (r.id == slot.zoneChannelId) { row = &r; break; }
-            if (!row || (row->flags & chat_channels::kFlagDefense) == 0) continue;
-            if ((row->flags & chat_channels::kFlagZoneDependent) != 0 && areaId != playerZone) continue;
-            // From no one: the line is the channel's, as 0x00509dd0 is
-            // handed it with no sender.
-            MessageChatData line;
-            line.type = ChatType::CHANNEL;
-            line.language = ChatLanguage::UNIVERSAL;
-            line.message = text;
-            line.channelName = slot.name;
-            addLocalChatMessage(line);
-        }
+        postToDefenseChannels(areaId, packet.readString());
     };
     // ServerMessages.dbc's text for the type with the server's text put in,
     // a CHAT_MSG_SYSTEM line (0x0050c980): "[SERVER] Shutdown in %s" and the
@@ -703,6 +680,35 @@ void ChatHandler::sendAddonMessage(ChatType type, const std::string& message, co
     owner_.getSocket()->send(packet);
 }
 
+/// 0x0050c850 / 0x0050c3c0: a line in each joined defense channel
+/// (ChatChannels.dbc flag 0x10000) - of a zone-dependent one only when the
+/// area's zone is the player's - from no one.
+void ChatHandler::postToDefenseChannels(uint32_t areaId, const std::string& text) {
+    auto* renderer = core::Application::getInstance().getRenderer();
+    // The area's parent where it has one (AreaTable +8), compared with
+    // the zone the player is in (0x00bd080c).
+    if (auto* zm = renderer ? renderer->getZoneManager() : nullptr) {
+        if (const auto parent = zm->areaParent(areaId); parent && *parent != 0) areaId = *parent;
+    }
+    const auto* place = renderer ? renderer->getZoneTexts() : nullptr;
+    const uint32_t playerZone = place ? place->zoneId : 0;
+    for (const auto& slot : channelSlots_.all()) {
+        if (slot.number == 0 || slot.pending || slot.zoneChannelId == 0) continue;
+        const chat_channels::Row* row = nullptr;
+        for (const auto& r : channelRows()) if (r.id == slot.zoneChannelId) { row = &r; break; }
+        if (!row || (row->flags & chat_channels::kFlagDefense) == 0) continue;
+        if ((row->flags & chat_channels::kFlagZoneDependent) != 0 && areaId != playerZone) continue;
+        // From no one: the line is the channel's, as 0x00509dd0 is
+        // handed it with no sender.
+        MessageChatData line;
+        line.type = ChatType::CHANNEL;
+        line.language = ChatLanguage::UNIVERSAL;
+        line.message = text;
+        line.channelName = slot.name;
+        addLocalChatMessage(line);
+    }
+}
+
 void ChatHandler::filterProfanity(ChatType type, std::string& text) {
     switch (type) {
         case ChatType::SYSTEM: case ChatType::SAY: case ChatType::PARTY: case ChatType::PARTY_LEADER:
@@ -715,9 +721,31 @@ void ChatHandler::filterProfanity(ChatType type, std::string& text) {
             return;
     }
     if (text.empty() || addons::storedCVarValue("profanityFilter", "1") == "0") return;
+    if (loadProfanity()) profanity_.apply(text);
+}
+
+std::optional<chat_channels::Join> ChatHandler::joinChannelByName(const std::string& name,
+                                                                  const std::string& password, bool byPlayer) {
+    constexpr size_t kMaxLength = 128;
+    if (name.empty() || name.find(' ') != std::string::npos || name.size() >= kMaxLength ||
+        password.size() >= kMaxLength)
+        return std::nullopt;
+    if (isProfane(name)) {
+        owner_.addUIError(interfaceString("ERR_PROFANE_CHAT_NAME", "Channel names can't contain profanity."));
+        owner_.playGameErrorSound("ERR_PROFANE_CHAT_NAME");
+        return std::nullopt;
+    }
+    return joinChannel(name, password, false, byPlayer);
+}
+
+bool ChatHandler::isProfane(std::string text) {
+    return !text.empty() && loadProfanity() && profanity_.apply(text);
+}
+
+bool ChatHandler::loadProfanity() {
     if (!profanityLoaded_) {
         auto* am = owner_.services().assetManager;
-        if (!am || !am->isInitialized()) return;
+        if (!am || !am->isInitialized()) return false;
         profanityLoaded_ = true;
         const auto* profile = owner_.services().expansionRegistry
                                   ? owner_.services().expansionRegistry->getActive() : nullptr;
@@ -734,7 +762,7 @@ void ChatHandler::filterProfanity(ChatType type, std::string& text) {
         }
         profanity_.load(expressions);
     }
-    profanity_.apply(text);
+    return true;
 }
 
 uint32_t ChatHandler::languageComprehension(uint32_t language) {
@@ -1471,40 +1499,50 @@ void ChatHandler::handleTextEmote(network::Packet& packet) {
         }
     }
 
+    // The narration, once there is a name to put in it.
+    const auto narrate = [this, data](const std::string& senderName) {
+        const std::string* targetPtr = data.targetName.empty() ? nullptr : &data.targetName;
+        std::string emoteText = rendering::AnimationController::getEmoteTextByDbcId(data.textEmoteId, senderName, targetPtr);
+        if (emoteText.empty()) {
+            emoteText = data.targetName.empty()
+                ? senderName + " performs an emote."
+                : senderName + " performs an emote at " + data.targetName + ".";
+        }
+
+        MessageChatData chatMsg;
+        chatMsg.type = ChatType::TEXT_EMOTE;
+        // Universal: an emote is seen, not spoken, and anything else is printed
+        // as a language header in front of it.
+        chatMsg.language = ChatLanguage::UNIVERSAL;
+        chatMsg.senderGuid = data.senderGuid;
+        chatMsg.senderName = senderName;
+        chatMsg.message = emoteText;
+
+        addLocalChatMessage(chatMsg);
+
+        // And the emote's own voice line, which the client asks of the sender at
+        // the same moment it narrates it: EmotesTextSound picks the clip by the
+        // emote text and the sender's race and sex, and the sender's own sound
+        // path plays it - gates for emote and pet sounds included.
+        if (owner_.emoteSoundCallbackRef()) owner_.emoteSoundCallbackRef()(data.senderGuid, data.textEmoteId);
+
+        LOG_INFO("TEXT_EMOTE from ", senderName, " (emoteId=", data.textEmoteId, ")");
+    };
+
+    // A player not yet named is asked for and the line waits for the answer:
+    // the client keeps it on its pending text emote list until the name cache
+    // calls back (0x00503fb0), and drops it only when no name comes. This
+    // dropped it at once, so an emote from anyone not yet met never showed.
     if (senderName.empty()) {
-        if (isPlayerGuid(data.senderGuid)) owner_.queryPlayerName(data.senderGuid);
-        LOG_DEBUG("Deferred chat text for unresolved SMSG_TEXT_EMOTE sender=0x",
-                  std::hex, data.senderGuid, std::dec,
-                  " emoteId=", data.textEmoteId);
+        if (!isPlayerGuid(data.senderGuid)) return;
+        static uint32_t emoteWaits = 0;
+        owner_.askNameThen(data.senderGuid, "text emote " + std::to_string(++emoteWaits),
+                           [narrate](bool found, const std::string& name) {
+                               if (found && !name.empty()) narrate(name);
+                           });
         return;
     }
-
-    const std::string* targetPtr = data.targetName.empty() ? nullptr : &data.targetName;
-    std::string emoteText = rendering::AnimationController::getEmoteTextByDbcId(data.textEmoteId, senderName, targetPtr);
-    if (emoteText.empty()) {
-        emoteText = data.targetName.empty()
-            ? senderName + " performs an emote."
-            : senderName + " performs an emote at " + data.targetName + ".";
-    }
-
-    MessageChatData chatMsg;
-    chatMsg.type = ChatType::TEXT_EMOTE;
-    // Universal: an emote is seen, not spoken, and anything else is printed
-    // as a language header in front of it.
-    chatMsg.language = ChatLanguage::UNIVERSAL;
-    chatMsg.senderGuid = data.senderGuid;
-    chatMsg.senderName = senderName;
-    chatMsg.message = emoteText;
-
-    addLocalChatMessage(chatMsg);
-
-    // And the emote's own voice line, which the client asks of the sender at
-    // the same moment it narrates it: EmotesTextSound picks the clip by the
-    // emote text and the sender's race and sex, and the sender's own sound
-    // path plays it - gates for emote and pet sounds included.
-    if (owner_.emoteSoundCallbackRef()) owner_.emoteSoundCallbackRef()(data.senderGuid, data.textEmoteId);
-
-    LOG_INFO("TEXT_EMOTE from ", senderName, " (emoteId=", data.textEmoteId, ")");
+    narrate(senderName);
 }
 
 const std::vector<chat_channels::Row>& ChatHandler::channelRows() const {

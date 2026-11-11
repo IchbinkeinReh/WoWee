@@ -406,6 +406,8 @@ public:
     // ---- Item-targeted item use (sharpening stones, weightstones, weapon oils) ----
     /// True while a used item is waiting for the player to pick the item it applies to.
     bool isAwaitingItemTarget() const;
+    /// The spell waiting on the cursor for an item (0x00d3f4e4), 0 for none.
+    uint32_t getPendingItemTargetSpellId() const;
     /// Entry of the item awaiting a target (0 if none) - drives the targeting cursor.
     uint32_t getPendingItemTargetSourceItemId() const;
     void cancelItemTargeting();
@@ -726,8 +728,13 @@ public:
                           uint32_t buyout, uint32_t duration);
     void auctionSellItemByGuid(uint64_t itemGuid, uint32_t stackCount, uint32_t bid,
                                uint32_t buyout, uint32_t duration);
-    void auctionPlaceBid(uint32_t auctionId, uint32_t amount);
-    void auctionBuyout(uint32_t auctionId, uint32_t buyoutPrice);
+    /// PlaceAuctionBid's checks and request (0x0059da40).
+    void auctionBid(const AuctionEntry& auction, uint32_t bid);
+    /// 0x00754dd0: whether `count` more of the item fit its MaxCount and its
+    /// ItemLimitCategory against what the player owns, saying why not when
+    /// `speak`.
+    bool canOwnMore(const ItemQueryResponseData& item, uint32_t count, bool speak);
+    void assessLootRoll(LootRollEntry& roll, const ItemQueryResponseData& item);
     void auctionCancelItem(uint32_t auctionId);
     void auctionListOwnerItems(uint32_t offset = 0);
     void auctionListBidderItems(uint32_t offset = 0);

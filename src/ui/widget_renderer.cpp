@@ -807,7 +807,7 @@ void WidgetRenderer::drawSimpleHtml(ImDrawList* dl, WidgetTree& tree,
     const float boxW = x1 - x0;
     const float wrapW = boxW > size ? boxW : 0.0f;
     float y = y0;
-    for (const HtmlBlock& b : parseSimpleHtml(w.text)) {
+    for (const HtmlBlock& b : parseSimpleHtml(w.text, w.htmlLinkFormat)) {
         const std::string& align = b.align.empty() ? w.justifyH : b.align;
         if (b.kind == HtmlBlock::Kind::Image) {
             // The size the tag asked for, the picture's own where it asked
@@ -1011,11 +1011,18 @@ void WidgetRenderer::drawStatusBar(ImDrawList* dl, const Widget& w,
     VkDescriptorSet tex = resident(w.barTexture);
     if (tex != kMissing) {
         // The texture is cropped to the filled part rather than squashed into
-        // it, so a bar at half value shows half its art at its own scale.
-        const float u1 = w.barVertical ? 1.0f : f;
-        const float v0 = w.barVertical ? (1.0f - f) : 0.0f;
-        dl->AddImage(reinterpret_cast<ImTextureID>(tex), ImVec2(x0, fy0), ImVec2(fx1, y1),
-                     ImVec2(0.0f, v0), ImVec2(u1, 1.0f), col);
+        // it, so a bar at half value shows half its art at its own scale. The
+        // filled part, as fractions of the bar from its top left:
+        const float sx1 = w.barVertical ? 1.0f : f;
+        const float sy0 = w.barVertical ? (1.0f - f) : 0.0f;
+        // A rotated bar's art is turned a quarter (0x00961d70's corners: upper
+        // left (0,1), lower left (1,1), upper right (0,0), lower right (1,0)).
+        auto uv = [&](float sx, float sy) {
+            return w.barRotatesTexture ? ImVec2(sy, 1.0f - sx) : ImVec2(sx, sy);
+        };
+        dl->AddImageQuad(reinterpret_cast<ImTextureID>(tex), ImVec2(x0, fy0), ImVec2(fx1, fy0),
+                         ImVec2(fx1, y1), ImVec2(x0, y1), uv(0.0f, sy0), uv(sx1, sy0),
+                         uv(sx1, 1.0f), uv(0.0f, 1.0f), col);
     } else if (w.barTexture.empty()) {
         dl->AddRectFilled(ImVec2(x0, fy0), ImVec2(fx1, y1), col);
     }

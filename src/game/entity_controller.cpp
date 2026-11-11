@@ -2148,8 +2148,8 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
         }
         // Armor with the six resistances behind it, and the spell power and
         // healing bonus. The paperdoll refreshes its resistance panel from
-        // UNIT_RESISTANCES alone - UNIT_DEFENSE is the *pet* sheet's event, not
-        // this one - and its spell-power panel shares a branch with UNIT_STATS,
+        // UNIT_RESISTANCES alone - UNIT_DEFENSE comes with a skill's bonus
+        // moving (spell_handler.cpp, 0x006d1bc0) - and its spell-power panel shares a branch with UNIT_STATS,
         // which only fires when one of the five base stats moves. So a spell
         // power buff that touched no stat, or a resistance aura, left the old
         // number on the sheet until the next login.

@@ -29,6 +29,11 @@ std::optional<uint32_t> clientCVarFlags(std::string_view name);
 /// Distance/Pitch/Yaw (0x005fd910) and the per-motion camera smoothing knobs.
 /// `clientCVarFlags` matches those by prefix, and listing them means inventing
 /// the names rather than reading them, so they stay out.
+/// The default the client registers `name` with, where it registers one as a
+/// literal; nothing for a name it does not register, or one whose default it
+/// works out at run time.
+std::optional<std::string_view> clientCVarDefault(std::string_view name);
+
 std::span<const std::string_view> clientCVarNames();
 
 constexpr uint32_t kCVarStoredWithAccount = 0x10;

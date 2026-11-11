@@ -141,8 +141,15 @@ inline int32_t luaToClientInt(lua_State* L, int idx) {
 }
 
 inline int luaReturnNil(lua_State* L)  { lua_pushnil(L); return 1; }
+/// 1 or nil, the way the client answers many of its yes-or-no questions.
+inline void luaPushOneOrNil(lua_State* L, bool yes) {
+    if (yes) lua_pushnumber(L, 1);
+    else     lua_pushnil(L);
+}
 inline int luaReturnZero(lua_State* L) { lua_pushnumber(L, 0); return 1; }
 inline int luaReturnFalse(lua_State* L){ lua_pushboolean(L, 0); return 1; }
+/// The client's "yes" for a question it answers 1 or nil.
+inline int luaReturnOne(lua_State* L)  { lua_pushnumber(L, 1); return 1; }
 
 /// IsActionInRange and IsSpellInRange's answer for one spell against one unit:
 /// 1 in range, 0 out, and nil where there is no range to speak of - a spell
@@ -924,6 +931,9 @@ inline int pushFactionRow(lua_State* L, game::GameHandler* gh,
 /// with the inventory bindings, and building it twice is how two answers to one
 /// question start to disagree.
 uint32_t currencyListItemId(lua_State* L, int index);
+/// The item of the index-th currency watched beside the bags, in
+/// CurrencyTypes.dbc's order (0x005b0340), or 0 for none.
+uint32_t backpackCurrencyItemId(lua_State* L, int index);
 
 // Resolve unit IDs (player, target, focus, mouseover, pet, targettarget, etc.) to entity
 inline game::Unit* resolveUnit(lua_State* L, const char* unitId) {
@@ -953,6 +963,10 @@ std::string localizedRaceName(game::GameHandler* gh, uint32_t raceId, int gender
 /// UI's +0x1234, which GetMouseButtonClicked reads - 0x0050f950).
 std::string& lastClickButton();
 std::string localizedClassName(game::GameHandler* gh, uint32_t classId, int gender);
+/// A profession's trade link for the player (0x005db060): the spell's skill
+/// line, the player's rank in it and a bit per known recipe - "" when the
+/// spell's line has none.
+std::string tradeSkillLink(game::GameHandler* gh, uint32_t spellId);
 
 inline uint8_t unitRaceOf(game::GameHandler* gh, const std::string& lowerUid) {
     if (!gh) return 0;
@@ -1222,6 +1236,14 @@ inline int pushHistoryCooldown(lua_State* L, const game::spell_history::History:
 /// (trigger 0), its cooldown cast from the item; without, 0, 0, 0.
 inline int pushItemCooldown(lua_State* L, game::GameHandler* gh, uint32_t itemId) {
     const auto* info = gh ? gh->getItemInfo(itemId) : nullptr;
+    // An item not known yet is asked for, and the answer that finds it redraws
+    // the cooldowns if its use spell turns out to be on one (0x00809030 hands
+    // the item cache 0x0080abe0). It answered 0, 0, 0 and never asked.
+    if (gh && itemId != 0 && (!info || !info->valid)) {
+        gh->askItemThen(itemId, "item cooldown", [gh, itemId](bool found) {
+            if (found && gh->getSpellHandler()) gh->getSpellHandler()->itemCooldownArrived(itemId);
+        });
+    }
     bool use = false;
     for (size_t k = 0; info && info->valid && k < info->spells.size() && !use; ++k)
         use = info->spells[k].spellId != 0 && info->spells[k].spellTrigger == 0;

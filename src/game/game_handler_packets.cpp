@@ -907,37 +907,48 @@ void GameHandler::registerCoreOpcodes() {
             // the ITEM_ ones naming what was drunk as a link. This said
             // English "You feel tipsy." and only of the player.
             const bool self = guid == playerGuid;
-            auto ent = entityController_->getEntityManager().getEntity(guid);
-            if (self || (ent && ent->getType() == ObjectType::PLAYER)) {
-                const std::string n = std::to_string(std::min(threshold, 3u) + 1);
-                const ItemQueryResponseData* item = itemId ? getItemInfo(itemId) : nullptr;
-                std::string key;
-                std::vector<std::string> args;
-                if (!self) args.push_back(lookupName(guid));
-                if (item && item->valid) {
-                    key = std::string(self ? "DRUNK_MESSAGE_ITEM_SELF" : "DRUNK_MESSAGE_ITEM_OTHER") + n;
-                    args.push_back(buildItemLink(itemId, item->quality, item->name,
-                                                 getPlayerLevel()));
-                } else {
-                    key = std::string(self ? "DRUNK_MESSAGE_SELF" : "DRUNK_MESSAGE_OTHER") + n;
+            // Said once the drink is known: the client asks the item cache
+            // with this as the callback and words the line when it answers -
+            // with the drink if it was found, without it if not (0x006d01b0).
+            const auto say = [this, guid, threshold, itemId, self]() {
+                auto ent = entityController_->getEntityManager().getEntity(guid);
+                if (self || (ent && ent->getType() == ObjectType::PLAYER)) {
+                    const std::string n = std::to_string(std::min(threshold, 3u) + 1);
+                    const ItemQueryResponseData* item = itemId ? getItemInfo(itemId) : nullptr;
+                    std::string key;
+                    std::vector<std::string> args;
+                    if (!self) args.push_back(lookupName(guid));
+                    if (item && item->valid) {
+                        key = std::string(self ? "DRUNK_MESSAGE_ITEM_SELF" : "DRUNK_MESSAGE_ITEM_OTHER") + n;
+                        args.push_back(buildItemLink(itemId, item->quality, item->name,
+                                                     getPlayerLevel()));
+                    } else {
+                        key = std::string(self ? "DRUNK_MESSAGE_SELF" : "DRUNK_MESSAGE_OTHER") + n;
+                    }
+                    static const char* const kSelf[] = {"You feel sober again.", "You feel tipsy.  Whee!",
+                                                        "You feel drunk.  Woah!", "You feel completely smashed."};
+                    static const char* const kOther[] = {"%s seems to be sobering up.", "%s looks tipsy.",
+                                                         "%s looks drunk.", "%s looks completely smashed."};
+                    static const char* const kItemSelf[] = {"You drink the %s and feel sober again.",
+                                                            "You drink the %s and feel tipsy.",
+                                                            "You drink the %s and feel drunk.",
+                                                            "You drink the %s and feel completely smashed."};
+                    static const char* const kItemOther[] = {"%s drinks the %s and seems to be sobering up.",
+                                                             "%s drinks the %s and looks tipsy.",
+                                                             "%s drinks the %s and looks drunk.",
+                                                             "%s drinks the %s and looks completely smashed."};
+                    const uint32_t i = std::min(threshold, 3u);
+                    const bool withItem = item && item->valid;
+                    const char* enUS = withItem ? (self ? kItemSelf[i] : kItemOther[i])
+                                                : (self ? kSelf[i] : kOther[i]);
+                    addSystemChatMessage(interfaceFormat(key.c_str(), enUS, args));
                 }
-                static const char* const kSelf[] = {"You feel sober again.", "You feel tipsy.  Whee!",
-                                                    "You feel drunk.  Woah!", "You feel completely smashed."};
-                static const char* const kOther[] = {"%s seems to be sobering up.", "%s looks tipsy.",
-                                                     "%s looks drunk.", "%s looks completely smashed."};
-                static const char* const kItemSelf[] = {"You drink the %s and feel sober again.",
-                                                        "You drink the %s and feel tipsy.",
-                                                        "You drink the %s and feel drunk.",
-                                                        "You drink the %s and feel completely smashed."};
-                static const char* const kItemOther[] = {"%s drinks the %s and seems to be sobering up.",
-                                                         "%s drinks the %s and looks tipsy.",
-                                                         "%s drinks the %s and looks drunk.",
-                                                         "%s drinks the %s and looks completely smashed."};
-                const uint32_t i = std::min(threshold, 3u);
-                const bool withItem = item && item->valid;
-                const char* enUS = withItem ? (self ? kItemSelf[i] : kItemOther[i])
-                                            : (self ? kSelf[i] : kOther[i]);
-                addSystemChatMessage(interfaceFormat(key.c_str(), enUS, args));
+            };
+            if (itemId && !(getItemInfo(itemId) && getItemInfo(itemId)->valid)) {
+                static uint32_t drunkWaits = 0;
+                askItemThen(itemId, "drunk " + std::to_string(++drunkWaits), [say](bool) { say(); });
+            } else {
+                say();
             }
             if (self) {
                 const float amount = static_cast<float>(std::min(threshold, 3u)) / 3.0f;
@@ -1471,27 +1482,17 @@ void GameHandler::registerCoreOpcodes() {
         // nothing.
         announceMinimapPing(senderGuid, ping.wowX, ping.wowY);
     };
+    // ZONE_UNDER_ATTACK with the area's name, as a line of each joined
+    // defense channel the area concerns (0x0050c3c0) - the same routing as a
+    // defense message. No event: the client has none by this name, and says
+    // nothing anywhere to a player in no such channel.
     dispatchTable_[Opcode::SMSG_ZONE_UNDER_ATTACK] = [this](network::Packet& packet) {
-        if (packet.hasRemaining(4)) {
-            uint32_t areaId = packet.readUInt32();
-            std::string areaName = getAreaName(areaId);
-            // The zone name goes with it: the interface writes its own warning
-            // from arg1 rather than reusing the chat line.
-            if (addonEventCallback_) addonEventCallback_("ZONE_UNDER_ATTACK", {areaName});
-            // ...which is why this client only writes the line when nothing
-            // else will. chatframe.lua's own ZONE_UNDER_ATTACK branch calls
-            // AddMessage with ZONE_UNDER_ATTACK formatted from arg1, so with
-            // the interface in charge the player read every attack twice in
-            // chat and a third time on the error line - which the real client
-            // never puts it on at all. Booty Bay under sustained attack filled
-            // the window.
-            // In its words, ZONE_UNDER_ATTACK, and in chat only - this wrote
-            // English to the error line as well.
-            if (!ui::frameXmlOwns(ui::UiElement::Chat)) {
-                addSystemChatMessage(interfaceFormat("ZONE_UNDER_ATTACK",
-                                                     "|cffffff00%s is under attack!|r", {areaName}));
-            }
-        }
+        if (!packet.hasRemaining(4) || !chatHandler_) return;
+        const uint32_t areaId = packet.readUInt32();
+        const std::string areaName = getAreaName(areaId);
+        if (areaName.empty()) return;   // no such area: nothing (0x0050c3c0)
+        chatHandler_->postToDefenseChannels(
+            areaId, interfaceFormat("ZONE_UNDER_ATTACK", "|cffffff00%s is under attack!|r", {areaName}));
     };
 
     // Spirit healer time / durability
@@ -2143,9 +2144,10 @@ void GameHandler::registerCoreOpcodes() {
                 if (cpit != criteriaProgress_.end()) oldProgress = cpit->second;
                 criteriaProgress_[criteriaId] = progress;
                 LOG_DEBUG("SMSG_CRITERIA_UPDATE: id=", criteriaId, " progress=", progress);
-                // Fire addon event for achievement tracking addons
+                // CRITERIA_UPDATE, with nothing: the client signals it bare
+                // (0x005b3160), and the interface asks GetAchievementCriteriaInfo.
                 if (progress != oldProgress)
-                    fireAddonEvent("CRITERIA_UPDATE", {std::to_string(criteriaId), std::to_string(progress)});
+                    fireAddonEvent("CRITERIA_UPDATE", {});
 
                 // A timed criteria also drives the tracker's countdown. The
                 // message says how far into the window the player is; how long
@@ -2368,39 +2370,30 @@ void GameHandler::registerRemainingOpcodes() {
             combatLogFeed_->setReplayDelay(0);
         }
     };
-    // WotLK: uint64 playerGuid + uint8 teamCount + per-team fields
+    // One team a packet (0x005e7b00): the inspected guid, the slot, the
+    // team id, its rating, season games and wins, then the player's season
+    // games and personal rating - for the player being inspected only.
+    // Each one raises INSPECT_HONOR_UPDATE.
     dispatchTable_[Opcode::MSG_INSPECT_ARENA_TEAMS] = [this](network::Packet& packet) {
-        // WotLK: uint64 playerGuid + uint8 teamCount + per-team fields
-        if (!packet.hasRemaining(9)) {
+        if (!packet.hasRemaining(8 + 1 + 6 * 4) || !socialHandler_) {
             packet.skipAll();
             return;
         }
-        uint64_t inspGuid  = packet.readUInt64();
-        uint8_t  teamCount = packet.readUInt8();
-        if (teamCount > 3) teamCount = 3; // 2v2, 3v3, 5v5
-        if (socialHandler_) {
-            auto& ir = socialHandler_->mutableInspectResult();
-            if (inspGuid == ir.guid || ir.guid == 0) {
-                ir.guid = inspGuid;
-                ir.arenaTeams.clear();
-                for (uint8_t t = 0; t < teamCount; ++t) {
-                    if (!packet.hasRemaining(21)) break;
-                    SocialHandler::InspectArenaTeam team;
-                    team.teamId         = packet.readUInt32();
-                    team.type           = packet.readUInt8();
-                    team.weekGames      = packet.readUInt32();
-                    team.weekWins       = packet.readUInt32();
-                    team.seasonGames    = packet.readUInt32();
-                    team.seasonWins     = packet.readUInt32();
-                    team.name           = packet.readString();
-                    if (!packet.hasRemaining(4)) break;
-                    team.personalRating = packet.readUInt32();
-                    ir.arenaTeams.push_back(std::move(team));
-                }
-            }
+        const uint64_t inspGuid = packet.readUInt64();
+        const uint8_t slot = packet.readUInt8();
+        auto& ir = socialHandler_->mutableInspectResult();
+        if (inspGuid != ir.guid || slot >= ir.arenaTeams.size()) {
+            packet.skipAll();
+            return;
         }
-        LOG_DEBUG("MSG_INSPECT_ARENA_TEAMS: guid=0x", std::hex, inspGuid, std::dec,
-                  " teams=", static_cast<int>(teamCount));
+        auto& team = ir.arenaTeams[slot];
+        team.teamId            = packet.readUInt32();
+        team.rating            = packet.readUInt32();
+        team.seasonGames       = packet.readUInt32();
+        team.seasonWins        = packet.readUInt32();
+        team.playerSeasonGames = packet.readUInt32();
+        team.personalRating    = packet.readUInt32();
+        if (addonEventCallback_) addonEventCallback_("INSPECT_HONOR_UPDATE", {});
     };
     // auctionId(u32) + action(u32) + error(u32) + itemEntry(u32) + randomPropertyId(u32) + ...
     // action: 0=sold/won, 1=expired, 2=bid placed on your auction

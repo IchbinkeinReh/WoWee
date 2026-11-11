@@ -267,6 +267,30 @@ public:
         for (const auto& s : keyring_)
             if (!s.empty()) fn(s.item);
     }
+    /// What 0x00754dd0 counts (0x007546f0 with 0x4f): those and the bank -
+    /// its slots, the bags in it and what they hold - leaving out a broken
+    /// item, one with durability to lose and none left.
+    template <typename F>
+    void forEachOwned(F&& fn) const {
+        auto unbroken = [&](const ItemDef& d) {
+            if (d.maxDurability == 0 || d.curDurability != 0) fn(d);
+        };
+        forEachCarried(unbroken);
+        forEachBanked(unbroken);
+    }
+    /// The bank's slots, the bags in them and what those hold (0x007546f0's
+    /// set 0x8).
+    template <typename F>
+    void forEachBanked(F&& fn) const {
+        auto take = [&](const ItemSlot& s) {
+            if (!s.empty()) fn(s.item);
+        };
+        for (const auto& s : bankSlots_) take(s);
+        for (int b = 0; b < BANK_BAG_SLOTS; ++b) {
+            take(getBankBagItem(b));
+            for (int i = 0; i < getBankBagSize(b); ++i) take(getBankBagSlot(b, i));
+        }
+    }
     /// 0x00754d00: how many of the item those hold, an occupied slot being
     /// at least one.
     [[nodiscard]] uint32_t countCarried(uint32_t itemId) const {

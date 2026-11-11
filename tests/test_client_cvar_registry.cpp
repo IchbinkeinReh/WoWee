@@ -45,3 +45,18 @@ TEST_CASE("a name the client never registers is not there", "[client_cvar_regist
     CHECK_FALSE(clientCVarFlags("notACVar").has_value());
     CHECK_FALSE(clientCVarFlags("").has_value());
 }
+
+TEST_CASE("a client CVar answers the default it is registered with", "[client_cvar_registry]") {
+    using wowee::addons::clientCVarDefault;
+    REQUIRE(clientCVarDefault("showClock"));
+    CHECK(*clientCVarDefault("showClock") == "1");
+    REQUIRE(clientCVarDefault("SHOWTOASTWINDOW"));
+    CHECK(*clientCVarDefault("SHOWTOASTWINDOW") == "1");
+    REQUIRE(clientCVarDefault("textureCacheSize"));
+    CHECK(*clientCVarDefault("textureCacheSize") == "32");
+    REQUIRE(clientCVarDefault("playerStatLeftDropdown"));
+    CHECK(clientCVarDefault("playerStatLeftDropdown")->empty());
+    // Worked out at run time rather than registered as a literal.
+    CHECK_FALSE(clientCVarDefault("cameraView").has_value());
+    CHECK_FALSE(clientCVarDefault("notACVar").has_value());
+}

@@ -832,20 +832,20 @@ static int lua_CastSpell(lua_State* L) {
 /// interruptibility.
 static int lua_IsPassiveSpell(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) { lua_pushboolean(L, 0); return 1; }
+    if (!gh) { luaPushOneOrNil(L, 0); return 1; }
     // Both forms: IsPassiveSpell(spellId) and IsPassiveSpell(slot, bookType),
     // which is the one the spellbook uses - and reading a slot as an id
     // answered for whichever spell happens to carry the number 1, 2 or 3.
     // The result decides whether a spell is drawn as castable at all.
     const uint32_t id = spellIdForCall(L, gh);
-    lua_pushboolean(L, gh->isSpellPassive(id) ? 1 : 0);
+    luaPushOneOrNil(L, gh->isSpellPassive(id) ? 1 : 0);
     return 1;
 }
 
 /// IsSelectedSpell(slot, bookType) → whether the book is highlighting it.
 /// Nothing selects a spell here; the highlight follows the cursor.
 static int lua_IsSelectedSpell(lua_State* L) {
-    lua_pushboolean(L, 0);
+    luaPushOneOrNil(L, 0);
     return 1;
 }
 
@@ -854,8 +854,8 @@ static int lua_IsSelectedSpell(lua_State* L) {
 /// little rotating border is not drawn, which is right for every spell a
 /// player has.
 static int lua_GetSpellAutocast(lua_State* L) {
-    lua_pushboolean(L, 0);
-    lua_pushboolean(L, 0);
+    luaPushOneOrNil(L, 0);
+    luaPushOneOrNil(L, 0);
     return 2;
 }
 /// GetKnownSlotFromHighestRankSlot(slot) → the slot actually known: a slot
@@ -1302,14 +1302,24 @@ static int lua_GetSpellInfo(lua_State* L) {
     // The interface unpacks all nine in one line in multicastactionbarframe,
     // and any addon reading a spell does the same.
     //
-    // isFunnel is the one value with nothing behind it here. False is right
-    // for every spell but a handful of warlock drains, and it is what the
-    // callers branch on rather than display.
+    // The cost is over the power's divisor (rage and runic power in tenths),
+    // and a spell that costs something each second - Health Funnel - shows
+    // that instead, with isFunnel true (0x00540a30, 0x007ff100). The power
+    // type is signed: -2 is health.
     auto spellData = gh->getSpellData(spellId);
-    lua_pushnumber(L, spellData.manaCost);                   // 4: cost
-    lua_pushboolean(L, 0);                                   // 5: isFunnel
-    lua_pushnumber(L, spellData.powerType);                  // 6: powerType
-    lua_pushnumber(L, spellData.castTimeMs);                 // 7: castTime (ms)
+    const int32_t powerType = static_cast<int8_t>(spellData.powerType);
+    const uint32_t divisor = powerType >= 0 && powerType < 7 ? kPowerDivisors[powerType] : 1;
+    const uint32_t perSecond = spellData.manaPerSecond / divisor;
+    const bool funnel = perSecond >= 1;
+    lua_pushnumber(L, funnel ? perSecond : spellData.manaCost / divisor);  // 4: cost
+    lua_pushboolean(L, funnel ? 1 : 0);                      // 5: isFunnel
+    lua_pushnumber(L, powerType);                            // 6: powerType
+    // 7: castTime (ms), 0 for a passive spell (Attributes 0x40).
+    constexpr uint32_t kAttrPassive = 0x40;
+    const auto& spells = gh->spellNameCacheRef();
+    const auto row = spells.find(spellId);
+    const bool passive = row != spells.end() && (row->second.attr & kAttrPassive);
+    lua_pushnumber(L, passive ? 0 : spellData.castTimeMs);
     lua_pushnumber(L, spellData.minRange);                   // 8: minRange (yards)
     lua_pushnumber(L, spellData.maxRange);                   // 9: maxRange (yards)
     return 9;
@@ -1358,10 +1368,24 @@ static int lua_GetSpellLink(lua_State* L) {
     const uint32_t spellId = spellIdForCall(L, gh);
     if (spellId == 0) { return luaReturnNil(L); }
     std::string name = gh->getSpellName(spellId);
-    if (name.empty()) { return luaReturnNil(L); }
-    const std::string link = game::spellChatLink(spellId, name);
-    lua_pushstring(L, link.c_str());
-    return 1;
+    // A spell with Attributes 0x80 and 0x100 both has no link (0x005408e0).
+    const auto& cache = gh->spellNameCacheRef();
+    const auto it = cache.find(spellId);
+    constexpr uint32_t kHiddenA = 0x80, kHiddenB = 0x100;
+    if (name.empty() || (it != cache.end() && (it->second.attr & kHiddenA) && (it->second.attr & kHiddenB))) {
+        lua_pushnil(L);
+        lua_pushnil(L);
+        return 2;
+    }
+    lua_pushstring(L, game::spellChatLink(spellId, name).c_str());
+    // The second: a trade skill's (effect 47 first) list of the player's
+    // recipes as a trade link (0x005db060), nil for any other spell.
+    constexpr uint32_t kEffectTradeSkill = 47;
+    const std::string trade = it != cache.end() && it->second.effectIds[0] == kEffectTradeSkill
+        ? tradeSkillLink(gh, spellId) : std::string();
+    if (trade.empty()) lua_pushnil(L);
+    else lua_pushstring(L, trade.c_str());
+    return 2;
 }
 
 /// CancelUnitBuff(unit, indexOrName [, filterOrRank]) - both forms.
@@ -1536,7 +1560,7 @@ void registerSpellLuaAPI(lua_State* L) {
                 {"SpellIsTargeting", [](lua_State* L) -> int {
             // 0x00d3f4e4: a spell is on the cursor waiting for its target.
             auto* gh = getGameHandler(L);
-            lua_pushboolean(L, gh && (gh->isGroundTargeting() || gh->isUnitTargeting() ||
+            luaPushOneOrNil(L, gh && (gh->isGroundTargeting() || gh->isUnitTargeting() ||
                                       gh->isAwaitingItemTarget() || gh->isAwaitingGlyphTarget()));
             return 1;
         }},
@@ -1634,7 +1658,7 @@ void registerSpellLuaAPI(lua_State* L) {
                 {"IsCurrentSpell", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             uint32_t spellId = static_cast<uint32_t>(luaL_checknumber(L, 1));
-            lua_pushboolean(L, gh && gh->getCurrentCastSpellId() == spellId ? 1 : 0);
+            luaPushOneOrNil(L, gh && gh->getCurrentCastSpellId() == spellId ? 1 : 0);
             return 1;
         }},
                 // IsAutoRepeatSpell(spell [, book]) (0x005415d0): 1 when the

@@ -2209,10 +2209,16 @@ void SocialHandler::offerPetition(uint64_t petitionGuid, uint64_t targetGuid) {
 
 void SocialHandler::initiateReadyCheck() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    // DoReadyCheck (0x005732b0) says nothing either way: without the lead
-    // it returns, and READY_CHECK_START comes back with the server's
-    // MSG_RAID_READY_CHECK. These were English lines.
-    if (!isInGroup()) return;
+    // DoReadyCheck (0x005732b0): without the lead - or a raid assistant's
+    // rank - it returns without a word, and while a check is still running it
+    // says ERR_READY_CHECK_IN_PROGRESS. READY_CHECK comes back with the
+    // server's MSG_RAID_READY_CHECK.
+    if (!leadsOrAssists(owner_.getPartyData(), owner_.getPlayerGuid())) return;
+    if (readyCheckRunning()) {
+        owner_.addUIError(interfaceString("ERR_READY_CHECK_IN_PROGRESS", "A ready check is already in progress."));
+        owner_.playGameErrorSound("ERR_READY_CHECK_IN_PROGRESS");
+        return;
+    }
     auto packet = ReadyCheckPacket::build();
     owner_.getSocket()->send(packet);
 }
@@ -2993,6 +2999,10 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
             if (!m.name.empty() && !had(partyData.members, m.guid))
                 gameError(owner_, ErrTo::Chat, "ERR_RAID_MEMBER_REMOVED_S", "%s has left the raid group.", {m.name});
     }
+    // A raid roster arriving with none before - joining a raid, or the party
+    // turned into one - is ERR_RAID_YOU_JOINED (0x00574f10 at 0x005751e7).
+    if (nowInGroup && groupIsRaid(partyData.groupType) && !wasRaid)
+        gameError(owner_, ErrTo::Chat, "ERR_RAID_YOU_JOINED", "You have joined a raid group.");
     if (!nowInGroup && wasRaid)
         gameError(owner_, ErrTo::Chat, "ERR_RAID_YOU_LEFT", "You have left the raid group.");
     if (nowInGroup != wasInGroup) LOG_INFO(nowInGroup ? "Joined group" : "Left group");
@@ -3517,6 +3527,7 @@ bool SocialHandler::guildMemberOnlineTransition(const std::string& name, bool no
         if (m.name == name) {
             if (m.online == nowOnline) return false;
             m.online = nowOnline;
+            m.statusFlags = nowOnline ? static_cast<uint8_t>(m.statusFlags | 0x01) : 0;
             return true;
         }
     }
@@ -3904,12 +3915,12 @@ void SocialHandler::handlePetitionQueryResponse(network::Packet& packet) {
     petitionInfo_.guildName = guildName;
     if (needed > 0) petitionInfo_.signaturesRequired = needed;
     petitionInfo_.isArena = arenaType != 0;
+    petitionInfo_.queried = true;
 
-    // Said again, because the frame was drawn when the signatures arrived and
-    // everything above lands after it. Without this the charter keeps the
-    // blank name and the placeholder count it opened with - the shape that
-    // reads as "only right after reopening it".
-    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("PETITION_SHOW", {});
+    // The frame opens on this answer when the signers are already named:
+    // the client holds PETITION_SHOW until both have come (0x005cec20), so
+    // the charter never shows its blank name and placeholder count.
+    showPetitionWhenComplete();
 }
 
 void SocialHandler::handlePetitionShowSignatures(network::Packet& packet) {
@@ -3943,11 +3954,31 @@ void SocialHandler::handlePetitionShowSignatures(network::Packet& packet) {
         owner_.getSocket()->send(query);
     }
 
-    // The signature list frame opens on this. The petition is parsed and
-    // stored above - showUI is what this client's own window reads - and the
-    // interface's version was never told, so a charter could not be signed
-    // through it.
-    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("PETITION_SHOW", {});
+    // The signature list frame opens on PETITION_SHOW, which waits for the
+    // query above and for every signer's name (0x005cea60): a charter shown
+    // before them listed its signers as unknown and stayed that way.
+    for (const auto& sig : petitionInfo_.signatures) awaitPetitionSigner(sig.playerGuid);
+    showPetitionWhenComplete();
+}
+
+bool SocialHandler::petitionComplete() const {
+    return petitionInfo_.queried && petitionInfo_.namesPending == 0;
+}
+
+void SocialHandler::showPetitionWhenComplete() {
+    if (petitionComplete() && owner_.addonEventCallbackRef())
+        owner_.addonEventCallbackRef()("PETITION_SHOW", {});
+}
+
+void SocialHandler::awaitPetitionSigner(uint64_t signer) {
+    if (signer == 0 || !owner_.lookupName(signer).empty()) return;
+    const uint64_t charter = petitionInfo_.petitionGuid;
+    petitionInfo_.namesPending += 1;
+    owner_.askNameThen(signer, "petition signer", [this, charter](bool, const std::string&) {
+        if (petitionInfo_.petitionGuid != charter || petitionInfo_.namesPending == 0) return;
+        petitionInfo_.namesPending -= 1;
+        if (petitionInfo_.namesPending == 0) showPetitionWhenComplete();
+    });
 }
 
 void SocialHandler::handlePetitionSignResults(network::Packet& packet) {
@@ -3960,6 +3991,10 @@ void SocialHandler::handlePetitionSignResults(network::Packet& packet) {
         petitionInfo_.signatureCount++;
         PetitionSignature sig; sig.playerGuid = playerGuid;
         petitionInfo_.signatures.push_back(sig);
+        // The new signer is asked for like the rest, and the frame is told
+        // again once the charter is complete (0x005cf710's tail).
+        awaitPetitionSigner(playerGuid);
+        showPetitionWhenComplete();
     }
     // As 0x006cefd0 says it. Someone else's signature on this player's
     // charter is ERR_PETITION_SIGNED_S naming them, whatever the result; the
@@ -4377,14 +4412,29 @@ void SocialHandler::handleRandomRoll(network::Packet& packet) {
     RandomRollData data;
     if (!RandomRollParser::parse(packet, data)) return;
     // RANDOM_ROLL_RESULT with the roller's name - the player's own too - the
-    // number and the range, a system line (0x006e2e90, MSG_RANDOM_ROLL); none
-    // for a roller whose name is not known. This printed "You roll" /
-    // "Someone rolls" in English.
+    // number and the range, a system line (0x006e2e90, MSG_RANDOM_ROLL). A
+    // roller whose name is not known yet is asked for and the line waits for
+    // the answer (0x006cb990); it is dropped only when no name comes back.
+    // This printed "You roll" / "Someone rolls" in English.
+    const auto print = [this, data](const std::string& name) {
+        owner_.addSystemChatMessage(interfaceFormat("RANDOM_ROLL_RESULT", "%s rolls %d (%d-%d)",
+            {name, std::to_string(data.result), std::to_string(data.minRoll),
+             std::to_string(data.maxRoll)}));
+    };
     std::string rollerName = owner_.lookupName(data.rollerGuid);
     if (rollerName.empty() && data.rollerGuid == owner_.getPlayerGuid()) rollerName = ownName(owner_);
-    if (rollerName.empty()) return;
-    owner_.addSystemChatMessage(interfaceFormat("RANDOM_ROLL_RESULT", "%s rolls %d (%d-%d)",
-        {rollerName, std::to_string(data.result), std::to_string(data.minRoll), std::to_string(data.maxRoll)}));
+    if (!rollerName.empty()) {
+        print(rollerName);
+        return;
+    }
+    if (data.rollerGuid == 0) return;
+    // Each roll waits on its own, as each of the client's carries its own
+    // copy of the numbers: two from one stranger must both be said.
+    static uint32_t rollWaits = 0;
+    owner_.askNameThen(data.rollerGuid, "random roll " + std::to_string(++rollWaits),
+                       [print](bool found, const std::string& name) {
+                           if (found && !name.empty()) print(name);
+                       });
 }
 
 // ============================================================
@@ -4665,7 +4715,7 @@ void SocialHandler::handleBattlefieldList(network::Packet& packet) {
         // asked for from elsewhere PVPQUEUE_ANYWHERE_SHOW, and otherwise the
         // battlemaster's own list - BATTLEFIELDS_SHOW, the battlemaster the
         // interaction object (0x005496d0).
-        constexpr uint32_t kRandomBattleground = 32;
+        constexpr uint32_t kRandomBattleground = GameHandler::kRandomBattleground;
         battlemasterGuid_ = data.battlemasterGuid;  // 0x00bea568
         if (data.bgTypeId == kRandomBattleground && data.battlemasterGuid != 0) {
             owner_.setInteractionObject(data.battlemasterGuid);
@@ -6037,12 +6087,40 @@ void SocialHandler::handleArenaTeamCommandResult(network::Packet& packet) {
     }
 }
 
+const ArenaTeamQueryData* SocialHandler::arenaTeamQuery(uint32_t teamId) {
+    if (teamId == 0) return nullptr;
+    if (auto it = arenaTeamQueries_.find(teamId); it != arenaTeamQueries_.end()) return &it->second;
+    if (arenaTeamQueriesAsked_.insert(teamId).second && owner_.getSocket()) {
+        network::Packet pkt(wireOpcode(Opcode::CMSG_ARENA_TEAM_QUERY));
+        pkt.writeUInt32(teamId);
+        owner_.getSocket()->send(pkt);
+    }
+    return nullptr;
+}
+
 void SocialHandler::handleArenaTeamQueryResponse(network::Packet& packet) {
     if (!packet.hasRemaining(4)) return;
     uint32_t teamId = packet.readUInt32();
     std::string teamName = packet.readString();
     uint32_t teamType = 0;
     if (packet.hasRemaining(4)) teamType = packet.readUInt32();
+    // The banner: background, emblem and its colour, border and its colour.
+    ArenaTeamQueryData& cached = arenaTeamQueries_[teamId];
+    cached.name = teamName;
+    cached.size = teamType;
+    if (packet.hasRemaining(20)) {
+        cached.background  = packet.readUInt32();
+        cached.emblem      = packet.readUInt32();
+        cached.emblemColor = packet.readUInt32();
+        cached.border      = packet.readUInt32();
+        cached.borderColor = packet.readUInt32();
+    }
+    // A team asked about for an inspect is somebody else's: it answers the
+    // inspect window, not the player's own list.
+    if (arenaTeamQueriesAsked_.erase(teamId)) {
+        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("INSPECT_HONOR_UPDATE", {});
+        return;
+    }
     bool known = false;
     for (auto& s : arenaTeamStats_) { if (s.teamId == teamId) { s.teamName = teamName; s.teamType = teamType; known = true; break; } }
     if (!known) {
@@ -6262,18 +6340,46 @@ void SocialHandler::handleArenaError(network::Packet& packet) {
 
 void SocialHandler::handlePvpLogData(network::Packet& packet) {
     if (!PvpLogDataParser::parse(packet, bgScoreboard_)) return;
-    for (auto& ps : bgScoreboard_.players) {
-        auto ent = owner_.getEntityManager().getEntity(ps.guid);
-        if (ent && (ent->getType() == game::ObjectType::PLAYER || ent->getType() == game::ObjectType::UNIT)) {
-            auto u = std::static_pointer_cast<game::Unit>(ent);
-            if (!u->getName().empty()) ps.name = u->getName();
+    // Every row's name: from the name cache, or a unit in view.
+    const auto fillNames = [this]() {
+        for (auto& ps : bgScoreboard_.players) {
+            if (const std::string& cached = owner_.lookupName(ps.guid); !cached.empty()) {
+                ps.name = cached;
+                continue;
+            }
+            auto ent = owner_.getEntityManager().getEntity(ps.guid);
+            if (ent && (ent->getType() == game::ObjectType::PLAYER || ent->getType() == game::ObjectType::UNIT)) {
+                auto u = std::static_pointer_cast<game::Unit>(ent);
+                if (!u->getName().empty()) ps.name = u->getName();
+            }
         }
-    }
+    };
+    fillNames();
     // The scoreboard is drawn from this and asked for it by name -
     // RequestBattlefieldScoreData sends the query, UPDATE_BATTLEFIELD_SCORE is
-    // the answer arriving. Every row, every column and the winner were parsed
-    // and stored, and the frame that displays them was never told.
-    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("UPDATE_BATTLEFIELD_SCORE", {});
+    // the answer arriving. The client asks for every player it has no name
+    // for and announces the board once the last answer is back, found or not
+    // (0x0054ca30, then 0x0054aa30); a row announced before its name was a
+    // row by nobody until the next update. A newer board takes over.
+    const uint32_t generation = ++bgScoreGeneration_;
+    bgScorePending_ = 0;
+    const auto announce = [this]() {
+        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("UPDATE_BATTLEFIELD_SCORE", {});
+    };
+    for (size_t row = 0; row < bgScoreboard_.players.size(); ++row) {
+        const auto& ps = bgScoreboard_.players[row];
+        if (!ps.name.empty() || ps.guid == 0) continue;
+        bgScorePending_ += 1;
+        owner_.askNameThen(ps.guid, "pvp log " + std::to_string(generation) + ":" + std::to_string(row),
+                           [this, generation, fillNames, announce](bool, const std::string&) {
+                               if (generation != bgScoreGeneration_ || bgScorePending_ == 0) return;
+                               bgScorePending_ -= 1;
+                               if (bgScorePending_ != 0) return;
+                               fillNames();
+                               announce();
+                           });
+    }
+    if (bgScorePending_ == 0) announce();
 }
 
 void SocialHandler::updateReadyCheckTimer() {
@@ -7188,13 +7294,39 @@ void SocialHandler::handleGuildBankLog(network::Packet& packet) {
         }
         if (!packet.hasRemaining(4)) break;
         e.secondsAgo = packet.readUInt32();
-        if (e.itemId) owner_.ensureItemInfo(e.itemId);
         log.push_back(e);
     }
     packet.skipAll();
     LOG_INFO("MSG_GUILD_BANK_LOG_QUERY reply: tab ", static_cast<int>(tab),
              ", ", log.size(), " entries");
-    if (owner_.addonEventCallbackRef()) {
+
+    // Every row's item and player are asked of their caches, and the log is
+    // announced once the last answer is in, found or not (0x005a4800 with
+    // 0x005a47d0 as the callback); at once when nothing was missing. A log
+    // announced before its names read as rows by nobody, and stayed so.
+    // A new log takes over from one still waiting.
+    const uint32_t generation = ++guildBankLogGeneration_;
+    guildBankLogPending_ = 0;
+    const auto answered = [this, generation]() {
+        if (generation != guildBankLogGeneration_ || guildBankLogPending_ == 0) return;
+        guildBankLogPending_ -= 1;
+        if (guildBankLogPending_ == 0 && owner_.addonEventCallbackRef())
+            owner_.addonEventCallbackRef()("GUILDBANKLOG_UPDATE", {});
+    };
+    for (size_t row = 0; row < log.size(); ++row) {
+        const auto& e = log[row];
+        const std::string key = "bank log " + std::to_string(generation) + ":" + std::to_string(row);
+        if (e.itemId && !(owner_.getItemInfo(e.itemId) && owner_.getItemInfo(e.itemId)->valid)) {
+            guildBankLogPending_ += 1;
+            owner_.askItemThen(e.itemId, key, [answered](bool) { answered(); });
+        }
+        if (e.playerGuid && owner_.lookupName(e.playerGuid).empty()) {
+            guildBankLogPending_ += 1;
+            owner_.askNameThen(e.playerGuid, key,
+                               [answered](bool, const std::string&) { answered(); });
+        }
+    }
+    if (guildBankLogPending_ == 0 && owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("GUILDBANKLOG_UPDATE", {});
     }
 }

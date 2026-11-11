@@ -189,7 +189,7 @@ bool allEventsCover(lua_State* L, int frame, const char* eventName) {
 static int lua_Frame_IsEventRegistered(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     const char* eventName = luaL_optstring(L, 2, nullptr);
-    if (!eventName || !*eventName) { lua_pushboolean(L, 0); return 1; }
+    if (!eventName || !*eventName) { luaPushOneOrNil(L, 0); return 1; }
     bool on = false;
     {
         taint::Quiet quiet;   // the registration is the client's, kept in C
@@ -202,7 +202,7 @@ static int lua_Frame_IsEventRegistered(lua_State* L) {
         lua_pop(L, 1);
         if (!on) on = allEventsCover(L, 1, eventName);
     }
-    lua_pushboolean(L, on ? 1 : 0);
+    luaPushOneOrNil(L, on ? 1 : 0);
     return 1;
 }
 
@@ -820,10 +820,7 @@ void recordScriptError(lua_State* L, const char* script) {
 // The protected-frame methods: IsProtected (0x0049cad0), CanChangeProtectedState
 // (0x0049cb60) and CanChangeAttribute (0x0049f260), answered 1 or nil as the
 // client answers them.
-static void pushFlag(lua_State* L, bool on) {
-    if (on) lua_pushnumber(L, 1);
-    else lua_pushnil(L);
-}
+static void pushFlag(lua_State* L, bool on) { wowee::addons::luaPushOneOrNil(L, on); }
 // IsProtected() -> protected, explicitly. Only the explicit kind is kept here
 // (see Widget::protectedFrame), so the two answers agree.
 static int lua_Frame_IsProtected(lua_State* L) {
@@ -1346,7 +1343,7 @@ int lua_Frame_SetMovable(lua_State* L) {
 }
 int lua_Frame_IsMovable(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    lua_pushboolean(L, w && w->movable);
+    luaPushOneOrNil(L, w && w->movable);
     return 1;
 }
 /// RegisterForDrag("LeftButton", ...) - naming none of them turns dragging off,
@@ -1420,7 +1417,7 @@ int lua_Frame_IsResizable(lua_State* L) {
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     const auto* w = (tree && id) ? tree->get(id) : nullptr;
-    lua_pushboolean(L, w && w->resizable ? 1 : 0);
+    luaPushOneOrNil(L, w && w->resizable ? 1 : 0);
     return 1;
 }
 
@@ -1908,7 +1905,7 @@ int lua_Region_GetObjectType(lua_State* L) {
 int lua_Region_IsObjectType(lua_State* L) {
     const auto* w = widgetOf(L, 1);
     const char* asked = luaL_optstring(L, 2, "");
-    lua_pushboolean(L, w && objectTypeMatches(w->objectType, asked));
+    luaPushOneOrNil(L, w && objectTypeMatches(w->objectType, asked));
     return 1;
 }
 
@@ -2327,7 +2324,7 @@ int lua_FontString_SetWordWrap(lua_State* L) {
 }
 int lua_FontString_CanWordWrap(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    lua_pushboolean(L, (w && w->wordWrap) ? 1 : 0);
+    luaPushOneOrNil(L, (w && w->wordWrap) ? 1 : 0);
     return 1;
 }
 /// Texture:Set/GetHorizTile, Set/GetVertTile (0x0048cb60, 0x0048cbc0,
@@ -2922,7 +2919,9 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
     if (info.manaCost > 0) {
         const char* named = game::powerTypeName(info.powerType);
         const char* unit = named ? named : "";
-        cost = std::to_string(info.manaCost) + (*unit ? std::string(" ") + unit : "");
+        // Over the power's divisor: rage and runic power are kept in tenths.
+        const uint32_t divisor = info.powerType < 7 ? wowee::addons::kPowerDivisors[info.powerType] : 1;
+        cost = std::to_string(info.manaCost / divisor) + (*unit ? std::string(" ") + unit : "");
     }
     if (info.maxRange > 0.0f) {
         range = withNumber(globalOr(L, "SPELL_RANGE", "%s yd range"), "%s", info.maxRange);
@@ -2999,10 +2998,10 @@ int lua_Tooltip_SetAction(lua_State* L) {
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
     const int slot = static_cast<int>(luaL_optnumber(L, 2, 0)) - 1;
-    if (!w || !gh || slot < 0) { lua_pushboolean(L, 0); return 1; }
+    if (!w || !gh || slot < 0) { luaPushOneOrNil(L, 0); return 1; }
     const auto& bar = gh->getActionBar();
     if (slot >= static_cast<int>(bar.size()) || bar[slot].isEmpty()) {
-        lua_pushboolean(L, 0);
+        luaPushOneOrNil(L, 0);
         return 1;
     }
 
@@ -3011,16 +3010,16 @@ int lua_Tooltip_SetAction(lua_State* L) {
     // Naming it and stopping meant the same potion described itself two
     // different ways depending on where it was hovered.
     if (action.type == game::ActionBarSlot::ITEM) {
-        lua_pushboolean(L, fillItemTooltipById(L, gh, action.id) ? 1 : 0);
+        luaPushOneOrNil(L, fillItemTooltipById(L, gh, action.id) ? 1 : 0);
         return 1;
     }
     if (action.type == game::ActionBarSlot::SPELL) {
-        lua_pushboolean(L, fillSpellTooltip(L, w, gh, action.id) ? 1 : 0);
+        luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, action.id) ? 1 : 0);
         return 1;
     }
     // A macro is the third kind a slot can hold and it has no tooltip of its
     // own - WoW shows the macro's name from the button rather than from here.
-    lua_pushboolean(L, 0);
+    luaPushOneOrNil(L, 0);
     return 1;
 }
 
@@ -3419,6 +3418,33 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
     else if (kind == "achievement")
         filled = fillAchievementLinkTooltip(L, w, gh, link, colon);
 
+    // A tooltip whose item was not known yet waits for it, as the client's
+    // does (its item cache calls 0x00626650 back to fill it in): it goes in
+    // __WoweeLinkTooltipsWaiting, weak-keyed, by the item's id, and the
+    // watcher in kTooltipItemDataRefreshLua sets the link again when that
+    // item arrives. Nothing else would: the refresh below is an
+    // UpdateTooltip, which GameTooltip_OnUpdate asks of a tooltip's owner,
+    // and the tooltip a chat link opens (ItemRefTooltip) is owned by
+    // UIParent - so it stayed empty until something set it again.
+    if (kind == "item" && lua_istable(L, 1)) {
+        lua_getglobal(L, "__WoweeLinkTooltipsWaiting");
+        if (!lua_istable(L, -1)) {
+            lua_pop(L, 1);
+            lua_newtable(L);
+            lua_newtable(L);                       // its metatable: weak keys
+            lua_pushstring(L, "k");
+            lua_setfield(L, -2, "__mode");
+            lua_setmetatable(L, -2);
+            lua_pushvalue(L, -1);
+            lua_setglobal(L, "__WoweeLinkTooltipsWaiting");
+        }
+        lua_pushvalue(L, 1);
+        if (filled) lua_pushnil(L);
+        else lua_pushnumber(L, static_cast<lua_Number>(id));
+        lua_rawset(L, -3);
+        lua_pop(L, 1);
+    }
+
     // Kept whole, so the refresh below rebuilds the item that was linked
     // rather than the template behind it, and set even when nothing could be
     // filled in - that is the case the refresh exists for.
@@ -3439,7 +3465,7 @@ int lua_Tooltip_SetSpellByID(lua_State* L) {
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
     const uint32_t id = static_cast<uint32_t>(luaL_optnumber(L, 2, 0));
-    lua_pushboolean(L, fillSpellTooltip(L, w, gh, id) ? 1 : 0);
+    luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, id) ? 1 : 0);
     return 1;
 }
 
@@ -3807,15 +3833,15 @@ static int lua_Tooltip_IsUnit(lua_State* L) {
     auto* gh = wowee::addons::getGameHandler(L);
     const char* asked = luaL_optstring(L, 2, nullptr);
     if (!w || !gh || !asked || !*asked || w->tooltipUnit.empty()) {
-        lua_pushboolean(L, 0);
+        luaPushOneOrNil(L, 0);
         return 1;
     }
     std::string other(asked);
     for (char& c : other) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    if (other == w->tooltipUnit) { lua_pushboolean(L, 1); return 1; }
+    if (other == w->tooltipUnit) { luaPushOneOrNil(L, 1); return 1; }
     const uint64_t mine = wowee::addons::resolveUnitGuid(gh, w->tooltipUnit);
     const uint64_t theirs = wowee::addons::resolveUnitGuid(gh, other);
-    lua_pushboolean(L, (mine != 0 && mine == theirs) ? 1 : 0);
+    luaPushOneOrNil(L, (mine != 0 && mine == theirs) ? 1 : 0);
     return 1;
 }
 
@@ -4155,6 +4181,58 @@ static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
             lua_setfield(L, -2, "durability");
             lua_pushnumber(L, static_cast<lua_Number>(instance->maxDurability));
             lua_setfield(L, -2, "maxDurability");
+            // What is left of its first spell's charges (ITEM_FIELD_SPELL_CHARGES).
+            lua_pushnumber(L, gh->getItemSpellCharges(instance->guid));
+            lua_setfield(L, -2, "charges0");
+            // The one action line the instance gets (0x006277f0): openable -
+            // a lootable item (flag 0x4) not locked or unlocked (instance
+            // 0x4), or flag 0x200 with instance 0x8 - else readable (a page,
+            // or instance 0x200), else socketable (any socket).
+            if (const auto* tmpl = gh->getItemInfo(itemId); tmpl && tmpl->valid) {
+                const uint32_t own = gh->getItemFieldFlags(instance->guid);
+                const char* action = nullptr;
+                if (((tmpl->itemFlags & 0x4u) != 0 && (tmpl->lockId == 0 || (own & 0x4u) != 0)) ||
+                    ((tmpl->itemFlags & 0x200u) != 0 && (own & 0x8u) != 0)) {
+                    action = "ITEM_OPENABLE";
+                } else if (tmpl->pageTextId != 0 || (own & 0x200u) != 0) {
+                    action = "ITEM_READABLE";
+                } else if (tmpl->socketColor[0] != 0 || tmpl->socketColor[1] != 0 || tmpl->socketColor[2] != 0) {
+                    action = "ITEM_SOCKETABLE";
+                }
+                if (action) {
+                    lua_pushstring(L, action);
+                    lua_setfield(L, -2, "action");
+                }
+                // No price at a vendor for one the player carries rather than
+                // wears: ITEM_UNSELLABLE where the price would be.
+                if (tmpl->sellPrice == 0 && gh->isVendorWindowOpen()) {
+                    bool worn = false;
+                    for (int e = 0; e < 19 && !worn; ++e) {
+                        const auto& slot = gh->getInventory().getEquipSlot(static_cast<game::EquipSlot>(e));
+                        worn = !slot.empty() && slot.item.guid == instance->guid;
+                    }
+                    if (!worn) {
+                        lua_pushboolean(L, 1);
+                        lua_setfield(L, -2, "unsellable");
+                    }
+                }
+            }
+            // Who made it (ITEM_FIELD_CREATOR), named once the name cache has
+            // them - asked for otherwise, and the owner's UpdateTooltip fills
+            // the line in, as the client's callback 0x00626650 does - and
+            // whether it was written rather than made (ITEM_FIELD_FLAGS
+            // 0x200: ITEM_WRITTEN_BY in place of ITEM_CREATED_BY).
+            if (const uint64_t creator = gh->getItemCreatorByGuid(instance->guid); creator != 0) {
+                const std::string& maker = gh->lookupName(creator);
+                if (maker.empty()) {
+                    gh->queryPlayerName(creator);
+                } else {
+                    lua_pushstring(L, maker.c_str());
+                    lua_setfield(L, -2, "creator");
+                    lua_pushboolean(L, (gh->getItemFieldFlags(instance->guid) & 0x200u) != 0 ? 1 : 0);
+                    lua_setfield(L, -2, "written");
+                }
+            }
             // The gems in its sockets, which the template only has the
             // colours of (0x006277f0's enchantment walk).
             pushSocketedGems(L, gh, instance->guid, itemId);
@@ -4189,6 +4267,24 @@ static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
         fireTooltipSetItem(L);
         return true;
     }
+    // Not known at all yet. The client says so rather than leaving the frame
+    // empty (0x00623760): the item is asked for, the tooltip holds the one red
+    // line RETRIEVING_ITEM_INFO and is shown, it no longer names an item for
+    // GetItem, and the setter still answers that it found nothing. When the
+    // answer lands the client refills it through its cache callback
+    // (0x00626650); here the owner's UpdateTooltip does that on the next tick.
+    gh->ensureItemInfo(itemId);
+    w->isTooltip = true;
+    w->tooltipLines.clear();
+    wowee::ui::Widget::TooltipLine line;
+    line.left = globalOr(L, "RETRIEVING_ITEM_INFO", "Retrieving item information");
+    // The client's colour for it, 0x00ad2d34: ff2020.
+    constexpr float kRetrievingRed[4] = {1.0f, 32.0f / 255.0f, 32.0f / 255.0f, 1.0f};
+    for (int i = 0; i < 4; ++i) line.lc[i] = line.rc[i] = kRetrievingRed[i];
+    w->tooltipLines.push_back(std::move(line));
+    lua_pushnil(L);
+    lua_setfield(L, 1, "__itemId");
+    w->shown = true;
     return false;
 }
 
@@ -4201,14 +4297,14 @@ int lua_Tooltip_SetAuctionItem(lua_State* L) {
     auto* gh = wowee::addons::getGameHandler(L);
     const char* list = luaL_optstring(L, 2, "list");
     const int index = static_cast<int>(luaL_optnumber(L, 3, 0));
-    if (!w || !gh || index < 1) { lua_pushboolean(L, 0); return 1; }
+    if (!w || !gh || index < 1) { luaPushOneOrNil(L, 0); return 1; }
 
     const std::string which(list ? list : "list");
     const auto& results = (which == "owner")  ? gh->getAuctionOwnerResults()
                         : (which == "bidder") ? gh->getAuctionBidderResults()
                                               : gh->getAuctionBrowseResults();
     if (index > static_cast<int>(results.auctions.size())) {
-        lua_pushboolean(L, 0);
+        luaPushOneOrNil(L, 0);
         return 1;
     }
     const auto& row = results.auctions[index - 1];
@@ -4230,7 +4326,7 @@ int lua_Tooltip_SetAuctionItem(lua_State* L) {
         def.suffixFactor     = row.suffixFactor;
         appendRandomSuffix(w, gh, def);
     }
-    lua_pushboolean(L, filled ? 1 : 0);
+    luaPushOneOrNil(L, filled ? 1 : 0);
     return 1;
 }
 
@@ -4391,7 +4487,7 @@ int lua_Tooltip_SetInventoryItem(lua_State* L) {
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
     const int slot = static_cast<int>(luaL_optnumber(L, 3, 0));
-    if (!w || !gh || slot < 1) { lua_pushboolean(L, 0); return 1; }
+    if (!w || !gh || slot < 1) { luaPushOneOrNil(L, 0); return 1; }
 
     // The unit argument was ignored, so every slot of the inspect paperdoll
     // showed whatever the player themselves had in that slot - the wrong item
@@ -4400,7 +4496,7 @@ int lua_Tooltip_SetInventoryItem(lua_State* L) {
     wowee::addons::toLowerInPlace(uid);
     // Another player is only ever inspected as equipment, and the cache behind
     // it is one entry per equipment slot.
-    if (uid != "player" && slot > 19) { lua_pushboolean(L, 0); return 1; }
+    if (uid != "player" && slot > 19) { luaPushOneOrNil(L, 0); return 1; }
     if (uid != "player") {
         // 0x0062e050's other-unit leg reads the same record GetInventoryItemLink
         // reads, so which row answers depends on which unit this is: the one in
@@ -4414,7 +4510,7 @@ int lua_Tooltip_SetInventoryItem(lua_State* L) {
         uint32_t entry = gh->inspectedItemRecord(guid, slot - 1, record);
         if (entry == 0) gh->visibleItemRecord(guid, slot - 1, entry, record);
         if (!fillItemTooltipById(L, gh, entry)) {
-            lua_pushboolean(L, 0);
+            luaPushOneOrNil(L, 0);
             return 1;
         }
         // The suffix and its stat lines, from the row's own property and seed -
@@ -4428,7 +4524,7 @@ int lua_Tooltip_SetInventoryItem(lua_State* L) {
         def.randomPropertyId = static_cast<int32_t>(static_cast<int16_t>(record.randomPropertyId));
         def.suffixFactor = record.seed;
         appendRandomSuffix(w, gh, def);
-        lua_pushboolean(L, 1);
+        luaPushOneOrNil(L, 1);
         return 1;
     }
 
@@ -4440,9 +4536,9 @@ int lua_Tooltip_SetInventoryItem(lua_State* L) {
     // GameTooltip:SetText(self.tooltipText) when this answers false, which is
     // the "Bank Bag" line, not the bag's own tooltip.
     const game::ItemSlot* sp = wowee::addons::inventorySlotItem(gh->getInventory(), slot);
-    if (!sp) { lua_pushboolean(L, 0); return 1; }
+    if (!sp) { luaPushOneOrNil(L, 0); return 1; }
     const auto& s = *sp;
-    if (s.empty()) { lua_pushboolean(L, 0); return 1; }
+    if (s.empty()) { luaPushOneOrNil(L, 0); return 1; }
     // Through the fuller builder, with the slot's own copy of the item as the
     // floor: the slot knows the name and quality even for an entry no
     // GetItemInfo has arrived for, and answering nothing there would be worse
@@ -4464,7 +4560,7 @@ int lua_Tooltip_SetInventoryItem(lua_State* L) {
     if (slot <= static_cast<int>(game::EquipSlot::NUM_SLOTS)) {
         appendEnchantLines(w, gh, gh->getEquipSlotGuid(slot - 1));
     }
-    lua_pushboolean(L, 1);
+    luaPushOneOrNil(L, 1);
     return 1;
 }
 
@@ -4530,7 +4626,15 @@ int lua_Tooltip_SetQuestLogSpecialItem(lua_State* L) {
 /// Both were unbound, so hovering a currency called nil and took the token
 /// frame's OnEnter with it. A currency is an item held in the bags, so its
 /// tooltip is the item's.
-int lua_Tooltip_ReturnFalse(lua_State* L) { lua_pushboolean(L, 0); return 1; }
+int lua_Tooltip_SetBackpackToken(lua_State* L) {
+    auto* gh = wowee::addons::getGameHandler(L);
+    const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
+    // 0x006307e0 answers nothing; the tooltip is the item's.
+    if (!widgetOf(L, 1) || !gh) return 0;
+    if (const uint32_t itemId = wowee::addons::backpackCurrencyItemId(L, index))
+        fillItemTooltipById(L, gh, itemId);
+    return 0;
+}
 
 int lua_Tooltip_SetCurrencyToken(lua_State* L) {
     auto* w = widgetOf(L, 1);
@@ -4548,7 +4652,7 @@ int lua_Tooltip_SetBagItem(lua_State* L) {
     auto* gh = wowee::addons::getGameHandler(L);
     const int bag = static_cast<int>(luaL_optnumber(L, 2, 0));
     const int slot = static_cast<int>(luaL_optnumber(L, 3, 0));
-    if (!w || !gh || slot < 1) { lua_pushboolean(L, 0); return 1; }
+    if (!w || !gh || slot < 1) { luaPushOneOrNil(L, 0); return 1; }
     const auto& inv = gh->getInventory();
     const auto& s = (bag == 0) ? inv.getBackpackSlot(slot - 1)
                                : inv.getBagSlot(bag - 1, slot - 1);
@@ -4560,7 +4664,7 @@ int lua_Tooltip_SetBagItem(lua_State* L) {
         // tooltip over an empty square.
         w->tooltipLines.clear();
         w->shown = false;
-        lua_pushboolean(L, 0);
+        luaPushOneOrNil(L, 0);
         return 1;
     }
     // Through the fuller builder, with the slot's own copy of the item as the
@@ -4573,7 +4677,7 @@ int lua_Tooltip_SetBagItem(lua_State* L) {
         fireTooltipSetItem(L);
         appendDurabilityLine(w, s.item);
     }
-    lua_pushboolean(L, 1);
+    luaPushOneOrNil(L, 1);
     return 1;
 }
 
@@ -5106,7 +5210,7 @@ int lua_Region_Hide(lua_State* L) {
 }
 int lua_Region_IsShown(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    lua_pushboolean(L, w ? (w->shown ? 1 : 0) : 0);
+    luaPushOneOrNil(L, w ? (w->shown ? 1 : 0) : 0);
     return 1;
 }
 
@@ -5133,7 +5237,7 @@ int lua_Region_IsVisible(lua_State* L) {
             id = p->parent;
         }
     }
-    lua_pushboolean(L, on);
+    luaPushOneOrNil(L, on);
     return 1;
 }
 int lua_Region_SetAlpha(lua_State* L) {
@@ -5352,7 +5456,7 @@ int lua_Frame_EnableMouse(lua_State* L) {
 }
 int lua_Frame_IsMouseEnabled(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    lua_pushboolean(L, w && w->mouseEnabled ? 1 : 0);
+    luaPushOneOrNil(L, w && w->mouseEnabled ? 1 : 0);
     return 1;
 }
 
@@ -5865,11 +5969,8 @@ void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
     // they are copied off the globals the animation bootstrap published. Absent
     // before the bootstrap has run, which is only true of regions built during
     // engine start-up, and those declare no animations.
-    for (const char* name : {"CreateAnimationGroup", "StopAnimating"}) {
-        lua_getglobal(L, (std::string("__Wowee") +
-                          (std::strcmp(name, "StopAnimating") == 0
-                               ? "StopAnimating"
-                               : "CreateAnimationGroup")).c_str());
+    for (const char* name : {"CreateAnimationGroup", "StopAnimating", "GetAnimationGroups"}) {
+        lua_getglobal(L, (std::string("__Wowee") + name).c_str());
         if (lua_isfunction(L, -1)) lua_setfield(L, -2, name);
         else                       lua_pop(L, 1);
     }
@@ -6144,7 +6245,7 @@ int lua_Frame_SetUserPlaced(lua_State* L) {
 }
 int lua_Frame_IsUserPlaced(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    lua_pushboolean(L, w && w->userMoved);
+    luaPushOneOrNil(L, w && w->userMoved);
     return 1;
 }
 
@@ -6405,7 +6506,7 @@ int lua_Frame_EnableKeyboard(lua_State* L) {
 }
 int lua_Frame_IsKeyboardEnabled(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    lua_pushboolean(L, w && w->keyboardEnabled);
+    luaPushOneOrNil(L, w && w->keyboardEnabled);
     return 1;
 }
 int lua_Frame_SetPropagateKeyboardInput(lua_State* L) {
@@ -6420,7 +6521,7 @@ int lua_Frame_SetToplevel(lua_State* L) {
 }
 int lua_Frame_IsToplevel(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    lua_pushboolean(L, w && w->topLevel);
+    luaPushOneOrNil(L, w && w->topLevel);
     return 1;
 }
 int lua_Frame_Raise(lua_State* L) {
@@ -6444,7 +6545,7 @@ int lua_Frame_SetClampedToScreen(lua_State* L) {
 }
 int lua_Frame_IsClampedToScreen(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    lua_pushboolean(L, w && w->clampedToScreen);
+    luaPushOneOrNil(L, w && w->clampedToScreen);
     return 1;
 }
 
@@ -6897,6 +6998,20 @@ int lua_EditBox_GetHistoryLines(lua_State* L) {
     lua_pushnumber(L, w ? w->editHistoryLines : 0);
     return 1;
 }
+/// SetAltArrowKeyMode / GetAltArrowKeyMode (0x00976890, 0x009768e0): the
+/// box's flag 0x10, the same one ignoreArrows="" sets - the arrows go to the
+/// game unless Alt is held.
+int lua_EditBox_GetAltArrowKeyMode(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    pushFlag(L, w && w->editIgnoreArrows);
+    return 1;
+}
+/// IsInIMECompositionMode (0x00976940): whether an input method is part way
+/// through composing - never here, where there is no input method.
+int lua_EditBox_IsInIMECompositionMode(lua_State* L) {
+    pushFlag(L, false);
+    return 1;
+}
 int lua_EditBox_SetIgnoreArrows(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (w) w->editIgnoreArrows = lua_toboolean(L, 2) != 0;
@@ -7169,11 +7284,22 @@ int lua_ColorSelect_SetValueThumbTexture(lua_State* L) {
     return setColorRole(L, wowee::ui::Widget::ColorRole::ValueThumb);
 }
 
+/// SetThumbTexture(texture or "texture" or nil) (0x00971b10): a texture
+/// becomes the grip, a path goes onto the grip there is (0x0096bfe0), and nil
+/// takes the grip away (0x0096bd90 with none).
 int lua_Slider_SetThumbTexture(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
     if (lua_isstring(L, 2)) {
         w->thumbTexture = lua_tostring(L, 2);
+        auto* tree = wowee::addons::getWidgetTree(L);
+        if (auto* grip = tree && w->thumbRegion ? tree->get(w->thumbRegion) : nullptr) {
+            grip->solidColor = false;
+            grip->texturePath = w->thumbTexture;
+        }
+    } else if (lua_isnoneornil(L, 2)) {
+        w->thumbTexture.clear();
+        w->thumbRegion = 0;
     } else if (lua_istable(L, 2)) {
         auto* tree = wowee::addons::getWidgetTree(L);
         const uint32_t tid = widgetIdOf(L, 2);
@@ -7190,6 +7316,47 @@ int lua_Slider_SetThumbTexture(lua_State* L) {
         }
     }
     return 0;
+}
+
+/// SetRotatesTexture(flag) and GetRotatesTexture() (0x009719d0, 0x00971970).
+int lua_StatusBar_SetRotatesTexture(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->barRotatesTexture = lua_toboolean(L, 2) != 0;
+    return 0;
+}
+int lua_StatusBar_GetRotatesTexture(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    if (w && w->barRotatesTexture) lua_pushnumber(L, 1.0);
+    else                           lua_pushnil(L);
+    return 1;
+}
+
+/// SetHyperlinkFormat("format") and GetHyperlinkFormat() (0x00975120,
+/// 0x009751a0): how the frame writes an <A href> - href, then the words.
+int lua_SimpleHTML_SetHyperlinkFormat(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isstring(L, 2)) {
+        return luaL_error(L, "Usage: %s:SetHyperlinkFormat(\"format\")",
+                          w->name.empty() ? "<unnamed>" : w->name.c_str());
+    }
+    w->htmlLinkFormat = lua_tostring(L, 2);
+    return 0;
+}
+int lua_SimpleHTML_GetHyperlinkFormat(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushstring(L, w ? w->htmlLinkFormat.c_str() : wowee::ui::kDefaultHyperlinkFormat);
+    return 1;
+}
+
+/// GetThumbTexture() (0x00971a90): the grip's texture, nil without one.
+int lua_Slider_GetThumbTexture(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    if (!w || w->thumbRegion == 0) {
+        lua_pushnil(L);
+        return 1;
+    }
+    pushFrameByWid(L, w->thumbRegion);
+    return 1;
 }
 
 int lua_StatusBar_GetValue(lua_State* L) {
@@ -8796,7 +8963,7 @@ void LuaEngine::registerCoreAPI() {
         // Nothing is pinned under the bags - that is a saved choice this
         // client does not keep - so this answers false rather than
         // describing an arbitrary row.
-        {"SetBackpackToken", lua_Tooltip_ReturnFalse},
+        {"SetBackpackToken", lua_Tooltip_SetBackpackToken},
         {"SetGuildBankItem", lua_Tooltip_SetGuildBankItem},
         {"SetSpellByID",    lua_Tooltip_SetSpellByID},
         {"SetQuestLogRewardSpell", lua_Tooltip_SetQuestLogRewardSpell},
@@ -8957,6 +9124,8 @@ void LuaEngine::registerCoreAPI() {
         {"SetStatusBarTexture",   lua_StatusBar_SetStatusBarTexture},
         {"SetStatusBarColor",     lua_StatusBar_SetStatusBarColor},
         {"SetOrientation",        lua_StatusBar_SetOrientation},
+        {"SetRotatesTexture",     lua_StatusBar_SetRotatesTexture},
+        {"GetRotatesTexture",     lua_StatusBar_GetRotatesTexture},
         {"GetOrientation",        lua_StatusBar_GetOrientation},
         {"GetStatusBarColor",     lua_StatusBar_GetStatusBarColor},
         {"IsAutoFocus",           lua_EditBox_IsAutoFocus},
@@ -9002,6 +9171,9 @@ void LuaEngine::registerCoreAPI() {
         {"SetValueStep",          lua_Slider_SetValueStep},
         {"GetValueStep",          lua_Slider_GetValueStep},
         {"SetThumbTexture",       lua_Slider_SetThumbTexture},
+        {"GetThumbTexture",       lua_Slider_GetThumbTexture},
+        {"SetHyperlinkFormat",    lua_SimpleHTML_SetHyperlinkFormat},
+        {"GetHyperlinkFormat",    lua_SimpleHTML_GetHyperlinkFormat},
         {"SetColorWheelTexture",      lua_ColorSelect_SetWheelTexture},
         {"SetColorWheelThumbTexture", lua_ColorSelect_SetWheelThumbTexture},
         {"SetColorValueTexture",      lua_ColorSelect_SetValueTexture},
@@ -9022,6 +9194,9 @@ void LuaEngine::registerCoreAPI() {
         {"GetCountInvisibleLetters", lua_EditBox_GetCountInvisibleLetters},
         {"GetHistoryLines",       lua_EditBox_GetHistoryLines},
         {"SetIgnoreArrows",       lua_EditBox_SetIgnoreArrows},
+        {"SetAltArrowKeyMode",    lua_EditBox_SetIgnoreArrows},
+        {"GetAltArrowKeyMode",    lua_EditBox_GetAltArrowKeyMode},
+        {"IsInIMECompositionMode", lua_EditBox_IsInIMECompositionMode},
         {"Insert",                lua_EditBox_Insert},
         {"SetMaxLetters",         lua_EditBox_SetMaxLetters},        // The limit here is applied against the text's size in bytes, which is
         // what SetMaxBytes asks for; SetMaxLetters is the same field because
@@ -9436,6 +9611,13 @@ void LuaEngine::registerCoreAPI() {
         "    end\n"
         "end\n"
         "mt.StopAnimating = __WoweeStopAnimating\n"
+
+        // Every group the region made, in the order it made them, as the
+        // region's list holds them (0x0049e260).
+        "function __WoweeGetAnimationGroups(self)\n"
+        "    if self.__animGroups then return unpack(self.__animGroups) end\n"
+        "end\n"
+        "mt.GetAnimationGroups = __WoweeGetAnimationGroups\n"
 
         // A texture animates itself as readily as a frame does, so this is a
         // plain function both get rather than a frame method. The achievement
@@ -10917,6 +11099,25 @@ void LuaEngine::registerCoreAPI() {
         // stat and requirement lines come worded from _GetItemTooltipData.
         // `inst`, when the tooltip is of one item held: its soulbound flag
         // and durability, which the template does not carry.
+        // A length the way 0x0061abf0 says it: the largest units first, two
+        // at most - days and hours, else hours and minutes, else minutes and
+        // seconds - each through its *_ABBR string, joined by
+        // TIME_UNIT_DELIMITER.
+        "function _WoweeCooldownText(ms)\n"
+        "    local parts, used = {}, 0\n"
+        "    local units = {{86400000, 'DAYS_ABBR', '%d Days'}, {3600000, 'HOURS_ABBR', '%d Hr'},\n"
+        "                   {60000, 'MINUTES_ABBR', '%d Min'}, {1000, 'SECONDS_ABBR', '%d Sec'}}\n"
+        "    for i, u in ipairs(units) do\n"
+        "        if used >= 2 then break end\n"
+        "        local n = math.floor(ms / u[1])\n"
+        "        if n > 0 or (i == 4 and used == 0 and ms > 0) then\n"
+        "            parts[#parts + 1] = format(_G[u[2]] or u[3], n)\n"
+        "            ms = ms - n * u[1]\n"
+        "            used = used + 1\n"
+        "        end\n"
+        "    end\n"
+        "    return table.concat(parts, TIME_UNIT_DELIMITER or ' ')\n"
+        "end\n"
         "function _WoweePopulateItemTooltip(self, itemId, inst)\n"
         "    local name, itemLink, quality, iLevel, reqLevel, class, subclass, maxStack, equipSlot, texture, sellPrice = GetItemInfo(itemId)\n"
         "    if not name then return false end\n"
@@ -10964,18 +11165,49 @@ void LuaEngine::registerCoreAPI() {
         "        self:AddLine(class, 1, 1, 1)\n"
         "    end\n"
         "    if data then\n"
-        "        if data.damageMin and data.damageMax and data.damageMin > 0 then\n"
+        // Each damage entry its own line (0x006277f0): the minimum down and
+        // the maximum up; ammunition by its average, an entry whose ends meet
+        // as one number, a school other than physical by name
+        // (SPELL_SCHOOL<n>_CAP), and every entry after the first with the
+        // PLUS_ form. A weapon's first line carries its speed, and its damage
+        // per second takes every entry.
+        "        if data.damages then\n"
+        "            local weapon, ammo = data.itemClass == 2, data.itemClass == 6\n"
         "            local speed = (data.speed or 0) / 1000\n"
-        "            if speed > 0 then\n"
-        "                self:AddDoubleLine(format(DAMAGE_TEMPLATE or '%d - %d Damage', data.damageMin, data.damageMax),\n"
-        "                                   format('%s %.2f', SPEED or 'Speed', speed), 1,1,1, 1,1,1)\n"
-        "                local dps = (data.damageMin + data.damageMax) / 2 / speed\n"
-        "                self:AddLine(format(DPS_TEMPLATE or '(%.1f damage per second)', dps), 1, 1, 1)\n"
+        "            local first, total = true, 0\n"
+        "            for _, d in ipairs(data.damages) do\n"
+        "                local lo, hi = math.floor(d.min), math.ceil(d.max)\n"
+        "                if lo ~= 0 or hi ~= 0 then\n"
+        "                    local plus = first and '' or 'PLUS_'\n"
+        "                    local line\n"
+        "                    if d.school == 0 then\n"
+        "                        if ammo then line = format(_G[plus..'AMMO_DAMAGE_TEMPLATE'] or '+%g damage per second', (lo + hi) / 2)\n"
+        "                        elseif lo == hi then line = format(_G[plus..'SINGLE_DAMAGE_TEMPLATE'] or '%d Damage', lo)\n"
+        "                        else line = format(_G[plus..'DAMAGE_TEMPLATE'] or '%d - %d Damage', lo, hi) end\n"
+        "                    else\n"
+        "                        local school = _G['SPELL_SCHOOL'..d.school..'_CAP'] or ''\n"
+        "                        if ammo then line = format(_G[plus..'AMMO_SCHOOL_DAMAGE_TEMPLATE'] or '+%g %s damage per second', (lo + hi) / 2, school)\n"
+        "                        elseif lo == hi then line = format(_G[plus..'SINGLE_DAMAGE_TEMPLATE_WITH_SCHOOL'] or '%d %s Damage', lo, school)\n"
+        "                        else line = format(_G[plus..'DAMAGE_TEMPLATE_WITH_SCHOOL'] or '%d - %d %s Damage', lo, hi, school) end\n"
+        "                    end\n"
+        "                    if first and weapon and speed > 0 then\n"
+        "                        self:AddDoubleLine(line, format('%s %.2f', SPEED or 'Speed', speed), 1,1,1, 1,1,1)\n"
+        "                    else\n"
+        "                        self:AddLine(line, 1, 1, 1)\n"
+        "                    end\n"
+        "                    total = total + (d.min + d.max) / 2\n"
+        "                    first = false\n"
+        "                end\n"
+        "            end\n"
+        "            if not first and weapon and speed > 0 then\n"
+        "                self:AddLine(format(DPS_TEMPLATE or '(%.1f damage per second)', total / speed), 1, 1, 1)\n"
         "            end\n"
         "        end\n"
         "        if data.armor and data.armor > 0 then\n"
         "            self:AddLine(format(ARMOR_TEMPLATE or '%d Armor', data.armor), 1, 1, 1)\n"
         "        end\n"
+        // A shield's block, under its armour.
+        "        if data.block then self:AddLine(format(SHIELD_BLOCK_TEMPLATE or '%d Block', data.block), 1, 1, 1) end\n"
         "        if data.statLines then\n"
         "            for _, st in ipairs(data.statLines) do\n"
         "                if not st.equip then self:AddLine(st.text, 1, 1, 1) end\n"
@@ -11110,15 +11342,67 @@ void LuaEngine::registerCoreAPI() {
         "                    local key = triggerKeys[sp.trigger]\n"
         "                    local label = key and _G[key]\n"
         "                    if label then text = label .. ' ' .. text end\n"
+        "                    if sp.cooldown then text = text .. ' ' .. format(ITEM_COOLDOWN_TOTAL or '(%s Cooldown)', _WoweeCooldownText(sp.cooldown)) end\n"
         "                    self:AddLine(text, 0, 1, 0, 1)\n"
+        "                    if sp.charges then\n"
+        "                        local n = sp.charges\n"
+        "                        if inst and sp.slot == 0 and inst.charges0 then n = inst.charges0 end\n"
+        "                        n = math.abs(n)\n"
+        "                        if n == 0 then self:AddLine(ITEM_SPELL_CHARGES_NONE or 'No charges', 1, 1, 1)\n"
+        "                        else self:AddLine(format(ITEM_SPELL_CHARGES or '%d Charges', n), 1, 1, 1) end\n"
+        "                    end\n"
         "                end\n"
         "            end\n"
         "        end\n"
+        // The set it belongs to (0x006277f0): a spacer, the set's name with
+        // the pieces worn out of how many there are, the skill it asks for,
+        // each piece - light yellow worn, grey not - another spacer, and the
+        // bonuses by threshold, green once reached, grey with the count first.
+        "        if data.itemSet then\n"
+        "            local set = data.itemSet\n"
+        "            self:AddLine(' ', 1, 0.82, 0, 1)\n"
+        "            self:AddLine(format(ITEM_SET_NAME or '%s (%d/%d)', set.name, set.count, set.total), 1, 0.82, 0)\n"
+        "            if set.skillName then\n"
+        "                local t\n"
+        "                if set.skillRank then t = format(ITEM_MIN_SKILL or 'Requires %s (%d)', set.skillName, set.skillRank)\n"
+        "                else t = format(ITEM_REQ_SKILL or 'Requires %s', set.skillName) end\n"
+        "                if set.skillOk then self:AddLine(t, 1, 1, 1) else self:AddLine(t, 1, 0.125, 0.125) end\n"
+        "            end\n"
+        "            for _, piece in ipairs(set.pieces or {}) do\n"
+        "                if piece.equipped then self:AddLine('  '..piece.name, 1, 1, 0.592)\n"
+        "                else self:AddLine('  '..piece.name, 0.5, 0.5, 0.5) end\n"
+        "            end\n"
+        "            self:AddLine(' ', 1, 0.82, 0, 1)\n"
+        "            for _, bonus in ipairs(set.bonuses or {}) do\n"
+        "                if bonus.active then self:AddLine(format(ITEM_SET_BONUS or 'Set: %s', bonus.text), 0, 1, 0, 1)\n"
+        "                else self:AddLine(format(ITEM_SET_BONUS_GRAY or '(%d) Set: %s', bonus.threshold, bonus.text), 0.5, 0.5, 0.5, 1) end\n"
+        "            end\n"
+        "        end\n"
         "        if data.description then self:AddLine('\"'..data.description..'\"', 1, 0.82, 0, 1) end\n"
+        // Who made it, under the flavour text (0x006277f0): ITEM_CREATED_BY,
+        // or ITEM_WRITTEN_BY for something written, in white.
+        "        if inst and inst.creator then\n"
+        "            local key = inst.written and 'ITEM_WRITTEN_BY' or 'ITEM_CREATED_BY'\n"
+        "            self:AddLine(format(_G[key] or (inst.written and '<Written by %s>' or '<Made by %s>'), inst.creator), 1, 1, 1)\n"
+        "        end\n"
+        // Then the one action line - open, read or socket it - in green, and
+        // while Disenchant waits for an item what disenchanting this takes.
+        "        if inst and inst.action and _G[inst.action] then self:AddLine(_G[inst.action], 0, 1, 0) end\n"
+        "        if data.disenchant then\n"
+        "            local d = data.disenchant\n"
+        "            if d.rank < 0 then self:AddLine(ITEM_DISENCHANT_NOT_DISENCHANTABLE or 'Cannot be disenchanted', 1, 0.125, 0.125)\n"
+        "            elseif d.rank == 0 then self:AddLine(ITEM_DISENCHANT_ANY_SKILL or 'Disenchantable', 0.533, 0.667, 1)\n"
+        "            else\n"
+        "                local t = format(ITEM_DISENCHANT_MIN_SKILL or 'Disenchanting requires %s (%d)', d.skill, d.rank)\n"
+        "                if d.met then self:AddLine(t, 0.533, 0.667, 1) else self:AddLine(t, 1, 0.125, 0.125) end\n"
+        "            end\n"
+        "        end\n"
         "        if data.startsQuest then self:AddLine(ITEM_STARTS_QUEST or 'This Item Begins a Quest', 1, 1, 1) end\n"
         "    end\n"
         "    if sellPrice and sellPrice > 0 then\n"
         "        self:AddLine(format('%s: ', SELL_PRICE or 'Sell Price')..GetCoinTextureString(sellPrice), 1, 1, 1)\n"
+        "    elseif inst and inst.unsellable then\n"
+        "        self:AddLine(ITEM_UNSELLABLE or 'No sell price', 1, 1, 1)\n"
         "    end\n"
         "    self.__itemId = itemId\n"
         "    return true\n"

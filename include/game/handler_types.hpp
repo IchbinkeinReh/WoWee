@@ -29,6 +29,8 @@ struct TalentEntry {
     uint32_t prereqTalent[3] = {};
     uint8_t prereqRank[3] = {};
     uint8_t maxRank = 0;
+    /// Talent.dbc Flags: 0x1 is GetTalentInfo's isExceptional (0x005c7800).
+    uint32_t flags = 0;
 };
 
 struct TalentTabEntry {
@@ -85,15 +87,29 @@ struct EquipmentSetInfo {
 
 // ---- Inspection ----
 
+/// One slot of MSG_INSPECT_ARENA_TEAMS (0x005e7b00 keeps them at 0x00c241c0,
+/// a slot apiece): the team's id and rating and season, then the inspected
+/// player's own games and rating on it. The name, size and banner are the
+/// team's query answer (SocialHandler::arenaTeamQuery).
 struct InspectArenaTeam {
-    uint32_t    teamId         = 0;
-    uint8_t     type           = 0;
-    uint32_t    weekGames      = 0;
-    uint32_t    weekWins       = 0;
-    uint32_t    seasonGames    = 0;
-    uint32_t    seasonWins     = 0;
+    uint32_t    teamId            = 0;
+    uint32_t    rating            = 0;
+    uint32_t    seasonGames       = 0;
+    uint32_t    seasonWins        = 0;
+    uint32_t    playerSeasonGames = 0;
+    uint32_t    personalRating    = 0;
+};
+
+/// SMSG_ARENA_TEAM_QUERY_RESPONSE: what the client caches for a team id
+/// (+0x04 name, +0x64 size, +0x68.. the banner).
+struct ArenaTeamQueryData {
     std::string name;
-    uint32_t    personalRating = 0;
+    uint32_t    size        = 0;
+    uint32_t    background  = 0;   ///< 0xAARRGGBB
+    uint32_t    emblem      = 0;
+    uint32_t    emblemColor = 0;
+    uint32_t    border      = 0;
+    uint32_t    borderColor = 0;
 };
 
 struct InspectResult {
@@ -108,7 +124,8 @@ struct InspectResult {
     uint8_t     activeTalentGroup = 0;
     std::array<uint32_t, 19> itemEntries{};
     std::array<uint16_t, 19> enchantIds{};
-    std::vector<InspectArenaTeam> arenaTeams;
+    /// By slot, a teamId of 0 for none sent.
+    std::array<InspectArenaTeam, 4> arenaTeams{};
     /// The inspected player's own talents, as talent id -> rank, one list per
     /// talent group - the same two lists SpellHandler keeps for the player.
     /// The inspect talent tab draws from these; without them it fell back to
@@ -310,6 +327,13 @@ struct PetitionInfo {
     bool isArena = false;
     std::vector<PetitionSignature> signatures;
     bool showUI = false;
+    /// SMSG_PETITION_QUERY_RESPONSE has answered for this charter. The client
+    /// raises PETITION_SHOW only once it has, and once every signer's name is
+    /// known (0x005cebf0, 0x005cec20).
+    bool queried = false;
+    /// Signers' names asked for and not yet answered, found or not: the
+    /// client counts down on every answer (0x005cebf0).
+    uint32_t namesPending = 0;
 };
 
 /// One dungeon of an LFG role check: its id, and the type packed into the top
@@ -548,6 +572,11 @@ struct LootRollEntry {
     uint8_t  itemQuality   = 0;
     uint32_t rollCountdownMs = 60000;
     uint8_t  voteMask      = 0xFF;
+    /// The stack rolled for (+0x28).
+    uint32_t itemCount     = 1;
+    /// Why need, greed and disenchant are not offered (+0x52..+0x54, set by
+    /// 0x006fa7a0 once the item is known): LOOT_ROLL_INELIGIBLE_REASON%d.
+    uint8_t  reasonNeed = 0, reasonGreed = 0, reasonDisenchant = 0;
     std::chrono::steady_clock::time_point rollStartedAt{};
     /// START_LOOT_ROLL has been raised for it (0x006fb2c0 counts these).
     bool started = false;

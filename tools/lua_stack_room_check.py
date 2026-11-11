@@ -97,7 +97,7 @@ def main():
                 # Only the loop's own body, so a push that merely follows the
                 # loop is not attributed to it.
                 inner, _ = bodyAt(body, brace)
-                if "lua_push" not in inner:
+                if "lua_push" not in inner and "luaPushOneOrNil" not in inner:
                     continue
                 line = text.count("\n", 0, start) + body.count("\n", 0, lm.start()) + 1
                 findings.append((path.name, line, name,

@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "rendering/minimap_zoom.hpp"
+#include "ui/simple_html.hpp"
 
 namespace wowee {
 namespace ui {
@@ -538,6 +539,9 @@ struct Widget {
     /// sorts by it. ARTWORK is WoW's default for a bar that does not say.
     DrawLayer barLayer = DrawLayer::Artwork;
     bool  barVertical = false;
+    /// SetRotatesTexture / rotatesTexture="true" (0x00961d70): the art is
+    /// turned a quarter, its top running down the bar's left.
+    bool  barRotatesTexture = false;
 
     /// Fraction filled, clamped. A zero or inverted range reads as empty rather
     /// than dividing by nothing.
@@ -558,6 +562,9 @@ struct Widget {
     /// headings, breaks and pictures, see simple_html.hpp - and anything else
     /// is drawn as it stands, which is what most letters and books are.
     bool  isSimpleHtml = false;
+    /// SetHyperlinkFormat / hyperlinkFormat="..." (0x0096c770): how an <A>
+    /// is written, href then text.
+    std::string htmlLinkFormat = kDefaultHyperlinkFormat;
     /// A scrolling message frame keeps its own lines rather than a single
     /// string: chat is a list that grows at one end and falls off the other,
     /// and the frame draws as many as fit from the bottom up.

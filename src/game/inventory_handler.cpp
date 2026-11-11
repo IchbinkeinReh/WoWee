@@ -1,4 +1,5 @@
 #include "game/inventory_handler.hpp"
+#include "game/stationery.hpp"
 #include "game/tutorials.hpp"
 #include "game/totem_bar.hpp"
 #include "game/spell_handler.hpp"
@@ -568,7 +569,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         uint32_t itemId   = packet.readUInt32();
         /*uint32_t randSuffix =*/ packet.readUInt32();
         (void)packet.readUInt32(); // random property
-        if (hasItemCount) (void)packet.readUInt32(); // items in stack
+        const uint32_t itemCount = hasItemCount ? packet.readUInt32() : 1;
         uint32_t countdown = packet.readUInt32();
         uint8_t  voteMask  = packet.readUInt8();
 
@@ -587,6 +588,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         roll.itemQuality = quality;
         roll.rollCountdownMs = countdown;
         roll.voteMask = voteMask;
+        roll.itemCount = itemCount;
         roll.rollStartedAt = std::chrono::steady_clock::now();
         // No line: the original opens the roll window and says nothing
         // (0x006fb2c0). "Loot roll started for ..." was this client's own.
@@ -598,6 +600,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         // 0x006fb1f0): an item not cached yet is asked for, the found answer
         // opens the frame, and one that found nothing drops the roll unseen.
         if (info && info->valid) {
+            assessLootRoll(roll, *info);
             openLootRollFrame(roll.rollId);
         } else {
             const int rollId = roll.rollId;
@@ -612,6 +615,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
                     if (const auto* got = owner_.getItemInfo(it->itemId)) {
                         it->itemName = got->name;
                         it->itemQuality = static_cast<uint8_t>(got->quality);
+                        assessLootRoll(*it, *got);
                     }
                     openLootRollFrame(rollId);
                     return;
@@ -1298,17 +1302,22 @@ void InventoryHandler::lootItem(uint8_t slotIndex, bool confirmed) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
 
     if (!confirmed) {
-        // Bind-on-pickup, and the warning neither interface gave. The slot the
-        // event carries is the one on screen, not the server's: uiparent.lua
-        // answers it with GetLootSlotInfo, which counts the coin as a slot of
-        // its own and the items after it.
+        // 0x00589140: a bind-on-pickup item better than common that is not
+        // party loot (template flag 0x800), in a slot that is not the
+        // player's own (4), is asked about - once one more of it can be
+        // owned; when it cannot, that is said and nothing is taken. The slot
+        // the event carries is the one on screen, not the server's:
+        // uiparent.lua answers it with GetLootSlotInfo, which counts the coin
+        // as a slot of its own and the items after it.
         const auto& loot = owner_.getCurrentLoot();
         int display = loot.hasCoinSlot() ? 1 : 0;
         for (const auto& item : loot.items) {
             ++display;
             if (item.slotIndex != slotIndex) continue;
             const auto* info = owner_.getItemInfo(item.itemId);
-            if (info && info->valid && info->bindType == 1) {
+            if (info && info->valid && info->bindType == 1 && info->quality > 1 &&
+                (info->itemFlags & 0x800u) == 0 && item.lootSlotType != 4) {
+                if (!canOwnMore(*info, item.count, true)) return;
                 pendingLootActive_ = true;
                 pendingLootSlot_ = slotIndex;
                 if (owner_.addonEventCallbackRef())
@@ -1597,6 +1606,21 @@ LootRollEntry* InventoryHandler::findLootRoll(uint64_t objectGuid, uint32_t slot
         if (roll.objectGuid == objectGuid && roll.slot == slot) return &roll;
     }
     return nullptr;
+}
+
+/// 0x006fa7a0: why a button the roll's mask leaves out is out - need (0x02)
+/// because one more cannot be owned (2) or the item refuses a need roll
+/// (Flags2 0x100: 5) or else the class (1); greed (0x04) 2; disenchant
+/// (0x08) because the item has a disenchanting skill (4) or none (3).
+void InventoryHandler::assessLootRoll(LootRollEntry& roll, const ItemQueryResponseData& item) {
+    constexpr uint8_t kNeed = 0x02, kGreed = 0x04, kDisenchant = 0x08;
+    constexpr uint32_t kNoNeedRoll = 0x100;
+    if (roll.voteMask & kNeed) roll.reasonNeed = 0;
+    else if (!canOwnMore(item, roll.itemCount, false)) roll.reasonNeed = 2;
+    else roll.reasonNeed = (item.itemFlags2 & kNoNeedRoll) ? 5 : 1;
+    roll.reasonGreed = (roll.voteMask & kGreed) ? 0 : 2;
+    if (roll.voteMask & kDisenchant) roll.reasonDisenchant = 0;
+    else roll.reasonDisenchant = item.requiredDisenchantSkill >= 0 ? 4 : 3;
 }
 
 /// Close one roll and take its window down with it.
@@ -2691,6 +2715,10 @@ void InventoryHandler::completeItemUseOnUnit(uint64_t targetUnitGuid) {
     if (isBandageItem(itemInfo)) synchronizeStationaryBandageCast(owner_);
     sendUseItem(pending.bag, pending.slot, pending.itemGuid, pending.spellId,
                 targetUnitGuid, 0);
+}
+
+uint32_t InventoryHandler::getPendingItemTargetSpellId() const {
+    return isAwaitingItemTarget() && pendingItemTarget_->fromSpell ? pendingItemTarget_->spellId : 0u;
 }
 
 bool InventoryHandler::isAwaitingItemTarget() const {
@@ -5043,15 +5071,76 @@ void InventoryHandler::auctionSellItemByGuid(uint64_t itemGuid, uint32_t stackCo
     owner_.getSocket()->send(packet);
 }
 
-void InventoryHandler::auctionPlaceBid(uint32_t auctionId, uint32_t amount) {
-    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || auctioneerGuid_ == 0) return;
-    auto packet = AuctionPlaceBidPacket::build(auctioneerGuid_, auctionId, amount);
-    owner_.getSocket()->send(packet);
+bool InventoryHandler::canOwnMore(const ItemQueryResponseData& item, uint32_t count, bool speak) {
+    const auto& inv = owner_.getInventory();
+    if (item.maxCount > 0) {
+        uint32_t owned = 0;
+        inv.forEachOwned([&](const ItemDef& d) {
+            if (d.itemId == item.entry) owned += d.stackCount > 0 ? d.stackCount : 1;
+        });
+        if (owned + count > static_cast<uint32_t>(item.maxCount)) {
+            if (speak) {
+                owner_.addUIError(uiText("ERR_ITEM_MAX_COUNT", "You can't carry any more of those items."));
+                owner_.playGameErrorSound("ERR_ITEM_MAX_COUNT");
+            }
+            return false;
+        }
+    }
+    if (item.itemLimitCategory == 0) return true;
+    const auto [name, quantity] = itemLimitCategory(owner_, item.itemLimitCategory);
+    uint32_t owned = 0;
+    inv.forEachOwned([&](const ItemDef& d) {
+        if (const auto* info = owner_.getItemInfo(d.itemId);
+            info && info->valid && info->itemLimitCategory == item.itemLimitCategory)
+            owned += d.stackCount > 0 ? d.stackCount : 1;
+    });
+    if (owned + count <= quantity) return true;
+    if (speak) {
+        owner_.addUIError(interfaceFormat("ERR_ITEM_MAX_LIMIT_CATEGORY_COUNT_EXCEEDED_IS", "You can only carry %d %s",
+                                          {std::to_string(quantity), name}));
+        owner_.playGameErrorSound("ERR_ITEM_MAX_LIMIT_CATEGORY_COUNT_EXCEEDED_IS");
+    }
+    return false;
 }
 
-void InventoryHandler::auctionBuyout(uint32_t auctionId, uint32_t buyoutPrice) {
+void InventoryHandler::auctionBid(const AuctionEntry& a, uint32_t bid) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || auctioneerGuid_ == 0) return;
-    auto packet = AuctionPlaceBidPacket::build(auctioneerGuid_, auctionId, buyoutPrice);
+    auto refuse = [&](const char* key, const char* enUS) {
+        owner_.addUIError(uiText(key, enUS));
+        owner_.playGameErrorSound(key);
+    };
+    // A bid past the buyout is the buyout - there is no other way to buy one
+    // out, the same request carries both.
+    if (a.buyoutPrice != 0 && a.buyoutPrice < bid) bid = a.buyoutPrice;
+    if (bid < a.startBid) {
+        refuse("ERR_AUCTION_MIN_BID", "Your bid is below the minimum bid.");
+        return;
+    }
+    if (bid <= a.currentBid) {
+        refuse("ERR_AUCTION_HIGHER_BID", "There is already a higher bid on that item.");
+        return;
+    }
+    const uint64_t nextBid = static_cast<uint64_t>(a.currentBid) + a.minBidIncrement;
+    if (a.currentBid != 0 && bid < nextBid && (a.buyoutPrice == 0 || bid < a.buyoutPrice)) {
+        refuse("ERR_AUCTION_BID_INCREMENT", "Your bid increment is too small.");
+        return;
+    }
+    // Two thousand million copper is as far as a bid goes, short of the next
+    // step up from the current one; past it nothing is said or sent.
+    constexpr uint32_t kMaxBid = 2000000000u;
+    if (bid > kMaxBid && bid > nextBid) return;
+    // Raising your own bid costs only the difference.
+    const uint64_t cost = a.bidderGuid == owner_.getPlayerGuid() ? bid - a.currentBid : bid;
+    if (cost > owner_.getMoneyCopper()) {
+        refuse("ERR_NOT_ENOUGH_MONEY", "You don't have enough money.");
+        return;
+    }
+    // The auction's stack must be ownable; a template not yet known asks
+    // nothing (0x0067ca30 answering none).
+    if (const auto* info = owner_.getItemInfo(a.itemEntry);
+        info && info->valid && !canOwnMore(*info, a.stackCount, true))
+        return;
+    auto packet = AuctionPlaceBidPacket::build(auctioneerGuid_, a.auctionId, bid);
     owner_.getSocket()->send(packet);
 }
 
@@ -6124,6 +6213,16 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
         owner_.itemInfoCacheRef()[data.entry] = data;
         rebuildOnlineInventory();
         maybeDetectVisibleItemLayout();
+        // The bar's buttons holding this item, re-read now that it has an
+        // icon and a name: ACTIONBAR_SLOT_CHANGED for each, as the item's
+        // arrival does in the client (0x007078e0 -> 0x005aa5c0, 0xb0).
+        if (owner_.addonEventCallbackRef()) {
+            const auto& bar = owner_.getActionBar();
+            for (size_t i = 0; i < bar.size(); ++i) {
+                if (bar[i].type == ActionBarSlot::ITEM && bar[i].id == data.entry)
+                    owner_.addonEventCallbackRef()("ACTIONBAR_SLOT_CHANGED", {std::to_string(i + 1)});
+            }
+        }
         // 0x006cd8c0: a quest reward line that was waiting on this item.
         owner_.questRewardItemArrived(data.entry);
         // 0x00593ca0: a trainer description that was waiting on this item.
@@ -6143,8 +6242,9 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
         // one that just arrived, rather than rebuilding on every reply.
         //
         // WoWee's own name, not the client's. This client has no such event:
-        // its tooltips are built from local DBC and never wait on a query, so
-        // there is no name here to borrow - and borrowing a later expansion's
+        // each of its waiting callers hands the item cache a callback of its
+        // own (the tooltip's is 0x00626650), so there is no name here to
+        // borrow - and borrowing a later expansion's
         // would hand a 4.x add-on a WotLK-shaped argument list under a name it
         // already has handlers for.
         if (owner_.addonEventCallbackRef()) {
@@ -6212,18 +6312,23 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
             }
         }
 
-        // Auction mail subjects contain an item entry rather than display text.
-        // Refresh FrameXML mail rows once that item's name becomes available.
-        bool resolvedAuctionSubject = false;
+        // Mail rows that were waiting on this item, told again
+        // (MAIL_INBOX_UPDATE): an auction subject names an item entry rather
+        // than display text, and GetInboxHeaderInfo's two icons come from the
+        // item cache - the one attachment's, and the stationery's item - with
+        // 0x0056d4b0 as the callback that refreshes the inbox when either lands.
+        bool mailWaited = false;
         for (const auto& mail : mailInbox_) {
             AuctionMailSubject auction;
-            if (mail.messageType == 2 && parseAuctionMailSubject(mail.subject, auction) &&
-                auction.itemEntry == data.entry) {
-                resolvedAuctionSubject = true;
+            if ((mail.messageType == 2 && parseAuctionMailSubject(mail.subject, auction) &&
+                 auction.itemEntry == data.entry) ||
+                (mail.attachments.size() == 1 && mail.attachments[0].itemId == data.entry) ||
+                stationeryItemId(mail.stationeryId) == data.entry) {
+                mailWaited = true;
                 break;
             }
         }
-        if (resolvedAuctionSubject && owner_.addonEventCallbackRef()) {
+        if (mailWaited && owner_.addonEventCallbackRef()) {
             owner_.addonEventCallbackRef()("MAIL_INBOX_UPDATE", {});
         }
 

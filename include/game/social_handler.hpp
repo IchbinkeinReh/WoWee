@@ -750,6 +750,11 @@ public:
 
     // Arena
     [[nodiscard]] const std::vector<ArenaTeamStats>& getArenaTeamStats() const { return arenaTeamStats_; }
+    /// A team's name, size and banner as the server answered a query for it
+    /// (0x00680170's cache); nullptr until then, the query sent once
+    /// (CMSG_ARENA_TEAM_QUERY) - the answer raises INSPECT_HONOR_UPDATE
+    /// (0x005e7640).
+    const ArenaTeamQueryData* arenaTeamQuery(uint32_t teamId);
     void requestArenaTeamRoster(uint32_t teamId);
     [[nodiscard]] const ArenaTeamRoster* getArenaTeamRoster(uint32_t teamId) const {
         for (const auto& r : arenaTeamRosters_)
@@ -813,6 +818,13 @@ private:
     void handleGuildEventLog(network::Packet& packet);
     void handlePetitionShowSignatures(network::Packet& packet);
     void handlePetitionSignResults(network::Packet& packet);
+    /// Ask for a signer the name cache has no name for; PETITION_SHOW waits
+    /// for the answer (petitionComplete).
+    void awaitPetitionSigner(uint64_t signer);
+    /// The charter's own query answered and no signer's name still asked
+    /// for: what the client waits for before PETITION_SHOW.
+    bool petitionComplete() const;
+    void showPetitionWhenComplete();
     void handleTurnInPetitionResults(network::Packet& packet);
     void handleBattlefieldStatus(network::Packet& packet);
     void handleBattlefieldList(network::Packet& packet);
@@ -1003,6 +1015,12 @@ private:
     std::vector<GuildEventLogEntry> guildEventLog_;
     /// Six item tabs and the money log after them.
     std::array<std::vector<GuildBankLogEntry>, 7> guildBankLogs_;
+    /// GUILDBANKLOG_UPDATE waits for every row's player name and item
+    /// (0x005a47d0 counts the answers down): the answers still owed for the
+    /// latest log, and which log that was, so a late answer to an older one
+    /// is not counted against it.
+    uint32_t guildBankLogPending_ = 0;
+    uint32_t guildBankLogGeneration_ = 0;
     uint32_t instanceDifficulty_ = 0;
     difficulty_change::RaidDifficulty raidDifficulty_;
     difficulty_change::DungeonDifficulty dungeonDifficulty_;
@@ -1016,6 +1034,10 @@ private:
 
     // Arena
     std::vector<ArenaTeamStats>  arenaTeamStats_;
+    std::unordered_map<uint32_t, ArenaTeamQueryData> arenaTeamQueries_;
+    /// Teams asked about for somebody else's arena teams, which are not the
+    /// player's own and stay out of arenaTeamStats_.
+    std::unordered_set<uint32_t> arenaTeamQueriesAsked_;
     std::vector<ArenaTeamRoster> arenaTeamRosters_;
     /// The column the arena rosters are sorted by, so clicking it again knows
     /// to reverse rather than re-sort the same way.
@@ -1050,6 +1072,11 @@ private:
     uint64_t battlemasterGuid_ = 0;
     std::vector<AvailableBgInfo> availableBgs_;
     BgScoreboardData bgScoreboard_;
+    /// UPDATE_BATTLEFIELD_SCORE waits for every row's name (0x0054ca30
+    /// counts the answers down): the answers still owed for the latest
+    /// scoreboard, and which one that was.
+    uint32_t bgScorePending_ = 0;
+    uint32_t bgScoreGeneration_ = 0;
     std::vector<BgPlayerPosition> bgPlayerPositions_;
     std::chrono::steady_clock::time_point lastBgPositionRequest_{};
     std::chrono::steady_clock::time_point lastContactListRequest_{};

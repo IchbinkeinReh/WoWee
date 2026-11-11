@@ -1377,10 +1377,16 @@ bool Application::initialize() {
             else cc->setBindingTurnRight(held);
         };
         luaSvc.getBarberStyleInfo = [uim = uiManager.get(), gh = gameHandler.get()](
-                int selector, std::string& name, bool& isCurrent) -> bool {
+                int selector, std::string& name, std::string& description, uint32_t& cost,
+                bool& isCurrent) -> bool {
             if (!uim || !gh) return false;
-            return uim->getGameScreen().windowManager()
-                      .barberStyleInfo(*gh, selector, name, isCurrent);
+            ui::WindowManager::BarberStyleInfo info;
+            if (!uim->getGameScreen().windowManager().barberStyleInfo(*gh, selector, info)) return false;
+            name = std::move(info.name);
+            description = std::move(info.description);
+            cost = info.cost;
+            isCurrent = info.isCurrent;
+            return true;
         };
         luaSvc.setNextBarberStyle = [uim = uiManager.get(), gh = gameHandler.get()](
                 int selector, int direction) {
@@ -1634,7 +1640,7 @@ bool Application::initialize() {
                 auto rangeMap    = std::make_shared<std::unordered_map<uint32_t, std::pair<float,float>>>();
                 auto spellCastIdx = std::make_shared<std::unordered_map<uint32_t, uint32_t>>(); // spellId→castTimeIdx
                 auto spellRangeIdx = std::make_shared<std::unordered_map<uint32_t, uint32_t>>(); // spellId→rangeIdx
-                struct SpellCostEntry { uint32_t manaCost = 0; uint8_t powerType = 0; };
+                struct SpellCostEntry { uint32_t manaCost = 0; uint8_t powerType = 0; uint32_t perSecond = 0; };
                 auto spellCostMap = std::make_shared<std::unordered_map<uint32_t, SpellCostEntry>>();
                 auto loaded = std::make_shared<bool>(false);
                 auto* am = assetManager.get();
@@ -1683,6 +1689,7 @@ bool Application::initialize() {
                                 try { ptF = (*spL)["PowerType"]; } catch (...) {}
                                 try { mcF = (*spL)["ManaCost"]; } catch (...) {}
                             }
+                            const uint32_t psF = spL ? spL->tryField("ManaPerSecond") : UINT32_MAX;
                             uint32_t fc = sDbc->getFieldCount();
                             for (uint32_t i = 0; i < sDbc->getRecordCount(); ++i) {
                                 uint32_t id = sDbc->getUInt32(i, idF);
@@ -1694,7 +1701,8 @@ bool Application::initialize() {
                                 // Extract power cost
                                 uint32_t mc = (mcF < fc) ? sDbc->getUInt32(i, mcF) : 0;
                                 uint8_t  pt = (ptF < fc) ? static_cast<uint8_t>(sDbc->getUInt32(i, ptF)) : 0;
-                                if (mc > 0) (*spellCostMap)[id] = {.manaCost = mc, .powerType = pt};
+                                const uint32_t ps = (psF < fc) ? sDbc->getUInt32(i, psF) : 0;
+                                if (mc > 0 || ps > 0) (*spellCostMap)[id] = {.manaCost = mc, .powerType = pt, .perSecond = ps};
                             }
                         }
                         LOG_INFO("SpellDataResolver: loaded ", spellCastIdx->size(), " cast indices, ",
@@ -1718,6 +1726,7 @@ bool Application::initialize() {
                     if (mcIt != spellCostMap->end()) {
                         info.manaCost = mcIt->second.manaCost;
                         info.powerType = mcIt->second.powerType;
+                        info.manaPerSecond = mcIt->second.perSecond;
                     }
                     return info;
                 });
@@ -3833,6 +3842,14 @@ void Application::processDeferredLogoutToLogin() {
 }
 
 void Application::fireInterfaceLeaving() {
+    // The camera's distance and pitch, kept for the next time the world is
+    // entered (0x005ff320 writes cameraSavedDistance and cameraSavedPitch).
+    if (renderer && renderer->getCameraController()) {
+        const auto* cam = renderer->getCameraController();
+        addons::setStoredCVar("cameraSavedDistance", std::to_string(cam->savedDistance()));
+        addons::setStoredCVar("cameraSavedPitch", std::to_string(-cam->savedPitch()));
+        addons::setStoredCVar("cameraSavedVehicleDistance", std::to_string(cam->savedVehicleDistance()));
+    }
     if (!addonManager_) return;
     {
         // A player still in combat is first told the fight is over

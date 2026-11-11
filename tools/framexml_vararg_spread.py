@@ -152,7 +152,7 @@ def main():
             continue                       # unbound is the other sweep's column
         if "return 0" not in body:
             continue
-        pushes = len(re.findall(r"lua_push", body))
+        pushes = len(re.findall(r"lua_push|luaPushOneOrNil", body))
         (quiet if pushes else loud).append((name, callee, where, pushes))
 
     print(f"{len(callees)} vararg callees, {len(sites)} bindings spread into one\n")

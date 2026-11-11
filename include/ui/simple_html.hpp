@@ -103,14 +103,46 @@ inline bool looksLikeSimpleHtml(const std::string& text) {
     return detail::htmlUpper(text.substr(i + 1, 4)) == "HTML";
 }
 
+/// The frame's hyperlink format as the client starts it (0x0096c8f4).
+inline constexpr const char* kDefaultHyperlinkFormat = "|H%s|h%s|h";
+
+/// A link written through the frame's format, href then text, the way
+/// 0x0096d306 prints it: each %s takes the next of the two, %% is a percent,
+/// and a %s past the second takes nothing.
+inline std::string formatHtmlLink(const std::string& format, const std::string& href,
+                                  const std::string& text) {
+    std::string out;
+    const std::string* args[] = {&href, &text};
+    size_t next = 0;
+    for (size_t i = 0; i < format.size(); ++i) {
+        if (format[i] == '%' && i + 1 < format.size()) {
+            if (format[i + 1] == 's') {
+                if (next < 2) out += *args[next++];
+                ++i;
+                continue;
+            }
+            if (format[i + 1] == '%') {
+                out += '%';
+                ++i;
+                continue;
+            }
+        }
+        out += format[i];
+    }
+    return out;
+}
+
 /// The blocks of a SimpleHTML document, in reading order.
-inline std::vector<HtmlBlock> parseSimpleHtml(const std::string& in) {
+inline std::vector<HtmlBlock> parseSimpleHtml(const std::string& in,
+                                              const std::string& linkFormat = kDefaultHyperlinkFormat) {
     std::vector<HtmlBlock> blocks;
     HtmlBlock cur;
     // Whether the last thing written into cur.text was a space, so runs of
     // whitespace collapse to one and none opens a line.
     bool lastSpace = true;
     std::string linkHref;
+    // Where the link's words begin in cur.text.
+    size_t linkStart = 0;
 
     auto flush = [&] {
         // A trailing space is where the source wrapped, not something to draw.
@@ -197,13 +229,19 @@ inline std::vector<HtmlBlock> parseSimpleHtml(const std::string& in) {
                 std::atof(detail::htmlAttr(body, "height").c_str()));
             if (!img.src.empty()) blocks.push_back(std::move(img));
         } else if (name == "A") {
-            // Written the way a label writes a link, so the draw that already
-            // files a clickable rect for |H...|h does the same here.
+            // Written through the frame's format - |H...|h by default, the way
+            // a label writes a link, so the draw that already files a
+            // clickable rect for one does the same here. A link with no words
+            // is left out, as the client leaves it.
             if (!closing) {
                 linkHref = detail::htmlAttr(body, "href");
-                if (!linkHref.empty()) cur.text += "|H" + linkHref + "|h";
+                linkStart = cur.text.size();
             } else if (!linkHref.empty()) {
-                cur.text += "|h";
+                if (linkStart <= cur.text.size()) {
+                    const std::string words = cur.text.substr(linkStart);
+                    cur.text.resize(linkStart);
+                    if (!words.empty()) cur.text += formatHtmlLink(linkFormat, linkHref, words);
+                }
                 linkHref.clear();
             }
         } else if ((name == "BODY" || name == "HTML") && closing) {

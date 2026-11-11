@@ -107,16 +107,16 @@ def _nil_positions(body):
     lines = [ln.strip() for ln in head.split("\n") if ln.strip()]
     block = []
     for ln in reversed(lines):
-        if "lua_push" in ln or ln.startswith("//") or ln.startswith("}"):
+        if "lua_push" in ln or "luaPushOneOrNil" in ln or ln.startswith("//") or ln.startswith("}"):
             block.append(ln)
             continue
         break
     block.reverse()
     positions, index = set(), 0
     for ln in block:
-        for call in re.finditer(r"lua_push(\w+)", ln):
+        for call in re.finditer(r"lua_push(\w+)|luaPush(OneOrNil)", ln):
             index += 1
-            if call.group(1) == "nil":
+            if (call.group(1) or call.group(2)) in ("nil", "OneOrNil"):
                 positions.add(index)
     return positions
 
@@ -144,7 +144,7 @@ def _answers_nil(body):
     lines = [ln.strip() for ln in head.split("\n") if ln.strip()]
     block = []
     for ln in reversed(lines):
-        if "lua_push" in ln or ln.startswith("//") or ln.startswith("}"):
+        if "lua_push" in ln or "luaPushOneOrNil" in ln or ln.startswith("//") or ln.startswith("}"):
             block.append(ln)
             continue
         break

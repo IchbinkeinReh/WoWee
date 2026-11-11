@@ -2053,8 +2053,9 @@ end
 /// roll with a blank icon and "Item #43102" where the name goes, which is what
 /// a need-or-greed on an unfamiliar drop looked like every time.
 ///
-/// WOWEE_ITEM_INFO_RECEIVED is WoWee's own name for exactly this (this client
-/// has no such event - its tooltips read local DBC and never wait on a query),
+/// WOWEE_ITEM_INFO_RECEIVED is WoWee's own name for exactly this (the client
+/// has no such event - it hands its item cache a callback per caller instead,
+/// as the tooltip does with 0x00626650),
 /// and OnShow is the interface's own fill: re-running it is a redraw, not a rewrite
 /// of what the window says. Only the windows that are up, and only while a roll
 /// is on screen - the query answers hundreds of times over a login and this is
@@ -2353,6 +2354,24 @@ inline constexpr const char* kTooltipItemDataRefreshLua = R"LUA(
 local watcher = CreateFrame("Frame")
 watcher:RegisterEvent("WOWEE_ITEM_INFO_RECEIVED")
 watcher:SetScript("OnEvent", function(self, event, a1)
+    -- A tooltip set from a link before its item was known: set it again now
+    -- (see lua_Tooltip_SetHyperlink). The chat link's ItemRefTooltip is the
+    -- one this is for - nothing else fills it in.
+    local arrivedId = tonumber(a1)
+    local waiting = __WoweeLinkTooltipsWaiting
+    if arrivedId and waiting then
+        -- Gathered first: setting the link again can put the tooltip back in
+        -- the table, and a key added during pairs() is undefined.
+        local due = {}
+        for tip, id in pairs(waiting) do
+            if id == arrivedId then due[#due + 1] = tip end
+        end
+        for _, tip in ipairs(due) do
+            waiting[tip] = nil
+            local link = rawget(tip, "__hyperlink")
+            if link and tip.IsShown and tip:IsShown() then tip:SetHyperlink(link) end
+        end
+    end
     if not GameTooltip or not GameTooltip.IsShown or not GameTooltip:IsShown() then
         return
     end
