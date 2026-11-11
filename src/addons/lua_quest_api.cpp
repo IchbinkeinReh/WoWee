@@ -5593,13 +5593,21 @@ void registerQuestLuaAPI(lua_State* L) {
             for (const auto& r : it->second.reagents) {
                 if (r.itemId == 0) continue;
                 if (++seen != n) continue;
-                gh->ensureItemInfo(r.itemId);
                 const auto* info = gh->getItemInfo(r.itemId);
-                lua_pushstring(L, info ? info->name.c_str() : "Reagent");
-                const std::string ricon =
-                    info ? gh->getItemIconPath(info->displayInfoId) : std::string();
-                lua_pushstring(L, ricon.empty()
-                    ? "Interface\\Icons\\INV_Misc_QuestionMark" : ricon.c_str());
+                if (!info || !info->valid) {
+                    // Not known yet: no name and no icon, and the item cache is
+                    // handed a callback that rebuilds the list - TRADE_SKILL_UPDATE
+                    // (0x005de400 -> 0x005de100 -> 0x005dd5a0). This answered the
+                    // English "Reagent" against a question mark, for good.
+                    askItemForEvent(gh, r.itemId, "TRADE_SKILL_UPDATE");
+                    lua_pushnil(L);
+                    lua_pushnil(L);
+                } else {
+                    lua_pushstring(L, info->name.c_str());
+                    const std::string ricon = gh->getItemIconPath(info->displayInfoId);
+                    lua_pushstring(L, ricon.empty()
+                        ? "Interface\\Icons\\INV_Misc_QuestionMark" : ricon.c_str());
+                }
                 lua_pushnumber(L, r.count);
                 lua_pushnumber(L, gh->countItemInBags(r.itemId));
                 return 4;
