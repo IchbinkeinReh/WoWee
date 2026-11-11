@@ -3418,6 +3418,33 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
     else if (kind == "achievement")
         filled = fillAchievementLinkTooltip(L, w, gh, link, colon);
 
+    // A tooltip whose item was not known yet waits for it, as the client's
+    // does (its item cache calls 0x00626650 back to fill it in): it goes in
+    // __WoweeLinkTooltipsWaiting, weak-keyed, by the item's id, and the
+    // watcher in kTooltipItemDataRefreshLua sets the link again when that
+    // item arrives. Nothing else would: the refresh below is an
+    // UpdateTooltip, which GameTooltip_OnUpdate asks of a tooltip's owner,
+    // and the tooltip a chat link opens (ItemRefTooltip) is owned by
+    // UIParent - so it stayed empty until something set it again.
+    if (kind == "item" && lua_istable(L, 1)) {
+        lua_getglobal(L, "__WoweeLinkTooltipsWaiting");
+        if (!lua_istable(L, -1)) {
+            lua_pop(L, 1);
+            lua_newtable(L);
+            lua_newtable(L);                       // its metatable: weak keys
+            lua_pushstring(L, "k");
+            lua_setfield(L, -2, "__mode");
+            lua_setmetatable(L, -2);
+            lua_pushvalue(L, -1);
+            lua_setglobal(L, "__WoweeLinkTooltipsWaiting");
+        }
+        lua_pushvalue(L, 1);
+        if (filled) lua_pushnil(L);
+        else lua_pushnumber(L, static_cast<lua_Number>(id));
+        lua_rawset(L, -3);
+        lua_pop(L, 1);
+    }
+
     // Kept whole, so the refresh below rebuilds the item that was linked
     // rather than the template behind it, and set even when nothing could be
     // filled in - that is the case the refresh exists for.

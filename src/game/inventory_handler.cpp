@@ -6242,8 +6242,9 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
         // one that just arrived, rather than rebuilding on every reply.
         //
         // WoWee's own name, not the client's. This client has no such event:
-        // its tooltips are built from local DBC and never wait on a query, so
-        // there is no name here to borrow - and borrowing a later expansion's
+        // each of its waiting callers hands the item cache a callback of its
+        // own (the tooltip's is 0x00626650), so there is no name here to
+        // borrow - and borrowing a later expansion's
         // would hand a 4.x add-on a WotLK-shaped argument list under a name it
         // already has handlers for.
         if (owner_.addonEventCallbackRef()) {
