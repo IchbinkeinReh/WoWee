@@ -3851,23 +3851,36 @@ static int lua_GetContainerItemLink(lua_State* L) {
 }
 
 // GetContainerNumFreeSlots(container) → numFreeSlots, bagType
+// GetContainerNumFreeSlots(container) (0x005d7590): the free slots and the
+// bag's family (its template's BagFamily) for the backpack (family 0), a
+// worn or banked bag, and the bank while a banker is open; one 0 for
+// anything else - no bag there, the bank shut, the keyring.
 static int lua_GetContainerNumFreeSlots(lua_State* L) {
     auto* gh = getGameHandler(L);
-    int container = static_cast<int>(luaL_checknumber(L, 1));
-    if (!gh) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); return 2; }
-
+    const int container = static_cast<int>(luaL_checknumber(L, 1));
+    if (!gh) return luaReturnZero(L);
     const auto& inv = gh->getInventory();
+    // The bag in a worn or bank bag slot, which a bag container must have.
+    const game::ItemSlot* bag = nullptr;
+    if (container >= 1 && container <= 4)
+        bag = &inv.getEquipSlot(static_cast<game::EquipSlot>(static_cast<int>(game::EquipSlot::BAG1) + container - 1));
+    else if (isBankBagContainer(container))
+        bag = &inv.getBankBagItem(container - kFirstBankBagContainer);
+    const bool answers = container == 0 || (container == kBankContainer && gh->isBankOpen()) ||
+                         (bag && !bag->empty());
+    if (!answers) return luaReturnZero(L);
     int freeSlots = 0;
-    int totalSlots = 0;
-
-    totalSlots = containerSlotCount(inv, container);
-    for (int i = 1; i <= totalSlots; ++i) {
+    const int total = containerSlotCount(inv, container);
+    for (int i = 1; i <= total; ++i) {
         const game::ItemSlot* sl = containerItemSlot(inv, container, i);
         if (sl && sl->empty()) ++freeSlots;
     }
-
+    uint32_t family = 0;
+    if (bag) {
+        if (const auto* info = gh->getItemInfo(bag->item.itemId)) family = info->bagFamily;
+    }
     lua_pushnumber(L, freeSlots);
-    lua_pushnumber(L, 0);  // bagType (0 = normal)
+    lua_pushnumber(L, family);
     return 2;
 }
 
