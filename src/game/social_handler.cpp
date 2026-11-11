@@ -3973,10 +3973,11 @@ void SocialHandler::showPetitionWhenComplete() {
 void SocialHandler::awaitPetitionSigner(uint64_t signer) {
     if (signer == 0 || !owner_.lookupName(signer).empty()) return;
     const uint64_t charter = petitionInfo_.petitionGuid;
-    ++petitionInfo_.namesPending;
+    petitionInfo_.namesPending += 1;
     owner_.askNameThen(signer, "petition signer", [this, charter](bool, const std::string&) {
         if (petitionInfo_.petitionGuid != charter || petitionInfo_.namesPending == 0) return;
-        if (--petitionInfo_.namesPending == 0) showPetitionWhenComplete();
+        petitionInfo_.namesPending -= 1;
+        if (petitionInfo_.namesPending == 0) showPetitionWhenComplete();
     });
 }
 
@@ -7265,13 +7266,39 @@ void SocialHandler::handleGuildBankLog(network::Packet& packet) {
         }
         if (!packet.hasRemaining(4)) break;
         e.secondsAgo = packet.readUInt32();
-        if (e.itemId) owner_.ensureItemInfo(e.itemId);
         log.push_back(e);
     }
     packet.skipAll();
     LOG_INFO("MSG_GUILD_BANK_LOG_QUERY reply: tab ", static_cast<int>(tab),
              ", ", log.size(), " entries");
-    if (owner_.addonEventCallbackRef()) {
+
+    // Every row's item and player are asked of their caches, and the log is
+    // announced once the last answer is in, found or not (0x005a4800 with
+    // 0x005a47d0 as the callback); at once when nothing was missing. A log
+    // announced before its names read as rows by nobody, and stayed so.
+    // A new log takes over from one still waiting.
+    const uint32_t generation = ++guildBankLogGeneration_;
+    guildBankLogPending_ = 0;
+    const auto answered = [this, generation]() {
+        if (generation != guildBankLogGeneration_ || guildBankLogPending_ == 0) return;
+        guildBankLogPending_ -= 1;
+        if (guildBankLogPending_ == 0 && owner_.addonEventCallbackRef())
+            owner_.addonEventCallbackRef()("GUILDBANKLOG_UPDATE", {});
+    };
+    for (size_t row = 0; row < log.size(); ++row) {
+        const auto& e = log[row];
+        const std::string key = "bank log " + std::to_string(generation) + ":" + std::to_string(row);
+        if (e.itemId && !(owner_.getItemInfo(e.itemId) && owner_.getItemInfo(e.itemId)->valid)) {
+            guildBankLogPending_ += 1;
+            owner_.askItemThen(e.itemId, key, [answered](bool) { answered(); });
+        }
+        if (e.playerGuid && owner_.lookupName(e.playerGuid).empty()) {
+            guildBankLogPending_ += 1;
+            owner_.askNameThen(e.playerGuid, key,
+                               [answered](bool, const std::string&) { answered(); });
+        }
+    }
+    if (guildBankLogPending_ == 0 && owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("GUILDBANKLOG_UPDATE", {});
     }
 }

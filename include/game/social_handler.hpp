@@ -1015,6 +1015,12 @@ private:
     std::vector<GuildEventLogEntry> guildEventLog_;
     /// Six item tabs and the money log after them.
     std::array<std::vector<GuildBankLogEntry>, 7> guildBankLogs_;
+    /// GUILDBANKLOG_UPDATE waits for every row's player name and item
+    /// (0x005a47d0 counts the answers down): the answers still owed for the
+    /// latest log, and which log that was, so a late answer to an older one
+    /// is not counted against it.
+    uint32_t guildBankLogPending_ = 0;
+    uint32_t guildBankLogGeneration_ = 0;
     uint32_t instanceDifficulty_ = 0;
     difficulty_change::RaidDifficulty raidDifficulty_;
     difficulty_change::DungeonDifficulty dungeonDifficulty_;
