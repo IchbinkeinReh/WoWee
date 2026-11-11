@@ -1376,12 +1376,69 @@ static int lua_UnitRace(lua_State* L) {
     return 3;
 }
 
+namespace {
+/// Vehicle.dbc's Flags and PowerDisplayID[3] (fields 1 and 37-39), by id.
+struct VehiclePowerRow { uint32_t flags = 0; std::array<uint32_t, 3> powerDisplay{}; };
+const VehiclePowerRow* vehiclePowerRow(game::GameHandler* gh, uint32_t vehicleId) {
+    static std::unordered_map<uint32_t, VehiclePowerRow> rows;
+    static bool loaded = false;
+    if (!loaded) {
+        auto* am = gh ? gh->services().assetManager : nullptr;
+        if (!am || !am->isInitialized()) return nullptr;
+        loaded = true;
+        if (auto dbc = am->loadDBCOptional("Vehicle.dbc"); dbc && dbc->isLoaded() && dbc->getFieldCount() >= 40)
+            for (uint32_t r = 0; r < dbc->getRecordCount(); ++r)
+                rows[dbc->getUInt32(r, 0)] = {dbc->getUInt32(r, 1),
+                                              {dbc->getUInt32(r, 37), dbc->getUInt32(r, 38), dbc->getUInt32(r, 39)}};
+    }
+    const auto it = rows.find(vehicleId);
+    return it != rows.end() ? &it->second : nullptr;
+}
+/// A PowerDisplay.dbc row: ActualType, GlobalStringBaseTag and its colour,
+/// three bytes after the strings (0x0065c290's record +4, +8, +0xc..+0xe).
+struct PowerDisplayRow { uint32_t actualType = 0; std::string token; uint8_t rgb[3] = {}; };
+std::optional<PowerDisplayRow> powerDisplayRow(game::GameHandler* gh, uint32_t id) {
+    auto* am = gh ? gh->services().assetManager : nullptr;
+    auto dbc = am && am->isInitialized() ? am->loadDBCOptional("PowerDisplay.dbc") : nullptr;
+    if (!dbc || !dbc->isLoaded() || dbc->getRecordSize() < 15) return std::nullopt;
+    const int32_t row = dbc->findRecordById(id);
+    if (row < 0) return std::nullopt;
+    PowerDisplayRow out;
+    out.actualType = dbc->getUInt32(static_cast<uint32_t>(row), 1);
+    out.token = dbc->getString(static_cast<uint32_t>(row), 2);
+    const uint8_t* rec = dbc->getRecord(static_cast<uint32_t>(row));
+    for (int i = 0; i < 3; ++i) out.rgb[i] = rec[12 + i];
+    return out;
+}
+}  // namespace
+
+// UnitPowerType(unit[, index]) (0x0060f100): the power type and its token.
+// A visible unit in a vehicle whose row has flag 0x100000 shows its power the
+// vehicle's way - the index-th of the row's PowerDisplay ids, when that
+// display is of the unit's own type - and then answers five: type, the
+// display's token and its colour. A unit known nowhere is 0 and "".
 static int lua_UnitPowerType(lua_State* L) {
     const char* uid = luaL_optstring(L, 1, "player");
     auto* unit = resolveUnit(L, uid);
+    const int index = lua_isnumber(L, 2) ? static_cast<int>(lua_tonumber(L, 2)) - 1 : 0;
 
     if (unit) {
         uint8_t pt = unit->getPowerType();
+        auto* gh = getGameHandler(L);
+        std::string uidStr(uid);
+        toLowerInPlace(uidStr);
+        const uint64_t guid = gh ? resolveUnitGuid(gh, uidStr) : 0;
+        constexpr uint32_t kVehiclePowerDisplay = 0x100000;
+        if (const auto* veh = guid ? vehiclePowerRow(gh, gh->vehicleRoster().vehicleId(guid)) : nullptr;
+            veh && (veh->flags & kVehiclePowerDisplay) && index >= 0 && index < 3) {
+            if (const auto shown = powerDisplayRow(gh, veh->powerDisplay[static_cast<size_t>(index)]);
+                shown && shown->actualType == pt) {
+                lua_pushnumber(L, shown->actualType);
+                lua_pushstring(L, shown->token.c_str());
+                for (uint8_t c : shown->rgb) lua_pushnumber(L, c / 255.0);
+                return 5;
+            }
+        }
         lua_pushnumber(L, pt);
         lua_pushstring(L, (pt < 7) ? kLuaPowerNames[pt] : "MANA");
         return 2;
@@ -1399,7 +1456,7 @@ static int lua_UnitPowerType(lua_State* L) {
         return 2;
     }
     lua_pushnumber(L, 0);
-    lua_pushstring(L, "MANA");
+    lua_pushstring(L, "");
     return 2;
 }
 
