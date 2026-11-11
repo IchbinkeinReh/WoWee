@@ -1314,7 +1314,12 @@ static int lua_GetSpellInfo(lua_State* L) {
     lua_pushnumber(L, funnel ? perSecond : spellData.manaCost / divisor);  // 4: cost
     lua_pushboolean(L, funnel ? 1 : 0);                      // 5: isFunnel
     lua_pushnumber(L, powerType);                            // 6: powerType
-    lua_pushnumber(L, spellData.castTimeMs);                 // 7: castTime (ms)
+    // 7: castTime (ms), 0 for a passive spell (Attributes 0x40).
+    constexpr uint32_t kAttrPassive = 0x40;
+    const auto& spells = gh->spellNameCacheRef();
+    const auto row = spells.find(spellId);
+    const bool passive = row != spells.end() && (row->second.attr & kAttrPassive);
+    lua_pushnumber(L, passive ? 0 : spellData.castTimeMs);
     lua_pushnumber(L, spellData.minRange);                   // 8: minRange (yards)
     lua_pushnumber(L, spellData.maxRange);                   // 9: maxRange (yards)
     return 9;
