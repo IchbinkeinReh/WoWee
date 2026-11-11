@@ -6209,6 +6209,16 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
         owner_.itemInfoCacheRef()[data.entry] = data;
         rebuildOnlineInventory();
         maybeDetectVisibleItemLayout();
+        // The bar's buttons holding this item, re-read now that it has an
+        // icon and a name: ACTIONBAR_SLOT_CHANGED for each, as the item's
+        // arrival does in the client (0x007078e0 -> 0x005aa5c0, 0xb0).
+        if (owner_.addonEventCallbackRef()) {
+            const auto& bar = owner_.getActionBar();
+            for (size_t i = 0; i < bar.size(); ++i) {
+                if (bar[i].type == ActionBarSlot::ITEM && bar[i].id == data.entry)
+                    owner_.addonEventCallbackRef()("ACTIONBAR_SLOT_CHANGED", {std::to_string(i + 1)});
+            }
+        }
         // 0x006cd8c0: a quest reward line that was waiting on this item.
         owner_.questRewardItemArrived(data.entry);
         // 0x00593ca0: a trainer description that was waiting on this item.
