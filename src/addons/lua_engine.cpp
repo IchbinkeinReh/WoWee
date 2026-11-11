@@ -11208,6 +11208,9 @@ void LuaEngine::registerCoreAPI() {
         "        end\n"
         // A shield's block, under its armour.
         "        if data.block then self:AddLine(format(SHIELD_BLOCK_TEMPLATE or '%d Block', data.block), 1, 1, 1) end\n"
+        "        if data.feralAttackPower then\n"
+        "            self:AddLine(format(FERAL_DRUID_ITEM_AP or 'Increases attack power by %d in Cat, Bear, Dire Bear, and Moonkin forms only.', data.feralAttackPower), 0, 1, 0, 1)\n"
+        "        end\n"
         "        if data.statLines then\n"
         "            for _, st in ipairs(data.statLines) do\n"
         "                if not st.equip then self:AddLine(st.text, 1, 1, 1) end\n"

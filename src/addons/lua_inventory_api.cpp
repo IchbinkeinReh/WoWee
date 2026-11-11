@@ -3531,6 +3531,26 @@ static int lua_GetItemTooltipData(lua_State* L) {
         lua_pushnumber(L, info->block);
         lua_setfield(L, -2, "block");
     }
+    // A druid sees what a weapon is worth in a feral form (0x0061a8f0): for
+    // a one-hand, two-hand, main or off hand weapon (inventory types whose
+    // mask at 0x00a2d288 has 0x8000) of more than 54.81 damage per second,
+    // (DPS - 54.81) x 14, rounded - FERAL_DRUID_ITEM_AP.
+    constexpr uint8_t kClassDruid = 11;
+    if (gh->getPlayerClass() == kClassDruid && info->itemClass == 2 && info->delayMs > 0) {
+        const uint32_t inv = info->inventoryType;
+        if (inv == 13 || inv == 17 || inv == 21 || inv == 22) {
+            float total = 0.0f;
+            for (const auto& d : info->damages) total += (d.min + d.max) * 0.5f;
+            const float dps = total / (static_cast<float>(info->delayMs) * 0.001f);
+            if (dps > 54.81f) {
+                const int ap = static_cast<int>(std::floor((dps - 54.81f) * 14.0f + 0.5f));
+                if (ap > 0) {
+                    lua_pushnumber(L, ap);
+                    lua_setfield(L, -2, "feralAttackPower");
+                }
+            }
+        }
+    }
     // Primary stats
     if (info->stamina != 0) { lua_pushnumber(L, info->stamina); lua_setfield(L, -2, "stamina"); }
     if (info->strength != 0) { lua_pushnumber(L, info->strength); lua_setfield(L, -2, "strength"); }
