@@ -218,6 +218,13 @@ struct M2ModelGPU {
         uint32_t mesh = ~0u;
     };
     std::vector<RtPiece> rtPieces;
+    /// A skinned model - cloth, a banner, whose vertices hang on more than
+    /// one bone - traced as drawn instead: its mesh in the bind pose and
+    /// each vertex's bones, skinned afresh every frame it casts
+    /// (M2Renderer::syncRtSkinned). Cut into rigid pieces, a banner's pieces
+    /// stood out of the cloth as it waved and shadowed it from the lamps.
+    struct RtSkin;  // m2_renderer.cpp
+    std::shared_ptr<const RtSkin> rtSkin;
     bool isSpellEffect = false;  // True for spell effect models (skip particle dampeners)
     bool disableAnimation = false; // Keep foliage/tree doodads visually stable
     bool shadowWindFoliage = false; // Cast shadows in the alpha-tested foliage pass (leaf cutouts)
@@ -1292,6 +1299,17 @@ private:
     std::vector<uint32_t> rtDynamicOwnerIds_;
     // Pieces of animated models placed by the last sync.
     uint32_t rtAnimatedPieces_ = 0;
+    /// The skinned models' meshes and instances this frame, by M2 instance id
+    /// (syncRtSkinned): made for this frame's pose, the last frame's let go.
+    struct RtSkinned {
+        uint32_t mesh = ~0u;
+        uint32_t instance = ~0u;
+        uint64_t frame = 0;
+    };
+    std::unordered_map<uint32_t, RtSkinned> rtSkinned_;
+    uint64_t rtSkinFrame_ = 0;
+    void syncRtSkinned();
+    void releaseRtSkinned();
     void registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& model);
     void releaseRtModel(M2ModelGPU& gpuModel);
 

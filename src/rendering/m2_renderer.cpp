@@ -2006,6 +2006,11 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
 namespace wowee {
 namespace rendering {
 
+struct M2ModelGPU::RtSkin {
+    RtScene::MeshSource bind;
+    std::vector<std::array<uint8_t, 4>> boneIdx, boneWgt;  // per position, as the vertices have them
+};
+
 // Where the traced lighting takes a point of `model` carried by `bone`
 // (rt_lights::steadyBoneCarried): by this frame's pose, but not turned with
 // the camera by a billboard bone above it.
@@ -2274,6 +2279,26 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
             boneWgt[i][k] = model.vertices[i].boneWeights[k];
         }
     }
+    // Skinned - a vertex the casting triangles use hangs on more than one
+    // bone: a banner, a flag, cloth - and small enough to skin every frame:
+    // traced as drawn, per vertex (syncRtSkinned), not cut into rigid pieces.
+    {
+        constexpr size_t kMaxSkinnedTriangles = 4000;
+        bool blended = false;
+        for (uint32_t v : src.indices) {
+            int bones = 0;
+            for (int k = 0; k < 4; ++k) bones += boneWgt[v][k] != 0 ? 1 : 0;
+            if (bones > 1) { blended = true; break; }
+        }
+        if (blended && src.indices.size() / 3 <= kMaxSkinnedTriangles) {
+            auto skin = std::make_shared<M2ModelGPU::RtSkin>();
+            skin->bind = std::move(src);
+            skin->boneIdx = std::move(boneIdx);
+            skin->boneWgt = std::move(boneWgt);
+            gpuModel.rtSkin = std::move(skin);
+            return;
+        }
+    }
     std::vector<int16_t> parents(model.bones.size());
     for (size_t b = 0; b < model.bones.size(); ++b) parents[b] = model.bones[b].parentBone;
     constexpr uint32_t kMinPieceTriangles = 16;
@@ -2309,6 +2334,7 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
 void M2Renderer::onRtActive(bool on) {
     if (!rtScene_ || !vkCtx_) return;
     if (!on) {
+        releaseRtSkinned();
         for (auto& [id, gm] : models) releaseRtModel(gm);
         for (RtTracking* tr : {&rtStatic_, &rtDynamic_}) {
             const uint32_t bit = tr == &rtDynamic_ ? RtScene::kDynamicBit : 0u;
@@ -2330,7 +2356,7 @@ void M2Renderer::onRtActive(bool on) {
     std::vector<M2ModelGPU*> todo;
     for (auto& [id, gm] : models) {
         if (!gm.vertexBuffer || !gm.indexBuffer || gm.vertexCount == 0 || gm.indexCount == 0) continue;
-        if (gm.rtMesh != RtScene::kInvalid || !gm.rtPieces.empty()) continue;
+        if (gm.rtMesh != RtScene::kInvalid || !gm.rtPieces.empty() || gm.rtSkin) continue;
         todo.push_back(&gm);
     }
     constexpr VkDeviceSize kVertexBytes = 18 * sizeof(float);  // loadModel's interleaved vertex
@@ -2394,6 +2420,7 @@ void M2Renderer::onRtActive(bool on) {
 }
 
 void M2Renderer::releaseRtModel(M2ModelGPU& gpuModel) {
+    gpuModel.rtSkin.reset();
     if (!rtScene_ || (gpuModel.rtMesh == RtScene::kInvalid && gpuModel.rtPieces.empty())) return;
     // Instances of it are normally gone already; any left are dropped here,
     // and the M2Instance that still names one re-registers on the next sync
@@ -2574,6 +2601,8 @@ void M2Renderer::syncRtScene() {
         rtAnimatedPieces_ += static_cast<uint32_t>(model->rtPieces.size());
     }
 
+    syncRtSkinned();
+
     if (rtSyncCursor_ < instances.size()) return;  // the pass goes on next frame
     rtSyncCursor_ = 0;
     rtLitInstances_.swap(rtLitNext_);
@@ -2601,6 +2630,92 @@ void M2Renderer::syncRtScene() {
             }
         }
     }
+}
+
+// The skinned models near the camera (M2ModelGPU::rtSkin): each traced in
+// this frame's pose, every vertex by its bones as m2.vert draws it, in a mesh
+// made for this frame and built before this frame's trace (RtScene::addMesh,
+// urgent). The last frame's mesh and instance go as this frame's come, so no
+// pose but this frame's is ever in the scene: cut into rigid pieces, a
+// banner's pieces stood out of the waving cloth and shadowed it from the deck
+// lanterns in hard bands that came and went (the Thundercaller at Tirisfal).
+void M2Renderer::syncRtSkinned() {
+    ++rtSkinFrame_;
+    constexpr float kSkinCastRadius = 60.0f;  // as the rigid pieces'
+    constexpr size_t kSkinTrianglesPerFrame = 40000;
+    size_t triangles = 0;
+    const bool cachedModelsValid = !spatialIndexDirty_;
+    for (size_t idx : animatedInstanceIndices_) {
+        if (idx >= instances.size()) continue;
+        M2Instance& inst = instances[idx];
+        const M2ModelGPU* model = cachedModelsValid ? inst.cachedModel : nullptr;
+        if (!cachedModelsValid) {
+            if (auto it = models.find(inst.modelId); it != models.end()) model = &it->second;
+        }
+        if (!model || !model->rtSkin) continue;
+        const auto& skin = *model->rtSkin;
+        const glm::vec3 d = inst.position - cachedCamPos_;
+        const size_t tris = skin.bind.indices.size() / 3;
+        if (inst.fade < 1.0f || inst.rtMoved || inst.boneMatrices.empty() ||
+            glm::dot(d, d) >= kSkinCastRadius * kSkinCastRadius || triangles + tris > kSkinTrianglesPerFrame) {
+            continue;  // let go below
+        }
+        RtScene::MeshSource src = skin.bind;
+        const size_t boneCount = inst.boneMatrices.size();
+        for (size_t v = 0; v < src.positions.size() && v < skin.boneIdx.size(); ++v) {
+            glm::mat4 m(0.0f);
+            float total = 0.0f;
+            for (int k = 0; k < 4; ++k) {
+                const float w = static_cast<float>(skin.boneWgt[v][k]) / 255.0f;
+                if (w <= 0.0f) continue;
+                const size_t b = std::min<size_t>(skin.boneIdx[v][k], boneCount - 1);
+                m += inst.boneMatrices[b] * w;
+                total += w;
+            }
+            if (total <= 0.0f) continue;
+            src.positions[v] = glm::vec3(m * glm::vec4(src.positions[v], 1.0f));
+            if (v < src.normals.size()) {
+                const glm::vec3 n = glm::mat3(m) * src.normals[v];
+                const float len = glm::length(n);
+                if (len > 1e-6f) src.normals[v] = n / len;
+            }
+        }
+        const uint32_t mesh = rtScene_->addMesh(std::move(src), /*urgent=*/true);
+        if (mesh == RtScene::kInvalid) continue;
+        const uint32_t instance = rtScene_->addDynamicInstance(mesh, inst.modelMatrix);
+        if (instance == RtScene::kInvalid) {
+            rtScene_->removeMesh(mesh);
+            continue;
+        }
+        triangles += tris;
+        RtSkinned& entry = rtSkinned_[inst.id];
+        // The last frame's pose goes as this frame's comes.
+        if (entry.instance != RtScene::kInvalid) rtScene_->removeInstance(entry.instance);
+        if (entry.mesh != RtScene::kInvalid) rtScene_->removeMesh(entry.mesh);
+        entry.mesh = mesh;
+        entry.instance = instance;
+        entry.frame = rtSkinFrame_;
+    }
+    // Not skinned this frame - out of reach, faded, gone: not in the scene.
+    for (auto it = rtSkinned_.begin(); it != rtSkinned_.end();) {
+        if (it->second.frame == rtSkinFrame_) {
+            ++it;
+            continue;
+        }
+        if (it->second.instance != RtScene::kInvalid) rtScene_->removeInstance(it->second.instance);
+        if (it->second.mesh != RtScene::kInvalid) rtScene_->removeMesh(it->second.mesh);
+        it = rtSkinned_.erase(it);
+    }
+}
+
+void M2Renderer::releaseRtSkinned() {
+    if (rtScene_) {
+        for (auto& [id, e] : rtSkinned_) {
+            if (e.instance != RtScene::kInvalid) rtScene_->removeInstance(e.instance);
+            if (e.mesh != RtScene::kInvalid) rtScene_->removeMesh(e.mesh);
+        }
+    }
+    rtSkinned_.clear();
 }
 
 namespace {

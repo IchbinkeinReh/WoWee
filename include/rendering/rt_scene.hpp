@@ -179,8 +179,10 @@ public:
     [[nodiscard]] uint64_t terrainRecordBytes() const { return terrainRecords_.bytes(); }
     [[nodiscard]] uint32_t detailCount() const { return details_.live(); }
     [[nodiscard]] uint32_t terrainRecordCount() const { return terrainRecords_.live(); }
-    /// Returns kInvalid for a mesh with no usable triangle.
-    MeshId addMesh(MeshSource source);
+    /// Returns kInvalid for a mesh with no usable triangle. `urgent` puts it
+    /// first in the queue, so this frame's update() builds it: a mesh made
+    /// for this frame's pose (M2Renderer's skinned cloth), traced this frame.
+    MeshId addMesh(MeshSource source, bool urgent = false);
     void removeMesh(MeshId mesh);
 
     InstanceId addInstance(MeshId mesh, const glm::mat4& objectToWorld);
