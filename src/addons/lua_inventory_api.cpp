@@ -324,7 +324,7 @@ static int lua_GetBuybackItemInfo(lua_State* L) {
         lua_pushnumber(L, 0);
         lua_pushnumber(L, 1);
         lua_pushnumber(L, 0);
-        lua_pushboolean(L, 1);
+        luaPushOneOrNil(L, 1);
         return 6;
     }
     const auto& bi = *row;
@@ -349,7 +349,7 @@ static int lua_GetBuybackItemInfo(lua_State* L) {
     lua_pushnumber(L, 0);
     // isUsable, as for a merchant's own items (0x00585070 asks 0x006dc3f0).
     const auto* binfo = gh->getItemInfo(bi.item.itemId);
-    lua_pushboolean(L, !binfo || gh->judgeItemRequirements(*binfo).usable());
+    luaPushOneOrNil(L, !binfo || gh->judgeItemRequirements(*binfo).usable());
     return 6;
 }
 
@@ -1731,6 +1731,20 @@ uint32_t currencyListItemId(lua_State* L, int index) {
     return rows[static_cast<size_t>(index) - 1].itemId;
 }
 
+uint32_t backpackCurrencyItemId(lua_State* L, int index) {
+    auto* gh = getGameHandler(L);
+    if (!gh || index < 1) return 0;
+    uint32_t knownLow = 0, knownHigh = 0;
+    const bool named = knownCurrencyPair(gh, knownLow, knownHigh);
+    const game::CurrencyWatch& watch = currencyWatched();
+    for (int seen = 0; const auto& c : gh->getCurrencyTypes()) {
+        if (named && !game::currencyIsKnown(knownLow, knownHigh, c.id)) continue;
+        if (!watch.has(c.id)) continue;
+        if (++seen == index) return c.itemId;
+    }
+    return 0;
+}
+
 static int lua_GetItemCount(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnZero(L); }
@@ -1834,7 +1848,7 @@ static int lua_GetInboxItem(lua_State* L) {
     lua_pushstring(L, info ? gh->getItemIconPath(info->displayInfoId).c_str() : "");
     lua_pushnumber(L, att->stackCount);
     lua_pushnumber(L, info ? info->quality : 1);
-    lua_pushboolean(L, 1);
+    luaPushOneOrNil(L, 1);
     return 5;
 }
 
@@ -5492,19 +5506,12 @@ void registerInventoryLuaAPI(lua_State* L) {
                 for (int i = 0; i < 5; ++i) lua_pushnil(L);
                 return 5;
             };
-            if (!gh || asked < 1) return answerNil(L);
-
-            uint32_t knownLow = 0, knownHigh = 0;
-            const bool named = knownCurrencyPair(gh, knownLow, knownHigh);
-            const game::CurrencyWatch& watch = currencyWatched();
-            for (int seen = 0; const auto& c : gh->getCurrencyTypes()) {
-                if (named && !game::currencyIsKnown(knownLow, knownHigh, c.id)) continue;
-                if (!watch.has(c.id)) continue;
-                if (++seen != asked) continue;
-
-                const auto* info = gh->getItemInfo(c.itemId);
+            const uint32_t itemId = backpackCurrencyItemId(L, asked);
+            if (!gh || itemId == 0) return answerNil(L);
+            {
+                const auto* info = gh->getItemInfo(itemId);
                 if (!info) return answerNil(L);
-                const auto [shown, extraType] = currencyAmount(gh, c.itemId);
+                const auto [shown, extraType] = currencyAmount(gh, itemId);
                 // The name is not gated on whether the character is holding the
                 // item. The client asks for the item's handle and then tests the
                 // dword at handle +0x1f4, which is the first slot of that item's
@@ -5523,10 +5530,9 @@ void registerInventoryLuaAPI(lua_State* L) {
                     ? gh->getItemIconPath(info->displayInfoId) : std::string();
                 if (icon.empty()) lua_pushstring(L, "Interface\\Icons\\INV_Misc_QuestionMark");
                 else              lua_pushstring(L, icon.c_str());   // 4: icon
-                lua_pushnumber(L, c.itemId);           // 5: itemID
+                lua_pushnumber(L, itemId);             // 5: itemID
                 return 5;
             }
-            return answerNil(L);
         }},
                 // The three that change how the list is displayed.
                 //
@@ -6011,7 +6017,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             lua_pushnumber(L, it.stackCount);
             // Locked while its item is on the cursor (0x005137d0).
             const auto& held = guildBankCursorSlot();
-            lua_pushboolean(L, (held.tab == tab && held.slot == slot) ? 1 : 0);
+            luaPushOneOrNil(L, (held.tab == tab && held.slot == slot) ? 1 : 0);
             return 3;
         }},
                 // GetGuildBankItemLink(tab, slot) → hyperlink
@@ -6590,7 +6596,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             lua_pushnumber(L, inStack);
             lua_pushnumber(L, info && info->valid ? info->quality
                                   : static_cast<uint32_t>(s.item.quality));
-            lua_pushboolean(L, 1);
+            luaPushOneOrNil(L, 1);
             lua_pushnumber(L, static_cast<lua_Number>(unitPrice) * inStack);
             lua_pushnumber(L, unitPrice);
             lua_pushnumber(L, (info && info->valid && info->maxStack > 0)
@@ -6914,7 +6920,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             lua_pushstring(L, icon.empty() ? "Interface\\Icons\\INV_Misc_QuestionMark" : icon.c_str()); // texture
             lua_pushnumber(L, a.stackCount);        // count
             lua_pushnumber(L, quality);             // quality
-            lua_pushboolean(L, 1);                  // canUse
+            luaPushOneOrNil(L, 1);                  // canUse
             lua_pushnumber(L, info ? info->requiredLevel : 0); // level
             lua_pushnumber(L, a.startBid);          // minBid
             lua_pushnumber(L, a.minBidIncrement);   // minIncrement
@@ -6926,7 +6932,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             // Bid", printed over the price it sits in front of.
             const bool isHighBidder =
                 a.bidderGuid != 0 && a.bidderGuid == gh->getPlayerGuid();
-            lua_pushboolean(L, isHighBidder ? 1 : 0); // highBidder
+            luaPushOneOrNil(L, isHighBidder ? 1 : 0); // highBidder
             // The seller column, which was two empty strings. The names are
             // asked for when the list arrives (handleAuctionListResult queries
             // every owner guid it does not know), so by the time a row is
@@ -7165,7 +7171,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // there is what the letters themselves say.
                 {"HasNewMail", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (!gh) { return luaReturnFalse(L); }
+            if (!gh) { return luaReturnNil(L); }
             bool hasNew = gh->hasNewMail();
             if (!hasNew) {
                 for (const auto& m : gh->getMailInbox()) {

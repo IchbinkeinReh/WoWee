@@ -3527,6 +3527,7 @@ bool SocialHandler::guildMemberOnlineTransition(const std::string& name, bool no
         if (m.name == name) {
             if (m.online == nowOnline) return false;
             m.online = nowOnline;
+            m.statusFlags = nowOnline ? static_cast<uint8_t>(m.statusFlags | 0x01) : 0;
             return true;
         }
     }

@@ -4388,7 +4388,7 @@ int lua_Tooltip_SetInventoryItem(lua_State* L) {
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
     const int slot = static_cast<int>(luaL_optnumber(L, 3, 0));
-    if (!w || !gh || slot < 1) { lua_pushboolean(L, 0); return 1; }
+    if (!w || !gh || slot < 1) { luaPushOneOrNil(L, 0); return 1; }
 
     // The unit argument was ignored, so every slot of the inspect paperdoll
     // showed whatever the player themselves had in that slot - the wrong item
@@ -4397,7 +4397,7 @@ int lua_Tooltip_SetInventoryItem(lua_State* L) {
     wowee::addons::toLowerInPlace(uid);
     // Another player is only ever inspected as equipment, and the cache behind
     // it is one entry per equipment slot.
-    if (uid != "player" && slot > 19) { lua_pushboolean(L, 0); return 1; }
+    if (uid != "player" && slot > 19) { luaPushOneOrNil(L, 0); return 1; }
     if (uid != "player") {
         // 0x0062e050's other-unit leg reads the same record GetInventoryItemLink
         // reads, so which row answers depends on which unit this is: the one in
@@ -4411,7 +4411,7 @@ int lua_Tooltip_SetInventoryItem(lua_State* L) {
         uint32_t entry = gh->inspectedItemRecord(guid, slot - 1, record);
         if (entry == 0) gh->visibleItemRecord(guid, slot - 1, entry, record);
         if (!fillItemTooltipById(L, gh, entry)) {
-            lua_pushboolean(L, 0);
+            luaPushOneOrNil(L, 0);
             return 1;
         }
         // The suffix and its stat lines, from the row's own property and seed -
@@ -4425,7 +4425,7 @@ int lua_Tooltip_SetInventoryItem(lua_State* L) {
         def.randomPropertyId = static_cast<int32_t>(static_cast<int16_t>(record.randomPropertyId));
         def.suffixFactor = record.seed;
         appendRandomSuffix(w, gh, def);
-        lua_pushboolean(L, 1);
+        luaPushOneOrNil(L, 1);
         return 1;
     }
 
@@ -4437,9 +4437,9 @@ int lua_Tooltip_SetInventoryItem(lua_State* L) {
     // GameTooltip:SetText(self.tooltipText) when this answers false, which is
     // the "Bank Bag" line, not the bag's own tooltip.
     const game::ItemSlot* sp = wowee::addons::inventorySlotItem(gh->getInventory(), slot);
-    if (!sp) { lua_pushboolean(L, 0); return 1; }
+    if (!sp) { luaPushOneOrNil(L, 0); return 1; }
     const auto& s = *sp;
-    if (s.empty()) { lua_pushboolean(L, 0); return 1; }
+    if (s.empty()) { luaPushOneOrNil(L, 0); return 1; }
     // Through the fuller builder, with the slot's own copy of the item as the
     // floor: the slot knows the name and quality even for an entry no
     // GetItemInfo has arrived for, and answering nothing there would be worse
@@ -4461,7 +4461,7 @@ int lua_Tooltip_SetInventoryItem(lua_State* L) {
     if (slot <= static_cast<int>(game::EquipSlot::NUM_SLOTS)) {
         appendEnchantLines(w, gh, gh->getEquipSlotGuid(slot - 1));
     }
-    lua_pushboolean(L, 1);
+    luaPushOneOrNil(L, 1);
     return 1;
 }
 
@@ -4527,7 +4527,15 @@ int lua_Tooltip_SetQuestLogSpecialItem(lua_State* L) {
 /// Both were unbound, so hovering a currency called nil and took the token
 /// frame's OnEnter with it. A currency is an item held in the bags, so its
 /// tooltip is the item's.
-int lua_Tooltip_ReturnFalse(lua_State* L) { lua_pushboolean(L, 0); return 1; }
+int lua_Tooltip_SetBackpackToken(lua_State* L) {
+    auto* gh = wowee::addons::getGameHandler(L);
+    const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
+    // 0x006307e0 answers nothing; the tooltip is the item's.
+    if (!widgetOf(L, 1) || !gh) return 0;
+    if (const uint32_t itemId = wowee::addons::backpackCurrencyItemId(L, index))
+        fillItemTooltipById(L, gh, itemId);
+    return 0;
+}
 
 int lua_Tooltip_SetCurrencyToken(lua_State* L) {
     auto* w = widgetOf(L, 1);
@@ -8856,7 +8864,7 @@ void LuaEngine::registerCoreAPI() {
         // Nothing is pinned under the bags - that is a saved choice this
         // client does not keep - so this answers false rather than
         // describing an arbitrary row.
-        {"SetBackpackToken", lua_Tooltip_ReturnFalse},
+        {"SetBackpackToken", lua_Tooltip_SetBackpackToken},
         {"SetGuildBankItem", lua_Tooltip_SetGuildBankItem},
         {"SetSpellByID",    lua_Tooltip_SetSpellByID},
         {"SetQuestLogRewardSpell", lua_Tooltip_SetQuestLogRewardSpell},

@@ -1211,7 +1211,8 @@ bool parseGuildRosterBody(network::Packet& packet, GuildRosterData& data,
         }
         auto& m = data.members[i];
         m.guid = packet.readUInt64();
-        m.online = (packet.readUInt8() != 0);
+        m.statusFlags = packet.readUInt8();
+        m.online = m.statusFlags != 0;
 
         // Validate before reading name string
         if (!packet.hasData()) {

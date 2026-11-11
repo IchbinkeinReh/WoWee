@@ -148,6 +148,8 @@ inline void luaPushOneOrNil(lua_State* L, bool yes) {
 }
 inline int luaReturnZero(lua_State* L) { lua_pushnumber(L, 0); return 1; }
 inline int luaReturnFalse(lua_State* L){ lua_pushboolean(L, 0); return 1; }
+/// The client's "yes" for a question it answers 1 or nil.
+inline int luaReturnOne(lua_State* L)  { lua_pushnumber(L, 1); return 1; }
 
 /// IsActionInRange and IsSpellInRange's answer for one spell against one unit:
 /// 1 in range, 0 out, and nil where there is no range to speak of - a spell
@@ -929,6 +931,9 @@ inline int pushFactionRow(lua_State* L, game::GameHandler* gh,
 /// with the inventory bindings, and building it twice is how two answers to one
 /// question start to disagree.
 uint32_t currencyListItemId(lua_State* L, int index);
+/// The item of the index-th currency watched beside the bags, in
+/// CurrencyTypes.dbc's order (0x005b0340), or 0 for none.
+uint32_t backpackCurrencyItemId(lua_State* L, int index);
 
 // Resolve unit IDs (player, target, focus, mouseover, pet, targettarget, etc.) to entity
 inline game::Unit* resolveUnit(lua_State* L, const char* unitId) {

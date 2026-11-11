@@ -1071,7 +1071,7 @@ static int lua_RemoveQuestWatch(lua_State* L) {
 static int lua_IsQuestWatched(lua_State* L) {
     auto* gh = getGameHandler(L);
     int index = static_cast<int>(luaL_checknumber(L, 1));
-    if (!gh || index < 1) { return luaReturnFalse(L); }
+    if (!gh || index < 1) { return luaReturnNil(L); }
     const auto* q = questAtRow(gh, index);
     luaPushOneOrNil(L, (q && gh->isQuestTracked(q->questId)) ? 1 : 0);
     return 1;
@@ -2409,8 +2409,8 @@ static int lua_GetSkillLineInfo(lua_State* L) {
     const auto rows = gh ? skillRows(gh) : std::vector<SkillRow>{};
     if (!gh || index < 1 || index > static_cast<int>(rows.size())) {
         lua_pushstring(L, "");                          // 1: skillName
-        lua_pushboolean(L, 0);                          // 2: isHeader
-        lua_pushboolean(L, 1);                          // 3: isExpanded
+        luaPushOneOrNil(L, 0);                          // 2: isHeader
+        luaPushOneOrNil(L, 1);                          // 3: isExpanded
         for (int i = 4; i <= 7; ++i) lua_pushnumber(L, 0);   // rank, temp, mod, max
         lua_pushnil(L);                                 // 8: isAbandonable
         // stepCost and rankCost nil for the same reason they are nil below:
@@ -2431,8 +2431,8 @@ static int lua_GetSkillLineInfo(lua_State* L) {
         // zero is true in Lua and would send the heading down the
         // "Learn <skill>" branch.
         lua_pushstring(L, gh->getSkillCategoryName(row.categoryId).c_str());
-        lua_pushboolean(L, 1);                          // 2: isHeader
-        lua_pushboolean(L, gh->isSkillCategoryCollapsed(row.categoryId) ? 0 : 1);
+        luaPushOneOrNil(L, 1);                          // 2: isHeader
+        luaPushOneOrNil(L, gh->isSkillCategoryCollapsed(row.categoryId) ? 0 : 1);
         for (int i = 4; i <= 7; ++i) lua_pushnumber(L, 0);
         lua_pushnil(L);                                 // 8: isAbandonable
         lua_pushnil(L);                                 // 9: stepCost
@@ -5505,11 +5505,9 @@ void registerQuestLuaAPI(lua_State* L) {
                 lua_pushstring(L, row.subclass.c_str());
                 lua_pushstring(L, "header");
                 lua_pushnumber(L, 0);
-                lua_pushboolean(L,
-                    collapsedTradeSkillSubClasses().count(row.subclass) ? 0 : 1);
+                luaPushOneOrNil(L, collapsedTradeSkillSubClasses().count(row.subclass) == 0);
                 lua_pushnil(L);         // altVerb
-                lua_pushnumber(L, 0);   // numSkillUps
-                return 6;
+                return 5;
             }
             const auto& r = row.recipe;
             static const char* kBands[4] = {"optimal", "medium", "easy", "trivial"};
@@ -5517,10 +5515,12 @@ void registerQuestLuaAPI(lua_State* L) {
             lua_pushstring(L, kBands[r.difficulty < 0 || r.difficulty > 3
                                          ? 0 : r.difficulty]);
             lua_pushnumber(L, r.canMake);
-            lua_pushboolean(L, 1);      // a recipe row is never folded
+            // Five values, as 0x005db2a0 gives them: isExpanded is a
+            // heading's alone and nil on a recipe, and there is no skill-up
+            // count in this client.
+            lua_pushnil(L);             // isExpanded
             lua_pushnil(L);             // altVerb
-            lua_pushnumber(L, 1);       // numSkillUps
-            return 6;
+            return 5;
         }},
                 {"GetTradeSkillIcon", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);

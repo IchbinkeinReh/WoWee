@@ -390,7 +390,7 @@ static void castPetSlot(lua_State* L, game::GameHandler* gh, uint32_t packed, in
 
 static int lua_HasAction(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnFalse(L); }
+    if (!gh) { return luaReturnNil(L); }
     int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1; // WoW uses 1-indexed slots
     if (const auto ref = petActionRef(gh, slot)) {
         // 0x005a8160: a command or a stance, or a spell.
@@ -2951,7 +2951,7 @@ static int lua_GetTradeTargetItemInfo(lua_State* L) {
     // nothing when it says no.  WoWee has no such measure for an item it was
     // never offered, so it keeps answering the usable answer, which is what the
     // client gives for an item that meets its requirements.
-    lua_pushboolean(L, 1);
+    luaPushOneOrNil(L, 1);
     if (i - 1 == game::GameHandler::TRADE_SLOT_NONTRADED) pushTradeEnchantment(L, gh, false);
     else lua_pushnil(L);
     return 6;

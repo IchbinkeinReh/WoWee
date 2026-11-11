@@ -3802,7 +3802,6 @@ static int lua_wow_gettime(lua_State* L) {
 // caller takes the branch it would take on a client where that feature is off,
 // rather than dividing by a nil.
 static int lua_ReturnFalse(lua_State* L) { lua_pushboolean(L, 0); return 1; }
-static int lua_ReturnTrue(lua_State* L)  { luaPushOneOrNil(L, 1); return 1; }
 static int lua_ReturnNil(lua_State* L)   { lua_pushnil(L); return 1; }
 static int lua_ReturnZero(lua_State* L)  { lua_pushnumber(L, 0.0); return 1; }
 
@@ -8552,7 +8551,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 // A separate render scale for the player model, which this
                 // client does not have. False disables the control rather than
                 // leaving it offering something that would do nothing.
-                {"IsPlayerResolutionAvailable", lua_ReturnFalse},
+                {"IsPlayerResolutionAvailable", luaReturnNil},
                 // Which extra action bars are shown. FrameXML draws the bars
                 // and MultiActionBar_Update decides from the SHOW_MULTI_ACTIONBAR_*
                 // globals, which are CVars and persist on their own - so the
@@ -8648,7 +8647,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 // Voice chat, which this client has none of. The enumerations
                 // hand back lists, so they answer with nothing rather than with
                 // a zero; IsVoiceChatEnabled already answers false beside them.
-                {"VoiceIsDisabledByClient",  lua_ReturnTrue},
+                {"VoiceIsDisabledByClient",  luaReturnOne},
                 {"VoiceEnumerateCaptureDevices", lua_ReturnNothing},
                 {"VoiceEnumerateOutputDevices",  lua_ReturnNothing},
                 {"VoiceSelectCaptureDevice", lua_ReturnNothing},
@@ -8765,7 +8764,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 // returns early unless KBSetup_IsLoaded, the MOTD and notice
                 // are both `if ( x )`, and the article lists are walked by the
                 // counts. Never loaded, nothing in it.
-                {"KBSetup_IsLoaded",            lua_ReturnFalse},
+                {"KBSetup_IsLoaded",            luaReturnNil},
                 {"KBSetup_BeginLoading",        lua_ReturnNothing},
                 {"KBQuery_BeginLoading",        lua_ReturnNothing},
                 {"KBArticle_BeginLoading",      lua_ReturnNothing},
@@ -9045,8 +9044,8 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, done);
             return 1;
         }},
-                {"GetVoiceStatus",           lua_ReturnFalse},
-                {"GetMuteStatus",            lua_ReturnFalse},
+                {"GetVoiceStatus",           luaReturnNil},
+                {"GetMuteStatus",            luaReturnNil},
                 {"GetActiveVoiceChannel",    lua_ReturnNil},
                 {"GetVoiceCurrentSessionID", lua_ReturnNil},
                 // GetPartyMember(1-4) -> 1 when that party slot holds someone,
@@ -9274,8 +9273,8 @@ void registerSystemLuaAPI(lua_State* L) {
         }},
                 // IsReferAFriendLinked moved to lua_unit_api.cpp: it is one bit
                 // of UNIT_DYNAMIC_FLAGS (0x40) read off the guid's own object.
-                {"IsStereoVideoAvailable",   lua_ReturnFalse},
-                {"IsVoiceChatEnabled",       lua_ReturnFalse},
+                {"IsStereoVideoAvailable",   luaReturnNil},
+                {"IsVoiceChatEnabled",       luaReturnNil},
                 // False always, which is what disabled the zoom-out button at
                 // every level of the map. The only way back out of a zone was
                 // the right-click that reaches the same handler without
@@ -9289,7 +9288,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 // False, which is what the client answers - a shared 3-byte
                 // `return 0` for this name and GetMapDebugObjectInfo; the note
                 // sits at GetNumMapDebugObjects.
-                {"HasDebugZoneMap",          lua_ReturnFalse},
+                {"HasDebugZoneMap",          luaReturnNil},
                 // IsDesaturateSupported() (0x00511fb0): 1 where the device
                 // can draw a texture desaturated (0x00483290), as every one
                 // here does; nothing otherwise.
@@ -9372,8 +9371,8 @@ void registerSystemLuaAPI(lua_State* L) {
                 // is hidden, and leaving it hidden is the honest outcome.
                 {"AchievementMicroButton_Update", [](lua_State* L) -> int {
             (void)L; return 0; }},
-                {"BNFeaturesEnabled",        lua_ReturnFalse},
-                {"BNFeaturesEnabledAndConnected", lua_ReturnFalse},
+                {"BNFeaturesEnabled",        luaReturnNil},
+                {"BNFeaturesEnabledAndConnected", luaReturnNil},
                 {"BNGetMaxPlayersInConversation", lua_ReturnZero},
                 {"GetSummonFriendCooldown",  lua_ReturnNoCooldown},
                 {"GetScreenResolutions",     lua_GetScreenResolutions},
@@ -9783,7 +9782,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 // IsWindowsClient() (0x004dce40): 1. IsDebugBuild()
                 // (0x0050fe80): false.
                 {"IsWindowsClient", [](lua_State* L) -> int { lua_pushnumber(L, 1); return 1; }},
-                {"IsDebugBuild",             lua_ReturnFalse},
+                {"IsDebugBuild",             luaReturnNil},
                 // GameMovieFinished() (0x0051d590 -> 0x00518870): only while a
                 // movie plays (0x00bd0800), which none does here -
                 // SMSG_TRIGGER_MOVIE is answered with CMSG_COMPLETE_MOVIE at
@@ -10427,7 +10426,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 // The equipment manager exists here - GetNumEquipmentSets and
                 // the rest of its API are bound - so the panel's checkbox is
                 // offering something real.
-                {"CanUseEquipmentSets",         lua_ReturnTrue},
+                {"CanUseEquipmentSets",         luaReturnOne},
                 // 0x00530700: 1 when any has been triggered, else nil.
                 {"CanResetTutorials", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
@@ -10441,7 +10440,7 @@ void registerSystemLuaAPI(lua_State* L) {
             return 0;
         }},
                 // A Mac-only mouse this build does not look for.
-                {"DetectWowMouse",              lua_ReturnFalse},
+                {"DetectWowMouse",              luaReturnNil},
                 // No Battle.net, so no chat to filter.
                 {"BNSetMatureLanguageFilter",   lua_ReturnNothing},
                 {"ShowHelm", [](lua_State* L) -> int {

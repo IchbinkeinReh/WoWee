@@ -416,7 +416,7 @@ static int lua_GetNumFriends(lua_State* L) {
     return 2;
 }
 
-// GetFriendInfo(index or name) → name, level, class, area, connected, status, note
+// GetFriendInfo(index or name) → name, level, class, area, connected, status, note, RAF
 //
 // A name as well as a row, because both are passed. The friends list asks by
 // row; the right-click menu's Set Note stores the name in FriendsFrame.NotesID
@@ -442,7 +442,7 @@ static int lua_GetFriendInfo(lua_State* L) {
             std::string area;
             if (c.areaId != 0) area = gh->getWhoAreaName(c.areaId);
             lua_pushstring(L, area.c_str());         // 4: area
-            lua_pushboolean(L, c.isOnline());        // 5: connected
+            luaPushOneOrNil(L, c.isOnline());        // 5: connected, 1 or nil (0x006b4130)
             // The bits, not the number: an away friend is online|away, which
             // is 3, and comparing that for equality named them busy instead.
             // friendsframe tests these against CHAT_FLAG_AFK and CHAT_FLAG_DND,
@@ -450,8 +450,13 @@ static int lua_GetFriendInfo(lua_State* L) {
             constexpr uint8_t kAway = 0x02, kBusy = 0x04;
             lua_pushstring(L, (c.status & kAway) ? "<AFK>"
                             : ((c.status & kBusy) ? "<DND>" : ""));  // 6: status
-            lua_pushstring(L, c.note.c_str());       // 7: note
-            return 7;
+            // 7: note, nil when there is none; 8: recruited through
+            // Recruit-a-Friend, the status bit 0x08 - both as 0x006b4130.
+            if (c.note.empty()) lua_pushnil(L);
+            else lua_pushstring(L, c.note.c_str());
+            constexpr uint8_t kReferAFriend = 0x08;
+            luaPushOneOrNil(L, (c.status & kReferAFriend) != 0);
+            return 8;
         }
     }
     lua_pushnil(L);
@@ -800,11 +805,20 @@ static int lua_GetGuildRosterInfo(lua_State* L) {
     lua_pushstring(L, m.classId < 12 ? localizedClassName(gh, m.classId, 2).c_str() : "Unknown"); // 5: class
     std::string zone;
     if (m.zoneId != 0 && m.online) zone = gh->getWhoAreaName(m.zoneId);
-    lua_pushstring(L, zone.c_str());                         // 6: zone
+    if (zone.empty()) lua_pushnil(L);                        // 6: zone, nil when unknown
+    else lua_pushstring(L, zone.c_str());
     lua_pushstring(L, m.publicNote.c_str());                 // 7: note
     lua_pushstring(L, m.officerNote.c_str());                // 8: officerNote
-    lua_pushboolean(L, m.online);                            // 9: online
-    lua_pushnumber(L, 0);                                    // 10: status (0=online, 1=AFK, 2=DND)
+    luaPushOneOrNil(L, m.online);                            // 9: online, 1 or nil
+    // 10: status - CHAT_FLAG_DND for busy (0x04), CHAT_FLAG_AFK for away
+    // (0x02), else the empty string (0x005cc9c0).
+    constexpr uint8_t kAway = 0x02, kBusy = 0x04;
+    if (m.statusFlags & kBusy)
+        lua_pushstring(L, game::interfaceString("CHAT_FLAG_DND", "<DND>").c_str());
+    else if (m.statusFlags & kAway)
+        lua_pushstring(L, game::interfaceString("CHAT_FLAG_AFK", "<AFK>").c_str());
+    else
+        lua_pushstring(L, "");
     // The uppercase token, not the id. This position is classFileName and it
     // is a key, not a number:
     //
@@ -3038,15 +3052,15 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"UnitIsRaidOfficer", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const char* unit = luaL_optstring(L, 1, "");
-            if (!gh || !unit || !*unit) return luaReturnFalse(L);
+            if (!gh || !unit || !*unit) return luaReturnNil(L);
             std::string uid(unit);
             toLowerInPlace(uid);
             const uint64_t guid = resolveUnitGuid(gh, uid);
-            if (guid == 0) return luaReturnFalse(L);
+            if (guid == 0) return luaReturnNil(L);
             for (const auto& mem : gh->getPartyData().members) {
                 if (mem.guid == guid) { luaPushOneOrNil(L, (mem.flags & 0x01) ? 1 : 0); return 1; }
             }
-            return luaReturnFalse(L);
+            return luaReturnNil(L);
         }},
                 // ---- Loot rules and party assignments ----
                 //
@@ -3385,7 +3399,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 // IsVoiceChatEnabled() block (1331, asking at 1377).  This
                 // client answers IsVoiceChatEnabled false, so the menus that
                 // would ask this one do not offer them at all.
-                {"UnitIsSilenced",      luaReturnFalse},
+                {"UnitIsSilenced",      luaReturnNil},
                 // AddOrDelMute(name) - 0x006b6bd0 → 0x006b6130, the toggle the
                 // raid panels' speaker icon uses. One walk over the mute rows
                 // decides which request to send: found, and that row's GUID goes
@@ -3458,7 +3472,7 @@ void registerSocialLuaAPI(lua_State* L) {
         }},
                 {"ChannelUnSilenceVoice", [](lua_State* L) -> int { (void)L; return 0; }},
                 // Vehicles are not modelled in the raid frames.
-                {"UnitTargetsVehicleInRaidUI", luaReturnFalse},
+                {"UnitTargetsVehicleInRaidUI", luaReturnNil},
                 {"GetNumLanguages",   lua_GetNumLanguages},
                 // The 1.12 client's own spelling, and not a typo on this side:
                 // stock ChatFrame.lua opens LanguageMenu_LoadLanguages with

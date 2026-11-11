@@ -171,7 +171,6 @@ std::unordered_map<int, bool>& collapsedHeaders() {
     return collapsed;
 }
 
-int luaReturnTrue(lua_State* L)    { lua_pushboolean(L, 1); return 1; }
 int luaReturnNothing(lua_State* L) { (void)L; return 0; }
 
 /// The roles the player has offered. Kept on the handler now - the ready
@@ -632,7 +631,7 @@ void registerLfgLuaAPI(lua_State* L) {
     }},
     // Whether a row can be queued for at all. Nothing is locked here - see
     // GetLFDChoiceLockedState - so the answer is yes and the server decides.
-    {"IsLFGDungeonJoinable", luaReturnTrue},
+    {"IsLFGDungeonJoinable", luaReturnOne},
     // GetLFGQueueStats() → hasData, leaderNeeds, tankNeeds, healerNeeds,
     //   dpsNeeds, instanceType, instanceName, averageWait, tankWait,
     //   healerWait, damageWait, myWait, queuedTime

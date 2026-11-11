@@ -1529,6 +1529,8 @@ public:
 struct GuildRosterMember {
     uint64_t guid = 0;
     bool online = false;
+    /// The roster's status byte: 0x01 online, 0x02 away, 0x04 busy (+0x50).
+    uint8_t statusFlags = 0;
     std::string name;
     uint32_t rankIndex = 0;
     uint8_t level = 0;
