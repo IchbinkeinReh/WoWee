@@ -148,6 +148,7 @@ bool rtTraceScene(vec3 o, vec3 d, inout float tMax, out uint hitTri, out uint hi
                 if (rtStructureOnly && (inst.flags & (RT_MESH_TERRAIN | RT_MESH_BUILDING)) == 0u) continue;
                 bool fixture = (inst.flags & RT_MESH_FIXTURE) != 0u;
                 if (rtSkipFixtures && fixture && !rtFixtureFacesOnly) continue;
+                if (rtOwnGroupOnly && inst.group == 0u) continue;
                 if (rtInGroup(inst.group, o)) continue;
                 // The object-space direction is left unnormalised so t stays
                 // a world-space distance.

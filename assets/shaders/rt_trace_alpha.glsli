@@ -90,10 +90,21 @@ bool rtMeetsOwnGroup = false;
 vec3 rtGroupFrom = vec3(0.0);
 bool rtGroupFromSet = false;
 
+// Set by the caller for one ray: only the character the ray starts on (the
+// group whose box holds its point) can stop it (rt_trace's rtSelfVis).
+bool rtOwnGroupOnly = false;
+
 // Whether a ray from p passes the instances of `group` by: it starts inside
 // the group's box - on the character the group is, which never shadows or
 // occludes itself.
 bool rtInGroup(uint group, vec3 p) {
+    if (rtOwnGroupOnly) {
+        if (group == 0u) return true;
+        vec3 olo = rtGroups[group * 2u].xyz;
+        vec3 ohi = rtGroups[group * 2u + 1u].xyz;
+        vec3 oq = rtGroupFromSet ? rtGroupFrom : p;
+        return !(all(greaterThanEqual(oq, olo)) && all(lessThanEqual(oq, ohi)));
+    }
     if (group == 0u) return false;
     if (rtSkipUnits) return true;
     if (rtMeetsOwnGroup) return false;

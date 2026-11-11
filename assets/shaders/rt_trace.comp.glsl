@@ -226,6 +226,40 @@ vec3 rtLightAim(RtPointLight light) {
 const float RT_FLOOR_FACE_FADE_LOW = -0.02;
 const float RT_FLOOR_FACE_FADE_HIGH = 0.10;
 
+// A character's shadow on itself (the Unit self-shadowing option,
+// pass.tune5.y), by the surface the drawing shades - its interpolated normal -
+// not the traced body's flat triangles. That body is low-poly, and its
+// pieces are rigid where the drawn one bends; a ray leaving a pixel along
+// its own triangle met the triangles beside it, and the self-shadow followed
+// the mesh in hard facets. The ray here starts lifted off the smooth surface
+// (RT_SELF_LIFT along the shading normal, onto where the smooth surface
+// stands over the triangle) and asks the character alone (rtOwnGroupOnly);
+// what it finds is let in by the smooth normal's angle to the light, from
+// nothing at the terminator, where the smooth and the flat surface part, to
+// all of it where the light falls well onto the face - so the self-shadow's
+// edge runs with the smooth shading. 1 where the option is off, or the
+// point is not on a character.
+const float RT_SELF_LIFT = 0.04;
+float rtSelfVis(vec3 surface, vec3 shadingN, vec3 dir, float reach, inout uint rng) {
+    if (pass.tune5.y < 0.5) return 1.0;
+    float facing = dot(shadingN, dir);
+    if (facing <= 0.0) return 1.0;  // turned from the light: the shading has none to take
+    bool skipUnits = rtSkipUnits;
+    rtSkipUnits = false;
+    rtOwnGroupOnly = true;
+    bool fromSet = rtGroupFromSet;
+    vec3 from = rtGroupFrom;
+    rtGroupFrom = surface;
+    rtGroupFromSet = true;
+    bool hit = rtOccluded(surface + shadingN * RT_SELF_LIFT, dir, reach, rng);
+    rtGroupFrom = from;
+    rtGroupFromSet = fromSet;
+    rtOwnGroupOnly = false;
+    rtSkipUnits = skipUnits;
+    if (!hit) return 1.0;
+    return 1.0 - smoothstep(0.05, 0.35, facing);
+}
+
 layout(local_size_x = 8, local_size_y = 8) in;
 
 void main() {
@@ -310,16 +344,15 @@ void main() {
         // sun's disc; the share that gets through.
         uint sunRays = rtRayCount(pass.rays.x);
         // A unit's own body shadows itself while the option asks for it
-        // (pass.tune5.y) - where the trace takes the units' sun shadows,
-        // past the shadow map's reach.
-        rtMeetsOwnGroup = pass.tune5.y > 0.5;
+        // (pass.tune5.y), by rtSelfVis: the smooth surface's, not its triangles'.
         for (uint k = 0u; k < sunRays; ++k) {
             vec3 sd = rtConeSample(L, pass.sunDir.w, rng);
             bool byUnit;
-            sun += rtOccludedBy(sunOrigin, sd, pass.params.w, rng, byUnit) ? 0.0 : 1.0;
+            float through = rtOccludedBy(sunOrigin, sd, pass.params.w, rng, byUnit) ? 0.0 : 1.0;
+            if (through > 0.0) through *= rtSelfVis(p, shadingN, sd, pass.params.w, rng);
+            sun += through;
             unitHit = unitHit || byUnit;
         }
-        rtMeetsOwnGroup = false;
         sun /= float(sunRays);
         // An enclosed place in a building flagged as outdoors - the
         // Tirisfal zeppelin tower's stairwell, one exterior group with its
@@ -569,11 +602,10 @@ void main() {
             // lifted one (rtGroupFrom).
             rtGroupFrom = origin;
             rtGroupFromSet = true;
-            // A unit's own body shadows itself while the option asks for it
-            // (pass.tune5.y): a ray leaving from inside its box meets it.
-            rtMeetsOwnGroup = pass.tune5.y > 0.5;
             pointVis = rtOccludedBy(lampOrigin, toLight / d, reach, rng, byUnit) ? 0.0 : 1.0;
-            rtMeetsOwnGroup = false;
+            // A unit's own body shadows itself while the option asks for it
+            // (pass.tune5.y), by rtSelfVis: the smooth surface's, not its triangles'.
+            if (pointVis > 0.0) pointVis *= rtSelfVis(origin, shadingN, toLight / d, reach, rng);
             rtGroupFromSet = false;
             rtFixtureFacesOnly = false;
             rtSkipFixtures = false;
