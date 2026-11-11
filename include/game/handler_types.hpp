@@ -327,6 +327,13 @@ struct PetitionInfo {
     bool isArena = false;
     std::vector<PetitionSignature> signatures;
     bool showUI = false;
+    /// SMSG_PETITION_QUERY_RESPONSE has answered for this charter. The client
+    /// raises PETITION_SHOW only once it has, and once every signer's name is
+    /// known (0x005cebf0, 0x005cec20).
+    bool queried = false;
+    /// Signers' names asked for and not yet answered, found or not: the
+    /// client counts down on every answer (0x005cebf0).
+    uint32_t namesPending = 0;
 };
 
 /// One dungeon of an LFG role check: its id, and the type packed into the top

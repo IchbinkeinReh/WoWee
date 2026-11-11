@@ -818,6 +818,13 @@ private:
     void handleGuildEventLog(network::Packet& packet);
     void handlePetitionShowSignatures(network::Packet& packet);
     void handlePetitionSignResults(network::Packet& packet);
+    /// Ask for a signer the name cache has no name for; PETITION_SHOW waits
+    /// for the answer (petitionComplete).
+    void awaitPetitionSigner(uint64_t signer);
+    /// The charter's own query answered and no signer's name still asked
+    /// for: what the client waits for before PETITION_SHOW.
+    bool petitionComplete() const;
+    void showPetitionWhenComplete();
     void handleTurnInPetitionResults(network::Packet& packet);
     void handleBattlefieldStatus(network::Packet& packet);
     void handleBattlefieldList(network::Packet& packet);

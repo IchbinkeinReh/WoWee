@@ -1637,7 +1637,10 @@ static int lua_GetPetitionNameInfo(lua_State* L) {
         return 1;
     }
     const std::string& name = gh->lookupName(info->signatures[static_cast<size_t>(index - 1)].playerGuid);
-    lua_pushstring(L, name.empty() ? "Unknown" : name.c_str());
+    // Nothing until the name cache has it (0x005cee30), not an English
+    // placeholder: the frame is not shown before every signer is named.
+    if (name.empty()) lua_pushnil(L);
+    else lua_pushstring(L, name.c_str());
     return 1;
 }
 

@@ -3915,12 +3915,12 @@ void SocialHandler::handlePetitionQueryResponse(network::Packet& packet) {
     petitionInfo_.guildName = guildName;
     if (needed > 0) petitionInfo_.signaturesRequired = needed;
     petitionInfo_.isArena = arenaType != 0;
+    petitionInfo_.queried = true;
 
-    // Said again, because the frame was drawn when the signatures arrived and
-    // everything above lands after it. Without this the charter keeps the
-    // blank name and the placeholder count it opened with - the shape that
-    // reads as "only right after reopening it".
-    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("PETITION_SHOW", {});
+    // The frame opens on this answer when the signers are already named:
+    // the client holds PETITION_SHOW until both have come (0x005cec20), so
+    // the charter never shows its blank name and placeholder count.
+    showPetitionWhenComplete();
 }
 
 void SocialHandler::handlePetitionShowSignatures(network::Packet& packet) {
@@ -3954,11 +3954,30 @@ void SocialHandler::handlePetitionShowSignatures(network::Packet& packet) {
         owner_.getSocket()->send(query);
     }
 
-    // The signature list frame opens on this. The petition is parsed and
-    // stored above - showUI is what this client's own window reads - and the
-    // interface's version was never told, so a charter could not be signed
-    // through it.
-    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("PETITION_SHOW", {});
+    // The signature list frame opens on PETITION_SHOW, which waits for the
+    // query above and for every signer's name (0x005cea60): a charter shown
+    // before them listed its signers as unknown and stayed that way.
+    for (const auto& sig : petitionInfo_.signatures) awaitPetitionSigner(sig.playerGuid);
+    showPetitionWhenComplete();
+}
+
+bool SocialHandler::petitionComplete() const {
+    return petitionInfo_.queried && petitionInfo_.namesPending == 0;
+}
+
+void SocialHandler::showPetitionWhenComplete() {
+    if (petitionComplete() && owner_.addonEventCallbackRef())
+        owner_.addonEventCallbackRef()("PETITION_SHOW", {});
+}
+
+void SocialHandler::awaitPetitionSigner(uint64_t signer) {
+    if (signer == 0 || !owner_.lookupName(signer).empty()) return;
+    const uint64_t charter = petitionInfo_.petitionGuid;
+    ++petitionInfo_.namesPending;
+    owner_.askNameThen(signer, "petition signer", [this, charter](bool, const std::string&) {
+        if (petitionInfo_.petitionGuid != charter || petitionInfo_.namesPending == 0) return;
+        if (--petitionInfo_.namesPending == 0) showPetitionWhenComplete();
+    });
 }
 
 void SocialHandler::handlePetitionSignResults(network::Packet& packet) {
@@ -3971,6 +3990,10 @@ void SocialHandler::handlePetitionSignResults(network::Packet& packet) {
         petitionInfo_.signatureCount++;
         PetitionSignature sig; sig.playerGuid = playerGuid;
         petitionInfo_.signatures.push_back(sig);
+        // The new signer is asked for like the rest, and the frame is told
+        // again once the charter is complete (0x005cf710's tail).
+        awaitPetitionSigner(playerGuid);
+        showPetitionWhenComplete();
     }
     // As 0x006cefd0 says it. Someone else's signature on this player's
     // charter is ERR_PETITION_SIGNED_S naming them, whatever the result; the
