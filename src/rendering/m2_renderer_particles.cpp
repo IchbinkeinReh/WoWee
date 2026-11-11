@@ -693,8 +693,9 @@ void M2Renderer::prepareM2Particles() {
         if (glowLights) {
             const float fade = std::clamp(inst.fade, 0.0f, 1.0f);
             const size_t firstLight = rtParticleLights_.size();
+            const float modelScale = glm::length(glm::vec3(inst.modelMatrix[0]));
             for (const rt_lights::ParticleGlow& glow : rtEmitterGlowScratch_) {
-                auto l = glow.light();
+                auto l = glow.light(modelScale);
                 if (!l) continue;
                 l->color *= fade;
                 rtParticleLights_.push_back(*l);

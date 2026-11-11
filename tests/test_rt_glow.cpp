@@ -123,7 +123,7 @@ TEST_CASE("An emitter's light sits among its particles, of their colour", "[rt_g
     ParticleGlow more = g;
     for (int i = 0; i < 20; ++i) more.add(glm::vec3(1.0f, 0.0f, 1.0f), glm::vec3(1.0f, 0.5f, 0.0f), 1.0f, 0.1f, 1.0f);
     CHECK(more.light()->attenuationEnd > l->attenuationEnd);
-    CHECK(more.light()->attenuationEnd <= kParticleMaxReach);
+    CHECK(more.light()->attenuationEnd <= kGlowMaxReach);
     CHECK(brightest(more.light()->color) <= kParticleGain * kGlowMaxStrength + 1e-4f);
 }
 

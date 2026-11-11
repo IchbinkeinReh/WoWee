@@ -299,9 +299,11 @@ inline float particleGlowWeight(uint16_t blendType, bool unlit) {
 /// several emitters (flames, embers, sparks) over one another, each summed
 /// on its own, and its particles crowd into a small space, so as a surface
 /// would each of them lit a hearth's room like a bonfire. A third of the
-/// strength, and a reach no longer than a fire's (fireLight).
+/// strength (kParticleGain), and the model's emitters together capped
+/// (kMaxParticleModelStrength). Their reach is a glow's of the same power, up
+/// to a glow's ceiling: a fixed 10 yards here cut a big bonfire's light short
+/// while its strength still grew (user decision, 2026-11-11).
 inline constexpr float kParticleGain = 0.35f;
-inline constexpr float kParticleMaxReach = 10.0f;
 
 /// The most one model's emitters give together (their brightest channels
 /// summed): a fire's few emitters about a fireLight's, while a model with
@@ -342,13 +344,12 @@ struct ParticleGlow {
     }
 
     /// Its light: at the middle of its particles, of their mean colour, as
-    /// large as they are together.
-    [[nodiscard]] std::optional<PointLight> light() const {
+    /// large as they are together. `scale`: the instance's size over its
+    /// model's, which raises the reach's ceiling as it does a glow's.
+    [[nodiscard]] std::optional<PointLight> light(float scale = 1.0f) const {
         if (!(weight > 0.0f)) return std::nullopt;
-        PointLight l = glowLight(weightedPosition / weight, weightedColor / weight, weight, Source::Particle);
+        PointLight l = glowLight(weightedPosition / weight, weightedColor / weight, weight, Source::Particle, scale);
         l.color *= kParticleGain;
-        l.attenuationEnd = std::min(l.attenuationEnd, kParticleMaxReach);
-        l.attenuationStart = 0.15f * l.attenuationEnd;
         return l;
     }
 };
