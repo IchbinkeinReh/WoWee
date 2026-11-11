@@ -284,22 +284,41 @@ static int lua_UnitExists(lua_State* L) {
     return 1;
 }
 
-static int lua_UnitIsDead(lua_State* L) {
+/// UnitIsDead, UnitIsGhost and UnitIsDeadOrGhost (0x0060f480, 0x0060f580,
+/// 0x0060f680). A visible unit: dead at no health, a ghost by PLAYER_FLAGS
+/// 0x10 - and for the two that ask after death, also dead when its
+/// UNIT_DYNAMIC_FLAGS carry 0x20 and it is not of the player's group (a
+/// hunter feigning death looks dead to everyone else). A party member out of
+/// sight: its roster status, 0x04 dead and 0x08 ghost. 1 or nil.
+static int pushDeathState(lua_State* L, bool askDead, bool askGhost) {
     const char* uid = luaL_optstring(L, 1, "player");
+    auto* gh = getGameHandler(L);
+    std::string uidStr(uid);
+    toLowerInPlace(uidStr);
     auto* unit = resolveUnit(L, uid);
+    bool yes = false;
     if (unit) {
-        luaPushOneOrNil(L, unit->getHealth() == 0);
-    } else {
-        // Fallback: party member stats for out-of-range members
-        auto* gh = getGameHandler(L);
-        std::string uidStr(uid);
-        toLowerInPlace(uidStr);
-        uint64_t guid = gh ? resolveUnitGuid(gh, uidStr) : 0;
-        const auto* pm = findPartyMember(gh, guid);
-        luaPushOneOrNil(L, pm ? (pm->curHealth == 0 && pm->maxHealth > 0) : 0);
+        bool ghost = false;
+        if (uidStr == "player" && gh) {
+            ghost = gh->isPlayerGhost();
+        } else if (unit->getType() == game::ObjectType::PLAYER) {
+            constexpr uint32_t kPlayerFlagGhost = 0x10;
+            ghost = (unit->getField(game::fieldIndex(game::UF::PLAYER_FLAGS)) & kPlayerFlagGhost) != 0;
+        }
+        const bool dead = unit->getHealth() == 0;
+        yes = (askDead && dead) || (askGhost && ghost);
+        if (!yes && askDead && (unit->getDynamicFlags() & game::UNIT_DYNFLAG_DEAD) &&
+            !isGroupMemberOrPet(gh, unit->getGuid()))
+            yes = true;
+    } else if (gh) {
+        constexpr uint16_t kMemberDead = 0x04, kMemberGhost = 0x08;
+        if (const auto* pm = findPartyMember(gh, resolveUnitGuid(gh, uidStr)))
+            yes = (askDead && (pm->onlineStatus & kMemberDead)) || (askGhost && (pm->onlineStatus & kMemberGhost));
     }
+    luaPushOneOrNil(L, yes);
     return 1;
 }
+static int lua_UnitIsDead(lua_State* L) { return pushDeathState(L, true, false); }
 
 /// A ChrRaces or ChrClasses name as the client answers it (0x00715970,
 /// 0x007159e0): the localized name in the unit's gender - Name_female or
@@ -391,46 +410,10 @@ static int lua_UnitClass(lua_State* L) { return pushUnitClass(L, false); }
 static int lua_UnitClassBase(lua_State* L) { return pushUnitClass(L, true); }
 
 // UnitIsGhost(unit) - true if unit is in ghost form
-static int lua_UnitIsGhost(lua_State* L) {
-    const char* uid = luaL_optstring(L, 1, "player");
-    auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnNil(L); }
-    std::string uidStr(uid);
-    toLowerInPlace(uidStr);
-    if (uidStr == "player") {
-        luaPushOneOrNil(L, gh->isPlayerGhost());
-    } else {
-        // Check UNIT_FIELD_FLAGS for UNIT_FLAG_GHOST (0x00000100) - best approximation
-        uint64_t guid = resolveUnitGuid(gh, uidStr);
-        bool ghost = false;
-        if (guid != 0) {
-            auto entity = gh->getEntityManager().getEntity(guid);
-            if (entity) {
-                // Ghost is PLAYER_FLAGS bit 0x10, NOT UNIT_FIELD_FLAGS bit 0x100
-                // (which is UNIT_FLAG_IMMUNE_TO_PC - would flag immune NPCs as ghosts).
-                uint32_t pf = entity->getField(game::fieldIndex(game::UF::PLAYER_FLAGS));
-                ghost = (pf & 0x00000010) != 0;
-            }
-        }
-        luaPushOneOrNil(L, ghost);
-    }
-    return 1;
-}
+static int lua_UnitIsGhost(lua_State* L) { return pushDeathState(L, false, true); }
 
 // UnitIsDeadOrGhost(unit)
-static int lua_UnitIsDeadOrGhost(lua_State* L) {
-    const char* uid = luaL_optstring(L, 1, "player");
-    auto* unit = resolveUnit(L, uid);
-    auto* gh = getGameHandler(L);
-    bool dead = (unit && unit->getHealth() == 0);
-    if (!dead && gh) {
-        std::string uidStr(uid);
-        toLowerInPlace(uidStr);
-        if (uidStr == "player") dead = gh->isPlayerGhost() || gh->isPlayerDead();
-    }
-    luaPushOneOrNil(L, dead);
-    return 1;
-}
+static int lua_UnitIsDeadOrGhost(lua_State* L) { return pushDeathState(L, true, true); }
 
 // UnitIsAFK(unit), UnitIsDND(unit)
 /// A unit predicate answered from one bit of PLAYER_FLAGS.
