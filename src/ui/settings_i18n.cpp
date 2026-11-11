@@ -439,25 +439,25 @@ constexpr SettingGerman kGerman[] = {
      "eigenes.",
      nullptr, nullptr, nullptr},
     {"dbgglowpulse",
-     "Stärke des Glühpulsierens (%)",
+     "Glühpuls-Stärke (%)",
      "Wie stark das Licht eines pulsierenden Leuchtens mit ihm an- und abschwillt - der Schein "
      "einer Straßenlaterne, das Leuchten einer Fackel. 100 wie das Modell pulsiert, 0 ein "
      "ruhiges Licht, 300 der dreifache Ausschlag. Raytracing.",
      nullptr, nullptr, nullptr},
     {"dbgfireflicker",
-     "Stärke des Feuerflackerns (%)",
+     "Feuerflackern (%)",
      "Wie stark das Licht eines Feuers flackert - einer Feuerschale, eines Lagerfeuers, einer "
      "Fackel ohne eigenes Licht. 100 wie bisher, 0 ein ruhiges Licht, 300 der dreifache "
      "Ausschlag. Raytracing.",
      nullptr, nullptr, nullptr},
     {"dbgmodelflicker",
-     "Stärke des Modelllicht-Flackerns (%)",
+     "Modelllicht-Flackern (%)",
      "Wie stark das eigene Licht eines Modells flackert, wie seine Datei es animiert - einer "
      "Feuerschale, einer Feuergrube, eines Wachturms. 100 wie im Modell, 0 sein Mittel, 300 der "
      "dreifache Ausschlag. Raytracing.",
      nullptr, nullptr, nullptr},
     {"dbgglowanim",
-     "Stärke der Leucht-Farbanimation (%)",
+     "Leuchtfarb-Animation (%)",
      "Wie stark das Licht eines Leuchtens folgt, dessen Farbe oder Transparenz das Modell "
      "animiert. 100 wie im Modell, 0 sein Mittel, 300 der dreifache Ausschlag. Raytracing.",
      nullptr, nullptr, nullptr},
