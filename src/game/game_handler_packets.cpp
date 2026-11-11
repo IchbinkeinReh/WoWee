@@ -907,37 +907,48 @@ void GameHandler::registerCoreOpcodes() {
             // the ITEM_ ones naming what was drunk as a link. This said
             // English "You feel tipsy." and only of the player.
             const bool self = guid == playerGuid;
-            auto ent = entityController_->getEntityManager().getEntity(guid);
-            if (self || (ent && ent->getType() == ObjectType::PLAYER)) {
-                const std::string n = std::to_string(std::min(threshold, 3u) + 1);
-                const ItemQueryResponseData* item = itemId ? getItemInfo(itemId) : nullptr;
-                std::string key;
-                std::vector<std::string> args;
-                if (!self) args.push_back(lookupName(guid));
-                if (item && item->valid) {
-                    key = std::string(self ? "DRUNK_MESSAGE_ITEM_SELF" : "DRUNK_MESSAGE_ITEM_OTHER") + n;
-                    args.push_back(buildItemLink(itemId, item->quality, item->name,
-                                                 getPlayerLevel()));
-                } else {
-                    key = std::string(self ? "DRUNK_MESSAGE_SELF" : "DRUNK_MESSAGE_OTHER") + n;
+            // Said once the drink is known: the client asks the item cache
+            // with this as the callback and words the line when it answers -
+            // with the drink if it was found, without it if not (0x006d01b0).
+            const auto say = [this, guid, threshold, itemId, self]() {
+                auto ent = entityController_->getEntityManager().getEntity(guid);
+                if (self || (ent && ent->getType() == ObjectType::PLAYER)) {
+                    const std::string n = std::to_string(std::min(threshold, 3u) + 1);
+                    const ItemQueryResponseData* item = itemId ? getItemInfo(itemId) : nullptr;
+                    std::string key;
+                    std::vector<std::string> args;
+                    if (!self) args.push_back(lookupName(guid));
+                    if (item && item->valid) {
+                        key = std::string(self ? "DRUNK_MESSAGE_ITEM_SELF" : "DRUNK_MESSAGE_ITEM_OTHER") + n;
+                        args.push_back(buildItemLink(itemId, item->quality, item->name,
+                                                     getPlayerLevel()));
+                    } else {
+                        key = std::string(self ? "DRUNK_MESSAGE_SELF" : "DRUNK_MESSAGE_OTHER") + n;
+                    }
+                    static const char* const kSelf[] = {"You feel sober again.", "You feel tipsy.  Whee!",
+                                                        "You feel drunk.  Woah!", "You feel completely smashed."};
+                    static const char* const kOther[] = {"%s seems to be sobering up.", "%s looks tipsy.",
+                                                         "%s looks drunk.", "%s looks completely smashed."};
+                    static const char* const kItemSelf[] = {"You drink the %s and feel sober again.",
+                                                            "You drink the %s and feel tipsy.",
+                                                            "You drink the %s and feel drunk.",
+                                                            "You drink the %s and feel completely smashed."};
+                    static const char* const kItemOther[] = {"%s drinks the %s and seems to be sobering up.",
+                                                             "%s drinks the %s and looks tipsy.",
+                                                             "%s drinks the %s and looks drunk.",
+                                                             "%s drinks the %s and looks completely smashed."};
+                    const uint32_t i = std::min(threshold, 3u);
+                    const bool withItem = item && item->valid;
+                    const char* enUS = withItem ? (self ? kItemSelf[i] : kItemOther[i])
+                                                : (self ? kSelf[i] : kOther[i]);
+                    addSystemChatMessage(interfaceFormat(key.c_str(), enUS, args));
                 }
-                static const char* const kSelf[] = {"You feel sober again.", "You feel tipsy.  Whee!",
-                                                    "You feel drunk.  Woah!", "You feel completely smashed."};
-                static const char* const kOther[] = {"%s seems to be sobering up.", "%s looks tipsy.",
-                                                     "%s looks drunk.", "%s looks completely smashed."};
-                static const char* const kItemSelf[] = {"You drink the %s and feel sober again.",
-                                                        "You drink the %s and feel tipsy.",
-                                                        "You drink the %s and feel drunk.",
-                                                        "You drink the %s and feel completely smashed."};
-                static const char* const kItemOther[] = {"%s drinks the %s and seems to be sobering up.",
-                                                         "%s drinks the %s and looks tipsy.",
-                                                         "%s drinks the %s and looks drunk.",
-                                                         "%s drinks the %s and looks completely smashed."};
-                const uint32_t i = std::min(threshold, 3u);
-                const bool withItem = item && item->valid;
-                const char* enUS = withItem ? (self ? kItemSelf[i] : kItemOther[i])
-                                            : (self ? kSelf[i] : kOther[i]);
-                addSystemChatMessage(interfaceFormat(key.c_str(), enUS, args));
+            };
+            if (itemId && !(getItemInfo(itemId) && getItemInfo(itemId)->valid)) {
+                static uint32_t drunkWaits = 0;
+                askItemThen(itemId, "drunk " + std::to_string(++drunkWaits), [say](bool) { say(); });
+            } else {
+                say();
             }
             if (self) {
                 const float amount = static_cast<float>(std::min(threshold, 3u)) / 3.0f;
