@@ -3790,3 +3790,20 @@ wowee_add_test(test_layout_cache
 # The minimap's replaceable textures (0x00583860 .. 0x00583f60, 0x0057e100).
 wowee_add_test(test_minimap_art
     SOURCES test_minimap_art.cpp)
+
+# ── test_paper_ui_tab ────────────────────────────────────────
+# Tab on the login screen moves one field a press, not two or three.
+add_executable(test_paper_ui_tab
+    test_paper_ui_tab.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/paper_ui.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/text_edit.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/interface_fonts.cpp
+)
+target_include_directories(test_paper_ui_tab PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_paper_ui_tab SYSTEM PRIVATE
+    ${TEST_SYSTEM_INCLUDE_DIRS}
+    ${CMAKE_SOURCE_DIR}/extern/imgui
+)
+target_link_libraries(test_paper_ui_tab PRIVATE catch2_main imgui)
+add_test(NAME paper_ui_tab COMMAND test_paper_ui_tab)
+register_test_target(test_paper_ui_tab)

@@ -799,7 +799,12 @@ PaperUI::FieldResult PaperUI::field(const char* idStr, ImVec2 a, ImVec2 b, TextE
         const bool lineJump = io.KeySuper;  // Cmd+Arrow, the macOS Home/End
         const auto pressed = [](ImGuiKey k) { return ImGui::IsKeyPressed(k, true); };
 
-        if (ImGui::IsKeyPressed(ImGuiKey_Tab, false)) {
+        // One field a press. The field Tab hands the keyboard to is drawn
+        // later in the same frame and saw the same press: it passed the focus
+        // on again, and the next one too - the login screen's Tab went from
+        // the account name past the password, two or three fields a press.
+        if (ImGui::IsKeyPressed(ImGuiKey_Tab, false) && tabTakenFrame_ != ImGui::GetFrameCount()) {
+            tabTakenFrame_ = ImGui::GetFrameCount();
             if (shift) {
                 if (drawnBefore != 0) {
                     focus_ = drawnBefore;
