@@ -909,6 +909,11 @@ static int lua_UnitSex(lua_State* L) {
             lua_pushnumber(L, gender == 0 ? 2 : (gender == 1 ? 3 : 1)); // WoW: 2=male, 3=female
             return 1;
         }
+        // Out of sight, the name cache's gender (0x0060f8e0 -> 0x0067d770).
+        if (const uint8_t gender = gh->lookupPlayerGender(guid); gender <= 1) {
+            lua_pushnumber(L, gender == 0 ? 2 : 3);
+            return 1;
+        }
     }
     lua_pushnumber(L, 1); // unknown
     return 1;
@@ -1351,22 +1356,23 @@ static int lua_GetAttackPowerForStat(lua_State* L) {
     return 1;
 }
 
+// UnitRace(unit) (0x0060fd40) → the race's name in the unit's gender and its
+// file name (ChrRaces ClientFileString), from the unit or, out of sight, the
+// name cache; nil and nil when neither knows it.
 static int lua_UnitRace(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) { lua_pushstring(L, "Unknown"); lua_pushstring(L, "Unknown"); lua_pushnumber(L, 0); return 3; }
     std::string uid(luaL_optstring(L, 1, "player"));
     toLowerInPlace(uid);
-
-    const uint8_t raceId = unitRaceOf(gh, uid);
-    const bool known = (raceId > 0 && raceId < 12);
-    // The localized name in the unit's gender (0x0060fd40 -> 0x00715970).
-    std::string localized = known ? chrRowName(gh, "ChrRaces.dbc", "ChrRaces", raceId, unitIsFemale(gh, uid) ? 1 : 0) : "";
-    const char* name = known ? (!localized.empty() ? localized.c_str() : kLuaRaces[raceId]) : "Unknown";
-    const char* file = known ? kLuaRaceFileNames[raceId] : "Unknown";
-    lua_pushstring(L, name);      // 1: localized race
-    lua_pushstring(L, file);      // 2: race file name, spliced into asset paths
-    lua_pushnumber(L, raceId);    // 3: raceId (WoW returns 3 values)
-    return 3;
+    const uint8_t raceId = gh ? unitRaceOf(gh, uid) : 0;
+    if (raceId == 0 || raceId >= 12) {
+        lua_pushnil(L);
+        lua_pushnil(L);
+        return 2;
+    }
+    const std::string localized = chrRowName(gh, "ChrRaces.dbc", "ChrRaces", raceId, unitIsFemale(gh, uid) ? 1 : 0);
+    lua_pushstring(L, !localized.empty() ? localized.c_str() : kLuaRaces[raceId]);
+    lua_pushstring(L, kLuaRaceFileNames[raceId]);   // spliced into asset paths
+    return 2;
 }
 
 namespace {
