@@ -7843,18 +7843,38 @@ void SpellHandler::logEffectPowerDrain(const SpellLogExecuteEntry& entry, uint64
                              powerByte, caster, caster);
 }
 
-void SpellHandler::logEffectCreateItem(const SpellLogExecuteEntry& entry, uint32_t spellId, bool isPlayerCaster) {
-    // SPELL_EFFECT_CREATE_ITEM / CREATE_RANDOM_ITEM / CREATE_ITEM_2: the item
+void SpellHandler::logEffectCreateItem(const SpellLogExecuteEntry& entry, uint32_t spellId, uint64_t casterGuid) {
+    // SPELL_EFFECT_CREATE_ITEM / CREATE_RANDOM_ITEM / CREATE_ITEM_2: the item.
+    // A TRADESKILLS line for whoever cast it (0x006d3220's case -> 0x0050bd90):
+    // TRADESKILL_LOG_FIRSTPERSON with the item's name for the player,
+    // TRADESKILL_LOG_THIRDPERSON with the caster's (0x0074d750) for anyone
+    // else, once the item is known - the cache's callback (0x004fb970) says it
+    // when the answer finds it. This was taken out as combat-log-only.
     const uint32_t itemEntry = entry.value1;
-    if (!isPlayerCaster || itemEntry == 0) return;
-    // No chat line here: SMSG_SPELLLOGEXECUTE is combat log only
-    // (0x006d3730), and the item is announced by the item push that
-    // brings it (LOOT_ITEM_CREATED_SELF). This printed "You create X
-    // using Y." in English.
-    owner_.ensureItemInfo(itemEntry);
+    if (itemEntry == 0) return;
+    const auto say = [this, itemEntry, casterGuid]() {
+        const auto* info = owner_.getItemInfo(itemEntry);
+        if (!info || !info->valid) return;
+        std::string line;
+        if (casterGuid == owner_.getPlayerGuid()) {
+            line = interfaceFormat("TRADESKILL_LOG_FIRSTPERSON", "You create %s.", {info->name});
+        } else {
+            std::string caster = owner_.lookupName(casterGuid);
+            if (caster.empty()) caster = interfaceString("UNKNOWN", "Unknown");
+            line = interfaceFormat("TRADESKILL_LOG_THIRDPERSON", "%s creates %s.",
+                                   {caster, info->name});
+        }
+        owner_.addLocalChatLine(ChatType::TRADESKILLS, line);
+    };
+    if (const auto* info = owner_.getItemInfo(itemEntry); info && info->valid) {
+        say();
+    } else {
+        static uint32_t createdWaits = 0;
+        owner_.askItemThen(itemEntry, "created " + std::to_string(++createdWaits),
+                           [say](bool found) { if (found) say(); });
+    }
     LOG_DEBUG("SMSG_SPELLLOGEXECUTE CREATE_ITEM: spell=", spellId, " item=", itemEntry);
 }
-
 void SpellHandler::logEffectInterruptCast(const SpellLogExecuteEntry& entry, uint64_t caster, uint32_t spellId,
                                           bool isPlayerCaster) {
     // SPELL_EFFECT_INTERRUPT_CAST: target + interrupted_spell_id
@@ -7871,14 +7891,35 @@ void SpellHandler::logEffectInterruptCast(const SpellLogExecuteEntry& entry, uin
     LOG_DEBUG("SMSG_SPELLLOGEXECUTE INTERRUPT_CAST: spell=", spellId,
               " interrupted=", icSpellId, " target=0x", std::hex, icTarget, std::dec);
 }
-
-void SpellHandler::logEffectFeedPet(const SpellLogExecuteEntry& entry, bool isPlayerCaster) {
-    // SPELL_EFFECT_FEED_PET: the item
+void SpellHandler::logEffectFeedPet(const SpellLogExecuteEntry& entry, uint64_t casterGuid) {
+    // SPELL_EFFECT_FEED_PET: the item. A PET_INFO line (0x0050baf0):
+    // FEEDPET_LOG_FIRSTPERSON with the food's name for the player, and
+    // FEEDPET_LOG_THIRDPERSON with the feeder's name for another player - only
+    // when the name cache already has it - once the food is known (callback
+    // 0x004fb950). This was taken out as combat-log-only.
     const uint32_t feedItem = entry.value1;
-    if (!isPlayerCaster || feedItem == 0) return;
-    // No chat line: combat log only (0x006d3730). This printed "You feed
-    // your pet X." in English.
-    owner_.ensureItemInfo(feedItem);
+    if (feedItem == 0) return;
+    const auto say = [this, feedItem, casterGuid]() {
+        const auto* info = owner_.getItemInfo(feedItem);
+        if (!info || !info->valid) return;
+        std::string line;
+        if (casterGuid == owner_.getPlayerGuid()) {
+            line = interfaceFormat("FEEDPET_LOG_FIRSTPERSON", "Your pet begins eating the %s.", {info->name});
+        } else {
+            const std::string& feeder = owner_.lookupName(casterGuid);
+            if (feeder.empty()) return;
+            line = interfaceFormat("FEEDPET_LOG_THIRDPERSON", "%s's pet begins eating a %s.",
+                                   {feeder, info->name});
+        }
+        owner_.addLocalChatLine(ChatType::PET_INFO, line);
+    };
+    if (const auto* info = owner_.getItemInfo(feedItem); info && info->valid) {
+        say();
+    } else {
+        static uint32_t feedWaits = 0;
+        owner_.askItemThen(feedItem, "fed " + std::to_string(++feedWaits),
+                           [say](bool found) { if (found) say(); });
+    }
     LOG_DEBUG("SMSG_SPELLLOGEXECUTE FEED_PET: item=", feedItem);
 }
 
@@ -7938,13 +7979,13 @@ void SpellHandler::handleSpellLogExecute(network::Packet& packet) {
             case SpellEffect::CREATE_ITEM:
             case SpellEffect::CREATE_RANDOM_ITEM:
             case SpellEffect::CREATE_ITEM2:
-                logEffectCreateItem(entry, data.spellId, isPlayerCaster);
+                logEffectCreateItem(entry, data.spellId, data.casterGuid);
                 break;
             case SpellEffect::INTERRUPT_CAST:
                 logEffectInterruptCast(entry, data.casterGuid, data.spellId, isPlayerCaster);
                 break;
             case SpellEffect::FEED_PET:
-                logEffectFeedPet(entry, isPlayerCaster);
+                logEffectFeedPet(entry, data.casterGuid);
                 break;
             default:
                 break;

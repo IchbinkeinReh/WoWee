@@ -663,10 +663,10 @@ private:
     void logExecuteEntry(const SpellLogExecuteEntry& entry, uint64_t caster, uint32_t spellId);
     void logEffectPowerDrain(const SpellLogExecuteEntry& entry, uint64_t caster, uint32_t spellId,
                              bool isPlayerCaster);
-    void logEffectCreateItem(const SpellLogExecuteEntry& entry, uint32_t spellId, bool isPlayerCaster);
+    void logEffectCreateItem(const SpellLogExecuteEntry& entry, uint32_t spellId, uint64_t casterGuid);
     void logEffectInterruptCast(const SpellLogExecuteEntry& entry, uint64_t caster, uint32_t spellId,
                                 bool isPlayerCaster);
-    void logEffectFeedPet(const SpellLogExecuteEntry& entry, bool isPlayerCaster);
+    void logEffectFeedPet(const SpellLogExecuteEntry& entry, uint64_t casterGuid);
 
     // Find the on-use spell for an item (trigger=0 Use or trigger=5 NoDelay).
     // CMSG_USE_ITEM requires a valid spellId or the server silently ignores it.
