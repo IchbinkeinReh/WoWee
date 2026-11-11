@@ -52,6 +52,17 @@ void RealmScreen::render(auth::AuthHandler& authHandler) {
     const PaperTheme& theme = ui_.theme();
     const auto px = [this](float units) { return ui_.px(units); };
 
+    // No session to ask for realms: a failed or dropped login. Asking it every
+    // frame (requestRealmList) only logged "not authenticated (state: 10)"
+    // every ten seconds for as long as the client ran.
+    if (!realmSelected && onSessionLost &&
+        (authHandler.getState() == auth::AuthState::FAILED ||
+         (!authHandler.isConnected() && authHandler.getRealms().empty()))) {
+        ui_.end();
+        onSessionLost();
+        return;
+    }
+
     const auto& realms = authHandler.getRealms();
 
     // Auto-select: prefer realm with characters, then single realm, then first available

@@ -33,6 +33,12 @@ public:
     }
 
     void setOnBack(std::function<void()> cb) { onBack = std::move(cb); }
+    /// The login session is gone (the auth server dropped it, or it failed)
+    /// while the realm list is up: back to login with the reason, as the
+    /// client does (its realm list states REALM_LIST_FAILED and
+    /// RESPONSE_DISCONNECTED end in the glue's DISCONNECTED dialog and the
+    /// login screen, 0x006b02c0, 0x004e54d0).
+    void setOnSessionLost(std::function<void()> cb) { onSessionLost = std::move(cb); }
 
     /**
      * Reset selection state (e.g., when switching servers)
@@ -87,6 +93,7 @@ private:
     // Callbacks
     std::function<void(const std::string&, const std::string&)> onRealmSelected;
     std::function<void()> onBack;
+    std::function<void()> onSessionLost;
 
     /**
      * Update status message
