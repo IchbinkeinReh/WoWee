@@ -105,6 +105,7 @@ void M2Renderer::setInstancePosition(uint32_t instanceId, const glm::vec3& posit
 
     inst.position = position;
     inst.updateModelMatrix();
+    markRtUnsettled(inst);
     // Use cachedModel instead of a fresh models.find() - the pointer was set
     // at addInstance and stays valid as long as the instance exists.
     if (inst.cachedModel) {
@@ -124,6 +125,7 @@ void M2Renderer::setInstanceFade(uint32_t instanceId, float alpha) {
     auto idxIt = instanceIndexById.find(instanceId);
     if (idxIt == instanceIndexById.end()) return;
     instances[idxIt->second].fade = std::clamp(alpha, 0.0f, 1.0f);
+    markRtUnsettled(instances[idxIt->second]);
 }
 
 void M2Renderer::setInstanceDetailShade(uint32_t instanceId, const glm::vec4& color,
@@ -640,6 +642,7 @@ void M2Renderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& tran
 
     // Update model matrix directly
     inst.modelMatrix = transform;
+    markRtUnsettled(inst);
     inst.invModelMatrix = glm::inverse(transform);
 
     // Extract position from transform for bounds
@@ -708,6 +711,9 @@ void M2Renderer::removeInstance(uint32_t instanceId) {
     }
 
     destroyInstanceBones(inst, /*defer=*/true);
+    // Out of the traced scene now (the sync no longer sweeps for it).
+    releaseRtOf(inst);
+    forgetRtLit(inst);
 
     // Swap-remove: move last element to the hole and pop_back to avoid O(n) shift
     const size_t last = instances.size() - 1;
@@ -793,6 +799,8 @@ void M2Renderer::removeInstances(const std::vector<uint32_t>& instanceIds) {
             }
         }
         destroyInstanceBones(inst, /*defer=*/true);
+        releaseRtOf(inst);
+        forgetRtLit(inst);
         instanceIndexById.erase(idxIt);
     }
     if (toRemove.empty()) {
@@ -905,6 +913,9 @@ void M2Renderer::clear() {
     }
     models.clear();
     pinnedModelIds_.clear();
+    for (auto& inst : instances) releaseRtOf(inst);
+    rtUnsettledIds_.clear();
+    rtLitInstances_.clear();
     instances.clear();
     shadowCullDirty_ = true;
     spatialGrid.clear();
@@ -932,7 +943,12 @@ void M2Renderer::clear() {
 
 void M2Renderer::clearInstances() {
     if (vkCtx_) ::wowee::rendering::deviceWaitIdle(vkCtx_->getDevice());
-    for (auto& inst : instances) destroyInstanceBones(inst);
+    for (auto& inst : instances) {
+        destroyInstanceBones(inst);
+        releaseRtOf(inst);
+    }
+    rtUnsettledIds_.clear();
+    rtLitInstances_.clear();
     instances.clear();
     shadowCullDirty_ = true;
     spatialGrid.clear();

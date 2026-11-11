@@ -2269,6 +2269,12 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
     if (gpuModel.rtFixture) src.flags |= RtScene::kMeshFixture;
     if (!animated) {
         gpuModel.rtMesh = rtScene_->addMesh(std::move(src));
+        // Instances of it made before its mesh (a model loaded while the
+        // tracing was off, then switched on, is done by onRtActive): placed
+        // by the next sync.
+        for (const auto& [mid, gm] : models) {
+            if (&gm == &gpuModel) { rtModelsToResettle_.insert(mid); break; }
+        }
         return;
     }
     if (src.indices.empty() || model.bones.empty()) return;
@@ -2342,10 +2348,12 @@ void M2Renderer::onRtActive(bool on) {
             *tr = RtTracking{};
         }
         rtDynamicOwnerIds_.clear();
-        rtSyncCursor_ = 0;
+        rtUnsettledIds_.clear();
+        rtModelsToResettle_.clear();
         for (auto& inst : instances) {
             inst.rtInstance = RtScene::kInvalid;
             inst.rtPieceInstances.clear();
+            inst.rtUnsettled = false;
         }
         return;
     }
@@ -2417,6 +2425,35 @@ void M2Renderer::onRtActive(bool on) {
         }
         destroyBuffer(alloc, host);
     }
+    // Every instance placed afresh (syncRtScene), the lit ones listed.
+    rtModelsToResettle_.clear();
+    rtLitInstances_.clear();
+    for (auto& inst : instances) {
+        inst.rtLit = false;
+        markRtUnsettled(inst);
+        if (inst.cachedModel) noteRtLit(inst, *inst.cachedModel);
+    }
+}
+
+bool M2Renderer::rtModelLit(const M2ModelGPU& model) {
+    return !model.lights.empty() || model.isBrazierOrFire || model.isTorch || model.isLamp ||
+           !model.glowPatches.empty();
+}
+
+void M2Renderer::noteRtLit(M2Instance& inst, const M2ModelGPU& model) {
+    if (inst.rtLit || !rtModelLit(model)) return;
+    inst.rtLit = true;
+    rtLitInstances_.push_back(inst.id);
+}
+
+void M2Renderer::forgetRtLit(M2Instance& inst) {
+    if (!inst.rtLit) return;
+    inst.rtLit = false;
+    auto it = std::find(rtLitInstances_.begin(), rtLitInstances_.end(), inst.id);
+    if (it != rtLitInstances_.end()) {
+        *it = rtLitInstances_.back();
+        rtLitInstances_.pop_back();
+    }
 }
 
 void M2Renderer::releaseRtModel(M2ModelGPU& gpuModel) {
@@ -2436,6 +2473,7 @@ void M2Renderer::releaseRtModel(M2ModelGPU& gpuModel) {
                 rtScene_->removeInstance(slot | bit);
                 tr->seen[slot] = 0;
                 tr->owned[i] = tr->owned.back();
+                tr->ownedPos[tr->owned[i]] = static_cast<uint32_t>(i);
                 tr->owned.pop_back();
             } else {
                 ++i;
@@ -2451,66 +2489,113 @@ M2Renderer::RtTracking& M2Renderer::rtTrackingOf(uint32_t rtId) {
     return RtScene::isDynamic(rtId) ? rtDynamic_ : rtStatic_;
 }
 
+// A slot of the RtScene this renderer placed, out of the scene and out of the
+// tracking now, not at the end of a pass: the event-driven sync has no pass
+// over every instance to find what is gone.
+void M2Renderer::dropRtSlot(uint32_t rtId) {
+    if (rtId == RtScene::kInvalid || !rtScene_) return;
+    RtTracking& tr = rtTrackingOf(rtId);
+    const uint32_t slot = rtId & ~RtScene::kDynamicBit;
+    if (slot >= tr.seen.size() || tr.seen[slot] == 0) return;  // not ours, or gone already
+    rtScene_->removeInstance(rtId);
+    tr.seen[slot] = 0;
+    const uint32_t pos = tr.ownedPos[slot];
+    if (pos < tr.owned.size() && tr.owned[pos] == slot) {
+        const uint32_t moved = tr.owned.back();
+        tr.owned[pos] = moved;
+        tr.ownedPos[moved] = pos;
+        tr.owned.pop_back();
+    }
+}
+
+void M2Renderer::trackRtSlot(uint32_t rtId, uint32_t mesh, uint32_t owner) {
+    RtTracking& tr = rtTrackingOf(rtId);
+    const uint32_t s = rtId & ~RtScene::kDynamicBit;
+    if (s >= tr.seen.size()) {
+        tr.seen.resize(s + 1, 0);
+        tr.meshOf.resize(s + 1, RtScene::kInvalid);
+        tr.ownerOf.resize(s + 1, 0);
+        tr.ownedPos.resize(s + 1, ~0u);
+    }
+    if (tr.seen[s] == 0) {
+        tr.ownedPos[s] = static_cast<uint32_t>(tr.owned.size());
+        tr.owned.push_back(s);
+    }
+    tr.seen[s] = 1;
+    tr.meshOf[s] = mesh;
+    tr.ownerOf[s] = owner;
+}
+
+bool M2Renderer::ownsRtSlot(uint32_t rtId, uint32_t mesh, uint32_t owner) const {
+    const RtTracking& tr = RtScene::isDynamic(rtId) ? rtDynamic_ : rtStatic_;
+    const uint32_t s = rtId & ~RtScene::kDynamicBit;
+    return s < tr.seen.size() && tr.seen[s] != 0 && tr.meshOf[s] == mesh && tr.ownerOf[s] == owner;
+}
+
+uint32_t M2Renderer::rtTrackedMeshOf(uint32_t rtId) const {
+    const RtTracking& tr = RtScene::isDynamic(rtId) ? rtDynamic_ : rtStatic_;
+    const uint32_t s = rtId & ~RtScene::kDynamicBit;
+    return s < tr.meshOf.size() ? tr.meshOf[s] : RtScene::kInvalid;
+}
+
+// An instance going: its slots out of the scene at once.
+void M2Renderer::releaseRtOf(M2Instance& inst) {
+    if (inst.rtInstance != RtScene::kInvalid &&
+        ownsRtSlot(inst.rtInstance, rtTrackedMeshOf(inst.rtInstance), inst.id)) {
+        dropRtSlot(inst.rtInstance);
+    }
+    inst.rtInstance = RtScene::kInvalid;
+    for (uint32_t id : inst.rtPieceInstances) {
+        if (id != RtScene::kInvalid && ownsRtSlot(id, rtTrackedMeshOf(id), inst.id)) dropRtSlot(id);
+    }
+    inst.rtPieceInstances.clear();
+}
+
+void M2Renderer::markRtUnsettled(M2Instance& inst) {
+    if (inst.rtUnsettled) return;
+    inst.rtUnsettled = true;
+    rtUnsettledIds_.push_back(inst.id);
+}
+
 void M2Renderer::syncRtScene() {
     if (!rtScene_ || !rtScene_->isActive()) return;
-    // A pass over every instance - 120 000 in a city - took 4 ms a frame. It
-    // is spread over four frames now: what it does for a still instance - is
-    // it there, is it fully faded in - can wait a frame or three. What moves
-    // is kept in the dynamic level and updated every frame below, and what is
-    // no longer seen is removed once a whole pass has gone by.
-    if (rtSyncCursor_ == 0) {
-        ++rtSyncGeneration_;
-        rtLitNext_.clear();
-    }
-    const uint64_t gen = rtSyncGeneration_;
-    rtAnimatedPieces_ = 0;
-    // The tracking slot of an RtScene instance id.
-    auto slotOf = [](uint32_t id) { return id & ~RtScene::kDynamicBit; };
-    auto track = [&](uint32_t id, uint32_t mesh, uint32_t owner) {
-        RtTracking& tr = rtTrackingOf(id);
-        const uint32_t s = slotOf(id);
-        if (s >= tr.seen.size()) {
-            tr.seen.resize(s + 1, 0);
-            tr.meshOf.resize(s + 1, RtScene::kInvalid);
-            tr.ownerOf.resize(s + 1, 0);
+    // Event-driven. A walk over every instance - 120 000 in a city, a quarter
+    // a frame - took 5 to 8 ms in a Mulgore forest at the user's clutter, only
+    // to find nearly all of them as they were. An instance is looked at here
+    // while it is unsettled (rtUnsettledIds_): created, fading in, moved, its
+    // model's traced mesh come, the tracing switched on. Once it stands in the
+    // scene as it should, it drops off the list and costs nothing until one
+    // of those puts it back (markRtUnsettled). What moves every frame is kept
+    // in the dynamic level (rtDynamicOwnerIds_), animated models near the
+    // camera in pieces, and an instance that goes takes its slots out at once
+    // (releaseRtOf, from removeInstance(s)).
+    if (!rtModelsToResettle_.empty()) {
+        // A model's traced mesh came (registerRtModel) after instances of it
+        // were made: those instances, once.
+        for (auto& inst : instances) {
+            if (rtModelsToResettle_.count(inst.modelId)) markRtUnsettled(inst);
         }
-        tr.seen[s] = gen;
-        tr.meshOf[s] = mesh;
-        tr.ownerOf[s] = owner;
-    };
-    // Still this instance's (a copied M2Instance carries its original's RT
-    // id, not its M2 id) and placing the same mesh.
-    auto ownedBy = [&](uint32_t id, uint32_t mesh, uint32_t owner) {
-        const RtTracking& tr = rtTrackingOf(id);
-        const uint32_t s = slotOf(id);
-        return s < tr.seen.size() && tr.seen[s] != 0 && tr.meshOf[s] == mesh && tr.ownerOf[s] == owner;
+        rtModelsToResettle_.clear();
+    }
+    rtAnimatedPieces_ = 0;
+    const bool cachedModelsValid = !spatialIndexDirty_;
+    auto modelOf = [&](const M2Instance& inst) -> const M2ModelGPU* {
+        if (cachedModelsValid) return inst.cachedModel;
+        auto it = models.find(inst.modelId);
+        return it != models.end() ? &it->second : nullptr;
     };
     auto add = [&](M2Instance& inst, uint32_t mesh, bool dynamic) {
         inst.rtInstance = dynamic ? rtScene_->addDynamicInstance(mesh, inst.modelMatrix)
                                   : rtScene_->addInstance(mesh, inst.modelMatrix);
         if (inst.rtInstance == RtScene::kInvalid) return;
         inst.rtMatrix = inst.modelMatrix;
-        rtTrackingOf(inst.rtInstance).owned.push_back(slotOf(inst.rtInstance));
-        track(inst.rtInstance, mesh, inst.id);
+        trackRtSlot(inst.rtInstance, mesh, inst.id);
         if (dynamic) rtDynamicOwnerIds_.push_back(inst.id);
     };
-    // The cached model pointers hold unless a model was added or removed
-    // since update() refreshed them (the map may have rehashed). Taking them
-    // saves a hash lookup an instance - most of this pass in a city.
-    const bool cachedModelsValid = !spatialIndexDirty_;
-    auto syncOne = [&](size_t idx, bool scanning) {
-        auto& inst = instances[idx];
-        const M2ModelGPU* model = nullptr;
-        if (cachedModelsValid) {
-            model = inst.cachedModel;
-        } else if (auto it = models.find(inst.modelId); it != models.end()) {
-            model = &it->second;
-        }
-        if (scanning && model &&
-            (!model->lights.empty() || model->isBrazierOrFire || model->isTorch || model->isLamp ||
-             !model->glowPatches.empty())) {
-            rtLitNext_.push_back(inst.id);
-        }
+    // One instance brought to where it should stand; whether it is settled -
+    // nothing left to wait for (a fade, a slot the scene was out of) - after.
+    auto syncOne = [&](M2Instance& inst) -> bool {
+        const M2ModelGPU* model = modelOf(inst);
         // A fixture that moves is carried, and its light's rays would meet it.
         if (model && model->rtFixture) {
             if (inst.rtSeen && inst.rtSeenAt != inst.position) inst.rtMoved = true;
@@ -2519,35 +2604,51 @@ void M2Renderer::syncRtScene() {
         }
         const uint32_t mesh = model ? model->rtMesh : RtScene::kInvalid;
         const bool wanted = mesh != RtScene::kInvalid && inst.fade >= 1.0f && !inst.rtMoved;
-        const bool valid = inst.rtInstance != RtScene::kInvalid && ownedBy(inst.rtInstance, mesh, inst.id);
+        const bool valid = inst.rtInstance != RtScene::kInvalid && ownsRtSlot(inst.rtInstance, mesh, inst.id);
         if (!wanted) {
-            inst.rtInstance = RtScene::kInvalid;  // an unseen id is removed below
-            return;
+            if (valid) dropRtSlot(inst.rtInstance);
+            inst.rtInstance = RtScene::kInvalid;
+            // Fading in: looked at again next frame. No mesh, or a moved
+            // fixture: nothing to wait for.
+            return !(mesh != RtScene::kInvalid && inst.fade < 1.0f && !inst.rtMoved);
         }
         if (!valid) {
             add(inst, mesh, false);
-            return;
+            return inst.rtInstance != RtScene::kInvalid;
         }
         if (inst.rtMatrix != inst.modelMatrix) {
             if (RtScene::isDynamic(inst.rtInstance)) {
                 rtScene_->setInstanceTransform(inst.rtInstance, inst.modelMatrix);
                 inst.rtMatrix = inst.modelMatrix;
-                track(inst.rtInstance, mesh, inst.id);
             } else {
                 // It moves: a transport, or a doodad riding one. Moved in the
                 // static set it would rebuild the whole city's top level
-                // every frame; the old id is left unseen and goes below.
+                // every frame; it goes to the dynamic one.
+                dropRtSlot(inst.rtInstance);
                 add(inst, mesh, true);
             }
-            return;
         }
-        track(inst.rtInstance, mesh, inst.id);
+        return true;
     };
     {
-        const size_t n = instances.size();
-        const size_t end = std::min(n, rtSyncCursor_ + n / 4 + 1);
-        for (size_t idx = rtSyncCursor_; idx < end; ++idx) syncOne(idx, true);
-        rtSyncCursor_ = end;
+        WOWEE_PROFILE_SCOPE("rt: unsettled", Cpu);
+        for (size_t k = 0; k < rtUnsettledIds_.size();) {
+            auto it = instanceIndexById.find(rtUnsettledIds_[k]);
+            bool drop = it == instanceIndexById.end() || it->second >= instances.size();
+            if (!drop) {
+                M2Instance& inst = instances[it->second];
+                if (syncOne(inst)) {
+                    inst.rtUnsettled = false;
+                    drop = true;
+                }
+            }
+            if (drop) {
+                rtUnsettledIds_[k] = rtUnsettledIds_.back();
+                rtUnsettledIds_.pop_back();
+            } else {
+                ++k;
+            }
+        }
     }
     // Every frame, what has been seen to move.
     for (size_t k = 0; k < rtDynamicOwnerIds_.size();) {
@@ -2559,7 +2660,7 @@ void M2Renderer::syncRtScene() {
             rtDynamicOwnerIds_.pop_back();
             continue;
         }
-        syncOne(it->second, false);
+        syncOne(instances[it->second]);
         ++k;
     }
 
@@ -2572,16 +2673,16 @@ void M2Renderer::syncRtScene() {
     for (size_t idx : animatedInstanceIndices_) {
         if (idx >= instances.size()) continue;
         M2Instance& inst = instances[idx];
-        const M2ModelGPU* model = cachedModelsValid ? inst.cachedModel : nullptr;
-        if (!cachedModelsValid) {
-            if (auto it = models.find(inst.modelId); it != models.end()) model = &it->second;
-        }
+        const M2ModelGPU* model = modelOf(inst);
         const glm::vec3 d = inst.position - cachedCamPos_;
         const bool wanted = model && !model->rtPieces.empty() && inst.fade >= 1.0f && !inst.rtMoved &&
                             !inst.boneMatrices.empty() && glm::dot(d, d) < kAnimatedCastRadius * kAnimatedCastRadius &&
                             rtAnimatedPieces_ + model->rtPieces.size() <= kMaxAnimatedPieces;
         if (!wanted) {
-            inst.rtPieceInstances.clear();  // unseen, so removed below
+            for (uint32_t id : inst.rtPieceInstances) {
+                if (id != RtScene::kInvalid && ownsRtSlot(id, rtTrackedMeshOf(id), inst.id)) dropRtSlot(id);
+            }
+            inst.rtPieceInstances.clear();
             continue;
         }
         inst.rtPieceInstances.resize(model->rtPieces.size(), RtScene::kInvalid);
@@ -2589,47 +2690,18 @@ void M2Renderer::syncRtScene() {
             const auto& piece = model->rtPieces[i];
             const glm::mat4 m = rtSteadyCarried(*model, inst, piece.bone);
             uint32_t& id = inst.rtPieceInstances[i];
-            if (id != RtScene::kInvalid && ownedBy(id, piece.mesh, inst.id)) {
+            if (id != RtScene::kInvalid && ownsRtSlot(id, piece.mesh, inst.id)) {
                 rtScene_->setInstanceTransform(id, m);
             } else {
                 id = rtScene_->addDynamicInstance(piece.mesh, m);
                 if (id == RtScene::kInvalid) continue;
-                rtDynamic_.owned.push_back(slotOf(id));
+                trackRtSlot(id, piece.mesh, inst.id);
             }
-            track(id, piece.mesh, inst.id);
         }
         rtAnimatedPieces_ += static_cast<uint32_t>(model->rtPieces.size());
     }
 
     syncRtSkinned();
-
-    if (rtSyncCursor_ < instances.size()) return;  // the pass goes on next frame
-    rtSyncCursor_ = 0;
-    rtLitInstances_.swap(rtLitNext_);
-    for (RtTracking* tr : {&rtStatic_, &rtDynamic_}) {
-        const uint32_t bit = tr == &rtDynamic_ ? RtScene::kDynamicBit : 0u;
-        for (size_t i = 0; i < tr->owned.size();) {
-            const uint32_t slot = tr->owned[i];
-            if (tr->seen[slot] != gen) {
-                // Not met by the pass, yet still held: a removal swapped its
-                // instance from the part not yet scanned into the part
-                // already scanned. Kept, rather than gone for a pass.
-                const auto owner = instanceIndexById.find(tr->ownerOf[slot]);
-                if (owner != instanceIndexById.end() && owner->second < instances.size() &&
-                    instances[owner->second].rtInstance == (slot | bit)) {
-                    tr->seen[slot] = gen;
-                    ++i;
-                    continue;
-                }
-                rtScene_->removeInstance(slot | bit);
-                tr->seen[slot] = 0;
-                tr->owned[i] = tr->owned.back();
-                tr->owned.pop_back();
-            } else {
-                ++i;
-            }
-        }
-    }
 }
 
 // The skinned models near the camera (M2ModelGPU::rtSkin): each traced in
