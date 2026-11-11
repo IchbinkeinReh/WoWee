@@ -1653,6 +1653,16 @@ spell_history::History::Cooldown SpellHandler::historyCooldown(uint32_t spellId,
                itemId);
 }
 
+int32_t SpellHandler::itemUseCooldownMs(uint32_t spellId) const {
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return 0;
+    const auto& e = it->second;
+    const int32_t own = moddedCooldown(spellId, static_cast<int32_t>(e.recoveryMs));
+    int32_t cat = static_cast<int32_t>(e.categoryRecoveryMs);
+    if ((e.attrEx6 & 0x80000000u) == 0) cat = moddedCooldown(spellId, cat);
+    return std::max(own, cat);
+}
+
 int32_t SpellHandler::moddedCooldown(uint32_t spellId, int32_t ms) const {
     // 0x007fd970 with op 11, Cooldown.
     return static_cast<int32_t>(spell_mods::apply(static_cast<float>(ms), spellModifiers(spellId, 11)));

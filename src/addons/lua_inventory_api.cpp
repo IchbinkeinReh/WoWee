@@ -3613,6 +3613,21 @@ static int lua_GetItemTooltipData(lua_State* L) {
             // after it counts them unless they are 0 or -1 (0x006277f0).
             lua_pushnumber(L, i);
             lua_setfield(L, -2, "slot");
+            // A Use spell's cooldown, said at the end of its line
+            // (ITEM_COOLDOWN_TOTAL): the template's when it is above zero;
+            // when it and the category's are both under zero, the spell's.
+            if (info->spells[i].spellTrigger == 0) {
+                int32_t cd = info->spells[i].cooldown;
+                if (cd < 0 && info->spells[i].categoryCooldown < 0) {
+                    gh->loadSpellNameCache();
+                    const auto* sh = gh->getSpellHandler();
+                    cd = sh ? sh->itemUseCooldownMs(info->spells[i].spellId) : 0;
+                }
+                if (cd > 0) {
+                    lua_pushnumber(L, cd);
+                    lua_setfield(L, -2, "cooldown");
+                }
+            }
             if (info->spells[i].charges != 0 && info->spells[i].charges != -1) {
                 lua_pushnumber(L, info->spells[i].charges);
                 lua_setfield(L, -2, "charges");

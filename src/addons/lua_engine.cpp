@@ -11099,6 +11099,25 @@ void LuaEngine::registerCoreAPI() {
         // stat and requirement lines come worded from _GetItemTooltipData.
         // `inst`, when the tooltip is of one item held: its soulbound flag
         // and durability, which the template does not carry.
+        // A length the way 0x0061abf0 says it: the largest units first, two
+        // at most - days and hours, else hours and minutes, else minutes and
+        // seconds - each through its *_ABBR string, joined by
+        // TIME_UNIT_DELIMITER.
+        "function _WoweeCooldownText(ms)\n"
+        "    local parts, used = {}, 0\n"
+        "    local units = {{86400000, 'DAYS_ABBR', '%d Days'}, {3600000, 'HOURS_ABBR', '%d Hr'},\n"
+        "                   {60000, 'MINUTES_ABBR', '%d Min'}, {1000, 'SECONDS_ABBR', '%d Sec'}}\n"
+        "    for i, u in ipairs(units) do\n"
+        "        if used >= 2 then break end\n"
+        "        local n = math.floor(ms / u[1])\n"
+        "        if n > 0 or (i == 4 and used == 0 and ms > 0) then\n"
+        "            parts[#parts + 1] = format(_G[u[2]] or u[3], n)\n"
+        "            ms = ms - n * u[1]\n"
+        "            used = used + 1\n"
+        "        end\n"
+        "    end\n"
+        "    return table.concat(parts, TIME_UNIT_DELIMITER or ' ')\n"
+        "end\n"
         "function _WoweePopulateItemTooltip(self, itemId, inst)\n"
         "    local name, itemLink, quality, iLevel, reqLevel, class, subclass, maxStack, equipSlot, texture, sellPrice = GetItemInfo(itemId)\n"
         "    if not name then return false end\n"
@@ -11292,6 +11311,7 @@ void LuaEngine::registerCoreAPI() {
         "                    local key = triggerKeys[sp.trigger]\n"
         "                    local label = key and _G[key]\n"
         "                    if label then text = label .. ' ' .. text end\n"
+        "                    if sp.cooldown then text = text .. ' ' .. format(ITEM_COOLDOWN_TOTAL or '(%s Cooldown)', _WoweeCooldownText(sp.cooldown)) end\n"
         "                    self:AddLine(text, 0, 1, 0, 1)\n"
         "                    if sp.charges then\n"
         "                        local n = sp.charges\n"

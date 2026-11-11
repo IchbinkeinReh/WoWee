@@ -272,6 +272,11 @@ public:
     [[nodiscard]] std::vector<uint32_t> multiCastSpells(int element) const;
     /// 0x007548f0: the player carries what the TotemCategory asks for.
     [[nodiscard]] bool carriesTotemCategory(uint32_t category) const;
+    /// The cooldown an item's Use spell is shown with when the item names none
+    /// of its own (0x006277f0): RecoveryTime and CategoryRecoveryTime through
+    /// the spell's Cooldown modifiers (op 11, the category's unless
+    /// AttributesEx6 0x80000000), whichever is longer. Milliseconds.
+    [[nodiscard]] int32_t itemUseCooldownMs(uint32_t spellId) const;
     /// The first area an AreaGroup names, 0 for none.
     [[nodiscard]] uint32_t firstAreaOfGroup(uint32_t group) const;
     /// The totem bar's update (0x005ab9d0): an element whose list has spells
