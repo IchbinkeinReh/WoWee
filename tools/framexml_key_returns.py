@@ -129,11 +129,12 @@ def push_kinds(name):
     count = int(last.group(1))
     if count == 0 or count > 32:
         return ()
-    pushes = list(re.finditer(r"\blua_push(number|string|boolean|nil|integer|lstring)\b",
+    # luaPushOneOrNil is a number (1) or nil, the client's yes-or-no.
+    pushes = list(re.finditer(r"\b(?:lua_push|luaPush)(number|string|boolean|nil|integer|lstring|OneOrNil)\b",
                               body[:last.start()]))
     if len(pushes) < count:
         return ()
-    return tuple(p.group(1) for p in pushes[-count:])
+    return tuple("number" if p.group(1) == "OneOrNil" else p.group(1) for p in pushes[-count:])
 
 
 # Read once. Both stages want every loaded file and reading them twice was

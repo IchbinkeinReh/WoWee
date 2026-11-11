@@ -154,7 +154,7 @@ def constant_falsey_bindings():
 
     hits = {}
     for name, body in out.items():
-        if "lua_pushnil" in body or "luaReturnNil" in body:
+        if "lua_pushnil" in body or "luaReturnNil" in body or "luaPushOneOrNil" in body:
             continue
         if re.search(r'lua_pushstring\(\s*L\s*,\s*""\s*\)', body):
             hits[name] = 'pushes ""'

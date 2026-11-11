@@ -832,20 +832,20 @@ static int lua_CastSpell(lua_State* L) {
 /// interruptibility.
 static int lua_IsPassiveSpell(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) { lua_pushboolean(L, 0); return 1; }
+    if (!gh) { luaPushOneOrNil(L, 0); return 1; }
     // Both forms: IsPassiveSpell(spellId) and IsPassiveSpell(slot, bookType),
     // which is the one the spellbook uses - and reading a slot as an id
     // answered for whichever spell happens to carry the number 1, 2 or 3.
     // The result decides whether a spell is drawn as castable at all.
     const uint32_t id = spellIdForCall(L, gh);
-    lua_pushboolean(L, gh->isSpellPassive(id) ? 1 : 0);
+    luaPushOneOrNil(L, gh->isSpellPassive(id) ? 1 : 0);
     return 1;
 }
 
 /// IsSelectedSpell(slot, bookType) → whether the book is highlighting it.
 /// Nothing selects a spell here; the highlight follows the cursor.
 static int lua_IsSelectedSpell(lua_State* L) {
-    lua_pushboolean(L, 0);
+    luaPushOneOrNil(L, 0);
     return 1;
 }
 
@@ -854,8 +854,8 @@ static int lua_IsSelectedSpell(lua_State* L) {
 /// little rotating border is not drawn, which is right for every spell a
 /// player has.
 static int lua_GetSpellAutocast(lua_State* L) {
-    lua_pushboolean(L, 0);
-    lua_pushboolean(L, 0);
+    luaPushOneOrNil(L, 0);
+    luaPushOneOrNil(L, 0);
     return 2;
 }
 /// GetKnownSlotFromHighestRankSlot(slot) → the slot actually known: a slot
@@ -1536,7 +1536,7 @@ void registerSpellLuaAPI(lua_State* L) {
                 {"SpellIsTargeting", [](lua_State* L) -> int {
             // 0x00d3f4e4: a spell is on the cursor waiting for its target.
             auto* gh = getGameHandler(L);
-            lua_pushboolean(L, gh && (gh->isGroundTargeting() || gh->isUnitTargeting() ||
+            luaPushOneOrNil(L, gh && (gh->isGroundTargeting() || gh->isUnitTargeting() ||
                                       gh->isAwaitingItemTarget() || gh->isAwaitingGlyphTarget()));
             return 1;
         }},
@@ -1634,7 +1634,7 @@ void registerSpellLuaAPI(lua_State* L) {
                 {"IsCurrentSpell", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             uint32_t spellId = static_cast<uint32_t>(luaL_checknumber(L, 1));
-            lua_pushboolean(L, gh && gh->getCurrentCastSpellId() == spellId ? 1 : 0);
+            luaPushOneOrNil(L, gh && gh->getCurrentCastSpellId() == spellId ? 1 : 0);
             return 1;
         }},
                 // IsAutoRepeatSpell(spell [, book]) (0x005415d0): 1 when the

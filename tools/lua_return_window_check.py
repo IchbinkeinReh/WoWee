@@ -57,7 +57,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 BINDING = re.compile(
     r"^static int (lua_\w+)\(lua_State\* L\)\s*\{"
     r"|\{\s*\"(\w+)\"\s*,\s*\[\]\s*\(lua_State\* L\)\s*->\s*int\s*\{", re.M)
-PUSH = re.compile(r"\blua_(?:push\w+|getfield|rawgeti|newtable|createtable)\s*\(")
+PUSH = re.compile(r"\blua_(?:push\w+|getfield|rawgeti|newtable|createtable)\s*\(|\bluaPushOneOrNil\s*\(")
 POP = re.compile(r"\blua_pop\s*\(")
 FINAL_RETURN = re.compile(r"\breturn\s+(\d+)\s*;")
 

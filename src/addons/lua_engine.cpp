@@ -189,7 +189,7 @@ bool allEventsCover(lua_State* L, int frame, const char* eventName) {
 static int lua_Frame_IsEventRegistered(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     const char* eventName = luaL_optstring(L, 2, nullptr);
-    if (!eventName || !*eventName) { lua_pushboolean(L, 0); return 1; }
+    if (!eventName || !*eventName) { luaPushOneOrNil(L, 0); return 1; }
     bool on = false;
     {
         taint::Quiet quiet;   // the registration is the client's, kept in C
@@ -202,7 +202,7 @@ static int lua_Frame_IsEventRegistered(lua_State* L) {
         lua_pop(L, 1);
         if (!on) on = allEventsCover(L, 1, eventName);
     }
-    lua_pushboolean(L, on ? 1 : 0);
+    luaPushOneOrNil(L, on ? 1 : 0);
     return 1;
 }
 
@@ -1343,7 +1343,7 @@ int lua_Frame_SetMovable(lua_State* L) {
 }
 int lua_Frame_IsMovable(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    lua_pushboolean(L, w && w->movable);
+    luaPushOneOrNil(L, w && w->movable);
     return 1;
 }
 /// RegisterForDrag("LeftButton", ...) - naming none of them turns dragging off,
@@ -1417,7 +1417,7 @@ int lua_Frame_IsResizable(lua_State* L) {
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     const auto* w = (tree && id) ? tree->get(id) : nullptr;
-    lua_pushboolean(L, w && w->resizable ? 1 : 0);
+    luaPushOneOrNil(L, w && w->resizable ? 1 : 0);
     return 1;
 }
 
@@ -1905,7 +1905,7 @@ int lua_Region_GetObjectType(lua_State* L) {
 int lua_Region_IsObjectType(lua_State* L) {
     const auto* w = widgetOf(L, 1);
     const char* asked = luaL_optstring(L, 2, "");
-    lua_pushboolean(L, w && objectTypeMatches(w->objectType, asked));
+    luaPushOneOrNil(L, w && objectTypeMatches(w->objectType, asked));
     return 1;
 }
 
@@ -2324,7 +2324,7 @@ int lua_FontString_SetWordWrap(lua_State* L) {
 }
 int lua_FontString_CanWordWrap(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    lua_pushboolean(L, (w && w->wordWrap) ? 1 : 0);
+    luaPushOneOrNil(L, (w && w->wordWrap) ? 1 : 0);
     return 1;
 }
 /// Texture:Set/GetHorizTile, Set/GetVertTile (0x0048cb60, 0x0048cbc0,
@@ -2996,10 +2996,10 @@ int lua_Tooltip_SetAction(lua_State* L) {
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
     const int slot = static_cast<int>(luaL_optnumber(L, 2, 0)) - 1;
-    if (!w || !gh || slot < 0) { lua_pushboolean(L, 0); return 1; }
+    if (!w || !gh || slot < 0) { luaPushOneOrNil(L, 0); return 1; }
     const auto& bar = gh->getActionBar();
     if (slot >= static_cast<int>(bar.size()) || bar[slot].isEmpty()) {
-        lua_pushboolean(L, 0);
+        luaPushOneOrNil(L, 0);
         return 1;
     }
 
@@ -3008,16 +3008,16 @@ int lua_Tooltip_SetAction(lua_State* L) {
     // Naming it and stopping meant the same potion described itself two
     // different ways depending on where it was hovered.
     if (action.type == game::ActionBarSlot::ITEM) {
-        lua_pushboolean(L, fillItemTooltipById(L, gh, action.id) ? 1 : 0);
+        luaPushOneOrNil(L, fillItemTooltipById(L, gh, action.id) ? 1 : 0);
         return 1;
     }
     if (action.type == game::ActionBarSlot::SPELL) {
-        lua_pushboolean(L, fillSpellTooltip(L, w, gh, action.id) ? 1 : 0);
+        luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, action.id) ? 1 : 0);
         return 1;
     }
     // A macro is the third kind a slot can hold and it has no tooltip of its
     // own - WoW shows the macro's name from the button rather than from here.
-    lua_pushboolean(L, 0);
+    luaPushOneOrNil(L, 0);
     return 1;
 }
 
@@ -3436,7 +3436,7 @@ int lua_Tooltip_SetSpellByID(lua_State* L) {
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
     const uint32_t id = static_cast<uint32_t>(luaL_optnumber(L, 2, 0));
-    lua_pushboolean(L, fillSpellTooltip(L, w, gh, id) ? 1 : 0);
+    luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, id) ? 1 : 0);
     return 1;
 }
 
@@ -3804,15 +3804,15 @@ static int lua_Tooltip_IsUnit(lua_State* L) {
     auto* gh = wowee::addons::getGameHandler(L);
     const char* asked = luaL_optstring(L, 2, nullptr);
     if (!w || !gh || !asked || !*asked || w->tooltipUnit.empty()) {
-        lua_pushboolean(L, 0);
+        luaPushOneOrNil(L, 0);
         return 1;
     }
     std::string other(asked);
     for (char& c : other) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    if (other == w->tooltipUnit) { lua_pushboolean(L, 1); return 1; }
+    if (other == w->tooltipUnit) { luaPushOneOrNil(L, 1); return 1; }
     const uint64_t mine = wowee::addons::resolveUnitGuid(gh, w->tooltipUnit);
     const uint64_t theirs = wowee::addons::resolveUnitGuid(gh, other);
-    lua_pushboolean(L, (mine != 0 && mine == theirs) ? 1 : 0);
+    luaPushOneOrNil(L, (mine != 0 && mine == theirs) ? 1 : 0);
     return 1;
 }
 
@@ -4198,14 +4198,14 @@ int lua_Tooltip_SetAuctionItem(lua_State* L) {
     auto* gh = wowee::addons::getGameHandler(L);
     const char* list = luaL_optstring(L, 2, "list");
     const int index = static_cast<int>(luaL_optnumber(L, 3, 0));
-    if (!w || !gh || index < 1) { lua_pushboolean(L, 0); return 1; }
+    if (!w || !gh || index < 1) { luaPushOneOrNil(L, 0); return 1; }
 
     const std::string which(list ? list : "list");
     const auto& results = (which == "owner")  ? gh->getAuctionOwnerResults()
                         : (which == "bidder") ? gh->getAuctionBidderResults()
                                               : gh->getAuctionBrowseResults();
     if (index > static_cast<int>(results.auctions.size())) {
-        lua_pushboolean(L, 0);
+        luaPushOneOrNil(L, 0);
         return 1;
     }
     const auto& row = results.auctions[index - 1];
@@ -4227,7 +4227,7 @@ int lua_Tooltip_SetAuctionItem(lua_State* L) {
         def.suffixFactor     = row.suffixFactor;
         appendRandomSuffix(w, gh, def);
     }
-    lua_pushboolean(L, filled ? 1 : 0);
+    luaPushOneOrNil(L, filled ? 1 : 0);
     return 1;
 }
 
@@ -4545,7 +4545,7 @@ int lua_Tooltip_SetBagItem(lua_State* L) {
     auto* gh = wowee::addons::getGameHandler(L);
     const int bag = static_cast<int>(luaL_optnumber(L, 2, 0));
     const int slot = static_cast<int>(luaL_optnumber(L, 3, 0));
-    if (!w || !gh || slot < 1) { lua_pushboolean(L, 0); return 1; }
+    if (!w || !gh || slot < 1) { luaPushOneOrNil(L, 0); return 1; }
     const auto& inv = gh->getInventory();
     const auto& s = (bag == 0) ? inv.getBackpackSlot(slot - 1)
                                : inv.getBagSlot(bag - 1, slot - 1);
@@ -4557,7 +4557,7 @@ int lua_Tooltip_SetBagItem(lua_State* L) {
         // tooltip over an empty square.
         w->tooltipLines.clear();
         w->shown = false;
-        lua_pushboolean(L, 0);
+        luaPushOneOrNil(L, 0);
         return 1;
     }
     // Through the fuller builder, with the slot's own copy of the item as the
@@ -4570,7 +4570,7 @@ int lua_Tooltip_SetBagItem(lua_State* L) {
         fireTooltipSetItem(L);
         appendDurabilityLine(w, s.item);
     }
-    lua_pushboolean(L, 1);
+    luaPushOneOrNil(L, 1);
     return 1;
 }
 
@@ -5103,7 +5103,7 @@ int lua_Region_Hide(lua_State* L) {
 }
 int lua_Region_IsShown(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    lua_pushboolean(L, w ? (w->shown ? 1 : 0) : 0);
+    luaPushOneOrNil(L, w ? (w->shown ? 1 : 0) : 0);
     return 1;
 }
 
@@ -5130,7 +5130,7 @@ int lua_Region_IsVisible(lua_State* L) {
             id = p->parent;
         }
     }
-    lua_pushboolean(L, on);
+    luaPushOneOrNil(L, on);
     return 1;
 }
 int lua_Region_SetAlpha(lua_State* L) {
@@ -5349,7 +5349,7 @@ int lua_Frame_EnableMouse(lua_State* L) {
 }
 int lua_Frame_IsMouseEnabled(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    lua_pushboolean(L, w && w->mouseEnabled ? 1 : 0);
+    luaPushOneOrNil(L, w && w->mouseEnabled ? 1 : 0);
     return 1;
 }
 
@@ -6138,7 +6138,7 @@ int lua_Frame_SetUserPlaced(lua_State* L) {
 }
 int lua_Frame_IsUserPlaced(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    lua_pushboolean(L, w && w->userMoved);
+    luaPushOneOrNil(L, w && w->userMoved);
     return 1;
 }
 
@@ -6399,7 +6399,7 @@ int lua_Frame_EnableKeyboard(lua_State* L) {
 }
 int lua_Frame_IsKeyboardEnabled(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    lua_pushboolean(L, w && w->keyboardEnabled);
+    luaPushOneOrNil(L, w && w->keyboardEnabled);
     return 1;
 }
 int lua_Frame_SetPropagateKeyboardInput(lua_State* L) {
@@ -6414,7 +6414,7 @@ int lua_Frame_SetToplevel(lua_State* L) {
 }
 int lua_Frame_IsToplevel(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    lua_pushboolean(L, w && w->topLevel);
+    luaPushOneOrNil(L, w && w->topLevel);
     return 1;
 }
 int lua_Frame_Raise(lua_State* L) {
@@ -6438,7 +6438,7 @@ int lua_Frame_SetClampedToScreen(lua_State* L) {
 }
 int lua_Frame_IsClampedToScreen(lua_State* L) {
     const auto* w = widgetOf(L, 1);
-    lua_pushboolean(L, w && w->clampedToScreen);
+    luaPushOneOrNil(L, w && w->clampedToScreen);
     return 1;
 }
 

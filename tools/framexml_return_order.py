@@ -81,7 +81,7 @@ for p in ADDONS.rglob("*.cpp"):
             i += 1
         bodies.setdefault(m.group(1), src[m.end():i])
 
-PUSH = re.compile(r"lua_push(?:string|number|integer|boolean|nil|lstring)\s*\(\s*L\s*,?\s*([^;]*)\)\s*;")
+PUSH = re.compile(r"(?:lua_push(?:string|number|integer|boolean|nil|lstring)|luaPushOneOrNil)\s*\(\s*L\s*,?\s*([^;]*)\)\s*;")
 def pushes(body):
     # The longest run of pushes with no `return` between them: the main path.
     # Collecting every push in the function counts the early-return block too

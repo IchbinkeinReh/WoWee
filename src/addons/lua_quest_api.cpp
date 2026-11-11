@@ -263,7 +263,7 @@ static const game::GameHandler::QuestLogEntry* selectedLogEntry(game::GameHandle
 static int lua_IsCurrentQuestFailed(lua_State* L) {
     auto* gh = getGameHandler(L);
     const auto* q = selectedLogEntry(gh);
-    lua_pushboolean(L, (q && q->failed) ? 1 : 0);
+    luaPushOneOrNil(L, (q && q->failed) ? 1 : 0);
     return 1;
 }
 
@@ -291,8 +291,8 @@ static int lua_GetQuestRewardSpell(lua_State* L) {
     lua_pushstring(L, icon.empty() ? "Interface\\Icons\\INV_Misc_QuestionMark"
                                    : icon.c_str());
     lua_pushstring(L, name.c_str());
-    lua_pushboolean(L, gh->isProfessionSpell(spellId) ? 1 : 0);
-    lua_pushboolean(L, gh->getKnownSpells().count(spellId) > 0 ? 1 : 0);
+    luaPushOneOrNil(L, gh->isProfessionSpell(spellId) ? 1 : 0);
+    luaPushOneOrNil(L, gh->getKnownSpells().count(spellId) > 0 ? 1 : 0);
     return 4;
 }
 // GetQuestLogRewardTitle() → the title a quest awards, formatted with the
@@ -919,7 +919,7 @@ static int lua_GetQuestLogSelection(lua_State* L) {
 // never offering it at all. The button is disabled without this, and sharing
 // works, so silence would be the more misleading answer of the two.
 static int lua_GetQuestLogPushable(lua_State* L) {
-    lua_pushboolean(L, selectedQuest(getGameHandler(L)) != nullptr ? 1 : 0);
+    luaPushOneOrNil(L, selectedQuest(getGameHandler(L)) != nullptr ? 1 : 0);
     return 1;
 }
 
@@ -1073,7 +1073,7 @@ static int lua_IsQuestWatched(lua_State* L) {
     int index = static_cast<int>(luaL_checknumber(L, 1));
     if (!gh || index < 1) { return luaReturnFalse(L); }
     const auto* q = questAtRow(gh, index);
-    lua_pushboolean(L, (q && gh->isQuestTracked(q->questId)) ? 1 : 0);
+    luaPushOneOrNil(L, (q && gh->isQuestTracked(q->questId)) ? 1 : 0);
     return 1;
 }
 
@@ -1667,7 +1667,7 @@ static int lua_GetQuestPOILeaderBoard(lua_State* L) {
     }
     lua_pushstring(L, line.text.c_str());
     lua_pushstring(L, line.type);
-    lua_pushboolean(L, line.finished ? 1 : 0);
+    luaPushOneOrNil(L, line.finished ? 1 : 0);
     return 3;
 }
 
@@ -1780,7 +1780,7 @@ static int lua_GetQuestLogItemDrop(lua_State* L) {
             "QUEST_ITEMS_NEEDED", "%s (%d/%d)",
             {name, std::to_string(shown), std::to_string(wanted)}).c_str());
         lua_pushstring(L, "item");                        // 2: type
-        lua_pushboolean(L, wanted <= have ? 1 : 0);       // 3: finished
+        luaPushOneOrNil(L, wanted <= have ? 1 : 0);       // 3: finished
         return 3;
     }
     lua_pushnil(L); lua_pushnil(L); lua_pushnil(L);
@@ -2880,10 +2880,10 @@ static int lua_GetTalentInfo(lua_State* L) {
         lua_pushnumber(L, talent->column + 1);
         lua_pushnumber(L, rank);
         lua_pushnumber(L, talent->maxRank);
-        lua_pushboolean(L, 0);
-        lua_pushboolean(L, met ? 1 : 0);
+        luaPushOneOrNil(L, (talent->flags & 0x1) != 0);
+        luaPushOneOrNil(L, met ? 1 : 0);
         lua_pushnumber(L, previewRank);
-        lua_pushboolean(L, petPrereqsMet(gh, talent, /*withPreview=*/true) ? 1 : 0);
+        luaPushOneOrNil(L, petPrereqsMet(gh, talent, /*withPreview=*/true) ? 1 : 0);
         return 10;
     }
     const int group = talentGroupArg(L, 5, gh);
@@ -2915,12 +2915,12 @@ static int lua_GetTalentInfo(lua_State* L) {
     lua_pushnumber(L, talent->column + 1);     // 4: column (1-indexed)
     lua_pushnumber(L, rank);                   // 5: rank
     lua_pushnumber(L, talent->maxRank);        // 6: maxRank
-    lua_pushboolean(L, 0);                     // 7: isExceptional
+    luaPushOneOrNil(L, (talent->flags & 0x1) != 0);  // 7: isExceptional
     // Was hardcoded true, which drew every talent as learnable however deep in
     // a chain it sat.
-    lua_pushboolean(L, talentPrereqsMet(gh, talent, /*withPreview=*/false, inspect, group) ? 1 : 0);
+    luaPushOneOrNil(L, talentPrereqsMet(gh, talent, /*withPreview=*/false, inspect, group) ? 1 : 0);
     lua_pushnumber(L, previewRank);            // 9: previewRank
-    lua_pushboolean(L, talentPrereqsMet(gh, talent, /*withPreview=*/true, inspect, group) ? 1 : 0);
+    luaPushOneOrNil(L, talentPrereqsMet(gh, talent, /*withPreview=*/true, inspect, group) ? 1 : 0);
     return 10;
 }
 
@@ -3817,8 +3817,8 @@ static int lua_GetTalentPrereqs(lua_State* L) {
             const int previewHave = have + (it != petPreviewPoints().end() ? it->second : 0);
             lua_pushnumber(L, prereq->row + 1);
             lua_pushnumber(L, prereq->column + 1);
-            lua_pushboolean(L, have >= needed ? 1 : 0);
-            lua_pushboolean(L, previewHave >= needed ? 1 : 0);
+            luaPushOneOrNil(L, have >= needed ? 1 : 0);
+            luaPushOneOrNil(L, previewHave >= needed ? 1 : 0);
             pushed += 4;
         }
         return pushed;
@@ -3845,8 +3845,8 @@ static int lua_GetTalentPrereqs(lua_State* L) {
 
         lua_pushnumber(L, prereq->row + 1);
         lua_pushnumber(L, prereq->column + 1);
-        lua_pushboolean(L, have >= needed ? 1 : 0);
-        lua_pushboolean(L, previewHave >= needed ? 1 : 0);
+        luaPushOneOrNil(L, have >= needed ? 1 : 0);
+        luaPushOneOrNil(L, previewHave >= needed ? 1 : 0);
         pushed += 4;
     }
     return pushed;
@@ -4192,8 +4192,8 @@ static int lua_GetQuestLogRewardSpell(lua_State* L) {
     lua_pushstring(L, icon.empty() ? "Interface\\Icons\\INV_Misc_QuestionMark"
                                    : icon.c_str());
     lua_pushstring(L, name.c_str());
-    lua_pushboolean(L, gh->isProfessionSpell(spellId) ? 1 : 0);
-    lua_pushboolean(L, gh->getKnownSpells().count(spellId) > 0 ? 1 : 0);
+    luaPushOneOrNil(L, gh->isProfessionSpell(spellId) ? 1 : 0);
+    luaPushOneOrNil(L, gh->getKnownSpells().count(spellId) > 0 ? 1 : 0);
     return 4;
 }
 
@@ -4527,7 +4527,7 @@ static int lua_IsQuestCompletable(lua_State* L) {
     auto* gh = getGameHandler(L);
     const bool ok = gh && gh->isQuestRequestItemsOpen() &&
                     gh->getQuestRequestItems().isCompletable();
-    lua_pushboolean(L, ok ? 1 : 0);
+    luaPushOneOrNil(L, ok ? 1 : 0);
     return 1;
 }
 
@@ -4586,7 +4586,7 @@ static int lua_GetQuestItemInfo(lua_State* L) {
             info && info->displayInfoId ? info->displayInfoId : r.displayInfoId).c_str());
         lua_pushnumber(L, r.count);
         lua_pushnumber(L, info ? info->quality : 1);
-        lua_pushboolean(L, rewardUsable(*gh, info));
+        luaPushOneOrNil(L, rewardUsable(*gh, info));
         return 5;
     }
     return luaReturnNil(L);
@@ -4700,8 +4700,8 @@ void registerQuestLuaAPI(lua_State* L) {
             const char* uid = luaL_optstring(L, 2, "player");
             std::string u(uid);
             for (char& c : u) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            if (!gh || u != "player" || index < 1) { lua_pushboolean(L, 0); return 1; }
-            lua_pushboolean(L, questAtRow(gh, index) != nullptr ? 1 : 0);
+            if (!gh || u != "player" || index < 1) { luaPushOneOrNil(L, 0); return 1; }
+            luaPushOneOrNil(L, questAtRow(gh, index) != nullptr ? 1 : 0);
             return 1;
         }},
                 {"GetQuestLogQuestText",    lua_GetQuestLogQuestText},
@@ -4915,7 +4915,7 @@ void registerQuestLuaAPI(lua_State* L) {
                 {"ItemTextHasNextPage", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const size_t pages = gh ? gh->getBookPages().size() : 0;
-            lua_pushboolean(L, static_cast<size_t>(bookPage() + 1) < pages ? 1 : 0);
+            luaPushOneOrNil(L, static_cast<size_t>(bookPage() + 1) < pages ? 1 : 0);
             return 1;
         }},
                 {"ItemTextPrevPage", [](lua_State* L) -> int {
@@ -5342,7 +5342,7 @@ void registerQuestLuaAPI(lua_State* L) {
                 {"QuestFlagsPVP", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             constexpr uint32_t kQuestFlagsPvp = 0x00002000u;
-            lua_pushboolean(L, gh && (questFrameFlags(gh) & kQuestFlagsPvp) ? 1 : 0);
+            luaPushOneOrNil(L, gh && (questFrameFlags(gh) & kQuestFlagsPvp) ? 1 : 0);
             return 1;
         }},
                 // QuestIsDaily() (0x0058c4d0) / QuestIsWeekly() (0x0058c510):
@@ -6489,7 +6489,7 @@ void registerQuestLuaAPI(lua_State* L) {
         }},
                 {"IsTradeskillTrainer", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushboolean(L, gh && gh->getTrainerSpells().trainerType == 2);
+            luaPushOneOrNil(L, gh && gh->getTrainerSpells().trainerType == 2);
             return 1;
         }},
                 // BuyTrainerService(index) (0x00595e60): CMSG_TRAINER_BUY_SPELL

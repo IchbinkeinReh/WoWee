@@ -436,7 +436,7 @@ for f in (ROOT / "src/addons").glob("*.cpp"):
         # lua_pushnumber(L, selectedFaction()) loses the accessor inside it and
         # reads as a literal. luaReturnNil goes with them: it is how a binding
         # says nil, not something it consults.
-        rest = re.sub(r"lua_push\w*\s*\(|luaReturnNil\s*\(|\breturn\b|\(void\)\s*L\s*;",
+        rest = re.sub(r"lua_push\w*\s*\(|luaPushOneOrNil\s*\(|luaReturnNil\s*\(|\breturn\b|\(void\)\s*L\s*;",
                       "", body)
         if not re.search(r"\w+\s*\(", rest):
             inline_stub[name] = "(inline)"

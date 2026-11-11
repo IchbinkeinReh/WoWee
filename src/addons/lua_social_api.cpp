@@ -738,7 +738,7 @@ static int channelSilenceAll(lua_State* L, bool silence, const char* fn) {
 // IsInGuild() → boolean
 static int lua_IsInGuild(lua_State* L) {
     auto* gh = getGameHandler(L);
-    lua_pushboolean(L, gh && gh->isInGuild());
+    luaPushOneOrNil(L, gh && gh->isInGuild());
     return 1;
 }
 
@@ -1599,13 +1599,13 @@ static int lua_GetPetitionInfo(lua_State* L) {
 static int lua_CanSignPetition(lua_State* L) {
     auto* gh = getGameHandler(L);
     const auto* info = shownPetition(L);
-    if (!gh || !info) { lua_pushboolean(L, 0); return 1; }
+    if (!gh || !info) { luaPushOneOrNil(L, 0); return 1; }
     const uint64_t me = gh->getPlayerGuid();
-    if (info->ownerGuid == me) { lua_pushboolean(L, 0); return 1; }
+    if (info->ownerGuid == me) { luaPushOneOrNil(L, 0); return 1; }
     for (const auto& sig : info->signatures) {
-        if (sig.playerGuid == me) { lua_pushboolean(L, 0); return 1; }
+        if (sig.playerGuid == me) { luaPushOneOrNil(L, 0); return 1; }
     }
-    lua_pushboolean(L, info->signatureCount < info->signaturesRequired ? 1 : 0);
+    luaPushOneOrNil(L, info->signatureCount < info->signaturesRequired ? 1 : 0);
     return 1;
 }
 
@@ -2176,7 +2176,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"HasFilledPetition", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const bool carrying = gh && carriedCharterGuid(gh, {23560, 23561, 23562}) != 0;
-            lua_pushboolean(L, carrying ? 1 : 0);
+            luaPushOneOrNil(L, carrying ? 1 : 0);
             return 1;
         }},
                 // TurnInGuildCharter() (0x0059a1c0 -> 0x006dd3a0): the first
@@ -2220,7 +2220,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 // holds everyone either way - so the list shows them, which is
                 // what answering true says.
                 {"GetGuildRosterShowOffline", [](lua_State* L) -> int {
-            lua_pushboolean(L, guildShowOffline() ? 1 : 0);
+            luaPushOneOrNil(L, guildShowOffline() ? 1 : 0);
             return 1;
         }},
                 {"SetGuildRosterShowOffline", [](lua_State* L) -> int {
@@ -2339,7 +2339,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 // value is a name split as "Name-Server" off a typed string
                 // (unitpopup.lua:196-202) - and that path has no `unit` at all, so
                 // the `not unit` test in front of this one answers first.
-                {"UnitIsSameServer", [](lua_State* L) -> int { lua_pushboolean(L, 1); return 1; }},
+                {"UnitIsSameServer", [](lua_State* L) -> int { luaPushOneOrNil(L, 1); return 1; }},
                 // Recruit-a-Friend summoning: the summon half of the feature
                 // CanGrantLevel was adjudicated against above, and each row here
                 // is what the reference client already does on a realm that never
@@ -2699,7 +2699,7 @@ void registerSocialLuaAPI(lua_State* L) {
                         if (index >= 0 && index < static_cast<int>(inbox.size()))
                             can = mailIsComplainable(gh, inbox[index]);
                     }
-                    if (can) lua_pushnumber(L, 1); else lua_pushboolean(L, 0);
+                    if (can) lua_pushnumber(L, 1); else luaPushOneOrNil(L, 0);
                     return 1;
                 }},
                 // Turning a letter into a keepable item. Called from the mail
@@ -2874,7 +2874,7 @@ void registerSocialLuaAPI(lua_State* L) {
             const auto* rank = sel >= 1 ? gh->getGuildRankRow(static_cast<uint32_t>(sel) - 1) : nullptr;
             if (!rank) return 0;
             const uint32_t rights = rank->rights;
-            for (uint32_t bit : kGuildRankFlagBits) lua_pushboolean(L, (rights & bit) ? 1 : 0);
+            for (uint32_t bit : kGuildRankFlagBits) luaPushOneOrNil(L, (rights & bit) ? 1 : 0);
             return static_cast<int>(kGuildRankFlagCount);
         }},
                 // CONFIRM_BUY_GUILDBANK_TAB's accept, from the guild bank's
@@ -3044,7 +3044,7 @@ void registerSocialLuaAPI(lua_State* L) {
             const uint64_t guid = resolveUnitGuid(gh, uid);
             if (guid == 0) return luaReturnFalse(L);
             for (const auto& mem : gh->getPartyData().members) {
-                if (mem.guid == guid) { lua_pushboolean(L, (mem.flags & 0x01) ? 1 : 0); return 1; }
+                if (mem.guid == guid) { luaPushOneOrNil(L, (mem.flags & 0x01) ? 1 : 0); return 1; }
             }
             return luaReturnFalse(L);
         }},
@@ -3808,9 +3808,9 @@ void registerSocialLuaAPI(lua_State* L) {
                 lua_pushnumber(L, q.questLevel);
                 // Trivial greys the title out. Nothing here knows a quest's
                 // green range, and guessing it would grey quests that are not.
-                lua_pushboolean(L, 0);
-                lua_pushboolean(L, (q.questFlags & kQuestFlagsDaily) ? 1 : 0);
-                lua_pushboolean(L, q.isRepeatable ? 1 : 0);
+                luaPushOneOrNil(L, 0);
+                luaPushOneOrNil(L, (q.questFlags & kQuestFlagsDaily) ? 1 : 0);
+                luaPushOneOrNil(L, q.isRepeatable ? 1 : 0);
                 n += 5;
             }
             return n;
@@ -3830,8 +3830,8 @@ void registerSocialLuaAPI(lua_State* L) {
                 if (!gossipQuestIsActive(q.questIcon)) continue;
                 lua_pushstring(L, q.title.c_str());
                 lua_pushnumber(L, q.questLevel);
-                lua_pushboolean(L, 0);
-                lua_pushboolean(L, gossipQuestIsComplete(gh, q) ? 1 : 0);
+                luaPushOneOrNil(L, 0);
+                luaPushOneOrNil(L, gossipQuestIsComplete(gh, q) ? 1 : 0);
                 n += 4;
             }
             return n;
@@ -3983,7 +3983,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 // tracking the position of.
                 {"CheckSpiritHealerDist", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushboolean(L, gh && gh->resurrectRequestPendingRef() &&
+            luaPushOneOrNil(L, gh && gh->resurrectRequestPendingRef() &&
                                 gh->resurrectIsSpiritHealerRef() ? 1 : 0);
             return 1;
         }},
@@ -4120,7 +4120,7 @@ void registerSocialLuaAPI(lua_State* L) {
             const bool inactive = rows && index >= 1 &&
                 index <= static_cast<int>(rows->size()) &&
                 ((*rows)[index - 1].flags & game::GameHandler::FACTION_FLAG_INACTIVE) != 0;
-            lua_pushboolean(L, inactive ? 1 : 0);
+            luaPushOneOrNil(L, inactive ? 1 : 0);
             return 1;
         }},
                 {"GetSelectedFaction", [](lua_State* L) -> int {
@@ -4400,12 +4400,12 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"UnitIsInMyGuild", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const char* name = luaL_optstring(L, 1, "");
-            if (!gh || !name || !*name) { lua_pushboolean(L, 0); return 1; }
+            if (!gh || !name || !*name) { luaPushOneOrNil(L, 0); return 1; }
             bool found = false;
             for (const auto& m : gh->getGuildRoster().members) {
                 if (m.name == name) { found = true; break; }
             }
-            lua_pushboolean(L, found);
+            luaPushOneOrNil(L, found);
             return 1;
         }},
                 // Answered no rather than left missing. Each hides one menu
@@ -4419,7 +4419,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 // offered it.
                 {"PetCanBeRenamed", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushboolean(L, gh && gh->isPetRenameable() ? 1 : 0);
+            luaPushOneOrNil(L, gh && gh->isPetRenameable() ? 1 : 0);
             return 1;
         }},
                 // The other end: PETRENAMECONFIRM's accept calls this, so the
@@ -4470,7 +4470,7 @@ void registerSocialLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             const uint32_t lineId = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
             const uint64_t guid = (gh && lineId) ? gh->chatLineSender(lineId) : 0;
-            lua_pushboolean(L, (guid != 0 && guid != gh->getPlayerGuid()) ? 1 : 0);
+            luaPushOneOrNil(L, (guid != 0 && guid != gh->getPlayerGuid()) ? 1 : 0);
             return 1;
         }},
                 // 0x0052d000: whether the player may change the difficulty
@@ -4509,7 +4509,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 // so it is answered for real - in lua_system_api.cpp, beside the
                 // selected-channel state it reads. One name is registered once;
                 // two registrations of it would be settled by load order.
-                {"IsSilenced", [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
+                {"IsSilenced", [](lua_State* L) -> int { luaPushOneOrNil(L, 0); return 1; }},
                 // PromoteToLeader(name, exactMatch) - /promote, /pr, and the
                 // unit menu's "Promote to Leader". The client had no outgoing
                 // side for this at all: SMSG_GROUP_SET_LEADER was handled and
@@ -4574,7 +4574,7 @@ void registerSocialLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"GetOptOutOfLoot", [](lua_State* L) -> int {
-            lua_pushboolean(L, optOutOfLoot() ? 1 : 0);
+            luaPushOneOrNil(L, optOutOfLoot() ? 1 : 0);
             return 1;
         }},
                 // Both send a real opcode now; sendSetDifficulty used to write
@@ -4731,12 +4731,12 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"IsIgnoredOrMuted", lua_IsIgnoredContact<0x2 | 0x4>},
                 {"ResurrectHasSickness", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushboolean(L, (gh && gh->resurrectHasSickness()) ? 1 : 0);
+            luaPushOneOrNil(L, (gh && gh->resurrectHasSickness()) ? 1 : 0);
             return 1;
         }},
                 {"ResurrectHasTimer", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushboolean(L, (gh && gh->resurrectHasTimer()) ? 1 : 0);
+            luaPushOneOrNil(L, (gh && gh->resurrectHasTimer()) ? 1 : 0);
             return 1;
         }},
                 // ResurrectGetOfferer() (0x00515950): the name cache's name for
@@ -4927,7 +4927,7 @@ void registerSocialLuaAPI(lua_State* L) {
         }},
                 {"CheckTalentMasterDist", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushboolean(L,
+            luaPushOneOrNil(L,
                 gh && npcWithinInteractRange(gh, gh->getTalentWipeNpcGuid()) ? 1 : 0);
             return 1;
         }},
@@ -5002,7 +5002,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 // same reason: it is no longer there to talk to.
                 {"CheckBinderDist", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushboolean(L, gh && npcWithinInteractRange(gh, gh->getBinderGuid()) ? 1 : 0);
+            luaPushOneOrNil(L, gh && npcWithinInteractRange(gh, gh->getBinderGuid()) ? 1 : 0);
             return 1;
         }},
                 {"InCinematic", [](lua_State* L) -> int {

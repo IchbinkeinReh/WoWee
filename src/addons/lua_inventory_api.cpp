@@ -290,7 +290,7 @@ static int lua_SetPortraitToTexture(lua_State* L) {
 /// there was no way to finish any of them once the bags were handed over.
 static int lua_SpellCanTargetItem(lua_State* L) {
     auto* gh = getGameHandler(L);
-    lua_pushboolean(L, gh && gh->isAwaitingItemTarget());
+    luaPushOneOrNil(L, gh && gh->isAwaitingItemTarget());
     return 1;
 }
 
@@ -428,7 +428,7 @@ static int lua_GetRepairAllCost(lua_State* L) {
     auto* gh = getGameHandler(L);
     const uint32_t cost = gh ? gh->estimateRepairAllCost() : 0;
     lua_pushnumber(L, cost);
-    lua_pushboolean(L, gh && gh->getMoneyCopper() >= cost);
+    luaPushOneOrNil(L, gh && gh->getMoneyCopper() >= cost);
     return 2;
 }
 
@@ -817,7 +817,7 @@ static int lua_ShowContainerSellCursor(lua_State* L) {
 
 static int lua_CanMerchantRepair(lua_State* L) {
     auto* gh = getGameHandler(L);
-    lua_pushboolean(L, gh && gh->getVendorItems().canRepair ? 1 : 0);
+    luaPushOneOrNil(L, gh && gh->getVendorItems().canRepair ? 1 : 0);
     return 1;
 }
 
@@ -967,7 +967,7 @@ static int lua_IsDressableItem(lua_State* L) {
     const auto* info = (gh && itemId) ? gh->getItemInfo(itemId) : nullptr;
     // 2 is weapon and 4 is armour, as the item class is sent.
     const bool dressable = info && (info->itemClass == 2 || info->itemClass == 4);
-    lua_pushboolean(L, dressable ? 1 : 0);
+    luaPushOneOrNil(L, dressable ? 1 : 0);
     return 1;
 }
 
@@ -1877,7 +1877,7 @@ static int lua_DeleteInboxItem(lua_State* L) {
 
 // InboxItemCanDelete(index) - nothing here refuses a deletion
 static int lua_InboxItemCanDelete(lua_State* L) {
-    lua_pushboolean(L, 1);
+    luaPushOneOrNil(L, 1);
     return 1;
 }
 
@@ -2082,7 +2082,7 @@ static int lua_CloseMail(lua_State* L) {
 /// money had not finished syncing.
 static int lua_SetSendMailMoney(lua_State* L) {
     s_sendMailMoney = copperArg(L, 1);
-    lua_pushboolean(L, 1);
+    luaPushOneOrNil(L, 1);
     return 1;
 }
 
@@ -2789,7 +2789,7 @@ static int lua_IsEquippableItem(lua_State* L) {
     const uint32_t itemId = itemIdFromArg(L, 1);
     const auto* info = (gh && itemId) ? gh->getItemInfo(itemId) : nullptr;
     // Zero is "nowhere to wear it" - reagents, food, quest items.
-    lua_pushboolean(L, (info && info->inventoryType != 0) ? 1 : 0);
+    luaPushOneOrNil(L, (info && info->inventoryType != 0) ? 1 : 0);
     return 1;
 }
 
@@ -2805,7 +2805,7 @@ static int lua_IsEquippedItem(lua_State* L) {
             worn = !sl.empty() && sl.item.itemId == itemId;
         }
     }
-    lua_pushboolean(L, worn ? 1 : 0);
+    luaPushOneOrNil(L, worn ? 1 : 0);
     return 1;
 }
 
@@ -4653,7 +4653,7 @@ static int lua_PutItemInBackpack(lua_State* L) {
     auto* gh = getGameHandler(L);
     uint8_t srcBag = 0, srcSlot = 0;
     if (!gh || !heldWireSlot(srcBag, srcSlot)) {
-        lua_pushboolean(L, 0);
+        luaPushOneOrNil(L, 0);
         return 1;
     }
     const int free = gh->getInventory().findFreeBackpackSlot();
@@ -4665,7 +4665,7 @@ static int lua_PutItemInBackpack(lua_State* L) {
         cursorItemSlot() = {};
         wowee::ui::frameXmlSetCursorItem(std::string());
     }
-    lua_pushboolean(L, 1);
+    luaPushOneOrNil(L, 1);
     return 1;
 }
 
@@ -4728,13 +4728,13 @@ static const game::LootItem* lootItemAtSlot(game::GameHandler* gh, int slot) {
 static int lua_LootSlotIsCoin(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int slot = static_cast<int>(luaL_optnumber(L, 1, 0));
-    lua_pushboolean(L, (lootHasCoin(gh) && slot == 1) ? 1 : 0);
+    luaPushOneOrNil(L, (lootHasCoin(gh) && slot == 1) ? 1 : 0);
     return 1;
 }
 
 // LootSlotIsItem(slot) → whether this slot is a real item
 static int lua_LootSlotIsItem(lua_State* L) {
-    lua_pushboolean(L, lootItemAtSlot(getGameHandler(L),
+    luaPushOneOrNil(L, lootItemAtSlot(getGameHandler(L),
                                       static_cast<int>(luaL_optnumber(L, 1, 0))) ? 1 : 0);
     return 1;
 }
@@ -4745,7 +4745,7 @@ static int lua_IsFishingLoot(lua_State* L) {
     // LOOT_TYPE_FISHING, as the server sends it.
     const bool fishing = gh && gh->isLootWindowOpen() &&
                          gh->getCurrentLoot().lootType == 2;
-    lua_pushboolean(L, fishing ? 1 : 0);
+    luaPushOneOrNil(L, fishing ? 1 : 0);
     return 1;
 }
 
@@ -4787,7 +4787,7 @@ static int lua_GetLootSlotInfo(lua_State* L) {
         lua_pushstring(L, lootCoinText(loot.gold).c_str());
         lua_pushnumber(L, loot.gold);
         lua_pushnumber(L, 1);
-        lua_pushboolean(L, 0);
+        luaPushOneOrNil(L, 0);
         return 5;
     }
     const auto* itemPtr = lootItemAtSlot(gh, slot);
@@ -4821,7 +4821,7 @@ static int lua_GetLootSlotInfo(lua_State* L) {
     constexpr uint8_t kAllowLoot = 0, kOwner = 4;
     const bool locked = item.lootSlotType != kAllowLoot &&
                         item.lootSlotType != kOwner;
-    lua_pushboolean(L, locked ? 1 : 0);
+    luaPushOneOrNil(L, locked ? 1 : 0);
     return 5;
 }
 
@@ -6075,7 +6075,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // Rank zero is the guild master; an unknown rank is not.
                 {"IsGuildLeader", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushboolean(L, gh && gh->getPlayerGuildRankIndex() == 0 ? 1 : 0);
+            luaPushOneOrNil(L, gh && gh->getPlayerGuildRankIndex() == 0 ? 1 : 0);
             return 1;
         }},
                 // The transaction log, the tab text and the tabard are not in
@@ -6293,8 +6293,8 @@ void registerInventoryLuaAPI(lua_State* L) {
             // server for every auction at once and is rate-limited to once
             // every fifteen minutes even where it is allowed.
             const bool open = gh && gh->isAuctionHouseOpen();
-            lua_pushboolean(L, open && gh->getAuctionSearchDelay() <= 0.0f);
-            lua_pushboolean(L, 0);
+            luaPushOneOrNil(L, open && gh->getAuctionSearchDelay() <= 0.0f);
+            luaPushOneOrNil(L, 0);
             return 2;
         }},
                 // QueryAuctionItems(name, minLevel, maxLevel, invType, class,
@@ -6398,7 +6398,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             const bool ok = res && index >= 1 &&
                             index <= static_cast<int>(res->auctions.size()) &&
                             res->auctions[index - 1].currentBid == 0;
-            lua_pushboolean(L, ok ? 1 : 0);
+            luaPushOneOrNil(L, ok ? 1 : 0);
             return 1;
         }},
                 // StartAuction(minBid, buyout, duration, stackSize, numStacks)
@@ -6711,7 +6711,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             if (index < 1 || index > static_cast<int>(keys.size())) return 0;
             const auto& k = keys[keys.size() - static_cast<size_t>(index)];
             lua_pushstring(L, k.column.c_str());
-            lua_pushboolean(L, k.reverse ? 1 : 0);
+            luaPushOneOrNil(L, k.reverse ? 1 : 0);
             return 2;
         }},
                 // Applied least significant first, each pass stable, which is
@@ -7135,7 +7135,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 lua_pushstring(L, mail->body.c_str());
             }
             lua_pushstring(L, game::stationeryTexture(mail->stationeryId, mail->messageType));
-            lua_pushboolean(L, (mail->money > 0 || !mail->attachments.empty()) ? 1 : 0);
+            luaPushOneOrNil(L, (mail->money > 0 || !mail->attachments.empty()) ? 1 : 0);
             // Whether this is an auction house invoice, which was answered no
             // for every letter. OpenMail_Update asks here first and only calls
             // GetInboxInvoiceInfo `if ( isInvoice )`, so saying no kept the
@@ -7147,7 +7147,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             game::AuctionMailInvoice invoice;
             const bool isInvoice = mail->messageType == 2 &&
                                    game::parseAuctionMailBody(mail->body, invoice);
-            lua_pushboolean(L, isInvoice ? 1 : 0);
+            luaPushOneOrNil(L, isInvoice ? 1 : 0);
             return 4;
         }},
                 // Whether there is unread mail waiting, which is what the
@@ -7172,7 +7172,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                     if (!m.read) { hasNew = true; break; }
                 }
             }
-            lua_pushboolean(L, hasNew ? 1 : 0);
+            luaPushOneOrNil(L, hasNew ? 1 : 0);
             return 1;
         }},
     };

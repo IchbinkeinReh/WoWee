@@ -325,7 +325,7 @@ def main():
             # for. A body that *pushes values* while ignoring everything it was
             # handed is the fault this list exists to catch: the call answers,
             # confidently, about the wrong thing.
-            answers = re.search(r"lua_push\w+|luaReturn\w+|return\s+[1-9]", body)
+            answers = re.search(r"lua_push\w+|luaPushOneOrNil|luaReturn\w+|return\s+[1-9]", body)
             if answers:
                 blind.append((widest[name], name))
         elif reads and widest[name] > reads:
