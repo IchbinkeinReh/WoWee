@@ -196,23 +196,7 @@ go_use::Opening GameHandler::gameObjectOpening(const GameObjectFacts& f) {
         }
         return true;
     };
-    // 0x008016c0 for the player: the skill in the spell's line stands for
-    // its level (0x006dc330), then the spell's modifiers - all effects (8)
-    // and this effect's own (3, 12, 23) - and rounded to the nearest.
-    const auto value = [&](uint32_t spellId, int k) {
-        const auto& e = cache.find(spellId)->second;
-        int32_t skill = 0;
-        if (const auto line = spellToSkillLine_.find(spellId); line != spellToSkillLine_.end()) {
-            if (const auto s = playerSkills_.find(line->second); s != playerSkills_.end())
-                skill = s->second.effectiveValue();
-        }
-        float v = go_use::effectValue(e.effectBasePoints[k], e.effectPointsPerLevel[k], skill, e.baseLevel,
-                                      e.maxLevel);
-        static constexpr uint8_t kEffectOp[3] = {3, 12, 23};
-        v = spell_mods::apply(v, spellHandler_->spellModifiers(spellId, 8));
-        v = spell_mods::apply(v, spellHandler_->spellModifiers(spellId, kEffectOp[k]));
-        return static_cast<int32_t>(std::lround(v));
-    };
+    const auto value = [this](uint32_t spellId, int k) { return openLockEffectValue(spellId, k); };
     const auto carries = [&](uint32_t itemId) { return findCarriedItem(itemId).has_value(); };
     // 0x00707c60(0x21): the key's own use spell with an OPEN_LOCK effect,
     // else the spell of the first of its enchantments that is used (type 7).
@@ -243,6 +227,69 @@ go_use::Opening GameHandler::gameObjectOpening(const GameObjectFacts& f) {
                                                                        : spellHandler_->groundTargetSpellId();
     const auto& known = spellHandler_->getKnownSpells();
     return go_use::evaluate(*lock, f.state, f.flags, f.level, known, targeting, effects, value, carries, keySpell);
+}
+
+int32_t GameHandler::openLockEffectValue(uint32_t spellId, int k) const {
+    // 0x008016c0 for the player: the skill in the spell's line stands for
+    // its level (0x006dc330), then the spell's modifiers - all effects (8)
+    // and this effect's own (3, 12, 23) - and rounded to the nearest.
+    const auto it = spellNameCache_.find(spellId);
+    if (it == spellNameCache_.end() || !spellHandler_ || k < 0 || k > 2) return 0;
+    const auto& e = it->second;
+    int32_t skill = 0;
+    if (const auto line = spellToSkillLine_.find(spellId); line != spellToSkillLine_.end()) {
+        if (const auto sk = playerSkills_.find(line->second); sk != playerSkills_.end())
+            skill = sk->second.effectiveValue();
+    }
+    float v = go_use::effectValue(e.effectBasePoints[k], e.effectPointsPerLevel[k], skill, e.baseLevel,
+                                  e.maxLevel);
+    static constexpr uint8_t kEffectOp[3] = {3, 12, 23};
+    v = spell_mods::apply(v, spellHandler_->spellModifiers(spellId, 8));
+    v = spell_mods::apply(v, spellHandler_->spellModifiers(spellId, kEffectOp[k]));
+    return static_cast<int32_t>(std::lround(v));
+}
+
+std::optional<GameHandler::ItemLockShown> GameHandler::itemLockShown(uint32_t lockId, int32_t itemLevel) {
+    // 0x007086b0 for an item's lock, as its tooltip asks (0x006277f0): each
+    // skill slot (type 2) against the player's spells in order, an OPEN_LOCK
+    // effect of the slot's kind - the first whose value reaches what the slot
+    // wants (its skill, else the item's level times five) answers, else the
+    // last one tried. ENCRYPTED for kind 20: the found slot's, or any slot's
+    // when no spell answers.
+    const auto& rows = lockRows(services_.assetManager);
+    const auto row = rows.find(lockId);
+    if (lockId == 0 || row == rows.end() || !spellHandler_) return std::nullopt;
+    const auto& lock = row->second;
+    loadSpellNameCache();
+    constexpr uint32_t kLockKindEncrypted = 20;
+    ItemLockShown out;
+    uint32_t foundKind = 0;
+    for (int i = 0; i < 8; ++i) {
+        if (lock.type[i] != 2) continue;
+        for (const uint32_t spellId : spellHandler_->getKnownSpells()) {
+            const auto it = spellNameCache_.find(spellId);
+            if (it == spellNameCache_.end()) continue;
+            for (int k = 0; k < 3; ++k) {
+                if (it->second.effectIds[k] != go_use::kEffectOpenLock ||
+                    it->second.effectMiscValues[k] != lock.index[i])
+                    continue;
+                out.hasSpell = true;
+                out.required = lock.skill[i] != 0 ? static_cast<int32_t>(lock.skill[i]) : itemLevel * 5;
+                out.value = openLockEffectValue(spellId, k);
+                foundKind = lock.index[i];
+                if (out.required <= out.value) {
+                    out.encrypted = foundKind == kLockKindEncrypted;
+                    return out;
+                }
+            }
+        }
+    }
+    if (out.hasSpell) {
+        out.encrypted = foundKind == kLockKindEncrypted;
+    } else {
+        for (const uint32_t kind : lock.index) out.encrypted = out.encrypted || kind == kLockKindEncrypted;
+    }
+    return out;
 }
 
 bool GameHandler::gameObjectAllowsMounted(const GameObjectFacts& f) const {

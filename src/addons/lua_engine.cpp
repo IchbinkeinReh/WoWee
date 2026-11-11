@@ -4225,6 +4225,11 @@ static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
             // What is left of its first spell's charges (ITEM_FIELD_SPELL_CHARGES).
             lua_pushnumber(L, gh->getItemSpellCharges(instance->guid));
             lua_setfield(L, -2, "charges0");
+            // Its lock opened (ITEM_FIELD_FLAGS 0x4): no LOCKED line.
+            if ((gh->getItemFieldFlags(instance->guid) & 0x4u) != 0) {
+                lua_pushboolean(L, 1);
+                lua_setfield(L, -2, "unlocked");
+            }
             // The one action line the instance gets (0x006277f0): openable -
             // a lootable item (flag 0x4) not locked or unlocked (instance
             // 0x4), or flag 0x200 with instance 0x8 - else readable (a page,
@@ -11203,6 +11208,23 @@ void LuaEngine::registerCoreAPI() {
         "        if bind and _G[bind] then self:AddLine(_G[bind], 1, 1, 1) end\n"
         "        if data.isUnique then self:AddLine(ITEM_UNIQUE or 'Unique', 1, 1, 1)\n"
         "        elseif data.isUniqueEquipped then self:AddLine(ITEM_UNIQUE_EQUIPPABLE or 'Unique-Equipped', 1, 1, 1) end\n"
+        // A lock not opened (0x006277f0): LOCKED, or ENCRYPTED, in the colour
+        // of how the player's opening spell measures against it - grey a
+        // hundred over, green fifty, yellow twenty-five, orange at it, red
+        // short - and green with no such spell (0x0061a1f0).
+        "        if data.lock and not (inst and inst.unlocked) then\n"
+        "            local l = data.lock\n"
+        "            local r, g, b = 0.25, 0.75, 0.25\n"
+        "            if l.hasSpell then\n"
+        "                if l.value >= l.required + 100 then r, g, b = 0.5, 0.5, 0.5\n"
+        "                elseif l.value >= l.required + 50 then r, g, b = 0.25, 0.75, 0.25\n"
+        "                elseif l.value >= l.required + 25 then r, g, b = 1, 1, 0\n"
+        "                elseif l.value >= l.required then r, g, b = 1, 0.5, 0.25\n"
+        "                else r, g, b = 1, 0.125, 0.125 end\n"
+        "            end\n"
+        "            local text = l.encrypted and (ENCRYPTED or 'Encrypted') or (LOCKED or 'Locked')\n"
+        "            self:AddLine(text, r, g, b)\n"
+        "        end\n"
         "    end\n"
         "    if equipSlot and equipSlot ~= '' then\n"
         "        local slotText = _G[equipSlot] or ''\n"

@@ -4821,6 +4821,16 @@ public:
         auto it = onlineItems_.find(guid);
         return it != onlineItems_.end() ? it->second.flags : 0u;
     }
+    /// What an item's lock says on its tooltip (0x007086b0): whether one of
+    /// the player's spells opens locks of its kind, that spell's value and
+    /// what the lock wants of it, and whether it is encrypted (kind 20).
+    struct ItemLockShown {
+        bool hasSpell = false;
+        bool encrypted = false;
+        int32_t value = 0;
+        int32_t required = 0;
+    };
+    std::optional<ItemLockShown> itemLockShown(uint32_t lockId, int32_t itemLevel);
     /// ITEM_FIELD_DURATION of an item this client holds, 0 when unknown.
     uint32_t getItemDurationByGuid(uint64_t guid) const {
         auto it = onlineItems_.find(guid);
@@ -6588,6 +6598,8 @@ private:
     const go_use::LockRow* gameObjectLock(const GameObjectFacts& f) const;
     std::optional<CarriedItem> findCarriedItem(uint32_t itemId) const;
     go_use::Opening gameObjectOpening(const GameObjectFacts& f);
+    /// 0x008016c0 for an OPEN_LOCK effect of the player's: effect k's value.
+    int32_t openLockEffectValue(uint32_t spellId, int k) const;
     bool gameObjectAllowsMounted(const GameObjectFacts& f) const;
     bool gameObjectInReach(const GameObject& go, const GameObjectFacts& f);
     uint16_t gameObjectRefusal(const GameObject& go, const GameObjectFacts& f, std::string& arg);

@@ -3541,6 +3541,23 @@ static int lua_GetItemTooltipData(lua_State* L) {
         const std::string map = gh->getMapName(info->limitMap);
         if (!map.empty()) { lua_pushstring(L, map.c_str()); lua_setfield(L, -2, "limitMap"); }
     }
+    // A lock (LockID): whether one of the player's spells opens its kind,
+    // that spell's value and what the lock wants - the colour of the
+    // LOCKED line - and whether it is encrypted (0x007086b0).
+    if (info->lockId != 0) {
+        if (const auto lock = gh->itemLockShown(info->lockId, static_cast<int32_t>(info->itemLevel))) {
+            lua_newtable(L);
+            lua_pushboolean(L, lock->hasSpell ? 1 : 0);
+            lua_setfield(L, -2, "hasSpell");
+            lua_pushboolean(L, lock->encrypted ? 1 : 0);
+            lua_setfield(L, -2, "encrypted");
+            lua_pushnumber(L, lock->value);
+            lua_setfield(L, -2, "value");
+            lua_pushnumber(L, lock->required);
+            lua_setfield(L, -2, "required");
+            lua_setfield(L, -2, "lock");
+        }
+    }
     // Conjured (flag 0x2): ITEM_CONJURED.
     if ((info->itemFlags & 0x2u) != 0) {
         lua_pushboolean(L, 1);
