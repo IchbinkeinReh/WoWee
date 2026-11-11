@@ -4201,6 +4201,23 @@ static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
             lua_setfield(L, -2, "durability");
             lua_pushnumber(L, static_cast<lua_Number>(instance->maxDurability));
             lua_setfield(L, -2, "maxDurability");
+            // Raid loot still tradeable among those who could have looted it:
+            // soulbound, flagged 0x100, and under two hours of the player's
+            // played time since it was made (0x00708520, 0x00708b40) - the
+            // seconds left, for BIND_TRADE_TIME_REMAINING.
+            {
+                const uint32_t own = gh->getItemFieldFlags(instance->guid);
+                const int64_t played = gh->playedTimeNow();
+                const auto& online = gh->onlineItemsRef();
+                const auto oi = online.find(instance->guid);
+                if ((own & 0x1u) != 0 && (own & 0x100u) != 0 && played >= 0 && oi != online.end()) {
+                    const int64_t left = static_cast<int64_t>(oi->second.createPlayedTime) - played + 7200;
+                    if (left > 0) {
+                        lua_pushnumber(L, static_cast<lua_Number>(left));
+                        lua_setfield(L, -2, "tradeLeft");
+                    }
+                }
+            }
             // How long it has left, for an item that lasts a while
             // (ITEM_FIELD_DURATION, seconds; 0x007070b0).
             lua_pushnumber(L, gh->getItemDurationByGuid(instance->guid));
@@ -11457,6 +11474,20 @@ void LuaEngine::registerCoreAPI() {
         "                local t = format(ITEM_DISENCHANT_MIN_SKILL or 'Disenchanting requires %s (%d)', d.skill, d.rank)\n"
         "                if d.met then self:AddLine(t, 0.533, 0.667, 1) else self:AddLine(t, 1, 0.125, 0.125) end\n"
         "            end\n"
+        "        end\n"
+        // Still tradeable for a while (0x006277f0): a spacer, then
+        // BIND_TRADE_TIME_REMAINING in light blue - an hour and the minutes
+        // past it when over an hour is left, else one unit of
+        // INT_SPELL_DURATION.
+        "        if inst and inst.tradeLeft then\n"
+        "            local left, t = inst.tradeLeft\n"
+        "            if left > 3660 then\n"
+        "                t = format(INT_SPELL_DURATION_HOURS or '%d hr', 1)..(TIME_UNIT_DELIMITER or ' ')..format(INT_SPELL_DURATION_MIN or '%d min', math.floor((left - 3600) / 60))\n"
+        "            elseif left >= 3600 then t = format(INT_SPELL_DURATION_HOURS or '%d hr', math.floor(left / 3600))\n"
+        "            elseif left >= 60 then t = format(INT_SPELL_DURATION_MIN or '%d min', math.floor(left / 60))\n"
+        "            else t = format(INT_SPELL_DURATION_SEC or '%d sec', left) end\n"
+        "            self:AddLine(' ', 1, 0.82, 0)\n"
+        "            self:AddLine(format(BIND_TRADE_TIME_REMAINING or 'You may trade this item with players that were also eligible to loot this item for the next %s.', t), 0, 0.8, 1, 1)\n"
         "        end\n"
         "        if data.startsQuest then self:AddLine(ITEM_STARTS_QUEST or 'This Item Begins a Quest', 1, 1, 1) end\n"
         "    end\n"
