@@ -1729,6 +1729,7 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
     }
 
     glm::vec3 camPos = camera.getPosition();
+    const glm::vec3 camForward = camera.getForward();
     // Portal culling seeds from both the camera and the character. Either one
     // alone has a way to be wrong - a third-person camera can end up inside a
     // wall or a broom cupboard, and a character can sit in a loose interior AABB
@@ -1887,6 +1888,26 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
                 const auto& [gMin, gMax] = instance.worldGroupBounds[gi];
                 if (!frustum.intersectsAABB(gMin, gMax)) {
                     result.frustumCulled++;
+                    continue;
+                }
+            }
+
+            // Past the far clip: the client's camera has the far clip as its
+            // far plane (CGCamera 0x00606b30 / 0x00607b00: near 0x00adeed4,
+            // far 0x00cd7748, set by 0x00780800 and 0x00781430 from
+            // 0x00780770 - 791 yards before map 530), so nothing of a
+            // building lies past it, as nothing of the ground does. A group
+            // wholly beyond that plane is not drawn. Drawn regardless, Thunder
+            // Bluff's lodges, lift and bridges hung over the horizon from
+            // Stonebull Lake, 1200 yards off, with the mesas under them cut
+            // at the far clip.
+            if (gi < instance.worldGroupBounds.size()) {
+                const auto& [gMin, gMax] = instance.worldGroupBounds[gi];
+                const glm::vec3 c = (gMin + gMax) * 0.5f - camPos;
+                const glm::vec3 h = (gMax - gMin) * 0.5f;
+                const float nearestDepth = glm::dot(c, camForward) - glm::dot(h, glm::abs(camForward));
+                if (nearestDepth > viewDistance_) {
+                    result.distanceCulled++;
                     continue;
                 }
             }
