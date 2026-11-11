@@ -125,6 +125,17 @@ void UIScreenCallbackHandler::setupCallbacks() {
         setState_(AppState::AUTHENTICATION);
     });
 
+    // The login session failed or the auth server dropped it at the realm
+    // list: back to login, saying so, as the client's DISCONNECTED dialog does.
+    uiManager_.getRealmScreen().setOnSessionLost([this]() {
+        LOG_WARNING("Realm list: the login session is gone (auth state ",
+                    static_cast<int>(authHandler_.getState()), "); back to login");
+        authHandler_.disconnect();
+        uiManager_.getRealmScreen().reset();
+        uiManager_.getAuthScreen().setStatus("Disconnected from server.", true, true);
+        setState_(AppState::AUTHENTICATION);
+    });
+
     // Character selection callback
     uiManager_.getCharacterScreen().setOnCharacterSelected([this](uint64_t characterGuid) {
         LOG_INFO("Character selected: GUID=0x", std::hex, characterGuid, std::dec);
