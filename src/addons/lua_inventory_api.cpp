@@ -3543,7 +3543,12 @@ static int lua_GetContainerNumSlots(lua_State* L) {
     // KEYRING_CONTAINER made GetKeyRingSize loop zero times, so the keyring
     // frame was generated with no slots and opened empty - while the keys were
     // being tracked out of PLAYER_FIELD_KEYRING_SLOT_1 the whole time.
-    lua_pushnumber(L, containerSlotCount(gh->getInventory(), container));
+    // Container -4, the currency tokens' (PLAYER_FIELD_CURRENCYTOKEN_SLOT),
+    // is 32 slots as the keyring is (0x005d74a0).
+    constexpr int kCurrencyTokenContainer = -4;
+    constexpr int kCurrencyTokenSlots = 32;
+    lua_pushnumber(L, container == kCurrencyTokenContainer ? kCurrencyTokenSlots
+                                                           : containerSlotCount(gh->getInventory(), container));
     return 1;
 }
 
@@ -3797,8 +3802,12 @@ static int lua_GetContainerItemInfo(lua_State* L) {
     // out of it rather than still sitting there.
     const auto& held = cursorItemSlot();
     luaPushOneOrNil(L, (!held.equipped && held.bag == container && held.slot == slot) ? 1 : 0);
-    lua_pushnumber(L, info ? info->quality : 0);  // quality
-    luaPushOneOrNil(L, 0);  // readable
+    // quality, -1 while the template is not known (0x005d7a90).
+    lua_pushnumber(L, info ? static_cast<double>(info->quality) : -1.0);
+    // readable: the item has a page to read, or its ITEM_FIELD_FLAGS 0x200.
+    constexpr uint32_t kItemFieldReadable = 0x200;
+    const uint32_t pageText = itemSlot->item.pageTextId ? itemSlot->item.pageTextId : (info ? info->pageTextId : 0);
+    luaPushOneOrNil(L, pageText != 0 || (gh->getItemFieldFlags(itemSlot->item.guid) & kItemFieldReadable));
     luaPushOneOrNil(L, 0);  // lootable
     // Build item link with quality color
     std::string name = info ? info->name : ("Item #" + std::to_string(itemSlot->item.itemId));
