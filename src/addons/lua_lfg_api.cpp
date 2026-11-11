@@ -898,9 +898,12 @@ void registerLfgLuaAPI(lua_State* L) {
             if (e.dungeonId != dungeonId) continue;
             if (index > static_cast<int>(e.items.size())) return luaReturnNil(L);
             const auto& item = e.items[static_cast<size_t>(index) - 1];
-            gh->ensureItemInfo(item.itemId);
             const auto* info = gh->getItemInfo(item.itemId);
-            lua_pushstring(L, info ? info->name.c_str() : "");
+            // An item not known yet answers an empty name and is asked for;
+            // the answer that finds it raises LFG_UPDATE_RANDOM_INFO, so the
+            // reward list fills itself in (0x00557be0 with 0x00552950).
+            if (!info || !info->valid) askItemForEvent(gh, item.itemId, "LFG_UPDATE_RANDOM_INFO");
+            lua_pushstring(L, info && info->valid ? info->name.c_str() : "");
             const std::string icon = gh->getItemIconPath(item.displayInfoId);
             if (icon.empty()) lua_pushnil(L); else lua_pushstring(L, icon.c_str());
             lua_pushnumber(L, item.count);
