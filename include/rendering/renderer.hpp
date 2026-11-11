@@ -692,6 +692,8 @@ private:
         bool normalMaps = false;
         float strength = 0.8f;
     } wmoSurfaceDetail_;
+    float groundClutterDensity_ = 1.0f;   ///< setGroundClutterDensity
+    float groundClutterDistance_ = -1.0f; ///< setGroundClutterDistance; below 0 not set
     float diagTerrainFurthest_ = -1.0f;
     float diagM2Furthest_ = -1.0f;
 
@@ -795,6 +797,13 @@ public:
     /// first world load builds its buildings with the saved setting: the game
     /// screen that used to apply it does not run until that load is over.
     void setWmoSurfaceDetail(bool normalMaps, float strength);
+    /// The ground clutter settings (Graphics: Ground clutter, its distance).
+    /// Held here as well as given to the terrain manager and the M2 renderer,
+    /// which are made with the first world: set before it - from settings.cfg
+    /// at startup - they reach the tiles the login loads, not only the ones
+    /// that stream in after the game screen first draws.
+    void setGroundClutterDensity(float scale);
+    void setGroundClutterDistance(float yards);
     /// Fog lit by the sun through the shadow map and by nearby torches: 0 is
     /// off, 1-3 the volume's resolution. Applied at the start of the next
     /// frame. See VolumetricFog.

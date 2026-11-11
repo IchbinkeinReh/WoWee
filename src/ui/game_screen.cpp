@@ -169,6 +169,12 @@ void GameScreen::reapplySettingsAfterGpuRebuild(rendering::Renderer* renderer) {
     }
 }
 
+void GameScreen::applySavedGroundClutter(rendering::Renderer* renderer) {
+    if (!renderer) return;
+    renderer->setGroundClutterDensity(static_cast<float>(settingsPanel_.pendingGroundClutterDensity) / 100.0f);
+    renderer->setGroundClutterDistance(static_cast<float>(settingsPanel_.pendingGroundClutterDistance));
+}
+
 void GameScreen::applySavedSurfaceDetail(rendering::Renderer* renderer) {
     if (!renderer) return;
     renderer->setWmoSurfaceDetail(settingsPanel_.pendingNormalMapping,
@@ -472,7 +478,8 @@ void GameScreen::render(game::GameHandler& gameHandler) {
             }
             if (!settingsPanel_.terrainSettingsApplied_) {
             if (auto* tm = renderer->getTerrainManager()) {
-                tm->setGroundClutterDensityScale(
+                (void)tm;
+                renderer->setGroundClutterDensity(
                     static_cast<float>(settingsPanel_.pendingGroundClutterDensity) / 100.0f);
                 renderer->setGrassEnabled(settingsPanel_.pendingGrassEnabled);
                 renderer->setGrassScales(
