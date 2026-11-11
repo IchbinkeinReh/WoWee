@@ -334,66 +334,51 @@ static bool unitIsFemale(game::GameHandler* gh, const std::string& lowerUid) {
     return ((entity->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0)) >> 16) & 0xFFu) == 1;
 }
 
-static int lua_UnitClass(lua_State* L) {
+/// The class of a unit the client can name (0x0060fec0, 0x00610040): the
+/// player's own, a visible unit's UNIT_FIELD_BYTES_0, else the name cache.
+/// 0 when none is known.
+static uint8_t unitClassId(lua_State* L, game::GameHandler* gh, const std::string& uidStr) {
+    if (!resolveUnit(L, uidStr.c_str())) return 0;
+    if (uidStr == "player") return gh->getPlayerClass();
+    const uint64_t guid = resolveUnitGuid(gh, uidStr);
+    if (guid == 0) return 0;
+    uint8_t classId = 0;
+    if (auto entity = gh->getEntityManager().getEntity(guid)) {
+        const uint32_t bytes0 = entity->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0));
+        classId = static_cast<uint8_t>((bytes0 >> 8) & 0xFF);
+    }
+    if (classId == 0) classId = gh->lookupPlayerClass(guid);
+    return classId;
+}
+
+/// UnitClass(unit) → the class name in the unit's gender, and its token;
+/// UnitClassBase(unit) → the name without gender, and the token. Both nil
+/// and nil for a unit whose class is not known - "UNKNOWN" would pass every
+/// `if ( class ) then` guard written for it and then index nothing:
+/// CLASS_ICON_TCOORDS has no such key, which took Blizzard_ArenaUI down at
+/// load. The token is the second value, not the display name again - every
+/// class-indexed table in FrameXML is keyed by it.
+static int pushUnitClass(lua_State* L, bool base) {
     const char* uid = luaL_optstring(L, 1, "player");
     auto* gh = getGameHandler(L);
-    auto* unit = resolveUnit(L, uid);
-    if (unit && gh) {
-
-        uint8_t classId = 0;
-        std::string uidStr(uid);
-        toLowerInPlace(uidStr);
-        if (uidStr == "player") {
-            classId = gh->getPlayerClass();
-        } else {
-            // Read class from UNIT_FIELD_BYTES_0 (class is byte 1)
-            uint64_t guid = resolveUnitGuid(gh, uidStr);
-            if (guid != 0) {
-                auto entity = gh->getEntityManager().getEntity(guid);
-                if (entity) {
-                    uint32_t bytes0 = entity->getField(
-                        game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0));
-                    classId = static_cast<uint8_t>((bytes0 >> 8) & 0xFF);
-                }
-            }
-            // Fallback: check name query class/race cache
-            if (classId == 0 && guid != 0) {
-                classId = gh->lookupPlayerClass(guid);
-            }
-        }
-        // Nothing at all when the class is not known, because that is what WoW
-        // answers for a unit it cannot see and what every caller is written
-        // against: `local _, class = UnitClass(self.unit); if ( class ) then`.
-        //
-        // "UNKNOWN" passes that guard and then indexes nothing -
-        // CLASS_ICON_TCOORDS has no such key - so the line after it unpacked a
-        // nil. ArenaEnemyFrame_OnLoad does exactly this, which took the whole
-        // of Blizzard_ArenaUI down at load. A binding that answers a constant
-        // where the real one answers nothing defeats every guard written for
-        // it, and the guard is the caller saying it already knows how to cope.
-        //
-        // The token decides: it is the one thing that knows which class ids
-        // WoW actually uses, and the two callers in the social API ask it the
-        // same question for the same reason.
-        const char* token = luaClassToken(classId);
-        if (!token) return 0;
-        // Second is the uppercase token, not the display name again. Every
-        // class-indexed table in FrameXML is keyed by it, so answering "Mage"
-        // where "MAGE" was meant looked up nothing: SetPortraitTexture found no
-        // CLASS_ICON_TCOORDS entry and fell back to the placeholder portrait,
-        // which is the blue question mark on the character sheet.
-        // The localized name in the unit's gender (0x007159e0).
-        const std::string localized = chrRowName(gh, "ChrClasses.dbc", "ChrClasses", classId,
-                                                 unitIsFemale(gh, uidStr) ? 1 : 0);
-        lua_pushstring(L, !localized.empty() ? localized.c_str() : kLuaClasses[classId]);
-        lua_pushstring(L, token);
-        lua_pushnumber(L, classId);
-        return 3;
+    std::string uidStr(uid);
+    toLowerInPlace(uidStr);
+    const uint8_t classId = gh ? unitClassId(L, gh, uidStr) : 0;
+    const char* token = luaClassToken(classId);
+    if (!token) {
+        lua_pushnil(L);
+        lua_pushnil(L);
+        return 2;
     }
-    // The unit does not exist, which is the case WoW answers nothing for. See
-    // above: a constant here reads as a class the caller then looks up.
-    return 0;
+    // Gendered (0x007159e0) or the row's own name (+0x10).
+    const std::string localized = chrRowName(gh, "ChrClasses.dbc", "ChrClasses", classId,
+                                             base ? 2 : (unitIsFemale(gh, uidStr) ? 1 : 0));
+    lua_pushstring(L, !localized.empty() ? localized.c_str() : kLuaClasses[classId]);
+    lua_pushstring(L, token);
+    return 2;
 }
+static int lua_UnitClass(lua_State* L) { return pushUnitClass(L, false); }
+static int lua_UnitClassBase(lua_State* L) { return pushUnitClass(L, true); }
 
 // UnitIsGhost(unit) - true if unit is in ghost form
 static int lua_UnitIsGhost(lua_State* L) {
@@ -736,25 +721,25 @@ static int lua_CheckInteractDistance(lua_State* L) {
 // second return says whether the question could be answered at all: a member
 // on another part of the map has no entity here, and dimming them for being
 // out of range would be a guess dressed as a measurement.
+// UnitInRange(unit) → 1 or nil (0x00612f10): a member of the player's group
+// less than forty yards away, measured in three dimensions.
 static int lua_UnitInRange(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) { luaPushOneOrNil(L, 0); luaPushOneOrNil(L, 0); return 2; }
+    if (!gh) return luaReturnNil(L);
     std::string uidStr(luaL_optstring(L, 1, "player"));
     toLowerInPlace(uidStr);
     const uint64_t guid = resolveUnitGuid(gh, uidStr);
-    auto other  = guid ? gh->getEntityManager().getEntity(guid) : nullptr;
+    const auto& members = gh->getPartyData().members;
+    const bool inGroup = guid != 0 && std::any_of(members.begin(), members.end(),
+                                                  [guid](const auto& m) { return m.guid == guid; });
+    auto other  = inGroup ? gh->getEntityManager().getEntity(guid) : nullptr;
     auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid());
-    if (!other || !player) {
-        luaPushOneOrNil(L, 0);
-        luaPushOneOrNil(L, 0);   // could not be checked
-        return 2;
-    }
+    if (!other || !player) return luaReturnNil(L);
     const float dx = player->getX() - other->getX();
     const float dy = player->getY() - other->getY();
     const float dz = player->getZ() - other->getZ();
-    luaPushOneOrNil(L, (dx*dx + dy*dy + dz*dz) <= (40.0f * 40.0f));
-    luaPushOneOrNil(L, 1);
-    return 2;
+    luaPushOneOrNil(L, (dx*dx + dy*dy + dz*dz) < (40.0f * 40.0f));
+    return 1;
 }
 
 // IsRaidLeader() / IsPartyLeader-style check against the group's leader guid.
@@ -1331,17 +1316,47 @@ static int lua_GetSpellBonusHealing(lua_State* L) {
     return 1;
 }
 
-// GetMeleeHaste / GetAttackPowerForStat stubs for addon compat
-static int lua_GetAttackPower(lua_State* L) {
+// GetAttackPowerForStat(stat, value) → the attack power that much of a stat
+// gives the player (0x0060e560 -> 0x006d7070). Strength (1) gives two for
+// each point past ten, or one for a class whose ChrClasses field 1 is 1
+// (hunter, rogue, shaman); agility (2) gives one for each point past ten to
+// those classes only, and all of it in a form with SpellShapeshiftForm flag
+// 0x20 (cat, bear). Any other stat gives none.
+static int lua_GetAttackPowerForStat(lua_State* L) {
     auto* gh = getGameHandler(L);
-    int32_t ap = gh ? gh->getMeleeAttackPower() : 0;
-    if (ap < 0) ap = 0;
-    lua_pushnumber(L, ap);  // base
-    lua_pushnumber(L, 0);   // posBuff
-    lua_pushnumber(L, 0);   // negBuff
-    return 3;
+    const int stat = static_cast<int>(luaL_checknumber(L, 1)) - 1;
+    const int value = static_cast<int>(luaL_checknumber(L, 2));
+    if (!gh) return luaReturnZero(L);
+    // ChrClasses field 1, by class id: 1 where agility is the class's
+    // attack power.
+    static std::unordered_map<uint32_t, uint32_t> agilityClass;
+    static bool loaded = false;
+    if (!loaded) {
+        auto* am = gh->services().assetManager;
+        if (am && am->isInitialized()) {
+            loaded = true;
+            if (auto dbc = am->loadDBCOptional("ChrClasses.dbc"); dbc && dbc->isLoaded() && dbc->getFieldCount() > 1)
+                for (uint32_t r = 0; r < dbc->getRecordCount(); ++r)
+                    agilityClass[dbc->getUInt32(r, 0)] = dbc->getUInt32(r, 1);
+        }
+    }
+    const auto it = agilityClass.find(gh->getPlayerClass());
+    if (it == agilityClass.end()) return luaReturnZero(L);
+    const bool agile = it->second == 1;
+    const int past = value - 10 > 0 ? value - 10 : 0;
+    int ap = 0;
+    if (stat == 0) {
+        ap = agile ? past : past * 2;
+    } else if (stat == 1) {
+        if (agile) ap = past;
+        constexpr uint32_t kFormAgilityAttackPower = 0x20;
+        if (const auto* row = gh->shapeshiftFormRow(gh->getShapeshiftFormId());
+            row && (row->flags & kFormAgilityAttackPower))
+            ap += value;
+    }
+    lua_pushnumber(L, ap);
+    return 1;
 }
-
 
 static int lua_UnitRace(lua_State* L) {
     auto* gh = getGameHandler(L);
@@ -3702,7 +3717,7 @@ void registerUnitLuaAPI(lua_State* L) {
                 {"GetCombatRating",     lua_GetCombatRating},
                 {"GetSpellBonusDamage", lua_GetSpellBonusDamage},
                 {"GetSpellBonusHealing", lua_GetSpellBonusHealing},
-                {"GetAttackPowerForStat", lua_GetAttackPower},
+                {"GetAttackPowerForStat", lua_GetAttackPowerForStat},
                 {"GetShapeshiftFormInfo", [](lua_State* L) -> int {
             // GetShapeshiftFormInfo(index) → icon, name, isActive, isCastable
             auto* gh = getGameHandler(L);
@@ -4209,15 +4224,7 @@ void registerUnitLuaAPI(lua_State* L) {
                 // The class token without the localised name beside it, which
                 // is all UnitClassBase is: the same second return UnitClass
                 // already computes.
-                {"UnitClassBase",         [](lua_State* L) -> int {
-            lua_getglobal(L, "UnitClass");
-            lua_pushvalue(L, 1);
-            if (lua_pcall(L, 1, 3, 0) != 0) { lua_pop(L, 1); lua_pushnil(L); return 1; }
-            // UnitClass answers name, token, id; the token is what is wanted.
-            lua_remove(L, -3);
-            lua_pop(L, 1);
-            return 1;
-        }},
+                {"UnitClassBase",         lua_UnitClassBase},
                 {"IsMounted",         lua_IsMounted},
                 {"IsFlying",          lua_IsFlying},
                 {"IsSwimming",        lua_IsSwimming},

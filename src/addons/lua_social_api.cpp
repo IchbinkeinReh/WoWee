@@ -203,8 +203,7 @@ static int lua_GetLanguageByIndex(lua_State* L) {
         gh ? gh->getLanguageName(static_cast<uint32_t>(langs[static_cast<size_t>(idx) - 1].id))
            : std::string();
     lua_pushstring(L, !dbcName.empty() ? dbcName.c_str() : langs[static_cast<size_t>(idx) - 1].name);
-    lua_pushnumber(L, langs[static_cast<size_t>(idx) - 1].id);
-    return 2;
+    return 1;   // the name alone (0x00500810)
 }
 
 static int lua_SendChatMessage(lua_State* L) {
@@ -769,22 +768,15 @@ static int lua_GetGuildInfoFunc(lua_State* L) {
     return 3;
 }
 
-// GetNumGuildMembers() → totalMembers, onlineMembers
+// GetNumGuildMembers(includeOffline) → the number of rows (0x005ca130): every
+// member when asked for them or when the roster shows those offline, else
+// those online - one count, the one the panel loops 1..n over.
 static int lua_GetNumGuildMembers(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); return 2; }
-    // The first count is how many rows there are to draw, so it has to be the
-    // filtered one: the panel loops 1..this and reads each index, and counting
-    // the whole roster while indexing a filtered view walked off the end of it.
-    // The second is how many of the guild are online, filtered or not, which is
-    // what the "N of M online" line means.
-    const auto view = guildRosterView(gh);
-    int online = 0;
-    for (const auto& m : gh->getGuildRoster().members)
-        if (m.online) online++;
-    lua_pushnumber(L, view.size());
-    lua_pushnumber(L, online);
-    return 2;
+    if (!gh) { return luaReturnZero(L); }
+    if (lua_toboolean(L, 1)) lua_pushnumber(L, gh->getGuildRoster().members.size());
+    else lua_pushnumber(L, guildRosterView(gh).size());
+    return 1;
 }
 
 // GetGuildRosterInfo(index) → name, rank, rankIndex, level, class, zone, note, officerNote, online, status, classId

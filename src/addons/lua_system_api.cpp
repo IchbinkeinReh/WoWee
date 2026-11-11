@@ -5036,8 +5036,11 @@ static int lua_IsAddOnLoaded(lua_State* L) {
         auto* svc = getLuaServices(L);
         if (svc && svc->isAddOnLoaded) found = svc->isAddOnLoaded(wanted);
     }
-    luaPushOneOrNil(L, found ? 1 : 0);
-    return 1;
+    // loaded, then finished (0x00511b30): an addon here has run its files by
+    // the time anything can ask, so the two agree.
+    luaPushOneOrNil(L, found);
+    luaPushOneOrNil(L, found);
+    return 2;
 }
 
 /// GetTime() → seconds since the client started, as a float.
@@ -10639,9 +10642,8 @@ void registerSystemLuaAPI(lua_State* L) {
             uint32_t ms = gh ? gh->getLatencyMs() : 0;
             lua_pushnumber(L, 0);   // bandwidthIn
             lua_pushnumber(L, 0);   // bandwidthOut
-            lua_pushnumber(L, ms);  // latencyHome
-            lua_pushnumber(L, ms);  // latencyWorld
-            return 4;
+            lua_pushnumber(L, ms);  // latency - three values, as 0x00510ac0
+            return 3;
         }},
                 {"GetCurrentTitle", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);

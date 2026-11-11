@@ -4221,8 +4221,9 @@ static int pushRewardAt(lua_State* L, game::GameHandler* gh,
         lua_pushstring(L, gh->getItemIconPath(
             info && info->displayInfoId ? info->displayInfoId : r.displayInfoId).c_str());
         lua_pushnumber(L, r.count);
-        lua_pushnumber(L, info ? info->quality : 1);
-        lua_pushboolean(L, rewardUsable(*gh, info));
+        // -1 for an item not known yet, and usable as 1 or nil (0x005e4660).
+        lua_pushnumber(L, info ? static_cast<double>(info->quality) : -1.0);
+        luaPushOneOrNil(L, rewardUsable(*gh, info));
         return 5;
     }
     return luaReturnNil(L);

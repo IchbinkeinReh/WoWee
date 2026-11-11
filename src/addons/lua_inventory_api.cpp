@@ -2282,46 +2282,6 @@ const game::EquipmentSetInfo* equipmentSetByName(game::GameHandler* gh,
     return nullptr;
 }
 
-/// How much of a set is worn, and how much is merely to hand.
-struct SetTally { int items = 0, equipped = 0, inBags = 0, missing = 0, ignored = 0; };
-
-SetTally tallySet(game::GameHandler* gh, const game::EquipmentSetInfo& set) {
-    SetTally t;
-    const auto* guids = gh ? gh->getEquipmentSetItems(set.setId) : nullptr;
-    if (!gh || !guids) return t;
-    const uint32_t ignoreMask = gh->getEquipmentSetIgnoreMask(set.setId);
-    const auto& inv = gh->getInventory();
-
-    for (int i = 0; i < kEquipSlots; ++i) {
-        if (ignoreMask & (1u << i)) { ++t.ignored; continue; }
-        const uint32_t want = gh->getItemIdByGuid((*guids)[i]);
-        if (want == 0) { ++t.ignored; continue; }
-        ++t.items;
-        // Worn anywhere counts as worn: a ring saved from one ring slot and put
-        // back on in the other is on the player either way.
-        bool onBody = false;
-        for (int w = 0; w < kEquipSlots && !onBody; ++w) {
-            const auto& worn = inv.getEquipSlot(static_cast<game::EquipSlot>(w));
-            onBody = !worn.empty() && worn.item.itemId == want;
-        }
-        if (onBody) { ++t.equipped; continue; }
-
-        bool found = false;
-        for (int b = 0; b < inv.getBackpackSize() && !found; ++b) {
-            const auto& sl = inv.getBackpackSlot(b);
-            found = !sl.empty() && sl.item.itemId == want;
-        }
-        for (int bag = 0; bag < game::Inventory::NUM_BAG_SLOTS && !found; ++bag) {
-            for (int sl = 0; sl < inv.getBagSize(bag) && !found; ++sl) {
-                const auto& s2 = inv.getBagSlot(bag, sl);
-                found = !s2.empty() && s2.item.itemId == want;
-            }
-        }
-        if (found) ++t.inBags; else ++t.missing;
-    }
-    return t;
-}
-
 /// Slots the player marked to leave alone before the next save. A choice about
 /// the save to come rather than part of any set, so it is kept here.
 std::set<int>& pendingIgnoredSlots() {
@@ -2367,39 +2327,31 @@ static int lua_GetNumEquipmentSets(lua_State* L) {
     return 1;
 }
 
-static void pushSetInfo(lua_State* L, game::GameHandler* gh,
-                        const game::EquipmentSetInfo& set) {
-    const SetTally t = tallySet(gh, set);
-    lua_pushstring(L, set.name.c_str());
-    // The server names the icon; the interface wants something SetTexture can
-    // use, and every one of them lives under the same directory.
-    if (set.iconName.empty()) lua_pushnil(L);
-    else lua_pushstring(L, ("Interface\\Icons\\" + set.iconName).c_str());
-    lua_pushnumber(L, set.setId);
-    lua_pushboolean(L, (t.items > 0 && t.equipped == t.items) ? 1 : 0);
-    lua_pushnumber(L, t.items);
-    lua_pushnumber(L, t.equipped);
-    lua_pushnumber(L, t.inBags);
-    lua_pushnumber(L, t.missing);
-    lua_pushnumber(L, t.ignored);
-}
-
+// GetEquipmentSetInfo(index) → name, icon, setID (0x005af120): the icon as a
+// path SetTexture takes, under the directory every one of them lives in.
 static int lua_GetEquipmentSetInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
     if (!gh) { return luaReturnNil(L); }
     const auto& sets = gh->getEquipmentSets();
     if (index < 1 || index > static_cast<int>(sets.size())) { return luaReturnNil(L); }
-    pushSetInfo(L, gh, sets[index - 1]);
-    return 9;
+    const auto& set = sets[index - 1];
+    lua_pushstring(L, set.name.c_str());
+    if (set.iconName.empty()) lua_pushnil(L);
+    else lua_pushstring(L, ("Interface\\Icons\\" + set.iconName).c_str());
+    lua_pushnumber(L, set.setId);
+    return 3;
 }
 
+// GetEquipmentSetInfoByName(name) → icon, setID (0x005af1d0): the icon as the
+// server named it, without the directory, and nothing for no such set.
 static int lua_GetEquipmentSetInfoByName(lua_State* L) {
     auto* gh = getGameHandler(L);
     const auto* set = equipmentSetByName(gh, luaL_optstring(L, 1, ""));
-    if (!set) { return luaReturnNil(L); }
-    pushSetInfo(L, gh, *set);
-    return 9;
+    if (!set) return 0;
+    lua_pushstring(L, set->iconName.c_str());
+    lua_pushnumber(L, set->setId);
+    return 2;
 }
 
 // GetEquipmentSetItemIDs(name) → one entry per slot, walked with ipairs
