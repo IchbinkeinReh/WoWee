@@ -3645,6 +3645,15 @@ static int petPreviewTotal() {
     return total;
 }
 
+/// PREVIEW_TALENT_POINTS_CHANGED, or the pet's, with the talent, the tree,
+/// the group (from one) and how far the staged total moved - and only when it
+/// moved (0x005c9590, 0x005c7130, 0x005c7200).
+static void firePreviewChanged(game::GameHandler* gh, bool pet, int talent, int tab, int group, int moved) {
+    if (!gh || moved == 0) return;
+    gh->fireAddonEvent(pet ? "PREVIEW_PET_TALENT_POINTS_CHANGED" : "PREVIEW_TALENT_POINTS_CHANGED",
+                       {std::to_string(talent), std::to_string(tab), std::to_string(group), std::to_string(moved)});
+}
+
 // AddPreviewTalentPoints(tabIndex, talentIndex, delta, pet, group)
 static int lua_AddPreviewTalentPoints(lua_State* L) {
     auto* gh = getGameHandler(L);
@@ -3656,15 +3665,16 @@ static int lua_AddPreviewTalentPoints(lua_State* L) {
     if (wantsPetTalents(L, 4)) {
         const auto* talent = petTalentAt(gh, false, tab, index);
         if (!talent) return 0;
+        const int before = petPreviewTotal();
         int& staged = petPreviewPoints()[talent->talentId];
         int upper = static_cast<int>(talent->maxRank) - gh->getPetTalentRank(talent->talentId);
         if (delta > 0) {
-            const int unspent = static_cast<int>(gh->getPetUnspentTalentPoints()) - petPreviewTotal();
+            const int unspent = static_cast<int>(gh->getPetUnspentTalentPoints()) - before;
             upper = std::min(upper, staged + std::max(0, unspent));
         }
         staged = std::clamp(staged + delta, 0, std::max(0, upper));
         if (staged == 0) petPreviewPoints().erase(talent->talentId);
-        gh->fireAddonEvent("PREVIEW_PET_TALENT_POINTS_CHANGED", {});
+        firePreviewChanged(gh, true, index, tab, 1, petPreviewTotal() - before);
         return 0;
     }
     // The fifth argument names the group to stage in, and the client does have
@@ -3688,6 +3698,8 @@ static int lua_AddPreviewTalentPoints(lua_State* L) {
     for (const auto& [talentId, entry] : gh->getAllTalents()) {
         if (talentId == id) { maxRank = entry.maxRank; break; }
     }
+    int before = 0;
+    for (const auto& [tid, n] : previewPoints()) { (void)tid; before += n; }
     int& staged = previewPoints()[id];
     // Bounded by what is already learned and the talent's own cap: a preview
     // that goes past either is one the server will refuse, and the frame draws
@@ -3704,18 +3716,17 @@ static int lua_AddPreviewTalentPoints(lua_State* L) {
     // pool is shared across all three trees, and only when adding: taking a
     // staged point back is always allowed however far past the pool it went.
     if (delta > 0) {
-        int stagedTotal = 0;
-        for (const auto& [tid, n] : previewPoints()) { (void)tid; stagedTotal += n; }
         const int unspent =
-            gh->getUnspentTalentPoints(gh->getActiveTalentSpec()) - stagedTotal;
+            gh->getUnspentTalentPoints(gh->getActiveTalentSpec()) - before;
         upper = std::min(upper, staged + std::max(0, unspent));
     }
     const int wanted = std::clamp(staged + delta, 0, std::max(0, upper));
+    const int moved = wanted - staged;
     staged = wanted;
     if (staged == 0) previewPoints().erase(id);
     // What makes a staged point appear: the talent frame refreshes on this
     // event, and reads the rank back through GetTalentInfo's preview value.
-    gh->fireAddonEvent("PREVIEW_TALENT_POINTS_CHANGED", {});
+    firePreviewChanged(gh, false, index, tab, static_cast<int>(gh->getActiveTalentSpec()) + 1, moved);
     return 0;
 }
 
@@ -3749,10 +3760,7 @@ static int lua_ResetPreviewTalentPoints(lua_State* L) {
         // The pet's one tree (0x005c7130 fires 0x275 for it).
         const int before = petPreviewTotal();
         if (tab == 1) petPreviewPoints().clear();
-        if (before != 0 && tab == 1) {
-            gh->fireAddonEvent("PREVIEW_PET_TALENT_POINTS_CHANGED",
-                               {"0", std::to_string(tab), "1", std::to_string(-before)});
-        }
+        if (tab == 1) firePreviewChanged(gh, true, 0, tab, 1, -before);
         return 0;
     }
     if (group != static_cast<int>(gh->getActiveTalentSpec())) {
@@ -3776,11 +3784,7 @@ static int lua_ResetPreviewTalentPoints(lua_State* L) {
             ++it;
         }
     }
-    if (after != before) {
-        gh->fireAddonEvent("PREVIEW_TALENT_POINTS_CHANGED",
-                           {"0", std::to_string(tab), std::to_string(group + 1),
-                            std::to_string(after - before)});
-    }
+    firePreviewChanged(gh, false, 0, tab, group + 1, after - before);
     return 0;
 }
 
@@ -3884,22 +3888,21 @@ static int lua_GetGroupPreviewTalentPointsSpent(lua_State* L) {
 static int lua_ResetGroupPreviewTalentPoints(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (luaClientSwitchArg(L, 1, false)) {
-        const bool hadPetStaged = !petPreviewPoints().empty();
+        const int before = petPreviewTotal();
         petPreviewPoints().clear();
-        if (hadPetStaged && gh) gh->fireAddonEvent("PREVIEW_PET_TALENT_POINTS_CHANGED", {});
+        firePreviewChanged(gh, true, 0, 0, 1, -before);
         return 0;
     }
     if (!previewApplies(gh, false, talentGroupArg(L, 2, gh))) {
         LOG_WARNING("ResetGroupPreviewTalentPoints: nothing is staged for another group");
         return 0;
     }
-    const bool hadStaged = !previewPoints().empty();
+    int before = 0;
+    for (const auto& [tid, n] : previewPoints()) { (void)tid; before += n; }
     previewPoints().clear();
     // The frame redraws on this and on nothing else, so clearing the staged
     // points without it leaves them on screen after they are gone.
-    if (hadStaged && gh) {
-        gh->fireAddonEvent("PREVIEW_TALENT_POINTS_CHANGED", {});
-    }
+    if (gh) firePreviewChanged(gh, false, 0, 0, static_cast<int>(gh->getActiveTalentSpec()) + 1, -before);
     return 0;
 }
 
