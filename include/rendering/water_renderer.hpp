@@ -138,7 +138,7 @@ inline constexpr size_t kMaxWaterLamps = 8;
 // What the water shader's uniform block holds: under the 16 KB that every
 // device gives a uniform block (maxUniformBufferRange's least is 16384).
 struct WaterFrameUBOData {
-    glm::vec4 wakeBounds{0.0f};              // x = trail groups, y = ring groups, w = trail points
+    glm::vec4 wakeBounds{0.0f};              // x = trail groups, y = ring groups, z = interactive water on, w = trail points
     glm::vec4 wakePoints[kMaxWakePoints]{};  // xy = pos, z = age 0..1, w = strength
     // The ray traced water (water_rt.glsli): x on, y the view (1 the
     // reflection alone, 2 what comes through alone), z how far a reflected
@@ -280,6 +280,9 @@ public:
     /// The swimmer's rings this frame (swim_wave.hpp).
     /// Grouped by owner for the shader (water_share::groupByOwner).
     void setSwimWaves(const std::vector<swim_wave::Wave>& waves);
+    /// Bow waves and wakes behind what moves through the traced water, from
+    /// the trails' points (water.frag's kelvinWake, wakeBounds.z).
+    void setInteractiveWater(bool on) { interactiveWater_ = on; }
     /// Whether this frame's water and ocean are the traced ones: on, with
     /// what they need. Otherwise every liquid is the client's own (its
     /// LiquidType textures, depth ramps and blending, client_liquid.hpp), as
@@ -520,6 +523,7 @@ private:
         uint64_t key = 0;        // the unit that laid it, 0 the character
     };
     std::vector<WakePoint> wakePoints_;
+    bool interactiveWater_ = true;
     WaterFrameUBOData frameUBO_{};
     /// Where a trail last laid its points: the character's, and each other
     /// unit's by its guid (forgotten five seconds after it was last fed).

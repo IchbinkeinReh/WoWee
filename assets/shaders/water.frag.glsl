@@ -75,7 +75,7 @@ const float RT_INTERIOR_SLOPE = 1.0;
 const float RT_INTERIOR_MIRROR = 0.6;
 
 layout(set = 2, binding = 3) uniform WaterFrameData {
-    vec4 wakeBounds;                  // x = trail groups, y = ring groups, w = trail points
+    vec4 wakeBounds;                  // x = trail groups, y = ring groups, z = interactive water, w = trail points
     vec4 wakePoints[MAX_WAKE_POINTS]; // xy = world pos, z = age 0..1, w = strength
     // The ray traced water (water_rt.glsli): x on, y the view (0 the water,
     // 1 its reflection alone, 2 what comes up through it alone), z how far
@@ -370,6 +370,48 @@ vec2 rainRippleTilt(vec2 p, float t, float strength) {
     return tilt;
 }
 
+// Interactive water: the bow wave and the Kelvin wake of every trail near
+// the pixel (see main), as a surface slope.
+vec2 kelvinWake(vec2 at) {
+    const float KELVIN_REACH = 7.0;
+    vec2 tilt = vec2(0.0);
+    int count = clamp(int(wakeBounds.w), 0, MAX_WAKE_POINTS);
+    int groups = clamp(int(wakeBounds.x), 0, MAX_WATER_GROUPS);
+    for (int g = 0; g < groups; ++g) {
+        int first = clamp(int(wakeGroups[g].w), 0, count);
+        int end = g + 1 < groups ? clamp(int(wakeGroups[g + 1].w), first, count) : count;
+        if (end - first < 1) continue;
+        vec2 head = wakePoints[end - 1].xy;
+        vec2 toHead = at - head;
+        if (dot(toHead, toHead) >= KELVIN_REACH * KELVIN_REACH) continue;
+        for (int i = first; i < end; ++i) {
+            vec4 wp = wakePoints[i];
+            float radius = 0.2 + length(head - wp.xy) / 3.0;
+            vec2 from = at - wp.xy;
+            float d = length(from);
+            float along = (d - radius) / 0.32;
+            if (abs(along) > 3.0) continue;
+            float crest = exp(-along * along) * sin(along * 3.2);
+            float amp = wp.w * (1.0 - wp.z) * 0.14 / (1.0 + 0.6 * radius);
+            tilt -= (from / max(d, 0.01)) * crest * amp;
+        }
+        // The bow: a crest round the head, on the side it moves to.
+        if (end - first >= 3) {
+            vec2 fwd = head - wakePoints[end - 3].xy;
+            float fl = length(fwd);
+            if (fl > 0.05) {
+                fwd /= fl;
+                float d = length(toHead);
+                float ahead = dot(toHead / max(d, 0.01), fwd);
+                float along = (d - 0.55) / 0.22;
+                float crest = exp(-along * along) * sin(along * 3.2);
+                tilt -= (toHead / max(d, 0.01)) * crest * 0.2 * wakePoints[end - 1].w * smoothstep(-0.3, 0.7, ahead);
+            }
+        }
+    }
+    return tilt;
+}
+
 void main() {
     float time = fogParams.z;
     float basicType = push.liquidBasicType;
@@ -493,6 +535,17 @@ void main() {
             float rainNear = 1.0 - smoothstep(RAIN_FADE_NEAR, RAIN_FADE_FAR, dist);
             swimTilt += rainRippleTilt(FragPos.xy, time, rainStrength) * rainNear;
         }
+    }
+    // Interactive water (WoWee only, wakeBounds.z): a bow wave before each
+    // trail's newest point and a V of waves behind it. Every point of a
+    // trail sends out a ring that has spread a third as far as the trail
+    // has gone on since the point was laid - the far-field wave of a body
+    // moving over deep water, whose rings' envelope is Kelvin's wedge
+    // (asin(1/3), 19.47 degrees either side), whatever the speed. Summed,
+    // the rings of a crowd cross and interfere. From the trails' points
+    // alone, each a stored event with its age: no wave state is kept.
+    if (wakeBounds.z > 0.5) {
+        swimTilt += kelvinWake(FragPos.xy);
     }
     norm = normalize(norm + vec3(swimTilt, 0.0));
 

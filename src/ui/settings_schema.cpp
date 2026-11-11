@@ -250,8 +250,16 @@ constexpr SettingDesc kSchema[] = {
      "under it traced through the world - the bed bent by the waves,\n"
      "darker and bluer with depth, the sky and the shore in the mirror.\n"
      "Off, or without ray tracing, the original client's water.", "", 1, "raytracedlighting"},
-    {"rtswimwaves", "Swimming waves", SettingKind::Bool, 0, 0, 0,
+    // Bow waves and wakes behind what moves through the traced water
+    // (water.frag's kelvinWake), from each unit's trail points.
+    {"interactivewater", "Interactive water", SettingKind::Bool, 0, 0, 0,
      "Water", "Water",
+     "On the ray traced water: a bow wave before every swimmer, wader and\n"
+     "boat and a V of waves spreading behind it, the rings of many crossing\n"
+     "one another. Costs a little more where crowds are in the water. Not\n"
+     "in the original client.", "", 1, "rtwater"},
+    {"rtswimwaves", "Swimming waves", SettingKind::Bool, 0, 0, 0,
+     "Water", "",
      "On the ray traced water: small waves from a swimmer's arms and body\n"
      "where they move at the surface, and rings where rain falls on it\n"
      "(not under a roof). An experiment.", "", 1, "rtwater"},

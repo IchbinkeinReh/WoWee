@@ -6825,6 +6825,10 @@ void Renderer::setRtParticleLights(int n) {
     if (m2Renderer) m2Renderer->setParticleLightsPerEmitter(n);
 }
 
+void Renderer::setInteractiveWater(bool on) {
+    if (waterRenderer) waterRenderer->setInteractiveWater(on);
+}
+
 void Renderer::recordRtLighting() {
     if (!rtLighting_ || !rtLighting_->active() || !camera) return;
     RtLighting::FrameInputs in{};

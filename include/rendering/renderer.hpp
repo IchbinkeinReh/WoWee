@@ -1303,6 +1303,9 @@ public:
     void setRtWater(bool on) { rtWater_ = on; }
     /// The swimmer's small waves on the traced water (swim_wave.hpp).
     void setRtSwimWaves(bool on) { rtSwimWaves_ = on; }
+    /// Graphics, "Interactive water": the traced water's bow waves and
+    /// wakes (water.frag's kelvinWake).
+    void setInteractiveWater(bool on);
     void setRtRoomSun(bool on) { rtRoomSun_ = on; }
     /// Its waves' height and frequency, 1 the default of each.
     void setRtWaterWaves(float amplitude, float frequency) {
