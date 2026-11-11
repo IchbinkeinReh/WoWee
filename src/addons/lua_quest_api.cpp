@@ -5747,27 +5747,57 @@ void registerQuestLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"GetTradeSkillTools", [](lua_State* L) -> int {
-            // NOTHING, not a nil. The tool requirement is not in what this
-            // client parses, and claiming a tool is missing would grey out
-            // recipes that work - but answering one nil is not the same as
-            // answering none, and the difference is the whole bug.
+            // GetTradeSkillTools(index) (0x005de620): what the recipe needs at
+            // hand, as pairs of a name and 1 when it is there, nil when not -
+            // the spell focus (named, and always 1: it is a place to stand
+            // at, judged when the cast goes out), the area group's first area
+            // (likewise), each tool item (1 when carried, 0x00754a20; one the
+            // item cache does not have yet is asked for, its answer firing
+            // TRADE_SKILL_UPDATE, and left out until then) and each tool
+            // category (1 when what is carried covers it, 0x007548f0).
             //
-            // The only caller is
-            //   local spellFocus = BuildColoredListString(GetTradeSkillTools(id));
-            // and BuildColoredListString gives up only on an empty argument
-            // list: `if ( select("#", ...) == 0 ) then return nil end`. One nil
-            // is a list of one, so it walked past that, took `text` as nil, and
-            // raised concatenating it.
-            //
-            // That line sits in TradeSkillFrame_SetSelection ABOVE
-            // `if ( creatable ) then TradeSkillCreateButton:Enable()`, so the
-            // raise took the selection down before either Create button was
-            // enabled again - they are disabled at the top of every trade skill
-            // update and re-enabled only there. Both stayed greyed with the
-            // reagents in the bag and the recipe drawn, because everything the
-            // panel had already filled in happened before the raise.
-            (void)L;
-            return 0;
+            // Nothing at all for a recipe needing nothing - never one nil:
+            // BuildColoredListString gives up only on an empty argument list,
+            // and a lone nil raised inside TradeSkillFrame_SetSelection above
+            // the line that enables the Create buttons.
+            auto* gh = getGameHandler(L);
+            const int i = static_cast<int>(luaL_checknumber(L, 1));
+            if (!gh) return 0;
+            const auto* rec = tradeSkillRecipeAt(tradeSkillRows(gh), i);
+            if (!rec) return 0;
+            auto it = gh->spellNameCacheRef().find(rec->spellId);
+            if (it == gh->spellNameCacheRef().end()) return 0;
+            const auto& spell = it->second;
+            const auto* sh = gh->getSpellHandler();
+            int pairs = 0;
+            const auto pair = [&](const std::string& name, bool there) {
+                lua_pushstring(L, name.c_str());
+                if (there) lua_pushnumber(L, 1); else lua_pushnil(L);
+                ++pairs;
+            };
+            if (spell.requiresSpellFocus != 0) {
+                const std::string& focus = gh->getSpellFocusName(spell.requiresSpellFocus);
+                if (!focus.empty()) pair(focus, true);
+            }
+            if (spell.areaGroupId > 0 && sh) {
+                const std::string area = gh->getAreaName(sh->firstAreaOfGroup(spell.areaGroupId));
+                if (!area.empty()) pair(area, true);
+            }
+            for (const uint32_t tool : spell.totems) {
+                if (tool == 0) continue;
+                const auto* info = gh->getItemInfo(tool);
+                if (!info || !info->valid) {
+                    askItemForEvent(gh, tool, "TRADE_SKILL_UPDATE");
+                    continue;
+                }
+                pair(info->name, gh->getInventory().countCarried(tool) > 0);
+            }
+            for (const uint32_t cat : spell.totemCategories) {
+                if (cat == 0) continue;
+                const std::string& name = gh->getTotemCategoryName(cat);
+                if (!name.empty()) pair(name, sh && sh->carriesTotemCategory(cat));
+            }
+            return pairs * 2;
         }},
                 // Links, which need an item this client does not resolve for a
                 // recipe, and the play-time limits that only Chinese realms set.

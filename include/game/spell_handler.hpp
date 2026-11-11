@@ -272,6 +272,8 @@ public:
     [[nodiscard]] std::vector<uint32_t> multiCastSpells(int element) const;
     /// 0x007548f0: the player carries what the TotemCategory asks for.
     [[nodiscard]] bool carriesTotemCategory(uint32_t category) const;
+    /// The first area an AreaGroup names, 0 for none.
+    [[nodiscard]] uint32_t firstAreaOfGroup(uint32_t group) const;
     /// The totem bar's update (0x005ab9d0): an element whose list has spells
     /// and whose bit in autoFilledMultiCastSlots is clear puts its first
     /// spell on each of its empty slots and sets the bit; one with none

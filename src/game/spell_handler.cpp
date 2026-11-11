@@ -2818,6 +2818,12 @@ uint32_t SpellHandler::supersededBy(uint32_t spellId) const {
     return 0;
 }
 
+uint32_t SpellHandler::firstAreaOfGroup(uint32_t group) const {
+    loadAreaGroups();
+    const auto it = areaGroups_.find(group);
+    return it == areaGroups_.end() ? 0u : it->second[0];
+}
+
 void SpellHandler::loadAreaGroups() const {
     if (areaGroupsLoaded_) return;
     areaGroupsLoaded_ = true;
@@ -5567,7 +5573,7 @@ struct CastCheckColumns {
         auraInterrupt, channelInterrupt, powerType, manaCost, perLevel, costPct, baseLevel, maxLevel,
         castTimeIndex, effectMechanic, trigger, prevention, minFaction, minRep, auraVision, areaGroup, itemClass,
         itemSubClassMask, runeCost, targetStateNot, targetAura, excludeTargetAura, totem, totemCategory, dieSides, pointsPerLevel,
-        spellDifficulty;
+        spellDifficulty, spellFocus;
 
     template <class Layout>
     explicit CastCheckColumns(const Layout* l) {
@@ -5587,7 +5593,7 @@ struct CastCheckColumns {
         targetStateNot = named("TargetAuraStateNot"), targetAura = named("TargetAuraSpell");
         spellDifficulty = named("SpellDifficultyId");
         excludeTargetAura = named("ExcludeTargetAuraSpell"), totem = named("Totem");
-        totemCategory = named("TotemCategory");
+        totemCategory = named("TotemCategory"), spellFocus = named("RequiresSpellFocus");
         dieSides = named("EffectDieSides0"), pointsPerLevel = named("EffectRealPointsPerLevel0");
     }
 
@@ -5630,6 +5636,7 @@ struct CastCheckColumns {
         entry.minReputation = u(minRep);
         entry.requiredAuraVision = u(auraVision);
         entry.areaGroupId = u(areaGroup);
+        entry.requiresSpellFocus = u(spellFocus);
         if (itemClass < fieldCount) entry.equippedItemClass = n(itemClass);
         entry.equippedItemSubClassMask = u(itemSubClassMask);
         entry.runeCostId = u(runeCost);

@@ -5743,6 +5743,8 @@ public:
         uint32_t spellDifficultyId = 0;
         uint32_t totems[2] = {0, 0};
         uint32_t totemCategories[2] = {0, 0};
+        /// RequiresSpellFocus: the SpellFocusObject the spell needs nearby.
+        uint32_t requiresSpellFocus = 0;
     };
     static constexpr size_t PLAYER_EXPLORED_ZONES_COUNT = 128;
     std::string getAreaName(uint32_t areaId) const;
