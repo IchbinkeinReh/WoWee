@@ -839,6 +839,10 @@ bool Application::initialize() {
     // building it shows with whatever the WMO renderer holds, and the game
     // screen's own application of them waits until that load is over.
     uiManager->getGameScreen().applySavedSurfaceDetail(renderer.get());
+    // And the ground clutter's density and distance: the login's own tiles
+    // are prepared before the game screen applies anything, and kept the
+    // default density until they streamed out and back.
+    uiManager->getGameScreen().applySavedGroundClutter(renderer.get());
 
     // Create subsystems
     authHandler = std::make_unique<auth::AuthHandler>();
@@ -1069,7 +1073,7 @@ bool Application::initialize() {
         };
         luaSvc.setGroundDetailDistance = [this](float yards) {
             if (!renderer) return;
-            if (auto* m2 = renderer->getM2Renderer()) m2->setGroundDetailDistance(yards);
+            renderer->setGroundClutterDistance(yards);
         };
         luaSvc.setAnisotropyLimit = [this](float limit) {
             if (auto* window = this->window.get()) {

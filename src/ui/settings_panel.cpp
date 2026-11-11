@@ -1524,20 +1524,12 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
     } else if (key == "specular") {
         if (renderer) renderer->setClientSpecular(pendingSpecular);
     } else if (key == "groundclutter") {
-        if (renderer) {
-            if (auto* tm = renderer->getTerrainManager()) {
-                tm->setGroundClutterDensityScale(
-                    static_cast<float>(pendingGroundClutterDensity) / 100.0f);
-            }
-        }
+        if (renderer) renderer->setGroundClutterDensity(static_cast<float>(pendingGroundClutterDensity) / 100.0f);
     } else if (key == "groundclutterdistance") {
         // The five below reach the same code the game's own Effects panel
         // reached through LuaServices. They are settings rather than cvars
         // now; kClientCVars keeps the cvar pointing at the same value.
-        if (renderer) {
-            if (auto* m2 = renderer->getM2Renderer())
-                m2->setGroundDetailDistance(static_cast<float>(pendingGroundClutterDistance));
-        }
+        if (renderer) renderer->setGroundClutterDistance(static_cast<float>(pendingGroundClutterDistance));
     } else if (key == "particledensity") {
         if (renderer) {
             if (auto* m2 = renderer->getM2Renderer())

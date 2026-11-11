@@ -5516,6 +5516,7 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
         if (!m2Renderer->initialize(vkCtx, perFrameSetLayout, assetManager))
             LOG_ERROR("M2Renderer initialization failed");
         m2Renderer->setRtScene(rtScene_.get());
+        if (groundClutterDistance_ >= 0.0f) m2Renderer->setGroundDetailDistance(groundClutterDistance_);
         if (swimEffects) {
             swimEffects->setM2Renderer(m2Renderer.get());
         }
@@ -5604,6 +5605,11 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
             terrainManager.reset();
             return false;
         }
+        // The saved clutter density before the first tile is prepared: the
+        // game screen applies its settings only once it draws, after the
+        // login's tiles have been built - a player who logged in inside a
+        // forest got the default density there until the tiles reloaded.
+        terrainManager->setGroundClutterDensityScale(groundClutterDensity_);
         // Set water renderer for terrain streaming
         if (waterRenderer) {
             terrainManager->setWaterRenderer(waterRenderer.get());
@@ -7904,3 +7910,19 @@ void Renderer::buildFrameGraph(game::GameHandler* gameHandler) {
 
 } // namespace rendering
 } // namespace wowee
+
+namespace wowee {
+namespace rendering {
+
+void Renderer::setGroundClutterDensity(float scale) {
+    groundClutterDensity_ = scale;
+    if (terrainManager) terrainManager->setGroundClutterDensityScale(scale);
+}
+
+void Renderer::setGroundClutterDistance(float yards) {
+    groundClutterDistance_ = yards;
+    if (m2Renderer) m2Renderer->setGroundDetailDistance(yards);
+}
+
+}  // namespace rendering
+}  // namespace wowee
