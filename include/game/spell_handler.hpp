@@ -131,6 +131,11 @@ public:
     [[nodiscard]] spell_history::History::Cooldown historyCooldown(uint32_t spellId, uint32_t itemId, bool pet) const;
     /// 0x00809030: an item's - its first use spell's (trigger 0), cast from it.
     [[nodiscard]] spell_history::History::Cooldown itemCooldown(uint32_t itemId) const;
+    /// An item's record arrived for a cooldown query that was waiting on it
+    /// (0x0080abe0): when its use spell is on cooldown, the bars and the bags
+    /// are told, as any change to the history tells them (0x0053bac0,
+    /// 0x005d6f10).
+    void itemCooldownArrived(uint32_t itemId);
     /// The client's clock for the history, in milliseconds (0x0086ae20):
     /// GetTime()'s, a thousandth of a second at a time.
     static int64_t historyNowMs();

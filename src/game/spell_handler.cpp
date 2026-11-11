@@ -1554,6 +1554,11 @@ void SpellHandler::playerCooldownsChanged() {
 // PetActionBar_UpdateCooldowns (172), which asks GetPetActionCooldown for every
 // slot - the call WoWee already answers from its pet history, so the numbers
 // were there and only the word about them was missing.
+void SpellHandler::itemCooldownArrived(uint32_t itemId) {
+    const auto cd = itemCooldown(itemId);
+    if (cd.running || !cd.enabled) cooldownHistoryChanged(false);
+}
+
 void SpellHandler::cooldownHistoryChanged(bool forPet) {
     if (!owner_.addonEventCallbackRef()) return;
     playerCooldownsChanged();

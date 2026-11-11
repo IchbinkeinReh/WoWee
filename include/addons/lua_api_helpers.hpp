@@ -1236,6 +1236,14 @@ inline int pushHistoryCooldown(lua_State* L, const game::spell_history::History:
 /// (trigger 0), its cooldown cast from the item; without, 0, 0, 0.
 inline int pushItemCooldown(lua_State* L, game::GameHandler* gh, uint32_t itemId) {
     const auto* info = gh ? gh->getItemInfo(itemId) : nullptr;
+    // An item not known yet is asked for, and the answer that finds it redraws
+    // the cooldowns if its use spell turns out to be on one (0x00809030 hands
+    // the item cache 0x0080abe0). It answered 0, 0, 0 and never asked.
+    if (gh && itemId != 0 && (!info || !info->valid)) {
+        gh->askItemThen(itemId, "item cooldown", [gh, itemId](bool found) {
+            if (found && gh->getSpellHandler()) gh->getSpellHandler()->itemCooldownArrived(itemId);
+        });
+    }
     bool use = false;
     for (size_t k = 0; info && info->valid && k < info->spells.size() && !use; ++k)
         use = info->spells[k].spellId != 0 && info->spells[k].spellTrigger == 0;
