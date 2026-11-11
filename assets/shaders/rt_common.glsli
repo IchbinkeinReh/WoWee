@@ -54,6 +54,12 @@ layout(set = 0, binding = 0) uniform RtPassData {
                          // one - the interior ambient (MOHD) of the building
                          // round the camera over the zone's; w 1 when there
                          // is one (rt_apply)
+    // The probe ratio's open field and settings as the surfaces have them
+    // (rt_lighting.glsli's giSky, giGround, giParams), for rt_trace's
+    // visibility of the probes; giOpenParams.x 1 when the probes light.
+    vec4 giOpenSky;
+    vec4 giOpenGround;
+    vec4 giOpenParams;
     // The probe volume (rt_gi.glsli), read only by the probe passes.
     vec4 giVolume[2];        // the grid this frame's update writes
     vec4 giVolumeMod[2];

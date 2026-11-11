@@ -240,6 +240,7 @@ private:
         AllocatedBuffer lights{};  // rt_lights::PointLightGPU[kMaxPointLights], mapped
         VkDescriptorSet sets[3] = {};  // one per filter pass; set 0 also runs the rest
         uint64_t setsGeneration = 0;   // the views they were written for
+        VkImageView giView = VK_NULL_HANDLE;  // the probe atlas they name (kGiAtlas)
     };
 
     bool createPipelines();

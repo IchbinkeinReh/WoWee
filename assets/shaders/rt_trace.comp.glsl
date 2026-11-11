@@ -48,6 +48,9 @@ layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D uRaw;
 // baked colour (rt_prepare). Out: the point lights' light; a = the baked
 // lights' part.
 layout(set = 0, binding = 11, rgba16f) uniform image2D uPointOut;
+// The probe atlas (rt_gi.glsli), for which of the probes round a point it can
+// see (rtProbesSeen).
+layout(set = 0, binding = 15) uniform sampler2D uGiAtlas;
 
 // Must match rt_lights::PointLightGPU.
 struct RtPointLight {
@@ -226,6 +229,108 @@ vec3 rtLightAim(RtPointLight light) {
 const float RT_FLOOR_FACE_FADE_LOW = -0.02;
 const float RT_FLOOR_FACE_FADE_HIGH = 0.10;
 
+#include "rt_gi.glsli"
+
+// giSampleCascade (rt_gi.glsli) with every probe it would weigh asked by a
+// ray: none that geometry stands between the point and it counts. The probe
+// volume's visibility tiles are a few texels a probe, each a wide cone's mean
+// depth; past a wall thinner than a probe cell - the Tirisfal zeppelin
+// tower's, a yard of stone - a probe outside in the sunlit air passed their
+// test for the room's floor at the wall's foot, while the probes inside were
+// buried in the stone, and with the weights normalised the outside one lit
+// the floor alone: a lilac band of sky light round the room (user162). All
+// eight are asked, not the heaviest few: the one that leaks is often a light
+// one, and dropping the heavy ones would hand it the whole of the cell.
+vec4 rtGiSampleCascadeSeen(int cascade, vec4 vol, vec4 volMod, vec3 p, vec3 n, vec3 v, inout uint rng) {
+    float spacing = vol.w;
+    vec3 pb = p + (n * 0.2 + v * 0.8) * (0.225 * spacing);
+    vec3 g = pb / spacing - vol.xyz;
+    ivec3 base = clamp(ivec3(floor(g)), ivec3(0), GI_PROBES - 2);
+    vec3 alpha = clamp(g - vec3(base), 0.0, 1.0);
+    vec3 sum = vec3(0.0);
+    float wsum = 0.0;
+    // Asked from just off the surface, as the probes' own bias has it, but
+    // from the surface's side: the biased point can stand past a thin wall.
+    vec3 from = p + n * max(0.05, 0.02 * spacing);
+    for (int i = 0; i < 8; ++i) {
+        ivec3 off = ivec3(i & 1, (i >> 1) & 1, i >> 2);
+        ivec3 local = base + off;
+        vec3 probe = giProbeWorld(vol, local);
+        ivec3 st = giStorage(volMod, local);
+        vec3 toProbe = normalize(probe - p);
+        float back = (dot(toProbe, n) + 1.0) * 0.5;
+        float w = back * back + 0.2;
+        vec3 fromProbe = pb - probe;
+        float d = length(fromProbe);
+        vec3 vis = textureLod(uGiAtlas, giTileUv(giVisibilityTileOrigin(cascade, st), GI_VIS_TEXELS,
+                                                 fromProbe / max(d, 1e-4)), 0.0).rgb;
+        if (vis.b > 0.5) continue;
+        vec2 m = vis.rg;
+        if (d > m.x) {
+            float variance = abs(m.x * m.x - m.y);
+            float over = d - m.x;
+            float cheb = variance / (variance + over * over);
+            w *= max(cheb * cheb * cheb, 0.05);
+        }
+        w = max(w, 1e-6);
+        if (w < 0.2) w *= w * w / 0.04;
+        vec3 tri = mix(1.0 - alpha, alpha, vec3(off));
+        w *= tri.x * tri.y * tri.z;
+        if (w < 1e-5) continue;
+        vec3 toward = probe - from;
+        float reach = length(toward);
+        if (reach > 1e-3) {
+            rtSkipUnits = true;
+            rtCutoutsOpen = true;
+            bool hidden = rtOccluded(from, toward / reach, reach, rng);
+            rtCutoutsOpen = false;
+            rtSkipUnits = false;
+            if (hidden) continue;
+        }
+        vec3 irr = textureLod(uGiAtlas, giTileUv(giIrradianceTileOrigin(cascade, st), GI_IRR_TEXELS, n), 0.0).rgb;
+        sum += sqrt(max(irr, vec3(0.0))) * w;
+        wsum += w;
+    }
+    vec3 r = sum / max(wsum, 1e-6);
+    return vec4(r * r, clamp(wsum * 20.0, 0.0, 1.0));
+}
+
+// giIrradiance with the probes' visibility asked (rtGiSampleCascadeSeen).
+vec4 rtGiIrradianceSeen(vec3 p, vec3 n, vec3 v, inout uint rng) {
+    float c0 = giCascadeCover(pass.giVolume[0], p);
+    vec4 s0 = c0 > 0.0 ? rtGiSampleCascadeSeen(0, pass.giVolume[0], pass.giVolumeMod[0], p, n, v, rng) : vec4(0.0);
+    c0 *= s0.a;
+    if (c0 >= 1.0) return vec4(s0.rgb, 1.0);
+    float c1 = giCascadeCover(pass.giVolume[1], p);
+    vec4 s1 = c1 > 0.0 ? rtGiSampleCascadeSeen(1, pass.giVolume[1], pass.giVolumeMod[1], p, n, v, rng) : vec4(0.0);
+    c1 *= s1.a;
+    float w0 = c0;
+    float w1 = c1 * (1.0 - c0);
+    float cover = w0 + w1;
+    if (cover <= 1e-4) return vec4(0.0);
+    return vec4((s0.rgb * w0 + s1.rgb * w1) / cover, cover);
+}
+
+// How much of the probes' ratio over the flat ambient (rt_lighting.glsli's
+// rtGiRatio, as the surfaces take it) is left with only the probes the point
+// can see: their ambient is scaled by it with the occlusion, never brightened.
+float rtProbesSeen(vec3 p, vec3 n, inout uint rng) {
+    if (pass.giOpenParams.x < 0.5) return 1.0;
+    vec3 v = normalize(pass.cameraPos.xyz - p);
+    vec4 eAll = giIrradiance(uGiAtlas, pass.giVolume[0], pass.giVolumeMod[0], pass.giVolume[1], pass.giVolumeMod[1],
+                            p, n, v);
+    vec4 seen = rtGiIrradianceSeen(p, n, v, rng);
+    float lift = texelFetch(uGiAtlas, GI_EXPOSURE_TEXEL, 0).r;
+    lift = lift > 0.0 ? lift : 1.0;
+    vec3 rAll = giAmbientRatio(eAll, pass.giOpenSky.rgb, pass.giOpenGround.rgb, n, pass.giOpenSky.w,
+                               pass.giOpenGround.w, pass.giOpenParams.z, lift);
+    vec3 rSeen = giAmbientRatio(seen, pass.giOpenSky.rgb, pass.giOpenGround.rgb, n, pass.giOpenSky.w,
+                                pass.giOpenGround.w, pass.giOpenParams.z, lift);
+    float lAll = dot(rAll, GI_LUMA);
+    if (lAll <= 1e-4) return 1.0;
+    return clamp(dot(rSeen, GI_LUMA) / lAll, 0.0, 1.0);
+}
+
 layout(local_size_x = 8, local_size_y = 8) in;
 
 void main() {
@@ -367,6 +472,10 @@ void main() {
         rtCutoutsOpen = false;
         ao = aoSum / float(aoRays);
     }
+    // The probes' light only from the probes the point can see: the ambient
+    // the occlusion scales is the probes' ratio over the flat one
+    // (rt_lighting.glsli), so what is lost of it goes with the occlusion.
+    if (mode >= RT_MODE_AO) ao *= rtProbesSeen(p, shadingN, rng);
 
     // The point lights: their sum, and one of them picked by weighted
     // reservoir sampling in the same pass.
