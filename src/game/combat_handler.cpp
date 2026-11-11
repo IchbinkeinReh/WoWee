@@ -582,8 +582,33 @@ void CombatHandler::stopAutoAttack() {
 // Combat text
 // ============================================================
 
+namespace {
+// The kinds of combat text that take health from their target.
+bool combatTextIsDamage(CombatTextEntry::Type type) {
+    switch (type) {
+        case CombatTextEntry::MELEE_DAMAGE:
+        case CombatTextEntry::SPELL_DAMAGE:
+        case CombatTextEntry::CRIT_DAMAGE:
+        case CombatTextEntry::PERIODIC_DAMAGE:
+        case CombatTextEntry::ENVIRONMENTAL:
+        case CombatTextEntry::GLANCING:
+        case CombatTextEntry::CRUSHING:
+            return true;
+        default:
+            return false;
+    }
+}
+}  // namespace
+
 void CombatHandler::addCombatText(CombatTextEntry::Type type, int32_t amount, uint32_t spellId, bool isPlayerSource, uint8_t powerType,
                                   uint64_t srcGuid, uint64_t dstGuid) {
+    // A hit that did the player damage (playerDamageHits), before the
+    // filters: the player is its target (by guid, or by no target given and
+    // the player not its source), and it took health.
+    if (amount > 0 && combatTextIsDamage(type) &&
+        (dstGuid == owner_.getPlayerGuid() || (dstGuid == 0 && !isPlayerSource))) {
+        ++playerDamageHits_;
+    }
     // The panel's filters, before anything is built or announced. The mapping
     // lives in combat_text_filter.hpp so it can be tested without a settings
     // store; only the lookup is here.

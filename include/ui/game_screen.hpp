@@ -214,7 +214,7 @@ private:
     // UI state
     bool showEntityWindow = false;
     bool showMinimap_ = true;  // M key toggles minimap
-    uint32_t lastPlayerHp_ = 0;   // Previous frame HP for damage flash detection
+    uint32_t lastPlayerDamageHits_ = 0;  // GameHandler::playerDamageHits at the last frame (damage flash)
     float damageFlashAlpha_ = 0.0f; // Screen edge flash intensity (fades to 0)
 
 
