@@ -53,6 +53,17 @@ vec3 rtwSunUnderwater() {
     return -refract(-normalize(rtSunRay.xyz), vec3(0.0, 0.0, 1.0), 1.0 / RTW_IOR);
 }
 
+// A direction in the cone of tangent `tanRadius` about d, in its quarter
+// `quarter` (0-3) of the disc: rtConeSample's, stratified.
+vec3 rtwConeQuarter(vec3 d, float tanRadius, uint quarter, inout uint rng) {
+    float u = rtRandom(rng), v = rtRandom(rng);
+    float r = sqrt(u) * tanRadius;
+    float phi = 1.57079632679 * (float(quarter) + v);
+    vec3 t, b;
+    rtBasis(d, t, b);
+    return normalize(d + t * (r * cos(phi)) + b * (r * sin(phi)));
+}
+
 // How far from `bed`, `depth` under the surface, the sun has come through water.
 float rtwSunPath(float depth) {
     return depth / max(rtwSunUnderwater().z, 0.2);
@@ -275,14 +286,18 @@ vec4 rtwRefraction(vec3 origin, vec3 dir, vec3 toSun, vec3 sigma, vec3 scatterCo
                 rtMaskJitter = true;
                 uint sunRays = 0u;
                 for (uint k = 0u; k < RTW_BED_SUN_RAYS; ++k) {
-                    vec3 under = rtConeSample(sunUnder, RTW_BED_SUN_TAN, rng);
-                    vec3 air = rtConeSample(sunRay, RTW_BED_SUN_TAN, rng);
+                    // Each ray in its own quarter of the disc, the first two
+                    // on opposite sides of it (0, 2, 1, 3).
+                    uint quarter = (k & 1u) * 2u + (k >> 1u);
+                    vec3 under = rtwConeQuarter(sunUnder, RTW_BED_SUN_TAN, quarter, rng);
+                    vec3 air = rtwConeQuarter(sunRay, RTW_BED_SUN_TAN, quarter, rng);
                     bool blocked = rtOccluded(hit + hn * 0.05, under, sunPath, rng) ||
                                    rtOccluded(hit + under * sunPath + vec3(0.0, 0.0, 0.1), air, 400.0, rng);
                     vis += blocked ? 0.0 : 1.0;
                     ++sunRays;
-                    // Half the disc in agreement - all lit or all shaded - is
-                    // the bed outside a shadow's edge; only an edge takes all.
+                    // Opposite sides of the disc in agreement - both lit or
+                    // both shaded - is the bed off a shadow's edge; only an
+                    // edge takes all four.
                     if (sunRays == RTW_BED_SUN_RAYS / 2u && (vis == 0.0 || vis == float(sunRays))) break;
                 }
                 rtMaskJitter = false;
