@@ -3512,6 +3512,25 @@ static int lua_GetItemTooltipData(lua_State* L) {
     lua_setfield(L, -2, "damageMax");
     lua_pushnumber(L, info->delayMs);
     lua_setfield(L, -2, "speed");
+    // Both damage entries as sent - minimum, maximum and school - which the
+    // tooltip says one line each (0x006277f0), and the shield's block.
+    lua_newtable(L);
+    int damageEntries = 0;
+    for (const auto& d : info->damages) {
+        lua_newtable(L);
+        lua_pushnumber(L, d.min);
+        lua_setfield(L, -2, "min");
+        lua_pushnumber(L, d.max);
+        lua_setfield(L, -2, "max");
+        lua_pushnumber(L, d.type);
+        lua_setfield(L, -2, "school");
+        lua_rawseti(L, -2, ++damageEntries);
+    }
+    lua_setfield(L, -2, "damages");
+    if (info->block > 0) {
+        lua_pushnumber(L, info->block);
+        lua_setfield(L, -2, "block");
+    }
     // Primary stats
     if (info->stamina != 0) { lua_pushnumber(L, info->stamina); lua_setfield(L, -2, "stamina"); }
     if (info->strength != 0) { lua_pushnumber(L, info->strength); lua_setfield(L, -2, "strength"); }
