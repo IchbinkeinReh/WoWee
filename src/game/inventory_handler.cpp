@@ -1,4 +1,5 @@
 #include "game/inventory_handler.hpp"
+#include "game/stationery.hpp"
 #include "game/tutorials.hpp"
 #include "game/totem_bar.hpp"
 #include "game/spell_handler.hpp"
@@ -6296,18 +6297,23 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
             }
         }
 
-        // Auction mail subjects contain an item entry rather than display text.
-        // Refresh FrameXML mail rows once that item's name becomes available.
-        bool resolvedAuctionSubject = false;
+        // Mail rows that were waiting on this item, told again
+        // (MAIL_INBOX_UPDATE): an auction subject names an item entry rather
+        // than display text, and GetInboxHeaderInfo's two icons come from the
+        // item cache - the one attachment's, and the stationery's item - with
+        // 0x0056d4b0 as the callback that refreshes the inbox when either lands.
+        bool mailWaited = false;
         for (const auto& mail : mailInbox_) {
             AuctionMailSubject auction;
-            if (mail.messageType == 2 && parseAuctionMailSubject(mail.subject, auction) &&
-                auction.itemEntry == data.entry) {
-                resolvedAuctionSubject = true;
+            if ((mail.messageType == 2 && parseAuctionMailSubject(mail.subject, auction) &&
+                 auction.itemEntry == data.entry) ||
+                (mail.attachments.size() == 1 && mail.attachments[0].itemId == data.entry) ||
+                stationeryItemId(mail.stationeryId) == data.entry) {
+                mailWaited = true;
                 break;
             }
         }
-        if (resolvedAuctionSubject && owner_.addonEventCallbackRef()) {
+        if (mailWaited && owner_.addonEventCallbackRef()) {
             owner_.addonEventCallbackRef()("MAIL_INBOX_UPDATE", {});
         }
 
