@@ -1087,6 +1087,7 @@ void TerrainRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, c
     }
 
     glm::vec3 camPos = camera.getPosition();
+    const float maxTerrainDistSq = maxViewDistance_ * maxViewDistance_;
 
     renderedChunks = 0;
     culledChunks = 0;
@@ -1109,14 +1110,7 @@ void TerrainRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, c
         float dx = chunk.boundingSphereCenter.x - camPos.x;
         float dy = chunk.boundingSphereCenter.y - camPos.y;
         float distSq = dx * dx + dy * dy;
-        // Drawn while any of it is within the view distance, as a building's
-        // groups are (WMORenderer: the nearest point of each group's box).
-        // Asked of its centre, a chunk past the distance was dropped while
-        // the building on its near edge stayed: Thunder Bluff's lodges, lift
-        // and bridges hung over the horizon from Stonebull Lake with the
-        // mesas under them gone.
-        const float reach = maxViewDistance_ + chunk.boundingSphereRadius;
-        if (distSq > reach * reach) {
+        if (distSq > maxTerrainDistSq) {
             culledChunks++;
             continue;
         }
