@@ -498,7 +498,17 @@ void AuthScreen::render(auth::AuthHandler& authHandler) {
         static int autoLoginTries = 0;
         static double lastAutoLogin = -1e9;
         const double now = ImGui::GetTime();
-        if (autoLogin && autoLoginTries < 5 && now - lastAutoLogin > 5.0 && loginInfoLoaded &&
+        // Never once the account is in: the screen is still drawn for the
+        // frame the login succeeds in, and a second try there - five seconds
+        // after the first - started a new logon over the one that had just
+        // succeeded; the server refused it, the handler went to FAILED, and
+        // the realm list was asked of a failed session every ten seconds for
+        // as long as the client ran (two hung test runs, 2026-11-11).
+        const auto st = authHandler.getState();
+        const bool loggedIn = st == auth::AuthState::AUTHENTICATED ||
+                              st == auth::AuthState::REALM_LIST_REQUESTED ||
+                              st == auth::AuthState::REALM_LIST_RECEIVED;
+        if (autoLogin && !loggedIn && autoLoginTries < 5 && now - lastAutoLogin > 5.0 && loginInfoLoaded &&
             !authenticating && !settingsOpen_ && usingStoredHash &&
             password_.text() == PASSWORD_PLACEHOLDER) {
             ++autoLoginTries;
