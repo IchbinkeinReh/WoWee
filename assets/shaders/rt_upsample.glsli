@@ -80,6 +80,21 @@ float rtNormalWeight(vec3 np, vec3 nt) {
     return 0.05 + 0.95 * smoothstep(0.5, 0.85, dot(np, nt));
 }
 
+// The stand-in for a pixel that found none of its own surface's texels
+// close by (the apply pass, rt_apply.glsli): how good a texel `offset`
+// texels away, at distance texelDist with normal nt, is as its nearest
+// neighbour of the same kind - on the same side of the edge, at about the
+// pixel's distance (within 10% + 15 cm, looser than rtDistanceMatch) and
+// facing about the same way. 0 for a texel of the other side of an edge, or
+// the sky; less the farther it lies. Only ever asked within a few texels.
+float rtFallbackScore(float texelDist, float expected, vec3 np, vec3 nt, vec2 offset) {
+    if (texelDist <= 0.0) return 0.0;
+    float e = (texelDist - expected) / (0.10 * expected + 0.15);
+    float depthOk = exp(-e * e);
+    float normalOk = smoothstep(0.3, 0.8, dot(np, nt));
+    return depthOk * normalOk * exp(-dot(offset, offset) / 8.0);
+}
+
 // How far this frame's samples hold a texel's history: around their mean,
 // 1.5 times their spread and 0.2 more, widened where there are few of them
 // (an edge, a pole), where the spread says nothing; at one sample by 0.6.

@@ -164,3 +164,18 @@ TEST_CASE("rt_upsample: a still camera finds a texel's own history", "[rt_upsamp
     const glm::vec2 mid = own + glm::vec2(1.0f, 0.0f);
     CHECK(historyWeight(own, mid, 2.0f) == Catch::Approx(historyWeight(own + glm::vec2(2.0f, 0.0f), mid, 2.0f)));
 }
+
+TEST_CASE("rt_upsample: a pixel without its own texel takes the nearest of its kind", "[rt_upsample]") {
+    const glm::vec3 wall(0.0f, -1.0f, 0.0f);
+    const glm::vec3 floor(0.0f, 0.0f, 1.0f);
+    // The background behind a character's silhouette at 30 yards: a texel of
+    // the same wall two texels off stands in; the character's at 10 does not.
+    const float sameWall = fallbackScore(30.4f, 30.0f, wall, wall, {2.0f, 0.0f});
+    CHECK(sameWall > 0.4f);
+    CHECK(fallbackScore(10.0f, 30.0f, wall, wall, {1.0f, 0.0f}) < 1e-3f);
+    // Across a corner, at the same distance: the other face's texel is no stand-in.
+    CHECK(fallbackScore(30.0f, 30.0f, wall, floor, {1.0f, 0.0f}) < 1e-3f);
+    // Nearer beats farther; the sky never stands in.
+    CHECK(fallbackScore(30.4f, 30.0f, wall, wall, {1.0f, 0.0f}) > sameWall);
+    CHECK(fallbackScore(0.0f, 30.0f, wall, wall, {0.0f, 0.0f}) == 0.0f);
+}

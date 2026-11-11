@@ -114,10 +114,59 @@ Traced findTraced(vec2 pixf, vec3 rel, vec3 np, float expected) {
             }
         }
     }
+    // Still nothing that is surely its own - the far side of a character's
+    // silhouette, a wall's foot where the floor took the texels: its nearest
+    // texel of the same kind (rtFallbackScore: about its distance, facing
+    // its way) within three texels makes up what the match lacks, instead of
+    // the pixel being lit as without the tracing.
+    float own = smoothstep(0.1, 0.6, acc.best);
+    float stand = 0.0;
+    Found alt = Found(0.0, 0.0, vec2(0.0), vec4(0.0), 0.0);
+    if (own < 1.0) {
+        ivec2 pick = ivec2(-1);
+        float score = 0.0;
+        for (int y = -3; y <= 3; ++y) {
+            for (int x = -3; x <= 3; ++x) {
+                ivec2 q = center + ivec2(x, y);
+                if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, size))) continue;
+                vec4 l = texelFetch(uLight, q, 0);
+                if (l.a <= 0.0) continue;
+                vec4 tg = texelFetch(uTraceGbuf, q, 0);
+                vec2 tp = vec2(rtGbufPixel(tg, q)) + 0.5;
+                float sc = rtFallbackScore(l.a, expected, np, rtGbufNormal(tg), (tp - pixf) / float(rtBlockSize()));
+                if (sc > score) {
+                    score = sc;
+                    pick = q;
+                }
+            }
+        }
+        stand = smoothstep(0.1, 0.4, score);
+        if (stand > 0.0) {
+            vec4 l = texelFetch(uLight, pick, 0);
+            vec4 p = imageLoad(uPoint, pick);
+            alt.wsum = 1.0;
+            alt.point = p * max(mix(1.0, l.b, pass.tune2.y), 0.0);
+            alt.bakedDark = rtBakedDarkness(p.a, clamp(l.b, 0.0, 1.0));
+            alt.sunAo = l.rg;
+        }
+    }
+    // Its own texels where it has them, the stand-in for the rest.
+    float weight = max(own, stand);
+    if (acc.wsum <= 1e-5 && stand <= 0.0) {
+        r.best = acc.best;
+        return r;
+    }
+    float keep = acc.wsum > 1e-5 ? own / max(weight, 1e-5) : 0.0;
+    float aw = (1.0 - keep) / alt.wsum;
+    float cw = acc.wsum > 1e-5 ? keep / acc.wsum : 0.0;
+    if (stand <= 0.0) aw = 0.0;
+    acc.sunAo = acc.sunAo * cw + alt.sunAo * aw;
+    acc.point = acc.point * cw + alt.point * aw;
+    acc.bakedDark = acc.bakedDark * cw + alt.bakedDark * aw;
+    acc.wsum = 1.0;
     float wsum = acc.wsum;
-    r.best = acc.best;
-    if (wsum <= 1e-5) return r;
-    r.weight = smoothstep(0.1, 0.6, acc.best);
+    r.best = max(acc.best, stand * 0.6);
+    r.weight = weight;
     r.sun = acc.sunAo.x / wsum;
     r.ao = acc.sunAo.y / wsum;
     r.point = acc.point.rgb / wsum * (r.weight * pass.tune.w);

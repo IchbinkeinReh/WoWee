@@ -71,6 +71,15 @@ inline float normalWeight(glm::vec3 np, glm::vec3 nt) {
     return 0.05f + 0.95f * smoothstep(0.5f, 0.85f, glm::dot(np, nt));
 }
 
+/// rtFallbackScore.
+inline float fallbackScore(float texelDist, float expected, glm::vec3 np, glm::vec3 nt, glm::vec2 offset) {
+    if (texelDist <= 0.0f) return 0.0f;
+    const float e = (texelDist - expected) / (0.10f * expected + 0.15f);
+    const float depthOk = std::exp(-e * e);
+    const float normalOk = smoothstep(0.3f, 0.8f, glm::dot(np, nt));
+    return depthOk * normalOk * std::exp(-glm::dot(offset, offset) / 8.0f);
+}
+
 /// rtClampWindow, per channel.
 inline float clampWindow(float sigma, float count) {
     return 1.5f * sigma + 0.2f + 0.6f * std::clamp((4.0f - count) / 3.0f, 0.0f, 1.0f);
