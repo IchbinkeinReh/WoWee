@@ -2919,7 +2919,9 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
     if (info.manaCost > 0) {
         const char* named = game::powerTypeName(info.powerType);
         const char* unit = named ? named : "";
-        cost = std::to_string(info.manaCost) + (*unit ? std::string(" ") + unit : "");
+        // Over the power's divisor: rage and runic power are kept in tenths.
+        const uint32_t divisor = info.powerType < 7 ? wowee::addons::kPowerDivisors[info.powerType] : 1;
+        cost = std::to_string(info.manaCost / divisor) + (*unit ? std::string(" ") + unit : "");
     }
     if (info.maxRange > 0.0f) {
         range = withNumber(globalOr(L, "SPELL_RANGE", "%s yd range"), "%s", info.maxRange);

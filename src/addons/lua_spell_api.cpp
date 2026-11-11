@@ -1302,13 +1302,18 @@ static int lua_GetSpellInfo(lua_State* L) {
     // The interface unpacks all nine in one line in multicastactionbarframe,
     // and any addon reading a spell does the same.
     //
-    // isFunnel is the one value with nothing behind it here. False is right
-    // for every spell but a handful of warlock drains, and it is what the
-    // callers branch on rather than display.
+    // The cost is over the power's divisor (rage and runic power in tenths),
+    // and a spell that costs something each second - Health Funnel - shows
+    // that instead, with isFunnel true (0x00540a30, 0x007ff100). The power
+    // type is signed: -2 is health.
     auto spellData = gh->getSpellData(spellId);
-    lua_pushnumber(L, spellData.manaCost);                   // 4: cost
-    lua_pushboolean(L, 0);                                   // 5: isFunnel
-    lua_pushnumber(L, spellData.powerType);                  // 6: powerType
+    const int32_t powerType = static_cast<int8_t>(spellData.powerType);
+    const uint32_t divisor = powerType >= 0 && powerType < 7 ? kPowerDivisors[powerType] : 1;
+    const uint32_t perSecond = spellData.manaPerSecond / divisor;
+    const bool funnel = perSecond >= 1;
+    lua_pushnumber(L, funnel ? perSecond : spellData.manaCost / divisor);  // 4: cost
+    lua_pushboolean(L, funnel ? 1 : 0);                      // 5: isFunnel
+    lua_pushnumber(L, powerType);                            // 6: powerType
     lua_pushnumber(L, spellData.castTimeMs);                 // 7: castTime (ms)
     lua_pushnumber(L, spellData.minRange);                   // 8: minRange (yards)
     lua_pushnumber(L, spellData.maxRange);                   // 9: maxRange (yards)
