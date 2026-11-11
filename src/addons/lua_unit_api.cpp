@@ -102,11 +102,20 @@ static int lua_UnitName(lua_State* L) {
 }
 
 
+static bool isGroupMemberOrPet(game::GameHandler* gh, uint64_t guid);
+
+/// A dead unit (UNIT_DYNAMIC_FLAGS 0x20) outside the player's group shows no
+/// health and no power (0x0060eb60, 0x0060ed40 ask 0x00512a30).
+static bool hidesItsBars(lua_State* L, const game::Unit& unit) {
+    return (unit.getDynamicFlags() & game::UNIT_DYNFLAG_DEAD) &&
+           !isGroupMemberOrPet(getGameHandler(L), unit.getGuid());
+}
+
 static int lua_UnitHealth(lua_State* L) {
     const char* uid = luaL_optstring(L, 1, "player");
     auto* unit = resolveUnit(L, uid);
     if (unit) {
-        lua_pushnumber(L, unit->getHealth());
+        lua_pushnumber(L, hidesItsBars(L, *unit) ? 0 : unit->getHealth());
     } else {
         // Fallback: party member stats for out-of-range members
         auto* gh = getGameHandler(L);
@@ -163,7 +172,8 @@ static int lua_UnitPower(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (unit) {
         const int type = want == 7 ? unit->getPowerType() : want;
-        const bool answers = gh && type < 7 && (type == unit->getPowerType() || unit->getGuid() == gh->getPlayerGuid());
+        const bool answers = gh && type < 7 && !hidesItsBars(L, *unit) &&
+                             (type == unit->getPowerType() || unit->getGuid() == gh->getPlayerGuid());
         lua_pushnumber(L, answers ? static_cast<uint32_t>(gh->unitPower(*unit, type)) / powerDivisor(type) : 0);
     } else {
         std::string uidStr(uid);
