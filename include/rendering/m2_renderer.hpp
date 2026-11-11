@@ -306,6 +306,10 @@ struct M2Instance {
     // An animated model's pieces' RtScene instances, while it is near enough
     // to cast (syncRtScene), parallel to M2ModelGPU::rtPieces.
     std::vector<uint32_t> rtPieceInstances;
+    // On M2Renderer::rtUnsettledIds_ (syncRtScene looks at it next frame);
+    // on rtLitInstances_ (its model carries a light).
+    bool rtUnsettled = false;
+    bool rtLit = false;
     glm::vec3 worldBoundsMin;
     glm::vec3 worldBoundsMax;
 
@@ -1270,14 +1274,26 @@ private:
         std::vector<uint64_t> seen;
         std::vector<uint32_t> meshOf;
         std::vector<uint32_t> ownerOf;  ///< the M2Instance::id the slot was placed for
+        std::vector<uint32_t> ownedPos; ///< where a slot stands in `owned`
     };
     RtTracking rtStatic_, rtDynamic_;
     RtTracking& rtTrackingOf(uint32_t rtId);
-    uint64_t rtSyncGeneration_ = 0;
-    // The instances whose models carry lights, by M2Instance::id, as the last
-    // complete pass found them; the pass in progress fills rtLitNext_.
+    // The event-driven sync (syncRtScene): the instances to look at, by id;
+    // the models whose traced mesh came after instances of them were made.
+    std::vector<uint32_t> rtUnsettledIds_;
+    std::unordered_set<uint32_t> rtModelsToResettle_;
+    void markRtUnsettled(M2Instance& inst);
+    void releaseRtOf(M2Instance& inst);
+    void dropRtSlot(uint32_t rtId);
+    void trackRtSlot(uint32_t rtId, uint32_t mesh, uint32_t owner);
+    [[nodiscard]] bool ownsRtSlot(uint32_t rtId, uint32_t mesh, uint32_t owner) const;
+    [[nodiscard]] uint32_t rtTrackedMeshOf(uint32_t rtId) const;
+    // rtLitInstances_ kept on creation and removal.
+    static bool rtModelLit(const M2ModelGPU& model);
+    void noteRtLit(M2Instance& inst, const M2ModelGPU& model);
+    void forgetRtLit(M2Instance& inst);
+    // The instances whose models carry lights, by M2Instance::id.
     std::vector<uint32_t> rtLitInstances_;
-    std::vector<uint32_t> rtLitNext_;
     /// One light per particle emitter near the camera whose model gives no
     /// other (rt_lights::ParticleGlow), gathered by prepareM2Particles as it
     /// writes the particles out; read by collectRtLights after the worker
@@ -1292,10 +1308,8 @@ private:
     static void detectLamp(M2ModelGPU& gpuModel, const pipeline::M2Model& model);
     /// M2ModelGPU::flameClouds, from the emitters' tracks at the start.
     void computeFlameClouds(M2ModelGPU& gpuModel);
-    // The pass over every instance is spread over a few frames: where it has
-    // got to. The instances placed in the dynamic level - moving ones - are
-    // brought up to date every frame from rtDynamicOwnerIds_ (M2Instance ids).
-    size_t rtSyncCursor_ = 0;
+    // The instances placed in the dynamic level - moving ones - are brought
+    // up to date every frame from rtDynamicOwnerIds_ (M2Instance ids).
     std::vector<uint32_t> rtDynamicOwnerIds_;
     // Pieces of animated models placed by the last sync.
     uint32_t rtAnimatedPieces_ = 0;

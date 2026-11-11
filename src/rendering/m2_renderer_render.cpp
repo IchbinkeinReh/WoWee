@@ -267,6 +267,9 @@ uint32_t M2Renderer::createInstance(uint32_t modelId, const glm::vec3& position,
     }
     instanceIndexById[instance.id] = idx;
     insertBounds(spatialGrid, instance.worldBoundsMin, instance.worldBoundsMax, instance.id);
+    // Placed in the traced scene by the next sync; listed if it lights.
+    markRtUnsettled(instances[idx]);
+    noteRtLit(instances[idx], mdlRef);
 
     return instance.id;
 }
@@ -375,6 +378,9 @@ uint32_t M2Renderer::createInstanceWithMatrix(uint32_t modelId, const glm::mat4&
     }
     instanceIndexById[instance.id] = idx;
     insertBounds(spatialGrid, instance.worldBoundsMin, instance.worldBoundsMax, instance.id);
+    // Placed in the traced scene by the next sync; listed if it lights.
+    markRtUnsettled(instances[idx]);
+    noteRtLit(instances[idx], mdl2);
 
     return instance.id;
 }
