@@ -768,7 +768,9 @@ void RtLighting::record(VkCommandBuffer cmd, const SceneTarget& target, const Fr
                        clampRtRays(in.rays.pointLights), clampRtRays(in.rays.bounce));
     d.tune4 = glm::vec4(in.normalBlendNear, in.normalBlendFar, std::max(in.unitShadowReach, 0.0f),
                         std::clamp(in.splitAt, 0.0f, 1.0f));
-    d.tune5 = glm::vec4(in.pointSelfShadow ? 1.0f : 0.0f, in.unitSelfShadow ? 1.0f : 0.0f, 0.0f, 0.0f);
+    // z: the realistic falloff (rtLightFalloff).
+    d.tune5 = glm::vec4(in.pointSelfShadow ? 1.0f : 0.0f, in.unitSelfShadow ? 1.0f : 0.0f,
+                        in.realisticFalloff ? 1.0f : 0.0f, 0.0f);
     d.tune6 = glm::vec4(in.enclosedAmbientRatio, in.haveEnclosedAmbient ? 1.0f : 0.0f);
     {
         // The probes' ratio as the surfaces take it (consumerData), for the

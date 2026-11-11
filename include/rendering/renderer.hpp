@@ -823,6 +823,7 @@ public:
     void setRtFullResolution(bool full);
     /// The lamps' wider wrap (Ray Tracing, "Softer lamp light"; rt_lamp_wrap.hpp).
     void setRtSoftLamps(bool softer) { rtSoftLamps_ = softer; }
+    void setRtRealisticFalloff(bool on) { rtRealisticFalloff_ = on; }
     /// Debug Graphics (a WoWee-only view): the left half of the picture with
     /// the ray tracing, the right half as without it.
     void setRtSplitView(bool split) { rtSplitView_ = split; }
@@ -1231,6 +1232,7 @@ private:
     std::string rtHeldOffLogged_;
     LightingTune lightingTune_{};
     bool rtSoftLamps_ = false;
+    bool rtRealisticFalloff_ = false;  // every point light by the inverse square (rtLightFalloff)
     bool rtSplitView_ = false;
     bool rtPointSelfShadow_ = false;
     bool rtUnitSelfShadow_ = false;

@@ -2047,6 +2047,7 @@ void GameScreen::saveSettings() {
     out << "ray_traced_lighting=" << settingsPanel_.pendingRtLighting << "\n";
     out << "rt_full_resolution=" << (settingsPanel_.pendingRtFullRes ? 1 : 0) << "\n";
     out << "rt_soft_lamps=" << (settingsPanel_.pendingRtSoftLamps ? 1 : 0) << "\n";
+    out << "rt_realistic_falloff=" << (settingsPanel_.pendingRtRealisticFalloff ? 1 : 0) << "\n";
     out << "rt_point_self_shadow=" << (settingsPanel_.pendingRtPointSelfShadow ? 1 : 0) << "\n";
     out << "rt_unit_self_shadow=" << (settingsPanel_.pendingRtUnitSelfShadow ? 1 : 0) << "\n";
     out << "rt_unit_shadow_reach=" << settingsPanel_.pendingRtUnitShadowReach << "\n";
@@ -2406,6 +2407,7 @@ void GameScreen::loadSettings() {
             else if (key == "ray_traced_lighting") settingsPanel_.pendingRtLighting = std::clamp(std::stoi(val), 0, 3);
             else if (key == "rt_full_resolution") settingsPanel_.pendingRtFullRes = (std::stoi(val) != 0);
             else if (key == "rt_soft_lamps") settingsPanel_.pendingRtSoftLamps = (std::stoi(val) != 0);
+            else if (key == "rt_realistic_falloff") settingsPanel_.pendingRtRealisticFalloff = (std::stoi(val) != 0);
             else if (key == "rt_point_self_shadow") settingsPanel_.pendingRtPointSelfShadow = (std::stoi(val) != 0);
             else if (key == "rt_unit_self_shadow") settingsPanel_.pendingRtUnitSelfShadow = (std::stoi(val) != 0);
             else if (key == "rt_unit_shadow_reach")

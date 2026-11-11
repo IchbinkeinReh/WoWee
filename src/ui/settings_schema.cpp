@@ -314,6 +314,16 @@ constexpr SettingDesc kSchema[] = {
      "they shine on: softer, flatter lamp light, and the faces just\n"
      "turned away from a low candle - the bevel of a step, a curb -\n"
      "lit a little instead of dark.", "", 0, "raytracedlighting"},
+    // Every traced point light by the inverse square of its distance, from a
+    // core the size of its full-strength window, to nothing at its reach
+    // (rtLightFalloff in rt_trace.comp, rt_lights::realisticAttenuation).
+    {"rtrealisticfalloff", "Realistic light falloff", SettingKind::Bool, 0, 0, 0,
+     "Ray Tracing", "",
+     "Every light - lamps, fires, torches, building lights, glows and\n"
+     "sparks - fades with the square of the distance, as real light\n"
+     "does: bright close to it, a long soft tail, no edge where its\n"
+     "reach ends. Off: full strength out to a set radius, then a short\n"
+     "fade to its reach. Not in the original client.", "", 0, "raytracedlighting"},
     // How far a unit's shadow of a lamp reaches from its body
     // (rtUnitShadowReach in rt_trace.comp): 5 as it always was.
     {"rtunitshadowreach", "Unit shadow reach (yards)", SettingKind::Int, 1, 100, 1,

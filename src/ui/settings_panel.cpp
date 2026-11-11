@@ -972,7 +972,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "animatedportraits",
     "fogskyblend", "fogstrength", "sharpstars", "lightshafts", "mistdensity", "sunshafts",
     "lensflare",
-    "screenglow", "raytracedlighting", "rtfullres", "rtsoftlamps", "rtpointselfshadow", "rtunitselfshadow", "rtroomsun", "rtunitshadowreach", "rtminbrightness", "rtwater", "rtswimwaves", "rtwaveamp", "rtwavefreq", "rtnormalkeep", "rtnormalface", "rteyebrighten", "rteyeseconds",
+    "screenglow", "raytracedlighting", "rtfullres", "rtsoftlamps", "rtrealisticfalloff", "rtpointselfshadow", "rtunitselfshadow", "rtroomsun", "rtunitshadowreach", "rtminbrightness", "rtwater", "rtswimwaves", "rtwaveamp", "rtwavefreq", "rtnormalkeep", "rtnormalface", "rteyebrighten", "rteyeseconds",
     "rteyesensitivity",
     "rtsunrays", "rtaorays", "rtpointrays", "rtbouncerays",
     // The Debug Graphics settings: each applies all of them.
@@ -1172,6 +1172,7 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "raytracedlighting", .asInt = &SettingsPanel::pendingRtLighting},
     {.key = "rtfullres", .asBool = &SettingsPanel::pendingRtFullRes},
     {.key = "rtsoftlamps", .asBool = &SettingsPanel::pendingRtSoftLamps},
+    {.key = "rtrealisticfalloff", .asBool = &SettingsPanel::pendingRtRealisticFalloff},
     {.key = "rtpointselfshadow", .asBool = &SettingsPanel::pendingRtPointSelfShadow},
     {.key = "rtunitselfshadow", .asBool = &SettingsPanel::pendingRtUnitSelfShadow},
     {.key = "rtunitshadowreach", .asInt = &SettingsPanel::pendingRtUnitShadowReach},
@@ -1682,6 +1683,8 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         if (renderer) renderer->setRtFullResolution(pendingRtFullRes);
     } else if (key == "rtsoftlamps") {
         if (renderer) renderer->setRtSoftLamps(pendingRtSoftLamps);
+    } else if (key == "rtrealisticfalloff") {
+        if (renderer) renderer->setRtRealisticFalloff(pendingRtRealisticFalloff);
     } else if (key == "dbgsplitrt") {
         if (renderer) renderer->setRtSplitView(pendingDbgSplitRt);
     } else if (key == "rtpointselfshadow") {

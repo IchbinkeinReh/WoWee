@@ -78,6 +78,7 @@ public:
     int pendingRtLighting = 0;
     bool pendingRtFullRes = false;  ///< trace every pixel (Ray Tracing)
     bool pendingRtSoftLamps = false;  ///< the lamps' wider wrap (Ray Tracing)
+    bool pendingRtRealisticFalloff = false;  ///< inverse-square point lights (Ray Tracing)
     bool pendingRtUnitSelfShadow = false;   ///< a unit's own body shadows itself (Ray Tracing)
     bool pendingRtPointSelfShadow = false;  ///< point lights shadowed by their own model (Ray Tracing)
     /// Every graphics setting back to its schema default (graphicsDefaultRows),

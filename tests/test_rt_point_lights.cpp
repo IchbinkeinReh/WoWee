@@ -12,6 +12,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -196,6 +197,25 @@ TEST_CASE("the falloff is whole inside the start, gone at the end and smooth bet
     // A start past the end is the end; no end is no light.
     CHECK(attenuation(5.0f, 9.0f, 6.0f) == 1.0f);
     CHECK(attenuation(0.0f, 0.0f, 0.0f) == 0.0f);
+}
+
+TEST_CASE("the realistic falloff is an inverse square from the start, gone at the end", "[rt][lights]") {
+    // Twice the window's strength at the light, the window's own at r0 (the
+    // start here), a falling tail, nothing at the end.
+    CHECK(realisticAttenuation(0.0f, 2.0f, 6.0f) == Catch::Approx(2.0f));
+    const float w = 1.0f - std::pow(2.0f / 6.0f, 4.0f);
+    CHECK(realisticAttenuation(2.0f, 2.0f, 6.0f) == Catch::Approx(w * w));
+    CHECK(realisticAttenuation(6.0f, 2.0f, 6.0f) == 0.0f);
+    CHECK(realisticAttenuation(9.0f, 2.0f, 6.0f) == 0.0f);
+    float last = 3.0f;
+    for (float d = 0.0f; d <= 6.0f; d += 0.25f) {
+        const float a = realisticAttenuation(d, 2.0f, 6.0f);
+        CHECK(a < last);
+        last = a;
+    }
+    // No start: the core is the source's size, never a point.
+    CHECK(realisticAttenuation(0.15f, 0.0f, 3.0f) == Catch::Approx(1.0f).margin(0.01f));
+    CHECK(realisticAttenuation(0.0f, 0.0f, 0.0f) == 0.0f);
 }
 
 TEST_CASE("the lights kept are those that reach the view, the strongest first", "[rt][lights]") {

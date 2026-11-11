@@ -205,6 +205,13 @@ constexpr SettingGerman kGerman[] = {
      "weicheres, flacheres Lampenlicht, und die von einer niedrigen Kerze knapp abgewandten "
      "Flächen - die Kante einer Stufe, ein Bordstein - ein wenig erhellt statt dunkel.",
      nullptr, nullptr, nullptr},
+    {"rtrealisticfalloff",
+     "Realistischer Lichtabfall",
+     "Jedes Licht - Lampen, Feuer, Fackeln, Gebäudelichter, Leuchten und Funken - nimmt mit dem "
+     "Quadrat der Entfernung ab, wie echtes Licht: hell nah dran, ein langer weicher Ausläufer, "
+     "keine Kante, wo seine Reichweite endet. Aus: volle Stärke bis zu einem festen Radius, dann "
+     "ein kurzer Übergang bis zur Reichweite. Nicht im ursprünglichen Client.",
+     nullptr, nullptr, nullptr},
     {"rtunitselfshadow",
      "Eigenschatten von Figuren",
      "Der eigene Körper einer Figur oder Kreatur beschattet sie selbst: ein Arm vor ihrer Brust, "

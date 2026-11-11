@@ -6844,6 +6844,7 @@ void Renderer::recordRtLighting() {
     in.interiorFullAt = currentFrameData.rtTune2.z;
     in.maxLight = currentFrameData.rtTune2.w;
     in.lampWrap = lampWrap(rtSoftLamps_);
+    in.realisticFalloff = rtRealisticFalloff_;
     in.pointSelfShadow = rtPointSelfShadow_;
     in.unitSelfShadow = rtUnitSelfShadow_;
     // An enclosed place in a building flagged outdoors takes the building's

@@ -97,6 +97,23 @@ float rtLightFalloff(float d, float start, float end) {
 float rtLightRadius(float reach) {
     return clamp(0.04 * reach, 0.15, 0.5);
 }
+// The Ray Tracing page's "Realistic light falloff" (pass.tune5.z): the inverse
+// square of the distance from a core of radius r0, windowed to reach nothing
+// at the same end (rt_lights::realisticAttenuation, which must agree):
+//     I = 2 / (1 + (d / r0)^2) * (1 - (d / end)^4)^2
+// r0 is the light's full-strength window (its start), or its source's size
+// (rtLightRadius) where that is larger. The 2 makes it as strong as the
+// window at r0, where the two curves cross; nearer it is up to twice as
+// bright, farther a long soft tail instead of a ramp and an edge.
+const float RT_REALISTIC_GAIN = 2.0;
+float rtLightFalloffRealistic(float d, float start, float end) {
+    if (d >= end) return 0.0;
+    float r0 = max(clamp(start, 0.0, end), rtLightRadius(end));
+    float q = d / r0;
+    float x = d / end;
+    float w = 1.0 - x * x * x * x;
+    return RT_REALISTIC_GAIN * w * w / (1.0 + q * q);
+}
 // A light sits inside its lamp - a lantern's glass, a brazier's bowl - so a
 // shadow ray stops this short of it rather than finding the lamp itself.
 const float RT_LIGHT_STANDOFF = 0.45;
@@ -623,7 +640,9 @@ void main() {
             ndl = max(ndl, low * (faceRise + pass.tune3.w) / (1.0 + pass.tune3.w));
         }
         if (ndl <= 0.0) continue;
-        vec3 c = light.colorStart.rgb * (rtLightFalloff(d, light.colorStart.w, end) * ndl * faceFade);
+        float falloff = pass.tune5.z > 0.5 ? rtLightFalloffRealistic(d, light.colorStart.w, end)
+                                           : rtLightFalloff(d, light.colorStart.w, end);
+        vec3 c = light.colorStart.rgb * (falloff * ndl * faceFade);
         float w = max(c.r, max(c.g, c.b));
         if (w <= 0.0) continue;
         // The view of the lights' kinds: the same light, its brightness in

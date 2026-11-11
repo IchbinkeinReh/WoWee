@@ -167,6 +167,9 @@ public:
         float maxLight = 0.0f;
         /// How far past the terminator the lamps' light wraps (rt_lamp_wrap.hpp).
         float lampWrap = 0.25f;
+        /// Every point light by the inverse square of its distance
+        /// (rt_lights::realisticAttenuation) instead of the authored window.
+        bool realisticFalloff = false;
         /// How far, in yards, a unit's shadow of a lamp reaches from it
         /// (rtUnitShadowReach in rt_trace.comp).
         float unitShadowReach = 5.0f;

@@ -49,7 +49,8 @@ layout(set = 0, binding = 0) uniform RtPassData {
                          // the width drawn traced, 0 none (rt_apply)
     vec4 tune5;          // x 1: point lights shadowed by their own model's
                          // faces turned toward them (rt_trace, a WoWee-only
-                         // option); yzw unused
+                         // option); z 1: the realistic falloff
+                         // (rtLightFalloff); w unused
     vec4 tune6;          // rgb an enclosed place's ambient over the outdoor
                          // one - the interior ambient (MOHD) of the building
                          // round the camera over the zone's; w 1 when there

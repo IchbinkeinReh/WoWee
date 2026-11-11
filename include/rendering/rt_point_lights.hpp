@@ -100,6 +100,21 @@ inline float attenuation(float distance, float start, float end) {
     return t * t * (3.0f - 2.0f * t);
 }
 
+/// The same with the Ray Tracing page's "Realistic light falloff": the
+/// inverse square from a core of radius r0 - the start, or the source's size
+/// (rtLightRadius: 0.04 x end, 0.15 to 0.5 yd) where that is larger -
+/// windowed to nothing at the same end, times 2 so it crosses the window's
+/// full strength at r0. rt_trace.comp.glsl's rtLightFalloffRealistic must agree.
+inline float realisticAttenuation(float distance, float start, float end) {
+    if (!(end > 0.0f) || distance >= end) return 0.0f;
+    const float source = std::clamp(0.04f * end, 0.15f, 0.5f);
+    const float r0 = std::max(std::clamp(start, 0.0f, end), source);
+    const float q = distance / r0;
+    const float x = distance / end;
+    const float w = 1.0f - x * x * x * x;
+    return 2.0f * w * w / (1.0f + q * q);
+}
+
 /// What of a point light's light a surface takes for one shadow sample `vis`
 /// at point shadow strength `strength` (Debug Graphics): mix(1, vis, s), so a
 /// shadow lets 1 - s through - as rtGather and rt_apply's findTraced have it,
