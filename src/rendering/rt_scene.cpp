@@ -297,7 +297,7 @@ void RtScene::destroyMeshGpu(Mesh& m) {
 // ---------------------------------------------------------------------------
 // Registration
 
-RtScene::MeshId RtScene::addMesh(MeshSource source) {
+RtScene::MeshId RtScene::addMesh(MeshSource source, bool urgent) {
     if (!ctx_ || source.indices.size() < 3 || source.surfaces.empty()) return kInvalid;
     const size_t triCount = source.indices.size() / 3;
     if (source.surfaces.size() != 1 && source.surfaces.size() != triCount) return kInvalid;
@@ -350,7 +350,8 @@ RtScene::MeshId RtScene::addMesh(MeshSource source) {
     liveTriangles_ += m.triCount;
     if (active_) {
         m.queued = true;
-        pendingMeshes_.push_back(id);
+        if (urgent) pendingMeshes_.insert(pendingMeshes_.begin(), id);
+        else pendingMeshes_.push_back(id);
     }
     return id;
 }
