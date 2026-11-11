@@ -4154,6 +4154,22 @@ static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
             lua_setfield(L, -2, "durability");
             lua_pushnumber(L, static_cast<lua_Number>(instance->maxDurability));
             lua_setfield(L, -2, "maxDurability");
+            // Who made it (ITEM_FIELD_CREATOR), named once the name cache has
+            // them - asked for otherwise, and the owner's UpdateTooltip fills
+            // the line in, as the client's callback 0x00626650 does - and
+            // whether it was written rather than made (ITEM_FIELD_FLAGS
+            // 0x200: ITEM_WRITTEN_BY in place of ITEM_CREATED_BY).
+            if (const uint64_t creator = gh->getItemCreatorByGuid(instance->guid); creator != 0) {
+                const std::string& maker = gh->lookupName(creator);
+                if (maker.empty()) {
+                    gh->queryPlayerName(creator);
+                } else {
+                    lua_pushstring(L, maker.c_str());
+                    lua_setfield(L, -2, "creator");
+                    lua_pushboolean(L, (gh->getItemFieldFlags(instance->guid) & 0x200u) != 0 ? 1 : 0);
+                    lua_setfield(L, -2, "written");
+                }
+            }
             // The gems in its sockets, which the template only has the
             // colours of (0x006277f0's enchantment walk).
             pushSocketedGems(L, gh, instance->guid, itemId);
@@ -11242,6 +11258,12 @@ void LuaEngine::registerCoreAPI() {
         "            end\n"
         "        end\n"
         "        if data.description then self:AddLine('\"'..data.description..'\"', 1, 0.82, 0, 1) end\n"
+        // Who made it, under the flavour text (0x006277f0): ITEM_CREATED_BY,
+        // or ITEM_WRITTEN_BY for something written, in white.
+        "        if inst and inst.creator then\n"
+        "            local key = inst.written and 'ITEM_WRITTEN_BY' or 'ITEM_CREATED_BY'\n"
+        "            self:AddLine(format(_G[key] or (inst.written and '<Written by %s>' or '<Made by %s>'), inst.creator), 1, 1, 1)\n"
+        "        end\n"
         "        if data.startsQuest then self:AddLine(ITEM_STARTS_QUEST or 'This Item Begins a Quest', 1, 1, 1) end\n"
         "    end\n"
         "    if sellPrice and sellPrice > 0 then\n"
