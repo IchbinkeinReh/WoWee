@@ -37,6 +37,9 @@ struct RtPassData {
     glm::vec4 tune4;
     glm::vec4 tune5;
     glm::vec4 tune6;
+    glm::vec4 giOpenSky;     // the probe ratio's open field, as the surfaces have it (rt_trace)
+    glm::vec4 giOpenGround;
+    glm::vec4 giOpenParams;  // x 1 when the probes light the ambient
     RtGiProbes::PassData gi;
 };
 
@@ -56,7 +59,8 @@ enum Binding : uint32_t {
     kPointLights = 12,  // the slot's light list
     kSceneGbuf0 = 13,   // the opaque surfaces' G-buffer (rt_gbuffer.glsli)
     kSceneGbuf1 = 14,
-    kBindingCount = 15,
+    kGiAtlas = 15,      // the probe atlas, for the probes' visibility (rt_trace.comp)
+    kBindingCount = 16,
 };
 
 constexpr VkFormat kFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -217,7 +221,8 @@ bool RtLighting::createPipelines() {
     constexpr uint32_t kSets = MAX_FRAMES_IN_FLIGHT * 3;
     VkDescriptorPoolSize sizes[4] = {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kSets},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSets * 9},
+        // Every binding but the block, the five storage images and the light list.
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSets * (kBindingCount - 7)},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kSets * 5},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kSets},
     };
@@ -682,6 +687,8 @@ void RtLighting::writeSlotSets(uint32_t slotIndex) {
         img[kPointStore] = storage(s.point);
         img[kSceneGbuf0] = gbuf0;
         img[kSceneGbuf1] = gbuf1;
+        s.giView = giViewForSlot(slotIndex);
+        img[kGiAtlas] = VkDescriptorImageInfo{linearSampler_, s.giView, VK_IMAGE_LAYOUT_GENERAL};
 
         std::array<VkWriteDescriptorSet, kBindingCount> w{};
         for (uint32_t i = 0; i < kBindingCount; ++i) {
@@ -714,7 +721,7 @@ void RtLighting::record(VkCommandBuffer cmd, const SceneTarget& target, const Fr
 
     const uint32_t slotIndex = ctx_->getCurrentFrame();
     Slot& s = slots_[slotIndex];
-    if (s.setsGeneration != viewsGeneration_) writeSlotSets(slotIndex);
+    if (s.setsGeneration != viewsGeneration_ || s.giView != giViewForSlot(slotIndex)) writeSlotSets(slotIndex);
 
     scene_->update(cmd);
     ctx_->gpuMark(cmd, "rt scene update");
@@ -763,6 +770,14 @@ void RtLighting::record(VkCommandBuffer cmd, const SceneTarget& target, const Fr
                         std::clamp(in.splitAt, 0.0f, 1.0f));
     d.tune5 = glm::vec4(in.pointSelfShadow ? 1.0f : 0.0f, in.unitSelfShadow ? 1.0f : 0.0f, 0.0f, 0.0f);
     d.tune6 = glm::vec4(in.enclosedAmbientRatio, in.haveEnclosedAmbient ? 1.0f : 0.0f);
+    {
+        // The probes' ratio as the surfaces take it (consumerData), for the
+        // trace to say how much of it comes from probes the point cannot see.
+        const RtGiProbes::ConsumerData open = mode_ == Mode::Full ? probes_.consumerData() : RtGiProbes::ConsumerData{};
+        d.giOpenSky = open.sky;
+        d.giOpenGround = open.ground;
+        d.giOpenParams = open.params;
+    }
     const bool probes = mode_ == Mode::Full && probes_.hasResources();
     if (probes) {
         // The open field the zone's flat ambient was set for: that ambient as
