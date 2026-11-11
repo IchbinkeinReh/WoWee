@@ -1471,27 +1471,17 @@ void GameHandler::registerCoreOpcodes() {
         // nothing.
         announceMinimapPing(senderGuid, ping.wowX, ping.wowY);
     };
+    // ZONE_UNDER_ATTACK with the area's name, as a line of each joined
+    // defense channel the area concerns (0x0050c3c0) - the same routing as a
+    // defense message. No event: the client has none by this name, and says
+    // nothing anywhere to a player in no such channel.
     dispatchTable_[Opcode::SMSG_ZONE_UNDER_ATTACK] = [this](network::Packet& packet) {
-        if (packet.hasRemaining(4)) {
-            uint32_t areaId = packet.readUInt32();
-            std::string areaName = getAreaName(areaId);
-            // The zone name goes with it: the interface writes its own warning
-            // from arg1 rather than reusing the chat line.
-            if (addonEventCallback_) addonEventCallback_("ZONE_UNDER_ATTACK", {areaName});
-            // ...which is why this client only writes the line when nothing
-            // else will. chatframe.lua's own ZONE_UNDER_ATTACK branch calls
-            // AddMessage with ZONE_UNDER_ATTACK formatted from arg1, so with
-            // the interface in charge the player read every attack twice in
-            // chat and a third time on the error line - which the real client
-            // never puts it on at all. Booty Bay under sustained attack filled
-            // the window.
-            // In its words, ZONE_UNDER_ATTACK, and in chat only - this wrote
-            // English to the error line as well.
-            if (!ui::frameXmlOwns(ui::UiElement::Chat)) {
-                addSystemChatMessage(interfaceFormat("ZONE_UNDER_ATTACK",
-                                                     "|cffffff00%s is under attack!|r", {areaName}));
-            }
-        }
+        if (!packet.hasRemaining(4) || !chatHandler_) return;
+        const uint32_t areaId = packet.readUInt32();
+        const std::string areaName = getAreaName(areaId);
+        if (areaName.empty()) return;   // no such area: nothing (0x0050c3c0)
+        chatHandler_->postToDefenseChannels(
+            areaId, interfaceFormat("ZONE_UNDER_ATTACK", "|cffffff00%s is under attack!|r", {areaName}));
     };
 
     // Spirit healer time / durability

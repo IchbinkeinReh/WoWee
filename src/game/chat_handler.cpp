@@ -547,32 +547,9 @@ void ChatHandler::registerOpcodes(DispatchTable& table) {
         // each joined defense channel (ChatChannels.dbc flag 0x10000) - of a
         // zone-dependent one only when the area's zone is the player's.
         if (!packet.hasRemaining(8)) return;
-        uint32_t areaId = packet.readUInt32();
+        const uint32_t areaId = packet.readUInt32();
         /*uint32_t length =*/ packet.readUInt32();
-        const std::string text = packet.readString();
-        auto* renderer = core::Application::getInstance().getRenderer();
-        // The area's parent where it has one (AreaTable +8), compared with
-        // the zone the player is in (0x00bd080c).
-        if (auto* zm = renderer ? renderer->getZoneManager() : nullptr) {
-            if (const auto parent = zm->areaParent(areaId); parent && *parent != 0) areaId = *parent;
-        }
-        const auto* place = renderer ? renderer->getZoneTexts() : nullptr;
-        const uint32_t playerZone = place ? place->zoneId : 0;
-        for (const auto& slot : channelSlots_.all()) {
-            if (slot.number == 0 || slot.pending || slot.zoneChannelId == 0) continue;
-            const chat_channels::Row* row = nullptr;
-            for (const auto& r : channelRows()) if (r.id == slot.zoneChannelId) { row = &r; break; }
-            if (!row || (row->flags & chat_channels::kFlagDefense) == 0) continue;
-            if ((row->flags & chat_channels::kFlagZoneDependent) != 0 && areaId != playerZone) continue;
-            // From no one: the line is the channel's, as 0x00509dd0 is
-            // handed it with no sender.
-            MessageChatData line;
-            line.type = ChatType::CHANNEL;
-            line.language = ChatLanguage::UNIVERSAL;
-            line.message = text;
-            line.channelName = slot.name;
-            addLocalChatMessage(line);
-        }
+        postToDefenseChannels(areaId, packet.readString());
     };
     // ServerMessages.dbc's text for the type with the server's text put in,
     // a CHAT_MSG_SYSTEM line (0x0050c980): "[SERVER] Shutdown in %s" and the
@@ -701,6 +678,35 @@ void ChatHandler::sendAddonMessage(ChatType type, const std::string& message, co
                     raw.empty() ? std::string{} : core::toHexString(raw.data(), raw.size(), true), "]");
     }
     owner_.getSocket()->send(packet);
+}
+
+/// 0x0050c850 / 0x0050c3c0: a line in each joined defense channel
+/// (ChatChannels.dbc flag 0x10000) - of a zone-dependent one only when the
+/// area's zone is the player's - from no one.
+void ChatHandler::postToDefenseChannels(uint32_t areaId, const std::string& text) {
+    auto* renderer = core::Application::getInstance().getRenderer();
+    // The area's parent where it has one (AreaTable +8), compared with
+    // the zone the player is in (0x00bd080c).
+    if (auto* zm = renderer ? renderer->getZoneManager() : nullptr) {
+        if (const auto parent = zm->areaParent(areaId); parent && *parent != 0) areaId = *parent;
+    }
+    const auto* place = renderer ? renderer->getZoneTexts() : nullptr;
+    const uint32_t playerZone = place ? place->zoneId : 0;
+    for (const auto& slot : channelSlots_.all()) {
+        if (slot.number == 0 || slot.pending || slot.zoneChannelId == 0) continue;
+        const chat_channels::Row* row = nullptr;
+        for (const auto& r : channelRows()) if (r.id == slot.zoneChannelId) { row = &r; break; }
+        if (!row || (row->flags & chat_channels::kFlagDefense) == 0) continue;
+        if ((row->flags & chat_channels::kFlagZoneDependent) != 0 && areaId != playerZone) continue;
+        // From no one: the line is the channel's, as 0x00509dd0 is
+        // handed it with no sender.
+        MessageChatData line;
+        line.type = ChatType::CHANNEL;
+        line.language = ChatLanguage::UNIVERSAL;
+        line.message = text;
+        line.channelName = slot.name;
+        addLocalChatMessage(line);
+    }
 }
 
 void ChatHandler::filterProfanity(ChatType type, std::string& text) {

@@ -68,6 +68,8 @@ public:
     /// with its third argument 1), refused with ERR_PROFANE_CHAT_NAME.
     std::optional<chat_channels::Join> joinChannelByName(const std::string& channelName,
                                                          const std::string& password, bool byPlayer);
+    /// A line in each joined defense channel the area concerns (0x0050c850).
+    void postToDefenseChannels(uint32_t areaId, const std::string& text);
     /// Leave a channel by its number, its name or its shortcut (0x005093f0).
     void leaveChannel(const std::string& channelName);
     /// Ask the server for a channel's members; the answer arrives as
