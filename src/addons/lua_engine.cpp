@@ -4188,6 +4188,24 @@ static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
         fireTooltipSetItem(L);
         return true;
     }
+    // Not known at all yet. The client says so rather than leaving the frame
+    // empty (0x00623760): the item is asked for, the tooltip holds the one red
+    // line RETRIEVING_ITEM_INFO and is shown, it no longer names an item for
+    // GetItem, and the setter still answers that it found nothing. When the
+    // answer lands the client refills it through its cache callback
+    // (0x00626650); here the owner's UpdateTooltip does that on the next tick.
+    gh->ensureItemInfo(itemId);
+    w->isTooltip = true;
+    w->tooltipLines.clear();
+    wowee::ui::Widget::TooltipLine line;
+    line.left = globalOr(L, "RETRIEVING_ITEM_INFO", "Retrieving item information");
+    // The client's colour for it, 0x00ad2d34: ff2020.
+    constexpr float kRetrievingRed[4] = {1.0f, 32.0f / 255.0f, 32.0f / 255.0f, 1.0f};
+    for (int i = 0; i < 4; ++i) line.lc[i] = line.rc[i] = kRetrievingRed[i];
+    w->tooltipLines.push_back(std::move(line));
+    lua_pushnil(L);
+    lua_setfield(L, 1, "__itemId");
+    w->shown = true;
     return false;
 }
 

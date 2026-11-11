@@ -2053,8 +2053,9 @@ end
 /// roll with a blank icon and "Item #43102" where the name goes, which is what
 /// a need-or-greed on an unfamiliar drop looked like every time.
 ///
-/// WOWEE_ITEM_INFO_RECEIVED is WoWee's own name for exactly this (this client
-/// has no such event - its tooltips read local DBC and never wait on a query),
+/// WOWEE_ITEM_INFO_RECEIVED is WoWee's own name for exactly this (the client
+/// has no such event - it hands its item cache a callback per caller instead,
+/// as the tooltip does with 0x00626650),
 /// and OnShow is the interface's own fill: re-running it is a redraw, not a rewrite
 /// of what the window says. Only the windows that are up, and only while a roll
 /// is on screen - the query answers hundreds of times over a login and this is
