@@ -53,6 +53,12 @@ public:
 
     // Floating combat text
     [[nodiscard]] const std::vector<CombatTextEntry>& getCombatText() const { return combatText_; }
+    /// How many hits that did the player damage have come in (a melee or
+    /// spell hit, a tick, a fall or lava) - counted whatever the combat text
+    /// filters show. The screen's damage flash goes by this, not by the
+    /// health falling: a buff running out or a piece of gear taken off lowers
+    /// the maximum and the health with it, and that is no hit.
+    [[nodiscard]] uint32_t playerDamageHits() const { return playerDamageHits_; }
     void updateCombatText(float deltaTime);
 
     // Combat log (persistent rolling history)
@@ -234,6 +240,7 @@ private:
     std::unordered_set<uint64_t> hostileAttackers_;
     std::unordered_map<uint64_t, uint64_t> unitMeleeTargets_;
     std::vector<CombatTextEntry> combatText_;
+    uint32_t playerDamageHits_ = 0;
     static constexpr size_t MAX_COMBAT_LOG = 500;
     std::deque<CombatLogEntry> combatLog_;
 

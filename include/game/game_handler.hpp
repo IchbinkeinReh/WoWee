@@ -1442,6 +1442,8 @@ public:
     // Zero if no swing has occurred this session.
     uint64_t getLastMeleeSwingMs() const;
     const std::vector<CombatTextEntry>& getCombatText() const;
+    /// Hits that did the player damage so far (CombatHandler::playerDamageHits).
+    uint32_t playerDamageHits() const;
     void clearCombatText();
     void updateCombatText(float deltaTime);
     void clearHostileAttackers();

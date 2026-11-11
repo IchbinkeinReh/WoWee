@@ -2591,6 +2591,10 @@ uint64_t GameHandler::getLastMeleeSwingMs() const {
     return combatHandler_ ? combatHandler_->getLastMeleeSwingMs() : 0;
 }
 
+uint32_t GameHandler::playerDamageHits() const {
+    return combatHandler_ ? combatHandler_->playerDamageHits() : 0u;
+}
+
 const std::vector<CombatTextEntry>& GameHandler::getCombatText() const {
     static const std::vector<CombatTextEntry> empty;
     return combatHandler_ ? combatHandler_->getCombatText() : empty;
