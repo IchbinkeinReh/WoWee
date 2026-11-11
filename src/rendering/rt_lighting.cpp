@@ -815,7 +815,9 @@ void RtLighting::record(VkCommandBuffer cmd, const SceneTarget& target, const Fr
     // z: the realistic falloff (rtLightFalloff).
     d.tune5 = glm::vec4(in.pointSelfShadow ? 1.0f : 0.0f, in.unitSelfShadow ? 1.0f : 0.0f,
                         in.realisticFalloff ? 1.0f : 0.0f, 0.0f);
-    d.tune6 = glm::vec4(in.enclosedAmbientRatio, in.haveEnclosedAmbient ? 1.0f : 0.0f);
+    // w: the direct light's share of a sunlit colour goes by the traced
+    // light alone (rt_apply).
+    d.tune6 = glm::vec4(in.ambientColor, 1.0f);
     {
         // The probes' ratio as the surfaces take it (consumerData), for the
         // trace to say how much of it comes from probes the point cannot see.

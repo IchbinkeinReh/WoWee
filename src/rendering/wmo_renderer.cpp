@@ -4967,28 +4967,6 @@ bool WMORenderer::isInsideInteriorWMO(float glX, float glY, float glZ) const {
     return isInsideWMOGroups(glX, glY, glZ, /*interiorOnly=*/true, nullptr);
 }
 
-std::optional<glm::vec3> WMORenderer::buildingAmbientAt(const glm::vec3& p) const {
-    std::vector<size_t> candidates;
-    gatherCandidates(p - glm::vec3(0.5f), p + glm::vec3(0.5f), candidates);
-    std::optional<glm::vec3> out;
-    float smallest = std::numeric_limits<float>::max();
-    for (size_t idx : candidates) {
-        const auto& instance = instances[idx];
-        const auto it = loadedModels.find(instance.modelId);
-        if (it == loadedModels.end()) continue;
-        for (const auto& [gMin, gMax] : instance.worldGroupBounds) {
-            if (glm::any(glm::lessThan(p, gMin)) || glm::any(glm::greaterThan(p, gMax))) continue;
-            const glm::vec3 size = gMax - gMin;
-            const float volume = size.x * size.y * size.z;
-            if (volume < smallest) {
-                smallest = volume;
-                out = it->second.wmoAmbientColor;
-            }
-        }
-    }
-    return out;
-}
-
 template <typename FaceFilter, typename OnHit>
 void WMORenderer::walkTrianglesAlong(const glm::vec3& start, float endZ, uint32_t groupSkip,
                                      FaceFilter&& takesFace, OnHit&& onHit) const {

@@ -479,10 +479,6 @@ public:
      * Used to dim M2 lighting for doodads placed indoors.
      */
     bool isInsideInteriorWMO(float glX, float glY, float glZ) const;
-    /// The interior ambient (MOHD) of the building whose group stands round
-    /// `p` (render space), the smallest group's where several do; none
-    /// outside every building.
-    std::optional<glm::vec3> buildingAmbientAt(const glm::vec3& p) const;
 
     /// The fog of the WMO interior the camera is in, as 0x007a1150 finds it:
     /// the first group around `pos` that is neither exterior nor exterior-lit

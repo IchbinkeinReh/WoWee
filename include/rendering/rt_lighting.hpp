@@ -192,11 +192,9 @@ public:
         /// A unit's own body shadows itself (the Ray Tracing page's "Unit
         /// self-shadowing", a WoWee-only option).
         bool unitSelfShadow = false;
-        /// An enclosed place's ambient over the outdoor one (rt_apply): the
-        /// interior ambient (MOHD) of the building round the camera divided
-        /// by the zone's, and whether there is such a building.
-        glm::vec3 enclosedAmbientRatio{1.0f};
-        bool haveEnclosedAmbient = false;
+        /// The frame's ambient colour, which the direct light's share of a
+        /// sunlit surface's colour is told by (rt_apply).
+        glm::vec3 ambientColor{0.0f};
         /// Rays a pixel of each kind, 1 to kMaxRtRaysPerPixel (Ray Tracing
         /// settings): toward the sun, for the occlusion, toward a point
         /// light, and a probe's rays for the bounced light. One is the

@@ -51,10 +51,9 @@ layout(set = 0, binding = 0) uniform RtPassData {
                          // faces turned toward them (rt_trace, a WoWee-only
                          // option); z 1: the realistic falloff
                          // (rtLightFalloff); w unused
-    vec4 tune6;          // rgb an enclosed place's ambient over the outdoor
-                         // one - the interior ambient (MOHD) of the building
-                         // round the camera over the zone's; w 1 when there
-                         // is one (rt_apply)
+    vec4 tune6;          // rgb the frame's ambient colour, w 1: the direct
+                         // light's share of a sunlit colour goes by the
+                         // traced light alone (rt_apply)
     // The probe ratio's open field and settings as the surfaces have them
     // (rt_lighting.glsli's giSky, giGround, giParams), for rt_trace's
     // visibility of the probes; giOpenParams.x 1 when the probes light.

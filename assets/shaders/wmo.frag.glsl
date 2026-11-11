@@ -271,7 +271,13 @@ vec3 fogPass(vec3 color, int which, float dist) {
 RtSurface passSurface(int mode, vec3 c, PassKnee knee, bool shadowedPass, float shadowScale,
                       vec3 texel, int fogWhich, float dist) {
     RtSurface s = rtSurfaceNone();
-    s.flags = RT_GB_VALID | (shadowedPass ? RT_GB_SUN : 0u) | (passBaked(mode) ? RT_GB_BAKED : 0u) |
+    // A pass lit by the zone's sun or moon (modes 1 and 2) takes the traced
+    // shade whether or not the client's shadow variant draws it: with the
+    // tracing nothing the sun's light cannot reach keeps it, and a batch the
+    // client draws unshadowed - the Tirisfal tower's covered passage - was
+    // lit blue by the moon through its walls (user163b).
+    bool sunLit = shadowedPass || mode == 1 || mode == 2;
+    s.flags = RT_GB_VALID | (sunLit ? RT_GB_SUN : 0u) | (passBaked(mode) ? RT_GB_BAKED : 0u) |
               (passInterior(mode, shadowedPass) ? RT_GB_INTERIOR : 0u);
     // A room's baked colour: the building's lights of other storeys leave it
     // as painted (rt_trace).

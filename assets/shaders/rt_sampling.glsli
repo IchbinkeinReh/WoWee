@@ -41,16 +41,6 @@ vec3 rtCosineHemisphere(vec3 n, inout uint rng) {
     return normalize(t * (r * cos(phi)) + b * (r * sin(phi)) + n * sqrt(max(0.0, 1.0 - u)));
 }
 
-// A direction in the hemisphere around n, every direction alike.
-vec3 rtUniformHemisphere(vec3 n, inout uint rng) {
-    float z = rtRandom(rng), v = rtRandom(rng);
-    float r = sqrt(max(0.0, 1.0 - z * z));
-    float phi = 6.28318530718 * v;
-    vec3 t, b;
-    rtBasis(n, t, b);
-    return normalize(t * (r * cos(phi)) + b * (r * sin(phi)) + n * z);
-}
-
 // A direction inside the cone of half-angle atan(tanRadius) around d.
 vec3 rtConeSample(vec3 d, float tanRadius, inout uint rng) {
     float u = rtRandom(rng), v = rtRandom(rng);
