@@ -32,6 +32,23 @@ layout(set = 0, binding = 13) uniform sampler2D uSceneGbuf0;
 layout(set = 0, binding = 14) uniform sampler2D uSceneGbuf1;
 #endif
 layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D uGbuf;
+#ifdef RT_MSAA
+// Per scene pixel, whether its samples hold more than one surface (rt_apply:
+// an edge is applied per sample, the rest once per pixel).
+layout(set = 0, binding = 16, r32ui) uniform writeonly uimage2D uEdge;
+
+// Two samples of one surface carry the same G-buffer: its attributes are the
+// pixel's, interpolated once, whatever sample they cover.
+bool pixelIsEdge(ivec2 p) {
+    int n = textureSamples(uSceneGbuf0);
+    vec4 a0 = texelFetch(uSceneGbuf0, p, 0);
+    vec4 a1 = texelFetch(uSceneGbuf1, p, 0);
+    for (int s = 1; s < n; ++s) {
+        if (texelFetch(uSceneGbuf0, p, s) != a0 || texelFetch(uSceneGbuf1, p, s) != a1) return true;
+    }
+    return false;
+}
+#endif
 layout(set = 0, binding = 11, rgba16f) uniform writeonly image2D uPointNormal;
 
 layout(local_size_x = 8, local_size_y = 8) in;
@@ -63,6 +80,16 @@ void main() {
     // a surface.
     // At full resolution the block is the pixel itself (rtBlockSize).
     ivec2 base = rtBlockBase(px);
+#ifdef RT_MSAA
+    {
+        int bs = rtBlockSize();
+        for (int i = 0; i < bs * bs; ++i) {
+            ivec2 ep = base + ivec2(i % bs, i / bs);
+            if (any(greaterThanEqual(ep, ivec2(pass.sceneExtent.xy)))) continue;
+            imageStore(uEdge, ep, uvec4(pixelIsEdge(ep) ? 1u : 0u));
+        }
+    }
+#endif
     int sub = 0;
     float d = 0.0;  // reversed depth: 0 is the sky, nearer is larger
     bool valid = false;

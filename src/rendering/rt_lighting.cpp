@@ -60,7 +60,8 @@ enum Binding : uint32_t {
     kSceneGbuf0 = 13,   // the opaque surfaces' G-buffer (rt_gbuffer.glsli)
     kSceneGbuf1 = 14,
     kGiAtlas = 15,      // the probe atlas, for the probes' visibility (rt_trace.comp)
-    kBindingCount = 16,
+    kEdge = 16,         // per scene pixel, its samples hold more than one surface (MSAA)
+    kBindingCount = 17,
 };
 
 constexpr VkFormat kFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -176,7 +177,7 @@ void RtLighting::shutdown() {
     destroyImage(dev, alloc, neutral_);
     if (depthView_) vkDestroyImageView(dev, depthView_, nullptr);
     depthView_ = VK_NULL_HANDLE;
-    for (VkPipeline* p : {&prepare_, &prepareMs_, &trace_, &temporal_, &filter_, &apply_}) {
+    for (VkPipeline* p : {&prepare_, &prepareMs_, &trace_, &temporal_, &filter_, &apply_, &applyPixel_}) {
         if (*p) vkDestroyPipeline(dev, *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
@@ -208,7 +209,7 @@ bool RtLighting::createPipelines() {
         b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     }
     b[kUbo].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    for (uint32_t i : {kGbufStore, kRawStore, kHistStore, kFilterOut, kPointStore}) {
+    for (uint32_t i : {kGbufStore, kRawStore, kHistStore, kFilterOut, kPointStore, kEdge}) {
         b[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     }
     b[kPointLights].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -221,9 +222,9 @@ bool RtLighting::createPipelines() {
     constexpr uint32_t kSets = MAX_FRAMES_IN_FLIGHT * 3;
     VkDescriptorPoolSize sizes[4] = {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kSets},
-        // Every binding but the block, the five storage images and the light list.
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSets * (kBindingCount - 7)},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kSets * 5},
+        // Every binding but the block, the six storage images and the light list.
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSets * (kBindingCount - 8)},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kSets * 6},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kSets},
     };
     VkDescriptorPoolCreateInfo pi{};
@@ -292,6 +293,8 @@ bool RtLighting::createPipelines() {
 bool RtLighting::createApplyPipeline() {
     VkDevice dev = ctx_->getDevice();
     if (apply_) vkDestroyPipeline(dev, apply_, nullptr);
+    if (applyPixel_) vkDestroyPipeline(dev, applyPixel_, nullptr);
+    applyPixel_ = VK_NULL_HANDLE;
     if (applyRenderPass_) vkDestroyRenderPass(dev, applyRenderPass_, nullptr);
     apply_ = VK_NULL_HANDLE;
     applyRenderPass_ = VK_NULL_HANDLE;
@@ -367,6 +370,33 @@ bool RtLighting::createApplyPipeline() {
                  .setRenderPass(applyRenderPass_)
                  .setDynamicStates(viewportAndScissorDynamic())
                  .build(dev, ctx_->getPipelineCache());
+    // Under MSAA the pixels whose samples are all one surface once each
+    // (rt_apply_msp), before the edges per sample (rt_apply_ms).
+    if (msaa) {
+        VkShaderModule fragPixel;
+        if (fragPixel.loadFromFile(dev, "assets/shaders/rt_apply_msp.frag.spv")) {
+            applyPixel_ = PipelineBuilder()
+                              .setShaders(vert.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
+                                          fragPixel.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT))
+                              .setVertexInput({}, {})
+                              .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+                              .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
+                              .setNoDepthTest()
+                              .setColorBlendAttachment(blend)
+                              .setMultisample(samples)
+                              .setSampleShading(false)
+                              .setLayout(pipelineLayout_)
+                              .setRenderPass(applyRenderPass_)
+                              .setDynamicStates(viewportAndScissorDynamic())
+                              .build(dev, ctx_->getPipelineCache());
+            fragPixel.destroy();
+        }
+        if (!applyPixel_) {
+            LOG_ERROR("RtLighting: failed to create the per-pixel apply pipeline");
+            vkDestroyPipeline(dev, apply_, nullptr);
+            apply_ = VK_NULL_HANDLE;
+        }
+    }
     vert.destroy();
     frag.destroy();
     applySamples_ = samples;
@@ -428,10 +458,22 @@ bool RtLighting::createGbuffer(VkExtent2D extent, VkSampleCountFlagBits samples)
     const VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     gbuf0_ = createImage(dev, alloc, extent.width, extent.height, VkContext::kGbufferFormat, usage, samples);
     gbuf1_ = createImage(dev, alloc, extent.width, extent.height, VkContext::kGbufferFormat, usage, samples);
+    // One texel when single-sampled: only the MSAA passes read it.
+    const bool msaa = samples > VK_SAMPLE_COUNT_1_BIT;
+    edge_ = createImage(dev, alloc, msaa ? extent.width : 1, msaa ? extent.height : 1, VK_FORMAT_R32_UINT,
+                        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    if (edge_.image) {
+        ctx_->immediateSubmit([&](VkCommandBuffer cmd) {
+            VkClearColorValue zero{};
+            const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            transitionImageLayout(cmd, edge_.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+            vkCmdClearColorImage(cmd, edge_.image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
+        });
+    }
     gbufExtent_ = extent;
     gbufSamples_ = samples;
     ++viewsGeneration_;
-    return gbuf0_.image != VK_NULL_HANDLE && gbuf1_.image != VK_NULL_HANDLE;
+    return gbuf0_.image != VK_NULL_HANDLE && gbuf1_.image != VK_NULL_HANDLE && edge_.image != VK_NULL_HANDLE;
 }
 
 void RtLighting::destroyGbuffer() {
@@ -440,6 +482,7 @@ void RtLighting::destroyGbuffer() {
     for (VkFramebuffer fb : applyFramebuffers_.takeAll()) vkDestroyFramebuffer(dev, fb, nullptr);
     destroyImage(dev, ctx_->getAllocator(), gbuf0_);
     destroyImage(dev, ctx_->getAllocator(), gbuf1_);
+    destroyImage(dev, ctx_->getAllocator(), edge_);
     gbufExtent_ = {};
     ++viewsGeneration_;
 }
@@ -689,6 +732,7 @@ void RtLighting::writeSlotSets(uint32_t slotIndex) {
         img[kSceneGbuf1] = gbuf1;
         s.giView = giViewForSlot(slotIndex);
         img[kGiAtlas] = VkDescriptorImageInfo{linearSampler_, s.giView, VK_IMAGE_LAYOUT_GENERAL};
+        img[kEdge] = VkDescriptorImageInfo{VK_NULL_HANDLE, edge_.imageView, VK_IMAGE_LAYOUT_GENERAL};
 
         std::array<VkWriteDescriptorSet, kBindingCount> w{};
         for (uint32_t i = 0; i < kBindingCount; ++i) {
@@ -877,9 +921,15 @@ void RtLighting::recordApply(VkCommandBuffer cmd, const SceneTarget& target, Slo
     VkRect2D sc{};
     sc.extent = target.extent;
     vkCmdSetScissor(cmd, 0, 1, &sc);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, apply_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &s.sets[1], 0,
                             nullptr);
+    // Under MSAA: the pixels of one surface once each, then the edges per
+    // sample (rt_apply.glsli); each pass discards what the other draws.
+    if (applyPixel_) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, applyPixel_);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+    }
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, apply_);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRenderPass(cmd);
 }
@@ -892,7 +942,7 @@ void RtLighting::memoryReport(std::vector<MemoryEntry>& out) const {
         targets += img(s.gbuf.img) + img(s.hist.img) + img(s.out.img) + img(s.point.img);
         buffers += allocationBytes(a, s.ubo.allocation) + allocationBytes(a, s.lights.allocation);
     }
-    out.push_back({"RT G-buffer", img(gbuf0_) + img(gbuf1_), 0});
+    out.push_back({"RT G-buffer", img(gbuf0_) + img(gbuf1_) + img(edge_), 0});
     out.push_back({"RT trace, history and filter images", targets + img(neutral_), 0});
     out.push_back({"RT pass blocks and light lists", buffers, 0});
     out.push_back({"RT probe volume", probes_.gpuBytes(a), 0});

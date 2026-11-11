@@ -273,6 +273,9 @@ private:
     // The opaque surfaces' G-buffer (VkContext::kGbufferFormat), at the
     // scene's size and sample count, and the passes over it.
     AllocatedImage gbuf0_{}, gbuf1_{};
+    /// Under MSAA, per scene pixel whether its samples hold more than one
+    /// surface (rt_prepare_ms writes it, the apply pass splits by it).
+    AllocatedImage edge_{};
     VkExtent2D gbufExtent_{};
     float splitAt_ = 0.0f;
     VkSampleCountFlagBits gbufSamples_ = VK_SAMPLE_COUNT_1_BIT;
@@ -285,6 +288,7 @@ private:
     void releaseFramebuffersLater(std::vector<VkFramebuffer> framebuffers);
     VkRenderPass applyRenderPass_ = VK_NULL_HANDLE;
     VkPipeline apply_ = VK_NULL_HANDLE;
+    VkPipeline applyPixel_ = VK_NULL_HANDLE;  // MSAA: the pixels of one surface, once each
     VkSampleCountFlagBits applySamples_ = VK_SAMPLE_COUNT_1_BIT;
     /// Counts the views the sets bind - the G-buffer, the depth - so a slot
     /// rewrites its sets when they changed.
