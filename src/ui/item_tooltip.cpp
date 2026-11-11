@@ -516,7 +516,9 @@ void renderItemTooltip(const game::ItemDef& item, const game::Inventory* invento
                         const auto& thrKeys = ui::kItemSetThresholdKeys;
                         uint32_t itemFB[10], spellFB[10], thrFB[10];
                         for (int i = 0; i < 10; ++i) {
-                            itemFB[i] = 18+i; spellFB[i] = 28+i; thrFB[i] = 38+i;
+                            itemFB[i] = 18u + i;
+                            spellFB[i] = i < 8 ? 35u + i : 0xFFFFFFFFu;
+                            thrFB[i] = i < 8 ? 43u + i : 0xFFFFFFFFu;
                         }
                         for (uint32_t r = 0; r < dbc->getRecordCount(); ++r) {
                             uint32_t id = dbc->getUInt32(r, idF);
@@ -524,9 +526,9 @@ void renderItemTooltip(const game::ItemDef& item, const game::Inventory* invento
                             SetEntryD e;
                             e.name = dbc->getString(r, nameF);
                             for (int i = 0; i < 10; ++i) {
-                                e.itemIds[i]    = dbc->getUInt32(r, layout ? (*layout)[itemKeys[i]]  : itemFB[i]);
-                                e.spellIds[i]   = dbc->getUInt32(r, layout ? (*layout)[spellKeys[i]] : spellFB[i]);
-                                e.thresholds[i] = dbc->getUInt32(r, layout ? (*layout)[thrKeys[i]]   : thrFB[i]);
+                                e.itemIds[i]    = dbc->getUInt32(r, layout ? layout->tryField(itemKeys[i])  : itemFB[i]);
+                                e.spellIds[i]   = dbc->getUInt32(r, layout ? layout->tryField(spellKeys[i]) : spellFB[i]);
+                                e.thresholds[i] = dbc->getUInt32(r, layout ? layout->tryField(thrKeys[i])   : thrFB[i]);
                             }
                             s_setDataD[id] = std::move(e);
                         }
@@ -985,8 +987,8 @@ void renderItemTooltip(const game::ItemQueryResponseData& info, const game::Inve
                 uint32_t itemFallback[10], spellFallback[10], thrFallback[10];
                 for (int i = 0; i < 10; ++i) {
                     itemFallback[i]  = 18 + i;
-                    spellFallback[i] = 28 + i;
-                    thrFallback[i]   = 38 + i;
+                    spellFallback[i] = i < 8 ? 35u + i : 0xFFFFFFFFu;
+                    thrFallback[i] = i < 8 ? 43u + i : 0xFFFFFFFFu;
                 }
                 for (uint32_t r = 0; r < dbc->getRecordCount(); ++r) {
                     uint32_t id = dbc->getUInt32(r, idF);
@@ -994,9 +996,9 @@ void renderItemTooltip(const game::ItemQueryResponseData& info, const game::Inve
                     SetEntry e;
                     e.name = dbc->getString(r, nameF);
                     for (int i = 0; i < 10; ++i) {
-                        e.itemIds[i]    = dbc->getUInt32(r, layout ? (*layout)[itemKeys[i]]  : itemFallback[i]);
-                        e.spellIds[i]   = dbc->getUInt32(r, layout ? (*layout)[spellKeys[i]] : spellFallback[i]);
-                        e.thresholds[i] = dbc->getUInt32(r, layout ? (*layout)[thrKeys[i]]   : thrFallback[i]);
+                        e.itemIds[i]    = dbc->getUInt32(r, layout ? layout->tryField(itemKeys[i])  : itemFallback[i]);
+                        e.spellIds[i]   = dbc->getUInt32(r, layout ? layout->tryField(spellKeys[i]) : spellFallback[i]);
+                        e.thresholds[i] = dbc->getUInt32(r, layout ? layout->tryField(thrKeys[i])   : thrFallback[i]);
                     }
                     s_setData[id] = std::move(e);
                 }

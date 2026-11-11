@@ -26,6 +26,7 @@
 #include "game/item_stat_text.hpp"
 #include "game/reputation_standing.hpp"
 #include "game/server_notices.hpp"
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -36,6 +37,7 @@
 #include <map>
 #include <set>
 #include <string_view>
+#include <unordered_map>
 
 namespace wowee::addons {
 
@@ -3338,6 +3340,135 @@ static int lua_WoweeContainerItemInstance(lua_State* L) {
     return 1;
 }
 
+/// One ItemSet.dbc row: the set's name, its seventeen item ids, its eight
+/// bonuses and the thresholds they come at, and the skill it may ask for
+/// (WotLK: Name 1, Item 18-34, Spell 35-42, Threshold 43-50, skill 51-52).
+struct ItemSetRow {
+    std::string name;
+    std::array<uint32_t, 17> items{};
+    std::array<uint32_t, 8> spells{};
+    std::array<uint32_t, 8> thresholds{};
+    uint32_t skill = 0;
+    uint32_t skillRank = 0;
+};
+
+static const ItemSetRow* itemSetRow(game::GameHandler* gh, uint32_t setId) {
+    static std::unordered_map<uint32_t, ItemSetRow> rows;
+    static bool loaded = false;
+    if (!loaded && gh) {
+        auto* am = gh->services().assetManager;
+        const auto* layouts = pipeline::getActiveDBCLayout();
+        const auto* l = layouts ? layouts->getLayout("ItemSet") : nullptr;
+        if (am && am->isInitialized() && l) {
+            loaded = true;
+            if (auto dbc = am->loadDBC("ItemSet.dbc"); dbc && dbc->isLoaded()) {
+                const auto col = [&](const std::string& k) { return l->tryField(k); };
+                for (uint32_t r = 0; r < dbc->getRecordCount(); ++r) {
+                    const uint32_t id = dbc->getUInt32(r, col("ID"));
+                    if (id == 0) continue;
+                    ItemSetRow row;
+                    row.name = dbc->getString(r, col("Name"));
+                    for (size_t i = 0; i < row.items.size(); ++i)
+                        row.items[i] = dbc->getUInt32(r, col("Item" + std::to_string(i)));
+                    for (size_t i = 0; i < row.spells.size(); ++i) {
+                        row.spells[i] = dbc->getUInt32(r, col("Spell" + std::to_string(i)));
+                        row.thresholds[i] = dbc->getUInt32(r, col("Threshold" + std::to_string(i)));
+                    }
+                    row.skill = dbc->getUInt32(r, col("RequiredSkill"));
+                    row.skillRank = dbc->getUInt32(r, col("RequiredSkillRank"));
+                    rows[id] = std::move(row);
+                }
+            }
+        }
+    }
+    const auto it = rows.find(setId);
+    return it == rows.end() ? nullptr : &it->second;
+}
+
+/// The item set block of an item's tooltip (0x006277f0): the set's name with
+/// how many of its pieces the player wears out of how many there are, the
+/// skill it may require, each piece by name - lit when worn, grey when not -
+/// and its bonuses by threshold, green once reached and grey with the
+/// threshold in front until then.
+static void pushItemSet(lua_State* L, game::GameHandler* gh, uint32_t setId) {
+    const ItemSetRow* set = itemSetRow(gh, setId);
+    if (!set || set->name.empty()) return;
+    const auto& inv = gh->getInventory();
+    std::vector<uint32_t> worn;
+    uint32_t count = 0;
+    for (int s = 0; s < 19; ++s) {
+        const auto& slot = inv.getEquipSlot(static_cast<game::EquipSlot>(s));
+        if (slot.empty()) continue;
+        worn.push_back(slot.item.itemId);
+        if (const auto* w = gh->getItemInfo(slot.item.itemId); w && w->valid && w->itemSetId == setId) ++count;
+    }
+    uint32_t total = 0;
+    for (const uint32_t item : set->items) total += item != 0 ? 1u : 0u;
+
+    lua_newtable(L);
+    lua_pushstring(L, set->name.c_str());
+    lua_setfield(L, -2, "name");
+    lua_pushnumber(L, count);
+    lua_setfield(L, -2, "count");
+    lua_pushnumber(L, total);
+    lua_setfield(L, -2, "total");
+    if (set->skill != 0) {
+        const std::string& skill = gh->getSkillLineName(set->skill);
+        lua_pushstring(L, skill.empty() ? "UNKNOWN" : skill.c_str());
+        lua_setfield(L, -2, "skillName");
+        if (set->skillRank != 0) {
+            lua_pushnumber(L, set->skillRank);
+            lua_setfield(L, -2, "skillRank");
+        }
+        const auto& skills = gh->getPlayerSkills();
+        const auto known = skills.find(set->skill);
+        const bool ok = known != skills.end() && known->second.effectiveValue() >= set->skillRank;
+        lua_pushboolean(L, ok ? 1 : 0);
+        lua_setfield(L, -2, "skillOk");
+    }
+    lua_newtable(L);
+    int pieces = 0;
+    for (const uint32_t item : set->items) {
+        if (item == 0) continue;
+        const auto* info = gh->getItemInfo(item);
+        if (!info || !info->valid) {
+            gh->ensureItemInfo(item);
+            continue;
+        }
+        lua_newtable(L);
+        lua_pushstring(L, info->name.c_str());
+        lua_setfield(L, -2, "name");
+        const bool on = std::find(worn.begin(), worn.end(), item) != worn.end();
+        lua_pushboolean(L, on ? 1 : 0);
+        lua_setfield(L, -2, "equipped");
+        lua_rawseti(L, -2, ++pieces);
+    }
+    lua_setfield(L, -2, "pieces");
+    // By threshold, then by place (0x0061a600).
+    std::array<size_t, 8> order{};
+    for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        return set->thresholds[a] < set->thresholds[b];
+    });
+    lua_newtable(L);
+    int bonuses = 0;
+    for (const size_t i : order) {
+        if (set->spells[i] == 0) continue;
+        const std::string text = gh->formatSpellDescription(set->spells[i], gh->getSpellDescription(set->spells[i]));
+        if (text.empty()) continue;
+        lua_newtable(L);
+        lua_pushstring(L, text.c_str());
+        lua_setfield(L, -2, "text");
+        lua_pushnumber(L, set->thresholds[i]);
+        lua_setfield(L, -2, "threshold");
+        lua_pushboolean(L, count >= set->thresholds[i] ? 1 : 0);
+        lua_setfield(L, -2, "active");
+        lua_rawseti(L, -2, ++bonuses);
+    }
+    lua_setfield(L, -2, "bonuses");
+    lua_setfield(L, -2, "itemSet");
+}
+
 static int lua_GetItemTooltipData(lua_State* L) {
     auto* gh = getGameHandler(L);
     uint32_t itemId = static_cast<uint32_t>(luaL_checknumber(L, 1));
@@ -3494,6 +3625,7 @@ static int lua_GetItemTooltipData(lua_State* L) {
         if (spellCount > 0) lua_setfield(L, -2, "itemSpells");
         else lua_pop(L, 1);
     }
+    if (info->itemSetId != 0) pushItemSet(L, gh, info->itemSetId);
     // Gem sockets (WotLK/TBC)
     int numSockets = 0;
     for (int i = 0; i < 3; ++i) {
