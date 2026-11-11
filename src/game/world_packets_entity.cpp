@@ -609,7 +609,7 @@ bool ItemQueryResponseParser::parse(network::Packet& packet, ItemQueryResponseDa
         if (packet.hasRemaining(16)) {
             data.requiredDisenchantSkill = static_cast<int32_t>(packet.readUInt32());
             packet.readFloat();
-            packet.readUInt32();
+            data.itemDuration = packet.readUInt32();
             data.itemLimitCategory = packet.readUInt32();
         }
     }

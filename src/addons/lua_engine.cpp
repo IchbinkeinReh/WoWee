@@ -4181,6 +4181,10 @@ static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
             lua_setfield(L, -2, "durability");
             lua_pushnumber(L, static_cast<lua_Number>(instance->maxDurability));
             lua_setfield(L, -2, "maxDurability");
+            // How long it has left, for an item that lasts a while
+            // (ITEM_FIELD_DURATION, seconds; 0x007070b0).
+            lua_pushnumber(L, gh->getItemDurationByGuid(instance->guid));
+            lua_setfield(L, -2, "duration");
             // What is left of its first spell's charges (ITEM_FIELD_SPELL_CHARGES).
             lua_pushnumber(L, gh->getItemSpellCharges(instance->guid));
             lua_setfield(L, -2, "charges0");
@@ -11277,6 +11281,25 @@ void LuaEngine::registerCoreAPI() {
         "            local r, g, b = 1, 1, 1\n"
         "            if cur == 0 then r, g, b = 1, 0.125, 0.125 end\n"
         "            self:AddLine(format(DURABILITY_TEMPLATE or 'Durability %d / %d', cur, inst.maxDurability), r, g, b)\n"
+        "        end\n"
+        // How long it lasts - what the one held has left, else the template's
+        // own - in its largest unit, rounded up (0x0061a9e0 with
+        // "ITEM_DURATION"): _SEC under a minute, _MIN under an hour, _HOURS
+        // under a day, else _DAYS; sixty minutes is an hour and twenty-four
+        // hours a day.
+        "        if data.duration then\n"
+        "            local s = data.duration\n"
+        "            if inst and inst.duration and inst.duration > 0 then s = inst.duration end\n"
+        "            local key, n\n"
+        "            if s < 60 then key, n = 'ITEM_DURATION_SEC', s\n"
+        "            elseif s < 3600 then\n"
+        "                n = math.ceil(s / 60)\n"
+        "                if n == 60 then key, n = 'ITEM_DURATION_HOURS', 1 else key = 'ITEM_DURATION_MIN' end\n"
+        "            elseif s < 86400 then\n"
+        "                n = math.ceil(s / 3600)\n"
+        "                if n == 24 then key, n = 'ITEM_DURATION_DAYS', 1 else key = 'ITEM_DURATION_HOURS' end\n"
+        "            else key, n = 'ITEM_DURATION_DAYS', math.ceil(s / 86400) end\n"
+        "            if _G[key] then self:AddLine(format(_G[key], n), 1, 1, 1) end\n"
         "        end\n"
         "        local function req(text, ok)\n"
         "            if ok == false then self:AddLine(text, 1, 0.125, 0.125)\n"

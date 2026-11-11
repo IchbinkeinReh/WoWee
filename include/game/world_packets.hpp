@@ -2178,6 +2178,9 @@ struct ItemQueryResponseData {
     /// LockID: a lock that must be opened before the item is (0x006277f0
     /// says ITEM_OPENABLE only for an unlocked one).
     uint32_t lockId = 0;
+    /// Duration: how long the item lasts once had, in seconds; 0 for ever
+    /// (ITEM_DURATION, 0x006277f0).
+    uint32_t itemDuration = 0;
     /// Which of PageTextMaterial.dbc's seven backings the page is drawn on -
     /// Parchment, Stone, Marble, Silver, Bronze, Valentine, Illidan. Read off
     /// the same four post-description words as pageTextId and thrown away

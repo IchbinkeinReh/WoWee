@@ -3531,6 +3531,10 @@ static int lua_GetItemTooltipData(lua_State* L) {
         lua_pushnumber(L, info->block);
         lua_setfield(L, -2, "block");
     }
+    if (info->itemDuration > 0) {
+        lua_pushnumber(L, info->itemDuration);
+        lua_setfield(L, -2, "duration");
+    }
     // A druid sees what a weapon is worth in a feral form (0x0061a8f0): for
     // a one-hand, two-hand, main or off hand weapon (inventory types whose
     // mask at 0x00a2d288 has 0x8000) of more than 54.81 damage per second,

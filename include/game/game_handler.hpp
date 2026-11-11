@@ -4821,6 +4821,11 @@ public:
         auto it = onlineItems_.find(guid);
         return it != onlineItems_.end() ? it->second.flags : 0u;
     }
+    /// ITEM_FIELD_DURATION of an item this client holds, 0 when unknown.
+    uint32_t getItemDurationByGuid(uint64_t guid) const {
+        auto it = onlineItems_.find(guid);
+        return it != onlineItems_.end() ? it->second.duration : 0u;
+    }
     /// ITEM_FIELD_SPELL_CHARGES[0] of an item this client holds, 0 when unknown.
     int32_t getItemSpellCharges(uint64_t guid) const {
         auto it = onlineItems_.find(guid);
@@ -5809,6 +5814,9 @@ public:
         /// ITEM_FIELD_SPELL_CHARGES, the first of the five (STACK_COUNT + 2):
         /// what is left of the template's first spell's charges.
         int32_t  spellCharges0 = 0;
+        /// ITEM_FIELD_DURATION (STACK_COUNT + 1): seconds the item has left,
+        /// for one that lasts a while.
+        uint32_t duration = 0;
         /// All twelve ITEM_FIELD_ENCHANTMENT slots' ids (STACK_COUNT + 8, three apart).
         std::array<uint32_t, 12> enchantIds{};
         /// ITEM_FIELD_CREATE_PLAYED_TIME (MAXDURABILITY + 1): the owner's played

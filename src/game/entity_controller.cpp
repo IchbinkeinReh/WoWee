@@ -2266,6 +2266,10 @@ void EntityController::trackItemOnCreate(const UpdateBlock& block, bool& newItem
     const uint16_t chargesField = (fieldIndex(UF::ITEM_FIELD_STACK_COUNT) != 0xFFFF)
         ? static_cast<uint16_t>(fieldIndex(UF::ITEM_FIELD_STACK_COUNT) + 2u) : 0xFFFFu;
     auto chargesIt  = (chargesField != 0xFFFF)  ? block.fields.find(chargesField)  : block.fields.end();
+    // ITEM_FIELD_DURATION, the one between: seconds left on an item that lasts.
+    const uint16_t durationField = (fieldIndex(UF::ITEM_FIELD_STACK_COUNT) != 0xFFFF)
+        ? static_cast<uint16_t>(fieldIndex(UF::ITEM_FIELD_STACK_COUNT) + 1u) : 0xFFFFu;
+    auto durationIt = (durationField != 0xFFFF) ? block.fields.find(durationField) : block.fields.end();
     // ITEM_FIELD_CREATE_PLAYED_TIME, one after MAXDURABILITY on WotLK.
     const uint16_t createdField = (!isPreWotlk() && fieldIndex(UF::ITEM_FIELD_MAXDURABILITY) != 0xFFFF)
         ? static_cast<uint16_t>(fieldIndex(UF::ITEM_FIELD_MAXDURABILITY) + 1u) : 0xFFFFu;
@@ -2295,6 +2299,7 @@ void EntityController::trackItemOnCreate(const UpdateBlock& block, bool& newItem
         if (sock3EnchIt != block.fields.end()) info.socketEnchantIds[2]  = sock3EnchIt->second;
         if (flagsIt    != block.fields.end()) info.flags                 = flagsIt->second;
         if (chargesIt  != block.fields.end()) info.spellCharges0         = static_cast<int32_t>(chargesIt->second);
+        if (durationIt != block.fields.end()) info.duration              = durationIt->second;
         if (createdIt  != block.fields.end()) info.createPlayedTime      = createdIt->second;
         if (enchBase != 0xFFFF) {
             for (uint16_t e = 0; e < 12; ++e) {
@@ -2361,6 +2366,7 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
     // RANDOM_PROPERTIES_ID sits before DURABILITY (DUR-2 pre-WotLK, DUR-1 on WotLK).
     const uint16_t itemFlagsField    = (itemStackField != 0xFFFF) ? (itemStackField + 7u) : 0xFFFF;
     const uint16_t itemChargesField  = (itemStackField != 0xFFFF) ? (itemStackField + 2u) : 0xFFFF;
+    const uint16_t itemDurationField = (itemStackField != 0xFFFF) ? (itemStackField + 1u) : 0xFFFF;
     const uint16_t itemCreatedField  = (!isPreWotlk() && itemMaxDurField != 0xFFFF) ? (itemMaxDurField + 1u) : 0xFFFF;
     const uint16_t itemRandPropField = (itemDurField != 0xFFFF)
         ? static_cast<uint16_t>(itemDurField - (isPreWotlk() ? 2u : 1u)) : 0xFFFF;
@@ -2426,6 +2432,8 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
             }
         } else if (isItemInInventory && itemChargesField != 0xFFFF && key == itemChargesField) {
             it->second.spellCharges0 = static_cast<int32_t>(val);
+        } else if (isItemInInventory && itemDurationField != 0xFFFF && key == itemDurationField) {
+            it->second.duration = val;
         } else if (isItemInInventory && itemCreatedField != 0xFFFF && key == itemCreatedField) {
             it->second.createPlayedTime = val;
         } else if (isItemInInventory && itemFlagsField != 0xFFFF && key == itemFlagsField) {
