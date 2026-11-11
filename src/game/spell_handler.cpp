@@ -3866,11 +3866,23 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
         if (playerHistory_.dropGlobalCooldown(data.spellId, now)) playerCooldownsChanged();
         if (heldLetGo) cooldownHistoryChanged(false);
     }
-    // Totem failures name tool item ids; request their info so a retry of the
-    // craft can show the tool's name even if it wasn't cached yet.
-    if (data.result == kCastResultTotems) {
-        if (data.miscArg != 0) owner_.ensureItemInfo(data.miscArg);
-        if (data.miscArg2 != 0) owner_.ensureItemInfo(data.miscArg2);
+    // A failure that names an item the cache does not have - NEED_MORE_ITEMS,
+    // REAGENTS, TOTEMS - waits for it: the client hands the item cache a
+    // callback and raises the line from there (0x00808200 -> 0x007feb50,
+    // 0x007fea80). Asked of here it came back empty and was never shown.
+    if ((data.result == 0x37 || data.result == 0x64 || data.result == kCastResultTotems) &&
+        data.miscArg != 0 &&
+        !(owner_.getItemInfo(data.miscArg) && owner_.getItemInfo(data.miscArg)->valid)) {
+        static uint32_t failureWaits = 0;
+        owner_.askItemThen(data.miscArg, "cast failure " + std::to_string(++failureWaits),
+                           [this, data, powerType](bool found) {
+                               if (!found) return;
+                               const std::string late = castFailureMessage(owner_, data.spellId, data.result,
+                                                                           powerType, data.miscArg, data.miscArg2);
+                               if (late.empty()) return;
+                               owner_.addUIError(late);
+                               sayCastFailure(data.spellId, data.result);
+                           });
     }
     std::string errMsg = castFailureMessage(owner_, data.spellId, data.result, powerType,
                                             data.miscArg, data.miscArg2);
