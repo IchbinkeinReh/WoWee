@@ -997,6 +997,83 @@ void M2Renderer::writeInstanceLight(M2InstanceGPU& e, const M2Instance& inst) co
                                  inst.interiorTowardSun);
 }
 
+void M2Renderer::gatherVertexLights(bool on, const std::function<void(m2_vertex_lights::Grid&)>& others) {
+    // This frame's lights (m2_vertex_lights.hpp): every point light of a
+    // model stepped this frame, while its visibility track holds (0x00828a00
+    // -> 0x008356f0), its diffuse colour times its intensity times the
+    // model's alpha (0x0082f0f0). Outside the ray traced lighting only; under
+    // it the trace lights the models.
+    ++vertexLightFrame_;
+    if (vertexLightFrame_ == 0) vertexLightFrame_ = 1;
+    vertexLightSetCount_.store(1, std::memory_order_relaxed);
+    vertexLightGrid_.clear();
+    vertexLightsWanted_ = on;
+    if (!vertexLightsWanted_) return;
+    if (others) others(vertexLightGrid_);
+    for (size_t idx : boneWorkIndices_) {
+        if (idx >= instances.size()) continue;
+        const M2Instance& inst = instances[idx];
+        const M2ModelGPU* model = inst.cachedModel;
+        if (!model || model->lights.empty()) continue;
+        const auto& gs = model->globalSequenceDurations;
+        const float alpha = std::clamp(inst.fade, 0.0f, 1.0f);
+        for (const auto& light : model->lights) {
+            if (light.type != 1) continue;
+            const int seq = inst.currentSequenceIndex;
+            if (m2_track::sampleFloat(light.visibility, seq, inst.animTime, inst.globalSequenceTime, gs, 1.0f) == 0.0f)
+                continue;
+            const glm::vec3 color = m2_track::sampleVec3(light.diffuseColor, seq, inst.animTime,
+                                                         inst.globalSequenceTime, gs, glm::vec3(0.0f));
+            const float intensity =
+                m2_track::sampleFloat(light.diffuseIntensity, seq, inst.animTime, inst.globalSequenceTime, gs, 0.0f);
+            m2_vertex_lights::Light l;
+            l.diffuse = glm::max(color, glm::vec3(0.0f)) * std::max(intensity, 0.0f) * alpha;
+            if (std::max(l.diffuse.r, std::max(l.diffuse.g, l.diffuse.b)) <= 0.0f) continue;
+            glm::mat4 toWorld = inst.modelMatrix;
+            if (light.bone >= 0 && static_cast<size_t>(light.bone) < inst.boneMatrices.size()) {
+                toWorld = toWorld * inst.boneMatrices[static_cast<size_t>(light.bone)];
+            }
+            l.position = glm::vec3(toWorld * glm::vec4(light.position, 1.0f));
+            vertexLightGrid_.add(l);
+        }
+    }
+}
+
+void M2Renderer::writeInstanceVertexLights(uint32_t frameIndex, uint32_t slot, M2Instance& inst) {
+    if (frameIndex >= 2 || !vertexLightMapped_[frameIndex] || slot >= MAX_INSTANCE_DATA) return;
+    auto* setOf = static_cast<int32_t*>(vertexLightMapped_[frameIndex]);
+    if (vertexLightGrid_.empty() || inst.detailDoodad) {
+        setOf[slot] = 0;
+        return;
+    }
+    // Picked once a frame per instance (0x00831af0 per model), then every
+    // entry of it takes the same set.
+    if (inst.vertexLightFrame != vertexLightFrame_) {
+        inst.vertexLightFrame = vertexLightFrame_;
+        inst.vertexLightSet = 0;
+        const auto picked = vertexLightGrid_.pick(inst.cachedCullCenter);
+        if (picked.count > 0) {
+            const uint32_t set = vertexLightSetCount_.fetch_add(1, std::memory_order_relaxed);
+            if (set < kMaxVertexLightSets) {
+                auto* sets = reinterpret_cast<glm::vec4*>(setOf + MAX_INSTANCE_DATA);
+                glm::vec4* dst = sets + size_t(set) * kVertexLightSetVec4s;
+                for (int i = 0; i < m2_vertex_lights::kDrawn; ++i) {
+                    const bool on = i < picked.count;
+                    const auto& l = picked.lights[static_cast<size_t>(i)];
+                    dst[2 * i] = on ? glm::vec4(l.position, 1.0f) : glm::vec4(0.0f);
+                    dst[2 * i + 1] = on ? glm::vec4(l.diffuse, 0.0f) : glm::vec4(0.0f);
+                }
+                inst.vertexLightSet = set;
+            } else if (!vertexLightSetsFull_) {
+                vertexLightSetsFull_ = true;
+                LOG_WARNING("M2 vertex lights: more than ", kMaxVertexLightSets,
+                            " lit models this frame; the rest drawn without their point lights");
+            }
+        }
+    }
+    setOf[slot] = static_cast<int32_t>(inst.vertexLightSet);
+}
+
 void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
                         const BlendedInterleave* interleave) {
     renderOpaque(cmd, perFrameSet, camera);
@@ -1403,6 +1480,7 @@ void M2Renderer::renderOpaque(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, 
                 e.boneCount = static_cast<int32_t>(inst.boneMatrices.size());
                 e.highlight = inst.highlight;
                 writeInstanceLight(e, inst);
+                writeInstanceVertexLights(frameIndex, instanceDataCount_, inst);
                 instanceDataCount_++;
                 ++writtenInstances;
             }
@@ -1555,6 +1633,7 @@ void M2Renderer::renderOpaque(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, 
                             e.boneCount = static_cast<int32_t>(inst.boneMatrices.size());
                             e.highlight = inst.highlight;
                             writeInstanceLight(e, inst);
+                            writeInstanceVertexLights(frameIndex, instanceDataCount_, inst);
                             instanceDataCount_++;
                         }
                     }
@@ -2007,6 +2086,7 @@ void M2Renderer::renderBlended(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             e.boneCount = static_cast<int32_t>(instance.boneMatrices.size());
             e.highlight = instance.highlight;
             writeInstanceLight(e, instance);
+            writeInstanceVertexLights(frameIndex, instanceDataCount_, instance);
             instanceDataCount_++;
 
             // Pipeline selection: the batch's own blend mode, spell or not.

@@ -506,10 +506,11 @@ bool M2Renderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout
 
     // Instance data set layout (set 3): binding 0 = STORAGE_BUFFER (per-instance
     // data), 1 = this frame's chunked ground cover list, 2 = the ground cover's
-    // static entries (registerDetailChunk).
+    // static entries (registerDetailChunk), 3 = the client's point lights
+    // outside the ray traced lighting (m2_vertex_lights.hpp).
     {
-        VkDescriptorSetLayoutBinding bindings[3]{};
-        for (uint32_t b = 0; b < 3; ++b) {
+        VkDescriptorSetLayoutBinding bindings[4]{};
+        for (uint32_t b = 0; b < 4; ++b) {
             bindings[b].binding = b;
             bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             bindings[b].descriptorCount = 1;
@@ -517,7 +518,7 @@ bool M2Renderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout
         }
 
         VkDescriptorSetLayoutCreateInfo ci{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        ci.bindingCount = 3;
+        ci.bindingCount = 4;
         ci.pBindings = bindings;
         vkCreateDescriptorSetLayout(device, &ci, nullptr, &instanceSetLayout_);
     }
@@ -648,8 +649,8 @@ bool M2Renderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout
         static_assert(sizeof(M2InstanceGPU) == 192, "M2InstanceGPU must be 192 bytes (std430)");
         const VkDeviceSize instBufSize = MAX_INSTANCE_DATA * sizeof(M2InstanceGPU);
 
-        // Descriptor pool for 2 sets (double-buffered), three buffers each
-        VkDescriptorPoolSize poolSize{.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 6};
+        // Descriptor pool for 2 sets (double-buffered), four buffers each
+        VkDescriptorPoolSize poolSize{.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 8};
         VkDescriptorPoolCreateInfo poolCi{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         poolCi.maxSets = 2;
         poolCi.poolSizeCount = 1;
@@ -682,6 +683,23 @@ bool M2Renderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout
             write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             write.pBufferInfo = &bufInfo;
             vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+
+            // The vertex lights: every entry's set (0, none, to start), then
+            // the sets.
+            const VkDeviceSize vlSize = VkDeviceSize(MAX_INSTANCE_DATA) * sizeof(int32_t) +
+                                        VkDeviceSize(kMaxVertexLightSets) * kVertexLightSetVec4s * sizeof(glm::vec4);
+            VkBufferCreateInfo vbci{.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+            vbci.size = vlSize;
+            vbci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+            VmaAllocationInfo vlInfo{};
+            vmaCreateBuffer(ctx->getAllocator(), &vbci, &aci, &vertexLightBuffer_[i], &vertexLightAlloc_[i], &vlInfo);
+            vertexLightMapped_[i] = vlInfo.pMappedData;
+            if (vertexLightMapped_[i]) std::memset(vertexLightMapped_[i], 0, static_cast<size_t>(vlSize));
+            const VkDescriptorBufferInfo vlBufInfo{vertexLightBuffer_[i], 0, vlSize};
+            VkWriteDescriptorSet vlWrite = write;
+            vlWrite.dstBinding = 3;
+            vlWrite.pBufferInfo = &vlBufInfo;
+            vkUpdateDescriptorSets(device, 1, &vlWrite, 0, nullptr);
         }
         // The ground cover's buffers, a slot each until clutter is placed, so
         // bindings 1 and 2 are never left unwritten.
@@ -891,6 +909,8 @@ void M2Renderer::shutdown() {
     for (int i = 0; i < 2; i++) {
         destroy(alloc, instanceBuffer_[i], instanceAlloc_[i]);
         instanceMapped_[i] = nullptr;
+        destroy(alloc, vertexLightBuffer_[i], vertexLightAlloc_[i]);
+        vertexLightMapped_[i] = nullptr;
         instanceSet_[i] = VK_NULL_HANDLE;
     }
     destroy(device, instanceDescPool_);

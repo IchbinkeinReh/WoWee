@@ -8,6 +8,7 @@
 
 #include "pipeline/m2_loader.hpp"
 #include "rendering/m2_track_sampler.hpp"
+#include "rendering/m2_vertex_lights.hpp"
 #include "rendering/vehicle_seat.hpp"
 #include "rendering/animation/animation_data.hpp"
 #include "rendering/animation/upper_body.hpp"
@@ -561,6 +562,13 @@ public:
     void setRtGlowPulseStrength(float s) { rtGlowPulseStrength_ = s; }
     /// Debug Glow, "Model light flicker strength" (rt_lights::evaluateM2Light).
     void setRtModelFlickerStrength(float s) { rtModelFlickerStrength_ = s; }
+    /// The client's M2 point lights outside the ray traced lighting
+    /// (m2_vertex_lights.hpp): the units' own (a held torch's, a lantern's)
+    /// into this frame's grid, and the grid the units are lit from - by
+    /// vertex, lights 1-3 of the four nearest each, in the bone buffer past
+    /// its MAX_BONES matrices.
+    void addVertexLights(m2_vertex_lights::Grid& grid) const;
+    void setVertexLightGrid(const m2_vertex_lights::Grid* grid) { vertexLightGrid_ = grid; }
     struct RtStats {
         uint32_t characters = 0;  // casting
         uint32_t posed = 0;       // of those, cut into bone pieces
@@ -1157,6 +1165,10 @@ private:
     // Maximum bones supported
     float rtGlowPulseStrength_ = 1.0f;
     float rtModelFlickerStrength_ = 1.0f;
+    /// Past the bones in each bone buffer: two matrices of the client's
+    /// point lights (per light a position, w 1 when set, and a diffuse).
+    static constexpr int kVertexLightMatrices = 2;
+    const m2_vertex_lights::Grid* vertexLightGrid_ = nullptr;
     static constexpr int MAX_BONES = 240;
     uint32_t numAnimThreads_ = 1;
     std::vector<std::future<void>> animFutures_;

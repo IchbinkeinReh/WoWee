@@ -83,6 +83,13 @@ layout(set = 3, binding = 1) readonly buffer ClutterListSSBO {
 layout(set = 3, binding = 2) readonly buffer ClutterStaticSSBO {
     InstanceData clutterData[];
 };
+// Outside the ray traced lighting, the client's M2 point lights
+// (m2_vertex_lights.hpp): the set each instance entry draws with, 0 for
+// none, then the sets - per light its position (w 1 when set) and diffuse.
+layout(set = 3, binding = 3) readonly buffer VertexLightSSBO {
+    int vertexLightSetOf[131072];
+    vec4 vertexLightSets[];
+};
 
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;
@@ -103,6 +110,8 @@ layout(location = 9) flat out int vInteriorLit;
 layout(location = 10) flat out vec3 vInteriorAmbient;
 layout(location = 11) flat out vec4 vInteriorDirect;
 layout(location = 12) flat out float vDetailLit;  // ground cover's baked shadow (flags & 8)
+// The client's point lights summed at this vertex (m2_vertex_lights.hpp).
+layout(location = 13) out vec3 vPointLight;
 
 void main() {
     // Fetch per-instance data from SSBO
@@ -190,6 +199,26 @@ void main() {
     vInteriorAmbient = inst.interiorAmbient.rgb;
     vInteriorDirect = inst.interiorDirect;
     vDetailLit = inst.interiorAmbient.a;
+
+    // Lights 1-3 of the model's four nearest (0x008353d0), by vertex as the
+    // vertex programs light them: diffuse x max(N.L, 0) / (0.7 d + 0.03 d^2)
+    // (0x00834a40's attenuation, Diffuse_T1's point-light variant).
+    vPointLight = vec3(0.0);
+    if (push.clutterList < 0) {
+        int set = vertexLightSetOf[push.instanceDataOffset + gl_InstanceIndex];
+        if (set > 0) {
+            vec3 n = normalize(Normal);
+            for (int i = 0; i < 3; ++i) {
+                vec4 lp = vertexLightSets[set * 6 + i * 2];
+                if (lp.w < 0.5) continue;
+                vec3 toL = lp.xyz - worldPos.xyz;
+                float d = length(toL);
+                if (d < 1e-5) continue;
+                float atten = 1.0 / (0.7 * d + 0.03 * d * d);
+                vPointLight += vertexLightSets[set * 6 + i * 2 + 1].rgb * (max(dot(n, toL / d), 0.0) * atten);
+            }
+        }
+    }
 
     gl_Position = projection * view * worldPos;
     // A sky model sits on the far plane whatever its radius, so the depth

@@ -85,6 +85,8 @@ layout(location = 9) flat in int vInteriorLit;
 layout(location = 10) flat in vec3 vInteriorAmbient;
 layout(location = 11) flat in vec4 vInteriorDirect;
 layout(location = 12) flat in float vDetailLit;
+// The client's point lights summed at this vertex (m2.vert, m2_vertex_lights.hpp).
+layout(location = 13) in vec3 vPointLight;
 
 layout(location = 0) out vec4 outColor;
 
@@ -396,6 +398,11 @@ void main() {
             light = modelZoneLight(rt, norm, FragPos, shadow, ambient, direct, rtSurface);
         }
     }
+    // The client's M2 point lights outside the ray traced lighting: added to
+    // what the zone or the room gives, and the sum held to 1 as the vertex
+    // programs hold it - where that sum is already past 1 it is left as it
+    // is. None under the tracing (the buffer holds none then) or unlit.
+    if (unlit == 0) light = min(light + vPointLight, max(light, vec3(1.0)));
     vec3 result = combineStages(vec4(light * tint, batchFade), tex0, tex1).rgb;
     // The stages are affine in the diffuse: what multiplies the light on its
     // way through them multiplies the traced terms' part of it too.

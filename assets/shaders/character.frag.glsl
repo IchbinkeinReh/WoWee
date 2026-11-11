@@ -197,6 +197,8 @@ layout(location = 3) in vec3 Tangent;
 layout(location = 4) in vec3 Bitangent;
 layout(location = 5) in vec2 inTexCoord2;
 layout(location = 6) in vec2 inEnvCoord;
+// The client's point lights at this vertex (character.vert, m2_vertex_lights.hpp).
+layout(location = 7) in vec3 vPointLight;
 // The second stage's coordinate, set with TexCoord.
 vec2 TexCoord2;
 
@@ -464,6 +466,11 @@ void main() {
             light = modelZoneLight(rt, norm, FragPos, shadow, ambient, direct, rtSurface);
         }
     }
+
+    // The client's M2 point lights outside the ray traced lighting, summed
+    // with the rest and held to 1 as the vertex programs do; where the rest
+    // is already past 1 it is left as it is. None under the tracing.
+    if (unlit == 0) light = min(light + vPointLight, max(light, vec3(1.0)));
 
     // The batch's colour times the light is the diffuse the stages combine
     // over (0x0081fe90).

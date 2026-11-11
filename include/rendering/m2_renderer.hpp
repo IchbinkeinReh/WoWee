@@ -17,6 +17,7 @@
 #include "rendering/m2_event_sounds.hpp"
 #include "rendering/rt_glow.hpp"
 #include "rendering/rt_glow_pulse.hpp"
+#include "rendering/m2_vertex_lights.hpp"
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
@@ -328,6 +329,11 @@ struct M2Instance {
     // Posed from a unit or a worn model (setInstanceExternalPose): its
     // particles step after the units are animated (stepPosedParticles).
     bool externallyPosed = false;
+    // Outside the ray traced lighting, the client's point lights this
+    // frame (m2_vertex_lights): the frame they were picked for and the set
+    // in the vertex light buffer they were written to, 0 for none.
+    uint32_t vertexLightFrame = 0;
+    uint32_t vertexLightSet = 0;
     glm::vec3 worldBoundsMin;
     glm::vec3 worldBoundsMax;
 
@@ -633,6 +639,13 @@ public:
         rtGlowAnimationStrength_ = glowAnimation;
     }
     void setRtScene(RtScene* scene) { rtScene_ = scene; }
+    /// This frame's client M2 point lights (m2_vertex_lights.hpp), outside
+    /// the ray traced lighting (`on`); under it the trace lights the models
+    /// and none are gathered. Every model just stepped, and what `others`
+    /// adds (the units'). Called once the frame's poses are done, before
+    /// anything is drawn.
+    void gatherVertexLights(bool on, const std::function<void(m2_vertex_lights::Grid&)>& others);
+    [[nodiscard]] const m2_vertex_lights::Grid& vertexLightGrid() const { return vertexLightGrid_; }
     /// Bring the scene's instances in line with this renderer's, once a frame
     /// while the lighting is on. An instance that moves - a transport, a
     /// doodad on one - goes over to the scene's dynamic instances.
@@ -1374,6 +1387,23 @@ private:
     void* instanceMapped_[2] = {};
     VkDescriptorSet instanceSet_[2] = {};
     uint32_t instanceDataCount_ = 0; // reset each frame in render()
+
+    // The client's M2 point lights outside the ray traced lighting
+    // (m2_vertex_lights.hpp): set 3 binding 3, per frame slot, the set each
+    // instance entry draws with (MAX_INSTANCE_DATA ints), then the sets,
+    // kVertexLightSetVec4s vec4s each (per light: position, w 1 when set;
+    // diffuse). Set 0 is none.
+    static constexpr uint32_t kMaxVertexLightSets = 8192;
+    static constexpr uint32_t kVertexLightSetVec4s = 6;
+    ::VkBuffer vertexLightBuffer_[2] = {};
+    VmaAllocation vertexLightAlloc_[2] = {};
+    void* vertexLightMapped_[2] = {};
+    m2_vertex_lights::Grid vertexLightGrid_;
+    bool vertexLightsWanted_ = false;
+    uint32_t vertexLightFrame_ = 0;
+    std::atomic<uint32_t> vertexLightSetCount_{1};
+    bool vertexLightSetsFull_ = false;
+    void writeInstanceVertexLights(uint32_t frameIndex, uint32_t slot, M2Instance& inst);
 
 
     RtScene* rtScene_ = nullptr;

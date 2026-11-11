@@ -3996,7 +3996,7 @@ void CharacterRenderer::prepareRender(uint32_t frameIndex) {
     // Pre-allocate bone SSBOs + descriptor sets on main thread (pool ops not
     // thread-safe): the whole ring at once.
     constexpr int kRing = CharacterInstance::kBoneRing;
-    const VkDeviceSize bufferSize = MAX_BONES * sizeof(glm::mat4);
+    const VkDeviceSize bufferSize = (MAX_BONES + kVertexLightMatrices) * sizeof(glm::mat4);
     for (auto& [id, instance] : instances) {
         int numBones = std::min(static_cast<int>(instance.boneMatrices.size()), MAX_BONES);
         if (numBones <= 0) continue;
@@ -4030,6 +4030,7 @@ void CharacterRenderer::prepareRender(uint32_t frameIndex) {
             if (instance.boneMapped[k]) {
                 auto* dst = static_cast<glm::mat4*>(instance.boneMapped[k]);
                 for (int j = 0; j < MAX_BONES; j++) dst[j] = glm::mat4(1.0f);
+                for (int j = 0; j < kVertexLightMatrices; j++) dst[MAX_BONES + j] = glm::mat4(0.0f);
             }
         }
         for (int k = 0; k < kRing && ok; ++k) {
@@ -4067,6 +4068,22 @@ void CharacterRenderer::writeFrameBones(CharacterInstance& inst) {
     if (inst.boneMapped[k] && inst.boneWritten[k] != boneFrame_) {
         auto* dst = static_cast<glm::mat4*>(inst.boneMapped[k]);
         if (numBones > 0) memcpy(dst, inst.boneMatrices.data(), numBones * sizeof(glm::mat4));
+        // The client's point lights this frame (m2_vertex_lights.hpp), picked
+        // round the model's middle; none under the ray traced lighting (the
+        // grid is empty then).
+        glm::mat4 lights[kVertexLightMatrices] = {glm::mat4(0.0f), glm::mat4(0.0f)};
+        if (vertexLightGrid_ && !vertexLightGrid_->empty() && inst.cachedModel) {
+            const glm::mat4 modelMat = inst.hasOverrideModelMatrix ? inst.overrideModelMatrix : getModelMatrix(inst);
+            const glm::vec3 mid = 0.5f * (inst.cachedModel->visualBoundMin + inst.cachedModel->visualBoundMax);
+            const auto picked = vertexLightGrid_->pick(glm::vec3(modelMat * glm::vec4(mid, 1.0f)));
+            for (int i = 0; i < picked.count; ++i) {
+                const auto& l = picked.lights[static_cast<size_t>(i)];
+                glm::mat4& m = lights[(2 * i) / 4];
+                m[(2 * i) % 4] = glm::vec4(l.position, 1.0f);
+                m[(2 * i + 1) % 4] = glm::vec4(l.diffuse, 0.0f);
+            }
+        }
+        memcpy(dst + MAX_BONES, lights, sizeof(lights));
         inst.boneWritten[k] = boneFrame_;
     }
 }

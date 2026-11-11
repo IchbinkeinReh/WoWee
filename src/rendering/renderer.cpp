@@ -3492,6 +3492,16 @@ void Renderer::update(float deltaTime) {
         if (particleTwinPoser_) particleTwinPoser_();
         m2Renderer->stepPosedParticles(deltaTime);
     }
+    // The client's M2 point lights outside the ray traced lighting, this
+    // frame's (m2_vertex_lights.hpp): every model's and every unit's that was
+    // just animated, gathered once both are posed, before anything is drawn.
+    if (m2Renderer) {
+        const bool vertexLights = !(rtLighting_ && rtLighting_->active());
+        m2Renderer->gatherVertexLights(vertexLights, [this](m2_vertex_lights::Grid& grid) {
+            if (characterRenderer) characterRenderer->addVertexLights(grid);
+        });
+        if (characterRenderer) characterRenderer->setVertexLightGrid(&m2Renderer->vertexLightGrid());
+    }
 
     // What the models' events play, now the step that found them is done -
     // and the camera shakes they start, by SpellEffectCameraShakes as a

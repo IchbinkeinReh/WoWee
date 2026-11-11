@@ -527,5 +527,43 @@ void CharacterRenderer::collectRtLights(const glm::vec3& eye, float range,
     }
 }
 
+void CharacterRenderer::addVertexLights(m2_vertex_lights::Grid& grid) const {
+    // A unit's model lights as a doodad's does (0x00828a00 for every model
+    // the client steps): each point light while its visibility track holds,
+    // its diffuse colour times its intensity times the model's alpha.
+    for (const auto& [id, inst] : instances) {
+        if (!inst.cachedModel || inst.cachedModel->data.lights.empty()) continue;
+        if (!inst.visible || inst.heldBack || inst.isSceneModel) continue;
+        if (!inst.posedOnce && !inst.hasOverrideModelMatrix) continue;
+        const glm::mat4 modelMat = inst.hasOverrideModelMatrix ? inst.overrideModelMatrix : getModelMatrix(inst);
+        const auto& data = inst.cachedModel->data;
+        const float alpha = std::clamp(inst.opacity * inst.kitAlpha, 0.0f, 1.0f);
+        const int seq = inst.currentSequenceIndex;
+        const float t = seq >= 0 && static_cast<size_t>(seq) < data.sequences.size()
+                            ? anim::sampledSequenceTime(inst.animationTime,
+                                                        data.sequences[static_cast<size_t>(seq)].duration,
+                                                        inst.playMode)
+                            : inst.animationTime;
+        const auto& gs = data.globalSequenceDurations;
+        for (const auto& light : data.lights) {
+            if (light.type != 1) continue;
+            if (m2_track::sampleFloat(light.visibility, seq, t, inst.globalSequenceTime, gs, 1.0f) == 0.0f) continue;
+            const glm::vec3 color =
+                m2_track::sampleVec3(light.diffuseColor, seq, t, inst.globalSequenceTime, gs, glm::vec3(0.0f));
+            const float intensity =
+                m2_track::sampleFloat(light.diffuseIntensity, seq, t, inst.globalSequenceTime, gs, 0.0f);
+            m2_vertex_lights::Light l;
+            l.diffuse = glm::max(color, glm::vec3(0.0f)) * std::max(intensity, 0.0f) * alpha;
+            if (std::max(l.diffuse.r, std::max(l.diffuse.g, l.diffuse.b)) <= 0.0f) continue;
+            glm::mat4 toWorld = modelMat;
+            if (light.bone >= 0 && static_cast<size_t>(light.bone) < inst.boneMatrices.size()) {
+                toWorld = toWorld * inst.boneMatrices[static_cast<size_t>(light.bone)];
+            }
+            l.position = glm::vec3(toWorld * glm::vec4(light.position, 1.0f));
+            grid.add(l);
+        }
+    }
+}
+
 }  // namespace rendering
 }  // namespace wowee

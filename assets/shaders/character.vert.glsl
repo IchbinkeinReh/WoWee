@@ -38,6 +38,11 @@ layout(location = 3) out vec3 Tangent;
 layout(location = 4) out vec3 Bitangent;
 layout(location = 5) out vec2 TexCoord2;
 layout(location = 6) out vec2 EnvCoord;
+// The client's M2 point lights summed at this vertex (m2_vertex_lights.hpp),
+// outside the ray traced lighting: lights 1-3, in the two matrices past the
+// bones (CharacterRenderer::kVertexLightMatrices), a position (w 1 when set)
+// and a diffuse each.
+layout(location = 7) out vec3 vPointLight;
 
 vec3 safeNormalize(vec3 v, vec3 fallback) {
     float len2 = dot(v, v);
@@ -103,6 +108,20 @@ void main() {
 
     Tangent = T;
     Bitangent = B;
+
+    // diffuse x max(N.L, 0) / (0.7 d + 0.03 d^2), as the vertex programs
+    // light a model by its point lights (0x008353d0, 0x00834a40).
+    vPointLight = vec3(0.0);
+    for (int i = 0; i < 3; ++i) {
+        mat4 lm = bones[MAX_BONES + uint((2 * i) / 4)];
+        vec4 lp = lm[(2 * i) % 4];
+        if (lp.w < 0.5) continue;
+        vec3 diffuse = lm[(2 * i + 1) % 4].rgb;
+        vec3 toL = lp.xyz - worldPos.xyz;
+        float d = length(toL);
+        if (d < 1e-5) continue;
+        vPointLight += diffuse * (max(dot(N, toL / d), 0.0) / (0.7 * d + 0.03 * d * d));
+    }
 
     gl_Position = projection * vec4(viewP, 1.0);
 }
