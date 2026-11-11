@@ -69,7 +69,12 @@ float rtwSunPath(float depth) {
 // Returns how much of the frame's colour to take: 1 well inside the screen,
 // falling to 0 over its outer 3% so the change to the traced colour where a
 // hit leaves it is not a line. 0 for no match.
-const float RTW_BED_SHORE = 0.5;  // yards under the surface the ground's own sun has taken over by
+const float RTW_BED_SHORE = 0.5;
+// The bed's sun under the water (rtwRefraction): rays a pixel, and the
+// tangent of the cone they spread over - the land's shadows are softened by
+// their filter (rt_filter), this pass has none.
+const uint RTW_BED_SUN_RAYS = 4u;
+const float RTW_BED_SUN_TAN = 0.03;  // yards under the surface the ground's own sun has taken over by
 bool rtwScreenReuse = true;  // off for the traced-only debug view and interior water
 // (Interior water's mirror reads the capture by its own rules: rtwMirrorSeen.)
 const float RTW_MIRROR_EDGE = 0.12;   // of the screen, the fade at its edge
@@ -237,7 +242,6 @@ vec4 rtwRefraction(vec3 origin, vec3 dir, vec3 toSun, vec3 sigma, vec3 scatterCo
             vec3 sunRay = normalize(rtSunRay.xyz);
             float sunPath = rtwSunPath(depth);
             vec3 sunUnder = rtwSunUnderwater();
-            vec3 entry = hit + sunUnder * sunPath;
             // Both stretches of the sun's way: through the water from the bed
             // to the surface, and on from the surface through the air. Only
             // the second was asked, from the surface: a swimmer under it,
@@ -248,11 +252,26 @@ vec4 rtwRefraction(vec3 origin, vec3 dir, vec3 toSun, vec3 sigma, vec3 scatterCo
             // boxes are asked about the bed's own point (rtGroupFrom).
             rtGroupFrom = hit;
             rtGroupFromSet = true;
-            bool sunBlocked = sunRay.z <= 0.0 ||
-                              rtOccluded(hit + hn * 0.05, sunUnder, sunPath, rng) ||
-                              rtOccluded(entry + vec3(0.0, 0.0, 0.1), sunRay, 400.0, rng);
+            // Several rays over the sun's disc, widened to the softness the
+            // land's traced shadows have after their filter, and the alpha
+            // keys' masks read between their texels: one ray, all or
+            // nothing, drew the weed's shadows on the bed in hard steps a
+            // few pixels wide - the screen's rows and the masks' texels
+            // (Stonebull Lake at 17:00).
+            float vis = 0.0;
+            if (sunRay.z > 0.0) {
+                rtMaskJitter = true;
+                for (uint k = 0u; k < RTW_BED_SUN_RAYS; ++k) {
+                    vec3 under = rtConeSample(sunUnder, RTW_BED_SUN_TAN, rng);
+                    vec3 air = rtConeSample(sunRay, RTW_BED_SUN_TAN, rng);
+                    bool blocked = rtOccluded(hit + hn * 0.05, under, sunPath, rng) ||
+                                   rtOccluded(hit + under * sunPath + vec3(0.0, 0.0, 0.1), air, 400.0, rng);
+                    vis += blocked ? 0.0 : 1.0;
+                }
+                rtMaskJitter = false;
+                vis /= float(RTW_BED_SUN_RAYS);
+            }
             rtGroupFromSet = false;
-            float vis = sunBlocked ? 0.0 : 1.0;
             traced = rtwLitHit(hs, ground ? vec3(0.0, 0.0, 1.0) : hn, toSun, exp(-sigma * sunPath) * vis);
         }
         bed = shown;
