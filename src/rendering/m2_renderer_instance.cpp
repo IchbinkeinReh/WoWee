@@ -583,7 +583,10 @@ void M2Renderer::setModelParticlesOnly(uint32_t modelId) {
     // traced every frame.
     releaseRtModel(it->second);
     // And its lights: the unit it follows has them. Kept, every lit thing a
-    // unit carries shone twice from one place, a held torch among them.
+    // unit carries shone twice from one place, a held torch among them. Nor
+    // does its flame's particle glow stand beside them, as it does not on a
+    // doodad that carries a light of its own.
+    it->second.lightsGivenByUnit = !it->second.lights.empty();
     it->second.lights.clear();
     it->second.glowPatches.clear();
     it->second.isLamp = false;

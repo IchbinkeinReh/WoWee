@@ -132,6 +132,10 @@ struct M2ModelGPU {
     bool collisionStatue = false;
     bool isSmallFoliage = false;    // Small foliage (bushes, grass, plants) - skip during taxi
     bool isInvisibleTrap = false;   // Invisible trap objects (don't render, no collision)
+    /// A unit's particle twin whose model carries M2 lights of its own: the
+    /// unit it follows gives those (CharacterRenderer::collectRtLights), so
+    /// its flame's particles give none beside them (prepareM2Particles).
+    bool lightsGivenByUnit = false;
     bool isGroundDetail = false;    // Ground clutter/detail doodads (culling distance, density, dedup)
     bool isWaterVegetation = false; // Cattails, reeds, kelp etc. near water (insect spawning)
     bool isFireflyEffect = false;   // Firefly/fireflies M2 (exempt from particle dampeners)

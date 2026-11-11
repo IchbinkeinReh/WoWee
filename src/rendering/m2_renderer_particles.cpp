@@ -424,7 +424,8 @@ void M2Renderer::prepareM2Particles() {
         // their crystal's glow standing for them.
         constexpr float kParticleLightRange = 100.0f;
         const bool glowLights = rtScene_ && particleDrawOrder_[instOrder].first < kParticleLightRange * kParticleLightRange &&
-                                gpu.lights.empty() && !gpu.isBrazierOrFire && !gpu.isTorch && !gpu.isLamp;
+                                gpu.lights.empty() && !gpu.lightsGivenByUnit && !gpu.isBrazierOrFire &&
+                                !gpu.isTorch && !gpu.isLamp;
         if (glowLights) rtEmitterGlowScratch_.assign(gpu.particleEmitters.size(), rt_lights::ParticleGlow{});
         float emitterGlowWeight = 0.0f;
         glm::vec3 emitterGlowTexel(1.0f);
