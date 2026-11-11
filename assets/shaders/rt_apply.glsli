@@ -218,6 +218,19 @@ void main() {
     outMul = vec4(1.0);
     float depth = texelFetch(uSceneDepth, pix, s).r;
     vec4 gb0 = texelFetch(uSceneGbuf0, pix, s);
+    // Debug views 1 and 3 - the probes' ratio and their ambient, which the
+    // surfaces drew instead of themselves before the trace: scaled by what
+    // the trace leaves of the probes' light (rt_trace puts that factor alone
+    // in the occlusion in these views: the probes the point can see), so
+    // they show what the surface really gets.
+    int dbgView = int(pass.tune2.z + 0.5);
+    if ((dbgView == 1 || dbgView == 3) && depth > 0.0 && pass.params.x >= float(RT_MODE_AO) - 0.5) {
+        vec2 duv = (vec2(pix) + 0.5) * pass.sceneExtent.zw;
+        vec3 drel = rtRelFromDepth(duv, depth);
+        Traced dr = findTraced(vec2(pix) + 0.5, drel, geometricNormal(pix, s, depth, drel), length(drel));
+        outMul = vec4(vec3(mix(1.0, dr.ao, dr.weight)), 1.0);
+        return;
+    }
     if ((rtGbufFlags(gb0) & RT_GB_VALID) == 0u || depth <= 0.0) return;  // reversed depth: 0 is the sky
     RtGbuf g = rtGbufUnpack(gb0, texelFetch(uSceneGbuf1, pix, s));
 

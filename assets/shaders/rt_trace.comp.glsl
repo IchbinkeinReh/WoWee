@@ -508,7 +508,14 @@ void main() {
     // The probes' light only from the probes the point can see: the ambient
     // the occlusion scales is the probes' ratio over the flat one
     // (rt_lighting.glsli), so what is lost of it goes with the occlusion.
-    if (mode >= RT_MODE_AO) ao *= rtProbesSeen(p, shadingN, rng);
+    // Debug views 1 and 3 (the probes' ratio and ambient) are drawn before
+    // the trace; the apply pass scales them by what the trace leaves of the
+    // probes' light, so there the occlusion carries that factor alone.
+    if (mode >= RT_MODE_AO) {
+        int view = int(pass.tune2.z + 0.5);
+        float probes = rtProbesSeen(p, shadingN, rng);
+        ao = (view == 1 || view == 3) ? probes : ao * probes;
+    }
 
     // The point lights: their sum, and one of them picked by weighted
     // reservoir sampling in the same pass.
