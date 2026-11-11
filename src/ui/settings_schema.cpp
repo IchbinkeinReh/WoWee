@@ -324,16 +324,6 @@ constexpr SettingDesc kSchema[] = {
      "does: bright close to it, a long soft tail, no edge where its\n"
      "reach ends. Off: full strength out to a set radius, then a short\n"
      "fade to its reach. Not in the original client.", "", 0, "raytracedlighting"},
-    // How far a unit's shadow of a lamp reaches from its body
-    // (rtUnitShadowReach in rt_trace.comp): 5 as it always was.
-    {"rtunitshadowreach", "Unit shadow reach (yards)", SettingKind::Int, 1, 100, 1,
-     "Ray Tracing", "",
-     "How far from a character or creature its shadow of a lamp, a fire\n"
-     "or a glow may fall: the floor beside it, a wall behind it. Short\n"
-     "keeps the shadows close to the body, where its traced pieces hold\n"
-     "it well; long lets them climb a pillar or cross a room, where the\n"
-     "pieces' coarse joints show more. 5 is the reach as it always was.", "", 5,
-     "raytracedlighting"},
     // A floor on what the tracing darkens a surface to (rt_min_brightness.hpp):
     // 0 the tracing as it always was.
     {"rtminbrightness", "Minimum brightness (%)", SettingKind::Int, 0, 50, 1,
@@ -547,6 +537,18 @@ constexpr SettingDesc kSchema[] = {
      "theirs through the shadow map instead.", "", 100},
     {"dbgpointshadow", "Torch and lamp shadows (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "",
      "How much of the shadows the torches and lamps cast shows.", "", 100},
+    // How far a unit's shadow of a lamp reaches from its body
+    // (rtUnitShadowReach in rt_trace.comp): 5 as it always was. Here beside
+    // the traced shadows' other strengths since the Ray Tracing page's two
+    // columns are full (test_settings_panel_layout).
+    {"rtunitshadowreach", "Unit shadow reach (yards)", SettingKind::Int, 1, 100, 1,
+     "Debug Shadows", "",
+     "How far from a character or creature its shadow of a lamp, a fire\n"
+     "or a glow may fall: the floor beside it, a wall behind it. Short\n"
+     "keeps the shadows close to the body, where its traced pieces hold\n"
+     "it well; long lets them climb a pillar or cross a room, where the\n"
+     "pieces' coarse joints show more. 5 is the reach as it always was.", "", 5,
+     "raytracedlighting"},
     {"dbgbakedlampshadow", "Lamp shadows on painted light (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "",
      "How much of an interior's painted light a lamp's shadow takes\n"
      "where that lamp alone lights it.", "", 100},
