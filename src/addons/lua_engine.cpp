@@ -8809,6 +8809,21 @@ static int lua_Minimap_SetCorpsePOIArrowTexture(lua_State* L) {
     return setMinimapArt(L, mma::CorpseArrow, "SetCorpsePOITexture");
 }
 static int lua_Minimap_SetPlayerTexture(lua_State* L) { return setMinimapArt(L, mma::Player, "SetPlayerTexture"); }
+/// Minimap:SetPlayerTextureHeight / Width(n) (0x0057e1c0, 0x0057e280): the
+/// player arrow's size, in interface units.
+static int setMinimapPlayerSize(lua_State* L, bool height, const char* usage) {
+    const auto* w = widgetOf(L, 1);
+    if (!lua_isnumber(L, 2))
+        return luaL_error(L, usage, (w && !w->name.empty()) ? w->name.c_str() : "<unnamed>");
+    (height ? mma::state().playerHeight : mma::state().playerWidth) = static_cast<float>(lua_tonumber(L, 2));
+    return 0;
+}
+static int lua_Minimap_SetPlayerTextureHeight(lua_State* L) {
+    return setMinimapPlayerSize(L, true, "Usage: %s:SetPlayerTextureHeight(height)");
+}
+static int lua_Minimap_SetPlayerTextureWidth(lua_State* L) {
+    return setMinimapPlayerSize(L, false, "Usage: %s:SetPlayerTextureWidth(Width)");
+}
 
 // Frame method: frame:CreateTexture(name, layer) → a real region
 static int lua_Frame_CreateTexture(lua_State* L) {
@@ -10105,6 +10120,8 @@ void LuaEngine::registerCoreAPI() {
         {"SetPOIArrowTexture",       lua_Minimap_SetPOIArrowTexture},
         {"SetCorpsePOIArrowTexture", lua_Minimap_SetCorpsePOIArrowTexture},
         {"SetPlayerTexture",         lua_Minimap_SetPlayerTexture},
+        {"SetPlayerTextureHeight",   lua_Minimap_SetPlayerTextureHeight},
+        {"SetPlayerTextureWidth",    lua_Minimap_SetPlayerTextureWidth},
         {"PingLocation",    lua_Minimap_PingLocation},
         {"GetPingPosition", lua_Minimap_GetPingPosition},
         {"DrawQuestBlob",   lua_QuestBlobFrame_DrawQuestBlob},

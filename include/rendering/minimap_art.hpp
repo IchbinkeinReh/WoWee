@@ -39,6 +39,10 @@ inline constexpr std::array<const char*, kCount> kDefaults = {
 struct State {
     std::array<std::string, kCount> path;
     uint32_t generation = 0;
+    /// Minimap:SetPlayerTextureWidth / Height (0x0057e280, 0x0057e1c0): the
+    /// arrow's size in interface units; 0 for the texture's own.
+    float playerWidth = 0.0f;
+    float playerHeight = 0.0f;
 };
 
 inline State& state() {

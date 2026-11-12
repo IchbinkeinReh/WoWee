@@ -1496,8 +1496,13 @@ void GameScreen::renderMinimapPlayerArrow(const MinimapFrame& frame, uint8_t alp
     const float c = std::cos(angle);
     const float s = std::sin(angle);
     const float unitPx = frame.unitPixels();
-    const float hw = static_cast<float>(art.playerArrowWidth) * 0.5f * unitPx;
-    const float hh = static_cast<float>(art.playerArrowHeight) * 0.5f * unitPx;
+    // The size the interface gave it (SetPlayerTextureWidth / Height), else
+    // the texture's own.
+    const auto& sized = rendering::minimap_art::state();
+    const float hw = (sized.playerWidth > 0.0f ? sized.playerWidth : static_cast<float>(art.playerArrowWidth)) *
+                     0.5f * unitPx;
+    const float hh = (sized.playerHeight > 0.0f ? sized.playerHeight : static_cast<float>(art.playerArrowHeight)) *
+                     0.5f * unitPx;
     // Screen y grows down, so a counter-clockwise turn is (x c + y s, -x s + y c).
     const auto corner = [&](float x, float y) {
         return ImVec2(frame.centerX + x * c + y * s, frame.centerY - x * s + y * c);
