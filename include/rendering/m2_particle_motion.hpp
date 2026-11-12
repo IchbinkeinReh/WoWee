@@ -47,6 +47,17 @@ inline void step(glm::vec3& position, glm::vec3& velocity, float age, float dt,
     }
 }
 
+// The emitter's own frame against its bone's. 0x008309c0 hands every emitter
+// the matrix R * T(position) * bone * model (row vectors), R the fixed
+// quarter turn about Z at 0x00d411e0: rows (0,1,0), (-1,0,0), (0,0,1). What
+// an emitter makes in its own space - the spot on its plane, sphere or
+// spline, the direction it flies off in - is turned by R before the
+// position and the bone take it: the particles' X runs along the bone's Y,
+// their Y along the bone's -X.
+inline glm::vec3 emitterToBone(const glm::vec3& v) {
+    return glm::vec3(-v.y, v.x, v.z);
+}
+
 /// zSource (+0xbc, file track 0xF0), as its setter 0x00978da0 stores it:
 /// anything under a thousandth is zero, and zero means "not used".
 inline float zSourceValue(float v) {

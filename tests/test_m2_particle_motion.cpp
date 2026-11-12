@@ -99,3 +99,14 @@ TEST_CASE("Spline direction: up, turned about the tangent") {
     REQUIRE(std::fabs(side.y) == Approx(1.0f));
     REQUIRE(side.z == Approx(0.0f).margin(1e-5));
 }
+
+TEST_CASE("Emitter frame: the quarter turn about Z of 0x008309c0") {
+    // R's rows (0,1,0), (-1,0,0), (0,0,1): X to Y, Y to -X, Z kept.
+    const glm::vec3 x = emitterToBone(glm::vec3(1, 0, 0));
+    REQUIRE(x.x == Approx(0.0f));
+    REQUIRE(x.y == Approx(1.0f));
+    const glm::vec3 y = emitterToBone(glm::vec3(0, 1, 0));
+    REQUIRE(y.x == Approx(-1.0f));
+    REQUIRE(y.y == Approx(0.0f));
+    REQUIRE(emitterToBone(glm::vec3(0, 0, 2)).z == Approx(2.0f));
+}

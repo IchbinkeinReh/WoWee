@@ -271,6 +271,10 @@ void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt
             if (em.bone < inst.boneMatrices.size()) {
                 boneXform = inst.boneMatrices[em.bone];
             }
+            // Into the bone's space: turned by the emitter's quarter turn,
+            // then set at the emitter's position (0x008309c0).
+            offset = m2_particle::emitterToBone(offset);
+            dir = m2_particle::emitterToBone(dir);
             const glm::vec3 spawnLocal = em.position + offset;
             // Through the bone and the model, scale and all, as the client
             // multiplies it by the emitter's world matrix.
@@ -342,17 +346,19 @@ std::optional<M2Renderer::ParticleMeanPath> M2Renderer::particleMeanPath(const M
     path.toWorld = toWorld;
     path.gravity = track(em.gravity);
     path.drag = em.drag;
-    const glm::vec3 spawnLocal = em.position + launch.offset;
+    // In the bone's space, as emitParticles sets them (0x008309c0's turn).
+    const glm::vec3 launchVelocity = m2_particle::emitterToBone(launch.velocity);
+    const glm::vec3 spawnLocal = em.position + m2_particle::emitterToBone(launch.offset);
     // Flag 0x10 keeps the particles in the bone's space, gravity and all
     // (updateParticles); otherwise they fly in the world from where they
     // were let go.
     path.modelSpace = (em.flags & 0x10) != 0;
     if (path.modelSpace) {
         path.start = spawnLocal;
-        path.velocity = launch.velocity;
+        path.velocity = launchVelocity;
     } else {
         path.start = glm::vec3(toWorld * glm::vec4(spawnLocal, 1.0f));
-        path.velocity = glm::mat3(toWorld) * launch.velocity;
+        path.velocity = glm::mat3(toWorld) * launchVelocity;
     }
     return path;
 }
