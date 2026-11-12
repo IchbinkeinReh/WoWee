@@ -29,6 +29,9 @@ layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec4 aColor;
 layout(location = 2) in float aSize;
 layout(location = 3) in float aTile;
+layout(location = 4) in vec2 aTurn;  // sin, cos of the quad's turn
+layout(location = 5) in vec3 aFlatX; // a flat particle's plane in the world;
+layout(location = 6) in vec3 aFlatY; // zero for one facing the camera
 
 layout(location = 0) out vec4 vColor;
 layout(location = 1) out float vTile;
@@ -61,7 +64,16 @@ void main() {
     const vec2 corner = kCorner[gl_VertexIndex];
     vec4 viewPos4 = view * vec4(aPos, 1.0);
     vCorner = vec2(corner.x * 0.5 + 0.5, 0.5 - corner.y * 0.5);
-    viewPos4.xy += corner * aSize;
+    // Turned in the view by the particle's spin (0x0097be80): each corner
+    // (x, y) to (c x - s y, s x + c y), as the client builds them.
+    const vec2 turned = vec2(aTurn.y * corner.x - aTurn.x * corner.y, aTurn.x * corner.x + aTurn.y * corner.y);
+    if (dot(aFlatX, aFlatX) > 0.0) {
+        // Flat (flag 0x1000): the corners set out along the particle's own
+        // X and Y axes, in the view as the client sets them (0x0097be80).
+        viewPos4.xyz += mat3(view) * ((turned.x * aFlatX + turned.y * aFlatY) * aSize);
+    } else {
+        viewPos4.xy += turned * aSize;
+    }
     vColor = aColor;
     // Lit as the client lights a particle (FUN_0097a390, FUN_0081fe90): a
     // white material whose normal is the view's third row - facing the

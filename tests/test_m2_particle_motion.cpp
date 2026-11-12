@@ -110,3 +110,27 @@ TEST_CASE("Emitter frame: the quarter turn about Z of 0x008309c0") {
     REQUIRE(y.y == Approx(0.0f));
     REQUIRE(emitterToBone(glm::vec3(0, 0, 2)).z == Approx(2.0f));
 }
+
+TEST_CASE("Particle turn: the client's sine and cosine at the quarter turns") {
+    const SinCos z = clientSinCos(0.0f);
+    REQUIRE(z.s == Approx(0.0f).margin(1e-6));
+    REQUIRE(z.c == Approx(1.0f));
+    const SinCos q = clientSinCos(1.5707963f);
+    REQUIRE(q.s == Approx(1.0f).margin(1e-5));
+    REQUIRE(q.c == Approx(0.0f).margin(1e-5));
+    const SinCos h = clientSinCos(3.1415927f);
+    REQUIRE(h.c == Approx(-1.0f).margin(1e-5));
+    const SinCos m = clientSinCos(-1.5707963f);
+    REQUIRE(m.s == Approx(-1.0f).margin(1e-5));
+    // Between, the cubic: at a sixth of a turn 1 - (6 - 4/3) / 9.
+    REQUIRE(clientSinCos(1.0471976f).c == Approx(1.0f - (6.0f - 4.0f / 3.0f) / 9.0f).margin(1e-5));
+}
+
+TEST_CASE("Particle turn: none without a rate or its spread, else start plus age times rate") {
+    bool turns = true;
+    REQUIRE(particleSpinAngle(0.0f, 0.0f, 2.0f, 1.0f, 3.0f, false, turns) == 0.0f);
+    REQUIRE_FALSE(turns);
+    REQUIRE(particleSpinAngle(5.0f, 0.0f, 2.0f, 1.0f, 5.0f, false, turns) == Approx(11.0f));
+    REQUIRE(turns);
+    REQUIRE(particleSpinAngle(0.0f, 0.5f, 2.0f, 1.0f, 0.25f, true, turns) == Approx(-1.5f));
+}

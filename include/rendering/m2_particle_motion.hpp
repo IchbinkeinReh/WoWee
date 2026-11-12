@@ -193,4 +193,36 @@ inline glm::vec3 splineDirection(const glm::vec3& tangent, float angle) {
     return q * glm::vec3(0.0f, 0.0f, 1.0f);
 }
 
+/// The client's sine and cosine for a particle's turn (0x006f7a60): the
+/// angle in half turns, split by 0x005fe800 into a whole count (the
+/// truncation, one less at or below zero) and the rest t, gives
+/// 1 - (6 - 4t) t^2, negated for an odd count; the sine is the cosine a
+/// quarter turn back.
+struct SinCos {
+    float s = 0.0f;
+    float c = 1.0f;
+};
+inline float clientHalfTurnCos(float halfTurns) {
+    int whole = static_cast<int>(halfTurns);
+    if (!(halfTurns > 0.0f)) whole -= 1;
+    const float t = halfTurns - static_cast<float>(whole);
+    const float v = 1.0f - (6.0f - t * 4.0f) * t * t;
+    return (whole & 1) != 0 ? -v : v;
+}
+inline SinCos clientSinCos(float angle) {
+    const float halfTurns = angle * 0.31830987f;
+    return SinCos{clientHalfTurnCos(halfTurns - 0.5f), clientHalfTurnCos(halfTurns)};
+}
+
+/// A particle's turn as 0x0097be80 draws it: none unless the emitter has a
+/// rate or a rate spread (+0xc8, +0xcc); else its start plus its age times
+/// its rate, the whole turned the other way for a particle that drew it.
+inline float particleSpinAngle(float emitterSpin, float emitterSpinVary, float age, float base,
+                               float rate, bool flip, bool& turns) {
+    turns = emitterSpin != 0.0f || emitterSpinVary != 0.0f;
+    if (!turns) return 0.0f;
+    const float angle = age * rate + base;
+    return flip ? -angle : angle;
+}
+
 }  // namespace wowee::rendering::m2_particle
