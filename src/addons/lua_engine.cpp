@@ -9668,6 +9668,7 @@ static int lua_CreateFrame(lua_State* L) {
 LuaEngine::LuaEngine() = default;
 
 LuaEngine::~LuaEngine() {
+    if (gameHandler_) gameHandler_->setAccountDataBridge({});
     shutdown();
 }
 
@@ -9775,6 +9776,21 @@ void LuaEngine::shutdown() {
 
 void LuaEngine::setGameHandler(game::GameHandler* handler) {
     gameHandler_ = handler;
+    // The copies of the settings the realm keeps (account data 0 to 3) are
+    // the CVars and key bindings this state owns.
+    if (handler) {
+        game::GameHandler::AccountDataBridge bridge;
+        bridge.config = [](bool perCharacter) { return accountConfigText(perCharacter); };
+        bridge.applyConfig = [this](bool perCharacter, const std::string& text) {
+            applyAccountConfigText(L_, perCharacter, text);
+        };
+        // One set of bindings here, the account's (GetCurrentBindingSet is 1).
+        bridge.bindings = [](bool perCharacter) { return perCharacter ? std::string() : accountBindingsText(); };
+        bridge.applyBindings = [this](bool perCharacter, const std::string& text) {
+            if (!perCharacter && L_) applyAccountBindingsText(L_, text);
+        };
+        handler->setAccountDataBridge(std::move(bridge));
+    }
     if (L_) {
         lua_pushlightuserdata(L_, handler);
         lua_setfield(L_, LUA_REGISTRYINDEX, "wowee_game_handler");

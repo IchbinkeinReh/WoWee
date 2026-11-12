@@ -79,6 +79,17 @@ void noteClientSettingChanged(const std::string& settingKey, const std::string& 
 /// reason its own file says: a value that survives only a clean exit is not one
 /// a player can rely on, and this client is exited every way there is.
 void setStoredCVar(const std::string& key, const std::string& value);
+
+/// The CVars kept on the realm (config-cache.wtf, account data 0 and 1):
+/// those set here whose registration keeps them with the account, or with
+/// the character, as SET lines - and the same text taken back.
+std::string accountConfigText(bool perCharacter);
+void applyAccountConfigText(lua_State* L, bool perCharacter, const std::string& text);
+
+/// The key bindings kept on the realm (bindings-cache.wtf, account data 2):
+/// a "bind KEY COMMAND" line for each key, and the same text taken back.
+std::string accountBindingsText();
+void applyAccountBindingsText(lua_State* L, const std::string& text);
 void registerActionLuaAPI(lua_State* L);
 
 /// Whether the modifiers a modified click action is bound to are held now

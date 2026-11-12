@@ -3571,8 +3571,14 @@ static int lua_SetBindingClick(lua_State* L) {
 }
 
 // SaveBindings(which) → writes what is bound where, for the next run
+static void writeBindingsFile();
 static int lua_SaveBindings(lua_State* L) {
     if (!taint::allowed(L, 0xd)) return 0;   // 0x005640c0 -> 0x00562b80
+    writeBindingsFile();
+    return 0;
+}
+
+static void writeBindingsFile() {
     const std::string path = bindingsFilePath();
     std::error_code ec;
     std::filesystem::create_directories(
@@ -3580,14 +3586,13 @@ static int lua_SaveBindings(lua_State* L) {
     std::ofstream out(path, std::ios::trunc);
     if (!out) {
         LOG_WARNING("Could not write the key bindings to ", path);
-        return 0;
+        return;
     }
     for (const auto& [command, keys] : bindingKeys()) {
         // Both slots on one line, the second empty when there is no second key,
         // so a command that lost one is recorded as having lost it.
         out << command << "=" << keys[0] << "," << keys[1] << "\n";
     }
-    return 0;
 }
 
 // LoadBindings(which) → what a previous run saved, over the defaults
@@ -3614,6 +3619,47 @@ static int lua_LoadBindings(lua_State* L) {
     }
     if (auto* gh = getGameHandler(L)) gh->fireAddonEvent("UPDATE_BINDINGS", {});
     return 0;
+}
+
+std::string accountBindingsText() {
+    // bindings-cache.wtf: the binding mode, then a bind line for each key.
+    seedBindingDefaults();
+    std::string out = "BINDINGMODE 0\n";
+    for (const auto& [command, keys] : bindingKeys())
+        for (const auto& key : keys)
+            if (!key.empty()) out += "bind " + key + " " + command + "\n";
+    return out;
+}
+
+void applyAccountBindingsText(lua_State* L, const std::string& text) {
+    // The realm's copy replaces the keys here, and is saved as them.
+    std::map<std::string, std::array<std::string, 2>> keys;
+    size_t pos = 0;
+    while (pos < text.size()) {
+        size_t end = text.find('\n', pos);
+        if (end == std::string::npos) end = text.size();
+        std::string line = text.substr(pos, end - pos);
+        pos = end + 1;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.rfind("bind ", 0) != 0) continue;
+        const size_t sp = line.find(' ', 5);
+        if (sp == std::string::npos) continue;
+        const std::string key = line.substr(5, sp - 5);
+        const std::string command = line.substr(sp + 1);
+        if (key.empty() || command.empty()) continue;
+        auto& slot = keys[command];
+        if (slot[0].empty()) slot[0] = key;
+        else if (slot[1].empty()) slot[1] = key;
+    }
+    if (keys.empty()) return;
+    for (const auto& [command, old] : bindingKeys()) {
+        (void)old;
+        if (!keys.count(command)) pushBindingToClient(command, "");
+    }
+    bindingKeys() = std::move(keys);
+    for (const auto& [command, k] : bindingKeys()) pushBindingToClient(command, k[0].empty() ? k[1] : k[0]);
+    writeBindingsFile();
+    if (auto* gh = getGameHandler(L)) gh->fireAddonEvent("UPDATE_BINDINGS", {});
 }
 
 // RunBinding(command, keystate) → runs what bindings.xml says the command does

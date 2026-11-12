@@ -514,6 +514,7 @@ void GameHandler::registerCoreOpcodes() {
     registerHandler(Opcode::SMSG_CLIENTCACHE_VERSION, &GameHandler::handleClientCacheVersion);
     registerHandler(Opcode::SMSG_TUTORIAL_FLAGS, &GameHandler::handleTutorialFlags);
     registerHandler(Opcode::SMSG_ACCOUNT_DATA_TIMES, &GameHandler::handleAccountDataTimes);
+    registerHandler(Opcode::SMSG_UPDATE_ACCOUNT_DATA, &GameHandler::handleUpdateAccountData);
     registerHandler(Opcode::SMSG_MOTD, &GameHandler::handleMotd);
     registerHandler(Opcode::SMSG_NOTIFICATION, &GameHandler::handleNotification);
     registerHandler(Opcode::SMSG_PONG, &GameHandler::handlePong);
@@ -4078,7 +4079,6 @@ void GameHandler::registerRemainingOpcodes() {
         Opcode::SMSG_SPELL_CHANCE_RESIST_PUSHBACK,
         Opcode::SMSG_STOP_DANCE,
         Opcode::SMSG_TEST_DROP_RATE_RESULT,
-        Opcode::SMSG_UPDATE_ACCOUNT_DATA,
         Opcode::SMSG_UPDATE_ACCOUNT_DATA_COMPLETE,
         Opcode::SMSG_UPDATE_INSTANCE_OWNERSHIP,
         Opcode::SMSG_UPDATE_LAST_INSTANCE,

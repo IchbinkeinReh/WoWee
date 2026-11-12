@@ -2420,6 +2420,54 @@ void setStoredCVar(const std::string& key, const std::string& value) {
     saveStoredCVars();
 }
 
+std::string accountConfigText(bool perCharacter) {
+    // config-cache.wtf (AccountData type 0 or 1): a SET line for every CVar
+    // the player has set whose registration keeps it with the account or with
+    // the character.
+    if (!cvarStoreLoaded()) loadStoredCVars();
+    const uint32_t want = perCharacter ? kCVarStoredWithCharacter : kCVarStoredWithAccount;
+    std::vector<const std::pair<const std::string, std::string>*> rows;
+    for (const auto& kv : cvarStore()) {
+        const auto flags = registeredCVarFlags(kv.first);
+        if (flags && (*flags & want) && kv.second.find('\n') == std::string::npos) rows.push_back(&kv);
+    }
+    std::sort(rows.begin(), rows.end(), [](const auto* a, const auto* b) { return a->first < b->first; });
+    std::string out;
+    for (const auto* kv : rows) out += "SET " + kv->first + " \"" + kv->second + "\"\n";
+    return out;
+}
+
+void applyAccountConfigText(lua_State* L, bool perCharacter, const std::string& text) {
+    // What the realm keeps wins over what this computer has, one CVar at a
+    // time, and only for a CVar that belongs in that copy.
+    if (!cvarStoreLoaded()) loadStoredCVars();
+    const uint32_t want = perCharacter ? kCVarStoredWithCharacter : kCVarStoredWithAccount;
+    bool changed = false;
+    size_t pos = 0;
+    while (pos < text.size()) {
+        size_t end = text.find('\n', pos);
+        if (end == std::string::npos) end = text.size();
+        std::string line = text.substr(pos, end - pos);
+        pos = end + 1;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.rfind("SET ", 0) != 0) continue;
+        const size_t sp = line.find(' ', 4);
+        if (sp == std::string::npos) continue;
+        std::string key = line.substr(4, sp - 4);
+        toLowerInPlace(key);
+        std::string value = line.substr(sp + 1);
+        if (value.size() >= 2 && value.front() == '"' && value.back() == '"') value = value.substr(1, value.size() - 2);
+        const auto flags = registeredCVarFlags(key);
+        if (!flags || !(*flags & want)) continue;
+        auto& slot = cvarStore()[key];
+        if (slot == value) continue;
+        slot = value;
+        changed = true;
+        if (L) applyCVarSideEffects(L, key, value);
+    }
+    if (changed) saveStoredCVars();
+}
+
 void noteClientSettingChanged(const std::string& settingKey, const std::string& value) {
     if (g_applyingCVarToSetting) return;
     for (const auto& binding : kClientCVars) {

@@ -784,6 +784,7 @@ void GameHandler::update(float deltaTime) {
     updateNetworking();
     if (!socket) return;  // disconnect() may have been called
     if (state == WorldState::IN_WORLD) updatePredictedPower();
+    tickAccountData(deltaTime);
     // The world state frame's countdowns run on the server's clock, which
     // 0x005488f0 asks for every twenty seconds in the world:
     // CMSG_WORLD_STATE_UI_TIMER_UPDATE (0x00548760), answered with

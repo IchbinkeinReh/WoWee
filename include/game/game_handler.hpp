@@ -4364,6 +4364,25 @@ public:
     /// ReportBug / ReportSuggestion (0x006b22a0): CMSG_BUG, type 0 a bug and
     /// 1 a suggestion, with the client's report in front of the text.
     void sendBugReport(uint32_t type, const std::string& text);
+
+    /// Account data (AccountData.cpp): the eight copies the realm keeps.
+    static constexpr uint32_t kAccountDataTypes = 8;
+    /// What the interface layer gives the sync for the copies it owns: the
+    /// CVars (0, 1), the key bindings (2, 3) and the chat windows (7), each
+    /// as text and taken back from text.
+    struct AccountDataBridge {
+        std::function<std::string(bool perCharacter)> config;
+        std::function<void(bool perCharacter, const std::string&)> applyConfig;
+        std::function<std::string(bool perCharacter)> bindings;
+        std::function<void(bool perCharacter, const std::string&)> applyBindings;
+        std::function<std::string()> chat;
+        std::function<void(const std::string&)> applyChat;
+    };
+    void setAccountDataBridge(AccountDataBridge bridge) { accountDataBridge_ = std::move(bridge); }
+    /// CMSG_READY_FOR_ACCOUNT_DATA_TIMES (0x004de390).
+    void sendReadyForAccountDataTimes();
+    /// Once a second: a copy changed here goes up.
+    void tickAccountData(float dt);
     /// The report 0x006b22a0 writes: the machine, then the realm, account
     /// and character, map, zone, position, target and auras.
     std::string bugReportText() const;
@@ -6059,6 +6078,24 @@ private:
      * Handle SMSG_ACCOUNT_DATA_TIMES from server
      */
     void handleAccountDataTimes(network::Packet& packet);
+    void handleUpdateAccountData(network::Packet& packet);
+    std::string accountDataKey(uint32_t type) const;
+    uint32_t accountDataLocalTime(uint32_t type) const;
+    void setAccountDataLocalTime(uint32_t type, uint32_t time);
+    bool accountDataSynced(uint32_t type) const;
+    std::string accountDataText(uint32_t type) const;
+    void applyAccountDataText(uint32_t type, const std::string& text);
+    std::string accountDataMacros(bool perCharacter) const;
+    void applyAccountDataMacros(bool perCharacter, const std::string& text);
+    void requestAccountData(uint32_t type);
+    void uploadAccountData(uint32_t type);
+    AccountDataBridge accountDataBridge_;
+    uint32_t accountDataClock_ = 0;
+    float accountDataCheckTimer_ = 0.0f;
+    std::array<bool, kAccountDataTypes> accountDataKnown_{};
+    std::array<bool, kAccountDataTypes> accountDataAwaited_{};
+    std::array<std::string, kAccountDataTypes> accountDataLastText_{};
+    std::string accountDataCharacter_;   // whose per-character copies are known
 
     /**
      * Handle SMSG_MOTD from server

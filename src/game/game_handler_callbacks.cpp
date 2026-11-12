@@ -177,7 +177,11 @@ void GameHandler::handleAuthResponse(network::Packet& packet) {
 
     setState(WorldState::READY);
 
-    // Request character list automatically
+    // The account's copies of its settings first (0x004de390), then the
+    // character list.
+    accountDataKnown_.fill(false);
+    accountDataAwaited_.fill(false);
+    sendReadyForAccountDataTimes();
     requestCharacterList();
 
     // Call success callback
@@ -1019,18 +1023,6 @@ void GameHandler::handleTutorialFlags(network::Packet& packet) {
     LOG_INFO("SMSG_TUTORIAL_FLAGS: [",
              flags[0], ", ", flags[1], ", ", flags[2], ", ", flags[3], ", ",
              flags[4], ", ", flags[5], ", ", flags[6], ", ", flags[7], "]");
-}
-
-void GameHandler::handleAccountDataTimes(network::Packet& packet) {
-    LOG_DEBUG("Handling SMSG_ACCOUNT_DATA_TIMES");
-
-    AccountDataTimesData data;
-    if (!AccountDataTimesParser::parse(packet, data)) {
-        LOG_WARNING("Failed to parse SMSG_ACCOUNT_DATA_TIMES");
-        return;
-    }
-
-    LOG_DEBUG("Account data times received (server time: ", data.serverTime, ")");
 }
 
 void GameHandler::handleMotd(network::Packet& packet) {
