@@ -5551,12 +5551,25 @@ static void appendEnchantLines(wowee::ui::Widget* w, game::GameHandler* gh,
     if (!w || !gh || itemGuid == 0) return;
     const auto [permanentId, temporaryId] = gh->getItemEnchantIds(itemGuid);
 
-    // Green, and after the item's own lines, which is where the real client
-    // puts both of them. The permanent one was not shown at all: an enchanted
-    // weapon described its base damage and said nothing about the enchant on
-    // it, in the bags and on the paperdoll alike.
+    // Green, in the enchant walk where the client writes them - the
+    // permanent, then the temporary, before the sockets (0x006277f0) - at
+    // the place the builder marked, else after the item's own lines.
+    const size_t before = w->tooltipLines.size();
     appendEnchantLineById(w, gh, permanentId);
     appendEnchantLineById(w, gh, temporaryId);
+    const int at = w->tooltipEnchantAt;
+    if (at >= 0 && static_cast<size_t>(at) < before) {
+        std::rotate(w->tooltipLines.begin() + at, w->tooltipLines.begin() + static_cast<std::ptrdiff_t>(before),
+                    w->tooltipLines.end());
+    }
+    w->tooltipEnchantAt = -1;
+}
+
+/// __WoweeTooltipMarkEnchantSpot(tooltip): the builder's mark, where the
+/// sockets are about to start.
+int lua_Tooltip_MarkEnchantSpot(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->tooltipEnchantAt = static_cast<int>(w->tooltipLines.size());
+    return 0;
 }
 
 /// The random suffix an instance rolled, on top of a tooltip built from the
@@ -11705,6 +11718,8 @@ void LuaEngine::registerCoreAPI() {
     lua_setglobal(L_, "__WoweeTooltipSetShapeshift");
     lua_pushcfunction(L_, lua_Tooltip_FadeOut);
     lua_setglobal(L_, "__WoweeTooltipFadeOut");
+    lua_pushcfunction(L_, lua_Tooltip_MarkEnchantSpot);
+    lua_setglobal(L_, "__WoweeTooltipMarkEnchantSpot");
     lua_pushcfunction(L_, lua_Tooltip_AdoptFontStrings);
     lua_setglobal(L_, "__WoweeTooltipAdoptFontStrings");
     lua_pushcfunction(L_, lua_Tooltip_SetPossession);
@@ -12715,6 +12730,7 @@ void LuaEngine::registerCoreAPI() {
         // follows it, white or grey on its own (0x0061c0b0). The socket bonus
         // closes the block: green when every socket holds a gem of its
         // colour, grey otherwise and always on a bare template.
+        "        if inst then __WoweeTooltipMarkEnchantSpot(self) end\n"
         "        local gems = inst and inst.gems\n"
         "        local function gemLines(g)\n"
         "            local r, gc, b = 1, 1, 1\n"
