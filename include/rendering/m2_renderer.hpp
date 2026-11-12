@@ -1845,6 +1845,10 @@ private:
     };
     std::optional<ParticleMeanPath> particleMeanPath(const M2Instance& inst, const M2ModelGPU& gpu,
                                                      size_t emitterIndex) const;
+    /// A model's own light into `out`, split along its emitters' particle
+    /// paths with "Point lights per particle light" above one.
+    void pushAlongParticles(const rt_lights::PointLight& light, const M2ModelGPU& model, const M2Instance& inst,
+                            std::vector<rt_lights::PointLight>& out) const;
     /// The client's ribbons on an instance, as 0x00828a00 drives them each
     /// frame: the tracks, the bone's matrix, the update.
     void updateClientRibbons(M2Instance& inst, const M2ModelGPU& gpu, float dt);
