@@ -80,6 +80,13 @@ public:
     [[nodiscard]] const std::vector<uint32_t>* rtDetail() const { return rtDetail_.get(); }
     /// What every texture's rtDetail holds now, in bytes.
     [[nodiscard]] static uint64_t rtDetailBytes();
+    /// Counts every texture whose image, view or own sampler was destroyed.
+    /// A descriptor set written with a texture's view stays good for as long
+    /// as this has not moved since: a cache of sets keyed by view handles
+    /// (CharacterRenderer's material sets) keeps them across frames while it
+    /// holds still, and starts over when it moves - a handle can be reused by
+    /// the next texture created.
+    [[nodiscard]] static uint64_t destroyedSerial();
 
     /// What every uploadBLP so far actually cost, and what the same textures
     /// would have cost decoded.

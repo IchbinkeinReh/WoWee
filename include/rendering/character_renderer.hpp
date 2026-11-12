@@ -1063,6 +1063,10 @@ private:
     std::shared_ptr<std::atomic<uint64_t>> boneDescPoolGeneration_ =
         std::make_shared<std::atomic<uint64_t>>(0);
     uint32_t lastMaterialPoolResetFrame_ = 0xFFFFFFFFu;
+    /// Per frame slot: the sets allocated from its pool since it was last
+    /// reset, and VkTexture::destroyedSerial() at that reset.
+    uint32_t materialSetsAllocated_[2] = {0, 0};
+    uint64_t materialSetsSerial_[2] = {0, 0};
 
     // Material UBO ring buffer - pre-allocated per frame slot, sub-allocated each draw
     VkBuffer materialRingBuffer_[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};

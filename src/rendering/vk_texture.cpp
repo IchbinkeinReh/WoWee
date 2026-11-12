@@ -20,6 +20,12 @@ uint64_t rtDetailSize(const std::unique_ptr<std::vector<uint32_t>>& d) {
 
 uint64_t VkTexture::rtDetailBytes() { return g_rtDetailBytes.load(std::memory_order_relaxed); }
 
+namespace {
+std::atomic<uint64_t> g_destroyedSerial{0};
+} // namespace
+
+uint64_t VkTexture::destroyedSerial() { return g_destroyedSerial.load(std::memory_order_acquire); }
+
 void VkTexture::setRtDetail(std::unique_ptr<std::vector<uint32_t>> detail) {
     g_rtDetailBytes.fetch_sub(rtDetailSize(rtDetail_), std::memory_order_relaxed);
     rtDetail_ = std::move(detail);
@@ -473,6 +479,10 @@ void VkTexture::destroy(VkDevice device, VmaAllocator allocator) {
     // default-constructed texture is destroyed without having been used.
     if (device == VK_NULL_HANDLE) {
         return;
+    }
+    if (image_.image != VK_NULL_HANDLE || image_.imageView != VK_NULL_HANDLE ||
+        (sampler_ != VK_NULL_HANDLE && ownsSampler_)) {
+        g_destroyedSerial.fetch_add(1, std::memory_order_acq_rel);
     }
     if (sampler_ != VK_NULL_HANDLE && ownsSampler_) {
         vkDestroySampler(device, sampler_, nullptr);

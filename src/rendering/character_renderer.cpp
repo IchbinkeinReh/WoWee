@@ -894,6 +894,11 @@ void CharacterRenderer::clear() {
             vkResetDescriptorPool(device, materialDescPool, 0);
         }
     }
+    // The sets kept across frames went with the pools.
+    for (uint32_t slot = 0; slot < 2; ++slot) {
+        materialDescriptorCache_[slot].clear();
+        materialSetsAllocated_[slot] = 0;
+    }
     if (boneDescPool_) {
         if (boneDescPoolGeneration_) boneDescPoolGeneration_->fetch_add(1, std::memory_order_relaxed);
         vkResetDescriptorPool(device, boneDescPool_, 0);
@@ -4256,16 +4261,27 @@ void CharacterRenderer::renderPass(VkCommandBuffer cmd, VkDescriptorSet perFrame
     uint32_t frameIndex = vkCtx_->getCurrentFrame();
     uint32_t frameSlot = frameIndex % 2u;
 
-    // Reset material ring buffer and descriptor pool once per frame slot, by
-    // whichever pass comes first.
+    // Reset the material ring once per frame slot, by whichever pass comes
+    // first. The slot's descriptor sets are kept across frames: a set holds
+    // nothing that changes from frame to frame - three textures and the ring,
+    // the material itself goes in by its dynamic offset - so the same key
+    // gets the same set again. They are handed back only when a texture has
+    // been destroyed since (its view handle can come back as another's), or
+    // when the pool is half used.
     {
         std::lock_guard<std::mutex> materialLock(materialMutex_);
         if (lastMaterialPoolResetFrame_ != frameIndex) {
             materialRingOffset_[frameSlot] = 0;
-            if (materialDescPools_[frameSlot]) {
-                vkResetDescriptorPool(vkCtx_->getDevice(), materialDescPools_[frameSlot], 0);
+            const uint64_t destroyed = VkTexture::destroyedSerial();
+            if (destroyed != materialSetsSerial_[frameSlot] ||
+                materialSetsAllocated_[frameSlot] > MAX_MATERIAL_SETS / 2) {
+                if (materialDescPools_[frameSlot]) {
+                    vkResetDescriptorPool(vkCtx_->getDevice(), materialDescPools_[frameSlot], 0);
+                }
+                materialDescriptorCache_[frameSlot].clear();
+                materialSetsAllocated_[frameSlot] = 0;
+                materialSetsSerial_[frameSlot] = destroyed;
             }
-            materialDescriptorCache_[frameSlot].clear();
             lastMaterialPoolResetFrame_ = frameIndex;
         }
     }
@@ -4327,6 +4343,7 @@ void CharacterRenderer::renderPass(VkCommandBuffer cmd, VkDescriptorSet perFrame
                      .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &secondInfo, .pBufferInfo = nullptr, .pTexelBufferView = nullptr};
         vkUpdateDescriptorSets(vkCtx_->getDevice(), 4, writes, 0, nullptr);
         cache.emplace(key, set);
+        ++materialSetsAllocated_[frameSlot];
         return set;
     };
     // A batch's slot in the material ring and its descriptor set, under the
