@@ -2997,6 +2997,17 @@ int GameHandler::unitReaction(const Entity& asker, const Entity& unit) const {
     return reaction::unitReaction(w, reactionWho(*this, asker), reactionWho(*this, unit));
 }
 
+std::pair<int, int> GameHandler::unitReactionsBothWays(const Entity& a, const Entity& b) const {
+    // The same two answers as two calls of unitReaction: what each side is
+    // (reactionWho) is read off the same objects either way round.
+    ReactionWorld w{*this, factionTemplates_,
+                    combatHandler_ ? &combatHandler_->getForcedReactions() : nullptr, getPlayerGuid(),
+                    socialHandler_ ? socialHandler_->getDuelOpponentGuid() : 0};
+    const reaction::Who whoA = reactionWho(*this, a);
+    const reaction::Who whoB = reactionWho(*this, b);
+    return {reaction::unitReaction(w, whoA, whoB), reaction::unitReaction(w, whoB, whoA)};
+}
+
 int GameHandler::unitReactionToPlayer(const Unit& unit) const {
     // 0x007251c0 asked by the unit about the player.
     if (auto me = getEntityManager().getEntity(getPlayerGuid()); me && !factionTemplates_.empty())

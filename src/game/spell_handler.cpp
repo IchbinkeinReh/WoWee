@@ -1102,8 +1102,7 @@ unit_target::Relations relationsOf(GameHandler& gh, const std::shared_ptr<Entity
         c.unitTeam = entityField(*c2, UF::PLAYER_DUEL_TEAM);
     }
     // 0x007251c0 both ways round.
-    const int reaction = gh.unitReaction(*caster, *unit);
-    const int back = gh.unitReaction(*unit, *caster);
+    const auto [reaction, back] = gh.unitReactionsBothWays(*caster, *unit);
     r.mayAssist = unit_target::mayAssist(cs, us, reaction, false, c);
     r.mayAssistEx6 = unit_target::mayAssist(cs, us, reaction, (attrEx6 & 0x8u) != 0, c);
     r.mayAttack = unit_target::mayAttack(cs, us, reaction, back, c);
