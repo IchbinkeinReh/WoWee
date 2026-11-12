@@ -2892,8 +2892,24 @@ static std::string withNumber(const std::string& format, const char* token, floa
 static std::string formatGlobal(lua_State* L, const std::string& format,
                                 const std::vector<std::string>& args);
 
+/// The interface's UberTooltips choice: "0" makes an action button's spell
+/// tooltip the brief one (0x00631000 reads it).
+static bool uberTooltips(lua_State* L) {
+    lua_getglobal(L, "GetCVar");
+    if (!lua_isfunction(L, -1)) { lua_pop(L, 1); return true; }
+    lua_pushstring(L, "UberTooltips");
+    if (lua_pcall(L, 1, 1, 0) != 0) { lua_pop(L, 1); return true; }
+    const char* v = lua_tostring(L, -1);
+    const bool on = !v || std::strcmp(v, "0") != 0;
+    lua_pop(L, 1);
+    return on;
+}
+
+/// `brief` is 0x006238a0's third argument - SetAction's with UberTooltips
+/// off: the name with its rank, no cost, reach or cast. `showRank` is its
+/// sixth, SetSpellByID's fourth: the rank beside the name in a full one.
 static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh,
-                             uint32_t spellId) {
+                             uint32_t spellId, bool brief = false, bool showRank = false) {
     if (!w || !gh || spellId == 0) return false;
     const std::string& name = gh->getSpellName(spellId);
     if (name.empty()) return false;
@@ -2909,9 +2925,10 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
 
     w->isTooltip = true;
     w->tooltipLines.clear();
-    // The name in white and its rank to the right in grey, as the spellbook
-    // shows them.
-    line(name, gh->getSpellRank(spellId), 1.0f, 1.0f, 1.0f);
+    // The name in white and its rank to the right in grey - only in a brief
+    // tooltip or where the caller asks for it; SetSpell, SetHyperlink and a
+    // full SetAction leave the rank off.
+    line(name, brief || showRank ? gh->getSpellRank(spellId) : std::string(), 1.0f, 1.0f, 1.0f);
     {
         auto& title = w->tooltipLines.back();
         title.rc[0] = title.rc[1] = title.rc[2] = 0.5f;
@@ -2919,7 +2936,7 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
 
     const auto info = gh->getSpellData(spellId);
     std::string cost, range;
-    if (info.manaCost > 0) {
+    if (!brief && info.manaCost > 0) {
         const char* named = game::powerTypeName(info.powerType);
         const char* unit = named ? named : "";
         // Over the power's divisor: rage and runic power are kept in tenths.
@@ -2933,7 +2950,7 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
     // with no cost the enemy's stands left of both, as the client's buffer
     // keeps it, and the friendly numbers go "min-max" by the enemy's minimum.
     // SPELL_RANGE_UNLIMITED from 50000 yards.
-    if (const auto* sh = gh->getSpellHandler()) {
+    if (const auto* sh = gh->getSpellHandler(); sh && !brief) {
         const auto reach = sh->tooltipRange(spellId);
         const auto yards = [](float shownMin, float min, float max) {
             char b[32];
@@ -2995,7 +3012,7 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
             std::any_of(std::begin(sp.effectIds), std::end(sp.effectIds), [](uint32_t e) {
                 return e == 0x35 || e == 0x18 || e == 0x9d || e == 0x3b;
             });
-        if ((sp.attr & 0x40u) == 0 && sp.effectIds[0] != 0x2f && sp.effectIds[0] != 0x4e && !tradeSpell) {
+        if (!brief && (sp.attr & 0x40u) == 0 && sp.effectIds[0] != 0x2f && sp.effectIds[0] != 0x4e && !tradeSpell) {
             std::string cast;
             const int32_t castMs = static_cast<int32_t>(info.castTimeMs);
             if (castMs > 0) {
@@ -3104,7 +3121,7 @@ int lua_Tooltip_SetAction(lua_State* L) {
         return 1;
     }
     if (action.type == game::ActionBarSlot::SPELL) {
-        luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, action.id) ? 1 : 0);
+        luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, action.id, !uberTooltips(L)) ? 1 : 0);
         return 1;
     }
     // A macro is the third kind a slot can hold and it has no tooltip of its
@@ -3575,7 +3592,8 @@ int lua_Tooltip_SetSpellByID(lua_State* L) {
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
     const uint32_t id = static_cast<uint32_t>(luaL_optnumber(L, 2, 0));
-    luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, id) ? 1 : 0);
+    // (id, isPet, showRank); the fifth is the brief form SetAction asks for.
+    luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, id, lua_toboolean(L, 5) != 0, lua_toboolean(L, 4) != 0) ? 1 : 0);
     return 1;
 }
 
@@ -11700,8 +11718,8 @@ void LuaEngine::registerCoreAPI() {
         // thing it added: the id GetSpell answers with.
         "do\n"
         "    local fill = __WoweeTooltipSetSpellByID\n"
-        "    function __WoweeFrameMT:SetSpellByID(spellId)\n"
-        "        local ok = fill(self, spellId)\n"
+        "    function __WoweeFrameMT:SetSpellByID(spellId, isPet, showRank, brief)\n"
+        "        local ok = fill(self, spellId, isPet, showRank, brief)\n"
         "        self.__spellId = ok and spellId or nil\n"
         "        return ok\n"
         "    end\n"
@@ -11715,7 +11733,7 @@ void LuaEngine::registerCoreAPI() {
         "    if not slot then return false end\n"
         "    local actionType, id = GetActionInfo(slot)\n"
         "    if actionType == 'spell' and id and id > 0 then\n"
-        "        self:SetSpellByID(id)\n"
+        "        self:SetSpellByID(id, nil, nil, GetCVar('UberTooltips') == '0')\n"
         "        return self:NumLines() > 0\n"
         "    elseif actionType == 'item' and id and id > 0 then\n"
         "        _WoweePopulateItemTooltip(self, id)\n"
