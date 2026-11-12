@@ -26,6 +26,11 @@ endif()
 # Options
 option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 option(WOWEE_BUILD_TESTS "Build tests" ON)
+# One self-contained wowee.exe for the drop-in (wowee_dropin): the C and C++
+# runtimes, winpthread, SDL3, zlib and OpenSSL linked in, so it imports only
+# the system's DLLs and vulkan-1.dll, the system's Vulkan loader. FFmpeg (the
+# screen recorder) is left out. MinGW only; its own build directory.
+option(WOWEE_STATIC_RUNTIME "Link the runtime and the libraries statically (drop-in executable)" OFF)
 option(WOWEE_ENABLE_ASAN "Enable AddressSanitizer + UBSan (applied to all build configs; pairs well with Debug)" OFF)
 option(WOWEE_ENABLE_TRACY "Enable Tracy profiler instrumentation" OFF)
 # AMD's FidelityFX SDK backends, off by default.
@@ -330,7 +335,15 @@ if(ANDROID OR IOS)
                                     COMPILE_OPTIONS "-Wno-unused-parameter")
     endif()
 else()
-    find_package(SDL3 REQUIRED CONFIG)
+    if(WOWEE_STATIC_RUNTIME)
+        # SDL3Config makes SDL3::SDL3 the shared library when there is one,
+        # unless the target exists already: here it is the static one.
+        add_library(SDL3::SDL3 INTERFACE IMPORTED)
+        find_package(SDL3 REQUIRED CONFIG COMPONENTS SDL3-static)
+        set_property(TARGET SDL3::SDL3 PROPERTY INTERFACE_LINK_LIBRARIES SDL3::SDL3-static)
+    else()
+        find_package(SDL3 REQUIRED CONFIG)
+    endif()
 endif()
 if(IOS)
     # An iOS app loads no code of its own beyond its binary, so there is no
@@ -445,6 +458,10 @@ endif()
 if(CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     set(WOWEE_MACOS_CROSS_COMPILE TRUE)
 endif()
+if(WOWEE_STATIC_RUNTIME)
+    set(OPENSSL_USE_STATIC_LIBS TRUE)
+    set(ZLIB_USE_STATIC_LIBS ON)
+endif()
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
 find_package(ZLIB REQUIRED)
@@ -481,6 +498,26 @@ elseif(FFMPEG_FOUND)
 else()
     set(HAVE_FFMPEG FALSE)
     message(WARNING "FFmpeg not found - video_player will be disabled. Install via vcpkg: ffmpeg:x64-windows")
+endif()
+# The static drop-in build takes FFmpeg only from WOWEE_FFMPEG_ROOT: the
+# install prefix of tools/build-ffmpeg-minimal.sh (an LGPL build with just the
+# recorder's encoders and the movies' decoders). Without it, no FFmpeg.
+set(WOWEE_FFMPEG_ROOT "" CACHE PATH "Prefix of a static minimal FFmpeg (tools/build-ffmpeg-minimal.sh)")
+if(WOWEE_STATIC_RUNTIME)
+    if(WOWEE_FFMPEG_ROOT AND EXISTS "${WOWEE_FFMPEG_ROOT}/lib/libavcodec.a")
+        set(HAVE_FFMPEG TRUE)
+        set(FFMPEG_INCLUDE_DIRS "${WOWEE_FFMPEG_ROOT}/include")
+        set(FFMPEG_LIBRARY_DIRS "")
+        set(FFMPEG_LIBRARIES
+            "${WOWEE_FFMPEG_ROOT}/lib/libavformat.a" "${WOWEE_FFMPEG_ROOT}/lib/libavcodec.a"
+            "${WOWEE_FFMPEG_ROOT}/lib/libswscale.a" "${WOWEE_FFMPEG_ROOT}/lib/libswresample.a"
+            "${WOWEE_FFMPEG_ROOT}/lib/libavutil.a"
+            mfplat mfuuid strmiids ole32 oleaut32 user32 bcrypt)
+        message(STATUS "FFmpeg: the static minimal build in ${WOWEE_FFMPEG_ROOT}")
+    else()
+        set(HAVE_FFMPEG FALSE)
+        message(STATUS "FFmpeg left out of the static drop-in build (no WOWEE_FFMPEG_ROOT)")
+    endif()
 endif()
 
 # Unicorn Engine (x86 emulator for cross-platform Warden module execution)
@@ -1533,6 +1570,15 @@ target_link_libraries(wowee PRIVATE
     ${CMAKE_DL_LIBS}
 )
 
+if(WOWEE_STATIC_RUNTIME AND MINGW)
+    # Every library by its archive, the C++ runtime and winpthread included;
+    # the system's import libraries are archives too, and the Vulkan loader
+    # is named by the path of its import library, so it stays a DLL.
+    target_link_options(wowee PRIVATE -static -static-libgcc -static-libstdc++)
+    if(TARGET OpenSSL::Crypto)
+        set_property(TARGET OpenSSL::Crypto APPEND PROPERTY INTERFACE_LINK_LIBRARIES ws2_32 crypt32 bcrypt)
+    endif()
+endif()
 if(HAVE_FFMPEG)
     target_compile_definitions(wowee PRIVATE HAVE_FFMPEG)
     target_link_libraries(wowee PRIVATE ${FFMPEG_LIBRARIES})
@@ -3052,4 +3098,9 @@ add_custom_target(copy_bundled_addons ALL
             -P ${CMAKE_SOURCE_DIR}/cmake/strip_saved_vars.cmake
     COMMENT "Copying bundled addons")
 add_dependencies(copy_bundled_addons wowee)
+# The drop-in executable carries the bundled addons too: packed after they
+# are copied, not from whatever an earlier build left (or nothing at all).
+if(TARGET wowee_dropin)
+    add_dependencies(wowee_dropin copy_bundled_addons)
+endif()
 
