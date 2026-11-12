@@ -759,6 +759,11 @@ public:
     // Mouseover targeting - set each frame by the nameplate renderer
     void setMouseoverGuid(uint64_t guid) override;
     uint64_t getMouseoverGuid() const override { return mouseoverGuid_; }
+    /// Whether the interface is shown (0x00ac80a8, SetUIVisibility
+    /// 0x00517c20): hidden, the world draws no nameplates, raid icons or
+    /// selection circle, and no mouseover highlight unless unitHighlights.
+    [[nodiscard]] bool isUiVisible() const { return uiVisible_; }
+    void setUiVisible(bool visible) { uiVisible_ = visible; }
 
     // Advanced targeting
     void targetLastTarget();
@@ -6184,7 +6189,8 @@ private:
     uint64_t targetGuid = 0;
     uint64_t focusGuid = 0;              // Focus target
     uint64_t lastTargetGuid = 0;         // Previous target
-    uint64_t mouseoverGuid_ = 0;         // Set each frame by nameplate renderer
+    uint64_t mouseoverGuid_ = 0;         // Committed once a frame (GameScreen::commitMouseover)
+    bool uiVisible_ = true;              // SetUIVisibility (0x00ac80a8)
     std::vector<uint64_t> tabCycleList;
     int tabCycleIndex = -1;
     bool tabCycleStale = true;

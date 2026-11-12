@@ -4146,13 +4146,9 @@ void registerActionLuaAPI(lua_State* L) {
             lua_pushnumber(L, lvl - gray);
             return 1;
         }},
-                // Two latent raises on the escape-key path, bound as no-ops
-                // because doing nothing is the right behaviour rather than a
-                // placeholder for it. SetUIVisibility is reached only from
-                // ToggleGameMenu's first branch, which runs when UIParent is
-                // hidden - out of the way until someone hides the interface,
-                // and then on the only path that brings it back.
-                // ConsoleAddMessage is the sink for FrameXML's debug print:
+                // ConsoleAddMessage is bound as a no-op because doing
+                // nothing is the right behaviour rather than a placeholder
+                // for it. It is the sink for FrameXML's debug print:
                 // ConsolePrint (uiparent.lua:3550) joins its arguments and hands
                 // the result straight over, and in this tree the only thing that
                 // calls ConsolePrint is lfgframe.lua's LFGDebug. The client runs
@@ -4162,7 +4158,12 @@ void registerActionLuaAPI(lua_State* L) {
                 // routine the console's own output goes through as well. There
                 // is no console window drawn here, so there is nothing to add a
                 // line to.
-                {"SetUIVisibility",   [](lua_State* L) -> int { (void)L; return 0; }},
+                // SetUIVisibility(shown) (0x00517c20): what the world draws
+                // with the interface hidden - see GameHandler::isUiVisible.
+                {"SetUIVisibility",   [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) gh->setUiVisible(lua_isnoneornil(L, 1) || lua_toboolean(L, 1) != 0);
+            return 0;
+        }},
                 {"ConsoleAddMessage", [](lua_State* L) -> int { (void)L; return 0; }},
                 // GetCurrentBindingSet() - which set SaveBindings should write.
                 //

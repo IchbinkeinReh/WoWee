@@ -489,7 +489,7 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         // drawn with the depth test off (0x007e5640 sets state 0xd to 0), so
         // no wall hides it.
         const uint8_t mark = gameHandler.getEntityRaidMark(guid);
-        if (mark < game::GameHandler::kRaidMarkCount) {
+        if (mark < game::GameHandler::kRaidMarkCount && gameHandler.isUiVisible()) {
             if (VkDescriptorSet tex = getRaidTargetIcon(mark, assets)) {
                 const float iconPx = std::abs(proj[1][1]) * 0.5f * screenH / sizingW;
                 const int alpha = un::raidIconAlpha(glm::distance(camPos, anchor));
@@ -551,7 +551,9 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         // name (0x00715720).
         const glm::vec3 unitPos = unitPosition(place);
         std::optional<ImVec2> plateAt;
-        if (un::plateShown(facts, plates) &&
+        // None with the interface hidden (0x0072b060 asks 0x00ac80a8); the
+        // name over the head stands in for it then.
+        if (gameHandler.isUiVisible() && un::plateShown(facts, plates) &&
             rendering::unit_name_anchor::plateInRange(playerRenderPos, unitPos)) {
             const glm::vec3 p = namePoint(place) +
                                 glm::vec3(0.0f, 0.0f, rendering::unit_name_anchor::kPlateLift);

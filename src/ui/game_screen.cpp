@@ -946,7 +946,8 @@ void GameScreen::render(game::GameHandler& gameHandler) {
                                     target->getType() == game::ObjectType::PLAYER;
                 // Its place is asked by the renderer as it lays the circle
                 // down (Renderer::setSelectionCircleTarget).
-                if (isUnit && target->getGuid() != gameHandler.getPlayerGuid()) {
+                // Not with the interface hidden (0x00725980 asks 0x00ac80a8).
+                if (isUnit && gameHandler.isUiVisible() && target->getGuid() != gameHandler.getPlayerGuid()) {
                     const auto& unit = static_cast<const game::Unit&>(*target);
                     renderer->setSelectionCircleTarget(target->getGuid(), targetCircleColor(gameHandler, unit));
                 } else {
@@ -2084,7 +2085,7 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
     // The game object highlight follows the mouseover (0x0051f790 calls
     // 0x00743c70 on the new one, 0x00743bc0 on the old) when the interface is
     // shown (0x00ac80a8, SetUIVisibility, 0x00517c20) or the unitHighlights
-    // cvar is set. The interface is always shown here, so always.
+    // cvar is set.
     uint64_t highlightGuid = 0;
     // A spell waiting for a place (0x004f66c0, each frame the pointer is
     // over the world): the ground under the pointer, the circle there in the
@@ -2203,8 +2204,10 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
     {
         auto entity = highlightGuid ? gameHandler.getEntityManager().getEntity(highlightGuid)
                                     : nullptr;
+        const bool highlights =
+            gameHandler.isUiVisible() || addons::storedCVarValue("unitHighlights", "1") != "0";
         core::Application::getInstance().setHighlightedGameObject(
-            entity && entity->getType() == game::ObjectType::GAMEOBJECT ? highlightGuid : 0);
+            highlights && entity && entity->getType() == game::ObjectType::GAMEOBJECT ? highlightGuid : 0);
     }
 
     // Left-click targeting: only on mouse-up if the mouse didn't drag (camera rotate)
