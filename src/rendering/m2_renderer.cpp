@@ -1120,6 +1120,7 @@ void M2Renderer::markModelAsSpellEffect(uint32_t modelId) {
     auto it = models.find(modelId);
     if (it != models.end()) {
         it->second.isSpellEffect = true;
+        it->second.isSpellKit = true;
         // Spell effects MUST have bone animation for ribbons/particles to work.
         if (it->second.disableAnimation && it->second.hasAnimation) {
             it->second.disableAnimation = false;
