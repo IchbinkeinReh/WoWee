@@ -884,3 +884,28 @@ TEST_CASE("Entity runs a linear spline straight and at one speed", "[entity]") {
     REQUIRE(e.getX() == Catch::Approx(10.0f).margin(0.001f));
     REQUIRE(e.getY() == Catch::Approx(1.0f).margin(0.01f));
 }
+
+TEST_CASE("Entity flies a curved spline from where it is drawn, by curve length", "[entity]") {
+    // FUN_0073c8e0's 0x42000 branch: the curve starts at the unit, not at the
+    // packet's start, and goes on through the packet's later points. Time
+    // goes by each segment's curve length (FUN_004c3b10, FUN_004c3bd0).
+    Entity e;
+    e.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    // The packet's start is 60 yards off; the points after it lead on east.
+    const std::vector<std::array<float, 3>> path = {
+        {{60.0f, 40.0f, 0.0f}}, {{10.0f, 0.0f, 0.0f}}, {{20.0f, 0.0f, 0.0f}}, {{30.0f, 0.0f, 0.0f}}};
+    e.startMoveAlongPath(path, 0.0f, 3.0f, /*smooth=*/true, /*clientCurve=*/true);
+    float lastX = 0.0f;
+    for (int i = 1; i <= 29; ++i) {
+        e.updateMovement(0.1f);
+        // Never toward the packet's start: on the line, always on east.
+        REQUIRE(e.getY() == Catch::Approx(0.0f).margin(0.001f));
+        REQUIRE(e.getX() > lastX);
+        // Each segment is ten yards of curve, a second each; the middle one,
+        // between evenly spaced points, at one speed.
+        if (i > 10 && i <= 20) REQUIRE(e.getX() - lastX == Catch::Approx(1.0f).margin(0.02f));
+        if (i == 10) REQUIRE(e.getX() == Catch::Approx(10.0f).margin(0.05f));
+        if (i == 20) REQUIRE(e.getX() == Catch::Approx(20.0f).margin(0.05f));
+        lastX = e.getX();
+    }
+}

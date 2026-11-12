@@ -2220,7 +2220,8 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
             // point. The pre-WotLK flags keep the curve.
             const bool smooth = !wotlkSplineFlags ||
                 (data.splineFlags & (SplineFlagWotlk::FLYING | SplineFlagWotlk::CATMULLROM)) != 0;
-            entity->startMoveAlongPath(path, orientation, data.duration / 1000.0f, smooth);
+            entity->startMoveAlongPath(path, orientation, data.duration / 1000.0f, smooth,
+                                       /*clientCurve=*/wotlkSplineFlags && smooth);
         } else {
             entity->startMoveTo(destCanonical.x, destCanonical.y, destCanonical.z,
                                 orientation, data.duration / 1000.0f);
