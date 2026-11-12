@@ -1481,6 +1481,7 @@ void SpellHandler::castPetSpell(uint64_t caster, uint32_t spellId, uint64_t targ
         }
     }
     cancelGroundTargeting();  // 0x00809a60
+    playCastActivateSound(spellId, 0);
     if (armGroundTarget(spellId, caster)) return;
     castAtUnits(spellId, caster, targetGuid);
 }
@@ -1914,6 +1915,7 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     // 0x00739650's rules.
     cancelGroundTargeting();
     if (!castChecksPass(spellId, targetGuid)) return;
+    playCastActivateSound(spellId, 0);
 
     // A spell that wants a place on the ground waits for it (0x0080c790).
     if (armGroundTarget(spellId, 0)) return;
@@ -1966,6 +1968,24 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     castAtUnits(spellId, owner_.getPlayerGuid(), targetGuid);
 }
 
+void SpellHandler::playCastActivateSound(uint32_t spellId, uint64_t itemGuid) {
+    // 0x0080cce0, once the cast is past its checks: an item's own use sound
+    // (its ItemGroupSounds' third, 0x004d0020(2)), else GAMEABILITYACTIVATE
+    // for an ability (Attributes 0x10) and GAMESPELLACTIVATE for the rest.
+    auto* ac = owner_.services().audioCoordinator;
+    auto* sfx = ac ? ac->getUiSoundManager() : nullptr;
+    if (!sfx) return;
+    if (itemGuid != 0) {
+        const uint32_t entry = owner_.getItemEntryByGuid(itemGuid);
+        const auto* info = entry != 0 ? owner_.getItemInfo(entry) : nullptr;
+        if (info && info->valid) sfx->playItemSound(info->displayInfoId, 2);
+        return;
+    }
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    const uint32_t attr = it != owner_.spellNameCacheRef().end() ? it->second.attr : 0u;
+    sfx->playByName((attr & 0x10u) != 0 ? "GAMEABILITYACTIVATE" : "GAMESPELLACTIVATE");
+}
+
 bool SpellHandler::castAtGameObject(uint32_t spellId, uint64_t gameObjectGuid, uint64_t itemGuid,
                                     uint8_t bag, uint8_t slot) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return false;
@@ -1986,6 +2006,7 @@ bool SpellHandler::castAtGameObject(uint32_t spellId, uint64_t gameObjectGuid, u
     if (restorationActive_) cancelCast();
     cancelGroundTargeting();
     if (!castChecksPass(spellId, 0)) return false;
+    playCastActivateSound(spellId, itemGuid);
     if (itemGuid != 0) {
         owner_.getSocket()->send(UseItemPacket::build(bag, slot, itemGuid, spellId, 0, 0, gameObjectGuid));
     } else {

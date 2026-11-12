@@ -855,6 +855,8 @@ private:
     /// held to the reach (0x00809610), then 0x00739650. False, said, where
     /// the cast is refused.
     bool castChecksPass(uint32_t spellId, uint64_t targetGuid);
+    /// The sound of a cast that passed its checks (0x0080cce0).
+    void playCastActivateSound(uint32_t spellId, uint64_t itemGuid);
     /// What 0x00739650 asks of the player for the spell (cast_check::Caster).
     cast_check::Caster casterState(uint32_t spellId, const Entity& player);
     /// 0x008012f0: the spell's power cost to the player.
