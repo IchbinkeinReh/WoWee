@@ -1456,6 +1456,17 @@ private:
         float scale = 1.0f;
     };
     std::deque<PendingGameObjectSpawn> pendingGameObjectSpawns_;
+    /// DUNGEON_DIFFICULTY objects (type 31) by difficulty (0x00710a50): every
+    /// spawn as it was asked for, so one hidden can be spawned again; the
+    /// hidden ones, held back; the difficulty key last applied.
+    std::unordered_map<uint64_t, PendingGameObjectSpawn> gameObjectSpawnRecords_;
+    std::unordered_map<uint64_t, PendingGameObjectSpawn> difficultyHeldGameObjects_;
+    uint64_t difficultyObjectsKey_ = ~0ull;
+    bool difficultyObjectsDirty_ = true;
+    /// False for a type-31 object hidden at the difficulty in force; true for
+    /// anything else, or while its template is not known.
+    bool gameObjectShownByDifficulty(uint32_t entry) const;
+    void updateDifficultyGameObjects();
     void processGameObjectSpawnQueue();
 
     // --- Async WMO loading for game objects ---

@@ -5327,6 +5327,33 @@ int GameHandler::currentMapInstanceType() const {
     return it != mapInstanceTypeCache_.end() ? static_cast<int>(it->second) : -1;
 }
 
+bool GameHandler::difficultyObjectShown(uint32_t mapId, uint32_t difficulty) const {
+    loadMapNameCache();
+    difficulty_change::DifficultyObjectInputs in;
+    in.mapInstanceType = mapInstanceType(mapId);
+    if (auto it = mapFlagsCache_.find(mapId); it != mapFlagsCache_.end()) {
+        in.mapDynamic = (it->second & difficulty_change::kMapFlagDynamicDifficulty) != 0;
+    }
+    in.dungeonDifficulty = getDungeonDifficulty().first;
+    in.raidDifficulty = getRaidDifficulty().first;
+    in.raidSpellDifficulty = raidDifficultyInForce();
+    if (in.mapInstanceType == 2 && !in.mapDynamic && in.raidDifficulty >= 2 &&
+        in.raidDifficulty - 2 == difficulty) {
+        auto* am = services().assetManager;
+        if (am && am->isInitialized()) {
+            in.heroicRowExists = mapDifficultyRow(am->loadDBC("MapDifficulty.dbc"), mapId, in.raidDifficulty) >= 0;
+        }
+    }
+    return difficulty_change::difficultyObjectShown(difficulty, in);
+}
+
+uint64_t GameHandler::difficultyObjectsKey() const {
+    const uint64_t d = getDungeonDifficulty().first & 0xFF;
+    const uint64_t r = getRaidDifficulty().first & 0xFF;
+    const uint64_t s = raidDifficultyInForce() & 0xFF;
+    return d | (r << 8) | (s << 16) | (static_cast<uint64_t>(currentMapId_) << 24);
+}
+
 bool GameHandler::isDynamicDifficultyMap() const {
     loadMapNameCache();
     auto it = mapFlagsCache_.find(currentMapId_);

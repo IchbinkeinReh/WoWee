@@ -1045,7 +1045,44 @@ void EntitySpawner::processAsyncGameObjectM2Results() {
     }
 }
 
+bool EntitySpawner::gameObjectShownByDifficulty(uint32_t entry) const {
+    if (!gameHandler_) return true;
+    const auto* info = gameHandler_->getCachedGameObjectInfo(entry);
+    if (!info || !info->hasData || info->type != 31) return true;
+    return gameHandler_->difficultyObjectShown(info->data[0], info->data[1]);
+}
+
+void EntitySpawner::updateDifficultyGameObjects() {
+    if (!gameHandler_) return;
+    const uint64_t key = gameHandler_->difficultyObjectsKey();
+    if (key == difficultyObjectsKey_ && !difficultyObjectsDirty_) return;
+    difficultyObjectsKey_ = key;
+    difficultyObjectsDirty_ = false;
+    // Shown now: back into the queue.
+    for (auto it = difficultyHeldGameObjects_.begin(); it != difficultyHeldGameObjects_.end();) {
+        if (gameObjectShownByDifficulty(it->second.entry)) {
+            pendingGameObjectSpawns_.push_back(it->second);
+            it = difficultyHeldGameObjects_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    // Hidden now: the model goes, the record stays.
+    std::vector<uint64_t> hide;
+    for (const auto& [guid, rec] : gameObjectSpawnRecords_) {
+        if (gameObjectInstances_.count(guid) && !gameObjectShownByDifficulty(rec.entry)) hide.push_back(guid);
+    }
+    for (uint64_t guid : hide) {
+        const PendingGameObjectSpawn rec = gameObjectSpawnRecords_[guid];
+        despawnGameObject(guid);
+        difficultyHeldGameObjects_[guid] = rec;
+        gameObjectSpawnRecords_[guid] = rec;
+        LOG_INFO("GO ", guid, " (entry ", rec.entry, ") hidden at this difficulty");
+    }
+}
+
 void EntitySpawner::processGameObjectSpawnQueue() {
+    updateDifficultyGameObjects();
     // Finalize any completed async WMO loads first
     processAsyncGameObjectResults();
     // And the M2s prepared on workers.
@@ -1079,6 +1116,13 @@ void EntitySpawner::processGameObjectSpawnQueue() {
         if (elapsedMs >= kBudgetMs) break;
 
         auto& s = pendingGameObjectSpawns_.front();
+        gameObjectSpawnRecords_[s.guid] = s;
+        // A DUNGEON_DIFFICULTY object for another difficulty: held back.
+        if (!gameObjectShownByDifficulty(s.entry)) {
+            difficultyHeldGameObjects_[s.guid] = s;
+            pendingGameObjectSpawns_.pop_front();
+            continue;
+        }
 
         // Check if this is an uncached WMO that needs async loading
         std::string modelPath;
@@ -2745,6 +2789,8 @@ void EntitySpawner::updateGameObjectDestroyPending() {
 }
 
 void EntitySpawner::onGameObjectInfoReceived(uint32_t entry) {
+    // A template arriving can make a spawned type-31 object one to hide.
+    difficultyObjectsDirty_ = true;
     // The client animates game objects by their state (see
     // applyGameObjectState) and, as the interaction object, by their type
     // (applyGameObjectInteraction, which asks for the template then); the
@@ -2772,6 +2818,10 @@ void EntitySpawner::onGameObjectInfoReceived(uint32_t entry) {
 }
 
 void EntitySpawner::despawnGameObject(uint64_t guid, const char* serverRemovalReason) {
+    if (serverRemovalReason) {
+        gameObjectSpawnRecords_.erase(guid);
+        difficultyHeldGameObjects_.erase(guid);
+    }
     gameObjectPendingCustomAnim_.erase(guid);
     gameObjectDestroyPending_.erase(guid);
     pendingTransportDoodadBatches_.erase(

@@ -2632,6 +2632,13 @@ public:
     /// The current map can switch between normal and heroic (Map.dbc Flags
     /// 0x100; GetInstanceInfo's isDynamicInstance, 0x0051a8c0).
     bool isDynamicDifficultyMap() const;
+    /// Whether a DUNGEON_DIFFICULTY game object (type 31) for map `mapId` and
+    /// difficulty `difficulty` (its template's data0/data1) is shown now
+    /// (0x00710a50; difficulty_change::difficultyObjectShown).
+    bool difficultyObjectShown(uint32_t mapId, uint32_t difficulty) const;
+    /// What difficultyObjectShown depends on that changes during play, as one
+    /// number: a change means the shown ones must be asked again.
+    uint64_t difficultyObjectsKey() const;
     /// 0x0052cbc0: the player leads a raid group on such a map.
     bool canChangePlayerDifficulty() const;
     /// 0xbd1984: a difficulty change's cooldown still runs.

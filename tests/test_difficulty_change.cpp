@@ -141,3 +141,45 @@ TEST_CASE("a raid difficulty change is worded by the map it is said on", "[diffi
     CHECK(dc::raidChangeWords(false, 1) == dc::RaidChangeWords::RaidDifficulty);
     CHECK(dc::raidChangeWords(false, 0) == dc::RaidChangeWords::RaidDifficulty);
 }
+
+TEST_CASE("A DUNGEON_DIFFICULTY object is shown only at its difficulty (0x00710a50)", "[difficulty]") {
+    using wowee::game::difficulty_change::DifficultyObjectInputs;
+    using wowee::game::difficulty_change::difficultyObjectShown;
+    // Utgarde Keep (map 574, a dungeon): the heroic skull, data1 = 1.
+    DifficultyObjectInputs uk;
+    uk.mapInstanceType = 1;
+    uk.dungeonDifficulty = 0;
+    CHECK_FALSE(difficultyObjectShown(1, uk));
+    CHECK(difficultyObjectShown(0, uk));
+    uk.dungeonDifficulty = 1;
+    CHECK(difficultyObjectShown(1, uk));
+    CHECK_FALSE(difficultyObjectShown(0, uk));
+    // The raid difficulty does not count for a dungeon's objects.
+    uk.dungeonDifficulty = 0;
+    uk.raidDifficulty = 1;
+    CHECK_FALSE(difficultyObjectShown(1, uk));
+
+    // A raid: the raid difficulty in force.
+    DifficultyObjectInputs raid;
+    raid.mapInstanceType = 2;
+    raid.raidDifficulty = 1;
+    CHECK(difficultyObjectShown(1, raid));
+    CHECK_FALSE(difficultyObjectShown(0, raid));
+    // Heroic 10 (2): its normal-size objects (0) stand in only where the map
+    // has no heroic MapDifficulty row.
+    raid.raidDifficulty = 2;
+    raid.heroicRowExists = true;
+    CHECK_FALSE(difficultyObjectShown(0, raid));
+    raid.heroicRowExists = false;
+    CHECK(difficultyObjectShown(0, raid));
+    CHECK(difficultyObjectShown(2, raid));
+    CHECK_FALSE(difficultyObjectShown(1, raid));
+    // A raid that switches in place (flags 0x100): the spells' difficulty.
+    DifficultyObjectInputs icc;
+    icc.mapInstanceType = 2;
+    icc.mapDynamic = true;
+    icc.raidDifficulty = 0;
+    icc.raidSpellDifficulty = 2;
+    CHECK(difficultyObjectShown(2, icc));
+    CHECK_FALSE(difficultyObjectShown(0, icc));
+}

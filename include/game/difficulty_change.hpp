@@ -94,6 +94,39 @@ inline bool applyDungeonDifficulty(DungeonDifficulty& d, uint32_t difficulty, bo
     return d.effective(inParty) != before;
 }
 
+/// Whether a DUNGEON_DIFFICULTY game object (type 31: data0 = map, data1 =
+/// difficulty, 0x00746190's fields 0x57/0x58) is shown, as its own class
+/// decides (0x00710a50, vtable 0x00a34420 of GameObject_C.cpp line 0x1155;
+/// 0x0077f2f0 hides the model otherwise):
+/// - for a raid map (Map.dbc InstanceType 2) that switches difficulty in
+///   place (Map flags 0x100): when data1 is the raid difficulty spells use
+///   (0x00519680);
+/// - for another raid map: when data1 is the raid difficulty in force
+///   (0x00513900), or when that is a heroic one (2 or 3), data1 is its normal
+///   size (difficulty - 2) and the map has no MapDifficulty.dbc row for the
+///   heroic one (0x00634950);
+/// - anywhere else (a dungeon, the open world): when data1 is the dungeon
+///   difficulty in force (0x005138d0).
+/// So Utgarde Keep's heroic skull (data1 1) is hidden at normal difficulty.
+struct DifficultyObjectInputs {
+    int mapInstanceType = -1;      ///< Map.dbc InstanceType of data0, -1 unknown
+    bool mapDynamic = false;       ///< Map.dbc flags 0x100 of data0
+    uint32_t dungeonDifficulty = 0;   ///< in force, from 0
+    uint32_t raidDifficulty = 0;      ///< in force, from 0 (0x00513900)
+    uint32_t raidSpellDifficulty = 0; ///< 0x00519680
+    bool heroicRowExists = false;  ///< MapDifficulty.dbc has (data0, raidDifficulty)
+};
+
+inline bool difficultyObjectShown(uint32_t objectDifficulty, const DifficultyObjectInputs& in) {
+    if (in.mapInstanceType == 2) {
+        if (in.mapDynamic) return objectDifficulty == in.raidSpellDifficulty;
+        if (objectDifficulty == in.raidDifficulty) return true;
+        if (in.raidDifficulty >= 2 && in.raidDifficulty - 2 == objectDifficulty) return !in.heroicRowExists;
+        return false;
+    }
+    return objectDifficulty == in.dungeonDifficulty;
+}
+
 /// The minimap's difficulty flag as MiniMapInstanceDifficulty_OnEvent draws
 /// it from GetInstanceInfo (Minimap.lua): shown in a dungeon or a raid that is
 /// not a normal five, heroic for a dungeon's difficulty 2, a dynamic raid the
