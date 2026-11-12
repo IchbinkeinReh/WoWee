@@ -4558,6 +4558,54 @@ int lua_Tooltip_SetUnit(lua_State* L) {
         addLine(text, 1.0f, 1.0f, 1.0f);
     }
 
+    // After the level line (0x00621070): the creature's faction by name where
+    // the player has a reputation with it - the first of Faction.dbc's four
+    // race/class entries the player fits, unless that entry is hidden (flag
+    // 0x4), for a creature without type flag 0x10; PVP_ENABLED for a unit
+    // flagged for it (UNIT_FIELD_BYTES_2 byte 1 0x1, a player's PLAYER_FLAGS
+    // 0x100); RESURRECTABLE in green on a dead player the player may help
+    // (0x007293d0); PVP_RANK_LEADER on a flagged racial leader (0x0071b680).
+    if (const auto u = std::dynamic_pointer_cast<game::Unit>(entity); u && player) {
+        const auto f = [&](const game::Entity& e, game::UF uf) {
+            const uint16_t i = game::fieldIndex(uf);
+            return i != 0xFFFF ? e.getField(i) : 0u;
+        };
+        const game::CreatureQueryResponseData* cr = nullptr;
+        if (!isPlayer) {
+            const auto& cache = gh->getCreatureInfoCache();
+            if (const auto it = cache.find(u->getEntry()); it != cache.end()) cr = &it->second;
+        }
+        auto* am = gh->services().assetManager;
+        if ((!cr || (cr->typeFlags & 0x10u) == 0) && am && am->isInitialized()) {
+            auto templates = am->loadDBCOptional("FactionTemplate.dbc");
+            auto factions = am->loadDBCOptional("Faction.dbc");
+            const int32_t tr = templates && templates->isLoaded()
+                ? templates->findRecordById(f(*u, game::UF::UNIT_FIELD_FACTIONTEMPLATE)) : -1;
+            const int32_t fr = tr >= 0 && factions && factions->isLoaded() && factions->getFieldCount() > 23
+                ? factions->findRecordById(templates->getUInt32(static_cast<uint32_t>(tr), 1)) : -1;
+            if (fr >= 0 && static_cast<int32_t>(factions->getUInt32(static_cast<uint32_t>(fr), 1)) >= 0) {
+                const uint32_t b0 = f(*player, game::UF::UNIT_FIELD_BYTES_0);
+                const uint32_t raceBit = 1u << (((b0 & 0xFFu) - 1u) & 31u);
+                const uint32_t classBit = 1u << ((((b0 >> 8) & 0xFFu) - 1u) & 31u);
+                for (uint32_t k = 0; k < 4; ++k) {
+                    const uint32_t races = factions->getUInt32(static_cast<uint32_t>(fr), 2 + k);
+                    const uint32_t classes = factions->getUInt32(static_cast<uint32_t>(fr), 6 + k);
+                    const uint32_t fits = races == 0 ? classes : races & raceBit;
+                    if (fits == 0 || (classes != 0 && (classes & classBit) == 0)) continue;
+                    if ((factions->getUInt32(static_cast<uint32_t>(fr), 14 + k) & 0x4u) == 0)
+                        addLine(factions->getString(static_cast<uint32_t>(fr), 23), 1.0f, 1.0f, 1.0f);
+                    break;
+                }
+            }
+        }
+        const bool pvpFlag = ((f(*u, game::UF::UNIT_FIELD_BYTES_2) >> 8) & 0x1u) != 0;
+        if ((isPlayer && (f(*u, game::UF::PLAYER_FLAGS) & 0x100u) != 0) || pvpFlag)
+            addLine(globalOr(L, "PVP_ENABLED", "PvP"), 1.0f, 1.0f, 1.0f);
+        if (isPlayer && u->getHealth() == 0 && gh->unitMayAssist(gh->getPlayerGuid(), guid))
+            addLine(globalOr(L, "RESURRECTABLE", "Resurrectable"), 0.0f, 1.0f, 0.0f);
+        if (pvpFlag && cr && cr->racialLeader) addLine(globalOr(L, "PVP_RANK_LEADER", "Leader"), 1.0f, 1.0f, 1.0f);
+    }
+
     // A corpse's looters, as SMSG_LOOT_LIST left them on the unit: "Master
     // Looter: name" and "Loot: name" (0x00621070, MASTER_LOOTER and LOOT) on
     // a unit with no health or flagged dead. A name not yet known is asked

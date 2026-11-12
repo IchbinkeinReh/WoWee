@@ -2002,6 +2002,12 @@ struct CreatureQueryResponseData {
     uint32_t family = 0;
     uint32_t rank = 0;         // 0=Normal, 1=Elite, 2=Rare Elite, 3=Boss, 4=Rare
     uint32_t displayId[4] = {};  // Up to 4 random display models (0 = unused)
+    /// The kill credits (+0x1c) and quest items (+0x40) the unit tooltip's
+    /// quest lines look for; RacialLeader (+0x3c), the tooltip's
+    /// PVP_RANK_LEADER (0x0071b680).
+    uint32_t killCredit[2] = {};
+    bool racialLeader = false;
+    uint32_t questItems[6] = {};
 
     [[nodiscard]] bool isValid() const { return entry != 0 && !name.empty(); }
 };

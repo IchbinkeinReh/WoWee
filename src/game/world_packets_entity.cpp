@@ -183,14 +183,21 @@ bool CreatureQueryResponseParser::parse(network::Packet& packet, CreatureQueryRe
         return true;
     }
 
-    packet.readUInt32();  // killCredit[0]
-    packet.readUInt32();  // killCredit[1]
+    data.killCredit[0] = packet.readUInt32();
+    data.killCredit[1] = packet.readUInt32();
     data.displayId[0] = packet.readUInt32();
     data.displayId[1] = packet.readUInt32();
     data.displayId[2] = packet.readUInt32();
     data.displayId[3] = packet.readUInt32();
 
-    // Skip remaining fields (healthMultiplier, powerMultiplier, racialLeader, questItems, movementId)
+    // healthMultiplier, powerMultiplier, racialLeader (byte), questItems[6];
+    // movementId after them goes unread.
+    if (packet.hasRemaining(4 + 4 + 1 + 6 * 4)) {
+        packet.readFloat();
+        packet.readFloat();
+        data.racialLeader = packet.readUInt8() != 0;
+        for (uint32_t& q : data.questItems) q = packet.readUInt32();
+    }
 
     LOG_DEBUG("Creature query response: ", data.name, " (type=", data.creatureType,
              " rank=", data.rank, " displayIds=[", data.displayId[0], ",",
