@@ -2486,6 +2486,13 @@ void Application::run() {
             // passed by.
             if (event.type == SDL_EVENT_KEY_UP && addonManager_ && addonsLoaded_) {
                 if (auto* engine = addonManager_->getLuaEngine()) {
+                    // A frame listening for keys has the release too, as it
+                    // had the press: its OnKeyUp, and no binding. The movie
+                    // frame acts on the release (MovieFrame_OnKeyUp: Escape
+                    // closes it, Space and Enter stop the movie), and with
+                    // only presses reaching frames the movie could not be
+                    // skipped.
+                    if (!engine->editBoxHasFocus() && engine->dispatchFrameKey(event.key.key, false)) continue;
                     (void)engine->dispatchBindingKey(event.key.key, false, false, false,
                                                      false, false);
                 }
@@ -2544,6 +2551,17 @@ void Application::run() {
                     // keys and every binding carry on exactly as before.
                     if (auto* engine = addonManager_->getLuaEngine()) {
                         if (engine->dispatchFrameKey(event.key.key, true)) {
+                            // Taken, so not also acted on by the ImGui side
+                            // of the chain (GameScreen reads the same press):
+                            // the movie frame's Escape went on to toggle the
+                            // game menu, which shows UIParent again under it.
+                            switch (event.key.key) {
+                                case SDLK_ESCAPE: ui::noteInterfaceConsumedKey(ImGuiKey_Escape); break;
+                                case SDLK_RETURN:
+                                case SDLK_KP_ENTER: ui::noteInterfaceConsumedKey(ImGuiKey_Enter); break;
+                                case SDLK_TAB: ui::noteInterfaceConsumedKey(ImGuiKey_Tab); break;
+                                default: break;
+                            }
                             // Escape says so, because "Escape does nothing"
                             // is a live report and this is one of the three
                             // ways the press can end before the chain that

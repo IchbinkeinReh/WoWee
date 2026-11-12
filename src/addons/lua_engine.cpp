@@ -53,6 +53,7 @@
 #include "core/config_paths.hpp"
 #include <filesystem>
 #include <unordered_set>
+#include "ui/movie_playback.hpp"
 
 extern "C" {
 #include <lua.h>
@@ -7202,6 +7203,53 @@ int lua_EditBox_GetUTF8CursorPosition(lua_State* L) {
     return 1;
 }
 
+// MovieFrame (CSimpleMovieFrame). StartMovie("filename", volume_0_to_255)
+// (0x00970660): 1 when the movie plays, nil when it cannot.
+int lua_MovieFrame_StartMovie(lua_State* L) {
+    const uint32_t id = widgetIdOf(L, 1);
+    if (!lua_isstring(L, 2) || !lua_isnumber(L, 3)) {
+        return luaL_error(L, "Usage: %s:StartMovie(\"filename\", volume_0_to_255)", "MovieFrame");
+    }
+    std::string why;
+    if (id != 0 && wowee::ui::movie::start(id, lua_tostring(L, 2), static_cast<int>(lua_tonumber(L, 3)), why)) {
+        lua_pushnumber(L, 1.0);
+    } else {
+        LOG_WARNING("MovieFrame: StartMovie(", lua_tostring(L, 2), ") failed: ", why);
+        lua_pushnil(L);
+    }
+    return 1;
+}
+
+// StopMovie (0x00970730 -> 0x0095eba0): a playing movie is stopped and the
+// frame's OnMovieFinished runs at once.
+int lua_MovieFrame_StopMovie(lua_State* L) {
+    const uint32_t id = widgetIdOf(L, 1);
+    if (id == 0 || wowee::ui::movie::owner() != id) {
+        if (wowee::ui::movie::playing()) {
+            LOG_INFO("MovieFrame: StopMovie on frame ", id, ", the movie is frame ", wowee::ui::movie::owner(), "'s");
+        }
+        return 0;
+    }
+    if (!wowee::ui::movie::stop()) return 0;
+    lua_getfield(L, 1, "GetScript");
+    if (!lua_isfunction(L, -1)) { lua_pop(L, 1); return 0; }
+    lua_pushvalue(L, 1);
+    lua_pushstring(L, "OnMovieFinished");
+    if (lua_pcall(L, 2, 1, 0) != 0 || !lua_isfunction(L, -1)) { lua_pop(L, 1); return 0; }
+    lua_pushvalue(L, 1);
+    if (lua_pcall(L, 1, 0, 0) != 0) {
+        LOG_ERROR("MovieFrame: OnMovieFinished error: ", luaL_optstring(L, -1, "?"));
+        lua_pop(L, 1);
+    }
+    return 0;
+}
+
+// EnableSubtitles(enable) (+0x2a8).
+int lua_MovieFrame_EnableSubtitles(lua_State* L) {
+    wowee::ui::movie::enableSubtitles(lua_toboolean(L, 2) != 0);
+    return 0;
+}
+
 int lua_Cooldown_SetCooldown(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) {
         w->cooldownStart = luaL_optnumber(L, 2, 0.0);
@@ -8016,6 +8064,7 @@ static int lua_CreateFrame(lua_State* L) {
             // the emitter writes it after the frame is created.
             if (w->isSlider) w->barVertical = true;
             w->isCooldown = (ft == "Cooldown");
+            w->isMovieFrame = (ft == "MovieFrame");
             // Marked at creation rather than only when a child is set, so a
             // scroll frame clips what is under it even while it is empty.
             if (ft == "ScrollFrame") tree->markScrollFrame(id);
@@ -9185,6 +9234,9 @@ void LuaEngine::registerCoreAPI() {
         {"SetColorHSV",               lua_ColorSelect_SetColorHSV},
         {"GetColorHSV",               lua_ColorSelect_GetColorHSV},
         {"SetCooldown",           lua_Cooldown_SetCooldown},
+        {"StartMovie",            lua_MovieFrame_StartMovie},
+        {"StopMovie",             lua_MovieFrame_StopMovie},
+        {"EnableSubtitles",       lua_MovieFrame_EnableSubtitles},
         {"GetNumber",             lua_EditBox_GetNumber},
         {"SetNumber",             lua_EditBox_SetNumber},
         {"AddHistoryLine",        lua_EditBox_AddHistoryLine},
@@ -14984,6 +15036,26 @@ void LuaEngine::dispatchOnUpdate(float elapsed) {
 
     drainPendingTextChanged();
     advanceWheelGlide(elapsed);
+
+    // The MovieFrame's movie: subtitle lines and its end, to the frame that
+    // started it (CSimpleMovieFrame's scripts, 0x0095db80).
+    {
+        std::vector<ui::movie::Event> movieEvents;
+        ui::movie::poll(movieEvents);
+        for (const auto& e : movieEvents) {
+            switch (e.kind) {
+                case ui::movie::Event::Kind::ShowSubtitle:
+                    callFrameScript(e.widget, "OnMovieShowSubtitle", e.text.c_str());
+                    break;
+                case ui::movie::Event::Kind::HideSubtitle:
+                    callFrameScript(e.widget, "OnMovieHideSubtitle", nullptr);
+                    break;
+                case ui::movie::Event::Kind::Finished:
+                    callFrameScript(e.widget, "OnMovieFinished", nullptr);
+                    break;
+            }
+        }
+    }
 
     // The macros on the bars that can change their answer, worked out again
     // as the client does every frame (0x00566660); a slot whose macro now

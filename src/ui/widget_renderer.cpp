@@ -13,6 +13,9 @@
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/blp_loader.hpp"
 #include "rendering/vk_context.hpp"
+#include "rendering/imgui_texture.hpp"
+#include "pipeline/blp_loader.hpp"
+#include "ui/movie_playback.hpp"
 #include "core/app_clock.hpp"
 #include "core/env_flag.hpp"
 #include "ui/interface_fonts.hpp"
@@ -1210,6 +1213,57 @@ void WidgetRenderer::drawSlider(ImDrawList* dl, const Widget& w,
     }
 }
 
+WidgetRenderer::~WidgetRenderer() {
+    // Gone with the process, never destroyed against a device that may
+    // already be: this object outlives the Vulkan context at shutdown.
+    if (movieTexture_) {
+        (void)movieTexture_->texture.release();
+        movieTexture_->descriptorSet = VK_NULL_HANDLE;
+    }
+}
+
+void WidgetRenderer::retireMovieTexture() {
+    if (!movieTexture_) return;
+    if (vkCtx_) {
+        // Still bound by the frames in flight.
+        auto old = std::move(movieTexture_);
+        rendering::VkContext* ctx = vkCtx_;
+        vkCtx_->deferAfterAllFrameFences([old, ctx]() { old->destroy(ctx->getDevice(), ctx->getAllocator()); });
+    }
+    movieTexture_.reset();
+}
+
+void WidgetRenderer::drawMovie(ImDrawList* dl, const Widget& w, float x0, float y0, float x1, float y1) {
+    if (movie::owner() != w.id) return;
+    auto retire = [this]() { retireMovieTexture(); };
+    if (movieGeneration_ != movie::generation()) {
+        retire();
+        movieGeneration_ = movie::generation();
+    }
+    int pw = 0, ph = 0;
+    if (vkCtx_ && movie::takeFrame(movieScratch_, pw, ph)) {
+        pipeline::BLPImage image;
+        image.width = pw;
+        image.height = ph;
+        image.data = std::move(movieScratch_);
+        auto tex = std::make_shared<rendering::ImGuiTexture>(rendering::makeImGuiTexture(*vkCtx_, image));
+        movieScratch_ = std::move(image.data);
+        if (tex->descriptorSet != VK_NULL_HANDLE) {
+            retire();
+            movieTexture_ = std::move(tex);
+        }
+    }
+    if (pw == 0) movie::pictureSize(pw, ph);
+    dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), IM_COL32(0, 0, 0, 255));
+    if (!movieTexture_ || pw <= 0 || ph <= 0) return;
+    // The whole picture, as large as it fits, centred.
+    const float bw = x1 - x0, bh = y1 - y0;
+    const float scale = std::min(bw / static_cast<float>(pw), bh / static_cast<float>(ph));
+    const float dw = static_cast<float>(pw) * scale, dh = static_cast<float>(ph) * scale;
+    const float dx = x0 + (bw - dw) * 0.5f, dy = y0 + (bh - dh) * 0.5f;
+    dl->AddImage(reinterpret_cast<ImTextureID>(movieTexture_->descriptorSet), ImVec2(dx, dy), ImVec2(dx + dw, dy + dh));
+}
+
 void WidgetRenderer::drawCooldown(ImDrawList* dl, const Widget& w,
                                   float x0, float y0, float x1, float y1) {
     if (w.cooldownDuration <= 0.0) return;
@@ -2130,6 +2184,7 @@ void WidgetRenderer::reportWidgetDiagnostics(WidgetTree& tree,
 }
 
 void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
+    if (movieTexture_ && !movie::playing()) retireMovieTexture();
     // Cleared here rather than in layout(), which is the half that runs before
     // the frame's clicks are resolved. Emptying the list there and refilling it
     // here would leave nothing to click against in between, and a chat link
@@ -2588,6 +2643,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             if (w->isStatusBar) drawStatusBar(dl, *w, x0, y0, x1, y1);
             if (w->isSlider) drawSlider(dl, *w, x0, y0, x1, y1);
             if (w->isCooldown) drawCooldown(dl, *w, x0, y0, x1, y1);
+            if (w->isMovieFrame) drawMovie(dl, *w, x0, y0, x1, y1);
             // A tooltip reads downward from the top, which is the other way
             // round from chat.
             if (isGameTooltip) {

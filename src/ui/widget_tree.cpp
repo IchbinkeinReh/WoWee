@@ -1422,7 +1422,7 @@ void WidgetTree::collectDrawOrder() {
         // Not gated on holding text. The caret is what says which box is
         // listening, and an empty box still has to show it.
         if (w.kind == WidgetKind::Frame && !w.hasBackdrop && !w.isStatusBar &&
-            !w.isEditBox && w.externalTexture == 0 &&
+            !w.isEditBox && w.externalTexture == 0 && !w.isMovieFrame &&
             !(w.isSimpleHtml && !w.text.empty()) &&
             !(w.isMessageFrame && !w.messages.empty()) &&
             !(w.isTooltip && !w.tooltipLines.empty())) continue;

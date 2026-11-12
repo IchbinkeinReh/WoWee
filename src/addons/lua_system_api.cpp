@@ -9819,11 +9819,13 @@ void registerSystemLuaAPI(lua_State* L) {
                 // (0x0050fe80): false.
                 {"IsWindowsClient", [](lua_State* L) -> int { lua_pushnumber(L, 1); return 1; }},
                 {"IsDebugBuild",             luaReturnNil},
-                // GameMovieFinished() (0x0051d590 -> 0x00518870): only while a
-                // movie plays (0x00bd0800), which none does here -
-                // SMSG_TRIGGER_MOVIE is answered with CMSG_COMPLETE_MOVIE at
-                // once - so nothing.
-                {"GameMovieFinished",        lua_ReturnNothing},
+                // GameMovieFinished() (0x0051d590 -> 0x00518870):
+                // CMSG_COMPLETE_MOVIE, only while the server's movie plays
+                // (0x00bd0800).
+                {"GameMovieFinished", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) gh->gameMovieFinished();
+            return 0;
+        }},
                 // ReplaceTradeEnchant() (0x00510b80 -> 0x0080c5f0): the Yes
                 // on TRADE_REPLACE_ENCHANT. The spell is still waiting for its
                 // item, and goes at the trade window's untraded slot now.

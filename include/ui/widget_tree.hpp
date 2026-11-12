@@ -512,6 +512,8 @@ struct Widget {
     mutable int wrappedLines = 1;
 
     bool  isCooldown = false;
+    /// A MovieFrame: draws its movie (WidgetRenderer::drawMovie).
+    bool  isMovieFrame = false;
     double cooldownStart = 0.0;
     double cooldownDuration = 0.0;
     /// The shaded wedge grows instead of shrinking. An ability's cooldown

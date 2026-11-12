@@ -757,6 +757,7 @@ target_link_libraries(test_addon_globals PRIVATE catch2_main)
 add_test(NAME addon_globals COMMAND test_addon_globals)
 register_test_target(test_addon_globals)
 
+<<<<<<< Updated upstream
 # ── test_client_saved_variables ─────────────────────────────
 add_executable(test_client_saved_variables
     test_client_saved_variables.cpp
@@ -766,6 +767,30 @@ target_include_directories(test_client_saved_variables SYSTEM PRIVATE ${TEST_SYS
 target_link_libraries(test_client_saved_variables PRIVATE catch2_main)
 add_test(NAME client_saved_variables COMMAND test_client_saved_variables)
 register_test_target(test_client_saved_variables)
+=======
+# ── test_movie_rules ────────────────────────────────────────
+add_executable(test_movie_rules
+    test_movie_rules.cpp
+)
+target_include_directories(test_movie_rules PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_movie_rules SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_movie_rules PRIVATE catch2_main)
+add_test(NAME movie_rules COMMAND test_movie_rules)
+register_test_target(test_movie_rules)
+>>>>>>> Stashed changes
+
+# ── test_loose_movies ───────────────────────────────────────
+add_executable(test_loose_movies
+    test_loose_movies.cpp
+    ${CMAKE_SOURCE_DIR}/tools/asset_extract/loose_movies.cpp
+    ${CMAKE_SOURCE_DIR}/tools/asset_extract/path_mapper.cpp
+    ${CMAKE_SOURCE_DIR}/tools/asset_extract/manifest_writer.cpp
+)
+target_include_directories(test_loose_movies PRIVATE ${TEST_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/tools/asset_extract)
+target_include_directories(test_loose_movies SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_loose_movies PRIVATE catch2_main ZLIB::ZLIB)
+add_test(NAME loose_movies COMMAND test_loose_movies)
+register_test_target(test_loose_movies)
 
 # ── test_monster_move_facing ─────────────────────────────────
 # SMSG_MONSTER_MOVE's move-type byte and the facing after it, which three
@@ -2059,6 +2084,7 @@ if(STORMLIB_LIBRARY AND STORMLIB_INCLUDE_DIR)
     add_executable(test_extract_progress
         test_extract_progress.cpp
         ${CMAKE_SOURCE_DIR}/tools/asset_extract/extractor.cpp
+        ${CMAKE_SOURCE_DIR}/tools/asset_extract/loose_movies.cpp
         ${CMAKE_SOURCE_DIR}/tools/asset_extract/path_mapper.cpp
         ${CMAKE_SOURCE_DIR}/tools/asset_extract/manifest_writer.cpp
         ${CMAKE_SOURCE_DIR}/tools/asset_extract/open_format_emitter.cpp
