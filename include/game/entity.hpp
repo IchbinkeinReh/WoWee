@@ -17,6 +17,7 @@
 #include <mutex>
 #include <chrono>
 #include "math/spline.hpp"
+#include "math/chase_spring.hpp"
 #include "game/flat_field_map.hpp"
 #include "game/monster_move_flags.hpp"
 #include "game/power_prediction.hpp"
@@ -1079,12 +1080,8 @@ private:
             float target = orientation;
             if (modelFacing_ > target + kPi) target += 2.0f * kPi;
             else if (modelFacing_ < target - kPi) target -= 2.0f * kPi;
-            const float x = facingChaseRate_ * deltaTime;
-            const float damp = 1.0f / (x * x * 0.48f + x * x * x * 0.235f + x + 1.0f);
-            const float change = modelFacing_ - target;
-            const float push = (change * facingChaseRate_ + facingVelocity_) * deltaTime;
-            facingVelocity_ = damp * (facingVelocity_ - push * facingChaseRate_);
-            modelFacing_ = wrapAngle(target + (change + push) * damp);
+            wowee::math::chaseStep(modelFacing_, facingVelocity_, target, facingChaseRate_, deltaTime);
+            modelFacing_ = wrapAngle(modelFacing_);
             return;
         }
         const float diff = wrapAngle(orientation - modelFacing_);

@@ -6,6 +6,7 @@
 
 #include "game/vehicle.hpp"
 #include "game/vehicle_transition.hpp"
+#include "math/chase_spring.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -124,17 +125,8 @@ struct CameraZoom {
 }
 
 /// The vehicle camera's chase of a value toward its target (0x007160b0 for
-/// one, 0x006ff4c0 for a point): a spring that settles at `rate` without
-/// overshooting, its velocity kept between steps.
-template <class T>
-inline void chaseStep(T& value, T& velocity, const T& target, float rate, float dt) {
-    const float x = rate * dt;
-    const float d = 1.0f / (x * x * 0.48f + x * x * x * 0.235f + x + 1.0f);
-    const T off = value - target;
-    const T push = (off * rate + velocity) * dt;
-    value = (off + push) * d + target;
-    velocity = (velocity - push * rate) * d;
-}
+/// one, 0x006ff4c0 for a point).
+using wowee::math::chaseStep;
 
 /// The rate a seat chases at: 20 over its CameraPosChaseRate or
 /// CameraFacingChaseRate, none for one of 0.0001 or less (0x00759d80,
