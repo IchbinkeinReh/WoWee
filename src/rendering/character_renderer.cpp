@@ -788,7 +788,7 @@ void CharacterRenderer::shutdown() {
             materialRingAlloc_[i] = VK_NULL_HANDLE;
             materialRingMapped_[i] = nullptr;
         }
-        materialRingOffset_[i] = 0;
+        materialRingOffset_[i].store(0, std::memory_order_relaxed);
     }
 
     // Destroy descriptor pools and layouts
@@ -881,9 +881,11 @@ void CharacterRenderer::clear() {
     instances.clear();
 
     // Reset material ring buffer offsets (buffers persist, just reset write position)
-    for (uint32_t& offset : materialRingOffset_) {
-        offset = 0;
+    for (auto& offset : materialRingOffset_) {
+        offset.store(0, std::memory_order_relaxed);
     }
+    ++materialCacheEpoch_[0];
+    ++materialCacheEpoch_[1];
 
     // Reset descriptor pools (don't destroy - reuse for new allocations),
     // once what is still queued to free sets from them has run (see
@@ -893,6 +895,11 @@ void CharacterRenderer::clear() {
         if (materialDescPool) {
             vkResetDescriptorPool(device, materialDescPool, 0);
         }
+    }
+    // The sets kept across frames went with the pools.
+    for (uint32_t slot = 0; slot < 2; ++slot) {
+        materialDescriptorCache_[slot].clear();
+        materialSetsAllocated_[slot] = 0;
     }
     if (boneDescPool_) {
         if (boneDescPoolGeneration_) boneDescPoolGeneration_->fetch_add(1, std::memory_order_relaxed);
@@ -4069,7 +4076,16 @@ void CharacterRenderer::writeFrameBones(CharacterInstance& inst) {
     constexpr int kRing = CharacterInstance::kBoneRing;
     const int k = static_cast<int>(boneFrame_ % kRing);
     const int numBones = std::min(static_cast<int>(inst.boneMatrices.size()), MAX_BONES);
-    if (inst.boneMapped[k] && inst.boneWritten[k] != boneFrame_) {
+    if (!inst.boneMapped[k]) return;
+    // Up to three passes record at once (the characters', the doodads' with
+    // the blended characters, the shadows') and each wants this frame's pose
+    // in the buffer before it draws; the first to claim the frame copies it.
+    // The others need not wait: nothing reads the buffer before the frame is
+    // submitted, after all of them are joined.
+    std::atomic_ref<uint64_t> written(inst.boneWritten[k]);
+    uint64_t before = written.load(std::memory_order_relaxed);
+    if (before == boneFrame_ || !written.compare_exchange_strong(before, boneFrame_)) return;
+    {
         auto* dst = static_cast<glm::mat4*>(inst.boneMapped[k]);
         if (numBones > 0) memcpy(dst, inst.boneMatrices.data(), numBones * sizeof(glm::mat4));
         // The client's point lights this frame (m2_vertex_lights.hpp), picked
@@ -4088,7 +4104,6 @@ void CharacterRenderer::writeFrameBones(CharacterInstance& inst) {
             }
         }
         memcpy(dst + MAX_BONES, lights, sizeof(lights));
-        inst.boneWritten[k] = boneFrame_;
     }
 }
 
@@ -4205,9 +4220,9 @@ std::vector<CharacterRenderer::BlendedDraw> CharacterRenderer::planBlended(const
 
 void CharacterRenderer::zfillFadedInstances(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                                             const Camera& camera) {
-    zfillDraw_ = true;
-    for (const uint32_t id : fadedToZfill_) render(cmd, perFrameSet, camera, Phase::Blended, id);
-    zfillDraw_ = false;
+    for (const uint32_t id : fadedToZfill_) {
+        renderPass(cmd, perFrameSet, camera, Phase::Blended, id, false, BlendedDepth::Zfill);
+    }
     zfilledFaded_ = std::move(fadedToZfill_);
     fadedToZfill_.clear();
 }
@@ -4218,17 +4233,40 @@ void CharacterRenderer::renderBlendedInstance(VkCommandBuffer cmd, VkDescriptorS
     if (std::find(fadedToZfill_.begin(), fadedToZfill_.end(), instanceId) != fadedToZfill_.end()) {
         zfillFadedInstances(cmd, perFrameSet, camera);
     }
-    overZfill_ = std::find(zfilledFaded_.begin(), zfilledFaded_.end(), instanceId) != zfilledFaded_.end();
-    render(cmd, perFrameSet, camera, Phase::Blended, instanceId);
-    overZfill_ = false;
+    const bool overZfill =
+        std::find(zfilledFaded_.begin(), zfilledFaded_.end(), instanceId) != zfilledFaded_.end();
+    renderPass(cmd, perFrameSet, camera, Phase::Blended, instanceId, false,
+               overZfill ? BlendedDepth::OverZfill : BlendedDepth::None);
 }
 
+struct CharacterRenderer::ThreadMaterialSets {
+    uint64_t owner = 0;
+    uint64_t epoch[2] = {~0ull, ~0ull};
+    std::unordered_map<MaterialDescriptorKey, VkDescriptorSet, MaterialDescriptorKeyHash> sets[2];
+};
+
 void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
-                               Phase phase, uint32_t onlyInstance, bool gbuffer) {
+                               Phase phase, uint32_t onlyInstance, bool gbuffer, uint32_t part,
+                               uint32_t parts) {
+    renderPass(cmd, perFrameSet, camera, phase, onlyInstance, gbuffer, BlendedDepth::None, part, parts);
+}
+
+void CharacterRenderer::renderPass(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
+                                   Phase phase, uint32_t onlyInstance, bool gbuffer,
+                                   BlendedDepth blendedDepth, uint32_t part, uint32_t parts) {
     if (instances.empty() || !opaquePipeline_ || (gbuffer && gbufferVariants_.empty())) {
         return;
     }
-    std::lock_guard<std::mutex> renderLock(renderMutex_);
+    // No lock round the whole pass. The characters' worker records the opaque
+    // phase while the doodads' worker records the blended one, instance by
+    // instance, and the shadow worker the casters: each only reads the
+    // instances and models, and what they share to write - the material ring,
+    // its descriptor sets, each instance's bone copy - is taken piece by piece
+    // (allocMaterial, writeFrameBones). One lock held for a whole pass made
+    // the doodads' worker wait out the characters' opaque pass and both
+    // shadow cascades before it could draw a blended batch.
+    const bool zfillDraw = blendedDepth == BlendedDepth::Zfill;
+    const bool overZfill = blendedDepth == BlendedDepth::OverZfill;
     const float renderRadiusSq = characterRenderRadiusSq();
     const glm::vec3 camPos = camera.getPosition();
 
@@ -4239,15 +4277,49 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
     uint32_t frameIndex = vkCtx_->getCurrentFrame();
     uint32_t frameSlot = frameIndex % 2u;
 
-    // Reset material ring buffer and descriptor pool once per frame slot.
-    if (lastMaterialPoolResetFrame_ != frameIndex) {
-        materialRingOffset_[frameSlot] = 0;
-        if (materialDescPools_[frameSlot]) {
-            vkResetDescriptorPool(vkCtx_->getDevice(), materialDescPools_[frameSlot], 0);
+    // Reset the material ring once per frame slot, by whichever pass comes
+    // first. The slot's descriptor sets are kept across frames: a set holds
+    // nothing that changes from frame to frame - three textures and the ring,
+    // the material itself goes in by its dynamic offset - so the same key
+    // gets the same set again. They are handed back only when a texture has
+    // been destroyed since (its view handle can come back as another's), or
+    // when the pool is half used.
+    uint64_t cacheEpoch = 0;
+    {
+        std::lock_guard<std::mutex> materialLock(materialMutex_);
+        if (lastMaterialPoolResetFrame_ != frameIndex) {
+            materialRingOffset_[frameSlot].store(0, std::memory_order_relaxed);
+            const uint64_t destroyed = VkTexture::destroyedSerial();
+            if (destroyed != materialSetsSerial_[frameSlot] ||
+                materialSetsAllocated_[frameSlot] > MAX_MATERIAL_SETS / 2) {
+                if (materialDescPools_[frameSlot]) {
+                    vkResetDescriptorPool(vkCtx_->getDevice(), materialDescPools_[frameSlot], 0);
+                }
+                materialDescriptorCache_[frameSlot].clear();
+                materialSetsAllocated_[frameSlot] = 0;
+                materialSetsSerial_[frameSlot] = destroyed;
+                ++materialCacheEpoch_[frameSlot];
+            }
+            lastMaterialPoolResetFrame_ = frameIndex;
         }
-        materialDescriptorCache_[frameSlot].clear();
-        lastMaterialPoolResetFrame_ = frameIndex;
+        cacheEpoch = materialCacheEpoch_[frameSlot];
     }
+    // This thread's copy of the cache, forgotten when the slot's sets were
+    // handed back since it was filled, or when it was filled for another
+    // renderer (a character preview's).
+    thread_local ThreadMaterialSets threadSets;
+    if (threadSets.owner != rendererSerial_) {
+        threadSets.owner = rendererSerial_;
+        for (int slot = 0; slot < 2; ++slot) {
+            threadSets.sets[slot].clear();
+            threadSets.epoch[slot] = ~0ull;
+        }
+    }
+    if (threadSets.epoch[frameSlot] != cacheEpoch) {
+        threadSets.sets[frameSlot].clear();
+        threadSets.epoch[frameSlot] = cacheEpoch;
+    }
+    auto& threadCache = threadSets.sets[frameSlot];
 
     // Pre-compute aligned UBO stride for ring buffer sub-allocation
     const uint32_t uboStride = (sizeof(CharMaterialUBO) + materialUboAlignment_ - 1) & ~(materialUboAlignment_ - 1);
@@ -4280,8 +4352,13 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
         const MaterialDescriptorKey key{.diffuse = diffuseInfo.imageView, .normal = normalInfo.imageView,
                                         .diffuseSampler = diffuseInfo.sampler, .normalSampler = normalInfo.sampler,
                                         .second = secondInfo.imageView, .secondSampler = secondInfo.sampler};
+        if (auto it = threadCache.find(key); it != threadCache.end()) return it->second;
+        std::lock_guard<std::mutex> materialLock(materialMutex_);
         auto& cache = materialDescriptorCache_[frameSlot];
-        if (auto it = cache.find(key); it != cache.end()) return it->second;
+        if (auto it = cache.find(key); it != cache.end()) {
+            threadCache.emplace(key, it->second);
+            return it->second;
+        }
 
         VkDescriptorSet set = VK_NULL_HANDLE;
         VkDescriptorSetAllocateInfo ai{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
@@ -4306,7 +4383,21 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                      .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &secondInfo, .pBufferInfo = nullptr, .pTexelBufferView = nullptr};
         vkUpdateDescriptorSets(vkCtx_->getDevice(), 4, writes, 0, nullptr);
         cache.emplace(key, set);
+        threadCache.emplace(key, set);
+        ++materialSetsAllocated_[frameSlot];
         return set;
+    };
+    // A batch's slot in the material ring and its descriptor set, under the
+    // lock both recording passes share; the UBO is copied in outside it, into
+    // the slot that is this batch's alone. False: the ring is full or there
+    // is no set (the batch is skipped, as before).
+    auto allocMaterial = [&](const CharMaterialUBO& matData, VkTexture* diffuse, VkTexture* normal,
+                             VkTexture* second, uint32_t& offset, VkDescriptorSet& set) -> bool {
+        offset = materialRingOffset_[frameSlot].fetch_add(uboStride, std::memory_order_relaxed);
+        if (offset + uboStride > ringCapacityBytes) return false;  // ring exhausted
+        set = getMaterialDescriptorSet(diffuse, normal, second);
+        memcpy(static_cast<char*>(materialRingMapped_[frameSlot]) + offset, &matData, sizeof(CharMaterialUBO));
+        return set != VK_NULL_HANDLE;
     };
 
     // Bind per-frame descriptor set (set 0) -- shared across all draws
@@ -4319,15 +4410,30 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
 
     // One instance alone, or all of them. A caller drawing several blended
     // instances between a doodad renderer's own orders them far to near.
-    drawOrder_.clear();
+    // One list per thread: two passes record at once.
+    thread_local std::vector<std::pair<uint32_t, CharacterInstance*>> drawOrder;
+    drawOrder.clear();
     if (onlyInstance != 0) {
         auto it = instances.find(onlyInstance);
-        if (it != instances.end()) drawOrder_.emplace_back(it->first, &it->second);
+        if (it != instances.end()) drawOrder.emplace_back(it->first, &it->second);
+    } else if (parts <= 1) {
+        for (auto& pair : instances) drawOrder.emplace_back(pair.first, &pair.second);
     } else {
-        for (auto& pair : instances) drawOrder_.emplace_back(pair.first, &pair.second);
+        // This part's run of the instances drawn, split by count. Each part
+        // walks the same map in the same order, so the runs join up.
+        for (auto& pair : instances) {
+            if (isDrawCandidate(pair.second, camPos, frustum, renderRadiusSq)) {
+                drawOrder.emplace_back(pair.first, &pair.second);
+            }
+        }
+        const size_t n = drawOrder.size();
+        const size_t first = n * part / parts;
+        const size_t last = n * (part + 1) / parts;
+        drawOrder.erase(drawOrder.begin() + static_cast<std::ptrdiff_t>(last), drawOrder.end());
+        drawOrder.erase(drawOrder.begin(), drawOrder.begin() + static_cast<std::ptrdiff_t>(first));
     }
 
-    for (const auto& [instanceId, instancePtr] : drawOrder_) {
+    for (const auto& [instanceId, instancePtr] : drawOrder) {
         auto& instance = *instancePtr;
 
         if (!isDrawCandidate(instance, camPos, frustum, renderRadiusSq)) continue;
@@ -4399,7 +4505,9 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                     }
                 }
                 if (!hasRenderableGeoset) {
+                    static std::mutex loggedGeosetFallbackMutex;
                     static std::unordered_set<uint32_t> loggedGeosetFallback;
+                    std::lock_guard<std::mutex> logLock(loggedGeosetFallbackMutex);
                     if (loggedGeosetFallback.insert(instance.id).second) {
                         LOG_WARNING("Geoset filter matched no batches for instance ",
                                     instance.id, " (model ", instance.modelId,
@@ -4467,8 +4575,8 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 // single NPC had spawned.
                 const bool worldCharacter =
                     !instance.textureSlotOverrides.empty() || instance.drawSkinExtra;
-                if (batch.submeshId == 0 && worldCharacter && headBatchCanaryCount_ < 24) {
-                    ++headBatchCanaryCount_;
+                if (batch.submeshId == 0 && worldCharacter && headBatchCanaryCount_.load(std::memory_order_relaxed) < 24 &&
+                    headBatchCanaryCount_.fetch_add(1) < 24) {
                     uint32_t chosenType = 0;
                     if (batch.textureIndex != 0xFFFF && !gpuModel.data.textureLookup.empty()) {
                         uint16_t sl = gpuModel.data.textureLookup[batch.textureIndex];
@@ -4691,10 +4799,10 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 // the client sets them for every blend mode (FUN_0081fe90).
                 // A faded model's z-fill: its opaque and alpha-key batches'
                 // depth alone (those that write it); its colour then over it.
-                if (zfillDraw_) {
+                if (zfillDraw) {
                     if (!faded || blendMode >= 2 || (materialFlags & 0x10) != 0) continue;
                     desiredPipeline = zfillPipeline_;
-                } else if (overZfill_ && faded && desiredPipeline == translucentPipeline_) {
+                } else if (overZfill && faded && desiredPipeline == translucentPipeline_) {
                     desiredPipeline = fadedOverZfillPipeline_;
                 }
                 desiredPipeline = gbuffer ? gbufferVariant(desiredPipeline, materialFlags, mirroredInstance)
@@ -4722,7 +4830,7 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 matData.instanceFade = instance.opacity * instance.kitAlpha * instance.cameraAlpha;
                 matData.opacity = matData.instanceFade * batchColorAlpha;
                 // The z-fill keeps what the cutout keeps, at full strength.
-                if (zfillDraw_) {
+                if (zfillDraw) {
                     matData.instanceFade = 1.0f;
                     matData.opacity = 1.0f;
                 }
@@ -4818,8 +4926,8 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
 
                 // WOWEE_SCENE_DIAG=1 dumps what each backdrop batch is actually told to
                 // draw - texture, blend mode, shader path - once per scene model.
-                static int sceneDiagLines = 0;
-                if (instance.isSceneModel && sceneDiagEnabled() && sceneDiagLines++ < 40) {
+                static std::atomic<int> sceneDiagLines{0};
+                if (instance.isSceneModel && sceneDiagEnabled() && sceneDiagLines.fetch_add(1) < 40) {
                     std::string texName = "<white>";
                     if (batch.textureIndex < gpuModel.data.textureLookup.size()) {
                         uint16_t lk = gpuModel.data.textureLookup[batch.textureIndex];
@@ -4839,14 +4947,10 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 }
 
                 // Sub-allocate material UBO from ring buffer
-                uint32_t matOffset = materialRingOffset_[frameSlot];
-                if (matOffset + uboStride > ringCapacityBytes) continue; // ring exhausted
-                memcpy(static_cast<char*>(materialRingMapped_[frameSlot]) + matOffset, &matData, sizeof(CharMaterialUBO));
-                materialRingOffset_[frameSlot] = matOffset + uboStride;
-
                 VkTexture* bindTex = (texPtr && texPtr->isValid()) ? texPtr : whiteTexture_.get();
-                VkDescriptorSet materialSet = getMaterialDescriptorSet(bindTex, normalMap, secondTex);
-                if (!materialSet) continue;
+                uint32_t matOffset = 0;
+                VkDescriptorSet materialSet = VK_NULL_HANDLE;
+                if (!allocMaterial(matData, bindTex, normalMap, secondTex, matOffset, materialSet)) continue;
 
                 // Bind material descriptor set (set 1)
                 const uint32_t dynamicOffset = matOffset;
@@ -4859,7 +4963,7 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 // a surface passes its own depth whatever the two pipelines
                 // make of the same vertices; what lies behind it by more than
                 // that still fails.
-                if (zfillDraw_) {
+                if (zfillDraw) {
                     vkCmdSetDepthBias(cmd, depth::biasFromStandard(static_cast<float>(batch.materialLayer) * 0.5f + 16.0f),
                                       0.0f, depth::biasFromStandard(1.5f));
                 } else {
@@ -4869,7 +4973,7 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 vkCmdDrawIndexed(cmd, batch.indexCount, 1, batch.indexStart, 0, 0);
             }
             } // end pass loop
-        } else if ((phase == Phase::Blended) == faded && !zfillDraw_) {
+        } else if ((phase == Phase::Blended) == faded && !zfillDraw) {
             // Draw entire model with first texture: in the opaque phase, or
             // faded in the blended one (instanceDrawnFaded)
             VkTexture* texPtr = !gpuModel.textureIds.empty() ? gpuModel.textureIds[0] : whiteTexture_.get();
@@ -4909,13 +5013,9 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             }
 
             // Sub-allocate material UBO from ring buffer
-            uint32_t matOffset2 = materialRingOffset_[frameSlot];
-            if (matOffset2 + uboStride > ringCapacityBytes) continue; // ring exhausted
-            memcpy(static_cast<char*>(materialRingMapped_[frameSlot]) + matOffset2, &matData, sizeof(CharMaterialUBO));
-            materialRingOffset_[frameSlot] = matOffset2 + uboStride;
-
-            VkDescriptorSet materialSet = getMaterialDescriptorSet(texPtr, flatNormalTexture_.get(), nullptr);
-            if (!materialSet) continue;
+            uint32_t matOffset2 = 0;
+            VkDescriptorSet materialSet = VK_NULL_HANDLE;
+            if (!allocMaterial(matData, texPtr, flatNormalTexture_.get(), nullptr, matOffset2, materialSet)) continue;
 
             const uint32_t dynamicOffset = matOffset2;
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -5078,8 +5178,7 @@ void CharacterRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& light
     if (frameIndex >= 2) return;
     // The shadow worker records this while the doodad worker draws the
     // blended characters through render(), and both copy each instance's pose
-    // into the same bone buffer (writeFrameBones).
-    std::lock_guard<std::mutex> renderLock(renderMutex_);
+    // into the same bone buffer: writeFrameBones lets one of them do it.
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline_);
 

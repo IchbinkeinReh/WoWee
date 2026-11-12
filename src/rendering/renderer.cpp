@@ -4576,7 +4576,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         const double prepCharMs = std::chrono::duration<double, std::milli>(prepEnd - prepM2End).count();
 
         // --- Dispatch worker threads (terrain + WMO + M2) ---
-        std::future<double> terrainFuture, wmoFuture, charFuture, postFuture;
+        std::future<double> terrainFuture, wmoFuture, charFuture, charFuture2, postFuture;
 
         // Grass rides in the terrain secondary: it sits on the ground, and
         // that buffer is executed after the sky and before WMO, which is
@@ -4751,6 +4751,9 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
 
         // Character recording is independent after prepareRender() and no
         // longer shares the selection-circle overlay command buffer.
+        // In two halves, each on a worker of its own, executed one after
+        // the other: the same draws in the same order as one buffer. The
+        // pass' GPU mark goes at the end of the second.
         charFuture = core::ThreadPool::frameWorkers().submit([&]() -> double {
             WOWEE_PROFILE_SCOPE("worker: characters", Worker);
             auto t0 = std::chrono::steady_clock::now();
@@ -4758,7 +4761,20 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             setSecondaryViewportScissor(cmd);
             if (characterRenderer && camera && !skipChars) {
                 characterRenderer->render(cmd, perFrameSet, *camera,
-                                          CharacterRenderer::Phase::Opaque, 0, deferred);
+                                          CharacterRenderer::Phase::Opaque, 0, deferred, 0, 2);
+            }
+            vkEndCommandBuffer(cmd);
+            return std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t0).count();
+        });
+        charFuture2 = core::ThreadPool::frameWorkers().submit([&]() -> double {
+            WOWEE_PROFILE_SCOPE("worker: characters 2", Worker);
+            auto t0 = std::chrono::steady_clock::now();
+            VkCommandBuffer cmd = beginSecondary(SEC_CHARS2, deferred);
+            setSecondaryViewportScissor(cmd);
+            if (characterRenderer && camera && !skipChars) {
+                characterRenderer->render(cmd, perFrameSet, *camera,
+                                          CharacterRenderer::Phase::Opaque, 0, deferred, 1, 2);
             }
             sceneMark(cmd, kMarkChars, "characters (opaque)");
             vkEndCommandBuffer(cmd);
@@ -4839,6 +4855,8 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         catch (const std::exception& e) { LOG_ERROR("WMO render worker: ", e.what()); }
         try { if (charFuture.valid()) (void)charFuture.get(); }
         catch (const std::exception& e) { LOG_ERROR("Character render worker: ", e.what()); }
+        try { if (charFuture2.valid()) (void)charFuture2.get(); }
+        catch (const std::exception& e) { LOG_ERROR("Character render worker 2: ", e.what()); }
         try { if (postFuture.valid()) (void)postFuture.get(); }
         catch (const std::exception& e) { LOG_ERROR("Post render worker: ", e.what()); }
         joinScope.reset();
@@ -5113,6 +5131,7 @@ void Renderer::finishRenderWorld() {
             if (pw.queueWmo)
                 queue(secondaryCmds_[SEC_WMO][frameIdx], "wmo");
             queue(secondaryCmds_[SEC_CHARS][frameIdx], "characters");
+            queue(secondaryCmds_[SEC_CHARS2][frameIdx], "characters 2");
             if (pw.queueM2)
                 queue(secondaryCmds_[SEC_M2][frameIdx], "m2");
             if (numCmds > 0) vkCmdExecuteCommands(currentCmd, numCmds, validCmds);
@@ -5130,6 +5149,7 @@ void Renderer::finishRenderWorld() {
             if (pw.queueWmo)
                 queue(secondaryCmds_[SEC_WMO][frameIdx], "wmo");
             queue(secondaryCmds_[SEC_CHARS][frameIdx], "characters");
+            queue(secondaryCmds_[SEC_CHARS2][frameIdx], "characters 2");
             if (pw.queueM2)
                 queue(secondaryCmds_[SEC_M2][frameIdx], "m2");
         }
@@ -6181,7 +6201,7 @@ bool Renderer::createSecondaryCommandResources() {
     allocInfo.commandBufferCount = 1;
 
     // Each concurrently recorded worker secondary owns a dedicated command pool.
-    const uint32_t workerSecondaries[] = { SEC_TERRAIN, SEC_WMO, SEC_CHARS, SEC_M2, SEC_POST };
+    const uint32_t workerSecondaries[] = { SEC_TERRAIN, SEC_WMO, SEC_CHARS, SEC_M2, SEC_POST, SEC_CHARS2 };
     for (uint32_t w = 0; w < NUM_WORKERS; ++w) {
         allocInfo.commandPool = workerCmdPools_[w];
         for (uint32_t f = 0; f < MAX_FRAMES; ++f) {

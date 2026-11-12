@@ -1130,8 +1130,11 @@ private:
     static constexpr uint32_t SEC_WMO_BLEND = 8;  // WMO blended batches (worker 1)
     static constexpr uint32_t SEC_M2_BLEND  = 9;  // M2 blended + particles + ribbons (worker 3)
     static constexpr uint32_t SEC_GROUND    = 10; // blob shadows, under the water's copy of the scene
-    static constexpr uint32_t NUM_SECONDARIES = 11;
-    static constexpr uint32_t NUM_WORKERS = 5;
+    // The characters' opaque pass in two halves on two workers: it was the
+    // longest recording renderWorld waits for. Executed right after SEC_CHARS.
+    static constexpr uint32_t SEC_CHARS2    = 11; // characters, second half (worker 5)
+    static constexpr uint32_t NUM_SECONDARIES = 12;
+    static constexpr uint32_t NUM_WORKERS = 6;
 
     /// The doodads' blended batches and, among them, the characters' own, by
     /// distance. withCharacters: whether the characters draw at all. After
