@@ -50,6 +50,7 @@
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_layout.hpp"
 #include "ui/unit_summon_title.hpp"
+#include "game/quest_objectives.hpp"
 #include "core/window.hpp"
 #include <imgui.h>
 #include <fstream>
@@ -2977,18 +2978,22 @@ static std::string genderedGlobal(lua_State* L, const std::string& key) {
     return out;
 }
 
-/// The interface's UberTooltips choice: "0" makes an action button's spell
-/// tooltip the brief one (0x00631000 reads it).
-static bool uberTooltips(lua_State* L) {
+/// A boolean CVar as GetCVar answers it - the panel's answer, defaults and
+/// all - read as on unless it says "0".
+static bool cvarOn(lua_State* L, const char* name) {
     lua_getglobal(L, "GetCVar");
     if (!lua_isfunction(L, -1)) { lua_pop(L, 1); return true; }
-    lua_pushstring(L, "UberTooltips");
+    lua_pushstring(L, name);
     if (lua_pcall(L, 1, 1, 0) != 0) { lua_pop(L, 1); return true; }
     const char* v = lua_tostring(L, -1);
     const bool on = !v || std::strcmp(v, "0") != 0;
     lua_pop(L, 1);
     return on;
 }
+
+/// The interface's UberTooltips choice: "0" makes an action button's spell
+/// tooltip the brief one (0x00631000 reads it).
+static bool uberTooltips(lua_State* L) { return cvarOn(L, "UberTooltips"); }
 
 /// `brief` is 0x006238a0's third argument - SetAction's with UberTooltips
 /// off: the name with its rank, no cost, reach or cast. `showRank` is its
@@ -4713,6 +4718,71 @@ int lua_Tooltip_SetUnit(lua_State* L) {
             addLine(globalOr(L, key, key), r, g, b);
         }
         if (pvpFlag && cr && cr->racialLeader) addLine(globalOr(L, "PVP_RANK_LEADER", "Leader"), 1.0f, 1.0f, 1.0f);
+    }
+
+    // What the creature means to the player's quests, with
+    // showQuestTrackingTooltips (0x00621070): for each quest in the log, its
+    // title in gold over a white " - " line for each objective the creature
+    // answers - a kill objective naming it or one of its two kill credits
+    // (0x005e2370), an item objective for one of its six quest items
+    // (0x005e2630), and for a quest not yet complete an item the quest hands
+    // over among them, by name. Not for a creature a player summoned.
+    if (const auto qu = std::dynamic_pointer_cast<game::Unit>(entity); qu && !isPlayer &&
+        cvarOn(L, "showQuestTrackingTooltips")) {
+        const auto& cache = gh->getCreatureInfoCache();
+        const auto ce = cache.find(qu->getEntry());
+        const uint16_t sLo = game::fieldIndex(game::UF::UNIT_FIELD_SUMMONEDBY_LO);
+        const uint16_t sHi = game::fieldIndex(game::UF::UNIT_FIELD_SUMMONEDBY_HI);
+        const uint32_t lo = sLo != 0xFFFF ? qu->getField(sLo) : 0u;
+        const uint32_t hi = sHi != 0xFFFF ? qu->getField(sHi) : 0u;
+        const bool byPlayer = (hi & 0xf0000000u) == 0 && (lo != 0 || (hi & 0xf07fffffu) != 0);
+        if (ce != cache.end() && !byPlayer) {
+            const auto& c = ce->second;
+            for (const auto& q : gh->getQuestLog()) {
+                bool titled = false;
+                const auto emit = [&](const std::string& text) {
+                    if (!titled) {
+                        addLine(q.title, 1.0f, 0.824f, 0.0f);
+                        titled = true;
+                    }
+                    addLine(" - " + text, 1.0f, 1.0f, 1.0f);
+                };
+                const auto killLine = [&](uint32_t id) {
+                    if (id == 0) return;
+                    for (int k = 0; k < 4; ++k) {
+                        if (q.killObjectives[static_cast<size_t>(k)].npcOrGoId != static_cast<int32_t>(id)) continue;
+                        game::QuestObjective line;
+                        if (game::questObjectiveSlotLine(*gh, q, k, line)) emit(line.text);
+                        return;
+                    }
+                };
+                killLine(qu->getEntry());
+                killLine(c.killCredit[0]);
+                killLine(c.killCredit[1]);
+                for (const uint32_t item : c.questItems) {
+                    if (item == 0) break;
+                    for (int k = 0; k < 6; ++k) {
+                        const auto& io = q.itemObjectives[static_cast<size_t>(k)];
+                        if (io.itemId != item || (io.itemId == q.sourceItemId && io.required <= 1)) continue;
+                        game::QuestObjective line;
+                        if (game::questObjectiveSlotLine(*gh, q, 4 + k, line)) emit(line.text);
+                        break;
+                    }
+                    if (q.complete) continue;
+                    for (const uint32_t handed : q.objectiveSourceItems) {
+                        if (handed != item) continue;
+                        if (titled == false) {
+                            addLine(q.title, 1.0f, 0.824f, 0.0f);
+                            titled = true;
+                        }
+                        if (const auto* info = gh->getItemInfo(item); info && info->valid && !info->name.empty())
+                            addLine(" - " + info->name, 1.0f, 1.0f, 1.0f);
+                        else
+                            gh->ensureItemInfo(item);
+                    }
+                }
+            }
+        }
     }
 
     // A corpse's looters, as SMSG_LOOT_LIST left them on the unit: "Master
