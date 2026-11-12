@@ -151,6 +151,20 @@ void AddonManager::scanAddons(const std::string& addonsPath) {
         fs::path p = fs::absolute(local, rec);
         if (fs::is_directory(p, rec)) roots.push_back(fs::weakly_canonical(p, rec));
     }
+    // Drop-in mode (core::enterDropInRoot sets WOWEE_CLIENT_ROOT): the player's
+    // own addons, in the original client's Interface\AddOns, read in place.
+    // Nothing is written there: their saved variables go to WoWee\ (see
+    // getSavedVariablesPath) and their enable state is read from the client's
+    // AddOns.txt, never written back (readClientAddOnsTxt).
+    clientAddonsRoot_.clear();
+    if (const char* client = std::getenv("WOWEE_CLIENT_ROOT"); client && *client) {
+        const fs::path interfaceDir = resolveChild(fs::path(client), "Interface");
+        const fs::path userAddons = interfaceDir.empty() ? fs::path() : resolveChild(interfaceDir, "AddOns");
+        if (!userAddons.empty() && fs::is_directory(userAddons, rec)) {
+            clientAddonsRoot_ = fs::weakly_canonical(userAddons, rec).generic_string();
+            roots.push_back(fs::weakly_canonical(userAddons, rec));
+        }
+    }
 
     int scannedDirs = 0, loadOnDemand = 0, noToc = 0;
     std::vector<fs::path> dirs;
@@ -185,6 +199,10 @@ void AddonManager::scanAddons(const std::string& addonsPath) {
     for (const auto& dir : dirs) {
         ++scannedDirs;
         std::string dirName = dir.filename().string();
+        // The player's folder may hold Blizzard's own addons written out of
+        // the archives; the client loads Blizzard's from its archives, and
+        // this client from its own copy of them, never a loose one.
+        if (isClientAddon(dir.generic_string()) && dirName.rfind("Blizzard_", 0) == 0) continue;
         // The original interface is not an addon and must never be loaded as
         // one. It ships with a .toc of its own, so a scan that lands on
         // Data/interface rather than Data/interface/AddOns - which is what a
@@ -491,7 +509,63 @@ void AddonManager::loadAllAddons() {
 
 bool AddonManager::isAddonEnabled(const std::string& addonName) const {
     auto it = addonEnabled_.find(addonName);
-    return (it == addonEnabled_.end()) ? true : it->second;  // default: enabled
+    if (it != addonEnabled_.end()) return it->second;
+    // The original client's list for the player's own addons; enabled when
+    // it does not name one.
+    auto client = clientEnabled_.find(addonName);
+    return client == clientEnabled_.end() ? true : client->second;
+}
+
+bool AddonManager::isClientAddon(const std::string& basePath) const {
+    if (clientAddonsRoot_.empty()) return false;
+    std::error_code ec;
+    const std::string base = fs::weakly_canonical(fs::path(basePath), ec).generic_string();
+    return base.size() > clientAddonsRoot_.size() &&
+           base.compare(0, clientAddonsRoot_.size(), clientAddonsRoot_) == 0 &&
+           base[clientAddonsRoot_.size()] == '/';
+}
+
+void AddonManager::setClientIdentity(const std::string& account, const std::string& realm) {
+    clientAccount_ = account;
+    for (char& c : clientAccount_) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    clientRealm_ = realm;
+    readClientAddOnsTxt();
+}
+
+// The original's enable list (0x005f92c0): the character's
+// WTF\Account\<ACCOUNT>\<realm>\<character>\AddOns.txt, or WTF\Account\<ACCOUNT>\AddOns.txt when the
+// character has none; lines "Name: enabled" or "Name: disabled" (anything
+// but "disabled" enables). Read only: this client never writes into WTF.
+void AddonManager::readClientAddOnsTxt() {
+    clientEnabled_.clear();
+    const char* client = std::getenv("WOWEE_CLIENT_ROOT");
+    if (!client || !*client || clientAccount_.empty()) return;
+    fs::path account = resolveChild(fs::path(client), "WTF");
+    if (!account.empty()) account = resolveChild(account, "Account");
+    if (!account.empty()) account = resolveChild(account, clientAccount_);
+    if (account.empty()) return;
+    fs::path file;
+    if (!clientRealm_.empty() && !characterName_.empty()) {
+        fs::path realm = resolveChild(account, clientRealm_);
+        fs::path character = realm.empty() ? fs::path() : resolveChild(realm, characterName_);
+        if (!character.empty()) file = resolveChild(character, "AddOns.txt");
+    }
+    if (file.empty()) file = resolveChild(account, "AddOns.txt");
+    if (file.empty()) return;
+    std::ifstream in(file);
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        const auto colon = line.find(':');
+        if (colon == std::string::npos) continue;
+        std::string value = line.substr(colon + 1);
+        value.erase(0, value.find_first_not_of(' '));
+        if (value.empty()) continue;
+        std::string lower = value;
+        for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        clientEnabled_[line.substr(0, colon)] = lower.rfind("disabled", 0) != 0;
+    }
+    LOG_INFO("AddonManager: read ", clientEnabled_.size(), " entries of the client's ", file.string());
 }
 
 void AddonManager::setAddonEnabled(const std::string& addonName, bool enabled) {
@@ -529,6 +603,9 @@ void AddonManager::saveEnabledState() const {
     // Persist an explicit line only for addons we actually know about, so stale
     // entries for removed addons don't accumulate.
     for (const auto& addon : addons_) {
+        // The player's own addons only when changed here: otherwise the
+        // client's AddOns.txt goes on deciding.
+        if (isClientAddon(addon.basePath) && addonEnabled_.find(addon.addonName) == addonEnabled_.end()) continue;
         out << addon.addonName << "=" << (isAddonEnabled(addon.addonName) ? "1" : "0") << "\n";
     }
 }
@@ -550,11 +627,25 @@ std::string AddonManager::layoutCachePath() const {
 }
 
 std::string AddonManager::getSavedVariablesPath(const TocFile& addon) const {
+    // The player's own addons keep theirs in WoWee\, not in their folder of
+    // the original client's.
+    if (isClientAddon(addon.basePath)) {
+        const std::string dir = core::getConfigRoot() + "/AddOnsSaved";
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        return dir + "/" + addon.addonName + ".lua.saved";
+    }
     return addon.basePath + "/" + addon.addonName + ".lua.saved";
 }
 
 std::string AddonManager::getSavedVariablesPerCharacterPath(const TocFile& addon) const {
     if (characterName_.empty()) return "";
+    if (isClientAddon(addon.basePath)) {
+        const std::string dir = core::getConfigRoot() + "/AddOnsSaved";
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        return dir + "/" + addon.addonName + "." + characterName_ + ".lua.saved";
+    }
     return addon.basePath + "/" + addon.addonName + "." + characterName_ + ".lua.saved";
 }
 
