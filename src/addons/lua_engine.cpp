@@ -26,6 +26,7 @@
 #include "network/world_socket.hpp"
 #include "addons/addon_lua_snippets.hpp"
 #include "game/chat_channels.hpp"
+#include "game/difficulty_change.hpp"
 #include "game/interface_text.hpp"
 #include "game/item_stat_text.hpp"
 #include "rendering/minimap_zoom.hpp"
@@ -3897,6 +3898,69 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
 
     lua_pushboolean(L, filled ? 1 : 0);
     return 1;
+}
+
+// SetShapeshift(slot) (0x00625630): the form's spell, as SetAction has one -
+// brief with UberTooltips off - and with its rank. 1 when filled.
+static int lua_Tooltip_SetShapeshift(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    auto* gh = wowee::addons::getGameHandler(L);
+    const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
+    if (!w || !gh || index < 1) return 0;
+    const auto forms = game::knownShapeshiftForms(gh->getPlayerClass(), gh->getKnownSpells());
+    if (static_cast<size_t>(index) > forms.size()) return 0;
+    luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, forms[static_cast<size_t>(index) - 1].spellId, !uberTooltips(L), true)
+                           ? 1 : 0);
+    return 1;
+}
+
+// SetPossession(slot) (0x006257c0): slot 1 is the possessing spell, shown as
+// SetShapeshift shows a form's. 1 when filled.
+static int lua_Tooltip_SetPossession(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    auto* gh = wowee::addons::getGameHandler(L);
+    const long slot = std::lround(luaL_optnumber(L, 2, 0));
+    if (!w || !gh || slot != 1 || gh->getPossessSpellId() == 0) return 0;
+    luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, gh->getPossessSpellId(), !uberTooltips(L), true) ? 1 : 0);
+    return 1;
+}
+
+// SetQuestRewardSpell() (0x006263e0): the reward spell's full tooltip.
+static int lua_Tooltip_SetQuestRewardSpell(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    auto* gh = wowee::addons::getGameHandler(L);
+    if (w && gh && gh->getQuestDetails().rewardSpellId != 0) {
+        fillSpellTooltip(L, w, gh, gh->getQuestDetails().rewardSpellId);
+    }
+    return 0;
+}
+
+// SetTotem(slot) (0x006205c0): the totem's name in gold, then what is left
+// of it through SPELL_TIME_REMAINING, in its largest unit rounded up
+// (0x0061a9e0).
+static int lua_Tooltip_SetTotem(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    auto* gh = wowee::addons::getGameHandler(L);
+    const int slot = static_cast<int>(luaL_optnumber(L, 2, 0));
+    if (!w || !gh || slot < 1 || slot > game::GameHandler::NUM_TOTEM_SLOTS) return 0;
+    const auto& totem = gh->getTotemSlot(slot - 1);
+    if (!totem.active()) return 0;
+    w->isTooltip = true;
+    w->tooltipLines.clear();
+    const auto add = [&w](std::string text, float r, float g, float b) {
+        wowee::ui::Widget::TooltipLine l;
+        l.left = std::move(text);
+        l.lc[0] = r; l.lc[1] = g; l.lc[2] = b; l.lc[3] = 1.0f;
+        l.rc[0] = l.rc[1] = l.rc[2] = l.rc[3] = 1.0f;
+        w->tooltipLines.push_back(std::move(l));
+    };
+    add(gh->getSpellName(totem.spellId), 1.0f, 0.824f, 0.0f);
+    const auto d = game::difficulty_change::intDuration(static_cast<uint32_t>(std::max<int64_t>(0, totem.remainingMs())));
+    const std::string key = std::string("SPELL_TIME_REMAINING") + d.suffix;
+    add(withPlural(formatGlobal(L, globalOr(L, key.c_str(), "%d"), {std::to_string(d.value)}), static_cast<int>(d.value)),
+        1.0f, 1.0f, 1.0f);
+    w->shown = true;
+    return 0;
 }
 
 int lua_Tooltip_SetSpellByID(lua_State* L) {
@@ -10765,6 +10829,15 @@ void LuaEngine::registerCoreAPI() {
     lua_setglobal(L_, "__WoweeTooltipSetSpellByID");
     lua_pushcfunction(L_, lua_Tooltip_SetUnitAura);
     lua_setglobal(L_, "__WoweeTooltipSetUnitAura");
+    // The spell-shaped setters the client builds itself (0x006238a0).
+    lua_pushcfunction(L_, lua_Tooltip_SetShapeshift);
+    lua_setglobal(L_, "__WoweeTooltipSetShapeshift");
+    lua_pushcfunction(L_, lua_Tooltip_SetPossession);
+    lua_setglobal(L_, "__WoweeTooltipSetPossession");
+    lua_pushcfunction(L_, lua_Tooltip_SetQuestRewardSpell);
+    lua_setglobal(L_, "__WoweeTooltipSetQuestRewardSpell");
+    lua_pushcfunction(L_, lua_Tooltip_SetTotem);
+    lua_setglobal(L_, "__WoweeTooltipSetTotem");
 
     // CreateFrame function
     lua_pushcfunction(L_, lua_EditBox_SetText);
@@ -11399,15 +11472,7 @@ void LuaEngine::registerCoreAPI() {
         "end\n"
         // A totem's tooltip is its spell's, and the totem bar is drawn by
         // whichever side owns it.
-        "function __WoweeFrameMT:SetTotem(slot)\n"
-        "    self:ClearLines()\n"
-        "    local _, name, _, duration = GetTotemInfo(slot)\n"
-        "    if not name or name == '' then return end\n"
-        "    self:SetText(name, 1, 1, 1)\n"
-        "    if duration and duration > 0 then\n"
-        "        self:AddLine(string.format('%.0f sec remaining', duration), 1, 1, 1)\n"
-        "    end\n"
-        "end\n"
+        "function __WoweeFrameMT:SetTotem(slot) return __WoweeTooltipSetTotem(self, slot) end\n"
         // What the minimap's tracking button is showing. 1.12's Minimap.xml
         // opens the tracking frame's OnEnter with SetOwner and this, and it was
         // in neither the method table nor the no-op allowlist - so the lookup
@@ -11429,14 +11494,13 @@ void LuaEngine::registerCoreAPI() {
         "        if active and name then return self:SetText(name, 1, 1, 1) end\n"
         "    end\n"
         "end\n"
+        // 0x0062e900: the spell the service teaches (LEARN_SPELL, or
+        // LEARN_PET_SPELL for the pet) - the item it makes where that is a
+        // recipe - else the service's own spell. Answers nothing.
         "function __WoweeFrameMT:SetTrainerService(index)\n"
-        "    self:ClearLines()\n"
-        "    if not index then return end\n"
-        "    local link = GetTrainerServiceItemLink and GetTrainerServiceItemLink(index)\n"
-        "    if link then return self:SetHyperlink(link) end\n"
-        "    local name, subText = GetTrainerServiceInfo(index)\n"
-        "    if name then self:SetText(name, 1, 1, 1) end\n"
-        "    if subText and subText ~= '' then self:AddLine(subText, 0.5, 0.5, 0.5) end\n"
+        "    local kind, id, pet = __WoweeTrainerServiceTooltip(index)\n"
+        "    if kind == 'item' then _WoweePopulateItemTooltip(self, id)\n"
+        "    elseif kind == 'spell' then self:SetSpellByID(id, pet) end\n"
         "end\n"
         "function __WoweeFrameMT:SetAuctionSellItem()\n"
         "    self:ClearLines()\n"
@@ -11460,11 +11524,7 @@ void LuaEngine::registerCoreAPI() {
         "    local name = GetQuestItemInfo(itemType, index)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
         "end\n"
-        "function __WoweeFrameMT:SetQuestRewardSpell()\n"
-        "    self:ClearLines()\n"
-        "    local _, _, _, name = GetRewardSpell()\n"
-        "    if name then self:SetText(name, 1, 1, 1) end\n"
-        "end\n"
+        "function __WoweeFrameMT:SetQuestRewardSpell() return __WoweeTooltipSetQuestRewardSpell(self) end\n"
         "function __WoweeFrameMT:SetTradePlayerItem(index)\n"
         "    self:ClearLines()\n"
         "    local link = GetTradePlayerItemLink and GetTradePlayerItemLink(index)\n"
@@ -11504,13 +11564,7 @@ void LuaEngine::registerCoreAPI() {
         // The stance bar's tooltip. Every druid, warrior, rogue, priest and
         // death knight has this bar on screen the whole time, and hovering a
         // form said nothing at all.
-        "function __WoweeFrameMT:SetShapeshift(index)\n"
-        "    self:ClearLines()\n"
-        "    local _, name, isActive = GetShapeshiftFormInfo(index)\n"
-        "    if not name then return end\n"
-        "    self:SetText(name, 1, 1, 1)\n"
-        "    if isActive then self:AddLine(ACTIVE_PETS or 'Active', 0.5, 0.5, 0.5) end\n"
-        "end\n"
+        "function __WoweeFrameMT:SetShapeshift(index) return __WoweeTooltipSetShapeshift(self, index) end\n"
         // What a vendor wants besides coin - badges, marks, a token. The
         // money frame draws one of these per cost item and the tooltip is the
         // only place the item is named.
@@ -12034,11 +12088,7 @@ void LuaEngine::registerCoreAPI() {
         // nothing. It is bound now so enabling that slot later is a change to
         // one binding rather than two, and it answers from the same place the
         // button's icon came from.
-        "function __WoweeFrameMT:SetPossession(slot)\n"
-        "    self:ClearLines()\n"
-        "    local _, name = GetPossessInfo(slot)\n"
-        "    if name then self:SetText(name, 1, 1, 1) end\n"
-        "end\n"
+        "function __WoweeFrameMT:SetPossession(slot) return __WoweeTooltipSetPossession(self, slot) end\n"
         // Built by the C binding (fillSpellTooltip), in the client's words
         // and with the reagents; a second builder here, in English and
         // without them, had taken its place. Kept as a wrapper for the one

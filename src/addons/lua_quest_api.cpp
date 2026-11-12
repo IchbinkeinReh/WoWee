@@ -6626,6 +6626,39 @@ void registerQuestLuaAPI(lua_State* L) {
                 // GetTrainerServiceItemLink(index) (0x00596290): the link of
                 // the item a tradeskill trainer's service makes, once the item
                 // is known.
+                // __WoweeTrainerServiceTooltip(index) for SetTrainerService
+                // (0x0062e900): "spell", the spell a LEARN_SPELL (36) or
+                // LEARN_PET_SPELL (57) effect teaches and true for the pet's;
+                // "item" and what it makes where that spell is a recipe
+                // (Attributes 0x20, first effect 24, 157 or 59, an
+                // EffectItemType[0]); else "spell" and the service's own.
+                {"__WoweeTrainerServiceTooltip", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            const auto* r = gh && lua_isnumber(L, 1) ? trainerRow(L, luaToClientInt(L, 1)) : nullptr;
+            const auto* e = trainerRowSpell(gh, r);
+            if (!e) return 0;
+            for (int k = 0; k < 3; ++k) {
+                if (e->effectIds[k] != 36 && e->effectIds[k] != 57) continue;
+                const auto lt = gh->spellNameCacheRef().find(e->effectTriggerSpell[k]);
+                if (lt == gh->spellNameCacheRef().end()) continue;
+                const auto& learned = lt->second;
+                const uint32_t first = learned.effectIds[0];
+                if ((learned.attr & 0x20u) != 0 && (first == 24 || first == 157 || first == 59) &&
+                    learned.effectItemType0 != 0) {
+                    gh->ensureItemInfo(learned.effectItemType0);
+                    lua_pushstring(L, "item");
+                    lua_pushnumber(L, learned.effectItemType0);
+                    return 2;
+                }
+                lua_pushstring(L, "spell");
+                lua_pushnumber(L, lt->first);
+                lua_pushboolean(L, e->effectIds[k] == 57);
+                return 3;
+            }
+            lua_pushstring(L, "spell");
+            lua_pushnumber(L, static_cast<uint32_t>(r->spellId));
+            return 2;
+        }},
                 {"GetTrainerServiceItemLink", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetTrainerServiceItemLink(index)");
             auto* gh = getGameHandler(L);
