@@ -301,7 +301,7 @@ public:
     void setDrawSkinExtra(uint32_t instanceId, bool enabled);
 
     /// Counts the head-batch diagnostic lines so it stops after a few.
-    int headBatchCanaryCount_ = 0;
+    std::atomic<int> headBatchCanaryCount_{0};
     void setGroupTextureOverride(uint32_t instanceId, uint16_t geosetGroup, VkTexture* texture);
     void setTextureSlotOverride(uint32_t instanceId, uint16_t textureSlot, VkTexture* texture);
     void clearTextureSlotOverride(uint32_t instanceId, uint16_t textureSlot);
@@ -1021,9 +1021,12 @@ private:
     /// the body); set by planBlended, cleared as they are filled.
     mutable std::vector<uint32_t> fadedToZfill_;
     std::vector<uint32_t> zfilledFaded_;
-    /// Inside render(): drawing the z-fill, or a faded colour over it.
-    bool zfillDraw_ = false;
-    bool overZfill_ = false;
+    /// What a blended pass draws: the colour, the faded ones' z-fill, or a
+    /// faded colour over its z-fill. An argument and not a member: the
+    /// opaque pass records on another thread meanwhile.
+    enum class BlendedDepth { None, Zfill, OverZfill };
+    void renderPass(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
+                    Phase phase, uint32_t onlyInstance, bool gbuffer, BlendedDepth blendedDepth);
     void zfillFadedInstances(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera);
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
 
@@ -1119,14 +1122,12 @@ private:
     std::unordered_set<uint32_t> attachedScratch_;  // refreshInteriorLights' per-frame scratch
     uint32_t lightRefreshFrame_ = 0;  ///< refreshInteriorLights' turn counter
     std::unordered_map<uint32_t, CharacterInstance> instances;
-    /// The instances a render() call draws, in the order it draws them.
-    std::vector<std::pair<uint32_t, CharacterInstance*>> drawOrder_;
-    /// render() is called from two recording threads - the characters' own and
-    /// the one that draws the doodads and takes the blended characters among
-    /// them - and shares the material ring, descriptor cache and drawOrder_.
-    /// renderShadow takes it too: the shadow worker runs beside the doodad
-    /// worker, and the two passes copy the pose into the same bone buffers.
-    std::mutex renderMutex_;
+    /// render() is called from two recording threads at once - the characters'
+    /// own and the one that draws the doodads and takes the blended characters
+    /// among them. This guards what they share to write: the material ring's
+    /// offset, its descriptor pool and cache, and their reset once a frame.
+    /// Held per batch, never for a pass.
+    std::mutex materialMutex_;
     /// Whether an instance is drawn this frame: visible, in range and view, and
     /// with geometry.
     bool isDrawCandidate(const CharacterInstance& instance, const glm::vec3& camPos,
