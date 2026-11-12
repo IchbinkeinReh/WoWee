@@ -249,7 +249,8 @@ public:
     /// spline flagged FLYING or CATMULLROM (0x42000); otherwise straight lines
     /// from point to point at the spline's one speed - FUN_0098c770 sets the
     /// spline's mode (+500) to 1 only for those flags, 0 (linear) for the rest.
-    /// `clientCurve`: the curve as the WotLK client builds it (startCurvedPath).
+    /// `clientCurve`: the spline as the WotLK client builds it - a curve by
+    /// startCurvedPath, a straight one from the packet's start.
     void startMoveAlongPath(const std::vector<std::array<float, 3>>& packetPath, float destO, float totalDuration,
                             bool smooth = true, bool clientCurve = false) {
         if (packetPath.empty()) return;
@@ -268,15 +269,36 @@ public:
         }
         curvePoints_.clear();
         curveLengths_.clear();
-        // The client's spline starts where the unit is drawn, not where the
-        // packet says the server had it: CGUnit_C's monster-move handler
-        // (FUN_0073c8e0) puts the unit's current position (vfunc +0x30) first
-        // and keeps the packet's start after it only when the two are more
-        // than 0.00077160494 apart squared. Starting at the packet's start
-        // jumped a unit redirected mid-move back or forward to it.
+        // A straight spline as the WotLK client builds it (clientCurve):
+        // from the packet's start - where the server has the unit - through
+        // its points to its end. FUN_0073c8e0's branch for a spline without
+        // 0x42000 puts the packet's start first (with a pad before it that a
+        // straight spline never reaches) and asks nothing of where the unit
+        // is drawn; only the curved branch starts at the unit (vfunc +0x30).
+        // Its speed is the points' length over the packet's duration, at
+        // most four times the unit's run speed and never under 28 yd/s.
+        // Otherwise (the older expansions) the spline starts where the unit
+        // is drawn and keeps the packet's start after it when the two are
+        // more than 0.00077160494 apart squared.
         std::vector<std::array<float, 3>> path;
         path.reserve(packetPath.size() + 1);
-        {
+        if (!smooth && clientCurve) {
+            path = packetPath;
+            x = path[0][0]; y = path[0][1]; z = path[0][2];
+            float length = 0.0f;
+            for (size_t i = 1; i < path.size(); ++i) {
+                const float dx = path[i][0] - path[i - 1][0];
+                const float dy = path[i][1] - path[i - 1][1];
+                const float dz = path[i][2] - path[i - 1][2];
+                length += std::sqrt(dx * dx + dy * dy + dz * dz);
+            }
+            const float cap = std::max(speeds_.run * 4.0f, 28.0f);
+            float speed = cap;
+            if (totalDuration > 0.0f) speed = std::min(speed, length / totalDuration);
+            if (length > 0.16666667f && speed > 9.536743e-07f) {
+                totalDuration = static_cast<float>(std::max(1L, std::lround(length / speed * 1000.0f))) / 1000.0f;
+            }
+        } else {
             const float sx = packetPath[0][0] - x;
             const float sy = packetPath[0][1] - y;
             const float sz = packetPath[0][2] - z;

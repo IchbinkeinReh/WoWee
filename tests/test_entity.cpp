@@ -909,3 +909,19 @@ TEST_CASE("Entity flies a curved spline from where it is drawn, by curve length"
         lastX = e.getX();
     }
 }
+
+TEST_CASE("Entity starts a straight client spline at the packet's start", "[entity]") {
+    // FUN_0073c8e0's branch without 0x42000: the packet's start is the
+    // spline's first point, wherever the unit was drawn.
+    Entity e;
+    e.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    const std::vector<std::array<float, 3>> path = {
+        {{5.0f, 0.0f, 0.0f}}, {{10.0f, 0.0f, 0.0f}}, {{15.0f, 0.0f, 0.0f}}};
+    e.startMoveAlongPath(path, 0.0f, 4.0f, /*smooth=*/false, /*clientCurve=*/true);
+    REQUIRE(e.getX() == Catch::Approx(5.0f));
+    for (int i = 1; i <= 7; ++i) {
+        e.updateMovement(0.5f);
+        // Ten yards in four seconds from the start: 2.5 yd/s.
+        REQUIRE(e.getX() == Catch::Approx(5.0f + 1.25f * i).margin(0.01f));
+    }
+}
