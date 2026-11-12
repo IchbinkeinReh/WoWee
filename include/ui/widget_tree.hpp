@@ -190,6 +190,11 @@ struct Widget {
     /// SetIndentedWordWrap / indented="": every wrapped line after the first
     /// set in (font instance flag 0x20000, 0x0048e0e0/0x0048e600).
     bool indentedWordWrap = false;
+    /// FontString:SetAlphaGradient(start, length) (0x0048d0f0): glyphs before
+    /// `start` drawn whole, the next `length` fading out, the rest not drawn;
+    /// start -1 for none.
+    int alphaGradientStart = -1;
+    int alphaGradientLength = 0;
     /// SetHorizTile / SetVertTile / horizTile="" vertTile="" (texture +0x160
     /// flags 4 and 8, 0x0048cb60/0x0048cc30): the image repeats at its own size.
     bool horizTile = false;

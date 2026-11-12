@@ -2322,6 +2322,43 @@ int lua_MessageFrame_RemoveMessagesByAccessID(lua_State* L) {
 /// Zero, the default, means for good, which is what a chat frame wants.
 /// UIErrorsFrame declares five and it was dropped, so every refusal the server
 /// sent stayed on screen until a hundred and twenty-eight had piled up.
+/// FontString:SetAlphaGradient(start, length) (0x0048d0f0 -> 0x006c78f0):
+/// the first `start` glyphs drawn whole, the next `length` fading out, the
+/// rest not drawn. 1 while the start is still inside the text, nil once it
+/// has passed the last glyph or for a negative argument - which is how the
+/// quest window knows its words have all faded in.
+int lua_FontString_SetAlphaGradient(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!lua_isnumber(L, 2) || !lua_isnumber(L, 3)) {
+        return luaL_error(L, "Usage: %s:SetAlphaGradient(start, length)", w && !w->name.empty() ? w->name.c_str() : "<unnamed>");
+    }
+    const int start = static_cast<int>(lua_tonumber(L, 2));
+    const int length = static_cast<int>(lua_tonumber(L, 3));
+    if (!w) { luaPushOneOrNil(L, 1); return 1; }
+    w->alphaGradientStart = start;
+    w->alphaGradientLength = length;
+    if (start < 0 || length < 0) { luaPushOneOrNil(L, 0); return 1; }
+    // The glyphs the text draws: what is left once its markup is read,
+    // spaces drawing nothing.
+    int glyphs = 0;
+    for (size_t i = 0; i < w->text.size();) {
+        const char c = w->text[i];
+        if (c == '|' && i + 1 < w->text.size()) {
+            const char tag = w->text[i + 1];
+            if (tag == 'c') { i += 10; continue; }
+            if (tag == 'r') { i += 2; continue; }
+            if (tag == 'H') { const size_t e = w->text.find("|h", i + 2); i = e == std::string::npos ? w->text.size() : e + 2; continue; }
+            if (tag == 'h') { i += 2; continue; }
+            if (tag == 'T') { const size_t e = w->text.find("|t", i + 2); i = e == std::string::npos ? w->text.size() : e + 2; continue; }
+        }
+        const unsigned char lead = static_cast<unsigned char>(c);
+        if ((lead & 0xc0u) != 0x80u && c != ' ' && c != '\n' && c != '\t') ++glyphs;
+        ++i;
+    }
+    luaPushOneOrNil(L, start < glyphs ? 1 : 0);
+    return 1;
+}
+
 int lua_FontString_SetWordWrap(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (w) w->wordWrap = lua_toboolean(L, 2) != 0;
@@ -9989,6 +10026,7 @@ void LuaEngine::registerCoreAPI() {
         {"RemoveMessagesByAccessID", lua_MessageFrame_RemoveMessagesByAccessID},
         {"SetMaxLines",     lua_MessageFrame_SetMaxLines},
         {"SetWordWrap",     lua_FontString_SetWordWrap},
+        {"SetAlphaGradient", lua_FontString_SetAlphaGradient},
         {"CanWordWrap",     lua_FontString_CanWordWrap},
         {"SetNonSpaceWrap", lua_FontString_SetNonSpaceWrap},
         {"SetReverse",      lua_Cooldown_SetReverse},

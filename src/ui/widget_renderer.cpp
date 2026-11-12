@@ -713,6 +713,7 @@ float WidgetRenderer::drawMarkupText(ImDrawList* dl, ImFont* font, float size,
                                      bool nonSpaceWrap, const char* justifyH,
                                      bool forceColor, WidgetTree* linkSink,
                                      uint32_t linkOwner, float indent) {
+    gradientGlyph_ = 0;
     const auto lines = wrapText(parseMarkup(text), wrapWidth, nonSpaceWrap,
                                 [&](const std::string& piece) {
                                     return font->CalcTextSizeA(size, FLT_MAX, 0.0f,
@@ -773,9 +774,42 @@ float WidgetRenderer::drawMarkupText(ImDrawList* dl, ImFont* font, float size,
                 float rgba[4] = {run.rgba[0], run.rgba[1], run.rgba[2], run.rgba[3]};
                 col = packColor(rgba, alpha);
             }
-            dl->AddText(font, size, ImVec2(x, y), col, run.text.c_str());
             const float runW = font->CalcTextSizeA(size, FLT_MAX, 0.0f,
                                                    run.text.c_str()).x;
+            if (gradientStart_ < 0) {
+                dl->AddText(font, size, ImVec2(x, y), col, run.text.c_str());
+            } else {
+                // Glyph by glyph under an alpha gradient (0x006c78f0): whole
+                // before the start, then two steps of alpha / length down a
+                // glyph, none past the ramp. Spaces draw nothing and count
+                // for nothing.
+                float gx = x;
+                const std::string& t = run.text;
+                for (size_t at = 0; at < t.size();) {
+                    const unsigned char lead = static_cast<unsigned char>(t[at]);
+                    const size_t n = lead < 0x80 ? 1 : (lead >> 5) == 0x6 ? 2 : (lead >> 4) == 0xe ? 3
+                                   : (lead >> 3) == 0x1e ? 4 : 1;
+                    const std::string glyph = t.substr(at, n);
+                    at += n;
+                    const float gw = font->CalcTextSizeA(size, FLT_MAX, 0.0f, glyph.c_str()).x;
+                    if (glyph != " " && glyph != "\t") {
+                        const int k = gradientGlyph_++;
+                        float f = 0.0f;
+                        if (k < gradientStart_) {
+                            f = 1.0f;
+                        } else if (gradientLength_ > 0 && k < gradientStart_ + gradientLength_) {
+                            f = std::max(0.0f, 1.0f - static_cast<float>(2 * (k - gradientStart_) + 1) /
+                                                          static_cast<float>(gradientLength_));
+                        }
+                        if (f > 0.0f) {
+                            const uint32_t a = static_cast<uint32_t>(((col >> IM_COL32_A_SHIFT) & 0xffu) * f);
+                            dl->AddText(font, size, ImVec2(gx, y),
+                                        (col & ~IM_COL32_A_MASK) | (a << IM_COL32_A_SHIFT), glyph.c_str());
+                        }
+                    }
+                    gx += gw;
+                }
+            }
             // Where the link landed, for the click that arrives in another
             // pass entirely. Only from the pass that draws the text itself -
             // the outline and shadow draw the same glyphs and would file the
@@ -3294,6 +3328,14 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 });
             }
             const std::string& shown = fitted.empty() ? w->text : fitted;
+            // The gradient, for every copy of the words drawn below - the
+            // outline and the shadow fade with them.
+            struct GradientScope {
+                WidgetRenderer& r;
+                ~GradientScope() { r.gradientStart_ = -1; }
+            } gradientScope{*this};
+            gradientStart_ = w->alphaGradientStart;
+            gradientLength_ = w->alphaGradientLength;
             float tx = x0;
             if (wrapW <= 0.0f && !overflows) {
                 if (w->justifyH == "CENTER")     tx = x0 + (boxW - extent.x) * 0.5f;
