@@ -360,6 +360,13 @@ struct M2ParticleEmitter {
     float drag = 0.0f;
     glm::vec3 windVector{0.0f};
     float windTime = 0.0f;
+    // WotLK 0x178-0x184: the quad's turn - a start angle and its spread, a
+    // rate in radians a second and its spread (the emitter's +0xc0..+0xcc,
+    // rolled per particle by 0x0097a130).
+    float baseSpin = 0.0f;
+    float baseSpinVary = 0.0f;
+    float spin = 0.0f;
+    float spinVary = 0.0f;
     // WotLK 0x1C0: a spline emitter's (type 3) curve.
     std::vector<glm::vec3> splinePoints;
     bool enabled = true;

@@ -300,6 +300,11 @@ struct M2Particle {
     int emitterIndex;  // which emitter spawned this
     float tileIndex = 0.0f; // texture atlas tile index
     float sizeVary = 1.0f;  // this particle's roll of the emitter's scale spread
+    // The quad's turn (0x0097a130): its start angle and its rate, rolled at
+    // birth; turned the other way when the emitter's flag 0x200 picks it.
+    float spinBase = 0.0f;
+    float spinRate = 0.0f;
+    bool spinFlip = false;
     /// Emitter flag 0x10 (the client's model-space bit, 0x200): position and
     /// velocity are in the emitter bone's space, carried along as it moves.
     bool modelSpace = false;
@@ -1750,6 +1755,9 @@ private:
     /// Vertices the particle buffer holds. Not MAX_M2_PARTICLES, which is the
     /// cap on one instance's particles: this has to hold a whole frame's.
     static constexpr size_t MAX_M2_PARTICLE_VERTS = 131072;
+    // A particle's record: position 3, colour 4, size, cell, the turn's sine
+    // and cosine.
+    static constexpr size_t kParticleVertexFloats = 11;
     /// The instances with live particles this frame, nearest first, so that when
     /// the buffer is full it is the far ones that go without and not whichever
     /// was made last - a campfire a player lights is made after every doodad of

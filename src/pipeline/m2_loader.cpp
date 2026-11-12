@@ -713,7 +713,11 @@ struct M2ParticleEmitterDisk {
     FBlockDisk tailCell;            // 0x14C - not read
     uint8_t notRead0[0x18];         // 0x15C - tail length, twinkle, burst
     float drag;                     // 0x174 - emitter +0x168 (0x00832ea0)
-    uint8_t notRead1[0x28];         // 0x178 - spin, tumble
+    float baseSpin;                 // 0x178 - emitter +0xc0
+    float baseSpinVary;             // 0x17C - emitter +0xc4
+    float spin;                     // 0x180 - emitter +0xc8
+    float spinVary;                 // 0x184 - emitter +0xcc
+    uint8_t notRead1[0x18];         // 0x188 - tumble
     float windVector[3];            // 0x1A0 - emitter +0x16c
     float windTime;                 // 0x1AC - emitter +0x178
     uint8_t notRead2[0x10];         // 0x1B0 - follow speeds and scales
@@ -728,6 +732,8 @@ static_assert(offsetof(M2ParticleEmitterDisk, lifespanVary) == 0xAC &&
               offsetof(M2ParticleEmitterDisk, scaleVary) == 0x134 &&
               offsetof(M2ParticleEmitterDisk, headCell) == 0x13C &&
               offsetof(M2ParticleEmitterDisk, drag) == 0x174 &&
+              offsetof(M2ParticleEmitterDisk, baseSpin) == 0x178 &&
+              offsetof(M2ParticleEmitterDisk, spinVary) == 0x184 &&
               offsetof(M2ParticleEmitterDisk, windVector) == 0x1A0 &&
               offsetof(M2ParticleEmitterDisk, windTime) == 0x1AC &&
               offsetof(M2ParticleEmitterDisk, splinePoints) == 0x1C0 &&
@@ -2004,6 +2010,10 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
                 em.emissionRateVary = disk.emissionRateVary;
                 em.scaleVary = glm::vec2(disk.scaleVary[0], disk.scaleVary[1]);
                 em.drag = disk.drag;
+                em.baseSpin = disk.baseSpin;
+                em.baseSpinVary = disk.baseSpinVary;
+                em.spin = disk.spin;
+                em.spinVary = disk.spinVary;
                 em.windVector = glm::vec3(disk.windVector[0], disk.windVector[1], disk.windVector[2]);
                 em.windTime = disk.windTime;
                 // A spline emitter's points; 0x00832ea0 hands them to the

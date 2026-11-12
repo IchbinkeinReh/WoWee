@@ -172,6 +172,17 @@ void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt
             // below a tenth of a thousandth.
             p.maxLife = std::max(life + distN(particleRng_) * em.lifespanVary, 0.001f);
             p.sizeVary = std::max(1.0f + distN(particleRng_) * em.scaleVary.x, 0.0001f);
+            // Its turn (0x0097a130): the start angle and the rate, each its
+            // value plus a roll of its spread where it has one. The flag 0x200
+            // (the client's 0x10000) turns about half of them the other way;
+            // the client picks them by a bit of the particle's address.
+            if (em.spin != 0.0f || em.spinVary != 0.0f) {
+                p.spinBase = em.baseSpin;
+                if (em.baseSpinVary != 0.0f) p.spinBase += distN(particleRng_) * em.baseSpinVary;
+                p.spinRate = em.spin;
+                if (em.spinVary != 0.0f) p.spinRate += distN(particleRng_) * em.spinVary;
+                p.spinFlip = (em.flags & 0x200) != 0 && dist01(particleRng_) < 0.5f;
+            }
             p.tileIndex = 0.0f;
 
             const auto track = [&](const pipeline::M2AnimationTrack& t) {
@@ -705,7 +716,7 @@ void M2Renderer::prepareM2Particles() {
             }
             widestParticle = std::max(widestParticle, scale);
 
-            float* vd = vbBase + static_cast<size_t>(vbWritten) * 9;
+            float* vd = vbBase + static_cast<size_t>(vbWritten) * kParticleVertexFloats;
             vd[0] = pWorld.x;
             vd[1] = pWorld.y;
             vd[2] = pWorld.z;
@@ -726,6 +737,14 @@ void M2Renderer::prepareM2Particles() {
             }
             tileIndex = std::clamp(tileIndex, 0.0f, static_cast<float>(cachedTotalTiles) - 1.0f);
             vd[8] = tileIndex;
+            // The quad's turn in the view (0x0097be80), by the client's own
+            // sine and cosine; unturned, (0, 1).
+            bool turns = false;
+            const float spinAngle = m2_particle::particleSpinAngle(em.spin, em.spinVary, p.life, p.spinBase,
+                                                                   p.spinRate, p.spinFlip, turns);
+            const m2_particle::SinCos sc = turns ? m2_particle::clientSinCos(spinAngle) : m2_particle::SinCos{};
+            vd[9] = sc.s;
+            vd[10] = sc.c;
             ++vbWritten;
             ++particleRuns_.back().count;
             totalParticles++;
