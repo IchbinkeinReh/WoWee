@@ -1455,7 +1455,7 @@ public:
     uint64_t getLastMeleeSwingMs() const;
     const std::vector<CombatTextEntry>& getCombatText() const;
     /// Hits that did the player damage so far (CombatHandler::playerDamageHits).
-    uint32_t playerDamageHits() const;
+    uint32_t numPlayerDamageHits() const;
     void clearCombatText();
     void updateCombatText(float deltaTime);
     void clearHostileAttackers();

@@ -76,7 +76,10 @@ TEST_CASE("a copy saved here since is kept; a newer WTF file replaces it") {
     syncAddon(d.client.string(), d.config.string(), "acc", "", "", "X", out, errors);
     REQUIRE(out.size() == 1);
     const fs::path copy = out[0].to;
-    REQUIRE(fs::last_write_time(copy) == fs::last_write_time(src));
+    // In parentheses so Catch does not decompose it: it would print the two
+    // times, and a file time's count is __int128 under libc++, which no
+    // ostream can print - the test failed to build on macOS and windows-arm64.
+    REQUIRE((fs::last_write_time(copy) == fs::last_write_time(src)));
 
     // Second start, nothing changed: not copied again.
     out.clear();

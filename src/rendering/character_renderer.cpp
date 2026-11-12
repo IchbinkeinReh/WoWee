@@ -70,6 +70,24 @@ namespace wowee {
 namespace rendering {
 
 namespace {
+/// Claims a bone buffer for this frame: true for the one caller that moves
+/// the stamp to `frame`, false once another has. std::atomic_ref where the
+/// library has it; the Android NDK's libc++ does not, so there the
+/// compiler's own atomics on the same word.
+bool claimBoneFrame(uint64_t& stamp, uint64_t frame) {
+#if defined(__cpp_lib_atomic_ref)
+    std::atomic_ref<uint64_t> written(stamp);
+    uint64_t before = written.load(std::memory_order_relaxed);
+    return before != frame && written.compare_exchange_strong(before, frame);
+#else
+    uint64_t before = __atomic_load_n(&stamp, __ATOMIC_RELAXED);
+    return before != frame &&
+           __atomic_compare_exchange_n(&stamp, &before, frame, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+#endif
+}
+}  // namespace
+
+namespace {
 size_t approxTextureBytesWithMips(int w, int h) {
     if (w <= 0 || h <= 0) return 0;
     size_t base = static_cast<size_t>(w) * static_cast<size_t>(h) * 4ull;
@@ -4082,9 +4100,7 @@ void CharacterRenderer::writeFrameBones(CharacterInstance& inst) {
     // in the buffer before it draws; the first to claim the frame copies it.
     // The others need not wait: nothing reads the buffer before the frame is
     // submitted, after all of them are joined.
-    std::atomic_ref<uint64_t> written(inst.boneWritten[k]);
-    uint64_t before = written.load(std::memory_order_relaxed);
-    if (before == boneFrame_ || !written.compare_exchange_strong(before, boneFrame_)) return;
+    if (!claimBoneFrame(inst.boneWritten[k], boneFrame_)) return;
     {
         auto* dst = static_cast<glm::mat4*>(inst.boneMapped[k]);
         if (numBones > 0) memcpy(dst, inst.boneMatrices.data(), numBones * sizeof(glm::mat4));

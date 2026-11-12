@@ -978,14 +978,14 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     }
 
     // Screen edge damage flash - a red vignette when a hit does the player
-    // damage (GameHandler::playerDamageHits): a melee or spell hit, a tick,
+    // damage (GameHandler::numPlayerDamageHits): a melee or spell hit, a tick,
     // a fall. Not on the health merely falling - a buff running out or gear
     // taken off lowers the maximum and the health with it, and flashed as a
     // hit. The client draws no such flash; its own red edge (LowHealthFrame)
     // is the interface's, from the combat state.
     {
         const bool deadOrGhost = gameHandler.isPlayerDead() || gameHandler.isPlayerGhost();
-        const uint32_t hits = gameHandler.playerDamageHits();
+        const uint32_t hits = gameHandler.numPlayerDamageHits();
         if (!deadOrGhost && settingsPanel_.damageFlashEnabled_ && hits != lastPlayerDamageHits_) {
             damageFlashAlpha_ = 1.0f;
         }

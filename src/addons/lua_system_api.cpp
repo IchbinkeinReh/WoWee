@@ -1108,6 +1108,9 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     // As registered (0x00767fc0): 70 yards of clutter, level 0 shadows.
     else if (n == "groundeffectdist") lua_pushstring(L, "70");
     else if (n == "extshadowquality") lua_pushstring(L, "0");
+    // The horizon past the far clip at four times it, as registered and as
+    // the renderer reads it.
+    else if (n == "horizonfarclipscale") lua_pushstring(L, "4.0");
     // Clicking open ground clears the target, which is the real client's
     // behaviour and this one's. Without saying so it fell to the generic zero,
     // and zero here means sticky targeting - so the checkbox would have shown

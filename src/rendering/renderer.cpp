@@ -4449,6 +4449,23 @@ void Renderer::updateGrassPopulation() {
              complete ? "" : " - hit the blade cap");
 }
 
+rendering::SkyParams Renderer::frameSkyParams(game::GameHandler* gameHandler, float timeOfDay,
+                                              bool useOriginalSkybox, bool drawSkyModels) const {
+    // The sky's inputs this frame, as both recording paths hand them over.
+    rendering::SkyParams skyParams = rendering::skyParamsFromLighting(
+        timeOfDay,
+        gameHandler ? gameHandler->getGameTime() : -1.0f,
+        gameHandler ? gameHandler->getWeatherIntensity() : 0.0f,
+        lightingManager ? &lightingManager->getLightingParams() : nullptr,
+        useOriginalSkybox);
+    skyParams.weatherLight = weatherLight_;
+    skyParams.sunOcclusion = sunScreenOcclusion_;
+    skyParams.moonOcclusion = moonScreenOcclusion_;
+    skyParams.skyboxWeight = drawSkyModels && lightingManager
+        ? LightingManager::skyboxGlareWeight(lightingManager->getSkyboxLayers()) : 0.0f;
+    return skyParams;
+}
+
 void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
     ZoneScopedN("Renderer::renderWorld");
     (void)world;
@@ -4714,17 +4731,8 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                 horizon_->render(cmd, perFrameSet, *camera, farClip_, horizonScale_);
             }
             if (skySystem && camera && !skipSky) {
-                rendering::SkyParams skyParams = rendering::skyParamsFromLighting(
-                    timeOfDay,
-                    gameHandler ? gameHandler->getGameTime() : -1.0f,
-                    gameHandler ? gameHandler->getWeatherIntensity() : 0.0f,
-                    lightingManager ? &lightingManager->getLightingParams() : nullptr,
-                    useOriginalSkybox);
-                skyParams.weatherLight = weatherLight_;
-                skyParams.sunOcclusion = sunScreenOcclusion_;
-                skyParams.moonOcclusion = moonScreenOcclusion_;
-                skyParams.skyboxWeight = drawSkyModels && lightingManager
-                ? LightingManager::skyboxGlareWeight(lightingManager->getSkyboxLayers()) : 0.0f;
+                const rendering::SkyParams skyParams =
+                    frameSkyParams(gameHandler, timeOfDay, useOriginalSkybox, drawSkyModels);
                 skySystem->render(cmd, perFrameSet, *camera, skyParams, drawStars);
                 if (drawSkyModels) {
                     skyboxModelRenderer_->render(cmd, perFrameSet, *camera);
@@ -4924,17 +4932,8 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             horizon_->render(currentCmd, perFrameSet, *camera, farClip_, horizonScale_);
         }
         if (skySystem && camera && !skipSky) {
-            rendering::SkyParams skyParams = rendering::skyParamsFromLighting(
-                timeOfDay,
-                gameHandler ? gameHandler->getGameTime() : -1.0f,
-                gameHandler ? gameHandler->getWeatherIntensity() : 0.0f,
-                lightingManager ? &lightingManager->getLightingParams() : nullptr,
-                useOriginalSkybox);
-            skyParams.weatherLight = weatherLight_;
-            skyParams.sunOcclusion = sunScreenOcclusion_;
-            skyParams.moonOcclusion = moonScreenOcclusion_;
-            skyParams.skyboxWeight = drawSkyModels && lightingManager
-                ? LightingManager::skyboxGlareWeight(lightingManager->getSkyboxLayers()) : 0.0f;
+            const rendering::SkyParams skyParams =
+                frameSkyParams(gameHandler, timeOfDay, useOriginalSkybox, drawSkyModels);
             if (drawStarsModel) starsModelRenderer_->prepareRender(frameIdx);
             skySystem->render(currentCmd, perFrameSet, *camera, skyParams, drawStars);
             if (drawSkyModels) {

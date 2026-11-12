@@ -2583,7 +2583,7 @@ uint64_t GameHandler::getLastMeleeSwingMs() const {
     return combatHandler_ ? combatHandler_->getLastMeleeSwingMs() : 0;
 }
 
-uint32_t GameHandler::playerDamageHits() const {
+uint32_t GameHandler::numPlayerDamageHits() const {
     return combatHandler_ ? combatHandler_->playerDamageHits() : 0u;
 }
 
