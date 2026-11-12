@@ -1653,6 +1653,13 @@ spell_history::History::Cooldown SpellHandler::historyCooldown(uint32_t spellId,
                itemId);
 }
 
+int32_t SpellHandler::spellShownCooldownMs(uint32_t spellId) const {
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return 0;
+    const int32_t own = moddedCooldown(spellId, static_cast<int32_t>(it->second.recoveryMs));
+    return std::max(own, categoryCooldown(spellId, false));
+}
+
 int32_t SpellHandler::itemUseCooldownMs(uint32_t spellId) const {
     const auto it = owner_.spellNameCacheRef().find(spellId);
     if (it == owner_.spellNameCacheRef().end()) return 0;

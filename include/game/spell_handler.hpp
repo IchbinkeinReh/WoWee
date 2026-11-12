@@ -277,6 +277,10 @@ public:
     /// the spell's Cooldown modifiers (op 11, the category's unless
     /// AttributesEx6 0x80000000), whichever is longer. Milliseconds.
     [[nodiscard]] int32_t itemUseCooldownMs(uint32_t spellId) const;
+    /// The cooldown a spell's tooltip gives it (0x006238a0): RecoveryTime
+    /// through its Cooldown modifiers against the category's as the history
+    /// takes it (0x007fef60), the longer. Milliseconds.
+    [[nodiscard]] int32_t spellShownCooldownMs(uint32_t spellId) const;
     /// The first area an AreaGroup names, 0 for none.
     [[nodiscard]] uint32_t firstAreaOfGroup(uint32_t group) const;
     /// The totem bar's update (0x005ab9d0): an element whose list has spells

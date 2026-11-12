@@ -2928,12 +2928,49 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
     }
     if (!cost.empty() || !range.empty()) line(cost, range, 1.0f, 1.0f, 1.0f);
 
-    // Instant is a word rather than a zero, which is what WoW prints.
-    const std::string cast = info.castTimeMs > 0
-        ? withNumber(globalOr(L, "SPELL_CAST_TIME_SEC", "%.3g sec cast"), "%.3g",
-                     info.castTimeMs / 1000.0f)
-        : globalOr(L, "SPELL_CAST_TIME_INSTANT", "Instant");
-    line(cast, "", 1.0f, 1.0f, 1.0f);
+    // The cast, as 0x006238a0 says it - none for a passive spell (Attributes
+    // 0x40), one whose first effect is 0x2f or 0x4e, or a trade spell: a
+    // time in seconds under a minute, else minutes; with none, channeled
+    // (AttributesEx 0x44), on the next swing (Attributes 0x404) or ranged
+    // attack (0x2), Instant for a mana spell with a cost, else "Instant cast".
+    // Its cooldown on the right (SPELL_RECAST_TIME_*), unless AttributesEx6
+    // 0x1 keeps it off.
+    gh->loadSpellNameCache();
+    if (const auto ce = gh->spellNameCacheRef().find(spellId); ce != gh->spellNameCacheRef().end()) {
+        const auto& sp = ce->second;
+        const bool tradeSpell = (sp.attr & 0x20u) != 0 &&
+            std::any_of(std::begin(sp.effectIds), std::end(sp.effectIds), [](uint32_t e) {
+                return e == 0x35 || e == 0x18 || e == 0x9d || e == 0x3b;
+            });
+        if ((sp.attr & 0x40u) == 0 && sp.effectIds[0] != 0x2f && sp.effectIds[0] != 0x4e && !tradeSpell) {
+            std::string cast;
+            const int32_t castMs = static_cast<int32_t>(info.castTimeMs);
+            if (castMs > 0) {
+                cast = castMs < 60000
+                    ? withNumber(globalOr(L, "SPELL_CAST_TIME_SEC", "%.3g sec cast"), "%.3g", castMs / 1000.0f)
+                    : withNumber(globalOr(L, "SPELL_CAST_TIME_MIN", "%.3g min cast"), "%.3g", castMs / 60000.0f);
+            } else if ((sp.attrEx & 0x44u) != 0) {
+                cast = globalOr(L, "SPELL_CAST_CHANNELED", "Channeled");
+            } else if ((sp.attr & 0x404u) != 0) {
+                cast = globalOr(L, "SPELL_ON_NEXT_SWING", "Next melee");
+            } else if ((sp.attr & 0x2u) != 0) {
+                cast = globalOr(L, "SPELL_ON_NEXT_RANGED", "Next ranged");
+            } else if (info.powerType == 0 && info.manaCost > 0) {
+                cast = globalOr(L, "SPELL_CAST_TIME_INSTANT", "Instant");
+            } else {
+                cast = globalOr(L, "SPELL_CAST_TIME_INSTANT_NO_MANA", "Instant cast");
+            }
+            std::string recast;
+            const auto* sh = gh->getSpellHandler();
+            const int32_t cdMs = sh ? sh->spellShownCooldownMs(spellId) : 0;
+            if (cdMs > 0 && (sp.attrEx6 & 0x1u) == 0) {
+                recast = cdMs < 60000
+                    ? withNumber(globalOr(L, "SPELL_RECAST_TIME_SEC", "%.3g sec cooldown"), "%.3g", cdMs / 1000.0f)
+                    : withNumber(globalOr(L, "SPELL_RECAST_TIME_MIN", "%.3g min cooldown"), "%.3g", cdMs / 60000.0f);
+            }
+            line(cast, recast, 1.0f, 1.0f, 1.0f);
+        }
+    }
 
     // What the spell consumes, as 0x00624ce0 writes it: SPELL_REAGENTS, then
     // each item by name with its count past one, a reagent the bags are
