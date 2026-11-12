@@ -232,8 +232,8 @@ std::optional<ImVec2> project(const glm::mat4& viewProj, const glm::vec3& p, flo
 
 void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
     WOWEE_PROFILE_SCOPE("interface: names and plates", Cpu);
+    plateMouseover_ = 0;
     if (gameHandler.getState() != game::WorldState::IN_WORLD) return;
-    gameHandler.setMouseoverGuid(0);
 
     auto* appRenderer = services_.renderer;
     rendering::Camera* camera = appRenderer ? appRenderer->getCamera() : nullptr;
@@ -996,7 +996,7 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         // mouseover, and a click targets it.
         if (!ImGui::GetIO().WantCaptureMouse) {
             if (mouse.x >= fr0.x && mouse.x <= fr1.x && mouse.y >= fr0.y && mouse.y <= fr1.y) {
-                gameHandler.setMouseoverGuid(guid);
+                plateMouseover_ = guid;
                 if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) gameHandler.targetUnit(guid);
             }
         }

@@ -4853,6 +4853,34 @@ public:
         int32_t required = 0;
     };
     std::optional<ItemLockShown> itemLockShown(uint32_t lockId, int32_t itemLevel);
+    /// What a game object's world tooltip says (0x00626720): its name, the
+    /// LOCKED line where GAMEOBJECT_FLAGS says locked, coloured by the lock
+    /// walk (0x0070f160), and what its lock's first slot asks for when that
+    /// slot's Action fits the object as it is (0x0070ef30, 0x0070ef90).
+    struct GameObjectTooltipFacts {
+        uint32_t entry = 0;
+        std::string name;
+        bool flaggedLocked = false;
+        /// The lock walk: nothing opens it, the spell and its value against
+        /// what the slot wants, the key carried.
+        bool locked = false;
+        uint32_t spell = 0;
+        int32_t value = 0;
+        int32_t required = 0;
+        uint32_t keyItem = 0;
+        /// The first slot's Type (1 item, 2 skill, 3 spell) where it fits,
+        /// else 0, with its Index.
+        uint32_t requirementType = 0;
+        uint32_t requirementIndex = 0;
+        /// LockType.dbc's name for a skill slot, "UNKNOWN" for none.
+        std::string lockTypeName;
+        /// For a spell slot: the spell's reagents.
+        uint32_t reagentItem[8] = {};
+        uint32_t reagentCount[8] = {};
+        /// The template's six quest items (after its size).
+        std::array<uint32_t, 6> questItems{};
+    };
+    std::optional<GameObjectTooltipFacts> gameObjectTooltipFacts(uint64_t guid);
     /// ITEM_FIELD_DURATION of an item this client holds, 0 when unknown.
     uint32_t getItemDurationByGuid(uint64_t guid) const {
         auto it = onlineItems_.find(guid);

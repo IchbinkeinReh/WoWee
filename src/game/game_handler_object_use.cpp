@@ -292,6 +292,48 @@ std::optional<GameHandler::ItemLockShown> GameHandler::itemLockShown(uint32_t lo
     return out;
 }
 
+std::optional<GameHandler::GameObjectTooltipFacts> GameHandler::gameObjectTooltipFacts(uint64_t guid) {
+    const auto entity = getEntityManager().getEntity(guid);
+    const auto go = std::dynamic_pointer_cast<GameObject>(entity);
+    if (!go) return std::nullopt;
+    const GameObjectQueryResponseData* info = getCachedGameObjectInfo(go->getEntry());
+    const GameObjectFacts f = gameObjectFacts(*go, info);
+    GameObjectTooltipFacts t;
+    t.entry = go->getEntry();
+    // The template's name (0x0070cdf0), nothing until it is described.
+    if (info) {
+        t.name = info->name;
+        t.questItems = info->questItems;
+    }
+    t.flaggedLocked = (f.flags & go_use::kFlagLocked) != 0;
+    const go_use::Opening o = gameObjectOpening(f);
+    t.locked = o.locked;
+    t.spell = o.spell;
+    t.value = o.value;
+    t.required = o.required;
+    t.keyItem = o.keyItem;
+    // The first slot, where its Action fits the object as it stands.
+    if (const go_use::LockRow* lock = gameObjectLock(f); lock && go_use::actionFits(lock->action[0], f.state, f.flags)) {
+        t.requirementType = lock->type[0];
+        t.requirementIndex = lock->index[0];
+        if (t.requirementType == 2) {
+            t.lockTypeName = lockTypeName(services_.assetManager, lock->index[0]);
+            if (t.lockTypeName.empty()) t.lockTypeName = "UNKNOWN";
+        } else if (t.requirementType == 3) {
+            loadSpellNameCache();
+            if (const auto it = spellNameCache_.find(lock->index[0]); it != spellNameCache_.end()) {
+                for (int k = 0; k < 8; ++k) {
+                    t.reagentItem[k] = it->second.reagents[k].itemId;
+                    t.reagentCount[k] = it->second.reagents[k].count;
+                }
+            } else {
+                t.requirementType = 0;
+            }
+        }
+    }
+    return t;
+}
+
 bool GameHandler::gameObjectAllowsMounted(const GameObjectFacts& f) const {
     // 0x00710390: a mailbox always, a barber chair never, else its field.
     if (f.type == 19) return true;

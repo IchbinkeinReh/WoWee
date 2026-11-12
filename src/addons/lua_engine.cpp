@@ -2725,6 +2725,9 @@ int lua_Tooltip_SetOwner(lua_State* L) {
     w->isTooltip = true;
     // Cleared here, because SetOwner is what precedes a fresh set of lines.
     w->tooltipLines.clear();
+    // And a fade under way is called off, the tooltip whole again (0x0061ea00).
+    w->tooltipFadeLeft = 0.0f;
+    w->alpha = 1.0f;
 
     // Remembered, because IsOwned reads it and nothing wrote it - so every
     // check answered false and a tooltip outlived the frame it belonged to.
@@ -4909,6 +4912,227 @@ int lua_Tooltip_SetUnit(lua_State* L) {
     luaPushOneOrNil(L, threatShown ? 1 : 0);
     return 1;
 }
+
+/// How an opening spell's value measures against what a lock wants
+/// (0x0061a1f0): grey a hundred over, green fifty, yellow twenty-five,
+/// orange at it, red short.
+static void lockSkillColour(int32_t value, int32_t required, float (&c)[3]) {
+    static constexpr float kGrey[3] = {0.5f, 0.5f, 0.5f}, kGreen[3] = {0.25f, 0.75f, 0.25f},
+                           kYellow[3] = {1.0f, 1.0f, 0.0f}, kOrange[3] = {1.0f, 0.5f, 0.25f},
+                           kRed[3] = {1.0f, 0.125f, 0.125f};
+    const float* pick = value >= required + 100 ? kGrey
+                        : value >= required + 50 ? kGreen
+                        : value >= required + 25 ? kYellow
+                        : value >= required      ? kOrange
+                                                 : kRed;
+    for (int i = 0; i < 3; ++i) c[i] = pick[i];
+}
+
+/// A game object's tooltip over the world (0x00626720): its name in gold;
+/// LOCKED where its flags say locked, red where nothing the player has opens
+/// it, green where a key or no spell does, else in the colour of the opening
+/// spell against the lock; what the lock's first slot asks for - the key by
+/// name (LOCKED_WITH_ITEM, white), the kind of skill (LOCKED_WITH_SPELL_KNOWN
+/// in the skill's colour, or LOCKED_WITH_SPELL in red with no spell for it,
+/// left out on a locked object), or a spell's reagents (LOCKED_WITH_SPELL,
+/// each red where the bags hold too few); and with showQuestTrackingTooltips
+/// the quests it answers. Answers whether there was an object to describe.
+static bool fillGameObjectTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh, uint64_t guid) {
+    const auto facts = gh->gameObjectTooltipFacts(guid);
+    if (!facts) return false;
+    const auto& t = *facts;
+    lua_checkstack(L, 8);
+    w->isTooltip = true;
+    w->tooltipUnit.clear();
+    w->tooltipLines.clear();
+    auto addLine = [&w](std::string text, const float (&c)[3], bool wrap = false) {
+        if (text.empty()) return;
+        wowee::ui::Widget::TooltipLine line;
+        line.left = std::move(text);
+        line.lc[0] = c[0]; line.lc[1] = c[1]; line.lc[2] = c[2]; line.lc[3] = 1.0f;
+        line.rc[0] = line.rc[1] = line.rc[2] = line.rc[3] = 1.0f;
+        line.wrap = wrap;
+        w->tooltipLines.push_back(std::move(line));
+    };
+    static constexpr float kGold[3] = {1.0f, 0.824f, 0.0f}, kWhite[3] = {1.0f, 1.0f, 1.0f},
+                           kGreen[3] = {0.25f, 0.75f, 0.25f}, kRed[3] = {1.0f, 0.125f, 0.125f};
+    addLine(t.name, kGold);
+
+    if (t.flaggedLocked) {
+        float c[3] = {kRed[0], kRed[1], kRed[2]};
+        if (!t.locked) {
+            if (t.spell == 0 || t.keyItem != 0) {
+                for (int i = 0; i < 3; ++i) c[i] = kGreen[i];
+            } else {
+                lockSkillColour(t.value, t.required, c);
+            }
+        }
+        addLine(globalOr(L, "LOCKED", "Locked"), c);
+    }
+
+    switch (t.requirementType) {
+        case 1: {
+            const auto* key = gh->getItemInfo(t.requirementIndex);
+            if (key && key->valid && !key->name.empty()) {
+                addLine(formatGlobal(L, globalOr(L, "LOCKED_WITH_ITEM", "Requires %s"), {key->name}), kWhite);
+            } else {
+                gh->ensureItemInfo(t.requirementIndex);
+            }
+            break;
+        }
+        case 2: {
+            if (t.spell != 0) {
+                float c[3];
+                lockSkillColour(t.value, t.required, c);
+                addLine(formatGlobal(L, globalOr(L, "LOCKED_WITH_SPELL_KNOWN", "Requires %s"), {t.lockTypeName}), c);
+            } else if (!t.flaggedLocked) {
+                addLine(formatGlobal(L, globalOr(L, "LOCKED_WITH_SPELL", "Requires %s"), {t.lockTypeName}), kRed);
+            }
+            break;
+        }
+        case 3: {
+            // 0x00623590: each reagent by name, its count after it where more
+            // than one, in red where the bags hold fewer, joined by ", ".
+            std::string list;
+            for (int k = 0; k < 8; ++k) {
+                if (t.reagentItem[k] == 0 || t.reagentCount[k] == 0) continue;
+                const auto* item = gh->getItemInfo(t.reagentItem[k]);
+                if (!item || !item->valid || item->name.empty()) {
+                    gh->ensureItemInfo(t.reagentItem[k]);
+                    continue;
+                }
+                if (!list.empty()) list += ", ";
+                std::string one = item->name;
+                if (t.reagentCount[k] >= 2) one += " (" + std::to_string(t.reagentCount[k]) + ")";
+                if (gh->countItemInBags(t.reagentItem[k]) < t.reagentCount[k]) list += "|cffff2020" + one + "|r";
+                else list += one;
+            }
+            if (!list.empty())
+                addLine(formatGlobal(L, globalOr(L, "LOCKED_WITH_SPELL", "Requires %s"), {list}), kWhite, true);
+            break;
+        }
+        default:
+            break;
+    }
+
+    // As a creature's (0x00621070): each quest's title over a " - " line for
+    // an objective naming the object, or one of its six quest items, and for
+    // a quest not yet complete an item the quest hands over among them.
+    if (cvarOn(L, "showQuestTrackingTooltips")) {
+        for (const auto& q : gh->getQuestLog()) {
+            bool titled = false;
+            const auto title = [&] {
+                if (!titled) addLine(q.title, kGold);
+                titled = true;
+            };
+            const auto emit = [&](const std::string& text) {
+                title();
+                addLine(" - " + text, kWhite);
+            };
+            for (int k = 0; k < 4; ++k) {
+                if (q.killObjectives[static_cast<size_t>(k)].npcOrGoId != -static_cast<int32_t>(t.entry)) continue;
+                game::QuestObjective line;
+                if (game::questObjectiveSlotLine(*gh, q, k, line)) emit(line.text);
+                break;
+            }
+            for (const uint32_t item : t.questItems) {
+                if (item == 0) break;
+                for (int k = 0; k < 6; ++k) {
+                    const auto& io = q.itemObjectives[static_cast<size_t>(k)];
+                    if (io.itemId != item || (io.itemId == q.sourceItemId && io.required <= 1)) continue;
+                    game::QuestObjective line;
+                    if (game::questObjectiveSlotLine(*gh, q, 4 + k, line)) emit(line.text);
+                    break;
+                }
+                if (q.complete) continue;
+                for (const uint32_t handed : q.objectiveSourceItems) {
+                    if (handed != item) continue;
+                    if (const auto* info = gh->getItemInfo(item); info && info->valid && !info->name.empty()) {
+                        title();
+                        addLine(" - " + info->name, kWhite);
+                    } else {
+                        gh->ensureItemInfo(item);
+                    }
+                }
+            }
+        }
+    }
+    w->shown = true;
+    return true;
+}
+
+namespace {
+/// The tooltips fading out, by widget id.
+std::vector<uint32_t>& fadingTooltips() {
+    static std::vector<uint32_t> ids;
+    return ids;
+}
+
+/// A frame's own Hide, run as a script would run it, so OnHide follows.
+void hideFrameByWid(lua_State* L, uint32_t wid) {
+    lua_getglobal(L, "__WoweeFramesByWid");
+    if (!lua_istable(L, -1)) { lua_pop(L, 1); return; }
+    lua_pushinteger(L, static_cast<lua_Integer>(wid));
+    lua_rawget(L, -2);
+    if (!lua_istable(L, -1)) { lua_pop(L, 2); return; }
+    lua_getfield(L, -1, "Hide");
+    if (!lua_isfunction(L, -1)) { lua_pop(L, 3); return; }
+    lua_pushvalue(L, -2);
+    if (lua_pcall(L, 1, 0, 0) != 0) {
+        LOG_WARNING("tooltip fade: ", luaL_optstring(L, -1, "?"));
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 2);
+}
+
+/// FadeOut (0x0061d940): a tooltip at the cursor goes at once; any other
+/// is held two seconds, the last of them fading, and then hidden
+/// (0x0061b290, the fade at 0x0061b3dd).
+void fadeOutTooltip(lua_State* L, uint32_t wid) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    auto* w = tree ? tree->get(wid) : nullptr;
+    if (!w) return;
+    if (w->tooltipAnchorType == 8 || w->tooltipAnchorType == 11) {
+        w->tooltipFadeLeft = 0.0f;
+        hideFrameByWid(L, wid);
+        return;
+    }
+    w->tooltipFadeLeft = 2.0f;
+    auto& ids = fadingTooltips();
+    if (std::find(ids.begin(), ids.end(), wid) == ids.end()) ids.push_back(wid);
+}
+
+/// Each frame: the alpha of a fading tooltip is what is left of its time,
+/// at most one; at none it is whole again and hidden.
+void tickTooltipFades(lua_State* L, float elapsed) {
+    auto& ids = fadingTooltips();
+    if (ids.empty()) return;
+    auto* tree = wowee::addons::getWidgetTree(L);
+    if (!tree) return;
+    const std::vector<uint32_t> now = ids;
+    ids.clear();
+    for (const uint32_t wid : now) {
+        auto* w = tree->get(wid);
+        if (!w || w->tooltipFadeLeft <= 0.0f) continue;
+        w->tooltipFadeLeft -= elapsed;
+        if (w->tooltipFadeLeft > 0.0f) {
+            w->alpha = std::min(w->tooltipFadeLeft, 1.0f);
+            ids.push_back(wid);
+        } else {
+            w->tooltipFadeLeft = 0.0f;
+            w->alpha = 1.0f;
+            hideFrameByWid(L, wid);
+        }
+    }
+}
+}  // namespace
+
+int lua_Tooltip_FadeOut(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    if (w && w->isTooltip) fadeOutTooltip(L, widgetIdOf(L, 1));
+    return 0;
+}
+
 
 /// Shared by every setter that ends up naming an item: title in the quality
 /// colour, then whatever else is worth saying. One place, because the four
@@ -11406,6 +11630,8 @@ void LuaEngine::registerCoreAPI() {
     lua_setglobal(L_, "__WoweeTooltipSetPetAction");
     lua_pushcfunction(L_, lua_Tooltip_SetShapeshift);
     lua_setglobal(L_, "__WoweeTooltipSetShapeshift");
+    lua_pushcfunction(L_, lua_Tooltip_FadeOut);
+    lua_setglobal(L_, "__WoweeTooltipFadeOut");
     lua_pushcfunction(L_, lua_Tooltip_SetPossession);
     lua_setglobal(L_, "__WoweeTooltipSetPossession");
     lua_pushcfunction(L_, lua_Tooltip_SetQuestRewardSpell);
@@ -12741,7 +12967,6 @@ void LuaEngine::registerCoreAPI() {
         "    end\n"
         "    return false\n"
         "end\n"
-        "function __WoweeFrameMT:FadeOut() end\n"
         // SetFrameStrata is a real binding; a no-op here would shadow it and
         // leave the tooltip in whatever stratum it inherited, under the frames
         // it is meant to sit above.
@@ -12794,6 +13019,8 @@ void LuaEngine::registerCoreAPI() {
         "    end\n"
         "    return unpack(out, 1, n)\n"
         "end\n"
+        // FadeOut (0x0061d940), a tooltip's; nothing on any other frame.
+        "function __WoweeFrameMT:FadeOut() __WoweeTooltipFadeOut(self) end\n"
         // Iterating a table the secure way, which for our purposes is next.
         "SecureNext = next\n"
         // GetCVarBool wraps C-side GetCVar (registered in table) for boolean queries
@@ -13526,6 +13753,50 @@ void LuaEngine::callFrameScript(uint32_t wid, const char* script,
     finishFrameScript(wid, script, handlerIdx, nargs);
 }
 
+
+void LuaEngine::worldMouseoverChanged(uint64_t oldGuid, uint64_t newGuid, bool unit) {
+    // 0x0051f790, on the mouseover changing: the old one's tooltip faded
+    // (0x0061b290), then GameTooltip put at its default place
+    // (OnTooltipSetDefaultAnchor, 0x005143f0) and SetUnit("mouseover") for a
+    // unit, the object's own tooltip for a game object (0x00626720).
+    if (!L_) return;
+    taint::Scope secure(0);
+    lua_getglobal(L_, "GameTooltip");
+    const uint32_t wid = lua_istable(L_, -1) ? widgetIdOf(L_, lua_gettop(L_)) : 0;
+    lua_pop(L_, 1);
+    if (wid == 0) return;
+    // Only while the tooltip is still the world's - placed against UIParent,
+    // as the default anchor places it - and not one a frame the pointer has
+    // moved onto has taken over since.
+    if (oldGuid != 0) {
+        lua_getglobal(L_, "UIParent");
+        const uint32_t uiParent = lua_istable(L_, -1) ? widgetIdOf(L_, lua_gettop(L_)) : 0;
+        lua_pop(L_, 1);
+        const auto* w = widgets_.get(wid);
+        if (w && w->shown && w->tooltipOwnerId == uiParent) fadeOutTooltip(L_, wid);
+    }
+    auto* gh = wowee::addons::getGameHandler(L_);
+    if (newGuid == 0 || !gh) return;
+    if (!unit) {
+        callFrameScript(wid, "OnTooltipSetDefaultAnchor");
+        if (auto* w = widgets_.get(wid)) fillGameObjectTooltip(L_, w, gh, newGuid);
+        return;
+    }
+    callFrameScript(wid, "OnTooltipSetDefaultAnchor");
+    lua_getglobal(L_, "GameTooltip");
+    lua_getfield(L_, -1, "SetUnit");
+    if (lua_isfunction(L_, -1)) {
+        lua_pushvalue(L_, -2);
+        lua_pushstring(L_, "mouseover");
+        if (lua_pcall(L_, 2, 0, 0) != 0) {
+            LOG_WARNING("mouseover tooltip: ", luaL_optstring(L_, -1, "?"));
+            lua_pop(L_, 1);
+        }
+    } else {
+        lua_pop(L_, 1);
+    }
+    lua_pop(L_, 1);
+}
 
 bool LuaEngine::frameHasScript(uint32_t wid, const char* script) {
     if (!L_ || wid == 0) return false;
@@ -16211,6 +16482,7 @@ void LuaEngine::dispatchOnUpdate(float elapsed) {
 
     drainPendingTextChanged();
     advanceWheelGlide(elapsed);
+    tickTooltipFades(L_, elapsed);
 
     // The macros on the bars that can change their answer, worked out again
     // as the client does every frame (0x00566660); a slot whose macro now

@@ -304,6 +304,8 @@ bool parseGameObjectQueryBody(network::Packet& packet,
                         data.entry, ")");
         }
         if (packet.hasRemaining(4)) data.size = packet.readFloat();
+        for (uint32_t& item : data.questItems)
+            if (packet.hasRemaining(4)) item = packet.readUInt32();
     } else if (remaining > 0) {
         // Partial data field; read what we can
         uint32_t fieldsToRead = remaining / 4;

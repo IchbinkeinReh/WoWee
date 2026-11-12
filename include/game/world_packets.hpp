@@ -2051,6 +2051,9 @@ struct GameObjectQueryResponseData {
     /// The template's size, after the data fields (+0x74 in the client's
     /// cache record): the model's scale.
     float size = 1.0f;
+    /// The quest items that follow the size on WotLK (+0x78, six): the
+    /// object's tooltip names a quest objective for any of them.
+    std::array<uint32_t, 6> questItems{};
 
     [[nodiscard]] bool isValid() const { return entry != 0 && !name.empty(); }
 };

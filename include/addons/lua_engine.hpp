@@ -271,6 +271,9 @@ public:
     /// The widget tree CreateFrame and CreateTexture build into. Owned here so
     /// its lifetime matches the Lua state that holds handles into it.
     ui::WidgetTree& widgets() { return widgets_; }
+    /// The world mouseover changed (0x0051f790): the old one's tooltip
+    /// fades, and a unit's or a game object's is shown.
+    void worldMouseoverChanged(uint64_t oldGuid, uint64_t newGuid, bool unit);
 
     lua_State* getState() { return L_; }
     /// A global string of the interface's - GlobalStrings.lua's, which is

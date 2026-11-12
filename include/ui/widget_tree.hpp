@@ -633,6 +633,9 @@ struct Widget {
     /// The offsets SetOwner or SetAnchorType gave, which ANCHOR_CURSOR_RIGHT
     /// adds to the cursor each frame (0x0061b2e0).
     float tooltipAnchorX = 0.0f, tooltipAnchorY = 0.0f;
+    /// Seconds left of a FadeOut, 0 for none (0x0061d940: two, the last one
+    /// fading).
+    float tooltipFadeLeft = 0.0f;
     /// The frame this tooltip was last given by SetOwner. A tooltip is hidden
     /// when its owner stops being visible - see hideOrphanedTooltips.
     uint32_t tooltipOwnerId = 0;

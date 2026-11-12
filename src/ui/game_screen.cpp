@@ -719,6 +719,7 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     auto spellIconFn = [this](uint32_t id, pipeline::AssetManager* am) { return getSpellIcon(id, am); };
     combatUI_.renderCooldownTracker(gameHandler, settingsPanel_, spellIconFn);
     renderNameplates(gameHandler);  // names over heads and nameplates (0x007e5640, 0x0098f790)
+    commitMouseover(gameHandler);
     renderLightKindOverlay();       // Debug Graphics: the lights' kinds
     combatUI_.playSoundsForNewChat(gameHandler);
     // Blizzard_CombatText draws its own once it is loaded, which happens the
@@ -1426,20 +1427,29 @@ bool GameScreen::drawWorldObjectCursor(game::GameHandler& gameHandler,
         drawCursorTexture(tex);
     }
 
-    // ...and what it is, beside the pointer, which is the whole of what the
-    // real client shows for an object: a cursor saying what it is for and a
-    // name saying what it is. An object whose name has not come back yet is
-    // left silent rather than labelled "Unknown".
+    // What it is, GameTooltip says as the mouseover's (0x00626720, through
+    // commitMouseover). Scenery with nothing to say is not worth taking the
+    // pointer for.
     const std::string name = game::entityDisplayName(entity);
-    if (!name.empty() && name != "Unknown") {
-        ImGui::BeginTooltip();
-        ImGui::TextUnformatted(name.c_str());
-        ImGui::EndTooltip();
-    } else if (!usable) {
-        // Scenery with nothing to say is not worth taking the pointer for.
-        return false;
-    }
+    if ((name.empty() || name == "Unknown") && !usable) return false;
     return true;
+}
+
+void GameScreen::commitMouseover(game::GameHandler& gameHandler) {
+    // The mouseover as the client keeps it (0x0051f790): one guid, changed
+    // at most once a frame, the old one's tooltip let go and the new one's
+    // shown - a unit's by SetUnit, a game object's by its own (0x00626720).
+    const uint64_t guid = plateMouseover_ != 0 ? plateMouseover_ : worldMouseover_;
+    const uint64_t old = gameHandler.getMouseoverGuid();
+    if (guid == old) return;
+    gameHandler.setMouseoverGuid(guid);
+    auto* engine = services_.addonManager ? services_.addonManager->getLuaEngine() : nullptr;
+    if (!engine) return;
+    const auto entity = guid != 0 ? gameHandler.getEntityManager().getEntity(guid) : nullptr;
+    const bool unit = entity && (entity->getType() == game::ObjectType::UNIT ||
+                                 entity->getType() == game::ObjectType::PLAYER);
+    const bool object = entity && entity->getType() == game::ObjectType::GAMEOBJECT;
+    engine->worldMouseoverChanged(old, unit || object ? guid : 0, unit);
 }
 
 void GameScreen::renderEntityList(game::GameHandler& gameHandler) {
@@ -2109,6 +2119,7 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
             if (gameHandler.isGroundTargeting()) gameHandler.aimGroundTarget(std::nullopt);
         }
     }
+    worldMouseover_ = 0;
     if (!io.WantCaptureMouse && !frameXmlOwnsMouse() && !gameHandler.isGroundTargeting()) {
         auto* renderer = services_.renderer;
         auto* camera = renderer ? renderer->getCamera() : nullptr;
@@ -2151,6 +2162,7 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                 drawWorldObjectCursor(gameHandler, hoverPick);
             }
             highlightGuid = hoverPick.mouseover();
+            worldMouseover_ = highlightGuid;
         }
     }
     // A cursor the interface asked for with SetCursor, drawn last so it covers
