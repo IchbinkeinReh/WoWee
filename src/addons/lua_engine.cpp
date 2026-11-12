@@ -2955,6 +2955,24 @@ static void addTalentHints(lua_State* L, wowee::ui::Widget* w, const wowee::addo
     }
 }
 
+/// A global string for the player's gender, as GetText(key, UnitSex("player"))
+/// reads it (0x007225e0 with -1).
+static std::string genderedGlobal(lua_State* L, const std::string& key) {
+    lua_getglobal(L, "GetText");
+    if (!lua_isfunction(L, -1)) { lua_pop(L, 1); return globalOr(L, key.c_str(), key.c_str()); }
+    lua_pushstring(L, key.c_str());
+    lua_getglobal(L, "UnitSex");
+    if (lua_isfunction(L, -1)) {
+        lua_pushstring(L, "player");
+        if (lua_pcall(L, 1, 1, 0) != 0) { lua_pop(L, 1); lua_pushnil(L); }
+    }
+    if (lua_pcall(L, 2, 1, 0) != 0) { lua_pop(L, 1); return key; }
+    const char* v = lua_tostring(L, -1);
+    std::string out = v ? v : key;
+    lua_pop(L, 1);
+    return out;
+}
+
 /// The interface's UberTooltips choice: "0" makes an action button's spell
 /// tooltip the brief one (0x00631000 reads it).
 static bool uberTooltips(lua_State* L) {
@@ -3172,12 +3190,90 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
         }
     }
 
+    // The tools, after the cast: SPELL_TOTEMS, then each Totem item by
+    // name and each TotemCategory by its name, ", " between, one not carried
+    // red (0x00754a20, 0x007548f0). A brief tooltip shows the line only
+    // when something is missing. An item the cache has not answered yet is
+    // left out and asked for, as with the reagents.
+    if (const auto se = gh->spellNameCacheRef().find(spellId); se != gh->spellNameCacheRef().end()) {
+        const auto* sh = gh->getSpellHandler();
+        std::string tools;
+        bool allThere = true;
+        const auto add = [&](const std::string& named, bool there) {
+            tools += tools.empty() ? globalOr(L, "SPELL_TOTEMS", "Tools: ") : std::string(", ");
+            if (!there) allThere = false;
+            tools += there ? named : "|cffff2020" + named + "|r";
+        };
+        for (const uint32_t tool : se->second.totems) {
+            if (tool == 0) continue;
+            const auto* item = gh->getItemInfo(tool);
+            if (!item || !item->valid || item->name.empty()) {
+                gh->ensureItemInfo(tool);
+                continue;
+            }
+            add(item->name, gh->getInventory().countCarried(tool) > 0);
+        }
+        for (const uint32_t cat : se->second.totemCategories) {
+            if (cat == 0) continue;
+            const std::string& named = gh->getTotemCategoryName(cat);
+            if (!named.empty()) add(named, sh && sh->carriesTotemCategory(cat));
+        }
+        if (!tools.empty() && (!allThere || !brief)) {
+            line(tools, "", 1.0f, 1.0f, 1.0f);
+            w->tooltipLines.back().wrap = true;
+        }
+    }
+
+    // Then what the spell asks of the player, each line white where it is
+    // met and red where it is not, and in a brief tooltip only where it is
+    // not (SPELL_*_NOSPACE): the item it wants on (SPELL_EQUIPPED_ITEM),
+    // the forms it may be cast in (SPELL_REQUIRED_FORM), the reputation
+    // (ITEM_REQ_REPUTATION with the faction and the gendered standing), and
+    // for a passive spell the level it starts at (ITEM_MIN_LEVEL, red).
+    if (const auto* sh = gh->getSpellHandler()) {
+        const auto needLine = [&](const char* key, const char* keyBrief, const std::string& what, bool met, bool wrap) {
+            if (what.empty() || (met && brief)) return;
+            const std::string fmt = globalOr(L, met || !brief ? key : keyBrief, "Requires %s");
+            line(formatGlobal(L, fmt, {what}), "", 1.0f, met ? 1.0f : 0.125f, met ? 1.0f : 0.125f);
+            w->tooltipLines.back().wrap = wrap;
+        };
+        const auto eq = sh->tooltipEquipped(spellId);
+        needLine("SPELL_EQUIPPED_ITEM", "SPELL_EQUIPPED_ITEM_NOSPACE", eq.names, eq.equipped, true);
+        const auto forms = sh->tooltipForms(spellId);
+        needLine("SPELL_REQUIRED_FORM", "SPELL_REQUIRED_FORM_NOSPACE", forms.names, forms.met, false);
+        if (const auto rep = sh->tooltipReputation(spellId); rep.faction != 0 && (!rep.met || !brief)) {
+            const std::string& faction = gh->getFactionNamePublic(rep.faction);
+            const std::string standing =
+                genderedGlobal(L, "FACTION_STANDING_LABEL" + std::to_string(rep.rank + 1));
+            line(formatGlobal(L, globalOr(L, "ITEM_REQ_REPUTATION", "Requires %s - %s"),
+                              {faction.empty() ? globalOr(L, "UNKNOWN", "Unknown") : faction, standing}),
+                 "", 1.0f, rep.met ? 1.0f : 0.125f, rep.met ? 1.0f : 0.125f);
+        }
+        if (const auto pe = gh->spellNameCacheRef().find(spellId); pe != gh->spellNameCacheRef().end() && !brief) {
+            const auto& sp = pe->second;
+            const bool trade = (sp.attr & 0x20u) != 0 &&
+                std::any_of(std::begin(sp.effectIds), std::end(sp.effectIds), [](uint32_t x) {
+                    return x == 0x35 || x == 0x18 || x == 0x9d || x == 0x3b;
+                });
+            const bool passive = sp.effectIds[0] == 0x2f || (sp.attr & 0x40u) != 0;
+            if (!trade && passive && sp.baseLevel > 0 && static_cast<int32_t>(gh->getPlayerLevel()) < sp.baseLevel) {
+                line(formatGlobal(L, globalOr(L, "ITEM_MIN_LEVEL", "Requires Level %d"), {std::to_string(sp.baseLevel)}),
+                     "", 1.0f, 0.125f, 0.125f);
+            }
+        }
+    }
+
     // What the spell consumes, as 0x00624ce0 writes it: SPELL_REAGENTS, then
     // each item by name with its count past one, a reagent the bags are
-    // short of in red. An item the cache has not answered yet is left out
-    // and asked for, as the client does; the next refresh names it.
+    // short of in red; nothing where the player needs none now (0x00800d60),
+    // and in a brief tooltip only where one is short. An item the cache has
+    // not answered yet is left out and asked for, as the client does; the
+    // next refresh names it.
     gh->loadSpellNameCache();
-    if (auto se = gh->spellNameCacheRef().find(spellId); se != gh->spellNameCacheRef().end()) {
+    const auto* reagentSh = gh->getSpellHandler();
+    if (auto se = gh->spellNameCacheRef().find(spellId);
+        se != gh->spellNameCacheRef().end() && !(reagentSh && reagentSh->tooltipNoReagents(spellId))) {
+        bool short_ = false;
         std::string reagents;
         for (const auto& r : se->second.reagents) {
             if (r.itemId == 0 || r.count == 0) continue;
@@ -3190,10 +3286,13 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
                                          : std::string(", ");
             std::string named = item->name;
             if (r.count >= 2) named += " (" + std::to_string(r.count) + ")";
-            if (gh->countItemInBags(r.itemId) < r.count) named = "|cffff2020" + named + "|r";
+            if (gh->countItemInBags(r.itemId) < r.count) {
+                named = "|cffff2020" + named + "|r";
+                short_ = true;
+            }
             reagents += named;
         }
-        if (!reagents.empty()) {
+        if (!reagents.empty() && (short_ || !brief)) {
             line(reagents, "", 1.0f, 1.0f, 1.0f);
             w->tooltipLines.back().wrap = true;
         }
@@ -3214,6 +3313,11 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
             text.replace(at, 2, std::to_string(amount));
         }
         line(text, "", 1.0f, 1.0f, 1.0f);
+    }
+    // A brief tooltip ends here: no description.
+    if (brief) {
+        w->shown = true;
+        return true;
     }
 
     const std::string body =

@@ -2213,18 +2213,7 @@ bool SpellHandler::toolsCarried(uint32_t spellId, const Entity& player) const {
     for (const uint32_t cat : e.totemCategories) {
         if (cat != 0 && !carriesTotemCategory(cat)) return false;
     }
-    // 0x00800d60: no reagents prepared (UNIT_FLAG 0x20 with AttributesEx5
-    // 0x2), or for a spell of the class's family PLAYER_NO_REAGENT_COST
-    // names.
-    const uint16_t flagsIdx = fieldIndex(UF::UNIT_FIELD_FLAGS);
-    const uint32_t unitFlags = flagsIdx != 0xFFFF ? player.getField(flagsIdx) : 0u;
-    bool free = (unitFlags & 0x20u) != 0 && (e.attrEx5 & 0x2u) != 0;
-    if (!free && e.spellFamily != 0 && e.spellFamily == classSpellFamily()) {
-        const uint16_t mask = fieldIndex(UF::PLAYER_NO_REAGENT_COST_1);
-        for (uint16_t w = 0; mask != 0xFFFF && w < 3 && !free; ++w)
-            free = (player.getField(static_cast<uint16_t>(mask + w)) & e.spellFamilyFlags[w]) != 0;
-    }
-    if (free) return true;
+    if (reagentsFree(spellId, player)) return true;
     // Each reagent carried in its count - one more where the reagent is an
     // item whose own spell this is, with charges.
     for (const auto& r : e.reagents) {
@@ -2237,6 +2226,138 @@ bool SpellHandler::toolsCarried(uint32_t spellId, const Entity& player) const {
         if (inv.countCarried(r.itemId) < need) return false;
     }
     return true;
+}
+
+bool SpellHandler::reagentsFree(uint32_t spellId, const Entity& player) const {
+    const auto own = owner_.spellNameCacheRef().find(spellId);
+    if (own == owner_.spellNameCacheRef().end()) return false;
+    const auto& e = own->second;
+    // 0x00800d60: no reagents prepared (UNIT_FLAG 0x20 with AttributesEx5
+    // 0x2), or for a spell of the class's family PLAYER_NO_REAGENT_COST
+    // names.
+    const uint16_t flagsIdx = fieldIndex(UF::UNIT_FIELD_FLAGS);
+    const uint32_t unitFlags = flagsIdx != 0xFFFF ? player.getField(flagsIdx) : 0u;
+    bool free = (unitFlags & 0x20u) != 0 && (e.attrEx5 & 0x2u) != 0;
+    if (!free && e.spellFamily != 0 && e.spellFamily == classSpellFamily()) {
+        const uint16_t mask = fieldIndex(UF::PLAYER_NO_REAGENT_COST_1);
+        for (uint16_t w = 0; mask != 0xFFFF && w < 3 && !free; ++w)
+            free = (player.getField(static_cast<uint16_t>(mask + w)) & e.spellFamilyFlags[w]) != 0;
+    }
+    return free;
+}
+
+const ItemQueryResponseData* SpellHandler::equippedMatch(uint32_t spellId, const Entity& player, uint32_t slots) const {
+    const auto own = owner_.spellNameCacheRef().find(spellId);
+    if (own == owner_.spellNameCacheRef().end()) return nullptr;
+    const auto& e = own->second;
+    const auto field = [&](UF f) {
+        const uint16_t i = fieldIndex(f);
+        return i != 0xFFFF ? player.getField(i) : 0u;
+    };
+    const uint32_t flags = field(UF::UNIT_FIELD_FLAGS), flags2 = field(UF::UNIT_FIELD_FLAGS_2);
+    if ((flags & 0x200000u) != 0) slots &= ~0x8000u;
+    if ((flags2 & 0x80u) != 0) slots &= ~0x10000u;
+    if ((flags2 & 0x400u) != 0) slots &= ~0x20000u;
+    for (int slot = 0; slot < 0x17; ++slot) {
+        if ((slots & (1u << slot)) == 0) continue;
+        const auto it = owner_.onlineItemsRef().find(owner_.getEquipSlotGuid(slot));
+        if (it == owner_.onlineItemsRef().end()) continue;
+        if (it->second.maxDurability != 0 && it->second.curDurability == 0) continue;
+        const auto* info = owner_.getItemInfo(it->second.entry);
+        if (info && static_cast<int32_t>(info->itemClass) == e.equippedItemClass &&
+            (e.equippedItemSubClassMask & (1u << (info->subClass & 31))) != 0)
+            return info;
+    }
+    return nullptr;
+}
+
+SpellHandler::TooltipEquipped SpellHandler::tooltipEquipped(uint32_t spellId) const {
+    TooltipEquipped out;
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return out;
+    const auto& e = it->second;
+    if ((e.targetFlags & 0x10u) != 0 || e.equippedItemClass < 0 || e.equippedItemSubClassMask == 0) return out;
+    auto* am = owner_.services().assetManager;
+    const auto cls = static_cast<uint32_t>(e.equippedItemClass);
+    if (auto m = am ? am->loadDBCOptional("ItemSubClassMask.dbc") : nullptr; m && m->getFieldCount() >= 3) {
+        for (uint32_t r = 0; r < m->getRecordCount() && out.names.empty(); ++r) {
+            if (m->getUInt32(r, 0) == cls && m->getUInt32(r, 1) == e.equippedItemSubClassMask) out.names = m->getString(r, 2);
+        }
+    }
+    if (out.names.empty()) {
+        if (auto sub = am ? am->loadDBCOptional("ItemSubClass.dbc") : nullptr; sub && sub->getFieldCount() > 27) {
+            for (uint32_t r = 0; r < sub->getRecordCount(); ++r) {
+                if (sub->getUInt32(r, 0) != cls || (e.equippedItemSubClassMask & (1u << (sub->getUInt32(r, 1) & 31))) == 0)
+                    continue;
+                std::string named = sub->getString(r, 27);  // VerboseName, else DisplayName
+                if (named.empty()) named = sub->getString(r, 10);
+                if (!out.names.empty()) out.names += ", ";
+                out.names += named;
+            }
+        }
+    }
+    // The hand AttributesEx3 names, else anywhere; both hands for 0x1000400.
+    if (const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
+        const uint32_t slots = (e.attrEx3 & 0x400u) != 0 ? 0x8000u : (e.attrEx3 & 0x1000000u) != 0 ? 0x10000u : 0xFFFFFFFFu;
+        out.equipped = equippedMatch(spellId, *player, slots) != nullptr;
+        if ((e.attrEx3 & 0x1000400u) == 0x1000400u && !equippedMatch(spellId, *player, 0x10000u)) out.equipped = false;
+    }
+    return out;
+}
+
+SpellHandler::TooltipForms SpellHandler::tooltipForms(uint32_t spellId) const {
+    TooltipForms out;
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return out;
+    const auto& e = it->second;
+    if (e.stances[0] == 0 && e.stances[1] == 0) return out;
+    const auto bit = [&](int k) { return k >= 0 && k < 64 && (e.stances[k >> 5] & (1u << (k & 31))) != 0; };
+    // SpellShapeshiftForm row k is form k + 1, as Stances' bit k is.
+    if ((e.attrEx2 & 0x80000u) == 0) {
+        auto* am = owner_.services().assetManager;
+        if (auto f = am ? am->loadDBCOptional("SpellShapeshiftForm.dbc") : nullptr; f && f->getFieldCount() > 2) {
+            const uint32_t n = std::min<uint32_t>(f->getRecordCount(), 64);
+            for (uint32_t r = 0; r < n; ++r) {
+                if (!bit(static_cast<int>(r))) continue;
+                const std::string named = f->getString(r, 2);
+                if (named.empty()) continue;
+                if (!out.names.empty()) out.names += ", ";
+                out.names += named;
+            }
+        }
+    }
+    const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    if (!player) return out;
+    const uint16_t b2 = fieldIndex(UF::UNIT_FIELD_BYTES_2);
+    const auto form = static_cast<uint8_t>((b2 != 0xFFFF ? player->getField(b2) : 0u) >> 24);
+    out.met = bit(static_cast<int>(form) - 1) ||
+              ((e.attrEx2 & 0x80000u) != 0 && !inShapeshiftForm(form, owner_.shapeshiftFormRow(form))) ||
+              playerAuraAffects(275, spellId);
+    return out;
+}
+
+SpellHandler::TooltipReputation SpellHandler::tooltipReputation(uint32_t spellId) const {
+    TooltipReputation out;
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end() || it->second.minFactionId == 0) return out;
+    const auto& e = it->second;
+    out.faction = e.minFactionId;
+    out.rank = e.minReputation < 8 ? e.minReputation : 7;
+    const uint32_t i = owner_.getRepListIdByFactionId(e.minFactionId);
+    const auto& all = owner_.getInitialFactions();
+    const int32_t standing = i < 0x80 && i < all.size() ? all[i].standing : 0;
+    out.met = standing >= cast_check::kRankStart[out.rank];
+    return out;
+}
+
+bool SpellHandler::tooltipNoReagents(uint32_t spellId) const {
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    return it != owner_.spellNameCacheRef().end() && player && reagentsFree(spellId, *player);
 }
 
 bool SpellHandler::weaponCarried(uint32_t spellId, const Entity& player) const {
@@ -2252,23 +2373,7 @@ bool SpellHandler::weaponCarried(uint32_t spellId, const Entity& player) const {
     // AttributesEx3 0x400, the off hand for 0x1000000, the ranged slot for
     // a ranged spell (Attributes 0x2), else any - not a hand disarmed, nor a
     // broken item.
-    const auto found = [&](uint32_t slots) -> const ItemQueryResponseData* {
-        const uint32_t flags = field(UF::UNIT_FIELD_FLAGS), flags2 = field(UF::UNIT_FIELD_FLAGS_2);
-        if ((flags & 0x200000u) != 0) slots &= ~0x8000u;
-        if ((flags2 & 0x80u) != 0) slots &= ~0x10000u;
-        if ((flags2 & 0x400u) != 0) slots &= ~0x20000u;
-        for (int slot = 0; slot < 0x17; ++slot) {
-            if ((slots & (1u << slot)) == 0) continue;
-            const auto it = owner_.onlineItemsRef().find(owner_.getEquipSlotGuid(slot));
-            if (it == owner_.onlineItemsRef().end()) continue;
-            if (it->second.maxDurability != 0 && it->second.curDurability == 0) continue;
-            const auto* info = owner_.getItemInfo(it->second.entry);
-            if (info && static_cast<int32_t>(info->itemClass) == e.equippedItemClass &&
-                (e.equippedItemSubClassMask & (1u << (info->subClass & 31))) != 0)
-                return info;
-        }
-        return nullptr;
-    };
+    const auto found = [&](uint32_t slots) { return equippedMatch(spellId, player, slots); };
     uint32_t slots = 0xFFFFFFFFu;
     if ((e.attrEx3 & 0x400u) != 0) slots = 0x8000u;
     else if ((e.attrEx3 & 0x1000000u) != 0) slots = 0x10000u;

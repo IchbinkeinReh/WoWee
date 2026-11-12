@@ -461,6 +461,36 @@ public:
         uint32_t powerDisplayId = 0;
     };
     [[nodiscard]] TooltipCost tooltipCost(uint32_t spellId) const;
+    /// The tooltip's equipped-item line (0x006238a0): the names the spell's
+    /// EquippedItemClass and subclass mask go by - ItemSubClassMask's for
+    /// the exact pair, else each subclass's ItemSubClass name, ", " between
+    /// - empty where it asks for none (Targets 0x10, no class or mask); and
+    /// whether the player has one on (0x006de230).
+    struct TooltipEquipped {
+        std::string names;
+        bool equipped = true;
+    };
+    [[nodiscard]] TooltipEquipped tooltipEquipped(uint32_t spellId) const;
+    /// The tooltip's form line: the names of the forms Stances allows, ", "
+    /// between (none with AttributesEx2 0x80000), and whether the player
+    /// stands in one it allows - none counts under AttributesEx2 0x80000, and
+    /// an aura 275 for the spell lets any form do.
+    struct TooltipForms {
+        std::string names;
+        bool met = true;
+    };
+    [[nodiscard]] TooltipForms tooltipForms(uint32_t spellId) const;
+    /// The tooltip's reputation line: MinFactionId (0 none), the
+    /// MinReputation rank, and whether the player's standing reaches it
+    /// (0x005d05b0 against 0x00a2d2fc).
+    struct TooltipReputation {
+        uint32_t faction = 0;
+        uint32_t rank = 0;
+        bool met = true;
+    };
+    [[nodiscard]] TooltipReputation tooltipReputation(uint32_t spellId) const;
+    /// 0x00800d60 for the player: the spell costs no reagents now.
+    [[nodiscard]] bool tooltipNoReagents(uint32_t spellId) const;
     /// The item the running cast was cast from (SMSG_SPELL_START's caster
     /// where it is not the unit), 0 for none (0x00805fc0).
     [[nodiscard]] uint64_t currentCastItemGuid() const { return casting_ ? castItemGuid_ : 0; }
@@ -838,6 +868,13 @@ private:
     uint32_t classSpellFamily() const;
     /// 0x008091d0 for the player: the spell's totems, tools and reagents.
     bool toolsCarried(uint32_t spellId, const Entity& player) const;
+    /// 0x006de230: an item of the spell's EquippedItemClass and subclass
+    /// mask on in one of `slots` (bit per equipment slot) - not in a hand
+    /// disarmed, nor broken.
+    const ItemQueryResponseData* equippedMatch(uint32_t spellId, const Entity& player,
+                                               uint32_t slots) const;
+    /// 0x00800d60: no reagents for this spell now.
+    bool reagentsFree(uint32_t spellId, const Entity& player) const;
     /// 0x008093d0 for the player: the weapon it wants, and its ammunition.
     bool weaponCarried(uint32_t spellId, const Entity& player) const;
     /// 0x007ff480 from the caster to the unit (none: a place), at the
