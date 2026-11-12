@@ -33,7 +33,9 @@ float millibels(int32_t mB) {
     return mB <= -10000 ? 0.0f : std::pow(10.0f, static_cast<float>(mB) / 2000.0f);
 }
 
-// Freeverb's tunings at 44.1 kHz, the right side spread by 23 samples.
+// Freeverb's tunings, in samples at its own rate, the right side spread by
+// 23 samples.
+constexpr float kTuningRate = 44.1e3f;
 constexpr std::array<int, 8> kCombs = {1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617};
 constexpr std::array<int, 4> kAllpasses = {556, 441, 341, 225};
 constexpr int kSpread = 23;
@@ -46,7 +48,7 @@ constexpr float kOutputGain = 3.0f;
 void EaxReverb::configure(const EaxReverbParams& params, uint32_t sampleRate, uint32_t channels) {
     channels_ = std::max<uint32_t>(1, channels);
     const float rate = static_cast<float>(std::max<uint32_t>(8000, sampleRate));
-    const float size = std::clamp(params.envSize / 7.5f, 0.5f, 2.0f) * rate / 44100.0f;
+    const float size = std::clamp(params.envSize / 7.5f, 0.5f, 2.0f) * rate / kTuningRate;
     const float decay = std::clamp(params.decayTime, 0.1f, 20.0f);
     for (size_t s = 0; s < sides_.size(); ++s) {
         const int spread = s == 0 ? 0 : kSpread;
@@ -64,7 +66,7 @@ void EaxReverb::configure(const EaxReverbParams& params, uint32_t sampleRate, ui
         for (size_t a = 0; a < kAllpasses.size(); ++a) {
             auto& ap = sides_[s].allpasses[a];
             const size_t length =
-                std::max<size_t>(1, static_cast<size_t>(static_cast<float>(kAllpasses[a] + spread) * rate / 44100.0f));
+                std::max<size_t>(1, static_cast<size_t>(static_cast<float>(kAllpasses[a] + spread) * rate / kTuningRate));
             if (ap.buffer.size() != length) {
                 ap.buffer.assign(length, 0.0f);
                 ap.index = 0;
