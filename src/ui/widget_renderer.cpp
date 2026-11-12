@@ -501,7 +501,7 @@ void WidgetRenderer::sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree
         // it ever set a height, the box kept whatever size it had, and the
         // lines past that drew below its bottom edge.
         if (line.wrap) continue;
-        float wide = measure(line.left);
+        float wide = measure(line.left) + (line.icon.empty() ? 0.0f : size + 2.0f);
         if (!line.right.empty()) {
             // Left and right text share a line with a gap between them.
             wide += 20.0f + measure(line.right);
@@ -2634,7 +2634,18 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 size_t rowIdx = 0;
                 for (const auto& line : w->tooltipLines) {
                     float lc[4] = {line.lc[0], line.lc[1], line.lc[2], line.lc[3]};
-                    drawMarkupText(dl, font, size, ImVec2(x0 + pad, y),
+                    float textX = x0 + pad;
+                    if (!line.icon.empty()) {
+                        if (VkDescriptorSet tex = resident(line.icon); tex != kMissing) {
+                            float tint[4] = {line.iconTint[0], line.iconTint[1], line.iconTint[2], line.iconTint[3]};
+                            dl->AddImage(reinterpret_cast<ImTextureID>(tex), ImVec2(textX, y),
+                                         ImVec2(textX + size, y + size),
+                                         ImVec2(line.iconUV[0], line.iconUV[2]),
+                                         ImVec2(line.iconUV[1], line.iconUV[3]), packColor(tint, w->alpha));
+                        }
+                        textX += size + 2.0f;
+                    }
+                    drawMarkupText(dl, font, size, ImVec2(textX, y),
                                    packColor(lc, w->alpha), w->alpha, line.left,
                                    line.wrap ? textW : 0.0f);
                     if (!line.right.empty()) {

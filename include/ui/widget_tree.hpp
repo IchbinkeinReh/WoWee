@@ -654,6 +654,12 @@ struct Widget {
         /// tip - and the flag was read off the call and dropped, so one long
         /// sentence stretched the tooltip across the screen.
         bool wrap = false;
+        /// A picture in front of the line, as tall as the line and tinted -
+        /// the threat status icon a unit's tooltip ends with (0x00621070 ->
+        /// 0x0061c8b0 with a colour). Empty for none.
+        std::string icon;
+        float iconUV[4] = {0.0f, 1.0f, 0.0f, 1.0f};
+        float iconTint[4] = {1.0f, 1.0f, 1.0f, 1.0f};
         /// Lines the wrap produced, filled by the sizing pass so the draw and
         /// the height agree on how tall this line is.
         mutable int lines = 1;

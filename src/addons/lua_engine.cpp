@@ -4869,6 +4869,18 @@ int lua_Tooltip_SetUnit(lua_State* L) {
                         addLine(formatGlobal(L, globalOr(L, "THREAT_TOOLTIP", "%d%% Threat"),
                                              {std::to_string(std::lround(pct - 0.5))}),
                                 1.0f, 1.0f, 1.0f);
+                        // In front of it the threat icon, tinted by the
+                        // status (0xad2d70: grey, yellow, orange, red for
+                        // 0 to 3).
+                        static constexpr float kThreatTint[4][3] = {
+                            {0.69f, 0.69f, 0.69f}, {1.0f, 1.0f, 0.467f}, {1.0f, 0.6f, 0.0f}, {1.0f, 0.0f, 0.0f}};
+                        const int status = std::clamp(static_cast<int>(lua_tonumber(L, -4)), 0, 3);
+                        auto& tl = w->tooltipLines.back();
+                        tl.icon = "Interface\\RaidFrame\\UI-RaidFrame-Threat";
+                        tl.iconTint[0] = kThreatTint[status][0];
+                        tl.iconTint[1] = kThreatTint[status][1];
+                        tl.iconTint[2] = kThreatTint[status][2];
+                        tl.iconTint[3] = 1.0f;
                         threatShown = true;
                     }
                     lua_pop(L, 5);
