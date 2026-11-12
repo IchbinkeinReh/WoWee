@@ -4107,8 +4107,15 @@ constexpr float kSelfShadowMaxExtent = 15.0f;
 constexpr float kDefaultCharacterCullRadius = 4.0f;
 
 float characterRenderRadiusSq() {
-    const float renderRadius = static_cast<float>(envSizeOrDefault("WOWEE_CHAR_RENDER_RADIUS", 130));
-    return renderRadius * renderRadius;
+    // Read once. render() asks on every call, and the doodads' worker calls
+    // it once per blended character - a few hundred times a frame in a city,
+    // where looking the variable up in the environment each time came to
+    // three of the worker's eight milliseconds.
+    static const float renderRadiusSq = [] {
+        const float renderRadius = static_cast<float>(envSizeOrDefault("WOWEE_CHAR_RENDER_RADIUS", 130));
+        return renderRadius * renderRadius;
+    }();
+    return renderRadiusSq;
 }
 
 // Drawn see-through as a whole - the player's body as the camera closes in, a
