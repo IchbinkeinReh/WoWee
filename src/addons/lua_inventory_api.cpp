@@ -7337,18 +7337,20 @@ void registerInventoryLuaAPI(lua_State* L) {
             luaPushOneOrNil(L, mail.read ? 1 : 0);               // wasRead
             // Returned (mail flag 0x2) or sent back unopened (0x200).
             luaPushOneOrNil(L, (mail.flags & 0x202u) != 0 ? 1 : 0); // wasReturned
-            luaPushOneOrNil(L, !mail.body.empty() ? 1 : 0);      // textCreated
+            // textCreated: a copy of the letter's text was made (mail flag
+            // 0x4, COPIED; 0x0056e520), not whether it has a text.
+            luaPushOneOrNil(L, (mail.flags & 0x4u) != 0 ? 1 : 0);
             // A player's letter, unless on the GM's stationery (61), which is
             // a GM's and says so instead (0x0056e520).
             constexpr uint32_t kGmStationery = 0x3d;
             const bool fromGm = mail.stationeryId == kGmStationery;
             luaPushOneOrNil(L, mail.messageType == 0 && !fromGm ? 1 : 0); // canReply
             luaPushOneOrNil(L, fromGm ? 1 : 0);                   // isGM
-            // How many of the first attachment there are, which is what the
-            // inbox button prints in its corner.
-            lua_pushnumber(L, mail.attachments.empty()
-                                  ? 0
-                                  : static_cast<lua_Number>(mail.attachments[0].stackCount));
+            // How many of the attachment there are, which is what the inbox
+            // button prints in its corner - only for a letter with exactly
+            // one, nil otherwise (0x0056e520).
+            if (mail.attachments.size() == 1) lua_pushnumber(L, static_cast<lua_Number>(mail.attachments[0].stackCount));
+            else lua_pushnil(L);
             return 14;
         }},
                 // body, stationery texture, isTakeable, isInvoice
