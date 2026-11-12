@@ -2995,12 +2995,33 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
         line(globalOr(L, "TOOLTIP_TALENT_NEXT_RANK", "Next Rank:"), "", 1.0f, 1.0f, 1.0f);
     } else {
         w->tooltipLines.clear();
-        // The name in white and its rank to the right in grey - only in a
-        // brief tooltip or where the caller asks for it; SetSpell,
-        // SetHyperlink and a full SetAction leave the rank off.
-        line(name, brief || showRank ? gh->getSpellRank(spellId) : std::string(), 1.0f, 1.0f, 1.0f);
-        auto& title = w->tooltipLines.back();
-        title.rc[0] = title.rc[1] = title.rc[2] = 0.5f;
+        // A trade spell (Attributes 0x20 with an enchant or create-item
+        // effect) is titled "<skill>: <name>" in gold by its skill line for
+        // the player's race and class (0x00812410), and has no title at all
+        // where none is found.
+        gh->loadSpellNameCache();
+        const auto te = gh->spellNameCacheRef().find(spellId);
+        const bool trade = te != gh->spellNameCacheRef().end() && (te->second.attr & 0x20u) != 0 &&
+            std::any_of(std::begin(te->second.effectIds), std::end(te->second.effectIds), [](uint32_t e) {
+                return e == 0x35 || e == 0x18 || e == 0x9d || e == 0x3b;
+            });
+        if (trade) {
+            if (const uint32_t skill = gh->spellSkillLine(spellId); skill != 0) {
+                if (const std::string& skillName = gh->getSkillName(skill); !skillName.empty()) {
+                    line(skillName + ": " + name, "", 1.0f, 0.824f, 0.0f);
+                    w->tooltipLines.back().rc[0] = 1.0f;
+                    w->tooltipLines.back().rc[1] = 0.824f;
+                    w->tooltipLines.back().rc[2] = 0.0f;
+                }
+            }
+        } else {
+            // The name in white and its rank to the right in grey - only in
+            // a brief tooltip or where the caller asks for it; SetSpell,
+            // SetHyperlink and a full SetAction leave the rank off.
+            line(name, brief || showRank ? gh->getSpellRank(spellId) : std::string(), 1.0f, 1.0f, 1.0f);
+            auto& title = w->tooltipLines.back();
+            title.rc[0] = title.rc[1] = title.rc[2] = 0.5f;
+        }
         if (talent && talent->facts) addTalentRankAndPrereqs(L, w, gh, *talent->facts);
     }
 
