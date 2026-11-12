@@ -532,6 +532,9 @@ private:
 
     // Quest marker billboard sprites (above NPCs)
     void updateQuestMarkers();     // The marks over questgivers' heads
+    /// SpaceDeathUniversal once on falling below the world's floor (0x00606f90).
+    void updateWorldFloorSound();
+    bool aboveWorldFloor_ = true;  // 0x00c24ea8
     void updateLootSparkles();     // The glitter over corpses with loot
 };
 

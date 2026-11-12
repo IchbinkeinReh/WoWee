@@ -5,6 +5,7 @@
 #include <string>
 #include <cstdint>
 #include <array>
+#include <optional>
 
 namespace wowee {
 namespace pipeline {
@@ -112,6 +113,10 @@ struct MapChunk {
 struct ADTTerrain {
     bool loaded = false;
     uint32_t version = 0;
+
+    /// MFBO, the tile's flight bounds: a 3 x 3 grid of heights over the
+    /// tile, the upper plane then the lower (int16). Absent on most tiles.
+    std::optional<std::array<int16_t, 18>> flightBounds;
 
     ADTCoord coord;          // ADT coordinates (e.g., 32, 49 for Azeroth)
 
@@ -224,6 +229,7 @@ private:
     static constexpr uint32_t MDDF = 0x4D444446;  // Doodad placement (ASCII "MDDF")
     static constexpr uint32_t MODF = 0x4D4F4446;  // WMO placement (ASCII "MODF")
     static constexpr uint32_t MH2O = 0x4D48324F;  // Water/liquid (ASCII "MH2O")
+    static constexpr uint32_t MFBO = 0x4D46424F;  // Flight bounds (ASCII "MFBO")
     static constexpr uint32_t MCNK = 0x4D434E4B;  // Map chunk (ASCII "MCNK")
 
     // Sub-chunks within MCNK

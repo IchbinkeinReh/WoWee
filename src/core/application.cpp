@@ -74,6 +74,7 @@
 #include "ui/framexml_takeover.hpp"
 #include "ui/keybinding_manager.hpp"
 #include "rendering/quest_giver_markers.hpp"
+#include "audio/ui_sound_manager.hpp"
 #include "game/quest_giver_status.hpp"
 #include "game/minimap_tracking.hpp"
 #include "rendering/footprint_renderer.hpp"
@@ -6081,6 +6082,7 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
     updateCheckpoint = "in_game: quest markers";
     runInGameStage("updateQuestMarkers", [&] {
         updateQuestMarkers();
+        updateWorldFloorSound();
     });
     runInGameStage("updateLootSparkles", [&] {
         updateLootSparkles();
@@ -8098,6 +8100,28 @@ void Application::updateLootSparkles() {
         if (getRenderPositionForGuid(guid, position)) corpses.emplace_back(guid, position);
     }
     sparkles->update(renderer->getM2Renderer(), assetManager.get(), corpses);
+}
+
+void Application::updateWorldFloorSound() {
+    // 0x00606f90: the camera's target against the floor under the world -
+    // the tile's lower MFBO plane, or -500 where there is none. At or above
+    // it the target has ground; below it, having had ground, the sound of
+    // falling out of the world plays once.
+    if (!gameHandler || !renderer || gameHandler->getState() != game::WorldState::IN_WORLD) return;
+    auto* terrain = renderer->getTerrainManager();
+    if (!terrain) return;
+    const auto& mi = gameHandler->getMovementInfo();
+    const glm::vec3 wire = core::coords::canonicalToServer(glm::vec3(mi.x, mi.y, mi.z));
+    const float floor = terrain->flightFloorAt(wire.x, wire.y).value_or(-500.0f);
+    if (floor <= wire.z) {
+        aboveWorldFloor_ = true;
+        return;
+    }
+    if (aboveWorldFloor_) {
+        if (auto* ac = getAudioCoordinator(); ac && ac->getUiSoundManager())
+            ac->getUiSoundManager()->playByName("SpaceDeathUniversal");
+    }
+    aboveWorldFloor_ = false;
 }
 
 void Application::updateQuestMarkers() {
