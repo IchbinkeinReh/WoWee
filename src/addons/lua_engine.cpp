@@ -4942,6 +4942,36 @@ static void lockSkillColour(int32_t value, int32_t required, float (&c)[3]) {
 /// left out on a locked object), or a spell's reagents (LOCKED_WITH_SPELL,
 /// each red where the bags hold too few); and with showQuestTrackingTooltips
 /// the quests it answers. Answers whether there was an object to describe.
+/// The destructible building the tooltip's bar follows, and the tooltip.
+static uint64_t s_destructibleGuid = 0;
+static uint32_t s_destructibleTooltip = 0;
+
+/// The tooltip's status bar at a building's health (0x00626720 for type 33:
+/// range 0 to 1, the value byte 3 / 255, shown).
+static void showDestructibleBar(lua_State* L, const std::string& tooltipName, int health, bool show) {
+    if (tooltipName.empty()) return;
+    lua_getglobal(L, (tooltipName + "StatusBar").c_str());
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        return;
+    }
+    const int bar = lua_gettop(L);
+    const auto call = [&](const char* method, std::initializer_list<double> args) {
+        lua_getfield(L, bar, method);
+        if (!lua_isfunction(L, -1)) {
+            lua_pop(L, 1);
+            return;
+        }
+        lua_pushvalue(L, bar);
+        for (const double a : args) lua_pushnumber(L, a);
+        if (lua_pcall(L, static_cast<int>(args.size()) + 1, 0, 0) != 0) lua_pop(L, 1);
+    };
+    if (show) call("SetMinMaxValues", {0.0, 1.0});
+    call("SetValue", {static_cast<double>(health) * 0.003921569});
+    if (show) call("Show", {});
+    lua_pop(L, 1);
+}
+
 static bool fillGameObjectTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh, uint64_t guid) {
     const auto facts = gh->gameObjectTooltipFacts(guid);
     if (!facts) return false;
@@ -5062,8 +5092,33 @@ static bool fillGameObjectTooltip(lua_State* L, wowee::ui::Widget* w, game::Game
             }
         }
     }
+    // A destructible building's health on the tooltip's bar, kept current
+    // while the tooltip shows it (the field watch of 0x004d5a80).
+    if (t.destructibleHealth >= 0) {
+        s_destructibleGuid = guid;
+        s_destructibleTooltip = w->id;
+        showDestructibleBar(L, w->name, t.destructibleHealth, true);
+    } else {
+        s_destructibleGuid = 0;
+        s_destructibleTooltip = 0;
+    }
     w->shown = true;
     return true;
+}
+
+/// Each frame: the followed building's health onto its tooltip's bar, until
+/// the tooltip is hidden or shows something else.
+static void tickDestructibleBar(lua_State* L) {
+    if (s_destructibleGuid == 0) return;
+    auto* tree = wowee::addons::getWidgetTree(L);
+    auto* gh = wowee::addons::getGameHandler(L);
+    const auto* w = tree ? tree->get(s_destructibleTooltip) : nullptr;
+    const auto facts = gh && w && w->shown ? gh->gameObjectTooltipFacts(s_destructibleGuid) : std::nullopt;
+    if (!facts || facts->destructibleHealth < 0) {
+        s_destructibleGuid = 0;
+        return;
+    }
+    showDestructibleBar(L, w->name, facts->destructibleHealth, false);
 }
 
 namespace {
@@ -13892,6 +13947,8 @@ void LuaEngine::worldMouseoverChanged(uint64_t oldGuid, uint64_t newGuid, Mouseo
         const auto* w = widgets_.get(wid);
         if (w && w->shown && w->tooltipOwnerId == uiParent) fadeOutTooltip(L_, wid);
     }
+    // The bar follows the building only while it is the one hovered.
+    s_destructibleGuid = 0;
     auto* gh = wowee::addons::getGameHandler(L_);
     if (newGuid == 0 || !gh || kind == MouseoverKind::None) return;
     if (kind == MouseoverKind::GameObject) {
@@ -16686,6 +16743,7 @@ void LuaEngine::dispatchOnUpdate(float elapsed) {
     drainPendingTextChanged();
     advanceWheelGlide(elapsed);
     tickTooltipFades(L_, elapsed);
+    tickDestructibleBar(L_);
 
     // The MovieFrame's movie: subtitle lines and its end, to the frame that
     // started it (CSimpleMovieFrame's scripts, 0x0095db80).

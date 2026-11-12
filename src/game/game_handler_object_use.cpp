@@ -305,6 +305,8 @@ std::optional<GameHandler::GameObjectTooltipFacts> GameHandler::gameObjectToolti
         t.name = info->name;
         t.questItems = info->questItems;
     }
+    if (f.type == 33 && fieldIndex(UF::GAMEOBJECT_BYTES_1) != 0xFFFF)
+        t.destructibleHealth = static_cast<int>((go->getField(fieldIndex(UF::GAMEOBJECT_BYTES_1)) >> 24) & 0xFFu);
     t.flaggedLocked = (f.flags & go_use::kFlagLocked) != 0;
     const go_use::Opening o = gameObjectOpening(f);
     t.locked = o.locked;

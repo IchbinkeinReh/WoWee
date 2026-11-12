@@ -4947,6 +4947,9 @@ public:
         uint32_t reagentCount[8] = {};
         /// The template's six quest items (after its size).
         std::array<uint32_t, 6> questItems{};
+        /// A destructible building's (type 33) health, GAMEOBJECT_BYTES_1
+        /// byte 3 out of 255; -1 for any other object.
+        int destructibleHealth = -1;
     };
     std::optional<GameObjectTooltipFacts> gameObjectTooltipFacts(uint64_t guid);
     /// ITEM_FIELD_DURATION of an item this client holds, 0 when unknown.
