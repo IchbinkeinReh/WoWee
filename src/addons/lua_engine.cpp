@@ -2934,8 +2934,10 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
         title.rc[0] = title.rc[1] = title.rc[2] = 0.5f;
     }
 
-    const auto info = gh->getSpellData(spellId);
     std::string cost, range;
+    // The cost over its divisor and the power it is in, kept for the cast
+    // line's Instant / Instant cast.
+    int32_t shownCost = 0, shownPower = 0;
     // The cost, as 0x006238a0 words it, over the power's divisor
     // (0x007fde00): a rune spell's RUNE_COST_BLOOD/UNHOLY/FROST joined by
     // spaces; one with a cost each second "<POWER>_COST_PER_TIME" (cost,
@@ -2951,6 +2953,8 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
         const int32_t divisor = listed ? static_cast<int32_t>(wowee::addons::kPowerDivisors[c.powerType]) : 1;
         const int32_t amount = c.cost / divisor;
         const int32_t perSecond = c.perSecond / divisor;
+        shownCost = amount;
+        shownPower = c.powerType;
         const std::string key = listed ? kCostKeys[c.powerType] : "HEALTH_COST";
         std::optional<std::string> shown;
         if (c.powerDisplayId != 0) {
@@ -3046,18 +3050,21 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
             });
         if (!brief && (sp.attr & 0x40u) == 0 && sp.effectIds[0] != 0x2f && sp.effectIds[0] != 0x4e && !tradeSpell) {
             std::string cast;
-            const int32_t castMs = static_cast<int32_t>(info.castTimeMs);
+            const auto* castSh = gh->getSpellHandler();
+            const int32_t castMs = castSh ? castSh->playerCastTimeMs(spellId) : 0;
             if (castMs > 0) {
                 cast = castMs < 60000
                     ? withNumber(globalOr(L, "SPELL_CAST_TIME_SEC", "%.3g sec cast"), "%.3g", castMs / 1000.0f)
                     : withNumber(globalOr(L, "SPELL_CAST_TIME_MIN", "%.3g min cast"), "%.3g", castMs / 60000.0f);
             } else if ((sp.attrEx & 0x44u) != 0) {
                 cast = globalOr(L, "SPELL_CAST_CHANNELED", "Channeled");
+            } else if (castMs < 0) {
+                cast = globalOr(L, "SPELL_CAST_TIME_INSTANT", "Instant");
             } else if ((sp.attr & 0x404u) != 0) {
                 cast = globalOr(L, "SPELL_ON_NEXT_SWING", "Next melee");
             } else if ((sp.attr & 0x2u) != 0) {
                 cast = globalOr(L, "SPELL_ON_NEXT_RANGED", "Next ranged");
-            } else if (info.powerType == 0 && info.manaCost > 0) {
+            } else if (shownPower == 0 && shownCost > 0) {
                 cast = globalOr(L, "SPELL_CAST_TIME_INSTANT", "Instant");
             } else {
                 cast = globalOr(L, "SPELL_CAST_TIME_INSTANT_NO_MANA", "Instant cast");

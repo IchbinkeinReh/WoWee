@@ -582,6 +582,11 @@ public:
     /// 0x007ff180 != 0: whether the spell takes time to cast for this unit -
     /// also what the combat log asks of a cast (the unit's +0x148).
     bool hasCastTime(uint32_t spellId, const Entity& player) const;
+    /// 0x007ff180 itself: the spell's cast time for the unit, in ms -
+    /// modifiers, casting speed and a ranged spell's half second included.
+    int32_t castTimeMs(uint32_t spellId, const Entity& player) const;
+    /// The same for the player (0 without one), what a tooltip states.
+    [[nodiscard]] int32_t playerCastTimeMs(uint32_t spellId) const;
 
     /// Give a hunter's pet up for good. The interface asks first - this is the
     /// other side of the ABANDON_PET dialog, whose accept called an unbound

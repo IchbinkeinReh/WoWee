@@ -2681,8 +2681,12 @@ int32_t SpellHandler::powerCost(uint32_t spellId, const Entity& player, int dept
 }
 
 bool SpellHandler::hasCastTime(uint32_t spellId, const Entity& player) const {
+    return castTimeMs(spellId, player) > 0;
+}
+
+int32_t SpellHandler::castTimeMs(uint32_t spellId, const Entity& player) const {
     const auto own = owner_.spellNameCacheRef().find(spellId);
-    if (own == owner_.spellNameCacheRef().end()) return false;
+    if (own == owner_.spellNameCacheRef().end()) return 0;
     const auto& e = own->second;
     // 0x007ff180: SpellCastTimes' base and per level past BaseLevel, at
     // least its minimum, through the cast time modifiers (op 10), the
@@ -2701,7 +2705,7 @@ bool SpellHandler::hasCastTime(uint32_t spellId, const Entity& player) const {
         }
     }
     const auto row = castTimes_.find(e.castingTimeIndex);
-    if (row == castTimes_.end()) return false;
+    if (row == castTimes_.end()) return 0;
     const uint16_t levelIdx = fieldIndex(UF::UNIT_FIELD_LEVEL);
     int32_t level = levelIdx != 0xFFFF ? static_cast<int32_t>(player.getField(levelIdx)) : 0;
     if (e.maxLevel > 0 && e.maxLevel < level) level = e.maxLevel;
@@ -2714,7 +2718,13 @@ bool SpellHandler::hasCastTime(uint32_t spellId, const Entity& player) const {
         if (speed != 1.0f) t = static_cast<int32_t>(std::nearbyint(static_cast<float>(t) * speed));
     }
     if ((e.attr & 0x2u) != 0) t += 500;
-    return t > 0;
+    return t;
+}
+
+int32_t SpellHandler::playerCastTimeMs(uint32_t spellId) const {
+    loadSpellNameCache();
+    const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    return player ? castTimeMs(spellId, *player) : 0;
 }
 
 cast_check::Caster SpellHandler::casterState(uint32_t spellId, const Entity& player) {
