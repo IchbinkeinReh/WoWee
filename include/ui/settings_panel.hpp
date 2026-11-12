@@ -311,7 +311,7 @@ public:
     /// cvar in kClientCVars, so the two are one value rather than two that
     /// can disagree - which is why they are settings here rather than
     /// another store beside the one the panel wrote.
-    int pendingGroundClutterDistance = 140;   ///< yards
+    int pendingGroundClutterDistance = 70;    ///< yards; groundEffectDist's 70
     int pendingParticleDensity = 100;         ///< percent of what an effect asks for
     int pendingWeatherDetail = 2;             ///< weatherDensity 0-3, "2" as the client (0x00787780)
     int pendingEnvironmentDetail = 100;       ///< percent

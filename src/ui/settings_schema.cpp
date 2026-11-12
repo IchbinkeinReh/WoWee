@@ -185,7 +185,7 @@ constexpr SettingDesc kSchema[] = {
     {"groundclutterdistance", "Ground clutter distance", SettingKind::Int, 70, 300, 10,
      "Detail", "",
      "How far out that clutter is drawn, in yards. Past this it simply\n"
-     "is not there, so a short distance is a visible edge on open ground.", "", 140},
+     "is not there, so a short distance is a visible edge on open ground.", "", 70},
 
     {"normalmapping", "Surface bumps (normal mapping)", SettingKind::Bool, 0, 0, 0, "Detail", "Surfaces",
      "Light the stone, brick and wood of buildings by their surface\n"
