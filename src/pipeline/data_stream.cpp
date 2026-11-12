@@ -3,15 +3,10 @@
 
 #include "core/data_paths.hpp"
 #include "core/logger.hpp"
+#include "core/tls_trust.hpp"
 #include "network/net_platform.hpp"
 
 #include <nlohmann/json.hpp>
-#ifdef _WIN32
-// Before OpenSSL: wincrypt's names that clash with OpenSSL's are undone by
-// OpenSSL's own headers when they come second.
-#include <windows.h>
-#include <wincrypt.h>
-#endif
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/ssl.h>
@@ -35,33 +30,6 @@ namespace {
 std::string lowerAscii(std::string s) {
     for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return s;
-}
-
-/// The trust store to verify the server's certificate against. OpenSSL's own
-/// default paths name no store on Windows (the MinGW build looks for a folder
-/// that is not there and fails the handshake with "unregistered scheme"), so
-/// there the system's root certificates are loaded instead - the ones the
-/// rest of Windows trusts.
-void loadTrustStore(SSL_CTX* ctx) {
-#ifdef _WIN32
-    X509_STORE* store = SSL_CTX_get_cert_store(ctx);
-    HCERTSTORE roots = CertOpenSystemStoreW(0, L"ROOT");
-    if (roots != nullptr) {
-        PCCERT_CONTEXT cert = nullptr;
-        while ((cert = CertEnumCertificatesInStore(roots, cert)) != nullptr) {
-            const unsigned char* der = cert->pbCertEncoded;
-            X509* x = d2i_X509(nullptr, &der, static_cast<long>(cert->cbCertEncoded));
-            if (x != nullptr) {
-                X509_STORE_add_cert(store, x);
-                X509_free(x);
-            }
-        }
-        CertCloseStore(roots, 0);
-    }
-#else
-    SSL_CTX_set_default_verify_paths(ctx);
-#endif
-    ERR_clear_error();
 }
 
 bool isLoopback(const std::string& host) {
@@ -242,7 +210,7 @@ private:
                 ctx_ = SSL_CTX_new(TLS_client_method());
                 if (ctx_) {
                     SSL_CTX_set_verify(ctx_, SSL_VERIFY_PEER, nullptr);
-                    loadTrustStore(ctx_);
+                    core::loadTrustStore(ctx_);
                     SSL_CTX_set_min_proto_version(ctx_, TLS1_2_VERSION);
                 }
             }

@@ -740,6 +740,7 @@ set(WOWEE_SOURCES
     src/core/frame_pacer.cpp
     src/core/frame_profiler.cpp
     src/core/https_get.cpp
+    src/core/tls_trust.cpp
     src/core/update_check.cpp
 
     # Math
@@ -1592,8 +1593,8 @@ target_link_libraries(wowee PRIVATE
 )
 
 if(WIN32)
-    # crypt32: the streaming data mode's HTTPS verifies against the system's
-    # root certificates (pipeline/data_stream.cpp).
+    # crypt32: HTTPS (the update check and the streaming data mode) verifies
+    # against the system's root certificates (core/tls_trust.cpp).
     target_link_libraries(wowee PRIVATE crypt32)
 endif()
 if(WOWEE_STATIC_RUNTIME AND MINGW)

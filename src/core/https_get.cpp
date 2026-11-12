@@ -10,6 +10,7 @@
 #include <memory>
 #include <vector>
 
+#include "core/tls_trust.hpp"
 #include "network/net_platform.hpp"
 
 namespace wowee::core {
@@ -138,8 +139,11 @@ HttpsResponse httpsGet(const std::string& host, const std::string& path,
     // makes the second happen - without it a valid certificate for any host
     // at all would satisfy the first, which is most of the point of asking.
     SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
-    if (SSL_CTX_set_default_verify_paths(ctx) != 1) {
-        result.error = "no trust store: " + sslError();
+    // The system's root certificates on Windows, where OpenSSL's default
+    // paths name no store and every handshake failed with "unregistered
+    // scheme"; OpenSSL's default paths elsewhere.
+    if (loadTrustStore(ctx) == 0) {
+        result.error = "no trust store";
         return result;
     }
     SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);

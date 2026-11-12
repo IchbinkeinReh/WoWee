@@ -7,6 +7,10 @@
 #include <catch_amalgamated.hpp>
 
 #include "core/update_check.hpp"
+#include "core/https_get.hpp"
+#include "core/tls_trust.hpp"
+
+#include <openssl/ssl.h>
 
 using wowee::core::isNewerVersion;
 
@@ -50,4 +54,28 @@ TEST_CASE("the v is optional on either side", "[update]") {
     CHECK(isNewerVersion("3.1.31", "v3.1.30"));
     CHECK(isNewerVersion("v3.1.31", "3.1.30"));
     CHECK_FALSE(isNewerVersion("3.1.30", "3.1.30"));
+}
+
+TEST_CASE("the trust store has root certificates", "[update][tls]") {
+    // OpenSSL's default paths name no store on Windows; the check has to
+    // find the system's roots there, or every handshake fails.
+    SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
+    REQUIRE(ctx != nullptr);
+    const int added = wowee::core::loadTrustStore(ctx);
+    CHECK(added > 0);
+#ifdef _WIN32
+    // Windows keeps dozens; a handful would mean the store was misread.
+    CHECK(added >= 10);
+#endif
+    SSL_CTX_free(ctx);
+}
+
+// Hidden (needs the network): `test_update_check "[.network]"` runs it.
+TEST_CASE("GitHub's release document is fetched over verified TLS", "[.network]") {
+    const wowee::core::HttpsResponse reply = wowee::core::httpsGet(
+        "api.github.com", "/repos/Kelsidavis/WoWee/releases/latest", "WoWee/test");
+    INFO("error: " << reply.error);
+    REQUIRE(reply.ok);
+    CHECK(reply.status == 200);
+    CHECK(reply.body.find("tag_name") != std::string::npos);
 }
