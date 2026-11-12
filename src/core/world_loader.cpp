@@ -55,96 +55,6 @@ namespace core {
 
 namespace {
 
-struct InstancePortalVisual {
-    uint32_t mapId;
-    glm::vec3 canonicalPos;
-    float canonicalYaw;
-    float scale;
-};
-
-void spawnInstancePortalVisuals(uint32_t mapId,
-                                rendering::Renderer* renderer,
-                                pipeline::AssetManager* assetManager) {
-    if (!renderer || !assetManager || !assetManager->isInitialized()) return;
-    auto* m2Renderer = renderer->getM2Renderer();
-    if (!m2Renderer) return;
-
-    static constexpr const char* kPortalPath =
-        "World\\GENERIC\\ACTIVEDOODADS\\INSTANCEPORTAL\\InstancePortal.m2";
-    static constexpr const char* kPortalModelName =
-        "World\\GENERIC\\ACTIVEDOODADS\\INSTANCEPORTAL\\InstancePortal.m2#world-entry-glow";
-    static const uint32_t kPortalModelId =
-        static_cast<uint32_t>(std::hash<std::string>{}(kPortalModelName));
-
-    if (!m2Renderer->hasModel(kPortalModelId)) {
-        auto m2Data = assetManager->readFile(kPortalPath);
-        if (m2Data.empty()) {
-            LOG_WARNING("Instance portal visual unavailable: ", kPortalPath);
-            return;
-        }
-
-        pipeline::M2Model model = pipeline::M2Loader::load(m2Data);
-        model.name = kPortalModelName;
-
-        const std::string skinPath = pipeline::skinPathForM2(std::string(kPortalPath));
-        auto skinData = assetManager->readFile(skinPath);
-        if (!skinData.empty() && model.version >= 264) {
-            pipeline::M2Loader::loadSkin(skinData, model);
-        }
-
-        if (!m2Renderer->loadModel(model, kPortalModelId)) {
-            LOG_WARNING("Failed to load instance portal visual model: ", kPortalPath);
-            return;
-        }
-        m2Renderer->markModelAsSpellEffect(kPortalModelId);
-    }
-
-    static const InstancePortalVisual kPortals[] = {
-        // Ironforge station -> Deeprun Tram
-        {.mapId = 0,   .canonicalPos = glm::vec3(-1330.46f, -4840.26f, 503.85f),
-         .canonicalYaw = 3.10f, .scale = 4.25f},
-        // Deeprun Tram -> Ironforge station
-        {.mapId = 369, .canonicalPos = glm::vec3(10.50f, 76.03f, -2.30f),
-         .canonicalYaw = 3.12f, .scale = 4.25f},
-        // Stormwind station -> Deeprun Tram. Coordinates from a live playthrough's
-        // actual AreaTrigger 2173 fire: entrance trigger position on map 0, and the
-        // canonical position the player actually landed at on map 369 after transfer
-        // (Z lifted by the same ~+2.0 offset the Ironforge map-369 entry uses relative
-        // to its own arrival point, since both tunnel ends have similar floor height).
-        // Yaw reuses the Ironforge value as a starting point - Stormwind's entrance
-        // faces a different direction, so this likely needs live tuning.
-        {.mapId = 0,   .canonicalPos = glm::vec3(514.03f, -8346.46f, 97.60f),
-         .canonicalYaw = 3.12f, .scale = 4.25f},
-        // Deeprun Tram -> Stormwind station
-        {.mapId = 369, .canonicalPos = glm::vec3(2490.91f, 68.30f, -2.30f),
-         .canonicalYaw = 3.12f, .scale = 4.25f},
-        // The Stockade exit. The WMO contains this InstancePortal doodad, but
-        // WMO-child matrix instances bypass the standalone portal presentation.
-        // Position and scale come from StormwindJail.wmo's authored doodad after
-        // applying the instance's 180-degree placement rotation.
-        {.mapId = 34,  .canonicalPos = glm::vec3(0.6882f, 45.7492f, -16.1133f),
-         .canonicalYaw = 0.0f, .scale = 1.36f},
-    };
-
-    for (const auto& portal : kPortals) {
-        if (portal.mapId != mapId) continue;
-
-        glm::vec3 renderPos = core::coords::canonicalToRender(portal.canonicalPos);
-        float renderYaw = portal.canonicalYaw + glm::radians(90.0f);
-        // Each entry keeps the scale appropriate to its authored doorway; the
-        // Deeprun entries are intentionally larger because their original effect
-        // was too subtle at station scale.
-        uint32_t instanceId = m2Renderer->createInstance(
-            kPortalModelId, renderPos, glm::vec3(0.0f, 0.0f, renderYaw), portal.scale);
-        if (instanceId) {
-            m2Renderer->setSkipCollision(instanceId, true);
-            LOG_INFO("Spawned instance portal visual map=", mapId,
-                     " canonical=(", portal.canonicalPos.x, ", ",
-                     portal.canonicalPos.y, ", ", portal.canonicalPos.z, ")");
-        }
-    }
-}
-
 } // namespace
 
 WorldLoader::WorldLoader(Application& app,
@@ -1113,7 +1023,6 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     renderer_->setCharacterYaw(spawnYawDeg);
     // Drawn facing that way from the start, not shuffled round from the last world.
     renderer_->snapCharacterBodyYaw();
-    spawnInstancePortalVisuals(mapId, renderer_, assetManager_);
 
     // Test transport disabled - real transports come from server via UPDATEFLAG_TRANSPORT
     showProgress("Finalizing world...", 0.94f);
