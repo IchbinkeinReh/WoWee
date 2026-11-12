@@ -2205,9 +2205,10 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
         // point. The pre-WotLK flags keep the curve.
         const bool smooth = !wotlkSplineFlags ||
             (data.splineFlags & (SplineFlagWotlk::FLYING | SplineFlagWotlk::CATMULLROM)) != 0;
-        // A WotLK curve is the client's (startCurvedPath) with or without
-        // points between: FUN_0073c8e0 builds it the same for one point.
-        const bool clientRoute = wotlkSplineFlags && smooth;
+        // A WotLK spline is the client's - a curve by startCurvedPath, a
+        // straight one from the packet's start - with or without points
+        // between: FUN_0073c8e0 builds it the same for one point.
+        const bool clientRoute = wotlkSplineFlags;
         // Build full path: start → waypoints → destination (all in canonical coords)
         if (!data.waypoints.empty() || clientRoute) {
             glm::vec3 startCanonical = core::coords::serverToCanonical(
@@ -2224,7 +2225,7 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
             }
             path.push_back({destCanonical.x, destCanonical.y, destCanonical.z});
             entity->startMoveAlongPath(path, orientation, data.duration / 1000.0f, smooth,
-                                       /*clientCurve=*/wotlkSplineFlags && smooth);
+                                       /*clientCurve=*/wotlkSplineFlags);
         } else {
             entity->startMoveTo(destCanonical.x, destCanonical.y, destCanonical.z,
                                 orientation, data.duration / 1000.0f);
