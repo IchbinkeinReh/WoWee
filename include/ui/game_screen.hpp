@@ -330,6 +330,13 @@ private:
     /// Quest-giver status per NPC guid, as the server reports it.
     using QuestStatusMap = std::unordered_map<uint64_t, game::QuestGiverStatus>;
 
+    /// What the pointer rests on over the minimap this frame, each name with
+    /// the place its kind takes in the client's one tooltip (0x0057c720):
+    /// the group, the battleground markers, the area points, then the
+    /// objects' blips by kind. The text last set, so it is set on change only.
+    std::vector<std::pair<int, std::string>> minimapHover_;
+    std::string minimapHoverShown_;
+    void showMinimapHover();
     void renderMinimapNpcDots(const MinimapFrame& frame, const EntityList& units,
                               const EntrySet& questEntries);
     void renderMinimapRares(const MinimapFrame& frame, const EntityList& units,

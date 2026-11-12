@@ -278,6 +278,9 @@ public:
     /// Each frame with the mouseover unchanged: a corpse whose owner's name
     /// was not yet known gets its tooltip once the name arrives.
     void retryCorpseTooltip(uint64_t mouseover);
+    /// The minimap's hover (0x0057c720): GameTooltip at the cursor against
+    /// Minimap with the text, or hidden where the text is empty.
+    void showMinimapTooltip(const std::string& text);
 
     lua_State* getState() { return L_; }
     /// A global string of the interface's - GlobalStrings.lua's, which is

@@ -5205,6 +5205,32 @@ std::pair<uint32_t, uint32_t> GameHandler::getRaidDifficulty() const {
     return {raid.effective(!getPartyData().isEmpty()), raid.personal};
 }
 
+std::optional<uint32_t> GameHandler::randomSuffixPoints(uint32_t itemId) const {
+    const ItemQueryResponseData* info = getItemInfo(itemId);
+    if (!info || !info->valid) return std::nullopt;
+    // 0x00707500: InventoryType through the jump table at 0x0070757c, to the
+    // five categories (head/chest/legs..., shoulders..., wrists..., weapon,
+    // ranged), -1 for a type with none.
+    static constexpr int8_t kCategory[29] = {-1, 0, 2, 1, 0, 0, 1, 0, 1, 2, 1, 2, 1, 3, 2, 4,
+                                             2, 0, -1, -1, 0, 3, 3, 2, -1, 4, 4, -1, -1};
+    if (info->inventoryType >= 29) return std::nullopt;
+    const int cat = kCategory[info->inventoryType];
+    if (cat < 0) return std::nullopt;
+    uint32_t base;
+    switch (info->quality) {
+        case 2: base = 11; break;   // good (+0x2c)
+        case 3: base = 6; break;    // superior (+0x18)
+        case 4: base = 1; break;    // epic (+0x4)
+        default: return std::nullopt;
+    }
+    auto* am = services_.assetManager;
+    const auto dbc = am && am->isInitialized() ? am->loadDBCOptional("RandPropPoints.dbc") : nullptr;
+    if (!dbc || dbc->getFieldCount() < 16) return std::nullopt;
+    const int32_t row = dbc->findRecordById(info->itemLevel);
+    if (row < 0) return std::nullopt;
+    return dbc->getUInt32(static_cast<uint32_t>(row), base + static_cast<uint32_t>(cat));
+}
+
 uint32_t GameHandler::raidDifficultyInForce() const {
     // 0x00519680: the raid difficulty in force, and on a map that switches
     // difficulty in place (Map flags 0x100) its size bit with the player's

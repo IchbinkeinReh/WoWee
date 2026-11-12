@@ -6821,7 +6821,11 @@ ItemDef InventoryHandler::buildItemDef(uint32_t entry, uint32_t stackCount,
     // stats fold into their dedicated fields; everything else (ratings, AP, spell power)
     // joins extraStats so the existing tooltip rendering shows them as green stat lines.
     if (randomPropertyId != 0) {
-        for (const auto& b : owner_.getRandomStatBonuses(randomPropertyId, suffixFactor)) {
+        // A suffix's points from the item's level, quality and slot
+        // (0x007089b0), where the tables answer; the server's seed else.
+        const uint32_t points = randomPropertyId < 0
+            ? owner_.randomSuffixPoints(def.itemId).value_or(suffixFactor) : suffixFactor;
+        for (const auto& b : owner_.getRandomStatBonuses(randomPropertyId, points)) {
             if (b.value == 0) continue;
             switch (b.statType) {
                 case 3: def.agility   += b.value; break;

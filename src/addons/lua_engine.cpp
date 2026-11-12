@@ -5588,8 +5588,11 @@ static void appendRandomSuffix(wowee::ui::Widget* w, game::GameHandler* gh,
     }
 
     // After the item's own lines.
-    for (const auto& b : gh->getRandomStatBonuses(item.randomPropertyId,
-                                                  item.suffixFactor)) {
+    // A suffix's points from the item's own level, quality and slot, as the
+    // client works them out (0x007089b0), where the tables answer.
+    const uint32_t points = item.randomPropertyId < 0
+        ? gh->randomSuffixPoints(item.itemId).value_or(item.suffixFactor) : item.suffixFactor;
+    for (const auto& b : gh->getRandomStatBonuses(item.randomPropertyId, points)) {
         if (b.value == 0) continue;
         // Worded as the item's own stats are (item_stat_text.hpp): white for a
         // primary, green "Equip:" for a rating.
@@ -13900,6 +13903,49 @@ void LuaEngine::worldMouseoverChanged(uint64_t oldGuid, uint64_t newGuid, Mouseo
         lua_pop(L_, 1);
     }
     lua_pop(L_, 1);
+}
+
+void LuaEngine::showMinimapTooltip(const std::string& text) {
+    if (!L_) return;
+    taint::Scope secure(0);
+    lua_getglobal(L_, "GameTooltip");
+    const int tip = lua_gettop(L_);
+    lua_getglobal(L_, "Minimap");
+    const int minimap = lua_gettop(L_);
+    if (!lua_istable(L_, tip) || !lua_istable(L_, minimap)) {
+        lua_settop(L_, tip - 1);
+        return;
+    }
+    const auto call = [&](const char* method, int nargs) {
+        // The method and self are below the nargs already pushed.
+        if (lua_pcall(L_, nargs + 1, 0, 0) != 0) {
+            LOG_WARNING("minimap tooltip ", method, ": ", luaL_optstring(L_, -1, "?"));
+            lua_pop(L_, 1);
+        }
+    };
+    if (text.empty()) {
+        // Hidden only while it is still the minimap's.
+        if (auto* w = widgets_.get(widgetIdOf(L_, tip)); w && w->tooltipOwnerId == widgetIdOf(L_, minimap)) {
+            lua_getfield(L_, tip, "Hide");
+            lua_pushvalue(L_, tip);
+            call("Hide", 0);
+        }
+        lua_settop(L_, tip - 1);
+        return;
+    }
+    lua_getfield(L_, tip, "SetOwner");
+    lua_pushvalue(L_, tip);
+    lua_pushvalue(L_, minimap);
+    lua_pushstring(L_, "ANCHOR_CURSOR");
+    call("SetOwner", 2);
+    lua_getfield(L_, tip, "SetText");
+    lua_pushvalue(L_, tip);
+    lua_pushstring(L_, text.c_str());
+    call("SetText", 1);
+    lua_getfield(L_, tip, "Show");
+    lua_pushvalue(L_, tip);
+    call("Show", 0);
+    lua_settop(L_, tip - 1);
 }
 
 void LuaEngine::retryCorpseTooltip(uint64_t mouseover) {

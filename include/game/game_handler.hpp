@@ -577,6 +577,11 @@ public:
     // with ItemDef::ExtraStat (4=Str, 7=Sta, 45=SpellPower, ...). Suffix stats scale as
     // AllocationPct*suffixFactor/10000; positive properties use the enchant's fixed amount.
     struct RandomStatBonus { uint32_t statType = 0; int32_t value = 0; };
+    /// The points a random suffix's stats are a share of (0x007075a0): the
+    /// RandPropPoints row of the item's level, the column of its quality
+    /// (good, superior, epic) and its slot's category (0x00707500's table
+    /// over InventoryType). Nothing for an item or quality that has none.
+    std::optional<uint32_t> randomSuffixPoints(uint32_t itemId) const;
     using RandomStatResolver = std::function<std::vector<RandomStatBonus>(int32_t, uint32_t)>;
     void setRandomStatResolver(RandomStatResolver r) { randomStatResolver_ = std::move(r); }
     std::vector<RandomStatBonus> getRandomStatBonuses(int32_t id, uint32_t suffixFactor) const {

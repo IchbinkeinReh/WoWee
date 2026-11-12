@@ -1962,8 +1962,13 @@ bool Application::initialize() {
                         auto sit = suffixMap->find(-id);
                         if (sit != suffixMap->end())
                             for (const auto& [ench, pct] : sit->second) {
-                                int32_t amount = static_cast<int32_t>(
-                                    (static_cast<int64_t>(pct) * suffixFactor) / 10000);
+                                // 0x00707650: the share as a float, rounded
+                                // the client's way - twice it less a half, to
+                                // the nearest, halved.
+                                const float share = static_cast<float>(pct) * 0.0001f *
+                                                    static_cast<float>(suffixFactor);
+                                const int32_t amount = static_cast<int32_t>(
+                                    std::nearbyint(share + share - 0.5f)) >> 1;
                                 addEnchant(ench, amount, true);
                             }
                     } else {
