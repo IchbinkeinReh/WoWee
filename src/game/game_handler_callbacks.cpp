@@ -3908,7 +3908,9 @@ void GameHandler::interactWithNpc(uint64_t guid) {
             return;
         case ni::Hello::Banker: op = Opcode::CMSG_BANKER_ACTIVATE; break;
         case ni::Hello::Petitioner: op = Opcode::CMSG_PETITION_SHOWLIST; break;
-        case ni::Hello::TabardDesigner: op = Opcode::MSG_TABARDVENDOR_ACTIVATE; break;
+        case ni::Hello::TabardDesigner:
+            activateTabardVendor(guid);
+            return;
         case ni::Hello::Battlemaster: op = Opcode::CMSG_BATTLEMASTER_HELLO; break;
         case ni::Hello::Auctioneer: op = Opcode::MSG_AUCTION_HELLO; break;
         case ni::Hello::StableMaster: op = Opcode::MSG_LIST_STABLED_PETS; break;

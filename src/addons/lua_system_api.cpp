@@ -10132,6 +10132,18 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"GetCVarBool",         lua_GetCVarBool},
                 {"SetCVar",             lua_SetCVar},
                 {"GetLocale",         lua_GetLocale},
+                // ReportBug(text) and ReportSuggestion(text) (0x00510930,
+                // 0x00510980): CMSG_BUG with the client's report.
+                {"ReportBug", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: ReportBug(\"description\")");
+            if (auto* gh = getGameHandler(L)) gh->sendBugReport(0, lua_tostring(L, 1));
+            return 0;
+        }},
+                {"ReportSuggestion", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: ReportSuggestion(\"description\")");
+            if (auto* gh = getGameHandler(L)) gh->sendBugReport(1, lua_tostring(L, 1));
+            return 0;
+        }},
                 // Gender-aware lookup of a global string by token name.
                 //
                 // The reputation list is the caller that matters:

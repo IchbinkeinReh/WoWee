@@ -733,6 +733,7 @@ set(WOWEE_SOURCES
     src/game/game_handler_packets.cpp
     src/game/game_handler_callbacks.cpp
     src/game/game_handler_tabard.cpp
+    src/game/bug_report.cpp
     src/game/game_handler_corpse.cpp
     src/game/game_handler_world_state_ui.cpp
     src/game/chat_handler.cpp

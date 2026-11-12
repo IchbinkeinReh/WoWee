@@ -312,7 +312,18 @@ public:
     void replayAuraStateKits();
 
     // Known spells mutation (formerly accessed via friend)
-    void addKnownSpell(uint32_t spellId) { knownSpells_.insert(spellId); }
+    void addKnownSpell(uint32_t spellId) {
+        knownSpells_.insert(spellId);
+        noteLearnOrder(spellId);
+    }
+    /// Where a known spell stands in the order it was learned - the order
+    /// the client's spell list keeps (0x00542030 appends) - for a spell this
+    /// has not seen learned, after all the others.
+    [[nodiscard]] uint64_t learnOrder(uint32_t spellId) const {
+        const auto it = learnOrder_.find(spellId);
+        return it != learnOrder_.end() ? it->second : UINT64_MAX;
+    }
+    void noteLearnOrder(uint32_t spellId) { learnOrder_.try_emplace(spellId, nextLearnOrder_++); }
     [[nodiscard]] bool hasKnownSpell(uint32_t spellId) const { return knownSpells_.count(spellId) > 0; }
     /// 0x007260e0 || 0x00726160: the spell known, or one SkillLineAbility
     /// supersedes it with, followed down the chain.
@@ -756,6 +767,8 @@ private:
 
     // --- Spell state ---
     std::unordered_set<uint32_t> knownSpells_;
+    std::unordered_map<uint32_t, uint64_t> learnOrder_;
+    uint64_t nextLearnOrder_ = 0;
     uint8_t castCount_ = 0;
     AttackStreak attackStreak_;  ///< 0x0080cce0's tutorial counter
     /// The cast count of the player's cast the server last started: the

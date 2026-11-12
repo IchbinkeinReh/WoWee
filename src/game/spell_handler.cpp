@@ -1914,6 +1914,20 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     // unit asked is held to the reach (0x00809610) and the caster to
     // 0x00739650's rules.
     cancelGroundTargeting();
+    // 0x0080cce0: with an override bar's row in force that does not let any
+    // spell through (Flags 0x4), a spell not in it fails (0xad) - an attack
+    // (Effect 78, Attributes 0x2) or a repeat (AttributesEx2 0x20) aside.
+    if (const auto& row = owner_.overrideSpellRow(); row && (row->flags & 0x4u) == 0 && !row->holds(spellId)) {
+        const auto it = owner_.spellNameCacheRef().find(spellId);
+        const bool exempt = it != owner_.spellNameCacheRef().end() &&
+                            (it->second.effectIds[0] == 78 || (it->second.attr & 0x2u) != 0 ||
+                             (it->second.attrEx2 & 0x20u) != 0);
+        if (!exempt) {
+            constexpr uint8_t kSpellFailedOverride = 0xad;
+            reportLocalCastFailure(spellId, kSpellFailedOverride);
+            return;
+        }
+    }
     if (!castChecksPass(spellId, targetGuid)) return;
     playCastActivateSound(spellId, 0);
 
@@ -3960,6 +3974,10 @@ void SpellHandler::handleInitialSpells(network::Packet& packet) {
     if (!owner_.getPacketParsers()->parseInitialSpells(packet, data)) return;
 
     knownSpells_ = {data.spellIds.begin(), data.spellIds.end()};
+    // The list's own order is the order they were learned in.
+    learnOrder_.clear();
+    nextLearnOrder_ = 0;
+    for (const uint32_t id : data.spellIds) noteLearnOrder(id);
 
     LOG_DEBUG("Initial spells include: 527=", knownSpells_.count(527u),
               " 988=", knownSpells_.count(988u), " 1180=", knownSpells_.count(1180u));
@@ -4986,6 +5004,7 @@ void SpellHandler::handleLearnedSpell(network::Packet& packet) {
 
     const bool alreadyKnown = knownSpells_.count(spellId) > 0;
     knownSpells_.insert(spellId);
+    noteLearnOrder(spellId);
     LOG_INFO("Learned spell: ", spellId, alreadyKnown ? " (already known)" : "");
     if (isPreWotlk()) {
         loadTalentDbc();
@@ -5173,6 +5192,11 @@ void SpellHandler::handleSupercededSpell(network::Packet& packet) {
     uint32_t newSpellId = classicSpellId ? packet.readUInt16() : packet.readUInt32();
 
     knownSpells_.erase(oldSpellId);
+    // The new rank takes the old one's place in the list.
+    if (const auto old = learnOrder_.find(oldSpellId); old != learnOrder_.end()) {
+        learnOrder_[newSpellId] = old->second;
+        learnOrder_.erase(old);
+    }
 
     const bool newSpellAlreadyAnnounced = knownSpells_.count(newSpellId) > 0;
 
@@ -5713,6 +5737,8 @@ void SpellHandler::resetCastState() {
 
 void SpellHandler::resetAllState() {
     knownSpells_.clear();
+    learnOrder_.clear();
+    nextLearnOrder_ = 0;
     playerHistory_.clear();  // 0x00802a50
     petHistory_.clear();
     playerAuras_.clear();
@@ -5895,7 +5921,7 @@ uint32_t SpellHandler::difficultySpell(uint32_t spellId) const {
     const auto info = owner_.getInstanceInfo();
     uint32_t difficulty;
     if (info.type == "party") difficulty = owner_.getDungeonDifficulty().first;
-    else if (info.type == "raid") difficulty = owner_.getRaidDifficulty().first;
+    else if (info.type == "raid") difficulty = owner_.raidDifficultyInForce();
     else return spellId;
     const auto& v = row->second;
     uint32_t pick = difficulty < 4 ? v[difficulty] : 0;
@@ -6510,8 +6536,13 @@ bool SpellHandler::carriesTotemCategory(uint32_t cat) const {
 std::vector<uint32_t> SpellHandler::multiCastSpells(int element) const {
     if (element < 0 || element >= totem_bar::kElements) return {};
     const auto& cache = owner_.spellNameCacheRef();
+    // In the order they were learned, as the client's list is walked
+    // (0x00542030 appends each).
     std::vector<uint32_t> ids(knownSpells_.begin(), knownSpells_.end());
-    std::sort(ids.begin(), ids.end());
+    std::sort(ids.begin(), ids.end(), [this](uint32_t a, uint32_t b) {
+        const uint64_t oa = learnOrder(a), ob = learnOrder(b);
+        return oa != ob ? oa < ob : a < b;
+    });
     // 0x0053b540: the rank's number.
     const auto rankOf = [&](uint32_t id) -> uint32_t {
         const auto it = cache.find(id);

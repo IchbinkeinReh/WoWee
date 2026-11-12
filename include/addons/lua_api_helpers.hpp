@@ -338,6 +338,16 @@ inline GuildBankCursorSlot& guildBankCursorSlot() {
     return held;
 }
 
+/// A slot whose item went out with a move: the cursor let it go without
+/// unlocking it (0x00519280 leaves 0x00513800 to the bank's update), so it
+/// stays locked until the next bank list arrives (0x005a5410, 0x005a7250) -
+/// `list` is the count of lists seen when it was moved.
+struct GuildBankMovedSlot { int tab = 0; int slot = 0; uint32_t list = 0; };
+inline std::vector<GuildBankMovedSlot>& guildBankMovedSlots() {
+    static std::vector<GuildBankMovedSlot> moved;
+    return moved;
+}
+
 /// The uppercase tokens WoW returns second from UnitClass, and the key every
 /// class-indexed table in FrameXML uses - CLASS_ICON_TCOORDS for the class
 /// portrait, RAID_CLASS_COLORS for a name's colour. Written out rather than

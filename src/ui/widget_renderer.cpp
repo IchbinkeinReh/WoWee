@@ -2720,12 +2720,42 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 // rather than its first, lower on screen than the original's.
                 const bool topDown = w->objectType == "MessageFrame";
                 const int count = static_cast<int>(w->messages.size());
+                // Every message's lines, measured again only where the width
+                // moved; a message that came in while the frame was scrolled
+                // back moves the view back by its lines past the first.
+                int totalLines = 0;
+                for (const auto& m : w->messages) {
+                    if (m.rowsWidth != wrapW) {
+                        m.rows = static_cast<int>(lineCount(m.text));
+                        m.rowsWidth = wrapW;
+                    }
+                    if (m.scrollCredit) {
+                        m.scrollCredit = false;
+                        if (w->messageScroll > 0) w->messageScroll += m.rows - 1;
+                    }
+                    totalLines += m.rows;
+                }
+                w->messageLinesTotal = totalLines;
                 float y = topDown ? y0 : y1 - lineH;
                 int painted = 0;
-                const int scroll = w->messageScroll;
-                for (int k = scroll; k < count && (topDown ? y < y1 : y >= y0); ++k) {
+                int paintedLines = 0;
+                // Scrolled back by display lines (the client's ring holds the
+                // wrapped lines): those at the newest end are passed over, a
+                // message only partly passed over showing its upper lines.
+                int skipLines = topDown ? 0 : std::max(w->messageScroll, 0);
+                const int firstK = topDown ? std::max(w->messageScroll, 0) : 0;
+                for (int k = firstK; k < count && (topDown ? y < y1 : y >= y0); ++k) {
                     const int i = topDown ? k : count - 1 - k;
                     const auto& m = w->messages[static_cast<size_t>(i)];
+                    int hiddenBelow = 0;
+                    if (skipLines > 0) {
+                        if (skipLines >= m.rows) {
+                            skipLines -= m.rows;
+                            continue;
+                        }
+                        hiddenBelow = skipLines;
+                        skipLines = 0;
+                    }
                     // A line whose time is up is still in the history - it
                     // comes back when the frame is scrolled - but it takes no
                     // room on screen, so the ones still lit pack together.
@@ -2744,8 +2774,9 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     // upward, because the newest sits at the bottom: the block
                     // starts as many lines above the cursor as it needs, and
                     // the cursor then moves past all of them.
-                    const size_t rows = lineCount(m.text);
-                    const float top = topDown ? y : y - static_cast<float>(rows - 1) * lineH;
+                    const size_t rows = static_cast<size_t>(std::max(m.rows, 1));
+                    const size_t shownRows = rows - static_cast<size_t>(hiddenBelow);
+                    const float top = topDown ? y : y - static_cast<float>(shownRows - 1) * lineH;
                     // Top-down the block grows downward instead, and one that
                     // would run out of the bottom stops the same way - unless it
                     // is the first, which the original shows regardless.
@@ -2783,6 +2814,8 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     };
                     const float bx = std::floor(x0);
                     const float by = std::floor(top);
+                    // The lines scrolled past are below the frame: cut there.
+                    if (hiddenBelow > 0) dl->PushClipRect(ImVec2(x0, y0), ImVec2(x1, y1), true);
                     if (w->hasShadow) {
                         float sc[4] = {w->shadowColor[0], w->shadowColor[1],
                                        w->shadowColor[2], w->shadowColor[3]};
@@ -2805,9 +2838,11 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                                    packColor(rgba, w->alpha), w->alpha, m.text,
                                    wrapW, false, w->justifyH.c_str(), false,
                                    &tree, w->id, (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f));
+                    if (hiddenBelow > 0) dl->PopClipRect();
                     if (topDown) y += lineH * static_cast<float>(rows);
-                    else         y -= lineH * static_cast<float>(rows);
+                    else         y -= lineH * static_cast<float>(shownRows);
                     ++painted;
+                    paintedLines += static_cast<int>(topDown ? rows : shownRows);
                 }
                 // A window holding lines and painting none of them.
                 //
@@ -2820,7 +2855,9 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 //
                 // Once per frame per session - it means nothing is on screen,
                 // so it cannot be noisy for long.
-                w->messagesDisplayed = painted;
+                // In display lines, the unit PageUp and GetNumLinesDisplayed
+                // count in (0x009736a0).
+                w->messagesDisplayed = paintedLines;
                 if (painted == 0) {
                     int lit = 0;
                     for (const auto& m : w->messages) {

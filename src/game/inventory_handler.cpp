@@ -4939,6 +4939,7 @@ void InventoryHandler::requestGuildBankWithdrawMoney() {
 
 void InventoryHandler::handleGuildBankList(network::Packet& packet) {
     if (!GuildBankListParser::parse(packet, guildBankData_)) return;
+    ++guildBankListCount_;
     // The tab names come with the count of tabs bought (0x005a7250 ->
     // 0x00c1dc0c).
     if (guildBankData_.tabsIncluded)

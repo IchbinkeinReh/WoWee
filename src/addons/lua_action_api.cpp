@@ -242,6 +242,9 @@ static void cursorItemPickedUp(lua_State* L, uint32_t itemId) {
     if (auto* sfx = cursorSounds(L); sfx && s_cursorItemDisplay != 0) sfx->playItemSound(s_cursorItemDisplay, 0);
 }
 
+/// The cursor's guild bank item has gone out with a move (see setCursorType).
+static bool s_guildBankMoveSent = false;
+
 static void setCursorType(lua_State* L, CursorType type) {
     if (s_cursorType == type) return;
     // Putting anything down forgets the guild bank split. It rides on the
@@ -255,8 +258,18 @@ static void setCursorType(lua_State* L, CursorType type) {
     lua_getfield(L, LUA_REGISTRYINDEX, "wowee_lua_engine");
     auto* engine = static_cast<LuaEngine*>(lua_touserdata(L, -1));
     lua_pop(L, 1);
-    // A guild bank item put down lets its slot go (0x00519280 case 0xb).
-    const bool releasedBankSlot = prevType == CursorType::GUILDBANK && guildBankCursorSlot().tab != 0;
+    // A guild bank item put down lets its slot go (0x00519280 case 0xb) -
+    // unless it went out with a move, which leaves the slot locked for the
+    // bank's update to free (0x00513800).
+    bool releasedBankSlot = prevType == CursorType::GUILDBANK && guildBankCursorSlot().tab != 0;
+    if (releasedBankSlot && s_guildBankMoveSent) {
+        if (auto* gh = getGameHandler(L))
+            guildBankMovedSlots().push_back({guildBankCursorSlot().tab, guildBankCursorSlot().slot,
+                                             gh->guildBankListCount()});
+        releasedBankSlot = false;
+        guildBankCursorSlot() = {};
+    }
+    s_guildBankMoveSent = false;
     if (releasedBankSlot) guildBankCursorSlot() = {};
     if (!engine) return;
     if (releasedBankSlot) engine->fireEvent("GUILDBANK_ITEM_LOCK_CHANGED", {});
@@ -1058,6 +1071,19 @@ static int lua_IsUsableAction(lua_State* L) {
                 noPower = true;
                 usable = false;
             }
+        }
+    }
+    // 0x005a9e20 under an override bar's row: an item only with its Flags
+    // 0x1, a macro only with 0x2, a spell only with 0x4 or in the row.
+    if (const auto& row = gh->overrideSpellRow()) {
+        bool barred = false;
+        if (action.type == game::ActionBarSlot::ITEM) barred = (row->flags & 0x1u) == 0;
+        else if (action.type == game::ActionBarSlot::MACRO) barred = (row->flags & 0x2u) == 0;
+        else if (action.type == game::ActionBarSlot::SPELL)
+            barred = (row->flags & 0x4u) == 0 && !row->holds(action.id);
+        if (barred) {
+            usable = false;
+            noPower = false;
         }
     }
     if (usable) {
@@ -2093,6 +2119,7 @@ static int lua_PickupContainerItem(lua_State* L) {
         gh->guildBankWithdrawItem(static_cast<uint8_t>(s_cursorBag - 1),
                                   static_cast<uint8_t>(s_cursorSlot - 1),
                                   dstBag, dstSlot, s_cursorSplit);
+        s_guildBankMoveSent = true;
         setCursorType(L, CursorType::NONE);
         return 0;
     }

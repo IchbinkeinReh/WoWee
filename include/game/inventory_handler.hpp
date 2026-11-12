@@ -511,6 +511,8 @@ public:
     void closeMailCompose() { showMailCompose_ = false; clearMailAttachments(); }
     bool hasNewMail() const { return hasNewMail_; }
     void openMailbox(uint64_t guid);
+    /// How many guild bank lists have arrived (SMSG_GUILD_BANK_LIST).
+    uint32_t guildBankListCount() const { return guildBankListCount_; }
     void closeMailbox();
     /// Look for mail, as SMSG_RECEIVED_MAIL does with its delay (0x005704d0):
     /// with the mailbox open, only once it closes; otherwise ask the server
@@ -1213,6 +1215,7 @@ private:
     // DurabilityQuality.dbc: [id] -> quality_mod float
     mutable std::unordered_map<uint32_t, float> durabilityQuality_;
     void loadRepairDbc() const;
+    uint32_t guildBankListCount_ = 0;
 };
 
 } // namespace game

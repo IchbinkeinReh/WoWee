@@ -596,6 +596,12 @@ struct Widget {
         std::string text;
         float color[4];
         float age = 0.0f;
+        /// The display lines it wraps to, as the last draw measured it, and
+        /// at what width; arrived while the frame was scrolled back, so the
+        /// view is to move back by its lines once they are known.
+        mutable int rows = 1;
+        mutable float rowsWidth = -1.0f;
+        mutable bool scrollCredit = false;
         double lineId = 0.0;
         double accessId = 0.0;
         bool hasExtra = false;
@@ -623,8 +629,10 @@ struct Widget {
     /// is none; the 15% used here is the leading a line already carries.
     float messagePadding = 0.0f;
     size_t maxMessages = 128;
+    /// Every display line the history holds, as the last draw measured them.
+    mutable int messageLinesTotal = 0;
     /// How far back through the history the frame has been scrolled, in lines.
-    int   messageScroll = 0;
+    mutable int messageScroll = 0;
     /// How many messages the last draw fitted on screen, which is the page
     /// PageUp and PageDown turn and GetNumLinesDisplayed answers.
     mutable int messagesDisplayed = 0;

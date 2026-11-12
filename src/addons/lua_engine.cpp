@@ -2251,8 +2251,12 @@ int lua_MessageFrame_AddMessage(lua_State* L) {
         else                      w->messages.pop_front();
     }
     // A new line at the bottom means the view follows it, which is what a
-    // chat frame does unless someone has scrolled up.
-    if (w->messageScroll > 0) ++w->messageScroll;
+    // chat frame does unless someone has scrolled up: then the view stays on
+    // what it shows, back by the new message's lines (counted once drawn).
+    if (w->messageScroll > 0) {
+        ++w->messageScroll;
+        (w->messagesInsertTop ? w->messages.front() : w->messages.back()).scrollCredit = true;
+    }
     // The slot the line took in the client's ring of maxLines.
     w->messageRingLine = (w->messageRingLine + 1) % static_cast<int>(std::max<size_t>(w->maxMessages, 1));
     return 0;
@@ -6079,8 +6083,10 @@ int lua_MessageFrame_SetMaxLines(lua_State* L) {
     return 0;
 }
 int lua_MessageFrame_ScrollUp(lua_State* L) {
+    // A display line at a time (0x009732f0), the client's ring holding the
+    // wrapped lines rather than the messages.
     if (auto* w = widgetOf(L, 1)) {
-        if (static_cast<size_t>(w->messageScroll) + 1 < w->messages.size())
+        if (w->messageScroll + 1 < std::max(w->messageLinesTotal, static_cast<int>(w->messages.size())))
             ++w->messageScroll;
     }
     return 0;
@@ -6096,13 +6102,13 @@ int lua_MessageFrame_ScrollToBottom(lua_State* L) {
     return 0;
 }
 
-// The rest of ScrollingMessageFrame's scrolling (0x009732f0-0x009736f0). The
-// client counts in wrapped lines; this frame keeps its offset in messages, so
-// a page here is the messages the last draw fitted rather than its lines.
+// The rest of ScrollingMessageFrame's scrolling (0x009732f0-0x009736f0), in
+// wrapped display lines as the client's ring holds them.
 
 namespace {
 int lastScroll(const wowee::ui::Widget& w) {
-    return w.messages.empty() ? 0 : static_cast<int>(w.messages.size()) - 1;
+    const int lines = std::max(w.messageLinesTotal, static_cast<int>(w.messages.size()));
+    return lines > 0 ? lines - 1 : 0;
 }
 void scrollTo(wowee::ui::Widget& w, int offset) {
     w.messageScroll = std::clamp(offset, 0, lastScroll(w));
@@ -12660,6 +12666,7 @@ void LuaEngine::registerCoreAPI() {
         "            if not (g.skillOk and g.levelOk) then r, gc, b = 1, 0.125, 0.125\n"
         "            elseif not g.conditionsMet then r, gc, b = 0.5, 0.5, 0.5 end\n"
         "            self:AddLine(g.text, r, gc, b)\n"
+        "            if g.icon then self:AddTexture(g.icon) end\n"
         "            for _, c in ipairs(g.conditions or {}) do\n"
         "                local text = ''\n"
         "                local fmt = c.key and _G[c.key]\n"
@@ -12683,6 +12690,7 @@ void LuaEngine::registerCoreAPI() {
         "        end\n"
         "        if data.sockets or gems then\n"
         "            local socketKeys = {[1]='EMPTY_SOCKET_META',[2]='EMPTY_SOCKET_RED',[4]='EMPTY_SOCKET_YELLOW',[8]='EMPTY_SOCKET_BLUE'}\n"
+        "            local socketArt = {[1]='Meta',[2]='Red',[4]='Yellow',[8]='Blue'}\n"
         "            local socks = data.sockets or {}\n"
         "            for i = 1, 3 do\n"
         "                local g = gems and gems[i]\n"
@@ -12690,6 +12698,8 @@ void LuaEngine::registerCoreAPI() {
         "                elseif socks[i] then\n"
         "                    local key = socketKeys[socks[i].color] or 'EMPTY_SOCKET_NO_COLOR'\n"
         "                    self:AddLine(_G[key] or key, 0.5, 0.5, 0.5)\n"
+        "                    local art = socketArt[socks[i].color]\n"
+        "                    self:AddTexture(art and ('Interface\\\\ItemSocketingFrame\\\\UI-EmptySocket-'..art) or 'Interface\\\\ItemSocketingFrame\\\\UI-EmptySocket')\n"
         "                end\n"
         "            end\n"
         "        end\n"

@@ -6265,9 +6265,15 @@ void registerInventoryLuaAPI(lua_State* L) {
             lua_pushstring(L, icon.empty()
                 ? "Interface\\Icons\\INV_Misc_QuestionMark" : icon.c_str());
             lua_pushnumber(L, it.stackCount);
-            // Locked while its item is on the cursor (0x005137d0).
+            // Locked while its item is on the cursor (0x005137d0), and after
+            // a move until the bank's next list unlocks it (0x00513800).
             const auto& held = guildBankCursorSlot();
-            luaPushOneOrNil(L, (held.tab == tab && held.slot == slot) ? 1 : 0);
+            bool locked = held.tab == tab && held.slot == slot;
+            auto& moved = guildBankMovedSlots();
+            const uint32_t lists = gh->guildBankListCount();
+            std::erase_if(moved, [lists](const GuildBankMovedSlot& m) { return m.list != lists; });
+            for (const auto& m : moved) locked = locked || (m.tab == tab && m.slot == slot);
+            luaPushOneOrNil(L, locked ? 1 : 0);
             return 3;
         }},
                 // GetGuildBankItemLink(tab, slot) → hyperlink
