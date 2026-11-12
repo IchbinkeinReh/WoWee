@@ -225,6 +225,13 @@ constexpr SettingGerman kGerman[] = {
      "zugewandten Flächen tun es, so scheint ein Licht in einer Laterne weiter durch ihr Glas "
      "nach außen. Nicht im ursprünglichen Client.",
      nullptr, nullptr, nullptr},
+    {"rtparticlelights",
+     "Partikel-Punktlichter",
+     "Wie viele Lichter die Funken oder Flammen eines Emitters geben: 1 ist ein Licht dort, wo "
+     "seine Partikel im Mittel nach der Hälfte ihres Lebens sind; mehr verteilen sich auf ihrem "
+     "Weg vom Emitter bis dorthin, wo sie vergehen, das erste am stärksten, alle zusammen so hell "
+     "wie eines. Mehr kostet Zeit beim Raytracing. Nicht im ursprünglichen Client.",
+     nullptr, nullptr, nullptr},
     {"rtunitshadowreach",
      "Figurenschattenweite (m)",
      "Wie weit vom Körper der Schatten einer Figur oder Kreatur von einer Lampe, einem Feuer "

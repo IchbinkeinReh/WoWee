@@ -841,6 +841,8 @@ public:
     /// Debug Glow: the glow pulse's and the fire flicker's strength, percent.
     void setRtPulseStrengths(int glowPulsePercent, int fireFlickerPercent, int modelFlickerPercent,
                              int glowAnimationPercent);
+    /// Ray Tracing, "Point lights per particle light" (rt_particle_lights.hpp).
+    void setRtParticleLights(int n);
     /// The Ray Tracing page's "Minimum brightness (%)" (rt_min_brightness.hpp).
     void setRtMinBrightness(int percent) { rtMinBrightnessPercent_ = percent; }
     /// The Ray Tracing page's two "Normal blend" angles (rt_normal_blend.hpp).

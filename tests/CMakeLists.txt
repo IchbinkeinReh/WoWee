@@ -1447,6 +1447,12 @@ wowee_add_test(test_m2_vertex_lights
     SOURCES test_m2_vertex_lights.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_rt_particle_lights ──────────────────────────────────
+# An emitter's particle light split along its particles' mean path.
+wowee_add_test(test_rt_particle_lights
+    SOURCES test_rt_particle_lights.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_rt_light_kinds ──────────────────────────────────────
 # The Debug Graphics view of the lights' kinds: a name and a colour of its
 # own for each, the trace shader's list the same, the kind in the GPU record.

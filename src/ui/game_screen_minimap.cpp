@@ -2099,6 +2099,7 @@ void GameScreen::saveSettings() {
     out << "dbg_fire_flicker=" << settingsPanel_.pendingDbgFireFlicker << "\n";
     out << "dbg_model_flicker=" << settingsPanel_.pendingDbgModelFlicker << "\n";
     out << "dbg_glow_anim=" << settingsPanel_.pendingDbgGlowAnim << "\n";
+    out << "rt_particle_lights=" << settingsPanel_.pendingRtParticleLights << "\n";
     out << "dbg_shadow_darkness=" << settingsPanel_.pendingDbgShadowDarkness << "\n";
     out << "dbg_traced_sun_shadow=" << settingsPanel_.pendingDbgTracedSunShadow << "\n";
     out << "dbg_map_sun_shadow=" << settingsPanel_.pendingDbgMapSunShadow << "\n";
@@ -2471,6 +2472,7 @@ void GameScreen::loadSettings() {
             else if (key == "dbg_fire_flicker") settingsPanel_.pendingDbgFireFlicker = std::clamp(std::stoi(val), 0, 300);
             else if (key == "dbg_model_flicker") settingsPanel_.pendingDbgModelFlicker = std::clamp(std::stoi(val), 0, 300);
             else if (key == "dbg_glow_anim") settingsPanel_.pendingDbgGlowAnim = std::clamp(std::stoi(val), 0, 300);
+            else if (key == "rt_particle_lights") settingsPanel_.pendingRtParticleLights = std::clamp(std::stoi(val), 1, 10);
             else if (key == "dbg_shadow_darkness") settingsPanel_.pendingDbgShadowDarkness = std::clamp(std::stoi(val), 0, 100);
             else if (key == "dbg_traced_sun_shadow") settingsPanel_.pendingDbgTracedSunShadow = std::clamp(std::stoi(val), 0, 100);
             else if (key == "dbg_map_sun_shadow") settingsPanel_.pendingDbgMapSunShadow = std::clamp(std::stoi(val), 0, 100);

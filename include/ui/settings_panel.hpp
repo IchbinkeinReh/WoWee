@@ -148,6 +148,7 @@ public:
     int pendingDbgModelFlicker = 100;  ///< Debug Glow: model light flicker strength, percent
     int pendingDbgGlowAnim = 100;      ///< Debug Glow: glow colour animation strength, percent
     int pendingDbgLightCountLimit = 512;
+    int pendingRtParticleLights = 1;  ///< lights per particle emitter (rt_particle_lights.hpp)
     int pendingDbgShadowDarkness = 65;
     int pendingDbgTracedSunShadow = 100;
     int pendingDbgMapSunShadow = 100;

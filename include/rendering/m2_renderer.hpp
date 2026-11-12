@@ -18,6 +18,7 @@
 #include "rendering/rt_glow.hpp"
 #include "rendering/rt_glow_pulse.hpp"
 #include "rendering/m2_vertex_lights.hpp"
+#include "rendering/rt_particle_lights.hpp"
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
@@ -1011,6 +1012,12 @@ public:
         particleDensity_ = std::clamp(density, 0.05f, 1.0f);
     }
     [[nodiscard]] float particleDensity() const { return particleDensity_; }
+    /// Ray Tracing, "Point lights per particle light" (1..10): how many lights
+    /// one emitter's glow is split into along its particles' mean path
+    /// (rt_particle_lights.hpp).
+    void setParticleLightsPerEmitter(int n) {
+        particleLightsPerEmitter_ = std::clamp(n, rt_lights::kMinParticleLights, rt_lights::kMaxParticleLights);
+    }
 
     void setSuppressBakedStars(bool suppress) { suppressBakedStars_ = suppress; }
 
@@ -1800,6 +1807,7 @@ private:
     float rtModelFlickerStrength_ = 1.0f;
     float rtGlowAnimationStrength_ = 1.0f;
     float particleDensity_ = 1.0f;
+    int particleLightsPerEmitter_ = 1;
     /// What a particle's size is multiplied by to give the point size the vertex
     /// shader draws: the shader divides by distance after a fixed 500, while a
     /// particle is a quad twice its size across, so the number of pixels it
@@ -1820,6 +1828,23 @@ private:
     glm::vec3 interpFBlockVec3(const pipeline::M2FBlock& fb, float lifeRatio);
     void emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt);
     void updateParticles(M2Instance& inst, float dt);
+    /// An emitter's particles' mean path this frame (rt_particle_lights.hpp),
+    /// in the world; none for an emitter with no lifespan.
+    struct ParticleMeanPath {
+        glm::mat4 toWorld{1.0f};
+        bool modelSpace = false;
+        glm::vec3 start{0.0f};     // world, or the bone's space when modelSpace
+        glm::vec3 velocity{0.0f};  // in the same space
+        float gravity = 0.0f;
+        float drag = 0.0f;
+        float life = 0.0f;
+        [[nodiscard]] glm::vec3 at(float t) const {
+            const glm::vec3 p = start + rt_lights::meanDisplacement(velocity, gravity, drag, t);
+            return modelSpace ? glm::vec3(toWorld * glm::vec4(p, 1.0f)) : p;
+        }
+    };
+    std::optional<ParticleMeanPath> particleMeanPath(const M2Instance& inst, const M2ModelGPU& gpu,
+                                                     size_t emitterIndex) const;
     /// The client's ribbons on an instance, as 0x00828a00 drives them each
     /// frame: the tracks, the bone's matrix, the update.
     void updateClientRibbons(M2Instance& inst, const M2ModelGPU& gpu, float dt);

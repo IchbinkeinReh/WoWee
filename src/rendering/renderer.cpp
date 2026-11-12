@@ -6821,6 +6821,10 @@ void Renderer::setRtPulseStrengths(int glowPulsePercent, int fireFlickerPercent,
     }
 }
 
+void Renderer::setRtParticleLights(int n) {
+    if (m2Renderer) m2Renderer->setParticleLightsPerEmitter(n);
+}
+
 void Renderer::recordRtLighting() {
     if (!rtLighting_ || !rtLighting_->active() || !camera) return;
     RtLighting::FrameInputs in{};
