@@ -15,6 +15,8 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 playerWake;  // xyz = trailing player position (springback reference)
 };
 
+#include "far_clip.glsli"
+
 // Per-draw push constants (batch-level data only)
 layout(push_constant) uniform Push {
     int texCoordSet;         // per stage: 0 UV0, 1 UV1, 2 env map; stage 0 in bits 0-1, stage 1 in 2-3
@@ -131,6 +133,7 @@ void main() {
             // Every vertex of the instance at one point outside the clip
             // volume: nothing of it is drawn.
             gl_Position = vec4(0.0, 0.0, -2.0, 1.0);
+            gl_ClipDistance[0] = -1.0;
             return;
         }
     } else {
@@ -226,4 +229,7 @@ void main() {
     // drawn after the ground now, and this is what makes that free.
     // (Depth is reversed: the far plane is 0.)
     if (push.isFoliage < 0) gl_Position.z = 0.0;
+    // The sky's models stand on the far plane, not in the world's reach.
+    if (push.isFoliage < 0) gl_ClipDistance[0] = 1.0;
+    else farClip(view * worldPos);
 }

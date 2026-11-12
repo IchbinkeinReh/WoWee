@@ -13,6 +13,8 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 shadowParams;
 };
 
+#include "far_clip.glsli"
+
 layout(push_constant) uniform Push {
     mat4 model;
 } push;
@@ -64,5 +66,6 @@ void main() {
     vec3 viewN = normalize(mat3(view) * Normal);
     EnvCoord = reflect(normalize(viewP), viewN).xy;
 
+    farClip(view * worldPos);
     gl_Position = projection * view * worldPos;
 }

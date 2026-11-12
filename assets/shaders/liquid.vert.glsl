@@ -20,6 +20,8 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 fogParams;
 };
 
+#include "far_clip.glsli"
+
 layout(push_constant) uniform Push {
     vec4 animMatrix;   // the surface coordinate's 2x2 (c9, c10), column by column
     vec4 params;       // x depth v scale (c14), y light (0 world, 1 white, 2 none), z kind (0 water, 1 magma), w depth source
@@ -41,6 +43,7 @@ layout(location = 5) out vec3 vWorld;  // for the fog volume (liquid.frag)
 
 void main() {
     vec4 viewSpace = view * vec4(aPos, 1.0);
+    farClip(viewSpace);
     gl_Position = projection * viewSpace;
     vWorld = aPos;
 
