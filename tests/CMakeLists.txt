@@ -967,7 +967,10 @@ wowee_add_test(test_transport_path_repo
             ${TEST_COMMON_SOURCES}
             ${CMAKE_SOURCE_DIR}/src/game/transport_path_repository.cpp
             ${CMAKE_SOURCE_DIR}/src/math/spline.cpp
-            ${CMAKE_SOURCE_DIR}/src/pipeline/dbc_loader.cpp)
+            ${CMAKE_SOURCE_DIR}/src/pipeline/dbc_loader.cpp
+            ${CMAKE_SOURCE_DIR}/src/pipeline/mpq_archive_set.cpp)
+# AssetManager's destructor (used here) owns the MPQ archive set.
+target_link_libraries(test_transport_path_repo PRIVATE ZLIB::ZLIB)
 
 # ── test_opcode_table ────────────────────────────────────────
 add_executable(test_opcode_table
