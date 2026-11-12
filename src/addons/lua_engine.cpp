@@ -2892,6 +2892,69 @@ static std::string withNumber(const std::string& format, const char* token, floa
 static std::string formatGlobal(lua_State* L, const std::string& format,
                                 const std::vector<std::string>& args);
 
+/// A talent's part in a spell tooltip (0x006238a0's arguments 9 to 16):
+/// the facts, whether this is the next rank's half (appended under
+/// TOOLTIP_TALENT_NEXT_RANK) and whether the learn hints close it.
+struct TalentTooltipPart {
+    const wowee::addons::TalentTooltipFacts* facts = nullptr;
+    bool nextRank = false;
+    bool hints = false;
+};
+static constexpr float kTalentWhite[3] = {1.0f, 1.0f, 1.0f};
+static constexpr float kTalentGold[3] = {1.0f, 0.824f, 0.0f};    // 0xad2d2c
+static constexpr float kTalentRed[3] = {1.0f, 0.125f, 0.125f};   // 0xad2d34
+static constexpr float kTalentGreen[3] = {0.0f, 1.0f, 0.0f};     // 0xad2d40
+static std::string withPlural(std::string text, int n);
+
+static void addTalentLine(wowee::ui::Widget* w, std::string text, const float* rgb) {
+    wowee::ui::Widget::TooltipLine l;
+    l.left = std::move(text);
+    l.lc[0] = rgb[0]; l.lc[1] = rgb[1]; l.lc[2] = rgb[2]; l.lc[3] = 1.0f;
+    l.rc[0] = l.rc[1] = l.rc[2] = l.rc[3] = 1.0f;
+    w->tooltipLines.push_back(std::move(l));
+}
+
+/// After the title: TOOLTIP_TALENT_RANK (shown rank, last rank, one-based)
+/// in white, and where no rank is shown 0x006224f0's red lines -
+/// TOOLTIP_TALENT_PREREQ, TOOLTIP_TALENT_TIER_POINTS, ITEM_REQ_SKILL.
+static void addTalentRankAndPrereqs(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh,
+                                    const wowee::addons::TalentTooltipFacts& f) {
+    if (f.maxIdx >= 0) {
+        addTalentLine(w, formatGlobal(L, globalOr(L, "TOOLTIP_TALENT_RANK", "Rank %d/%d"),
+                                      {std::to_string(f.shownIdx + 1), std::to_string(f.maxIdx + 1)}),
+                      kTalentWhite);
+    }
+    if (f.shownIdx >= 0) return;
+    for (const auto& [rank, spell] : f.prereqs) {
+        addTalentLine(w, withPlural(formatGlobal(L, globalOr(L, "TOOLTIP_TALENT_PREREQ", "Requires %d |4point:points; in %s"),
+                                                 {std::to_string(rank), gh->getSpellName(spell)}), rank),
+                      kTalentRed);
+    }
+    if (f.tierPoints > 0) {
+        addTalentLine(w, withPlural(formatGlobal(L, globalOr(L, "TOOLTIP_TALENT_TIER_POINTS",
+                                                             "Requires %d |4point:points; in %s Talents"),
+                                                 {std::to_string(f.tierPoints), f.tierTab}), f.tierPoints),
+                      kTalentRed);
+    }
+    if (f.requiredSpell != 0) {
+        addTalentLine(w, formatGlobal(L, globalOr(L, "ITEM_REQ_SKILL", "Requires %s"),
+                                      {gh->getSpellName(f.requiredSpell)}),
+                      kTalentRed);
+    }
+}
+
+/// 0x00622800's lines, last: TOOLTIP_TALENT_LEARN in green, or in a
+/// preview TALENT_TOOLTIP_ADDPREVIEWPOINT green and
+/// TALENT_TOOLTIP_REMOVEPREVIEWPOINT red.
+static void addTalentHints(lua_State* L, wowee::ui::Widget* w, const wowee::addons::TalentTooltipFacts& f) {
+    if (f.learnHint) addTalentLine(w, globalOr(L, "TOOLTIP_TALENT_LEARN", "Click to learn"), kTalentGreen);
+    if (f.addHint) addTalentLine(w, globalOr(L, "TALENT_TOOLTIP_ADDPREVIEWPOINT", "Click to add a talent point."), kTalentGreen);
+    if (f.removeHint) {
+        addTalentLine(w, globalOr(L, "TALENT_TOOLTIP_REMOVEPREVIEWPOINT", "Right-click to remove a talent point."),
+                      kTalentRed);
+    }
+}
+
 /// The interface's UberTooltips choice: "0" makes an action button's spell
 /// tooltip the brief one (0x00631000 reads it).
 static bool uberTooltips(lua_State* L) {
@@ -2909,7 +2972,8 @@ static bool uberTooltips(lua_State* L) {
 /// off: the name with its rank, no cost, reach or cast. `showRank` is its
 /// sixth, SetSpellByID's fourth: the rank beside the name in a full one.
 static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh,
-                             uint32_t spellId, bool brief = false, bool showRank = false) {
+                             uint32_t spellId, bool brief = false, bool showRank = false,
+                             const TalentTooltipPart* talent = nullptr) {
     if (!w || !gh || spellId == 0) return false;
     const std::string& name = gh->getSpellName(spellId);
     if (name.empty()) return false;
@@ -2924,14 +2988,20 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
     };
 
     w->isTooltip = true;
-    w->tooltipLines.clear();
-    // The name in white and its rank to the right in grey - only in a brief
-    // tooltip or where the caller asks for it; SetSpell, SetHyperlink and a
-    // full SetAction leave the rank off.
-    line(name, brief || showRank ? gh->getSpellRank(spellId) : std::string(), 1.0f, 1.0f, 1.0f);
-    {
+    if (talent && talent->nextRank) {
+        // A talent's next rank goes on under the one shown, headed
+        // "\n" TOOLTIP_TALENT_NEXT_RANK in white.
+        line(" ", "", 1.0f, 1.0f, 1.0f);
+        line(globalOr(L, "TOOLTIP_TALENT_NEXT_RANK", "Next Rank:"), "", 1.0f, 1.0f, 1.0f);
+    } else {
+        w->tooltipLines.clear();
+        // The name in white and its rank to the right in grey - only in a
+        // brief tooltip or where the caller asks for it; SetSpell,
+        // SetHyperlink and a full SetAction leave the rank off.
+        line(name, brief || showRank ? gh->getSpellRank(spellId) : std::string(), 1.0f, 1.0f, 1.0f);
         auto& title = w->tooltipLines.back();
         title.rc[0] = title.rc[1] = title.rc[2] = 0.5f;
+        if (talent && talent->facts) addTalentRankAndPrereqs(L, w, gh, *talent->facts);
     }
 
     std::string cost, range;
@@ -3135,6 +3205,7 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
         line(body, "", 1.0f, 0.82f, 0.0f);
         w->tooltipLines.back().wrap = true;
     }
+    if (talent && talent->hints && talent->facts) addTalentHints(L, w, *talent->facts);
 
     w->shown = true;
     return true;
@@ -3880,61 +3951,75 @@ int lua_Tooltip_SetQuestLogRewardSpell(lua_State* L) {
 /// The description shown is the rank the player actually has. An unlearned
 /// talent describes its first rank, which is what taking a point in it would
 /// buy - the useful thing to read when deciding.
+// SetTalent(tabIndex, talentIndex[, isInspect[, isPet[, groupIndex[, isPreview]]]])
+// (0x0062f740 -> 0x00626e20). A talent that teaches a spell (Flags 0x1)
+// gets that spell's tooltip, the rank shown and then, below it, the next
+// one under TOOLTIP_TALENT_NEXT_RANK. Any other: the name in white,
+// TOOLTIP_TALENT_RANK, what is missing to learn it when no rank is shown,
+// the shown rank's description and the next rank's in gold, then the learn
+// hints. Answers nothing, as the client's does.
 int lua_Tooltip_SetTalent(lua_State* L) {
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
-    const int tabIndex    = static_cast<int>(luaL_optnumber(L, 2, 0));
+    if (!w || !gh) return 0;
+    const int tabIndex = static_cast<int>(luaL_optnumber(L, 2, 0));
     const int talentIndex = static_cast<int>(luaL_optnumber(L, 3, 0));
-    if (!w || !gh) { lua_pushboolean(L, 0); return 1; }
+    const bool inspect = lua_toboolean(L, 4) != 0;
+    const bool pet = lua_toboolean(L, 5) != 0;
+    const int group = lua_isnumber(L, 6) ? static_cast<int>(lua_tonumber(L, 6)) - 1
+                                         : static_cast<int>(gh->getActiveTalentSpec());
+    const bool preview = lua_toboolean(L, 7) != 0;
+    const auto f = wowee::addons::talentTooltipFacts(gh, tabIndex, talentIndex, inspect, pet, group, preview);
+    if (!f.talent) return 0;
+    const auto& t = *f.talent;
+    const uint32_t shown = f.shownIdx >= 0 && f.shownIdx < 5 ? t.rankSpells[f.shownIdx] : 0;
+    const uint32_t next = f.shownIdx < f.maxIdx && f.shownIdx + 1 < 5 ? t.rankSpells[f.shownIdx + 1] : 0;
 
-    const auto* talent = wowee::addons::talentAt(gh, tabIndex, talentIndex);
-    if (!talent) { lua_pushboolean(L, 0); return 1; }
+    if ((t.flags & 0x1u) != 0) {
+        const bool showNext = f.maxIdx >= 1 && f.shownIdx >= 0 && f.shownIdx < f.maxIdx;
+        const TalentTooltipPart first{&f, false, !showNext};
+        fillSpellTooltip(L, w, gh, t.rankSpells[std::max(f.shownIdx, 0)], false, false, &first);
+        if (showNext) {
+            const TalentTooltipPart second{&f, true, true};
+            fillSpellTooltip(L, w, gh, next, false, false, &second);
+        }
+        return 0;
+    }
 
-    const uint8_t rank = gh->getTalentRank(talent->talentId);
-    // Rank 1's spell names the talent whatever the player has in it, and is the
-    // only entry guaranteed to be filled.
-    const uint32_t titleSpell = talent->rankSpells[0];
-    // The rank being described: what the player has, or the first if none.
-    const uint32_t bodySpell = talent->rankSpells[rank > 0 ? rank - 1 : 0];
-    if (titleSpell == 0) { lua_pushboolean(L, 0); return 1; }
-
-    const std::string& name = gh->getSpellName(titleSpell);
-    if (name.empty()) { lua_pushboolean(L, 0); return 1; }
-
+    const std::string& shownName = shown ? gh->getSpellName(shown) : std::string();
+    const std::string& nextName = next ? gh->getSpellName(next) : std::string();
     w->isTooltip = true;
     w->tooltipLines.clear();
-
-    wowee::ui::Widget::TooltipLine title;
-    title.left = name;
-    title.lc[0] = 1.0f; title.lc[1] = 0.82f; title.lc[2] = 0.0f; title.lc[3] = 1.0f;
-    title.rc[0] = title.rc[1] = title.rc[2] = title.rc[3] = 1.0f;
-    w->tooltipLines.push_back(std::move(title));
-
-    if (talent->maxRank > 0) {
-        wowee::ui::Widget::TooltipLine rankLine;
-        rankLine.left = "Rank " + std::to_string(rank) + "/" +
-                        std::to_string(static_cast<int>(talent->maxRank));
-        rankLine.lc[0] = rankLine.lc[1] = rankLine.lc[2] = 1.0f; rankLine.lc[3] = 1.0f;
-        rankLine.rc[0] = rankLine.rc[1] = rankLine.rc[2] = rankLine.rc[3] = 1.0f;
-        w->tooltipLines.push_back(std::move(rankLine));
+    if (shownName.empty() && nextName.empty()) return 0;
+    const auto add = [&w](std::string text, const float* rgb, bool wrap) {
+        wowee::ui::Widget::TooltipLine l;
+        l.left = std::move(text);
+        l.lc[0] = rgb[0]; l.lc[1] = rgb[1]; l.lc[2] = rgb[2]; l.lc[3] = 1.0f;
+        l.rc[0] = l.rc[1] = l.rc[2] = l.rc[3] = 1.0f;
+        l.wrap = wrap;
+        w->tooltipLines.push_back(std::move(l));
+    };
+    add(!shownName.empty() ? shownName : nextName, kTalentWhite, false);
+    addTalentRankAndPrereqs(L, w, gh, f);
+    bool described = false;
+    if (!shownName.empty()) {
+        if (const std::string body = gh->formatSpellDescription(shown, gh->getSpellDescription(shown)); !body.empty()) {
+            add(body, kTalentGold, true);
+            described = true;
+        }
     }
-
-    // Through the formatter for the same reason SetSpellByID is: a description
-    // arrives as a template of $-tokens and reads as one if handed over raw.
-    const std::string body =
-        gh->formatSpellDescription(bodySpell, gh->getSpellDescription(bodySpell));
-    if (!body.empty()) {
-        wowee::ui::Widget::TooltipLine desc;
-        desc.left = body;
-        desc.lc[0] = desc.lc[1] = desc.lc[2] = 1.0f; desc.lc[3] = 1.0f;
-        desc.rc[0] = desc.rc[1] = desc.rc[2] = desc.rc[3] = 1.0f;
-        desc.wrap = true;  // prose; see fillSpellTooltip
-        w->tooltipLines.push_back(std::move(desc));
+    if (!nextName.empty()) {
+        if (const std::string body = gh->formatSpellDescription(next, gh->getSpellDescription(next)); !body.empty()) {
+            if (described) {
+                add(" ", kTalentGold, false);
+                add(globalOr(L, "TOOLTIP_TALENT_NEXT_RANK", "Next Rank:"), kTalentWhite, false);
+            }
+            add(body, kTalentGold, true);
+        }
     }
-
+    addTalentHints(L, w, f);
     w->shown = true;
-    lua_pushboolean(L, 1);
-    return 1;
+    return 0;
 }
 
 /// SetTradeSkillItem(index) - what a recipe in the open profession makes.

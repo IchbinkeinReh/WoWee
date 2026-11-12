@@ -529,6 +529,7 @@
     "CombatRoundTime": 22,
     "CreatureType": 20,
     "Flags": 19,
+    "RequiredSpellId": 20,
     "ID": 0,
     "Name": 2,
     "PresetSpellID0": 27
@@ -641,6 +642,7 @@
   "Talent": {
     "Column": 3,
     "Flags": 19,
+    "RequiredSpellId": 20,
     "ID": 0,
     "PrereqRank0": 16,
     "PrereqTalent0": 13,

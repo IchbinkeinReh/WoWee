@@ -2852,6 +2852,118 @@ static bool talentPrereqsMet(game::GameHandler* gh,
     return true;
 }
 
+TalentTooltipFacts talentTooltipFacts(game::GameHandler* gh, int tabIndex, int talentIndex, bool inspect,
+                                      bool pet, int group, bool preview) {
+    TalentTooltipFacts f;
+    if (!gh) return f;
+    const auto* t = pet ? petTalentAt(gh, inspect, tabIndex, talentIndex)
+                        : talentAt(gh, tabIndex, talentIndex, talentClassId(gh, inspect));
+    if (!t) return f;
+    f.talent = t;
+    f.maxIdx = static_cast<int>(t->maxRank) - 1;
+    // The group record (0x005c5fc0): the pet's own, or one of the two the
+    // player and the inspected player each have.
+    const bool hasRecord = pet ? petTalentTab(gh, inspect) != nullptr
+                               : group >= 0 && group < 2 && (!inspect || gh->getInspectResult());
+    const bool staging = pet ? !inspect : previewApplies(gh, inspect, group);
+    const auto learned = [&](uint32_t id) {
+        return pet ? static_cast<int>(gh->getPetTalentRank(id)) : talentRankFor(gh, inspect, id, group);
+    };
+    const auto staged = [&](uint32_t id) {
+        if (!staging) return 0;
+        const auto& pts = pet ? petPreviewPoints() : previewPoints();
+        const auto it = pts.find(id);
+        return it != pts.end() ? it->second : 0;
+    };
+    const auto withPreview = [&](uint32_t id) { return learned(id) + staged(id); };
+    f.learnedIdx = hasRecord ? learned(t->talentId) - 1 : -1;
+    const int previewIdx = hasRecord ? withPreview(t->talentId) - 1 : -1;
+    f.shownIdx = preview ? previewIdx : f.learnedIdx;
+    const int perTier = pet ? 3 : 5;
+    // A tab's points, learned and staged, by tier (0x005c5b30's +4 and +8).
+    std::array<int, 16> tierSum{};
+    for (const auto& [id, e] : gh->getAllTalents()) {
+        if (e.tabId == t->tabId && e.row < tierSum.size()) tierSum[e.row] += withPreview(id);
+    }
+    int tabPoints = 0;
+    for (const int n : tierSum) tabPoints += n;
+
+    // 0x006224f0, counting the preview's ranks when previewing.
+    for (int p = 0; p < 3; ++p) {
+        const uint32_t pre = t->prereqTalent[p];
+        const auto* row = pre ? gh->getTalentEntry(pre) : nullptr;
+        if (!row) continue;
+        const int need = t->prereqRank[p];
+        if (hasRecord && (preview ? withPreview(pre) : learned(pre)) - 1 >= need) continue;
+        uint32_t named = 0;
+        for (int r = need; r < 5 && named == 0; ++r) named = row->rankSpells[r];
+        if (named == 0) continue;
+        f.prereqs.emplace_back(need + 1, named);
+        f.learnable = false;
+    }
+    if (hasRecord && t->row > 0) {
+        const int need = perTier * t->row;
+        const auto* tab = pet ? petTalentTab(gh, inspect) : gh->getTalentTabEntry(t->tabId);
+        if (tab && tabPoints < need) {
+            f.tierPoints = need;
+            f.tierTab = tab->name;
+            f.learnable = false;
+        }
+    }
+    // 0x005c60c0: an inspected player's tree asks nothing of it; otherwise
+    // the player has to know the spell.
+    if (t->requiredSpell != 0 && (pet || !inspect) && !gh->getKnownSpells().count(t->requiredSpell)) {
+        f.requiredSpell = t->requiredSpell;
+        f.learnable = false;
+    }
+
+    // 0x00622800: only in the group the player stands in, never another's.
+    const bool activeRecord = pet ? (!inspect && hasRecord)
+                                  : (!inspect && group == static_cast<int>(gh->getActiveTalentSpec()));
+    // Learnable as the tooltip has it: a talent with a rank shown always is.
+    if (!activeRecord || (f.shownIdx < 0 && !f.learnable)) return f;
+    int stagedTotal = 0;
+    for (const auto& [id, n] : pet ? petPreviewPoints() : previewPoints()) { (void)id; stagedTotal += n; }
+    const int unspent = pet ? static_cast<int>(gh->getPetUnspentTalentPoints())
+                            : static_cast<int>(gh->getUnspentTalentPoints(gh->getActiveTalentSpec()));
+    if (!preview) {
+        f.learnHint = unspent != 0 && f.learnedIdx != f.maxIdx;
+        return f;
+    }
+    // 0x005c73d0 for a step of one: the tier reached and every
+    // prerequisite at its rank, staged ranks counted; adding wants a point
+    // not yet staged and a rank left, taking back a staged rank that
+    // nothing staged above it leans on.
+    const auto stepAllowed = [&](int delta) {
+        if (delta > 0 && unspent - stagedTotal <= 0) return false;
+        if (perTier * t->row > tabPoints) return false;
+        for (int p = 0; p < 3; ++p) {
+            const uint32_t pre = t->prereqTalent[p];
+            if (pre && gh->getTalentEntry(pre) && withPreview(pre) - 1 < t->prereqRank[p]) return false;
+        }
+        const int now = withPreview(t->talentId) - 1;
+        const int next = std::clamp(now + delta, f.learnedIdx, f.maxIdx);
+        if (next == now) return false;
+        if (delta > 0) return true;
+        for (const auto& [id, e] : gh->getAllTalents()) {
+            if (withPreview(id) <= 0) continue;
+            for (int p = 0; p < 3; ++p) {
+                if (e.prereqTalent[p] == t->talentId && next < e.prereqRank[p]) return false;
+            }
+        }
+        // Each tier above this one with points keeps the points below it.
+        int below = 0;
+        for (size_t tier = 0; tier < tierSum.size(); ++tier) {
+            if (tier > t->row && tierSum[tier] > 0 && below < perTier * static_cast<int>(tier)) return false;
+            below += tierSum[tier] - (tier == t->row ? 1 : 0);
+        }
+        return true;
+    };
+    f.addHint = stepAllowed(1);
+    f.removeHint = stepAllowed(-1);
+    return f;
+}
+
 // GetTalentInfo(tabIndex, talentIndex[, isInspect[, isPet[, groupIndex]]])
 //
 // The fifth argument names the group, and 0x005c7800 hands it to 0x005c57d0 at

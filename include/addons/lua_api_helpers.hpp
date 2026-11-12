@@ -1296,6 +1296,33 @@ inline const game::GroupMember* findRosterMember(game::GameHandler* gh, uint64_t
 const game::TalentEntry* talentAt(game::GameHandler* gh, int tabIndex, int talentIndex,
                                   uint8_t classIdOverride = 0);
 
+/// What a talent's tooltip (0x00626e20) says beyond its spells, worked out
+/// where the talent API keeps the ranks, the preview and the pet's tree.
+/// Rank indices count from 0, -1 for none, as the client's records do.
+struct TalentTooltipFacts {
+    const game::TalentEntry* talent = nullptr;
+    int learnedIdx = -1;    ///< the group record's rank (+0x1c)
+    int shownIdx = -1;      ///< its preview rank (+0x20) when previewing, else the above
+    int maxIdx = -1;        ///< the last rank with a spell
+    /// 0x006224f0, asked where nothing is learned yet: each unmet
+    /// prerequisite's rank (one-based) and the spell named for it; the tier's
+    /// points and its tab where the tab has too few; a required spell not
+    /// known. Any of them leaves the talent not learnable.
+    std::vector<std::pair<int, uint32_t>> prereqs;
+    int tierPoints = 0;
+    std::string tierTab;
+    uint32_t requiredSpell = 0;
+    bool learnable = true;
+    /// 0x00622800's lines: TOOLTIP_TALENT_LEARN, or in a preview
+    /// TALENT_TOOLTIP_ADDPREVIEWPOINT and _REMOVEPREVIEWPOINT.
+    bool learnHint = false;
+    bool addHint = false;
+    bool removeHint = false;
+};
+/// SetTalent's arguments (0x0062f740), group zero-based.
+TalentTooltipFacts talentTooltipFacts(game::GameHandler* gh, int tabIndex, int talentIndex, bool inspect,
+                                      bool pet, int group, bool preview);
+
 /// The item id the cursor is carrying, or zero for anything else.
 ///
 /// The cursor state lives in lua_action_api.cpp, where everything that picks

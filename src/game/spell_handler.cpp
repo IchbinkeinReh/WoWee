@@ -3569,6 +3569,10 @@ void SpellHandler::loadTalentDbc() {
         const uint32_t tPrereq0 = talL ? (*talL)["PrereqTalent0"] : 9;
         const uint32_t tPrereqR0 = talL ? (*talL)["PrereqRank0"] : 12;
         const uint32_t tFlags = talL ? talL->tryField("Flags") : 0xFFFFFFFFu;
+        // RequiredSpellId follows Flags; a data dir copied before it was
+        // named still finds it.
+        uint32_t tRequired = talL ? talL->tryField("RequiredSpellId") : 0xFFFFFFFFu;
+        if (tRequired == 0xFFFFFFFFu && tFlags != 0xFFFFFFFFu) tRequired = tFlags + 1;
 
         uint32_t count = talentDbc->getRecordCount();
         for (uint32_t i = 0; i < count; ++i) {
@@ -3590,6 +3594,7 @@ void SpellHandler::loadTalentDbc() {
             }
 
             if (tFlags != 0xFFFFFFFFu) entry.flags = talentDbc->getUInt32(i, tFlags);
+            if (tRequired < talentDbc->getFieldCount()) entry.requiredSpell = talentDbc->getUInt32(i, tRequired);
 
             entry.maxRank = 0;
             for (int r = 0; r < 5; ++r) {
