@@ -1756,8 +1756,9 @@ private:
     /// cap on one instance's particles: this has to hold a whole frame's.
     static constexpr size_t MAX_M2_PARTICLE_VERTS = 131072;
     // A particle's record: position 3, colour 4, size, cell, the turn's sine
-    // and cosine.
-    static constexpr size_t kParticleVertexFloats = 11;
+    // and cosine, and the plane of a flat (XYQuad) particle - its X and Y
+    // axes in the world, zero for one facing the camera.
+    static constexpr size_t kParticleVertexFloats = 17;
     /// The instances with live particles this frame, nearest first, so that when
     /// the buffer is full it is the far ones that go without and not whichever
     /// was made last - a campfire a player lights is made after every doodad of

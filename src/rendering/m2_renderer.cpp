@@ -300,7 +300,7 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
     if (particleVert.isValid() && particleFrag.isValid()) {
         VkVertexInputBindingDescription pBind{};
         pBind.binding = 0;
-        pBind.stride = kParticleVertexFloats * sizeof(float); // pos3 + color4 + size1 + tile1 + turn2
+        pBind.stride = kParticleVertexFloats * sizeof(float); // pos3 + color4 + size1 + tile1 + turn2 + axes6
         // One record a particle, read per instance: the vertex shader draws each
         // as a camera-facing quad, the way the client does, not as a point
         // sprite - which a driver clamps in size and draws as a square.
@@ -312,6 +312,8 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
             {.location = 2, .binding = 0, .format = VK_FORMAT_R32_SFLOAT, .offset = 7 * sizeof(float)},          // size
             {.location = 3, .binding = 0, .format = VK_FORMAT_R32_SFLOAT, .offset = 8 * sizeof(float)},          // tile
             {.location = 4, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = 9 * sizeof(float)},       // turn: sin, cos
+            {.location = 5, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 11 * sizeof(float)},   // flat: X axis
+            {.location = 6, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 14 * sizeof(float)},   // flat: Y axis
         };
 
         auto buildParticlePipeline = [&](VkPipelineColorBlendAttachmentState blend) -> VkPipeline {

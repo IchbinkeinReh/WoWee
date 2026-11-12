@@ -498,6 +498,9 @@ void M2Renderer::prepareM2Particles() {
         ParticleGroup* cachedGroup = nullptr;
         // Size times the emitter's world scale where it is flagged 0x20.
         float cachedModelScale = 1.0f;
+        // A flat particle's plane (flag 0x1000, the client's 0x4000): zero
+        // axes for one that faces the camera.
+        glm::vec3 cachedFlatX(0.0f), cachedFlatY(0.0f);
 
         // How far this instance's particles actually reach, against how far
         // the model says it extends. A fire twice the height of the hut behind
@@ -632,6 +635,34 @@ void M2Renderer::prepareM2Particles() {
                     if (cachedEm->bone < inst.boneMatrices.size()) world = world * inst.boneMatrices[cachedEm->bone];
                     cachedModelScale = glm::length(glm::vec3(world[0]));
                 }
+                // Flag 0x1000 (0x00832ea0 maps it to 0x4000): the quad lies in
+                // the plane of the particles' own X and Y axes rather than
+                // facing the camera (0x0097a390 keeps the rotation of the
+                // matrix that takes them into the view, 0x0097be80 sets the
+                // corners out along it). A model-space particle's axes are its
+                // emitter's in the world, with the emitter's scale taken out
+                // (0x004c5230 by 1 / +0x1ec, the length of the frame's first
+                // row, 0x0097ac20); a world one's, the world's. The emitter's
+                // frame is not its bone's: 0x008309c0 hands it the fixed quarter
+                // turn about Z at 0x00d411e0 times the emitter's position, bone
+                // and model, so the particles' X runs along the bone's Y and
+                // their Y along the bone's -X.
+                cachedFlatX = glm::vec3(0.0f);
+                cachedFlatY = glm::vec3(0.0f);
+                if (cachedEm->flags & 0x1000) {
+                    if (cachedEm->flags & 0x10) {
+                        glm::mat4 world = inst.modelMatrix;
+                        if (cachedEm->bone < inst.boneMatrices.size()) world = world * inst.boneMatrices[cachedEm->bone];
+                        const glm::vec3 ax(world[1]), ay(-glm::vec3(world[0]));
+                        const float scale = glm::length(ax);
+                        const float inv = std::fabs(scale) >= 2.3841858e-07f ? 1.0f / scale : 1.0f;
+                        cachedFlatX = ax * inv;
+                        cachedFlatY = ay * inv;
+                    } else {
+                        cachedFlatX = glm::vec3(1.0f, 0.0f, 0.0f);
+                        cachedFlatY = glm::vec3(0.0f, 1.0f, 0.0f);
+                    }
+                }
                 ParticleGroupKey key{.texture = cachedTex, .blendType = static_cast<uint8_t>(cachedBlendType),
                                      .tilesX = cachedTilesX, .tilesY = cachedTilesY,
                                      .lit = lit, .fogMode = fogMode};
@@ -745,6 +776,12 @@ void M2Renderer::prepareM2Particles() {
             const m2_particle::SinCos sc = turns ? m2_particle::clientSinCos(spinAngle) : m2_particle::SinCos{};
             vd[9] = sc.s;
             vd[10] = sc.c;
+            vd[11] = cachedFlatX.x;
+            vd[12] = cachedFlatX.y;
+            vd[13] = cachedFlatX.z;
+            vd[14] = cachedFlatY.x;
+            vd[15] = cachedFlatY.y;
+            vd[16] = cachedFlatY.z;
             ++vbWritten;
             ++particleRuns_.back().count;
             totalParticles++;
