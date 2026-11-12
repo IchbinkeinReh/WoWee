@@ -1,0 +1,16 @@
+// The client's far clip, as the camera's far plane has it: 0x00607b00 sets
+// the camera's far to the far clip (DAT_00cd7748, from the view distance,
+// 0x00780770), so the ground, the buildings, the doodads and the water all
+// end at the one depth. The camera's own projection reaches far past it for
+// the sky; the world's vertex programs clip at it themselves, by view depth,
+// as the far plane would (lightDir.w of the frame's data, 0 for none: the
+// character preview, the model frames). Without it a building's group whose
+// nearest corner was in reach was drawn whole: Thunder Bluff's lodges and
+// bridges hung in the night sky over Stonebull Lake, 1200 yards off, with
+// the mesas under them cut at the far clip (user168).
+// The including shader declares the frame's data (lightDir) first.
+out float gl_ClipDistance[1];
+
+void farClip(vec4 viewSpace) {
+    gl_ClipDistance[0] = lightDir.w > 0.0 ? lightDir.w + viewSpace.z : 1.0;
+}

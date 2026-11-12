@@ -1087,7 +1087,6 @@ void TerrainRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, c
     }
 
     glm::vec3 camPos = camera.getPosition();
-    const float maxTerrainDistSq = maxViewDistance_ * maxViewDistance_;
 
     renderedChunks = 0;
     culledChunks = 0;
@@ -1107,10 +1106,17 @@ void TerrainRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, c
     for (const auto& chunk : chunks) {
         if (!chunk.isValid() || !chunk.materialSet) continue;
 
+        // The client's test: the chunk's box against a cube of the far clip
+        // about the camera (0x00780860 builds it, 0x007b6110 tests each
+        // chunk), not its centre's distance. What of it lies past the far
+        // clip the vertex program clips at the far clip's depth, as the
+        // client's far plane does (far_clip.glsli), so the ground reaches
+        // as far as the buildings standing on it at every edge of the view.
         float dx = chunk.boundingSphereCenter.x - camPos.x;
         float dy = chunk.boundingSphereCenter.y - camPos.y;
         float distSq = dx * dx + dy * dy;
-        if (distSq > maxTerrainDistSq) {
+        const float reach = maxViewDistance_ + chunk.boundingSphereRadius;
+        if (std::abs(dx) > reach || std::abs(dy) > reach) {
             culledChunks++;
             continue;
         }

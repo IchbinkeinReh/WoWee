@@ -715,6 +715,10 @@ bool VkContext::selectPhysicalDevice() {
     dualSrcBlendSupported_ = enableIfPresent(&VkPhysicalDeviceFeatures::dualSrcBlend);
     independentBlendSupported_ = enableIfPresent(&VkPhysicalDeviceFeatures::independentBlend);
     sampleRateShadingSupported_ = enableIfPresent(&VkPhysicalDeviceFeatures::sampleRateShading);
+    // The world's vertex programs clip at the far clip (far_clip.glsli).
+    if (!enableIfPresent(&VkPhysicalDeviceFeatures::shaderClipDistance)) {
+        LOG_WARNING("Vulkan: shaderClipDistance not supported; the world is not clipped at the far clip");
+    }
     // The rest of what the ray traced lighting asks of the device, for
     // rt_capability::evaluate: the deferred passes' blending, the G-buffer
     // format at each sample count, and its compute passes' limits.

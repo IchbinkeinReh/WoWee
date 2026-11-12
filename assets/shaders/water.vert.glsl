@@ -15,6 +15,8 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 playerWake;  // xyz = trailing player position (springback reference)
 };
 
+#include "far_clip.glsli"
+
 layout(push_constant) uniform Push {
     vec4 closeColor;  // the light's water colours, fragment stage only
     vec4 farColor;
@@ -70,6 +72,7 @@ void main() {
     WaveBase = aPos.xy;
     FragPos = worldPos.xyz;
     TexCoord = aTexCoord;
+    farClip(view * worldPos);
     vec4 clipPos = projection * view * worldPos;
     gl_Position = clipPos;
     vec2 ndc = clipPos.xy / max(clipPos.w, 1e-5);

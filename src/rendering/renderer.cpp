@@ -589,11 +589,15 @@ void Renderer::updatePerFrameUBO() {
     currentFrameData.viewPos = glm::vec4(camera->getPosition(),
                                          1.0f + static_cast<float>(lowCostShading_ ? 0 : textureMagnification_));
     currentFrameData.fogParams.z = globalTime;
+    // w of the light's direction: the far clip the world's vertex programs
+    // clip at (far_clip.glsli), as the client's camera far plane does
+    // (0x00607b00). Set again below where the lighting writes the direction.
+    currentFrameData.lightDir.w = farClip_;
 
     // Lighting from LightingManager
     if (lightingManager) {
         const auto& lp = lightingManager->getLightingParams();
-        currentFrameData.lightDir = glm::vec4(lp.directionalDir, 0.0f);
+        currentFrameData.lightDir = glm::vec4(lp.directionalDir, farClip_);
         // Looking into the sun's glare darkens the world: the ambient and
         // the direct light by up to 35% (0x007816f0 with the glare's
         // 0xd38f4c from the frame before, 0x007ef6e0).
