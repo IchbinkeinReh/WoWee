@@ -6,9 +6,21 @@
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <future>
 #include <mutex>
 #include <thread>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <objbase.h>
+#endif
 
 #ifdef HAVE_FFMPEG
 extern "C" {
@@ -86,6 +98,8 @@ struct ScreenRecorder::Impl {
         return buf;
     }
 
+    bool setup(const std::string& path, std::string& error);
+    void encoderThread(const std::string& path, std::promise<std::string> ready);
     bool openVideo(std::string& error);
     bool openAudio();
     bool write(AVCodecContext* ctx, AVStream* stream, AVFrame* frame);
@@ -297,6 +311,98 @@ void ScreenRecorder::Impl::drainAudio() {
     }
 }
 
+bool ScreenRecorder::Impl::setup(const std::string& path, std::string& error) {
+    int result = avformat_alloc_output_context2(&format, nullptr, "mp4", path.c_str());
+    if (result < 0 || !format) {
+        error = "could not set up an MP4: " + errorText(result);
+        return false;
+    }
+    if (!openVideo(error)) {
+        release();
+        return false;
+    }
+    videoStream = avformat_new_stream(format, nullptr);
+    packet = av_packet_alloc();
+    videoFrame = av_frame_alloc();
+    if (!videoStream || !packet || !videoFrame) {
+        error = "out of memory";
+        release();
+        return false;
+    }
+    avcodec_parameters_from_context(videoStream->codecpar, video);
+    videoStream->time_base = video->time_base;
+    videoFrame->format = video->pix_fmt;
+    videoFrame->width = video->width;
+    videoFrame->height = video->height;
+    if (av_frame_get_buffer(videoFrame, 0) < 0) {
+        error = "out of memory";
+        release();
+        return false;
+    }
+    sws = sws_getContext(static_cast<int>(size.width), static_cast<int>(size.height), AV_PIX_FMT_BGRA,
+                         static_cast<int>(size.width), static_cast<int>(size.height), video->pix_fmt,
+                         SWS_BILINEAR, nullptr, nullptr, nullptr);
+    if (!sws) {
+        error = "could not set up the colour conversion";
+        release();
+        return false;
+    }
+    // Full-range RGB in, BT.709 limited-range video out, as tagged above.
+    sws_setColorspaceDetails(sws, sws_getCoefficients(SWS_CS_ITU709), 1,
+                             sws_getCoefficients(SWS_CS_ITU709), 0, 0, 1 << 16, 1 << 16);
+
+    hasAudio = openAudio();
+    if (hasAudio) {
+        audioStream = avformat_new_stream(format, nullptr);
+        if (!audioStream) {
+            error = "out of memory";
+            release();
+            return false;
+        }
+        avcodec_parameters_from_context(audioStream->codecpar, audio);
+        audioStream->time_base = audio->time_base;
+    } else {
+        LOG_WARNING("ScreenRecorder: no sound to record - the recording will be silent");
+    }
+
+    if (!(format->oformat->flags & AVFMT_NOFILE)) {
+        result = avio_open(&format->pb, path.c_str(), AVIO_FLAG_WRITE);
+        if (result < 0) {
+            error = "could not create " + path + ": " + errorText(result);
+            release();
+            return false;
+        }
+    }
+    result = avformat_write_header(format, nullptr);
+    if (result < 0) {
+        error = "could not start the file: " + errorText(result);
+        release();
+        return false;
+    }
+
+    startTime = Clock::now();
+    return true;
+}
+
+void ScreenRecorder::Impl::encoderThread(const std::string& path, std::promise<std::string> ready) {
+#ifdef _WIN32
+    // This thread's own apartment: multithreaded, as Media Foundation's
+    // encoder needs; FFmpeg's CoInitializeEx then only counts it up.
+    const HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+#endif
+    std::string error;
+    const bool ok = setup(path, error);
+    if (!ok && error.empty()) error = "could not start recording";
+    ready.set_value(ok ? std::string() : error);
+    if (ok) {
+        run();
+        finish();
+    }
+#ifdef _WIN32
+    if (SUCCEEDED(com)) CoUninitialize();
+#endif
+}
+
 void ScreenRecorder::Impl::run() {
     for (;;) {
         Frame frame;
@@ -385,79 +491,22 @@ bool ScreenRecorder::start(const std::string& path, RecordingSize size, std::str
     d.dropped.store(0);
     d.lastPts = -1;
     d.audioPts = 0;
-
-    int result = avformat_alloc_output_context2(&d.format, nullptr, "mp4", path.c_str());
-    if (result < 0 || !d.format) {
-        error = "could not set up an MP4: " + Impl::errorText(result);
-        return false;
-    }
-    if (!d.openVideo(error)) {
-        d.release();
-        return false;
-    }
-    d.videoStream = avformat_new_stream(d.format, nullptr);
-    d.packet = av_packet_alloc();
-    d.videoFrame = av_frame_alloc();
-    if (!d.videoStream || !d.packet || !d.videoFrame) {
-        error = "out of memory";
-        d.release();
-        return false;
-    }
-    avcodec_parameters_from_context(d.videoStream->codecpar, d.video);
-    d.videoStream->time_base = d.video->time_base;
-    d.videoFrame->format = d.video->pix_fmt;
-    d.videoFrame->width = d.video->width;
-    d.videoFrame->height = d.video->height;
-    if (av_frame_get_buffer(d.videoFrame, 0) < 0) {
-        error = "out of memory";
-        d.release();
-        return false;
-    }
-    d.sws = sws_getContext(static_cast<int>(size.width), static_cast<int>(size.height), AV_PIX_FMT_BGRA,
-                           static_cast<int>(size.width), static_cast<int>(size.height), d.video->pix_fmt,
-                           SWS_BILINEAR, nullptr, nullptr, nullptr);
-    if (!d.sws) {
-        error = "could not set up the colour conversion";
-        d.release();
-        return false;
-    }
-    // Full-range RGB in, BT.709 limited-range video out, as tagged above.
-    sws_setColorspaceDetails(d.sws, sws_getCoefficients(SWS_CS_ITU709), 1,
-                             sws_getCoefficients(SWS_CS_ITU709), 0, 0, 1 << 16, 1 << 16);
-
-    d.hasAudio = d.openAudio();
-    if (d.hasAudio) {
-        d.audioStream = avformat_new_stream(d.format, nullptr);
-        if (!d.audioStream) {
-            error = "out of memory";
-            d.release();
-            return false;
-        }
-        avcodec_parameters_from_context(d.audioStream->codecpar, d.audio);
-        d.audioStream->time_base = d.audio->time_base;
-    } else {
-        LOG_WARNING("ScreenRecorder: no sound to record - the recording will be silent");
-    }
-
-    if (!(d.format->oformat->flags & AVFMT_NOFILE)) {
-        result = avio_open(&d.format->pb, path.c_str(), AVIO_FLAG_WRITE);
-        if (result < 0) {
-            error = "could not create " + path + ": " + Impl::errorText(result);
-            d.release();
-            return false;
-        }
-    }
-    result = avformat_write_header(d.format, nullptr);
-    if (result < 0) {
-        error = "could not start the file: " + Impl::errorText(result);
-        d.release();
-        return false;
-    }
-
-    d.startTime = Clock::now();
     d.stopping = false;
+
+    // The encoder lives on its own thread from opening to closing. Media
+    // Foundation's (h264_mf) has to be opened and closed on a thread in COM's
+    // multithreaded apartment, and SDL leaves this one single-threaded - so
+    // here it would be passed over with "COM must not be in STA mode".
+    std::promise<std::string> ready;
+    std::future<std::string> setupResult = ready.get_future();
+    d.worker = std::thread([&d, path, p = std::move(ready)]() mutable { d.encoderThread(path, std::move(p)); });
+    const std::string setupError = setupResult.get();
+    if (!setupError.empty()) {
+        d.worker.join();
+        error = setupError;
+        return false;
+    }
     d.recording = true;
-    d.worker = std::thread([&d] { d.run(); });
     LOG_WARNING("ScreenRecorder: recording ", size.width, "x", size.height, " at ", d.fps,
                 " fps with ", d.encoderName, d.hasAudio ? " and AAC sound" : ", no sound",
                 " to ", path);
@@ -479,11 +528,9 @@ ScreenRecorder::Stats ScreenRecorder::stop() {
         d.stopping = true;
     }
     d.wake.notify_all();
-    if (d.worker.joinable()) d.worker.join();
     stats.seconds = elapsedSeconds();
-#ifdef WOWEE_RECORDER_ENCODES
-    d.finish();
-#endif
+    // The worker finishes the file and closes the encoder on its way out.
+    if (d.worker.joinable()) d.worker.join();
     d.recording = false;
     stats.framesWritten = d.written.load();
     stats.framesDropped = d.dropped.load();
