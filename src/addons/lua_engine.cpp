@@ -5465,8 +5465,28 @@ int lua_Tooltip_SetInventoryItem(lua_State* L) {
     if (slot <= static_cast<int>(game::EquipSlot::NUM_SLOTS)) {
         appendEnchantLines(w, gh, gh->getEquipSlotGuid(slot - 1));
     }
+    // hasItem, then whether a cooldown is running on it (the paperdoll keeps
+    // refreshing the tooltip while one is), then what repairing it costs
+    // (0x0062e050 -> 0x00584b20) for repair mode.
     luaPushOneOrNil(L, 1);
-    return 1;
+    bool cooling = false;
+    lua_getglobal(L, "GetInventoryItemCooldown");
+    if (lua_isfunction(L, -1)) {
+        lua_pushstring(L, "player");
+        lua_pushnumber(L, slot);
+        if (lua_pcall(L, 2, 3, 0) == 0) {
+            cooling = lua_tonumber(L, -2) > 0.0;
+            lua_pop(L, 3);
+        } else {
+            lua_pop(L, 1);
+        }
+    } else {
+        lua_pop(L, 1);
+    }
+    luaPushOneOrNil(L, cooling ? 1 : 0);
+    const uint64_t itemGuid = slot <= static_cast<int>(game::EquipSlot::NUM_SLOTS) ? gh->getEquipSlotGuid(slot - 1) : 0;
+    lua_pushnumber(L, gh->itemRepairCostShown(itemGuid));
+    return 3;
 }
 
 /// The three socketing-panel tooltips.
@@ -5552,6 +5572,16 @@ int lua_Tooltip_SetCurrencyToken(lua_State* L) {
 }
 
 /// SetBagItem(bag, slot) - the same for something in the bags.
+/// __WoweeContainerRepairCost(bag, slot): what repairing the item there
+/// costs, as SetBagItem's second answer gives it (0x00584b20).
+static int lua_WoweeContainerRepairCost(lua_State* L) {
+    auto* gh = wowee::addons::getGameHandler(L);
+    const int bag = static_cast<int>(luaL_optnumber(L, 1, 0));
+    const int slot = static_cast<int>(luaL_optnumber(L, 2, 0));
+    lua_pushnumber(L, gh && slot > 0 ? gh->itemRepairCostShown(wowee::addons::containerSlotGuid(gh, bag, slot)) : 0);
+    return 1;
+}
+
 int lua_Tooltip_SetBagItem(lua_State* L) {
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
@@ -5582,8 +5612,11 @@ int lua_Tooltip_SetBagItem(lua_State* L) {
         fireTooltipSetItem(L);
         appendDurabilityLine(w, s.item);
     }
+    // And what repairing it costs (0x0062f420 -> 0x00584b20), which the bag
+    // button shows in repair mode.
     luaPushOneOrNil(L, 1);
-    return 1;
+    lua_pushnumber(L, gh->itemRepairCostShown(wowee::addons::containerSlotGuid(gh, bag, slot)));
+    return 2;
 }
 
 /// SetGuildBankItem(tab, slot) - hovering a slot in the guild bank.
@@ -11192,6 +11225,8 @@ void LuaEngine::registerCoreAPI() {
     lua_pushcfunction(L_, lua_Tooltip_SetUnitAura);
     lua_setglobal(L_, "__WoweeTooltipSetUnitAura");
     // The spell-shaped setters the client builds itself (0x006238a0).
+    lua_pushcfunction(L_, lua_WoweeContainerRepairCost);
+    lua_setglobal(L_, "__WoweeContainerRepairCost");
     lua_pushcfunction(L_, lua_Tooltip_SetPetAction);
     lua_setglobal(L_, "__WoweeTooltipSetPetAction");
     lua_pushcfunction(L_, lua_Tooltip_SetShapeshift);
@@ -12397,6 +12432,11 @@ void LuaEngine::registerCoreAPI() {
         "    if not id then return end\n"
         "    _WoweePopulateItemTooltip(self, tonumber(id), _WoweeContainerItemInstance(bag, slot))\n"
         "    self:_WoweeAppendItemEnchants(bag, slot)\n"
+        // As 0x0062f420 answers: whether the tooltip counts something down
+        // (a cooldown running), and what repairing the item costs - the bag
+        // button's repair mode reads the second.
+        "    local start = GetContainerItemCooldown(bag, slot)\n"
+        "    return (start and start > 0) and 1 or nil, __WoweeContainerRepairCost(bag, slot)\n"
         "end\n"
         // The spellbook's tooltip. SpellButton_OnEnter calls this and nothing
         // answered it, so hovering any spell in the book showed nothing -

@@ -280,6 +280,8 @@ public:
     void repairItem(uint64_t vendorGuid, uint64_t itemGuid);
     void repairAll(uint64_t vendorGuid, bool useGuildBank = false);
     uint32_t estimateRepairAllCost() const;
+    /// One item's repair cost from its lost durability (0x00708540).
+    uint32_t estimateItemRepairCost(uint64_t itemGuid) const;
     /// The sale mirror, in the order the sales happened.  What the interface
     /// sees is buybackRowCount / buybackRow.
     const std::deque<BuybackItem>& getBuybackItems() const { return buybackItems_; }
@@ -1211,7 +1213,6 @@ private:
     // DurabilityQuality.dbc: [id] -> quality_mod float
     mutable std::unordered_map<uint32_t, float> durabilityQuality_;
     void loadRepairDbc() const;
-    uint32_t estimateItemRepairCost(uint64_t itemGuid) const;
 };
 
 } // namespace game

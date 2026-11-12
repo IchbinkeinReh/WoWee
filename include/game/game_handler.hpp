@@ -4456,6 +4456,11 @@ public:
     void repairItem(uint64_t vendorGuid, uint64_t itemGuid);
     void repairAll(uint64_t vendorGuid, bool useGuildBank = false);
     uint32_t estimateRepairAllCost() const;
+    /// What a tooltip says repairing one item costs (0x00584b20): its cost,
+    /// less the open merchant's discount where the merchant's faction keeps
+    /// a reputation - 5% friendly, 10% honored, 15% revered, 20% exalted, by
+    /// how it regards the player (0x007279a0) - rounded.
+    uint32_t itemRepairCostShown(uint64_t itemGuid) const;
     /// The sale mirror, ring slots and all.  The interface's list is
     /// buybackRowCount / buybackRowAt - a row the realm has not confirmed into
     /// the ring is in this one and not in that.

@@ -4298,6 +4298,34 @@ uint32_t GameHandler::estimateRepairAllCost() const {
     return 0;
 }
 
+uint32_t GameHandler::itemRepairCostShown(uint64_t itemGuid) const {
+    if (!inventoryHandler_ || itemGuid == 0) return 0;
+    const uint32_t cost = inventoryHandler_->estimateItemRepairCost(itemGuid);
+    float discount = 0.0f;
+    const auto player = getEntityManager().getEntity(playerGuid);
+    const auto merchant = isVendorWindowOpen() ? getEntityManager().getEntity(getVendorItems().vendorGuid) : nullptr;
+    if (player && merchant) {
+        const uint16_t ft = fieldIndex(UF::UNIT_FIELD_FACTIONTEMPLATE);
+        auto* am = services_.assetManager;
+        auto templates = am && am->isInitialized() ? am->loadDBCOptional("FactionTemplate.dbc") : nullptr;
+        auto factions = am && am->isInitialized() ? am->loadDBCOptional("Faction.dbc") : nullptr;
+        const int32_t tr = templates && templates->isLoaded() && ft != 0xFFFF
+            ? templates->findRecordById(merchant->getField(ft)) : -1;
+        const int32_t fr = tr >= 0 && factions && factions->isLoaded()
+            ? factions->findRecordById(templates->getUInt32(static_cast<uint32_t>(tr), 1)) : -1;
+        if (fr >= 0 && static_cast<int32_t>(factions->getUInt32(static_cast<uint32_t>(fr), 1)) >= 0) {
+            switch (unitReaction(*merchant, *player)) {
+                case 4: discount = 0.05f; break;
+                case 5: discount = 0.10f; break;
+                case 6: discount = 0.15f; break;
+                case 7: discount = 0.20f; break;
+                default: break;
+            }
+        }
+    }
+    return static_cast<uint32_t>(std::lround(static_cast<float>(cost) * (1.0f - discount)));
+}
+
 void GameHandler::sellItem(uint64_t vendorGuid, uint64_t itemGuid, uint32_t count) {
     if (inventoryHandler_) inventoryHandler_->sellItem(vendorGuid, itemGuid, count);
 }
