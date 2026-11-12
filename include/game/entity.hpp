@@ -714,8 +714,14 @@ public:
             else advanceSegment(deltaTime);
         }
         arriveSplineFlags();
-        updateModelFacing();
+        updateModelFacing(deltaTime);
     }
+
+    /// The rate its model chases its facing at, in the client's critically
+    /// damped spring (0x007160b0), or 0 for the four-sample halving: a
+    /// creature's CreatureMovementInfo SmoothFacingChaseRate, or 20 (30 in a
+    /// fight) for a player-controlled unit that is not a player (0x00735f60).
+    void setFacingChaseRate(float rate) { facingChaseRate_ = rate; }
 
     [[nodiscard]] bool isEntityMoving() const { return isMoving_; }
 
@@ -1060,10 +1066,25 @@ private:
         }
     }
 
-    void updateModelFacing() {
+    void updateModelFacing(float deltaTime) {
         if (!modelFacingSet_) {
             modelFacing_ = orientation;
             modelFacingSet_ = true;
+            facingVelocity_ = 0.0f;
+            return;
+        }
+        if (facingChaseRate_ > 0.0f) {
+            // 0x007160b0 on the facing and its speed, the target brought
+            // within half a turn of where the model is.
+            float target = orientation;
+            if (modelFacing_ > target + kPi) target += 2.0f * kPi;
+            else if (modelFacing_ < target - kPi) target -= 2.0f * kPi;
+            const float x = facingChaseRate_ * deltaTime;
+            const float damp = 1.0f / (x * x * 0.48f + x * x * x * 0.235f + x + 1.0f);
+            const float change = modelFacing_ - target;
+            const float push = (change * facingChaseRate_ + facingVelocity_) * deltaTime;
+            facingVelocity_ = damp * (facingVelocity_ - push * facingChaseRate_);
+            modelFacing_ = wrapAngle(target + (change + push) * damp);
             return;
         }
         const float diff = wrapAngle(orientation - modelFacing_);
@@ -1122,6 +1143,8 @@ private:
     float modelFacing_ = 0;
     bool modelFacingSet_ = false;
     std::array<float, 4> facingDiffs_{};
+    float facingChaseRate_ = 0.0f;
+    float facingVelocity_ = 0.0f;
 };
 
 /**

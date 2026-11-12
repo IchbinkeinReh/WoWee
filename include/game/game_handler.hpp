@@ -6079,6 +6079,11 @@ private:
      */
     void handleAccountDataTimes(network::Packet& packet);
     void handleUpdateAccountData(network::Packet& packet);
+    /// The rate a unit's model chases its facing at (0x00735f60), 0 for the
+    /// four-sample halving.
+    float facingChaseRate(const Entity& entity);
+    std::unordered_map<uint32_t, float> creatureMovementInfo_;   // CreatureMovementInfo.dbc
+    bool creatureMovementInfoLoaded_ = false;
     std::string accountDataKey(uint32_t type) const;
     uint32_t accountDataLocalTime(uint32_t type) const;
     void setAccountDataLocalTime(uint32_t type, uint32_t time);

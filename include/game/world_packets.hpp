@@ -2008,6 +2008,7 @@ struct CreatureQueryResponseData {
     uint32_t killCredit[2] = {};
     bool racialLeader = false;
     uint32_t questItems[6] = {};
+    uint32_t movementId = 0;  // CreatureMovementInfo row: how fast its model turns
 
     [[nodiscard]] bool isValid() const { return entry != 0 && !name.empty(); }
 };
