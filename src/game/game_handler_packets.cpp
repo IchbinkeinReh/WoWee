@@ -818,11 +818,9 @@ void GameHandler::registerCoreOpcodes() {
     // draws the gossip window now and follows the real flow: the server asks,
     // a popup accepts, and the reply goes back.
     dispatchTable_[Opcode::SMSG_BINDER_CONFIRM] = [this](network::Packet& packet) {
-        binderGuid_ = packet.hasRemaining(8) ? packet.readUInt64() : 0;
-        // Who is asking. StaticPopup_Show("CONFIRM_BINDER", arg1) puts the name
-        // into "Do you want to make <name> your new home?" - without it the
-        // question had a hole where the innkeeper should be.
-        fireAddonEvent("CONFIRM_BINDER", {lookupName(binderGuid_)});
+        // As a click on the innkeeper asks it (0x006d2120): the area the
+        // player stands in goes into "Do you want to make %s your new home?".
+        askBinder(packet.hasRemaining(8) ? packet.readUInt64() : 0);
     };
     // 0x006e2e90 case 0x4ed writes "XP Gain Enabled"/"Disabled" to the
     // developer console and nowhere a player sees; this printed it in chat.

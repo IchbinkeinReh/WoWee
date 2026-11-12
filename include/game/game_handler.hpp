@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/npc_interaction.hpp"
 #include "game/tutorials.hpp"
 #include "game/item_text.hpp"   // ItemLinkInstance - the numbers an item link carries
 #include "game/visible_item_fields.hpp"   // the visible-item pair as the client's record reads it
@@ -3087,6 +3088,8 @@ public:
     /// (CMSG_SPELLCLICK) or a group member's vehicle entered
     /// (CMSG_PLAYER_VEHICLE_ENTER). False when it is neither.
     bool clickUnitBeyondHellos(uint64_t guid);
+    /// What 0x006ddbb0 reads of a unit to choose the hello.
+    npc_interaction::Unit npcInteractionFacts(uint64_t guid) const;
     /// 0x00408520: on a loading screen, CMSG_KEEP_ALIVE every thirty seconds.
     /// Starting (0x0040a990) sets the first one thirty seconds out; each
     /// progress step after sends one once that time has come.
@@ -4328,6 +4331,8 @@ public:
     /// Accept the innkeeper's offer to make this the player's home. The prompt
     /// arrives as SMSG_BINDER_CONFIRM and this is the reply.
     void confirmBinder();
+    /// An innkeeper's bind asked (0x006d2120): CONFIRM_BINDER with the area.
+    void askBinder(uint64_t guid);
 
     // Taxi / Flight Paths
     bool isTaxiWindowOpen() const;

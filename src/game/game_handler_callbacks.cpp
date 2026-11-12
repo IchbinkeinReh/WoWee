@@ -2625,6 +2625,19 @@ bool GameHandler::isHostileAttacker(uint64_t guid) const {
     return combatHandler_ ? combatHandler_->isHostileAttacker(guid) : false;
 }
 
+void GameHandler::askBinder(uint64_t guid) {
+    // 0x006d2120: the innkeeper remembered, and CONFIRM_BINDER asks with the
+    // name of the area the player stands in - the subzone's, else the
+    // zone's (0x00519ca0) - or HOME_INN where there is none.
+    binderGuid_ = guid;
+    std::string where;
+    if (const auto* r = services_.renderer) {
+        if (const auto* t = r->getZoneTexts()) where = !t->subzone.empty() ? t->subzone : t->zone;
+    }
+    if (where.empty()) where = interfaceString("HOME_INN", "your inn");
+    fireAddonEvent("CONFIRM_BINDER", {where});
+}
+
 void GameHandler::confirmBinder() {
     if (!isInWorld() || !socket || binderGuid_ == 0) return;
     auto pkt = BinderActivatePacket::build(binderGuid_);
@@ -3805,21 +3818,6 @@ void GameHandler::interactWithNpc(uint64_t guid) {
             }
         }
     }
-    // A dead player at an area spirit healer is a different conversation. The
-    // battleground ones do not answer a gossip hello at all - they answer
-    // CMSG_AREA_SPIRIT_HEALER_QUERY with the seconds to the next mass
-    // resurrection, and the client has to ask. Nothing here ever asked, so the
-    // reply never came, the countdown never appeared, and the queue that
-    // actually resurrects anyone was never joined.
-    if (isPlayerDead() || isPlayerGhost()) {
-        auto entity = getEntityManager().getEntity(guid);
-        if (auto* unit = dynamic_cast<Unit*>(entity.get())) {
-            constexpr uint32_t kSpiritFlags = NPC_FLAG_SPIRIT_GUIDE | NPC_FLAG_SPIRIT_HEALER;
-            if (unit->getNpcFlags() & kSpiritFlags) {
-                queryAreaSpiritHealer(guid);
-            }
-        }
-    }
     // Only to a unit the server says has something to say. UNIT_NPC_FLAGS is
     // zero for a creature that is not a questgiver, vendor, trainer, healer or
     // any of the rest, and a hello sent to one of those is answered with the
@@ -3855,10 +3853,74 @@ void GameHandler::interactWithNpc(uint64_t guid) {
     // 0x006ddbb0: a questgiver with nothing for the player yet (status 1)
     // opens its tutorial.
     if (getQuestGiverStatus(guid) == QuestGiverStatus::UNAVAILABLE) triggerTutorial(0x2a);
-    // Past the hellos, 0x006ddbb0 clicks a spell-click unit rather than greet it.
-    if (clickUnitBeyondHellos(guid)) return;
 
-    auto packet = GossipHelloPacket::build(guid);
+    const npc_interaction::Unit u = npcInteractionFacts(guid);
+    // A flight master whose node is not yet learned is told so first
+    // (0x006d62a0, CMSG_ENABLETAXI); only a questgiver with something to say
+    // is spoken to past it.
+    if (u.taxiNodeUnknown) {
+        network::Packet enable(wireOpcode(Opcode::CMSG_ENABLETAXI));
+        enable.writeUInt64(guid);
+        socket->send(enable);
+        if (!npc_interaction::questGiverHas(u)) return;
+    }
+    switch (npc_interaction::decide(u)) {
+        case npc_interaction::Action::SpellClick:
+        case npc_interaction::Action::VehicleEnter:
+            clickUnitBeyondHellos(guid);
+            return;
+        case npc_interaction::Action::Mailbox:
+            openMailbox(guid);  // 0x0056da60
+            return;
+        case npc_interaction::Action::Nothing:
+            return;
+        case npc_interaction::Action::Hello:
+            break;
+    }
+    // The hello its flags ask for, each with its own opcode.
+    namespace ni = npc_interaction;
+    Opcode op = Opcode::CMSG_GOSSIP_HELLO;
+    switch (ni::hello(u)) {
+        case ni::Hello::Gossip: op = Opcode::CMSG_GOSSIP_HELLO; break;
+        case ni::Hello::QuestGiver: op = Opcode::CMSG_QUESTGIVER_HELLO; break;
+        case ni::Hello::FlightMaster: op = Opcode::CMSG_TAXIQUERYAVAILABLENODES; break;
+        case ni::Hello::Vendor: op = Opcode::CMSG_LIST_INVENTORY; break;
+        case ni::Hello::Trainer: op = Opcode::CMSG_TRAINER_LIST; break;
+        case ni::Hello::SpiritHealer:
+            // 0x006db010: only a ghost, and nothing sent yet - the healer is
+            // remembered and CONFIRM_XP_LOSS asks; its accept activates it.
+            if (isPlayerGhost()) {
+                resurrectCasterGuid_ = guid;
+                resurrectCasterName_.clear();
+                resurrectIsSpiritHealer_ = true;
+                resurrectRequestPending_ = true;
+                fireAddonEvent("CONFIRM_XP_LOSS", {});
+            }
+            return;
+        case ni::Hello::SpiritGuide:
+            // 0x006db180: a ghost asks the battleground's spirit healer when
+            // it next resurrects (CMSG_AREA_SPIRIT_HEALER_QUERY).
+            if (isPlayerGhost()) queryAreaSpiritHealer(guid);
+            return;
+        case ni::Hello::Innkeeper:
+            // 0x006d2120: remembered and asked, nothing sent until the accept.
+            askBinder(guid);
+            return;
+        case ni::Hello::Banker: op = Opcode::CMSG_BANKER_ACTIVATE; break;
+        case ni::Hello::Petitioner: op = Opcode::CMSG_PETITION_SHOWLIST; break;
+        case ni::Hello::TabardDesigner: op = Opcode::MSG_TABARDVENDOR_ACTIVATE; break;
+        case ni::Hello::Battlemaster: op = Opcode::CMSG_BATTLEMASTER_HELLO; break;
+        case ni::Hello::Auctioneer: op = Opcode::MSG_AUCTION_HELLO; break;
+        case ni::Hello::StableMaster: op = Opcode::MSG_LIST_STABLED_PETS; break;
+        case ni::Hello::GuildBanker:
+            // 0x006d23c0: with the byte that asks for the slots too.
+            socket->send(GuildBankerActivatePacket::build(guid));
+            return;
+        case ni::Hello::None: return;
+    }
+    if (wireOpcode(op) == 0xFFFF) return;
+    network::Packet packet(wireOpcode(op));
+    packet.writeUInt64(guid);
     socket->send(packet);
 
     pendingNpcHello_ = PendingNpcHello{};
@@ -3879,13 +3941,11 @@ void GameHandler::interactWithNpc(uint64_t guid) {
               pendingNpcHello_.distance, " yards");
 }
 
-bool GameHandler::clickUnitBeyondHellos(uint64_t guid) {
-    if (!isInWorld() || !socket || guid == 0) return false;
+npc_interaction::Unit GameHandler::npcInteractionFacts(uint64_t guid) const {
+    npc_interaction::Unit u;
     auto entity = getEntityManager().getEntity(guid);
     auto* unit = dynamic_cast<Unit*>(entity.get());
-    if (!unit) return false;
-
-    npc_interaction::Unit u;
+    if (!unit) return u;
     u.npcFlags = unit->getNpcFlags();
     if (const uint16_t f = fieldIndex(UF::UNIT_FIELD_FLAGS_2); f != 0xFFFF) u.flags2 = unit->getField(f);
     u.questStatus = static_cast<uint8_t>(getQuestGiverStatus(guid));
@@ -3895,7 +3955,14 @@ bool GameHandler::clickUnitBeyondHellos(uint64_t guid) {
         if (m.guid == guid) { u.inGroup = true; break; }
     }
     u.emptySeats = vehicleRoster_.emptySeats(guid);
+    u.taxiNodeUnknown = isTaxiNodeUnknown(guid);
+    return u;
+}
 
+bool GameHandler::clickUnitBeyondHellos(uint64_t guid) {
+    if (!isInWorld() || !socket || guid == 0) return false;
+    if (!dynamic_cast<Unit*>(getEntityManager().getEntity(guid).get())) return false;
+    const npc_interaction::Unit u = npcInteractionFacts(guid);
     const auto action = npc_interaction::decide(u);
     if (action != npc_interaction::Action::SpellClick &&
         action != npc_interaction::Action::VehicleEnter) {
