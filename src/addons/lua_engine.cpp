@@ -5216,7 +5216,13 @@ int lua_Tooltip_SetAuctionItem(lua_State* L) {
         return 1;
     }
     const auto& row = results.auctions[index - 1];
+    // No price on an auction's item: 0x0062fcf0 passes 0x006277f0 its
+    // seventeenth argument, as SetMerchantItem does.
+    lua_pushboolean(L, 1);
+    lua_setglobal(L, "__WoweeTooltipNoPrice");
     const bool filled = fillItemTooltipById(L, gh, row.itemEntry);
+    lua_pushnil(L);
+    lua_setglobal(L, "__WoweeTooltipNoPrice");
     if (filled) {
         // The suffix it rolled, which for a ring is usually all of its stats.
         //
@@ -5575,6 +5581,20 @@ int lua_Tooltip_SetCurrencyToken(lua_State* L) {
 }
 
 /// SetBagItem(bag, slot) - the same for something in the bags.
+/// SetSendMailItem(index) (0x0062f8b0): the attachment's full tooltip, from
+/// the item itself - 1 when filled.
+static int lua_Tooltip_SetSendMailItem(lua_State* L) {
+    auto* gh = wowee::addons::getGameHandler(L);
+    const long index = std::lround(luaL_optnumber(L, 2, 0));
+    if (!gh || index < 1) return 0;
+    const auto& attachments = gh->getMailAttachments();
+    if (index > static_cast<long>(attachments.size())) return 0;
+    const auto& att = attachments[static_cast<size_t>(index) - 1];
+    if (!att.occupied()) return 0;
+    luaPushOneOrNil(L, fillItemTooltipById(L, gh, att.item.itemId, &att.item) ? 1 : 0);
+    return 1;
+}
+
 /// __WoweeContainerRepairCost(bag, slot): what repairing the item there
 /// costs, as SetBagItem's second answer gives it (0x00584b20).
 static int lua_WoweeContainerRepairCost(lua_State* L) {
@@ -11228,6 +11248,8 @@ void LuaEngine::registerCoreAPI() {
     lua_pushcfunction(L_, lua_Tooltip_SetUnitAura);
     lua_setglobal(L_, "__WoweeTooltipSetUnitAura");
     // The spell-shaped setters the client builds itself (0x006238a0).
+    lua_pushcfunction(L_, lua_Tooltip_SetSendMailItem);
+    lua_setglobal(L_, "__WoweeTooltipSetSendMailItem");
     lua_pushcfunction(L_, lua_WoweeContainerRepairCost);
     lua_setglobal(L_, "__WoweeContainerRepairCost");
     lua_pushcfunction(L_, lua_Tooltip_SetPetAction);
@@ -11826,10 +11848,18 @@ void LuaEngine::registerCoreAPI() {
         //
         // Each prefers the item link, because SetHyperlink already renders one
         // and a link is what these getters hand back.
+        // The slot's count rides along, as 0x0062e520 hands it to 0x006277f0
+        // (+0x4b8): the price is for the whole pile.
         "function __WoweeFrameMT:SetLootItem(slot)\n"
         "    self:ClearLines()\n"
         "    local link = GetLootSlotLink and GetLootSlotLink(slot)\n"
-        "    if link then return self:SetHyperlink(link) end\n"
+        "    if link then\n"
+        "        __WoweeTooltipItemCount = select(3, GetLootSlotInfo(slot))\n"
+        "        local ok, r1, r2 = pcall(self.SetHyperlink, self, link)\n"
+        "        __WoweeTooltipItemCount = nil\n"
+        "        if not ok then error(r1, 0) end\n"
+        "        return r1, r2\n"
+        "    end\n"
         "    local _, name = GetLootSlotInfo(slot)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
         "end\n"
@@ -11860,18 +11890,21 @@ void LuaEngine::registerCoreAPI() {
         "    local name = GetBuybackItemInfo(index)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
         "end\n"
+        // With the attachment's count (0x0062f9e0).
         "function __WoweeFrameMT:SetInboxItem(index, attachIndex)\n"
         "    self:ClearLines()\n"
         "    local link = GetInboxItemLink and GetInboxItemLink(index, attachIndex)\n"
-        "    if link then return self:SetHyperlink(link) end\n"
+        "    if link then\n"
+        "        __WoweeTooltipItemCount = select(3, GetInboxItem(index, attachIndex))\n"
+        "        local ok, r1, r2 = pcall(self.SetHyperlink, self, link)\n"
+        "        __WoweeTooltipItemCount = nil\n"
+        "        if not ok then error(r1, 0) end\n"
+        "        return r1, r2\n"
+        "    end\n"
         "    local name = GetInboxItem(index, attachIndex)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
         "end\n"
-        "function __WoweeFrameMT:SetSendMailItem(index)\n"
-        "    self:ClearLines()\n"
-        "    local name = GetSendMailItem(index)\n"
-        "    if name then self:SetText(name, 1, 1, 1) end\n"
-        "end\n"
+        "function __WoweeFrameMT:SetSendMailItem(index) return __WoweeTooltipSetSendMailItem(self, index) end\n"
         // A totem's tooltip is its spell's, and the totem bar is drawn by
         // whichever side owns it.
         "function __WoweeFrameMT:SetTotem(slot) return __WoweeTooltipSetTotem(self, slot) end\n"
@@ -11919,10 +11952,17 @@ void LuaEngine::registerCoreAPI() {
         "    local name = GetQuestItemInfo(itemType, index)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
         "end\n"
+        // And a quest reward's count (0x0062e670).
         "function __WoweeFrameMT:SetQuestItem(itemType, index)\n"
         "    self:ClearLines()\n"
         "    local link = GetQuestItemLink and GetQuestItemLink(itemType, index)\n"
-        "    if link then return self:SetHyperlink(link) end\n"
+        "    if link then\n"
+        "        __WoweeTooltipItemCount = select(3, GetQuestItemInfo(itemType, index))\n"
+        "        local ok, r1, r2 = pcall(self.SetHyperlink, self, link)\n"
+        "        __WoweeTooltipItemCount = nil\n"
+        "        if not ok then error(r1, 0) end\n"
+        "        return r1, r2\n"
+        "    end\n"
         "    local name = GetQuestItemInfo(itemType, index)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
         "end\n"
@@ -12413,9 +12453,10 @@ void LuaEngine::registerCoreAPI() {
         // one appended under a recipe; else the tooltip's OnTooltipAddMoney
         // with the money - for a held item its price less its repair cost,
         // times the stack - which FrameXML draws through SetTooltipMoney.
-        "    if append or __WoweeTooltipMerchantIndex then\n"
+        "    if append or __WoweeTooltipMerchantIndex or __WoweeTooltipNoPrice then\n"
         "    elseif sellPrice and sellPrice > 0 then\n"
-        "        local money = (inst and inst.price and inst.price > 0) and inst.price or sellPrice\n"
+        "        local money = (inst and inst.price and inst.price > 0) and inst.price\n"
+        "            or sellPrice * math.max(1, tonumber(__WoweeTooltipItemCount) or 1)\n"
         "        local onMoney = self.GetScript and self:GetScript('OnTooltipAddMoney')\n"
         "        if onMoney then onMoney(self, money)\n"
         "        else self:AddLine(format('%s: ', SELL_PRICE or 'Sell Price')..GetCoinTextureString(money), 1, 1, 1) end\n"
