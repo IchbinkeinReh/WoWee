@@ -720,6 +720,16 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     combatUI_.renderCooldownTracker(gameHandler, settingsPanel_, spellIconFn);
     renderNameplates(gameHandler);  // names over heads and nameplates (0x007e5640, 0x0098f790)
     commitMouseover(gameHandler);
+    // The extra action bars as the realm keeps them for the character
+    // (PLAYER_FIELD_BYTES byte 2, 0x005a8790): drawn from that when it
+    // arrives or changes - bottom left bit 0, right bit 2, the left (the
+    // interface's fourth multi-bar) bit 3.
+    if (const auto bars = gameHandler.getActionBarToggles(); bars && bars != appliedBarToggles_) {
+        appliedBarToggles_ = bars;
+        settingsPanel_.pendingShowActionBar2 = (*bars & 0x1u) != 0;
+        settingsPanel_.pendingShowRightBar = (*bars & 0x4u) != 0;
+        settingsPanel_.pendingShowLeftBar = (*bars & 0x8u) != 0;
+    }
     // cameraDistanceMax, the other half of the zoom limit (0x006000e0).
     if (auto* renderer = services_.renderer; renderer && renderer->getCameraController()) {
         float yards = 15.0f;

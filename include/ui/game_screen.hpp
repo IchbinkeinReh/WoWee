@@ -452,6 +452,8 @@ private:
     /// world, and the nameplate it is over, which wins. Committed once a
     /// frame (commitMouseover), so a change is announced once.
     uint64_t worldMouseover_ = 0;
+    /// The extra bars the realm keeps for the character, as last applied.
+    std::optional<uint8_t> appliedBarToggles_;
     uint64_t plateMouseover_ = 0;
     void commitMouseover(game::GameHandler& gameHandler);
     // Right-click interact/attack fires on release only if the press was a tap, not a
