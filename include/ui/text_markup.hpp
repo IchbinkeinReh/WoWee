@@ -115,9 +115,11 @@ inline std::vector<WrapRun> parseMarkup(const std::string& in) {
             continue;
         }
         if (tag == 'T') {
-            // |Tpath:height:width:offsetX:offsetY|t. Everything after the path
-            // is optional and a zero means "the height of the line", which is
-            // what all three coin escapes ask for.
+            // |Tpath:height:width:offsetX:offsetY:texWidth:texHeight:left:
+            // right:top:bottom|t. Everything after the path is optional and a
+            // zero size means "the height of the line", which is what all
+            // three coin escapes ask for; the last six cut a part of the file
+            // out, in its pixels.
             const size_t end = in.find("|t", i + 2);
             const size_t stop = (end == std::string::npos) ? in.size() : end;
             const std::string payload = in.substr(i + 2, stop - (i + 2));
@@ -134,7 +136,10 @@ inline std::vector<WrapRun> parseMarkup(const std::string& in) {
                     // Height then width. Anything unparsable stays zero, which
                     // is the same as the escape asking for the line height.
                     size_t at = firstColon + 1;
-                    float* fields[2] = {&tex.texHeight, &tex.texWidth};
+                    float offX = 0.0f, offY = 0.0f, fileW = 0.0f, fileH = 0.0f;
+                    float cut[4] = {-1.0f, -1.0f, -1.0f, -1.0f};
+                    float* fields[10] = {&tex.texHeight, &tex.texWidth, &offX, &offY, &fileW, &fileH,
+                                         &cut[0], &cut[1], &cut[2], &cut[3]};
                     for (float* field : fields) {
                         if (at > payload.size()) break;
                         const size_t next = payload.find(':', at);
@@ -143,6 +148,14 @@ inline std::vector<WrapRun> parseMarkup(const std::string& in) {
                         *field = static_cast<float>(std::atof(part.c_str()));
                         if (next == std::string::npos) break;
                         at = next + 1;
+                    }
+                    (void)offX;
+                    (void)offY;
+                    if (fileW > 0.0f && fileH > 0.0f && cut[3] >= 0.0f) {
+                        tex.uv[0] = cut[0] / fileW;
+                        tex.uv[1] = cut[1] / fileW;
+                        tex.uv[2] = cut[2] / fileH;
+                        tex.uv[3] = cut[3] / fileH;
                     }
                 }
                 runs.push_back(std::move(tex));

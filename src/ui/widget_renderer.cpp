@@ -758,7 +758,7 @@ float WidgetRenderer::drawMarkupText(ImDrawList* dl, ImFont* font, float size,
                         const float top = y + (lineH - h) * 0.5f;
                         dl->AddImage(reinterpret_cast<ImTextureID>(tex),
                                      ImVec2(x, top), ImVec2(x + w, top + h),
-                                     ImVec2(0, 0), ImVec2(1, 1),
+                                     ImVec2(run.uv[0], run.uv[2]), ImVec2(run.uv[1], run.uv[3]),
                                      IM_COL32(255, 255, 255,
                                               static_cast<int>(alpha * 255.0f)));
                     }

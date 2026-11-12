@@ -40,6 +40,10 @@ struct WrapRun {
     /// height of the line", which is what every coin escape asks for.
     float texHeight = 0.0f;
     float texWidth = 0.0f;
+    /// The part of the file shown, left/right/top/bottom as fractions -
+    /// the escape's last four numbers over its texture size; all of it by
+    /// default.
+    float uv[4] = {0.0f, 1.0f, 0.0f, 1.0f};
 };
 
 /// Whether two runs are the same style, so adjacent pieces can be merged back

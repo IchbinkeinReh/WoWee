@@ -5581,6 +5581,28 @@ int lua_Tooltip_SetCurrencyToken(lua_State* L) {
 }
 
 /// SetBagItem(bag, slot) - the same for something in the bags.
+/// GameTooltip:AddTexture(texture[, left, right, top, bottom]) (0x0061d810
+/// -> 0x0061c8b0): the picture at the front of the last line, as tall as
+/// the line, the line's text moved along past it - ten at most a tooltip,
+/// and only once there is a line. The part shown, where all four numbers
+/// are given, is that fraction of the file.
+static int lua_Tooltip_AddTexture(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w || w->tooltipLines.empty() || !lua_isstring(L, 2)) return 0;
+    int pictures = 0;
+    for (const auto& line : w->tooltipLines) pictures += line.left.rfind("|T", 0) == 0 ? 1 : 0;
+    if (pictures >= 10) return 0;
+    std::string escape = std::string("|T") + lua_tostring(L, 2) + ":0";
+    if (lua_isnumber(L, 3) && lua_isnumber(L, 4) && lua_isnumber(L, 5) && lua_isnumber(L, 6)) {
+        constexpr double kScale = 10000.0;
+        const auto px = [&](int i) { return std::to_string(std::lround(lua_tonumber(L, i) * kScale)); };
+        escape += ":0:0:0:10000:10000:" + px(3) + ":" + px(4) + ":" + px(5) + ":" + px(6);
+    }
+    escape += "|t ";
+    w->tooltipLines.back().left = escape + w->tooltipLines.back().left;
+    return 0;
+}
+
 /// SetSendMailItem(index) (0x0062f8b0): the attachment's full tooltip, from
 /// the item itself - 1 when filled.
 static int lua_Tooltip_SetSendMailItem(lua_State* L) {
@@ -9933,6 +9955,7 @@ void LuaEngine::registerCoreAPI() {
         {"SetBackpackToken", lua_Tooltip_SetBackpackToken},
         {"SetGuildBankItem", lua_Tooltip_SetGuildBankItem},
         {"SetSpellByID",    lua_Tooltip_SetSpellByID},
+        {"AddTexture",      lua_Tooltip_AddTexture},
         {"SetQuestLogRewardSpell", lua_Tooltip_SetQuestLogRewardSpell},
         {"SetEquipmentSet",        lua_Tooltip_SetEquipmentSet},
         {"SetLFGCompletionReward", lua_Tooltip_SetLFGCompletionReward},
