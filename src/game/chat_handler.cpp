@@ -793,6 +793,12 @@ uint32_t ChatHandler::languageComprehension(uint32_t language) {
 }
 
 std::string ChatHandler::hearInLanguage(uint32_t language, const std::string& text) {
+    // A game master hears every language as said (0x00509dd0: the active
+    // player's PLAYER_FLAGS, its +0x1008 block +8, bit 0x8).
+    if (const auto me = owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
+        const uint16_t flagsIdx = fieldIndex(UF::PLAYER_FLAGS);
+        if (flagsIdx != 0xFFFF && (me->getField(flagsIdx) & 0x8u) != 0) return text;
+    }
     const uint32_t comprehension = languageComprehension(language);
     if (comprehension > 299) return text;
     if (!languageWordsLoaded_) {
