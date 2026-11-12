@@ -1095,6 +1095,8 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     // One, not zero: the slider is a multiple of the original client's limit
     // and zero is not a position on it. Answering zero pinned it at minimum.
     else if (n == "cameradistancemaxfactor") lua_pushstring(L, "1");
+    // The zoom limit's other half, as registered and as the camera reads it.
+    else if (n == "cameradistancemax") lua_pushstring(L, "15.0");
     else if (n == "weatherdensity") lua_pushstring(L, "2");
     else if (n == "particledensity") lua_pushstring(L, "1");
     else if (n == "environmentdetail") lua_pushstring(L, "1");
