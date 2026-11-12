@@ -435,6 +435,12 @@ private:
     AllocatedBuffer meshTable_{};
     uint32_t meshTableCapacity_ = 0;
     bool meshTableDirty_ = true;
+    // What meshTable_ holds, row for row, so only changed rows are sent.
+    std::vector<MeshGPU> meshTableShadow_;
+    // The meshes whose row may have changed since the table was last sent;
+    // every row when meshRowsAll_.
+    std::vector<MeshId> meshRowsTouched_;
+    bool meshRowsAll_ = true;
 
     // Bumped whenever the instance set, a transform, or a mesh's placement in
     // the pools changes; each frame slot re-uploads when it lags behind.

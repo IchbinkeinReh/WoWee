@@ -243,6 +243,8 @@ void RtScene::shutdown() {
 
     for (auto& m : meshes_) destroyMeshGpu(m);
     meshes_.clear();
+    meshRowsAll_ = true;
+    meshRowsTouched_.clear();
     instances_.clear();
     dynInstances_.clear();
     groups_.clear();
@@ -326,6 +328,7 @@ RtScene::MeshId RtScene::addMesh(MeshSource source, bool urgent) {
     Mesh& m = meshes_[id];
     m = Mesh{};
     m.live = true;
+    meshRowsTouched_.push_back(id);
     m.triCount = static_cast<uint32_t>(triCount);
     m.bounds = bounds;
     m.source = std::move(source);
@@ -596,6 +599,8 @@ void RtScene::releaseGpu() {
     destroyBuffer(alloc, meshTable_);
     meshTableCapacity_ = 0;
     meshTableDirty_ = true;
+    meshRowsAll_ = true;
+    meshRowsTouched_.clear();
     builtVersion_ = ~0ull;
     // And the top levels' CPU copies, built again when it is back on.
     for (auto* v : {&instanceData_, &dynInstanceData_}) {
@@ -618,6 +623,7 @@ void RtScene::removeMesh(MeshId id) {
     if (id >= meshes_.size() || !meshes_[id].live) return;
     Mesh& m = meshes_[id];
     m.live = false;
+    meshRowsTouched_.push_back(id);
     --liveMeshes_;
     liveTriangles_ -= m.triCount;
     pendingMeshes_.erase(std::remove(pendingMeshes_.begin(), pendingMeshes_.end(), id),
@@ -852,6 +858,7 @@ void RtScene::uploadPending(VkCommandBuffer cmd) {
     std::vector<MeshId> ready;
     for (MeshId id : batch) {
         Mesh& m = meshes_[id];
+        meshRowsTouched_.push_back(id);
         m.triOffset = poolAllocate(cmd, triPool_, m.triCount);
         if (backend_ == Backend::Software) m.nodeOffset = poolAllocate(cmd, nodePool_, m.nodeCount);
         if (m.extraCount > 0) m.extraOffset = poolAllocate(cmd, extraPool_, m.extraCount);
@@ -1407,43 +1414,91 @@ void RtScene::update(VkCommandBuffer cmd) {
 
     if (meshTableDirty_) {
         meshTableDirty_ = false;
-        std::vector<MeshGPU> table(meshes_.size());
-        for (size_t i = 0; i < meshes_.size(); ++i) {
-            // The third word: 1 + the terrain record, 0 for none.
-            const uint32_t terrain = meshes_[i].live && meshes_[i].terrainSlot != kInvalid
-                                         ? meshes_[i].terrainSlot + 1
-                                         : 0;
-            table[i] = {meshes_[i].nodeOffset, meshes_[i].triOffset, terrain, 0};
-        }
-        if (!meshTable_.buffer || meshTableCapacity_ < table.size()) {
+        const size_t count = meshes_.size();
+        bool fresh = false;
+        if (!meshTable_.buffer || meshTableCapacity_ < count) {
             if (meshTable_.buffer) {
                 VmaAllocator alloc = ctx_->getAllocator();
                 AllocatedBuffer old = meshTable_;
                 ctx_->deferAfterAllFrameFences([alloc, old]() mutable { destroyBuffer(alloc, old); });
             }
-            meshTableCapacity_ = grownCapacity(meshTableCapacity_, static_cast<uint32_t>(table.size()));
+            meshTableCapacity_ = grownCapacity(meshTableCapacity_, static_cast<uint32_t>(count));
             meshTable_ = createBuffer(ctx_->getAllocator(),
                                       VkDeviceSize(meshTableCapacity_) * sizeof(MeshGPU),
                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                           VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                       VMA_MEMORY_USAGE_GPU_ONLY);
             ++descriptorGeneration_;
+            fresh = true;
         }
+        // Only the rows that differ from what the buffer holds are sent: the
+        // skinned doodads come and go every frame, and the whole table - a
+        // row for every mesh ever made - went up each time for those few.
+        // A new buffer holds nothing yet, so it is sent whole. What the
+        // buffer holds afterwards is the same as when the whole table went.
+        if (fresh) meshTableShadow_.clear();
+        meshTableShadow_.resize(count, MeshGPU{~0u, ~0u, ~0u, ~0u});
+        // Runs of changed rows; a gap this short is sent along rather than
+        // costing a copy of its own.
+        constexpr size_t kJoinGap = 64;
+        size_t runStart = count, runEnd = 0;
+        bool staged = false;
+        auto flush = [&]() {
+            if (runStart >= runEnd) return;
+            stage(cmd, meshTable_.buffer, VkDeviceSize(runStart) * sizeof(MeshGPU),
+                  meshTableShadow_.data() + runStart, (runEnd - runStart) * sizeof(MeshGPU));
+            staged = true;
+            runStart = count;
+            runEnd = 0;
+        };
+        // The rows whose mesh changed since the last send; all of them after
+        // the scene let go of its GPU copy. Any other row is as it was sent.
+        if (fresh) meshRowsAll_ = true;
+        auto& ids = meshRowsTouched_;
+        if (meshRowsAll_) {
+            ids.resize(count);
+            for (size_t i = 0; i < count; ++i) ids[i] = static_cast<MeshId>(i);
+        } else {
+            std::sort(ids.begin(), ids.end());
+            ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+        }
+        for (const MeshId id : ids) {
+            const size_t i = id;
+            if (i >= count) continue;
+            // The third word: 1 + the terrain record, 0 for none.
+            const uint32_t terrain = meshes_[i].live && meshes_[i].terrainSlot != kInvalid
+                                         ? meshes_[i].terrainSlot + 1
+                                         : 0;
+            const MeshGPU row{meshes_[i].nodeOffset, meshes_[i].triOffset, terrain, 0};
+            MeshGPU& held = meshTableShadow_[i];
+            if (!fresh && held.nodeOffset == row.nodeOffset && held.triOffset == row.triOffset &&
+                held.pad0 == row.pad0 && held.pad1 == row.pad1) {
+                continue;
+            }
+            held = row;
+            if (runStart < runEnd && i > runEnd + kJoinGap) flush();
+            if (runStart >= runEnd) runStart = i;
+            runEnd = i + 1;
+        }
+        ids.clear();
+        meshRowsAll_ = false;
         // Rows of live meshes never change after upload and freed rows are
         // unreferenced, so rewriting the table while an earlier frame reads
         // it only changes rows no one is looking at.
-        stage(cmd, meshTable_.buffer, 0, table.data(), table.size() * sizeof(MeshGPU));
-        VkMemoryBarrier2 mb{};
-        mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-        mb.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-        mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        mb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-        VkDependencyInfo dep{};
-        dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-        dep.memoryBarrierCount = 1;
-        dep.pMemoryBarriers = &mb;
-        cmdPipelineBarrier2(cmd, dep);
+        flush();
+        if (staged) {
+            VkMemoryBarrier2 mb{};
+            mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            mb.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            mb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+            VkDependencyInfo dep{};
+            dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            dep.memoryBarrierCount = 1;
+            dep.pMemoryBarriers = &mb;
+            cmdPipelineBarrier2(cmd, dep);
+        }
     }
 
     // The static data once per version of that set, the dynamic every frame.
