@@ -169,6 +169,54 @@ bool setCustomDataBookmark(const std::string& base64) {
     return static_cast<bool>(out);
 }
 
+namespace {
+fs::path dataStreamFile() {
+    return fs::path(getConfigRoot()) / "data_stream.txt";
+}
+std::string trimmed(std::string s) {
+    const auto first = s.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return {};
+    const auto last = s.find_last_not_of(" \t\r\n");
+    return s.substr(first, last - first + 1);
+}
+}  // namespace
+
+DataStreamChoice getDataStream() {
+    DataStreamChoice c;
+    {
+        std::ifstream in(dataStreamFile());
+        std::string line;
+        if (in && std::getline(in, line)) c.url = trimmed(line);
+        if (in && std::getline(in, line)) c.key = trimmed(line);
+    }
+    if (const char* url = std::getenv("WOWEE_STREAM_URL"); url && *url) c.url = url;
+    if (const char* keyFile = std::getenv("WOWEE_STREAM_KEY_FILE"); keyFile && *keyFile) {
+        std::ifstream in(keyFile);
+        std::string line;
+        if (in && std::getline(in, line)) c.key = trimmed(line);
+    }
+    return c;
+}
+
+bool setDataStream(const DataStreamChoice& choice) {
+    std::error_code ec;
+    const fs::path file = dataStreamFile();
+    if (choice.url.empty()) {
+        fs::remove(file, ec);
+        return !ec;
+    }
+    fs::create_directories(file.parent_path(), ec);
+    {
+        std::ofstream out(file, std::ios::trunc);
+        if (!out) return false;
+        out << choice.url << '\n' << choice.key << '\n';
+        if (!out) return false;
+    }
+    // The key: for its owner only.
+    fs::permissions(file, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace, ec);
+    return true;
+}
+
 void migratePortableConfigIfNeeded() {
     std::error_code ec;
     const std::string exeDir = getExecutableDir();

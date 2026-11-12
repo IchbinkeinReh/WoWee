@@ -104,6 +104,8 @@
 #include "addons/lua_api_registrations.hpp"
 #include "core/data_paths.hpp"
 #include "core/data_prompt.hpp"
+#include "pipeline/data_stream.hpp"
+#include "core/env.hpp"
 #include "ui/ui_services.hpp"
 #include "auth/auth_handler.hpp"
 #include "game/game_handler.hpp"
@@ -930,6 +932,36 @@ bool Application::initialize() {
     // Try to get WoW data path from environment variable
     const char* dataPathEnv = std::getenv("WOW_DATA_PATH");
     std::string dataPath = dataPathEnv ? dataPathEnv : "./Data";
+
+    // The "streaming" data mode: the original archives read from a server
+    // through a local chunk cache (pipeline/data_stream). Chosen by a stored
+    // server (core::getDataStream) unless WOWEE_DATA_MODE says otherwise, or
+    // by WOWEE_DATA_MODE=streaming. The cache's mirror of the server's folder
+    // is then read as the game folder, exactly as a local install.
+    {
+        const char* modeEnv = std::getenv("WOWEE_DATA_MODE");
+        const std::string mode = modeEnv ? modeEnv : "";
+        const core::DataStreamChoice stream = core::getDataStream();
+        if (mode == "streaming" || (mode.empty() && !stream.url.empty())) {
+            std::string error;
+            pipeline::StreamUrl url;
+            std::string mirror;
+            if (stream.url.empty()) {
+                error = "no streaming server is set";
+            } else if (pipeline::parseStreamUrl(stream.url, url, error)) {
+                mirror = pipeline::DataStream::instance().start(
+                    {stream.url, stream.key}, pipeline::DataStream::defaultCacheRoot(url), error);
+            }
+            if (!mirror.empty()) {
+                dataPath = mirror;
+                // Everything that looks the data folder up again finds the same.
+                core::setEnvVar("WOW_DATA_PATH", mirror.c_str(), /*overwrite=*/true);
+                if (!modeEnv) core::setEnvVar("WOWEE_DATA_MODE", "mpq", /*overwrite=*/true);
+            } else {
+                LOG_ERROR("Streaming game data: ", error);
+            }
+        }
+    }
 
     // The original client's archives (Data\*.MPQ) instead of an extraction:
     // the asset manager reads them in place, and the expansion tables - which
@@ -2896,6 +2928,12 @@ void Application::updateMapWindow() {
 }
 
 void Application::shutdown() {
+    if (pipeline::DataStream::instance().active()) {
+        const auto t = pipeline::DataStream::instance().totals();
+        LOG_WARNING("STREAM: at exit: fetched ", t.fetchedBytes, " bytes in ", t.requests,
+                    " requests this run; cache holds ", t.localBytes, " of ", t.mpqBytes,
+                    " MPQ bytes (", t.totalBytes, " listed)");
+    }
     // A clean exit: the next start has nothing to warn of (rt_session_marker).
     rt_session::clear(getConfigRoot() + "/rt_session.marker");
     LOG_DEBUG("Shutting down application...");
@@ -6184,6 +6222,22 @@ void Application::update(float deltaTime) {
         }
     }
     // Update based on current state
+    // Streaming: what was fetched, every ten seconds while it changes.
+    if (pipeline::DataStream::instance().active()) {
+        static auto lastReport = std::chrono::steady_clock::now();
+        static uint64_t lastFetched = ~0ull;
+        const auto now = std::chrono::steady_clock::now();
+        if (now - lastReport > std::chrono::seconds(10)) {
+            lastReport = now;
+            const auto t = pipeline::DataStream::instance().totals();
+            if (t.fetchedBytes != lastFetched) {
+                lastFetched = t.fetchedBytes;
+                LOG_WARNING("STREAM: fetched ", t.fetchedBytes, " bytes in ", t.requests,
+                            " requests this run; cache holds ", t.localBytes, " of ", t.mpqBytes,
+                            " MPQ bytes (", t.totalBytes, " listed)");
+            }
+        }
+    }
     updateCheckpoint = "state switch";
     switch (state) {
         case AppState::FIRST_RUN:

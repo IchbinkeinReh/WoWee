@@ -35,6 +35,21 @@ bool setCustomDataRoot(const std::string& path);
 std::string getCustomDataBookmark();
 bool setCustomDataBookmark(const std::string& base64);
 
+// The streaming server the game data is read from instead of a folder (the
+// "streaming" data mode, pipeline/data_stream): its address and access key,
+// in <config root>/data_stream.txt (address on the first line, key on the
+// second; the file is made readable by its owner only where the platform
+// allows). Empty url = no streaming. WOWEE_STREAM_URL and
+// WOWEE_STREAM_KEY_FILE (a file holding the key) override it.
+struct DataStreamChoice {
+    std::string url;
+    std::string key;
+};
+DataStreamChoice getDataStream();
+// Remembers the server, or forgets it when url is empty. Read once at
+// startup. False when the file could not be written or removed.
+bool setDataStream(const DataStreamChoice& choice);
+
 // One-time seeding of portable config. On the first launch after the user drops
 // a "portable.txt" marker next to the executable (before any config folder
 // exists), copies the existing per-user config tree into <exe_dir>/config so
