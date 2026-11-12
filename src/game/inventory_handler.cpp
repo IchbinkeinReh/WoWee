@@ -4646,8 +4646,26 @@ uint32_t InventoryHandler::getBankBagSlotPrice(int slotIndex) {
     return kPrices[slotIndex];
 }
 
+void InventoryHandler::slotItemChanged(uint64_t before, uint64_t after) {
+    if (before == after || pendingMoveEntry_ == 0) return;
+    if (pendingMoveGuid_ == 0 || pendingMoveGuid_ == before || pendingMoveGuid_ == after) {
+        const auto* info = owner_.getItemInfo(pendingMoveEntry_);
+        if (info && info->valid) playItemSound(info->displayInfoId, 1);
+    }
+    pendingMoveGuid_ = 0;
+    pendingMoveEntry_ = 0;
+}
+
+/// The item at a wire bag and slot with its entry, for notePendingItemMove.
+static void notePendingMoveAt(InventoryHandler& inv, GameHandler& owner, uint8_t bag, uint8_t slot) {
+    const uint64_t guid = inv.itemGuidAtWire(bag, slot);
+    const auto found = owner.onlineItemsRef().find(guid);
+    if (guid != 0 && found != owner.onlineItemsRef().end()) inv.notePendingItemMove(guid, found->second.entry);
+}
+
 void InventoryHandler::depositItem(uint8_t srcBag, uint8_t srcSlot) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    notePendingMoveAt(*this, owner_, srcBag, srcSlot);
     // CMSG_AUTOBANK_ITEM lets the server place the item into the first free slot
     // across the whole bank - the main slots AND the purchased bank bags. The
     // old code scanned only the main bank slots and reported "Bank is full" the
@@ -4659,6 +4677,7 @@ void InventoryHandler::depositItem(uint8_t srcBag, uint8_t srcSlot) {
 
 void InventoryHandler::withdrawItem(uint8_t srcBag, uint8_t srcSlot) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    notePendingMoveAt(*this, owner_, srcBag, srcSlot);
     // CMSG_AUTOSTORE_BANK_ITEM lets the server place the item into the first
     // free slot across ALL bags (retail right-click-to-withdraw), not just the
     // backpack. The server replies with an inventory-full error if there's no
@@ -4905,6 +4924,7 @@ void InventoryHandler::guildBankDepositFromInventory(uint8_t srcBag, uint8_t src
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() ||
         guildBankerGuid_ == 0 || !guildBankOpen_) return;
     if (guildBankRefusesDeposit(srcBag, srcSlot)) return;
+    notePendingMoveAt(*this, owner_, srcBag, srcSlot);
     // CMSG_GUILD_BANK_SWAP_ITEMS has no server-side auto-store for the deposit
     // direction (that path forces bank→character), so the client picks the
     // target slot - the first empty one in the tab the player is viewing, which
@@ -6640,6 +6660,7 @@ bool InventoryHandler::applyInventoryFields(const FlatFieldMap& fields, bool ini
                 const uint64_t before = guid;
                 if (isLow) guid = (guid & 0xFFFFFFFF00000000ULL) | val;
                 else guid = (guid & 0x00000000FFFFFFFFULL) | (uint64_t(val) << 32);
+                if (!initial) slotItemChanged(before, guid);
                 slotsChanged = true;
                 // Only the nineteen worn slots, not the four bag slots that
                 // share this region of the field block.
@@ -6651,8 +6672,10 @@ bool InventoryHandler::applyInventoryFields(const FlatFieldMap& fields, bool ini
             bool isLow = ((key - packBase) % 2 == 0);
             if (slotIndex < static_cast<int>(owner_.backpackSlotGuidsRef().size())) {
                 uint64_t& guid = owner_.backpackSlotGuidsRef()[slotIndex];
+                const uint64_t before = guid;
                 if (isLow) guid = (guid & 0xFFFFFFFF00000000ULL) | val;
                 else guid = (guid & 0x00000000FFFFFFFFULL) | (uint64_t(val) << 32);
+                if (!initial) slotItemChanged(before, guid);
                 slotsChanged = true;
             }
         } else if (keyringBase != 0xFFFF &&
@@ -6676,6 +6699,7 @@ bool InventoryHandler::applyInventoryFields(const FlatFieldMap& fields, bool ini
                 const uint64_t before = guid;
                 if (isLow) guid = (guid & 0xFFFFFFFF00000000ULL) | val;
                 else guid = (guid & 0x00000000FFFFFFFFULL) | (uint64_t(val) << 32);
+                if (!initial) slotItemChanged(before, guid);
                 slotsChanged = true;
                 // Counted as the bank window counts: its general slots first,
                 // from one. A guid arrives as two fields, so this is a set.
@@ -6764,8 +6788,10 @@ void InventoryHandler::extractContainerFields(uint64_t containerGuid, const Flat
         if (slotIndex >= 36) continue;
         bool isLow = (offset % 2 == 0);
         uint64_t& guid = info.slotGuids[slotIndex];
+        const uint64_t before = guid;
         if (isLow) guid = (guid & 0xFFFFFFFF00000000ULL) | val;
         else guid = (guid & 0x00000000FFFFFFFFULL) | (uint64_t(val) << 32);
+        slotItemChanged(before, guid);
     }
 }
 

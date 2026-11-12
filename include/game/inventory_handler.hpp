@@ -689,6 +689,17 @@ public:
                         const ItemQueryResponseData& info);
     /// The item at the wire's bag and slot, 0 when none is known there.
     [[nodiscard]] uint64_t itemGuidAtWire(uint8_t bag, uint8_t slot) const;
+    /// An item sent off to the bank or the guild bank by a right-click
+    /// (0x005a4780): its put-down sound waits for the slot it leaves or
+    /// lands in to change. A guid of 0 (a guild bank withdrawal) waits for
+    /// any slot.
+    void notePendingItemMove(uint64_t guid, uint32_t entry) {
+        pendingMoveGuid_ = guid;
+        pendingMoveEntry_ = entry;
+    }
+    /// A slot's item changed (0x005d9600 / 0x005d9790): the waiting move's
+    /// sound where it is that item's, and the move forgotten either way.
+    void slotItemChanged(uint64_t before, uint64_t after);
     /// One of the player's own items put on the trade table (0x005864d0).
     [[nodiscard]] bool itemInTrade(uint64_t itemGuid) const;
     /// TRADE_POTENTIAL_BIND_ENCHANT's answer for an item (0x005869a0).
@@ -985,6 +996,8 @@ private:
     void beginOpenItem();
     /// An item's own sound, 0 picked up, 1 put down (0x004d0090).
     void playItemSound(uint32_t displayInfoId, int which);
+    uint64_t pendingMoveGuid_ = 0;
+    uint32_t pendingMoveEntry_ = 0;
     bool autoSellGrey_ = false;
     bool autoRepair_ = false;
     LootResponseData currentLoot_;

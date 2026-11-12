@@ -6324,7 +6324,14 @@ void registerInventoryLuaAPI(lua_State* L) {
             const int tab  = static_cast<int>(luaL_optnumber(L, 1, 1));
             const int slot = static_cast<int>(luaL_optnumber(L, 2, 1));
             // Destination 0,0 lets the server pick the first free bag slot,
-            // which is what "auto store" means.
+            // which is what "auto store" means. Its put-down sound waits for
+            // the slot it lands in (0x005a4800 -> 0x00bd08a4).
+            if (gh && gh->getInventoryHandler()) {
+                for (const auto& it : gh->getGuildBankData().tabItems) {
+                    if (it.slotId == static_cast<uint8_t>(slot - 1) && it.itemEntry != 0)
+                        gh->getInventoryHandler()->notePendingItemMove(0, it.itemEntry);
+                }
+            }
             if (gh) gh->guildBankWithdrawItem(static_cast<uint8_t>(tab - 1),
                                               static_cast<uint8_t>(slot - 1), 0, 0);
             return 0;
