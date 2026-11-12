@@ -4739,6 +4739,41 @@ int lua_Tooltip_SetUnit(lua_State* L) {
         }
     }
 
+    // Last, the player's threat on the unit where threat is shown at all
+    // (threatWarning: 0 never, 1 in an instance, 2 in a party, 3 always -
+    // 0x00519df0): THREAT_TOOLTIP with the percentage less a half, rounded
+    // (0x007374c0). SetUnit answers 1 only when it wrote this line.
+    bool threatShown = false;
+    if (entity && !isPlayer && gh->getEntityManager().getEntity(gh->getPlayerGuid())) {
+        int mode = 3;
+        try { mode = std::stoi(wowee::addons::storedCVarValue("threatWarning", "3")); } catch (...) {}
+        const bool wanted = mode == 3 || (mode == 1 && gh->isInInstance()) ||
+                            (mode == 2 && !gh->getPartyData().members.empty());
+        if (wanted) {
+            lua_getglobal(L, "UnitDetailedThreatSituation");
+            if (lua_isfunction(L, -1)) {
+                lua_pushstring(L, "player");
+                lua_pushstring(L, uidStr.c_str());
+                if (lua_pcall(L, 2, 5, 0) == 0) {
+                    // On the unit's threat list: a threat value, which
+                    // the binding's guess without one leaves at zero.
+                    const double pct = lua_tonumber(L, -3);
+                    if (lua_tonumber(L, -1) > 0.0) {
+                        addLine(formatGlobal(L, globalOr(L, "THREAT_TOOLTIP", "%d%% Threat"),
+                                             {std::to_string(std::lround(pct - 0.5))}),
+                                1.0f, 1.0f, 1.0f);
+                        threatShown = true;
+                    }
+                    lua_pop(L, 5);
+                } else {
+                    lua_pop(L, 1);
+                }
+            } else {
+                lua_pop(L, 1);
+            }
+        }
+    }
+
     w->shown = true;
     // The unit counterpart of fireTooltipSetItem, and it was the one of the
     // pair that was never fired. GameTooltip declares
@@ -4752,7 +4787,7 @@ int lua_Tooltip_SetUnit(lua_State* L) {
     // unit's reaction - red for hostile, green for friendly - and without this
     // every one of them was drawn in the default colour instead.
     if (lua_istable(L, 1)) callScriptOnTable(L, 1, "OnTooltipSetUnit", 0.0);
-    lua_pushboolean(L, 1);
+    luaPushOneOrNil(L, threatShown ? 1 : 0);
     return 1;
 }
 
