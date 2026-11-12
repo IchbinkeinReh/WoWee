@@ -5023,6 +5023,13 @@ public:
     void updateNetworking();
     void updateTimers(float deltaTime);
     void updateEntityInterpolation(float deltaTime);
+    /// The frame's real length, uncapped, for the next update's units on
+    /// their moves (updateEntityInterpolation). The client runs a unit's
+    /// spline by the clock - its elapsed time is now less the time it started
+    /// (FUN_0098ca00: spline +0x28 = now - +0x24, +0x24 set to the world time
+    /// by FUN_0098c770) - so a long frame moves it as far as the time that
+    /// passed. Without it, the update's own delta is used.
+    void setUnitClockSeconds(float seconds) { unitClockSeconds_ = seconds; }
     void updateTaxiAndMountState(float deltaTime);
     void updateAutoAttack(float deltaTime);
 
@@ -5839,6 +5846,8 @@ public:
     }
 
 private:
+    /// setUnitClockSeconds: the frame's real length, until an update takes it.
+    std::optional<float> unitClockSeconds_;
     /// unitsCooperate, with unitMayAttack(a, b) asked only when not given.
     [[nodiscard]] bool unitsCooperateGiven(uint64_t a, uint64_t b, std::optional<bool> aMayAttackB) const;
     bool autoRepeating_ = false;

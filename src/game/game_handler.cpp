@@ -586,10 +586,16 @@ void GameHandler::updateEntityInterpolation(float deltaTime) {
 // creature then put it on the unconditional path and made it snap forward.
 // Entity interpolation is inexpensive; rendering retains its own distance
 // culling and remains the correct place to skip costly visual work.
+// By the frame's real length (setUnitClockSeconds), not the capped delta: a
+// stall of a few seconds left every moving unit that far behind where the
+// server had it, and its next move's start - the server's position - put it
+// right in one frame, 13 to 35 yards at a run.
+const float unitDelta = unitClockSeconds_.value_or(deltaTime);
+unitClockSeconds_.reset();
 for (const auto& [guid, entity] : entityController_->getEntityManager().getEntities()) {
     (void)guid;
     if (entity && entity->isUnit()) {
-        entity->updateMovement(deltaTime);
+        entity->updateMovement(unitDelta);
     }
 }
 }

@@ -2214,6 +2214,10 @@ void Application::run() {
         // coming back from sleep - does not teleport everything that
         // integrates over it.
         const float deltaTime = FramePacer::toSeconds(deltaNs);
+        // But the units on their moves go by the clock, as the client's
+        // splines do (GameHandler::setUnitClockSeconds); capped only where
+        // a float of seconds stays exact enough.
+        if (gameHandler) gameHandler->setUnitClockSeconds(FramePacer::toSeconds(deltaNs, 3600.0f));
 
         // A lost GPU device, from the loss until it is rebuilt: the session
         // kept up, nothing drawn or uploaded, and the rebuild tried when
