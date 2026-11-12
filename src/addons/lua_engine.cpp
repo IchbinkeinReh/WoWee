@@ -3380,6 +3380,34 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
     }
     if (talent && talent->hints && talent->facts) addTalentHints(L, w, *talent->facts);
 
+    // A trade spell that makes an item (Attributes 0x20 with effect 0x18,
+    // 0x9d or 0x3b) ends with that item's tooltip, EffectItemType[0]'s,
+    // appended (0x006277f0); one the cache has not answered is asked for.
+    if (const auto ie = gh->spellNameCacheRef().find(spellId); ie != gh->spellNameCacheRef().end()) {
+        const auto& sp = ie->second;
+        const bool makes = (sp.attr & 0x20u) != 0 &&
+            std::any_of(std::begin(sp.effectIds), std::end(sp.effectIds), [](uint32_t x) {
+                return x == 0x18 || x == 0x9d || x == 0x3b;
+            });
+        if (makes && sp.effectItemType0 != 0 && widgetOf(L, 1) == w) {
+            const auto* item = gh->getItemInfo(sp.effectItemType0);
+            if (!item || !item->valid) {
+                gh->ensureItemInfo(sp.effectItemType0);
+            } else {
+                lua_getglobal(L, "_WoweePopulateItemTooltip");
+                if (lua_isfunction(L, -1)) {
+                    lua_pushvalue(L, 1);
+                    lua_pushnumber(L, sp.effectItemType0);
+                    lua_pushnil(L);
+                    lua_pushboolean(L, 1);
+                    if (lua_pcall(L, 4, 0, 0) != 0) lua_pop(L, 1);
+                } else {
+                    lua_pop(L, 1);
+                }
+            }
+        }
+    }
+
     w->shown = true;
     return true;
 }
@@ -11569,12 +11597,14 @@ void LuaEngine::registerCoreAPI() {
         "    end\n"
         "    return table.concat(parts, TIME_UNIT_DELIMITER or ' ')\n"
         "end\n"
-        "function _WoweePopulateItemTooltip(self, itemId, inst)\n"
+        // `append` goes on under what the tooltip holds - a trade spell's
+        // tooltip ends with its item's (0x006277f0 with its eighth argument).
+        "function _WoweePopulateItemTooltip(self, itemId, inst, append)\n"
         "    local name, itemLink, quality, iLevel, reqLevel, class, subclass, maxStack, equipSlot, texture, sellPrice = GetItemInfo(itemId)\n"
         "    if not name then return false end\n"
         "    local qColors = {[0]={0.62,0.62,0.62},[1]={1,1,1},[2]={0.12,1,0},[3]={0,0.44,0.87},[4]={0.64,0.21,0.93},[5]={1,0.5,0},[6]={0.9,0.8,0.5},[7]={0,0.8,1}}\n"
         "    local c = qColors[quality or 1] or {1,1,1}\n"
-        "    self:SetText(name, c[1], c[2], c[3])\n"
+        "    if append then self:AddLine(name, c[1], c[2], c[3]) else self:SetText(name, c[1], c[2], c[3]) end\n"
         "    local data = _GetItemTooltipData(itemId)\n"
         // Colour-blind mode names the quality under the title, in white, and a
         // heroic item's as ITEM_HEROIC_EPIC in place of both that and the
@@ -11928,7 +11958,7 @@ void LuaEngine::registerCoreAPI() {
         "    elseif inst and inst.unsellable then\n"
         "        self:AddLine(ITEM_UNSELLABLE or 'No sell price', 1, 1, 1)\n"
         "    end\n"
-        "    self.__itemId = itemId\n"
+        "    if not append then self.__itemId = itemId end\n"
         "    return true\n"
         "end\n"
         // No SetInventoryItem here. It was written on this metatable and won,

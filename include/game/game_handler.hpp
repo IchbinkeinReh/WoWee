@@ -5713,6 +5713,9 @@ public:
         uint32_t startRecoveryMs = 0;
         uint32_t dmgClass = 0;
         uint32_t createdItemId = 0;
+        /// Spell.dbc EffectItemType[0] as it stands: the item a trade spell's
+        /// tooltip appends (0x006238a0 -> 0x006277f0).
+        uint32_t effectItemType0 = 0;
         SpellReagent reagents[8] = {};
         uint32_t trivialSkillHigh = 0;
         uint32_t trivialSkillLow = 0;

@@ -6232,6 +6232,7 @@ void SpellHandler::loadSpellNameCache() const {
             if (categoryRecoveryField != 0xFFFFFFFF && categoryRecoveryField < fieldCount)
                 entry.categoryRecoveryMs = dbc->getUInt32(i, categoryRecoveryField);
             if (hasEffectFields) {
+                entry.effectItemType0 = dbc->getUInt32(i, itemTypeFields[0]);
                 for (int e = 0; e < 3; ++e) {
                     const uint32_t effect = dbc->getUInt32(i, effectFields[e]);
                     if (effect == 24 || effect == 114) {   // CREATE_ITEM, CREATE_ITEM_2
