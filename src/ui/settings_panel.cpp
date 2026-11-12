@@ -946,7 +946,7 @@ constexpr const char* kGraphicsPresetKeys[] = {
     "lensflare", "sharpstars", "sunshafts", "lightshafts", "fogskyblend",
     "specular",
     "environmentdetail", "groundclutterdistance", "particledensity", "weatherdetail",
-    "texturecompression",
+    "texturecompression", "interactivewater",
 };
 
 /// Every graphics setting that has to reach something when it is loaded.
@@ -972,7 +972,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "animatedportraits",
     "fogskyblend", "fogstrength", "sharpstars", "lightshafts", "mistdensity", "sunshafts",
     "lensflare",
-    "screenglow", "raytracedlighting", "rtfullres", "rtsoftlamps", "rtrealisticfalloff", "rtpointselfshadow", "rtunitselfshadow", "rtroomsun", "rtunitshadowreach", "rtminbrightness", "rtwater", "rtswimwaves", "rtwaveamp", "rtwavefreq", "rtnormalkeep", "rtnormalface", "rteyebrighten", "rteyeseconds",
+    "screenglow", "raytracedlighting", "rtfullres", "rtsoftlamps", "rtrealisticfalloff", "rtpointselfshadow", "rtunitselfshadow", "rtroomsun", "rtunitshadowreach", "rtminbrightness", "rtwater", "rtswimwaves", "interactivewater", "rtwaveamp", "rtwavefreq", "rtnormalkeep", "rtnormalface", "rteyebrighten", "rteyeseconds",
     "rteyesensitivity",
     "rtsunrays", "rtaorays", "rtpointrays", "rtbouncerays",
     // The Debug Graphics settings: each applies all of them.
@@ -1046,6 +1046,7 @@ void SettingsPanel::applyGraphicsPreset(GraphicsPreset preset) {
         pendingParticleDensity       = p.particleDensity;
         pendingWeatherDetail         = p.weatherDetail;
         pendingTextureCompression    = p.textureCompression;
+        pendingInteractiveWater      = p.interactiveWater;
         // Each one goes to the thing it affects through the one function that
         // knows where that is, rather than through a second copy of the same
         // renderer calls written out here.
@@ -1105,6 +1106,7 @@ SettingsPanel::GraphicsPreset SettingsPanel::matchingGraphicsPreset() const {
             std::abs(pendingParticleDensity - p.particleDensity) <= 5 &&
             pendingWeatherDetail == p.weatherDetail &&
             pendingTextureCompression == p.textureCompression &&
+            pendingInteractiveWater == p.interactiveWater &&
             // As with shadows: a preset that grows no grass says nothing about
             // how dense, how tall or how far it would have been.
             (!p.grass || (std::abs(pendingGrassDensity - p.grassDensity) <= 5 &&
@@ -1180,6 +1182,7 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "rtminbrightness", .asInt = &SettingsPanel::pendingRtMinBrightness},
     {.key = "rtwater", .asBool = &SettingsPanel::pendingRtWater},
     {.key = "rtswimwaves", .asBool = &SettingsPanel::pendingRtSwimWaves},
+    {.key = "interactivewater", .asBool = &SettingsPanel::pendingInteractiveWater},
     {.key = "rtroomsun", .asBool = &SettingsPanel::pendingRtRoomSun},
     {.key = "rtwaveamp", .asInt = &SettingsPanel::pendingRtWaveAmp},
     {.key = "rtwavefreq", .asInt = &SettingsPanel::pendingRtWaveFreq},
@@ -1710,6 +1713,8 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         if (renderer) renderer->setRtMinBrightness(pendingRtMinBrightness);
     } else if (key == "rtwater") {
         if (renderer) renderer->setRtWater(pendingRtWater);
+    } else if (key == "interactivewater") {
+        if (renderer) renderer->setInteractiveWater(pendingInteractiveWater);
     } else if (key == "rtswimwaves") {
         if (renderer) renderer->setRtSwimWaves(pendingRtSwimWaves);
     } else if (key == "rtroomsun") {

@@ -2103,6 +2103,7 @@ void WaterRenderer::updateWake(float deltaTime, const glm::vec2& pos,
     }
     frameUBO_.wakeBounds.x = static_cast<float>(groups.size());
     frameUBO_.wakeBounds.w = static_cast<float>(count);
+    frameUBO_.wakeBounds.z = interactiveWater_ ? 1.0f : 0.0f;
     // Uploaded when the frame is recorded, not here: this runs before the frame
     // has waited for its slot, and the slot it would name is still being read
     // by the frame the GPU is drawing.

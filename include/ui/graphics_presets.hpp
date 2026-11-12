@@ -90,6 +90,10 @@ struct GraphicsPresetValues {
     /// setting). On for Low, which is for the cards with the least memory;
     /// off elsewhere, the composited skins being a little lossy.
     bool  textureCompression;
+    /// Interactive water (WoWee only, user decision 2026-11-11): the traced
+    /// water's bow waves and wakes behind what moves through it. Off on Low
+    /// and Medium, on from High up.
+    bool  interactiveWater;
 };
 
 // Note the shadows column: Low turns them off, as the client's own Low does
@@ -110,10 +114,10 @@ struct GraphicsPresetValues {
 // (FrameXML GraphicsQualityLevels.lua): Low 177, Good 727, High 1057 and Ultra
 // 1277 - its Fair, 507, has no row here.
 constexpr GraphicsPresetValues kGraphicsPresets[] = {
-    /* Low    */ { .viewDistance = 177.0f, .shadows = false, .shadowDistance = 100.0f, .antiAliasing = 0, .fxaa = false, .normalMapping = false, .normalMapStrength = 0.3f, .groundClutter = 25,  .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .specular = false, .environmentDetail = 50,  .groundClutterDistance = 70,  .particleDensity = 10,  .weatherDetail = 0, .textureCompression = true},
-    /* Medium */ { .viewDistance = 727.0f, .shadows = true,  .shadowDistance = 200.0f, .antiAliasing = 1, .fxaa = false, .normalMapping = true,  .normalMapStrength = 0.3f, .groundClutter = 60,  .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .specular = false, .environmentDetail = 100, .groundClutterDistance = 120, .particleDensity = 60,  .weatherDetail = 2, .textureCompression = false},
-    /* High   */ {.viewDistance = 1057.0f, .shadows = true,  .shadowDistance = 350.0f, .antiAliasing = 2, .fxaa = false, .normalMapping = true,  .normalMapStrength = 0.3f, .groundClutter = 100, .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .specular = false, .environmentDetail = 125, .groundClutterDistance = 130, .particleDensity = 80,  .weatherDetail = 3, .textureCompression = false},
-    /* Ultra  */ {.viewDistance = 1277.0f, .shadows = true,  .shadowDistance = 500.0f, .antiAliasing = 3, .fxaa = false, .normalMapping = true,  .normalMapStrength = 0.3f, .groundClutter = 150, .grass = true,  .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .specular = false, .environmentDetail = 150, .groundClutterDistance = 140, .particleDensity = 100, .weatherDetail = 3, .textureCompression = false},
+    /* Low    */ { .viewDistance = 177.0f, .shadows = false, .shadowDistance = 100.0f, .antiAliasing = 0, .fxaa = false, .normalMapping = false, .normalMapStrength = 0.3f, .groundClutter = 25,  .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .specular = false, .environmentDetail = 50,  .groundClutterDistance = 70,  .particleDensity = 10,  .weatherDetail = 0, .textureCompression = true, .interactiveWater = false},
+    /* Medium */ { .viewDistance = 727.0f, .shadows = true,  .shadowDistance = 200.0f, .antiAliasing = 1, .fxaa = false, .normalMapping = true,  .normalMapStrength = 0.3f, .groundClutter = 60,  .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .specular = false, .environmentDetail = 100, .groundClutterDistance = 120, .particleDensity = 60,  .weatherDetail = 2, .textureCompression = false, .interactiveWater = false},
+    /* High   */ {.viewDistance = 1057.0f, .shadows = true,  .shadowDistance = 350.0f, .antiAliasing = 2, .fxaa = false, .normalMapping = true,  .normalMapStrength = 0.3f, .groundClutter = 100, .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .specular = false, .environmentDetail = 125, .groundClutterDistance = 130, .particleDensity = 80,  .weatherDetail = 3, .textureCompression = false, .interactiveWater = true},
+    /* Ultra  */ {.viewDistance = 1277.0f, .shadows = true,  .shadowDistance = 500.0f, .antiAliasing = 3, .fxaa = false, .normalMapping = true,  .normalMapStrength = 0.3f, .groundClutter = 150, .grass = true,  .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .specular = false, .environmentDetail = 150, .groundClutterDistance = 140, .particleDensity = 100, .weatherDetail = 3, .textureCompression = false, .interactiveWater = true},
 };
 
 /// The number of presets, not counting Custom - which is not a set of values
