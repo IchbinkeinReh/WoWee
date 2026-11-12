@@ -5668,7 +5668,13 @@ int lua_Tooltip_SetGuildBankItem(lua_State* L) {
 
     for (const auto& it : *items) {
         if (it.slotId + 1 != slot) continue;
-        lua_pushboolean(L, fillItemTooltipById(L, gh, it.itemEntry) ? 1 : 0);
+        // With the slot's count (0x006304a0, +0x4b8).
+        lua_pushnumber(L, it.stackCount);
+        lua_setglobal(L, "__WoweeTooltipItemCount");
+        const bool filled = fillItemTooltipById(L, gh, it.itemEntry);
+        lua_pushnil(L);
+        lua_setglobal(L, "__WoweeTooltipItemCount");
+        lua_pushboolean(L, filled ? 1 : 0);
         return 1;
     }
     lua_pushboolean(L, 0);
@@ -11863,10 +11869,20 @@ void LuaEngine::registerCoreAPI() {
         "    local _, name = GetLootSlotInfo(slot)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
         "end\n"
+        // A link drawn with the count its setter hands 0x006277f0 (+0x4b8),
+        // for the price of the whole pile.
+        "function __WoweeSetHyperlinkCounted(self, link, count)\n"
+        "    __WoweeTooltipItemCount = count\n"
+        "    local ok, r1, r2 = pcall(self.SetHyperlink, self, link)\n"
+        "    __WoweeTooltipItemCount = nil\n"
+        "    if not ok then error(r1, 0) end\n"
+        "    return r1, r2\n"
+        "end\n"
+        // 0x006300a0, with the roll's count.
         "function __WoweeFrameMT:SetLootRollItem(rollId)\n"
         "    self:ClearLines()\n"
         "    local link = GetLootRollItemLink and GetLootRollItemLink(rollId)\n"
-        "    if link then return self:SetHyperlink(link) end\n"
+        "    if link then return __WoweeSetHyperlinkCounted(self, link, select(3, GetLootRollItemInfo(rollId))) end\n"
         "end\n"
         // The merchant item's index rides along while its link is drawn, so
         // the item tooltip can say the arena rating its cost asks for.
@@ -11886,7 +11902,7 @@ void LuaEngine::registerCoreAPI() {
         "function __WoweeFrameMT:SetBuybackItem(index)\n"
         "    self:ClearLines()\n"
         "    local link = GetBuybackItemLink and GetBuybackItemLink(index)\n"
-        "    if link then return self:SetHyperlink(link) end\n"
+        "    if link then return __WoweeSetHyperlinkCounted(self, link, select(4, GetBuybackItemInfo(index))) end\n"
         "    local name = GetBuybackItemInfo(index)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
         "end\n"
@@ -11948,7 +11964,12 @@ void LuaEngine::registerCoreAPI() {
         "function __WoweeFrameMT:SetQuestLogItem(itemType, index)\n"
         "    self:ClearLines()\n"
         "    local link = GetQuestLogItemLink and GetQuestLogItemLink(itemType, index)\n"
-        "    if link then return self:SetHyperlink(link) end\n"
+        "    if link then\n"
+        "        local count\n"
+        "        if itemType == 'choice' then count = select(3, GetQuestLogChoiceInfo(index))\n"
+        "        else count = select(3, GetQuestLogRewardInfo(index)) end\n"
+        "        return __WoweeSetHyperlinkCounted(self, link, count)\n"
+        "    end\n"
         "    local name = GetQuestItemInfo(itemType, index)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
         "end\n"
@@ -11970,7 +11991,7 @@ void LuaEngine::registerCoreAPI() {
         "function __WoweeFrameMT:SetTradePlayerItem(index)\n"
         "    self:ClearLines()\n"
         "    local link = GetTradePlayerItemLink and GetTradePlayerItemLink(index)\n"
-        "    if link then return self:SetHyperlink(link) end\n"
+        "    if link then return __WoweeSetHyperlinkCounted(self, link, select(3, GetTradePlayerItemInfo(index))) end\n"
         "    local name = GetTradePlayerItemInfo(index)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
         "end\n"
@@ -11980,7 +12001,7 @@ void LuaEngine::registerCoreAPI() {
         "function __WoweeFrameMT:SetTradeTargetItem(index)\n"
         "    self:ClearLines()\n"
         "    local link = GetTradeTargetItemLink and GetTradeTargetItemLink(index)\n"
-        "    if link then return self:SetHyperlink(link) end\n"
+        "    if link then return __WoweeSetHyperlinkCounted(self, link, select(3, GetTradeTargetItemInfo(index))) end\n"
         "    local name = GetTradeTargetItemInfo(index)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
         "end\n"
