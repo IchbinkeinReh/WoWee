@@ -8031,6 +8031,16 @@ void Application::setHighlightedGameObject(uint64_t guid) {
         if (it != objects.end()) {
             instance = it->second.instanceId;
             kind = it->second.isWmo ? 2 : 1;
+        } else if (auto c = entitySpawner_->getCreatureInstances().find(guid);
+                   c != entitySpawner_->getCreatureInstances().end()) {
+            // A unit's model, in the character renderer (0x00743c70 is the
+            // object's, whatever kind of object it is).
+            instance = c->second;
+            kind = 3;
+        } else if (auto p = entitySpawner_->getPlayerInstances().find(guid);
+                   p != entitySpawner_->getPlayerInstances().end()) {
+            instance = p->second;
+            kind = 3;
         }
     }
     if (instance == highlightedInstance_ && kind == highlightedKind_) return;
@@ -8045,6 +8055,7 @@ void Application::setHighlightedGameObject(uint64_t guid) {
     // a despawn could have handed to another model.
     if (m2) m2->clearInstanceHighlights();
     if (wmo) wmo->clearInstanceHighlights();
+    if (auto* cr = renderer->getCharacterRenderer()) cr->setHighlightedInstance(kind == 3 ? instance : 0);
     // 0x00743c70 on the new one. A WMO gets the light's ambient added into
     // its c29 (0x007964a0 compares its GUID with the one recorded here,
     // 0x007a8430); an M2 gets it in +0x18c..0x194, added to its ambient.

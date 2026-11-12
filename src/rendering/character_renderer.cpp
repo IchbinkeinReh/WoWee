@@ -4472,6 +4472,7 @@ void CharacterRenderer::renderPass(VkCommandBuffer cmd, VkDescriptorSet perFrame
         {
             float extent = 2.0f * gpuModel.data.boundRadius * std::max(instance.scale, 0.001f);
             charPush.lightFlags.z = glm::clamp(extent, kSelfShadowMinExtent, kSelfShadowMaxExtent);
+            charPush.lightFlags.w = instance.highlighted ? 1.0f : 0.0f;
         }
         charPush.diffuseColour = glm::vec4(instance.diffuseColour, 0.0f);
 
@@ -5694,6 +5695,10 @@ void CharacterRenderer::setInstanceCameraAlpha(uint32_t instanceId, float alpha)
             if (auto fxIt = instances.find(fx.effectInstanceId); fxIt != instances.end()) fxIt->second.cameraAlpha = a;
         }
     }
+}
+
+void CharacterRenderer::setHighlightedInstance(uint32_t instanceId) {
+    for (auto& [id, instance] : instances) instance.highlighted = id == instanceId && instanceId != 0;
 }
 
 void CharacterRenderer::setInstanceOpacity(uint32_t instanceId, float opacity) {

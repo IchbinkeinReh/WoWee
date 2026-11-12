@@ -273,6 +273,8 @@ public:
     void setLocomotionSpeed(uint32_t instanceId, float yardsPerSecond);
     void startFadeIn(uint32_t instanceId, float durationSeconds);
     void setInstanceOpacity(uint32_t instanceId, float opacity);
+    /// The mouseover highlight on one instance, off on every other.
+    void setHighlightedInstance(uint32_t instanceId);
     /// How much of the model the camera's closeness leaves (0x00737390), on
     /// top of its own opacity; its weapons go with it.
     void setInstanceCameraAlpha(uint32_t instanceId, float alpha);
@@ -821,6 +823,8 @@ private:
         // 0x00781a10), and lightFlags as drawn.
         float directScale = 1.0f;
         glm::vec4 drawFlags{0.0f, 1.0f, 0.0f, 0.0f};
+        /// The mouseover highlight (0x00743c70), drawn as lightFlags.w.
+        bool highlighted = false;
 
         // Enchant visual attached to a weapon. It needs its animation advanced
         // even though its transform comes from the parent; it is drawn by its

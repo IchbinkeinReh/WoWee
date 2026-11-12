@@ -2210,8 +2210,9 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                                     : nullptr;
         const bool highlights =
             gameHandler.isUiVisible() || addons::storedCVarValue("unitHighlights", "1") != "0";
-        core::Application::getInstance().setHighlightedGameObject(
-            highlights && entity && entity->getType() == game::ObjectType::GAMEOBJECT ? highlightGuid : 0);
+        // On whatever the pointer rests on - a unit as well as an object
+        // (0x0051f790 -> 0x00743c70).
+        core::Application::getInstance().setHighlightedGameObject(highlights && entity ? highlightGuid : 0);
     }
 
     // Left-click targeting: only on mouse-up if the mouse didn't drag (camera rotate)
