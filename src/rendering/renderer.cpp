@@ -17,6 +17,8 @@
 #include <fstream>
 #include <iterator>
 #include "addons/lua_api_registrations.hpp"
+#include "rendering/horizon_renderer.hpp"
+#include "pipeline/wdl_loader.hpp"
 #include "core/env_flag.hpp"
 #include "rendering/sky_params_from_lighting.hpp"
 #include "core/coordinates.hpp"
@@ -919,6 +921,11 @@ bool Renderer::initialize(core::Window* win) {
         LOG_ERROR("Failed to initialize sky system");
         return false;
     }
+    horizon_ = std::make_unique<HorizonRenderer>();
+    if (!horizon_->initialize(vkCtx, perFrameSetLayout)) {
+        LOG_WARNING("Horizon initialization failed (non-fatal)");
+        horizon_.reset();
+    }
     // Expose sub-components via renderer accessors
     skybox = nullptr;  // Owned by skySystem; access via skySystem->getSkybox()
     celestial = nullptr;
@@ -1217,6 +1224,10 @@ void Renderer::shutdown() {
         screenEffects_.reset();
     }
 
+    if (horizon_) {
+        horizon_->shutdown();
+        horizon_.reset();
+    }
     LOG_DEBUG("Renderer::shutdown - skySystem...");
     if (skySystem) {
         skySystem->shutdown();
@@ -1486,6 +1497,7 @@ void Renderer::applyMsaaChange() {
     if (mountDust) mountDust->recreatePipelines();
     if (fishingLines_) fishingLines_->recreatePipelines();
     if (worldText_) worldText_->recreatePipelines();
+    if (horizon_) horizon_->recreatePipelines();
 
     // Sky system sub-renderers
     if (skySystem) {
@@ -4691,6 +4703,12 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             WOWEE_PROFILE_SCOPE("record sky", Cpu);
             VkCommandBuffer cmd = beginSecondary(SEC_SKY);
             setSecondaryViewportScissor(cmd);
+            // The horizon first: it writes the depth the sky's layers are
+            // then kept off by, as the client draws it over its sky.
+            if (horizon_ && camera && drawTerrain) {
+                horizon_->update(cachedAssetManager);
+                horizon_->render(cmd, perFrameSet, *camera, farClip_, horizonScale_);
+            }
             if (skySystem && camera && !skipSky) {
                 rendering::SkyParams skyParams = rendering::skyParamsFromLighting(
                     timeOfDay,
@@ -4879,6 +4897,10 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         }
 
         // Sky after the ground, for the reason given on the parallel path.
+        if (horizon_ && camera && terrainRenderer && terrainEnabled && !skipTerrain) {
+            horizon_->update(cachedAssetManager);
+            horizon_->render(currentCmd, perFrameSet, *camera, farClip_, horizonScale_);
+        }
         if (skySystem && camera && !skipSky) {
             rendering::SkyParams skyParams = rendering::skyParamsFromLighting(
                 timeOfDay,
@@ -5441,6 +5463,9 @@ void Renderer::setActiveMapName(const std::string& name) {
     if (minimap) minimap->setMapName(name);
     if (worldMap) worldMap->setMapName(name);
     if (wmoRenderer) wmoRenderer->setMapName(name);
+    if (horizon_) horizon_->setMapName(name);
+    horizonScale_ = pipeline::wdl::clampHorizonScale(static_cast<float>(
+        std::atof(addons::storedCVarValue("horizonFarclipScale", "4.0").c_str())));
 }
 
 bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const std::string& mapName) {

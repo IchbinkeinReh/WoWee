@@ -57,6 +57,7 @@ class Camera;
 class CameraController;
 class TerrainRenderer;
 class TerrainManager;
+class HorizonRenderer;
 class PerformanceHUD;
 class WaterRenderer;
 class Skybox;
@@ -482,6 +483,9 @@ private:
     std::unique_ptr<Lightning> lightning;
     std::unique_ptr<LightingManager> lightingManager;
     std::unique_ptr<SkySystem> skySystem;  // Coordinator for sky rendering
+    // The .wdl horizon past the far clip (0x007cc0b0), drawn with the sky.
+    std::unique_ptr<HorizonRenderer> horizon_;
+    float horizonScale_ = 4.0f;  // horizonFarclipScale, 3..6 (0x0078d7c0)
     std::unique_ptr<SwimEffects> swimEffects;
     std::unique_ptr<MountDust> mountDust;
     std::unique_ptr<LevelUpEffect> levelUpEffect;

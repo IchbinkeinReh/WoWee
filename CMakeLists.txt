@@ -865,6 +865,7 @@ set(WOWEE_SOURCES
     src/pipeline/wmo_loader.cpp
     src/pipeline/adt_loader.cpp
     src/pipeline/wdt_loader.cpp
+    src/pipeline/wdl_loader.cpp
     src/pipeline/wowee_terrain_loader.cpp
     src/pipeline/wowee_model.cpp
     src/pipeline/wowee_model_fromm2.cpp
@@ -1125,6 +1126,7 @@ set(WOWEE_SOURCES
     src/rendering/swim_effects.cpp
     src/rendering/mount_dust.cpp
     src/rendering/fishing_line.cpp
+    src/rendering/horizon_renderer.cpp
     src/rendering/world_text_renderer.cpp
     src/rendering/levelup_effect.cpp
     src/rendering/spell_visual_system.cpp
@@ -1294,6 +1296,8 @@ set(WOWEE_HEADERS
     include/pipeline/wmo_loader.hpp
     include/pipeline/adt_loader.hpp
     include/pipeline/wdt_loader.hpp
+    include/pipeline/wdl_loader.hpp
+    include/rendering/horizon_renderer.hpp
     include/pipeline/dbc_loader.hpp
     include/pipeline/terrain_mesh.hpp
 

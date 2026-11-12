@@ -3475,6 +3475,12 @@ wowee_add_test(test_detail_doodad_placement
 wowee_add_test(test_weapon_attachment
     SOURCES test_weapon_attachment.cpp)
 
+# ── test_wdl_loader ─────────────────────────────────────────
+# The .wdl horizon's heights and tiles (pipeline/wdl_loader.hpp).
+wowee_add_test(test_wdl_loader
+    SOURCES test_wdl_loader.cpp
+            ${CMAKE_SOURCE_DIR}/src/pipeline/wdl_loader.cpp)
+
 # ── test_fishing_line ────────────────────────────────────────
 # The line from a fishing pole to its bobber (rendering/fishing_line_geometry.hpp).
 wowee_add_test(test_fishing_line
