@@ -29,9 +29,9 @@ struct ChatSettings;
  * it serialises cross-cutting state (chat, quest tracker, etc.).
  */
 /// The cameramaxdistance row counts yards; the CVar the game's own slider wrote,
-/// cameraDistanceMaxFactor, counts multiples of the 22 the original client
-/// gives, which is the scale on that row of kClientCVars.
-inline constexpr float cameraDistanceFactor(int yards) { return static_cast<float>(yards) / 22.0f; }
+/// cameraDistanceMaxFactor, counts multiples of cameraDistanceMax's default 15,
+/// which is the scale on that row of kClientCVars.
+inline constexpr float cameraDistanceFactor(int yards) { return static_cast<float>(yards) / 15.0f; }
 
 class SettingsPanel {
 public:
@@ -206,7 +206,7 @@ public:
     float pendingGamepadLookSpeed = 180.0f;   // degrees a second at full stick
     bool pendingGamepadInvertLook = false;
     float pendingGamepadDeadzone = 0.18f;
-    int pendingCameraMaxDistance = 22;     // Yards; the CVar counts multiples of this default
+    int pendingCameraMaxDistance = 15;     // Yards; the CVar counts multiples of this default
     float pendingPivotHeight = 1.6f;       // Camera pivot height above feet (lower = less detached feel)
     float pendingFov = 54.0f;
     float pendingCameraShake = 1.0f;  // 0 = off, 1 = the full amount  // degrees, default matches WoW's ~70° horizontal FOV
@@ -313,7 +313,7 @@ public:
     /// cvar in kClientCVars, so the two are one value rather than two that
     /// can disagree - which is why they are settings here rather than
     /// another store beside the one the panel wrote.
-    int pendingGroundClutterDistance = 140;   ///< yards
+    int pendingGroundClutterDistance = 70;    ///< yards; groundEffectDist's 70
     int pendingParticleDensity = 100;         ///< percent of what an effect asks for
     int pendingWeatherDetail = 2;             ///< weatherDensity 0-3, "2" as the client (0x00787780)
     int pendingEnvironmentDetail = 100;       ///< percent

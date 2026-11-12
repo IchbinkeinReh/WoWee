@@ -26,6 +26,8 @@
 #include "network/world_socket.hpp"
 #include "addons/addon_lua_snippets.hpp"
 #include "game/chat_channels.hpp"
+#include "game/difficulty_change.hpp"
+#include "game/pet_action.hpp"
 #include "game/interface_text.hpp"
 #include "game/item_stat_text.hpp"
 #include "rendering/minimap_zoom.hpp"
@@ -46,6 +48,9 @@
 #include "addons/button_label_lua.hpp"
 #include "addons/binding_command.hpp"
 #include "pipeline/asset_manager.hpp"
+#include "pipeline/dbc_layout.hpp"
+#include "ui/unit_summon_title.hpp"
+#include "game/quest_objectives.hpp"
 #include "core/window.hpp"
 #include <imgui.h>
 #include <fstream>
@@ -2247,8 +2252,12 @@ int lua_MessageFrame_AddMessage(lua_State* L) {
         else                      w->messages.pop_front();
     }
     // A new line at the bottom means the view follows it, which is what a
-    // chat frame does unless someone has scrolled up.
-    if (w->messageScroll > 0) ++w->messageScroll;
+    // chat frame does unless someone has scrolled up: then the view stays on
+    // what it shows, back by the new message's lines (counted once drawn).
+    if (w->messageScroll > 0) {
+        ++w->messageScroll;
+        (w->messagesInsertTop ? w->messages.front() : w->messages.back()).scrollCredit = true;
+    }
     // The slot the line took in the client's ring of maxLines.
     w->messageRingLine = (w->messageRingLine + 1) % static_cast<int>(std::max<size_t>(w->maxMessages, 1));
     return 0;
@@ -2318,6 +2327,43 @@ int lua_MessageFrame_RemoveMessagesByAccessID(lua_State* L) {
 /// Zero, the default, means for good, which is what a chat frame wants.
 /// UIErrorsFrame declares five and it was dropped, so every refusal the server
 /// sent stayed on screen until a hundred and twenty-eight had piled up.
+/// FontString:SetAlphaGradient(start, length) (0x0048d0f0 -> 0x006c78f0):
+/// the first `start` glyphs drawn whole, the next `length` fading out, the
+/// rest not drawn. 1 while the start is still inside the text, nil once it
+/// has passed the last glyph or for a negative argument - which is how the
+/// quest window knows its words have all faded in.
+int lua_FontString_SetAlphaGradient(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!lua_isnumber(L, 2) || !lua_isnumber(L, 3)) {
+        return luaL_error(L, "Usage: %s:SetAlphaGradient(start, length)", w && !w->name.empty() ? w->name.c_str() : "<unnamed>");
+    }
+    const int start = static_cast<int>(lua_tonumber(L, 2));
+    const int length = static_cast<int>(lua_tonumber(L, 3));
+    if (!w) { luaPushOneOrNil(L, 1); return 1; }
+    w->alphaGradientStart = start;
+    w->alphaGradientLength = length;
+    if (start < 0 || length < 0) { luaPushOneOrNil(L, 0); return 1; }
+    // The glyphs the text draws: what is left once its markup is read,
+    // spaces drawing nothing.
+    int glyphs = 0;
+    for (size_t i = 0; i < w->text.size();) {
+        const char c = w->text[i];
+        if (c == '|' && i + 1 < w->text.size()) {
+            const char tag = w->text[i + 1];
+            if (tag == 'c') { i += 10; continue; }
+            if (tag == 'r') { i += 2; continue; }
+            if (tag == 'H') { const size_t e = w->text.find("|h", i + 2); i = e == std::string::npos ? w->text.size() : e + 2; continue; }
+            if (tag == 'h') { i += 2; continue; }
+            if (tag == 'T') { const size_t e = w->text.find("|t", i + 2); i = e == std::string::npos ? w->text.size() : e + 2; continue; }
+        }
+        const unsigned char lead = static_cast<unsigned char>(c);
+        if ((lead & 0xc0u) != 0x80u && c != ' ' && c != '\n' && c != '\t') ++glyphs;
+        ++i;
+    }
+    luaPushOneOrNil(L, start < glyphs ? 1 : 0);
+    return 1;
+}
+
 int lua_FontString_SetWordWrap(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (w) w->wordWrap = lua_toboolean(L, 2) != 0;
@@ -2684,6 +2730,9 @@ int lua_Tooltip_SetOwner(lua_State* L) {
     w->isTooltip = true;
     // Cleared here, because SetOwner is what precedes a fresh set of lines.
     w->tooltipLines.clear();
+    // And a fade under way is called off, the tooltip whole again (0x0061ea00).
+    w->tooltipFadeLeft = 0.0f;
+    w->alpha = 1.0f;
 
     // Remembered, because IsOwned reads it and nothing wrote it - so every
     // check answered false and a tooltip outlived the frame it belonged to.
@@ -2890,8 +2939,116 @@ static std::string withNumber(const std::string& format, const char* token, floa
     return out;
 }
 
+static std::string formatGlobal(lua_State* L, const std::string& format,
+                                const std::vector<std::string>& args);
+
+/// A talent's part in a spell tooltip (0x006238a0's arguments 9 to 16):
+/// the facts, whether this is the next rank's half (appended under
+/// TOOLTIP_TALENT_NEXT_RANK) and whether the learn hints close it.
+struct TalentTooltipPart {
+    const wowee::addons::TalentTooltipFacts* facts = nullptr;
+    bool nextRank = false;
+    bool hints = false;
+};
+static constexpr float kTalentWhite[3] = {1.0f, 1.0f, 1.0f};
+static constexpr float kTalentGold[3] = {1.0f, 0.824f, 0.0f};    // 0xad2d2c
+static constexpr float kTalentRed[3] = {1.0f, 0.125f, 0.125f};   // 0xad2d34
+static constexpr float kTalentGreen[3] = {0.0f, 1.0f, 0.0f};     // 0xad2d40
+static std::string withPlural(std::string text, int n);
+
+static void addTalentLine(wowee::ui::Widget* w, std::string text, const float* rgb) {
+    wowee::ui::Widget::TooltipLine l;
+    l.left = std::move(text);
+    l.lc[0] = rgb[0]; l.lc[1] = rgb[1]; l.lc[2] = rgb[2]; l.lc[3] = 1.0f;
+    l.rc[0] = l.rc[1] = l.rc[2] = l.rc[3] = 1.0f;
+    w->tooltipLines.push_back(std::move(l));
+}
+
+/// After the title: TOOLTIP_TALENT_RANK (shown rank, last rank, one-based)
+/// in white, and where no rank is shown 0x006224f0's red lines -
+/// TOOLTIP_TALENT_PREREQ, TOOLTIP_TALENT_TIER_POINTS, ITEM_REQ_SKILL.
+static void addTalentRankAndPrereqs(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh,
+                                    const wowee::addons::TalentTooltipFacts& f) {
+    if (f.maxIdx >= 0) {
+        addTalentLine(w, formatGlobal(L, globalOr(L, "TOOLTIP_TALENT_RANK", "Rank %d/%d"),
+                                      {std::to_string(f.shownIdx + 1), std::to_string(f.maxIdx + 1)}),
+                      kTalentWhite);
+    }
+    if (f.shownIdx >= 0) return;
+    for (const auto& [rank, spell] : f.prereqs) {
+        addTalentLine(w, withPlural(formatGlobal(L, globalOr(L, "TOOLTIP_TALENT_PREREQ", "Requires %d |4point:points; in %s"),
+                                                 {std::to_string(rank), gh->getSpellName(spell)}), rank),
+                      kTalentRed);
+    }
+    if (f.tierPoints > 0) {
+        addTalentLine(w, withPlural(formatGlobal(L, globalOr(L, "TOOLTIP_TALENT_TIER_POINTS",
+                                                             "Requires %d |4point:points; in %s Talents"),
+                                                 {std::to_string(f.tierPoints), f.tierTab}), f.tierPoints),
+                      kTalentRed);
+    }
+    if (f.requiredSpell != 0) {
+        addTalentLine(w, formatGlobal(L, globalOr(L, "ITEM_REQ_SKILL", "Requires %s"),
+                                      {gh->getSpellName(f.requiredSpell)}),
+                      kTalentRed);
+    }
+}
+
+/// 0x00622800's lines, last: TOOLTIP_TALENT_LEARN in green, or in a
+/// preview TALENT_TOOLTIP_ADDPREVIEWPOINT green and
+/// TALENT_TOOLTIP_REMOVEPREVIEWPOINT red.
+static void addTalentHints(lua_State* L, wowee::ui::Widget* w, const wowee::addons::TalentTooltipFacts& f) {
+    if (f.learnHint) addTalentLine(w, globalOr(L, "TOOLTIP_TALENT_LEARN", "Click to learn"), kTalentGreen);
+    if (f.addHint) addTalentLine(w, globalOr(L, "TALENT_TOOLTIP_ADDPREVIEWPOINT", "Click to add a talent point."), kTalentGreen);
+    if (f.removeHint) {
+        addTalentLine(w, globalOr(L, "TALENT_TOOLTIP_REMOVEPREVIEWPOINT", "Right-click to remove a talent point."),
+                      kTalentRed);
+    }
+}
+
+/// A global string for the player's gender, as GetText(key, UnitSex("player"))
+/// reads it (0x007225e0 with -1).
+static std::string genderedGlobal(lua_State* L, const std::string& key) {
+    lua_getglobal(L, "GetText");
+    if (!lua_isfunction(L, -1)) { lua_pop(L, 1); return globalOr(L, key.c_str(), key.c_str()); }
+    lua_pushstring(L, key.c_str());
+    lua_getglobal(L, "UnitSex");
+    if (lua_isfunction(L, -1)) {
+        lua_pushstring(L, "player");
+        if (lua_pcall(L, 1, 1, 0) != 0) { lua_pop(L, 1); lua_pushnil(L); }
+    }
+    if (lua_pcall(L, 2, 1, 0) != 0) { lua_pop(L, 1); return key; }
+    const char* v = lua_tostring(L, -1);
+    std::string out = v ? v : key;
+    lua_pop(L, 1);
+    return out;
+}
+
+/// A boolean CVar as GetCVar answers it - the panel's answer, defaults and
+/// all - read as on unless it says "0".
+static bool cvarOn(lua_State* L, const char* name) {
+    lua_getglobal(L, "GetCVar");
+    if (!lua_isfunction(L, -1)) { lua_pop(L, 1); return true; }
+    lua_pushstring(L, name);
+    if (lua_pcall(L, 1, 1, 0) != 0) { lua_pop(L, 1); return true; }
+    const char* v = lua_tostring(L, -1);
+    const bool on = !v || std::strcmp(v, "0") != 0;
+    lua_pop(L, 1);
+    return on;
+}
+
+/// The interface's UberTooltips choice: "0" makes an action button's spell
+/// tooltip the brief one (0x00631000 reads it).
+static bool uberTooltips(lua_State* L) { return cvarOn(L, "UberTooltips"); }
+
+/// `brief` is 0x006238a0's third argument - SetAction's with UberTooltips
+/// off: the name with its rank, no cost, reach or cast. `showRank` is its
+/// sixth, SetSpellByID's fourth: the rank beside the name in a full one.
 static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh,
-                             uint32_t spellId) {
+                             uint32_t spellId, bool brief = false, bool showRank = false,
+                             const TalentTooltipPart* talent = nullptr, bool pet = false) {
+    // 0x006238a0's fifth argument: a pet's spell is costed, timed, formed
+    // and levelled by the pet, and says nothing of tools or reagents.
+    const uint64_t casterGuid = pet ? gh->getPetGuid() : 0;
     if (!w || !gh || spellId == 0) return false;
     const std::string& name = gh->getSpellName(spellId);
     if (name.empty()) return false;
@@ -2906,42 +3063,280 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
     };
 
     w->isTooltip = true;
-    w->tooltipLines.clear();
-    // The name in white and its rank to the right in grey, as the spellbook
-    // shows them.
-    line(name, gh->getSpellRank(spellId), 1.0f, 1.0f, 1.0f);
-    {
-        auto& title = w->tooltipLines.back();
-        title.rc[0] = title.rc[1] = title.rc[2] = 0.5f;
+    if (talent && talent->nextRank) {
+        // A talent's next rank goes on under the one shown, headed
+        // "\n" TOOLTIP_TALENT_NEXT_RANK in white.
+        line(" ", "", 1.0f, 1.0f, 1.0f);
+        line(globalOr(L, "TOOLTIP_TALENT_NEXT_RANK", "Next Rank:"), "", 1.0f, 1.0f, 1.0f);
+    } else {
+        w->tooltipLines.clear();
+        // A trade spell (Attributes 0x20 with an enchant or create-item
+        // effect) is titled "<skill>: <name>" in gold by its skill line for
+        // the player's race and class (0x00812410), and has no title at all
+        // where none is found.
+        gh->loadSpellNameCache();
+        const auto te = gh->spellNameCacheRef().find(spellId);
+        const bool trade = te != gh->spellNameCacheRef().end() && (te->second.attr & 0x20u) != 0 &&
+            std::any_of(std::begin(te->second.effectIds), std::end(te->second.effectIds), [](uint32_t e) {
+                return e == 0x35 || e == 0x18 || e == 0x9d || e == 0x3b;
+            });
+        if (trade) {
+            if (const uint32_t skill = gh->spellSkillLine(spellId); skill != 0) {
+                if (const std::string& skillName = gh->getSkillName(skill); !skillName.empty()) {
+                    line(skillName + ": " + name, "", 1.0f, 0.824f, 0.0f);
+                    w->tooltipLines.back().rc[0] = 1.0f;
+                    w->tooltipLines.back().rc[1] = 0.824f;
+                    w->tooltipLines.back().rc[2] = 0.0f;
+                }
+            }
+        } else {
+            // The name in white and its rank to the right in grey - only in
+            // a brief tooltip or where the caller asks for it; SetSpell,
+            // SetHyperlink and a full SetAction leave the rank off.
+            line(name, brief || showRank ? gh->getSpellRank(spellId) : std::string(), 1.0f, 1.0f, 1.0f);
+            auto& title = w->tooltipLines.back();
+            title.rc[0] = title.rc[1] = title.rc[2] = 0.5f;
+        }
+        if (talent && talent->facts) addTalentRankAndPrereqs(L, w, gh, *talent->facts);
     }
 
-    const auto info = gh->getSpellData(spellId);
     std::string cost, range;
-    if (info.manaCost > 0) {
-        const char* named = game::powerTypeName(info.powerType);
-        const char* unit = named ? named : "";
-        // Over the power's divisor: rage and runic power are kept in tenths.
-        const uint32_t divisor = info.powerType < 7 ? wowee::addons::kPowerDivisors[info.powerType] : 1;
-        cost = std::to_string(info.manaCost / divisor) + (*unit ? std::string(" ") + unit : "");
+    // The cost over its divisor and the power it is in, kept for the cast
+    // line's Instant / Instant cast.
+    int32_t shownCost = 0, shownPower = 0;
+    // The cost, as 0x006238a0 words it, over the power's divisor
+    // (0x007fde00): a rune spell's RUNE_COST_BLOOD/UNHOLY/FROST joined by
+    // spaces; one with a cost each second "<POWER>_COST_PER_TIME" (cost,
+    // per second); else "<POWER>_COST" from 1 up - MANA_COST to
+    // RUNIC_POWER_COST, HEALTH_COST for any other type. A spell whose
+    // power has a PowerDisplay row names it by that row's string instead
+    // (POWER_DISPLAY_COST, POWER_DISPLAY_COST_PER_TIME).
+    if (const auto* sh = gh->getSpellHandler(); sh && !brief) {
+        static constexpr const char* kCostKeys[] = {"MANA_COST", "RAGE_COST", "FOCUS_COST", "ENERGY_COST",
+                                                    "HAPPINESS_COST", "RUNE_COST", "RUNIC_POWER_COST"};
+        const auto c = sh->tooltipCost(spellId, casterGuid);
+        const bool listed = c.powerType >= 0 && c.powerType < 7;
+        const int32_t divisor = listed ? static_cast<int32_t>(wowee::addons::kPowerDivisors[c.powerType]) : 1;
+        const int32_t amount = c.cost / divisor;
+        const int32_t perSecond = c.perSecond / divisor;
+        shownCost = amount;
+        shownPower = c.powerType;
+        const std::string key = listed ? kCostKeys[c.powerType] : "HEALTH_COST";
+        std::optional<std::string> shown;
+        if (c.powerDisplayId != 0) {
+            if (const auto row = wowee::addons::powerDisplayRow(gh, c.powerDisplayId)) {
+                shown = globalOr(L, row->token.c_str(), row->token.c_str());
+            }
+        }
+        if (c.powerType == 5) {
+            static constexpr const char* kRuneKeys[] = {"RUNE_COST_BLOOD", "RUNE_COST_UNHOLY", "RUNE_COST_FROST"};
+            for (int r = 0; c.hasRuneRow && r < 3; ++r) {
+                if (c.runes[r] == 0) continue;
+                if (!cost.empty()) cost += ' ';
+                cost += formatGlobal(L, globalOr(L, kRuneKeys[r], "%d"), {std::to_string(c.runes[r])});
+            }
+        } else if (perSecond > 0) {
+            cost = shown ? formatGlobal(L, globalOr(L, "POWER_DISPLAY_COST_PER_TIME", "%d %s, plus %d per sec"),
+                                        {std::to_string(amount), *shown, std::to_string(perSecond)})
+                         : formatGlobal(L, globalOr(L, (key + "_PER_TIME").c_str(), "%d, plus %d per sec"),
+                                        {std::to_string(amount), std::to_string(perSecond)});
+        } else if (amount >= 1) {
+            cost = shown ? formatGlobal(L, globalOr(L, "POWER_DISPLAY_COST", "%d %s"), {std::to_string(amount), *shown})
+                         : formatGlobal(L, globalOr(L, key.c_str(), "%d"), {std::to_string(amount)});
+        }
     }
-    if (info.maxRange > 0.0f) {
-        range = withNumber(globalOr(L, "SPELL_RANGE", "%s yd range"), "%s", info.maxRange);
+    // The reach to the cost's right, as 0x006238a0 writes it: MELEE_RANGE,
+    // or SPELL_RANGE with "max" or "min-max" yards rounded, the same for
+    // friend and foe; where they differ, SPELL_RANGE_DUAL with ENEMY on a
+    // line of its own ahead of the cost's, then FRIENDLY beside the cost -
+    // with no cost the enemy's stands left of both, as the client's buffer
+    // keeps it, and the friendly numbers go "min-max" by the enemy's minimum.
+    // SPELL_RANGE_UNLIMITED from 50000 yards.
+    if (const auto* sh = gh->getSpellHandler(); sh && !brief) {
+        const auto reach = sh->tooltipRange(spellId);
+        const auto yards = [](float shownMin, float min, float max) {
+            char b[32];
+            if (shownMin <= 0.0f) {
+                std::snprintf(b, sizeof(b), "%ld", std::lrint(max));
+            } else {
+                std::snprintf(b, sizeof(b), "%ld-%ld", std::lrint(min), std::lrint(max));
+            }
+            return std::string(b);
+        };
+        const auto differs = [](float a, float b) { return std::fabs(a - b) >= 2.3841858e-07f; };
+        const auto& h = reach.hostile;
+        const auto& f = reach.friendly;
+        if (!reach.shown) {
+            // Attributes 0x404 or AttributesEx3 0x40000000: no reach.
+        } else if (reach.melee) {
+            range = globalOr(L, "MELEE_RANGE", "Melee Range");
+        } else if (!differs(h.min, f.min) && !differs(h.max, f.max)) {
+            if (h.max > 0.0f) {
+                range = h.max < 50000.0f
+                    ? formatGlobal(L, globalOr(L, "SPELL_RANGE", "%s yd range"), {yards(h.min, h.min, h.max)})
+                    : globalOr(L, "SPELL_RANGE_UNLIMITED", "Unlimited range");
+            }
+        } else {
+            const std::string dual = globalOr(L, "SPELL_RANGE_DUAL", "%1$s: %2$s yd range");
+            std::string enemy;
+            if (h.max > 0.0f) {
+                enemy = h.max < 50000.0f
+                    ? formatGlobal(L, dual, {globalOr(L, "ENEMY", "Enemy"), yards(h.min, h.min, h.max)})
+                    : globalOr(L, "SPELL_RANGE_UNLIMITED", "Unlimited range");
+            }
+            if (cost.empty()) {
+                cost = enemy;
+                line(enemy, "", 1.0f, 1.0f, 1.0f);
+            } else {
+                line(" ", enemy, 1.0f, 1.0f, 1.0f);
+            }
+            if (f.max > 0.0f) {
+                range = f.max < 50000.0f
+                    ? formatGlobal(L, dual, {globalOr(L, "FRIENDLY", "Friendly"), yards(h.min, f.min, f.max)})
+                    : globalOr(L, "SPELL_RANGE_UNLIMITED", "Unlimited range");
+            }
+        }
     }
+    if (cost.empty()) std::swap(cost, range);
     if (!cost.empty() || !range.empty()) line(cost, range, 1.0f, 1.0f, 1.0f);
 
-    // Instant is a word rather than a zero, which is what WoW prints.
-    const std::string cast = info.castTimeMs > 0
-        ? withNumber(globalOr(L, "SPELL_CAST_TIME_SEC", "%.3g sec cast"), "%.3g",
-                     info.castTimeMs / 1000.0f)
-        : globalOr(L, "SPELL_CAST_TIME_INSTANT", "Instant");
-    line(cast, "", 1.0f, 1.0f, 1.0f);
+    // The cast, as 0x006238a0 says it - none for a passive spell (Attributes
+    // 0x40), one whose first effect is 0x2f or 0x4e, or a trade spell: a
+    // time in seconds under a minute, else minutes; with none, channeled
+    // (AttributesEx 0x44), on the next swing (Attributes 0x404) or ranged
+    // attack (0x2), Instant for a mana spell with a cost, else "Instant cast".
+    // Its cooldown on the right (SPELL_RECAST_TIME_*), unless AttributesEx6
+    // 0x1 keeps it off.
+    gh->loadSpellNameCache();
+    if (const auto ce = gh->spellNameCacheRef().find(spellId); ce != gh->spellNameCacheRef().end()) {
+        const auto& sp = ce->second;
+        const bool tradeSpell = (sp.attr & 0x20u) != 0 &&
+            std::any_of(std::begin(sp.effectIds), std::end(sp.effectIds), [](uint32_t e) {
+                return e == 0x35 || e == 0x18 || e == 0x9d || e == 0x3b;
+            });
+        if (!brief && (sp.attr & 0x40u) == 0 && sp.effectIds[0] != 0x2f && sp.effectIds[0] != 0x4e && !tradeSpell) {
+            std::string cast;
+            const auto* castSh = gh->getSpellHandler();
+            const int32_t castMs = castSh ? castSh->playerCastTimeMs(spellId, casterGuid) : 0;
+            if (castMs > 0) {
+                cast = castMs < 60000
+                    ? withNumber(globalOr(L, "SPELL_CAST_TIME_SEC", "%.3g sec cast"), "%.3g", castMs / 1000.0f)
+                    : withNumber(globalOr(L, "SPELL_CAST_TIME_MIN", "%.3g min cast"), "%.3g", castMs / 60000.0f);
+            } else if ((sp.attrEx & 0x44u) != 0) {
+                cast = globalOr(L, "SPELL_CAST_CHANNELED", "Channeled");
+            } else if (castMs < 0) {
+                cast = globalOr(L, "SPELL_CAST_TIME_INSTANT", "Instant");
+            } else if ((sp.attr & 0x404u) != 0) {
+                cast = globalOr(L, "SPELL_ON_NEXT_SWING", "Next melee");
+            } else if ((sp.attr & 0x2u) != 0) {
+                cast = globalOr(L, "SPELL_ON_NEXT_RANGED", "Next ranged");
+            } else if (shownPower == 0 && shownCost > 0) {
+                cast = globalOr(L, "SPELL_CAST_TIME_INSTANT", "Instant");
+            } else {
+                cast = globalOr(L, "SPELL_CAST_TIME_INSTANT_NO_MANA", "Instant cast");
+            }
+            std::string recast;
+            const auto* sh = gh->getSpellHandler();
+            const int32_t cdMs = sh ? sh->spellShownCooldownMs(spellId) : 0;
+            if (cdMs > 0 && (sp.attrEx6 & 0x1u) == 0) {
+                recast = cdMs < 60000
+                    ? withNumber(globalOr(L, "SPELL_RECAST_TIME_SEC", "%.3g sec cooldown"), "%.3g", cdMs / 1000.0f)
+                    : withNumber(globalOr(L, "SPELL_RECAST_TIME_MIN", "%.3g min cooldown"), "%.3g", cdMs / 60000.0f);
+            }
+            line(cast, recast, 1.0f, 1.0f, 1.0f);
+        }
+    }
+
+    // The tools, after the cast: SPELL_TOTEMS, then each Totem item by
+    // name and each TotemCategory by its name, ", " between, one not carried
+    // red (0x00754a20, 0x007548f0). A brief tooltip shows the line only
+    // when something is missing. An item the cache has not answered yet is
+    // left out and asked for, as with the reagents.
+    if (const auto se = gh->spellNameCacheRef().find(spellId); se != gh->spellNameCacheRef().end() && !pet) {
+        const auto* sh = gh->getSpellHandler();
+        std::string tools;
+        bool allThere = true;
+        const auto add = [&](const std::string& named, bool there) {
+            tools += tools.empty() ? globalOr(L, "SPELL_TOTEMS", "Tools: ") : std::string(", ");
+            if (!there) allThere = false;
+            tools += there ? named : "|cffff2020" + named + "|r";
+        };
+        for (const uint32_t tool : se->second.totems) {
+            if (tool == 0) continue;
+            const auto* item = gh->getItemInfo(tool);
+            if (!item || !item->valid || item->name.empty()) {
+                gh->ensureItemInfo(tool);
+                continue;
+            }
+            add(item->name, gh->getInventory().countCarried(tool) > 0);
+        }
+        for (const uint32_t cat : se->second.totemCategories) {
+            if (cat == 0) continue;
+            const std::string& named = gh->getTotemCategoryName(cat);
+            if (!named.empty()) add(named, sh && sh->carriesTotemCategory(cat));
+        }
+        if (!tools.empty() && (!allThere || !brief)) {
+            line(tools, "", 1.0f, 1.0f, 1.0f);
+            w->tooltipLines.back().wrap = true;
+        }
+    }
+
+    // Then what the spell asks of the player, each line white where it is
+    // met and red where it is not, and in a brief tooltip only where it is
+    // not (SPELL_*_NOSPACE): the item it wants on (SPELL_EQUIPPED_ITEM),
+    // the forms it may be cast in (SPELL_REQUIRED_FORM), the reputation
+    // (ITEM_REQ_REPUTATION with the faction and the gendered standing), and
+    // for a passive spell the level it starts at (ITEM_MIN_LEVEL, red).
+    if (const auto* sh = gh->getSpellHandler()) {
+        const auto needLine = [&](const char* key, const char* keyBrief, const std::string& what, bool met, bool wrap) {
+            if (what.empty() || (met && brief)) return;
+            const std::string fmt = globalOr(L, met || !brief ? key : keyBrief, "Requires %s");
+            line(formatGlobal(L, fmt, {what}), "", 1.0f, met ? 1.0f : 0.125f, met ? 1.0f : 0.125f);
+            w->tooltipLines.back().wrap = wrap;
+        };
+        const auto eq = sh->tooltipEquipped(spellId);
+        needLine("SPELL_EQUIPPED_ITEM", "SPELL_EQUIPPED_ITEM_NOSPACE", eq.names, eq.equipped || pet, true);
+        const auto forms = sh->tooltipForms(spellId, casterGuid);
+        needLine("SPELL_REQUIRED_FORM", "SPELL_REQUIRED_FORM_NOSPACE", forms.names, forms.met, false);
+        if (const auto rep = sh->tooltipReputation(spellId); rep.faction != 0 && (!rep.met || !brief)) {
+            const std::string& faction = gh->getFactionNamePublic(rep.faction);
+            const std::string standing =
+                genderedGlobal(L, "FACTION_STANDING_LABEL" + std::to_string(rep.rank + 1));
+            line(formatGlobal(L, globalOr(L, "ITEM_REQ_REPUTATION", "Requires %s - %s"),
+                              {faction.empty() ? globalOr(L, "UNKNOWN", "Unknown") : faction, standing}),
+                 "", 1.0f, rep.met ? 1.0f : 0.125f, rep.met ? 1.0f : 0.125f);
+        }
+        if (const auto pe = gh->spellNameCacheRef().find(spellId); pe != gh->spellNameCacheRef().end() && !brief) {
+            const auto& sp = pe->second;
+            const bool trade = (sp.attr & 0x20u) != 0 &&
+                std::any_of(std::begin(sp.effectIds), std::end(sp.effectIds), [](uint32_t x) {
+                    return x == 0x35 || x == 0x18 || x == 0x9d || x == 0x3b;
+                });
+            const bool passive = sp.effectIds[0] == 0x2f || (sp.attr & 0x40u) != 0;
+            int32_t casterLevel = static_cast<int32_t>(gh->getPlayerLevel());
+            if (pet) {
+                const auto petUnit = gh->getEntityManager().getEntity(casterGuid);
+                const uint16_t li = game::fieldIndex(game::UF::UNIT_FIELD_LEVEL);
+                casterLevel = petUnit && li != 0xFFFF ? static_cast<int32_t>(petUnit->getField(li)) : 0;
+            }
+            if (!trade && passive && sp.baseLevel > 0 && casterLevel < sp.baseLevel) {
+                line(formatGlobal(L, globalOr(L, "ITEM_MIN_LEVEL", "Requires Level %d"), {std::to_string(sp.baseLevel)}),
+                     "", 1.0f, 0.125f, 0.125f);
+            }
+        }
+    }
 
     // What the spell consumes, as 0x00624ce0 writes it: SPELL_REAGENTS, then
     // each item by name with its count past one, a reagent the bags are
-    // short of in red. An item the cache has not answered yet is left out
-    // and asked for, as the client does; the next refresh names it.
+    // short of in red; nothing where the player needs none now (0x00800d60),
+    // and in a brief tooltip only where one is short. An item the cache has
+    // not answered yet is left out and asked for, as the client does; the
+    // next refresh names it.
     gh->loadSpellNameCache();
-    if (auto se = gh->spellNameCacheRef().find(spellId); se != gh->spellNameCacheRef().end()) {
+    const auto* reagentSh = gh->getSpellHandler();
+    if (auto se = gh->spellNameCacheRef().find(spellId);
+        se != gh->spellNameCacheRef().end() && !pet && !(reagentSh && reagentSh->tooltipNoReagents(spellId))) {
+        bool short_ = false;
         std::string reagents;
         for (const auto& r : se->second.reagents) {
             if (r.itemId == 0 || r.count == 0) continue;
@@ -2954,10 +3349,13 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
                                          : std::string(", ");
             std::string named = item->name;
             if (r.count >= 2) named += " (" + std::to_string(r.count) + ")";
-            if (gh->countItemInBags(r.itemId) < r.count) named = "|cffff2020" + named + "|r";
+            if (gh->countItemInBags(r.itemId) < r.count) {
+                named = "|cffff2020" + named + "|r";
+                short_ = true;
+            }
             reagents += named;
         }
-        if (!reagents.empty()) {
+        if (!reagents.empty() && (short_ || !brief)) {
             line(reagents, "", 1.0f, 1.0f, 1.0f);
             w->tooltipLines.back().wrap = true;
         }
@@ -2979,6 +3377,59 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
         }
         line(text, "", 1.0f, 1.0f, 1.0f);
     }
+    // A brief tooltip ends here: no description.
+    if (brief) {
+        w->shown = true;
+        return true;
+    }
+
+    // The player's own chance for a spell that is it (0x006238a0): a first
+    // effect 0x4e says CHANCE_TO_CRIT, and a passive one's 0x14, 0x16 and
+    // 0x17 CHANCE_TO_DODGE, _PARRY and _BLOCK, from the player's fields.
+    // Then for AttributesEx 0x2 SPELL_USE_ALL_<power> - SPELL_USE_ALL_HEALTH
+    // past the seven, SPELL_USE_ALL_POWER_DISPLAY with the PowerDisplay
+    // row's name; the client's table has no word for runic power.
+    if (const auto ce = gh->spellNameCacheRef().find(spellId); ce != gh->spellNameCacheRef().end()) {
+        const auto& sp = ce->second;
+        const bool passive = sp.effectIds[0] == 0x2f || (sp.attr & 0x40u) != 0;
+        const char* key = nullptr;
+        game::UF field = game::UF::PLAYER_CRIT_PERCENTAGE;
+        switch (sp.effectIds[0]) {
+            case 0x4e: key = "CHANCE_TO_CRIT"; field = game::UF::PLAYER_CRIT_PERCENTAGE; break;
+            case 0x14: if (passive) { key = "CHANCE_TO_DODGE"; field = game::UF::PLAYER_DODGE_PERCENTAGE; } break;
+            case 0x16: if (passive) { key = "CHANCE_TO_PARRY"; field = game::UF::PLAYER_PARRY_PERCENTAGE; } break;
+            case 0x17: if (passive) { key = "CHANCE_TO_BLOCK"; field = game::UF::PLAYER_BLOCK_PERCENTAGE; } break;
+            default: break;
+        }
+        if (key) {
+            float pct = 0.0f;
+            const auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid());
+            if (const uint16_t idx = game::fieldIndex(field); player && idx != 0xFFFF) {
+                const uint32_t raw = player->getField(idx);
+                std::memcpy(&pct, &raw, sizeof pct);
+            }
+            char number[32];
+            std::snprintf(number, sizeof number, "%.9g", pct);
+            line(formatGlobal(L, globalOr(L, key, "%.2f%%"), {number}), "", 1.0f, 1.0f, 1.0f);
+        }
+        if ((sp.attrEx & 0x2u) != 0) {
+            std::string text;
+            if (sp.powerDisplayId != 0) {
+                if (const auto row = wowee::addons::powerDisplayRow(gh, sp.powerDisplayId)) {
+                    text = formatGlobal(L, globalOr(L, "SPELL_USE_ALL_POWER_DISPLAY", "Uses 100%% %s"),
+                                        {globalOr(L, row->token.c_str(), row->token.c_str())});
+                }
+            } else {
+                static constexpr const char* kUseAll[] = {"SPELL_USE_ALL_MANA", "SPELL_USE_ALL_RAGE", "SPELL_USE_ALL_FOCUS",
+                                                          "SPELL_USE_ALL_ENERGY", "SPELL_USE_ALL_HAPPINESS",
+                                                          "SPELL_USE_ALL_RUNE"};
+                const auto pt = static_cast<int32_t>(sp.powerType);
+                const char* k = pt >= 0 && pt < 6 ? kUseAll[pt] : pt == 6 ? nullptr : "SPELL_USE_ALL_HEALTH";
+                if (k) text = globalOr(L, k, k);
+            }
+            if (!text.empty()) line(text, "", 1.0f, 1.0f, 1.0f);
+        }
+    }
 
     const std::string body =
         gh->formatSpellDescription(spellId, gh->getSpellDescription(spellId));
@@ -2989,6 +3440,35 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
         // Gold, NORMAL_FONT_COLOR, as the client writes a description.
         line(body, "", 1.0f, 0.82f, 0.0f);
         w->tooltipLines.back().wrap = true;
+    }
+    if (talent && talent->hints && talent->facts) addTalentHints(L, w, *talent->facts);
+
+    // A trade spell that makes an item (Attributes 0x20 with effect 0x18,
+    // 0x9d or 0x3b) ends with that item's tooltip, EffectItemType[0]'s,
+    // appended (0x006277f0); one the cache has not answered is asked for.
+    if (const auto ie = gh->spellNameCacheRef().find(spellId); ie != gh->spellNameCacheRef().end()) {
+        const auto& sp = ie->second;
+        const bool makes = (sp.attr & 0x20u) != 0 &&
+            std::any_of(std::begin(sp.effectIds), std::end(sp.effectIds), [](uint32_t x) {
+                return x == 0x18 || x == 0x9d || x == 0x3b;
+            });
+        if (makes && sp.effectItemType0 != 0 && widgetOf(L, 1) == w) {
+            const auto* item = gh->getItemInfo(sp.effectItemType0);
+            if (!item || !item->valid) {
+                gh->ensureItemInfo(sp.effectItemType0);
+            } else {
+                lua_getglobal(L, "_WoweePopulateItemTooltip");
+                if (lua_isfunction(L, -1)) {
+                    lua_pushvalue(L, 1);
+                    lua_pushnumber(L, sp.effectItemType0);
+                    lua_pushnil(L);
+                    lua_pushboolean(L, 1);
+                    if (lua_pcall(L, 4, 0, 0) != 0) lua_pop(L, 1);
+                } else {
+                    lua_pop(L, 1);
+                }
+            }
+        }
     }
 
     w->shown = true;
@@ -3015,7 +3495,7 @@ int lua_Tooltip_SetAction(lua_State* L) {
         return 1;
     }
     if (action.type == game::ActionBarSlot::SPELL) {
-        luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, action.id) ? 1 : 0);
+        luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, action.id, !uberTooltips(L)) ? 1 : 0);
         return 1;
     }
     // A macro is the third kind a slot can hold and it has no tooltip of its
@@ -3390,9 +3870,23 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
     // The three after it are the gems in its sockets, by enchant id.
     uint32_t enchantId = 0;
     std::array<uint32_t, 3> linkGems{};
+    bool linkRolled = false;
     if (kind == "item") {
         size_t at = colon + 1;
         while (at < link.size() && link[at] >= '0' && link[at] <= '9') ++at;
+        // item:id:enchant:gem1:gem2:gem3:gem4:suffix - the suffix, which a
+        // rolled item's link carries and a template's does not.
+        {
+            size_t f = at;
+            for (int field = 0; field < 5 && f < link.size(); ++field) {
+                f = link.find(':', f + 1);
+                if (f == std::string::npos) break;
+            }
+            if (f != std::string::npos && f < link.size()) {
+                const char* p = link.c_str() + f + 1;
+                linkRolled = *p != '\0' && *p != ':' && std::strtol(p, nullptr, 10) != 0;
+            }
+        }
         for (int field = 0; field < 4 && at < link.size() && link[at] == ':'; ++field) {
             uint32_t v = 0;
             for (++at; at < link.size() && link[at] >= '0' && link[at] <= '9'; ++at)
@@ -3406,7 +3900,13 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
     if (kind == "spell" || kind == "enchant" || kind == "talent")
         filled = fillSpellTooltip(L, w, gh, id);
     else if (kind == "item") {
+        // Whether the link names a rolled suffix, which the builder asks
+        // before saying ITEM_RANDOM_ENCHANT for the template.
+        lua_pushboolean(L, linkRolled ? 1 : 0);
+        lua_setfield(L, 1, "__linkRolled");
         filled = fillItemTooltipById(L, gh, id, nullptr, &linkGems);
+        lua_pushnil(L);
+        lua_setfield(L, 1, "__linkRolled");
         if (filled) appendEnchantLineById(w, gh, enchantId);
         // Asked for whether it was found or not: the answer is what turns a
         // name into a tooltip, and the miss is exactly when it is needed.
@@ -3462,11 +3962,90 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
     return 1;
 }
 
+// SetPetAction(slot) (0x00625470): the spell on the pet's bar, the pet's
+// own, with its rank. 1 when filled; a command (Attack, Follow ...) is no
+// spell and fills nothing - the bar names those itself.
+static int lua_Tooltip_SetPetAction(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    auto* gh = wowee::addons::getGameHandler(L);
+    const long slot = std::lround(luaL_optnumber(L, 2, 0));
+    if (!w || !gh || slot < 1 || slot > 10 || gh->getPetGuid() == 0) return 0;
+    const uint32_t packed = gh->getPetActionSlot(static_cast<int>(slot - 1));
+    const uint32_t spell = packed & 0xFFFFFFu;
+    if (spell == 0 || !game::pet::isPetSpellAction(packed)) return 0;
+    luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, spell, false, true, nullptr, true) ? 1 : 0);
+    return 1;
+}
+
+// SetShapeshift(slot) (0x00625630): the form's spell, as SetAction has one -
+// brief with UberTooltips off - and with its rank. 1 when filled.
+static int lua_Tooltip_SetShapeshift(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    auto* gh = wowee::addons::getGameHandler(L);
+    const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
+    if (!w || !gh || index < 1) return 0;
+    const auto forms = game::knownShapeshiftForms(gh->getPlayerClass(), gh->getKnownSpells());
+    if (static_cast<size_t>(index) > forms.size()) return 0;
+    luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, forms[static_cast<size_t>(index) - 1].spellId, !uberTooltips(L), true)
+                           ? 1 : 0);
+    return 1;
+}
+
+// SetPossession(slot) (0x006257c0): slot 1 is the possessing spell, shown as
+// SetShapeshift shows a form's. 1 when filled.
+static int lua_Tooltip_SetPossession(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    auto* gh = wowee::addons::getGameHandler(L);
+    const long slot = std::lround(luaL_optnumber(L, 2, 0));
+    if (!w || !gh || slot != 1 || gh->getPossessSpellId() == 0) return 0;
+    luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, gh->getPossessSpellId(), !uberTooltips(L), true) ? 1 : 0);
+    return 1;
+}
+
+// SetQuestRewardSpell() (0x006263e0): the reward spell's full tooltip.
+static int lua_Tooltip_SetQuestRewardSpell(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    auto* gh = wowee::addons::getGameHandler(L);
+    if (w && gh && gh->getQuestDetails().rewardSpellId != 0) {
+        fillSpellTooltip(L, w, gh, gh->getQuestDetails().rewardSpellId);
+    }
+    return 0;
+}
+
+// SetTotem(slot) (0x006205c0): the totem's name in gold, then what is left
+// of it through SPELL_TIME_REMAINING, in its largest unit rounded up
+// (0x0061a9e0).
+static int lua_Tooltip_SetTotem(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    auto* gh = wowee::addons::getGameHandler(L);
+    const int slot = static_cast<int>(luaL_optnumber(L, 2, 0));
+    if (!w || !gh || slot < 1 || slot > game::GameHandler::NUM_TOTEM_SLOTS) return 0;
+    const auto& totem = gh->getTotemSlot(slot - 1);
+    if (!totem.active()) return 0;
+    w->isTooltip = true;
+    w->tooltipLines.clear();
+    const auto add = [&w](std::string text, float r, float g, float b) {
+        wowee::ui::Widget::TooltipLine l;
+        l.left = std::move(text);
+        l.lc[0] = r; l.lc[1] = g; l.lc[2] = b; l.lc[3] = 1.0f;
+        l.rc[0] = l.rc[1] = l.rc[2] = l.rc[3] = 1.0f;
+        w->tooltipLines.push_back(std::move(l));
+    };
+    add(gh->getSpellName(totem.spellId), 1.0f, 0.824f, 0.0f);
+    const auto d = game::difficulty_change::intDuration(static_cast<uint32_t>(std::max<int64_t>(0, totem.remainingMs())));
+    const std::string key = std::string("SPELL_TIME_REMAINING") + d.suffix;
+    add(withPlural(formatGlobal(L, globalOr(L, key.c_str(), "%d"), {std::to_string(d.value)}), static_cast<int>(d.value)),
+        1.0f, 1.0f, 1.0f);
+    w->shown = true;
+    return 0;
+}
+
 int lua_Tooltip_SetSpellByID(lua_State* L) {
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
     const uint32_t id = static_cast<uint32_t>(luaL_optnumber(L, 2, 0));
-    luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, id) ? 1 : 0);
+    // (id, isPet, showRank); the fifth is the brief form SetAction asks for.
+    luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, id, lua_toboolean(L, 5) != 0, lua_toboolean(L, 4) != 0) ? 1 : 0);
     return 1;
 }
 
@@ -3554,33 +4133,21 @@ int lua_Tooltip_SetUnitAura(lua_State* L) {
         lua_getglobal(L, "GetTime");
         if (lua_isfunction(L, -1) && lua_pcall(L, 0, 1, 0) == 0) now = lua_tonumber(L, -1);
         lua_pop(L, 1);
+        // 0x0061a9e0 rounding up: seconds under a minute (rounded down),
+        // then minutes, hours, days - sixty minutes reading one hour and
+        // twenty-four hours one day.
         const double left = std::max(0.0, expires - now);
-        const char* key; const char* fallback; int amount;
-        if (left >= 86400.0) {
-            key = "SPELL_TIME_REMAINING_DAYS"; fallback = "%d |4day:days; remaining";
-            amount = static_cast<int>(std::ceil(left / 86400.0));
-        } else if (left >= 3600.0) {
-            key = "SPELL_TIME_REMAINING_HOURS"; fallback = "%d |4hour:hours; remaining";
-            amount = static_cast<int>(std::ceil(left / 3600.0));
-        } else if (left >= 60.0) {
-            key = "SPELL_TIME_REMAINING_MIN"; fallback = "%d |4minute:minutes; remaining";
-            amount = static_cast<int>(std::ceil(left / 60.0));
-        } else {
-            key = "SPELL_TIME_REMAINING_SEC"; fallback = "%d |4second:seconds; remaining";
-            amount = static_cast<int>(std::ceil(left));
-        }
-        std::string text = globalOr(L, key, fallback);
-        if (const size_t at = text.find("%d"); at != std::string::npos) {
-            text.replace(at, 2, std::to_string(amount));
-        }
-        line(withPlural(text, amount), "", 1.0f, 0.82f, 0.0f);
+        const auto d = game::difficulty_change::intDuration(static_cast<uint32_t>(left * 1000.0));
+        const std::string key = std::string("SPELL_TIME_REMAINING") + d.suffix;
+        const int amount = static_cast<int>(d.value);
+        line(withPlural(formatGlobal(L, globalOr(L, key.c_str(), "%d"), {std::to_string(amount)}), amount), "",
+             1.0f, 0.82f, 0.0f);
     }
 
     lua_pushnumber(L, spellId);
     lua_setfield(L, 1, "__spellId");
     w->shown = true;
-    lua_pushboolean(L, 1);
-    return 1;
+    return 0;
 }
 
 /// A glyph in its socket, hovered on the glyph panel.
@@ -3714,61 +4281,75 @@ int lua_Tooltip_SetQuestLogRewardSpell(lua_State* L) {
 /// The description shown is the rank the player actually has. An unlearned
 /// talent describes its first rank, which is what taking a point in it would
 /// buy - the useful thing to read when deciding.
+// SetTalent(tabIndex, talentIndex[, isInspect[, isPet[, groupIndex[, isPreview]]]])
+// (0x0062f740 -> 0x00626e20). A talent that teaches a spell (Flags 0x1)
+// gets that spell's tooltip, the rank shown and then, below it, the next
+// one under TOOLTIP_TALENT_NEXT_RANK. Any other: the name in white,
+// TOOLTIP_TALENT_RANK, what is missing to learn it when no rank is shown,
+// the shown rank's description and the next rank's in gold, then the learn
+// hints. Answers nothing, as the client's does.
 int lua_Tooltip_SetTalent(lua_State* L) {
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
-    const int tabIndex    = static_cast<int>(luaL_optnumber(L, 2, 0));
+    if (!w || !gh) return 0;
+    const int tabIndex = static_cast<int>(luaL_optnumber(L, 2, 0));
     const int talentIndex = static_cast<int>(luaL_optnumber(L, 3, 0));
-    if (!w || !gh) { lua_pushboolean(L, 0); return 1; }
+    const bool inspect = lua_toboolean(L, 4) != 0;
+    const bool pet = lua_toboolean(L, 5) != 0;
+    const int group = lua_isnumber(L, 6) ? static_cast<int>(lua_tonumber(L, 6)) - 1
+                                         : static_cast<int>(gh->getActiveTalentSpec());
+    const bool preview = lua_toboolean(L, 7) != 0;
+    const auto f = wowee::addons::talentTooltipFacts(gh, tabIndex, talentIndex, inspect, pet, group, preview);
+    if (!f.talent) return 0;
+    const auto& t = *f.talent;
+    const uint32_t shown = f.shownIdx >= 0 && f.shownIdx < 5 ? t.rankSpells[f.shownIdx] : 0;
+    const uint32_t next = f.shownIdx < f.maxIdx && f.shownIdx + 1 < 5 ? t.rankSpells[f.shownIdx + 1] : 0;
 
-    const auto* talent = wowee::addons::talentAt(gh, tabIndex, talentIndex);
-    if (!talent) { lua_pushboolean(L, 0); return 1; }
+    if ((t.flags & 0x1u) != 0) {
+        const bool showNext = f.maxIdx >= 1 && f.shownIdx >= 0 && f.shownIdx < f.maxIdx;
+        const TalentTooltipPart first{&f, false, !showNext};
+        fillSpellTooltip(L, w, gh, t.rankSpells[std::max(f.shownIdx, 0)], false, false, &first);
+        if (showNext) {
+            const TalentTooltipPart second{&f, true, true};
+            fillSpellTooltip(L, w, gh, next, false, false, &second);
+        }
+        return 0;
+    }
 
-    const uint8_t rank = gh->getTalentRank(talent->talentId);
-    // Rank 1's spell names the talent whatever the player has in it, and is the
-    // only entry guaranteed to be filled.
-    const uint32_t titleSpell = talent->rankSpells[0];
-    // The rank being described: what the player has, or the first if none.
-    const uint32_t bodySpell = talent->rankSpells[rank > 0 ? rank - 1 : 0];
-    if (titleSpell == 0) { lua_pushboolean(L, 0); return 1; }
-
-    const std::string& name = gh->getSpellName(titleSpell);
-    if (name.empty()) { lua_pushboolean(L, 0); return 1; }
-
+    const std::string& shownName = shown ? gh->getSpellName(shown) : std::string();
+    const std::string& nextName = next ? gh->getSpellName(next) : std::string();
     w->isTooltip = true;
     w->tooltipLines.clear();
-
-    wowee::ui::Widget::TooltipLine title;
-    title.left = name;
-    title.lc[0] = 1.0f; title.lc[1] = 0.82f; title.lc[2] = 0.0f; title.lc[3] = 1.0f;
-    title.rc[0] = title.rc[1] = title.rc[2] = title.rc[3] = 1.0f;
-    w->tooltipLines.push_back(std::move(title));
-
-    if (talent->maxRank > 0) {
-        wowee::ui::Widget::TooltipLine rankLine;
-        rankLine.left = "Rank " + std::to_string(rank) + "/" +
-                        std::to_string(static_cast<int>(talent->maxRank));
-        rankLine.lc[0] = rankLine.lc[1] = rankLine.lc[2] = 1.0f; rankLine.lc[3] = 1.0f;
-        rankLine.rc[0] = rankLine.rc[1] = rankLine.rc[2] = rankLine.rc[3] = 1.0f;
-        w->tooltipLines.push_back(std::move(rankLine));
+    if (shownName.empty() && nextName.empty()) return 0;
+    const auto add = [&w](std::string text, const float* rgb, bool wrap) {
+        wowee::ui::Widget::TooltipLine l;
+        l.left = std::move(text);
+        l.lc[0] = rgb[0]; l.lc[1] = rgb[1]; l.lc[2] = rgb[2]; l.lc[3] = 1.0f;
+        l.rc[0] = l.rc[1] = l.rc[2] = l.rc[3] = 1.0f;
+        l.wrap = wrap;
+        w->tooltipLines.push_back(std::move(l));
+    };
+    add(!shownName.empty() ? shownName : nextName, kTalentWhite, false);
+    addTalentRankAndPrereqs(L, w, gh, f);
+    bool described = false;
+    if (!shownName.empty()) {
+        if (const std::string body = gh->formatSpellDescription(shown, gh->getSpellDescription(shown)); !body.empty()) {
+            add(body, kTalentGold, true);
+            described = true;
+        }
     }
-
-    // Through the formatter for the same reason SetSpellByID is: a description
-    // arrives as a template of $-tokens and reads as one if handed over raw.
-    const std::string body =
-        gh->formatSpellDescription(bodySpell, gh->getSpellDescription(bodySpell));
-    if (!body.empty()) {
-        wowee::ui::Widget::TooltipLine desc;
-        desc.left = body;
-        desc.lc[0] = desc.lc[1] = desc.lc[2] = 1.0f; desc.lc[3] = 1.0f;
-        desc.rc[0] = desc.rc[1] = desc.rc[2] = desc.rc[3] = 1.0f;
-        desc.wrap = true;  // prose; see fillSpellTooltip
-        w->tooltipLines.push_back(std::move(desc));
+    if (!nextName.empty()) {
+        if (const std::string body = gh->formatSpellDescription(next, gh->getSpellDescription(next)); !body.empty()) {
+            if (described) {
+                add(" ", kTalentGold, false);
+                add(globalOr(L, "TOOLTIP_TALENT_NEXT_RANK", "Next Rank:"), kTalentWhite, false);
+            }
+            add(body, kTalentGold, true);
+        }
     }
-
+    addTalentHints(L, w, f);
     w->shown = true;
-    lua_pushboolean(L, 1);
-    return 1;
+    return 0;
 }
 
 /// SetTradeSkillItem(index) - what a recipe in the open profession makes.
@@ -3876,6 +4457,9 @@ int lua_Tooltip_SetUnit(lua_State* L) {
     const std::string name = gh->lookupName(guid);
     if (name.empty()) { lua_pushboolean(L, 0); return 1; }
 
+    // Room for the global-string lookups the Beast Lore and faction loops
+    // make: each pops what it pushed, but the lines are counted by data.
+    lua_checkstack(L, 8);
     w->isTooltip = true;
     // Whose tooltip this is, for IsUnit below.
     w->tooltipUnit = uidStr;
@@ -3890,55 +4474,359 @@ int lua_Tooltip_SetUnit(lua_State* L) {
         w->tooltipLines.push_back(std::move(line));
     };
 
-    addLine(name, 1.0f, 1.0f, 1.0f);
-
-    // What the name alone does not say, which in WoW is most of a unit
-    // tooltip: the guild under a player's name, the trade under an NPC's, and
-    // the level line under both.
-    //
-    // This built the title and stopped, so every mouseover in the game showed
-    // a bare name. The client has all of it - its own nameplates draw the
-    // guild and the subtitle from these very accessors - so this is another
-    // case of handing an element over leaving behind what the window it
-    // replaced was already doing.
     const auto entity = gh->getEntityManager().getEntity(guid);
     const bool isPlayer = entity && entity->getType() == game::ObjectType::PLAYER;
+    const auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid());
 
+    // The title in gold (0x00621070 -> 0x0072a290): a player's name inside
+    // the title they wear (PLAYER_CHOSEN_TITLE, in their gender's form).
+    std::string title = name;
     if (isPlayer) {
-        if (const uint32_t guildId = gh->getEntityGuildId(guid); guildId != 0) {
-            const std::string& guildName = gh->lookupGuildName(guildId);
-            if (!guildName.empty()) addLine("<" + guildName + ">", 0.25f, 1.0f, 0.25f);
-        }
-    } else if (entity) {
-        // The trade an NPC plies, which is the line that tells a vendor from a
-        // guard: <Auctioneer>, <Innkeeper>, <Reagent Vendor>.
-        const auto unit = std::dynamic_pointer_cast<game::Unit>(entity);
-        if (unit) {
-            const std::string sub = gh->getCachedCreatureSubName(unit->getEntry());
-            if (!sub.empty()) addLine("<" + sub + ">", 1.0f, 1.0f, 1.0f);
+        const uint16_t t = game::fieldIndex(game::UF::PLAYER_CHOSEN_TITLE);
+        const uint16_t b0 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0);
+        if (t != 0xFFFF && entity->getField(t) != 0) {
+            const uint8_t gender = b0 != 0xFFFF ? static_cast<uint8_t>((entity->getField(b0) >> 16) & 0xFFu) : 0xFF;
+            if (std::string titled = gh->getFormattedTitleFor(entity->getField(t), name, gender); !titled.empty())
+                title = std::move(titled);
         }
     }
+    addLine(title, 1.0f, 0.824f, 0.0f);
 
-    // "Level 50", and the class after it for a player. Yellow, as WoW draws a
-    // level the player's own is a match for; the difficulty colouring proper
-    // needs the same table the nameplates use and is not invented here.
-    if (entity) {
-        const uint32_t level =
-            entity->getField(game::fieldIndex(game::UF::UNIT_FIELD_LEVEL));
-        if (level > 0) {
-            std::string levelLine = "Level " + std::to_string(level);
-            if (isPlayer) {
-                const uint32_t bytes0 =
-                    entity->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0));
-                const unsigned classId = (bytes0 >> 8) & 0xFFu;
-                if (const char* cls = wowee::addons::luaClassToken(classId)) {
-                    (void)cls;
-                    levelLine += " ";
-                    levelLine += wowee::addons::localizedClassName(
-                        gh, classId, ((bytes0 >> 16) & 0xFFu) == 1 ? 1 : 0);
+    // Then, in white and as they stand: a player's guild (PLAYER_GUILDID
+    // through the guild cache, 0x0067d930); with colourblindMode the unit's
+    // standing toward the player (FACTION_STANDING_LABEL, gendered by the
+    // player); a creature's subname (0x00719950); and whose pet, minion or
+    // the like the unit is (0x0061e830, UNITNAME_SUMMON_TITLE).
+    if (isPlayer) {
+        if (const uint32_t guildId = gh->getEntityGuildId(guid); guildId != 0) {
+            addLine(gh->lookupGuildName(guildId), 1.0f, 1.0f, 1.0f);
+        }
+    }
+    const auto unitPtr = std::dynamic_pointer_cast<game::Unit>(entity);
+    if (unitPtr && player) {
+        lua_getglobal(L, "GetCVar");
+        bool colorblind = false;
+        if (lua_isfunction(L, -1)) {
+            lua_pushstring(L, "colorblindMode");
+            if (lua_pcall(L, 1, 1, 0) == 0) {
+                const char* v = lua_tostring(L, -1);
+                colorblind = v && std::strcmp(v, "1") == 0;
+            }
+            lua_pop(L, 1);
+        } else {
+            lua_pop(L, 1);
+        }
+        if (colorblind) {
+            addLine(genderedGlobal(L, "FACTION_STANDING_LABEL" + std::to_string(gh->unitReaction(*unitPtr, *player) + 1)),
+                    1.0f, 1.0f, 1.0f);
+        }
+    }
+    if (unitPtr && !isPlayer) {
+        addLine(gh->getCachedCreatureSubName(unitPtr->getEntry()), 1.0f, 1.0f, 1.0f);
+    }
+    if (unitPtr) addLine(wowee::ui::summonTitleLine(*gh, *entity, *unitPtr), 1.0f, 1.0f, 1.0f);
+
+    // The level line, white (0x00621070): the level, or "??" for a boss
+    // (creature type flag 0x4), one ten or more above a player it is hostile
+    // to, or none; then a player's race and class (gendered), CORPSE for one
+    // dead, or a creature's type where the player is not friendly to it; then
+    // PLAYER for a player, BOSS, or ELITE for rank 1 and 2. Which of the three
+    // there are picks TOOLTIP_UNIT_LEVEL, _TYPE, _CLASS, _CLASS_TYPE,
+    // _RACE_CLASS or _RACE_CLASS_TYPE.
+    if (const auto unitEnt = std::dynamic_pointer_cast<game::Unit>(entity)) {
+        const auto field = [&](game::UF f) {
+            const uint16_t i = game::fieldIndex(f);
+            return i != 0xFFFF ? unitEnt->getField(i) : 0u;
+        };
+        const int32_t level = static_cast<int32_t>(field(game::UF::UNIT_FIELD_LEVEL));
+        const bool dead = unitEnt->getHealth() == 0 || (field(game::UF::UNIT_DYNAMIC_FLAGS) & game::UNIT_DYNFLAG_DEAD) != 0;
+        const game::CreatureQueryResponseData* cre = nullptr;
+        if (!isPlayer) {
+            const auto& cache = gh->getCreatureInfoCache();
+            if (const auto it = cache.find(unitEnt->getEntry()); it != cache.end()) cre = &it->second;
+        }
+        // 0x0071f300: the form's creature type, else the creature's, else
+        // the race's.
+        uint32_t type = 0;
+        auto* am = gh->services().assetManager;
+        if (const auto* form = gh->shapeshiftFormRow(static_cast<uint8_t>(field(game::UF::UNIT_FIELD_BYTES_2) >> 24));
+            form && static_cast<int32_t>(form->creatureType) > 0) {
+            type = form->creatureType;
+        } else if (cre) {
+            type = cre->creatureType;
+        } else if (isPlayer) {
+            const auto* layouts = pipeline::getActiveDBCLayout();
+            const auto* rl = layouts ? layouts->getLayout("ChrRaces") : nullptr;
+            const uint32_t tf = rl ? rl->tryField("CreatureType") : 0xFFFFFFFFu;
+            auto races = am && am->isInitialized() ? am->loadDBCOptional("ChrRaces.dbc") : nullptr;
+            if (races && races->isLoaded() && tf < races->getFieldCount())
+                if (const int32_t r = races->findRecordById(field(game::UF::UNIT_FIELD_BYTES_0) & 0xFFu); r >= 0)
+                    type = races->getUInt32(static_cast<uint32_t>(r), tf);
+        }
+        const uint32_t typeFlags = cre ? cre->typeFlags : 0u;
+        bool unknown = false;
+        uint32_t shownType = 0;
+        if (player) {
+            if (type != 10 && gh->unitReaction(*player, *unitEnt) < 4 && (typeFlags & 0x4000000u) == 0) shownType = type;
+            const uint16_t li = game::fieldIndex(game::UF::UNIT_FIELD_LEVEL);
+            const int32_t playerLevel = li != 0xFFFF ? static_cast<int32_t>(player->getField(li)) : 0;
+            if (gh->unitReaction(*unitEnt, *player) < 2 && playerLevel <= level - 10) unknown = true;
+        }
+        if ((typeFlags & 0x4u) != 0 || level < 1) unknown = true;
+        const std::string levelText = unknown ? std::string("??") : std::to_string(level);
+
+        std::string race, cls, kind;
+        if (dead) {
+            cls = globalOr(L, "CORPSE", "Corpse");
+        } else if (isPlayer) {
+            const uint32_t bytes0 = field(game::UF::UNIT_FIELD_BYTES_0);
+            const int gender = ((bytes0 >> 16) & 0xFFu) == 1 ? 1 : 0;
+            const std::string r = wowee::addons::localizedRaceName(gh, bytes0 & 0xFFu, gender);
+            const std::string c = wowee::addons::localizedClassName(gh, (bytes0 >> 8) & 0xFFu, gender);
+            if (!r.empty() && !c.empty()) { race = r; cls = c; }
+        } else if (shownType != 0) {
+            auto types = am && am->isInitialized() ? am->loadDBCOptional("CreatureType.dbc") : nullptr;
+            if (types && types->isLoaded() && types->getFieldCount() > 1)
+                if (const int32_t r = types->findRecordById(shownType); r >= 0) cls = types->getString(static_cast<uint32_t>(r), 1);
+        }
+        if (isPlayer) kind = globalOr(L, "PLAYER", "Player");
+        else if ((typeFlags & 0x4u) != 0) kind = globalOr(L, "BOSS", "Boss");
+        else if (cre && (cre->rank == 1 || cre->rank == 2)) kind = globalOr(L, "ELITE", "Elite");
+
+        std::string text;
+        if (!race.empty() && !cls.empty()) {
+            text = kind.empty()
+                ? formatGlobal(L, globalOr(L, "TOOLTIP_UNIT_LEVEL_RACE_CLASS", "Level %s %s %s"), {levelText, race, cls})
+                : formatGlobal(L, globalOr(L, "TOOLTIP_UNIT_LEVEL_RACE_CLASS_TYPE", "Level %s %s %s (%s)"),
+                               {levelText, race, cls, kind});
+        } else if (!cls.empty()) {
+            text = kind.empty() ? formatGlobal(L, globalOr(L, "TOOLTIP_UNIT_LEVEL_CLASS", "Level %s %s"), {levelText, cls})
+                                : formatGlobal(L, globalOr(L, "TOOLTIP_UNIT_LEVEL_CLASS_TYPE", "Level %s %s (%s)"),
+                                               {levelText, cls, kind});
+        } else if (!kind.empty()) {
+            text = formatGlobal(L, globalOr(L, "TOOLTIP_UNIT_LEVEL_TYPE", "Level %s (%s)"), {levelText, kind});
+        } else {
+            text = formatGlobal(L, globalOr(L, "TOOLTIP_UNIT_LEVEL", "Level %s"), {levelText});
+        }
+        addLine(text, 1.0f, 1.0f, 1.0f);
+    }
+
+    // After the level line (0x00621070): the creature's faction by name where
+    // the player has a reputation with it - the first of Faction.dbc's four
+    // race/class entries the player fits, unless that entry is hidden (flag
+    // 0x4), for a creature without type flag 0x10; PVP_ENABLED for a unit
+    // flagged for it (UNIT_FIELD_BYTES_2 byte 1 0x1, a player's PLAYER_FLAGS
+    // 0x100); RESURRECTABLE in green on a dead player the player may help
+    // (0x007293d0); PVP_RANK_LEADER on a flagged racial leader (0x0071b680).
+    if (const auto u = std::dynamic_pointer_cast<game::Unit>(entity); u && player) {
+        const auto f = [&](const game::Entity& e, game::UF uf) {
+            const uint16_t i = game::fieldIndex(uf);
+            return i != 0xFFFF ? e.getField(i) : 0u;
+        };
+        const game::CreatureQueryResponseData* cr = nullptr;
+        if (!isPlayer) {
+            const auto& cache = gh->getCreatureInfoCache();
+            if (const auto it = cache.find(u->getEntry()); it != cache.end()) cr = &it->second;
+        }
+        auto* am = gh->services().assetManager;
+        if ((!cr || (cr->typeFlags & 0x10u) == 0) && am && am->isInitialized()) {
+            auto templates = am->loadDBCOptional("FactionTemplate.dbc");
+            auto factions = am->loadDBCOptional("Faction.dbc");
+            const int32_t tr = templates && templates->isLoaded()
+                ? templates->findRecordById(f(*u, game::UF::UNIT_FIELD_FACTIONTEMPLATE)) : -1;
+            const int32_t fr = tr >= 0 && factions && factions->isLoaded() && factions->getFieldCount() > 23
+                ? factions->findRecordById(templates->getUInt32(static_cast<uint32_t>(tr), 1)) : -1;
+            if (fr >= 0 && static_cast<int32_t>(factions->getUInt32(static_cast<uint32_t>(fr), 1)) >= 0) {
+                const uint32_t b0 = f(*player, game::UF::UNIT_FIELD_BYTES_0);
+                const uint32_t raceBit = 1u << (((b0 & 0xFFu) - 1u) & 31u);
+                const uint32_t classBit = 1u << ((((b0 >> 8) & 0xFFu) - 1u) & 31u);
+                for (uint32_t k = 0; k < 4; ++k) {
+                    const uint32_t races = factions->getUInt32(static_cast<uint32_t>(fr), 2 + k);
+                    const uint32_t classes = factions->getUInt32(static_cast<uint32_t>(fr), 6 + k);
+                    const uint32_t fits = races == 0 ? classes : races & raceBit;
+                    if (fits == 0 || (classes != 0 && (classes & classBit) == 0)) continue;
+                    if ((factions->getUInt32(static_cast<uint32_t>(fr), 14 + k) & 0x4u) == 0)
+                        addLine(factions->getString(static_cast<uint32_t>(fr), 23), 1.0f, 1.0f, 1.0f);
+                    break;
                 }
             }
-            addLine(levelLine, 1.0f, 0.82f, 0.0f);
+        }
+        const bool pvpFlag = ((f(*u, game::UF::UNIT_FIELD_BYTES_2) >> 8) & 0x1u) != 0;
+        if ((isPlayer && (f(*u, game::UF::PLAYER_FLAGS) & 0x100u) != 0) || pvpFlag)
+            addLine(globalOr(L, "PVP_ENABLED", "PvP"), 1.0f, 1.0f, 1.0f);
+        if (isPlayer && u->getHealth() == 0 && gh->unitMayAssist(gh->getPlayerGuid(), guid))
+            addLine(globalOr(L, "RESURRECTABLE", "Resurrectable"), 0.0f, 1.0f, 0.0f);
+        // Beast Lore's report on a creature under it (UNIT_DYNAMIC_FLAGS
+        // 0x10; 0x00620950), all white: its damage (SINGLE_DAMAGE_TEMPLATE
+        // where the rounded least and the ceiling of the most agree, else
+        // DAMAGE_TEMPLATE), ARMOR_TEMPLATE, HP_TEMPLATE, a
+        // RESISTANCE_TEMPLATE for each other school it resists, its family's
+        // diet (PET_DIET_TEMPLATE, ItemPetFood names by the family's food
+        // mask), TAMEABLE, TAMEABLE_EXOTIC (type flag 0x10000) or
+        // NOT_TAMEABLE, and for a tameable one the abilities its family's
+        // skill lines teach (PET_SPELLS_TEMPLATE: SkillLineAbility rows
+        // learned on getting the skill, superseding nothing, of spells
+        // neither passive nor hidden).
+        if (!isPlayer && (f(*u, game::UF::UNIT_DYNAMIC_FLAGS) & 0x10u) != 0) {
+            const auto ff = [&](game::UF uf, uint16_t k = 0) {
+                const uint16_t i = game::fieldIndex(uf);
+                float v = 0.0f;
+                if (i != 0xFFFF) { const uint32_t raw = u->getField(static_cast<uint16_t>(i + k)); std::memcpy(&v, &raw, sizeof v); }
+                return v;
+            };
+            const long lo = std::lround(ff(game::UF::UNIT_FIELD_MINDAMAGE));
+            const long hi = std::lround(std::ceil(ff(game::UF::UNIT_FIELD_MAXDAMAGE)));
+            addLine(lo == hi ? formatGlobal(L, globalOr(L, "SINGLE_DAMAGE_TEMPLATE", "%d Damage"), {std::to_string(lo)})
+                             : formatGlobal(L, globalOr(L, "DAMAGE_TEMPLATE", "%d - %d Damage"),
+                                            {std::to_string(lo), std::to_string(hi)}),
+                    1.0f, 1.0f, 1.0f);
+            const uint16_t ri = game::fieldIndex(game::UF::UNIT_FIELD_RESISTANCES);
+            const auto resist = [&](uint16_t k) {
+                return ri != 0xFFFF ? static_cast<int32_t>(u->getField(static_cast<uint16_t>(ri + k))) : 0;
+            };
+            addLine(formatGlobal(L, globalOr(L, "ARMOR_TEMPLATE", "%d Armor"), {std::to_string(std::max(0, resist(0)))}),
+                    1.0f, 1.0f, 1.0f);
+            addLine(formatGlobal(L, globalOr(L, "HP_TEMPLATE", "%d hp"), {std::to_string(u->getHealth())}), 1.0f, 1.0f, 1.0f);
+            for (uint16_t k = 1; k < 7; ++k) {
+                if (resist(k) <= 0) continue;
+                const std::string school = globalOr(L, ("RESISTANCE" + std::to_string(k) + "_NAME").c_str(), "");
+                if (school.empty()) continue;
+                addLine(formatGlobal(L, globalOr(L, "RESISTANCE_TEMPLATE", "%d %s"), {std::to_string(resist(k)), school}),
+                        1.0f, 1.0f, 1.0f);
+            }
+            const uint32_t family = cr ? cr->family : 0u;
+            auto fams = family && am && am->isInitialized() ? am->loadDBCOptional("CreatureFamily.dbc") : nullptr;
+            const int32_t famRow = fams && fams->isLoaded() && fams->getFieldCount() > 7 ? fams->findRecordById(family) : -1;
+            if (famRow >= 0) {
+                const uint32_t foodMask = fams->getUInt32(static_cast<uint32_t>(famRow), 7);
+                auto foods = foodMask ? am->loadDBCOptional("ItemPetFood.dbc") : nullptr;
+                std::string diet;
+                for (uint32_t r = 0; foods && foods->isLoaded() && r < foods->getRecordCount(); ++r) {
+                    const uint32_t id = foods->getUInt32(r, 0);
+                    if (id == 0 || (foodMask & (1u << ((id - 1) & 31))) == 0) continue;
+                    if (!diet.empty()) diet += ", ";
+                    diet += foods->getString(r, 1);
+                }
+                if (!diet.empty())
+                    addLine(formatGlobal(L, globalOr(L, "PET_DIET_TEMPLATE", "Diet: %s"), {diet}), 1.0f, 1.0f, 1.0f);
+            }
+            const uint32_t tflags = cr ? cr->typeFlags : 0u;
+            if ((tflags & 0x1u) == 0 || family == 0) {
+                addLine(globalOr(L, "NOT_TAMEABLE", "Not Tameable"), 1.0f, 1.0f, 1.0f);
+            } else {
+                addLine(globalOr(L, (tflags & 0x10000u) ? "TAMEABLE_EXOTIC" : "TAMEABLE",
+                                 (tflags & 0x10000u) ? "Tameable (Exotic)" : "Tameable"),
+                        1.0f, 1.0f, 1.0f);
+                std::string spells;
+                auto abilities = famRow >= 0 ? am->loadDBCOptional("SkillLineAbility.dbc") : nullptr;
+                for (uint32_t k = 0; k < 2 && abilities && abilities->isLoaded() && abilities->getFieldCount() > 9; ++k) {
+                    const uint32_t line = fams->getUInt32(static_cast<uint32_t>(famRow), 5 + k);
+                    for (uint32_t r = 0; line != 0 && r < abilities->getRecordCount(); ++r) {
+                        if (abilities->getUInt32(r, 1) != line || abilities->getUInt32(r, 8) != 0 ||
+                            abilities->getUInt32(r, 9) != 2)
+                            continue;
+                        const uint32_t spell = abilities->getUInt32(r, 2);
+                        gh->loadSpellNameCache();
+                        const auto se = gh->spellNameCacheRef().find(spell);
+                        if (se == gh->spellNameCacheRef().end() || (se->second.attr & 0xc0u) != 0) continue;
+                        if (!spells.empty()) spells += ", ";
+                        spells += gh->getSpellName(spell);
+                    }
+                }
+                if (!spells.empty())
+                    addLine(formatGlobal(L, globalOr(L, "PET_SPELLS_TEMPLATE", "Abilities: %s"), {spells}), 1.0f, 1.0f, 1.0f);
+            }
+        }
+        // A creature to be skinned, gathered or salvaged (UNIT_FLAG
+        // 0x4000000; 0x00620ee0): UNIT_SKINNABLE_HERB, _ROCK or _BOLTS by
+        // type flag 0x100, 0x200 or 0x8000, else _LEATHER, coloured as the
+        // player's skill in that profession stands to what the unit's level
+        // asks (1 to level 10, (level - 10) x 10 under 20, else level x 5):
+        // red short of it, orange, yellow from 25 over, green from 50, grey
+        // from 100; red with no such profession.
+        if (!isPlayer && (f(*u, game::UF::UNIT_FIELD_FLAGS) & 0x4000000u) != 0) {
+            const uint32_t tf = cr ? cr->typeFlags : 0u;
+            const char* key = (tf & 0x100u) ? "UNIT_SKINNABLE_HERB" : (tf & 0x200u) ? "UNIT_SKINNABLE_ROCK"
+                              : (tf & 0x8000u) ? "UNIT_SKINNABLE_BOLTS" : "UNIT_SKINNABLE_LEATHER";
+            const uint32_t skill = (tf & 0x100u) ? 182u : (tf & 0x200u) ? 186u : (tf & 0x8000u) ? 202u : 393u;
+            const int32_t lvl = static_cast<int32_t>(f(*u, game::UF::UNIT_FIELD_LEVEL));
+            const int32_t need = lvl <= 10 ? 1 : lvl < 20 ? (lvl - 10) * 10 : lvl * 5;
+            float r = 1.0f, g = 0.125f, b = 0.125f;  // 0xad2d64
+            const auto& skills = gh->getPlayerSkills();
+            if (const auto it = skills.find(skill); it != skills.end() && it->second.effectiveValue() > 0) {
+                const int32_t have = it->second.effectiveValue();
+                if (have >= need + 100) { r = g = b = 0.5f; }                      // 0xad2d54
+                else if (have >= need + 50) { r = 0.25f; g = 0.75f; b = 0.25f; }  // 0xad2d58
+                else if (have >= need + 25) { r = 1.0f; g = 1.0f; b = 0.0f; }     // 0xad2d5c
+                else if (have >= need) { r = 1.0f; g = 0.5f; b = 0.25f; }         // 0xad2d60
+            }
+            addLine(globalOr(L, key, key), r, g, b);
+        }
+        if (pvpFlag && cr && cr->racialLeader) addLine(globalOr(L, "PVP_RANK_LEADER", "Leader"), 1.0f, 1.0f, 1.0f);
+    }
+
+    // What the creature means to the player's quests, with
+    // showQuestTrackingTooltips (0x00621070): for each quest in the log, its
+    // title in gold over a white " - " line for each objective the creature
+    // answers - a kill objective naming it or one of its two kill credits
+    // (0x005e2370), an item objective for one of its six quest items
+    // (0x005e2630), and for a quest not yet complete an item the quest hands
+    // over among them, by name. Not for a creature a player summoned.
+    if (const auto qu = std::dynamic_pointer_cast<game::Unit>(entity); qu && !isPlayer &&
+        cvarOn(L, "showQuestTrackingTooltips")) {
+        const auto& cache = gh->getCreatureInfoCache();
+        const auto ce = cache.find(qu->getEntry());
+        const uint16_t sLo = game::fieldIndex(game::UF::UNIT_FIELD_SUMMONEDBY_LO);
+        const uint16_t sHi = game::fieldIndex(game::UF::UNIT_FIELD_SUMMONEDBY_HI);
+        const uint32_t lo = sLo != 0xFFFF ? qu->getField(sLo) : 0u;
+        const uint32_t hi = sHi != 0xFFFF ? qu->getField(sHi) : 0u;
+        const bool byPlayer = (hi & 0xf0000000u) == 0 && (lo != 0 || (hi & 0xf07fffffu) != 0);
+        if (ce != cache.end() && !byPlayer) {
+            const auto& c = ce->second;
+            for (const auto& q : gh->getQuestLog()) {
+                bool titled = false;
+                const auto emit = [&](const std::string& text) {
+                    if (!titled) {
+                        addLine(q.title, 1.0f, 0.824f, 0.0f);
+                        titled = true;
+                    }
+                    addLine(" - " + text, 1.0f, 1.0f, 1.0f);
+                };
+                const auto killLine = [&](uint32_t id) {
+                    if (id == 0) return;
+                    for (int k = 0; k < 4; ++k) {
+                        if (q.killObjectives[static_cast<size_t>(k)].npcOrGoId != static_cast<int32_t>(id)) continue;
+                        game::QuestObjective line;
+                        if (game::questObjectiveSlotLine(*gh, q, k, line)) emit(line.text);
+                        return;
+                    }
+                };
+                killLine(qu->getEntry());
+                killLine(c.killCredit[0]);
+                killLine(c.killCredit[1]);
+                for (const uint32_t item : c.questItems) {
+                    if (item == 0) break;
+                    for (int k = 0; k < 6; ++k) {
+                        const auto& io = q.itemObjectives[static_cast<size_t>(k)];
+                        if (io.itemId != item || (io.itemId == q.sourceItemId && io.required <= 1)) continue;
+                        game::QuestObjective line;
+                        if (game::questObjectiveSlotLine(*gh, q, 4 + k, line)) emit(line.text);
+                        break;
+                    }
+                    if (q.complete) continue;
+                    for (const uint32_t handed : q.objectiveSourceItems) {
+                        if (handed != item) continue;
+                        if (titled == false) {
+                            addLine(q.title, 1.0f, 0.824f, 0.0f);
+                            titled = true;
+                        }
+                        if (const auto* info = gh->getItemInfo(item); info && info->valid && !info->name.empty())
+                            addLine(" - " + info->name, 1.0f, 1.0f, 1.0f);
+                        else
+                            gh->ensureItemInfo(item);
+                    }
+                }
+            }
         }
     }
 
@@ -3966,6 +4854,53 @@ int lua_Tooltip_SetUnit(lua_State* L) {
         }
     }
 
+    // Last, the player's threat on the unit where threat is shown at all
+    // (threatWarning: 0 never, 1 in an instance, 2 in a party, 3 always -
+    // 0x00519df0): THREAT_TOOLTIP with the percentage less a half, rounded
+    // (0x007374c0). SetUnit answers 1 only when it wrote this line.
+    bool threatShown = false;
+    if (entity && !isPlayer && gh->getEntityManager().getEntity(gh->getPlayerGuid())) {
+        int mode = 3;
+        try { mode = std::stoi(wowee::addons::storedCVarValue("threatWarning", "3")); } catch (...) {}
+        const bool wanted = mode == 3 || (mode == 1 && gh->isInInstance()) ||
+                            (mode == 2 && !gh->getPartyData().members.empty());
+        if (wanted) {
+            lua_getglobal(L, "UnitDetailedThreatSituation");
+            if (lua_isfunction(L, -1)) {
+                lua_pushstring(L, "player");
+                lua_pushstring(L, uidStr.c_str());
+                if (lua_pcall(L, 2, 5, 0) == 0) {
+                    // On the unit's threat list: a threat value, which
+                    // the binding's guess without one leaves at zero.
+                    const double pct = lua_tonumber(L, -3);
+                    if (lua_tonumber(L, -1) > 0.0) {
+                        addLine(formatGlobal(L, globalOr(L, "THREAT_TOOLTIP", "%d%% Threat"),
+                                             {std::to_string(std::lround(pct - 0.5))}),
+                                1.0f, 1.0f, 1.0f);
+                        // In front of it the threat icon, tinted by the
+                        // status (0xad2d70: grey, yellow, orange, red for
+                        // 0 to 3).
+                        static constexpr float kThreatTint[4][3] = {
+                            {0.69f, 0.69f, 0.69f}, {1.0f, 1.0f, 0.467f}, {1.0f, 0.6f, 0.0f}, {1.0f, 0.0f, 0.0f}};
+                        const int status = std::clamp(static_cast<int>(lua_tonumber(L, -4)), 0, 3);
+                        auto& tl = w->tooltipLines.back();
+                        tl.icon = "Interface\\RaidFrame\\UI-RaidFrame-Threat";
+                        tl.iconTint[0] = kThreatTint[status][0];
+                        tl.iconTint[1] = kThreatTint[status][1];
+                        tl.iconTint[2] = kThreatTint[status][2];
+                        tl.iconTint[3] = 1.0f;
+                        threatShown = true;
+                    }
+                    lua_pop(L, 5);
+                } else {
+                    lua_pop(L, 1);
+                }
+            } else {
+                lua_pop(L, 1);
+            }
+        }
+    }
+
     w->shown = true;
     // The unit counterpart of fireTooltipSetItem, and it was the one of the
     // pair that was never fired. GameTooltip declares
@@ -3979,9 +4914,241 @@ int lua_Tooltip_SetUnit(lua_State* L) {
     // unit's reaction - red for hostile, green for friendly - and without this
     // every one of them was drawn in the default colour instead.
     if (lua_istable(L, 1)) callScriptOnTable(L, 1, "OnTooltipSetUnit", 0.0);
-    lua_pushboolean(L, 1);
+    luaPushOneOrNil(L, threatShown ? 1 : 0);
     return 1;
 }
+
+/// How an opening spell's value measures against what a lock wants
+/// (0x0061a1f0): grey a hundred over, green fifty, yellow twenty-five,
+/// orange at it, red short.
+static void lockSkillColour(int32_t value, int32_t required, float (&c)[3]) {
+    static constexpr float kGrey[3] = {0.5f, 0.5f, 0.5f}, kGreen[3] = {0.25f, 0.75f, 0.25f},
+                           kYellow[3] = {1.0f, 1.0f, 0.0f}, kOrange[3] = {1.0f, 0.5f, 0.25f},
+                           kRed[3] = {1.0f, 0.125f, 0.125f};
+    const float* pick = value >= required + 100 ? kGrey
+                        : value >= required + 50 ? kGreen
+                        : value >= required + 25 ? kYellow
+                        : value >= required      ? kOrange
+                                                 : kRed;
+    for (int i = 0; i < 3; ++i) c[i] = pick[i];
+}
+
+/// A game object's tooltip over the world (0x00626720): its name in gold;
+/// LOCKED where its flags say locked, red where nothing the player has opens
+/// it, green where a key or no spell does, else in the colour of the opening
+/// spell against the lock; what the lock's first slot asks for - the key by
+/// name (LOCKED_WITH_ITEM, white), the kind of skill (LOCKED_WITH_SPELL_KNOWN
+/// in the skill's colour, or LOCKED_WITH_SPELL in red with no spell for it,
+/// left out on a locked object), or a spell's reagents (LOCKED_WITH_SPELL,
+/// each red where the bags hold too few); and with showQuestTrackingTooltips
+/// the quests it answers. Answers whether there was an object to describe.
+static bool fillGameObjectTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh, uint64_t guid) {
+    const auto facts = gh->gameObjectTooltipFacts(guid);
+    if (!facts) return false;
+    const auto& t = *facts;
+    lua_checkstack(L, 8);
+    w->isTooltip = true;
+    w->tooltipUnit.clear();
+    w->tooltipLines.clear();
+    auto addLine = [&w](std::string text, const float (&c)[3], bool wrap = false) {
+        if (text.empty()) return;
+        wowee::ui::Widget::TooltipLine line;
+        line.left = std::move(text);
+        line.lc[0] = c[0]; line.lc[1] = c[1]; line.lc[2] = c[2]; line.lc[3] = 1.0f;
+        line.rc[0] = line.rc[1] = line.rc[2] = line.rc[3] = 1.0f;
+        line.wrap = wrap;
+        w->tooltipLines.push_back(std::move(line));
+    };
+    static constexpr float kGold[3] = {1.0f, 0.824f, 0.0f}, kWhite[3] = {1.0f, 1.0f, 1.0f},
+                           kGreen[3] = {0.25f, 0.75f, 0.25f}, kRed[3] = {1.0f, 0.125f, 0.125f};
+    addLine(t.name, kGold);
+
+    if (t.flaggedLocked) {
+        float c[3] = {kRed[0], kRed[1], kRed[2]};
+        if (!t.locked) {
+            if (t.spell == 0 || t.keyItem != 0) {
+                for (int i = 0; i < 3; ++i) c[i] = kGreen[i];
+            } else {
+                lockSkillColour(t.value, t.required, c);
+            }
+        }
+        addLine(globalOr(L, "LOCKED", "Locked"), c);
+    }
+
+    switch (t.requirementType) {
+        case 1: {
+            const auto* key = gh->getItemInfo(t.requirementIndex);
+            if (key && key->valid && !key->name.empty()) {
+                addLine(formatGlobal(L, globalOr(L, "LOCKED_WITH_ITEM", "Requires %s"), {key->name}), kWhite);
+            } else {
+                gh->ensureItemInfo(t.requirementIndex);
+            }
+            break;
+        }
+        case 2: {
+            if (t.spell != 0) {
+                float c[3];
+                lockSkillColour(t.value, t.required, c);
+                addLine(formatGlobal(L, globalOr(L, "LOCKED_WITH_SPELL_KNOWN", "Requires %s"), {t.lockTypeName}), c);
+            } else if (!t.flaggedLocked) {
+                addLine(formatGlobal(L, globalOr(L, "LOCKED_WITH_SPELL", "Requires %s"), {t.lockTypeName}), kRed);
+            }
+            break;
+        }
+        case 3: {
+            // 0x00623590: each reagent by name, its count after it where more
+            // than one, in red where the bags hold fewer, joined by ", ".
+            std::string list;
+            for (int k = 0; k < 8; ++k) {
+                if (t.reagentItem[k] == 0 || t.reagentCount[k] == 0) continue;
+                const auto* item = gh->getItemInfo(t.reagentItem[k]);
+                if (!item || !item->valid || item->name.empty()) {
+                    gh->ensureItemInfo(t.reagentItem[k]);
+                    continue;
+                }
+                if (!list.empty()) list += ", ";
+                std::string one = item->name;
+                if (t.reagentCount[k] >= 2) one += " (" + std::to_string(t.reagentCount[k]) + ")";
+                if (gh->countItemInBags(t.reagentItem[k]) < t.reagentCount[k]) list += "|cffff2020" + one + "|r";
+                else list += one;
+            }
+            if (!list.empty())
+                addLine(formatGlobal(L, globalOr(L, "LOCKED_WITH_SPELL", "Requires %s"), {list}), kWhite, true);
+            break;
+        }
+        default:
+            break;
+    }
+
+    // As a creature's (0x00621070): each quest's title over a " - " line for
+    // an objective naming the object, or one of its six quest items, and for
+    // a quest not yet complete an item the quest hands over among them.
+    if (cvarOn(L, "showQuestTrackingTooltips")) {
+        for (const auto& q : gh->getQuestLog()) {
+            bool titled = false;
+            const auto title = [&] {
+                if (!titled) addLine(q.title, kGold);
+                titled = true;
+            };
+            const auto emit = [&](const std::string& text) {
+                title();
+                addLine(" - " + text, kWhite);
+            };
+            for (int k = 0; k < 4; ++k) {
+                if (q.killObjectives[static_cast<size_t>(k)].npcOrGoId != -static_cast<int32_t>(t.entry)) continue;
+                game::QuestObjective line;
+                if (game::questObjectiveSlotLine(*gh, q, k, line)) emit(line.text);
+                break;
+            }
+            for (const uint32_t item : t.questItems) {
+                if (item == 0) break;
+                for (int k = 0; k < 6; ++k) {
+                    const auto& io = q.itemObjectives[static_cast<size_t>(k)];
+                    if (io.itemId != item || (io.itemId == q.sourceItemId && io.required <= 1)) continue;
+                    game::QuestObjective line;
+                    if (game::questObjectiveSlotLine(*gh, q, 4 + k, line)) emit(line.text);
+                    break;
+                }
+                if (q.complete) continue;
+                for (const uint32_t handed : q.objectiveSourceItems) {
+                    if (handed != item) continue;
+                    if (const auto* info = gh->getItemInfo(item); info && info->valid && !info->name.empty()) {
+                        title();
+                        addLine(" - " + info->name, kWhite);
+                    } else {
+                        gh->ensureItemInfo(item);
+                    }
+                }
+            }
+        }
+    }
+    w->shown = true;
+    return true;
+}
+
+namespace {
+/// The tooltips fading out, by widget id.
+std::vector<uint32_t>& fadingTooltips() {
+    static std::vector<uint32_t> ids;
+    return ids;
+}
+
+/// A frame's own Hide, run as a script would run it, so OnHide follows.
+void hideFrameByWid(lua_State* L, uint32_t wid) {
+    lua_getglobal(L, "__WoweeFramesByWid");
+    if (!lua_istable(L, -1)) { lua_pop(L, 1); return; }
+    lua_pushinteger(L, static_cast<lua_Integer>(wid));
+    lua_rawget(L, -2);
+    if (!lua_istable(L, -1)) { lua_pop(L, 2); return; }
+    lua_getfield(L, -1, "Hide");
+    if (!lua_isfunction(L, -1)) { lua_pop(L, 3); return; }
+    lua_pushvalue(L, -2);
+    if (lua_pcall(L, 1, 0, 0) != 0) {
+        LOG_WARNING("tooltip fade: ", luaL_optstring(L, -1, "?"));
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 2);
+}
+
+/// FadeOut (0x0061d940): a tooltip at the cursor goes at once; any other
+/// is held two seconds, the last of them fading, and then hidden
+/// (0x0061b290, the fade at 0x0061b3dd).
+void fadeOutTooltip(lua_State* L, uint32_t wid) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    auto* w = tree ? tree->get(wid) : nullptr;
+    if (!w) return;
+    if (w->tooltipAnchorType == 8 || w->tooltipAnchorType == 11) {
+        w->tooltipFadeLeft = 0.0f;
+        hideFrameByWid(L, wid);
+        return;
+    }
+    w->tooltipFadeLeft = 2.0f;
+    auto& ids = fadingTooltips();
+    if (std::find(ids.begin(), ids.end(), wid) == ids.end()) ids.push_back(wid);
+}
+
+/// Each frame: the alpha of a fading tooltip is what is left of its time,
+/// at most one; at none it is whole again and hidden.
+void tickTooltipFades(lua_State* L, float elapsed) {
+    auto& ids = fadingTooltips();
+    if (ids.empty()) return;
+    auto* tree = wowee::addons::getWidgetTree(L);
+    if (!tree) return;
+    const std::vector<uint32_t> now = ids;
+    ids.clear();
+    for (const uint32_t wid : now) {
+        auto* w = tree->get(wid);
+        if (!w || w->tooltipFadeLeft <= 0.0f) continue;
+        w->tooltipFadeLeft -= elapsed;
+        if (w->tooltipFadeLeft > 0.0f) {
+            w->alpha = std::min(w->tooltipFadeLeft, 1.0f);
+            ids.push_back(wid);
+        } else {
+            w->tooltipFadeLeft = 0.0f;
+            w->alpha = 1.0f;
+            hideFrameByWid(L, wid);
+        }
+    }
+}
+}  // namespace
+
+/// The last line AddFontStrings made is the two font strings themselves
+/// (0x0061fe30): it shows what they say and how they are coloured from now on.
+int lua_Tooltip_AdoptFontStrings(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w || w->tooltipLines.empty()) return 0;
+    auto& line = w->tooltipLines.back();
+    line.leftFontString = widgetIdOf(L, 2);
+    line.rightFontString = widgetIdOf(L, 3);
+    return 0;
+}
+
+int lua_Tooltip_FadeOut(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    if (w && w->isTooltip) fadeOutTooltip(L, widgetIdOf(L, 1));
+    return 0;
+}
+
 
 /// Shared by every setter that ends up naming an item: title in the quality
 /// colour, then whatever else is worth saying. One place, because the four
@@ -4182,9 +5349,38 @@ static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
             lua_setfield(L, -2, "durability");
             lua_pushnumber(L, static_cast<lua_Number>(instance->maxDurability));
             lua_setfield(L, -2, "maxDurability");
+            lua_pushnumber(L, static_cast<lua_Number>(
+                gh->itemSellPriceShown(instance->guid, itemId, instance->stackCount)));
+            lua_setfield(L, -2, "price");
+            // Raid loot still tradeable among those who could have looted it:
+            // soulbound, flagged 0x100, and under two hours of the player's
+            // played time since it was made (0x00708520, 0x00708b40) - the
+            // seconds left, for BIND_TRADE_TIME_REMAINING.
+            {
+                const uint32_t own = gh->getItemFieldFlags(instance->guid);
+                const int64_t played = gh->playedTimeNow();
+                const auto& online = gh->onlineItemsRef();
+                const auto oi = online.find(instance->guid);
+                if ((own & 0x1u) != 0 && (own & 0x100u) != 0 && played >= 0 && oi != online.end()) {
+                    const int64_t left = static_cast<int64_t>(oi->second.createPlayedTime) - played + 7200;
+                    if (left > 0) {
+                        lua_pushnumber(L, static_cast<lua_Number>(left));
+                        lua_setfield(L, -2, "tradeLeft");
+                    }
+                }
+            }
+            // How long it has left, for an item that lasts a while
+            // (ITEM_FIELD_DURATION, seconds; 0x007070b0).
+            lua_pushnumber(L, gh->getItemDurationByGuid(instance->guid));
+            lua_setfield(L, -2, "duration");
             // What is left of its first spell's charges (ITEM_FIELD_SPELL_CHARGES).
             lua_pushnumber(L, gh->getItemSpellCharges(instance->guid));
             lua_setfield(L, -2, "charges0");
+            // Its lock opened (ITEM_FIELD_FLAGS 0x4): no LOCKED line.
+            if ((gh->getItemFieldFlags(instance->guid) & 0x4u) != 0) {
+                lua_pushboolean(L, 1);
+                lua_setfield(L, -2, "unlocked");
+            }
             // The one action line the instance gets (0x006277f0): openable -
             // a lootable item (flag 0x4) not locked or unlocked (instance
             // 0x4), or flag 0x200 with instance 0x8 - else readable (a page,
@@ -4309,7 +5505,13 @@ int lua_Tooltip_SetAuctionItem(lua_State* L) {
         return 1;
     }
     const auto& row = results.auctions[index - 1];
+    // No price on an auction's item: 0x0062fcf0 passes 0x006277f0 its
+    // seventeenth argument, as SetMerchantItem does.
+    lua_pushboolean(L, 1);
+    lua_setglobal(L, "__WoweeTooltipNoPrice");
     const bool filled = fillItemTooltipById(L, gh, row.itemEntry);
+    lua_pushnil(L);
+    lua_setglobal(L, "__WoweeTooltipNoPrice");
     if (filled) {
         // The suffix it rolled, which for a ring is usually all of its stats.
         //
@@ -4561,8 +5763,28 @@ int lua_Tooltip_SetInventoryItem(lua_State* L) {
     if (slot <= static_cast<int>(game::EquipSlot::NUM_SLOTS)) {
         appendEnchantLines(w, gh, gh->getEquipSlotGuid(slot - 1));
     }
+    // hasItem, then whether a cooldown is running on it (the paperdoll keeps
+    // refreshing the tooltip while one is), then what repairing it costs
+    // (0x0062e050 -> 0x00584b20) for repair mode.
     luaPushOneOrNil(L, 1);
-    return 1;
+    bool cooling = false;
+    lua_getglobal(L, "GetInventoryItemCooldown");
+    if (lua_isfunction(L, -1)) {
+        lua_pushstring(L, "player");
+        lua_pushnumber(L, slot);
+        if (lua_pcall(L, 2, 3, 0) == 0) {
+            cooling = lua_tonumber(L, -2) > 0.0;
+            lua_pop(L, 3);
+        } else {
+            lua_pop(L, 1);
+        }
+    } else {
+        lua_pop(L, 1);
+    }
+    luaPushOneOrNil(L, cooling ? 1 : 0);
+    const uint64_t itemGuid = slot <= static_cast<int>(game::EquipSlot::NUM_SLOTS) ? gh->getEquipSlotGuid(slot - 1) : 0;
+    lua_pushnumber(L, gh->itemRepairCostShown(itemGuid));
+    return 3;
 }
 
 /// The three socketing-panel tooltips.
@@ -4648,6 +5870,52 @@ int lua_Tooltip_SetCurrencyToken(lua_State* L) {
 }
 
 /// SetBagItem(bag, slot) - the same for something in the bags.
+/// GameTooltip:AddTexture(texture[, left, right, top, bottom]) (0x0061d810
+/// -> 0x0061c8b0): the picture at the front of the last line, as tall as
+/// the line, the line's text moved along past it - ten at most a tooltip,
+/// and only once there is a line. The part shown, where all four numbers
+/// are given, is that fraction of the file.
+static int lua_Tooltip_AddTexture(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w || w->tooltipLines.empty() || !lua_isstring(L, 2)) return 0;
+    int pictures = 0;
+    for (const auto& line : w->tooltipLines) pictures += line.left.rfind("|T", 0) == 0 ? 1 : 0;
+    if (pictures >= 10) return 0;
+    std::string escape = std::string("|T") + lua_tostring(L, 2) + ":0";
+    if (lua_isnumber(L, 3) && lua_isnumber(L, 4) && lua_isnumber(L, 5) && lua_isnumber(L, 6)) {
+        constexpr double kScale = 10000.0;
+        const auto px = [&](int i) { return std::to_string(std::lround(lua_tonumber(L, i) * kScale)); };
+        escape += ":0:0:0:10000:10000:" + px(3) + ":" + px(4) + ":" + px(5) + ":" + px(6);
+    }
+    escape += "|t ";
+    w->tooltipLines.back().left = escape + w->tooltipLines.back().left;
+    return 0;
+}
+
+/// SetSendMailItem(index) (0x0062f8b0): the attachment's full tooltip, from
+/// the item itself - 1 when filled.
+static int lua_Tooltip_SetSendMailItem(lua_State* L) {
+    auto* gh = wowee::addons::getGameHandler(L);
+    const long index = std::lround(luaL_optnumber(L, 2, 0));
+    if (!gh || index < 1) return 0;
+    const auto& attachments = gh->getMailAttachments();
+    if (index > static_cast<long>(attachments.size())) return 0;
+    const auto& att = attachments[static_cast<size_t>(index) - 1];
+    if (!att.occupied()) return 0;
+    luaPushOneOrNil(L, fillItemTooltipById(L, gh, att.item.itemId, &att.item) ? 1 : 0);
+    return 1;
+}
+
+/// __WoweeContainerRepairCost(bag, slot): what repairing the item there
+/// costs, as SetBagItem's second answer gives it (0x00584b20).
+static int lua_WoweeContainerRepairCost(lua_State* L) {
+    auto* gh = wowee::addons::getGameHandler(L);
+    const int bag = static_cast<int>(luaL_optnumber(L, 1, 0));
+    const int slot = static_cast<int>(luaL_optnumber(L, 2, 0));
+    lua_pushnumber(L, gh && slot > 0 ? gh->itemRepairCostShown(wowee::addons::containerSlotGuid(gh, bag, slot)) : 0);
+    return 1;
+}
+
 int lua_Tooltip_SetBagItem(lua_State* L) {
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
@@ -4678,8 +5946,11 @@ int lua_Tooltip_SetBagItem(lua_State* L) {
         fireTooltipSetItem(L);
         appendDurabilityLine(w, s.item);
     }
+    // And what repairing it costs (0x0062f420 -> 0x00584b20), which the bag
+    // button shows in repair mode.
     luaPushOneOrNil(L, 1);
-    return 1;
+    lua_pushnumber(L, gh->itemRepairCostShown(wowee::addons::containerSlotGuid(gh, bag, slot)));
+    return 2;
 }
 
 /// SetGuildBankItem(tab, slot) - hovering a slot in the guild bank.
@@ -4708,7 +5979,13 @@ int lua_Tooltip_SetGuildBankItem(lua_State* L) {
 
     for (const auto& it : *items) {
         if (it.slotId + 1 != slot) continue;
-        lua_pushboolean(L, fillItemTooltipById(L, gh, it.itemEntry) ? 1 : 0);
+        // With the slot's count (0x006304a0, +0x4b8).
+        lua_pushnumber(L, it.stackCount);
+        lua_setglobal(L, "__WoweeTooltipItemCount");
+        const bool filled = fillItemTooltipById(L, gh, it.itemEntry);
+        lua_pushnil(L);
+        lua_setglobal(L, "__WoweeTooltipItemCount");
+        lua_pushboolean(L, filled ? 1 : 0);
         return 1;
     }
     lua_pushboolean(L, 0);
@@ -4742,6 +6019,25 @@ int lua_Tooltip_NumLines(lua_State* L) {
     const auto* w = widgetOf(L, 1);
     lua_pushnumber(L, w ? static_cast<lua_Number>(w->tooltipLines.size()) : 0.0);
     return 1;
+}
+
+/// ScrollingMessageFrame:UpdateColorByID(id, r, g, b) (0x00973590 ->
+/// 0x0096a6e0): every line added with that id takes the colour - which is
+/// how a chat type's new colour reaches the lines already in the window.
+/// All four arguments are needed; an id of 0 names no line.
+int lua_MessageFrame_UpdateColorByID(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w || !lua_isnumber(L, 2) || !lua_isnumber(L, 3) || !lua_isnumber(L, 4) || !lua_isnumber(L, 5)) return 0;
+    const double id = lua_tonumber(L, 2);
+    if (id == 0.0) return 0;
+    const auto chan = [&](int i) { return static_cast<float>(std::clamp(lua_tonumber(L, i), 0.0, 1.0)); };
+    for (auto& m : w->messages) {
+        if (m.lineId != id) continue;
+        m.color[0] = chan(3);
+        m.color[1] = chan(4);
+        m.color[2] = chan(5);
+    }
+    return 0;
 }
 
 int lua_MessageFrame_Clear(lua_State* L) {
@@ -4788,8 +6084,10 @@ int lua_MessageFrame_SetMaxLines(lua_State* L) {
     return 0;
 }
 int lua_MessageFrame_ScrollUp(lua_State* L) {
+    // A display line at a time (0x009732f0), the client's ring holding the
+    // wrapped lines rather than the messages.
     if (auto* w = widgetOf(L, 1)) {
-        if (static_cast<size_t>(w->messageScroll) + 1 < w->messages.size())
+        if (w->messageScroll + 1 < std::max(w->messageLinesTotal, static_cast<int>(w->messages.size())))
             ++w->messageScroll;
     }
     return 0;
@@ -4805,13 +6103,13 @@ int lua_MessageFrame_ScrollToBottom(lua_State* L) {
     return 0;
 }
 
-// The rest of ScrollingMessageFrame's scrolling (0x009732f0-0x009736f0). The
-// client counts in wrapped lines; this frame keeps its offset in messages, so
-// a page here is the messages the last draw fitted rather than its lines.
+// The rest of ScrollingMessageFrame's scrolling (0x009732f0-0x009736f0), in
+// wrapped display lines as the client's ring holds them.
 
 namespace {
 int lastScroll(const wowee::ui::Widget& w) {
-    return w.messages.empty() ? 0 : static_cast<int>(w.messages.size()) - 1;
+    const int lines = std::max(w.messageLinesTotal, static_cast<int>(w.messages.size()));
+    return lines > 0 ? lines - 1 : 0;
 }
 void scrollTo(wowee::ui::Widget& w, int offset) {
     w.messageScroll = std::clamp(offset, 0, lastScroll(w));
@@ -4931,6 +6229,35 @@ int lua_QuestBlobFrame_DrawQuestBlob(lua_State* L) {
     // Absent means show, as it does everywhere in this API.
     const bool show = lua_isnone(L, 3) ? true : lua_toboolean(L, 3) != 0;
     gh->setQuestBlobShown(questId, show);
+    return 0;
+}
+
+/// WorldMapBlobFrame's look (0x0058fe50, 0x0058e660, 0x0058fea0, 0x0058e6f0,
+/// 0x0058e780): the fill and border textures, their alphas clamped to
+/// 0-255, and the border's width clamped to 0-10 (hundredths).
+static int lua_QuestBlobFrame_SetFillTexture(lua_State* L) {
+    if (auto* gh = wowee::addons::getGameHandler(L)) gh->questBlobStyleRef().fillTexture = luaL_optstring(L, 2, "");
+    return 0;
+}
+static int lua_QuestBlobFrame_SetBorderTexture(lua_State* L) {
+    if (auto* gh = wowee::addons::getGameHandler(L)) gh->questBlobStyleRef().borderTexture = luaL_optstring(L, 2, "");
+    return 0;
+}
+static uint8_t blobAlphaArg(lua_State* L) {
+    const double a = std::clamp(luaL_optnumber(L, 2, 0), 0.0, 255.0);
+    return static_cast<uint8_t>(std::lround(a));
+}
+static int lua_QuestBlobFrame_SetFillAlpha(lua_State* L) {
+    if (auto* gh = wowee::addons::getGameHandler(L)) gh->questBlobStyleRef().fillAlpha = blobAlphaArg(L);
+    return 0;
+}
+static int lua_QuestBlobFrame_SetBorderAlpha(lua_State* L) {
+    if (auto* gh = wowee::addons::getGameHandler(L)) gh->questBlobStyleRef().borderAlpha = blobAlphaArg(L);
+    return 0;
+}
+static int lua_QuestBlobFrame_SetBorderScalar(lua_State* L) {
+    if (auto* gh = wowee::addons::getGameHandler(L))
+        gh->questBlobStyleRef().borderScalar = static_cast<float>(std::clamp(luaL_optnumber(L, 2, 0), 0.0, 10.0));
     return 0;
 }
 
@@ -7802,6 +9129,21 @@ static int lua_Minimap_SetCorpsePOIArrowTexture(lua_State* L) {
     return setMinimapArt(L, mma::CorpseArrow, "SetCorpsePOITexture");
 }
 static int lua_Minimap_SetPlayerTexture(lua_State* L) { return setMinimapArt(L, mma::Player, "SetPlayerTexture"); }
+/// Minimap:SetPlayerTextureHeight / Width(n) (0x0057e1c0, 0x0057e280): the
+/// player arrow's size, in interface units.
+static int setMinimapPlayerSize(lua_State* L, bool height, const char* usage) {
+    const auto* w = widgetOf(L, 1);
+    if (!lua_isnumber(L, 2))
+        return luaL_error(L, usage, (w && !w->name.empty()) ? w->name.c_str() : "<unnamed>");
+    (height ? mma::state().playerHeight : mma::state().playerWidth) = static_cast<float>(lua_tonumber(L, 2));
+    return 0;
+}
+static int lua_Minimap_SetPlayerTextureHeight(lua_State* L) {
+    return setMinimapPlayerSize(L, true, "Usage: %s:SetPlayerTextureHeight(height)");
+}
+static int lua_Minimap_SetPlayerTextureWidth(lua_State* L) {
+    return setMinimapPlayerSize(L, false, "Usage: %s:SetPlayerTextureWidth(Width)");
+}
 
 // Frame method: frame:CreateTexture(name, layer) → a real region
 static int lua_Frame_CreateTexture(lua_State* L) {
@@ -9015,6 +10357,7 @@ void LuaEngine::registerCoreAPI() {
         {"SetBackpackToken", lua_Tooltip_SetBackpackToken},
         {"SetGuildBankItem", lua_Tooltip_SetGuildBankItem},
         {"SetSpellByID",    lua_Tooltip_SetSpellByID},
+        {"AddTexture",      lua_Tooltip_AddTexture},
         {"SetQuestLogRewardSpell", lua_Tooltip_SetQuestLogRewardSpell},
         {"SetEquipmentSet",        lua_Tooltip_SetEquipmentSet},
         {"SetLFGCompletionReward", lua_Tooltip_SetLFGCompletionReward},
@@ -9043,11 +10386,13 @@ void LuaEngine::registerCoreAPI() {
         {"AppendText",      lua_Tooltip_AppendText},
         {"NumLines",        lua_Tooltip_NumLines},
         {"Clear",           lua_MessageFrame_Clear},
+        {"UpdateColorByID", lua_MessageFrame_UpdateColorByID},
         {"GetNumMessages",  lua_MessageFrame_GetNumMessages},
         {"GetMessageInfo",  lua_MessageFrame_GetMessageInfo},
         {"RemoveMessagesByAccessID", lua_MessageFrame_RemoveMessagesByAccessID},
         {"SetMaxLines",     lua_MessageFrame_SetMaxLines},
         {"SetWordWrap",     lua_FontString_SetWordWrap},
+        {"SetAlphaGradient", lua_FontString_SetAlphaGradient},
         {"CanWordWrap",     lua_FontString_CanWordWrap},
         {"SetNonSpaceWrap", lua_FontString_SetNonSpaceWrap},
         {"SetReverse",      lua_Cooldown_SetReverse},
@@ -9097,9 +10442,16 @@ void LuaEngine::registerCoreAPI() {
         {"SetPOIArrowTexture",       lua_Minimap_SetPOIArrowTexture},
         {"SetCorpsePOIArrowTexture", lua_Minimap_SetCorpsePOIArrowTexture},
         {"SetPlayerTexture",         lua_Minimap_SetPlayerTexture},
+        {"SetPlayerTextureHeight",   lua_Minimap_SetPlayerTextureHeight},
+        {"SetPlayerTextureWidth",    lua_Minimap_SetPlayerTextureWidth},
         {"PingLocation",    lua_Minimap_PingLocation},
         {"GetPingPosition", lua_Minimap_GetPingPosition},
         {"DrawQuestBlob",   lua_QuestBlobFrame_DrawQuestBlob},
+        {"SetFillTexture",  lua_QuestBlobFrame_SetFillTexture},
+        {"SetFillAlpha",    lua_QuestBlobFrame_SetFillAlpha},
+        {"SetBorderTexture", lua_QuestBlobFrame_SetBorderTexture},
+        {"SetBorderAlpha",  lua_QuestBlobFrame_SetBorderAlpha},
+        {"SetBorderScalar", lua_QuestBlobFrame_SetBorderScalar},
         {"EnableSmoothing",        wowee::addons::lua_QuestBlob_EnableSmoothing},
         {"EnableMerging",          wowee::addons::lua_QuestBlob_EnableMerging},
         {"SetMergeThreshold",      wowee::addons::lua_QuestBlob_SetMergeThreshold},
@@ -9356,6 +10708,7 @@ void LuaEngine::registerCoreAPI() {
         "    local lr, lg, lb = l:GetTextColor()\n"
         "    local rr, rg, rb = r:GetTextColor()\n"
         "    self:AddDoubleLine(l:GetText() or '', r:GetText() or '', lr, lg, lb, rr, rg, rb)\n"
+        "    __WoweeTooltipAdoptFontStrings(self, l, r)\n"
         "end\n"
         // SetInventoryPortraitTexture(texture, unit, slot) (0x005ea9b0): the
         // texture shows the icon of what the unit wears in that slot.
@@ -10338,6 +11691,25 @@ void LuaEngine::registerCoreAPI() {
     lua_setglobal(L_, "__WoweeTooltipSetSpellByID");
     lua_pushcfunction(L_, lua_Tooltip_SetUnitAura);
     lua_setglobal(L_, "__WoweeTooltipSetUnitAura");
+    // The spell-shaped setters the client builds itself (0x006238a0).
+    lua_pushcfunction(L_, lua_Tooltip_SetSendMailItem);
+    lua_setglobal(L_, "__WoweeTooltipSetSendMailItem");
+    lua_pushcfunction(L_, lua_WoweeContainerRepairCost);
+    lua_setglobal(L_, "__WoweeContainerRepairCost");
+    lua_pushcfunction(L_, lua_Tooltip_SetPetAction);
+    lua_setglobal(L_, "__WoweeTooltipSetPetAction");
+    lua_pushcfunction(L_, lua_Tooltip_SetShapeshift);
+    lua_setglobal(L_, "__WoweeTooltipSetShapeshift");
+    lua_pushcfunction(L_, lua_Tooltip_FadeOut);
+    lua_setglobal(L_, "__WoweeTooltipFadeOut");
+    lua_pushcfunction(L_, lua_Tooltip_AdoptFontStrings);
+    lua_setglobal(L_, "__WoweeTooltipAdoptFontStrings");
+    lua_pushcfunction(L_, lua_Tooltip_SetPossession);
+    lua_setglobal(L_, "__WoweeTooltipSetPossession");
+    lua_pushcfunction(L_, lua_Tooltip_SetQuestRewardSpell);
+    lua_setglobal(L_, "__WoweeTooltipSetQuestRewardSpell");
+    lua_pushcfunction(L_, lua_Tooltip_SetTotem);
+    lua_setglobal(L_, "__WoweeTooltipSetTotem");
 
     // CreateFrame function
     lua_pushcfunction(L_, lua_EditBox_SetText);
@@ -10845,7 +12217,15 @@ void LuaEngine::registerCoreAPI() {
         "    if not equipSlot or equipSlot == '' then return __cmpNo('GetItemInfo gave no equip slot') end\n"
         "    local slots = __WoweeCompareSlots[equipSlot]\n"
         "    if not slots then return __cmpNo('no slot mapping for ' .. tostring(equipSlot)) end\n"
-        "    local slot = slots[index or 1]\n"
+        // 0x00631850: the index-th of the fitting slots that hold something
+        // - an empty first ring slot does not stop the second being compared.
+        "    local slot, seen = nil, 0\n"
+        "    for _, s in ipairs(slots) do\n"
+        "        if GetInventoryItemLink('player', s) then\n"
+        "            seen = seen + 1\n"
+        "            if seen == (index or 1) then slot = s break end\n"
+        "        end\n"
+        "    end\n"
         "    if not slot then return __cmpNo('no slot at compare index') end\n"
         // Nothing worn there is not a comparison, it is an empty tooltip -
         // and answering true for one would show a blank box beside the item.
@@ -10865,11 +12245,13 @@ void LuaEngine::registerCoreAPI() {
         // own terms: wearing one copy and hovering another, index 1 is the copy
         // worn and index 2 the other ring, and dropping the first leaves the
         // player comparing against one hand only.
-        "    if not _WoweePopulateItemTooltip(self, wornId) then return __cmpNo('no tooltip could be built for the worn item') end\n"
-        // What is on the worn item, which its id could not carry.
-        "    if self._WoweeAppendEquippedEnchants then\n"
-        "        self:_WoweeAppendEquippedEnchants(slot)\n"
-        "    end\n"
+        // The worn item itself - its durability, enchants and suffix - under
+        // CURRENTLY_EQUIPPED in grey (0x006277f0's sixth argument).
+        "    __WoweeTooltipEquippedHeader = true\n"
+        "    local ok, filled = pcall(self.SetInventoryItem, self, 'player', slot)\n"
+        "    __WoweeTooltipEquippedHeader = nil\n"
+        "    if not ok then error(filled, 0) end\n"
+        "    if not filled then return __cmpNo('no tooltip could be built for the worn item') end\n"
         "    self:Show()\n"
         "    return true\n"
         "end\n"
@@ -10924,17 +12306,35 @@ void LuaEngine::registerCoreAPI() {
         //
         // Each prefers the item link, because SetHyperlink already renders one
         // and a link is what these getters hand back.
+        // The slot's count rides along, as 0x0062e520 hands it to 0x006277f0
+        // (+0x4b8): the price is for the whole pile.
         "function __WoweeFrameMT:SetLootItem(slot)\n"
         "    self:ClearLines()\n"
         "    local link = GetLootSlotLink and GetLootSlotLink(slot)\n"
-        "    if link then return self:SetHyperlink(link) end\n"
+        "    if link then\n"
+        "        __WoweeTooltipItemCount = select(3, GetLootSlotInfo(slot))\n"
+        "        local ok, r1, r2 = pcall(self.SetHyperlink, self, link)\n"
+        "        __WoweeTooltipItemCount = nil\n"
+        "        if not ok then error(r1, 0) end\n"
+        "        return r1, r2\n"
+        "    end\n"
         "    local _, name = GetLootSlotInfo(slot)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
         "end\n"
+        // A link drawn with the count its setter hands 0x006277f0 (+0x4b8),
+        // for the price of the whole pile.
+        "function __WoweeSetHyperlinkCounted(self, link, count)\n"
+        "    __WoweeTooltipItemCount = count\n"
+        "    local ok, r1, r2 = pcall(self.SetHyperlink, self, link)\n"
+        "    __WoweeTooltipItemCount = nil\n"
+        "    if not ok then error(r1, 0) end\n"
+        "    return r1, r2\n"
+        "end\n"
+        // 0x006300a0, with the roll's count.
         "function __WoweeFrameMT:SetLootRollItem(rollId)\n"
         "    self:ClearLines()\n"
         "    local link = GetLootRollItemLink and GetLootRollItemLink(rollId)\n"
-        "    if link then return self:SetHyperlink(link) end\n"
+        "    if link then return __WoweeSetHyperlinkCounted(self, link, select(3, GetLootRollItemInfo(rollId))) end\n"
         "end\n"
         // The merchant item's index rides along while its link is drawn, so
         // the item tooltip can say the arena rating its cost asks for.
@@ -10954,33 +12354,28 @@ void LuaEngine::registerCoreAPI() {
         "function __WoweeFrameMT:SetBuybackItem(index)\n"
         "    self:ClearLines()\n"
         "    local link = GetBuybackItemLink and GetBuybackItemLink(index)\n"
-        "    if link then return self:SetHyperlink(link) end\n"
+        "    if link then return __WoweeSetHyperlinkCounted(self, link, select(4, GetBuybackItemInfo(index))) end\n"
         "    local name = GetBuybackItemInfo(index)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
         "end\n"
+        // With the attachment's count (0x0062f9e0).
         "function __WoweeFrameMT:SetInboxItem(index, attachIndex)\n"
         "    self:ClearLines()\n"
         "    local link = GetInboxItemLink and GetInboxItemLink(index, attachIndex)\n"
-        "    if link then return self:SetHyperlink(link) end\n"
+        "    if link then\n"
+        "        __WoweeTooltipItemCount = select(3, GetInboxItem(index, attachIndex))\n"
+        "        local ok, r1, r2 = pcall(self.SetHyperlink, self, link)\n"
+        "        __WoweeTooltipItemCount = nil\n"
+        "        if not ok then error(r1, 0) end\n"
+        "        return r1, r2\n"
+        "    end\n"
         "    local name = GetInboxItem(index, attachIndex)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
         "end\n"
-        "function __WoweeFrameMT:SetSendMailItem(index)\n"
-        "    self:ClearLines()\n"
-        "    local name = GetSendMailItem(index)\n"
-        "    if name then self:SetText(name, 1, 1, 1) end\n"
-        "end\n"
+        "function __WoweeFrameMT:SetSendMailItem(index) return __WoweeTooltipSetSendMailItem(self, index) end\n"
         // A totem's tooltip is its spell's, and the totem bar is drawn by
         // whichever side owns it.
-        "function __WoweeFrameMT:SetTotem(slot)\n"
-        "    self:ClearLines()\n"
-        "    local _, name, _, duration = GetTotemInfo(slot)\n"
-        "    if not name or name == '' then return end\n"
-        "    self:SetText(name, 1, 1, 1)\n"
-        "    if duration and duration > 0 then\n"
-        "        self:AddLine(string.format('%.0f sec remaining', duration), 1, 1, 1)\n"
-        "    end\n"
-        "end\n"
+        "function __WoweeFrameMT:SetTotem(slot) return __WoweeTooltipSetTotem(self, slot) end\n"
         // What the minimap's tracking button is showing. 1.12's Minimap.xml
         // opens the tracking frame's OnEnter with SetOwner and this, and it was
         // in neither the method table nor the no-op allowlist - so the lookup
@@ -11002,14 +12397,13 @@ void LuaEngine::registerCoreAPI() {
         "        if active and name then return self:SetText(name, 1, 1, 1) end\n"
         "    end\n"
         "end\n"
+        // 0x0062e900: the spell the service teaches (LEARN_SPELL, or
+        // LEARN_PET_SPELL for the pet) - the item it makes where that is a
+        // recipe - else the service's own spell. Answers nothing.
         "function __WoweeFrameMT:SetTrainerService(index)\n"
-        "    self:ClearLines()\n"
-        "    if not index then return end\n"
-        "    local link = GetTrainerServiceItemLink and GetTrainerServiceItemLink(index)\n"
-        "    if link then return self:SetHyperlink(link) end\n"
-        "    local name, subText = GetTrainerServiceInfo(index)\n"
-        "    if name then self:SetText(name, 1, 1, 1) end\n"
-        "    if subText and subText ~= '' then self:AddLine(subText, 0.5, 0.5, 0.5) end\n"
+        "    local kind, id, pet = __WoweeTrainerServiceTooltip(index)\n"
+        "    if kind == 'item' then _WoweePopulateItemTooltip(self, id)\n"
+        "    elseif kind == 'spell' then self:SetSpellByID(id, pet) end\n"
         "end\n"
         "function __WoweeFrameMT:SetAuctionSellItem()\n"
         "    self:ClearLines()\n"
@@ -11022,26 +12416,34 @@ void LuaEngine::registerCoreAPI() {
         "function __WoweeFrameMT:SetQuestLogItem(itemType, index)\n"
         "    self:ClearLines()\n"
         "    local link = GetQuestLogItemLink and GetQuestLogItemLink(itemType, index)\n"
-        "    if link then return self:SetHyperlink(link) end\n"
+        "    if link then\n"
+        "        local count\n"
+        "        if itemType == 'choice' then count = select(3, GetQuestLogChoiceInfo(index))\n"
+        "        else count = select(3, GetQuestLogRewardInfo(index)) end\n"
+        "        return __WoweeSetHyperlinkCounted(self, link, count)\n"
+        "    end\n"
         "    local name = GetQuestItemInfo(itemType, index)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
         "end\n"
+        // And a quest reward's count (0x0062e670).
         "function __WoweeFrameMT:SetQuestItem(itemType, index)\n"
         "    self:ClearLines()\n"
         "    local link = GetQuestItemLink and GetQuestItemLink(itemType, index)\n"
-        "    if link then return self:SetHyperlink(link) end\n"
+        "    if link then\n"
+        "        __WoweeTooltipItemCount = select(3, GetQuestItemInfo(itemType, index))\n"
+        "        local ok, r1, r2 = pcall(self.SetHyperlink, self, link)\n"
+        "        __WoweeTooltipItemCount = nil\n"
+        "        if not ok then error(r1, 0) end\n"
+        "        return r1, r2\n"
+        "    end\n"
         "    local name = GetQuestItemInfo(itemType, index)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
         "end\n"
-        "function __WoweeFrameMT:SetQuestRewardSpell()\n"
-        "    self:ClearLines()\n"
-        "    local _, _, _, name = GetRewardSpell()\n"
-        "    if name then self:SetText(name, 1, 1, 1) end\n"
-        "end\n"
+        "function __WoweeFrameMT:SetQuestRewardSpell() return __WoweeTooltipSetQuestRewardSpell(self) end\n"
         "function __WoweeFrameMT:SetTradePlayerItem(index)\n"
         "    self:ClearLines()\n"
         "    local link = GetTradePlayerItemLink and GetTradePlayerItemLink(index)\n"
-        "    if link then return self:SetHyperlink(link) end\n"
+        "    if link then return __WoweeSetHyperlinkCounted(self, link, select(3, GetTradePlayerItemInfo(index))) end\n"
         "    local name = GetTradePlayerItemInfo(index)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
         "end\n"
@@ -11051,7 +12453,7 @@ void LuaEngine::registerCoreAPI() {
         "function __WoweeFrameMT:SetTradeTargetItem(index)\n"
         "    self:ClearLines()\n"
         "    local link = GetTradeTargetItemLink and GetTradeTargetItemLink(index)\n"
-        "    if link then return self:SetHyperlink(link) end\n"
+        "    if link then return __WoweeSetHyperlinkCounted(self, link, select(3, GetTradeTargetItemInfo(index))) end\n"
         "    local name = GetTradeTargetItemInfo(index)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
         "end\n"
@@ -11077,13 +12479,7 @@ void LuaEngine::registerCoreAPI() {
         // The stance bar's tooltip. Every druid, warrior, rogue, priest and
         // death knight has this bar on screen the whole time, and hovering a
         // form said nothing at all.
-        "function __WoweeFrameMT:SetShapeshift(index)\n"
-        "    self:ClearLines()\n"
-        "    local _, name, isActive = GetShapeshiftFormInfo(index)\n"
-        "    if not name then return end\n"
-        "    self:SetText(name, 1, 1, 1)\n"
-        "    if isActive then self:AddLine(ACTIVE_PETS or 'Active', 0.5, 0.5, 0.5) end\n"
-        "end\n"
+        "function __WoweeFrameMT:SetShapeshift(index) return __WoweeTooltipSetShapeshift(self, index) end\n"
         // What a vendor wants besides coin - badges, marks, a token. The
         // money frame draws one of these per cost item and the tooltip is the
         // only place the item is named.
@@ -11170,24 +12566,45 @@ void LuaEngine::registerCoreAPI() {
         "    end\n"
         "    return table.concat(parts, TIME_UNIT_DELIMITER or ' ')\n"
         "end\n"
-        "function _WoweePopulateItemTooltip(self, itemId, inst)\n"
+        // `append` goes on under what the tooltip holds - a trade spell's
+        // tooltip ends with its item's (0x006277f0 with its eighth argument).
+        "function _WoweePopulateItemTooltip(self, itemId, inst, append)\n"
         "    local name, itemLink, quality, iLevel, reqLevel, class, subclass, maxStack, equipSlot, texture, sellPrice = GetItemInfo(itemId)\n"
         "    if not name then return false end\n"
         "    local qColors = {[0]={0.62,0.62,0.62},[1]={1,1,1},[2]={0.12,1,0},[3]={0,0.44,0.87},[4]={0.64,0.21,0.93},[5]={1,0.5,0},[6]={0.9,0.8,0.5},[7]={0,0.8,1}}\n"
         "    local c = qColors[quality or 1] or {1,1,1}\n"
-        "    self:SetText(name, c[1], c[2], c[3])\n"
-        "    if GetCVar('colorblindMode') == '1' then\n"
-        "        local qn = _G['ITEM_QUALITY'..(quality or 1)..'_DESC']\n"
-        "        if qn then self:AddLine(qn, c[1], c[2], c[3]) end\n"
-        "    end\n"
+        "    if append then self:AddLine(name, c[1], c[2], c[3])\n"
+        "    elseif __WoweeTooltipEquippedHeader then\n"
+        "        self:SetText(CURRENTLY_EQUIPPED or 'Currently Equipped', 0.5, 0.5, 0.5)\n"
+        "        self:AddLine(name, c[1], c[2], c[3])\n"
+        "    else self:SetText(name, c[1], c[2], c[3]) end\n"
         "    local data = _GetItemTooltipData(itemId)\n"
+        // Colour-blind mode names the quality under the title, in white, and a
+        // heroic item's as ITEM_HEROIC_EPIC in place of both that and the
+        // green ITEM_HEROIC line (0x006277f0).
+        "    local colorblind = GetCVar('colorblindMode') == '1'\n"
+        "    if colorblind then\n"
+        "        if data and data.isHeroic then\n"
+        "            self:AddLine(ITEM_HEROIC_EPIC or 'Heroic Epic', 1, 1, 1)\n"
+        "        else\n"
+        "            local qn = _G['ITEM_QUALITY'..(quality or 1)..'_DESC']\n"
+        "            if qn then self:AddLine(qn, 1, 1, 1) end\n"
+        "        end\n"
+        "    end\n"
         "    if data then\n"
-        "        if data.isHeroic then self:AddLine(ITEM_HEROIC or 'Heroic', 0, 1, 0) end\n"
+        "        if data.isHeroic and not colorblind then self:AddLine(ITEM_HEROIC or 'Heroic', 0, 1, 0) end\n"
         // A bound item says so, whatever its template's binding: the line
         // is ITEM_SOULBOUND in its place (0x006277f0 tests the instance's
         // flag 0x1 first). A quest item stays a quest item.
         // Bound to the account (item flag 0x8000000): ITEM_ACCOUNTBOUND once
         // bound, ITEM_BIND_TO_ACCOUNT before. A class 10 item says nothing.
+        // Ahead of the binding (0x006277f0): ITEM_SIGNABLE in green for an
+        // item to be signed (flag 0x2000), then in white the zone and the
+        // instance it works in alone, and ITEM_CONJURED.
+        "        if data.signable then self:AddLine(ITEM_SIGNABLE or '<Right Click for Additional Information>', 0, 1, 0) end\n"
+        "        if data.limitArea then self:AddLine(data.limitArea, 1, 1, 1) end\n"
+        "        if data.limitMap then self:AddLine(data.limitMap, 1, 1, 1) end\n"
+        "        if data.conjured then self:AddLine(ITEM_CONJURED or 'Conjured Item', 1, 1, 1) end\n"
         "        local bind\n"
         "        if inst and inst.soulbound then\n"
         "            if data.bindType == 4 then bind = 'ITEM_BIND_QUEST'\n"
@@ -11199,6 +12616,23 @@ void LuaEngine::registerCoreAPI() {
         "        if bind and _G[bind] then self:AddLine(_G[bind], 1, 1, 1) end\n"
         "        if data.isUnique then self:AddLine(ITEM_UNIQUE or 'Unique', 1, 1, 1)\n"
         "        elseif data.isUniqueEquipped then self:AddLine(ITEM_UNIQUE_EQUIPPABLE or 'Unique-Equipped', 1, 1, 1) end\n"
+        // A lock not opened (0x006277f0): LOCKED, or ENCRYPTED, in the colour
+        // of how the player's opening spell measures against it - grey a
+        // hundred over, green fifty, yellow twenty-five, orange at it, red
+        // short - and green with no such spell (0x0061a1f0).
+        "        if data.lock and not (inst and inst.unlocked) then\n"
+        "            local l = data.lock\n"
+        "            local r, g, b = 0.25, 0.75, 0.25\n"
+        "            if l.hasSpell then\n"
+        "                if l.value >= l.required + 100 then r, g, b = 0.5, 0.5, 0.5\n"
+        "                elseif l.value >= l.required + 50 then r, g, b = 0.25, 0.75, 0.25\n"
+        "                elseif l.value >= l.required + 25 then r, g, b = 1, 1, 0\n"
+        "                elseif l.value >= l.required then r, g, b = 1, 0.5, 0.25\n"
+        "                else r, g, b = 1, 0.125, 0.125 end\n"
+        "            end\n"
+        "            local text = l.encrypted and (ENCRYPTED or 'Encrypted') or (LOCKED or 'Locked')\n"
+        "            self:AddLine(text, r, g, b)\n"
+        "        end\n"
         "    end\n"
         "    if equipSlot and equipSlot ~= '' then\n"
         "        local slotText = _G[equipSlot] or ''\n"
@@ -11260,6 +12694,9 @@ void LuaEngine::registerCoreAPI() {
         "        end\n"
         // A shield's block, under its armour.
         "        if data.block then self:AddLine(format(SHIELD_BLOCK_TEMPLATE or '%d Block', data.block), 1, 1, 1) end\n"
+        "        if data.feralAttackPower then\n"
+        "            self:AddLine(format(FERAL_DRUID_ITEM_AP or 'Increases attack power by %d in Cat, Bear, Dire Bear, and Moonkin forms only.', data.feralAttackPower), 0, 1, 0, 1)\n"
+        "        end\n"
         "        if data.statLines then\n"
         "            for _, st in ipairs(data.statLines) do\n"
         "                if not st.equip then self:AddLine(st.text, 1, 1, 1) end\n"
@@ -11281,6 +12718,7 @@ void LuaEngine::registerCoreAPI() {
         "            if not (g.skillOk and g.levelOk) then r, gc, b = 1, 0.125, 0.125\n"
         "            elseif not g.conditionsMet then r, gc, b = 0.5, 0.5, 0.5 end\n"
         "            self:AddLine(g.text, r, gc, b)\n"
+        "            if g.icon then self:AddTexture(g.icon) end\n"
         "            for _, c in ipairs(g.conditions or {}) do\n"
         "                local text = ''\n"
         "                local fmt = c.key and _G[c.key]\n"
@@ -11304,6 +12742,7 @@ void LuaEngine::registerCoreAPI() {
         "        end\n"
         "        if data.sockets or gems then\n"
         "            local socketKeys = {[1]='EMPTY_SOCKET_META',[2]='EMPTY_SOCKET_RED',[4]='EMPTY_SOCKET_YELLOW',[8]='EMPTY_SOCKET_BLUE'}\n"
+        "            local socketArt = {[1]='Meta',[2]='Red',[4]='Yellow',[8]='Blue'}\n"
         "            local socks = data.sockets or {}\n"
         "            for i = 1, 3 do\n"
         "                local g = gems and gems[i]\n"
@@ -11311,6 +12750,8 @@ void LuaEngine::registerCoreAPI() {
         "                elseif socks[i] then\n"
         "                    local key = socketKeys[socks[i].color] or 'EMPTY_SOCKET_NO_COLOR'\n"
         "                    self:AddLine(_G[key] or key, 0.5, 0.5, 0.5)\n"
+        "                    local art = socketArt[socks[i].color]\n"
+        "                    self:AddTexture(art and ('Interface\\\\ItemSocketingFrame\\\\UI-EmptySocket-'..art) or 'Interface\\\\ItemSocketingFrame\\\\UI-EmptySocket')\n"
         "                end\n"
         "            end\n"
         "        end\n"
@@ -11319,6 +12760,11 @@ void LuaEngine::registerCoreAPI() {
         "            if inst and inst.socketBonusMatched then self:AddLine(text, 0, 1, 0)\n"
         "            else self:AddLine(text, 0.5, 0.5, 0.5) end\n"
         "        end\n"
+        // A template that rolls its stats on drop, seen as a template - not
+        // one held, nor a link naming its roll: ITEM_RANDOM_ENCHANT in green.
+        "        if data.randomEnchant and not inst and not rawget(self, '__linkRolled') then\n"
+        "            self:AddLine(ITEM_RANDOM_ENCHANT or '<Random enchantment>', 0, 1, 0)\n"
+        "        end\n"
         // The durability, between what the item is and what it asks for
         // (0x006277f0): white, red once broken.
         "        if inst and inst.maxDurability and inst.maxDurability > 0 then\n"
@@ -11326,6 +12772,25 @@ void LuaEngine::registerCoreAPI() {
         "            local r, g, b = 1, 1, 1\n"
         "            if cur == 0 then r, g, b = 1, 0.125, 0.125 end\n"
         "            self:AddLine(format(DURABILITY_TEMPLATE or 'Durability %d / %d', cur, inst.maxDurability), r, g, b)\n"
+        "        end\n"
+        // How long it lasts - what the one held has left, else the template's
+        // own - in its largest unit, rounded up (0x0061a9e0 with
+        // "ITEM_DURATION"): _SEC under a minute, _MIN under an hour, _HOURS
+        // under a day, else _DAYS; sixty minutes is an hour and twenty-four
+        // hours a day.
+        "        if data.duration then\n"
+        "            local s = data.duration\n"
+        "            if inst and inst.duration and inst.duration > 0 then s = inst.duration end\n"
+        "            local key, n\n"
+        "            if s < 60 then key, n = 'ITEM_DURATION_SEC', s\n"
+        "            elseif s < 3600 then\n"
+        "                n = math.ceil(s / 60)\n"
+        "                if n == 60 then key, n = 'ITEM_DURATION_HOURS', 1 else key = 'ITEM_DURATION_MIN' end\n"
+        "            elseif s < 86400 then\n"
+        "                n = math.ceil(s / 3600)\n"
+        "                if n == 24 then key, n = 'ITEM_DURATION_DAYS', 1 else key = 'ITEM_DURATION_HOURS' end\n"
+        "            else key, n = 'ITEM_DURATION_DAYS', math.ceil(s / 86400) end\n"
+        "            if _G[key] then self:AddLine(format(_G[key], n), 1, 1, 1) end\n"
         "        end\n"
         "        local function req(text, ok)\n"
         "            if ok == false then self:AddLine(text, 1, 0.125, 0.125)\n"
@@ -11449,14 +12914,37 @@ void LuaEngine::registerCoreAPI() {
         "                if d.met then self:AddLine(t, 0.533, 0.667, 1) else self:AddLine(t, 1, 0.125, 0.125) end\n"
         "            end\n"
         "        end\n"
+        // Still tradeable for a while (0x006277f0): a spacer, then
+        // BIND_TRADE_TIME_REMAINING in light blue - an hour and the minutes
+        // past it when over an hour is left, else one unit of
+        // INT_SPELL_DURATION.
+        "        if inst and inst.tradeLeft then\n"
+        "            local left, t = inst.tradeLeft\n"
+        "            if left > 3660 then\n"
+        "                t = format(INT_SPELL_DURATION_HOURS or '%d hr', 1)..(TIME_UNIT_DELIMITER or ' ')..format(INT_SPELL_DURATION_MIN or '%d min', math.floor((left - 3600) / 60))\n"
+        "            elseif left >= 3600 then t = format(INT_SPELL_DURATION_HOURS or '%d hr', math.floor(left / 3600))\n"
+        "            elseif left >= 60 then t = format(INT_SPELL_DURATION_MIN or '%d min', math.floor(left / 60))\n"
+        "            else t = format(INT_SPELL_DURATION_SEC or '%d sec', left) end\n"
+        "            self:AddLine(' ', 1, 0.82, 0)\n"
+        "            self:AddLine(format(BIND_TRADE_TIME_REMAINING or 'You may trade this item with players that were also eligible to loot this item for the next %s.', t), 0, 0.8, 1, 1)\n"
+        "        end\n"
         "        if data.startsQuest then self:AddLine(ITEM_STARTS_QUEST or 'This Item Begins a Quest', 1, 1, 1) end\n"
         "    end\n"
-        "    if sellPrice and sellPrice > 0 then\n"
-        "        self:AddLine(format('%s: ', SELL_PRICE or 'Sell Price')..GetCoinTextureString(sellPrice), 1, 1, 1)\n"
+        // The price (0x006277f0's end): none for a merchant's own item or
+        // one appended under a recipe; else the tooltip's OnTooltipAddMoney
+        // with the money - for a held item its price less its repair cost,
+        // times the stack - which FrameXML draws through SetTooltipMoney.
+        "    if append or __WoweeTooltipMerchantIndex or __WoweeTooltipNoPrice then\n"
+        "    elseif sellPrice and sellPrice > 0 then\n"
+        "        local money = (inst and inst.price and inst.price > 0) and inst.price\n"
+        "            or sellPrice * math.max(1, tonumber(__WoweeTooltipItemCount) or 1)\n"
+        "        local onMoney = self.GetScript and self:GetScript('OnTooltipAddMoney')\n"
+        "        if onMoney then onMoney(self, money)\n"
+        "        else self:AddLine(format('%s: ', SELL_PRICE or 'Sell Price')..GetCoinTextureString(money), 1, 1, 1) end\n"
         "    elseif inst and inst.unsellable then\n"
         "        self:AddLine(ITEM_UNSELLABLE or 'No sell price', 1, 1, 1)\n"
         "    end\n"
-        "    self.__itemId = itemId\n"
+        "    if not append then self.__itemId = itemId end\n"
         "    return true\n"
         "end\n"
         // No SetInventoryItem here. It was written on this metatable and won,
@@ -11477,6 +12965,11 @@ void LuaEngine::registerCoreAPI() {
         "    if not id then return end\n"
         "    _WoweePopulateItemTooltip(self, tonumber(id), _WoweeContainerItemInstance(bag, slot))\n"
         "    self:_WoweeAppendItemEnchants(bag, slot)\n"
+        // As 0x0062f420 answers: whether the tooltip counts something down
+        // (a cooldown running), and what repairing the item costs - the bag
+        // button's repair mode reads the second.
+        "    local start = GetContainerItemCooldown(bag, slot)\n"
+        "    return (start and start > 0) and 1 or nil, __WoweeContainerRepairCost(bag, slot)\n"
         "end\n"
         // The spellbook's tooltip. SpellButton_OnEnter calls this and nothing
         // answered it, so hovering any spell in the book showed nothing -
@@ -11512,19 +13005,7 @@ void LuaEngine::registerCoreAPI() {
         // how the commands and stances are named - Attack, Follow, Passive -
         // and printing the key instead of the string is what that flag exists
         // to prevent.
-        "function __WoweeFrameMT:SetPetAction(slot)\n"
-        "    self:ClearLines()\n"
-        "    local name, subtext, _, isToken = GetPetActionInfo(slot)\n"
-        "    if not name then return end\n"
-        "    if isToken then\n"
-        "        name = _G[name] or name\n"
-        "        subtext = subtext and _G[subtext] or subtext\n"
-        "    end\n"
-        "    self:SetText(name, 1, 1, 1)\n"
-        "    if subtext and subtext ~= '' then\n"
-        "        self:AddLine(subtext, 0.5, 0.5, 0.5)\n"
-        "    end\n"
-        "end\n"
+        "function __WoweeFrameMT:SetPetAction(slot) return __WoweeTooltipSetPetAction(self, slot) end\n"
         // The possess bar's tooltip. PossessButton_OnEnter calls this for
         // every slot but the cancel one, so it is reachable the moment
         // GetPossessInfo answers for a slot other than two - and a widget
@@ -11532,19 +13013,15 @@ void LuaEngine::registerCoreAPI() {
         // nothing. It is bound now so enabling that slot later is a change to
         // one binding rather than two, and it answers from the same place the
         // button's icon came from.
-        "function __WoweeFrameMT:SetPossession(slot)\n"
-        "    self:ClearLines()\n"
-        "    local _, name = GetPossessInfo(slot)\n"
-        "    if name then self:SetText(name, 1, 1, 1) end\n"
-        "end\n"
+        "function __WoweeFrameMT:SetPossession(slot) return __WoweeTooltipSetPossession(self, slot) end\n"
         // Built by the C binding (fillSpellTooltip), in the client's words
         // and with the reagents; a second builder here, in English and
         // without them, had taken its place. Kept as a wrapper for the one
         // thing it added: the id GetSpell answers with.
         "do\n"
         "    local fill = __WoweeTooltipSetSpellByID\n"
-        "    function __WoweeFrameMT:SetSpellByID(spellId)\n"
-        "        local ok = fill(self, spellId)\n"
+        "    function __WoweeFrameMT:SetSpellByID(spellId, isPet, showRank, brief)\n"
+        "        local ok = fill(self, spellId, isPet, showRank, brief)\n"
         "        self.__spellId = ok and spellId or nil\n"
         "        return ok\n"
         "    end\n"
@@ -11558,7 +13035,7 @@ void LuaEngine::registerCoreAPI() {
         "    if not slot then return false end\n"
         "    local actionType, id = GetActionInfo(slot)\n"
         "    if actionType == 'spell' and id and id > 0 then\n"
-        "        self:SetSpellByID(id)\n"
+        "        self:SetSpellByID(id, nil, nil, GetCVar('UberTooltips') == '0')\n"
         "        return self:NumLines() > 0\n"
         "    elseif actionType == 'item' and id and id > 0 then\n"
         "        _WoweePopulateItemTooltip(self, id)\n"
@@ -11566,7 +13043,6 @@ void LuaEngine::registerCoreAPI() {
         "    end\n"
         "    return false\n"
         "end\n"
-        "function __WoweeFrameMT:FadeOut() end\n"
         // SetFrameStrata is a real binding; a no-op here would shadow it and
         // leave the tooltip in whatever stratum it inherited, under the frames
         // it is meant to sit above.
@@ -11619,6 +13095,8 @@ void LuaEngine::registerCoreAPI() {
         "    end\n"
         "    return unpack(out, 1, n)\n"
         "end\n"
+        // FadeOut (0x0061d940), a tooltip's; nothing on any other frame.
+        "function __WoweeFrameMT:FadeOut() __WoweeTooltipFadeOut(self) end\n"
         // Iterating a table the secure way, which for our purposes is next.
         "SecureNext = next\n"
         // GetCVarBool wraps C-side GetCVar (registered in table) for boolean queries
@@ -12351,6 +13829,93 @@ void LuaEngine::callFrameScript(uint32_t wid, const char* script,
     finishFrameScript(wid, script, handlerIdx, nargs);
 }
 
+
+void LuaEngine::worldMouseoverChanged(uint64_t oldGuid, uint64_t newGuid, MouseoverKind kind) {
+    // 0x0051f790, on the mouseover changing: the old one's tooltip faded
+    // (0x0061b290), then GameTooltip put at its default place
+    // (OnTooltipSetDefaultAnchor, 0x005143f0) and SetUnit("mouseover") for a
+    // unit, the object's own tooltip for a game object (0x00626720).
+    if (!L_) return;
+    taint::Scope secure(0);
+    lua_getglobal(L_, "GameTooltip");
+    const uint32_t wid = lua_istable(L_, -1) ? widgetIdOf(L_, lua_gettop(L_)) : 0;
+    lua_pop(L_, 1);
+    if (wid == 0) return;
+    // Only while the tooltip is still the world's - placed against UIParent,
+    // as the default anchor places it - and not one a frame the pointer has
+    // moved onto has taken over since.
+    if (oldGuid != 0) {
+        lua_getglobal(L_, "UIParent");
+        const uint32_t uiParent = lua_istable(L_, -1) ? widgetIdOf(L_, lua_gettop(L_)) : 0;
+        lua_pop(L_, 1);
+        const auto* w = widgets_.get(wid);
+        if (w && w->shown && w->tooltipOwnerId == uiParent) fadeOutTooltip(L_, wid);
+    }
+    auto* gh = wowee::addons::getGameHandler(L_);
+    if (newGuid == 0 || !gh || kind == MouseoverKind::None) return;
+    if (kind == MouseoverKind::GameObject) {
+        callFrameScript(wid, "OnTooltipSetDefaultAnchor");
+        if (auto* w = widgets_.get(wid)) fillGameObjectTooltip(L_, w, gh, newGuid);
+        return;
+    }
+    if (kind == MouseoverKind::Corpse) {
+        // 0x00622410: CORPSE_TOOLTIP with its owner's name, white, once the
+        // name is known (asked for where it is not).
+        callFrameScript(wid, "OnTooltipSetDefaultAnchor");
+        auto* w = widgets_.get(wid);
+        const auto corpse = gh->getEntityManager().getEntity(newGuid);
+        if (!w || !corpse) return;
+        const uint64_t ownerGuid = (static_cast<uint64_t>(corpse->getField(7)) << 32) | corpse->getField(6);
+        const auto& names = gh->getPlayerNameCache();
+        const auto it = names.find(ownerGuid);
+        if (it == names.end() || it->second.empty()) {
+            // Asked for, and the tooltip built when it comes back, as the
+            // client's name callback does (0x0061dd20).
+            if (ownerGuid != 0) gh->queryPlayerName(ownerGuid);
+            corpseTooltipWaiting_ = newGuid;
+            return;
+        }
+        corpseTooltipWaiting_ = 0;
+        w->isTooltip = true;
+        w->tooltipUnit.clear();
+        w->tooltipLines.clear();
+        wowee::ui::Widget::TooltipLine line;
+        line.left = formatGlobal(L_, globalOr(L_, "CORPSE_TOOLTIP", "Corpse of %s"), {it->second});
+        for (int i = 0; i < 4; ++i) line.lc[i] = line.rc[i] = 1.0f;
+        w->tooltipLines.push_back(std::move(line));
+        w->shown = true;
+        return;
+    }
+    callFrameScript(wid, "OnTooltipSetDefaultAnchor");
+    lua_getglobal(L_, "GameTooltip");
+    lua_getfield(L_, -1, "SetUnit");
+    if (lua_isfunction(L_, -1)) {
+        lua_pushvalue(L_, -2);
+        lua_pushstring(L_, "mouseover");
+        if (lua_pcall(L_, 2, 0, 0) != 0) {
+            LOG_WARNING("mouseover tooltip: ", luaL_optstring(L_, -1, "?"));
+            lua_pop(L_, 1);
+        }
+    } else {
+        lua_pop(L_, 1);
+    }
+    lua_pop(L_, 1);
+}
+
+void LuaEngine::retryCorpseTooltip(uint64_t mouseover) {
+    if (corpseTooltipWaiting_ == 0) return;
+    if (corpseTooltipWaiting_ != mouseover) {
+        corpseTooltipWaiting_ = 0;
+        return;
+    }
+    auto* gh = L_ ? wowee::addons::getGameHandler(L_) : nullptr;
+    const auto corpse = gh ? gh->getEntityManager().getEntity(mouseover) : nullptr;
+    if (!corpse) return;
+    const uint64_t ownerGuid = (static_cast<uint64_t>(corpse->getField(7)) << 32) | corpse->getField(6);
+    const auto it = gh->getPlayerNameCache().find(ownerGuid);
+    if (it == gh->getPlayerNameCache().end() || it->second.empty()) return;
+    worldMouseoverChanged(0, mouseover, MouseoverKind::Corpse);
+}
 
 bool LuaEngine::frameHasScript(uint32_t wid, const char* script) {
     if (!L_ || wid == 0) return false;
@@ -15036,6 +16601,7 @@ void LuaEngine::dispatchOnUpdate(float elapsed) {
 
     drainPendingTextChanged();
     advanceWheelGlide(elapsed);
+    tickTooltipFades(L_, elapsed);
 
     // The MovieFrame's movie: subtitle lines and its end, to the frame that
     // started it (CSimpleMovieFrame's scripts, 0x0095db80).

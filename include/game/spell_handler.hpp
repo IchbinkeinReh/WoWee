@@ -277,6 +277,10 @@ public:
     /// the spell's Cooldown modifiers (op 11, the category's unless
     /// AttributesEx6 0x80000000), whichever is longer. Milliseconds.
     [[nodiscard]] int32_t itemUseCooldownMs(uint32_t spellId) const;
+    /// The cooldown a spell's tooltip gives it (0x006238a0): RecoveryTime
+    /// through its Cooldown modifiers against the category's as the history
+    /// takes it (0x007fef60), the longer. Milliseconds.
+    [[nodiscard]] int32_t spellShownCooldownMs(uint32_t spellId) const;
     /// The first area an AreaGroup names, 0 for none.
     [[nodiscard]] uint32_t firstAreaOfGroup(uint32_t group) const;
     /// The totem bar's update (0x005ab9d0): an element whose list has spells
@@ -308,7 +312,18 @@ public:
     void replayAuraStateKits();
 
     // Known spells mutation (formerly accessed via friend)
-    void addKnownSpell(uint32_t spellId) { knownSpells_.insert(spellId); }
+    void addKnownSpell(uint32_t spellId) {
+        knownSpells_.insert(spellId);
+        noteLearnOrder(spellId);
+    }
+    /// Where a known spell stands in the order it was learned - the order
+    /// the client's spell list keeps (0x00542030 appends) - for a spell this
+    /// has not seen learned, after all the others.
+    [[nodiscard]] uint64_t learnOrder(uint32_t spellId) const {
+        const auto it = learnOrder_.find(spellId);
+        return it != learnOrder_.end() ? it->second : UINT64_MAX;
+    }
+    void noteLearnOrder(uint32_t spellId) { learnOrder_.try_emplace(spellId, nextLearnOrder_++); }
     [[nodiscard]] bool hasKnownSpell(uint32_t spellId) const { return knownSpells_.count(spellId) > 0; }
     /// 0x007260e0 || 0x00726160: the spell known, or one SkillLineAbility
     /// supersedes it with, followed down the chain.
@@ -432,6 +447,61 @@ public:
     [[nodiscard]] std::optional<bool> reachAnswer(uint32_t spellId, uint64_t caster, uint64_t unit) const;
     /// 0x00801650 with no unit: the spell's reach from the caster.
     [[nodiscard]] std::optional<unit_target::Range> spellRange(uint32_t spellId, uint64_t caster) const;
+    /// The reach a spell's tooltip states (0x006238a0): none where
+    /// Attributes 0x404 or AttributesEx3 0x40000000 keep it off; "melee"
+    /// for a melee row (Flags 1) no Range modifier touches; else 0x007ff480
+    /// from the player, hostile and friendly, a ranged row's minimum both
+    /// replaced by 0x007ff400's.
+    struct TooltipRange {
+        bool shown = false;
+        bool melee = false;
+        unit_target::Range hostile;
+        unit_target::Range friendly;
+    };
+    [[nodiscard]] TooltipRange tooltipRange(uint32_t spellId) const;
+    /// What a spell's tooltip says it costs the player (0x006238a0): the
+    /// cost (0x008012f0) and the cost each second (0x007ff100), neither yet
+    /// over the power's divisor; a rune spell's SpellRuneCost row; the
+    /// PowerDisplay row its power is named by.
+    struct TooltipCost {
+        int32_t powerType = 0;
+        int32_t cost = 0;
+        int32_t perSecond = 0;
+        bool hasRuneRow = false;
+        std::array<uint32_t, 3> runes{};
+        uint32_t powerDisplayId = 0;
+    };
+    [[nodiscard]] TooltipCost tooltipCost(uint32_t spellId, uint64_t caster = 0) const;
+    /// The tooltip's equipped-item line (0x006238a0): the names the spell's
+    /// EquippedItemClass and subclass mask go by - ItemSubClassMask's for
+    /// the exact pair, else each subclass's ItemSubClass name, ", " between
+    /// - empty where it asks for none (Targets 0x10, no class or mask); and
+    /// whether the player has one on (0x006de230).
+    struct TooltipEquipped {
+        std::string names;
+        bool equipped = true;
+    };
+    [[nodiscard]] TooltipEquipped tooltipEquipped(uint32_t spellId) const;
+    /// The tooltip's form line: the names of the forms Stances allows, ", "
+    /// between (none with AttributesEx2 0x80000), and whether the player
+    /// stands in one it allows - none counts under AttributesEx2 0x80000, and
+    /// an aura 275 for the spell lets any form do.
+    struct TooltipForms {
+        std::string names;
+        bool met = true;
+    };
+    [[nodiscard]] TooltipForms tooltipForms(uint32_t spellId, uint64_t caster = 0) const;
+    /// The tooltip's reputation line: MinFactionId (0 none), the
+    /// MinReputation rank, and whether the player's standing reaches it
+    /// (0x005d05b0 against 0x00a2d2fc).
+    struct TooltipReputation {
+        uint32_t faction = 0;
+        uint32_t rank = 0;
+        bool met = true;
+    };
+    [[nodiscard]] TooltipReputation tooltipReputation(uint32_t spellId) const;
+    /// 0x00800d60 for the player: the spell costs no reagents now.
+    [[nodiscard]] bool tooltipNoReagents(uint32_t spellId) const;
     /// The item the running cast was cast from (SMSG_SPELL_START's caster
     /// where it is not the unit), 0 for none (0x00805fc0).
     [[nodiscard]] uint64_t currentCastItemGuid() const { return casting_ ? castItemGuid_ : 0; }
@@ -553,6 +623,11 @@ public:
     /// 0x007ff180 != 0: whether the spell takes time to cast for this unit -
     /// also what the combat log asks of a cast (the unit's +0x148).
     bool hasCastTime(uint32_t spellId, const Entity& player) const;
+    /// 0x007ff180 itself: the spell's cast time for the unit, in ms -
+    /// modifiers, casting speed and a ranged spell's half second included.
+    int32_t castTimeMs(uint32_t spellId, const Entity& player) const;
+    /// The same for the player (0 without one), what a tooltip states.
+    [[nodiscard]] int32_t playerCastTimeMs(uint32_t spellId, uint64_t caster = 0) const;
 
     /// Give a hunter's pet up for good. The interface asks first - this is the
     /// other side of the ABANDON_PET dialog, whose accept called an unbound
@@ -692,6 +767,8 @@ private:
 
     // --- Spell state ---
     std::unordered_set<uint32_t> knownSpells_;
+    std::unordered_map<uint32_t, uint64_t> learnOrder_;
+    uint64_t nextLearnOrder_ = 0;
     uint8_t castCount_ = 0;
     AttackStreak attackStreak_;  ///< 0x0080cce0's tutorial counter
     /// The cast count of the player's cast the server last started: the
@@ -791,6 +868,8 @@ private:
     /// held to the reach (0x00809610), then 0x00739650. False, said, where
     /// the cast is refused.
     bool castChecksPass(uint32_t spellId, uint64_t targetGuid);
+    /// The sound of a cast that passed its checks (0x0080cce0).
+    void playCastActivateSound(uint32_t spellId, uint64_t itemGuid);
     /// What 0x00739650 asks of the player for the spell (cast_check::Caster).
     cast_check::Caster casterState(uint32_t spellId, const Entity& player);
     /// 0x008012f0: the spell's power cost to the player.
@@ -804,6 +883,13 @@ private:
     uint32_t classSpellFamily() const;
     /// 0x008091d0 for the player: the spell's totems, tools and reagents.
     bool toolsCarried(uint32_t spellId, const Entity& player) const;
+    /// 0x006de230: an item of the spell's EquippedItemClass and subclass
+    /// mask on in one of `slots` (bit per equipment slot) - not in a hand
+    /// disarmed, nor broken.
+    const ItemQueryResponseData* equippedMatch(uint32_t spellId, const Entity& player,
+                                               uint32_t slots) const;
+    /// 0x00800d60: no reagents for this spell now.
+    bool reagentsFree(uint32_t spellId, const Entity& player) const;
     /// 0x008093d0 for the player: the weapon it wants, and its ammunition.
     bool weaponCarried(uint32_t spellId, const Entity& player) const;
     /// 0x007ff480 from the caster to the unit (none: a place), at the

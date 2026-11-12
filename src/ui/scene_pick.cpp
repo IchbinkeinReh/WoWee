@@ -75,6 +75,20 @@ ScenePick pickScene(game::GameHandler& gameHandler,
     for (const auto& [guid, entity] : gameHandler.getEntityManager().getEntities()) {
         if (!entity) continue;
         const auto type = entity->getType();
+        if (type == game::ObjectType::CORPSE) {
+            // For the pointer only, behind anything a click would take.
+            glm::vec3 c;
+            float r = 0.0f;
+            if (!core::Application::getInstance().getRenderBoundsForGuid(guid, c, r)) continue;
+            float t = 0.0f;
+            if (!raySphereIntersect(ray, c, std::max(r, 0.5f), t) || hiddenByWorld(t)) continue;
+            const float centerT = glm::dot(c - ray.origin, ray.direction);
+            if (centerT < pick.mouseoverCorpseCenterT) {
+                pick.mouseoverCorpseCenterT = centerT;
+                pick.mouseoverCorpseGuid = guid;
+            }
+            continue;
+        }
         if (type != game::ObjectType::UNIT &&
             type != game::ObjectType::PLAYER &&
             type != game::ObjectType::GAMEOBJECT) continue;

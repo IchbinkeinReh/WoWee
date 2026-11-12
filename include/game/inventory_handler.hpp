@@ -280,6 +280,8 @@ public:
     void repairItem(uint64_t vendorGuid, uint64_t itemGuid);
     void repairAll(uint64_t vendorGuid, bool useGuildBank = false);
     uint32_t estimateRepairAllCost() const;
+    /// One item's repair cost from its lost durability (0x00708540).
+    uint32_t estimateItemRepairCost(uint64_t itemGuid) const;
     /// The sale mirror, in the order the sales happened.  What the interface
     /// sees is buybackRowCount / buybackRow.
     const std::deque<BuybackItem>& getBuybackItems() const { return buybackItems_; }
@@ -509,6 +511,8 @@ public:
     void closeMailCompose() { showMailCompose_ = false; clearMailAttachments(); }
     bool hasNewMail() const { return hasNewMail_; }
     void openMailbox(uint64_t guid);
+    /// How many guild bank lists have arrived (SMSG_GUILD_BANK_LIST).
+    uint32_t guildBankListCount() const { return guildBankListCount_; }
     void closeMailbox();
     /// Look for mail, as SMSG_RECEIVED_MAIL does with its delay (0x005704d0):
     /// with the mailbox open, only once it closes; otherwise ask the server
@@ -1211,7 +1215,7 @@ private:
     // DurabilityQuality.dbc: [id] -> quality_mod float
     mutable std::unordered_map<uint32_t, float> durabilityQuality_;
     void loadRepairDbc() const;
-    uint32_t estimateItemRepairCost(uint64_t itemGuid) const;
+    uint32_t guildBankListCount_ = 0;
 };
 
 } // namespace game

@@ -719,6 +719,13 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     auto spellIconFn = [this](uint32_t id, pipeline::AssetManager* am) { return getSpellIcon(id, am); };
     combatUI_.renderCooldownTracker(gameHandler, settingsPanel_, spellIconFn);
     renderNameplates(gameHandler);  // names over heads and nameplates (0x007e5640, 0x0098f790)
+    commitMouseover(gameHandler);
+    // cameraDistanceMax, the other half of the zoom limit (0x006000e0).
+    if (auto* renderer = services_.renderer; renderer && renderer->getCameraController()) {
+        float yards = 15.0f;
+        try { yards = std::stof(addons::storedCVarValue("cameraDistanceMax", "15.0")); } catch (...) {}
+        renderer->getCameraController()->setDistanceMax(yards);
+    }
     renderLightKindOverlay();       // Debug Graphics: the lights' kinds
     combatUI_.playSoundsForNewChat(gameHandler);
     // Blizzard_CombatText draws its own once it is loaded, which happens the
@@ -945,7 +952,8 @@ void GameScreen::render(game::GameHandler& gameHandler) {
                                     target->getType() == game::ObjectType::PLAYER;
                 // Its place is asked by the renderer as it lays the circle
                 // down (Renderer::setSelectionCircleTarget).
-                if (isUnit && target->getGuid() != gameHandler.getPlayerGuid()) {
+                // Not with the interface hidden (0x00725980 asks 0x00ac80a8).
+                if (isUnit && gameHandler.isUiVisible() && target->getGuid() != gameHandler.getPlayerGuid()) {
                     const auto& unit = static_cast<const game::Unit&>(*target);
                     renderer->setSelectionCircleTarget(target->getGuid(), targetCircleColor(gameHandler, unit));
                 } else {
@@ -1421,20 +1429,40 @@ bool GameScreen::drawWorldObjectCursor(game::GameHandler& gameHandler,
         drawCursorTexture(tex);
     }
 
-    // ...and what it is, beside the pointer, which is the whole of what the
-    // real client shows for an object: a cursor saying what it is for and a
-    // name saying what it is. An object whose name has not come back yet is
-    // left silent rather than labelled "Unknown".
+    // What it is, GameTooltip says as the mouseover's (0x00626720, through
+    // commitMouseover). Scenery with nothing to say is not worth taking the
+    // pointer for.
     const std::string name = game::entityDisplayName(entity);
-    if (!name.empty() && name != "Unknown") {
-        ImGui::BeginTooltip();
-        ImGui::TextUnformatted(name.c_str());
-        ImGui::EndTooltip();
-    } else if (!usable) {
-        // Scenery with nothing to say is not worth taking the pointer for.
-        return false;
-    }
+    if ((name.empty() || name == "Unknown") && !usable) return false;
     return true;
+}
+
+void GameScreen::commitMouseover(game::GameHandler& gameHandler) {
+    // The mouseover as the client keeps it (0x0051f790): one guid, changed
+    // at most once a frame, the old one's tooltip let go and the new one's
+    // shown - a unit's by SetUnit, a game object's by its own (0x00626720), a
+    // corpse's by its owner's name (0x00622410).
+    const uint64_t guid = plateMouseover_ != 0 ? plateMouseover_ : worldMouseover_;
+    const uint64_t old = gameHandler.getMouseoverGuid();
+    auto* engine = services_.addonManager ? services_.addonManager->getLuaEngine() : nullptr;
+    if (guid == old) {
+        if (engine) engine->retryCorpseTooltip(guid);
+        return;
+    }
+    gameHandler.setMouseoverGuid(guid);
+    if (!engine) return;
+    const auto entity = guid != 0 ? gameHandler.getEntityManager().getEntity(guid) : nullptr;
+    using Kind = addons::LuaEngine::MouseoverKind;
+    Kind kind = Kind::None;
+    if (entity) {
+        switch (entity->getType()) {
+            case game::ObjectType::UNIT: case game::ObjectType::PLAYER: kind = Kind::Unit; break;
+            case game::ObjectType::GAMEOBJECT: kind = Kind::GameObject; break;
+            case game::ObjectType::CORPSE: kind = Kind::Corpse; break;
+            default: break;
+        }
+    }
+    engine->worldMouseoverChanged(old, guid, kind);
 }
 
 void GameScreen::renderEntityList(game::GameHandler& gameHandler) {
@@ -2061,7 +2089,7 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
     // The game object highlight follows the mouseover (0x0051f790 calls
     // 0x00743c70 on the new one, 0x00743bc0 on the old) when the interface is
     // shown (0x00ac80a8, SetUIVisibility, 0x00517c20) or the unitHighlights
-    // cvar is set. The interface is always shown here, so always.
+    // cvar is set.
     uint64_t highlightGuid = 0;
     // A spell waiting for a place (0x004f66c0, each frame the pointer is
     // over the world): the ground under the pointer, the circle there in the
@@ -2104,6 +2132,7 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
             if (gameHandler.isGroundTargeting()) gameHandler.aimGroundTarget(std::nullopt);
         }
     }
+    worldMouseover_ = 0;
     if (!io.WantCaptureMouse && !frameXmlOwnsMouse() && !gameHandler.isGroundTargeting()) {
         auto* renderer = services_.renderer;
         auto* camera = renderer ? renderer->getCamera() : nullptr;
@@ -2146,6 +2175,7 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                 drawWorldObjectCursor(gameHandler, hoverPick);
             }
             highlightGuid = hoverPick.mouseover();
+            worldMouseover_ = highlightGuid;
         }
     }
     // A cursor the interface asked for with SetCursor, drawn last so it covers
@@ -2178,8 +2208,10 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
     {
         auto entity = highlightGuid ? gameHandler.getEntityManager().getEntity(highlightGuid)
                                     : nullptr;
+        const bool highlights =
+            gameHandler.isUiVisible() || addons::storedCVarValue("unitHighlights", "1") != "0";
         core::Application::getInstance().setHighlightedGameObject(
-            entity && entity->getType() == game::ObjectType::GAMEOBJECT ? highlightGuid : 0);
+            highlights && entity && entity->getType() == game::ObjectType::GAMEOBJECT ? highlightGuid : 0);
     }
 
     // Left-click targeting: only on mouse-up if the mouse didn't drag (camera rotate)

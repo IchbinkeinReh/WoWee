@@ -498,6 +498,9 @@ void GameScreen::feedWorldMap(game::GameHandler& gameHandler,
                         "data, so only quest givers and endpoints can be drawn");
         }
         wm->setQuestPois(std::move(qpois));
+        const auto& blob = gameHandler.questBlobStyle();
+        wm->setQuestBlobStyle(blob.fillTexture, blob.fillAlpha, blob.borderTexture, blob.borderAlpha,
+                              blob.borderScalar);
     }
 
     // Corpse marker: show skull X on world map when ghost with unclaimed corpse

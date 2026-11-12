@@ -3380,10 +3380,8 @@ void CameraController::zoomStep(float yards, float rate) {
 }
 
 float CameraController::clampedZoomDistance(float distance) const {
-    // A multiple of the original client's limit rather than a choice between
-    // two numbers, so the game's own Max Camera Distance slider means something
-    // at every position instead of only at its ends.
-    float maxDist = MAX_DISTANCE_NORMAL * maxDistanceFactor_;
+    // cameraDistanceMax times its factor, held to 50 (0x006000e0).
+    float maxDist = std::min(distanceMax_ * maxDistanceFactor_, MAX_DISTANCE_EXTENDED);
     float minDist = MIN_DISTANCE;
     // A seat's limits hold the wheel too (0x0074c0e0).
     // The vehicle distance mode lets it out to 50 (0x006000e0).

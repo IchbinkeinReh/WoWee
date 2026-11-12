@@ -1481,6 +1481,7 @@ void SpellHandler::castPetSpell(uint64_t caster, uint32_t spellId, uint64_t targ
         }
     }
     cancelGroundTargeting();  // 0x00809a60
+    playCastActivateSound(spellId, 0);
     if (armGroundTarget(spellId, caster)) return;
     castAtUnits(spellId, caster, targetGuid);
 }
@@ -1651,6 +1652,13 @@ spell_history::History::Cooldown SpellHandler::historyCooldown(uint32_t spellId,
         .query(spellId, category, it->second.startRecoveryCategory, historyNowMs(),
                [this](uint32_t c) { return (spellCategoryFlags(c) & 0x2u) != 0; }, runesReady, sharesRunes,
                itemId);
+}
+
+int32_t SpellHandler::spellShownCooldownMs(uint32_t spellId) const {
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return 0;
+    const int32_t own = moddedCooldown(spellId, static_cast<int32_t>(it->second.recoveryMs));
+    return std::max(own, categoryCooldown(spellId, false));
 }
 
 int32_t SpellHandler::itemUseCooldownMs(uint32_t spellId) const {
@@ -1906,7 +1914,22 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     // unit asked is held to the reach (0x00809610) and the caster to
     // 0x00739650's rules.
     cancelGroundTargeting();
+    // 0x0080cce0: with an override bar's row in force that does not let any
+    // spell through (Flags 0x4), a spell not in it fails (0xad) - an attack
+    // (Effect 78, Attributes 0x2) or a repeat (AttributesEx2 0x20) aside.
+    if (const auto& row = owner_.overrideSpellRow(); row && (row->flags & 0x4u) == 0 && !row->holds(spellId)) {
+        const auto it = owner_.spellNameCacheRef().find(spellId);
+        const bool exempt = it != owner_.spellNameCacheRef().end() &&
+                            (it->second.effectIds[0] == 78 || (it->second.attr & 0x2u) != 0 ||
+                             (it->second.attrEx2 & 0x20u) != 0);
+        if (!exempt) {
+            constexpr uint8_t kSpellFailedOverride = 0xad;
+            reportLocalCastFailure(spellId, kSpellFailedOverride);
+            return;
+        }
+    }
     if (!castChecksPass(spellId, targetGuid)) return;
+    playCastActivateSound(spellId, 0);
 
     // A spell that wants a place on the ground waits for it (0x0080c790).
     if (armGroundTarget(spellId, 0)) return;
@@ -1959,6 +1982,24 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     castAtUnits(spellId, owner_.getPlayerGuid(), targetGuid);
 }
 
+void SpellHandler::playCastActivateSound(uint32_t spellId, uint64_t itemGuid) {
+    // 0x0080cce0, once the cast is past its checks: an item's own use sound
+    // (its ItemGroupSounds' third, 0x004d0020(2)), else GAMEABILITYACTIVATE
+    // for an ability (Attributes 0x10) and GAMESPELLACTIVATE for the rest.
+    auto* ac = owner_.services().audioCoordinator;
+    auto* sfx = ac ? ac->getUiSoundManager() : nullptr;
+    if (!sfx) return;
+    if (itemGuid != 0) {
+        const uint32_t entry = owner_.getItemEntryByGuid(itemGuid);
+        const auto* info = entry != 0 ? owner_.getItemInfo(entry) : nullptr;
+        if (info && info->valid) sfx->playItemSound(info->displayInfoId, 2);
+        return;
+    }
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    const uint32_t attr = it != owner_.spellNameCacheRef().end() ? it->second.attr : 0u;
+    sfx->playByName((attr & 0x10u) != 0 ? "GAMEABILITYACTIVATE" : "GAMESPELLACTIVATE");
+}
+
 bool SpellHandler::castAtGameObject(uint32_t spellId, uint64_t gameObjectGuid, uint64_t itemGuid,
                                     uint8_t bag, uint8_t slot) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return false;
@@ -1979,6 +2020,7 @@ bool SpellHandler::castAtGameObject(uint32_t spellId, uint64_t gameObjectGuid, u
     if (restorationActive_) cancelCast();
     cancelGroundTargeting();
     if (!castChecksPass(spellId, 0)) return false;
+    playCastActivateSound(spellId, itemGuid);
     if (itemGuid != 0) {
         owner_.getSocket()->send(UseItemPacket::build(bag, slot, itemGuid, spellId, 0, 0, gameObjectGuid));
     } else {
@@ -2206,18 +2248,7 @@ bool SpellHandler::toolsCarried(uint32_t spellId, const Entity& player) const {
     for (const uint32_t cat : e.totemCategories) {
         if (cat != 0 && !carriesTotemCategory(cat)) return false;
     }
-    // 0x00800d60: no reagents prepared (UNIT_FLAG 0x20 with AttributesEx5
-    // 0x2), or for a spell of the class's family PLAYER_NO_REAGENT_COST
-    // names.
-    const uint16_t flagsIdx = fieldIndex(UF::UNIT_FIELD_FLAGS);
-    const uint32_t unitFlags = flagsIdx != 0xFFFF ? player.getField(flagsIdx) : 0u;
-    bool free = (unitFlags & 0x20u) != 0 && (e.attrEx5 & 0x2u) != 0;
-    if (!free && e.spellFamily != 0 && e.spellFamily == classSpellFamily()) {
-        const uint16_t mask = fieldIndex(UF::PLAYER_NO_REAGENT_COST_1);
-        for (uint16_t w = 0; mask != 0xFFFF && w < 3 && !free; ++w)
-            free = (player.getField(static_cast<uint16_t>(mask + w)) & e.spellFamilyFlags[w]) != 0;
-    }
-    if (free) return true;
+    if (reagentsFree(spellId, player)) return true;
     // Each reagent carried in its count - one more where the reagent is an
     // item whose own spell this is, with charges.
     for (const auto& r : e.reagents) {
@@ -2230,6 +2261,138 @@ bool SpellHandler::toolsCarried(uint32_t spellId, const Entity& player) const {
         if (inv.countCarried(r.itemId) < need) return false;
     }
     return true;
+}
+
+bool SpellHandler::reagentsFree(uint32_t spellId, const Entity& player) const {
+    const auto own = owner_.spellNameCacheRef().find(spellId);
+    if (own == owner_.spellNameCacheRef().end()) return false;
+    const auto& e = own->second;
+    // 0x00800d60: no reagents prepared (UNIT_FLAG 0x20 with AttributesEx5
+    // 0x2), or for a spell of the class's family PLAYER_NO_REAGENT_COST
+    // names.
+    const uint16_t flagsIdx = fieldIndex(UF::UNIT_FIELD_FLAGS);
+    const uint32_t unitFlags = flagsIdx != 0xFFFF ? player.getField(flagsIdx) : 0u;
+    bool free = (unitFlags & 0x20u) != 0 && (e.attrEx5 & 0x2u) != 0;
+    if (!free && e.spellFamily != 0 && e.spellFamily == classSpellFamily()) {
+        const uint16_t mask = fieldIndex(UF::PLAYER_NO_REAGENT_COST_1);
+        for (uint16_t w = 0; mask != 0xFFFF && w < 3 && !free; ++w)
+            free = (player.getField(static_cast<uint16_t>(mask + w)) & e.spellFamilyFlags[w]) != 0;
+    }
+    return free;
+}
+
+const ItemQueryResponseData* SpellHandler::equippedMatch(uint32_t spellId, const Entity& player, uint32_t slots) const {
+    const auto own = owner_.spellNameCacheRef().find(spellId);
+    if (own == owner_.spellNameCacheRef().end()) return nullptr;
+    const auto& e = own->second;
+    const auto field = [&](UF f) {
+        const uint16_t i = fieldIndex(f);
+        return i != 0xFFFF ? player.getField(i) : 0u;
+    };
+    const uint32_t flags = field(UF::UNIT_FIELD_FLAGS), flags2 = field(UF::UNIT_FIELD_FLAGS_2);
+    if ((flags & 0x200000u) != 0) slots &= ~0x8000u;
+    if ((flags2 & 0x80u) != 0) slots &= ~0x10000u;
+    if ((flags2 & 0x400u) != 0) slots &= ~0x20000u;
+    for (int slot = 0; slot < 0x17; ++slot) {
+        if ((slots & (1u << slot)) == 0) continue;
+        const auto it = owner_.onlineItemsRef().find(owner_.getEquipSlotGuid(slot));
+        if (it == owner_.onlineItemsRef().end()) continue;
+        if (it->second.maxDurability != 0 && it->second.curDurability == 0) continue;
+        const auto* info = owner_.getItemInfo(it->second.entry);
+        if (info && static_cast<int32_t>(info->itemClass) == e.equippedItemClass &&
+            (e.equippedItemSubClassMask & (1u << (info->subClass & 31))) != 0)
+            return info;
+    }
+    return nullptr;
+}
+
+SpellHandler::TooltipEquipped SpellHandler::tooltipEquipped(uint32_t spellId) const {
+    TooltipEquipped out;
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return out;
+    const auto& e = it->second;
+    if ((e.targetFlags & 0x10u) != 0 || e.equippedItemClass < 0 || e.equippedItemSubClassMask == 0) return out;
+    auto* am = owner_.services().assetManager;
+    const auto cls = static_cast<uint32_t>(e.equippedItemClass);
+    if (auto m = am ? am->loadDBCOptional("ItemSubClassMask.dbc") : nullptr; m && m->getFieldCount() >= 3) {
+        for (uint32_t r = 0; r < m->getRecordCount() && out.names.empty(); ++r) {
+            if (m->getUInt32(r, 0) == cls && m->getUInt32(r, 1) == e.equippedItemSubClassMask) out.names = m->getString(r, 2);
+        }
+    }
+    if (out.names.empty()) {
+        if (auto sub = am ? am->loadDBCOptional("ItemSubClass.dbc") : nullptr; sub && sub->getFieldCount() > 27) {
+            for (uint32_t r = 0; r < sub->getRecordCount(); ++r) {
+                if (sub->getUInt32(r, 0) != cls || (e.equippedItemSubClassMask & (1u << (sub->getUInt32(r, 1) & 31))) == 0)
+                    continue;
+                std::string named = sub->getString(r, 27);  // VerboseName, else DisplayName
+                if (named.empty()) named = sub->getString(r, 10);
+                if (!out.names.empty()) out.names += ", ";
+                out.names += named;
+            }
+        }
+    }
+    // The hand AttributesEx3 names, else anywhere; both hands for 0x1000400.
+    if (const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
+        const uint32_t slots = (e.attrEx3 & 0x400u) != 0 ? 0x8000u : (e.attrEx3 & 0x1000000u) != 0 ? 0x10000u : 0xFFFFFFFFu;
+        out.equipped = equippedMatch(spellId, *player, slots) != nullptr;
+        if ((e.attrEx3 & 0x1000400u) == 0x1000400u && !equippedMatch(spellId, *player, 0x10000u)) out.equipped = false;
+    }
+    return out;
+}
+
+SpellHandler::TooltipForms SpellHandler::tooltipForms(uint32_t spellId, uint64_t caster) const {
+    TooltipForms out;
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return out;
+    const auto& e = it->second;
+    if (e.stances[0] == 0 && e.stances[1] == 0) return out;
+    const auto bit = [&](int k) { return k >= 0 && k < 64 && (e.stances[k >> 5] & (1u << (k & 31))) != 0; };
+    // SpellShapeshiftForm row k is form k + 1, as Stances' bit k is.
+    if ((e.attrEx2 & 0x80000u) == 0) {
+        auto* am = owner_.services().assetManager;
+        if (auto f = am ? am->loadDBCOptional("SpellShapeshiftForm.dbc") : nullptr; f && f->getFieldCount() > 2) {
+            const uint32_t n = std::min<uint32_t>(f->getRecordCount(), 64);
+            for (uint32_t r = 0; r < n; ++r) {
+                if (!bit(static_cast<int>(r))) continue;
+                const std::string named = f->getString(r, 2);
+                if (named.empty()) continue;
+                if (!out.names.empty()) out.names += ", ";
+                out.names += named;
+            }
+        }
+    }
+    const auto player = owner_.getEntityManager().getEntity(caster ? caster : owner_.getPlayerGuid());  // the pet's for a pet action
+    if (!player) return out;
+    const uint16_t b2 = fieldIndex(UF::UNIT_FIELD_BYTES_2);
+    const auto form = static_cast<uint8_t>((b2 != 0xFFFF ? player->getField(b2) : 0u) >> 24);
+    out.met = bit(static_cast<int>(form) - 1) ||
+              ((e.attrEx2 & 0x80000u) != 0 && !inShapeshiftForm(form, owner_.shapeshiftFormRow(form))) ||
+              playerAuraAffects(275, spellId);
+    return out;
+}
+
+SpellHandler::TooltipReputation SpellHandler::tooltipReputation(uint32_t spellId) const {
+    TooltipReputation out;
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end() || it->second.minFactionId == 0) return out;
+    const auto& e = it->second;
+    out.faction = e.minFactionId;
+    out.rank = e.minReputation < 8 ? e.minReputation : 7;
+    const uint32_t i = owner_.getRepListIdByFactionId(e.minFactionId);
+    const auto& all = owner_.getInitialFactions();
+    const int32_t standing = i < 0x80 && i < all.size() ? all[i].standing : 0;
+    out.met = standing >= cast_check::kRankStart[out.rank];
+    return out;
+}
+
+bool SpellHandler::tooltipNoReagents(uint32_t spellId) const {
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    return it != owner_.spellNameCacheRef().end() && player && reagentsFree(spellId, *player);
 }
 
 bool SpellHandler::weaponCarried(uint32_t spellId, const Entity& player) const {
@@ -2245,23 +2408,7 @@ bool SpellHandler::weaponCarried(uint32_t spellId, const Entity& player) const {
     // AttributesEx3 0x400, the off hand for 0x1000000, the ranged slot for
     // a ranged spell (Attributes 0x2), else any - not a hand disarmed, nor a
     // broken item.
-    const auto found = [&](uint32_t slots) -> const ItemQueryResponseData* {
-        const uint32_t flags = field(UF::UNIT_FIELD_FLAGS), flags2 = field(UF::UNIT_FIELD_FLAGS_2);
-        if ((flags & 0x200000u) != 0) slots &= ~0x8000u;
-        if ((flags2 & 0x80u) != 0) slots &= ~0x10000u;
-        if ((flags2 & 0x400u) != 0) slots &= ~0x20000u;
-        for (int slot = 0; slot < 0x17; ++slot) {
-            if ((slots & (1u << slot)) == 0) continue;
-            const auto it = owner_.onlineItemsRef().find(owner_.getEquipSlotGuid(slot));
-            if (it == owner_.onlineItemsRef().end()) continue;
-            if (it->second.maxDurability != 0 && it->second.curDurability == 0) continue;
-            const auto* info = owner_.getItemInfo(it->second.entry);
-            if (info && static_cast<int32_t>(info->itemClass) == e.equippedItemClass &&
-                (e.equippedItemSubClassMask & (1u << (info->subClass & 31))) != 0)
-                return info;
-        }
-        return nullptr;
-    };
+    const auto found = [&](uint32_t slots) { return equippedMatch(spellId, player, slots); };
     uint32_t slots = 0xFFFFFFFFu;
     if ((e.attrEx3 & 0x400u) != 0) slots = 0x8000u;
     else if ((e.attrEx3 & 0x1000000u) != 0) slots = 0x10000u;
@@ -2384,6 +2531,64 @@ std::optional<unit_target::Range> SpellHandler::spellRange(uint32_t spellId, uin
     // 0x00801650 with no unit: the friendly row for a spell aimed at
     // friends (0x007fe1b0 answering 1), else the hostile one.
     return spellReach(spellId, *caster, nullptr, owner_.getSpellTargetKind(spellId) == 1);
+}
+
+SpellHandler::TooltipCost SpellHandler::tooltipCost(uint32_t spellId, uint64_t caster) const {
+    TooltipCost out;
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    const auto player = owner_.getEntityManager().getEntity(caster ? caster : owner_.getPlayerGuid());  // the pet's for a pet action
+    if (it == owner_.spellNameCacheRef().end() || !player) return out;
+    const auto& e = it->second;
+    out.powerType = static_cast<int32_t>(e.powerType);
+    out.powerDisplayId = e.powerDisplayId;
+    out.cost = powerCost(spellId, *player, 0);
+    // 0x007ff100: ManaPerSecond and its growth for each level past
+    // BaseLevel, a positive one through the cost modifiers' percent (op 14).
+    const uint16_t li = fieldIndex(UF::UNIT_FIELD_LEVEL);
+    int32_t level = li != 0xFFFF ? static_cast<int32_t>(player->getField(li)) : 0;
+    if (e.maxLevel > 0 && e.maxLevel < level) level = e.maxLevel;
+    if (level < 0) level = 0;
+    out.perSecond = (level - e.baseLevel) * e.manaPerSecondPerLevel + e.manaPerSecond;
+    if (out.perSecond > 0) {
+        if (const auto mods = spellModifiers(spellId, 14); mods.any) out.perSecond = mods.pct * out.perSecond / 100;
+    }
+    if (out.powerType == 5) {
+        if (const auto* row = runeCostRow(e.runeCostId)) {
+            out.runes = *row;
+            out.hasRuneRow = true;
+        }
+    }
+    return out;
+}
+
+SpellHandler::TooltipRange SpellHandler::tooltipRange(uint32_t spellId) const {
+    TooltipRange out;
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    if (it == owner_.spellNameCacheRef().end() || !player) return out;
+    const auto& e = it->second;
+    if ((e.attr & 0x404u) != 0 || (e.attrEx3 & 0x40000000u) != 0) return out;
+    out.shown = true;
+    // 0x007ff380 and 0x00800770(spell, 5): a melee row with no Range
+    // modifier on the spell says MELEE_RANGE.
+    if (e.hasRangeRow && (e.rangeFlags & 1u) != 0 && !spellModifiers(spellId, spell_mods::kOpRange).any) {
+        out.melee = true;
+        return out;
+    }
+    out.hostile = spellReach(spellId, *player, nullptr, false);
+    out.friendly = spellReach(spellId, *player, nullptr, true);
+    // 0x007ff3c0 / 0x007ff400: a ranged row's minimum, both ends, is the
+    // row's own for the side the spell is aimed at (0x007fe1b0) and 5 more.
+    if (e.hasRangeRow && (e.rangeFlags & 2u) != 0) {
+        const int k = owner_.getSpellTargetKind(spellId) == 1 ? 1 : 0;
+        const float m = (e.rangeFlags & 1u) != 0 ? 0.0f
+                        : std::max(0.0f, e.rangeMin[k]) + ((e.rangeFlags & 0x7fffffffu) != 0 ? 5.0f : 0.0f);
+        out.hostile.min = m;
+        out.friendly.min = m;
+    }
+    return out;
 }
 
 std::optional<bool> SpellHandler::reachAnswer(uint32_t spellId, uint64_t casterGuid, uint64_t unitGuid) const {
@@ -2616,8 +2821,12 @@ int32_t SpellHandler::powerCost(uint32_t spellId, const Entity& player, int dept
 }
 
 bool SpellHandler::hasCastTime(uint32_t spellId, const Entity& player) const {
+    return castTimeMs(spellId, player) > 0;
+}
+
+int32_t SpellHandler::castTimeMs(uint32_t spellId, const Entity& player) const {
     const auto own = owner_.spellNameCacheRef().find(spellId);
-    if (own == owner_.spellNameCacheRef().end()) return false;
+    if (own == owner_.spellNameCacheRef().end()) return 0;
     const auto& e = own->second;
     // 0x007ff180: SpellCastTimes' base and per level past BaseLevel, at
     // least its minimum, through the cast time modifiers (op 10), the
@@ -2636,7 +2845,7 @@ bool SpellHandler::hasCastTime(uint32_t spellId, const Entity& player) const {
         }
     }
     const auto row = castTimes_.find(e.castingTimeIndex);
-    if (row == castTimes_.end()) return false;
+    if (row == castTimes_.end()) return 0;
     const uint16_t levelIdx = fieldIndex(UF::UNIT_FIELD_LEVEL);
     int32_t level = levelIdx != 0xFFFF ? static_cast<int32_t>(player.getField(levelIdx)) : 0;
     if (e.maxLevel > 0 && e.maxLevel < level) level = e.maxLevel;
@@ -2649,7 +2858,13 @@ bool SpellHandler::hasCastTime(uint32_t spellId, const Entity& player) const {
         if (speed != 1.0f) t = static_cast<int32_t>(std::nearbyint(static_cast<float>(t) * speed));
     }
     if ((e.attr & 0x2u) != 0) t += 500;
-    return t > 0;
+    return t;
+}
+
+int32_t SpellHandler::playerCastTimeMs(uint32_t spellId, uint64_t caster) const {
+    loadSpellNameCache();
+    const auto player = owner_.getEntityManager().getEntity(caster ? caster : owner_.getPlayerGuid());  // the pet's for a pet action
+    return player ? castTimeMs(spellId, *player) : 0;
 }
 
 cast_check::Caster SpellHandler::casterState(uint32_t spellId, const Entity& player) {
@@ -3494,6 +3709,10 @@ void SpellHandler::loadTalentDbc() {
         const uint32_t tPrereq0 = talL ? (*talL)["PrereqTalent0"] : 9;
         const uint32_t tPrereqR0 = talL ? (*talL)["PrereqRank0"] : 12;
         const uint32_t tFlags = talL ? talL->tryField("Flags") : 0xFFFFFFFFu;
+        // RequiredSpellId follows Flags; a data dir copied before it was
+        // named still finds it.
+        uint32_t tRequired = talL ? talL->tryField("RequiredSpellId") : 0xFFFFFFFFu;
+        if (tRequired == 0xFFFFFFFFu && tFlags != 0xFFFFFFFFu) tRequired = tFlags + 1;
 
         uint32_t count = talentDbc->getRecordCount();
         for (uint32_t i = 0; i < count; ++i) {
@@ -3515,6 +3734,7 @@ void SpellHandler::loadTalentDbc() {
             }
 
             if (tFlags != 0xFFFFFFFFu) entry.flags = talentDbc->getUInt32(i, tFlags);
+            if (tRequired < talentDbc->getFieldCount()) entry.requiredSpell = talentDbc->getUInt32(i, tRequired);
 
             entry.maxRank = 0;
             for (int r = 0; r < 5; ++r) {
@@ -3754,6 +3974,10 @@ void SpellHandler::handleInitialSpells(network::Packet& packet) {
     if (!owner_.getPacketParsers()->parseInitialSpells(packet, data)) return;
 
     knownSpells_ = {data.spellIds.begin(), data.spellIds.end()};
+    // The list's own order is the order they were learned in.
+    learnOrder_.clear();
+    nextLearnOrder_ = 0;
+    for (const uint32_t id : data.spellIds) noteLearnOrder(id);
 
     LOG_DEBUG("Initial spells include: 527=", knownSpells_.count(527u),
               " 988=", knownSpells_.count(988u), " 1180=", knownSpells_.count(1180u));
@@ -4780,6 +5004,7 @@ void SpellHandler::handleLearnedSpell(network::Packet& packet) {
 
     const bool alreadyKnown = knownSpells_.count(spellId) > 0;
     knownSpells_.insert(spellId);
+    noteLearnOrder(spellId);
     LOG_INFO("Learned spell: ", spellId, alreadyKnown ? " (already known)" : "");
     if (isPreWotlk()) {
         loadTalentDbc();
@@ -4967,6 +5192,11 @@ void SpellHandler::handleSupercededSpell(network::Packet& packet) {
     uint32_t newSpellId = classicSpellId ? packet.readUInt16() : packet.readUInt32();
 
     knownSpells_.erase(oldSpellId);
+    // The new rank takes the old one's place in the list.
+    if (const auto old = learnOrder_.find(oldSpellId); old != learnOrder_.end()) {
+        learnOrder_[newSpellId] = old->second;
+        learnOrder_.erase(old);
+    }
 
     const bool newSpellAlreadyAnnounced = knownSpells_.count(newSpellId) > 0;
 
@@ -5507,6 +5737,8 @@ void SpellHandler::resetCastState() {
 
 void SpellHandler::resetAllState() {
     knownSpells_.clear();
+    learnOrder_.clear();
+    nextLearnOrder_ = 0;
     playerHistory_.clear();  // 0x00802a50
     petHistory_.clear();
     playerAuras_.clear();
@@ -5580,7 +5812,8 @@ namespace {
 // 0x008091d0 read beside them, named by the WotLK layout alone.
 struct CastCheckColumns {
     uint32_t mechanic, stances, stancesNot, casterState, casterStateNot, casterAura, excludeAura, interrupt,
-        auraInterrupt, channelInterrupt, powerType, manaCost, perLevel, costPct, baseLevel, maxLevel,
+        auraInterrupt, channelInterrupt, powerType, manaCost, perLevel, costPct, perSecond, perSecondPerLevel,
+        baseLevel, maxLevel,
         castTimeIndex, effectMechanic, trigger, prevention, minFaction, minRep, auraVision, areaGroup, itemClass,
         itemSubClassMask, runeCost, targetStateNot, targetAura, excludeTargetAura, totem, totemCategory, dieSides, pointsPerLevel,
         spellDifficulty, spellFocus;
@@ -5595,6 +5828,10 @@ struct CastCheckColumns {
         channelInterrupt = named("ChannelInterruptFlags"), powerType = named("PowerType");
         manaCost = named("ManaCost"), perLevel = named("ManaCostPerLevel"), costPct = named("ManaCostPercentage");
         baseLevel = named("BaseLevel"), maxLevel = named("MaxLevel"), castTimeIndex = named("CastingTimeIndex");
+        // The per-level column follows ManaPerSecond in every layout; a
+        // data dir copied before it was named still finds it.
+        perSecond = named("ManaPerSecond"), perSecondPerLevel = named("ManaPerSecondPerLevel");
+        if (perSecondPerLevel == 0xFFFFFFFFu && perSecond != 0xFFFFFFFFu) perSecondPerLevel = perSecond + 1;
         effectMechanic = named("EffectMechanic0"), trigger = named("EffectTriggerSpell0");
         prevention = named("PreventionType"), minFaction = named("MinFactionId"), minRep = named("MinReputation");
         auraVision = named("RequiredAuraVision");
@@ -5629,6 +5866,8 @@ struct CastCheckColumns {
         entry.manaCost = n(manaCost);
         entry.manaCostPerLevel = n(perLevel);
         entry.manaCostPct = n(costPct);
+        entry.manaPerSecond = n(perSecond);
+        entry.manaPerSecondPerLevel = n(perSecondPerLevel);
         entry.baseLevel = n(baseLevel);
         entry.maxLevel = n(maxLevel);
         entry.castingTimeIndex = u(castTimeIndex);
@@ -5682,7 +5921,7 @@ uint32_t SpellHandler::difficultySpell(uint32_t spellId) const {
     const auto info = owner_.getInstanceInfo();
     uint32_t difficulty;
     if (info.type == "party") difficulty = owner_.getDungeonDifficulty().first;
-    else if (info.type == "raid") difficulty = owner_.getRaidDifficulty().first;
+    else if (info.type == "raid") difficulty = owner_.raidDifficultyInForce();
     else return spellId;
     const auto& v = row->second;
     uint32_t pick = difficulty < 4 ? v[difficulty] : 0;
@@ -6040,6 +6279,7 @@ void SpellHandler::loadSpellNameCache() const {
             if (categoryRecoveryField != 0xFFFFFFFF && categoryRecoveryField < fieldCount)
                 entry.categoryRecoveryMs = dbc->getUInt32(i, categoryRecoveryField);
             if (hasEffectFields) {
+                entry.effectItemType0 = dbc->getUInt32(i, itemTypeFields[0]);
                 for (int e = 0; e < 3; ++e) {
                     const uint32_t effect = dbc->getUInt32(i, effectFields[e]);
                     if (effect == 24 || effect == 114) {   // CREATE_ITEM, CREATE_ITEM_2
@@ -6296,8 +6536,13 @@ bool SpellHandler::carriesTotemCategory(uint32_t cat) const {
 std::vector<uint32_t> SpellHandler::multiCastSpells(int element) const {
     if (element < 0 || element >= totem_bar::kElements) return {};
     const auto& cache = owner_.spellNameCacheRef();
+    // In the order they were learned, as the client's list is walked
+    // (0x00542030 appends each).
     std::vector<uint32_t> ids(knownSpells_.begin(), knownSpells_.end());
-    std::sort(ids.begin(), ids.end());
+    std::sort(ids.begin(), ids.end(), [this](uint32_t a, uint32_t b) {
+        const uint64_t oa = learnOrder(a), ob = learnOrder(b);
+        return oa != ob ? oa < ob : a < b;
+    });
     // 0x0053b540: the rank's number.
     const auto rankOf = [&](uint32_t id) -> uint32_t {
         const auto it = cache.find(id);

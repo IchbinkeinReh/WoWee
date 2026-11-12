@@ -56,18 +56,15 @@ public:
     /// so neither cvar says anything about the other axis.
     void setInvertYaw(bool invert) { invertYaw = invert; }
     [[nodiscard]] bool isInvertYaw() const { return invertYaw; }
-    /// How far back the camera may be pulled, as a multiple of the original
-    /// client's own limit.
-    ///
-    /// Max Camera Distance, as a multiple of the 22 yards the original client
-    /// gives. The schema's cameramaxdistance row counts the yards themselves
-    /// and kClientCVars scales cameraDistanceMaxFactor - the CVar the game's
-    /// own slider wrote, before that page was retired - onto it. Before both
-    /// there was an extended-zoom checkbox of this client's own, a switch
-    /// between two constants where this is every distance between them.
+    /// How far back the camera may be pulled (0x006000e0): cameraDistanceMax
+    /// (15) times cameraDistanceMaxFactor, held to 50. The schema's
+    /// cameramaxdistance row counts the yards of the factor at the default
+    /// cameraDistanceMax, and kClientCVars scales cameraDistanceMaxFactor onto it.
     void setMaxDistanceFactor(float factor) {
-        maxDistanceFactor_ = std::clamp(factor, 1.0f, kMaxDistanceFactorLimit);
+        maxDistanceFactor_ = std::clamp(factor, 0.0f, kMaxDistanceFactorLimit);
     }
+    /// cameraDistanceMax, 0..50 as the client registers it.
+    void setDistanceMax(float yards) { distanceMax_ = std::clamp(yards, 0.0f, MAX_DISTANCE_EXTENDED); }
     [[nodiscard]] float maxDistanceFactor() const { return maxDistanceFactor_; }
     [[nodiscard]] bool isExtendedZoom() const { return extendedZoom_; }
     void setEnabled(bool enabled) { this->enabled = enabled; }
@@ -823,7 +820,7 @@ private:
     game::vehicle::EasedCameraOffset vehiclePitchOffset_;
     uint32_t cameraClockMs_ = 0;
     static constexpr float MIN_DISTANCE = 0.5f;     // Minimum zoom (first-person threshold)
-    static constexpr float MAX_DISTANCE_NORMAL = 22.0f;   // Default max zoom out
+    static constexpr float MAX_DISTANCE_NORMAL = 15.0f;   // cameraDistanceMax's default
     static constexpr float MAX_DISTANCE_EXTENDED = 50.0f;  // Extended max zoom out
 public:
     /// The largest multiple worth offering: the camera as far back as this
@@ -1074,6 +1071,7 @@ private:
     float savedBarberDistance_ = 10.0f;
     float savedBarberPivot_ = 0.0f;
     float maxDistanceFactor_ = 1.0f;
+    float distanceMax_ = MAX_DISTANCE_NORMAL;
     bool xKeyWasDown = false;
     bool rKeyWasDown = false;
     bool autoRunning = false;

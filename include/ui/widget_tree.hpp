@@ -190,6 +190,11 @@ struct Widget {
     /// SetIndentedWordWrap / indented="": every wrapped line after the first
     /// set in (font instance flag 0x20000, 0x0048e0e0/0x0048e600).
     bool indentedWordWrap = false;
+    /// FontString:SetAlphaGradient(start, length) (0x0048d0f0): glyphs before
+    /// `start` drawn whole, the next `length` fading out, the rest not drawn;
+    /// start -1 for none.
+    int alphaGradientStart = -1;
+    int alphaGradientLength = 0;
     /// SetHorizTile / SetVertTile / horizTile="" vertTile="" (texture +0x160
     /// flags 4 and 8, 0x0048cb60/0x0048cc30): the image repeats at its own size.
     bool horizTile = false;
@@ -494,6 +499,12 @@ struct Widget {
     /// this many seconds, 0.5 from the constructor (0x00966b70); 0 never
     /// blinks.
     float editBlinkSpeed = 0.5f;
+    /// The caret's own blink (0x00967670): focused time gathered since it last
+    /// turned (+0x2fc), whether it is showing, and where it stood, since a
+    /// caret that moves starts its count again shown (0x00964a90).
+    mutable float editCaretClock = 0.0f;
+    mutable bool  editCaretShown = true;
+    mutable size_t editCaretAt = 0;
 
     /// Whether a label too long for its box breaks onto another line. On, as
     /// WoW has it - a FontString given a width wraps inside it, and nothing
@@ -587,6 +598,12 @@ struct Widget {
         std::string text;
         float color[4];
         float age = 0.0f;
+        /// The display lines it wraps to, as the last draw measured it, and
+        /// at what width; arrived while the frame was scrolled back, so the
+        /// view is to move back by its lines once they are known.
+        mutable int rows = 1;
+        mutable float rowsWidth = -1.0f;
+        mutable bool scrollCredit = false;
         double lineId = 0.0;
         double accessId = 0.0;
         bool hasExtra = false;
@@ -596,10 +613,10 @@ struct Widget {
     };
     std::deque<Message> messages;
     /// How long a message stays before it fades out, in seconds, and how long
-    /// the fade itself takes. Zero means it never goes - which is what a chat
-    /// frame wants and what UIErrorsFrame very much does not: it declares
-    /// displayDuration="5" and every error was staying on screen for good.
-    float messageDuration = 0.0f;
+    /// the fade itself takes: ten and three from both message frames'
+    /// constructors (0x0096a2f0, CSimpleMessageFrame's), for a frame that
+    /// declares neither. Zero means it never goes.
+    float messageDuration = 10.0f;
     float messageFadeDuration = 3.0f;
     /// Whether a new message goes above the ones already there. UIErrorsFrame
     /// asks for insertMode="TOP"; a chat frame does not.
@@ -614,8 +631,10 @@ struct Widget {
     /// is none; the 15% used here is the leading a line already carries.
     float messagePadding = 0.0f;
     size_t maxMessages = 128;
+    /// Every display line the history holds, as the last draw measured them.
+    mutable int messageLinesTotal = 0;
     /// How far back through the history the frame has been scrolled, in lines.
-    int   messageScroll = 0;
+    mutable int messageScroll = 0;
     /// How many messages the last draw fitted on screen, which is the page
     /// PageUp and PageDown turn and GetNumLinesDisplayed answers.
     mutable int messagesDisplayed = 0;
@@ -630,6 +649,9 @@ struct Widget {
     /// The offsets SetOwner or SetAnchorType gave, which ANCHOR_CURSOR_RIGHT
     /// adds to the cursor each frame (0x0061b2e0).
     float tooltipAnchorX = 0.0f, tooltipAnchorY = 0.0f;
+    /// Seconds left of a FadeOut, 0 for none (0x0061d940: two, the last one
+    /// fading).
+    float tooltipFadeLeft = 0.0f;
     /// The frame this tooltip was last given by SetOwner. A tooltip is hidden
     /// when its owner stops being visible - see hideOrphanedTooltips.
     uint32_t tooltipOwnerId = 0;
@@ -651,6 +673,16 @@ struct Widget {
         /// tip - and the flag was read off the call and dropped, so one long
         /// sentence stretched the tooltip across the screen.
         bool wrap = false;
+        /// A picture in front of the line, as tall as the line and tinted -
+        /// the threat status icon a unit's tooltip ends with (0x00621070 ->
+        /// 0x0061c8b0 with a colour). Empty for none.
+        std::string icon;
+        float iconUV[4] = {0.0f, 1.0f, 0.0f, 1.0f};
+        float iconTint[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+        /// AddFontStrings (0x0061fe30): the two font strings the line is made
+        /// of, whose text and colour it shows as they stand. 0 for a line of
+        /// its own.
+        uint32_t leftFontString = 0, rightFontString = 0;
         /// Lines the wrap produced, filled by the sizing pass so the draw and
         /// the height agree on how tall this line is.
         mutable int lines = 1;

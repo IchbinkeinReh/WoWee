@@ -73,8 +73,20 @@ const Widget* rotationOwner(const WidgetTree& tree, const Widget& w) {
 }
 
 bool caretBlinkOn(const Widget& w) {
-    if (!(w.editBlinkSpeed > 0.0f)) return true;
-    return std::fmod(ImGui::GetTime(), 2.0 * w.editBlinkSpeed) < w.editBlinkSpeed;
+    // Moved: shown, and the count from nothing (0x00964a90).
+    if (w.cursorPos != w.editCaretAt) {
+        w.editCaretAt = w.cursorPos;
+        w.editCaretClock = 0.0f;
+        w.editCaretShown = true;
+    }
+    // A speed of 0 leaves it as it stands.
+    if (!(w.editBlinkSpeed > 0.0f)) return w.editCaretShown;
+    w.editCaretClock += ImGui::GetIO().DeltaTime;
+    if (w.editBlinkSpeed < w.editCaretClock) {
+        w.editCaretShown = !w.editCaretShown;
+        w.editCaretClock = 0.0f;
+    }
+    return w.editCaretShown;
 }
 
 /// The same string with every escape taken out, for measuring.
@@ -454,6 +466,17 @@ void WidgetRenderer::sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree
     // reason: one line of text plus a tooltip's padding, in place of the
     // 233x215 its XML asks for.
     if (w->objectType != "GameTooltip") return;
+    // A line made of font strings shows them as they are now.
+    for (auto& line : w->tooltipLines) {
+        const auto adopt = [&tree](uint32_t id, std::string& text, float (&c)[4]) {
+            const Widget* fs = id ? tree.get(id) : nullptr;
+            if (!fs) return;
+            text = fs->text;
+            for (int i = 0; i < 4; ++i) c[i] = fs->color[i];
+        };
+        adopt(line.leftFontString, line.left, line.lc);
+        adopt(line.rightFontString, line.right, line.rc);
+    }
 
     const float size = interfaceFontSize(w->fontHeight);
     const float lineH = size * 1.2f;
@@ -504,7 +527,7 @@ void WidgetRenderer::sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree
         // it ever set a height, the box kept whatever size it had, and the
         // lines past that drew below its bottom edge.
         if (line.wrap) continue;
-        float wide = measure(line.left);
+        float wide = measure(line.left) + (line.icon.empty() ? 0.0f : size + 2.0f);
         if (!line.right.empty()) {
             // Left and right text share a line with a gap between them.
             wide += 20.0f + measure(line.right);
@@ -716,6 +739,7 @@ float WidgetRenderer::drawMarkupText(ImDrawList* dl, ImFont* font, float size,
                                      bool nonSpaceWrap, const char* justifyH,
                                      bool forceColor, WidgetTree* linkSink,
                                      uint32_t linkOwner, float indent) {
+    gradientGlyph_ = 0;
     const auto lines = wrapText(parseMarkup(text), wrapWidth, nonSpaceWrap,
                                 [&](const std::string& piece) {
                                     return font->CalcTextSizeA(size, FLT_MAX, 0.0f,
@@ -761,7 +785,7 @@ float WidgetRenderer::drawMarkupText(ImDrawList* dl, ImFont* font, float size,
                         const float top = y + (lineH - h) * 0.5f;
                         dl->AddImage(reinterpret_cast<ImTextureID>(tex),
                                      ImVec2(x, top), ImVec2(x + w, top + h),
-                                     ImVec2(0, 0), ImVec2(1, 1),
+                                     ImVec2(run.uv[0], run.uv[2]), ImVec2(run.uv[1], run.uv[3]),
                                      IM_COL32(255, 255, 255,
                                               static_cast<int>(alpha * 255.0f)));
                     }
@@ -776,9 +800,42 @@ float WidgetRenderer::drawMarkupText(ImDrawList* dl, ImFont* font, float size,
                 float rgba[4] = {run.rgba[0], run.rgba[1], run.rgba[2], run.rgba[3]};
                 col = packColor(rgba, alpha);
             }
-            dl->AddText(font, size, ImVec2(x, y), col, run.text.c_str());
             const float runW = font->CalcTextSizeA(size, FLT_MAX, 0.0f,
                                                    run.text.c_str()).x;
+            if (gradientStart_ < 0) {
+                dl->AddText(font, size, ImVec2(x, y), col, run.text.c_str());
+            } else {
+                // Glyph by glyph under an alpha gradient (0x006c78f0): whole
+                // before the start, then two steps of alpha / length down a
+                // glyph, none past the ramp. Spaces draw nothing and count
+                // for nothing.
+                float gx = x;
+                const std::string& t = run.text;
+                for (size_t at = 0; at < t.size();) {
+                    const unsigned char lead = static_cast<unsigned char>(t[at]);
+                    const size_t n = lead < 0x80 ? 1 : (lead >> 5) == 0x6 ? 2 : (lead >> 4) == 0xe ? 3
+                                   : (lead >> 3) == 0x1e ? 4 : 1;
+                    const std::string glyph = t.substr(at, n);
+                    at += n;
+                    const float gw = font->CalcTextSizeA(size, FLT_MAX, 0.0f, glyph.c_str()).x;
+                    if (glyph != " " && glyph != "\t") {
+                        const int k = gradientGlyph_++;
+                        float f = 0.0f;
+                        if (k < gradientStart_) {
+                            f = 1.0f;
+                        } else if (gradientLength_ > 0 && k < gradientStart_ + gradientLength_) {
+                            f = std::max(0.0f, 1.0f - static_cast<float>(2 * (k - gradientStart_) + 1) /
+                                                          static_cast<float>(gradientLength_));
+                        }
+                        if (f > 0.0f) {
+                            const uint32_t a = static_cast<uint32_t>(((col >> IM_COL32_A_SHIFT) & 0xffu) * f);
+                            dl->AddText(font, size, ImVec2(gx, y),
+                                        (col & ~IM_COL32_A_MASK) | (a << IM_COL32_A_SHIFT), glyph.c_str());
+                        }
+                    }
+                    gx += gw;
+                }
+            }
             // Where the link landed, for the click that arrives in another
             // pass entirely. Only from the pass that draws the text itself -
             // the outline and shadow draw the same glyphs and would file the
@@ -2656,7 +2713,18 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 size_t rowIdx = 0;
                 for (const auto& line : w->tooltipLines) {
                     float lc[4] = {line.lc[0], line.lc[1], line.lc[2], line.lc[3]};
-                    drawMarkupText(dl, font, size, ImVec2(x0 + pad, y),
+                    float textX = x0 + pad;
+                    if (!line.icon.empty()) {
+                        if (VkDescriptorSet tex = resident(line.icon); tex != kMissing) {
+                            float tint[4] = {line.iconTint[0], line.iconTint[1], line.iconTint[2], line.iconTint[3]};
+                            dl->AddImage(reinterpret_cast<ImTextureID>(tex), ImVec2(textX, y),
+                                         ImVec2(textX + size, y + size),
+                                         ImVec2(line.iconUV[0], line.iconUV[2]),
+                                         ImVec2(line.iconUV[1], line.iconUV[3]), packColor(tint, w->alpha));
+                        }
+                        textX += size + 2.0f;
+                    }
+                    drawMarkupText(dl, font, size, ImVec2(textX, y),
                                    packColor(lc, w->alpha), w->alpha, line.left,
                                    line.wrap ? textW : 0.0f);
                     if (!line.right.empty()) {
@@ -2708,12 +2776,42 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 // rather than its first, lower on screen than the original's.
                 const bool topDown = w->objectType == "MessageFrame";
                 const int count = static_cast<int>(w->messages.size());
+                // Every message's lines, measured again only where the width
+                // moved; a message that came in while the frame was scrolled
+                // back moves the view back by its lines past the first.
+                int totalLines = 0;
+                for (const auto& m : w->messages) {
+                    if (m.rowsWidth != wrapW) {
+                        m.rows = static_cast<int>(lineCount(m.text));
+                        m.rowsWidth = wrapW;
+                    }
+                    if (m.scrollCredit) {
+                        m.scrollCredit = false;
+                        if (w->messageScroll > 0) w->messageScroll += m.rows - 1;
+                    }
+                    totalLines += m.rows;
+                }
+                w->messageLinesTotal = totalLines;
                 float y = topDown ? y0 : y1 - lineH;
                 int painted = 0;
-                const int scroll = w->messageScroll;
-                for (int k = scroll; k < count && (topDown ? y < y1 : y >= y0); ++k) {
+                int paintedLines = 0;
+                // Scrolled back by display lines (the client's ring holds the
+                // wrapped lines): those at the newest end are passed over, a
+                // message only partly passed over showing its upper lines.
+                int skipLines = topDown ? 0 : std::max(w->messageScroll, 0);
+                const int firstK = topDown ? std::max(w->messageScroll, 0) : 0;
+                for (int k = firstK; k < count && (topDown ? y < y1 : y >= y0); ++k) {
                     const int i = topDown ? k : count - 1 - k;
                     const auto& m = w->messages[static_cast<size_t>(i)];
+                    int hiddenBelow = 0;
+                    if (skipLines > 0) {
+                        if (skipLines >= m.rows) {
+                            skipLines -= m.rows;
+                            continue;
+                        }
+                        hiddenBelow = skipLines;
+                        skipLines = 0;
+                    }
                     // A line whose time is up is still in the history - it
                     // comes back when the frame is scrolled - but it takes no
                     // room on screen, so the ones still lit pack together.
@@ -2732,8 +2830,9 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     // upward, because the newest sits at the bottom: the block
                     // starts as many lines above the cursor as it needs, and
                     // the cursor then moves past all of them.
-                    const size_t rows = lineCount(m.text);
-                    const float top = topDown ? y : y - static_cast<float>(rows - 1) * lineH;
+                    const size_t rows = static_cast<size_t>(std::max(m.rows, 1));
+                    const size_t shownRows = rows - static_cast<size_t>(hiddenBelow);
+                    const float top = topDown ? y : y - static_cast<float>(shownRows - 1) * lineH;
                     // Top-down the block grows downward instead, and one that
                     // would run out of the bottom stops the same way - unless it
                     // is the first, which the original shows regardless.
@@ -2771,6 +2870,8 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     };
                     const float bx = std::floor(x0);
                     const float by = std::floor(top);
+                    // The lines scrolled past are below the frame: cut there.
+                    if (hiddenBelow > 0) dl->PushClipRect(ImVec2(x0, y0), ImVec2(x1, y1), true);
                     if (w->hasShadow) {
                         float sc[4] = {w->shadowColor[0], w->shadowColor[1],
                                        w->shadowColor[2], w->shadowColor[3]};
@@ -2793,9 +2894,11 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                                    packColor(rgba, w->alpha), w->alpha, m.text,
                                    wrapW, false, w->justifyH.c_str(), false,
                                    &tree, w->id, (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f));
+                    if (hiddenBelow > 0) dl->PopClipRect();
                     if (topDown) y += lineH * static_cast<float>(rows);
-                    else         y -= lineH * static_cast<float>(rows);
+                    else         y -= lineH * static_cast<float>(shownRows);
                     ++painted;
+                    paintedLines += static_cast<int>(topDown ? rows : shownRows);
                 }
                 // A window holding lines and painting none of them.
                 //
@@ -2808,7 +2911,9 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 //
                 // Once per frame per session - it means nothing is on screen,
                 // so it cannot be noisy for long.
-                w->messagesDisplayed = painted;
+                // In display lines, the unit PageUp and GetNumLinesDisplayed
+                // count in (0x009736a0).
+                w->messagesDisplayed = paintedLines;
                 if (painted == 0) {
                     int lit = 0;
                     for (const auto& m : w->messages) {
@@ -3350,6 +3455,14 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 });
             }
             const std::string& shown = fitted.empty() ? w->text : fitted;
+            // The gradient, for every copy of the words drawn below - the
+            // outline and the shadow fade with them.
+            struct GradientScope {
+                WidgetRenderer& r;
+                ~GradientScope() { r.gradientStart_ = -1; }
+            } gradientScope{*this};
+            gradientStart_ = w->alphaGradientStart;
+            gradientLength_ = w->alphaGradientLength;
             float tx = x0;
             if (wrapW <= 0.0f && !overflows) {
                 if (w->justifyH == "CENTER")     tx = x0 + (boxW - extent.x) * 0.5f;

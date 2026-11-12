@@ -2249,6 +2249,9 @@ void InventoryHandler::repairItem(uint64_t vendorGuid, uint64_t itemGuid) {
         owner_.playGameErrorSound("ERR_NOT_ENOUGH_MONEY");
         return;
     }
+    // The anvil, as the request goes (0x005d8650, 0x005e85d0).
+    if (auto* ac = owner_.services().audioCoordinator)
+        if (auto* sfx = ac->getUiSoundManager()) sfx->playByName("ITEM_REPAIR");
 
     network::Packet packet(wireOpcode(Opcode::CMSG_REPAIR_ITEM));
     packet.writeUInt64(vendorGuid);
@@ -2546,6 +2549,9 @@ void InventoryHandler::dispatchUseItem(uint8_t wowBag, uint8_t wowSlot, uint64_t
     if (itemInfo && itemInfo->valid && (itemInfo->itemFlags & kItemFlagWrapper) != 0) {
         if ((owner_.getItemFieldFlags(itemGuid) & kItemFieldFlagWrapped) != 0) {
             beginOpenItem();
+            // The paper torn, as the request goes (0x006dce70).
+            if (auto* ac = owner_.services().audioCoordinator)
+                if (auto* sfx = ac->getUiSoundManager()) sfx->playByName("UnwrapGift");
             owner_.getSocket()->send(OpenItemPacket::build(wowBag, wowSlot));
         } else {
             wrapPaperGuid_ = itemGuid;
@@ -2593,6 +2599,9 @@ void InventoryHandler::dispatchUseItem(uint8_t wowBag, uint8_t wowSlot, uint64_t
     if (useSpellId != 0 && !owner_.isMounted() && owner_.getSpellHandler()) {
         owner_.getSpellHandler()->noteGroundCastSpell(useSpellId);
     }
+    // The item's use sound, where a spell cast plays GAMESPELLACTIVATE
+    // (0x0080cce0 -> 0x004d0020(2)).
+    if (useSpellId != 0 && itemInfo && itemInfo->valid) playItemSound(itemInfo->displayInfoId, 2);
 
     // A glyph opens the glyph frame (USE_GLYPH, 0x005d8650 for an item of
     // class 16) and its spell waits for a socket (Targets 0x20000) rather
@@ -4930,6 +4939,7 @@ void InventoryHandler::requestGuildBankWithdrawMoney() {
 
 void InventoryHandler::handleGuildBankList(network::Packet& packet) {
     if (!GuildBankListParser::parse(packet, guildBankData_)) return;
+    ++guildBankListCount_;
     // The tab names come with the count of tabs bought (0x005a7250 ->
     // 0x00c1dc0c).
     if (guildBankData_.tabsIncluded)

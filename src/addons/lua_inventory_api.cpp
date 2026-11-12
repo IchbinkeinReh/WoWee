@@ -3337,6 +3337,8 @@ static int lua_WoweeContainerItemInstance(lua_State* L) {
     lua_pushnumber(L, static_cast<lua_Number>(s->item.maxDurability));
     lua_setfield(L, -2, "maxDurability");
     pushSocketedGems(L, gh, s->item.guid, s->item.itemId);
+    lua_pushnumber(L, static_cast<lua_Number>(gh->itemSellPriceShown(s->item.guid, s->item.itemId, s->item.stackCount)));
+    lua_setfield(L, -2, "price");
     return 1;
 }
 
@@ -3530,6 +3532,70 @@ static int lua_GetItemTooltipData(lua_State* L) {
     if (info->block > 0) {
         lua_pushnumber(L, info->block);
         lua_setfield(L, -2, "block");
+    }
+    // Where it works, if only somewhere: the zone (AreaTable) and the
+    // instance (Map) it is limited to, by name.
+    if (info->limitArea != 0) {
+        const std::string area = gh->getAreaName(info->limitArea);
+        if (!area.empty()) { lua_pushstring(L, area.c_str()); lua_setfield(L, -2, "limitArea"); }
+    }
+    if (info->limitMap != 0) {
+        const std::string map = gh->getMapName(info->limitMap);
+        if (!map.empty()) { lua_pushstring(L, map.c_str()); lua_setfield(L, -2, "limitMap"); }
+    }
+    // A lock (LockID): whether one of the player's spells opens its kind,
+    // that spell's value and what the lock wants - the colour of the
+    // LOCKED line - and whether it is encrypted (0x007086b0).
+    if (info->lockId != 0) {
+        if (const auto lock = gh->itemLockShown(info->lockId, static_cast<int32_t>(info->itemLevel))) {
+            lua_newtable(L);
+            lua_pushboolean(L, lock->hasSpell ? 1 : 0);
+            lua_setfield(L, -2, "hasSpell");
+            lua_pushboolean(L, lock->encrypted ? 1 : 0);
+            lua_setfield(L, -2, "encrypted");
+            lua_pushnumber(L, lock->value);
+            lua_setfield(L, -2, "value");
+            lua_pushnumber(L, lock->required);
+            lua_setfield(L, -2, "required");
+            lua_setfield(L, -2, "lock");
+        }
+    }
+    // Conjured (flag 0x2): ITEM_CONJURED.
+    if ((info->itemFlags & 0x2u) != 0) {
+        lua_pushboolean(L, 1);
+        lua_setfield(L, -2, "conjured");
+    }
+    if ((info->itemFlags & 0x2000u) != 0) {
+        lua_pushboolean(L, 1);
+        lua_setfield(L, -2, "signable");
+    }
+    if (info->randomEnchant) {
+        lua_pushboolean(L, 1);
+        lua_setfield(L, -2, "randomEnchant");
+    }
+    if (info->itemDuration > 0) {
+        lua_pushnumber(L, info->itemDuration);
+        lua_setfield(L, -2, "duration");
+    }
+    // A druid sees what a weapon is worth in a feral form (0x0061a8f0): for
+    // a one-hand, two-hand, main or off hand weapon (inventory types whose
+    // mask at 0x00a2d288 has 0x8000) of more than 54.81 damage per second,
+    // (DPS - 54.81) x 14, rounded - FERAL_DRUID_ITEM_AP.
+    constexpr uint8_t kClassDruid = 11;
+    if (gh->getPlayerClass() == kClassDruid && info->itemClass == 2 && info->delayMs > 0) {
+        const uint32_t inv = info->inventoryType;
+        if (inv == 13 || inv == 17 || inv == 21 || inv == 22) {
+            float total = 0.0f;
+            for (const auto& d : info->damages) total += (d.min + d.max) * 0.5f;
+            const float dps = total / (static_cast<float>(info->delayMs) * 0.001f);
+            if (dps > 54.81f) {
+                const int ap = static_cast<int>(std::floor((dps - 54.81f) * 14.0f + 0.5f));
+                if (ap > 0) {
+                    lua_pushnumber(L, ap);
+                    lua_setfield(L, -2, "feralAttackPower");
+                }
+            }
+        }
     }
     // Primary stats
     if (info->stamina != 0) { lua_pushnumber(L, info->stamina); lua_setfield(L, -2, "stamina"); }
@@ -6199,9 +6265,15 @@ void registerInventoryLuaAPI(lua_State* L) {
             lua_pushstring(L, icon.empty()
                 ? "Interface\\Icons\\INV_Misc_QuestionMark" : icon.c_str());
             lua_pushnumber(L, it.stackCount);
-            // Locked while its item is on the cursor (0x005137d0).
+            // Locked while its item is on the cursor (0x005137d0), and after
+            // a move until the bank's next list unlocks it (0x00513800).
             const auto& held = guildBankCursorSlot();
-            luaPushOneOrNil(L, (held.tab == tab && held.slot == slot) ? 1 : 0);
+            bool locked = held.tab == tab && held.slot == slot;
+            auto& moved = guildBankMovedSlots();
+            const uint32_t lists = gh->guildBankListCount();
+            std::erase_if(moved, [lists](const GuildBankMovedSlot& m) { return m.list != lists; });
+            for (const auto& m : moved) locked = locked || (m.tab == tab && m.slot == slot);
+            luaPushOneOrNil(L, locked ? 1 : 0);
             return 3;
         }},
                 // GetGuildBankItemLink(tab, slot) → hyperlink
@@ -7271,18 +7343,20 @@ void registerInventoryLuaAPI(lua_State* L) {
             luaPushOneOrNil(L, mail.read ? 1 : 0);               // wasRead
             // Returned (mail flag 0x2) or sent back unopened (0x200).
             luaPushOneOrNil(L, (mail.flags & 0x202u) != 0 ? 1 : 0); // wasReturned
-            luaPushOneOrNil(L, !mail.body.empty() ? 1 : 0);      // textCreated
+            // textCreated: a copy of the letter's text was made (mail flag
+            // 0x4, COPIED; 0x0056e520), not whether it has a text.
+            luaPushOneOrNil(L, (mail.flags & 0x4u) != 0 ? 1 : 0);
             // A player's letter, unless on the GM's stationery (61), which is
             // a GM's and says so instead (0x0056e520).
             constexpr uint32_t kGmStationery = 0x3d;
             const bool fromGm = mail.stationeryId == kGmStationery;
             luaPushOneOrNil(L, mail.messageType == 0 && !fromGm ? 1 : 0); // canReply
             luaPushOneOrNil(L, fromGm ? 1 : 0);                   // isGM
-            // How many of the first attachment there are, which is what the
-            // inbox button prints in its corner.
-            lua_pushnumber(L, mail.attachments.empty()
-                                  ? 0
-                                  : static_cast<lua_Number>(mail.attachments[0].stackCount));
+            // How many of the attachment there are, which is what the inbox
+            // button prints in its corner - only for a letter with exactly
+            // one, nil otherwise (0x0056e520).
+            if (mail.attachments.size() == 1) lua_pushnumber(L, static_cast<lua_Number>(mail.attachments[0].stackCount));
+            else lua_pushnil(L);
             return 14;
         }},
                 // body, stationery texture, isTakeable, isInvoice

@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <initializer_list>
 #include <limits>
 
 using namespace wowee::game;
@@ -64,7 +65,7 @@ TEST_CASE("Route clock: forty days of steady clock keep millisecond precision",
     const int64_t uptime = 40 * kDayMs;   // past what a float second count resolves to the ms
     TransportRouteClock clock;
     clock.apply(123456u, kPeriod, uptime, true);
-    for (int64_t step : {0LL, 1LL, 7LL, 999LL, 86400000LL, 40 * kDayMs}) {
+    for (const int64_t step : std::initializer_list<int64_t>{0, 1, 7, 999, 86400000, 40 * kDayMs}) {
         const uint32_t expected =
             static_cast<uint32_t>(123456u + static_cast<uint32_t>(step)) % kPeriod;
         INFO("step " << step);

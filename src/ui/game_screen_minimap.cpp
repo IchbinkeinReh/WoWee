@@ -1496,8 +1496,13 @@ void GameScreen::renderMinimapPlayerArrow(const MinimapFrame& frame, uint8_t alp
     const float c = std::cos(angle);
     const float s = std::sin(angle);
     const float unitPx = frame.unitPixels();
-    const float hw = static_cast<float>(art.playerArrowWidth) * 0.5f * unitPx;
-    const float hh = static_cast<float>(art.playerArrowHeight) * 0.5f * unitPx;
+    // The size the interface gave it (SetPlayerTextureWidth / Height), else
+    // the texture's own.
+    const auto& sized = rendering::minimap_art::state();
+    const float hw = (sized.playerWidth > 0.0f ? sized.playerWidth : static_cast<float>(art.playerArrowWidth)) *
+                     0.5f * unitPx;
+    const float hh = (sized.playerHeight > 0.0f ? sized.playerHeight : static_cast<float>(art.playerArrowHeight)) *
+                     0.5f * unitPx;
     // Screen y grows down, so a counter-clockwise turn is (x c + y s, -x s + y c).
     const auto corner = [&](float x, float y) {
         return ImVec2(frame.centerX + x * c + y * s, frame.centerY - x * s + y * c);
@@ -2524,7 +2529,7 @@ void GameScreen::loadSettings() {
             else if (key == "mouse_sensitivity") settingsPanel_.pendingMouseSensitivity = std::clamp(std::stof(val), 0.05f, 1.0f);
             else if (key == "invert_mouse") settingsPanel_.pendingInvertMouse = (std::stoi(val) != 0);
             else if (key == "invert_yaw") settingsPanel_.pendingInvertYaw = (std::stoi(val) != 0);
-            else if (key == "camera_max_distance") settingsPanel_.pendingCameraMaxDistance = std::clamp(std::stoi(val), 22, 50);
+            else if (key == "camera_max_distance") settingsPanel_.pendingCameraMaxDistance = std::clamp(std::stoi(val), 15, 50);
             else if (key == "camera_pivot_height") settingsPanel_.pendingPivotHeight = std::clamp(std::stof(val), 0.0f, 3.0f);
             else if (key == "gamepad") settingsPanel_.pendingGamepadEnabled = (std::stoi(val) != 0);
             else if (key == "gamepad_look_speed") settingsPanel_.pendingGamepadLookSpeed = std::clamp(std::stof(val), 60.0f, 540.0f);

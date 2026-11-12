@@ -31,6 +31,9 @@ struct TalentEntry {
     uint8_t maxRank = 0;
     /// Talent.dbc Flags: 0x1 is GetTalentInfo's isExceptional (0x005c7800).
     uint32_t flags = 0;
+    /// Talent.dbc RequiredSpellId (+0x50): a spell the talent asks to be
+    /// known first (0x006224f0's ITEM_REQ_SKILL). 0 = none.
+    uint32_t requiredSpell = 0;
 };
 
 struct TalentTabEntry {

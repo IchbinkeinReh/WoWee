@@ -403,6 +403,8 @@ bool WorldMapFacade::initialize(VkContext* ctx, pipeline::AssetManager* am) {
         impl_->playerMarkerLayer->initialize(ctx, am);
     if (impl_->corpseMarkerLayer)
         impl_->corpseMarkerLayer->initialize(ctx, am);
+    if (impl_->questPOILayer)
+        impl_->questPOILayer->initialize(ctx, am);
     impl_->initialized = true;
     return true;
 }
@@ -1084,6 +1086,11 @@ void WorldMapFacade::setTaxiNodes(std::vector<TaxiNode> nodes) {
 
 void WorldMapFacade::setQuestPois(std::vector<QuestPOI> pois) {
     impl_->questPois = std::move(pois);
+}
+
+void WorldMapFacade::setQuestBlobStyle(const std::string& fill, uint8_t fillAlpha, const std::string& border,
+                                       uint8_t borderAlpha, float borderScalar) {
+    if (impl_->questPOILayer) impl_->questPOILayer->setBlobStyle(fill, fillAlpha, border, borderAlpha, borderScalar);
 }
 
 void WorldMapFacade::setFrameRect(float x, float y, float w, float h) {

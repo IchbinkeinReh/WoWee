@@ -85,6 +85,11 @@ struct ScenePick {
     /// shop's board - is not tracked by the client and shows no tooltip.
     uint64_t mouseoverObjectGuid = 0;
     float    mouseoverObjectAim = 1e30f;
+    /// The nearest corpse the ray meets: never what a click acts on, but
+    /// the pointer rests on it and the client names whose it is (0x0051f790
+    /// case 0x81 -> 0x00622410).
+    uint64_t mouseoverCorpseGuid = 0;
+    float    mouseoverCorpseCenterT = 1e30f;
 
     /// The living win; a corpse is still selectable, but only when nothing alive
     /// was under the cursor - which is what makes a player standing on a body
@@ -125,7 +130,8 @@ struct ScenePick {
     /// (an anvil, a forge).
     [[nodiscard]] uint64_t mouseover() const {
         const uint64_t guid = resolve();
-        return guid != 0 ? guid : mouseoverObjectGuid;
+        if (guid != 0) return guid;
+        return mouseoverObjectGuid != 0 ? mouseoverObjectGuid : mouseoverCorpseGuid;
     }
 };
 

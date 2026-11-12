@@ -152,6 +152,11 @@ private:
     /// can be filed in the coordinates the click will arrive in.
     float linkScreenH_ = 0.0f;
     float linkScale_ = 1.0f;
+    /// The alpha gradient of the font string being drawn (start -1 for
+    /// none) and the glyph count reached, for drawMarkupText.
+    int gradientStart_ = -1;
+    int gradientLength_ = 0;
+    int gradientGlyph_ = 0;
     void drawBackdrop(ImDrawList* dl, const Widget& w, float scale,
                       float x0, float y0, float x1, float y1);
     void drawStatusBar(ImDrawList* dl, const Widget& w,

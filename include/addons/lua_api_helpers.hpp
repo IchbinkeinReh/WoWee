@@ -66,6 +66,11 @@ extern "C" {
 
 namespace wowee::addons {
 
+/// A PowerDisplay.dbc row: ActualType, GlobalStringBaseTag and its colour,
+/// three bytes after the strings (0x0065c290's record +4, +8, +0xc..+0xe).
+struct PowerDisplayRow { uint32_t actualType = 0; std::string token; uint8_t rgb[3] = {}; };
+std::optional<PowerDisplayRow> powerDisplayRow(game::GameHandler* gh, uint32_t id);
+
 // ---- String helper ----
 inline void toLowerInPlace(std::string& s) {
     for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -331,6 +336,16 @@ struct GuildBankCursorSlot { int tab = 0; int slot = 0; };
 inline GuildBankCursorSlot& guildBankCursorSlot() {
     static GuildBankCursorSlot held;
     return held;
+}
+
+/// A slot whose item went out with a move: the cursor let it go without
+/// unlocking it (0x00519280 leaves 0x00513800 to the bank's update), so it
+/// stays locked until the next bank list arrives (0x005a5410, 0x005a7250) -
+/// `list` is the count of lists seen when it was moved.
+struct GuildBankMovedSlot { int tab = 0; int slot = 0; uint32_t list = 0; };
+inline std::vector<GuildBankMovedSlot>& guildBankMovedSlots() {
+    static std::vector<GuildBankMovedSlot> moved;
+    return moved;
 }
 
 /// The uppercase tokens WoW returns second from UnitClass, and the key every
@@ -1290,6 +1305,33 @@ inline const game::GroupMember* findRosterMember(game::GameHandler* gh, uint64_t
 /// player's own class, or the inspected player's when their tree is being drawn.
 const game::TalentEntry* talentAt(game::GameHandler* gh, int tabIndex, int talentIndex,
                                   uint8_t classIdOverride = 0);
+
+/// What a talent's tooltip (0x00626e20) says beyond its spells, worked out
+/// where the talent API keeps the ranks, the preview and the pet's tree.
+/// Rank indices count from 0, -1 for none, as the client's records do.
+struct TalentTooltipFacts {
+    const game::TalentEntry* talent = nullptr;
+    int learnedIdx = -1;    ///< the group record's rank (+0x1c)
+    int shownIdx = -1;      ///< its preview rank (+0x20) when previewing, else the above
+    int maxIdx = -1;        ///< the last rank with a spell
+    /// 0x006224f0, asked where nothing is learned yet: each unmet
+    /// prerequisite's rank (one-based) and the spell named for it; the tier's
+    /// points and its tab where the tab has too few; a required spell not
+    /// known. Any of them leaves the talent not learnable.
+    std::vector<std::pair<int, uint32_t>> prereqs;
+    int tierPoints = 0;
+    std::string tierTab;
+    uint32_t requiredSpell = 0;
+    bool learnable = true;
+    /// 0x00622800's lines: TOOLTIP_TALENT_LEARN, or in a preview
+    /// TALENT_TOOLTIP_ADDPREVIEWPOINT and _REMOVEPREVIEWPOINT.
+    bool learnHint = false;
+    bool addHint = false;
+    bool removeHint = false;
+};
+/// SetTalent's arguments (0x0062f740), group zero-based.
+TalentTooltipFacts talentTooltipFacts(game::GameHandler* gh, int tabIndex, int talentIndex, bool inspect,
+                                      bool pet, int group, bool preview);
 
 /// The item id the cursor is carrying, or zero for anything else.
 ///

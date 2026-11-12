@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/npc_interaction.hpp"
 #include "game/tutorials.hpp"
 #include "game/item_text.hpp"   // ItemLinkInstance - the numbers an item link carries
 #include "game/visible_item_fields.hpp"   // the visible-item pair as the client's record reads it
@@ -760,6 +761,11 @@ public:
     // Mouseover targeting - set each frame by the nameplate renderer
     void setMouseoverGuid(uint64_t guid) override;
     uint64_t getMouseoverGuid() const override { return mouseoverGuid_; }
+    /// Whether the interface is shown (0x00ac80a8, SetUIVisibility
+    /// 0x00517c20): hidden, the world draws no nameplates, raid icons or
+    /// selection circle, and no mouseover highlight unless unitHighlights.
+    [[nodiscard]] bool isUiVisible() const { return uiVisible_; }
+    void setUiVisible(bool visible) { uiVisible_ = visible; }
 
     // Advanced targeting
     void targetLastTarget();
@@ -2611,6 +2617,8 @@ public:
     /// force - the group's in a group, the player's own out of one - and the
     /// player's own, both from 0.
     std::pair<uint32_t, uint32_t> getRaidDifficulty() const;
+    /// The raid difficulty spells are swapped by (0x00519680).
+    uint32_t raidDifficultyInForce() const;
 
     /// The bind-or-leave prompt raised on entering an instance in progress.
     /// False when nothing is pending, in which case the out-params are
@@ -3085,6 +3093,8 @@ public:
     /// (CMSG_SPELLCLICK) or a group member's vehicle entered
     /// (CMSG_PLAYER_VEHICLE_ENTER). False when it is neither.
     bool clickUnitBeyondHellos(uint64_t guid);
+    /// What 0x006ddbb0 reads of a unit to choose the hello.
+    npc_interaction::Unit npcInteractionFacts(uint64_t guid) const;
     /// 0x00408520: on a loading screen, CMSG_KEEP_ALIVE every thirty seconds.
     /// Starting (0x0040a990) sets the first one thirty seconds out; each
     /// progress step after sends one once that time has come.
@@ -3223,6 +3233,19 @@ public:
     bool isQuestBlobShown(uint32_t questId) const {
         return blobQuestIds_.count(questId) > 0;
     }
+    /// How WorldMapBlobFrame draws a quest's area (QuestPOIFrame's
+    /// SetFillTexture, SetFillAlpha, SetBorderTexture, SetBorderAlpha and
+    /// SetBorderScalar): the textures, their alphas (0-255) and the border's
+    /// width in hundredths (0-10).
+    struct QuestBlobStyle {
+        std::string fillTexture;
+        std::string borderTexture;
+        uint8_t fillAlpha = 255;
+        uint8_t borderAlpha = 255;
+        float borderScalar = 1.0f;
+    };
+    const QuestBlobStyle& questBlobStyle() const { return questBlobStyle_; }
+    QuestBlobStyle& questBlobStyleRef() { return questBlobStyle_; }
     void setQuestBlobShown(uint32_t questId, bool shown) {
         if (shown) blobQuestIds_.insert(questId);
         else       blobQuestIds_.erase(questId);
@@ -3410,6 +3433,18 @@ public:
     /// and while that row names a spell its ten fill slots 121..130, 131 and
     /// 132 empty; the offset is 5 and the page 1 as for the pet's bar.
     bool overrideBarActive() const { return overrideBarActive_; }
+    /// The OverrideSpellData row PLAYER_FIELD_BYTES2 names, whether or not
+    /// it fills the bar: its ten spells and Flags - 0x1 items may be used,
+    /// 0x2 macros, 0x4 any spell (0x005a9e20, 0x0080cce0).
+    struct OverrideSpellRow {
+        std::array<uint32_t, 10> spells{};
+        uint32_t flags = 0;
+        [[nodiscard]] bool holds(uint32_t spell) const {
+            for (const uint32_t s : spells) if (s == spell) return true;
+            return false;
+        }
+    };
+    const std::optional<OverrideSpellRow>& overrideSpellRow() const { return overrideSpellRow_; }
     /// Asked again as the player's PLAYER_FIELD_BYTES2 changes (0x006d1c5d).
     void updateOverrideSpellBar();
     static constexpr int kBonusPetSlotFirst = 120;
@@ -4319,6 +4354,18 @@ public:
     /// Accept the innkeeper's offer to make this the player's home. The prompt
     /// arrives as SMSG_BINDER_CONFIRM and this is the reply.
     void confirmBinder();
+    /// An innkeeper's bind asked (0x006d2120): CONFIRM_BINDER with the area.
+    void askBinder(uint64_t guid);
+    /// ReportBug / ReportSuggestion (0x006b22a0): CMSG_BUG, type 0 a bug and
+    /// 1 a suggestion, with the client's report in front of the text.
+    void sendBugReport(uint32_t type, const std::string& text);
+    /// The report 0x006b22a0 writes: the machine, then the realm, account
+    /// and character, map, zone, position, target and auras.
+    std::string bugReportText() const;
+    /// 0x007202c0: whether the player's model can show a tabard.
+    [[nodiscard]] bool canShowTabard() const;
+    /// 0x006d2500: the tabard designer asked for, refused where no tabard shows.
+    void activateTabardVendor(uint64_t npc);
 
     // Taxi / Flight Paths
     bool isTaxiWindowOpen() const;
@@ -4465,6 +4512,15 @@ public:
     void repairItem(uint64_t vendorGuid, uint64_t itemGuid);
     void repairAll(uint64_t vendorGuid, bool useGuildBank = false);
     uint32_t estimateRepairAllCost() const;
+    /// What a tooltip says repairing one item costs (0x00584b20): its cost,
+    /// less the open merchant's discount where the merchant's faction keeps
+    /// a reputation - 5% friendly, 10% honored, 15% revered, 20% exalted, by
+    /// how it regards the player (0x007279a0) - rounded.
+    uint32_t itemRepairCostShown(uint64_t itemGuid) const;
+    /// The money an item tooltip offers for one held item (0x006277f0 ->
+    /// OnTooltipAddMoney): its SellPrice less its repair cost (0x00708540),
+    /// 1 where the repair would cost as much or more, times the stack.
+    uint32_t itemSellPriceShown(uint64_t itemGuid, uint32_t itemId, uint32_t stackCount) const;
     /// The sale mirror, ring slots and all.  The interface's list is
     /// buybackRowCount / buybackRowAt - a row the realm has not confirmed into
     /// the ring is in this one and not in that.
@@ -4605,6 +4661,7 @@ public:
     void setMailComposeShowing(bool showing);
     bool hasNewMail() const;
     void openMailbox(uint64_t guid);
+    uint32_t guildBankListCount() const;
     void closeMailbox();
     void sendMail(const std::string& recipient, const std::string& subject,
                   const std::string& body, uint64_t money, uint64_t cod = 0);
@@ -4829,6 +4886,49 @@ public:
     uint32_t getItemFieldFlags(uint64_t guid) const {
         auto it = onlineItems_.find(guid);
         return it != onlineItems_.end() ? it->second.flags : 0u;
+    }
+    /// What an item's lock says on its tooltip (0x007086b0): whether one of
+    /// the player's spells opens locks of its kind, that spell's value and
+    /// what the lock wants of it, and whether it is encrypted (kind 20).
+    struct ItemLockShown {
+        bool hasSpell = false;
+        bool encrypted = false;
+        int32_t value = 0;
+        int32_t required = 0;
+    };
+    std::optional<ItemLockShown> itemLockShown(uint32_t lockId, int32_t itemLevel);
+    /// What a game object's world tooltip says (0x00626720): its name, the
+    /// LOCKED line where GAMEOBJECT_FLAGS says locked, coloured by the lock
+    /// walk (0x0070f160), and what its lock's first slot asks for when that
+    /// slot's Action fits the object as it is (0x0070ef30, 0x0070ef90).
+    struct GameObjectTooltipFacts {
+        uint32_t entry = 0;
+        std::string name;
+        bool flaggedLocked = false;
+        /// The lock walk: nothing opens it, the spell and its value against
+        /// what the slot wants, the key carried.
+        bool locked = false;
+        uint32_t spell = 0;
+        int32_t value = 0;
+        int32_t required = 0;
+        uint32_t keyItem = 0;
+        /// The first slot's Type (1 item, 2 skill, 3 spell) where it fits,
+        /// else 0, with its Index.
+        uint32_t requirementType = 0;
+        uint32_t requirementIndex = 0;
+        /// LockType.dbc's name for a skill slot, "UNKNOWN" for none.
+        std::string lockTypeName;
+        /// For a spell slot: the spell's reagents.
+        uint32_t reagentItem[8] = {};
+        uint32_t reagentCount[8] = {};
+        /// The template's six quest items (after its size).
+        std::array<uint32_t, 6> questItems{};
+    };
+    std::optional<GameObjectTooltipFacts> gameObjectTooltipFacts(uint64_t guid);
+    /// ITEM_FIELD_DURATION of an item this client holds, 0 when unknown.
+    uint32_t getItemDurationByGuid(uint64_t guid) const {
+        auto it = onlineItems_.find(guid);
+        return it != onlineItems_.end() ? it->second.duration : 0u;
     }
     /// ITEM_FIELD_SPELL_CHARGES[0] of an item this client holds, 0 when unknown.
     int32_t getItemSpellCharges(uint64_t guid) const {
@@ -5714,6 +5814,9 @@ public:
         uint32_t startRecoveryMs = 0;
         uint32_t dmgClass = 0;
         uint32_t createdItemId = 0;
+        /// Spell.dbc EffectItemType[0] as it stands: the item a trade spell's
+        /// tooltip appends (0x006238a0 -> 0x006277f0).
+        uint32_t effectItemType0 = 0;
         SpellReagent reagents[8] = {};
         uint32_t trivialSkillHigh = 0;
         uint32_t trivialSkillLow = 0;
@@ -5743,6 +5846,9 @@ public:
         int32_t manaCost = 0;
         int32_t manaCostPerLevel = 0;
         int32_t manaCostPct = 0;
+        /// Spell.dbc ManaPerSecond and ManaPerSecondPerLevel (0x007ff100).
+        int32_t manaPerSecond = 0;
+        int32_t manaPerSecondPerLevel = 0;
         int32_t baseLevel = 0;
         int32_t maxLevel = 0;
         uint32_t castingTimeIndex = 0;
@@ -5825,6 +5931,9 @@ public:
         /// ITEM_FIELD_SPELL_CHARGES, the first of the five (STACK_COUNT + 2):
         /// what is left of the template's first spell's charges.
         int32_t  spellCharges0 = 0;
+        /// ITEM_FIELD_DURATION (STACK_COUNT + 1): seconds the item has left,
+        /// for one that lasts a while.
+        uint32_t duration = 0;
         /// All twelve ITEM_FIELD_ENCHANTMENT slots' ids (STACK_COUNT + 8, three apart).
         std::array<uint32_t, 12> enchantIds{};
         /// ITEM_FIELD_CREATE_PLAYED_TIME (MAXDURABILITY + 1): the owner's played
@@ -6130,7 +6239,8 @@ private:
     uint64_t targetGuid = 0;
     uint64_t focusGuid = 0;              // Focus target
     uint64_t lastTargetGuid = 0;         // Previous target
-    uint64_t mouseoverGuid_ = 0;         // Set each frame by nameplate renderer
+    uint64_t mouseoverGuid_ = 0;         // Committed once a frame (GameScreen::commitMouseover)
+    bool uiVisible_ = true;              // SetUIVisibility (0x00ac80a8)
     std::vector<uint64_t> tabCycleList;
     int tabCycleIndex = -1;
     bool tabCycleStale = true;
@@ -6600,6 +6710,8 @@ private:
     const go_use::LockRow* gameObjectLock(const GameObjectFacts& f) const;
     std::optional<CarriedItem> findCarriedItem(uint32_t itemId) const;
     go_use::Opening gameObjectOpening(const GameObjectFacts& f);
+    /// 0x008016c0 for an OPEN_LOCK effect of the player's: effect k's value.
+    int32_t openLockEffectValue(uint32_t spellId, int k) const;
     bool gameObjectAllowsMounted(const GameObjectFacts& f) const;
     bool gameObjectInReach(const GameObject& go, const GameObjectFacts& f);
     uint16_t gameObjectRefusal(const GameObject& go, const GameObjectFacts& f, std::string& arg);
@@ -6641,6 +6753,7 @@ private:
     std::unordered_map<uint32_t, int32_t> questWatchExpiry_;
     float questWatchSweepTimer_ = 0.0f;
     std::unordered_set<uint32_t> blobQuestIds_;
+    QuestBlobStyle questBlobStyle_;
     uint64_t combatTextUnit_ = 0;
     /// Events waiting on a player name, by guid: the event and whether only a
     /// found name raises it.
@@ -6683,6 +6796,7 @@ private:
     bool petActionsOnBonusBar_ = false;
     bool overrideBarActive_ = false;
     uint32_t overrideSpellsId_ = 0;
+    std::optional<OverrideSpellRow> overrideSpellRow_;
     uint32_t possessSpellId_ = 0;
     void setPossessSpell(uint32_t spellId);
 

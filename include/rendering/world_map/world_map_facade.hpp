@@ -54,6 +54,10 @@ public:
     void setPartyDots(std::vector<PartyDot> dots);
     void setTaxiNodes(std::vector<TaxiNode> nodes);
     void setQuestPois(std::vector<QuestPOI> pois);
+    /// WorldMapBlobFrame's textures, alphas and border width for the quest
+    /// areas (see QuestPOILayer::setBlobStyle).
+    void setQuestBlobStyle(const std::string& fill, uint8_t fillAlpha, const std::string& border,
+                           uint8_t borderAlpha, float borderScalar);
     void setCorpsePos(bool hasCorpse, glm::vec3 renderPos);
     /// The spirit healer a release would send the player to.
     void setGraveyardPos(bool hasGraveyard, glm::vec3 renderPos);

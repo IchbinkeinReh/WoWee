@@ -622,7 +622,7 @@ constexpr SettingGerman kGerman[] = {
      nullptr, nullptr, nullptr},
     {"cameramaxdistance",
      "Größter Kameraabstand",
-     "Wie weit die Kamera zurückgezogen werden kann, in Metern. 22 gibt der ursprüngliche Client; "
+     "Wie weit die Kamera zurückgezogen werden kann, in Metern. 15 gibt der ursprüngliche Client; "
      "weiter weg zeigt mehr vom Kampf und weniger von Eurem Charakter.",
      nullptr, nullptr, nullptr},
     {"pivotheight",

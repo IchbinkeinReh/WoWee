@@ -418,6 +418,7 @@
     "BaseLevel": 38,
     "ManaCostPerLevel": 43,
     "ManaPerSecond": 44,
+    "ManaPerSecondPerLevel": 45,
     "EffectMechanic0": 83,
     "EffectTriggerSpell0": 116,
     "ManaCostPercentage": 204,
@@ -528,6 +529,7 @@
     "CombatRoundTime": 22,
     "CreatureType": 20,
     "Flags": 19,
+    "RequiredSpellId": 20,
     "ID": 0,
     "Name": 2,
     "PresetSpellID0": 27
@@ -640,6 +642,7 @@
   "Talent": {
     "Column": 3,
     "Flags": 19,
+    "RequiredSpellId": 20,
     "ID": 0,
     "PrereqRank0": 16,
     "PrereqTalent0": 13,

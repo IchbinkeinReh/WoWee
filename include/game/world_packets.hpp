@@ -2002,6 +2002,12 @@ struct CreatureQueryResponseData {
     uint32_t family = 0;
     uint32_t rank = 0;         // 0=Normal, 1=Elite, 2=Rare Elite, 3=Boss, 4=Rare
     uint32_t displayId[4] = {};  // Up to 4 random display models (0 = unused)
+    /// The kill credits (+0x1c) and quest items (+0x40) the unit tooltip's
+    /// quest lines look for; RacialLeader (+0x3c), the tooltip's
+    /// PVP_RANK_LEADER (0x0071b680).
+    uint32_t killCredit[2] = {};
+    bool racialLeader = false;
+    uint32_t questItems[6] = {};
 
     [[nodiscard]] bool isValid() const { return entry != 0 && !name.empty(); }
 };
@@ -2045,6 +2051,9 @@ struct GameObjectQueryResponseData {
     /// The template's size, after the data fields (+0x74 in the client's
     /// cache record): the model's scale.
     float size = 1.0f;
+    /// The quest items that follow the size on WotLK (+0x78, six): the
+    /// object's tooltip names a quest objective for any of them.
+    std::array<uint32_t, 6> questItems{};
 
     [[nodiscard]] bool isValid() const { return entry != 0 && !name.empty(); }
 };
@@ -2178,6 +2187,16 @@ struct ItemQueryResponseData {
     /// LockID: a lock that must be opened before the item is (0x006277f0
     /// says ITEM_OPENABLE only for an unlocked one).
     uint32_t lockId = 0;
+    /// Duration: how long the item lasts once had, in seconds; 0 for ever
+    /// (ITEM_DURATION, 0x006277f0).
+    uint32_t itemDuration = 0;
+    /// RandomProperty or RandomSuffix named: the item rolls its stats when it
+    /// drops, so the template alone says ITEM_RANDOM_ENCHANT (0x006277f0).
+    bool randomEnchant = false;
+    /// Area and Map: the zone and the instance the item works in alone
+    /// (0x006277f0 names each in white), 0 for none.
+    uint32_t limitArea = 0;
+    uint32_t limitMap = 0;
     /// Which of PageTextMaterial.dbc's seven backings the page is drawn on -
     /// Parchment, Stone, Marble, Silver, Bronze, Valentine, Illidan. Read off
     /// the same four post-description words as pageTextId and thrown away

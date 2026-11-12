@@ -655,7 +655,6 @@ void GameHandler::updateTimers(float deltaTime) {
     // GameHandler previously ticked its own never-populated copies, so lost
     // or rejected quest accepts were never resynced or unblocked).
     if (questHandler_) {
-        questHandler_->tickQuestGiverStatusRequery(deltaTime);
         auto& acceptTimeouts = questHandler_->pendingQuestAcceptTimeoutsRef();
         auto& acceptNpcGuids = questHandler_->pendingQuestAcceptNpcGuidsRef();
         for (auto it = acceptTimeouts.begin(); it != acceptTimeouts.end();) {
@@ -1562,6 +1561,10 @@ void GameHandler::updateAttachedTransportChildren(float deltaTime) {
 // ============================================================
 // Mail System
 // ============================================================
+
+uint32_t GameHandler::guildBankListCount() const {
+    return inventoryHandler_ ? inventoryHandler_->guildBankListCount() : 0u;
+}
 
 void GameHandler::openMailbox(uint64_t guid) {
     if (inventoryHandler_) inventoryHandler_->openMailbox(guid);
@@ -4137,15 +4140,20 @@ void GameHandler::updateOverrideSpellBar() {
     // OverrideSpellData: ID, Spells[10], Flags.
     std::array<uint32_t, 10> spells{};
     bool any = false;
+    overrideSpellRow_.reset();
     if (id != 0) {
         auto* am = services_.assetManager;
         if (auto dbc = am && am->isInitialized() ? am->loadDBC("OverrideSpellData.dbc") : nullptr;
             dbc && dbc->isLoaded() && dbc->getFieldCount() >= 11) {
             if (const int32_t row = dbc->findRecordById(id); row >= 0) {
+                OverrideSpellRow r;
                 for (uint32_t i = 0; i < 10; ++i) {
                     spells[i] = dbc->getUInt32(static_cast<uint32_t>(row), 1 + i);
                     any = any || spells[i] != 0;
                 }
+                r.spells = spells;
+                r.flags = dbc->getFieldCount() > 11 ? dbc->getUInt32(static_cast<uint32_t>(row), 11) : 0u;
+                overrideSpellRow_ = r;
             }
         }
     }
@@ -5195,6 +5203,15 @@ std::pair<uint32_t, uint32_t> GameHandler::getRaidDifficulty() const {
     if (!socialHandler_) return {0, 0};
     const auto& raid = socialHandler_->getRaidDifficulty();
     return {raid.effective(!getPartyData().isEmpty()), raid.personal};
+}
+
+uint32_t GameHandler::raidDifficultyInForce() const {
+    // 0x00519680: the raid difficulty in force, and on a map that switches
+    // difficulty in place (Map flags 0x100) its size bit with the player's
+    // heroic difficulty (0xbd1980) on top.
+    const uint32_t raid = getRaidDifficulty().first;
+    if (!isDynamicDifficultyMap()) return raid;
+    return (raid & 1u) + playerDifficulty_ * 2u;
 }
 
 std::pair<uint32_t, uint32_t> GameHandler::getDungeonDifficulty() const {

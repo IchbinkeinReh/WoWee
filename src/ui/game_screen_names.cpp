@@ -9,6 +9,7 @@
 // with a plate has no name over its head; the plate carries it.
 
 #include "ui/game_screen.hpp"
+#include "ui/unit_summon_title.hpp"
 #include "core/frame_profiler.hpp"
 
 #include "addons/addon_manager.hpp"
@@ -134,8 +135,9 @@ const std::string& interfaceText(const char* name) {
     return kept.emplace(name, std::move(text)).first->second;
 }
 
-/// 0x0061e830: the "<Owner's Pet>" line under a unit something made, empty
-/// for none.
+}  // namespace
+
+/// 0x0061e830 (declared in ui/unit_summon_title.hpp).
 std::string summonTitleLine(game::GameHandler& gh, const game::Entity& e, const game::Unit& unit) {
     auto ownerOf = [](const game::Entity& x) {
         const uint64_t charmedBy = guidAt(x, game::UF::UNIT_FIELD_CHARMEDBY);
@@ -185,6 +187,8 @@ std::string summonTitleLine(game::GameHandler& gh, const game::Entity& e, const 
     return un::summonTitleText(title, ownerName, interfaceText(un::summonTitleKey(title).c_str()));
 }
 
+namespace {
+
 /// 0x0098e5f0: the level's colour on a plate, against the player's level -
 /// red five or more above, orange three, yellow within two, green, and grey
 /// past the grey range (0x00aa34b8 by the player's level over five).
@@ -228,8 +232,8 @@ std::optional<ImVec2> project(const glm::mat4& viewProj, const glm::vec3& p, flo
 
 void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
     WOWEE_PROFILE_SCOPE("interface: names and plates", Cpu);
+    plateMouseover_ = 0;
     if (gameHandler.getState() != game::WorldState::IN_WORLD) return;
-    gameHandler.setMouseoverGuid(0);
 
     auto* appRenderer = services_.renderer;
     rendering::Camera* camera = appRenderer ? appRenderer->getCamera() : nullptr;
@@ -485,7 +489,7 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         // drawn with the depth test off (0x007e5640 sets state 0xd to 0), so
         // no wall hides it.
         const uint8_t mark = gameHandler.getEntityRaidMark(guid);
-        if (mark < game::GameHandler::kRaidMarkCount) {
+        if (mark < game::GameHandler::kRaidMarkCount && gameHandler.isUiVisible()) {
             if (VkDescriptorSet tex = getRaidTargetIcon(mark, assets)) {
                 const float iconPx = std::abs(proj[1][1]) * 0.5f * screenH / sizingW;
                 const int alpha = un::raidIconAlpha(glm::distance(camPos, anchor));
@@ -547,7 +551,9 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         // name (0x00715720).
         const glm::vec3 unitPos = unitPosition(place);
         std::optional<ImVec2> plateAt;
-        if (un::plateShown(facts, plates) &&
+        // None with the interface hidden (0x0072b060 asks 0x00ac80a8); the
+        // name over the head stands in for it then.
+        if (gameHandler.isUiVisible() && un::plateShown(facts, plates) &&
             rendering::unit_name_anchor::plateInRange(playerRenderPos, unitPos)) {
             const glm::vec3 p = namePoint(place) +
                                 glm::vec3(0.0f, 0.0f, rendering::unit_name_anchor::kPlateLift);
@@ -992,7 +998,7 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         // mouseover, and a click targets it.
         if (!ImGui::GetIO().WantCaptureMouse) {
             if (mouse.x >= fr0.x && mouse.x <= fr1.x && mouse.y >= fr0.y && mouse.y <= fr1.y) {
-                gameHandler.setMouseoverGuid(guid);
+                plateMouseover_ = guid;
                 if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) gameHandler.targetUnit(guid);
             }
         }

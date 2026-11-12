@@ -5,6 +5,8 @@
 #include "game/interface_text.hpp"
 #include "game/social_handler.hpp"
 #include "game/tabard_design.hpp"
+#include "game/update_field_table.hpp"
+#include "pipeline/asset_manager.hpp"
 #include "network/packet.hpp"
 #include "network/world_socket.hpp"
 
@@ -46,17 +48,54 @@ void GameHandler::tabardFromGuildRegistrar() {
     if (!socialHandler_ || !socialHandler_->hasPetitionShowlist() ||
         !socialHandler_->isGuildRegistrar())
         return;
-    const uint64_t registrar = socialHandler_->getPetitionNpcGuid();
-    // 0x006d2500: asked only when the designer is not already open with this
-    // npc. (It also refuses with ERR_EMBLEMERROR_NOTABARDGEOSET when the
-    // player's model cannot show a tabard, 0x007202c0 - see differences.)
-    if (registrar != 0 && registrar != tabardVendorGuid_ && socket) {
-        network::Packet packet(wireOpcode(Opcode::MSG_TABARDVENDOR_ACTIVATE));
-        packet.writeUInt64(registrar);
-        socket->send(packet);
-    }
+    activateTabardVendor(socialHandler_->getPetitionNpcGuid());
     // CloseGuildRegistrar (0x00599f00): the npc let go, GUILD_REGISTRAR_CLOSED.
     closePetitionVendor();
+}
+
+bool GameHandler::canShowTabard() const {
+    // 0x007202c0 for the active player: a form on its way counts as able;
+    // so does a model whose extra display (CreatureDisplayInfoExtra Flags 1)
+    // is of a race that shows tabards (ChrRaces Flags 4); else only the
+    // player's own model - the display its native one.
+    if (shapeshiftFormPending_) return true;
+    const auto me = getEntityManager().getEntity(playerGuid);
+    if (!me) return false;
+    const auto field = [&](UF f) {
+        const uint16_t i = fieldIndex(f);
+        return i != 0xFFFF ? me->getField(i) : 0u;
+    };
+    const uint32_t display = field(UF::UNIT_FIELD_DISPLAYID);
+    if (display == field(UF::UNIT_FIELD_NATIVEDISPLAYID)) return true;
+    auto* am = services_.assetManager;
+    if (!am || !am->isInitialized()) return false;
+    const auto displays = am->loadDBCOptional("CreatureDisplayInfo.dbc");
+    const auto extras = am->loadDBCOptional("CreatureDisplayInfoExtra.dbc");
+    const auto races = am->loadDBCOptional("ChrRaces.dbc");
+    if (!displays || !extras || !races) return false;
+    const int32_t drow = displays->findRecordById(display);
+    if (drow < 0 || displays->getFieldCount() <= 3) return false;
+    const int32_t erow = extras->findRecordById(displays->getUInt32(static_cast<uint32_t>(drow), 3));
+    if (erow < 0 || extras->getFieldCount() <= 19) return false;
+    if ((extras->getUInt32(static_cast<uint32_t>(erow), 19) & 0x1u) == 0) return false;
+    const int32_t rrow = races->findRecordById(extras->getUInt32(static_cast<uint32_t>(erow), 1));
+    return rrow >= 0 && races->getFieldCount() > 1 &&
+           (races->getUInt32(static_cast<uint32_t>(rrow), 1) & 0x4u) != 0;
+}
+
+void GameHandler::activateTabardVendor(uint64_t npc) {
+    // 0x006d2500: asked only when the designer is not already open with this
+    // npc, and refused where the player's model cannot show a tabard.
+    if (npc == 0 || npc == tabardVendorGuid_ || !socket) return;
+    if (!canShowTabard()) {
+        playGameErrorSound("ERR_EMBLEMERROR_NOTABARDGEOSET");
+        raiseUiError(interfaceString("ERR_EMBLEMERROR_NOTABARDGEOSET",
+                                     "Your current form can't wear a tabard."));
+        return;
+    }
+    network::Packet packet(wireOpcode(Opcode::MSG_TABARDVENDOR_ACTIVATE));
+    packet.writeUInt64(npc);
+    socket->send(packet);
 }
 
 void GameHandler::previewTabard(const GuildEmblem& emblem) { tabardPreview_ = emblem; }

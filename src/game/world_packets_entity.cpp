@@ -183,14 +183,21 @@ bool CreatureQueryResponseParser::parse(network::Packet& packet, CreatureQueryRe
         return true;
     }
 
-    packet.readUInt32();  // killCredit[0]
-    packet.readUInt32();  // killCredit[1]
+    data.killCredit[0] = packet.readUInt32();
+    data.killCredit[1] = packet.readUInt32();
     data.displayId[0] = packet.readUInt32();
     data.displayId[1] = packet.readUInt32();
     data.displayId[2] = packet.readUInt32();
     data.displayId[3] = packet.readUInt32();
 
-    // Skip remaining fields (healthMultiplier, powerMultiplier, racialLeader, questItems, movementId)
+    // healthMultiplier, powerMultiplier, racialLeader (byte), questItems[6];
+    // movementId after them goes unread.
+    if (packet.hasRemaining(4 + 4 + 1 + 6 * 4)) {
+        packet.readFloat();
+        packet.readFloat();
+        data.racialLeader = packet.readUInt8() != 0;
+        for (uint32_t& q : data.questItems) q = packet.readUInt32();
+    }
 
     LOG_DEBUG("Creature query response: ", data.name, " (type=", data.creatureType,
              " rank=", data.rank, " displayIds=[", data.displayId[0], ",",
@@ -297,6 +304,8 @@ bool parseGameObjectQueryBody(network::Packet& packet,
                         data.entry, ")");
         }
         if (packet.hasRemaining(4)) data.size = packet.readFloat();
+        for (uint32_t& item : data.questItems)
+            if (packet.hasRemaining(4)) item = packet.readUInt32();
     } else if (remaining > 0) {
         // Partial data field; read what we can
         uint32_t fieldsToRead = remaining / 4;
@@ -575,12 +584,17 @@ bool ItemQueryResponseParser::parse(network::Packet& packet, ItemQueryResponseDa
         data.lockId = packet.readUInt32();
         data.material = packet.readUInt32();
         data.sheath = packet.readUInt32();
-        packet.readUInt32();  // RandomProperty and RandomSuffix: the link
-        packet.readUInt32();  // names the one rolled
+        // RandomProperty and RandomSuffix: the link names the one rolled;
+        // that there is one to roll is what a template's tooltip says.
+        const uint32_t randomProperty = packet.readUInt32();
+        const uint32_t randomSuffix = packet.readUInt32();
+        data.randomEnchant = randomProperty != 0 || randomSuffix != 0;
         data.block = static_cast<int32_t>(packet.readUInt32());
         data.itemSetId = packet.readUInt32(); // ItemSet(6)
         // MaxDurability(7), Area(8), Map(9)
-        for (size_t i = 0; i < 3; ++i) packet.readUInt32();
+        packet.readUInt32();
+        data.limitArea = packet.readUInt32();
+        data.limitMap = packet.readUInt32();
         // BagFamily(10) - kept rather than skipped. GetItemFamily answers from
         // it, and an addon asking what a bag holds gets nil without it.
         data.bagFamily = packet.readUInt32();
@@ -609,7 +623,7 @@ bool ItemQueryResponseParser::parse(network::Packet& packet, ItemQueryResponseDa
         if (packet.hasRemaining(16)) {
             data.requiredDisenchantSkill = static_cast<int32_t>(packet.readUInt32());
             packet.readFloat();
-            packet.readUInt32();
+            data.itemDuration = packet.readUInt32();
             data.itemLimitCategory = packet.readUInt32();
         }
     }

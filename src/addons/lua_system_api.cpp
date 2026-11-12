@@ -976,6 +976,8 @@ static std::unordered_set<std::string>& reregisteredClientCVars() {
     return names;
 }
 
+static int lua_GetLocale(lua_State* L);
+
 /// `stated`, when given, comes back false for a name this chain does not name.
 /// The "0" at the end of it is a stand-in for an unanswered CVar rather than a
 /// value the client registered the CVar with, and the CVar listing has to tell
@@ -1093,23 +1095,35 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     // One, not zero: the slider is a multiple of the original client's limit
     // and zero is not a position on it. Answering zero pinned it at minimum.
     else if (n == "cameradistancemaxfactor") lua_pushstring(L, "1");
+    // The zoom limit's other half, as registered and as the camera reads it.
+    else if (n == "cameradistancemax") lua_pushstring(L, "15.0");
     else if (n == "weatherdensity") lua_pushstring(L, "2");
     else if (n == "particledensity") lua_pushstring(L, "1");
     else if (n == "environmentdetail") lua_pushstring(L, "1");
     // The top of the slider: this client has always drawn at 16x, so anything
     // less would be a quality setting the player never asked for.
     else if (n == "texturefilteringmode") lua_pushstring(L, "5");
-    else if (n == "groundeffectdist") lua_pushstring(L, "140");
-    // Level 3 is 4096, which is the shadow map this client drew before the
-    // setting existed. Answering the size it has always used keeps a player who
-    // never touches this from being quietly downgraded by it appearing.
-    else if (n == "extshadowquality") lua_pushstring(L, "3");
+    // As registered (0x00767fc0): 70 yards of clutter, level 0 shadows.
+    else if (n == "groundeffectdist") lua_pushstring(L, "70");
+    else if (n == "extshadowquality") lua_pushstring(L, "0");
     // Clicking open ground clears the target, which is the real client's
     // behaviour and this one's. Without saying so it fell to the generic zero,
     // and zero here means sticky targeting - so the checkbox would have shown
     // itself ticked while the client went on clearing, the panel and the game
     // disagreeing about the same switch.
     else if (n == "deselectonclick") lua_pushstring(L, "1");
+    // Registered by the locale (0x0051xxxx registration block): auto-move to
+    // the interact target on only in koKR; 12-hour time in enUS, koKR and esMX,
+    // 24-hour time everywhere else.
+    else if (n == "autointeract" || n == "timemgrusemilitarytime") {
+        lua_GetLocale(L);
+        const std::string locale = lua_tostring(L, -1) ? lua_tostring(L, -1) : "enUS";
+        lua_pop(L, 1);
+        bool on;
+        if (n == "autointeract") on = locale == "koKR";
+        else on = !(locale == "enUS" || locale == "koKR" || locale == "esMX");
+        lua_pushstring(L, on ? "1" : "0");
+    }
     // Off, as registered (0x0051dd63 pushes the string "0" for it): FrameXML's
     // error handler - _ERRORMESSAGE, basiccontrols.xml - puts a script error in
     // BasicScriptErrors only while this says so, and the interface's Advanced
@@ -1708,9 +1722,9 @@ constexpr ClientCVarBinding kClientCVars[] = {
     // The client's own cvar of that name (0x0078e1a0), read at start-up.
     {"specular",             "specular"},
     // How far back the camera may be pulled. The row counts yards; the CVar
-    // the game's slider wrote counts multiples of the 22 the original client
-    // gives, so a 1 here is 22 there and the slider's 2 is 44.
-    {"cameradistancemaxfactor", "cameramaxdistance", 22.0},
+    // the game's slider wrote counts multiples of cameraDistanceMax's 15, so
+    // a 1 here is 15 there and the slider's 2 is 30.
+    {"cameradistancemaxfactor", "cameramaxdistance", 15.0},
     // Read by the client's own attack handling, not by FrameXML's buttons.
     {"secureabilitytoggle",  "secureabilitytoggle"},
     // The bubbles are drawn by this client, so both boxes are its own.
@@ -10120,6 +10134,18 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"GetCVarBool",         lua_GetCVarBool},
                 {"SetCVar",             lua_SetCVar},
                 {"GetLocale",         lua_GetLocale},
+                // ReportBug(text) and ReportSuggestion(text) (0x00510930,
+                // 0x00510980): CMSG_BUG with the client's report.
+                {"ReportBug", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: ReportBug(\"description\")");
+            if (auto* gh = getGameHandler(L)) gh->sendBugReport(0, lua_tostring(L, 1));
+            return 0;
+        }},
+                {"ReportSuggestion", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: ReportSuggestion(\"description\")");
+            if (auto* gh = getGameHandler(L)) gh->sendBugReport(1, lua_tostring(L, 1));
+            return 0;
+        }},
                 // Gender-aware lookup of a global string by token name.
                 //
                 // The reputation list is the caller that matters:

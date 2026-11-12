@@ -226,6 +226,13 @@ static void askCursorSound(lua_State* L, CursorType type, bool pickedUp) {
                              : "INTERFACESOUND_CURSORDROPOBJECT");
 }
 
+/// The spellbook's own sound for a spell taken out of it or dropped back on
+/// it (0x0053baf0, 0x0053bbc0), after the cursor's grab or drop.
+static void spellBookIconSound(lua_State* L, bool pickedUp) {
+    if (auto* sfx = cursorSounds(L))
+        sfx->playByName(pickedUp ? "igSpellBookSpellIconPickup" : "igSpellBookSpellIconDrop");
+}
+
 /// The item just put on the cursor: its pick-up sound (0x00520d30,
 /// 0x00522fb0), and its display kept for the drop.
 static void cursorItemPickedUp(lua_State* L, uint32_t itemId) {
@@ -234,6 +241,9 @@ static void cursorItemPickedUp(lua_State* L, uint32_t itemId) {
     s_cursorItemDisplay = info ? info->displayInfoId : 0;
     if (auto* sfx = cursorSounds(L); sfx && s_cursorItemDisplay != 0) sfx->playItemSound(s_cursorItemDisplay, 0);
 }
+
+/// The cursor's guild bank item has gone out with a move (see setCursorType).
+static bool s_guildBankMoveSent = false;
 
 static void setCursorType(lua_State* L, CursorType type) {
     if (s_cursorType == type) return;
@@ -248,8 +258,18 @@ static void setCursorType(lua_State* L, CursorType type) {
     lua_getfield(L, LUA_REGISTRYINDEX, "wowee_lua_engine");
     auto* engine = static_cast<LuaEngine*>(lua_touserdata(L, -1));
     lua_pop(L, 1);
-    // A guild bank item put down lets its slot go (0x00519280 case 0xb).
-    const bool releasedBankSlot = prevType == CursorType::GUILDBANK && guildBankCursorSlot().tab != 0;
+    // A guild bank item put down lets its slot go (0x00519280 case 0xb) -
+    // unless it went out with a move, which leaves the slot locked for the
+    // bank's update to free (0x00513800).
+    bool releasedBankSlot = prevType == CursorType::GUILDBANK && guildBankCursorSlot().tab != 0;
+    if (releasedBankSlot && s_guildBankMoveSent) {
+        if (auto* gh = getGameHandler(L))
+            guildBankMovedSlots().push_back({guildBankCursorSlot().tab, guildBankCursorSlot().slot,
+                                             gh->guildBankListCount()});
+        releasedBankSlot = false;
+        guildBankCursorSlot() = {};
+    }
+    s_guildBankMoveSent = false;
     if (releasedBankSlot) guildBankCursorSlot() = {};
     if (!engine) return;
     if (releasedBankSlot) engine->fireEvent("GUILDBANK_ITEM_LOCK_CHANGED", {});
@@ -379,7 +399,7 @@ static void castPetSlot(lua_State* L, game::GameHandler* gh, uint32_t packed, in
     // 2): a pet's action is refused outright to insecure code.
     if (!taint::allowed(L, 2)) return;
     uint64_t target = 0;
-    if (const char* uid = luaL_optstring(L, unitArg, nullptr)) {
+    if (const char* uid = unitArg > 0 ? luaL_optstring(L, unitArg, nullptr) : nullptr) {
         std::string u(uid);
         toLowerInPlace(u);
         target = resolveUnitGuid(gh, u);
@@ -1053,6 +1073,19 @@ static int lua_IsUsableAction(lua_State* L) {
             }
         }
     }
+    // 0x005a9e20 under an override bar's row: an item only with its Flags
+    // 0x1, a macro only with 0x2, a spell only with 0x4 or in the row.
+    if (const auto& row = gh->overrideSpellRow()) {
+        bool barred = false;
+        if (action.type == game::ActionBarSlot::ITEM) barred = (row->flags & 0x1u) == 0;
+        else if (action.type == game::ActionBarSlot::MACRO) barred = (row->flags & 0x2u) == 0;
+        else if (action.type == game::ActionBarSlot::SPELL)
+            barred = (row->flags & 0x4u) == 0 && !row->holds(action.id);
+        if (barred) {
+            usable = false;
+            noPower = false;
+        }
+    }
     if (usable) {
         lua_pushnumber(L, 1.0);
         lua_pushnil(L);
@@ -1227,8 +1260,12 @@ static int lua_UseAction(lua_State* L) {
     if (!gh) return 0;
     int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
     if (const auto ref = petActionRef(gh, slot)) {
-        // 0x005abbc0 -> 0x005d4210: the pet bar's slot, used.
-        castPetSlot(L, gh, ref->packed, 2);
+        // 0x005abbc0 -> 0x005d4210: the pet bar's slot, used at the target
+        // (the unit argument is not passed on), and GAMEABILITYACTIVATE.
+        if (ref->packed != 0) {
+            castPetSlot(L, gh, ref->packed, 0);
+            if (auto* sfx = cursorSounds(L)) sfx->playByName("GAMEABILITYACTIVATE");
+        }
         return 0;
     }
     const auto& bar = gh->getActionBar();
@@ -1585,18 +1622,28 @@ static int lua_PickupSpell(lua_State* L) {
     // dragging a pet spell out of the book picked up whichever of the player's
     // spells sat at that index.
     const uint32_t picked = spellIdForCall(L, gh);
-    if (picked == 0) return 0;
+    // The cursor is put down first, whatever the slot holds (0x00519280(1,1)
+    // before anything else). The same spell already held is the drop, with
+    // the book's own sound after the cursor's; a different one held is only
+    // put down; nothing held picks this one up.
+    const uint32_t held = s_cursorType == CursorType::SPELL ? s_cursorId : 0;
+    clearCursorItem(L);
+    if (picked != 0 && picked == held) {
+        spellBookIconSound(L, false);
+        return 0;
+    }
+    if (picked == 0 || held != 0) return 0;
     // Out of the pet's book the cursor holds the pet's action for the spell,
     // its entry in the pet's spell list (0x005d3410 -> 0x00520a80): the spell,
     // type 1, and the autocast bits SMSG_PET_SPELLS gave it.
     if (const char* book = lua_isnumber(L, 1) && !lua_isnoneornil(L, 2) ? lua_tostring(L, 2) : nullptr;
         book && std::string(book) == "pet") {
-        clearCursorItem(L);
         const uint32_t state = 0x01u | (gh->isPetSpellAutocastable(picked) ? 0x80u : 0u) |
                                (gh->isPetSpellAutocast(picked) ? 0x40u : 0u);
         setCursorType(L, CursorType::PET_ACTION);
         s_cursorId = (picked & 0x00ffffffu) | (state << 24);
         wowee::ui::frameXmlSetCursorItem(gh->getSpellIconPath(picked));
+        spellBookIconSound(L, true);
         return 0;
     }
     setCursorType(L, CursorType::SPELL);
@@ -1605,6 +1652,7 @@ static int lua_PickupSpell(lua_State* L) {
     // does it. Dragging a spell out of the book carried nothing visible, so
     // the drag read as not having started.
     wowee::ui::frameXmlSetCursorItem(gh->getSpellIconPath(s_cursorId));
+    spellBookIconSound(L, true);
     return 0;
 }
 
@@ -1715,10 +1763,19 @@ static int lua_PickupCompanion(lua_State* L) {
     const auto& list = gh->getCompanions(std::string(mode) == "MOUNT");
     if (index > static_cast<int>(list.size())) return 0;
     const uint32_t spellId = list[static_cast<size_t>(index) - 1].spellId;
-    if (spellId == 0) return 0;
+    // As PickupSpell: put down, then the same summon held is the drop and an
+    // empty cursor the pickup, each with the book's sound (0x0053bbc0).
+    const uint32_t held = s_cursorType == CursorType::SPELL ? s_cursorId : 0;
+    clearCursorItem(L);
+    if (spellId == held) {
+        if (spellId != 0) spellBookIconSound(L, false);
+        return 0;
+    }
+    if (held != 0 || spellId == 0) return 0;
     setCursorType(L, CursorType::SPELL);
     s_cursorId = spellId;
     wowee::ui::frameXmlSetCursorItem(gh->getSpellIconPath(spellId));
+    spellBookIconSound(L, true);
     return 0;
 }
 
@@ -1778,6 +1835,39 @@ static void clearCursorItem(lua_State* L) {
 
 /// PickupPetAction(slot): the pet bar's drag and drop. Reached by
 /// shift-clicking a pet button, dragging one and dropping on one.
+/// A pet action dropped on a pet bar slot (0x005d6020): put there, and what
+/// the slot held comes up onto the cursor instead.
+static void placeHeldPetAction(lua_State* L, game::GameHandler* gh, int slot, uint32_t held) {
+    const uint32_t displaced = gh->placePetAction(slot, held);
+    if ((displaced & 0x00ffffffu) != 0) {
+        setCursorType(L, CursorType::PET_ACTION);
+        s_cursorId = displaced;
+        if (((displaced >> 24) & 0x3fu) == 1)
+            wowee::ui::frameXmlSetCursorItem(gh->getSpellIconPath(displaced & 0x00ffffffu));
+    }
+}
+
+/// CastPetAction(index, unit) (0x005d67b0). A pet action held on the cursor
+/// is dropped on the slot, as on a click while dragging; otherwise the slot
+/// is used and the bar's GAMEABILITYACTIVATE plays.
+static int lua_CastPetAction(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: CastPetAction(index, target)");
+    const int slot = static_cast<int>(std::lround(lua_tonumber(L, 1))) - 1;
+    if (slot < 0 || slot > 10) return luaL_error(L, "Invalid slot in CastPetAction");
+    auto* gh = getGameHandler(L);
+    if (!gh) return 0;
+    const uint32_t held =
+        gh->petBarEditable() && s_cursorType == CursorType::PET_ACTION ? s_cursorId : 0;
+    if (gh->petBarEditable()) clearCursorItem(L);
+    if (held != 0) {
+        placeHeldPetAction(L, gh, slot, held);
+    } else if (gh->hasPet() && slot < game::GameHandler::PET_ACTION_BAR_SLOTS) {
+        castPetSlot(L, gh, gh->getPetActionSlot(slot), 2);
+        if (auto* sfx = cursorSounds(L)) sfx->playByName("GAMEABILITYACTIVATE");
+    }
+    return 0;
+}
+
 static int lua_PickupPetAction(lua_State* L) {
     // 0x005d65c0, slots counted from 1.
     const int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
@@ -1790,13 +1880,7 @@ static int lua_PickupPetAction(lua_State* L) {
     clearCursorItem(L);
     if (held != 0) {
         // Put on the slot; what the slot held comes up instead (0x005d6020).
-        const uint32_t displaced = gh->placePetAction(slot, held);
-        if ((displaced & 0x00ffffffu) != 0) {
-            setCursorType(L, CursorType::PET_ACTION);
-            s_cursorId = displaced;
-            if (((displaced >> 24) & 0x3fu) == 1)
-                wowee::ui::frameXmlSetCursorItem(gh->getSpellIconPath(displaced & 0x00ffffffu));
-        }
+        placeHeldPetAction(L, gh, slot, held);
         return 0;
     }
     // Taken up (0x00520a80); a spell is taken off the bar (0x005d64a0),
@@ -2035,6 +2119,7 @@ static int lua_PickupContainerItem(lua_State* L) {
         gh->guildBankWithdrawItem(static_cast<uint8_t>(s_cursorBag - 1),
                                   static_cast<uint8_t>(s_cursorSlot - 1),
                                   dstBag, dstSlot, s_cursorSplit);
+        s_guildBankMoveSent = true;
         setCursorType(L, CursorType::NONE);
         return 0;
     }
@@ -4088,13 +4173,9 @@ void registerActionLuaAPI(lua_State* L) {
             lua_pushnumber(L, lvl - gray);
             return 1;
         }},
-                // Two latent raises on the escape-key path, bound as no-ops
-                // because doing nothing is the right behaviour rather than a
-                // placeholder for it. SetUIVisibility is reached only from
-                // ToggleGameMenu's first branch, which runs when UIParent is
-                // hidden - out of the way until someone hides the interface,
-                // and then on the only path that brings it back.
-                // ConsoleAddMessage is the sink for FrameXML's debug print:
+                // ConsoleAddMessage is bound as a no-op because doing
+                // nothing is the right behaviour rather than a placeholder
+                // for it. It is the sink for FrameXML's debug print:
                 // ConsolePrint (uiparent.lua:3550) joins its arguments and hands
                 // the result straight over, and in this tree the only thing that
                 // calls ConsolePrint is lfgframe.lua's LFGDebug. The client runs
@@ -4104,7 +4185,12 @@ void registerActionLuaAPI(lua_State* L) {
                 // routine the console's own output goes through as well. There
                 // is no console window drawn here, so there is nothing to add a
                 // line to.
-                {"SetUIVisibility",   [](lua_State* L) -> int { (void)L; return 0; }},
+                // SetUIVisibility(shown) (0x00517c20): what the world draws
+                // with the interface hidden - see GameHandler::isUiVisible.
+                {"SetUIVisibility",   [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) gh->setUiVisible(lua_isnoneornil(L, 1) || lua_toboolean(L, 1) != 0);
+            return 0;
+        }},
                 {"ConsoleAddMessage", [](lua_State* L) -> int { (void)L; return 0; }},
                 // GetCurrentBindingSet() - which set SaveBindings should write.
                 //
@@ -4529,13 +4615,7 @@ void registerActionLuaAPI(lua_State* L) {
                 // CastPetAction(action, unit) - the unit is what a click-cast
                 // binding on a unit frame passes, and dropping it sent the pet
                 // at whatever was targeted instead of what was clicked.
-                {"CastPetAction", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            int index = static_cast<int>(luaL_checknumber(L, 1));
-            if (!gh || index < 1 || index > game::GameHandler::PET_ACTION_BAR_SLOTS) return 0;
-            castPetSlot(L, gh, gh->getPetActionSlot(index - 1), 2);
-            return 0;
-        }},
+                {"CastPetAction", lua_CastPetAction},
                 {"TogglePetAutocast", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             int index = static_cast<int>(luaL_checknumber(L, 1));

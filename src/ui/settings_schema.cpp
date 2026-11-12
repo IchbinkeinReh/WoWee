@@ -185,7 +185,7 @@ constexpr SettingDesc kSchema[] = {
     {"groundclutterdistance", "Ground clutter distance", SettingKind::Int, 70, 300, 10,
      "Detail", "",
      "How far out that clutter is drawn, in yards. Past this it simply\n"
-     "is not there, so a short distance is a visible edge on open ground.", "", 140},
+     "is not there, so a short distance is a visible edge on open ground.", "", 70},
 
     {"normalmapping", "Surface bumps (normal mapping)", SettingKind::Bool, 0, 0, 0, "Detail", "Surfaces",
      "Light the stone, brick and wood of buildings by their surface\n"
@@ -722,14 +722,14 @@ constexpr SettingDesc kSchema[] = {
     // other two, follow speed and camera style, wrote camerastiffness and
     // smoothfollow (both since removed with the camera's position smoothing,
     // which the client does not have). In yards rather than the multiple of
-    // 22 the game's slider counted in; kClientCVars scales cameraDistanceMaxFactor by 22 for an
+    // 15 the game's slider counted in; kClientCVars scales cameraDistanceMaxFactor by 15 for an
     // addon or a macro that still writes it. Before either there was an
     // extended-zoom checkbox of this client's own, a choice between two
     // positions where this is every distance between them.
-    {"cameramaxdistance", "Max camera distance", SettingKind::Int, 22, 50, 1, "Camera", "",
-     "How far back the camera can be pulled, in yards. 22 is what the\n"
+    {"cameramaxdistance", "Max camera distance", SettingKind::Int, 15, 50, 1, "Camera", "",
+     "How far back the camera can be pulled, in yards. 15 is what the\n"
      "original client gives; further out shows more of a fight and less\n"
-     "of your character.", "", 22},
+     "of your character.", "", 15},
     {"pivotheight", "Camera pivot height", SettingKind::Float, 0, 3, 0.1f, "Camera", "",
      "The point the camera turns around, as a height above your feet in\n"
      "yards. Lower feels closer to the character; higher looks over it.", "", 1.6f},

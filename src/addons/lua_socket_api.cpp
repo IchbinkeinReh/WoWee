@@ -470,6 +470,17 @@ void pushSocketedGems(lua_State* L, game::GameHandler* gh,
             lua_pushstring(L, text.c_str());
             lua_setfield(L, -2, "text");
             const uint32_t gem = gh->getEnchantGemItem(ench);
+            // The gem's own icon goes in front of its line (0x0061c8b0).
+            if (gem != 0) {
+                gh->ensureItemInfo(gem);
+                if (const auto* gi = gh->getItemInfo(gem); gi && gi->valid) {
+                    const std::string icon = gh->getItemIconPath(gi->displayInfoId);
+                    if (!icon.empty()) {
+                        lua_pushstring(L, icon.c_str());
+                        lua_setfield(L, -2, "icon");
+                    }
+                }
+            }
             // A gem out of colour leaves the bonus unearned (0x005c48d0).
             if (info && info->socketColor[i] != 0 &&
                 (gemColorMask(gh, gem) & info->socketColor[i]) == 0)
