@@ -2338,6 +2338,8 @@ public:
     /// How `asker` regards `unit` as the client works it out (0x007251c0,
     /// unit_reaction.hpp): 0 hated to 7 exalted, UnitReaction less one.
     [[nodiscard]] int unitReaction(const Entity& asker, const Entity& unit) const;
+    /// unitReaction(a, b) and unitReaction(b, a), each side worked out once.
+    [[nodiscard]] std::pair<int, int> unitReactionsBothWays(const Entity& a, const Entity& b) const;
     /// How a unit regards the player, numbered as UnitReaction numbers it:
     /// 1 hated to 8 exalted - unitReaction(unit, player) + 1.
     [[nodiscard]] int unitReactionToPlayer(const Unit& unit) const;
