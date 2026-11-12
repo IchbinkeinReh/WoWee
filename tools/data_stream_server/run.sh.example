@@ -1,0 +1,6 @@
+#!/bin/sh
+# WoWee data streaming service (user level). Started by crontab @reboot in screen "wowee-data".
+cd "$HOME/wowee-data-server" || exit 1
+exec nice -n 10 python3 -u "$HOME/wowee-data-server/wowee_data_server.py" \
+  --root "<the client folder that holds Data/>" \
+  --key-file "$HOME/wowee-data-server/access_key" --port 8951 2>>"$HOME/wowee-data-server/server.log"
