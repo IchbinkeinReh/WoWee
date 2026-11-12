@@ -847,6 +847,9 @@ void RtLighting::record(VkCommandBuffer cmd, const SceneTarget& target, const Fr
 
     // The probes first: they need nothing of this frame's depth.
     if (probes) probes_.record(cmd, slotIndex, s.ubo.buffer, sizeof(RtPassData), s.gbuf.img.imageView);
+    // The profiler's split of the traced lighting: the probes, the G-buffer's
+    // preparation, the view's rays, and the history and filter after them.
+    ctx_->gpuMark(cmd, "rt probes");
 
     depthBarrier(cmd, target.depthImage, true);
 
@@ -873,10 +876,12 @@ void RtLighting::record(VkCommandBuffer cmd, const SceneTarget& target, const Fr
     // The view's lift for the probe light, from the G-buffer just built and
     // the volume just updated; nothing below reads what it writes.
     if (probes) probes_.recordExposure(cmd, slotIndex);
+    ctx_->gpuMark(cmd, "rt prepare");
 
     bind(trace_, 0);
     vkCmdDispatch(cmd, gx, gy, 1);
     computeToCompute();
+    ctx_->gpuMark(cmd, "rt rays");
 
     bind(temporal_, 0);
     vkCmdDispatch(cmd, gx, gy, 1);
@@ -895,7 +900,7 @@ void RtLighting::record(VkCommandBuffer cmd, const SceneTarget& target, const Fr
     memoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                   VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                   VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
-    ctx_->gpuMark(cmd, "rt trace");
+    ctx_->gpuMark(cmd, "rt filter");
 
     recordApply(cmd, target, s);
     depthBarrier(cmd, target.depthImage, false);
