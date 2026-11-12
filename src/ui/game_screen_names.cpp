@@ -684,7 +684,7 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
             }
             if (atlas->TexData == packedIn) break;
         }
-        worldText->setText(std::move(nameTriangles), atlas->TexData, std::move(nameRuns));
+        worldText->swapText(nameTriangles, atlas->TexData, nameRuns);
     }
 
     // Forget the units whose plates are gone.

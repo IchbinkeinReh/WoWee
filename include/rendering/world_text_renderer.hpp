@@ -66,6 +66,9 @@ public:
         size_t count = 0;
     };
     void setText(std::vector<Vertex> triangles, ImTextureData* texture, std::vector<Run> runs = {});
+    /// The same, trading buffers: the caller gets the last text's back, its
+    /// storage kept for the next frame's instead of allocated anew.
+    void swapText(std::vector<Vertex>& triangles, ImTextureData* texture, std::vector<Run>& runs);
     void clear() {
         triangles_.clear();
         runs_.clear();

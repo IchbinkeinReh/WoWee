@@ -126,6 +126,13 @@ void WorldTextRenderer::setText(std::vector<Vertex> triangles, ImTextureData* te
     textFrame_ = ImGui::GetFrameCount();
 }
 
+void WorldTextRenderer::swapText(std::vector<Vertex>& triangles, ImTextureData* texture, std::vector<Run>& runs) {
+    triangles_.swap(triangles);
+    runs_.swap(runs);
+    texture_ = texture;
+    textFrame_ = ImGui::GetFrameCount();
+}
+
 void WorldTextRenderer::followUnits(const std::function<bool(uint64_t, glm::vec3&)>& drawnAt) {
     for (Run& run : runs_) {
         glm::vec3 now;
