@@ -152,6 +152,10 @@ private:
     std::string clientRealm_;
     std::unordered_map<std::string, bool> clientEnabled_;
     void readClientAddOnsTxt();
+    /// Drop-in mode: copy the original's WTF saved variables of one of the
+    /// player's own addons into WoWee\config\AddOnsSaved (client_saved_variables.hpp).
+    void copyClientSavedVariables(const TocFile& addon);
+    bool loggedNoWtfAccount_ = false;
     std::string frameXmlDir_;
     /// The same directory as it is actually spelled on disk.
     ///

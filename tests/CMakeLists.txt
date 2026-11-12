@@ -757,6 +757,16 @@ target_link_libraries(test_addon_globals PRIVATE catch2_main)
 add_test(NAME addon_globals COMMAND test_addon_globals)
 register_test_target(test_addon_globals)
 
+# ── test_client_saved_variables ─────────────────────────────
+add_executable(test_client_saved_variables
+    test_client_saved_variables.cpp
+)
+target_include_directories(test_client_saved_variables PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_client_saved_variables SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_client_saved_variables PRIVATE catch2_main)
+add_test(NAME client_saved_variables COMMAND test_client_saved_variables)
+register_test_target(test_client_saved_variables)
+
 # ── test_monster_move_facing ─────────────────────────────────
 # SMSG_MONSTER_MOVE's move-type byte and the facing after it, which three
 # expansion parsers used to read for themselves. A wrong length here misreads
