@@ -4081,33 +4081,21 @@ int lua_Tooltip_SetUnitAura(lua_State* L) {
         lua_getglobal(L, "GetTime");
         if (lua_isfunction(L, -1) && lua_pcall(L, 0, 1, 0) == 0) now = lua_tonumber(L, -1);
         lua_pop(L, 1);
+        // 0x0061a9e0 rounding up: seconds under a minute (rounded down),
+        // then minutes, hours, days - sixty minutes reading one hour and
+        // twenty-four hours one day.
         const double left = std::max(0.0, expires - now);
-        const char* key; const char* fallback; int amount;
-        if (left >= 86400.0) {
-            key = "SPELL_TIME_REMAINING_DAYS"; fallback = "%d |4day:days; remaining";
-            amount = static_cast<int>(std::ceil(left / 86400.0));
-        } else if (left >= 3600.0) {
-            key = "SPELL_TIME_REMAINING_HOURS"; fallback = "%d |4hour:hours; remaining";
-            amount = static_cast<int>(std::ceil(left / 3600.0));
-        } else if (left >= 60.0) {
-            key = "SPELL_TIME_REMAINING_MIN"; fallback = "%d |4minute:minutes; remaining";
-            amount = static_cast<int>(std::ceil(left / 60.0));
-        } else {
-            key = "SPELL_TIME_REMAINING_SEC"; fallback = "%d |4second:seconds; remaining";
-            amount = static_cast<int>(std::ceil(left));
-        }
-        std::string text = globalOr(L, key, fallback);
-        if (const size_t at = text.find("%d"); at != std::string::npos) {
-            text.replace(at, 2, std::to_string(amount));
-        }
-        line(withPlural(text, amount), "", 1.0f, 0.82f, 0.0f);
+        const auto d = game::difficulty_change::intDuration(static_cast<uint32_t>(left * 1000.0));
+        const std::string key = std::string("SPELL_TIME_REMAINING") + d.suffix;
+        const int amount = static_cast<int>(d.value);
+        line(withPlural(formatGlobal(L, globalOr(L, key.c_str(), "%d"), {std::to_string(amount)}), amount), "",
+             1.0f, 0.82f, 0.0f);
     }
 
     lua_pushnumber(L, spellId);
     lua_setfield(L, 1, "__spellId");
     w->shown = true;
-    lua_pushboolean(L, 1);
-    return 1;
+    return 0;
 }
 
 /// A glyph in its socket, hovered on the glyph panel.
