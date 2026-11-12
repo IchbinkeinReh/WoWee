@@ -545,8 +545,12 @@ bool CharacterRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFram
     msaaSamplesOverride_ = msaaSamples;
     const unsigned hc = std::thread::hardware_concurrency();
     const size_t availableCores = (hc > 1u) ? static_cast<size_t>(hc - 1u) : 1ull;
-    // Character updates run alongside M2/WMO work; default to a smaller share.
-    const size_t defaultAnimThreads = std::max<size_t>(1, availableCores / 4);
+    // Character updates run alongside M2/WMO work, so they take a share of
+    // the cores, not all: half of them, at most four. A quarter (two on a
+    // twelve-thread machine) left the main thread posing half of a city's
+    // units itself - 2.2 of its 23 ms in Orgrimmar; four halve that, and six
+    // gain nothing more beside the model, shadow and character workers.
+    const size_t defaultAnimThreads = std::clamp<size_t>(availableCores / 2, 1, 4);
     numAnimThreads_ = static_cast<uint32_t>(std::max<size_t>(
         1, envSizeOrDefault("WOWEE_CHAR_ANIM_THREADS", defaultAnimThreads)));
     core::Logger::getInstance().info("Character anim threads: ", numAnimThreads_);
