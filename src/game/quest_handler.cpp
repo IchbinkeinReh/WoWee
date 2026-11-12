@@ -1490,27 +1490,9 @@ void QuestHandler::selectGossipOption(uint32_t optionId, const std::string& code
     owner_.getSocket()->send(packet);
 
     // 0x0058af10 sends only this: the window the option leads to - a vendor,
-    // a bank, a flight map, a battlemaster's list, a tabard designer - is the
-    // server's answer to it. Then the options and quests go (0x0058a7b0).
-    //
-    // One exception, kept for this client's own gossip window only: it has
-    // no confirm step for a hearthstone, so the bind is sent with the select
-    // (see differences.md). FrameXML follows the server's own flow - the
-    // select goes out, SMSG_BINDER_CONFIRM asks, the popup answers.
-    if (!ui::frameXmlOwns(ui::UiElement::Gossip)) {
-        for (const auto& opt : currentGossip_.options) {
-            if (opt.id != optionId) continue;
-            std::string textLower = opt.text;
-            std::transform(textLower.begin(), textLower.end(), textLower.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            if (textLower.find("make this inn your home") != std::string::npos ||
-                textLower.find("set your home") != std::string::npos) {
-                owner_.getSocket()->send(BinderActivatePacket::build(currentGossip_.npcGuid));
-                LOG_INFO("Sent CMSG_BINDER_ACTIVATE for npc=0x", std::hex, currentGossip_.npcGuid, std::dec);
-            }
-            break;
-        }
-    }
+    // a bank, a flight map, a battlemaster's list, a tabard designer, the
+    // innkeeper's bind confirmation (SMSG_BINDER_CONFIRM) - is the server's
+    // answer to it. Then the options and quests go (0x0058a7b0).
     currentGossip_.options.clear();
     currentGossip_.quests.clear();
 }
