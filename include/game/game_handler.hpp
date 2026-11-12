@@ -5047,6 +5047,12 @@ public:
         return {it->second.permanentEnchantId, it->second.temporaryEnchantId};
     }
     // Returns the socket gem enchant IDs (3 slots; 0 = empty socket) for an item by GUID.
+    /// The enchant in the item's prismatic slot (ITEM_FIELD_ENCHANTMENT 6):
+    /// a socket added to it, a belt buckle's (0x006277f0's walk).
+    uint32_t getItemPrismaticEnchant(uint64_t guid) const {
+        auto it = onlineItems_.find(guid);
+        return it != onlineItems_.end() ? it->second.enchantIds[6] : 0u;
+    }
     std::array<uint32_t, 3> getItemSocketEnchantIds(uint64_t guid) const {
         auto it = onlineItems_.find(guid);
         if (it == onlineItems_.end()) return {};
