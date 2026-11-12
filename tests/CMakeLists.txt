@@ -757,7 +757,6 @@ target_link_libraries(test_addon_globals PRIVATE catch2_main)
 add_test(NAME addon_globals COMMAND test_addon_globals)
 register_test_target(test_addon_globals)
 
-<<<<<<< Updated upstream
 # ── test_client_saved_variables ─────────────────────────────
 add_executable(test_client_saved_variables
     test_client_saved_variables.cpp
@@ -767,7 +766,7 @@ target_include_directories(test_client_saved_variables SYSTEM PRIVATE ${TEST_SYS
 target_link_libraries(test_client_saved_variables PRIVATE catch2_main)
 add_test(NAME client_saved_variables COMMAND test_client_saved_variables)
 register_test_target(test_client_saved_variables)
-=======
+
 # ── test_movie_rules ────────────────────────────────────────
 add_executable(test_movie_rules
     test_movie_rules.cpp
@@ -777,7 +776,6 @@ target_include_directories(test_movie_rules SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE
 target_link_libraries(test_movie_rules PRIVATE catch2_main)
 add_test(NAME movie_rules COMMAND test_movie_rules)
 register_test_target(test_movie_rules)
->>>>>>> Stashed changes
 
 # ── test_loose_movies ───────────────────────────────────────
 add_executable(test_loose_movies
