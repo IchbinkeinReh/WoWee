@@ -1173,6 +1173,10 @@ private:
     /// asset overlay that re-points them can be told apart from one that never
     /// reached the client. Five is enough to see and few enough to ignore.
     mutable int humanoidDisplayCanaryCount_ = 0;
+    /// creatureModelFlags' answers by display id. The two tables are static
+    /// data, and the unit sync asks for every unit every frame.
+    mutable std::mutex creatureModelFlagsMutex_;
+    mutable std::unordered_map<uint32_t, std::optional<uint32_t>> creatureModelFlagsCache_;
     /// Says what the first few NPCs resolved for their head-detail texture.
     int npcHeadDetailCanaryCount_ = 0;
     uint32_t nextCreatureModelId_ = 5000;

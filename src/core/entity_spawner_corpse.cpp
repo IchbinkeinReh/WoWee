@@ -20,19 +20,30 @@ namespace wowee::core {
 
 std::optional<uint32_t> EntitySpawner::creatureModelFlags(uint32_t displayId) const {
     if (!assetManager_) return std::nullopt;
+    {
+        std::lock_guard<std::mutex> lock(creatureModelFlagsMutex_);
+        if (auto it = creatureModelFlagsCache_.find(displayId); it != creatureModelFlagsCache_.end()) {
+            return it->second;
+        }
+    }
     auto displays = assetManager_->loadDBCOptional("CreatureDisplayInfo.dbc");
     auto models = assetManager_->loadDBCOptional("CreatureModelData.dbc");
+    // Not remembered: the tables may yet load.
     if (!displays || !models) return std::nullopt;
     const auto* layouts = pipeline::getActiveDBCLayout();
     const auto* displayLayout = layouts ? layouts->getLayout("CreatureDisplayInfo") : nullptr;
+    std::optional<uint32_t> flags;
     const int32_t displayRow = displays->findRecordById(displayId);
-    if (displayRow < 0) return std::nullopt;
-    const uint32_t modelId =
-        displays->getUInt32(static_cast<uint32_t>(displayRow), displayLayout ? (*displayLayout)["ModelID"] : 1);
-    const int32_t modelRow = models->findRecordById(modelId);
-    if (modelRow < 0) return std::nullopt;
-    // CreatureModelData +4, its Flags.
-    return models->getUInt32(static_cast<uint32_t>(modelRow), 1);
+    if (displayRow >= 0) {
+        const uint32_t modelId =
+            displays->getUInt32(static_cast<uint32_t>(displayRow), displayLayout ? (*displayLayout)["ModelID"] : 1);
+        const int32_t modelRow = models->findRecordById(modelId);
+        // CreatureModelData +4, its Flags.
+        if (modelRow >= 0) flags = models->getUInt32(static_cast<uint32_t>(modelRow), 1);
+    }
+    std::lock_guard<std::mutex> lock(creatureModelFlagsMutex_);
+    creatureModelFlagsCache_.emplace(displayId, flags);
+    return flags;
 }
 
 std::optional<bool> EntitySpawner::corpseDisplayIsCharacter(uint32_t displayId) const {
