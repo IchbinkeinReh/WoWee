@@ -4407,6 +4407,9 @@ int lua_Tooltip_SetUnit(lua_State* L) {
     const std::string name = gh->lookupName(guid);
     if (name.empty()) { lua_pushboolean(L, 0); return 1; }
 
+    // Room for the global-string lookups the Beast Lore and faction loops
+    // make: each pops what it pushed, but the lines are counted by data.
+    lua_checkstack(L, 8);
     w->isTooltip = true;
     // Whose tooltip this is, for IsUnit below.
     w->tooltipUnit = uidStr;
@@ -4603,6 +4606,112 @@ int lua_Tooltip_SetUnit(lua_State* L) {
             addLine(globalOr(L, "PVP_ENABLED", "PvP"), 1.0f, 1.0f, 1.0f);
         if (isPlayer && u->getHealth() == 0 && gh->unitMayAssist(gh->getPlayerGuid(), guid))
             addLine(globalOr(L, "RESURRECTABLE", "Resurrectable"), 0.0f, 1.0f, 0.0f);
+        // Beast Lore's report on a creature under it (UNIT_DYNAMIC_FLAGS
+        // 0x10; 0x00620950), all white: its damage (SINGLE_DAMAGE_TEMPLATE
+        // where the rounded least and the ceiling of the most agree, else
+        // DAMAGE_TEMPLATE), ARMOR_TEMPLATE, HP_TEMPLATE, a
+        // RESISTANCE_TEMPLATE for each other school it resists, its family's
+        // diet (PET_DIET_TEMPLATE, ItemPetFood names by the family's food
+        // mask), TAMEABLE, TAMEABLE_EXOTIC (type flag 0x10000) or
+        // NOT_TAMEABLE, and for a tameable one the abilities its family's
+        // skill lines teach (PET_SPELLS_TEMPLATE: SkillLineAbility rows
+        // learned on getting the skill, superseding nothing, of spells
+        // neither passive nor hidden).
+        if (!isPlayer && (f(*u, game::UF::UNIT_DYNAMIC_FLAGS) & 0x10u) != 0) {
+            const auto ff = [&](game::UF uf, uint16_t k = 0) {
+                const uint16_t i = game::fieldIndex(uf);
+                float v = 0.0f;
+                if (i != 0xFFFF) { const uint32_t raw = u->getField(static_cast<uint16_t>(i + k)); std::memcpy(&v, &raw, sizeof v); }
+                return v;
+            };
+            const long lo = std::lround(ff(game::UF::UNIT_FIELD_MINDAMAGE));
+            const long hi = std::lround(std::ceil(ff(game::UF::UNIT_FIELD_MAXDAMAGE)));
+            addLine(lo == hi ? formatGlobal(L, globalOr(L, "SINGLE_DAMAGE_TEMPLATE", "%d Damage"), {std::to_string(lo)})
+                             : formatGlobal(L, globalOr(L, "DAMAGE_TEMPLATE", "%d - %d Damage"),
+                                            {std::to_string(lo), std::to_string(hi)}),
+                    1.0f, 1.0f, 1.0f);
+            const uint16_t ri = game::fieldIndex(game::UF::UNIT_FIELD_RESISTANCES);
+            const auto resist = [&](uint16_t k) {
+                return ri != 0xFFFF ? static_cast<int32_t>(u->getField(static_cast<uint16_t>(ri + k))) : 0;
+            };
+            addLine(formatGlobal(L, globalOr(L, "ARMOR_TEMPLATE", "%d Armor"), {std::to_string(std::max(0, resist(0)))}),
+                    1.0f, 1.0f, 1.0f);
+            addLine(formatGlobal(L, globalOr(L, "HP_TEMPLATE", "%d hp"), {std::to_string(u->getHealth())}), 1.0f, 1.0f, 1.0f);
+            for (uint16_t k = 1; k < 7; ++k) {
+                if (resist(k) <= 0) continue;
+                const std::string school = globalOr(L, ("RESISTANCE" + std::to_string(k) + "_NAME").c_str(), "");
+                if (school.empty()) continue;
+                addLine(formatGlobal(L, globalOr(L, "RESISTANCE_TEMPLATE", "%d %s"), {std::to_string(resist(k)), school}),
+                        1.0f, 1.0f, 1.0f);
+            }
+            const uint32_t family = cr ? cr->family : 0u;
+            auto fams = family && am && am->isInitialized() ? am->loadDBCOptional("CreatureFamily.dbc") : nullptr;
+            const int32_t famRow = fams && fams->isLoaded() && fams->getFieldCount() > 7 ? fams->findRecordById(family) : -1;
+            if (famRow >= 0) {
+                const uint32_t foodMask = fams->getUInt32(static_cast<uint32_t>(famRow), 7);
+                auto foods = foodMask ? am->loadDBCOptional("ItemPetFood.dbc") : nullptr;
+                std::string diet;
+                for (uint32_t r = 0; foods && foods->isLoaded() && r < foods->getRecordCount(); ++r) {
+                    const uint32_t id = foods->getUInt32(r, 0);
+                    if (id == 0 || (foodMask & (1u << ((id - 1) & 31))) == 0) continue;
+                    if (!diet.empty()) diet += ", ";
+                    diet += foods->getString(r, 1);
+                }
+                if (!diet.empty())
+                    addLine(formatGlobal(L, globalOr(L, "PET_DIET_TEMPLATE", "Diet: %s"), {diet}), 1.0f, 1.0f, 1.0f);
+            }
+            const uint32_t tflags = cr ? cr->typeFlags : 0u;
+            if ((tflags & 0x1u) == 0 || family == 0) {
+                addLine(globalOr(L, "NOT_TAMEABLE", "Not Tameable"), 1.0f, 1.0f, 1.0f);
+            } else {
+                addLine(globalOr(L, (tflags & 0x10000u) ? "TAMEABLE_EXOTIC" : "TAMEABLE",
+                                 (tflags & 0x10000u) ? "Tameable (Exotic)" : "Tameable"),
+                        1.0f, 1.0f, 1.0f);
+                std::string spells;
+                auto abilities = famRow >= 0 ? am->loadDBCOptional("SkillLineAbility.dbc") : nullptr;
+                for (uint32_t k = 0; k < 2 && abilities && abilities->isLoaded() && abilities->getFieldCount() > 9; ++k) {
+                    const uint32_t line = fams->getUInt32(static_cast<uint32_t>(famRow), 5 + k);
+                    for (uint32_t r = 0; line != 0 && r < abilities->getRecordCount(); ++r) {
+                        if (abilities->getUInt32(r, 1) != line || abilities->getUInt32(r, 8) != 0 ||
+                            abilities->getUInt32(r, 9) != 2)
+                            continue;
+                        const uint32_t spell = abilities->getUInt32(r, 2);
+                        gh->loadSpellNameCache();
+                        const auto se = gh->spellNameCacheRef().find(spell);
+                        if (se == gh->spellNameCacheRef().end() || (se->second.attr & 0xc0u) != 0) continue;
+                        if (!spells.empty()) spells += ", ";
+                        spells += gh->getSpellName(spell);
+                    }
+                }
+                if (!spells.empty())
+                    addLine(formatGlobal(L, globalOr(L, "PET_SPELLS_TEMPLATE", "Abilities: %s"), {spells}), 1.0f, 1.0f, 1.0f);
+            }
+        }
+        // A creature to be skinned, gathered or salvaged (UNIT_FLAG
+        // 0x4000000; 0x00620ee0): UNIT_SKINNABLE_HERB, _ROCK or _BOLTS by
+        // type flag 0x100, 0x200 or 0x8000, else _LEATHER, coloured as the
+        // player's skill in that profession stands to what the unit's level
+        // asks (1 to level 10, (level - 10) x 10 under 20, else level x 5):
+        // red short of it, orange, yellow from 25 over, green from 50, grey
+        // from 100; red with no such profession.
+        if (!isPlayer && (f(*u, game::UF::UNIT_FIELD_FLAGS) & 0x4000000u) != 0) {
+            const uint32_t tf = cr ? cr->typeFlags : 0u;
+            const char* key = (tf & 0x100u) ? "UNIT_SKINNABLE_HERB" : (tf & 0x200u) ? "UNIT_SKINNABLE_ROCK"
+                              : (tf & 0x8000u) ? "UNIT_SKINNABLE_BOLTS" : "UNIT_SKINNABLE_LEATHER";
+            const uint32_t skill = (tf & 0x100u) ? 182u : (tf & 0x200u) ? 186u : (tf & 0x8000u) ? 202u : 393u;
+            const int32_t lvl = static_cast<int32_t>(f(*u, game::UF::UNIT_FIELD_LEVEL));
+            const int32_t need = lvl <= 10 ? 1 : lvl < 20 ? (lvl - 10) * 10 : lvl * 5;
+            float r = 1.0f, g = 0.125f, b = 0.125f;  // 0xad2d64
+            const auto& skills = gh->getPlayerSkills();
+            if (const auto it = skills.find(skill); it != skills.end() && it->second.effectiveValue() > 0) {
+                const int32_t have = it->second.effectiveValue();
+                if (have >= need + 100) { r = g = b = 0.5f; }                      // 0xad2d54
+                else if (have >= need + 50) { r = 0.25f; g = 0.75f; b = 0.25f; }  // 0xad2d58
+                else if (have >= need + 25) { r = 1.0f; g = 1.0f; b = 0.0f; }     // 0xad2d5c
+                else if (have >= need) { r = 1.0f; g = 0.5f; b = 0.25f; }         // 0xad2d60
+            }
+            addLine(globalOr(L, key, key), r, g, b);
+        }
         if (pvpFlag && cr && cr->racialLeader) addLine(globalOr(L, "PVP_RANK_LEADER", "Leader"), 1.0f, 1.0f, 1.0f);
     }
 
