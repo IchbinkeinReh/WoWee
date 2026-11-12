@@ -3825,3 +3825,11 @@ target_include_directories(test_paper_ui_tab SYSTEM PRIVATE
 target_link_libraries(test_paper_ui_tab PRIVATE catch2_main imgui)
 add_test(NAME paper_ui_tab COMMAND test_paper_ui_tab)
 register_test_target(test_paper_ui_tab)
+
+# ── test_mpq_archive_set ──────────────────────────────────────────────
+# The original client's archives read in place: load order, zlib sectors,
+# single units, deletion markers, listfiles.
+wowee_add_test(test_mpq_archive_set
+    SOURCES test_mpq_archive_set.cpp ${TEST_COMMON_SOURCES}
+            ${CMAKE_SOURCE_DIR}/src/pipeline/mpq_archive_set.cpp)
+target_link_libraries(test_mpq_archive_set PRIVATE ZLIB::ZLIB)

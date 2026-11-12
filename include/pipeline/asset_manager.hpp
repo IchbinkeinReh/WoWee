@@ -4,6 +4,7 @@
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/asset_manifest.hpp"
 #include "pipeline/loose_file_reader.hpp"
+#include "pipeline/mpq_archive_set.hpp"
 #include <atomic>
 #include <memory>
 #include <string>
@@ -56,6 +57,16 @@ public:
     [[nodiscard]] bool isInitialized() const { return initialized; }
     [[nodiscard]] const std::string& getDataPath() const { return dataPath; }
     [[nodiscard]] const AssetManifest& getManifest() const { return manifest_; }
+
+    /// Whether the files come from the original client's MPQ archives rather
+    /// than an extracted tree (decided at initialize from what the data
+    /// folder holds; WOWEE_DATA_MODE=mpq|extracted overrides).
+    [[nodiscard]] bool isMpqMode() const { return mpq_ != nullptr; }
+    [[nodiscard]] const MpqArchiveSet* mpqArchives() const { return mpq_.get(); }
+
+    /// Every file whose normalised path starts with `prefix`, sorted, from
+    /// whichever source is active (the manifest, or the archives' listfiles).
+    [[nodiscard]] std::vector<std::string> listFiles(const std::string& prefix) const;
 
     /**
      * Load a BLP texture
@@ -200,6 +211,9 @@ private:
 
     // Base manifest (loaded from dataPath/manifest.json)
     AssetManifest manifest_;
+
+    // The client's archives, when they are the source instead of a manifest.
+    std::unique_ptr<MpqArchiveSet> mpq_;
 
     // Optional base-path fallback: used when manifest_ doesn't contain a file.
     // Populated by setBaseFallbackPath(); ignored if baseFallbackDataPath_ is empty.

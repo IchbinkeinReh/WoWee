@@ -322,6 +322,9 @@ void AuthHandler::sendLogonProof() {
         }
         // Legacy flat extraction layout.
         for (const auto& root : roots) candidateDirs.push_back(root + "/misc");
+        // The original client itself, when its Data folder is what is read:
+        // Wow.exe sits one level up.
+        for (const auto& root : roots) candidateDirs.push_back(root + "/..");
         // Common turtle repack location used in this workspace
         if (const char* home = std::getenv("HOME")) {
             if (home && *home) {

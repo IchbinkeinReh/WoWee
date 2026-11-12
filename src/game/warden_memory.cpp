@@ -669,6 +669,7 @@ std::string WardenMemory::findWowExe(uint16_t build) const {
         candidateDirs.push_back(root + "/expansions/classic/misc");
         candidateDirs.push_back(root + "/misc");
         candidateDirs.push_back(root + "/expansions/turtle/overlay/misc");
+        candidateDirs.push_back(root + "/..");  // the client beside its Data
     }
 
     const char* candidateExes[] = { "WoW.exe", "TurtleWoW.exe", "Wow.exe", "wow.exe" };

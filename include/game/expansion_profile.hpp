@@ -69,6 +69,13 @@ public:
     /** Get the active expansion profile. Never null after successful initialize(). */
     [[nodiscard]] const ExpansionProfile* getActive() const;
 
+    /** The locale of the client data being read, where the profiles were
+     *  not loaded from beside it (the original client's archives read in
+     *  place: its Data/<locale> folder says, the profiles' folder does not). */
+    void setClientLocale(const std::string& locale) {
+        for (auto& p : profiles_) p.locale = locale;
+    }
+
     /** Convenience: active expansion id. Empty if none. */
     [[nodiscard]] const std::string& getActiveId() const { return activeId_; }
 

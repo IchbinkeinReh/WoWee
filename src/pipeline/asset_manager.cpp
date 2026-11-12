@@ -2,6 +2,7 @@
 #include "core/platform.hpp"
 #include "pipeline/base_fallback.hpp"
 #include "pipeline/dds_loader.hpp"
+#include "pipeline/mpq_archive_set.hpp"
 #include "core/logger.hpp"
 #include "core/memory_monitor.hpp"
 #include "core/profiler.hpp"
@@ -67,11 +68,34 @@ bool AssetManager::initialize(const std::string& dataPath_) {
     setupFileCacheBudget();
 
     std::string manifestPath = dataPath + "/manifest.json";
-    if (!std::filesystem::exists(manifestPath)) {
+    // Which source: an extraction (manifest.json) or the original client's
+    // archives (Data\*.MPQ), whichever the folder holds. With both, the
+    // extraction wins unless WOWEE_DATA_MODE=mpq; WOWEE_DATA_MODE=extracted
+    // never opens the archives.
+    const char* modeEnv = std::getenv("WOWEE_DATA_MODE");
+    const std::string mode = modeEnv ? modeEnv : "";
+    const bool hasManifest = std::filesystem::exists(manifestPath);
+    const bool hasArchives = mode != "extracted" && MpqArchiveSet::findArchiveDir(dataPath);
+    if (hasArchives && (!hasManifest || mode == "mpq")) {
+        auto set = std::make_unique<MpqArchiveSet>();
+        if (!set->open(dataPath)) {
+            LOG_ERROR("No readable MPQ archive in: ", dataPath);
+            return false;
+        }
+        mpq_ = std::move(set);
+        overridePath_ = dataPath + "/override";
+        initialized = true;
+        LOG_WARNING("Asset source: MPQ archives (", mpq_->archiveCount(), " in ", mpq_->archiveDir(),
+                    ", locale ", mpq_->locale().empty() ? std::string("none") : mpq_->locale(),
+                    "; file cache: ", fileCacheBudget / (1024 * 1024), " MB)");
+        return true;
+    }
+    if (!hasManifest) {
         LOG_ERROR("manifest.json not found in: ", dataPath);
-        LOG_ERROR("Run asset_extract to extract MPQ archives first");
+        LOG_ERROR("Point WOW_DATA_PATH at a WoW 3.3.5a folder (its Data MPQ archives) or run asset_extract first");
         return false;
     }
+    LOG_WARNING("Asset source: extracted tree (", manifestPath, ")");
 
     if (!manifest_.load(manifestPath)) {
         LOG_ERROR("Failed to load manifest");
@@ -92,6 +116,10 @@ bool AssetManager::switchDataPath(const std::string& newDataPath) {
     if (newDataPath.empty()) return false;
     if (initialized && newDataPath == dataPath) return true;
 
+    if (mpq_) {
+        LOG_ERROR("Cannot switch asset path while reading the client's MPQ archives");
+        return false;
+    }
     const std::string manifestPath = newDataPath + "/manifest.json";
     AssetManifest nextManifest;
     if (!std::filesystem::exists(manifestPath) || !nextManifest.load(manifestPath)) {
@@ -192,6 +220,9 @@ std::string AssetManager::resolveFile(const std::string& normalizedPath) const {
             return overrideByPath;
         }
     }
+    // The archives have no filesystem paths: only an override is a file.
+    if (mpq_) return {};
+
     // Primary manifest
     std::string primaryPath = manifest_.resolveFilesystemPath(normalizedPath);
     if (!primaryPath.empty()) return primaryPath;
@@ -699,6 +730,7 @@ bool AssetManager::fileExists(const std::string& path) const {
     // of them took the wrong branch at once: a weapon texture that is present
     // under Weapon\ was declared missing and looked for under Shield\, where
     // it has never been, and the weapon drew white.
+    if (mpq_) return mpq_->contains(normalized) || !resolveFile(normalized).empty();
     return !resolveFile(normalized).empty();
 }
 
@@ -721,16 +753,20 @@ std::vector<uint8_t> AssetManager::readFile(const std::string& path) const {
     }
     fileCacheMisses++;
 
-    // Read from filesystem (override dir first, then base manifest)
+    // Read from filesystem (override dir first, then base manifest), or
+    // from the archives when those are the source.
     std::string fsPath = resolveFile(normalized);
+    std::vector<uint8_t> data;
     if (fsPath.empty()) {
-        return {};
-    }
-
-    auto data = LooseFileReader::readFile(fsPath);
-    if (data.empty()) {
-        LOG_WARNING("Manifest entry exists but file unreadable: ", fsPath);
-        return data;
+        if (!mpq_) return {};
+        data = mpq_->read(normalized);
+        if (data.empty()) return data;
+    } else {
+        data = LooseFileReader::readFile(fsPath);
+        if (data.empty()) {
+            LOG_WARNING("Manifest entry exists but file unreadable: ", fsPath);
+            return data;
+        }
     }
 
     // Into the cache, the least recently read making room. This was a scan
@@ -743,6 +779,19 @@ std::vector<uint8_t> AssetManager::readFile(const std::string& path) const {
     }
 
     return data;
+}
+
+std::vector<std::string> AssetManager::listFiles(const std::string& prefix) const {
+    std::vector<std::string> out;
+    if (!initialized) return out;
+    const std::string want = normalizePath(prefix);
+    if (mpq_) return mpq_->list(want);
+    for (const auto& [key, entry] : manifest_.getEntries()) {
+        (void)entry;
+        if (key.compare(0, want.size(), want) == 0) out.push_back(key);
+    }
+    std::sort(out.begin(), out.end());
+    return out;
 }
 
 std::vector<uint8_t> AssetManager::readFileOptional(const std::string& path) const {

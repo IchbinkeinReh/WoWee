@@ -260,7 +260,10 @@ void UIManager::loadInterfaceFont(const std::string& dataRoot,
         }
         if (!at.empty() && fs::is_directory(at, ec)) { fontDir = at; break; }
     }
-    if (fontDir.empty()) {
+    // The client's archives hold the fonts where no folder does: the faces
+    // are read from them (addFromArchive below).
+    const bool fromArchives = fontDir.empty() && assets && assets->isMpqMode();
+    if (fontDir.empty() && !fromArchives) {
         // Said out loud: the client still runs, in a face that is not the
         // game's, and nothing else reports why.
         LOG_WARNING("No interface fonts under ", dataRoot,
@@ -288,6 +291,7 @@ void UIManager::loadInterfaceFont(const std::string& dataRoot,
     // Case is not agreed on here either, so look for the file rather than
     // assuming the spelling the manifest happens to use.
     auto resolve = [&](const char* name) {
+        if (fontDir.empty()) return fs::path();
         fs::path file = fontDir / name;
         if (fs::exists(file, ec)) return file;
         for (const auto& entry : fs::directory_iterator(fontDir, ec)) {

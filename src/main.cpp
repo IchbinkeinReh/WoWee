@@ -1,3 +1,4 @@
+#include "core/dropin.hpp"
 #include "core/application.hpp"
 #include "core/config_paths.hpp"
 #include "core/logger.hpp"
@@ -296,6 +297,10 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[]) {
     // to sit inside the macOS branch above, so Linux and Windows went on
     // looking beside the executable for assets the asset manager had written
     // to their own per-user directory.
+    // Copied into an original client's folder: work from WoWee\ beside the
+    // executable and read the client's Data\ in place (core/dropin.hpp).
+    // Before selectUserDataPath, which keeps a WOW_DATA_PATH this sets.
+    const std::string dropInNote = wowee::core::enterDropInRoot();
     selectUserDataPath();
 
     try {
@@ -327,6 +332,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[]) {
         constexpr const char* kArch = "unknown-arch";
 #endif
         LOG_WARNING("Wowee ", wowee::core::kVersionString, " ", kPlatform, " ", kArch);
+        if (!dropInNote.empty()) LOG_WARNING(dropInNote);
         LOG_INFO("Starting application...");
 
         // Seed portable config from the per-user location on first portable launch.

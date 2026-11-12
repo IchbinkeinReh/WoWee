@@ -114,6 +114,7 @@
 #include "game/expansion_profile.hpp"
 #include "game/packet_parsers.hpp"
 #include "pipeline/asset_inventory.hpp"
+#include "pipeline/mpq_archive_set.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_layout.hpp"
 #include "pipeline/spell_icon_paths.hpp"
@@ -716,6 +717,65 @@ Application::~Application() {
     instance = nullptr;
 }
 
+namespace {
+
+/// The interface's text files out of the archives into a folder the addon
+/// manager can read: cache/interface_mpq/interface/... relative to the working
+/// directory. Written again only when the archives change (a stamp of their
+/// names and sizes). Returns the root to hand the addon manager.
+std::string writeInterfaceFromArchives(const pipeline::AssetManager& am) {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::path("cache") / "interface_mpq";
+    const auto* set = am.mpqArchives();
+    if (!set) return root.string();
+    std::string stamp = "v1 " + set->archiveDir() + " " + set->locale() + "\n";
+    {
+        std::string loc;
+        for (const auto& p : pipeline::MpqArchiveSet::discoverArchives(set->archiveDir(), loc)) {
+            std::error_code ec;
+            stamp += fs::path(p).filename().string() + " " + std::to_string(fs::file_size(p, ec)) + "\n";
+        }
+    }
+    const fs::path stampPath = root / ".stamp";
+    {
+        std::ifstream in(stampPath, std::ios::binary);
+        std::string have((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        if (have == stamp) {
+            LOG_INFO("Interface files from the archives: up to date in ", root.string());
+            return root.string();
+        }
+    }
+    const auto t0 = std::chrono::steady_clock::now();
+    size_t written = 0, bytes = 0;
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    for (const char* prefix : {"interface\\framexml\\", "interface\\gluexml\\", "interface\\addons\\"}) {
+        for (const std::string& name : am.listFiles(prefix)) {
+            const size_t dot = name.rfind('.');
+            const std::string ext = dot == std::string::npos ? std::string() : name.substr(dot);
+            if (ext != ".lua" && ext != ".xml" && ext != ".toc") continue;
+            const auto data = am.readFile(name);
+            if (data.empty()) continue;
+            std::string rel = name;
+            std::replace(rel.begin(), rel.end(), '\\', '/');
+            const fs::path out = root / rel;
+            fs::create_directories(out.parent_path(), ec);
+            std::ofstream o(out, std::ios::binary | std::ios::trunc);
+            o.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+            ++written;
+            bytes += data.size();
+        }
+    }
+    std::ofstream(stampPath, std::ios::binary | std::ios::trunc) << stamp;
+    LOG_WARNING("Interface files from the archives: ", written, " files (", bytes / 1024, " KB) into ",
+                fs::absolute(root).string(), " in ",
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count(),
+                " ms");
+    return root.string();
+}
+
+} // namespace
+
 bool Application::initialize() {
     LOG_INFO("Initializing Wowee Native Client");
 
@@ -870,12 +930,27 @@ bool Application::initialize() {
     const char* dataPathEnv = std::getenv("WOW_DATA_PATH");
     std::string dataPath = dataPathEnv ? dataPathEnv : "./Data";
 
+    // The original client's archives (Data\*.MPQ) instead of an extraction:
+    // the asset manager reads them in place, and the expansion tables - which
+    // ship with this client, not with the game - are read from this client's
+    // own Data/ (relative to the working directory, like its shaders). An
+    // extraction in the same folder wins unless WOWEE_DATA_MODE=mpq.
+    const char* dataModeEnv = std::getenv("WOWEE_DATA_MODE");
+    const std::string dataMode = dataModeEnv ? dataModeEnv : "";
+    const bool mpqData = dataMode != "extracted" && pipeline::MpqArchiveSet::findArchiveDir(dataPath) &&
+                         (dataMode == "mpq" || !core::holdsExtraction(dataPath));
+    const std::string tablesRoot = mpqData ? std::string("Data") : dataPath;
+    if (mpqData) {
+        LOG_WARNING("Game data: the client's MPQ archives in ", dataPath, " (tables from ",
+                    std::filesystem::absolute("Data").string(), ")");
+    }
+
     // The client's own expansion tables, into the extraction it is about to
     // read them from. Without this an extraction in the per-user directory -
     // where the asset builder writes one - had no expansion.json, so no
     // expansion was found, no assets opened, and a login went no further. See
     // syncClientTables.
-    {
+    if (!mpqData) {
         std::vector<std::string> failures;
         const int copied = core::syncClientTables("Data", dataPath, &failures);
         if (copied > 0) {
@@ -888,7 +963,15 @@ bool Application::initialize() {
     }
 
     // Scan for available expansion profiles
-    expansionRegistry_->initialize(dataPath);
+    expansionRegistry_->initialize(tablesRoot);
+    if (mpqData) {
+        // The language the server answers in: the archives' locale folder.
+        std::string archiveDir, locale;
+        if (pipeline::MpqArchiveSet::findArchiveDir(dataPath, &archiveDir)) {
+            pipeline::MpqArchiveSet::discoverArchives(archiveDir, locale);
+        }
+        if (!locale.empty()) expansionRegistry_->setClientLocale(locale);
+    }
 
     // Say what is actually installed, before anything tries to use it.
     //
@@ -898,7 +981,10 @@ bool Application::initialize() {
     // returning nothing. None of it said there were no assets, and none of it
     // said where it had looked.
     assetInventory_ = pipeline::takeInventory(dataPath);
-    if (assetInventory_.anyUsable()) {
+    if (mpqData) {
+        // The archives are the whole install; the inventory describes
+        // extractions and has nothing to say about them.
+    } else if (assetInventory_.anyUsable()) {
         // At the level these logs carry, because this is the line that answers
         // the most common question anyone asks of them. One per installed set,
         // and the sets nobody has built are not mentioned at all.
@@ -940,7 +1026,7 @@ bool Application::initialize() {
             assetManager->setExpansionDataPath(profile->dataPath);
 
             std::string expansionManifest = profile->dataPath + "/manifest.json";
-            if (std::filesystem::exists(expansionManifest)) {
+            if (!mpqData && std::filesystem::exists(expansionManifest)) {
                 assetPath = profile->dataPath;
                 LOG_INFO("Using expansion-specific asset path: ", assetPath);
                 // Register base Data/ as fallback so world terrain files are
@@ -1435,9 +1521,9 @@ bool Application::initialize() {
             if (!am) return icons;
             // Manifest keys are normalised: lower case, backslashes.
             static const std::string kPrefix = "interface\\icons\\";
-            for (const auto& [path, entry] : am->getManifest().getEntries()) {
-                (void)entry;
-                if (path.compare(0, kPrefix.size(), kPrefix) != 0) continue;
+            // From the manifest or the archives' listfiles, whichever is the
+            // source.
+            for (const std::string& path : am->listFiles(kPrefix)) {
                 // SetTexture wants the path without the extension, which is
                 // also how every icon is named everywhere else in the
                 // interface.
@@ -1471,7 +1557,13 @@ bool Application::initialize() {
             // The expansion still wins if it does ship an interface, which is
             // what an expansion-specific FrameXML would be for.
             std::string interfaceRoot = dataPath;
-            if (assetPath != dataPath) {
+            if (assetManager->isMpqMode()) {
+                // The interface's scripts are inside the archives; the addon
+                // manager reads a folder. They are written once into
+                // cache/interface_mpq (the Lua, XML and TOC files of FrameXML,
+                // GlueXML and the Blizzard addons) and read from there.
+                interfaceRoot = writeInterfaceFromArchives(*assetManager);
+            } else if (assetPath != dataPath) {
                 std::error_code ec;
                 for (const char* cased : {"/interface", "/Interface"}) {
                     if (std::filesystem::is_directory(assetPath + cased, ec)) {

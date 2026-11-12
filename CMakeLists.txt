@@ -698,6 +698,7 @@ set(WOWEE_SOURCES
     src/core/memory_monitor.cpp
     src/core/app_clock.cpp
     src/core/config_paths.cpp
+    src/core/dropin.cpp
     src/core/frame_pacer.cpp
     src/core/frame_profiler.cpp
     src/core/https_get.cpp
@@ -819,6 +820,7 @@ set(WOWEE_SOURCES
     src/pipeline/asset_manager.cpp
     src/pipeline/asset_inventory.cpp
     src/pipeline/asset_manifest.cpp
+    src/pipeline/mpq_archive_set.cpp
     src/pipeline/loose_file_reader.cpp
     src/pipeline/m2_loader.cpp
     src/pipeline/wmo_loader.cpp
@@ -2269,6 +2271,29 @@ else()
     message(STATUS "  asset panel in the client: DISABLED (needs StormLib and extern/imgui)")
 endif()
 
+# ---- Tool: wowee_pack and the drop-in executable ----
+# wowee_dropin (not built by default) writes dropin/wowee.exe: the client
+# without its debug information and with its own files (assets/, addons/,
+# Data/) appended, to be copied alone into an original 3.3.5a folder
+# (include/core/dropin.hpp). The DLLs it links against are not inside it.
+add_executable(wowee_pack tools/wowee_pack/main.cpp)
+set_target_properties(wowee_pack PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+if(CMAKE_STRIP)
+    set(WOWEE_DROPIN_STRIP ${CMAKE_STRIP} --strip-debug -o ${CMAKE_BINARY_DIR}/dropin/wowee.stripped.exe $<TARGET_FILE:wowee>)
+else()
+    set(WOWEE_DROPIN_STRIP ${CMAKE_COMMAND} -E copy $<TARGET_FILE:wowee> ${CMAKE_BINARY_DIR}/dropin/wowee.stripped.exe)
+endif()
+add_custom_target(wowee_dropin
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/dropin
+    COMMAND ${WOWEE_DROPIN_STRIP}
+    COMMAND wowee_pack ${CMAKE_BINARY_DIR}/dropin/wowee.stripped.exe ${CMAKE_BINARY_DIR}/dropin/$<TARGET_FILE_NAME:wowee>
+            $<TARGET_FILE_DIR:wowee> assets addons Data
+    COMMAND ${CMAKE_COMMAND} -E remove ${CMAKE_BINARY_DIR}/dropin/wowee.stripped.exe
+    DEPENDS wowee wowee_pack wowee_assets_sync
+    COMMENT "Drop-in executable: ${CMAKE_BINARY_DIR}/dropin/$<TARGET_FILE_NAME:wowee>"
+    VERBATIM
+)
+
 # ---- Tool: dbc_to_csv (DBC → CSV text) ----
 add_executable(dbc_to_csv
     tools/dbc_to_csv/main.cpp
@@ -2625,6 +2650,7 @@ add_executable(wowee_editor
     src/pipeline/asset_manager.cpp
     src/pipeline/asset_inventory.cpp
     src/pipeline/asset_manifest.cpp
+    src/pipeline/mpq_archive_set.cpp
     src/pipeline/loose_file_reader.cpp
     src/pipeline/m2_loader.cpp
     src/pipeline/wmo_loader.cpp
