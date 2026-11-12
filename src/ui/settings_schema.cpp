@@ -501,15 +501,6 @@ constexpr SettingDesc kSchema[] = {
      "it a crowded view keeps the most important near the camera, and a\n"
      "light can drop out as the camera moves. More costs trace time.\n"
      "512 is the default.", "", 512},
-    // One emitter's glow as several lights along its particles' mean path
-    // (rt_particle_lights.hpp), together as bright as the one.
-    {"rtparticlelights", "Point lights per particle light", SettingKind::Int, 1, 10, 1, "Debug Glow", "",
-     "How many lights one emitter's sparks or flames give: 1 is one\n"
-     "light where its particles are on average halfway through their\n"
-     "life; more spread along their way from the emitter to where they\n"
-     "fade, the first the strongest, all together as bright as one.\n"
-     "More costs trace time. Not in the original client.", "", 1,
-     "raytracedlighting"},
     {"rtpointselfshadow", "Point light self-shadowing", SettingKind::Bool, 0, 0, 0,
      "Debug Lights", "",
      "A lamp, torch or brazier is shadowed by its own model too: its\n"
@@ -549,6 +540,15 @@ constexpr SettingDesc kSchema[] = {
     {"dbgparticlelightreach", "Particles: reach (%)", SettingKind::Int, 100, 1000, 10, "Debug Glow", "",
      "How far its light reaches: where the falloff starts and ends.\n"
      "Ray traced. 100 is its own.", "", 100},
+    // One emitter's glow as several lights along its particles' mean path
+    // (rt_particle_lights.hpp), together as bright as the one.
+    {"rtparticlelights", "Point lights per particle light", SettingKind::Int, 1, 10, 1, "Debug Glow", "",
+     "How many lights one emitter's sparks or flames give: 1 is one\n"
+     "light where its particles are on average halfway through their\n"
+     "life; more spread along their way from the emitter to where they\n"
+     "fade, the first the strongest, all together as bright as one.\n"
+     "More costs trace time. Not in the original client.", "", 1,
+     "raytracedlighting"},
 
     {"dbgshadowdarkness", "Shadow darkness, ray traced (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "Ray traced",
      "How much of the light a shadow takes where the ray tracing has a\n"
