@@ -2393,6 +2393,35 @@ std::optional<unit_target::Range> SpellHandler::spellRange(uint32_t spellId, uin
     return spellReach(spellId, *caster, nullptr, owner_.getSpellTargetKind(spellId) == 1);
 }
 
+SpellHandler::TooltipRange SpellHandler::tooltipRange(uint32_t spellId) const {
+    TooltipRange out;
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    if (it == owner_.spellNameCacheRef().end() || !player) return out;
+    const auto& e = it->second;
+    if ((e.attr & 0x404u) != 0 || (e.attrEx3 & 0x40000000u) != 0) return out;
+    out.shown = true;
+    // 0x007ff380 and 0x00800770(spell, 5): a melee row with no Range
+    // modifier on the spell says MELEE_RANGE.
+    if (e.hasRangeRow && (e.rangeFlags & 1u) != 0 && !spellModifiers(spellId, spell_mods::kOpRange).any) {
+        out.melee = true;
+        return out;
+    }
+    out.hostile = spellReach(spellId, *player, nullptr, false);
+    out.friendly = spellReach(spellId, *player, nullptr, true);
+    // 0x007ff3c0 / 0x007ff400: a ranged row's minimum, both ends, is the
+    // row's own for the side the spell is aimed at (0x007fe1b0) and 5 more.
+    if (e.hasRangeRow && (e.rangeFlags & 2u) != 0) {
+        const int k = owner_.getSpellTargetKind(spellId) == 1 ? 1 : 0;
+        const float m = (e.rangeFlags & 1u) != 0 ? 0.0f
+                        : std::max(0.0f, e.rangeMin[k]) + ((e.rangeFlags & 0x7fffffffu) != 0 ? 5.0f : 0.0f);
+        out.hostile.min = m;
+        out.friendly.min = m;
+    }
+    return out;
+}
+
 std::optional<bool> SpellHandler::reachAnswer(uint32_t spellId, uint64_t casterGuid, uint64_t unitGuid) const {
     loadSpellNameCache();
     const auto it = owner_.spellNameCacheRef().find(spellId);

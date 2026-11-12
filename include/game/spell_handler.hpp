@@ -436,6 +436,18 @@ public:
     [[nodiscard]] std::optional<bool> reachAnswer(uint32_t spellId, uint64_t caster, uint64_t unit) const;
     /// 0x00801650 with no unit: the spell's reach from the caster.
     [[nodiscard]] std::optional<unit_target::Range> spellRange(uint32_t spellId, uint64_t caster) const;
+    /// The reach a spell's tooltip states (0x006238a0): none where
+    /// Attributes 0x404 or AttributesEx3 0x40000000 keep it off; "melee"
+    /// for a melee row (Flags 1) no Range modifier touches; else 0x007ff480
+    /// from the player, hostile and friendly, a ranged row's minimum both
+    /// replaced by 0x007ff400's.
+    struct TooltipRange {
+        bool shown = false;
+        bool melee = false;
+        unit_target::Range hostile;
+        unit_target::Range friendly;
+    };
+    [[nodiscard]] TooltipRange tooltipRange(uint32_t spellId) const;
     /// The item the running cast was cast from (SMSG_SPELL_START's caster
     /// where it is not the unit), 0 for none (0x00805fc0).
     [[nodiscard]] uint64_t currentCastItemGuid() const { return casting_ ? castItemGuid_ : 0; }

@@ -2889,6 +2889,9 @@ static std::string withNumber(const std::string& format, const char* token, floa
     return out;
 }
 
+static std::string formatGlobal(lua_State* L, const std::string& format,
+                                const std::vector<std::string>& args);
+
 static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh,
                              uint32_t spellId) {
     if (!w || !gh || spellId == 0) return false;
@@ -2923,9 +2926,59 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
         const uint32_t divisor = info.powerType < 7 ? wowee::addons::kPowerDivisors[info.powerType] : 1;
         cost = std::to_string(info.manaCost / divisor) + (*unit ? std::string(" ") + unit : "");
     }
-    if (info.maxRange > 0.0f) {
-        range = withNumber(globalOr(L, "SPELL_RANGE", "%s yd range"), "%s", info.maxRange);
+    // The reach to the cost's right, as 0x006238a0 writes it: MELEE_RANGE,
+    // or SPELL_RANGE with "max" or "min-max" yards rounded, the same for
+    // friend and foe; where they differ, SPELL_RANGE_DUAL with ENEMY on a
+    // line of its own ahead of the cost's, then FRIENDLY beside the cost -
+    // with no cost the enemy's stands left of both, as the client's buffer
+    // keeps it, and the friendly numbers go "min-max" by the enemy's minimum.
+    // SPELL_RANGE_UNLIMITED from 50000 yards.
+    if (const auto* sh = gh->getSpellHandler()) {
+        const auto reach = sh->tooltipRange(spellId);
+        const auto yards = [](float shownMin, float min, float max) {
+            char b[32];
+            if (shownMin <= 0.0f) {
+                std::snprintf(b, sizeof(b), "%ld", std::lrint(max));
+            } else {
+                std::snprintf(b, sizeof(b), "%ld-%ld", std::lrint(min), std::lrint(max));
+            }
+            return std::string(b);
+        };
+        const auto differs = [](float a, float b) { return std::fabs(a - b) >= 2.3841858e-07f; };
+        const auto& h = reach.hostile;
+        const auto& f = reach.friendly;
+        if (!reach.shown) {
+            // Attributes 0x404 or AttributesEx3 0x40000000: no reach.
+        } else if (reach.melee) {
+            range = globalOr(L, "MELEE_RANGE", "Melee Range");
+        } else if (!differs(h.min, f.min) && !differs(h.max, f.max)) {
+            if (h.max > 0.0f) {
+                range = h.max < 50000.0f
+                    ? formatGlobal(L, globalOr(L, "SPELL_RANGE", "%s yd range"), {yards(h.min, h.min, h.max)})
+                    : globalOr(L, "SPELL_RANGE_UNLIMITED", "Unlimited range");
+            }
+        } else {
+            const std::string dual = globalOr(L, "SPELL_RANGE_DUAL", "%1$s: %2$s yd range");
+            std::string enemy;
+            if (h.max > 0.0f) {
+                enemy = h.max < 50000.0f
+                    ? formatGlobal(L, dual, {globalOr(L, "ENEMY", "Enemy"), yards(h.min, h.min, h.max)})
+                    : globalOr(L, "SPELL_RANGE_UNLIMITED", "Unlimited range");
+            }
+            if (cost.empty()) {
+                cost = enemy;
+                line(enemy, "", 1.0f, 1.0f, 1.0f);
+            } else {
+                line(" ", enemy, 1.0f, 1.0f, 1.0f);
+            }
+            if (f.max > 0.0f) {
+                range = f.max < 50000.0f
+                    ? formatGlobal(L, dual, {globalOr(L, "FRIENDLY", "Friendly"), yards(h.min, f.min, f.max)})
+                    : globalOr(L, "SPELL_RANGE_UNLIMITED", "Unlimited range");
+            }
+        }
     }
+    if (cost.empty()) std::swap(cost, range);
     if (!cost.empty() || !range.empty()) line(cost, range, 1.0f, 1.0f, 1.0f);
 
     // The cast, as 0x006238a0 says it - none for a passive spell (Attributes
