@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <climits>
 #include <cmath>
+#include <cstring>
 #include <ranges>
 
 namespace wowee {
@@ -12,13 +13,22 @@ namespace ui {
 
 namespace {
 
-bool contains(const std::string& s, const char* sub) {
-    return s.find(sub) != std::string::npos;
-}
-
 std::string upper(std::string s) {
     for (char& c : s) c = static_cast<char>(::toupper(static_cast<unsigned char>(c)));
     return s;
+}
+
+/// contains(upper(s), sub) for an upper-case `sub`, without the copy.
+bool containsUpper(const std::string& s, const char* sub) {
+    const size_t n = std::strlen(sub);
+    if (n == 0) return true;
+    if (s.size() < n) return false;
+    for (size_t i = 0; i + n <= s.size(); ++i) {
+        size_t k = 0;
+        while (k < n && static_cast<char>(::toupper(static_cast<unsigned char>(s[i + k]))) == sub[k]) ++k;
+        if (k == n) return true;
+    }
+    return false;
 }
 
 int strataRank(FrameStrata s) { return static_cast<int>(s); }
@@ -26,18 +36,20 @@ int layerRank(DrawLayer l) { return static_cast<int>(l); }
 
 } // namespace
 
-AnchorPoint resolveAnchorPoint(const std::string& rawName) {
-    const std::string name = upper(rawName);
+AnchorPoint resolveAnchorPoint(const std::string& name) {
     AnchorPoint p;
     // Vertical: TOP is 1, BOTTOM is 0, neither is centred. Tested before the
     // horizontal half because the names combine (TOPLEFT is both).
-    if (contains(name, "TOP"))         p.fy = 1.0f;
-    else if (contains(name, "BOTTOM")) p.fy = 0.0f;
-    else                               p.fy = 0.5f;
+    // Asked of the name as written, each character upper-cased as compared:
+    // the same answers as upper-casing a copy first, without the copy. The
+    // layout asks this of every anchor of every frame it places, each frame.
+    if (containsUpper(name, "TOP"))         p.fy = 1.0f;
+    else if (containsUpper(name, "BOTTOM")) p.fy = 0.0f;
+    else                                    p.fy = 0.5f;
 
-    if (contains(name, "LEFT"))        p.fx = 0.0f;
-    else if (contains(name, "RIGHT"))  p.fx = 1.0f;
-    else                               p.fx = 0.5f;
+    if (containsUpper(name, "LEFT"))        p.fx = 0.0f;
+    else if (containsUpper(name, "RIGHT"))  p.fx = 1.0f;
+    else                                    p.fx = 0.5f;
     return p;
 }
 
@@ -1073,9 +1085,24 @@ void WidgetTree::layoutWidgetSelf(uint32_t id, float screenW, float screenH) {
     // a frame pinned at two opposing corners gets sized without anyone calling
     // SetSize.
     struct Constraint { float f; float target; };
-    std::vector<Constraint> cx, cy;
-    cx.reserve(w->anchors.size());
-    cy.reserve(w->anchors.size());
+    // A frame has a handful of anchors (nine points at most, as a rule): the
+    // constraints are kept in place rather than in two heap vectors a frame
+    // per widget, and only spill to the heap past that.
+    struct Constraints {
+        Constraint inline_[9];
+        std::vector<Constraint> spill;
+        size_t n = 0;
+        void push_back(const Constraint& c) {
+            if (n < 9 && spill.empty()) { inline_[n++] = c; return; }
+            if (spill.empty()) spill.assign(inline_, inline_ + n);
+            spill.push_back(c);
+            ++n;
+        }
+        [[nodiscard]] bool empty() const { return n == 0; }
+        [[nodiscard]] size_t size() const { return n; }
+        const Constraint& operator[](size_t i) const { return spill.empty() ? inline_[i] : spill[i]; }
+    };
+    Constraints cx, cy;
 
     for (const Anchor& a : w->anchors) {
         const Widget* rel = (a.relativeTo != 0) ? get(a.relativeTo) : parent;
@@ -1093,7 +1120,7 @@ void WidgetTree::layoutWidgetSelf(uint32_t id, float screenW, float screenH) {
         cy.push_back({.f = mp.fy, .target = relBottom + rp.fy * relH + a.y * es});
     }
 
-    auto solveAxis = [](const std::vector<Constraint>& cs, float explicitSize,
+    auto solveAxis = [](const Constraints& cs, float explicitSize,
                         float parentOrigin, float parentSize,
                         float& outOrigin, float& outSize) {
         if (cs.empty()) {
