@@ -2936,12 +2936,44 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
 
     const auto info = gh->getSpellData(spellId);
     std::string cost, range;
-    if (!brief && info.manaCost > 0) {
-        const char* named = game::powerTypeName(info.powerType);
-        const char* unit = named ? named : "";
-        // Over the power's divisor: rage and runic power are kept in tenths.
-        const uint32_t divisor = info.powerType < 7 ? wowee::addons::kPowerDivisors[info.powerType] : 1;
-        cost = std::to_string(info.manaCost / divisor) + (*unit ? std::string(" ") + unit : "");
+    // The cost, as 0x006238a0 words it, over the power's divisor
+    // (0x007fde00): a rune spell's RUNE_COST_BLOOD/UNHOLY/FROST joined by
+    // spaces; one with a cost each second "<POWER>_COST_PER_TIME" (cost,
+    // per second); else "<POWER>_COST" from 1 up - MANA_COST to
+    // RUNIC_POWER_COST, HEALTH_COST for any other type. A spell whose
+    // power has a PowerDisplay row names it by that row's string instead
+    // (POWER_DISPLAY_COST, POWER_DISPLAY_COST_PER_TIME).
+    if (const auto* sh = gh->getSpellHandler(); sh && !brief) {
+        static constexpr const char* kCostKeys[] = {"MANA_COST", "RAGE_COST", "FOCUS_COST", "ENERGY_COST",
+                                                    "HAPPINESS_COST", "RUNE_COST", "RUNIC_POWER_COST"};
+        const auto c = sh->tooltipCost(spellId);
+        const bool listed = c.powerType >= 0 && c.powerType < 7;
+        const int32_t divisor = listed ? static_cast<int32_t>(wowee::addons::kPowerDivisors[c.powerType]) : 1;
+        const int32_t amount = c.cost / divisor;
+        const int32_t perSecond = c.perSecond / divisor;
+        const std::string key = listed ? kCostKeys[c.powerType] : "HEALTH_COST";
+        std::optional<std::string> shown;
+        if (c.powerDisplayId != 0) {
+            if (const auto row = wowee::addons::powerDisplayRow(gh, c.powerDisplayId)) {
+                shown = globalOr(L, row->token.c_str(), row->token.c_str());
+            }
+        }
+        if (c.powerType == 5) {
+            static constexpr const char* kRuneKeys[] = {"RUNE_COST_BLOOD", "RUNE_COST_UNHOLY", "RUNE_COST_FROST"};
+            for (int r = 0; c.hasRuneRow && r < 3; ++r) {
+                if (c.runes[r] == 0) continue;
+                if (!cost.empty()) cost += ' ';
+                cost += formatGlobal(L, globalOr(L, kRuneKeys[r], "%d"), {std::to_string(c.runes[r])});
+            }
+        } else if (perSecond > 0) {
+            cost = shown ? formatGlobal(L, globalOr(L, "POWER_DISPLAY_COST_PER_TIME", "%d %s, plus %d per sec"),
+                                        {std::to_string(amount), *shown, std::to_string(perSecond)})
+                         : formatGlobal(L, globalOr(L, (key + "_PER_TIME").c_str(), "%d, plus %d per sec"),
+                                        {std::to_string(amount), std::to_string(perSecond)});
+        } else if (amount >= 1) {
+            cost = shown ? formatGlobal(L, globalOr(L, "POWER_DISPLAY_COST", "%d %s"), {std::to_string(amount), *shown})
+                         : formatGlobal(L, globalOr(L, key.c_str(), "%d"), {std::to_string(amount)});
+        }
     }
     // The reach to the cost's right, as 0x006238a0 writes it: MELEE_RANGE,
     // or SPELL_RANGE with "max" or "min-max" yards rounded, the same for

@@ -66,6 +66,11 @@ extern "C" {
 
 namespace wowee::addons {
 
+/// A PowerDisplay.dbc row: ActualType, GlobalStringBaseTag and its colour,
+/// three bytes after the strings (0x0065c290's record +4, +8, +0xc..+0xe).
+struct PowerDisplayRow { uint32_t actualType = 0; std::string token; uint8_t rgb[3] = {}; };
+std::optional<PowerDisplayRow> powerDisplayRow(game::GameHandler* gh, uint32_t id);
+
 // ---- String helper ----
 inline void toLowerInPlace(std::string& s) {
     for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));

@@ -448,6 +448,19 @@ public:
         unit_target::Range friendly;
     };
     [[nodiscard]] TooltipRange tooltipRange(uint32_t spellId) const;
+    /// What a spell's tooltip says it costs the player (0x006238a0): the
+    /// cost (0x008012f0) and the cost each second (0x007ff100), neither yet
+    /// over the power's divisor; a rune spell's SpellRuneCost row; the
+    /// PowerDisplay row its power is named by.
+    struct TooltipCost {
+        int32_t powerType = 0;
+        int32_t cost = 0;
+        int32_t perSecond = 0;
+        bool hasRuneRow = false;
+        std::array<uint32_t, 3> runes{};
+        uint32_t powerDisplayId = 0;
+    };
+    [[nodiscard]] TooltipCost tooltipCost(uint32_t spellId) const;
     /// The item the running cast was cast from (SMSG_SPELL_START's caster
     /// where it is not the unit), 0 for none (0x00805fc0).
     [[nodiscard]] uint64_t currentCastItemGuid() const { return casting_ ? castItemGuid_ : 0; }

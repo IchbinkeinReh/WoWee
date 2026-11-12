@@ -418,6 +418,7 @@
     "BaseLevel": 38,
     "ManaCostPerLevel": 43,
     "ManaPerSecond": 44,
+    "ManaPerSecondPerLevel": 45,
     "EffectMechanic0": 83,
     "EffectTriggerSpell0": 116,
     "ManaCostPercentage": 204,

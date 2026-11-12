@@ -2393,6 +2393,35 @@ std::optional<unit_target::Range> SpellHandler::spellRange(uint32_t spellId, uin
     return spellReach(spellId, *caster, nullptr, owner_.getSpellTargetKind(spellId) == 1);
 }
 
+SpellHandler::TooltipCost SpellHandler::tooltipCost(uint32_t spellId) const {
+    TooltipCost out;
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    if (it == owner_.spellNameCacheRef().end() || !player) return out;
+    const auto& e = it->second;
+    out.powerType = static_cast<int32_t>(e.powerType);
+    out.powerDisplayId = e.powerDisplayId;
+    out.cost = powerCost(spellId, *player, 0);
+    // 0x007ff100: ManaPerSecond and its growth for each level past
+    // BaseLevel, a positive one through the cost modifiers' percent (op 14).
+    const uint16_t li = fieldIndex(UF::UNIT_FIELD_LEVEL);
+    int32_t level = li != 0xFFFF ? static_cast<int32_t>(player->getField(li)) : 0;
+    if (e.maxLevel > 0 && e.maxLevel < level) level = e.maxLevel;
+    if (level < 0) level = 0;
+    out.perSecond = (level - e.baseLevel) * e.manaPerSecondPerLevel + e.manaPerSecond;
+    if (out.perSecond > 0) {
+        if (const auto mods = spellModifiers(spellId, 14); mods.any) out.perSecond = mods.pct * out.perSecond / 100;
+    }
+    if (out.powerType == 5) {
+        if (const auto* row = runeCostRow(e.runeCostId)) {
+            out.runes = *row;
+            out.hasRuneRow = true;
+        }
+    }
+    return out;
+}
+
 SpellHandler::TooltipRange SpellHandler::tooltipRange(uint32_t spellId) const {
     TooltipRange out;
     loadSpellNameCache();
@@ -5616,7 +5645,8 @@ namespace {
 // 0x008091d0 read beside them, named by the WotLK layout alone.
 struct CastCheckColumns {
     uint32_t mechanic, stances, stancesNot, casterState, casterStateNot, casterAura, excludeAura, interrupt,
-        auraInterrupt, channelInterrupt, powerType, manaCost, perLevel, costPct, baseLevel, maxLevel,
+        auraInterrupt, channelInterrupt, powerType, manaCost, perLevel, costPct, perSecond, perSecondPerLevel,
+        baseLevel, maxLevel,
         castTimeIndex, effectMechanic, trigger, prevention, minFaction, minRep, auraVision, areaGroup, itemClass,
         itemSubClassMask, runeCost, targetStateNot, targetAura, excludeTargetAura, totem, totemCategory, dieSides, pointsPerLevel,
         spellDifficulty, spellFocus;
@@ -5631,6 +5661,10 @@ struct CastCheckColumns {
         channelInterrupt = named("ChannelInterruptFlags"), powerType = named("PowerType");
         manaCost = named("ManaCost"), perLevel = named("ManaCostPerLevel"), costPct = named("ManaCostPercentage");
         baseLevel = named("BaseLevel"), maxLevel = named("MaxLevel"), castTimeIndex = named("CastingTimeIndex");
+        // The per-level column follows ManaPerSecond in every layout; a
+        // data dir copied before it was named still finds it.
+        perSecond = named("ManaPerSecond"), perSecondPerLevel = named("ManaPerSecondPerLevel");
+        if (perSecondPerLevel == 0xFFFFFFFFu && perSecond != 0xFFFFFFFFu) perSecondPerLevel = perSecond + 1;
         effectMechanic = named("EffectMechanic0"), trigger = named("EffectTriggerSpell0");
         prevention = named("PreventionType"), minFaction = named("MinFactionId"), minRep = named("MinReputation");
         auraVision = named("RequiredAuraVision");
@@ -5665,6 +5699,8 @@ struct CastCheckColumns {
         entry.manaCost = n(manaCost);
         entry.manaCostPerLevel = n(perLevel);
         entry.manaCostPct = n(costPct);
+        entry.manaPerSecond = n(perSecond);
+        entry.manaPerSecondPerLevel = n(perSecondPerLevel);
         entry.baseLevel = n(baseLevel);
         entry.maxLevel = n(maxLevel);
         entry.castingTimeIndex = u(castTimeIndex);

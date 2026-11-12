@@ -1393,9 +1393,7 @@ const VehiclePowerRow* vehiclePowerRow(game::GameHandler* gh, uint32_t vehicleId
     const auto it = rows.find(vehicleId);
     return it != rows.end() ? &it->second : nullptr;
 }
-/// A PowerDisplay.dbc row: ActualType, GlobalStringBaseTag and its colour,
-/// three bytes after the strings (0x0065c290's record +4, +8, +0xc..+0xe).
-struct PowerDisplayRow { uint32_t actualType = 0; std::string token; uint8_t rgb[3] = {}; };
+}  // namespace
 std::optional<PowerDisplayRow> powerDisplayRow(game::GameHandler* gh, uint32_t id) {
     auto* am = gh ? gh->services().assetManager : nullptr;
     auto dbc = am && am->isInitialized() ? am->loadDBCOptional("PowerDisplay.dbc") : nullptr;
@@ -1409,7 +1407,6 @@ std::optional<PowerDisplayRow> powerDisplayRow(game::GameHandler* gh, uint32_t i
     for (int i = 0; i < 3; ++i) out.rgb[i] = rec[12 + i];
     return out;
 }
-}  // namespace
 
 // UnitPowerType(unit[, index]) (0x0060f100): the power type and its token.
 // A visible unit in a vehicle whose row has flag 0x100000 shows its power the

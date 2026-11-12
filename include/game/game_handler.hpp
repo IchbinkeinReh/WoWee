@@ -5742,6 +5742,9 @@ public:
         int32_t manaCost = 0;
         int32_t manaCostPerLevel = 0;
         int32_t manaCostPct = 0;
+        /// Spell.dbc ManaPerSecond and ManaPerSecondPerLevel (0x007ff100).
+        int32_t manaPerSecond = 0;
+        int32_t manaPerSecondPerLevel = 0;
         int32_t baseLevel = 0;
         int32_t maxLevel = 0;
         uint32_t castingTimeIndex = 0;
