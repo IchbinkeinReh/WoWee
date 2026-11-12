@@ -62,6 +62,11 @@ const uint RT_GB_SHARE_TERRAIN = 2u;  // the ground
 // yards over the Valley of Strength faded the triangles turned a degree from
 // it to nothing, hard dark wedges in its light (1594 -4402, 19:30).
 const uint RT_GB_SHARE_LAMP_NORMAL = 4u;
+// A character's or a creature's body: a smooth surface drawn by its
+// interpolated normal over low-poly faces. The trace lights it by that
+// normal alone and never takes one of its faces turned up for a floor
+// (rt_trace's smoothBody).
+const uint RT_GB_SHARE_SMOOTH = 8u;
 
 vec2 rtOctEncode(vec3 n) {
     n /= abs(n.x) + abs(n.y) + abs(n.z);
@@ -158,7 +163,7 @@ void rtSurfacePack(RtSurface s, vec3 c0, out vec4 gb0, out vec4 gb1) {
                      s.occY.g > 1e-6 ? s.occE.g / s.occY.g : 1.0,
                      s.occY.b > 1e-6 ? s.occE.b / s.occY.b : 1.0);
     vec3 kp = s.kp * 0.5;
-    uint f = (s.flags & RT_GB_TRANSITION) != 0u ? rtBits6(s.outside) : (s.storeyBound & 7u);
+    uint f = (s.flags & RT_GB_TRANSITION) != 0u ? rtBits6(s.outside) : (s.storeyBound & 15u);
     uint w0 = rtBits10(oct.x) | (rtBits5(knee.r) << 10) | ((f & 1u) << 15);
     uint w1 = rtBits10(oct.y) | (rtBits5(knee.g) << 10) | (((f >> 1) & 1u) << 15);
     uint w2 = rtByte(s.map) | ((s.flags & 127u) << 8) | (((f >> 2) & 1u) << 15);

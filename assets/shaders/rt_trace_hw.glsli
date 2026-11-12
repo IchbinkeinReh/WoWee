@@ -150,8 +150,11 @@ bool rtClosestEx(vec3 origin, vec3 dir, float tMax, inout uint rng,
     surface = vec4(0.0);
     bool found = false;
     uint instIdx = 0u, prim = 0u;
+    // Only the ground and the buildings while rtStructureOnly is set (the
+    // software tracer's rule, the hardware's ray mask).
+    uint closestMask = rtStructureOnly ? RT_RAY_STRUCTURE : 0xFFu;
     rayQueryEXT q;
-    rayQueryInitializeEXT(q, rtTlas, gl_RayFlagsNoneEXT, 0xFF, origin, 0.0, dir, tMax);
+    rayQueryInitializeEXT(q, rtTlas, gl_RayFlagsNoneEXT, closestMask, origin, 0.0, dir, tMax);
     RT_RESOLVE_CANDIDATES(q, rng);
     if (rayQueryGetIntersectionTypeEXT(q, true) != gl_RayQueryCommittedIntersectionNoneEXT) {
         found = true;
@@ -160,7 +163,7 @@ bool rtClosestEx(vec3 origin, vec3 dir, float tMax, inout uint rng,
         prim = rayQueryGetIntersectionPrimitiveIndexEXT(q, true);
     }
     rayQueryEXT d;
-    rayQueryInitializeEXT(d, rtDynamicTlas, gl_RayFlagsNoneEXT, 0xFF, origin, 0.0, dir, t);
+    rayQueryInitializeEXT(d, rtDynamicTlas, gl_RayFlagsNoneEXT, closestMask, origin, 0.0, dir, t);
     RT_RESOLVE_CANDIDATES(d, rng);
     if (rayQueryGetIntersectionTypeEXT(d, true) != gl_RayQueryCommittedIntersectionNoneEXT) {
         found = true;

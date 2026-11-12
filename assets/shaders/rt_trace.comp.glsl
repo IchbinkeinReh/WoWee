@@ -176,6 +176,27 @@ bool rtOnStorey(vec4 storey, float z) {
     return storey.z < 0.5 || (z >= storey.x - RT_STOREY_MARGIN && z <= storey.y + RT_STOREY_MARGIN);
 }
 
+// Whether a baked colour at p lies on another storey than a building light's
+// (rtOnStorey's heights alone are not enough): under its floor with a floor
+// or a ceiling of the ground or a building straight over it no higher than
+// that floor - a cellar under the hall - or over its ceiling with one
+// straight under it no lower than that ceiling - the rooms upstairs. Out of
+// the heights alone, a cave's uneven floor dipping a foot under the floor
+// straight below its lamps took none of their light: a black patch with the
+// floor's contour for its edge in the Deadmines (user167). What stands over
+// and under the point is asked once, and only for a point out of a light's
+// heights (storeyAbove, storeyBelow in main).
+const float RT_STOREY_LOOK = 40.0;
+float rtStructureHeight(vec3 origin, float dirZ, inout uint rng) {
+    float t;
+    vec3 hitN;
+    vec4 surf;
+    rtStructureOnly = true;
+    bool hit = rtClosest(origin, vec3(0.0, 0.0, dirZ), RT_STOREY_LOOK, rng, t, hitN, surf);
+    rtStructureOnly = false;
+    return hit ? origin.z + dirZ * t : dirZ * 1e30;
+}
+
 // The point shadow sample of a light that the ground or a building stops
 // (rt_lights::hardShadowVisibility). The surfaces take the point lights as
 // their unshadowed light times mix(1, vis, s), s the point shadows' strength
@@ -407,6 +428,9 @@ void main() {
     // faces, a fire low over Orgrimmar's streets faded the triangles turned
     // a degree from it to nothing.
     bool terrain = (shareBits & (RT_GB_SHARE_TERRAIN | RT_GB_SHARE_LAMP_NORMAL)) != 0u;
+    // A character's or a creature's body: a smooth surface over low-poly
+    // faces, lit by its smooth normal alone (RT_GB_SHARE_SMOOTH).
+    bool smoothBody = (shareBits & RT_GB_SHARE_SMOOTH) != 0u;
     // A room's baked colour: its normal already blended toward its face in
     // the G-buffer (rtInteriorLampNormal), so not again here.
     bool normalResolved = normalIn.w > 0.5;
@@ -519,7 +543,7 @@ void main() {
     // smoothing stays: their normals lie within some fifteen degrees of
     // their faces (rtNormalAgreement). A room's baked colour comes with the
     // same rule applied already, to its vertex normal (normalResolved).
-    vec3 lightN = normalize(mix(n, shadingN, (normalResolved || terrain) ? 1.0 : rtNormalAgreement(n, shadingN, pass.tune4.xy)));
+    vec3 lightN = normalize(mix(n, shadingN, (normalResolved || terrain || smoothBody) ? 1.0 : rtNormalAgreement(n, shadingN, pass.tune4.xy)));
     // What "behind the surface" and "a lamp low over it" below are measured
     // against: a floor's face, as they were written for (a plank, a step, a
     // curb); a room's wall its smooth normal (rtInteriorLampNormal leaves
@@ -545,7 +569,12 @@ void main() {
     // half a yard up - lit the triangles a degree or two turned toward it and
     // faded those turned away, and the edge of its light ran round it as a
     // ring of hard triangular wedges.
-    vec3 faceRef = (normalResolved || terrain) ? lightN
+    // A character's or a creature's body (RT_GB_SHARE_SMOOTH) by its smooth
+    // normal outright, as its picture is shaded, and never as a floor: its
+    // low-poly faces turned up - a shoulder, a bent back - took the floors'
+    // measures by the face, and with the half of the face elsewhere the lamps
+    // lit a Defias miner in the Deadmines facet by facet (user167).
+    vec3 faceRef = (normalResolved || terrain || smoothBody) ? lightN
                  : n.z >= RT_NORMAL_FLOOR_Z ? normalize(mix(n, lightN, floorLean)) : normalize(n + lightN);
     vec3 pointSum = vec3(0.0);
     float bakedSum = 0.0;
@@ -555,6 +584,10 @@ void main() {
     uint pointRays = rtRayCount(pass.rays.z);
     int picked[RT_MAX_RAYS] = int[RT_MAX_RAYS](-1, -1, -1, -1, -1);
     uint lightCount = uint(pass.params.z + 0.5);
+    // What of the ground and the buildings stands straight over and under
+    // the point, asked the first time a light's storey needs it.
+    float storeyAbove = 1e30, storeyBelow = -1e30;
+    bool storeyAboveKnown = false, storeyBelowKnown = false;
     for (uint i = 0u; i < lightCount; ++i) {
         RtPointLight light = rtPointLights[i];
         vec3 toLight = rtLightAim(light) - p;
@@ -562,7 +595,21 @@ void main() {
         float end = abs(light.positionEnd.w);
         if (d2 >= end * end) continue;
         // A building's light of another storey than this baked colour's.
-        if (storeyBound && light.positionEnd.w < 0.0 && !rtOnStorey(light.storey, p.z)) continue;
+        if (storeyBound && light.positionEnd.w < 0.0 && !rtOnStorey(light.storey, p.z)) {
+            if (p.z < light.storey.x) {
+                if (!storeyAboveKnown) {
+                    storeyAbove = rtStructureHeight(origin, 1.0, rng);
+                    storeyAboveKnown = true;
+                }
+                if (storeyAbove <= light.storey.x + RT_STOREY_MARGIN) continue;
+            } else {
+                if (!storeyBelowKnown) {
+                    storeyBelow = rtStructureHeight(origin, -1.0, rng);
+                    storeyBelowKnown = true;
+                }
+                if (storeyBelow >= light.storey.y - RT_STOREY_MARGIN) continue;
+            }
+        }
         float d = sqrt(d2);
         // Behind the surface itself - below a floor, behind a wall - no
         // light, by its geometric face, whatever its normal map says: a
@@ -583,7 +630,7 @@ void main() {
         // smooth normal faces keeps it the other way round.
         float faceFade = 1.0;
         float faceRise = d > 1e-4 ? dot(terrain ? faceRef : n, toLight) / d : 1.0;
-        if (d > 1e-4 && n.z >= RT_NORMAL_FLOOR_Z) {
+        if (d > 1e-4 && !smoothBody && n.z >= RT_NORMAL_FLOOR_Z) {
             faceFade = smoothstep(RT_FLOOR_FACE_FADE_LOW, RT_FLOOR_FACE_FADE_HIGH,
                                   max(dot(faceRef, toLight) / d, faceRise));
             if (faceFade <= 0.0) continue;
@@ -607,7 +654,7 @@ void main() {
         float ndl = d > 1e-4 ? (dot(nl, toLight / d) + pass.tune3.w) / (1.0 + pass.tune3.w) : 1.0;
         // A low light on a floor is lit as the face has it at the least, the
         // ground's falloff on any flat floor, however its normals lean.
-        if (d > 1e-4 && n.z >= RT_NORMAL_FLOOR_Z) {
+        if (d > 1e-4 && !smoothBody && n.z >= RT_NORMAL_FLOOR_Z) {
             float low = 1.0 - smoothstep(RT_LAMP_DETAIL_LOW, RT_LAMP_DETAIL_HIGH, dot(faceRef, toLight / d));
             ndl = max(ndl, low * (faceRise + pass.tune3.w) / (1.0 + pass.tune3.w));
         }

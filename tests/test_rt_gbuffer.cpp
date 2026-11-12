@@ -380,14 +380,14 @@ TEST_CASE("A baked colour's storey bit survives the words", "[rt_gbuffer]") {
         s.map = rng(0.0f, 1.0f);
         s.g = rng.v(0.0f, 0.5f);
         s.kp = rng.v(0.0f, 1.0f);
-        s.storeyBound = static_cast<uint32_t>(i & 7);  // bit 1: the ground, bit 2: an outside floor
+        s.storeyBound = static_cast<uint32_t>(i & 15);  // bit 1: the ground, bit 2: an outside floor, bit 3: a body
         const glm::vec3 c0(0.5f);
         const Texel t = unpack(pack(s, c0));
         CHECK(t.storeyBound == s.storeyBound);
         CHECK(t.flags == s.flags);
         CHECK(std::abs(t.map - s.map) <= 0.5f / 255.0f + 1e-5f);
         Surface u = s;
-        u.storeyBound = 7u - s.storeyBound;
+        u.storeyBound = 15u - s.storeyBound;
         const Texel tu = unpack(pack(u, c0));
         CHECK(tu.g == t.g);
         CHECK(tu.kp == t.kp);

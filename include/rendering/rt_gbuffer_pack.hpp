@@ -44,7 +44,9 @@ struct Surface {
     /// for the ground, which the lamps light by its smooth normal
     /// (rt_trace); bit 2 for a building's floor outside its rooms, whose
     /// normal is already the one the lamps light it by (wmo.frag,
-    /// RT_GB_SHARE_LAMP_NORMAL). It takes the outside share's bits.
+    /// RT_GB_SHARE_LAMP_NORMAL); bit 3 for a character's or a creature's body,
+    /// lit by its smooth normal alone (RT_GB_SHARE_SMOOTH). It takes the
+    /// outside share's bits.
     uint32_t storeyBound = 0;
 };
 
@@ -84,7 +86,7 @@ inline Words pack(const Surface& s, const glm::vec3& c0) {
     const glm::vec3 kp = s.kp * 0.5f;
     const auto byte = [](float v) { return quantise(v, 255.0f); };
     Words w{};
-    const uint32_t f = (s.flags & kTransition) != 0 ? quantise(s.outside, 63.0f) : (s.storeyBound & 7u);
+    const uint32_t f = (s.flags & kTransition) != 0 ? quantise(s.outside, 63.0f) : (s.storeyBound & 15u);
     w[0] = static_cast<uint16_t>(quantise(oct.x, 1023.0f) | (quantise(knee.r, 31.0f) << 10) | ((f & 1u) << 15));
     w[1] = static_cast<uint16_t>(quantise(oct.y, 1023.0f) | (quantise(knee.g, 31.0f) << 10) |
                                  (((f >> 1) & 1u) << 15));

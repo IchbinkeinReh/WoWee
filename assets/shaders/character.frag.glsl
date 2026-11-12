@@ -480,6 +480,9 @@ void main() {
     // does a NoAlphaAdd's opacity. Mod and Mod2x are drawn unlit.
     if (kGbuffer) {
         rtSurface.normal = norm;
+        // A body: lit by this smooth normal alone in the trace, its low-poly
+        // faces never taken for a floor (RT_GB_SHARE_SMOOTH).
+        rtSurface.storeyBound |= RT_GB_SHARE_SMOOTH;
         rtSurfaceScale(rtSurface, combineStages(vec4(vec3(tintR, tintG, tintB), opacity), tex0, tex1).rgb -
                                   combineStages(vec4(vec3(0.0), opacity), tex0, tex1).rgb);
         if (colourBlend == 3) rtSurfaceScale(rtSurface, vec3(opacity));
