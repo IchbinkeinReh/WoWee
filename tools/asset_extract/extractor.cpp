@@ -1,6 +1,7 @@
 #include "extractor.hpp"
 #include "path_mapper.hpp"
 #include "manifest_writer.hpp"
+#include "loose_movies.hpp"
 #include "open_format_emitter.hpp"
 
 #include <StormLib.h>
@@ -1042,6 +1043,10 @@ bool Extractor::run(const Options& opts) {
                   << "    - Another program (WoW client, antivirus) has the MPQ files locked\n"
                   << "    - Too many threads for the OS file-handle limit (try --threads 1)\n"
                   << "  Re-run with --verbose for detailed diagnostics.\n";
+    }
+
+    for (auto& entry : copyLooseMovies(opts.mpqDir, opts.locale, effectiveOutputDir)) {
+        manifestEntries.push_back(std::move(entry));
     }
 
     // Merge with existing manifest so partial extractions don't nuke prior entries

@@ -2512,18 +2512,14 @@ void GameHandler::registerRemainingOpcodes() {
             entityController_->invalidatePlayerName(guid);
         }
     };
-    // uint32 movieId - we don't play movies; acknowledge immediately.
+    // uint32 movieId (0x005235b0): the movie's file for this screen width
+    // goes to the interface as PLAY_MOVIE (0x0051d710); the server hears
+    // CMSG_COMPLETE_MOVIE when it has finished or been skipped
+    // (GameMovieFinished, 0x00518870).
     dispatchTable_[Opcode::SMSG_TRIGGER_MOVIE] = [this](network::Packet& packet) {
-        // uint32 movieId - we don't play movies; acknowledge immediately.
+        const uint32_t movieId = packet.hasRemaining(4) ? packet.readUInt32() : 0;
         packet.skipAll();
-        // WotLK servers expect CMSG_COMPLETE_MOVIE after the movie finishes;
-        // without it, the server may hang or disconnect the client.
-        uint16_t wire = wireOpcode(Opcode::CMSG_COMPLETE_MOVIE);
-        if (wire != 0xFFFF) {
-            network::Packet ack(wire);
-            socket->send(ack);
-            LOG_DEBUG("SMSG_TRIGGER_MOVIE: skipped, sent CMSG_COMPLETE_MOVIE");
-        }
+        triggerMovie(movieId);
     };
     // Server-side LFG invite timed out (no response within time limit)
     dispatchTable_[Opcode::SMSG_LFG_TIMEDOUT] = [this](network::Packet& packet) {

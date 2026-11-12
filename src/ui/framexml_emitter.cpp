@@ -924,14 +924,18 @@ struct Emitter {
         // clear out of its way. In WoW these are parentless because they are
         // declared at XML top level with no parent of their own.
         //
+        // MovieFrame is the other case of the same thing: its OnShow hides
+        // UIParent (MovieFrame_OnShow), so as UIParent's child it hid itself
+        // and the movie played behind nothing.
+        //
         // Named rather than derived from that rule, which would take in a
-        // hundred more: this list is UIPanelWindows' `area = "full"` entries,
-        // and it is the whole set the mechanism applies to. Detaching the rest
+        // hundred more: this list is UIPanelWindows' `area = "full"` entries
+        // and MovieFrame, and it is the whole set the mechanism applies to. Detaching the rest
         // changes what GetParent() answers for them - nil where it used to be
         // UIParent - and FrameXML asks that of frames it is about to position,
         // so a wider net blanks panels rather than freeing them.
         static const char* kFullscreenPanels[] = {
-            "WorldMapFrame", "CinematicFrame",
+            "WorldMapFrame", "CinematicFrame", "MovieFrame",
         };
         bool detached = false;
         if (parentVar.empty() && !node.attr("parent")) {

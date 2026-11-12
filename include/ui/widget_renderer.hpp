@@ -11,6 +11,7 @@
 // is shipped; it is the player's own install being drawn.
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -24,7 +25,7 @@ struct ImVec2;
 
 namespace wowee {
 namespace pipeline { class AssetManager; }
-namespace rendering { class VkContext; }
+namespace rendering { class VkContext; struct ImGuiTexture; }
 
 namespace ui {
 
@@ -33,6 +34,10 @@ struct Widget;
 
 class WidgetRenderer {
 public:
+    WidgetRenderer() = default;
+    WidgetRenderer(const WidgetRenderer&) = delete;
+    WidgetRenderer& operator=(const WidgetRenderer&) = delete;
+    ~WidgetRenderer();
     void initialize(pipeline::AssetManager* assets, rendering::VkContext* vkCtx);
 
     /// Lay the tree out for this screen and draw it. Safe to call with no
@@ -165,6 +170,15 @@ private:
                    float x0, float y0, float x1, float y1);
     void drawCooldown(ImDrawList* dl, const Widget& w,
                       float x0, float y0, float x1, float y1);
+    /// A MovieFrame's movie (ui/movie_playback): black, and the newest
+    /// picture fitted inside it at its own aspect.
+    void drawMovie(ImDrawList* dl, const Widget& w, float x0, float y0, float x1, float y1);
+    std::shared_ptr<rendering::ImGuiTexture> movieTexture_;
+    /// The movie's last picture handed back to the device once the movie is
+    /// over (after the frames in flight).
+    void retireMovieTexture();
+    uint32_t movieGeneration_ = 0;
+    std::vector<uint8_t> movieScratch_;
 
     pipeline::AssetManager* assets_ = nullptr;
     rendering::VkContext* vkCtx_ = nullptr;

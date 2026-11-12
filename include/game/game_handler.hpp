@@ -4186,6 +4186,12 @@ public:
     void addUIInfoMessage(const std::string& msg) {
         fireAddonEvent("UI_INFO_MESSAGE", {msg});
     }
+    /// SMSG_TRIGGER_MOVIE (0x005235b0): PLAY_MOVIE with the file for this
+    /// screen, or the complete at once when there is none.
+    void triggerMovie(uint32_t movieId);
+    /// GameMovieFinished (0x0051d590 -> 0x00518870): CMSG_COMPLETE_MOVIE,
+    /// only while a server's movie is playing.
+    void gameMovieFinished();
     void fireAddonEvent(const std::string& event, const std::vector<std::string>& args = {}) {
         if (addonEventCallback_) addonEventCallback_(event, args);
     }
@@ -6101,6 +6107,8 @@ private:
     // Chat (state lives in ChatHandler; callbacks remain here for cross-domain access)
     ChatBubbleCallback chatBubbleCallback_;
     AddonEventCallback addonEventCallback_;
+    /// A server's movie is playing (DAT_00bd0800).
+    bool moviePlaying_ = false;
     AddonEventValuesCallback addonEventValuesCallback_;
     CombatLogEventCallback combatLogEventCallback_;
     InterfaceCommand   interfaceCommand_;

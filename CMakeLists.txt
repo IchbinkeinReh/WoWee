@@ -702,6 +702,7 @@ set(WOWEE_SOURCES
     src/core/application.cpp
     src/core/stall_report.cpp
     src/core/screen_recorder.cpp
+    src/ui/movie_playback.cpp
     src/core/entity_spawner.cpp
     src/core/entity_spawner_player.cpp
     src/core/entity_spawner_artkit.cpp
@@ -769,6 +770,7 @@ set(WOWEE_SOURCES
     src/game/cinematic.cpp
     src/game/game_handler.cpp
     src/game/game_handler_packets.cpp
+    src/game/game_handler_movie.cpp
     src/game/game_handler_callbacks.cpp
     src/game/game_handler_tabard.cpp
     src/game/game_handler_corpse.cpp
@@ -2114,6 +2116,7 @@ if(STORMLIB_LIBRARY AND STORMLIB_INCLUDE_DIR)
         ${WOWEE_PLATFORM_SOURCES}
         tools/asset_extract/main.cpp
         tools/asset_extract/extractor.cpp
+        tools/asset_extract/loose_movies.cpp
         tools/asset_extract/path_mapper.cpp
         tools/asset_extract/manifest_writer.cpp
         tools/asset_extract/open_format_emitter.cpp
@@ -2202,6 +2205,7 @@ if(STORMLIB_LIBRARY AND STORMLIB_INCLUDE_DIR AND SDL3_FOUND AND EXISTS ${IMGUI_D
         src/pipeline/asset_inventory.cpp
         src/rendering/m2_model_classifier.cpp
         tools/asset_extract/extractor.cpp
+        tools/asset_extract/loose_movies.cpp
         tools/asset_extract/path_mapper.cpp
         tools/asset_extract/manifest_writer.cpp
         tools/asset_extract/open_format_emitter.cpp
@@ -2283,6 +2287,7 @@ if(TARGET wowee AND STORMLIB_LIBRARY AND STORMLIB_INCLUDE_DIR AND EXISTS ${IMGUI
         tools/asset_manager/model_source.cpp
         tools/asset_manager/folder_picker.cpp
         tools/asset_extract/extractor.cpp
+        tools/asset_extract/loose_movies.cpp
         tools/asset_extract/path_mapper.cpp
         tools/asset_extract/manifest_writer.cpp
         tools/asset_extract/open_format_emitter.cpp
