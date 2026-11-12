@@ -403,7 +403,7 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         const game::Unit& u = *unitP;
         std::string name = asCaster ? u.getName() : gameHandler.shownUnitName(unit);
         if (name.empty() && asCaster) name = gameHandler.lookupName(g);
-        const std::string text = [&]() -> std::string {
+        std::string text = [&]() -> std::string {
             std::string out;
             if (player) {
                 const uint16_t pf = game::fieldIndex(game::UF::PLAYER_FLAGS);
@@ -477,7 +477,7 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
                                 .hasBase = drawnAt != nullptr,
                                 .anchor = anchor,
                                 .anchorPx = glm::vec2(at->x, at->y),
-                                .text = text,
+                                .text = std::move(text),
                                 .bake = bake,
                                 .bakePerYard = perYard * bake / px,
                                 .spread = bake / px,
@@ -623,10 +623,13 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
             }
             nameTriangles.clear();
             nameRuns.clear();
-            std::string key;
+            static thread_local std::string key;
             for (const NameJob& job : nameJobs) {
                 const size_t runFirst = nameTriangles.size();
-                key.assign(std::to_string(static_cast<int>(job.bake)));
+                // The digits std::to_string gave, without a string of their own.
+                char bakeDigits[16];
+                const int bakeLen = std::snprintf(bakeDigits, sizeof(bakeDigits), "%d", static_cast<int>(job.bake));
+                key.assign(bakeDigits, static_cast<size_t>(std::max(bakeLen, 0)));
                 key.push_back('\x1f');
                 key.append(job.text);
                 auto it = glyphCache.find(key);
@@ -669,16 +672,23 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
                 const ImU32 shadow = IM_COL32(0, 0, 0, (job.color >> IM_COL32_A_SHIFT) & 0xFF);
                 const float s = job.spread;
                 const glm::vec2 shifts[5] = {{-s, 0.0f}, {s, 0.0f}, {0.0f, -s}, {0.0f, s}, {0.0f, 0.0f}};
+                // The five passes written in place, their slots made at once:
+                // a push per vertex was most of this stage. The sums are the
+                // same as before, (anchor + glyph) + shift, so every offset is
+                // the same float.
+                const size_t glyphCount = glyphs.pos.size();
+                nameTriangles.resize(runFirst + glyphCount * 5);
+                rendering::WorldTextRenderer::Vertex* out = nameTriangles.data() + runFirst;
                 for (int pass = 0; pass < 5; ++pass) {
                     const ImU32 colour = pass < 4 ? shadow : job.color;
-                    for (size_t k = 0; k < glyphs.pos.size(); ++k) {
-                        const glm::vec2 px = job.anchorPx + glyphs.pos[k] + shifts[pass];
-                        nameTriangles.push_back(
-                            {.anchor = job.anchor,
-                             .offset = rendering::unit_name_anchor::billboardOffset(px, job.anchorPx,
-                                                                                    job.bakePerYard),
-                             .uv = glyphs.uv[k],
-                             .colour = colour});
+                    const glm::vec2 shift = shifts[pass];
+                    for (size_t k = 0; k < glyphCount; ++k, ++out) {
+                        const glm::vec2 px = job.anchorPx + glyphs.pos[k] + shift;
+                        out->anchor = job.anchor;
+                        out->offset = rendering::unit_name_anchor::billboardOffset(px, job.anchorPx,
+                                                                                    job.bakePerYard);
+                        out->uv = glyphs.uv[k];
+                        out->colour = colour;
                     }
                 }
                 if (job.hasBase) {
