@@ -3337,6 +3337,8 @@ static int lua_WoweeContainerItemInstance(lua_State* L) {
     lua_pushnumber(L, static_cast<lua_Number>(s->item.maxDurability));
     lua_setfield(L, -2, "maxDurability");
     pushSocketedGems(L, gh, s->item.guid, s->item.itemId);
+    lua_pushnumber(L, static_cast<lua_Number>(gh->itemSellPriceShown(s->item.guid, s->item.itemId, s->item.stackCount)));
+    lua_setfield(L, -2, "price");
     return 1;
 }
 

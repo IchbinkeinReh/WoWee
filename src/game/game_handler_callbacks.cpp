@@ -4298,6 +4298,16 @@ uint32_t GameHandler::estimateRepairAllCost() const {
     return 0;
 }
 
+uint32_t GameHandler::itemSellPriceShown(uint64_t itemGuid, uint32_t itemId, uint32_t stackCount) const {
+    const auto* info = getItemInfo(itemId);
+    if (!info || !info->valid || info->sellPrice == 0) return 0;
+    uint32_t price = info->sellPrice;
+    const uint32_t repair = inventoryHandler_ && itemGuid ? inventoryHandler_->estimateItemRepairCost(itemGuid) : 0;
+    if (repair >= price) price = 1;
+    else price -= repair;
+    return stackCount > 1 ? price * stackCount : price;
+}
+
 uint32_t GameHandler::itemRepairCostShown(uint64_t itemGuid) const {
     if (!inventoryHandler_ || itemGuid == 0) return 0;
     const uint32_t cost = inventoryHandler_->estimateItemRepairCost(itemGuid);

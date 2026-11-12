@@ -4461,6 +4461,10 @@ public:
     /// a reputation - 5% friendly, 10% honored, 15% revered, 20% exalted, by
     /// how it regards the player (0x007279a0) - rounded.
     uint32_t itemRepairCostShown(uint64_t itemGuid) const;
+    /// The money an item tooltip offers for one held item (0x006277f0 ->
+    /// OnTooltipAddMoney): its SellPrice less its repair cost (0x00708540),
+    /// 1 where the repair would cost as much or more, times the stack.
+    uint32_t itemSellPriceShown(uint64_t itemGuid, uint32_t itemId, uint32_t stackCount) const;
     /// The sale mirror, ring slots and all.  The interface's list is
     /// buybackRowCount / buybackRowAt - a row the realm has not confirmed into
     /// the ring is in this one and not in that.

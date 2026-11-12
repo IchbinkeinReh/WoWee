@@ -5060,6 +5060,9 @@ static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
             lua_setfield(L, -2, "durability");
             lua_pushnumber(L, static_cast<lua_Number>(instance->maxDurability));
             lua_setfield(L, -2, "maxDurability");
+            lua_pushnumber(L, static_cast<lua_Number>(
+                gh->itemSellPriceShown(instance->guid, itemId, instance->stackCount)));
+            lua_setfield(L, -2, "price");
             // Raid loot still tradeable among those who could have looted it:
             // soulbound, flagged 0x100, and under two hours of the player's
             // played time since it was made (0x00708520, 0x00708b40) - the
@@ -12406,8 +12409,16 @@ void LuaEngine::registerCoreAPI() {
         "        end\n"
         "        if data.startsQuest then self:AddLine(ITEM_STARTS_QUEST or 'This Item Begins a Quest', 1, 1, 1) end\n"
         "    end\n"
-        "    if sellPrice and sellPrice > 0 then\n"
-        "        self:AddLine(format('%s: ', SELL_PRICE or 'Sell Price')..GetCoinTextureString(sellPrice), 1, 1, 1)\n"
+        // The price (0x006277f0's end): none for a merchant's own item or
+        // one appended under a recipe; else the tooltip's OnTooltipAddMoney
+        // with the money - for a held item its price less its repair cost,
+        // times the stack - which FrameXML draws through SetTooltipMoney.
+        "    if append or __WoweeTooltipMerchantIndex then\n"
+        "    elseif sellPrice and sellPrice > 0 then\n"
+        "        local money = (inst and inst.price and inst.price > 0) and inst.price or sellPrice\n"
+        "        local onMoney = self.GetScript and self:GetScript('OnTooltipAddMoney')\n"
+        "        if onMoney then onMoney(self, money)\n"
+        "        else self:AddLine(format('%s: ', SELL_PRICE or 'Sell Price')..GetCoinTextureString(money), 1, 1, 1) end\n"
         "    elseif inst and inst.unsellable then\n"
         "        self:AddLine(ITEM_UNSELLABLE or 'No sell price', 1, 1, 1)\n"
         "    end\n"
