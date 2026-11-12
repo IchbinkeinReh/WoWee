@@ -1438,7 +1438,8 @@ bool GameScreen::drawWorldObjectCursor(game::GameHandler& gameHandler,
 void GameScreen::commitMouseover(game::GameHandler& gameHandler) {
     // The mouseover as the client keeps it (0x0051f790): one guid, changed
     // at most once a frame, the old one's tooltip let go and the new one's
-    // shown - a unit's by SetUnit, a game object's by its own (0x00626720).
+    // shown - a unit's by SetUnit, a game object's by its own (0x00626720), a
+    // corpse's by its owner's name (0x00622410).
     const uint64_t guid = plateMouseover_ != 0 ? plateMouseover_ : worldMouseover_;
     const uint64_t old = gameHandler.getMouseoverGuid();
     if (guid == old) return;
@@ -1446,10 +1447,17 @@ void GameScreen::commitMouseover(game::GameHandler& gameHandler) {
     auto* engine = services_.addonManager ? services_.addonManager->getLuaEngine() : nullptr;
     if (!engine) return;
     const auto entity = guid != 0 ? gameHandler.getEntityManager().getEntity(guid) : nullptr;
-    const bool unit = entity && (entity->getType() == game::ObjectType::UNIT ||
-                                 entity->getType() == game::ObjectType::PLAYER);
-    const bool object = entity && entity->getType() == game::ObjectType::GAMEOBJECT;
-    engine->worldMouseoverChanged(old, unit || object ? guid : 0, unit);
+    using Kind = addons::LuaEngine::MouseoverKind;
+    Kind kind = Kind::None;
+    if (entity) {
+        switch (entity->getType()) {
+            case game::ObjectType::UNIT: case game::ObjectType::PLAYER: kind = Kind::Unit; break;
+            case game::ObjectType::GAMEOBJECT: kind = Kind::GameObject; break;
+            case game::ObjectType::CORPSE: kind = Kind::Corpse; break;
+            default: break;
+        }
+    }
+    engine->worldMouseoverChanged(old, guid, kind);
 }
 
 void GameScreen::renderEntityList(game::GameHandler& gameHandler) {

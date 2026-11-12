@@ -13754,7 +13754,7 @@ void LuaEngine::callFrameScript(uint32_t wid, const char* script,
 }
 
 
-void LuaEngine::worldMouseoverChanged(uint64_t oldGuid, uint64_t newGuid, bool unit) {
+void LuaEngine::worldMouseoverChanged(uint64_t oldGuid, uint64_t newGuid, MouseoverKind kind) {
     // 0x0051f790, on the mouseover changing: the old one's tooltip faded
     // (0x0061b290), then GameTooltip put at its default place
     // (OnTooltipSetDefaultAnchor, 0x005143f0) and SetUnit("mouseover") for a
@@ -13776,10 +13776,34 @@ void LuaEngine::worldMouseoverChanged(uint64_t oldGuid, uint64_t newGuid, bool u
         if (w && w->shown && w->tooltipOwnerId == uiParent) fadeOutTooltip(L_, wid);
     }
     auto* gh = wowee::addons::getGameHandler(L_);
-    if (newGuid == 0 || !gh) return;
-    if (!unit) {
+    if (newGuid == 0 || !gh || kind == MouseoverKind::None) return;
+    if (kind == MouseoverKind::GameObject) {
         callFrameScript(wid, "OnTooltipSetDefaultAnchor");
         if (auto* w = widgets_.get(wid)) fillGameObjectTooltip(L_, w, gh, newGuid);
+        return;
+    }
+    if (kind == MouseoverKind::Corpse) {
+        // 0x00622410: CORPSE_TOOLTIP with its owner's name, white, once the
+        // name is known (asked for where it is not).
+        callFrameScript(wid, "OnTooltipSetDefaultAnchor");
+        auto* w = widgets_.get(wid);
+        const auto corpse = gh->getEntityManager().getEntity(newGuid);
+        if (!w || !corpse) return;
+        const uint64_t ownerGuid = (static_cast<uint64_t>(corpse->getField(7)) << 32) | corpse->getField(6);
+        const auto& names = gh->getPlayerNameCache();
+        const auto it = names.find(ownerGuid);
+        if (it == names.end() || it->second.empty()) {
+            if (ownerGuid != 0) gh->queryPlayerName(ownerGuid);
+            return;
+        }
+        w->isTooltip = true;
+        w->tooltipUnit.clear();
+        w->tooltipLines.clear();
+        wowee::ui::Widget::TooltipLine line;
+        line.left = formatGlobal(L_, globalOr(L_, "CORPSE_TOOLTIP", "Corpse of %s"), {it->second});
+        for (int i = 0; i < 4; ++i) line.lc[i] = line.rc[i] = 1.0f;
+        w->tooltipLines.push_back(std::move(line));
+        w->shown = true;
         return;
     }
     callFrameScript(wid, "OnTooltipSetDefaultAnchor");

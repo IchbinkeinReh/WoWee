@@ -272,8 +272,9 @@ public:
     /// its lifetime matches the Lua state that holds handles into it.
     ui::WidgetTree& widgets() { return widgets_; }
     /// The world mouseover changed (0x0051f790): the old one's tooltip
-    /// fades, and a unit's or a game object's is shown.
-    void worldMouseoverChanged(uint64_t oldGuid, uint64_t newGuid, bool unit);
+    /// fades, and a unit's, a game object's or a corpse's is shown.
+    enum class MouseoverKind { None, Unit, GameObject, Corpse };
+    void worldMouseoverChanged(uint64_t oldGuid, uint64_t newGuid, MouseoverKind kind);
 
     lua_State* getState() { return L_; }
     /// A global string of the interface's - GlobalStrings.lua's, which is
