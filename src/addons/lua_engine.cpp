@@ -27,6 +27,7 @@
 #include "addons/addon_lua_snippets.hpp"
 #include "game/chat_channels.hpp"
 #include "game/difficulty_change.hpp"
+#include "game/pet_action.hpp"
 #include "game/interface_text.hpp"
 #include "game/item_stat_text.hpp"
 #include "rendering/minimap_zoom.hpp"
@@ -2992,7 +2993,10 @@ static bool uberTooltips(lua_State* L) {
 /// sixth, SetSpellByID's fourth: the rank beside the name in a full one.
 static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh,
                              uint32_t spellId, bool brief = false, bool showRank = false,
-                             const TalentTooltipPart* talent = nullptr) {
+                             const TalentTooltipPart* talent = nullptr, bool pet = false) {
+    // 0x006238a0's fifth argument: a pet's spell is costed, timed, formed
+    // and levelled by the pet, and says nothing of tools or reagents.
+    const uint64_t casterGuid = pet ? gh->getPetGuid() : 0;
     if (!w || !gh || spellId == 0) return false;
     const std::string& name = gh->getSpellName(spellId);
     if (name.empty()) return false;
@@ -3058,7 +3062,7 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
     if (const auto* sh = gh->getSpellHandler(); sh && !brief) {
         static constexpr const char* kCostKeys[] = {"MANA_COST", "RAGE_COST", "FOCUS_COST", "ENERGY_COST",
                                                     "HAPPINESS_COST", "RUNE_COST", "RUNIC_POWER_COST"};
-        const auto c = sh->tooltipCost(spellId);
+        const auto c = sh->tooltipCost(spellId, casterGuid);
         const bool listed = c.powerType >= 0 && c.powerType < 7;
         const int32_t divisor = listed ? static_cast<int32_t>(wowee::addons::kPowerDivisors[c.powerType]) : 1;
         const int32_t amount = c.cost / divisor;
@@ -3161,7 +3165,7 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
         if (!brief && (sp.attr & 0x40u) == 0 && sp.effectIds[0] != 0x2f && sp.effectIds[0] != 0x4e && !tradeSpell) {
             std::string cast;
             const auto* castSh = gh->getSpellHandler();
-            const int32_t castMs = castSh ? castSh->playerCastTimeMs(spellId) : 0;
+            const int32_t castMs = castSh ? castSh->playerCastTimeMs(spellId, casterGuid) : 0;
             if (castMs > 0) {
                 cast = castMs < 60000
                     ? withNumber(globalOr(L, "SPELL_CAST_TIME_SEC", "%.3g sec cast"), "%.3g", castMs / 1000.0f)
@@ -3196,7 +3200,7 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
     // red (0x00754a20, 0x007548f0). A brief tooltip shows the line only
     // when something is missing. An item the cache has not answered yet is
     // left out and asked for, as with the reagents.
-    if (const auto se = gh->spellNameCacheRef().find(spellId); se != gh->spellNameCacheRef().end()) {
+    if (const auto se = gh->spellNameCacheRef().find(spellId); se != gh->spellNameCacheRef().end() && !pet) {
         const auto* sh = gh->getSpellHandler();
         std::string tools;
         bool allThere = true;
@@ -3239,8 +3243,8 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
             w->tooltipLines.back().wrap = wrap;
         };
         const auto eq = sh->tooltipEquipped(spellId);
-        needLine("SPELL_EQUIPPED_ITEM", "SPELL_EQUIPPED_ITEM_NOSPACE", eq.names, eq.equipped, true);
-        const auto forms = sh->tooltipForms(spellId);
+        needLine("SPELL_EQUIPPED_ITEM", "SPELL_EQUIPPED_ITEM_NOSPACE", eq.names, eq.equipped || pet, true);
+        const auto forms = sh->tooltipForms(spellId, casterGuid);
         needLine("SPELL_REQUIRED_FORM", "SPELL_REQUIRED_FORM_NOSPACE", forms.names, forms.met, false);
         if (const auto rep = sh->tooltipReputation(spellId); rep.faction != 0 && (!rep.met || !brief)) {
             const std::string& faction = gh->getFactionNamePublic(rep.faction);
@@ -3257,7 +3261,13 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
                     return x == 0x35 || x == 0x18 || x == 0x9d || x == 0x3b;
                 });
             const bool passive = sp.effectIds[0] == 0x2f || (sp.attr & 0x40u) != 0;
-            if (!trade && passive && sp.baseLevel > 0 && static_cast<int32_t>(gh->getPlayerLevel()) < sp.baseLevel) {
+            int32_t casterLevel = static_cast<int32_t>(gh->getPlayerLevel());
+            if (pet) {
+                const auto petUnit = gh->getEntityManager().getEntity(casterGuid);
+                const uint16_t li = game::fieldIndex(game::UF::UNIT_FIELD_LEVEL);
+                casterLevel = petUnit && li != 0xFFFF ? static_cast<int32_t>(petUnit->getField(li)) : 0;
+            }
+            if (!trade && passive && sp.baseLevel > 0 && casterLevel < sp.baseLevel) {
                 line(formatGlobal(L, globalOr(L, "ITEM_MIN_LEVEL", "Requires Level %d"), {std::to_string(sp.baseLevel)}),
                      "", 1.0f, 0.125f, 0.125f);
             }
@@ -3273,7 +3283,7 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
     gh->loadSpellNameCache();
     const auto* reagentSh = gh->getSpellHandler();
     if (auto se = gh->spellNameCacheRef().find(spellId);
-        se != gh->spellNameCacheRef().end() && !(reagentSh && reagentSh->tooltipNoReagents(spellId))) {
+        se != gh->spellNameCacheRef().end() && !pet && !(reagentSh && reagentSh->tooltipNoReagents(spellId))) {
         bool short_ = false;
         std::string reagents;
         for (const auto& r : se->second.reagents) {
@@ -3897,6 +3907,21 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
     }
 
     lua_pushboolean(L, filled ? 1 : 0);
+    return 1;
+}
+
+// SetPetAction(slot) (0x00625470): the spell on the pet's bar, the pet's
+// own, with its rank. 1 when filled; a command (Attack, Follow ...) is no
+// spell and fills nothing - the bar names those itself.
+static int lua_Tooltip_SetPetAction(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    auto* gh = wowee::addons::getGameHandler(L);
+    const long slot = std::lround(luaL_optnumber(L, 2, 0));
+    if (!w || !gh || slot < 1 || slot > 10 || gh->getPetGuid() == 0) return 0;
+    const uint32_t packed = gh->getPetActionSlot(static_cast<int>(slot - 1));
+    const uint32_t spell = packed & 0xFFFFFFu;
+    if (spell == 0 || !game::pet::isPetSpellAction(packed)) return 0;
+    luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, spell, false, true, nullptr, true) ? 1 : 0);
     return 1;
 }
 
@@ -10830,6 +10855,8 @@ void LuaEngine::registerCoreAPI() {
     lua_pushcfunction(L_, lua_Tooltip_SetUnitAura);
     lua_setglobal(L_, "__WoweeTooltipSetUnitAura");
     // The spell-shaped setters the client builds itself (0x006238a0).
+    lua_pushcfunction(L_, lua_Tooltip_SetPetAction);
+    lua_setglobal(L_, "__WoweeTooltipSetPetAction");
     lua_pushcfunction(L_, lua_Tooltip_SetShapeshift);
     lua_setglobal(L_, "__WoweeTooltipSetShapeshift");
     lua_pushcfunction(L_, lua_Tooltip_SetPossession);
@@ -12068,19 +12095,7 @@ void LuaEngine::registerCoreAPI() {
         // how the commands and stances are named - Attack, Follow, Passive -
         // and printing the key instead of the string is what that flag exists
         // to prevent.
-        "function __WoweeFrameMT:SetPetAction(slot)\n"
-        "    self:ClearLines()\n"
-        "    local name, subtext, _, isToken = GetPetActionInfo(slot)\n"
-        "    if not name then return end\n"
-        "    if isToken then\n"
-        "        name = _G[name] or name\n"
-        "        subtext = subtext and _G[subtext] or subtext\n"
-        "    end\n"
-        "    self:SetText(name, 1, 1, 1)\n"
-        "    if subtext and subtext ~= '' then\n"
-        "        self:AddLine(subtext, 0.5, 0.5, 0.5)\n"
-        "    end\n"
-        "end\n"
+        "function __WoweeFrameMT:SetPetAction(slot) return __WoweeTooltipSetPetAction(self, slot) end\n"
         // The possess bar's tooltip. PossessButton_OnEnter calls this for
         // every slot but the cancel one, so it is reachable the moment
         // GetPossessInfo answers for a slot other than two - and a widget

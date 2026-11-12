@@ -2306,7 +2306,7 @@ SpellHandler::TooltipEquipped SpellHandler::tooltipEquipped(uint32_t spellId) co
     return out;
 }
 
-SpellHandler::TooltipForms SpellHandler::tooltipForms(uint32_t spellId) const {
+SpellHandler::TooltipForms SpellHandler::tooltipForms(uint32_t spellId, uint64_t caster) const {
     TooltipForms out;
     loadSpellNameCache();
     const auto it = owner_.spellNameCacheRef().find(spellId);
@@ -2328,7 +2328,7 @@ SpellHandler::TooltipForms SpellHandler::tooltipForms(uint32_t spellId) const {
             }
         }
     }
-    const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    const auto player = owner_.getEntityManager().getEntity(caster ? caster : owner_.getPlayerGuid());  // the pet's for a pet action
     if (!player) return out;
     const uint16_t b2 = fieldIndex(UF::UNIT_FIELD_BYTES_2);
     const auto form = static_cast<uint8_t>((b2 != 0xFFFF ? player->getField(b2) : 0u) >> 24);
@@ -2498,11 +2498,11 @@ std::optional<unit_target::Range> SpellHandler::spellRange(uint32_t spellId, uin
     return spellReach(spellId, *caster, nullptr, owner_.getSpellTargetKind(spellId) == 1);
 }
 
-SpellHandler::TooltipCost SpellHandler::tooltipCost(uint32_t spellId) const {
+SpellHandler::TooltipCost SpellHandler::tooltipCost(uint32_t spellId, uint64_t caster) const {
     TooltipCost out;
     loadSpellNameCache();
     const auto it = owner_.spellNameCacheRef().find(spellId);
-    const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    const auto player = owner_.getEntityManager().getEntity(caster ? caster : owner_.getPlayerGuid());  // the pet's for a pet action
     if (it == owner_.spellNameCacheRef().end() || !player) return out;
     const auto& e = it->second;
     out.powerType = static_cast<int32_t>(e.powerType);
@@ -2826,9 +2826,9 @@ int32_t SpellHandler::castTimeMs(uint32_t spellId, const Entity& player) const {
     return t;
 }
 
-int32_t SpellHandler::playerCastTimeMs(uint32_t spellId) const {
+int32_t SpellHandler::playerCastTimeMs(uint32_t spellId, uint64_t caster) const {
     loadSpellNameCache();
-    const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    const auto player = owner_.getEntityManager().getEntity(caster ? caster : owner_.getPlayerGuid());  // the pet's for a pet action
     return player ? castTimeMs(spellId, *player) : 0;
 }
 

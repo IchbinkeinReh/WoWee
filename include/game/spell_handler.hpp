@@ -460,7 +460,7 @@ public:
         std::array<uint32_t, 3> runes{};
         uint32_t powerDisplayId = 0;
     };
-    [[nodiscard]] TooltipCost tooltipCost(uint32_t spellId) const;
+    [[nodiscard]] TooltipCost tooltipCost(uint32_t spellId, uint64_t caster = 0) const;
     /// The tooltip's equipped-item line (0x006238a0): the names the spell's
     /// EquippedItemClass and subclass mask go by - ItemSubClassMask's for
     /// the exact pair, else each subclass's ItemSubClass name, ", " between
@@ -479,7 +479,7 @@ public:
         std::string names;
         bool met = true;
     };
-    [[nodiscard]] TooltipForms tooltipForms(uint32_t spellId) const;
+    [[nodiscard]] TooltipForms tooltipForms(uint32_t spellId, uint64_t caster = 0) const;
     /// The tooltip's reputation line: MinFactionId (0 none), the
     /// MinReputation rank, and whether the player's standing reaches it
     /// (0x005d05b0 against 0x00a2d2fc).
@@ -616,7 +616,7 @@ public:
     /// modifiers, casting speed and a ranged spell's half second included.
     int32_t castTimeMs(uint32_t spellId, const Entity& player) const;
     /// The same for the player (0 without one), what a tooltip states.
-    [[nodiscard]] int32_t playerCastTimeMs(uint32_t spellId) const;
+    [[nodiscard]] int32_t playerCastTimeMs(uint32_t spellId, uint64_t caster = 0) const;
 
     /// Give a hunter's pet up for good. The interface asks first - this is the
     /// other side of the ABANDON_PET dialog, whose accept called an unbound
