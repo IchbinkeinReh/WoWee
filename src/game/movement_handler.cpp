@@ -2215,7 +2215,12 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
                 path.push_back({wpCanonical.x, wpCanonical.y, wpCanonical.z});
             }
             path.push_back({destCanonical.x, destCanonical.y, destCanonical.z});
-            entity->startMoveAlongPath(path, orientation, data.duration / 1000.0f);
+            // Curved only for a FLYING or CATMULLROM spline (FUN_0098c770 sets its
+            // mode from 0x42000); a walking unit's runs straight from point to
+            // point. The pre-WotLK flags keep the curve.
+            const bool smooth = !wotlkSplineFlags ||
+                (data.splineFlags & (SplineFlagWotlk::FLYING | SplineFlagWotlk::CATMULLROM)) != 0;
+            entity->startMoveAlongPath(path, orientation, data.duration / 1000.0f, smooth);
         } else {
             entity->startMoveTo(destCanonical.x, destCanonical.y, destCanonical.z,
                                 orientation, data.duration / 1000.0f);

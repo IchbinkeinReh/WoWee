@@ -245,7 +245,12 @@ public:
     }
 
     // Multi-segment path movement (Catmull-Rom spline interpolation)
-    void startMoveAlongPath(const std::vector<std::array<float, 3>>& packetPath, float destO, float totalDuration) {
+    /// `smooth`: a curve through the points (Catmull-Rom), as the client runs a
+    /// spline flagged FLYING or CATMULLROM (0x42000); otherwise straight lines
+    /// from point to point at the spline's one speed - FUN_0098c770 sets the
+    /// spline's mode (+500) to 1 only for those flags, 0 (linear) for the rest.
+    void startMoveAlongPath(const std::vector<std::array<float, 3>>& packetPath, float destO, float totalDuration,
+                            bool smooth = true) {
         if (packetPath.empty()) return;
         if (packetPath.size() == 1 || totalDuration <= 0.0f) {
             startMoveTo(packetPath.back()[0], packetPath.back()[1], packetPath.back()[2], destO, totalDuration);
@@ -296,6 +301,11 @@ public:
         for (size_t i = 0; i < path.size(); i++) {
             keys[i].timeMs = static_cast<uint32_t>(cumDist[i] * invTotalDist);
             keys[i].position = {path[i][0], path[i][1], path[i][2]};
+        }
+        if (smooth) {
+            linearKeys_.clear();
+        } else {
+            linearKeys_ = keys;
         }
         activeSpline_.emplace(std::move(keys), /*timeClosed=*/false);
         splineDurationMs_ = durationMs;
@@ -607,7 +617,7 @@ public:
             orientation = *fixedFacing;
         } else if (usePathMode_ && activeSpline_) {
             faceAlongPath_ = true;
-            const math::SplineEvalResult start = activeSpline_->evaluate(0);
+            const math::SplineEvalResult start = pathEval(0);
             faceDirection(start.tangent.x, start.tangent.y);
         } else {
             faceDirection(moveEndX_ - moveStartX_, moveEndY_ - moveStartY_);
@@ -658,7 +668,7 @@ public:
         if (usePathMode_ && activeSpline_ && splineDurationMs_ > 0) {
             uint32_t ms = static_cast<uint32_t>(moveElapsed_ * 1000.0f);
             if (ms >= splineDurationMs_) ms = splineDurationMs_ - 1;
-            way = activeSpline_->evaluate(ms).tangent;
+            way = pathEval(ms).tangent;
         }
         const float length = std::sqrt(way.x * way.x + way.y * way.y + way.z * way.z);
         if (length < 1e-6f) return glm::vec3(0.0f);
@@ -758,6 +768,8 @@ protected:
     float moveSpeed_ = 0;                   // Current movement's speed; see getMoveSpeed
     // CatmullRom spline for multi-segment path movement (replaces linear pathPoints_/pathSegDists_)
     std::optional<math::CatmullRomSpline> activeSpline_;
+    // A linear spline's points and times (startMoveAlongPath); empty for a curved one.
+    std::vector<math::SplineKey> linearKeys_;
     uint32_t splineDurationMs_ = 0;
 
 private:
@@ -812,14 +824,30 @@ private:
         }
     }
 
+    /// The path at `ms`: the curve, or straight between its points when the
+    /// spline is linear (startMoveAlongPath).
+    [[nodiscard]] math::SplineEvalResult pathEval(uint32_t ms) const {
+        if (linearKeys_.size() < 2) return activeSpline_->evaluate(ms);
+        size_t i = 1;
+        while (i + 1 < linearKeys_.size() && linearKeys_[i].timeMs <= ms) ++i;
+        const math::SplineKey& a = linearKeys_[i - 1];
+        const math::SplineKey& b = linearKeys_[i];
+        const float span = static_cast<float>(b.timeMs - a.timeMs);
+        const float t = span > 0.0f ? std::clamp((static_cast<float>(ms) - static_cast<float>(a.timeMs)) / span, 0.0f, 1.0f) : 1.0f;
+        math::SplineEvalResult r;
+        r.position = a.position + (b.position - a.position) * t;
+        r.tangent = b.position - a.position;
+        return r;
+    }
+
     void advanceSegment(float deltaTime) {
         moveElapsed_ += deltaTime;
         if (moveElapsed_ < moveDuration_) {
             if (usePathMode_ && activeSpline_) {
-                // Catmull-Rom spline interpolation
+                // Along the path: curved or straight (pathEval)
                 uint32_t pathTimeMs = static_cast<uint32_t>(moveElapsed_ * 1000.0f);
                 if (pathTimeMs >= splineDurationMs_) pathTimeMs = splineDurationMs_ - 1;
-                const math::SplineEvalResult eval = activeSpline_->evaluate(pathTimeMs);
+                const math::SplineEvalResult eval = pathEval(pathTimeMs);
                 x = eval.position.x;
                 y = eval.position.y;
                 z = eval.position.z;

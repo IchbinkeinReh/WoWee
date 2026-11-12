@@ -859,3 +859,28 @@ TEST_CASE("A landing is sent only for a fall that started", "[entity][fall]") {
     CHECK_FALSE(landingSent(kOnTransport));
     CHECK_FALSE(landingSent(kForward | kFallingFar));
 }
+
+TEST_CASE("Entity runs a linear spline straight and at one speed", "[entity]") {
+    // A walking unit's spline without FLYING or CATMULLROM (0x42000) runs
+    // straight between its points (FUN_0098c770 mode 0): equal steps in equal
+    // times, and on the line between the points, not on a curve through them.
+    Entity e;
+    e.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    const std::vector<std::array<float, 3>> path = {
+        {{0.0f, 0.0f, 0.0f}}, {{10.0f, 0.0f, 0.0f}}, {{10.0f, 2.0f, 0.0f}}};
+    e.startMoveAlongPath(path, 0.0f, 6.0f, /*smooth=*/false);
+    float lastX = 0.0f;
+    for (int i = 1; i <= 9; ++i) {
+        e.updateMovement(0.5f);
+        // Two yards a second along the first leg, on the line y = 0.
+        REQUIRE(e.getX() == Catch::Approx(i * 1.0f).margin(0.01f));
+        REQUIRE(e.getY() == Catch::Approx(0.0f).margin(0.001f));
+        REQUIRE(e.getX() - lastX == Catch::Approx(1.0f).margin(0.01f));
+        lastX = e.getX();
+    }
+    e.updateMovement(0.5f);  // 5 s: at the corner
+    REQUIRE(e.getX() == Catch::Approx(10.0f).margin(0.01f));
+    e.updateMovement(0.5f);  // 5.5 s: half way up the second leg
+    REQUIRE(e.getX() == Catch::Approx(10.0f).margin(0.001f));
+    REQUIRE(e.getY() == Catch::Approx(1.0f).margin(0.01f));
+}
