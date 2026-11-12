@@ -5127,6 +5127,17 @@ void tickTooltipFades(lua_State* L, float elapsed) {
 }
 }  // namespace
 
+/// The last line AddFontStrings made is the two font strings themselves
+/// (0x0061fe30): it shows what they say and how they are coloured from now on.
+int lua_Tooltip_AdoptFontStrings(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w || w->tooltipLines.empty()) return 0;
+    auto& line = w->tooltipLines.back();
+    line.leftFontString = widgetIdOf(L, 2);
+    line.rightFontString = widgetIdOf(L, 3);
+    return 0;
+}
+
 int lua_Tooltip_FadeOut(lua_State* L) {
     const auto* w = widgetOf(L, 1);
     if (w && w->isTooltip) fadeOutTooltip(L, widgetIdOf(L, 1));
@@ -10639,6 +10650,7 @@ void LuaEngine::registerCoreAPI() {
         "    local lr, lg, lb = l:GetTextColor()\n"
         "    local rr, rg, rb = r:GetTextColor()\n"
         "    self:AddDoubleLine(l:GetText() or '', r:GetText() or '', lr, lg, lb, rr, rg, rb)\n"
+        "    __WoweeTooltipAdoptFontStrings(self, l, r)\n"
         "end\n"
         // SetInventoryPortraitTexture(texture, unit, slot) (0x005ea9b0): the
         // texture shows the icon of what the unit wears in that slot.
@@ -11632,6 +11644,8 @@ void LuaEngine::registerCoreAPI() {
     lua_setglobal(L_, "__WoweeTooltipSetShapeshift");
     lua_pushcfunction(L_, lua_Tooltip_FadeOut);
     lua_setglobal(L_, "__WoweeTooltipFadeOut");
+    lua_pushcfunction(L_, lua_Tooltip_AdoptFontStrings);
+    lua_setglobal(L_, "__WoweeTooltipAdoptFontStrings");
     lua_pushcfunction(L_, lua_Tooltip_SetPossession);
     lua_setglobal(L_, "__WoweeTooltipSetPossession");
     lua_pushcfunction(L_, lua_Tooltip_SetQuestRewardSpell);

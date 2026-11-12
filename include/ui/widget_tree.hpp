@@ -499,6 +499,12 @@ struct Widget {
     /// this many seconds, 0.5 from the constructor (0x00966b70); 0 never
     /// blinks.
     float editBlinkSpeed = 0.5f;
+    /// The caret's own blink (0x00967670): focused time gathered since it last
+    /// turned (+0x2fc), whether it is showing, and where it stood, since a
+    /// caret that moves starts its count again shown (0x00964a90).
+    mutable float editCaretClock = 0.0f;
+    mutable bool  editCaretShown = true;
+    mutable size_t editCaretAt = 0;
 
     /// Whether a label too long for its box breaks onto another line. On, as
     /// WoW has it - a FontString given a width wraps inside it, and nothing
@@ -599,10 +605,10 @@ struct Widget {
     };
     std::deque<Message> messages;
     /// How long a message stays before it fades out, in seconds, and how long
-    /// the fade itself takes. Zero means it never goes - which is what a chat
-    /// frame wants and what UIErrorsFrame very much does not: it declares
-    /// displayDuration="5" and every error was staying on screen for good.
-    float messageDuration = 0.0f;
+    /// the fade itself takes: ten and three from both message frames'
+    /// constructors (0x0096a2f0, CSimpleMessageFrame's), for a frame that
+    /// declares neither. Zero means it never goes.
+    float messageDuration = 10.0f;
     float messageFadeDuration = 3.0f;
     /// Whether a new message goes above the ones already there. UIErrorsFrame
     /// asks for insertMode="TOP"; a chat frame does not.
@@ -663,6 +669,10 @@ struct Widget {
         std::string icon;
         float iconUV[4] = {0.0f, 1.0f, 0.0f, 1.0f};
         float iconTint[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+        /// AddFontStrings (0x0061fe30): the two font strings the line is made
+        /// of, whose text and colour it shows as they stand. 0 for a line of
+        /// its own.
+        uint32_t leftFontString = 0, rightFontString = 0;
         /// Lines the wrap produced, filled by the sizing pass so the draw and
         /// the height agree on how tall this line is.
         mutable int lines = 1;

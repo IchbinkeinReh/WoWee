@@ -70,8 +70,20 @@ const Widget* rotationOwner(const WidgetTree& tree, const Widget& w) {
 }
 
 bool caretBlinkOn(const Widget& w) {
-    if (!(w.editBlinkSpeed > 0.0f)) return true;
-    return std::fmod(ImGui::GetTime(), 2.0 * w.editBlinkSpeed) < w.editBlinkSpeed;
+    // Moved: shown, and the count from nothing (0x00964a90).
+    if (w.cursorPos != w.editCaretAt) {
+        w.editCaretAt = w.cursorPos;
+        w.editCaretClock = 0.0f;
+        w.editCaretShown = true;
+    }
+    // A speed of 0 leaves it as it stands.
+    if (!(w.editBlinkSpeed > 0.0f)) return w.editCaretShown;
+    w.editCaretClock += ImGui::GetIO().DeltaTime;
+    if (w.editBlinkSpeed < w.editCaretClock) {
+        w.editCaretShown = !w.editCaretShown;
+        w.editCaretClock = 0.0f;
+    }
+    return w.editCaretShown;
 }
 
 /// The same string with every escape taken out, for measuring.
@@ -451,6 +463,17 @@ void WidgetRenderer::sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree
     // reason: one line of text plus a tooltip's padding, in place of the
     // 233x215 its XML asks for.
     if (w->objectType != "GameTooltip") return;
+    // A line made of font strings shows them as they are now.
+    for (auto& line : w->tooltipLines) {
+        const auto adopt = [&tree](uint32_t id, std::string& text, float (&c)[4]) {
+            const Widget* fs = id ? tree.get(id) : nullptr;
+            if (!fs) return;
+            text = fs->text;
+            for (int i = 0; i < 4; ++i) c[i] = fs->color[i];
+        };
+        adopt(line.leftFontString, line.left, line.lc);
+        adopt(line.rightFontString, line.right, line.rc);
+    }
 
     const float size = interfaceFontSize(w->fontHeight);
     const float lineH = size * 1.2f;
