@@ -5959,6 +5959,35 @@ int lua_QuestBlobFrame_DrawQuestBlob(lua_State* L) {
     return 0;
 }
 
+/// WorldMapBlobFrame's look (0x0058fe50, 0x0058e660, 0x0058fea0, 0x0058e6f0,
+/// 0x0058e780): the fill and border textures, their alphas clamped to
+/// 0-255, and the border's width clamped to 0-10 (hundredths).
+static int lua_QuestBlobFrame_SetFillTexture(lua_State* L) {
+    if (auto* gh = wowee::addons::getGameHandler(L)) gh->questBlobStyleRef().fillTexture = luaL_optstring(L, 2, "");
+    return 0;
+}
+static int lua_QuestBlobFrame_SetBorderTexture(lua_State* L) {
+    if (auto* gh = wowee::addons::getGameHandler(L)) gh->questBlobStyleRef().borderTexture = luaL_optstring(L, 2, "");
+    return 0;
+}
+static uint8_t blobAlphaArg(lua_State* L) {
+    const double a = std::clamp(luaL_optnumber(L, 2, 0), 0.0, 255.0);
+    return static_cast<uint8_t>(std::lround(a));
+}
+static int lua_QuestBlobFrame_SetFillAlpha(lua_State* L) {
+    if (auto* gh = wowee::addons::getGameHandler(L)) gh->questBlobStyleRef().fillAlpha = blobAlphaArg(L);
+    return 0;
+}
+static int lua_QuestBlobFrame_SetBorderAlpha(lua_State* L) {
+    if (auto* gh = wowee::addons::getGameHandler(L)) gh->questBlobStyleRef().borderAlpha = blobAlphaArg(L);
+    return 0;
+}
+static int lua_QuestBlobFrame_SetBorderScalar(lua_State* L) {
+    if (auto* gh = wowee::addons::getGameHandler(L))
+        gh->questBlobStyleRef().borderScalar = static_cast<float>(std::clamp(luaL_optnumber(L, 2, 0), 0.0, 10.0));
+    return 0;
+}
+
 int lua_Minimap_PingLocation(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) {
         w->pingX = static_cast<float>(luaL_optnumber(L, 2, 0));
@@ -10079,6 +10108,11 @@ void LuaEngine::registerCoreAPI() {
         {"PingLocation",    lua_Minimap_PingLocation},
         {"GetPingPosition", lua_Minimap_GetPingPosition},
         {"DrawQuestBlob",   lua_QuestBlobFrame_DrawQuestBlob},
+        {"SetFillTexture",  lua_QuestBlobFrame_SetFillTexture},
+        {"SetFillAlpha",    lua_QuestBlobFrame_SetFillAlpha},
+        {"SetBorderTexture", lua_QuestBlobFrame_SetBorderTexture},
+        {"SetBorderAlpha",  lua_QuestBlobFrame_SetBorderAlpha},
+        {"SetBorderScalar", lua_QuestBlobFrame_SetBorderScalar},
         {"EnableSmoothing",        wowee::addons::lua_QuestBlob_EnableSmoothing},
         {"EnableMerging",          wowee::addons::lua_QuestBlob_EnableMerging},
         {"SetMergeThreshold",      wowee::addons::lua_QuestBlob_SetMergeThreshold},

@@ -3220,6 +3220,19 @@ public:
     bool isQuestBlobShown(uint32_t questId) const {
         return blobQuestIds_.count(questId) > 0;
     }
+    /// How WorldMapBlobFrame draws a quest's area (QuestPOIFrame's
+    /// SetFillTexture, SetFillAlpha, SetBorderTexture, SetBorderAlpha and
+    /// SetBorderScalar): the textures, their alphas (0-255) and the border's
+    /// width in hundredths (0-10).
+    struct QuestBlobStyle {
+        std::string fillTexture;
+        std::string borderTexture;
+        uint8_t fillAlpha = 255;
+        uint8_t borderAlpha = 255;
+        float borderScalar = 1.0f;
+    };
+    const QuestBlobStyle& questBlobStyle() const { return questBlobStyle_; }
+    QuestBlobStyle& questBlobStyleRef() { return questBlobStyle_; }
     void setQuestBlobShown(uint32_t questId, bool shown) {
         if (shown) blobQuestIds_.insert(questId);
         else       blobQuestIds_.erase(questId);
@@ -6656,6 +6669,7 @@ private:
     std::unordered_map<uint32_t, int32_t> questWatchExpiry_;
     float questWatchSweepTimer_ = 0.0f;
     std::unordered_set<uint32_t> blobQuestIds_;
+    QuestBlobStyle questBlobStyle_;
     uint64_t combatTextUnit_ = 0;
     /// Events waiting on a player name, by guid: the event and whether only a
     /// found name raises it.
