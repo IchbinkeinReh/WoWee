@@ -226,6 +226,9 @@ void AudioCoordinator::updateAmbience(const ZoneAudioContext& ctx) {
         // (0x004c8d80).
         setMusicSlotIntro(zm::kSlotPlaceIntro, chain(column("IntroSound"), at.buildingIntro, at.groupIntro));
         setMusicSlotZoneMusic(zm::kSlotPlace, chain(column("ZoneMusic"), at.buildingMusic, at.groupMusic));
+        placeReverb_ = chain(column("SoundProviderPref"), at.buildingReverb, at.groupReverb);
+        placeReverbUnderwater_ =
+            chain(column("SoundProviderPrefUnderwater"), at.buildingReverbUnderwater, at.groupReverbUnderwater);
     }
 
     // Slot 1, the world states' (0x004cbe70): WorldStateZoneSounds.dbc, 0
@@ -245,6 +248,7 @@ void AudioCoordinator::updateAmbience(const ZoneAudioContext& ctx) {
                 row.intro = dbc->getUInt32(i, 4);
                 row.music = dbc->getUInt32(i, 5);
                 row.ambience = dbc->getUInt32(i, 6);
+                row.reverb = dbc->getUInt32(i, 7);
                 worldStateSounds_.push_back(row);
             }
         }
@@ -274,6 +278,21 @@ void AudioCoordinator::updateAmbience(const ZoneAudioContext& ctx) {
                                                                                 : -1;
         if (idx >= 0) sound = dbc->getInt32(static_cast<uint32_t>(idx), 1);
         ambience->setSlotSound(za::kSlotWeather, sound > 0 ? sound : -1);
+    }
+
+    // The reverb (0x004d2050 -> 0x004c8590): under liquid the place's
+    // underwater preset, else the world state's, else the place's; a row of
+    // 0 is the OFF preset.
+    if (assets) {
+        if (!soundProviderPrefsLoaded_) {
+            soundProviderPrefsLoaded_ = true;
+            soundProviderPrefs_ = assets->loadDBCOptional("SoundProviderPreferences.dbc");
+        }
+        const uint32_t reverbId = ctx.cameraLiquidType != 0 ? placeReverbUnderwater_
+                                  : worldStateRow_         ? worldStateRow_->reverb
+                                                           : placeReverb_;
+        AudioEngine::instance().setReverbPreset(
+            soundProviderPrefs_ ? soundProviderPreset(*soundProviderPrefs_, reverbId) : std::nullopt);
     }
 
     // Slot 9, under liquid (0x004c8630), and slot 10, the screen effect's

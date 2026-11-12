@@ -33,6 +33,8 @@
     "ID": 0,
     "MapID": 1,
     "ParentAreaNum": 2,
+    "SoundProviderPref": 5,
+    "SoundProviderPrefUnderwater": 6,
     "SoundAmbience": 7,
     "ZoneMusic": 8,
     "IntroSound": 9
@@ -779,6 +781,8 @@
     "WMOID": 1,
     "NameSetID": 2,
     "WMOGroupID": 3,
+    "SoundProviderPref": 4,
+    "SoundProviderPrefUnderwater": 5,
     "SoundAmbience": 6,
     "ZoneMusic": 7,
     "IntroSound": 8,

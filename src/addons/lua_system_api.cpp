@@ -907,6 +907,8 @@ static void applySoundCVars(lua_State* L) {
     // applied by applyAudioVolumes as one scale over the seven effect volumes
     // this client keeps separately. Only the switch is left here, and it zeroes
     // them on top of whatever that applied.
+    // The world's reverb (0x004d0bc0, Sound_EnableReverb, off by default).
+    audio::AudioEngine::instance().setReverbEnabled(soundCVar("sound_enablereverb", 0.0f) != 0.0f);
     const bool sfxOn = soundCVar("sound_enablesfx", 1.0f) != 0.0f;
     if (!sfxOn) {
         if (auto* m = ac->getUiSoundManager())        m->setVolumeScale(0.0f);

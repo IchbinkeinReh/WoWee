@@ -2636,12 +2636,16 @@ void Renderer::updatePlayerArea() {
                 place.groupAmbience = row->soundAmbience;
                 place.groupMusic = row->zoneMusic;
                 place.groupIntro = row->introSound;
+                place.groupReverb = row->soundProvider;
+                place.groupReverbUnderwater = row->soundProviderUnderwater;
             }
             if (const auto* row = mi::areaRow(rows, linked->wmoId, linked->nameSet, -1)) {
                 place.buildingRow = row->id;
                 place.buildingAmbience = row->soundAmbience;
                 place.buildingMusic = row->zoneMusic;
                 place.buildingIntro = row->introSound;
+                place.buildingReverb = row->soundProvider;
+                place.buildingReverbUnderwater = row->soundProviderUnderwater;
             }
             place.indoors = playerLinkIndoors_;
         }
@@ -7627,6 +7631,8 @@ void Renderer::loadWmoAreaRows() {
     const uint32_t ambienceCol = layout->tryField("SoundAmbience");
     const uint32_t musicCol = layout->tryField("ZoneMusic");
     const uint32_t introCol = layout->tryField("IntroSound");
+    const uint32_t reverbCol = layout->tryField("SoundProviderPref");
+    const uint32_t reverbUnderCol = layout->tryField("SoundProviderPrefUnderwater");
     auto data = assetManager->readFile("DBFilesClient\\WMOAreaTable.dbc");
     pipeline::DBCFile dbc;
     if (data.empty() || !dbc.load(data)) return;
@@ -7651,6 +7657,8 @@ void Renderer::loadWmoAreaRows() {
         if (ambienceCol < dbc.getFieldCount()) row.soundAmbience = dbc.getUInt32(i, ambienceCol);
         if (musicCol < dbc.getFieldCount()) row.zoneMusic = dbc.getUInt32(i, musicCol);
         if (introCol < dbc.getFieldCount()) row.introSound = dbc.getUInt32(i, introCol);
+        if (reverbCol < dbc.getFieldCount()) row.soundProvider = dbc.getUInt32(i, reverbCol);
+        if (reverbUnderCol < dbc.getFieldCount()) row.soundProviderUnderwater = dbc.getUInt32(i, reverbUnderCol);
         wmoAreaRows_[minimap_indoor::areaKey(dbc.getUInt32(i, cols[0]), dbc.getUInt32(i, cols[1]),
                                              static_cast<int32_t>(dbc.getUInt32(i, cols[2])))] =
             std::move(row);

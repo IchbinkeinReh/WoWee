@@ -12,7 +12,7 @@
 #include "audio/zone_music.hpp"
 
 namespace wowee {
-namespace pipeline { class AssetManager; }
+namespace pipeline { class AssetManager; class DBCFile; }
 namespace audio {
 
 class MusicManager;
@@ -153,6 +153,11 @@ private:
     // What the slots were last filled from.
     std::optional<zone_ambience::Place> ambiencePlace_;
     std::optional<zone_ambience::WorldStateSound> worldStateRow_;
+    // The place's reverb presets (slot 0 and, under liquid, slot 9).
+    uint32_t placeReverb_ = 0;
+    uint32_t placeReverbUnderwater_ = 0;
+    std::shared_ptr<pipeline::DBCFile> soundProviderPrefs_;
+    bool soundProviderPrefsLoaded_ = false;
     std::vector<zone_ambience::WorldStateSound> worldStateSounds_;
     bool worldStateSoundsLoaded_ = false;
     uint32_t weatherSerialSeen_ = 0;

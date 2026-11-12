@@ -3876,3 +3876,11 @@ wowee_add_test(test_mpq_archive_set
     SOURCES test_mpq_archive_set.cpp ${TEST_COMMON_SOURCES}
             ${CMAKE_SOURCE_DIR}/src/pipeline/mpq_archive_set.cpp)
 target_link_libraries(test_mpq_archive_set PRIVATE ZLIB::ZLIB)
+
+# ── test_eax_reverb ──────────────────────────────────────────
+# The world's reverb: the OFF preset is silence, a preset's tail and decay.
+wowee_add_test(test_eax_reverb
+    SOURCES test_eax_reverb.cpp
+            ${CMAKE_SOURCE_DIR}/src/audio/eax_reverb.cpp
+            ${CMAKE_SOURCE_DIR}/src/pipeline/dbc_loader.cpp
+            ${TEST_COMMON_SOURCES})
