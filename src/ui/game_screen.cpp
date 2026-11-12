@@ -720,6 +720,12 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     combatUI_.renderCooldownTracker(gameHandler, settingsPanel_, spellIconFn);
     renderNameplates(gameHandler);  // names over heads and nameplates (0x007e5640, 0x0098f790)
     commitMouseover(gameHandler);
+    // cameraDistanceMax, the other half of the zoom limit (0x006000e0).
+    if (auto* renderer = services_.renderer; renderer && renderer->getCameraController()) {
+        float yards = 15.0f;
+        try { yards = std::stof(addons::storedCVarValue("cameraDistanceMax", "15.0")); } catch (...) {}
+        renderer->getCameraController()->setDistanceMax(yards);
+    }
     renderLightKindOverlay();       // Debug Graphics: the lights' kinds
     combatUI_.playSoundsForNewChat(gameHandler);
     // Blizzard_CombatText draws its own once it is loaded, which happens the

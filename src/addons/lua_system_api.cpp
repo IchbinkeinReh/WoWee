@@ -1708,9 +1708,9 @@ constexpr ClientCVarBinding kClientCVars[] = {
     // The client's own cvar of that name (0x0078e1a0), read at start-up.
     {"specular",             "specular"},
     // How far back the camera may be pulled. The row counts yards; the CVar
-    // the game's slider wrote counts multiples of the 22 the original client
-    // gives, so a 1 here is 22 there and the slider's 2 is 44.
-    {"cameradistancemaxfactor", "cameramaxdistance", 22.0},
+    // the game's slider wrote counts multiples of cameraDistanceMax's 15, so
+    // a 1 here is 15 there and the slider's 2 is 30.
+    {"cameradistancemaxfactor", "cameramaxdistance", 15.0},
     // Read by the client's own attack handling, not by FrameXML's buttons.
     {"secureabilitytoggle",  "secureabilitytoggle"},
     // The bubbles are drawn by this client, so both boxes are its own.
