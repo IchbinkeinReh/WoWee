@@ -48,6 +48,7 @@
 #include "addons/button_label_lua.hpp"
 #include "addons/binding_command.hpp"
 #include "pipeline/asset_manager.hpp"
+#include "pipeline/dbc_layout.hpp"
 #include "core/window.hpp"
 #include <imgui.h>
 #include <fstream>
@@ -4448,27 +4449,90 @@ int lua_Tooltip_SetUnit(lua_State* L) {
         }
     }
 
-    // "Level 50", and the class after it for a player. Yellow, as WoW draws a
-    // level the player's own is a match for; the difficulty colouring proper
-    // needs the same table the nameplates use and is not invented here.
-    if (entity) {
-        const uint32_t level =
-            entity->getField(game::fieldIndex(game::UF::UNIT_FIELD_LEVEL));
-        if (level > 0) {
-            std::string levelLine = "Level " + std::to_string(level);
-            if (isPlayer) {
-                const uint32_t bytes0 =
-                    entity->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0));
-                const unsigned classId = (bytes0 >> 8) & 0xFFu;
-                if (const char* cls = wowee::addons::luaClassToken(classId)) {
-                    (void)cls;
-                    levelLine += " ";
-                    levelLine += wowee::addons::localizedClassName(
-                        gh, classId, ((bytes0 >> 16) & 0xFFu) == 1 ? 1 : 0);
-                }
-            }
-            addLine(levelLine, 1.0f, 0.82f, 0.0f);
+    // The level line, white (0x00621070): the level, or "??" for a boss
+    // (creature type flag 0x4), one ten or more above a player it is hostile
+    // to, or none; then a player's race and class (gendered), CORPSE for one
+    // dead, or a creature's type where the player is not friendly to it; then
+    // PLAYER for a player, BOSS, or ELITE for rank 1 and 2. Which of the three
+    // there are picks TOOLTIP_UNIT_LEVEL, _TYPE, _CLASS, _CLASS_TYPE,
+    // _RACE_CLASS or _RACE_CLASS_TYPE.
+    if (const auto unitEnt = std::dynamic_pointer_cast<game::Unit>(entity)) {
+        const auto field = [&](game::UF f) {
+            const uint16_t i = game::fieldIndex(f);
+            return i != 0xFFFF ? unitEnt->getField(i) : 0u;
+        };
+        const int32_t level = static_cast<int32_t>(field(game::UF::UNIT_FIELD_LEVEL));
+        const bool dead = unitEnt->getHealth() == 0 || (field(game::UF::UNIT_DYNAMIC_FLAGS) & game::UNIT_DYNFLAG_DEAD) != 0;
+        const game::CreatureQueryResponseData* cre = nullptr;
+        if (!isPlayer) {
+            const auto& cache = gh->getCreatureInfoCache();
+            if (const auto it = cache.find(unitEnt->getEntry()); it != cache.end()) cre = &it->second;
         }
+        // 0x0071f300: the form's creature type, else the creature's, else
+        // the race's.
+        uint32_t type = 0;
+        auto* am = gh->services().assetManager;
+        if (const auto* form = gh->shapeshiftFormRow(static_cast<uint8_t>(field(game::UF::UNIT_FIELD_BYTES_2) >> 24));
+            form && static_cast<int32_t>(form->creatureType) > 0) {
+            type = form->creatureType;
+        } else if (cre) {
+            type = cre->creatureType;
+        } else if (isPlayer) {
+            const auto* layouts = pipeline::getActiveDBCLayout();
+            const auto* rl = layouts ? layouts->getLayout("ChrRaces") : nullptr;
+            const uint32_t tf = rl ? rl->tryField("CreatureType") : 0xFFFFFFFFu;
+            auto races = am && am->isInitialized() ? am->loadDBCOptional("ChrRaces.dbc") : nullptr;
+            if (races && races->isLoaded() && tf < races->getFieldCount())
+                if (const int32_t r = races->findRecordById(field(game::UF::UNIT_FIELD_BYTES_0) & 0xFFu); r >= 0)
+                    type = races->getUInt32(static_cast<uint32_t>(r), tf);
+        }
+        const auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid());
+        const uint32_t typeFlags = cre ? cre->typeFlags : 0u;
+        bool unknown = false;
+        uint32_t shownType = 0;
+        if (player) {
+            if (type != 10 && gh->unitReaction(*player, *unitEnt) < 4 && (typeFlags & 0x4000000u) == 0) shownType = type;
+            const uint16_t li = game::fieldIndex(game::UF::UNIT_FIELD_LEVEL);
+            const int32_t playerLevel = li != 0xFFFF ? static_cast<int32_t>(player->getField(li)) : 0;
+            if (gh->unitReaction(*unitEnt, *player) < 2 && playerLevel <= level - 10) unknown = true;
+        }
+        if ((typeFlags & 0x4u) != 0 || level < 1) unknown = true;
+        const std::string levelText = unknown ? std::string("??") : std::to_string(level);
+
+        std::string race, cls, kind;
+        if (dead) {
+            cls = globalOr(L, "CORPSE", "Corpse");
+        } else if (isPlayer) {
+            const uint32_t bytes0 = field(game::UF::UNIT_FIELD_BYTES_0);
+            const int gender = ((bytes0 >> 16) & 0xFFu) == 1 ? 1 : 0;
+            const std::string r = wowee::addons::localizedRaceName(gh, bytes0 & 0xFFu, gender);
+            const std::string c = wowee::addons::localizedClassName(gh, (bytes0 >> 8) & 0xFFu, gender);
+            if (!r.empty() && !c.empty()) { race = r; cls = c; }
+        } else if (shownType != 0) {
+            auto types = am && am->isInitialized() ? am->loadDBCOptional("CreatureType.dbc") : nullptr;
+            if (types && types->isLoaded() && types->getFieldCount() > 1)
+                if (const int32_t r = types->findRecordById(shownType); r >= 0) cls = types->getString(static_cast<uint32_t>(r), 1);
+        }
+        if (isPlayer) kind = globalOr(L, "PLAYER", "Player");
+        else if ((typeFlags & 0x4u) != 0) kind = globalOr(L, "BOSS", "Boss");
+        else if (cre && (cre->rank == 1 || cre->rank == 2)) kind = globalOr(L, "ELITE", "Elite");
+
+        std::string text;
+        if (!race.empty() && !cls.empty()) {
+            text = kind.empty()
+                ? formatGlobal(L, globalOr(L, "TOOLTIP_UNIT_LEVEL_RACE_CLASS", "Level %s %s %s"), {levelText, race, cls})
+                : formatGlobal(L, globalOr(L, "TOOLTIP_UNIT_LEVEL_RACE_CLASS_TYPE", "Level %s %s %s (%s)"),
+                               {levelText, race, cls, kind});
+        } else if (!cls.empty()) {
+            text = kind.empty() ? formatGlobal(L, globalOr(L, "TOOLTIP_UNIT_LEVEL_CLASS", "Level %s %s"), {levelText, cls})
+                                : formatGlobal(L, globalOr(L, "TOOLTIP_UNIT_LEVEL_CLASS_TYPE", "Level %s %s (%s)"),
+                                               {levelText, cls, kind});
+        } else if (!kind.empty()) {
+            text = formatGlobal(L, globalOr(L, "TOOLTIP_UNIT_LEVEL_TYPE", "Level %s (%s)"), {levelText, kind});
+        } else {
+            text = formatGlobal(L, globalOr(L, "TOOLTIP_UNIT_LEVEL", "Level %s"), {levelText});
+        }
+        addLine(text, 1.0f, 1.0f, 1.0f);
     }
 
     // A corpse's looters, as SMSG_LOOT_LIST left them on the unit: "Master
