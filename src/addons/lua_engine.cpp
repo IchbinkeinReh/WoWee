@@ -5781,6 +5781,25 @@ int lua_Tooltip_NumLines(lua_State* L) {
     return 1;
 }
 
+/// ScrollingMessageFrame:UpdateColorByID(id, r, g, b) (0x00973590 ->
+/// 0x0096a6e0): every line added with that id takes the colour - which is
+/// how a chat type's new colour reaches the lines already in the window.
+/// All four arguments are needed; an id of 0 names no line.
+int lua_MessageFrame_UpdateColorByID(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w || !lua_isnumber(L, 2) || !lua_isnumber(L, 3) || !lua_isnumber(L, 4) || !lua_isnumber(L, 5)) return 0;
+    const double id = lua_tonumber(L, 2);
+    if (id == 0.0) return 0;
+    const auto chan = [&](int i) { return static_cast<float>(std::clamp(lua_tonumber(L, i), 0.0, 1.0)); };
+    for (auto& m : w->messages) {
+        if (m.lineId != id) continue;
+        m.color[0] = chan(3);
+        m.color[1] = chan(4);
+        m.color[2] = chan(5);
+    }
+    return 0;
+}
+
 int lua_MessageFrame_Clear(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) {
         w->messages.clear();
@@ -10077,6 +10096,7 @@ void LuaEngine::registerCoreAPI() {
         {"AppendText",      lua_Tooltip_AppendText},
         {"NumLines",        lua_Tooltip_NumLines},
         {"Clear",           lua_MessageFrame_Clear},
+        {"UpdateColorByID", lua_MessageFrame_UpdateColorByID},
         {"GetNumMessages",  lua_MessageFrame_GetNumMessages},
         {"GetMessageInfo",  lua_MessageFrame_GetMessageInfo},
         {"RemoveMessagesByAccessID", lua_MessageFrame_RemoveMessagesByAccessID},
