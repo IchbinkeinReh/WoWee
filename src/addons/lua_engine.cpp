@@ -13793,9 +13793,13 @@ void LuaEngine::worldMouseoverChanged(uint64_t oldGuid, uint64_t newGuid, Mouseo
         const auto& names = gh->getPlayerNameCache();
         const auto it = names.find(ownerGuid);
         if (it == names.end() || it->second.empty()) {
+            // Asked for, and the tooltip built when it comes back, as the
+            // client's name callback does (0x0061dd20).
             if (ownerGuid != 0) gh->queryPlayerName(ownerGuid);
+            corpseTooltipWaiting_ = newGuid;
             return;
         }
+        corpseTooltipWaiting_ = 0;
         w->isTooltip = true;
         w->tooltipUnit.clear();
         w->tooltipLines.clear();
@@ -13820,6 +13824,21 @@ void LuaEngine::worldMouseoverChanged(uint64_t oldGuid, uint64_t newGuid, Mouseo
         lua_pop(L_, 1);
     }
     lua_pop(L_, 1);
+}
+
+void LuaEngine::retryCorpseTooltip(uint64_t mouseover) {
+    if (corpseTooltipWaiting_ == 0) return;
+    if (corpseTooltipWaiting_ != mouseover) {
+        corpseTooltipWaiting_ = 0;
+        return;
+    }
+    auto* gh = L_ ? wowee::addons::getGameHandler(L_) : nullptr;
+    const auto corpse = gh ? gh->getEntityManager().getEntity(mouseover) : nullptr;
+    if (!corpse) return;
+    const uint64_t ownerGuid = (static_cast<uint64_t>(corpse->getField(7)) << 32) | corpse->getField(6);
+    const auto it = gh->getPlayerNameCache().find(ownerGuid);
+    if (it == gh->getPlayerNameCache().end() || it->second.empty()) return;
+    worldMouseoverChanged(0, mouseover, MouseoverKind::Corpse);
 }
 
 bool LuaEngine::frameHasScript(uint32_t wid, const char* script) {

@@ -275,6 +275,9 @@ public:
     /// fades, and a unit's, a game object's or a corpse's is shown.
     enum class MouseoverKind { None, Unit, GameObject, Corpse };
     void worldMouseoverChanged(uint64_t oldGuid, uint64_t newGuid, MouseoverKind kind);
+    /// Each frame with the mouseover unchanged: a corpse whose owner's name
+    /// was not yet known gets its tooltip once the name arrives.
+    void retryCorpseTooltip(uint64_t mouseover);
 
     lua_State* getState() { return L_; }
     /// A global string of the interface's - GlobalStrings.lua's, which is
@@ -329,6 +332,7 @@ private:
     lua_State* L_ = nullptr;
     uint32_t stateGeneration_ = 0;
     ui::WidgetTree widgets_;
+    uint64_t corpseTooltipWaiting_ = 0;
     game::GameHandler* gameHandler_ = nullptr;
     LuaServices luaServices_;
     LuaErrorCallback luaErrorCallback_;

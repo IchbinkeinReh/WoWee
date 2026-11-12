@@ -1443,9 +1443,12 @@ void GameScreen::commitMouseover(game::GameHandler& gameHandler) {
     // corpse's by its owner's name (0x00622410).
     const uint64_t guid = plateMouseover_ != 0 ? plateMouseover_ : worldMouseover_;
     const uint64_t old = gameHandler.getMouseoverGuid();
-    if (guid == old) return;
-    gameHandler.setMouseoverGuid(guid);
     auto* engine = services_.addonManager ? services_.addonManager->getLuaEngine() : nullptr;
+    if (guid == old) {
+        if (engine) engine->retryCorpseTooltip(guid);
+        return;
+    }
+    gameHandler.setMouseoverGuid(guid);
     if (!engine) return;
     const auto entity = guid != 0 ? gameHandler.getEntityManager().getEntity(guid) : nullptr;
     using Kind = addons::LuaEngine::MouseoverKind;
