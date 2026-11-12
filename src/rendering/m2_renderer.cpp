@@ -2919,18 +2919,19 @@ void M2Renderer::releaseRtSkinned() {
 void M2Renderer::pushAlongParticles(const rt_lights::PointLight& light, const M2ModelGPU& model,
                                     const M2Instance& inst, std::vector<rt_lights::PointLight>& out) const {
     // A model's own light - an M2 light, a lamp's, a fire's - shines while
-    // its particles emit (emission): it is their light. With the Debug Glow
-    // "Point lights per particle light" above one it is split as a particle
-    // light is (rt_particle_lights.hpp): N lights along the mean path of the
+    // its particles emit (emission): it is their light, and it is placed as a
+    // particle light is (rt_particle_lights.hpp, the Debug Glow "Point
+    // lights per particle light", N): N lights along the mean path of the
     // emitters that are on, spaced evenly from the emitter to the
-    // particles' mean end, the first the strongest, together the one light's
-    // colour. Its flame emitters' paths where it has any (blending 3 and 4,
-    // as flameCentre takes them) - not its smoke's, which gives no light -
-    // else all of them that are on; the light shared out over them equally.
-    // At one, and for a model with no emitter on - a lamp that only glows -
-    // the light stays as it is, where the model gives it.
+    // particles' mean end - at N = 1 the one light at the middle of the
+    // path, the user's decision - the first the strongest, together the one
+    // light's colour. Its flame emitters' paths where it has any (blending 3
+    // and 4, as flameCentre takes them) - not its smoke's, which gives no
+    // light - else all of them that are on; the light shared out over them
+    // equally. A model with no emitter on - a lamp that only glows - keeps
+    // its light where the model gives it.
     const int n = particleLightsPerEmitter_;
-    if (n <= 1 || model.particleEmitters.empty()) {
+    if (model.particleEmitters.empty()) {
         out.push_back(light);
         return;
     }

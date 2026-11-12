@@ -556,8 +556,7 @@ constexpr SettingDesc kSchema[] = {
      "life; more spread along their way from the emitter to where they\n"
      "fade, the first the strongest, all together as bright as one.\n"
      "A model's own light that burns with its particles - a brazier's,\n"
-     "a lamp's flame - is spread the same way along its flames; at 1 it\n"
-     "stays where the model gives it.\n"
+     "a lamp's flame - is placed the same way along its flames.\n"
      "More costs trace time. Not in the original client.", "", 1,
      "raytracedlighting"},
 

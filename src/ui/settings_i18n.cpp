@@ -237,8 +237,8 @@ constexpr SettingGerman kGerman[] = {
      "seine Partikel im Mittel nach der Hälfte ihres Lebens sind; mehr verteilen sich auf ihrem "
      "Weg vom Emitter bis dorthin, wo sie vergehen, das erste am stärksten, alle zusammen so hell "
      "wie eines. Das eigene Licht eines Modells, das mit seinen Partikeln brennt - einer "
-     "Feuerschale, der Flamme einer Lampe -, verteilt sich ebenso entlang seiner Flammen; bei 1 "
-     "bleibt es, wo das Modell es gibt. Mehr kostet Zeit beim Raytracing. Nicht im "
+     "Feuerschale, der Flamme einer Lampe -, verteilt sich ebenso entlang seiner Flammen. "
+     "Mehr kostet Zeit beim Raytracing. Nicht im "
      "ursprünglichen Client.",
      nullptr, nullptr, nullptr},
     {"rtunitshadowreach",
