@@ -1,6 +1,7 @@
 #include "ui/data_folder_screen.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 
@@ -8,6 +9,7 @@
 #include "core/application.hpp"
 #include "core/config_paths.hpp"
 #include "core/window.hpp"
+#include "pipeline/data_stream.hpp"
 #include "ui/data_folder_picker.hpp"
 #include "ui/paper_ui.hpp"
 
@@ -72,6 +74,10 @@ void DataFolderScreen::render() {
     ImGui::PushStyleColor(ImGuiCol_Button, fromU32(theme.photoMat));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, fromU32(theme.highlighter));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, fromU32(theme.paperEdge));
+    // The text fields in the card's own field colour, as on the login card.
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, fromU32(theme.fieldFill));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, fromU32(theme.highlighter));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, fromU32(theme.highlighter));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(22.0f * scale, 20.0f * scale));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f * scale, 9.0f * scale));
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f * scale, 8.0f * scale));
@@ -112,9 +118,55 @@ void DataFolderScreen::render() {
         ImGui::TextWrapped("%s", picker.message().c_str());
     }
 
+    // Or the game data streamed from a server: its address and access key.
+    if (!streamLoaded_) {
+        const core::DataStreamChoice kept = core::getDataStream();
+        std::snprintf(streamUrl_, sizeof(streamUrl_), "%s", kept.url.c_str());
+        std::snprintf(streamKey_, sizeof(streamKey_), "%s", kept.key.c_str());
+        streamLoaded_ = true;
+    }
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    ImGui::TextWrapped("Or stream the game data from a server:");
+    const float fieldW = ImGui::GetContentRegionAvail().x;
+    ImGui::SetNextItemWidth(fieldW);
+    ImGui::InputTextWithHint("##streamurl", "https://server/wowee-data/", streamUrl_, sizeof(streamUrl_));
+    ImGui::SetNextItemWidth(fieldW);
+    ImGui::InputTextWithHint("##streamkey", "Access key", streamKey_, sizeof(streamKey_),
+                             ImGuiInputTextFlags_Password);
+    if (ImGui::Button("Use this server")) {
+        const std::string url = streamUrl_;
+        const std::string key = streamKey_;
+        pipeline::StreamUrl parsed;
+        std::string error;
+        if (url.empty()) {
+            streamMessage_ = "Give the server's address.";
+        } else if (!pipeline::parseStreamUrl(url, parsed, error)) {
+            streamMessage_ = "That address will not do: " + error + ".";
+        } else if (key.empty()) {
+            streamMessage_ = "The server needs its access key.";
+        } else if (!core::setDataStream({url, key})) {
+            streamMessage_ = "Could not save the server to " + core::getConfigRoot() + ".";
+        } else {
+            streamMessage_ = "The game data will be streamed from " + parsed.host +
+                             " when WoWee next starts. Close WoWee and open it again.";
+        }
+    }
+    if (!core::getDataStream().url.empty()) {
+        ImGui::SameLine();
+        if (ImGui::Button("Stop streaming")) {
+            core::setDataStream({});
+            streamUrl_[0] = '\0';
+            streamKey_[0] = '\0';
+            streamMessage_ = "The game data will be read from the folder again when WoWee next starts.";
+        }
+    }
+    if (!streamMessage_.empty()) ImGui::TextWrapped("%s", streamMessage_.c_str());
+
     ImGui::End();
     ImGui::PopStyleVar(3);
-    ImGui::PopStyleColor(9);
+    ImGui::PopStyleColor(12);
 }
 
 }  // namespace wowee::ui

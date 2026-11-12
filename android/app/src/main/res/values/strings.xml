@@ -12,6 +12,13 @@
     <string name="data_folder_choose">Choose folder…</string>
     <string name="data_folder_default">Use /sdcard/wowee</string>
     <string name="data_folder_shortcut">Data folder</string>
+    <string name="data_stream_title">Or stream the game data from a server</string>
+    <string name="data_stream_url_hint">https://server/wowee-data/</string>
+    <string name="data_stream_key_hint">Access key</string>
+    <string name="data_stream_use">Use this server</string>
+    <string name="data_stream_use_saved">Use this server (saved)</string>
+    <string name="data_stream_https">The server address must start with https://</string>
+    <string name="data_stream_no_key">The server needs its access key.</string>
 
     <!-- Unpacking a zip of the data into the folder; see ZipImport. -->
     <string name="data_folder_zip">Unpack a zip…</string>

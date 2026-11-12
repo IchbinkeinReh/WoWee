@@ -9,6 +9,11 @@
 /// the same screen as Android's, drawn by the client: the folder it reads, what
 /// to do to fill it, a way to choose another folder, and a way back to the
 /// default. The decisions are core/data_prompt.hpp's.
+///
+/// Or no folder at all: a streaming server's address and access key (the
+/// "streaming" data mode, pipeline/data_stream), kept like the folder choice
+/// (core::setDataStream) and used from the next start - as Android's screen
+/// offers the same two fields.
 
 #include "core/data_prompt.hpp"
 
@@ -29,6 +34,11 @@ private:
     bool found_ = false;
     std::string folder_;
     std::string lastMessage_;
+    // The streaming server's fields, filled from what is kept.
+    bool streamLoaded_ = false;
+    char streamUrl_[512] = {};
+    char streamKey_[256] = {};
+    std::string streamMessage_;
 };
 
 }  // namespace wowee::ui

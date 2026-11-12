@@ -86,6 +86,7 @@ public class WoweeActivity extends SDLActivity {
         setEnv("WOW_DATA_PATH", data.getAbsolutePath());
         setEnv("WOWEE_CONFIG_ROOT", new File(root, "config").getAbsolutePath());
         new File(root, "config").mkdirs();
+        writeStreamChoice(new File(root, "config"));
 
         super.onCreate(savedInstanceState);
         watchKeyboard();
@@ -156,6 +157,29 @@ public class WoweeActivity extends SDLActivity {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /**
+     * The streaming server chosen in DataFolderActivity, where the client
+     * reads it (core::getDataStream): config/data_stream.txt, the address on
+     * the first line and the key on the second, in the app's own storage.
+     * Removed when no server is chosen, so the folder is read again.
+     */
+    private void writeStreamChoice(File config) {
+        File file = new File(config, "data_stream.txt");
+        String url = DataFolderActivity.streamUrl(this);
+        if (url == null) {
+            if (file.exists() && !file.delete()) Log.w(TAG, "could not remove " + file);
+            return;
+        }
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(file)) {
+            out.write((url + "\n" + DataFolderActivity.streamKey(this) + "\n")
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            Log.e(TAG, "could not write " + file, e);
+        }
+        file.setReadable(false, false);
+        file.setReadable(true, true);
     }
 
     private void setEnv(String name, String value) {

@@ -19,7 +19,9 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.text.InputType;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
@@ -52,6 +54,11 @@ public class DataFolderActivity extends Activity implements ZipImport.Listener {
 
     private static final String PREFS = "wowee";
     private static final String KEY_DATA_PATH = "dataPath";
+    // The streaming server instead of a folder (the client's "streaming" data
+    // mode): kept here like the folder, written into the client's config by
+    // WoweeActivity (config/data_stream.txt) before it starts.
+    static final String KEY_STREAM_URL = "streamUrl";
+    static final String KEY_STREAM_KEY = "streamKey";
     private static final int REQUEST_TREE = 1;
     private static final int REQUEST_ZIP = 2;
 
@@ -61,6 +68,9 @@ public class DataFolderActivity extends Activity implements ZipImport.Listener {
     private LinearLayout buttons;
     private Button unpackZip;
     private Button unpackFound;
+    private EditText streamUrl;
+    private EditText streamKey;
+    private Button streamUse;
 
     // Shown instead of the buttons while a zip is being unpacked.
     private LinearLayout progressPanel;
@@ -105,6 +115,17 @@ public class DataFolderActivity extends Activity implements ZipImport.Listener {
         return false;
     }
 
+    /** The streaming server's address, or null when none is set. */
+    static String streamUrl(Context context) {
+        String url = context.getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_STREAM_URL, null);
+        return url == null || url.isEmpty() ? null : url;
+    }
+
+    static String streamKey(Context context) {
+        String key = context.getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_STREAM_KEY, null);
+        return key == null ? "" : key;
+    }
+
     private static boolean haveAccess() {
         return Environment.isExternalStorageManager();
     }
@@ -145,6 +166,11 @@ public class DataFolderActivity extends Activity implements ZipImport.Listener {
         }
         // Back from the settings screen, the picker, or the player copying data
         // in: the state may have changed under this screen either way.
+        // Streaming needs no folder and no file access: straight in.
+        if (!choosing && streamUrl(this) != null) {
+            startGame();
+            return;
+        }
         if (!choosing && haveAccess() && hasGameData(dataDir(this))) {
             startGame();
             return;
@@ -208,6 +234,39 @@ public class DataFolderActivity extends Activity implements ZipImport.Listener {
         });
         buttons.addView(reset, buttonParams());
 
+        // Or no folder at all: the game data streamed from a server, the
+        // address and its access key.
+        TextView streamTitle = new TextView(this);
+        streamTitle.setText(R.string.data_stream_title);
+        streamTitle.setTextColor(Color.WHITE);
+        streamTitle.setTextSize(17);
+        streamTitle.setGravity(Gravity.CENTER);
+        streamTitle.setPadding(0, pad, 0, pad / 3);
+        buttons.addView(streamTitle);
+
+        streamUrl = new EditText(this);
+        streamUrl.setHint(R.string.data_stream_url_hint);
+        streamUrl.setSingleLine(true);
+        streamUrl.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        streamUrl.setTextColor(Color.WHITE);
+        streamUrl.setHintTextColor(Color.GRAY);
+        String savedUrl = streamUrl(this);
+        if (savedUrl != null) streamUrl.setText(savedUrl);
+        buttons.addView(streamUrl, fieldParams());
+
+        streamKey = new EditText(this);
+        streamKey.setHint(R.string.data_stream_key_hint);
+        streamKey.setSingleLine(true);
+        streamKey.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        streamKey.setTextColor(Color.WHITE);
+        streamKey.setHintTextColor(Color.GRAY);
+        streamKey.setText(streamKey(this));
+        buttons.addView(streamKey, fieldParams());
+
+        streamUse = new Button(this);
+        streamUse.setOnClickListener(v -> useStream());
+        buttons.addView(streamUse, buttonParams());
+
         progressPanel = new LinearLayout(this);
         progressPanel.setOrientation(LinearLayout.VERTICAL);
         progressPanel.setVisibility(View.GONE);
@@ -246,6 +305,41 @@ public class DataFolderActivity extends Activity implements ZipImport.Listener {
         setContentView(layout);
     }
 
+    private LinearLayout.LayoutParams fieldParams() {
+        int width = (int) (420 * getResources().getDisplayMetrics().density);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+                width, ViewGroup.LayoutParams.WRAP_CONTENT);
+        p.gravity = Gravity.CENTER_HORIZONTAL;
+        return p;
+    }
+
+    /**
+     * Keeps the server and starts, or forgets it when the address is empty.
+     * Only https://, or http:// to this device (the client refuses the rest
+     * itself and says so).
+     */
+    private void useStream() {
+        String url = streamUrl.getText().toString().trim();
+        String key = streamKey.getText().toString().trim();
+        SharedPreferences.Editor e = getSharedPreferences(PREFS, MODE_PRIVATE).edit();
+        if (url.isEmpty()) {
+            e.remove(KEY_STREAM_URL).remove(KEY_STREAM_KEY).apply();
+            refresh();
+            return;
+        }
+        if (!url.startsWith("https://") && !url.startsWith("http://127.0.0.1")
+                && !url.startsWith("http://localhost")) {
+            status.setText(R.string.data_stream_https);
+            return;
+        }
+        if (key.isEmpty()) {
+            status.setText(R.string.data_stream_no_key);
+            return;
+        }
+        e.putString(KEY_STREAM_URL, url).putString(KEY_STREAM_KEY, key).apply();
+        startGame();
+    }
+
     private LinearLayout.LayoutParams buttonParams() {
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -256,6 +350,10 @@ public class DataFolderActivity extends Activity implements ZipImport.Listener {
     private void refresh() {
         File folder = chosenFolder(this);
         showProgress(false);
+        if (streamUse != null) {
+            streamUse.setText(streamUrl(this) != null ? R.string.data_stream_use_saved
+                                                      : R.string.data_stream_use);
+        }
         if (!haveAccess()) {
             status.setText(getString(R.string.data_folder_need_access, folder.getAbsolutePath()));
             primary.setText(R.string.data_folder_grant);
