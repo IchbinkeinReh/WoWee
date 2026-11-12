@@ -249,8 +249,9 @@ public:
     /// spline flagged FLYING or CATMULLROM (0x42000); otherwise straight lines
     /// from point to point at the spline's one speed - FUN_0098c770 sets the
     /// spline's mode (+500) to 1 only for those flags, 0 (linear) for the rest.
+    /// `clientCurve`: the curve as the WotLK client builds it (startCurvedPath).
     void startMoveAlongPath(const std::vector<std::array<float, 3>>& packetPath, float destO, float totalDuration,
-                            bool smooth = true) {
+                            bool smooth = true, bool clientCurve = false) {
         if (packetPath.empty()) return;
         if (packetPath.size() == 1 || totalDuration <= 0.0f) {
             startMoveTo(packetPath.back()[0], packetPath.back()[1], packetPath.back()[2], destO, totalDuration);
@@ -261,6 +262,12 @@ public:
         if (isMoving_ && moveElapsed_ >= moveDuration_) {
             x = moveEndX_; y = moveEndY_; z = moveEndZ_;
         }
+        if (smooth && clientCurve) {
+            startCurvedPath(packetPath, destO, totalDuration);
+            return;
+        }
+        curvePoints_.clear();
+        curveLengths_.clear();
         // The client's spline starts where the unit is drawn, not where the
         // packet says the server had it: CGUnit_C's monster-move handler
         // (FUN_0073c8e0) puts the unit's current position (vfunc +0x30) first
@@ -770,6 +777,10 @@ protected:
     std::optional<math::CatmullRomSpline> activeSpline_;
     // A linear spline's points and times (startMoveAlongPath); empty for a curved one.
     std::vector<math::SplineKey> linearKeys_;
+    // A curved spline's control points, a pad at each end (startCurvedPath),
+    // and the running curve length at the end of each segment; else empty.
+    std::vector<glm::vec3> curvePoints_;
+    std::vector<float> curveLengths_;
     uint32_t splineDurationMs_ = 0;
 
 private:
@@ -827,6 +838,20 @@ private:
     /// The path at `ms`: the curve, or straight between its points when the
     /// spline is linear (startMoveAlongPath).
     [[nodiscard]] math::SplineEvalResult pathEval(uint32_t ms) const {
+        if (curvePoints_.size() >= 4 && !curveLengths_.empty() && splineDurationMs_ > 0) {
+            // As the client's spline (FUN_004c3bd0): the share of the time
+            // gone is the share of the curve's length; the segment is found by
+            // the running lengths and its parameter by its own length.
+            const float total = curveLengths_.back();
+            const float share = std::clamp(static_cast<float>(ms) / static_cast<float>(splineDurationMs_), 0.0f, 1.0f);
+            const float s = total * share;
+            size_t seg = 0;
+            while (seg + 1 < curveLengths_.size() && curveLengths_[seg] <= s) ++seg;
+            const float before = seg > 0 ? curveLengths_[seg - 1] : 0.0f;
+            const float len = curveLengths_[seg] - before;
+            const float u = len > 1e-6f ? std::clamp((s - before) / len, 0.0f, 1.0f) : 1.0f;
+            return curveAt(seg, u);
+        }
         if (linearKeys_.size() < 2) return activeSpline_->evaluate(ms);
         size_t i = 1;
         while (i + 1 < linearKeys_.size() && linearKeys_[i].timeMs <= ms) ++i;
@@ -838,6 +863,108 @@ private:
         r.position = a.position + (b.position - a.position) * t;
         r.tangent = b.position - a.position;
         return r;
+    }
+
+    /// Catmull-Rom segment `seg` of curvePoints_ - from its point seg + 1 to
+    /// seg + 2; the first and the last point are pads - at `u`.
+    [[nodiscard]] math::SplineEvalResult curveAt(size_t seg, float u) const {
+        const glm::vec3& p0 = curvePoints_[seg];
+        const glm::vec3& p1 = curvePoints_[seg + 1];
+        const glm::vec3& p2 = curvePoints_[seg + 2];
+        const glm::vec3& p3 = curvePoints_[seg + 3];
+        const float u2 = u * u;
+        const float u3 = u2 * u;
+        math::SplineEvalResult r;
+        r.position = 0.5f * ((2.0f * p1) + (-p0 + p2) * u + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * u2 +
+                             (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * u3);
+        r.tangent = 0.5f * ((-p0 + p2) + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * 2.0f * u +
+                            (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * 3.0f * u2);
+        return r;
+    }
+
+    /// A FLYING or CATMULLROM monster move (0x42000), as the client's handler
+    /// (FUN_0073c8e0) builds it: from where the unit is drawn (vfunc +0x30),
+    /// on through the packet's points after its start - the first of them
+    /// only when it lies more than 0.0278 yd from the unit - with a pad a yard
+    /// behind the unit along its facing before it and the last point repeated
+    /// after it. The packet's own start is not a point of the curve. Its speed
+    /// is the points' polyline length over the packet's duration, at most
+    /// 50 yd/s, and its duration that length at that speed. A segment's length
+    /// is its curve's, summed over 20 steps (FUN_004c3b10).
+    void startCurvedPath(const std::vector<std::array<float, 3>>& packetPath, float destO, float totalDuration) {
+        constexpr float kSameStartDistanceSq = 0.00077160494f;
+        constexpr float kFlyingSpeedCap = 50.0f;
+        std::vector<glm::vec3> pts;
+        pts.reserve(packetPath.size() + 2);
+        const glm::vec3 here(x, y, z);
+        // The facing's direction, as startMoveByFlags moves along it.
+        pts.push_back(glm::vec3(here.x - std::cos(orientation), here.y + std::sin(orientation), here.z));
+        pts.push_back(here);
+        for (size_t i = 1; i < packetPath.size(); ++i) {
+            const glm::vec3 p(packetPath[i][0], packetPath[i][1], packetPath[i][2]);
+            if (i == 1) {
+                const glm::vec3 d = p - here;
+                if (glm::dot(d, d) < kSameStartDistanceSq) continue;
+            }
+            pts.push_back(p);
+        }
+        const glm::vec3 dest = pts.back();
+        pts.push_back(dest);
+        float chord = 0.0f;
+        for (size_t i = 2; i + 1 < pts.size(); ++i) chord += glm::length(pts[i] - pts[i - 1]);
+        if (pts.size() < 4 || chord <= 0.16666667f) {
+            curvePoints_.clear();
+            curveLengths_.clear();
+            startMoveTo(dest.x, dest.y, dest.z, destO, totalDuration);
+            return;
+        }
+        float speed = kFlyingSpeedCap;
+        if (totalDuration > 0.0f) speed = std::min(speed, chord / totalDuration);
+        const uint32_t durationMs =
+            std::max<uint32_t>(1u, static_cast<uint32_t>(std::lround(chord / speed * 1000.0f)));
+        const float duration = static_cast<float>(durationMs) / 1000.0f;
+
+        curvePoints_ = std::move(pts);
+        curveLengths_.clear();
+        float run = 0.0f;
+        for (size_t seg = 0; seg + 3 < curvePoints_.size(); ++seg) {
+            glm::vec3 prev = curvePoints_[seg + 1];
+            for (int k = 1; k <= 20; ++k) {
+                const glm::vec3 at = curveAt(seg, 0.05f * static_cast<float>(k)).position;
+                run += glm::length(at - prev);
+                prev = at;
+            }
+            curveLengths_.push_back(run);
+        }
+        if (run <= 1e-6f) run = 1.0f;
+        // The curve's points as the spline's keys too, for what reads them.
+        std::vector<math::SplineKey> keys;
+        keys.reserve(curvePoints_.size() - 2);
+        for (size_t i = 1; i + 1 < curvePoints_.size(); ++i) {
+            math::SplineKey k;
+            k.timeMs = i == 1 ? 0u
+                              : static_cast<uint32_t>(curveLengths_[i - 2] / run * static_cast<float>(durationMs));
+            k.position = curvePoints_[i];
+            keys.push_back(k);
+        }
+        linearKeys_.clear();
+        activeSpline_.emplace(std::move(keys), /*timeClosed=*/false);
+        splineDurationMs_ = durationMs;
+
+        const float fromX = isMoving_ ? moveEndX_ : x;
+        const float fromY = isMoving_ ? moveEndY_ : y;
+        const float alpha = 0.65f;
+        velX_ = alpha * (dest.x - fromX) / duration + (1.0f - alpha) * velX_;
+        velY_ = alpha * (dest.y - fromY) / duration + (1.0f - alpha) * velY_;
+        velZ_ = alpha * (dest.z - here.z) / duration + (1.0f - alpha) * velZ_;
+
+        moveEndX_ = dest.x; moveEndY_ = dest.y; moveEndZ_ = dest.z;
+        moveDuration_ = duration;
+        moveElapsed_ = 0.0f;
+        moveSpeed_ = speed;
+        orientation = destO;
+        isMoving_ = true;
+        usePathMode_ = true;
     }
 
     void advanceSegment(float deltaTime) {

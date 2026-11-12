@@ -2200,8 +2200,16 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
             through(destCanonical);
         }
 
+        // Curved only for a FLYING or CATMULLROM spline (FUN_0098c770 sets its
+        // mode from 0x42000); a walking unit's runs straight from point to
+        // point. The pre-WotLK flags keep the curve.
+        const bool smooth = !wotlkSplineFlags ||
+            (data.splineFlags & (SplineFlagWotlk::FLYING | SplineFlagWotlk::CATMULLROM)) != 0;
+        // A WotLK curve is the client's (startCurvedPath) with or without
+        // points between: FUN_0073c8e0 builds it the same for one point.
+        const bool clientRoute = wotlkSplineFlags && smooth;
         // Build full path: start → waypoints → destination (all in canonical coords)
-        if (!data.waypoints.empty()) {
+        if (!data.waypoints.empty() || clientRoute) {
             glm::vec3 startCanonical = core::coords::serverToCanonical(
                 glm::vec3(data.x, data.y, data.z));
             std::vector<std::array<float, 3>> path;
@@ -2215,12 +2223,8 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
                 path.push_back({wpCanonical.x, wpCanonical.y, wpCanonical.z});
             }
             path.push_back({destCanonical.x, destCanonical.y, destCanonical.z});
-            // Curved only for a FLYING or CATMULLROM spline (FUN_0098c770 sets its
-            // mode from 0x42000); a walking unit's runs straight from point to
-            // point. The pre-WotLK flags keep the curve.
-            const bool smooth = !wotlkSplineFlags ||
-                (data.splineFlags & (SplineFlagWotlk::FLYING | SplineFlagWotlk::CATMULLROM)) != 0;
-            entity->startMoveAlongPath(path, orientation, data.duration / 1000.0f, smooth);
+            entity->startMoveAlongPath(path, orientation, data.duration / 1000.0f, smooth,
+                                       /*clientCurve=*/wotlkSplineFlags && smooth);
         } else {
             entity->startMoveTo(destCanonical.x, destCanonical.y, destCanonical.z,
                                 orientation, data.duration / 1000.0f);
