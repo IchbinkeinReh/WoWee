@@ -11775,7 +11775,15 @@ void LuaEngine::registerCoreAPI() {
         "    if not equipSlot or equipSlot == '' then return __cmpNo('GetItemInfo gave no equip slot') end\n"
         "    local slots = __WoweeCompareSlots[equipSlot]\n"
         "    if not slots then return __cmpNo('no slot mapping for ' .. tostring(equipSlot)) end\n"
-        "    local slot = slots[index or 1]\n"
+        // 0x00631850: the index-th of the fitting slots that hold something
+        // - an empty first ring slot does not stop the second being compared.
+        "    local slot, seen = nil, 0\n"
+        "    for _, s in ipairs(slots) do\n"
+        "        if GetInventoryItemLink('player', s) then\n"
+        "            seen = seen + 1\n"
+        "            if seen == (index or 1) then slot = s break end\n"
+        "        end\n"
+        "    end\n"
         "    if not slot then return __cmpNo('no slot at compare index') end\n"
         // Nothing worn there is not a comparison, it is an empty tooltip -
         // and answering true for one would show a blank box beside the item.
@@ -11795,11 +11803,13 @@ void LuaEngine::registerCoreAPI() {
         // own terms: wearing one copy and hovering another, index 1 is the copy
         // worn and index 2 the other ring, and dropping the first leaves the
         // player comparing against one hand only.
-        "    if not _WoweePopulateItemTooltip(self, wornId) then return __cmpNo('no tooltip could be built for the worn item') end\n"
-        // What is on the worn item, which its id could not carry.
-        "    if self._WoweeAppendEquippedEnchants then\n"
-        "        self:_WoweeAppendEquippedEnchants(slot)\n"
-        "    end\n"
+        // The worn item itself - its durability, enchants and suffix - under
+        // CURRENTLY_EQUIPPED in grey (0x006277f0's sixth argument).
+        "    __WoweeTooltipEquippedHeader = true\n"
+        "    local ok, filled = pcall(self.SetInventoryItem, self, 'player', slot)\n"
+        "    __WoweeTooltipEquippedHeader = nil\n"
+        "    if not ok then error(filled, 0) end\n"
+        "    if not filled then return __cmpNo('no tooltip could be built for the worn item') end\n"
         "    self:Show()\n"
         "    return true\n"
         "end\n"
@@ -12121,7 +12131,11 @@ void LuaEngine::registerCoreAPI() {
         "    if not name then return false end\n"
         "    local qColors = {[0]={0.62,0.62,0.62},[1]={1,1,1},[2]={0.12,1,0},[3]={0,0.44,0.87},[4]={0.64,0.21,0.93},[5]={1,0.5,0},[6]={0.9,0.8,0.5},[7]={0,0.8,1}}\n"
         "    local c = qColors[quality or 1] or {1,1,1}\n"
-        "    if append then self:AddLine(name, c[1], c[2], c[3]) else self:SetText(name, c[1], c[2], c[3]) end\n"
+        "    if append then self:AddLine(name, c[1], c[2], c[3])\n"
+        "    elseif __WoweeTooltipEquippedHeader then\n"
+        "        self:SetText(CURRENTLY_EQUIPPED or 'Currently Equipped', 0.5, 0.5, 0.5)\n"
+        "        self:AddLine(name, c[1], c[2], c[3])\n"
+        "    else self:SetText(name, c[1], c[2], c[3]) end\n"
         "    local data = _GetItemTooltipData(itemId)\n"
         // Colour-blind mode names the quality under the title, in white, and a
         // heroic item's as ITEM_HEROIC_EPIC in place of both that and the
