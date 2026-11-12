@@ -216,3 +216,72 @@ TEST_CASE("The listfiles name what is there", "[mpq]") {
     const auto names = set.list("a\\");
     CHECK(names == std::vector<std::string>{"a\\crc.bin", "a\\stored.txt", "a\\zipped.bin"});
 }
+
+// ---- streaming mode: the same archives read through a chunk cache -------------
+
+#include "pipeline/chunk_cache.hpp"
+
+#include <map>
+#include <memory>
+
+TEST_CASE("Streaming: the archives read through a chunk cache, fetching only what is read",
+          "[mpq][stream]") {
+    using wowee::pipeline::ChunkCache;
+    TempData remote;
+    const fs::path mirror = remote.root.parent_path() / (remote.root.filename().string() + "_mirror");
+    std::map<std::string, uint64_t> fetched;
+    uint64_t total = 0;
+
+    auto run = [&](uint64_t& bytesOut) {
+        bytesOut = 0;
+        std::vector<std::unique_ptr<ChunkCache>> caches;
+        std::map<std::string, ChunkCache*> byPath;
+        for (const auto& rel : {"Data/common.MPQ", "Data/deDE/locale-deDE.MPQ", "Data/patch.MPQ"}) {
+            const fs::path src = remote.root / rel;
+            const fs::path dst = mirror / rel;
+            auto c = std::make_unique<ChunkCache>();
+            const std::string srcPath = src.string();
+            uint64_t* counter = &bytesOut;
+            REQUIRE(c->open(dst.string(), fs::file_size(src), 512, "v1",
+                            [srcPath, counter](uint64_t off, uint64_t len, std::vector<uint8_t>& out,
+                                               std::string&) {
+                                std::ifstream in(srcPath, std::ios::binary);
+                                in.seekg(static_cast<std::streamoff>(off));
+                                out.resize(static_cast<size_t>(len));
+                                in.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(len));
+                                *counter += len;
+                                return in.gcount() == static_cast<std::streamsize>(len);
+                            }));
+            byPath[fs::absolute(dst).lexically_normal().string()] = c.get();
+            caches.push_back(std::move(c));
+        }
+        MpqArchiveSet::setRangeSource([&byPath](const std::string& p) -> MpqArchiveSet::RangeFetch {
+            auto it = byPath.find(fs::absolute(fs::path(p)).lexically_normal().string());
+            if (it == byPath.end()) return {};
+            ChunkCache* c = it->second;
+            return [c](uint64_t o, uint64_t l) { return c->ensure(o, l); };
+        });
+        MpqArchiveSet set;
+        REQUIRE(set.open(mirror.string()));
+        CHECK(set.archiveCount() == 3);
+        CHECK(set.read("a\\crc.bin") == pattern(10000));
+        const auto stored = set.read("a\\stored.txt");
+        CHECK(std::string(stored.begin(), stored.end()) == "locale bytes");
+        set.close();
+        MpqArchiveSet::setRangeSource({});
+    };
+
+    for (const auto& rel : {"Data/common.MPQ", "Data/deDE/locale-deDE.MPQ", "Data/patch.MPQ"}) {
+        total += fs::file_size(remote.root / rel);
+    }
+    uint64_t first = 0, second = 0;
+    run(first);
+    // Headers, tables and the two files read - not the zipped file nobody read.
+    CHECK(first > 0);
+    CHECK(first < total);
+    // A restart: everything it reads is in the cache already.
+    run(second);
+    CHECK(second == 0);
+    std::error_code ec;
+    fs::remove_all(mirror, ec);
+}

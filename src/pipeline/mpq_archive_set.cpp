@@ -114,11 +114,35 @@ constexpr uint32_t kHashDeleted = 0xFFFFFFFE;
 
 } // namespace
 
+// ---- streaming hook ------------------------------------------------------------
+
+namespace {
+std::mutex g_rangeSourceMutex;
+std::function<MpqArchiveSet::RangeFetch(const std::string&)> g_rangeSource;
+
+MpqArchiveSet::RangeFetch rangeSourceFor(const std::string& path) {
+    std::lock_guard<std::mutex> lock(g_rangeSourceMutex);
+    return g_rangeSource ? g_rangeSource(path) : MpqArchiveSet::RangeFetch{};
+}
+}  // namespace
+
+void MpqArchiveSet::setRangeSource(std::function<RangeFetch(const std::string& path)> source) {
+    std::lock_guard<std::mutex> lock(g_rangeSourceMutex);
+    g_rangeSource = std::move(source);
+}
+
 // ---- one archive ---------------------------------------------------------------
 
 struct MpqArchiveSet::Archive {
     std::string path;
     const uint8_t* base = nullptr;
+    // Streaming mode: the archive is a sparse local copy filled on demand
+    // (pipeline/data_stream); every range is asked for before it is read.
+    // Null for an archive on disk, where everything is there already.
+    MpqArchiveSet::RangeFetch stream;
+    bool need(uint64_t offset, uint64_t length) const {
+        return !stream || stream(offset, length);
+    }
     uint64_t size = 0;
     uint64_t header = 0;  // offset of the MPQ header in the file
     uint32_t sectorSize = 4096;
@@ -151,6 +175,7 @@ struct MpqArchiveSet::Archive {
         LARGE_INTEGER li{};
         if (!GetFileSizeEx(file, &li) || li.QuadPart <= 0) return false;
         size = static_cast<uint64_t>(li.QuadPart);
+        stream = rangeSourceFor(path);
         mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
         if (!mapping) return false;
         base = static_cast<const uint8_t*>(MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0));
@@ -161,6 +186,7 @@ struct MpqArchiveSet::Archive {
         struct stat st{};
         if (fstat(fd, &st) != 0 || st.st_size <= 0) return false;
         size = static_cast<uint64_t>(st.st_size);
+        stream = rangeSourceFor(path);
         void* p = mmap(nullptr, size, PROT_READ, MAP_SHARED, fd, 0);
         if (p == MAP_FAILED) return false;
         base = static_cast<const uint8_t*>(p);
@@ -186,10 +212,11 @@ struct MpqArchiveSet::Archive {
     // The header sits at a multiple of 512, possibly behind a user-data block.
     bool parse() {
         for (uint64_t at = 0; at + 0x20 <= size; at += 0x200) {
+            if (!need(at, 0x20)) return false;
             const uint8_t* p = base + at;
             if (std::memcmp(p, "MPQ\x1B", 4) == 0) {
                 const uint64_t hdr = at + readU32(p + 8);
-                if (hdr + 0x20 <= size && std::memcmp(base + hdr, "MPQ\x1A", 4) == 0) {
+                if (hdr + 0x20 <= size && need(hdr, 0x20) && std::memcmp(base + hdr, "MPQ\x1A", 4) == 0) {
                     header = hdr;
                     break;
                 }
@@ -201,6 +228,7 @@ struct MpqArchiveSet::Archive {
             }
             if (at > (64u << 20)) return false;  // no header in the first 64 MB
         }
+        if (!need(header, std::min<uint64_t>(0x2C, size - header))) return false;
         const uint8_t* h = base + header;
         if (std::memcmp(h, "MPQ\x1A", 4) != 0) return false;
         const uint32_t headerSize = readU32(h + 4);
@@ -219,6 +247,7 @@ struct MpqArchiveSet::Archive {
         if (header + blockPos + uint64_t(blockCount) * 16 > size) return false;
 
         std::vector<uint32_t> buf(size_t(hashCount) * 4);
+        if (!need(header + hashPos, buf.size() * 4)) return false;
         std::memcpy(buf.data(), base + header + hashPos, buf.size() * 4);
         decryptBlock(buf.data(), buf.size(), stormHash("(hash table)", kHashKey));
         hashes.resize(hashCount);
@@ -228,10 +257,12 @@ struct MpqArchiveSet::Archive {
                          static_cast<uint16_t>(e[2] >> 16), e[3]};
         }
         buf.assign(size_t(blockCount) * 4, 0);
+        if (blockCount && !need(header + blockPos, buf.size() * 4)) return false;
         std::memcpy(buf.data(), base + header + blockPos, buf.size() * 4);
         decryptBlock(buf.data(), buf.size(), stormHash("(block table)", kHashKey));
         blocks.resize(blockCount);
-        const bool hasHi = hiBlockPos != 0 && header + hiBlockPos + uint64_t(blockCount) * 2 <= size;
+        const bool hasHi = hiBlockPos != 0 && header + hiBlockPos + uint64_t(blockCount) * 2 <= size &&
+                           (blockCount == 0 || need(header + hiBlockPos, uint64_t(blockCount) * 2));
         for (uint32_t i = 0; i < blockCount; ++i) {
             const uint32_t* e = &buf[size_t(i) * 4];
             uint64_t pos = e[0];
@@ -402,6 +433,7 @@ bool MpqArchiveSet::decode(const Archive& a, uint32_t blockIndex, const std::str
     const auto& be = a.blocks[blockIndex];
     const uint64_t start = a.header + be.pos;
     if (start > a.size || be.csize > a.size - start) return false;
+    if (!a.need(start, be.csize)) return false;
     const uint8_t* src = a.base + start;
     out.assign(be.fsize, 0);
     if (be.fsize == 0) return true;

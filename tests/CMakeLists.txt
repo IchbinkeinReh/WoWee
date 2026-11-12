@@ -3874,5 +3874,15 @@ register_test_target(test_paper_ui_tab)
 # single units, deletion markers, listfiles.
 wowee_add_test(test_mpq_archive_set
     SOURCES test_mpq_archive_set.cpp ${TEST_COMMON_SOURCES}
-            ${CMAKE_SOURCE_DIR}/src/pipeline/mpq_archive_set.cpp)
+            ${CMAKE_SOURCE_DIR}/src/pipeline/mpq_archive_set.cpp
+            ${CMAKE_SOURCE_DIR}/src/pipeline/chunk_cache.cpp)
 target_link_libraries(test_mpq_archive_set PRIVATE ZLIB::ZLIB)
+
+# ── test_chunk_cache ──────────────────────────────────────────────────
+# The streaming data mode's local copy: chunks fetched only when a read needs
+# them, consecutive ones in one request, the bitmap of what is there kept
+# across restarts and thrown away for another version of the file, failed
+# fetches leaving nothing marked. (The MPQ reader over it: test_mpq_archive_set.)
+wowee_add_test(test_chunk_cache
+    SOURCES test_chunk_cache.cpp ${TEST_COMMON_SOURCES}
+            ${CMAKE_SOURCE_DIR}/src/pipeline/chunk_cache.cpp)

@@ -861,6 +861,8 @@ set(WOWEE_SOURCES
     src/pipeline/asset_inventory.cpp
     src/pipeline/asset_manifest.cpp
     src/pipeline/mpq_archive_set.cpp
+    src/pipeline/chunk_cache.cpp
+    src/pipeline/data_stream.cpp
     src/pipeline/loose_file_reader.cpp
     src/pipeline/m2_loader.cpp
     src/pipeline/wmo_loader.cpp
@@ -1577,6 +1579,11 @@ target_link_libraries(wowee PRIVATE
     ${CMAKE_DL_LIBS}
 )
 
+if(WIN32)
+    # crypt32: the streaming data mode's HTTPS verifies against the system's
+    # root certificates (pipeline/data_stream.cpp).
+    target_link_libraries(wowee PRIVATE crypt32)
+endif()
 if(WOWEE_STATIC_RUNTIME AND MINGW)
     # Every library by its archive, the C++ runtime and winpthread included;
     # the system's import libraries are archives too, and the Vulkan loader

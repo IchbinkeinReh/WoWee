@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -46,6 +47,14 @@ public:
     /// the locale folder found beside them ("" when none).
     static std::vector<std::string> discoverArchives(const std::string& archiveDir,
                                                      std::string& localeOut);
+
+    /// Streaming mode (pipeline/data_stream): makes a byte range of an
+    /// archive present locally, fetching what is missing; false when it
+    /// cannot. The reader asks before it touches any range.
+    using RangeFetch = std::function<bool(uint64_t offset, uint64_t length)>;
+    /// Where archives opened from now on get their RangeFetch: by path, an
+    /// empty function for a file that is all on disk. Unset = all on disk.
+    static void setRangeSource(std::function<RangeFetch(const std::string& path)> source);
 
     /// Opens every archive of the Data folder `dir` (or `dir`\Data).
     bool open(const std::string& dir);
