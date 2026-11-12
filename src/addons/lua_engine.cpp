@@ -3320,6 +3320,54 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
         return true;
     }
 
+    // The player's own chance for a spell that is it (0x006238a0): a first
+    // effect 0x4e says CHANCE_TO_CRIT, and a passive one's 0x14, 0x16 and
+    // 0x17 CHANCE_TO_DODGE, _PARRY and _BLOCK, from the player's fields.
+    // Then for AttributesEx 0x2 SPELL_USE_ALL_<power> - SPELL_USE_ALL_HEALTH
+    // past the seven, SPELL_USE_ALL_POWER_DISPLAY with the PowerDisplay
+    // row's name; the client's table has no word for runic power.
+    if (const auto ce = gh->spellNameCacheRef().find(spellId); ce != gh->spellNameCacheRef().end()) {
+        const auto& sp = ce->second;
+        const bool passive = sp.effectIds[0] == 0x2f || (sp.attr & 0x40u) != 0;
+        const char* key = nullptr;
+        game::UF field = game::UF::PLAYER_CRIT_PERCENTAGE;
+        switch (sp.effectIds[0]) {
+            case 0x4e: key = "CHANCE_TO_CRIT"; field = game::UF::PLAYER_CRIT_PERCENTAGE; break;
+            case 0x14: if (passive) { key = "CHANCE_TO_DODGE"; field = game::UF::PLAYER_DODGE_PERCENTAGE; } break;
+            case 0x16: if (passive) { key = "CHANCE_TO_PARRY"; field = game::UF::PLAYER_PARRY_PERCENTAGE; } break;
+            case 0x17: if (passive) { key = "CHANCE_TO_BLOCK"; field = game::UF::PLAYER_BLOCK_PERCENTAGE; } break;
+            default: break;
+        }
+        if (key) {
+            float pct = 0.0f;
+            const auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid());
+            if (const uint16_t idx = game::fieldIndex(field); player && idx != 0xFFFF) {
+                const uint32_t raw = player->getField(idx);
+                std::memcpy(&pct, &raw, sizeof pct);
+            }
+            char number[32];
+            std::snprintf(number, sizeof number, "%.9g", pct);
+            line(formatGlobal(L, globalOr(L, key, "%.2f%%"), {number}), "", 1.0f, 1.0f, 1.0f);
+        }
+        if ((sp.attrEx & 0x2u) != 0) {
+            std::string text;
+            if (sp.powerDisplayId != 0) {
+                if (const auto row = wowee::addons::powerDisplayRow(gh, sp.powerDisplayId)) {
+                    text = formatGlobal(L, globalOr(L, "SPELL_USE_ALL_POWER_DISPLAY", "Uses 100%% %s"),
+                                        {globalOr(L, row->token.c_str(), row->token.c_str())});
+                }
+            } else {
+                static constexpr const char* kUseAll[] = {"SPELL_USE_ALL_MANA", "SPELL_USE_ALL_RAGE", "SPELL_USE_ALL_FOCUS",
+                                                          "SPELL_USE_ALL_ENERGY", "SPELL_USE_ALL_HAPPINESS",
+                                                          "SPELL_USE_ALL_RUNE"};
+                const auto pt = static_cast<int32_t>(sp.powerType);
+                const char* k = pt >= 0 && pt < 6 ? kUseAll[pt] : pt == 6 ? nullptr : "SPELL_USE_ALL_HEALTH";
+                if (k) text = globalOr(L, k, k);
+            }
+            if (!text.empty()) line(text, "", 1.0f, 1.0f, 1.0f);
+        }
+    }
+
     const std::string body =
         gh->formatSpellDescription(spellId, gh->getSpellDescription(spellId));
     if (!body.empty()) {
