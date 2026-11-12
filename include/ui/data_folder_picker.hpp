@@ -22,7 +22,11 @@ namespace wowee::ui {
 /// The dialog answers on whatever thread the platform likes, so the answer is
 /// handed over under a lock and acted on in poll(), on the main thread.
 /// Android chooses its folder before the client starts (DataFolderActivity),
-/// so there this does nothing.
+/// so there this does nothing. iOS has no folder dialog in SDL: the system's
+/// document picker is shown instead (data_folder_picker_ios.mm), and since an
+/// iOS app may open a folder outside its own only through the bookmark the
+/// picker grants, that bookmark is kept beside the path
+/// (core::setCustomDataBookmark) and resolved again at every start.
 class DataFolderPicker {
 public:
     /// Opens the folder dialog, unless one is already open.
@@ -31,6 +35,10 @@ public:
     void useDefault();
     /// Picks up the dialog's answer. Once a frame, from the main thread.
     void poll();
+    /// The answer of a platform picker that is not SDL's (iOS): the folder,
+    /// the access bookmark for it (base64, may be empty), or an error. An
+    /// empty path and no error is a cancel.
+    void deliver(const std::string& path, const std::string& bookmark, const std::string& error);
 
     [[nodiscard]] bool isOpen() const;
     /// What the last choice came to, for the screen to show. Empty until
@@ -49,6 +57,7 @@ private:
     bool answered_ = false;
     bool failed_ = false;
     std::string chosen_;
+    std::string bookmark_;
     std::string error_;
     std::string message_;
     // Where the dialog starts. Held here because the dialog may read it after

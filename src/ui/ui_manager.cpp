@@ -36,6 +36,7 @@ UIManager::UIManager() {
     // Before any asset system exists, which is the state it is there for.
     firstRunScreen = std::make_unique<FirstRunScreen>();
 #endif
+    dataFolderScreen = std::make_unique<DataFolderScreen>();
     authScreen = std::make_unique<AuthScreen>();
     realmScreen = std::make_unique<RealmScreen>();
     characterCreateScreen = std::make_unique<CharacterCreateScreen>();
@@ -491,6 +492,10 @@ void UIManager::render(core::AppState appState, auth::AuthHandler* authHandler, 
             if (authScreen) authScreen->drawBackdrop();
             if (firstRunScreen) firstRunScreen->render();
 #endif
+            break;
+        case core::AppState::DATA_FOLDER:
+            if (authScreen) authScreen->drawBackdrop();
+            if (dataFolderScreen) dataFolderScreen->render();
             break;
         case core::AppState::AUTHENTICATION:
             if (authHandler) {

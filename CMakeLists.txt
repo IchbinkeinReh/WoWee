@@ -1165,6 +1165,7 @@ set(WOWEE_SOURCES
     src/ui/auth_screen.cpp
     src/ui/first_run_screen.cpp
     src/ui/data_folder_picker.cpp
+    src/ui/data_folder_screen.cpp
     src/ui/realm_screen.cpp
     src/ui/character_create_screen.cpp
     src/ui/character_screen.cpp
@@ -1356,6 +1357,8 @@ set(WOWEE_HEADERS
     include/ui/ui_manager.hpp
     include/ui/auth_screen.hpp
     include/ui/data_folder_picker.hpp
+    include/ui/data_folder_screen.hpp
+    include/core/data_prompt.hpp
     include/ui/realm_screen.hpp
     include/ui/character_create_screen.hpp
     include/ui/character_screen.hpp
@@ -1375,6 +1378,15 @@ if(APPLE AND NOT IOS)
 endif()
 
 set(WOWEE_PLATFORM_SOURCES)
+if(IOS)
+    # The data folder screen's "Choose folder..." on iOS: the system's
+    # document picker and the folder's access bookmark (SDL has no folder
+    # dialog there). ARC on, outside the C++ precompiled header.
+    enable_language(OBJCXX)
+    list(APPEND WOWEE_PLATFORM_SOURCES src/ui/data_folder_picker_ios.mm)
+    set_source_files_properties(src/ui/data_folder_picker_ios.mm PROPERTIES
+        COMPILE_FLAGS "-fobjc-arc" SKIP_PRECOMPILE_HEADERS ON)
+endif()
 if(WIN32)
     # Copy icon into build tree so windres can find it via the relative path
     # in wowee.rc ("assets\\wowee.ico").  Tell the RC compiler to also search
@@ -1613,7 +1625,8 @@ if(IOS)
         SKIP_PRECOMPILE_HEADERS ON
         COMPILE_OPTIONS "-Wno-unused-parameter;-Wno-deprecated-declarations")
     target_link_libraries(wowee PRIVATE
-        "-framework AVFoundation" "-framework AudioToolbox" "-framework CoreAudio")
+        "-framework AVFoundation" "-framework AudioToolbox" "-framework CoreAudio"
+        "-framework UniformTypeIdentifiers")
 endif()
 if(WIN32)
     # winmm: timeBeginPeriod/timeEndPeriod, which the frame pacer uses to ask

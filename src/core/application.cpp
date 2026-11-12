@@ -103,6 +103,7 @@
 #include "core/gamepad.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "core/data_paths.hpp"
+#include "core/data_prompt.hpp"
 #include "ui/ui_services.hpp"
 #include "auth/auth_handler.hpp"
 #include "game/game_handler.hpp"
@@ -1002,6 +1003,26 @@ bool Application::initialize() {
         state = AppState::FIRST_RUN;
         LOG_WARNING("No assets found - opening the asset builder instead of the login screen");
 #endif
+    }
+    // Without the asset builder (iOS, which has no screen of its own in front
+    // of the client the way Android has DataFolderActivity) the client asks
+    // where the data is instead of opening a login nobody can get through.
+    {
+#ifdef WOWEE_HAVE_ASSET_PANEL
+        constexpr bool builder = true;
+#else
+        constexpr bool builder = false;
+#endif
+        const std::string chosen = core::getCustomDataRoot();
+        std::error_code chosenEc;
+        const bool chosenPresent = !chosen.empty() && std::filesystem::is_directory(chosen, chosenEc);
+        dataPrompt_ = core::dataPromptAtStartup(core::kPreLaunchDataMask, builder,
+                                                mpqData || assetInventory_.anyUsable(), chosen,
+                                                chosenPresent);
+        if (dataPrompt_ != core::DataPrompt::None) {
+            state = AppState::DATA_FOLDER;
+            LOG_WARNING("No game data found - asking where it is instead of opening the login screen");
+        }
     }
 
     // Ask whether there is a newer WoWee, on a thread of its own. Started
@@ -3282,6 +3303,10 @@ void Application::setState(AppState newState) {
         case AppState::FIRST_RUN:
             // Nothing to enter: the screen builds what is missing and the
             // client is reopened afterwards.
+            break;
+        case AppState::DATA_FOLDER:
+            // Nothing to enter either: the screen only looks and chooses, and
+            // the client is reopened to use what it found.
             break;
         case AppState::AUTHENTICATION:
             // Show auth screen
@@ -6165,6 +6190,9 @@ void Application::update(float deltaTime) {
             // Drawn, not driven: the extraction runs on its own thread and
             // the screen reads its progress while laying itself out.
             updateCheckpoint = "first_run: enter";
+            break;
+        case AppState::DATA_FOLDER:
+            updateCheckpoint = "data_folder: enter";
             break;
 
         case AppState::AUTHENTICATION:

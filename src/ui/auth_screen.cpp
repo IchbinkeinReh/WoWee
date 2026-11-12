@@ -1032,11 +1032,13 @@ void AuthScreen::renderCard(auth::AuthHandler& authHandler, float screenW, float
             col.gap(px(kRowGap));
         }
 
-#ifndef WOWEE_MOBILE
+#if !defined(__ANDROID__)
         // Where the game data is read from, and a way to choose. The heading
         // and the link share a row, and the path wraps under them: the card is
         // already the tallest thing on the screen with this section open.
-        // Android chooses its folder before the client starts.
+        // Android chooses its folder before the client starts; iOS has no
+        // screen before the client, so it chooses here (the system's document
+        // picker, data_folder_picker_ios.mm).
         {
             auto& picker = dataFolderPicker();
             ui_.text(col.at(), "Game data", labelSize, theme.inkSoft);

@@ -2,6 +2,7 @@
 
 #include "ui/auth_screen.hpp"
 #include "ui/first_run_screen.hpp"
+#include "ui/data_folder_screen.hpp"
 #include "ui/realm_screen.hpp"
 #include "ui/character_create_screen.hpp"
 #include "ui/character_screen.hpp"
@@ -167,6 +168,7 @@ private:
 #ifdef WOWEE_HAVE_ASSET_PANEL
     std::unique_ptr<FirstRunScreen> firstRunScreen;
 #endif
+    std::unique_ptr<DataFolderScreen> dataFolderScreen;
     std::unique_ptr<AuthScreen> authScreen;
     std::unique_ptr<RealmScreen> realmScreen;
     std::unique_ptr<CharacterCreateScreen> characterCreateScreen;

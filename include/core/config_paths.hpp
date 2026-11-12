@@ -27,6 +27,14 @@ std::string getCustomDataRoot();
 // False when the file could not be written or removed.
 bool setCustomDataRoot(const std::string& path);
 
+// The access bookmark that goes with the chosen folder, where the platform
+// needs one to open it again (iOS: a folder outside the app's own is only
+// reachable through the security-scoped bookmark the document picker grants).
+// Base64, in <config root>/data_folder_bookmark.txt; empty when there is none.
+// Setting an empty one removes the file.
+std::string getCustomDataBookmark();
+bool setCustomDataBookmark(const std::string& base64);
+
 // One-time seeding of portable config. On the first launch after the user drops
 // a "portable.txt" marker next to the executable (before any config folder
 // exists), copies the existing per-user config tree into <exe_dir>/config so

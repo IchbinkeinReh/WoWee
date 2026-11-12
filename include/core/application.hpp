@@ -15,6 +15,7 @@ namespace wowee::rendering { class ModelFrameView; }
 #include "game/character.hpp"
 #include "game/game_services.hpp"
 #include "pipeline/asset_inventory.hpp"
+#include "core/data_prompt.hpp"
 #include "core/update_check.hpp"
 #include "rendering/device_recovery.hpp"
 #include "pipeline/blp_loader.hpp"
@@ -67,7 +68,11 @@ enum class AppState {
     /// Nothing extracted yet, so the asset builder is shown instead of a
     /// login nobody can get through. Last rather than first because the log
     /// prints these by number, and inserting one renumbers every old line.
-    FIRST_RUN
+    FIRST_RUN,
+    /// No game data and no asset builder in this build (iOS): where the data
+    /// has to go, and a way to choose another folder (ui/data_folder_screen).
+    /// Android asks in DataFolderActivity before the client starts.
+    DATA_FOLDER
 };
 
 class Application {
@@ -116,6 +121,7 @@ public:
     /// What assets were found at startup. Taken once, because it walks the
     /// override tree and no screen should do that while it is being drawn.
     const pipeline::AssetInventory& getAssetInventory() const { return assetInventory_; }
+    core::DataPrompt getDataPrompt() const { return dataPrompt_; }
     /// Whether GitHub has a newer release than this build, asked once at
     /// startup. The login screen reads it; nothing else needs to.
     const UpdateCheck& getUpdateCheck() const { return updateCheck_; }
@@ -289,6 +295,8 @@ private:
     /// What assets were found at startup, so the login screen can say so
     /// rather than every screen finding out separately.
     pipeline::AssetInventory assetInventory_;
+    /// Why the data folder screen was opened at startup, if it was.
+    core::DataPrompt dataPrompt_ = core::DataPrompt::None;
     UpdateCheck updateCheck_;
 
 

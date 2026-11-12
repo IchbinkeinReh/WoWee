@@ -19,6 +19,7 @@
 #include <filesystem>
 
 #include "core/data_paths.hpp"
+#include "core/data_prompt.hpp"
 #include <string>
 #include <SDL3/SDL.h>
 // SDLActivity loads libwowee.so and calls SDL_main, the name this header gives
@@ -178,8 +179,33 @@ static wowee::core::LogLevel readLogLevelFromEnv() {
 /// This was macOS only, which left the asset manager and the client with no
 /// agreed destination on Linux or Windows at all: the manager wrote wherever
 /// the terminal was and the client looked beside itself.
+#if defined(WOWEE_IOS)
+namespace wowee::ui {
+/// data_folder_picker_ios.mm: the folder a stored bookmark names, opened for
+/// this run (startAccessingSecurityScopedResource); empty when it cannot be.
+std::string iosResolveFolderBookmark(const std::string& base64);
+}
+#endif
+
 static void selectUserDataPath() {
     if (std::getenv("WOW_DATA_PATH")) return;
+
+#if defined(WOWEE_IOS)
+    // A folder chosen outside the app's own container opens only through the
+    // bookmark the document picker granted, and its path may differ from the
+    // one written down when it was chosen. Resolved first, every start.
+    if (const std::string bookmark = wowee::core::getCustomDataBookmark(); !bookmark.empty()) {
+        const std::string at = wowee::ui::iosResolveFolderBookmark(bookmark);
+        if (!at.empty()) {
+            std::filesystem::path root = wowee::core::resolveDataFolderChoice(at);
+            if (root.empty()) root = at;
+            wowee::core::setEnvVar("WOW_DATA_PATH", root.string().c_str(), /*overwrite=*/false);
+            return;
+        }
+        LOG_WARNING("The chosen game data folder could not be opened again; looking in the "
+                    "default places instead");
+    }
+#endif
 
     // The folder chosen at the login screen, ahead of the default search. Not
     // when it has gone - an external drive that is not plugged in - where the

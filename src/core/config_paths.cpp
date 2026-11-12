@@ -116,6 +116,9 @@ namespace {
 fs::path customDataRootFile() {
     return fs::path(getConfigRoot()) / "data_folder.txt";
 }
+fs::path customDataBookmarkFile() {
+    return fs::path(getConfigRoot()) / "data_folder_bookmark.txt";
+}
 }  // namespace
 
 std::string getCustomDataRoot() {
@@ -141,6 +144,28 @@ bool setCustomDataRoot(const std::string& path) {
     std::ofstream out(file, std::ios::trunc);
     if (!out) return false;
     out << path << '\n';
+    return static_cast<bool>(out);
+}
+
+std::string getCustomDataBookmark() {
+    std::ifstream in(customDataBookmarkFile());
+    std::string line;
+    if (!in || !std::getline(in, line)) return {};
+    while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+    return line;
+}
+
+bool setCustomDataBookmark(const std::string& base64) {
+    std::error_code ec;
+    const fs::path file = customDataBookmarkFile();
+    if (base64.empty()) {
+        fs::remove(file, ec);
+        return !ec;
+    }
+    fs::create_directories(file.parent_path(), ec);
+    std::ofstream out(file, std::ios::trunc);
+    if (!out) return false;
+    out << base64 << '\n';
     return static_cast<bool>(out);
 }
 

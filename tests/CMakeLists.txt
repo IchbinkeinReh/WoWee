@@ -263,6 +263,12 @@ wowee_add_test(test_asset_inventory
 wowee_add_test(test_data_paths
     SOURCES test_data_paths.cpp)
 
+# ── test_data_prompt ────────────────────────────────────────
+# When the client asks where the game data is: iOS has no screen in front of
+# the client (Android has DataFolderActivity), so the client asks itself.
+wowee_add_test(test_data_prompt
+    SOURCES test_data_prompt.cpp)
+
 # ── test_log_privacy ────────────────────────────────────────
 # The home directory, and with it the account name, written as ~ in the log.
 wowee_add_test(test_log_privacy
