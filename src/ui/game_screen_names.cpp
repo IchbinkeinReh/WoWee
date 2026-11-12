@@ -9,6 +9,7 @@
 // with a plate has no name over its head; the plate carries it.
 
 #include "ui/game_screen.hpp"
+#include "ui/unit_summon_title.hpp"
 #include "core/frame_profiler.hpp"
 
 #include "addons/addon_manager.hpp"
@@ -134,8 +135,9 @@ const std::string& interfaceText(const char* name) {
     return kept.emplace(name, std::move(text)).first->second;
 }
 
-/// 0x0061e830: the "<Owner's Pet>" line under a unit something made, empty
-/// for none.
+}  // namespace
+
+/// 0x0061e830 (declared in ui/unit_summon_title.hpp).
 std::string summonTitleLine(game::GameHandler& gh, const game::Entity& e, const game::Unit& unit) {
     auto ownerOf = [](const game::Entity& x) {
         const uint64_t charmedBy = guidAt(x, game::UF::UNIT_FIELD_CHARMEDBY);
@@ -184,6 +186,8 @@ std::string summonTitleLine(game::GameHandler& gh, const game::Entity& e, const 
     }
     return un::summonTitleText(title, ownerName, interfaceText(un::summonTitleKey(title).c_str()));
 }
+
+namespace {
 
 /// 0x0098e5f0: the level's colour on a plate, against the player's level -
 /// red five or more above, orange three, yellow within two, green, and grey

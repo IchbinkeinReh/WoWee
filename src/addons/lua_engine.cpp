@@ -49,6 +49,7 @@
 #include "addons/binding_command.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_layout.hpp"
+#include "ui/unit_summon_title.hpp"
 #include "core/window.hpp"
 #include <imgui.h>
 #include <fstream>
@@ -4420,34 +4421,57 @@ int lua_Tooltip_SetUnit(lua_State* L) {
         w->tooltipLines.push_back(std::move(line));
     };
 
-    addLine(name, 1.0f, 1.0f, 1.0f);
-
-    // What the name alone does not say, which in WoW is most of a unit
-    // tooltip: the guild under a player's name, the trade under an NPC's, and
-    // the level line under both.
-    //
-    // This built the title and stopped, so every mouseover in the game showed
-    // a bare name. The client has all of it - its own nameplates draw the
-    // guild and the subtitle from these very accessors - so this is another
-    // case of handing an element over leaving behind what the window it
-    // replaced was already doing.
     const auto entity = gh->getEntityManager().getEntity(guid);
     const bool isPlayer = entity && entity->getType() == game::ObjectType::PLAYER;
+    const auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid());
 
+    // The title in gold (0x00621070 -> 0x0072a290): a player's name inside
+    // the title they wear (PLAYER_CHOSEN_TITLE, in their gender's form).
+    std::string title = name;
     if (isPlayer) {
-        if (const uint32_t guildId = gh->getEntityGuildId(guid); guildId != 0) {
-            const std::string& guildName = gh->lookupGuildName(guildId);
-            if (!guildName.empty()) addLine("<" + guildName + ">", 0.25f, 1.0f, 0.25f);
-        }
-    } else if (entity) {
-        // The trade an NPC plies, which is the line that tells a vendor from a
-        // guard: <Auctioneer>, <Innkeeper>, <Reagent Vendor>.
-        const auto unit = std::dynamic_pointer_cast<game::Unit>(entity);
-        if (unit) {
-            const std::string sub = gh->getCachedCreatureSubName(unit->getEntry());
-            if (!sub.empty()) addLine("<" + sub + ">", 1.0f, 1.0f, 1.0f);
+        const uint16_t t = game::fieldIndex(game::UF::PLAYER_CHOSEN_TITLE);
+        const uint16_t b0 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0);
+        if (t != 0xFFFF && entity->getField(t) != 0) {
+            const uint8_t gender = b0 != 0xFFFF ? static_cast<uint8_t>((entity->getField(b0) >> 16) & 0xFFu) : 0xFF;
+            if (std::string titled = gh->getFormattedTitleFor(entity->getField(t), name, gender); !titled.empty())
+                title = std::move(titled);
         }
     }
+    addLine(title, 1.0f, 0.824f, 0.0f);
+
+    // Then, in white and as they stand: a player's guild (PLAYER_GUILDID
+    // through the guild cache, 0x0067d930); with colourblindMode the unit's
+    // standing toward the player (FACTION_STANDING_LABEL, gendered by the
+    // player); a creature's subname (0x00719950); and whose pet, minion or
+    // the like the unit is (0x0061e830, UNITNAME_SUMMON_TITLE).
+    if (isPlayer) {
+        if (const uint32_t guildId = gh->getEntityGuildId(guid); guildId != 0) {
+            addLine(gh->lookupGuildName(guildId), 1.0f, 1.0f, 1.0f);
+        }
+    }
+    const auto unitPtr = std::dynamic_pointer_cast<game::Unit>(entity);
+    if (unitPtr && player) {
+        lua_getglobal(L, "GetCVar");
+        bool colorblind = false;
+        if (lua_isfunction(L, -1)) {
+            lua_pushstring(L, "colorblindMode");
+            if (lua_pcall(L, 1, 1, 0) == 0) {
+                const char* v = lua_tostring(L, -1);
+                colorblind = v && std::strcmp(v, "1") == 0;
+            }
+            lua_pop(L, 1);
+        } else {
+            lua_pop(L, 1);
+        }
+        if (colorblind) {
+            addLine(genderedGlobal(L, "FACTION_STANDING_LABEL" + std::to_string(gh->unitReaction(*unitPtr, *player) + 1)),
+                    1.0f, 1.0f, 1.0f);
+        }
+    }
+    if (unitPtr && !isPlayer) {
+        addLine(gh->getCachedCreatureSubName(unitPtr->getEntry()), 1.0f, 1.0f, 1.0f);
+    }
+    if (unitPtr) addLine(wowee::ui::summonTitleLine(*gh, *entity, *unitPtr), 1.0f, 1.0f, 1.0f);
 
     // The level line, white (0x00621070): the level, or "??" for a boss
     // (creature type flag 0x4), one ten or more above a player it is hostile
@@ -4486,7 +4510,6 @@ int lua_Tooltip_SetUnit(lua_State* L) {
                 if (const int32_t r = races->findRecordById(field(game::UF::UNIT_FIELD_BYTES_0) & 0xFFu); r >= 0)
                     type = races->getUInt32(static_cast<uint32_t>(r), tf);
         }
-        const auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid());
         const uint32_t typeFlags = cre ? cre->typeFlags : 0u;
         bool unknown = false;
         uint32_t shownType = 0;
