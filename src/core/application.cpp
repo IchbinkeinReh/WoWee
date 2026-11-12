@@ -8114,7 +8114,11 @@ void Application::updateQuestMarkers() {
 
     const rendering::Camera* camera = renderer->getCamera();
     std::vector<rendering::QuestGiverMarkers::Marker> wanted;
-    for (const auto& [guid, status] : gameHandler->getNpcQuestStatuses()) {
+    // Not with the interface hidden (Alt-Z): SetUIVisibility re-flags every
+    // unit's TalkToMe model by it (0x00517c20 -> 0x00517be0 -> 0x00745140).
+    static const std::unordered_map<uint64_t, game::QuestGiverStatus> kNone;
+    const auto& statuses = gameHandler->isUiVisible() ? gameHandler->getNpcQuestStatuses() : kNone;
+    for (const auto& [guid, status] : statuses) {
         const char* model = game::questGiverMarkerModel(status, trivial);
         if (!model) continue;
         auto entity = gameHandler->getEntityManager().getEntity(guid);
