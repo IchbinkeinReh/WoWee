@@ -211,8 +211,13 @@ public:
     /// onlyInstance: draw that instance alone (0 = all of them).
     /// gbuffer: the opaque phase into the ray traced lighting's G-buffer
     /// pass, with the pipelines built for it.
+    /// part / parts: of all the instances drawn (onlyInstance 0), the part'th
+    /// of that many runs, in the order one call would draw them - so the
+    /// parts, recorded on as many threads and executed in turn, draw what one
+    /// call draws, in the same order.
     void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
-                Phase phase = Phase::All, uint32_t onlyInstance = 0, bool gbuffer = false);
+                Phase phase = Phase::All, uint32_t onlyInstance = 0, bool gbuffer = false,
+                uint32_t part = 0, uint32_t parts = 1);
 
     /// An instance with blended batches, and its squared distance from the camera.
     struct BlendedDraw {
@@ -1026,7 +1031,8 @@ private:
     /// opaque pass records on another thread meanwhile.
     enum class BlendedDepth { None, Zfill, OverZfill };
     void renderPass(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
-                    Phase phase, uint32_t onlyInstance, bool gbuffer, BlendedDepth blendedDepth);
+                    Phase phase, uint32_t onlyInstance, bool gbuffer, BlendedDepth blendedDepth,
+                    uint32_t part = 0, uint32_t parts = 1);
     void zfillFadedInstances(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera);
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
 
@@ -1066,13 +1072,25 @@ private:
     /// Per frame slot: the sets allocated from its pool since it was last
     /// reset, and VkTexture::destroyedSerial() at that reset.
     uint32_t materialSetsAllocated_[2] = {0, 0};
+    /// The material sets one recording thread has looked up (renderPass), in
+    /// front of the shared cache, so a pass takes materialMutex_ only for a
+    /// set it has not used since the slot's sets were last handed back. Tied
+    /// to the renderer by a serial, which no later renderer shares as it
+    /// could an address.
+    struct ThreadMaterialSets;
+    static inline std::atomic<uint64_t> rendererSerials_{0};
+    const uint64_t rendererSerial_ = ++rendererSerials_;
     uint64_t materialSetsSerial_[2] = {0, 0};
 
     // Material UBO ring buffer - pre-allocated per frame slot, sub-allocated each draw
     VkBuffer materialRingBuffer_[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
     VmaAllocation materialRingAlloc_[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
     void* materialRingMapped_[2] = {nullptr, nullptr};
-    uint32_t materialRingOffset_[2] = {0, 0};
+    /// Taken by fetch_add: the recording passes share the ring.
+    std::atomic<uint32_t> materialRingOffset_[2] = {0, 0};
+    /// Moves each time a slot's descriptor sets are handed back, so the
+    /// passes' own per-thread copies of the cache know to forget theirs.
+    uint64_t materialCacheEpoch_[2] = {0, 0};
     uint32_t materialUboAlignment_ = 256;  // minUniformBufferOffsetAlignment
     static constexpr uint32_t MATERIAL_RING_CAPACITY = 4096;
 
@@ -1126,11 +1144,12 @@ private:
     std::unordered_set<uint32_t> attachedScratch_;  // refreshInteriorLights' per-frame scratch
     uint32_t lightRefreshFrame_ = 0;  ///< refreshInteriorLights' turn counter
     std::unordered_map<uint32_t, CharacterInstance> instances;
-    /// render() is called from two recording threads at once - the characters'
-    /// own and the one that draws the doodads and takes the blended characters
-    /// among them. This guards what they share to write: the material ring's
-    /// offset, its descriptor pool and cache, and their reset once a frame.
-    /// Held per batch, never for a pass.
+    /// render() is called from several recording threads at once - the two
+    /// halves of the characters' opaque pass and the one that draws the
+    /// doodads and takes the blended characters among them. This guards the
+    /// descriptor pool and the shared cache of material sets, and the ring's
+    /// and pool's reset once a frame; taken only for a set the thread's own
+    /// copy of the cache does not have yet (ThreadMaterialSets).
     std::mutex materialMutex_;
     /// Whether an instance is drawn this frame: visible, in range and view, and
     /// with geometry.

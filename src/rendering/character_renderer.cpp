@@ -788,7 +788,7 @@ void CharacterRenderer::shutdown() {
             materialRingAlloc_[i] = VK_NULL_HANDLE;
             materialRingMapped_[i] = nullptr;
         }
-        materialRingOffset_[i] = 0;
+        materialRingOffset_[i].store(0, std::memory_order_relaxed);
     }
 
     // Destroy descriptor pools and layouts
@@ -881,9 +881,11 @@ void CharacterRenderer::clear() {
     instances.clear();
 
     // Reset material ring buffer offsets (buffers persist, just reset write position)
-    for (uint32_t& offset : materialRingOffset_) {
-        offset = 0;
+    for (auto& offset : materialRingOffset_) {
+        offset.store(0, std::memory_order_relaxed);
     }
+    ++materialCacheEpoch_[0];
+    ++materialCacheEpoch_[1];
 
     // Reset descriptor pools (don't destroy - reuse for new allocations),
     // once what is still queued to free sets from them has run (see
@@ -4230,14 +4232,21 @@ void CharacterRenderer::renderBlendedInstance(VkCommandBuffer cmd, VkDescriptorS
                overZfill ? BlendedDepth::OverZfill : BlendedDepth::None);
 }
 
+struct CharacterRenderer::ThreadMaterialSets {
+    uint64_t owner = 0;
+    uint64_t epoch[2] = {~0ull, ~0ull};
+    std::unordered_map<MaterialDescriptorKey, VkDescriptorSet, MaterialDescriptorKeyHash> sets[2];
+};
+
 void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
-                               Phase phase, uint32_t onlyInstance, bool gbuffer) {
-    renderPass(cmd, perFrameSet, camera, phase, onlyInstance, gbuffer, BlendedDepth::None);
+                               Phase phase, uint32_t onlyInstance, bool gbuffer, uint32_t part,
+                               uint32_t parts) {
+    renderPass(cmd, perFrameSet, camera, phase, onlyInstance, gbuffer, BlendedDepth::None, part, parts);
 }
 
 void CharacterRenderer::renderPass(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
                                    Phase phase, uint32_t onlyInstance, bool gbuffer,
-                                   BlendedDepth blendedDepth) {
+                                   BlendedDepth blendedDepth, uint32_t part, uint32_t parts) {
     if (instances.empty() || !opaquePipeline_ || (gbuffer && gbufferVariants_.empty())) {
         return;
     }
@@ -4268,10 +4277,11 @@ void CharacterRenderer::renderPass(VkCommandBuffer cmd, VkDescriptorSet perFrame
     // gets the same set again. They are handed back only when a texture has
     // been destroyed since (its view handle can come back as another's), or
     // when the pool is half used.
+    uint64_t cacheEpoch = 0;
     {
         std::lock_guard<std::mutex> materialLock(materialMutex_);
         if (lastMaterialPoolResetFrame_ != frameIndex) {
-            materialRingOffset_[frameSlot] = 0;
+            materialRingOffset_[frameSlot].store(0, std::memory_order_relaxed);
             const uint64_t destroyed = VkTexture::destroyedSerial();
             if (destroyed != materialSetsSerial_[frameSlot] ||
                 materialSetsAllocated_[frameSlot] > MAX_MATERIAL_SETS / 2) {
@@ -4281,10 +4291,28 @@ void CharacterRenderer::renderPass(VkCommandBuffer cmd, VkDescriptorSet perFrame
                 materialDescriptorCache_[frameSlot].clear();
                 materialSetsAllocated_[frameSlot] = 0;
                 materialSetsSerial_[frameSlot] = destroyed;
+                ++materialCacheEpoch_[frameSlot];
             }
             lastMaterialPoolResetFrame_ = frameIndex;
         }
+        cacheEpoch = materialCacheEpoch_[frameSlot];
     }
+    // This thread's copy of the cache, forgotten when the slot's sets were
+    // handed back since it was filled, or when it was filled for another
+    // renderer (a character preview's).
+    thread_local ThreadMaterialSets threadSets;
+    if (threadSets.owner != rendererSerial_) {
+        threadSets.owner = rendererSerial_;
+        for (int slot = 0; slot < 2; ++slot) {
+            threadSets.sets[slot].clear();
+            threadSets.epoch[slot] = ~0ull;
+        }
+    }
+    if (threadSets.epoch[frameSlot] != cacheEpoch) {
+        threadSets.sets[frameSlot].clear();
+        threadSets.epoch[frameSlot] = cacheEpoch;
+    }
+    auto& threadCache = threadSets.sets[frameSlot];
 
     // Pre-compute aligned UBO stride for ring buffer sub-allocation
     const uint32_t uboStride = (sizeof(CharMaterialUBO) + materialUboAlignment_ - 1) & ~(materialUboAlignment_ - 1);
@@ -4317,8 +4345,13 @@ void CharacterRenderer::renderPass(VkCommandBuffer cmd, VkDescriptorSet perFrame
         const MaterialDescriptorKey key{.diffuse = diffuseInfo.imageView, .normal = normalInfo.imageView,
                                         .diffuseSampler = diffuseInfo.sampler, .normalSampler = normalInfo.sampler,
                                         .second = secondInfo.imageView, .secondSampler = secondInfo.sampler};
+        if (auto it = threadCache.find(key); it != threadCache.end()) return it->second;
+        std::lock_guard<std::mutex> materialLock(materialMutex_);
         auto& cache = materialDescriptorCache_[frameSlot];
-        if (auto it = cache.find(key); it != cache.end()) return it->second;
+        if (auto it = cache.find(key); it != cache.end()) {
+            threadCache.emplace(key, it->second);
+            return it->second;
+        }
 
         VkDescriptorSet set = VK_NULL_HANDLE;
         VkDescriptorSetAllocateInfo ai{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
@@ -4343,6 +4376,7 @@ void CharacterRenderer::renderPass(VkCommandBuffer cmd, VkDescriptorSet perFrame
                      .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &secondInfo, .pBufferInfo = nullptr, .pTexelBufferView = nullptr};
         vkUpdateDescriptorSets(vkCtx_->getDevice(), 4, writes, 0, nullptr);
         cache.emplace(key, set);
+        threadCache.emplace(key, set);
         ++materialSetsAllocated_[frameSlot];
         return set;
     };
@@ -4352,13 +4386,9 @@ void CharacterRenderer::renderPass(VkCommandBuffer cmd, VkDescriptorSet perFrame
     // is no set (the batch is skipped, as before).
     auto allocMaterial = [&](const CharMaterialUBO& matData, VkTexture* diffuse, VkTexture* normal,
                              VkTexture* second, uint32_t& offset, VkDescriptorSet& set) -> bool {
-        {
-            std::lock_guard<std::mutex> materialLock(materialMutex_);
-            offset = materialRingOffset_[frameSlot];
-            if (offset + uboStride > ringCapacityBytes) return false;  // ring exhausted
-            materialRingOffset_[frameSlot] = offset + uboStride;
-            set = getMaterialDescriptorSet(diffuse, normal, second);
-        }
+        offset = materialRingOffset_[frameSlot].fetch_add(uboStride, std::memory_order_relaxed);
+        if (offset + uboStride > ringCapacityBytes) return false;  // ring exhausted
+        set = getMaterialDescriptorSet(diffuse, normal, second);
         memcpy(static_cast<char*>(materialRingMapped_[frameSlot]) + offset, &matData, sizeof(CharMaterialUBO));
         return set != VK_NULL_HANDLE;
     };
@@ -4379,8 +4409,21 @@ void CharacterRenderer::renderPass(VkCommandBuffer cmd, VkDescriptorSet perFrame
     if (onlyInstance != 0) {
         auto it = instances.find(onlyInstance);
         if (it != instances.end()) drawOrder.emplace_back(it->first, &it->second);
-    } else {
+    } else if (parts <= 1) {
         for (auto& pair : instances) drawOrder.emplace_back(pair.first, &pair.second);
+    } else {
+        // This part's run of the instances drawn, split by count. Each part
+        // walks the same map in the same order, so the runs join up.
+        for (auto& pair : instances) {
+            if (isDrawCandidate(pair.second, camPos, frustum, renderRadiusSq)) {
+                drawOrder.emplace_back(pair.first, &pair.second);
+            }
+        }
+        const size_t n = drawOrder.size();
+        const size_t first = n * part / parts;
+        const size_t last = n * (part + 1) / parts;
+        drawOrder.erase(drawOrder.begin() + static_cast<std::ptrdiff_t>(last), drawOrder.end());
+        drawOrder.erase(drawOrder.begin(), drawOrder.begin() + static_cast<std::ptrdiff_t>(first));
     }
 
     for (const auto& [instanceId, instancePtr] : drawOrder) {
