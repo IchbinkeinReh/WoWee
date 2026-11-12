@@ -1480,16 +1480,10 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
             }
         }
         else if (key == ufi.faction) {
-            const uint32_t factionBefore = unit->getFactionTemplate();
             unit->setFactionTemplate(val);
             // The player's own template moves how everything regards them.
             if (block.guid == owner_.getPlayerGuid()) {
                 owner_.refreshUnitHostility();
-                // And what the server says about their quests: an enemy is
-                // shown none (quest_status_requery.hpp).
-                if (quest_status_requery::playerFactionChanged(factionBefore, val)) {
-                    if (auto* qh = owner_.getQuestHandler()) qh->requeryNearbyQuestGiverStatus();
-                }
             }
             else unit->setHostile(owner_.playerRegardsHostile(*unit));
         } else if (key == ufi.boundingRadius) {
@@ -1955,13 +1949,6 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
             if ((prev ^ val) & PLAYER_FLAGS_HELM_CLOAK_BITS) {
                 pendingEvents_.emit("UNIT_PORTRAIT_UPDATE", {"player"});
                 pendingEvents_.emit("UNIT_MODEL_CHANGED", {"player"});
-            }
-            // .gm on / .gm off: the server answers quest status for the
-            // player as they are now, and an enemy gets none - so a GM who
-            // arrived among the other faction's questgivers before turning
-            // GM on kept their empty answers (quest_status_requery.hpp).
-            if (!isCreate && last.known && quest_status_requery::gmFlagChanged(last.value, val)) {
-                if (auto* qh = owner_.getQuestHandler()) qh->requeryNearbyQuestGiverStatus();
             }
             last.value = val;
             last.known = true;

@@ -327,36 +327,11 @@ public:
         npcQuestStatus_.clear();
     }
 
-    // Drives the quest-giver status requery cooldown; called once per frame by
-    // GameHandler::update alongside the other quest bookkeeping.
-    void tickQuestGiverStatusRequery(float deltaTime);
-
-    // Ask every questgiver in view for its status again (rate-limited, see
-    // below). Also for what changes the answer outside the quest log: the
-    // player's faction or GM flag (game/quest_status_requery.hpp).
     /// 0x006d50c0: every quest giver's status asked at once, a bare
     /// CMSG_QUESTGIVER_STATUS_MULTIPLE_QUERY.
     void queryAllQuestGiverStatuses();
-    void requeryNearbyQuestGiverStatus();
 
 private:
-    // Request fresh quest-giver status for nearby NPCs so the !/? markers update
-    // live (e.g. the moment an objective completes) instead of only when the
-    // player leaves and re-enters the area.
-    //
-    // Rate-limited rather than sent on the spot: one call fans out to a packet
-    // per nearby quest giver, and completion events arrive in bursts (a killing
-    // blow that finishes two quests, a loot that fills several objectives).
-    // Requests inside the cooldown set a pending flag and are coalesced into a
-    // single sweep when it expires, so no refresh is dropped.
-    // (requeryNearbyQuestGiverStatus, public above, is the entry point.)
-    void sendQuestGiverStatusQueries();
-
-    // Minimum spacing between requery sweeps. Marker freshness is a cosmetic
-    // concern, so a second of latency is imperceptible next to the packet cost.
-    static constexpr float kQuestGiverRequeryIntervalSec = 1.0f;
-    float questGiverRequeryCooldown_ = 0.0f;
-    bool questGiverRequeryPending_ = false;
 
     // --- Packet handlers ---
     void handleGossipMessage(network::Packet& packet);
