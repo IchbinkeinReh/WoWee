@@ -147,6 +147,11 @@ jobs:
   build-macos:
     name: Build (macOS ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
+    # GitHub often finds no Apple Silicon runner for this repository and drops
+    # the arm64 job unrun, so it must not turn master red. The Intel runner has
+    # been reliable and still gates the run. Publish release below checks its
+    # result on its own.
+    continue-on-error: ${{ matrix.arch == 'arm64' }}
     strategy:
       fail-fast: false
       matrix:
@@ -781,6 +786,8 @@ jobs:
   build-ios:
     name: Build (iOS arm64, unsigned)
     runs-on: macos-latest
+    # Same Apple Silicon runner shortage as macOS arm64 above.
+    continue-on-error: true
 
     # The same client as the Android one, built for iPhone and iPad through
     # MoltenVK. Unsigned: CODE_SIGNING_ALLOWED=NO, so the .ipa installs only
