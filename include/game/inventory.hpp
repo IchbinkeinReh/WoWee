@@ -183,6 +183,9 @@ struct ItemDef {
     // A BoE item is bindType==2 but only prompts on equip while this is false; once the
     // server sets the soulbound bit (on equip), it is already bound and must not prompt.
     bool soulbound = false;
+    /// Gift-wrapped (ITEM_FIELD_FLAGS 0x8): it sounds as a wrapped gift on
+    /// the cursor (0x004d0020), not as the item inside.
+    bool wrapped = false;
 
     /// Would equipping this bind it to the player?
     ///

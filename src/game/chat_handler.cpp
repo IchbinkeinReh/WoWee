@@ -1292,8 +1292,12 @@ void ChatHandler::deliverChatMessage(MessageChatData data, bool alreadyWaited) {
         // channel with no slot reaches no frame, as in the client.
         const chat_channels::Slot* chanSlot =
             data.channelName.empty() ? nullptr : channelSlots_.byName(data.channelName);
-        const std::string numberedChannel = data.channelName.empty()
+        std::string numberedChannel = data.channelName.empty()
             ? std::string() : chat_channels::numberedName(chanSlot, data.channelName);
+        // The header goes through the mature-language filter as well
+        // (0x00509dd0 filters its "%d. %s" with the text); arg9, the name the
+        // frame finds the channel by, does not.
+        filterProfanity(data.type, numberedChannel);
         // arg5 is the *target*, not the sender. It was the sender's own name,
         // which is only read by CHANNEL_NOTICE_USER - and read as "there are
         // two names in this notice", so every kick and ban was formatted as

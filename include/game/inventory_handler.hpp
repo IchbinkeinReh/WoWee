@@ -181,7 +181,9 @@ public:
     const LootResponseData& getCurrentLoot() const { return currentLoot_; }
     /// The player's +0x18e8: whether the loot the player is opening now is
     /// taken at once (0x006cde50) - set by what begins it.
-    void setAutoLoot(bool enabled) { autoLoot_ = enabled; }
+    /// 0x006cde50: the switch, and a loot already open is taken at once
+    /// when it goes on (its guid +0x18e0 -> 0x00588f90).
+    void setAutoLoot(bool enabled);
     /// 0x00588f90: the open loot taken, as far as it may be.
     void autoTakeLoot();
     bool isAutoLoot() const { return autoLoot_; }

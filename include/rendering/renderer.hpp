@@ -1459,6 +1459,7 @@ public:
      * generation time on the main thread, and turning it off has to release
      * what it was holding rather than merely stop drawing. */
     void setGrassEnabled(bool enabled);
+    [[nodiscard]] bool isGrassEnabled() const { return grassEnabled_; }
 private:
     bool grassEnabled_ = false;
     float grassDensityScale_ = 1.0f;

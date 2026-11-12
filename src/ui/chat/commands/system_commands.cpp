@@ -19,6 +19,8 @@
 #include "core/coordinates.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/renderer.hpp"
+#include "pipeline/asset_manager.hpp"
+#include "pipeline/dbc_loader.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/lighting_manager.hpp"
 #include "core/frame_profiler.hpp"
@@ -26,6 +28,9 @@
 #include "core/version.hpp"
 #include "game/transport_manager.hpp"
 #include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <vector>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -875,6 +880,228 @@ public:
     }
 };
 
+// --- worldport, charmport, setrawpos (the GM movement commands) ---
+//
+// Registered by FUN_00769100 in category 0 beside togglehelm: each needs the
+// active player, reads its words with the console tokeniser (0x0076f1e0) and
+// sends one request the realm answers only for a GM. Their prints go to the
+// console, which here is the chat frame.
+namespace gm_port {
+
+std::vector<std::string> consoleWords(const std::string& args, std::string_view delimiters) {
+    std::vector<std::string> words;
+    size_t pos = 0;
+    while (true) {
+        const size_t start = args.find_first_not_of(delimiters, pos);
+        if (start == std::string::npos) break;
+        const size_t end = args.find_first_of(delimiters, start);
+        std::string word = args.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        if (word.size() > 63) word.resize(63);
+        words.push_back(std::move(word));
+        if (end == std::string::npos) break;
+        pos = end;
+    }
+    return words;
+}
+
+/// 0x00406de0: finite, and inside the 34133-yard square of a continent.
+bool coordinatesInRange(float x, float y, float z) {
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return false;
+    const float a = 17066.666f - y, b = 17066.666f - x;
+    return 0.0f < a && a < 34133.332f && 0.0f < b && b < 34133.332f;
+}
+
+bool startsWithDigit(const std::string& s) {
+    return !s.empty() && std::isdigit(static_cast<unsigned char>(s[0]));
+}
+
+/// The player's position and facing as the realm counts them.
+void playerPlace(game::GameHandler& gh, float& x, float& y, float& z, float& facing) {
+    const auto& mi = gh.getMovementInfo();
+    const glm::vec3 server = core::coords::canonicalToServer(glm::vec3(mi.x, mi.y, mi.z));
+    x = server.x;
+    y = server.y;
+    z = server.z;
+    facing = core::coords::canonicalToServerYaw(mi.orientation);
+}
+
+constexpr std::string_view kWorldportDelims = "\t\r\n\" ";
+constexpr std::string_view kPortDelims = "\t\r\n\" ,";
+
+}  // namespace gm_port
+
+// worldport <continentID|place> [x y z] [facing] (0x00407210): a place name
+// is looked for in WorldSafeLocs (the first row whose name holds it, any
+// case); otherwise the map and as many coordinates as given, the rest the
+// player's own. Sent as CMSG_WORLD_TELEPORT: the time, the map, eight zero
+// bytes, x, y, z and the facing.
+class WorldportCommand : public IChatCommand {
+public:
+    ChatCommandResult execute(ChatCommandContext& ctx) override {
+        auto& gh = ctx.gameHandler;
+        if (gh.getState() != game::WorldState::IN_WORLD) return {};
+        auto* am = ctx.services.assetManager;
+        float x = 0, y = 0, z = 0, facing = 0;
+        gm_port::playerPlace(gh, x, y, z, facing);
+        int32_t mapId = 0;
+        if (!gm_port::startsWithDigit(ctx.args)) {
+            std::string wanted = ctx.args;
+            for (auto& c : wanted) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            auto dbc = am ? am->loadDBCOptional("WorldSafeLocs.dbc") : nullptr;
+            bool found = false;
+            for (uint32_t r = 0; dbc && dbc->isLoaded() && r < dbc->getRecordCount(); ++r) {
+                std::string name = dbc->getString(r, 5);
+                std::string lower = name;
+                for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                if (lower.empty() || lower.find(wanted) == std::string::npos) continue;
+                mapId = static_cast<int32_t>(dbc->getUInt32(r, 1));
+                x = dbc->getFloat(r, 2);
+                y = dbc->getFloat(r, 3);
+                z = dbc->getFloat(r, 4);
+                sayConsole(ctx, "Porting to " + name);
+                found = true;
+                break;
+            }
+            if (!found) {
+                sayConsole(ctx, "Could not find location: " + ctx.args);
+                return {};
+            }
+        } else {
+            const auto words = gm_port::consoleWords(ctx.args, gm_port::kWorldportDelims);
+            if (words.empty()) {
+                sayConsole(ctx, "Usage: worldport <continentID> [x y z] [facing]");
+                return {};
+            }
+            mapId = static_cast<int32_t>(std::atoi(words[0].c_str()));
+            if (words.size() > 1) x = std::strtof(words[1].c_str(), nullptr);
+            if (words.size() > 2) y = std::strtof(words[2].c_str(), nullptr);
+            if (words.size() > 3) z = std::strtof(words[3].c_str(), nullptr);
+            if (words.size() > 4) facing = std::strtof(words[4].c_str(), nullptr) * 0.017453292f;
+        }
+        auto maps = am ? am->loadDBCOptional("Map.dbc") : nullptr;
+        if (mapId < 0 || !maps || !maps->isLoaded() || maps->findRecordById(static_cast<uint32_t>(mapId)) < 0) {
+            sayConsole(ctx, "Bad world number: " + std::to_string(mapId));
+            return {};
+        }
+        network::Packet packet(game::wireOpcode(game::Opcode::CMSG_WORLD_TELEPORT));
+        packet.writeUInt32(static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count()));
+        packet.writeUInt32(static_cast<uint32_t>(mapId));
+        packet.writeUInt32(0);
+        packet.writeUInt32(0);
+        packet.writeFloat(x);
+        packet.writeFloat(y);
+        packet.writeFloat(z);
+        packet.writeFloat(facing);
+        gh.sendInterfaceRequest(packet);
+        return {};
+    }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"worldport"}; }
+    [[nodiscard]] std::string helpText() const override {
+        return "GM: port to a map and place (/worldport <continentID|place> [x y z] [facing])";
+    }
+};
+
+// charmport [x y z] [facing] | <name> (0x004071f0 -> 0x00406f90 with the
+// charm switch on): a name is CMSG_TELEPORT_TO_UNIT; coordinates move the
+// unit the player controls, CMSG_MOVE_CHARM_PORT_CHEAT.
+class CharmportCommand : public IChatCommand {
+public:
+    ChatCommandResult execute(ChatCommandContext& ctx) override {
+        auto& gh = ctx.gameHandler;
+        if (gh.getState() != game::WorldState::IN_WORLD) return {};
+        const std::string& a = ctx.args;
+        if (!a.empty() && !gm_port::startsWithDigit(a) && a[0] != '-') {
+            network::Packet packet(game::wireOpcode(game::Opcode::CMSG_TELEPORT_TO_UNIT));
+            packet.writeString(a);
+            gh.sendInterfaceRequest(packet);
+            return {};
+        }
+        const auto words = gm_port::consoleWords(a, gm_port::kPortDelims);
+        if (words.empty()) {
+            sayConsole(ctx, "Usage: port [x y z] [facing]");
+            return {};
+        }
+        if (words.size() < 2) return {};
+        const float x = std::strtof(words[0].c_str(), nullptr);
+        const float y = std::strtof(words[1].c_str(), nullptr);
+        const float z = words.size() > 2 ? std::strtof(words[2].c_str(), nullptr) : 0.0f;
+        if (!gm_port::coordinatesInRange(x, y, z)) {
+            sayConsole(ctx, "Coordinates out of range");
+            return {};
+        }
+        float px, py, pz, facing;
+        gm_port::playerPlace(gh, px, py, pz, facing);
+        if (words.size() > 3) facing = std::strtof(words[3].c_str(), nullptr) * 0.017453292f;
+        network::Packet packet(game::wireOpcode(game::Opcode::CMSG_MOVE_CHARM_PORT_CHEAT));
+        packet.writeFloat(x);
+        packet.writeFloat(y);
+        packet.writeFloat(z);
+        packet.writeFloat(facing);
+        gh.sendInterfaceRequest(packet);
+        return {};
+    }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"charmport"}; }
+    [[nodiscard]] std::string helpText() const override {
+        return "GM: port the controlled unit (/charmport [x y z] [facing] or a name)";
+    }
+};
+
+// setrawpos x y [z] [facing] (0x00407520): CMSG_MOVE_SET_RAW_POSITION.
+class SetRawPosCommand : public IChatCommand {
+public:
+    ChatCommandResult execute(ChatCommandContext& ctx) override {
+        auto& gh = ctx.gameHandler;
+        if (gh.getState() != game::WorldState::IN_WORLD) return {};
+        const std::string& a = ctx.args;
+        if (a.empty() || (!gm_port::startsWithDigit(a) && a[0] != '-')) {
+            sayConsole(ctx, "Usage: setrawpos [x y z] [facing]");
+            return {};
+        }
+        const auto words = gm_port::consoleWords(a, gm_port::kPortDelims);
+        if (words.size() < 2) return {};
+        const float x = std::strtof(words[0].c_str(), nullptr);
+        const float y = std::strtof(words[1].c_str(), nullptr);
+        const float z = words.size() > 2 ? std::strtof(words[2].c_str(), nullptr) : 0.0f;
+        if (!gm_port::coordinatesInRange(x, y, z)) {
+            sayConsole(ctx, "Coordinates out of range");
+            return {};
+        }
+        float px, py, pz, facing;
+        gm_port::playerPlace(gh, px, py, pz, facing);
+        if (words.size() > 3) facing = std::strtof(words[3].c_str(), nullptr) * 0.017453292f;
+        network::Packet packet(game::wireOpcode(game::Opcode::CMSG_MOVE_SET_RAW_POSITION));
+        packet.writeFloat(x);
+        packet.writeFloat(y);
+        packet.writeFloat(z);
+        packet.writeFloat(facing);
+        gh.sendInterfaceRequest(packet);
+        return {};
+    }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"setrawpos"}; }
+    [[nodiscard]] std::string helpText() const override {
+        return "GM: set the raw position (/setrawpos x y [z] [facing])";
+    }
+};
+
+// showDetailDoodads (0x0077f5b0): the ground clutter on or off, said on the
+// console - world flag 0x100000.
+class ShowDetailDoodadsCommand : public IChatCommand {
+public:
+    ChatCommandResult execute(ChatCommandContext& ctx) override {
+        auto* renderer = ctx.services.renderer;
+        if (!renderer) return {};
+        const bool on = !renderer->isGrassEnabled();
+        renderer->setGrassEnabled(on);
+        sayConsole(ctx, on ? "Detail doodads enabled." : "Detail doodads disabled.");
+        return {};
+    }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"showdetaildoodads"}; }
+    [[nodiscard]] std::string helpText() const override {
+        return "Turn the ground clutter on or off (/showdetaildoodads)";
+    }
+};
+
 void registerSystemCommands(ChatCommandRegistry& reg) {
     reg.registerCommand(std::make_unique<ProfileCommand>());
     reg.registerCommand(std::make_unique<GpsCommand>());
@@ -897,6 +1124,10 @@ void registerSystemCommands(ChatCommandRegistry& reg) {
     reg.registerCommand(std::make_unique<PitchLimitCommand>());
     reg.registerCommand(std::make_unique<VersionCommand>());
     reg.registerCommand(std::make_unique<InertConsoleCommand>());
+    reg.registerCommand(std::make_unique<WorldportCommand>());
+    reg.registerCommand(std::make_unique<CharmportCommand>());
+    reg.registerCommand(std::make_unique<SetRawPosCommand>());
+    reg.registerCommand(std::make_unique<ShowDetailDoodadsCommand>());
 }
 
 } // namespace ui

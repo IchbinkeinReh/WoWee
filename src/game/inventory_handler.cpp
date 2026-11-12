@@ -1475,6 +1475,11 @@ void InventoryHandler::lootReady() {
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LOOT_OPENED", {"0"});
 }
 
+void InventoryHandler::setAutoLoot(bool enabled) {
+    autoLoot_ = enabled;
+    if (enabled && lootWindowOpen_ && currentLoot_.lootGuid != 0) autoTakeLoot();
+}
+
 void InventoryHandler::autoTakeLoot() {
     // 0x00588f90, once every item is known: the coin (0x006d4b90), then each
     // slot the player may take - free (type 0) or the player's own (4). A
@@ -6781,6 +6786,7 @@ ItemDef InventoryHandler::buildItemDef(uint32_t entry, uint32_t stackCount,
     def.maxStack = 1;
     // ITEM_FLAG_SOULBOUND (0x1): a BoE item that has already bound must not re-prompt.
     def.soulbound = (flags & 0x1u) != 0;
+    def.wrapped = (flags & 0x8u) != 0;
     def.randomPropertyId = randomPropertyId;
     def.suffixFactor = suffixFactor;
 

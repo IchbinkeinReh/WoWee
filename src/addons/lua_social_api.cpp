@@ -1911,6 +1911,8 @@ static bool consoleCommandHere(const std::string& name) {
         "pitchlimit",                              // "pitchLimit", 0x005fe400
         "togglehelm", "togglecloak",               // 0x00407710 / 0x004077c0
         "memusage", "heapusage2", "setmap",        // all three one stub, 0x008c8de0
+        "worldport", "charmport", "setrawpos",     // 0x00407210 / 0x004071f0 / 0x00407520
+        "showdetaildoodads",                       // "showDetailDoodads", 0x0077f5b0
     };
     for (const char* candidate : kNames)
         if (name == candidate) return true;
