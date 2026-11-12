@@ -811,10 +811,16 @@ std::string ChatHandler::hearInLanguage(uint32_t language, const std::string& te
             }
         }
     }
-    return chat_language::garble(text, comprehension, [&](uint32_t len) -> const std::vector<std::string>* {
-        auto it = languageWords_.find((language << 8) | len);
-        return it == languageWords_.end() ? nullptr : &it->second;
-    });
+    const auto* profile = owner_.services().expansionRegistry ? owner_.services().expansionRegistry->getActive()
+                                                              : nullptr;
+    const int locale = chat_profanity::localeIndex(profile ? profile->locale : std::string("enUS"));
+    return chat_language::garble(
+        text, comprehension,
+        [&](uint32_t len) -> const std::vector<std::string>* {
+            auto it = languageWords_.find((language << 8) | len);
+            return it == languageWords_.end() ? nullptr : &it->second;
+        },
+        locale);
 }
 
 void ChatHandler::handleMessageChat(network::Packet& packet, const std::string& gmName) {

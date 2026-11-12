@@ -93,6 +93,15 @@ void appendInCaseOf(std::string& out, const std::string& word, std::string_view 
     }
 }
 
+/// 0x004fb410 in koKR, zhCN and zhTW: the replacement byte by byte against
+/// the original's bytes, upper-cased where the original's byte is A-Z.
+void appendInCaseOfBytes(std::string& out, const std::string& word, std::string_view original) {
+    for (size_t i = 0; i < word.size() && i < original.size() && original[i] != '\0'; ++i) {
+        const auto o = static_cast<uint8_t>(original[i]);
+        out.push_back(o >= 'A' && o <= 'Z' ? upper(word[i]) : word[i]);
+    }
+}
+
 }  // namespace
 
 uint32_t stringHash(std::string_view s) {
@@ -168,11 +177,14 @@ std::string stripEscapes(std::string_view in) {
     return out;
 }
 
-std::string garble(std::string_view text, uint32_t comprehension, const WordsOfLength& words) {
+std::string garble(std::string_view text, uint32_t comprehension, const WordsOfLength& words, int locale) {
     if (comprehension > 299) return std::string(text);
     const std::string s = stripEscapes(text);
     std::string out;
     size_t p = 0;
+    // zhCN and zhTW: the piece a word is cut at (local_c), 2 to 5 in turn.
+    int piece = (locale == 4 || locale == 5) ? 2 : 0;
+    const bool byteCase = locale == 1 || locale == 4 || locale == 5;
     for (;;) {
         // The run between words: one space for all of it.
         bool spaced = false;
@@ -184,7 +196,16 @@ std::string garble(std::string_view text, uint32_t comprehension, const WordsOfL
         }
         if (cp == kEnd) return out;
         const size_t start = p;
-        while ((cp = decode(s, p, len)) != kEnd && isWordChar(cp)) p += len;
+        int taken = 0;
+        while ((cp = decode(s, p, len)) != kEnd && isWordChar(cp)) {
+            p += len;
+            if (piece > 0 && ++taken >= piece) {
+                // Cut here: a space, and the next piece one longer.
+                out.push_back(' ');
+                piece = piece + 1 > 5 ? 2 : piece + 1;
+                break;
+            }
+        }
         std::string_view word(s.data() + start, std::min<size_t>(p - start, 0x400));
         const uint32_t hash = stringHash(word);
         if (comprehension > hash % 300) {
@@ -199,7 +220,8 @@ std::string garble(std::string_view text, uint32_t comprehension, const WordsOfL
             bucket = words ? words(want) : nullptr;
         }
         if (!bucket || bucket->empty()) continue;   // nothing to say it with: dropped
-        appendInCaseOf(out, (*bucket)[hash % bucket->size()], word);
+        if (byteCase) appendInCaseOfBytes(out, (*bucket)[hash % bucket->size()], word);
+        else appendInCaseOf(out, (*bucket)[hash % bucket->size()], word);
     }
 }
 
