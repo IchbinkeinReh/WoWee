@@ -2916,6 +2916,62 @@ void M2Renderer::releaseRtSkinned() {
 
 
 
+void M2Renderer::pushAlongParticles(const rt_lights::PointLight& light, const M2ModelGPU& model,
+                                    const M2Instance& inst, std::vector<rt_lights::PointLight>& out) const {
+    // A model's own light - an M2 light, a lamp's, a fire's - shines while
+    // its particles emit (emission): it is their light, and it is placed as a
+    // particle light is (rt_particle_lights.hpp, the Debug Glow "Point
+    // lights per particle light", N): N lights along the mean path of the
+    // emitters that are on, spaced evenly from the emitter to the
+    // particles' mean end - at N = 1 the one light at the middle of the
+    // path, the user's decision - the first the strongest, together the one
+    // light's colour. Its flame emitters' paths where it has any (blending 3
+    // and 4, as flameCentre takes them) - not its smoke's, which gives no
+    // light - else all of them that are on; the light shared out over them
+    // equally. A model with no emitter on - a lamp that only glows - keeps
+    // its light where the model gives it.
+    const int n = particleLightsPerEmitter_;
+    if (model.particleEmitters.empty()) {
+        out.push_back(light);
+        return;
+    }
+    const auto on = [&](const pipeline::M2ParticleEmitter& em) {
+        if (!em.enabled) return false;
+        return m2_track::sampleFloat(em.enabledTrack, inst.currentSequenceIndex, inst.animTime,
+                                     inst.globalSequenceTime, model.globalSequenceDurations, 1.0f) >= 0.5f;
+    };
+    bool anyFlame = false;
+    for (const auto& em : model.particleEmitters) anyFlame = anyFlame || (on(em) && rt_lights::isFlameEmitter(em));
+    std::vector<ParticleMeanPath> paths;
+    for (size_t ei = 0; ei < model.particleEmitters.size(); ++ei) {
+        const auto& em = model.particleEmitters[ei];
+        if (!on(em) || (anyFlame && !rt_lights::isFlameEmitter(em))) continue;
+        if (auto path = particleMeanPath(inst, model, ei)) paths.push_back(*path);
+    }
+    if (paths.empty()) {
+        out.push_back(light);
+        return;
+    }
+    const std::vector<float> weights = rt_lights::particleLightWeights(n);
+    const float share = 1.0f / static_cast<float>(paths.size());
+    for (const ParticleMeanPath& path : paths) {
+        const size_t first = out.size();
+        for (int k = 0; k < static_cast<int>(weights.size()); ++k) {
+            rt_lights::PointLight part = light;
+            part.position = path.at(rt_lights::particleLightAge(k, static_cast<int>(weights.size()), path.life));
+            part.color = light.color * (weights[static_cast<size_t>(k)] * share);
+            // Too faint for the trace to keep (selectLights): its share to
+            // the first, so all of them together stay the one light.
+            const float strength = std::max(part.color.r, std::max(part.color.g, part.color.b));
+            if (k > 0 && strength < rt_lights::kMinParticlePartStrength) {
+                out[first].color += part.color;
+                continue;
+            }
+            out.push_back(part);
+        }
+    }
+}
+
 void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
                                  std::vector<rt_lights::PointLight>& out) const {
     for (uint32_t id : rtLitInstances_) {
@@ -2966,7 +3022,7 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
             // Not a game object's: a server's object (Hallow's End's lit
             // pumpkins in Undercity) was never in the bake, so it adds its light.
             l.baked = inst.interiorLit && !inst.isGameObject;
-            out.push_back(l);
+            pushAlongParticles(l, *model, inst, out);
             continue;
         }
         if (model->lights.empty() && (model->isBrazierOrFire || model->isTorch)) {
@@ -2986,7 +3042,7 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
                 l.position = *flame;
             }
             l.color *= fade * cardPulse;
-            out.push_back(l);
+            pushAlongParticles(l, *model, inst, out);
             continue;
         }
         if (model->lights.empty()) {
@@ -3062,7 +3118,7 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
             }
             // Carried: it meets the fixtures, as a character's own lights do.
             l->carried = inst.rtMoved;
-            out.push_back(*l);
+            pushAlongParticles(*l, *model, inst, out);
         }
     }
     // The particle emitters' (prepareM2Particles), within the range.
