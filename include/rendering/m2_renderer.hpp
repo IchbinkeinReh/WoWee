@@ -243,6 +243,9 @@ struct M2ModelGPU {
     struct RtSkin;  // m2_renderer.cpp
     std::shared_ptr<const RtSkin> rtSkin;
     bool isSpellEffect = false;  // True for spell effect models (skip particle dampeners)
+    // Made for a spell or object effect (markModelAsSpellEffect), not placed
+    // in the world: its emitters keep their rate at any distance.
+    bool isSpellKit = false;
     bool disableAnimation = false; // Keep foliage/tree doodads visually stable
     bool shadowWindFoliage = false; // Cast shadows in the alpha-tested foliage pass (leaf cutouts)
     bool isFoliageLike = false;     // Model name matches foliage/tree/bush/grass etc (precomputed)

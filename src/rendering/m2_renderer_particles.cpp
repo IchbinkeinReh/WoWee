@@ -126,8 +126,11 @@ void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt
         // ...and thinned with the distance from the camera, by the emitter's
         // place. The client's flag against this (0x400000) is set from the
         // unit and spell side and not by a model's own data, so a spell
-        // effect keeps its rate here.
-        if (!gpu.isSpellEffect) {
+        // effect keeps its rate here - one made for a spell or object effect,
+        // not a model that only looks like one by its name: the instance
+        // portals and mage portals placed in the world thin out like any
+        // doodad's emitters (0x0097d8c0).
+        if (!gpu.isSpellKit) {
             glm::mat4 emitterWorld = inst.modelMatrix;
             if (em.bone < inst.boneMatrices.size()) emitterWorld = emitterWorld * inst.boneMatrices[em.bone];
             const glm::vec3 emitterPos(emitterWorld * glm::vec4(em.position, 1.0f));
