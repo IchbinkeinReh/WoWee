@@ -1578,6 +1578,7 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
                 }
             }
         }
+        if (gameHandler_) addonManager_->setClientIdentity(gameHandler_->getAccountName(), gameHandler_->getRealmName());
         addonManager_->loadAllAddons();
         app_.addonsLoaded_ = true;
         addonManager_->fireEvent("VARIABLES_LOADED");

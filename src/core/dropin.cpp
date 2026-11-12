@@ -147,6 +147,9 @@ std::string enterDropInRoot() {
     fs::current_path(root, ec);
     if (ec) return "drop-in: cannot enter " + root.string() + " - not taken";
     if (!archiveDir.empty()) setEnvVar("WOW_DATA_PATH", archiveDir.c_str(), /*overwrite=*/false);
+    // The original client's own folder, for the player's addons in its
+    // Interface\AddOns and its WTF (read only; AddonManager).
+    setEnvVar("WOWEE_CLIENT_ROOT", exeDir.string().c_str(), /*overwrite=*/false);
     const std::string config = (root / "config").string();
     setEnvVar("WOWEE_CONFIG_ROOT", config.c_str(), /*overwrite=*/false);
 #ifdef _WIN32

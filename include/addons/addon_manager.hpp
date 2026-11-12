@@ -92,6 +92,12 @@ public:
 
     void saveAllSavedVariables();
     void setCharacterName(const std::string& name) { characterName_ = name; }
+    /// The account and realm the original client's WTF files are named by,
+    /// for its AddOns.txt (drop-in mode; readClientAddOnsTxt).
+    void setClientIdentity(const std::string& account, const std::string& realm);
+    /// Whether this addon came from the original client's Interface\AddOns
+    /// (drop-in mode: the player's own addons).
+    [[nodiscard]] bool isClientAddon(const std::string& basePath) const;
     /// Where this character's chat colour table is kept, the COLORS section
     /// of the client's chat-cache.txt. Empty before a character is known.
     [[nodiscard]] std::string chatCachePath() const;
@@ -139,6 +145,13 @@ private:
 
     // addonName -> enabled. Absent means enabled (default on).
     std::unordered_map<std::string, bool> addonEnabled_;
+    // Drop-in mode: the original client's Interface\AddOns (empty otherwise),
+    // and its AddOns.txt for this character, read only (readClientAddOnsTxt).
+    std::string clientAddonsRoot_;
+    std::string clientAccount_;
+    std::string clientRealm_;
+    std::unordered_map<std::string, bool> clientEnabled_;
+    void readClientAddOnsTxt();
     std::string frameXmlDir_;
     /// The same directory as it is actually spelled on disk.
     ///

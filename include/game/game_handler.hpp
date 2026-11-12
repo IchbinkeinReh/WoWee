@@ -247,6 +247,7 @@ public:
     /// GetRealmName answers (0x00510e00).
     void setRealmName(const std::string& name) { realmName_ = name; }
     const std::string& getRealmName() const { return realmName_; }
+    const std::string& getAccountName() const { return accountName; }
 
     /**
      * Check if connected to world server
