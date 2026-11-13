@@ -150,6 +150,17 @@ TEST_CASE("a player created feigning is alive, and stays so when it ends", "[rep
 
 namespace {
 
+constexpr uint64_t kMob = 0xF130000000000123ull;
+constexpr uint32_t kArcaneShot = 3044;
+
+// A hunter in the world with a mob to shoot (upstream's helper, from a
+// replay commit not taken here).
+void huntMob(Session& s) {
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_LEVEL, 9}});
+    s.receive(UpdateObject().create(kMob, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_LEVEL, 8}}));
+}
+
 // WorldObject::SendSpellMiss: the spell, the caster's guid whole, an unknown
 // byte, one target, its guid whole, and how it missed (SpellMissInfo).
 wowee::network::Packet spellMiss(uint64_t caster, uint64_t victim, uint32_t spellId, uint8_t missInfo) {
