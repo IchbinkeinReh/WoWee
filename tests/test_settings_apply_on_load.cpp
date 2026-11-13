@@ -129,7 +129,7 @@ TEST_CASE("unit self-shadowing is an option of its own, kept and applied",
     CHECK(cfg.find("\"rt_unit_self_shadow=\"") != std::string::npos);
     CHECK(cfg.find("key == \"rt_unit_self_shadow\"") != std::string::npos);
     const std::string i18n = wowee::test::slurp("src/ui/settings_i18n.cpp");
-    CHECK(i18n.find("Eigenschatten von Figuren") != std::string::npos);
+    CHECK(i18n.find("Figuren-Eigenschatten") != std::string::npos);
 }
 
 TEST_CASE("the graphics defaults have one home", "[settings]") {

@@ -456,8 +456,8 @@ TEST_CASE("the graphics reset covers every graphics row and nothing else", "[set
 // category it draws is one, and every one is drawn there.
 TEST_CASE("the graphics categories are the Video tab's", "[settings][schema]") {
     const std::string src = wowee::test::slurp("src/ui/settings_panel.cpp");
-    const std::size_t from = src.find("BeginTabItem(\"Video\"");
-    const std::size_t to = src.find("BeginTabItem(\"Interface\"", from);
+    const std::size_t from = src.find("BeginTabItem(tabLabel(\"Video\")");
+    const std::size_t to = src.find("BeginTabItem(tabLabel(\"Interface\")", from);
     REQUIRE(from != std::string::npos);
     REQUIRE(to != std::string::npos);
     const std::string tab = src.substr(from, to - from);

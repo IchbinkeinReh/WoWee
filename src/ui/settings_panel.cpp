@@ -11,6 +11,10 @@
 #include "ui/settings_panel.hpp"
 #include "addons/addon_manager.hpp"
 #include "ui/settings_schema.hpp"
+#include "ui/settings_i18n.hpp"
+#include <cstring>
+#include <utility>
+#include "game/expansion_profile.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "ui/display_modes.hpp"
 #include "ui/inventory_screen.hpp"
@@ -63,6 +67,23 @@
 #include <limits>
 #include <string>
 
+namespace {
+
+// The window in the client's language (settings_i18n): set once a frame
+// where the window is drawn, read by everything it draws.
+bool g_settingsGerman = false;
+
+const char* tr(const char* en) { return wowee::ui::settingsWindowText(en); }
+
+/// A tab's label in the client's language, with the English name as its id,
+/// so the tab stays the same tab whichever language draws it.
+std::string tabLabel(const char* en) {
+    return std::string(tr(en)) + "###" + en;
+}
+
+}  // namespace
+
+
 namespace wowee { namespace ui {
 
 // The interface tab: the client's own windows, its bars, and what it draws
@@ -77,37 +98,37 @@ void SettingsPanel::renderSettingsInterfaceTab(const std::function<void()>& save
     ImGui::Spacing();
     ImGui::BeginChild("InterfaceSettings", ImVec2(0, -1), true);
 
-    ImGui::SeparatorText("Interface");
+    ImGui::SeparatorText(tr("Interface"));
     drawSchemaCategory("Interface", saveCallback);
 
     ImGui::Spacing();
-    ImGui::SeparatorText("Action Bars");
+    ImGui::SeparatorText(tr("Action Bars"));
     drawSchemaCategory("Action Bars", saveCallback);
     // Not a setting: the two offsets are, and this is the way back to where
     // they started without dragging both sliders to zero by eye.
-    if (ImGui::Button("Reset Bottom Left Position")) {
+    if (ImGui::Button(tr("Reset Bottom Left Position"))) {
         pendingActionBar2OffsetX = 0.0f;
         pendingActionBar2OffsetY = 0.0f;
         saveCallback();
     }
 
     ImGui::Spacing();
-    ImGui::SeparatorText("HUD");
+    ImGui::SeparatorText(tr("HUD"));
     drawSchemaCategory("HUD", saveCallback);
 
     ImGui::Spacing();
-    ImGui::SeparatorText("Names");
+    ImGui::SeparatorText(tr("Names"));
     drawSchemaCategory("Names", saveCallback);
 
     // Its own category since the nameplates outgrew the Names panel in the
     // game's own options frame; this window scrolls, so here they are just
     // the next heading down.
     ImGui::Spacing();
-    ImGui::SeparatorText("Nameplates");
+    ImGui::SeparatorText(tr("Nameplates"));
     drawSchemaCategory("Nameplates", saveCallback);
 
     ImGui::Spacing();
-    ImGui::SeparatorText("Combat");
+    ImGui::SeparatorText(tr("Combat"));
     drawSchemaCategory("Combat", saveCallback);
 
     ImGui::EndChild();
@@ -125,7 +146,7 @@ void SettingsPanel::renderSettingsGameplayTab(const std::function<void()>& saveC
     ImGui::Spacing();
     ImGui::BeginChild("GameplaySettings", ImVec2(0, -1), true);
 
-    ImGui::SeparatorText("Camera");
+    ImGui::SeparatorText(tr("Camera"));
     drawSchemaCategory("Camera", saveCallback);
 
     // What the pad does, said where the pad's settings are.
@@ -136,8 +157,8 @@ void SettingsPanel::renderSettingsGameplayTab(const std::function<void()>& saveC
     // will find: nothing on screen would otherwise say that Back gives you a
     // pointer, and there is nowhere else to look.
     ImGui::Spacing();
-    ImGui::TextUnformatted(core::gamepad().describe().c_str());
-    if (ImGui::CollapsingHeader("What the controller does")) {
+    ImGui::TextUnformatted(tr(core::gamepad().describe().c_str()));
+    if (ImGui::CollapsingHeader(tr("What the controller does"))) {
         ImGui::BulletText("Left stick: walk and strafe");
         ImGui::BulletText("Right stick: look around");
         ImGui::BulletText("Triggers: zoom in and out");
@@ -173,11 +194,11 @@ void SettingsPanel::renderSettingsGameplayTab(const std::function<void()>& saveC
     }
 
     ImGui::Spacing();
-    ImGui::SeparatorText("Minimap");
+    ImGui::SeparatorText(tr("Minimap"));
     drawSchemaCategory("Minimap", saveCallback);
     // Not settings: the zoom is the minimap's own state, stepped rather than
     // chosen, and there is no value to store for it.
-    ImGui::Text("Zoom:");
+    ImGui::Text("%s", tr("Zoom:"));
     ImGui::SameLine();
     if (ImGui::Button("  -  ")) {
         if (renderer) {
@@ -192,18 +213,18 @@ void SettingsPanel::renderSettingsGameplayTab(const std::function<void()>& saveC
     }
 
     ImGui::Spacing();
-    ImGui::SeparatorText("Gameplay");
+    ImGui::SeparatorText(tr("Gameplay"));
     drawSchemaCategory("Gameplay", saveCallback);
 
     ImGui::Spacing();
-    ImGui::SeparatorText("Chat");
+    ImGui::SeparatorText(tr("Chat"));
     drawSchemaCategory("Chat", saveCallback);
 
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
-    if (ImGui::Button("Restore Gameplay Defaults", ImVec2(-1, 0))) {
+    if (ImGui::Button(tr("Restore Gameplay Defaults"), ImVec2(-1, 0))) {
         for (const char* category : {"Camera", "Interface", "Minimap",
                                      "Action Bars", "Combat & HUD",
                                      "Gameplay", "Chat"}) {
@@ -224,7 +245,7 @@ void SettingsPanel::renderSettingsGameplayTab(const std::function<void()>& saveC
 void SettingsPanel::renderSettingsControlsTab(const std::function<void()>& saveCallback) {
 ImGui::Spacing();
 
-ImGui::Text("Keybindings");
+ImGui::Text("%s", tr("Keybindings"));
 ImGui::Separator();
 
 auto& km = ui::KeybindingManager::getInstance();
@@ -236,7 +257,7 @@ for (int i = 0; i < numActions; ++i) {
     ImGuiKey currentKey = km.getKeyForAction(action);
 
     // Display current binding
-    ImGui::Text("%s:", actionName);
+    ImGui::Text("%s:", tr(actionName));
     ImGui::SameLine(200);
 
     // Get human-readable key name (basic implementation)
@@ -263,11 +284,11 @@ for (int i = 0; i < numActions; ++i) {
         keyName = keyBuf;
     }
 
-    ImGui::Text("[%s]", keyName);
+    ImGui::Text("[%s]", tr(keyName));
 
     // Rebind button
     ImGui::SameLine(350);
-    if (ImGui::Button(awaitingKeyPress_ && pendingRebindAction_ == i ? "Waiting..." : "Rebind", ImVec2(100, 0))) {
+    if (ImGui::Button(awaitingKeyPress_ && pendingRebindAction_ == i ? tr("Waiting...") : tr("Rebind"), ImVec2(100, 0))) {
         pendingRebindAction_ = i;
         awaitingKeyPress_ = true;
     }
@@ -277,7 +298,7 @@ for (int i = 0; i < numActions; ++i) {
 if (awaitingKeyPress_ && pendingRebindAction_ >= 0) {
     ImGui::Spacing();
     ImGui::Separator();
-    ImGui::Text("Press any key to bind to this action (Esc to cancel)...");
+    ImGui::Text("%s", tr("Press any key to bind to this action (Esc to cancel)..."));
 
     // Check for any key press
     bool foundKey = false;
@@ -310,7 +331,7 @@ ImGui::Spacing();
 ImGui::Separator();
 ImGui::Spacing();
 
-if (ImGui::Button("Reset to Defaults", ImVec2(-1, 0))) {
+if (ImGui::Button(tr("Reset to Defaults"), ImVec2(-1, 0))) {
     km.resetToDefaults();
     awaitingKeyPress_ = false;
     pendingRebindAction_ = -1;
@@ -330,12 +351,12 @@ ImGui::BeginChild("AudioSettings", ImVec2(0, -1), true);
 drawSchemaCategory("Sound", saveCallback);
 
 ImGui::Spacing();
-ImGui::SeparatorText("Sound Effects");
+ImGui::SeparatorText(tr("Sound Effects"));
 drawSchemaCategory("Sound Effects", saveCallback);
 
 ImGui::EndChild();
 
-if (ImGui::Button("Restore Audio Defaults", ImVec2(-1, 0))) {
+if (ImGui::Button(tr("Restore Audio Defaults"), ImVec2(-1, 0))) {
     restoreSchemaDefaults("Sound");
     restoreSchemaDefaults("Sound Effects");
     applyAudioVolumes(services_.audioCoordinator);
@@ -348,12 +369,12 @@ void SettingsPanel::renderSettingsAboutTab() {
 ImGui::Spacing();
 ImGui::Spacing();
 
-ImGui::TextWrapped("WoWee - World of Warcraft Client Emulator");
+ImGui::TextWrapped("%s", tr("WoWee - World of Warcraft Client Emulator"));
 ImGui::Spacing();
 ImGui::Separator();
 ImGui::Spacing();
 
-ImGui::Text("Developer");
+ImGui::Text("%s", tr("Developer"));
 ImGui::Indent();
 ImGui::Text("Kelsi Davis");
 ImGui::Unindent();
@@ -364,7 +385,7 @@ ImGui::Indent();
 ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.0f, 1.0f), "https://github.com/IchbinkeinReh/WoWee");
 if (ImGui::IsItemHovered()) {
     ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-    ImGui::SetTooltip("Click to copy");
+    ImGui::SetTooltip("%s", tr("Click to copy"));
 }
 if (ImGui::IsItemClicked()) {
     ImGui::SetClipboardText("https://github.com/IchbinkeinReh/WoWee");
@@ -372,12 +393,12 @@ if (ImGui::IsItemClicked()) {
 ImGui::Unindent();
 ImGui::Spacing();
 
-ImGui::Text("Contact");
+ImGui::Text("%s", tr("Contact"));
 ImGui::Indent();
 ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.0f, 1.0f), "github.com/Kelsidavis");
 if (ImGui::IsItemHovered()) {
     ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-    ImGui::SetTooltip("Click to copy");
+    ImGui::SetTooltip("%s", tr("Click to copy"));
 }
 if (ImGui::IsItemClicked()) {
     ImGui::SetClipboardText("https://github.com/Kelsidavis");
@@ -388,9 +409,9 @@ ImGui::Spacing();
 ImGui::Separator();
 ImGui::Spacing();
 
-ImGui::TextWrapped("A multi-expansion WoW client supporting Classic, TBC, and WotLK (3.3.5a).");
+ImGui::TextWrapped("%s", tr("A multi-expansion WoW client supporting Classic, TBC, and WotLK (3.3.5a)."));
 ImGui::Spacing();
-ImGui::TextDisabled("Built with Vulkan, SDL2, and ImGui");
+ImGui::TextDisabled("%s", tr("Built with Vulkan, SDL2, and ImGui"));
 
 }
 
@@ -483,8 +504,13 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove |
                              ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
 
+    {
+        const auto* registry = services_.expansionRegistry;
+        g_settingsGerman = registry && registry->getActive() && settingsLocaleGerman(registry->getActive()->locale);
+        setSettingsWindowGerman(g_settingsGerman);
+    }
     if (ImGui::Begin("##SettingsWindow", nullptr, flags)) {
-        ImGui::Text("Settings");
+        ImGui::Text("%s", tr("Settings"));
         ImGui::SameLine();
         {
             // Right-align the build version against the window's content edge.
@@ -511,7 +537,7 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
             // ============================================================
             // VIDEO TAB
             // ============================================================
-            if (ImGui::BeginTabItem("Video", nullptr, tabFlagFor("Video"))) {
+            if (ImGui::BeginTabItem(tabLabel("Video").c_str(), nullptr, tabFlagFor("Video"))) {
                 ImGui::Spacing();
 
                 // What follows is three schema categories and the four controls
@@ -526,7 +552,7 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
                 // know about. Those dependencies are in the schema now, so both
                 // windows grey out the same things at the same times.
 
-                ImGui::SeparatorText("Display");
+                ImGui::SeparatorText(tr("Display"));
                 drawSchemaCategory("Display", saveCallback);
                 {
                     const char* resItems[kResCount];
@@ -536,7 +562,7 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
                                  kResolutions[i][0], kResolutions[i][1]);
                         resItems[i] = resBuf[i];
                     }
-                    if (ImGui::Combo("Resolution", &pendingResIndex, resItems, kResCount)) {
+                    if (ImGui::Combo(tr("Resolution"), &pendingResIndex, resItems, kResCount)) {
                         window->applyResolution(kResolutions[pendingResIndex][0],
                                                 kResolutions[pendingResIndex][1]);
                         // Read back rather than assumed. A window cannot be
@@ -560,7 +586,7 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
                 }
 
                 ImGui::Spacing();
-                ImGui::SeparatorText("Graphics");
+                ImGui::SeparatorText(tr("Graphics"));
                 drawSchemaCategory("Graphics", saveCallback);
                 // View distance moved into the schema, so it is drawn by
                 // drawSchemaCategory above rather than here - the options
@@ -568,10 +594,10 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
                 // schema and nothing else, and that is the screen it was
                 // missing from. Ground clutter followed it there.
                 ImGui::Spacing();
-                ImGui::SeparatorText("Shadows");
+                ImGui::SeparatorText(tr("Shadows"));
                 drawSchemaCategory("Shadows", saveCallback);
                 ImGui::Spacing();
-                ImGui::SeparatorText("Detail");
+                ImGui::SeparatorText(tr("Detail"));
                 drawSchemaCategory("Detail", saveCallback);
 
                 // From the schema, like everything else on this tab: the four
@@ -580,19 +606,19 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
                 // window explained the same sliders differently, and three of
                 // them not at all. The schema's own heading follows.
                 ImGui::Spacing();
-                ImGui::SeparatorText("Grass");
+                ImGui::SeparatorText(tr("Grass"));
                 drawSchemaCategory("Grass", saveCallback);
 
                 ImGui::Spacing();
-                ImGui::SeparatorText("Water");
+                ImGui::SeparatorText(tr("Water"));
                 drawSchemaCategory("Water", saveCallback);
 
                 ImGui::Spacing();
-                ImGui::SeparatorText("Ray Tracing (highly experimental)");
+                ImGui::SeparatorText(tr("Ray Tracing (highly experimental)"));
                 drawSchemaCategory("Ray Tracing", saveCallback);
 
                 ImGui::Spacing();
-                ImGui::SeparatorText("Upscaling");
+                ImGui::SeparatorText(tr("Upscaling"));
                 drawSchemaCategory("Upscaling", saveCallback);
                 // Not settings: what the machine can actually do, which is the
                 // half of frame generation no preference can decide.
@@ -622,7 +648,7 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
                 ImGui::Separator();
                 ImGui::Spacing();
 
-                if (ImGui::Button("Restore Video Defaults", ImVec2(-1, 0))) {
+                if (ImGui::Button(tr("Restore Video Defaults"), ImVec2(-1, 0))) {
                     // Every graphics page this tab draws but the Debug ones, read
                     // off the schema: the list was written out here, and Grass -
                     // its switch, density, height and distance - was left off it
@@ -644,24 +670,24 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
                 // light's and shadow's strength (Renderer::LightingTune). Last
                 // on the tab, as the options panels put them after Display.
                 ImGui::Spacing();
-                ImGui::SeparatorText("Debug Graphics");
+                ImGui::SeparatorText(tr("Debug Graphics"));
                 ImGui::TextWrapped("For looking at the lighting's parts. Every default is the "
                                    "picture as it is; the ray traced ones change nothing with "
                                    "ray tracing off.");
                 ImGui::Spacing();
                 drawSchemaCategory("Debug Graphics", saveCallback);
                 ImGui::Spacing();
-                ImGui::SeparatorText("Debug: Time of day");
+                ImGui::SeparatorText(tr("Debug: Time of day"));
                 drawSchemaCategory("Debug Time", saveCallback);
                 ImGui::Spacing();
-                ImGui::SeparatorText("Debug: Light sources");
+                ImGui::SeparatorText(tr("Debug: Light sources"));
                 drawSchemaCategory("Debug Lights", saveCallback);
                 drawSchemaCategory("Debug Glow", saveCallback);
                 ImGui::Spacing();
-                ImGui::SeparatorText("Debug: Shadows");
+                ImGui::SeparatorText(tr("Debug: Shadows"));
                 drawSchemaCategory("Debug Shadows", saveCallback);
                 ImGui::Spacing();
-                if (ImGui::Button("Restore Debug Graphics Defaults", ImVec2(-1, 0))) {
+                if (ImGui::Button(tr("Restore Debug Graphics Defaults"), ImVec2(-1, 0))) {
                     restoreSchemaDefaults("Debug Graphics");
                     restoreSchemaDefaults("Debug Lights");
                     restoreSchemaDefaults("Debug Glow");
@@ -673,7 +699,7 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
                 ImGui::EndTabItem();
             }
 
-            if (ImGui::BeginTabItem("Interface", nullptr, tabFlagFor("Interface"))) {
+            if (ImGui::BeginTabItem(tabLabel("Interface").c_str(), nullptr, tabFlagFor("Interface"))) {
                 renderSettingsInterfaceTab(saveCallback);
                 ImGui::EndTabItem();
             }
@@ -681,7 +707,7 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
             // ============================================================
             // AUDIO TAB
             // ============================================================
-            if (ImGui::BeginTabItem("Audio", nullptr, tabFlagFor("Audio"))) {
+            if (ImGui::BeginTabItem(tabLabel("Audio").c_str(), nullptr, tabFlagFor("Audio"))) {
                 renderSettingsAudioTab(saveCallback);
                 ImGui::EndTabItem();
             }
@@ -689,7 +715,7 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
             // ============================================================
             // GAMEPLAY TAB
             // ============================================================
-            if (ImGui::BeginTabItem("Gameplay", nullptr, tabFlagFor("Gameplay"))) {
+            if (ImGui::BeginTabItem(tabLabel("Gameplay").c_str(), nullptr, tabFlagFor("Gameplay"))) {
                 renderSettingsGameplayTab(saveCallback);
                 ImGui::EndTabItem();
             }
@@ -697,7 +723,7 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
             // ============================================================
             // CONTROLS TAB
             // ============================================================
-            if (ImGui::BeginTabItem("Controls", nullptr, tabFlagFor("Controls"))) {
+            if (ImGui::BeginTabItem(tabLabel("Controls").c_str(), nullptr, tabFlagFor("Controls"))) {
                 renderSettingsControlsTab(saveCallback);
                 ImGui::EndTabItem();
             }
@@ -705,7 +731,7 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
             // ============================================================
             // CHAT TAB
             // ============================================================
-            if (ImGui::BeginTabItem("Chat", nullptr, tabFlagFor("Chat"))) {
+            if (ImGui::BeginTabItem(tabLabel("Chat").c_str(), nullptr, tabFlagFor("Chat"))) {
                 chatPanel.renderSettingsTab(saveCallback);
                 ImGui::EndTabItem();
             }
@@ -713,7 +739,7 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
             // ============================================================
             // ABOUT TAB
             // ============================================================
-            if (ImGui::BeginTabItem("About", nullptr, tabFlagFor("About"))) {
+            if (ImGui::BeginTabItem(tabLabel("About").c_str(), nullptr, tabFlagFor("About"))) {
                 renderSettingsAboutTab();
                 ImGui::EndTabItem();
             }
@@ -725,11 +751,11 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
         ImGui::Spacing();
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 10.0f));
         float saveBtnW = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
-        if (ImGui::Button("Save Settings", ImVec2(saveBtnW, 0))) {
+        if (ImGui::Button(tr("Save Settings"), ImVec2(saveBtnW, 0))) {
             saveCallback();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Back to Game", ImVec2(-1, 0))) {
+        if (ImGui::Button(tr("Back to Game"), ImVec2(-1, 0))) {
             showSettingsWindow = false;
         }
         ImGui::PopStyleVar();
@@ -744,7 +770,7 @@ void SettingsPanel::drawSchemaCategory(const char* category,
     std::string heading;
     // Why the ray tracing rows are greyed, where the device cannot run it
     // (rendering/rt_capability.hpp); empty where it can.
-    const std::string rtReason = services_.renderer ? services_.renderer->rtUnavailableReason() : std::string();
+    const std::string rtReason = services_.renderer ? services_.renderer->rtUnavailableReason(g_settingsGerman) : std::string();
     // The traced lighting as it runs: asked for, and the device runs it.
     const bool rtOn = rtReason.empty() && settingIsOn(settingValue("raytracedlighting"));
     for (std::size_t i = 0; i < count; ++i) {
@@ -753,9 +779,13 @@ void SettingsPanel::drawSchemaCategory(const char* category,
         // A row on the game's own store is the interface's to show; this
         // window has no CVar to read and is not on screen while it is.
         if (d.store[0] != '\0') continue;
+        // The row's words in the client's language (settings_i18n), the key
+        // as the control's id so a translation cannot collide or move it.
+        const SettingText text = settingText(d, g_settingsGerman);
+        const std::string label = text.label + "##" + d.key;
         if (d.section[0] != '\0' && d.section != heading) {
             heading = d.section;
-            ImGui::SeparatorText(d.section);
+            ImGui::SeparatorText(text.section.c_str());
         }
 
         // Read, draw, and write back only if it moved. The value lives in a
@@ -775,21 +805,21 @@ void SettingsPanel::drawSchemaCategory(const char* category,
         const bool unavailable = !unavailableReason.empty();
         // And greyed while the ray traced lighting is on, for what it makes
         // moot (rayTracingIgnoredReason) - back as soon as it is off.
-        const char* rtIgnored = rtOn ? rayTracingIgnoredReason(d.key) : nullptr;
+        const char* rtIgnored = rtOn ? rayTracingIgnoredText(d.key, g_settingsGerman) : nullptr;
         const bool enabled = !unavailable && !rtIgnored &&
             settingEnabled(d, [this](const std::string& key) { return settingValue(key); });
         if (!enabled) ImGui::BeginDisabled();
         switch (d.kind) {
             case SettingKind::Bool: {
                 bool v = settingIsOn(current);
-                if (ImGui::Checkbox(d.label, &v)) {
+                if (ImGui::Checkbox(label.c_str(), &v)) {
                     changed = setSettingValue(d.key, v ? "1" : "0");
                 }
                 break;
             }
             case SettingKind::Int: {
                 int v = std::atoi(current.c_str());
-                if (ImGui::SliderInt(d.label, &v, static_cast<int>(d.minValue),
+                if (ImGui::SliderInt(label.c_str(), &v, static_cast<int>(d.minValue),
                                      static_cast<int>(d.maxValue))) {
                     changed = setSettingValue(d.key, std::to_string(v));
                 }
@@ -805,7 +835,7 @@ void SettingsPanel::drawSchemaCategory(const char* category,
                 // small values could not be reached.
                 const bool logScale = d.minValue > 0.0f && d.maxValue >= 1000.0f * d.minValue;
                 if (logScale) format = "%.3g";
-                if (ImGui::SliderFloat(d.label, &v, d.minValue, d.maxValue, format,
+                if (ImGui::SliderFloat(label.c_str(), &v, d.minValue, d.maxValue, format,
                                        logScale ? ImGuiSliderFlags_Logarithmic : ImGuiSliderFlags_None)) {
                     changed = setSettingValue(d.key, settingNumberText(v));
                 }
@@ -815,7 +845,7 @@ void SettingsPanel::drawSchemaCategory(const char* category,
                 // The choices are one string separated by bars, because that is
                 // what crosses to Lua; ImGui wants them as an array.
                 std::vector<std::string> labels;
-                std::string choices = d.choices;
+                std::string choices = text.choices.empty() ? std::string(d.choices) : text.choices;
                 for (std::size_t at = 0; at != std::string::npos;) {
                     const std::size_t bar = choices.find('|', at);
                     labels.push_back(choices.substr(
@@ -826,7 +856,7 @@ void SettingsPanel::drawSchemaCategory(const char* category,
                 items.reserve(labels.size());
                 for (const auto& label : labels) items.push_back(label.c_str());
                 int v = std::atoi(current.c_str());
-                if (ImGui::Combo(d.label, &v, items.data(),
+                if (ImGui::Combo(label.c_str(), &v, items.data(),
                                  static_cast<int>(items.size()))) {
                     changed = setSettingValue(d.key, std::to_string(v));
                 }
@@ -844,13 +874,13 @@ void SettingsPanel::drawSchemaCategory(const char* category,
         }
         if (unavailable && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
             // The reason first: it is why the control will not move.
-            if (d.tooltip[0] != '\0') ImGui::SetTooltip("%s\n\n%s", unavailableReason.c_str(), d.tooltip);
+            if (!text.tooltip.empty()) ImGui::SetTooltip("%s\n\n%s", unavailableReason.c_str(), text.tooltip.c_str());
             else ImGui::SetTooltip("%s", unavailableReason.c_str());
         } else if (rtIgnored && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            if (d.tooltip[0] != '\0') ImGui::SetTooltip("%s\n\n%s", rtIgnored, d.tooltip);
+            if (!text.tooltip.empty()) ImGui::SetTooltip("%s\n\n%s", rtIgnored, text.tooltip.c_str());
             else ImGui::SetTooltip("%s", rtIgnored);
-        } else if (d.tooltip[0] != '\0' && ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", d.tooltip);
+        } else if (!text.tooltip.empty() && ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", text.tooltip.c_str());
         }
         if (!enabled) ImGui::EndDisabled();
         if (changed && saveCallback) saveCallback();
