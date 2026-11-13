@@ -137,6 +137,17 @@ glm::vec3 CameraController::portMove(const glm::vec3& from, const glm::vec3& wan
     const float dist = glm::length(horiz);
     bool fell = false;
     const char* how = "stand";
+    // 0x0073a890: the active player falling (or jumping) with flight
+    // allowed and not yet flying takes to the air once there is no ground
+    // within half a yard under its feet (0x00714b60's ray from a yard over
+    // them to a yard under, 1.5 or more) - the landing's test turned round.
+    if (flyingActive_ && !flightAirborne_ && m.falling && !m.swimming && !swimming) {
+        const auto down = sweeper.run(m, glm::vec3(0.0f, 0.0f, -1.0f), 0.5f);
+        if (down.facet < 0) {
+            flightAirborne_ = true;
+            portFlyMs_ = 0;
+        }
+    }
     // A flyer, and a unit with gravity disabled (MOVEMENTFLAG 0x400,
     // levitating), move by the swim-and-fly step (0x0075eda0 -> 0x00760b40).
     m.flying = isFlightAirborne() || gravityDisabled_;
