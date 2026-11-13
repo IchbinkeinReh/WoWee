@@ -2,6 +2,9 @@
 #include "game/equipment_hash.hpp"
 #include "ui/ui_colors.hpp"
 #include "rendering/character_preview.hpp"
+#include "rendering/character_preview_warm.hpp"
+#include "pipeline/data_stream.hpp"
+#include <chrono>
 #include "rendering/renderer.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "core/application.hpp"
@@ -424,6 +427,49 @@ void CharacterScreen::renderNotice(game::GameHandler& gameHandler, float screenW
     }
 }
 
+CharacterScreen::~CharacterScreen() {
+    if (previewWarm_.thread.joinable()) previewWarm_.thread.join();
+}
+
+bool CharacterScreen::previewFilesReady(uint64_t key, const game::Character& character,
+                                        const std::optional<game::GuildEmblem>& emblem) {
+    if (previewWarmedKey_ == key) return true;
+    if (previewWarm_.thread.joinable()) {
+        // One read-ahead at a time; a newer character waits for it.
+        if (!previewWarm_.done->load()) return false;
+        previewWarm_.thread.join();
+        if (previewWarm_.key == key) {
+            previewWarmedKey_ = key;
+            return true;
+        }
+    }
+    if (!assetManager_) return true;
+
+    rendering::PreviewWarmCharacter who;
+    who.race = character.race;
+    who.gender = character.gender;
+    who.useFemaleModel = character.useFemaleModel;
+    who.classId = static_cast<uint8_t>(character.characterClass);
+    who.appearanceBytes = character.appearanceBytes;
+    who.facialFeatures = character.facialFeatures;
+    who.flags = character.flags;
+    who.equipment = character.equipment;
+    who.emblem = emblem;
+    auto done = std::make_shared<std::atomic<bool>>(false);
+    previewWarm_.key = key;
+    previewWarm_.done = done;
+    pipeline::AssetManager* assets = assetManager_;
+    previewWarm_.thread = std::thread([assets, who = std::move(who), done]() {
+        const auto start = std::chrono::steady_clock::now();
+        const size_t files = rendering::warmCharacterPreviewFiles(*assets, who);
+        LOG_WARNING("CharacterScreen: preview files read ahead in ",
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(),
+                    " ms (", files, " files)");
+        done->store(true);
+    });
+    return false;
+}
+
 void CharacterScreen::releasePreview() {
     // Unregisters itself from the renderer on the way out.
     preview_.reset();
@@ -469,7 +515,16 @@ void CharacterScreen::renderDetails(game::GameHandler& gameHandler,
                 (previewUseFemaleModel_ != character.useFemaleModel) ||
                 (previewEquipHash_ != equipHash);
 
-            if (changed) {
+            // Streaming: the files first, on a worker; the screen keeps
+            // drawing (the last preview, or none) until they are here.
+            const uint64_t warmKey = character.guid * 1000003ull ^ equipHash ^
+                                     (uint64_t{character.appearanceBytes} << 8) ^ character.facialFeatures ^
+                                     (emblem ? 0x9e3779b97f4a7c15ull : 0ull);
+            const bool filesReady = !changed || !pipeline::DataStream::instance().active() ||
+                                    previewFilesReady(warmKey, character, emblem);
+
+            if (changed && filesReady) {
+                const auto buildStart = std::chrono::steady_clock::now();
                 uint8_t skin = character.appearanceBytes & 0xFF;
                 uint8_t face = (character.appearanceBytes >> 8) & 0xFF;
                 uint8_t hairStyle = (character.appearanceBytes >> 16) & 0xFF;
@@ -489,6 +544,10 @@ void CharacterScreen::renderDetails(game::GameHandler& gameHandler,
                 previewUseFemaleModel_ = character.useFemaleModel;
                 previewEquipHash_ = equipHash;
                 previewEmblem_ = emblem;
+                LOG_INFO("CharacterScreen: preview built in ",
+                         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - buildStart)
+                             .count(),
+                         " ms");
             }
 
             // Drive preview animation and request composite for next beginFrame.

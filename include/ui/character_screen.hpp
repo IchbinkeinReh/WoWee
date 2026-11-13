@@ -2,6 +2,8 @@
 
 #include "game/guild_emblem.hpp"
 #include <optional>
+#include <atomic>
+#include <thread>
 #include "ui/paper_ui.hpp"
 #include "ui/ui_services.hpp"
 #include "game/game_handler.hpp"
@@ -24,6 +26,9 @@ namespace ui {
 class CharacterScreen {
 public:
     CharacterScreen();
+    ~CharacterScreen();
+    CharacterScreen(const CharacterScreen&) = delete;
+    CharacterScreen& operator=(const CharacterScreen&) = delete;
 
     /**
      * Render the UI
@@ -162,6 +167,20 @@ private:
     bool previewUseFemaleModel_ = false;
     uint64_t previewEquipHash_ = 0;
     std::optional<game::GuildEmblem> previewEmblem_;
+
+    // The streaming data mode: the preview's files read on a worker first
+    // (rendering/character_preview_warm), so a cache that lacks them costs
+    // the screen nothing while they come from the server. True once the
+    // files for `key` are read; until then the preview is not rebuilt.
+    bool previewFilesReady(uint64_t key, const game::Character& character,
+                           const std::optional<game::GuildEmblem>& emblem);
+    struct PreviewWarm {
+        std::thread thread;
+        std::shared_ptr<std::atomic<bool>> done;
+        uint64_t key = 0;
+    };
+    PreviewWarm previewWarm_;
+    uint64_t previewWarmedKey_ = 0;
 };
 
 } // namespace ui
