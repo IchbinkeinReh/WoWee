@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 
 #include <array>
+#include <cctype>
 #include <cstdlib>
 #include <fstream>
 #include <string>
@@ -57,10 +58,35 @@ std::array<long, 3> versionParts(const std::string& tag) {
     return parts;
 }
 
+/// The N of a `build-N-<hash>` tag - the form the fork's releases and its
+/// dev builds carry - or -1 for any other form. Anything git describe adds
+/// after the hash ("-72-g1262e42c", commits on top) is ignored, as for vX.Y.Z.
+long buildNumber(const std::string& tag) {
+    static const std::string prefix = "build-";
+    if (tag.compare(0, prefix.size(), prefix) != 0) return -1;
+    std::size_t at = prefix.size();
+    if (at >= tag.size() || std::isdigit(static_cast<unsigned char>(tag[at])) == 0) return -1;
+    char* end = nullptr;
+    const long n = std::strtol(tag.c_str() + at, &end, 10);
+    at = static_cast<std::size_t>(end - tag.c_str());
+    // A hash must follow: build-482-1a31eac4.
+    if (at >= tag.size() || tag[at] != '-' || at + 1 >= tag.size() ||
+        std::isxdigit(static_cast<unsigned char>(tag[at + 1])) == 0) {
+        return -1;
+    }
+    return n;
+}
+
 }  // namespace
 
 bool isNewerVersion(const std::string& candidate, const std::string& current) {
     if (candidate.empty() || current.empty()) return false;
+
+    // Both build-N-<hash>: the build numbers decide. A build with commits on
+    // top of build-N is not behind release build-N, as for vX.Y.Z below.
+    const long theirBuild = buildNumber(candidate);
+    const long ourBuild = buildNumber(current);
+    if (theirBuild >= 0 && ourBuild >= 0) return theirBuild > ourBuild;
 
     const std::array<long, 3> them = versionParts(candidate);
     const std::array<long, 3> us = versionParts(current);

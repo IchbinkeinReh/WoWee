@@ -49,7 +49,9 @@ private:
     std::atomic<bool> finished_{false};
 };
 
-/// Compare two `vX.Y.Z` tags, ignoring anything git describe appended.
+/// Compare two `vX.Y.Z` tags, ignoring anything git describe appended - or
+/// two `build-N-<hash>` tags (the fork's releases and its dev builds) by N.
+/// A mixed pair compares as vX.Y.Z, where build-N reads as 0.0.0.
 ///
 /// Exposed for the tests: the ordering is the whole of the decision, and a
 /// wrong answer either nags somebody who is current or silences the notice

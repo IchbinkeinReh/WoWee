@@ -56,6 +56,32 @@ TEST_CASE("the v is optional on either side", "[update]") {
     CHECK_FALSE(isNewerVersion("3.1.30", "3.1.30"));
 }
 
+TEST_CASE("build-N tags compare by their build number", "[update]") {
+    // The fork's releases and its dev builds: build-<N>-<hash>.
+    CHECK(isNewerVersion("build-487-f8913a86", "build-482-1a31eac4"));
+    CHECK_FALSE(isNewerVersion("build-482-1a31eac4", "build-482-1a31eac4"));
+    CHECK_FALSE(isNewerVersion("build-480-500d132b", "build-482-1a31eac4"));
+    // Numbers, not text: 1000 is after 999.
+    CHECK(isNewerVersion("build-1000-abc1234", "build-999-def5678"));
+    // A dev build with commits on top of build-482 is not behind it, and is
+    // still behind a later one.
+    CHECK_FALSE(isNewerVersion("build-482-1a31eac4", "build-482-1a31eac4-72-g1262e42c"));
+    CHECK(isNewerVersion("build-487-f8913a86", "build-482-1a31eac4-72-g1262e42c"));
+}
+
+TEST_CASE("a vX.Y.Z pair still compares as versions", "[update]") {
+    CHECK(isNewerVersion("v3.1.54", "v3.1.53"));
+    CHECK_FALSE(isNewerVersion("v3.1.53", "v3.1.54"));
+}
+
+TEST_CASE("a mixed pair compares as before", "[update]") {
+    // build-N against vX.Y.Z reads build-N as 0.0.0, as it always has.
+    CHECK(isNewerVersion("v3.1.54", "build-482-1a31eac4"));
+    CHECK_FALSE(isNewerVersion("build-487-f8913a86", "v3.1.30"));
+    // Not a build tag without the hash after the number.
+    CHECK_FALSE(isNewerVersion("build-487", "build-482"));
+}
+
 TEST_CASE("the trust store has root certificates", "[update][tls]") {
     // OpenSSL's default paths name no store on Windows; the check has to
     // find the system's roots there, or every handshake fails.
