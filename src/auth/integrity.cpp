@@ -1,5 +1,6 @@
 #include "auth/integrity.hpp"
 #include "auth/crypto.hpp"
+#include "core/data_paths.hpp"
 
 #include <fstream>
 #include <sstream>
@@ -9,7 +10,7 @@ namespace wowee {
 namespace auth {
 
 static bool readWholeFile(const std::string& path, std::vector<uint8_t>& out, std::string& err) {
-    std::ifstream f(path, std::ios::binary);
+    std::ifstream f(core::resolveFileIgnoreCase(path), std::ios::binary);
     if (!f.is_open()) {
         err = "missing: " + path;
         return false;

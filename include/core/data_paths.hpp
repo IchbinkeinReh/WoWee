@@ -22,6 +22,7 @@
 #include "core/platform.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -100,6 +101,29 @@ inline bool holdsExtraction(const std::filesystem::path& dataRoot) {
     if (dataRoot.empty()) return false;
     if (fs::is_regular_file(dataRoot / "manifest.json", ec)) return true;
     return !installedExpansions(dataRoot).empty();
+}
+
+/// `path` with its file name matched to what is on disk without regard to
+/// case, or `path` unchanged when nothing matches. A client copied to Linux
+/// is often lowercased, and a lookup by the exact name found nothing there.
+/// The folder part is taken as given.
+inline std::string resolveFileIgnoreCase(const std::string& path) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (fs::exists(path, ec)) return path;
+    const fs::path wanted(path);
+    const fs::path dir = wanted.has_parent_path() ? wanted.parent_path() : fs::path(".");
+    auto lower = [](std::string text) {
+        std::transform(text.begin(), text.end(), text.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return text;
+    };
+    const std::string name = lower(wanted.filename().string());
+    for (const auto& entry : fs::directory_iterator(dir, ec)) {
+        if (ec) break;
+        if (lower(entry.path().filename().string()) == name) return entry.path().string();
+    }
+    return path;
 }
 
 /// The data folders something the extraction wrote may be under, most likely

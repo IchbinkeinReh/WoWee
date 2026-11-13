@@ -681,8 +681,13 @@ std::string WardenMemory::findWowExe(uint16_t build) const {
             std::string path = dir;
             if (!path.empty() && path.back() != '/') path += '/';
             path += exe;
+            path = core::resolveFileIgnoreCase(path);
             if (std::filesystem::exists(path)) {
-                allPaths.push_back(path);
+                // A case-insensitive volume answers every spelling with the
+                // same file, so the same one is not listed four times.
+                if (std::find(allPaths.begin(), allPaths.end(), path) == allPaths.end()) {
+                    allPaths.push_back(path);
+                }
             }
         }
     }
