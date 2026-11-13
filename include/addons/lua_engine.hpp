@@ -98,6 +98,10 @@ public:
         bool left = false;
         bool right = false;
         bool middle = false;
+        /// The side buttons, BUTTON4 and BUTTON5 to the client (0x0055e340:
+        /// button masks 0x8 and 0x10).
+        bool button4 = false;
+        bool button5 = false;
     };
     /// Window pixels from the top-left, as ImGui reports them, plus the
     /// window height - converted here rather than by the caller, so the
@@ -216,6 +220,11 @@ public:
     /// A held key's auto-repeat runs nothing again - the press ran the binding
     /// once - but is still claimed when the key holds a binding, so it reaches
     /// nothing further either.
+    /// Key codes for the mouse's side buttons, outside SDL's keycode range,
+    /// so a binding to BUTTON4 / BUTTON5 goes through the same dispatch as a
+    /// key (wowKeyName names them).
+    static constexpr int kBindingKeyButton4 = 0x7F000004;
+    static constexpr int kBindingKeyButton5 = 0x7F000005;
     bool dispatchBindingKey(int sdlKeycode, bool shift, bool ctrl, bool alt,
                             bool down, bool repeat = false);
 
@@ -462,14 +471,14 @@ private:
     /// Per button, because a press and its release belong together: sliding off
     /// a button between them is how a player changes their mind, and holding
     /// one button while clicking another must not confuse the first.
-    static constexpr int kMouseButtons = 3;
-    uint32_t pressedWid_[kMouseButtons] = {0, 0, 0};
-    bool buttonDown_[kMouseButtons] = {false, false, false};
+    static constexpr int kMouseButtons = 5;
+    uint32_t pressedWid_[kMouseButtons] = {};
+    bool buttonDown_[kMouseButtons] = {};
     /// Where each button went down, so a drag can be told from a click by how
     /// far the cursor has travelled since. Without a threshold every click is a
     /// one-pixel drag and nothing would ever reach OnClick.
-    float pressX_[kMouseButtons] = {0.0f, 0.0f, 0.0f};
-    float pressY_[kMouseButtons] = {0.0f, 0.0f, 0.0f};
+    float pressX_[kMouseButtons] = {};
+    float pressY_[kMouseButtons] = {};
     /// The frame whose OnDragStart has run and not yet been stopped, and the
     /// button that started it. The frame is not always the one the press landed
     /// on - a drag belongs to the nearest ancestor registered for it - so the

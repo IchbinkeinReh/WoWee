@@ -17,6 +17,7 @@
 #include <ctime>
 #include <sstream>
 #include <algorithm>
+#include <iterator>
 #include <climits>
 #include <set>
 #include <cstdlib>
@@ -14742,7 +14743,16 @@ void LuaEngine::dispatchText(const char* utf8) {
 /// The handlers compare against these by name - CoinPickupFrame checks for
 /// "ESCAPE" and the digits - so a wrong spelling is a handler that never
 /// matches rather than an error anyone would see.
+/// The mouse buttons as WoW names them, in the order the state arrays are
+/// indexed.
+static constexpr const char* kMouseButtonNames[] = {"LeftButton", "RightButton", "MiddleButton",
+                                                    "Button4", "Button5"};
+
 static std::string wowKeyName(int sym) {
+    // The mouse's side buttons, as the binding tables name them (0x0055e340:
+    // "BUTTON%d" for button masks from 0x8 up).
+    if (sym == LuaEngine::kBindingKeyButton4) return "BUTTON4";
+    if (sym == LuaEngine::kBindingKeyButton5) return "BUTTON5";
     if (sym >= 'a' && sym <= 'z') return std::string(1, static_cast<char>(sym - 32));
     if (sym >= '0' && sym <= '9') return std::string(1, static_cast<char>(sym));
     switch (sym) {
@@ -15916,8 +15926,8 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
     // it owned even once the cursor has left the frame, because letting go of
     // the interface halfway through a drag would hand the rest of the drag to
     // the camera.
-    ui::frameXmlNoteMouseOwned(hit != 0 || pressedWid_[0] != 0 ||
-                               pressedWid_[1] != 0 || pressedWid_[2] != 0);
+    ui::frameXmlNoteMouseOwned(hit != 0 || std::any_of(std::begin(pressedWid_), std::end(pressedWid_),
+                                                       [](uint32_t wid) { return wid != 0; }));
 
     // Hover first, so a frame that appears under a stationary cursor still gets
     // its OnEnter rather than waiting for the mouse to move.
@@ -15961,7 +15971,8 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
     // stuck to the cursor follows it forever and there is no way back from it
     // in the running client, so this does not rely on the release path having
     // matched the drag correctly.
-    const bool anyHeld = buttonDown_[0] || buttonDown_[1] || buttonDown_[2];
+    const bool anyHeld = std::any_of(std::begin(buttonDown_), std::end(buttonDown_),
+                                     [](bool down) { return down; });
     if (!anyHeld && (widgets_.movingWidget() != 0 || widgets_.sizingWidget() != 0 ||
                      draggingWid_ != 0)) {
         if (draggingWid_ != 0) callFrameScript(draggingWid_, "OnDragStop", "LeftButton");
@@ -16046,7 +16057,7 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
             widgets_.setDraggedWidget(draggingWid_);
             draggingButton_ = i;
             callFrameScript(draggingWid_, "OnDragStart",
-                            i == 0 ? "LeftButton" : "RightButton");
+                            kMouseButtonNames[i]);
             const auto* dw = widgets_.get(draggingWid_);
             LOG_WARNING("WidgetInput: drag started on ",
                         dw && !dw->name.empty() ? dw->name.c_str() : "(unnamed)");
@@ -16140,6 +16151,8 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
         {"LeftButton",   buttons.left},
         {"RightButton",  buttons.right},
         {"MiddleButton", buttons.middle},
+        {"Button4",      buttons.button4},
+        {"Button5",      buttons.button5},
     };
 
     for (int i = 0; i < kMouseButtons; ++i) {
