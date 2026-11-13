@@ -5307,6 +5307,22 @@ void registerSocialLuaAPI(lua_State* L) {
                 if (consoleCommandHere(name)) {
                     if (auto* svc = getLuaServices(L); svc && svc->runClientChatCommand)
                         svc->runClientChatCommand(name, std::string(command.args));
+                } else if (!command.args.empty() && name != "reloadui" &&
+                           name != "changeplayerdifficulty") {
+                    // Every CVar is a console command of its own name as well
+                    // (`/console scriptErrors 1`): with a value it sets the
+                    // CVar. Handed to SetCVar, as the options panels set them,
+                    // under the name as it was typed (upstream c2ca1927).
+                    lua_getglobal(L, "SetCVar");
+                    if (lua_isfunction(L, -1)) {
+                        const std::string cvarName(command.command);
+                        const std::string cvarValue(command.args);
+                        lua_pushstring(L, cvarName.c_str());
+                        lua_pushstring(L, cvarValue.c_str());
+                        if (lua_pcall(L, 2, 0, 0) != 0) lua_pop(L, 1);
+                    } else {
+                        lua_pop(L, 1);
+                    }
                 }
             }
             return 0;
