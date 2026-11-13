@@ -73,7 +73,7 @@ TEST_CASE("the trust store has root certificates", "[update][tls]") {
 // Hidden (needs the network): `test_update_check "[.network]"` runs it.
 TEST_CASE("GitHub's release document is fetched over verified TLS", "[.network]") {
     const wowee::core::HttpsResponse reply = wowee::core::httpsGet(
-        "api.github.com", "/repos/Kelsidavis/WoWee/releases/latest", "WoWee/test");
+        "api.github.com", "/repos/IchbinkeinReh/WoWee/releases/latest", "WoWee/test");
     INFO("error: " << reply.error);
     REQUIRE(reply.ok);
     CHECK(reply.status == 200);

@@ -82,7 +82,7 @@ AUR as `stormlib-git` if you need the asset tools.
 Always clone with submodules:
 
 ```bash
-git clone --recurse-submodules https://github.com/Kelsidavis/WoWee.git
+git clone --recurse-submodules https://github.com/IchbinkeinReh/WoWee.git
 cd WoWee
 ```
 
@@ -149,7 +149,7 @@ brew install stormlib # asset tools (see Asset Extraction below)
 ### Clone & Build
 
 ```bash
-git clone --recurse-submodules https://github.com/Kelsidavis/WoWee.git
+git clone --recurse-submodules https://github.com/IchbinkeinReh/WoWee.git
 cd WoWee
 
 BREW=$(brew --prefix)
@@ -268,7 +268,7 @@ cmake --install /tmp/StormLib/build
 ### Clone & Build
 
 ```bash
-git clone --recurse-submodules https://github.com/Kelsidavis/WoWee.git
+git clone --recurse-submodules https://github.com/IchbinkeinReh/WoWee.git
 cd WoWee
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel $(nproc)
@@ -295,7 +295,7 @@ vcpkg install "sdl3[vulkan]" glm openssl zlib ffmpeg stormlib --triplet x64-wind
 ### Clone
 
 ```powershell
-git clone --recurse-submodules https://github.com/Kelsidavis/WoWee.git
+git clone --recurse-submodules https://github.com/IchbinkeinReh/WoWee.git
 cd WoWee
 ```
 

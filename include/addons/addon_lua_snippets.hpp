@@ -933,7 +933,7 @@ aboutText:SetText(say("WoWee, a World of Warcraft client\n", "WoWee, ein World-o
     .. (WoweeVersion and WoweeVersion() or "") .. "\n"
     .. say("MIT, less commercial game use. See LICENSE.\n",
            "MIT, ohne kommerzielle Spielnutzung. Siehe LICENSE.\n")
-    .. "Kelsi Davis  ..  |cff66b3ffgithub.com/Kelsidavis/WoWee|r")
+    .. "Kelsi Davis  ..  |cff66b3ffgithub.com/IchbinkeinReh/WoWee|r")
 
 -- Find a setting without knowing which panel it is on.
 --
@@ -1201,7 +1201,7 @@ inline constexpr const char* kAboutMenuLua = R"LUA(
 -- this snippet spent its first run returning at the first line.
 if not GameMenuFrame or rawget(_G, "GameMenuButtonWoweeAbout") then return end
 
-local kURL = "https://github.com/Kelsidavis/WoWee"
+local kURL = "https://github.com/IchbinkeinReh/WoWee"
 local kAuthor = "Kelsi Davis"
 
 local function showAbout()

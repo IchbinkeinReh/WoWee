@@ -21,7 +21,7 @@ For a more honest snapshot of gaps and current direction, see `docs/status.md`.
 ### 1. Clone
 
 ```bash
-git clone --recurse-submodules https://github.com/Kelsidavis/WoWee.git
+git clone --recurse-submodules https://github.com/IchbinkeinReh/WoWee.git
 cd WoWee
 ```
 

@@ -6,7 +6,7 @@ pkgver=r.1
 pkgrel=1
 pkgdesc="Open-source World of Warcraft client with Vulkan renderer (WotLK 3.3.5a / TBC / Classic)"
 arch=('x86_64')
-url="https://github.com/Kelsidavis/WoWee"
+url="https://github.com/IchbinkeinReh/WoWee"
 license=('MIT')
 depends=(
   'sdl3'              # Windowing and event loop
@@ -29,7 +29,7 @@ makedepends=(
 )
 provides=('wowee')
 conflicts=('wowee')
-source=("${pkgname}::git+https://github.com/Kelsidavis/WoWee.git#branch=master"
+source=("${pkgname}::git+https://github.com/IchbinkeinReh/WoWee.git#branch=master"
         "git+https://github.com/ocornut/imgui.git"
         "git+https://github.com/charles-lunarg/vk-bootstrap.git")
 sha256sums=('SKIP' 'SKIP' 'SKIP')

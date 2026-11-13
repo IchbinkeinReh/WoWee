@@ -16,7 +16,7 @@ namespace wowee::core {
 namespace {
 
 constexpr const char* kHost = "api.github.com";
-constexpr const char* kPath = "/repos/Kelsidavis/WoWee/releases/latest";
+constexpr const char* kPath = "/repos/IchbinkeinReh/WoWee/releases/latest";
 
 /// Read the toggle straight out of settings.cfg.
 ///

@@ -361,13 +361,13 @@ ImGui::Spacing();
 
 ImGui::Text("GitHub");
 ImGui::Indent();
-ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.0f, 1.0f), "https://github.com/Kelsidavis/WoWee");
+ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.0f, 1.0f), "https://github.com/IchbinkeinReh/WoWee");
 if (ImGui::IsItemHovered()) {
     ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     ImGui::SetTooltip("Click to copy");
 }
 if (ImGui::IsItemClicked()) {
-    ImGui::SetClipboardText("https://github.com/Kelsidavis/WoWee");
+    ImGui::SetClipboardText("https://github.com/IchbinkeinReh/WoWee");
 }
 ImGui::Unindent();
 ImGui::Spacing();

@@ -18,7 +18,7 @@ expansion-specific profiles and packet parsers. It has been tested with
 AzerothCore/ChromieCraft, TrinityCore, MaNGOS, and Turtle WoW 1.18.
 
 [Watch the latest demonstration](https://youtu.be/1Ax1jeNV_GU) ·
-[Download the latest release](https://github.com/Kelsidavis/WoWee/releases/latest) ·
+[Download the latest release](https://github.com/IchbinkeinReh/WoWee/releases/latest) ·
 [Read the project status](docs/status.md) ·
 [Hear the soundtrack](https://kelsidavis.bandcamp.com/album/wowee-soundtrack)
 
@@ -171,7 +171,7 @@ For Windows/MSYS2, Visual Studio, and platform-specific notes, see the
 ### 2. Clone and build
 
 ```bash
-git clone --recurse-submodules https://github.com/Kelsidavis/WoWee.git
+git clone --recurse-submodules https://github.com/IchbinkeinReh/WoWee.git
 cd WoWee
 
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -280,7 +280,7 @@ The Android client is the same tree built for arm64. It reaches the login
 screen, character selection and the world, and is tested on a Pixel 9a.
 
 Install `wowee-<version>-android-arm64.apk` from
-[the latest release](https://github.com/Kelsidavis/WoWee/releases/latest). It
+[the latest release](https://github.com/IchbinkeinReh/WoWee/releases/latest). It
 needs **Android 13 or newer** on **arm64**: Android's `libvulkan.so` only
 exports the Vulkan 1.2/1.3 entry points the renderer uses from API 33. The APK
 is signed with the debug key, so Android asks you to allow installation from an
