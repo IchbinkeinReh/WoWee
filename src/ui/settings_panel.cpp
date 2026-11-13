@@ -614,7 +614,7 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
                 drawSchemaCategory("Water", saveCallback);
 
                 ImGui::Spacing();
-                ImGui::SeparatorText(tr("Ray Tracing (highly experimental)"));
+                ImGui::SeparatorText(tr("Ray Tracing"));
                 drawSchemaCategory("Ray Tracing", saveCallback);
 
                 ImGui::Spacing();
@@ -1034,6 +1034,9 @@ bool isGraphicsPresetKey(const std::string& key) {
     for (const char* k : kGraphicsPresetKeys) {
         if (key == k) return true;
     }
+    for (const auto& e : kSuperUltraExtras) {
+        if (key == e.key) return true;
+    }
     return false;
 }
 
@@ -1089,6 +1092,11 @@ void SettingsPanel::applyGraphicsPreset(GraphicsPreset preset) {
             applySettingSideEffects(key);
             addons::noteClientSettingChanged(key, settingValue(key));
         }
+        // Super-Ultra also sets the rest of the graphics pages
+        // (kSuperUltraExtras), through the one setter every control uses.
+        if (preset == GraphicsPreset::SUPER_ULTRA) {
+            for (const auto& e : kSuperUltraExtras) setSettingValue(e.key, settingNumberText(e.value));
+        }
     }
 
     currentGraphicsPreset = preset;
@@ -1142,7 +1150,18 @@ SettingsPanel::GraphicsPreset SettingsPanel::matchingGraphicsPreset() const {
             (!p.grass || (std::abs(pendingGrassDensity - p.grassDensity) <= 5 &&
                           std::abs(pendingGrassHeight - p.grassHeight) <= 5 &&
                           std::abs(pendingGrassDistance - p.grassDistance) <= 10));
-        if (matches) return static_cast<GraphicsPreset>(i + 1);
+        // Super-Ultra is also the rest of the graphics pages (kSuperUltraExtras).
+        bool extrasMatch = true;
+        if (matches && static_cast<GraphicsPreset>(i + 1) == GraphicsPreset::SUPER_ULTRA) {
+            for (const auto& e : kSuperUltraExtras) {
+                const double v = std::atof(settingValue(e.key).c_str());
+                if (std::abs(v - e.value) > 0.01 + 0.005 * std::abs(e.value)) {
+                    extrasMatch = false;
+                    break;
+                }
+            }
+        }
+        if (matches && extrasMatch) return static_cast<GraphicsPreset>(i + 1);
     }
     return GraphicsPreset::CUSTOM;
 }
@@ -1152,7 +1171,7 @@ void SettingsPanel::publishGraphicsPresetLabel() {
     // it. "Custom (from Low)" is Low with something changed since - the shape
     // a saved file or a hand-set switch leaves behind.
     if (!services_.renderer) return;
-    static constexpr const char* kNames[] = {"Custom", "Low", "Medium", "High", "Ultra"};
+    static constexpr const char* kNames[] = {"Custom", "Low", "Medium", "High", "Ultra", "Super-Ultra"};
     const auto name = [](GraphicsPreset p) {
         const int i = static_cast<int>(p);
         return (i >= 0 && i < static_cast<int>(std::size(kNames))) ? kNames[i] : "?";
@@ -1942,7 +1961,7 @@ bool SettingsPanel::setSettingValue(const std::string& key, const std::string& v
     const bool on = settingIsOn(value);
 
     if (key == "graphicspreset") {
-        const int idx = std::clamp(static_cast<int>(v + 0.5), 0, 4);
+        const int idx = std::clamp(static_cast<int>(v + 0.5), 0, kGraphicsPresetCount);
         pendingGraphicsPreset = static_cast<GraphicsPreset>(idx);
         applySettingSideEffects(key);
         return true;

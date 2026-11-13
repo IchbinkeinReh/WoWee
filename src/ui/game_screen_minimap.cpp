@@ -2394,7 +2394,7 @@ void GameScreen::loadSettings() {
             else if (key == "secure_ability_toggle") settingsPanel_.pendingSecureAbilityToggle = (std::stoi(val) != 0);
             else if (key == "auto_face_target") settingsPanel_.pendingAutoFaceTarget = (std::stoi(val) != 0);
             else if (key == "graphics_preset") {
-                int presetVal = std::clamp(std::stoi(val), 0, 4);
+                int presetVal = std::clamp(std::stoi(val), 0, 5);
                 settingsPanel_.currentGraphicsPreset = static_cast<SettingsPanel::GraphicsPreset>(presetVal);
                 settingsPanel_.pendingGraphicsPreset = settingsPanel_.currentGraphicsPreset;
             }

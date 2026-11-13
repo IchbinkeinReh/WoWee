@@ -365,7 +365,8 @@ public:
         LOW = 1,
         MEDIUM = 2,
         HIGH = 3,
-        ULTRA = 4
+        ULTRA = 4,
+        SUPER_ULTRA = 5   // after Ultra, so a saved 0-4 keeps its meaning
     };
     GraphicsPreset currentGraphicsPreset = GraphicsPreset::CUSTOM;
     GraphicsPreset pendingGraphicsPreset = GraphicsPreset::CUSTOM;

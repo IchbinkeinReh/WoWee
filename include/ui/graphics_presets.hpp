@@ -17,7 +17,9 @@
 namespace wowee {
 namespace ui {
 
-/// What each quality preset means, in the order Low, Medium, High, Ultra.
+/// What each quality preset means, in the order Low, Medium, High, Ultra,
+/// Super-Ultra (the last added at the end, so the stored indices 0-4 keep
+/// their meaning).
 ///
 /// That order is what the config file holds. graphics_preset is written as an
 /// index - 0 for Custom, then one per row here - so a preset added at the front
@@ -61,9 +63,10 @@ struct GraphicsPresetValues {
     int   grassDistance;     ///< yards
     /// The extras the original client does not have: the lens flare, the
     /// sharp-point starfield, sun shafts, light shafts and mist, fog tinted
-    /// by the sky, and the enhanced water. Off on every row, so picking any
-    /// preset gives the client's own picture; each stays in the panel to be
-    /// turned on by hand.
+    /// by the sky, and the enhanced water. Off on the client's own levels, Low
+    /// to Ultra, so those give the client's own picture; Super-Ultra is the
+    /// user's picture and has them on (2026-11-13). Each stays in the panel
+    /// to be set by hand.
     float lensFlare;
     bool  sharpStars;
     bool  sunShafts;
@@ -110,6 +113,15 @@ struct GraphicsPresetValues {
 // MSAA, where there is nothing left for it to find and its sub-pixel filter
 // only softened the resolve. It stays in the panel for anyone who wants it,
 // which mostly means anyone running without MSAA.
+// Super-Ultra (user decision 2026-11-13) comes after the client's own Ultra
+// (FrameXML GlobalStrings VIDEO_QUALITY_LABEL5 "Ultra", GraphicsQualityLevels
+// [5] "ULTRA mode") and is the user's own picture, from their settings file
+// of that day: ray traced lighting with shadows, occlusion and bounce at full
+// resolution, the extras (lens flare, sharp stars, sun shafts, light shafts
+// on High) on, normal maps at 0.4, and the shadow map off - the traced sun
+// and moon shadows stand in for it. The rows it sets beyond these columns are
+// kSuperUltraExtras below. Grass is off on every row (user decision, the same
+// day): it costs main-thread time and has known faults.
 // The view distances are the client's own quality levels' farclip
 // (FrameXML GraphicsQualityLevels.lua): Low 177, Good 727, High 1057 and Ultra
 // 1277 - its Fair, 507, has no row here.
@@ -117,7 +129,37 @@ constexpr GraphicsPresetValues kGraphicsPresets[] = {
     /* Low    */ { .viewDistance = 177.0f, .shadows = false, .shadowDistance = 100.0f, .antiAliasing = 0, .fxaa = false, .normalMapping = false, .normalMapStrength = 0.3f, .groundClutter = 25,  .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .specular = false, .environmentDetail = 50,  .groundClutterDistance = 70,  .particleDensity = 10,  .weatherDetail = 0, .textureCompression = true, .interactiveWater = false},
     /* Medium */ { .viewDistance = 727.0f, .shadows = true,  .shadowDistance = 200.0f, .antiAliasing = 1, .fxaa = false, .normalMapping = true,  .normalMapStrength = 0.3f, .groundClutter = 60,  .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .specular = false, .environmentDetail = 100, .groundClutterDistance = 120, .particleDensity = 60,  .weatherDetail = 2, .textureCompression = false, .interactiveWater = false},
     /* High   */ {.viewDistance = 1057.0f, .shadows = true,  .shadowDistance = 350.0f, .antiAliasing = 2, .fxaa = false, .normalMapping = true,  .normalMapStrength = 0.3f, .groundClutter = 100, .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .specular = false, .environmentDetail = 125, .groundClutterDistance = 130, .particleDensity = 80,  .weatherDetail = 3, .textureCompression = false, .interactiveWater = true},
-    /* Ultra  */ {.viewDistance = 1277.0f, .shadows = true,  .shadowDistance = 500.0f, .antiAliasing = 3, .fxaa = false, .normalMapping = true,  .normalMapStrength = 0.3f, .groundClutter = 150, .grass = true,  .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .specular = false, .environmentDetail = 150, .groundClutterDistance = 140, .particleDensity = 100, .weatherDetail = 3, .textureCompression = false, .interactiveWater = true},
+    /* Ultra  */ {.viewDistance = 1277.0f, .shadows = true,  .shadowDistance = 500.0f, .antiAliasing = 3, .fxaa = false, .normalMapping = true,  .normalMapStrength = 0.3f, .groundClutter = 150, .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .specular = false, .environmentDetail = 150, .groundClutterDistance = 140, .particleDensity = 100, .weatherDetail = 3, .textureCompression = false, .interactiveWater = true},
+    /* Super-Ultra */ {.viewDistance = 1277.0f, .shadows = false, .shadowDistance = 500.0f, .antiAliasing = 3, .fxaa = false, .normalMapping = true,  .normalMapStrength = 0.4f, .groundClutter = 150, .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 1.0f, .sharpStars = true,  .sunShafts = true,  .lightShafts = 3, .fogSkyBlend = 0.0f, .specular = false, .environmentDetail = 150, .groundClutterDistance = 140, .particleDensity = 100, .weatherDetail = 3, .textureCompression = false, .interactiveWater = true},
+};
+
+/// The settings Super-Ultra sets beyond the columns above: the rest of the
+/// graphics pages (Graphics, Shadows, Detail, Water, Ray Tracing with its eye
+/// adaptation, Upscaling), as the user's settings have them. Low to Ultra
+/// leave these where they are, as every preset always did, and are
+/// recognised whatever these say. Where the
+/// user's file had no row the value is the schema's default - what their
+/// client ran with. (Frame generation, off in their file, is a row only
+/// in builds with FSR 3 frame generation, so it is not one of these.)
+struct GraphicsPresetExtra {
+    const char* key;   ///< the schema key
+    float value;
+};
+inline constexpr GraphicsPresetExtra kSuperUltraExtras[] = {
+    {"fogstrength", 1.0f},       {"mistdensity", 1.0f},
+    {"shadowresolution", 1.0f},  {"shadowcascades", 2.0f},
+    {"texturefiltering", 4.0f},
+    {"rtwater", 1.0f},           {"rtswimwaves", 1.0f},
+    {"rtwaveamp", 100.0f},       {"rtwavefreq", 100.0f},
+    {"raytracedlighting", 3.0f}, {"rtfullres", 1.0f},
+    {"rtroomsun", 1.0f},         {"rtsoftlamps", 0.0f},
+    {"rtrealisticfalloff", 0.0f}, {"rtminbrightness", 0.0f},
+    {"rteyebrighten", 30.0f},    {"rteyeseconds", 2.5f},
+    {"rteyesensitivity", 0.0f},
+    {"rtsunrays", 1.0f},         {"rtaorays", 1.0f},
+    {"rtpointrays", 1.0f},       {"rtbouncerays", 1.0f},
+    {"upscaling", 0.0f},         {"fsrquality", 3.0f},
+    {"fsrsharpness", 1.6f},
 };
 
 /// The number of presets, not counting Custom - which is not a set of values
