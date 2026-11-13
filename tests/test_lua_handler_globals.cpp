@@ -115,6 +115,19 @@ TEST_CASE("OnEvent names the event and numbers the payload", "[handlerglobals]")
     CHECK(fx.global("sawTwo") == "1234");
 }
 
+TEST_CASE("A chat event reaches arg11", "[handlerglobals]") {
+    Fixture fx;
+    setLegacyHandlerGlobals(true);
+    // 2.4's ChatFrame_OnEvent puts arg11, the line id, into the player link
+    // with `..`, so a nil there raised and no chat line was ever printed.
+    fx.handler("OnEvent", "link = '|Hplayer:'..arg2..':'..arg11..'|h'; guid = arg12");
+    REQUIRE(fx.dispatch("OnEvent", {"CHAT_MSG_SAY", "hello", "Thrall", "Orcish", "",
+                                    "", "", "0", "0", "", "0", "42",
+                                    "0x0000000000000001"}) == 0);
+    CHECK(fx.global("link") == "|Hplayer:Thrall:42|h");
+    CHECK(fx.global("guid") == "0x0000000000000001");
+}
+
 TEST_CASE("Every other handler's own arguments start at arg1",
           "[handlerglobals]") {
     Fixture fx;

@@ -23,9 +23,14 @@ bool gLegacyHandlerGlobals = false;
 int gHandlerDepth = 0;
 int gHandlerSaveRef = LUA_NOREF;
 
-constexpr int kMaxHandlerArgs = 9;
+/// Past nine: 2.4's ChatFrame builds the player link out of arg11, the line
+/// id, and concatenating the nil it found there raised for every message, so
+/// the chat window stayed empty.
+constexpr int kMaxHandlerArgs = 20;
 const char* const kHandlerArgNames[kMaxHandlerArgs] = {
-    "arg1", "arg2", "arg3", "arg4", "arg5", "arg6", "arg7", "arg8", "arg9"};
+    "arg1",  "arg2",  "arg3",  "arg4",  "arg5",  "arg6",  "arg7",
+    "arg8",  "arg9",  "arg10", "arg11", "arg12", "arg13", "arg14",
+    "arg15", "arg16", "arg17", "arg18", "arg19", "arg20"};
 /// `this`, `event`, and one per argN.
 constexpr int kHandlerSaveSlots = 2 + kMaxHandlerArgs;
 
