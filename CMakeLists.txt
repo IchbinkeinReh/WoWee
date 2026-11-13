@@ -1831,6 +1831,14 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_EXE_LINKER_FLAGS MATCHES "-fus
 endif()
 if(_ipo_supported)
     set_property(TARGET wowee PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+    # test_game_replay links wowee's own objects (tests/CMakeLists.txt), which
+    # are LTO here: its link has to be an LTO link too. Clang's are bitcode,
+    # which a link without -flto hands to the linker as they are, and GNU ld
+    # does not read them ("file format not recognized"). Set here, not with
+    # the test: the tests directory is added before this property is.
+    if(TARGET test_game_replay)
+        set_property(TARGET test_game_replay PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+    endif()
 endif()
 if(NOT MSVC)
     # -O3: more aggressive inlining and auto-vectorization vs CMake's default -O2
