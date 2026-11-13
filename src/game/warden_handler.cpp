@@ -312,7 +312,9 @@ bool WardenHandler::loadWardenCRFile(const std::string& moduleHashHex) {
 
     std::ifstream crFile(crPath, std::ios::binary);
     if (!crFile) {
-        LOG_WARNING("Warden: No .cr file found at ", crPath);
+        LOG_WARNING("Warden: No .cr file at ", crPath,
+                    " - hash requests go unanswered. Servers that tolerate that are unaffected; "
+                    "otherwise turn Warden off on the server");
         return false;
     }
 
