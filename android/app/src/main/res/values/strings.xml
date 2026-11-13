@@ -37,4 +37,10 @@
     <string name="zip_unreadable">The zip could not be opened.</string>
     <string name="zip_replace">%1$s already holds game data. Files the zip also has will be replaced.</string>
     <string name="zip_replace_ok">Unpack</string>
+
+    <!-- The notification that keeps the session open in the background; see
+         WoweeSessionService. -->
+    <string name="session_channel_name">Game session</string>
+    <string name="session_channel_description">Shown while WoWee keeps its connection to the server open in the background.</string>
+    <string name="session_notification_text">Staying connected while in the background</string>
 </resources>

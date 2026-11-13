@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The status bar icon of the session notification (WoweeSessionService).
+     Android draws a notification's small icon from its alpha alone, so this is
+     a plain white "W"; the launcher icon is a full-colour picture and would
+     show as a white square. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M2,4h3.2l2.3,10.2L10.4,4h3.2l2.9,10.2L18.8,4H22l-4,16h-3.1L12,9.9L9.1,20H6z" />
+</vector>

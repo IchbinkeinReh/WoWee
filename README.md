@@ -611,9 +611,6 @@ before making broad changes.
   glitches.
 - World-map zone hover has edge cases near continent boundaries.
 - Pet-bar protocol behavior may require adjustment for non-AzerothCore forks.
-- On Android the session drops a few seconds after the app goes to the
-  background, because the system closes the socket without a foreground service.
-  The client returns to the login screen as it does on any disconnect.
 - On Android the FrameXML interface is drawn at native size and reads small. The
   client's own panels scale with display density, and **Window scale** under
   Interface → WoWee → Interface reaches 3x.
