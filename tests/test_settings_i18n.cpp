@@ -73,7 +73,8 @@ TEST_CASE("German labels fit their columns", "[settings][i18n]") {
         const SettingDesc& d = rows[i];
         const SettingGerman* de = germanSettingText(d.key);
         REQUIRE(de != nullptr);
-        const std::size_t limit = d.kind == SettingKind::Bool ? 28 : d.kind == SettingKind::Enum ? 34 : 24;
+        // 24 for every kind: the settings window shows these too (2026-11-13).
+        const std::size_t limit = 24;
         INFO(d.key << ": \"" << de->label << "\" is longer than " << limit);
         CHECK(characters(de->label) <= limit);
     }

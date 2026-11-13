@@ -51,6 +51,17 @@ const SettingGerman* germanSettingTable(std::size_t& count);
 const char* germanCategoryName(const std::string& category);
 const char* germanSectionName(const std::string& section);
 
+/// The settings window's own words (tabs, headings, buttons) in German, or
+/// nullptr for one the table does not have.
+const char* germanWindowWord(const std::string& english);
+
+/// The language the settings window draws in, set where it is drawn.
+void setSettingsWindowGerman(bool german);
+/// A word of the settings window (or a category's or section's name) in its
+/// language: the German where the window is German and the table has it,
+/// else the English given.
+const char* settingsWindowText(const char* english);
+
 /// Whether the settings are shown in German for this client locale.
 inline bool settingsLocaleGerman(const std::string& locale) { return locale == "deDE"; }
 

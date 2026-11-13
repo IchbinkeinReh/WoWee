@@ -186,7 +186,7 @@ constexpr SettingGerman kGerman[] = {
      "glänzenden Bodentexturen. Wirkt beim nächsten Spielstart, wie im ursprünglichen Client.",
      nullptr, nullptr, nullptr},
     {"raytracedlighting",
-     "Raytracing (experimentell)",
+     "Raytracing (Experiment)",
      "SEHR EXPERIMENTELL: Bildfehler und hohe Kosten bei der Bildrate sind zu erwarten, besonders "
      "ohne Raytracing-Hardware. Verfolgt Strahlen durch die Welt für die Schatten der Sonne, die "
      "Verdunkelung in Ecken und Spalten und das von Boden und Wänden zurückgeworfene Licht. Nutzt "
@@ -194,7 +194,7 @@ constexpr SettingGerman kGerman[] = {
      "Charaktere werfen ihre Schatten weiter aus der Schattenkarte.",
      "Aus|Sonnenschatten|Schatten und Verdeckung|Schatten, Verdeckung und indirektes Licht", nullptr, nullptr},
     {"rtfullres",
-     "Volle Auflösung verfolgen",
+     "Volle Auflösung (RT)",
      "Jedes Pixel verfolgen statt eines von vieren. Etwa das Vierfache der Kosten. Dünne Blätter, "
      "Gras, Pfähle und die Kanten der Dinge bekommen dann ihr eigenes verfolgtes Licht und ihren "
      "eigenen Schatten, statt des Aussehens ohne Raytracing, wo die halbe Auflösung sie verfehlte.",
@@ -212,14 +212,14 @@ constexpr SettingGerman kGerman[] = {
      "Flächen - die Kante einer Stufe, ein Bordstein - ein wenig erhellt statt dunkel.",
      nullptr, nullptr, nullptr},
     {"rtrealisticfalloff",
-     "Realistischer Lichtabfall",
+     "Realer Lichtabfall",
      "Jedes Licht - Lampen, Feuer, Fackeln, Gebäudelichter, Leuchten und Funken - nimmt mit dem "
      "Quadrat der Entfernung ab, wie echtes Licht: hell nah dran, ein langer weicher Ausläufer, "
      "keine Kante, wo seine Reichweite endet. Aus: volle Stärke bis zu einem festen Radius, dann "
      "ein kurzer Übergang bis zur Reichweite. Nicht im ursprünglichen Client.",
      nullptr, nullptr, nullptr},
     {"rtunitselfshadow",
-     "Eigenschatten von Figuren",
+     "Figuren-Eigenschatten",
      "Der eigene Körper einer Figur oder Kreatur beschattet sie selbst: ein Arm vor ihrer Brust, "
      "ihr Kopf über ihren Schultern, für die Sonne wie für Fackeln und Lampen. Aus wirft ein "
      "Körper nie einen Schatten auf sich selbst, wie im ursprünglichen Client.",
@@ -295,7 +295,7 @@ constexpr SettingGerman kGerman[] = {
      "erneut.",
      nullptr, nullptr, nullptr},
     {"dbgview",
-     "Anstelle des Bildes zeigen",
+     "Statt des Bildes zeigen",
      "Ersetzt das Bild durch einen Teil der Beleuchtung mit Raytracing. Die verfolgten Ansichten "
      "gehen in jedem Raytracing-Modus; die Sondenansichten brauchen Schatten, Verdeckung und "
      "indirektes Licht; was das eingebrannte Licht eines Gebäudes färbt - seine Räume, deren "
@@ -367,12 +367,12 @@ constexpr SettingGerman kGerman[] = {
      "Dazwischen eine weiche Mischung; nie weniger als der erste Wert.",
      nullptr, nullptr, nullptr},
     {"dbgsplitrt",
-     "Geteilt: links Raytracing",
+     "Geteilt: links RT",
      "Die linke Hälfte des Bildes mit dem Raytracing-Licht zeichnen und die rechte ohne, um "
      "beides nebeneinander zu vergleichen. Nicht im ursprünglichen Client.",
      nullptr, nullptr, nullptr},
     {"dbgtimeoverride",
-     "Diese Tageszeit verwenden",
+     "Diese Tageszeit nutzen",
      "Die Welt zur unten gewählten Zeit beleuchten statt zu der des Servers. Nur was gezeichnet "
      "wird; die Uhr des Servers bleibt unberührt.",
      nullptr, nullptr, nullptr},
@@ -711,7 +711,7 @@ constexpr SettingGerman kGerman[] = {
      "Die Schaltfläche des Schlüsselbunds neben den Taschen zeigen.",
      nullptr, nullptr, nullptr},
     {"freebagslots",
-     "Freien Inventarplatz zeigen",
+     "Freie Taschenplätze",
      "Die leeren Plätze aller Taschen auf der Rucksackschaltfläche zählen.",
      nullptr, "DISPLAY_FREE_BAG_SLOTS", "OPTION_TOOLTIP_DISPLAY_FREE_BAG_SLOTS"},
     {"enhancedtooltips",
@@ -733,7 +733,7 @@ constexpr SettingGerman kGerman[] = {
      "Die Stufe eines Gegenstands in seinem Tooltip zeigen.",
      nullptr, nullptr, "OPTION_TOOLTIP_SHOW_ITEM_LEVEL"},
     {"equipmentmanager",
-     "Ausrüstungsmanager benutzen",
+     "Ausrüstungsmanager",
      "Ausrüstungssets im Charakterfenster speichern und mit einem Klick wechseln.",
      nullptr, "USE_EQUIPMENT_MANAGER", nullptr},
     {"previewtalents",
@@ -749,7 +749,7 @@ constexpr SettingGerman kGerman[] = {
      "Die Minikarte als Quadrat statt als Kreis zeichnen.",
      nullptr, nullptr, nullptr},
     {"minimapnpcdots",
-     "Punkte für nahe Kreaturen",
+     "Punkte für Kreaturen",
      "Kreaturen in Eurer Nähe als Punkte auf der Minikarte markieren.",
      nullptr, nullptr, nullptr},
     {"minimapcoords",
@@ -825,7 +825,7 @@ constexpr SettingGerman kGerman[] = {
      "Fünftel ist.",
      nullptr, nullptr, nullptr},
     {"screenedgeflash",
-     "Blinken des Bildschirmrands",
+     "Bildschirmrand blinkt",
      "Das eigene rote Blinken des Spiels am Bildschirmrand, solange Eure Gesundheit niedrig ist - "
      "neben der Warnung oben, die die dieses Clients ist.",
      nullptr, "SHOW_FULLSCREEN_STATUS_TEXT", "OPTION_TOOLTIP_SHOW_FULLSCREEN_STATUS"},
@@ -842,7 +842,7 @@ constexpr SettingGerman kGerman[] = {
      "Im Zielfenster nur die Stärkungszauber zeigen, die Ihr selbst wirken könntet.",
      nullptr, "SHOW_CASTABLE_BUFFS_TEXT", "OPTION_TOOLTIP_SHOW_CASTABLE_BUFFS"},
     {"castabledebuffs",
-     "Wirkbare Schwächungszauber",
+     "Wirkbare Schwächungen",
      "Im Zielfenster nur die Schwächungszauber zeigen, die von Euch sind.",
      nullptr, "SHOW_CASTABLE_DEBUFFS_TEXT", "OPTION_TOOLTIP_SHOW_CASTABLE_DEBUFFS"},
     {"assistattack",
@@ -854,7 +854,7 @@ constexpr SettingGerman kGerman[] = {
      "Ein neues Ziel beendet Euren automatischen Angriff, statt ihn mitzunehmen.",
      nullptr, "STOP_AUTO_ATTACK", "OPTION_TOOLTIP_STOP_AUTO_ATTACK"},
     {"secureabilitytoggle",
-     "Doppeltes Angreifen sperren",
+     "Doppelangriff sperren",
      "Ein zweiter Druck auf Angriff innerhalb einer halben Sekunde wird ignoriert, sodass ein "
      "Doppeltippen den automatischen Angriff nicht gleich wieder ausschaltet.",
      nullptr, nullptr, nullptr},
@@ -886,7 +886,7 @@ constexpr SettingGerman kGerman[] = {
      "Wann dieses Fenster den Platz wert ist.",
      "Immer|Im Schlachtzug|In der Gruppe|Allein|In Schlachtzug oder Gruppe", nullptr, nullptr},
     {"targetcastbar",
-     "Zauberleiste am Zielfenster",
+     "Zauberleiste am Ziel",
      "Unter dem Fenster Eures Ziels zeigen, was es wirkt.",
      nullptr, nullptr, "OPTION_TOOLTIP_SHOW_TARGET_CASTBAR"},
     {"myname",
@@ -942,7 +942,7 @@ constexpr SettingGerman kGerman[] = {
      "Namen über ihren Totems.",
      nullptr, nullptr, "OPTION_TOOLTIP_UNIT_NAME_ENEMY_TOTEMS"},
     {"friendlyplates",
-     "Freundliche Namensplaketten",
+     "Freundliche Plaketten",
      "Namen und Gesundheitsleisten über freundlichen Spielern und Kreaturen. Umschalt+V schaltet "
      "dies um, Strg+V beide Arten zusammen.",
      nullptr, nullptr, nullptr},
@@ -959,7 +959,7 @@ constexpr SettingGerman kGerman[] = {
      "Plaketten über freundlichen Totems.",
      nullptr, nullptr, "OPTION_TOOLTIP_UNIT_NAMEPLATES_SHOW_FRIENDLY_TOTEMS"},
     {"enemyplates",
-     "Feindliche Namensplaketten",
+     "Feindliche Plaketten",
      "Namen und Gesundheitsleisten über feindlichen Spielern und Kreaturen. V schaltet dies um, "
      "Strg+V beide Arten zusammen.",
      nullptr, nullptr, nullptr},
@@ -981,7 +981,7 @@ constexpr SettingGerman kGerman[] = {
      "jede von den anderen weggeschoben.",
      nullptr, nullptr, "OPTION_TOOLTIP_UNIT_NAMEPLATES_ALLOW_OVERLAP"},
     {"nameplateclasscolours",
-     "Plaketten in Klassenfarben",
+     "Plaketten: Klassenfarben",
      "Die Gesundheitsleiste eines feindlichen Spielers nach seiner Klasse färben.",
      nullptr, "SHOW_CLASS_COLOR_IN_V_KEY", "OPTION_TOOLTIP_SHOW_CLASS_COLOR_IN_V_KEY"},
     {"nameplatecastbar",
@@ -997,7 +997,7 @@ constexpr SettingGerman kGerman[] = {
      "In welche Richtung der Text wandert.",
      "Aufwärts|Abwärts|Bogen", nullptr, nullptr},
     {"fctdodgeparrymiss",
-     "Ausweich./Parier./Verfehl.",
+     "Ausw./Parieren/Verfehlt",
      "Sagen, wenn ein Schlag gegen Euch verfehlte, und warum.",
      nullptr, "COMBAT_TEXT_SHOW_DODGE_PARRY_MISS_TEXT", nullptr},
     {"fctdamagereduction",
@@ -1014,7 +1014,7 @@ constexpr SettingGerman kGerman[] = {
      "verfügbar wird.",
      nullptr, "COMBAT_TEXT_SHOW_REACTIVES_TEXT", nullptr},
     {"fctfriendlyhealers",
-     "Namen befreundeter Heiler",
+     "Namen freundl. Heiler",
      "Wer Euch geheilt hat, mit dem Betrag.",
      nullptr, "COMBAT_TEXT_SHOW_FRIENDLY_NAMES_TEXT", nullptr},
     {"fctcombatstate",
@@ -1034,7 +1034,7 @@ constexpr SettingGerman kGerman[] = {
      "Mana, Wut, Energie und Runenmacht, wenn sie hereinkommen.",
      nullptr, "COMBAT_TEXT_SHOW_ENERGIZE_TEXT", nullptr},
     {"fctperiodicenergygains",
-     "Regelmäßiger Energiegewinn",
+     "Energie über Zeit",
      "Dasselbe für das Rinnsal aus Regeneration und Effekten über Zeit.",
      nullptr, "COMBAT_TEXT_SHOW_PERIODIC_ENERGIZE_TEXT", nullptr},
     {"fcthonorgains",
@@ -1046,11 +1046,11 @@ constexpr SettingGerman kGerman[] = {
      "Jeder Stärkungs- und Schwächungszauber, wenn er Euch trifft und wenn er verblasst.",
      nullptr, "COMBAT_TEXT_SHOW_AURAS_TEXT", nullptr},
     {"partybackground",
-     "Gruppen-/Arenahintergrund",
+     "Hintergrund Gruppe/Arena",
      "Eine dunkle Fläche hinter den Gruppenfenstern.",
      nullptr, "SHOW_PARTY_BACKGROUND_TEXT", "OPTION_TOOLTIP_SHOW_PARTY_BACKGROUND"},
     {"hidepartyinraid",
-     "Gruppe im Raid ausblenden",
+     "Gruppe im Raid verbergen",
      "Nur die Schlachtzugsfenster zeigen, während Ihr in einem seid.",
      nullptr, nullptr, "OPTION_TOOLTIP_HIDE_PARTY_INTERFACE"},
     {"partypets",
@@ -1074,7 +1074,7 @@ constexpr SettingGerman kGerman[] = {
      "Die Zahlen auf Eure eigenen Gesundheits- und Machtleisten schreiben.",
      nullptr, nullptr, nullptr},
     {"petstatustext",
-     "Am Fenster des Begleiters",
+     "Am Begleiterfenster",
      "Dasselbe auf den Leisten Eures Begleiters.",
      nullptr, nullptr, nullptr},
     {"partystatustext",
@@ -1102,7 +1102,7 @@ constexpr SettingGerman kGerman[] = {
      "Zeigen, wie nah Ihr daran seid, Euer Ziel von dem abzuziehen, der es hat.",
      nullptr, "SHOW_NUMERIC_THREAT", "OPTION_TOOLTIP_SHOW_NUMERIC_THREAT"},
     {"threatsounds",
-     "Bedrohungs-Sounds abspielen",
+     "Bedrohungs-Sounds",
      "Einen Ton abspielen, wenn Eure Bedrohung die nächste Stufe erreicht.",
      nullptr, "PLAY_AGGRO_SOUNDS", "OPTION_TOOLTIP_PLAY_AGGRO_SOUNDS"},
     {"animatedportraits",
@@ -1196,7 +1196,7 @@ constexpr SettingGerman kGerman[] = {
      "Angeln, Bergbau, Schmieden und die übrige Welt bei der Arbeit.",
      nullptr, nullptr, nullptr},
     {"chatboxvisible",
-     "Chateingabe immer sichtbar",
+     "Chateingabe stets zeigen",
      "Das Chateingabefeld auf dem Bildschirm lassen, damit es angeklickt werden kann. Aus "
      "erscheint es mit Eingabe und verschwindet beim Senden.",
      nullptr, nullptr, nullptr},
@@ -1223,7 +1223,7 @@ constexpr SettingGerman kGerman[] = {
      "Eine Zeile, die derselbe Spieler einen Moment später erneut einfügt, wird nicht gezeigt.",
      nullptr, nullptr, nullptr},
     {"lootrollmessages",
-     "Detaillierte Plünderanzeige",
+     "Detaillierte Würfelinfos",
      "Den Wurf jedes Spielers auf einen Gegenstand nennen, nicht nur, wer ihn gewann.",
      nullptr, "SHOW_LOOT_SPAM", "OPTION_TOOLTIP_SHOW_LOOT_SPAM"},
     {"guildmemberalerts",
@@ -1259,7 +1259,7 @@ constexpr SettingGerman kGerman[] = {
      "Was in der Nähe gesagt und gerufen wird, über dem Kopf des Sprechers schweben lassen.",
      nullptr, "CHAT_BUBBLES_TEXT", nullptr},
     {"chatbubblesparty",
-     "Sprechblasen für Gruppenchat",
+     "Sprechblasen: Gruppe",
      "Auch Gruppen- und Schlachtzugschat über dem Kopf des Sprechers schweben lassen.",
      nullptr, "PARTY_CHAT_BUBBLES_TEXT", nullptr},
     {"autoloot",
@@ -1267,7 +1267,7 @@ constexpr SettingGerman kGerman[] = {
      "Alles aus einer Leiche oder Truhe nehmen, ohne das Beutefenster zu öffnen.",
      nullptr, "AUTO_LOOT_DEFAULT_TEXT", nullptr},
     {"autolootkey",
-     "Taste für Schnell-Plündern",
+     "Taste: Schnellplündern",
      "Diese beim Öffnen einer Leiche halten, um für diese eine Leiche das Gegenteil der "
      "Einstellung oben zu tun.",
      "Keine|Alt|Strg|Umschalt", "AUTO_LOOT_KEY_TEXT", nullptr},
@@ -1299,7 +1299,7 @@ constexpr SettingGerman kGerman[] = {
      "abzulehnen.",
      nullptr, "AUTO_DISMOUNT_FLYING_TEXT", "OPTION_TOOLTIP_AUTO_DISMOUNT_FLYING"},
     {"autoclearafk",
-     "Abwesend endet bei Bewegung",
+     "AFK endet bei Bewegung",
      "Bewegen oder Sprechen beendet Euren Abwesenheitsstatus.",
      nullptr, nullptr, "OPTION_TOOLTIP_CLEAR_AFK"},
     {"blocktrades",
@@ -1307,11 +1307,11 @@ constexpr SettingGerman kGerman[] = {
      "Handelsanfragen werden abgelehnt, bevor ihr Fenster sich öffnet, und der Chat sagt es.",
      nullptr, "BLOCK_TRADES", "OPTION_TOOLTIP_BLOCK_TRADES"},
     {"instantquesttext",
-     "Questtext sofort anzeigen",
+     "Questtext sofort zeigen",
      "Questtext erscheint ganz, statt Zeile für Zeile aufgedeckt zu werden.",
      nullptr, "SHOW_QUEST_FADING_TEXT", "OPTION_TOOLTIP_SHOW_QUEST_FADING"},
     {"autotrackquests",
-     "Quest bei Annahme verfolgen",
+     "Neue Quests verfolgen",
      "Eine neue Quest kommt sofort in die Zielverfolgung.",
      nullptr, nullptr, "OPTION_TOOLTIP_AUTO_QUEST_WATCH"},
     {"widerquesttracker",
@@ -1328,7 +1328,7 @@ constexpr SettingGerman kGerman[] = {
      "Dasselbe für den Helm.",
      nullptr, "SHOW_HELM", nullptr},
     {"checkforupdates",
-     "Nach neuen Versionen suchen",
+     "Nach Updates suchen",
      "Beim Start einmal bei GitHub fragen, ob ein neueres WoWee erschienen ist, und es auf dem "
      "Anmeldebildschirm sagen. Es wird nichts heruntergeladen oder installiert, und nichts über "
      "Euch wird gesendet.",
@@ -1509,6 +1509,103 @@ SettingText settingText(const SettingDesc& desc, bool german, const GlobalString
         }
     }
     return t;
+}
+
+// The settings window's own words around the schema's rows: tabs, headings,
+// buttons (SettingsPanel). Labels at most 24 characters, as the rows are;
+// the key-binding prompt is a sentence.
+namespace {
+constexpr Pair kWindowWords[] = {
+    {"Settings", "Einstellungen"},
+    {"Interface", "Oberfläche"},
+    {"Audio", "Ton"},
+    {"Gameplay", "Spiel"},
+    {"Controls", "Steuerung"},
+    {"About", "Info"},
+    {"Save Settings", "Speichern"},
+    {"Back to Game", "Zurück zum Spiel"},
+    {"Restore Video Defaults", "Grafik zurücksetzen"},
+    {"Restore Debug Graphics Defaults", "Debug zurücksetzen"},
+    {"Restore Gameplay Defaults", "Spiel zurücksetzen"},
+    {"Restore Audio Defaults", "Ton zurücksetzen"},
+    {"Reset to Defaults", "Auf Standard setzen"},
+    {"Reset Bottom Left Position", "Position zurücksetzen"},
+    {"Resolution", "Auflösung"},
+    {"What the controller does", "Was der Controller tut"},
+    {"Ray Tracing (highly experimental)", "Raytracing (Experiment)"},
+    {"Debug: Time of day", "Debug: Tageszeit"},
+    {"Debug: Light sources", "Debug: Lichtquellen"},
+    {"Debug: Shadows", "Debug: Schatten"},
+    {"Keybindings", "Tastenbelegung"},
+    {"Zoom:", "Zoom:"},
+    {"Developer", "Entwicklerin"},
+    {"Contact", "Kontakt"},
+    {"Click to copy", "Klicken zum Kopieren"},
+    {"Rebind", "Neu belegen"},
+    {"Waiting...", "Warte..."},
+    {"Character Screen", "Charakter"},
+    {"Inventory", "Inventar"},
+    {"Bags", "Taschen"},
+    {"Spellbook", "Zauberbuch"},
+    {"Talents", "Talente"},
+    {"Quests", "Quests"},
+    {"Minimap", "Minikarte"},
+    {"Chat", "Chat"},
+    {"Guild Roster / Social", "Gilde / Kontakte"},
+    {"Dungeon Finder", "Dungeonbrowser"},
+    {"World Map", "Weltkarte"},
+    {"Nameplates", "Namensplaketten"},
+    {"Achievements", "Erfolge"},
+    {"Skills / Professions", "Fertigkeiten / Berufe"},
+    {"Player vs Player", "Spieler gegen Spieler"},
+    {"Appearance", "Aussehen"},
+    {"Show Timestamps", "Zeitstempel zeigen"},
+    {"Small", "Klein"},
+    {"Medium", "Mittel"},
+    {"Large", "Groß"},
+    {"Chat Font Size", "Chat-Schriftgröße"},
+    {"Background Opacity", "Hintergrunddeckkraft"},
+    {"Fade Old Messages", "Alte Nachrichten blenden"},
+    {"Auto-Join Channels", "Kanäle automatisch"},
+    {"General", "Allgemein"},
+    {"Trade", "Handel"},
+    {"LocalDefense", "LokaleVerteidigung"},
+    {"LookingForGroup", "SucheNachGruppe"},
+    {"Local", "Lokal"},
+    {"Joined Channels", "Beigetretene Kanäle"},
+    {"Use /join and /leave commands in chat to manage channels.",
+     "Kanäle mit /join und /leave im Chat verwalten."},
+    {"Restore Chat Defaults", "Chat zurücksetzen"},
+    {"no controller connected", "kein Controller verbunden"},
+    {"Unknown", "Unbekannt"},
+    {"WoWee - World of Warcraft Client Emulator", "WoWee - ein Client für World of Warcraft"},
+    {"A multi-expansion WoW client supporting Classic, TBC, and WotLK (3.3.5a).",
+     "Ein WoW-Client für mehrere Erweiterungen: Classic, TBC und WotLK (3.3.5a)."},
+    {"Built with Vulkan, SDL2, and ImGui", "Gebaut mit Vulkan, SDL2 und ImGui"},
+    {"Press any key to bind to this action (Esc to cancel)...",
+     "Taste für diese Aktion drücken (Esc bricht ab)..."},
+};
+}  // namespace
+
+namespace {
+bool g_windowGerman = false;
+}
+
+void setSettingsWindowGerman(bool german) { g_windowGerman = german; }
+
+const char* settingsWindowText(const char* english) {
+    if (!g_windowGerman) return english;
+    if (const char* de = germanWindowWord(english)) return de;
+    if (const char* de = germanCategoryName(english)) return de;
+    if (const char* de = germanSectionName(english)) return de;
+    return english;
+}
+
+const char* germanWindowWord(const std::string& english) {
+    for (const auto& w : kWindowWords) {
+        if (english == w.en) return w.de;
+    }
+    return nullptr;
 }
 
 std::string categoryText(const std::string& category, bool german) {
