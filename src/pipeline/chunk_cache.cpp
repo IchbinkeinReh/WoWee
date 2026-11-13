@@ -438,6 +438,16 @@ bool ChunkCache::ensure(uint64_t offset, uint64_t length) {
             ok = false;
             error = "could not write the cache copy";
         }
+#ifdef __APPLE__
+        // A streamed archive is mapped MAP_PRIVATE. Linux shows a private
+        // mapping's untouched pages as the file is now; macOS keeps them as
+        // the file was when it was mapped, so a chunk written to the copy
+        // after that never reaches the reader. Put it in the view as well.
+        if (ok && !toMemory) {
+            std::lock_guard<std::mutex> viewLock(mutex_);
+            if (view_) std::memcpy(view_ + from, bytes.data(), bytes.size());
+        }
+#endif
 
         lock.lock();
         for (uint64_t k = c; k <= end; ++k) inFlight_.erase(k);

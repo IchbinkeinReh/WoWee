@@ -255,6 +255,13 @@ TEST_CASE("Streaming: the archives read through a chunk cache, fetching only wha
             byPath[fs::absolute(dst).lexically_normal().string()] = c.get();
             caches.push_back(std::move(c));
         }
+        // The view each streamed archive is mapped to, as the stream hands
+        // it to its cache (pipeline/data_stream): where a chunk fetched after
+        // the archive was mapped reaches the reader on macOS.
+        MpqArchiveSet::setStreamViewSink([&byPath](const std::string& p, uint8_t* view) {
+            auto it = byPath.find(fs::absolute(fs::path(p)).lexically_normal().string());
+            if (it != byPath.end()) it->second->setView(view);
+        });
         MpqArchiveSet::setRangeSource([&byPath](const std::string& p) -> MpqArchiveSet::RangeFetch {
             auto it = byPath.find(fs::absolute(fs::path(p)).lexically_normal().string());
             if (it == byPath.end()) return {};
@@ -269,6 +276,7 @@ TEST_CASE("Streaming: the archives read through a chunk cache, fetching only wha
         CHECK(std::string(stored.begin(), stored.end()) == "locale bytes");
         set.close();
         MpqArchiveSet::setRangeSource({});
+        MpqArchiveSet::setStreamViewSink({});
     };
 
     for (const auto& rel : {"Data/common.MPQ", "Data/deDE/locale-deDE.MPQ", "Data/patch.MPQ"}) {
