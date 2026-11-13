@@ -1207,46 +1207,86 @@ bool Extractor::run(const Options& opts) {
         }
     }
 
-    // Cache WoW.exe for Warden MEM_CHECK responses
+    // Cache WoW.exe for Warden MEM_CHECK responses. A copy that fails is
+    // reported and the extraction goes on: the game data is already written,
+    // and the executable is only what Warden reads.
     {
         const char* exeNames[] = { "WoW.exe", "TurtleWoW.exe", "Wow.exe" };
+        const fs::path mpqPath = fs::path(opts.mpqDir);
         std::vector<std::string> searchDirs = {
-            fs::path(opts.mpqDir).parent_path().string(),  // WoW.exe is typically next to Data/
-            opts.mpqDir                                      // Some layouts put it inside Data/
+            mpqPath.parent_path().string(),                // WoW.exe is typically next to Data/
+            mpqPath.string(),                              // Some layouts put it inside Data/
+            mpqPath.parent_path().parent_path().string()   // Data/<locale> is one level deeper
         };
-        for (const auto& dir : searchDirs) {
-            bool found = false;
-            for (const char* name : exeNames) {
-                auto src = fs::path(dir) / name;
-                if (fs::exists(src)) {
-                    // Keep each client's executable beside its isolated manifest.
-                    // Warden integrity checks must never use a WoW.exe cached by a
-                    // later extraction from another expansion.
-                    auto dstDir = fs::path(effectiveOutputDir) / "misc";
-                    fs::create_directories(dstDir);
-                    auto dst = dstDir / name;
-                    fs::copy_file(src, dst, fs::copy_options::overwrite_existing);
-                    std::cout << "Cached " << name << " -> " << dst.string() << "\n";
-
-                    // Legacy auth integrity hashes include companion DLLs. Keep
-                    // them with the executable so Classic and Turtle servers can
-                    // validate the exact distribution that was extracted.
-                    for (const char* companion : {
-                            "fmod.dll", "ijl15.dll", "dbghelp.dll", "unicows.dll",
-                            "twloader.dll", "twdiscord.dll"}) {
-                        const auto companionSrc = fs::path(dir) / companion;
-                        if (!fs::exists(companionSrc)) continue;
-                        const auto companionDst = dstDir / companion;
-                        fs::copy_file(companionSrc, companionDst,
-                                      fs::copy_options::overwrite_existing);
-                        std::cout << "Cached " << companion << " -> "
-                                  << companionDst.string() << "\n";
-                    }
-                    found = true;
-                    break;
+        // The name matched without regard to case: a client copied to Linux or
+        // macOS is often lowercased, and an exact-name lookup found nothing.
+        auto findIn = [](const fs::path& dir, const std::string& name) -> fs::path {
+            std::error_code lookEc;
+            if (!fs::is_directory(dir, lookEc)) return {};
+            const std::string wanted = toLowerStr(name);
+            for (const auto& entry : fs::directory_iterator(dir, lookEc)) {
+                if (lookEc) break;
+                if (entry.is_regular_file(lookEc) &&
+                    toLowerStr(entry.path().filename().string()) == wanted) {
+                    return entry.path();
                 }
             }
+            return {};
+        };
+
+        bool found = false;
+        for (const auto& dir : searchDirs) {
+            if (dir.empty()) continue;
+            for (const char* name : exeNames) {
+                const fs::path src = findIn(dir, name);
+                if (src.empty()) continue;
+
+                // Keep each client's executable beside its isolated manifest.
+                // Warden integrity checks must never use a WoW.exe cached by a
+                // later extraction from another expansion.
+                const auto dstDir = fs::path(effectiveOutputDir) / "misc";
+                std::error_code copyEc;
+                fs::create_directories(dstDir, copyEc);
+                const auto dst = dstDir / name;
+                if (copyEc ||
+                    !fs::copy_file(src, dst, fs::copy_options::overwrite_existing, copyEc)) {
+                    std::cerr << "Could not cache " << src.string() << " -> " << dst.string()
+                              << ": " << copyEc.message() << "\n";
+                    continue;
+                }
+                std::cout << "Cached " << name << " -> " << dst.string() << "\n";
+                found = true;
+
+                // Legacy auth integrity hashes include companion DLLs. Keep
+                // them with the executable so Classic and Turtle servers can
+                // validate the exact distribution that was extracted.
+                for (const char* companion : {
+                        "fmod.dll", "ijl15.dll", "dbghelp.dll", "unicows.dll",
+                        "twloader.dll", "twdiscord.dll"}) {
+                    const fs::path companionSrc = findIn(src.parent_path(), companion);
+                    if (companionSrc.empty()) continue;
+                    const auto companionDst = dstDir / companion;
+                    if (!fs::copy_file(companionSrc, companionDst,
+                                       fs::copy_options::overwrite_existing, copyEc)) {
+                        std::cerr << "Could not cache " << companionSrc.string() << ": "
+                                  << copyEc.message() << "\n";
+                        continue;
+                    }
+                    std::cout << "Cached " << companion << " -> "
+                              << companionDst.string() << "\n";
+                }
+                break;
+            }
             if (found) break;
+        }
+        if (!found) {
+            std::cerr << "WoW.exe was not found, so it is not cached. Looked in:";
+            for (const auto& dir : searchDirs) {
+                if (!dir.empty()) std::cerr << " " << dir;
+            }
+            std::cerr << "\nA server that runs Warden will see failed memory checks "
+                         "until it is copied into " << (fs::path(effectiveOutputDir) / "misc").string()
+                      << " or WOWEE_INTEGRITY_DIR points at it.\n";
         }
     }
 
