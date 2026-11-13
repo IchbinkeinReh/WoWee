@@ -445,8 +445,18 @@ jobs:
           fi
           exit "${notary_status}"
         fi
-        xcrun stapler staple Wowee.dmg
-        xcrun stapler validate Wowee.dmg
+        # stapler talks to Apple's ticket service; retry transient network drops.
+        for action in staple validate; do
+          for attempt in 1 2 3 4 5; do
+            if xcrun stapler "${action}" Wowee.dmg; then
+              break
+            fi
+            if [ "${attempt}" -eq 5 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 15))
+          done
+        done
         spctl --assess --type open --context context:primary-signature \
           --verbose=2 Wowee.dmg
 

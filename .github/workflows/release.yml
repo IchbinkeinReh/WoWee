@@ -405,8 +405,18 @@ jobs:
           --key-id "${APPLE_NOTARY_KEY_ID}" \
           --issuer "${APPLE_NOTARY_ISSUER_ID}" \
           --wait --timeout 30m
-        xcrun stapler staple "${DMG}"
-        xcrun stapler validate "${DMG}"
+        # stapler talks to Apple's ticket service; retry transient network drops.
+        for action in staple validate; do
+          for attempt in 1 2 3 4 5; do
+            if xcrun stapler "${action}" "${DMG}"; then
+              break
+            fi
+            if [ "${attempt}" -eq 5 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 15))
+          done
+        done
         spctl --assess --type open --context context:primary-signature \
           --verbose=2 "${DMG}"
 
