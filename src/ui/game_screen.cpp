@@ -2233,6 +2233,10 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
         leftClickWasPress_ = true;
     }
 
+    // A touch screen has no right button, so interacting is a second tap on
+    // the unit already targeted. It runs the right-click path below.
+    bool tapInteract = false;
+
     // On mouse-up, check if it was a click (not a drag)
     if (leftClickWasPress_ && input.isMouseButtonJustReleased(SDL_BUTTON_LEFT)) {
         leftClickWasPress_ = false;
@@ -2331,6 +2335,15 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                 if (closestGuid != 0 && gameHandler.isAwaitingUnitTarget()) {
                     gameHandler.completeItemUseOnUnit(closestGuid);
                 } else if (closestGuid != 0) {
+#ifdef __ANDROID__
+                    if (gameHandler.getTargetGuid() == closestGuid) {
+                        auto tapped = gameHandler.getEntityManager().getEntity(closestGuid);
+                        if (tapped && tapped->getType() == game::ObjectType::UNIT) {
+                            tapInteract = true;
+                            rightClickPressPos_ = leftClickPressPos_;
+                        }
+                    }
+#endif
                     // A game object is used, not targeted.
                     //
                     // The client set every click's subject as the target, so
@@ -2379,7 +2392,7 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
     }
 
     // On right mouse-up, act only if it was a click (not a drag / camera rotate).
-    if (rightClickWasPress_ && input.isMouseButtonJustReleased(SDL_BUTTON_RIGHT)) {
+    if (tapInteract || (rightClickWasPress_ && input.isMouseButtonJustReleased(SDL_BUTTON_RIGHT))) {
         rightClickWasPress_ = false;
         glm::vec2 rDragDelta = input.getMousePosition() - rightClickPressPos_;
         LOG_DEBUG("Right-click released at (", input.getMousePosition().x, ", ", input.getMousePosition().y,
