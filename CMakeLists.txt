@@ -462,6 +462,13 @@ endif()
 if(WOWEE_STATIC_RUNTIME)
     set(OPENSSL_USE_STATIC_LIBS TRUE)
     set(ZLIB_USE_STATIC_LIBS ON)
+    if(MINGW)
+        # find_library takes libX.dll.a before libX.a, and a full path to an
+        # import library makes the exe need the DLL whatever -static says:
+        # StormLib's bzip2 and LibTomCrypt did (libbz2-1.dll, libtomcrypt-1.dll
+        # in CI). Archives only.
+        set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
+    endif()
 endif()
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
