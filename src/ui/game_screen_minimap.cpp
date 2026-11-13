@@ -793,44 +793,6 @@ void GameScreen::renderMinimapNpcDots(const MinimapFrame& frame, const EntityLis
 
 }
 
-// The same live creature-rank classification the world map uses.
-void GameScreen::renderMinimapRares(const MinimapFrame& frame, const EntityList& minimapUnits,
-                                     game::GameHandler& gameHandler) {
-    // Rare tracker: use the same live creature-rank classification as the world map.
-    // This is independent of generic NPC dots so enabling rare tracking consistently
-    // shows spawned rares on both maps without adding every nearby creature.
-    if (settingsPanel_.showRareTracker_) {
-        for (const auto& entity : minimapUnits) {
-            auto unit = std::static_pointer_cast<game::Unit>(entity);
-            if (!unit || unit->getHealth() == 0) continue;
-
-            const int rank = gameHandler.getCreatureRank(unit->getEntry());
-            if (rank != 2 && rank != 4) continue; // 2 = Rare Elite, 4 = Rare
-
-            float sx = 0.0f, sy = 0.0f;
-            if (!frame.projectEntity(*entity, sx, sy)) continue;
-
-            // Match the world-map tracker: gold for Rare, silver for Rare Elite.
-            const bool isElite = rank == 2;
-            const ImU32 fill = isElite
-                ? IM_COL32(210, 210, 225, 255)
-                : IM_COL32(255, 190, 60, 255);
-            constexpr float halfSize = 5.0f;
-            const ImVec2 top(sx, sy - halfSize);
-            const ImVec2 right(sx + halfSize, sy);
-            const ImVec2 bottom(sx, sy + halfSize);
-            const ImVec2 left(sx - halfSize, sy);
-            frame.drawList->AddQuadFilled(top, right, bottom, left, fill);
-            frame.drawList->AddQuad(top, right, bottom, left, IM_COL32(0, 0, 0, 220), 1.5f);
-
-            if (cursorNearBlip(sx, sy, kSmallBlipHoverRadius) && !unit->getName().empty()) {
-                minimapHover_.emplace_back(50, unit->getName());
-            }
-        }
-    }
-
-}
-
 // Other players nearby. Party members are squares, drawn elsewhere; these are
 // the small circles for everyone else.
 void GameScreen::renderMinimapPlayerDots(const MinimapFrame& frame, const EntityList& minimapPlayers,
@@ -904,48 +866,6 @@ void GameScreen::renderMinimapObjectDots(const MinimapFrame& frame, const Entity
             if (cursorNearBlip(sx, sy) && !goInfo->name.empty()) {
                 (void)isQuestGO;
                 minimapHover_.emplace_back(50, goInfo->name);
-            }
-        }
-    }
-
-}
-
-// GAMEOBJECT_TYPE_CHEST covers gathering nodes on WoW servers, so the mining
-// and herbalism classification is excluded explicitly rather than by luck.
-void GameScreen::renderMinimapChests(const MinimapFrame& frame, const EntityList& minimapGameObjects,
-                                      game::GameHandler& gameHandler) {
-    // Chest tracker: GAMEOBJECT_TYPE_CHEST also covers gathering nodes on WoW
-    // servers, so explicitly exclude the existing mining/herbalism classification.
-    if (settingsPanel_.showChestTracker_) {
-        ImVec2 mouse = ImGui::GetMousePos();
-        for (const auto& entity : minimapGameObjects) {
-            auto chest = std::static_pointer_cast<game::GameObject>(entity);
-            if (!chest) continue;
-            const auto* info = gameHandler.getCachedGameObjectInfo(chest->getEntry());
-            if (!info || !info->isValid() || info->type != 3) continue;
-            if (gameHandler.isGatherGameObject(chest->getGuid())) continue;
-
-            float sx = 0.0f, sy = 0.0f;
-            if (!frame.projectEntity(*entity, sx, sy)) continue;
-
-            constexpr float halfW = 5.5f;
-            constexpr float halfH = 4.0f;
-            constexpr ImU32 fill = IM_COL32(205, 125, 35, 255);
-            constexpr ImU32 outline = IM_COL32(45, 25, 5, 230);
-            frame.drawList->AddRectFilled(ImVec2(sx - halfW, sy - halfH),
-                                    ImVec2(sx + halfW, sy + halfH), fill, 1.5f);
-            frame.drawList->AddRect(ImVec2(sx - halfW, sy - halfH),
-                              ImVec2(sx + halfW, sy + halfH), outline, 1.5f, 0, 1.5f);
-            frame.drawList->AddLine(ImVec2(sx - halfW, sy - 0.8f),
-                              ImVec2(sx + halfW, sy - 0.8f), outline, 1.0f);
-            frame.drawList->AddRectFilled(ImVec2(sx - 1.0f, sy - 1.2f),
-                                    ImVec2(sx + 1.0f, sy + 1.3f),
-                                    IM_COL32(255, 220, 80, 255), 0.5f);
-
-            if (mouse.x >= sx - halfW - 2.0f && mouse.x <= sx + halfW + 2.0f &&
-                mouse.y >= sy - halfH - 2.0f && mouse.y <= sy + halfH + 2.0f) {
-                const std::string& name = chest->getName().empty() ? info->name : chest->getName();
-                if (!name.empty()) minimapHover_.emplace_back(50, name);
             }
         }
     }
@@ -1879,10 +1799,8 @@ void GameScreen::renderMinimapMarkers(game::GameHandler& gameHandler) {
 
     minimapHover_.clear();
     renderMinimapNpcDots(frame, minimapUnits, minimapQuestEntries);
-    renderMinimapRares(frame, minimapUnits, gameHandler);
     renderMinimapPlayerDots(frame, minimapPlayers, gameHandler);
     renderMinimapObjectDots(frame, minimapGameObjects, minimapQuestGoEntries, gameHandler);
-    renderMinimapChests(frame, minimapGameObjects, gameHandler);
 
     renderMinimapPings(frame, gameHandler);
     // The group's blips go down before the objects' (0x00581e80 calls
@@ -1959,10 +1877,7 @@ void GameScreen::saveSettings() {
     out << "check_for_updates=" << (settingsPanel_.pendingCheckForUpdates ? 1 : 0) << "\n";
     out << "stream_cache_limit=" << settingsPanel_.pendingStreamCacheLimit << "\n";
     out << "stream_cache_clear=" << (settingsPanel_.pendingStreamCacheClear ? 1 : 0) << "\n";
-    out << "show_cooldown_tracker=" << (settingsPanel_.showCooldownTracker_ ? 1 : 0) << "\n";
-    out << "show_rare_tracker=" << (settingsPanel_.showRareTracker_ ? 1 : 0) << "\n";
     out << "map_window=" << (settingsPanel_.showMapWindow_ ? 1 : 0) << "\n";
-    out << "show_chest_tracker=" << (settingsPanel_.showChestTracker_ ? 1 : 0) << "\n";
     out << "separate_bags=" << (settingsPanel_.pendingSeparateBags ? 1 : 0) << "\n";
     out << "show_keyring=" << (settingsPanel_.pendingShowKeyring ? 1 : 0) << "\n";
     out << "bag_scale=" << settingsPanel_.pendingBagScale << "\n";
@@ -2280,14 +2195,8 @@ void GameScreen::loadSettings() {
             } else if (key == "show_fps") {
                 settingsPanel_.showFps_ = (std::stoi(val) != 0);
                 settingsPanel_.pendingShowFps = settingsPanel_.showFps_;
-            } else if (key == "show_cooldown_tracker") {
-                settingsPanel_.showCooldownTracker_ = (std::stoi(val) != 0);
-            } else if (key == "show_rare_tracker") {
-                settingsPanel_.showRareTracker_ = (std::stoi(val) != 0);
             } else if (key == "map_window") {
                 settingsPanel_.showMapWindow_ = (std::stoi(val) != 0);
-            } else if (key == "show_chest_tracker") {
-                settingsPanel_.showChestTracker_ = (std::stoi(val) != 0);
             } else if (key == "separate_bags") {
                 settingsPanel_.pendingSeparateBags = (std::stoi(val) != 0);
             } else if (key == "show_keyring") {

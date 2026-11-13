@@ -144,14 +144,6 @@ struct PartyDot {
     std::string name;      ///< Member name (shown as tooltip on hover)
 };
 
-// ── Nearby rare/rare-elite creature marker (UI layer → world map overlay) ─
-
-struct RareMark {
-    glm::vec3 renderPos;   ///< Position in render-space coordinates
-    std::string name;      ///< Creature name (shown as tooltip on hover)
-    int rank = 4;          ///< Creature rank: 2 = Rare Elite, 4 = Rare
-};
-
 // ── Taxi (flight master) node (UI layer → world map overlay) ─
 
 struct TaxiNode {

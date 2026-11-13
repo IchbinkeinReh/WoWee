@@ -3758,22 +3758,6 @@ void GameHandler::closeLoot() {
     if (inventoryHandler_) inventoryHandler_->closeLoot();
 }
 
-bool GameHandler::isGatherGameObject(uint64_t guid) const {
-    // A herb or a vein: its lock opens to Herbalism (LockType 2) or Mining
-    // (3), the lock types the client's resource tracking finds them by
-    // (0x006dca90) - not its name.
-    if (guid == 0 || !entityController_) return false;
-    auto entity = entityController_->getEntityManager().getEntity(guid);
-    if (!entity || entity->getType() != ObjectType::GAMEOBJECT) return false;
-    auto go = std::static_pointer_cast<GameObject>(entity);
-    const GameObjectFacts f = gameObjectFacts(*go, getCachedGameObjectInfo(go->getEntry()));
-    const go_use::LockRow* lock = gameObjectLock(f);
-    if (!lock) return false;
-    for (int i = 0; i < 8; ++i)
-        if (lock->type[i] == 2 && (lock->index[i] == 2 || lock->index[i] == 3)) return true;
-    return false;
-}
-
 void GameHandler::lootMasterGive(uint8_t lootSlot, uint64_t targetGuid) {
     if (inventoryHandler_) inventoryHandler_->lootMasterGive(lootSlot, targetGuid);
 }

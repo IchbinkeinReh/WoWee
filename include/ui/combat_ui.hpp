@@ -39,9 +39,6 @@ public:
     size_t raidWarnChatSeenCount_ = 0;
 
     // ---- Public render methods ----
-    void renderCooldownTracker(game::GameHandler& gameHandler,
-                               const SettingsPanel& settings,
-                               const SpellIconFn& getSpellIcon);
     /// The whisper sound, taken from a walk of new chat lines. What is left
     /// of the raid warning overlay, whose banner is FrameXML's.
     void playSoundsForNewChat(game::GameHandler& gameHandler);

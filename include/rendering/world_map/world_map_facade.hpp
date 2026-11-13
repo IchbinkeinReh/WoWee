@@ -75,8 +75,6 @@ public:
     /// the client knows FrameXML has its map panel on screen and wants the map
     /// drawn into it.
     [[nodiscard]] bool hasFrameRect() const;
-    /// Nearby rare/rare-elite creatures currently spawned near the player.
-    void setRares(std::vector<RareMark> rares);
 
     [[nodiscard]] bool isOpen() const;
     void close();

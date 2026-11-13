@@ -66,10 +66,11 @@ std::optional<AudioCallbackHandler::SoundEntry> AudioCallbackHandler::resolveSou
 }
 
 void AudioCallbackHandler::setupCallbacks() {
-    // Level-up callback - play sound, cheer emote, and trigger UI ding overlay + 3D effect
-    gameHandler_.setLevelUpCallback([this](uint32_t newLevel) {
+    // Level-up callback - sound, cheer emote and the LevelUp.m2 effect. The
+    // level itself is FrameXML's chat line; nothing is drawn over the screen.
+    gameHandler_.setLevelUpCallback([this](uint32_t /*newLevel*/) {
         if (uiManager_) {
-            uiManager_->getGameScreen().toastManager().triggerDing(newLevel);
+            uiManager_->getGameScreen().toastManager().playLevelUp();
         }
         if (renderer_) {
             if (auto* ac = renderer_->getAnimationController()) ac->triggerLevelUpEffect(renderer_->getCharacterPosition());
