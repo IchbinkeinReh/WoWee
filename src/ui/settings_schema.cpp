@@ -2,6 +2,7 @@
 
 #include "rendering/rt_normal_blend.hpp"
 #include "ui/graphics_defaults.hpp"
+#include "ui/graphics_presets.hpp"
 
 namespace wowee {
 namespace ui {
@@ -1481,6 +1482,30 @@ bool settingNeedsRayTracing(const std::string& key) {
         if (key == k) return true;
     }
     return false;
+}
+
+std::vector<PresetRowValue> presetRowValues(bool superUltra) {
+    std::vector<PresetRowValue> out;
+    std::size_t count = 0;
+    const SettingDesc* schema = clientSettingsSchema(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        const SettingDesc& row = schema[i];
+        const std::string key = row.key;
+        bool onPage = false;
+        for (const char* page : kGraphicsPresetPages) onPage = onPage || std::string(row.category) == page;
+        if (!onPage || key == "graphicspreset") continue;
+        bool column = false;
+        for (const char* k : kGraphicsPresetKeys) column = column || key == k;
+        if (column) continue;
+        float value = row.defaultValue;
+        if (superUltra) {
+            for (const auto& e : kSuperUltraExtras) {
+                if (key == e.key) value = e.value;
+            }
+        }
+        out.push_back({&row, value});
+    }
+    return out;
 }
 
 }  // namespace ui

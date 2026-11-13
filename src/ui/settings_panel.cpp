@@ -967,18 +967,6 @@ void SettingsPanel::applyWindowUiScale() {
 namespace {
 
 
-/// The settings a preset has an opinion about, in the order it sets them.
-constexpr const char* kGraphicsPresetKeys[] = {
-    "viewdistance", "shadows", "shadowdistance", "antialiasing", "fxaa",
-    "normalmapping", "normalmapstrength",
-    "groundclutter",
-    "grassenabled", "grassdensity", "grassheight", "grassdistance",
-    "lensflare", "sharpstars", "sunshafts", "lightshafts", "fogskyblend",
-    "specular",
-    "environmentdetail", "groundclutterdistance", "particledensity", "weatherdetail",
-    "texturecompression", "interactivewater",
-};
-
 /// Every graphics setting that has to reach something when it is loaded.
 ///
 /// A value read from the config file only lands in a pending field. Until one
@@ -1034,8 +1022,10 @@ bool isGraphicsPresetKey(const std::string& key) {
     for (const char* k : kGraphicsPresetKeys) {
         if (key == k) return true;
     }
-    for (const auto& e : kSuperUltraExtras) {
-        if (key == e.key) return true;
+    // And every other row on the preset pages, which a preset puts back to
+    // its default (presetRowValues).
+    for (const auto& r : presetRowValues(false)) {
+        if (key == r.row->key) return true;
     }
     return false;
 }
@@ -1092,10 +1082,13 @@ void SettingsPanel::applyGraphicsPreset(GraphicsPreset preset) {
             applySettingSideEffects(key);
             addons::noteClientSettingChanged(key, settingValue(key));
         }
-        // Super-Ultra also sets the rest of the graphics pages
-        // (kSuperUltraExtras), through the one setter every control uses.
-        if (preset == GraphicsPreset::SUPER_ULTRA) {
-            for (const auto& e : kSuperUltraExtras) setSettingValue(e.key, settingNumberText(e.value));
+        // Every other row on the preset pages: its default, or Super-Ultra's
+        // own value (kSuperUltraExtras), through the one setter every control
+        // uses. A preset that left them alone kept Super-Ultra's ray tracing
+        // on under Ultra (user decision 2026-11-13: defaults unless the preset
+        // says otherwise).
+        for (const auto& r : presetRowValues(preset == GraphicsPreset::SUPER_ULTRA)) {
+            setSettingValue(r.row->key, settingNumberText(r.value));
         }
     }
 
@@ -1150,12 +1143,16 @@ SettingsPanel::GraphicsPreset SettingsPanel::matchingGraphicsPreset() const {
             (!p.grass || (std::abs(pendingGrassDensity - p.grassDensity) <= 5 &&
                           std::abs(pendingGrassHeight - p.grassHeight) <= 5 &&
                           std::abs(pendingGrassDistance - p.grassDistance) <= 10));
-        // Super-Ultra is also the rest of the graphics pages (kSuperUltraExtras).
+        // And the rest of the preset pages: each preset puts them back to
+        // their defaults, Super-Ultra to its own values (presetRowValues).
         bool extrasMatch = true;
-        if (matches && static_cast<GraphicsPreset>(i + 1) == GraphicsPreset::SUPER_ULTRA) {
-            for (const auto& e : kSuperUltraExtras) {
-                const double v = std::atof(settingValue(e.key).c_str());
-                if (std::abs(v - e.value) > 0.01 + 0.005 * std::abs(e.value)) {
+        if (matches) {
+            const bool superUltra = static_cast<GraphicsPreset>(i + 1) == GraphicsPreset::SUPER_ULTRA;
+            for (const auto& r : presetRowValues(superUltra)) {
+                const std::string text = settingValue(r.row->key);
+                if (text.empty()) continue;  // a row this build does not keep
+                const double v = std::atof(text.c_str());
+                if (std::abs(v - r.value) > 0.01 + 0.005 * std::abs(r.value)) {
                     extrasMatch = false;
                     break;
                 }

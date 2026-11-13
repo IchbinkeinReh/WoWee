@@ -234,5 +234,17 @@ bool isGraphicsCategory(const std::string& category);
 /// rows after it then put back to their own defaults.
 std::vector<const SettingDesc*> graphicsDefaultRows();
 
+/// A row a quality preset sets beyond its columns, and the value it gets.
+struct PresetRowValue {
+    const SettingDesc* row;
+    float value;
+};
+
+/// What choosing a preset does to every row on the preset pages
+/// (kGraphicsPresetPages) that is neither the preset row itself nor one of
+/// the table's columns (kGraphicsPresetKeys): its default, or for Super-Ultra
+/// its kSuperUltraExtras value where it has one. In schema order.
+std::vector<PresetRowValue> presetRowValues(bool superUltra);
+
 }  // namespace ui
 }  // namespace wowee

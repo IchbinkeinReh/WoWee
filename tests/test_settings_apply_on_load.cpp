@@ -94,7 +94,7 @@ TEST_CASE("every setting a preset sets is also applied on load", "[settings]") {
     // at least the same set, or choosing a preset and restarting gives two
     // different pictures.
     const std::string panel = wowee::test::slurp("src/ui/settings_panel.cpp");
-    const auto presetKeys = namesIn(panel, "PresetKeys");
+    const auto presetKeys = namesIn(wowee::test::slurp("include/ui/graphics_presets.hpp"), "PresetKeys");
     const auto applyKeys = namesIn(panel, "ApplyKeys");
     REQUIRE(presetKeys.size() >= 10);
     REQUIRE(applyKeys.size() >= presetKeys.size());
@@ -352,7 +352,7 @@ TEST_CASE("a preset applies the detail levels it carries", "[settings]") {
         INFO(column << " is not applied by applyGraphicsPreset");
         CHECK(body.find(column) != std::string::npos);
     }
-    const auto presetKeys = namesIn(panel, "PresetKeys");
+    const auto presetKeys = namesIn(wowee::test::slurp("include/ui/graphics_presets.hpp"), "PresetKeys");
     for (const char* key : {"environmentdetail", "groundclutterdistance", "particledensity",
                             "weatherdetail"}) {
         INFO(key << " is not pushed out by a preset");
@@ -854,4 +854,60 @@ TEST_CASE("Restore Video Defaults puts back every graphics page but the Debug on
         if (std::string(rows[i].category) == "Grass") ++grass;
     }
     CHECK(grass == 4);
+}
+
+TEST_CASE("a preset puts every other row on its pages back to its default", "[settings]") {
+    // User decision 2026-11-13: Ultra after Super-Ultra kept ray tracing on,
+    // the client's own levels never having touched the rows Super-Ultra adds.
+    // Every row on the preset pages a preset has no column for now gets its
+    // default - and under Super-Ultra its own value where it has one.
+    std::map<std::string, float> extras;
+    for (const auto& e : wowee::ui::kSuperUltraExtras) extras[e.key] = e.value;
+
+    const auto plain = wowee::ui::presetRowValues(false);
+    const auto superUltra = wowee::ui::presetRowValues(true);
+    REQUIRE(plain.size() == superUltra.size());
+    std::set<std::string> keys;
+    for (std::size_t i = 0; i < plain.size(); ++i) {
+        const std::string key = plain[i].row->key;
+        INFO(key);
+        keys.insert(key);
+        CHECK(plain[i].value == plain[i].row->defaultValue);
+        CHECK(superUltra[i].row == plain[i].row);
+        const auto it = extras.find(key);
+        CHECK(superUltra[i].value == (it != extras.end() ? it->second : plain[i].row->defaultValue));
+        CHECK(key != "graphicspreset");
+        for (const char* column : wowee::ui::kGraphicsPresetKeys) CHECK(key != column);
+    }
+    // Every Super-Ultra extra is one of those rows, so Ultra resets each.
+    for (const auto& [key, value] : extras) {
+        INFO(key << " is set by Super-Ultra but not put back by the other presets");
+        CHECK(keys.count(key) == 1);
+    }
+    // Ray tracing in particular: off under Low to Ultra.
+    CHECK(keys.count("raytracedlighting") == 1);
+    for (const auto& r : plain) {
+        if (std::string(r.row->key) == "raytracedlighting") CHECK(r.value == 0.0f);
+    }
+
+    // Every row on a preset page is either a column or one of these.
+    std::size_t count = 0;
+    const auto* schema = wowee::ui::clientSettingsSchema(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        bool onPage = false;
+        for (const char* page : wowee::ui::kGraphicsPresetPages) onPage = onPage || std::string(schema[i].category) == page;
+        if (!onPage) continue;
+        const std::string key = schema[i].key;
+        bool column = key == "graphicspreset";
+        for (const char* k : wowee::ui::kGraphicsPresetKeys) column = column || key == k;
+        INFO(key);
+        CHECK((column || keys.count(key) == 1));
+    }
+
+    // And the panel applies them for every preset, not only Super-Ultra.
+    const std::string panel = wowee::test::slurp("src/ui/settings_panel.cpp");
+    const size_t at = panel.find("void SettingsPanel::applyGraphicsPreset");
+    REQUIRE(at != std::string::npos);
+    const std::string body = panel.substr(at, panel.find("\n}\n", at) - at);
+    CHECK(body.find("presetRowValues(preset == GraphicsPreset::SUPER_ULTRA)") != std::string::npos);
 }

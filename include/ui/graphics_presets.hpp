@@ -136,8 +136,7 @@ constexpr GraphicsPresetValues kGraphicsPresets[] = {
 /// The settings Super-Ultra sets beyond the columns above: the rest of the
 /// graphics pages (Graphics, Shadows, Detail, Water, Ray Tracing with its eye
 /// adaptation, Upscaling), as the user's settings have them. Low to Ultra
-/// leave these where they are, as every preset always did, and are
-/// recognised whatever these say. Where the
+/// put these back to their defaults (presetRowValues). Where the
 /// user's file had no row the value is the schema's default - what their
 /// client ran with. (Frame generation, off in their file, is a row only
 /// in builds with FSR 3 frame generation, so it is not one of these.)
@@ -160,6 +159,29 @@ inline constexpr GraphicsPresetExtra kSuperUltraExtras[] = {
     {"rtpointrays", 1.0f},       {"rtbouncerays", 1.0f},
     {"upscaling", 0.0f},         {"fsrquality", 3.0f},
     {"fsrsharpness", 1.6f},
+};
+
+/// The settings the columns above set, by schema key, in the order a preset
+/// sets them.
+inline constexpr const char* kGraphicsPresetKeys[] = {
+    "viewdistance", "shadows", "shadowdistance", "antialiasing", "fxaa",
+    "normalmapping", "normalmapstrength",
+    "groundclutter",
+    "grassenabled", "grassdensity", "grassheight", "grassdistance",
+    "lensflare", "sharpstars", "sunshafts", "lightshafts", "fogskyblend",
+    "specular",
+    "environmentdetail", "groundclutterdistance", "particledensity", "weatherdetail",
+    "texturecompression", "interactivewater",
+};
+
+/// The pages a preset is the whole of (user decision 2026-11-13): every row
+/// on them that a preset has no column for is put back to its default -
+/// or, for Super-Ultra, to its kSuperUltraExtras value where it has one - so
+/// that Ultra after Super-Ultra is Ultra, not Ultra with ray tracing left on.
+/// Not Display (window, resolution, frame cap, brightness: the screen's, not
+/// the picture's quality) and not the Debug pages.
+inline constexpr const char* kGraphicsPresetPages[] = {
+    "Graphics", "Shadows", "Detail", "Grass", "Water", "Ray Tracing", "Upscaling",
 };
 
 /// The number of presets, not counting Custom - which is not a set of values
