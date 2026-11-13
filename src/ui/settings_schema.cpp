@@ -435,11 +435,11 @@ constexpr SettingDesc kSchema[] = {
     {"dbgbounce", "Bounced light, ray traced (%)", SettingKind::Int, 0, 200, 5, "Debug Graphics", "",
      "How far the probes' bounced light darkens shaded places and\n"
      "lifts lit ones (Shadows, occlusion and bounce light). 0 leaves\n"
-     "the flat ambient.", "", 100},
+     "the flat ambient.", "", 50},
     {"dbginteriorbase", "Inside, unlit by lamps (%)", SettingKind::Int, 0, 100, 5, "Debug Graphics", "Interiors, ray traced",
      "How much of a room's painted light shows where no lamp's light\n"
      "reaches: walls, floors, the things and people in it. Where the\n"
-     "lamps shine fully all of it shows. 100 is as painted.", "", 25},
+     "lamps shine fully all of it shows. 100 is as painted.", "", 20},
     {"dbginteriorfullat", "Inside, lamp light for full colour (%)", SettingKind::Int, 5, 300, 5, "Debug Graphics", "",
      "How bright the lamps' traced light must be for a room's painted\n"
      "light to show in full. Lower lights more of the room.", "", 100},
@@ -462,7 +462,7 @@ constexpr SettingDesc kSchema[] = {
      "Only what is drawn; the server's clock is left alone.", "", 0},
     {"dbgtime", "Time of day (hours)", SettingKind::Float, 0, 24, 0.25f, "Debug Time", "",
      "The time of day the world is lit at while the switch above\n"
-     "is on: 0 and 24 are midnight, 12 is noon.", "", 12},
+     "is on: 0 and 24 are midnight, 12 is noon.", "", 19.25f},
     {"dbgmodellightintensity", "Model lights: intensity (%)", SettingKind::Float, 0.001f, 1000, 0.001f, "Debug Lights", "Intensity and reach",
      "The lights model files carry: braziers, crystals, spell\n"
      "effects on objects.\n"
@@ -473,21 +473,21 @@ constexpr SettingDesc kSchema[] = {
     {"dbgfirelightintensity", "Fires: intensity (%)", SettingKind::Float, 0.001f, 1000, 0.001f, "Debug Lights", "",
      "Fires, braziers and torches whose files carry no light: a\n"
      "warm flickering light added at their flame.\n"
-     "Ray traced. 100 is its own.", "", 105},
+     "Ray traced. 100 is its own.", "", 100},
     {"dbgfirelightreach", "Fires: reach (%)", SettingKind::Int, 100, 1000, 10, "Debug Lights", "",
      "How far its light reaches: where the falloff starts and ends.\n"
      "Ray traced. 100 is its own.", "", 150},
     {"dbglamplightintensity", "Lamps and lanterns: intensity (%)", SettingKind::Float, 0.001f, 1000, 0.001f, "Debug Lights", "",
      "Street lamps, lanterns and sconces whose files carry no\n"
      "light, lit at every hour.\n"
-     "Ray traced. 100 is its own.", "", 105},
+     "Ray traced. 100 is its own.", "", 100},
     {"dbglamplightreach", "Lamps and lanterns: reach (%)", SettingKind::Int, 100, 1000, 10, "Debug Lights", "",
      "How far its light reaches: where the falloff starts and ends.\n"
      "Ray traced. 100 is its own.", "", 150},
     {"dbgbuildinglightintensity", "Building lights: intensity (%)", SettingKind::Float, 0.001f, 1000, 0.001f, "Debug Lights", "",
      "A building's own lamps (WMO lights). Its walls and floors\n"
      "hold their light already; the rest takes it from the tracing.\n"
-     "Ray traced. 100 is its own.", "", 55},
+     "Ray traced. 100 is its own.", "", 30},
     {"dbgbuildinglightreach", "Building lights: reach (%)", SettingKind::Int, 100, 1000, 10, "Debug Lights", "",
      "How far its light reaches: where the falloff starts and ends.\n"
      "Ray traced. 100 is its own.", "", 100},
@@ -526,7 +526,7 @@ constexpr SettingDesc kSchema[] = {
     {"dbgparticlelightintensity", "Particles: intensity (%)", SettingKind::Float, 0.001f, 1000, 0.001f, "Debug Glow", "",
      "Particle effects that glow - spells, flames, candles - one\n"
      "light per emitter at the middle of its particles.\n"
-     "Ray traced. 100 is its own.", "", 100},
+     "Ray traced. 100 is its own.", "", 110},
     // How much of a glow card's bone pulse and of a fire's flicker the traced
     // light keeps (rt_glow_pulse.hpp scaledPulse, rt_lights::fireLight).
     {"dbgglowpulse", "Glow pulse strength (%)", SettingKind::Int, 0, 300, 10, "Debug Glow", "",
@@ -547,7 +547,7 @@ constexpr SettingDesc kSchema[] = {
      "300 three times the swing. Ray traced.", "", 100, "raytracedlighting"},
     {"dbgparticlelightreach", "Particles: reach (%)", SettingKind::Int, 100, 1000, 10, "Debug Glow", "",
      "How far its light reaches: where the falloff starts and ends.\n"
-     "Ray traced. 100 is its own.", "", 100},
+     "Ray traced. 100 is its own.", "", 150},
     // One emitter's glow as several lights along its particles' mean path
     // (rt_particle_lights.hpp), together as bright as the one.
     {"rtparticlelights", "Point lights per particle light", SettingKind::Int, 1, 10, 1, "Debug Glow", "",
@@ -562,7 +562,7 @@ constexpr SettingDesc kSchema[] = {
 
     {"dbgshadowdarkness", "Shadow darkness, ray traced (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "Ray traced",
      "How much of the light a shadow takes where the ray tracing has a\n"
-     "result. Without it the client's own 30% applies.", "", 65},
+     "result. Without it the client's own 30% applies.", "", 70},
     {"rtunitselfshadow", "Unit self-shadowing", SettingKind::Bool, 0, 0, 0,
      "Debug Shadows", "",
      "A character's or creature's own body shadows itself: an arm\n"
@@ -573,7 +573,7 @@ constexpr SettingDesc kSchema[] = {
      "How much of the traced sun shadows shows. Units near you cast\n"
      "theirs through the shadow map instead.", "", 100},
     {"dbgpointshadow", "Torch and lamp shadows (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "",
-     "How much of the shadows the torches and lamps cast shows.", "", 100},
+     "How much of the shadows the torches and lamps cast shows.", "", 70},
     // How far a unit's shadow of a lamp reaches from its body
     // (rtUnitShadowReach in rt_trace.comp): 5 as it always was. Here beside
     // the traced shadows' other strengths since the Ray Tracing page's two

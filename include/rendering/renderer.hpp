@@ -873,17 +873,17 @@ public:
         float sun = 1.0f;               ///< the sun's (or moon's) direct light
         float bakedLight = 1.0f;        ///< interiors' vertex colours, doodads' and units' floor colours
         float pointLights = 1.0f;       ///< ray traced: the torches', lamps' and fires' light
-        float bounce = 1.0f;            ///< ray traced: the probes' bounced light (Full mode)
+        float bounce = 0.5f;            ///< ray traced: the probes' bounced light (Full mode)
         /// Ray traced, per kind of point light (rt_lights::Source): its
         /// colour, and its falloff window's start and end.
-        float sourceIntensity[7] = {1.0f, 1.05f, 1.05f, 0.55f, 1.0f, 0.3f, 1.0f};
-        float sourceReach[7] = {1.5f, 1.5f, 1.5f, 1.0f, 1.0f, 1.0f, 1.0f};
+        float sourceIntensity[7] = {1.0f, 1.0f, 1.0f, 0.3f, 1.0f, 0.3f, 1.1f};
+        float sourceReach[7] = {1.5f, 1.5f, 1.5f, 1.0f, 1.0f, 1.0f, 1.5f};
         /// Ray traced, inside: a baked colour (an interior's vertex colours, a
         /// doodad's MODD colour, a unit's floor colour) shows at
         /// interiorBase + (1 - interiorBase) x lit, lit the point lights'
         /// shadowed light there over interiorFullAt, at most 1
         /// (rt_gbuffer.glsli rtInteriorShade). 1 leaves the bake as painted.
-        float interiorBase = 0.25f;
+        float interiorBase = 0.2f;
         float interiorFullAt = 1.0f;
         /// Ray traced: the most light the point lights, glows and lava
         /// together add to a place, its brightest channel, the hue kept
@@ -893,10 +893,10 @@ public:
         /// important of a crowded view's (rt_lights::lightLimit).
         int lightCountLimit = 512;  // rt_lights::kDefaultLightLimit
         // Shadows.
-        float shadowStrength = 0.65f;   ///< ray traced: how much of the light a shadow takes
+        float shadowStrength = 0.7f;   ///< ray traced: how much of the light a shadow takes
         float tracedSunShadow = 1.0f;   ///< ray traced: how much of the traced sun shadows shows
         float mapSunShadow = 1.0f;      ///< the shadow map's sun shadows (with or without ray tracing)
-        float pointShadow = 1.0f;       ///< ray traced: the point lights' shadows
+        float pointShadow = 0.7f;       ///< ray traced: the point lights' shadows
         float bakedLampShadow = 1.0f;   ///< ray traced: how much of a baked colour a lamp's shadow takes
         float occlusion = 1.0f;         ///< ray traced: ambient occlusion
         float bakedTerrainShadow = 1.0f;  ///< how much of the terrain's painted shadow (MCSH) shows
