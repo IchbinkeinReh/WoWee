@@ -3988,3 +3988,9 @@ wowee_add_test(test_eax_reverb
             ${CMAKE_SOURCE_DIR}/src/audio/eax_reverb.cpp
             ${CMAKE_SOURCE_DIR}/src/pipeline/dbc_loader.cpp
             ${TEST_COMMON_SOURCES})
+
+# ── test_nearest_enemy_filter ─────────────────────────────────────────
+# TargetNearestEnemy's filter (0x00518e40): attackable, alive, not flagged
+# dead, not lying dead.
+wowee_add_test(test_nearest_enemy_filter
+    SOURCES test_nearest_enemy_filter.cpp)

@@ -9,6 +9,7 @@
 #include "game/game_utils.hpp"
 #include "game/packet_parsers.hpp"
 #include "game/entity.hpp"
+#include "game/nearest_enemy_filter.hpp"
 #include "game/update_field_table.hpp"
 #include "game/spell_unit_target.hpp"
 #include "game/opcode_table.hpp"
@@ -2048,9 +2049,11 @@ void CombatHandler::targetEnemy(bool reverse) {
         const auto t = e.getType();
         if (t != ObjectType::UNIT && t != ObjectType::PLAYER) return false;
         auto* unit = dynamic_cast<Unit*>(&e);
-        if (!unit || unit->getHealth() == 0) return false;
-        // 0x00518e40: one the player may attack (0x00729740).
-        return owner_.unitMayAttack(owner_.getPlayerGuid(), guid);
+        if (!unit) return false;
+        // 0x00518e40: one the player may attack (0x00729740), alive, not
+        // flagged dead, not lying dead (nearest_enemy_filter.hpp).
+        return nearestEnemyCandidate(owner_.unitMayAttack(owner_.getPlayerGuid(), guid),
+                                     unit->getHealth(), unit->getDynamicFlags(), unit->getStandState());
     });
 }
 
@@ -2072,9 +2075,11 @@ void CombatHandler::targetNearestEnemyPlayer(bool reverse) {
     cycleTarget(reverse, "No enemy players in range.", [this](uint64_t guid, Entity& e) {
         if (e.getType() != ObjectType::PLAYER) return false;
         auto* unit = dynamic_cast<Unit*>(&e);
-        if (!unit || unit->getHealth() == 0) return false;
-        // 0x00518e40: one the player may attack (0x00729740).
-        return owner_.unitMayAttack(owner_.getPlayerGuid(), guid);
+        if (!unit) return false;
+        // 0x00518e40: one the player may attack (0x00729740), alive, not
+        // flagged dead, not lying dead (nearest_enemy_filter.hpp).
+        return nearestEnemyCandidate(owner_.unitMayAttack(owner_.getPlayerGuid(), guid),
+                                     unit->getHealth(), unit->getDynamicFlags(), unit->getStandState());
     });
 }
 
@@ -2143,8 +2148,9 @@ void CombatHandler::tabTarget(float playerX, float playerY, float playerZ) {
             return lootIt != owner_.localLootStateRef().end() &&
                    !lootIt->second.data.items.empty();
         }
-        // 0x00518e40: one the player may attack (0x00729740).
-        return owner_.unitMayAttack(owner_.getPlayerGuid(), guid);
+        // 0x00518e40 (nearest_enemy_filter.hpp).
+        return nearestEnemyCandidate(owner_.unitMayAttack(owner_.getPlayerGuid(), guid),
+                                     unit->getHealth(), unit->getDynamicFlags(), unit->getStandState());
     };
 
     // Restart the cycle after a pause - the player has moved on; the next tab
