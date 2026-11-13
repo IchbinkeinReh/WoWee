@@ -1,5 +1,35 @@
 # Changelog
 
+## [v3.1.44] - 2026-10-14
+
+### Fixed
+- **Tab skipped neutral mobs.** Tab and TargetNearestEnemy now pick hostile and neutral units alike, and skip friendly units, critters, and units the server marks unselectable, unattackable or immune to players (#161)
+- **Escape went straight to the game menu with a target selected.** It clears the target first, as the stock interface expects (#162)
+- **Key bindings marked to run on key release ran only on the press.** They now run their release half too (#163)
+- **Neutral units read as friend or enemy.** They are now neither, and `UnitReaction` answers for players as well as creatures, in either argument order (#165)
+- **The game clock stood still between server time packets.** It now advances at the server's speed and wraps at midnight (#166)
+- **Saved key bindings were not loaded until the bindings panel opened.** They load at startup, including a binding saved only in the second slot, and Default resets to the client's real defaults (#167)
+- **AFK, DND and `UnitPlayerControlled` read the wrong flag bits** (#168)
+- **/who asked only for players near your own level.** It asks for every level (#169)
+- **The resting state came from the rest XP byte and a misread quest packet.** It comes from the player flags only, and resets when switching characters (#170)
+- **Party frames stayed empty.** `GetPartyMember` reports filled slots, and raid party units resolve within your own subgroup (#171)
+- **WotLK shapeshift forms were read from the wrong field**, including on login while shapeshifted (#172)
+- **Spells that cost a percentage of base mana showed no cost** and were not checked against the right power type (#173)
+- **Taxi flights were detected with the wrong unit flag** (#174)
+- **Other players' vehicles were treated as your own** (#175)
+- **Minimap pings from other players had the wrong sender on WotLK** (#176)
+- **`/console` did nothing.** It sets console variables (#177)
+
+### Tests
+- A test harness that feeds server packets through the game handler (#179)
+
+### Build
+- The FidelityFX SDKs are fetched at their recorded submodule commits
+- CI retries stapling on transient network errors
+
+### Docs
+- Building StormLib from source on Arch (#158)
+
 ## [v3.1.43] - 2026-10-13
 
 ### Fixed
