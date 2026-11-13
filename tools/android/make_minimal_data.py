@@ -157,6 +157,29 @@ def copy_repo_json(source, out, dry_run):
     return count
 
 
+# The executable the extractor caches for Warden, and the DLLs the login
+# integrity hash reads beside it. They are not manifest entries, so no profile
+# keeps them, and a phone without them answers every Warden memory check as
+# unmapped and cannot compute the integrity hash - a server that checks either
+# sees a client that is not the real one.
+INTEGRITY_FILES = [
+    "expansions/*/misc/*.exe",
+    "expansions/*/misc/*.dll",
+]
+
+
+def copy_integrity_files(source, out, dry_run):
+    count = 0
+    for pattern in INTEGRITY_FILES:
+        for path in sorted(source.glob(pattern)):
+            if not path.is_file():
+                continue
+            count += 1
+            if not dry_run:
+                place(path, out / path.relative_to(source), copy=False)
+    return count
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -260,6 +283,12 @@ def main():
     extra = copy_repo_json(source, out, dry_run=False)
     print("wrote manifest.json with %d entries, plus %d expansion and opcode files."
           % (len(kept_lines), extra))
+    integrity = copy_integrity_files(source, out, dry_run=False)
+    print("copied %d client executable and DLL files for Warden and the login hash."
+          % integrity)
+    if integrity == 0:
+        print("no expansions/*/misc/WoW.exe in the source: a server that runs Warden "
+              "will see failed memory checks from this device.")
     print("\nOn a device, after opening the app once:\n"
           "  adb push %s/. /sdcard/Android/data/com.wowee.client/files/Data/\n"
           "  adb shell chmod -R a+rwX /sdcard/Android/data/com.wowee.client/files/Data" % out)
