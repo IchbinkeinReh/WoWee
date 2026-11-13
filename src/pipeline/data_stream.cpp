@@ -481,16 +481,11 @@ std::string DataStream::start(const StreamConfig& config, const std::string& cac
     const uint32_t chunk = list.value("chunkSize", 262144u);
 
     // This start's number in this cache folder: the chunks it reads are
-    // stamped with it, for the size limit (ChunkCache::setRun).
-    {
-        const fs::path runFile = fs::path(cacheRoot) / "runs.txt";
-        uint64_t runs = 0;
-        std::ifstream(runFile) >> runs;
-        runs = std::min<uint64_t>(runs + 1, 0xFFFFFFF0u);
-        std::ofstream(runFile, std::ios::trunc) << runs << '\n';
-        run_ = static_cast<uint32_t>(runs);
-        ChunkCache::setRun(run_);
-    }
+    // stamped with it, for the size limit (ChunkCache::setRun). Each loading
+    // screen takes the next one too (enforceCacheLimit), so the limit can
+    // drop what an earlier place read and keep the last one's.
+    runFile_ = (fs::path(cacheRoot) / "runs.txt").string();
+    nextRun();
     const fs::path mirror = fs::path(cacheRoot) / "mirror";
 
     entries_.clear();
@@ -551,6 +546,12 @@ std::string DataStream::start(const StreamConfig& config, const std::string& cac
     }
     active_ = !entries_.empty();
     applyCacheSettings();
+    // Each streamed archive's copy-on-write view, for the chunks held in
+    // memory past the disk limit.
+    MpqArchiveSet::ViewSink viewSink = [this](const std::string& path, uint8_t* view) {
+        if (ChunkCache* cache = cacheFor(path)) cache->setView(view);
+    };
+    MpqArchiveSet::setStreamViewSink(std::move(viewSink));
     MpqArchiveSet::setRangeSource([this](const std::string& path) -> MpqArchiveSet::RangeFetch {
         ChunkCache* cache = cacheFor(path);
         if (!cache) return {};
@@ -602,6 +603,8 @@ void DataStream::applyCacheSettings() {
         resetCacheClearSetting();
     }
     const uint64_t limit = cacheLimitForChoice(settings.limitChoice);
+    // Held during play too (enforceCacheLimit, and chunks past it in memory).
+    ChunkCache::setDiskLimit(limit);
     if (limit == 0) return;
     std::map<uint32_t, uint64_t> byRun;
     for (const auto& e : entries_) e->cache->addBytesByLastUse(byRun);
@@ -624,6 +627,47 @@ void DataStream::applyCacheSettings() {
     }
     LOG_WARNING("STREAM: cache held ", held, " bytes, limit ", limit, "; dropped what was last read before start ",
                 cutoff, " of ", run_, ": ", freed, " bytes in ", files, " files");
+}
+
+void DataStream::nextRun() {
+    uint64_t runs = 0;
+    std::ifstream(runFile_) >> runs;
+    runs = std::min<uint64_t>(std::max<uint64_t>(runs, run_) + 1, 0xFFFFFFF0u);
+    std::ofstream(runFile_, std::ios::trunc) << runs << '\n';
+    run_ = static_cast<uint32_t>(runs);
+    ChunkCache::setRun(run_);
+}
+
+void DataStream::enforceCacheLimit(const char* why) {
+    if (!active_) return;
+    // A new place: what it reads from here is stamped apart from what the
+    // last one read, so the limit drops places, longest ago first.
+    saveUse();
+    nextRun();
+    const uint64_t limit = ChunkCache::diskLimit();
+    if (limit == 0) return;
+    std::map<uint32_t, uint64_t> byRun;
+    for (const auto& e : entries_) e->cache->addBytesByLastUse(byRun);
+    uint64_t held = 0;
+    for (const auto& [run, bytes] : byRun) held += bytes;
+    const uint32_t cutoff = chooseLoadCutoff(byRun, limit, run_);
+    uint64_t freed = 0;
+    size_t files = 0;
+    if (cutoff != 0) {
+        for (const auto& e : entries_) {
+            const uint64_t dropped = e->cache->dropReadBefore(cutoff);
+            if (dropped == 0) continue;
+            freed += dropped;
+            ++files;
+        }
+    }
+    LOG_WARNING("STREAM: ", why, ": cache held ", held, " bytes on disk, limit ", limit,
+                cutoff ? "; dropped what was last read before start " + std::to_string(cutoff) + " of " +
+                             std::to_string(run_) + ": " + std::to_string(freed) + " bytes in " +
+                             std::to_string(files) + " files"
+                       : std::string("; nothing to drop"),
+                "; now ", ChunkCache::diskBytes(), " on disk, ", ChunkCache::memoryBytes(), " in memory only",
+                ChunkCache::diskBytes() > limit ? " (this start's own chunks are over the limit)" : "");
 }
 
 void DataStream::saveUse() {

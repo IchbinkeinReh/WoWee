@@ -115,10 +115,34 @@ public:
     bool saveUse();
     /// Bytes held, by the run that last read them.
     void addBytesByLastUse(std::map<uint32_t, uint64_t>& out) const;
-    /// Drops the chunks last read before run `cutoff`. Only while nothing
-    /// reads the copy - at start, before an archive maps it. Returns the
-    /// bytes dropped.
+    /// Drops the chunks last read before run `cutoff` and gives back their
+    /// room. Safe while the copy is mapped and read: every read stamps its
+    /// chunks with the current run under the same lock before it touches
+    /// them (ensure), so with `cutoff` at most the current run no chunk a
+    /// reader of this run holds can go; one dropped before a reader's ensure
+    /// is fetched again by it. Returns the bytes dropped.
     uint64_t dropReadBefore(uint32_t cutoff);
+
+    // ---- the limit during play -------------------------------------------
+    //
+    // On-disk bytes of all caches together are counted (diskBytes). With a
+    // disk limit set and reached, a fetched chunk is not written to the copy:
+    // it goes into the reader's copy-on-write view of the archive (setView),
+    // private memory of this process, and is held there for this session -
+    // readable, its SHA-256 checked like any other, but not in the on-disk
+    // bitmap, so the next start fetches it again. That memory is bounded
+    // (setMemoryLimit); past it chunks go to disk after all, past the limit.
+
+    /// The archive's mapped view, writable copy-on-write (MpqArchiveSet maps
+    /// streamed archives so); null while unmapped.
+    void setView(uint8_t* view);
+    static void setDiskLimit(uint64_t bytes);
+    static uint64_t diskLimit();
+    static uint64_t diskBytes();
+    static uint64_t memoryBytes();
+    static void setMemoryLimit(uint64_t bytes);
+    /// Chunks of this file held in memory only (this session).
+    [[nodiscard]] uint64_t chunksInMemory() const;
 
     /// Largest single request, in bytes.
     static constexpr uint64_t kMaxRequestBytes = 8ull * 1024 * 1024;
@@ -139,6 +163,13 @@ private:
     uint64_t fetched_ = 0;
     uint64_t requests_ = 0;
     bool loggedFailure_ = false;
+    uint8_t* view_ = nullptr;
+    std::vector<uint8_t> inMemory_;   // per chunk: held in the view only
+    uint64_t diskCounted_ = 0;        // this copy's bytes in the shared count
+    bool loggedMemoryFull_ = false;
+    bool present(uint64_t chunk) const {
+        return bitmap_.has(chunk) || (chunk < inMemory_.size() && inMemory_[static_cast<size_t>(chunk)] != 0);
+    }
     std::string usePath_;
     std::vector<uint32_t> lastUse_;   // per chunk: the run that last read it
     bool useDirty_ = false;
@@ -158,6 +189,13 @@ private:
 /// the newest start (or this one, `current`) read stays, even over the limit.
 uint32_t chooseUseCutoff(const std::map<uint32_t, uint64_t>& bytesByRun, uint64_t limit,
                          uint32_t current);
+
+/// The same at a loading screen, during play: every run before this one
+/// (`current`) may go, this run's chunks never - if dropping all the older
+/// ones is still not enough, that is where it stops. 0 when the cache is
+/// within nine tenths of the limit already.
+uint32_t chooseLoadCutoff(const std::map<uint32_t, uint64_t>& bytesByRun, uint64_t limit,
+                          uint32_t current);
 
 } // namespace pipeline
 } // namespace wowee
