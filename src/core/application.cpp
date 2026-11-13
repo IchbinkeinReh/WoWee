@@ -2422,6 +2422,21 @@ void Application::run() {
                     renderer->getCameraController()->processMouseMotion(event.motion);
                 }
                 else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
+                    // The side buttons over the world are keys to the binding
+                    // tables, BUTTON4 and BUTTON5 (0x0055e340), with the
+                    // modifiers held - over a frame they are its clicks.
+                    if ((event.button.button == SDL_BUTTON_X1 || event.button.button == SDL_BUTTON_X2) &&
+                        addonManager_ && addonsLoaded_ && !ImGui::GetIO().WantTextInput) {
+                        if (auto* engine = addonManager_->getLuaEngine()) {
+                            const SDL_Keymod mods = SDL_GetModState();
+                            const bool down = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+                            (void)engine->dispatchBindingKey(
+                                event.button.button == SDL_BUTTON_X1 ? addons::LuaEngine::kBindingKeyButton4
+                                                                     : addons::LuaEngine::kBindingKeyButton5,
+                                down && (mods & SDL_KMOD_SHIFT) != 0, down && (mods & SDL_KMOD_CTRL) != 0,
+                                down && (mods & SDL_KMOD_ALT) != 0, down, false);
+                        }
+                    }
                     renderer->getCameraController()->processMouseButton(event.button);
                 }
                 else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
@@ -7393,6 +7408,9 @@ void Application::render() {
                 buttons.left   = ImGui::IsMouseDown(ImGuiMouseButton_Left);
                 buttons.right  = ImGui::IsMouseDown(ImGuiMouseButton_Right);
                 buttons.middle = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
+                // ImGui's SDL3 backend numbers the side buttons 3 and 4.
+                buttons.button4 = ImGui::IsMouseDown(3);
+                buttons.button5 = ImGui::IsMouseDown(4);
                 engine->dispatchMouse(io.MousePos.x, io.MousePos.y,
                                       io.DisplaySize.y, buttons);
 
