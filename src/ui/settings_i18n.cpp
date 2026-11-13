@@ -634,9 +634,10 @@ constexpr SettingGerman kGerman[] = {
      nullptr, nullptr, nullptr},
     {"mousespeed",
      "Mausempfindlichkeit",
-     "Wie weit sich die Sicht bei einer Mausbewegung dreht. Das eigene Fenster des Spiels hatte hier "
-     "zwei Regler: einen dafür, wie schnell sich der Zeiger bewegt, den dieser Client nicht kennt, "
-     "und einen dafür, wie weit sich die Sicht dreht. Dieser Client legt beide auf diesen einen Wert.",
+     "Wie weit sich die Sicht bei einer Mausbewegung dreht: die Mausumsehgeschwindigkeit des Spiels "
+     "(cameraYawMoveSpeed). Die Geschwindigkeit des Zeigers selbst ist die Mausempfindlichkeit des "
+     "Spiels (mouseSpeed), die unter Windows die Zeigergeschwindigkeit des Systems setzt, solange "
+     "das Spiel den Fokus hat.",
      nullptr, "MOUSE_SENSITIVITY", nullptr},
     {"invertmouse",
      "Maus umkehren",

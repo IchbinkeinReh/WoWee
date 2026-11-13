@@ -270,15 +270,11 @@ struct LuaServices {
 
     /// Whether looking up drags the view down, for mouseInvertPitch.
     ///
-    /// There is deliberately no counterpart for mouseSpeed, which sits beside
-    /// it on the same panel: it is the pointer's speed, and this client keeps no
-    /// pointer speed of its own - the cursor is the operating system's. The
-    /// slider's range is declared after all (MousePanelOptions gives it 0.5 to
-    /// 1.5 and Mouse Look Speed 90 to 270, interfaceoptionspanels.lua:1622);
-    /// what has no counterpart is anything on the other end of that multiplier.
-    /// The look slider next to it does have one: cameraYawMoveSpeed is bound to
-    /// the same setting in kClientCVars on the client's own 0.00125 between its
-    /// degrees and the camera's.
+    /// mouseSpeed, beside it on the same panel, is the pointer's speed while
+    /// the game has the focus: core/pointer_speed, set by SetCVar directly.
+    /// The look slider next to it is cameraYawMoveSpeed, bound to the mouse
+    /// sensitivity setting in kClientCVars on the client's own 0.00125 between
+    /// its degrees and the camera's.
     /// mouseInvertPitch and gxVSync had a pair each here. Both are rows in
     /// kClientCVars now - the client has settings keys for them, which it did
     /// not when they were written, and a row costs nothing where a pair costs

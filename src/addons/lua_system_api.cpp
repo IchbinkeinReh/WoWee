@@ -26,6 +26,7 @@
 #include "game/known_titles.hpp"
 #include "game/movement_handler.hpp"   // the client-control table, for GetBattlefieldVehicleInfo's seventh value
 #include "core/open_url.hpp"
+#include "core/pointer_speed.hpp"
 #include "core/version.hpp"
 #include "core/config_paths.hpp"
 #include "ui/settings_schema.hpp"
@@ -783,6 +784,18 @@ static void loadStoredCVars() {
             cvarStartupValues()["camerayawmovespeed"] = moved;
         }
     }
+    // mouseSpeed held the camera's mouse-look sensitivity until it became the
+    // pointer's speed (core/pointer_speed): the store has the camera's number
+    // under it, 0.225 by default. Under the shipped slider's own minimum of
+    // 0.5 it can only be that, and as a pointer speed it would slow the cursor
+    // to a crawl, so it is dropped and the desktop's own speed is the value.
+    if (auto it = cvarStore().find("mousespeed"); it != cvarStore().end()) {
+        const float stored = static_cast<float>(std::atof(it->second.c_str()));
+        if (stored < 0.5f) {
+            cvarStore().erase(it);
+            cvarStartupValues().erase("mousespeed");
+        }
+    }
     LOG_INFO("CVars: loaded ", loaded, " from ", cvarStorePath());
 }
 
@@ -1111,6 +1124,9 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     // The horizon past the far clip at four times it, as registered and as
     // the renderer reads it.
     else if (n == "horizonfarclipscale") lua_pushstring(L, "4.0");
+    // The desktop's own pointer speed over ten, as the client registers it
+    // (0x00869630 into "%1.1f"): left alone, mouseSpeed changes nothing.
+    else if (n == "mousespeed") lua_pushstring(L, core::pointer_speed::desktopDefault());
     // Clicking open ground clears the target, which is the real client's
     // behaviour and this one's. Without saying so it fell to the generic zero,
     // and zero here means sticky targeting - so the checkbox would have shown
@@ -1651,15 +1667,7 @@ struct ClientCVarBinding {
 // drives. Naming the fields makes both of them see an empty table.
 constexpr ClientCVarBinding kClientCVars[] = {
     {"farclip",              "viewdistance"},
-    // Mouse Sensitivity. Its shipped range is 0.5 to 1.5, a multiplier around
-    // 1.0 for the pointer, and this client's sensitivity is an amount that runs
-    // 0.05 to 1.0 - so passed through unchanged the slowest setting that slider
-    // offered was two and a half times this client's default. The pointer's own
-    // speed is not something this client keeps, so the slider drives the look
-    // rate directly and is drawn on that rate's scale instead (kCVarRanges);
-    // Mouse Look Speed reads the same setting in its own units below.
-    {"mousespeed",           "mousespeed"},
-    // Mouse Look Speed, which is the setting above counted the way the client
+    // Mouse Look Speed, the camera's mouse-look sensitivity setting counted the way the client
     // counts it: it turns the view cameraYawMoveSpeed * 0.00125 degrees per
     // movement of the mouse (0x006020b0), so its shipped 90..270 slider is
     // 0.1125..0.3375 of this client's degrees. Scaled through the table rather
@@ -2261,6 +2269,9 @@ static void applyCVarSideEffects(lua_State* L, const std::string& key,
     // 1/600 of a degree per movement of the mouse per unit of it (0x006020b0).
     // Touching the look slider afterwards takes the pitch back to its share, as
     // moving that slider in the original writes its half of the pair too.
+    // Mouse Sensitivity: the pointer's own speed while the game has the focus
+    // (0x004015e0 -> 0x0086a070), not the camera's - see core/pointer_speed.
+    if (key == "mousespeed") core::pointer_speed::setMouseSpeed(static_cast<float>(std::atof(value.c_str())));
     if (key == "camerapitchmovespeed") {
         if (auto* svc = getLuaServices(L); svc && svc->getCameraController) {
             if (auto* cc = svc->getCameraController()) {
@@ -7738,17 +7749,6 @@ constexpr CVarRange kCVarRanges[] = {
     // movement, so the slider is drawn on its own numbers again instead of being
     // bent to the setting's scale, which is what let a 90 hand over a 90.
     {"camerayawmovespeed", 90.0f, 270.0f},
-    // Mouse Sensitivity, the same setting in the units this client's own camera
-    // counts it in. Shipped as 0.5 to 1.5, a multiplier around 1.0 for the
-    // pointer, which this client does not keep: the slider moves the view, so it
-    // is drawn on the view's range and its slowest setting was 2.5x the default.
-    //
-    // Those two numbers are Mouse Look Speed's 90 and 270 times the 0.00125
-    // between the two scales. The two sliders write one value, so what they
-    // reach has to be the same span - otherwise one can put the shared value
-    // where the other has no handle for it, which is what this table's own
-    // first finding was, seen from the other control.
-    {"mousespeed", 0.1125f, 0.3375f},
     // Max camera distance, as a multiple of the original client's limit. The
     // shipped table stops at 2; this client has always been willing to go
     // further, and did it through a checkbox of its own until this slider was

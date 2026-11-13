@@ -1,5 +1,6 @@
 #include "core/test_frame_shot.hpp"
 #include "core/stall_report.hpp"
+#include "core/pointer_speed.hpp"
 #include "core/platform.hpp"
 #include "core/application.hpp"
 #include "rendering/model_frame_view.hpp"
@@ -2379,6 +2380,11 @@ void Application::run() {
                     window && window->getVkContext() && window->getVkContext()->inBackground();
                 audio::AudioEngine::instance().setSuspended(
                     appInBackground || (!focused && !playInBackground));
+                // mouseSpeed, the pointer's speed while the game has the focus
+                // and the desktop's own otherwise (0x0086a2da; core/pointer_speed).
+                core::pointer_speed::setMouseSpeed(static_cast<float>(std::atof(
+                    addons::storedCVarValue("mouseSpeed", core::pointer_speed::desktopDefault()).c_str())));
+                core::pointer_speed::setActive(focused && !appInBackground);
             }
 
             // The map window's own events stop here. A click on the map is not
@@ -2971,6 +2977,8 @@ void Application::updateMapWindow() {
 }
 
 void Application::shutdown() {
+    // The desktop's own pointer speed back (core/pointer_speed).
+    core::pointer_speed::restore();
     if (pipeline::DataStream::instance().active()) {
         pipeline::DataStream::instance().saveUse();
         const auto t = pipeline::DataStream::instance().totals();

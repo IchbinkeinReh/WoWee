@@ -744,10 +744,10 @@ constexpr SettingDesc kSchema[] = {
     // above it - a config that already sits outside the game's reach stays on
     // show here rather than snapping to an end.
     {"mousespeed", "Mouse sensitivity", SettingKind::Float, 0.05f, 1.0f, 0.025f, "Camera", "Mouse",
-     "How far the view turns for a given movement of the mouse. The game's\n"
-     "own panel had two sliders here: one for how fast the pointer moves,\n"
-     "which this client does not keep, and one for how far the view turns.\n"
-     "This client puts both of them on this one value.", "", 0.225f},
+     "How far the view turns for a given movement of the mouse: the game's\n"
+     "Mouse Look Speed (cameraYawMoveSpeed). The pointer's own speed is the\n"
+     "game's Mouse Sensitivity (mouseSpeed), which sets the system pointer\n"
+     "speed while the game has the focus, on Windows.", "", 0.225f},
     {"invertmouse", "Invert mouse look", SettingKind::Bool, 0, 0, 0, "Camera", "",
      "Push the mouse forward to look up, as in a flight sim.", "", 0},
     // The yaw half of that pair. The game's own panel never had a row for it -
