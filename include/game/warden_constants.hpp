@@ -52,16 +52,6 @@ constexpr uint32_t WARDEN_WIN_VERSION_ADDRESS   = 0x7FFE026C;
 // Recent enough that the anti-AFK scan sees an active player.
 constexpr uint32_t WARDEN_LAST_HARDWARE_ACTION_AGE_MS = 2000;
 
-// The 37-byte memcpy routine the Warden module carries, which VMaNGOS's
-// "Warden Memory Read check" asks FIND_CODE_BY_HASH to find.
-inline constexpr uint8_t WARDEN_MEMCPY_PATTERN[37] = {
-    0x56, 0x57, 0xFC, 0x8B, 0x54, 0x24, 0x14, 0x8B,
-    0x74, 0x24, 0x10, 0x8B, 0x44, 0x24, 0x0C, 0x8B,
-    0xCA, 0x8B, 0xF8, 0xC1, 0xE9, 0x02, 0x74, 0x02,
-    0xF3, 0xA5, 0xB1, 0x03, 0x23, 0xCA, 0x74, 0x02,
-    0xF3, 0xA4, 0x5F, 0x5E, 0xC3
-};
-
 // ---------------------------------------------------------------------------
 // Check sizes (bytes)
 // ---------------------------------------------------------------------------
