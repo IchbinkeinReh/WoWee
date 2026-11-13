@@ -1000,11 +1000,50 @@ static int lua_GetActionTexture(lua_State* L) {
     return 1;
 }
 
-// IsCurrentAction(slot) → boolean
+// IsCurrentAction(slot) (0x005aad40 -> 0x005aa240): 1 while what the slot
+// holds is in use, else nil.
+static bool actionIsCurrent(lua_State* L, game::GameHandler* gh, int slot) {
+    const auto& bar = gh->getActionBar();
+    // A pet's action on the bonus bar (slots 120..131 while it holds the
+    // pet's, 0x005a78c0 / 0x005a79a0): a reaction is current while it is the
+    // pet's stance (type 6, 0x005a7980), a command while it is the pet's
+    // command or, for Attack, while the pet attacks (type 7, DAT_00c234c8
+    // byte 1, DAT_00c234dc); a spell by 0x00806030.
+    if (const auto pet = petActionRef(gh, slot)) {
+        if (pet->packed == 0) return false;
+        const uint32_t id = game::pet::petActionId(pet->packed);
+        const auto type = game::pet::petActionType(pet->packed);
+        if (type == game::pet::ActionType::Reaction) return id == gh->getPetReact();
+        if (type == game::pet::ActionType::Command)
+            return id == gh->getPetCommand() || (id == game::pet::kAttack && gh->isPetAttacking());
+        return gh->isCurrentSpell(game::pet::petSlotSpell(pet->packed));
+    }
+    if (slot < 0 || slot >= static_cast<int>(bar.size()) || bar[slot].isEmpty()) return false;
+    const auto& action = bar[slot];
+    switch (action.type) {
+        // The item a slot holds, or the item a macro shows (0x005a8070):
+        // current while a spell cast from it is in progress (0x00805fc0).
+        case game::ActionBarSlot::ITEM:
+            return gh->isCurrentItem(action.id);
+        case game::ActionBarSlot::MACRO: {
+            const MacroShown* m = macroShown(L, gh, action.id);
+            if (!m) return false;
+            if (m->result.item != 0) return gh->isCurrentItem(m->result.item);
+            return m->result.spell > 0 && gh->isCurrentSpell(static_cast<uint32_t>(m->result.spell));
+        }
+        // A spell (0x005a8c30): Attack by its effect (0x005a96d0, the
+        // player's auto-attack target), the rest by 0x00806030.
+        case game::ActionBarSlot::SPELL:
+            return gh->isCurrentSpell(action.id);
+        default:
+            return false;
+    }
+}
+
 static int lua_IsCurrentAction(lua_State* L) {
-    // Currently no "active action" tracking; return false
-    (void)L;
-    luaPushOneOrNil(L, 0);
+    auto* gh = getGameHandler(L);
+    const int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
+    luaPushOneOrNil(L, gh && actionIsCurrent(L, gh, slot) ? 1 : 0);
     return 1;
 }
 

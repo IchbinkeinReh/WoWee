@@ -250,3 +250,21 @@ TEST_CASE("a spell go miss shows what the server says happened", "[replay]") {
         CHECK(types == std::vector<wowee::game::CombatTextEntry::Type>{type});
     }
 }
+
+// IsCurrentSpell / IsCurrentAction's spell leg (0x00806030): Attack, whose
+// first effect is ATTACK (0x4e), is current from the swing's request until it
+// stops (Player_C +0xa20/+0xa24, the auto-attack target).
+TEST_CASE("Attack is the current spell while the player swings", "[replay][action]") {
+    Session s;
+    huntMob(s);
+    auto& attack = s.handler().spellNameCacheRef()[6603];
+    attack.name = "Attack";
+    attack.effectIds[0] = 0x4e;
+    CHECK_FALSE(s.handler().isCurrentSpell(6603));
+    s.handler().startAutoAttack(kMob);
+    CHECK(s.handler().isCurrentSpell(6603));
+    s.handler().stopAutoAttack();
+    CHECK_FALSE(s.handler().isCurrentSpell(6603));
+    // A spell the client has no record of is never current.
+    CHECK_FALSE(s.handler().isCurrentSpell(999999));
+}

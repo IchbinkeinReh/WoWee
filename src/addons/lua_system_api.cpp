@@ -9848,11 +9848,9 @@ void registerSystemLuaAPI(lua_State* L) {
             luaPushOneOrNil(L, on ? 1 : 0);
             return 1;
         }},
-                // IsAutoRepeatAction(slot) - the button flashes for as long as
-                // an auto-repeat is running. There are exactly two in 3.3.5,
-                // Auto Shot and the wand's Shoot, which is how IsAttackAction
-                // beside it identifies auto-attack: by id rather than by an
-                // attribute word this client does not cache.
+                // IsAutoRepeatAction(slot) (0x005a9c10 -> 0x005a9470): 1 while
+                // the slot's spell is the repeating one running (0x007fe130,
+                // DAT_00d397d0), not whenever Auto Shot or Shoot sits there.
                 {"IsAutoRepeatAction", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const int slot = static_cast<int>(luaL_optnumber(L, 1, 0)) - 1;
@@ -9861,8 +9859,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 const auto& bar = gh->getActionBar();
                 if (slot < static_cast<int>(bar.size()) &&
                     bar[slot].type == game::ActionBarSlot::SPELL) {
-                    constexpr uint32_t kAutoShot = 75, kShoot = 5019;
-                    repeating = bar[slot].id == kAutoShot || bar[slot].id == kShoot;
+                    repeating = bar[slot].id != 0 && bar[slot].id == gh->autoRepeatSpellId();
                 }
             }
             luaPushOneOrNil(L, repeating);

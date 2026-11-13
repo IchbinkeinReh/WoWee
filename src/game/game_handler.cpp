@@ -3874,6 +3874,44 @@ bool GameHandler::formSpellInEffect(uint32_t spellId) const {
                            shapeshiftFormPending_ && spellAppliesAura(spellId, kAuraModShapeshift));
 }
 
+bool GameHandler::isCurrentSpell(uint32_t spellId) const {
+    // 0x00806030. A spell the client has no record of is not current.
+    const auto it = spellNameCache_.find(spellId);
+    if (spellId == 0 || it == spellNameCache_.end()) return false;
+    const auto& spell = it->second;
+    // 0x00805f30: one of the spells in progress (the list at 0x00af5254, a
+    // spell object's +0x20) - the cast or channel under way, the repeating
+    // shot.
+    if ((isCasting() && getCurrentCastSpellId() == spellId) || autoRepeatSpellId() == spellId) return true;
+    // Effect 0 ATTACK (0x4e): while the player swings (Player_C +0xa20/+0xa24,
+    // the auto-attack target).
+    // The target is set when the swing is asked for, ahead of the server's
+    // SMSG_ATTACKSTART: the request counts.
+    if (spell.effectIds[0] == 0x4e) return hasAutoAttackIntent() || isAutoAttacking();
+    // Effect 0 TRADE_SKILL (0x2f): while its profession's window is open
+    // (0x0071a670, DAT_00c235a4), and not a linked one (DAT_00c235e4).
+    if (spell.effectIds[0] == 0x2f) {
+        return spellHandler_ && spellHandler_->isCraftingWindowOpen() &&
+               spellHandler_->getCraftingSpellId() == spellId;
+    }
+    // A mount (effect 0's aura 78, 0x008009b0) or a shapeshift (any aura 36,
+    // 0x007fde50(.., 0x24)): while its aura is on the player (0x00802cb0).
+    if (spell.effectAuraIds[0] == 78 || spellAppliesAura(spellId, kAuraModShapeshift))
+        return formSpellInEffect(spellId);
+    return false;
+}
+
+bool GameHandler::isCurrentItem(uint32_t itemId) const {
+    // 0x00805fc0: a spell in progress whose casting item (the object its
+    // +0x8/+0xc names) is this item.
+    if (itemId == 0 || !spellHandler_) return false;
+    const uint64_t itemGuid = spellHandler_->currentCastItemGuid();
+    if (itemGuid == 0) return false;
+    const auto item = getEntityManager().getEntity(itemGuid);
+    const uint16_t entryField = fieldIndex(UF::OBJECT_FIELD_ENTRY);
+    return item && entryField != 0xFFFF && item->getField(entryField) == itemId;
+}
+
 uint32_t GameHandler::getBonusActionBarOffset() const {
     // 0x005a83c0 (DAT_00c1e59c).
     return bonusBarOffset(petActionsOnBonusBar_ || overrideBarActive_, shapeshiftFormRow(shapeshiftFormId_));
