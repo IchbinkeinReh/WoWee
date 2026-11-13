@@ -1320,6 +1320,8 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "showfps",       .asBool  = &SettingsPanel::pendingShowFps},
     {.key = "animatedportraits", .asBool = &SettingsPanel::pendingAnimatedPortraits},
     {.key = "checkforupdates",   .asBool  = &SettingsPanel::pendingCheckForUpdates},
+    {.key = "streamcachelimit",  .asInt   = &SettingsPanel::pendingStreamCacheLimit},
+    {.key = "streamcacheclear",  .asBool  = &SettingsPanel::pendingStreamCacheClear},
     {.key = "micromenu",     .asBool  = &SettingsPanel::pendingShowMicroMenu},
     {.key = "chatboxvisible", .asBool = &SettingsPanel::pendingChatBoxVisible},
     {.key = "bagscale",      .asFloat = &SettingsPanel::pendingBagScale},

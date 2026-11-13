@@ -1346,6 +1346,18 @@ constexpr SettingDesc kSchema[] = {
      "Ask GitHub once at startup whether a newer WoWee has been\n"
      "released, and say so on the login screen. Nothing is downloaded\n"
      "or installed, and nothing about you is sent.", "", 1},
+    // The streaming data mode's local copy (pipeline/data_stream). Read at
+    // start, before the archives open: a chunk cannot be taken from under a
+    // mapped archive, so both act at the next start.
+    {"streamcachelimit", "Stream cache limit", SettingKind::Enum, 0, 4, 1, "Gameplay", "Streaming",
+     "When the game data is streamed from a server: the most the local\n"
+     "copy may hold. Checked at each start: what was read longest ago\n"
+     "goes first, and is fetched again when it is needed.",
+     "None|1 GB|2 GB|5 GB|10 GB", 0},
+    {"streamcacheclear", "Clear stream cache", SettingKind::Bool, 0, 0, 0, "Gameplay", "",
+     "Empty the streamed game data's local copy at the next start.\n"
+     "Everything is fetched from the server again as it is needed.\n"
+     "Turns itself off once done.", "", 0},
 };
 
 }  // namespace

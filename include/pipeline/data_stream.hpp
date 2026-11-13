@@ -73,14 +73,29 @@ public:
         uint64_t fetchedBytes = 0; ///< this run
         uint64_t requests = 0;     ///< this run
         uint64_t localBytes = 0;   ///< chunks held in the cache (all runs)
+        /// Reads (a game file, an archive's tables) that had to fetch, this run.
+        uint64_t filesFetched = 0;
+        /// Seconds since the last fetch finished; negative before the first.
+        double secondsSinceFetch = -1.0;
     };
     [[nodiscard]] Totals totals() const;
+
+    /// Saves which chunks this run read (the size limit's "last read"); at
+    /// exit and now and then while playing.
+    void saveUse();
+
+    /// The cache size limit (Settings: stream_cache_limit), in bytes; 0 = none.
+    /// Choices by index: none, 1, 2, 5, 10 GB.
+    static uint64_t cacheLimitForChoice(int choice);
 
     /// The default cache folder for a stream URL: <per-user data>/stream-cache/<host>
     /// (WOWEE_STREAM_CACHE overrides the folder).
     static std::string defaultCacheRoot(const StreamUrl& url);
 
 private:
+    /// The settings' clear and size limit, at start (see the .cpp).
+    void applyCacheSettings();
+
     struct Entry {
         std::string rel;
         uint64_t size = 0;
@@ -91,6 +106,7 @@ private:
     std::vector<std::unique_ptr<Entry>> entries_;
     std::map<std::string, Entry*> byLocal_;   // normalised local path -> entry
     bool active_ = false;
+    uint32_t run_ = 1;   // this start's number in the cache folder
 };
 
 /// Normalised form of a local path for the lookups above (absolute, generic

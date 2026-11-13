@@ -952,6 +952,10 @@ bool Application::initialize() {
                 mirror = pipeline::DataStream::instance().start(
                     {stream.url, stream.key}, pipeline::DataStream::defaultCacheRoot(url), error);
             }
+            // The cache's clear is asked for once (data_stream reset its row in
+            // settings.cfg); the settings were read before this, so the panel's
+            // copy goes back to 0 too, or its next save would ask again.
+            if (uiManager) uiManager->getGameScreen().getSettingsPanel().setSettingValue("streamcacheclear", "0");
             if (!mirror.empty()) {
                 dataPath = mirror;
                 // Everything that looks the data folder up again finds the same.
@@ -2929,6 +2933,7 @@ void Application::updateMapWindow() {
 
 void Application::shutdown() {
     if (pipeline::DataStream::instance().active()) {
+        pipeline::DataStream::instance().saveUse();
         const auto t = pipeline::DataStream::instance().totals();
         LOG_WARNING("STREAM: at exit: fetched ", t.fetchedBytes, " bytes in ", t.requests,
                     " requests this run; cache holds ", t.localBytes, " of ", t.mpqBytes,
@@ -6229,6 +6234,9 @@ void Application::update(float deltaTime) {
         const auto now = std::chrono::steady_clock::now();
         if (now - lastReport > std::chrono::seconds(10)) {
             lastReport = now;
+            // Which chunks were read, for the cache limit; kept now and then
+            // so a crash loses little of it.
+            pipeline::DataStream::instance().saveUse();
             const auto t = pipeline::DataStream::instance().totals();
             if (t.fetchedBytes != lastFetched) {
                 lastFetched = t.fetchedBytes;

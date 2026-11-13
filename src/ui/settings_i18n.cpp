@@ -1333,6 +1333,17 @@ constexpr SettingGerman kGerman[] = {
      "Anmeldebildschirm sagen. Es wird nichts heruntergeladen oder installiert, und nichts über "
      "Euch wird gesendet.",
      nullptr, nullptr, nullptr},
+    {"streamcachelimit",
+     "Stream-Cache-Grenze",
+     "Wenn die Spieldaten von einem Server gestreamt werden: wie viel die lokale Kopie höchstens "
+     "hält. Geprüft bei jedem Start: was am längsten nicht gelesen wurde, geht zuerst und wird "
+     "bei Bedarf neu geladen.",
+     "Keine|1 GB|2 GB|5 GB|10 GB", nullptr, nullptr},
+    {"streamcacheclear",
+     "Stream-Cache leeren",
+     "Die lokale Kopie der gestreamten Spieldaten beim nächsten Start leeren. Alles wird bei "
+     "Bedarf neu vom Server geladen. Schaltet sich danach selbst aus.",
+     nullptr, nullptr, nullptr},
 };
 
 struct Pair {
@@ -1430,6 +1441,7 @@ constexpr Pair kSections[] = {
     {"Tooltips", "Tooltips"},
     {"Trackers", "Anzeigen"},
     {"Updates", "Aktualisierungen"},
+    {"Streaming", "Streaming"},
     {"View", "Ansicht"},
     {"Voices", "Stimmen"},
     {"Water", "Wasser"},

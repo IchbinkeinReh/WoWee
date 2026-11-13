@@ -1,4 +1,5 @@
 #include "ui/ui_manager.hpp"
+#include "ui/stream_progress.hpp"
 #include "core/platform.hpp"
 #include "ui/safe_area.hpp"
 #include <cstdio>
@@ -552,6 +553,12 @@ void UIManager::render(core::AppState appState, auth::AuthHandler* authHandler, 
             break;
     }
 
+    // The streaming data mode's fetch on the screens before the world: the
+    // character screen's models come from the server too.
+    if (appState != core::AppState::IN_GAME) {
+        const ImVec2 display = ImGui::GetIO().DisplaySize;
+        drawStreamProgress(ImGui::GetForegroundDrawList(), display.x, display.y);
+    }
 }
 
 void UIManager::drawGloveCursor() {

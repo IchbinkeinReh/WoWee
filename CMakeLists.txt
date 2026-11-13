@@ -1169,6 +1169,7 @@ set(WOWEE_SOURCES
     src/ui/first_run_screen.cpp
     src/ui/data_folder_picker.cpp
     src/ui/data_folder_screen.cpp
+    src/ui/stream_progress.cpp
     src/ui/realm_screen.cpp
     src/ui/character_create_screen.cpp
     src/ui/character_screen.cpp
