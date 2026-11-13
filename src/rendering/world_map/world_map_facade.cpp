@@ -17,7 +17,6 @@
 #include "rendering/world_map/layers/poi_marker_layer.hpp"
 #include "rendering/world_map/layers/quest_poi_layer.hpp"
 #include "rendering/world_map/layers/corpse_marker_layer.hpp"
-#include "rendering/world_map/layers/rare_tracker_layer.hpp"
 #include "rendering/world_map/layers/zone_highlight_layer.hpp"
 #include "rendering/world_map/layers/coordinate_display.hpp"
 #include "rendering/world_map/layers/subzone_tooltip_layer.hpp"
@@ -156,12 +155,10 @@ struct WorldMapFacade::Impl {
 
     // Typed layer pointers for setters (non-owning references into overlay)
     PartyDotLayer* partyDotLayer = nullptr;
-    std::vector<RareMark> rares;
     TaxiNodeLayer* taxiNodeLayer = nullptr;
     POIMarkerLayer* poiMarkerLayer = nullptr;
     QuestPOILayer* questPOILayer = nullptr;
     CorpseMarkerLayer* corpseMarkerLayer = nullptr;
-    RareTrackerLayer* rareTrackerLayer = nullptr;
     ZoneHighlightLayer* zoneHighlightLayer = nullptr;
     PlayerMarkerLayer* playerMarkerLayer = nullptr;
 
@@ -369,11 +366,6 @@ void WorldMapFacade::Impl::initOverlayLayers() {
     auto cmLayer = std::make_unique<CorpseMarkerLayer>();
     corpseMarkerLayer = cmLayer.get();
     overlay.addLayer(std::move(cmLayer));
-
-    // Nearby rare/rare-elite tracker
-    auto rtLayer = std::make_unique<RareTrackerLayer>();
-    rareTrackerLayer = rtLayer.get();
-    overlay.addLayer(std::move(rtLayer));
 
     // Coordinate display
     overlay.addLayer(std::make_unique<CoordinateDisplay>());
@@ -1078,10 +1070,6 @@ void WorldMapFacade::setPartyDots(std::vector<PartyDot> dots) {
     impl_->partyDots = std::move(dots);
 }
 
-void WorldMapFacade::setRares(std::vector<RareMark> rares) {
-    impl_->rares = std::move(rares);
-}
-
 void WorldMapFacade::setTaxiNodes(std::vector<TaxiNode> nodes) {
     impl_->taxiNodes = std::move(nodes);
 }
@@ -1320,7 +1308,6 @@ void WorldMapFacade::Impl::renderImGuiOverlay(const glm::vec3& playerRenderPos,
 
         // Update layer data pointers
         if (partyDotLayer) partyDotLayer->setDots(partyDots);
-        if (rareTrackerLayer) rareTrackerLayer->setRares(rares);
         if (taxiNodeLayer) taxiNodeLayer->setNodes(taxiNodes);
         if (poiMarkerLayer) poiMarkerLayer->setMarkers(data.poiMarkers());
         if (questPOILayer) questPOILayer->setPois(questPois);

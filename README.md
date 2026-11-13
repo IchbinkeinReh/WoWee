@@ -111,10 +111,9 @@ is the original one.
 
 **Interface extras**
 
-- Optional animated portraits, a damage meter, a cooldown tracker, a rare-mob
-  tracker, a colourblind mode, an equipment manager and more, all under
-  Interface → WoWee. Blizzard's own FrameXML interface and your addons still
-  load as usual.
+- Optional animated portraits, a colourblind mode, an equipment manager and
+  more, all under Interface → WoWee. Blizzard's own FrameXML interface and
+  your addons still load as usual.
 - A built-in update check against this repository's releases.
 
 ## What works

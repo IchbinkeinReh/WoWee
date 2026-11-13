@@ -2003,15 +2003,26 @@ void GameHandler::registerCoreOpcodes() {
     for (auto op : {Opcode::SMSG_LEVELUP_INFO, Opcode::SMSG_LEVELUP_INFO_ALT}) {
         dispatchTable_[op] = [this](network::Packet& packet) {
             // Server-authoritative level-up event.
-            // WotLK layout: uint32 newLevel + uint32 hpDelta + uint32 manaDelta + 5x uint32 statDeltas
+            //
+            // The level, the health gained, one delta per power type, then
+            // the five stats (0x006e2e90 case 0x1d4: 1 + 1 + 7 + 5 uint32s
+            // in this build; the 1.12 and 2.4.3 servers send 5 powers). The
+            // first power is mana, the third argument of PLAYER_LEVEL_UP.
+            // The stats used to be read straight after mana, so the chat's
+            // "Stärke steigt um N" lines showed the rage, focus, energy...
+            // deltas instead - zero, mostly - and never the stats.
             if (packet.hasRemaining(4)) {
                 uint32_t newLevel = packet.readUInt32();
                 if (newLevel > 0) {
-                    // Parse stat deltas (WotLK layout has 7 more uint32s)
                     lastLevelUpDeltas_ = {};
-                    if (packet.hasRemaining(28)) {
-                        lastLevelUpDeltas_.hp    = packet.readUInt32();
-                        lastLevelUpDeltas_.mana  = packet.readUInt32();
+                    const size_t words = packet.getRemainingSize() / 4;
+                    if (words >= 2 + 5) {
+                        const size_t powers = words - 1 - 5;
+                        lastLevelUpDeltas_.hp = packet.readUInt32();
+                        for (size_t i = 0; i < powers; ++i) {
+                            const uint32_t delta = packet.readUInt32();
+                            if (i == 0) lastLevelUpDeltas_.mana = delta;
+                        }
                         lastLevelUpDeltas_.str   = packet.readUInt32();
                         lastLevelUpDeltas_.agi   = packet.readUInt32();
                         lastLevelUpDeltas_.sta   = packet.readUInt32();
@@ -2048,9 +2059,12 @@ void GameHandler::registerCoreOpcodes() {
                         // the level was an error on every level gained - and
                         // every one of these was already parsed above.
                         //
-                        // Talent points are zero: the packet carries no such
-                        // delta, and zero is what stops the interface claiming
-                        // a point was gained.
+                        // Talent points: the packet carries none, and the
+                        // client sends 1 from level 10 on and 0 below (the
+                        // fourth of 0x006e2e90's nine, its stat loop's last
+                        // counter) - one point a level, which is how a
+                        // 3.3.5a character gets them; chatframe.lua says
+                        // LEVEL_UP_CHAR_POINTS for it.
                         // 0x006e2e90's SMSG_LEVELUP_INFO: the tutorials a
                         // level opens, before PLAYER_LEVEL_UP.
                         {
@@ -2068,7 +2082,7 @@ void GameHandler::registerCoreOpcodes() {
                             std::to_string(newLevel),
                             std::to_string(lastLevelUpDeltas_.hp),
                             std::to_string(lastLevelUpDeltas_.mana),
-                            "0",
+                            newLevel > 9 ? "1" : "0",
                             std::to_string(lastLevelUpDeltas_.str),
                             std::to_string(lastLevelUpDeltas_.agi),
                             std::to_string(lastLevelUpDeltas_.sta),

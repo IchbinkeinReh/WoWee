@@ -337,15 +337,11 @@ private:
     void showMinimapHover();
     void renderMinimapNpcDots(const MinimapFrame& frame, const EntityList& units,
                               const EntrySet& questEntries);
-    void renderMinimapRares(const MinimapFrame& frame, const EntityList& units,
-                            game::GameHandler& gameHandler);
     void renderMinimapPlayerDots(const MinimapFrame& frame, const EntityList& players,
                                  game::GameHandler& gameHandler);
     void renderMinimapObjectDots(const MinimapFrame& frame, const EntityList& objects,
                                  const EntrySet& questGoEntries,
                                  game::GameHandler& gameHandler);
-    void renderMinimapChests(const MinimapFrame& frame, const EntityList& objects,
-                             game::GameHandler& gameHandler);
 
     void renderMinimapObjectBlips(const MinimapFrame& frame, const EntityList& units,
                                   const EntityList& players, const EntityList& gameObjects,

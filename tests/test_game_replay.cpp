@@ -268,3 +268,31 @@ TEST_CASE("Attack is the current spell while the player swings", "[replay][actio
     // A spell the client has no record of is never current.
     CHECK_FALSE(s.handler().isCurrentSpell(999999));
 }
+
+// Player::GiveLevel's SMSG_LEVELUP_INFO: the level, the health gained, one
+// delta per power type (MAX_POWERS, 7 in 3.3.5a), then the five stats. The
+// client hands nine of them to PLAYER_LEVEL_UP (0x006e2e90 case 0x1d4): level,
+// health, the first power, talent points (1 from level 10), the five stats -
+// which chatframe.lua turns into its LEVEL_UP lines.
+TEST_CASE("a level gained reaches PLAYER_LEVEL_UP with the stats after the powers",
+          "[replay][levelup]") {
+    // Before the session: its teardown still fires events into the callback.
+    std::vector<std::vector<std::string>> levelUps;
+    Session s;
+    s.handler().setAddonEventCallback(
+        [&levelUps](const std::string& name, const std::vector<std::string>& args) {
+            if (name == "PLAYER_LEVEL_UP") levelUps.push_back(args);
+        });
+    wowee::network::Packet p(wowee::game::wireOpcode(wowee::game::Opcode::SMSG_LEVELUP_INFO));
+    p.writeUInt32(42);                                      // level
+    p.writeUInt32(150);                                     // health
+    for (uint32_t power : {80u, 0u, 0u, 0u, 0u, 0u, 0u}) {  // mana, rage, focus, energy, happiness, runes, runic power
+        p.writeUInt32(power);
+    }
+    for (uint32_t stat : {1u, 2u, 3u, 4u, 5u}) p.writeUInt32(stat);
+    s.receive(p);
+
+    REQUIRE(levelUps.size() == 1);
+    CHECK(levelUps[0] == std::vector<std::string>{"42", "150", "80", "1", "1", "2", "3", "4", "5"});
+    s.handler().setAddonEventCallback({});
+}

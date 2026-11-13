@@ -3023,7 +3023,6 @@ public:
     void cancelTempEnchantment(uint8_t handIndex);
     void closeLoot();
 
-    bool isGatherGameObject(uint64_t guid) const;
     /// What the pointer makes of a game object: whether it may rest on it -
     /// a tooltip, a highlight (0x0070f580, with the quest it is kept for in
     /// the log) - and whether a click on it is a use (the type handler's

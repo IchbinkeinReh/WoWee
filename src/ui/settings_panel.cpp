@@ -1392,9 +1392,6 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "leftbaroffsety",  .asFloat = &SettingsPanel::pendingLeftBarOffsetY},
 
     // --- Combat and HUD ---
-    {.key = "cooldowntracker",    .asBool  = &SettingsPanel::showCooldownTracker_},
-    {.key = "raretracker",        .asBool  = &SettingsPanel::showRareTracker_},
-    {.key = "chesttracker",       .asBool  = &SettingsPanel::showChestTracker_},
     {.key = "damageflash",        .asBool  = &SettingsPanel::damageFlashEnabled_},
     {.key = "lowhealthvignette",  .asBool  = &SettingsPanel::lowHealthVignetteEnabled_},
 

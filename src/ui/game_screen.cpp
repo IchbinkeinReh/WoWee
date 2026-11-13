@@ -402,7 +402,6 @@ void GameScreen::render(game::GameHandler& gameHandler) {
 
     // Set up chat bubble callback (once) and cache game handler in ChatPanel
     chatPanel_.setupCallbacks(gameHandler);
-    toastManager_.setupCallbacks(gameHandler);
 
     // Set up appearance-changed callback to refresh inventory preview (barber shop, etc.)
     if (!appearanceCallbackSet_) {
@@ -716,8 +715,6 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     reportRecordingFailure();
 
     // ---- New UI elements ----
-    auto spellIconFn = [this](uint32_t id, pipeline::AssetManager* am) { return getSpellIcon(id, am); };
-    combatUI_.renderCooldownTracker(gameHandler, settingsPanel_, spellIconFn);
     renderNameplates(gameHandler);  // names over heads and nameplates (0x007e5640, 0x0098f790)
     commitMouseover(gameHandler);
     // The extra action bars as the realm keeps them for the character
@@ -1022,30 +1019,6 @@ void GameScreen::render(game::GameHandler& gameHandler) {
             float pulse  = 0.55f + 0.45f * std::sin(static_cast<float>(ImGui::GetTime()) * 9.4f);
             int   alpha  = static_cast<int>(danger * pulse * 90.0f);  // max ~90 alpha, subtle
             drawScreenEdgeVignette(200, 0, 0, alpha, 0.15f);
-        }
-    }
-
-    // Level-up golden burst overlay
-    if (toastManager_.levelUpFlashAlpha > 0.0f) {
-        toastManager_.levelUpFlashAlpha -= ImGui::GetIO().DeltaTime * 1.0f;  // fade over ~1 second
-        if (toastManager_.levelUpFlashAlpha < 0.0f) toastManager_.levelUpFlashAlpha = 0.0f;
-
-        const int alpha = static_cast<int>(toastManager_.levelUpFlashAlpha * 160.0f);
-        drawScreenEdgeVignette(255, 210, 50, alpha, 0.18f);
-
-        // "Level X!" text in the center during the first half of the animation
-        if (toastManager_.levelUpFlashAlpha > 0.5f && toastManager_.levelUpDisplayLevel > 0) {
-            ImDrawList* fg = ImGui::GetForegroundDrawList();
-            const float W = ImGui::GetIO().DisplaySize.x;
-            const float H = ImGui::GetIO().DisplaySize.y;
-            char lvlText[32];
-            snprintf(lvlText, sizeof(lvlText), "Level %u!", toastManager_.levelUpDisplayLevel);
-            ImVec2 ts = ImGui::CalcTextSize(lvlText);
-            float tx = (W - ts.x) * 0.5f;
-            float ty = H * 0.35f;
-            // Large shadow + bright gold text
-            fg->AddText(nullptr, 28.0f, ImVec2(tx + 2, ty + 2), IM_COL32(0, 0, 0, alpha), lvlText);
-            fg->AddText(nullptr, 28.0f, ImVec2(tx, ty), IM_COL32(255, 230, 80, alpha), lvlText);
         }
     }
 
