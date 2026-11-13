@@ -893,10 +893,7 @@ constexpr SettingDesc kSchema[] = {
     // Combat & HUD until 2026-09-06, when the fighting rows went to a Combat
     // page of their own and the nameplate rows to Names, and the game's own
     // Buffs page came here.
-    {"dpsmeter", "Damage meter", SettingKind::Bool, 0, 0, 0, "HUD", "Trackers",
-     "Show your damage and healing per second above the action bar\n"
-     "while you are in combat.", "", 0},
-    {"cooldowntracker", "Cooldown tracker", SettingKind::Bool, 0, 0, 0, "HUD", "",
+    {"cooldowntracker", "Cooldown tracker", SettingKind::Bool, 0, 0, 0, "HUD", "Trackers",
      "Show your longer cooldowns counting down beside the action bar.", "", 0},
     {"raretracker", "Rare tracker", SettingKind::Bool, 0, 0, 0, "HUD", "",
      "Mark rare creatures near you on the minimap and the world map.", "", 0},
