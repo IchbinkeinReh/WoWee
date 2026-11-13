@@ -3,6 +3,7 @@
 #include "core/input.hpp"
 #include "core/logger.hpp"
 #include "rendering/camera_controller.hpp"
+#include "ui/safe_area.hpp"
 
 #include <imgui.h>
 
@@ -66,12 +67,32 @@ void TouchControls::handleEvent(const SDL_Event& event, int windowWidth, int win
     const float y = event.tfinger.y * h;
     const SDL_FingerID id = event.tfinger.fingerID;
 
+    // The zone is a fraction of what the display leaves usable, not of the
+    // whole panel: a fraction of the panel put its edge under the cutout and
+    // its bottom under the gesture bar on a phone that has them. The same safe
+    // area the interface is laid out in (ui/safe_area.hpp), in window units.
+    const safe_area::Insets& inset = safe_area::current();
+    float zoneLeft = inset.left, zoneTop = inset.top;
+    float zoneW = w - inset.left - inset.right, zoneH = h - inset.top - inset.bottom;
+    if (zoneW <= 1.0f || zoneH <= 1.0f) {
+        zoneLeft = zoneTop = 0.0f;
+        zoneW = w;
+        zoneH = h;
+    }
+
     if (event.type == SDL_EVENT_FINGER_DOWN) {
+        // A press outside the safe area - on the gesture bar, in the cutout's
+        // corner - is the system's or nobody's. It is left to be a mouse, and
+        // never becomes a stick, a look or half of a pinch.
+        if (x < zoneLeft || x >= zoneLeft + zoneW || y < zoneTop || y >= zoneTop + zoneH) {
+            LOG_DEBUG("touch: finger down at ", x, ",", y, " outside the safe area");
+            return;
+        }
         // The interface is asked first, so a bag or an action button drawn over
         // the corner still gets the press. A stick that ate those would be
         // maddening, and the corner is only a default.
-        if (stickFingerId_ == kNoFinger && x < w * kStickZoneWidth &&
-            y > h * kStickZoneTop && !ImGui::GetIO().WantCaptureMouse) {
+        if (stickFingerId_ == kNoFinger && x < zoneLeft + zoneW * kStickZoneWidth &&
+            y > zoneTop + zoneH * kStickZoneTop && !ImGui::GetIO().WantCaptureMouse) {
             LOG_DEBUG("touch: stick claimed at ", x, ",", y);
             stickFingerId_ = id;
             stickOriginX_ = x;

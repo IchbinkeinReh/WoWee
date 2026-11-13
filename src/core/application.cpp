@@ -2401,6 +2401,24 @@ void Application::run() {
                 ui::touchControls().handleEvent(event, tw, th);
             }
 
+            // A fold, a rotation, split screen, a move to another display, or
+            // a safe area that grew or shrank. The swapchain follows the pixel
+            // size, the interface the density and the safe area, and a finger
+            // held through it is no longer where it was.
+            if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
+                event.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED ||
+                event.type == SDL_EVENT_DISPLAY_CONTENT_SCALE_CHANGED ||
+                event.type == SDL_EVENT_WINDOW_SAFE_AREA_CHANGED ||
+                event.type == SDL_EVENT_WINDOW_RESIZED) {
+                if (window && window->getVkContext() &&
+                    (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
+                     event.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED)) {
+                    window->getVkContext()->markSwapchainDirty();
+                }
+                if (uiManager) uiManager->refreshInterfaceScale();
+                ui::touchControls().displayChanged();
+            }
+
             // Back is Escape. A phone has no Escape key, and Escape is what
             // closes the map, the bags and every dialog, and opens the game
             // menu - so without this the map could be opened and not closed.

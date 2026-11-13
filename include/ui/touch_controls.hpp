@@ -49,6 +49,12 @@ public:
     /// should face where the camera does.
     [[nodiscard]] bool isSteering() const { return lookFingerId_ != kNoFinger && lookMoved_; }
 
+    /// The display changed under the controls: a fold, a rotation, the window
+    /// moving to another screen, or the safe area changing. The stick's size is
+    /// worked out again from the density, and a finger held through it is let
+    /// go - it is no longer where it was.
+    void displayChanged() { cachedRadius_ = 0.0f; reset(); }
+
     void handleEvent(const SDL_Event& event, int windowWidth, int windowHeight);
 
     /// Applies the stick to the movement keys, and turns a finger held still
@@ -61,7 +67,8 @@ public:
     /// Drops the stick and releases the keys.
     void reset();
 
-    /// Where the stick may start, as a fraction of the window.
+    /// Where the stick may start, as a fraction of the display's safe area -
+    /// the window less a cutout, rounded corners and the gesture bar.
     static constexpr float kStickZoneWidth = 0.38f;
     static constexpr float kStickZoneTop = 0.30f;
 
