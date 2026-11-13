@@ -748,7 +748,11 @@ void GameHandler::updateTimers(float deltaTime) {
         } else if (pendingLoginQuestResyncTimeout_ <= 0.0f) {
             pendingLoginQuestResync_ = false;
             pendingLoginQuestResyncTimeout_ = 0.0f;
-            LOG_WARNING("Quest login resync timed out waiting for player quest slot fields");
+            // A new character has no quests, and the server leaves zero fields
+            // out of the create block, so no quest slot ever arrives. That is
+            // an empty log, not a missing one.
+            LOG_INFO("Quest login resync: no quest slot fields in the player's update, ",
+                     "taking the quest log as empty");
         }
     }
 
