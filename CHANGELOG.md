@@ -1,5 +1,14 @@
 # Changelog
 
+## [v3.1.45] - 2026-10-14
+
+### Fixed
+- **Auto Shot read as repeating when it was not.** It repeats from the moment the press is sent until it is refused or cancelled, and another hunter stopping their shot no longer stops yours (#164)
+- **Action bar cooldowns were not drawn.** Buttons show the cooldown and global cooldown sweep, light up while their spell is being cast, and an on-next-swing ability stays lit until the swing (#160)
+- **The pet menu never offered Abandon.** `PetCanBeAbandoned` reads whether the pet is a tamed hunter pet (#178)
+- **Fog, sandstorms and thunderstorms were drawn as rain.** Weather is read as the server's weather states, and all weather packets post the chat line and addon event (#180)
+- **Feign Death was treated as dying.** The player stays alive while feigning, and a death during the feign still counts (#181)
+
 ## [v3.1.44] - 2026-10-14
 
 ### Fixed
