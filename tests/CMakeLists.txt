@@ -3470,6 +3470,7 @@ if(NOT ANDROID)
         $<TARGET_PROPERTY:wowee,LINK_DIRECTORIES>)
     target_link_options(test_game_replay PRIVATE
         $<TARGET_PROPERTY:wowee,LINK_OPTIONS>)
+    target_sources(test_game_replay PRIVATE test_game_replay_cast_guids.cpp)
     add_dependencies(test_game_replay wowee)
     add_test(NAME game_replay COMMAND test_game_replay)
     target_sources(test_game_replay PRIVATE test_game_replay_energize.cpp)

@@ -1218,6 +1218,10 @@ static uint8_t translateTbcCastFailure(uint8_t tbcResult) {
     return static_cast<uint8_t>(tbcResult + 1);
 }
 
+uint8_t TbcPacketParsers::castResult(uint8_t raw) const {
+    return translateTbcCastFailure(raw);
+}
+
 // ============================================================================
 // TbcPacketParsers::parseCastResult - TBC 2.4.3 SMSG_CAST_RESULT
 //

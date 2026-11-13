@@ -177,6 +177,10 @@ public:
         return CastFailedParser::parse(packet, data);
     }
 
+    /** A SpellCastResult as sent, in the WotLK numbering the client's
+     *  strings use. Classic and TBC have no SUCCESS entry. */
+    virtual uint8_t castResult(uint8_t raw) const { return raw; }
+
     /** Parse SMSG_CAST_RESULT header (spellId + result), expansion-aware.
      *  WotLK: castCount(u8) + spellId(u32) + result(u8)
      *  TBC/Classic: spellId(u32) + result(u8)  (no castCount prefix).
@@ -411,6 +415,7 @@ public:
                          uint32_t& miscArg, uint32_t& miscArg2) override;
     // TBC 2.4.3 SMSG_CAST_FAILED: spellId(u32) + result(u8) + castCount(u8)
     bool parseCastFailed(network::Packet& packet, CastFailedData& data) override;
+    uint8_t castResult(uint8_t raw) const override;
     // TBC 2.4.3 SMSG_INITIAL_SPELLS: uint16 spellId + uint16 unk per entry.
     bool parseInitialSpells(network::Packet& packet, InitialSpellsData& data) override {
         return InitialSpellsParser::parse(packet, data, /*vanillaFormat=*/true);
@@ -498,6 +503,7 @@ public:
     bool parseCastFailed(network::Packet& packet, CastFailedData& data) override;
     bool parseCastResult(network::Packet& packet, uint32_t& spellId, uint8_t& result,
                          uint32_t& miscArg, uint32_t& miscArg2) override;
+    uint8_t castResult(uint8_t raw) const override { return static_cast<uint8_t>(raw + 1); }
     bool parseMessageChat(network::Packet& packet, MessageChatData& data) override;
     bool parseGameObjectQueryResponse(network::Packet& packet, GameObjectQueryResponseData& data) override;
     // Classic 1.12 SMSG_CREATURE_QUERY_RESPONSE lacks the iconName string that TBC/WotLK include

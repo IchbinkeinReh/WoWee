@@ -7163,8 +7163,9 @@ void SpellHandler::handleCastResult(network::Packet& packet) {
 }
 
 void SpellHandler::handleSpellFailedOther(network::Packet& packet) {
+    // A whole guid on classic, packed on TBC and WotLK.
     const bool tbcLike2 = isPreWotlk();
-    uint64_t failOtherGuid = tbcLike2
+    uint64_t failOtherGuid = isClassicLikeExpansion()
         ? (packet.hasRemaining(8) ? packet.readUInt64() : 0)
         : packet.readPackedGuid();
     // 0x00806ad0: castCount, spellId, result - the caster's shown cast ends
@@ -7269,9 +7270,10 @@ void SpellHandler::handleSpellModifier(network::Packet& packet, bool isFlat) {
 }
 
 void SpellHandler::handleSpellDelayed(network::Packet& packet) {
-    const bool spellDelayTbcLike = isPreWotlk();
-    if (!packet.hasRemaining(spellDelayTbcLike ? 8u : 1u) ) return;
-    uint64_t caster = spellDelayTbcLike
+    // A whole guid on classic, packed on TBC and WotLK.
+    const bool spellDelayFullGuid = isClassicLikeExpansion();
+    if (!packet.hasRemaining(spellDelayFullGuid ? 8u : 1u) ) return;
+    uint64_t caster = spellDelayFullGuid
         ? packet.readUInt64() : packet.readPackedGuid();
     if (!packet.hasRemaining(4)) return;
     uint32_t delayMs = packet.readUInt32();
@@ -7379,14 +7381,14 @@ void SpellHandler::handleSpellLogMiss(network::Packet& packet) {
 
 void SpellHandler::handleSpellFailure(network::Packet& packet) {
     // WotLK: packed_guid + uint8 castCount + uint32 spellId + uint8 failReason
-    // TBC:   full uint64 + uint8 castCount + uint32 spellId + uint8 failReason
+    // TBC:   packed_guid + uint32 spellId + uint8 failReason  (NO castCount)
     // Classic: full uint64 + uint32 spellId + uint8 failReason  (NO castCount)
     const bool isClassic = isClassicLikeExpansion();
-    const bool isTbc     = isActiveExpansion("tbc");
-    uint64_t failGuid = (isClassic || isTbc)
+    const bool hasCastCount = !isPreWotlk();
+    uint64_t failGuid = isClassic
         ? (packet.hasRemaining(8) ? packet.readUInt64() : 0)
         : packet.readPackedGuid();
-    // Classic omits the castCount byte; TBC and WotLK include it
+    // Classic and TBC omit the castCount byte; WotLK includes it
     //
     // 0x007fecc0 picks the event by the reason, not by which packet this is:
     // this named INTERRUPTED for every failure, the plain ones included, which
@@ -7394,9 +7396,9 @@ void SpellHandler::handleSpellFailure(network::Packet& packet) {
     // reason byte could be read there is nothing to choose on, and the old
     // notice stands.
     std::string failureEvent = "UNIT_SPELLCAST_INTERRUPTED";
-    const size_t remainingFields = isClassic ? 5u : 6u;  // spellId(4)+reason(1) [+castCount(1)]
+    const size_t remainingFields = hasCastCount ? 6u : 5u;  // spellId(4)+reason(1) [+castCount(1)]
     if (packet.hasRemaining(remainingFields)) {
-        const uint8_t failCastCount = isClassic ? 0 : packet.readUInt8();
+        const uint8_t failCastCount = hasCastCount ? packet.readUInt8() : 0;
         uint32_t failSpellId = packet.readUInt32();
         uint8_t rawFailReason = packet.readUInt8();
         // 0x00809c70: the caster's shown cast ends where it is this one
