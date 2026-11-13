@@ -1127,6 +1127,9 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     // The desktop's own pointer speed over ten, as the client registers it
     // (0x00869630 into "%1.1f"): left alone, mouseSpeed changes nothing.
     else if (n == "mousespeed") lua_pushstring(L, core::pointer_speed::desktopDefault());
+    // As registered (0x00767fc0) and read by the screenshot (0x004a8570).
+    else if (n == "screenshotformat") lua_pushstring(L, "jpeg");
+    else if (n == "screenshotquality") lua_pushstring(L, "3");
     // Clicking open ground clears the target, which is the real client's
     // behaviour and this one's. Without saying so it fell to the generic zero,
     // and zero here means sticky targeting - so the checkbox would have shown
