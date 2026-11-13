@@ -160,6 +160,10 @@ private:
     /// it, and they have to agree. 1.0 off Android.
     float interfaceScale_ = 1.0f;
     std::vector<uint8_t> clientFontData_;
+    /// A face with Chinese, Japanese and Korean in it, merged under every
+    /// interface face. Held here because the atlas reads it for as long as it
+    /// lives and every face shares the one copy.
+    std::vector<uint8_t> cjkFontData_;
     float clientFontSize_ = 15.0f;
     core::Window* window = nullptr;
     UIServices services_;  // Injected services

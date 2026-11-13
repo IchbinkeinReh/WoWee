@@ -289,6 +289,7 @@ void UIManager::loadInterfaceFont(const std::string& dataRoot,
     const float kClientSize = 15.0f * atlasScale;
 
     ImGuiIO& io = ImGui::GetIO();
+    const int firstNewFont = io.Fonts->Fonts.Size;
 
     // Case is not agreed on here either, so look for the file rather than
     // assuming the spelling the manifest happens to use.
@@ -403,6 +404,65 @@ void UIManager::loadInterfaceFont(const std::string& dataRoot,
         }
     }
     LOG_WARNING("Interface fonts loaded: ", loaded, " of 5 from ", fontDir.string());
+
+    // The interface faces are Latin only, so a character named in Chinese came
+    // out as "???". A face that has those glyphs is merged under each one:
+    // the localized client's own if this install is one, otherwise the
+    // system's. Glyphs are rasterized as they are drawn, so the size of the
+    // face costs memory once and atlas space only for what is shown.
+    if (cjkFontData_.empty()) {
+        std::string from;
+        for (const char* name : { "arkai_t.ttf", "bhei00m.ttf", "2002.ttf" }) {
+            const fs::path file = resolve(name);
+            if (!file.empty()) {
+                std::ifstream in(file, std::ios::binary);
+                cjkFontData_.assign(std::istreambuf_iterator<char>(in),
+                                    std::istreambuf_iterator<char>());
+            } else if (assets) {
+                std::string upper(name);
+                for (char& c : upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                cjkFontData_ = assets->readFileOptional(std::string("Fonts\\") + upper);
+            }
+            if (!cjkFontData_.empty()) { from = name; break; }
+        }
+        for (const char* path : {
+                 "/System/Library/Fonts/Hiragino Sans GB.ttc",
+                 "/System/Library/Fonts/STHeiti Medium.ttc",
+                 "C:\\Windows\\Fonts\\msyh.ttc",
+                 "C:\\Windows\\Fonts\\simsun.ttc",
+                 "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                 "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+                 "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+                 "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+                 "/system/fonts/NotoSansCJK-Regular.ttc" }) {
+            if (!cjkFontData_.empty()) break;
+            if (!fs::exists(path, ec)) continue;
+            std::ifstream in(path, std::ios::binary);
+            cjkFontData_.assign(std::istreambuf_iterator<char>(in),
+                                std::istreambuf_iterator<char>());
+            if (!cjkFontData_.empty()) from = path;
+        }
+        if (cjkFontData_.empty()) {
+            LOG_WARNING("No CJK font found - Chinese, Japanese and Korean text "
+                        "will draw as '?'");
+        } else {
+            LOG_INFO("CJK fallback font: ", from);
+        }
+    }
+    if (!cjkFontData_.empty()) {
+        const float cjkEmScale =
+            fontEmSizeScale(cjkFontData_.data(), cjkFontData_.size());
+        for (int i = firstNewFont; i < io.Fonts->Fonts.Size; ++i) {
+            ImFont* dst = io.Fonts->Fonts[i];
+            ImFontConfig cfg = interfaceFontConfig(cjkEmScale);
+            cfg.MergeMode = true;
+            cfg.DstFont = dst;
+            cfg.FontDataOwnedByAtlas = false;
+            io.Fonts->AddFontFromMemoryTTF(cjkFontData_.data(),
+                                           static_cast<int>(cjkFontData_.size()),
+                                           dst->LegacySize, &cfg);
+        }
+    }
     if (loaded > 0) interfaceFontsLoaded_ = true;
 }
 
