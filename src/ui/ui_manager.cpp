@@ -448,18 +448,37 @@ void UIManager::loadInterfaceFont(const std::string& dataRoot,
         } else {
             LOG_INFO("CJK fallback font: ", from);
         }
+
+        // The Chinese faces the Mac and Windows have carry no Hangul, and nor
+        // do the Chinese clients' own. Korean gets a face of its own, merged
+        // after, so it only answers for what the first could not. The Linux
+        // faces above and the Korean client's cover Hangul already.
+        if (from != "2002.ttf") {
+            for (const char* path : {
+                     "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+                     "C:\\Windows\\Fonts\\malgun.ttf" }) {
+                if (!fs::exists(path, ec)) continue;
+                std::ifstream in(path, std::ios::binary);
+                hangulFontData_.assign(std::istreambuf_iterator<char>(in),
+                                       std::istreambuf_iterator<char>());
+                if (!hangulFontData_.empty()) {
+                    LOG_INFO("Korean fallback font: ", path);
+                    break;
+                }
+            }
+        }
     }
-    if (!cjkFontData_.empty()) {
-        const float cjkEmScale =
-            fontEmSizeScale(cjkFontData_.data(), cjkFontData_.size());
+    for (std::vector<uint8_t>* face : { &cjkFontData_, &hangulFontData_ }) {
+        if (face->empty()) continue;
+        const float emScale = fontEmSizeScale(face->data(), face->size());
         for (int i = firstNewFont; i < io.Fonts->Fonts.Size; ++i) {
             ImFont* dst = io.Fonts->Fonts[i];
-            ImFontConfig cfg = interfaceFontConfig(cjkEmScale);
+            ImFontConfig cfg = interfaceFontConfig(emScale);
             cfg.MergeMode = true;
             cfg.DstFont = dst;
             cfg.FontDataOwnedByAtlas = false;
-            io.Fonts->AddFontFromMemoryTTF(cjkFontData_.data(),
-                                           static_cast<int>(cjkFontData_.size()),
+            io.Fonts->AddFontFromMemoryTTF(face->data(),
+                                           static_cast<int>(face->size()),
                                            dst->LegacySize, &cfg);
         }
     }

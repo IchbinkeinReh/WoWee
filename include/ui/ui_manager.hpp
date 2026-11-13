@@ -164,6 +164,8 @@ private:
     /// interface face. Held here because the atlas reads it for as long as it
     /// lives and every face shares the one copy.
     std::vector<uint8_t> cjkFontData_;
+    /// Korean, merged after it, where that face has no Hangul.
+    std::vector<uint8_t> hangulFontData_;
     float clientFontSize_ = 15.0f;
     core::Window* window = nullptr;
     UIServices services_;  // Injected services
