@@ -41,7 +41,7 @@ namespace rendering::upper_body { struct Unit; }
 namespace game { class Unit; }
 namespace ui { class UIManager; class MapWindow; }
 namespace auth { class AuthHandler; }
-namespace game { class GameHandler; class World; class ExpansionRegistry; struct ExpansionProfile; }
+namespace game { class GameHandler; class World; class ExpansionRegistry; struct ExpansionProfile; struct GameHandlerTestAccess; }
 namespace pipeline { class AssetManager; class DBCLayout; struct M2Model; struct WMOModel; }
 namespace audio { enum class VoiceType; class AudioCoordinator; }
 namespace addons { class AddonManager; }
@@ -77,6 +77,9 @@ enum class AppState {
 
 class Application {
     friend class WorldLoader;
+    /// tests/game_replay.hpp: installs the expansion registry the game code
+    /// asks which protocol it is speaking.
+    friend struct game::GameHandlerTestAccess;
 
 public:
     Application();

@@ -3445,6 +3445,35 @@ wowee_add_test(test_transport_rotation
 # Which transport the player is on, from the ground under its feet.
 wowee_add_test(test_transport_boarding
     SOURCES test_transport_boarding.cpp)
+# ── test_game_replay ─────────────────────────────────────────
+# Server packets through GameHandler's own dispatch, against the real WotLK
+# tables. GameHandler reaches into nearly every part of the client, so this
+# links the client's own objects, minus its main, rather than a source list:
+# nothing is compiled twice, and nothing here can drift from what the client
+# is built from. The properties are read when the build is generated, so
+# libraries the root file adds to the client after this directory are seen.
+# The filter drops main by the object names Makefiles, Ninja, Xcode and Visual
+# Studio give it; src/main.cpp is the only file of that name in the client.
+if(NOT ANDROID)
+    add_executable(test_game_replay test_game_replay.cpp
+        "$<FILTER:$<TARGET_OBJECTS:wowee>,EXCLUDE,/main([.]cpp)?[.]o(bj)?$>")
+    target_include_directories(test_game_replay PRIVATE ${TEST_INCLUDE_DIRS}
+        $<TARGET_PROPERTY:wowee,INCLUDE_DIRECTORIES>)
+    target_include_directories(test_game_replay SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+    target_compile_definitions(test_game_replay PRIVATE
+        WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        $<TARGET_PROPERTY:wowee,COMPILE_DEFINITIONS>)
+    target_link_libraries(test_game_replay PRIVATE catch2_main
+        $<TARGET_PROPERTY:wowee,LINK_LIBRARIES>)
+    wowee_test_link_glm(test_game_replay)
+    target_link_directories(test_game_replay PRIVATE
+        $<TARGET_PROPERTY:wowee,LINK_DIRECTORIES>)
+    target_link_options(test_game_replay PRIVATE
+        $<TARGET_PROPERTY:wowee,LINK_OPTIONS>)
+    add_dependencies(test_game_replay wowee)
+    add_test(NAME game_replay COMMAND test_game_replay)
+    register_test_target(test_game_replay)
+endif()
 
 # ── Sanitizers, once every test target exists ────────────────
 # This must be the last thing in this file. The loop walks ALL_TEST_TARGETS,

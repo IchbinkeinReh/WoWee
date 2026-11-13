@@ -203,6 +203,10 @@ class GameHandler : public IConnectionState,
                      public IEntityAccess,
                      public ISocialState,
                      public IPvpState {
+    /// tests/game_replay.hpp: hands this handler server packets the way the
+    /// socket would, and puts it in the world without a login.
+    friend struct GameHandlerTestAccess;
+
 public:
     // Talent data structures (aliased from handler_types.hpp)
     using TalentEntry = game::TalentEntry;
