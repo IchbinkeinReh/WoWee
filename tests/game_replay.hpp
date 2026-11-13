@@ -8,14 +8,14 @@
 // wrong expansion, a guid read packed where the server wrote it whole. None of
 // that shows in a unit test of a helper, because the helper is right and the
 // call site is not. Here the packet goes in through the same dispatch the
-// realm's would, with WotLK active and its own opcode and update field tables,
-// and the test reads back what the client concluded.
+// realm's would, with one expansion active and its own opcode and update field
+// tables and packet parsers, and the test reads back what the client concluded.
 //
 // The packets are built by hand, field by field as the server writes them;
 // each test says which server function it copies.
 //
-// There is no socket: whatever the client would send in answer goes nowhere,
-// and isInWorld(), which asks for one, stays false.
+// The socket is never connected; it only keeps what the client sends, for a
+// test to read back.
 
 #include <catch_amalgamated.hpp>
 
@@ -24,13 +24,16 @@
 #include "game/game_handler.hpp"
 #include "game/game_services.hpp"
 #include "game/opcode_table.hpp"
+#include "game/packet_parsers.hpp"
 #include "game/update_field_table.hpp"
 #include "network/packet.hpp"
+#include "network/world_socket.hpp"
 
 #include <cstdint>
 #include <map>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace wowee {
 namespace game {
@@ -50,6 +53,9 @@ struct GameHandlerTestAccess {
         REQUIRE_FALSE(pending());
     }
     static void enterWorld(GameHandler& gh) { gh.setState(WorldState::IN_WORLD); }
+    static void setSocket(GameHandler& gh, std::unique_ptr<network::WorldSocket> socket) {
+        gh.socket = std::move(socket);
+    }
     static void setExpansions(core::Application& app, std::unique_ptr<ExpansionRegistry> registry) {
         app.expansionRegistry_ = std::move(registry);
     }
@@ -63,7 +69,7 @@ namespace replay {
 using wowee::game::Opcode;
 using wowee::game::UF;
 
-// SMSG_UPDATE_OBJECT, one block per call. Fields are keyed by name and
+// SMSG_UPDATE_OBJECT, one block per call, in WotLK's layout. Fields are keyed by name and
 // resolved through the loaded update field table, so a test states which field
 // it sets rather than which index that is this expansion.
 class UpdateObject {
@@ -131,26 +137,49 @@ private:
     wowee::network::Packet body_;
 };
 
-// A client in the world as one WotLK character, ready for packets.
+// Keeps what the client sends instead of writing it anywhere.
+class SentPackets : public wowee::network::WorldSocket {
+public:
+    void send(const wowee::network::Packet& packet) override { sent_.push_back(packet); }
+
+    // Everything sent with this opcode, oldest first.
+    [[nodiscard]] std::vector<wowee::network::Packet> of(Opcode opcode) const {
+        std::vector<wowee::network::Packet> found;
+        for (const auto& p : sent_)
+            if (p.getOpcode() == wowee::game::wireOpcode(opcode)) found.push_back(p);
+        return found;
+    }
+
+private:
+    std::vector<wowee::network::Packet> sent_;
+};
+
+// A client in the world as one character, ready for packets. WotLK unless
+// another expansion is named.
 class Session {
 public:
     static constexpr uint64_t kPlayerGuid = 0x0000000000000042ull;
 
     // The expansion is chosen and its tables loaded the way the client does it
     // at startup, from the profiles under Data/expansions in this repository.
-    Session() : handler_(services_) {
+    explicit Session(const char* expansion = "wotlk") : handler_(services_) {
         auto registry = std::make_unique<wowee::game::ExpansionRegistry>();
         registry->initialize(std::string(WOWEE_SOURCE_DIR) + "/Data");
-        REQUIRE(registry->setActive("wotlk"));
+        REQUIRE(registry->setActive(expansion));
         const std::string dir = registry->getActive()->dataPath;
         wowee::game::GameHandlerTestAccess::setExpansions(app_, std::move(registry));
         REQUIRE(handler_.getOpcodeTable().loadFromJson(dir + "/opcodes.json"));
         REQUIRE(handler_.getUpdateFieldTable().loadFromJson(dir + "/update_fields.json"));
+        handler_.setPacketParsers(wowee::game::createPacketParsers(expansion));
         handler_.setPlayerGuid(kPlayerGuid);
+        auto socket = std::make_unique<SentPackets>();
+        sent_ = socket.get();
+        wowee::game::GameHandlerTestAccess::setSocket(handler_, std::move(socket));
         wowee::game::GameHandlerTestAccess::enterWorld(handler_);
     }
 
     wowee::game::GameHandler& handler() { return handler_; }
+    const SentPackets& sent() const { return *sent_; }
 
     void receive(const wowee::network::Packet& packet) {
         wowee::game::GameHandlerTestAccess::receive(handler_, packet);
@@ -169,6 +198,7 @@ private:
     wowee::core::Application app_;
     wowee::game::GameServices services_;
     wowee::game::GameHandler handler_;
+    SentPackets* sent_ = nullptr;
 };
 
 }  // namespace replay

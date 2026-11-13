@@ -7678,25 +7678,16 @@ void SpellHandler::handlePeriodicAuraLog(network::Packet& packet) {
 }
 
 void SpellHandler::handleSpellEnergizeLog(network::Packet& packet) {
-    // WotLK: packed_guid victim + packed_guid caster + uint32 spellId + uint32 powerType + int32 amount
-    // TBC: full uint64 victim + uint64 caster + uint32 spellId + uint32 powerType + int32 amount
-    // Classic/Vanilla: packed_guid (same as WotLK). PowerType is uint32 in every expansion.
-    const bool energizeTbc = isActiveExpansion("tbc");
-    auto readEnergizeGuid = [&]() -> uint64_t {
-        if (energizeTbc)
-            return (packet.hasRemaining(8)) ? packet.readUInt64() : 0;
-        return packet.readPackedGuid();
-    };
-    if (!packet.hasRemaining(energizeTbc ? 8u : 1u)
-        || (!energizeTbc && !packet.hasFullPackedGuid())) {
+    // packed_guid victim + packed_guid caster + uint32 spellId + uint32 powerType + int32 amount,
+    // in every expansion.
+    if (!packet.hasFullPackedGuid()) {
         packet.skipAll(); return;
     }
-    uint64_t victimGuid = readEnergizeGuid();
-    if (!packet.hasRemaining(energizeTbc ? 8u : 1u)
-        || (!energizeTbc && !packet.hasFullPackedGuid())) {
+    uint64_t victimGuid = packet.readPackedGuid();
+    if (!packet.hasFullPackedGuid()) {
         packet.skipAll(); return;
     }
-    uint64_t casterGuid = readEnergizeGuid();
+    uint64_t casterGuid = packet.readPackedGuid();
     // spellId(4) + powerType(4) + amount(4) = 12. PowerType is a uint32 on the wire in
     // every expansion (Vanilla/TBC/WotLK); reading it as a uint8 left 3 bytes in front of
     // amount, turning a small power gain (e.g. 10 = 0x0000000A after powerType 0x00000001)
