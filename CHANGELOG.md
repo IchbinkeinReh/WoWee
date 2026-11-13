@@ -1,5 +1,19 @@
 # Changelog
 
+## [v3.1.49] - 2026-10-21
+
+### Added
+- **Item tooltips show restrictions.** `Classes:`, `Races:`, `Requires <faction> - <standing>` and `Socket Bonus:` lines
+
+### Fixed
+- **The Combat Log tab was empty.** Combat events reach it as `COMBAT_LOG_EVENT` in the layout the addon parses, and it keeps its history for a refilter. `/combatlog` selects the tab
+- **Windows: the update check failed with `certificate verify failed`.** TLS verification trusts the Windows root certificate store
+- **Android: the interface drew under display cutouts and rounded corners.** FrameXML and the movement stick stay inside the safe area, and the interface rescales when the window changes size or the device is folded
+- **Warden memory checks failed on phones.** The Android data subset carries the cached `WoW.exe` and its DLLs. The extractor and the client find them whatever their case, and a missing `.cr` file says what it means
+
+### Removed
+- **The native skills, combat log and threat windows, and `/threat`.** Skills are the character sheet's tab and threat reaches addons through `UnitDetailedThreatSituation`
+
 ## [v3.1.48] - 2026-10-20
 
 ### Added
