@@ -198,6 +198,20 @@ void frameXmlNoteMouseOwned(bool owned) {
 }
 bool frameXmlOwnsMouse() { return gMouseOwned.load(std::memory_order_relaxed); }
 
+namespace {
+/// Set by the Lua engine while its widget tree exists: the tree is the only
+/// thing that knows what a point in the window lands on.
+std::function<bool(float, float)> gPointTest;
+} // namespace
+
+void frameXmlSetPointTest(std::function<bool(float, float)> test) {
+    gPointTest = std::move(test);
+}
+
+bool frameXmlPointOwnsMouse(float x, float y) {
+    return gPointTest && gPointTest(x, y);
+}
+
 
 namespace {
 /// Every load-on-demand addon that has actually loaded.

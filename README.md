@@ -438,9 +438,9 @@ for the profiles and how to check one.
 
 | Input | Action |
 |---|---|
-| Left thumb, lower left | Move and strafe |
-| Right thumb, drag | Turn the view; the character faces where it looks |
-| Two fingers | Zoom the camera |
+| Left thumb, left half | Move and strafe |
+| Right thumb, right half | Camera stick: push to turn the view; the character faces where it looks |
+| Two fingers in one half | Zoom the camera |
 | Tap | Target, interact, and everything in the interface |
 
 A keyboard and mouse should work when attached, since SDL delivers them the same
@@ -613,12 +613,10 @@ before making broad changes.
   glitches.
 - World-map zone hover has edge cases near continent boundaries.
 - Pet-bar protocol behavior may require adjustment for non-AzerothCore forks.
-- On Android the session drops a few seconds after the app goes to the
-  background, because the system closes the socket without a foreground service.
-  The client returns to the login screen as it does on any disconnect.
-- On Android the FrameXML interface is drawn at native size and reads small. The
-  client's own panels scale with display density, and **Window scale** under
-  Interface → WoWee → Interface reaches 3x.
+- On a phone the FrameXML interface starts at the largest UI Scale its frames
+  still fit at, and is still small on a small screen. The client's own panels
+  scale with display density, and **Window scale** under Interface → WoWee →
+  Interface reaches 3x.
 
 When reporting a bug, include the relevant client log lines, expansion, server
 core, and reproduction steps.

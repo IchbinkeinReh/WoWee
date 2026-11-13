@@ -98,3 +98,18 @@ TEST_CASE("Owning everything means suppressing nothing", "[takeover]") {
     INFO("hidden despite being owned: " << suppressed);
     CHECK(suppressed.empty());
 }
+
+TEST_CASE("A point is the interface's only where the tree says so", "[takeover]") {
+    // Nothing set: no tree, so nothing is there and a thumb may be a stick.
+    wowee::ui::frameXmlSetPointTest(nullptr);
+    REQUIRE_FALSE(wowee::ui::frameXmlPointOwnsMouse(10.0f, 10.0f));
+    // The tree's answer for that point, not the cursor's.
+    wowee::ui::frameXmlNoteMouseOwned(false);
+    wowee::ui::frameXmlSetPointTest([](float x, float y) { return x > 100.0f && y > 50.0f; });
+    REQUIRE(wowee::ui::frameXmlPointOwnsMouse(150.0f, 60.0f));
+    REQUIRE_FALSE(wowee::ui::frameXmlPointOwnsMouse(50.0f, 60.0f));
+    REQUIRE_FALSE(wowee::ui::frameXmlOwnsMouse());
+    // Cleared when the tree goes with its Lua state.
+    wowee::ui::frameXmlSetPointTest(nullptr);
+    REQUIRE_FALSE(wowee::ui::frameXmlPointOwnsMouse(150.0f, 60.0f));
+}

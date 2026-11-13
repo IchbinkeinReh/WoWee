@@ -12,6 +12,11 @@
          all-files access reaches such a folder that way; see
          DataFolderActivity. -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <!-- The session stays open while the client is in the background: a
+         process holding a foreground service is not frozen, so its socket to
+         the world server is not dropped. See WoweeSessionService. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <application
         android:label="@string/app_name"
@@ -46,5 +51,17 @@
             android:screenOrientation="sensorLandscape"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
             android:preferMinimalPostProcessing="true" />
+
+        <!-- Started and stopped by WoweeActivity only. specialUse, because
+             none of the named types (media, location, data sync...) is what
+             keeping a game connection open is. -->
+        <service
+            android:name="com.wowee.client.WoweeSessionService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the game server connection open while the app is in the background" />
+        </service>
     </application>
 </manifest>

@@ -8,6 +8,7 @@
 #include "ui/character_screen.hpp"
 #include "ui/game_screen.hpp"
 #include "ui/ui_services.hpp"
+#include "ui/safe_area.hpp"
 #include <functional>
 #include <cstdint>
 #include <memory>
@@ -118,6 +119,12 @@ public:
 
     void processEvent(const SDL_Event& event);
 
+    /// Work the interface scale out again after the display changed under it
+    /// - a fold, a rotation, split screen, a move to another screen, or a safe
+    /// area that grew or shrank - and bring the style and text to it. Nothing
+    /// happens when it comes out the same, which on a desktop is always.
+    void refreshInterfaceScale();
+
     /**
      * Get screen instances for callback setup
      */
@@ -159,6 +166,13 @@ private:
     /// drawn. Decided once at start-up; the style and the font atlas both use
     /// it, and they have to agree. 1.0 off Android.
     float interfaceScale_ = 1.0f;
+    /// What the style is scaled to now. The font atlas stays at
+    /// interfaceScale_, the figure it was built for, and is drawn at this.
+    float appliedScale_ = 1.0f;
+    /// The safe area the scale was last worked out for; a change rescales.
+    safe_area::Insets lastInsets_;
+    /// The style before any scaling, which a rescale starts from.
+    ImGuiStyle baseStyle_;
     std::vector<uint8_t> clientFontData_;
     /// A face with Chinese, Japanese and Korean in it, merged under every
     /// interface face. Held here because the atlas reads it for as long as it

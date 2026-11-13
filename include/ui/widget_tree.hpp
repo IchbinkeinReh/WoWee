@@ -29,6 +29,7 @@
 #include <string_view>
 #include <vector>
 
+#include "core/platform.hpp"
 #include "rendering/minimap_zoom.hpp"
 #include "ui/simple_html.hpp"
 
@@ -1175,6 +1176,8 @@ public:
     /// chosen to feel safe. kCVarRanges gives the slider the same value, and
     /// the confirmation dialog is the second line of defence.
     void setUserScale(float scale) {
+        // A scale the player chose, which the default no longer overrides.
+        userScaleIsDefault_ = false;
         const float clamped = scale < 0.64f ? 0.64f
                             : (scale > kMaxUserScale ? kMaxUserScale : scale);
         if (clamped == userScale_) return;
@@ -1186,12 +1189,61 @@ public:
     }
     [[nodiscard]] float userScale() const { return userScale_; }
 
+    /// Back to the scale the interface has while the player has not chosen
+    /// one - "Use UI Scale" turned off. 1 on a desktop, which is the size the
+    /// screen's height alone gives; with fitScaleByDefault, the largest the
+    /// frames fit at, worked out again at every layout.
+    void useDefaultUserScale() {
+        userScaleIsDefault_ = true;
+        if (fitScaleByDefault_) {
+            markLayoutDirty();
+        } else if (userScale_ != 1.0f) {
+            userScale_ = 1.0f;
+            markLayoutDirty();
+        }
+    }
+
+    /// Whether the default scale is the largest the frames fit at rather than
+    /// 1. A phone shows the interface's 768 units in a few inches of height,
+    /// where 1 reads small, so a phone or tablet starts at the ceiling the
+    /// frames allow: kMaxUserScale on a whole screen, less where the safe area
+    /// takes height or width away. A UI Scale the player saved still wins.
+    void setFitScaleByDefault(bool fit) {
+        if (fitScaleByDefault_ == fit) return;
+        fitScaleByDefault_ = fit;
+        if (!fit && userScaleIsDefault_) userScale_ = 1.0f;
+        markLayoutDirty();
+    }
+    [[nodiscard]] bool fitScaleByDefault() const { return fitScaleByDefault_; }
+
+    /// The largest UI Scale at which UIParent - the screen less the safe
+    /// area's insets, all in pixels - still holds kMinLayoutWidth by
+    /// kMinLayoutHeight units, within the slider's range.
+    [[nodiscard]] static float fitUserScale(float pixelW, float pixelH, float insetLeft,
+                                            float insetRight, float insetTop, float insetBottom) {
+        if (pixelW <= 0.0f || pixelH <= 0.0f) return 1.0f;
+        // UIParent is (pixels less insets) / uiScale units, and uiScale is
+        // pixelH / kInterfaceHeight * the user's scale.
+        const float usableW = pixelW - insetLeft - insetRight;
+        const float usableH = pixelH - insetTop - insetBottom;
+        const float byHeight = kInterfaceHeight * usableH / (pixelH * kMinLayoutHeight);
+        const float byWidth = kInterfaceHeight * usableW / (pixelH * kMinLayoutWidth);
+        float s = byHeight < byWidth ? byHeight : byWidth;
+        if (s > kMaxUserScale) s = kMaxUserScale;
+        if (s < kMinUserScale) s = kMinUserScale;
+        return s;
+    }
+
     /// The canvas height the interface lays out in. The scale a screen of a
     /// given pixel height gets is pixelHeight / this, times the user's own.
     static constexpr float kInterfaceHeight = 768.0f;
     /// The shortest layout the shipped frames still fit in: the 600 of an
     /// 800x600 screen, which is the smallest the interface was authored for.
     static constexpr float kMinLayoutHeight = 600.0f;
+    /// And the 800 across of that screen.
+    static constexpr float kMinLayoutWidth = 800.0f;
+    /// The slider's floor, Blizzard's own.
+    static constexpr float kMinUserScale = 0.64f;
     /// How far up the interface can be scaled before its own frames stop
     /// fitting on screen. See setUserScale.
     static constexpr float kMaxUserScale = kInterfaceHeight / kMinLayoutHeight;
@@ -1410,6 +1462,18 @@ private:
     /// references valid when it grows, which is the guarantee this needs.
     float uiScale_ = 1.0f;
     float userScale_ = 1.0f;
+    /// No UI Scale chosen: the default applies (see useDefaultUserScale).
+    bool userScaleIsDefault_ = true;
+#ifdef WOWEE_MOBILE
+    bool fitScaleByDefault_ = true;
+#else
+    bool fitScaleByDefault_ = false;
+#endif
+    /// The default scale for this screen and safe area, when it applies.
+    void applyDefaultUserScale(float pixelW, float pixelH) {
+        if (!fitScaleByDefault_ || !userScaleIsDefault_) return;
+        userScale_ = fitUserScale(pixelW, pixelH, safeLeft_, safeRight_, safeTop_, safeBottom_);
+    }
     float safeLeft_ = 0.0f, safeRight_ = 0.0f, safeTop_ = 0.0f, safeBottom_ = 0.0f;
     std::vector<uint32_t> scrollFrames_;
     /// Which unit each portrait texture is showing, and the reverse. Two maps
