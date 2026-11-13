@@ -1,5 +1,15 @@
 # Changelog
 
+## [v3.1.48] - 2026-10-20
+
+### Added
+- **Command-based key bindings.** Gameplay, the interface and gamepad buttons share one binding system, with two keys per command and rebindable controller buttons. Autorun keeps `` ` `` and NumLock, existing saved bindings keep the new defaults, and Ctrl-walk and the camera reset are rebindable (#198)
+
+### Fixed
+- **Android: tapping an NPC only targeted it.** A second tap on the targeted unit talks to it, loots it or attacks it, as a right-click does
+- **Chests on AzerothCore gave no quest credit.** Clicks on a gameobject wait for its query, the lock is read on every expansion, and every use is reported (#196)
+- **A new character logged a quest resync timeout.** An empty quest log is taken as empty; a quest marker that is not drawn now logs why (#199)
+
 ## [v3.1.47] - 2026-10-16
 
 ### Fixed
