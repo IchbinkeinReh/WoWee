@@ -190,6 +190,14 @@ SpellTimingFields detectSpellTimingFields(const DBCFile* dbc, const DBCFieldMap*
 uint32_t detectEnchantmentNameField(const DBCFile* dbc, const DBCFieldMap* sieL);
 
 /**
+ * The item a Spell.dbc row creates through its first CREATE_ITEM (24) or
+ * CREATE_ITEM_2 (157) effect, or 0. 114 is ATTACK_ME, not CREATE_ITEM_2.
+ */
+uint32_t spellCreatedItem(const DBCFile& dbc, uint32_t row,
+                          const uint32_t (&effectFields)[3],
+                          const uint32_t (&itemTypeFields)[3]);
+
+/**
  * Resolve the SpellItemEnchantment.dbc ItemVisual field index, which likewise
  * shifted with the record: Vanilla/Turtle=19, TBC=30, WotLK=31.
  */

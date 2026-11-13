@@ -235,6 +235,16 @@ SpellTimingFields detectSpellTimingFields(const DBCFile* dbc, const DBCFieldMap*
     return f;
 }
 
+uint32_t spellCreatedItem(const DBCFile& dbc, uint32_t row,
+                          const uint32_t (&effectFields)[3],
+                          const uint32_t (&itemTypeFields)[3]) {
+    for (int e = 0; e < 3; ++e) {
+        const uint32_t effect = dbc.getUInt32(row, effectFields[e]);
+        if (effect == 24 || effect == 157) return dbc.getUInt32(row, itemTypeFields[e]);
+    }
+    return 0;
+}
+
 uint32_t detectEnchantmentNameField(const DBCFile* dbc, const DBCFieldMap* sieL) {
     if (!dbc || dbc->getRecordCount() == 0) return 14;
 

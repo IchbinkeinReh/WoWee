@@ -659,4 +659,26 @@ TEST_CASE("A localized client's strings are read where the enUS ones would be", 
         CHECK(dbc.getString(0, 1) == "Geringes Heilen");
         CHECK(dbc.getUInt32(0, 10) == 7);
     }
+TEST_CASE("Spell.dbc's created item comes from CREATE_ITEM and CREATE_ITEM_2", "[dbc][spell]") {
+    // WotLK's columns: Effect at 71, EffectItemType at 107. Smelt Copper is
+    // effect 24 and Bold Bloodstone, like the other 80 WotLK recipes with a
+    // 157, is CREATE_ITEM_2; here it sits in the third slot. 114 is ATTACK_ME.
+    const uint32_t effectFields[3] = {71, 72, 73};
+    const uint32_t itemTypeFields[3] = {107, 108, 109};
+    auto rowOf = [](uint32_t id, int slot, uint32_t effect, uint32_t item) {
+        std::vector<uint32_t> row(234, 0);
+        row[0] = id;
+        row[71 + slot] = effect;
+        row[107 + slot] = item;
+        return row;
+    };
+    auto data = buildSyntheticDBC(3, 234,
+                                  {rowOf(2657, 0, 24, 2840), rowOf(53831, 2, 157, 39900),
+                                   rowOf(1, 0, 114, 39900)},
+                                  std::string(1, '\0'));
+    DBCFile dbc;
+    REQUIRE(dbc.load(data));
+    CHECK(wowee::pipeline::spellCreatedItem(dbc, 0, effectFields, itemTypeFields) == 2840);
+    CHECK(wowee::pipeline::spellCreatedItem(dbc, 1, effectFields, itemTypeFields) == 39900);
+    CHECK(wowee::pipeline::spellCreatedItem(dbc, 2, effectFields, itemTypeFields) == 0);
 }
