@@ -1,5 +1,23 @@
 # Changelog
 
+## [v3.1.46] - 2026-10-15
+
+### Added
+- **Mouse buttons 4 and 5.** Side buttons can be bound as keys and reach the interface as `Button4` and `Button5` (#194)
+
+### Fixed
+- **Dodges, parries and evades on WotLK melee hits showed nothing.** Melee hits are read in WotLK's layout and victim states with the servers' numbers; partial blocks show the blocked amount (#182)
+- **A second press of a queued swing ability unlit the first.** Only the refusal of the press that queued it clears it, and no press goes out with cast count 0 (#183)
+- **The pet menu offered Rename after the pet was named.** `PetCanBeRenamed` reads the pet's rename flag (#184)
+- **Spell misses showed the wrong result.** Miss types use the servers' numbering, and the spell miss log reads whole guids (#185)
+- **Combat log filters asked the wrong question.** `bit.band`, `bor` and `bxor` take any number of arguments (#186)
+- **Quest kill progress went to chat.** It is shown in the middle of the screen, with quest objects named from the object cache (#187)
+- **Dispels were attributed backwards.** The dispel, spellsteal, instakill and dispel-failed logs are read as the servers write them (#188)
+- **Interrupts, drains, burns and pet feeding showed nothing.** The spell execute log is read with the servers' effect numbers (#189)
+- **Recipes using CREATE_ITEM_2 had no created item.** It is effect 157, not 114 (#190)
+- **TBC energize, cast failure and cast delay logs were misread.** Their guids are packed (#191, #192)
+- **Classic item pushes were dropped.** Classic's item push result has no carried count (#193)
+
 ## [v3.1.45] - 2026-10-14
 
 ### Fixed
