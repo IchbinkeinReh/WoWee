@@ -162,7 +162,7 @@ followed by `VideoOptionsFrame`, `AudioOptionsFrame` and several
   3. Nothing else in the options framework needs changing; the template is
      present on disk and correct
 
-See [#132](https://github.com/Kelsidavis/WoWee/issues/132).
+See [#132](https://github.com/IchbinkeinReh/WoWee/issues/132).
 
 ## Performance Optimization
 

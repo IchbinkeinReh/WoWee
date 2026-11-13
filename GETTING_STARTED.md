@@ -12,7 +12,7 @@ WoWee is a native C++ World of Warcraft client that connects to private servers.
 
 ### Step 1: Build WoWee
 
-Prebuilt releases are on the [releases page](https://github.com/Kelsidavis/WoWee/releases/latest). To build from source, see the [Quick start](README.md#quick-start) in the README and the [complete build guide](BUILD_INSTRUCTIONS.md). The desktop build needs SDL3.
+Prebuilt releases are on the [releases page](https://github.com/IchbinkeinReh/WoWee/releases/latest). To build from source, see the [Quick start](README.md#quick-start) in the README and the [complete build guide](BUILD_INSTRUCTIONS.md). The desktop build needs SDL3.
 
 **Quick start (Linux/macOS)**:
 ```bash
