@@ -335,6 +335,9 @@ public:
     /// default: a bug reported against a version fixed weeks ago costs both
     /// sides the whole exchange to find that out.
     bool pendingCheckForUpdates = true;
+    // The streaming data mode's cache (read by pipeline/data_stream at start).
+    int pendingStreamCacheLimit = 0;   // index: none, 1, 2, 5, 10 GB
+    bool pendingStreamCacheClear = false;
     bool pendingNormalMapping = false;  // off by default: not in the client
     float pendingNormalMapStrength = 0.3f;  // 0.0-2.0
     float pendingLensFlare = 0.0f;          // 0.0-2.0; off: the client has its glare instead

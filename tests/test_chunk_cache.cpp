@@ -5,6 +5,7 @@
 #include <catch_amalgamated.hpp>
 
 #include <atomic>
+#include <map>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -224,4 +225,95 @@ TEST_CASE("Readers on several threads fetch each chunk once", "[chunks]") {
     CHECK(ok == 8 * 64);
     CHECK(r.sent <= r.bytes.size());  // no chunk fetched twice
     CHECK(r.sent == cache.chunksPresent() * kChunk);
+}
+
+TEST_CASE("Held bytes count the short last chunk, and a clear empties the cache", "[chunks]") {
+    Dir d;
+    Remote r(10 * kChunk + 100);   // the last chunk is 100 bytes
+    const fs::path local = d.root / "common.MPQ";
+    {
+        ChunkCache cache;
+        REQUIRE(cache.open(local.string(), r.bytes.size(), kChunk, "v1", r.fetcher()));
+        CHECK(cache.bytesPresent() == 0);
+        const uint64_t fetchesBefore = ChunkCache::threadFetchCount();
+        REQUIRE(cache.ensure(0, 2 * kChunk));
+        CHECK(ChunkCache::threadFetchCount() == fetchesBefore + 1);
+        REQUIRE(cache.ensure(10 * kChunk, 100));
+        CHECK(cache.bytesPresent() == 2 * kChunk + 100);
+        // Already held: no fetch, so the counter stays.
+        const uint64_t held = ChunkCache::threadFetchCount();
+        REQUIRE(cache.ensure(10, 10));
+        CHECK(ChunkCache::threadFetchCount() == held);
+
+        REQUIRE(cache.clear());
+        CHECK(cache.bytesPresent() == 0);
+        CHECK(fs::file_size(local) == r.bytes.size());
+    }
+    // The clear is kept: a restart finds nothing and fetches again.
+    const int before = r.requests;
+    ChunkCache cache;
+    REQUIRE(cache.open(local.string(), r.bytes.size(), kChunk, "v1", r.fetcher()));
+    CHECK(cache.chunksPresent() == 0);
+    REQUIRE(cache.ensure(0, kChunk));
+    CHECK(r.requests == before + 1);
+    CHECK(readLocal(local, 0, kChunk) ==
+          std::vector<uint8_t>(r.bytes.begin(), r.bytes.begin() + kChunk));
+}
+
+TEST_CASE("The size limit drops what was read longest ago, to nine tenths", "[chunks]") {
+    using wowee::pipeline::chooseUseCutoff;
+    // Bytes held by the run that last read them; this is run 9.
+    const std::map<uint32_t, uint64_t> byRun = {{0, 100}, {3, 300}, {5, 500}, {9, 300}};
+    // 1200 held. No limit, or room enough: nothing.
+    CHECK(chooseUseCutoff(byRun, 0, 9) == 0);
+    CHECK(chooseUseCutoff(byRun, 1200, 9) == 0);
+    // 1150 (target 1035): run 0's chunks -> 1100, still over; run 3's too -> 800.
+    CHECK(chooseUseCutoff(byRun, 1150, 9) == 4);
+    // 1000 (target 900): 0 and 3 go -> 800.
+    CHECK(chooseUseCutoff(byRun, 1000, 9) == 4);
+    // 700 (target 630): 0, 3 and 5 go -> 300.
+    CHECK(chooseUseCutoff(byRun, 700, 9) == 6);
+    // 100: what this run read stays all the same.
+    CHECK(chooseUseCutoff(byRun, 100, 9) == 9);
+    // Started anew (run 10): what the last start (9) read stays, even over.
+    CHECK(chooseUseCutoff(byRun, 100, 10) == 9);
+    CHECK(chooseUseCutoff({{2, 2000}}, 1000, 3) == 2);   // one start alone: nothing to drop
+}
+
+TEST_CASE("Chunks remember the run that read them; old ones are dropped", "[chunks]") {
+    Dir d;
+    Remote r(8 * kChunk + 10);
+    const fs::path local = d.root / "patch-2.MPQ";
+    {
+        ChunkCache::setRun(1);
+        ChunkCache cache;
+        REQUIRE(cache.open(local.string(), r.bytes.size(), kChunk, "v1", r.fetcher()));
+        REQUIRE(cache.ensure(0, 4 * kChunk));      // chunks 0-3 in run 1
+        REQUIRE(cache.saveUse());
+    }
+    {
+        ChunkCache::setRun(2);
+        ChunkCache cache;
+        REQUIRE(cache.open(local.string(), r.bytes.size(), kChunk, "v1", r.fetcher()));
+        REQUIRE(cache.ensure(2 * kChunk, 1));      // chunk 2 read again in run 2
+        REQUIRE(cache.ensure(8 * kChunk, 10));     // the short last chunk, run 2
+        REQUIRE(cache.saveUse());
+    }
+    ChunkCache::setRun(3);
+    ChunkCache cache;
+    REQUIRE(cache.open(local.string(), r.bytes.size(), kChunk, "v1", r.fetcher()));
+    std::map<uint32_t, uint64_t> byRun;
+    cache.addBytesByLastUse(byRun);
+    CHECK(byRun == std::map<uint32_t, uint64_t>{{1, 3 * kChunk}, {2, kChunk + 10}});
+    // Drop what run 1 read last: chunks 0, 1, 3.
+    CHECK(cache.dropReadBefore(2) == 3 * kChunk);
+    CHECK(cache.chunksPresent() == 2);
+    const int before = r.requests;
+    REQUIRE(cache.ensure(2 * kChunk, kChunk));     // kept
+    CHECK(r.requests == before);
+    REQUIRE(cache.ensure(0, 1));                   // dropped: fetched again
+    CHECK(r.requests == before + 1);
+    CHECK(readLocal(local, 0, kChunk) ==
+          std::vector<uint8_t>(r.bytes.begin(), r.bytes.begin() + kChunk));
+    ChunkCache::setRun(1);
 }

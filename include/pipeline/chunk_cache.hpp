@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <set>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -36,7 +37,9 @@ public:
     [[nodiscard]] uint64_t chunkCount() const { return count_; }
     [[nodiscard]] bool has(uint64_t chunk) const;
     void set(uint64_t chunk);
+    void unset(uint64_t chunk);
     [[nodiscard]] uint64_t present() const;
+    [[nodiscard]] const std::string& identity() const { return identity_; }
 
     /// Text header + raw bits. False when the file could not be written.
     bool save(const std::string& path) const;
@@ -83,6 +86,39 @@ public:
     [[nodiscard]] uint64_t chunkCount() const;
     [[nodiscard]] uint64_t bytesFetched() const { return fetched_; }
     [[nodiscard]] uint64_t requests() const { return requests_; }
+    /// The bytes the local copy holds (present chunks, the last one short).
+    [[nodiscard]] uint64_t bytesPresent() const;
+
+    /// Drops every chunk: the bitmap is emptied and saved, and the copy's
+    /// room given back (it is cut to nothing and grown again, sparse). Only
+    /// while nothing reads the copy - at start, before an archive maps it.
+    bool clear();
+
+    /// Fetches that this thread completed, in all caches, ever. A caller
+    /// compares it before and after ensure() to learn whether that read had
+    /// to go to the server.
+    static uint64_t threadFetchCount();
+
+    // ---- the size limit ------------------------------------------------
+    //
+    // Every chunk has the number of the run that last read it, kept beside
+    // the copy (<file>.use) and saved by saveUse(). Over the limit, the
+    // chunks read longest ago go first, a whole run's worth at a time
+    // (chooseUseCutoff), and their room is given back (a hole punched in the
+    // sparse copy). An archive's tables are read at every start, so they
+    // are never the oldest.
+
+    /// The number of this run (DataStream counts starts per cache folder).
+    static void setRun(uint32_t run);
+    /// Saves the chunks' last-read runs when they changed. False when the
+    /// file could not be written.
+    bool saveUse();
+    /// Bytes held, by the run that last read them.
+    void addBytesByLastUse(std::map<uint32_t, uint64_t>& out) const;
+    /// Drops the chunks last read before run `cutoff`. Only while nothing
+    /// reads the copy - at start, before an archive maps it. Returns the
+    /// bytes dropped.
+    uint64_t dropReadBefore(uint32_t cutoff);
 
     /// Largest single request, in bytes.
     static constexpr uint64_t kMaxRequestBytes = 8ull * 1024 * 1024;
@@ -103,12 +139,25 @@ private:
     uint64_t fetched_ = 0;
     uint64_t requests_ = 0;
     bool loggedFailure_ = false;
+    std::string usePath_;
+    std::vector<uint32_t> lastUse_;   // per chunk: the run that last read it
+    bool useDirty_ = false;
+    /// Gives back the room of [offset, offset + length) of the copy.
+    void punchHole(uint64_t offset, uint64_t length);
 #ifdef _WIN32
     void* file_ = nullptr;
 #else
     int fd_ = -1;
 #endif
 };
+
+/// For the size limit: given the bytes held by the run that last read them,
+/// the run before which everything is dropped so that the rest fits in nine
+/// tenths of `limit` - room for a session to grow without dropping again at
+/// every start. 0 (drop nothing) when it fits already or `limit` is 0. What
+/// the newest start (or this one, `current`) read stays, even over the limit.
+uint32_t chooseUseCutoff(const std::map<uint32_t, uint64_t>& bytesByRun, uint64_t limit,
+                         uint32_t current);
 
 } // namespace pipeline
 } // namespace wowee

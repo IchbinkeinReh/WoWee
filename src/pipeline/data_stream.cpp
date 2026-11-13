@@ -1,6 +1,7 @@
 #include "pipeline/data_stream.hpp"
 #include "pipeline/mpq_archive_set.hpp"
 
+#include "core/config_paths.hpp"
 #include "core/data_paths.hpp"
 #include "core/logger.hpp"
 #include "network/net_platform.hpp"
@@ -23,6 +24,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <thread>
 
 namespace wowee {
@@ -353,6 +355,60 @@ private:
 std::unique_ptr<HttpClient> g_client;
 std::atomic<uint64_t> g_fetched{0};
 std::atomic<uint64_t> g_requests{0};
+std::atomic<uint64_t> g_filesFetched{0};
+std::atomic<int64_t> g_lastFetchMs{-1};   // steady clock, ms
+
+int64_t steadyMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+/// The stream cache's two rows of settings.cfg, read before the settings
+/// panel exists (as update_check reads its own row).
+struct CacheSettings {
+    int limitChoice = 0;
+    bool clear = false;
+};
+CacheSettings readCacheSettings() {
+    CacheSettings out;
+    std::ifstream in(core::getConfigRoot() + "/settings.cfg");
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        const size_t eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        const std::string key = line.substr(0, eq);
+        const std::string val = line.substr(eq + 1);
+        if (key == "stream_cache_limit") out.limitChoice = std::atoi(val.c_str());
+        else if (key == "stream_cache_clear") out.clear = std::atoi(val.c_str()) != 0;
+    }
+    return out;
+}
+
+/// The clear is asked for once: done, its row goes back to 0, so the next
+/// start keeps what this one fetches.
+void resetCacheClearSetting() {
+    const std::string path = core::getConfigRoot() + "/settings.cfg";
+    std::string text;
+    {
+        std::ifstream in(path, std::ios::binary);
+        if (!in) return;
+        text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    const std::string key = "stream_cache_clear=";
+    size_t at = std::string::npos;
+    if (text.compare(0, key.size(), key) == 0) {
+        at = 0;
+    } else {
+        const size_t nl = text.find("\n" + key);
+        if (nl != std::string::npos) at = nl + 1;
+    }
+    if (at == std::string::npos) return;
+    const size_t end = text.find_first_of("\r\n", at);
+    text.replace(at, (end == std::string::npos ? text.size() : end) - at, key + "0");
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out << text;
+}
 
 }  // namespace
 
@@ -455,6 +511,18 @@ std::string DataStream::start(const StreamConfig& config, const std::string& cac
         return {};
     }
     const uint32_t chunk = list.value("chunkSize", 262144u);
+
+    // This start's number in this cache folder: the chunks it reads are
+    // stamped with it, for the size limit (ChunkCache::setRun).
+    {
+        const fs::path runFile = fs::path(cacheRoot) / "runs.txt";
+        uint64_t runs = 0;
+        std::ifstream(runFile) >> runs;
+        runs = std::min<uint64_t>(runs + 1, 0xFFFFFFF0u);
+        std::ofstream(runFile, std::ios::trunc) << runs << '\n';
+        run_ = static_cast<uint32_t>(runs);
+        ChunkCache::setRun(run_);
+    }
     const fs::path mirror = fs::path(cacheRoot) / "mirror";
 
     entries_.clear();
@@ -491,6 +559,7 @@ std::string DataStream::start(const StreamConfig& config, const std::string& cac
             }
             g_fetched += r.body.size();
             ++g_requests;
+            g_lastFetchMs = steadyMs();
             {
                 static std::mutex logMutex;
                 static auto lastLog = std::chrono::steady_clock::now();
@@ -513,10 +582,17 @@ std::string DataStream::start(const StreamConfig& config, const std::string& cac
         entries_.push_back(std::move(e));
     }
     active_ = !entries_.empty();
+    applyCacheSettings();
     MpqArchiveSet::setRangeSource([this](const std::string& path) -> MpqArchiveSet::RangeFetch {
         ChunkCache* cache = cacheFor(path);
         if (!cache) return {};
-        return [cache](uint64_t offset, uint64_t length) { return cache->ensure(offset, length); };
+        return [cache](uint64_t offset, uint64_t length) {
+            // One read: an archive's tables at open, or one game file.
+            const uint64_t before = ChunkCache::threadFetchCount();
+            const bool ok = cache->ensure(offset, length);
+            if (ChunkCache::threadFetchCount() != before) ++g_filesFetched;
+            return ok;
+        };
     });
     if (!active_) {
         error = "the server lists no files";
@@ -526,6 +602,64 @@ std::string DataStream::start(const StreamConfig& config, const std::string& cac
     LOG_WARNING("STREAM: ", t.files, " files, ", t.mpqBytes, " bytes of MPQ (", t.totalBytes,
                 " in all), ", t.localBytes, " bytes already cached, from ", url.host, url.basePath);
     return mirror.string();
+}
+
+uint64_t DataStream::cacheLimitForChoice(int choice) {
+    constexpr uint64_t kGB = 1024ull * 1024 * 1024;
+    switch (choice) {
+        case 1: return 1 * kGB;
+        case 2: return 2 * kGB;
+        case 3: return 5 * kGB;
+        case 4: return 10 * kGB;
+        default: return 0;
+    }
+}
+
+void DataStream::applyCacheSettings() {
+    // Here, at start, and nowhere later: once the archives are open they are
+    // mapped, and a chunk taken from under a reader would read as zeros. So
+    // the limit holds at each start; a session can go past it until the next.
+    const CacheSettings settings = readCacheSettings();
+    if (settings.clear) {
+        uint64_t freed = 0;
+        size_t failed = 0;
+        for (const auto& e : entries_) {
+            const uint64_t held = e->cache->bytesPresent();
+            if (held == 0) continue;
+            if (e->cache->clear()) freed += held;
+            else ++failed;
+        }
+        LOG_WARNING("STREAM: cache cleared as asked in the settings: ", freed, " bytes freed",
+                    failed ? (", " + std::to_string(failed) + " files could not be cleared") : std::string());
+        resetCacheClearSetting();
+    }
+    const uint64_t limit = cacheLimitForChoice(settings.limitChoice);
+    if (limit == 0) return;
+    std::map<uint32_t, uint64_t> byRun;
+    for (const auto& e : entries_) e->cache->addBytesByLastUse(byRun);
+    uint64_t held = 0;
+    for (const auto& [run, bytes] : byRun) held += bytes;
+    const uint32_t cutoff = chooseUseCutoff(byRun, limit, run_);
+    if (cutoff == 0) {
+        LOG_WARNING("STREAM: cache holds ", held, " bytes, within its limit of ", limit);
+        return;
+    }
+    // The chunks read longest ago, a whole start's worth at a time.
+    uint64_t freed = 0;
+    size_t files = 0;
+    for (const auto& e : entries_) {
+        const uint64_t dropped = e->cache->dropReadBefore(cutoff);
+        if (dropped == 0) continue;
+        freed += dropped;
+        ++files;
+        LOG_WARNING("STREAM: cache over its limit: ", dropped, " bytes of ", e->rel, " dropped");
+    }
+    LOG_WARNING("STREAM: cache held ", held, " bytes, limit ", limit, "; dropped what was last read before start ",
+                cutoff, " of ", run_, ": ", freed, " bytes in ", files, " files");
+}
+
+void DataStream::saveUse() {
+    for (const auto& e : entries_) e->cache->saveUse();
 }
 
 ChunkCache* DataStream::cacheFor(const std::string& localPath) const {
@@ -541,10 +675,13 @@ DataStream::Totals DataStream::totals() const {
         t.totalBytes += e->size;
         const std::string lower = lowerAscii(e->rel);
         if (lower.size() > 4 && lower.compare(lower.size() - 4, 4, ".mpq") == 0) t.mpqBytes += e->size;
-        t.localBytes += std::min<uint64_t>(e->size, e->cache->chunksPresent() * e->chunk);
+        t.localBytes += e->cache->bytesPresent();
     }
     t.fetchedBytes = g_fetched.load();
     t.requests = g_requests.load();
+    t.filesFetched = g_filesFetched.load();
+    const int64_t last = g_lastFetchMs.load();
+    t.secondsSinceFetch = last < 0 ? -1.0 : static_cast<double>(steadyMs() - last) / 1000.0;
     return t;
 }
 

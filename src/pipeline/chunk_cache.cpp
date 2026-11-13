@@ -3,6 +3,7 @@
 #include "core/logger.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -16,6 +17,9 @@
 #include <winioctl.h>
 #else
 #include <fcntl.h>
+#ifdef __linux__
+#include <linux/falloc.h>
+#endif
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -24,6 +28,19 @@ namespace wowee {
 namespace pipeline {
 
 namespace fs = std::filesystem;
+
+namespace {
+thread_local uint64_t t_fetches = 0;
+}
+
+uint64_t ChunkCache::threadFetchCount() { return t_fetches; }
+
+namespace {
+std::atomic<uint32_t> g_run{1};
+constexpr const char* kUseMagic = "wowee-chunk-use 1";
+}
+
+void ChunkCache::setRun(uint32_t run) { g_run = run; }
 
 // ---- bitmap --------------------------------------------------------------------
 
@@ -45,6 +62,10 @@ bool ChunkBitmap::has(uint64_t c) const {
 
 void ChunkBitmap::set(uint64_t c) {
     if (c < count_) bits_[static_cast<size_t>(c / 8)] |= static_cast<uint8_t>(1u << (c % 8));
+}
+
+void ChunkBitmap::unset(uint64_t c) {
+    if (c < count_) bits_[static_cast<size_t>(c / 8)] &= static_cast<uint8_t>(~(1u << (c % 8)));
 }
 
 uint64_t ChunkBitmap::present() const {
@@ -160,7 +181,108 @@ bool ChunkCache::open(const std::string& dataPath, uint64_t fileSize, uint32_t c
     }
 #endif
     if (!known) bitmap_.save(indexPath_);
+
+    // The chunks' last-read runs. Missing or for another size: what is held
+    // counts as read before any run (0), the first to go.
+    usePath_ = dataPath + ".use";
+    lastUse_.assign(static_cast<size_t>(bitmap_.chunkCount()), 0);
+    useDirty_ = false;
+    if (known) {
+        std::ifstream in(usePath_, std::ios::binary);
+        std::string magic, line;
+        uint64_t count = 0;
+        if (in && std::getline(in, magic) && magic == kUseMagic && std::getline(in, line) &&
+            (std::istringstream(line) >> count) && count == lastUse_.size()) {
+            in.read(reinterpret_cast<char*>(lastUse_.data()),
+                    static_cast<std::streamsize>(lastUse_.size() * sizeof(uint32_t)));
+            if (in.gcount() != static_cast<std::streamsize>(lastUse_.size() * sizeof(uint32_t))) {
+                std::fill(lastUse_.begin(), lastUse_.end(), 0u);
+            }
+        }
+    }
     return true;
+}
+
+bool ChunkCache::saveUse() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!useDirty_ || usePath_.empty()) return true;
+    const std::string tmp = usePath_ + ".tmp";
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        if (!out) return false;
+        out << kUseMagic << '\n' << lastUse_.size() << '\n';
+        out.write(reinterpret_cast<const char*>(lastUse_.data()),
+                  static_cast<std::streamsize>(lastUse_.size() * sizeof(uint32_t)));
+        if (!out) return false;
+    }
+    std::error_code ec;
+    fs::rename(tmp, usePath_, ec);
+    if (ec) {
+        fs::remove(usePath_, ec);
+        fs::rename(tmp, usePath_, ec);
+    }
+    if (!ec) useDirty_ = false;
+    return !ec;
+}
+
+void ChunkCache::addBytesByLastUse(std::map<uint32_t, uint64_t>& out) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const uint64_t count = bitmap_.chunkCount();
+    for (uint64_t c = 0; c < count; ++c) {
+        if (!bitmap_.has(c)) continue;
+        const uint64_t bytes = c + 1 == count ? size_ - c * chunk_ : chunk_;
+        out[lastUse_[static_cast<size_t>(c)]] += bytes;
+    }
+}
+
+uint64_t ChunkCache::dropReadBefore(uint32_t cutoff) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!inFlight_.empty()) return 0;
+    const uint64_t count = bitmap_.chunkCount();
+    std::vector<uint64_t> drop;
+    for (uint64_t c = 0; c < count; ++c) {
+        if (bitmap_.has(c) && lastUse_[static_cast<size_t>(c)] < cutoff) drop.push_back(c);
+    }
+    if (drop.empty()) return 0;
+    // The bitmap first: a crash before the holes are punched leaves bytes on
+    // disk that are not marked, which costs a fetch, never the reverse.
+    for (uint64_t c : drop) bitmap_.unset(c);
+    bitmap_.save(indexPath_);
+    uint64_t freed = 0;
+    for (size_t i = 0; i < drop.size();) {
+        size_t j = i;
+        while (j + 1 < drop.size() && drop[j + 1] == drop[j] + 1) ++j;
+        const uint64_t from = drop[i] * chunk_;
+        const uint64_t to = std::min<uint64_t>((drop[j] + 1) * chunk_, size_);
+        punchHole(from, to - from);
+        freed += to - from;
+        i = j + 1;
+    }
+    return freed;
+}
+
+void ChunkCache::punchHole(uint64_t offset, uint64_t length) {
+#ifdef _WIN32
+    FILE_ZERO_DATA_INFORMATION zero{};
+    zero.FileOffset.QuadPart = static_cast<LONGLONG>(offset);
+    zero.BeyondFinalZero.QuadPart = static_cast<LONGLONG>(offset + length);
+    DWORD ret = 0;
+    DeviceIoControl(static_cast<HANDLE>(file_), FSCTL_SET_ZERO_DATA, &zero, sizeof(zero), nullptr, 0,
+                    &ret, nullptr);
+#elif defined(__linux__)
+    fallocate(fd_, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, static_cast<off_t>(offset),
+              static_cast<off_t>(length));
+#elif defined(__APPLE__)
+    fpunchhole_t hole{};
+    hole.fp_offset = static_cast<off_t>(offset);
+    hole.fp_length = static_cast<off_t>(length);
+    fcntl(fd_, F_PUNCHHOLE, &hole);
+#else
+    // No way to give the room back here: the chunks are unmarked all the
+    // same and fetched again when read.
+    (void)offset;
+    (void)length;
+#endif
 }
 
 bool ChunkCache::writeAt(uint64_t offset, const uint8_t* data, size_t length) {
@@ -197,6 +319,14 @@ bool ChunkCache::ensure(uint64_t offset, uint64_t length) {
     const uint64_t last = (offset + length - 1) / chunk_;
     const uint64_t perRequest = std::max<uint64_t>(1, kMaxRequestBytes / chunk_);
     const uint64_t epoch0 = failedEpoch_;
+    // This run read these chunks (the size limit's "last read").
+    const uint32_t run = g_run.load(std::memory_order_relaxed);
+    for (uint64_t k = first; k <= last && k < lastUse_.size(); ++k) {
+        if (lastUse_[static_cast<size_t>(k)] != run) {
+            lastUse_[static_cast<size_t>(k)] = run;
+            useDirty_ = true;
+        }
+    }
     for (;;) {
         // The first chunk still missing that nobody is fetching: claim the
         // run of missing chunks from there and fetch it without the lock, so
@@ -237,6 +367,7 @@ bool ChunkCache::ensure(uint64_t offset, uint64_t length) {
         lock.lock();
         for (uint64_t k = c; k <= end; ++k) inFlight_.erase(k);
         if (ok) {
+            ++t_fetches;
             ++requests_;
             fetched_ += bytes.size();
             for (uint64_t k = c; k <= end; ++k) bitmap_.set(k);
@@ -257,6 +388,60 @@ bool ChunkCache::ensure(uint64_t offset, uint64_t length) {
 uint64_t ChunkCache::chunksPresent() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return bitmap_.present();
+}
+
+uint64_t ChunkCache::bytesPresent() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const uint64_t count = bitmap_.chunkCount();
+    if (count == 0) return 0;
+    uint64_t bytes = bitmap_.present() * chunk_;
+    // The last chunk is short when the size is not a multiple of the chunk.
+    if (bitmap_.has(count - 1)) bytes -= count * chunk_ - size_;
+    return bytes;
+}
+
+bool ChunkCache::clear() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!inFlight_.empty()) return false;
+    const std::string identity = bitmap_.identity();
+    bitmap_.reset(size_, chunk_, identity);
+    std::fill(lastUse_.begin(), lastUse_.end(), 0u);
+    useDirty_ = true;
+    // The bitmap first: a crash between the two leaves chunks that are on
+    // disk but not marked, which costs a fetch, never the reverse.
+    const bool saved = bitmap_.save(indexPath_);
+#ifdef _WIN32
+    HANDLE h = static_cast<HANDLE>(file_);
+    if (!h) return false;
+    LARGE_INTEGER zero{};
+    LARGE_INTEGER want{};
+    want.QuadPart = static_cast<LONGLONG>(size_);
+    const bool cut = SetFilePointerEx(h, zero, nullptr, FILE_BEGIN) && SetEndOfFile(h) &&
+                     SetFilePointerEx(h, want, nullptr, FILE_BEGIN) && SetEndOfFile(h);
+#else
+    if (fd_ < 0) return false;
+    const bool cut = ftruncate(fd_, 0) == 0 && ftruncate(fd_, static_cast<off_t>(size_)) == 0;
+#endif
+    return saved && cut;
+}
+
+
+uint32_t chooseUseCutoff(const std::map<uint32_t, uint64_t>& bytesByRun, uint64_t limit,
+                         uint32_t current) {
+    if (limit == 0) return 0;
+    uint64_t total = 0;
+    for (const auto& [run, bytes] : bytesByRun) total += bytes;
+    if (total <= limit) return 0;
+    const uint64_t target = limit - limit / 10;
+    const uint32_t newest = bytesByRun.rbegin()->first;
+    for (const auto& [run, bytes] : bytesByRun) {
+        // What the last start read stays even when it alone is over: the
+        // next one most likely reads it again.
+        if (run >= current || run == newest) return run;
+        total -= bytes;
+        if (total <= target) return run + 1;
+    }
+    return current;
 }
 
 uint64_t ChunkCache::chunkCount() const {

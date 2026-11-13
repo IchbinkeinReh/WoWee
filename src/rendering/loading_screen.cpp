@@ -9,6 +9,7 @@
 #include <SDL3/SDL_vulkan.h>
 #include "rendering/vk_context.hpp"
 #include "core/logger.hpp"
+#include "ui/stream_progress.hpp"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_impl_vulkan.h>
@@ -420,6 +421,7 @@ void LoadingScreen::drawOverlay() {
     // Black first, as the screen is black around a picture of another shape.
     drawList->AddRectFilled(ImVec2(0.0f, 0.0f), size, IM_COL32(0, 0, 0, 255));
     drawPicture(drawList, size.x, size.y);
+    ui::drawStreamProgress(drawList, size.x, size.y);
 }
 
 void LoadingScreen::render() {
@@ -449,6 +451,8 @@ void LoadingScreen::render() {
         ImGuiWindowFlags_NoBringToFrontOnFocus);
 
     drawPicture(ImGui::GetWindowDrawList(), screenW, screenH);
+    // The streaming data mode's fetch, while it goes on (not the original's).
+    ui::drawStreamProgress(ImGui::GetWindowDrawList(), screenW, screenH);
 
     ImGui::End();
     ImGui::Render();
