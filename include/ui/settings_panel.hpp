@@ -114,30 +114,30 @@ public:
     int pendingDbgSun = 100;
     int pendingDbgBakedLight = 100;
     int pendingDbgPointLights = 100;
-    int pendingDbgBounce = 100;
+    int pendingDbgBounce = 50;
     /// A time of day to light the world at instead of the server's, in
     /// hours, used while the switch is on (Renderer::setGameTimeOverride).
     bool pendingDbgTimeOverride = false;
     bool pendingDbgSplitRt = false;  ///< Debug Graphics: left half traced, right not
-    float pendingDbgTime = 12.0f;
+    float pendingDbgTime = 19.25f;
     /// Per kind of point light (rt_lights::Source), in percent of its own.
     float pendingDbgModelLightIntensity = 100.0f;
     int pendingDbgModelLightReach = 150;
-    float pendingDbgFireLightIntensity = 105.0f;
+    float pendingDbgFireLightIntensity = 100.0f;
     int pendingDbgFireLightReach = 150;
-    float pendingDbgLampLightIntensity = 105.0f;
+    float pendingDbgLampLightIntensity = 100.0f;
     int pendingDbgLampLightReach = 150;
-    float pendingDbgBuildingLightIntensity = 55.0f;
+    float pendingDbgBuildingLightIntensity = 30.0f;
     int pendingDbgBuildingLightReach = 100;
     float pendingDbgUnitLightIntensity = 100.0f;
     int pendingDbgUnitLightReach = 100;
     float pendingDbgEmissiveLightIntensity = 30.0f;
     int pendingDbgEmissiveLightReach = 100;
-    float pendingDbgParticleLightIntensity = 100.0f;
-    int pendingDbgParticleLightReach = 100;
+    float pendingDbgParticleLightIntensity = 110.0f;
+    int pendingDbgParticleLightReach = 150;
     /// Inside, a baked colour where no lamp shines and the lamps' light at
     /// which it is whole (Renderer::LightingTune::interiorBase, interiorFullAt).
-    int pendingDbgInteriorBase = 25;
+    int pendingDbgInteriorBase = 20;
     int pendingDbgInteriorFullAt = 100;
     /// The most light the traced lights add to a place, % of a full white
     /// light; 1000 no limit (Renderer::LightingTune::maxLight).
@@ -150,10 +150,10 @@ public:
     int pendingDbgGlowAnim = 100;      ///< Debug Glow: glow colour animation strength, percent
     int pendingDbgLightCountLimit = 512;
     int pendingRtParticleLights = 1;  ///< lights per particle emitter (rt_particle_lights.hpp)
-    int pendingDbgShadowDarkness = 65;
+    int pendingDbgShadowDarkness = 70;
     int pendingDbgTracedSunShadow = 100;
     int pendingDbgMapSunShadow = 100;
-    int pendingDbgPointShadow = 100;
+    int pendingDbgPointShadow = 70;
     int pendingDbgBakedLampShadow = 100;
     int pendingDbgOcclusion = 100;
     int pendingDbgTerrainShadow = 100;
