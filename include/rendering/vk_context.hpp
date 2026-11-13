@@ -778,6 +778,9 @@ private:
     bool createOverlayRenderPass();
     bool createSceneContinueRenderPass();
     void createDeferredScenePasses();
+    /// The external dependency into the scene pass. Shared by every pass that
+    /// has to stay compatible with it.
+    static VkSubpassDependency sceneEntryDependency();
     bool createMsaaScenePass(VkRenderPass& out, bool loadScene, bool keepColour = false);
     VkRenderPass gbufferRenderPass_ = VK_NULL_HANDLE;
     VkRenderPass sceneResumeMsaaRenderPass_ = VK_NULL_HANDLE;

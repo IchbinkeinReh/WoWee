@@ -2065,6 +2065,29 @@ void VkContext::setMsaaSamples(VkSampleCountFlagBits samples) {
 // blended halves), loading what the first one stored. keepColour stores the
 // multisampled colour for a pass to load after it: the scene is closed once
 // more under the water, for the copy the water reads (Renderer::cutSceneForWater).
+// The external dependency into the scene pass, shared by every pass that has
+// to stay compatible with it (upstream b8b6242d, 9c399b97). The scene's
+// framebuffers share their depth, MSAA colour and depth-resolve images across
+// frames: UNDEFINED discards the contents but does not order the new layout
+// transition after the previous frame's writes, and depth stores can run in
+// LATE_FRAGMENT_TESTS. The old zero source access mask left reuse and the
+// depth resolve at vkCmdEndRenderPass with write-after-write hazards.
+VkSubpassDependency VkContext::sceneEntryDependency() {
+    VkSubpassDependency dependency{};
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    dependency.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                              VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                              VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                               VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                               VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                               VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    return dependency;
+}
+
 bool VkContext::createMsaaScenePass(VkRenderPass& out, bool loadScene, bool keepColour) {
     const bool useDepthResolve = (depthResolveImageView != VK_NULL_HANDLE);
     // MSAA render pass: 3 or 4 attachments
@@ -2159,11 +2182,13 @@ bool VkContext::createMsaaScenePass(VkRenderPass& out, bool loadScene, bool keep
 
         VkSubpassDependency2 dep2{};
         dep2.sType = VK_STRUCTURE_TYPE_SUBPASS_DEPENDENCY_2;
-        dep2.srcSubpass = VK_SUBPASS_EXTERNAL;
-        dep2.dstSubpass = 0;
-        dep2.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-        dep2.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-        dep2.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        const VkSubpassDependency entry = sceneEntryDependency();
+        dep2.srcSubpass = entry.srcSubpass;
+        dep2.dstSubpass = entry.dstSubpass;
+        dep2.srcStageMask = entry.srcStageMask;
+        dep2.dstStageMask = entry.dstStageMask;
+        dep2.srcAccessMask = entry.srcAccessMask;
+        dep2.dstAccessMask = entry.dstAccessMask;
 
         VkRenderPassCreateInfo2 rpInfo2{};
         rpInfo2.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO_2;
@@ -2198,13 +2223,7 @@ bool VkContext::createMsaaScenePass(VkRenderPass& out, bool loadScene, bool keep
         subpass.pDepthStencilAttachment = &depthRef;
         subpass.pResolveAttachments = &resolveRef;
 
-        VkSubpassDependency dependency{};
-        dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-        dependency.dstSubpass = 0;
-        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-        dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-        dependency.srcAccessMask = 0;
-        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        const VkSubpassDependency dependency = sceneEntryDependency();
 
         VkRenderPassCreateInfo rpInfo{};
         rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
@@ -2305,13 +2324,7 @@ bool VkContext::createSwapchainRenderTargets(const char* verb) {
         subpass.pColorAttachments = &colorRef;
         subpass.pDepthStencilAttachment = &depthRef;
 
-        VkSubpassDependency dependency{};
-        dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-        dependency.dstSubpass = 0;
-        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-        dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-        dependency.srcAccessMask = 0;
-        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        const VkSubpassDependency dependency = sceneEntryDependency();
 
         VkRenderPassCreateInfo rpInfo{};
         rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
@@ -2515,13 +2528,7 @@ bool VkContext::createSceneContinueRenderPass() {
     // against how that framebuffer was created - a dependency that differs makes
     // the begin invalid, which is undefined behaviour and rendered the frame into
     // a corner of the screen on the FXAA path.
-    VkSubpassDependency dependency{};
-    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-    dependency.dstSubpass = 0;
-    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dependency.srcAccessMask = 0;
-    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    const VkSubpassDependency dependency = sceneEntryDependency();
 
     VkRenderPassCreateInfo rpInfo{};
     rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
