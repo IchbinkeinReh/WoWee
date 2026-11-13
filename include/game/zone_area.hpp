@@ -3,7 +3,7 @@
 /// Where the player is, as the client names it: the area under the feet, the
 /// zone and subzone it splits into, the four texts the interface reads and
 /// the event that says they changed (0x0078f020, run every tenth tick by
-/// 0x006d7bb0, into 0x005204c0).
+/// 0x006d7bb0 from the frame tick 0x00403340, into 0x005204c0).
 ///
 /// The area is a building's where the player stands in or on one and its
 /// WMOAreaTable row names an area - Dalaran's streets are its exterior
