@@ -21,7 +21,7 @@ constexpr SettingGerman kGerman[] = {
      "Stellt alle Grafikoptionen auf einmal ein: Sichtweite, Schatten, Kantenglättung, "
      "Oberflächendetails, Bodenbewuchs und Gras. Wird danach eine davon geändert, steht hier "
      "Benutzerdefiniert.",
-     "Benutzerdefiniert|Niedrig|Mittel|Hoch|Ultra", nullptr, nullptr},
+     "Benutzerdefiniert|Niedrig|Mittel|Hoch|Ultra|Super-Ultra", nullptr, nullptr},
     {"viewdistance",
      "Sichtweite",
      "Wie weit die Welt in die Ferne gezeichnet wird, in Metern. Der größte einzelne Kostenpunkt "
@@ -186,12 +186,11 @@ constexpr SettingGerman kGerman[] = {
      "glänzenden Bodentexturen. Wirkt beim nächsten Spielstart, wie im ursprünglichen Client.",
      nullptr, nullptr, nullptr},
     {"raytracedlighting",
-     "Raytracing (Experiment)",
-     "SEHR EXPERIMENTELL: Bildfehler und hohe Kosten bei der Bildrate sind zu erwarten, besonders "
-     "ohne Raytracing-Hardware. Verfolgt Strahlen durch die Welt für die Schatten der Sonne, die "
-     "Verdunkelung in Ecken und Spalten und das von Boden und Wänden zurückgeworfene Licht. Nutzt "
-     "das Raytracing der Grafikkarte, wo sie es hat, und sonst einen langsameren Rechenweg. "
-     "Charaktere werfen ihre Schatten weiter aus der Schattenkarte.",
+     "Raytracing-Beleuchtung",
+     "Verfolgt Strahlen durch die Welt für die Schatten von Sonne und Mond, die Verdunkelung in "
+     "Ecken und Spalten und das von Boden und Wänden zurückgeworfene Licht. Nutzt das Raytracing "
+     "der Grafikkarte, wo sie es hat, und sonst einen Rechenweg; jede Stufe kostet Bildrate, der "
+     "Rechenweg mehr. Charaktere werfen ihre Schatten weiter aus der Schattenkarte.",
      "Aus|Sonnenschatten|Schatten und Verdeckung|Schatten, Verdeckung und indirektes Licht", nullptr, nullptr},
     {"rtfullres",
      "Volle Auflösung (RT)",
@@ -1406,7 +1405,6 @@ constexpr Pair kSections[] = {
     {"Ground cover", "Bodenbedeckung"},
     {"Ground cover (experimental)", "Bodenbedeckung (experimentell)"},
     {"Health and power numbers", "Zahlen zu Gesundheit und Macht"},
-    {"Highly experimental", "Sehr experimentell"},
     {"Input", "Eingabe"},
     {"Intensity and reach", "Stärke und Reichweite"},
     {"Interiors, ray traced", "Innenräume, Raytracing"},
@@ -1531,7 +1529,6 @@ constexpr Pair kWindowWords[] = {
     {"Reset Bottom Left Position", "Position zurücksetzen"},
     {"Resolution", "Auflösung"},
     {"What the controller does", "Was der Controller tut"},
-    {"Ray Tracing (highly experimental)", "Raytracing (Experiment)"},
     {"Debug: Time of day", "Debug: Tageszeit"},
     {"Debug: Light sources", "Debug: Lichtquellen"},
     {"Debug: Shadows", "Debug: Schatten"},

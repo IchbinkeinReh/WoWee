@@ -34,11 +34,11 @@ constexpr SettingDesc kSchema[] = {
     // them. Both panels show the label as the title and these lines under it,
     // and the interface's panel adds the reason when a control is greyed, so
     // no line here needs to say what it depends on.
-    {"graphicspreset", "Quality preset", SettingKind::Enum, 0, 4, 1, "Graphics", "Quality",
+    {"graphicspreset", "Quality preset", SettingKind::Enum, 0, 5, 1, "Graphics", "Quality",
      "Sets every graphics option at once: view distance, shadows,\n"
      "anti-aliasing, surface detail, ground clutter and grass.\n"
      "Change any one of them afterwards and this reads Custom.",
-     "Custom|Low|Medium|High|Ultra", 0},
+     "Custom|Low|Medium|High|Ultra|Super-Ultra", 0},
     // The shadow rows are on a Shadows page of their own, after this one.
     // The client's farclip: its slider's range and step, 177 to 1277 in
     // tenths (FrameXML VideoOptionsPanels.lua), and its Ultra level's value.
@@ -290,14 +290,13 @@ constexpr SettingDesc kSchema[] = {
     // costs real frames. One row rather than three switches, because each
     // term builds on the previous one's rays. A page of its own because
     // Graphics and Detail are both full to the bottom of their columns.
-    {"raytracedlighting", "Ray traced lighting (highly experimental)", SettingKind::Enum, 0, 3, 1,
-     "Ray Tracing", "Highly experimental",
-     "HIGHLY EXPERIMENTAL: expect visual artefacts and a large\n"
-     "frame rate cost, especially without ray tracing hardware.\n"
-     "Traces rays against the world for the sun's shadows, the\n"
-     "darkening in corners and crevices, and light bounced off the\n"
-     "ground and walls. Uses the graphics card's ray tracing where it\n"
-     "has it and a slower compute path where it does not.\n"
+    {"raytracedlighting", "Ray traced lighting", SettingKind::Enum, 0, 3, 1,
+     "Ray Tracing", "Lighting",
+     "Traces rays against the world for the shadows of the sun and\n"
+     "the moon, the darkening in corners and crevices, and light\n"
+     "bounced off the ground and walls. Uses the graphics card's ray\n"
+     "tracing where it has it and a compute path where it does not;\n"
+     "each step costs frame rate, the compute path more.\n"
      "Characters still cast shadows from the shadow map.",
      "Off|Sun shadows|Shadows and occlusion|Shadows, occlusion and bounce light", 0},
     // Off by default: half resolution is the trace as it has always run. A
