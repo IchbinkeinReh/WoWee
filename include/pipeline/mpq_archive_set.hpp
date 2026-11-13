@@ -55,6 +55,13 @@ public:
     /// Where archives opened from now on get their RangeFetch: by path, an
     /// empty function for a file that is all on disk. Unset = all on disk.
     static void setRangeSource(std::function<RangeFetch(const std::string& path)> source);
+    /// Told of each streamed archive's view as it is mapped (and of null as
+    /// it is unmapped). A streamed archive is mapped copy-on-write: a write
+    /// to the view stays in this process and never reaches the file, which
+    /// is how the stream holds chunks past its disk limit in memory
+    /// (ChunkCache::setView). An archive on disk stays mapped read-only.
+    using ViewSink = std::function<void(const std::string& path, uint8_t* view)>;
+    static void setStreamViewSink(ViewSink sink);
 
     /// Opens every archive of the Data folder `dir` (or `dir`\Data).
     bool open(const std::string& dir);

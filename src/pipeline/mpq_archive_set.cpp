@@ -131,6 +131,23 @@ void MpqArchiveSet::setRangeSource(std::function<RangeFetch(const std::string& p
     g_rangeSource = std::move(source);
 }
 
+namespace {
+MpqArchiveSet::ViewSink g_viewSink;   // under g_rangeSourceMutex
+void tellView(const std::string& path, uint8_t* view) {
+    MpqArchiveSet::ViewSink sink;
+    {
+        std::lock_guard<std::mutex> lock(g_rangeSourceMutex);
+        sink = g_viewSink;
+    }
+    if (sink) sink(path, view);
+}
+}  // namespace
+
+void MpqArchiveSet::setStreamViewSink(ViewSink sink) {
+    std::lock_guard<std::mutex> lock(g_rangeSourceMutex);
+    g_viewSink = std::move(sink);
+}
+
 // ---- one archive ---------------------------------------------------------------
 
 struct MpqArchiveSet::Archive {
@@ -176,9 +193,11 @@ struct MpqArchiveSet::Archive {
         if (!GetFileSizeEx(file, &li) || li.QuadPart <= 0) return false;
         size = static_cast<uint64_t>(li.QuadPart);
         stream = rangeSourceFor(path);
-        mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
+        // Streamed: copy-on-write (see setStreamViewSink); else read-only.
+        mapping = CreateFileMappingW(file, nullptr, stream ? PAGE_WRITECOPY : PAGE_READONLY, 0, 0, nullptr);
         if (!mapping) return false;
-        base = static_cast<const uint8_t*>(MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0));
+        base = static_cast<const uint8_t*>(MapViewOfFile(mapping, stream ? FILE_MAP_COPY : FILE_MAP_READ, 0, 0, 0));
+        if (base && stream) tellView(path, const_cast<uint8_t*>(base));
         return base != nullptr;
 #else
         fd = ::open(path.c_str(), O_RDONLY);
@@ -187,14 +206,18 @@ struct MpqArchiveSet::Archive {
         if (fstat(fd, &st) != 0 || st.st_size <= 0) return false;
         size = static_cast<uint64_t>(st.st_size);
         stream = rangeSourceFor(path);
-        void* p = mmap(nullptr, size, PROT_READ, MAP_SHARED, fd, 0);
+        // Streamed: private, writable (see setStreamViewSink); else shared, read-only.
+        void* p = stream ? mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0)
+                         : mmap(nullptr, size, PROT_READ, MAP_SHARED, fd, 0);
         if (p == MAP_FAILED) return false;
         base = static_cast<const uint8_t*>(p);
+        if (stream) tellView(path, static_cast<uint8_t*>(p));
         return true;
 #endif
     }
 
     void unmap() {
+        if (base && stream) tellView(path, nullptr);
 #ifdef _WIN32
         if (base) UnmapViewOfFile(base);
         if (mapping) CloseHandle(mapping);

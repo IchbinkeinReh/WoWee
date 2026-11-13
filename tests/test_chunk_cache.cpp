@@ -317,3 +317,96 @@ TEST_CASE("Chunks remember the run that read them; old ones are dropped", "[chun
           std::vector<uint8_t>(r.bytes.begin(), r.bytes.begin() + kChunk));
     ChunkCache::setRun(1);
 }
+
+TEST_CASE("A loading screen drops older runs' chunks, never this run's", "[chunks][limit]") {
+    using wowee::pipeline::chooseLoadCutoff;
+    // This run is 9; it read 300 bytes so far.
+    const std::map<uint32_t, uint64_t> byRun = {{3, 300}, {5, 500}, {9, 300}};
+    CHECK(chooseLoadCutoff(byRun, 0, 9) == 0);
+    CHECK(chooseLoadCutoff(byRun, 1300, 9) == 0);   // 1100 is within 1170
+    CHECK(chooseLoadCutoff(byRun, 1150, 9) == 4);   // under the limit, over 1035: 300 go
+    CHECK(chooseLoadCutoff(byRun, 1000, 9) == 4);   // 300 go -> 800 <= 900
+    CHECK(chooseLoadCutoff(byRun, 700, 9) == 6);    // both older -> 300 <= 630
+    // This run's own 300 are over a limit of 100: they stay, and it stops.
+    CHECK(chooseLoadCutoff(byRun, 100, 9) == 9);
+    // Unlike at start, the newest older run is no shield during play.
+    CHECK(chooseLoadCutoff({{8, 2000}, {9, 10}}, 1000, 9) == 9);
+
+    // On a cache that a reader of this run holds: run 1 read chunks 0-3,
+    // run 2 (now) chunk 2; dropping before run 2 keeps chunk 2, and the
+    // shared on-disk count follows.
+    Dir d;
+    Remote r(8 * kChunk);
+    const fs::path local = d.root / "common.MPQ";
+    ChunkCache::setRun(1);
+    ChunkCache cache;
+    REQUIRE(cache.open(local.string(), r.bytes.size(), kChunk, "v1", r.fetcher()));
+    const uint64_t disk0 = ChunkCache::diskBytes();
+    REQUIRE(cache.ensure(0, 4 * kChunk));
+    CHECK(ChunkCache::diskBytes() == disk0 + 4 * kChunk);
+    ChunkCache::setRun(2);
+    REQUIRE(cache.ensure(2 * kChunk, 1));
+    std::map<uint32_t, uint64_t> held;
+    cache.addBytesByLastUse(held);
+    REQUIRE(chooseLoadCutoff(held, 2 * kChunk, 2) == 2);
+    CHECK(cache.dropReadBefore(2) == 3 * kChunk);
+    CHECK(ChunkCache::diskBytes() == disk0 + kChunk);
+    const int before = r.requests;
+    REQUIRE(cache.ensure(2 * kChunk, kChunk));      // kept: no fetch
+    CHECK(r.requests == before);
+    REQUIRE(cache.ensure(0, 1));                    // dropped: fetched again
+    CHECK(r.requests == before + 1);
+    ChunkCache::setRun(1);
+}
+
+TEST_CASE("Past the disk limit, chunks are held in the view's memory only", "[chunks][limit]") {
+    Dir d;
+    Remote r(8 * kChunk);
+    const fs::path local = d.root / "patch-3.MPQ";
+    std::vector<uint8_t> view(r.bytes.size(), 0);   // the archive's private view
+    const uint64_t mem0 = ChunkCache::memoryBytes();
+    {
+        ChunkCache cache;
+        REQUIRE(cache.open(local.string(), r.bytes.size(), kChunk, "v1", r.fetcher()));
+        cache.setView(view.data());
+        // Room on disk for two chunks more than now.
+        ChunkCache::setDiskLimit(ChunkCache::diskBytes() + 2 * kChunk);
+        ChunkCache::setMemoryLimit(3 * kChunk);
+        REQUIRE(cache.ensure(0, 2 * kChunk));           // to disk: fits
+        CHECK(cache.chunksPresent() == 2);
+        REQUIRE(cache.ensure(2 * kChunk, 2 * kChunk));  // past it: memory
+        CHECK(cache.chunksPresent() == 2);              // not in the bitmap
+        CHECK(cache.chunksInMemory() == 2);
+        CHECK(ChunkCache::memoryBytes() == mem0 + 2 * kChunk);
+        // Readable from the view, the server's bytes (its SHA-256 is the
+        // fetcher's to check, as for any chunk); not written to the copy.
+        CHECK(std::vector<uint8_t>(view.begin() + 2 * kChunk, view.begin() + 4 * kChunk) ==
+              std::vector<uint8_t>(r.bytes.begin() + 2 * kChunk, r.bytes.begin() + 4 * kChunk));
+        CHECK(readLocal(local, 2 * kChunk, kChunk) == std::vector<uint8_t>(kChunk, 0));
+        // Held: reading it again fetches nothing.
+        const int before = r.requests;
+        REQUIRE(cache.ensure(3 * kChunk, 10));
+        CHECK(r.requests == before);
+        // The memory is bounded: the next chunk goes to disk after all.
+        REQUIRE(cache.ensure(4 * kChunk, kChunk));      // the third in memory
+        CHECK(cache.chunksInMemory() == 3);
+        REQUIRE(cache.ensure(5 * kChunk, kChunk));      // memory full: disk
+        CHECK(cache.chunksInMemory() == 3);
+        CHECK(cache.chunksPresent() == 3);
+        ChunkCache::setDiskLimit(0);
+        ChunkCache::setMemoryLimit(256ull * 1024 * 1024);
+    }
+    CHECK(ChunkCache::memoryBytes() == mem0);
+    // A restart: the memory-only chunks are not in the bitmap, so they are
+    // fetched again; the disk ones are not.
+    ChunkCache cache;
+    REQUIRE(cache.open(local.string(), r.bytes.size(), kChunk, "v1", r.fetcher()));
+    CHECK(cache.chunksPresent() == 3);
+    const int before = r.requests;
+    REQUIRE(cache.ensure(0, 2 * kChunk));
+    CHECK(r.requests == before);
+    REQUIRE(cache.ensure(2 * kChunk, 2 * kChunk));
+    CHECK(r.requests == before + 1);
+    CHECK(readLocal(local, 2 * kChunk, kChunk) ==
+          std::vector<uint8_t>(r.bytes.begin() + 2 * kChunk, r.bytes.begin() + 3 * kChunk));
+}

@@ -80,6 +80,12 @@ public:
     };
     [[nodiscard]] Totals totals() const;
 
+    /// The cache limit during play: each loading screen takes a new stamp
+    /// (a start and every loading screen after it are "runs"), then what
+    /// earlier runs read is dropped, longest ago first, down to nine tenths
+    /// of the limit (see chooseLoadCutoff). Nothing dropped without a limit.
+    void enforceCacheLimit(const char* why);
+
     /// Saves which chunks this run read (the size limit's "last read"); at
     /// exit and now and then while playing.
     void saveUse();
@@ -106,7 +112,9 @@ private:
     std::vector<std::unique_ptr<Entry>> entries_;
     std::map<std::string, Entry*> byLocal_;   // normalised local path -> entry
     bool active_ = false;
-    uint32_t run_ = 1;   // this start's number in the cache folder
+    uint32_t run_ = 0;   // the stamp of this start, or of its last loading screen
+    std::string runFile_;
+    void nextRun();
 };
 
 /// Normalised form of a local path for the lookups above (absolute, generic
