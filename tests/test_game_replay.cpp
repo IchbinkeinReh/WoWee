@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 using replay::Session;
@@ -145,4 +146,92 @@ TEST_CASE("a player created feigning is alive, and stays so when it ends", "[rep
     s.receive(UpdateObject().values(Session::kPlayerGuid,
                                     {{UF::UNIT_FIELD_FLAGS_2, 0}, {UF::UNIT_DYNAMIC_FLAGS, 0}}));
     CHECK_FALSE(s.handler().isPlayerDead());
+}
+
+namespace {
+
+// WorldObject::SendSpellMiss: the spell, the caster's guid whole, an unknown
+// byte, one target, its guid whole, and how it missed (SpellMissInfo).
+wowee::network::Packet spellMiss(uint64_t caster, uint64_t victim, uint32_t spellId, uint8_t missInfo) {
+    wowee::network::Packet p(wowee::game::wireOpcode(wowee::game::Opcode::SMSG_SPELLLOGMISS));
+    p.writeUInt32(spellId);
+    p.writeUInt64(caster);
+    p.writeUInt8(0);
+    p.writeUInt32(1);
+    p.writeUInt64(victim);
+    p.writeUInt8(missInfo);
+    return p;
+}
+
+std::vector<wowee::game::CombatTextEntry::Type> spellMissText(uint64_t caster, uint64_t victim,
+                                                               uint8_t missInfo) {
+    Session s;
+    huntMob(s);
+    // Resists and immunities show only on the target (fctSpellMechanics).
+    s.handler().setTarget(kMob);
+    s.receive(spellMiss(caster, victim, kArcaneShot, missInfo));
+    std::vector<wowee::game::CombatTextEntry::Type> types;
+    for (const auto& e : s.handler().getCombatText()) types.push_back(e.type);
+    return types;
+}
+
+}  // namespace
+
+namespace {
+
+// SpellMissInfo, as every server family numbers it.
+const std::vector<std::pair<uint8_t, wowee::game::CombatTextEntry::Type>>& missTypes() {
+    using T = wowee::game::CombatTextEntry;
+    static const std::vector<std::pair<uint8_t, T::Type>> table = {
+        {1, T::MISS},   {2, T::RESIST}, {3, T::DODGE},   {4, T::PARRY},  {5, T::BLOCK},
+        {6, T::EVADE},  {7, T::IMMUNE}, {8, T::IMMUNE},  {9, T::DEFLECT}, {10, T::ABSORB},
+    };
+    return table;
+}
+
+}  // namespace
+
+TEST_CASE("a spell miss shows what the server says happened", "[replay]") {
+    for (const auto& [missInfo, type] : missTypes()) {
+        CAPTURE(missInfo);
+        // The player's own misses, against the target, where every kind shows.
+        CHECK(spellMissText(Session::kPlayerGuid, kMob, missInfo) ==
+              std::vector<wowee::game::CombatTextEntry::Type>{type});
+    }
+}
+
+namespace {
+
+// Spell::SendSpellGo with no hits and one miss: caster and unit packed, the
+// cast count, spell, flags and time, no hit targets, one miss target whole
+// with its SpellMissInfo, and an empty target mask.
+wowee::network::Packet spellGoMiss(uint64_t victim, uint32_t spellId, uint8_t missInfo) {
+    wowee::network::Packet p(wowee::game::wireOpcode(wowee::game::Opcode::SMSG_SPELL_GO));
+    p.writePackedGuid(Session::kPlayerGuid);
+    p.writePackedGuid(Session::kPlayerGuid);
+    p.writeUInt8(1);
+    p.writeUInt32(spellId);
+    p.writeUInt32(0);
+    p.writeUInt32(0);
+    p.writeUInt8(0);
+    p.writeUInt8(1);
+    p.writeUInt64(victim);
+    p.writeUInt8(missInfo);
+    p.writeUInt32(0);
+    return p;
+}
+
+}  // namespace
+
+TEST_CASE("a spell go miss shows what the server says happened", "[replay]") {
+    for (const auto& [missInfo, type] : missTypes()) {
+        CAPTURE(missInfo);
+        Session s;
+        huntMob(s);
+        s.handler().setTarget(kMob);
+        s.receive(spellGoMiss(kMob, kArcaneShot, missInfo));
+        std::vector<wowee::game::CombatTextEntry::Type> types;
+        for (const auto& e : s.handler().getCombatText()) types.push_back(e.type);
+        CHECK(types == std::vector<wowee::game::CombatTextEntry::Type>{type});
+    }
 }

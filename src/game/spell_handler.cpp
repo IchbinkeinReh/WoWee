@@ -358,9 +358,7 @@ static CombatTextEntry::Type combatTextTypeFromSpellMissInfo(uint8_t missInfo) {
         case SpellMissInfo::DEFLECT: return CombatTextEntry::DEFLECT;
         case SpellMissInfo::ABSORB:  return CombatTextEntry::ABSORB;
         case SpellMissInfo::RESIST:  return CombatTextEntry::RESIST;
-        case SpellMissInfo::IMMUNE2:
-        case SpellMissInfo::IMMUNE3:
-            return CombatTextEntry::IMMUNE;
+        case SpellMissInfo::IMMUNE2: return CombatTextEntry::IMMUNE;
         case SpellMissInfo::REFLECT: return CombatTextEntry::REFLECT;
         default: return CombatTextEntry::MISS;
     }
@@ -7338,20 +7336,13 @@ void SpellHandler::handleSpellLogMiss(network::Packet& packet) {
         }
         return;
     }
-    const bool spellMissUsesFullGuid = isActiveExpansion("tbc");
-    auto readSpellMissGuid = [&]() -> uint64_t {
-        if (spellMissUsesFullGuid)
-            return (packet.hasRemaining(8)) ? packet.readUInt64() : 0;
-        return packet.readPackedGuid();
-    };
-    // spellId prefix present in all expansions
-    if (!packet.hasRemaining(4)) return;
+    // spellId(4) + uint64 caster + uint8 unk + uint32 count
+    //   + count × (uint64 victim + uint8 missInfo), guids whole in every
+    // expansion (AzerothCore's WorldObject::SendSpellMiss, cmangos's
+    // Unit::SendSpellMiss).
+    if (!packet.hasRemaining(12)) { packet.skipAll(); return; }
     uint32_t spellId = packet.readUInt32();
-    if (!packet.hasRemaining(spellMissUsesFullGuid ? 8u : 1u)
-        || (!spellMissUsesFullGuid && !packet.hasFullPackedGuid())) {
-        packet.skipAll(); return;
-    }
-    uint64_t casterGuid = readSpellMissGuid();
+    uint64_t casterGuid = packet.readUInt64();
     if (!packet.hasRemaining(5)) return;
     /*uint8_t unk =*/ packet.readUInt8();
     const uint32_t rawCount = packet.readUInt32();
@@ -7363,58 +7354,31 @@ void SpellHandler::handleSpellLogMiss(network::Packet& packet) {
     struct SpellMissLogEntry {
         uint64_t victimGuid = 0;
         uint8_t missInfo = 0;
-        uint32_t reflectSpellId = 0;  // Only valid when missInfo==REFLECT
     };
     std::vector<SpellMissLogEntry> parsedMisses;
     parsedMisses.reserve(storedLimit);
 
-    bool truncated = false;
     for (uint32_t i = 0; i < rawCount; ++i) {
-        if (!packet.hasRemaining(spellMissUsesFullGuid ? 9u : 2u)
-            || (!spellMissUsesFullGuid && !packet.hasFullPackedGuid())) {
-            truncated = true;
+        if (!packet.hasRemaining(9)) {
+            packet.skipAll();
             return;
         }
-        const uint64_t victimGuid = readSpellMissGuid();
-        if (!packet.hasRemaining(1)) {
-            truncated = true;
-            return;
-        }
+        const uint64_t victimGuid = packet.readUInt64();
         const uint8_t missInfo = packet.readUInt8();
-        // REFLECT: extra uint32 reflectSpellId + uint8 reflectResult
-        uint32_t reflectSpellId = 0;
-        if (missInfo == SpellMissInfo::REFLECT) {
-            if (packet.hasRemaining(5)) {
-                reflectSpellId = packet.readUInt32();
-                /*uint8_t reflectResult =*/ packet.readUInt8();
-            } else {
-                truncated = true;
-                return;
-            }
-        }
         if (i < storedLimit) {
-            parsedMisses.push_back({.victimGuid = victimGuid, .missInfo = missInfo, .reflectSpellId = reflectSpellId});
+            parsedMisses.push_back({.victimGuid = victimGuid, .missInfo = missInfo});
         }
-    }
-
-    if (truncated) {
-        packet.skipAll();
-        return;
     }
 
     for (const auto& miss : parsedMisses) {
         const uint64_t victimGuid = miss.victimGuid;
-        const uint8_t missInfo = miss.missInfo;
-        CombatTextEntry::Type ct = combatTextTypeFromSpellMissInfo(missInfo);
-        // For REFLECT, use the reflected spell ID so combat text shows the spell name
-        uint32_t combatSpellId = (ct == CombatTextEntry::REFLECT && miss.reflectSpellId != 0)
-                                 ? miss.reflectSpellId : spellId;
+        const CombatTextEntry::Type ct = combatTextTypeFromSpellMissInfo(miss.missInfo);
         if (casterGuid == owner_.getPlayerGuid()) {
             // We cast a spell and it missed the target
-            owner_.addCombatText(ct, 0, combatSpellId, true, 0, casterGuid, victimGuid);
+            owner_.addCombatText(ct, 0, spellId, true, 0, casterGuid, victimGuid);
         } else if (victimGuid == owner_.getPlayerGuid()) {
             // Enemy spell missed us (we dodged/parried/blocked/resisted/etc.)
-            owner_.addCombatText(ct, 0, combatSpellId, false, 0, casterGuid, victimGuid);
+            owner_.addCombatText(ct, 0, spellId, false, 0, casterGuid, victimGuid);
         }
     }
 }

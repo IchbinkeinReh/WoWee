@@ -362,20 +362,21 @@ namespace SpellEffect {
     constexpr uint8_t TOTAL_SPELL_EFFECTS       = 165;
 } // namespace SpellEffect
 
-// ── SpellMissInfo - SMSG_SPELLLOGMISS / SMSG_SPELL_GO miss type (3.3.5a) ─
+// ── SpellMissInfo - SMSG_SPELLLOGMISS / SMSG_SPELL_GO miss type ─
+// The servers' own numbering, the same from 1.12 to 3.3.5 (AzerothCore and
+// cmangos SharedDefines.h).
 namespace SpellMissInfo {
-    constexpr uint8_t NONE      = 0;   // Miss
-    constexpr uint8_t MISS      = 0;
-    constexpr uint8_t DODGE     = 1;
-    constexpr uint8_t PARRY     = 2;
-    constexpr uint8_t BLOCK     = 3;
-    constexpr uint8_t EVADE     = 4;
-    constexpr uint8_t IMMUNE    = 5;
-    constexpr uint8_t DEFLECT   = 6;
-    constexpr uint8_t ABSORB    = 7;
-    constexpr uint8_t RESIST    = 8;
-    constexpr uint8_t IMMUNE2   = 9;   // Second immunity flag
-    constexpr uint8_t IMMUNE3   = 10;  // Third immunity flag
+    constexpr uint8_t NONE      = 0;
+    constexpr uint8_t MISS      = 1;
+    constexpr uint8_t RESIST    = 2;
+    constexpr uint8_t DODGE     = 3;
+    constexpr uint8_t PARRY     = 4;
+    constexpr uint8_t BLOCK     = 5;
+    constexpr uint8_t EVADE     = 6;
+    constexpr uint8_t IMMUNE    = 7;
+    constexpr uint8_t IMMUNE2   = 8;
+    constexpr uint8_t DEFLECT   = 9;
+    constexpr uint8_t ABSORB    = 10;
     constexpr uint8_t REFLECT   = 11;
 } // namespace SpellMissInfo
 
