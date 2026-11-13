@@ -12,6 +12,7 @@
 
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -83,7 +84,40 @@ namespace {
 constexpr float kMinLogicalHeight = 620.0f;
 #endif
 
-float interfaceScale([[maybe_unused]] SDL_Window* window) {
+/// What the display covers at each edge - a notch, rounded corners, the home
+/// indicator or gesture bar - in window units. Zero everywhere on a desktop.
+safe_area::Insets measureSafeArea(SDL_Window* window) {
+    safe_area::Insets insets;
+    if (window) {
+        SDL_Rect safe{};
+        int winW = 0, winH = 0;
+        if (SDL_GetWindowSafeArea(window, &safe) && SDL_GetWindowSize(window, &winW, &winH) &&
+            safe.w > 0 && safe.h > 0) {
+            insets.left = static_cast<float>(safe.x);
+            insets.top = static_cast<float>(safe.y);
+            insets.right = static_cast<float>(winW - safe.x - safe.w);
+            insets.bottom = static_cast<float>(winH - safe.y - safe.h);
+        }
+    }
+    // A test hook (with WOWEE_AUTO_LUA only): WOWEE_TEST_SAFE_AREA="l,r,t,b"
+    // stands in for a notch on a desktop, so a scripted run can see what
+    // keeps clear of one.
+    static const std::optional<safe_area::Insets> fake = []() -> std::optional<safe_area::Insets> {
+        const char* lua = std::getenv("WOWEE_AUTO_LUA");
+        const char* v = std::getenv("WOWEE_TEST_SAFE_AREA");
+        if (!lua || !*lua || !v || !*v) return std::nullopt;
+        safe_area::Insets in;
+        if (std::sscanf(v, "%f,%f,%f,%f", &in.left, &in.right, &in.top, &in.bottom) != 4) return std::nullopt;
+        return in;
+    }();
+    if (fake) insets = *fake;
+    return insets;
+}
+
+/// The panels are laid out in the safe area, so the height they have is the
+/// window's less what the display covers at the top and the bottom.
+float interfaceScale([[maybe_unused]] SDL_Window* window,
+                     [[maybe_unused]] const safe_area::Insets& insets) {
 #ifdef WOWEE_MOBILE
     // SDL3 dropped SDL_GetDisplayDPI and answers with a content scale
     // instead, which is the same number this was deriving: dpi over
@@ -101,6 +135,7 @@ float interfaceScale([[maybe_unused]] SDL_Window* window) {
     if (window) {
         SDL_GetWindowSize(window, nullptr, &height);
     }
+    height -= static_cast<int>(insets.top + insets.bottom);
     if (height > 0) {
         density = std::min(density, static_cast<float>(height) / kMinLogicalHeight);
     }
@@ -132,11 +167,17 @@ bool UIManager::initialize(core::Window* win) {
     // The look, shared with the asset manager so the two agree.
     ImGuiStyle& style = ImGui::GetStyle();
     ui::applyWoweeStyle(style);
+    // Kept unscaled, so a later rescale scales from it once rather than
+    // compounding: ScaleAllSizes truncates every size, and scaling the scaled
+    // style by a ratio lost a pixel each time the display changed and back.
+    baseStyle_ = style;
 
     // Padding, rounding, scrollbars and the rest, before the backend starts.
     // Fonts are scaled where the atlas is built, so they stay crisp rather than
     // being magnified from a desktop-sized atlas.
-    interfaceScale_ = interfaceScale(window->getSDLWindow());
+    lastInsets_ = measureSafeArea(window->getSDLWindow());
+    interfaceScale_ = interfaceScale(window->getSDLWindow(), lastInsets_);
+    appliedScale_ = interfaceScale_;
     if (const float scale = interfaceScale_; scale > 1.0f) {
         style.ScaleAllSizes(scale);
         LOG_INFO("Interface scaled by ", scale, " for this display");
@@ -508,38 +549,51 @@ void UIManager::shutdown() {
 void UIManager::update([[maybe_unused]] float deltaTime) {
     if (!imguiInitialized) return;
 
+    // The display's safe area for the panels and for UIParent: the whole
+    // window everywhere but a phone with a notch or a cutout. Measured before
+    // the frame opens, so a change rescales the style before anything is
+    // drawn with it.
+    const safe_area::Insets insets = measureSafeArea(window ? window->getSDLWindow() : nullptr);
+    if (insets.left != lastInsets_.left || insets.right != lastInsets_.right ||
+        insets.top != lastInsets_.top || insets.bottom != lastInsets_.bottom) {
+        refreshInterfaceScale();
+    }
+
     // Start ImGui frame
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
 
-    // The display's safe area for the panels and for UIParent: the whole
-    // window everywhere but a phone with a notch or a cutout.
-    safe_area::Insets insets;
-    if (SDL_Window* sdlWin = window ? window->getSDLWindow() : nullptr) {
-        SDL_Rect safe{};
-        int winW = 0, winH = 0;
-        if (SDL_GetWindowSafeArea(sdlWin, &safe) && SDL_GetWindowSize(sdlWin, &winW, &winH) &&
-            safe.w > 0 && safe.h > 0) {
-            insets.left = static_cast<float>(safe.x);
-            insets.top = static_cast<float>(safe.y);
-            insets.right = static_cast<float>(winW - safe.x - safe.w);
-            insets.bottom = static_cast<float>(winH - safe.y - safe.h);
-        }
-    }
-    // A test hook (with WOWEE_AUTO_LUA only): WOWEE_TEST_SAFE_AREA="l,r,t,b"
-    // stands in for a notch on a desktop, so a scripted run can see what
-    // keeps clear of one.
-    static const std::optional<safe_area::Insets> fake = []() -> std::optional<safe_area::Insets> {
-        const char* lua = std::getenv("WOWEE_AUTO_LUA");
-        const char* v = std::getenv("WOWEE_TEST_SAFE_AREA");
-        if (!lua || !*lua || !v || !*v) return std::nullopt;
-        safe_area::Insets in;
-        if (std::sscanf(v, "%f,%f,%f,%f", &in.left, &in.right, &in.top, &in.bottom) != 4) return std::nullopt;
-        return in;
-    }();
-    if (fake) insets = *fake;
     safe_area::set(insets);
+}
+
+void UIManager::refreshInterfaceScale() {
+    if (!window || !ImGui::GetCurrentContext()) return;
+    lastInsets_ = measureSafeArea(window->getSDLWindow());
+    const float scale = interfaceScale(window->getSDLWindow(), lastInsets_);
+    if (std::abs(scale - appliedScale_) < 0.01f) return;
+    ImGuiStyle& style = ImGui::GetStyle();
+    // The sizes from the unscaled style, once, at this scale times the Window
+    // scale setting the settings panel has applied over it (it keeps that in
+    // FontGlobalScale). Colours, the opacity and the font sizes stay as they
+    // are; only the sizes ScaleAllSizes touches come from the copy.
+    ImGuiStyle scaled = baseStyle_;
+    const float windowScale = ImGui::GetIO().FontGlobalScale > 0.0f ? ImGui::GetIO().FontGlobalScale : 1.0f;
+    scaled.ScaleAllSizes(scale * windowScale);
+    std::copy(std::begin(style.Colors), std::end(style.Colors), std::begin(scaled.Colors));
+    scaled.Alpha = style.Alpha;
+    scaled.DisabledAlpha = style.DisabledAlpha;
+    scaled.FontSizeBase = style.FontSizeBase;
+    scaled.FontScaleMain = style.FontScaleMain;
+    // The text from the scale the font atlas was built at: the atlas stays,
+    // and is drawn at the new size.
+    scaled.FontScaleDpi = scale / interfaceScale_;
+    style = scaled;
+    LOG_WARNING("Interface rescaled from ", appliedScale_, " to ", scale,
+                " for the display (", window->getWidth(), "x", window->getHeight(),
+                ", safe area insets ", lastInsets_.left, ",", lastInsets_.right, ",",
+                lastInsets_.top, ",", lastInsets_.bottom, ")");
+    appliedScale_ = scale;
 }
 
 void UIManager::render(core::AppState appState, auth::AuthHandler* authHandler, game::GameHandler* gameHandler) {
