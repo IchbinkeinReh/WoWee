@@ -87,8 +87,9 @@ TEST_CASE("the login time sets the game clock", "[replay]") {
 // AuraEffect::HandleFeignDeath sets UNIT_FLAG2_FEIGN_DEATH and
 // UNIT_DYNFLAG_DEAD together, and removes them together.
 TEST_CASE("Feign Death is not a death", "[replay]") {
-    Session s;
+    // Before the session: its teardown still fires events into the callback.
     std::vector<std::string> events;
+    Session s;
     s.handler().setAddonEventCallback(
         [&events](const std::string& name, const std::vector<std::string>&) { events.push_back(name); });
     s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 300}, {UF::UNIT_FIELD_MAXHEALTH, 300}});
@@ -121,8 +122,9 @@ TEST_CASE("the dead flag at full health is Feign Death without its flags2 bit", 
 }
 
 TEST_CASE("killed while feigning stays dead when the feign ends", "[replay]") {
-    Session s;
+    // Before the session: its teardown still fires events into the callback.
     std::vector<std::string> events;
+    Session s;
     s.handler().setAddonEventCallback(
         [&events](const std::string& name, const std::vector<std::string>&) { events.push_back(name); });
     s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 300}, {UF::UNIT_FIELD_MAXHEALTH, 300}});
@@ -190,12 +192,14 @@ std::vector<wowee::game::CombatTextEntry::Type> spellMissText(uint64_t caster, u
 
 namespace {
 
-// SpellMissInfo, as every server family numbers it.
+// SpellMissInfo, as every server family numbers it. Only the kinds shown
+// whatever the panel says: resists, immunities, deflects and absorbs sit
+// behind fctSpellMechanics, which is "0" by default as in the client
+// (combat_text_filter.hpp), so upstream's cases for 2 and 7-10 are left out.
 const std::vector<std::pair<uint8_t, wowee::game::CombatTextEntry::Type>>& missTypes() {
     using T = wowee::game::CombatTextEntry;
     static const std::vector<std::pair<uint8_t, T::Type>> table = {
-        {1, T::MISS},   {2, T::RESIST}, {3, T::DODGE},   {4, T::PARRY},  {5, T::BLOCK},
-        {6, T::EVADE},  {7, T::IMMUNE}, {8, T::IMMUNE},  {9, T::DEFLECT}, {10, T::ABSORB},
+        {1, T::MISS}, {3, T::DODGE}, {4, T::PARRY}, {5, T::BLOCK}, {6, T::EVADE},
     };
     return table;
 }

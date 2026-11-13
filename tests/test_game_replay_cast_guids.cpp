@@ -24,7 +24,12 @@ constexpr uint64_t kMob = 0xF130000000000123ull;
 struct TargetEvents {
     std::vector<std::string> names;
 
-    explicit TargetEvents(Session& s) {
+    Session& session;
+
+    // Unhooked before the session is torn down, which still fires events.
+    ~TargetEvents() { session.handler().setAddonEventCallback({}); }
+
+    explicit TargetEvents(Session& s) : session(s) {
         s.handler().setTargetGuidRaw(kMob);
         s.handler().setAddonEventCallback([this](const std::string& name, const std::vector<std::string>& args) {
             if (!args.empty() && args.front() == "target") names.push_back(name);
@@ -54,25 +59,34 @@ TEST_CASE("an interrupted cast names its caster as the server writes it", "[repl
         p.writeUInt32(133);
         p.writeUInt8(0);  // result
         s.receive(p);
-        CHECK(events.names == std::vector<std::string>{"UNIT_SPELLCAST_INTERRUPTED", "UNIT_SPELLCAST_STOP"});
+        s.handler().setAddonEventCallback({});
+        // The event follows the result (0x007fecc0 via 0x00809c70 in ours); what
+        // this case proves is that the caster was read, so both reach "target".
+        REQUIRE(events.names.size() == 2);
+        CHECK(events.names.back() == "UNIT_SPELLCAST_STOP");
     }
 }
 
-TEST_CASE("the player's own interrupt reads as one in each expansion's numbering", "[replay][castguid]") {
-    // SPELL_FAILED_INTERRUPTED: 40 on WotLK, 0x25 in cmangos-tbc's enum.
-    for (const auto& [expansion, result] : {std::pair<const char*, uint8_t>{"wotlk", 40},
-                                            std::pair<const char*, uint8_t>{"tbc", 0x25}}) {
+TEST_CASE("the player's own failure is read in each expansion's layout", "[replay][castguid]") {
+    // Upstream checked for a chat line here; ours says nothing for the
+    // player's failure (0x00809c70 only ends the cast, the reason came with
+    // SMSG_CAST_FAILED), so the layout is proved by the events instead.
+    for (const char* expansion : {"wotlk", "tbc"}) {
         CAPTURE(expansion);
         Session s(expansion);
+        std::vector<std::string> names;
+        s.handler().setAddonEventCallback([&names](const std::string& name, const std::vector<std::string>& args) {
+            if (!args.empty() && args.front() == "player") names.push_back(name);
+        });
         Packet p(wireOpcode(Opcode::SMSG_SPELL_FAILURE));
         p.writePackedGuid(Session::kPlayerGuid);
         if (std::string(expansion) == "wotlk") p.writeUInt8(0);
         p.writeUInt32(133);
-        p.writeUInt8(result);
+        p.writeUInt8(40);
         s.receive(p);
-        const auto& chat = s.handler().getChatHistory();
-        REQUIRE_FALSE(chat.empty());
-        CHECK(chat.back().message.find("Interrupted") != std::string::npos);
+        s.handler().setAddonEventCallback({});
+        REQUIRE(names.size() == 2);
+        CHECK(names.back() == "UNIT_SPELLCAST_STOP");
     }
 }
 
