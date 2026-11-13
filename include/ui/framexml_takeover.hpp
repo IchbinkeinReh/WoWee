@@ -285,6 +285,18 @@ bool frameXmlWorldEntered();
 void frameXmlNoteMouseOwned(bool owned);
 bool frameXmlOwnsMouse();
 
+/// Whether a frame that takes the mouse is at this point, in window pixels
+/// measured from the top-left corner.
+///
+/// frameXmlOwnsMouse answers for where the cursor was last dispatched, which is
+/// a frame behind a finger that has only just gone down: the touch controls
+/// decide whether a press is theirs from the event, before the tree has seen
+/// that position. This asks the tree about the point itself, so a thumb on an
+/// action button is the button's and never becomes a stick. The Lua engine
+/// sets the test once its tree is up; without one nothing is there.
+void frameXmlSetPointTest(std::function<bool(float, float)> test);
+bool frameXmlPointOwnsMouse(float x, float y);
+
 /// Hand an element back to this client because FrameXML's version was never
 /// built.
 ///

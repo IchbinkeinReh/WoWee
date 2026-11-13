@@ -436,9 +436,9 @@ for the profiles and how to check one.
 
 | Input | Action |
 |---|---|
-| Left thumb, lower left | Move and strafe |
-| Right thumb, drag | Turn the view; the character faces where it looks |
-| Two fingers | Zoom the camera |
+| Left thumb, left half | Move and strafe |
+| Right thumb, right half | Camera stick: push to turn the view; the character faces where it looks |
+| Two fingers in one half | Zoom the camera |
 | Tap | Target, interact, and everything in the interface |
 
 A keyboard and mouse should work when attached, since SDL delivers them the same

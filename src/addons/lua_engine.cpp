@@ -9737,6 +9737,18 @@ bool LuaEngine::initialize() {
     taint::reset();
     // Nor the overrides its frames put on keys: those frames are gone.
     overrideBindings().reset();
+
+    // The touch controls ask, the moment a thumb lands, whether the interface
+    // has a frame there that takes the mouse. frameXmlOwnsMouse answers for
+    // where the cursor was last dispatched, a frame behind a fresh press; this
+    // asks the tree about the point itself, with the same conversion and the
+    // same hit test the mouse dispatch uses.
+    ui::frameXmlSetPointTest([this](float x, float y) {
+        if (!L_ || sLastScreenH_ <= 0.0f) return false;
+        ui::mouseToTreeSpace(x, y, sLastScreenH_, widgets_.uiScale());
+        return widgets_.hitTest(x, y) != 0;
+    });
+
     L_ = luaL_newstate();
     ++stateGeneration_;
     if (!L_) {
@@ -9803,6 +9815,7 @@ void LuaEngine::shutdown() {
         // client's own windows can ask what FrameXML is carrying, and calling
         // through it after the close would be reading a freed state.
         ui::frameXmlSetCursorBridge(nullptr, nullptr);
+        ui::frameXmlSetPointTest(nullptr);
         setModifiedClickState(nullptr);
         taint::setEventSink(nullptr);
         lua_close(L_);
@@ -15853,6 +15866,7 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
     ui::mouseToTreeSpace(x, y, screenH, widgets_.uiScale());
     const uint32_t hit = widgets_.hitTest(x, y);
     lastMouseHit_ = hit;
+    sLastScreenH_ = screenH;
     // Kept so IsMouseOver can answer from a frame's own rect. Hover alone is
     // not enough: it names the mouse-enabled frame that was hit, and a
     // container the cursor is plainly inside is often neither.

@@ -3,8 +3,12 @@
 #include "core/input.hpp"
 #include "core/logger.hpp"
 #include "rendering/camera_controller.hpp"
+#include "ui/framexml_takeover.hpp"
+#include "ui/safe_area.hpp"
+#include "ui/touch_zones.hpp"
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include <algorithm>
 #include <cmath>
@@ -53,10 +57,24 @@ void TouchControls::setMovementKeys(bool forward, bool back, bool left, bool rig
     input.setVirtualKey(SDL_SCANCODE_E, right);
 }
 
+bool TouchControls::pointOverInterface(float x, float y) {
+    // This client's own windows, asked the way ImGui itself finds the hovered
+    // one, at the point rather than where the cursor last was: the finger has
+    // only just gone down, and ImGui has not yet seen it there. Between frames
+    // the window list is last frame's, which is what is on the screen.
+    if (ImGui::GetCurrentContext()) {
+        ImGuiWindow* hovered = nullptr;
+        ImGui::FindHoveredWindowEx(ImVec2(x, y), false, &hovered, nullptr);
+        if (hovered) return true;
+    }
+    // FrameXML draws into ImGui's background list, so ImGui knows nothing of
+    // its frames; the widget tree is asked about the same point.
+    return frameXmlPointOwnsMouse(x, y);
+}
+
 void TouchControls::handleEvent(const SDL_Event& event, int windowWidth, int windowHeight) {
-    if (!inWorld_) return;
     if (event.type != SDL_EVENT_FINGER_DOWN && event.type != SDL_EVENT_FINGER_MOTION &&
-        event.type != SDL_EVENT_FINGER_UP) {
+        event.type != SDL_EVENT_FINGER_UP && event.type != SDL_EVENT_FINGER_CANCELED) {
         return;
     }
 
@@ -65,93 +83,141 @@ void TouchControls::handleEvent(const SDL_Event& event, int windowWidth, int win
     const float x = event.tfinger.x * w;
     const float y = event.tfinger.y * h;
     const SDL_FingerID id = event.tfinger.fingerID;
+    const bool down = event.type == SDL_EVENT_FINGER_DOWN;
+    const bool up = event.type == SDL_EVENT_FINGER_UP || event.type == SDL_EVENT_FINGER_CANCELED;
 
-    if (event.type == SDL_EVENT_FINGER_DOWN) {
-        // The interface is asked first, so a bag or an action button drawn over
-        // the corner still gets the press. A stick that ate those would be
-        // maddening, and the corner is only a default.
-        if (stickFingerId_ == kNoFinger && x < w * kStickZoneWidth &&
-            y > h * kStickZoneTop && !ImGui::GetIO().WantCaptureMouse) {
-            LOG_DEBUG("touch: stick claimed at ", x, ",", y);
+    // Which finger SDL makes the mouse is tracked on every screen, so it is
+    // right when the world appears with a finger already down.
+    if (down && mouseFingerId_ == kNoFinger) mouseFingerId_ = id;
+    if (up && id == mouseFingerId_) mouseFingerId_ = kNoFinger;
+
+    if (!inWorld_) return;
+
+    if (down) {
+        // The interface is asked first, so a bag, an action button or the
+        // minimap under the thumb still gets the press. A stick that ate those
+        // would be maddening. The press stays a tap or a long press.
+        if (pointOverInterface(x, y)) {
+            LOG_DEBUG("touch: finger down at ", x, ",", y, " over the interface");
+            if (lookFingerId_ == kNoFinger) {
+                lookFingerId_ = id;
+                lookIsStick_ = false;
+                lookX_ = lookOriginX_ = x;
+                lookY_ = lookOriginY_ = y;
+                lookStickX_ = lookStickY_ = 0.0f;
+                lookMoved_ = false;
+                lookTravel_ = 0.0f;
+                lookDownMs_ = SDL_GetTicks();
+                longPressFired_ = false;
+            }
+            return;
+        }
+
+        // Each stick owns one half of the safe area, the full height of it.
+        const safe_area::Insets& inset = safe_area::current();
+        const touch::Area area =
+            touch::usableArea(w, h, inset.left, inset.right, inset.top, inset.bottom);
+        const bool leftHalf = touch::halfAt(x, area) == touch::Half::Move;
+
+        if (leftHalf && stickFingerId_ == kNoFinger) {
+            LOG_DEBUG("touch: move stick at ", x, ",", y);
             stickFingerId_ = id;
-            stickOriginX_ = x;
-            stickOriginY_ = y;
+            stickOriginX_ = stickAtX_ = x;
+            stickOriginY_ = stickAtY_ = y;
             stickX_ = stickY_ = 0.0f;
             return;
         }
-        LOG_DEBUG("touch: finger down at ", x, ",", y, " of ", w, "x", h,
-                  " uiWants=", ImGui::GetIO().WantCaptureMouse, " - not the stick");
-        if (lookFingerId_ == kNoFinger) {
+        if (!leftHalf && lookFingerId_ == kNoFinger) {
+            LOG_DEBUG("touch: camera stick at ", x, ",", y);
             lookFingerId_ = id;
-            lookX_ = x;
-            lookY_ = y;
+            lookIsStick_ = true;
+            lookX_ = lookOriginX_ = x;
+            lookY_ = lookOriginY_ = y;
+            lookStickX_ = lookStickY_ = 0.0f;
             lookMoved_ = false;
             lookTravel_ = 0.0f;
             lookDownMs_ = SDL_GetTicks();
             longPressFired_ = false;
+            return;
         }
+
+        // A second finger in a half whose stick is held: a pinch with that
+        // stick's finger. Two thumbs, one in each half, are walking and
+        // looking, never a pinch.
         if (pinchA_ == kNoFinger) {
-            pinchA_ = id; pinchAX_ = x; pinchAY_ = y;
-        } else if (pinchB_ == kNoFinger) {
-            pinchB_ = id; pinchBX_ = x; pinchBY_ = y;
-            lastPinchSpacing_ = std::hypot(pinchAX_ - pinchBX_, pinchAY_ - pinchBY_);
-            pinching_ = true;
+            const bool withMove = leftHalf && stickFingerId_ != kNoFinger;
+            const bool withLook = !leftHalf && isLookStickHeld();
+            if (withMove || withLook) {
+                pinchA_ = withMove ? stickFingerId_ : lookFingerId_;
+                pinchOfMoveStick_ = withMove;
+                pinchB_ = id;
+                pinchBX_ = x;
+                pinchBY_ = y;
+                const float ax = withMove ? stickAtX_ : lookX_;
+                const float ay = withMove ? stickAtY_ : lookY_;
+                lastPinchSpacing_ = std::hypot(ax - x, ay - y);
+                LOG_DEBUG("touch: pinch with the ", withMove ? "move" : "camera", " stick");
+            }
         }
         return;
     }
 
-    if (event.type == SDL_EVENT_FINGER_UP) {
+    if (up) {
+        if (id == pinchA_ || id == pinchB_) endPinch();
         if (id == stickFingerId_) {
             stickFingerId_ = kNoFinger;
             stickX_ = stickY_ = 0.0f;
             setMovementKeys(false, false, false, false);
-        } else {
-            if (id == lookFingerId_) {
-                lookFingerId_ = kNoFinger;
-                lookMoved_ = false;
-                // The finger is off, so SDL has let go of its left button and
-                // there is nothing left to read as up.
-                if (leftMasked_) {
-                    core::Input::getInstance().setMouseButtonMasked(SDL_BUTTON_LEFT, false);
-                    leftMasked_ = false;
-                }
+        }
+        if (id == lookFingerId_) {
+            lookFingerId_ = kNoFinger;
+            lookIsStick_ = false;
+            lookMoved_ = false;
+            lookStickX_ = lookStickY_ = 0.0f;
+            // The finger is off, so SDL has let go of its left button and
+            // there is nothing left to read as up.
+            if (leftMasked_) {
+                core::Input::getInstance().setMouseButtonMasked(SDL_BUTTON_LEFT, false);
+                leftMasked_ = false;
             }
-            if (id == pinchA_) { pinchA_ = kNoFinger; pinching_ = false; }
-            if (id == pinchB_) { pinchB_ = kNoFinger; pinching_ = false; }
         }
         return;
     }
 
     // SDL_EVENT_FINGER_MOTION
+    const float radius = stickRadius();
     if (id == stickFingerId_) {
-        const float radius = stickRadius();
-        stickX_ = std::clamp((x - stickOriginX_) / radius, -1.0f, 1.0f);
-        stickY_ = std::clamp((y - stickOriginY_) / radius, -1.0f, 1.0f);
-        return;
-    }
-    // One finger dragging is a look. Two is a pinch, and the view should not
-    // swing while the fingers close.
-    if (id == lookFingerId_ && pinchB_ == kNoFinger) {
-        const float dx = x - lookX_;
-        const float dy = y - lookY_;
-        lookX_ = x;
-        lookY_ = y;
+        stickAtX_ = x;
+        stickAtY_ = y;
+        if (pinchA_ != id) {
+            stickX_ = std::clamp((x - stickOriginX_) / radius, -1.0f, 1.0f);
+            stickY_ = std::clamp((y - stickOriginY_) / radius, -1.0f, 1.0f);
+        }
+    } else if (id == lookFingerId_) {
         // Distance travelled, not distance from where the finger went down: a
-        // slow drag arrives in many small steps and would never clear a
+        // slow push arrives in many small steps and would never clear a
         // per-event threshold.
         if (!lookMoved_) {
-            lookTravel_ += std::hypot(dx, dy);
+            lookTravel_ += std::hypot(x - lookX_, y - lookY_);
             if (lookTravel_ >= kLookSlopPixels) lookMoved_ = true;
         }
-        if (lookMoved_ && camera_) camera_->applyLookDelta(dx, dy);
+        lookX_ = x;
+        lookY_ = y;
+        if (lookIsStick_ && pinchA_ != id) {
+            lookStickX_ = std::clamp((x - lookOriginX_) / radius, -1.0f, 1.0f);
+            lookStickY_ = std::clamp((y - lookOriginY_) / radius, -1.0f, 1.0f);
+        }
+    } else if (id == pinchB_) {
+        pinchBX_ = x;
+        pinchBY_ = y;
+    } else {
+        return;
     }
 
-    if (id == pinchA_) { pinchAX_ = x; pinchAY_ = y; }
-    else if (id == pinchB_) { pinchBX_ = x; pinchBY_ = y; }
-    else return;
-
-    if (!pinching_ || pinchA_ == kNoFinger || pinchB_ == kNoFinger) return;
-    const float spacing = std::hypot(pinchAX_ - pinchBX_, pinchAY_ - pinchBY_);
+    if (pinchA_ == kNoFinger || pinchB_ == kNoFinger || (id != pinchA_ && id != pinchB_)) return;
+    const float ax = pinchOfMoveStick_ ? stickAtX_ : lookX_;
+    const float ay = pinchOfMoveStick_ ? stickAtY_ : lookY_;
+    const float spacing = std::hypot(ax - pinchBX_, ay - pinchBY_);
     const float moved = spacing - lastPinchSpacing_;
     if (std::abs(moved) < kPinchPixelsPerNotch) return;
     lastPinchSpacing_ = spacing;
@@ -168,6 +234,20 @@ void TouchControls::handleEvent(const SDL_Event& event, int windowWidth, int win
     SDL_PushEvent(&wheel);
 }
 
+void TouchControls::endPinch() {
+    if (pinchA_ == stickFingerId_ && stickFingerId_ != kNoFinger) {
+        stickOriginX_ = stickAtX_;
+        stickOriginY_ = stickAtY_;
+        stickX_ = stickY_ = 0.0f;
+    }
+    if (pinchA_ == lookFingerId_ && lookFingerId_ != kNoFinger) {
+        lookOriginX_ = lookX_;
+        lookOriginY_ = lookY_;
+        lookStickX_ = lookStickY_ = 0.0f;
+    }
+    pinchA_ = pinchB_ = kNoFinger;
+}
+
 void TouchControls::updateLongPress() {
     auto& input = core::Input::getInstance();
     // Pressed last frame, let go this one: a click, which is what both the
@@ -177,8 +257,11 @@ void TouchControls::updateLongPress() {
         ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Right, false);
         rightHeld_ = false;
     }
+    // Only the finger SDL is reporting as the mouse: the click lands where the
+    // mouse is, and with the other thumb on the movement stick that is under
+    // the other thumb.
     if (!inWorld_ || longPressFired_ || lookFingerId_ == kNoFinger || lookMoved_ ||
-        pinchB_ != kNoFinger) {
+        lookFingerId_ != mouseFingerId_ || pinchA_ != kNoFinger) {
         return;
     }
     if (SDL_GetTicks() - lookDownMs_ < kLongPressMs) return;
@@ -218,7 +301,24 @@ void TouchControls::endLongPress() {
 
 void TouchControls::update() {
     updateLongPress();
-    if (!inWorld_ || stickFingerId_ == kNoFinger) {
+
+    // The camera stick turns at a rate, so it needs the time since the last
+    // update; a frame held up by a load is not a second and a half of turning.
+    const uint64_t nowNs = SDL_GetTicksNS();
+    const float seconds = lastUpdateNs_ == 0
+        ? 0.0f
+        : std::min(static_cast<float>(nowNs - lastUpdateNs_) * 1e-9f, 0.1f);
+    lastUpdateNs_ = nowNs;
+
+    if (inWorld_ && isLookStickHeld() && camera_ &&
+        !(pinchA_ != kNoFinger && !pinchOfMoveStick_)) {
+        const touch::Turn turn = touch::lookStickTurn(lookStickX_, lookStickY_, kLookDeadzone,
+                                                      kLookStickPixelsPerSecond, seconds);
+        if (turn.dx != 0.0f || turn.dy != 0.0f) camera_->applyLookDelta(turn.dx, turn.dy);
+    }
+
+    if (!inWorld_ || stickFingerId_ == kNoFinger ||
+        (pinchA_ != kNoFinger && pinchOfMoveStick_)) {
         wasForward_ = wasBack_ = wasLeft_ = wasRight_ = false;
         setMovementKeys(false, false, false, false);
         return;
@@ -242,12 +342,12 @@ void TouchControls::draw() const {
     // A ring closing round a finger held still, so a long press can be seen
     // coming and the finger lifted in time if a right click was not meant. In
     // front of everything, because the finger is usually on a frame.
-    if (lookFingerId_ != kNoFinger && !lookMoved_ && !longPressFired_ &&
-        pinchB_ == kNoFinger) {
-        const uint64_t held = SDL_GetTicks() - lookDownMs_;
-        if (held >= kLongPressHintMs) {
+    if (lookFingerId_ != kNoFinger && lookFingerId_ == mouseFingerId_ && !lookMoved_ &&
+        !longPressFired_ && pinchA_ == kNoFinger) {
+        const uint64_t heldMs = SDL_GetTicks() - lookDownMs_;
+        if (heldMs >= kLongPressHintMs) {
             if (ImDrawList* fg = ImGui::GetForegroundDrawList()) {
-                const float t = std::min(1.0f, static_cast<float>(held - kLongPressHintMs) /
+                const float t = std::min(1.0f, static_cast<float>(heldMs - kLongPressHintMs) /
                                                    static_cast<float>(kLongPressMs - kLongPressHintMs));
                 const float r = stickRadius() * 0.35f;
                 const ImVec2 c(lookX_, lookY_);
@@ -258,26 +358,33 @@ void TouchControls::draw() const {
         }
     }
 
-    if (stickFingerId_ == kNoFinger) return;
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     if (!dl) return;
     const float radius = stickRadius();
-    const ImVec2 origin(stickOriginX_, stickOriginY_);
-    const ImVec2 knob(stickOriginX_ + stickX_ * radius, stickOriginY_ + stickY_ * radius);
-    dl->AddCircle(origin, radius, IM_COL32(255, 255, 255, 60), 48, 3.0f);
-    // The ring the thumb has to cross to start strafing, so the player can see
-    // why walking straight is the easy thing to do.
-    dl->AddCircle(origin, radius * kStrafeDeadzone, IM_COL32(255, 255, 255, 35), 40, 2.0f);
-    dl->AddCircleFilled(knob, radius * 0.28f, IM_COL32(255, 255, 255, 95), 32);
+    // Both sticks get the same two rings and knob, so the pair reads as one
+    // control. The inner ring is where sideways starts on the movement stick
+    // and where turning starts on the camera stick.
+    auto ring = [&](float ox, float oy, float sx, float sy) {
+        const ImVec2 origin(ox, oy);
+        const ImVec2 knob(ox + sx * radius, oy + sy * radius);
+        dl->AddCircle(origin, radius, IM_COL32(255, 255, 255, 60), 48, 3.0f);
+        dl->AddCircle(origin, radius * kStrafeDeadzone, IM_COL32(255, 255, 255, 35), 40, 2.0f);
+        dl->AddCircleFilled(knob, radius * 0.28f, IM_COL32(255, 255, 255, 95), 32);
+    };
+    if (stickFingerId_ != kNoFinger) ring(stickOriginX_, stickOriginY_, stickX_, stickY_);
+    // The camera stick once it is being pushed: a finger resting there may be
+    // a tap or a long press, which have their own ring.
+    if (isLookStickHeld() && lookMoved_) ring(lookOriginX_, lookOriginY_, lookStickX_, lookStickY_);
 }
 
 void TouchControls::reset() {
     stickFingerId_ = kNoFinger;
     lookFingerId_ = kNoFinger;
+    lookIsStick_ = false;
     lookMoved_ = false;
     lookTravel_ = 0.0f;
+    lookStickX_ = lookStickY_ = 0.0f;
     pinchA_ = pinchB_ = kNoFinger;
-    pinching_ = false;
     stickX_ = stickY_ = 0.0f;
     wasForward_ = wasBack_ = wasLeft_ = wasRight_ = false;
     endLongPress();
