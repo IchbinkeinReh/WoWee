@@ -1397,9 +1397,13 @@ bool AddonManager::loadFrameXml(const std::string& frameXmlDir) {
     // ShowUIPanel and HideUIPanel simply show and hide them; UISpecialFrames
     // keeps Escape closing them, which the panel table used to do.
     luaEngine_.executeString(
+        // A frame this interface does not build answers through the API
+        // fallback as a stand-in with no name - 1.12 has no PVPParentFrame -
+        // and filing that under a nil key raised on every 1.12 login.
         "local function centered(f)\n"
-        "  if not f or not UIPanelWindows then return end\n"
+        "  if type(f) ~= 'table' or not f.GetName or not UIPanelWindows then return end\n"
         "  local name = f:GetName()\n"
+        "  if not name then return end\n"
         "  UIPanelWindows[name] = nil\n"
         "  if UISpecialFrames then tinsert(UISpecialFrames, name) end\n"
         "  f:HookScript('OnShow', function(self)\n"
