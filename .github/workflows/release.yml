@@ -601,6 +601,75 @@ jobs:
         path: wowee-*.zip
         if-no-files-found: error
 
+  # The two self-contained executables a release also offers on their own:
+  # wowee.exe and wowee_vr.exe, each copied alone into an original 3.3.5a
+  # folder beside Wow.exe (drop-in mode). tools/ci/build_windows_dropin.sh.
+  build-windows-dropin:
+    name: Build (windows-x86-64 drop-in)
+    runs-on: windows-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v7
+      with:
+        submodules: true
+
+    - name: Set up MSYS2
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: UCRT64
+        update: false
+        cache: false
+
+    # No Unicorn: found, it would be linked as unicorn.dll, and these two must need no
+    # DLL beside them (the import check fails on it). Warden runs without it,
+    # as in every local Windows build, which has never had it.
+    - name: Install dependencies with mirror retry
+      shell: msys2 {0}
+      run: |
+        packages=(
+          mingw-w64-ucrt-x86_64-cmake
+          mingw-w64-ucrt-x86_64-gcc
+          mingw-w64-ucrt-x86_64-ninja
+          mingw-w64-ucrt-x86_64-pkgconf
+          mingw-w64-ucrt-x86_64-sdl3
+          mingw-w64-ucrt-x86_64-glm
+          mingw-w64-ucrt-x86_64-openssl
+          mingw-w64-ucrt-x86_64-zlib
+          mingw-w64-ucrt-x86_64-vulkan-loader
+          mingw-w64-ucrt-x86_64-vulkan-headers
+          mingw-w64-ucrt-x86_64-shaderc
+          mingw-w64-ucrt-x86_64-libtommath
+          mingw-w64-ucrt-x86_64-libtomcrypt
+          git make diffutils curl
+        )
+        for attempt in 1 2 3; do
+          if pacman -S --noconfirm --needed "${packages[@]}"; then
+            exit 0
+          fi
+          echo "MSYS2 package download failed on attempt ${attempt}; retrying..."
+          sleep $((attempt * 10))
+        done
+        exit 1
+
+    - name: Build StormLib from source
+      shell: msys2 {0}
+      run: |
+        git clone --depth 1 https://github.com/ladislav-zezula/StormLib.git /tmp/StormLib
+        cmake -S /tmp/StormLib -B /tmp/StormLib/build -G Ninja           -DCMAKE_BUILD_TYPE=Release           -DCMAKE_INSTALL_PREFIX="$MINGW_PREFIX"           -DBUILD_SHARED_LIBS=OFF
+        cmake --build /tmp/StormLib/build --parallel $(nproc)
+        cmake --install /tmp/StormLib/build
+
+    - name: Build the drop-in executables
+      shell: msys2 {0}
+      run: bash tools/ci/build_windows_dropin.sh dropin-out
+
+    - name: Upload drop-in executables
+      uses: actions/upload-artifact@v7
+      with:
+        name: wowee-dropin
+        path: dropin-out/*.exe
+        if-no-files-found: error
+
   build-android:
     name: Build (android arm64)
     runs-on: ubuntu-24.04
@@ -661,7 +730,7 @@ jobs:
 
   release:
     name: Create Release
-    needs: [ build-linux, build-macos, build-windows, build-android ]
+    needs: [ build-linux, build-macos, build-windows, build-windows-dropin, build-android ]
     runs-on: ubuntu-latest
 
     steps:

@@ -91,7 +91,9 @@ is the original one.
   is no extraction step.
 - **Drop-in mode**: copy `wowee.exe` into an existing WoW 3.3.5a folder and
   start it. Everything WoWee writes goes into its own `WoWee\` folder; the
-  original files, `WTF\` and `Interface\` stay untouched.
+  original files, `WTF\` and `Interface\` stay untouched. Every release offers
+  `wowee.exe` and `wowee_vr.exe` as single downloads for this: each is one
+  self-contained file that needs no DLLs beside it.
 - **Streaming game data**: instead of a local install, the client can read the
   MPQs from a server ([tools/data_stream_server](tools/data_stream_server)).
   It only downloads the 256 KiB chunks the game actually reads, checks each

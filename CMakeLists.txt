@@ -3034,6 +3034,29 @@ message(STATUS "")
 # which installs it and gives it a shortcut.
 include(cmake/WoweeVr.cmake)
 
+# wowee_vr_dropin (not built by default) writes dropin/wowee_vr.exe, the
+# headset client packed the way wowee_dropin packs wowee: no debug
+# information, the same payload appended. With WOWEE_STATIC_RUNTIME it copies
+# wowee's link options, so it too imports only the system's DLLs and
+# vulkan-1.dll, and runs alone from an original 3.3.5a folder.
+if(TARGET wowee_vr)
+    if(CMAKE_STRIP)
+        set(WOWEE_VR_DROPIN_STRIP ${CMAKE_STRIP} --strip-debug -o ${CMAKE_BINARY_DIR}/dropin/wowee_vr.stripped.exe $<TARGET_FILE:wowee_vr>)
+    else()
+        set(WOWEE_VR_DROPIN_STRIP ${CMAKE_COMMAND} -E copy $<TARGET_FILE:wowee_vr> ${CMAKE_BINARY_DIR}/dropin/wowee_vr.stripped.exe)
+    endif()
+    add_custom_target(wowee_vr_dropin
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/dropin
+        COMMAND ${WOWEE_VR_DROPIN_STRIP}
+        COMMAND wowee_pack ${CMAKE_BINARY_DIR}/dropin/wowee_vr.stripped.exe ${CMAKE_BINARY_DIR}/dropin/$<TARGET_FILE_NAME:wowee_vr>
+                $<TARGET_FILE_DIR:wowee> assets addons Data
+        COMMAND ${CMAKE_COMMAND} -E remove ${CMAKE_BINARY_DIR}/dropin/wowee_vr.stripped.exe
+        DEPENDS wowee_vr wowee_pack wowee_assets_sync
+        COMMENT "Drop-in headset executable: ${CMAKE_BINARY_DIR}/dropin/$<TARGET_FILE_NAME:wowee_vr>"
+        VERBATIM
+    )
+endif()
+
 # ---- CPack packaging ----
 set(CPACK_PACKAGE_NAME "wowee")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
@@ -3139,5 +3162,8 @@ add_dependencies(copy_bundled_addons wowee)
 # are copied, not from whatever an earlier build left (or nothing at all).
 if(TARGET wowee_dropin)
     add_dependencies(wowee_dropin copy_bundled_addons)
+endif()
+if(TARGET wowee_vr_dropin)
+    add_dependencies(wowee_vr_dropin copy_bundled_addons)
 endif()
 
