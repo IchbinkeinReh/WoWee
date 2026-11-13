@@ -1,5 +1,7 @@
 #pragma once
 
+#include "math/chase_spring.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -81,13 +83,7 @@ inline void spring(State& s, float facing, float target, float dt) noexcept {
     if (s.body > t + kPi) t += 2.0f * kPi;
     else if (s.body < t - kPi) t -= 2.0f * kPi;
 
-    constexpr float kOmega = 20.0f;
-    const float x = dt * kOmega;
-    const float e = 1.0f / (x * x * 0.48f + x * x * x * 0.235f + x + 1.0f);
-    const float change = s.body - t;
-    const float temp = (change * kOmega + s.velocity) * dt;
-    s.body = (change + temp) * e + t;
-    s.velocity = (s.velocity - temp * kOmega) * e;
+    wowee::math::chaseStep(s.body, s.velocity, t, 20.0f, dt);
     s.body = s.body * s.weight + (1.0f - s.weight) * t;
 }
 

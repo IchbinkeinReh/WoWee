@@ -62,3 +62,30 @@ TEST_CASE("The hash never answers zero", "[chat_language]") {
     CHECK(stringHash("") == 0x7fed7fedu);
     CHECK(stringHash("a/b") == stringHash("A\\B"));
 }
+
+TEST_CASE("zhCN and zhTW cut a long word into pieces of 2, 3, 4, 5", "[chat_language]") {
+    // Comprehension 0 replaces every piece, and a lookup answering each
+    // length with that many x's shows where the cuts fell.
+    std::map<uint32_t, std::vector<std::string>> echo;
+    for (uint32_t n = 1; n <= 18; ++n) echo[n] = {std::string(n, 'x')};
+    const auto byLength = [&](uint32_t n) -> const std::vector<std::string>* {
+        auto it = echo.find(n);
+        return it == echo.end() ? nullptr : &it->second;
+    };
+    const std::string out = garble("abcdefghijklmn", 0, byLength, 4);
+    // 14 letters: 2 + 3 + 4 + 5, each cut with a space before the piece.
+    CHECK(out == " xx xxx xxxx xxxxx");
+    // enUS does not cut.
+    CHECK(garble("abcdefghijklmn", 0, byLength, 0) == "xxxxxxxxxxxxxx");
+}
+
+TEST_CASE("koKR copies the case byte by byte", "[chat_language]") {
+    std::map<uint32_t, std::vector<std::string>> one = {{3, {"abc"}}};
+    const auto look = [&](uint32_t n) -> const std::vector<std::string>* {
+        auto it = one.find(n);
+        return it == one.end() ? nullptr : &it->second;
+    };
+    // An upper-case original letter makes the byte upper case; a lower-case
+    // one leaves it as it is (no lower-casing, unlike enUS).
+    CHECK(garble("XyZ", 0, look, 1) == "AbC");
+}

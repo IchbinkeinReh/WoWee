@@ -3,9 +3,12 @@
 #include <glm/glm.hpp>
 #include <atomic>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 #include <cstdint>
+#include "audio/eax_reverb.hpp"
 #include "audio/play_limit.hpp"
 #include "audio/voice_priority.hpp"
 #include "audio/world_sound_hold.hpp"
@@ -172,6 +175,11 @@ public:
     /// The Sound Effects volume, 0 with Sound_EnableSFX off: what the
     /// Effects channel is heard at.
     void setEffectsVolume(float volume);
+    /// The world's reverb (0x004d2050): on while Sound_EnableReverb is, with
+    /// the preset of the place (none for the OFF preset). The effects are
+    /// what it reverberates.
+    void setReverbEnabled(bool enabled);
+    void setReverbPreset(const std::optional<EaxReverbParams>& preset);
 
     /// How many sounds are heard at once - Sound_NumChannels, held to
     /// 12..128 (0x0087c710); the rest play on silent until a voice is free,
@@ -279,6 +287,12 @@ private:
     /// The Effects channel's group (an ma_sound_group is an ma_sound).
     ma_sound* effectsGroup_ = nullptr;
     ma_sound* groupFor(Channel channel) const;
+    /// The reverb node between the effects group and the endpoint.
+    void* reverbNode_ = nullptr;
+    std::mutex reverbMutex_;
+    bool reverbEnabled_ = false;
+    std::optional<EaxReverbParams> reverbPreset_;
+    void pushReverb();
     bool suspended_ = false;
     glm::vec3 listenerPosition_{0.0f, 0.0f, 0.0f};
     glm::vec3 listenerForward_{0.0f, 0.0f, -1.0f};

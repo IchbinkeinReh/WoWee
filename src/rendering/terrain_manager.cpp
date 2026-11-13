@@ -2484,6 +2484,48 @@ std::optional<float> TerrainManager::getHeightAt(float glX, float glY) const {
     return surface.z;
 }
 
+std::optional<float> TerrainManager::flightFloorAt(float wireX, float wireY) const {
+    return flightPlaneAt(wireX, wireY, 9);
+}
+
+std::optional<float> TerrainManager::flightCeilingAt(float wireX, float wireY) const {
+    return flightPlaneAt(wireX, wireY, 0);
+}
+
+std::optional<float> TerrainManager::flightPlaneAt(float wireX, float wireY, size_t first) const {
+    constexpr float kTile = core::coords::TILE_SIZE;
+    constexpr float kHalf = kTile * 0.5f;
+    // The tile: its file Y from the wire X, its file X from the wire Y.
+    const int fileY = static_cast<int>(std::floor(32.0f - wireX / kTile));
+    const int fileX = static_cast<int>(std::floor(32.0f - wireY / kTile));
+    if (fileX < 0 || fileX > 63 || fileY < 0 || fileY > 63) return std::nullopt;
+    const auto it = loadedTiles.find(TileCoord{.x = fileX, .y = fileY});
+    if (it == loadedTiles.end() || !it->second || !it->second->terrain.flightBounds) return std::nullopt;
+    const auto& planes = *it->second->terrain.flightBounds;
+    // From the tile's top corner, both axes running negative; vertex r*3+c
+    // sits r half-tiles down in X and c down in Y.
+    const float dx = wireX - (core::coords::ZEROPOINT - static_cast<float>(fileY) * kTile);
+    const float dy = wireY - (core::coords::ZEROPOINT - static_cast<float>(fileX) * kTile);
+    const auto vertex = [&](int k) {
+        return glm::vec3(-kHalf * static_cast<float>(k / 3), -kHalf * static_cast<float>(k % 3),
+                         static_cast<float>(planes[first + static_cast<size_t>(k)]));
+    };
+    // The eight triangles fanned about the centre (the table at 0x00aedf58).
+    static constexpr int kTris[8][3] = {{3, 0, 4}, {0, 1, 4}, {1, 2, 4}, {2, 5, 4},
+                                        {5, 8, 4}, {8, 7, 4}, {7, 6, 4}, {6, 3, 4}};
+    for (const auto& t : kTris) {
+        const glm::vec3 a = vertex(t[0]), b = vertex(t[1]), c = vertex(t[2]);
+        const float det = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+        if (std::abs(det) < 1e-6f) continue;
+        const float wa = ((b.y - c.y) * (dx - c.x) + (c.x - b.x) * (dy - c.y)) / det;
+        const float wb = ((c.y - a.y) * (dx - c.x) + (a.x - c.x) * (dy - c.y)) / det;
+        const float wc = 1.0f - wa - wb;
+        if (wa < -1e-4f || wb < -1e-4f || wc < -1e-4f) continue;
+        return wa * a.z + wb * b.z + wc * c.z;
+    }
+    return std::nullopt;
+}
+
 bool TerrainManager::isInBakedShadowAt(float glX, float glY) const {
     float fracX = 0.0f, fracY = 0.0f;
     const pipeline::MapChunk* chunk = findChunkAt(glX, glY, fracX, fracY);

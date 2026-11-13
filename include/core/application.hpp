@@ -540,6 +540,14 @@ private:
 
     // Quest marker billboard sprites (above NPCs)
     void updateQuestMarkers();     // The marks over questgivers' heads
+    /// SpaceDeathUniversal once on falling below the world's floor (0x00606f90).
+    void updateWorldFloorSound();
+    bool aboveWorldFloor_ = true;  // 0x00c24ea8
+    void updateFlightCeiling();
+    // 0x00ca12b8 bit 1 and 0x00ca12b4: the ceiling check is armed on the
+    // first flying tick and looked at no sooner than this.
+    bool flightCeilingArmed_ = false;
+    uint64_t flightCeilingDueMs_ = 0;
     void updateLootSparkles();     // The glitter over corpses with loot
 };
 

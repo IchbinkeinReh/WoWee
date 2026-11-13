@@ -74,6 +74,7 @@
 #include "ui/framexml_takeover.hpp"
 #include "ui/keybinding_manager.hpp"
 #include "rendering/quest_giver_markers.hpp"
+#include "audio/ui_sound_manager.hpp"
 #include "game/quest_giver_status.hpp"
 #include "game/minimap_tracking.hpp"
 #include "rendering/footprint_renderer.hpp"
@@ -2019,8 +2020,13 @@ bool Application::initialize() {
                         auto sit = suffixMap->find(-id);
                         if (sit != suffixMap->end())
                             for (const auto& [ench, pct] : sit->second) {
-                                int32_t amount = static_cast<int32_t>(
-                                    (static_cast<int64_t>(pct) * suffixFactor) / 10000);
+                                // 0x00707650: the share as a float, rounded
+                                // the client's way - twice it less a half, to
+                                // the nearest, halved.
+                                const float share = static_cast<float>(pct) * 0.0001f *
+                                                    static_cast<float>(suffixFactor);
+                                const int32_t amount = static_cast<int32_t>(
+                                    std::nearbyint(share + share - 0.5f)) >> 1;
                                 addEnchant(ench, amount, true);
                             }
                     } else {
@@ -6144,6 +6150,10 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
     updateCheckpoint = "in_game: quest markers";
     runInGameStage("updateQuestMarkers", [&] {
         updateQuestMarkers();
+        updateWorldFloorSound();
+    });
+    runInGameStage("updateFlightCeiling", [&] {
+        updateFlightCeiling();
     });
     runInGameStage("updateLootSparkles", [&] {
         updateLootSparkles();
@@ -8116,6 +8126,16 @@ void Application::setHighlightedGameObject(uint64_t guid) {
         if (it != objects.end()) {
             instance = it->second.instanceId;
             kind = it->second.isWmo ? 2 : 1;
+        } else if (auto c = entitySpawner_->getCreatureInstances().find(guid);
+                   c != entitySpawner_->getCreatureInstances().end()) {
+            // A unit's model, in the character renderer (0x00743c70 is the
+            // object's, whatever kind of object it is).
+            instance = c->second;
+            kind = 3;
+        } else if (auto p = entitySpawner_->getPlayerInstances().find(guid);
+                   p != entitySpawner_->getPlayerInstances().end()) {
+            instance = p->second;
+            kind = 3;
         }
     }
     if (instance == highlightedInstance_ && kind == highlightedKind_) return;
@@ -8130,6 +8150,7 @@ void Application::setHighlightedGameObject(uint64_t guid) {
     // a despawn could have handed to another model.
     if (m2) m2->clearInstanceHighlights();
     if (wmo) wmo->clearInstanceHighlights();
+    if (auto* cr = renderer->getCharacterRenderer()) cr->setHighlightedInstance(kind == 3 ? instance : 0);
     // 0x00743c70 on the new one. A WMO gets the light's ambient added into
     // its c29 (0x007964a0 compares its GUID with the one recorded here,
     // 0x007a8430); an M2 gets it in +0x18c..0x194, added to its ambient.
@@ -8174,6 +8195,75 @@ void Application::updateLootSparkles() {
     sparkles->update(renderer->getM2Renderer(), assetManager.get(), corpses);
 }
 
+void Application::updateWorldFloorSound() {
+    // 0x00606f90: the camera's target against the floor under the world -
+    // the tile's lower MFBO plane, or -500 where there is none. At or above
+    // it the target has ground; below it, having had ground, the sound of
+    // falling out of the world plays once.
+    if (!gameHandler || !renderer || gameHandler->getState() != game::WorldState::IN_WORLD) return;
+    auto* terrain = renderer->getTerrainManager();
+    if (!terrain) return;
+    const auto& mi = gameHandler->getMovementInfo();
+    const glm::vec3 wire = core::coords::canonicalToServer(glm::vec3(mi.x, mi.y, mi.z));
+    const float floor = terrain->flightFloorAt(wire.x, wire.y).value_or(-500.0f);
+    if (floor <= wire.z) {
+        aboveWorldFloor_ = true;
+        return;
+    }
+    if (aboveWorldFloor_) {
+        if (auto* ac = getAudioCoordinator(); ac && ac->getUiSoundManager())
+            ac->getUiSoundManager()->playByName("SpaceDeathUniversal");
+    }
+    aboveWorldFloor_ = false;
+}
+
+void Application::updateFlightCeiling() {
+    // 0x0073a890, the active player flying (CAN_FLY and FLYING): two seconds
+    // after its first flight, and every two seconds after each bump, it is
+    // held against the tile's upper MFBO plane. Where its top - its position
+    // plus its collision height - is within two yards of the ceiling, it
+    // swims backwards (45, through 0x007176f0's fallbacks) and takes a wound
+    // that is not critical (0x00736640(0)) - not as a passenger whose seat
+    // owns its animation (0x004f6210, 0x007571c0; here: any vehicle) - and
+    // its sound row's exertion plays.
+    if (!gameHandler || !renderer || gameHandler->getState() != game::WorldState::IN_WORLD) return;
+    const auto& mi = gameHandler->getMovementInfo();
+    constexpr uint32_t kFlyingFlags = static_cast<uint32_t>(game::MovementFlags::CAN_FLY) |
+                                      static_cast<uint32_t>(game::MovementFlags::FLYING);
+    if ((mi.flags & kFlyingFlags) != kFlyingFlags) return;
+    const auto nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                 std::chrono::steady_clock::now().time_since_epoch())
+                                                 .count());
+    constexpr uint64_t kBumpIntervalMs = 2000;
+    if (!flightCeilingArmed_) {
+        flightCeilingArmed_ = true;
+        flightCeilingDueMs_ = nowMs + kBumpIntervalMs;
+    }
+    if (nowMs < flightCeilingDueMs_) return;
+    auto* terrain = renderer->getTerrainManager();
+    if (!terrain) return;
+    const glm::vec3 wire = core::coords::canonicalToServer(glm::vec3(mi.x, mi.y, mi.z));
+    const auto ceiling = terrain->flightCeilingAt(wire.x, wire.y);
+    if (!ceiling) return;
+    auto* cc = renderer->getCameraController();
+    const float height = cc ? cc->collisionHeight() : 0.0f;
+    if (!(*ceiling - 2.0f < wire.z + height)) return;
+    if (!gameHandler->isInVehicle()) {
+        auto* cr = renderer->getCharacterRenderer();
+        const uint32_t instance = renderer->getCharacterInstanceId();
+        if (cr && instance != 0) {
+            cr->playAnimation(instance, rendering::anim::SWIM_BACKWARDS, false);
+            if (const auto wound = cr->woundFor(instance, false)) cr->playWound(instance, *wound);
+        }
+    }
+    if (entitySpawner_) {
+        if (auto entity = gameHandler->getEntityManager().getEntity(gameHandler->getPlayerGuid());
+            entity && entity->isUnit())
+            entitySpawner_->playFlightCeilingSound(static_cast<const game::Unit&>(*entity));
+    }
+    flightCeilingDueMs_ = nowMs + kBumpIntervalMs;
+}
+
 void Application::updateQuestMarkers() {
     auto* markers = renderer ? renderer->getQuestGiverMarkers() : nullptr;
     if (!markers || !gameHandler) return;
@@ -8188,7 +8278,11 @@ void Application::updateQuestMarkers() {
 
     const rendering::Camera* camera = renderer->getCamera();
     std::vector<rendering::QuestGiverMarkers::Marker> wanted;
-    for (const auto& [guid, status] : gameHandler->getNpcQuestStatuses()) {
+    // Not with the interface hidden (Alt-Z): SetUIVisibility re-flags every
+    // unit's TalkToMe model by it (0x00517c20 -> 0x00517be0 -> 0x00745140).
+    static const std::unordered_map<uint64_t, game::QuestGiverStatus> kNone;
+    const auto& statuses = gameHandler->isUiVisible() ? gameHandler->getNpcQuestStatuses() : kNone;
+    for (const auto& [guid, status] : statuses) {
         const char* model = game::questGiverMarkerModel(status, trivial);
         if (!model) continue;
         auto entity = gameHandler->getEntityManager().getEntity(guid);

@@ -177,7 +177,8 @@ layout(push_constant) uniform Push {
     vec4 interiorDirect;
     // x: 1 in a WMO group of the camera's interior pass, y: the scale on the
     // direct light, z: the model's own depth in yards, within which it does
-    // not receive the sun's shadow (CharPushConstants::lightFlags).
+    // not receive the sun's shadow, w: 1 while the unit is the highlighted
+    // mouseover (CharPushConstants::lightFlags).
     vec4 lightFlags;
     // The unit's colour, which its direct light is multiplied by (CM2Model
     // +0x180: a spell kit's, 0x00720db0); white for none.
@@ -436,9 +437,15 @@ void main() {
         // client's switch as it is.
         const bool traced = rtMode() > 0.5;
         const bool known = !traced && pc.interiorAmbient.w > 0.5;
+        // The mouseover highlight: 0x00743c70 sets the model's +0x18c..0x194
+        // to the light's ambient bytes, which 0x0082e140 adds into its
+        // ambient on top of the scene's - as the game objects' (m2.frag).
+        const vec3 highlightAmbient = pc.lightFlags.w > 0.5
+            ? round(clamp(ambientColor.rgb, 0.0, 1.0) * 255.0) / 255.0 : vec3(0.0);
         const vec3 direct = (known ? pc.interiorDirect.rgb * pc.lightFlags.y : lightColor.rgb) * pc.diffuseColour.rgb;
         if (!traced && pc.interiorAmbient.w > 1.5) {
-            light = modelBakedLight(rt, norm, pc.interiorAmbient.rgb, direct, pc.interiorDirect.w, true, rtSurface);
+            light = modelBakedLight(rt, norm, pc.interiorAmbient.rgb + highlightAmbient, direct, pc.interiorDirect.w,
+                                    true, rtSurface);
         } else {
             float shadow = 1.0;
             if (shadowParams.x > 0.5) {
@@ -462,7 +469,7 @@ void main() {
                 shadow = csmShadow(uShadowMap, FragPos, vertexNormal, nl, bias);
                 shadow = mix(1.0, shadow, shadowParams.y);
             }
-            const vec3 ambient = known ? pc.interiorAmbient.rgb : ambientColor.rgb;
+            const vec3 ambient = (known ? pc.interiorAmbient.rgb : ambientColor.rgb) + highlightAmbient;
             light = modelZoneLight(rt, norm, FragPos, shadow, ambient, direct, rtSurface);
         }
     }

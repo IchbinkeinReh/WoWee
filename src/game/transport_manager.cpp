@@ -1401,12 +1401,26 @@ void TransportManager::applySway(ActiveTransport& transport, const PathEntry& pa
     const float speed = tp::effectiveSpeed(phys, rawSpeed);
     float turn = 0.0f;
     if (speed > 0.0f && rawSpeed > 0.0f) {
-        // Four places behind, 0.45 s apart at this speed.
+        // Four places behind along the route by distance - k times the
+        // effective speed's 0.45 s of travel back from here, as 0x007f82b0
+        // reads its distance-keyed path - walked back over the spline in
+        // small steps so an accelerating or slowing ship is measured where
+        // it actually was, not where it was a fixed time ago.
         float h[5] = {heading(now), 0, 0, 0, 0};
-        const float stepMs = 450.0f * speed / rawSpeed;
+        const float stepYards = 0.45f * speed;
+        constexpr int64_t kWalkMs = 20;
+        int64_t t = static_cast<int64_t>(pathTimeMs);
+        glm::vec3 prev = spline.evaluatePosition(static_cast<uint32_t>(std::clamp<int64_t>(t, 0, duration)));
+        float walked = 0.0f;
         for (int k = 1; k < 5; ++k) {
-            const int64_t t = std::max<int64_t>(
-                0, static_cast<int64_t>(pathTimeMs) - static_cast<int64_t>(stepMs * static_cast<float>(k)));
+            const float target = stepYards * static_cast<float>(k);
+            while (walked < target && t > 0) {
+                const int64_t back = std::max<int64_t>(0, t - kWalkMs);
+                const glm::vec3 p = spline.evaluatePosition(static_cast<uint32_t>(std::min<int64_t>(back, duration)));
+                walked += glm::length(prev - p);
+                prev = p;
+                t = back;
+            }
             const glm::vec3 v = travel(t);
             h[k] = glm::dot(v, v) > 1e-8f ? heading(v) : h[k - 1];
         }

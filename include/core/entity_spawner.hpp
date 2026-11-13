@@ -404,6 +404,9 @@ public:
     /// handlers ask it: kSlotJumpStart leaving the ground, kSlotJumpEnd
     /// coming down (unit_model_events.hpp).
     void playUnitJumpSound(const game::Unit& unit, uint32_t slot);
+    /// A flier at the ceiling of flight (0x0073a890): the exertion of its
+    /// sound row, outright - no slot, no chance, no count.
+    void playFlightCeilingSound(const game::Unit& unit);
     /// The voice line an emote asks for, played as the unit it shows on speaks
     /// it: EmotesTextSound by the emote text and the speaker's race and sex,
     /// under the client's two emote CVars (unit_model_events.hpp).

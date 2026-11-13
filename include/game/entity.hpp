@@ -17,6 +17,7 @@
 #include <mutex>
 #include <chrono>
 #include "math/spline.hpp"
+#include "math/chase_spring.hpp"
 #include "game/flat_field_map.hpp"
 #include "game/monster_move_flags.hpp"
 #include "game/power_prediction.hpp"
@@ -714,8 +715,14 @@ public:
             else advanceSegment(deltaTime);
         }
         arriveSplineFlags();
-        updateModelFacing();
+        updateModelFacing(deltaTime);
     }
+
+    /// The rate its model chases its facing at, in the client's critically
+    /// damped spring (0x007160b0), or 0 for the four-sample halving: a
+    /// creature's CreatureMovementInfo SmoothFacingChaseRate, or 20 (30 in a
+    /// fight) for a player-controlled unit that is not a player (0x00735f60).
+    void setFacingChaseRate(float rate) { facingChaseRate_ = rate; }
 
     [[nodiscard]] bool isEntityMoving() const { return isMoving_; }
 
@@ -1060,10 +1067,21 @@ private:
         }
     }
 
-    void updateModelFacing() {
+    void updateModelFacing(float deltaTime) {
         if (!modelFacingSet_) {
             modelFacing_ = orientation;
             modelFacingSet_ = true;
+            facingVelocity_ = 0.0f;
+            return;
+        }
+        if (facingChaseRate_ > 0.0f) {
+            // 0x007160b0 on the facing and its speed, the target brought
+            // within half a turn of where the model is.
+            float target = orientation;
+            if (modelFacing_ > target + kPi) target += 2.0f * kPi;
+            else if (modelFacing_ < target - kPi) target -= 2.0f * kPi;
+            wowee::math::chaseStep(modelFacing_, facingVelocity_, target, facingChaseRate_, deltaTime);
+            modelFacing_ = wrapAngle(modelFacing_);
             return;
         }
         const float diff = wrapAngle(orientation - modelFacing_);
@@ -1122,6 +1140,8 @@ private:
     float modelFacing_ = 0;
     bool modelFacingSet_ = false;
     std::array<float, 4> facingDiffs_{};
+    float facingChaseRate_ = 0.0f;
+    float facingVelocity_ = 0.0f;
 };
 
 /**

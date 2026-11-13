@@ -688,6 +688,10 @@ struct Widget {
         mutable int lines = 1;
     };
     std::vector<TooltipLine> tooltipLines;
+    /// Where an item tooltip's enchants go: the line its sockets start at,
+    /// marked by the builder (0x006277f0 writes the permanent and temporary
+    /// enchants in its enchant walk, before the sockets); -1 for the end.
+    int tooltipEnchantAt = -1;
     /// Stand-ins for GameTooltipTextLeft1..N, created on demand by whatever
     /// asks to be anchored to one. FrameXML positions things against a
     /// tooltip's individual lines - SetTooltipMoney hangs the coin frame off

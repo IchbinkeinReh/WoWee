@@ -214,7 +214,7 @@ private:
     // UI state
     bool showEntityWindow = false;
     bool showMinimap_ = true;  // M key toggles minimap
-    uint32_t lastPlayerDamageHits_ = 0;  // GameHandler::playerDamageHits at the last frame (damage flash)
+    uint32_t lastPlayerDamageHits_ = 0;  // GameHandler::numPlayerDamageHits at the last frame (damage flash)
     float damageFlashAlpha_ = 0.0f; // Screen edge flash intensity (fades to 0)
 
 
@@ -330,6 +330,13 @@ private:
     /// Quest-giver status per NPC guid, as the server reports it.
     using QuestStatusMap = std::unordered_map<uint64_t, game::QuestGiverStatus>;
 
+    /// What the pointer rests on over the minimap this frame, each name with
+    /// the place its kind takes in the client's one tooltip (0x0057c720):
+    /// the group, the battleground markers, the area points, then the
+    /// objects' blips by kind. The text last set, so it is set on change only.
+    std::vector<std::pair<int, std::string>> minimapHover_;
+    std::string minimapHoverShown_;
+    void showMinimapHover();
     void renderMinimapNpcDots(const MinimapFrame& frame, const EntityList& units,
                               const EntrySet& questEntries);
     void renderMinimapRares(const MinimapFrame& frame, const EntityList& units,
@@ -445,6 +452,8 @@ private:
     /// world, and the nameplate it is over, which wins. Committed once a
     /// frame (commitMouseover), so a change is announced once.
     uint64_t worldMouseover_ = 0;
+    /// The extra bars the realm keeps for the character, as last applied.
+    std::optional<uint8_t> appliedBarToggles_;
     uint64_t plateMouseover_ = 0;
     void commitMouseover(game::GameHandler& gameHandler);
     // Right-click interact/attack fires on release only if the press was a tap, not a

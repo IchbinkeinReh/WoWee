@@ -608,15 +608,17 @@ void WorldMapFacade::render(const glm::vec3& playerRenderPos,
         }
         // The floor the player is on (0x00547170 -> 0x005439e0): the building
         // they stand in and their height pick the DungeonMap row. Where no
-        // row answers, the area's own default stands.
-        if (!d.taxiMode && d.playerWmoId != 0 && playerZone >= 0 &&
+        // row answers on a map with floors, the client falls to the terrain
+        // map ("NO MAP FOUND (will use terrain)"), not the area's default.
+        if (!d.taxiMode && playerZone >= 0 &&
             playerZone < static_cast<int>(d.data.zones().size()) &&
             d.viewState.currentLevel() == ViewLevel::ZONE && d.viewState.currentZoneIdx() == playerZone) {
             const Zone& z = d.data.zones()[static_cast<size_t>(playerZone)];
-            const int row = d.data.dungeonMapForChunk(z.mapID, d.playerWmoId, displayPlayerRenderPos.z);
-            if (row > 0) {
+            if (z.defaultDungeonFloorRowId != -1) {
+                const int row = d.playerWmoId != 0
+                    ? d.data.dungeonMapForChunk(z.mapID, d.playerWmoId, displayPlayerRenderPos.z) : -1;
                 d.dungeonLevelAreaId = z.wmaID;
-                d.dungeonLevelRowId = row;
+                d.dungeonLevelRowId = row > 0 ? row : -1;
             }
         }
         // The view has only now become the player's zone, and the interface

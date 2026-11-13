@@ -36,7 +36,10 @@ using WordsOfLength = std::function<const std::vector<std::string>*(uint32_t len
 
 /// What a listener with `comprehension` hears of `text` (0x00505930 as the
 /// chat handler calls it: no <...> passthrough, separators collapsed). Above
-/// 299 the text is untouched.
-std::string garble(std::string_view text, uint32_t comprehension, const WordsOfLength& words);
+/// 299 the text is untouched. `locale` is the client's locale index (0 enUS,
+/// 1 koKR, 4 zhCN, 5 zhTW...): zhCN and zhTW cut a long word into pieces of
+/// 2, 3, 4, 5, 2... characters, each heard as a word of its own, and koKR,
+/// zhCN and zhTW copy the case byte by byte (0x004fb410).
+std::string garble(std::string_view text, uint32_t comprehension, const WordsOfLength& words, int locale = 0);
 
 }  // namespace wowee::game::chat_language

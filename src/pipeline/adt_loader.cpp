@@ -229,6 +229,11 @@ ADTTerrain ADTLoader::load(const std::vector<uint8_t>& adtData) {
         else if (header.magic == MCNK) {
             parseMCNK(chunkData, chunkIndex++, terrain);
         }
+        else if (header.magic == MFBO && chunkData.size() >= 36) {
+            std::array<int16_t, 18> planes{};
+            std::memcpy(planes.data(), chunkData.data(), sizeof(planes));
+            terrain.flightBounds = planes;
+        }
 
         // Move to next chunk
         offset += kChunkHeaderSize + chunkSize;

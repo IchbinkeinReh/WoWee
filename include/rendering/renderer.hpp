@@ -131,6 +131,9 @@ public:
     /// CPU work goes in between, which is the point - it used to sit idle here
     /// for the whole of the doodads' recording.
     void renderWorld(game::World* world, game::GameHandler* gameHandler = nullptr);
+    /// The sky's parameters for this frame, for either recording path.
+    [[nodiscard]] rendering::SkyParams frameSkyParams(game::GameHandler* gameHandler, float timeOfDay,
+                                                      bool useOriginalSkybox, bool drawSkyModels) const;
     /// Joins the world's recording and executes it into the frame, then the
     /// passes that follow the scene. Does nothing when there is nothing
     /// pending, so endFrame calls it too in case the caller did not.
@@ -1459,6 +1462,7 @@ public:
      * generation time on the main thread, and turning it off has to release
      * what it was holding rather than merely stop drawing. */
     void setGrassEnabled(bool enabled);
+    [[nodiscard]] bool isGrassEnabled() const { return grassEnabled_; }
 private:
     bool grassEnabled_ = false;
     float grassDensityScale_ = 1.0f;

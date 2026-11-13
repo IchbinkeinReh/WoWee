@@ -107,6 +107,7 @@ struct WorldStateSound {
     uint32_t ambience = 0;
     uint32_t intro = 0;
     uint32_t music = 0;
+    uint32_t reverb = 0;  // +0x1c, the SoundProviderPreferences row (slot 1)
     bool operator==(const WorldStateSound&) const = default;
 };
 
@@ -127,6 +128,12 @@ struct Place {
     uint32_t groupMusic = 0;
     uint32_t buildingIntro = 0;
     uint32_t groupIntro = 0;
+    // The reverb presets (SoundProviderPreferences rows, WMOAreaTable +0x10
+    // and underwater +0x14; 0x0078e9a0).
+    uint32_t buildingReverb = 0;
+    uint32_t groupReverb = 0;
+    uint32_t buildingReverbUnderwater = 0;
+    uint32_t groupReverbUnderwater = 0;
     bool indoors = false;
     constexpr bool operator==(const Place&) const = default;
 };

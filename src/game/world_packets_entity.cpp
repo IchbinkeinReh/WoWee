@@ -190,13 +190,15 @@ bool CreatureQueryResponseParser::parse(network::Packet& packet, CreatureQueryRe
     data.displayId[2] = packet.readUInt32();
     data.displayId[3] = packet.readUInt32();
 
-    // healthMultiplier, powerMultiplier, racialLeader (byte), questItems[6];
-    // movementId after them goes unread.
+    // healthMultiplier, powerMultiplier, racialLeader (byte), questItems[6],
+    // then movementId (the cache record's +0x58), the CreatureMovementInfo
+    // row the model turns by (0x00735f60).
     if (packet.hasRemaining(4 + 4 + 1 + 6 * 4)) {
         packet.readFloat();
         packet.readFloat();
         data.racialLeader = packet.readUInt8() != 0;
         for (uint32_t& q : data.questItems) q = packet.readUInt32();
+        if (packet.hasRemaining(4)) data.movementId = packet.readUInt32();
     }
 
     LOG_DEBUG("Creature query response: ", data.name, " (type=", data.creatureType,

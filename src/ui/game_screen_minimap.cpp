@@ -1,3 +1,4 @@
+#include "game/interface_text.hpp"
 #include "rendering/minimap_art.hpp"
 #include "rendering/rt_rays.hpp"
 #include "core/platform.hpp"
@@ -779,7 +780,7 @@ void GameScreen::renderMinimapNpcDots(const MinimapFrame& frame, const EntityLis
                 // Tooltip on hover showing unit name
                 if (cursorNearBlip(sx, sy)) {
                     const std::string& nm = unit->getName();
-                    if (!nm.empty()) ImGui::SetTooltip("%s (quest)", nm.c_str());
+                    if (!nm.empty()) minimapHover_.emplace_back(50, nm);
                 }
             } else {
                 // One colour for all: the client draws no dot for every unit,
@@ -822,11 +823,8 @@ void GameScreen::renderMinimapRares(const MinimapFrame& frame, const EntityList&
             frame.drawList->AddQuadFilled(top, right, bottom, left, fill);
             frame.drawList->AddQuad(top, right, bottom, left, IM_COL32(0, 0, 0, 220), 1.5f);
 
-            if (cursorNearBlip(sx, sy, kSmallBlipHoverRadius)) {
-                const std::string& name = unit->getName();
-                ImGui::SetTooltip("%s\n%s",
-                                  name.empty() ? "Unknown creature" : name.c_str(),
-                                  isElite ? "Rare Elite" : "Rare");
+            if (cursorNearBlip(sx, sy, kSmallBlipHoverRadius) && !unit->getName().empty()) {
+                minimapHover_.emplace_back(50, unit->getName());
             }
         }
     }
@@ -903,11 +901,9 @@ void GameScreen::renderMinimapObjectDots(const MinimapFrame& frame, const Entity
             }
 
             // Tooltip on hover
-            if (cursorNearBlip(sx, sy)) {
-                if (isQuestGO)
-                    ImGui::SetTooltip("%s (quest)", goInfo->name.c_str());
-                else
-                    ImGui::SetTooltip("%s", goInfo->name.c_str());
+            if (cursorNearBlip(sx, sy) && !goInfo->name.empty()) {
+                (void)isQuestGO;
+                minimapHover_.emplace_back(50, goInfo->name);
             }
         }
     }
@@ -949,7 +945,7 @@ void GameScreen::renderMinimapChests(const MinimapFrame& frame, const EntityList
             if (mouse.x >= sx - halfW - 2.0f && mouse.x <= sx + halfW + 2.0f &&
                 mouse.y >= sy - halfH - 2.0f && mouse.y <= sy + halfH + 2.0f) {
                 const std::string& name = chest->getName().empty() ? info->name : chest->getName();
-                ImGui::SetTooltip("%s\nChest", name.empty() ? "Chest" : name.c_str());
+                if (!name.empty()) minimapHover_.emplace_back(50, name);
             }
         }
     }
@@ -1099,7 +1095,6 @@ void GameScreen::renderMinimapObjectBlips(const MinimapFrame& frame, const Entit
 
     std::stable_sort(blips.begin(), blips.end(),
                      [](const Blip& a, const Blip& b) { return a.icon < b.icon; });
-    const char* tooltip = nullptr;
     constexpr uint8_t g = minimap_blips::kOtherAreaGrey;
     for (const Blip& b : blips) {
         const auto cell = minimap_blips::objectIconCell(b.icon);
@@ -1109,10 +1104,10 @@ void GameScreen::renderMinimapObjectBlips(const MinimapFrame& frame, const Entit
                                  ImVec2(cell.u1, cell.v1),
                                  b.grey ? IM_COL32(g, g, g, 255) : IM_COL32_WHITE);
         if (b.name && !b.name->empty() && cursorNearBlip(b.sx, b.sy, size * 0.5f)) {
-            tooltip = b.name->c_str();
+            // Grey where the blip is (0x0057c720: |cffb0b0b0 ... |r).
+            minimapHover_.emplace_back(10 + b.icon, b.grey ? "|cffb0b0b0" + *b.name + "|r" : *b.name);
         }
     }
-    if (tooltip) ImGui::SetTooltip("%s", tooltip);
 }
 
 // What a party member pinged, for as long as the ping lasts.
@@ -1187,7 +1182,7 @@ void GameScreen::renderMinimapPartyDots(const MinimapFrame& frame, game::GameHan
             drawAtlasBlip(frame.drawList, art.partyRaidBlips, sx, sy, blipSize,
                           minimap_blips::partyRaidCell(icon));
             if (!member.name.empty() && cursorNearBlip(sx, sy, blipSize * 0.5f)) {
-                ImGui::SetTooltip("%s", member.name.c_str());
+                minimapHover_.emplace_back(0, member.name);
             }
             continue;
         }
@@ -1196,7 +1191,7 @@ void GameScreen::renderMinimapPartyDots(const MinimapFrame& frame, game::GameHan
         const ImVec2 mid = drawRimArrow(frame.drawList, art.groupArrow, frame.centerX,
                                         frame.centerY, unitPx, offsetBearing(offset));
         if (!member.name.empty() && cursorNearBlip(mid.x, mid.y, kArrowHoverRadius)) {
-            ImGui::SetTooltip("%s", member.name.c_str());
+            minimapHover_.emplace_back(0, member.name);
         }
     }
 }
@@ -1297,21 +1292,9 @@ void GameScreen::renderMinimapBattlegroundPositions(const MinimapFrame& frame, g
                 frame.drawList->AddQuad(top, right, bot, left, IM_COL32(255, 255, 255, 180), 1.0f);
 
                 if (cursorNearBlip(sx, sy)) {
-                    // Show entity name if available, otherwise guid
-                    auto ent = gameHandler.getEntityManager().getEntity(bp.guid);
-                    if (ent) {
-                        std::string nm;
-                        if (ent->getType() == game::ObjectType::PLAYER) {
-                            auto pl = std::static_pointer_cast<game::Unit>(ent);
-                            nm = pl ? pl->getName() : "";
-                        }
-                        if (!nm.empty())
-                            ImGui::SetTooltip("Flag carrier: %s", nm.c_str());
-                        else
-                            ImGui::SetTooltip("Flag carrier");
-                    } else {
-                        ImGui::SetTooltip("Flag carrier");
-                    }
+                    // The carrier by name, as a marker of the group's.
+                    const std::string& nm = gameHandler.lookupName(bp.guid);
+                    if (!nm.empty()) minimapHover_.emplace_back(1, nm);
                 }
             }
         }
@@ -1427,8 +1410,6 @@ void GameScreen::renderMinimapPois(const MinimapFrame& frame, game::GameHandler&
     std::vector<mb::PoiCandidate> candidates;
     std::vector<size_t> candidatePoint;
     std::vector<glm::vec2> offsets(points.size());
-    const char* tooltip = nullptr;
-    std::string tooltipText;
     for (size_t i = 0; i < points.size(); ++i) {
         const Point& p = points[i];
         const glm::vec3 render = core::coords::canonicalToRender(glm::vec3(p.x, p.y, 0.0f));
@@ -1452,7 +1433,8 @@ void GameScreen::renderMinimapPois(const MinimapFrame& frame, game::GameHandler&
             const float sy = frame.centerY + offsets[i].y;
             drawAtlasBlip(frame.drawList, art.poiIcons, sx, sy, size, mb::poiIconCell(p.icon, art.poiIconsWidth));
             if (cursorNearBlip(sx, sy, size * 0.5f)) {
-                tooltipText = p.kind == Kind::Corpse ? std::string("Your corpse") : p.name;
+                const std::string text = p.kind == Kind::Corpse ? game::interfaceString("CORPSE", "Corpse") : p.name;
+                if (!text.empty()) minimapHover_.emplace_back(3, text);
             }
             continue;
         }
@@ -1469,11 +1451,10 @@ void GameScreen::renderMinimapPois(const MinimapFrame& frame, game::GameHandler&
         const ImVec2 mid = drawRimArrow(frame.drawList, texture, frame.centerX, frame.centerY, unitPx,
                                         offsetBearing(offsets[candidatePoint[c]]));
         if (cursorNearBlip(mid.x, mid.y, kArrowHoverRadius)) {
-            tooltipText = p.kind == Kind::Corpse ? std::string("Your corpse") : p.name;
+            const std::string text = p.kind == Kind::Corpse ? game::interfaceString("CORPSE", "Corpse") : p.name;
+            if (!text.empty()) minimapHover_.emplace_back(3, text);
         }
     }
-    if (!tooltipText.empty()) tooltip = tooltipText.c_str();
-    if (tooltip) ImGui::SetTooltip("%s", tooltip);
 }
 
 // The player: Interface\Minimap\MinimapArrow at the centre, at the size of
@@ -1896,6 +1877,7 @@ void GameScreen::renderMinimapMarkers(game::GameHandler& gameHandler) {
     const auto& minimapQuestEntries = minimapQuestCreatureEntries_;
     const auto& minimapQuestGoEntries = minimapQuestGameObjectEntries_;
 
+    minimapHover_.clear();
     renderMinimapNpcDots(frame, minimapUnits, minimapQuestEntries);
     renderMinimapRares(frame, minimapUnits, gameHandler);
     renderMinimapPlayerDots(frame, minimapPlayers, gameHandler);
@@ -1912,6 +1894,7 @@ void GameScreen::renderMinimapMarkers(game::GameHandler& gameHandler) {
                              statuses, gameHandler);
     renderMinimapBattlegroundPositions(frame, gameHandler);
     renderMinimapPois(frame, gameHandler);
+    showMinimapHover();
     // Fainter while the player sits in a vehicle it does not drive there.
     const bool inVehicleSeat = gameHandler.vehicleRoster().passenger(gameHandler.getPlayerGuid()).has_value();
     renderMinimapPlayerArrow(frame, minimap_blips::playerArrowAlpha(inVehicleSeat, drivesListedVehicle));
@@ -1931,6 +1914,24 @@ void GameScreen::renderMinimapMarkers(game::GameHandler& gameHandler) {
         renderMinimapChrome(gameHandler, centerX, centerY, mapRadius);
     }
 }
+void GameScreen::showMinimapHover() {
+    // 0x0057c720: one GameTooltip, at the cursor against the Minimap, with
+    // every name under the pointer a line of it in the client's order; set
+    // when what is under the pointer changes, hidden when nothing is.
+    std::stable_sort(minimapHover_.begin(), minimapHover_.end(),
+                     [](const auto& a, const auto& b) { return a.first < b.first; });
+    std::string text;
+    for (const auto& [order, name] : minimapHover_) {
+        (void)order;
+        if (!text.empty()) text += "\n";
+        text += name;
+    }
+    if (text == minimapHoverShown_) return;
+    minimapHoverShown_ = text;
+    auto* engine = services_.addonManager ? services_.addonManager->getLuaEngine() : nullptr;
+    if (engine) engine->showMinimapTooltip(text);
+}
+
 void GameScreen::saveSettings() {
     std::string path = SettingsPanel::getSettingsPath();
     std::filesystem::path dir = std::filesystem::path(path).parent_path();

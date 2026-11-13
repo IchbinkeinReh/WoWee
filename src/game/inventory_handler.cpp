@@ -1475,6 +1475,11 @@ void InventoryHandler::lootReady() {
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LOOT_OPENED", {"0"});
 }
 
+void InventoryHandler::setAutoLoot(bool enabled) {
+    autoLoot_ = enabled;
+    if (enabled && lootWindowOpen_ && currentLoot_.lootGuid != 0) autoTakeLoot();
+}
+
 void InventoryHandler::autoTakeLoot() {
     // 0x00588f90, once every item is known: the coin (0x006d4b90), then each
     // slot the player may take - free (type 0) or the player's own (4). A
@@ -4641,8 +4646,26 @@ uint32_t InventoryHandler::getBankBagSlotPrice(int slotIndex) {
     return kPrices[slotIndex];
 }
 
+void InventoryHandler::slotItemChanged(uint64_t before, uint64_t after) {
+    if (before == after || pendingMoveEntry_ == 0) return;
+    if (pendingMoveGuid_ == 0 || pendingMoveGuid_ == before || pendingMoveGuid_ == after) {
+        const auto* info = owner_.getItemInfo(pendingMoveEntry_);
+        if (info && info->valid) playItemSound(info->displayInfoId, 1);
+    }
+    pendingMoveGuid_ = 0;
+    pendingMoveEntry_ = 0;
+}
+
+/// The item at a wire bag and slot with its entry, for notePendingItemMove.
+static void notePendingMoveAt(InventoryHandler& inv, GameHandler& owner, uint8_t bag, uint8_t slot) {
+    const uint64_t guid = inv.itemGuidAtWire(bag, slot);
+    const auto found = owner.onlineItemsRef().find(guid);
+    if (guid != 0 && found != owner.onlineItemsRef().end()) inv.notePendingItemMove(guid, found->second.entry);
+}
+
 void InventoryHandler::depositItem(uint8_t srcBag, uint8_t srcSlot) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    notePendingMoveAt(*this, owner_, srcBag, srcSlot);
     // CMSG_AUTOBANK_ITEM lets the server place the item into the first free slot
     // across the whole bank - the main slots AND the purchased bank bags. The
     // old code scanned only the main bank slots and reported "Bank is full" the
@@ -4654,6 +4677,7 @@ void InventoryHandler::depositItem(uint8_t srcBag, uint8_t srcSlot) {
 
 void InventoryHandler::withdrawItem(uint8_t srcBag, uint8_t srcSlot) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    notePendingMoveAt(*this, owner_, srcBag, srcSlot);
     // CMSG_AUTOSTORE_BANK_ITEM lets the server place the item into the first
     // free slot across ALL bags (retail right-click-to-withdraw), not just the
     // backpack. The server replies with an inventory-full error if there's no
@@ -4900,6 +4924,7 @@ void InventoryHandler::guildBankDepositFromInventory(uint8_t srcBag, uint8_t src
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() ||
         guildBankerGuid_ == 0 || !guildBankOpen_) return;
     if (guildBankRefusesDeposit(srcBag, srcSlot)) return;
+    notePendingMoveAt(*this, owner_, srcBag, srcSlot);
     // CMSG_GUILD_BANK_SWAP_ITEMS has no server-side auto-store for the deposit
     // direction (that path forces bank→character), so the client picks the
     // target slot - the first empty one in the tab the player is viewing, which
@@ -6635,6 +6660,7 @@ bool InventoryHandler::applyInventoryFields(const FlatFieldMap& fields, bool ini
                 const uint64_t before = guid;
                 if (isLow) guid = (guid & 0xFFFFFFFF00000000ULL) | val;
                 else guid = (guid & 0x00000000FFFFFFFFULL) | (uint64_t(val) << 32);
+                if (!initial) slotItemChanged(before, guid);
                 slotsChanged = true;
                 // Only the nineteen worn slots, not the four bag slots that
                 // share this region of the field block.
@@ -6646,8 +6672,10 @@ bool InventoryHandler::applyInventoryFields(const FlatFieldMap& fields, bool ini
             bool isLow = ((key - packBase) % 2 == 0);
             if (slotIndex < static_cast<int>(owner_.backpackSlotGuidsRef().size())) {
                 uint64_t& guid = owner_.backpackSlotGuidsRef()[slotIndex];
+                const uint64_t before = guid;
                 if (isLow) guid = (guid & 0xFFFFFFFF00000000ULL) | val;
                 else guid = (guid & 0x00000000FFFFFFFFULL) | (uint64_t(val) << 32);
+                if (!initial) slotItemChanged(before, guid);
                 slotsChanged = true;
             }
         } else if (keyringBase != 0xFFFF &&
@@ -6671,6 +6699,7 @@ bool InventoryHandler::applyInventoryFields(const FlatFieldMap& fields, bool ini
                 const uint64_t before = guid;
                 if (isLow) guid = (guid & 0xFFFFFFFF00000000ULL) | val;
                 else guid = (guid & 0x00000000FFFFFFFFULL) | (uint64_t(val) << 32);
+                if (!initial) slotItemChanged(before, guid);
                 slotsChanged = true;
                 // Counted as the bank window counts: its general slots first,
                 // from one. A guid arrives as two fields, so this is a set.
@@ -6759,8 +6788,10 @@ void InventoryHandler::extractContainerFields(uint64_t containerGuid, const Flat
         if (slotIndex >= 36) continue;
         bool isLow = (offset % 2 == 0);
         uint64_t& guid = info.slotGuids[slotIndex];
+        const uint64_t before = guid;
         if (isLow) guid = (guid & 0xFFFFFFFF00000000ULL) | val;
         else guid = (guid & 0x00000000FFFFFFFFULL) | (uint64_t(val) << 32);
+        slotItemChanged(before, guid);
     }
 }
 
@@ -6781,6 +6812,7 @@ ItemDef InventoryHandler::buildItemDef(uint32_t entry, uint32_t stackCount,
     def.maxStack = 1;
     // ITEM_FLAG_SOULBOUND (0x1): a BoE item that has already bound must not re-prompt.
     def.soulbound = (flags & 0x1u) != 0;
+    def.wrapped = (flags & 0x8u) != 0;
     def.randomPropertyId = randomPropertyId;
     def.suffixFactor = suffixFactor;
 
@@ -6821,7 +6853,11 @@ ItemDef InventoryHandler::buildItemDef(uint32_t entry, uint32_t stackCount,
     // stats fold into their dedicated fields; everything else (ratings, AP, spell power)
     // joins extraStats so the existing tooltip rendering shows them as green stat lines.
     if (randomPropertyId != 0) {
-        for (const auto& b : owner_.getRandomStatBonuses(randomPropertyId, suffixFactor)) {
+        // A suffix's points from the item's level, quality and slot
+        // (0x007089b0), where the tables answer; the server's seed else.
+        const uint32_t points = randomPropertyId < 0
+            ? owner_.randomSuffixPoints(def.itemId).value_or(suffixFactor) : suffixFactor;
+        for (const auto& b : owner_.getRandomStatBonuses(randomPropertyId, points)) {
             if (b.value == 0) continue;
             switch (b.statType) {
                 case 3: def.agility   += b.value; break;

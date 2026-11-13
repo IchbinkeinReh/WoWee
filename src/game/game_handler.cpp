@@ -578,6 +578,36 @@ void GameHandler::updateAutoAttack(float deltaTime) {
 // Close NPC windows if player walks too far (15 units)
 }
 
+float GameHandler::facingChaseRate(const Entity& entity) {
+    // 0x00735f60: a creature whose cache record names a CreatureMovementInfo
+    // row with a rate above 1e-5 chases its facing at that rate; otherwise a
+    // unit that is player-controlled (UNIT_FLAG 0x8) and not a player chases
+    // at 20, or 30 while its pet-in-combat flag (0x800) is up (0x0071afb0);
+    // everything else takes the four-sample halving.
+    const auto* unit = dynamic_cast<const Unit*>(&entity);
+    if (!unit) return 0.0f;
+    if (entity.getType() != ObjectType::PLAYER) {
+        const auto& cache = getCreatureInfoCache();
+        if (const auto it = cache.find(unit->getEntry()); it != cache.end() && it->second.movementId != 0) {
+            if (!creatureMovementInfoLoaded_) {
+                creatureMovementInfoLoaded_ = true;
+                if (auto* am = services().assetManager; am && am->isInitialized()) {
+                    if (auto dbc = am->loadDBCOptional("CreatureMovementInfo.dbc"); dbc && dbc->isLoaded()) {
+                        for (uint32_t r = 0; r < dbc->getRecordCount(); ++r)
+                            creatureMovementInfo_[dbc->getUInt32(r, 0)] = dbc->getFloat(r, 1);
+                    }
+                }
+            }
+            if (const auto row = creatureMovementInfo_.find(it->second.movementId);
+                row != creatureMovementInfo_.end() && row->second > 1e-5f) {
+                return row->second;
+            }
+        }
+        if ((unit->getUnitFlags() & 0x8u) != 0) return (unit->getUnitFlags() & 0x800u) != 0 ? 30.0f : 20.0f;
+    }
+    return 0.0f;
+}
+
 void GameHandler::updateEntityInterpolation(float deltaTime) {
 // Advance every server-tracked unit once per frame. This is intentionally not
 // selected-target or distance gated: the spatial query is indexed by each
@@ -595,6 +625,7 @@ unitClockSeconds_.reset();
 for (const auto& [guid, entity] : entityController_->getEntityManager().getEntities()) {
     (void)guid;
     if (entity && entity->isUnit()) {
+        entity->setFacingChaseRate(facingChaseRate(*entity));
         entity->updateMovement(unitDelta);
     }
 }
@@ -784,6 +815,7 @@ void GameHandler::update(float deltaTime) {
     updateNetworking();
     if (!socket) return;  // disconnect() may have been called
     if (state == WorldState::IN_WORLD) updatePredictedPower();
+    tickAccountData(deltaTime);
     // The world state frame's countdowns run on the server's clock, which
     // 0x005488f0 asks for every twenty seconds in the world:
     // CMSG_WORLD_STATE_UI_TIMER_UPDATE (0x00548760), answered with
@@ -5214,6 +5246,32 @@ std::pair<uint32_t, uint32_t> GameHandler::getRaidDifficulty() const {
     if (!socialHandler_) return {0, 0};
     const auto& raid = socialHandler_->getRaidDifficulty();
     return {raid.effective(!getPartyData().isEmpty()), raid.personal};
+}
+
+std::optional<uint32_t> GameHandler::randomSuffixPoints(uint32_t itemId) const {
+    const ItemQueryResponseData* info = getItemInfo(itemId);
+    if (!info || !info->valid) return std::nullopt;
+    // 0x00707500: InventoryType through the jump table at 0x0070757c, to the
+    // five categories (head/chest/legs..., shoulders..., wrists..., weapon,
+    // ranged), -1 for a type with none.
+    static constexpr int8_t kCategory[29] = {-1, 0, 2, 1, 0, 0, 1, 0, 1, 2, 1, 2, 1, 3, 2, 4,
+                                             2, 0, -1, -1, 0, 3, 3, 2, -1, 4, 4, -1, -1};
+    if (info->inventoryType >= 29) return std::nullopt;
+    const int cat = kCategory[info->inventoryType];
+    if (cat < 0) return std::nullopt;
+    uint32_t base;
+    switch (info->quality) {
+        case 2: base = 11; break;   // good (+0x2c)
+        case 3: base = 6; break;    // superior (+0x18)
+        case 4: base = 1; break;    // epic (+0x4)
+        default: return std::nullopt;
+    }
+    auto* am = services_.assetManager;
+    const auto dbc = am && am->isInitialized() ? am->loadDBCOptional("RandPropPoints.dbc") : nullptr;
+    if (!dbc || dbc->getFieldCount() < 16) return std::nullopt;
+    const int32_t row = dbc->findRecordById(info->itemLevel);
+    if (row < 0) return std::nullopt;
+    return dbc->getUInt32(static_cast<uint32_t>(row), base + static_cast<uint32_t>(cat));
 }
 
 uint32_t GameHandler::raidDifficultyInForce() const {

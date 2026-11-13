@@ -775,6 +775,7 @@ set(WOWEE_SOURCES
     src/game/game_handler_callbacks.cpp
     src/game/game_handler_tabard.cpp
     src/game/bug_report.cpp
+    src/game/game_handler_account_data.cpp
     src/game/game_handler_corpse.cpp
     src/game/game_handler_world_state_ui.cpp
     src/game/chat_handler.cpp
@@ -847,6 +848,7 @@ set(WOWEE_SOURCES
     src/audio/npc_voice_manager.cpp
     src/audio/player_voice_manager.cpp
     src/audio/sound_filter.cpp
+    src/audio/eax_reverb.cpp
     src/audio/ambient_sound_manager.cpp
     src/audio/ui_sound_manager.cpp
     src/audio/combat_sound_manager.cpp

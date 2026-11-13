@@ -200,6 +200,42 @@ AudioEngine& AudioEngine::instance() {
     return instance;
 }
 
+namespace {
+
+/// The reverb as a node of the graph: the effects in, the effects and their
+/// reverb out. The parameters come from the game thread under the engine's
+/// mutex, taken here only when free - a frame late is better than a click.
+struct ReverbNode {
+    ma_node_base base;  // first, as miniaudio requires
+    EaxReverb reverb;
+    std::mutex* mutex = nullptr;
+    bool* enabled = nullptr;
+    std::optional<EaxReverbParams>* preset = nullptr;
+    std::atomic<bool> dirty{true};
+    bool on = false;
+    uint32_t sampleRate = 44100;
+    uint32_t channels = 2;
+};
+
+void reverbProcess(ma_node* node, const float** in, ma_uint32* inFrames, float** out, ma_uint32* outFrames) {
+    auto* self = static_cast<ReverbNode*>(node);
+    const ma_uint32 frames = std::min(*inFrames, *outFrames);
+    std::memcpy(out[0], in[0], static_cast<size_t>(frames) * self->channels * sizeof(float));
+    *outFrames = frames;
+    if (self->dirty.load(std::memory_order_acquire) && self->mutex->try_lock()) {
+        self->dirty.store(false, std::memory_order_relaxed);
+        self->on = *self->enabled;
+        // The OFF preset (0x004d1ec0 with no row) where there is none.
+        self->reverb.configure(self->preset->value_or(EaxReverbParams{}), self->sampleRate, self->channels);
+        self->mutex->unlock();
+    }
+    if (self->on) self->reverb.process(out[0], frames);
+}
+
+ma_node_vtable kReverbVtable = {reverbProcess, nullptr, 1, 1, 0};
+
+}  // namespace
+
 AudioEngine::AudioEngine() = default;
 
 AudioEngine::~AudioEngine() {
@@ -262,6 +298,28 @@ bool AudioEngine::initialize() {
         effectsGroup_ = nullptr;
     }
 
+    // The reverb after the effects (0x008794e0 sets it on FMOD's system).
+    if (effectsGroup_) {
+        auto* node = new ReverbNode();
+        node->mutex = &reverbMutex_;
+        node->enabled = &reverbEnabled_;
+        node->preset = &reverbPreset_;
+        node->sampleRate = ma_engine_get_sample_rate(engine_);
+        node->channels = ma_engine_get_channels(engine_);
+        ma_uint32 channels = node->channels;
+        ma_node_config config = ma_node_config_init();
+        config.vtable = &kReverbVtable;
+        config.pInputChannels = &channels;
+        config.pOutputChannels = &channels;
+        if (ma_node_init(ma_engine_get_node_graph(engine_), &config, nullptr, &node->base) == MA_SUCCESS) {
+            ma_node_attach_output_bus(&node->base, 0, ma_engine_get_endpoint(engine_), 0);
+            ma_node_attach_output_bus(effectsGroup_, 0, &node->base, 0);
+            reverbNode_ = node;
+        } else {
+            delete node;
+        }
+    }
+
     initialized_ = true;
     LOG_INFO("AudioEngine initialized (miniaudio, backend: ", backendName, ")");
     return true;
@@ -269,6 +327,28 @@ bool AudioEngine::initialize() {
 
 ma_sound* AudioEngine::groupFor(Channel channel) const {
     return channel == Channel::Effects ? effectsGroup_ : nullptr;
+}
+
+void AudioEngine::pushReverb() {
+    if (reverbNode_) static_cast<ReverbNode*>(reverbNode_)->dirty.store(true, std::memory_order_release);
+}
+
+void AudioEngine::setReverbEnabled(bool enabled) {
+    {
+        std::lock_guard<std::mutex> lock(reverbMutex_);
+        if (reverbEnabled_ == enabled) return;
+        reverbEnabled_ = enabled;
+    }
+    pushReverb();
+}
+
+void AudioEngine::setReverbPreset(const std::optional<EaxReverbParams>& preset) {
+    {
+        std::lock_guard<std::mutex> lock(reverbMutex_);
+        if (reverbPreset_ == preset) return;
+        reverbPreset_ = preset;
+    }
+    pushReverb();
 }
 
 void AudioEngine::setEffectsVolume(float volume) {
@@ -346,6 +426,12 @@ void AudioEngine::shutdown() {
         ma_sound_group_uninit(effectsGroup_);
         std::free(effectsGroup_);
         effectsGroup_ = nullptr;
+    }
+    if (reverbNode_) {
+        auto* node = static_cast<ReverbNode*>(reverbNode_);
+        ma_node_uninit(&node->base, nullptr);
+        delete node;
+        reverbNode_ = nullptr;
     }
 
     capturing_.store(false, std::memory_order_release);

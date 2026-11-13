@@ -793,6 +793,12 @@ uint32_t ChatHandler::languageComprehension(uint32_t language) {
 }
 
 std::string ChatHandler::hearInLanguage(uint32_t language, const std::string& text) {
+    // A game master hears every language as said (0x00509dd0: the active
+    // player's PLAYER_FLAGS, its +0x1008 block +8, bit 0x8).
+    if (const auto me = owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
+        const uint16_t flagsIdx = fieldIndex(UF::PLAYER_FLAGS);
+        if (flagsIdx != 0xFFFF && (me->getField(flagsIdx) & 0x8u) != 0) return text;
+    }
     const uint32_t comprehension = languageComprehension(language);
     if (comprehension > 299) return text;
     if (!languageWordsLoaded_) {
@@ -811,10 +817,16 @@ std::string ChatHandler::hearInLanguage(uint32_t language, const std::string& te
             }
         }
     }
-    return chat_language::garble(text, comprehension, [&](uint32_t len) -> const std::vector<std::string>* {
-        auto it = languageWords_.find((language << 8) | len);
-        return it == languageWords_.end() ? nullptr : &it->second;
-    });
+    const auto* profile = owner_.services().expansionRegistry ? owner_.services().expansionRegistry->getActive()
+                                                              : nullptr;
+    const int locale = chat_profanity::localeIndex(profile ? profile->locale : std::string("enUS"));
+    return chat_language::garble(
+        text, comprehension,
+        [&](uint32_t len) -> const std::vector<std::string>* {
+            auto it = languageWords_.find((language << 8) | len);
+            return it == languageWords_.end() ? nullptr : &it->second;
+        },
+        locale);
 }
 
 void ChatHandler::handleMessageChat(network::Packet& packet, const std::string& gmName) {
@@ -1292,8 +1304,12 @@ void ChatHandler::deliverChatMessage(MessageChatData data, bool alreadyWaited) {
         // channel with no slot reaches no frame, as in the client.
         const chat_channels::Slot* chanSlot =
             data.channelName.empty() ? nullptr : channelSlots_.byName(data.channelName);
-        const std::string numberedChannel = data.channelName.empty()
+        std::string numberedChannel = data.channelName.empty()
             ? std::string() : chat_channels::numberedName(chanSlot, data.channelName);
+        // The header goes through the mature-language filter as well
+        // (0x00509dd0 filters its "%d. %s" with the text); arg9, the name the
+        // frame finds the channel by, does not.
+        filterProfanity(data.type, numberedChannel);
         // arg5 is the *target*, not the sender. It was the sender's own name,
         // which is only read by CHANNEL_NOTICE_USER - and read as "there are
         // two names in this notice", so every kick and ban was formatted as

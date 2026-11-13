@@ -179,6 +179,29 @@ void EntitySpawner::playUnitJumpSound(const game::Unit& unit, uint32_t slot) {
     playUnitSlot(unit, slot, true, nullptr);
 }
 
+void EntitySpawner::playFlightCeilingSound(const game::Unit& unit) {
+    // 0x0073a890 reads the row itself (0x0071a3f0, pet row and all) and plays
+    // its Exertion column straight (0x004c6a40), not through the slots: no
+    // chance and no play count. With the listener at the character it is
+    // heard where the listener is, at 0.65 and kept over a crowd (0x6e);
+    // otherwise where the unit is, at full volume.
+    if (!renderer_ || !gameHandler_ || !assetManager_) return;
+    const int32_t row = unitSoundRow(unit, true);
+    if (row < 0) return;
+    auto sounds = assetManager_->loadDBCOptional("CreatureSoundData.dbc");
+    const uint32_t sound = sounds->getUInt32(static_cast<uint32_t>(row), ue::slotColumn(ue::kSlotExertion));
+    if (sound == 0) return;
+    rendering::M2EventSounds& player = renderer_->getM2EventSounds();
+    if (addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0") {
+        player.playOnce(sound, nullptr, ue::kListenerAtCharacterVolume, assetManager_, audio::PlayLimit::None, false,
+                        audio::voice_priority::kActiveMover);
+        return;
+    }
+    if (const auto where = unitSoundPosition(unit.getGuid()))
+        player.playOnce(sound, &*where, 1.0f, assetManager_, audio::PlayLimit::None, false,
+                        audio::voice_priority::kDefault);
+}
+
 void EntitySpawner::playUnitReactionSound(const game::Unit& unit, uint32_t reaction) {
     // 0x00716b10, SMSG_AI_REACTION's handler: it asks one thing per reaction and
     // nothing for the others. A reaction of HATE asks the unit its slot 8,

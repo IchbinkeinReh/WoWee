@@ -444,6 +444,12 @@ void pushSocketedGems(lua_State* L, game::GameHandler* gh, uint64_t itemGuid,
                       uint32_t itemId) {
     if (!gh || itemGuid == 0) return;
     pushSocketedGems(L, gh, gh->getItemSocketEnchantIds(itemGuid), itemId);
+    // A socket an enchant added (the prismatic slot): one more after the
+    // template's, of no colour.
+    if (gh->getItemPrismaticEnchant(itemGuid) != 0) {
+        lua_pushboolean(L, 1);
+        lua_setfield(L, -2, "prismatic");
+    }
 }
 
 void pushSocketedGems(lua_State* L, game::GameHandler* gh,

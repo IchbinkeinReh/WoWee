@@ -577,6 +577,11 @@ public:
     // with ItemDef::ExtraStat (4=Str, 7=Sta, 45=SpellPower, ...). Suffix stats scale as
     // AllocationPct*suffixFactor/10000; positive properties use the enchant's fixed amount.
     struct RandomStatBonus { uint32_t statType = 0; int32_t value = 0; };
+    /// The points a random suffix's stats are a share of (0x007075a0): the
+    /// RandPropPoints row of the item's level, the column of its quality
+    /// (good, superior, epic) and its slot's category (0x00707500's table
+    /// over InventoryType). Nothing for an item or quality that has none.
+    std::optional<uint32_t> randomSuffixPoints(uint32_t itemId) const;
     using RandomStatResolver = std::function<std::vector<RandomStatBonus>(int32_t, uint32_t)>;
     void setRandomStatResolver(RandomStatResolver r) { randomStatResolver_ = std::move(r); }
     std::vector<RandomStatBonus> getRandomStatBonuses(int32_t id, uint32_t suffixFactor) const {
@@ -1450,7 +1455,7 @@ public:
     uint64_t getLastMeleeSwingMs() const;
     const std::vector<CombatTextEntry>& getCombatText() const;
     /// Hits that did the player damage so far (CombatHandler::playerDamageHits).
-    uint32_t playerDamageHits() const;
+    uint32_t numPlayerDamageHits() const;
     void clearCombatText();
     void updateCombatText(float deltaTime);
     void clearHostileAttackers();
@@ -4368,6 +4373,25 @@ public:
     /// ReportBug / ReportSuggestion (0x006b22a0): CMSG_BUG, type 0 a bug and
     /// 1 a suggestion, with the client's report in front of the text.
     void sendBugReport(uint32_t type, const std::string& text);
+
+    /// Account data (AccountData.cpp): the eight copies the realm keeps.
+    static constexpr uint32_t kAccountDataTypes = 8;
+    /// What the interface layer gives the sync for the copies it owns: the
+    /// CVars (0, 1), the key bindings (2, 3) and the chat windows (7), each
+    /// as text and taken back from text.
+    struct AccountDataBridge {
+        std::function<std::string(bool perCharacter)> config;
+        std::function<void(bool perCharacter, const std::string&)> applyConfig;
+        std::function<std::string(bool perCharacter)> bindings;
+        std::function<void(bool perCharacter, const std::string&)> applyBindings;
+        std::function<std::string()> chat;
+        std::function<void(const std::string&)> applyChat;
+    };
+    void setAccountDataBridge(AccountDataBridge bridge) { accountDataBridge_ = std::move(bridge); }
+    /// CMSG_READY_FOR_ACCOUNT_DATA_TIMES (0x004de390).
+    void sendReadyForAccountDataTimes();
+    /// Once a second: a copy changed here goes up.
+    void tickAccountData(float dt);
     /// The report 0x006b22a0 writes: the machine, then the realm, account
     /// and character, map, zone, position, target and auras.
     std::string bugReportText() const;
@@ -4932,6 +4956,9 @@ public:
         uint32_t reagentCount[8] = {};
         /// The template's six quest items (after its size).
         std::array<uint32_t, 6> questItems{};
+        /// A destructible building's (type 33) health, GAMEOBJECT_BYTES_1
+        /// byte 3 out of 255; -1 for any other object.
+        int destructibleHealth = -1;
     };
     std::optional<GameObjectTooltipFacts> gameObjectTooltipFacts(uint64_t guid);
     /// ITEM_FIELD_DURATION of an item this client holds, 0 when unknown.
@@ -5051,6 +5078,12 @@ public:
         return {it->second.permanentEnchantId, it->second.temporaryEnchantId};
     }
     // Returns the socket gem enchant IDs (3 slots; 0 = empty socket) for an item by GUID.
+    /// The enchant in the item's prismatic slot (ITEM_FIELD_ENCHANTMENT 6):
+    /// a socket added to it, a belt buckle's (0x006277f0's walk).
+    uint32_t getItemPrismaticEnchant(uint64_t guid) const {
+        auto it = onlineItems_.find(guid);
+        return it != onlineItems_.end() ? it->second.enchantIds[6] : 0u;
+    }
     std::array<uint32_t, 3> getItemSocketEnchantIds(uint64_t guid) const {
         auto it = onlineItems_.find(guid);
         if (it == onlineItems_.end()) return {};
@@ -6057,6 +6090,29 @@ private:
      * Handle SMSG_ACCOUNT_DATA_TIMES from server
      */
     void handleAccountDataTimes(network::Packet& packet);
+    void handleUpdateAccountData(network::Packet& packet);
+    /// The rate a unit's model chases its facing at (0x00735f60), 0 for the
+    /// four-sample halving.
+    float facingChaseRate(const Entity& entity);
+    std::unordered_map<uint32_t, float> creatureMovementInfo_;   // CreatureMovementInfo.dbc
+    bool creatureMovementInfoLoaded_ = false;
+    std::string accountDataKey(uint32_t type) const;
+    uint32_t accountDataLocalTime(uint32_t type) const;
+    void setAccountDataLocalTime(uint32_t type, uint32_t time);
+    bool accountDataSynced(uint32_t type) const;
+    std::string accountDataText(uint32_t type) const;
+    void applyAccountDataText(uint32_t type, const std::string& text);
+    std::string accountDataMacros(bool perCharacter) const;
+    void applyAccountDataMacros(bool perCharacter, const std::string& text);
+    void requestAccountData(uint32_t type);
+    void uploadAccountData(uint32_t type);
+    AccountDataBridge accountDataBridge_;
+    uint32_t accountDataClock_ = 0;
+    float accountDataCheckTimer_ = 0.0f;
+    std::array<bool, kAccountDataTypes> accountDataKnown_{};
+    std::array<bool, kAccountDataTypes> accountDataAwaited_{};
+    std::array<std::string, kAccountDataTypes> accountDataLastText_{};
+    std::string accountDataCharacter_;   // whose per-character copies are known
 
     /**
      * Handle SMSG_MOTD from server

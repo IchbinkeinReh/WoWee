@@ -4942,6 +4942,36 @@ static void lockSkillColour(int32_t value, int32_t required, float (&c)[3]) {
 /// left out on a locked object), or a spell's reagents (LOCKED_WITH_SPELL,
 /// each red where the bags hold too few); and with showQuestTrackingTooltips
 /// the quests it answers. Answers whether there was an object to describe.
+/// The destructible building the tooltip's bar follows, and the tooltip.
+static uint64_t s_destructibleGuid = 0;
+static uint32_t s_destructibleTooltip = 0;
+
+/// The tooltip's status bar at a building's health (0x00626720 for type 33:
+/// range 0 to 1, the value byte 3 / 255, shown).
+static void showDestructibleBar(lua_State* L, const std::string& tooltipName, int health, bool show) {
+    if (tooltipName.empty()) return;
+    lua_getglobal(L, (tooltipName + "StatusBar").c_str());
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        return;
+    }
+    const int bar = lua_gettop(L);
+    const auto call = [&](const char* method, std::initializer_list<double> args) {
+        lua_getfield(L, bar, method);
+        if (!lua_isfunction(L, -1)) {
+            lua_pop(L, 1);
+            return;
+        }
+        lua_pushvalue(L, bar);
+        for (const double a : args) lua_pushnumber(L, a);
+        if (lua_pcall(L, static_cast<int>(args.size()) + 1, 0, 0) != 0) lua_pop(L, 1);
+    };
+    if (show) call("SetMinMaxValues", {0.0, 1.0});
+    call("SetValue", {static_cast<double>(health) * 0.003921569});
+    if (show) call("Show", {});
+    lua_pop(L, 1);
+}
+
 static bool fillGameObjectTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh, uint64_t guid) {
     const auto facts = gh->gameObjectTooltipFacts(guid);
     if (!facts) return false;
@@ -5062,8 +5092,33 @@ static bool fillGameObjectTooltip(lua_State* L, wowee::ui::Widget* w, game::Game
             }
         }
     }
+    // A destructible building's health on the tooltip's bar, kept current
+    // while the tooltip shows it (the field watch of 0x004d5a80).
+    if (t.destructibleHealth >= 0) {
+        s_destructibleGuid = guid;
+        s_destructibleTooltip = w->id;
+        showDestructibleBar(L, w->name, t.destructibleHealth, true);
+    } else {
+        s_destructibleGuid = 0;
+        s_destructibleTooltip = 0;
+    }
     w->shown = true;
     return true;
+}
+
+/// Each frame: the followed building's health onto its tooltip's bar, until
+/// the tooltip is hidden or shows something else.
+static void tickDestructibleBar(lua_State* L) {
+    if (s_destructibleGuid == 0) return;
+    auto* tree = wowee::addons::getWidgetTree(L);
+    auto* gh = wowee::addons::getGameHandler(L);
+    const auto* w = tree ? tree->get(s_destructibleTooltip) : nullptr;
+    const auto facts = gh && w && w->shown ? gh->gameObjectTooltipFacts(s_destructibleGuid) : std::nullopt;
+    if (!facts || facts->destructibleHealth < 0) {
+        s_destructibleGuid = 0;
+        return;
+    }
+    showDestructibleBar(L, w->name, facts->destructibleHealth, false);
 }
 
 namespace {
@@ -5551,12 +5606,25 @@ static void appendEnchantLines(wowee::ui::Widget* w, game::GameHandler* gh,
     if (!w || !gh || itemGuid == 0) return;
     const auto [permanentId, temporaryId] = gh->getItemEnchantIds(itemGuid);
 
-    // Green, and after the item's own lines, which is where the real client
-    // puts both of them. The permanent one was not shown at all: an enchanted
-    // weapon described its base damage and said nothing about the enchant on
-    // it, in the bags and on the paperdoll alike.
+    // Green, in the enchant walk where the client writes them - the
+    // permanent, then the temporary, before the sockets (0x006277f0) - at
+    // the place the builder marked, else after the item's own lines.
+    const size_t before = w->tooltipLines.size();
     appendEnchantLineById(w, gh, permanentId);
     appendEnchantLineById(w, gh, temporaryId);
+    const int at = w->tooltipEnchantAt;
+    if (at >= 0 && static_cast<size_t>(at) < before) {
+        std::rotate(w->tooltipLines.begin() + at, w->tooltipLines.begin() + static_cast<std::ptrdiff_t>(before),
+                    w->tooltipLines.end());
+    }
+    w->tooltipEnchantAt = -1;
+}
+
+/// __WoweeTooltipMarkEnchantSpot(tooltip): the builder's mark, where the
+/// sockets are about to start.
+int lua_Tooltip_MarkEnchantSpot(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->tooltipEnchantAt = static_cast<int>(w->tooltipLines.size());
+    return 0;
 }
 
 /// The random suffix an instance rolled, on top of a tooltip built from the
@@ -5588,8 +5656,11 @@ static void appendRandomSuffix(wowee::ui::Widget* w, game::GameHandler* gh,
     }
 
     // After the item's own lines.
-    for (const auto& b : gh->getRandomStatBonuses(item.randomPropertyId,
-                                                  item.suffixFactor)) {
+    // A suffix's points from the item's own level, quality and slot, as the
+    // client works them out (0x007089b0), where the tables answer.
+    const uint32_t points = item.randomPropertyId < 0
+        ? gh->randomSuffixPoints(item.itemId).value_or(item.suffixFactor) : item.suffixFactor;
+    for (const auto& b : gh->getRandomStatBonuses(item.randomPropertyId, points)) {
         if (b.value == 0) continue;
         // Worded as the item's own stats are (item_stat_text.hpp): white for a
         // primary, green "Equip:" for a rating.
@@ -9652,6 +9723,7 @@ static int lua_CreateFrame(lua_State* L) {
 LuaEngine::LuaEngine() = default;
 
 LuaEngine::~LuaEngine() {
+    if (gameHandler_) gameHandler_->setAccountDataBridge({});
     shutdown();
 }
 
@@ -9759,6 +9831,21 @@ void LuaEngine::shutdown() {
 
 void LuaEngine::setGameHandler(game::GameHandler* handler) {
     gameHandler_ = handler;
+    // The copies of the settings the realm keeps (account data 0 to 3) are
+    // the CVars and key bindings this state owns.
+    if (handler) {
+        game::GameHandler::AccountDataBridge bridge;
+        bridge.config = [](bool perCharacter) { return accountConfigText(perCharacter); };
+        bridge.applyConfig = [this](bool perCharacter, const std::string& text) {
+            applyAccountConfigText(L_, perCharacter, text);
+        };
+        // One set of bindings here, the account's (GetCurrentBindingSet is 1).
+        bridge.bindings = [](bool perCharacter) { return perCharacter ? std::string() : accountBindingsText(); };
+        bridge.applyBindings = [this](bool perCharacter, const std::string& text) {
+            if (!perCharacter && L_) applyAccountBindingsText(L_, text);
+        };
+        handler->setAccountDataBridge(std::move(bridge));
+    }
     if (L_) {
         lua_pushlightuserdata(L_, handler);
         lua_setfield(L_, LUA_REGISTRYINDEX, "wowee_game_handler");
@@ -11702,6 +11789,8 @@ void LuaEngine::registerCoreAPI() {
     lua_setglobal(L_, "__WoweeTooltipSetShapeshift");
     lua_pushcfunction(L_, lua_Tooltip_FadeOut);
     lua_setglobal(L_, "__WoweeTooltipFadeOut");
+    lua_pushcfunction(L_, lua_Tooltip_MarkEnchantSpot);
+    lua_setglobal(L_, "__WoweeTooltipMarkEnchantSpot");
     lua_pushcfunction(L_, lua_Tooltip_AdoptFontStrings);
     lua_setglobal(L_, "__WoweeTooltipAdoptFontStrings");
     lua_pushcfunction(L_, lua_Tooltip_SetPossession);
@@ -12712,6 +12801,7 @@ void LuaEngine::registerCoreAPI() {
         // follows it, white or grey on its own (0x0061c0b0). The socket bonus
         // closes the block: green when every socket holds a gem of its
         // colour, grey otherwise and always on a bare template.
+        "        if inst then __WoweeTooltipMarkEnchantSpot(self) end\n"
         "        local gems = inst and inst.gems\n"
         "        local function gemLines(g)\n"
         "            local r, gc, b = 1, 1, 1\n"
@@ -12740,10 +12830,16 @@ void LuaEngine::registerCoreAPI() {
         "                self:AddLine(format(ENCHANT_ITEM_REQ_LEVEL or 'Requires Level %d', g.minLevel), 1, 0.125, 0.125)\n"
         "            end\n"
         "        end\n"
-        "        if data.sockets or gems then\n"
+        "        if data.sockets or gems or (inst and inst.prismatic) then\n"
         "            local socketKeys = {[1]='EMPTY_SOCKET_META',[2]='EMPTY_SOCKET_RED',[4]='EMPTY_SOCKET_YELLOW',[8]='EMPTY_SOCKET_BLUE'}\n"
         "            local socketArt = {[1]='Meta',[2]='Red',[4]='Yellow',[8]='Blue'}\n"
         "            local socks = data.sockets or {}\n"
+        "            if inst and inst.prismatic and #socks < 3 then\n"
+        "                local copy = {}\n"
+        "                for k, v in ipairs(socks) do copy[k] = v end\n"
+        "                copy[#copy + 1] = {color = 0}\n"
+        "                socks = copy\n"
+        "            end\n"
         "            for i = 1, 3 do\n"
         "                local g = gems and gems[i]\n"
         "                if g then gemLines(g)\n"
@@ -13851,6 +13947,8 @@ void LuaEngine::worldMouseoverChanged(uint64_t oldGuid, uint64_t newGuid, Mouseo
         const auto* w = widgets_.get(wid);
         if (w && w->shown && w->tooltipOwnerId == uiParent) fadeOutTooltip(L_, wid);
     }
+    // The bar follows the building only while it is the one hovered.
+    s_destructibleGuid = 0;
     auto* gh = wowee::addons::getGameHandler(L_);
     if (newGuid == 0 || !gh || kind == MouseoverKind::None) return;
     if (kind == MouseoverKind::GameObject) {
@@ -13900,6 +13998,49 @@ void LuaEngine::worldMouseoverChanged(uint64_t oldGuid, uint64_t newGuid, Mouseo
         lua_pop(L_, 1);
     }
     lua_pop(L_, 1);
+}
+
+void LuaEngine::showMinimapTooltip(const std::string& text) {
+    if (!L_) return;
+    taint::Scope secure(0);
+    lua_getglobal(L_, "GameTooltip");
+    const int tip = lua_gettop(L_);
+    lua_getglobal(L_, "Minimap");
+    const int minimap = lua_gettop(L_);
+    if (!lua_istable(L_, tip) || !lua_istable(L_, minimap)) {
+        lua_settop(L_, tip - 1);
+        return;
+    }
+    const auto call = [&](const char* method, int nargs) {
+        // The method and self are below the nargs already pushed.
+        if (lua_pcall(L_, nargs + 1, 0, 0) != 0) {
+            LOG_WARNING("minimap tooltip ", method, ": ", luaL_optstring(L_, -1, "?"));
+            lua_pop(L_, 1);
+        }
+    };
+    if (text.empty()) {
+        // Hidden only while it is still the minimap's.
+        if (auto* w = widgets_.get(widgetIdOf(L_, tip)); w && w->tooltipOwnerId == widgetIdOf(L_, minimap)) {
+            lua_getfield(L_, tip, "Hide");
+            lua_pushvalue(L_, tip);
+            call("Hide", 0);
+        }
+        lua_settop(L_, tip - 1);
+        return;
+    }
+    lua_getfield(L_, tip, "SetOwner");
+    lua_pushvalue(L_, tip);
+    lua_pushvalue(L_, minimap);
+    lua_pushstring(L_, "ANCHOR_CURSOR");
+    call("SetOwner", 2);
+    lua_getfield(L_, tip, "SetText");
+    lua_pushvalue(L_, tip);
+    lua_pushstring(L_, text.c_str());
+    call("SetText", 1);
+    lua_getfield(L_, tip, "Show");
+    lua_pushvalue(L_, tip);
+    call("Show", 0);
+    lua_settop(L_, tip - 1);
 }
 
 void LuaEngine::retryCorpseTooltip(uint64_t mouseover) {
@@ -16602,6 +16743,7 @@ void LuaEngine::dispatchOnUpdate(float elapsed) {
     drainPendingTextChanged();
     advanceWheelGlide(elapsed);
     tickTooltipFades(L_, elapsed);
+    tickDestructibleBar(L_);
 
     // The MovieFrame's movie: subtitle lines and its end, to the frame that
     // started it (CSimpleMovieFrame's scripts, 0x0095db80).

@@ -720,6 +720,16 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     combatUI_.renderCooldownTracker(gameHandler, settingsPanel_, spellIconFn);
     renderNameplates(gameHandler);  // names over heads and nameplates (0x007e5640, 0x0098f790)
     commitMouseover(gameHandler);
+    // The extra action bars as the realm keeps them for the character
+    // (PLAYER_FIELD_BYTES byte 2, 0x005a8790): drawn from that when it
+    // arrives or changes - bottom left bit 0, right bit 2, the left (the
+    // interface's fourth multi-bar) bit 3.
+    if (const auto bars = gameHandler.getActionBarToggles(); bars && bars != appliedBarToggles_) {
+        appliedBarToggles_ = bars;
+        settingsPanel_.pendingShowActionBar2 = (*bars & 0x1u) != 0;
+        settingsPanel_.pendingShowRightBar = (*bars & 0x4u) != 0;
+        settingsPanel_.pendingShowLeftBar = (*bars & 0x8u) != 0;
+    }
     // cameraDistanceMax, the other half of the zoom limit (0x006000e0).
     if (auto* renderer = services_.renderer; renderer && renderer->getCameraController()) {
         float yards = 15.0f;
@@ -968,14 +978,14 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     }
 
     // Screen edge damage flash - a red vignette when a hit does the player
-    // damage (GameHandler::playerDamageHits): a melee or spell hit, a tick,
+    // damage (GameHandler::numPlayerDamageHits): a melee or spell hit, a tick,
     // a fall. Not on the health merely falling - a buff running out or gear
     // taken off lowers the maximum and the health with it, and flashed as a
     // hit. The client draws no such flash; its own red edge (LowHealthFrame)
     // is the interface's, from the combat state.
     {
         const bool deadOrGhost = gameHandler.isPlayerDead() || gameHandler.isPlayerGhost();
-        const uint32_t hits = gameHandler.playerDamageHits();
+        const uint32_t hits = gameHandler.numPlayerDamageHits();
         if (!deadOrGhost && settingsPanel_.damageFlashEnabled_ && hits != lastPlayerDamageHits_) {
             damageFlashAlpha_ = 1.0f;
         }
@@ -2210,8 +2220,9 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                                     : nullptr;
         const bool highlights =
             gameHandler.isUiVisible() || addons::storedCVarValue("unitHighlights", "1") != "0";
-        core::Application::getInstance().setHighlightedGameObject(
-            highlights && entity && entity->getType() == game::ObjectType::GAMEOBJECT ? highlightGuid : 0);
+        // On whatever the pointer rests on - a unit as well as an object
+        // (0x0051f790 -> 0x00743c70).
+        core::Application::getInstance().setHighlightedGameObject(highlights && entity ? highlightGuid : 0);
     }
 
     // Left-click targeting: only on mouse-up if the mouse didn't drag (camera rotate)
