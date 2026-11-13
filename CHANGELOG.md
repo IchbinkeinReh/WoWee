@@ -1,5 +1,31 @@
 # Changelog
 
+## [v3.1.51] - 2026-10-22
+
+### Added
+- **Warden answers AzerothCore and TrinityCore realms in full.** The 3.3.5a hash request is answered without a `.cr` file - from a built-in table for the module those servers send, or by any other module itself, run in the emulator - and the cheat checks that follow are answered as a genuine client answers them. `WOWEE_WARDEN_ANSWER_HASH=0` leaves the hash request unanswered, as before, and the server then sends no checks
+- **Warden check answers are graded against AzerothCore's own check list.** `test_warden_check_grader` lays the server's checks out as it sends them and grades the reply by its rules; the memory checks run when `WOWEE_TEST_WOW_EXE` names a build 12340 `WoW.exe`
+
+### Changed
+- **The cooldown tracker and damage meter are interface panels.** The meter keeps counting once the combat log is full
+- **The level-up and resurrection banners are interface frames**
+- **The Classic combat log goes to the 1.12 Combat Log tab as chat.** TBC's combat log events use TBC's layout, and 1.12 fonts have fallbacks
+- **The asset panel, its folder browser and the asset tool's window use the paper controls**
+- **Warden check rounds no longer fill the log with warnings.** A round is summarized at info level and each check is at debug level; warnings are left for a memory read that missed, an unknown check, or a `WoW.exe` of the wrong build
+
+### Fixed
+- **Warden memory checks were read from whichever `WoW.exe` was found first.** Each expansion's executable is read from its own `Data/expansions/<id>/misc`, one of the realm's build is preferred, and one of another build is named in the log. The 3.3.5a login state reads as it does in a running client
+- **Warden scans that found nothing were answered `0x00`.** TrinityCore and AzerothCore pass only `0xE9`, which vmangos and CMaNGOS also take as clean
+- **Genuine Blizzard Warden modules failed their signature check.** The signature and key are read little-endian, and the `NGIS` tag is left out of the signed data
+- **The Warden module could not run in the emulator.** Its entry point, exports and client services are thiscall, each Windows import pops its own arguments, and every call is bounded
+- **The PvP window re-centred itself on every 1.12 login**
+
+### Removed
+- **The native settings window, its chat tab and the chat background and fade settings.** The game menu and its options frames are the interface's on every expansion
+- **The native zone banner, and the zone, area trigger, discovery and quest complete toasts.** `ZoneTextFrame` is the only banner
+- **The reputation, honor, loot, quest progress, whisper and nearby level-up toasts.** Chat carries each message
+- **The native Classic combat log window, and the player info and entity list debug windows**
+
 ## [v3.1.50] - 2026-10-22
 
 ### Changed

@@ -27,6 +27,21 @@ This guide covers common issues and solutions for WoWee.
   2. Reduce number of assets loading (lower graphics preset)
   3. Verify server supports this expansion version
 
+### Disconnected a Minute or Two Into the World (Warden)
+- **Cause**: The server's anti-cheat (Warden) graded a check answer as a modified
+  client. It closes the connection with no message, and some servers ban the account.
+  With `WOWEE_LOG_LEVEL=info`, the log shows `Warden: (async) Parsed N checks` just before
+  `connection closed by peer`; `WOWEE_LOG_LEVEL=debug` adds each check and its answer
+- **Solution**:
+  1. Look for `WardenMemory: Loading PE image:` in the log. It must name the `WoW.exe`
+     of the expansion you are playing, in `Data/expansions/<id>/misc`. A
+     `WardenMemory: <path> is build N, not M` line means the wrong one was found -
+     re-extract that expansion's assets from its own client, or copy its `WoW.exe` there
+  2. To play without risking the account while it is looked into, start with
+     `WOWEE_WARDEN_ANSWER_HASH=0`. The hash request then goes unanswered and no checks
+     are sent; servers that tolerate that are unaffected
+  3. Report the log lines from `Warden:` and `WardenMemory:` with the server's name
+
 ## Startup Issues
 
 ### The Client Opens the Asset Builder Instead of the Login Screen

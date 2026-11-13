@@ -7129,26 +7129,6 @@ private:
     float pendingDeleteTimer_ = 0.0f;
     bool pendingDeleteFallbackEnum_ = false;
 
-    // Warden module download state
-    enum class WardenState {
-        WAIT_MODULE_USE,     // Waiting for first SMSG (MODULE_USE)
-        WAIT_MODULE_CACHE,   // Sent MODULE_MISSING, receiving module chunks
-        WAIT_HASH_REQUEST,   // Module received, waiting for HASH_REQUEST
-        WAIT_CHECKS,         // Hash sent, waiting for check requests
-    };
-
-    // Pre-computed challenge/response entries from .cr file
-    struct WardenCREntry {
-        uint8_t seed[16];
-        uint8_t reply[20];
-        uint8_t clientKey[16];  // Encrypt key (client→server)
-        uint8_t serverKey[16]; // Decrypt key (server→client)
-    };
-    // Module-specific check type opcodes [9]: MEM, PAGE_A, PAGE_B, MPQ, LUA, DRIVER, TIMING, PROC, MODULE
-    uint8_t wardenCheckOpcodes_[9] = {};
-
-    // Async Warden response: avoids 5-second main-loop stalls from PAGE_A/PAGE_B code pattern searches
-
     // ---- RX silence detection ----
     std::chrono::steady_clock::time_point lastRxTime_{};
     // noteResumedFromBackground: until when an answer is waited for, and the

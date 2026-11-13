@@ -340,11 +340,12 @@ FrameXML calls into, plus what the client draws in the world.
 ### 9. Warden Anti-Cheat (`src/game/`)
 
 Components:
-- `WardenHandler` - Packet handling (SMSG/CMSG_WARDEN_DATA); builds each check reply itself, from `WardenMemory` and `.cr` challenge/response files in the Warden cache directory
+- `WardenHandler` - Packet handling (SMSG/CMSG_WARDEN_DATA); answers the hash request from a `.cr` file, the built-in TrinityCore/AzerothCore module table, or the module itself
+- `WardenCheckResponder` - Builds each cheat-check reply from `WardenMemory`; graded against AzerothCore's check list by `test_warden_check_grader`
 - `WardenCrypto` - RC4 keys for Warden traffic, derived from the SRP session key
 - `WardenModule` - 8-step load pipeline: verify MD5, decrypt (RC4), verify the RSA-2048 signature, strip it and decompress (zlib), parse the module's own executable format, relocate, bind imports, initialize under the emulator. A failed step logs and continues
 - `WardenEmulator` - Unicorn Engine x86 CPU emulation with Windows API interception
-- `WardenMemory` - WoW.exe PE image loading with bounds-checked reads, runtime global patching
+- `WardenMemory` - WoW.exe PE image loading (the active expansion's, from `Data/expansions/<id>/misc`) with bounds-checked reads, runtime global patching
 
 ## Threading Model
 

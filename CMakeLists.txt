@@ -807,6 +807,7 @@ set(WOWEE_SOURCES
     src/game/quest_objectives.cpp
     src/game/entity_controller.cpp
     src/game/warden_handler.cpp
+    src/game/warden_check_responder.cpp
     src/game/warden_crypto.cpp
     src/game/cata_movement.cpp
     src/game/warden_module.cpp

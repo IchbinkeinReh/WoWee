@@ -8,9 +8,6 @@
 #include <unordered_map>
 #include <map>
 
-#include "game/warden_constants.hpp"
-#include "game/warden_formats.hpp"
-
 namespace wowee {
 namespace game {
 
@@ -25,12 +22,12 @@ class WardenCrypto;
  * For now, these are stubs for future native code execution.
  */
 struct WardenFuncList {
-    using GenerateRC4KeysFunc = std::function<void(uint8_t* packet)>;
+    using GenerateRC4KeysFunc = std::function<void(const uint8_t* data, size_t length)>;
     using UnloadFunc = std::function<void(uint8_t* rc4Keys)>;
     using PacketHandlerFunc = std::function<void(uint8_t* data, size_t length)>;
     using TickFunc = std::function<uint32_t(uint32_t deltaMs)>;
 
-    GenerateRC4KeysFunc generateRC4Keys;  // Triggered by 0x05 packets (re-keying)
+    GenerateRC4KeysFunc generateRC4Keys;  // Initial cipher state, from the session key
     UnloadFunc unload;                     // Cleanup, save RC4 state
     PacketHandlerFunc packetHandler;       // Process check requests (0x02, 0x04, etc.)
     TickFunc tick;                         // Periodic execution
@@ -65,13 +62,13 @@ struct WardenFuncList {
 /// at image + 0xFFFFFFFF. Both are reachable from a hostile server.
 inline constexpr uint32_t wardenAbsoluteRelocTarget(uint8_t first, uint8_t b1,
                                                     uint8_t b2, uint8_t b3) {
-    return (static_cast<uint32_t>(first & ~WARDEN_RELOC_ABSOLUTE_FLAG & 0xFFu) << 24) |
+    return (static_cast<uint32_t>(first & 0x7Fu) << 24) |
            (static_cast<uint32_t>(b1) << 16) |
            (static_cast<uint32_t>(b2) << 8) | b3;
 }
 
 inline constexpr bool wardenRelocTargetFits(uint32_t target, size_t moduleSize) {
-    return static_cast<size_t>(target) + sizeof(uint32_t) <= moduleSize;
+    return static_cast<size_t>(target) + 4u <= moduleSize;
 }
 
 class WardenModule {
@@ -111,23 +108,30 @@ public:
      */
     [[nodiscard]] const std::vector<uint8_t>& getMD5Hash() const { return md5Hash_; }
 
+    /// The cipher state a module hands over through SetRC4Data: two RC4
+    /// states, client->server then server->client, each [256 S-box][i][j].
+    static constexpr size_t kWardenRc4PairSize = 2 * 258;
+
     /**
-     * Process check request packet via module's PacketHandler
+     * Answer HASH_REQUEST by running the module's own handler on the seed.
      *
-     * This would call the loaded module's native code to:
-     * - Parse check opcodes (0xF3, 0xB2, 0x98, etc.)
-     * - Perform actual memory scans
-     * - Compute file checksums
-     * - Generate REAL response data
+     * The module is keyed from the session key, given the request encrypted
+     * as the server sends it, and its encrypted reply is read back; then it
+     * is unloaded, which is when it hands the client the cipher state the
+     * exchange switches to. The reply and the keys are the module's own, so
+     * no `.cr` record is needed. The module is spent afterwards: a server
+     * asks this once per session.
      *
-     * For now, returns false (not implemented).
+     * False when the module is not running, or did not both reply and hand
+     * over new keys.
      *
-     * @param checkData Decrypted check request payload
-     * @param responseOut Response data to send back
-     * @return true if processed successfully
+     * @param seed The 16-byte seed from the request
+     * @param sessionKey The 40-byte session key the Warden cipher starts from
+     * @param replyOut The 20-byte HASH_RESULT payload
+     * @param rc4StateOut kWardenRc4PairSize bytes of RC4 state
      */
-    bool processCheckRequest(const std::vector<uint8_t>& checkData,
-                            std::vector<uint8_t>& responseOut);
+    bool answerHashRequest(const uint8_t seed[16], const std::vector<uint8_t>& sessionKey,
+                           uint8_t replyOut[20], std::vector<uint8_t>& rc4StateOut);
 
     /**
      * Periodic tick for module state updates
@@ -136,11 +140,6 @@ public:
      * @return Next tick interval in ms (0 = no more ticks needed)
      */
     uint32_t tick(uint32_t deltaMs);
-
-    /**
-     * Generate new RC4 keys (triggered by server opcode 0x05)
-     */
-    void generateRC4Keys(uint8_t* packet);
 
     /**
      * Unload module and cleanup
@@ -173,6 +172,10 @@ private:
     // normal on private servers. Running the emulator over that image just executes
     // garbage, so we go straight to the stub callbacks instead.
     bool moduleImageUsable_ = false;
+    // What the emulated module handed the client services: packets it sent,
+    // and the RC4 state it last installed.
+    std::vector<std::vector<uint8_t>> emulatedSends_;
+    std::vector<uint8_t> emulatedRc4Data_;
     std::vector<uint8_t> md5Hash_;         // Module identifier
     std::vector<uint8_t> moduleData_;      // Raw encrypted data
     std::vector<uint8_t> decryptedData_;   // RC4 decrypted data
@@ -183,7 +186,7 @@ private:
     size_t moduleSize_ = 0;                // Size of loaded code
     // 0x400000 is the default PE image base for 32-bit Windows executables.
     // Warden modules are loaded as if they were PE DLLs at this base address.
-    uint32_t moduleBase_ = PE_DEFAULT_IMAGE_BASE; // Module base address (for emulator)
+    uint32_t moduleBase_ = 0x400000;       // Module base address (for emulator)
     // Native Warden-image header fields. Private-server modules place these
     // tables inside the mapped image rather than after the copy stream.
     uint32_t relocOffset_ = 0;
@@ -197,7 +200,6 @@ private:
     size_t relocDataOffset_ = 0;           // Offset into decompressedData_ where relocation data starts
     WardenFuncList funcList_;              // Callback functions
     std::unique_ptr<WardenEmulator> emulator_; // Cross-platform x86 emulator
-    uint32_t emulatedPacketHandlerAddr_ = 0;   // Raw emulated VA for 4-arg PacketHandler call
 
     // Dependencies injected via setCallbackDependencies() for module callbacks.
     // These are NOT owned - the handler owns the crypto and socket lifetime.

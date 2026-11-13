@@ -32,7 +32,7 @@ Implemented (working in normal use):
 - Floating combat text: world-space damage/heal numbers above entities with 3D projection
 - Target/focus frames: guild name, creature type, rank badges, combo points, cast bars
 - Map exploration: subzone-level fog-of-war reveal
-- Warden anti-cheat: full module execution via Unicorn Engine x86 emulation; module caching
+- Warden anti-cheat: module execution via Unicorn Engine x86 emulation; the hash request answered without a `.cr` file; cheat checks graded clean against AzerothCore's check list and verified on a live realm
 - Audio: ambient, movement, combat, spell, and UI sound systems; NPC voice lines for all playable races (greeting/farewell/vendor/pissed/aggro/flee)
 - Bags: FrameXML's container frames, or the bundled `WoweeAllBags` combined window (carried bags, keyring and bank, with a Sort button); "Separate bag windows" under Interface > Bags chooses between them
 - Controllers: SDL3 gamepads on every platform, with buttons named per pad family (Xbox, PlayStation, Nintendo, Steam Deck and others), back paddles on action slots 7-10, a pointer mode on Back, and the scheme seeded into the game's Key Bindings panel

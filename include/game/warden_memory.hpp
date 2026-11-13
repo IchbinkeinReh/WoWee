@@ -20,11 +20,20 @@ public:
 
     /** Search standard candidate dirs for WoW.exe and load it.
      *  @param build Client build number (e.g. 5875 for Classic 1.12.1) to select the right exe.
-     *  @param isTurtle If true, prefer the Turtle WoW custom exe (different code bytes). */
-    bool load(uint16_t build = 0, bool isTurtle = false);
+     *  @param isTurtle If true, prefer the Turtle WoW custom exe (different code bytes).
+     *  @param expansionId The active expansion; its Data/expansions/<id>/misc is looked in first. */
+    bool load(uint16_t build = 0, bool isTurtle = false, const std::string& expansionId = {});
 
     /** Load PE image from a specific file path. */
     bool loadFromFile(const std::string& exePath);
+
+    /**
+     * The build number an executable says it is, from the VS_FIXEDFILEINFO
+     * in its version resource (the low word of the file version), or 0 when
+     * it carries none. A WoW.exe of another build answers every memory check
+     * from the wrong bytes, and nothing else about the file says so.
+     */
+    static uint16_t fileBuildOf(const uint8_t* data, size_t size);
 
     /**
      * Read bytes from virtual address space.
@@ -55,6 +64,7 @@ private:
     bool loaded_ = false;
     uint32_t imageBase_ = 0;
     uint32_t imageSize_ = 0;
+    uint16_t fileBuild_ = 0;   // what the loaded executable says it is; 0 if unknown
     std::vector<uint8_t> image_;
 
     // KUSER_SHARED_DATA mock (0x7FFE0000 - 0x7FFE0FFF)
@@ -68,7 +78,7 @@ private:
     void patchTurtleWowBinary();
     void verifyWardenScanEntries();
     bool isTurtle_ = false;
-    [[nodiscard]] std::string findWowExe(uint16_t build) const;
+    [[nodiscard]] std::string findWowExe(uint16_t build, const std::string& expansionId) const;
     static uint32_t expectedImageSizeForBuild(uint16_t build, bool isTurtle);
 
     // Cache for searchCodePattern results to avoid repeated 5-second brute-force searches.

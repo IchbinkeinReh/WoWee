@@ -608,6 +608,57 @@ target_include_directories(test_warden_formats SYSTEM PRIVATE ${TEST_SYSTEM_INCL
 target_link_libraries(test_warden_formats PRIVATE catch2_main)
 add_test(NAME warden_formats COMMAND test_warden_formats)
 register_test_target(test_warden_formats)
+# ── test_warden_cr_file ──────────────────────────────────────
+add_executable(test_warden_cr_file test_warden_cr_file.cpp)
+target_include_directories(test_warden_cr_file PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_warden_cr_file SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_warden_cr_file PRIVATE catch2_main OpenSSL::Crypto)
+add_test(NAME warden_cr_file COMMAND test_warden_cr_file)
+register_test_target(test_warden_cr_file)
+
+# ── test_warden_crypto ───────────────────────────────────────
+add_executable(test_warden_crypto
+    test_warden_crypto.cpp
+    ${TEST_COMMON_SOURCES}
+    ${CMAKE_SOURCE_DIR}/src/game/warden_crypto.cpp
+    ${CMAKE_SOURCE_DIR}/src/auth/crypto.cpp
+)
+target_include_directories(test_warden_crypto PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_warden_crypto SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_warden_crypto PRIVATE catch2_main OpenSSL::SSL OpenSSL::Crypto)
+add_test(NAME warden_crypto COMMAND test_warden_crypto)
+register_test_target(test_warden_crypto)
+
+# ── test_warden_file_build ───────────────────────────────────
+add_executable(test_warden_file_build
+    test_warden_file_build.cpp
+    ${TEST_COMMON_SOURCES}
+    ${CMAKE_SOURCE_DIR}/src/game/warden_memory.cpp
+)
+target_include_directories(test_warden_file_build PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_warden_file_build SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_warden_file_build PRIVATE catch2_main OpenSSL::Crypto)
+add_test(NAME warden_file_build COMMAND test_warden_file_build)
+register_test_target(test_warden_file_build)
+
+# ── test_warden_check_grader ─────────────────────────────────
+# AzerothCore's own check list put to the check responder and graded by its own
+# rules: a wrong answer is a ban on a live server, so it has to fail here first.
+# The memory checks need the build 12340 WoW.exe named in WOWEE_TEST_WOW_EXE.
+# Classic fixtures use WOWEE_TEST_CLASSIC_WOW_EXE (5875); TBC fixtures use
+# WOWEE_TEST_TBC_WOW_EXE (8606). Missing executables skip those cases.
+add_executable(test_warden_check_grader
+    test_warden_check_grader.cpp
+    ${TEST_COMMON_SOURCES}
+    ${CMAKE_SOURCE_DIR}/src/game/warden_check_responder.cpp
+    ${CMAKE_SOURCE_DIR}/src/game/warden_memory.cpp
+    ${CMAKE_SOURCE_DIR}/src/auth/crypto.cpp
+)
+target_include_directories(test_warden_check_grader PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_warden_check_grader SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_warden_check_grader PRIVATE catch2_main OpenSSL::SSL OpenSSL::Crypto)
+add_test(NAME warden_check_grader COMMAND test_warden_check_grader)
+register_test_target(test_warden_check_grader)
 
 # ── sweep_guard ──────────────────────────────────────────────────
 # The fast interface sweeps, run as a test so they stop depending on someone

@@ -98,6 +98,18 @@ void WardenCrypto::replaceKeys(const std::vector<uint8_t>& newEncryptKey,
     LOG_INFO("Warden: RC4 keys replaced (module-specific keys)");
 }
 
+bool WardenCrypto::replaceState(const std::vector<uint8_t>& statePair) {
+    if (statePair.size() != 2 * 258) return false;
+    encryptRC4State_.assign(statePair.begin(), statePair.begin() + 256);
+    encryptRC4_i_ = statePair[256];
+    encryptRC4_j_ = statePair[257];
+    decryptRC4State_.assign(statePair.begin() + 258, statePair.begin() + 514);
+    decryptRC4_i_ = statePair[514];
+    decryptRC4_j_ = statePair[515];
+    LOG_INFO("Warden: RC4 state replaced (handed over by the module)");
+    return true;
+}
+
 std::vector<uint8_t> WardenCrypto::decrypt(const std::vector<uint8_t>& data) {
     if (!initialized_) {
         LOG_WARNING("Warden: Attempted to decrypt without initialization");

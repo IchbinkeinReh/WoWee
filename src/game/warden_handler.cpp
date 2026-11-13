@@ -1,4 +1,5 @@
 #include "game/warden_handler.hpp"
+#include "game/warden_check_responder.hpp"
 #include "game/game_handler.hpp"
 #include "game/game_utils.hpp"
 #include "game/warden_crypto.hpp"
@@ -12,7 +13,6 @@
 #include "pipeline/asset_manager.hpp"
 #include "core/logger.hpp"
 #include "game/warden_constants.hpp"
-#include "game/warden_formats.hpp"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -21,13 +21,23 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
-#include <openssl/sha.h>
-#include <openssl/hmac.h>
 
 namespace wowee {
 namespace game {
 
 namespace {
+
+// Whether a hash request may be answered without a hand-placed .cr file -
+// from the built-in table or by the module itself. On unless
+// WOWEE_WARDEN_ANSWER_HASH=0. Answering is what makes a server start sending
+// cheat checks, and a wrong check answer is penalised with a ban where an
+// unanswered hash request is tolerated - so the answers are graded against
+// AzerothCore's own check list in test_warden_check_grader, and this is the
+// switch back to silence should a server grade differently.
+bool wardenAnswerHashEnabled() {
+    const char* env = std::getenv("WOWEE_WARDEN_ANSWER_HASH");
+    return !(env && std::string(env) == "0");
+}
 
 std::string asciiLower(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(),
@@ -109,108 +119,6 @@ std::vector<uint8_t> readFileBinary(const std::string& fsPath) {
     return data;
 }
 
-bool hmacSha1Matches(const uint8_t seedBytes[4], const std::string& text, const uint8_t expected[20]) {
-    uint8_t out[SHA_DIGEST_LENGTH];
-    unsigned int outLen = 0;
-    HMAC(EVP_sha1(),
-         seedBytes, 4,
-         reinterpret_cast<const uint8_t*>(text.data()),
-         static_cast<int>(text.size()),
-         out, &outLen);
-    return outLen == SHA_DIGEST_LENGTH && std::memcmp(out, expected, SHA_DIGEST_LENGTH) == 0;
-}
-
-// Pre-computed HMAC-SHA1 hashes of known door M2 models that Warden checks
-// to verify the client hasn't modified collision geometry (wall-hack detection).
-// These hashes match the unmodified 3.3.5a client data files.
-const std::unordered_map<std::string, std::array<uint8_t, 20>>& knownDoorHashes() {
-    static const std::unordered_map<std::string, std::array<uint8_t, 20>> k = {
-        {"world\\lordaeron\\stratholme\\activedoodads\\doors\\nox_door_plague.m2",
-         {0xB4,0x45,0x2B,0x6D,0x95,0xC9,0x8B,0x18,0x6A,0x70,0xB0,0x08,0xFA,0x07,0xBB,0xAE,0xF3,0x0D,0xF7,0xA2}},
-        {"world\\kalimdor\\onyxiaslair\\doors\\onyxiasgate01.m2",
-         {0x75,0x19,0x5E,0x4A,0xED,0xA0,0xBC,0xAF,0x04,0x8C,0xA0,0xE3,0x4D,0x95,0xA7,0x0D,0x4F,0x53,0xC7,0x46}},
-        {"world\\generic\\human\\activedoodads\\doors\\deadminedoor02.m2",
-         {0x3D,0xFF,0x01,0x1B,0x9A,0xB1,0x34,0xF3,0x7F,0x88,0x50,0x97,0xE6,0x95,0x35,0x1B,0x91,0x95,0x35,0x64}},
-        {"world\\kalimdor\\silithus\\activedoodads\\ahnqirajdoor\\ahnqirajdoor02.m2",
-         {0xDB,0xD4,0xF4,0x07,0xC4,0x68,0xCC,0x36,0x13,0x4E,0x62,0x1D,0x16,0x01,0x78,0xFD,0xA4,0xD0,0xD2,0x49}},
-        {"world\\kalimdor\\diremaul\\activedoodads\\doors\\diremaulsmallinstancedoor.m2",
-         {0x0D,0xC8,0xDB,0x46,0xC8,0x55,0x49,0xC0,0xFF,0x1A,0x60,0x0F,0x6C,0x23,0x63,0x57,0xC3,0x05,0x78,0x1A}},
-    };
-    return k;
-}
-
-static_assert(sizeof(WardenCRFileHeader) == WARDEN_CR_HEADER_SIZE);
-static_assert(sizeof(WardenPageCheckRequest) == WARDEN_PAGE_CHECK_SIZE);
-static_assert(sizeof(WardenPageCheckShortRequest) == WARDEN_PAGE_A_SHORT_SIZE);
-static_assert(sizeof(WardenCRFileHeader::checkOpcodes) == WARDEN_SCAN_TYPE_COUNT);
-
-// Turtle PAGE_A checks below this offset fall back to "found" when the pattern
-// is not in the on-disk PE: the code there is patched at runtime.
-constexpr uint32_t kTurtlePageAFallbackOffsetLimit = 0x600000;
-
-// DB sanity check: "Warden packet process code search sanity check" (id=85),
-// asked for at WARDEN_KNOWN_CODE_SCAN_OFFSET.
-constexpr uint8_t kPacketProcessSanityPattern[] = {
-    0x33, 0xD2, 0x33, 0xC9, 0xE8, 0x87, 0x07, 0x1B, 0x00, 0xE8
-};
-
-/// Whether a PAGE_A/PAGE_B request asks for one of the two patterns every
-/// clean client has, so the answer is "found" without searching for it.
-bool isKnownWantedCodeScan(const uint8_t seedBytes[4], const uint8_t reqHash[20],
-                           uint32_t offset, uint8_t length) {
-    auto hashPattern = [&](const uint8_t* pattern, size_t patternLen) {
-        uint8_t out[SHA_DIGEST_LENGTH];
-        unsigned int outLen = 0;
-        HMAC(EVP_sha1(),
-             seedBytes, 4,
-             pattern, patternLen,
-             out, &outLen);
-        return outLen == SHA_DIGEST_LENGTH && std::memcmp(out, reqHash, SHA_DIGEST_LENGTH) == 0;
-    };
-
-    if (offset == WARDEN_KNOWN_CODE_SCAN_OFFSET && length == sizeof(kPacketProcessSanityPattern) &&
-        hashPattern(kPacketProcessSanityPattern, sizeof(kPacketProcessSanityPattern))) {
-        return true;
-    }
-
-    // Scripted sanity check: "Warden Memory Read check" in wardenwin.cpp
-    if (length == sizeof(WARDEN_MEMCPY_PATTERN) &&
-        hashPattern(WARDEN_MEMCPY_PATTERN, sizeof(WARDEN_MEMCPY_PATTERN))) {
-        return true;
-    }
-
-    return false;
-}
-
-/// A little-endian uint32 on the end of a check result.
-void appendLE32(std::vector<uint8_t>& out, uint32_t value) {
-    uint8_t bytes[sizeof(value)];
-    storeRecord(bytes, value);
-    out.insert(out.end(), std::begin(bytes), std::end(bytes));
-}
-
-/// CHEAT_CHECKS_RESULT: the header, then the per-check results.
-///
-/// The checksum is the five dwords of SHA1(results), XORed. The length is
-/// truncated to 16 bits as the field is; a round of checks never comes near.
-std::vector<uint8_t> buildCheatChecksResult(const std::vector<uint8_t>& resultData) {
-    const auto resultHash = auth::Crypto::sha1(resultData);
-    uint32_t hashWords[SHA_DIGEST_LENGTH / sizeof(uint32_t)];
-    std::memcpy(hashWords, resultHash.data(), sizeof(hashWords));
-    uint32_t checksum = 0;
-    for (uint32_t word : hashWords) checksum ^= word;
-
-    const WardenCheatChecksResultHeader header = {
-        .opcode = WARDEN_CMSG_CHEAT_CHECKS_RESULT,
-        .resultLength = static_cast<uint16_t>(resultData.size()),
-        .checksum = checksum,
-    };
-    std::vector<uint8_t> resp(sizeof(header));
-    storeRecord(resp.data(), header);
-    resp.insert(resp.end(), resultData.begin(), resultData.end());
-    return resp;
-}
-
 } // anonymous namespace
 
 // ---------------------------------------------------------------------------
@@ -274,7 +182,7 @@ void WardenHandler::update(float deltaTime) {
                 }
                 if (owner_.getSocket() && owner_.getSocket()->isConnected()) {
                     owner_.getSocket()->send(response);
-                    LOG_WARNING("Warden: Sent async CHEAT_CHECKS_RESULT (", plaintext.size(), " bytes plaintext)");
+                    LOG_DEBUG("Warden: Sent async CHEAT_CHECKS_RESULT (", plaintext.size(), " bytes plaintext)");
                 }
             }
         }
@@ -297,47 +205,19 @@ void WardenHandler::update(float deltaTime) {
 // ---------------------------------------------------------------------------
 
 bool WardenHandler::loadWardenCRFile(const std::string& moduleHashHex) {
-    wardenCREntries_.clear();
-
-    // Look for .cr file in warden cache
-    std::string cacheBase;
-#ifdef _WIN32
-    if (const char* h = std::getenv("APPDATA")) cacheBase = std::string(h) + "\\wowee\\warden_cache";
-    else cacheBase = ".\\warden_cache";
-#else
-    if (const char* h = std::getenv("HOME")) cacheBase = std::string(h) + "/.local/share/wowee/warden_cache";
-    else cacheBase = "./warden_cache";
-#endif
-    std::string crPath = cacheBase + "/" + moduleHashHex + ".cr";
-
-    std::ifstream crFile(crPath, std::ios::binary);
-    if (!crFile) {
-        LOG_WARNING("Warden: No .cr file at ", crPath,
-                    " - hash requests go unanswered. Servers that tolerate that are unaffected; "
-                    "otherwise turn Warden off on the server");
-        return false;
+    const std::string crPath = wardenCRPath(moduleHashHex);
+    std::string source = crPath;
+    if (!readWardenCR(crPath, wardenCheckOpcodes_, wardenCREntries_)) {
+        if (!wardenAnswerHashEnabled() ||
+            !knownWardenCR(moduleHashHex, wardenCheckOpcodes_, wardenCREntries_)) {
+            LOG_WARNING("Warden: No usable .cr file at ", crPath,
+                        " - hash requests go unanswered. Servers that tolerate that are unaffected; "
+                        "otherwise turn Warden off on the server");
+            return false;
+        }
+        source = "the built-in TrinityCore/AzerothCore module table";
     }
 
-    // Get file size
-    crFile.seekg(0, std::ios::end);
-    auto fileSize = crFile.tellg();
-    crFile.seekg(0, std::ios::beg);
-
-    // Header: [4 memoryRead][4 pageScanCheck][9 opcodes] = 17 bytes
-    constexpr size_t CR_HEADER_SIZE = sizeof(WardenCRFileHeader);
-    constexpr size_t CR_ENTRY_SIZE = sizeof(WardenCREntry); // seed[16]+reply[20]+clientKey[16]+serverKey[16]
-
-    if (static_cast<size_t>(fileSize) < CR_HEADER_SIZE) {
-        LOG_ERROR("Warden: .cr file too small (", fileSize, " bytes)");
-        return false;
-    }
-
-    // Read header: [4 memoryRead][4 pageScanCheck][9 opcodes]; only the
-    // opcodes are kept.
-    WardenCRFileHeader crHeader{};
-    crFile.read(reinterpret_cast<char*>(&crHeader), sizeof(crHeader));
-    static_assert(sizeof(wardenCheckOpcodes_) == sizeof(crHeader.checkOpcodes));
-    std::memcpy(wardenCheckOpcodes_, crHeader.checkOpcodes, sizeof(wardenCheckOpcodes_));
     {
         std::string opcHex;
         // CMaNGOS WindowsScanType order:
@@ -351,18 +231,7 @@ bool WardenHandler::loadWardenCRFile(const std::string& moduleHashHex) {
         LOG_DEBUG("Warden: Check opcodes: ", opcHex);
     }
 
-    size_t entryCount = (static_cast<size_t>(fileSize) - CR_HEADER_SIZE) / CR_ENTRY_SIZE;
-    if (entryCount == 0) {
-        LOG_ERROR("Warden: .cr file has no entries");
-        return false;
-    }
-
-    // The entries follow the header back to back, laid out as WardenCREntry.
-    wardenCREntries_.resize(entryCount);
-    crFile.read(reinterpret_cast<char*>(wardenCREntries_.data()),
-                static_cast<std::streamsize>(entryCount * sizeof(WardenCREntry)));
-
-    LOG_INFO("Warden: Loaded ", entryCount, " CR entries from ", crPath);
+    LOG_INFO("Warden: Loaded ", wardenCREntries_.size(), " CR entries from ", source);
     return true;
 }
 
@@ -437,15 +306,17 @@ void WardenHandler::handleWardenData(network::Packet& packet) {
     switch (wardenOpcode) {
         case WARDEN_SMSG_MODULE_USE: { // MODULE_USE
             // Format: [1 opcode][16 moduleHash][16 moduleKey][4 moduleSize]
-            if (decrypted.size() < sizeof(WardenModuleUseRequest)) {
+            if (decrypted.size() < 37) {
                 LOG_ERROR("Warden: MODULE_USE too short (", decrypted.size(), " bytes, need 37)");
                 return;
             }
 
-            const auto moduleUse = loadRecord<WardenModuleUseRequest>(decrypted.data());
-            wardenModuleHash_.assign(std::begin(moduleUse.moduleHash), std::end(moduleUse.moduleHash));
-            wardenModuleKey_.assign(std::begin(moduleUse.moduleKey), std::end(moduleUse.moduleKey));
-            wardenModuleSize_ = moduleUse.moduleSize;
+            wardenModuleHash_.assign(decrypted.begin() + 1, decrypted.begin() + 17);
+            wardenModuleKey_.assign(decrypted.begin() + 17, decrypted.begin() + 33);
+            wardenModuleSize_ = static_cast<uint32_t>(decrypted[33])
+                              | (static_cast<uint32_t>(decrypted[34]) << 8)
+                              | (static_cast<uint32_t>(decrypted[35]) << 16)
+                              | (static_cast<uint32_t>(decrypted[36]) << 24);
             wardenModuleData_.clear();
 
             {
@@ -467,22 +338,23 @@ void WardenHandler::handleWardenData(network::Packet& packet) {
 
         case WARDEN_SMSG_MODULE_CACHE: { // MODULE_CACHE (module data chunk)
             // Format: [1 opcode][2 chunkSize LE][chunkSize bytes data]
-            constexpr size_t kChunkDataOffset = sizeof(WardenModuleCacheHeader);
-            if (decrypted.size() < kChunkDataOffset) {
+            if (decrypted.size() < 3) {
                 LOG_ERROR("Warden: MODULE_CACHE too short");
                 return;
             }
 
-            const uint16_t chunkSize = loadRecord<WardenModuleCacheHeader>(decrypted.data()).chunkSize;
+            uint16_t chunkSize = static_cast<uint16_t>(decrypted[1])
+                               | (static_cast<uint16_t>(decrypted[2]) << 8);
 
-            if (decrypted.size() < kChunkDataOffset + chunkSize) {
+            if (decrypted.size() < 3u + chunkSize) {
                 LOG_ERROR("Warden: MODULE_CACHE chunk truncated (claimed ", chunkSize,
-                          ", have ", decrypted.size() - kChunkDataOffset, ")");
+                          ", have ", decrypted.size() - 3, ")");
                 return;
             }
 
-            const auto chunkBegin = decrypted.begin() + kChunkDataOffset;
-            wardenModuleData_.insert(wardenModuleData_.end(), chunkBegin, chunkBegin + chunkSize);
+            wardenModuleData_.insert(wardenModuleData_.end(),
+                                     decrypted.begin() + 3,
+                                     decrypted.begin() + 3 + chunkSize);
 
             LOG_DEBUG("Warden: MODULE_CACHE chunk ", chunkSize, " bytes, total ",
                      wardenModuleData_.size(), "/", wardenModuleSize_);
@@ -495,16 +367,9 @@ void WardenHandler::handleWardenData(network::Packet& packet) {
 
                 // Cache raw module to disk
                 {
-#ifdef _WIN32
-                    std::string cacheDir;
-                    if (const char* h = std::getenv("APPDATA")) cacheDir = std::string(h) + "\\wowee\\warden_cache";
-                    else cacheDir = ".\\warden_cache";
-#else
-                    std::string cacheDir;
-                    if (const char* h = std::getenv("HOME")) cacheDir = std::string(h) + "/.local/share/wowee/warden_cache";
-                    else cacheDir = "./warden_cache";
-#endif
-                    std::filesystem::create_directories(cacheDir);
+                    const std::string cacheDir = wardenCacheDir();
+                    std::error_code ec;
+                    std::filesystem::create_directories(cacheDir, ec);
 
                     std::string hashHex;
                     for (auto b : wardenModuleHash_) { char s[4]; snprintf(s, 4, "%02x", b); hashHex += s; }
@@ -559,13 +424,12 @@ void WardenHandler::handleWardenData(network::Packet& packet) {
 
         case WARDEN_SMSG_HASH_REQUEST: { // HASH_REQUEST
             // Format: [1 opcode][16 seed]
-            if (decrypted.size() < sizeof(WardenHashRequest)) {
+            if (decrypted.size() < 17) {
                 LOG_ERROR("Warden: HASH_REQUEST too short (", decrypted.size(), " bytes, need 17)");
                 return;
             }
 
-            const auto hashRequest = loadRecord<WardenHashRequest>(decrypted.data());
-            std::vector<uint8_t> seed(std::begin(hashRequest.seed), std::end(hashRequest.seed));
+            std::vector<uint8_t> seed(decrypted.begin() + 1, decrypted.begin() + 17);
             auto applyWardenSeedRekey = [&](const std::vector<uint8_t>& rekeySeed) {
                 // Derive new RC4 keys from the seed using SHA1Randx.
                 uint8_t newEncryptKey[16], newDecryptKey[16];
@@ -581,9 +445,9 @@ void WardenHandler::handleWardenData(network::Packet& packet) {
 
             // --- Try CR lookup (pre-computed challenge/response entries) ---
             if (!wardenCREntries_.empty()) {
-                const WardenCREntry* match = nullptr;
+                const WardenCRRecord* match = nullptr;
                 for (const auto& entry : wardenCREntries_) {
-                    if (std::memcmp(entry.seed, seed.data(), sizeof(entry.seed)) == 0) {
+                    if (std::memcmp(entry.seed, seed.data(), 16) == 0) {
                         match = &entry;
                         break;
                     }
@@ -595,21 +459,42 @@ void WardenHandler::handleWardenData(network::Packet& packet) {
                     // Send HASH_RESULT
                     std::vector<uint8_t> resp;
                     resp.push_back(WARDEN_CMSG_HASH_RESULT);
-                    resp.insert(resp.end(), std::begin(match->reply), std::end(match->reply));
+                    resp.insert(resp.end(), match->reply, match->reply + 20);
                     sendWardenResponse(resp);
 
                     // Switch to new RC4 keys from the CR entry
                     // clientKey = encrypt (client→server), serverKey = decrypt (server→client)
-                    std::vector<uint8_t> newEncryptKey(std::begin(match->clientKey), std::end(match->clientKey));
-                    std::vector<uint8_t> newDecryptKey(std::begin(match->serverKey), std::end(match->serverKey));
+                    std::vector<uint8_t> newEncryptKey(match->clientKey, match->clientKey + 16);
+                    std::vector<uint8_t> newDecryptKey(match->serverKey, match->serverKey + 16);
                     wardenCrypto_->replaceKeys(newEncryptKey, newDecryptKey);
 
                     LOG_DEBUG("Warden: Switched to CR key set");
 
                     wardenState_ = WardenState::WAIT_CHECKS;
                     break;
-                }                     LOG_DEBUG("Warden: Seed not found in ", wardenCREntries_.size(), " CR entries");
-               
+                }
+                LOG_DEBUG("Warden: Seed not found in ", wardenCREntries_.size(), " CR entries");
+            }
+
+            // --- No CR match: ask the module itself ---
+            // The module computes its own reply and the keys the exchange
+            // switches to, so where it runs its answer is the right one for
+            // any server. Unless turned off; see wardenAnswerHashEnabled.
+            {
+                uint8_t reply[20];
+                std::vector<uint8_t> rc4State;
+                if (wardenAnswerHashEnabled() && wardenLoadedModule_ &&
+                    wardenLoadedModule_->answerHashRequest(seed.data(), owner_.getSessionKey(),
+                                                           reply, rc4State)) {
+                    std::vector<uint8_t> resp;
+                    resp.push_back(WARDEN_CMSG_HASH_RESULT);
+                    resp.insert(resp.end(), reply, reply + 20);
+                    sendWardenResponse(resp);
+                    wardenCrypto_->replaceState(rc4State);
+                    LOG_INFO("Warden: HASH_REQUEST answered by the module's own handler");
+                    wardenState_ = WardenState::WAIT_CHECKS;
+                    break;
+                }
             }
 
             // --- No CR match: decide strategy based on server strictness ---
@@ -671,7 +556,7 @@ void WardenHandler::handleWardenData(network::Packet& packet) {
                 }
 
                 std::vector<uint8_t> resp;
-                resp.push_back(WARDEN_CMSG_HASH_RESULT);
+                resp.push_back(0x04); // WARDEN_CMSG_HASH_RESULT
                 resp.insert(resp.end(), fallbackReply.begin(), fallbackReply.end());
                 sendWardenResponse(resp);
                 applyWardenSeedRekey(seed);
@@ -689,687 +574,55 @@ void WardenHandler::handleWardenData(network::Packet& packet) {
                 break;
             }
 
-            // --- Parse string table ---
-            // Format: [1 opcode][string table: (len+data)*][0x00 end][check data][xorByte]
-            size_t pos = 1;
-            std::vector<std::string> strings;
-            while (pos < decrypted.size()) {
-                uint8_t slen = decrypted[pos++];
-                if (slen == 0) break; // end of string table
-                if (pos + slen > decrypted.size()) break;
-                strings.emplace_back(reinterpret_cast<const char*>(decrypted.data() + pos), slen);
-                pos += slen;
-            }
-            LOG_DEBUG("Warden: String table: ", strings.size(), " entries");
-            for (size_t i = 0; i < strings.size(); i++) {
-                LOG_DEBUG("Warden:   [", i, "] = \"", strings[i], "\"");
-            }
-
-            // XOR byte is the last byte of the packet
-            uint8_t xorByte = decrypted.back();
-            LOG_DEBUG("Warden: XOR byte = 0x", [&]{ char s[4]; snprintf(s,4,"%02x",xorByte); return std::string(s); }());
-
-            // Quick-scan for PAGE_A/PAGE_B checks (these trigger 5-second brute-force searches)
-            {
-                bool hasSlowChecks = false;
-                for (size_t i = pos; i < decrypted.size() - 1; i++) {
-                    uint8_t d = decrypted[i] ^ xorByte;
-                    if (d == wardenCheckOpcodes_[WARDEN_SCAN_FIND_MEM_IMAGE_CODE_BY_HASH] ||
-                        d == wardenCheckOpcodes_[WARDEN_SCAN_FIND_CODE_BY_HASH]) {
-                        hasSlowChecks = true;
-                        break;
-                    }
+            // Memory checks are served from the WoW.exe image, loaded here on
+            // the main thread before anything reads it.
+            if (!wardenMemory_) {
+                wardenMemory_ = std::make_unique<WardenMemory>();
+                std::string expansionId;
+                if (auto* reg = core::Application::getInstance().getExpansionRegistry()) {
+                    if (const auto* profile = reg->getActive()) expansionId = profile->id;
                 }
-                if (hasSlowChecks && !wardenResponsePending_) {
-                    LOG_WARNING("Warden: PAGE_A/PAGE_B detected - building response async to avoid main-loop stall");
-                    // Ensure wardenMemory_ is loaded on main thread before launching async task
-                    if (!wardenMemory_) {
-                        wardenMemory_ = std::make_unique<WardenMemory>();
-                        if (!wardenMemory_->load(static_cast<uint16_t>(owner_.getBuild()), isActiveExpansion("turtle"))) {
-                            LOG_WARNING("Warden: Could not load WoW.exe for MEM_CHECK");
-                        }
-                    }
-                    // Capture state by value (decrypted, strings) and launch async.
-                    // The async task returns plaintext response bytes; main thread encrypts+sends in update().
-                    size_t capturedPos = pos;
-                    wardenPendingEncrypted_ = std::async(std::launch::async,
-                        [this, decrypted, strings, xorByte, capturedPos]() -> std::vector<uint8_t> {
-                            // This runs on a background thread - same logic as the synchronous path below.
-                            // BEGIN: duplicated check processing (kept in sync with synchronous path)
-                            enum CheckType { CT_MEM=0, CT_PAGE_A=1, CT_PAGE_B=2, CT_MPQ=3, CT_LUA=4,
-                                             CT_DRIVER=5, CT_TIMING=6, CT_PROC=7, CT_MODULE=8, CT_UNKNOWN=9 };
-                            size_t checkEnd = decrypted.size() - 1;
-                            size_t pos = capturedPos;
-
-                            auto decodeCheckType = [&](uint8_t raw) -> CheckType {
-                                uint8_t decoded = raw ^ xorByte;
-                                if (decoded == wardenCheckOpcodes_[WARDEN_SCAN_READ_MEMORY]) return CT_MEM;
-                                if (decoded == wardenCheckOpcodes_[WARDEN_SCAN_FIND_MODULE_BY_NAME]) return CT_MODULE;
-                                if (decoded == wardenCheckOpcodes_[WARDEN_SCAN_FIND_MEM_IMAGE_CODE_BY_HASH]) return CT_PAGE_A;
-                                if (decoded == wardenCheckOpcodes_[WARDEN_SCAN_FIND_CODE_BY_HASH]) return CT_PAGE_B;
-                                if (decoded == wardenCheckOpcodes_[WARDEN_SCAN_HASH_CLIENT_FILE]) return CT_MPQ;
-                                if (decoded == wardenCheckOpcodes_[WARDEN_SCAN_GET_LUA_VARIABLE]) return CT_LUA;
-                                if (decoded == wardenCheckOpcodes_[WARDEN_SCAN_API_CHECK]) return CT_PROC;
-                                if (decoded == wardenCheckOpcodes_[WARDEN_SCAN_FIND_DRIVER_BY_NAME]) return CT_DRIVER;
-                                if (decoded == wardenCheckOpcodes_[WARDEN_SCAN_CHECK_TIMING_VALUES]) return CT_TIMING;
-                                return CT_UNKNOWN;
-                            };
-                            auto resolveString = [&](uint8_t idx) -> std::string {
-                                if (idx == 0) return {};
-                                size_t i = idx - 1;
-                                return i < strings.size() ? strings[i] : std::string();
-                            };
-                            std::vector<uint8_t> resultData;
-                            int checkCount = 0;
-                            int checkTypeCounts[10] = {};
-
-                            #define WARDEN_ASYNC_HANDLER 1
-                            // The check processing loop is identical to the synchronous path.
-                            // See the synchronous case 0x02 below for the canonical version.
-                            while (pos < checkEnd) {
-                                CheckType ct = decodeCheckType(decrypted[pos]);
-                                pos++;
-                                checkCount++;
-                                if (ct <= CT_UNKNOWN) checkTypeCounts[ct]++;
-
-                                switch (ct) {
-                                case CT_TIMING: {
-                                    resultData.push_back(WARDEN_TIMING_CHECK_OK);
-                                    uint32_t ticks = static_cast<uint32_t>(
-                                        std::chrono::duration_cast<std::chrono::milliseconds>(
-                                            std::chrono::steady_clock::now().time_since_epoch()).count());
-                                    appendLE32(resultData, ticks);
-                                    break;
-                                }
-                                case CT_MEM: {
-                                    if (pos + sizeof(WardenMemCheckRequest) > checkEnd) { pos = checkEnd; break; }
-                                    const auto req = loadRecord<WardenMemCheckRequest>(decrypted.data() + pos);
-                                    pos += sizeof(req);
-                                    uint8_t strIdx = req.moduleStringIndex;
-                                    std::string moduleName = resolveString(strIdx);
-                                    uint32_t offset = req.address;
-                                    uint8_t readLen = req.length;
-                                    LOG_WARNING("Warden:   MEM offset=0x", [&]{char s[12];snprintf(s,12,"%08x",offset);return std::string(s);}(),
-                                             " len=", (int)readLen,
-                                             (strIdx ? " module=\"" + moduleName + "\"" : ""));
-                                    if (offset == WARDEN_TICKCOUNT_ADDRESS && readLen == 4 && wardenMemory_ && wardenMemory_->isLoaded()) {
-                                        uint32_t now = static_cast<uint32_t>(
-                                            std::chrono::duration_cast<std::chrono::milliseconds>(
-                                                std::chrono::steady_clock::now().time_since_epoch()).count());
-                                        wardenMemory_->writeLE32(WARDEN_TICKCOUNT_ADDRESS, now - WARDEN_LAST_HARDWARE_ACTION_AGE_MS);
-                                    }
-                                    std::vector<uint8_t> memBuf(readLen, 0);
-                                    bool memOk = wardenMemory_ && wardenMemory_->isLoaded() &&
-                                                 wardenMemory_->readMemory(offset, readLen, memBuf.data());
-                                    if (memOk) {
-                                        const char* region = "?";
-                                        if (offset >= KUSER_SHARED_DATA_BASE && offset < KUSER_SHARED_DATA_END) region = "KUSER";
-                                        else if (offset >= PE_TEXT_SECTION_BASE && offset < PE_TEXT_SECTION_END) region = ".text/.code";
-                                        else if (offset >= PE_RDATA_SECTION_BASE && offset < PE_DATA_RAW_SECTION_BASE) region = ".rdata";
-                                        else if (offset >= PE_DATA_RAW_SECTION_BASE && offset < PE_BSS_SECTION_BASE) region = ".data(raw)";
-                                        else if (offset >= PE_BSS_SECTION_BASE && offset < PE_BSS_SECTION_END) region = ".data(BSS)";
-                                        bool allZero = true;
-                                        for (int i = 0; i < (int)readLen; i++) { if (memBuf[i] != 0) { allZero = false; break; } }
-                                        std::string hexDump;
-                                        for (int i = 0; i < (int)readLen; i++) { char hx[4]; snprintf(hx,4,"%02x ",memBuf[i]); hexDump += hx; }
-                                        LOG_WARNING("Warden:   MEM_CHECK served: [", hexDump, "] region=", region,
-                                                    (allZero && offset >= PE_BSS_SECTION_BASE ? " \xe2\x98\x85""BSS_ZERO\xe2\x98\x85" : ""));
-                                        if (offset == WARDEN_WIN_VERSION_ADDRESS && readLen == 12)
-                                            LOG_WARNING("Warden:   Applying 4-byte ULONG alignment padding for WinVersionGet");
-                                        resultData.push_back(WARDEN_MEM_CHECK_SUCCESS);
-                                        resultData.insert(resultData.end(), memBuf.begin(), memBuf.end());
-                                    } else {
-                                        LOG_WARNING("Warden:   MEM_CHECK -> 0xE9 (unmapped 0x",
-                                                    [&]{char s[12];snprintf(s,12,"%08x",offset);return std::string(s);}(), ")");
-                                        resultData.push_back(WARDEN_MEM_CHECK_UNMAPPED);
-                                    }
-                                    break;
-                                }
-                                case CT_PAGE_A:
-                                case CT_PAGE_B: {
-                                    constexpr size_t kPageSize = sizeof(WardenPageCheckRequest);
-                                    const char* pageName = (ct == CT_PAGE_A) ? "PAGE_A" : "PAGE_B";
-                                    bool isImageOnly = (ct == CT_PAGE_A);
-                                    if (pos + kPageSize > checkEnd) { pos = checkEnd; resultData.push_back(WARDEN_PAGE_CHECK_NOT_FOUND); break; }
-                                    const auto req = loadRecord<WardenPageCheckRequest>(decrypted.data() + pos);
-                                    uint32_t off = req.offset;
-                                    uint8_t patLen = req.length;
-                                    bool found = false;
-                                    bool turtleFallback = false;
-                                    if (isKnownWantedCodeScan(req.seed, req.sha1, off, patLen)) {
-                                        found = true;
-                                    } else if (wardenMemory_ && wardenMemory_->isLoaded() && patLen > 0) {
-                                        bool hintOnly = (ct == CT_PAGE_A && isActiveExpansion("turtle"));
-                                        found = wardenMemory_->searchCodePattern(req.seed, req.sha1, patLen, isImageOnly, off, hintOnly);
-                                        if (!found && !hintOnly && wardenLoadedModule_ && wardenLoadedModule_->isLoaded()) {
-                                            const uint8_t* modMem = static_cast<const uint8_t*>(wardenLoadedModule_->getModuleMemory());
-                                            size_t modSize = wardenLoadedModule_->getModuleSize();
-                                            if (modMem && modSize >= patLen) {
-                                                for (size_t i = 0; i < modSize - patLen + 1; i++) {
-                                                    uint8_t h[SHA_DIGEST_LENGTH]; unsigned int hl = 0;
-                                                    HMAC(EVP_sha1(), req.seed, sizeof(req.seed), modMem+i, patLen, h, &hl);
-                                                    if (hl == SHA_DIGEST_LENGTH && !std::memcmp(h, req.sha1, SHA_DIGEST_LENGTH)) { found = true; break; }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    if (!found && ct == CT_PAGE_A && isActiveExpansion("turtle") && off < kTurtlePageAFallbackOffsetLimit) {
-                                        found = true;
-                                        turtleFallback = true;
-                                    }
-                                    uint8_t pageResult = found ? WARDEN_PAGE_CHECK_FOUND : WARDEN_PAGE_CHECK_NOT_FOUND;
-                                    LOG_WARNING("Warden:   ", pageName, " offset=0x",
-                                                [&]{char s[12];snprintf(s,12,"%08x",off);return std::string(s);}(),
-                                                " patLen=", (int)patLen, " found=", found ? "yes" : "no",
-                                                turtleFallback ? " (turtle-fallback)" : "");
-                                    pos += kPageSize;
-                                    resultData.push_back(pageResult);
-                                    break;
-                                }
-                                case CT_MPQ: {
-                                    if (pos + 1 > checkEnd) { pos = checkEnd; break; }
-                                    uint8_t strIdx = decrypted[pos++];
-                                    std::string filePath = resolveString(strIdx);
-                                    LOG_WARNING("Warden:   MPQ file=\"", (filePath.empty() ? "?" : filePath), "\"");
-                                    bool found = false;
-                                    std::vector<uint8_t> hash(SHA_DIGEST_LENGTH, 0);
-                                    if (!filePath.empty()) {
-                                        std::string np = asciiLower(filePath);
-                                        std::replace(np.begin(), np.end(), '/', '\\');
-                                        auto knownIt = knownDoorHashes().find(np);
-                                        if (knownIt != knownDoorHashes().end()) { found = true; hash.assign(knownIt->second.begin(), knownIt->second.end()); }
-                                        auto* am = owner_.services().assetManager;
-                                        if (am && am->isInitialized() && !found) {
-                                            std::vector<uint8_t> fd;
-                                            std::string rp = resolveCaseInsensitiveDataPath(am->getDataPath(), filePath);
-                                            if (!rp.empty()) fd = readFileBinary(rp);
-                                            if (fd.empty()) fd = am->readFile(filePath);
-                                            if (!fd.empty()) { found = true; hash = auth::Crypto::sha1(fd); }
-                                        }
-                                    }
-                                    LOG_WARNING("Warden:   MPQ result=", (found ? "FOUND" : "NOT_FOUND"));
-                                    if (found) { resultData.push_back(WARDEN_MPQ_CHECK_SUCCESS); resultData.insert(resultData.end(), hash.begin(), hash.end()); }
-                                    else { resultData.push_back(WARDEN_MPQ_CHECK_FAILED); }
-                                    break;
-                                }
-                                case CT_LUA: {
-                                    if (pos + 1 > checkEnd) { pos = checkEnd; break; }
-                                    pos++; resultData.push_back(WARDEN_LUA_CHECK_NOT_FOUND); break;
-                                }
-                                case CT_DRIVER: {
-                                    if (pos + sizeof(WardenDriverCheckRequest) > checkEnd) { pos = checkEnd; break; }
-                                    const auto req = loadRecord<WardenDriverCheckRequest>(decrypted.data() + pos);
-                                    pos += sizeof(req);
-                                    std::string dn = resolveString(req.driverStringIndex);
-                                    LOG_WARNING("Warden:   DRIVER=\"", (dn.empty() ? "?" : dn), "\" -> 0x00(not found)");
-                                    resultData.push_back(WARDEN_DRIVER_CHECK_NOT_FOUND); break;
-                                }
-                                case CT_MODULE: {
-                                    if (pos + sizeof(WardenModuleCheckRequest) > checkEnd) { pos = checkEnd; resultData.push_back(WARDEN_MODULE_CHECK_NOT_FOUND); break; }
-                                    const auto req = loadRecord<WardenModuleCheckRequest>(decrypted.data() + pos);
-                                    const uint8_t* sb = req.seed;
-                                    const uint8_t* rh = req.sha1;
-                                    pos += sizeof(req);
-                                    bool isWanted = hmacSha1Matches(sb, "KERNEL32.DLL", rh);
-                                    std::string mn = isWanted ? "KERNEL32.DLL" : "?";
-                                    if (!isWanted) {
-                                        // Cheat modules (unwanted - report not found)
-                                        if (hmacSha1Matches(sb,"WPESPY.DLL",rh)) mn = "WPESPY.DLL";
-                                        else if (hmacSha1Matches(sb,"TAMIA.DLL",rh)) mn = "TAMIA.DLL";
-                                        else if (hmacSha1Matches(sb,"PRXDRVPE.DLL",rh)) mn = "PRXDRVPE.DLL";
-                                        else if (hmacSha1Matches(sb,"SPEEDHACK-I386.DLL",rh)) mn = "SPEEDHACK-I386.DLL";
-                                        else if (hmacSha1Matches(sb,"D3DHOOK.DLL",rh)) mn = "D3DHOOK.DLL";
-                                        else if (hmacSha1Matches(sb,"NJUMD.DLL",rh)) mn = "NJUMD.DLL";
-                                        // System DLLs (wanted - report found)
-                                        else if (hmacSha1Matches(sb,"USER32.DLL",rh)) { mn = "USER32.DLL"; isWanted = true; }
-                                        else if (hmacSha1Matches(sb,"NTDLL.DLL",rh)) { mn = "NTDLL.DLL"; isWanted = true; }
-                                        else if (hmacSha1Matches(sb,"WS2_32.DLL",rh)) { mn = "WS2_32.DLL"; isWanted = true; }
-                                        else if (hmacSha1Matches(sb,"WSOCK32.DLL",rh)) { mn = "WSOCK32.DLL"; isWanted = true; }
-                                        else if (hmacSha1Matches(sb,"ADVAPI32.DLL",rh)) { mn = "ADVAPI32.DLL"; isWanted = true; }
-                                        else if (hmacSha1Matches(sb,"SHELL32.DLL",rh)) { mn = "SHELL32.DLL"; isWanted = true; }
-                                        else if (hmacSha1Matches(sb,"GDI32.DLL",rh)) { mn = "GDI32.DLL"; isWanted = true; }
-                                        else if (hmacSha1Matches(sb,"OPENGL32.DLL",rh)) { mn = "OPENGL32.DLL"; isWanted = true; }
-                                        else if (hmacSha1Matches(sb,"WINMM.DLL",rh)) { mn = "WINMM.DLL"; isWanted = true; }
-                                    }
-                                    uint8_t mr = isWanted ? WARDEN_MODULE_CHECK_FOUND : WARDEN_MODULE_CHECK_NOT_FOUND;
-                                    LOG_WARNING("Warden:   MODULE \"", mn, "\" -> 0x",
-                                                [&]{char s[4];snprintf(s,4,"%02x",mr);return std::string(s);}(),
-                                                isWanted ? "(found)" : "(not found)");
-                                    resultData.push_back(mr); break;
-                                }
-                                case CT_PROC: {
-                                    if (pos + sizeof(WardenApiCheckRequest) > checkEnd) { pos = checkEnd; break; }
-                                    pos += sizeof(WardenApiCheckRequest); resultData.push_back(WARDEN_PROC_CHECK_NOT_FOUND); break;
-                                }
-                                default: pos = checkEnd; break;
-                                }
-                            }
-                            #undef WARDEN_ASYNC_HANDLER
-
-                            // Log summary
-                            {
-                                std::string summary;
-                                const char* ctNames[] = {"MEM","PAGE_A","PAGE_B","MPQ","LUA","DRIVER","TIMING","PROC","MODULE","UNK"};
-                                for (int i = 0; i < 10; i++) {
-                                    if (checkTypeCounts[i] > 0) {
-                                        if (!summary.empty()) summary += " ";
-                                        summary += ctNames[i]; summary += "="; summary += std::to_string(checkTypeCounts[i]);
-                                    }
-                                }
-                                LOG_WARNING("Warden: (async) Parsed ", checkCount, " checks [", summary,
-                                            "] resultSize=", resultData.size());
-                                std::string fullHex;
-                                for (size_t bi = 0; bi < resultData.size(); bi++) {
-                                    char hx[4]; snprintf(hx, 4, "%02x ", resultData[bi]); fullHex += hx;
-                                    if ((bi + 1) % 32 == 0 && bi + 1 < resultData.size()) fullHex += "\n                    ";
-                                }
-                                LOG_WARNING("Warden: RESPONSE_HEX [", fullHex, "]");
-                            }
-
-                            // Build plaintext response: [0x02][uint16 len][uint32 checksum][resultData]
-                            return buildCheatChecksResult(resultData); // plaintext; main thread will encrypt + send
-                        });
-                    wardenResponsePending_ = true;
-                    break; // exit case 0x02 - response will be sent from update()
+                if (!wardenMemory_->load(static_cast<uint16_t>(owner_.getBuild()), isActiveExpansion("turtle"),
+                                         expansionId)) {
+                    LOG_WARNING("Warden: Could not load WoW.exe for MEM_CHECK");
                 }
             }
 
-            // Check type enum indices
-            enum CheckType { CT_MEM=0, CT_PAGE_A=1, CT_PAGE_B=2, CT_MPQ=3, CT_LUA=4,
-                             CT_DRIVER=5, CT_TIMING=6, CT_PROC=7, CT_MODULE=8, CT_UNKNOWN=9 };
-            const char* checkTypeNames[] = {"MEM","PAGE_A","PAGE_B","MPQ","LUA","DRIVER","TIMING","PROC","MODULE","UNKNOWN"};
-            size_t checkEnd = decrypted.size() - 1; // exclude xorByte
-
-            auto decodeCheckType = [&](uint8_t raw) -> CheckType {
-                uint8_t decoded = raw ^ xorByte;
-                if (decoded == wardenCheckOpcodes_[WARDEN_SCAN_READ_MEMORY]) return CT_MEM;
-                if (decoded == wardenCheckOpcodes_[WARDEN_SCAN_FIND_MODULE_BY_NAME]) return CT_MODULE;
-                if (decoded == wardenCheckOpcodes_[WARDEN_SCAN_FIND_MEM_IMAGE_CODE_BY_HASH]) return CT_PAGE_A;
-                if (decoded == wardenCheckOpcodes_[WARDEN_SCAN_FIND_CODE_BY_HASH]) return CT_PAGE_B;
-                if (decoded == wardenCheckOpcodes_[WARDEN_SCAN_HASH_CLIENT_FILE]) return CT_MPQ;
-                if (decoded == wardenCheckOpcodes_[WARDEN_SCAN_GET_LUA_VARIABLE]) return CT_LUA;
-                if (decoded == wardenCheckOpcodes_[WARDEN_SCAN_API_CHECK]) return CT_PROC;
-                if (decoded == wardenCheckOpcodes_[WARDEN_SCAN_FIND_DRIVER_BY_NAME]) return CT_DRIVER;
-                if (decoded == wardenCheckOpcodes_[WARDEN_SCAN_CHECK_TIMING_VALUES]) return CT_TIMING;
-                return CT_UNKNOWN;
-            };
-            auto resolveWardenString = [&](uint8_t oneBasedIndex) -> std::string {
-                if (oneBasedIndex == 0) return std::string();
-                size_t idx = static_cast<size_t>(oneBasedIndex - 1);
-                if (idx >= strings.size()) return std::string();
-                return strings[idx];
-            };
-            // The request bytes after each check type, by layout. PAGE_A and
-            // PAGE_B come in a short and a long form.
-            constexpr size_t kStringIndexSize = sizeof(uint8_t);  // MPQ, LUA: [1 stringIdx]
-            auto requestSizes = [&](CheckType ct) {
-                switch (ct) {
-                    case CT_TIMING: return std::vector<size_t>{0};
-                    case CT_MEM:    return std::vector<size_t>{sizeof(WardenMemCheckRequest)};
-                    case CT_PAGE_A: return std::vector<size_t>{sizeof(WardenPageCheckShortRequest),
-                                                               sizeof(WardenPageCheckRequest)};
-                    case CT_PAGE_B: return std::vector<size_t>{sizeof(WardenPageCheckShortRequest),
-                                                               sizeof(WardenPageCheckRequest)};
-                    case CT_MPQ:    return std::vector<size_t>{kStringIndexSize};
-                    case CT_LUA:    return std::vector<size_t>{kStringIndexSize};
-                    case CT_DRIVER: return std::vector<size_t>{sizeof(WardenDriverCheckRequest)};
-                    case CT_PROC:   return std::vector<size_t>{sizeof(WardenApiCheckRequest)};
-                    case CT_MODULE: return std::vector<size_t>{sizeof(WardenModuleCheckRequest)};
-                    default:        return std::vector<size_t>{};
-                }
-            };
-            std::unordered_map<size_t, bool> parseMemo;
-            std::function<bool(size_t)> canParseFrom = [&](size_t checkPos) -> bool {
-                if (checkPos == checkEnd) return true;
-                if (checkPos > checkEnd) return false;
-                auto it = parseMemo.find(checkPos);
-                if (it != parseMemo.end()) return it->second;
-
-                CheckType ct = decodeCheckType(decrypted[checkPos]);
-                if (ct == CT_UNKNOWN) {
-                    parseMemo[checkPos] = false;
-                    return false;
-                }
-
-                size_t payloadPos = checkPos + 1;
-                for (size_t reqSize : requestSizes(ct)) {
-                    if (payloadPos + reqSize > checkEnd) continue;
-                    if (canParseFrom(payloadPos + reqSize)) {
-                        parseMemo[checkPos] = true;
-                        return true;
-                    }
-                }
-
-                parseMemo[checkPos] = false;
-                return false;
-            };
-            auto isBoundaryAfter = [&](size_t start, size_t consume) -> bool {
-                size_t next = start + consume;
-                if (next == checkEnd) return true;
-                if (next > checkEnd) return false;
-                return decodeCheckType(decrypted[next]) != CT_UNKNOWN;
+            WardenCheckContext ctx;
+            ctx.opcodes = wardenCheckOpcodes_;
+            ctx.memory = wardenMemory_.get();
+            if (wardenLoadedModule_ && wardenLoadedModule_->isLoaded()) {
+                ctx.moduleImage = static_cast<const uint8_t*>(wardenLoadedModule_->getModuleMemory());
+                ctx.moduleImageSize = wardenLoadedModule_->getModuleSize();
+            }
+            ctx.turtle = isActiveExpansion("turtle");
+            ctx.readGameFile = [this](const std::string& wowPath) -> std::vector<uint8_t> {
+                auto* am = owner_.services().assetManager;
+                if (!am || !am->isInitialized()) return {};
+                std::vector<uint8_t> data;
+                const std::string fsPath = resolveCaseInsensitiveDataPath(am->getDataPath(), wowPath);
+                if (!fsPath.empty()) data = readFileBinary(fsPath);
+                if (data.empty()) data = am->readFile(wowPath);
+                return data;
             };
 
-            // --- Parse check entries and build response ---
-            std::vector<uint8_t> resultData;
-            int checkCount = 0;
-
-            while (pos < checkEnd) {
-                CheckType ct = decodeCheckType(decrypted[pos]);
-                pos++;
-                checkCount++;
-
-                LOG_DEBUG("Warden: Check #", checkCount, " type=", checkTypeNames[ct],
-                         " at offset ", pos - 1);
-
-                switch (ct) {
-                    case CT_TIMING: {
-                        // No additional request data
-                        // Response: [uint8 result][uint32 ticks]
-                        resultData.push_back(WARDEN_TIMING_CHECK_OK);
-                        uint32_t ticks = static_cast<uint32_t>(
-                            std::chrono::duration_cast<std::chrono::milliseconds>(
-                                std::chrono::steady_clock::now().time_since_epoch()).count());
-                        appendLE32(resultData, ticks);
-                        LOG_WARNING("Warden:   (sync) TIMING ticks=", ticks);
-                        break;
-                    }
-                    case CT_MEM: {
-                        // Request: [1 stringIdx][4 offset][1 length]
-                        if (pos + sizeof(WardenMemCheckRequest) > checkEnd) { pos = checkEnd; break; }
-                        const auto req = loadRecord<WardenMemCheckRequest>(decrypted.data() + pos);
-                        pos += sizeof(req);
-                        std::string moduleName = resolveWardenString(req.moduleStringIndex);
-                        uint32_t offset = req.address;
-                        uint8_t readLen = req.length;
-                        LOG_WARNING("Warden:   (sync) MEM offset=0x", [&]{char s[12];snprintf(s,12,"%08x",offset);return std::string(s);}(),
-                                 " len=", (int)readLen,
-                                 moduleName.empty() ? "" : (" module=\"" + moduleName + "\""));
-
-                        // Lazy-load WoW.exe PE image on first MEM_CHECK
-                        if (!wardenMemory_) {
-                            wardenMemory_ = std::make_unique<WardenMemory>();
-                            if (!wardenMemory_->load(static_cast<uint16_t>(owner_.getBuild()), isActiveExpansion("turtle"))) {
-                                LOG_WARNING("Warden: Could not load WoW.exe for MEM_CHECK");
-                            }
-                        }
-
-                        // Dynamically update LastHardwareAction before reading
-                        if (offset == WARDEN_TICKCOUNT_ADDRESS && readLen == 4 && wardenMemory_ && wardenMemory_->isLoaded()) {
-                            uint32_t now = static_cast<uint32_t>(
-                                std::chrono::duration_cast<std::chrono::milliseconds>(
-                                    std::chrono::steady_clock::now().time_since_epoch()).count());
-                            wardenMemory_->writeLE32(WARDEN_TICKCOUNT_ADDRESS, now - WARDEN_LAST_HARDWARE_ACTION_AGE_MS);
-                        }
-
-                        // Read bytes from PE image (includes patched runtime globals)
-                        std::vector<uint8_t> memBuf(readLen, 0);
-                        if (wardenMemory_->isLoaded() && wardenMemory_->readMemory(offset, readLen, memBuf.data())) {
-                            LOG_DEBUG("Warden:   MEM_CHECK served from PE image");
-                            resultData.push_back(WARDEN_MEM_CHECK_SUCCESS);
-                            resultData.insert(resultData.end(), memBuf.begin(), memBuf.end());
-                        } else {
-                            // Address not in PE/KUSER - return 0xE9 (not readable).
-                            LOG_WARNING("Warden:   (sync) MEM_CHECK -> 0xE9 (unmapped 0x",
-                                        [&]{char s[12];snprintf(s,12,"%08x",offset);return std::string(s);}(), ")");
-                            resultData.push_back(WARDEN_MEM_CHECK_UNMAPPED);
-                        }
-                        break;
-                    }
-                    case CT_PAGE_A: {
-                        // Classic has seen two PAGE_A layouts in the wild:
-                        // short: [4 seed][20 sha1] = 24 bytes
-                        // long:  [4 seed][20 sha1][4 addr][1 len] = 29 bytes
-                        constexpr size_t kPageAShort = sizeof(WardenPageCheckShortRequest);
-                        constexpr size_t kPageALong = sizeof(WardenPageCheckRequest);
-                        size_t consume = 0;
-
-                        if (pos + kPageAShort <= checkEnd && canParseFrom(pos + kPageAShort)) {
-                            consume = kPageAShort;
-                        }
-                        if (pos + kPageALong <= checkEnd && canParseFrom(pos + kPageALong) && consume == 0) {
-                            consume = kPageALong;
-                        }
-                        if (consume == 0 && isBoundaryAfter(pos, kPageAShort)) consume = kPageAShort;
-                        if (consume == 0 && isBoundaryAfter(pos, kPageALong)) consume = kPageALong;
-
-                        if (consume == 0) {
-                            size_t remaining = checkEnd - pos;
-                            if (remaining >= kPageAShort && remaining < kPageALong) consume = kPageAShort;
-                            else if (remaining >= kPageALong) consume = kPageALong;
-                            else {
-                                LOG_WARNING("Warden:   PAGE_A check truncated (remaining=", remaining,
-                                            "), consuming remainder");
-                                pos = checkEnd;
-                                resultData.push_back(WARDEN_PAGE_CHECK_NOT_FOUND);
-                                break;
-                            }
-                        }
-
-                        uint8_t pageResult = WARDEN_PAGE_CHECK_NOT_FOUND;
-                        if (consume >= kPageALong) {
-                            const auto req = loadRecord<WardenPageCheckRequest>(decrypted.data() + pos);
-                            if (isKnownWantedCodeScan(req.seed, req.sha1, req.offset, req.length)) {
-                                pageResult = WARDEN_PAGE_CHECK_FOUND;
-                            } else if (wardenMemory_ && wardenMemory_->isLoaded() && req.length > 0) {
-                                if (wardenMemory_->searchCodePattern(req.seed, req.sha1, req.length, true, req.offset))
-                                    pageResult = WARDEN_PAGE_CHECK_FOUND;
-                            }
-                            // Turtle PAGE_A fallback: runtime-patched offsets aren't in the
-                            // on-disk PE. Server expects "found" for code integrity checks.
-                            if (pageResult == WARDEN_PAGE_CHECK_NOT_FOUND && isActiveExpansion("turtle") &&
-                                req.offset < kTurtlePageAFallbackOffsetLimit) {
-                                pageResult = WARDEN_PAGE_CHECK_FOUND;
-                                LOG_WARNING("Warden:   PAGE_A turtle-fallback for offset=0x",
-                                            [&]{char s[12];snprintf(s,12,"%08x",req.offset);return std::string(s);}());
-                            }
-                            LOG_WARNING("Warden:   (sync) PAGE_A offset=0x",
-                                        [&]{char s[12];snprintf(s,12,"%08x",req.offset);return std::string(s);}(),
-                                        " patLen=", (int)req.length,
-                                        " result=0x", [&]{char s[4];snprintf(s,4,"%02x",pageResult);return std::string(s);}());
-                        } else {
-                            LOG_WARNING("Warden:   (sync) PAGE_A (short ", consume, "b) result=0x",
-                                        [&]{char s[4];snprintf(s,4,"%02x",pageResult);return std::string(s);}());
-                        }
-                        pos += consume;
-                        resultData.push_back(pageResult);
-                        break;
-                    }
-                    case CT_PAGE_B: {
-                        constexpr size_t kPageBShort = sizeof(WardenPageCheckShortRequest);
-                        constexpr size_t kPageBLong = sizeof(WardenPageCheckRequest);
-                        size_t consume = 0;
-
-                        if (pos + kPageBShort <= checkEnd && canParseFrom(pos + kPageBShort)) {
-                            consume = kPageBShort;
-                        }
-                        if (pos + kPageBLong <= checkEnd && canParseFrom(pos + kPageBLong) && consume == 0) {
-                            consume = kPageBLong;
-                        }
-                        if (consume == 0 && isBoundaryAfter(pos, kPageBShort)) consume = kPageBShort;
-                        if (consume == 0 && isBoundaryAfter(pos, kPageBLong)) consume = kPageBLong;
-
-                        if (consume == 0) {
-                            size_t remaining = checkEnd - pos;
-                            if (remaining >= kPageBShort && remaining < kPageBLong) consume = kPageBShort;
-                            else if (remaining >= kPageBLong) consume = kPageBLong;
-                            else { pos = checkEnd; break; }
-                        }
-                        uint8_t pageResult = WARDEN_PAGE_CHECK_NOT_FOUND;
-                        if (consume >= kPageBLong) {
-                            const auto req = loadRecord<WardenPageCheckRequest>(decrypted.data() + pos);
-                            if (isKnownWantedCodeScan(req.seed, req.sha1, req.offset, req.length)) {
-                                pageResult = WARDEN_PAGE_CHECK_FOUND; // PatternFound
-                            }
-                        }
-                        LOG_DEBUG("Warden:   PAGE_B request bytes=", consume,
-                                 " result=0x", [&]{char s[4];snprintf(s,4,"%02x",pageResult);return std::string(s);}());
-                        pos += consume;
-                        resultData.push_back(pageResult);
-                        break;
-                    }
-                    case CT_MPQ: {
-                        // HASH_CLIENT_FILE request: [1 stringIdx]
-                        if (pos + kStringIndexSize > checkEnd) { pos = checkEnd; break; }
-                        uint8_t strIdx = decrypted[pos++];
-                        std::string filePath = resolveWardenString(strIdx);
-                        LOG_WARNING("Warden:   (sync) MPQ file=\"", (filePath.empty() ? "?" : filePath), "\"");
-
-                        bool found = false;
-                        std::vector<uint8_t> hash(SHA_DIGEST_LENGTH, 0);
-                        if (!filePath.empty()) {
-                            std::string normalizedPath = asciiLower(filePath);
-                            std::replace(normalizedPath.begin(), normalizedPath.end(), '/', '\\');
-                            auto knownIt = knownDoorHashes().find(normalizedPath);
-                            if (knownIt != knownDoorHashes().end()) {
-                                found = true;
-                                hash.assign(knownIt->second.begin(), knownIt->second.end());
-                            }
-
-                            auto* am = owner_.services().assetManager;
-                            if (am && am->isInitialized() && !found) {
-                                std::vector<uint8_t> fileData;
-                                std::string resolvedFsPath =
-                                    resolveCaseInsensitiveDataPath(am->getDataPath(), filePath);
-                                if (!resolvedFsPath.empty()) {
-                                    fileData = readFileBinary(resolvedFsPath);
-                                }
-                                if (fileData.empty()) {
-                                    fileData = am->readFile(filePath);
-                                }
-
-                                if (!fileData.empty()) {
-                                    found = true;
-                                    hash = auth::Crypto::sha1(fileData);
-                                }
-                            }
-                        }
-
-                        if (found) {
-                            resultData.push_back(WARDEN_MPQ_CHECK_SUCCESS);
-                            resultData.insert(resultData.end(), hash.begin(), hash.end());
-                        } else {
-                            resultData.push_back(WARDEN_MPQ_CHECK_FAILED);
-                        }
-                        LOG_WARNING("Warden:   (sync) MPQ result=", found ? "FOUND" : "NOT_FOUND");
-                        break;
-                    }
-                    case CT_LUA: {
-                        // Request: [1 stringIdx]
-                        if (pos + kStringIndexSize > checkEnd) { pos = checkEnd; break; }
-                        uint8_t strIdx = decrypted[pos++];
-                        std::string luaVar = resolveWardenString(strIdx);
-                        LOG_WARNING("Warden:   (sync) LUA str=\"", (luaVar.empty() ? "?" : luaVar), "\"");
-                        resultData.push_back(WARDEN_LUA_CHECK_NOT_FOUND);
-                        break;
-                    }
-                    case CT_DRIVER: {
-                        // Request: [4 seed][20 sha1][1 stringIdx]
-                        if (pos + sizeof(WardenDriverCheckRequest) > checkEnd) { pos = checkEnd; break; }
-                        const auto req = loadRecord<WardenDriverCheckRequest>(decrypted.data() + pos);
-                        pos += sizeof(req);
-                        std::string driverName = resolveWardenString(req.driverStringIndex);
-                        LOG_WARNING("Warden:   (sync) DRIVER=\"", (driverName.empty() ? "?" : driverName), "\" -> 0x00(not found)");
-                        resultData.push_back(WARDEN_DRIVER_CHECK_NOT_FOUND);
-                        break;
-                    }
-                    case CT_MODULE: {
-                        // FIND_MODULE_BY_NAME request: [4 seed][20 sha1] = 24 bytes
-                        constexpr size_t moduleSize = sizeof(WardenModuleCheckRequest);
-                        if (pos + moduleSize > checkEnd) {
-                            size_t remaining = checkEnd - pos;
-                            LOG_WARNING("Warden:   MODULE check truncated (remaining=", remaining,
-                                        ", expected=", moduleSize, "), consuming remainder");
-                            pos = checkEnd;
-                        } else {
-                            const auto req = loadRecord<WardenModuleCheckRequest>(decrypted.data() + pos);
-                            const uint8_t* seedBytes = req.seed;
-                            const uint8_t* reqHash = req.sha1;
-                            pos += moduleSize;
-
-                            bool shouldReportFound = false;
-                            std::string modName = "?";
-                            // Wanted system modules
-                            if (hmacSha1Matches(seedBytes, "KERNEL32.DLL", reqHash)) { modName = "KERNEL32.DLL"; shouldReportFound = true; }
-                            else if (hmacSha1Matches(seedBytes, "USER32.DLL", reqHash)) { modName = "USER32.DLL"; shouldReportFound = true; }
-                            else if (hmacSha1Matches(seedBytes, "NTDLL.DLL", reqHash)) { modName = "NTDLL.DLL"; shouldReportFound = true; }
-                            else if (hmacSha1Matches(seedBytes, "WS2_32.DLL", reqHash)) { modName = "WS2_32.DLL"; shouldReportFound = true; }
-                            else if (hmacSha1Matches(seedBytes, "WSOCK32.DLL", reqHash)) { modName = "WSOCK32.DLL"; shouldReportFound = true; }
-                            else if (hmacSha1Matches(seedBytes, "ADVAPI32.DLL", reqHash)) { modName = "ADVAPI32.DLL"; shouldReportFound = true; }
-                            else if (hmacSha1Matches(seedBytes, "SHELL32.DLL", reqHash)) { modName = "SHELL32.DLL"; shouldReportFound = true; }
-                            else if (hmacSha1Matches(seedBytes, "GDI32.DLL", reqHash)) { modName = "GDI32.DLL"; shouldReportFound = true; }
-                            else if (hmacSha1Matches(seedBytes, "OPENGL32.DLL", reqHash)) { modName = "OPENGL32.DLL"; shouldReportFound = true; }
-                            else if (hmacSha1Matches(seedBytes, "WINMM.DLL", reqHash)) { modName = "WINMM.DLL"; shouldReportFound = true; }
-                            // Unwanted cheat modules
-                            else if (hmacSha1Matches(seedBytes, "WPESPY.DLL", reqHash)) modName = "WPESPY.DLL";
-                            else if (hmacSha1Matches(seedBytes, "SPEEDHACK-I386.DLL", reqHash)) modName = "SPEEDHACK-I386.DLL";
-                            else if (hmacSha1Matches(seedBytes, "TAMIA.DLL", reqHash)) modName = "TAMIA.DLL";
-                            else if (hmacSha1Matches(seedBytes, "PRXDRVPE.DLL", reqHash)) modName = "PRXDRVPE.DLL";
-                            else if (hmacSha1Matches(seedBytes, "D3DHOOK.DLL", reqHash)) modName = "D3DHOOK.DLL";
-                            else if (hmacSha1Matches(seedBytes, "NJUMD.DLL", reqHash)) modName = "NJUMD.DLL";
-                            const uint8_t moduleResult =
-                                shouldReportFound ? WARDEN_MODULE_CHECK_FOUND : WARDEN_MODULE_CHECK_NOT_FOUND;
-                            LOG_WARNING("Warden:   (sync) MODULE \"", modName,
-                                        "\" -> 0x", [&]{char s[4];snprintf(s,4,"%02x",moduleResult);return std::string(s);}(),
-                                        "(", shouldReportFound ? "found" : "not found", ")");
-                            resultData.push_back(moduleResult);
-                            break;
-                        }
-                        // Truncated module request fallback: module NOT loaded = clean
-                        resultData.push_back(WARDEN_MODULE_CHECK_NOT_FOUND);
-                        break;
-                    }
-                    case CT_PROC: {
-                        // API_CHECK request:
-                        // [4 seed][20 sha1][1 stringIdx][1 stringIdx2][4 offset] = 30 bytes
-                        constexpr size_t procSize = sizeof(WardenApiCheckRequest);
-                        if (pos + procSize > checkEnd) { pos = checkEnd; break; }
-                        pos += procSize;
-                        LOG_WARNING("Warden:   (sync) PROC check -> 0x01(not found)");
-                        resultData.push_back(WARDEN_PROC_CHECK_NOT_FOUND);
-                        break;
-                    }
-                    default: {
-                        uint8_t rawByte = decrypted[pos - 1];
-                        uint8_t decoded = rawByte ^ xorByte;
-                        LOG_WARNING("Warden: Unknown check type raw=0x",
-                                    [&]{char s[4];snprintf(s,4,"%02x",rawByte);return std::string(s);}(),
-                                    " decoded=0x",
-                                    [&]{char s[4];snprintf(s,4,"%02x",decoded);return std::string(s);}(),
-                                    " xorByte=0x",
-                                    [&]{char s[4];snprintf(s,4,"%02x",xorByte);return std::string(s);}(),
-                                    " opcodes=[",
-                                    [&]{std::string r;for(uint8_t wardenCheckOpcode : wardenCheckOpcodes_){char s[6];snprintf(s,6,"0x%02x ",wardenCheckOpcode);r+=s;}return r;}(),
-                                    "] pos=", pos, "/", checkEnd);
-                        pos = checkEnd; // stop parsing
-                        break;
-                    }
-                }
+            // A code scan searches the whole image and can take seconds, so a
+            // request holding one is answered off the main thread; update()
+            // encrypts and sends what comes back.
+            if (wardenRequestHasCodeScan(decrypted, wardenCheckOpcodes_) && !wardenResponsePending_) {
+                LOG_DEBUG("Warden: PAGE_A/PAGE_B detected - building response async to avoid main-loop stall");
+                wardenPendingEncrypted_ = std::async(std::launch::async, [decrypted, ctx]() {
+                    return buildWardenCheckResponse(decrypted, ctx, "async");
+                });
+                wardenResponsePending_ = true;
+                break;
             }
 
-            // Log synchronous round summary at WARNING level for diagnostics
-            {
-                LOG_WARNING("Warden: (sync) Parsed ", checkCount, " checks, resultSize=", resultData.size());
-                std::string fullHex;
-                for (size_t bi = 0; bi < resultData.size(); bi++) {
-                    char hx[4]; snprintf(hx, 4, "%02x ", resultData[bi]); fullHex += hx;
-                    if ((bi + 1) % 32 == 0 && bi + 1 < resultData.size()) fullHex += "\n                    ";
-                }
-                LOG_WARNING("Warden: (sync) RESPONSE_HEX [", fullHex, "]");
-            }
-
-            // --- Build response: [0x02][uint16 length][uint32 checksum][resultData] ---
-            // The checksum is the XOR of the five uint32s of SHA1(resultData).
-            std::vector<uint8_t> resp = buildCheatChecksResult(resultData);
-            const uint32_t checksum = loadRecord<WardenCheatChecksResultHeader>(resp.data()).checksum;
-            sendWardenResponse(resp);
-            LOG_DEBUG("Warden: Sent CHEAT_CHECKS_RESULT (", resp.size(), " bytes, ",
-                     checkCount, " checks, checksum=0x",
-                     [&]{char s[12];snprintf(s,12,"%08x",checksum);return std::string(s);}(), ")");
+            sendWardenResponse(buildWardenCheckResponse(decrypted, ctx, "sync"));
             break;
         }
 
-        case WARDEN_SMSG_MODULE_INITIALIZE:
+        case 0x03: // WARDEN_SMSG_MODULE_INITIALIZE
             LOG_DEBUG("Warden: MODULE_INITIALIZE (", decrypted.size(), " bytes, no response needed)");
             break;
 

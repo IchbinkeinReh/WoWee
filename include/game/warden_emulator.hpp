@@ -68,20 +68,24 @@ public:
      * @param dllName DLL name (e.g., "kernel32.dll")
      * @param functionName Function name (e.g., "VirtualAlloc")
      * @param handler Native function to call (receives emulator context)
+     * @param argCount Stack arguments the stub pops; -1 looks the name up
      * @return Address where API was mapped (for IAT patching)
      */
     uint32_t hookAPI(const std::string& dllName,
                      const std::string& functionName,
-                     std::function<uint32_t(WardenEmulator&, const std::vector<uint32_t>&)> handler);
+                     std::function<uint32_t(WardenEmulator&, const std::vector<uint32_t>&)> handler,
+                     int argCount = -1);
 
     /**
      * Call emulated function
      *
      * @param address Address of function in emulated space
      * @param args Arguments to pass (stdcall convention)
+     * @param thisPtr Loaded into ECX, for the module's thiscall exports
      * @return Return value from function (EAX)
      */
-    uint32_t callFunction(uint32_t address, const std::vector<uint32_t>& args = {});
+    uint32_t callFunction(uint32_t address, const std::vector<uint32_t>& args = {},
+                          uint32_t thisPtr = 0);
 
     /**
      * Read memory from emulated address space

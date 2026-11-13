@@ -32,6 +32,14 @@ public:
     void replaceKeys(const std::vector<uint8_t>& newEncryptKey,
                      const std::vector<uint8_t>& newDecryptKey);
 
+    /**
+     * Replace the RC4 state outright, as a Warden module hands it over: the
+     * client->server state then the server->client state, each 256 S-box
+     * bytes then i then j. False, leaving the state alone, when the buffer
+     * is not exactly 516 bytes.
+     */
+    bool replaceState(const std::vector<uint8_t>& statePair);
+
     /** Decrypt an incoming SMSG_WARDEN_DATA payload. */
     std::vector<uint8_t> decrypt(const std::vector<uint8_t>& data);
 

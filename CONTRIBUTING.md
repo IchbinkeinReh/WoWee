@@ -93,7 +93,8 @@ is expected for gameplay-affecting changes.
   `UpdateFields_2_4_3.h` and AzerothCore / TrinityCore `UpdateFields.h`
   respectively.
 - `expansion.json` may name the realm's Warden signing key as
-  `wardenRsaModulus`, 512 hex characters for the 256-byte RSA-2048 modulus.
+  `wardenRsaModulus`, 512 hex characters for the 256-byte RSA-2048 modulus,
+  little-endian as it sits in the client binary.
   Omit it and the module's signature is checked against Blizzard's own key,
   which is right for a server running a genuine module. A server that builds
   its own module signs it with a key of its own, and its key can be pulled

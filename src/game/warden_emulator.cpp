@@ -1,5 +1,6 @@
 #include "game/warden_emulator.hpp"
 #include "core/logger.hpp"
+#include <cctype>
 #include <cstring>
 #include <chrono>
 #include <iterator>
@@ -148,30 +149,72 @@ bool WardenEmulator::initialize(const void* moduleCode, size_t moduleSize, uint3
     return true;
 }
 
+namespace {
+// DLL names arrive in whatever case the module's import table spells them.
+std::string lowerDllName(std::string name) {
+    for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return name;
+}
+}  // namespace
+
 uint32_t WardenEmulator::hookAPI(const std::string& dllName,
                                  const std::string& functionName,
-                                 std::function<uint32_t(WardenEmulator&, const std::vector<uint32_t>&)> handler) {
+                                 std::function<uint32_t(WardenEmulator&, const std::vector<uint32_t>&)> handler,
+                                 int argCount) {
     // Allocate address for this API stub (16 bytes each)
     uint32_t stubAddr = nextApiStubAddr_;
     nextApiStubAddr_ += 16;
 
     // Store address mapping for IAT patching
-    apiAddresses_[dllName][functionName] = stubAddr;
+    apiAddresses_[lowerDllName(dllName)][functionName] = stubAddr;
 
     // Determine stdcall arg count from known Windows APIs so the hook can
-    // clean up the stack correctly (RETN N convention).
+    // clean up the stack correctly (RETN N convention). A stub that pops the
+    // wrong count returns into a shifted stack, so every import the 3.3.5a
+    // module names is listed; anything else is assumed to take none.
     static const std::pair<const char*, int> knownArgCounts[] = {
         {"VirtualAlloc",           4},
         {"VirtualFree",            3},
+        {"VirtualQuery",           3},
         {"GetTickCount",           0},
         {"Sleep",                  1},
         {"GetCurrentThreadId",     0},
         {"GetCurrentProcessId",    0},
+        {"GetCurrentProcess",      0},
         {"ReadProcessMemory",      5},
+        {"LCMapStringA",           6},
+        {"MulDiv",                 3},
+        {"GetModuleHandleA",       1},
+        {"TlsAlloc",               0},
+        {"TlsFree",                1},
+        {"TlsGetValue",            1},
+        {"TlsSetValue",            2},
+        {"RaiseException",         4},
+        {"GetProcAddress",         2},
+        {"GetSystemInfo",          1},
+        {"GetVersionExA",          1},
+        {"QueryDosDeviceA",        3},
+        {"DuplicateHandle",        7},
+        {"CloseHandle",            1},
+        {"FreeLibrary",            1},
+        {"LoadLibraryA",           1},
+        {"GetProcessHeap",         0},
+        {"HeapFree",               3},
+        {"TerminateProcess",       2},
+        {"UnhandledExceptionFilter",    1},
+        {"SetUnhandledExceptionFilter", 1},
+        {"QueryPerformanceCounter", 1},
+        {"GetSystemTimeAsFileTime", 1},
+        {"RtlUnwind",              4},
+        {"CharUpperBuffA",         2},
+        {"DestroyIcon",            1},
+        {"DrawTextA",              5},
     };
-    int argCount = 0;
-    for (const auto& [name, cnt] : knownArgCounts) {
-        if (functionName == name) { argCount = cnt; break; }
+    if (argCount < 0) {
+        argCount = 0;
+        for (const auto& [name, cnt] : knownArgCounts) {
+            if (functionName == name) { argCount = cnt; break; }
+        }
     }
 
     // Store the handler so hookCode() can dispatch to it
@@ -194,7 +237,7 @@ uint32_t WardenEmulator::hookAPI(const std::string& dllName,
 }
 
 uint32_t WardenEmulator::getAPIAddress(const std::string& dllName, const std::string& funcName) const {
-    auto libIt = apiAddresses_.find(dllName);
+    auto libIt = apiAddresses_.find(lowerDllName(dllName));
     if (libIt == apiAddresses_.end()) return 0;
     auto funcIt = libIt->second.find(funcName);
     return (funcIt != libIt->second.end()) ? funcIt->second : 0;
@@ -225,7 +268,8 @@ uint32_t WardenEmulator::writeData(const void* data, size_t size) {
     }
     return addr;
 }
-uint32_t WardenEmulator::callFunction(uint32_t address, const std::vector<uint32_t>& args) {
+uint32_t WardenEmulator::callFunction(uint32_t address, const std::vector<uint32_t>& args,
+                                      uint32_t thisPtr) {
     if (!uc_) {
         LOG_ERROR("WardenEmulator: Not initialized");
         return 0;
@@ -237,9 +281,14 @@ uint32_t WardenEmulator::callFunction(uint32_t address, const std::vector<uint32
         LOG_DEBUG("WardenEmulator: Calling function at ", aBuf, " with ", args.size(), " args");
     }
 
-    // Get current ESP
+    // Get current ESP. Put back afterwards whatever the callee popped, so a
+    // cdecl/stdcall mismatch cannot walk the stack down call by call.
     uint32_t esp;
     uc_reg_read(uc_, UC_X86_REG_ESP, &esp);
+    const uint32_t callerEsp = esp;
+
+    // thiscall: the object pointer travels in ECX
+    uc_reg_write(uc_, UC_X86_REG_ECX, &thisPtr);
 
     // Push arguments (stdcall: right-to-left)
     for (uint32_t arg : std::views::reverse(args)) {
@@ -255,8 +304,16 @@ uint32_t WardenEmulator::callFunction(uint32_t address, const std::vector<uint32
     // Update ESP
     uc_reg_write(uc_, UC_X86_REG_ESP, &esp);
 
-    // Execute until return address
-    uc_err err = uc_emu_start(uc_, address, retAddr, 0, 0);
+    // Execute until return address. Bounded: the module is server-supplied,
+    // and one that loops would otherwise hang the network thread.
+    constexpr uint64_t kCallTimeoutUs = 10'000'000;
+    uc_err err = uc_emu_start(uc_, address, retAddr, kCallTimeoutUs, 0);
+    uc_reg_write(uc_, UC_X86_REG_ESP, &callerEsp);
+    // A timeout stops the engine without an error; only reaching the return
+    // address means the call finished.
+    uint32_t eip = 0;
+    uc_reg_read(uc_, UC_X86_REG_EIP, &eip);
+    if (err == UC_ERR_OK && eip != retAddr) err = UC_ERR_EXCEPTION;
     if (err != UC_ERR_OK) {
         if (failuresExpected_) {
             LOG_WARNING("WardenEmulator: module did not run (", uc_strerror(err),
@@ -570,8 +627,8 @@ WardenEmulator::WardenEmulator() = default;
 WardenEmulator::~WardenEmulator() {}
 bool WardenEmulator::initialize(const void*, size_t, uint32_t) { return false; }
 uint32_t WardenEmulator::hookAPI(const std::string&, const std::string&,
-    std::function<uint32_t(WardenEmulator&, const std::vector<uint32_t>&)>) { return 0; }
-uint32_t WardenEmulator::callFunction(uint32_t, const std::vector<uint32_t>&) { return 0; }
+    std::function<uint32_t(WardenEmulator&, const std::vector<uint32_t>&)>, int) { return 0; }
+uint32_t WardenEmulator::callFunction(uint32_t, const std::vector<uint32_t>&, uint32_t) { return 0; }
 bool WardenEmulator::readMemory(uint32_t, void*, size_t) { return false; }
 bool WardenEmulator::writeMemory(uint32_t, const void*, size_t) { return false; }
 std::string WardenEmulator::readString(uint32_t, size_t) { return {}; }
