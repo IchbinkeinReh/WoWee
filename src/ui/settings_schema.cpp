@@ -1341,15 +1341,19 @@ constexpr SettingDesc kSchema[] = {
      "", "lua:ShowingCloak|ShowCloak"},
     {"showhelm", "Show your helm", SettingKind::Bool, 0, 0, 0, "Gameplay", "",
      "The same for the helm.", "", 1, "", "lua:ShowingHelm|ShowHelm"},
-    // On the Gameplay page: the Interface page's two columns are full.
-    {"checkforupdates", "Check for new versions", SettingKind::Bool, 0, 0, 0, "Gameplay", "Updates",
+    // On the Gameplay page: the Interface page's two columns are full. One
+    // heading over this and the stream cache's two rows: a heading of their
+    // own put the last row a pixel past the foot of the second column
+    // (test_settings_panel_layout), and the first column has room for one
+    // checkbox only.
+    {"checkforupdates", "Check for new versions", SettingKind::Bool, 0, 0, 0, "Gameplay", "Updates and data",
      "Ask GitHub once at startup whether a newer WoWee has been\n"
      "released, and say so on the login screen. Nothing is downloaded\n"
      "or installed, and nothing about you is sent.", "", 1},
     // The streaming data mode's local copy (pipeline/data_stream). Read at
     // start, before the archives open: a chunk cannot be taken from under a
     // mapped archive, so both act at the next start.
-    {"streamcachelimit", "Stream cache limit", SettingKind::Enum, 0, 4, 1, "Gameplay", "Streaming",
+    {"streamcachelimit", "Stream cache limit", SettingKind::Enum, 0, 4, 1, "Gameplay", "",
      "When the game data is streamed from a server: the most the local\n"
      "copy may hold. Checked at each start: what was read longest ago\n"
      "goes first, and is fetched again when it is needed.",
