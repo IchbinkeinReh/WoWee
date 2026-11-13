@@ -1,5 +1,33 @@
 # Changelog
 
+## [v3.1.53] - 2026-10-24
+
+### Fixed
+- **TBC logins on CMaNGOS realms stopped at the character list.** CMaNGOS holds the character list until Warden reads the client's system information, and the 2.4.3 Warden module, `g_theGxDevicePtr`, `CWorld::enables` and last-input addresses were left unset. They now point at the emulated runtime data, and the 3.3.5a Warden module address is set for CMaNGOS WotLK. Addresses come from CMaNGOS's scripted scans; live realm testing remains required
+- **Open-lock spells follow the 3.3.5a client's skill rule.** A known spell is cast only when its minimum points reach the lock's Skill, or 5 x the object's level when the lock has none. Classic and TBC keep the previous behavior
+- **Gameobject use range is measured against the display box on WotLK.** The box is scaled, rotated and extended by 5 yards, so large objects can be used along their full length and small ones require a closer approach. Fishing nodes reach 100 yards and spell focuses use a sphere. Classic and TBC keep the 10-yard sphere
+
+### Documentation
+- The README and quickstart advise limiting build jobs, for example `-j2`, on machines that run out of memory
+
+## [v3.1.52] - 2026-10-22
+
+### Added
+- **Classic and TBC Warden memory checks are graded offline.** Build 5875 fixtures cover 74 CMaNGOS and 80 vmangos checks; build 8606 fixtures cover 61 CMaNGOS TBC checks. All pass against the supplied 1.12.1 and 2.4.3 executables with three request keys. Set `WOWEE_TEST_CLASSIC_WOW_EXE` and `WOWEE_TEST_TBC_WOW_EXE` to run them. Scripted scans and live realm compatibility remain unverified
+- **Android uses a foreground service to keep the session alive in the background.** Device testing remains required
+
+### Changed
+- **Android starts FrameXML at the largest supported UI Scale.** Saved player settings still take precedence
+- **Warden code scans reuse HMAC setup across the search**, reducing repeated work
+
+### Fixed
+- **Classic Warden memory reads initialize the nameplate and follow distance limits.** Build 5875 checks now receive runtime defaults instead of zero-filled file values
+- **The shadows toggle is available again.** Disabling it stops shadow sampling while retaining the shadow pass; live GPU validation remains required
+- **AzerothCore code-scan grading checks the executable build**, so a Classic or TBC executable cannot be mistaken for the required build 12340
+
+### Documentation
+- Updated the README's interface and Warden descriptions and removed the Orgrimmar screenshot
+
 ## [v3.1.51] - 2026-10-22
 
 ### Added
