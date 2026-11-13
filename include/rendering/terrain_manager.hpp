@@ -317,6 +317,9 @@ public:
     /// interpolated over the triangle of its 3 x 3 grid the point is in;
     /// none where no tile is loaded or it has no MFBO.
     [[nodiscard]] std::optional<float> flightFloorAt(float wireX, float wireY) const;
+    /// The ceiling of flight there (0x007ad700 with its first plane): the
+    /// upper MFBO plane, as flightFloorAt reads the lower.
+    [[nodiscard]] std::optional<float> flightCeilingAt(float wireX, float wireY) const;
 
     /// Whether a point lies in the terrain's baked shadow: the chunk's MCSH
     /// texel under it is set (0x007a06a0). False where the chunk has none.
@@ -449,6 +452,10 @@ public:
     void processPendingUnloads();
 
 private:
+    /// One MFBO plane at a wire position: the nine heights from `first`
+    /// (0 the upper plane, 9 the lower).
+    [[nodiscard]] std::optional<float> flightPlaneAt(float wireX, float wireY, size_t first) const;
+
     /**
      * Get tile coordinates from GL world position
      */

@@ -2485,6 +2485,14 @@ std::optional<float> TerrainManager::getHeightAt(float glX, float glY) const {
 }
 
 std::optional<float> TerrainManager::flightFloorAt(float wireX, float wireY) const {
+    return flightPlaneAt(wireX, wireY, 9);
+}
+
+std::optional<float> TerrainManager::flightCeilingAt(float wireX, float wireY) const {
+    return flightPlaneAt(wireX, wireY, 0);
+}
+
+std::optional<float> TerrainManager::flightPlaneAt(float wireX, float wireY, size_t first) const {
     constexpr float kTile = core::coords::TILE_SIZE;
     constexpr float kHalf = kTile * 0.5f;
     // The tile: its file Y from the wire X, its file X from the wire Y.
@@ -2500,7 +2508,7 @@ std::optional<float> TerrainManager::flightFloorAt(float wireX, float wireY) con
     const float dy = wireY - (core::coords::ZEROPOINT - static_cast<float>(fileX) * kTile);
     const auto vertex = [&](int k) {
         return glm::vec3(-kHalf * static_cast<float>(k / 3), -kHalf * static_cast<float>(k % 3),
-                         static_cast<float>(planes[static_cast<size_t>(9 + k)]));
+                         static_cast<float>(planes[first + static_cast<size_t>(k)]));
     };
     // The eight triangles fanned about the centre (the table at 0x00aedf58).
     static constexpr int kTris[8][3] = {{3, 0, 4}, {0, 1, 4}, {1, 2, 4}, {2, 5, 4},

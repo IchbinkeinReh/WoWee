@@ -6084,6 +6084,9 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
         updateQuestMarkers();
         updateWorldFloorSound();
     });
+    runInGameStage("updateFlightCeiling", [&] {
+        updateFlightCeiling();
+    });
     runInGameStage("updateLootSparkles", [&] {
         updateLootSparkles();
     });
@@ -8122,6 +8125,53 @@ void Application::updateWorldFloorSound() {
             ac->getUiSoundManager()->playByName("SpaceDeathUniversal");
     }
     aboveWorldFloor_ = false;
+}
+
+void Application::updateFlightCeiling() {
+    // 0x0073a890, the active player flying (CAN_FLY and FLYING): two seconds
+    // after its first flight, and every two seconds after each bump, it is
+    // held against the tile's upper MFBO plane. Where its top - its position
+    // plus its collision height - is within two yards of the ceiling, it
+    // swims backwards (45, through 0x007176f0's fallbacks) and takes a wound
+    // that is not critical (0x00736640(0)) - not as a passenger whose seat
+    // owns its animation (0x004f6210, 0x007571c0; here: any vehicle) - and
+    // its sound row's exertion plays.
+    if (!gameHandler || !renderer || gameHandler->getState() != game::WorldState::IN_WORLD) return;
+    const auto& mi = gameHandler->getMovementInfo();
+    constexpr uint32_t kFlyingFlags = static_cast<uint32_t>(game::MovementFlags::CAN_FLY) |
+                                      static_cast<uint32_t>(game::MovementFlags::FLYING);
+    if ((mi.flags & kFlyingFlags) != kFlyingFlags) return;
+    const auto nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                 std::chrono::steady_clock::now().time_since_epoch())
+                                                 .count());
+    constexpr uint64_t kBumpIntervalMs = 2000;
+    if (!flightCeilingArmed_) {
+        flightCeilingArmed_ = true;
+        flightCeilingDueMs_ = nowMs + kBumpIntervalMs;
+    }
+    if (nowMs < flightCeilingDueMs_) return;
+    auto* terrain = renderer->getTerrainManager();
+    if (!terrain) return;
+    const glm::vec3 wire = core::coords::canonicalToServer(glm::vec3(mi.x, mi.y, mi.z));
+    const auto ceiling = terrain->flightCeilingAt(wire.x, wire.y);
+    if (!ceiling) return;
+    auto* cc = renderer->getCameraController();
+    const float height = cc ? cc->collisionHeight() : 0.0f;
+    if (!(*ceiling - 2.0f < wire.z + height)) return;
+    if (!gameHandler->isInVehicle()) {
+        auto* cr = renderer->getCharacterRenderer();
+        const uint32_t instance = renderer->getCharacterInstanceId();
+        if (cr && instance != 0) {
+            cr->playAnimation(instance, rendering::anim::SWIM_BACKWARDS, false);
+            if (const auto wound = cr->woundFor(instance, false)) cr->playWound(instance, *wound);
+        }
+    }
+    if (entitySpawner_) {
+        if (auto entity = gameHandler->getEntityManager().getEntity(gameHandler->getPlayerGuid());
+            entity && entity->isUnit())
+            entitySpawner_->playFlightCeilingSound(static_cast<const game::Unit&>(*entity));
+    }
+    flightCeilingDueMs_ = nowMs + kBumpIntervalMs;
 }
 
 void Application::updateQuestMarkers() {
