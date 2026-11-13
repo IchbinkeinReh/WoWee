@@ -54,6 +54,9 @@ Makefile
 # IDE files
 .vscode/
 .idea/
+/.run/
+/CMakeUserPresets.json
+/cmake-build-*/
 *.swp
 *.swo
 *~
