@@ -1,5 +1,13 @@
 # Changelog
 
+## [v3.1.50] - 2026-10-22
+
+### Changed
+- **The pet talent reset and the duel countdown are interface frames.** The reset is a popup raised from `CONFIRM_PET_UNLEARN` with `ConfirmPetUnlearn` and `CancelPetUnlearn`; the countdown counts "3, 2, 1, Fight!" in the middle of the screen
+
+### Removed
+- **The instance lockouts and equipment set windows.** Nothing could open them; the interface's raid info and gear manager are the ones in use
+
 ## [v3.1.49] - 2026-10-21
 
 ### Added
