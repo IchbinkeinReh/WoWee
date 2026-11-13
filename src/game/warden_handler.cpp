@@ -640,8 +640,13 @@ void WardenHandler::handleWardenData(network::Packet& packet) {
                     // ChromieCraft/AzerothCore tolerates the silence (no ban, no kick),
                     // but REJECTS a wrong hash and closes the connection immediately.
                     // Staying silent lets the server continue the session without Warden checks.
-                    LOG_DEBUG("Warden: HASH_REQUEST seed=", seedHex,
-                                " - no CR match, skipping response (server tolerates silence)");
+                    //
+                    // Said at warning level: if a server stops tolerating the
+                    // silence, the session ends right after this, and a log
+                    // that stops at the missing .cr file cannot say why.
+                    LOG_WARNING("Warden: HASH_REQUEST seed=", seedHex,
+                                " - no CR match, not answering; a server that requires an "
+                                "answer will disconnect after this");
                     wardenState_ = WardenState::WAIT_CHECKS;
                     break;
                 }
