@@ -81,7 +81,6 @@ namespace {
     /// larger than what is drawn - otherwise a marker is nearly impossible to
     /// hover on a map this small.
     constexpr float kBlipHoverRadius = 8.0f;
-    constexpr float kSmallBlipHoverRadius = 7.0f;
     /// The off-map direction arrows are bigger than a blip, so their target is too.
     constexpr float kArrowHoverRadius = 10.0f;
 

@@ -38,7 +38,6 @@ namespace {
     constexpr auto& kColorRed         = kRed;
     constexpr auto& kColorGreen       = kGreen;
     constexpr auto& kColorBrightGreen = kBrightGreen;
-    constexpr auto& kColorYellow      = kYellow;
 } // anonymous namespace
 
 namespace wowee {
