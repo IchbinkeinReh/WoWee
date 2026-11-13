@@ -304,23 +304,28 @@ std::optional<ms::Item> EntitySpawner::defenderItem(const game::Entity& unit, bo
     return item;
 }
 
+bool EntitySpawner::vehicleKitBusy(uint64_t guid) const {
+    // 0x007571c0 on the unit's vehicle kit (+0xf5c, with a Vehicle row -
+    // 0x004f6210): a VehicleSeat animation on its whole model (+0x58 bit
+    // 26), or Flags 0x10000 while the cast it shows animates it (+0xa38
+    // 0x400) or a kit's animation it was told to hold plays (+0xfa4) - which
+    // only a type 0 kit sets (0x0073b140 with 0x00745230's flag 0x80), and
+    // only DanceMoves plays those (0x006e18d0, SMSG_PLAY_DANCE), which this
+    // client does not.
+    if (!gameHandler_) return false;
+    const auto* vehicle = gameHandler_->vehicleRoster().vehicleOf(guid);
+    if (!vehicle) return false;
+    const auto* shown = gameHandler_->castVisuals().state(guid);
+    const bool castAnimates = shown && shown->precastAnimating;
+    return vehicleWholeModelAnimating(guid) ||
+           ((vehicle->flags & ms::kVehicleFlagCastNoWound) != 0 && castAnimates);
+}
+
 bool EntitySpawner::playsNoWound(const game::Entity& unit) const {
     // 0x00722180.
     const uint64_t guid = unit.getGuid();
     const bool self = guid == gameHandler_->getPlayerGuid();
-    // 0x007571c0 on its vehicle kit (+0xf5c, with a Vehicle row): a
-    // VehicleSeat animation on its whole model (+0x58 bit 26), or Flags
-    // 0x10000 while the cast it shows animates it (+0xa38 0x400) or a kit's
-    // animation it was told to hold plays (+0xfa4) - which only a type 0 kit
-    // sets (0x0073b140 with 0x00745230's flag 0x80), and only DanceMoves
-    // plays those (0x006e18d0, SMSG_PLAY_DANCE), which this client does not.
-    bool vehicleBusy = false;
-    if (const auto* vehicle = gameHandler_->vehicleRoster().vehicleOf(guid)) {
-        const auto* shown = gameHandler_->castVisuals().state(guid);
-        const bool castAnimates = shown && shown->precastAnimating;
-        vehicleBusy = vehicleWholeModelAnimating(guid) ||
-                      ((vehicle->flags & ms::kVehicleFlagCastNoWound) != 0 && castAnimates);
-    }
+    const bool vehicleBusy = vehicleKitBusy(guid);
     std::optional<uint32_t> typeFlags;
     if (unit.getType() == game::ObjectType::UNIT) {
         const auto& info = gameHandler_->getCreatureInfoCache();

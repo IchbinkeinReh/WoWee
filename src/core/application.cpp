@@ -8241,9 +8241,9 @@ void Application::updateFlightCeiling() {
     // held against the tile's upper MFBO plane. Where its top - its position
     // plus its collision height - is within two yards of the ceiling, it
     // swims backwards (45, through 0x007176f0's fallbacks) and takes a wound
-    // that is not critical (0x00736640(0)) - not as a passenger whose seat
-    // owns its animation (0x004f6210, 0x007571c0; here: any vehicle) - and
-    // its sound row's exertion plays.
+    // that is not critical (0x00736640(0)) - not while its own vehicle kit
+    // holds its animation (0x004f6210 -> 0x007571c0) - and its sound row's
+    // exertion plays.
     if (!gameHandler || !renderer || gameHandler->getState() != game::WorldState::IN_WORLD) return;
     const auto& mi = gameHandler->getMovementInfo();
     constexpr uint32_t kFlyingFlags = static_cast<uint32_t>(game::MovementFlags::CAN_FLY) |
@@ -8266,7 +8266,7 @@ void Application::updateFlightCeiling() {
     auto* cc = renderer->getCameraController();
     const float height = cc ? cc->collisionHeight() : 0.0f;
     if (!(*ceiling - 2.0f < wire.z + height)) return;
-    if (!gameHandler->isInVehicle()) {
+    if (!entitySpawner_ || !entitySpawner_->vehicleKitBusy(gameHandler->getPlayerGuid())) {
         auto* cr = renderer->getCharacterRenderer();
         const uint32_t instance = renderer->getCharacterInstanceId();
         if (cr && instance != 0) {
