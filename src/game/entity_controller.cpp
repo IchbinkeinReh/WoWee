@@ -2676,8 +2676,9 @@ void EntityController::onCreatePlayer(const UpdateBlock& block, std::shared_ptr<
 
     // Self-player post-unit-field handling
     if (block.guid == owner_.getPlayerGuid()) {
-        if ((unit->getUnitFlags() & UNIT_FLAG_TAXI_FLIGHT) != 0 && !owner_.onTaxiFlightRef() && owner_.taxiLandingCooldownRef() <= 0.0f) {
-            owner_.onTaxiFlightRef() = true;
+        // Not GameHandler's legacy onTaxiFlight_: setting it here arms a
+        // reconnect recovery that has no position to recover to.
+        if ((unit->getUnitFlags() & UNIT_FLAG_TAXI_FLIGHT) != 0 && owner_.taxiLandingCooldownRef() <= 0.0f) {
             owner_.taxiStartGraceRef() = std::max(owner_.taxiStartGraceRef(), 2.0f);
             owner_.sanitizeMovementForTaxi();
             if (owner_.getMovementHandler()) owner_.getMovementHandler()->applyTaxiMountForCurrentNode();

@@ -18,7 +18,7 @@ constexpr uint32_t COPPER_PER_SILVER = 100;
 // Unit flags (UNIT_FIELD_FLAGS - index 59 in UnitFields for 3.3.5a;
 // 46 in Classic/TBC/Turtle. Bitmask values below are stable across expansions.)
 // ---------------------------------------------------------------------------
-constexpr uint32_t UNIT_FLAG_TAXI_FLIGHT = 0x00000100;
+constexpr uint32_t UNIT_FLAG_TAXI_FLIGHT = 0x00100000;
 constexpr uint32_t UNIT_FLAG_IN_COMBAT   = 0x00080000;
 /// The server's own mark for a unit the player is not meant to interact with:
 /// the triggers and bunnies that scripts hang their effects on. They are
