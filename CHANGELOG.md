@@ -1,5 +1,26 @@
 # Changelog
 
+## [v3.1.43] - 2026-10-13
+
+### Fixed
+- **Terrain did not blend and the minimap was black on some NVIDIA drivers.** Textures were uploaded with host image copy in formats the driver cannot take it for, such as the terrain's alpha maps, and every one failed to create. Host image copy is now used only where the format supports it, and anything else takes the staging path. `WOWEE_VK_NO_HOST_IMAGE_COPY=1` turns it off entirely (#155)
+- **Candelabra flames drew as large squares and the candelabra itself looked washed out.** A light fixture with a flame on each candle was taken for a spell effect (#156)
+- **Fireball and other spell missiles were invisible.** Missiles now fly from the caster to the target at the spell's speed, and the impact effect plays where they land (#156)
+- **Render pass mismatches with anti-aliasing off.** The scene continuation and water reflection passes no longer differ from the scene pass they have to match
+- **GPU markers inside the scene pass.** Checkpoints and timestamps were recorded where only secondary command buffers are allowed. They are recorded outside it now. The multithreaded path no longer breaks the world down pass by pass on the GPU timeline; `WOWEE_SINGLE_THREAD_RECORD` still does
+
+### Diagnostics
+- `WOWEE_PREVIEW_MSAA=1|2|4|8` sets the character preview's sample count, for the NVIDIA device loss at character select (#154, #157)
+- A texture that fails to create logs its format, usage and the driver's error code
+
+### Build
+- CI actions moved to their current major versions, off the deprecated Node.js 20 runtime
+
+## [v3.1.42] - 2026-10-03
+
+### Fixed
+- **Shared scene attachments are synchronized before reuse.** The swapchain framebuffers share their depth, multisample and depth-resolve images, and the next frame could start writing them before the last had finished (#154)
+
 ## [v3.1.41] - 2026-09-30
 
 ### Build
