@@ -41,6 +41,82 @@ AzerothCore/ChromieCraft, TrinityCore, MaNGOS, and Turtle WoW 1.18.
 > legally obtained game data and comply with the laws in your jurisdiction.
 > WoWee is not affiliated with or endorsed by Blizzard Entertainment.
 
+## Beyond the original client
+
+WoWee aims to look and behave like the original `Wow.exe` 3.3.5a. Everything it
+adds on top is optional; most of it is off by default, so the default picture
+is the original one.
+
+**Graphics**
+
+- **Ray traced lighting**: sun and moon shadows,
+  ambient occlusion and bounced light (global illumination through light
+  probes), traced against the whole world. Torches, lamps, fires, spell
+  effects and glowing surfaces become real point lights with their own
+  shadows, and sunlight falls through doors and windows into rooms. It uses
+  the GPU's ray tracing hardware where present and a compute fallback
+  elsewhere.
+- **Ray traced water**: waves, reflections of the world and sky, and the bed
+  seen through the water, darker and bluer with depth.
+- **Interactive water**: bow waves and spreading wakes behind swimmers,
+  waders and boats, waves from a swimmer's strokes, and rain rings on the
+  surface.
+- **Eye adaptation**: the picture brightens slowly in dark places and settles
+  again in daylight.
+- **Volumetric light shafts and mist**: sunbeams through trees and buildings,
+  torches and lava glowing in the haze. Screen-space sun shafts and a lens
+  flare are available too.
+- **Normal mapping** on buildings, plus **grass** that bends in the wind and
+  parts as you walk through it *(experimental)*.
+- **Upscaling and anti-aliasing**: AMD FSR 1 and FSR 3 (temporal), optional
+  FSR 3 frame generation, FXAA, MSAA up to 8x and 16x anisotropic filtering.
+- **Beyond the original's limits**: longer view distance, denser ground
+  clutter, sharp stars, a modern Vulkan 1.3 renderer at any resolution, and
+  optional GPU texture compression to save memory.
+- **Upgraded assets**: models and textures can be taken from a later WoW
+  client you own, such as Cataclysm's re-made trees
+  ([upgraded assets](docs/upgraded-assets.md)).
+
+**Virtual reality**
+
+- **`wowee_vr`**: the whole client in a headset through OpenXR (Meta Quest
+  Link, SteamVR). The world is rendered in stereo, the interface appears as a
+  panel or a large screen, and the controllers aim with a pointer. It is built
+  by default on Windows x64.
+
+**Game data**
+
+- **Reads the original MPQs directly**: point WoWee at a 3.3.5a install and
+  it reads `Data\*.MPQ` in place, in the original client's patch order. There
+  is no extraction step.
+- **Drop-in mode**: copy `wowee.exe` into an existing WoW 3.3.5a folder and
+  start it. Everything WoWee writes goes into its own `WoWee\` folder; the
+  original files, `WTF\` and `Interface\` stay untouched.
+- **Streaming game data**: instead of a local install, the client can read the
+  MPQs from a server ([tools/data_stream_server](tools/data_stream_server)).
+  It only downloads the 256 KiB chunks the game actually reads, checks each
+  one by SHA-256, and keeps them in a local cache, so a second start downloads
+  almost nothing. Access needs a key. Progress is shown on the loading
+  screens, and the cache can be limited in size or cleared from the settings.
+- **Several expansions in one client**: Vanilla 1.12, TBC 2.4.3 and WotLK
+  3.3.5a, each with its own data set, chosen per server.
+
+**Platforms and input**
+
+- **Android (arm64) and iOS** builds with touch controls. A start screen asks
+  for a data folder, a zip to unpack or a streaming server. Linux, macOS and
+  Windows run on both x86-64 and ARM64.
+- **Game controllers**, with Xbox, PlayStation, Nintendo and Steam Deck button
+  names.
+
+**Interface extras**
+
+- Optional animated portraits, a damage meter, a cooldown tracker, a rare-mob
+  tracker, a colourblind mode, an equipment manager and more, all under
+  Interface → WoWee. Blizzard's own FrameXML interface and your addons still
+  load as usual.
+- A built-in update check against this repository's releases.
+
 ## What works
 
 - Vulkan 1.3 terrain, WMO, M2, water/lava, particles, lighting, shadows,
@@ -52,8 +128,9 @@ AzerothCore/ChromieCraft, TrinityCore, MaNGOS, and Turtle WoW 1.18.
   house, gossip, chat, parties, pets, maps, and taxi travel
 - Blizzard's own FrameXML interface, loaded from your game data and drawn by
   the client; addons in the game's `Interface\AddOns` folder load too
-- An asset builder, inside the client and as the standalone `wowee_assets`
-  window, that extracts your own game installation
+- Game data read straight from the original MPQs, from a local install, in
+  drop-in mode or streamed from a server; an extraction made by the asset
+  builder (inside the client or the standalone `wowee_assets` window) works too
 - Keyboard and mouse, or a game controller with Xbox, PlayStation, Nintendo
   and Steam Deck button names
 - Zone and city music, tavern and weather ambience, footsteps, mounts, combat,
@@ -183,13 +260,27 @@ FidelityFX SDKs into `extern/`. Those are only used when `WOWEE_ENABLE_AMD_FSR2`
 or `WOWEE_ENABLE_AMD_FSR3_FRAMEGEN` is turned on, and both are off by default;
 the client's own FSR 1 and FSR 3 upscaling need neither.
 
-### 3. Extract game data
+### 3. Game data
 
-WoWee does not read MPQs at runtime. It needs a loose-file tree with a
-generated `manifest.json`, extracted from a legally obtained client.
+WoWee reads a legally obtained 3.3.5a client's data in one of three ways:
 
-The asset builder does this. When the client starts and finds nothing
-extracted, it opens the builder instead of the login screen; later it is under
+- **The original MPQs, in place (recommended).** Set `WOW_DATA_PATH` to the WoW
+  folder, or to its `Data` folder, or choose that folder in the client. You can
+  also copy `wowee.exe` into the WoW folder and start it there (drop-in mode).
+  In drop-in mode WoWee keeps everything it writes in a `WoWee\` subfolder.
+  `WOWEE_DROPIN=0` turns drop-in mode off and `=1` forces it.
+- **Streamed from a server.** Run
+  [tools/data_stream_server](tools/data_stream_server) next to a WoW folder. In
+  the client, enter the server's URL and access key: on the Android/iOS data
+  screen, or through `WOWEE_STREAM_URL` and `WOWEE_STREAM_KEY_FILE`. Only the
+  chunks the game reads are downloaded, and they are cached locally.
+- **An extraction**, described below. This is a loose-file tree with a
+  generated `manifest.json`. The MPQ reader covers 3.3.5a installs, so an
+  extraction is needed for Vanilla, TBC and Turtle data,
+  and for [upgraded assets](docs/upgraded-assets.md).
+
+The asset builder makes an extraction. When the client starts and finds nothing
+extracted and no MPQs, it opens the builder instead of the login screen; later it is under
 **more options** → **add or rebuild assets...** on the login screen, and it is
 also the standalone `wowee_assets` window. Point it at your World of Warcraft
 folder and it extracts into the per-user data directory the client reads.
