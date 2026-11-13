@@ -659,6 +659,8 @@ TEST_CASE("A localized client's strings are read where the enUS ones would be", 
         CHECK(dbc.getString(0, 1) == "Geringes Heilen");
         CHECK(dbc.getUInt32(0, 10) == 7);
     }
+}
+
 TEST_CASE("Spell.dbc's created item comes from CREATE_ITEM and CREATE_ITEM_2", "[dbc][spell]") {
     // WotLK's columns: Effect at 71, EffectItemType at 107. Smelt Copper is
     // effect 24 and Bold Bloodstone, like the other 80 WotLK recipes with a
