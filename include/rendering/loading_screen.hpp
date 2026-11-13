@@ -50,7 +50,13 @@ public:
         crossingLeftFrom_ = leftFrom;
     }
 
-    void setProgress(float progress) { loadProgress = progress; }
+    /// The bar only fills: a value under what it shows is ignored, and it is
+    /// held to 0 - 1 (0x0040af40, 0x004079d0). A new screen starts empty
+    /// (initialize, as 0x0040ab70 does).
+    void setProgress(float progress) {
+        if (!(progress >= loadProgress)) return;
+        loadProgress = progress > 1.0f ? 1.0f : progress;
+    }
     /// What is being loaded, for the log: the client's screen says nothing.
     void setStatus(const std::string& status);
 
