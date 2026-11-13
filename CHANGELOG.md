@@ -1,5 +1,11 @@
 # Changelog
 
+## [v3.1.47] - 2026-10-16
+
+### Fixed
+- **Chinese, Japanese and Korean names drew as `???`.** A CJK font is merged under every interface font: the localized client's own if the data has one, otherwise the system's, with a Korean face added on macOS and Windows (#157)
+- **The client failed to build against OpenSSL 4.** Hostname verification uses the `X509_VERIFY_PARAM` calls rather than the deprecated `SSL_set1_host` (#195)
+
 ## [v3.1.46] - 2026-10-15
 
 ### Added
