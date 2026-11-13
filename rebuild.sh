@@ -5,6 +5,19 @@ set -e  # Exit on error
 
 cd "$(dirname "$0")"
 
+# Commit the superproject records for a submodule path; empty outside a git checkout.
+recorded_commit() {
+    git rev-parse -q --verify "HEAD:$1" 2>/dev/null || true
+}
+
+# Shallow-fetch one ref (branch, tag or commit SHA) of a repository into a directory.
+fetch_at_ref() {
+    local repo="$1" ref="$2" dir="$3"
+    git init -q "$dir" &&
+        git -C "$dir" fetch -q --depth 1 "$repo" "$ref" &&
+        git -C "$dir" checkout -q --detach FETCH_HEAD
+}
+
 ensure_fsr2_sdk() {
     local sdk_dir="extern/FidelityFX-FSR2"
     local sdk_header="$sdk_dir/src/ffx-fsr2-api/ffx_fsr2.h"
@@ -15,18 +28,20 @@ ensure_fsr2_sdk() {
         echo "Warning: git not found; cannot auto-fetch AMD FSR2 SDK."
         return
     fi
-    echo "Fetching AMD FidelityFX FSR2 SDK into $sdk_dir ..."
+    local sdk_ref
+    sdk_ref="$(recorded_commit "$sdk_dir")"
+    sdk_ref="${sdk_ref:-master}"
+    echo "Fetching AMD FidelityFX FSR2 SDK ($sdk_ref) into $sdk_dir ..."
     mkdir -p extern
-    git clone --depth 1 https://github.com/GPUOpen-Effects/FidelityFX-FSR2.git "$sdk_dir" || {
+    fetch_at_ref https://github.com/GPUOpen-Effects/FidelityFX-FSR2.git "$sdk_ref" "$sdk_dir" || {
         echo "Warning: failed to clone AMD FSR2 SDK. Build will use internal fallback path."
     }
 }
 
 ensure_fidelityfx_sdk() {
     local sdk_dir="extern/FidelityFX-SDK"
-    local sdk_header="$sdk_dir/sdk/include/FidelityFX/host/ffx_frameinterpolation.h"
+    local sdk_header="$sdk_dir/Kits/FidelityFX/framegeneration/fsr3/include/ffx_frameinterpolation.h"
     local sdk_repo="${WOWEE_FFX_SDK_REPO:-https://github.com/Kelsidavis/FidelityFX-SDK.git}"
-    local sdk_ref="${WOWEE_FFX_SDK_REF:-main}"
     if [ -f "$sdk_header" ]; then
         return
     fi
@@ -34,9 +49,11 @@ ensure_fidelityfx_sdk() {
         echo "Warning: git not found; cannot auto-fetch AMD FidelityFX SDK."
         return
     fi
+    local sdk_ref="${WOWEE_FFX_SDK_REF:-$(recorded_commit "$sdk_dir")}"
+    sdk_ref="${sdk_ref:-main}"
     echo "Fetching AMD FidelityFX SDK ($sdk_ref from $sdk_repo) into $sdk_dir ..."
     mkdir -p extern
-    git clone --depth 1 --branch "$sdk_ref" "$sdk_repo" "$sdk_dir" || {
+    fetch_at_ref "$sdk_repo" "$sdk_ref" "$sdk_dir" || {
         echo "Warning: failed to clone AMD FidelityFX SDK. FSR3 framegen extern will be unavailable."
     }
 }

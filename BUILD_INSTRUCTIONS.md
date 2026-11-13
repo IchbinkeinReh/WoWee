@@ -372,10 +372,12 @@ Pass these to the configure step as `-D<option>=ON|OFF`.
   in-tree and needs no external SDK.
 - The AMD FidelityFX backends are off by default and are compiled only with
   the `WOWEE_ENABLE_AMD_*` options above. `build.sh` / `rebuild.sh` /
-  `build.ps1` / `rebuild.ps1` still fetch both SDKs when they are missing:
+  `build.ps1` / `rebuild.ps1` still fetch both SDKs when they are missing, at
+  the commits recorded for the `extern/` submodules:
   - `https://github.com/GPUOpen-Effects/FidelityFX-FSR2.git` into `extern/FidelityFX-FSR2`
   - `https://github.com/Kelsidavis/FidelityFX-SDK.git` into `extern/FidelityFX-SDK`
-    (`WOWEE_FFX_SDK_REPO` and `WOWEE_FFX_SDK_REF` choose another repository or ref)
+    (`WOWEE_FFX_SDK_REPO` and `WOWEE_FFX_SDK_REF` choose another repository or
+    branch, tag or commit)
 - With `WOWEE_ENABLE_AMD_FSR2=ON`, if the SDK checkout is missing its generated
   Vulkan permutation headers, CMake bootstraps them from:
   - `third_party/fsr2_vk_permutations`

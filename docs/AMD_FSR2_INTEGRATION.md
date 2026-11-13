@@ -15,14 +15,14 @@ AMD SDK checkout path:
 
 FidelityFX SDK checkout path (framegen extern):
 
-`extern/FidelityFX-SDK` (default branch `main` from WoWee's fork in build scripts)
+`extern/FidelityFX-SDK` (WoWee's fork)
 
-`build.sh` / `rebuild.sh` (and the PowerShell equivalents) clone both when missing, but the default configure does not use them until one of the build flags below is turned on.
+`build.sh` / `rebuild.sh` (and the PowerShell equivalents) fetch both when missing, at the commits the repository records for those submodules, but the default configure does not use them until one of the build flags below is turned on.
 
 Override knobs for local build scripts:
 
 - `WOWEE_FFX_SDK_REPO` (default: `https://github.com/Kelsidavis/FidelityFX-SDK.git`)
-- `WOWEE_FFX_SDK_REF` (default: `main`)
+- `WOWEE_FFX_SDK_REF` (default: the recorded `extern/FidelityFX-SDK` commit; branch, tag or SHA)
 
 Detection expects:
 

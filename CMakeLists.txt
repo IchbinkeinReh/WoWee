@@ -45,8 +45,9 @@ option(WOWEE_ENABLE_TRACY "Enable Tracy profiler instrumentation" OFF)
 # SDK path is gone.
 #
 # To build it back, set any of these ON and place the SDKs under extern/:
-#   extern/FidelityFX-FSR2   github.com/GPUOpen-Effects/FidelityFX-FSR2 (master)
-#   extern/FidelityFX-SDK    github.com/Kelsidavis/FidelityFX-SDK (main)
+#   extern/FidelityFX-FSR2   github.com/GPUOpen-Effects/FidelityFX-FSR2
+#   extern/FidelityFX-SDK    github.com/Kelsidavis/FidelityFX-SDK
+# build.sh / build.ps1 fetch both at their recorded submodule commits.
 # CI used to clone both on every run and no longer does.
 option(WOWEE_ENABLE_AMD_FSR2 "Enable AMD FidelityFX FSR2 backend when SDK is present" OFF)
 option(WOWEE_ENABLE_AMD_FSR3_FRAMEGEN "Enable AMD FidelityFX SDK FSR3 frame generation interface probe when SDK is present" OFF)
