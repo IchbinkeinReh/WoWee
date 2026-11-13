@@ -611,9 +611,10 @@ before making broad changes.
   glitches.
 - World-map zone hover has edge cases near continent boundaries.
 - Pet-bar protocol behavior may require adjustment for non-AzerothCore forks.
-- On Android the FrameXML interface is drawn at native size and reads small. The
-  client's own panels scale with display density, and **Window scale** under
-  Interface → WoWee → Interface reaches 3x.
+- On a phone the FrameXML interface starts at the largest UI Scale its frames
+  still fit at, and is still small on a small screen. The client's own panels
+  scale with display density, and **Window scale** under Interface → WoWee →
+  Interface reaches 3x.
 
 When reporting a bug, include the relevant client log lines, expansion, server
 core, and reproduction steps.
