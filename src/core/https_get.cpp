@@ -5,6 +5,7 @@
 #include <openssl/x509v3.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdlib>
 #include <memory>
@@ -135,7 +136,7 @@ HttpsResponse httpsGet(const std::string& host, const std::string& path,
     }
     const std::unique_ptr<SSL_CTX, void (*)(SSL_CTX*)> ctxGuard(ctx, SSL_CTX_free);
 
-    // Verify the chain, and verify the name on it. SSL_set1_host is what
+    // Verify the chain, and verify the name on it. The peer identity check
     // makes the second happen - without it a valid certificate for any host
     // at all would satisfy the first, which is most of the point of asking.
     SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
@@ -156,9 +157,22 @@ HttpsResponse httpsGet(const std::string& host, const std::string& path,
     const std::unique_ptr<SSL, void (*)(SSL*)> sslGuard(ssl, SSL_free);
 
     SSL_set_tlsext_host_name(ssl, host.c_str());   // SNI
-    // and check the name matches (what SSL_set1_host did; it is deprecated
-    // since OpenSSL 4.0)
-    X509_VERIFY_PARAM_set1_host(SSL_get0_param(ssl), host.c_str(), 0);
+    // Set verification parameters directly: SSL_set1_host is deprecated in
+    // OpenSSL 4. Keep IP literals matched against IP SANs, rather than DNS SANs.
+    X509_VERIFY_PARAM* verify = SSL_get0_param(ssl);
+    std::array<unsigned char, 16> address{};
+    int identitySet = 0;
+    if (inet_pton(AF_INET, host.c_str(), address.data()) == 1) {
+        identitySet = X509_VERIFY_PARAM_set1_ip(verify, address.data(), 4);
+    } else if (inet_pton(AF_INET6, host.c_str(), address.data()) == 1) {
+        identitySet = X509_VERIFY_PARAM_set1_ip(verify, address.data(), 16);
+    } else if (!host.empty()) {
+        identitySet = X509_VERIFY_PARAM_set1_host(verify, host.c_str(), host.size());
+    }
+    if (identitySet != 1) {
+        result.error = "could not configure TLS peer identity: " + sslError();
+        return result;
+    }
     SSL_set_fd(ssl, static_cast<int>(sock));
 
     if (SSL_connect(ssl) != 1) {
