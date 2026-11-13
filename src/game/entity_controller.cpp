@@ -141,6 +141,7 @@ void EntityController::clearAll() {
     transportGuids_.clear();
     serverUpdatedTransportGuids_.clear();
     entityManager.clear();
+    playerFeigningDeath_ = false;
 }
 
 // ============================================================
@@ -1145,6 +1146,16 @@ void EntityController::notePlayerPvpByte(const UpdateBlock& block, bool isCreate
     if (!isCreate && was >= 0 && was != now && (now & 0x1) != 0) owner_.triggerTutorial(0x1f);
 }
 
+// Feign Death sets UNIT_DYNFLAG_DEAD and takes it away again with health
+// untouched; TBC and later also set UNIT_FLAG2_FEIGN_DEATH beside it. Read as a
+// death, it raised the release spirit popup, and its end a resurrection.
+static bool isFeigningDeath(const Entity& entity, const Unit& unit) {
+    constexpr uint32_t UNIT_FLAG2_FEIGN_DEATH = 0x1;
+    const uint16_t flags2 = fieldIndex(UF::UNIT_FIELD_FLAGS_2);
+    return (flags2 != 0xFFFF && (entity.getField(flags2) & UNIT_FLAG2_FEIGN_DEATH) != 0) ||
+           unit.getHealth() > 0;
+}
+
 // Consolidates player-death state into one place so both the health==0 and
 // dynFlags UNIT_DYNFLAG_DEAD paths share the same corpse-caching logic.
 // Classic WoW does not send SMSG_DEATH_RELEASE_LOC, so this cached position
@@ -1422,7 +1433,11 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
                 if (oldDyn != val) pendingEvents_.emit("UNIT_DYNAMIC_FLAGS", {"player"});
                 bool wasDead = (oldDyn & UNIT_DYNFLAG_DEAD) != 0;
                 bool nowDead = (val & UNIT_DYNFLAG_DEAD) != 0;
-                if (!wasDead && nowDead) {
+                if (!wasDead && nowDead && isFeigningDeath(*entity, *unit)) {
+                    playerFeigningDeath_ = true;
+                } else if (wasDead && !nowDead && playerFeigningDeath_) {
+                    playerFeigningDeath_ = false;
+                } else if (!wasDead && nowDead) {
                     markPlayerDead("dynFlags");
                     // And tell the interface, which the health=0 path did and
                     // this one did not. The server marks a death either way -
@@ -2684,10 +2699,13 @@ void EntityController::onCreatePlayer(const UpdateBlock& block, std::shared_ptr<
             if (owner_.getMovementHandler()) owner_.getMovementHandler()->applyTaxiMountForCurrentNode();
         }
     }
-    if (block.guid == owner_.getPlayerGuid() &&
-        (unit->getDynamicFlags() & UNIT_DYNFLAG_DEAD) != 0) {
-        owner_.playerDeadRef() = true;
-        LOG_INFO("Player logged in dead (dynamic flags)");
+    if (block.guid == owner_.getPlayerGuid()) {
+        const bool deadFlag = (unit->getDynamicFlags() & UNIT_DYNFLAG_DEAD) != 0;
+        playerFeigningDeath_ = deadFlag && isFeigningDeath(*entity, *unit);
+        if (deadFlag && !playerFeigningDeath_) {
+            owner_.playerDeadRef() = true;
+            LOG_INFO("Player logged in dead (dynamic flags)");
+        }
     }
     // Detect ghost state on login via PLAYER_FLAGS
     if (block.guid == owner_.getPlayerGuid()) {

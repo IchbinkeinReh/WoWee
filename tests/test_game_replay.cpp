@@ -6,7 +6,10 @@
 #include "game/game_utils.hpp"
 #include "game/packed_time.hpp"
 
+#include <algorithm>
 #include <memory>
+#include <string>
+#include <vector>
 
 using replay::Session;
 using replay::UpdateObject;
@@ -78,4 +81,68 @@ TEST_CASE("the login time sets the game clock", "[replay]") {
     s.receive(p);
 
     CHECK(s.handler().getGameTime() == Catch::Approx(13.5f).margin(0.01f));
+}
+
+// AuraEffect::HandleFeignDeath sets UNIT_FLAG2_FEIGN_DEATH and
+// UNIT_DYNFLAG_DEAD together, and removes them together.
+TEST_CASE("Feign Death is not a death", "[replay]") {
+    Session s;
+    std::vector<std::string> events;
+    s.handler().setAddonEventCallback(
+        [&events](const std::string& name, const std::vector<std::string>&) { events.push_back(name); });
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 300}, {UF::UNIT_FIELD_MAXHEALTH, 300}});
+
+    s.receive(UpdateObject().values(Session::kPlayerGuid,
+                                    {{UF::UNIT_FIELD_FLAGS_2, 0x1}, {UF::UNIT_DYNAMIC_FLAGS, 0x20}}));
+    CHECK_FALSE(s.handler().isPlayerDead());
+
+    s.receive(UpdateObject().values(Session::kPlayerGuid,
+                                    {{UF::UNIT_FIELD_FLAGS_2, 0}, {UF::UNIT_DYNAMIC_FLAGS, 0}}));
+    CHECK_FALSE(s.handler().isPlayerDead());
+    CHECK(std::count(events.begin(), events.end(), "PLAYER_DEAD") == 0);
+    CHECK(std::count(events.begin(), events.end(), "PLAYER_ALIVE") == 0);
+}
+
+TEST_CASE("the dead flag at zero health is still a death", "[replay]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 300}, {UF::UNIT_FIELD_MAXHEALTH, 300}});
+    s.receive(UpdateObject().values(Session::kPlayerGuid,
+                                    {{UF::UNIT_FIELD_HEALTH, 0}, {UF::UNIT_DYNAMIC_FLAGS, 0x20}}));
+    CHECK(s.handler().isPlayerDead());
+}
+
+// vmangos's Unit::SetFeignDeath sets the dead flag alone.
+TEST_CASE("the dead flag at full health is Feign Death without its flags2 bit", "[replay]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 300}, {UF::UNIT_FIELD_MAXHEALTH, 300}});
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_DYNAMIC_FLAGS, 0x20}}));
+    CHECK_FALSE(s.handler().isPlayerDead());
+}
+
+TEST_CASE("killed while feigning stays dead when the feign ends", "[replay]") {
+    Session s;
+    std::vector<std::string> events;
+    s.handler().setAddonEventCallback(
+        [&events](const std::string& name, const std::vector<std::string>&) { events.push_back(name); });
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 300}, {UF::UNIT_FIELD_MAXHEALTH, 300}});
+    s.receive(UpdateObject().values(Session::kPlayerGuid,
+                                    {{UF::UNIT_FIELD_FLAGS_2, 0x1}, {UF::UNIT_DYNAMIC_FLAGS, 0x20}}));
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_FIELD_HEALTH, 0}}));
+    s.receive(UpdateObject().values(Session::kPlayerGuid,
+                                    {{UF::UNIT_FIELD_FLAGS_2, 0}, {UF::UNIT_DYNAMIC_FLAGS, 0}}));
+    CHECK(s.handler().isPlayerDead());
+    CHECK(std::count(events.begin(), events.end(), "PLAYER_ALIVE") == 0);
+}
+
+// A player created while feigning, as after a relog or a teleport mid-feign.
+TEST_CASE("a player created feigning is alive, and stays so when it ends", "[replay]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 300},
+                   {UF::UNIT_FIELD_MAXHEALTH, 300},
+                   {UF::UNIT_FIELD_FLAGS_2, 0x1},
+                   {UF::UNIT_DYNAMIC_FLAGS, 0x20}});
+    CHECK_FALSE(s.handler().isPlayerDead());
+    s.receive(UpdateObject().values(Session::kPlayerGuid,
+                                    {{UF::UNIT_FIELD_FLAGS_2, 0}, {UF::UNIT_DYNAMIC_FLAGS, 0}}));
+    CHECK_FALSE(s.handler().isPlayerDead());
 }

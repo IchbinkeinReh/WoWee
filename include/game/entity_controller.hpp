@@ -389,6 +389,9 @@ private:
     };
     PendingEvents pendingEvents_;
     void flushPendingEvents();
+
+    // The player's UNIT_DYNFLAG_DEAD is Feign Death, not a death.
+    bool playerFeigningDeath_ = false;
 };
 
 } // namespace game
