@@ -1658,7 +1658,8 @@ void registerSpellLuaAPI(lua_State* L) {
                 {"IsCurrentSpell", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             uint32_t spellId = static_cast<uint32_t>(luaL_checknumber(L, 1));
-            luaPushOneOrNil(L, gh && gh->getCurrentCastSpellId() == spellId ? 1 : 0);
+            // 0x00541500 -> 0x00806030 (GameHandler::isCurrentSpell).
+            luaPushOneOrNil(L, gh && gh->isCurrentSpell(spellId) ? 1 : 0);
             return 1;
         }},
                 // IsAutoRepeatSpell(spell [, book]) (0x005415d0): 1 when the

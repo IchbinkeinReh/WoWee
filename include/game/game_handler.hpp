@@ -3391,6 +3391,12 @@ public:
     void clearShapeshiftFormPending() { shapeshiftFormPending_ = false; }
     /// 0x00802cb0 for the player: whether a form's spell is in effect.
     bool formSpellInEffect(uint32_t spellId) const;
+    /// Whether a spell is current (0x00806030): IsCurrentSpell and the spell
+    /// leg of IsCurrentAction (0x005aa240).
+    bool isCurrentSpell(uint32_t spellId) const;
+    /// Whether an item is being used (0x00805fc0): a spell in progress cast
+    /// from that item.
+    bool isCurrentItem(uint32_t itemId) const;
     /// Which extra action bar the current form or stance uses, or 0 for none.
     ///
     /// SpellShapeshiftForm.dbc carries it per form - cat 1, bear 3, moonkin 4,
