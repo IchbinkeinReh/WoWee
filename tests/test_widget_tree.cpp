@@ -3274,3 +3274,55 @@ TEST_CASE("Settings windows are fixed in place", "[widget]") {
         CHECK_FALSE(isFixedSettingsWindow(name));
     }
 }
+
+TEST_CASE("With no scale chosen, a phone starts at the largest the frames fit at",
+          "[widget][scale]") {
+    // A whole 2400x1080 screen: the height decides, 768 / 600.
+    REQUIRE(WidgetTree::fitUserScale(2400.0f, 1080.0f, 0, 0, 0, 0) ==
+            Catch::Approx(WidgetTree::kMaxUserScale));
+    // A safe area taking 80 pixels off the bottom takes that share off the scale,
+    // so UIParent still holds 600 units.
+    const float s = WidgetTree::fitUserScale(2400.0f, 1080.0f, 140, 140, 0, 80);
+    REQUIRE(s == Catch::Approx(WidgetTree::kMaxUserScale * 1000.0f / 1080.0f));
+    REQUIRE((1080.0f - 80.0f) / (1080.0f / WidgetTree::kInterfaceHeight * s) ==
+            Catch::Approx(WidgetTree::kMinLayoutHeight));
+    // A 4:3 tablet less wide insets: the width decides, 800 units across.
+    const float t = WidgetTree::fitUserScale(1024.0f, 768.0f, 60, 60, 0, 0);
+    REQUIRE((1024.0f - 120.0f) / (768.0f / WidgetTree::kInterfaceHeight * t) ==
+            Catch::Approx(WidgetTree::kMinLayoutWidth));
+
+    WidgetTree tree;
+    tree.setFitScaleByDefault(true);
+    tree.setSafeArea(140, 140, 0, 80);
+    tree.layout(2400.0f, 1080.0f);
+    REQUIRE(tree.userScale() == Catch::Approx(s));
+    const Widget* ui = tree.get(tree.uiParentId());
+    REQUIRE(ui != nullptr);
+    REQUIRE(ui->rectH == Catch::Approx(WidgetTree::kMinLayoutHeight));
+    // The safe area changing is followed at the next layout.
+    tree.setSafeArea(0, 0, 0, 0);
+    tree.layout(2400.0f, 1080.0f);
+    REQUIRE(tree.userScale() == Catch::Approx(WidgetTree::kMaxUserScale));
+
+    // A scale the player chose wins, and stays through a layout.
+    tree.setUserScale(1.0f);
+    tree.layout(2400.0f, 1080.0f);
+    REQUIRE(tree.userScale() == Catch::Approx(1.0f));
+    // "Use UI Scale" off again: back to the largest that fits.
+    tree.useDefaultUserScale();
+    tree.layout(2400.0f, 1080.0f);
+    REQUIRE(tree.userScale() == Catch::Approx(WidgetTree::kMaxUserScale));
+}
+
+TEST_CASE("On a desktop the default scale is still 1", "[widget][scale]") {
+    WidgetTree tree;
+    tree.setFitScaleByDefault(false);
+    tree.layout(kScreenW, kScreenH);
+    REQUIRE(tree.userScale() == Catch::Approx(1.0f));
+    tree.setUserScale(1.2f);
+    tree.layout(kScreenW, kScreenH);
+    REQUIRE(tree.userScale() == Catch::Approx(1.2f));
+    tree.useDefaultUserScale();
+    tree.layout(kScreenW, kScreenH);
+    REQUIRE(tree.userScale() == Catch::Approx(1.0f));
+}
