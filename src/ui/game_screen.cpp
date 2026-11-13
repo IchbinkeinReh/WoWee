@@ -752,11 +752,6 @@ void GameScreen::render(game::GameHandler& gameHandler) {
         addons::storedCVarValue("enableCombatText", "1") != "0") {
         combatUI_.renderCombatText(gameHandler);
     }
-    // No target frame of ours to park under any more, so the meter takes its
-    // own position. FrameXML's TargetFrame has one, and could be measured the
-    // way the minimap measures MinimapCluster, but nothing reads it yet.
-    combatUI_.renderDPSMeter(gameHandler, settingsPanel_, -1.0f);
-    toastManager_.renderEarlyToasts(ImGui::GetIO().DeltaTime, gameHandler);
     dialogManager_.renderDialogs(gameHandler);
     // FriendsFrame is what "social" suppresses, and its tabs are the friends
     // list, the who list and the guild roster. Only the friends list was gated

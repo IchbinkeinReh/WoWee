@@ -15,9 +15,9 @@ namespace ui {
  * Toast / notification overlay manager
  *
  * Owns all toast state, callbacks, and rendering:
- *   level-up ding, achievement, area discovery, whisper, quest progress,
- *   player level-up, PvP honor, item loot, reputation, quest complete,
- *   zone entry, area trigger, resurrect flash, and zone text.
+ *   level-up ding, achievement sound, resurrect flash and zone text. The
+ *   client has no reputation, honor, loot, whisper, quest or discovery
+ *   toasts; those events are chat and info lines.
  */
 class ToastManager {
 public:
@@ -26,11 +26,8 @@ public:
     /// Register toast-related callbacks on GameHandler (idempotent - safe every frame)
     void setupCallbacks(game::GameHandler& gameHandler);
 
-    /// Render "early" toasts (rep, quest-complete, zone, area-trigger) - called before action bars
-    void renderEarlyToasts(float deltaTime, game::GameHandler& gameHandler);
-
-    /// Render "late" toasts (ding, achievement, discovery, whisper, quest progress,
-    /// player level-up, PvP honor, item loot, resurrect flash, zone text) - called after escape menu
+    /// Render the ding, the resurrection flash and the zone text - called after
+    /// the escape menu
     void renderLateToasts(game::GameHandler& gameHandler);
 
     /// Fire level-up ding animation + sound
@@ -64,114 +61,6 @@ private:
 
     // ---- Achievement toast ----
     static constexpr float ACHIEVEMENT_TOAST_DURATION = 5.0f;
-
-    // ---- Area discovery toast ----
-    static constexpr float DISCOVERY_TOAST_DURATION = 4.0f;
-    float discoveryToastTimer_ = 0.0f;
-    std::string discoveryToastName_;
-    uint32_t discoveryToastXP_ = 0;
-    bool areaDiscoveryCallbackSet_ = false;
-    void renderDiscoveryToast();
-
-    // ---- Whisper toast ----
-    struct WhisperToastEntry {
-        std::string sender;
-        std::string preview;
-        float age = 0.0f;
-    };
-    static constexpr float WHISPER_TOAST_DURATION = 5.0f;
-    std::vector<WhisperToastEntry> whisperToasts_;
-    void renderWhisperToasts();
-
-    // ---- Quest objective progress toast ----
-    struct QuestProgressToastEntry {
-        std::string questTitle;
-        std::string objectiveName;
-        uint32_t current = 0;
-        uint32_t required = 0;
-        float age = 0.0f;
-    };
-    static constexpr float QUEST_TOAST_DURATION = 4.0f;
-    std::vector<QuestProgressToastEntry> questToasts_;
-    bool questProgressCallbackSet_ = false;
-    void renderQuestProgressToasts();
-
-    // ---- Nearby player level-up toast ----
-    struct PlayerLevelUpToastEntry {
-        uint64_t guid = 0;
-        std::string playerName;
-        uint32_t newLevel = 0;
-        float age = 0.0f;
-    };
-    static constexpr float PLAYER_LEVELUP_TOAST_DURATION = 4.0f;
-    std::vector<PlayerLevelUpToastEntry> playerLevelUpToasts_;
-    bool otherPlayerLevelUpCallbackSet_ = false;
-    void renderPlayerLevelUpToasts(game::GameHandler& gameHandler);
-
-    // ---- PvP honor toast ----
-    struct PvpHonorToastEntry {
-        uint32_t honor = 0;
-        uint32_t victimRank = 0;
-        float age = 0.0f;
-    };
-    static constexpr float PVP_HONOR_TOAST_DURATION = 3.5f;
-    std::vector<PvpHonorToastEntry> pvpHonorToasts_;
-    bool pvpHonorCallbackSet_ = false;
-    void renderPvpHonorToasts();
-
-    // ---- Item loot toast ----
-    struct ItemLootToastEntry {
-        uint32_t itemId = 0;
-        uint32_t count = 0;
-        uint32_t quality = 1;
-        std::string name;
-        float age = 0.0f;
-    };
-    static constexpr float ITEM_LOOT_TOAST_DURATION = 3.0f;
-    std::vector<ItemLootToastEntry> itemLootToasts_;
-    bool itemLootCallbackSet_ = false;
-    void renderItemLootToasts();
-
-    // ---- Reputation change toast ----
-    struct RepToastEntry {
-        std::string factionName;
-        int32_t delta = 0;
-        int32_t standing = 0;
-        float age = 0.0f;
-    };
-    std::vector<RepToastEntry> repToasts_;
-    bool repChangeCallbackSet_ = false;
-    static constexpr float kRepToastLifetime = 3.5f;
-    void renderRepToasts(float deltaTime);
-
-    // ---- Quest completion toast ----
-    struct QuestCompleteToastEntry {
-        uint32_t questId = 0;
-        std::string title;
-        float age = 0.0f;
-    };
-    std::vector<QuestCompleteToastEntry> questCompleteToasts_;
-    bool questCompleteCallbackSet_ = false;
-    static constexpr float kQuestCompleteToastLifetime = 4.0f;
-    void renderQuestCompleteToasts(float deltaTime);
-
-    // ---- Zone entry toast ----
-    struct ZoneToastEntry {
-        std::string zoneName;
-        float age = 0.0f;
-    };
-    std::vector<ZoneToastEntry> zoneToasts_;
-    std::string lastKnownZone_;
-    static constexpr float kZoneToastLifetime = 3.0f;
-    void renderZoneToasts(float deltaTime);
-
-    // ---- Area trigger message toast ----
-    struct AreaTriggerToast {
-        std::string text;
-        float age = 0.0f;
-    };
-    std::vector<AreaTriggerToast> areaTriggerToasts_;
-    void renderAreaTriggerToasts(float deltaTime, game::GameHandler& gameHandler);
 
     // ---- Resurrection flash ----
     float resurrectFlashTimer_ = 0.0f;

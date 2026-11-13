@@ -22,7 +22,7 @@ class InventoryScreen;
  *
  * Owns all combat-related rendering:
  *   cast bar, cooldown tracker, raid warning overlay, floating combat text,
- *   DPS/HPS meter, buff bar, battleground score HUD, combat log,
+ *   buff bar, battleground score HUD, combat log,
  *   threat window, BG scoreboard.
  */
 class CombatUI {
@@ -38,19 +38,6 @@ public:
 
     size_t raidWarnChatSeenCount_ = 0;
 
-    // ---- DPS meter state ----
-    float dpsCombatAge_ = 0.0f;
-    bool dpsWasInCombat_ = false;
-    float dpsEncounterDamage_ = 0.0f;
-    float dpsEncounterHeal_   = 0.0f;
-    size_t dpsLogSeenCount_   = 0;
-    // Window position. Negative x means "not placed by the user yet", in which
-    // case the meter parks itself under the target frame each frame and follows
-    // it as that frame resizes. The first drag latches the user's position and
-    // auto-placement stops for good.
-    ImVec2 dpsMeterPos_{-1.0f, -1.0f};
-    bool dpsMeterUserPositioned_ = false;
-
     // ---- Public render methods ----
     void renderCooldownTracker(game::GameHandler& gameHandler,
                                const SettingsPanel& settings,
@@ -59,20 +46,6 @@ public:
     /// of the raid warning overlay, whose banner is FrameXML's.
     void playSoundsForNewChat(game::GameHandler& gameHandler);
     void renderCombatText(game::GameHandler& gameHandler);
-    /// targetFrameBottom: screen Y of the bottom of the target frame, or a
-    /// negative value when nothing is targeted, which parks the meter at the
-    /// height the frame would occupy so it does not jump around.
-    void renderDPSMeter(game::GameHandler& gameHandler,
-                        const SettingsPanel& settings,
-                        float targetFrameBottom);
-
-    // Saved-position access for settings persistence (see GameScreen settings I/O).
-    [[nodiscard]] ImVec2 getDPSMeterPos() const { return dpsMeterUserPositioned_ ? dpsMeterPos_ : ImVec2(-1.0f, -1.0f); }
-    void setDPSMeterPos(float x, float y) {
-        if (x < 0.0f || y < 0.0f) return;
-        dpsMeterPos_ = ImVec2(x, y);
-        dpsMeterUserPositioned_ = true;
-    }
     // inventoryScreen supplies the weapon item icons shown for temporary weapon enchants.
     void renderCombatLog(game::GameHandler& gameHandler,
                          SpellbookScreen& spellbookScreen);

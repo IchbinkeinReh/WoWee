@@ -245,8 +245,6 @@ private:
 
     // Halves of the saved DPS meter position, applied once both have been read
     // (settings arrive as separate key/value lines).
-    float dpsMeterSavedX_ = -1.0f;
-    float dpsMeterSavedY_ = -1.0f;
 
     /**
      * Render pet frame (below player frame when player has an active pet)

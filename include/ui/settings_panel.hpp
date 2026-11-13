@@ -408,7 +408,6 @@ public:
     // registers them (0x00511xxx): Shift-V and V turn them on, Ctrl-V both.
     bool showFriendlyNameplates_ = false;
     bool showEnemyNameplates_ = false;
-    bool showDPSMeter_ = false;
     bool showCooldownTracker_ = false;
     bool showRareTracker_ = false;  // Mark nearby spawned rares/rare-elites on both maps
     bool showMapWindow_ = false;    // The world map on a window of its own (Application::updateMapWindow)
