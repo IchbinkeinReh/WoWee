@@ -25,12 +25,12 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         submodules: true
 
     - name: Cache apt packages
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: /var/cache/apt/archives/*.deb
         key: apt-${{ matrix.arch }}-${{ hashFiles('.github/workflows/release.yml') }}
@@ -130,7 +130,7 @@ jobs:
         tar czf "${STAGING}.tar.gz" "${STAGING}"
 
     - name: Upload artifact
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v7
       with:
         name: wowee-linux-${{ matrix.arch }}
         path: wowee-*.tar.gz
@@ -159,7 +159,7 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         submodules: true
 
@@ -411,7 +411,7 @@ jobs:
           --verbose=2 "${DMG}"
 
     - name: Upload artifact
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v7
       with:
         name: wowee-macos-${{ matrix.arch }}
         path: wowee-*.dmg
@@ -435,7 +435,7 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         submodules: true
 
@@ -570,7 +570,7 @@ jobs:
         zip -r "${STAGING}.zip" "${STAGING}"
 
     - name: Upload artifact
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v7
       with:
         name: wowee-windows-${{ matrix.arch }}
         path: wowee-*.zip
@@ -582,12 +582,12 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         submodules: true
 
     - name: Set up JDK
-      uses: actions/setup-java@v4
+      uses: actions/setup-java@v6
       with:
         distribution: temurin
         java-version: '17'
@@ -600,7 +600,7 @@ jobs:
 
     - name: Cache OpenSSL for Android
       id: cache-openssl
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: build-android-deps
         key: android-openssl-${{ hashFiles('tools/build-android-deps.sh') }}
@@ -629,7 +629,7 @@ jobs:
         cp "${APK}" "wowee-${TAG}-android-arm64.apk"
 
     - name: Upload artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: wowee-android-arm64
         path: wowee-*-android-arm64.apk
@@ -641,7 +641,7 @@ jobs:
 
     steps:
     - name: Download all artifacts
-      uses: actions/download-artifact@v5
+      uses: actions/download-artifact@v8
       with:
         path: artifacts/
 
