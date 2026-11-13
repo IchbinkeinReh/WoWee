@@ -2219,6 +2219,12 @@ wowee_test_link_glm(test_gamepad)
 add_test(NAME gamepad COMMAND test_gamepad)
 register_test_target(test_gamepad)
 
+# ── test_touch_zones ─────────────────────────────────────────
+# Header-only: which half of the safe area a thumb landed in, and how far a held
+# camera stick turns the view. TouchControls applies them to events and the
+# camera, which need a phone.
+wowee_add_test(test_touch_zones SOURCES test_touch_zones.cpp)
+
 # ── test_camera_pivot ────────────────────────────────────────
 # Header-only: the pivot arithmetic is a static member, so this needs SDL3's
 # headers (camera_controller.hpp includes them) but none of its symbols.
