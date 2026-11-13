@@ -670,9 +670,10 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
 
     // ---- Item push result ----
     table[Opcode::SMSG_ITEM_PUSH_RESULT] = [this](network::Packet& packet) {
-        // WotLK 3.3.5a: guid(8)+received(4)+created(4)+displayInChat(4)+bagSlot(1)
-        //   +slot(4)+itemId(4)+suffixFactor(4)+randomPropertyId(4)+count(4)+countInInventory(4)
-        if (!packet.hasRemaining(45)) return;
+        // guid(8)+received(4)+created(4)+displayInChat(4)+bagSlot(1)
+        //   +slot(4)+itemId(4)+suffixFactor(4)+randomPropertyId(4)+count(4)
+        // TBC and WotLK then add countInInventory(4); classic does not.
+        if (!packet.hasRemaining(41)) return;
         uint64_t guid = packet.readUInt64();
         const bool self = guid == owner_.getPlayerGuid();
         const bool received   = packet.readUInt32() != 0;
