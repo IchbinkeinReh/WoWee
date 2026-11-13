@@ -1,5 +1,10 @@
 # Changelog
 
+## [v3.1.54] - 2026-10-24
+
+### Fixed
+- **The TBC chat window showed no messages.** Pre-3.0 interfaces read event arguments from the `arg1`..`argN` globals, and only `arg1`..`arg9` were set. TBC's ChatFrame reads `arg11` for the player link, so every chat line raised an error. Handler globals now run to `arg20` on Classic, Turtle and TBC
+
 ## [v3.1.53] - 2026-10-24
 
 ### Fixed
