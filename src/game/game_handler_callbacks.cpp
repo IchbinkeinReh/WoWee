@@ -626,6 +626,7 @@ void GameHandler::handleLoginSetTimeSpeed(network::Packet& packet) {
              "h), timeSpeed=", timeSpeed_, " game minutes per second");
 }
 
+// SMSG_LOGIN_VERIFY_WORLD: the client's handler is 0x00403de0.
 void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
     LOG_INFO("Handling SMSG_LOGIN_VERIFY_WORLD");
     const bool initialWorldEntry = (state == WorldState::ENTERING_WORLD);

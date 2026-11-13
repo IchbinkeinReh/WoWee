@@ -4086,6 +4086,7 @@ int64_t SocialHandler::playedTimeNow() const {
     return static_cast<int64_t>(totalTimePlayed_) + since;
 }
 
+// SMSG_PLAYED_TIME: the client's handler is 0x00401390.
 void SocialHandler::handlePlayedTime(network::Packet& packet) {
     PlayedTimeData data;
     if (!PlayedTimeParser::parse(packet, data)) return;

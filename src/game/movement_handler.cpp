@@ -2729,6 +2729,7 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
     }
 }
 
+// SMSG_TRANSFER_PENDING: the client's handler is 0x00401480.
 // The map, and the transport entry and the map it leaves from only when the
 // player goes with a transport (a ship that crosses to another map). A
 // teleport from a transport has none: the server took the player off it.

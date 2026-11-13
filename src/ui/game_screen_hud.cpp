@@ -778,6 +778,7 @@ float GameScreen::getGamma() const {
     return static_cast<float>(settingsPanel_.pendingBrightness) / 50.0f;
 }
 
+// The Gamma CVar's change handler in the client is 0x00401a30.
 void GameScreen::setGamma(float gamma) {
     // WoW's own slider runs 0.3 to 2.8; clamped to what the 0-100 setting can
     // hold so a value from outside cannot push the slider off its own track.
@@ -877,6 +878,8 @@ void GameScreen::reportRecordingFailure() {
         "Recording stopped: " + failure + ". What was recorded is saved in " + recordingPath_ + ".");
 }
 
+// The client's screenshot CVars: screenshotFormat 0x00401b20, screenshotQuality
+// 0x00401b40 (-> 0x004a84a0).
 void GameScreen::takeScreenshot() {
     auto* renderer = services_.renderer;
     if (!renderer) return;
