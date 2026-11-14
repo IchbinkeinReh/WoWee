@@ -10187,8 +10187,11 @@ void registerSystemLuaAPI(lua_State* L) {
                 // The selection is the panel's own state and nothing else
                 // reads it, so it lives here and round-trips. Answering nil
                 // for the getter meant the highlight never moved.
+                // GetSelectedDisplayChannel (0x004ffa10): the selected row, or
+                // nil with none selected - where this answered 0.
                 {"GetSelectedDisplayChannel", [](lua_State* L) -> int {
-            lua_pushnumber(L, selectedDisplayChannel());
+            if (selectedDisplayChannel() > 0) lua_pushnumber(L, selectedDisplayChannel());
+            else lua_pushnil(L);
             return 1;
         }},
                 // Whether the player owns the channel that panel has selected.
