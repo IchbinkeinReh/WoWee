@@ -217,6 +217,65 @@ TEST_CASE("The listfiles name what is there", "[mpq]") {
     CHECK(names == std::vector<std::string>{"a\\crc.bin", "a\\stored.txt", "a\\zipped.bin"});
 }
 
+TEST_CASE("Read with positional reads instead of a mapping, the same files come out", "[mpq]") {
+    // iOS's way (setMapArchives(false)): its address space cannot take the
+    // archives whole.
+    TempData t;
+    MpqArchiveSet::setMapArchives(false);
+    {
+        MpqArchiveSet set;
+        REQUIRE(set.open(t.root.string()));
+        CHECK(set.archiveCount() == 3);
+        const auto stored = set.read("a\\stored.txt");
+        CHECK(std::string(stored.begin(), stored.end()) == "locale bytes");
+        CHECK(set.read("a\\zipped.bin") == pattern(5000));
+        CHECK(set.read("a\\crc.bin") == pattern(10000));
+        CHECK_FALSE(set.contains("a\\gone.txt"));
+        CHECK(set.list("a\\") == std::vector<std::string>{"a\\crc.bin", "a\\stored.txt", "a\\zipped.bin"});
+    }
+    MpqArchiveSet::setMapArchives(true);
+}
+
+namespace {
+/// Rewrites block `index`'s file size in an archive written by writeArchive
+/// (v0 header at 0, block table encrypted).
+void setBlockFileSize(const fs::path& path, uint32_t index, uint32_t fsize) {
+    std::fstream f(path, std::ios::binary | std::ios::in | std::ios::out);
+    uint32_t header[8];
+    f.read(reinterpret_cast<char*>(header), sizeof(header));
+    std::vector<uint32_t> words(size_t(header[7]) * 4);
+    f.seekg(header[5]);
+    f.read(reinterpret_cast<char*>(words.data()), static_cast<std::streamsize>(words.size() * 4));
+    // Decrypted as the reader does, changed, encrypted again.
+    uint32_t key = hashOf("(block table)", 3), s2 = 0xEEEEEEEE;
+    for (auto& w : words) {
+        s2 += table[0x400 + (key & 0xFF)];
+        w ^= key + s2;
+        key = ((~key << 0x15) + 0x11111111) | (key >> 0x0B);
+        s2 = w + s2 + (s2 << 5) + 3;
+    }
+    words[size_t(index) * 4 + 2] = fsize;
+    encrypt(words, hashOf("(block table)", 3));
+    f.seekp(header[5]);
+    f.write(reinterpret_cast<const char*>(words.data()), static_cast<std::streamsize>(words.size() * 4));
+}
+}  // namespace
+
+TEST_CASE("A damaged size in the block table reads as a missing file, not an allocation", "[mpq]") {
+    TempData t;
+    // common.MPQ's A\Crc.bin (block 2) claiming 3.5 GB.
+    setBlockFileSize(t.root / "Data" / "common.MPQ", 2, 0xE0000000u);
+    for (const bool map : {true, false}) {
+        MpqArchiveSet::setMapArchives(map);
+        MpqArchiveSet set;
+        REQUIRE(set.open(t.root.string()));
+        CHECK(set.read("a\\crc.bin").empty());
+        CHECK(set.read("a\\zipped.bin") == pattern(5000));   // the rest reads on
+        CHECK(set.stats().failures == 1);
+    }
+    MpqArchiveSet::setMapArchives(true);
+}
+
 // ---- streaming mode: the same archives read through a chunk cache -------------
 
 #include "pipeline/chunk_cache.hpp"
@@ -232,7 +291,9 @@ TEST_CASE("Streaming: the archives read through a chunk cache, fetching only wha
     std::map<std::string, uint64_t> fetched;
     uint64_t total = 0;
 
-    auto run = [&](uint64_t& bytesOut) {
+    bool serverUp = true;
+    auto run = [&](uint64_t& bytesOut, bool map, bool fresh) {
+        MpqArchiveSet::setMapArchives(map);
         bytesOut = 0;
         std::vector<std::unique_ptr<ChunkCache>> caches;
         std::map<std::string, ChunkCache*> byPath;
@@ -242,9 +303,14 @@ TEST_CASE("Streaming: the archives read through a chunk cache, fetching only wha
             auto c = std::make_unique<ChunkCache>();
             const std::string srcPath = src.string();
             uint64_t* counter = &bytesOut;
+            const bool* up = &serverUp;
             REQUIRE(c->open(dst.string(), fs::file_size(src), 512, "v1",
-                            [srcPath, counter](uint64_t off, uint64_t len, std::vector<uint8_t>& out,
-                                               std::string&) {
+                            [srcPath, counter, up](uint64_t off, uint64_t len, std::vector<uint8_t>& out,
+                                                   std::string& err) {
+                                if (!*up) {
+                                    err = "server stopped";
+                                    return false;
+                                }
                                 std::ifstream in(srcPath, std::ios::binary);
                                 in.seekg(static_cast<std::streamoff>(off));
                                 out.resize(static_cast<size_t>(len));
@@ -271,6 +337,14 @@ TEST_CASE("Streaming: the archives read through a chunk cache, fetching only wha
         MpqArchiveSet set;
         REQUIRE(set.open(mirror.string()));
         CHECK(set.archiveCount() == 3);
+        // The server gone after the open: a file not cached yet reads as a
+        // missing file - no throw, no bytes that never arrived - and once
+        // the server is back, it reads. A restart has it cached.
+        serverUp = false;
+        const auto whileDown = set.read("a\\crc.bin");
+        serverUp = true;
+        if (fresh) CHECK(whileDown.empty());
+        else CHECK(whileDown == pattern(10000));
         CHECK(set.read("a\\crc.bin") == pattern(10000));
         const auto stored = set.read("a\\stored.txt");
         CHECK(std::string(stored.begin(), stored.end()) == "locale bytes");
@@ -282,14 +356,20 @@ TEST_CASE("Streaming: the archives read through a chunk cache, fetching only wha
     for (const auto& rel : {"Data/common.MPQ", "Data/deDE/locale-deDE.MPQ", "Data/patch.MPQ"}) {
         total += fs::file_size(remote.root / rel);
     }
-    uint64_t first = 0, second = 0;
-    run(first);
-    // Headers, tables and the two files read - not the zipped file nobody read.
-    CHECK(first > 0);
-    CHECK(first < total);
-    // A restart: everything it reads is in the cache already.
-    run(second);
-    CHECK(second == 0);
+    for (const bool map : {true, false}) {
+        INFO("mapped: " << map);
+        std::error_code ec;
+        fs::remove_all(mirror, ec);
+        uint64_t first = 0, second = 0;
+        run(first, map, true);
+        // Headers, tables and the two files read - not the zipped file nobody read.
+        CHECK(first > 0);
+        CHECK(first < total);
+        // A restart: everything it reads is in the cache already.
+        run(second, map, false);
+        CHECK(second == 0);
+    }
+    MpqArchiveSet::setMapArchives(true);
     std::error_code ec;
     fs::remove_all(mirror, ec);
 }

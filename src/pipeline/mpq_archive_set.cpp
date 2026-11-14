@@ -1,12 +1,16 @@
 #include "pipeline/mpq_archive_set.hpp"
 #include "core/logger.hpp"
+#include "core/platform.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <mutex>
+#include <new>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -148,10 +152,49 @@ void MpqArchiveSet::setStreamViewSink(ViewSink sink) {
     g_viewSink = std::move(sink);
 }
 
+// ---- how archives are read ------------------------------------------------------
+
+namespace {
+// Mapped (the whole archive in the address space at once) or read with
+// positional reads. iOS reads: an app there gets an address space of a few
+// gigabytes (without com.apple.developer.kernel.extended-virtual-addressing),
+// and a 3.3.5a Data folder is 17 GB of archives. Mapped, common.MPQ and
+// common-2.MPQ took 4.6 GB of it, expansion, lichking, patch and patch-2 would
+// not map at all - four archives the game could not see, the Blood Elf models
+// among what they hold - and what the maps took was missing to the heap: the
+// world load's first large allocation threw std::bad_alloc. Read, an archive
+// costs its two tables. WOWEE_MPQ_MAP=0 reads on any platform (how the iOS
+// path is run on a desktop), =1 maps.
+std::atomic<int> g_mapMode{-1};   // -1 = not decided yet
+bool mapArchives() {
+    int mode = g_mapMode.load(std::memory_order_relaxed);
+    if (mode < 0) {
+#if defined(WOWEE_IOS)
+        mode = 0;
+#else
+        mode = sizeof(void*) >= 8 ? 1 : 0;
+#endif
+        if (const char* env = std::getenv("WOWEE_MPQ_MAP"); env && *env) mode = env[0] != '0' ? 1 : 0;
+        g_mapMode.store(mode, std::memory_order_relaxed);
+    }
+    return mode != 0;
+}
+
+// The largest file and table this reader makes room for. A 3.3.5a install's
+// largest file is tens of MB and its largest table a few MB; an entry past
+// these is damaged, and taking its size as given asked for gigabytes.
+constexpr uint64_t kMaxFileBytes = 512ull << 20;
+constexpr uint64_t kMaxTableBytes = 256ull << 20;
+}  // namespace
+
+void MpqArchiveSet::setMapArchives(bool map) { g_mapMode.store(map ? 1 : 0, std::memory_order_relaxed); }
+
 // ---- one archive ---------------------------------------------------------------
 
 struct MpqArchiveSet::Archive {
     std::string path;
+    // The whole file when it is mapped (mapArchives); null when it is read a
+    // range at a time (at()).
     const uint8_t* base = nullptr;
     // Streaming mode: the archive is a sparse local copy filled on demand
     // (pipeline/data_stream); every range is asked for before it is read.
@@ -183,6 +226,41 @@ struct MpqArchiveSet::Archive {
 
     ~Archive() { unmap(); }
 
+    /// `length` bytes from `offset`, fetched first when streamed: a pointer
+    /// into the mapping, or into `scratch` read from the file. Null when the
+    /// range is outside the file or cannot be had (a chunk that would not
+    /// fetch, a read error) - never a pointer to bytes that are not there.
+    const uint8_t* at(uint64_t offset, uint64_t length, std::vector<uint8_t>& scratch) const {
+        if (offset > size || length > size - offset) return nullptr;
+        if (!need(offset, length)) return nullptr;
+        if (base) return base + offset;
+        scratch.resize(static_cast<size_t>(length));
+        return readFile(offset, scratch.data(), static_cast<size_t>(length)) ? scratch.data() : nullptr;
+    }
+
+    bool readFile(uint64_t offset, uint8_t* dst, size_t length) const {
+        size_t done = 0;
+#ifdef _WIN32
+        while (done < length) {
+            OVERLAPPED ov{};
+            const uint64_t pos = offset + done;
+            ov.Offset = static_cast<DWORD>(pos & 0xFFFFFFFFu);
+            ov.OffsetHigh = static_cast<DWORD>(pos >> 32);
+            const DWORD want = static_cast<DWORD>(std::min<size_t>(length - done, 1u << 30));
+            DWORD got = 0;
+            if (!ReadFile(file, dst + done, want, &got, &ov) || got == 0) return false;
+            done += got;
+        }
+#else
+        while (done < length) {
+            const ssize_t n = ::pread(fd, dst + done, length - done, static_cast<off_t>(offset + done));
+            if (n <= 0) return false;
+            done += static_cast<size_t>(n);
+        }
+#endif
+        return true;
+    }
+
     bool map() {
 #ifdef _WIN32
         file = CreateFileW(fs::path(path).wstring().c_str(), GENERIC_READ,
@@ -193,12 +271,25 @@ struct MpqArchiveSet::Archive {
         if (!GetFileSizeEx(file, &li) || li.QuadPart <= 0) return false;
         size = static_cast<uint64_t>(li.QuadPart);
         stream = rangeSourceFor(path);
+        if (!mapArchives()) return true;
         // Streamed: copy-on-write (see setStreamViewSink); else read-only.
         mapping = CreateFileMappingW(file, nullptr, stream ? PAGE_WRITECOPY : PAGE_READONLY, 0, 0, nullptr);
-        if (!mapping) return false;
-        base = static_cast<const uint8_t*>(MapViewOfFile(mapping, stream ? FILE_MAP_COPY : FILE_MAP_READ, 0, 0, 0));
-        if (base && stream) tellView(path, const_cast<uint8_t*>(base));
-        return base != nullptr;
+        if (mapping) {
+            base = static_cast<const uint8_t*>(
+                MapViewOfFile(mapping, stream ? FILE_MAP_COPY : FILE_MAP_READ, 0, 0, 0));
+        }
+        if (!base) {
+            // No room for it in the address space, or for the commit a
+            // copy-on-write view is charged in full: read it instead.
+            const DWORD err = GetLastError();
+            if (mapping) CloseHandle(mapping);
+            mapping = nullptr;
+            LOG_WARNING("MPQ: ", fs::path(path).filename().string(), " (", size,
+                        " bytes) could not be mapped (error ", err, "); reading it instead");
+            return true;
+        }
+        if (stream) tellView(path, const_cast<uint8_t*>(base));
+        return true;
 #else
         fd = ::open(path.c_str(), O_RDONLY);
         if (fd < 0) return false;
@@ -206,10 +297,16 @@ struct MpqArchiveSet::Archive {
         if (fstat(fd, &st) != 0 || st.st_size <= 0) return false;
         size = static_cast<uint64_t>(st.st_size);
         stream = rangeSourceFor(path);
+        if (!mapArchives()) return true;
         // Streamed: private, writable (see setStreamViewSink); else shared, read-only.
         void* p = stream ? mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0)
                          : mmap(nullptr, size, PROT_READ, MAP_SHARED, fd, 0);
-        if (p == MAP_FAILED) return false;
+        if (p == MAP_FAILED) {
+            const int err = errno;
+            LOG_WARNING("MPQ: ", fs::path(path).filename().string(), " (", size,
+                        " bytes) could not be mapped (", std::strerror(err), "); reading it instead");
+            return true;
+        }
         base = static_cast<const uint8_t*>(p);
         if (stream) tellView(path, static_cast<uint8_t*>(p));
         return true;
@@ -234,44 +331,54 @@ struct MpqArchiveSet::Archive {
 
     // The header sits at a multiple of 512, possibly behind a user-data block.
     bool parse() {
-        for (uint64_t at = 0; at + 0x20 <= size; at += 0x200) {
-            if (!need(at, 0x20)) return false;
-            const uint8_t* p = base + at;
+        std::vector<uint8_t> scratch;
+        bool found = false;
+        for (uint64_t pos = 0; pos + 0x20 <= size; pos += 0x200) {
+            const uint8_t* p = at(pos, 0x20, scratch);
+            if (!p) return false;
             if (std::memcmp(p, "MPQ\x1B", 4) == 0) {
-                const uint64_t hdr = at + readU32(p + 8);
-                if (hdr + 0x20 <= size && need(hdr, 0x20) && std::memcmp(base + hdr, "MPQ\x1A", 4) == 0) {
+                const uint64_t hdr = pos + readU32(p + 8);
+                const uint8_t* q = hdr + 0x20 <= size ? at(hdr, 0x20, scratch) : nullptr;
+                if (q && std::memcmp(q, "MPQ\x1A", 4) == 0) {
                     header = hdr;
+                    found = true;
                     break;
                 }
                 continue;
             }
             if (std::memcmp(p, "MPQ\x1A", 4) == 0) {
-                header = at;
+                header = pos;
+                found = true;
                 break;
             }
-            if (at > (64u << 20)) return false;  // no header in the first 64 MB
+            if (pos > (64u << 20)) return false;  // no header in the first 64 MB
         }
-        if (!need(header, std::min<uint64_t>(0x2C, size - header))) return false;
-        const uint8_t* h = base + header;
-        if (std::memcmp(h, "MPQ\x1A", 4) != 0) return false;
+        if (!found) return false;
+        const uint64_t headerBytes = std::min<uint64_t>(0x2C, size - header);
+        const uint8_t* h = at(header, headerBytes, scratch);
+        if (!h || std::memcmp(h, "MPQ\x1A", 4) != 0) return false;
         const uint32_t headerSize = readU32(h + 4);
         const uint16_t version = readU16(h + 12);
-        sectorSize = 512u << readU16(h + 14);
+        const uint16_t sectorShift = readU16(h + 14);
+        if (sectorShift > 15) return false;
+        sectorSize = 512u << sectorShift;
         uint64_t hashPos = readU32(h + 16), blockPos = readU32(h + 20);
         const uint32_t hashCount = readU32(h + 24), blockCount = readU32(h + 28);
         uint64_t hiBlockPos = 0;
-        if (version >= 1 && headerSize >= 0x2C) {
+        if (version >= 1 && headerSize >= 0x2C && headerBytes >= 0x2C) {
             std::memcpy(&hiBlockPos, h + 0x20, 8);
             hashPos |= static_cast<uint64_t>(readU16(h + 0x28)) << 32;
             blockPos |= static_cast<uint64_t>(readU16(h + 0x2A)) << 32;
         }
         if (hashCount == 0 || (hashCount & (hashCount - 1)) != 0) return false;
+        if (uint64_t(hashCount) * 16 > kMaxTableBytes || uint64_t(blockCount) * 16 > kMaxTableBytes) return false;
         if (header + hashPos + uint64_t(hashCount) * 16 > size) return false;
         if (header + blockPos + uint64_t(blockCount) * 16 > size) return false;
 
         std::vector<uint32_t> buf(size_t(hashCount) * 4);
-        if (!need(header + hashPos, buf.size() * 4)) return false;
-        std::memcpy(buf.data(), base + header + hashPos, buf.size() * 4);
+        const uint8_t* src = at(header + hashPos, buf.size() * 4, scratch);
+        if (!src) return false;
+        std::memcpy(buf.data(), src, buf.size() * 4);
         decryptBlock(buf.data(), buf.size(), stormHash("(hash table)", kHashKey));
         hashes.resize(hashCount);
         for (uint32_t i = 0; i < hashCount; ++i) {
@@ -280,16 +387,23 @@ struct MpqArchiveSet::Archive {
                          static_cast<uint16_t>(e[2] >> 16), e[3]};
         }
         buf.assign(size_t(blockCount) * 4, 0);
-        if (blockCount && !need(header + blockPos, buf.size() * 4)) return false;
-        std::memcpy(buf.data(), base + header + blockPos, buf.size() * 4);
+        if (blockCount) {
+            src = at(header + blockPos, buf.size() * 4, scratch);
+            if (!src) return false;
+            std::memcpy(buf.data(), src, buf.size() * 4);
+        }
         decryptBlock(buf.data(), buf.size(), stormHash("(block table)", kHashKey));
         blocks.resize(blockCount);
-        const bool hasHi = hiBlockPos != 0 && header + hiBlockPos + uint64_t(blockCount) * 2 <= size &&
-                           (blockCount == 0 || need(header + hiBlockPos, uint64_t(blockCount) * 2));
+        std::vector<uint8_t> hiScratch;
+        const uint8_t* hi = nullptr;
+        if (hiBlockPos != 0 && blockCount != 0 && header + hiBlockPos + uint64_t(blockCount) * 2 <= size) {
+            hi = at(header + hiBlockPos, uint64_t(blockCount) * 2, hiScratch);
+            if (!hi) return false;   // positions past 4 GB unknown: no guessing
+        }
         for (uint32_t i = 0; i < blockCount; ++i) {
             const uint32_t* e = &buf[size_t(i) * 4];
             uint64_t pos = e[0];
-            if (hasHi) pos |= static_cast<uint64_t>(readU16(base + header + hiBlockPos + i * 2)) << 32;
+            if (hi) pos |= static_cast<uint64_t>(readU16(hi + size_t(i) * 2)) << 32;
             blocks[i] = {pos, e[1], e[2], e[3]};
         }
         return true;
@@ -456,11 +570,21 @@ bool MpqArchiveSet::decode(const Archive& a, uint32_t blockIndex, const std::str
     const auto& be = a.blocks[blockIndex];
     const uint64_t start = a.header + be.pos;
     if (start > a.size || be.csize > a.size - start) return false;
-    if (!a.need(start, be.csize)) return false;
-    const uint8_t* src = a.base + start;
-    out.assign(be.fsize, 0);
-    if (be.fsize == 0) return true;
+    // Sizes from the block table, checked before anything is made room for:
+    // a file larger than any the game has, or one that would have to inflate
+    // past zlib's limit (about 1032:1) from what it holds, is a damaged entry
+    // and fails as a missing file rather than as an allocation of gigabytes.
+    if (be.fsize > kMaxFileBytes || be.csize > kMaxFileBytes) return false;
+    if (uint64_t(be.fsize) > uint64_t(be.csize) * 1100 + 4096) return false;
+    if (be.fsize == 0) {
+        out.clear();
+        return true;
+    }
     if (be.flags & kPatchFile) return false;  // incremental patches are Cataclysm's
+    std::vector<uint8_t> scratch;
+    const uint8_t* src = a.at(start, be.csize, scratch);
+    if (!src) return false;   // a chunk that would not fetch: as a missing file
+    out.assign(be.fsize, 0);
 
     uint32_t key = 0;
     if (be.flags & kEncrypted) {
@@ -534,9 +658,24 @@ std::vector<uint8_t> MpqArchiveSet::read(const std::string& normalizedPath) cons
     const Hit h = find(normalizedPath);
     if (!h.archive) return {};
     std::vector<uint8_t> out;
-    if (!decode(*h.archive, h.block, normalizedPath, out)) {
-        counters_->failures.fetch_add(1, std::memory_order_relaxed);
-        LOG_WARNING("MPQ: cannot decode ", normalizedPath, " in ", fs::path(h.archive->path).filename().string());
+    bool ok = false;
+    try {
+        ok = decode(*h.archive, h.block, normalizedPath, out);
+    } catch (const std::bad_alloc&) {
+        // No room for this one file: it reads as missing, the game goes on.
+        out = {};
+        LOG_ERROR("MPQ: no memory for ", normalizedPath, " (", h.archive->blocks[h.block].fsize, " bytes)");
+    }
+    if (!ok) {
+        const uint64_t n = counters_->failures.fetch_add(1, std::memory_order_relaxed) + 1;
+        // Each one up to fifty, then every five hundredth: with the stream's
+        // server gone every read of a zone fails, and a line each buried the
+        // log (1332 in one load).
+        if (n <= 50 || n % 500 == 0) {
+            LOG_WARNING("MPQ: cannot decode ", normalizedPath, " in ", fs::path(h.archive->path).filename().string(),
+                        n == 50 ? " (the next are counted, not named, but every 500th)" : "",
+                        n > 50 ? " (" + std::to_string(n) + " so far)" : std::string());
+        }
         return {};
     }
     counters_->reads.fetch_add(1, std::memory_order_relaxed);

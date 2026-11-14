@@ -21,11 +21,13 @@ namespace pipeline {
  * a file is taken from the last archive that holds it. A deletion marker in a
  * later patch hides the file in every earlier archive, as in the client.
  *
- * The archives are memory-mapped and their hash and block tables are read
- * once at open; a lookup is a hash probe per archive and a read decodes the
- * file's sectors straight out of the mapping, so any number of threads read
- * at once without a lock. What 3.3.5a's archives hold is v1 headers, zlib
- * sectors (with or without the sector CRC table), single-unit files, plain
+ * The archives are memory-mapped (on iOS, and wherever a map fails, read
+ * with positional reads instead - setMapArchives) and their hash and block
+ * tables are read once at open; a lookup is a hash probe per archive and a
+ * read decodes the file's sectors straight out of the mapping (or out of the
+ * bytes read for it), so any number of threads read at once without a lock.
+ * What 3.3.5a's archives hold is v1 headers, zlib sectors (with or without
+ * the sector CRC table), single-unit files, plain
  * stored files and deletion markers; encryption (and the fix-key variant) is
  * handled as well. Other compressions (bzip2, implode, Huffman, ADPCM) do not
  * occur in a 3.3.5a install; a file using one is refused and named once.
@@ -62,6 +64,12 @@ public:
     /// (ChunkCache::setView). An archive on disk stays mapped read-only.
     using ViewSink = std::function<void(const std::string& path, uint8_t* view)>;
     static void setStreamViewSink(ViewSink sink);
+
+    /// Whether archives opened from now on are mapped whole into the address
+    /// space (the default on a 64-bit desktop) or read a range at a time
+    /// (iOS, whose address space cannot take 17 GB of archives; WOWEE_MPQ_MAP=0
+    /// anywhere). A map that fails falls back to reading either way.
+    static void setMapArchives(bool map);
 
     /// Opens every archive of the Data folder `dir` (or `dir`\Data).
     bool open(const std::string& dir);
