@@ -455,3 +455,23 @@ TEST_CASE("A list the host keeps taints nobody when it is kept quietly", "[taint
     }
     CHECK(taint::current() == 0);
 }
+
+TEST_CASE("Objects are charged to the addon whose code made them (0x0085b4e0)", "[taint]") {
+    Fixture f;
+    const int other = taint::intern("OtherAddon");
+    const auto bytesOf = [&f](int who) {
+        std::pair<int, size_t> acc{who, 0};
+        lua_taintedsizes(f.L, [](void* ud, int t, size_t n) {
+            auto* a = static_cast<std::pair<int, size_t>*>(ud);
+            if (t == a->first) a->second += n;
+        }, &acc);
+        return acc.second;
+    };
+    f.run("SecureTable = {}", 0);
+    const size_t before = bytesOf(f.addon);
+    f.run("Big = {} for i = 1, 1000 do Big[i] = 'item' .. i end", f.addon);
+    const size_t after = bytesOf(f.addon);
+    // A thousand-slot array and a thousand strings at the least.
+    CHECK(after - before > 1000 * sizeof(void*));
+    CHECK(bytesOf(other) == 0);
+}

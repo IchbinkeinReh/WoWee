@@ -14030,28 +14030,6 @@ void LuaEngine::registerCoreAPI() {
         "    trivial = {r=0.5,g=0.5,b=0.5,font='QuestDifficulty_Trivial'},\n"
         "    header = {r=1.0,g=0.82,b=0.0,font='QuestDifficulty_Header'},\n"
         "}\n"
-        // Money as WoW writes it: the amount and the coin's picture, not the
-        // amount and a letter.
-        //
-        // This answered "19g 81s 56c", and that string is what put letters
-        // beside the values wherever it is used - the backpack's money among
-        // them. A real client writes each amount followed by an inline texture
-        // escape, which is what GOLD_AMOUNT_TEXTURE and its two siblings in
-        // globalstrings.lua spell out, and there is no letter anywhere in it.
-        //
-        // The letters are still what the colourblind setting asks for, and
-        // GOLD_AMOUNT_SYMBOL is still where they live - this is not that.
-        "function GetCoinTextureString(copper)\n"
-        "    copper = math.floor(copper or 0)\n"
-        "    local g = math.floor(copper / 10000)\n"
-        "    local s = math.floor(math.fmod(copper, 10000) / 100)\n"
-        "    local c = math.fmod(copper, 100)\n"
-        "    local r = ''\n"
-        "    if g > 0 then r = r .. format(GOLD_AMOUNT_TEXTURE, g, 0, 0) .. ' ' end\n"
-        "    if s > 0 then r = r .. format(SILVER_AMOUNT_TEXTURE, s, 0, 0) .. ' ' end\n"
-        "    if c > 0 or r == '' then r = r .. format(COPPER_AMOUNT_TEXTURE, c, 0, 0) end\n"
-        "    return r\n"
-        "end\n"
     );
 
     // RAID_CLASS_COLORS, filled from the same table this client colours a name
@@ -15625,10 +15603,6 @@ void LuaEngine::dispatchText(const char* utf8) {
 /// The handlers compare against these by name - CoinPickupFrame checks for
 /// "ESCAPE" and the digits - so a wrong spelling is a handler that never
 /// matches rather than an error anyone would see.
-/// The mouse buttons as WoW names them, in the order the state arrays are
-/// indexed.
-static constexpr const char* kMouseButtonNames[] = {"LeftButton", "RightButton", "MiddleButton",
-                                                    "Button4", "Button5"};
 
 static std::string wowKeyName(int sym) {
     // The mouse's side buttons, as the binding tables name them (0x0055e340:

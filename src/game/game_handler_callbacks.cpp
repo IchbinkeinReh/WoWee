@@ -3637,12 +3637,17 @@ void GameHandler::updateGmTicket(const std::string& text) {
 }
 
 void GameHandler::destroyTotem(int slot) {
-    // CMSG_TOTEM_DESTROYED carries the slot and nothing else on these
-    // expansions; the guid form arrived a expansion later than any of them.
-    if (slot < 0 || slot > 3 || !isInWorld() || !getSocket()) return;
-    network::Packet pkt(wireOpcode(Opcode::CMSG_TOTEM_DESTROYED));
-    pkt.writeUInt8(static_cast<uint8_t>(slot));
-    getSocket()->send(pkt);
+    // 0x005197d0: only a slot with a totem in it. CMSG_TOTEM_DESTROYED carries
+    // the slot and nothing else on these expansions; the slot is emptied at
+    // once and the bar told, not left for the server's answer.
+    if (slot < 0 || slot >= NUM_TOTEM_SLOTS || activeTotemSlots_[slot].guid == 0) return;
+    if (isInWorld() && getSocket()) {
+        network::Packet pkt(wireOpcode(Opcode::CMSG_TOTEM_DESTROYED));
+        pkt.writeUInt8(static_cast<uint8_t>(slot));
+        getSocket()->send(pkt);
+    }
+    activeTotemSlots_[slot] = TotemSlot{};
+    fireAddonEvent("PLAYER_TOTEM_UPDATE", {std::to_string(slot + 1)});
 }
 
 void GameHandler::deleteGmTicket() {
