@@ -56,10 +56,14 @@ void makeSelfSigned(Credentials& out, const char* name) {
     X509_gmtime_adj(X509_getm_notBefore(out.cert), 0);
     X509_gmtime_adj(X509_getm_notAfter(out.cert), 3600);
     X509_set_pubkey(out.cert, out.key);
-    X509_NAME* subject = X509_get_subject_name(out.cert);
+    // A name of our own: OpenSSL 4 hands the certificate's back as const.
+    X509_NAME* subject = X509_NAME_new();
+    REQUIRE(subject != nullptr);
     X509_NAME_add_entry_by_txt(subject, "CN", MBSTRING_ASC,
                                reinterpret_cast<const unsigned char*>(name), -1, -1, 0);
+    X509_set_subject_name(out.cert, subject);
     X509_set_issuer_name(out.cert, subject);
+    X509_NAME_free(subject);
     REQUIRE(X509_sign(out.cert, out.key, EVP_sha256()) > 0);
 }
 

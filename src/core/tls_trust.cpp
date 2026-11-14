@@ -23,18 +23,19 @@ namespace {
 int verifyWithChainVerifier(X509_STORE_CTX* store, void* arg) {
     const auto* verifier = static_cast<const ChainVerifier*>(arg);
     DerChain chain;
-    auto add = [&chain](X509* cert) {
+    auto add = [&chain](const X509* cert) {
         unsigned char* der = nullptr;
         const int len = i2d_X509(cert, &der);
         if (len > 0) chain.emplace_back(der, der + len);
         OPENSSL_free(der);
     };
-    X509* leaf = X509_STORE_CTX_get0_cert(store);
+    // Const-qualified: OpenSSL 4 hands these back as const.
+    const X509* leaf = X509_STORE_CTX_get0_cert(store);
     if (leaf != nullptr) add(leaf);
     // The peer's chain as sent; a client's holds the leaf as well.
-    if (STACK_OF(X509)* sent = X509_STORE_CTX_get0_untrusted(store)) {
+    if (auto* sent = X509_STORE_CTX_get0_untrusted(store)) {
         for (int i = 0; i < sk_X509_num(sent); ++i) {
-            X509* cert = sk_X509_value(sent, i);
+            const X509* cert = sk_X509_value(sent, i);
             if (leaf == nullptr || X509_cmp(cert, leaf) != 0) add(cert);
         }
     }
