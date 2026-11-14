@@ -6928,6 +6928,7 @@ int lua_Texture_SetTexture(lua_State* L) {
     auto* w = widgetToRemeasure(L, 1);
     if (!w) return 0;
     w->emblemMask = false;  // a texture of its own replaces a TabardModel's emblem
+    w->portraitDisc = false;  // and an ordinary one replaces a round portrait
     if (lua_isnumber(L, 2)) {
         w->solidColor = true;
         w->texturePath.clear();
@@ -6939,6 +6940,43 @@ int lua_Texture_SetTexture(lua_State* L) {
         w->solidColor = false;
         w->texturePath = luaL_optstring(L, 2, "");
     }
+    return 0;
+}
+// SetPortraitToTexture(texture or "name", "file") (0x00516970): the texture
+// object, or the one of that name; a table that is no object, or an object
+// that is no texture, raises. A file given becomes the texture's image as a
+// round portrait - drawn as a disc, its corners clear.
+static int lua_SetPortraitToTexture(lua_State* L) {
+    if (lua_istable(L, 1)) {
+        lua_rawgeti(L, 1, 0);
+        const bool hasThis = lua_isuserdata(L, -1) != 0;
+        lua_pop(L, 1);
+        if (!hasThis) return luaL_error(L, "SetPortraitToTexture(): Couldn't find 'this' in texture object");
+        lua_pushvalue(L, 1);
+    } else if (lua_isstring(L, 1)) {
+        lua_getglobal(L, lua_tostring(L, 1));
+        if (!lua_istable(L, -1)) {
+            lua_pop(L, 1);
+            return luaL_error(L, "SetPortraitToTexture(): Couldn't find texture named '%s'", lua_tostring(L, 1));
+        }
+    } else {
+        const char* given = lua_tostring(L, 1);
+        return luaL_error(L, "SetPortraitToTexture(): Couldn't find texture named '%s'", given ? given : "(null)");
+    }
+    const int object = lua_gettop(L);
+    auto* w = widgetOf(L, object);
+    if (!w || w->objectType != "Texture")
+        return luaL_error(L, "SetPortraitToTexture(): Wrong object type, expected texture");
+    if (!lua_isstring(L, 2)) return 0;
+    lua_getfield(L, object, "SetTexture");
+    if (lua_isfunction(L, -1)) {
+        lua_pushvalue(L, object);
+        lua_pushvalue(L, 2);
+        lua_call(L, 2, 0);
+    } else {
+        lua_pop(L, 1);
+    }
+    w->portraitDisc = true;
     return 0;
 }
 int lua_Texture_GetTexture(lua_State* L) {
@@ -12588,6 +12626,8 @@ void LuaEngine::registerCoreAPI() {
     lua_setglobal(L_, "GetScreenHeight");
     lua_pushcfunction(L_, lua_GetFramerate);
     lua_setglobal(L_, "GetFramerate");
+    lua_pushcfunction(L_, lua_SetPortraitToTexture);
+    lua_setglobal(L_, "SetPortraitToTexture");
 
     // Frame event dispatch table
     lua_newtable(L_);

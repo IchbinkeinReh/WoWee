@@ -379,6 +379,10 @@ struct Widget {
     /// render is a square with a corner in each of those places, so the
     /// renderer draws one as a disc - see the live-texture branch.
     bool isUnitPortrait = false;
+    /// SetPortraitToTexture's image (0x00516970 -> 0x00619330): the file made
+    /// into a round portrait texture, its corners clear. Any SetTexture after
+    /// it is an ordinary texture again.
+    bool portraitDisc = false;
 
     // Backdrop, the bordered panel look most of the original interface is
     // built from. The edge file is a strip of eight square tiles - verified
