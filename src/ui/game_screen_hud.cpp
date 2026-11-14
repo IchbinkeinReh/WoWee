@@ -778,6 +778,7 @@ float GameScreen::getGamma() const {
     return static_cast<float>(settingsPanel_.pendingBrightness) / 50.0f;
 }
 
+// The Gamma CVar's change handler in the client is 0x00401a30.
 void GameScreen::setGamma(float gamma) {
     // WoW's own slider runs 0.3 to 2.8; clamped to what the 0-100 setting can
     // hold so a value from outside cannot push the slider off its own track.
@@ -877,16 +878,51 @@ void GameScreen::reportRecordingFailure() {
         "Recording stopped: " + failure + ". What was recorded is saved in " + recordingPath_ + ".");
 }
 
+// 0x004a8570, the client's screenshot. Its CVars: screenshotFormat (0x00401b20,
+// default "jpeg") picks the file - "tga" a 32-bit TGA, anything else, "png"
+// too, a JPEG - and screenshotQuality (0x00401b40 -> 0x004a84a0, default 3)
+// is clamped to 1-10 (0 is 1) and made the JPEG quality q * 5.5 + 45, rounded
+// as the FPU rounds (61.5 -> 62). The file is Screenshots\WoWScrnShot_<time>
+// in the game folder, the time as strftime "%m%d%y_%H%M%S" (0x0086d490).
+// The game folder is the working directory, as for the client; where that
+// cannot be written (an app bundle started from /), ~/.wowee instead.
 void GameScreen::takeScreenshot() {
     auto* renderer = services_.renderer;
     if (!renderer) return;
 
-    const std::string path = capturePath("screenshots", "png");
+    std::string format = addons::storedCVarValue("screenshotFormat", "jpeg");
+    for (char& c : format) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const bool tga = format == "tga";
+    long quality = 3;
+    try {
+        quality = std::stol(addons::storedCVarValue("screenshotQuality", "3"));
+    } catch (...) {
+    }
+    quality = std::clamp(quality, 0L, 10L);
+    if (quality == 0) quality = 1;
+    const int jpegQuality = static_cast<int>(std::lrint(static_cast<double>(quality) * 5.5 + 45.0));
+
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path dir = fs::current_path(ec) / "Screenshots";
+    fs::create_directories(dir, ec);
+    if (ec || !fs::is_directory(dir)) {
+        const char* home = std::getenv("HOME");
+        if (!home) home = std::getenv("USERPROFILE");
+        dir = fs::path(home ? home : "/tmp") / ".wowee" / "Screenshots";
+        ec.clear();
+        fs::create_directories(dir, ec);
+    }
+    const std::tm tm = core::localTime(std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()));
+    char stamp[32];
+    std::strftime(stamp, sizeof(stamp), "%m%d%y_%H%M%S", &tm);
+    const std::string path =
+        (dir / (std::string("WoWScrnShot_") + stamp + (tga ? ".tga" : ".jpg"))).string();
 
     // SCREENSHOT_SUCCEEDED or SCREENSHOT_FAILED, which worldframe.lua shows
     // as SCREENSHOT_SUCCESS / SCREENSHOT_FAILURE in the action status text.
     // No chat line: this printed "Screenshot saved: <path>" in English.
-    const bool saved = renderer->captureScreenshot(path);
+    const bool saved = renderer->captureScreenshot(path, jpegQuality);
     if (services_.gameHandler) {
         services_.gameHandler->fireAddonEvent(saved ? "SCREENSHOT_SUCCEEDED" : "SCREENSHOT_FAILED");
     }

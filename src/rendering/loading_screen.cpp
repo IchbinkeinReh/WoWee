@@ -36,6 +36,7 @@ LoadingScreen::~LoadingScreen() {
 
 bool LoadingScreen::initialize(pipeline::AssetManager* assets, uint32_t mapId) {
     LOG_INFO("Initializing loading screen (Vulkan/ImGui)");
+    loadProgress = 0.0f;
     // The streaming cache's limit, held during play: at each loading screen,
     // before the new place is read (pipeline/data_stream).
     pipeline::DataStream::instance().enforceCacheLimit("loading screen");

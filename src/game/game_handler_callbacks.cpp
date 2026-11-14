@@ -626,6 +626,7 @@ void GameHandler::handleLoginSetTimeSpeed(network::Packet& packet) {
              "h), timeSpeed=", timeSpeed_, " game minutes per second");
 }
 
+// SMSG_LOGIN_VERIFY_WORLD: the client's handler is 0x00403de0.
 void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
     LOG_INFO("Handling SMSG_LOGIN_VERIFY_WORLD");
     const bool initialWorldEntry = (state == WorldState::ENTERING_WORLD);
@@ -644,42 +645,15 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
     glm::vec3 canonical = core::coords::serverToCanonical(glm::vec3(data.x, data.y, data.z));
     const bool alreadyInWorld = (state == WorldState::IN_WORLD);
     const bool sameMap = alreadyInWorld && (currentMapId_ == data.mapId);
-    const float dxCurrent = movementInfo.x - canonical.x;
-    const float dyCurrent = movementInfo.y - canonical.y;
-    const float dzCurrent = movementInfo.z - canonical.z;
-    const float distSqCurrent = dxCurrent * dxCurrent + dyCurrent * dyCurrent + dzCurrent * dzCurrent;
-
-    // Some realms emit a late duplicate LOGIN_VERIFY_WORLD after the client is already
-    // in-world. Re-running full world-entry handling here can trigger an expensive
-    // same-map reload/reset path and starve networking for tens of seconds.
-    // The distance test alone is not enough while flying. A taxi carries the
-    // player a long way from where the packet's position points, so a late
-    // duplicate stops looking like a duplicate and is taken for a teleport -
-    // and world entry puts the player back at the position it carries, which
-    // is where they logged in. Any of these arriving mid-flight is a duplicate
-    // whatever the distance says: the server moves a passenger along the
-    // spline, not by sending them into the world again.
-    const bool flying = isOnTaxiFlight();
-    if (!initialWorldEntry && sameMap &&
-        (flying || distSqCurrent <= (5.0f * 5.0f))) {
-        LOG_INFO("Ignoring duplicate SMSG_LOGIN_VERIFY_WORLD while already in world: mapId=",
-                 data.mapId, " dist=", std::sqrt(distSqCurrent),
-                 flying ? " (on a taxi flight)" : "");
+    // 0x00403de0: on the map the world already shows (0x004d37e0) the
+    // client does nothing with it at all, whatever position it carries -
+    // only another map moves the player into a world (0x00403b70).
+    if (!initialWorldEntry && sameMap) {
+        LOG_INFO("Ignoring SMSG_LOGIN_VERIFY_WORLD on the current map: mapId=", data.mapId);
         return;
     }
-
-    // Said at warning level when it happens in-world, because from here the
-    // player is moved to the position this packet carries. A duplicate that
-    // slips past the test above is indistinguishable, after the fact, from a
-    // teleport nobody asked for - and one arriving in-world is what puts a
-    // player back where they logged in.
     if (!initialWorldEntry) {
-        LOG_WARNING("SMSG_LOGIN_VERIFY_WORLD in-world is being treated as a "
-                    "teleport: mapId=", data.mapId, " sameMap=", sameMap,
-                    " dist=", std::sqrt(distSqCurrent),
-                    " onTaxi=", flying,
-                    " - the player is about to be placed at (", data.x, ", ",
-                    data.y, ", ", data.z, ")");
+        LOG_INFO("SMSG_LOGIN_VERIFY_WORLD in-world for another map: mapId=", data.mapId);
     }
 
     // Successfully entered the world (or teleported)

@@ -880,6 +880,7 @@ public:
     }
 };
 
+// The client registers its console commands in 0x00407870 and 0x00402910.
 // --- worldport, charmport, setrawpos (the GM movement commands) ---
 //
 // Registered by FUN_00769100 in category 0 beside togglehelm: each needs the

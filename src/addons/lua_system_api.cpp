@@ -10,6 +10,8 @@
 #include <cstring>
 #include <ctime>
 #include <filesystem>
+#include <sstream>
+#include <cstdlib>
 #include <fstream>
 #include <optional>
 #include <ranges>
@@ -26,6 +28,7 @@
 #include "game/known_titles.hpp"
 #include "game/movement_handler.hpp"   // the client-control table, for GetBattlefieldVehicleInfo's seventh value
 #include "core/open_url.hpp"
+#include "core/pointer_speed.hpp"
 #include "core/version.hpp"
 #include "core/config_paths.hpp"
 #include "ui/settings_schema.hpp"
@@ -748,14 +751,75 @@ static bool& cvarStoreLoaded() {
     return loaded;
 }
 
+/// The original client's WTF folder, read and never written: under
+/// WOWEE_CLIENT_ROOT where that names the client's folder, else in the game
+/// folder (the working directory), as the client finds it beside itself.
+/// Matched without regard to case, as an install copied off Windows has it.
+static std::filesystem::path clientWtfFolder() {
+    namespace fs = std::filesystem;
+    const auto child = [](const fs::path& base, const std::string& name) -> fs::path {
+        std::error_code ec;
+        if (fs::is_directory(base / name, ec)) return base / name;
+        std::string wanted = name;
+        toLowerInPlace(wanted);
+        for (const auto& entry : fs::directory_iterator(base, ec)) {
+            std::string have = entry.path().filename().string();
+            toLowerInPlace(have);
+            if (have == wanted && entry.is_directory(ec)) return entry.path();
+        }
+        return {};
+    };
+    const char* root = std::getenv("WOWEE_CLIENT_ROOT");
+    std::error_code ec;
+    const fs::path base = (root && *root) ? fs::path(root) : fs::current_path(ec);
+    return base.empty() ? fs::path() : child(base, "WTF");
+}
+
+/// One console file of the client's: its SET lines into the store (the other
+/// commands such a file can hold have nothing to set here). The client runs
+/// each line as a console command (0x00766530); `SET name "value"` is what
+/// Config.wtf and a RunOnce file are made of, the quotes optional.
+static size_t readClientConsoleFile(const std::filesystem::path& file) {
+    std::ifstream in(file);
+    if (!in.is_open()) return 0;
+    size_t set = 0;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        std::istringstream words(line);
+        std::string verb, name;
+        if (!(words >> verb >> name)) continue;
+        toLowerInPlace(verb);
+        if (verb != "set") continue;
+        std::string value;
+        std::getline(words, value);
+        const size_t first = value.find_first_not_of(" \t");
+        value = first == std::string::npos ? std::string() : value.substr(first);
+        if (value.size() >= 2 && value.front() == '"' && value.back() == '"') value = value.substr(1, value.size() - 2);
+        toLowerInPlace(name);
+        cvarStore()[name] = value;
+        cvarStartupValues()[name] = value;
+        ++set;
+    }
+    return set;
+}
+
 static void loadStoredCVars() {
     cvarStoreLoaded() = true;
     cvarFileSnapshot().valid = false;
+    // The original's own CVars first: WTF\Config.wtf, as the client reads it
+    // at start (0x004067f0 -> 0x00768340). Read only - this client writes its
+    // CVars to its own file, never into the WTF folder - so what the player set
+    // here since, in cvars.cfg below, is laid over it.
+    const std::filesystem::path wtf = clientWtfFolder();
+    if (!wtf.empty()) {
+        if (const size_t n = readClientConsoleFile(wtf / "Config.wtf"); n > 0)
+            LOG_INFO("CVars: ", n, " from ", (wtf / "Config.wtf").string());
+    }
     std::ifstream in(cvarStorePath());
-    if (!in.is_open()) return;
     std::string line;
     size_t loaded = 0;
-    while (std::getline(in, line)) {
+    while (in.is_open() && std::getline(in, line)) {
         const size_t eq = line.find('=');
         if (eq == std::string::npos || eq == 0) continue;
         std::string key = line.substr(0, eq);
@@ -783,7 +847,40 @@ static void loadStoredCVars() {
             cvarStartupValues()["camerayawmovespeed"] = moved;
         }
     }
+    // mouseSpeed held the camera's mouse-look sensitivity until it became the
+    // pointer's speed (core/pointer_speed): the store has the camera's number
+    // under it, 0.225 by default. Under the shipped slider's own minimum of
+    // 0.5 it can only be that, and as a pointer speed it would slow the cursor
+    // to a crawl, so it is dropped and the desktop's own speed is the value.
+    if (auto it = cvarStore().find("mousespeed"); it != cvarStore().end()) {
+        const float stored = static_cast<float>(std::atof(it->second.c_str()));
+        if (stored < 0.5f) {
+            cvarStore().erase(it);
+            cvarStartupValues().erase("mousespeed");
+        }
+    }
     LOG_INFO("CVars: loaded ", loaded, " from ", cvarStorePath());
+    // Then WTF\RunOnce*.wtf, each file in name order, over everything else
+    // (0x00406740: the files sorted by 0x00403300, each run by 0x00766530).
+    if (!wtf.empty()) {
+        std::vector<std::filesystem::path> runOnce;
+        std::error_code ec;
+        for (const auto& entry : std::filesystem::directory_iterator(wtf, ec)) {
+            std::string name = entry.path().filename().string();
+            toLowerInPlace(name);
+            if (name.rfind("runonce", 0) == 0 && name.size() >= 4 &&
+                name.compare(name.size() - 4, 4, ".wtf") == 0) {
+                runOnce.push_back(entry.path());
+            }
+        }
+        std::sort(runOnce.begin(), runOnce.end(), [](const auto& a, const auto& b) {
+            return a.filename().string() < b.filename().string();
+        });
+        for (const auto& file : runOnce) {
+            if (const size_t n = readClientConsoleFile(file); n > 0)
+                LOG_INFO("CVars: ", n, " from ", file.string());
+        }
+    }
 }
 
 /// Write them back. Called on every change rather than at shutdown: the file is
@@ -1111,6 +1208,12 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     // The horizon past the far clip at four times it, as registered and as
     // the renderer reads it.
     else if (n == "horizonfarclipscale") lua_pushstring(L, "4.0");
+    // The desktop's own pointer speed over ten, as the client registers it
+    // (0x00869630 into "%1.1f"): left alone, mouseSpeed changes nothing.
+    else if (n == "mousespeed") lua_pushstring(L, core::pointer_speed::desktopDefault());
+    // As registered (0x00767fc0) and read by the screenshot (0x004a8570).
+    else if (n == "screenshotformat") lua_pushstring(L, "jpeg");
+    else if (n == "screenshotquality") lua_pushstring(L, "3");
     // Clicking open ground clears the target, which is the real client's
     // behaviour and this one's. Without saying so it fell to the generic zero,
     // and zero here means sticky targeting - so the checkbox would have shown
@@ -1651,15 +1754,7 @@ struct ClientCVarBinding {
 // drives. Naming the fields makes both of them see an empty table.
 constexpr ClientCVarBinding kClientCVars[] = {
     {"farclip",              "viewdistance"},
-    // Mouse Sensitivity. Its shipped range is 0.5 to 1.5, a multiplier around
-    // 1.0 for the pointer, and this client's sensitivity is an amount that runs
-    // 0.05 to 1.0 - so passed through unchanged the slowest setting that slider
-    // offered was two and a half times this client's default. The pointer's own
-    // speed is not something this client keeps, so the slider drives the look
-    // rate directly and is drawn on that rate's scale instead (kCVarRanges);
-    // Mouse Look Speed reads the same setting in its own units below.
-    {"mousespeed",           "mousespeed"},
-    // Mouse Look Speed, which is the setting above counted the way the client
+    // Mouse Look Speed, the camera's mouse-look sensitivity setting counted the way the client
     // counts it: it turns the view cameraYawMoveSpeed * 0.00125 degrees per
     // movement of the mouse (0x006020b0), so its shipped 90..270 slider is
     // 0.1125..0.3375 of this client's degrees. Scaled through the table rather
@@ -2261,6 +2356,9 @@ static void applyCVarSideEffects(lua_State* L, const std::string& key,
     // 1/600 of a degree per movement of the mouse per unit of it (0x006020b0).
     // Touching the look slider afterwards takes the pitch back to its share, as
     // moving that slider in the original writes its half of the pair too.
+    // Mouse Sensitivity: the pointer's own speed while the game has the focus
+    // (0x004015e0 -> 0x0086a070), not the camera's - see core/pointer_speed.
+    if (key == "mousespeed") core::pointer_speed::setMouseSpeed(static_cast<float>(std::atof(value.c_str())));
     if (key == "camerapitchmovespeed") {
         if (auto* svc = getLuaServices(L); svc && svc->getCameraController) {
             if (auto* cc = svc->getCameraController()) {
@@ -7738,17 +7836,6 @@ constexpr CVarRange kCVarRanges[] = {
     // movement, so the slider is drawn on its own numbers again instead of being
     // bent to the setting's scale, which is what let a 90 hand over a 90.
     {"camerayawmovespeed", 90.0f, 270.0f},
-    // Mouse Sensitivity, the same setting in the units this client's own camera
-    // counts it in. Shipped as 0.5 to 1.5, a multiplier around 1.0 for the
-    // pointer, which this client does not keep: the slider moves the view, so it
-    // is drawn on the view's range and its slowest setting was 2.5x the default.
-    //
-    // Those two numbers are Mouse Look Speed's 90 and 270 times the 0.00125
-    // between the two scales. The two sliders write one value, so what they
-    // reach has to be the same span - otherwise one can put the shared value
-    // where the other has no handle for it, which is what this table's own
-    // first finding was, seen from the other control.
-    {"mousespeed", 0.1125f, 0.3375f},
     // Max camera distance, as a multiple of the original client's limit. The
     // shipped table stops at 2; this client has always been willing to go
     // further, and did it through a checkbox of its own until this slider was

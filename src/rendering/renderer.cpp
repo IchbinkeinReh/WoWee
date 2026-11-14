@@ -2189,7 +2189,7 @@ void Renderer::recordScreenCapture() {
     }
 }
 
-bool Renderer::captureScreenshot(const std::string& outputPath) {
+bool Renderer::captureScreenshot(const std::string& outputPath, int jpegQuality) {
     if (!vkCtx) return false;
 
     VkDevice device     = vkCtx->getDevice();
@@ -2287,17 +2287,32 @@ bool Renderer::captureScreenshot(const std::string& outputPath) {
         return f.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
     });
     screenshotWrites_.push_back(std::async(std::launch::async,
-        [pixels = std::move(pixels), w, h, outputPath]() mutable {
+        [pixels = std::move(pixels), w, h, outputPath, jpegQuality]() mutable {
             for (size_t i = 0; i + 3 < pixels.size(); i += 4) std::swap(pixels[i], pixels[i + 2]);
             std::error_code ec;
             const std::filesystem::path outPath(outputPath);
             if (outPath.has_parent_path()) std::filesystem::create_directories(outPath.parent_path(), ec);
-            const int ok = stbi_write_png(outputPath.c_str(), static_cast<int>(w), static_cast<int>(h), 4,
-                                          pixels.data(), static_cast<int>(w * 4));
+            std::string ext = outPath.extension().string();
+            for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            int ok = 0;
+            if (ext == ".jpg") {
+                ok = stbi_write_jpg(outputPath.c_str(), static_cast<int>(w), static_cast<int>(h), 4,
+                                    pixels.data(), std::clamp(jpegQuality, 1, 100));
+            } else if (ext == ".tga") {
+                // 32 bits a pixel, uncompressed (0x004a8570 -> 0x006aa950(.., 0x20, ..));
+                // the frame's alpha is not the picture's, so it is opaque.
+                for (size_t i = 3; i < pixels.size(); i += 4) pixels[i] = 0xFF;
+                stbi_write_tga_with_rle = 0;
+                ok = stbi_write_tga(outputPath.c_str(), static_cast<int>(w), static_cast<int>(h), 4,
+                                    pixels.data());
+            } else {
+                ok = stbi_write_png(outputPath.c_str(), static_cast<int>(w), static_cast<int>(h), 4,
+                                    pixels.data(), static_cast<int>(w * 4));
+            }
             if (ok) {
                 LOG_INFO("Screenshot saved: ", outputPath);
             } else {
-                LOG_WARNING("Screenshot: stbi_write_png failed for ", outputPath);
+                LOG_WARNING("Screenshot: could not write ", outputPath);
             }
         }));
     return true;

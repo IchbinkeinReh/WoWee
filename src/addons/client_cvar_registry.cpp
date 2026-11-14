@@ -20,6 +20,8 @@ struct ClientCVar {
     const char* defaultValue;
 };
 
+// The registrations are spread over the client's start-up, e.g. 0x00401b60,
+// 0x00401ff0, 0x00402530, 0x004026b0 and 0x00402760 (Client.cpp).
 // Every CVar the client registers by name (0x00767fc0 with a literal name),
 // with the flags and the default it registers it with, in case-insensitive order. Read out of
 // the 3.3.5a build 12340 binary; the names built in a loop are matched by

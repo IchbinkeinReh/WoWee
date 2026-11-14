@@ -193,10 +193,13 @@ bool allEventsCover(lua_State* L, int frame, const char* eventName) {
     return on;
 }
 
+static const char* frameNameOnStack(lua_State* L, int index);
 static int lua_Frame_IsEventRegistered(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
-    const char* eventName = luaL_optstring(L, 2, nullptr);
-    if (!eventName || !*eventName) { luaPushOneOrNil(L, 0); return 1; }
+    // 0x0049f160: a string, or the usage error.
+    if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:IsEventRegistered(\"event\")", frameNameOnStack(L, 1));
+    const char* eventName = lua_tostring(L, 2);
+    if (!*eventName) { luaPushOneOrNil(L, 0); return 1; }
     bool on = false;
     {
         taint::Quiet quiet;   // the registration is the client's, kept in C
@@ -213,9 +216,36 @@ static int lua_Frame_IsEventRegistered(lua_State* L) {
     return 1;
 }
 
+/// A frame's name for a usage error, through its own GetName (these bindings
+/// sit above the widget helpers): the name, or "<unnamed>". Left on the stack.
+static const char* frameNameOnStack(lua_State* L, int index) {
+    lua_getfield(L, index, "GetName");
+    if (lua_isfunction(L, -1)) {
+        lua_pushvalue(L, index);
+        if (lua_pcall(L, 1, 1, 0) == 0 && lua_isstring(L, -1)) return lua_tostring(L, -1);
+    }
+    lua_pop(L, 1);
+    lua_pushstring(L, "<unnamed>");
+    return lua_tostring(L, -1);
+}
+
+/// Whether arguments from..from+count-1 are all numbers; if not, the client's
+/// usage error for the method (`usage` is its format, with %s for the name).
+static bool requireNumbers(lua_State* L, int from, int count, const char* usage) {
+    for (int i = from; i < from + count; ++i) {
+        if (!lua_isnumber(L, i)) {
+            luaL_error(L, usage, frameNameOnStack(L, 1));
+            return false;
+        }
+    }
+    return true;
+}
+
 static int lua_Frame_RegisterEvent(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);  // self
-    const char* eventName = luaL_checkstring(L, 2);
+    // 0x0049efe0: a string, or the usage error.
+    if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:RegisterEvent(\"event\")", frameNameOnStack(L, 1));
+    const char* eventName = lua_tostring(L, 2);
 
     // Bookkeeping the client keeps in C (the frame's event list), so it is
     // done without tainting or being tainted. Done under the caller's taint,
@@ -343,7 +373,9 @@ static int lua_Frame_UnregisterAllEvents(lua_State* L) {
 
 static int lua_Frame_UnregisterEvent(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
-    const char* eventName = luaL_checkstring(L, 2);
+    // 0x0049f060: a string, or the usage error.
+    if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:UnregisterEvent(\"event\")", frameNameOnStack(L, 1));
+    const char* eventName = lua_tostring(L, 2);
     taint::Quiet quiet;   // as RegisterEvent
 
     allEventsSkip(L, 1, eventName, true);
@@ -461,7 +493,11 @@ void registerAllEventFrames(lua_State* L, const char* eventName) {
 // Frame method: frame:SetScript("handler", func)
 static int lua_Frame_SetScript(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
-    const char* scriptType = luaL_checkstring(L, 2);
+    // 0x0049ec80: the type as a string and a function or nil, or the usage
+    // error. (The client also refuses a type the frame has no script for.)
+    if (!lua_isstring(L, 2) || (!lua_isfunction(L, 3) && !lua_isnoneornil(L, 3)))
+        return luaL_error(L, "Usage: %s:SetScript(\"type\", function)", frameNameOnStack(L, 1));
+    const char* scriptType = lua_tostring(L, 2);
     // The script is held with the taint of whoever set it (0x0049edb0 keeps
     // the two side by side), and that is what it runs under - see
     // pcallScript. Read first, so a handler an insecure caller hands over
@@ -545,7 +581,9 @@ static int lua_Frame_HookScript(lua_State* L) {
 // Frame method: frame:GetScript("handler")
 static int lua_Frame_GetScript(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
-    const char* scriptType = luaL_checkstring(L, 2);
+    // 0x0049eb70: a string, or the usage error.
+    if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:GetScript(\"type\")", frameNameOnStack(L, 1));
+    const char* scriptType = lua_tostring(L, 2);
     lua_getfield(L, 1, "__scripts");
     if (lua_istable(L, -1)) {
         lua_getfield(L, -1, scriptType);
@@ -1095,13 +1133,19 @@ int lua_Region_SetAllPoints(lua_State* L) {
     return 0;
 }
 
+// SetSize(width, height) (0x0049d7a0): both numbers, or the usage error.
 int lua_Region_SetSize(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
+    if (id != 0 && (!lua_isnumber(L, 2) || !lua_isnumber(L, 3))) {
+        const auto* w = tree ? tree->get(id) : nullptr;
+        return luaL_error(L, "Usage: %s:SetSize(width, height)",
+                          (w && !w->name.empty()) ? w->name.c_str() : "<unnamed>");
+    }
     if (tree && id != 0) {
-        tree->setWidth(id, static_cast<float>(luaL_optnumber(L, 2, 0)));
-        tree->setHeight(id, static_cast<float>(luaL_optnumber(L, 3, 0)));
+        tree->setWidth(id, static_cast<float>(lua_tonumber(L, 2)));
+        tree->setHeight(id, static_cast<float>(lua_tonumber(L, 3)));
     }
     return 0;
 }
@@ -1432,6 +1476,8 @@ int lua_Frame_SetMinResize(lua_State* L) {
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     if (!tree || id == 0) return 0;
+    // 0x004a0520: two numbers, or the usage error.
+    if (!requireNumbers(L, 2, 2, "Usage: %s:SetMinResize(minWidth, minHeight)")) return 0;
     if (auto* w = tree->get(id)) {
         w->minResizeW = static_cast<float>(luaL_optnumber(L, 2, 0));
         w->minResizeH = static_cast<float>(luaL_optnumber(L, 3, 0));
@@ -1443,6 +1489,8 @@ int lua_Frame_SetMaxResize(lua_State* L) {
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     if (!tree || id == 0) return 0;
+    // 0x004a06e0: two numbers, or the usage error.
+    if (!requireNumbers(L, 2, 2, "Usage: %s:SetMaxResize(maxWidth, maxHeight)")) return 0;
     if (auto* w = tree->get(id)) {
         w->maxResizeW = static_cast<float>(luaL_optnumber(L, 2, 0));
         w->maxResizeH = static_cast<float>(luaL_optnumber(L, 3, 0));
@@ -1494,18 +1542,30 @@ int lua_Region_GetName(lua_State* L) {
     return 1;
 }
 
+namespace {
+/// The name a usage error is worded with: the frame's, or "<unnamed>".
+const char* usageName(lua_State* L, int index) {
+    const auto* w = widgetOf(L, index);
+    return (w && !w->name.empty()) ? w->name.c_str() : "<unnamed>";
+}
+}  // namespace
+
+// SetWidth(width) / SetHeight(height) (0x0049d480, 0x0049d620): a number, or
+// the usage error.
 int lua_Region_SetWidth(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
-    if (tree && id != 0) tree->setWidth(id, static_cast<float>(luaL_optnumber(L, 2, 0)));
+    if (id != 0 && !lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetWidth(width)", usageName(L, 1));
+    if (tree && id != 0) tree->setWidth(id, static_cast<float>(lua_tonumber(L, 2)));
     return 0;
 }
 int lua_Region_SetHeight(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
-    if (tree && id != 0) tree->setHeight(id, static_cast<float>(luaL_optnumber(L, 2, 0)));
+    if (id != 0 && !lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetHeight(height)", usageName(L, 1));
+    if (tree && id != 0) tree->setHeight(id, static_cast<float>(lua_tonumber(L, 2)));
     return 0;
 }
 /// Width of a string as it would be drawn.
@@ -1751,18 +1811,48 @@ int lua_Region_GetCenter(lua_State* L) {
 static int lua_Region_SetParent(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
     luaL_checktype(L, 1, LUA_TTABLE);
-    // A name is as good as a table here, and FrameXML passes both.
-    if (lua_isstring(L, 2) && !lua_isnumber(L, 2)) {
-        lua_getglobal(L, lua_tostring(L, 2));
-        lua_replace(L, 2);
+    // 0x0049cbd0's refusals, each its own error.
+    auto* tree = wowee::addons::getWidgetTree(L);
+    const auto* self = widgetOf(L, 1);
+    const char* who = (self && !self->name.empty()) ? self->name.c_str() : "<unnamed>";
+    if (lua_isnoneornil(L, 2)) {
+        if (self && self->kind != wowee::ui::WidgetKind::Frame)
+            return luaL_error(L, "%s:SetParent(): Cannot set a 'nil' parent for fonts or textures", who);
+    } else {
+        // A name is as good as a table here, and FrameXML passes both.
+        if (!lua_istable(L, 2)) {
+            const char* asked = lua_tostring(L, 2);
+            if (lua_type(L, 2) == LUA_TSTRING) {
+                lua_getglobal(L, asked);
+                if (lua_istable(L, -1) && widgetIdOf(L, lua_gettop(L)) != 0) {
+                    lua_replace(L, 2);
+                } else {
+                    lua_pop(L, 1);
+                    return luaL_error(L, "%s:SetParent(): Couldn't find region named '%s'", who, asked);
+                }
+            } else {
+                return luaL_error(L, "%s:SetParent(): Couldn't find region named '%s'", who, asked ? asked : "");
+            }
+        }
+        const uint32_t np = widgetIdOf(L, 2);
+        const auto* parent = (tree && np) ? tree->get(np) : nullptr;
+        if (!parent) return luaL_error(L, "%s:SetParent(): Couldn't find 'this' in parent object", who);
+        if (parent->kind != wowee::ui::WidgetKind::Frame)
+            return luaL_error(L, "%s:SetParent(): Wrong parent object type, expected Frame", who);
+        // Up from the new parent: meeting the frame itself would be a loop.
+        const uint32_t selfId = widgetIdOf(L, 1);
+        for (const auto* at = parent; at; at = at->parent ? tree->get(at->parent) : nullptr) {
+            if (at->id == selfId)
+                return luaL_error(L, "%s:SetParent(): Would create a loop parenting to %s", who,
+                                  parent->name.empty() ? "<unnamed>" : parent->name.c_str());
+        }
     }
-    if (!lua_istable(L, 2) && !lua_isnil(L, 2)) return 0;
     lua_pushvalue(L, 2);
     lua_setfield(L, 1, "__parent");
     // And the widget, which is what everything inherited actually follows.
     // Writing only the field left GetParent answering the new parent while the
     // frame stayed laid out, clipped and shown by the old one.
-    if (auto* tree = wowee::addons::getWidgetTree(L)) {
+    if (tree) {
         const uint32_t id = widgetIdOf(L, 1);
         const uint32_t np = lua_istable(L, 2) ? widgetIdOf(L, 2) : 0;
         if (id != 0) tree->setParent(id, np);
@@ -1835,13 +1925,16 @@ int lua_Region_GetScale(lua_State* L) {
     lua_pushnumber(L, w ? w->scale : 1.0);
     return 1;
 }
+// SetScale(scale) (0x0049f820): a number, or the usage error; one not above
+// zero is its own error - it would collapse the frame and everything under it.
 int lua_Region_SetScale(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
     if (auto* w = widgetOf(L, 1)) {
-        const float v = static_cast<float>(luaL_optnumber(L, 2, 1.0));
-        // A scale of zero collapses the frame and everything under it to
-        // nothing, with no way back from Lua; WoW rejects it too.
-        if (v > 0.0f) w->scale = v;
+        const char* who = w->name.empty() ? "<unnamed>" : w->name.c_str();
+        if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetScale(scale)", who);
+        const auto v = static_cast<float>(lua_tonumber(L, 2));
+        if (!(v > 0.0f)) return luaL_error(L, "%s:SetScale(): Scale must be > 0", who);
+        w->scale = v;
     }
     return 0;
 }
@@ -1909,8 +2002,11 @@ int lua_Region_GetObjectType(lua_State* L) {
     lua_pushstring(L, w ? w->objectType.c_str() : "Frame");
     return 1;
 }
+// IsObjectType("TYPE") (0x0048be30 and its kin): a string, or the usage error.
 int lua_Region_IsObjectType(lua_State* L) {
     const auto* w = widgetOf(L, 1);
+    if (w && !lua_isstring(L, 2))
+        return luaL_error(L, "Usage: %s:IsObjectType(\"TYPE\")", w->name.empty() ? "<unnamed>" : w->name.c_str());
     const char* asked = luaL_optstring(L, 2, "");
     luaPushOneOrNil(L, w && objectTypeMatches(w->objectType, asked));
     return 1;
@@ -6640,8 +6736,27 @@ int lua_Region_IsVisible(lua_State* L) {
     luaPushOneOrNil(L, on);
     return 1;
 }
+// SetAlpha(alpha), held as the byte the client keeps in the region's colour:
+// a texture's (0x0048c3e0) and a frame's (0x0049f9e0) clamped to 0 - 1 first,
+// a font string's (0x0048d030) not - its 255ths taken as they come and cut to
+// a byte. Anything but a number is the usage error, the frame's own wording.
 int lua_Region_SetAlpha(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->alpha = static_cast<float>(luaL_optnumber(L, 2, 1.0));
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isnumber(L, 2)) {
+        const char* who = w->name.empty() ? "<unnamed>" : w->name.c_str();
+        return luaL_error(L, w->kind == wowee::ui::WidgetKind::Frame ? "Usage: %s:SetAlpha(alpha 0 to 1)"
+                                                              : "Usage: %s:SetAlpha(alpha)",
+                          who);
+    }
+    double alpha = lua_tonumber(L, 2);
+    if (std::isnan(alpha)) alpha = 0.0;  // the FPU's integer indefinite, low byte 0
+    if (w->kind != wowee::ui::WidgetKind::FontString) alpha = (alpha >= 0.0 && alpha < 1.0) ? alpha : (alpha >= 1.0 ? 1.0 : 0.0);
+    const double scaled = alpha * 255.0;
+    // Out of an int's reach the FPU's conversion is the indefinite 0x80000000.
+    const long whole = std::fabs(scaled) < 2147483648.0 ? std::lrint(scaled) : 0L;
+    const auto byte = static_cast<uint8_t>(whole & 0xFF);
+    w->alpha = static_cast<float>(byte) / 255.0f;
     return 0;
 }
 int lua_Region_GetAlpha(lua_State* L) {
@@ -6673,26 +6788,60 @@ int lua_Texture_GetTexture(lua_State* L) {
     lua_pushstring(L, w ? w->texturePath.c_str() : "");
     return 1;
 }
+// SetTexCoord (0x0048e170): exactly four numbers - left, right, top, bottom -
+// or exactly eight, a UV per corner in WoW's order of upper-left, lower-left,
+// upper-right, lower-right; any other count is the usage error. Each value is
+// read as a number (anything else is 0) and must lie in -10000 .. 10000, NaN
+// failing too, or it is "TexCoord out of range". Reading the first four of an
+// eight-number call as a crop is how the paperdoll's sideways flyout arrow
+// became a pale bar.
 int lua_Texture_SetTexCoord(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) {
-        // Eight numbers is the rotated form: a UV per corner, in WoW's order
-        // of upper-left, lower-left, upper-right, lower-right. Four is the
-        // plain left/right/top/bottom crop. Reading the first four of an
-        // eight-number call treats two corners as a crop rectangle, which is
-        // how the paperdoll's sideways flyout arrow became a pale bar.
-        if (lua_gettop(L) >= 9) {
-            for (int i = 0; i < 8; ++i) {
-                w->texCoordQuad[i] = static_cast<float>(luaL_optnumber(L, 2 + i, 0.0));
-            }
-            w->texCoordRotated = true;
-            return 0;
-        }
-        w->texCoordRotated = false;
-        w->texCoord[0] = static_cast<float>(luaL_optnumber(L, 2, 0.0));
-        w->texCoord[1] = static_cast<float>(luaL_optnumber(L, 3, 1.0));
-        w->texCoord[2] = static_cast<float>(luaL_optnumber(L, 4, 0.0));
-        w->texCoord[3] = static_cast<float>(luaL_optnumber(L, 5, 1.0));
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    const int top = lua_gettop(L);
+    if (top != 5 && top != 9) {
+        return luaL_error(L,
+                          "Usage: %s:SetTexCoord(minX, maxX, minY, maxY) or SetTexCoord(ULx, ULy, LLx, LLy, URx, URy, "
+                          "LRx, LRy)",
+                          w->name.empty() ? "<unnamed>" : w->name.c_str());
     }
+    const int count = top - 1;
+    float v[8] = {};
+    for (int i = 0; i < count; ++i) {
+        v[i] = static_cast<float>(lua_tonumber(L, 2 + i));
+        if (!(v[i] >= -10000.0f && v[i] <= 10000.0f)) return luaL_error(L, "TexCoord out of range");
+    }
+    if (count == 8) {
+        for (int i = 0; i < 8; ++i) w->texCoordQuad[i] = v[i];
+        w->texCoordRotated = true;
+        return 0;
+    }
+    w->texCoordRotated = false;
+    for (int i = 0; i < 4; ++i) w->texCoord[i] = v[i];
+    return 0;
+}
+/// SetRotation(angle[, cx, cy]) (0x0048c860): the four corners' coordinates
+/// turned about (cx, cy) - the middle, 0.5 0.5, unless both are given - by
+/// the angle less a quarter turn, one unit out from it: upper-left
+/// (cx + sin, cy - cos), lower-left (cx - cos, cy - sin), upper-right
+/// (cx + cos, cy + sin), lower-right (cx - sin, cy + cos). One unit, not the
+/// half-diagonal, so a turned image is cropped to the middle of its square.
+int lua_Texture_SetRotation(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isnumber(L, 2)) {
+        return luaL_error(L, "Usage: %s:SetRotation(angle, [cx, cy])", w->name.empty() ? "<unnamed>" : w->name.c_str());
+    }
+    const float angle = static_cast<float>(lua_tonumber(L, 2) - 0.7853981852531433);
+    float cx = 0.5f, cy = 0.5f;
+    if (lua_isnumber(L, 3) && lua_isnumber(L, 4)) {
+        cx = static_cast<float>(lua_tonumber(L, 3));
+        cy = static_cast<float>(lua_tonumber(L, 4));
+    }
+    const float sn = std::sin(angle), cs = std::cos(angle);
+    const float quad[8] = {sn + cx, cy - cs, cx - cs, cy - sn, cs + cx, sn + cy, cx - sn, cs + cy};
+    for (int i = 0; i < 8; ++i) w->texCoordQuad[i] = quad[i];
+    w->texCoordRotated = true;
     return 0;
 }
 /// GetTexCoord() (0x0048c7f0): the four corners' coordinates, upper-left,
@@ -6710,15 +6859,25 @@ int lua_Texture_GetTexCoord(lua_State* L) {
     for (float v : q) lua_pushnumber(L, v);
     return 8;
 }
+// SetBlendMode("mode") (0x0048c040): one of the five modes by name, any case
+// (0x00814ff0 compares with strnicmp), or the usage error. Drawn: ADD adds;
+// BLEND, MOD, ALPHAKEY and DISABLE are drawn as ordinary blending here.
 int lua_Texture_SetBlendMode(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) {
-        const char* mode = luaL_optstring(L, 2, "BLEND");
-        // "ADD" and "ALPHAKEY" are the two that add rather than cover; the rest
-        // - BLEND, MOD, DISABLE - are close enough to ordinary blending that
-        // telling them apart would not change a pixel here yet.
-        w->blendAdd = (std::strcmp(mode, "ADD") == 0);
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    static constexpr const char* kModes[] = {"DISABLE", "BLEND", "ALPHAKEY", "ADD", "MOD"};
+    if (lua_isstring(L, 2)) {
+        std::string mode = lua_tostring(L, 2);
+        for (char& c : mode) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        for (const char* known : kModes) {
+            if (mode == known) {
+                w->blendMode = mode;
+                w->blendAdd = mode == "ADD";
+                return 0;
+            }
+        }
     }
-    return 0;
+    return luaL_error(L, "Usage: %s:SetBlendMode(\"mode\")", w->name.empty() ? "<unnamed>" : w->name.c_str());
 }
 // SetDesaturated(flag): drawn as its own luminance (Desaturate.bls). Answers
 // whether the shader is there - always - which SetItemButtonDesaturated reads
@@ -6735,7 +6894,7 @@ int lua_Texture_IsDesaturated(lua_State* L) {
 }
 int lua_Texture_GetBlendMode(lua_State* L) {
     auto* w = widgetOf(L, 1);
-    lua_pushstring(L, (w && w->blendAdd) ? "ADD" : "BLEND");
+    lua_pushstring(L, w ? w->blendMode.c_str() : "BLEND");
     return 1;
 }
 int lua_Region_SetVertexColor(lua_State* L) {
@@ -6808,9 +6967,18 @@ int lua_Region_GetDrawLayer(lua_State* L) {
     lua_pushstring(L, kNames[static_cast<size_t>(layer)]);
     return 1;
 }
+// SetDrawLayer("layer") (0x0048bf30 a texture's, 0x0048ce70 a font string's):
+// one of the five layers by name, any case (0x00814f60), or the usage error.
+// 3.3.5 takes no sub-level here, so the region keeps its own.
 int lua_Region_SetDrawLayer(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) {
-        const auto layer = wowee::ui::parseDrawLayer(luaL_optstring(L, 2, "ARTWORK"));
+        std::string name = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
+        for (char& c : name) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        if (name != "BACKGROUND" && name != "BORDER" && name != "ARTWORK" && name != "OVERLAY" &&
+            name != "HIGHLIGHT") {
+            return luaL_error(L, "Usage: %s:SetDrawLayer(\"layer\")", w->name.empty() ? "<unnamed>" : w->name.c_str());
+        }
+        const auto layer = wowee::ui::parseDrawLayer(name);
         // On a status bar this names the layer of the *fill*, which is a
         // region in the real client and is drawn by the bar here. Twenty bars
         // in the interface declare it and the cast bar is one of them: it asks
@@ -6818,7 +6986,6 @@ int lua_Region_SetDrawLayer(lua_State* L) {
         // behind the fill rather than over it.
         if (w->isStatusBar) w->barLayer = layer;
         else                w->layer = layer;
-        w->subLevel = static_cast<int>(luaL_optnumber(L, 3, 0));
     }
     return 0;
 }
@@ -6863,7 +7030,18 @@ int lua_Frame_IsMouseEnabled(lua_State* L) {
 int lua_Frame_SetFrameStrata(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
     if (auto* w = widgetOf(L, 1)) {
-        w->strata = wowee::ui::parseStrata(luaL_optstring(L, 2, "MEDIUM"));
+        // 0x0049e880: a string, or the usage error; a name that is not one of
+        // the strata (0x00814e40, any case) is its own error.
+        const char* who = w->name.empty() ? "<unnamed>" : w->name.c_str();
+        if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:SetFrameStrata(level)", who);
+        std::string name = lua_tostring(L, 2);
+        for (char& c : name) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        static constexpr const char* kStrata[] = {"WORLD",  "BACKGROUND", "LOW",        "MEDIUM", "HIGH",
+                                                  "DIALOG", "FULLSCREEN", "FULLSCREEN_DIALOG", "TOOLTIP"};
+        bool known = false;
+        for (const char* k : kStrata) known = known || name == k;
+        if (!known) return luaL_error(L, "%s:SetFrameStrata(): Unknown frame strata: %s", who, lua_tostring(L, 2));
+        w->strata = wowee::ui::parseStrata(name);
         w->strataExplicit = true;
     }
     return 0;
@@ -6887,7 +7065,12 @@ int lua_Frame_SetFrameLevel(lua_State* L) {
     const uint32_t id = widgetIdOf(L, 1);
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
-    const int wanted = static_cast<int>(luaL_optnumber(L, 2, 0));
+    // 0x0049e9d0: a number, or the usage error; truncated to a whole level and
+    // refused below zero with its own error.
+    const char* who = w->name.empty() ? "<unnamed>" : w->name.c_str();
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetFrameLevel(level)", who);
+    const int wanted = static_cast<int>(lua_tonumber(L, 2));
+    if (wanted < 0) return luaL_error(L, "%s:SetFrameLevel(): Passed negative frame level: %d", who, wanted);
     // Anything inside that set its own level moves by the same amount, because
     // a child's level is relative to its parent. Raising a window by hand and
     // raising it by clicking it must leave the same arrangement behind.
@@ -6920,14 +7103,31 @@ int lua_FontString_GetText(lua_State* L) {
     lua_pushstring(L, w ? w->text.c_str() : "");
     return 1;
 }
-int lua_FontString_SetJustifyH(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->justifyH = luaL_optstring(L, 2, "CENTER");
+namespace {
+/// The one justify table both setters read (0x00815080 over 0x00a44010):
+/// LEFT 1, CENTER 2, RIGHT 4, TOP 8, MIDDLE 16, BOTTOM 32, any case. Each
+/// setter keeps its own axis's bits of the match, so a name of the other axis
+/// leaves none set - drawn as the left edge, or the top. Anything else is the
+/// usage error.
+int setJustify(lua_State* L, bool horizontal) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    std::string name = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
+    for (char& c : name) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    const bool h = name == "LEFT" || name == "CENTER" || name == "RIGHT";
+    const bool v = name == "TOP" || name == "MIDDLE" || name == "BOTTOM";
+    if (!h && !v) {
+        return luaL_error(L, horizontal ? "Usage: %s:SetJustifyH(\"justify\")" : "Usage: %s:SetJustifyV(\"justify\")",
+                          w->name.empty() ? "<unnamed>" : w->name.c_str());
+    }
+    if (horizontal) w->justifyH = h ? name : "LEFT";
+    else            w->justifyV = v ? name : "TOP";
     return 0;
 }
-int lua_FontString_SetJustifyV(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->justifyV = luaL_optstring(L, 2, "MIDDLE");
-    return 0;
-}
+}  // namespace
+// SetJustifyH (0x0048e360) and SetJustifyV (0x0048e430).
+int lua_FontString_SetJustifyH(lua_State* L) { return setJustify(L, true); }
+int lua_FontString_SetJustifyV(lua_State* L) { return setJustify(L, false); }
 int lua_FontString_GetJustifyV(lua_State* L) {
     const auto* w = widgetOf(L, 1);
     lua_pushstring(L, w ? w->justifyV.c_str() : "MIDDLE");
@@ -7007,22 +7207,34 @@ int lua_FontString_SetTextColor(lua_State* L) {
     return 0;
 }
 
+// SetFont("font", fontHeight [, flags]) (0x0048d5b0): a string and a number,
+// or the usage error; a height not above FLT_EPSILON is its own error; an
+// empty face changes nothing and answers nothing. Otherwise 1 for a font set
+// (nil where the client could not load it - this one does not load here).
 int lua_FontString_SetFont(lua_State* L) {
-    if (auto* w = widgetToRemeasure(L, 1)) {
-        if (lua_isstring(L, 2)) w->fontFace = lua_tostring(L, 2);
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    const char* who = w->name.empty() ? "<unnamed>" : w->name.c_str();
+    if (!lua_isstring(L, 2) || !lua_isnumber(L, 3))
+        return luaL_error(L, "Usage: %s:SetFont(\"font\", fontHeight [, flags])", who);
+    const auto height = static_cast<float>(lua_tonumber(L, 3));
+    if (!(height > 1.1920929e-07f))
+        return luaL_error(L, "ERROR: %s:SetFont(): invalid fontHeight: %f, height must be > 0", who,
+                          static_cast<double>(height));
+    if (lua_tostring(L, 2)[0] == '\0') return 0;
+    if (auto* m = widgetToRemeasure(L, 1)) {
+        if (lua_isstring(L, 2)) m->fontFace = lua_tostring(L, 2);
         // The flags argument, where "OUTLINE" and "THICKOUTLINE" arrive.
         if (const char* flags = lua_isstring(L, 4) ? lua_tostring(L, 4) : nullptr) {
             const std::string f(flags);
-            if (f.find("THICK") != std::string::npos)        w->fontOutline = "THICK";
-            else if (f.find("OUTLINE") != std::string::npos) w->fontOutline = "NORMAL";
-            else                                             w->fontOutline.clear();
+            if (f.find("THICK") != std::string::npos)        m->fontOutline = "THICK";
+            else if (f.find("OUTLINE") != std::string::npos) m->fontOutline = "NORMAL";
+            else                                             m->fontOutline.clear();
         }
-        // (path, height, flags). Only the height is honoured for now; the path
-        // needs a font atlas rebuild, which cannot happen mid-frame.
-        const double h = luaL_optnumber(L, 3, 0.0);
-        if (h > 0.0) w->fontHeight = static_cast<float>(h);
+        m->fontHeight = height;
     }
-    return 0;
+    lua_pushnumber(L, 1);
+    return 1;
 }
 
 /// GetFont() → path, height, flags.
@@ -7061,9 +7273,13 @@ int lua_FontString_GetSpacing(lua_State* L) {
     return 1;
 }
 
+// SetSpacing(spacing) (0x0048dd00): a number, or the usage error.
 int lua_FontString_SetSpacing(lua_State* L) {
-    if (auto* w = widgetOf(L, 1))
-        w->lineSpacing = static_cast<float>(luaL_optnumber(L, 2, 0.0));
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: %s:SetSpacing(spacing)", w->name.empty() ? "<unnamed>" : w->name.c_str());
+    w->lineSpacing = static_cast<float>(lua_tonumber(L, 2));
     return 0;
 }
 
@@ -7140,12 +7356,15 @@ static void applyFontObject(lua_State* L, int fontIndex, wowee::ui::Widget* w) {
     lua_pop(L, 1);
 }
 
+// SetShadowOffset(x, y) (0x0048dbb0): both numbers, or the usage error.
 int lua_FontString_SetShadowOffset(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) {
-        w->hasShadow = true;
-        w->shadowX = static_cast<float>(luaL_optnumber(L, 2, 1.0));
-        w->shadowY = static_cast<float>(luaL_optnumber(L, 3, -1.0));
-    }
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isnumber(L, 2) || !lua_isnumber(L, 3))
+        return luaL_error(L, "Usage: %s:SetShadowOffset(x, y)", w->name.empty() ? "<unnamed>" : w->name.c_str());
+    w->hasShadow = true;
+    w->shadowX = static_cast<float>(lua_tonumber(L, 2));
+    w->shadowY = static_cast<float>(lua_tonumber(L, 3));
     return 0;
 }
 int lua_FontString_SetShadowColor(lua_State* L) {
@@ -7168,11 +7387,17 @@ int lua_FontString_SetShadowColor(lua_State* L) {
 /// the rest, so with this doing nothing the banner appeared at whatever size
 /// its template carried and sat there. Combat feedback sizes its numbers by
 /// hit type through the same call, and the scrolling combat text its crits.
+// SetTextHeight(pixelHeight) (0x0048ddb0): a number, or the usage error; one
+// not above FLT_EPSILON is its own error, and leaves the height as it was.
 int lua_FontString_SetTextHeight(lua_State* L) {
-    if (auto* w = widgetToRemeasure(L, 1)) {
-        const double h = luaL_optnumber(L, 2, 0.0);
-        if (h > 0.0) w->fontHeight = static_cast<float>(h);
-    }
+    auto* w = widgetToRemeasure(L, 1);
+    if (!w) return 0;
+    const char* who = w->name.empty() ? "<unnamed>" : w->name.c_str();
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetTextHeight(pixelHeight)", who);
+    const auto h = static_cast<float>(lua_tonumber(L, 2));
+    if (h <= 1.1920929e-07f)
+        return luaL_error(L, "%s:SetTextHeight(): invalid texHeight: %f, height must be > 0", who, static_cast<double>(h));
+    w->fontHeight = h;
     return 0;
 }
 int lua_FontString_SetFontObject(lua_State* L) {
@@ -7187,6 +7412,18 @@ int lua_FontString_SetFontObject(lua_State* L) {
             if (auto* fs = tree->get(widgetIdOf(L, lua_gettop(L)))) w = fs;
         }
         lua_pop(L, 1);
+    }
+    // (0x0048d380) A font object, a font's global name, or nil; anything else
+    // is the usage error, and a name with no font behind it its own error.
+    const int type = lua_type(L, 2);
+    const char* who = (w && !w->name.empty()) ? w->name.c_str() : "<unnamed>";
+    if (type != LUA_TTABLE && type != LUA_TSTRING && type != LUA_TNIL && type != LUA_TNONE)
+        return luaL_error(L, "Usage: %s:SetFontObject(font or \"font\" or nil)", who);
+    if (type == LUA_TSTRING) {
+        lua_getglobal(L, lua_tostring(L, 2));
+        const bool found = lua_istable(L, -1);
+        lua_pop(L, 1);
+        if (!found) return luaL_error(L, "%s:SetFontObject(): Couldn't find font named %s", who, lua_tostring(L, 2));
     }
     applyFontObject(L, 2, w);
     return 0;
@@ -7393,6 +7630,7 @@ void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
         set("SetTexture", lua_Texture_SetTexture);
         set("GetTexture", lua_Texture_GetTexture);
         set("SetTexCoord", lua_Texture_SetTexCoord);
+        set("SetRotation", lua_Texture_SetRotation);
         set("SetBlendMode", lua_Texture_SetBlendMode);
         set("GetBlendMode", lua_Texture_GetBlendMode);
         set("SetDesaturated", lua_Texture_SetDesaturated);
@@ -7616,6 +7854,8 @@ int lua_Frame_GetPushedTextOffset(lua_State* L) {
 
 int lua_Frame_SetHitRectInsets(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
+    // 0x004a0090: four numbers, or the usage error.
+    if (widgetOf(L, 1) && !requireNumbers(L, 2, 4, "Usage: %s:SetHitRectInsets(left, right, top, bottom)")) return 0;
     if (auto* w = widgetOf(L, 1)) {
         w->hitInsetLeft   = static_cast<float>(luaL_optnumber(L, 2, 0.0));
         w->hitInsetRight  = static_cast<float>(luaL_optnumber(L, 3, 0.0));
@@ -7960,6 +8200,8 @@ int lua_Frame_IsClampedToScreen(lua_State* L) {
 int lua_Frame_SetClampRectInsets(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
+    // 0x004a0310: four numbers, or the usage error.
+    if (!requireNumbers(L, 2, 4, "Usage: %s:SetClampRectInsets(left, right, top, bottom)")) return 0;
     w->clampInsetL = static_cast<float>(luaL_optnumber(L, 2, 0.0));
     w->clampInsetR = static_cast<float>(luaL_optnumber(L, 3, 0.0));
     w->clampInsetT = static_cast<float>(luaL_optnumber(L, 4, 0.0));
@@ -10861,15 +11103,32 @@ void LuaEngine::registerCoreAPI() {
         "__WoweePlayingAnimations = {}\n"
         "local playing = __WoweePlayingAnimations\n"
 
+        // The usage errors the client's animation methods raise (0x004a51a0 and
+        // its neighbours), worded with the animation's name.
+        "local function animUsage(self, usage)\n"
+        "    error(usage:format(tostring(self.name or '<unnamed>')), 3)\n"
+        "end\n"
         "local animMeta = {}\n"
         "animMeta.__index = animMeta\n"
-        "function animMeta:SetDuration(d) self.duration = d or 0 end\n"
+        // SetDuration (0x004a5320): a number.
+        "function animMeta:SetDuration(d)\n"
+        "    if type(d) ~= 'number' and not tonumber(d) then animUsage(self, 'Usage: %s:SetDuration(durationSec)') end\n"
+        "    self.duration = tonumber(d)\n"
+        "end\n"
         "function animMeta:GetDuration() return self.duration or 0 end\n"
-        "function animMeta:SetChange(c) self.change = c end\n"
+        // SetChange (0x004a6da0): a number.
+        "function animMeta:SetChange(c)\n"
+        "    if not tonumber(c) then animUsage(self, 'Usage: %s:SetChange(change)') end\n"
+        "    self.change = tonumber(c)\n"
+        "end\n"
         "function animMeta:GetChange() return self.change end\n"
         "function animMeta:SetFromAlpha(a) self.fromAlpha = a end\n"
         "function animMeta:SetToAlpha(a) self.toAlpha = a end\n"
-        "function animMeta:SetOffset(x, y) self.offsetX, self.offsetY = x, y end\n"
+        // SetOffset (0x004a6040): two numbers.
+        "function animMeta:SetOffset(x, y)\n"
+        "    if not tonumber(x) or not tonumber(y) then animUsage(self, 'Usage: %s:SetOffset(x, y)') end\n"
+        "    self.offsetX, self.offsetY = tonumber(x), tonumber(y)\n"
+        "end\n"
         "function animMeta:GetOffset() return self.offsetX or 0, self.offsetY or 0 end\n"
         // An animation carries scripts of its own, and OnFinished on the
         // *animation* is how FrameXML hides a faded-out frame:
@@ -10885,11 +11144,24 @@ void LuaEngine::registerCoreAPI() {
         "animMeta.GetScript = __WoweeGetScriptSlot\n"
         "animMeta.HookScript = __WoweeHookScriptSlot\n"
         "function animMeta:GetRegionParent() return self.group and self.group.parent end\n"
-        "function animMeta:SetOrder(o) self.order = o or 1 end\n"
+        // SetOrder (0x004a5660 -> 0x0049aec0): a whole number held to 1 - 100.
+        "function animMeta:SetOrder(o)\n"
+        "    if not tonumber(o) then animUsage(self, 'Usage: %s:SetOrder(order)') end\n"
+        "    o = math.floor(tonumber(o))\n"
+        "    self.order = math.max(1, math.min(100, o))\n"
+        "end\n"
         "function animMeta:GetOrder() return self.order or 1 end\n"
-        "function animMeta:SetStartDelay(d) self.startDelay = d or 0 end\n"
+        // SetStartDelay / SetEndDelay (0x004a51a0, 0x004a5260): a number, a
+        // negative delay taken as none (0x0049ae20).
+        "function animMeta:SetStartDelay(d)\n"
+        "    if not tonumber(d) then animUsage(self, 'Usage: %s:SetStartDelay(delaySec)') end\n"
+        "    self.startDelay = math.max(0, tonumber(d))\n"
+        "end\n"
         "function animMeta:GetStartDelay() return self.startDelay or 0 end\n"
-        "function animMeta:SetEndDelay(d) self.endDelay = d or 0 end\n"
+        "function animMeta:SetEndDelay(d)\n"
+        "    if not tonumber(d) then animUsage(self, 'Usage: %s:SetEndDelay(delaySec)') end\n"
+        "    self.endDelay = math.max(0, tonumber(d))\n"
+        "end\n"
         // SetSmoothing (0x004a5740): one of NONE, IN, OUT, IN_OUT, OUT_IN.
         "function animMeta:SetSmoothing(s)\n"
         "    if type(s) ~= 'string' then error(('Usage: %s:SetSmoothing(\"smoothingType\")'):format(tostring(self.name or '<unnamed>')), 2) end\n"
@@ -10899,10 +11171,18 @@ void LuaEngine::registerCoreAPI() {
         "    end\n"
         "    self.smoothing = s\n"
         "end\n"
-        "function animMeta:SetScale(x, y) self.scaleX, self.scaleY = x, y end\n"
+        // SetScale (0x004a6650): two numbers.
+        "function animMeta:SetScale(x, y)\n"
+        "    if not tonumber(x) or not tonumber(y) then animUsage(self, 'Usage: %s:SetScale(x, y)') end\n"
+        "    self.scaleX, self.scaleY = tonumber(x), tonumber(y)\n"
+        "end\n"
         // A Rotation keeps radians (+0xa4): SetRadians sets them, GetDegrees
         // answers them times 57.29578 (0x004a6410, 0x004a63c0, 0x004a6490).
-        "function animMeta:SetDegrees(d) self.radians = (tonumber(d) or 0) / 57.29578 end\n"
+        // SetDegrees (0x004a6340): a number.
+        "function animMeta:SetDegrees(d)\n"
+        "    if not tonumber(d) then animUsage(self, 'Usage: %s:SetDegrees(degrees)') end\n"
+        "    self.radians = tonumber(d) / 57.29578\n"
+        "end\n"
         "function animMeta:GetDegrees() return (self.radians or 0) * 57.29578 end\n"
         "function animMeta:SetRadians(r)\n"
         "    if type(r) ~= 'number' then error(('Usage: %s:SetRadians(radians)'):format(tostring(self.name or '<unnamed>')), 2) end\n"
@@ -11022,15 +11302,32 @@ void LuaEngine::registerCoreAPI() {
 
         "local groupMeta = {}\n"
         "groupMeta.__index = groupMeta\n"
+        // CreateAnimation(type, name) (0x004a7e00): the type matched in any case
+        // to Animation, Translation, Rotation, Scale, Path or Alpha; none, or one
+        // not among them, is a plain Animation that changes nothing.
+        "local animKinds = {animation = 'Animation', translation = 'Translation', rotation = 'Rotation',\n"
+        "                   scale = 'Scale', path = 'Path', alpha = 'Alpha'}\n"
         "function groupMeta:CreateAnimation(kind, name)\n"
-        "    local a = setmetatable({kind = kind or 'Alpha', group = self,\n"
+        "    kind = type(kind) == 'string' and animKinds[kind:lower()] or 'Animation'\n"
+        "    local a = setmetatable({kind = kind, group = self,\n"
         "                            duration = 0, order = 1, startDelay = 0}, animMeta)\n"
         "    table.insert(self.animations, a)\n"
         "    if name then _G[name] = a end\n"
         "    return a\n"
         "end\n"
         "function groupMeta:GetAnimations() return unpack(self.animations) end\n"
-        "function groupMeta:SetLooping(m) self.looping = m end\n"
+        // SetLooping (0x004a7130): NONE, REPEAT or BOUNCE in any case (0x008152a0),
+        // the usage error for anything not a string, its own error for another.
+        "function groupMeta:SetLooping(m)\n"
+        "    if type(m) ~= 'string' and type(m) ~= 'number' then\n"
+        "        error(('Usage: %s:SetLooping(\"loopType\")'):format(tostring(self.name or '<unnamed>')), 2)\n"
+        "    end\n"
+        "    local u = tostring(m):upper()\n"
+        "    if u ~= 'NONE' and u ~= 'REPEAT' and u ~= 'BOUNCE' then\n"
+        "        error(('%s:SetLooping(): Unknown loop type specified'):format(tostring(self.name or '<unnamed>')), 2)\n"
+        "    end\n"
+        "    self.looping = u\n"
+        "end\n"
         "function groupMeta:GetLooping() return self.looping or 'NONE' end\n"
         "function groupMeta:IsPlaying() return self.isPlaying == true end\n"
         "function groupMeta:IsDone() return self.isPlaying ~= true end\n"
@@ -13370,6 +13667,20 @@ void LuaEngine::registerCoreAPI() {
         // A bare table has no GetTextColor, so that indexes nil and the enable
         // path raises - for every checkbox, slider and dropdown in the options
         // panels, which is where a control most needs to come back to life.
+        "local function fontName(self)\n"
+        "    local n = rawget(self, 'name') or (self.GetName and self:GetName())\n"
+        "    return tostring(n or '<unnamed>')\n"
+        "end\n"
+        "local function fontUsage(self, usage) error(usage:format(fontName(self)), 3) end\n"
+        "local justifyAxis = {LEFT = 'H', CENTER = 'H', RIGHT = 'H', TOP = 'V', MIDDLE = 'V', BOTTOM = 'V'}\n"
+        "local function fontJustify(self, j, axis)\n"
+        "    local u = type(j) == 'string' and j:upper()\n"
+        "    if not u or not justifyAxis[u] then\n"
+        "        fontUsage(self, 'Usage: %s:SetJustify' .. axis .. '(\"justify\")')\n"
+        "    end\n"
+        "    if justifyAxis[u] == axis then return u end\n"
+        "    return axis == 'H' and 'LEFT' or 'TOP'\n"
+        "end\n"
         "local fontMT = { __index = {\n"
         "    GetTextColor = function(self) return self.r, self.g, self.b, self.a end,\n"
         "    SetTextColor = function(self, r, g, b, a)\n"
@@ -13382,12 +13693,59 @@ void LuaEngine::registerCoreAPI() {
         "        self.font, self.height, self.outline = f, h, flags\n"
         "    end,\n"
         "    GetFontHeight = function(self) return self.height end,\n"
-        "    GetShadowColor = function(self) return 0, 0, 0, 1 end,\n"
-        "    GetShadowOffset = function(self) return 0, 0 end,\n"
-        "    GetSpacing = function(self) return 0 end,\n"
+        // What the setters below keep, answered back.
+        "    GetShadowColor = function(self)\n"
+        "        return self.shadowR or 0, self.shadowG or 0, self.shadowB or 0, self.shadowA or 1\n"
+        "    end,\n"
+        "    GetShadowOffset = function(self) return self.shadowX or 0, self.shadowY or 0 end,\n"
+        "    GetSpacing = function(self) return self.spacing or 0 end,\n"
         "    GetJustifyH = function(self) return self.justifyH or 'LEFT' end,\n"
         "    GetJustifyV = function(self) return self.justifyV or 'MIDDLE' end,\n"
         "    GetObjectType = function(self) return 'Font' end,\n"
+        // The font object's own setters (0x004a3bc0 and its neighbours), each
+        // the usage error without its arguments. SetAlpha keeps round(a * 255)
+        // as a byte, unclamped, as a font string's does.
+        "    SetAlpha = function(self, a)\n"
+        "        if not tonumber(a) then fontUsage(self, 'Usage: %s:SetAlpha(alpha)') end\n"
+        "        local n = math.floor(tonumber(a) * 255 + 0.5) % 256\n"
+        "        self.alpha = n / 255\n"
+        "    end,\n"
+        "    GetAlpha = function(self) return self.alpha or 1 end,\n"
+        "    SetShadowOffset = function(self, x, y)\n"
+        "        if not tonumber(x) or not tonumber(y) then fontUsage(self, 'Usage: %s:SetShadowOffset(x, y)') end\n"
+        "        self.shadowX, self.shadowY = tonumber(x), tonumber(y)\n"
+        "    end,\n"
+        "    SetSpacing = function(self, n)\n"
+        "        if not tonumber(n) then fontUsage(self, 'Usage: %s:SetSpacing(spacing)') end\n"
+        "        self.spacing = tonumber(n)\n"
+        "    end,\n"
+        // SetJustifyH / SetJustifyV (0x004a4930, 0x004a49c0): the one six-name
+        // table, each keeping its own axis.
+        "    SetJustifyH = function(self, j) self.justifyH = fontJustify(self, j, 'H') end,\n"
+        "    SetJustifyV = function(self, j) self.justifyV = fontJustify(self, j, 'V') end,\n"
+        // IsObjectType (0x004a4170): a string, or the usage error.
+        "    IsObjectType = function(self, t)\n"
+        "        if type(t) ~= 'string' then fontUsage(self, 'Usage: %s:IsObjectType(\"TYPE\")') end\n"
+        "        local l = t:lower()\n"
+        "        if l == 'font' or l == 'object' then return 1 end\n"
+        "        return nil\n"
+        "    end,\n"
+        // SetFontObject (0x004a3790): another font object, a font's name, or
+        // nil; another type is the usage error, a name with no font behind it
+        // its own error. Takes the other font's settings, as CopyFontObject.
+        "    SetFontObject = function(self, src)\n"
+        "        if src == nil then return end\n"
+        "        if type(src) == 'string' then\n"
+        "            local f = _G[src]\n"
+        "            if type(f) ~= 'table' then\n"
+        "                error((\"%s:SetFontObject(): Couldn't find font named %s\"):format(fontName(self), src), 2)\n"
+        "            end\n"
+        "            src = f\n"
+        "        elseif type(src) ~= 'table' then\n"
+        "            fontUsage(self, 'Usage: %s:SetFontObject(font or \"font\" or nil)')\n"
+        "        end\n"
+        "        self:CopyFontObject(src)\n"
+        "    end,\n"
         // A font object is its own font object, which is what SetFontObject
         // being handed one relies on.
         "    GetFontObject = function(self) return self end,\n"

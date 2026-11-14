@@ -311,7 +311,9 @@ public:
     /// holds the frame; the conversion and the PNG's compression run on a
     /// worker, so a screenshot no longer freezes the client. True once the
     /// copy is taken; a failed write is logged.
-    bool captureScreenshot(const std::string& outputPath);
+    /// Writes the next frame to outputPath, by its extension: .jpg at
+    /// jpegQuality (1-100), .tga (32-bit, uncompressed), anything else PNG.
+    bool captureScreenshot(const std::string& outputPath, int jpegQuality = 90);
 
     /// Start writing the screen, interface included, and what the client
     /// plays to a video file. False, with the reason in error, when it cannot.
