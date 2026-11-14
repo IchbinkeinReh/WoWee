@@ -66,14 +66,17 @@ std::optional<AudioCallbackHandler::SoundEntry> AudioCallbackHandler::resolveSou
 }
 
 void AudioCallbackHandler::setupCallbacks() {
-    // Level-up callback - the sound and the LevelUp.m2 effect. The
-    // level itself is FrameXML's chat line; nothing is drawn over the screen.
+    // Level-up callback - the LevelUp.m2 effect, which is the sound as well
+    // (its $SND, SoundEntries 888). The level itself is FrameXML's chat line;
+    // nothing is drawn over the screen, and the character does not cheer:
+    // the client plays "HARDCODED Unit Level Up" on the unit and nothing else
+    // (0x00730050 -> 0x0072e3a0 -> 0x006f9260).
     gameHandler_.setLevelUpCallback([this](uint32_t /*newLevel*/) {
-        if (uiManager_) {
-            uiManager_->getGameScreen().toastManager().playLevelUp();
-        }
         if (renderer_) {
-            if (auto* ac = renderer_->getAnimationController()) ac->triggerLevelUpEffect(renderer_->getCharacterPosition());
+            uint32_t unitInstance = gameHandler_.resolveUnitRenderInstance(gameHandler_.getPlayerGuid());
+            if (unitInstance == 0) unitInstance = renderer_->getCharacterInstanceId();
+            if (auto* ac = renderer_->getAnimationController())
+                ac->triggerLevelUpEffect(renderer_->getCharacterPosition(), unitInstance);
         }
     });
 
@@ -169,7 +172,8 @@ void AudioCallbackHandler::setupCallbacks() {
         if (entity) {
             glm::vec3 canonical(entity->getX(), entity->getY(), entity->getZ());
             glm::vec3 renderPos = core::coords::canonicalToRender(canonical);
-            if (auto* ac = renderer_->getAnimationController()) ac->triggerLevelUpEffect(renderPos);
+            if (auto* ac = renderer_->getAnimationController())
+                ac->triggerLevelUpEffect(renderPos, gameHandler_.resolveUnitRenderInstance(guid));
         }
 
         // Show chat message if in group

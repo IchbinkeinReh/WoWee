@@ -27,10 +27,6 @@ public:
     /// Render the zone text - called after the escape menu
     void renderLateToasts(game::GameHandler& gameHandler);
 
-    /// The level-up sound. Nothing is drawn: the level is announced in chat
-    /// by FrameXML, and LevelUp.m2 is the renderer's.
-    void playLevelUp();
-
     /// Fire achievement earned toast + sound
     /// The sound an achievement makes. The badge is FrameXML's.
     void playAchievementEarned();

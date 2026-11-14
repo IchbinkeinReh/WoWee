@@ -326,7 +326,7 @@ uint32_t AnimationController::resolveMeleeAnimId() {
 
 // ── Effect triggers ──────────────────────────────────────────────────────────
 
-void AnimationController::triggerLevelUpEffect(const glm::vec3& position) {
+void AnimationController::triggerLevelUpEffect(const glm::vec3& position, uint32_t unitInstanceId) {
     auto* levelUpEffect = renderer_->getLevelUpEffect();
     if (!levelUpEffect) return;
 
@@ -349,7 +349,7 @@ void AnimationController::triggerLevelUpEffect(const glm::vec3& position) {
         }
     }
 
-    levelUpEffect->trigger(position);
+    levelUpEffect->trigger(position, unitInstanceId);
 }
 
 // ── Mount ────────────────────────────────────────────────────────────────────

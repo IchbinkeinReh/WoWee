@@ -2050,7 +2050,11 @@ void GameHandler::registerCoreOpcodes() {
                                 "Congratulations, you have reached level %d!",
                                 {std::to_string(newLevel)}));
                         }
-                        withSoundManager(&audio::AudioCoordinator::getUiSoundManager, [](auto* sfx) { sfx->playLevelUp(); });
+                        // No sound of its own: the client's handler plays none
+                        // (0x006e2e90 case 0x1d4), and FrameXML none either -
+                        // chatframe.lua's PLAYER_LEVEL_UP branch only writes
+                        // lines. The sound is LevelUp.m2's $SND (SoundEntries
+                        // 888, LevelUp.wav), heard as the effect plays.
                         if (levelUpCallback_) levelUpCallback_(newLevel);
                         // All nine, in the order the interface reads them:
                         // level, health, power, talent points, then the five

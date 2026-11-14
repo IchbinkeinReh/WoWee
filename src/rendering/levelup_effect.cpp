@@ -33,6 +33,8 @@ bool LevelUpEffect::loadModel(M2Renderer* m2Renderer,
         return false;
     }
 
+    eventsSeconds_ = model.sequences.empty() ? 0.0f
+                                             : static_cast<float>(model.sequences[0].duration) / 1000.0f;
     modelLoaded_ = true;
     LOG_INFO("LevelUpEffect: loaded LevelUp.m2 - vertices=", model.vertices.size(),
              " indices=", model.indices.size(),
@@ -41,7 +43,7 @@ bool LevelUpEffect::loadModel(M2Renderer* m2Renderer,
     return true;
 }
 
-void LevelUpEffect::trigger(const glm::vec3& position) {
+void LevelUpEffect::trigger(const glm::vec3& position, uint32_t unitInstanceId) {
     if (!modelLoaded_ || !m2Renderer_) return;
 
     uint32_t instanceId = m2Renderer_->createInstance(MODEL_ID, position,
@@ -51,7 +53,16 @@ void LevelUpEffect::trigger(const glm::vec3& position) {
         return;
     }
 
-    activeEffects_.push_back({.instanceId = instanceId, .elapsed = 0.0f});
+    // From its first frame, as the client starts it (0x006f7680 sets the
+    // sequence going once the model is in), not at the random point a placed
+    // doodad starts at: the pillar rises from the ground, and the $SND at
+    // 33 ms sounds as the level is gained rather than up to a lap later.
+    m2Renderer_->restartInstanceAnimation(instanceId);
+    // A spell effect on the unit (0x006f9260 -> 0x00824060 with 0x006f7b00):
+    // its $SND plays, at the listener when the unit is the active mover's.
+    m2Renderer_->setInstanceEventOwner(instanceId, m2_event::Owner::Effect, unitInstanceId);
+
+    activeEffects_.push_back({.instanceId = instanceId, .elapsed = 0.0f, .eventsOwned = true});
 }
 
 void LevelUpEffect::update(float deltaTime) {
@@ -59,6 +70,12 @@ void LevelUpEffect::update(float deltaTime) {
 
     for (auto it = activeEffects_.begin(); it != activeEffects_.end(); ) {
         it->elapsed += deltaTime;
+        // Updated ahead of the models, so the pass's end is caught before the
+        // sequence comes round again.
+        if (it->eventsOwned && it->elapsed >= eventsSeconds_) {
+            m2Renderer_->setInstanceEventOwner(it->instanceId, m2_event::Owner::None, 0);
+            it->eventsOwned = false;
+        }
         if (it->elapsed >= EFFECT_DURATION) {
             m2Renderer_->removeInstance(it->instanceId);
             it = activeEffects_.erase(it);

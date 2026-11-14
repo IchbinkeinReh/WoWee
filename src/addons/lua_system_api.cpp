@@ -454,7 +454,7 @@ static int lua_PlaySound(lua_State* L) {
             case 862: sfx->playBagOpen(); return 0;                // igBackPackOpen
             case 863: sfx->playBagClose(); return 0;               // igBackPackClose
             case 867: sfx->playError(); return 0;                  // igPlayerInvite
-            case 888: sfx->playLevelUp(); return 0;                // LEVELUPSOUND
+            case 888: sfx->playLevelUp(); return 0;                // LEVELUP (LevelUp.wav)
             default: return 0;
         }
     } else {

@@ -112,7 +112,9 @@ public:
     static constexpr uint8_t STAND_STATE_SUBMERGED   = 9;
 
     // ── Effect triggers ────────────────────────────────────────────────────
-    void triggerLevelUpEffect(const glm::vec3& position);
+    /// LevelUp.m2 at a position, on the unit drawn as `unitInstanceId` (0 for
+    /// none): an effect of that unit's, whose $SND is the level-up sound.
+    void triggerLevelUpEffect(const glm::vec3& position, uint32_t unitInstanceId);
 
     // ── Mount ──────────────────────────────────────────────────────────────
     void setMounted(uint32_t mountInstId, uint32_t mountDisplayId,

@@ -27,20 +27,6 @@ void ToastManager::renderLateToasts(game::GameHandler& gameHandler) {
     renderZoneText(gameHandler);
 }
 
-void ToastManager::playLevelUp() {
-    // The sound alone. The character does not cheer: SMSG_LEVELUP_INFO
-    // (0x006e2e90 case 0x1d4) opens tutorials and fires PLAYER_LEVEL_UP, and
-    // a level field that changes plays "HARDCODED Unit Level Up" on the unit
-    // (0x00730050 -> 0x0072e3a0 -> 0x006f9260) - the LevelUp.m2 effect, no
-    // emote and no animation of the character's own.
-    auto* ac = services_.audioCoordinator;
-    if (ac) {
-        if (auto* sfx = ac->getUiSoundManager()) {
-            sfx->playLevelUp();
-        }
-    }
-}
-
 void ToastManager::playAchievementEarned() {
     // alertframes.lua registers ACHIEVEMENT_EARNED and raises the badge, so
     // there is nothing of ours left to put on screen. The sound stays:
