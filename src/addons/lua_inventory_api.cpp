@@ -259,30 +259,6 @@ static int lua_KeyRingButtonIDToInvSlotID(lua_State* L) {
     return 1;
 }
 
-/// SetPortraitToTexture(texture, path) - the rounded icon a bag or panel puts
-/// in its corner. Drawn square here, since the mask that rounds it is not
-/// modelled, but drawn: leaving it to the fallback left the region showing
-/// whatever it last held.
-///
-/// The first argument is a texture or the name of one, and FrameXML uses both
-/// within four lines of each other - ContainerFrame_Update passes the object
-/// for an ordinary bag and the name for the keyring. Taking only the object
-/// meant the keyring silently kept whatever icon it had.
-static int lua_SetPortraitToTexture(lua_State* L) {
-    if (lua_isstring(L, 1) && !lua_isnumber(L, 1)) {
-        lua_getglobal(L, lua_tostring(L, 1));
-        if (!lua_istable(L, -1)) { lua_pop(L, 1); return 0; }
-        lua_replace(L, 1);
-    }
-    if (!lua_istable(L, 1)) return 0;
-    lua_getfield(L, 1, "SetTexture");
-    if (!lua_isfunction(L, -1)) { lua_pop(L, 1); return 0; }
-    lua_pushvalue(L, 1);
-    lua_pushvalue(L, 2);
-    lua_call(L, 2, 0);
-    return 0;
-}
-
 /// SpellCanTargetItem() - whether something is waiting to be applied to an item.
 ///
 /// This client does have the notion after all: a sharpening stone, an oil, an
@@ -5568,7 +5544,6 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"UpdateInventoryAlertStatus", lua_UpdateInventoryAlertStatus},
                 {"GetContainerItemQuestInfo", lua_GetContainerItemQuestInfo},
                 {"KeyRingButtonIDToInvSlotID", lua_KeyRingButtonIDToInvSlotID},
-                {"SetPortraitToTexture",  lua_SetPortraitToTexture},
                 // The "you can't do that when you're dead" line, which
                 // containerframe.lua and uiparent.lua raise when a panel is
                 // asked for while dead. A no-op meant the bags simply refused

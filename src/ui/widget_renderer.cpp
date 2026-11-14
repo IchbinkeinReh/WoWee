@@ -3247,8 +3247,9 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                                  ImVec2(q[6], q[7]),   // lower-right
                                  ImVec2(q[2], q[3]),   // lower-left
                                  textureColor(*w));
-            } else if (live && w->isUnitPortrait &&
-                       std::fabs((x1 - x0) - (y1 - y0)) <= 0.02f * (x1 - x0)) {
+            } else if ((live && w->isUnitPortrait &&
+                        std::fabs((x1 - x0) - (y1 - y0)) <= 0.02f * (x1 - x0)) ||
+                       (!live && w->portraitDisc)) {
                 // A face, drawn as the disc the interface expects.
                 //
                 // Every portrait the interface draws is a circular image whose
