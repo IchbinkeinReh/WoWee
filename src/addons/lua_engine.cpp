@@ -1909,8 +1909,11 @@ int lua_Region_GetObjectType(lua_State* L) {
     lua_pushstring(L, w ? w->objectType.c_str() : "Frame");
     return 1;
 }
+// IsObjectType("TYPE") (0x0048be30 and its kin): a string, or the usage error.
 int lua_Region_IsObjectType(lua_State* L) {
     const auto* w = widgetOf(L, 1);
+    if (w && !lua_isstring(L, 2))
+        return luaL_error(L, "Usage: %s:IsObjectType(\"TYPE\")", w->name.empty() ? "<unnamed>" : w->name.c_str());
     const char* asked = luaL_optstring(L, 2, "");
     luaPushOneOrNil(L, w && objectTypeMatches(w->objectType, asked));
     return 1;
@@ -7095,22 +7098,34 @@ int lua_FontString_SetTextColor(lua_State* L) {
     return 0;
 }
 
+// SetFont("font", fontHeight [, flags]) (0x0048d5b0): a string and a number,
+// or the usage error; a height not above FLT_EPSILON is its own error; an
+// empty face changes nothing and answers nothing. Otherwise 1 for a font set
+// (nil where the client could not load it - this one does not load here).
 int lua_FontString_SetFont(lua_State* L) {
-    if (auto* w = widgetToRemeasure(L, 1)) {
-        if (lua_isstring(L, 2)) w->fontFace = lua_tostring(L, 2);
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    const char* who = w->name.empty() ? "<unnamed>" : w->name.c_str();
+    if (!lua_isstring(L, 2) || !lua_isnumber(L, 3))
+        return luaL_error(L, "Usage: %s:SetFont(\"font\", fontHeight [, flags])", who);
+    const auto height = static_cast<float>(lua_tonumber(L, 3));
+    if (!(height > 1.1920929e-07f))
+        return luaL_error(L, "ERROR: %s:SetFont(): invalid fontHeight: %f, height must be > 0", who,
+                          static_cast<double>(height));
+    if (lua_tostring(L, 2)[0] == '\0') return 0;
+    if (auto* m = widgetToRemeasure(L, 1)) {
+        if (lua_isstring(L, 2)) m->fontFace = lua_tostring(L, 2);
         // The flags argument, where "OUTLINE" and "THICKOUTLINE" arrive.
         if (const char* flags = lua_isstring(L, 4) ? lua_tostring(L, 4) : nullptr) {
             const std::string f(flags);
-            if (f.find("THICK") != std::string::npos)        w->fontOutline = "THICK";
-            else if (f.find("OUTLINE") != std::string::npos) w->fontOutline = "NORMAL";
-            else                                             w->fontOutline.clear();
+            if (f.find("THICK") != std::string::npos)        m->fontOutline = "THICK";
+            else if (f.find("OUTLINE") != std::string::npos) m->fontOutline = "NORMAL";
+            else                                             m->fontOutline.clear();
         }
-        // (path, height, flags). Only the height is honoured for now; the path
-        // needs a font atlas rebuild, which cannot happen mid-frame.
-        const double h = luaL_optnumber(L, 3, 0.0);
-        if (h > 0.0) w->fontHeight = static_cast<float>(h);
+        m->fontHeight = height;
     }
-    return 0;
+    lua_pushnumber(L, 1);
+    return 1;
 }
 
 /// GetFont() → path, height, flags.
@@ -7288,6 +7303,18 @@ int lua_FontString_SetFontObject(lua_State* L) {
             if (auto* fs = tree->get(widgetIdOf(L, lua_gettop(L)))) w = fs;
         }
         lua_pop(L, 1);
+    }
+    // (0x0048d380) A font object, a font's global name, or nil; anything else
+    // is the usage error, and a name with no font behind it its own error.
+    const int type = lua_type(L, 2);
+    const char* who = (w && !w->name.empty()) ? w->name.c_str() : "<unnamed>";
+    if (type != LUA_TTABLE && type != LUA_TSTRING && type != LUA_TNIL && type != LUA_TNONE)
+        return luaL_error(L, "Usage: %s:SetFontObject(font or \"font\" or nil)", who);
+    if (type == LUA_TSTRING) {
+        lua_getglobal(L, lua_tostring(L, 2));
+        const bool found = lua_istable(L, -1);
+        lua_pop(L, 1);
+        if (!found) return luaL_error(L, "%s:SetFontObject(): Couldn't find font named %s", who, lua_tostring(L, 2));
     }
     applyFontObject(L, 2, w);
     return 0;
