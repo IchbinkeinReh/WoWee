@@ -1418,9 +1418,9 @@ int lua_Frame_StartMoving(lua_State* L) {
     const uint32_t id = widgetIdOf(L, 1);
     if (!tree || id == 0) return 0;
     const auto* w = tree->get(id);
-    // WoW raises on a frame that is not movable. Ignoring it loses nothing and
-    // keeps a mistake in one frame from taking down the file that asked.
-    if (!w || !w->movable) return 0;
+    if (!w) return 0;
+    // 0x004a0a40: a frame that is not movable is a Lua error, as in the client.
+    if (!w->movable) return luaL_error(L, "Frame %s is not movable", frameNameOnStack(L, 1));
     // The settings windows stay put, whatever their XML says.
     if (wowee::ui::isFixedSettingsWindow(w->name)) return 0;
     // 0x004a0a40: the client holds one frame at a time (+0xd0c) and leaves
@@ -1452,7 +1452,9 @@ int lua_Frame_StartSizing(lua_State* L) {
     const uint32_t id = widgetIdOf(L, 1);
     if (!tree || id == 0) return 0;
     const auto* w = tree->get(id);
-    if (!w || !w->resizable) return 0;
+    if (!w) return 0;
+    // 0x004a0b10: one that is not resizable is a Lua error.
+    if (!w->resizable) return luaL_error(L, "Frame %s is not resizable", frameNameOnStack(L, 1));
     // BOTTOMRIGHT is what the grabber art sits on and what FrameXML passes when
     // it passes nothing.
     const char* point = luaL_optstring(L, 2, "BOTTOMRIGHT");
@@ -7873,7 +7875,12 @@ int lua_Frame_GetHitRectInsets(lua_State* L) {
 /// and set it answered as no-ops, so a frame restored from saved variables was
 /// not treated as placed and could be shifted out from under its own position.
 int lua_Frame_SetUserPlaced(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->userMoved = luaClientSwitchArg(L, 2, true);
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    // 0x004a0c70: only a frame that can be moved or sized can be user placed.
+    if (!w->movable && !w->resizable)
+        return luaL_error(L, "Frame %s is not movable or resizable", frameNameOnStack(L, 1));
+    w->userMoved = luaClientSwitchArg(L, 2, true);
     return 0;
 }
 int lua_Frame_IsUserPlaced(lua_State* L) {
