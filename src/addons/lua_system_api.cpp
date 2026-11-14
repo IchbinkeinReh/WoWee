@@ -37,6 +37,7 @@
 #include "game/opcode_table.hpp"
 #include "network/packet.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "addons/object_type.hpp"
 #include "ui/layout_cache.hpp"
 #include "game/chat_log.hpp"
 #include "addons/lua_api_registrations.hpp"
@@ -2883,6 +2884,32 @@ int pushAddonRegistryAndIndex(lua_State* L, int arg) {
     return idx;
 }
 
+/// The index-or-name argument EnableAddOn, DisableAddOn and GetAddOnMetadata
+/// take (0x00511840, 0x00511940, 0x00511430): a number, rounded, must be one
+/// of the addons ("AddOn index must be in the range of 1 to %d"); a string is
+/// taken as the name; anything else raises the call's usage line. Answers
+/// the addon's name. Raises through lua_error, so it does not return then.
+static std::string addonNameArg(lua_State* L, int arg, const char* usage) {
+    if (lua_isnumber(L, arg)) {
+        const long n = std::lround(lua_tonumber(L, arg));
+        lua_getfield(L, LUA_REGISTRYINDEX, "wowee_addon_info");
+        const int count = lua_istable(L, -1) ? static_cast<int>(lua_objlen(L, -1)) : 0;
+        if (n < 1 || n > count) {
+            lua_pop(L, 1);
+            luaL_error(L, "AddOn index must be in the range of 1 to %d", count);
+            return {};
+        }
+        lua_rawgeti(L, -1, static_cast<int>(n));
+        lua_getfield(L, -1, "name");
+        std::string name = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+        lua_pop(L, 3);
+        return name;
+    }
+    if (lua_isstring(L, arg)) return lua_tostring(L, arg);
+    luaL_error(L, "%s", usage);
+    return {};
+}
+
 static int lua_GetAddOnInfo(lua_State* L) {
     // Accept index (1-based) or addon name
     const int idx = pushAddonRegistryAndIndex(L, 1);
@@ -2987,15 +3014,20 @@ static int lua_GetAddOnDependencies(lua_State* L) {
 
 // GetAddOnMetadata(addonNameOrIndex, key) → value
 static int lua_GetAddOnMetadata(lua_State* L) {
-    const int idx = pushAddonRegistryAndIndex(L, 1);
-    if (idx < 1) { lua_pushnil(L); return 1; }
-
-    const char* key = luaL_checkstring(L, 2);
+    // 0x00511430: the addon, then the field as a string, or the usage line.
+    static constexpr const char* kUsage = "Usage: GetAddOnMetadata(index or \"name\", \"variable\")";
+    if (!lua_isnumber(L, 1) && !lua_isstring(L, 1)) return luaL_error(L, "%s", kUsage);
+    const std::string addon = addonNameArg(L, 1, kUsage);
+    if (!lua_isstring(L, 2)) return luaL_error(L, "%s", kUsage);
+    const std::string key = lua_tostring(L, 2);
+    lua_pushstring(L, addon.c_str());
+    const int idx = pushAddonRegistryAndIndex(L, lua_gettop(L));
+    if (idx < 1) { lua_pop(L, 1); lua_pushnil(L); return 1; }
     lua_rawgeti(L, -1, idx);
-    if (!lua_istable(L, -1)) { lua_pop(L, 2); lua_pushnil(L); return 1; }
-    lua_getfield(L, -1, "metadata");
     if (!lua_istable(L, -1)) { lua_pop(L, 3); lua_pushnil(L); return 1; }
-    lua_getfield(L, -1, key);
+    lua_getfield(L, -1, "metadata");
+    if (!lua_istable(L, -1)) { lua_pop(L, 4); lua_pushnil(L); return 1; }
+    lua_getfield(L, -1, key.c_str());
     return 1;
 }
 
@@ -5285,6 +5317,12 @@ static int lua_IsAltKeyDown(lua_State* L) {
     luaPushOneOrNil(L, (SDL_GetModState() & SDL_KMOD_ALT) != 0);
     return 1;
 }
+// The one-sided forms (0x005144c0 and its five siblings): each its own key.
+template <SDL_Keymod Mod>
+static int lua_IsSidedKeyDown(lua_State* L) {
+    luaPushOneOrNil(L, (SDL_GetModState() & Mod) != 0);
+    return 1;
+}
 static int lua_IsModifierKeyDown(lua_State* L) {
     const SDL_Keymod m = SDL_GetModState();
     luaPushOneOrNil(L, (m & (SDL_KMOD_SHIFT | SDL_KMOD_CTRL | SDL_KMOD_ALT)) != 0);
@@ -5499,18 +5537,31 @@ static int lua_RunScript(lua_State* L) {
 // Named as WoW names them - "LeftButton", "RightButton", "MiddleButton" - and
 // answers for any button when asked for none, which is what a bare call means.
 static int lua_IsMouseButtonDown(lua_State* L) {
-    const char* which = luaL_optstring(L, 1, nullptr);
-    bool down = false;
-    if (!which || !*which) {
-        down = ImGui::IsMouseDown(ImGuiMouseButton_Left) ||
-               ImGui::IsMouseDown(ImGuiMouseButton_Right) ||
-               ImGui::IsMouseDown(ImGuiMouseButton_Middle);
+    // 0x005148b0: a button number (1 left, 2 right, 3 middle, 4 and up the
+    // extra buttons, 0x005eec20), a button's name (LeftButton, RightButton,
+    // MiddleButton, Button4...), or with neither any button at all. Wowee
+    // sees the five buttons the platform reports.
+    static constexpr ImGuiMouseButton kByNumber[5] = {
+        ImGuiMouseButton_Left, ImGuiMouseButton_Right, ImGuiMouseButton_Middle, 3, 4};
+    int button = -1;
+    bool any = false;
+    if (lua_isnumber(L, 1)) {
+        const int n = static_cast<int>(lua_tonumber(L, 1));
+        if (n >= 1 && n <= 5) button = kByNumber[n - 1];
+    } else if (lua_isstring(L, 1)) {
+        const char* name = lua_tostring(L, 1);
+        static constexpr const char* kNames[5] = {
+            "LeftButton", "RightButton", "MiddleButton", "Button4", "Button5"};
+        for (int i = 0; i < 5; ++i)
+            if (sameTypeName(name, kNames[i])) button = kByNumber[i];
     } else {
-        std::string name(which);
-        for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        if (name == "leftbutton" || name == "left")        down = ImGui::IsMouseDown(ImGuiMouseButton_Left);
-        else if (name == "rightbutton" || name == "right") down = ImGui::IsMouseDown(ImGuiMouseButton_Right);
-        else if (name == "middlebutton" || name == "middle") down = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
+        any = true;
+    }
+    bool down = false;
+    if (any) {
+        for (int i = 0; i < 5 && !down; ++i) down = ImGui::IsMouseDown(i);
+    } else if (button >= 0) {
+        down = ImGui::IsMouseDown(button);
     }
     luaPushOneOrNil(L, down ? 1 : 0);
     return 1;
@@ -7888,87 +7939,30 @@ static int lua_GetVideoCaps(lua_State* L) {
     return 7;
 }
 
-// GetCVarMin(name) / GetCVarMax(name) → the range a CVar is allowed, if it
-// declares one.
-//
-// Nil for all but the few listed here, and every caller is written for nil:
-// BlizzardOptionsPanel_GetCVarMinSafe passes it through tonumber, the slider
-// setup falls back with `or entry.minValue`, and the clamp reads
-// `if ( minValue and value < minValue )`. Answering a made-up zero for the
-// rest would clamp every graphics slider in the options panel to it.
-//
-// This is the seam Blizzard's own panel code offers for a range the client
-// owns rather than the interface: BlizzardOptionsPanel_OnEvent takes
-// GetCVarMax first and only falls back to its table. So widening a slider is
-// a row here, not an edit to a shipped Lua file - which matters because the
-// interface data is extracted game content and is not ours to keep changes in.
-struct CVarRange {
-    const char* cvar;
-    float minValue;
-    float maxValue;
-};
-
-constexpr CVarRange kCVarRanges[] = {
-    // The interface's own scale. 1 is the size the screen's height alone gives,
-    // and the shipped table stops there because the slider was only ever for
-    // making the interface smaller. A screen across a room needs the other
-    // direction. The floor is Blizzard's; it was the ceiling that was wrong.
-    //
-    // The ceiling is the tree's, not a number repeated here: past it the
-    // interface's own frames no longer fit on screen, options frame included,
-    // and a scale you cannot undo from inside the game is worse than one that
-    // is merely too small.
-    {"uiscale", 0.64f, ui::WidgetTree::kMaxUserScale},
-    // View distance: the shipped slider's own 177 to 1277, which is also what
-    // Renderer::setViewDistance holds the setting to.
-    {"farclip", 177.0f, 1277.0f},
-    // Texture filtering. The shipped slider counts Blizzard's six modes -
-    // bilinear and trilinear before the anisotropic steps - and this client's
-    // setting is the five its samplers have, off and then 2x to 16x, so a
-    // control drawn to the shipped table hands over a 5 the setting holds to
-    // 4. The page that slider was on is retired, but this is the range any
-    // control over the CVar is drawn with.
-    {"texturefilteringmode", 0.0f, 4.0f},
-    // Mouse Look Speed, on the scale the CVar itself is measured in - the
-    // shipped Mouse panel slider offers 90 to 270 and the client reads that as
-    // degrees (0x006020b0 turns the view value * 0.00125 degrees per movement of
-    // the mouse). The binding above converts it into this client's degrees per
-    // movement, so the slider is drawn on its own numbers again instead of being
-    // bent to the setting's scale, which is what let a 90 hand over a 90.
-    {"camerayawmovespeed", 90.0f, 270.0f},
-    // Max camera distance, as a multiple of the original client's limit. The
-    // shipped table stops at 2; this client has always been willing to go
-    // further, and did it through a checkbox of its own until this slider was
-    // wired to mean it.
-    {"cameradistancemaxfactor", 1.0f, rendering::CameraController::kMaxDistanceFactorLimit},
-};
-
-const CVarRange* findCVarRange(lua_State* L) {
+// GetCVarMin/GetCVarMax("cvar") (0x00514d40, 0x00514e30): a number for
+// the two CVars the client bounds here - farclip 177 to 1277, and
+// extShadowQuality from 0 to the highest level the card does - nil for any
+// other. The highest shadow level is the last of the four this renderer has.
+static int cvarBoundArg(lua_State* L, const char* usage) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "%s", usage);
     const char* name = lua_tostring(L, 1);
-    if (!name) return nullptr;
-    std::string lower = name;
-    std::transform(lower.begin(), lower.end(), lower.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    for (const auto& r : kCVarRanges) {
-        if (lower == r.cvar) return &r;
-    }
-    return nullptr;
+    if (sameTypeName(name, "farclip")) return 1;
+    if (sameTypeName(name, "extShadowQuality")) return 2;
+    return 0;
 }
-
 static int lua_GetCVarMin(lua_State* L) {
-    if (const auto* r = findCVarRange(L)) {
-        lua_pushstring(L, ui::settingNumberText(r->minValue).c_str());
-        return 1;
+    switch (cvarBoundArg(L, "Usage: GetCVarMin(\"cvar\")")) {
+        case 1: lua_pushnumber(L, 177); return 1;
+        case 2: lua_pushnumber(L, 0); return 1;
+        default: return luaReturnNil(L);
     }
-    return luaReturnNil(L);
 }
-
 static int lua_GetCVarMax(lua_State* L) {
-    if (const auto* r = findCVarRange(L)) {
-        lua_pushstring(L, ui::settingNumberText(r->maxValue).c_str());
-        return 1;
+    switch (cvarBoundArg(L, "Usage: GetCVarMax(\"cvar\")")) {
+        case 1: lua_pushnumber(L, 1277); return 1;
+        case 2: lua_pushnumber(L, 4); return 1;
+        default: return luaReturnNil(L);
     }
-    return luaReturnNil(L);
 }
 
 // ---- Voice chat ----
@@ -9408,18 +9402,36 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"ResetChatWindows",             lua_ResetChatWindows},
                 {"SetChatColorNameByClass",      lua_SetChatColorNameByClass},
                 {"ResetChatColors",              lua_ResetChatColors},
-                {"GetExistingLocales",       lua_ReturnNil},
+                // GetExistingLocales() (0x00511c80): each locale whose data is
+                // installed. Wowee runs on one, the one GetLocale names.
+                {"GetExistingLocales",       lua_GetLocale},
+                // GetNumDeclensionSets("name" [, gender]) (0x00511dd0) and
+                // DeclineName("name", gender, set) (0x00511e80). The client
+                // declines names through a table only a Russian install loads
+                // (0x00c5de9c); with none there are no sets, and DeclineName
+                // answers its five cases as nil. Wowee loads no such table.
+                {"GetNumDeclensionSets", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetNumDeclensionSets(\"name\", gender)");
+            lua_pushnumber(L, 0);
+            return 1;
+        }},
+                {"DeclineName", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1) || !lua_isnumber(L, 3))
+                return luaL_error(L, "Usage: DeclineName(\"name\", gender, declensionSet)");
+            for (int i = 0; i < 5; ++i) lua_pushnil(L);
+            return 5;
+        }},
                 // Read from the real keyboard: a shift-click means something
                 // different from a click, and FrameXML asks on every press.
                 {"IsShiftKeyDown",           lua_IsShiftKeyDown},
-                {"IsLeftShiftKeyDown",       lua_IsShiftKeyDown},
-                {"IsRightShiftKeyDown",      lua_IsShiftKeyDown},
+                {"IsLeftShiftKeyDown", lua_IsSidedKeyDown<SDL_KMOD_LSHIFT>},
+                {"IsRightShiftKeyDown", lua_IsSidedKeyDown<SDL_KMOD_RSHIFT>},
                 {"IsControlKeyDown",         lua_IsControlKeyDown},
-                {"IsLeftControlKeyDown",     lua_IsControlKeyDown},
-                {"IsRightControlKeyDown",    lua_IsControlKeyDown},
+                {"IsLeftControlKeyDown", lua_IsSidedKeyDown<SDL_KMOD_LCTRL>},
+                {"IsRightControlKeyDown", lua_IsSidedKeyDown<SDL_KMOD_RCTRL>},
                 {"IsAltKeyDown",             lua_IsAltKeyDown},
-                {"IsLeftAltKeyDown",         lua_IsAltKeyDown},
-                {"IsRightAltKeyDown",        lua_IsAltKeyDown},
+                {"IsLeftAltKeyDown", lua_IsSidedKeyDown<SDL_KMOD_LALT>},
+                {"IsRightAltKeyDown", lua_IsSidedKeyDown<SDL_KMOD_RALT>},
                 {"IsModifierKeyDown",        lua_IsModifierKeyDown},
                 // The four predicates actionbutton.lua asks about a slot.
                 //
@@ -10686,16 +10698,16 @@ void registerSystemLuaAPI(lua_State* L) {
                 // addon already loaded has its functions in the state and its
                 // frames on screen, and neither can be taken back out.
                 {"DisableAddOn", [](lua_State* L) -> int {
+            const std::string name = addonNameArg(L, 1, "Usage: DisableAddOn(index or \"name\")");
             auto* svc = getLuaServices(L);
-            const char* name = luaL_optstring(L, 1, nullptr);
-            if (svc && svc->setAddOnEnabled && name && *name)
+            if (svc && svc->setAddOnEnabled && !name.empty())
                 svc->setAddOnEnabled(name, false);
             return 0;
         }},
                 {"EnableAddOn", [](lua_State* L) -> int {
+            const std::string name = addonNameArg(L, 1, "Usage: EnableAddOn(index or \"name\")");
             auto* svc = getLuaServices(L);
-            const char* name = luaL_optstring(L, 1, nullptr);
-            if (svc && svc->setAddOnEnabled && name && *name)
+            if (svc && svc->setAddOnEnabled && !name.empty())
                 svc->setAddOnEnabled(name, true);
             return 0;
         }},

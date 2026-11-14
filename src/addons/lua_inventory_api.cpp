@@ -982,7 +982,9 @@ static int lua_GetItemFamily(lua_State* L) {
     auto* gh = getGameHandler(L);
     const uint32_t itemId = itemIdFromArg(L, 1);
     const auto* info = (gh && itemId) ? gh->getItemInfo(itemId) : nullptr;
-    lua_pushnumber(L, info ? info->bagFamily : 0);
+    // 0x00510f20: nothing at all for an item not in the cache.
+    if (!info || !info->valid) return 0;
+    lua_pushnumber(L, info->bagFamily);
     return 1;
 }
 
