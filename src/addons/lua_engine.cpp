@@ -24,6 +24,7 @@
 // The clipboard, for paste and copy in an edit box.
 #include <SDL3/SDL.h>
 #include "addons/lua_api_helpers.hpp"
+#include "addons/object_type.hpp"
 #include "network/world_socket.hpp"
 #include "addons/addon_lua_snippets.hpp"
 #include "game/chat_channels.hpp"
@@ -1986,51 +1987,6 @@ int lua_Region_GetPoint(lua_State* L) {
     lua_pushnumber(L, a.x);
     lua_pushnumber(L, a.y);
     return 5;
-}
-
-/// The types a widget answers to, most specific first.
-///
-/// WoW's IsObjectType is true for the type itself and everything it derives
-/// from - a CheckButton is a Button is a Frame is a Region is an Object - and
-/// FrameXML relies on that: it asks whether something is a Region to decide it
-/// can be positioned at all. Each class's test (0x00482c90 Texture, 0x004853c0
-/// FontString, 0x004926f0 Frame, 0x009622a0 CheckButton, 0x00597310
-/// PlayerModel, ...) compares without regard to case (0x0076e780) and then asks
-/// its parent class. ScrollingMessageFrame is not a MessageFrame.
-///
-/// "LayeredRegion" is WoWee's own: the client's chains have no such class.
-/// strnicmp as the client's type tests use it (0x0076e780), and portable.
-static bool sameTypeName(const char* a, const char* b) {
-    for (; *a && *b; ++a, ++b)
-        if (std::tolower(static_cast<unsigned char>(*a)) != std::tolower(static_cast<unsigned char>(*b)))
-            return false;
-    return *a == *b;
-}
-static const char* parentObjectType(const std::string& type) {
-    static const std::pair<const char*, const char*> kParents[] = {
-        {"Region", "Object"},       {"Texture", "Region"},
-        {"FontString", "Region"},   {"Frame", "Region"},
-        {"Button", "Frame"},        {"CheckButton", "Button"},
-        {"Model", "Frame"},         {"PlayerModel", "Model"},
-        {"DressUpModel", "PlayerModel"}, {"TabardModel", "PlayerModel"},
-    };
-    if (sameTypeName(type.c_str(), "Object") == 0) return nullptr;
-    for (const auto& [child, parent] : kParents)
-        if (sameTypeName(type.c_str(), child) == 0) return parent;
-    // Every other kind this creates is a Frame directly: Minimap, Cooldown,
-    // GameTooltip, StatusBar, EditBox, Slider, ScrollFrame and the rest.
-    return "Frame";
-}
-static bool objectTypeMatches(const std::string& actual, const std::string& asked) {
-    for (std::string t = actual;;) {
-        if (sameTypeName(t.c_str(), asked.c_str()) == 0) return true;
-        const char* parent = parentObjectType(t);
-        if (!parent) break;
-        t = parent;
-    }
-    const bool isRegion = (sameTypeName(actual.c_str(), "Texture") == 0 ||
-                           sameTypeName(actual.c_str(), "FontString") == 0);
-    return isRegion && sameTypeName(asked.c_str(), "LayeredRegion") == 0;
 }
 
 int lua_Region_GetObjectType(lua_State* L) {

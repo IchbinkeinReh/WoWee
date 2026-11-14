@@ -391,6 +391,15 @@ wowee_test_link_glm(test_lua_handler_globals)
 add_test(NAME lua_handler_globals COMMAND test_lua_handler_globals)
 register_test_target(test_lua_handler_globals)
 
+# ── test_object_type ────────────────────────────────────────
+# IsObjectType's class chains, header-only.
+add_executable(test_object_type test_object_type.cpp)
+target_include_directories(test_object_type PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_object_type SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_object_type PRIVATE catch2_main)
+add_test(NAME object_type COMMAND test_object_type)
+register_test_target(test_object_type)
+
 # ── test_missile_motion ─────────────────────────────────────
 # SpellMissileMotion.dbc's scripts as the client runs them (0x007587d0,
 # 0x00700350, 0x00700550, 0x006feb20): the chunk, the call, and what the
