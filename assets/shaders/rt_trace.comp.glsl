@@ -484,8 +484,13 @@ void main() {
         // drawn this frame in the pose on screen. Traced, they came a frame
         // late and settled over several more, and a running body trailed a
         // ghost of its staff and legs over the ground and itself.
+        // Not on a room's baked colour (RT_GB_SHARE_ROOM): no map is laid over
+        // it, and the sun through a door or a gap in the roof lit the floor
+        // round a character standing in it without the character's shadow
+        // (Camp Narache's armorsmith hut at 11:04, user174).
         vec3 fromMap = p - pass.unitMap.xyz;
-        rtSkipUnits = dot(fromMap, fromMap) < pass.unitMap.w * pass.unitMap.w;
+        rtSkipUnits = (shareBits & RT_GB_SHARE_ROOM) == 0u &&
+                      dot(fromMap, fromMap) < pass.unitMap.w * pass.unitMap.w;
         // As many rays as the settings ask, each to its own point on the
         // sun's disc; the share that gets through.
         uint sunRays = rtRayCount(pass.rays.x);

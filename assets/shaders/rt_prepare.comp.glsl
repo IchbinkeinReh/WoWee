@@ -142,6 +142,8 @@ void main() {
         if (dot(shading, n) < 0.0) shading = -shading;
         if (dot(shading, n) < 0.5) shading = n;
         storeyBound = rtGbufStoreyBound(gb0, texelFetch(uSceneGbuf1, sp, 0));
+        const uint room = RT_GB_BAKED | RT_GB_INTERIOR;
+        if ((rtGbufFlags(gb0) & room) == room) storeyBound |= RT_GB_SHARE_ROOM;
         resolved = (rtGbufFlags(gb0) & RT_GB_INTERIOR) != 0u || (storeyBound & RT_GB_SHARE_LAMP_NORMAL) != 0u
                        ? 1.0 : 0.0;
     }
