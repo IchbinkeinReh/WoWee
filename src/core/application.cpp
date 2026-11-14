@@ -1022,7 +1022,9 @@ bool Application::initialize() {
     assetInventory_ = pipeline::takeInventory(dataPath);
     if (mpqData) {
         // The archives are the whole install; the inventory describes
-        // extractions and has nothing to say about them.
+        // extractions and has nothing to say about them - nor has the login
+        // screen, which reads its trouble text on its own.
+        assetInventory_.fromArchives = true;
     } else if (assetInventory_.anyUsable()) {
         // At the level these logs carry, because this is the line that answers
         // the most common question anyone asks of them. One per installed set,

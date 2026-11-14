@@ -63,12 +63,20 @@ struct AssetSet {
 struct AssetInventory {
     std::string dataRoot;
     std::vector<AssetSet> sets;
+    /// Set when the game is read from the original client's MPQ archives in
+    /// place (drop-in mode, or WOW_DATA_PATH at a client's Data). Those are
+    /// the whole install, and an extraction is neither there nor wanted, so
+    /// there is nothing to warn about. The login screen used to read the
+    /// trouble text anyway and told a correct drop-in install it had no game
+    /// assets.
+    bool fromArchives = false;
 
     [[nodiscard]] bool anyUsable() const;
     /// The set with this id, or nullptr.
     [[nodiscard]] const AssetSet* find(const std::string& id) const;
     /// What to tell somebody who has nothing installed: where it looked, and
-    /// what to run. Empty when there is something usable.
+    /// what to run. Empty when there is something usable, or when the game is
+    /// read from archives (fromArchives).
     [[nodiscard]] std::string troubleText() const;
 };
 

@@ -15,6 +15,7 @@
 #include "core/application.hpp"
 #include "pipeline/asset_inventory.hpp"
 #include "core/config_paths.hpp"
+#include "core/original_client_login.hpp"
 #include "core/env_flag.hpp"
 #include "core/logger.hpp"
 #include "core/open_url.hpp"
@@ -38,7 +39,9 @@
 #include <cstring>
 #include <cstdio>
 #include <algorithm>
+#include <cctype>
 #include <iomanip>
+#include <optional>
 #include <unordered_map>
 
 namespace wowee { namespace ui {
@@ -164,6 +167,52 @@ void AuthScreen::seedKnownServers() {
         s.label = k.label;
         servers_.push_back(std::move(s));
     }
+}
+
+void AuthScreen::prefillFromOriginalClient(bool haveOwnLogin) {
+    // Only beside an original client, which drop-in mode names
+    // (core::enterDropInRoot). Its files are read and never written; the
+    // password is in none of them and nothing here asks for one.
+    const char* clientRoot = std::getenv("WOWEE_CLIENT_ROOT");
+    if (clientRoot == nullptr || *clientRoot == '\0') return;
+
+    const core::OriginalClientLogin original = core::readOriginalClientLogin(clientRoot);
+    const std::optional<core::RealmAddress> realm = core::splitRealmList(original.realmList);
+    LOG_WARNING("Original client's login (locale ", original.locale, "): server ",
+                realm ? makeServerKey(realm->host, realm->port) + " from " + original.realmListFrom
+                      : std::string("not set"),
+                ", account name ", original.accountName.empty() ? "not saved" : "saved",
+                haveOwnLogin ? "; this client's own saved login comes first" : "");
+    // With no server to hang it on, the account name goes to the field only on
+    // a first run: an empty account in a saved login was left empty here.
+    if (!haveOwnLogin) originalAccountName_ = original.accountName;
+    if (!realm) return;
+
+    // This client's own saved servers win: one chosen here was chosen on
+    // purpose, and may well not be the original's. The original's server is
+    // still put in the list, and selected only when there was nothing saved.
+    auto lower = [](std::string text) {
+        std::transform(text.begin(), text.end(), text.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return text;
+    };
+    int index = -1;
+    for (int i = 0; i < static_cast<int>(servers_.size()); ++i) {
+        if (lower(servers_[i].hostname) == lower(realm->host) && servers_[i].port == realm->port) {
+            index = i;
+            break;
+        }
+    }
+    if (index < 0) {
+        ServerProfile s;
+        s.hostname = realm->host;
+        s.port = realm->port;
+        s.expansionId = "wotlk";  // a 3.3.5a client's realm list is a Wrath server
+        servers_.push_back(std::move(s));
+        index = static_cast<int>(servers_.size()) - 1;
+    }
+    if (servers_[index].username.empty()) servers_[index].username = original.accountName;
+    if (!haveOwnLogin) selectServerProfile(index);
 }
 
 void AuthScreen::selectServerProfile(int index) {
@@ -302,6 +351,9 @@ void AuthScreen::render(auth::AuthHandler& authHandler) {
     // Load saved login info on first render
     if (!loginInfoLoaded) {
         loadLoginInfo();
+        // Before the known servers go in, so on a first run the original
+        // client's server is the one selected rather than the first of those.
+        prefillFromOriginalClient(!servers_.empty());
         // After the load, so it covers every way out of it - a config that
         // was read, one that was migrated, and the first run where there is
         // no file at all and the list would otherwise be empty.
@@ -313,6 +365,9 @@ void AuthScreen::render(auth::AuthHandler& authHandler) {
         // unconditionally, so a first run opened aimed at a server the person
         // running it does not have.
         if (hostname_.empty()) hostname_.setText("localhost");
+        // The original client's saved account name, only where this client's
+        // own saved login has none for the server it opened on.
+        if (username_.empty() && !originalAccountName_.empty()) username_.setText(originalAccountName_);
         auto* registry = core::Application::getInstance().getExpansionRegistry();
         if (registry && registry->getActive()) {
             const auto& profiles = registry->getAllProfiles();
@@ -1847,12 +1902,12 @@ std::string waitingInWords(const SettingDesc& desc, bool german) {
         }
         if (!out.empty()) out += "\n";
         if (!compare) {
-            out += german ? "Verfügbar, wenn " + name + " an ist." : "Available when " + name + " is on.";
+            out += german ? "VerfÃ¼gbar, wenn " + name + " an ist." : "Available when " + name + " is on.";
         } else if (negated) {
-            out += german ? "Verfügbar, außer bei " + name + ": " + choice + "."
+            out += german ? "VerfÃ¼gbar, auÃŸer bei " + name + ": " + choice + "."
                           : "Available when " + name + " is not " + choice + ".";
         } else {
-            out += german ? "Verfügbar bei " + name + ": " + choice + "."
+            out += german ? "VerfÃ¼gbar bei " + name + ": " + choice + "."
                           : "Available when " + name + " is " + choice + ".";
         }
     }
@@ -2018,7 +2073,7 @@ void AuthScreen::renderLoginSettingsSheet(float screenW, float screenH) {
     col.gap(ui_.lineHeight(px(kTitle), /*titleFace=*/true) + px(4));
     ui_.text(col.at(),
              words("Changes show as you make them; what is in the world, once you enter it.",
-                   "Änderungen wirken sofort; was die Welt betrifft, sobald Ihr sie betretet."),
+                   "Ã„nderungen wirken sofort; was die Welt betrifft, sobald Ihr sie betretet."),
              px(kSmall), theme.pencil);
     col.gap(ui_.lineHeight(px(kSmall)) + px(8));
     ui_.rule(ImVec2(col.x0, col.y), ImVec2(col.x1, col.y), paperFade(theme.pencil, 0.6f), px(1.0f), 0x9A17u);
@@ -2251,12 +2306,12 @@ void AuthScreen::renderLoginSettingsSheet(float screenW, float screenH) {
         // Every graphics setting, not only the ones on this page: the ray
         // tracing's and the Debug pages' with the rest. Asked first, since it
         // cannot be undone.
-        const char* resetLabel = words("Reset to default", "Auf Standard zurücksetzen");
+        const char* resetLabel = words("Reset to default", "Auf Standard zurÃ¼cksetzen");
         if (ui_.button("gfx.reset", ImVec2(col.x0, y), ImVec2(col.x0 + widthFor(resetLabel, 170), y + bh),
                        resetLabel)) {
             confirmGraphicsReset_ = true;
         }
-        const char* applyLabel = words("Apply", "Übernehmen");
+        const char* applyLabel = words("Apply", "Ãœbernehmen");
         const char* cancelLabel = words("Cancel", "Abbrechen");
         const float applyW = widthFor(applyLabel, 130);
         const float cancelW = widthFor(cancelLabel, 110);
@@ -2295,11 +2350,11 @@ void AuthScreen::renderLoginSettingsSheet(float screenW, float screenH) {
     if (settingsOpen_ && confirmGraphicsReset_) {
         // Yes or no, over the sheet.
         const char* line1 = words("Reset all graphics settings to their defaults?",
-                                  "Alle Grafikeinstellungen auf ihren Standard zurücksetzen?");
+                                  "Alle Grafikeinstellungen auf ihren Standard zurÃ¼cksetzen?");
         const char* line2 = words("Every one, the resolution, ray tracing and the debug pages too.",
-                                  "Jede einzelne, auch Auflösung, Raytracing und die Debug-Seiten.");
+                                  "Jede einzelne, auch AuflÃ¶sung, Raytracing und die Debug-Seiten.");
         const char* line3 = words("Sound, controls, interface and chat stay as they are.",
-                                  "Sound, Steuerung, Oberfläche und Chat bleiben, wie sie sind.");
+                                  "Sound, Steuerung, OberflÃ¤che und Chat bleiben, wie sie sind.");
         const float textW = std::max({ui_.textWidth(line1, px(kLabel)), ui_.textWidth(line2, px(kSmall)),
                                       ui_.textWidth(line3, px(kSmall))});
         const float cw = std::min(screenW - px(20), std::max(px(440), textW + px(kPad) * 2.0f));

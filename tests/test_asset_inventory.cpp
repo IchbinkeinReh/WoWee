@@ -124,6 +124,18 @@ TEST_CASE("the protocol directories this client ships are not assets") {
     CHECK(inventory.troubleText().find("No game assets") != std::string::npos);
 }
 
+TEST_CASE("a game read from its MPQ archives has nothing to warn about") {
+    Sandbox box;
+    // A drop-in install: the client's own expansion tables beside it, no
+    // extraction, the archives read in place. The login screen showed "No game
+    // assets" for exactly this.
+    box.protocolOnly("wotlk", "Wrath of the Lich King");
+    AssetInventory inventory = takeInventory(box.root.string());
+    CHECK(inventory.troubleText().find("No game assets") != std::string::npos);
+    inventory.fromArchives = true;
+    CHECK(inventory.troubleText().empty());
+}
+
 TEST_CASE("an extraction that was stopped partway is not offered, and says so") {
     Sandbox box;
     box.interrupted("wotlk", "Wrath of the Lich King");
