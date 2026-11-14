@@ -202,6 +202,9 @@ private:
     void loadLoginInfo();
     static std::string getConfigPath();
     bool loginInfoLoaded = false;
+    /// The account name the original client saved (drop-in mode), for the
+    /// account field when this client has no saved login of its own.
+    std::string originalAccountName_;
 
     static std::string makeServerKey(const std::string& host, int port);
     /// How one reads in the server list: its name if this client knows one,
@@ -211,6 +214,10 @@ private:
     /// that a first run offers somewhere to actually connect to rather than a
     /// blank address box and a realmlist to go and look up.
     void seedKnownServers();
+    /// Drop-in mode: the account name and realm list the original client in
+    /// this folder would show (core/original_client_login.hpp). This
+    /// client's own saved login wins; the original's fill only what it lacks.
+    void prefillFromOriginalClient(bool haveOwnLogin);
     void selectServerProfile(int index);
     void upsertCurrentServerProfile(bool includePasswordHash);
     [[nodiscard]] std::string currentExpansionId() const;

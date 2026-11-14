@@ -156,7 +156,7 @@ const AssetSet* AssetInventory::find(const std::string& id) const {
 }
 
 std::string AssetInventory::troubleText() const {
-    if (anyUsable()) return {};
+    if (fromArchives || anyUsable()) return {};
 
     // A directory per expansion is shipped with the client whether or not
     // anyone has extracted that game, so "there are directories" is not the

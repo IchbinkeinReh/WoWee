@@ -746,6 +746,7 @@ set(WOWEE_SOURCES
     src/core/app_clock.cpp
     src/core/config_paths.cpp
     src/core/dropin.cpp
+    src/core/original_client_login.cpp
     src/core/frame_pacer.cpp
     src/core/frame_profiler.cpp
     src/core/https_get.cpp

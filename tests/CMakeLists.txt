@@ -255,6 +255,13 @@ wowee_add_test(test_asset_inventory
     SOURCES test_asset_inventory.cpp
             ${CMAKE_SOURCE_DIR}/src/pipeline/asset_inventory.cpp)
 
+# ── test_original_client_login ──────────────────────────────
+# What the original client's Config.wtf and realmlist.wtf say, read the way
+# Wow.exe 12340 reads them, for the drop-in login screen's account and server.
+wowee_add_test(test_original_client_login
+    SOURCES test_original_client_login.cpp
+            ${CMAKE_SOURCE_DIR}/src/core/original_client_login.cpp)
+
 # ── test_data_paths ─────────────────────────────────────────
 # Where the assets go, which the client and the asset manager have to agree on
 # and did not: one looked in a macOS-only place, the other wrote beside the

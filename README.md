@@ -269,7 +269,10 @@ WoWee reads a legally obtained 3.3.5a client's data in one of three ways:
   folder, or to its `Data` folder, or choose that folder in the client. You can
   also copy `wowee.exe` into the WoW folder and start it there (drop-in mode).
   In drop-in mode WoWee keeps everything it writes in a `WoWee\` subfolder.
-  `WOWEE_DROPIN=0` turns drop-in mode off and `=1` forces it.
+  `WOWEE_DROPIN=0` turns drop-in mode off and `=1` forces it. On its first
+  start the login screen takes the server from the original client's
+  `realmlist.wtf` and the remembered account name from `WTF\Config.wtf`
+  (read only; once WoWee has saved a login of its own, that comes first).
 - **Streamed from a server.** Run
   [tools/data_stream_server](tools/data_stream_server) next to a WoW folder. In
   the client, enter the server's URL and access key: on the Android/iOS data
