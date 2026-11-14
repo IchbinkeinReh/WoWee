@@ -72,10 +72,13 @@ bool TouchControls::pointOverInterface(float x, float y) {
     return frameXmlPointOwnsMouse(x, y);
 }
 
-void TouchControls::handleEvent(const SDL_Event& event, int windowWidth, int windowHeight) {
+bool TouchControls::handleEvent(const SDL_Event& event, int windowWidth, int windowHeight) {
+    if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
+        return handleTouchButton(event);
+    }
     if (event.type != SDL_EVENT_FINGER_DOWN && event.type != SDL_EVENT_FINGER_MOTION &&
         event.type != SDL_EVENT_FINGER_UP && event.type != SDL_EVENT_FINGER_CANCELED) {
-        return;
+        return false;
     }
 
     const float w = static_cast<float>(std::max(windowWidth, 1));
@@ -91,9 +94,17 @@ void TouchControls::handleEvent(const SDL_Event& event, int windowWidth, int win
     if (down && mouseFingerId_ == kNoFinger) mouseFingerId_ = id;
     if (up && id == mouseFingerId_) mouseFingerId_ = kNoFinger;
 
-    if (!inWorld_) return;
+    if (!inWorld_) return false;
 
     if (down) {
+        // However the finger is placed below, the left button SDL pressed for
+        // it is then held for a long press or let through.
+        struct Settle {
+            TouchControls& controls;
+            SDL_FingerID finger;
+            ~Settle() { controls.settleMousePress(finger); }
+        } settle{*this, id};
+
         // Each stick owns one half of the safe area, the full height of it.
         const safe_area::Insets& inset = safe_area::current();
         const touch::Area area =
@@ -104,7 +115,7 @@ void TouchControls::handleEvent(const SDL_Event& event, int windowWidth, int win
         // never becomes a stick, a tap the controls track or half of a pinch.
         if (!touch::inside(x, y, area)) {
             LOG_DEBUG("touch: finger down at ", x, ",", y, " outside the safe area");
-            return;
+            return false;
         }
 
         // The interface is asked first, so a bag, an action button or the
@@ -123,7 +134,7 @@ void TouchControls::handleEvent(const SDL_Event& event, int windowWidth, int win
                 lookDownMs_ = SDL_GetTicks();
                 longPressFired_ = false;
             }
-            return;
+            return false;
         }
 
         const bool leftHalf = touch::halfAt(x, area) == touch::Half::Move;
@@ -134,7 +145,7 @@ void TouchControls::handleEvent(const SDL_Event& event, int windowWidth, int win
             stickOriginX_ = stickAtX_ = x;
             stickOriginY_ = stickAtY_ = y;
             stickX_ = stickY_ = 0.0f;
-            return;
+            return false;
         }
         if (!leftHalf && lookFingerId_ == kNoFinger) {
             LOG_DEBUG("touch: camera stick at ", x, ",", y);
@@ -147,7 +158,7 @@ void TouchControls::handleEvent(const SDL_Event& event, int windowWidth, int win
             lookTravel_ = 0.0f;
             lookDownMs_ = SDL_GetTicks();
             longPressFired_ = false;
-            return;
+            return false;
         }
 
         // A second finger in a half whose stick is held: a pinch with that
@@ -166,9 +177,14 @@ void TouchControls::handleEvent(const SDL_Event& event, int windowWidth, int win
                 const float ay = withMove ? stickAtY_ : lookY_;
                 lastPinchSpacing_ = std::hypot(ax - x, ay - y);
                 LOG_DEBUG("touch: pinch with the ", withMove ? "move" : "camera", " stick");
+                // The camera stick's finger is no long press now.
+                if (withLook && lookFingerId_ == mouseFingerId_ &&
+                    leftPress_.moved() == touch::PressStep::Deliver) {
+                    letHeldPressThrough();
+                }
             }
         }
-        return;
+        return false;
     }
 
     if (up) {
@@ -185,12 +201,9 @@ void TouchControls::handleEvent(const SDL_Event& event, int windowWidth, int win
             lookStickX_ = lookStickY_ = 0.0f;
             // The finger is off, so SDL has let go of its left button and
             // there is nothing left to read as up.
-            if (leftMasked_) {
-                core::Input::getInstance().setMouseButtonMasked(SDL_BUTTON_LEFT, false);
-                leftMasked_ = false;
-            }
+            unmaskLeft();
         }
-        return;
+        return false;
     }
 
     // SDL_EVENT_FINGER_MOTION
@@ -209,6 +222,11 @@ void TouchControls::handleEvent(const SDL_Event& event, int windowWidth, int win
         if (!lookMoved_) {
             lookTravel_ += std::hypot(x - lookX_, y - lookY_);
             if (lookTravel_ >= kLookSlopPixels) lookMoved_ = true;
+            // A push, not a tap: the press goes through and the finger drags.
+            if (lookMoved_ && id == mouseFingerId_ &&
+                leftPress_.moved() == touch::PressStep::Deliver) {
+                letHeldPressThrough();
+            }
         }
         lookX_ = x;
         lookY_ = y;
@@ -220,15 +238,15 @@ void TouchControls::handleEvent(const SDL_Event& event, int windowWidth, int win
         pinchBX_ = x;
         pinchBY_ = y;
     } else {
-        return;
+        return false;
     }
 
-    if (pinchA_ == kNoFinger || pinchB_ == kNoFinger || (id != pinchA_ && id != pinchB_)) return;
+    if (pinchA_ == kNoFinger || pinchB_ == kNoFinger || (id != pinchA_ && id != pinchB_)) return false;
     const float ax = pinchOfMoveStick_ ? stickAtX_ : lookX_;
     const float ay = pinchOfMoveStick_ ? stickAtY_ : lookY_;
     const float spacing = std::hypot(ax - pinchBX_, ay - pinchBY_);
     const float moved = spacing - lastPinchSpacing_;
-    if (std::abs(moved) < kPinchPixelsPerNotch) return;
+    if (std::abs(moved) < kPinchPixelsPerNotch) return false;
     lastPinchSpacing_ = spacing;
 
     // Fingers spreading pulls the camera in, the way a wheel forward does. Sent
@@ -241,6 +259,78 @@ void TouchControls::handleEvent(const SDL_Event& event, int windowWidth, int win
     // same measurement at two precisions, and only the finer one survived.
     wheel.wheel.y = moved / kPinchPixelsPerNotch;
     SDL_PushEvent(&wheel);
+    return false;
+}
+
+bool TouchControls::handleTouchButton(const SDL_Event& event) {
+    // The first finger's left button, and nothing else: a mouse, a pen and a
+    // touch's other buttons go through untouched.
+    if (event.button.which != SDL_TOUCH_MOUSEID || event.button.button != SDL_BUTTON_LEFT) return false;
+    // One of ours, let through late.
+    if (replaying_) {
+        replaying_ = false;
+        return false;
+    }
+    auto& input = core::Input::getInstance();
+    if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+        if (leftPress_.buttonDown(inWorld_) != touch::PressStep::Swallow) return false;
+        heldDown_ = event;
+        // core::Input reads SDL's buttons rather than its events, so the press
+        // is kept from it the same way.
+        input.setMouseButtonMasked(SDL_BUTTON_LEFT, true);
+        leftMasked_ = true;
+        return true;
+    }
+    switch (leftPress_.buttonUp()) {
+    case touch::PressStep::DeliverClick:
+        // A tap: the press and this release, one after the other - a click.
+        LOG_DEBUG("touch: tap at ", lookX_, ",", lookY_, " - left click");
+        replayHeldPress(&event);
+        // SDL's button is already up, so core::Input is given the press for
+        // the one frame (update() lets it go).
+        unmaskLeft();
+        input.setVirtualMouseButton(SDL_BUTTON_LEFT, true);
+        tapPressed_ = true;
+        return true;
+    case touch::PressStep::Swallow:
+        // The release of a press nobody saw: a long press's.
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool TouchControls::takeReplay(SDL_Event& event) {
+    if (replayNext_ >= replayCount_) return false;
+    event = replay_[replayNext_++];
+    if (replayNext_ >= replayCount_) replayCount_ = replayNext_ = 0;
+    replaying_ = true;
+    return true;
+}
+
+void TouchControls::replayHeldPress(const SDL_Event* release) {
+    replay_[0] = heldDown_;
+    replayCount_ = 1;
+    if (release) replay_[replayCount_++] = *release;
+    replayNext_ = 0;
+}
+
+void TouchControls::letHeldPressThrough() {
+    replayHeldPress(nullptr);
+    unmaskLeft();
+}
+
+void TouchControls::unmaskLeft() {
+    if (!leftMasked_) return;
+    core::Input::getInstance().setMouseButtonMasked(SDL_BUTTON_LEFT, false);
+    leftMasked_ = false;
+}
+
+void TouchControls::settleMousePress(SDL_FingerID id) {
+    if (id != mouseFingerId_) return;
+    // Long-pressable when it took the camera stick or a frame: the finger
+    // updateLongPress() watches.
+    if (leftPress_.fingerDown(lookFingerId_ == id) == touch::PressStep::Deliver) letHeldPressThrough();
 }
 
 void TouchControls::endPinch() {
@@ -275,20 +365,21 @@ void TouchControls::updateLongPress() {
     }
     if (SDL_GetTicks() - lookDownMs_ < kLongPressMs) return;
     longPressFired_ = true;
+    // The left button SDL pressed for the finger has been held back from
+    // everything since it went down (touch::HeldPress), and now never goes
+    // through: the long press is a right click and nothing else, as a
+    // desktop's is. Letting the left button go here instead was a left click
+    // to every frame and to the world - a unit frame targeted its unit before
+    // its menu opened. A press already let through (the finger was not held)
+    // makes no long press.
+    if (!leftPress_.longPress()) return;
     LOG_DEBUG("touch: long press at ", lookX_, ",", lookY_, " - right click");
 
-    // The left button first. The finger has held it since it went down, and
-    // the world reads both buttons at once as walking forward - and the
-    // world's right click only counts with the left one up.
-    //
     // Both channels, as the gamepad presses its buttons: the world polls
-    // core::Input, and every panel asks ImGui. ImGui hands the queued changes
-    // out a frame at a time, so the left button lets go before the right one
-    // goes down, and the interface sees a right click on its own.
-    input.setMouseButtonMasked(SDL_BUTTON_LEFT, true);
-    leftMasked_ = true;
-    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
-
+    // core::Input, and every panel asks ImGui. core::Input still reads the
+    // left button as up (it is masked until the finger lifts), so the world
+    // does not take both buttons for walking forward, and its right click,
+    // which only counts with the left one up, does count.
     input.setVirtualMouseButton(SDL_BUTTON_RIGHT, true);
     ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Right, true);
     rightHeld_ = true;
@@ -301,14 +392,29 @@ void TouchControls::endLongPress() {
         ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Right, false);
         rightHeld_ = false;
     }
-    if (leftMasked_) {
-        input.setMouseButtonMasked(SDL_BUTTON_LEFT, false);
-        leftMasked_ = false;
+    unmaskLeft();
+    // A press held with the finger down is forgotten, and a tap's press for
+    // core::Input let go.
+    leftPress_.reset();
+    replayCount_ = replayNext_ = 0;
+    replaying_ = false;
+    if (tapPressed_) {
+        input.setVirtualMouseButton(SDL_BUTTON_LEFT, false);
+        tapPressed_ = false;
     }
     longPressFired_ = false;
 }
 
 void TouchControls::update() {
+    // A tap's press was core::Input's for the frame just read; this one reads
+    // its release.
+    if (tapPressed_) {
+        core::Input::getInstance().setVirtualMouseButton(SDL_BUTTON_LEFT, false);
+        tapPressed_ = false;
+    }
+    // A press whose finger never came: let through (taken ahead of next
+    // frame's events).
+    if (leftPress_.update() == touch::PressStep::Deliver) letHeldPressThrough();
     updateLongPress();
 
     // The camera stick turns at a rate, so it needs the time since the last
@@ -352,7 +458,7 @@ void TouchControls::draw() const {
     // coming and the finger lifted in time if a right click was not meant. In
     // front of everything, because the finger is usually on a frame.
     if (lookFingerId_ != kNoFinger && lookFingerId_ == mouseFingerId_ && !lookMoved_ &&
-        !longPressFired_ && pinchA_ == kNoFinger) {
+        !longPressFired_ && pinchA_ == kNoFinger && leftPress_.held()) {
         const uint64_t heldMs = SDL_GetTicks() - lookDownMs_;
         if (heldMs >= kLongPressHintMs) {
             if (ImDrawList* fg = ImGui::GetForegroundDrawList()) {

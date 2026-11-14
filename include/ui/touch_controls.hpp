@@ -2,6 +2,8 @@
 
 #include <SDL3/SDL.h>
 
+#include "ui/touch_press.hpp"
+
 #include <cstdint>
 
 namespace wowee {
@@ -64,7 +66,14 @@ public:
     /// go - it is no longer where it was.
     void displayChanged() { cachedRadius_ = 0.0f; reset(); }
 
-    void handleEvent(const SDL_Event& event, int windowWidth, int windowHeight);
+    /// Reads the finger events, and the left button SDL makes of the first
+    /// finger. True when the event is kept back: the caller passes it on to
+    /// nothing else.
+    [[nodiscard]] bool handleEvent(const SDL_Event& event, int windowWidth, int windowHeight);
+
+    /// A left button event let through late (touch::HeldPress), to be handled
+    /// ahead of anything SDL has queued since. False when there is none.
+    bool takeReplay(SDL_Event& event);
 
     /// Applies the movement stick to the movement keys, turns the view by the
     /// camera stick, and turns a finger held still into a right click. Once a
@@ -159,6 +168,32 @@ private:
     bool longPressFired_ = false;
     bool rightHeld_ = false;
     bool leftMasked_ = false;
+
+    // The first finger's left button, kept back until the press is a tap, a
+    // push or a long press: the press SDL sent, the events to let through
+    // late (at most a press and its release), and whether the one being
+    // handled is one of those. A tap's press for core::Input, which reads
+    // SDL's buttons and not its events: held for the one frame.
+    touch::HeldPress leftPress_;
+    SDL_Event heldDown_{};
+    SDL_Event replay_[2]{};
+    int replayCount_ = 0;
+    int replayNext_ = 0;
+    bool replaying_ = false;
+    bool tapPressed_ = false;
+
+    /// Reads the touch mouse's left button events. True to keep the event back.
+    bool handleTouchButton(const SDL_Event& event);
+    /// Queues the press kept back, and the release with it for a tap.
+    void replayHeldPress(const SDL_Event* release);
+    /// The press kept back is a press after all: queued, and core::Input
+    /// reads SDL's button again.
+    void letHeldPressThrough();
+    /// Lets core::Input read SDL's left button again.
+    void unmaskLeft();
+    /// A finger just landed and has been made whatever it is: if it is the
+    /// mouse's, its press is held for a long press or let through.
+    void settleMousePress(SDL_FingerID id);
 
     // The pinch: a stick's finger and a second one in the same half. While it
     // lasts that stick is held centred, since both fingers are zooming.

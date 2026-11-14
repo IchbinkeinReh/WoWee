@@ -2355,7 +2355,15 @@ void Application::run() {
         }
 
         SDL_Event event;
-        while (SDL_PollEvent(&event)) {
+        auto nextEvent = [](SDL_Event& e) {
+#ifdef WOWEE_MOBILE
+            // A left press the touch controls kept back and have now let
+            // through, ahead of anything SDL queued after it.
+            if (ui::touchControls().takeReplay(e)) return true;
+#endif
+            return SDL_PollEvent(&e);
+        };
+        while (nextEvent(event)) {
             // Sound in Background. Off in the real client and off here: losing
             // focus silences the client rather than playing on behind whatever
             // the player switched to. Read at the moment focus changes, so
@@ -2392,13 +2400,16 @@ void Application::run() {
             core::gamepad().handleEvent(event);
 #ifdef WOWEE_MOBILE
             // The stick and the pinch read the finger events SDL sends
-            // alongside the mouse ones. They claim nothing else: every panel,
-            // slider and action button keeps working through the mouse SDL
-            // already makes of the first finger.
+            // alongside the mouse ones. Every panel, slider and action button
+            // keeps working through the mouse SDL already makes of the first
+            // finger - but its left button is held back until it is known
+            // whether the press is a tap, a push or a long press (a right
+            // click, with no left click in it), and comes back through
+            // nextEvent() when it is let through.
             {
                 int tw = 0, th = 0;
                 if (window) SDL_GetWindowSize(window->getSDLWindow(), &tw, &th);
-                ui::touchControls().handleEvent(event, tw, th);
+                if (ui::touchControls().handleEvent(event, tw, th)) continue;
             }
 
             // A fold, a rotation, split screen, a move to another display, or

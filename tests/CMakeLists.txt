@@ -2225,6 +2225,12 @@ register_test_target(test_gamepad)
 # camera, which need a phone.
 wowee_add_test(test_touch_zones SOURCES test_touch_zones.cpp)
 
+# ── test_touch_press ─────────────────────────────────────────
+# Header-only: what the left button SDL makes of the first finger becomes - a
+# tap's click, a push's press, or nothing at all for a long press (a right
+# click alone). TouchControls applies it to SDL's events, ImGui and core::Input.
+wowee_add_test(test_touch_press SOURCES test_touch_press.cpp)
+
 # ── test_camera_pivot ────────────────────────────────────────
 # Header-only: the pivot arithmetic is a static member, so this needs SDL3's
 # headers (camera_controller.hpp includes them) but none of its symbols.
