@@ -97,7 +97,10 @@
   "ChrRaces": {
     "ClientFileString": 11,
     "CreatureType": 8,
+    "FacialHairCustomization0": 65,
+    "FacialHairCustomization1": 66,
     "Flags": 1,
+    "HairCustomization": 67,
     "ID": 0,
     "Name": 14
   },

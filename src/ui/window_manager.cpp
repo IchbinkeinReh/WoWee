@@ -345,6 +345,13 @@ bool WindowManager::barberStyleInfo(game::GameHandler& gameHandler, int selector
     }
 }
 
+bool WindowManager::barberCanAlterSkin(game::GameHandler& gameHandler) {
+    ensureBarberState(gameHandler);
+    // The first entry is the colour the player came in with; a style row of
+    // the shop's own is what the client has found.
+    return barberSkinStyles_.size() > 1;
+}
+
 void WindowManager::barberCycleStyle(game::GameHandler& gameHandler, int selector,
                                      int direction) {
     ensureBarberState(gameHandler);

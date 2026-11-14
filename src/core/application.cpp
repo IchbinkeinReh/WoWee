@@ -1643,6 +1643,9 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
             if (!uim || !gh) return 0;
             return uim->getGameScreen().windowManager().barberTotalCostCopper(*gh);
         };
+        luaSvc.barberCanAlterSkin = [uim = uiManager.get(), gh = gameHandler.get()]() -> bool {
+            return uim && gh && uim->getGameScreen().windowManager().barberCanAlterSkin(*gh);
+        };
         luaSvc.barberReset = [uim = uiManager.get(), gh = gameHandler.get()]() {
             if (uim && gh) uim->getGameScreen().windowManager().barberResetSelections(*gh);
         };

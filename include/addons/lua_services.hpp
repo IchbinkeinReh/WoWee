@@ -312,6 +312,7 @@ struct LuaServices {
                        bool& isCurrent)> getBarberStyleInfo;
     std::function<void(int selector, int direction)> setNextBarberStyle;
     std::function<uint32_t()> getBarberTotalCost;
+    std::function<bool()> barberCanAlterSkin;
     std::function<void()> barberReset;
     /// The Okay button. blizzard_barbershopui.xml names ApplyBarberShopStyle
     /// as an OnClick handler attribute, which is why nothing noticed it was

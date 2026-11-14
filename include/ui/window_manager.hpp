@@ -136,6 +136,9 @@ public:
     /// Show the current selection on the character, without sending it.
     void barberPreview(game::GameHandler& gameHandler);
     uint32_t barberTotalCostCopper(game::GameHandler& gameHandler);
+    /// Whether the player's race and gender have a skin style in the shop
+    /// (0x00bd19b4, BarberShopStyle type 3, set as the shop opens).
+    bool barberCanAlterSkin(game::GameHandler& gameHandler);
     void barberResetSelections(game::GameHandler& gameHandler);
     /// Buy the current selection. The Okay button on either barber calls this;
     /// FrameXML's reaches it through ApplyBarberShopStyle.

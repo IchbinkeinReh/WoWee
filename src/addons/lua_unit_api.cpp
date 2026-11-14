@@ -2822,32 +2822,39 @@ static int lua_SetPortraitTexture(lua_State* L) {
 // and HAIR_HORNS_STYLE and HAIR_HORNS_COLOR are both there in globalstrings
 // beside the NORMAL pair. It is the only race that differs, which is why the
 // facial-hair function below has a switch and this has an if.
-static int lua_GetHairCustomization(lua_State* L) {
+/// A ChrRaces customization word for the player's race - the hair one, or
+/// the facial one for the player's gender - or "NORMAL" (0x0052e6d0,
+/// 0x0052e730).
+static std::string raceCustomization(lua_State* L, bool facial) {
     auto* gh = getGameHandler(L);
-    const bool tauren = gh &&
-        static_cast<game::Race>(gh->getPlayerRace()) == game::Race::TAUREN;
-    lua_pushstring(L, tauren ? "HORNS" : "NORMAL");
+    auto* am = gh ? gh->services().assetManager : nullptr;
+    if (!gh || !am || !am->isInitialized()) return "NORMAL";
+    const auto* layouts = pipeline::getActiveDBCLayout();
+    const auto* rl = layouts ? layouts->getLayout("ChrRaces") : nullptr;
+    if (!rl) return "NORMAL";
+    // The gender byte of UNIT_FIELD_BYTES_0, as the client reads it off the
+    // player (+0x1008, +0x1c): 1 is female, anything else the male column.
+    uint32_t bytes0 = 0;
+    if (auto e = gh->getEntityManager().getEntity(gh->getPlayerGuid()))
+        bytes0 = e->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0));
+    const bool female = ((bytes0 >> 16) & 0xFFu) == 1;
+    const uint32_t field = facial
+        ? rl->tryField(female ? "FacialHairCustomization1" : "FacialHairCustomization0")
+        : rl->tryField("HairCustomization");
+    auto races = am->loadDBCOptional("ChrRaces.dbc");
+    if (!races || !races->isLoaded() || field >= races->getFieldCount()) return "NORMAL";
+    const int32_t row = races->findRecordById(gh->getPlayerRace());
+    if (row < 0) return "NORMAL";
+    return races->getString(static_cast<uint32_t>(row), field);
+}
+
+static int lua_GetHairCustomization(lua_State* L) {
+    lua_pushstring(L, raceCustomization(L, false).c_str());
     return 1;
 }
 
-/// The facial category, which genuinely differs by race - a troll's is tusks
-/// and a night elf's is markings, and calling either "hair" reads as a mistake
-/// rather than as a shortcut. These are the game's own categories; anything
-/// unlisted falls back to NORMAL, which is what a beard is.
 static int lua_GetFacialHairCustomization(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    const char* category = "NORMAL";
-    if (gh) {
-        switch (static_cast<game::Race>(gh->getPlayerRace())) {
-            case game::Race::NIGHT_ELF: category = "MARKINGS"; break;
-            case game::Race::UNDEAD:    category = "FEATURES"; break;
-            case game::Race::TAUREN:    category = "HORNS";    break;
-            case game::Race::TROLL:     category = "TUSKS";    break;
-            case game::Race::BLOOD_ELF: category = "EARRINGS"; break;
-            default: break;
-        }
-    }
-    lua_pushstring(L, category);
+    lua_pushstring(L, raceCustomization(L, true).c_str());
     return 1;
 }
 
@@ -2856,8 +2863,11 @@ static int lua_GetFacialHairCustomization(lua_State* L) {
 /// False, and not merely for want of data: answering yes would put a selector
 /// on screen that this client cannot fill, and the barber tests every selector
 /// it has drawn before it will let the player buy anything.
+// CanAlterSkin() (0x0052e4f0): whether the shop has a skin style for the
+// player's race and gender.
 static int lua_CanAlterSkin(lua_State* L) {
-    lua_pushboolean(L, 0);
+    auto* svc = getLuaServices(L);
+    lua_pushboolean(L, svc && svc->barberCanAlterSkin && svc->barberCanAlterSkin() ? 1 : 0);
     return 1;
 }
 
@@ -2903,7 +2913,15 @@ static int lua_GetBarberShopStyleInfo(lua_State* L) {
 /// (blizzard_barbershopui.xml:31 and :56), so an absent argument means back
 /// rather than a missing parameter.
 static int lua_SetNextBarberShopStyle(lua_State* L) {
-    const int selector = static_cast<int>(luaL_optinteger(L, 1, 0));
+    // 0x0052fdd0: a number or the usage line, rounded; 1 to 4, the skin's 4
+    // only where there is a skin style to move through.
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetNextBarberShopStyle(type[, backward])");
+    const int selector = static_cast<int>(std::lround(lua_tonumber(L, 1)));
+    if (selector < 1 || selector > 4) return 0;
+    if (selector == 4) {
+        auto* svc = getLuaServices(L);
+        if (!svc || !svc->barberCanAlterSkin || !svc->barberCanAlterSkin()) return 0;
+    }
     const int direction = lua_isnoneornil(L, 2) ? -1 : 1;
     if (auto* svc = getLuaServices(L); svc && svc->setNextBarberStyle) {
         svc->setNextBarberStyle(selector, direction);
