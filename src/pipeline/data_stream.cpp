@@ -331,6 +331,31 @@ int64_t steadyMs() {
                std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
+// A server that has just failed (gone, or refusing the key) is not asked
+// again for a while: every read of a zone load would otherwise sit through
+// the client's retries - four tries over four seconds each - one after the
+// other, and a load of a few hundred reads would take minutes to come to the
+// same holes. Reads in that while fail at once, as missing files.
+constexpr int64_t kServerRestMs = 10000;
+std::atomic<int64_t> g_serverDownUntilMs{0};
+std::atomic<uint64_t> g_failures{0};
+std::atomic<int64_t> g_lastFailureMs{-1};
+std::mutex g_failureMutex;
+std::string g_lastFailure;   // under g_failureMutex
+
+void noteFailure(const std::string& why, bool serverDown) {
+    const int64_t now = steadyMs();
+    ++g_failures;
+    g_lastFailureMs = now;
+    if (serverDown) g_serverDownUntilMs = now + kServerRestMs;
+    std::lock_guard<std::mutex> lock(g_failureMutex);
+    if (why != g_lastFailure) {
+        // Each new reason once, not each read it fails.
+        LOG_WARNING("STREAM: fetch failed: ", why, serverDown ? "; reads fail at once for the next 10 s" : "");
+        g_lastFailure = why;
+    }
+}
+
 /// The stream cache's two rows of settings.cfg, read before the settings
 /// panel exists (as update_check reads its own row).
 struct CacheSettings {
@@ -505,19 +530,41 @@ std::string DataStream::start(const StreamConfig& config, const std::string& cac
         const std::string rel = e->rel;
         e->cache = std::make_unique<ChunkCache>();
         auto fetch = [rel](uint64_t off, uint64_t len, std::vector<uint8_t>& out, std::string& err) {
+            if (steadyMs() < g_serverDownUntilMs.load()) {
+                err = "the server failed a moment ago (" + [] {
+                    std::lock_guard<std::mutex> lock(g_failureMutex);
+                    return g_lastFailure;
+                }() + ")";
+                ++g_failures;
+                g_lastFailureMs = steadyMs();
+                return false;
+            }
             HttpClient::Reply r;
-            if (!g_client || !g_client->get("v1/data/" + encodePath(rel), off, off + len, r, err)) return false;
+            if (!g_client) {
+                err = "no connection";
+                return false;
+            }
+            if (!g_client->get("v1/data/" + encodePath(rel), off, off + len, r, err)) {
+                noteFailure(err, /*serverDown=*/true);
+                return false;
+            }
             if (r.status != 206) {
-                err = "status " + std::to_string(r.status);
+                err = r.status == 401 ? "the server refused the access key (status 401)"
+                                      : "status " + std::to_string(r.status);
+                // Refused, or the server broken: the next read gets the same.
+                // A 404 or 416 is this file's or range's own.
+                noteFailure(err, r.status == 401 || r.status == 403 || r.status >= 500);
                 return false;
             }
             if (r.body.size() != len) {
                 err = "short reply";
+                noteFailure(err, false);
                 return false;
             }
             // The server's hash of what it sent, against what arrived.
             if (r.contentSha256.empty() || hexSha256(r.body.data(), r.body.size()) != r.contentSha256) {
                 err = "the chunk failed its SHA-256 check";
+                noteFailure(err, false);
                 return false;
             }
             g_fetched += r.body.size();
@@ -694,6 +741,13 @@ DataStream::Totals DataStream::totals() const {
     t.filesFetched = g_filesFetched.load();
     const int64_t last = g_lastFetchMs.load();
     t.secondsSinceFetch = last < 0 ? -1.0 : static_cast<double>(steadyMs() - last) / 1000.0;
+    t.failures = g_failures.load();
+    const int64_t failed = g_lastFailureMs.load();
+    t.secondsSinceFailure = failed < 0 ? -1.0 : static_cast<double>(steadyMs() - failed) / 1000.0;
+    {
+        std::lock_guard<std::mutex> lock(g_failureMutex);
+        t.lastFailure = g_lastFailure;
+    }
     return t;
 }
 

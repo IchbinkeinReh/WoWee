@@ -3104,7 +3104,9 @@ void Application::shutdown() {
         const auto t = pipeline::DataStream::instance().totals();
         LOG_WARNING("STREAM: at exit: fetched ", t.fetchedBytes, " bytes in ", t.requests,
                     " requests this run; cache holds ", t.localBytes, " of ", t.mpqBytes,
-                    " MPQ bytes (", t.totalBytes, " listed)");
+                    " MPQ bytes (", t.totalBytes, " listed)",
+                    t.failures ? "; " + std::to_string(t.failures) + " reads failed, the last: " + t.lastFailure
+                               : std::string());
     }
     // A clean exit: the next start has nothing to warn of (rt_session_marker).
     rt_session::clear(getConfigRoot() + "/rt_session.marker");

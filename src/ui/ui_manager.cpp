@@ -700,6 +700,11 @@ void UIManager::render(core::AppState appState, auth::AuthHandler* authHandler, 
     if (appState != core::AppState::IN_GAME) {
         const ImVec2 display = ImGui::GetIO().DisplaySize;
         drawStreamProgress(ImGui::GetForegroundDrawList(), display.x, display.y);
+    } else {
+        // In the world only when the server fails: the holes it leaves
+        // (no ground, no models) need a reason on screen.
+        const ImVec2 display = ImGui::GetIO().DisplaySize;
+        drawStreamFailure(ImGui::GetForegroundDrawList(), display.x, display.y, /*top=*/true);
     }
 }
 

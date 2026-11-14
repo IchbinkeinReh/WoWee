@@ -20,8 +20,17 @@ namespace wowee::ui {
 /// `rateBytesPerSecond` < 0 leaves the rate out.
 std::string streamProgressText(uint64_t bytes, uint64_t files, double rateBytesPerSecond, bool german);
 
+/// The line said instead while the server is failing, e.g. "Datenserver
+/// antwortet nicht - es fehlt Spielinhalt (status 401)".
+std::string streamFailureText(const std::string& why, bool german);
+
 /// Draws the line along the bottom of a `width` x `height` screen when the
-/// streaming mode fetched something in the last few seconds; else nothing.
+/// streaming mode fetched something in the last few seconds, or the failure
+/// line (red) when a fetch failed in the last few; else nothing.
 void drawStreamProgress(ImDrawList* drawList, float width, float height);
+
+/// The failure line alone (in the world, where the progress is not shown),
+/// near the top of the screen when `top`; true when it was drawn.
+bool drawStreamFailure(ImDrawList* drawList, float width, float height, bool top);
 
 }  // namespace wowee::ui

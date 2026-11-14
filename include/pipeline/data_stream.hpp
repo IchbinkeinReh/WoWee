@@ -77,6 +77,11 @@ public:
         uint64_t filesFetched = 0;
         /// Seconds since the last fetch finished; negative before the first.
         double secondsSinceFetch = -1.0;
+        /// Fetches that failed this run (the server gone, the key refused),
+        /// seconds since the last of them (negative: none) and why it failed.
+        uint64_t failures = 0;
+        double secondsSinceFailure = -1.0;
+        std::string lastFailure;
     };
     [[nodiscard]] Totals totals() const;
 

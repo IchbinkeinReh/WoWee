@@ -47,9 +47,48 @@ std::string streamProgressText(uint64_t bytes, uint64_t files, double rateBytesP
     return s;
 }
 
+std::string streamFailureText(const std::string& why, bool german) {
+    std::string s = german ? "Datenserver antwortet nicht - es fehlt Spielinhalt"
+                           : "The game data server is not answering - some of the game is missing";
+    if (!why.empty()) s += " (" + why + ")";
+    return s;
+}
+
+namespace {
+void drawBand(ImDrawList* drawList, float width, float height, const std::string& text, ImU32 color,
+              bool top = false) {
+    ImFont* font = ImGui::GetFont();
+    const float size = ImGui::GetFontSize();
+    const ImVec2 extent = font->CalcTextSizeA(size, width, 0.0f, text.c_str());
+    const ImVec2 at((width - extent.x) * 0.5f, top ? height * 0.12f : height - extent.y - size * 0.6f);
+    // A dark band behind it: the loading pictures are bright in places.
+    drawList->AddRectFilled(ImVec2(at.x - size * 0.6f, at.y - size * 0.25f),
+                            ImVec2(at.x + extent.x + size * 0.6f, at.y + extent.y + size * 0.25f),
+                            IM_COL32(0, 0, 0, 160), size * 0.3f);
+    drawList->AddText(font, size, at, color, text.c_str());
+}
+}  // namespace
+
+bool drawStreamFailure(ImDrawList* drawList, float width, float height, bool top) {
+    auto& stream = pipeline::DataStream::instance();
+    if (!drawList || !stream.active()) return false;
+    const auto t = stream.totals();
+    // A server that stopped answering, or refuses the key: said for as long
+    // as reads keep failing and half a minute after, until a fetch succeeds
+    // again - what is missing meanwhile (a model, a texture, the ground) is
+    // why. In place of the progress.
+    constexpr double kShowFailureFor = 30.0;
+    if (t.failures == 0 || t.secondsSinceFailure < 0.0 || t.secondsSinceFailure > kShowFailureFor) return false;
+    if (t.secondsSinceFetch >= 0.0 && t.secondsSinceFetch < t.secondsSinceFailure) return false;
+    drawBand(drawList, width, height, streamFailureText(t.lastFailure, clientSpeaksGerman()),
+             IM_COL32(255, 80, 60, 255), top);
+    return true;
+}
+
 void drawStreamProgress(ImDrawList* drawList, float width, float height) {
     auto& stream = pipeline::DataStream::instance();
     if (!drawList || !stream.active()) return;
+    if (drawStreamFailure(drawList, width, height, /*top=*/false)) return;
     const auto t = stream.totals();
     // Only while data arrives: a warm cache shows nothing at all.
     constexpr double kShowFor = 4.0;
@@ -68,16 +107,8 @@ void drawStreamProgress(ImDrawList* drawList, float width, float height) {
         sampleBytes = t.fetchedBytes;
     }
 
-    const std::string text = streamProgressText(t.fetchedBytes, t.filesFetched, rate, clientSpeaksGerman());
-    ImFont* font = ImGui::GetFont();
-    const float size = ImGui::GetFontSize();
-    const ImVec2 extent = font->CalcTextSizeA(size, width, 0.0f, text.c_str());
-    const ImVec2 at((width - extent.x) * 0.5f, height - extent.y - size * 0.6f);
-    // A dark band behind it: the loading pictures are bright in places.
-    drawList->AddRectFilled(ImVec2(at.x - size * 0.6f, at.y - size * 0.25f),
-                            ImVec2(at.x + extent.x + size * 0.6f, at.y + extent.y + size * 0.25f),
-                            IM_COL32(0, 0, 0, 160), size * 0.3f);
-    drawList->AddText(font, size, at, IM_COL32(255, 210, 0, 255), text.c_str());
+    drawBand(drawList, width, height, streamProgressText(t.fetchedBytes, t.filesFetched, rate, clientSpeaksGerman()),
+             IM_COL32(255, 210, 0, 255));
 }
 
 }  // namespace wowee::ui
