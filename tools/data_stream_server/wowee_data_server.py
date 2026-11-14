@@ -208,8 +208,8 @@ def main():
     args = ap.parse_args()
     with open(args.key_file) as f:
         key = f.read().strip()
-    if len(key) < 32:
-        sys.exit('the key in %s is too short' % args.key_file)
+    if len(key) < 16:
+        sys.exit('the key in %s is too short (at least 16 characters)' % args.key_file)
     cache = os.path.join(os.path.dirname(os.path.abspath(args.key_file)), 'hashes.json')
     store = Store(args.root, cache)
     srv = Server((args.bind, args.port), Handler)
