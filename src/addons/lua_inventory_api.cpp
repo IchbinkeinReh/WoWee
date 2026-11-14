@@ -957,12 +957,36 @@ static int lua_WoweeUndress(lua_State* L) { return setModelDressed(L, true); }
 /// __WoweeRedress(frame).
 static int lua_WoweeRedress(lua_State* L) { return setModelDressed(L, false); }
 
+// IsDressableItem(item) (0x00517530): an item that goes on a slot, or one
+// whose spell teaches (effect 36) a spell whose first effect makes (24) such
+// an item - a pattern or a plan. The taught spell is the effect's own, or else
+// the item's spell triggered on learning (6). Each item asked about has to be
+// cached; nothing is queried.
 static int lua_IsDressableItem(lua_State* L) {
     auto* gh = getGameHandler(L);
     const uint32_t itemId = itemIdFromArg(L, 1);
     const auto* info = (gh && itemId) ? gh->getItemInfo(itemId) : nullptr;
-    // 2 is weapon and 4 is armour, as the item class is sent.
-    const bool dressable = info && (info->itemClass == 2 || info->itemClass == 4);
+    const auto wearable = [](const game::ItemQueryResponseData* i) {
+        return i && i->valid && i->inventoryType != 0;
+    };
+    bool dressable = wearable(info);
+    if (!dressable && info && info->valid) {
+        gh->loadSpellNameCache();
+        const auto& cache = gh->spellNameCacheRef();
+        for (const auto& sp : info->spells) {
+            if (sp.spellId == 0) continue;
+            const auto own = cache.find(sp.spellId);
+            if (own == cache.end() || own->second.effectIds[0] != 36) continue;
+            uint32_t taught = own->second.effectTriggerSpell[0];
+            if (taught == 0) {
+                for (const auto& other : info->spells)
+                    if (other.spellTrigger == 6) { taught = other.spellId; break; }
+            }
+            const auto made = cache.find(taught);
+            if (made == cache.end() || made->second.effectIds[0] != 24) continue;
+            if (wearable(gh->getItemInfo(made->second.effectItemType0))) { dressable = true; break; }
+        }
+    }
     luaPushOneOrNil(L, dressable ? 1 : 0);
     return 1;
 }
