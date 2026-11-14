@@ -8749,7 +8749,8 @@ void registerSystemLuaAPI(lua_State* L) {
                 // delay text on FrameXML's corpse prompt always empty.
                 {"GetCorpseRecoveryDelay", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushnumber(L, gh ? gh->getCorpseReclaimDelaySec() : 0.0);
+            // 0x00516280: whole seconds, the milliseconds left divided down.
+            lua_pushnumber(L, gh ? std::floor(gh->getCorpseReclaimDelaySec()) : 0.0);
             return 1;
         }},
                 // Which party slot holds the leader, in the same 1-to-4
@@ -11069,12 +11070,27 @@ void registerSystemLuaAPI(lua_State* L) {
                 // list this is, which is the local player: the client's
                 // GetTitleName reads its own object's gender byte.
                 {"GetTitleName", [](lua_State* L) -> int {
+            // 0x0051b4e0: a number or the usage line; nothing at all for a
+            // bit no row carries. The name hole is taken out rather than
+            // filled - a '%' and what follows it up to a space - so the
+            // list reads "Sergeant " and " the Explorer".
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetTitleName(titleMaskID)");
             auto* gh = getGameHandler(L);
-            int bit = static_cast<int>(luaL_checknumber(L, 1));
-            if (!gh || bit < 0) { return luaReturnNil(L); }
-            std::string title = gh->getFormattedTitle(static_cast<uint32_t>(bit));
-            if (title.empty()) { return luaReturnNil(L); }
-            lua_pushstring(L, title.c_str());
+            const int bit = static_cast<int>(lua_tonumber(L, 1));
+            const auto fmt = (gh && bit >= 0) ? gh->getTitleTemplate(static_cast<uint32_t>(bit))
+                                              : std::nullopt;
+            if (!fmt) return 0;
+            std::string out;
+            bool inHole = false;
+            for (const char c : *fmt) {
+                if (c == '%') { inHole = true; continue; }
+                if (inHole) {
+                    if (c != ' ') continue;
+                    inHole = false;
+                }
+                out += c;
+            }
+            lua_pushstring(L, out.c_str());
             return 1;
         }},
                 // SetCurrentTitle(bit) - and the comment that used to sit here
@@ -11357,10 +11373,14 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, 5000);
             return 2;
         }},
+                // GetBindLocation() (0x00516b20): the bind area's name, or the
+                // interface's HOME_INN when the area is not known.
                 {"GetBindLocation", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (!gh) { lua_pushstring(L, "Unknown"); return 1; }
-            lua_pushstring(L, gh->getWhoAreaName(gh->getHomeBindZoneId()).c_str());
+            const std::string area = gh ? gh->getWhoAreaName(gh->getHomeBindZoneId()) : std::string();
+            if (!area.empty()) { lua_pushstring(L, area.c_str()); return 1; }
+            lua_getglobal(L, "HOME_INN");
+            if (!lua_isstring(L, -1)) { lua_pop(L, 1); lua_pushstring(L, "HOME_INN"); }
             return 1;
         }},
                 // SetSavedInstanceExtend(index, doExtend) - the Extend button

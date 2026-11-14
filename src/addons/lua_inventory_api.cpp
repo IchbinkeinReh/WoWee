@@ -5617,9 +5617,10 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // macro parser look for to tell a usable item from an inert
                 // one. Trigger 0 is on-use; equip and proc effects are not what
                 // is being asked for.
+                // GetItemSpell(item) (0x00517100): name and rank, or nil, nil.
                 {"GetItemSpell", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (!gh) return luaReturnNil(L);
+            if (!gh) { lua_pushnil(L); lua_pushnil(L); return 2; }
             // Either an item id or a name, as everywhere else an item is named.
             uint32_t itemId = 0;
             if (lua_isnumber(L, 1)) {
@@ -5636,9 +5637,9 @@ void registerInventoryLuaAPI(lua_State* L) {
                     }
                 }
             }
-            if (itemId == 0) return luaReturnNil(L);
+            if (itemId == 0) { lua_pushnil(L); lua_pushnil(L); return 2; }
             const auto* info = gh->getItemInfo(itemId);
-            if (!info) return luaReturnNil(L);
+            if (!info) { lua_pushnil(L); lua_pushnil(L); return 2; }
             for (const auto& sp : info->spells) {
                 if (sp.spellId == 0 || sp.spellTrigger != 0) continue;
                 const std::string& name = gh->getSpellName(sp.spellId);
@@ -5650,7 +5651,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 lua_pushstring(L, gh->getSpellRank(sp.spellId).c_str());
                 return 2;
             }
-            return luaReturnNil(L);
+            { lua_pushnil(L); lua_pushnil(L); return 2; }
         }},
                 // ---- Currency tab ----
                 {"GetContainerItemPurchaseInfo", lua_GetContainerItemPurchaseInfo},
