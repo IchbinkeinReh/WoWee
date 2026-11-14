@@ -1985,16 +1985,46 @@ int lua_Region_GetPoint(lua_State* L) {
 /// The types a widget answers to, most specific first.
 ///
 /// WoW's IsObjectType is true for the type itself and everything it derives
-/// from - a Button is a Frame is a Region - and FrameXML relies on that: it
-/// asks whether something is a Region to decide it can be positioned at all.
+/// from - a CheckButton is a Button is a Frame is a Region is an Object - and
+/// FrameXML relies on that: it asks whether something is a Region to decide it
+/// can be positioned at all. Each class's test (0x00482c90 Texture, 0x004853c0
+/// FontString, 0x004926f0 Frame, 0x009622a0 CheckButton, 0x00597310
+/// PlayerModel, ...) compares without regard to case (0x0076e780) and then asks
+/// its parent class. ScrollingMessageFrame is not a MessageFrame.
+///
+/// "LayeredRegion" is WoWee's own: the client's chains have no such class.
+/// strnicmp as the client's type tests use it (0x0076e780), and portable.
+static bool sameTypeName(const char* a, const char* b) {
+    for (; *a && *b; ++a, ++b)
+        if (std::tolower(static_cast<unsigned char>(*a)) != std::tolower(static_cast<unsigned char>(*b)))
+            return false;
+    return *a == *b;
+}
+static const char* parentObjectType(const std::string& type) {
+    static const std::pair<const char*, const char*> kParents[] = {
+        {"Region", "Object"},       {"Texture", "Region"},
+        {"FontString", "Region"},   {"Frame", "Region"},
+        {"Button", "Frame"},        {"CheckButton", "Button"},
+        {"Model", "Frame"},         {"PlayerModel", "Model"},
+        {"DressUpModel", "PlayerModel"}, {"TabardModel", "PlayerModel"},
+    };
+    if (sameTypeName(type.c_str(), "Object") == 0) return nullptr;
+    for (const auto& [child, parent] : kParents)
+        if (sameTypeName(type.c_str(), child) == 0) return parent;
+    // Every other kind this creates is a Frame directly: Minimap, Cooldown,
+    // GameTooltip, StatusBar, EditBox, Slider, ScrollFrame and the rest.
+    return "Frame";
+}
 static bool objectTypeMatches(const std::string& actual, const std::string& asked) {
-    if (actual == asked) return true;
-    const bool isRegion = (actual == "Texture" || actual == "FontString");
-    if (isRegion) {
-        return asked == "LayeredRegion" || asked == "Region";
+    for (std::string t = actual;;) {
+        if (sameTypeName(t.c_str(), asked.c_str()) == 0) return true;
+        const char* parent = parentObjectType(t);
+        if (!parent) break;
+        t = parent;
     }
-    // Everything else this creates is a Frame or derives from one.
-    return asked == "Frame" || asked == "Region";
+    const bool isRegion = (sameTypeName(actual.c_str(), "Texture") == 0 ||
+                           sameTypeName(actual.c_str(), "FontString") == 0);
+    return isRegion && sameTypeName(asked.c_str(), "LayeredRegion") == 0;
 }
 
 int lua_Region_GetObjectType(lua_State* L) {
@@ -11298,14 +11328,26 @@ void LuaEngine::registerCoreAPI() {
         "function animMeta:GetCurve() return self.curve or 'NONE' end\n"
         "local pointMeta = {}\n"
         "pointMeta.__index = pointMeta\n"
-        "function pointMeta:SetOffset(x, y) self.offsetX, self.offsetY = x or 0, y or 0 end\n"
+        // SetOffset (0x004a6980): two numbers. SetOrder (0x004a6b10 ->
+        // 0x00499840): a number, held to 1 - 100, the path's points re-sorted.
+        "function pointMeta:SetOffset(x, y)\n"
+        "    if type(x) ~= 'number' or type(y) ~= 'number' then animUsage(self, 'Usage: %s:SetOffset(x, y)') end\n"
+        "    self.offsetX, self.offsetY = x, y\n"
+        "end\n"
         "function pointMeta:GetOffset() return self.offsetX or 0, self.offsetY or 0 end\n"
-        "function pointMeta:SetOrder(o) self.order = o or 1 end\n"
+        "local function sortPoints(path)\n"
+        "    if path and path.controlPoints then\n"
+        "        table.sort(path.controlPoints, function(a, b) return (a.order or 1) < (b.order or 1) end)\n"
+        "    end\n"
+        "end\n"
+        "function pointMeta:SetOrder(o)\n"
+        "    if not tonumber(o) then animUsage(self, 'Usage: %s:SetOrder(order)') end\n"
+        "    self.order = math.max(1, math.min(100, math.floor(tonumber(o))))\n"
+        "    sortPoints(self.path)\n"
+        "end\n"
         "function pointMeta:GetOrder() return self.order or 1 end\n"
         "function pointMeta:GetParent() return self.path end\n"
         "function pointMeta:GetRegionParent() return self.path and self.path:GetRegionParent() end\n"
-        "function pointMeta:GetName() return self.name end\n"
-        "function pointMeta:GetObjectType() return 'ControlPoint' end\n"
         "function animMeta:CreateControlPoint(name, inherits, order)\n"
         "    local cp = setmetatable({path = self, name = name, order = tonumber(order) or 1}, pointMeta)\n"
         "    if type(inherits) == 'string' and __WoweeTemplates and __WoweeTemplates[inherits] then\n"
@@ -11348,7 +11390,6 @@ void LuaEngine::registerCoreAPI() {
         "    return ease(self.smoothing, t)\n"
         "end\n"
         "function animMeta:GetElapsed() return self.elapsed or 0 end\n"
-        "function animMeta:SetParent(p) self.parent = p end\n"
         "function animMeta:GetRegionParent() return self.group and self.group.parent end\n"
         "function animMeta:SetTarget(t) self.target = t end\n"
         "function animMeta:IsDelaying() return (self.elapsed or 0) < (self.startDelay or 0) end\n"
@@ -11369,6 +11410,111 @@ void LuaEngine::registerCoreAPI() {
 
         "local groupMeta = {}\n"
         "groupMeta.__index = groupMeta\n"
+        // SetParent(parent [, order]) of an animation (0x004a5880) and of a
+        // control point (0x004a6790): the parent object, or the name of one,
+        // which must be an AnimationGroup or a Path; the object moves into it,
+        // with the order given or its own. An animation's SetParent wrote a
+        // field nothing read, so the animation stayed in its old group, and a
+        // control point had none.
+        "local function reparent(self, p, order, isParent, kind, listOf, field)\n"
+        "    local n = tostring(self.name or '<unnamed>')\n"
+        "    if p == nil then\n"
+        "        error((\"%s:SetParent(): Cannot set a 'nil' parent for %s\"):format(n, kind == 'Path' and 'control points' or 'animations'), 3)\n"
+        "    end\n"
+        "    local target\n"
+        "    if type(p) == 'string' or type(p) == 'number' then\n"
+        "        target = _G[tostring(p)]\n"
+        "        if not isParent(target) then target = nil end\n"
+        "    elseif type(p) == 'table' then\n"
+        "        if getmetatable(p) == nil then\n"
+        "            error((\"%s:SetParent(): Couldn't find 'this' in parent object\"):format(n), 3)\n"
+        "        end\n"
+        "        if not isParent(p) then\n"
+        "            error(('%s:SetParent(): Wrong parent object type, expected %s'):format(n, kind), 3)\n"
+        "        end\n"
+        "        target = p\n"
+        "    end\n"
+        "    if not target then\n"
+        "        error((\"%s:SetParent(): Couldn't find %s named '%s'\"):format(n, kind == 'Path' and 'Path' or 'animation group', tostring(p)), 3)\n"
+        "    end\n"
+        "    if tonumber(order) then self.order = math.max(1, math.min(100, math.floor(tonumber(order)))) end\n"
+        "    local old = self[field]\n"
+        "    if old ~= target then\n"
+        "        local list = old and listOf(old)\n"
+        "        if list then\n"
+        "            for i = #list, 1, -1 do if list[i] == self then table.remove(list, i) end end\n"
+        "        end\n"
+        "        local into = listOf(target, true)\n"
+        "        table.insert(into, self)\n"
+        "        self[field] = target\n"
+        "    end\n"
+        "    return target\n"
+        "end\n"
+        // The script-object methods every animation, group and control point
+        // has (0x004a8240 GetObjectType, 0x004a8290 IsObjectType, 0x004a8340
+        // GetName, 0x004a83a0 GetParent). None of them existed for animations
+        // or groups, so an addon asking an animation its name or its group
+        // raised. IsObjectType follows the client's chains without regard to
+        // case: Translation, Rotation, Scale, Alpha and Path are Animations,
+        // and everything is an Object (0x00498770 - 0x00499ff0).
+        "local function scriptName(self)\n"
+        "    local n = self.name\n"
+        "    if type(n) == 'string' and n ~= '' then return n end\n"
+        "end\n"
+        "local function typeChain(self)\n"
+        "    local mt = getmetatable(self)\n"
+        "    if mt == groupMeta then return {'AnimationGroup', 'Object'} end\n"
+        "    if mt == pointMeta then return {'ControlPoint', 'Object'} end\n"
+        "    local kind = self.kind or 'Animation'\n"
+        "    if kind == 'Animation' then return {'Animation', 'Object'} end\n"
+        "    return {kind, 'Animation', 'Object'}\n"
+        "end\n"
+        "for _, meta in ipairs({animMeta, groupMeta, pointMeta}) do\n"
+        "    meta.GetName = scriptName\n"
+        "    meta.GetObjectType = function(self) return typeChain(self)[1] end\n"
+        "    meta.IsObjectType = function(self, t)\n"
+        "        if type(t) ~= 'string' and type(t) ~= 'number' then\n"
+        "            error(('Usage: %s:IsObjectType(\\\"type\\\")'):format(tostring(scriptName(self) or '<unnamed>')), 2)\n"
+        "        end\n"
+        "        t = tostring(t):lower()\n"
+        "        for _, name in ipairs(typeChain(self)) do\n"
+        "            if name:lower() == t then return 1 end\n"
+        "        end\n"
+        "        return nil\n"
+        "    end\n"
+        "end\n"
+        "function animMeta:GetParent() return self.group end\n"
+        // HasScript("type") (0x004a5af0, 0x004a7480): whether the kind has
+        // that handler at all - OnLoad, OnPlay, OnPause, OnStop, OnFinished
+        // and OnUpdate (0x00497500), and OnLoop for a group (0x00497800) -
+        // named in any case.
+        "local animScripts = {onload = 1, onplay = 1, onpause = 1, onstop = 1, onfinished = 1, onupdate = 1}\n"
+        "local function hasScript(self, t, group)\n"
+        "    if type(t) ~= 'string' and type(t) ~= 'number' then\n"
+        "        error(('Usage: %s:HasScript(\\\"type\\\")'):format(tostring(scriptName(self) or '<unnamed>')), 3)\n"
+        "    end\n"
+        "    t = tostring(t):lower()\n"
+        "    if animScripts[t] or (group and t == 'onloop') then return 1 end\n"
+        "    return nil\n"
+        "end\n"
+        "function animMeta:HasScript(t) return hasScript(self, t, false) end\n"
+        "function groupMeta:HasScript(t) return hasScript(self, t, true) end\n"
+        // IsDone (0x004a5000): the animation's progress has reached its end.
+        "function animMeta:IsDone() return (self.progress or 0) >= 1 end\n"
+        "function animMeta:SetParent(p, order)\n"
+        "    reparent(self, p, order,\n"
+        "        function(t) return type(t) == 'table' and getmetatable(t) == groupMeta end,\n"
+        "        'AnimationGroup', function(g) return g.animations end, 'group')\n"
+        "end\n"
+        "function pointMeta:SetParent(p, order)\n"
+        "    local path = reparent(self, p, order,\n"
+        "        function(t) return type(t) == 'table' and getmetatable(t) == animMeta and t.kind == 'Path' end,\n"
+        "        'Path', function(a, make)\n"
+        "            if make and not a.controlPoints then a.controlPoints = {} end\n"
+        "            return a.controlPoints\n"
+        "        end, 'path')\n"
+        "    sortPoints(path)\n"
+        "end\n"
         // CreateAnimation(type, name) (0x004a7e00): the type matched in any case
         // to Animation, Translation, Rotation, Scale, Path or Alpha; none, or one
         // not among them, is a plain Animation that changes nothing.
@@ -11376,7 +11522,7 @@ void LuaEngine::registerCoreAPI() {
         "                   scale = 'Scale', path = 'Path', alpha = 'Alpha'}\n"
         "function groupMeta:CreateAnimation(kind, name)\n"
         "    kind = type(kind) == 'string' and animKinds[kind:lower()] or 'Animation'\n"
-        "    local a = setmetatable({kind = kind, group = self,\n"
+        "    local a = setmetatable({kind = kind, group = self, name = name,\n"
         "                            duration = 0, order = 1, startDelay = 0}, animMeta)\n"
         "    table.insert(self.animations, a)\n"
         "    if name then _G[name] = a end\n"
@@ -11396,21 +11542,48 @@ void LuaEngine::registerCoreAPI() {
         "    self.looping = u\n"
         "end\n"
         "function groupMeta:GetLooping() return self.looping or 'NONE' end\n"
-        "function groupMeta:IsPlaying() return self.isPlaying == true end\n"
-        "function groupMeta:IsDone() return self.isPlaying ~= true end\n"
+        // IsPlaying (0x004a7aa0): playing and not paused. IsDone (0x004a6ff0 ->
+        // 0x00497920): a group of no length always is; otherwise only one that
+        // ran to its end - not one never played, or stopped part way.
+        "function groupMeta:IsPlaying() return self.isPlaying == true and not self.paused end\n"
+        "function groupMeta:IsDone()\n"
+        "    if self:GetDuration() <= 0.0001 then return true end\n"
+        "    return self.isPlaying ~= true and self.done == true\n"
+        "end\n"
         "groupMeta.SetScript = __WoweeSetScriptSlot\n"
         "groupMeta.GetScript = __WoweeGetScriptSlot\n"
         "groupMeta.HookScript = __WoweeHookScriptSlot\n"
         "function groupMeta:SetParent(p) self.parent = p end\n"
         "function groupMeta:GetParent() return self.parent end\n"
+        // GetDuration (0x004a70e0, kept by 0x0049ac80): the orders one after
+        // another, each as long as its longest startDelay + duration +
+        // endDelay. GetProgress (0x004a6fa0) is the time into the group over
+        // that. GetMaxOrder (0x004a7290 -> 0x00498a40) is the highest order,
+        // 0 with no animations, and IsPaused (0x004a7040) the paused flag.
         "function groupMeta:GetDuration()\n"
-        "    local total = 0\n"
+        "    local longest = {}\n"
         "    for _, a in ipairs(self.animations) do\n"
-        "        local t = (a.startDelay or 0) + (a.duration or 0)\n"
-        "        if t > total then total = t end\n"
+        "        local o = a.order or 1\n"
+        "        local t = (a.startDelay or 0) + (a.duration or 0) + (a.endDelay or 0)\n"
+        "        if t > (longest[o] or 0) then longest[o] = t end\n"
         "    end\n"
+        "    local total = 0\n"
+        "    for _, t in pairs(longest) do total = total + t end\n"
         "    return total\n"
         "end\n"
+        "function groupMeta:GetProgress()\n"
+        "    local d = self:GetDuration()\n"
+        "    if d <= 0 then return 0 end\n"
+        "    return (self.elapsed or 0) / d\n"
+        "end\n"
+        "function groupMeta:GetMaxOrder()\n"
+        "    local top = 0\n"
+        "    for _, a in ipairs(self.animations) do\n"
+        "        if (a.order or 1) > top then top = a.order or 1 end\n"
+        "    end\n"
+        "    return top\n"
+        "end\n"
+        "function groupMeta:IsPaused() return self.paused == true end\n"
         // The frame's alpha at the moment Play is called is what an Alpha
         // animation's change is relative to. Captured here rather than at
         // creation, because a group replayed later starts from wherever the
@@ -11420,6 +11593,8 @@ void LuaEngine::registerCoreAPI() {
         "    self.pendingFinish = nil\n"
         "    self.reversed = false\n"
         "    self.curOrder = nil\n"
+        "    self.elapsed = 0\n"
+        "    self.done = nil\n"
         "    self.baseAlpha = self.parent and self.parent:GetAlpha() or 1\n"
         "    for _, a in ipairs(self.animations) do a.elapsed = 0 a.progress = 0 a.finished = nil end\n"
         "    playing[self] = true\n"
@@ -11427,6 +11602,7 @@ void LuaEngine::registerCoreAPI() {
         "end\n"
         "function groupMeta:Stop()\n"
         "    self.isPlaying = false\n"
+        "    self.done = nil\n"
         "    self.pendingFinish = nil\n"
         "    playing[self] = nil\n"
         // Put back what the animations moved, or a stopped group leaves the
@@ -11447,6 +11623,7 @@ void LuaEngine::registerCoreAPI() {
         "function groupMeta:IsPendingFinish() return self.pendingFinish == true end\n"
         "local function finishNow(g)\n"
         "    g.isPlaying = false\n"
+        "    g.done = true\n"
         "    g.pendingFinish = nil\n"
         "    playing[g] = nil\n"
         "    __WoweeRunScriptSlot(g, 'OnFinished')\n"
@@ -11499,7 +11676,7 @@ void LuaEngine::registerCoreAPI() {
         // Regions carry their methods on themselves rather than on a shared
         // metatable, so installRegionMethods copies these two off the globals.
         "function __WoweeCreateAnimationGroup(self, name)\n"
-        "    local g = setmetatable({parent = self, animations = {}}, groupMeta)\n"
+        "    local g = setmetatable({parent = self, name = name, animations = {}}, groupMeta)\n"
         "    if name then _G[name] = g end\n"
         "    self.__animGroups = self.__animGroups or {}\n"
         "    table.insert(self.__animGroups, g)\n"
@@ -11569,6 +11746,7 @@ void LuaEngine::registerCoreAPI() {
         "function __WoweeTickAnimations(elapsed)\n"
         "    for g in pairs(playing) do\n"
         "        if not g.paused then\n"
+        "            g.elapsed = (g.elapsed or 0) + elapsed\n"
         "            local orders = ordersOf(g)\n"
         "            if not g.curOrder then g.curOrder = g.reversed and orders[#orders] or orders[1] end\n"
         "            local cur = g.curOrder or 1\n"
@@ -11654,7 +11832,9 @@ void LuaEngine::registerCoreAPI() {
         "                        if mode == 'BOUNCE' then g.reversed = not g.reversed end\n"
         "                        for _, a in ipairs(g.animations) do a.elapsed = 0 a.finished = nil a.lastP = nil end\n"
         "                        g.curOrder = nil\n"
-        "                        __WoweeRunScriptSlot(g, 'OnLoop')\n"
+        "                        g.elapsed = 0\n"
+        // OnLoop(self, loopState) (0x00497800): the way it plays now.
+        "                        __WoweeRunScriptSlot(g, 'OnLoop', g:GetLoopState())\n"
         "                    else\n"
         "                        finishNow(g)\n"
         "                    end\n"
