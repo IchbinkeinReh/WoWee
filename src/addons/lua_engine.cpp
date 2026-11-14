@@ -6640,8 +6640,27 @@ int lua_Region_IsVisible(lua_State* L) {
     luaPushOneOrNil(L, on);
     return 1;
 }
+// SetAlpha(alpha), held as the byte the client keeps in the region's colour:
+// a texture's (0x0048c3e0) and a frame's (0x0049f9e0) clamped to 0 - 1 first,
+// a font string's (0x0048d030) not - its 255ths taken as they come and cut to
+// a byte. Anything but a number is the usage error, the frame's own wording.
 int lua_Region_SetAlpha(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->alpha = static_cast<float>(luaL_optnumber(L, 2, 1.0));
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isnumber(L, 2)) {
+        const char* who = w->name.empty() ? "<unnamed>" : w->name.c_str();
+        return luaL_error(L, w->kind == wowee::ui::WidgetKind::Frame ? "Usage: %s:SetAlpha(alpha 0 to 1)"
+                                                              : "Usage: %s:SetAlpha(alpha)",
+                          who);
+    }
+    double alpha = lua_tonumber(L, 2);
+    if (std::isnan(alpha)) alpha = 0.0;  // the FPU's integer indefinite, low byte 0
+    if (w->kind != wowee::ui::WidgetKind::FontString) alpha = (alpha >= 0.0 && alpha < 1.0) ? alpha : (alpha >= 1.0 ? 1.0 : 0.0);
+    const double scaled = alpha * 255.0;
+    // Out of an int's reach the FPU's conversion is the indefinite 0x80000000.
+    const long whole = std::fabs(scaled) < 2147483648.0 ? std::lrint(scaled) : 0L;
+    const auto byte = static_cast<uint8_t>(whole & 0xFF);
+    w->alpha = static_cast<float>(byte) / 255.0f;
     return 0;
 }
 int lua_Region_GetAlpha(lua_State* L) {
