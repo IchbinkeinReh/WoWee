@@ -213,9 +213,24 @@ static int lua_Frame_IsEventRegistered(lua_State* L) {
     return 1;
 }
 
+/// A frame's name for a usage error, through its own GetName (these bindings
+/// sit above the widget helpers): the name, or "<unnamed>". Left on the stack.
+static const char* frameNameOnStack(lua_State* L, int index) {
+    lua_getfield(L, index, "GetName");
+    if (lua_isfunction(L, -1)) {
+        lua_pushvalue(L, index);
+        if (lua_pcall(L, 1, 1, 0) == 0 && lua_isstring(L, -1)) return lua_tostring(L, -1);
+    }
+    lua_pop(L, 1);
+    lua_pushstring(L, "<unnamed>");
+    return lua_tostring(L, -1);
+}
+
 static int lua_Frame_RegisterEvent(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);  // self
-    const char* eventName = luaL_checkstring(L, 2);
+    // 0x0049efe0: a string, or the usage error.
+    if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:RegisterEvent(\"event\")", frameNameOnStack(L, 1));
+    const char* eventName = lua_tostring(L, 2);
 
     // Bookkeeping the client keeps in C (the frame's event list), so it is
     // done without tainting or being tainted. Done under the caller's taint,
@@ -461,7 +476,11 @@ void registerAllEventFrames(lua_State* L, const char* eventName) {
 // Frame method: frame:SetScript("handler", func)
 static int lua_Frame_SetScript(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
-    const char* scriptType = luaL_checkstring(L, 2);
+    // 0x0049ec80: the type as a string and a function or nil, or the usage
+    // error. (The client also refuses a type the frame has no script for.)
+    if (!lua_isstring(L, 2) || (!lua_isfunction(L, 3) && !lua_isnoneornil(L, 3)))
+        return luaL_error(L, "Usage: %s:SetScript(\"type\", function)", frameNameOnStack(L, 1));
+    const char* scriptType = lua_tostring(L, 2);
     // The script is held with the taint of whoever set it (0x0049edb0 keeps
     // the two side by side), and that is what it runs under - see
     // pcallScript. Read first, so a handler an insecure caller hands over
@@ -1095,13 +1114,19 @@ int lua_Region_SetAllPoints(lua_State* L) {
     return 0;
 }
 
+// SetSize(width, height) (0x0049d7a0): both numbers, or the usage error.
 int lua_Region_SetSize(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
+    if (id != 0 && (!lua_isnumber(L, 2) || !lua_isnumber(L, 3))) {
+        const auto* w = tree ? tree->get(id) : nullptr;
+        return luaL_error(L, "Usage: %s:SetSize(width, height)",
+                          (w && !w->name.empty()) ? w->name.c_str() : "<unnamed>");
+    }
     if (tree && id != 0) {
-        tree->setWidth(id, static_cast<float>(luaL_optnumber(L, 2, 0)));
-        tree->setHeight(id, static_cast<float>(luaL_optnumber(L, 3, 0)));
+        tree->setWidth(id, static_cast<float>(lua_tonumber(L, 2)));
+        tree->setHeight(id, static_cast<float>(lua_tonumber(L, 3)));
     }
     return 0;
 }
@@ -1494,18 +1519,30 @@ int lua_Region_GetName(lua_State* L) {
     return 1;
 }
 
+namespace {
+/// The name a usage error is worded with: the frame's, or "<unnamed>".
+const char* usageName(lua_State* L, int index) {
+    const auto* w = widgetOf(L, index);
+    return (w && !w->name.empty()) ? w->name.c_str() : "<unnamed>";
+}
+}  // namespace
+
+// SetWidth(width) / SetHeight(height) (0x0049d480, 0x0049d620): a number, or
+// the usage error.
 int lua_Region_SetWidth(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
-    if (tree && id != 0) tree->setWidth(id, static_cast<float>(luaL_optnumber(L, 2, 0)));
+    if (id != 0 && !lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetWidth(width)", usageName(L, 1));
+    if (tree && id != 0) tree->setWidth(id, static_cast<float>(lua_tonumber(L, 2)));
     return 0;
 }
 int lua_Region_SetHeight(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
-    if (tree && id != 0) tree->setHeight(id, static_cast<float>(luaL_optnumber(L, 2, 0)));
+    if (id != 0 && !lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetHeight(height)", usageName(L, 1));
+    if (tree && id != 0) tree->setHeight(id, static_cast<float>(lua_tonumber(L, 2)));
     return 0;
 }
 /// Width of a string as it would be drawn.
@@ -1835,13 +1872,16 @@ int lua_Region_GetScale(lua_State* L) {
     lua_pushnumber(L, w ? w->scale : 1.0);
     return 1;
 }
+// SetScale(scale) (0x0049f820): a number, or the usage error; one not above
+// zero is its own error - it would collapse the frame and everything under it.
 int lua_Region_SetScale(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
     if (auto* w = widgetOf(L, 1)) {
-        const float v = static_cast<float>(luaL_optnumber(L, 2, 1.0));
-        // A scale of zero collapses the frame and everything under it to
-        // nothing, with no way back from Lua; WoW rejects it too.
-        if (v > 0.0f) w->scale = v;
+        const char* who = w->name.empty() ? "<unnamed>" : w->name.c_str();
+        if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetScale(scale)", who);
+        const auto v = static_cast<float>(lua_tonumber(L, 2));
+        if (!(v > 0.0f)) return luaL_error(L, "%s:SetScale(): Scale must be > 0", who);
+        w->scale = v;
     }
     return 0;
 }
@@ -6937,7 +6977,18 @@ int lua_Frame_IsMouseEnabled(lua_State* L) {
 int lua_Frame_SetFrameStrata(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
     if (auto* w = widgetOf(L, 1)) {
-        w->strata = wowee::ui::parseStrata(luaL_optstring(L, 2, "MEDIUM"));
+        // 0x0049e880: a string, or the usage error; a name that is not one of
+        // the strata (0x00814e40, any case) is its own error.
+        const char* who = w->name.empty() ? "<unnamed>" : w->name.c_str();
+        if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:SetFrameStrata(level)", who);
+        std::string name = lua_tostring(L, 2);
+        for (char& c : name) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        static constexpr const char* kStrata[] = {"WORLD",  "BACKGROUND", "LOW",        "MEDIUM", "HIGH",
+                                                  "DIALOG", "FULLSCREEN", "FULLSCREEN_DIALOG", "TOOLTIP"};
+        bool known = false;
+        for (const char* k : kStrata) known = known || name == k;
+        if (!known) return luaL_error(L, "%s:SetFrameStrata(): Unknown frame strata: %s", who, lua_tostring(L, 2));
+        w->strata = wowee::ui::parseStrata(name);
         w->strataExplicit = true;
     }
     return 0;
@@ -6961,7 +7012,12 @@ int lua_Frame_SetFrameLevel(lua_State* L) {
     const uint32_t id = widgetIdOf(L, 1);
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
-    const int wanted = static_cast<int>(luaL_optnumber(L, 2, 0));
+    // 0x0049e9d0: a number, or the usage error; truncated to a whole level and
+    // refused below zero with its own error.
+    const char* who = w->name.empty() ? "<unnamed>" : w->name.c_str();
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetFrameLevel(level)", who);
+    const int wanted = static_cast<int>(lua_tonumber(L, 2));
+    if (wanted < 0) return luaL_error(L, "%s:SetFrameLevel(): Passed negative frame level: %d", who, wanted);
     // Anything inside that set its own level moves by the same amount, because
     // a child's level is relative to its parent. Raising a window by hand and
     // raising it by clicking it must leave the same arrangement behind.
