@@ -11288,10 +11288,14 @@ void LuaEngine::registerCoreAPI() {
         "    self.smoothing = s\n"
         "end\n"
         // SetScale (0x004a6650): two numbers.
+        // SetScale (0x004a6650 -> 0x00497720): two numbers, each held to at
+        // least 0.001. GetScale (0x004a6700) answers them, 1 and 1 unset.
+        "local function minScale(v) if v ~= v or v <= 0.001 then return 0.001 end return v end\n"
         "function animMeta:SetScale(x, y)\n"
         "    if not tonumber(x) or not tonumber(y) then animUsage(self, 'Usage: %s:SetScale(x, y)') end\n"
-        "    self.scaleX, self.scaleY = tonumber(x), tonumber(y)\n"
+        "    self.scaleX, self.scaleY = minScale(tonumber(x)), minScale(tonumber(y))\n"
         "end\n"
+        "function animMeta:GetScale() return self.scaleX or 1, self.scaleY or 1 end\n"
         // A Rotation keeps radians (+0xa4): SetRadians sets them, GetDegrees
         // answers them times 57.29578 (0x004a6410, 0x004a63c0, 0x004a6490).
         // SetDegrees (0x004a6340): a number.
@@ -11424,7 +11428,8 @@ void LuaEngine::registerCoreAPI() {
         "function animMeta:Pause()  if self.group then self.group:Pause()  end end\n"
         "function animMeta:Resume() if self.group then self.group:Resume() end end\n"
         "function animMeta:Finish() if self.group then self.group:Finish() end end\n"
-        "function animMeta:GetSmoothing() return self.smoothing end\n"
+        // GetSmoothing (0x004a5810): always a name, NONE when none was set.
+        "function animMeta:GetSmoothing() return self.smoothing or 'NONE' end\n"
         "function animMeta:GetOrder() return self.order or 1 end\n"
 
         "local groupMeta = {}\n"
