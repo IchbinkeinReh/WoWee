@@ -10815,19 +10815,23 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"DetectWowMouse",              luaReturnNil},
                 // No Battle.net, so no chat to filter.
                 {"BNSetMatureLanguageFilter",   lua_ReturnNothing},
+                // ShowHelm([show]) (0x0051c0b0): the flag as the client
+                // reads one - none at all is show - and the request only when
+                // it changes what is shown.
                 {"ShowHelm", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
-            const bool want = lua_isnumber(L, 1) ? (lua_tonumber(L, 1) != 0)
-                                                 : (lua_toboolean(L, 1) != 0);
+            const bool want = luaClientSwitchArg(L, 1, true);
             if (want != gh->isHelmVisible()) gh->toggleHelm();
             return 0;
         }},
+                // ShowCloak([show]) (0x0051c100): the flag as the client
+                // reads one - none at all is show - and the request only when
+                // it changes what is shown.
                 {"ShowCloak", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
-            const bool want = lua_isnumber(L, 1) ? (lua_tonumber(L, 1) != 0)
-                                                 : (lua_toboolean(L, 1) != 0);
+            const bool want = luaClientSwitchArg(L, 1, true);
             if (want != gh->isCloakVisible()) gh->toggleCloak();
             return 0;
         }},

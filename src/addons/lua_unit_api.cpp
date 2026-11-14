@@ -680,30 +680,31 @@ static int lua_UnitDetailedThreatSituation(lua_State* L) {
 
 // CheckInteractDistance(unit, distIndex) → boolean
 // distIndex: 1=inspect(28yd), 2=trade(11yd), 3=duel(10yd), 4=follow(28yd)
+/// CheckInteractDistance("unit", distIndex) (0x0051b240): a string and a
+/// number or the usage error; the index, rounded, picks the client's squared
+/// distance (0x00ac8a6c, 0x00ac8a68, 0x00ac8a64, 0x00ac8a70: 30 yards to
+/// inspect, 11.11 to trade, 10 to duel, 30 to follow), and the unit is within
+/// it when the three-dimensional distance is strictly less. Any other index,
+/// or a unit not known, is nil. WoWee used 28, 11.11, 9.9 and 28 yards.
 static int lua_CheckInteractDistance(lua_State* L) {
+    if (!lua_isstring(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: CheckInteractDistance(\"unit\", distIndex)");
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnNil(L); }
-    const char* uid = luaL_checkstring(L, 1);
-    int distIdx = static_cast<int>(luaL_optnumber(L, 2, 4));
-    std::string uidStr(uid);
+    static constexpr float kSquaredDistance[4] = {900.0f, 123.45678f, 100.0f, 900.0f};
+    const long index = std::lround(lua_tonumber(L, 2));
+    if (index < 1 || index > 4) { return luaReturnNil(L); }
+    std::string uidStr(lua_tostring(L, 1));
     toLowerInPlace(uidStr);
     uint64_t guid = resolveUnitGuid(gh, uidStr);
     if (guid == 0) { return luaReturnNil(L); }
     auto targetEnt = gh->getEntityManager().getEntity(guid);
     auto playerEnt = gh->getEntityManager().getEntity(gh->getPlayerGuid());
     if (!targetEnt || !playerEnt) { return luaReturnNil(L); }
-    float dx = playerEnt->getX() - targetEnt->getX();
-    float dy = playerEnt->getY() - targetEnt->getY();
-    float dz = playerEnt->getZ() - targetEnt->getZ();
-    float dist = std::sqrt(dx*dx + dy*dy + dz*dz);
-    float maxDist = 28.0f; // default: follow/inspect range
-    switch (distIdx) {
-        case 1: maxDist = 28.0f; break; // inspect
-        case 2: maxDist = 11.11f; break; // trade
-        case 3: maxDist = 9.9f; break; // duel
-        case 4: maxDist = 28.0f; break; // follow
-    }
-    luaPushOneOrNil(L, dist <= maxDist);
+    const float dx = playerEnt->getX() - targetEnt->getX();
+    const float dy = playerEnt->getY() - targetEnt->getY();
+    const float dz = playerEnt->getZ() - targetEnt->getZ();
+    luaPushOneOrNil(L, dx * dx + dy * dy + dz * dz < kSquaredDistance[index - 1]);
     return 1;
 }
 
