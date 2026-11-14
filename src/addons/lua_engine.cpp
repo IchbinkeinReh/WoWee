@@ -6714,6 +6714,30 @@ int lua_Texture_SetTexCoord(lua_State* L) {
     }
     return 0;
 }
+/// SetRotation(angle[, cx, cy]) (0x0048c860): the four corners' coordinates
+/// turned about (cx, cy) - the middle, 0.5 0.5, unless both are given - by
+/// the angle less a quarter turn, one unit out from it: upper-left
+/// (cx + sin, cy - cos), lower-left (cx - cos, cy - sin), upper-right
+/// (cx + cos, cy + sin), lower-right (cx - sin, cy + cos). One unit, not the
+/// half-diagonal, so a turned image is cropped to the middle of its square.
+int lua_Texture_SetRotation(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isnumber(L, 2)) {
+        return luaL_error(L, "Usage: %s:SetRotation(angle, [cx, cy])", w->name.empty() ? "<unnamed>" : w->name.c_str());
+    }
+    const float angle = static_cast<float>(lua_tonumber(L, 2) - 0.7853981852531433);
+    float cx = 0.5f, cy = 0.5f;
+    if (lua_isnumber(L, 3) && lua_isnumber(L, 4)) {
+        cx = static_cast<float>(lua_tonumber(L, 3));
+        cy = static_cast<float>(lua_tonumber(L, 4));
+    }
+    const float sn = std::sin(angle), cs = std::cos(angle);
+    const float quad[8] = {sn + cx, cy - cs, cx - cs, cy - sn, cs + cx, sn + cy, cx - sn, cs + cy};
+    for (int i = 0; i < 8; ++i) w->texCoordQuad[i] = quad[i];
+    w->texCoordRotated = true;
+    return 0;
+}
 /// GetTexCoord() (0x0048c7f0): the four corners' coordinates, upper-left,
 /// lower-left, upper-right, lower-right, eight numbers whichever form set them.
 int lua_Texture_GetTexCoord(lua_State* L) {
@@ -7412,6 +7436,7 @@ void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
         set("SetTexture", lua_Texture_SetTexture);
         set("GetTexture", lua_Texture_GetTexture);
         set("SetTexCoord", lua_Texture_SetTexCoord);
+        set("SetRotation", lua_Texture_SetRotation);
         set("SetBlendMode", lua_Texture_SetBlendMode);
         set("GetBlendMode", lua_Texture_GetBlendMode);
         set("SetDesaturated", lua_Texture_SetDesaturated);
