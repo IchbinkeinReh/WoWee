@@ -40,6 +40,15 @@ static int channelCommand(lua_State* L, game::Opcode opcode, const char* label) 
     return 0;
 }
 
+static int channelSilenceVoice(lua_State* L, game::Opcode opcode, const char* label) {
+    if (lua_isstring(L, 1)) {
+        std::string ch = lua_tostring(L, 1);
+        for (auto& c : ch) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        if (ch == "PARTY" || ch == "RAID" || ch == "BATTLEGROUND" || ch == "BATTLEFIELDS") return 0;
+    }
+    return channelCommand(L, opcode, label);
+}
+
 /// The one-string channel commands (0x004fe460): a string or
 /// "Usage: %s(\"channel\")", then the opcode and the channel's name.
 static int channelNameCommand(lua_State* L, game::Opcode opcode, const char* label) {
@@ -3477,7 +3486,14 @@ void registerSocialLuaAPI(lua_State* L) {
             gh->addVoiceIgnore(name);
             return 0;
         }},
-                {"ChannelSilenceVoice", [](lua_State* L) -> int { (void)L; return 0; }},
+                // ChannelSilenceVoice / ChannelUnSilenceVoice("channel", "name")
+                // (0x00501140 and its twin): a chat channel's member silenced
+                // through the shared channel command; the group's own voice
+                // channels - Party, Raid, Battleground - are the client's local
+                // voice chat, which this client does not have.
+                {"ChannelSilenceVoice", [](lua_State* L) -> int {
+            return channelSilenceVoice(L, game::Opcode::CMSG_CHANNEL_SILENCE_VOICE, "ChannelSilenceVoice");
+        }},
                 // ChannelSilenceAll / ChannelUnSilenceAll("channel", "name")
                 // (0x00501250, 0x00501400) - see ChatHandler::channelSilenceAll.
                 {"ChannelSilenceAll", [](lua_State* L) -> int {
@@ -3522,7 +3538,9 @@ void registerSocialLuaAPI(lua_State* L) {
                 gh->silenceGroupMember(lua_tostring(L, 1), false);
             return 0;
         }},
-                {"ChannelUnSilenceVoice", [](lua_State* L) -> int { (void)L; return 0; }},
+                {"ChannelUnSilenceVoice", [](lua_State* L) -> int {
+            return channelSilenceVoice(L, game::Opcode::CMSG_CHANNEL_UNSILENCE_VOICE, "ChannelUnSilenceVoice");
+        }},
                 // Vehicles are not modelled in the raid frames.
                 {"UnitTargetsVehicleInRaidUI", luaReturnNil},
                 {"GetNumLanguages",   lua_GetNumLanguages},
