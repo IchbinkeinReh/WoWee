@@ -3,7 +3,6 @@
 #include "game/game_handler.hpp"
 #include "core/application.hpp"
 #include "rendering/renderer.hpp"
-#include "rendering/animation_controller.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "audio/ui_sound_manager.hpp"
 #include "ui/framexml_takeover.hpp"
@@ -29,14 +28,16 @@ void ToastManager::renderLateToasts(game::GameHandler& gameHandler) {
 }
 
 void ToastManager::playLevelUp() {
+    // The sound alone. The character does not cheer: SMSG_LEVELUP_INFO
+    // (0x006e2e90 case 0x1d4) opens tutorials and fires PLAYER_LEVEL_UP, and
+    // a level field that changes plays "HARDCODED Unit Level Up" on the unit
+    // (0x00730050 -> 0x0072e3a0 -> 0x006f9260) - the LevelUp.m2 effect, no
+    // emote and no animation of the character's own.
     auto* ac = services_.audioCoordinator;
     if (ac) {
         if (auto* sfx = ac->getUiSoundManager()) {
             sfx->playLevelUp();
         }
-    }
-    if (auto* renderer = services_.renderer) {
-        if (auto* anim = renderer->getAnimationController()) anim->playEmote("cheer");
     }
 }
 

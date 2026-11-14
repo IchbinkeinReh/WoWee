@@ -66,7 +66,7 @@ std::optional<AudioCallbackHandler::SoundEntry> AudioCallbackHandler::resolveSou
 }
 
 void AudioCallbackHandler::setupCallbacks() {
-    // Level-up callback - sound, cheer emote and the LevelUp.m2 effect. The
+    // Level-up callback - the sound and the LevelUp.m2 effect. The
     // level itself is FrameXML's chat line; nothing is drawn over the screen.
     gameHandler_.setLevelUpCallback([this](uint32_t /*newLevel*/) {
         if (uiManager_) {
