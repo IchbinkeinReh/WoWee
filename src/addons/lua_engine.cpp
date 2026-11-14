@@ -6753,15 +6753,25 @@ int lua_Texture_GetTexCoord(lua_State* L) {
     for (float v : q) lua_pushnumber(L, v);
     return 8;
 }
+// SetBlendMode("mode") (0x0048c040): one of the five modes by name, any case
+// (0x00814ff0 compares with strnicmp), or the usage error. Drawn: ADD adds;
+// BLEND, MOD, ALPHAKEY and DISABLE are drawn as ordinary blending here.
 int lua_Texture_SetBlendMode(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) {
-        const char* mode = luaL_optstring(L, 2, "BLEND");
-        // "ADD" and "ALPHAKEY" are the two that add rather than cover; the rest
-        // - BLEND, MOD, DISABLE - are close enough to ordinary blending that
-        // telling them apart would not change a pixel here yet.
-        w->blendAdd = (std::strcmp(mode, "ADD") == 0);
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    static constexpr const char* kModes[] = {"DISABLE", "BLEND", "ALPHAKEY", "ADD", "MOD"};
+    if (lua_isstring(L, 2)) {
+        std::string mode = lua_tostring(L, 2);
+        for (char& c : mode) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        for (const char* known : kModes) {
+            if (mode == known) {
+                w->blendMode = mode;
+                w->blendAdd = mode == "ADD";
+                return 0;
+            }
+        }
     }
-    return 0;
+    return luaL_error(L, "Usage: %s:SetBlendMode(\"mode\")", w->name.empty() ? "<unnamed>" : w->name.c_str());
 }
 // SetDesaturated(flag): drawn as its own luminance (Desaturate.bls). Answers
 // whether the shader is there - always - which SetItemButtonDesaturated reads
@@ -6778,7 +6788,7 @@ int lua_Texture_IsDesaturated(lua_State* L) {
 }
 int lua_Texture_GetBlendMode(lua_State* L) {
     auto* w = widgetOf(L, 1);
-    lua_pushstring(L, (w && w->blendAdd) ? "ADD" : "BLEND");
+    lua_pushstring(L, w ? w->blendMode.c_str() : "BLEND");
     return 1;
 }
 int lua_Region_SetVertexColor(lua_State* L) {
@@ -6851,9 +6861,18 @@ int lua_Region_GetDrawLayer(lua_State* L) {
     lua_pushstring(L, kNames[static_cast<size_t>(layer)]);
     return 1;
 }
+// SetDrawLayer("layer") (0x0048bf30 a texture's, 0x0048ce70 a font string's):
+// one of the five layers by name, any case (0x00814f60), or the usage error.
+// 3.3.5 takes no sub-level here, so the region keeps its own.
 int lua_Region_SetDrawLayer(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) {
-        const auto layer = wowee::ui::parseDrawLayer(luaL_optstring(L, 2, "ARTWORK"));
+        std::string name = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
+        for (char& c : name) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        if (name != "BACKGROUND" && name != "BORDER" && name != "ARTWORK" && name != "OVERLAY" &&
+            name != "HIGHLIGHT") {
+            return luaL_error(L, "Usage: %s:SetDrawLayer(\"layer\")", w->name.empty() ? "<unnamed>" : w->name.c_str());
+        }
+        const auto layer = wowee::ui::parseDrawLayer(name);
         // On a status bar this names the layer of the *fill*, which is a
         // region in the real client and is drawn by the bar here. Twenty bars
         // in the interface declare it and the cast bar is one of them: it asks
@@ -6861,7 +6880,6 @@ int lua_Region_SetDrawLayer(lua_State* L) {
         // behind the fill rather than over it.
         if (w->isStatusBar) w->barLayer = layer;
         else                w->layer = layer;
-        w->subLevel = static_cast<int>(luaL_optnumber(L, 3, 0));
     }
     return 0;
 }

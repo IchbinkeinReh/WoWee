@@ -815,6 +815,9 @@ struct Widget {
     /// what adds nothing. Drawn the ordinary way it is a black slab instead,
     /// which is what covered the player frame while it pulsed.
     bool blendAdd = false;
+    /// The blend mode by its name (SetBlendMode, 0x0048c040): DISABLE, BLEND,
+    /// ALPHAKEY, ADD or MOD, what GetBlendMode answers.
+    std::string blendMode = "BLEND";
     /// Texture:SetDesaturated - drawn as its luminance, untinted
     /// (Desaturate.bls, CSimpleTop's 0x00483060).
     bool desaturated = false;
