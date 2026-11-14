@@ -9732,6 +9732,8 @@ void registerSystemLuaAPI(lua_State* L) {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetChatWindowMessages(index)");
             const ChatWindowSettings* w = chatWindow(L, 1);
             if (!w) return 0;
+            // One value per group, as many as the client has.
+            if (!lua_checkstack(L, static_cast<int>(std::size(kChatMessageGroups)))) return 0;
             // An empty General is unset, not configured, and answers the
             // defaults - which is what the real client does and what FrameXML
             // is written against.
