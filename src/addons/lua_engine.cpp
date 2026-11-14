@@ -193,10 +193,13 @@ bool allEventsCover(lua_State* L, int frame, const char* eventName) {
     return on;
 }
 
+static const char* frameNameOnStack(lua_State* L, int index);
 static int lua_Frame_IsEventRegistered(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
-    const char* eventName = luaL_optstring(L, 2, nullptr);
-    if (!eventName || !*eventName) { luaPushOneOrNil(L, 0); return 1; }
+    // 0x0049f160: a string, or the usage error.
+    if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:IsEventRegistered(\"event\")", frameNameOnStack(L, 1));
+    const char* eventName = lua_tostring(L, 2);
+    if (!*eventName) { luaPushOneOrNil(L, 0); return 1; }
     bool on = false;
     {
         taint::Quiet quiet;   // the registration is the client's, kept in C
@@ -358,7 +361,9 @@ static int lua_Frame_UnregisterAllEvents(lua_State* L) {
 
 static int lua_Frame_UnregisterEvent(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
-    const char* eventName = luaL_checkstring(L, 2);
+    // 0x0049f060: a string, or the usage error.
+    if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:UnregisterEvent(\"event\")", frameNameOnStack(L, 1));
+    const char* eventName = lua_tostring(L, 2);
     taint::Quiet quiet;   // as RegisterEvent
 
     allEventsSkip(L, 1, eventName, true);
@@ -564,7 +569,9 @@ static int lua_Frame_HookScript(lua_State* L) {
 // Frame method: frame:GetScript("handler")
 static int lua_Frame_GetScript(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
-    const char* scriptType = luaL_checkstring(L, 2);
+    // 0x0049eb70: a string, or the usage error.
+    if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:GetScript(\"type\")", frameNameOnStack(L, 1));
+    const char* scriptType = lua_tostring(L, 2);
     lua_getfield(L, 1, "__scripts");
     if (lua_istable(L, -1)) {
         lua_getfield(L, -1, scriptType);
@@ -1788,18 +1795,48 @@ int lua_Region_GetCenter(lua_State* L) {
 static int lua_Region_SetParent(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
     luaL_checktype(L, 1, LUA_TTABLE);
-    // A name is as good as a table here, and FrameXML passes both.
-    if (lua_isstring(L, 2) && !lua_isnumber(L, 2)) {
-        lua_getglobal(L, lua_tostring(L, 2));
-        lua_replace(L, 2);
+    // 0x0049cbd0's refusals, each its own error.
+    auto* tree = wowee::addons::getWidgetTree(L);
+    const auto* self = widgetOf(L, 1);
+    const char* who = (self && !self->name.empty()) ? self->name.c_str() : "<unnamed>";
+    if (lua_isnoneornil(L, 2)) {
+        if (self && self->kind != wowee::ui::WidgetKind::Frame)
+            return luaL_error(L, "%s:SetParent(): Cannot set a 'nil' parent for fonts or textures", who);
+    } else {
+        // A name is as good as a table here, and FrameXML passes both.
+        if (!lua_istable(L, 2)) {
+            const char* asked = lua_tostring(L, 2);
+            if (lua_type(L, 2) == LUA_TSTRING) {
+                lua_getglobal(L, asked);
+                if (lua_istable(L, -1) && widgetIdOf(L, lua_gettop(L)) != 0) {
+                    lua_replace(L, 2);
+                } else {
+                    lua_pop(L, 1);
+                    return luaL_error(L, "%s:SetParent(): Couldn't find region named '%s'", who, asked);
+                }
+            } else {
+                return luaL_error(L, "%s:SetParent(): Couldn't find region named '%s'", who, asked ? asked : "");
+            }
+        }
+        const uint32_t np = widgetIdOf(L, 2);
+        const auto* parent = (tree && np) ? tree->get(np) : nullptr;
+        if (!parent) return luaL_error(L, "%s:SetParent(): Couldn't find 'this' in parent object", who);
+        if (parent->kind != wowee::ui::WidgetKind::Frame)
+            return luaL_error(L, "%s:SetParent(): Wrong parent object type, expected Frame", who);
+        // Up from the new parent: meeting the frame itself would be a loop.
+        const uint32_t selfId = widgetIdOf(L, 1);
+        for (const auto* at = parent; at; at = at->parent ? tree->get(at->parent) : nullptr) {
+            if (at->id == selfId)
+                return luaL_error(L, "%s:SetParent(): Would create a loop parenting to %s", who,
+                                  parent->name.empty() ? "<unnamed>" : parent->name.c_str());
+        }
     }
-    if (!lua_istable(L, 2) && !lua_isnil(L, 2)) return 0;
     lua_pushvalue(L, 2);
     lua_setfield(L, 1, "__parent");
     // And the widget, which is what everything inherited actually follows.
     // Writing only the field left GetParent answering the new parent while the
     // frame stayed laid out, clipped and shown by the old one.
-    if (auto* tree = wowee::addons::getWidgetTree(L)) {
+    if (tree) {
         const uint32_t id = widgetIdOf(L, 1);
         const uint32_t np = lua_istable(L, 2) ? widgetIdOf(L, 2) : 0;
         if (id != 0) tree->setParent(id, np);
