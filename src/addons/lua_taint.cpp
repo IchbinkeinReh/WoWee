@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <unordered_map>
 
 extern "C" {
@@ -552,6 +553,8 @@ std::string runningFunctionName(lua_State* L) {
     return out;
 }
 
+namespace { void logEvent(lua_State* L, int kind, const char* global, int t); }
+
 void reportRefusal(lua_State* L, Refusal how) {
     if (how == Refusal::None || gReporting) return;
     gReporting = true;
@@ -567,7 +570,134 @@ void reportRefusal(lua_State* L, Refusal how) {
                   {who ? who : "", fn});
         }
     }
+    // 0x00513530: and to the taint log, 4 for a refusal in combat.
+    logEvent(L, how == Refusal::BlockedInCombat ? 4 : 3, nullptr, t);
     gReporting = false;
+}
+
+// ---- The taint log (taintLog, Logs\\taint.log: 0x0052a930, 0x0052a650) ----
+
+namespace {
+
+/// One entry of the log: what happened, to which global, by whose taint, and
+/// the call stack it happened on (0x0052a650 copies each level's lua_Debug).
+struct LogRecord {
+    int kind = 0;            // 1 global tainted, 2 execution tainted, 3/4 blocked
+    std::string global;
+    int taint = 0;
+    std::vector<std::string> frames;
+};
+
+int gLogLevel = 0;                                    // the taintLog CVar
+std::ofstream gLogFile;                               // DAT_00bd0794
+std::unordered_map<std::string, LogRecord> gGlobals;  // kind 1, by global name
+LogRecord gLast;                                      // 0xbd0c0c: the latest 2, 3 or 4
+bool gLogging = false;
+
+/// A stack level as 0x005125e0 writes it: "source:line name()", "source:line",
+/// or "name()" for a C function; nothing for a level with neither.
+std::string frameText(lua_Debug& ar) {
+    const char* source = ar.source ? ar.source : "";
+    if (*source == '@') ++source;
+    const char* fn = (ar.name && *ar.name) ? ar.name : nullptr;
+    char buf[1024];
+    if (*source != '\0' && *source != '=') {
+        if (fn) std::snprintf(buf, sizeof(buf), "%s:%d %s()", source, ar.currentline, fn);
+        else std::snprintf(buf, sizeof(buf), "%s:%d", source, ar.currentline);
+    } else if (fn) {
+        std::snprintf(buf, sizeof(buf), "%s()", fn);
+    } else {
+        buf[0] = '\0';
+    }
+    return buf;
+}
+
+std::vector<std::string> stackFrames(lua_State* L) {
+    std::vector<std::string> out;
+    lua_Debug ar;
+    for (int level = 0; lua_getstack(L, level, &ar); ++level) {
+        if (!lua_getinfo(L, "Sln", &ar)) break;
+        out.push_back(frameText(ar));
+    }
+    return out;
+}
+
+/// "MACRO_TAINT" for /run's taint, the addon's name otherwise (0x0052a650).
+std::string logTaintName(int t) {
+    if (t == macro()) return "MACRO_TAINT";
+    const char* n = name(t);
+    return n ? n : "";
+}
+
+/// 0x00518920: the line for the record, then each further level indented.
+void writeRecord(const LogRecord& r) {
+    if (!gLogFile.is_open()) return;
+    const std::string where = r.frames.empty() ? std::string("UNKNOWN") : r.frames.front();
+    const std::string who = logTaintName(r.taint);
+    char line[4096];
+    switch (r.kind) {
+        case 1:
+            std::snprintf(line, sizeof(line), "Global variable %s tainted by %s - %s",
+                          r.global.c_str(), who.c_str(), where.c_str());
+            break;
+        case 2:
+            std::snprintf(line, sizeof(line), "Execution tainted by %s while reading %s - %s",
+                          who.c_str(), r.global.c_str(), where.c_str());
+            break;
+        case 3:
+            std::snprintf(line, sizeof(line), "An action was blocked because of taint from %s - %s",
+                          who.c_str(), where.c_str());
+            break;
+        case 4:
+            std::snprintf(line, sizeof(line),
+                          "An action was blocked in combat because of taint from %s - %s",
+                          who.c_str(), where.c_str());
+            break;
+        default:
+            return;
+    }
+    gLogFile << line << '\n';
+    for (size_t i = 1; i < r.frames.size(); ++i)
+        if (!r.frames[i].empty()) gLogFile << "    " << r.frames[i] << '\n';
+    gLogFile.flush();
+}
+
+/// The hook the Lua core calls (DAT_00d413b0), and the blocked-action report.
+/// At level 1 only blocked actions are written, each preceded by the read
+/// that tainted the execution and the write that tainted that global, when
+/// the taint is the same; at 2 everything is written as it happens.
+void logEvent(lua_State* L, int kind, const char* global, int t) {
+    if (gLogLevel <= 0 || gLogging) return;
+    gLogging = true;
+    LogRecord rec{kind, global ? global : "", t, stackFrames(L)};
+    if (kind == 1) {
+        gGlobals[rec.global] = rec;
+    } else {
+        if (gLogLevel == 1 && (kind == 3 || kind == 4) && gLast.kind == 2 && gLast.taint == t) {
+            if (auto it = gGlobals.find(gLast.global); it != gGlobals.end()) writeRecord(it->second);
+            writeRecord(gLast);
+        }
+        gLast = rec;
+    }
+    if (gLogLevel != 1 || (kind != 1 && kind != 2)) writeRecord(rec);
+    gLogging = false;
+}
+
+void coreHook(lua_State* L, int kind, const char* global, int t) { logEvent(L, kind, global, t); }
+
+}  // namespace
+
+void setLogLevel(int level, const std::string& path) {
+    // 0x0052a930: off below 1; the file opened once, on the first level that
+    // wants it, and kept.
+    gLogLevel = level;
+    if (level <= 0) {
+        lua_settaintlog(nullptr);
+        return;
+    }
+    if (!gLogFile.is_open() && !path.empty()) gLogFile.open(path, std::ios::out | std::ios::trunc);
+    if (!gLogFile.is_open()) { gLogLevel = 0; lua_settaintlog(nullptr); return; }
+    lua_settaintlog(coreHook);
 }
 
 void setEventSink(EventSink sink) { gSink = std::move(sink); }

@@ -14,6 +14,9 @@ extern "C" {
 #include "lualib.h"
 }
 
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -474,4 +477,19 @@ TEST_CASE("Objects are charged to the addon whose code made them (0x0085b4e0)", 
     // A thousand-slot array and a thousand strings at the least.
     CHECK(after - before > 1000 * sizeof(void*));
     CHECK(bytesOf(other) == 0);
+}
+
+TEST_CASE("The taint log names the global an addon tainted (0x0052a650)", "[taint]") {
+    const auto path = (std::filesystem::temp_directory_path() / "wowee_test_taint.log").string();
+    std::filesystem::remove(path);
+    Fixture f;
+    taint::setLogLevel(2, path);
+    f.run("SomeGlobal = 1", f.addon);
+    f.run("local x = SomeGlobal", 0);
+    taint::setLogLevel(0, path);
+    std::ifstream in(path);
+    std::stringstream text;
+    text << in.rdbuf();
+    CHECK(text.str().find("Global variable SomeGlobal tainted by SomeAddon") != std::string::npos);
+    CHECK(text.str().find("Execution tainted by SomeAddon while reading SomeGlobal") != std::string::npos);
 }

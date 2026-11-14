@@ -191,6 +191,12 @@ void reportRefusal(lua_State* L, Refusal how);
 /// "FrameName:Method()" for a method on a frame (0x00817ee0, 0x00817de0).
 std::string runningFunctionName(lua_State* L);
 
+/// The taintLog CVar (0x0052a930): 0 off; 1 writes each blocked action, with
+/// the read and the global write that tainted it; 2 writes every global
+/// tainted and every tainted read as well. `path` is Logs\\taint.log's place,
+/// opened the first time a level asks for it.
+void setLogLevel(int level, const std::string& path);
+
 /// Where the events go: the interface's event dispatch, set by the engine.
 using EventSink = std::function<void(const std::string& event,
                                      const std::vector<std::string>& args)>;

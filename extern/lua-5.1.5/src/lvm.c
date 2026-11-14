@@ -105,6 +105,13 @@ static void callTM (lua_State *L, const TValue *f, const TValue *p1,
 }
 
 
+static lua_TaintLogFn luai_taintlog = NULL;
+
+LUA_API void lua_settaintlog (lua_TaintLogFn fn) {
+  luai_taintlog = fn;
+}
+
+
 void luaV_gettable (lua_State *L, const TValue *t, TValue *key, StkId val) {
   int loop;
   for (loop = 0; loop < MAXTAGLOOP; loop++) {
@@ -114,6 +121,10 @@ void luaV_gettable (lua_State *L, const TValue *t, TValue *key, StkId val) {
       const TValue *res = luaH_get(h, key); /* do a primitive get */
       if (!ttisnil(res) ||  /* result is no nil? */
           (tm = fasttm(L, h->metatable, TM_INDEX)) == NULL) { /* or no TM? */
+        /* WoW: a tainted global read, for the taint log (0x00857250). */
+        if (luai_taintlog != NULL && h == hvalue(gt(L)) && ttisstring(key) &&
+            res->taint != 0 && luai_ts.hold == 0)
+          luai_taintlog(L, 2, svalue(key), res->taint);
         setobj2s(L, val, res);
         return;
       }
@@ -141,6 +152,10 @@ void luaV_settable (lua_State *L, const TValue *t, TValue *key, StkId val) {
       TValue *oldval = luaH_set(L, h, key); /* do a primitive set */
       if (!ttisnil(oldval) ||  /* result is no nil? */
           (tm = fasttm(L, h->metatable, TM_NEWINDEX)) == NULL) { /* or no TM? */
+        /* WoW: a global newly tainted, for the taint log (0x008573c0). */
+        if (luai_taintlog != NULL && h == hvalue(gt(L)) && ttisstring(key) &&
+            val->taint != 0 && (ttisnil(oldval) || oldval->taint != val->taint))
+          luai_taintlog(L, 1, svalue(key), val->taint);
         setobj2t(L, oldval, val);
         h->flags = 0;
         luaC_barriert(L, h, val);

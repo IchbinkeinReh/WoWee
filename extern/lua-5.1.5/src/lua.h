@@ -314,6 +314,14 @@ typedef struct lua_TaintState {
 } lua_TaintState;
 
 LUA_API lua_TaintState *(lua_taintstate) (void);
+/*
+** WoW's taint log hook (DAT_00d413b0, set while the taintLog CVar is on):
+** kind 1 when a tainted value is written to a global the value differs in
+** taint from (0x008573c0), kind 2 when a tainted global is read
+** (0x00857250); `name` is the global's. Null for none.
+*/
+typedef void (*lua_TaintLogFn) (lua_State *L, int kind, const char *name, int taint);
+LUA_API void (lua_settaintlog) (lua_TaintLogFn fn);
 /* A value's own taint, and setting it (0x0084f0d0). */
 LUA_API int   (lua_gettaintof) (lua_State *L, int idx);
 LUA_API void  (lua_settaintof) (lua_State *L, int idx, int taint);

@@ -2267,6 +2267,13 @@ static void applyCVarSideEffects(lua_State* L, const std::string& key,
     // The power UnitPower and the cast read (0x0071c2e0).
     // 0x007f39b0: below level 2 the blood spurt's texture is its low or
     // medium one.
+    // 0x0052a930: taintLog above 0 turns the taint log on, written beside
+    // the session log as taint.log (the client's Logs\\taint.log).
+    if (key == "taintlog") {
+        const auto dir = core::Logger::getInstance().logDirectory();
+        taint::setLogLevel(std::atoi(value.c_str()),
+                           dir.empty() ? std::string() : (dir / "taint.log").string());
+    }
     if (key == "violencelevel") {
         const int level = game::spell_visual::violenceLevel(value);
         static constexpr const char* kSpurt[2] = {"BloodSpurtSmall01_Low.blp", "BloodSpurtSmall01_Medium.blp"};

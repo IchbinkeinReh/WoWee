@@ -136,6 +136,7 @@ void Logger::ensureFile() {
     if (!runningFromAppBundle()) {
         std::filesystem::create_directories("logs", ec);
         fileStream.open(std::string("logs/") + logFile, std::ios::out | std::ios::trunc);
+        if (fileStream.is_open()) logDirectory_ = "logs";
     }
 
     // Beside the working directory when that is writable, which is how this is
@@ -152,6 +153,7 @@ void Logger::ensureFile() {
         const std::filesystem::path at = fallback / logFile;
         fileStream.open(at, std::ios::out | std::ios::trunc);
         if (fileStream.is_open()) {
+            logDirectory_ = fallback;
             // Said on the console, because the file it names is the one thing
             // someone reading this needs and it is not where they will look.
             std::fprintf(stderr, "wowee: writing the log to %s\n",
