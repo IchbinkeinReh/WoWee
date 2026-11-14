@@ -1233,20 +1233,25 @@ int lua_Region_SetPoint(lua_State* L) {
     const uint32_t id = widgetIdOf(L, 1);
     const auto* self = (tree && id) ? tree->get(id) : nullptr;
     if (!self) return 0;
-    const char* who = frameNameOnStack(L, 1);
+    // Named only for an error: frameNameOnStack leaves the name on the
+    // stack, and taken up front it sat where an omitted argument would
+    // be read - UIParent:SetAllPoints() read "UIParent", itself, and
+    // raised "trying to anchor to itself" (the bootstrap chunk that
+    // makes UIParent failed on every start, RAID_CLASS_COLORS with it).
+    auto who = [L] { return frameNameOnStack(L, 1); };
     if (!lua_isstring(L, 2))
-        return luaL_error(L, "Usage: %s:SetPoint(\"point\" [, region or nil] [, \"relativePoint\"] [, offsetX, offsetY])", who);
+        return luaL_error(L, "Usage: %s:SetPoint(\"point\" [, region or nil] [, \"relativePoint\"] [, offsetX, offsetY])", who());
     const char* point = regionPointName(lua_tostring(L, 2));
-    if (!point) return luaL_error(L, "%s:SetPoint(): Unknown region point", who);
+    if (!point) return luaL_error(L, "%s:SetPoint(): Unknown region point", who());
     bool consumed = false, found = true;
     const uint32_t relative = relativeRegionArg(L, 3, *tree, *self, consumed, found);
     if (!found)
-        return luaL_error(L, "%s:SetPoint(): Couldn't find region named '%s'", who,
+        return luaL_error(L, "%s:SetPoint(): Couldn't find region named '%s'", who(),
                           lua_isstring(L, 3) ? lua_tostring(L, 3) : "");
-    if (relative == id) return luaL_error(L, "%s:SetPoint(): trying to anchor to itself", who);
+    if (relative == id) return luaL_error(L, "%s:SetPoint(): trying to anchor to itself", who());
     if (relative != 0 && regionDependsOn(*tree, relative, id)) {
         const auto* r = tree->get(relative);
-        return luaL_error(L, "%s:SetPoint(): %s is dependent on this", who,
+        return luaL_error(L, "%s:SetPoint(): %s is dependent on this", who(),
                           (r && !r->name.empty()) ? r->name.c_str() : "<unnamed>");
     }
     int argi = consumed ? 4 : 3;
@@ -1256,7 +1261,7 @@ int lua_Region_SetPoint(lua_State* L) {
     a.relativePoint = point;
     if (lua_type(L, argi) == LUA_TSTRING) {
         const char* rel = regionPointName(lua_tostring(L, argi));
-        if (!rel) return luaL_error(L, "%s:SetPoint(): Unknown region point", who);
+        if (!rel) return luaL_error(L, "%s:SetPoint(): Unknown region point", who());
         a.relativePoint = rel;
         ++argi;
     }
@@ -1276,16 +1281,17 @@ int lua_Region_SetAllPoints(lua_State* L) {
     const uint32_t id = widgetIdOf(L, 1);
     const auto* self = (tree && id) ? tree->get(id) : nullptr;
     if (!self) return 0;
-    const char* who = frameNameOnStack(L, 1);
+    // Named only for an error, as in SetPoint.
+    auto who = [L] { return frameNameOnStack(L, 1); };
     bool consumed = false, found = true;
     uint32_t target = relativeRegionArg(L, 2, *tree, *self, consumed, found);
     if (!found)
-        return luaL_error(L, "%s:SetAllPoints(): Couldn't find region named '%s'", who,
+        return luaL_error(L, "%s:SetAllPoints(): Couldn't find region named '%s'", who(),
                           lua_isstring(L, 2) ? lua_tostring(L, 2) : "");
-    if (target == id) return luaL_error(L, "%s:SetAllPoints(): trying to anchor to itself", who);
+    if (target == id) return luaL_error(L, "%s:SetAllPoints(): trying to anchor to itself", who());
     if (target != 0 && regionDependsOn(*tree, target, id)) {
         const auto* r = tree->get(target);
-        return luaL_error(L, "%s:SetAllPoints(): %s is dependent on this", who,
+        return luaL_error(L, "%s:SetAllPoints(): %s is dependent on this", who(),
                           (r && !r->name.empty()) ? r->name.c_str() : "<unnamed>");
     }
     // FrameXML's UIParent fills the tree's own UIParent, kept in the safe area.
