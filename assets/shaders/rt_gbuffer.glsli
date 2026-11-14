@@ -67,6 +67,12 @@ const uint RT_GB_SHARE_LAMP_NORMAL = 4u;
 // normal alone and never takes one of its faces turned up for a floor
 // (rt_trace's smoothBody).
 const uint RT_GB_SHARE_SMOOTH = 8u;
+// Set by rt_prepare alone, never in the G-buffer: a room's baked colour
+// (RT_GB_BAKED with RT_GB_INTERIOR), which the sun through a door or a gap in
+// the roof lights by the trace's own visibility (rt_apply's room sun) and
+// which no shadow map is laid over - an interior group binds the blank one
+// (0x007ac6a0, 0x008745d0(1)). rt_trace's sun rays meet the units there.
+const uint RT_GB_SHARE_ROOM = 16u;
 
 vec2 rtOctEncode(vec3 n) {
     n /= abs(n.x) + abs(n.y) + abs(n.z);
