@@ -8078,8 +8078,32 @@ static int lua_CanShowAchievementUI(lua_State* L) {
 // error, on an interface element that is drawn by default. Nothing here
 // measures per-addon memory, and zero is what an unmeasured addon costs as far
 // as this client knows.
+/// What UpdateAddOnMemoryUsage last counted, in bytes by taint (the list at
+/// global state +0x58 in the client).
+static std::unordered_map<int, size_t>& addonMemoryByTaint() {
+    static std::unordered_map<int, size_t> bytes;
+    return bytes;
+}
+
+// UpdateAddOnMemoryUsage() (0x00511510 -> 0x0085b4e0): every Lua object is
+// charged to the addon whose code made it, by the taint it carries; secure
+// (Blizzard) objects to no one.
+static int lua_UpdateAddOnMemoryUsage(lua_State* L) {
+    auto& bytes = addonMemoryByTaint();
+    for (auto& [taint, n] : bytes) n = 0;
+    lua_taintedsizes(L, [](void* ud, int taint, size_t n) {
+        (*static_cast<std::unordered_map<int, size_t>*>(ud))[taint] += n;
+    }, &bytes);
+    return 0;
+}
+
+// GetAddOnMemoryUsage(index or "name") (0x00511530): the addon's share of the
+// last count, in kilobytes.
 static int lua_GetAddOnMemoryUsage(lua_State* L) {
-    lua_pushnumber(L, 0);
+    const std::string name = addonNameArg(L, 1, "Usage: GetAddOnMemoryUsage(index or \"name\")");
+    const auto& bytes = addonMemoryByTaint();
+    const auto it = name.empty() ? bytes.end() : bytes.find(taint::intern(name));
+    lua_pushnumber(L, it == bytes.end() ? 0.0 : static_cast<double>(it->second) / 1024.0);
     return 1;
 }
 
@@ -8565,7 +8589,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"CanShowAchievementUI",     lua_CanShowAchievementUI},
                 {"IsXPUserDisabled",         lua_IsXPUserDisabled},
                 {"GetAddOnMemoryUsage",      lua_GetAddOnMemoryUsage},
-                {"UpdateAddOnMemoryUsage",   lua_ReturnNothing},
+                {"UpdateAddOnMemoryUsage",   lua_UpdateAddOnMemoryUsage},
                 {"RunScript",                lua_RunScript},
                 {"IsMouseButtonDown",        lua_IsMouseButtonDown},
                 {"GetCVarDefault",           lua_GetCVarDefault},

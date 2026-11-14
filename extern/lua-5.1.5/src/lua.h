@@ -364,6 +364,15 @@ LUA_API lua_Hook lua_gethook (lua_State *L);
 LUA_API int lua_gethookmask (lua_State *L);
 LUA_API int lua_gethookcount (lua_State *L);
 
+/*
+** WoW (wow.exe 12340, 0x0085b4e0): every collectable object - the list of
+** all objects and each bucket of the string table - handed to `f` with the
+** taint it was created under and the bytes it occupies (0x0085b030). How
+** UpdateAddOnMemoryUsage charges each addon for what its code made.
+*/
+typedef void (*lua_TaintSizeFn) (void *ud, int taint, size_t bytes);
+LUA_API void lua_taintedsizes (lua_State *L, lua_TaintSizeFn f, void *ud);
+
 
 struct lua_Debug {
   int event;

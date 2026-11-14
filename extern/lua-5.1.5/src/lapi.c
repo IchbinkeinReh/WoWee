@@ -1107,3 +1107,51 @@ LUA_API const char *lua_setupvalue (lua_State *L, int funcindex, int n) {
   return name;
 }
 
+
+
+/* WoW: see lua_taintedsizes in lua.h. */
+static size_t objsize (GCObject *o) {
+  switch (o->gch.tt) {
+    case LUA_TSTRING: return sizestring(gco2ts(o));
+    case LUA_TTABLE: {
+      Table *h = gco2h(o);
+      return sizeof(Table) + sizeof(TValue) * h->sizearray +
+             sizeof(Node) * sizenode(h);
+    }
+    case LUA_TUSERDATA: return sizeudata(gco2u(o));
+    case LUA_TTHREAD: {
+      lua_State *th = gco2th(o);
+      return sizeof(lua_State) + sizeof(TValue) * th->stacksize +
+             sizeof(CallInfo) * th->size_ci;
+    }
+    case LUA_TPROTO: {
+      Proto *f = gco2p(o);
+      return sizeof(Proto) + sizeof(Instruction) * f->sizecode +
+             sizeof(Proto *) * f->sizep + sizeof(TValue) * f->sizek +
+             sizeof(int) * f->sizelineinfo + sizeof(LocVar) * f->sizelocvars +
+             sizeof(TString *) * f->sizeupvalues;
+    }
+    case LUA_TFUNCTION: {
+      Closure *cl = gco2cl(o);
+      return cl->c.isC ? sizeCclosure(cl->c.nupvalues)
+                       : sizeLclosure(cl->l.nupvalues);
+    }
+    case LUA_TUPVAL: return sizeof(UpVal);
+    default: return 0;
+  }
+}
+
+static void sizelist (GCObject *o, lua_TaintSizeFn f, void *ud) {
+  for (; o != NULL; o = o->gch.next)
+    if (o->gch.taint != 0) f(ud, o->gch.taint, objsize(o));
+}
+
+LUA_API void lua_taintedsizes (lua_State *L, lua_TaintSizeFn f, void *ud) {
+  global_State *g = G(L);
+  int i;
+  lua_lock(L);
+  sizelist(g->rootgc, f, ud);
+  for (i = 0; i < g->strt.size; i++)
+    sizelist(g->strt.hash[i], f, ud);
+  lua_unlock(L);
+}
