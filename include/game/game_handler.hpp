@@ -3334,71 +3334,39 @@ public:
         {"EXHAUSTION", "BREATH", "FEIGNDEATH"};
     static constexpr const char* kMirrorTimerLabels[3] =
         {"Exhaustion", "Breath", "Feign Death"};
-    /// The interface's own wording of those labels (GlobalStrings
-    /// EXHAUSTION_LABEL, BREATH_LABEL - "Erschöpfung", "Atem" on a German
-    /// client); the English above is only what is left without one. Feign
-    /// death has no string of its own there.
-    static constexpr const char* kMirrorTimerLabelKeys[3] =
-        {"EXHAUSTION_LABEL", "BREATH_LABEL", nullptr};
+    /// The interface's own wording of those labels, "<NAME>_LABEL" as
+    /// 0x005199a0 builds the key (EXHAUSTION_LABEL, BREATH_LABEL - "Erschöpfung",
+    /// "Atem" on a German client); the English above is only what is left
+    /// without one. Used only when the timer's spell has no name.
+    static constexpr const char* kMirrorTimerLabelKeys[4] =
+        {"EXHAUSTION_LABEL", "BREATH_LABEL", "FEIGNDEATH_LABEL", "UNKNOWN_LABEL"};
 
+    /// One of the three slots at 0x00bd0b80, as SMSG_START_MIRROR_TIMER
+    /// fills it (0x00519a50): the type (3 - "UNKNOWN" - while stopped), the
+    /// value, maximum, scale and pause flag as sent, the spell, and the moment
+    /// it arrived. Nothing counts it down; GetMirrorTimerProgress works the
+    /// current value out from the start (0x00517aa0), and a pause changes
+    /// nothing here (0x1da only raises MIRROR_TIMER_PAUSE).
     struct MirrorTimer {
-        int32_t value    = 0;
-        int32_t maxValue = 0;
-        int32_t scale    = 0;     // +1 = counting up, -1 = counting down
-        bool    paused   = false;
-        bool    active   = false;
-        float   pendingMs = 0.0f; // sub-millisecond carry for the local countdown
+        uint32_t type     = 3;
+        int32_t  value    = 0;
+        int32_t  maxValue = 0;
+        int32_t  scale    = 0;     // +1 = counting up, -1 = counting down
+        int32_t  paused   = 0;
+        uint32_t spellId  = 0;
+        int64_t  startMs  = 0;     // on the clock GetTime() reads
+        [[nodiscard]] bool active() const { return type < 3; }
+        /// (now - start) * scale + value, unclamped, as 0x00517aa0 answers.
+        [[nodiscard]] int64_t progress(int64_t nowMs) const {
+            return (nowMs - startMs) * scale + value;
+        }
     };
+    /// The label a timer is shown with (0x005199a0): its spell's name, or
+    /// else the interface's "<NAME>_LABEL" string.
+    std::string mirrorTimerLabel(uint32_t type, uint32_t spellId);
     const MirrorTimer& getMirrorTimer(int type) const {
         static MirrorTimer empty;
         return (type >= 0 && type < 3) ? mirrorTimers_[type] : empty;
-    }
-    /**
-     * Count the mirror timers (breath, fatigue, feign death) down locally.
-     *
-     * The server sends SMSG_START_MIRROR_TIMER once with the remaining time and a
-     * scale, then only speaks again when something changes - so without this the
-     * breath bar just sits at whatever value it was handed and never moves.
-     * scale is ms of timer per ms of real time: -1 while drowning, +1 while the
-     * bar refills at the surface.
-     */
-    void tickMirrorTimers(float dt) {
-        if (dt <= 0.0f) return;
-        const float elapsedMs = dt * 1000.0f;
-        for (size_t ti = 0; ti < 3; ++ti) {
-            auto& t = mirrorTimers_[ti];
-            if (!t.active || t.paused || t.scale == 0 || t.maxValue <= 0) continue;
-            // Carry the sub-millisecond remainder: truncating each frame would lose
-            // most of a 144fps frame's 6.94ms and run the timer visibly slow.
-            t.pendingMs += elapsedMs;
-            const int32_t wholeMs = static_cast<int32_t>(t.pendingMs);
-            if (wholeMs == 0) continue;
-            t.pendingMs -= static_cast<float>(wholeMs);
-            t.value = std::clamp(t.value + t.scale * wholeMs, 0, t.maxValue);
-            // Refilled, so it is over. The server does not say so at this
-            // point: on surfacing it sends one update with a positive scale
-            // and then nothing until its own counter reaches full, which is
-            // several seconds later. Without this the bar climbs to full and
-            // sits there at a hundred percent in the meantime, which is what
-            // "the breath meter will not go away" looks like.
-            //
-            // Only when refilling. A drowning bar reaching zero is not over -
-            // that is when the damage starts, and the server keeps it up.
-            if (t.scale > 0 && t.value >= t.maxValue) {
-                t.active = false;
-                t.pendingMs = 0.0f;
-                // And say so. Clearing the flag only put away the bar this
-                // client draws, and the player frame is handed over - which
-                // means MirrorTimer1..3 are not suppressed and the bar actually
-                // on screen is FrameXML's. It hides on MIRROR_TIMER_STOP and
-                // nothing else, so without this it sat there full for good.
-                //
-                // Named rather than numbered, as the packet handler does:
-                // MirrorTimer_Hide matches on the timer's name.
-                fireAddonEvent("MIRROR_TIMER_STOP",
-                               {ti < 3 ? kMirrorTimerNames[ti] : "BREATH"});
-            }
-        }
     }
 
     // Combo points
@@ -3710,12 +3678,14 @@ public:
         uint64_t guid        = 0;  ///< 0x00bd0b08: what TargetTotem takes
         std::chrono::steady_clock::time_point placedAt{};
         [[nodiscard]] bool active() const { return spellId != 0 && remainingMs() > 0; }
-        [[nodiscard]] float remainingMs() const {
-            if (spellId == 0 || durationMs == 0) return 0.0f;
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        /// Whole milliseconds left: placed + duration - now, zero once past
+        /// (0x00513f50).
+        [[nodiscard]] int64_t remainingMs() const {
+            if (spellId == 0 || durationMs == 0) return 0;
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - placedAt).count();
-            float rem = static_cast<float>(durationMs) - static_cast<float>(elapsed);
-            return rem > 0.0f ? rem : 0.0f;
+            const int64_t rem = static_cast<int64_t>(durationMs) - elapsed;
+            return rem > 0 ? rem : 0;
         }
     };
     static constexpr int NUM_TOTEM_SLOTS = 4;

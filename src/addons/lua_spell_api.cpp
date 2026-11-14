@@ -7,12 +7,14 @@
 #include "rendering/camera.hpp"
 #include "addons/lua_api_helpers.hpp"
 #include "game/totem_bar.hpp"
+#include "game/spell_handler.hpp"
 #include "game/interface_text.hpp"
 #include "addons/lua_taint.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "game/item_text.hpp"
 #include "addons/lua_engine.hpp"
 #include "core/logger.hpp"
+#include <cmath>
 #include <set>
 #include <unordered_map>
 
@@ -151,46 +153,65 @@ static int lua_GetMultiCastTotemSpells(lua_State* L) {
 // GetTime() reports - a bar that is drawn from start and duration cannot use a
 // figure measured from a different zero.
 
+// The slot argument of the three totem calls, as 0x0051d330, 0x00517c60 and
+// 0x0051d520 read it: a number or the usage line, truncated, and one to four
+// or "Totem slot must be in range of 1 to 4". Zero-based on the way out.
+static bool totemSlotArg(lua_State* L, const char* usage, int& slot) {
+    if (!lua_isnumber(L, 1)) { luaL_error(L, "%s", usage); return false; }
+    const int n = static_cast<int>(lua_tonumber(L, 1));
+    if (n < 1 || n > game::GameHandler::NUM_TOTEM_SLOTS) {
+        luaL_error(L, "Totem slot must be in range of 1 to %d", game::GameHandler::NUM_TOTEM_SLOTS);
+        return false;
+    }
+    slot = n - 1;
+    return true;
+}
+
 // GetTotemInfo(slot) → haveTotem, name, startTime, duration, icon
+//
+// 0x0051d330. With a totem in the slot: true, the totem's own unit name (nil
+// until it is known - 0x0072ceb0 fills it in when the unit's name arrives),
+// the moment it was placed and its duration, both in whole seconds, and the
+// spell's icon. With none: whether the tool for that element is carried
+// (TotemCategory 4, 2, 5, 3 - fire, earth, water, air - through 0x007548f0),
+// "", 0, 0, "".
 static int lua_GetTotemInfo(lua_State* L) {
+    int slot = 0;
+    if (!totemSlotArg(L, "Usage: GetTotemInfo(slot)", slot)) return 0;   // 0x0051d330
     auto* gh = getGameHandler(L);
-    const int slot = static_cast<int>(luaL_optnumber(L, 1, 0));
-    if (!gh || slot < 1 || slot > game::GameHandler::NUM_TOTEM_SLOTS) {
-        lua_pushboolean(L, 0);
-        lua_pushstring(L, "");
-        lua_pushnumber(L, 0);
-        lua_pushnumber(L, 0);
-        lua_pushnil(L);
+    const auto* totem = gh ? &gh->getTotemSlot(slot) : nullptr;
+    if (totem && totem->active()) {
+        const int64_t remainingMs = totem->remainingMs();
+        // The clock GetTime() reads, as the client's start is a stamp of the
+        // same counter: placed as long ago as it has already run.
+        const double placedMs = luaGetTimeNow() * 1000.0
+            - (static_cast<double>(totem->durationMs) - static_cast<double>(remainingMs));
+        lua_pushboolean(L, 1);
+        const std::string& name = gh->lookupName(totem->guid);
+        if (!name.empty()) lua_pushstring(L, name.c_str()); else lua_pushnil(L);
+        lua_pushnumber(L, std::floor(std::max(0.0, placedMs) / 1000.0));
+        lua_pushnumber(L, totem->durationMs / 1000);
+        const std::string icon = gh->getSpellIconPath(totem->spellId);
+        if (!icon.empty()) lua_pushstring(L, icon.c_str()); else lua_pushnil(L);
         return 5;
     }
-    const auto& totem = gh->getTotemSlot(slot - 1);
-    const bool active = totem.active();
-    const double durationSec = totem.durationMs / 1000.0;
-    const double remainingSec = totem.remainingMs() / 1000.0;
-
-    lua_pushboolean(L, active ? 1 : 0);
-    lua_pushstring(L, active ? gh->getSpellName(totem.spellId).c_str() : "");
-    // Placed at however long ago it has already run for.
-    lua_pushnumber(L, active ? luaGetTimeNow() - (durationSec - remainingSec) : 0.0);
-    lua_pushnumber(L, active ? durationSec : 0.0);
-    if (active) {
-        const std::string icon = gh->getSpellIconPath(totem.spellId);
-        if (!icon.empty()) lua_pushstring(L, icon.c_str()); else lua_pushnil(L);
-    } else {
-        lua_pushnil(L);
-    }
+    static constexpr uint32_t kToolCategory[game::GameHandler::NUM_TOTEM_SLOTS] = {4, 2, 5, 3};
+    const auto* sh = gh ? gh->getSpellHandler() : nullptr;
+    lua_pushboolean(L, sh && sh->carriesTotemCategory(kToolCategory[slot]) ? 1 : 0);
+    lua_pushstring(L, "");
+    lua_pushnumber(L, 0);
+    lua_pushnumber(L, 0);
+    lua_pushstring(L, "");
     return 5;
 }
 
-// GetTotemTimeLeft(slot) → seconds
+// GetTotemTimeLeft(slot) → whole seconds left, 0 for an empty slot (0x00517c60).
 static int lua_GetTotemTimeLeft(lua_State* L) {
+    int slot = 0;
+    if (!totemSlotArg(L, "Usage: GetTotemTimeLeft(slot)", slot)) return 0;
     auto* gh = getGameHandler(L);
-    const int slot = static_cast<int>(luaL_optnumber(L, 1, 0));
-    if (!gh || slot < 1 || slot > game::GameHandler::NUM_TOTEM_SLOTS) {
-        lua_pushnumber(L, 0);
-        return 1;
-    }
-    lua_pushnumber(L, gh->getTotemSlot(slot - 1).remainingMs() / 1000.0);
+    const auto* totem = gh ? &gh->getTotemSlot(slot) : nullptr;
+    lua_pushnumber(L, totem && totem->active() ? totem->remainingMs() / 1000 : 0);
     return 1;
 }
 
@@ -1513,10 +1534,9 @@ void registerSpellLuaAPI(lua_State* L) {
                 // DestroyTotem(slot) - pull one down early. The totem bar's
                 // right-click, and the slot is all the request carries.
                 {"DestroyTotem", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const int slot = static_cast<int>(luaL_optnumber(L, 1, 0));
-            // The bar counts from one and the request from zero.
-            if (gh && slot >= 1) gh->destroyTotem(slot - 1);
+            int slot = 0;   // 0x0051d520
+            if (!totemSlotArg(L, "Usage: DestroyTotem(slot)", slot)) return 0;
+            if (auto* gh = getGameHandler(L)) gh->destroyTotem(slot);
             return 0;
         }},
                 {"GetTotemTimeLeft", lua_GetTotemTimeLeft},

@@ -185,6 +185,16 @@ GameErrorText petNameError(uint32_t reason) {
 
 } // end anonymous namespace
 
+// 0x005199a0.
+std::string GameHandler::mirrorTimerLabel(uint32_t type, uint32_t spellId) {
+    if (spellId != 0) {
+        const std::string& spell = getSpellName(spellId);
+        if (!spell.empty()) return spell;
+    }
+    const uint32_t k = type < 3 ? type : 3;
+    return interfaceString(kMirrorTimerLabelKeys[k], k < 3 ? kMirrorTimerLabels[k] : "");
+}
+
 // ERR_DIFFICULTY_CHANGE_COOLDOWN_S (0x2ca) with the time left worded by
 // 0x0061a9e0: SMSG_CHANGEPLAYER_DIFFICULTY_RESULT 1 and 0x0052d8d0 alike.
 // StopCinematic (0x00524980): the player's stop. With no player the end
@@ -606,25 +616,28 @@ void GameHandler::registerCoreOpcodes() {
         int32_t  maxV  = static_cast<int32_t>(packet.readUInt32());
         int32_t  scale = static_cast<int32_t>(packet.readUInt32());
         uint8_t  paused = packet.readUInt8();
-        /*uint32_t spellId =*/ packet.readUInt32();
+        const uint32_t spellId = packet.readUInt32();
+        // 0x00519a50: the event for any type, a type past the three named
+        // "UNKNOWN"; only the three have a slot.
+        const char* timerName = type < 3 ? kMirrorTimerNames[type] : "UNKNOWN";
+        const std::string timerLabel = mirrorTimerLabel(type, spellId);
+        fireAddonEvent("MIRROR_TIMER_START", {
+                timerName, std::to_string(value),
+                std::to_string(maxV), std::to_string(scale),
+                std::to_string(paused), timerLabel});
+        // Fatigue's tutorial (0x1a), breath's (0x1c).
+        if (type == 0) triggerTutorial(0x1a);
+        else if (type == 1) triggerTutorial(0x1c);
         if (type < 3) {
-            mirrorTimers_[type].value     = value;
-            mirrorTimers_[type].maxValue  = maxV;
-            mirrorTimers_[type].scale     = scale;
-            mirrorTimers_[type].paused    = (paused != 0);
-            mirrorTimers_[type].active    = true;
-            mirrorTimers_[type].pendingMs = 0.0f;  // server re-sync; drop the local carry
-            // The interface names its timers rather than numbering them, and
-            // wants a label to draw beside the bar: MirrorTimer_Show(timer,
-            // value, maxvalue, scale, paused, label). Sending the type as a
-            // number and omitting the label left it matching no timer and
-            // dividing a nil.
-            // The names WoW passes, not the wire's own ordering words - see
-            // kMirrorTimerNames, which every path that names a timer shares.
-            const char* timerName = (type < 3) ? kMirrorTimerNames[type] : "BREATH";
-            const std::string timerLabel =
-                kMirrorTimerLabelKeys[type] ? interfaceString(kMirrorTimerLabelKeys[type], kMirrorTimerLabels[type])
-                                            : std::string(kMirrorTimerLabels[type]);
+            // The slot takes the packet as it is, and the moment.
+            auto& t = mirrorTimers_[type];
+            t.type     = type;
+            t.value    = value;
+            t.maxValue = maxV;
+            t.scale    = scale;
+            t.paused   = paused;
+            t.spellId  = spellId;
+            t.startMs  = std::llround(core::appTimeSeconds() * 1000.0);
             // Said once per timer, because nothing on this side decides any of
             // it. The length of a breath is the server's: three minutes plus
             // whatever SPELL_AURA_MOD_WATER_BREATHING adds, which for a
@@ -638,33 +651,25 @@ void GameHandler::registerCoreOpcodes() {
                             "ms of max=", maxV, "ms scale=", scale,
                             " paused=", (paused != 0 ? 1 : 0));
             }
-            fireAddonEvent("MIRROR_TIMER_START", {
-                    timerName, std::to_string(value),
-                    std::to_string(maxV), std::to_string(scale),
-                    paused ? "1" : "0", timerLabel});
-            // 0x00519a50: fatigue's tutorial (0x1a), breath's (0x1c).
-            if (type == 0) triggerTutorial(0x1a);
-            else if (type == 1) triggerTutorial(0x1c);
         }
     };
     dispatchTable_[Opcode::SMSG_STOP_MIRROR_TIMER] = [this](network::Packet& packet) {
         if (!packet.hasRemaining(4)) return;
         uint32_t type = packet.readUInt32();
-        if (type < 3) {
-            mirrorTimers_[type].active = false;
-            mirrorTimers_[type].value  = 0;
-            // Named, like the start above: MirrorTimer_Hide matches on the
-            // timer's name, so a number hides nothing.
-            fireAddonEvent("MIRROR_TIMER_STOP",
-                           {type < 3 ? kMirrorTimerNames[type] : "BREATH"});
-        }
+        // 0x00519a50 (0x1db): named, like the start above - MirrorTimer_Hide
+        // matches on the timer's name - then the slot emptied, type back to
+        // "UNKNOWN".
+        fireAddonEvent("MIRROR_TIMER_STOP", {type < 3 ? kMirrorTimerNames[type] : "UNKNOWN"});
+        if (type < 3) mirrorTimers_[type] = MirrorTimer{};
     };
     dispatchTable_[Opcode::SMSG_PAUSE_MIRROR_TIMER] = [this](network::Packet& packet) {
         if (!packet.hasRemaining(5)) return;
         uint32_t type   = packet.readUInt32();
         uint8_t  paused = packet.readUInt8();
-        if (type < 3) {
-            mirrorTimers_[type].paused = (paused != 0);
+        {
+            // Only the event, for any type: 0x00519a50 (0x1da) leaves the slot
+            // as it is, so GetMirrorTimerInfo goes on answering the pause flag
+            // the start carried.
             // The timer's name first, then the pause byte: SMSG_PAUSE_MIRROR_TIMER
             // (0x1da) is a dword type plus a byte at (int)&type + 3, and the client
             // says (0x00510000.c:8169) event(353, "%s%d", name, param >> 24) with the
@@ -679,7 +684,7 @@ void GameHandler::registerCoreOpcodes() {
             // 12340 client raises there too. Fixing it would be fixing FrameXML, not
             // matching this client.
             fireAddonEvent("MIRROR_TIMER_PAUSE",
-                           {kMirrorTimerNames[type], paused ? "1" : "0"});
+                           {type < 3 ? kMirrorTimerNames[type] : "UNKNOWN", std::to_string(paused)});
         }
     };
 

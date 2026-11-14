@@ -4394,38 +4394,33 @@ void registerActionLuaAPI(lua_State* L) {
                 // the fallback answered with an object, that test passed, and
                 // the next line divided a nil by a thousand.
                 {"GetMirrorTimerInfo", [](lua_State* L) -> int {
+            // 0x0051cc10: a number, one to three, or the same usage line and
+            // range error GetMirrorTimerProgress has.
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetMirrorTimerInfo(\"timer\")");
+            const int index = static_cast<int>(lua_tonumber(L, 1)) - 1;
+            if (index < 0 || index > 2) return luaL_error(L, "ERROR: Invalid timer (Ex: \"BREATH\"");
             auto* gh = getGameHandler(L);
-            const int index = static_cast<int>(luaL_optnumber(L, 1, 1)) - 1;
-            // Shared with the packet handler that fires MIRROR_TIMER_START, so
-            // that polling and event agree on the name MirrorTimer_Hide will
-            // later be asked to match.
-            const auto& kNames  = game::GameHandler::kMirrorTimerNames;
-            const auto& kLabels = game::GameHandler::kMirrorTimerLabels;
-            if (!gh || index < 0 || index > 2 || !gh->getMirrorTimer(index).active) {
-                lua_pushstring(L, "UNKNOWN");
-                lua_pushnumber(L, 0); lua_pushnumber(L, 0); lua_pushnumber(L, 0);
-                lua_pushnumber(L, 0);
-                lua_pushstring(L, "");
-                return 6;
-            }
-            const auto& t = gh->getMirrorTimer(index);
-            // Worded by the interface, as the event's label is: "Atem" on a
-            // German client, the English only without that string. Read
-            // before the answers are built, so nothing is popped among them.
-            std::string label = kLabels[index];
-            if (const char* key = game::GameHandler::kMirrorTimerLabelKeys[index]) {
-                lua_getglobal(L, key);
-                if (lua_isstring(L, -1)) label = lua_tostring(L, -1);
+            static const game::GameHandler::MirrorTimer kStopped{};
+            const auto& t = gh ? gh->getMirrorTimer(index) : kStopped;
+            // The slot as the start left it: "UNKNOWN" and zeros while stopped,
+            // which is what mirrortimer.lua tests for before using the rest.
+            // The label is the timer's spell, else the interface's
+            // "<NAME>_LABEL" ("Atem" on a German client), read before the
+            // answers are built so nothing is popped among them.
+            const uint32_t k = t.type < 3 ? t.type : 3;
+            std::string label;
+            if (t.spellId != 0 && gh) label = gh->getSpellName(t.spellId);
+            if (label.empty()) {
+                lua_getglobal(L, game::GameHandler::kMirrorTimerLabelKeys[k]);
+                label = lua_isstring(L, -1) ? lua_tostring(L, -1)
+                                            : (k < 3 ? game::GameHandler::kMirrorTimerLabels[k] : "");
                 lua_pop(L, 1);
             }
-            lua_pushstring(L, kNames[index]);
+            lua_pushstring(L, k < 3 ? game::GameHandler::kMirrorTimerNames[k] : "UNKNOWN");
             lua_pushnumber(L, t.value);
             lua_pushnumber(L, t.maxValue);
             lua_pushnumber(L, t.scale);
-            // A number, as MirrorTimer_Show compares it: "if ( paused > 0 )".
-            // A boolean there raised on every breath bar shown on entering
-            // the world.
-            lua_pushnumber(L, t.paused ? 1 : 0);
+            lua_pushnumber(L, t.paused);
             lua_pushstring(L, label.c_str());
             return 6;
         }},

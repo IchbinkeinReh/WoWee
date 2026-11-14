@@ -8,6 +8,7 @@
 #include "game/pvp_flags.hpp"
 #include "rendering/selection_circle.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "addons/object_type.hpp"
 #include "addons/lua_taint.hpp"
 #include "game/power_prediction.hpp"
 #include "game/unit_level_display.hpp"
@@ -2146,10 +2147,7 @@ static int lua_GetNumBagSlots(lua_State* L) {
     return 1;
 }
 
-/// GetMirrorTimerProgress(timer) → milliseconds left on breath, fatigue or
-/// feign death. None of the three is tracked yet, and the honest answer is
-/// zero rather than a stub that reads as a timer running.
-/// GetMirrorTimerProgress(timer) → milliseconds left on that timer.
+/// GetMirrorTimerProgress(timer) → the timer's value now, in milliseconds.
 ///
 /// It answered a constant zero, and MirrorTimerFrame_OnUpdate divides it by a
 /// thousand and calls SetValue with the result on every frame - so the breath
@@ -2159,15 +2157,18 @@ static int lua_GetNumBagSlots(lua_State* L) {
 /// Named, not numbered: WoW passes the timer's name through the event and
 /// FrameXML hands the same string back here.
 static int lua_GetMirrorTimerProgress(lua_State* L) {
+    // 0x00517aa0, whose usage line names GetMirrorTimerInfo. The name is
+    // matched whole and in any case (0x00513e40).
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetMirrorTimerInfo(\"timer\")");
+    const char* name = lua_tostring(L, 1);
+    int type = 0;
+    while (type < 3 && !sameTypeName(name, game::GameHandler::kMirrorTimerNames[type])) ++type;
+    if (type >= 3) return luaL_error(L, "ERROR: Invalid timer (Ex: \"BREATH\"");
     auto* gh = getGameHandler(L);
-    std::string name(luaL_optstring(L, 1, ""));
-    toLowerInPlace(name);
-    int type = -1;
-    if (name == "exhaustion") type = 0;
-    else if (name == "breath") type = 1;
-    else if (name == "death") type = 2;
-    if (!gh || type < 0) { lua_pushnumber(L, 0); return 1; }
-    lua_pushnumber(L, gh->getMirrorTimer(type).value);
+    if (!gh) { lua_pushnumber(L, 0); return 1; }
+    // (now - start) * scale + value, unclamped and with no regard for a pause.
+    const auto& t = gh->getMirrorTimer(type);
+    lua_pushnumber(L, static_cast<double>(t.progress(std::llround(luaGetTimeNow() * 1000.0))));
     return 1;
 }
 
