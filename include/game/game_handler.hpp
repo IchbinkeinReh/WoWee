@@ -1730,6 +1730,12 @@ public:
         [[nodiscard]] bool isExpired() const { return age >= LIFETIME; }
     };
     const std::vector<MinimapPing>& getMinimapPings() const { return minimapPings_; }
+    /// CapturePointUIManager's check (0x005284d0, every frame): inside a
+    /// world PvP capture point's radius (GAMEOBJECT_TYPE_CAPTURE_POINT, data[0])
+    /// while not flagged for PvP and not on a taxi, PVP_REQUIRED_FOR_CAPTURE is
+    /// said, then nothing for five minutes.
+    void tickCapturePointWarning();
+    int64_t capturePointWarnAfterMs_ = 0;
     void tickMinimapPings(float dt) {
         for (auto& p : minimapPings_) p.age += dt;
         minimapPings_.erase(

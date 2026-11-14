@@ -4,6 +4,7 @@
 #include <iostream>
 #include <sstream>
 #include <mutex>
+#include <filesystem>
 #include <fstream>
 #include <chrono>
 #include <atomic>
@@ -39,6 +40,9 @@ public:
     void log(LogLevel level, const std::string& message);
     void setLogLevel(LogLevel level);
     [[nodiscard]] bool shouldLog(LogLevel level) const;
+    /// The folder the session log was opened in - where the client's other
+    /// logs (Logs\\taint.log) belong too. Empty before the log is opened.
+    [[nodiscard]] std::filesystem::path logDirectory() const { return logDirectory_; }
 
     template<typename... Args>
     void debug(Args&&... args) {
@@ -101,6 +105,7 @@ private:
     std::atomic<int> minLevel_{kDefaultMinLevelValue};
     std::mutex mutex;
     std::ofstream fileStream;
+    std::filesystem::path logDirectory_;
     bool fileReady = false;
     bool echoToStdout_ = true;
     std::chrono::steady_clock::time_point lastFlushTime_{};
