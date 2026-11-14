@@ -195,6 +195,7 @@ bool allEventsCover(lua_State* L, int frame, const char* eventName) {
 }
 
 static const char* frameNameOnStack(lua_State* L, int index);
+namespace { const char* frameScriptNameOrRaise(lua_State* L, const char* given); }
 static int lua_Frame_IsEventRegistered(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     // 0x0049f160: a string, or the usage error.
@@ -498,7 +499,7 @@ static int lua_Frame_SetScript(lua_State* L) {
     // error. (The client also refuses a type the frame has no script for.)
     if (!lua_isstring(L, 2) || (!lua_isfunction(L, 3) && !lua_isnoneornil(L, 3)))
         return luaL_error(L, "Usage: %s:SetScript(\"type\", function)", frameNameOnStack(L, 1));
-    const char* scriptType = lua_tostring(L, 2);
+    const char* scriptType = frameScriptNameOrRaise(L, lua_tostring(L, 2));
     // The script is held with the taint of whoever set it (0x0049edb0 keeps
     // the two side by side), and that is what it runs under - see
     // pcallScript. Read first, so a handler an insecure caller hands over
@@ -574,6 +575,9 @@ static int lua_Frame_HookScript(lua_State* L) {
         }
         return luaL_error(L, "Usage: %s:HookScript(\"type\", function)", who);
     }
+    // The handler's own spelling, or the error (0x0049edb0).
+    lua_pushstring(L, frameScriptNameOrRaise(L, lua_tostring(L, 2)));
+    lua_replace(L, 2);
     // 0x0049edb0 sets it with the running taint when nothing is set yet, as
     // SetScript does.
     return hookScriptWith(L, lua_Frame_SetScript);
@@ -584,7 +588,7 @@ static int lua_Frame_GetScript(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     // 0x0049eb70: a string, or the usage error.
     if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:GetScript(\"type\")", frameNameOnStack(L, 1));
-    const char* scriptType = lua_tostring(L, 2);
+    const char* scriptType = frameScriptNameOrRaise(L, lua_tostring(L, 2));
     lua_getfield(L, 1, "__scripts");
     if (lua_istable(L, -1)) {
         lua_getfield(L, -1, scriptType);
@@ -678,46 +682,73 @@ wowee::ui::Widget* widgetOf(lua_State* L, int index) {
     return tree->get(widgetIdOf(L, index));
 }
 
+/// The handler's own spelling when this kind of frame has it, matched in any
+/// case as the client's lookups do (0x0076e780), or nullptr.
+const char* frameTypeScriptName(const std::string& type, const std::string& handler) {
+    using List = std::initializer_list<const char*>;
+    static const List kFrame = {
+        "OnEvent", "OnLoad", "OnSizeChanged", "OnUpdate", "OnShow", "OnHide",
+        "OnEnter", "OnLeave", "OnMouseDown", "OnMouseUp", "OnMouseWheel",
+        "OnDragStart", "OnDragStop", "OnReceiveDrag", "OnChar", "OnKeyDown",
+        "OnKeyUp", "OnAttributeChanged", "OnEnable", "OnDisable"};
+    static const List kButton = {"PreClick", "OnClick", "PostClick", "OnDoubleClick"};   // 0x0096f200
+    static const List kEditBox = {                                                        // 0x009628f0
+        "OnEnterPressed", "OnEscapePressed", "OnSpacePressed", "OnTabPressed",
+        "OnTextChanged", "OnTextSet", "OnCursorChanged", "OnInputLanguageChanged",
+        "OnEditFocusGained", "OnEditFocusLost", "OnCharComposition"};
+    static const List kValue = {"OnValueChanged", "OnMinMaxChanged"};                     // 0x00961630, 0x0096bca0
+    static const List kScroll = {"OnHorizontalScroll", "OnVerticalScroll", "OnScrollRangeChanged"};  // 0x0096b0b0
+    static const List kTooltip = {                                                        // 0x0061a280
+        "OnTooltipSetDefaultAnchor", "OnTooltipCleared", "OnTooltipAddMoney",
+        "OnTooltipSetUnit", "OnTooltipSetItem", "OnTooltipSetSpell", "OnTooltipSetQuest",
+        "OnTooltipSetAchievement", "OnTooltipSetEquipmentSet", "OnTooltipSetFrameStack"};
+    static const List kModel = {"OnUpdateModel", "OnAnimFinished"};                       // 0x0095f420
+    static const List kMovie = {"OnMovieFinished", "OnMovieShowSubtitle", "OnMovieHideSubtitle"};  // 0x0095db80
+    static const List kHyperlink = {"OnHyperlinkEnter", "OnHyperlinkLeave", "OnHyperlinkClick"};  // 0x00978610
+    static const List kColor = {"OnColorSelect"};                                         // 0x0096dc50
+    static const List kScrollMsg = {"OnMessageScrollChanged"};                            // 0x00969040
+    auto find = [&](const List& list) -> const char* {
+        for (const char* n : list)
+            if (sameTypeName(n, handler.c_str())) return n;
+        return nullptr;
+    };
+    if (const char* n = find(kFrame)) return n;
+    if (type == "Button" || type == "CheckButton") return find(kButton);
+    if (type == "EditBox") return find(kEditBox);
+    if (type == "Slider" || type == "StatusBar") return find(kValue);
+    if (type == "ScrollFrame") return find(kScroll);
+    if (type == "GameTooltip") return find(kTooltip);
+    if (type == "ColorSelect") return find(kColor);
+    if (type == "MovieFrame") return find(kMovie);
+    if (type == "Model" || type == "PlayerModel" || type == "DressUpModel" ||
+        type == "TabardModel" || type == "CinematicModel")
+        return find(kModel);
+    if (type == "ScrollingMessageFrame") {
+        if (const char* n = find(kScrollMsg)) return n;
+        return find(kHyperlink);
+    }
+    if (type == "MessageFrame" || type == "SimpleHTML") return find(kHyperlink);
+    return nullptr;
+}
+
 /// HasScript("handler") (0x0049eab0): whether this kind of frame has the
 /// handler at all, set or not - the class's own name lookup (vtable slot 0xc),
 /// each falling back to its parent's: the frame's (0x0048e680, OnEvent from
 /// 0x00816830) under every one.
 bool frameTypeHasScript(const std::string& type, const std::string& handler) {
-    static const std::unordered_set<std::string> kFrame = {
-        "OnEvent", "OnLoad", "OnSizeChanged", "OnUpdate", "OnShow", "OnHide",
-        "OnEnter", "OnLeave", "OnMouseDown", "OnMouseUp", "OnMouseWheel",
-        "OnDragStart", "OnDragStop", "OnReceiveDrag", "OnChar", "OnKeyDown",
-        "OnKeyUp", "OnAttributeChanged", "OnEnable", "OnDisable"};
-    if (kFrame.count(handler)) return true;
-    using Set = std::unordered_set<std::string>;
-    static const Set kButton = {"PreClick", "OnClick", "PostClick", "OnDoubleClick"};   // 0x0096f200
-    static const Set kEditBox = {                                                        // 0x009628f0
-        "OnEnterPressed", "OnEscapePressed", "OnSpacePressed", "OnTabPressed",
-        "OnTextChanged", "OnTextSet", "OnCursorChanged", "OnInputLanguageChanged",
-        "OnEditFocusGained", "OnEditFocusLost", "OnCharComposition"};
-    static const Set kValue = {"OnValueChanged", "OnMinMaxChanged"};                     // 0x00961630, 0x0096bca0
-    static const Set kScroll = {"OnHorizontalScroll", "OnVerticalScroll", "OnScrollRangeChanged"};  // 0x0096b0b0
-    static const Set kTooltip = {                                                        // 0x0061a280
-        "OnTooltipSetDefaultAnchor", "OnTooltipCleared", "OnTooltipAddMoney",
-        "OnTooltipSetUnit", "OnTooltipSetItem", "OnTooltipSetSpell", "OnTooltipSetQuest",
-        "OnTooltipSetAchievement", "OnTooltipSetEquipmentSet", "OnTooltipSetFrameStack"};
-    static const Set kModel = {"OnUpdateModel", "OnAnimFinished"};                       // 0x0095f420
-    static const Set kMovie = {"OnMovieFinished", "OnMovieShowSubtitle", "OnMovieHideSubtitle"};  // 0x0095db80
-    static const Set kHyperlink = {"OnHyperlinkEnter", "OnHyperlinkLeave", "OnHyperlinkClick"};  // 0x00978610
-    if (type == "Button" || type == "CheckButton") return kButton.count(handler) > 0;
-    if (type == "EditBox") return kEditBox.count(handler) > 0;
-    if (type == "Slider" || type == "StatusBar") return kValue.count(handler) > 0;
-    if (type == "ScrollFrame") return kScroll.count(handler) > 0;
-    if (type == "GameTooltip") return kTooltip.count(handler) > 0;
-    if (type == "ColorSelect") return handler == "OnColorSelect";                       // 0x0096dc50
-    if (type == "MovieFrame") return kMovie.count(handler) > 0;
-    if (type == "Model" || type == "PlayerModel" || type == "DressUpModel" ||
-        type == "TabardModel" || type == "CinematicModel")
-        return kModel.count(handler) > 0;
-    if (type == "ScrollingMessageFrame")                                                 // 0x00969040
-        return handler == "OnMessageScrollChanged" || kHyperlink.count(handler) > 0;
-    if (type == "MessageFrame" || type == "SimpleHTML") return kHyperlink.count(handler) > 0;
-    return false;
+    return frameTypeScriptName(type, handler) != nullptr;
+}
+
+/// The script name a frame method was handed, as the frame keeps it: its own
+/// spelling for a handler this kind of frame has, or the client's error
+/// "%s doesn't have a \"%s\" script" (0x0049ec80, 0x0049eb70, 0x0049edb0).
+/// A table that is not a widget keeps any name.
+const char* frameScriptNameOrRaise(lua_State* L, const char* given) {
+    const auto* w = widgetOf(L, 1);
+    if (!w) return given;
+    const char* name = frameTypeScriptName(w->objectType, given);
+    if (!name) luaL_error(L, "%s doesn't have a \"%s\" script", frameNameOnStack(L, 1), given);
+    return name;
 }
 
 static int lua_Frame_HasScript(lua_State* L) {
@@ -11219,9 +11250,6 @@ void LuaEngine::registerCoreAPI() {
         // ran an addon's script inside whatever called Play or ticked the
         // animations, and left that caller holding the addon's taint for
         // every group after it.
-        "animMeta.SetScript = __WoweeSetScriptSlot\n"
-        "animMeta.GetScript = __WoweeGetScriptSlot\n"
-        "animMeta.HookScript = __WoweeHookScriptSlot\n"
         "function animMeta:GetRegionParent() return self.group and self.group.parent end\n"
         // SetOrder (0x004a5660 -> 0x0049aec0): a whole number held to 1 - 100.
         "function animMeta:SetOrder(o)\n"
@@ -11486,6 +11514,38 @@ void LuaEngine::registerCoreAPI() {
         "end\n"
         "function animMeta:HasScript(t) return hasScript(self, t, false) end\n"
         "function groupMeta:HasScript(t) return hasScript(self, t, true) end\n"
+        // Set/Get/HookScript (0x004a5bb0 - 0x004a5df0, 0x004a7540 - 0x004a7780):
+        // the usage error without a string (and, to set, a function or nil),
+        // "%s doesn't have a \"%s\" script" for a name the kind has not, and
+        // otherwise the handler's own spelling, so "onfinished" is OnFinished.
+        "local scriptSpelling = {onload = 'OnLoad', onplay = 'OnPlay', onpause = 'OnPause', onstop = 'OnStop',\n"
+        "                        onfinished = 'OnFinished', onupdate = 'OnUpdate', onloop = 'OnLoop'}\n"
+        "local function scriptSlot(self, t, group, usage)\n"
+        "    local n = tostring(scriptName(self) or '<unnamed>')\n"
+        "    if type(t) ~= 'string' and type(t) ~= 'number' then error(usage:format(n), 3) end\n"
+        "    t = tostring(t)\n"
+        "    if not hasScript(self, t, group) then\n"
+        "        error(('%s doesn\\'t have a \"%s\" script'):format(n, t), 3)\n"
+        "    end\n"
+        "    return scriptSpelling[t:lower()]\n"
+        "end\n"
+        "for meta, group in pairs({[animMeta] = false, [groupMeta] = true}) do\n"
+        "    meta.SetScript = function(self, t, fn)\n"
+        "        if fn ~= nil and type(fn) ~= 'function' then\n"
+        "            error(('Usage: %s:SetScript(\"type\", function)'):format(tostring(scriptName(self) or '<unnamed>')), 2)\n"
+        "        end\n"
+        "        return __WoweeSetScriptSlot(self, scriptSlot(self, t, group, 'Usage: %s:SetScript(\"type\", function)'), fn)\n"
+        "    end\n"
+        "    meta.GetScript = function(self, t)\n"
+        "        return __WoweeGetScriptSlot(self, scriptSlot(self, t, group, 'Usage: %s:GetScript(\"type\")'))\n"
+        "    end\n"
+        "    meta.HookScript = function(self, t, fn)\n"
+        "        if type(fn) ~= 'function' then\n"
+        "            error(('Usage: %s:HookScript(\"type\", function)'):format(tostring(scriptName(self) or '<unnamed>')), 2)\n"
+        "        end\n"
+        "        return __WoweeHookScriptSlot(self, scriptSlot(self, t, group, 'Usage: %s:HookScript(\"type\", function)'), fn)\n"
+        "    end\n"
+        "end\n"
         // IsDone (0x004a5000): the animation's progress has reached its end.
         "function animMeta:IsDone() return (self.progress or 0) >= 1 end\n"
         "function animMeta:SetParent(p, order)\n"
@@ -11537,9 +11597,6 @@ void LuaEngine::registerCoreAPI() {
         "    if self:GetDuration() <= 0.0001 then return true end\n"
         "    return self.isPlaying ~= true and self.done == true\n"
         "end\n"
-        "groupMeta.SetScript = __WoweeSetScriptSlot\n"
-        "groupMeta.GetScript = __WoweeGetScriptSlot\n"
-        "groupMeta.HookScript = __WoweeHookScriptSlot\n"
         "function groupMeta:SetParent(p) self.parent = p end\n"
         "function groupMeta:GetParent() return self.parent end\n"
         // GetDuration (0x004a70e0, kept by 0x0049ac80): the orders one after

@@ -200,6 +200,14 @@ struct Emitter {
     void line(const std::string& s) { result.lua += s; result.lua += "\n"; }
 
     void emitScripts(const XmlNode& scripts, const std::string& var) {
+        // A handler the object's type does not have is skipped, not raised:
+        // SetScript would refuse it ("doesn't have a script"), and that would
+        // lose the rest of the file where the client's loader only passes the
+        // element by. HasScript asks the same question without raising.
+        auto guarded = [&](const std::string& name, const std::string& call) {
+            line("if " + var + ".HasScript == nil or " + var + ":HasScript(" + quote(name) +
+                 ") then " + call + " end");
+        };
         for (const XmlNode& s : scripts.children) {
             // <OnClick function="Foo"/> names an existing global; an inline body
             // is a function literal. Both end up as the same SetScript call.
@@ -207,7 +215,7 @@ struct Emitter {
             // SetScript("X", ) - a syntax error that loses the whole file, not
             // just the handler.
             if (const std::string* fn = s.attr("function"); fn && !fn->empty()) {
-                line(var + ":SetScript(" + quote(s.name) + ", " + *fn + ")");
+                guarded(s.name, var + ":SetScript(" + quote(s.name) + ", " + *fn + ")");
                 continue;
             }
             std::string body = s.text;
@@ -218,9 +226,9 @@ struct Emitter {
             // left those names nil, so every one of these bodies failed the
             // moment it touched its own argument - arithmetic on a nil elapsed
             // being the loudest of them.
-            line(var + ":SetScript(" + quote(s.name) +
-                 ", function(" + scriptSignature(s.name) + ") " +
-                 scriptPrelude(s.name) + body + " end)");
+            guarded(s.name, var + ":SetScript(" + quote(s.name) +
+                    ", function(" + scriptSignature(s.name) + ") " +
+                    scriptPrelude(s.name) + body + " end)");
         }
     }
 
