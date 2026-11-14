@@ -2378,11 +2378,9 @@ void InventoryHandler::equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot, boo
         const uint32_t entry = owner_.getItemEntryByGuid(itemGuid);
         const auto* info = entry ? owner_.getItemInfo(entry) : nullptr;
         if (info && info->bindType == 2 && !owner_.isItemSoulbound(itemGuid)) {
-            pendingSwap_ = PendingSwap{};   // only one move can be waiting
-            pendingEquip_ = PendingEquip{.active = true, .fromBag = false, .toSlot = true,
-                                         .wireSlot = equipSlot, .itemGuid = itemGuid};
-            if (owner_.addonEventCallbackRef())
-                owner_.addonEventCallbackRef()("EQUIP_BIND_CONFIRM", {"0"});
+            parkPendingMove({.equip = PendingEquip{.active = true, .fromBag = false, .toSlot = true,
+                                                   .wireSlot = equipSlot, .itemGuid = itemGuid}},
+                            "EQUIP_BIND_CONFIRM");
             return;
         }
     }
@@ -2430,17 +2428,15 @@ void InventoryHandler::autoEquipItemBySlot(int backpackIndex, bool confirmed) {
         return;
     }
     if (!confirmed && slot.item.wouldBindOnEquip()) {
-        pendingSwap_ = PendingSwap{};   // only one move can be waiting
-        pendingEquip_ = PendingEquip{.active = true, .fromBag = false, .bag = 0, .slot = backpackIndex, .wireSlot = wireSlot};
         // The auto-equip form of the prompt: right-clicking an item rather
         // than dropping it on a slot. FrameXML hides whichever of the two is
         // already up before showing the other, so firing the wrong one leaves
         // both on screen. The argument is the pending queue's index, as it is
         // for EQUIP_BIND_CONFIRM - 0x006dfc40 fires 0x110 with 0x006df850's
-        // free entry, not with the slot - and one pending equip means one
-        // index, so it says 0.
-        if (owner_.addonEventCallbackRef())
-            owner_.addonEventCallbackRef()("AUTOEQUIP_BIND_CONFIRM", {"0"});
+        // free entry, not with the slot.
+        parkPendingMove({.equip = PendingEquip{.active = true, .fromBag = false, .bag = 0,
+                                               .slot = backpackIndex, .wireSlot = wireSlot}},
+                        "AUTOEQUIP_BIND_CONFIRM");
         return;
     }
 
@@ -2464,12 +2460,11 @@ void InventoryHandler::autoEquipItemInBag(int bagIndex, int slotIndex, bool conf
     }
 
     if (!confirmed && equipWouldBindFromBag(bagIndex, slotIndex)) {
-        pendingSwap_ = PendingSwap{};   // only one move can be waiting
-        pendingEquip_ = PendingEquip{.active = true, .fromBag = true, .bag = bagIndex, .slot = slotIndex,
-                                     .wireSlot = static_cast<uint8_t>(slotIndex)};
         // The same queue-index argument as the backpack form above.
-        if (owner_.addonEventCallbackRef())
-            owner_.addonEventCallbackRef()("AUTOEQUIP_BIND_CONFIRM", {"0"});
+        parkPendingMove({.equip = PendingEquip{.active = true, .fromBag = true, .bag = bagIndex,
+                                               .slot = slotIndex,
+                                               .wireSlot = static_cast<uint8_t>(slotIndex)}},
+                        "AUTOEQUIP_BIND_CONFIRM");
         return;
     }
 
@@ -2480,36 +2475,43 @@ void InventoryHandler::autoEquipItemInBag(int bagIndex, int slotIndex, bool conf
     }
 }
 
-void InventoryHandler::equipPendingItem() {
-    const PendingSwap held = pendingSwap_;
-    pendingSwap_ = PendingSwap{};
-    const PendingEquip pending = pendingEquip_;
-    pendingEquip_ = PendingEquip{};
-    if (held.active) {
-        // The answer to a drop onto the character: the same exchange again, with
-        // the question already asked. The client's reply reads the parked
-        // record and calls its own verb back with 1 - 0x006e0000.c:53 for an
-        // exchange, :60 for a named slot, :48 for the auto-equip one - and then
-        // zeroes the entry.
+void InventoryHandler::parkPendingMove(const PendingMove& move, const char* event) {
+    // 0x006df850: the first entry with nothing in it, the queue grown by one
+    // when there is none.
+    size_t index = 0;
+    while (index < pendingMoves_.size() && pendingMoves_[index].active()) ++index;
+    if (index == pendingMoves_.size()) pendingMoves_.emplace_back();
+    pendingMoves_[index] = move;
+    if (owner_.addonEventCallbackRef())
+        owner_.addonEventCallbackRef()(event, {std::to_string(index)});
+}
+
+void InventoryHandler::equipPendingItem(int index) {
+    // 0x006e01a0 with 1: an index past the queue does nothing; the entry is
+    // taken and emptied, then replayed with the question already answered -
+    // 0x006e0000.c:53 for an exchange, :60 for a named slot, :48 for the
+    // auto-equip one.
+    if (index < 0 || static_cast<size_t>(index) >= pendingMoves_.size()) return;
+    const PendingMove move = pendingMoves_[static_cast<size_t>(index)];
+    pendingMoves_[static_cast<size_t>(index)] = PendingMove{};
+    if (move.swap.active) {
+        const auto& held = move.swap;
         swapContainerItems(held.fromBag, held.fromSlot, held.toBag, held.toSlot,
                            held.applyLocally, true);
         return;
     }
+    const auto& pending = move.equip;
     if (!pending.active) return;
-    // The named-slot form replays through the routine that held it back, with
-    // the answer as its `confirmed`, exactly as 0x006e0000.c:60 calls
-    // 0x006dff90 again with 1 for the record FrameXML's dialog accepted.
     if (pending.toSlot)       equipItemToSlot(pending.itemGuid, pending.wireSlot, true);
     else if (pending.fromBag) autoEquipItemInBag(pending.bag, pending.slot, true);
     else                      autoEquipItemBySlot(pending.slot, true);
 }
 
-void InventoryHandler::cancelPendingEquip() {
-    // The dialog cancels on OnCancel and on OnHide both, so one dismissed with
-    // Escape equips nothing; and whichever of the two forms is held, both are
-    // cleared, because only one prompt can be up at a time.
-    pendingEquip_ = PendingEquip{};
-    pendingSwap_ = PendingSwap{};
+void InventoryHandler::cancelPendingEquip(int index) {
+    // 0x006e01a0 with 0: the entry let go. The dialog cancels on OnCancel and
+    // on OnHide both, so one dismissed with Escape equips nothing.
+    if (index < 0 || static_cast<size_t>(index) >= pendingMoves_.size()) return;
+    pendingMoves_[static_cast<size_t>(index)] = PendingMove{};
 }
 
 // Dispatches CMSG_USE_ITEM for an item already located at (wowBag, wowSlot).
@@ -3472,15 +3474,11 @@ void InventoryHandler::swapContainerItems(uint8_t srcBag, uint8_t srcSlot,
         ItemDef carried;
         const bool read = dstWorn ? readWireSlot(srcBag, srcSlot, carried) : readWireSlot(dstBag, dstSlot, carried);
         if (read && carried.wouldBindOnEquip()) {
-            // The client parks either verb's move in the one queue, and
-            // FrameXML hides the other dialog before showing this one; only one
-            // move can be waiting for the answer.
-            pendingEquip_ = PendingEquip{};
-            pendingSwap_ = PendingSwap{.active = true, .fromBag = srcBag, .fromSlot = srcSlot,
-                                       .toBag = dstBag, .toSlot = dstSlot,
-                                       .applyLocally = applyLocally};
-            if (owner_.addonEventCallbackRef())
-                owner_.addonEventCallbackRef()("EQUIP_BIND_CONFIRM", {"0"});
+            // The client parks either verb's move in the one queue.
+            parkPendingMove({.swap = PendingSwap{.active = true, .fromBag = srcBag, .fromSlot = srcSlot,
+                                                 .toBag = dstBag, .toSlot = dstSlot,
+                                                 .applyLocally = applyLocally}},
+                            "EQUIP_BIND_CONFIRM");
             return;
         }
     }

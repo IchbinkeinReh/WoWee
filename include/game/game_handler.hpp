@@ -4585,8 +4585,8 @@ public:
     /// their own prompt up.
     bool equipWouldBindFromBackpack(int backpackIndex) const;
     bool equipWouldBindFromBag(int bagIndex, int slotIndex) const;
-    void equipPendingItem();
-    void cancelPendingEquip();
+    void equipPendingItem(int index);
+    void cancelPendingEquip(int index);
     void useItemBySlot(int backpackIndex, bool confirmed = false,
                        uint64_t unitTarget = 0);
     void useKeyringItem(int index, bool confirmed = false);

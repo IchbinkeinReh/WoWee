@@ -6092,14 +6092,21 @@ void registerInventoryLuaAPI(lua_State* L) {
         }},
                 // Both through CGPlayer_C::ClearPendingEquip (0x006e01a0),
                 // whose swap and equip ask the taint check (kind 0x16).
+                // EquipPendingItem(index) / CancelPendingEquip(index)
+                // (0x0051a530, 0x0051a5c0): the queue entry the prompt's event
+                // named, the index rounded, or the usage line.
                 {"EquipPendingItem", [](lua_State* L) -> int {
             if (!taint::allowed(L, 0x16)) return 0;
-            if (auto* gh = getGameHandler(L)) gh->equipPendingItem();
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: EquipPendingItem(index)");
+            if (auto* gh = getGameHandler(L))
+                gh->equipPendingItem(static_cast<int>(std::lround(lua_tonumber(L, 1))));
             return 0;
         }},
                 {"CancelPendingEquip", [](lua_State* L) -> int {
             if (!taint::allowed(L, 0x16)) return 0;
-            if (auto* gh = getGameHandler(L)) gh->cancelPendingEquip();
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: CancelPendingEquip(index)");
+            if (auto* gh = getGameHandler(L))
+                gh->cancelPendingEquip(static_cast<int>(std::lround(lua_tonumber(L, 1))));
             return 0;
         }},
                 {"SplitContainerItem",  lua_SplitContainerItem},
