@@ -194,11 +194,8 @@ void GameScreen::updateCharacterTextures(game::Inventory& inventory) {
                 const auto* dispL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("ItemDisplayInfo") : nullptr;
                 std::string capeName = displayInfoDbc->getString(static_cast<uint32_t>(recIdx), dispL ? (*dispL)["LeftModelTexture"] : 3);
                 if (!capeName.empty()) {
-                    // This asked for one path only - ObjectComponents, no
-                    // suffix - and a cape whose art is filed anywhere else
-                    // showed white. The full list, in order, is in
-                    // pipeline/item_textures.hpp, and the other three places
-                    // that load a cape have always used all of it.
+                    // The client's one path (0x004f21e0), from
+                    // pipeline/item_textures.hpp like every other cape.
                     bool isFemale = false;
                     if (auto* gh = app.getGameHandler()) {
                         if (auto* ch = gh->getActiveCharacter()) {

@@ -487,34 +487,14 @@ TEST_CASE("the .m2 a model reference means", "[m2]") {
     }
 }
 
-TEST_CASE("where a cape's art might be", "[item]") {
+TEST_CASE("where a cape's art is", "[item]") {
+    // 0x004f21e0: one path, Item\ObjectComponents\Cape\<name>.blp, for
+    // either sex (decided D13).
     const auto c = pipeline::capeTextureCandidates("Cloak_A_01", false);
-    REQUIRE(c.size() == 6);
-
-    SECTION("both folders unsuffixed first, which is what the shipped art uses") {
-        CHECK(c[0] == "Item\\ObjectComponents\\Cape\\Cloak_A_01.blp");
-        CHECK(c[1] == "Item\\TextureComponents\\Cape\\Cloak_A_01.blp");
-    }
-
-    SECTION("then the wearer's suffix and the unisex one") {
-        CHECK(c[2] == "Item\\ObjectComponents\\Cape\\Cloak_A_01_M.blp");
-        CHECK(c[3] == "Item\\ObjectComponents\\Cape\\Cloak_A_01_U.blp");
-    }
-
-    SECTION("a female wearer asks for _F where a male asks for _M") {
-        const auto f = pipeline::capeTextureCandidates("Cloak_A_01", true);
-        CHECK(f[2] == "Item\\ObjectComponents\\Cape\\Cloak_A_01_F.blp");
-    }
-
-    SECTION("a name that already carries a folder is taken as given") {
-        const auto d = pipeline::capeTextureCandidates("Item\\Special\\Cloak.blp", false);
-        REQUIRE(d.size() == 1);
-        CHECK(d[0] == "Item\\Special\\Cloak.blp");
-    }
-
-    SECTION("nothing to look for") {
-        CHECK(pipeline::capeTextureCandidates("", false).empty());
-    }
+    REQUIRE(c.size() == 1);
+    CHECK(c[0] == "Item\\ObjectComponents\\Cape\\Cloak_A_01.blp");
+    CHECK(pipeline::capeTextureCandidates("Cloak_A_01", true) == c);
+    CHECK(pipeline::capeTextureCandidates("", false).empty());
 }
 
 TEST_CASE("the eight texture regions are in ItemDisplayInfo's own order", "[item]") {

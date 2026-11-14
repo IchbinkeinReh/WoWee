@@ -121,11 +121,9 @@ size_t warmCharacterPreviewFiles(pipeline::AssetManager& assets, const PreviewWa
     if (capeDisplay != 0) {
         const int32_t rec = displayInfo->findRecordById(capeDisplay);
         if (rec >= 0) {
-            for (uint32_t field : {3u, 4u}) {
-                const std::string name = displayInfo->getString(static_cast<uint32_t>(rec), field);
-                if (name.empty()) continue;
-                for (const auto& c : pipeline::capeTextureCandidates(name, female)) texture(c);
-            }
+            // LeftModelTexture only, as the client (0x004f21e0).
+            const std::string name = displayInfo->getString(static_cast<uint32_t>(rec), 3u);
+            for (const auto& c : pipeline::capeTextureCandidates(name, female)) texture(c);
         }
     }
     return read;

@@ -924,15 +924,8 @@ bool CharacterPreview::dress(const std::vector<game::EquipmentItem>& equipment, 
                         capeNames.push_back(n);
                     }
                 };
-                std::string leftName = displayInfoDbc->getString(static_cast<uint32_t>(capeRecIdx), 3);
-                std::string rightName = displayInfoDbc->getString(static_cast<uint32_t>(capeRecIdx), 4);
-                if (gender_ == game::Gender::FEMALE) {
-                    addName(rightName);
-                    addName(leftName);
-                } else {
-                    addName(leftName);
-                    addName(rightName);
-                }
+                // LeftModelTexture only, whoever wears it (0x004f21e0).
+                addName(displayInfoDbc->getString(static_cast<uint32_t>(capeRecIdx), 3));
 
                 // pipeline/item_textures.hpp knows where a cape's art is and
                 // in what order to try for it.

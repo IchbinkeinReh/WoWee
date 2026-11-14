@@ -83,46 +83,14 @@ struct ItemDisplayArt {
 
 ItemDisplayArt readItemDisplayArt(const DBCFile& itemDisplayInfo, uint32_t recordIndex);
 
-/// Every path a cape's texture might be at, in the order to try them.
-///
-/// A name that already carries a folder is taken as given. Otherwise both
-/// component folders are tried, unsuffixed first - which is what the shipped art
-/// mostly uses - and then with the wearer's suffix and the unisex one.
-inline std::vector<std::string> capeTextureCandidates(const std::string& rawName, bool isFemale) {
-    std::vector<std::string> candidates;
-    if (rawName.empty()) return candidates;
-
-    std::string name = rawName;
-    std::replace(name.begin(), name.end(), '/', '\\');
-    const bool hasDir = name.find('\\') != std::string::npos;
-    bool hasExt = false;
-    if (name.size() >= 4) {
-        std::string tail = name.substr(name.size() - 4);
-        std::transform(tail.begin(), tail.end(), tail.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        hasExt = (tail == ".blp");
-    }
-
-    if (hasDir) {
-        candidates.push_back(hasExt ? name : name + ".blp");
-        return candidates;
-    }
-
-    const std::string baseObj = "Item\\ObjectComponents\\Cape\\" + name;
-    const std::string baseTex = "Item\\TextureComponents\\Cape\\" + name;
-    if (hasExt) {
-        candidates.push_back(baseObj);
-        candidates.push_back(baseTex);
-    } else {
-        candidates.push_back(baseObj + ".blp");
-        candidates.push_back(baseTex + ".blp");
-    }
-    const char* suffix = isFemale ? "_F.blp" : "_M.blp";
-    candidates.push_back(baseObj + suffix);
-    candidates.push_back(baseObj + "_U.blp");
-    candidates.push_back(baseTex + suffix);
-    candidates.push_back(baseTex + "_U.blp");
-    return candidates;
+/// Where a cloak's texture is (0x004f21e0): the name from the display's
+/// LeftModelTexture, in Item\ObjectComponents\Cape\, with ".blp" after it -
+/// one path, as the client builds it. (Decided D13: no right field, no
+/// suffixed or other-folder variants.) A vector for its callers' loops.
+inline std::vector<std::string> capeTextureCandidates(const std::string& rawName,
+                                                      [[maybe_unused]] bool isFemale) {
+    if (rawName.empty()) return {};
+    return {"Item\\ObjectComponents\\Cape\\" + rawName + ".blp"};
 }
 
 }  // namespace pipeline

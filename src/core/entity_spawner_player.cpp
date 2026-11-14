@@ -432,17 +432,11 @@ void EntitySpawner::setOnlinePlayerEquipment(uint64_t guid,
         if (capeDid != 0) {
             int32_t capeRecIdx = displayInfoDbc->findRecordById(capeDid);
             if (capeRecIdx >= 0) {
+                // The client reads LeftModelTexture and nothing else
+                // (0x004f21e0; decided D13), whoever wears the cloak.
                 const uint32_t leftTexField = idiL ? (*idiL)["LeftModelTexture"] : 3u;
-                // RightModelTexture is the field right after LeftModelTexture.
-                // Some cloaks (e.g. Jaina's Radiance) carry their texture only in
-                // the right field; the character-preview screen checks both, so
-                // match it here - otherwise the world model shows the cape mesh
-                // untextured even though the paperdoll preview looks correct.
-                const uint32_t rightTexField = leftTexField + 1;
                 std::string leftName = displayInfoDbc->getString(
                     static_cast<uint32_t>(capeRecIdx), leftTexField);
-                std::string rightName = displayInfoDbc->getString(
-                    static_cast<uint32_t>(capeRecIdx), rightTexField);
 
                 std::vector<std::string> capeNames;
                 auto addCapeName = [&](const std::string& n) {
@@ -450,8 +444,7 @@ void EntitySpawner::setOnlinePlayerEquipment(uint64_t guid,
                         std::find(capeNames.begin(), capeNames.end(), n) == capeNames.end())
                         capeNames.push_back(n);
                 };
-                if (st.genderId == 1) { addCapeName(rightName); addCapeName(leftName); }
-                else                  { addCapeName(leftName);  addCapeName(rightName); }
+                addCapeName(leftName);
 
                 if (!capeNames.empty()) {
                     // Where a cape's art might be, in the order to try it -

@@ -2304,15 +2304,14 @@ void EntitySpawner::normalizeHumanoidClothingGeosets(uint32_t instanceId, uint32
     const int32_t recIdx = itemDisplayDbc->findRecordById(capeDisplayId);
     if (recIdx < 0) return;
     const uint32_t leftTexField = idiL ? (*idiL)["LeftModelTexture"] : 3u;
-    const uint32_t rightTexField = idiL ? (*idiL)["RightModelTexture"] : 4u;
     std::vector<std::string> capeNames;
     auto addName = [&](const std::string& n) {
         if (!n.empty() && std::find(capeNames.begin(), capeNames.end(), n) == capeNames.end()) {
             capeNames.push_back(n);
         }
     };
+    // LeftModelTexture only (0x004f21e0).
     addName(itemDisplayDbc->getString(static_cast<uint32_t>(recIdx), leftTexField));
-    addName(itemDisplayDbc->getString(static_cast<uint32_t>(recIdx), rightTexField));
     const bool npcIsFemale = (extra.sexId == 1);
     // Same list, same order, one place: pipeline/item_textures.hpp.
     std::string capeTexturePath;
