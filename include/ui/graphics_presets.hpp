@@ -76,7 +76,8 @@ struct GraphicsPresetValues {
     /// default "0" at 0x009e14a0). The exe holds no quality presets: its only
     /// other source is the hardware row of VideoHardware.dbc (0x0076b3f0
     /// copies its +0x2c into the detected defaults, written out by
-    /// 0x0078e1a0), so no fixed preset here turns it on.
+    /// 0x0078e1a0), so none of the client's own levels, Low to Ultra, turns
+    /// it on. Super-Ultra, the user's picture, does (2026-11-14).
     bool  specular;
     /// The rest of the client's own quality levels (FrameXML
     /// GraphicsQualityLevels.lua, the Effects panel's rows), in this
@@ -116,12 +117,14 @@ struct GraphicsPresetValues {
 // Super-Ultra (user decision 2026-11-13) comes after the client's own Ultra
 // (FrameXML GlobalStrings VIDEO_QUALITY_LABEL5 "Ultra", GraphicsQualityLevels
 // [5] "ULTRA mode") and is the user's own picture, from their settings file
-// of that day: ray traced lighting with shadows, occlusion and bounce at full
-// resolution, the extras (lens flare, sharp stars, sun shafts, light shafts
-// on High) on, normal maps at 0.4, and the shadow map off - the traced sun
-// and moon shadows stand in for it. The rows it sets beyond these columns are
-// kSuperUltraExtras below. Grass is off on every row (user decision, the same
-// day): it costs main-thread time and has known faults.
+// (user decision 2026-11-14, tests/data/super_ultra_user_settings.cfg): ray
+// traced lighting with shadows, occlusion and bounce at full resolution, the
+// extras (lens flare, sharp stars, sun shafts, light shafts on High) on, the
+// shadow map on at 500 yards beside the traced shadows, FXAA over 8x MSAA,
+// the client's specular on, normal maps at 0.4 and clutter out to 300 yards.
+// The rows it sets beyond these columns are kSuperUltraExtras and
+// kSuperUltraDebugValues below. Grass is off on every row (user decision
+// 2026-11-13): it costs main-thread time and has known faults.
 // The view distances are the client's own quality levels' farclip
 // (FrameXML GraphicsQualityLevels.lua): Low 177, Good 727, High 1057 and Ultra
 // 1277 - its Fair, 507, has no row here.
@@ -130,16 +133,15 @@ constexpr GraphicsPresetValues kGraphicsPresets[] = {
     /* Medium */ { .viewDistance = 727.0f, .shadows = true,  .shadowDistance = 200.0f, .antiAliasing = 1, .fxaa = false, .normalMapping = true,  .normalMapStrength = 0.3f, .groundClutter = 60,  .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .specular = false, .environmentDetail = 100, .groundClutterDistance = 120, .particleDensity = 60,  .weatherDetail = 2, .textureCompression = false, .interactiveWater = false},
     /* High   */ {.viewDistance = 1057.0f, .shadows = true,  .shadowDistance = 350.0f, .antiAliasing = 2, .fxaa = false, .normalMapping = true,  .normalMapStrength = 0.3f, .groundClutter = 100, .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .specular = false, .environmentDetail = 125, .groundClutterDistance = 130, .particleDensity = 80,  .weatherDetail = 3, .textureCompression = false, .interactiveWater = true},
     /* Ultra  */ {.viewDistance = 1277.0f, .shadows = true,  .shadowDistance = 500.0f, .antiAliasing = 3, .fxaa = false, .normalMapping = true,  .normalMapStrength = 0.3f, .groundClutter = 150, .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .specular = false, .environmentDetail = 150, .groundClutterDistance = 140, .particleDensity = 100, .weatherDetail = 3, .textureCompression = false, .interactiveWater = true},
-    /* Super-Ultra */ {.viewDistance = 1277.0f, .shadows = false, .shadowDistance = 500.0f, .antiAliasing = 3, .fxaa = false, .normalMapping = true,  .normalMapStrength = 0.4f, .groundClutter = 150, .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 1.0f, .sharpStars = true,  .sunShafts = true,  .lightShafts = 3, .fogSkyBlend = 0.0f, .specular = false, .environmentDetail = 150, .groundClutterDistance = 140, .particleDensity = 100, .weatherDetail = 3, .textureCompression = false, .interactiveWater = true},
+    /* Super-Ultra */ {.viewDistance = 1277.0f, .shadows = true,  .shadowDistance = 500.0f, .antiAliasing = 3, .fxaa = true,  .normalMapping = true,  .normalMapStrength = 0.4f, .groundClutter = 150, .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 1.0f, .sharpStars = true,  .sunShafts = true,  .lightShafts = 3, .fogSkyBlend = 0.0f, .specular = true,  .environmentDetail = 150, .groundClutterDistance = 300, .particleDensity = 100, .weatherDetail = 3, .textureCompression = false, .interactiveWater = true},
 };
 
 /// The settings Super-Ultra sets beyond the columns above: the rest of the
 /// graphics pages (Graphics, Shadows, Detail, Water, Ray Tracing with its eye
 /// adaptation, Upscaling), as the user's settings have them. Low to Ultra
-/// put these back to their defaults (presetRowValues). Where the
-/// user's file had no row the value is the schema's default - what their
-/// client ran with. (Frame generation, off in their file, is a row only
-/// in builds with FSR 3 frame generation, so it is not one of these.)
+/// put these back to their defaults (presetRowValues). (Frame generation,
+/// off in their file, is a row only in builds with FSR 3 frame generation,
+/// so it is not one of these: its default, off, is what every preset sets.)
 struct GraphicsPresetExtra {
     const char* key;   ///< the schema key
     float value;
@@ -149,16 +151,59 @@ inline constexpr GraphicsPresetExtra kSuperUltraExtras[] = {
     {"shadowresolution", 1.0f},  {"shadowcascades", 2.0f},
     {"texturefiltering", 4.0f},
     {"rtwater", 1.0f},           {"rtswimwaves", 1.0f},
-    {"rtwaveamp", 100.0f},       {"rtwavefreq", 100.0f},
+    {"rtwaveamp", 50.0f},        {"rtwavefreq", 50.0f},
     {"raytracedlighting", 3.0f}, {"rtfullres", 1.0f},
     {"rtroomsun", 1.0f},         {"rtsoftlamps", 0.0f},
-    {"rtrealisticfalloff", 0.0f}, {"rtminbrightness", 0.0f},
-    {"rteyebrighten", 30.0f},    {"rteyeseconds", 2.5f},
+    {"rtrealisticfalloff", 0.0f}, {"rtminbrightness", 20.0f},
+    {"rteyebrighten", 100.0f},   {"rteyeseconds", 2.5f},
     {"rteyesensitivity", 0.0f},
     {"rtsunrays", 1.0f},         {"rtaorays", 1.0f},
     {"rtpointrays", 1.0f},       {"rtbouncerays", 1.0f},
     {"upscaling", 0.0f},         {"fsrquality", 3.0f},
     {"fsrsharpness", 1.6f},
+};
+
+/// The Debug pages as the user's settings have them (user decision
+/// 2026-11-14: "all my settings, the debug menu's too"), which only
+/// Super-Ultra sets. Every row the settings file keeps on those pages, each
+/// stated even where it is the default, so Super-Ultra gives the same
+/// lighting whatever was tuned before it. Low to Ultra leave the Debug pages
+/// alone, as they always have, and a preset is recognised by its own pages
+/// alone (matchingGraphicsPreset): a lamp's reach tuned by hand does not make
+/// the dropdown read Custom.
+///
+/// Not here: the debug view (dbgview), which the file does not keep - it is
+/// for the session it is picked in - and is left as it is.
+inline constexpr GraphicsPresetExtra kSuperUltraDebugValues[] = {
+    // Debug Graphics
+    {"dbgsplitrt", 0.0f},
+    {"dbgambient", 100.0f},          {"dbgsun", 100.0f},
+    {"dbgbakedlight", 100.0f},       {"dbgpointlights", 100.0f},
+    {"dbgbounce", 50.0f},
+    {"dbginteriorbase", 0.0f},       {"dbginteriorfullat", 100.0f},
+    {"rtnormalkeep", 30.0f},         {"rtnormalface", 50.0f},
+    // Debug Time: off, the server's time of day.
+    {"dbgtimeoverride", 0.0f},       {"dbgtime", 19.25f},
+    // Debug Lights
+    {"dbgmodellightintensity", 100.0f},    {"dbgmodellightreach", 300.0f},
+    {"dbgfirelightintensity", 100.0f},     {"dbgfirelightreach", 130.0f},
+    {"dbglamplightintensity", 100.0f},     {"dbglamplightreach", 500.0f},
+    {"dbgbuildinglightintensity", 30.0f},  {"dbgbuildinglightreach", 100.0f},
+    {"dbgunitlightintensity", 100.0f},     {"dbgunitlightreach", 100.0f},
+    {"dbgmaxlight", 100.0f},               {"dbglightcountlimit", 2048.0f},
+    {"rtpointselfshadow", 1.0f},
+    // Debug Glow
+    {"dbgemissivelightintensity", 30.0f},  {"dbgemissivelightreach", 100.0f},
+    {"dbgparticlelightintensity", 110.0f}, {"dbgparticlelightreach", 150.0f},
+    {"dbgglowpulse", 100.0f},              {"dbgfireflicker", 100.0f},
+    {"dbgmodelflicker", 100.0f},           {"dbgglowanim", 100.0f},
+    {"rtparticlelights", 3.0f},
+    // Debug Shadows
+    {"dbgshadowdarkness", 70.0f},    {"rtunitselfshadow", 1.0f},
+    {"dbgtracedsunshadow", 100.0f},  {"dbgpointshadow", 100.0f},
+    {"rtunitshadowreach", 100.0f},   {"dbgbakedlampshadow", 100.0f},
+    {"dbgocclusion", 100.0f},        {"dbgmapsunshadow", 100.0f},
+    {"dbgterrainshadow", 100.0f},    {"dbgblobshadow", 100.0f},
 };
 
 /// The settings the columns above set, by schema key, in the order a preset
@@ -179,7 +224,8 @@ inline constexpr const char* kGraphicsPresetKeys[] = {
 /// or, for Super-Ultra, to its kSuperUltraExtras value where it has one - so
 /// that Ultra after Super-Ultra is Ultra, not Ultra with ray tracing left on.
 /// Not Display (window, resolution, frame cap, brightness: the screen's, not
-/// the picture's quality) and not the Debug pages.
+/// the picture's quality) and not the Debug pages, which only Super-Ultra
+/// sets (kSuperUltraDebugValues).
 inline constexpr const char* kGraphicsPresetPages[] = {
     "Graphics", "Shadows", "Detail", "Grass", "Water", "Ray Tracing", "Upscaling",
 };

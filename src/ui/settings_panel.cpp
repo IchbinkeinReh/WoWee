@@ -1090,6 +1090,11 @@ void SettingsPanel::applyGraphicsPreset(GraphicsPreset preset) {
         for (const auto& r : presetRowValues(preset == GraphicsPreset::SUPER_ULTRA)) {
             setSettingValue(r.row->key, settingNumberText(r.value));
         }
+        // And Super-Ultra's Debug pages, the user's tuned lighting (user
+        // decision 2026-11-14). The other presets leave those pages alone.
+        if (preset == GraphicsPreset::SUPER_ULTRA) {
+            for (const auto& e : kSuperUltraDebugValues) setSettingValue(e.key, settingNumberText(e.value));
+        }
     }
 
     currentGraphicsPreset = preset;
