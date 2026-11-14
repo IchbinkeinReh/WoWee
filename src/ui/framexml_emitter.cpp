@@ -1347,6 +1347,20 @@ struct Emitter {
             }
             t += "}";
             line(var + ":SetBackdrop(" + t + ")");
+            // The backdrop's own <Color> and <BorderColor> (0x004a2780). They
+            // were dropped, so every panel that tints its backdrop in the XML
+            // drew it white. SetBackdrop resets both, so they come after it.
+            for (const XmlNode& sub : child.children) {
+                const char* setter = sub.name == "Color"       ? ":SetBackdropColor("
+                                   : sub.name == "BorderColor" ? ":SetBackdropBorderColor("
+                                                               : nullptr;
+                if (!setter) continue;
+                line(var + setter +
+                     std::to_string(sub.attrFloat("r", 1.0f)) + ", " +
+                     std::to_string(sub.attrFloat("g", 1.0f)) + ", " +
+                     std::to_string(sub.attrFloat("b", 1.0f)) + ", " +
+                     std::to_string(sub.attrFloat("a", 1.0f)) + ")");
+            }
             break;  // one backdrop to a frame
         }
         // The wheel, on the same principle and its own switch. No FrameXML file

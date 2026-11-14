@@ -8209,50 +8209,72 @@ int lua_Frame_SetClampRectInsets(lua_State* L) {
     return 0;
 }
 
+/// SetBackdrop(nil or table) (0x004a15a0).
+///
+/// The client builds a new backdrop each call (0x004a2d40) and fills it from
+/// the table, so a key left out goes back to its default rather than keeping
+/// the last call's value, and both colours go back to white: bgFile and
+/// edgeFile none, tile off, tileSize 0, insets 0, and edgeSize 0.025 of the
+/// screen's diagonal-normalised height - 32 at 4:3, more on a wider screen.
+/// Nil or nothing removes the backdrop; anything else is the usage error.
 int lua_Frame_SetBackdrop(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
-    if (!lua_istable(L, 2)) {          // SetBackdrop(nil) clears it
+    const int type = lua_type(L, 2);
+    if (type == LUA_TNONE || type == LUA_TNIL) {
         w->hasBackdrop = false;
         return 0;
+    }
+    if (type != LUA_TTABLE) {
+        return luaL_error(L,
+            "Usage: %s:SetBackdrop(nil or {bgFile = \"bgFile\", edgeFile = \"edgeFile\", "
+            "tile = false, tileSize = 0, edgeSize = 32, "
+            "insets = { left = 0, right = 0, top = 0, bottom = 0 }})",
+            frameNameOnStack(L, 1));
     }
     w->hasBackdrop = true;
     auto str = [&](const char* key, std::string& out) {
         lua_getfield(L, 2, key);
-        if (lua_isstring(L, -1)) out = lua_tostring(L, -1);
+        const char* v = lua_isstring(L, -1) ? lua_tostring(L, -1) : nullptr;
+        out = v ? v : "";
         lua_pop(L, 1);
     };
-    auto num = [&](const char* key, float& out) {
-        lua_getfield(L, 2, key);
+    auto num = [&](int table, const char* key, float& out) {
+        lua_getfield(L, table, key);
         if (lua_isnumber(L, -1)) out = static_cast<float>(lua_tonumber(L, -1));
         lua_pop(L, 1);
     };
     str("bgFile", w->bgFile);
     str("edgeFile", w->edgeFile);
-    num("edgeSize", w->edgeSize);
-    // tileSize describes the background's repeat, and edgeSize the border tile.
-    // Where only one is given the other is the sensible stand-in.
-    num("tileSize", w->edgeSize);
-    num("edgeSize", w->edgeSize);
-    w->backdropTileSize = 0.0f;
-    num("tileSize", w->backdropTileSize);
     lua_getfield(L, 2, "tile");
     w->tileBackground = lua_toboolean(L, -1) != 0;
     lua_pop(L, 1);
 
+    // The default edge: 0.025 in the client's units, where the screen's height
+    // is 1 / sqrt(aspect^2 + 1) (0x00470000's aspect setter) and 768 UI units.
+    float aspect = 4.0f / 3.0f;
+    if (auto* tree = wowee::addons::getWidgetTree(L)) {
+        if (const auto* root = tree->get(tree->rootId());
+            root && root->rectW > 0.0f && root->rectH > 0.0f)
+            aspect = root->rectW / root->rectH;
+    }
+    w->edgeSize = 0.025f * 768.0f * std::sqrt(aspect * aspect + 1.0f);
+    w->backdropTileSize = 0.0f;
+    num(2, "tileSize", w->backdropTileSize);
+    num(2, "edgeSize", w->edgeSize);
+
+    w->insetLeft = w->insetRight = w->insetTop = w->insetBottom = 0.0f;
     lua_getfield(L, 2, "insets");
     if (lua_istable(L, -1)) {
-        auto inset = [&](const char* key, float& out) {
-            lua_getfield(L, -1, key);
-            if (lua_isnumber(L, -1)) out = static_cast<float>(lua_tonumber(L, -1));
-            lua_pop(L, 1);
-        };
-        inset("left", w->insetLeft);
-        inset("right", w->insetRight);
-        inset("top", w->insetTop);
-        inset("bottom", w->insetBottom);
+        const int insets = lua_gettop(L);
+        num(insets, "left", w->insetLeft);
+        num(insets, "right", w->insetRight);
+        num(insets, "top", w->insetTop);
+        num(insets, "bottom", w->insetBottom);
     }
     lua_pop(L, 1);
+
+    for (int i = 0; i < 4; ++i) w->backdropColor[i] = w->borderColor[i] = 1.0f;
     return 0;
 }
 

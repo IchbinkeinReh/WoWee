@@ -1058,6 +1058,26 @@ TEST_CASE("A Backdrop with only an edge file still emits", "[framexml][emit]") {
     REQUIRE_FALSE(has(r.lua, "bgFile="));
 }
 
+TEST_CASE("A Backdrop's Color and BorderColor follow its SetBackdrop", "[framexml][emit]") {
+    // 0x004a2780 reads both children; SetBackdrop resets the colours to white,
+    // so the setters have to come after it.
+    XmlNode root = parseOrFail(
+        "<Ui><Frame name=\"Tinted\">"
+        "<Backdrop edgeFile=\"edge.blp\">"
+        "<Color r=\"0\" g=\"0\" b=\"0\" a=\"0.5\"/>"
+        "<BorderColor r=\"0.4\" g=\"0.4\" b=\"0.4\"/>"
+        "</Backdrop></Frame></Ui>");
+    const EmitResult r = emitFrameXml(root);
+    const size_t backdrop = r.lua.find("SetBackdrop(");
+    const size_t colour = r.lua.find("SetBackdropColor(0.000000, 0.000000, 0.000000, 0.500000)");
+    const size_t border = r.lua.find("SetBackdropBorderColor(0.400000, 0.400000, 0.400000, 1.000000)");
+    REQUIRE(backdrop != std::string::npos);
+    REQUIRE(colour != std::string::npos);
+    REQUIRE(border != std::string::npos);
+    CHECK(colour > backdrop);
+    CHECK(border > backdrop);
+}
+
 TEST_CASE("A frame with no Backdrop emits no SetBackdrop", "[framexml][emit]") {
     XmlNode root = parseOrFail("<Ui><Frame name=\"Bare\"/></Ui>");
     const EmitResult r = emitFrameXml(root);
