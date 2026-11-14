@@ -1384,6 +1384,14 @@ set(WOWEE_HEADERS
     include/ui/keybinding_manager.hpp
 )
 
+# HTTPS on Apple platforms asks the system whether a server's certificate is
+# trusted (core/tls_trust.cpp): OpenSSL there has no root store of its own -
+# on iOS none at all, so the streaming data mode could never start. Wherever
+# tls_trust.cpp goes, so does this, and the Security framework with it.
+if(APPLE)
+    list(APPEND WOWEE_SOURCES src/core/tls_trust_apple.cpp)
+endif()
+
 # macOS needs an Objective-C++ shim for AppKit behavior that has no SDL
 # equivalent (press-and-hold accents).  window.cpp calls into it, so every
 # target that compiles window.cpp must link it.
@@ -1634,7 +1642,7 @@ if(UNIX AND NOT APPLE AND NOT ANDROID)
     target_link_libraries(wowee PRIVATE X11)
 endif()
 if(APPLE)
-    target_link_libraries(wowee PRIVATE "-framework Foundation")
+    target_link_libraries(wowee PRIVATE "-framework Foundation" "-framework Security")
 endif()
 if(IOS)
     # miniaudio's iOS backend talks to AVAudioSession, which is Objective-C:

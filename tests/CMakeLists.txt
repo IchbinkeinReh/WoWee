@@ -106,6 +106,18 @@ set(TEST_COMMON_SOURCES $<TARGET_OBJECTS:wowee_test_common>)
 #
 # Tests that also need SDL3, OpenSSL or Vulkan keep their own block: the link
 # set is the interesting part of those.
+# What core/tls_trust.cpp links beyond OpenSSL: the system's root store on
+# Windows, the system's trust decision on Apple platforms.
+function(wowee_test_link_tls_trust target)
+    if(WIN32)
+        target_link_libraries(${target} PRIVATE crypt32)
+    endif()
+    if(APPLE)
+        target_sources(${target} PRIVATE ${CMAKE_SOURCE_DIR}/src/core/tls_trust_apple.cpp)
+        target_link_libraries(${target} PRIVATE "-framework CoreFoundation" "-framework Security")
+    endif()
+endfunction()
+
 function(wowee_add_test target)
     cmake_parse_arguments(ARG "" "" "SOURCES" ${ARGN})
     add_executable(${target} ${ARG_SOURCES})
@@ -2124,13 +2136,21 @@ target_include_directories(test_update_check SYSTEM PRIVATE
     ${CMAKE_SOURCE_DIR}/extern/nlohmann
 )
 target_link_libraries(test_update_check PRIVATE catch2_main OpenSSL::SSL OpenSSL::Crypto)
-if(WIN32)
-    # The system's root certificates (core/tls_trust.cpp).
-    target_link_libraries(test_update_check PRIVATE crypt32)
-endif()
+wowee_test_link_tls_trust(test_update_check)
 wowee_test_link_glm(test_update_check)
 add_test(NAME update_check COMMAND test_update_check)
 register_test_target(test_update_check)
+
+# ── test_tls_trust ───────────────────────────────────────────
+# The trust store the HTTPS clients verify against. The streaming data mode
+# never started on a phone because OpenSSL's default paths hold no roots
+# there; the verifier hand-off iOS now uses and the certificate folders
+# Android is read from are pinned here, with a handshake in memory.
+wowee_add_test(test_tls_trust
+    SOURCES test_tls_trust.cpp
+            ${CMAKE_SOURCE_DIR}/src/core/tls_trust.cpp)
+target_link_libraries(test_tls_trust PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+wowee_test_link_tls_trust(test_tls_trust)
 
 # ── test_realm_patches ───────────────────────────────────────
 # What a realm may name and where its archives may land. No network: the
