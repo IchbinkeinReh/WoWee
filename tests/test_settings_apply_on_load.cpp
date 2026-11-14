@@ -305,15 +305,14 @@ TEST_CASE("Low turns dynamic shadows off and the client's other levels leave the
     // The client's own Low quality level has ShadowQuality 0 and every level
     // from Good up has dynamic shadows. Off skips the shadow pass now, so the
     // column means what it says. Super-Ultra, after the client's levels, is
-    // the user's picture (2026-11-13): the shadow map off, the traced sun and
-    // moon shadows in its place.
+    // the user's picture (2026-11-14): the shadow map on beside the traced sun
+    // and moon shadows.
     REQUIRE(wowee::ui::kGraphicsPresetCount == 5);
     CHECK_FALSE(wowee::ui::kGraphicsPresets[0].shadows);
-    for (int i = 1; i < 4; ++i) {
+    for (int i = 1; i < 5; ++i) {
         INFO("preset index " << i << " turns shadows off");
         CHECK(wowee::ui::kGraphicsPresets[i].shadows);
     }
-    CHECK_FALSE(wowee::ui::kGraphicsPresets[4].shadows);
     bool traced = false;
     for (const auto& e : wowee::ui::kSuperUltraExtras) {
         if (std::string(e.key) == "raytracedlighting") traced = e.value >= 1.0f;
@@ -326,11 +325,10 @@ TEST_CASE("the presets carry the client's own detail levels", "[settings]") {
     // distances already come from: EnvironmentDetail, ClutterRadius,
     // ParticleDensity and WeatherIntensity, in this client's units.
     struct Row { int environment, clutterRadius, particles, weather; };
-    // Super-Ultra, after them, carries Ultra's levels.
-    constexpr Row kClient[] = {{50, 70, 10, 0}, {100, 120, 60, 2}, {125, 130, 80, 3}, {150, 140, 100, 3},
-                               {150, 140, 100, 3}};
+    // Super-Ultra, after them, is the user's own (its own case below).
+    constexpr Row kClient[] = {{50, 70, 10, 0}, {100, 120, 60, 2}, {125, 130, 80, 3}, {150, 140, 100, 3}};
     REQUIRE(wowee::ui::kGraphicsPresetCount == 5);
-    for (int i = 0; i < wowee::ui::kGraphicsPresetCount; ++i) {
+    for (int i = 0; i < 4; ++i) {
         const auto& p = wowee::ui::kGraphicsPresets[i];
         INFO("preset index " << i);
         CHECK(p.environmentDetail == kClient[i].environment);
@@ -396,71 +394,154 @@ TEST_CASE("Ultra is the client's own top level, as before", "[settings]") {
     CHECK(u.interactiveWater);
 }
 
-TEST_CASE("Super-Ultra is the user's own settings of 2026-11-13", "[settings]") {
-    // From the user's settings file (wt-cfg/user_settings_ultra_preset_1113.cfg):
-    // every graphics row a preset should set. A row the file did not have is
-    // the schema's default - what that client ran with. It is the fifth
-    // preset, stored as 5, so a saved 0-4 means what it did.
+namespace {
+
+/// What Super-Ultra sets, by schema key: the table's columns, the rest of the
+/// preset pages (presetRowValues) and the Debug pages it alone sets - in the
+/// order applyGraphicsPreset assigns them, so a later one wins.
+std::map<std::string, float> superUltraSettings() {
     const auto& u = wowee::ui::kGraphicsPresets[4];
-    CHECK(u.viewDistance == 1277.0f);
-    CHECK_FALSE(u.shadows);
-    CHECK(u.shadowDistance == 500.0f);
-    CHECK(u.antiAliasing == 3);
-    CHECK_FALSE(u.fxaa);
-    CHECK(u.normalMapping);
-    CHECK(u.normalMapStrength == 0.4f);
-    CHECK(u.groundClutter == 150);
-    CHECK_FALSE(u.grass);
-    CHECK(u.lensFlare == 1.0f);
-    CHECK(u.sharpStars);
-    CHECK(u.sunShafts);
-    CHECK(u.lightShafts == 3);
-    CHECK(u.fogSkyBlend == 0.0f);
-    CHECK_FALSE(u.specular);
-    CHECK(u.environmentDetail == 150);
-    CHECK(u.groundClutterDistance == 140);
-    CHECK(u.particleDensity == 100);
-    CHECK(u.weatherDetail == 3);
-    CHECK_FALSE(u.textureCompression);
-    CHECK(u.interactiveWater);
-
-    const std::map<std::string, float> expected = {
-        {"fogstrength", 1.0f}, {"mistdensity", 1.0f}, {"shadowresolution", 1.0f}, {"shadowcascades", 2.0f},
-        {"texturefiltering", 4.0f}, {"rtwater", 1.0f}, {"rtswimwaves", 1.0f}, {"rtwaveamp", 100.0f},
-        {"rtwavefreq", 100.0f}, {"raytracedlighting", 3.0f}, {"rtfullres", 1.0f}, {"rtroomsun", 1.0f},
-        {"rtsoftlamps", 0.0f}, {"rtrealisticfalloff", 0.0f}, {"rtminbrightness", 0.0f},
-        {"rteyebrighten", 30.0f}, {"rteyeseconds", 2.5f}, {"rteyesensitivity", 0.0f},
-        {"rtsunrays", 1.0f}, {"rtaorays", 1.0f}, {"rtpointrays", 1.0f}, {"rtbouncerays", 1.0f},
-        {"upscaling", 0.0f}, {"fsrquality", 3.0f}, {"fsrsharpness", 1.6f},
+    std::map<std::string, float> out = {
+        {"viewdistance", u.viewDistance},
+        {"shadows", u.shadows ? 1.0f : 0.0f},
+        {"shadowdistance", u.shadowDistance},
+        {"antialiasing", static_cast<float>(u.antiAliasing)},
+        {"fxaa", u.fxaa ? 1.0f : 0.0f},
+        {"normalmapping", u.normalMapping ? 1.0f : 0.0f},
+        {"normalmapstrength", u.normalMapStrength},
+        {"groundclutter", static_cast<float>(u.groundClutter)},
+        {"grassenabled", u.grass ? 1.0f : 0.0f},
+        {"grassdensity", static_cast<float>(u.grassDensity)},
+        {"grassheight", static_cast<float>(u.grassHeight)},
+        {"grassdistance", static_cast<float>(u.grassDistance)},
+        {"lensflare", u.lensFlare},
+        {"sharpstars", u.sharpStars ? 1.0f : 0.0f},
+        {"sunshafts", u.sunShafts ? 1.0f : 0.0f},
+        {"lightshafts", static_cast<float>(u.lightShafts)},
+        {"fogskyblend", u.fogSkyBlend},
+        {"specular", u.specular ? 1.0f : 0.0f},
+        {"environmentdetail", static_cast<float>(u.environmentDetail)},
+        {"groundclutterdistance", static_cast<float>(u.groundClutterDistance)},
+        {"particledensity", static_cast<float>(u.particleDensity)},
+        {"weatherdetail", static_cast<float>(u.weatherDetail)},
+        {"texturecompression", u.textureCompression ? 1.0f : 0.0f},
+        {"interactivewater", u.interactiveWater ? 1.0f : 0.0f},
     };
-    std::map<std::string, float> extras;
-    for (const auto& e : wowee::ui::kSuperUltraExtras) extras[e.key] = e.value;
-    CHECK(extras == expected);
+    for (const auto& r : wowee::ui::presetRowValues(true)) out[r.row->key] = r.value;
+    for (const auto& e : wowee::ui::kSuperUltraDebugValues) out[e.key] = e.value;
+    return out;
+}
 
-    // Every extra is a real row of a graphics page, inside its range, and
-    // where the user's file had no row, it is the schema's default.
+/// The settings file's key for a schema key: the same without underscores,
+/// but for these, which the file spells its own way (game_screen_minimap.cpp).
+std::string schemaKeyOfFileKey(const std::string& fileKey) {
+    static const std::map<std::string, std::string> kRenamed = {
+        {"ground_clutter_density", "groundclutter"},
+        {"rt_full_resolution", "rtfullres"},
+        {"dbg_interior_unlit", "dbginteriorbase"},
+        {"upscaling_mode", "upscaling"},
+        {"graphics_preset", "graphicspreset"},
+    };
+    if (auto it = kRenamed.find(fileKey); it != kRenamed.end()) return it->second;
+    std::string key;
+    for (char c : fileKey) {
+        if (c != '_') key += c;
+    }
+    return key;
+}
+
+}  // namespace
+
+TEST_CASE("Super-Ultra is the user's own settings of 2026-11-14", "[settings]") {
+    // User decision 2026-11-14: every setting of theirs, the Debug pages' too.
+    // tests/data/super_ultra_user_settings.cfg is the rows of their settings
+    // file a preset should set, copied as the file spells them; Super-Ultra
+    // has to give each exactly, and set nothing the file does not have.
+    const std::string file = wowee::test::slurp("tests/data/super_ultra_user_settings.cfg");
+    REQUIRE(file.size() > 500);
+    std::map<std::string, float> user;
+    std::istringstream lines(file);
+    for (std::string line; std::getline(lines, line);) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty() || line[0] == '#') continue;
+        const auto eq = line.find('=');
+        REQUIRE(eq != std::string::npos);
+        user[schemaKeyOfFileKey(line.substr(0, eq))] = std::stof(line.substr(eq + 1));
+    }
+    // It is the fifth preset, stored as 5, so a saved 0-4 means what it did.
+    REQUIRE(user.count("graphicspreset") == 1);
+    CHECK(user["graphicspreset"] == 5.0f);
+    user.erase("graphicspreset");
+
     std::size_t count = 0;
     const auto* schema = wowee::ui::clientSettingsSchema(count);
-    for (const auto& [key, value] : extras) {
-        const wowee::ui::SettingDesc* row = nullptr;
+    const auto row = [&](const std::string& key) -> const wowee::ui::SettingDesc* {
         for (std::size_t i = 0; i < count; ++i) {
-            if (key == schema[i].key) row = &schema[i];
+            if (key == schema[i].key) return &schema[i];
         }
-        INFO(key);
-        REQUIRE(row != nullptr);
-        CHECK(wowee::ui::isGraphicsCategory(row->category));
-        CHECK(std::string(row->category).rfind("Debug", 0) != 0);
-        if (row->kind == wowee::ui::SettingKind::Bool) {
-            CHECK((value == 0.0f || value == 1.0f));
-        } else {
-            CHECK(value >= row->minValue);
-            CHECK(value <= row->maxValue);
-        }
-        static const std::set<std::string> fromFile = {
-            "fogstrength", "mistdensity", "shadowresolution", "shadowcascades", "texturefiltering",
-            "raytracedlighting", "rtfullres", "upscaling", "fsrquality", "fsrsharpness"};
-        if (!fromFile.count(key)) CHECK(value == row->defaultValue);
+        return nullptr;
+    };
+
+    const auto produced = superUltraSettings();
+    for (const auto& [key, value] : user) {
+        INFO(key << ": the user has " << value);
+        REQUIRE(row(key) != nullptr);
+        const auto it = produced.find(key);
+        REQUIRE(it != produced.end());
+        CHECK(it->second == Catch::Approx(value).margin(1e-4));
     }
+    for (const auto& [key, value] : produced) {
+        INFO(key << " is set by Super-Ultra to " << value);
+        // Rows only some builds have: off, and the debug build's jitter,
+        // at their defaults - the user's file has them so (framegen 0,
+        // fsr2_jitter_sign 0.38) but not under the schema's name.
+        if (key == "framegen" || key == "fsrjittersign") {
+            CHECK(value == row(key)->defaultValue);
+            continue;
+        }
+        CHECK(user.count(key) == 1);
+        // And inside the row's own range, which the loader clamps to.
+        const auto* r = row(key);
+        REQUIRE(r != nullptr);
+        if (r->kind != wowee::ui::SettingKind::Bool) {
+            CHECK(value >= r->minValue);
+            CHECK(value <= r->maxValue);
+        }
+    }
+}
+
+TEST_CASE("Super-Ultra alone sets the Debug pages, and never the debug view", "[settings]") {
+    std::size_t count = 0;
+    const auto* schema = wowee::ui::clientSettingsSchema(count);
+    std::set<std::string> keys;
+    for (const auto& e : wowee::ui::kSuperUltraDebugValues) {
+        INFO(e.key);
+        CHECK(keys.insert(e.key).second);
+        const wowee::ui::SettingDesc* r = nullptr;
+        for (std::size_t i = 0; i < count; ++i) {
+            if (std::string(e.key) == schema[i].key) r = &schema[i];
+        }
+        REQUIRE(r != nullptr);
+        CHECK(std::string(r->category).rfind("Debug", 0) == 0);
+        // A diagnostic picture would make the game look broken.
+        CHECK(std::string(e.key) != "dbgview");
+    }
+    // Every Debug-page row the settings file keeps (all but the view).
+    for (std::size_t i = 0; i < count; ++i) {
+        if (std::string(schema[i].category).rfind("Debug", 0) != 0) continue;
+        const std::string key = schema[i].key;
+        INFO(key);
+        CHECK((key == "dbgview" || keys.count(key) == 1));
+    }
+    // The panel applies them under Super-Ultra only.
+    const std::string panel = wowee::test::slurp("src/ui/settings_panel.cpp");
+    const size_t at = panel.find("void SettingsPanel::applyGraphicsPreset");
+    REQUIRE(at != std::string::npos);
+    const std::string body = panel.substr(at, panel.find("\n}\n", at) - at);
+    const size_t gate = body.find("if (preset == GraphicsPreset::SUPER_ULTRA)");
+    REQUIRE(gate != std::string::npos);
+    CHECK(body.find("kSuperUltraDebugValues", gate) != std::string::npos);
+    CHECK(body.find("kSuperUltraDebugValues") > gate);
 }
 
 TEST_CASE("ray tracing is no longer called an experiment", "[settings]") {
@@ -779,10 +860,11 @@ TEST_CASE("nothing writes a live setting without the field it is saved from", "[
     }
 }
 
-TEST_CASE("no preset turns the client's specular option on", "[settings]") {
+TEST_CASE("none of the client's own levels turns its specular option on", "[settings]") {
     // The client's cvar defaults to "0" (0x0078e1a0) and the exe holds no
     // quality presets that would set it; only VideoHardware.dbc rows do.
-    for (int i = 0; i < wowee::ui::kGraphicsPresetCount; ++i) {
+    // Super-Ultra, the user's picture, has it on (2026-11-14).
+    for (int i = 0; i < 4; ++i) {
         INFO("preset index " << i);
         CHECK_FALSE(wowee::ui::kGraphicsPresets[i].specular);
     }
