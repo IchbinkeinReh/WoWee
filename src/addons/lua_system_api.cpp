@@ -9742,6 +9742,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 // ChatFrame_RegisterForChannels reads: it steps two at a time
                 // and fills channelList and zoneChannelList together.
                 {"GetChatWindowChannels", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetChatWindowChannels(index)");   // 0x004feff0
             ChatWindowSettings* w = chatWindow(L, 1);
             if (!w) return 0;
             // Same rule, same reason: ChatFrame_RemoveAllChannels runs beside
@@ -9792,6 +9793,8 @@ void registerSystemLuaAPI(lua_State* L) {
                 // Zero is a real answer for a channel that is not zone based,
                 // and passes that test - zero being true in Lua.
                 {"AddChatWindowChannel", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1) || !lua_isstring(L, 2))
+                return luaL_error(L, "Usage: AddChatWindowChannel(index, \"channel\")");
             ChatWindowSettings* w = chatWindow(L, 1);
             const char* name = lua_isstring(L, 2) ? lua_tostring(L, 2) : nullptr;
             if (!w || !name) return 0;
@@ -9815,6 +9818,8 @@ void registerSystemLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"RemoveChatWindowChannel", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1) || !lua_isstring(L, 2))   // 0x004ff0d0
+                return luaL_error(L, "Usage: RemoveChatWindowChannel(index, \"channel\")");
             ChatWindowSettings* w = chatWindow(L, 1);
             const char* name = lua_isstring(L, 2) ? lua_tostring(L, 2) : nullptr;
             if (!w || !name) return 0;
