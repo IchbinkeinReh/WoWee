@@ -3,6 +3,7 @@
 
 #include "rendering/animation/melee_anim_chains.hpp"
 #include "core/world_loader.hpp"
+#include "core/config_paths.hpp"
 #include "core/application.hpp"
 #include "core/world_entry_callback_handler.hpp"
 #include "rendering/animation/animation_ids.hpp"
@@ -1585,14 +1586,11 @@ void WorldLoader::cancelWorldPreload() {
 
 void WorldLoader::saveLastWorldInfo(uint32_t mapId, const std::string& mapName,
                                      float serverX, float serverY) {
-#ifdef _WIN32
-    const char* base = std::getenv("APPDATA");
-    std::string dir = base ? std::string(base) + "\\wowee" : ".";
-#else
-    const char* home = std::getenv("HOME");
-    std::string dir = home ? std::string(home) + "/.wowee" : ".";
-#endif
-    std::filesystem::create_directories(dir);
+    // The config folder, as settings.cfg: on iOS only the container's
+    // Library and Documents can be written, and $HOME/.wowee threw here.
+    const std::string dir = core::getConfigRoot();
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
     std::ofstream f(dir + "/last_world.cfg");
     if (f) {
         f << mapId << "\n" << mapName << "\n" << serverX << "\n" << serverY << "\n";
@@ -1600,13 +1598,7 @@ void WorldLoader::saveLastWorldInfo(uint32_t mapId, const std::string& mapName,
 }
 
 WorldLoader::LastWorldInfo WorldLoader::loadLastWorldInfo() const {
-#ifdef _WIN32
-    const char* base = std::getenv("APPDATA");
-    std::string dir = base ? std::string(base) + "\\wowee" : ".";
-#else
-    const char* home = std::getenv("HOME");
-    std::string dir = home ? std::string(home) + "/.wowee" : ".";
-#endif
+    const std::string dir = core::getConfigRoot();
     LastWorldInfo info;
     std::ifstream f(dir + "/last_world.cfg");
     if (!f) return info;

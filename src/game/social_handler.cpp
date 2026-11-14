@@ -2,6 +2,7 @@
 #include "core/local_time.hpp"
 #include "game/item_text.hpp"
 #include "game/social_handler.hpp"
+#include "core/config_paths.hpp"
 #include <string_view>
 #include "addons/lua_api_registrations.hpp"
 #include "ui/framexml_takeover.hpp"
@@ -38,16 +39,8 @@ namespace game {
 namespace {
 
 std::filesystem::path guildNameCachePath() {
-#ifdef _WIN32
-    if (const char* appData = std::getenv("APPDATA")) {
-        return std::filesystem::path(appData) / "wowee" / "guild_names.tsv";
-    }
-#else
-    if (const char* home = std::getenv("HOME")) {
-        return std::filesystem::path(home) / ".wowee" / "guild_names.tsv";
-    }
-#endif
-    return std::filesystem::path("guild_names.tsv");
+    // The config folder, as settings.cfg: $HOME/.wowee cannot be written on iOS.
+    return std::filesystem::path(core::getConfigRoot()) / "guild_names.tsv";
 }
 
 // The three places 0x005216f0 sends a game error, as its table at 0x00ac8af0

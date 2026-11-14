@@ -834,7 +834,8 @@ std::string CharacterScreen::getConfigDir() {
 
 void CharacterScreen::saveLastCharacter(uint64_t guid) {
     std::string dir = getConfigDir();
-    std::filesystem::create_directories(dir);
+    std::error_code ec;   // a folder that cannot be made must not end the login
+    std::filesystem::create_directories(dir, ec);
     std::ofstream f(dir + "/last_character.cfg");
     if (f) f << guid;
 }
