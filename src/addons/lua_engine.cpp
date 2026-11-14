@@ -13667,6 +13667,20 @@ void LuaEngine::registerCoreAPI() {
         // A bare table has no GetTextColor, so that indexes nil and the enable
         // path raises - for every checkbox, slider and dropdown in the options
         // panels, which is where a control most needs to come back to life.
+        "local function fontName(self)\n"
+        "    local n = rawget(self, 'name') or (self.GetName and self:GetName())\n"
+        "    return tostring(n or '<unnamed>')\n"
+        "end\n"
+        "local function fontUsage(self, usage) error(usage:format(fontName(self)), 3) end\n"
+        "local justifyAxis = {LEFT = 'H', CENTER = 'H', RIGHT = 'H', TOP = 'V', MIDDLE = 'V', BOTTOM = 'V'}\n"
+        "local function fontJustify(self, j, axis)\n"
+        "    local u = type(j) == 'string' and j:upper()\n"
+        "    if not u or not justifyAxis[u] then\n"
+        "        fontUsage(self, 'Usage: %s:SetJustify' .. axis .. '(\"justify\")')\n"
+        "    end\n"
+        "    if justifyAxis[u] == axis then return u end\n"
+        "    return axis == 'H' and 'LEFT' or 'TOP'\n"
+        "end\n"
         "local fontMT = { __index = {\n"
         "    GetTextColor = function(self) return self.r, self.g, self.b, self.a end,\n"
         "    SetTextColor = function(self, r, g, b, a)\n"
@@ -13679,12 +13693,59 @@ void LuaEngine::registerCoreAPI() {
         "        self.font, self.height, self.outline = f, h, flags\n"
         "    end,\n"
         "    GetFontHeight = function(self) return self.height end,\n"
-        "    GetShadowColor = function(self) return 0, 0, 0, 1 end,\n"
-        "    GetShadowOffset = function(self) return 0, 0 end,\n"
-        "    GetSpacing = function(self) return 0 end,\n"
+        // What the setters below keep, answered back.
+        "    GetShadowColor = function(self)\n"
+        "        return self.shadowR or 0, self.shadowG or 0, self.shadowB or 0, self.shadowA or 1\n"
+        "    end,\n"
+        "    GetShadowOffset = function(self) return self.shadowX or 0, self.shadowY or 0 end,\n"
+        "    GetSpacing = function(self) return self.spacing or 0 end,\n"
         "    GetJustifyH = function(self) return self.justifyH or 'LEFT' end,\n"
         "    GetJustifyV = function(self) return self.justifyV or 'MIDDLE' end,\n"
         "    GetObjectType = function(self) return 'Font' end,\n"
+        // The font object's own setters (0x004a3bc0 and its neighbours), each
+        // the usage error without its arguments. SetAlpha keeps round(a * 255)
+        // as a byte, unclamped, as a font string's does.
+        "    SetAlpha = function(self, a)\n"
+        "        if not tonumber(a) then fontUsage(self, 'Usage: %s:SetAlpha(alpha)') end\n"
+        "        local n = math.floor(tonumber(a) * 255 + 0.5) % 256\n"
+        "        self.alpha = n / 255\n"
+        "    end,\n"
+        "    GetAlpha = function(self) return self.alpha or 1 end,\n"
+        "    SetShadowOffset = function(self, x, y)\n"
+        "        if not tonumber(x) or not tonumber(y) then fontUsage(self, 'Usage: %s:SetShadowOffset(x, y)') end\n"
+        "        self.shadowX, self.shadowY = tonumber(x), tonumber(y)\n"
+        "    end,\n"
+        "    SetSpacing = function(self, n)\n"
+        "        if not tonumber(n) then fontUsage(self, 'Usage: %s:SetSpacing(spacing)') end\n"
+        "        self.spacing = tonumber(n)\n"
+        "    end,\n"
+        // SetJustifyH / SetJustifyV (0x004a4930, 0x004a49c0): the one six-name
+        // table, each keeping its own axis.
+        "    SetJustifyH = function(self, j) self.justifyH = fontJustify(self, j, 'H') end,\n"
+        "    SetJustifyV = function(self, j) self.justifyV = fontJustify(self, j, 'V') end,\n"
+        // IsObjectType (0x004a4170): a string, or the usage error.
+        "    IsObjectType = function(self, t)\n"
+        "        if type(t) ~= 'string' then fontUsage(self, 'Usage: %s:IsObjectType(\"TYPE\")') end\n"
+        "        local l = t:lower()\n"
+        "        if l == 'font' or l == 'object' then return 1 end\n"
+        "        return nil\n"
+        "    end,\n"
+        // SetFontObject (0x004a3790): another font object, a font's name, or
+        // nil; another type is the usage error, a name with no font behind it
+        // its own error. Takes the other font's settings, as CopyFontObject.
+        "    SetFontObject = function(self, src)\n"
+        "        if src == nil then return end\n"
+        "        if type(src) == 'string' then\n"
+        "            local f = _G[src]\n"
+        "            if type(f) ~= 'table' then\n"
+        "                error((\"%s:SetFontObject(): Couldn't find font named %s\"):format(fontName(self), src), 2)\n"
+        "            end\n"
+        "            src = f\n"
+        "        elseif type(src) ~= 'table' then\n"
+        "            fontUsage(self, 'Usage: %s:SetFontObject(font or \"font\" or nil)')\n"
+        "        end\n"
+        "        self:CopyFontObject(src)\n"
+        "    end,\n"
         // A font object is its own font object, which is what SetFontObject
         // being handed one relies on.
         "    GetFontObject = function(self) return self end,\n"
