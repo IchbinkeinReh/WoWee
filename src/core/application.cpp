@@ -1049,7 +1049,10 @@ bool Application::initialize() {
     // where the data is instead of opening a login nobody can get through.
     {
 #ifdef WOWEE_HAVE_ASSET_PANEL
-        constexpr bool builder = true;
+        // WOWEE_DIAG_NO_BUILDER=1: act as a build without the asset builder,
+        // so a desktop shows the phones' data screen and goes through their
+        // start path - the only way to run that path on a machine at hand.
+        const bool builder = !core::envFlagEnabled("WOWEE_DIAG_NO_BUILDER", false);
 #else
         constexpr bool builder = false;
 #endif
