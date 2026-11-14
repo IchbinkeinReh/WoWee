@@ -1,5 +1,6 @@
 # Writes core/version.hpp from `git describe`, so the version shown in the client
-# is always the last tag reachable from HEAD.
+# is the last tag reachable from HEAD - or, in a CI branch build, the tag that
+# build's release will get (below).
 #
 # Run as a script (cmake -P) from a build-time custom target, not just at configure
 # time - otherwise tagging a release would not change the binary until someone
@@ -10,7 +11,23 @@
 find_package(Git QUIET)
 
 set(WOWEE_GIT_VERSION "unknown")
-if(GIT_FOUND)
+# A CI build of a branch push names itself what the release job will tag it
+# (.github/workflows/build.yml: build-<run number>-<8 hex of the commit>). The
+# tag is made after the builds, so `git describe` here found the previous
+# push's: the IPA of commit 58f35462 reported build-508-315532be, another
+# commit, and the update check offered each build its own release as newer. A
+# tag build (release.yml, v*) keeps its tag; WOWEE_BUILD_VERSION overrides both.
+set(_ci_version "")
+if(DEFINED ENV{WOWEE_BUILD_VERSION} AND NOT "$ENV{WOWEE_BUILD_VERSION}" STREQUAL "")
+    set(_ci_version "$ENV{WOWEE_BUILD_VERSION}")
+elseif("$ENV{GITHUB_ACTIONS}" STREQUAL "true" AND NOT "$ENV{GITHUB_REF_TYPE}" STREQUAL "tag"
+       AND DEFINED ENV{GITHUB_RUN_NUMBER} AND DEFINED ENV{GITHUB_SHA})
+    string(SUBSTRING "$ENV{GITHUB_SHA}" 0 8 _ci_sha)
+    set(_ci_version "build-$ENV{GITHUB_RUN_NUMBER}-${_ci_sha}")
+endif()
+if(_ci_version)
+    set(WOWEE_GIT_VERSION "${_ci_version}")
+elseif(GIT_FOUND)
     # The last tag reachable from HEAD - the released version this build descends from.
     execute_process(
         COMMAND ${GIT_EXECUTABLE} describe --tags --abbrev=0
