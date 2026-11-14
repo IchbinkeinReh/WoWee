@@ -1417,3 +1417,21 @@ TEST_CASE("every other handler keeps its named arguments", "[framexml][emit]") {
     REQUIRE(has(r.lua, ":SetScript(\"OnUpdate\", function(self, elapsed, ...)"));
     REQUIRE_FALSE(has(r.lua, "local arg1"));
 }
+
+TEST_CASE("A virtual AnimationGroup becomes a template a group can inherit", "[framexml][emit]") {
+    // 0x0049e350 -> 0x0049a060: CreateAnimationGroup(name, "X") copies the
+    // virtual group X; an XML group with inherits="X" does the same, and only
+    // asks for it when it is there, as the loader warns and goes on.
+    XmlNode root = parseOrFail(
+        "<Ui><AnimationGroup name=\"PulseTemplate\" virtual=\"true\" looping=\"BOUNCE\">"
+        "<Alpha change=\"-1\" duration=\"0.5\"/></AnimationGroup>"
+        "<Frame name=\"Pulser\"><Animations>"
+        "<AnimationGroup name=\"$parentPulse\" inherits=\"PulseTemplate\"/>"
+        "</Animations></Frame></Ui>");
+    const EmitResult r = emitFrameXml(root);
+    REQUIRE(has(r.lua, "__WoweeAnimGroupTemplates[\"PulseTemplate\"] = function(__g)"));
+    REQUIRE(has(r.lua, "__g:SetLooping(\"BOUNCE\")"));
+    REQUIRE(has(r.lua, "__g:CreateAnimation(\"Alpha\")"));
+    REQUIRE(has(r.lua, "CreateAnimationGroup(\"PulserPulse\", (__WoweeAnimGroupTemplates and "
+                       "__WoweeAnimGroupTemplates[\"PulseTemplate\"] and \"PulseTemplate\" or nil))"));
+}

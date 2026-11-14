@@ -458,6 +458,114 @@ struct Emitter {
         }
     }
 
+    /// What an <AnimationGroup> declares, onto the group in `gvar`: its
+    /// looping and initial offset, its scripts and its animations. Shared by
+    /// a frame's own groups and by a virtual group a template is made of.
+    void emitAnimationGroupBody(const XmlNode& group, const std::string& gvar,
+                                const std::string& name) {
+        if (const std::string* loop = group.attr("looping")) {
+            line(gvar + ":SetLooping(" + quote(*loop) + ")");
+        }
+        // initialOffsetX/Y (CSimpleAnimGroup's loader, 0x0049a060).
+        if (group.attr("initialOffsetX") || group.attr("initialOffsetY")) {
+            line(gvar + ":SetInitialOffset(" + group.attrOr("initialOffsetX", "0") + ", " +
+                 group.attrOr("initialOffsetY", "0") + ")");
+        }
+        for (const XmlNode& gs : group.children) {
+            if (gs.name == "Scripts") emitScripts(gs, gvar);
+        }
+        for (const XmlNode& a : group.children) {
+            if (a.name != "Alpha" && a.name != "Translation" &&
+                a.name != "Scale" && a.name != "Rotation" &&
+                a.name != "Path" && a.name != "Animation") {
+                continue;
+            }
+            const std::string avar = nextVar();
+            const std::string aname = substituteParent(
+                a.attrOr("name", ""), name);
+            line(avar + " = " + gvar + ":CreateAnimation(" +
+                 quote(a.name == "Animation" ? "Alpha" : a.name) +
+                 (aname.empty() ? "" : ", " + quote(aname)) + ")");
+            if (const std::string* d = a.attr("duration"))
+                line(avar + ":SetDuration(" + *d + ")");
+            if (const std::string* o = a.attr("order"))
+                line(avar + ":SetOrder(" + *o + ")");
+            if (const std::string* sd = a.attr("startDelay"))
+                line(avar + ":SetStartDelay(" + *sd + ")");
+            if (const std::string* ed = a.attr("endDelay"))
+                line(avar + ":SetEndDelay(" + *ed + ")");
+            if (const std::string* sm = a.attr("smoothing"))
+                line(avar + ":SetSmoothing(" + quote(*sm) + ")");
+            if (const std::string* fr = a.attr("maxFramerate"))
+                line(avar + ":SetMaxFramerate(" + *fr + ")");
+            if (const std::string* deg = a.attr("degrees"))
+                line(avar + ":SetDegrees(" + *deg + ")");
+            if (const std::string* rad = a.attr("radians"))
+                line(avar + ":SetRadians(" + *rad + ")");
+            if (const XmlNode* origin = a.child("Origin")) {
+                float ox = 0.0f, oy = 0.0f;
+                if (const XmlNode* off = origin->child("Offset")) readDimension(*off, ox, oy);
+                line(avar + ":SetOrigin(" + quote(origin->attrOr("point", "CENTER")) + ", " +
+                     std::to_string(ox) + ", " + std::to_string(oy) + ")");
+            }
+            // A Path's curve and its <ControlPoints>.
+            if (const std::string* cv = a.attr("curve"))
+                line(avar + ":SetCurve(" + quote(*cv) + ")");
+            if (const XmlNode* cps = a.child("ControlPoints")) {
+                for (const XmlNode& cp : cps->children) {
+                    if (cp.name != "ControlPoint") continue;
+                    const std::string cpName = substituteParent(cp.attrOr("name", ""), name);
+                    const std::string cpVar = nextVar();
+                    line(cpVar + " = " + avar + ":CreateControlPoint(" +
+                         (cpName.empty() ? "nil" : quote(cpName)) + ", nil, " +
+                         cp.attrOr("order", "nil") + ")");
+                    if (cp.attr("offsetX") || cp.attr("offsetY"))
+                        line(cpVar + ":SetOffset(" + cp.attrOr("offsetX", "0") + ", " +
+                             cp.attrOr("offsetY", "0") + ")");
+                }
+            }
+            if (const std::string* c = a.attr("change"))
+                line(avar + ":SetChange(" + *c + ")");
+            if (a.attr("offsetX") || a.attr("offsetY")) {
+                line(avar + ":SetOffset(" + a.attrOr("offsetX", "0") +
+                     ", " + a.attrOr("offsetY", "0") + ")");
+            }
+            // On the group, which is the animation's parent. This
+            // wrote it on the frame, so alertframes.xml's
+            // `frame.waitAndAnimOut.animOut:SetStartDelay(4.05)` found
+            // a nil and raised - taking the Play() on the line after it
+            // with it, which is the call that hides the banner.
+            if (const std::string* pk = a.attr("parentKey"))
+                line(gvar + "." + *pk + " = " + avar);
+            // An animation's own <Scripts>. Dropping these cost the
+            // alert banners: alertframes.xml hangs
+            // `self:GetRegionParent():Hide()` off the fade's
+            // OnFinished, so without it an achievement banner faded to
+            // nothing and stayed there.
+            for (const XmlNode& sc : a.children) {
+                if (sc.name == "Scripts") emitScripts(sc, avar);
+            }
+        }
+    }
+
+    /// A virtual <AnimationGroup name="X" virtual="true"> at the top of a file:
+    /// a template CreateAnimationGroup(name, "X") copies (0x0049e350 ->
+    /// 0x0049a060), and so does an XML group that says inherits="X".
+    void emitAnimationGroupTemplate(const XmlNode& group) {
+        const std::string name = group.attrOr("name", "");
+        if (name.empty()) {
+            result.warnings.emplace_back("virtual AnimationGroup with no name was skipped");
+            return;
+        }
+        line("__WoweeAnimGroupTemplates = __WoweeAnimGroupTemplates or {}");
+        line("__WoweeAnimGroupTemplates[" + quote(name) + "] = function(__g)");
+        // A virtual group can itself inherit one, which is copied first.
+        if (const std::string* inh = group.attr("inherits"); inh && !inh->empty())
+            line("__WoweeApplyAnimGroupTemplate(__g, " + quote(*inh) + ", " + quote(name) + ")");
+        emitAnimationGroupBody(group, "__g", "");
+        line("end");
+    }
+
     /// <Animations> - one or more <AnimationGroup>, each holding <Alpha>,
     /// <Translation> and friends.
     ///
@@ -480,94 +588,19 @@ struct Emitter {
                 const std::string gvar = nextVar();
                 const std::string gname = substituteParent(
                     group.attrOr("name", ""), name);
+                // inherits= copies a virtual group, if there is one by that
+                // name; the loader warns and goes on where there is not.
+                std::string inherits;
+                if (const std::string* inh = group.attr("inherits"); inh && !inh->empty()) {
+                    inherits = ", (__WoweeAnimGroupTemplates and __WoweeAnimGroupTemplates[" +
+                               quote(*inh) + "] and " + quote(*inh) + " or nil)";
+                }
                 line(gvar + " = " + var + ":CreateAnimationGroup(" +
-                     (gname.empty() ? "nil" : quote(gname)) + ")");
-                if (const std::string* loop = group.attr("looping")) {
-                    line(gvar + ":SetLooping(" + quote(*loop) + ")");
-                }
-                // initialOffsetX/Y (CSimpleAnimGroup's loader, 0x0049a060).
-                if (group.attr("initialOffsetX") || group.attr("initialOffsetY")) {
-                    line(gvar + ":SetInitialOffset(" + group.attrOr("initialOffsetX", "0") + ", " +
-                         group.attrOr("initialOffsetY", "0") + ")");
-                }
+                     (gname.empty() ? "nil" : quote(gname)) + inherits + ")");
                 if (const std::string* pk = group.attr("parentKey")) {
                     line(var + "." + *pk + " = " + gvar);
                 }
-                for (const XmlNode& gs : group.children) {
-                    if (gs.name == "Scripts") emitScripts(gs, gvar);
-                }
-                for (const XmlNode& a : group.children) {
-                    if (a.name != "Alpha" && a.name != "Translation" &&
-                        a.name != "Scale" && a.name != "Rotation" &&
-                        a.name != "Path" && a.name != "Animation") {
-                        continue;
-                    }
-                    const std::string avar = nextVar();
-                    const std::string aname = substituteParent(
-                        a.attrOr("name", ""), name);
-                    line(avar + " = " + gvar + ":CreateAnimation(" +
-                         quote(a.name == "Animation" ? "Alpha" : a.name) +
-                         (aname.empty() ? "" : ", " + quote(aname)) + ")");
-                    if (const std::string* d = a.attr("duration"))
-                        line(avar + ":SetDuration(" + *d + ")");
-                    if (const std::string* o = a.attr("order"))
-                        line(avar + ":SetOrder(" + *o + ")");
-                    if (const std::string* sd = a.attr("startDelay"))
-                        line(avar + ":SetStartDelay(" + *sd + ")");
-                    if (const std::string* ed = a.attr("endDelay"))
-                        line(avar + ":SetEndDelay(" + *ed + ")");
-                    if (const std::string* sm = a.attr("smoothing"))
-                        line(avar + ":SetSmoothing(" + quote(*sm) + ")");
-                    if (const std::string* fr = a.attr("maxFramerate"))
-                        line(avar + ":SetMaxFramerate(" + *fr + ")");
-                    if (const std::string* deg = a.attr("degrees"))
-                        line(avar + ":SetDegrees(" + *deg + ")");
-                    if (const std::string* rad = a.attr("radians"))
-                        line(avar + ":SetRadians(" + *rad + ")");
-                    if (const XmlNode* origin = a.child("Origin")) {
-                        float ox = 0.0f, oy = 0.0f;
-                        if (const XmlNode* off = origin->child("Offset")) readDimension(*off, ox, oy);
-                        line(avar + ":SetOrigin(" + quote(origin->attrOr("point", "CENTER")) + ", " +
-                             std::to_string(ox) + ", " + std::to_string(oy) + ")");
-                    }
-                    // A Path's curve and its <ControlPoints>.
-                    if (const std::string* cv = a.attr("curve"))
-                        line(avar + ":SetCurve(" + quote(*cv) + ")");
-                    if (const XmlNode* cps = a.child("ControlPoints")) {
-                        for (const XmlNode& cp : cps->children) {
-                            if (cp.name != "ControlPoint") continue;
-                            const std::string cpName = substituteParent(cp.attrOr("name", ""), name);
-                            const std::string cpVar = nextVar();
-                            line(cpVar + " = " + avar + ":CreateControlPoint(" +
-                                 (cpName.empty() ? "nil" : quote(cpName)) + ", nil, " +
-                                 cp.attrOr("order", "nil") + ")");
-                            if (cp.attr("offsetX") || cp.attr("offsetY"))
-                                line(cpVar + ":SetOffset(" + cp.attrOr("offsetX", "0") + ", " +
-                                     cp.attrOr("offsetY", "0") + ")");
-                        }
-                    }
-                    if (const std::string* c = a.attr("change"))
-                        line(avar + ":SetChange(" + *c + ")");
-                    if (a.attr("offsetX") || a.attr("offsetY")) {
-                        line(avar + ":SetOffset(" + a.attrOr("offsetX", "0") +
-                             ", " + a.attrOr("offsetY", "0") + ")");
-                    }
-                    // On the group, which is the animation's parent. This
-                    // wrote it on the frame, so alertframes.xml's
-                    // `frame.waitAndAnimOut.animOut:SetStartDelay(4.05)` found
-                    // a nil and raised - taking the Play() on the line after it
-                    // with it, which is the call that hides the banner.
-                    if (const std::string* pk = a.attr("parentKey"))
-                        line(gvar + "." + *pk + " = " + avar);
-                    // An animation's own <Scripts>. Dropping these cost the
-                    // alert banners: alertframes.xml hangs
-                    // `self:GetRegionParent():Hide()` off the fade's
-                    // OnFinished, so without it an achievement banner faded to
-                    // nothing and stayed there.
-                    for (const XmlNode& sc : a.children) {
-                        if (sc.name == "Scripts") emitScripts(sc, avar);
-                    }
-                }
+                emitAnimationGroupBody(group, gvar, name);
             }
         }
     }
@@ -1791,6 +1824,8 @@ EmitResult emitFrameXml(const XmlNode& rootIn) {
             if (const std::string* file = node.attr("file")) e.result.includeFiles.push_back(*file);
         } else if (node.name == "Font") {
             e.emitFont(node);
+        } else if (node.name == "AnimationGroup" && node.attrBool("virtual")) {
+            e.emitAnimationGroupTemplate(node);
         } else if (isFrameElement(node.name)) {
             e.emitFrame(node, "", "");
         } else if (node.name == "Texture" || node.name == "FontString") {

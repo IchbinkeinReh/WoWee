@@ -11719,11 +11719,38 @@ void LuaEngine::registerCoreAPI() {
         //
         // Regions carry their methods on themselves rather than on a shared
         // metatable, so installRegionMethods copies these two off the globals.
-        "function __WoweeCreateAnimationGroup(self, name)\n"
+        // CreateAnimationGroup(name, inherits) (0x0049e350): the second
+        // argument names a virtual <AnimationGroup> to copy (0x0049a060) -
+        // "Couldn't find inherited node" for one there is not, "Recursively
+        // inherited node" for one that comes back to itself.
+        "local applyingGroups = {}\n"
+        "function __WoweeApplyAnimGroupTemplate(g, tname, who)\n"
+        "    local t = __WoweeAnimGroupTemplates and __WoweeAnimGroupTemplates[tname]\n"
+        "    if not t then\n"
+        "        error(('%s:CreateAnimationGroup(): Couldn\\'t find inherited node \"%s\"'):format(who, tname), 3)\n"
+        "    end\n"
+        "    if applyingGroups[tname] then\n"
+        "        error(('%s:CreateAnimationGroup(): Recursively inherited node \"%s\"'):format(who, tname), 3)\n"
+        "    end\n"
+        "    applyingGroups[tname] = true\n"
+        "    local ok, err = pcall(t, g)\n"
+        "    applyingGroups[tname] = nil\n"
+        "    if not ok then error(err, 0) end\n"
+        "end\n"
+        "function __WoweeCreateAnimationGroup(self, name, inherits)\n"
+        "    local who = tostring(self.GetName and self:GetName() or '<unnamed>')\n"
+        "    if type(inherits) == 'string' and inherits ~= '' then\n"
+        "        if not (__WoweeAnimGroupTemplates and __WoweeAnimGroupTemplates[inherits]) then\n"
+        "            error(('%s:CreateAnimationGroup(): Couldn\\'t find inherited node \"%s\"'):format(who, inherits), 2)\n"
+        "        end\n"
+        "    end\n"
         "    local g = setmetatable({parent = self, name = name, animations = {}}, groupMeta)\n"
         "    if name then _G[name] = g end\n"
         "    self.__animGroups = self.__animGroups or {}\n"
         "    table.insert(self.__animGroups, g)\n"
+        "    if type(inherits) == 'string' and inherits ~= '' then\n"
+        "        __WoweeApplyAnimGroupTemplate(g, inherits, who)\n"
+        "    end\n"
         "    return g\n"
         "end\n"
         "mt.CreateAnimationGroup = __WoweeCreateAnimationGroup\n"
