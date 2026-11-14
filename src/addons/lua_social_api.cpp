@@ -24,6 +24,32 @@
 
 namespace wowee::addons {
 
+/// The channel commands - ChannelInvite, Kick, Ban, Unban, Mute, Unmute,
+/// Moderator, Unmoderator and SetChannelOwner - share one body in the client
+/// (0x004fe330): two strings or "Usage: %s(\"channel\", \"name\")", a
+/// player name of at most 48 characters or "Name too long", and then the
+/// packet, sent whatever the name.
+static int channelCommand(lua_State* L, game::Opcode opcode, const char* label) {
+    if (!lua_isstring(L, 1) || !lua_isstring(L, 2))
+        return luaL_error(L, "Usage: %s(\"channel\", \"name\")", label);
+    const char* ch = lua_tostring(L, 1);
+    const char* who = lua_tostring(L, 2);
+    if (std::strlen(who) > 48) return luaL_error(L, "Name too long");
+    if (auto* gh = getGameHandler(L); gh && *ch)
+        gh->channelModeration(opcode, ch, who, /*allowEmptyTarget=*/true);
+    return 0;
+}
+
+/// The one-string channel commands (0x004fe460): a string or
+/// "Usage: %s(\"channel\")", then the opcode and the channel's name.
+static int channelNameCommand(lua_State* L, game::Opcode opcode, const char* label) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: %s(\"channel\")", label);
+    if (auto* gh = getGameHandler(L); gh && gh->getChatHandler())
+        gh->getChatHandler()->sendChannelNameCommand(opcode, lua_tostring(L, 1));
+    return 0;
+}
+
+
 // The game-error rows below are named bare, as they are inside game/.
 namespace server_notice = game::server_notice;
 
@@ -2124,11 +2150,14 @@ void registerSocialLuaAPI(lua_State* L) {
                 gh->disbandArenaTeam(static_cast<uint32_t>(luaL_optnumber(L, 1, 0)));
             return 0;
         }},
-                // DeclineInvite(name) - the group invite popup's Decline.
-                // The same refusal DeclineGroup sends; the name is which
-                // invite the dialog was showing, and this client only ever
-                // holds one.
-                {"DeclineInvite",       lua_DeclineGroup},
+                // DeclineInvite("channel") (0x004ffcc0) turns down an invitation
+                // to a chat channel: CMSG_DECLINE_CHANNEL_INVITE with the
+                // channel's name. It was bound to DeclineGroup, so declining a
+                // channel invitation refused whatever party invitation was
+                // pending instead. (The party popup's own Decline is DeclineGroup.)
+                {"DeclineInvite", [](lua_State* L) -> int {
+            return channelNameCommand(L, game::Opcode::CMSG_DECLINE_CHANNEL_INVITE, "DeclineInvite");
+        }},
                 // ComplainInboxItem(index) - reporting a letter as spam. The
                 // reference asks the same question here that CanComplainInboxItem
                 // answers, before it reports anything: a row the button would
@@ -4612,49 +4641,14 @@ void registerSocialLuaAPI(lua_State* L) {
             if (gh && row >= 1) gh->sendSetDifficulty(static_cast<uint32_t>(row - 1), /*raid=*/true);
             return 0;
         }},
-                                {"ChannelBan", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const char* ch = luaL_optstring(L, 1, "");
-            const char* who = luaL_optstring(L, 2, "");
-            if (gh && ch && who && *ch && *who)
-                gh->channelModeration(game::Opcode::CMSG_CHANNEL_BAN, ch, who);
-            return 0;
-        }},
-                                {"ChannelKick", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const char* ch = luaL_optstring(L, 1, "");
-            const char* who = luaL_optstring(L, 2, "");
-            if (gh && ch && who && *ch && *who)
-                gh->channelModeration(game::Opcode::CMSG_CHANNEL_KICK, ch, who);
-            return 0;
-        }},
-                                {"ChannelModerator", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const char* ch = luaL_optstring(L, 1, "");
-            const char* who = luaL_optstring(L, 2, "");
-            if (gh && ch && who && *ch && *who)
-                gh->channelModeration(game::Opcode::CMSG_CHANNEL_MODERATOR, ch, who);
-            return 0;
-        }},
-                                {"ChannelUnmoderator", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const char* ch = luaL_optstring(L, 1, "");
-            const char* who = luaL_optstring(L, 2, "");
-            if (gh && ch && who && *ch && *who)
-                gh->channelModeration(game::Opcode::CMSG_CHANNEL_UNMODERATOR, ch, who);
-            return 0;
-        }},
+                                {"ChannelBan", [](lua_State* L) -> int { return channelCommand(L, game::Opcode::CMSG_CHANNEL_BAN, "ChannelBan"); }},
+                                {"ChannelKick", [](lua_State* L) -> int { return channelCommand(L, game::Opcode::CMSG_CHANNEL_KICK, "ChannelKick"); }},
+                                {"ChannelModerator", [](lua_State* L) -> int { return channelCommand(L, game::Opcode::CMSG_CHANNEL_MODERATOR, "ChannelModerator"); }},
+                                {"ChannelUnmoderator", [](lua_State* L) -> int { return channelCommand(L, game::Opcode::CMSG_CHANNEL_UNMODERATOR, "ChannelUnmoderator"); }},
                 // SetChannelOwner(channel, name) - the same two strings the
                 // eight moderation commands send, on an opcode that was mapped
                 // and never built.
-                {"SetChannelOwner", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const char* ch = luaL_optstring(L, 1, "");
-            const char* who = luaL_optstring(L, 2, "");
-            if (gh && ch && who && *ch && *who)
-                gh->channelModeration(game::Opcode::CMSG_CHANNEL_SET_OWNER, ch, who);
-            return 0;
-        }},
+                {"SetChannelOwner", [](lua_State* L) -> int { return channelCommand(L, game::Opcode::CMSG_CHANNEL_SET_OWNER, "SetChannelOwner"); }},
                 {"BNSetToonBlocked",          [](lua_State* L) -> int { (void)L; return 0; }},
 
                 // ---- What the summon and resurrect popups read ----
@@ -5135,40 +5129,17 @@ void registerSocialLuaAPI(lua_State* L) {
                 // them was ever sent: the opcodes existed and nothing built
                 // them, so /cinvite and the channel entries on the unit menu
                 // reached bindings with nothing behind them.
-                {"ChannelInvite", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const char* ch = luaL_optstring(L, 1, "");
-            const char* who = luaL_optstring(L, 2, "");
-            if (gh && ch && who && *ch && *who)
-                gh->channelModeration(game::Opcode::CMSG_CHANNEL_INVITE, ch, who);
-            return 0;
+                {"ChannelInvite", [](lua_State* L) -> int { return channelCommand(L, game::Opcode::CMSG_CHANNEL_INVITE, "ChannelInvite"); }},
+                                {"ChannelMute", [](lua_State* L) -> int { return channelCommand(L, game::Opcode::CMSG_CHANNEL_MUTE, "ChannelMute"); }},
+                                {"ChannelUnmute", [](lua_State* L) -> int { return channelCommand(L, game::Opcode::CMSG_CHANNEL_UNMUTE, "ChannelUnmute"); }},
+                                {"ChannelUnban", [](lua_State* L) -> int { return channelCommand(L, game::Opcode::CMSG_CHANNEL_UNBAN, "ChannelUnban"); }},
+                // 0x004fea50, 0x004fe830: the channel's name on its opcode.
+                {"ChannelToggleAnnouncements", [](lua_State* L) -> int {
+            return channelNameCommand(L, game::Opcode::CMSG_CHANNEL_ANNOUNCEMENTS, "ChannelToggleAnnouncements");
         }},
-                                {"ChannelMute", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const char* ch = luaL_optstring(L, 1, "");
-            const char* who = luaL_optstring(L, 2, "");
-            if (gh && ch && who && *ch && *who)
-                gh->channelModeration(game::Opcode::CMSG_CHANNEL_MUTE, ch, who);
-            return 0;
+                {"DisplayChannelOwner", [](lua_State* L) -> int {
+            return channelNameCommand(L, game::Opcode::CMSG_CHANNEL_OWNER, "DisplayChannelOwner");
         }},
-                                {"ChannelUnmute", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const char* ch = luaL_optstring(L, 1, "");
-            const char* who = luaL_optstring(L, 2, "");
-            if (gh && ch && who && *ch && *who)
-                gh->channelModeration(game::Opcode::CMSG_CHANNEL_UNMUTE, ch, who);
-            return 0;
-        }},
-                                {"ChannelUnban", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const char* ch = luaL_optstring(L, 1, "");
-            const char* who = luaL_optstring(L, 2, "");
-            if (gh && ch && who && *ch && *who)
-                gh->channelModeration(game::Opcode::CMSG_CHANNEL_UNBAN, ch, who);
-            return 0;
-        }},
-                {"ChannelToggleAnnouncements", [](lua_State* L) -> int { (void)L; return 0; }},
-                {"DisplayChannelOwner",      [](lua_State* L) -> int { (void)L; return 0; }},
                 {"ListChannels", [](lua_State* L) -> int {
                     // /chatlist. The client knows exactly this - which channels
                     // it is in and what number each one has - and answered
@@ -5196,14 +5167,21 @@ void registerSocialLuaAPI(lua_State* L) {
                     gh->addLocalChatLine(game::ChatType::CHANNEL_LIST, line);
                     return 0;
                 }},
-                {"ListChannelByName",        [](lua_State* L) -> int { (void)L; return 0; }},
+                // ListChannelByName (0x004fe630): CMSG_CHANNEL_LIST, the roster
+                // arriving as SMSG_CHANNEL_LIST.
+                {"ListChannelByName", [](lua_State* L) -> int {
+            return channelNameCommand(L, game::Opcode::CMSG_CHANNEL_LIST, "ListChannelByName");
+        }},
                 // SetChannelPassword(channel, password) - the same shape again,
                 // and the one place an empty second string is meant: sending
                 // no password is how a channel's password is taken off.
                 {"SetChannelPassword", [](lua_State* L) -> int {
+            // 0x004fe720: two strings, or the usage error.
+            if (!lua_isstring(L, 1) || !lua_isstring(L, 2))
+                return luaL_error(L, "Usage: SetChannelPassword(\"name\", \"password\")");
             auto* gh = getGameHandler(L);
-            const char* ch = luaL_optstring(L, 1, "");
-            const char* pass = luaL_optstring(L, 2, "");
+            const char* ch = lua_tostring(L, 1);
+            const char* pass = lua_tostring(L, 2);
             if (gh && ch && *ch)
                 gh->channelModeration(game::Opcode::CMSG_CHANNEL_PASSWORD, ch,
                                       pass ? pass : "", /*allowEmptyTarget=*/true);

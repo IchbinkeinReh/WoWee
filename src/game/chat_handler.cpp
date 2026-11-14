@@ -1737,6 +1737,15 @@ std::string ChatHandler::resolveChannelArg(const std::string& channel) const {
     return s ? s->name : std::string();
 }
 
+void ChatHandler::sendChannelNameCommand(Opcode op, const std::string& channel) {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    const std::string name = resolveChannelArg(channel);
+    if (name.empty()) return;
+    network::Packet packet(wireOpcode(op));
+    packet.writeString(name);
+    owner_.getSocket()->send(packet);
+}
+
 void ChatHandler::setChannelWatch(const std::string& channel) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     const std::string name = resolveChannelArg(channel);

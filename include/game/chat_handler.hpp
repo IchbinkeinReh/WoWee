@@ -79,6 +79,11 @@ public:
     /// channel with that number - none when no channel has it; anything else,
     /// itself. Empty for an empty argument.
     [[nodiscard]] std::string resolveChannelArg(const std::string& channel) const;
+    /// The channel commands that carry the channel and nothing else
+    /// (0x004fe460): ListChannelByName, DisplayChannelOwner,
+    /// ChannelToggleAnnouncements and DeclineInvite - the opcode and the
+    /// channel's name, nothing sent when the argument names no channel.
+    void sendChannelNameCommand(Opcode op, const std::string& channel);
     /// CMSG_SET_CHANNEL_WATCH and CMSG_CLEAR_CHANNEL_WATCH (0x004ffc30,
     /// 0x004ffc50).
     void setChannelWatch(const std::string& channel);
