@@ -1,5 +1,6 @@
 #include "core/stall_report.hpp"
 #include "core/local_time.hpp"
+#include "core/platform.hpp"
 
 #include <atomic>
 #include <cstdio>
@@ -161,6 +162,18 @@ void writeCrash(const char* reason, const void* context) {
     static std::atomic<bool> written{false};
     if (written.exchange(true)) return;
     const char* p = std::getenv("WOWEE_CRASH_REPORT");
+#if defined(WOWEE_IOS)
+    // The working directory is the read-only app bundle: beside the logs in
+    // Documents instead, where the Files app shows them.
+    static char iosPath[1024];
+    if (!(p && *p)) {
+        const char* home = std::getenv("HOME");
+        if (home && *home) {
+            std::snprintf(iosPath, sizeof(iosPath), "%s/Documents/logs/crash_report.txt", home);
+            p = iosPath;
+        }
+    }
+#endif
     FILE* f = std::fopen((p && *p) ? p : "crash_report.txt", "a");
     const std::time_t now = std::time(nullptr);
     char when[32] = "";

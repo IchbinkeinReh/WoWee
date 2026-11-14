@@ -901,7 +901,15 @@ void GameScreen::takeScreenshot() {
 
     namespace fs = std::filesystem;
     std::error_code ec;
+#if defined(WOWEE_IOS)
+    // The working directory is the read-only app bundle, and ~/.wowee below
+    // is outside what an iOS app may write: Documents, where the Files app
+    // shows them.
+    const char* iosHome = std::getenv("HOME");
+    fs::path dir = fs::path(iosHome ? iosHome : ".") / "Documents" / "Screenshots";
+#else
     fs::path dir = fs::current_path(ec) / "Screenshots";
+#endif
     fs::create_directories(dir, ec);
     if (ec || !fs::is_directory(dir)) {
         const char* home = std::getenv("HOME");

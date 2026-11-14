@@ -29,6 +29,7 @@
 #include "rendering/frustum.hpp"
 #include "pipeline/wmo_loader.hpp"
 #include "pipeline/asset_manager.hpp"
+#include "core/cache_root.hpp"
 #include "core/logger.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -1498,7 +1499,7 @@ bool WMORenderer::saveFloorCache() const {
         return false;
     }
 
-    std::string filepath = "cache/wmo_floor_" + mapName_ + ".bin";
+    std::string filepath = core::getCacheRoot() + "/wmo_floor_" + mapName_ + ".bin";
 
     // Create directory if needed
     std::filesystem::path path(filepath);
@@ -1544,7 +1545,7 @@ bool WMORenderer::loadFloorCache() {
         return false;
     }
 
-    std::string filepath = "cache/wmo_floor_" + mapName_ + ".bin";
+    std::string filepath = core::getCacheRoot() + "/wmo_floor_" + mapName_ + ".bin";
 
     std::ifstream file(filepath, std::ios::binary);
     if (!file) {

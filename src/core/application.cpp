@@ -5,6 +5,7 @@
 #include "core/application.hpp"
 #include "rendering/model_frame_view.hpp"
 #include "core/rt_session_marker.hpp"
+#include "core/cache_root.hpp"
 #include "core/config_paths.hpp"
 #include "core/world_settle.hpp"
 #include "core/cinematic_player.hpp"
@@ -725,12 +726,14 @@ Application::~Application() {
 namespace {
 
 /// The interface's text files out of the archives into a folder the addon
-/// manager can read: cache/interface_mpq/interface/... relative to the working
-/// directory. Written again only when the archives change (a stamp of their
-/// names and sizes). Returns the root to hand the addon manager.
+/// manager can read: <cache root>/interface_mpq/interface/... (core::
+/// getCacheRoot: cache/ in the working directory, the caches folder on iOS,
+/// whose working directory is the read-only app bundle). Written again only
+/// when the archives change (a stamp of their names and sizes). Returns the
+/// root to hand the addon manager.
 std::string writeInterfaceFromArchives(const pipeline::AssetManager& am) {
     namespace fs = std::filesystem;
-    const fs::path root = fs::path("cache") / "interface_mpq";
+    const fs::path root = fs::path(core::getCacheRoot()) / "interface_mpq";
     const auto* set = am.mpqArchives();
     if (!set) return root.string();
     std::string stamp = "v1 " + set->archiveDir() + " " + set->locale() + "\n";
@@ -751,7 +754,7 @@ std::string writeInterfaceFromArchives(const pipeline::AssetManager& am) {
         }
     }
     const auto t0 = std::chrono::steady_clock::now();
-    size_t written = 0, bytes = 0;
+    size_t written = 0, bytes = 0, failed = 0;
     std::error_code ec;
     fs::remove_all(root, ec);
     for (const char* prefix : {"interface\\framexml\\", "interface\\gluexml\\", "interface\\addons\\"}) {
@@ -767,9 +770,20 @@ std::string writeInterfaceFromArchives(const pipeline::AssetManager& am) {
             fs::create_directories(out.parent_path(), ec);
             std::ofstream o(out, std::ios::binary | std::ios::trunc);
             o.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+            if (!o) {
+                // Counted as written before, so a folder that takes nothing
+                // (an app bundle) read as a success and the interface as empty.
+                ++failed;
+                continue;
+            }
             ++written;
             bytes += data.size();
         }
+    }
+    if (failed) {
+        LOG_ERROR("Interface files from the archives: ", failed, " could not be written into ",
+                  fs::absolute(root).string(), " - the interface will be missing them");
+        return root.string();   // no stamp: tried again next start
     }
     std::ofstream(stampPath, std::ios::binary | std::ios::trunc) << stamp;
     LOG_WARNING("Interface files from the archives: ", written, " files (", bytes / 1024, " KB) into ",
