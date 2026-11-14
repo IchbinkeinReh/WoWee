@@ -1068,23 +1068,21 @@ static int lua_GetItemInfo(lua_State* L) {
 // Quality: 0=Poor(gray), 1=Common(white), 2=Uncommon(green), 3=Rare(blue),
 //          4=Epic(purple), 5=Legendary(orange), 6=Artifact(gold), 7=Heirloom(gold)
 static int lua_GetItemQualityColor(lua_State* L) {
-    int q = static_cast<int>(luaL_checknumber(L, 1));
-    struct QC { float r, g, b; const char* hex; };
-    static const QC colors[] = {
-        {.r = 0.62f, .g = 0.62f, .b = 0.62f, .hex = "ff9d9d9d"}, // 0 Poor
-        {.r = 1.00f, .g = 1.00f, .b = 1.00f, .hex = "ffffffff"}, // 1 Common
-        {.r = 0.12f, .g = 1.00f, .b = 0.00f, .hex = "ff1eff00"}, // 2 Uncommon
-        {.r = 0.00f, .g = 0.44f, .b = 0.87f, .hex = "ff0070dd"}, // 3 Rare
-        {.r = 0.64f, .g = 0.21f, .b = 0.93f, .hex = "ffa335ee"}, // 4 Epic
-        {.r = 1.00f, .g = 0.50f, .b = 0.00f, .hex = "ffff8000"}, // 5 Legendary
-        {.r = 0.90f, .g = 0.80f, .b = 0.50f, .hex = "ffe6cc80"}, // 6 Artifact
-        {.r = 0.00f, .g = 0.80f, .b = 1.00f, .hex = "ff00ccff"}, // 7 Heirloom
-    };
-    if (q < 0 || q > 7) q = 1;
-    lua_pushnumber(L, colors[q].r);
-    lua_pushnumber(L, colors[q].g);
-    lua_pushnumber(L, colors[q].b);
-    lua_pushstring(L, colors[q].hex);
+    // 0x00510e20: rounded; anything past 7 is Common (0x0061a510). The
+    // channels are the table's bytes over 255, and the code is the whole
+    // "|cff..." prefix (0x0061a530). Heirloom carries Artifact's colour in
+    // this build.
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetItemQualityColor(index)");
+    auto q = static_cast<uint32_t>(std::llround(lua_tonumber(L, 1)));
+    if (q > 7) q = 1;
+    static constexpr uint8_t kRgb[8][3] = {
+        {0x9d, 0x9d, 0x9d}, {0xff, 0xff, 0xff}, {0x1e, 0xff, 0x00}, {0x00, 0x70, 0xdd},
+        {0xa3, 0x35, 0xee}, {0xff, 0x80, 0x00}, {0xe6, 0xcc, 0x80}, {0xe6, 0xcc, 0x80}};
+    static constexpr const char* kCode[8] = {
+        "|cff9d9d9d", "|cffffffff", "|cff1eff00", "|cff0070dd",
+        "|cffa335ee", "|cffff8000", "|cffe6cc80", "|cffe6cc80"};
+    for (int c = 0; c < 3; ++c) lua_pushnumber(L, kRgb[q][c] * (1.0 / 255.0));
+    lua_pushstring(L, kCode[q]);
     return 4;
 }
 
@@ -2009,13 +2007,56 @@ static int lua_GetSendMailItemLink(lua_State* L) {
 // GOLD_AMOUNT_TEXTURE and its pair, so this is the interface's own artwork
 // rather than a path invented to fill the gap.
 static int lua_GetCoinIcon(lua_State* L) {
-    constexpr double kCopperPerSilver = 100.0;
-    constexpr double kCopperPerGold   = 100.0 * 100.0;
-    const double copper = luaL_optnumber(L, 1, 0);
-    const char* icon = (copper >= kCopperPerGold)   ? "Interface\\MoneyFrame\\UI-GoldIcon"
-                     : (copper >= kCopperPerSilver) ? "Interface\\MoneyFrame\\UI-SilverIcon"
-                                                    : "Interface\\MoneyFrame\\UI-CopperIcon";
-    lua_pushstring(L, icon);
+    // 0x00510bd0 -> 0x007e7cc0: a pile of coins sized by the amount.
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetCoinIcon(amount)");
+    const auto amount = static_cast<int32_t>(std::llround(lua_tonumber(L, 1)));
+    const char* icon = amount < 10    ? "INV_Misc_Coin_05"
+                     : amount < 100   ? "INV_Misc_Coin_06"
+                     : amount < 1000  ? "INV_Misc_Coin_03"
+                     : amount < 10000 ? "INV_Misc_Coin_04"
+                     : amount < 100000 ? "INV_Misc_Coin_01" : "INV_Misc_Coin_02";
+    lua_pushstring(L, (std::string("Interface\\Icons\\") + icon).c_str());
+    return 1;
+}
+
+// GetCoinTextureString(amount [, fontHeight]) (0x00510d00 -> 0x007e7e10):
+// gold, silver, copper, each that is not zero, through GOLD_AMOUNT_TEXTURE
+// and its siblings with (count, height, height), joined by one space. Zero
+// is COPPER_AMOUNT_TEXTURE with 0. The height is 14 unless given. The usage
+// line is the client's, naming GetCoinText.
+static int lua_GetCoinTextureString(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetCoinText(amount, fontHeight)");
+    const int height = lua_isnumber(L, 2) ? static_cast<int>(lua_tonumber(L, 2)) : 14;
+    int32_t amount = static_cast<int32_t>(std::llround(lua_tonumber(L, 1)));
+    const auto piece = [L, height](const char* key, int32_t count) {
+        lua_getglobal(L, "string");
+        lua_getfield(L, -1, "format");
+        lua_remove(L, -2);
+        lua_getglobal(L, key);
+        if (!lua_isstring(L, -1)) { lua_pop(L, 2); return std::string(); }
+        lua_pushnumber(L, count);
+        lua_pushnumber(L, height);
+        lua_pushnumber(L, height);
+        if (lua_pcall(L, 4, 1, 0) != 0) { lua_pop(L, 1); return std::string(); }
+        std::string out = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+        lua_pop(L, 1);
+        return out;
+    };
+    if (amount == 0) {
+        lua_pushstring(L, piece("COPPER_AMOUNT_TEXTURE", 0).c_str());
+        return 1;
+    }
+    static constexpr std::pair<const char*, int32_t> kCoins[3] = {
+        {"GOLD_AMOUNT_TEXTURE", 10000}, {"SILVER_AMOUNT_TEXTURE", 100}, {"COPPER_AMOUNT_TEXTURE", 1}};
+    std::string out;
+    for (const auto& [key, unit] : kCoins) {
+        int32_t count = 0;
+        if (amount >= unit) { count = amount / unit; amount %= unit; }
+        if (count == 0) continue;
+        if (!out.empty()) out += ' ';
+        out += piece(key, count);
+    }
+    lua_pushstring(L, out.c_str());
     return 1;
 }
 
@@ -6048,6 +6089,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"CheckInbox",          lua_CheckInbox},
                 {"ReturnInboxItem",      lua_ReturnInboxItem},
                 {"GetCoinIcon",          lua_GetCoinIcon},
+                {"GetCoinTextureString", lua_GetCoinTextureString},
                 {"GetCoinText",          lua_GetCoinText},
                 {"CloseMail",           lua_CloseMail},
                 {"SendMail",            lua_SendMail},
