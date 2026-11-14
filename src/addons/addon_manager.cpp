@@ -1,4 +1,6 @@
 #include "addons/addon_manager.hpp"
+#include "game/game_handler.hpp"
+#include <zlib.h>
 #include "addons/interface_prefetch.hpp"
 #include "addons/lua_handler_globals.hpp"
 #include "addons/lua_taint.hpp"
@@ -487,6 +489,13 @@ void AddonManager::loadAllAddons() {
             skipped++;
             continue;
         }
+        // One the server banned (SMSG_ADDON_INFO, 0x005f79a0) is not loaded
+        // (0x005f7e90: security BANNED is reason BANNED).
+        if (isAddonBanned(addon.addonName)) {
+            LOG_WARNING("AddonManager: not loading addon the server banned: ", addon.addonName);
+            skipped++;
+            continue;
+        }
         if (loadAddon(addon)) loaded++;
         else failed++;
     }
@@ -507,6 +516,45 @@ void AddonManager::loadAllAddons() {
 }
 
 // ---- Per-addon enable/disable (persisted) ----------------------------------
+
+bool AddonManager::isAddonBanned(const std::string& addonName) const {
+    const auto* v = gameHandler_ ? gameHandler_->addonVerdict(addonName) : nullptr;
+    return v && v->banned;
+}
+
+std::vector<game::AuthSessionPacket::Addon> AddonManager::authSessionAddons() const {
+    // 0x005f5440: every addon the client found, a Blizzard one (signed, its
+    // key's CRC sent) or not, with its .url's CRC where it has one.
+    std::vector<game::AuthSessionPacket::Addon> out;
+    auto add = [&](const TocFile& t) {
+        game::AuthSessionPacket::Addon a;
+        a.name = t.addonName;
+        a.signedByBlizzard = t.addonName.rfind("Blizzard_", 0) == 0;
+        std::ifstream url(t.basePath + "/" + t.addonName + ".url", std::ios::binary);
+        if (url) {
+            const std::string text((std::istreambuf_iterator<char>(url)), std::istreambuf_iterator<char>());
+            a.urlCrc = static_cast<uint32_t>(crc32(0L, reinterpret_cast<const Bytef*>(text.data()),
+                                                   static_cast<uInt>(text.size())));
+        }
+        out.push_back(std::move(a));
+    };
+    for (const auto& t : addons_) add(t);
+    for (const auto& t : lodAddons_) add(t);
+    return out;
+}
+
+void AddonManager::saveAddonUrls() const {
+    // 0x005f79a0: a url the server sends is kept as Interface\AddOns\<name>\<name>.url.
+    if (!gameHandler_) return;
+    auto save = [&](const TocFile& t) {
+        const auto* v = gameHandler_->addonVerdict(t.addonName);
+        if (!v || v->url.empty()) return;
+        std::ofstream out(t.basePath + "/" + t.addonName + ".url", std::ios::binary | std::ios::trunc);
+        if (out) out << v->url;
+    };
+    for (const auto& t : addons_) save(t);
+    for (const auto& t : lodAddons_) save(t);
+}
 
 bool AddonManager::isAddonEnabled(const std::string& addonName) const {
     auto it = addonEnabled_.find(addonName);
@@ -1781,6 +1829,7 @@ bool AddonManager::loadAddOnByName(const std::string& name, std::string& reason)
         for (const TocFile& a : addons_) {
             if (lowered(a.addonName) != key) continue;
             if (!isAddonEnabled(a.addonName)) { reason = "DISABLED"; return false; }
+            if (isAddonBanned(a.addonName)) { reason = "BANNED"; return false; }
             // Only once the startup pass has actually run it. Before that it is
             // listed but not loaded, and saying otherwise would have the caller
             // use frames that do not exist yet.
@@ -1791,6 +1840,7 @@ bool AddonManager::loadAddOnByName(const std::string& name, std::string& reason)
         return false;
     }
     if (!isAddonEnabled(found->addonName)) { reason = "DISABLED"; return false; }
+    if (isAddonBanned(found->addonName)) { reason = "BANNED"; return false; }
 
     // Recorded before loading, not after: the addon's own files run during
     // this call and one of them may call LoadAddOn on the same name, which

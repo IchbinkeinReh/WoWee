@@ -527,7 +527,7 @@ void GameHandler::registerCoreOpcodes() {
     // -----------------------------------------------------------------------
     // Item push / logout
     // -----------------------------------------------------------------------
-    registerSkipHandler(Opcode::SMSG_ADDON_INFO);
+    registerHandler(Opcode::SMSG_ADDON_INFO, &GameHandler::handleAddonInfo);
     // SMSG_EXPECTED_SPAM_RECORDS is handled by ChatHandler::registerOpcodes now.
 
     // -----------------------------------------------------------------------

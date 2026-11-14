@@ -459,6 +459,27 @@ public:
     bool ownsChatChannel(const std::string& name) const;
     /// Who sent the chat line with this id, or zero. See ChatHandler.
     uint64_t chatLineSender(uint32_t lineId) const;
+
+    /// The addons CMSG_AUTH_SESSION names (0x005f5440), set by whoever found
+    /// them before the world connection is made.
+    void setAuthAddons(std::vector<AuthSessionPacket::Addon> addons) { authAddons_ = std::move(addons); }
+    /// What SMSG_ADDON_INFO said of one addon (0x005f79a0): banned - its
+    /// state 0, or named in the ban list - and the url to keep beside it.
+    struct AddonVerdict {
+        bool banned = false;
+        bool secureCapable = false;   ///< state 2 (+0x29)
+        uint32_t revision = 0;
+        std::string url;
+    };
+    [[nodiscard]] const AddonVerdict* addonVerdict(const std::string& name) const {
+        auto it = addonVerdicts_.find(name);
+        return it == addonVerdicts_.end() ? nullptr : &it->second;
+    }
+    [[nodiscard]] const std::unordered_map<std::string, AddonVerdict>& addonVerdicts() const {
+        return addonVerdicts_;
+    }
+    /// Run once SMSG_ADDON_INFO has been read.
+    void setAddonInfoCallback(std::function<void()> cb) { addonInfoCallback_ = std::move(cb); }
     /// The members of a chat channel, as of the last list requested for it.
     const std::vector<ChannelMember>& getChannelRoster(const std::string& channel) const;
     std::string getChannelByIndex(int index) const;
@@ -6135,6 +6156,8 @@ private:
      * Handle SMSG_PONG from server
      */
     void handlePong(network::Packet& packet);
+    /// SMSG_ADDON_INFO (0x005f79a0): the server's word on each addon sent.
+    void handleAddonInfo(network::Packet& packet);
 
     void emitOtherPlayerEquipment(uint64_t guid);
     void emitAllOtherPlayerEquipment();
@@ -6208,6 +6231,10 @@ private:
      * Send CMSG_AUTH_SESSION to server
      */
     void sendAuthSession();
+    std::vector<AuthSessionPacket::Addon> authAddons_;
+    std::vector<AuthSessionPacket::Addon> sentAuthAddons_;
+    std::unordered_map<std::string, AddonVerdict> addonVerdicts_;
+    std::function<void()> addonInfoCallback_;
 
     /**
      * Generate random client seed

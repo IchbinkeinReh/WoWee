@@ -115,6 +115,52 @@ void GameHandler::handleAuthChallenge(network::Packet& packet) {
     sendAuthSession();
 }
 
+void GameHandler::handleAddonInfo(network::Packet& packet) {
+    // 0x005f79a0 (decided D5: read, as the client does, rather than skipped):
+    // for each addon CMSG_AUTH_SESSION named, in that order, its state - 0
+    // banned, 2 secure-capable - whether a key and a revision follow, and
+    // whether a url does; then the server's ban list, each entry the MD5 of
+    // an addon's name and version and whether it is banned.
+    addonVerdicts_.clear();
+    for (const auto& sent : sentAuthAddons_) {
+        if (!packet.hasRemaining(2)) break;
+        AddonVerdict v;
+        const uint8_t state = packet.readUInt8();
+        const uint8_t hasKeyInfo = packet.readUInt8();
+        if (hasKeyInfo) {
+            if (!packet.hasRemaining(1)) break;
+            if (packet.readUInt8()) {          // the key itself, 256 bytes
+                if (!packet.hasRemaining(256)) break;
+                for (int i = 0; i < 256; ++i) packet.readUInt8();
+            }
+            if (!packet.hasRemaining(4)) break;
+            v.revision = packet.readUInt32();
+        }
+        if (!packet.hasRemaining(1)) break;
+        if (packet.readUInt8()) v.url = packet.readString();
+        v.secureCapable = state == 2;
+        v.banned = state == 0;
+        addonVerdicts_[sent.name] = v;
+    }
+    if (packet.hasRemaining(4)) {
+        const uint32_t count = packet.readUInt32();
+        for (uint32_t i = 0; i < count && packet.hasRemaining(4 + 16 + 16 + 4 + 4); ++i) {
+            packet.readUInt32();                               // the entry's id
+            std::vector<uint8_t> nameHash(16);
+            for (auto& b : nameHash) b = packet.readUInt8();
+            for (int k = 0; k < 16; ++k) packet.readUInt8();   // version hash
+            packet.readUInt32();                               // timestamp
+            const uint32_t isBanned = packet.readUInt32();
+            if (!isBanned) continue;
+            for (const auto& sent : sentAuthAddons_) {
+                if (auth::Crypto::md5(sent.name) == nameHash) addonVerdicts_[sent.name].banned = true;
+            }
+        }
+    }
+    LOG_INFO("SMSG_ADDON_INFO: ", addonVerdicts_.size(), " addons answered");
+    if (addonInfoCallback_) addonInfoCallback_();
+}
+
 void GameHandler::sendAuthSession() {
     LOG_INFO("Sending CMSG_AUTH_SESSION");
 
@@ -125,8 +171,11 @@ void GameHandler::sendAuthSession() {
         clientSeed,
         sessionKey,
         serverSeed,
-        realmId_
+        realmId_,
+        authAddons_
     );
+    // SMSG_ADDON_INFO answers these, in this order.
+    sentAuthAddons_ = authAddons_;
 
     LOG_DEBUG("CMSG_AUTH_SESSION packet size: ", packet.getSize(), " bytes");
 

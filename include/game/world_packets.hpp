@@ -58,12 +58,20 @@ public:
      * @param serverSeed 4-byte seed from SMSG_AUTH_CHALLENGE
      * @return Packet ready to send
      */
+    /// One addon as CMSG_AUTH_SESSION's addon block carries it (0x005f5440).
+    struct Addon {
+        std::string name;
+        bool signedByBlizzard = false;   ///< its key's CRC 0x4C1C776D is sent
+        uint32_t urlCrc = 0;             ///< CRC of its .url, 0 for none
+    };
     static network::Packet build(uint32_t build,
                                   const std::string& accountName,
                                   uint32_t clientSeed,
                                   const std::vector<uint8_t>& sessionKey,
                                   uint32_t serverSeed,
-                                  uint32_t realmId = 1);
+                                  uint32_t realmId = 1,
+                                  const std::vector<Addon>& addons = {},
+                                  uint32_t addonListTime = 0);
 
 private:
     /**

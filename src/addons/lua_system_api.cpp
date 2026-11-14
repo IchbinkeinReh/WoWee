@@ -2913,9 +2913,20 @@ static int lua_GetAddOnInfo(lua_State* L) {
         auto* svc = getLuaServices(L);
         luaPushOneOrNil(L, !name || !svc || !svc->isAddOnEnabled || svc->isAddOnEnabled(name));
     }
-    luaPushOneOrNil(L, 1);          // 5: loadable
-    lua_pushnil(L);                 // 6: reason it is not, and it is
-    lua_pushstring(L, "INSECURE");  // 7: security
+    // 5 - 7: loadable, why not, and security (0x00511240, 0x005f4c90): an
+    // addon the server banned in SMSG_ADDON_INFO is BANNED and not loadable
+    // for that reason; a Blizzard one, whose signature the client checks, is
+    // SECURE; anything else INSECURE.
+    {
+        const char* name = lua_tostring(L, -4);
+        auto* gh = getGameHandler(L);
+        const auto* verdict = (gh && name) ? gh->addonVerdict(name) : nullptr;
+        const bool banned = verdict && verdict->banned;
+        const bool blizzard = name && std::string(name).rfind("Blizzard_", 0) == 0;
+        if (banned) { lua_pushnil(L); lua_pushstring(L, "BANNED"); }
+        else        { luaPushOneOrNil(L, 1); lua_pushnil(L); }
+        lua_pushstring(L, banned ? "BANNED" : blizzard ? "SECURE" : "INSECURE");
+    }
     return 7;
 }
 

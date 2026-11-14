@@ -1127,6 +1127,7 @@ wowee_add_packet_test(test_taxi_packets)
 
 # ── test_use_item_packet ─────────────────────────────────────
 wowee_add_packet_test(test_use_item_packet)
+wowee_add_packet_test(test_auth_session_addons)
 
 # ── test_normal_map ────────────────────────────────────────────────────
 # The normal-map pass the character and WMO renderers used to duplicate. Both

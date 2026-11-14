@@ -2,6 +2,7 @@
 
 #include "addons/lua_engine.hpp"
 #include "addons/toc_parser.hpp"
+#include "game/world_packets.hpp"
 #include <memory>
 #include <set>
 #include <string>
@@ -81,6 +82,12 @@ public:
     // 0x005f76a0, which only the world UI's teardown (0x00528f00) calls, and
     // ResetDisabledAddOns (0x005f91e0) reads it back over the pending list.
     [[nodiscard]] bool isAddonEnabled(const std::string& addonName) const;
+    /// Banned by the server's SMSG_ADDON_INFO (D5).
+    [[nodiscard]] bool isAddonBanned(const std::string& addonName) const;
+    /// The addons for CMSG_AUTH_SESSION's addon block (0x005f5440).
+    [[nodiscard]] std::vector<game::AuthSessionPacket::Addon> authSessionAddons() const;
+    /// Write each url SMSG_ADDON_INFO sent beside its addon (0x005f79a0).
+    void saveAddonUrls() const;
     void setAddonEnabled(const std::string& addonName, bool enabled);
     /// Write the pending enable state now.
     void saveAddonEnabledState() const { saveEnabledState(); }

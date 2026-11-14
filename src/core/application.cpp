@@ -1634,6 +1634,14 @@ bool Application::initialize() {
             std::string addonsDir = interfaceRoot + "/interface/AddOns";
             addonManager_->setFrameXmlDir(interfaceRoot + "/interface/FrameXML");
             addonManager_->scanAddons(addonsDir);
+            // What CMSG_AUTH_SESSION says this client has, and what is done
+            // with the server's answer (D5: 0x005f5440, 0x005f79a0).
+            if (gameHandler) {
+                gameHandler->setAuthAddons(addonManager_->authSessionAddons());
+                gameHandler->setAddonInfoCallback([this] {
+                    if (addonManager_) addonManager_->saveAddonUrls();
+                });
+            }
             // Wire Lua errors to UI error display
             addonManager_->getLuaEngine()->setLuaErrorCallback([gh = gameHandler.get()](const std::string& err) {
                 // Not addUIError: that reports by firing an event, which runs

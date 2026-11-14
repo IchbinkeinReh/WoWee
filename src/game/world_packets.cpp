@@ -129,7 +129,9 @@ network::Packet AuthSessionPacket::build(uint32_t build,
                                           uint32_t clientSeed,
                                           const std::vector<uint8_t>& sessionKey,
                                           uint32_t serverSeed,
-                                          uint32_t realmId) {
+                                          uint32_t realmId,
+                                          const std::vector<Addon>& addons,
+                                          uint32_t addonListTime) {
     if (sessionKey.size() != 40) {
         LOG_ERROR("Invalid session key size: ", sessionKey.size(), " (expected 40)");
     }
@@ -209,10 +211,21 @@ network::Packet AuthSessionPacket::build(uint32_t build,
         }
         addonData = addonBlock.getData();
     } else {
-        // WotLK: uint32 addonCount + entries + uint32 clientTime
-        // Send 0 addons
-        addonData = { 0, 0, 0, 0,  // addonCount = 0
-                      0, 0, 0, 0 }; // clientTime = 0
+        // WotLK (0x005f5440, decided D5: as the client): the count, then each
+        // addon the client found - its name, whether it carries Blizzard's
+        // key, that key's CRC (0 without one) and its .url's CRC (0 without
+        // one) - and the time of the server's last ban list.
+        network::Packet addonBlock(0);
+        addonBlock.writeUInt32(static_cast<uint32_t>(addons.size()));
+        static constexpr uint32_t kBlizzardKeyCrc = 0x4C1C776D;
+        for (const Addon& a : addons) {
+            addonBlock.writeString(a.name);
+            addonBlock.writeUInt8(a.signedByBlizzard ? 1 : 0);
+            addonBlock.writeUInt32(a.signedByBlizzard ? kBlizzardKeyCrc : 0);
+            addonBlock.writeUInt32(a.urlCrc);
+        }
+        addonBlock.writeUInt32(addonListTime);
+        addonData = addonBlock.getData();
     }
     uint32_t decompressedSize = static_cast<uint32_t>(addonData.size());
 
@@ -227,7 +240,7 @@ network::Packet AuthSessionPacket::build(uint32_t build,
         packet.writeBytes(compressed.data(), compressed.size());
         LOG_DEBUG("Addon info: decompressedSize=", decompressedSize,
                   " compressedSize=", compressedSize, " addons=",
-                  isTbc ? "12 vanilla" : "0 wotlk");
+                  isTbc ? std::string("12 vanilla") : std::to_string(addons.size()) + " wotlk");
     } else {
         LOG_ERROR("zlib compress failed with code: ", ret);
         packet.writeUInt32(0);
