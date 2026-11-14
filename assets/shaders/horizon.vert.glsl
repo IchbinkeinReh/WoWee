@@ -27,6 +27,9 @@ layout(push_constant) uniform Horizon {
 
 layout(location = 0) in vec3 aPos;
 
+// Where on screen it lies, for the fog volume (horizon.frag).
+layout(location = 0) out vec3 vWorldPos;
+
 out float gl_ClipDistance[2];
 
 void main() {
@@ -43,4 +46,5 @@ void main() {
     float k = (horizon.planes.z - horizon.planes.w) * n / (f - n);
     clip.z = horizon.planes.w * w + k * (f - w);
     gl_Position = clip;
+    vWorldPos = aPos;
 }
