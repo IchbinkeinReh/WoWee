@@ -2737,6 +2737,14 @@ void SocialHandler::setSavedInstanceExtend(uint32_t mapId, uint32_t difficulty, 
     // uint32 mapId, uint32 difficulty, uint8 toggle - HandleSetSavedInstanceExtend.
     // The server ignores it unless the bind is permanent and the flag actually
     // changes, so there is nothing to check here that it does not check better.
+    // 0x0050dc10: the lock is marked at once, and the chat says so with the
+    // instance's name, before the request goes.
+    for (auto& lo : instanceLockouts_) {
+        if (lo.mapId == mapId && lo.difficulty == difficulty) lo.extended = extend;
+    }
+    owner_.addSystemChatMessage(extend
+        ? interfaceFormat("RAID_INSTANCE_LOCK_EXTENDED", "Lock for %s has been extended.", {owner_.getMapName(mapId)})
+        : interfaceFormat("RAID_INSTANCE_LOCK_NOT_EXTENDED", "Lock for %s will no longer be extended.", {owner_.getMapName(mapId)}));
     network::Packet packet(wireOpcode(Opcode::CMSG_SET_SAVED_INSTANCE_EXTEND));
     packet.writeUInt32(mapId);
     packet.writeUInt32(difficulty);

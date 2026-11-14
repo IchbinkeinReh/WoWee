@@ -1199,10 +1199,11 @@ static int& selectedFriend() { static int v = 0; return v; }
 static int& selectedIgnore() { static int v = 0; return v; }
 
 // SendSystemMessage(text) - put a line in the chat as the client itself would
+/// SendSystemMessage("message") (0x0050d8a0): a string or the usage error,
+/// then a system line - an empty one too.
 static int lua_SendSystemMessage(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    const char* msg = luaL_optstring(L, 1, "");
-    if (gh && msg && *msg) gh->addSystemChatMessage(msg);
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: SendSystemMessage(\"message\")");
+    if (auto* gh = getGameHandler(L)) gh->addSystemChatMessage(lua_tostring(L, 1));
     return 0;
 }
 
@@ -5443,9 +5444,11 @@ void registerSocialLuaAPI(lua_State* L) {
         }},
                 {"JoinChannelByName", lua_JoinChannelByName},
                 {"JoinTemporaryChannel", lua_JoinChannelByName},
+                // 0x005096d0: a string or the usage error.
                 {"LeaveChannelByName", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: LeaveChannelByName(\"name\")");
             auto* gh = getGameHandler(L);
-            const char* name = luaL_checkstring(L, 1);
+            const char* name = lua_tostring(L, 1);
             if (gh) gh->leaveChannel(name);
             return 0;
         }},
