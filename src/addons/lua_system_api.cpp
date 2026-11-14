@@ -4593,11 +4593,30 @@ static void settleWindowChannels(lua_State* L, ChatWindowSettings& w, bool first
     if (changed) saveInterfaceState();
 }
 
-/// The window a one-based index names, or nullptr if it names none.
+/// The window a one-based index names, or nullptr if it names none. The
+/// client rounds the index to the nearest whole number (0x004fbd90 and the
+/// rest of the family); one outside 1 - 10 names no window.
 static ChatWindowSettings* chatWindow(lua_State* L, int argIndex) {
-    const int id = static_cast<int>(luaL_optnumber(L, argIndex, 0));
+    const double d = luaL_optnumber(L, argIndex, 0);
+    if (!(d >= 0.5 && d < kNumChatWindows + 0.5)) return nullptr;
+    const int id = static_cast<int>(std::lround(d));
     if (id < 1 || id > kNumChatWindows) return nullptr;
     return &chatWindows()[static_cast<size_t>(id - 1)];
+}
+
+/// The usage error when the index is not a number, as each of the family
+/// raises it.
+static bool chatWindowUsage(lua_State* L, const char* usage) {
+    if (lua_isnumber(L, 1)) return true;
+    luaL_error(L, "%s", usage);
+    return false;
+}
+
+/// A colour component as the chat window keeps it (0x004fc470): round(v x
+/// 255) as a byte, answered as that byte over 255.
+static float chatColourByte(double v) {
+    const long long b = std::llround(v * 255.0) & 0xff;
+    return static_cast<float>(b) * 0.003921569f;
 }
 
 /// Write the chat layout and the bar toggles out.
@@ -4787,15 +4806,16 @@ static void loadInterfaceState() {
 /// max() on every mouse-over - so a missing alpha is not a cosmetic gap, it is
 /// an error every time the cursor crosses the frame.
 static int lua_GetChatWindowInfo(lua_State* L) {
+    if (!chatWindowUsage(L, "Usage: GetChatWindowInfo(index)")) return 0;
     const ChatWindowSettings* w = chatWindow(L, 1);
-    if (!w) w = &chatWindows()[0];
+    if (!w) return 0;   // 0x004fbd90: nothing for an index past the ten
 
     lua_pushstring(L, w->name.c_str());
     lua_pushnumber(L, w->fontSize);
-    lua_pushnumber(L, w->r);
-    lua_pushnumber(L, w->g);
-    lua_pushnumber(L, w->b);
-    lua_pushnumber(L, w->alpha);
+    lua_pushnumber(L, chatColourByte(w->r));
+    lua_pushnumber(L, chatColourByte(w->g));
+    lua_pushnumber(L, chatColourByte(w->b));
+    lua_pushnumber(L, chatColourByte(w->alpha));
     // Numbers and nil, not booleans. docked is a dock position, not a flag -
     // FCF_LoadChatSettings hands it straight to FCF_DockFrame as the index to
     // insert at, and that compares it against a count. A boolean there is a
@@ -4810,6 +4830,7 @@ static int lua_GetChatWindowInfo(lua_State* L) {
 
 // GetChatWindowSavedPosition(index) → point, xOffset, yOffset
 static int lua_GetChatWindowSavedPosition(lua_State* L) {
+    if (!chatWindowUsage(L, "Usage: GetChatWindowSavedPosition(index)")) return 0;
     const ChatWindowSettings* w = chatWindow(L, 1);
     if (!w || !w->hasPosition) return luaReturnNil(L);
     lua_pushstring(L, w->point.c_str());
@@ -4820,6 +4841,7 @@ static int lua_GetChatWindowSavedPosition(lua_State* L) {
 
 // GetChatWindowSavedDimensions(index) → width, height
 static int lua_GetChatWindowSavedDimensions(lua_State* L) {
+    if (!chatWindowUsage(L, "Usage: GetChatWindowSavedDimensions(index)")) return 0;
     const ChatWindowSettings* w = chatWindow(L, 1);
     if (!w || !w->hasDimensions) return luaReturnNil(L);
     lua_pushnumber(L, w->width);
@@ -4827,13 +4849,26 @@ static int lua_GetChatWindowSavedDimensions(lua_State* L) {
     return 2;
 }
 
+/// SetChatWindowName (0x004fc330): a string, or "" for anything else, kept to
+/// 127 characters.
 static int lua_SetChatWindowName(lua_State* L) {
-    if (auto* w = chatWindow(L, 1)) w->name = luaL_optstring(L, 2, "");
+    if (!chatWindowUsage(L, "Usage: SetChatWindowName(index, \"name\")")) return 0;
+    if (auto* w = chatWindow(L, 1)) {
+        w->name = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
+        if (w->name.size() > 127) w->name.resize(127);
+    }
     saveInterfaceState();
     return 0;
 }
+/// SetChatWindowSize (0x004fc3d0): two numbers, the size cut to a whole
+/// number and kept only when it is more than 0.
 static int lua_SetChatWindowSize(lua_State* L) {
-    if (auto* w = chatWindow(L, 1)) w->fontSize = static_cast<float>(luaL_optnumber(L, 2, 14.0));
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: SetChatWindowSize(index, size)");
+    if (auto* w = chatWindow(L, 1)) {
+        const int size = luaToClientInt(L, 2);
+        if (size > 0) w->fontSize = static_cast<float>(size);
+    }
     saveInterfaceState();
     return 0;
 }
@@ -4844,42 +4879,52 @@ static int lua_SetChatWindowSize(lua_State* L) {
 // nothing" as "the interface said white", and saves it. The white background
 // this client shipped with is what that looks like once it is on disk.
 static int lua_SetChatWindowColor(lua_State* L) {
+    // (The client raises its usage error for a missing component, 0x004fc470;
+    // see above for why one is kept here.) Each is kept as the client keeps
+    // it, a byte.
+    if (!chatWindowUsage(L, "Usage: SetChatWindowColor(index, r, g, b)")) return 0;
     if (auto* w = chatWindow(L, 1)) {
-        w->r = static_cast<float>(luaL_optnumber(L, 2, w->r));
-        w->g = static_cast<float>(luaL_optnumber(L, 3, w->g));
-        w->b = static_cast<float>(luaL_optnumber(L, 4, w->b));
+        if (lua_isnumber(L, 2)) w->r = chatColourByte(lua_tonumber(L, 2));
+        if (lua_isnumber(L, 3)) w->g = chatColourByte(lua_tonumber(L, 3));
+        if (lua_isnumber(L, 4)) w->b = chatColourByte(lua_tonumber(L, 4));
     }
     saveInterfaceState();
     return 0;
 }
 static int lua_SetChatWindowAlpha(lua_State* L) {
+    if (!chatWindowUsage(L, "Usage: SetChatWindowAlpha(index, alpha)")) return 0;
     if (auto* w = chatWindow(L, 1))
-        w->alpha = static_cast<float>(luaL_optnumber(L, 2, w->alpha));
+        if (lua_isnumber(L, 2)) w->alpha = chatColourByte(lua_tonumber(L, 2));   // 0x004fc5b0
     saveInterfaceState();
     return 0;
 }
+/// SetChatWindowShown, Locked and Uninteractable (0x004fc810, 0x004fc660,
+/// 0x004fc6e0): the flag as the client reads one - none is yes for Shown and
+/// no for the other two.
 static int lua_SetChatWindowShown(lua_State* L) {
-    if (auto* w = chatWindow(L, 1)) w->shown = lua_toboolean(L, 2) != 0;
+    if (!chatWindowUsage(L, "Usage: SetChatWindowShown(index, shown)")) return 0;
+    if (auto* w = chatWindow(L, 1)) w->shown = luaClientBoolean(L, 2, true);
     saveInterfaceState();
     return 0;
 }
 static int lua_SetChatWindowLocked(lua_State* L) {
-    if (auto* w = chatWindow(L, 1)) w->locked = lua_toboolean(L, 2) != 0;
+    if (!chatWindowUsage(L, "Usage: SetChatWindowLocked(index, locked)")) return 0;
+    if (auto* w = chatWindow(L, 1)) w->locked = luaClientBoolean(L, 2, false);
     saveInterfaceState();
     return 0;
 }
 /// The dock position, which is a number and not a flag - see GetChatWindowInfo.
-/// A false or nil means undocked, which is zero here rather than a missing key.
+/// Anything but a number is undocked, 0 (0x004fc760: the number rounded).
 static int lua_SetChatWindowDocked(lua_State* L) {
-    if (auto* w = chatWindow(L, 1)) {
-        if (lua_isnumber(L, 2)) w->docked = static_cast<int>(lua_tonumber(L, 2));
-        else w->docked = lua_toboolean(L, 2) ? 1 : 0;
-    }
+    if (!chatWindowUsage(L, "Usage: SetChatWindowDocked(index, docked)")) return 0;
+    if (auto* w = chatWindow(L, 1))
+        w->docked = lua_isnumber(L, 2) ? static_cast<int>(std::lround(lua_tonumber(L, 2))) : 0;
     saveInterfaceState();
     return 0;
 }
 static int lua_SetChatWindowUninteractable(lua_State* L) {
-    if (auto* w = chatWindow(L, 1)) w->uninteractable = lua_toboolean(L, 2) != 0;
+    if (!chatWindowUsage(L, "Usage: SetChatWindowUninteractable(index, uninteractable)")) return 0;
+    if (auto* w = chatWindow(L, 1)) w->uninteractable = luaClientBoolean(L, 2, false);
     saveInterfaceState();
     return 0;
 }
