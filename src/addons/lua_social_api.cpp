@@ -3708,8 +3708,10 @@ void registerSocialLuaAPI(lua_State* L) {
                 // carries the wording. Sending is the whole of the client's
                 // part.
                 {"DoEmote", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1))   // 0x00500980
+                return luaL_error(L, "Usage: DoEmote(\"emote\"[, \"target\"])");
             auto* gh = getGameHandler(L);
-            const char* token = luaL_checkstring(L, 1);
+            const char* token = lua_tostring(L, 1);
             if (!gh || !token) return 0;
             std::string name(token);
             toLowerInPlace(name);
@@ -3722,9 +3724,12 @@ void registerSocialLuaAPI(lua_State* L) {
             //
             // The current target when none is named, which is what the emote
             // buttons and a bare "/dance" mean.
-            const char* aimedAt = luaL_optstring(L, 2, "");
-            uint64_t target = (aimedAt && *aimedAt) ? resolveUnitOrName(gh, aimedAt) : 0;
-            if (target == 0 && (!aimedAt || !*aimedAt)) {
+            // 0x00500980: none, "" or one starting with % (an unexpanded
+            // %t) is the current target; anything else names the unit.
+            const char* aimedAt = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
+            const bool current = !*aimedAt || *aimedAt == '%';
+            uint64_t target = current ? 0 : resolveUnitOrName(gh, aimedAt);
+            if (current) {
                 target = gh->hasTarget() ? gh->getTargetGuid() : 0;
             }
             // 0x006dd9e0: an emote the client does not send it does not play.
