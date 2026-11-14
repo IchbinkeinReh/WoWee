@@ -6692,26 +6692,36 @@ int lua_Texture_GetTexture(lua_State* L) {
     lua_pushstring(L, w ? w->texturePath.c_str() : "");
     return 1;
 }
+// SetTexCoord (0x0048e170): exactly four numbers - left, right, top, bottom -
+// or exactly eight, a UV per corner in WoW's order of upper-left, lower-left,
+// upper-right, lower-right; any other count is the usage error. Each value is
+// read as a number (anything else is 0) and must lie in -10000 .. 10000, NaN
+// failing too, or it is "TexCoord out of range". Reading the first four of an
+// eight-number call as a crop is how the paperdoll's sideways flyout arrow
+// became a pale bar.
 int lua_Texture_SetTexCoord(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) {
-        // Eight numbers is the rotated form: a UV per corner, in WoW's order
-        // of upper-left, lower-left, upper-right, lower-right. Four is the
-        // plain left/right/top/bottom crop. Reading the first four of an
-        // eight-number call treats two corners as a crop rectangle, which is
-        // how the paperdoll's sideways flyout arrow became a pale bar.
-        if (lua_gettop(L) >= 9) {
-            for (int i = 0; i < 8; ++i) {
-                w->texCoordQuad[i] = static_cast<float>(luaL_optnumber(L, 2 + i, 0.0));
-            }
-            w->texCoordRotated = true;
-            return 0;
-        }
-        w->texCoordRotated = false;
-        w->texCoord[0] = static_cast<float>(luaL_optnumber(L, 2, 0.0));
-        w->texCoord[1] = static_cast<float>(luaL_optnumber(L, 3, 1.0));
-        w->texCoord[2] = static_cast<float>(luaL_optnumber(L, 4, 0.0));
-        w->texCoord[3] = static_cast<float>(luaL_optnumber(L, 5, 1.0));
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    const int top = lua_gettop(L);
+    if (top != 5 && top != 9) {
+        return luaL_error(L,
+                          "Usage: %s:SetTexCoord(minX, maxX, minY, maxY) or SetTexCoord(ULx, ULy, LLx, LLy, URx, URy, "
+                          "LRx, LRy)",
+                          w->name.empty() ? "<unnamed>" : w->name.c_str());
     }
+    const int count = top - 1;
+    float v[8] = {};
+    for (int i = 0; i < count; ++i) {
+        v[i] = static_cast<float>(lua_tonumber(L, 2 + i));
+        if (!(v[i] >= -10000.0f && v[i] <= 10000.0f)) return luaL_error(L, "TexCoord out of range");
+    }
+    if (count == 8) {
+        for (int i = 0; i < 8; ++i) w->texCoordQuad[i] = v[i];
+        w->texCoordRotated = true;
+        return 0;
+    }
+    w->texCoordRotated = false;
+    for (int i = 0; i < 4; ++i) w->texCoord[i] = v[i];
     return 0;
 }
 /// SetRotation(angle[, cx, cy]) (0x0048c860): the four corners' coordinates
