@@ -37,6 +37,7 @@
 #include "game/opcode_table.hpp"
 #include "network/packet.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "game/chat_log.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "addons/chat_color_table.hpp"
 #include "addons/lua_taint.hpp"
@@ -8680,24 +8681,10 @@ void registerSystemLuaAPI(lua_State* L) {
                 // else is 0. It answered 1 for every type.
                 {"GetChatTypeIndex", [](lua_State* L) -> int {
             if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetChatTypeIndex(type)");
-            static constexpr const char* kChatTypes[] = {
-                "SYSTEM", "SAY", "PARTY", "RAID", "GUILD", "OFFICER", "YELL", "WHISPER",
-                "WHISPER_FOREIGN", "WHISPER_INFORM", "EMOTE", "TEXT_EMOTE", "MONSTER_SAY",
-                "MONSTER_PARTY", "MONSTER_YELL", "MONSTER_WHISPER", "MONSTER_EMOTE", "CHANNEL",
-                "CHANNEL_JOIN", "CHANNEL_LEAVE", "CHANNEL_LIST", "CHANNEL_NOTICE",
-                "CHANNEL_NOTICE_USER", "AFK", "DND", "IGNORED", "SKILL", "LOOT", "MONEY",
-                "OPENING", "TRADESKILLS", "PET_INFO", "COMBAT_MISC_INFO", "COMBAT_XP_GAIN",
-                "COMBAT_HONOR_GAIN", "COMBAT_FACTION_CHANGE", "BG_SYSTEM_NEUTRAL",
-                "BG_SYSTEM_ALLIANCE", "BG_SYSTEM_HORDE", "RAID_LEADER", "RAID_WARNING",
-                "RAID_BOSS_EMOTE", "RAID_BOSS_WHISPER", "FILTERED", "BATTLEGROUND",
-                "BATTLEGROUND_LEADER", "RESTRICTED", "BATTLENET", "ACHIEVEMENT",
-                "GUILD_ACHIEVEMENT", "ARENA_POINTS", "PARTY_LEADER", "TARGETICONS",
-                "BN_WHISPER", "BN_WHISPER_INFORM", "BN_CONVERSATION", "BN_CONVERSATION_NOTICE",
-                "BN_CONVERSATION_LIST", "BN_INLINE_TOAST_ALERT", "BN_INLINE_TOAST_BROADCAST",
-                "BN_INLINE_TOAST_BROADCAST_INFORM", "BN_INLINE_TOAST_CONVERSATION"};
             std::string type = lua_tostring(L, 1);
             for (auto& c : type) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-            for (size_t i = 0; i < std::size(kChatTypes); ++i) {
+            const auto& kChatTypes = game::chat_log::kTypeNames;
+            for (size_t i = 0; i < kChatTypes.size(); ++i) {
                 if (type == kChatTypes[i]) { lua_pushnumber(L, static_cast<double>(i + 1)); return 1; }
             }
             for (int n = 1; n <= 10; ++n) {
