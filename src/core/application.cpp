@@ -2379,6 +2379,8 @@ void Application::run() {
                 event.type == SDL_EVENT_WINDOW_FOCUS_GAINED) {
                 const bool focused = SDL_GetKeyboardFocus() != nullptr ||
                                      event.type == SDL_EVENT_WINDOW_FOCUS_GAINED;
+                // Sound_EnableSoundWhenGameIsInBG decides whether the game is
+                // heard while another window has the focus (0x004c5dc0).
                 const bool playInBackground =
                     addons::storedCVarValue("Sound_EnableSoundWhenGameIsInBG", "0") != "0";
                 // An app the system has sent to the background is silent

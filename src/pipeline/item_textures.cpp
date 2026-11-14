@@ -18,11 +18,14 @@ std::string resolveItemRegionTexture(AssetManager& assets, int region,
     const char* dir = itemComponentDir(region);
     if (dir[0] == '\0') return {};
 
+    // 0x004e6fb0: the unisex file first, and only where there is none the
+    // one for the character's sex - the U before ".blp" swapped for M or F.
+    // The plain name with no suffix is WoWee's own last resort.
     const std::string base = std::string("Item\\TextureComponents\\") + dir + "\\" + texName;
-    std::string gendered = base + (isFemale ? "_F.blp" : "_M.blp");
-    if (assets.fileExists(gendered)) return gendered;
     std::string unisex = base + "_U.blp";
     if (assets.fileExists(unisex)) return unisex;
+    std::string gendered = base + (isFemale ? "_F.blp" : "_M.blp");
+    if (assets.fileExists(gendered)) return gendered;
     std::string plain = base + ".blp";
     if (assets.fileExists(plain)) return plain;
     return {};

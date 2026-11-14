@@ -43,6 +43,8 @@ HelmVisual resolveHelmVisual(pipeline::AssetManager& assets,
         stripExtension(dbc->getString(static_cast<uint32_t>(row), modelField));
     if (modelName.empty()) return out;
 
+    // 0x004e7800: Head\<model>_<race><sex>.mdx - the model's name with its
+    // extension cut, an underscore, and the race's two letters and M or F.
     const std::string suffix = raceGenderSuffix(raceId, genderId);
     if (!suffix.empty()) out.racialModelPath = kHeadDir + modelName + suffix + ".m2";
     out.baseModelPath = kHeadDir + modelName + ".m2";
