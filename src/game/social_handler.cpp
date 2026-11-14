@@ -1878,7 +1878,8 @@ void SocialHandler::removeVoiceIgnore(const std::string& playerName) {
 void SocialHandler::randomRoll(uint32_t minRoll, uint32_t maxRoll) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     if (minRoll > maxRoll) std::swap(minRoll, maxRoll);
-    if (maxRoll > 10000) maxRoll = 10000;
+    // The client's own ceiling (0x00516610); RandomRoll refuses past it.
+    if (maxRoll > 1000000) maxRoll = 1000000;
     auto packet = RandomRollPacket::build(minRoll, maxRoll);
     owner_.getSocket()->send(packet);
     LOG_INFO("Rolled ", minRoll, "-", maxRoll);

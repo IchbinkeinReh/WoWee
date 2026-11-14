@@ -4002,10 +4002,13 @@ void registerSocialLuaAPI(lua_State* L) {
                 // was not, and the server refuses it from a rank without the
                 // right, which is where that decision belongs while nothing
                 // here reads rank rights.
+                // GuildSetMOTD("message") (0x00515a90): a string or the usage
+                // error, kept to the client's 128 characters.
                 {"GuildSetMOTD", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const char* motd = luaL_optstring(L, 1, "");
-            if (gh && motd) gh->setGuildMotd(motd);
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GuildSetMOTD(\"message\")");
+            std::string motd = lua_tostring(L, 1);
+            if (motd.size() > 128) motd.resize(128);
+            if (auto* gh = getGameHandler(L)) gh->setGuildMotd(motd);
             return 0;
         }},
                 {"SendSystemMessage",   lua_SendSystemMessage},
@@ -4490,19 +4493,16 @@ void registerSocialLuaAPI(lua_State* L) {
             lua_pushnumber(L, on ? 1 : 0);   // the menu compares it against 1 and 0
             return 1;
         }},
+                // SetPVP(state) (0x005168b0): CMSG_TOGGLE_PVP always carrying
+                // the state - the number rounded, as a byte, and 0 for anything
+                // else, SetPVP(true) included - which the server sets rather
+                // than toggles. (WoWee toggled when the state differed.)
                 {"SetPVP", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
-            const bool want = lua_isnumber(L, 1) ? (lua_tonumber(L, 1) != 0)
-                                                 : (lua_toboolean(L, 1) != 0);
-            bool on = false;
-            if (auto e = gh->getEntityManager().getEntity(gh->getPlayerGuid())) {
-                on = (e->getField(59) & 0x00001000u) != 0;
-            }
-            // The client can only toggle, so only toggle when it would land on
-            // what was asked for - otherwise SetPVP(1) while already flagged
-            // would turn it off.
-            if (want != on) gh->togglePvp();
+            const uint8_t state = lua_isnumber(L, 1)
+                ? static_cast<uint8_t>(std::lround(lua_tonumber(L, 1)) & 0xff) : 0;
+            gh->setPvpState(state);
             return 0;
         }},
                 {"UnitIsInMyGuild", [](lua_State* L) -> int {
@@ -5472,11 +5472,19 @@ void registerSocialLuaAPI(lua_State* L) {
             if (guid) gh->proposeDuel(guid);
             return 0;
         }},
+                // RandomRoll("min", "max") (0x00516610): both strings - numbers
+                // count - or the usage error, each read as atoi reads one; 0
+                // and 0, a negative minimum, a minimum past the maximum or a
+                // maximum past 1000000 send nothing. No defaults: the slash
+                // command supplies them.
                 {"RandomRoll", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            int mn = static_cast<int>(luaL_optnumber(L, 1, 1));
-            int mx = static_cast<int>(luaL_optnumber(L, 2, 100));
-            if (gh) gh->randomRoll(mn, mx);
+            if (!lua_isstring(L, 1) || !lua_isstring(L, 2))
+                return luaL_error(L, "Usage: RandomRoll(\"max\") or RandomRoll(\"min\", \"max\")");
+            const int mn = std::atoi(lua_tostring(L, 1));
+            const int mx = std::atoi(lua_tostring(L, 2));
+            if ((mn == 0 && mx == 0) || mn < 0 || mn > mx || mx > 1000000) return 0;
+            if (auto* gh = getGameHandler(L))
+                gh->randomRoll(static_cast<uint32_t>(mn), static_cast<uint32_t>(mx));
             return 0;
         }},
                 {"JoinChannelByName", lua_JoinChannelByName},

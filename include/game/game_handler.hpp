@@ -958,6 +958,8 @@ public:
 
     // PvP
     void togglePvp();
+    /// SetPVP (0x005168b0): the PvP flag set to `state`, not toggled.
+    void setPvpState(uint8_t state);
 
     // Minimap ping (Ctrl+click on minimap; wowX/wowY in canonical WoW coords)
     void sendMinimapPing(float wowX, float wowY);

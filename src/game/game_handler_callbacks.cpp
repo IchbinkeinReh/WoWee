@@ -2169,6 +2169,10 @@ void GameHandler::togglePvp() {
     if (combatHandler_) combatHandler_->togglePvp();
 }
 
+void GameHandler::setPvpState(uint8_t state) {
+    if (combatHandler_) combatHandler_->setPvpState(state);
+}
+
 void GameHandler::requestGuildInfo() {
     if (socialHandler_) socialHandler_->requestGuildInfo();
 }

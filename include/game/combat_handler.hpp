@@ -153,6 +153,8 @@ public:
 
     // --- PvP ---
     void togglePvp();
+    /// SetPVP's request (0x005168b0): CMSG_TOGGLE_PVP carrying the state.
+    void setPvpState(uint8_t state);
 
     // --- Death / Resurrection ---
     void releaseSpirit();

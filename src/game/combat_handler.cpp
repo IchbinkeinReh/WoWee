@@ -2311,6 +2311,12 @@ void CombatHandler::togglePvp() {
     LOG_INFO("Toggled PvP flag (was ", currentlyPvp ? "on" : "off", ")");
 }
 
+void CombatHandler::setPvpState(uint8_t state) {
+    if (!owner_.isInWorld()) return;
+    auto packet = TogglePvpPacket::build(state);
+    owner_.getSocket()->send(packet);
+}
+
 // ============================================================
 // Death / Resurrection
 // ============================================================

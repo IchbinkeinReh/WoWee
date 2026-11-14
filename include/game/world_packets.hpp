@@ -1262,7 +1262,9 @@ public:
 /** CMSG_TOGGLE_PVP packet builder */
 class TogglePvpPacket {
 public:
-    static network::Packet build();
+    /// With no state the server toggles the flag; with one it sets it
+    /// (SetPVP, 0x005168b0, always sends the byte).
+    static network::Packet build(std::optional<uint8_t> state = std::nullopt);
 };
 
 // ============================================================
