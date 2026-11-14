@@ -3213,6 +3213,18 @@ void Application::shutdown() {
     }
     audioCoordinator_.reset();
 
+    // Before the game handler. The Lua engine holds a raw pointer to it: its
+    // destructor hands the handler an empty account-data bridge, the bridge
+    // it installed captures the engine, and the state keeps the handler in
+    // its registry for the bindings that ask about the session. Left to
+    // member destruction in ~Application, all of that ran after
+    // gameHandler.reset() below - the destructor wrote into a freed
+    // GameHandler, which usually went unnoticed and sometimes ended a clean
+    // quit in SIGSEGV. The interface itself is already down (unloadInterface
+    // above), so this only saves what is left and closes the state.
+    LOG_DEBUG("Resetting addonManager...");
+    addonManager_.reset();
+
     LOG_DEBUG("Resetting world...");
     world.reset();
     LOG_DEBUG("Resetting gameHandler...");
