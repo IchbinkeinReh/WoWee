@@ -40,6 +40,15 @@ static int channelCommand(lua_State* L, game::Opcode opcode, const char* label) 
     return 0;
 }
 
+static int channelSilenceVoice(lua_State* L, game::Opcode opcode, const char* label) {
+    if (lua_isstring(L, 1)) {
+        std::string ch = lua_tostring(L, 1);
+        for (auto& c : ch) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        if (ch == "PARTY" || ch == "RAID" || ch == "BATTLEGROUND" || ch == "BATTLEFIELDS") return 0;
+    }
+    return channelCommand(L, opcode, label);
+}
+
 /// The one-string channel commands (0x004fe460): a string or
 /// "Usage: %s(\"channel\")", then the opcode and the channel's name.
 static int channelNameCommand(lua_State* L, game::Opcode opcode, const char* label) {
@@ -1199,10 +1208,11 @@ static int& selectedFriend() { static int v = 0; return v; }
 static int& selectedIgnore() { static int v = 0; return v; }
 
 // SendSystemMessage(text) - put a line in the chat as the client itself would
+/// SendSystemMessage("message") (0x0050d8a0): a string or the usage error,
+/// then a system line - an empty one too.
 static int lua_SendSystemMessage(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    const char* msg = luaL_optstring(L, 1, "");
-    if (gh && msg && *msg) gh->addSystemChatMessage(msg);
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: SendSystemMessage(\"message\")");
+    if (auto* gh = getGameHandler(L)) gh->addSystemChatMessage(lua_tostring(L, 1));
     return 0;
 }
 
@@ -1241,8 +1251,20 @@ static int lua_AddOrDelIgnore(lua_State* L) {
 // DUEL_REQUESTED, and StaticPopup draws them. None of the buttons did anything,
 // because the functions behind them were never bound - so an invitation could
 // be seen and not taken.
+/// The role mask InviteUnit and AcceptGroup read from three flags at `first`
+/// (0x0051a6e0, 0x0051ab20): tank 2, healer 4, damage 8.
+static uint32_t groupRolesArg(lua_State* L, int first) {
+    uint32_t roles = 0;
+    if (luaClientSwitchArg(L, first, false)) roles |= 2;
+    if (luaClientSwitchArg(L, first + 1, false)) roles |= 4;
+    if (luaClientSwitchArg(L, first + 2, false)) roles |= 8;
+    return roles;
+}
+
+/// AcceptGroup([tank, healer, damage]) (0x0051ab20): the role mask in the
+/// acceptance.
 static int lua_AcceptGroup(lua_State* L) {
-    if (auto* gh = getGameHandler(L)) gh->acceptGroupInvite();
+    if (auto* gh = getGameHandler(L)) gh->acceptGroupInvite(groupRolesArg(L, 1));
     return 0;
 }
 static int lua_DeclineGroup(lua_State* L) {
@@ -3476,7 +3498,14 @@ void registerSocialLuaAPI(lua_State* L) {
             gh->addVoiceIgnore(name);
             return 0;
         }},
-                {"ChannelSilenceVoice", [](lua_State* L) -> int { (void)L; return 0; }},
+                // ChannelSilenceVoice / ChannelUnSilenceVoice("channel", "name")
+                // (0x00501140 and its twin): a chat channel's member silenced
+                // through the shared channel command; the group's own voice
+                // channels - Party, Raid, Battleground - are the client's local
+                // voice chat, which this client does not have.
+                {"ChannelSilenceVoice", [](lua_State* L) -> int {
+            return channelSilenceVoice(L, game::Opcode::CMSG_CHANNEL_SILENCE_VOICE, "ChannelSilenceVoice");
+        }},
                 // ChannelSilenceAll / ChannelUnSilenceAll("channel", "name")
                 // (0x00501250, 0x00501400) - see ChatHandler::channelSilenceAll.
                 {"ChannelSilenceAll", [](lua_State* L) -> int {
@@ -3521,7 +3550,9 @@ void registerSocialLuaAPI(lua_State* L) {
                 gh->silenceGroupMember(lua_tostring(L, 1), false);
             return 0;
         }},
-                {"ChannelUnSilenceVoice", [](lua_State* L) -> int { (void)L; return 0; }},
+                {"ChannelUnSilenceVoice", [](lua_State* L) -> int {
+            return channelSilenceVoice(L, game::Opcode::CMSG_CHANNEL_UNSILENCE_VOICE, "ChannelUnSilenceVoice");
+        }},
                 // Vehicles are not modelled in the raid frames.
                 {"UnitTargetsVehicleInRaidUI", luaReturnNil},
                 {"GetNumLanguages",   lua_GetNumLanguages},
@@ -3971,10 +4002,13 @@ void registerSocialLuaAPI(lua_State* L) {
                 // was not, and the server refuses it from a rank without the
                 // right, which is where that decision belongs while nothing
                 // here reads rank rights.
+                // GuildSetMOTD("message") (0x00515a90): a string or the usage
+                // error, kept to the client's 128 characters.
                 {"GuildSetMOTD", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const char* motd = luaL_optstring(L, 1, "");
-            if (gh && motd) gh->setGuildMotd(motd);
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GuildSetMOTD(\"message\")");
+            std::string motd = lua_tostring(L, 1);
+            if (motd.size() > 128) motd.resize(128);
+            if (auto* gh = getGameHandler(L)) gh->setGuildMotd(motd);
             return 0;
         }},
                 {"SendSystemMessage",   lua_SendSystemMessage},
@@ -4337,9 +4371,16 @@ void registerSocialLuaAPI(lua_State* L) {
         }},
                 // InviteUnit(unit or name), UninviteUnit(unit or name): a
                 // unit token invites that unit by its name (unit_or_name.hpp).
+                // InviteUnit(unit or name [, tank, healer, damage]) (0x0051a6e0):
+                // a name past 48 characters is "Name too long", and the three
+                // flags, read as the client reads one, ride in the invite as
+                // its role mask - 2, 4 and 8.
                 {"InviteUnit", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (gh) gh->inviteToGroup(unitOrNameArg(L, gh, luaL_checkstring(L, 1)));
+            if (!gh || !lua_isstring(L, 1)) return 0;
+            const std::string name = unitOrNameArg(L, gh, lua_tostring(L, 1));
+            if (name.size() > 48) return luaL_error(L, "Name too long");
+            gh->inviteToGroup(name, groupRolesArg(L, 2));
             return 0;
         }},
                 // UninviteUnit(name [, reason]) - the reason is argument two, and
@@ -4452,19 +4493,16 @@ void registerSocialLuaAPI(lua_State* L) {
             lua_pushnumber(L, on ? 1 : 0);   // the menu compares it against 1 and 0
             return 1;
         }},
+                // SetPVP(state) (0x005168b0): CMSG_TOGGLE_PVP always carrying
+                // the state - the number rounded, as a byte, and 0 for anything
+                // else, SetPVP(true) included - which the server sets rather
+                // than toggles. (WoWee toggled when the state differed.)
                 {"SetPVP", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
-            const bool want = lua_isnumber(L, 1) ? (lua_tonumber(L, 1) != 0)
-                                                 : (lua_toboolean(L, 1) != 0);
-            bool on = false;
-            if (auto e = gh->getEntityManager().getEntity(gh->getPlayerGuid())) {
-                on = (e->getField(59) & 0x00001000u) != 0;
-            }
-            // The client can only toggle, so only toggle when it would land on
-            // what was asked for - otherwise SetPVP(1) while already flagged
-            // would turn it off.
-            if (want != on) gh->togglePvp();
+            const uint8_t state = lua_isnumber(L, 1)
+                ? static_cast<uint8_t>(std::lround(lua_tonumber(L, 1)) & 0xff) : 0;
+            gh->setPvpState(state);
             return 0;
         }},
                 {"UnitIsInMyGuild", [](lua_State* L) -> int {
@@ -5434,18 +5472,28 @@ void registerSocialLuaAPI(lua_State* L) {
             if (guid) gh->proposeDuel(guid);
             return 0;
         }},
+                // RandomRoll("min", "max") (0x00516610): both strings - numbers
+                // count - or the usage error, each read as atoi reads one; 0
+                // and 0, a negative minimum, a minimum past the maximum or a
+                // maximum past 1000000 send nothing. No defaults: the slash
+                // command supplies them.
                 {"RandomRoll", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            int mn = static_cast<int>(luaL_optnumber(L, 1, 1));
-            int mx = static_cast<int>(luaL_optnumber(L, 2, 100));
-            if (gh) gh->randomRoll(mn, mx);
+            if (!lua_isstring(L, 1) || !lua_isstring(L, 2))
+                return luaL_error(L, "Usage: RandomRoll(\"max\") or RandomRoll(\"min\", \"max\")");
+            const int mn = std::atoi(lua_tostring(L, 1));
+            const int mx = std::atoi(lua_tostring(L, 2));
+            if ((mn == 0 && mx == 0) || mn < 0 || mn > mx || mx > 1000000) return 0;
+            if (auto* gh = getGameHandler(L))
+                gh->randomRoll(static_cast<uint32_t>(mn), static_cast<uint32_t>(mx));
             return 0;
         }},
                 {"JoinChannelByName", lua_JoinChannelByName},
                 {"JoinTemporaryChannel", lua_JoinChannelByName},
+                // 0x005096d0: a string or the usage error.
                 {"LeaveChannelByName", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: LeaveChannelByName(\"name\")");
             auto* gh = getGameHandler(L);
-            const char* name = luaL_checkstring(L, 1);
+            const char* name = lua_tostring(L, 1);
             if (gh) gh->leaveChannel(name);
             return 0;
         }},

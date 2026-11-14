@@ -1262,7 +1262,9 @@ public:
 /** CMSG_TOGGLE_PVP packet builder */
 class TogglePvpPacket {
 public:
-    static network::Packet build();
+    /// With no state the server toggles the flag; with one it sets it
+    /// (SetPVP, 0x005168b0, always sends the byte).
+    static network::Packet build(std::optional<uint8_t> state = std::nullopt);
 };
 
 // ============================================================
@@ -2898,7 +2900,8 @@ public:
 /** CMSG_GROUP_INVITE packet builder */
 class GroupInvitePacket {
 public:
-    static network::Packet build(const std::string& playerName);
+    /// `roles`: 2 tank, 4 healer, 8 damage, as InviteUnit reads them (0x0051a6e0).
+    static network::Packet build(const std::string& playerName, uint32_t roles = 0);
 };
 
 /** SMSG_GROUP_INVITE data */
@@ -2918,7 +2921,8 @@ public:
 /** CMSG_GROUP_ACCEPT packet builder */
 class GroupAcceptPacket {
 public:
-    static network::Packet build();
+    /// `roles` as AcceptGroup reads them (0x0051ab20).
+    static network::Packet build(uint32_t roles = 0);
 };
 
 /** CMSG_GROUP_DECLINE packet builder */

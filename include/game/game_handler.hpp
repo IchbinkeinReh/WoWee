@@ -958,6 +958,8 @@ public:
 
     // PvP
     void togglePvp();
+    /// SetPVP (0x005168b0): the PvP flag set to `state`, not toggled.
+    void setPvpState(uint8_t state);
 
     // Minimap ping (Ctrl+click on minimap; wowX/wowY in canonical WoW coords)
     void sendMinimapPing(float wowX, float wowY);
@@ -2717,8 +2719,8 @@ public:
     void declineResurrect();
 
     // ---- Group ----
-    void inviteToGroup(const std::string& playerName);
-    void acceptGroupInvite();
+    void inviteToGroup(const std::string& playerName, uint32_t roles = 0);
+    void acceptGroupInvite(uint32_t roles = 0);
     void declineGroupInvite();
     void leaveGroup();
     /// SocialHandler::forgetLfgDungeonOnWorldport (0x0052cc30).

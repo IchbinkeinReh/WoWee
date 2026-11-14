@@ -1878,7 +1878,8 @@ void SocialHandler::removeVoiceIgnore(const std::string& playerName) {
 void SocialHandler::randomRoll(uint32_t minRoll, uint32_t maxRoll) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     if (minRoll > maxRoll) std::swap(minRoll, maxRoll);
-    if (maxRoll > 10000) maxRoll = 10000;
+    // The client's own ceiling (0x00516610); RandomRoll refuses past it.
+    if (maxRoll > 1000000) maxRoll = 1000000;
     auto packet = RandomRollPacket::build(minRoll, maxRoll);
     owner_.getSocket()->send(packet);
     LOG_INFO("Rolled ", minRoll, "-", maxRoll);
@@ -2340,7 +2341,7 @@ void SocialHandler::handleDuelWinner(network::Packet& packet) {
 // Party / Raid
 // ============================================================
 
-void SocialHandler::inviteToGroup(const std::string& playerName) {
+void SocialHandler::inviteToGroup(const std::string& playerName, uint32_t roles) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     // One's own name, matched without case, is refused before the request
     // (0x006d4300): ERR_INVITE_SELF.
@@ -2355,15 +2356,15 @@ void SocialHandler::inviteToGroup(const std::string& playerName) {
         }
     }
     LOG_WARNING(">>> Sending CMSG_GROUP_INVITE to '", playerName, "'");
-    auto packet = GroupInvitePacket::build(playerName);
+    auto packet = GroupInvitePacket::build(playerName, roles);
     owner_.getSocket()->send(packet);
 }
 
-void SocialHandler::acceptGroupInvite() {
+void SocialHandler::acceptGroupInvite(uint32_t roles) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     LOG_WARNING(">>> Sending CMSG_GROUP_ACCEPT");
     pendingGroupInvite = false;
-    auto packet = GroupAcceptPacket::build();
+    auto packet = GroupAcceptPacket::build(roles);
     owner_.getSocket()->send(packet);
 }
 
@@ -2737,6 +2738,14 @@ void SocialHandler::setSavedInstanceExtend(uint32_t mapId, uint32_t difficulty, 
     // uint32 mapId, uint32 difficulty, uint8 toggle - HandleSetSavedInstanceExtend.
     // The server ignores it unless the bind is permanent and the flag actually
     // changes, so there is nothing to check here that it does not check better.
+    // 0x0050dc10: the lock is marked at once, and the chat says so with the
+    // instance's name, before the request goes.
+    for (auto& lo : instanceLockouts_) {
+        if (lo.mapId == mapId && lo.difficulty == difficulty) lo.extended = extend;
+    }
+    owner_.addSystemChatMessage(extend
+        ? interfaceFormat("RAID_INSTANCE_LOCK_EXTENDED", "Lock for %s has been extended.", {owner_.getMapName(mapId)})
+        : interfaceFormat("RAID_INSTANCE_LOCK_NOT_EXTENDED", "Lock for %s will no longer be extended.", {owner_.getMapName(mapId)}));
     network::Packet packet(wireOpcode(Opcode::CMSG_SET_SAVED_INSTANCE_EXTEND));
     packet.writeUInt32(mapId);
     packet.writeUInt32(difficulty);

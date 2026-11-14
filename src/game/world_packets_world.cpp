@@ -405,10 +405,10 @@ bool SpellCooldownParser::parse(network::Packet& packet, SpellCooldownData& data
 // Group/Party System
 // ============================================================
 
-network::Packet GroupInvitePacket::build(const std::string& playerName) {
+network::Packet GroupInvitePacket::build(const std::string& playerName, uint32_t roles) {
     network::Packet packet(wireOpcode(Opcode::CMSG_GROUP_INVITE));
     packet.writeString(playerName);
-    packet.writeUInt32(0); // unused
+    packet.writeUInt32(roles);   // 0x006d4300: the role mask InviteUnit read
     LOG_DEBUG("Built CMSG_GROUP_INVITE: ", playerName);
     return packet;
 }
@@ -430,9 +430,9 @@ bool GroupInviteResponseParser::parse(network::Packet& packet, GroupInviteRespon
     return !data.inviterName.empty();
 }
 
-network::Packet GroupAcceptPacket::build() {
+network::Packet GroupAcceptPacket::build(uint32_t roles) {
     network::Packet packet(wireOpcode(Opcode::CMSG_GROUP_ACCEPT));
-    packet.writeUInt32(0); // unused in 3.3.5a
+    packet.writeUInt32(roles);   // 0x006d4450: the role mask AcceptGroup read
     return packet;
 }
 

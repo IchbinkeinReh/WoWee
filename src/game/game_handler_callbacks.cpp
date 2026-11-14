@@ -2170,6 +2170,10 @@ void GameHandler::togglePvp() {
     if (combatHandler_) combatHandler_->togglePvp();
 }
 
+void GameHandler::setPvpState(uint8_t state) {
+    if (combatHandler_) combatHandler_->setPvpState(state);
+}
+
 void GameHandler::requestGuildInfo() {
     if (socialHandler_) socialHandler_->requestGuildInfo();
 }
@@ -3437,12 +3441,12 @@ void GameHandler::sendAlterAppearance(uint32_t hairStyleEntry, uint32_t hairColo
 // Group/Party
 // ============================================================
 
-void GameHandler::inviteToGroup(const std::string& playerName) {
-    if (socialHandler_) socialHandler_->inviteToGroup(playerName);
+void GameHandler::inviteToGroup(const std::string& playerName, uint32_t roles) {
+    if (socialHandler_) socialHandler_->inviteToGroup(playerName, roles);
 }
 
-void GameHandler::acceptGroupInvite() {
-    if (socialHandler_) socialHandler_->acceptGroupInvite();
+void GameHandler::acceptGroupInvite(uint32_t roles) {
+    if (socialHandler_) socialHandler_->acceptGroupInvite(roles);
 }
 
 void GameHandler::declineGroupInvite() {

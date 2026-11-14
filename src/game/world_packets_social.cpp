@@ -852,8 +852,9 @@ network::Packet ShowingCloakPacket::build(bool show) {
 // PvP
 // ============================================================
 
-network::Packet TogglePvpPacket::build() {
+network::Packet TogglePvpPacket::build(std::optional<uint8_t> state) {
     network::Packet packet(wireOpcode(Opcode::CMSG_TOGGLE_PVP));
+    if (state) packet.writeUInt8(*state);
     LOG_DEBUG("Built CMSG_TOGGLE_PVP");
     return packet;
 }

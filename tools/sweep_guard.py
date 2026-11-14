@@ -1635,8 +1635,10 @@ CHECKS = [
     # 23 from 22 on 2026-11-14: SendAddonMessage to a party the player is not
     # in sends nothing and says nothing, because that is what the client does
     # (0x00500560, its jump past the send when 0xbd1948 is empty).
+    # 24 on 2026-11-14: InviteUnit with no name does nothing and says nothing,
+    # as the client's does (0x0051a6e0: its string read gives null, no send).
     ("silent_refusal_check.py",
-     r"^(\d+) state or lookup refusal", 23,
+     r"^(\d+) state or lookup refusal", 24,
      "action bindings that refuse on missing state and say nothing"),
     ("silent_refusal_check.py",
      r"^(\d+) argument-bound refusal", 27,

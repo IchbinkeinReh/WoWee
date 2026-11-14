@@ -3014,10 +3014,12 @@ static int lua_GetBuildInfo(lua_State* L) {
     auto* svc = getLuaServices(L);
     auto* profile = svc && svc->expansionRegistry
         ? svc->expansionRegistry->getActive() : nullptr;
-    if (!profile) {
-        lua_pushstring(L, "3.3.5a");
-        lua_pushnumber(L, 12340);
-        lua_pushstring(L, "");
+    if (!profile || profile->majorVersion >= 3) {
+        // 0x0050f890: the version, the build and the build date as strings,
+        // and the interface version.
+        lua_pushstring(L, "3.3.5");
+        lua_pushstring(L, "12340");
+        lua_pushstring(L, "Jun 24 2010");
         lua_pushnumber(L, 30300);
         return 4;
     }
@@ -10467,6 +10469,15 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushstring(L, token);
             return 1; }},
                 {"GetBuildInfo",      lua_GetBuildInfo},
+                // FrameXML_Debug([level]) (0x0050f830): the XML loader's debug
+                // level, set from a number (cut to a whole one) and answered
+                // either way. WoWee's loader logs the same at every level.
+                {"FrameXML_Debug", [](lua_State* L) -> int {
+            static int level = 0;
+            if (lua_isnumber(L, 1)) level = luaToClientInt(L, 1);
+            lua_pushnumber(L, level);
+            return 1;
+        }},
                 {"GetCurrentMapAreaID", lua_GetCurrentMapAreaID},
                 {"SetMapToCurrentZone", lua_SetMapToCurrentZone},
                 {"GetCurrentMapContinent", lua_GetCurrentMapContinent},
@@ -11318,9 +11329,13 @@ void registerSystemLuaAPI(lua_State* L) {
                 // The call gives a position in the list and the wire wants the
                 // map and difficulty, which is what the lockout at that
                 // position holds.
+                // SetSavedInstanceExtend(index, extend) (0x0050dc10): a number
+                // and a true boolean, or the usage error; the index rounded.
                 {"SetSavedInstanceExtend", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1) || lua_type(L, 2) != LUA_TBOOLEAN)
+                return luaL_error(L, "Usage: SetSavedInstanceExtend(index, extend)");
             auto* gh = getGameHandler(L);
-            const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
+            const int index = static_cast<int>(std::lround(lua_tonumber(L, 1)));
             if (!gh || index < 1) return 0;
             const auto& locks = gh->getInstanceLockouts();
             if (index > static_cast<int>(locks.size())) return 0;
