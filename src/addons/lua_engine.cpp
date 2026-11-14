@@ -6981,14 +6981,31 @@ int lua_FontString_GetText(lua_State* L) {
     lua_pushstring(L, w ? w->text.c_str() : "");
     return 1;
 }
-int lua_FontString_SetJustifyH(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->justifyH = luaL_optstring(L, 2, "CENTER");
+namespace {
+/// The one justify table both setters read (0x00815080 over 0x00a44010):
+/// LEFT 1, CENTER 2, RIGHT 4, TOP 8, MIDDLE 16, BOTTOM 32, any case. Each
+/// setter keeps its own axis's bits of the match, so a name of the other axis
+/// leaves none set - drawn as the left edge, or the top. Anything else is the
+/// usage error.
+int setJustify(lua_State* L, bool horizontal) {
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    std::string name = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
+    for (char& c : name) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    const bool h = name == "LEFT" || name == "CENTER" || name == "RIGHT";
+    const bool v = name == "TOP" || name == "MIDDLE" || name == "BOTTOM";
+    if (!h && !v) {
+        return luaL_error(L, horizontal ? "Usage: %s:SetJustifyH(\"justify\")" : "Usage: %s:SetJustifyV(\"justify\")",
+                          w->name.empty() ? "<unnamed>" : w->name.c_str());
+    }
+    if (horizontal) w->justifyH = h ? name : "LEFT";
+    else            w->justifyV = v ? name : "TOP";
     return 0;
 }
-int lua_FontString_SetJustifyV(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->justifyV = luaL_optstring(L, 2, "MIDDLE");
-    return 0;
-}
+}  // namespace
+// SetJustifyH (0x0048e360) and SetJustifyV (0x0048e430).
+int lua_FontString_SetJustifyH(lua_State* L) { return setJustify(L, true); }
+int lua_FontString_SetJustifyV(lua_State* L) { return setJustify(L, false); }
 int lua_FontString_GetJustifyV(lua_State* L) {
     const auto* w = widgetOf(L, 1);
     lua_pushstring(L, w ? w->justifyV.c_str() : "MIDDLE");
@@ -7122,9 +7139,13 @@ int lua_FontString_GetSpacing(lua_State* L) {
     return 1;
 }
 
+// SetSpacing(spacing) (0x0048dd00): a number, or the usage error.
 int lua_FontString_SetSpacing(lua_State* L) {
-    if (auto* w = widgetOf(L, 1))
-        w->lineSpacing = static_cast<float>(luaL_optnumber(L, 2, 0.0));
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: %s:SetSpacing(spacing)", w->name.empty() ? "<unnamed>" : w->name.c_str());
+    w->lineSpacing = static_cast<float>(lua_tonumber(L, 2));
     return 0;
 }
 
@@ -7201,12 +7222,15 @@ static void applyFontObject(lua_State* L, int fontIndex, wowee::ui::Widget* w) {
     lua_pop(L, 1);
 }
 
+// SetShadowOffset(x, y) (0x0048dbb0): both numbers, or the usage error.
 int lua_FontString_SetShadowOffset(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) {
-        w->hasShadow = true;
-        w->shadowX = static_cast<float>(luaL_optnumber(L, 2, 1.0));
-        w->shadowY = static_cast<float>(luaL_optnumber(L, 3, -1.0));
-    }
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    if (!lua_isnumber(L, 2) || !lua_isnumber(L, 3))
+        return luaL_error(L, "Usage: %s:SetShadowOffset(x, y)", w->name.empty() ? "<unnamed>" : w->name.c_str());
+    w->hasShadow = true;
+    w->shadowX = static_cast<float>(lua_tonumber(L, 2));
+    w->shadowY = static_cast<float>(lua_tonumber(L, 3));
     return 0;
 }
 int lua_FontString_SetShadowColor(lua_State* L) {
@@ -7229,11 +7253,17 @@ int lua_FontString_SetShadowColor(lua_State* L) {
 /// the rest, so with this doing nothing the banner appeared at whatever size
 /// its template carried and sat there. Combat feedback sizes its numbers by
 /// hit type through the same call, and the scrolling combat text its crits.
+// SetTextHeight(pixelHeight) (0x0048ddb0): a number, or the usage error; one
+// not above FLT_EPSILON is its own error, and leaves the height as it was.
 int lua_FontString_SetTextHeight(lua_State* L) {
-    if (auto* w = widgetToRemeasure(L, 1)) {
-        const double h = luaL_optnumber(L, 2, 0.0);
-        if (h > 0.0) w->fontHeight = static_cast<float>(h);
-    }
+    auto* w = widgetToRemeasure(L, 1);
+    if (!w) return 0;
+    const char* who = w->name.empty() ? "<unnamed>" : w->name.c_str();
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetTextHeight(pixelHeight)", who);
+    const auto h = static_cast<float>(lua_tonumber(L, 2));
+    if (h <= 1.1920929e-07f)
+        return luaL_error(L, "%s:SetTextHeight(): invalid texHeight: %f, height must be > 0", who, static_cast<double>(h));
+    w->fontHeight = h;
     return 0;
 }
 int lua_FontString_SetFontObject(lua_State* L) {
