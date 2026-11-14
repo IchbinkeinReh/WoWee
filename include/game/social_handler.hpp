@@ -472,6 +472,8 @@ public:
     [[nodiscard]] bool inDungeonParty() const;
     /// SetDungeonDifficulty (0x00526050).
     bool setDungeonDifficulty(uint32_t difficulty);
+    bool setRaidDifficulty(uint32_t difficulty);
+    void applyRaidDifficulty(uint32_t difficulty, bool own, bool group);
 
     // Minimap ping
     void sendMinimapPing(float wowX, float wowY);

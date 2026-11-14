@@ -3039,10 +3039,19 @@ static int lua_Dismount(lua_State* L) {
 // The interface passes a unit only to attack something other than the current
 // target, which this client cannot do without changing target first, so the
 // argument is read and the current target used.
+// StartAttack([unit or "name" [, exactMatch]]) (0x00523090): the unit named -
+// a token first, then the name resolver with mask 8 as TargetUnit uses it -
+// or with no argument the current target.
 static int lua_StartAttack(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
-    const uint64_t target = gh->getTargetGuid();
+    uint64_t target = gh->getTargetGuid();
+    if (const char* given = lua_isstring(L, 1) ? lua_tostring(L, 1) : nullptr; given && *given) {
+        std::string who(given);
+        toLowerInPlace(who);
+        target = resolveUnitGuid(gh, who);
+        if (target == 0) target = resolveNamedUnit(gh, who, luaClientSwitchArg(L, 2, false), false);
+    }
     if (target != 0) gh->startAutoAttack(target);
     return 0;
 }

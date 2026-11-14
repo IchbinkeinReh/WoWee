@@ -2638,6 +2638,7 @@ public:
     /// SetDungeonDifficulty (0x00526050): kept and asked for, `difficulty`
     /// from 0. False where a party's member who does not lead it is refused.
     bool setDungeonDifficulty(uint32_t difficulty);
+    bool setRaidDifficulty(uint32_t difficulty);
     /// What GetInstanceInfo answers (0x0051a8c0): the map's name and
     /// InstanceType, the instance's difficulty and its MapDifficulty.dbc row's
     /// name and size, the player's difficulty and whether the map is dynamic.

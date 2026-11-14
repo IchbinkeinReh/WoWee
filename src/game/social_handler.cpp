@@ -4970,6 +4970,20 @@ bool SocialHandler::setDungeonDifficulty(uint32_t difficulty) {
     return true;
 }
 
+// SetRaidDifficulty (0x005261a0): 0 to 3. A group's leader only
+// (ERR_NOT_LEADER, 0x54); the setting is applied here as the player's own and
+// the group's (0x005255a0 with 1, 1) before the server is told.
+bool SocialHandler::setRaidDifficulty(uint32_t difficulty) {
+    if (difficulty > 3) return false;
+    if (!partyData.isEmpty() && partyData.leaderGuid != owner_.getPlayerGuid()) {
+        gameError(owner_, ErrTo::Chat, "ERR_NOT_LEADER", "You are not the party leader.", {});
+        return false;
+    }
+    applyRaidDifficulty(difficulty, true, true);
+    sendSetDifficulty(difficulty, true);
+    return true;
+}
+
 // MSG_SET_RAID_DIFFICULTY (0x00526530 case 0x4eb): the difficulty, whether it
 // is the player's own and whether it is the group's - AzerothCore's
 // SendRaidDifficulty writes 1 and IsInGroup for the two. Stored as 0x005255a0
@@ -4979,6 +4993,12 @@ void SocialHandler::handleSetRaidDifficulty(network::Packet& packet) {
     const uint32_t difficulty = packet.readUInt32();
     const bool own = packet.readUInt32() != 0;
     const bool group = packet.readUInt32() != 0;
+    applyRaidDifficulty(difficulty, own, group);
+}
+
+// 0x005255a0: the difficulty stored, the player's own and/or the group's, and
+// said where the one in force changed.
+void SocialHandler::applyRaidDifficulty(uint32_t difficulty, bool own, bool group) {
     const bool inGroup = !owner_.getPartyData().isEmpty();
     const bool dynamicMap = owner_.isDynamicDifficultyMap();
     const auto applied =

@@ -4714,9 +4714,15 @@ void registerSocialLuaAPI(lua_State* L) {
                 // flat false - so the unit menu's "Opt out of loot" entry
                 // never showed a tick and never turned itself off again.
                 {"SetOptOutOfLoot", [](lua_State* L) -> int {
+            // 0x0052cf00: kept, sent, and said in the chat frame.
             const bool out = lua_toboolean(L, 1) != 0;
             optOutOfLoot() = out;
-            if (auto* gh = getGameHandler(L)) gh->sendOptOutOfLoot(out);
+            if (auto* gh = getGameHandler(L)) {
+                gh->sendOptOutOfLoot(out);
+                gh->addSystemChatMessage(out
+                    ? game::interfaceString("OPT_OUT_LOOT_TOGGLE_ON", "You are now passing on all loot.")
+                    : game::interfaceString("OPT_OUT_LOOT_TOGGLE_OFF", "You are no longer passing on all loot."));
+            }
             return 0;
         }},
                 {"GetOptOutOfLoot", [](lua_State* L) -> int {
@@ -4739,10 +4745,13 @@ void registerSocialLuaAPI(lua_State* L) {
             if (gh) gh->setDungeonDifficulty(difficulty);
             return 0;
         }},
+                // SetRaidDifficulty (0x005261a0): the row less one, 0 to 3,
+                // kept before the server is asked; the leader's only.
                 {"SetRaidDifficulty", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetRaidDifficulty(difficulty)");
             auto* gh = getGameHandler(L);
-            const int row = static_cast<int>(luaL_optnumber(L, 1, 1));
-            if (gh && row >= 1) gh->sendSetDifficulty(static_cast<uint32_t>(row - 1), /*raid=*/true);
+            const auto difficulty = static_cast<uint32_t>(std::llround(lua_tonumber(L, 1) - 1.0));
+            if (gh) gh->setRaidDifficulty(difficulty);
             return 0;
         }},
                                 {"ChannelBan", [](lua_State* L) -> int { return channelCommand(L, game::Opcode::CMSG_CHANNEL_BAN, "ChannelBan"); }},

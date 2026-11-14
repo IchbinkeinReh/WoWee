@@ -5391,12 +5391,16 @@ static int lua_IsAddOnLoaded(lua_State* L) {
 /// glyph frames are all load-on-demand addons that FrameXML asks for the first
 /// time one is opened. This answered "MISSING" unconditionally, so none of them
 /// ever appeared - and an addon that ships an optional module got the same.
+// LoadAddOn(index or "name") (0x00528920): the index or the name, or the
+// usage line and the range error; 1, nil when it loads, else nil and the
+// reason - UNKNOWN_ERROR when there is none to give.
 static int lua_LoadAddOn(lua_State* L) {
-    const char* name = lua_isstring(L, 1) ? lua_tostring(L, 1) : nullptr;
+    const std::string addon = addonNameArg(L, 1, "Usage: LoadAddOn(index or \"name\")");
+    const char* name = addon.c_str();
     auto* svc = getLuaServices(L);
-    if (!name || !svc || !svc->loadAddOn) {
-        luaPushOneOrNil(L, 0);
-        lua_pushstring(L, "MISSING");
+    if (!svc || !svc->loadAddOn) {
+        lua_pushnil(L);
+        lua_pushstring(L, "UNKNOWN_ERROR");
         return 2;
     }
     // Blizzard_Calendar loads. It was refused for a long time, and the note
@@ -5423,19 +5427,19 @@ static int lua_LoadAddOn(lua_State* L) {
     // panel was being opened. Every load-on-demand panel opens this way.
     //
     // The list is globalstrings' own ADDON_* names, which is where the far
-    // side reads them from. Anything else is answered as CORRUPT, which is
-    // what the real client says when an addon is there and will not run.
+    // side reads them from. Anything else is UNKNOWN_ERROR, as 0x00528920
+    // answers when it has no reason of its own.
     static const char* kKnown[] = {
         "BANNED", "CORRUPT", "DEMAND_LOADED", "DEP_BANNED", "DEP_CORRUPT",
         "DEP_DEMAND_LOADED", "DEP_DISABLED", "DEP_INCOMPATIBLE",
         "DEP_INSECURE", "DEP_INTERFACE_VERSION", "DEP_MISSING", "DISABLED",
-        "INCOMPATIBLE", "INSECURE", "INTERFACE_VERSION", "MISSING",
+        "INCOMPATIBLE", "INSECURE", "INTERFACE_VERSION", "MISSING", "UNKNOWN_ERROR",
     };
     bool known = false;
     for (const char* k : kKnown) {
         if (reason == k) { known = true; break; }
     }
-    lua_pushstring(L, known ? reason.c_str() : "CORRUPT");
+    lua_pushstring(L, known ? reason.c_str() : "UNKNOWN_ERROR");
     return 2;
 }
 

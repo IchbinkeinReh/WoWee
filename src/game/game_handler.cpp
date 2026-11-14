@@ -5345,6 +5345,10 @@ bool GameHandler::setDungeonDifficulty(uint32_t difficulty) {
     return socialHandler_ && socialHandler_->setDungeonDifficulty(difficulty);
 }
 
+bool GameHandler::setRaidDifficulty(uint32_t difficulty) {
+    return socialHandler_ && socialHandler_->setRaidDifficulty(difficulty);
+}
+
 bool GameHandler::isInInstance() const {
     // Difficulty packets advertise the player's preferred dungeon setting and
     // are also sent in the open world, so they cannot establish instance

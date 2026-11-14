@@ -107,8 +107,9 @@ static int lua_GetSendMailPrice(lua_State* L);  // with the letter's state, belo
 /// ungrouped player has, and the dropdown has no entry for it.
 static int lua_GetLootThreshold(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const uint8_t t = gh ? gh->getPartyData().lootThreshold : 0;
-    lua_pushnumber(L, t > 0 ? t : 2);
+    // 0x0052c2a0: as the group list gave it, Poor (0) included; Uncommon
+    // outside a group.
+    lua_pushnumber(L, gh ? gh->getPartyData().lootThreshold : 2);
     return 1;
 }
 
@@ -5461,50 +5462,34 @@ static int lua_GetMasterLootCandidate(lua_State* L) {
 }
 
 // GetLootMethod() → "freeforall"|"roundrobin"|"master"|"group"|"needbeforegreed", partyLoot, raidLoot
+// GetLootMethod() (0x0052cd90) → method, the master looter's party index,
+// and their raid index. The party index is 0 for the player and 1 to 4 for
+// the party slots; the raid index is their place in the raid roster. Either
+// is nil where the master looter is not there, and both are nil with no
+// master looter.
 static int lua_GetLootMethod(lua_State* L) {
     auto* gh = getGameHandler(L);
-    // Nil for the two indices here as well: no handler is no group, and a
-    // zero would claim the player is the master looter of it.
-    if (!gh) { lua_pushstring(L, "freeforall"); lua_pushnil(L); lua_pushnil(L); return 3; }
+    if (!gh) { lua_pushstring(L, kLootMethodTokens[3]); lua_pushnil(L); lua_pushnil(L); return 3; }
     const auto& pd = gh->getPartyData();
     lua_pushstring(L, pd.lootMethod < kNumLootMethods
                           ? kLootMethodTokens[pd.lootMethod]
                           : kLootMethodTokens[0]);
-    // Who the master looter is, or nobody.
-    //
-    // Zero is not "nobody" here - it is *the player*. playerframe.lua reads
-    //     if ( lootMaster == 0 and (in a party or raid) ) then
-    //         PlayerMasterIcon:Show()
-    // so answering zero unconditionally hung the master-looter crown on the
-    // player's own frame in every group, whatever the loot method was and
-    // whoever was actually holding it. partymemberframe.lua does the mirror
-    // of that with `if ( id == lootMaster )`.
-    //
-    // Nil is how the client says there is no master looter, and it is the
-    // truthful answer under every method but master loot. The guid comes with
-    // the group list, so when there is one it can be named rather than
-    // guessed: index 0 is the player, 1 upward the party members in order.
-    static constexpr uint8_t kMasterLoot = 2;
-    if (pd.lootMethod != kMasterLoot || pd.looterGuid == 0) {
-        lua_pushnil(L);
-        lua_pushnil(L);
-    } else if (pd.looterGuid == gh->getPlayerGuid()) {
-        lua_pushnumber(L, 0);
-        lua_pushnil(L);
-    } else {
-        int partyIndex = -1;
-        for (size_t i = 0; i < pd.members.size(); ++i) {
-            if (pd.members[i].guid == pd.looterGuid) {
-                partyIndex = static_cast<int>(i) + 1;
-                break;
-            }
+    int partyIndex = -1;
+    int raidIndex = -1;
+    if (pd.looterGuid != 0) {
+        if (pd.looterGuid == gh->getPlayerGuid()) {
+            partyIndex = 0;
+        } else {
+            for (int slot = 1; slot <= 4; ++slot)
+                if (game::partySlotGuid(pd, gh->getPlayerGuid(), slot) == pd.looterGuid) { partyIndex = slot; break; }
         }
-        if (partyIndex > 0) lua_pushnumber(L, partyIndex);
-        else                lua_pushnil(L);
-        // The raid index is a different numbering and this client does not
-        // keep one, so it says so rather than reusing the party position.
-        lua_pushnil(L);
+        if (game::groupIsRaid(pd.groupType)) {
+            for (size_t i = 0; i < pd.members.size(); ++i)
+                if (pd.members[i].guid == pd.looterGuid) { raidIndex = static_cast<int>(i) + 1; break; }
+        }
     }
+    if (partyIndex >= 0) lua_pushnumber(L, partyIndex); else lua_pushnil(L);
+    if (raidIndex >= 0) lua_pushnumber(L, raidIndex); else lua_pushnil(L);
     return 3;
 }
 
@@ -5693,13 +5678,14 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // Clamped to what the player has: the dialog does not check,
                 // and a cursor carrying more than the purse would be spent by
                 // whatever it was dropped on.
+                // PickupPlayerMoney(amount) (0x00522980): the amount rounded;
+                // nothing for none, and nothing for more than is held.
                 {"PickupPlayerMoney", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: PickupPlayerMoney(amount)");
             auto* gh = getGameHandler(L);
-            const double asked = luaL_optnumber(L, 1, 0);
-            if (!gh || asked <= 0) { setCursorMoney(L, 0); return 0; }
-            const uint64_t have = gh->getMoneyCopper();
-            const uint64_t want = static_cast<uint64_t>(asked);
-            setCursorMoney(L, want < have ? want : have);
+            if (!gh) return 0;
+            const auto want = static_cast<uint32_t>(std::llround(lua_tonumber(L, 1)));
+            if (want != 0 && want <= gh->getMoneyCopper()) setCursorMoney(L, want);
             return 0;
         }},
                 {"PickupTradeMoney",        lua_PickupTradeMoney},

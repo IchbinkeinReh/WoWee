@@ -108,9 +108,11 @@ struct GroupListData {
     uint8_t subGroup = 0;
     uint8_t flags = 0;
     uint8_t roles = 0;
-    uint8_t lootMethod = 0;      ///< 0..4; see lootMethodName
+    /// 0..4; see lootMethodName. Group loot and Uncommon outside a group, as
+    /// the client starts and resets them (0x00acc6c8 = 3, 0x00acc6cc = 2).
+    uint8_t lootMethod = 3;
     uint64_t looterGuid = 0;
-    uint8_t lootThreshold = 0;
+    uint8_t lootThreshold = 2;
     uint8_t difficultyId = 0;
     uint8_t raidDifficultyId = 0;
     /// WotLK: the player's difficulty, 0 normal and 1 heroic, the last byte
