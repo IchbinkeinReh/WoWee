@@ -163,6 +163,13 @@ inline constexpr GraphicsPresetExtra kSuperUltraExtras[] = {
     {"fsrsharpness", 1.6f},
 };
 
+/// Super-Ultra's camera rows, the user's own (user decision 2026-11-14: the
+/// field of view goes into the preset too). The other presets leave the
+/// camera alone.
+inline constexpr GraphicsPresetExtra kSuperUltraCameraValues[] = {
+    {"fov", 54.0f},
+};
+
 /// The Debug pages as the user's settings have them (user decision
 /// 2026-11-14: "all my settings, the debug menu's too"), which only
 /// Super-Ultra sets. Every row the settings file keeps on those pages, each

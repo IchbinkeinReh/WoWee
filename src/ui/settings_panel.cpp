@@ -1094,6 +1094,7 @@ void SettingsPanel::applyGraphicsPreset(GraphicsPreset preset) {
         // decision 2026-11-14). The other presets leave those pages alone.
         if (preset == GraphicsPreset::SUPER_ULTRA) {
             for (const auto& e : kSuperUltraDebugValues) setSettingValue(e.key, settingNumberText(e.value));
+            for (const auto& e : kSuperUltraCameraValues) setSettingValue(e.key, settingNumberText(e.value));
         }
     }
 

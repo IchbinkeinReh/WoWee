@@ -429,6 +429,7 @@ std::map<std::string, float> superUltraSettings() {
     };
     for (const auto& r : wowee::ui::presetRowValues(true)) out[r.row->key] = r.value;
     for (const auto& e : wowee::ui::kSuperUltraDebugValues) out[e.key] = e.value;
+    for (const auto& e : wowee::ui::kSuperUltraCameraValues) out[e.key] = e.value;
     return out;
 }
 
