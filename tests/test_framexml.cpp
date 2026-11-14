@@ -395,7 +395,8 @@ TEST_CASE("Size and anchors become the same calls a script would make",
         "</Frame></Ui>");
     const EmitResult r = emitFrameXml(root);
     REQUIRE(has(r.lua, ":SetSize(128"));
-    REQUIRE(has(r.lua, ":SetPoint(\"TOPLEFT\""));
+    REQUIRE(has(r.lua, "__WoweeXmlSetPoint("));
+    REQUIRE(has(r.lua, ", \"TOPLEFT\", "));
     REQUIRE(has(r.lua, "\"BOTTOMRIGHT\""));
     REQUIRE(has(r.lua, "5.000000, -7.000000"));
 }
@@ -415,7 +416,7 @@ TEST_CASE("$parent expands against the frame that owns the region",
     const EmitResult r = emitFrameXml(root);
     REQUIRE(has(r.lua, "CreateTexture(\"FooFrameBg\", \"BACKGROUND\")"));
     REQUIRE(has(r.lua, "SetTexture(\"Interface\\\\Foo\")"));
-    REQUIRE(has(r.lua, ":SetAllPoints("));
+    REQUIRE(has(r.lua, "__WoweeXmlSetAllPoints("));
 }
 
 TEST_CASE("alphaMode reaches the texture as a blend mode", "[framexml][emit]") {
@@ -576,7 +577,8 @@ TEST_CASE("A frame can fill its parent instead of anchoring", "[framexml][emit]"
         "<Frame name=\"$parentInner\" setAllPoints=\"true\"/>"
         "</Frames></Frame></Ui>");
     const EmitResult r = emitFrameXml(root);
-    REQUIRE(has(r.lua, ":SetAllPoints(__w[1])"));
+    REQUIRE(has(r.lua, ", __w[1])"));
+    REQUIRE(has(r.lua, "__WoweeXmlSetAllPoints("));
 }
 
 TEST_CASE("A Font element becomes a font object", "[framexml][emit]") {
@@ -761,8 +763,8 @@ TEST_CASE("A nested frame anchors to its container, not the screen",
         "</Frames></Frame></Ui>");
     const EmitResult r = emitFrameXml(root);
     REQUIRE(has(r.lua, "CreateFrame(\"StatusBar\", \"OuterBar\", __w[1])"));
-    REQUIRE(has(r.lua, ":SetPoint(\"BOTTOMLEFT\", __w[1],"));
-    REQUIRE_FALSE(has(r.lua, ":SetPoint(\"BOTTOMLEFT\", UIParent,"));
+    REQUIRE(has(r.lua, ", \"BOTTOMLEFT\", __w[1],"));
+    REQUIRE_FALSE(has(r.lua, ", \"BOTTOMLEFT\", UIParent,"));
 }
 
 TEST_CASE("An anchor inside a template resolves its parent at replay time",
@@ -941,7 +943,7 @@ TEST_CASE("$parent follows the parent attribute, not the file structure",
         "</Button></Ui>");
     const EmitResult r = emitFrameXml(root);
     REQUIRE(has(r.lua, "CreateTexture(\"PanelEdge\""));
-    REQUIRE(has(r.lua, ":SetPoint(\"TOPLEFT\", \"PanelEdge\""));
+    REQUIRE(has(r.lua, ", \"TOPLEFT\", \"PanelEdge\""));
     REQUIRE_FALSE(has(r.lua, "\"Edge\""));
 }
 
@@ -1207,7 +1209,7 @@ TEST_CASE("A TitleRegion is the frame's own title region", "[framexml][emit]") {
         "<Frame name=\"Sheet\" toplevel=\"true\" movable=\"true\"/></Ui>");
     const EmitResult r = emitFrameXml(root);
     REQUIRE(has(r.lua, ":CreateTitleRegion()"));
-    REQUIRE(has(r.lua, ":GetTitleRegion():SetAllPoints("));
+    REQUIRE(has(r.lua, "__WoweeXmlSetAllPoints(__w[1]:GetTitleRegion(), "));
     REQUIRE_FALSE(has(r.lua, "RegisterForDrag(\"LeftButton\")"));
     REQUIRE_FALSE(has(r.lua, "StartMoving()"));
 }

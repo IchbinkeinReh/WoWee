@@ -1081,10 +1081,12 @@ static int lua_WoweeSetProtected(lua_State* L) {
 /// that had been closed. Defined here rather than with the other frame methods
 /// because it needs widgetOf, which is declared just above.
 
-// SetPoint(point [, relativeTo] [, relativePoint] [, x, y]) - every argument
-// after the first is optional and the shapes overlap, so decide by type rather
-// than by count.
-int lua_Region_SetPoint(lua_State* L) {
+// The XML loader's anchor (__WoweeXmlSetPoint): the arguments SetPoint takes,
+// read leniently. The client's loader resolves an <Anchor> itself and only
+// warns at what SetPoint refuses (decided D8), so the anchors the FrameXML
+// emitter writes come here - a missing point is CENTER, a relative region that
+// is not found or is the frame itself is the parent.
+static int lua_Region_SetPointLenient(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
@@ -1135,7 +1137,9 @@ int lua_Region_ClearAllPoints(lua_State* L) {
     return 0;
 }
 
-int lua_Region_SetAllPoints(lua_State* L) {
+// The XML loader's setAllPoints (__WoweeXmlSetAllPoints), as lenient as its
+// SetPoint above.
+static int lua_Region_SetAllPointsLenient(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
@@ -1158,6 +1162,136 @@ int lua_Region_SetAllPoints(lua_State* L) {
     // one made before it are kept there too. On a desktop the two are the
     // same rect.
     if (w && w->name == "UIParent" && id != tree->uiParentId() &&
+        (target == 0 || target == tree->rootId())) {
+        target = tree->uiParentId();
+    }
+    tree->setAllPoints(id, target);
+    return 0;
+}
+
+namespace {
+/// The client's point names (0x00814ed0), matched in any case; the canonical
+/// spelling, or nullptr.
+const char* regionPointName(const char* given) {
+    static constexpr const char* kPoints[] = {"TOPLEFT", "TOP", "TOPRIGHT", "LEFT", "CENTER",
+                                              "RIGHT", "BOTTOMLEFT", "BOTTOM", "BOTTOMRIGHT"};
+    for (const char* p : kPoints)
+        if (given && sameTypeName(p, given)) return p;
+    return nullptr;
+}
+
+/// Whether `target` is placed through `self` (0x004891d0): it, or anything it
+/// is anchored to in turn - its parent where an anchor names none - is self.
+bool regionDependsOn(const wowee::ui::WidgetTree& tree, uint32_t target, uint32_t self) {
+    std::vector<uint32_t> todo{target};
+    std::unordered_set<uint32_t> seen;
+    while (!todo.empty()) {
+        const uint32_t id = todo.back();
+        todo.pop_back();
+        if (id == 0 || !seen.insert(id).second) continue;
+        if (id == self) return true;
+        const auto* w = tree.get(id);
+        if (!w) continue;
+        for (const auto& a : w->anchors) todo.push_back(a.relativeTo ? a.relativeTo : w->parent);
+    }
+    return false;
+}
+
+/// The relative region SetPoint and SetAllPoints were handed at `idx`, as the
+/// client reads it (0x0049db10, 0x0049de40): a name - looked up, $parent
+/// included - or a region, which take the argument; an explicit nil, the
+/// screen, which takes it too; anything else, the parent, which does not.
+/// `found` is false for a name or table that is no region.
+uint32_t relativeRegionArg(lua_State* L, int idx, const wowee::ui::WidgetTree& tree,
+                           const wowee::ui::Widget& self, bool& consumed, bool& found) {
+    found = true;
+    consumed = true;
+    if (lua_isstring(L, idx) && !lua_isnumber(L, idx)) {
+        const uint32_t id = widgetIdByAnchorName(L, 1, lua_tostring(L, idx));
+        found = id != 0;
+        return id;
+    }
+    if (lua_istable(L, idx)) {
+        const uint32_t id = widgetIdOf(L, idx);
+        found = id != 0;
+        return id;
+    }
+    if (lua_isnil(L, idx) && !lua_isnone(L, idx)) return tree.rootId();
+    consumed = false;
+    return self.parent;
+}
+}  // namespace
+
+// SetPoint("point" [, region or nil] [, "relativePoint"] [, x, y])
+// (0x0049db10, decided D8: as the client). A point that is not a string is the
+// usage error and one the client does not know "Unknown region point"; the
+// relative region is read as relativeRegionArg says, and one not found,
+// the frame itself or one placed through it are the client's three errors;
+// the relative point is the point unless a string follows, and the offsets
+// count only as a pair of numbers.
+int lua_Region_SetPoint(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
+    auto* tree = wowee::addons::getWidgetTree(L);
+    const uint32_t id = widgetIdOf(L, 1);
+    const auto* self = (tree && id) ? tree->get(id) : nullptr;
+    if (!self) return 0;
+    const char* who = frameNameOnStack(L, 1);
+    if (!lua_isstring(L, 2))
+        return luaL_error(L, "Usage: %s:SetPoint(\"point\" [, region or nil] [, \"relativePoint\"] [, offsetX, offsetY])", who);
+    const char* point = regionPointName(lua_tostring(L, 2));
+    if (!point) return luaL_error(L, "%s:SetPoint(): Unknown region point", who);
+    bool consumed = false, found = true;
+    const uint32_t relative = relativeRegionArg(L, 3, *tree, *self, consumed, found);
+    if (!found)
+        return luaL_error(L, "%s:SetPoint(): Couldn't find region named '%s'", who,
+                          lua_isstring(L, 3) ? lua_tostring(L, 3) : "");
+    if (relative == id) return luaL_error(L, "%s:SetPoint(): trying to anchor to itself", who);
+    if (relative != 0 && regionDependsOn(*tree, relative, id)) {
+        const auto* r = tree->get(relative);
+        return luaL_error(L, "%s:SetPoint(): %s is dependent on this", who,
+                          (r && !r->name.empty()) ? r->name.c_str() : "<unnamed>");
+    }
+    int argi = consumed ? 4 : 3;
+    wowee::ui::Anchor a;
+    a.point = point;
+    a.relativeTo = (relative == self->parent) ? 0 : relative;
+    a.relativePoint = point;
+    if (lua_type(L, argi) == LUA_TSTRING) {
+        const char* rel = regionPointName(lua_tostring(L, argi));
+        if (!rel) return luaL_error(L, "%s:SetPoint(): Unknown region point", who);
+        a.relativePoint = rel;
+        ++argi;
+    }
+    if (lua_isnumber(L, argi) && lua_isnumber(L, argi + 1)) {
+        a.x = static_cast<float>(lua_tonumber(L, argi));
+        a.y = static_cast<float>(lua_tonumber(L, argi + 1));
+    }
+    tree->addPoint(id, a);
+    return 0;
+}
+
+// SetAllPoints([region or nil]) (0x0049de40, decided D8): the region read as
+// SetPoint reads it, with the same three errors.
+int lua_Region_SetAllPoints(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;
+    auto* tree = wowee::addons::getWidgetTree(L);
+    const uint32_t id = widgetIdOf(L, 1);
+    const auto* self = (tree && id) ? tree->get(id) : nullptr;
+    if (!self) return 0;
+    const char* who = frameNameOnStack(L, 1);
+    bool consumed = false, found = true;
+    uint32_t target = relativeRegionArg(L, 2, *tree, *self, consumed, found);
+    if (!found)
+        return luaL_error(L, "%s:SetAllPoints(): Couldn't find region named '%s'", who,
+                          lua_isstring(L, 2) ? lua_tostring(L, 2) : "");
+    if (target == id) return luaL_error(L, "%s:SetAllPoints(): trying to anchor to itself", who);
+    if (target != 0 && regionDependsOn(*tree, target, id)) {
+        const auto* r = tree->get(target);
+        return luaL_error(L, "%s:SetAllPoints(): %s is dependent on this", who,
+                          (r && !r->name.empty()) ? r->name.c_str() : "<unnamed>");
+    }
+    // FrameXML's UIParent fills the tree's own UIParent, kept in the safe area.
+    if (self->name == "UIParent" && id != tree->uiParentId() &&
         (target == 0 || target == tree->rootId())) {
         target = tree->uiParentId();
     }
@@ -12483,6 +12617,11 @@ void LuaEngine::registerCoreAPI() {
     lua_setglobal(L_, "__WoweeSetWheelEnabled");
     lua_pushcfunction(L_, lua_WoweeClientBoolean);
     lua_setglobal(L_, "__WoweeClientBoolean");
+    // The XML loader's anchors, lenient where SetPoint is strict (D8).
+    lua_pushcfunction(L_, lua_Region_SetPointLenient);
+    lua_setglobal(L_, "__WoweeXmlSetPoint");
+    lua_pushcfunction(L_, lua_Region_SetAllPointsLenient);
+    lua_setglobal(L_, "__WoweeXmlSetAllPoints");
 
     // Reached from the button-art setters, which are written in Lua so they
     // cover every slot from one loop.

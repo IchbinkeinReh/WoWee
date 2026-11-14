@@ -345,7 +345,7 @@ struct Emitter {
                  (node.attrBool("indented") ? "true" : "false") + ")");
         }
         if (node.attrBool("setAllPoints")) {
-            line(var + ":SetAllPoints(" + parentVar + ")");
+            line("__WoweeXmlSetAllPoints(" + var + ", " + parentVar + ")");
         }
         // Either way, for the reason the frame path spells out: a region
         // inheriting a hidden template and declaring itself visible was left
@@ -705,7 +705,8 @@ struct Emitter {
                 ox = a.attrFloat("x", ox);
                 oy = a.attrFloat("y", oy);
             }
-            line(var + ":SetPoint(" + quote(point) + ", " + relative + ", " +
+            // The loader's own anchor, lenient where SetPoint is strict (D8).
+            line("__WoweeXmlSetPoint(" + var + ", " + quote(point) + ", " + relative + ", " +
                  quote(relPoint) + ", " + std::to_string(ox) + ", " + std::to_string(oy) + ")");
         }
     }
@@ -1273,7 +1274,7 @@ struct Emitter {
         if (const XmlNode* tr = node.child("TitleRegion")) {
             const std::string trVar = var + ":GetTitleRegion()";
             line(var + ":CreateTitleRegion()");
-            if (tr->attrBool("setAllPoints")) line(trVar + ":SetAllPoints(" + var + ")");
+            if (tr->attrBool("setAllPoints")) line("__WoweeXmlSetAllPoints(" + trVar + ", " + var + ")");
             if (const XmlNode* size = tr->child("Size")) {
                 float w = 0, h = 0;
                 if (readDimension(*size, w, h))
@@ -1535,7 +1536,7 @@ struct Emitter {
         // in the middle of the world because two frames above it said
         // setAllPoints and were heard by nobody.
         if (node.attrBool("setAllPoints")) {
-            line(var + ":SetAllPoints(" + parentVar + ")");
+            line("__WoweeXmlSetAllPoints(" + var + ", " + parentVar + ")");
         }
         if (const XmlNode* anchors = node.child("Anchors")) {
             // Anchored to the frame that contains it when no relativeTo is
