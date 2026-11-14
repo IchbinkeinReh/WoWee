@@ -4456,12 +4456,12 @@ bool GameHandler::equipWouldBindFromBag(int bagIndex, int slotIndex) const {
     return inventoryHandler_ && inventoryHandler_->equipWouldBindFromBag(bagIndex, slotIndex);
 }
 
-void GameHandler::equipPendingItem() {
-    if (inventoryHandler_) inventoryHandler_->equipPendingItem();
+void GameHandler::equipPendingItem(int index) {
+    if (inventoryHandler_) inventoryHandler_->equipPendingItem(index);
 }
 
-void GameHandler::cancelPendingEquip() {
-    if (inventoryHandler_) inventoryHandler_->cancelPendingEquip();
+void GameHandler::cancelPendingEquip(int index) {
+    if (inventoryHandler_) inventoryHandler_->cancelPendingEquip(index);
 }
 
 void GameHandler::autoEquipItemInBag(int bagIndex, int slotIndex, bool confirmed) {

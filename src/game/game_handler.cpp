@@ -2161,6 +2161,17 @@ std::string GameHandler::getFormattedTitle(uint32_t bit) const {
     return formatTitleString(fmt);
 }
 
+std::optional<std::string> GameHandler::getTitleTemplate(uint32_t bit) const {
+    loadTitleNameCache();
+    auto it = titleNameCache_.find(bit);
+    if (it == titleNameCache_.end()) return std::nullopt;
+    // 0x0051b4e0: the player's form, and the other when that one is empty.
+    const bool female = titleGenderOf(playerGuid) == 1;
+    const std::string& own   = female ? it->second.female : it->second.male;
+    const std::string& other = female ? it->second.male : it->second.female;
+    return own.empty() ? other : own;
+}
+
 std::string GameHandler::getFormattedTitleById(uint32_t id) const {
     loadTitleNameCache();
     auto it = titleFormatById_.find(id);

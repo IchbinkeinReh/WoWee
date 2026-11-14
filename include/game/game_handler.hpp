@@ -3793,6 +3793,9 @@ public:
     int32_t getChosenTitleBit() const { return chosenTitleBit_; }
     /// Returns the formatted title string for a given bit (replaces %s with player name), or empty.
     std::string getFormattedTitle(uint32_t bit) const;
+    /// The title's row in the local player's form, its name hole still in it;
+    /// nullopt for a bit no row carries (0x0051b4e0).
+    std::optional<std::string> getTitleTemplate(uint32_t bit) const;
     /// A title by its CharTitles.dbc id (what a quest reward carries), formatted
     /// with the player's name where the "%s" sits - "%s the Explorer". Empty
     /// when the id is unknown.
@@ -4582,8 +4585,8 @@ public:
     /// their own prompt up.
     bool equipWouldBindFromBackpack(int backpackIndex) const;
     bool equipWouldBindFromBag(int bagIndex, int slotIndex) const;
-    void equipPendingItem();
-    void cancelPendingEquip();
+    void equipPendingItem(int index);
+    void cancelPendingEquip(int index);
     void useItemBySlot(int backpackIndex, bool confirmed = false,
                        uint64_t unitTarget = 0);
     void useKeyringItem(int index, bool confirmed = false);

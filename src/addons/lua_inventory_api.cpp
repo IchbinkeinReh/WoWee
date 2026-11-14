@@ -957,12 +957,36 @@ static int lua_WoweeUndress(lua_State* L) { return setModelDressed(L, true); }
 /// __WoweeRedress(frame).
 static int lua_WoweeRedress(lua_State* L) { return setModelDressed(L, false); }
 
+// IsDressableItem(item) (0x00517530): an item that goes on a slot, or one
+// whose spell teaches (effect 36) a spell whose first effect makes (24) such
+// an item - a pattern or a plan. The taught spell is the effect's own, or else
+// the item's spell triggered on learning (6). Each item asked about has to be
+// cached; nothing is queried.
 static int lua_IsDressableItem(lua_State* L) {
     auto* gh = getGameHandler(L);
     const uint32_t itemId = itemIdFromArg(L, 1);
     const auto* info = (gh && itemId) ? gh->getItemInfo(itemId) : nullptr;
-    // 2 is weapon and 4 is armour, as the item class is sent.
-    const bool dressable = info && (info->itemClass == 2 || info->itemClass == 4);
+    const auto wearable = [](const game::ItemQueryResponseData* i) {
+        return i && i->valid && i->inventoryType != 0;
+    };
+    bool dressable = wearable(info);
+    if (!dressable && info && info->valid) {
+        gh->loadSpellNameCache();
+        const auto& cache = gh->spellNameCacheRef();
+        for (const auto& sp : info->spells) {
+            if (sp.spellId == 0) continue;
+            const auto own = cache.find(sp.spellId);
+            if (own == cache.end() || own->second.effectIds[0] != 36) continue;
+            uint32_t taught = own->second.effectTriggerSpell[0];
+            if (taught == 0) {
+                for (const auto& other : info->spells)
+                    if (other.spellTrigger == 6) { taught = other.spellId; break; }
+            }
+            const auto made = cache.find(taught);
+            if (made == cache.end() || made->second.effectIds[0] != 24) continue;
+            if (wearable(gh->getItemInfo(made->second.effectItemType0))) { dressable = true; break; }
+        }
+    }
     luaPushOneOrNil(L, dressable ? 1 : 0);
     return 1;
 }
@@ -5617,9 +5641,10 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // macro parser look for to tell a usable item from an inert
                 // one. Trigger 0 is on-use; equip and proc effects are not what
                 // is being asked for.
+                // GetItemSpell(item) (0x00517100): name and rank, or nil, nil.
                 {"GetItemSpell", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (!gh) return luaReturnNil(L);
+            if (!gh) { lua_pushnil(L); lua_pushnil(L); return 2; }
             // Either an item id or a name, as everywhere else an item is named.
             uint32_t itemId = 0;
             if (lua_isnumber(L, 1)) {
@@ -5636,9 +5661,9 @@ void registerInventoryLuaAPI(lua_State* L) {
                     }
                 }
             }
-            if (itemId == 0) return luaReturnNil(L);
+            if (itemId == 0) { lua_pushnil(L); lua_pushnil(L); return 2; }
             const auto* info = gh->getItemInfo(itemId);
-            if (!info) return luaReturnNil(L);
+            if (!info) { lua_pushnil(L); lua_pushnil(L); return 2; }
             for (const auto& sp : info->spells) {
                 if (sp.spellId == 0 || sp.spellTrigger != 0) continue;
                 const std::string& name = gh->getSpellName(sp.spellId);
@@ -5650,7 +5675,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 lua_pushstring(L, gh->getSpellRank(sp.spellId).c_str());
                 return 2;
             }
-            return luaReturnNil(L);
+            { lua_pushnil(L); lua_pushnil(L); return 2; }
         }},
                 // ---- Currency tab ----
                 {"GetContainerItemPurchaseInfo", lua_GetContainerItemPurchaseInfo},
@@ -6067,14 +6092,21 @@ void registerInventoryLuaAPI(lua_State* L) {
         }},
                 // Both through CGPlayer_C::ClearPendingEquip (0x006e01a0),
                 // whose swap and equip ask the taint check (kind 0x16).
+                // EquipPendingItem(index) / CancelPendingEquip(index)
+                // (0x0051a530, 0x0051a5c0): the queue entry the prompt's event
+                // named, the index rounded, or the usage line.
                 {"EquipPendingItem", [](lua_State* L) -> int {
             if (!taint::allowed(L, 0x16)) return 0;
-            if (auto* gh = getGameHandler(L)) gh->equipPendingItem();
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: EquipPendingItem(index)");
+            if (auto* gh = getGameHandler(L))
+                gh->equipPendingItem(static_cast<int>(std::lround(lua_tonumber(L, 1))));
             return 0;
         }},
                 {"CancelPendingEquip", [](lua_State* L) -> int {
             if (!taint::allowed(L, 0x16)) return 0;
-            if (auto* gh = getGameHandler(L)) gh->cancelPendingEquip();
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: CancelPendingEquip(index)");
+            if (auto* gh = getGameHandler(L))
+                gh->cancelPendingEquip(static_cast<int>(std::lround(lua_tonumber(L, 1))));
             return 0;
         }},
                 {"SplitContainerItem",  lua_SplitContainerItem},

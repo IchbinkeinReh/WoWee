@@ -4509,11 +4509,11 @@ void registerSocialLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             bool on = false;
             if (gh) {
-                if (auto e = gh->getEntityManager().getEntity(gh->getPlayerGuid())) {
-                    // UNIT_FIELD_FLAGS index 59, bit 0x1000 = UNIT_FLAG_PVP,
-                    // read the same way CombatHandler::togglePvp reads it.
-                    on = (e->getField(59) & 0x00001000u) != 0;
-                }
+                // 0x0051bca0: PLAYER_FLAGS 0x200, the player's own wish for PvP
+                // (PLAYER_FLAGS_IN_PVP), not whether the unit is flagged now.
+                const uint16_t idx = game::fieldIndex(game::UF::PLAYER_FLAGS);
+                if (auto e = gh->getEntityManager().getEntity(gh->getPlayerGuid()); e && idx != 0xFFFF)
+                    on = (e->getField(idx) & 0x200u) != 0;
             }
             lua_pushnumber(L, on ? 1 : 0);   // the menu compares it against 1 and 0
             return 1;

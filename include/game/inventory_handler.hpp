@@ -331,9 +331,8 @@ public:
     bool equipWouldBindFromBackpack(int backpackIndex) const;
     bool equipWouldBindFromBag(int bagIndex, int slotIndex) const;
 
-    /// The equip held back waiting for an answer. One at a time - FrameXML's
-    /// dialog is exclusive and this client's is modal, so a second cannot be
-    /// raised while the first is up.
+    /// An equip held back waiting for an answer, one entry of the client's
+    /// queue of pending equips (DAT_00c9eb6c, 0x20 bytes an entry).
     struct PendingEquip {
         bool    active  = false;
         bool    fromBag = false;
@@ -388,8 +387,10 @@ public:
     /// the partner's half. False with nothing waiting.
     bool castPendingAtTradeSlot();
 
-    void equipPendingItem();
-    void cancelPendingEquip();
+    /// EquipPendingItem / CancelPendingEquip (0x006e01a0): the queue entry at
+    /// `index`, replayed confirmed or let go, and then emptied.
+    void equipPendingItem(int index);
+    void cancelPendingEquip(int index);
     /// `unitTarget` names who the item is used on, and overrides the default
     /// the item's own class implies. Only the interface's /use handling passes
     /// it - `/use [target=Bob] Heavy Runecloth Bandage` - and zero keeps the
@@ -1070,8 +1071,17 @@ private:
 
     // ---- Mail state ----
     SocketSession socketSession_;
-    PendingEquip pendingEquip_;
-    PendingSwap pendingSwap_;
+    /// The client's queue of moves waiting on the bind prompt, either verb's.
+    /// An entry is free once answered; a new one takes the first free index
+    /// (0x006df850), which is the number the prompt's event carries.
+    struct PendingMove {
+        PendingEquip equip;
+        PendingSwap swap;
+        [[nodiscard]] bool active() const { return equip.active || swap.active; }
+    };
+    std::vector<PendingMove> pendingMoves_;
+    /// Park a move and say which prompt to raise with its index.
+    void parkPendingMove(const PendingMove& move, const char* event);
     /// The use held back waiting for an answer. Kept whole rather than as a
     /// slot pair: the item may be gone from that slot by the time the player
     /// answers, and re-reading it would use whatever moved into its place.

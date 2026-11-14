@@ -4271,25 +4271,23 @@ void registerActionLuaAPI(lua_State* L) {
             lua_pushnumber(L, lvl - gray);
             return 1;
         }},
-                // ConsoleAddMessage is bound as a no-op because doing
-                // nothing is the right behaviour rather than a placeholder
-                // for it. It is the sink for FrameXML's debug print:
-                // ConsolePrint (uiparent.lua:3550) joins its arguments and hands
-                // the result straight over, and in this tree the only thing that
-                // calls ConsolePrint is lfgframe.lua's LFGDebug. The client runs
-                // the line through its console line routine 0x007653b0 under the
-                // fixed format "%s" at 0x009e0e50 - which is what keeps a '%' in
-                // the Lua string text rather than a conversion - and that is the
-                // routine the console's own output goes through as well. There
-                // is no console window drawn here, so there is nothing to add a
-                // line to.
                 // SetUIVisibility(shown) (0x00517c20): what the world draws
                 // with the interface hidden - see GameHandler::isUiVisible.
                 {"SetUIVisibility",   [](lua_State* L) -> int {
             if (auto* gh = getGameHandler(L)) gh->setUiVisible(lua_isnoneornil(L, 1) || lua_toboolean(L, 1) != 0);
             return 0;
         }},
-                {"ConsoleAddMessage", [](lua_State* L) -> int { (void)L; return 0; }},
+                // ConsoleAddMessage(string) (0x00512090): the usage line for
+                // anything but a string; a non-empty one goes through the
+                // console's line routine (0x007653b0) under "%s", so a '%' in
+                // it stays text. Its caller is FrameXML's ConsolePrint. Wowee
+                // draws no console window; its console output is the log.
+                {"ConsoleAddMessage", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: ConsoleAddMessage(string)");
+            const char* line = lua_tostring(L, 1);
+            if (line && *line) LOG_INFO("Console: ", line);
+            return 0;
+        }},
                 // GetCurrentBindingSet() - which set SaveBindings should write.
                 //
                 // 1 is account-wide and 2 is per character. This client keeps
