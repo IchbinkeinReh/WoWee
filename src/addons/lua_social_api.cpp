@@ -587,16 +587,23 @@ int setAllAddOnsEnabled(lua_State* L, bool enabled) {
 /// exactly that - a client that cannot measure the distance and answers no
 /// shuts the dialog the instant it opens. Closing on ignorance would bring
 /// that back for any npc briefly missing from the entity list.
+/// Whether the player is close enough to the npc a dialog names
+/// (0x006d1fc0, 0x006d2070, 0x006d2290): within the npc's combat reach
+/// (UNIT_FIELD_COMBATREACH) plus four yards, measured in three dimensions.
+/// An npc that is not known here - none named, or out of sight - is not in
+/// range: the client's lookup finds nothing and answers no.
 bool npcWithinInteractRange(game::GameHandler* gh, uint64_t npcGuid) {
-    if (!gh || npcGuid == 0) return true;
+    if (!gh || npcGuid == 0) return false;
     auto npc = gh->getEntityManager().getEntity(npcGuid);
     auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid());
-    if (!npc || !player) return true;
+    if (!npc || !player) return false;
     const float dx = player->getX() - npc->getX();
     const float dy = player->getY() - npc->getY();
     const float dz = player->getZ() - npc->getZ();
-    constexpr float kInteractionDistance = 5.0f;
-    return dx * dx + dy * dy + dz * dz <= kInteractionDistance * kInteractionDistance;
+    float reach = 0.0f;
+    if (auto unit = std::dynamic_pointer_cast<game::Unit>(npc)) reach = unit->getCombatReach();
+    const float range = reach + 4.0f;
+    return dx * dx + dy * dy + dz * dz <= range * range;
 }
 
 /// Whose group roster entry the text names, which is how `0x00520190` answers
@@ -4098,15 +4105,15 @@ void registerSocialLuaAPI(lua_State* L) {
             }
             return 0;
         }},
-                // The popup hides itself and closes the gossip when this turns
-                // false, so it answers true for as long as the offer stands.
-                // The server withdraws the offer by other means; there is no
-                // distance to measure against a healer this client is not
-                // tracking the position of.
+                // CheckSpiritHealerDist (0x0051b6e0 -> 0x006d1fc0): the distance
+                // to the spirit healer the offer came from, as the other npc
+                // dialogs measure it. The popup hides itself and closes the
+                // gossip when this turns false. It answered true for as long
+                // as the offer stood, however far the player walked.
                 {"CheckSpiritHealerDist", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            luaPushOneOrNil(L, gh && gh->resurrectRequestPendingRef() &&
-                                gh->resurrectIsSpiritHealerRef() ? 1 : 0);
+            const uint64_t healer = (gh && gh->resurrectIsSpiritHealerRef()) ? gh->resurrectCasterGuidRef() : 0;
+            luaPushOneOrNil(L, npcWithinInteractRange(gh, healer) ? 1 : 0);
             return 1;
         }},
                 // GetResSicknessDuration() → how long the sickness lasts, as

@@ -3730,12 +3730,16 @@ static int lua_GetGameTime(lua_State* L) {
 }
 
 
+/// IsInInstance() (0x005156a0): whether the map the player is on is an
+/// instance, and which kind - Map.dbc's type as "none", "party", "raid",
+/// "pvp" or "arena", the same reading GetInstanceInfo makes. It answered
+/// "party" for every instance, battlegrounds and raids included.
 static int lua_IsInInstance(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) { luaPushOneOrNil(L, 0); lua_pushstring(L, "none"); return 2; }
-    bool inInstance = gh->isInInstance();
-    luaPushOneOrNil(L, inInstance);
-    lua_pushstring(L, inInstance ? "party" : "none");  // simplified: "none", "party", "raid", "pvp", "arena"
+    const auto info = gh ? gh->getInstanceInfo() : game::GameHandler::InstanceInfo{};
+    const std::string type = info.known ? info.type : std::string("none");
+    luaPushOneOrNil(L, type != "none");
+    lua_pushstring(L, type.c_str());
     return 2;
 }
 
@@ -10811,19 +10815,23 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"DetectWowMouse",              luaReturnNil},
                 // No Battle.net, so no chat to filter.
                 {"BNSetMatureLanguageFilter",   lua_ReturnNothing},
+                // ShowHelm([show]) (0x0051c0b0): the flag as the client
+                // reads one - none at all is show - and the request only when
+                // it changes what is shown.
                 {"ShowHelm", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
-            const bool want = lua_isnumber(L, 1) ? (lua_tonumber(L, 1) != 0)
-                                                 : (lua_toboolean(L, 1) != 0);
+            const bool want = luaClientSwitchArg(L, 1, true);
             if (want != gh->isHelmVisible()) gh->toggleHelm();
             return 0;
         }},
+                // ShowCloak([show]) (0x0051c100): the flag as the client
+                // reads one - none at all is show - and the request only when
+                // it changes what is shown.
                 {"ShowCloak", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
-            const bool want = lua_isnumber(L, 1) ? (lua_tonumber(L, 1) != 0)
-                                                 : (lua_toboolean(L, 1) != 0);
+            const bool want = luaClientSwitchArg(L, 1, true);
             if (want != gh->isCloakVisible()) gh->toggleCloak();
             return 0;
         }},
