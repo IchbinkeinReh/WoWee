@@ -5460,6 +5460,88 @@ static int lua_ReturnNoCooldown(lua_State* L) {
     return 3;
 }
 
+/// Whether this realm lets players fight anywhere: Cfg_Configs'
+/// PlayerKillingAllowed for the realm's type (0x00405540), or, without the
+/// file, the two PvP types.
+static bool pvpRealm(game::GameHandler* gh) {
+    const uint8_t type = gh->getRealmType();
+    auto* am = gh->services().assetManager;
+    if (am && am->isInitialized()) {
+        // Cfg_Configs: ID, RealmType, PlayerKillingAllowed, Roleplaying.
+        if (auto cfg = am->loadDBCOptional("Cfg_Configs.dbc"); cfg && cfg->isLoaded() && cfg->getFieldCount() > 2) {
+            for (uint32_t r = 0; r < cfg->getRecordCount(); ++r)
+                if (cfg->getUInt32(r, 1) == type) return cfg->getUInt32(r, 2) != 0;
+            return false;
+        }
+    }
+    return type == 1 || type == 8;
+}
+
+/// GetZonePVPInfo() (0x0051ba50). The subzone's AreaTable flags, or the
+/// zone's when the subzone has no row. Sanctuary (0x800), arena (0x80) and
+/// combat (0x1000000) are answered with whether the subzone said so. Else
+/// nothing at all, unless the realm is a PvP one or the zone is flagged
+/// for world PvP (0x10). Then the zone's faction mask against the player's
+/// faction template decides: friendly when its friend groups meet it (or
+/// with no template), hostile when its enemy groups do, contested otherwise
+/// or when the area is marked so (0x40000). The third answer is the first
+/// FactionGroup in the mask with a name.
+static int lua_GetZonePVPInfo(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!gh) return 0;
+    const auto t = zoneTexts(L);
+    const uint32_t zoneId = t.known ? t.zoneId : gh->getWorldStateZoneId();
+    const auto sub = t.known ? gh->getAreaPvpFields(t.subzoneId) : std::nullopt;
+    const auto zone = gh->getAreaPvpFields(zoneId);
+    const bool fromSub = sub.has_value();
+    const uint32_t flags = sub ? sub->first : (zone ? zone->first : 0u);
+    const auto named = [L, fromSub](const char* type) {
+        lua_pushstring(L, type);
+        if (fromSub) lua_pushnumber(L, 1); else lua_pushnil(L);
+        return 2;
+    };
+    if (flags & 0x800u) return named("sanctuary");
+    if (flags & 0x80u) return named("arena");
+    if (flags & 0x1000000u) return named("combat");
+    const auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid());
+    if (!zone || !player || (!pvpRealm(gh) && (zone->first & 0x10u) == 0)) return 0;
+    const uint32_t mask = zone->second;
+    auto* am = gh->services().assetManager;
+    const bool assets = am && am->isInitialized();
+    const char* type = "contested";
+    if ((flags & 0x40000u) == 0) {
+        type = "friendly";
+        const uint32_t templateId = player->getField(game::fieldIndex(game::UF::UNIT_FIELD_FACTIONTEMPLATE));
+        auto templates = assets ? am->loadDBCOptional("FactionTemplate.dbc") : nullptr;
+        const auto* layouts = pipeline::getActiveDBCLayout();
+        const auto* ftL = layouts ? layouts->getLayout("FactionTemplate") : nullptr;
+        const uint32_t friendF = ftL ? ftL->tryField("FriendGroup") : 4u;
+        const uint32_t enemyF = ftL ? ftL->tryField("EnemyGroup") : 5u;
+        if (templates && templates->isLoaded() && friendF < templates->getFieldCount() &&
+            enemyF < templates->getFieldCount()) {
+            if (const int32_t row = templates->findRecordById(templateId); row >= 0) {
+                const auto r = static_cast<uint32_t>(row);
+                if ((templates->getUInt32(r, friendF) & mask) != 0) type = "friendly";
+                else if ((templates->getUInt32(r, enemyF) & mask) != 0) type = "hostile";
+                else type = "contested";
+            }
+        }
+    }
+    std::string faction;
+    if (auto groups = assets ? am->loadDBCOptional("FactionGroup.dbc") : nullptr;
+        groups && groups->isLoaded() && groups->getFieldCount() > 3) {
+        // FactionGroup: ID, MaskID, InternalName, Name.
+        for (uint32_t r = 0; r < groups->getRecordCount() && faction.empty(); ++r) {
+            const uint32_t bit = groups->getUInt32(r, 1);
+            if (bit < 32 && (mask & (1u << bit)) != 0) faction = groups->getString(r, 3);
+        }
+    }
+    lua_pushstring(L, type);
+    lua_pushnil(L);
+    lua_pushstring(L, faction.c_str());
+    return 3;
+}
+
 /// UnitFactionGroup(unit) (0x0060d0a0) → the internal and the localized name of
 /// the first FactionGroup.dbc row, in file order, whose mask bit the unit's
 /// faction template carries and whose name is not empty - "Alliance" and its
@@ -9389,22 +9471,8 @@ void registerSystemLuaAPI(lua_State* L) {
             return 1;
         }},
                 // GetZonePVPInfo() → pvpType, isSubZonePvP, factionName
-                //
-                // minimap.lua unpacks three and answered nil for all of them,
-                // so the zone name on the minimap was always the default
-                // colour and its tooltip never said whose territory it was.
-                // Middle value stays nil: it is for a sub-zone that differs
-                // from its parent, which this reads at zone granularity.
-                {"GetZonePVPInfo", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            if (!gh) { lua_pushnil(L); return 1; }
-            const auto [type, faction] = gh->getZonePvpInfo(gh->getWorldStateZoneId());
-            if (type.empty()) { lua_pushnil(L); return 1; }
-            lua_pushstring(L, type.c_str());
-            lua_pushnil(L);
-            if (faction.empty()) lua_pushnil(L); else lua_pushstring(L, faction.c_str());
-            return 3;
-        }},
+                // (0x0051ba50).
+                {"GetZonePVPInfo", lua_GetZonePVPInfo},
                 // GetMouseButtonClicked() (0x0050f950): the button of the
                 // click the interface was last handed.
                 {"GetMouseButtonClicked", [](lua_State* L) -> int {

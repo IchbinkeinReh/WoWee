@@ -83,6 +83,7 @@ void UIScreenCallbackHandler::setupCallbacks() {
 
         uint32_t realmId = 0;
         uint16_t realmBuild = 0;
+        uint8_t realmType = 0;
         {
             // WotLK AUTH_SESSION includes a RealmID field; some servers reject if it's wrong/zero.
             const auto& realms = authHandler_.getRealms();
@@ -90,6 +91,7 @@ void UIScreenCallbackHandler::setupCallbacks() {
                 if (r.name == realmName && r.address == realmAddress) {
                     realmId = r.id;
                     realmBuild = r.build;
+                    realmType = r.icon;
                     break;
                 }
             }
@@ -110,6 +112,7 @@ void UIScreenCallbackHandler::setupCallbacks() {
         // The client keeps the realm's list name as realmName on choosing
         // it; GetRealmName reads it back (0x00510e00 -> 0x006b0dc0).
         gameHandler_.setRealmName(realmName);
+        gameHandler_.setRealmType(realmType);
         if (gameHandler_.connect(host, port, sessionKey, accountName, clientBuild, realmId)) {
             LOG_INFO("Connected to world server, transitioning to character selection");
             setState_(AppState::CHARACTER_SELECTION);
