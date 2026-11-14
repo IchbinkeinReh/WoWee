@@ -229,6 +229,18 @@ static const char* frameNameOnStack(lua_State* L, int index) {
     return lua_tostring(L, -1);
 }
 
+/// Whether arguments from..from+count-1 are all numbers; if not, the client's
+/// usage error for the method (`usage` is its format, with %s for the name).
+static bool requireNumbers(lua_State* L, int from, int count, const char* usage) {
+    for (int i = from; i < from + count; ++i) {
+        if (!lua_isnumber(L, i)) {
+            luaL_error(L, usage, frameNameOnStack(L, 1));
+            return false;
+        }
+    }
+    return true;
+}
+
 static int lua_Frame_RegisterEvent(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);  // self
     // 0x0049efe0: a string, or the usage error.
@@ -1464,6 +1476,8 @@ int lua_Frame_SetMinResize(lua_State* L) {
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     if (!tree || id == 0) return 0;
+    // 0x004a0520: two numbers, or the usage error.
+    if (!requireNumbers(L, 2, 2, "Usage: %s:SetMinResize(minWidth, minHeight)")) return 0;
     if (auto* w = tree->get(id)) {
         w->minResizeW = static_cast<float>(luaL_optnumber(L, 2, 0));
         w->minResizeH = static_cast<float>(luaL_optnumber(L, 3, 0));
@@ -1475,6 +1489,8 @@ int lua_Frame_SetMaxResize(lua_State* L) {
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     if (!tree || id == 0) return 0;
+    // 0x004a06e0: two numbers, or the usage error.
+    if (!requireNumbers(L, 2, 2, "Usage: %s:SetMaxResize(maxWidth, maxHeight)")) return 0;
     if (auto* w = tree->get(id)) {
         w->maxResizeW = static_cast<float>(luaL_optnumber(L, 2, 0));
         w->maxResizeH = static_cast<float>(luaL_optnumber(L, 3, 0));
@@ -7838,6 +7854,8 @@ int lua_Frame_GetPushedTextOffset(lua_State* L) {
 
 int lua_Frame_SetHitRectInsets(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
+    // 0x004a0090: four numbers, or the usage error.
+    if (widgetOf(L, 1) && !requireNumbers(L, 2, 4, "Usage: %s:SetHitRectInsets(left, right, top, bottom)")) return 0;
     if (auto* w = widgetOf(L, 1)) {
         w->hitInsetLeft   = static_cast<float>(luaL_optnumber(L, 2, 0.0));
         w->hitInsetRight  = static_cast<float>(luaL_optnumber(L, 3, 0.0));
@@ -8182,6 +8200,8 @@ int lua_Frame_IsClampedToScreen(lua_State* L) {
 int lua_Frame_SetClampRectInsets(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
+    // 0x004a0310: four numbers, or the usage error.
+    if (!requireNumbers(L, 2, 4, "Usage: %s:SetClampRectInsets(left, right, top, bottom)")) return 0;
     w->clampInsetL = static_cast<float>(luaL_optnumber(L, 2, 0.0));
     w->clampInsetR = static_cast<float>(luaL_optnumber(L, 3, 0.0));
     w->clampInsetT = static_cast<float>(luaL_optnumber(L, 4, 0.0));
@@ -11083,15 +11103,32 @@ void LuaEngine::registerCoreAPI() {
         "__WoweePlayingAnimations = {}\n"
         "local playing = __WoweePlayingAnimations\n"
 
+        // The usage errors the client's animation methods raise (0x004a51a0 and
+        // its neighbours), worded with the animation's name.
+        "local function animUsage(self, usage)\n"
+        "    error(usage:format(tostring(self.name or '<unnamed>')), 3)\n"
+        "end\n"
         "local animMeta = {}\n"
         "animMeta.__index = animMeta\n"
-        "function animMeta:SetDuration(d) self.duration = d or 0 end\n"
+        // SetDuration (0x004a5320): a number.
+        "function animMeta:SetDuration(d)\n"
+        "    if type(d) ~= 'number' and not tonumber(d) then animUsage(self, 'Usage: %s:SetDuration(durationSec)') end\n"
+        "    self.duration = tonumber(d)\n"
+        "end\n"
         "function animMeta:GetDuration() return self.duration or 0 end\n"
-        "function animMeta:SetChange(c) self.change = c end\n"
+        // SetChange (0x004a6da0): a number.
+        "function animMeta:SetChange(c)\n"
+        "    if not tonumber(c) then animUsage(self, 'Usage: %s:SetChange(change)') end\n"
+        "    self.change = tonumber(c)\n"
+        "end\n"
         "function animMeta:GetChange() return self.change end\n"
         "function animMeta:SetFromAlpha(a) self.fromAlpha = a end\n"
         "function animMeta:SetToAlpha(a) self.toAlpha = a end\n"
-        "function animMeta:SetOffset(x, y) self.offsetX, self.offsetY = x, y end\n"
+        // SetOffset (0x004a6040): two numbers.
+        "function animMeta:SetOffset(x, y)\n"
+        "    if not tonumber(x) or not tonumber(y) then animUsage(self, 'Usage: %s:SetOffset(x, y)') end\n"
+        "    self.offsetX, self.offsetY = tonumber(x), tonumber(y)\n"
+        "end\n"
         "function animMeta:GetOffset() return self.offsetX or 0, self.offsetY or 0 end\n"
         // An animation carries scripts of its own, and OnFinished on the
         // *animation* is how FrameXML hides a faded-out frame:
@@ -11107,11 +11144,24 @@ void LuaEngine::registerCoreAPI() {
         "animMeta.GetScript = __WoweeGetScriptSlot\n"
         "animMeta.HookScript = __WoweeHookScriptSlot\n"
         "function animMeta:GetRegionParent() return self.group and self.group.parent end\n"
-        "function animMeta:SetOrder(o) self.order = o or 1 end\n"
+        // SetOrder (0x004a5660 -> 0x0049aec0): a whole number held to 1 - 100.
+        "function animMeta:SetOrder(o)\n"
+        "    if not tonumber(o) then animUsage(self, 'Usage: %s:SetOrder(order)') end\n"
+        "    o = math.floor(tonumber(o))\n"
+        "    self.order = math.max(1, math.min(100, o))\n"
+        "end\n"
         "function animMeta:GetOrder() return self.order or 1 end\n"
-        "function animMeta:SetStartDelay(d) self.startDelay = d or 0 end\n"
+        // SetStartDelay / SetEndDelay (0x004a51a0, 0x004a5260): a number, a
+        // negative delay taken as none (0x0049ae20).
+        "function animMeta:SetStartDelay(d)\n"
+        "    if not tonumber(d) then animUsage(self, 'Usage: %s:SetStartDelay(delaySec)') end\n"
+        "    self.startDelay = math.max(0, tonumber(d))\n"
+        "end\n"
         "function animMeta:GetStartDelay() return self.startDelay or 0 end\n"
-        "function animMeta:SetEndDelay(d) self.endDelay = d or 0 end\n"
+        "function animMeta:SetEndDelay(d)\n"
+        "    if not tonumber(d) then animUsage(self, 'Usage: %s:SetEndDelay(delaySec)') end\n"
+        "    self.endDelay = math.max(0, tonumber(d))\n"
+        "end\n"
         // SetSmoothing (0x004a5740): one of NONE, IN, OUT, IN_OUT, OUT_IN.
         "function animMeta:SetSmoothing(s)\n"
         "    if type(s) ~= 'string' then error(('Usage: %s:SetSmoothing(\"smoothingType\")'):format(tostring(self.name or '<unnamed>')), 2) end\n"
@@ -11121,10 +11171,18 @@ void LuaEngine::registerCoreAPI() {
         "    end\n"
         "    self.smoothing = s\n"
         "end\n"
-        "function animMeta:SetScale(x, y) self.scaleX, self.scaleY = x, y end\n"
+        // SetScale (0x004a6650): two numbers.
+        "function animMeta:SetScale(x, y)\n"
+        "    if not tonumber(x) or not tonumber(y) then animUsage(self, 'Usage: %s:SetScale(x, y)') end\n"
+        "    self.scaleX, self.scaleY = tonumber(x), tonumber(y)\n"
+        "end\n"
         // A Rotation keeps radians (+0xa4): SetRadians sets them, GetDegrees
         // answers them times 57.29578 (0x004a6410, 0x004a63c0, 0x004a6490).
-        "function animMeta:SetDegrees(d) self.radians = (tonumber(d) or 0) / 57.29578 end\n"
+        // SetDegrees (0x004a6340): a number.
+        "function animMeta:SetDegrees(d)\n"
+        "    if not tonumber(d) then animUsage(self, 'Usage: %s:SetDegrees(degrees)') end\n"
+        "    self.radians = tonumber(d) / 57.29578\n"
+        "end\n"
         "function animMeta:GetDegrees() return (self.radians or 0) * 57.29578 end\n"
         "function animMeta:SetRadians(r)\n"
         "    if type(r) ~= 'number' then error(('Usage: %s:SetRadians(radians)'):format(tostring(self.name or '<unnamed>')), 2) end\n"
@@ -11244,15 +11302,32 @@ void LuaEngine::registerCoreAPI() {
 
         "local groupMeta = {}\n"
         "groupMeta.__index = groupMeta\n"
+        // CreateAnimation(type, name) (0x004a7e00): the type matched in any case
+        // to Animation, Translation, Rotation, Scale, Path or Alpha; none, or one
+        // not among them, is a plain Animation that changes nothing.
+        "local animKinds = {animation = 'Animation', translation = 'Translation', rotation = 'Rotation',\n"
+        "                   scale = 'Scale', path = 'Path', alpha = 'Alpha'}\n"
         "function groupMeta:CreateAnimation(kind, name)\n"
-        "    local a = setmetatable({kind = kind or 'Alpha', group = self,\n"
+        "    kind = type(kind) == 'string' and animKinds[kind:lower()] or 'Animation'\n"
+        "    local a = setmetatable({kind = kind, group = self,\n"
         "                            duration = 0, order = 1, startDelay = 0}, animMeta)\n"
         "    table.insert(self.animations, a)\n"
         "    if name then _G[name] = a end\n"
         "    return a\n"
         "end\n"
         "function groupMeta:GetAnimations() return unpack(self.animations) end\n"
-        "function groupMeta:SetLooping(m) self.looping = m end\n"
+        // SetLooping (0x004a7130): NONE, REPEAT or BOUNCE in any case (0x008152a0),
+        // the usage error for anything not a string, its own error for another.
+        "function groupMeta:SetLooping(m)\n"
+        "    if type(m) ~= 'string' and type(m) ~= 'number' then\n"
+        "        error(('Usage: %s:SetLooping(\"loopType\")'):format(tostring(self.name or '<unnamed>')), 2)\n"
+        "    end\n"
+        "    local u = tostring(m):upper()\n"
+        "    if u ~= 'NONE' and u ~= 'REPEAT' and u ~= 'BOUNCE' then\n"
+        "        error(('%s:SetLooping(): Unknown loop type specified'):format(tostring(self.name or '<unnamed>')), 2)\n"
+        "    end\n"
+        "    self.looping = u\n"
+        "end\n"
         "function groupMeta:GetLooping() return self.looping or 'NONE' end\n"
         "function groupMeta:IsPlaying() return self.isPlaying == true end\n"
         "function groupMeta:IsDone() return self.isPlaying ~= true end\n"
