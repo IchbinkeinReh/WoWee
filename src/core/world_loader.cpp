@@ -41,6 +41,7 @@
 #include "game/transport_manager.hpp"
 #include "game/world.hpp"
 
+#include <new>
 #include <SDL3/SDL.h>
 #include <chrono>
 #include <filesystem>
@@ -204,7 +205,18 @@ void WorldLoader::processPendingEntry() {
         renderer_->getCameraController()->suppressMovementFor(1.0f);
         renderer_->getCameraController()->suspendGravityFor(10.0f);
     }
-    loadOnlineWorldTerrain(entry.mapId, entry.x, entry.y, entry.z);
+    try {
+        loadOnlineWorldTerrain(entry.mapId, entry.x, entry.y, entry.z);
+    } catch (const std::bad_alloc& e) {
+        // Out of memory part way into the world (a phone's budget): back to
+        // the login screen with the reason on it, not a crash. The logout
+        // takes down whatever of the world was built.
+        loadingWorld_ = false;
+        LOG_ERROR("World entry: out of memory loading map ", entry.mapId, " (", e.what(),
+                  "); back to the login screen");
+        app_.disconnectNotice_ = "Not enough memory to load the world.";
+        app_.logoutToLogin();
+    }
 }
 
 void WorldLoader::reloadAfterDeviceLoss(uint32_t mapId, float x, float y, float z) {

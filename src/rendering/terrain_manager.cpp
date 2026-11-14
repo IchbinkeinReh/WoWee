@@ -1,6 +1,7 @@
 #include "rendering/terrain_manager.hpp"
 #include "rendering/collision_facets.hpp"
 #include "rendering/model_memory.hpp"
+#include <new>
 #include <cstdio>
 #include "pipeline/detail_doodad_shade.hpp"
 #include "rendering/m2_view_distance.hpp"
@@ -1566,7 +1567,17 @@ void TerrainManager::workerLoop() {
 
         if (hasWork) {
             const auto prepStart = std::chrono::steady_clock::now();
-            auto pending = prepareTile(coord.x, coord.y);
+            std::shared_ptr<PendingTile> pending;
+            try {
+                pending = prepareTile(coord.x, coord.y);
+            } catch (const std::bad_alloc&) {
+                // Out of memory on this thread (a phone's budget, a texture
+                // that would not fit): the tile fails as one that could not
+                // be read, rather than taking the process with it - nothing
+                // catches on a worker, so this was std::terminate.
+                LOG_ERROR("Terrain tile [", coord.x, ",", coord.y, "]: out of memory preparing it; skipped");
+                pending.reset();
+            }
             const double prepMs = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - prepStart).count();
             prepareNs_ += static_cast<long long>(prepMs * 1e6);

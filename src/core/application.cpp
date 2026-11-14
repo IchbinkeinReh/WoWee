@@ -6491,6 +6491,7 @@ void Application::update(float deltaTime) {
     }
 
     // Process any pending world entry request via WorldLoader
+    updateCheckpoint = "world entry";
     if (worldLoader_ && state != AppState::DISCONNECTED) {
         worldLoader_->processPendingEntry();
     }
