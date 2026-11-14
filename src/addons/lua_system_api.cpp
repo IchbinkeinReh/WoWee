@@ -4899,29 +4899,25 @@ static int lua_SetChatWindowSize(lua_State* L) {
     saveInterfaceState();
     return 0;
 }
-// A missing component keeps what the window already has rather than falling to
-// a number of this function's choosing. FCF_SetWindowColor passes on whatever
-// FCF_GetChatWindowInfo answered, and that is nil for a window the interface
-// has no settings for - so a default of 1 here reads "the interface said
-// nothing" as "the interface said white", and saves it. The white background
-// this client shipped with is what that looks like once it is on disk.
+/// SetChatWindowColor(index, r, g, b) (0x004fc470): all four numbers or the
+/// usage error, each component kept as a byte. (GetChatWindowInfo answers
+/// numbers for every window there is, so FCF_SetWindowColor always has them.)
 static int lua_SetChatWindowColor(lua_State* L) {
-    // (The client raises its usage error for a missing component, 0x004fc470;
-    // see above for why one is kept here.) Each is kept as the client keeps
-    // it, a byte.
-    if (!chatWindowUsage(L, "Usage: SetChatWindowColor(index, r, g, b)")) return 0;
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2) || !lua_isnumber(L, 3) || !lua_isnumber(L, 4))
+        return luaL_error(L, "Usage: SetChatWindowColor(index, r, g, b)");
     if (auto* w = chatWindow(L, 1)) {
-        if (lua_isnumber(L, 2)) w->r = chatColourByte(lua_tonumber(L, 2));
-        if (lua_isnumber(L, 3)) w->g = chatColourByte(lua_tonumber(L, 3));
-        if (lua_isnumber(L, 4)) w->b = chatColourByte(lua_tonumber(L, 4));
+        w->r = chatColourByte(lua_tonumber(L, 2));
+        w->g = chatColourByte(lua_tonumber(L, 3));
+        w->b = chatColourByte(lua_tonumber(L, 4));
     }
     saveInterfaceState();
     return 0;
 }
 static int lua_SetChatWindowAlpha(lua_State* L) {
-    if (!chatWindowUsage(L, "Usage: SetChatWindowAlpha(index, alpha)")) return 0;
-    if (auto* w = chatWindow(L, 1))
-        if (lua_isnumber(L, 2)) w->alpha = chatColourByte(lua_tonumber(L, 2));   // 0x004fc5b0
+    // 0x004fc5b0: two numbers or the usage error.
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: SetChatWindowAlpha(index, alpha)");
+    if (auto* w = chatWindow(L, 1)) w->alpha = chatColourByte(lua_tonumber(L, 2));
     saveInterfaceState();
     return 0;
 }
@@ -4955,14 +4951,22 @@ static int lua_SetChatWindowUninteractable(lua_State* L) {
     saveInterfaceState();
     return 0;
 }
+/// SetChatWindowSavedPosition(index, "point", x, y) (0x004fc890): all four
+/// or the usage error, and a point the client knows - any case - or
+/// "Unknown Region Point".
 static int lua_SetChatWindowSavedPosition(lua_State* L) {
+    if (!lua_isnumber(L, 1) || !lua_isstring(L, 2) || !lua_isnumber(L, 3) || !lua_isnumber(L, 4))
+        return luaL_error(L, "Usage: SetChatWindowSavedPosition(index, \"point\", xOffsetRatio, yOffsetRatio)");
     auto* w = chatWindow(L, 1);
     if (!w) return 0;
-    // Called with nil to forget the position, which is how a window that has
-    // been re-docked stops being restored to where it floated.
-    if (lua_isnoneornil(L, 2)) { w->hasPosition = false; saveInterfaceState(); return 0; }
-    const float x = static_cast<float>(luaL_optnumber(L, 3, 0.0));
-    const float y = static_cast<float>(luaL_optnumber(L, 4, 0.0));
+    static constexpr const char* kPoints[] = {"TOPLEFT", "TOP", "TOPRIGHT", "LEFT", "CENTER",
+                                              "RIGHT", "BOTTOMLEFT", "BOTTOM", "BOTTOMRIGHT"};
+    std::string point = lua_tostring(L, 2);
+    for (auto& c : point) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    if (std::find(std::begin(kPoints), std::end(kPoints), point) == std::end(kPoints))
+        return luaL_error(L, "Unknown Region Point");
+    const float x = static_cast<float>(lua_tonumber(L, 3));
+    const float y = static_cast<float>(lua_tonumber(L, 4));
     // A position is saved as a fraction of the screen, so anything that made
     // the screen zero for a frame makes this nan - and a nan written out is
     // permanent, because it is read back on every login and put straight into
@@ -4975,19 +4979,22 @@ static int lua_SetChatWindowSavedPosition(lua_State* L) {
                     x, ",", y);
         return 0;
     }
-    w->point   = luaL_optstring(L, 2, "TOPLEFT");
+    w->point   = point;
     w->xOffset = x;
     w->yOffset = y;
     w->hasPosition = true;
     saveInterfaceState();
     return 0;
 }
+/// SetChatWindowSavedDimensions(index, width, height) (0x004fc9a0): three
+/// numbers or the usage error.
 static int lua_SetChatWindowSavedDimensions(lua_State* L) {
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2) || !lua_isnumber(L, 3))
+        return luaL_error(L, "Usage: SetChatWindowSavedDimensions(index, width, height)");
     auto* w = chatWindow(L, 1);
     if (!w) return 0;
-    if (lua_isnoneornil(L, 2)) { w->hasDimensions = false; saveInterfaceState(); return 0; }
-    const float wd = static_cast<float>(luaL_optnumber(L, 2, 0.0));
-    const float ht = static_cast<float>(luaL_optnumber(L, 3, 0.0));
+    const float wd = static_cast<float>(lua_tonumber(L, 2));
+    const float ht = static_cast<float>(lua_tonumber(L, 3));
     if (!std::isfinite(wd) || !std::isfinite(ht)) {
         LOG_WARNING("Refusing chat window dimensions that are not numbers: ",
                     wd, "x", ht);
