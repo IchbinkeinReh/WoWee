@@ -2204,11 +2204,23 @@ void registerSocialLuaAPI(lua_State* L) {
                 // this client's own window, because every chat line carried the
                 // id zero and CanComplainChat is asked about that id before the
                 // entry is shown at all.
+                // ComplainChat(lineID), (name) or (name, text) (0x0050ed00):
+                // the same line lookup CanComplainChat makes (0x004fb300).
                 {"ComplainChat", [](lua_State* L) -> int {
+            std::string name, text;
+            uint32_t lineId = 0;
+            if (lua_isnumber(L, 1)) {
+                lineId = static_cast<uint32_t>(std::llround(lua_tonumber(L, 1)));
+            } else if (lua_isstring(L, 1)) {
+                name = lua_tostring(L, 1);
+                if (lua_isstring(L, 2)) text = lua_tostring(L, 2);
+            } else {
+                return luaL_error(L, "Usage: ComplainChat(lineID) or ComplainChat(name) or ComplainChat(name, text)");
+            }
             auto* gh = getGameHandler(L);
-            const uint32_t lineId = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-            if (!gh || lineId == 0) return 0;
-            const uint64_t guid = gh->chatLineSender(lineId);
+            auto* chat = gh ? gh->getChatHandler() : nullptr;
+            if (!chat || (lineId == 0 && name.empty())) return 0;
+            const uint64_t guid = chat->findChatLineSender(name, text, lineId);
             if (guid != 0) gh->reportPlayer(guid, "");
             return 0;
         }},
@@ -4523,11 +4535,24 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"CanGrantLevel",             [](lua_State* L) -> int { lua_pushnil(L); return 1; }},
                 // Whether that line can be reported: it has to be one this
                 // client still remembers the sender of, and not one of the
-                // player's own.
+                // player's own. CanComplainChat(lineID), (name) or (name, text)
+                // (0x00500c80): the line by its id - rounded - or the newest
+                // one that name said, that text when given (0x004fb300).
                 {"CanComplainChat", [](lua_State* L) -> int {
+            std::string name, text;
+            uint32_t lineId = 0;
+            if (lua_isnumber(L, 1)) {
+                lineId = static_cast<uint32_t>(std::llround(lua_tonumber(L, 1)));
+            } else if (lua_isstring(L, 1)) {
+                name = lua_tostring(L, 1);
+                if (lua_isstring(L, 2)) text = lua_tostring(L, 2);
+            } else {
+                return luaL_error(L, "Usage: CanComplainChat(lineID) or CanComplainChat(name) or CanComplainChat(name, text)");
+            }
             auto* gh = getGameHandler(L);
-            const uint32_t lineId = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-            const uint64_t guid = (gh && lineId) ? gh->chatLineSender(lineId) : 0;
+            auto* chat = gh ? gh->getChatHandler() : nullptr;
+            const uint64_t guid = (chat && (lineId || !name.empty()))
+                ? chat->findChatLineSender(name, text, lineId) : 0;
             luaPushOneOrNil(L, (guid != 0 && guid != gh->getPlayerGuid()) ? 1 : 0);
             return 1;
         }},

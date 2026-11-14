@@ -127,10 +127,15 @@ public:
     }
     /// Who sent the line with this id, or zero if it is not remembered.
     [[nodiscard]] uint64_t chatLineSender(uint32_t lineId) const {
-        for (const auto& [id, guid] : chatLineSenders_)
-            if (id == lineId) return guid;
+        for (const auto& l : chatLineSenders_)
+            if (l.id == lineId) return l.guid;
         return 0;
     }
+    /// The sender of the newest remembered line that matches (0x004fb300):
+    /// by its id when one is given, else by the sender's name and - when
+    /// given - the text, both in any case. Zero when none matches.
+    [[nodiscard]] uint64_t findChatLineSender(const std::string& name, const std::string& text,
+                                              uint32_t lineId) const;
 
     /// The roster of a channel by name, empty until a list is asked for. The
     /// list used to be printed to chat and dropped, so the channel panel had
@@ -315,7 +320,15 @@ private:
     ///
     /// Bounded, because a session's chat is unbounded and only recent lines can
     /// be reported anyway.
-    std::deque<std::pair<uint32_t, uint64_t>> chatLineSenders_;
+    /// The client keeps the last 60 lines a player said (0x00b75a60, 0x3c
+    /// rows): what it can be asked about to report.
+    struct RememberedLine {
+        uint32_t id = 0;
+        uint64_t guid = 0;
+        std::string name;
+        std::string text;
+    };
+    std::deque<RememberedLine> chatLineSenders_;
     uint32_t nextChatLineId_ = 1;
     std::unordered_map<std::string, std::vector<ChannelMember>> channelRosters_;
     /// The channel rosters waiting on names, and the guids still outstanding for

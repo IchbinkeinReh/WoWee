@@ -1288,11 +1288,10 @@ void ChatHandler::deliverChatMessage(MessageChatData data, bool alreadyWaited) {
         // CanComplainChat is asked about the id before the entry is shown.
         const uint32_t lineId = nextChatLineId_++;
         if (data.senderGuid != 0) {
-            chatLineSenders_.emplace_back(lineId, data.senderGuid);
-            // Recent lines only. A session's chat has no end, and a message old
-            // enough to have fallen out of this is old enough not to be
-            // reportable.
-            constexpr size_t kRememberedLines = 512;
+            chatLineSenders_.push_back({lineId, data.senderGuid, data.senderName, data.message});
+            // Recent lines only, as many as the client keeps (60, 0x004fb300's
+            // ring): a line older than that cannot be reported there either.
+            constexpr size_t kRememberedLines = 60;
             while (chatLineSenders_.size() > kRememberedLines)
                 chatLineSenders_.pop_front();
         }
@@ -1735,6 +1734,24 @@ std::string ChatHandler::resolveChannelArg(const std::string& channel) const {
     if (number == 0) return channel;
     const auto* s = channelSlots_.joinedByNumber(number);
     return s ? s->name : std::string();
+}
+
+uint64_t ChatHandler::findChatLineSender(const std::string& name, const std::string& text,
+                                         uint32_t lineId) const {
+    auto same = [](const std::string& a, const std::string& b) {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i)
+            if (std::tolower(static_cast<unsigned char>(a[i])) !=
+                std::tolower(static_cast<unsigned char>(b[i]))) return false;
+        return true;
+    };
+    for (auto it = chatLineSenders_.rbegin(); it != chatLineSenders_.rend(); ++it) {
+        if (!name.empty() && !same(name, it->name)) continue;
+        if (!text.empty() && !same(text, it->text)) continue;
+        if (lineId != 0 && lineId != it->id) continue;
+        return it->guid;
+    }
+    return 0;
 }
 
 void ChatHandler::sendChannelNameCommand(Opcode op, const std::string& channel) {
