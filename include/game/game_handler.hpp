@@ -2717,8 +2717,8 @@ public:
     void declineResurrect();
 
     // ---- Group ----
-    void inviteToGroup(const std::string& playerName);
-    void acceptGroupInvite();
+    void inviteToGroup(const std::string& playerName, uint32_t roles = 0);
+    void acceptGroupInvite(uint32_t roles = 0);
     void declineGroupInvite();
     void leaveGroup();
     /// SocialHandler::forgetLfgDungeonOnWorldport (0x0052cc30).

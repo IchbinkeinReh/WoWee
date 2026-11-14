@@ -2340,7 +2340,7 @@ void SocialHandler::handleDuelWinner(network::Packet& packet) {
 // Party / Raid
 // ============================================================
 
-void SocialHandler::inviteToGroup(const std::string& playerName) {
+void SocialHandler::inviteToGroup(const std::string& playerName, uint32_t roles) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     // One's own name, matched without case, is refused before the request
     // (0x006d4300): ERR_INVITE_SELF.
@@ -2355,15 +2355,15 @@ void SocialHandler::inviteToGroup(const std::string& playerName) {
         }
     }
     LOG_WARNING(">>> Sending CMSG_GROUP_INVITE to '", playerName, "'");
-    auto packet = GroupInvitePacket::build(playerName);
+    auto packet = GroupInvitePacket::build(playerName, roles);
     owner_.getSocket()->send(packet);
 }
 
-void SocialHandler::acceptGroupInvite() {
+void SocialHandler::acceptGroupInvite(uint32_t roles) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     LOG_WARNING(">>> Sending CMSG_GROUP_ACCEPT");
     pendingGroupInvite = false;
-    auto packet = GroupAcceptPacket::build();
+    auto packet = GroupAcceptPacket::build(roles);
     owner_.getSocket()->send(packet);
 }
 

@@ -1251,8 +1251,20 @@ static int lua_AddOrDelIgnore(lua_State* L) {
 // DUEL_REQUESTED, and StaticPopup draws them. None of the buttons did anything,
 // because the functions behind them were never bound - so an invitation could
 // be seen and not taken.
+/// The role mask InviteUnit and AcceptGroup read from three flags at `first`
+/// (0x0051a6e0, 0x0051ab20): tank 2, healer 4, damage 8.
+static uint32_t groupRolesArg(lua_State* L, int first) {
+    uint32_t roles = 0;
+    if (luaClientSwitchArg(L, first, false)) roles |= 2;
+    if (luaClientSwitchArg(L, first + 1, false)) roles |= 4;
+    if (luaClientSwitchArg(L, first + 2, false)) roles |= 8;
+    return roles;
+}
+
+/// AcceptGroup([tank, healer, damage]) (0x0051ab20): the role mask in the
+/// acceptance.
 static int lua_AcceptGroup(lua_State* L) {
-    if (auto* gh = getGameHandler(L)) gh->acceptGroupInvite();
+    if (auto* gh = getGameHandler(L)) gh->acceptGroupInvite(groupRolesArg(L, 1));
     return 0;
 }
 static int lua_DeclineGroup(lua_State* L) {
@@ -4356,9 +4368,16 @@ void registerSocialLuaAPI(lua_State* L) {
         }},
                 // InviteUnit(unit or name), UninviteUnit(unit or name): a
                 // unit token invites that unit by its name (unit_or_name.hpp).
+                // InviteUnit(unit or name [, tank, healer, damage]) (0x0051a6e0):
+                // a name past 48 characters is "Name too long", and the three
+                // flags, read as the client reads one, ride in the invite as
+                // its role mask - 2, 4 and 8.
                 {"InviteUnit", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (gh) gh->inviteToGroup(unitOrNameArg(L, gh, luaL_checkstring(L, 1)));
+            if (!gh || !lua_isstring(L, 1)) return 0;
+            const std::string name = unitOrNameArg(L, gh, lua_tostring(L, 1));
+            if (name.size() > 48) return luaL_error(L, "Name too long");
+            gh->inviteToGroup(name, groupRolesArg(L, 2));
             return 0;
         }},
                 // UninviteUnit(name [, reason]) - the reason is argument two, and

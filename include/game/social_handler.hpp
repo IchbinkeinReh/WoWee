@@ -375,8 +375,8 @@ public:
     }
 
     // Party/Raid
-    void inviteToGroup(const std::string& playerName);
-    void acceptGroupInvite();
+    void inviteToGroup(const std::string& playerName, uint32_t roles = 0);
+    void acceptGroupInvite(uint32_t roles = 0);
     void declineGroupInvite();
 
     // ---- Arena team invitations ----
