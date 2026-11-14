@@ -37,6 +37,7 @@
 #include "game/opcode_table.hpp"
 #include "network/packet.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "ui/layout_cache.hpp"
 #include "game/chat_log.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "addons/chat_color_table.hpp"
@@ -4981,12 +4982,9 @@ static int lua_SetChatWindowSavedPosition(lua_State* L) {
         return luaL_error(L, "Usage: SetChatWindowSavedPosition(index, \"point\", xOffsetRatio, yOffsetRatio)");
     auto* w = chatWindow(L, 1);
     if (!w) return 0;
-    static constexpr const char* kPoints[] = {"TOPLEFT", "TOP", "TOPRIGHT", "LEFT", "CENTER",
-                                              "RIGHT", "BOTTOMLEFT", "BOTTOM", "BOTTOMRIGHT"};
-    std::string point = lua_tostring(L, 2);
-    for (auto& c : point) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    if (std::find(std::begin(kPoints), std::end(kPoints), point) == std::end(kPoints))
-        return luaL_error(L, "Unknown Region Point");
+    const int pointIndex = ui::layout_cache::pointIndex(lua_tostring(L, 2));
+    if (pointIndex < 0) return luaL_error(L, "Unknown Region Point");
+    const std::string point = ui::layout_cache::kPoints[static_cast<size_t>(pointIndex)];
     const float x = static_cast<float>(lua_tonumber(L, 3));
     const float y = static_cast<float>(lua_tonumber(L, 4));
     // A position is saved as a fraction of the screen, so anything that made

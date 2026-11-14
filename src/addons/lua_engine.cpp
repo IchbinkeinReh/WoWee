@@ -1173,11 +1173,9 @@ namespace {
 /// The client's point names (0x00814ed0), matched in any case; the canonical
 /// spelling, or nullptr.
 const char* regionPointName(const char* given) {
-    static constexpr const char* kPoints[] = {"TOPLEFT", "TOP", "TOPRIGHT", "LEFT", "CENTER",
-                                              "RIGHT", "BOTTOMLEFT", "BOTTOM", "BOTTOMRIGHT"};
-    for (const char* p : kPoints)
-        if (given && sameTypeName(p, given)) return p;
-    return nullptr;
+    if (!given) return nullptr;
+    const int i = wowee::ui::layout_cache::pointIndex(given);
+    return i < 0 ? nullptr : wowee::ui::layout_cache::kPoints[static_cast<size_t>(i)];
 }
 
 /// Whether `target` is placed through `self` (0x004891d0): it, or anything it
