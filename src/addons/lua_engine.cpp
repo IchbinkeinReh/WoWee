@@ -15603,10 +15603,6 @@ void LuaEngine::dispatchText(const char* utf8) {
 /// The handlers compare against these by name - CoinPickupFrame checks for
 /// "ESCAPE" and the digits - so a wrong spelling is a handler that never
 /// matches rather than an error anyone would see.
-/// The mouse buttons as WoW names them, in the order the state arrays are
-/// indexed.
-static constexpr const char* kMouseButtonNames[] = {"LeftButton", "RightButton", "MiddleButton",
-                                                    "Button4", "Button5"};
 
 static std::string wowKeyName(int sym) {
     // The mouse's side buttons, as the binding tables name them (0x0055e340:

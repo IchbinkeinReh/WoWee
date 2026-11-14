@@ -227,6 +227,11 @@ inline double luaGetTimeNow() {
     return wowee::core::appTimeSeconds();
 }
 
+/// The mouse buttons as WoW names them, in the order the state arrays are
+/// indexed: 1 left, 2 right, 3 middle, then the extra buttons (0x005eec20).
+inline constexpr const char* kMouseButtonNames[] = {"LeftButton", "RightButton", "MiddleButton",
+                                                    "Button4", "Button5"};
+
 // ---- Shared WoW class/race/power name tables (indexed by ID, element 0 = unknown) ----
 inline constexpr const char* kLuaClasses[] = {
     "","Warrior","Paladin","Hunter","Rogue","Priest",

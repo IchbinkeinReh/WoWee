@@ -5550,10 +5550,8 @@ static int lua_IsMouseButtonDown(lua_State* L) {
         if (n >= 1 && n <= 5) button = kByNumber[n - 1];
     } else if (lua_isstring(L, 1)) {
         const char* name = lua_tostring(L, 1);
-        static constexpr const char* kNames[5] = {
-            "LeftButton", "RightButton", "MiddleButton", "Button4", "Button5"};
         for (int i = 0; i < 5; ++i)
-            if (sameTypeName(name, kNames[i])) button = kByNumber[i];
+            if (sameTypeName(name, kMouseButtonNames[i])) button = kByNumber[i];
     } else {
         any = true;
     }
