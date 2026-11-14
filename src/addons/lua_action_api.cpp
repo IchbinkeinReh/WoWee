@@ -11,6 +11,7 @@
 #include "game/inventory_handler.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/override_bindings.hpp"
+#include "addons/account_bindings.hpp"
 #include "addons/lua_api_registrations.hpp"
 // For fireEvent: paging has to reach the frames as well as the addons.
 #include "addons/lua_engine.hpp"
@@ -3232,8 +3233,8 @@ namespace {
 
 /// command → its two keys, empty meaning not bound. Two because the UI offers a
 /// primary and a secondary and will write either.
-std::map<std::string, std::array<std::string, 2>>& bindingKeys() {
-    static std::map<std::string, std::array<std::string, 2>> keys;
+BindingKeyMap& bindingKeys() {
+    static BindingKeyMap keys;
     return keys;
 }
 
@@ -3329,9 +3330,12 @@ std::optional<std::string> liveKeyFor(const std::string& command) {
 /// listens rather than restated here - a second copy would be wrong the moment
 /// either side moved. Commands the client has no action for keep their retail
 /// default, so the list reads correctly even where nothing acts on it yet.
-void seedBindingDefaults() {
-    auto& keys = bindingKeys();
-    if (!keys.empty()) return;
+///
+/// A fresh map each time, because it is also what the realm's copy of the
+/// bindings is read over (applyAccountBindingsText) and what the copy sent up
+/// is written against (accountBindingsText).
+BindingKeyMap defaultBindingKeys() {
+    BindingKeyMap keys;
 
     static const struct { const char* command; const char* key; } kDefaults[] = {
         {"MOVEFORWARD", "W"},   {"MOVEBACKWARD", "S"},
@@ -3392,6 +3396,12 @@ void seedBindingDefaults() {
     };
     seedPad(wowee::ui::padBindings());
     seedPad(wowee::ui::padExtraBindings());
+    return keys;
+}
+
+void seedBindingDefaults() {
+    auto& keys = bindingKeys();
+    if (keys.empty()) keys = defaultBindingKeys();
 }
 
 /// The command list the emitter built, or zero if bindings.xml never loaded.
@@ -3681,36 +3691,19 @@ static int lua_LoadBindings(lua_State* L) {
 }
 
 std::string accountBindingsText() {
-    // bindings-cache.wtf: the binding mode, then a bind line for each key.
+    // bindings-cache.wtf as 0x0055f1b0 writes it: the keys that are not on
+    // their default, which is all the original reads back over its defaults.
     seedBindingDefaults();
-    std::string out = "BINDINGMODE 0\n";
-    for (const auto& [command, keys] : bindingKeys())
-        for (const auto& key : keys)
-            if (!key.empty()) out += "bind " + key + " " + command + "\n";
-    return out;
+    return bindingsCacheText(defaultBindingKeys(), bindingKeys());
 }
 
 void applyAccountBindingsText(lua_State* L, const std::string& text) {
-    // The realm's copy replaces the keys here, and is saved as them.
-    std::map<std::string, std::array<std::string, 2>> keys;
-    size_t pos = 0;
-    while (pos < text.size()) {
-        size_t end = text.find('\n', pos);
-        if (end == std::string::npos) end = text.size();
-        std::string line = text.substr(pos, end - pos);
-        pos = end + 1;
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line.rfind("bind ", 0) != 0) continue;
-        const size_t sp = line.find(' ', 5);
-        if (sp == std::string::npos) continue;
-        const std::string key = line.substr(5, sp - 5);
-        const std::string command = line.substr(sp + 1);
-        if (key.empty() || command.empty()) continue;
-        auto& slot = keys[command];
-        if (slot[0].empty()) slot[0] = key;
-        else if (slot[1].empty()) slot[1] = key;
-    }
-    if (keys.empty()) return;
+    // The realm's copy replaces the keys here, and is saved as them. Read over
+    // the defaults (0x005641c0): the original's copy names only the keys moved
+    // off them, and taking it as the whole list unbound everything else - Z
+    // among them, which left TOGGLESHEATH on no key at all.
+    seedBindingDefaults();
+    BindingKeyMap keys = bindingsFromCacheText(defaultBindingKeys(), text);
     for (const auto& [command, old] : bindingKeys()) {
         (void)old;
         if (!keys.count(command)) pushBindingToClient(command, "");

@@ -793,6 +793,8 @@ void AppearanceComposer::updateWeaponsFromFields() {
     } else if (field && fieldSheathSeen_ && *field != *fieldSheathSeen_) {
         // 0x00737aa0: the server's change, taken when the player was in the
         // state it changed from.
+        LOG_INFO("Sheath field: ", static_cast<int>(*fieldSheathSeen_), " -> ", static_cast<int>(*field),
+                 " (shown ", static_cast<int>(sheath_), ")");
         if (const auto state = fieldSheathChange(sheath_, *fieldSheathSeen_, *field, true)) {
             setSheathState(*state, true);
         }

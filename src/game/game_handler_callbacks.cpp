@@ -2139,6 +2139,7 @@ void GameHandler::requestSheathState(uint8_t state) {
     if (!isInWorld()) return;
     auto packet = SetSheathedPacket::build(state);
     socket->send(packet);
+    LOG_INFO("CMSG_SET_SHEATHED ", static_cast<int>(state));
 }
 
 void GameHandler::toggleHelm() {
