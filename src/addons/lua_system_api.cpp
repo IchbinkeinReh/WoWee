@@ -10,6 +10,8 @@
 #include <cstring>
 #include <ctime>
 #include <filesystem>
+#include <sstream>
+#include <cstdlib>
 #include <fstream>
 #include <optional>
 #include <ranges>
@@ -749,14 +751,75 @@ static bool& cvarStoreLoaded() {
     return loaded;
 }
 
+/// The original client's WTF folder, read and never written: under
+/// WOWEE_CLIENT_ROOT where that names the client's folder, else in the game
+/// folder (the working directory), as the client finds it beside itself.
+/// Matched without regard to case, as an install copied off Windows has it.
+static std::filesystem::path clientWtfFolder() {
+    namespace fs = std::filesystem;
+    const auto child = [](const fs::path& base, const std::string& name) -> fs::path {
+        std::error_code ec;
+        if (fs::is_directory(base / name, ec)) return base / name;
+        std::string wanted = name;
+        toLowerInPlace(wanted);
+        for (const auto& entry : fs::directory_iterator(base, ec)) {
+            std::string have = entry.path().filename().string();
+            toLowerInPlace(have);
+            if (have == wanted && entry.is_directory(ec)) return entry.path();
+        }
+        return {};
+    };
+    const char* root = std::getenv("WOWEE_CLIENT_ROOT");
+    std::error_code ec;
+    const fs::path base = (root && *root) ? fs::path(root) : fs::current_path(ec);
+    return base.empty() ? fs::path() : child(base, "WTF");
+}
+
+/// One console file of the client's: its SET lines into the store (the other
+/// commands such a file can hold have nothing to set here). The client runs
+/// each line as a console command (0x00766530); `SET name "value"` is what
+/// Config.wtf and a RunOnce file are made of, the quotes optional.
+static size_t readClientConsoleFile(const std::filesystem::path& file) {
+    std::ifstream in(file);
+    if (!in.is_open()) return 0;
+    size_t set = 0;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        std::istringstream words(line);
+        std::string verb, name;
+        if (!(words >> verb >> name)) continue;
+        toLowerInPlace(verb);
+        if (verb != "set") continue;
+        std::string value;
+        std::getline(words, value);
+        const size_t first = value.find_first_not_of(" \t");
+        value = first == std::string::npos ? std::string() : value.substr(first);
+        if (value.size() >= 2 && value.front() == '"' && value.back() == '"') value = value.substr(1, value.size() - 2);
+        toLowerInPlace(name);
+        cvarStore()[name] = value;
+        cvarStartupValues()[name] = value;
+        ++set;
+    }
+    return set;
+}
+
 static void loadStoredCVars() {
     cvarStoreLoaded() = true;
     cvarFileSnapshot().valid = false;
+    // The original's own CVars first: WTF\Config.wtf, as the client reads it
+    // at start (0x004067f0 -> 0x00768340). Read only - this client writes its
+    // CVars to its own file, never into the WTF folder - so what the player set
+    // here since, in cvars.cfg below, is laid over it.
+    const std::filesystem::path wtf = clientWtfFolder();
+    if (!wtf.empty()) {
+        if (const size_t n = readClientConsoleFile(wtf / "Config.wtf"); n > 0)
+            LOG_INFO("CVars: ", n, " from ", (wtf / "Config.wtf").string());
+    }
     std::ifstream in(cvarStorePath());
-    if (!in.is_open()) return;
     std::string line;
     size_t loaded = 0;
-    while (std::getline(in, line)) {
+    while (in.is_open() && std::getline(in, line)) {
         const size_t eq = line.find('=');
         if (eq == std::string::npos || eq == 0) continue;
         std::string key = line.substr(0, eq);
@@ -797,6 +860,27 @@ static void loadStoredCVars() {
         }
     }
     LOG_INFO("CVars: loaded ", loaded, " from ", cvarStorePath());
+    // Then WTF\RunOnce*.wtf, each file in name order, over everything else
+    // (0x00406740: the files sorted by 0x00403300, each run by 0x00766530).
+    if (!wtf.empty()) {
+        std::vector<std::filesystem::path> runOnce;
+        std::error_code ec;
+        for (const auto& entry : std::filesystem::directory_iterator(wtf, ec)) {
+            std::string name = entry.path().filename().string();
+            toLowerInPlace(name);
+            if (name.rfind("runonce", 0) == 0 && name.size() >= 4 &&
+                name.compare(name.size() - 4, 4, ".wtf") == 0) {
+                runOnce.push_back(entry.path());
+            }
+        }
+        std::sort(runOnce.begin(), runOnce.end(), [](const auto& a, const auto& b) {
+            return a.filename().string() < b.filename().string();
+        });
+        for (const auto& file : runOnce) {
+            if (const size_t n = readClientConsoleFile(file); n > 0)
+                LOG_INFO("CVars: ", n, " from ", file.string());
+        }
+    }
 }
 
 /// Write them back. Called on every change rather than at shutdown: the file is
