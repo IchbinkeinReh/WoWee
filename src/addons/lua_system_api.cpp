@@ -10469,6 +10469,15 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushstring(L, token);
             return 1; }},
                 {"GetBuildInfo",      lua_GetBuildInfo},
+                // FrameXML_Debug([level]) (0x0050f830): the XML loader's debug
+                // level, set from a number (cut to a whole one) and answered
+                // either way. WoWee's loader logs the same at every level.
+                {"FrameXML_Debug", [](lua_State* L) -> int {
+            static int level = 0;
+            if (lua_isnumber(L, 1)) level = luaToClientInt(L, 1);
+            lua_pushnumber(L, level);
+            return 1;
+        }},
                 {"GetCurrentMapAreaID", lua_GetCurrentMapAreaID},
                 {"SetMapToCurrentZone", lua_SetMapToCurrentZone},
                 {"GetCurrentMapContinent", lua_GetCurrentMapContinent},
