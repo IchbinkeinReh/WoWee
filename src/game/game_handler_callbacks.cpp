@@ -2371,6 +2371,10 @@ bool GameHandler::ownsChatChannel(const std::string& name) const {
     return chatHandler_ && chatHandler_->ownsChannel(name);
 }
 
+int GameHandler::getPlayerRestState() const {
+    return entityController_ ? entityController_->lastRestState() : -1;
+}
+
 uint64_t GameHandler::chatLineSender(uint32_t lineId) const {
     return chatHandler_ ? chatHandler_->chatLineSender(lineId) : 0;
 }

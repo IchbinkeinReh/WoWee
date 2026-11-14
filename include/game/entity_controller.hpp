@@ -245,6 +245,9 @@ private:
     void notePlayerPvpByte(const UpdateBlock& block, bool isCreate);
     int lastPlayerPvpByte_ = -1;  ///< -1 until the player's has been seen
     int lastRestState_ = -1;      ///< PLAYER_BYTES_2 byte 3, -1 until seen
+public:
+    [[nodiscard]] int lastRestState() const { return lastRestState_; }
+private:
     struct UnitFieldIndices {
         uint16_t health, maxHealth, powerBase, maxPowerBase;
         uint16_t level, faction, flags, dynFlags, auraState;

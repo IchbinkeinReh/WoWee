@@ -459,6 +459,8 @@ public:
     bool ownsChatChannel(const std::string& name) const;
     /// Who sent the chat line with this id, or zero. See ChatHandler.
     uint64_t chatLineSender(uint32_t lineId) const;
+    /// PLAYER_BYTES_2 byte 3: 1 rested, 2 normal, 6 Refer-a-Friend; -1 unseen.
+    [[nodiscard]] int getPlayerRestState() const;
 
     /// The addons CMSG_AUTH_SESSION names (0x005f5440), set by whoever found
     /// them before the world connection is made.

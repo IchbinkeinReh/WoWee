@@ -2041,13 +2041,40 @@ static int lua_UnitXPMax(lua_State* L) {
     return 1;
 }
 
-// GetXPExhaustion() → rested XP pool remaining (nil if none)
+/// An Exhaustion.dbc row (the table at 0x00ad3838): its name, localized,
+/// and its experience factor.
+struct ExhaustionRow { bool found = false; std::string name; float factor = 1.0f; };
+static ExhaustionRow exhaustionRow(game::GameHandler* gh, int id) {
+    static std::unordered_map<int, ExhaustionRow> rows;
+    static bool loaded = false;
+    if (!loaded) {
+        auto* am = gh ? gh->services().assetManager : nullptr;
+        if (am && am->isInitialized()) {
+            loaded = true;
+            if (auto dbc = am->loadDBC("Exhaustion.dbc"); dbc && dbc->isLoaded()) {
+                // ID, XP, Factor, OutdoorHours, InnHours, Name_lang.
+                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                    ExhaustionRow r;
+                    r.found = true;
+                    r.factor = dbc->getFloat(i, 2);
+                    r.name = dbc->getString(i, 5);
+                    rows[static_cast<int>(dbc->getUInt32(i, 0))] = std::move(r);
+                }
+            }
+        }
+    }
+    auto it = rows.find(id);
+    return it == rows.end() ? ExhaustionRow{} : it->second;
+}
+
+/// GetXPExhaustion() (0x0051b960): only while the rest state is rested (1),
+/// the rested-experience field times the rested row's factor; nil otherwise.
 static int lua_GetXPExhaustion(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnNil(L); }
-    uint32_t rested = gh->getPlayerRestedXp();
-    if (rested > 0) lua_pushnumber(L, rested);
-    else lua_pushnil(L);
+    if (!gh || gh->getPlayerRestState() != 1) { return luaReturnNil(L); }
+    const ExhaustionRow rested = exhaustionRow(gh, 1);
+    lua_pushnumber(L, static_cast<double>(gh->getPlayerRestedXp()) *
+                          static_cast<double>(rested.found ? rested.factor : 1.0f));
     return 1;
 }
 
@@ -2914,29 +2941,20 @@ static int lua_GetMaxCombatRatingBonus(lua_State* L) {
     return 1;
 }
 
-/// GetRestState() → stateID, stateName, xpMultiplier.
-///
-/// One is rested and two is normal, which is the way round WoW numbers them -
-/// this answered the opposite. MainMenuBar multiplies by the third return the
-/// line after reading it, so returning only the id was arithmetic on nil every
-/// time the cursor crossed the experience bar.
-///
-/// Rested means there is rested experience left to spend, not that the player
-/// is standing in an inn. Those are different questions and this asked the
-/// second: IsResting reads the rest-state byte out of PLAYER_BYTES_2, which the
-/// server clears the moment you walk outside, while the pool you earned in
-/// there is spent over the next several levels. So the bar went back to the
-/// normal purple with the exhaustion tick still several bubbles ahead of the
-/// fill - the two disagreeing on screen about the same thing.
-///
-/// IsResting keeps that byte, which is the right source for the "Resting"
-/// indicator it feeds.
+/// GetRestState() (0x0051b8b0) → the rest state's id, name and experience
+/// factor: PLAYER_BYTES_2's byte 3 (1 rested, 2 normal, 6 Refer-a-Friend -
+/// whether there is rested experience to spend, not whether the player is
+/// in an inn) looked up in Exhaustion.dbc; three nils with no row for it.
+/// It answered 1 or 2 by the rested pool alone, with English names and a
+/// factor of 1.5 where the table says 2.
 static int lua_GetRestState(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const bool rested = gh && gh->getPlayerRestedXp() > 0;
-    lua_pushnumber(L, rested ? 1 : 2);
-    lua_pushstring(L, rested ? "Rested" : "Normal");
-    lua_pushnumber(L, rested ? 1.5 : 1.0);
+    const int state = gh ? gh->getPlayerRestState() : -1;
+    const ExhaustionRow row = exhaustionRow(gh, state);
+    if (!row.found) { lua_pushnil(L); lua_pushnil(L); lua_pushnil(L); return 3; }
+    lua_pushnumber(L, state);
+    lua_pushstring(L, row.name.c_str());
+    lua_pushnumber(L, row.factor);
     return 3;
 }
 
