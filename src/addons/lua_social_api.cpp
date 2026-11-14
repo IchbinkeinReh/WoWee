@@ -396,31 +396,42 @@ static int lua_JoinChannelByName(lua_State* L) {
     return 2;
 }
 
-// SendAddonMessage(prefix, text, chatType, target) - send addon message
+/// SendAddonMessage("prefix", "message" [, "type"] [, "target"]) (0x00500560).
+///
+/// "prefix<TAB>message", at most 2999 characters, on CMSG_MESSAGECHAT in the
+/// addon language. The type is PARTY unless one is given, and one of PARTY,
+/// RAID, GUILD, BATTLEGROUND or WHISPER - any other, OFFICER included, is
+/// "Unknown addon chat type". RAID outside a raid goes to the party, and the
+/// party outside one goes nowhere: nothing is sent. A whisper needs its
+/// target. Only a prefix and a message both empty is the usage error.
 static int lua_SendAddonMessage(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    if (!gh) return 0;
-    const char* prefix = luaL_checkstring(L, 1);
-    const char* text = luaL_checkstring(L, 2);
-    const char* chatType = luaL_optstring(L, 3, "PARTY");
-    const char* target = luaL_optstring(L, 4, "");
-
-    // Build addon message: prefix + TAB + text, send via the appropriate channel
-    std::string typeStr(chatType);
-    for (char& c : typeStr) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    const char* prefix = lua_isstring(L, 1) ? lua_tostring(L, 1) : "";
+    const char* text = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
+    if (!*prefix && !*text)
+        return luaL_error(L, "Usage: SendAddonMessage(\"prefix\", \"message\" [,\"type\"] [,\"target\"])");
+    std::string encoded = std::string(prefix) + "\t" + text;
+    if (encoded.size() > 2999) encoded.resize(2999);
 
     game::ChatType ct = game::ChatType::PARTY;
-    if (typeStr == "PARTY")           ct = game::ChatType::PARTY;
-    else if (typeStr == "RAID")       ct = game::ChatType::RAID;
-    else if (typeStr == "GUILD")      ct = game::ChatType::GUILD;
-    else if (typeStr == "OFFICER")    ct = game::ChatType::OFFICER;
-    else if (typeStr == "BATTLEGROUND") ct = game::ChatType::BATTLEGROUND;
-    else if (typeStr == "WHISPER")    ct = game::ChatType::WHISPER;
-
-    // Encode as prefix\ttext (WoW addon message format)
-    std::string encoded = std::string(prefix) + "\t" + text;
-    std::string targetStr(target && *target ? target : "");
-    gh->sendAddonMessage(ct, encoded, targetStr);
+    if (lua_isstring(L, 3)) {
+        std::string typeStr = lua_tostring(L, 3);
+        for (char& c : typeStr) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        if (typeStr == "PARTY")             ct = game::ChatType::PARTY;
+        else if (typeStr == "RAID")         ct = game::ChatType::RAID;
+        else if (typeStr == "GUILD")        ct = game::ChatType::GUILD;
+        else if (typeStr == "BATTLEGROUND") ct = game::ChatType::BATTLEGROUND;
+        else if (typeStr == "WHISPER")      ct = game::ChatType::WHISPER;
+        else return luaL_error(L, "Unknown addon chat type");
+    }
+    auto* gh = getGameHandler(L);
+    const bool inGroup = gh && gh->isInGroup();
+    if (ct == game::ChatType::RAID && !(inGroup && game::groupIsRaid(gh->getPartyData().groupType)))
+        ct = game::ChatType::PARTY;
+    if (ct == game::ChatType::PARTY && !inGroup) return 0;
+    const char* target = lua_isstring(L, 4) ? lua_tostring(L, 4) : "";
+    if (ct == game::ChatType::WHISPER && !*target)
+        return luaL_error(L, "SendAddonMessage(): Whisper message missing target player!");
+    if (gh) gh->sendAddonMessage(ct, encoded, ct == game::ChatType::WHISPER ? target : "");
     return 0;
 }
 
