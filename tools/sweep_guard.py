@@ -1632,8 +1632,11 @@ CHECKS = [
     # bools. The refusal is the same one and is still argument-bound - the id
     # comes from the interface - but the arms are told apart by whether the
     # condition contains a comparison, and a named bool has none.
+    # 23 from 22 on 2026-11-14: SendAddonMessage to a party the player is not
+    # in sends nothing and says nothing, because that is what the client does
+    # (0x00500560, its jump past the send when 0xbd1948 is empty).
     ("silent_refusal_check.py",
-     r"^(\d+) state or lookup refusal", 22,
+     r"^(\d+) state or lookup refusal", 23,
      "action bindings that refuse on missing state and say nothing"),
     ("silent_refusal_check.py",
      r"^(\d+) argument-bound refusal", 27,
