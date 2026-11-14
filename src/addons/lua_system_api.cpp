@@ -4612,6 +4612,32 @@ static bool chatWindowUsage(lua_State* L, const char* usage) {
     return false;
 }
 
+/// The message groups a chat window can take, in the client's order (the
+/// table at 0x009fb7c0). Add and Remove match a name in any case against it
+/// and ignore one not in it; GetChatWindowMessages answers in this order.
+static constexpr const char* kChatMessageGroups[] = {
+    "SYSTEM", "SYSTEM_NOMENU", "SAY", "EMOTE", "YELL", "WHISPER", "PARTY",
+    "PARTY_LEADER", "RAID", "RAID_LEADER", "RAID_WARNING", "BATTLEGROUND",
+    "BATTLEGROUND_LEADER", "GUILD", "OFFICER", "MONSTER_SAY", "MONSTER_YELL",
+    "MONSTER_EMOTE", "MONSTER_WHISPER", "MONSTER_BOSS_EMOTE",
+    "MONSTER_BOSS_WHISPER", "ERRORS", "AFK", "DND", "IGNORED", "BG_HORDE",
+    "BG_ALLIANCE", "BG_NEUTRAL", "COMBAT_FACTION_CHANGE", "SKILL", "LOOT",
+    "MONEY", "CHANNEL", "ACHIEVEMENT", "GUILD_ACHIEVEMENT", "TARGETICONS",
+    "BN_WHISPER", "BN_WHISPER_INFORM", "BN_CONVERSATION",
+    "BN_INLINE_TOAST_ALERT", "OPENING", "TRADESKILLS", "PET_INFO",
+    "COMBAT_XP_GAIN", "COMBAT_HONOR_GAIN", "COMBAT_MISC_INFO"};
+
+static const char* canonicalChatGroup(const char* name) {
+    for (const char* g : kChatMessageGroups) {
+        const char* a = name;
+        const char* b = g;
+        for (; *a && *b; ++a, ++b)
+            if (std::toupper(static_cast<unsigned char>(*a)) != *b) break;
+        if (!*a && !*b) return g;
+    }
+    return nullptr;
+}
+
 /// A colour component as the chat window keeps it (0x004fc470): round(v x
 /// 255) as a byte, answered as that byte over 255.
 static float chatColourByte(double v) {
@@ -9676,6 +9702,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 // arrived at a frame that had not asked for it: the chat
                 // window stayed empty from login to logout.
                 {"GetChatWindowMessages", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetChatWindowMessages(index)");
             const ChatWindowSettings* w = chatWindow(L, 1);
             if (!w) return 0;
             // An empty General is unset, not configured, and answers the
@@ -9698,8 +9725,18 @@ void registerSystemLuaAPI(lua_State* L) {
                 for (const char* g : kDefaultChatGroups) lua_pushstring(L, g);
                 return static_cast<int>(std::size(kDefaultChatGroups));
             }
-            for (const auto& g : w->messageGroups) lua_pushstring(L, g.c_str());
-            return static_cast<int>(w->messageGroups.size());
+            // 0x004fc0c0: in the client's order, whatever order they came in.
+            int n = 0;
+            for (const char* g : kChatMessageGroups) {
+                for (const auto& have : w->messageGroups) {
+                    if (canonicalChatGroup(have.c_str()) == g) {
+                        lua_pushstring(L, g);
+                        ++n;
+                        break;
+                    }
+                }
+            }
+            return n;
         }},
                 // Name and zone-channel id in pairs, which is the shape
                 // ChatFrame_RegisterForChannels reads: it steps two at a time
@@ -9722,21 +9759,29 @@ void registerSystemLuaAPI(lua_State* L) {
                 // nothing - so a change made in the panel lasted until the
                 // frame was next asked what it listened to, which is the next
                 // login, and then went back.
+                // 0x004fc170, 0x004fc250: an index and a name or the usage
+                // error; a name the client has no group for changes nothing.
                 {"AddChatWindowMessages", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1) || !lua_isstring(L, 2))
+                return luaL_error(L, "Usage: AddChatWindowMessages(index, \"messageGroup\")");
             ChatWindowSettings* w = chatWindow(L, 1);
-            const char* group = lua_isstring(L, 2) ? lua_tostring(L, 2) : nullptr;
+            const char* group = canonicalChatGroup(lua_tostring(L, 2));
             if (!w || !group) return 0;
-            for (const auto& g : w->messageGroups) if (g == group) return 0;
+            for (const auto& g : w->messageGroups) if (canonicalChatGroup(g.c_str()) == group) return 0;
             w->messageGroups.emplace_back(group);
             saveInterfaceState();
             return 0;
         }},
                 {"RemoveChatWindowMessages", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1) || !lua_isstring(L, 2))
+                return luaL_error(L, "Usage: RemoveChatWindowMessages(index, \"messageGroup\")");
             ChatWindowSettings* w = chatWindow(L, 1);
-            const char* group = lua_isstring(L, 2) ? lua_tostring(L, 2) : nullptr;
+            const char* group = canonicalChatGroup(lua_tostring(L, 2));
             if (!w || !group) return 0;
             auto& v = w->messageGroups;
-            v.erase(std::remove(v.begin(), v.end(), std::string(group)), v.end());
+            v.erase(std::remove_if(v.begin(), v.end(), [group](const std::string& g) {
+                        return canonicalChatGroup(g.c_str()) == group;
+                    }), v.end());
             saveInterfaceState();
             return 0;
         }},
