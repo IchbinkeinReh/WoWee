@@ -1389,7 +1389,7 @@ int lua_WoweeModelCentered(lua_State* L) {
 }
 
 int lua_Frame_SetMovable(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->movable = luaClientBoolean(L, 2, true);
+    if (auto* w = widgetOf(L, 1)) w->movable = luaClientSwitchArg(L, 2, true);
     return 0;
 }
 int lua_Frame_IsMovable(lua_State* L) {
@@ -1466,7 +1466,7 @@ int lua_Frame_SetResizable(lua_State* L) {
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     if (!tree || id == 0) return 0;
-    if (auto* w = tree->get(id)) w->resizable = luaClientBoolean(L, 2, true);
+    if (auto* w = tree->get(id)) w->resizable = luaClientSwitchArg(L, 2, true);
     return 0;
 }
 
@@ -2338,7 +2338,7 @@ int lua_Frame_SetWheelEnabled(lua_State* L) {
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     if (!tree || id == 0) return 0;
-    if (auto* w = tree->get(id)) w->wheelEnabled = luaClientBoolean(L, 2, true);
+    if (auto* w = tree->get(id)) w->wheelEnabled = luaClientSwitchArg(L, 2, true);
     return 0;
 }
 
@@ -2500,7 +2500,7 @@ int lua_FontString_SetAlphaGradient(lua_State* L) {
 
 int lua_FontString_SetWordWrap(lua_State* L) {
     auto* w = widgetOf(L, 1);
-    if (w) w->wordWrap = luaClientBoolean(L, 2, true);
+    if (w) w->wordWrap = luaClientSwitchArg(L, 2, true);
     return 0;
 }
 int lua_FontString_CanWordWrap(lua_State* L) {
@@ -2511,7 +2511,7 @@ int lua_FontString_CanWordWrap(lua_State* L) {
 /// Texture:Set/GetHorizTile, Set/GetVertTile (0x0048cb60, 0x0048cbc0,
 /// 0x0048cc30, 0x0048cc90).
 int lua_Texture_SetHorizTile(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->horizTile = luaClientBoolean(L, 2, true);
+    if (auto* w = widgetOf(L, 1)) w->horizTile = luaClientSwitchArg(L, 2, true);
     return 0;
 }
 int lua_Texture_GetHorizTile(lua_State* L) {
@@ -2520,7 +2520,7 @@ int lua_Texture_GetHorizTile(lua_State* L) {
     return 1;
 }
 int lua_Texture_SetVertTile(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->vertTile = luaClientBoolean(L, 2, true);
+    if (auto* w = widgetOf(L, 1)) w->vertTile = luaClientSwitchArg(L, 2, true);
     return 0;
 }
 int lua_Texture_GetVertTile(lua_State* L) {
@@ -2530,7 +2530,7 @@ int lua_Texture_GetVertTile(lua_State* L) {
 }
 /// Texture:Set/GetNonBlocking (0x0048caa0, 0x0048cb00).
 int lua_Texture_SetNonBlocking(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->nonBlocking = luaClientBoolean(L, 2, true);
+    if (auto* w = widgetOf(L, 1)) w->nonBlocking = luaClientSwitchArg(L, 2, true);
     return 0;
 }
 int lua_Texture_GetNonBlocking(lua_State* L) {
@@ -2540,7 +2540,7 @@ int lua_Texture_GetNonBlocking(lua_State* L) {
 }
 int lua_FontString_SetIndentedWordWrap(lua_State* L) {
     auto* w = widgetToRemeasure(L, 1);
-    if (w) w->indentedWordWrap = luaClientBoolean(L, 2, true);
+    if (w) w->indentedWordWrap = luaClientSwitchArg(L, 2, true);
     return 0;
 }
 int lua_FontString_GetIndentedWordWrap(lua_State* L) {
@@ -2550,7 +2550,7 @@ int lua_FontString_GetIndentedWordWrap(lua_State* L) {
 }
 int lua_FontString_SetNonSpaceWrap(lua_State* L) {
     auto* w = widgetToRemeasure(L, 1);
-    if (w) w->nonSpaceWrap = luaClientBoolean(L, 2, true);
+    if (w) w->nonSpaceWrap = luaClientSwitchArg(L, 2, true);
     return 0;
 }
 
@@ -6920,7 +6920,7 @@ int lua_Texture_SetBlendMode(lua_State* L) {
 // whether the shader is there - always - which SetItemButtonDesaturated reads
 // to decide against greying the icon with SetVertexColor instead.
 int lua_Texture_SetDesaturated(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->desaturated = luaClientBoolean(L, 2, true);
+    if (auto* w = widgetOf(L, 1)) w->desaturated = luaClientSwitchArg(L, 2, true);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -7054,7 +7054,7 @@ int lua_Frame_EnableMouse(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
     if (auto* w = widgetOf(L, 1)) {
         // 0x004a0fd0: the flag as the client reads one - none is yes, nil no.
-        w->mouseEnabled = luaClientBoolean(L, 2, true);
+        w->mouseEnabled = luaClientSwitchArg(L, 2, true);
     }
     return 0;
 }
@@ -7823,7 +7823,7 @@ int lua_Frame_GetDisabledFontObject(lua_State* L) {
     return w ? pushNamedFontObject(L, w->disabledFontName) : 0;
 }
 int lua_Frame_EnableJoystick(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->joystickEnabled = luaClientBoolean(L, 2, true);
+    if (auto* w = widgetOf(L, 1)) w->joystickEnabled = luaClientSwitchArg(L, 2, true);
     return 0;
 }
 int lua_Frame_IsJoystickEnabled(lua_State* L) {
@@ -7917,7 +7917,7 @@ int lua_Frame_GetHitRectInsets(lua_State* L) {
 /// and set it answered as no-ops, so a frame restored from saved variables was
 /// not treated as placed and could be shifted out from under its own position.
 int lua_Frame_SetUserPlaced(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->userMoved = luaClientBoolean(L, 2, true);
+    if (auto* w = widgetOf(L, 1)) w->userMoved = luaClientSwitchArg(L, 2, true);
     return 0;
 }
 int lua_Frame_IsUserPlaced(lua_State* L) {
@@ -8089,11 +8089,11 @@ static int lua_CreateFont(lua_State* L) {
     return 1;
 }
 
-/// __WoweeClientBoolean(default, value): luaClientBoolean for the methods
+/// __WoweeClientBoolean(default, value): luaClientSwitchArg for the methods
 /// written in Lua, which pass their own arguments through so that none at all
 /// stays none.
 static int lua_WoweeClientBoolean(lua_State* L) {
-    lua_pushboolean(L, luaClientBoolean(L, 2, lua_toboolean(L, 1) != 0));
+    lua_pushboolean(L, luaClientSwitchArg(L, 2, lua_toboolean(L, 1) != 0));
     return 1;
 }
 
@@ -8188,7 +8188,7 @@ int lua_Frame_GetNumRegions(lua_State* L) { return pushChildWidgets(L, true, tru
 
 int lua_Frame_EnableKeyboard(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
-    if (auto* w = widgetOf(L, 1)) w->keyboardEnabled = luaClientBoolean(L, 2, true);
+    if (auto* w = widgetOf(L, 1)) w->keyboardEnabled = luaClientSwitchArg(L, 2, true);
     return 0;
 }
 int lua_Frame_IsKeyboardEnabled(lua_State* L) {
@@ -8203,7 +8203,7 @@ int lua_Frame_SetPropagateKeyboardInput(lua_State* L) {
 
 int lua_Frame_SetToplevel(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
-    if (auto* w = widgetOf(L, 1)) w->topLevel = luaClientBoolean(L, 2, true);
+    if (auto* w = widgetOf(L, 1)) w->topLevel = luaClientSwitchArg(L, 2, true);
     return 0;
 }
 int lua_Frame_IsToplevel(lua_State* L) {
@@ -8227,7 +8227,7 @@ int lua_Frame_Lower(lua_State* L) {
 }
 
 int lua_Frame_SetClampedToScreen(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->clampedToScreen = luaClientBoolean(L, 2, true);
+    if (auto* w = widgetOf(L, 1)) w->clampedToScreen = luaClientSwitchArg(L, 2, true);
     return 0;
 }
 int lua_Frame_IsClampedToScreen(lua_State* L) {
@@ -9314,7 +9314,7 @@ int lua_Frame_EnableDrawLayer(lua_State* L) { return lua_Frame_SetDrawLayerEnabl
 int lua_Frame_DisableDrawLayer(lua_State* L) { return lua_Frame_SetDrawLayerEnabled(L, false); }
 /// Set/GetDontSavePosition (0x004a08c0, 0x004a0910).
 int lua_Frame_SetDontSavePosition(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->dontSavePosition = luaClientBoolean(L, 2, true);
+    if (auto* w = widgetOf(L, 1)) w->dontSavePosition = luaClientSwitchArg(L, 2, true);
     return 0;
 }
 int lua_Frame_GetDontSavePosition(lua_State* L) {

@@ -10,7 +10,6 @@
 #include <utility>
 #include <optional>
 #include <chrono>
-#include <cctype>
 #include <cstring>
 #include <cmath>
 #include <algorithm>
@@ -151,45 +150,6 @@ inline int luaReturnNil(lua_State* L)  { lua_pushnil(L); return 1; }
 inline void luaPushOneOrNil(lua_State* L, bool yes) {
     if (yes) lua_pushnumber(L, 1);
     else     lua_pushnil(L);
-}
-/// A yes-or-no argument as the client reads one (0x00815500): nothing there,
-/// or a table or function, is `def`; nil is no; a boolean is itself; a number
-/// is yes when its whole part is not 0, so 0 and 0.5 are no where Lua's own
-/// truth would say yes; a string is read by its first letter - 0, F or N no,
-/// 1 - 9, T or Y yes, in either case - or as "off"/"disabled" no and
-/// "on"/"enabled" yes, and anything else is `def` (0x00815400).
-///
-/// Flag setters - EnableMouse, SetMovable, Show helm and cloak and many more -
-/// pass `def` true, so calling one with no argument turns the flag on.
-inline bool luaClientBoolean(lua_State* L, int idx, bool def) {
-    switch (lua_type(L, idx)) {
-    case LUA_TNIL: return false;
-    case LUA_TBOOLEAN: return lua_toboolean(L, idx) != 0;
-    case LUA_TNUMBER: {
-        const double d = lua_tonumber(L, idx);
-        return !(d > -1.0 && d < 1.0);   // truncated to a whole number, not 0
-    }
-    case LUA_TSTRING: {
-        const char* s = lua_tostring(L, idx);
-        if (!s) return def;
-        switch (s[0]) {
-        case '0': case 'F': case 'N': case 'f': case 'n': return false;
-        case '1': case '2': case '3': case '4': case '5': case '6': case '7': case '8':
-        case '9': case 'T': case 'Y': case 't': case 'y': return true;
-        default: break;
-        }
-        auto same = [s](const char* word) {
-            const char* a = s;
-            for (; *a && *word; ++a, ++word)
-                if (std::tolower(static_cast<unsigned char>(*a)) != *word) return false;
-            return *a == *word;
-        };
-        if (same("off") || same("disabled")) return false;
-        if (same("on") || same("enabled")) return true;
-        return def;
-    }
-    default: return def;
-    }
 }
 inline int luaReturnZero(lua_State* L) { lua_pushnumber(L, 0); return 1; }
 inline int luaReturnFalse(lua_State* L){ lua_pushboolean(L, 0); return 1; }

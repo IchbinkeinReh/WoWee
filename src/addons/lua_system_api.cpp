@@ -4929,13 +4929,13 @@ static int lua_SetChatWindowAlpha(lua_State* L) {
 /// no for the other two.
 static int lua_SetChatWindowShown(lua_State* L) {
     if (!chatWindowUsage(L, "Usage: SetChatWindowShown(index, shown)")) return 0;
-    if (auto* w = chatWindow(L, 1)) w->shown = luaClientBoolean(L, 2, true);
+    if (auto* w = chatWindow(L, 1)) w->shown = luaClientSwitchArg(L, 2, true);
     saveInterfaceState();
     return 0;
 }
 static int lua_SetChatWindowLocked(lua_State* L) {
     if (!chatWindowUsage(L, "Usage: SetChatWindowLocked(index, locked)")) return 0;
-    if (auto* w = chatWindow(L, 1)) w->locked = luaClientBoolean(L, 2, false);
+    if (auto* w = chatWindow(L, 1)) w->locked = luaClientSwitchArg(L, 2, false);
     saveInterfaceState();
     return 0;
 }
@@ -4950,7 +4950,7 @@ static int lua_SetChatWindowDocked(lua_State* L) {
 }
 static int lua_SetChatWindowUninteractable(lua_State* L) {
     if (!chatWindowUsage(L, "Usage: SetChatWindowUninteractable(index, uninteractable)")) return 0;
-    if (auto* w = chatWindow(L, 1)) w->uninteractable = luaClientBoolean(L, 2, false);
+    if (auto* w = chatWindow(L, 1)) w->uninteractable = luaClientSwitchArg(L, 2, false);
     saveInterfaceState();
     return 0;
 }
@@ -5091,11 +5091,6 @@ static int lua_GetExpansionLevel(lua_State* L) {
     return 1;
 }
 
-/// Normal, which is the difficulty a fresh group is on.
-static int lua_ReturnOne(lua_State* L) {
-    lua_pushnumber(L, 1.0);
-    return 1;
-}
 
 // The always-up battleground score lines, in the order FrameXML asks for them.
 // The server sends world states as bare key/value pairs, so the labels come
@@ -8678,7 +8673,39 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, raid.second + 1u);
             return 2;
         }},
-                {"GetChatTypeIndex",         lua_ReturnOne},
+                // GetChatTypeIndex("type") (0x004feee0): where the chat type
+                // stands in the client's own table (0x009fa558, copied at
+                // 0x00500000), counting from 1 and matched in any case;
+                // CHANNEL1 - CHANNEL10 come after it from 63, and anything
+                // else is 0. It answered 1 for every type.
+                {"GetChatTypeIndex", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetChatTypeIndex(type)");
+            static constexpr const char* kChatTypes[] = {
+                "SYSTEM", "SAY", "PARTY", "RAID", "GUILD", "OFFICER", "YELL", "WHISPER",
+                "WHISPER_FOREIGN", "WHISPER_INFORM", "EMOTE", "TEXT_EMOTE", "MONSTER_SAY",
+                "MONSTER_PARTY", "MONSTER_YELL", "MONSTER_WHISPER", "MONSTER_EMOTE", "CHANNEL",
+                "CHANNEL_JOIN", "CHANNEL_LEAVE", "CHANNEL_LIST", "CHANNEL_NOTICE",
+                "CHANNEL_NOTICE_USER", "AFK", "DND", "IGNORED", "SKILL", "LOOT", "MONEY",
+                "OPENING", "TRADESKILLS", "PET_INFO", "COMBAT_MISC_INFO", "COMBAT_XP_GAIN",
+                "COMBAT_HONOR_GAIN", "COMBAT_FACTION_CHANGE", "BG_SYSTEM_NEUTRAL",
+                "BG_SYSTEM_ALLIANCE", "BG_SYSTEM_HORDE", "RAID_LEADER", "RAID_WARNING",
+                "RAID_BOSS_EMOTE", "RAID_BOSS_WHISPER", "FILTERED", "BATTLEGROUND",
+                "BATTLEGROUND_LEADER", "RESTRICTED", "BATTLENET", "ACHIEVEMENT",
+                "GUILD_ACHIEVEMENT", "ARENA_POINTS", "PARTY_LEADER", "TARGETICONS",
+                "BN_WHISPER", "BN_WHISPER_INFORM", "BN_CONVERSATION", "BN_CONVERSATION_NOTICE",
+                "BN_CONVERSATION_LIST", "BN_INLINE_TOAST_ALERT", "BN_INLINE_TOAST_BROADCAST",
+                "BN_INLINE_TOAST_BROADCAST_INFORM", "BN_INLINE_TOAST_CONVERSATION"};
+            std::string type = lua_tostring(L, 1);
+            for (auto& c : type) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            for (size_t i = 0; i < std::size(kChatTypes); ++i) {
+                if (type == kChatTypes[i]) { lua_pushnumber(L, static_cast<double>(i + 1)); return 1; }
+            }
+            for (int n = 1; n <= 10; ++n) {
+                if (type == "CHANNEL" + std::to_string(n)) { lua_pushnumber(L, 62 + n); return 1; }
+            }
+            lua_pushnumber(L, 0);
+            return 1;
+        }},
                 {"GetDefaultLanguage",       lua_GetDefaultLanguage},
                 {"GetWeaponEnchantInfo",     lua_GetWeaponEnchantInfo},
                 // The PvP reclaim timer, which this client already tracks.
