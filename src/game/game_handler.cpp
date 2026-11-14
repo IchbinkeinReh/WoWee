@@ -979,6 +979,7 @@ void GameHandler::update(float deltaTime) {
         // Update combat text (Phase 2)
         updateCombatText(deltaTime);
         tickMinimapPings(deltaTime);
+        tickCapturePointWarning();
 
         // Tick logout countdown
         if (socialHandler_) socialHandler_->updateLogoutCountdown(deltaTime);
@@ -4135,6 +4136,37 @@ void GameHandler::closeNpcInteraction() {
     // The battlemaster's list (BATTLEFIELDS_CLOSED), opened from
     // SMSG_BATTLEFIELD_LIST, closes with the rest.
     fireAddonEvent("BATTLEFIELDS_CLOSED", {});
+}
+
+void GameHandler::tickCapturePointWarning() {
+    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (nowMs < capturePointWarnAfterMs_) return;
+    const auto player = entityController_->getEntityManager().getEntity(playerGuid);
+    if (!player) return;
+    // UNIT_FIELD_BYTES_2's second byte, bit 1: flagged for PvP (+0x1d1); and
+    // UNIT_FLAG_TAXI_FLIGHT (0x100000, +0xd4).
+    const uint16_t bytes2 = fieldIndex(UF::UNIT_FIELD_BYTES_2);
+    const uint16_t flags = fieldIndex(UF::UNIT_FIELD_FLAGS);
+    if (bytes2 != 0xFFFF && ((player->getField(bytes2) >> 8) & 0x01u) != 0) return;
+    if (flags != 0xFFFF && (player->getField(flags) & 0x00100000u) != 0) return;
+    constexpr uint32_t kCapturePoint = 29;
+    for (const auto& [guid, entity] : entityController_->getEntityManager().getEntities()) {
+        if (!entity || entity->getType() != ObjectType::GAMEOBJECT) continue;
+        const auto* go = static_cast<const GameObject*>(entity.get());
+        const auto* info = getCachedGameObjectInfo(go->getEntry());
+        if (!info || info->type != kCapturePoint || !info->hasData) continue;
+        const float radius = static_cast<float>(info->data[0]);
+        const float dx = go->getX() - player->getX();
+        const float dy = go->getY() - player->getY();
+        const float dz = go->getZ() - player->getZ();
+        if (dx * dx + dy * dy + dz * dz < radius * radius) {
+            addSystemChatMessage(interfaceString("PVP_REQUIRED_FOR_CAPTURE",
+                                                 "You must be flagged for PvP to capture this objective."));
+            capturePointWarnAfterMs_ = nowMs + 300000;
+            return;
+        }
+    }
 }
 
 void GameHandler::onLeaveWorld(bool worldport) {
