@@ -211,6 +211,19 @@ public class WoweeActivity extends SDLActivity {
         file.setReadable(true, true);
     }
 
+    /**
+     * A streaming server chosen on the client's own data screen, which the
+     * client shows when the server it was started with could not be reached
+     * (src/ui/data_folder_screen.cpp, through JNI). The client writes its own
+     * config file; this keeps the same server where DataFolderActivity keeps
+     * it, or the next start's writeStreamChoice would put the old one back.
+     * An empty address forgets the server.
+     */
+    @SuppressWarnings("unused")
+    public void keepStreamChoice(String url, String key) {
+        DataFolderActivity.keepStream(this, url, key);
+    }
+
     private void setEnv(String name, String value) {
         try {
             Os.setenv(name, value, true);

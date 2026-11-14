@@ -39,7 +39,15 @@ enum class DataPrompt {
     None,              ///< Data is there; straight to the login screen.
     NoData,            ///< Nothing usable where the client looked.
     ChosenFolderGone,  ///< A folder was chosen and is not there any more.
+    StreamFailed,      ///< A streaming server was chosen and could not be read.
 };
+
+/// Whether this start reads the game data from a streaming server: when
+/// WOWEE_DATA_MODE (`modeEnv`, empty when unset) says "streaming", or when a
+/// server is kept (`streamUrl`) and WOWEE_DATA_MODE says nothing else.
+inline bool streamingChosen(const std::string& modeEnv, const std::string& streamUrl) {
+    return modeEnv == "streaming" || (modeEnv.empty() && !streamUrl.empty());
+}
 
 /// What startup does about the data folder.
 ///
@@ -50,9 +58,17 @@ enum class DataPrompt {
 ///
 /// `builderAvailable`: this build has the asset builder (FIRST_RUN), which
 /// asks the same question with more to offer; it wins over this screen.
+///
+/// `streamFailed`: a streaming server was chosen and did not start. That wins
+/// over everything: this screen holds the server's fields, Android's activity
+/// let the server through without being able to try it, and the asset
+/// builder has nothing to say about a server. Without it the phones came
+/// back to the screen (or, on Android, to a login with no data) with no word
+/// of what had gone wrong.
 inline DataPrompt dataPromptAtStartup(bool preLaunchMask, bool builderAvailable, bool dataUsable,
                                       const std::string& chosenFolder,
-                                      bool chosenFolderPresent) {
+                                      bool chosenFolderPresent, bool streamFailed) {
+    if (streamFailed) return DataPrompt::StreamFailed;
     if (preLaunchMask || builderAvailable) return DataPrompt::None;
     if (!chosenFolder.empty() && !chosenFolderPresent) return DataPrompt::ChosenFolderGone;
     if (!dataUsable) return DataPrompt::NoData;
@@ -78,6 +94,37 @@ struct DataFolderView {
     bool found = false;      ///< Data is there now; reopening the app uses it.
     bool offerDefault = false;  ///< A chosen folder can be forgotten.
 };
+
+/// What the screen says when the streaming server could not be read: a
+/// heading short enough for a button-sized line in any language this client
+/// speaks (24 characters or fewer), and the rest as body text.
+struct StreamFailureView {
+    std::string heading;
+    std::string body;
+};
+
+/// `server`: the server's host, as the player gave it; `error`: what the
+/// streaming client said (pipeline::DataStream::start).
+inline StreamFailureView describeStreamFailure(const std::string& server, const std::string& error) {
+    StreamFailureView v;
+    v.heading = "Streaming failed";
+    v.body = "The game data could not be streamed from " +
+             (server.empty() ? std::string("the server") : server) + ": " +
+             (error.empty() ? std::string("no reason was given") : error) + ".";
+    if (error.find("access key") != std::string::npos) {
+        v.body += " Check the access key";
+    } else if (error.find("TLS") != std::string::npos ||
+               error.find("certificate") != std::string::npos) {
+        v.body += " The server's certificate could not be checked. Check the address";
+    } else if (error.find("status 5") != std::string::npos) {
+        // 502/503: the web server answers, the data service behind it not.
+        v.body += " The server's data service is not answering. Try again later, or check the address";
+    } else {
+        v.body += " Check the address and the access key";
+    }
+    v.body += ", then choose \"Use this server\" again.";
+    return v;
+}
 
 /// `folder`: the folder the client reads (or would read); `chosen`: whether
 /// the player chose it rather than the default; `found`: whether it holds data

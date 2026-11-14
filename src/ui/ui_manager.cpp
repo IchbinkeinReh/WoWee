@@ -523,6 +523,15 @@ void UIManager::loadInterfaceFont(const std::string& dataRoot,
                                            dst->LegacySize, &cfg);
         }
     }
+    // Loaded after frames were drawn - the game data came from a streaming
+    // server started on the data screen rather than at startup - ImGui had
+    // put its built-in face in first by then, and the first face is the one
+    // everything without an opinion is drawn in. The client's face is made
+    // the default instead, as being first makes it at startup.
+    if (loaded > 0 && firstNewFont > 0 && firstNewFont < io.Fonts->Fonts.Size &&
+        io.FontDefault == nullptr && ImGui::GetFrameCount() > 0) {
+        io.FontDefault = io.Fonts->Fonts[firstNewFont];
+    }
     if (loaded > 0) interfaceFontsLoaded_ = true;
 }
 

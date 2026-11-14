@@ -2152,6 +2152,15 @@ wowee_add_test(test_tls_trust
 target_link_libraries(test_tls_trust PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 wowee_test_link_tls_trust(test_tls_trust)
 
+# ── test_data_stream_choice ──────────────────────────────────
+# The streaming server kept between starts, and which starts stream: the iOS
+# app came back to its data screen after every restart with the server's
+# fields filled in.
+wowee_add_test(test_data_stream_choice
+    SOURCES test_data_stream_choice.cpp
+            ${CMAKE_SOURCE_DIR}/src/core/config_paths.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_realm_patches ───────────────────────────────────────
 # What a realm may name and where its archives may land. No network: the
 # naming and the parsing are the part that decides whether a manifest can

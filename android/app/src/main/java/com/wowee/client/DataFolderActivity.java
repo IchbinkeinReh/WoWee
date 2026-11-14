@@ -126,6 +126,22 @@ public class DataFolderActivity extends Activity implements ZipImport.Listener {
         return key == null ? "" : key;
     }
 
+    /**
+     * Keeps the streaming server, or forgets it when the address is empty.
+     * Committed rather than applied: the client's own data screen calls this
+     * (through WoweeActivity.keepStreamChoice) and the process may be closed
+     * right after, and the next start's writeStreamChoice reads it back.
+     */
+    static void keepStream(Context context, String url, String key) {
+        SharedPreferences.Editor e = context.getSharedPreferences(PREFS, MODE_PRIVATE).edit();
+        if (url == null || url.isEmpty()) {
+            e.remove(KEY_STREAM_URL).remove(KEY_STREAM_KEY);
+        } else {
+            e.putString(KEY_STREAM_URL, url).putString(KEY_STREAM_KEY, key == null ? "" : key);
+        }
+        e.commit();
+    }
+
     private static boolean haveAccess() {
         return Environment.isExternalStorageManager();
     }
@@ -321,9 +337,8 @@ public class DataFolderActivity extends Activity implements ZipImport.Listener {
     private void useStream() {
         String url = streamUrl.getText().toString().trim();
         String key = streamKey.getText().toString().trim();
-        SharedPreferences.Editor e = getSharedPreferences(PREFS, MODE_PRIVATE).edit();
         if (url.isEmpty()) {
-            e.remove(KEY_STREAM_URL).remove(KEY_STREAM_KEY).apply();
+            keepStream(this, null, null);
             refresh();
             return;
         }
@@ -336,7 +351,7 @@ public class DataFolderActivity extends Activity implements ZipImport.Listener {
             status.setText(R.string.data_stream_no_key);
             return;
         }
-        e.putString(KEY_STREAM_URL, url).putString(KEY_STREAM_KEY, key).apply();
+        keepStream(this, url, key);
         startGame();
     }
 

@@ -125,6 +125,18 @@ public:
     /// override tree and no screen should do that while it is being drawn.
     const pipeline::AssetInventory& getAssetInventory() const { return assetInventory_; }
     core::DataPrompt getDataPrompt() const { return dataPrompt_; }
+
+    /// The streaming server kept on the data screen, started now rather than
+    /// at the next start ("Use this server"): the server is asked on a thread
+    /// of its own, then the archives are opened and the login screen follows
+    /// - or getStreamError() says why not. False when this run has opened
+    /// game data already; only a restart can change what it reads then.
+    bool startStreamingNow();
+    enum class StreamStart { Idle, Connecting, Loading };
+    StreamStart getStreamStart() const;
+    /// Why the last streaming start failed (at startup or from the data
+    /// screen); empty when it did not, or none was tried.
+    const std::string& getStreamError() const { return streamError_; }
     /// Whether GitHub has a newer release than this build, asked once at
     /// startup. The login screen reads it; nothing else needs to.
     const UpdateCheck& getUpdateCheck() const { return updateCheck_; }
@@ -300,6 +312,23 @@ private:
     pipeline::AssetInventory assetInventory_;
     /// Why the data folder screen was opened at startup, if it was.
     core::DataPrompt dataPrompt_ = core::DataPrompt::None;
+    /// The game data: the folder (or the streamed archives' mirror) opened,
+    /// and everything built on it. At startup, or again from the data screen
+    /// once a streaming server has answered - only ever while nothing has
+    /// been opened yet.
+    void openGameData(const std::string& dataPath, bool atStartup);
+    /// The outcome of a streaming start taken in: the mirror made the data
+    /// folder, or the error kept for the data screen. True when it started.
+    bool applyStreamStart(const std::string& mirror, const std::string& error);
+    /// Finishes a start the data screen asked for once its thread is done.
+    void pollStreamStart();
+    bool streamChosen_ = false;
+    std::string streamError_;
+    std::thread streamStartThread_;
+    std::atomic<bool> streamStartDone_{false};
+    bool streamStartLoading_ = false;
+    std::string streamStartMirror_;   ///< Written by the thread before done.
+    std::string streamStartFailure_;  ///< Likewise.
     UpdateCheck updateCheck_;
 
 

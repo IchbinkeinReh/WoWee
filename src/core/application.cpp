@@ -781,6 +781,25 @@ std::string writeInterfaceFromArchives(const pipeline::AssetManager& am) {
 
 } // namespace
 
+namespace {
+
+/// The streaming server's file list fetched and its cache made ready: the
+/// cache's mirror of the server's folder, or empty with `error` saying why.
+/// Network and disk only - safe on a thread of its own while nothing reads
+/// the game data yet.
+std::string startStreaming(const core::DataStreamChoice& stream, std::string& error) {
+    if (stream.url.empty()) {
+        error = "no streaming server is set";
+        return {};
+    }
+    pipeline::StreamUrl url;
+    if (!pipeline::parseStreamUrl(stream.url, url, error)) return {};
+    return pipeline::DataStream::instance().start(
+        {stream.url, stream.key}, pipeline::DataStream::defaultCacheRoot(url), error);
+}
+
+}  // namespace
+
 bool Application::initialize() {
     LOG_INFO("Initializing Wowee Native Client");
 
@@ -942,33 +961,105 @@ bool Application::initialize() {
     // is then read as the game folder, exactly as a local install.
     {
         const char* modeEnv = std::getenv("WOWEE_DATA_MODE");
-        const std::string mode = modeEnv ? modeEnv : "";
         const core::DataStreamChoice stream = core::getDataStream();
-        if (mode == "streaming" || (mode.empty() && !stream.url.empty())) {
+        streamChosen_ = core::streamingChosen(modeEnv ? modeEnv : "", stream.url);
+        if (streamChosen_) {
             std::string error;
-            pipeline::StreamUrl url;
-            std::string mirror;
-            if (stream.url.empty()) {
-                error = "no streaming server is set";
-            } else if (pipeline::parseStreamUrl(stream.url, url, error)) {
-                mirror = pipeline::DataStream::instance().start(
-                    {stream.url, stream.key}, pipeline::DataStream::defaultCacheRoot(url), error);
-            }
-            // The cache's clear is asked for once (data_stream reset its row in
-            // settings.cfg); the settings were read before this, so the panel's
-            // copy goes back to 0 too, or its next save would ask again.
-            if (uiManager) uiManager->getGameScreen().getSettingsPanel().setSettingValue("streamcacheclear", "0");
-            if (!mirror.empty()) {
-                dataPath = mirror;
-                // Everything that looks the data folder up again finds the same.
-                core::setEnvVar("WOW_DATA_PATH", mirror.c_str(), /*overwrite=*/true);
-                if (!modeEnv) core::setEnvVar("WOWEE_DATA_MODE", "mpq", /*overwrite=*/true);
-            } else {
-                LOG_ERROR("Streaming game data: ", error);
-            }
+            const std::string mirror = startStreaming(stream, error);
+            if (applyStreamStart(mirror, error)) dataPath = mirror;
         }
     }
 
+    openGameData(dataPath, /*atStartup=*/true);
+
+    // Set up UI callbacks
+    setupUICallbacks();
+
+    LOG_INFO("Application initialized successfully");
+    running = true;
+    return true;
+}
+
+bool Application::applyStreamStart(const std::string& mirror, const std::string& error) {
+    // The cache's clear is asked for once (data_stream reset its row in
+    // settings.cfg); the settings were read before this, so the panel's
+    // copy goes back to 0 too, or its next save would ask again.
+    if (uiManager) uiManager->getGameScreen().getSettingsPanel().setSettingValue("streamcacheclear", "0");
+    if (mirror.empty()) {
+        // Kept for the data screen, which says it - this used to reach the
+        // log only, and the screen simply came back.
+        streamError_ = error.empty() ? std::string("the server gave no answer") : error;
+        LOG_ERROR("Streaming game data: ", streamError_);
+        return false;
+    }
+    streamError_.clear();
+    // Everything that looks the data folder up again finds the same.
+    core::setEnvVar("WOW_DATA_PATH", mirror.c_str(), /*overwrite=*/true);
+    if (!std::getenv("WOWEE_DATA_MODE")) core::setEnvVar("WOWEE_DATA_MODE", "mpq", /*overwrite=*/true);
+    return true;
+}
+
+bool Application::startStreamingNow() {
+    if (streamStartThread_.joinable()) return true;   // already on its way
+    // Opened already (a folder found, then forgotten): what the interface
+    // was built on cannot be swapped under it. A restart reads the server.
+    if (assetManager && assetManager->isInitialized()) return false;
+    streamError_.clear();
+    streamStartLoading_ = false;
+    streamStartDone_.store(false, std::memory_order_relaxed);
+    const core::DataStreamChoice stream = core::getDataStream();
+    // Its own thread: an address that does not answer takes the socket's
+    // whole timeout, and the screen says what it is waiting for meanwhile.
+    streamStartThread_ = std::thread([this, stream] {
+        std::string error;
+        std::string mirror = startStreaming(stream, error);
+        streamStartMirror_ = std::move(mirror);
+        streamStartFailure_ = std::move(error);
+        streamStartDone_.store(true, std::memory_order_release);
+    });
+    return true;
+}
+
+Application::StreamStart Application::getStreamStart() const {
+    if (!streamStartThread_.joinable()) return StreamStart::Idle;
+    return streamStartLoading_ ? StreamStart::Loading : StreamStart::Connecting;
+}
+
+void Application::pollStreamStart() {
+    if (!streamStartThread_.joinable() || !streamStartDone_.load(std::memory_order_acquire)) return;
+    if (!streamStartLoading_ && streamStartFailure_.empty() && !streamStartMirror_.empty()) {
+        // One frame that says the archives are being opened, before the
+        // frames that are not drawn while they are.
+        streamStartLoading_ = true;
+        return;
+    }
+    streamStartThread_.join();
+    streamStartLoading_ = false;
+    const std::string mirror = std::move(streamStartMirror_);
+    const std::string error = std::move(streamStartFailure_);
+    streamStartMirror_.clear();
+    streamStartFailure_.clear();
+    if (!applyStreamStart(mirror, error)) return;   // the screen says why
+    streamChosen_ = true;
+
+    // What the start would have done had the server been there then: the
+    // archives opened, everything built on them, the callbacks wired. Here,
+    // between frames - update() runs before the interface's frame is begun.
+    openGameData(mirror, /*atStartup=*/false);
+    setupUICallbacks();
+    if (!assetManager || !assetManager->isInitialized()) {
+        streamError_ = "the streamed archives could not be opened";
+        LOG_ERROR("Streaming game data: ", streamError_);
+        return;
+    }
+    // The server's archives are the data now, whatever a forgotten folder
+    // choice would have said.
+    dataPrompt_ = core::DataPrompt::None;
+    LOG_WARNING("Streaming game data: started from the data screen, no restart");
+    setState(AppState::AUTHENTICATION);
+}
+
+void Application::openGameData(const std::string& dataPath, bool atStartup) {
     // The original client's archives (Data\*.MPQ) instead of an extraction:
     // the asset manager reads them in place, and the expansion tables - which
     // ship with this client, not with the game - are read from this client's
@@ -1040,8 +1131,10 @@ bool Application::initialize() {
         // and setState returns early when the state is unchanged anyway.
         // The rest of initialize() still runs - it is all null-tolerant, and
         // the login screen is what comes after a build and a reopen.
-        state = AppState::FIRST_RUN;
-        LOG_WARNING("No assets found - opening the asset builder instead of the login screen");
+        if (atStartup) {
+            state = AppState::FIRST_RUN;
+            LOG_WARNING("No assets found - opening the asset builder instead of the login screen");
+        }
 #endif
     }
     // Without the asset builder (iOS, which has no screen of its own in front
@@ -1061,10 +1154,12 @@ bool Application::initialize() {
         const bool chosenPresent = !chosen.empty() && std::filesystem::is_directory(chosen, chosenEc);
         dataPrompt_ = core::dataPromptAtStartup(core::kPreLaunchDataMask, builder,
                                                 mpqData || assetInventory_.anyUsable(), chosen,
-                                                chosenPresent);
-        if (dataPrompt_ != core::DataPrompt::None) {
+                                                chosenPresent, streamChosen_ && !streamError_.empty());
+        if (dataPrompt_ != core::DataPrompt::None && atStartup) {
             state = AppState::DATA_FOLDER;
-            LOG_WARNING("No game data found - asking where it is instead of opening the login screen");
+            LOG_WARNING(dataPrompt_ == core::DataPrompt::StreamFailed
+                            ? "Streaming failed - showing the data screen with what went wrong"
+                            : "No game data found - asking where it is instead of opening the login screen");
         }
     }
 
@@ -2099,13 +2194,6 @@ bool Application::initialize() {
         uiManager->loadInterfaceFont(assetPath, nullptr);
         uiManager->loadInterfaceFont(dataPath, nullptr);
     }
-
-    // Set up UI callbacks
-    setupUICallbacks();
-
-    LOG_INFO("Application initialized successfully");
-    running = true;
-    return true;
 }
 
 void Application::run() {
@@ -3003,6 +3091,9 @@ void Application::updateMapWindow() {
 }
 
 void Application::shutdown() {
+    // A streaming start from the data screen still waiting on the server:
+    // its thread writes into this object.
+    if (streamStartThread_.joinable()) streamStartThread_.join();
     // The desktop's own pointer speed back (core/pointer_speed).
     core::pointer_speed::restore();
     if (pipeline::DataStream::instance().active()) {
@@ -6332,6 +6423,7 @@ void Application::update(float deltaTime) {
             break;
         case AppState::DATA_FOLDER:
             updateCheckpoint = "data_folder: enter";
+            pollStreamStart();
             break;
 
         case AppState::AUTHENTICATION:
@@ -7599,8 +7691,14 @@ void Application::render() {
     if (const char* shot = std::getenv("WOWEE_SCREENSHOT"); shot != nullptr) {
         // Let the interface settle first: ImGui sizes much of its layout from
         // what it measured last frame, and hides a window outright for its
-        // first frame or two while it fits itself.
-        if (++screenshotFrames_ == kScreenshotFrame) {
+        // first frame or two while it fits itself. WOWEE_SCREENSHOT_FRAME
+        // takes it later, for a screen reached after a while (the login after
+        // a streaming start from the data screen).
+        int frame = kScreenshotFrame;
+        if (const char* at = std::getenv("WOWEE_SCREENSHOT_FRAME"); at != nullptr && std::atoi(at) > 0) {
+            frame = std::atoi(at);
+        }
+        if (++screenshotFrames_ == frame) {
             renderer->captureScreenshot(shot);
             running = false;
         }

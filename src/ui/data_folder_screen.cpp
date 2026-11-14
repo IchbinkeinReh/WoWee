@@ -4,14 +4,21 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 
 #include "imgui.h"
 #include "core/application.hpp"
 #include "core/config_paths.hpp"
+#include "core/logger.hpp"
 #include "core/window.hpp"
 #include "pipeline/data_stream.hpp"
 #include "ui/data_folder_picker.hpp"
 #include "ui/paper_ui.hpp"
+
+#if defined(__ANDROID__)
+#include <SDL3/SDL_system.h>
+#include <jni.h>
+#endif
 
 namespace wowee::ui {
 
@@ -33,7 +40,71 @@ const char* platformFolderHelp() {
 #endif
 }
 
+std::string trimmed(const char* text) {
+    std::string s(text);
+    const auto first = s.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return {};
+    const auto last = s.find_last_not_of(" \t\r\n");
+    return s.substr(first, last - first + 1);
+}
+
+/// The server kept for the next start too, or forgotten (an empty address).
+bool keepStream(const core::DataStreamChoice& choice) {
+    if (!core::setDataStream(choice)) return false;
+#if defined(__ANDROID__)
+    // Where DataFolderActivity keeps it as well: WoweeActivity writes the
+    // client's file from there before every start, and would put the server
+    // that failed back over this one.
+    auto* env = static_cast<JNIEnv*>(SDL_GetAndroidJNIEnv());
+    auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
+    if (env != nullptr && activity != nullptr) {
+        jclass cls = env->GetObjectClass(activity);
+        jmethodID keep = cls != nullptr
+                             ? env->GetMethodID(cls, "keepStreamChoice", "(Ljava/lang/String;Ljava/lang/String;)V")
+                             : nullptr;
+        if (keep != nullptr) {
+            jstring url = env->NewStringUTF(choice.url.c_str());
+            jstring key = env->NewStringUTF(choice.key.c_str());
+            env->CallVoidMethod(activity, keep, url, key);
+            env->DeleteLocalRef(url);
+            env->DeleteLocalRef(key);
+        }
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            LOG_WARNING("Could not keep the streaming server in the app's preferences");
+        }
+        if (cls != nullptr) env->DeleteLocalRef(cls);
+        env->DeleteLocalRef(activity);
+    }
+#endif
+    return true;
+}
+
 }  // namespace
+
+void DataFolderScreen::useServer(core::Application& app) {
+    const std::string url = trimmed(streamUrl_);
+    const std::string key = trimmed(streamKey_);
+    pipeline::StreamUrl parsed;
+    std::string error;
+    if (url.empty()) {
+        streamMessage_ = "Give the server's address.";
+    } else if (!pipeline::parseStreamUrl(url, parsed, error)) {
+        streamMessage_ = "That address will not do: " + error + ".";
+    } else if (key.empty()) {
+        streamMessage_ = "The server needs its access key.";
+    } else if (!keepStream({url, key})) {
+        streamMessage_ = "Could not save the server to " + core::getConfigRoot() + ".";
+    } else if (app.startStreamingNow()) {
+        // Straight in: the screen says what it waits for, and the login
+        // screen follows - or what went wrong.
+        streamHost_ = parsed.host;
+        streamMessage_.clear();
+    } else {
+        streamMessage_ = "The game data will be streamed from " + parsed.host +
+                         " when WoWee next starts. Close WoWee and open it again.";
+    }
+}
 
 void DataFolderScreen::recheck() {
     folder_ = DataFolderPicker::currentFolder();
@@ -90,32 +161,38 @@ void DataFolderScreen::render() {
                  ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize);
     ImGui::SetWindowFontScale(scale);
 
-    const core::DataFolderView view = core::describeDataFolder(
-        folder_, DataFolderPicker::hasCustomFolder(), found_,
-        core::Application::getInstance().getDataPrompt(), platformFolderHelp());
-    ImGui::TextWrapped("%s", view.status.c_str());
-    ImGui::Spacing();
-    ImGui::TextWrapped("%s", view.help.c_str());
-    ImGui::Spacing();
-
-    if (ImGui::Button("Check again")) recheck();
-    ImGui::SameLine();
-    ImGui::BeginDisabled(picker.isOpen());
-    if (ImGui::Button(picker.isOpen() ? "Choosing..." : "Choose folder...")) {
-        auto* window = core::Application::getInstance().getWindow();
-        picker.open(window ? window->getSDLWindow() : nullptr);
-    }
-    ImGui::EndDisabled();
-    if (view.offerDefault) {
-        ImGui::SameLine();
-        if (ImGui::Button("Use the default folder")) {
-            picker.useDefault();
-            checked_ = false;
-        }
-    }
-    if (!picker.message().empty()) {
+    auto& app = core::Application::getInstance();
+    // Android chooses the folder before the client starts (DataFolderActivity),
+    // and shows this screen only when the server it was given did not answer:
+    // the server's part alone, then.
+    if (!core::kPreLaunchDataMask) {
+        const core::DataFolderView view = core::describeDataFolder(
+            folder_, DataFolderPicker::hasCustomFolder(), found_, app.getDataPrompt(),
+            platformFolderHelp());
+        ImGui::TextWrapped("%s", view.status.c_str());
         ImGui::Spacing();
-        ImGui::TextWrapped("%s", picker.message().c_str());
+        ImGui::TextWrapped("%s", view.help.c_str());
+        ImGui::Spacing();
+
+        if (ImGui::Button("Check again")) recheck();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(picker.isOpen());
+        if (ImGui::Button(picker.isOpen() ? "Choosing..." : "Choose folder...")) {
+            auto* window = app.getWindow();
+            picker.open(window ? window->getSDLWindow() : nullptr);
+        }
+        ImGui::EndDisabled();
+        if (view.offerDefault) {
+            ImGui::SameLine();
+            if (ImGui::Button("Use the default folder")) {
+                picker.useDefault();
+                checked_ = false;
+            }
+        }
+        if (!picker.message().empty()) {
+            ImGui::Spacing();
+            ImGui::TextWrapped("%s", picker.message().c_str());
+        }
     }
 
     // Or the game data streamed from a server: its address and access key.
@@ -125,44 +202,78 @@ void DataFolderScreen::render() {
         std::snprintf(streamKey_, sizeof(streamKey_), "%s", kept.key.c_str());
         streamLoaded_ = true;
     }
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-    ImGui::TextWrapped("Or stream the game data from a server:");
+    if (core::kPreLaunchDataMask) {
+        ImGui::TextWrapped("The game data is streamed from a server:");
+    } else {
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        ImGui::TextWrapped("Or stream the game data from a server:");
+    }
+    const core::Application::StreamStart starting = app.getStreamStart();
+    const bool busy = starting != core::Application::StreamStart::Idle;
+    ImGui::BeginDisabled(busy);
     const float fieldW = ImGui::GetContentRegionAvail().x;
     ImGui::SetNextItemWidth(fieldW);
     ImGui::InputTextWithHint("##streamurl", "https://server/wowee-data/", streamUrl_, sizeof(streamUrl_));
     ImGui::SetNextItemWidth(fieldW);
     ImGui::InputTextWithHint("##streamkey", "Access key", streamKey_, sizeof(streamKey_),
                              ImGuiInputTextFlags_Password);
-    if (ImGui::Button("Use this server")) {
-        const std::string url = streamUrl_;
-        const std::string key = streamKey_;
-        pipeline::StreamUrl parsed;
-        std::string error;
-        if (url.empty()) {
-            streamMessage_ = "Give the server's address.";
-        } else if (!pipeline::parseStreamUrl(url, parsed, error)) {
-            streamMessage_ = "That address will not do: " + error + ".";
-        } else if (key.empty()) {
-            streamMessage_ = "The server needs its access key.";
-        } else if (!core::setDataStream({url, key})) {
-            streamMessage_ = "Could not save the server to " + core::getConfigRoot() + ".";
-        } else {
-            streamMessage_ = "The game data will be streamed from " + parsed.host +
-                             " when WoWee next starts. Close WoWee and open it again.";
+    // WOWEE_DIAG_STREAM_PRESS_URL and WOWEE_DIAG_STREAM_PRESS_KEY_FILE (a file
+    // holding the key): the two fields filled and "Use this server" pressed
+    // once, on the first frame - this screen's own start, run with nobody at
+    // the keys. The key is read from a file so it is never on a command line.
+    bool press = false;
+    if (!diagPressDone_) {
+        diagPressDone_ = true;
+        const char* url = std::getenv("WOWEE_DIAG_STREAM_PRESS_URL");
+        const char* keyFile = std::getenv("WOWEE_DIAG_STREAM_PRESS_KEY_FILE");
+        if (url != nullptr && *url != '\0') {
+            std::string key;
+            if (keyFile != nullptr) {
+                std::ifstream in(keyFile);
+                std::getline(in, key);
+            }
+            std::snprintf(streamUrl_, sizeof(streamUrl_), "%s", url);
+            std::snprintf(streamKey_, sizeof(streamKey_), "%s", key.c_str());
+            press = true;
         }
     }
+    if (ImGui::Button("Use this server") || press) useServer(app);
     if (!core::getDataStream().url.empty()) {
         ImGui::SameLine();
         if (ImGui::Button("Stop streaming")) {
-            core::setDataStream({});
+            keepStream({});
             streamUrl_[0] = '\0';
             streamKey_[0] = '\0';
-            streamMessage_ = "The game data will be read from the folder again when WoWee next starts.";
+            streamMessage_ = core::kPreLaunchDataMask
+                                 ? "Close WoWee and open it again to choose a folder."
+                                 : "The game data will be read from the folder again when WoWee next starts.";
         }
     }
-    if (!streamMessage_.empty()) ImGui::TextWrapped("%s", streamMessage_.c_str());
+    ImGui::EndDisabled();
+    if (busy) {
+        const std::string host = streamHost_.empty() ? std::string("the server") : streamHost_;
+        ImGui::TextWrapped("%s", (starting == core::Application::StreamStart::Connecting
+                                      ? "Connecting to " + host + "..."
+                                      : "Opening the game data from " + host + "...")
+                                     .c_str());
+    } else if (!app.getStreamError().empty()) {
+        // What went wrong, rather than the same card again with nothing said.
+        std::string host = streamHost_;
+        if (host.empty()) {
+            pipeline::StreamUrl kept;
+            std::string ignored;
+            if (pipeline::parseStreamUrl(core::getDataStream().url, kept, ignored)) host = kept.host;
+        }
+        const core::StreamFailureView failure = core::describeStreamFailure(host, app.getStreamError());
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Text, fromU32(theme.crayonRed));
+        ImGui::TextUnformatted(failure.heading.c_str());
+        ImGui::PopStyleColor();
+        ImGui::TextWrapped("%s", failure.body.c_str());
+    }
+    if (!busy && !streamMessage_.empty()) ImGui::TextWrapped("%s", streamMessage_.c_str());
 
     ImGui::End();
     ImGui::PopStyleVar(3);
