@@ -9459,7 +9459,50 @@ static int lua_Minimap_SetPlayerTextureWidth(lua_State* L) {
     return setMinimapPlayerSize(L, false, "Usage: %s:SetPlayerTextureWidth(Width)");
 }
 
-// Frame method: frame:CreateTexture(name, layer) → a real region
+/// The template a new region is made from (CreateTexture's and
+/// CreateFontString's third argument, 0x004a2010 / 0x004a2240): a virtual
+/// region from the XML, replayed onto it - or, for a font string, a font
+/// object, which is nearly always what an addon passes ("GameFontNormal").
+/// Neither by that name is the client's "Couldn't find inherited node".
+/// The region is on top of the stack.
+static int applyRegionTemplate(lua_State* L, int nameIndex, bool fontString, const char* method) {
+    if (!lua_isstring(L, nameIndex)) return 0;
+    const std::string inherits = lua_tostring(L, nameIndex);
+    if (inherits.empty()) return 0;
+    const int region = lua_gettop(L);
+    lua_getglobal(L, "__WoweeTemplates");
+    if (lua_istable(L, -1)) {
+        lua_getfield(L, -1, inherits.c_str());
+        if (lua_isfunction(L, -1)) {
+            lua_pushvalue(L, region);
+            lua_call(L, 1, 0);
+            lua_pop(L, 1);
+            return 0;
+        }
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+    if (fontString) {
+        lua_getglobal(L, inherits.c_str());
+        const bool isFont = lua_istable(L, -1);
+        lua_pop(L, 1);
+        if (isFont) {
+            lua_getfield(L, region, "SetFontObject");
+            if (lua_isfunction(L, -1)) {
+                lua_pushvalue(L, region);
+                lua_pushstring(L, inherits.c_str());
+                lua_call(L, 2, 0);
+            } else {
+                lua_pop(L, 1);
+            }
+            return 0;
+        }
+    }
+    return luaL_error(L, "%s:%s(): Couldn't find inherited node \"%s\"", frameNameOnStack(L, 1), method,
+                      inherits.c_str());
+}
+
+// Frame method: frame:CreateTexture(name, layer, inherits) → a real region
 static int lua_Frame_CreateTexture(lua_State* L) {
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t parent = widgetIdOf(L, 1);
@@ -9491,6 +9534,7 @@ static int lua_Frame_CreateTexture(lua_State* L) {
         lua_pushvalue(L, -1);
         lua_setglobal(L, name);
     }
+    applyRegionTemplate(L, 4, /*fontString=*/false, "CreateTexture");
     return 1;
 }
 
@@ -9528,6 +9572,7 @@ static int lua_Frame_CreateFontString(lua_State* L) {
         lua_pushvalue(L, -1);
         lua_setglobal(L, name);
     }
+    applyRegionTemplate(L, 4, /*fontString=*/true, "CreateFontString");
     return 1;
 }
 
