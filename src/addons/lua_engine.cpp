@@ -1389,7 +1389,7 @@ int lua_WoweeModelCentered(lua_State* L) {
 }
 
 int lua_Frame_SetMovable(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->movable = lua_toboolean(L, 2) != 0;
+    if (auto* w = widgetOf(L, 1)) w->movable = luaClientBoolean(L, 2, true);
     return 0;
 }
 int lua_Frame_IsMovable(lua_State* L) {
@@ -1404,11 +1404,9 @@ int lua_Frame_RegisterForDrag(lua_State* L) {
     if (!w) return 0;
     w->dragLeft = false;
     w->dragRight = false;
-    const int n = lua_gettop(L);
-    for (int i = 2; i <= n; ++i) {
-        const char* b = lua_tostring(L, i);
-        if (!b) continue;
-        const std::string name(b);
+    // 0x004a0e20: the button names up to the first argument that is not one.
+    for (int i = 2; lua_isstring(L, i); ++i) {
+        const std::string name(lua_tostring(L, i));
         if (name == "LeftButton")       w->dragLeft = true;
         else if (name == "RightButton") w->dragRight = true;
     }
@@ -1424,15 +1422,21 @@ int lua_Frame_StartMoving(lua_State* L) {
     if (!w || !w->movable) return 0;
     // The settings windows stay put, whatever their XML says.
     if (wowee::ui::isFixedSettingsWindow(w->name)) return 0;
+    // 0x004a0a40: the client holds one frame at a time (+0xd0c) and leaves
+    // the call alone while another is being moved or sized.
+    if (tree->movingWidget() != 0 || tree->sizingWidget() != 0) return 0;
     tree->pinToCurrentPosition(id);
     tree->setMovingWidget(id);
     return 0;
 }
+/// StopMovingOrSizing (0x004a0c20): puts down this frame, and only this one -
+/// a frame that is not the one held leaves the held one where it is.
 int lua_Frame_StopMovingOrSizing(lua_State* L) {
-    if (auto* tree = wowee::addons::getWidgetTree(L)) {
-        tree->setMovingWidget(0);
-        tree->setSizingWidget(0, "");
-    }
+    auto* tree = wowee::addons::getWidgetTree(L);
+    const uint32_t id = widgetIdOf(L, 1);
+    if (!tree || id == 0) return 0;
+    if (tree->movingWidget() == id) tree->setMovingWidget(0);
+    if (tree->sizingWidget() == id) tree->setSizingWidget(0, "");
     return 0;
 }
 
@@ -1451,6 +1455,8 @@ int lua_Frame_StartSizing(lua_State* L) {
     // BOTTOMRIGHT is what the grabber art sits on and what FrameXML passes when
     // it passes nothing.
     const char* point = luaL_optstring(L, 2, "BOTTOMRIGHT");
+    // 0x004a0b10: as StartMoving, one frame at a time.
+    if (tree->movingWidget() != 0 || tree->sizingWidget() != 0) return 0;
     tree->pinToCurrentPosition(id);
     tree->setSizingWidget(id, point ? point : "BOTTOMRIGHT");
     return 0;
@@ -1460,7 +1466,7 @@ int lua_Frame_SetResizable(lua_State* L) {
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     if (!tree || id == 0) return 0;
-    if (auto* w = tree->get(id)) w->resizable = lua_toboolean(L, 2) != 0;
+    if (auto* w = tree->get(id)) w->resizable = luaClientBoolean(L, 2, true);
     return 0;
 }
 
@@ -2328,10 +2334,11 @@ int lua_Texture_SetButtonArt(lua_State* L) {
 }
 
 int lua_Frame_SetWheelEnabled(lua_State* L) {
+    if (!protectedFrameAllows(L)) return 0;   // 0x004a10d0, as EnableMouse
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     if (!tree || id == 0) return 0;
-    if (auto* w = tree->get(id)) w->wheelEnabled = lua_toboolean(L, 2) != 0;
+    if (auto* w = tree->get(id)) w->wheelEnabled = luaClientBoolean(L, 2, true);
     return 0;
 }
 
@@ -2493,7 +2500,7 @@ int lua_FontString_SetAlphaGradient(lua_State* L) {
 
 int lua_FontString_SetWordWrap(lua_State* L) {
     auto* w = widgetOf(L, 1);
-    if (w) w->wordWrap = lua_toboolean(L, 2) != 0;
+    if (w) w->wordWrap = luaClientBoolean(L, 2, true);
     return 0;
 }
 int lua_FontString_CanWordWrap(lua_State* L) {
@@ -2504,7 +2511,7 @@ int lua_FontString_CanWordWrap(lua_State* L) {
 /// Texture:Set/GetHorizTile, Set/GetVertTile (0x0048cb60, 0x0048cbc0,
 /// 0x0048cc30, 0x0048cc90).
 int lua_Texture_SetHorizTile(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->horizTile = lua_toboolean(L, 2) != 0;
+    if (auto* w = widgetOf(L, 1)) w->horizTile = luaClientBoolean(L, 2, true);
     return 0;
 }
 int lua_Texture_GetHorizTile(lua_State* L) {
@@ -2513,7 +2520,7 @@ int lua_Texture_GetHorizTile(lua_State* L) {
     return 1;
 }
 int lua_Texture_SetVertTile(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->vertTile = lua_toboolean(L, 2) != 0;
+    if (auto* w = widgetOf(L, 1)) w->vertTile = luaClientBoolean(L, 2, true);
     return 0;
 }
 int lua_Texture_GetVertTile(lua_State* L) {
@@ -2523,7 +2530,7 @@ int lua_Texture_GetVertTile(lua_State* L) {
 }
 /// Texture:Set/GetNonBlocking (0x0048caa0, 0x0048cb00).
 int lua_Texture_SetNonBlocking(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->nonBlocking = lua_toboolean(L, 2) != 0;
+    if (auto* w = widgetOf(L, 1)) w->nonBlocking = luaClientBoolean(L, 2, true);
     return 0;
 }
 int lua_Texture_GetNonBlocking(lua_State* L) {
@@ -2533,7 +2540,7 @@ int lua_Texture_GetNonBlocking(lua_State* L) {
 }
 int lua_FontString_SetIndentedWordWrap(lua_State* L) {
     auto* w = widgetToRemeasure(L, 1);
-    if (w) w->indentedWordWrap = lua_toboolean(L, 2) != 0;
+    if (w) w->indentedWordWrap = luaClientBoolean(L, 2, true);
     return 0;
 }
 int lua_FontString_GetIndentedWordWrap(lua_State* L) {
@@ -2543,7 +2550,7 @@ int lua_FontString_GetIndentedWordWrap(lua_State* L) {
 }
 int lua_FontString_SetNonSpaceWrap(lua_State* L) {
     auto* w = widgetToRemeasure(L, 1);
-    if (w) w->nonSpaceWrap = lua_toboolean(L, 2) != 0;
+    if (w) w->nonSpaceWrap = luaClientBoolean(L, 2, true);
     return 0;
 }
 
@@ -6913,7 +6920,7 @@ int lua_Texture_SetBlendMode(lua_State* L) {
 // whether the shader is there - always - which SetItemButtonDesaturated reads
 // to decide against greying the icon with SetVertexColor instead.
 int lua_Texture_SetDesaturated(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->desaturated = lua_toboolean(L, 2) != 0;
+    if (auto* w = widgetOf(L, 1)) w->desaturated = luaClientBoolean(L, 2, true);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -7046,8 +7053,8 @@ int lua_Frame_SetHyperlinksEnabled(lua_State* L) {
 int lua_Frame_EnableMouse(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
     if (auto* w = widgetOf(L, 1)) {
-        // Absent argument means true, which is how addons usually write it.
-        w->mouseEnabled = lua_isnone(L, 2) ? true : (lua_toboolean(L, 2) != 0);
+        // 0x004a0fd0: the flag as the client reads one - none is yes, nil no.
+        w->mouseEnabled = luaClientBoolean(L, 2, true);
     }
     return 0;
 }
@@ -7816,7 +7823,7 @@ int lua_Frame_GetDisabledFontObject(lua_State* L) {
     return w ? pushNamedFontObject(L, w->disabledFontName) : 0;
 }
 int lua_Frame_EnableJoystick(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->joystickEnabled = lua_toboolean(L, 2) != 0;
+    if (auto* w = widgetOf(L, 1)) w->joystickEnabled = luaClientBoolean(L, 2, true);
     return 0;
 }
 int lua_Frame_IsJoystickEnabled(lua_State* L) {
@@ -7910,7 +7917,7 @@ int lua_Frame_GetHitRectInsets(lua_State* L) {
 /// and set it answered as no-ops, so a frame restored from saved variables was
 /// not treated as placed and could be shifted out from under its own position.
 int lua_Frame_SetUserPlaced(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->userMoved = lua_toboolean(L, 2) != 0;
+    if (auto* w = widgetOf(L, 1)) w->userMoved = luaClientBoolean(L, 2, true);
     return 0;
 }
 int lua_Frame_IsUserPlaced(lua_State* L) {
@@ -8073,10 +8080,20 @@ static int lua_CreateFont(lua_State* L) {
         lua_setmetatable(L, -2);
     }
     if (!name.empty()) {
+        lua_pushstring(L, name.c_str());   // what GetName answers
+        lua_setfield(L, -2, "name");
         lua_pushvalue(L, -1);
         lua_setglobal(L, name.c_str());
     }
     lua_remove(L, mt);
+    return 1;
+}
+
+/// __WoweeClientBoolean(default, value): luaClientBoolean for the methods
+/// written in Lua, which pass their own arguments through so that none at all
+/// stays none.
+static int lua_WoweeClientBoolean(lua_State* L) {
+    lua_pushboolean(L, luaClientBoolean(L, 2, lua_toboolean(L, 1) != 0));
     return 1;
 }
 
@@ -8171,7 +8188,7 @@ int lua_Frame_GetNumRegions(lua_State* L) { return pushChildWidgets(L, true, tru
 
 int lua_Frame_EnableKeyboard(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
-    if (auto* w = widgetOf(L, 1)) w->keyboardEnabled = lua_toboolean(L, 2) != 0;
+    if (auto* w = widgetOf(L, 1)) w->keyboardEnabled = luaClientBoolean(L, 2, true);
     return 0;
 }
 int lua_Frame_IsKeyboardEnabled(lua_State* L) {
@@ -8186,7 +8203,7 @@ int lua_Frame_SetPropagateKeyboardInput(lua_State* L) {
 
 int lua_Frame_SetToplevel(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
-    if (auto* w = widgetOf(L, 1)) w->topLevel = lua_toboolean(L, 2) != 0;
+    if (auto* w = widgetOf(L, 1)) w->topLevel = luaClientBoolean(L, 2, true);
     return 0;
 }
 int lua_Frame_IsToplevel(lua_State* L) {
@@ -8210,7 +8227,7 @@ int lua_Frame_Lower(lua_State* L) {
 }
 
 int lua_Frame_SetClampedToScreen(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->clampedToScreen = lua_toboolean(L, 2) != 0;
+    if (auto* w = widgetOf(L, 1)) w->clampedToScreen = luaClientBoolean(L, 2, true);
     return 0;
 }
 int lua_Frame_IsClampedToScreen(lua_State* L) {
@@ -9297,7 +9314,7 @@ int lua_Frame_EnableDrawLayer(lua_State* L) { return lua_Frame_SetDrawLayerEnabl
 int lua_Frame_DisableDrawLayer(lua_State* L) { return lua_Frame_SetDrawLayerEnabled(L, false); }
 /// Set/GetDontSavePosition (0x004a08c0, 0x004a0910).
 int lua_Frame_SetDontSavePosition(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->dontSavePosition = lua_toboolean(L, 2) != 0;
+    if (auto* w = widgetOf(L, 1)) w->dontSavePosition = luaClientBoolean(L, 2, true);
     return 0;
 }
 int lua_Frame_GetDontSavePosition(lua_State* L) {
@@ -11107,8 +11124,10 @@ void LuaEngine::registerCoreAPI() {
     bootstrap(
         "local mt = __WoweeFrameMT\n"
 
-        "function mt:EnableMouseWheel(enable)\n"
-        "    __WoweeSetWheelEnabled(self, enable ~= false)\n"
+        // The argument goes through as given: none is yes, nil is no, and the
+        // rest read as the client reads a flag (0x004a10d0 -> 0x00815500).
+        "function mt:EnableMouseWheel(...)\n"
+        "    __WoweeSetWheelEnabled(self, ...)\n"
         "end\n"
         // A scroll frame's range is recomputed after every layout, so asking
         // for it again has nothing to do - but answering rather than falling
@@ -12410,6 +12429,8 @@ void LuaEngine::registerCoreAPI() {
     // so it applies to every frame without another entry in the method list.
     lua_pushcfunction(L_, lua_Frame_SetWheelEnabled);
     lua_setglobal(L_, "__WoweeSetWheelEnabled");
+    lua_pushcfunction(L_, lua_WoweeClientBoolean);
+    lua_setglobal(L_, "__WoweeClientBoolean");
 
     // Reached from the button-art setters, which are written in Lua so they
     // cover every slot from one loop.
@@ -13928,21 +13949,55 @@ void LuaEngine::registerCoreAPI() {
         "    if justifyAxis[u] == axis then return u end\n"
         "    return axis == 'H' and 'LEFT' or 'TOP'\n"
         "end\n"
+        // A colour as the client reads one (0x00960420): r, g and b as numbers,
+        // anything else 0, alpha 1 unless one is given, each held to 0 - 1 and
+        // kept as a byte - so what comes back is a 255th, not what was passed.
+        "local function colourByte(v)\n"
+        "    v = tonumber(v) or 0\n"
+        "    if v ~= v or v < 0 then v = 0 elseif v > 1 then v = 1 end\n"
+        "    return math.floor(v * 255 + 0.5) * 0.00392156\n"
+        "end\n"
+        "local function readColour(r, g, b, a)\n"
+        "    return colourByte(r), colourByte(g), colourByte(b), type(a) == 'number' and colourByte(a) or colourByte(1)\n"
+        "end\n"
         "local fontMT = { __index = {\n"
         "    GetTextColor = function(self) return self.r, self.g, self.b, self.a end,\n"
+        // SetTextColor and SetShadowColor (0x004a4500 -> 0x004a3c50, 0x004a45e0
+        // -> 0x004a3d40).
         "    SetTextColor = function(self, r, g, b, a)\n"
-        "        self.r, self.g, self.b, self.a = r, g, b, a or 1\n"
+        "        self.r, self.g, self.b, self.a = readColour(r, g, b, a)\n"
+        "    end,\n"
+        "    SetShadowColor = function(self, r, g, b, a)\n"
+        "        self.shadowR, self.shadowG, self.shadowB, self.shadowA = readColour(r, g, b, a)\n"
         "    end,\n"
         "    GetFont = function(self)\n"
         "        return self.font or 'Fonts\\\\FRIZQT__.TTF', self.height, self.outline or ''\n"
         "    end,\n"
+        // SetFont(\"font\", height [, flags]) (0x004a43a0 -> 0x004a3a50): a path
+        // and a number or the usage error, and 1 for a font that took.
         "    SetFont = function(self, f, h, flags)\n"
-        "        self.font, self.height, self.outline = f, h, flags\n"
+        "        if (type(f) ~= 'string' and type(f) ~= 'number') or not tonumber(h) then\n"
+        "            fontUsage(self, 'Usage: %s:SetFont(\"font\", fontHeight [, flags])')\n"
+        "        end\n"
+        "        self.font, self.height = tostring(f), tonumber(h)\n"
+        "        self.outline = (type(flags) == 'string' or type(flags) == 'number') and tostring(flags) or nil\n"
+        "        return 1\n"
         "    end,\n"
+        // GetName (0x004a4220): the name, or nil for none.
+        "    GetName = function(self)\n"
+        "        local n = rawget(self, 'name')\n"
+        "        if type(n) == 'string' and n ~= '' then return n end\n"
+        "    end,\n"
+        // Set/GetIndentedWordWrap (0x004a4b50 -> 0x004a4a50, 0x004a48a0): a
+        // flag as the client reads one, none being yes; 1 or nil back.
+        "    SetIndentedWordWrap = function(self, ...)\n"
+        "        self.indentedWordWrap = __WoweeClientBoolean(true, ...)\n"
+        "    end,\n"
+        "    GetIndentedWordWrap = function(self) if self.indentedWordWrap then return 1 end end,\n"
         "    GetFontHeight = function(self) return self.height end,\n"
         // What the setters below keep, answered back.
         "    GetShadowColor = function(self)\n"
-        "        return self.shadowR or 0, self.shadowG or 0, self.shadowB or 0, self.shadowA or 1\n"
+        "        return self.shadowR or 0, self.shadowG or 0, self.shadowB or 0, self.shadowA or colourByte(1)\n"
         "    end,\n"
         "    GetShadowOffset = function(self) return self.shadowX or 0, self.shadowY or 0 end,\n"
         "    GetSpacing = function(self) return self.spacing or 0 end,\n"
@@ -13978,24 +14033,40 @@ void LuaEngine::registerCoreAPI() {
         "        return nil\n"
         "    end,\n"
         // SetFontObject (0x004a3790): another font object, a font's name, or
-        // nil; another type is the usage error, a name with no font behind it
-        // its own error. Takes the other font's settings, as CopyFontObject.
+        // nil, which lets go of the one followed; another type is the usage
+        // error, a table that is not a font or a name with no font behind it
+        // their own errors, and one that would end up following itself the
+        // loop error. Takes the other font's settings, as CopyFontObject, and
+        // remembers it: GetFontObject (0x004a42d0) answers the font followed,
+        // or nil.
         "    SetFontObject = function(self, src)\n"
-        "        if src == nil then return end\n"
+        "        if src == nil then self.fontObject = nil return end\n"
         "        if type(src) == 'string' then\n"
         "            local f = _G[src]\n"
-        "            if type(f) ~= 'table' then\n"
+        "            if type(f) ~= 'table' or getmetatable(f) ~= __WoweeFontMT then\n"
         "                error((\"%s:SetFontObject(): Couldn't find font named %s\"):format(fontName(self), src), 2)\n"
         "            end\n"
         "            src = f\n"
-        "        elseif type(src) ~= 'table' then\n"
+        "        elseif type(src) == 'table' then\n"
+        "            if getmetatable(src) == nil then\n"
+        "                error((\"%s:SetFontObject(): Couldn't find 'this' in font object\"):format(fontName(self)), 2)\n"
+        "            elseif getmetatable(src) ~= __WoweeFontMT then\n"
+        "                error(('%s:SetFontObject(): Wrong object type, expected font'):format(fontName(self)), 2)\n"
+        "            end\n"
+        "        else\n"
         "            fontUsage(self, 'Usage: %s:SetFontObject(font or \"font\" or nil)')\n"
         "        end\n"
+        "        local p = src\n"
+        "        while p do\n"
+        "            if p == self then\n"
+        "                error((\"%s:SetFontObject(): Can't create a font object loop\"):format(fontName(self)), 2)\n"
+        "            end\n"
+        "            p = rawget(p, 'fontObject')\n"
+        "        end\n"
+        "        self.fontObject = src\n"
         "        self:CopyFontObject(src)\n"
         "    end,\n"
-        // A font object is its own font object, which is what SetFontObject
-        // being handed one relies on.
-        "    GetFontObject = function(self) return self end,\n"
+        "    GetFontObject = function(self) return rawget(self, 'fontObject') end,\n"
         // CopyFontObject(font or name) (0x004a4350): take another font's
         // face, size, flags, colour, shadow, spacing and justification.
         "    CopyFontObject = function(self, src)\n"
@@ -14041,6 +14112,10 @@ void LuaEngine::registerCoreAPI() {
         "QuestTitleFont            = font(15, 0.00, 0.00, 0.00)\n"
         "Tooltip_Med               = font(12, 1.00, 1.00, 1.00)\n"
         "Tooltip_Small             = font(10, 1.00, 1.00, 1.00)\n"
+        // Each answers GetName with the name it is kept under.
+        "for k, v in pairs(_G) do\n"
+        "    if type(v) == 'table' and getmetatable(v) == fontMT and rawget(v, 'name') == nil then v.name = k end\n"
+        "end\n"
         // InterfaceOptionsFrame: addons register settings panels here
         "InterfaceOptionsFrame = CreateFrame('Frame', 'InterfaceOptionsFrame')\n"
 

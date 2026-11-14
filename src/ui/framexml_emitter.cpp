@@ -727,6 +727,7 @@ struct Emitter {
             // ...and one made fresh here has no metatable either.
             line("if __WoweeFontMT then setmetatable(" + name + ", __WoweeFontMT) end");
         }
+        line(name + ".name = " + quote(name));   // what GetName answers
         if (height > 0.0f) line(name + ".height = " + std::to_string(height));
         if (const std::string* f = node.attr("font"))
             line(name + ".font = " + quote(*f));
