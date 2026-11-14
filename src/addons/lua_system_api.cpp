@@ -4013,6 +4013,17 @@ static int lua_ReturnNothing(lua_State*) { return 0; }
 /// counterpart in the game, kept here so the getter and setter agree.
 static int& selectedDisplayChannel() { static int selected = 0; return selected; }
 
+/// The channel pane's roster request (0x004fe530 with 0x3d2): the channel's
+/// name on CMSG_CHANNEL_DISPLAY_LIST, sent when the pane turns to a channel
+/// other than the one it last asked about - not on every redraw.
+static void requestDisplayRoster(game::GameHandler* gh, const std::string& name) {
+    static std::string lastAsked;
+    if (!gh || name.empty() || name == lastAsked) return;
+    lastAsked = name;
+    if (auto* chat = gh->getChatHandler())
+        chat->sendChannelNameCommand(game::Opcode::CMSG_CHANNEL_DISPLAY_LIST, name);
+}
+
 /// One row of the channel pane, as 0x00504840 lays them out (0x20 bytes each
 /// at 0xb74468): the Group, World and Custom headers in that order, each
 /// followed - unless collapsed - by its rows. Group holds, off a battleground,
@@ -10263,8 +10274,15 @@ void registerSystemLuaAPI(lua_State* L) {
             luaPushOneOrNil(L, moderator ? 1 : 0);
             return 1;
         }},
+                // SetSelectedDisplayChannel(row) (0x00504e50): the row, rounded,
+                // selected, and its roster asked for.
                 {"SetSelectedDisplayChannel", [](lua_State* L) -> int {
-            selectedDisplayChannel() = static_cast<int>(luaL_optnumber(L, 1, 0));
+            if (!lua_isnumber(L, 1)) return 0;
+            selectedDisplayChannel() = static_cast<int>(std::lround(lua_tonumber(L, 1)));
+            if (auto* gh = getGameHandler(L)) {
+                if (const auto* slot = displayChannelSlot(gh, selectedDisplayChannel()))
+                    requestDisplayRoster(gh, slot->name);
+            }
             return 0;
         }},
                 // ExpandChannelHeader(index) / CollapseChannelHeader(index)
@@ -10281,15 +10299,19 @@ void registerSystemLuaAPI(lua_State* L) {
                 // the request that makes that true. The panel calls this in
                 // statement position when a channel row is clicked, which is
                 // the only thing that asks the server for a roster at all.
+                // GetNumChannelMembers(row) (0x00505190): the count, or nil
+                // when there is none yet - the roster asked for once, when the
+                // row names a channel other than the one last asked about.
                 {"GetNumChannelMembers", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const int channel = static_cast<int>(luaL_optnumber(L, 1, 0));
-            if (!gh || channel < 1) { lua_pushnumber(L, 0); return 1; }
+            if (!gh || !lua_isnumber(L, 1)) return luaReturnNil(L);
+            const int channel = static_cast<int>(std::lround(lua_tonumber(L, 1)));
             const auto* slot = displayChannelSlot(gh, channel);
-            if (!slot) { lua_pushnumber(L, 0); return 1; }
-            const auto& name = slot->name;
-            gh->requestChannelList(name);
-            lua_pushnumber(L, static_cast<lua_Number>(gh->getChannelRoster(name).size()));
+            if (!slot) return luaReturnNil(L);
+            requestDisplayRoster(gh, slot->name);
+            const size_t n = gh->getChannelRoster(slot->name).size();
+            if (n == 0) return luaReturnNil(L);
+            lua_pushnumber(L, static_cast<lua_Number>(n));
             return 1;
         }},
                 // GetChannelRosterInfo(channelIndex, rosterIndex) →
@@ -10309,7 +10331,10 @@ void registerSystemLuaAPI(lua_State* L) {
             const auto& roster = gh->getChannelRoster(slot->name);
             if (member > static_cast<int>(roster.size())) { return luaReturnNil(L); }
             const auto& m = roster[static_cast<size_t>(member) - 1];
-            lua_pushstring(L, m.name.c_str());          // 1: name
+            // 0x00504f30: a member whose name is not known yet is UNKNOWN.
+            if (m.name.empty()) lua_getglobal(L, "UNKNOWN");
+            else lua_pushstring(L, m.name.c_str());     // 1: name
+            if (lua_isnil(L, -1)) { lua_pop(L, 1); lua_pushstring(L, "Unknown"); }
             luaPushOneOrNil(L, m.owner ? 1 : 0);        // 2: owner
             luaPushOneOrNil(L, m.moderator ? 1 : 0);    // 3: moderator
             luaPushOneOrNil(L, m.muted ? 1 : 0);        // 4: muted
