@@ -765,6 +765,20 @@ uint32_t arenaTeamIdAtIndex(game::GameHandler* gh, int index) {
     return teams[static_cast<size_t>(index) - 1].teamId;
 }
 
+/// The arena team commands that take a team row and a name (0x00515cc0 and
+/// its neighbours): a number and a string or the usage error, the name at most
+/// 48 characters, nothing sent for an empty one.
+template <typename Send>
+static int arenaTeamNameCommand(lua_State* L, const char* usage, Send send) {
+    if (!lua_isnumber(L, 1) || !lua_isstring(L, 2)) return luaL_error(L, "%s", usage);
+    const char* name = lua_tostring(L, 2);
+    if (!*name) return 0;
+    if (std::strlen(name) > 48) return luaL_error(L, "Name too long");
+    if (auto* gh = getGameHandler(L))
+        send(gh, arenaTeamIdAtIndex(gh, static_cast<int>(std::lround(lua_tonumber(L, 1)))), name);
+    return 0;
+}
+
 /// The raid member the roster has selected, by guid (0x00beb610).
 static uint64_t& raidRosterSelection() {
     static uint64_t guid = 0;
@@ -2178,9 +2192,13 @@ void registerSocialLuaAPI(lua_State* L) {
             if (auto* gh = getGameHandler(L)) gh->declineArenaTeamInvite();
             return 0;
         }},
+                // ArenaTeamDisband(team) (0x00516130): the team's row, rounded,
+                // gives its id, as for the other team commands. This passed the
+                // row itself as the id, so the disband asked for team 1, 2 or 3.
                 {"ArenaTeamDisband", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: ArenaTeamDisband(team)");
             if (auto* gh = getGameHandler(L))
-                gh->disbandArenaTeam(static_cast<uint32_t>(luaL_optnumber(L, 1, 0)));
+                gh->disbandArenaTeam(arenaTeamIdAtIndex(gh, static_cast<int>(std::lround(lua_tonumber(L, 1)))));
             return 0;
         }},
                 // DeclineInvite("channel") (0x004ffcc0) turns down an invitation
@@ -5276,32 +5294,29 @@ void registerSocialLuaAPI(lua_State* L) {
                 // The first argument is the team's position in the list, which
                 // is how the interface counts the three bracket sizes; the wire
                 // is addressed by the team's own id.
+                // ArenaTeamInviteByName / UninviteByName / SetLeaderByName(team,
+                // name) and ArenaTeamLeave(team) (0x00515cc0, 0x00515eb0,
+                // 0x00515ff0, 0x00515dd0): the team's row, rounded, gives its id -
+                // 0 for a row with none, which is still sent - a name, past 48
+                // characters "Name too long", none at all nothing sent; each
+                // with its usage error.
                 {"ArenaTeamInviteByName", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const uint32_t id = arenaTeamIdAtIndex(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
-            const char* name = luaL_optstring(L, 2, "");
-            if (gh && id) gh->arenaTeamInvite(id, name ? name : "");
-            return 0;
+            return arenaTeamNameCommand(L, "Usage: ArenaTeamInviteByName(team, name)",
+                [](game::GameHandler* gh, uint32_t id, const char* n) { gh->arenaTeamInvite(id, n); });
         }},
                 {"ArenaTeamLeave", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: ArenaTeamLeave(team)");
             auto* gh = getGameHandler(L);
-            const uint32_t id = arenaTeamIdAtIndex(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
-            if (gh && id) gh->arenaTeamLeave(id);
+            if (gh) gh->arenaTeamLeave(arenaTeamIdAtIndex(gh, static_cast<int>(std::lround(lua_tonumber(L, 1)))));
             return 0;
         }},
                 {"ArenaTeamSetLeaderByName", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const uint32_t id = arenaTeamIdAtIndex(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
-            const char* name = luaL_optstring(L, 2, "");
-            if (gh && id) gh->arenaTeamSetLeader(id, name ? name : "");
-            return 0;
+            return arenaTeamNameCommand(L, "Usage: ArenaTeamSetLeaderByName(team, name)",
+                [](game::GameHandler* gh, uint32_t id, const char* n) { gh->arenaTeamSetLeader(id, n); });
         }},
                 {"ArenaTeamUninviteByName", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const uint32_t id = arenaTeamIdAtIndex(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
-            const char* name = luaL_optstring(L, 2, "");
-            if (gh && id) gh->arenaTeamRemove(id, name ? name : "");
-            return 0;
+            return arenaTeamNameCommand(L, "Usage: ArenaTeamUninviteByName(team, name)",
+                [](game::GameHandler* gh, uint32_t id, const char* n) { gh->arenaTeamRemove(id, n); });
         }},
                 {"BNGetConversationInfo",    [](lua_State* L) -> int { (void)L; return 0; }},
                 {"BNInviteToConversation",   [](lua_State* L) -> int { (void)L; return 0; }},
