@@ -510,6 +510,9 @@ static int lua_GetQuestLogRewardFactionInfo(lua_State* L) {
 // reputation line, and got nil for both; it survived only because `not nil` is
 // true and the test happens to fall the right way.
 static int lua_GetFactionInfoByID(lua_State* L) {
+    // 0x005d11e0
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: GetFactionInfoByID(id)");
     auto* gh = getGameHandler(L);
     const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
     if (!gh || id == 0) return luaReturnNil(L);
@@ -526,6 +529,9 @@ static int lua_GetFactionInfoByID(lua_State* L) {
 
 // GetQuestWatchIndex(questLogIndex) → where that quest sits in the watch list.
 static int lua_GetQuestWatchIndex(lua_State* L) {
+    // 0x005dfc40
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: GetQuestWatchIndex(index)");
     auto* gh = getGameHandler(L);
     const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
     if (!gh || idx < 1) return luaReturnNil(L);
@@ -696,6 +702,9 @@ static int lua_UseQuestLogSpecialItem(lua_State* L);
 // ready again - and WatchFrameItem_UpdateCooldown runs on every
 // BAG_UPDATE_COOLDOWN, so it had something to ask and nothing to hear.
 static int lua_GetQuestLogSpecialItemCooldown(lua_State* L) {
+    // 0x005e53d0
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: GetQuestLogSpecialItemCooldown(index)");
     auto* gh = getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
     const auto item = questSpecialItemAt(gh, index);
@@ -730,6 +739,9 @@ static int lua_GetQuestTimers(lua_State* L) {
 // GetQuestIndexForTimer(i) - the quest log index the i-th timer belongs to,
 // so clicking a timer row selects its quest.
 static int lua_GetQuestIndexForTimer(lua_State* L) {
+    // 0x005e4fb0
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: GetQuestIndexForTimer(index)");
     auto* gh = getGameHandler(L);
     const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
     if (!gh || idx < 1) return luaReturnNil(L);
@@ -760,10 +772,12 @@ static void fireItemTextReady(lua_State* L) {
 }
 
 static int lua_GetQuestLogTitle(lua_State* L) {
+    // 0x005e5cc0
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: GetQuestLogTitle(index)");
     auto* gh = getGameHandler(L);
-    // optnumber, not checknumber: FrameXML walks the quest log with an index
-    // that can be nil before anything has been selected, and raising there
-    // loses whatever asked rather than answering that there is no such quest.
+    // A nil index raises above, as the client's does; past that the number
+    // is read as given.
     const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
     if (!gh) { return luaReturnNil(L); }
     const auto rows = questRows(gh);
@@ -886,6 +900,9 @@ static int lua_GetQuestLogQuestText(lua_State* L) {
 
 // SelectQuestLogEntry(index) - select a quest in the quest log
 static int lua_SelectQuestLogEntry(lua_State* L) {
+    // 0x005e02f0
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: SelectQuestLogEntry(index)");
     auto* gh = getGameHandler(L);
     int index = static_cast<int>(luaL_checknumber(L, 1));
     if (!gh) return 0;
@@ -1073,6 +1090,9 @@ static int lua_RemoveQuestWatch(lua_State* L) {
 
 // IsQuestWatched(questLogIndex) → boolean
 static int lua_IsQuestWatched(lua_State* L) {
+    // 0x005df610
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: IsQuestWatched(index)");
     auto* gh = getGameHandler(L);
     int index = static_cast<int>(luaL_checknumber(L, 1));
     if (!gh || index < 1) { return luaReturnNil(L); }
@@ -1083,6 +1103,9 @@ static int lua_IsQuestWatched(lua_State* L) {
 
 // GetQuestLink(questLogIndex) → "|cff...|Hquest:id:level|h[title]|h|r"
 static int lua_GetQuestLink(lua_State* L) {
+    // 0x005e51d0
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: GetQuestLink(questID)");
     auto* gh = getGameHandler(L);
     int index = static_cast<int>(luaL_checknumber(L, 1));
     if (!gh || index < 1) { return luaReturnNil(L); }
@@ -1678,6 +1701,9 @@ static int lua_GetQuestPOILeaderBoard(lua_State* L) {
 /// The objective's line, its kind and whether it is done - through the one
 /// builder the map window's quest list uses too (game/quest_objectives.hpp).
 static int lua_GetQuestLogLeaderBoard(lua_State* L) {
+    // 0x005e5f60
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: GetQuestLogLeaderBoard(index)");
     auto* gh = getGameHandler(L);
     int objIdx = static_cast<int>(luaL_checknumber(L, 1));
     int questIdx = static_cast<int>(luaL_optnumber(L, 2,
@@ -1818,14 +1844,27 @@ static int setQuestHeaderCollapsed(lua_State* L, bool collapse) {
     gh->fireAddonEvent("QUEST_LOG_UPDATE", {});
     return 0;
 }
-static int lua_ExpandQuestHeader(lua_State* L) { return setQuestHeaderCollapsed(L, false); }
-static int lua_CollapseQuestHeader(lua_State* L) { return setQuestHeaderCollapsed(L, true); }
+static int lua_ExpandQuestHeader(lua_State* L) {
+    // 0x005e5150
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: ExpandQuestHeader(index)");
+    return setQuestHeaderCollapsed(L, false);
+}
+static int lua_CollapseQuestHeader(lua_State* L) {
+    // 0x005e5100
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: CollapseQuestHeader(index)");
+    return setQuestHeaderCollapsed(L, true);
+}
 
 // GetQuestLogSpecialItemInfo(questLogIndex) -> link, texture, charges
 //
 // Answering nil meant no button was ever built, so a quest that gives you
 // something to use looked like one that does not.
 static int lua_GetQuestLogSpecialItemInfo(lua_State* L) {
+    // 0x005e52d0
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: GetQuestLogSpecialItemInfo(index)");
     auto* gh = getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
     const QuestSpecialItem item = questSpecialItemAt(gh, index);
@@ -1854,6 +1893,9 @@ static int lua_GetQuestLogSpecialItemInfo(lua_State* L) {
 }
 
 static int lua_UseQuestLogSpecialItem(lua_State* L) {
+    // 0x005e5640
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: UseQuestLogSpecialItem(index)");
     auto* gh = getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
     const QuestSpecialItem item = questSpecialItemAt(gh, index);
@@ -2697,6 +2739,9 @@ static std::unordered_map<uint32_t, int>& previewPoints();
 // spec saw the first spec's points counted under the second spec's tab names,
 // and the inspect tab could not show a target's other tree at all.
 static int lua_GetTalentTabInfo(lua_State* L) {
+    // 0x005c6150
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: GetTalentTabInfo(tabIndex[, isInspect[, isPet[, groupIndex]]])");
     auto* gh = getGameHandler(L);
     int tabIndex = static_cast<int>(luaL_checknumber(L, 1)); // 1-indexed
     if (!gh || tabIndex < 1) {
@@ -2758,6 +2803,9 @@ static int lua_GetTalentTabInfo(lua_State* L) {
 
 // GetNumTalents(tabIndex) → count
 static int lua_GetNumTalents(lua_State* L) {
+    // 0x005c5d40
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: GetNumTalents(tabIndex[, isInspect[, isPet]])");
     auto* gh = getGameHandler(L);
     int tabIndex = static_cast<int>(luaL_checknumber(L, 1));
     // The counts belong to the same family as the readers below and were
@@ -3375,8 +3423,17 @@ const game::GameHandler::CraftRecipe* recipeAtTradeSkillRow(game::GameHandler* g
 /// Open or close the heading at a drawn-row index. A click on a recipe row is
 /// ignored rather than refused: the panel calls these from the row template
 /// whatever the row turns out to be.
-static int tradeSkillHeaderSetCollapsed(lua_State* L, bool collapsed) {
+static int tradeSkillHeaderSetCollapsed(lua_State* L, bool collapsed,
+                                        const char* usage, const char* badRow) {
+    // 0x005dd460 / 0x005dd500: a number, and from one up the index of a
+    // heading row; any other row is the second error.
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "%s", usage);
     auto* gh = getGameHandler(L);
+    if (gh && luaToClientInt(L, 1) - 1 >= 0) {
+        const auto& all = tradeSkillRows(gh);
+        const auto at = static_cast<size_t>(luaToClientInt(L, 1) - 1);
+        if (at >= all.size() || !all[at].isHeader) return luaL_error(L, "%s", badRow);
+    }
     const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
     if (!gh || index < 1) return 0;
     const auto rows = tradeSkillRows(gh);
@@ -4421,6 +4478,9 @@ static int lua_GetQuestLogChoiceInfo(lua_State* L) {
 // GetQuestLogRewardInfo and GetQuestLogChoiceInfo read. Shift-clicking a
 // reward in the log put nothing in chat before.
 static int lua_GetQuestLogItemLink(lua_State* L) {
+    // 0x005df250
+    if (!lua_isstring(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: GetQuestLogItemLink(\"type\", index)");
     auto* gh = getGameHandler(L);
     const auto* q = selectedLogEntry(gh);
     const char* type = luaL_optstring(L, 1, "reward");
@@ -4816,6 +4876,9 @@ void registerQuestLuaAPI(lua_State* L) {
                 // answer and is what leaves the counter hidden, rather than
                 // claiming a number nobody can stand behind.
                 {"IsUnitOnQuest", [](lua_State* L) -> int {
+            // 0x005e4070
+            if (!lua_isnumber(L, 1) || !lua_isstring(L, 2))
+                return luaL_error(L, "Usage: IsUnitOnQuest(index, \"unit\")");
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
             const char* uid = luaL_optstring(L, 2, "player");
@@ -5168,9 +5231,15 @@ void registerQuestLuaAPI(lua_State* L) {
                 // heading is ignored rather than refused - the tab calls these
                 // from the row label template whatever the row turns out to be.
                 {"ExpandSkillHeader",   [](lua_State* L) -> int {
+            // 0x005ce400
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: ExpandSkillHeader(index)");
             return skillHeaderSetCollapsed(L, false);
         }},
                 {"CollapseSkillHeader", [](lua_State* L) -> int {
+            // 0x005ce3a0
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: CollapseSkillHeader(index)");
             return skillHeaderSetCollapsed(L, true);
         }},
                 {"GetNumTalentTabs",        lua_GetNumTalentTabs},
@@ -5532,6 +5601,9 @@ void registerQuestLuaAPI(lua_State* L) {
                 //
                 // FrameXML counts sockets from one and the server from zero.
                 {"RemoveGlyphFromSocket", [](lua_State* L) -> int {
+            // 0x005b7660
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: RemoveGlyphFromSocket(index)");
             auto* gh = getGameHandler(L);
             const int socket = static_cast<int>(luaL_optnumber(L, 1, 0));
             if (gh && socket >= 1 && socket <= game::GameHandler::MAX_GLYPH_SLOTS)
@@ -5643,6 +5715,9 @@ void registerQuestLuaAPI(lua_State* L) {
             return 5;
         }},
                 {"GetTradeSkillIcon", [](lua_State* L) -> int {
+            // 0x005db550
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetTradeSkillIcon(index)");
             auto* gh = getGameHandler(L);
             const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
             if (!gh) return luaReturnNil(L);
@@ -5664,6 +5739,9 @@ void registerQuestLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"GetTradeSkillDescription", [](lua_State* L) -> int {
+            // 0x005dbe10
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetTradeSkillDescription(index)");
             auto* gh = getGameHandler(L);
             const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
             if (!gh) return luaReturnNil(L);
@@ -5675,6 +5753,9 @@ void registerQuestLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"GetTradeSkillNumReagents", [](lua_State* L) -> int {
+            // 0x005dbba0
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetTradeSkillNumReagents(index)");
             auto* gh = getGameHandler(L);
             const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
             int n = 0;
@@ -5728,6 +5809,9 @@ void registerQuestLuaAPI(lua_State* L) {
             return luaReturnNil(L);
         }},
                 {"GetTradeSkillNumMade", [](lua_State* L) -> int {
+            // 0x005db6e0
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetTradeSkillNumMade(index)");
             auto* gh = getGameHandler(L);
             const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
             int lo = 1, hi = 1;
@@ -5822,6 +5906,9 @@ void registerQuestLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"SelectTradeSkill", [](lua_State* L) -> int {
+            // 0x005da900
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: SelectTradeSkill(index)");
             tradeSkillSelection() = static_cast<int>(luaL_optnumber(L, 1, 0));
             return 0;
         }},
@@ -5921,6 +6008,9 @@ void registerQuestLuaAPI(lua_State* L) {
                 // and count them while answering nil to anyone asking for a
                 // link to the same thing.
                 {"GetTradeSkillItemLink", [](lua_State* L) -> int {
+            // 0x005dba70
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetTradeSkillItemLink(index)");
             auto* gh = getGameHandler(L);
             const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
             if (!gh || i < 1) return luaReturnNil(L);
@@ -5964,6 +6054,9 @@ void registerQuestLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"GetTradeSkillReagentItemLink", [](lua_State* L) -> int {
+            // 0x005dbcc0
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+                return luaL_error(L, "Usage: GetTradeReagentSkillItemLink(index, reagentIndex)");
             auto* gh = getGameHandler(L);
             const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
             const int n = static_cast<int>(luaL_optnumber(L, 2, 1));
@@ -6232,6 +6325,9 @@ void registerQuestLuaAPI(lua_State* L) {
                 // The arguments arrive as the strings strmatch produced;
                 // luaL_optnumber reads those.
                 {"SetTradeSkillItemLevelFilter", [](lua_State* L) -> int {
+            // 0x005dd090
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+                return luaL_error(L, "Usage: SetTradeSkillItemLevelFilter(minLevel, maxLevel)");
             const int lo = static_cast<int>(luaL_optnumber(L, 1, 0));
             const int hi = static_cast<int>(luaL_optnumber(L, 2, 0));
             tradeSkillLevelRange() = {lo, hi};
@@ -6294,10 +6390,14 @@ void registerQuestLuaAPI(lua_State* L) {
             return 2;
         }},
                 {"CollapseTradeSkillSubClass",  [](lua_State* L) -> int {
-            return tradeSkillHeaderSetCollapsed(L, true);
+            return tradeSkillHeaderSetCollapsed(L, true,
+                "Usage: CollapseTradeSkillSubClass(index)",
+                "Bad sub class in CollapseTradeSkillSubClass");
         }},
                 {"ExpandTradeSkillSubClass",    [](lua_State* L) -> int {
-            return tradeSkillHeaderSetCollapsed(L, false);
+            return tradeSkillHeaderSetCollapsed(L, false,
+                "Usage: ExpandTradeSkillSubClass(index)",
+                "Bad skill line in ExpandTradeSkillSubClass");
         }},
                 // GetTradeskillRepeatCount() → how many are still to be made.
                 //
@@ -7060,6 +7160,9 @@ void registerQuestLuaAPI(lua_State* L) {
         }},
                 // GetCategoryInfo(id) → name, parentCategoryID, flags
                 {"GetCategoryInfo", [](lua_State* L) -> int {
+            // 0x005b15c0
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetCategoryInfo(categoryID)");
             auto* gh = getGameHandler(L);
             const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
             if (!gh) return luaReturnNil(L);
@@ -7105,6 +7208,9 @@ void registerQuestLuaAPI(lua_State* L) {
             return 2;
         }},
                 {"GetAchievementCategory", [](lua_State* L) -> int {
+            // 0x005b18e0
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetAchievementCategory(achievementID)");
             auto* gh = getGameHandler(L);
             const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
             if (!gh) return luaReturnNil(L);
@@ -7113,6 +7219,9 @@ void registerQuestLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"GetAchievementNumCriteria", [](lua_State* L) -> int {
+            // 0x005b5530
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetAchievementNumCriteria(achievementID)");
             auto* gh = getGameHandler(L);
             const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
             if (!gh) { lua_pushnumber(L, 0); return 1; }
@@ -7125,6 +7234,9 @@ void registerQuestLuaAPI(lua_State* L) {
                 //   reqQuantity, charName, flags, assetID, quantityString,
                 //   criteriaID
                 {"GetAchievementCriteriaInfo", [](lua_State* L) -> int {
+            // 0x005b58b0
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetAchievementCrieriaInfo(achievementID, criteriaIndex)");
             auto* gh = getGameHandler(L);
             const auto id  = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
             const int  idx = static_cast<int>(luaL_optnumber(L, 2, 0));
@@ -7226,6 +7338,9 @@ void registerQuestLuaAPI(lua_State* L) {
                 // it, and neither did any cooking, fishing or battleground
                 // series.
                 {"GetPreviousAchievement", [](lua_State* L) -> int {
+            // 0x005b1690
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetPreviousAchievement(achievementID)");
             auto* gh = getGameHandler(L);
             const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
             if (!gh || id == 0) return luaReturnNil(L);
@@ -7240,6 +7355,9 @@ void registerQuestLuaAPI(lua_State* L) {
                 // `newID, completed = GetNextAchievement(nextID)` to find the
                 // furthest one earned, so the second value is what stops it.
                 {"GetNextAchievement", [](lua_State* L) -> int {
+            // 0x005b3ef0
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetNextAchievement(achievementID)");
             auto* gh = getGameHandler(L);
             const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
             if (!gh || id == 0) return luaReturnNil(L);
@@ -7264,6 +7382,9 @@ void registerQuestLuaAPI(lua_State* L) {
                 // answer when nothing has been counted, because that is what
                 // the real client shows for a statistic never triggered.
                 {"GetStatistic", [](lua_State* L) -> int {
+            // 0x005b5620
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetStatistic(achievementID)");
             auto* gh = getGameHandler(L);
             const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
             if (!gh || id == 0) { lua_pushstring(L, "--"); return 1; }
@@ -7284,6 +7405,9 @@ void registerQuestLuaAPI(lua_State* L) {
                 // per guid the whole time. What was missing was naming whose
                 // set to read.
                 {"SetAchievementComparisonUnit", [](lua_State* L) -> int {
+            // 0x005b1ab0
+            if (!lua_isstring(L, 1))
+                return luaL_error(L, "Usage: AddAchievementComparisonUnit(unitToken)");
             auto* gh = getGameHandler(L);
             const char* uid = luaL_optstring(L, 1, "");
             if (!gh || !uid || !*uid) return 0;
@@ -7573,11 +7697,25 @@ void registerQuestLuaAPI(lua_State* L) {
         }},
                 {"AddTrackedAchievement", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
+            // 0x005b4870: an id Achievement.dbc has a row for, else the
+            // usage error - zero and unknown ids alike.
+            {
+                const int32_t wanted = luaToClientInt(L, 1);
+                bool known = wanted != 0;
+                if (known && gh) {
+                    gh->ensureAchievementNamesLoaded();
+                    known = gh->achievementNameCacheRef().count(static_cast<uint32_t>(wanted)) > 0;
+                }
+                if (!known) return luaL_error(L, "Usage: AddTrackedAchievement(achievementID)");
+            }
             const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
             if (gh && id) { gh->setAchievementTracked(id, true); gh->fireAddonEvent("TRACKED_ACHIEVEMENT_UPDATE", {std::to_string(id)}); }
             return 0;
         }},
                 {"RemoveTrackedAchievement", [](lua_State* L) -> int {
+            // 0x005b48d0
+            if (luaToClientInt(L, 1) == 0)
+                return luaL_error(L, "Usage: RemoveTrackedAchievement(achievementID)");
             auto* gh = getGameHandler(L);
             const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
             if (gh && id) { gh->setAchievementTracked(id, false); gh->fireAddonEvent("TRACKED_ACHIEVEMENT_UPDATE", {std::to_string(id)}); }
