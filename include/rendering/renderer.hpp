@@ -113,6 +113,10 @@ public:
 
     void beginFrame();
     void endFrame();
+    /// Ends a frame given up part way - out of memory in one of its stages -
+    /// without recording any more of it: the workers are joined and an empty
+    /// frame is submitted in its place (VkContext::endAbandonedFrame).
+    void abandonFrame();
 
     /// Recorded after the interface is drawn and before the frame is submitted,
     /// into the frame's own command buffer. A second window draws here - see

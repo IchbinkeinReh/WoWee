@@ -3541,6 +3541,44 @@ VkCommandBuffer VkContext::beginFrame(uint32_t& imageIndex) {
     return frame.commandBuffer;
 }
 
+void VkContext::endAbandonedFrame(VkCommandBuffer cmd, uint32_t imageIndex) {
+    if (cmd == VK_NULL_HANDLE) return;
+    auto& frame = frames[currentFrame];
+    // Recording (not pending) both, so a reset is allowed: their pool is made
+    // with RESET_COMMAND_BUFFER_BIT.
+    vkResetCommandBuffer(frame.prologueBuffer, 0);
+    vkResetCommandBuffer(cmd, 0);
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(frame.prologueBuffer, &beginInfo);
+    vkBeginCommandBuffer(cmd, &beginInfo);
+    // No marks were reset for, so none are read back.
+    gpuMarksPending_[currentFrame] = false;
+    gpuMarkCount_[currentFrame] = 0;
+#ifndef WOWEE_VR
+    // The image as the presentation engine takes it, its contents undefined:
+    // one frame of nothing in particular, on the way to the login screen.
+    if (imageIndex < swapchainImages.size()) {
+        VkImageMemoryBarrier toPresent{};
+        toPresent.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        toPresent.srcAccessMask = 0;
+        toPresent.dstAccessMask = 0;
+        toPresent.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        toPresent.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toPresent.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toPresent.image = swapchainImages[imageIndex];
+        toPresent.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                             VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr,
+                             1, &toPresent);
+    }
+#endif
+    LOG_WARNING("Frame given up part way; an empty one is presented in its place");
+    endFrame(cmd, imageIndex);
+}
+
 void VkContext::endFrame(VkCommandBuffer cmd, uint32_t imageIndex) {
     static int endFrameCounter = 0;
     endFrameCounter++;

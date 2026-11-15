@@ -2095,6 +2095,20 @@ void Renderer::endFrame() {
     currentCmd = VK_NULL_HANDLE;
 }
 
+void Renderer::abandonFrame() {
+    // The workers first: they record into this frame's buffers.
+    try {
+        syncWorldRecording();
+    } catch (const std::exception& e) {
+        LOG_ERROR("Abandoned frame: a world worker failed too: ", e.what());
+    }
+    pendingWorld_.pending = false;
+    shadowPlan_.pending = false;
+    if (!vkCtx || currentCmd == VK_NULL_HANDLE) return;
+    vkCtx->endAbandonedFrame(currentCmd, currentImageIndex);
+    currentCmd = VK_NULL_HANDLE;
+}
+
 void Renderer::setCharacterFollow(uint32_t instanceId) {
     characterInstanceId = instanceId;
     if (cameraController && instanceId > 0) {

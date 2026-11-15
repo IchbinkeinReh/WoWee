@@ -159,6 +159,13 @@ public:
     // Frame operations
     VkCommandBuffer beginFrame(uint32_t& imageIndex);
     void endFrame(VkCommandBuffer cmd, uint32_t imageIndex);
+    /// Ends a frame whose recording was given up part way (out of memory in
+    /// the middle of it): whatever the frame and its prologue hold - a pass
+    /// left open, half a scene - is thrown away, and an empty frame that only
+    /// hands the acquired image back for presenting is submitted in its
+    /// place, so the image, the acquire semaphore and the frame's timeline
+    /// value move on as after any other frame.
+    void endAbandonedFrame(VkCommandBuffer cmd, uint32_t imageIndex);
     /// The current frame's prologue (FrameData::prologueBuffer), recording
     /// from beginFrame until endFrame ends it and submits it ahead of the
     /// frame's own buffer. What is recorded into it executes before anything

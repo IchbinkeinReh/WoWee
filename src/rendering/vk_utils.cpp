@@ -27,6 +27,22 @@ AllocationFailure lastAllocationFailure() {
     return gFailure;
 }
 
+namespace {
+AllocationFailure gUploadFailure;
+}  // namespace
+
+AllocationFailure lastUploadFailure() {
+    std::lock_guard<std::mutex> lock(gFailureMutex);
+    return gUploadFailure;
+}
+
+void noteUploadFailure(uint64_t bytes) {
+    std::lock_guard<std::mutex> lock(gFailureMutex);
+    gUploadFailure.result = gFailure.result != VK_SUCCESS ? gFailure.result : VK_ERROR_OUT_OF_HOST_MEMORY;
+    gUploadFailure.bytes = bytes;
+    ++gUploadFailure.serial;
+}
+
 AllocatedBuffer createBuffer(VmaAllocator allocator, VkDeviceSize size,
     VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage, VmaPool pool)
 {
@@ -349,19 +365,34 @@ void transitionImageLayout(VkCommandBuffer cmd, VkImage image,
 AllocatedBuffer uploadBuffer(VkContext& ctx, const void* data, VkDeviceSize size,
     VkBufferUsageFlags usage)
 {
-    // Create staging buffer
+    // Create staging buffer. Out of memory it is not there to write into:
+    // mapping a buffer that was never made was an access violation - the
+    // client gone, where an empty buffer is something its callers handle.
     AllocatedBuffer staging = createBuffer(ctx.getAllocator(), size,
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY);
+    if (staging.buffer == VK_NULL_HANDLE) {
+        noteUploadFailure(size);
+        return {};
+    }
 
     // Copy data to staging
-    void* mapped;
-    vmaMapMemory(ctx.getAllocator(), staging.allocation, &mapped);
+    void* mapped = nullptr;
+    if (vmaMapMemory(ctx.getAllocator(), staging.allocation, &mapped) != VK_SUCCESS) {
+        destroyBuffer(ctx.getAllocator(), staging);
+        noteUploadFailure(size);
+        return {};
+    }
     std::memcpy(mapped, data, size);
     vmaUnmapMemory(ctx.getAllocator(), staging.allocation);
 
     // Create GPU buffer
     AllocatedBuffer gpuBuffer = createBuffer(ctx.getAllocator(), size,
         usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_ONLY);
+    if (gpuBuffer.buffer == VK_NULL_HANDLE) {
+        destroyBuffer(ctx.getAllocator(), staging);
+        noteUploadFailure(size);
+        return {};
+    }
 
     // Copy staging -> GPU
     ctx.immediateSubmit([&](VkCommandBuffer cmd) {
@@ -386,11 +417,15 @@ bool uploadIntoBuffer(VkContext& ctx, const void* data, VkDeviceSize size,
 
     AllocatedBuffer staging = createBuffer(ctx.getAllocator(), size,
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY);
-    if (staging.buffer == VK_NULL_HANDLE) return false;
+    if (staging.buffer == VK_NULL_HANDLE) {
+        noteUploadFailure(size);
+        return false;
+    }
 
     void* mapped = nullptr;
     if (vmaMapMemory(ctx.getAllocator(), staging.allocation, &mapped) != VK_SUCCESS) {
         destroyBuffer(ctx.getAllocator(), staging);
+        noteUploadFailure(size);
         return false;
     }
     std::memcpy(mapped, data, size);

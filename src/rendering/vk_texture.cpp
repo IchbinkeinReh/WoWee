@@ -130,9 +130,16 @@ bool VkTexture::upload(VkContext& ctx, const uint8_t* pixels, uint32_t width, ui
     if (!useHostCopy) {
         staging = createBuffer(ctx.getAllocator(), imageSize,
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY);
-
-        void* mapped;
-        vmaMapMemory(ctx.getAllocator(), staging.allocation, &mapped);
+        // Out of memory: no staging buffer to write into - a texture that
+        // could not be made, not an access violation.
+        void* mapped = nullptr;
+        if (staging.buffer == VK_NULL_HANDLE ||
+            vmaMapMemory(ctx.getAllocator(), staging.allocation, &mapped) != VK_SUCCESS) {
+            destroyBuffer(ctx.getAllocator(), staging);
+            destroy(device_, allocator_);
+            noteUploadFailure(imageSize);
+            return false;
+        }
         std::memcpy(mapped, pixels, imageSize);
         vmaUnmapMemory(ctx.getAllocator(), staging.allocation);
     }
@@ -223,9 +230,13 @@ bool VkTexture::uploadMips(VkContext& ctx, const uint8_t* const* mipData,
 
     AllocatedBuffer staging = createBuffer(ctx.getAllocator(), totalSize,
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY);
-
-    void* mapped;
-    vmaMapMemory(ctx.getAllocator(), staging.allocation, &mapped);
+    void* mapped = nullptr;
+    if (staging.buffer == VK_NULL_HANDLE ||
+        vmaMapMemory(ctx.getAllocator(), staging.allocation, &mapped) != VK_SUCCESS) {
+        destroyBuffer(ctx.getAllocator(), staging);
+        noteUploadFailure(totalSize);
+        return false;
+    }
     VkDeviceSize offset = 0;
     for (uint32_t i = 0; i < mipCount; i++) {
         std::memcpy(static_cast<uint8_t*>(mapped) + offset, mipData[i], mipSizes[i]);

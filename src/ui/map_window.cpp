@@ -15,6 +15,7 @@
 #include "ui/interface_fonts.hpp"
 #include "ui/ui_manager.hpp"
 
+#include <new>
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_vulkan.h>
@@ -188,7 +189,11 @@ bool MapWindow::open(SDL_Window* gameWindow, rendering::Renderer* renderer,
         info.PipelineInfoMain.RenderPass = swapchain_->renderPass();
         info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
         info.CheckVkResultFn = [](VkResult err) {
-            if (err != VK_SUCCESS) LOG_ERROR("Map window ImGui Vulkan error: ", static_cast<int>(err));
+            if (err == VK_SUCCESS) return;
+            LOG_ERROR("Map window ImGui Vulkan error: ", static_cast<int>(err));
+            // As the main window's: out of memory stops here rather than
+            // writing into a buffer that was never made.
+            if (err == VK_ERROR_OUT_OF_HOST_MEMORY || err == VK_ERROR_OUT_OF_DEVICE_MEMORY) throw std::bad_alloc();
         };
         ImGui_ImplVulkan_Init(&info);
         ImGui::SetCurrentContext(previous);

@@ -4,6 +4,8 @@
 #include "ui/safe_area.hpp"
 #include <cstdio>
 #include <cstdlib>
+#include <new>
+#include <cstdlib>
 #include <cstring>
 #include <optional>
 #include "pipeline/asset_manager.hpp"
@@ -157,8 +159,18 @@ bool UIManager::initialize(core::Window* win) {
         return false;
     }
 
-    // Initialize ImGui
+    // Initialize ImGui. Its allocations throw std::bad_alloc when there is no
+    // memory, as the rest of the client's do, rather than hand back null: the
+    // font atlas copied its glyphs into the null a full job limit gave it and
+    // the client was gone, where an exception goes back to the login screen.
     IMGUI_CHECKVERSION();
+    ImGui::SetAllocatorFunctions(
+        [](size_t size, void*) -> void* {
+            void* p = std::malloc(size);
+            if (!p && size != 0) throw std::bad_alloc();
+            return p;
+        },
+        [](void* p, void*) { std::free(p); });
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
@@ -209,9 +221,14 @@ void UIManager::initVulkanBackend(rendering::VkContext* vkCtx) {
     // almost nothing there and costs fill rate at the sample count the scene uses.
     initInfo.PipelineInfoMain.RenderPass = vkCtx->getOverlayRenderPass();
     initInfo.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    // Out of memory the backend carried on into a buffer it could not make
+    // and copied the frame's vertices into a null mapping - the client gone
+    // at endFrame. It stops there instead, as an allocation that fails does
+    // (Application::leaveWorldOutOfMemory).
     initInfo.CheckVkResultFn = [](VkResult err) {
-        if (err != VK_SUCCESS)
-            LOG_ERROR("ImGui Vulkan error: ", static_cast<int>(err));
+        if (err == VK_SUCCESS) return;
+        LOG_ERROR("ImGui Vulkan error: ", static_cast<int>(err));
+        if (err == VK_ERROR_OUT_OF_HOST_MEMORY || err == VK_ERROR_OUT_OF_DEVICE_MEMORY) throw std::bad_alloc();
     };
 
     ImGui_ImplVulkan_Init(&initInfo);

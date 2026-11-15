@@ -125,6 +125,14 @@ struct AllocationFailure {
 };
 AllocationFailure lastAllocationFailure();
 
+/// The same for the uploads alone - a staging buffer, or the buffer or image
+/// the data goes into, that could not be made (uploadBuffer, VkTexture's
+/// uploads, CubeTexture). An upload that fails leaves its owner without what
+/// it draws; the application takes it as the world not fitting in memory and
+/// goes back to the login screen rather than carry on with holes in it.
+AllocationFailure lastUploadFailure();
+void noteUploadFailure(uint64_t bytes);
+
 // Image creation
 AllocatedImage createImage(VkDevice device, VmaAllocator allocator,
     uint32_t width, uint32_t height, VkFormat format,

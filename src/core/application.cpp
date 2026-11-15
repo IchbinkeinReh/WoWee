@@ -3,6 +3,7 @@
 #include "core/pointer_speed.hpp"
 #include "core/platform.hpp"
 #include "core/application.hpp"
+#include "rendering/vk_utils.hpp"
 #include "rendering/model_frame_view.hpp"
 #include "core/rt_session_marker.hpp"
 #include "core/cache_root.hpp"
@@ -2951,6 +2952,11 @@ void Application::run() {
         eventsScope.reset();
 
         // Update application state
+        // An update cut short by running out of memory never opened the
+        // interface's frame (UIManager::update, its last stage): this
+        // iteration draws nothing, rather than hand ImGui the last frame's
+        // draw lists over an interface the logout has just taken down.
+        bool updateCutShort = false;
         try {
             FrameMark;
             WOWEE_PROFILE_SCOPE("update", Cpu);
@@ -2958,7 +2964,8 @@ void Application::run() {
         } catch (const std::bad_alloc& e) {
             LOG_ERROR("OOM during Application::update (state=", static_cast<int>(state),
                       ", dt=", deltaTime, "): ", e.what());
-            throw;
+            if (!leaveWorldOutOfMemory("update", e.what(), false)) throw;
+            updateCutShort = true;
         } catch (const std::exception& e) {
             LOG_ERROR("Exception during Application::update (state=", static_cast<int>(state),
                       ", dt=", deltaTime, "): ", e.what());
@@ -2968,11 +2975,11 @@ void Application::run() {
             break;
         }
         // Render
-        try {
+        if (!updateCutShort) try {
             render();
         } catch (const std::bad_alloc& e) {
             LOG_ERROR("OOM during Application::render (state=", static_cast<int>(state), "): ", e.what());
-            throw;
+            if (!leaveWorldOutOfMemory("render", e.what(), true)) throw;
         } catch (const std::exception& e) {
             LOG_ERROR("Exception during Application::render (state=", static_cast<int>(state), "): ", e.what());
             throw;
@@ -2990,6 +2997,15 @@ void Application::run() {
         }
 
         processDeferredLogoutToLogin();
+
+        // An upload that ran out of memory since the last frame: whatever it
+        // was for is missing from the world, and more will follow it.
+        if (const auto upload = rendering::lastUploadFailure(); upload.serial != uploadFailureSeen_) {
+            uploadFailureSeen_ = upload.serial;
+            const std::string what = std::to_string(upload.bytes) + " bytes, VkResult " +
+                                     std::to_string(static_cast<int>(upload.result));
+            leaveWorldOutOfMemory("GPU upload", what.c_str(), false);
+        }
 
         // A lost GPU device: rebuilt with everything drawn with it while the
         // session carries on, here between frames where nothing is recording
@@ -4210,6 +4226,23 @@ void Application::logoutToLogin() {
     }
 
     performLogoutToLogin();
+}
+
+bool Application::leaveWorldOutOfMemory(const char* where, const char* what, bool midFrame) {
+    if (state != AppState::IN_GAME) return false;
+    LOG_ERROR("Out of memory in the world (", where, ": ", what, "); back to the login screen");
+    disconnectNotice_ = "Not enough memory to load the world.";
+    if (midFrame) {
+        // The frame stops where the exception left it: what it recorded is
+        // thrown away and an empty frame goes in its place, so the next one
+        // begins as after any other. The interface's frame is closed too.
+        renderingFrame_ = false;
+        logoutToLoginPending_ = false;
+        if (renderer) renderer->abandonFrame();
+        if (ImGuiContext* g = ImGui::GetCurrentContext(); g && g->WithinFrameScope) ImGui::EndFrame();
+    }
+    logoutToLogin();
+    return true;
 }
 
 void Application::processDeferredLogoutToLogin() {
@@ -6654,7 +6687,12 @@ void Application::render() {
         auto stageStart = std::chrono::steady_clock::now();
         const core::ProfileScope profileScope(stageName, core::ProfileKind::Cpu);
         const stall_report::StageScope stallStage(stageName);
-        fn();
+        try {
+            fn();
+        } catch (const std::bad_alloc&) {
+            LOG_ERROR("Out of memory in render stage '", stageName, "'");
+            throw;
+        }
         float stageMs = std::chrono::duration<float, std::milli>(
             std::chrono::steady_clock::now() - stageStart).count();
         noteStageTime(stageName, stageMs);

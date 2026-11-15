@@ -55,7 +55,13 @@ bool uploadCubeTexture(VkContext& ctx, const uint8_t* rgba, uint32_t width, uint
     AllocatedBuffer staging = createBuffer(ctx.getAllocator(), faces.size(),
                                            VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY);
     void* mapped = nullptr;
-    vmaMapMemory(ctx.getAllocator(), staging.allocation, &mapped);
+    if (staging.buffer == VK_NULL_HANDLE ||
+        vmaMapMemory(ctx.getAllocator(), staging.allocation, &mapped) != VK_SUCCESS) {
+        destroyBuffer(ctx.getAllocator(), staging);
+        vmaDestroyImage(ctx.getAllocator(), cube.image, cube.allocation);
+        noteUploadFailure(faces.size());
+        return false;
+    }
     std::memcpy(mapped, faces.data(), faces.size());
     vmaUnmapMemory(ctx.getAllocator(), staging.allocation);
     const VkImage image = cube.image;
@@ -95,6 +101,7 @@ bool uploadCubeTexture(VkContext& ctx, const uint8_t* rgba, uint32_t width, uint
     vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, kFaceCount};
     if (vkCreateImageView(ctx.getDevice(), &vi, nullptr, &cube.view) != VK_SUCCESS) {
         vmaDestroyImage(ctx.getAllocator(), cube.image, cube.allocation);
+        noteUploadFailure(faces.size());
         return false;
     }
     out = cube;

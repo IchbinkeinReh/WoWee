@@ -259,6 +259,13 @@ private:
     /// main loop to try again (true); false when the device will not come
     /// back.
     bool recoverFromDeviceLoss();
+    /// Out of memory in the world - std::bad_alloc out of an update or a
+    /// frame, or an upload that could not be made (lastUploadFailure): back
+    /// to the login screen with the reason on it, as a world entry that runs
+    /// out does (WorldLoader::processPendingEntry). `midFrame` for one that
+    /// left a frame half recorded, which is then given up (abandonFrame).
+    /// False outside the world, where there is nothing to give back.
+    bool leaveWorldOutOfMemory(const char* where, const char* what, bool midFrame);
     /// recoverFromDeviceLoss's first half: everything on the GPU but the
     /// context, in the order shutdown() lets go of it.
     void releaseGpuForDeviceRebuild();
@@ -498,6 +505,8 @@ private:
     bool running = false;
     bool renderingFrame_ = false;
     bool logoutToLoginPending_ = false;
+    /// lastUploadFailure's serial as last seen between frames.
+    uint64_t uploadFailureSeen_ = 0;
     /// Why the player is back at the login screen, when it was not their idea.
     std::string disconnectNotice_;
     bool playerCharacterSpawned = false;
