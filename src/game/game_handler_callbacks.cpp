@@ -52,6 +52,8 @@
 #include "auth/crypto.hpp"
 #include "core/coordinates.hpp"
 #include "core/application.hpp"
+#include "addons/addon_manager.hpp"
+#include "addons/lua_engine.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "core/logger.hpp"
@@ -4772,16 +4774,36 @@ std::string formatSpellDurationSec(float sec) {
 }
 } // namespace
 
+namespace {
+/// The least and the most effect `index` of a spell does at the player's
+/// level (0x007ff770). False for an unknown spell or index.
+bool spellEffectPointsOf(const GameHandler& gh, uint32_t spellId, int index, SpellEffectPoints& out) {
+    if (spellId == 0 || index < 0 || index > 2) return false;
+    if (!gh.getSpellEffectBasePoints(spellId)) return false;  // also loads the cache
+    const auto& cache = gh.spellNameCacheRef();
+    const auto it = cache.find(spellId);
+    if (it == cache.end()) return false;
+    const auto& e = it->second;
+    const std::size_t k = static_cast<std::size_t>(index);
+    out = spellEffectPoints(e.effectBasePoints[k], e.effectDieSides[k], e.effectPointsPerLevel[k],
+                            static_cast<int>(gh.getPlayerLevel()), e.baseLevel, e.maxLevel);
+    return true;
+}
+}  // namespace
+
 /// The evaluator's window onto this client: what a magnitude is, and which
 /// spells the player knows.
 SpellDescriptionContext GameHandler::descriptionContext(
         uint32_t spellId, const std::string* declarations) const {
     SpellDescriptionContext ctx;
     ctx.declarations = declarations;
-    ctx.magnitude = [this, spellId](int index, double& out) {
-        const int32_t* bp = getSpellEffectBasePoints(spellId);
-        if (!bp || index < 0 || index > 2) return false;
-        out = std::abs(static_cast<double>(bp[index]) + 1.0);
+    // Inside an expression $m1 is the least and $M1 the most, sign and all
+    // (0x005782d0 over 0x007ff770); $s and $o, which that table does not
+    // name, stand for the least.
+    ctx.magnitude = [this, spellId](char code, int index, double& out) {
+        SpellEffectPoints points;
+        if (!spellEffectPointsOf(*this, spellId, index, points)) return false;
+        out = (code == 'M') ? points.max : points.min;
         return true;
     };
     // Known to the PLAYER - the spell book, talents included - not merely a
@@ -4801,11 +4823,22 @@ std::string GameHandler::formatSpellDescription(uint32_t selfSpellId,
     const size_t n = raw.size();
     long lastValue = -1;  // drives $l plural selection
 
-    // Resolve a base-point magnitude ($s/$o/$m/$M) for a spell + effect index.
+    // Resolve a base-point magnitude ($o, and the value in "$/N;s1") for a
+    // spell + effect index: the least the effect does, without its sign.
     auto basePoints = [&](uint32_t sid, int idx) -> long {
-        const int32_t* bp = getSpellEffectBasePoints(sid);
-        if (!bp || idx < 0 || idx > 2) return LONG_MIN;
-        return std::labs(static_cast<long>(bp[idx]) + 1);  // stored as value-1
+        SpellEffectPoints points;
+        if (!spellEffectPointsOf(*this, sid, idx, points)) return LONG_MIN;
+        return std::labs(std::lround(points.min));
+    };
+    // The client's own words for a spread: "%1$d bis %2$d" on a German one.
+    auto spreadText = [](const char* key, const char* english) {
+        if (auto* addons = core::Application::getInstance().getAddonManager()) {
+            if (auto* lua = addons->getLuaEngine()) {
+                std::string text = lua->globalText(key);
+                if (!text.empty()) return text;
+            }
+        }
+        return std::string(english);
     };
 
     for (size_t i = 0; i < n; ) {
@@ -4944,8 +4977,22 @@ std::string GameHandler::formatSpellDescription(uint32_t selfSpellId,
 
         bool resolved = false;
         switch (code) {
-            case 's': case 'S': case 'o': case 'O':
-            case 'm': case 'M': {
+            case 's': case 'S': case 'm': case 'M': {
+                // $m the least, $M the most, $s both - "least to most" - when
+                // the dice can vary the effect (0x00579e50).
+                SpellEffectPoints points;
+                if (spellEffectPointsOf(*this, target, idx, points)) {
+                    const SpellPointsText shown = formatSpellPoints(
+                        code, points,
+                        spreadText("INT_SPELL_POINTS_SPREAD_TEMPLATE", "%d to %d"),
+                        spreadText("SPELL_POINTS_SPREAD_TEMPLATE", "%.1f to %.1f"));
+                    out += shown.text;
+                    lastValue = shown.shown;
+                    resolved = true;
+                }
+                break;
+            }
+            case 'o': case 'O': {
                 long v = basePoints(target, idx);
                 if (v != LONG_MIN) { out += std::to_string(v); lastValue = v; resolved = true; }
                 break;
