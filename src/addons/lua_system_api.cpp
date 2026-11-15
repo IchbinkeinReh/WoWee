@@ -4363,6 +4363,39 @@ static int bgCount(game::GameHandler* gh, int group) {
 /// bounded by MAX_RAID_MEMBERS rather than by how many are present and hides
 /// each frame whose position comes back as zero. On an AzerothCore realm that
 /// is every one of them: the server writes the count and never the entries.
+/// A canonical world position on the map being shown, as the two below push
+/// it (0x00544140): x and y, or 0 and 0 where it is not on this map.
+static int pushMapUV(lua_State* L, bool known, float wx, float wy, float wz) {
+    auto* svc = getLuaServices(L);
+    float u = 0.0f, v = 0.0f;
+    if (!known || !svc || !svc->mapUVForWorldPos || !svc->mapUVForWorldPos(wx, wy, wz, u, v)) {
+        u = 0.0f;
+        v = 0.0f;
+    }
+    lua_pushnumber(L, u);
+    lua_pushnumber(L, v);
+    return 2;
+}
+
+// GetCorpseMapPosition() (0x00545950): where the player's corpse lies on the
+// map being shown.
+static int lua_GetCorpseMapPosition(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    float cx = 0.0f, cy = 0.0f;
+    const bool known = gh && gh->getCorpseCanonicalPos(cx, cy);
+    return pushMapUV(L, known, cx, cy, 0.0f);
+}
+
+// GetDeathReleasePosition() (0x005459c0): where a release would put the
+// player - the spirit healer SMSG_DEATH_RELEASE_LOC named.
+static int lua_GetDeathReleasePosition(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    uint32_t mapId = 0;
+    glm::vec3 at{0.0f};
+    const bool known = gh && gh->getDeathReleaseLocation(mapId, at) && mapId == gh->getCurrentMapId();
+    return pushMapUV(L, known, at.x, at.y, at.z);
+}
+
 static int lua_GetBattlefieldPosition(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetBattlefieldPosition(index)");   // 0x0054c2e0
     auto* gh = getGameHandler(L);
@@ -9903,8 +9936,8 @@ void registerSystemLuaAPI(lua_State* L) {
                 // own map, from getCorpseCanonicalPos and
                 // getDeathReleaseLocation. Handing the world map over means
                 // giving these the projection, not just filling them in.
-                {"GetCorpseMapPosition",     lua_GetBattlefieldPosition},
-                {"GetDeathReleasePosition",  lua_GetBattlefieldPosition},
+                {"GetCorpseMapPosition",     lua_GetCorpseMapPosition},
+                {"GetDeathReleasePosition",  lua_GetDeathReleasePosition},
                 {"GetNumBattlefieldVehicles", lua_GetNumBattlefieldVehicles},
                 {"GetBattlefieldVehicleInfo", lua_GetBattlefieldVehicleInfo},
                 {"GetChatWindowInfo",        lua_GetChatWindowInfo},
