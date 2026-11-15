@@ -5217,6 +5217,7 @@ void GameHandler::setArenaRosterShowOffline(bool show) {
 }
 
 void GameHandler::requestItemRefundInfo(uint64_t itemGuid) {
+    // 0x007089e0: asked once per item (the item's flag 0x4), CMSG_ITEM_REFUND_INFO(guid).
     if (itemGuid == 0) return;
     if (getState() != WorldState::IN_WORLD || !getSocket()) return;
     if (!itemRefundAsked_.insert(itemGuid).second) return;   // asked already
