@@ -4201,6 +4201,15 @@ void InventoryHandler::checkInbox() {
     owner_.getSocket()->send(GetMailListPacket::build(mailboxGuid_));
 }
 
+void InventoryHandler::refreshMailList() {
+    // After taking, returning or deleting a letter the open inbox is asked
+    // for again, without CheckInbox's once-a-minute throttle: the change was
+    // the player's own and the list has to show it.
+    if (!mailboxOpen_ || mailboxGuid_ == 0) return;
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    owner_.getSocket()->send(GetMailListPacket::build(mailboxGuid_));
+}
+
 void InventoryHandler::refuseSend(const std::string& reason, const char* logLine) {
     // The compose frame disables its Send button the moment it is pressed and
     // re-enables it only when it hears how the send went. A refusal on this
