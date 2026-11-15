@@ -4754,27 +4754,6 @@ const std::string& GameHandler::getSpellDescription(uint32_t spellId) const {
 }
 
 namespace {
-// Format a duration in seconds the way WoW tooltips do: "12 sec", "5 min", "1 hour".
-std::string formatSpellDurationSec(float sec) {
-    if (sec <= 0.0f) return {};
-    auto trim = [](float v) {
-        char buf[32];
-        if (v == static_cast<float>(static_cast<long>(v)))
-            snprintf(buf, sizeof(buf), "%ld", static_cast<long>(v));
-        else
-            snprintf(buf, sizeof(buf), "%.1f", v);
-        return std::string(buf);
-    };
-    if (sec >= 3600.0f && std::fmod(sec, 3600.0f) == 0.0f) {
-        float h = sec / 3600.0f;
-        return trim(h) + (h == 1.0f ? " hour" : " hours");
-    }
-    if (sec >= 60.0f) return trim(sec / 60.0f) + " min";
-    return trim(sec) + " sec";
-}
-} // namespace
-
-namespace {
 /// The least and the most effect `index` of a spell does at the player's
 /// level (0x007ff770). False for an unknown spell or index.
 bool spellEffectPointsOf(const GameHandler& gh, uint32_t spellId, int index, SpellEffectPoints& out) {
@@ -4787,6 +4766,55 @@ bool spellEffectPointsOf(const GameHandler& gh, uint32_t spellId, int index, Spe
     const std::size_t k = static_cast<std::size_t>(index);
     out = spellEffectPoints(e.effectBasePoints[k], e.effectDieSides[k], e.effectPointsPerLevel[k],
                             static_cast<int>(gh.getPlayerLevel()), e.baseLevel, e.maxLevel);
+    return true;
+}
+
+const GameHandler::SpellNameEntry* spellEntryOf(const GameHandler& gh, uint32_t spellId) {
+    if (spellId == 0) return nullptr;
+    gh.getSpellName(spellId);  // loads the cache
+    const auto& cache = gh.spellNameCacheRef();
+    const auto it = cache.find(spellId);
+    return it != cache.end() ? &it->second : nullptr;
+}
+
+/// A whole number through the player's talents for an op (0x007fdb50).
+int modifiedBy(const GameHandler& gh, uint32_t spellId, GameHandler::SpellModOp op, int value) {
+    const spell_mods::Sum mods = gh.getSpellModifiers(spellId, op);
+    return mods.any ? applySpellModifier(value, mods.flat, mods.pct) : value;
+}
+
+/// How long a spell lasts for this player, in milliseconds (0x00800a70):
+/// SpellDuration.dbc's row at the player's level, then the talents that
+/// lengthen it. Haste on a periodic spell's duration is not modelled.
+/// Zero for a spell without a row; negative for one that lasts until
+/// cancelled.
+int spellDurationFor(const GameHandler& gh, uint32_t spellId) {
+    const auto* e = spellEntryOf(gh, spellId);
+    if (!e) return 0;
+    const int ms = spellDurationMs(e->durationBaseMs, e->durationPerLevelMs, e->durationMaxMs,
+                                   static_cast<int>(gh.getPlayerLevel()), e->baseLevel);
+    return modifiedBy(gh, spellId, GameHandler::SpellModOp::Duration, ms);
+}
+
+/// An effect's period in milliseconds as $t reads it (0x00579e50): five
+/// seconds for a spell with ProcFlags bit 0, else EffectAmplitude through the
+/// talents' ActivationTime op.
+int spellPeriodFor(const GameHandler& gh, uint32_t spellId, int index) {
+    const auto* e = spellEntryOf(gh, spellId);
+    if (!e || index < 0 || index > 2) return 0;
+    if (e->procFlags & 1u) return 5000;
+    return modifiedBy(gh, spellId, GameHandler::SpellModOp::ActivationTime,
+                      e->effectAmplitudeMs[index]);
+}
+
+/// $o: the effect's least and most over the whole duration (0x00579e50).
+bool spellPeriodicPointsOf(const GameHandler& gh, uint32_t spellId, int index, SpellEffectPoints& out) {
+    if (!spellEffectPointsOf(gh, spellId, index, out)) return false;
+    const auto* e = spellEntryOf(gh, spellId);
+    if (!e) return false;
+    constexpr uint32_t kAttrEx5TickOnApply = 0x200;
+    out = spellPeriodicTotal(out, e->effectAmplitudeMs[index], spellDurationFor(gh, spellId),
+                             (e->attrEx5 & kAttrEx5TickOnApply) != 0);
     return true;
 }
 }  // namespace
@@ -4811,6 +4839,26 @@ SpellDescriptionContext GameHandler::descriptionContext(
     // for every spell in the game, so "$?s61331[${115}][...]" took the
     // talent's branch for anyone and Sinister Strike read 115% for a mage.
     ctx.knowsSpell = [this](uint32_t id) { return spellHandler_ && spellHandler_->hasKnownSpell(id); };
+    // $d in seconds, $t in milliseconds, and another spell's tokens
+    // (0x005782d0).
+    ctx.quantity = [this, spellId](uint32_t refId, char code, int index, double& out) {
+        const uint32_t target = refId != 0 ? refId : spellId;
+        if (!spellEntryOf(*this, target)) return false;
+        switch (code) {
+            case 'd': case 'D':
+                out = spellDurationFor(*this, target) * 0.001;
+                return true;
+            case 't': case 'T':
+                out = spellPeriodFor(*this, target, index);
+                return true;
+            default: {
+                SpellEffectPoints points;
+                if (!spellEffectPointsOf(*this, target, index, points)) return false;
+                out = (code == 'M') ? points.max : points.min;
+                return true;
+            }
+        }
+    };
     return ctx;
 }
 
@@ -4823,13 +4871,6 @@ std::string GameHandler::formatSpellDescription(uint32_t selfSpellId,
     const size_t n = raw.size();
     long lastValue = -1;  // drives $l plural selection
 
-    // Resolve a base-point magnitude ($o, and the value in "$/N;s1") for a
-    // spell + effect index: the least the effect does, without its sign.
-    auto basePoints = [&](uint32_t sid, int idx) -> long {
-        SpellEffectPoints points;
-        if (!spellEffectPointsOf(*this, sid, idx, points)) return LONG_MIN;
-        return std::labs(std::lround(points.min));
-    };
     // The client's own words for a spread: "%1$d bis %2$d" on a German one.
     auto spreadText = [](const char* key, const char* english) {
         if (auto* addons = core::Application::getInstance().getAddonManager()) {
@@ -4927,41 +4968,20 @@ std::string GameHandler::formatSpellDescription(uint32_t selfSpellId,
             }
         }
 
-        // Division token "$/N;<valueToken>" - e.g. "$/5;s1" is "s1 divided by 5"
-        // (food eat spells: "Restores $/5;s1 health per second").
-        if (next == '/') {
-            size_t k = i + 2;
-            long divisor = 0;
-            while (k < n && raw[k] >= '0' && raw[k] <= '9') { divisor = divisor * 10 + (raw[k] - '0'); ++k; }
-            if (k < n && raw[k] == ';' && divisor != 0) {
-                ++k;  // past ';'
-                uint32_t rid = 0; bool hr = false;
-                while (k < n && raw[k] >= '0' && raw[k] <= '9') { rid = rid * 10 + (raw[k] - '0'); hr = true; ++k; }
-                if (k < n) {
-                    char cd = raw[k++];
-                    int ix = 0;
-                    if (k < n && raw[k] >= '1' && raw[k] <= '3') { ix = raw[k] - '1'; ++k; }
-                    if (cd == 's' || cd == 'S' || cd == 'o' || cd == 'O' || cd == 'm' || cd == 'M') {
-                        long v = basePoints(hr ? rid : selfSpellId, ix);
-                        if (v != LONG_MIN) {
-                            long dv = v / divisor;
-                            out += std::to_string(dv);
-                            lastValue = dv;
-                            i = k;
-                            continue;
-                        }
-                    }
-                }
-            }
-            // Unparseable division token - strip through the terminating ';' if present.
-            size_t semi = raw.find(';', i + 2);
-            i = (semi != std::string::npos) ? semi + 1 : i + 2;
-            if (i < n && raw[i] == '%') ++i;
-            continue;
+        // "$/N;" or "$*N;" in front of a value token divides or multiplies it
+        // - "$/5;s1" is s1 a fifth (food: "Restores $/5;s1 health per
+        // second"), "$/1000;S" a thousandth with its fraction (0x00579e50).
+        size_t j = i + 1;
+        float factor = 1.0f;
+        if (next == '/' || next == '*') {
+            const size_t semi = raw.find(';', i + 2);
+            if (semi == std::string::npos) { out += c; ++i; continue; }
+            const int n = std::atoi(raw.substr(i + 2, semi - (i + 2)).c_str());
+            if (n != 0) factor = (next == '/') ? 1.0f / static_cast<float>(n) : static_cast<float>(n);
+            j = semi + 1;
         }
 
         // General token: $ [spellId] letter [effectIndex]
-        size_t j = i + 1;
         uint32_t refId = 0;
         bool hasRef = false;
         while (j < n && raw[j] >= '0' && raw[j] <= '9') {
@@ -4983,7 +5003,7 @@ std::string GameHandler::formatSpellDescription(uint32_t selfSpellId,
                 SpellEffectPoints points;
                 if (spellEffectPointsOf(*this, target, idx, points)) {
                     const SpellPointsText shown = formatSpellPoints(
-                        code, points,
+                        code, scaledSpellPoints(points, factor),
                         spreadText("INT_SPELL_POINTS_SPREAD_TEMPLATE", "%d to %d"),
                         spreadText("SPELL_POINTS_SPREAD_TEMPLATE", "%.1f to %.1f"));
                     out += shown.text;
@@ -4993,13 +5013,35 @@ std::string GameHandler::formatSpellDescription(uint32_t selfSpellId,
                 break;
             }
             case 'o': case 'O': {
-                long v = basePoints(target, idx);
-                if (v != LONG_MIN) { out += std::to_string(v); lastValue = v; resolved = true; }
+                // What a periodic effect does in all: each tick times the
+                // duration over the period, written as $s writes its points.
+                SpellEffectPoints total;
+                if (spellPeriodicPointsOf(*this, target, idx, total)) {
+                    const SpellPointsText shown = formatSpellPoints(
+                        's', scaledSpellPoints(total, factor),
+                        spreadText("INT_SPELL_POINTS_SPREAD_TEMPLATE", "%d to %d"),
+                        spreadText("SPELL_POINTS_SPREAD_TEMPLATE", "%.1f to %.1f"));
+                    out += shown.text;
+                    lastValue = shown.shown;
+                    resolved = true;
+                }
                 break;
             }
-            case 'd': {
-                std::string dur = formatSpellDurationSec(getSpellDuration(target));
-                if (!dur.empty()) { out += dur; resolved = true; }
+            case 'd': case 'D': {
+                // "5 Sek.", "1.50 Min.", "bis Abbruch" - the interface's own
+                // words for the duration (0x0061a9e0, 0x0061aee0).
+                if (spellEntryOf(*this, target)) {
+                    out += formatSpellDuration(spellDurationFor(*this, target), interfaceString);
+                    resolved = true;
+                }
+                break;
+            }
+            case 't': case 'T': {
+                // An effect's period in seconds: "alle 3 Sek.".
+                if (spellEntryOf(*this, target)) {
+                    out += formatSpellPeriod(spellPeriodFor(*this, target, idx));
+                    resolved = true;
+                }
                 break;
             }
             case 'z': {
@@ -5017,7 +5059,7 @@ std::string GameHandler::formatSpellDescription(uint32_t selfSpellId,
                 if (!home.empty()) { out += home; resolved = true; }
                 break;
             }
-            default: break;  // $h proc chance, $t period, $a radius, ... - not resolvable here
+            default: break;  // $h proc chance, $a radius, ... - not resolvable here
         }
 
         if (resolved) {

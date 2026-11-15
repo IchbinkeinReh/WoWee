@@ -5849,6 +5849,18 @@ public:
         /// Spell.dbc EffectRadiusIndex, kept for the radius above.
         uint32_t effectRadiusIndex[3] = {0, 0, 0};
         float durationSec = 0.0f;
+        /// Its SpellDuration.dbc row as it stands - base, growth per level
+        /// and maximum, in milliseconds, -1 for "until cancelled" - which
+        /// 0x00800a70 works the tooltip's $d out of. All zero without a row.
+        int32_t durationBaseMs = 0;
+        int32_t durationPerLevelMs = 0;
+        int32_t durationMaxMs = 0;
+        /// Spell.dbc EffectAmplitude (+0x188): each effect's period in
+        /// milliseconds, for $t and $o.
+        int32_t effectAmplitudeMs[3] = {0, 0, 0};
+        /// Spell.dbc ProcFlags (+0x88): bit 0 makes $t five seconds
+        /// (0x00579e50).
+        uint32_t procFlags = 0;
         uint32_t spellVisualId = 0;
         /// Spell.dbc's second SpellVisual (+0x210), shown under violenceLevel
         /// 2 (0x007fa290).

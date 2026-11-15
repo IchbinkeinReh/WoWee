@@ -239,3 +239,152 @@ TEST_CASE("Frostbolt's talent chain is ten deep and still evaluates", "[spell][d
     REQUIRE(evaluateSpellExpression("$m2*$<mult>", ctx, lo));
     CHECK(lo == Catch::Approx(20.0));
 }
+
+// ---------------------------------------------------------------------------
+// $o: each tick times the duration over the period (0x00579e50). Rows are
+// Spell.dbc / SpellDuration.dbc 3.3.5a (12340), deDE.
+
+namespace {
+std::string shownTotal(const SpellEffectPoints& tick, int amplitudeMs, int durationMs,
+                       bool tickOnApply = false) {
+    return shown('s', spellPeriodicTotal(tick, amplitudeMs, durationMs, tickOnApply));
+}
+}  // namespace
+
+TEST_CASE("Fireball rank 1 burns for 2 in all, not the tick's 1", "[spell][description]") {
+    // 133 Feuerball rank 1: "$d lang insgesamt $o2 zusaetzlichen Feuerschaden".
+    // Effect 2 is BasePoints 0, DieSides 1, EffectAmplitude 2000; DurationIndex
+    // 35 is 4000 ms.
+    const SpellEffectPoints tick = spellEffectPoints(0, 1, 0.0f, 80, 1, 5);
+    CHECK(shown('s', tick) == "1");
+    CHECK(shownTotal(tick, 2000, 4000) == "2");
+}
+
+TEST_CASE("the warlock's and priest's first damage over time add up", "[spell][description]") {
+    // 589 Schattenwort: Schmerz rank 1: BasePoints 4, every 3000 ms for 18000.
+    CHECK(shownTotal(spellEffectPoints(4, 1, 0.0f, 80, 4, 9), 3000, 18000) == "30");
+    // 172 Verderbnis rank 1: BasePoints 9, every 3000 ms for 12000.
+    CHECK(shownTotal(spellEffectPoints(9, 1, 0.0f, 80, 4, 9), 3000, 12000) == "40");
+    // 348 Feuerbrand rank 1: BasePoints 3, every 3000 ms for 15000.
+    CHECK(shownTotal(spellEffectPoints(3, 1, 0.0f, 80, 1, 5), 3000, 15000) == "20");
+}
+
+TEST_CASE("a first tick on landing counts one period more", "[spell][description]") {
+    // 35387 Gift spucken: AttributesEx5 0x200, BasePoints 0, DieSides 3, 0.2
+    // a level from 1, every 2000 ms for 8000 - five ticks, not four.
+    const SpellEffectPoints tick = spellEffectPoints(0, 3, 0.2f, 1, 1, 0);
+    CHECK(shownTotal(tick, 2000, 8000, true) == "5 bis 15");
+    CHECK(shownTotal(tick, 2000, 8000, false) == "4 bis 12");
+}
+
+TEST_CASE("no period is five seconds, a negative one or no duration nothing",
+          "[spell][description]") {
+    const SpellEffectPoints tick{10.0f, 10.0f};
+    CHECK(shownTotal(tick, 0, 15000) == "30");
+    CHECK(shownTotal(tick, -1, 15000) == "0");
+    CHECK(shownTotal(tick, 3000, 0) == "0");
+    CHECK(shownTotal(tick, 3000, -1) == "0");
+}
+
+// ---------------------------------------------------------------------------
+// $d and $t: the interface's own words (0x0061a9e0, 0x0061aee0). The deDE
+// GlobalStrings as the client ships them.
+
+namespace {
+std::string deText(const char* key, const char* enUS) {
+    static const std::pair<const char*, const char*> kDe[] = {
+        {"INT_SPELL_DURATION_DAYS", "%d |4Tag:Tage;"},
+        {"INT_SPELL_DURATION_HOURS", "%d |4Stunde:Stunden;"},
+        {"INT_SPELL_DURATION_MIN", "%d Min."},
+        {"INT_SPELL_DURATION_SEC", "%d Sek."},
+        {"SPELL_DURATION_DAYS", "%.2f |4Tag:Tage;"},
+        {"SPELL_DURATION_HOURS", "%.2f |4Stunde:Stunden;"},
+        {"SPELL_DURATION_MIN", "%.2f Min."},
+        {"SPELL_DURATION_SEC", "%.2f Sek."},
+        {"SPELL_DURATION_UNTIL_CANCELLED", "bis Abbruch"},
+    };
+    for (const auto& [k, v] : kDe) {
+        if (std::string(k) == key) return v;
+    }
+    return enUS;
+}
+std::string enText(const char*, const char* enUS) { return enUS; }
+}  // namespace
+
+TEST_CASE("Frostbolt slows for 5 Sek. on a German client, not 5 sec", "[spell][description]") {
+    // 116 Frostblitz rank 1: DurationIndex 28, 5000 ms.
+    CHECK(formatSpellDuration(5000, deText) == "5 Sek.");
+    CHECK(formatSpellDuration(5000, enText) == "5 sec");
+    // 133 Feuerball rank 1: 4000 ms; 589 Schattenwort: Schmerz: 18000 ms.
+    CHECK(formatSpellDuration(4000, deText) == "4 Sek.");
+    CHECK(formatSpellDuration(18000, deText) == "18 Sek.");
+}
+
+TEST_CASE("minutes, hours and days take their own words", "[spell][description]") {
+    CHECK(formatSpellDuration(60000, deText) == "1 Min.");      // 134 Feuerschild
+    CHECK(formatSpellDuration(600000, deText) == "10 Min.");    // 131 Wasseratmung
+    CHECK(formatSpellDuration(1800000, deText) == "30 Min.");   // 168 Frostruestung
+    CHECK(formatSpellDuration(3600000, deText) == "1 Stunde");  // 673 Geringe Ruestung
+    CHECK(formatSpellDuration(7200000, deText) == "2 Stunden"); // 24382 Zanzas Geist
+    CHECK(formatSpellDuration(86400000, deText) == "1 Tag");
+    CHECK(formatSpellDuration(2 * 86400000, deText) == "2 Tage");
+    CHECK(formatSpellDuration(7200000, enText) == "2 hrs");
+}
+
+TEST_CASE("a duration that is not whole in its unit keeps two decimals", "[spell][description]") {
+    CHECK(formatSpellDuration(2500, deText) == "2.50 Sek.");   // 8150 Donnerkracher
+    CHECK(formatSpellDuration(90000, deText) == "1.50 Min.");  // 4941 Steinschild
+    CHECK(formatSpellDuration(5400000, deText) == "1.50 Stunden");
+}
+
+TEST_CASE("no duration, or -1, lasts until cancelled", "[spell][description]") {
+    CHECK(formatSpellDuration(-1, deText) == "bis Abbruch");  // 1908 Maechtige Heilung
+    CHECK(formatSpellDuration(0, deText) == "bis Abbruch");
+    CHECK(formatSpellDuration(0, enText) == "until cancelled");
+}
+
+TEST_CASE("SpellDuration grows by level and stops at its maximum", "[spell][description]") {
+    CHECK(spellDurationMs(5000, 0, 5000, 80, 4) == 5000);
+    CHECK(spellDurationMs(10000, 1000, 15000, 7, 4) == 13000);
+    CHECK(spellDurationMs(10000, 1000, 15000, 80, 4) == 15000);
+    CHECK(spellDurationMs(-1, 0, -1, 80, 1) == -1);
+    // A talent's flat and percent (0x007fdb50): +3000 ms, then 120%.
+    CHECK(applySpellModifier(12000, 3000, 120) == 18000);
+    CHECK(applySpellModifier(7, 0, 50) == 3);
+}
+
+TEST_CASE("$t is whole seconds, or seconds with two decimals", "[spell][description]") {
+    CHECK(formatSpellPeriod(3000) == "3");     // 134 Feuerschild
+    CHECK(formatSpellPeriod(10000) == "10");   // 8275 Vergifteter Schuss
+    CHECK(formatSpellPeriod(250) == "0.25");   // 49981 Maschinengewehr
+    CHECK(formatSpellPeriod(1500) == "1.50");  // 52632 Humanoiden verschlingen
+}
+
+TEST_CASE("an expression reads $d in seconds, $t in ms and other spells' tokens",
+          "[spell][description]") {
+    SpellDescriptionContext ctx;
+    ctx.quantity = [](uint32_t spellId, char code, int index, double& out) {
+        // 1510 Salve: 6000 ms. 72368: m1 7, period 1000 ms, 10000 ms.
+        if (spellId == 1510 && code == 'd') { out = 6.0; return true; }
+        if (spellId == 72368 && code == 'm' && index == 0) { out = 7.0; return true; }
+        if (spellId == 72368 && code == 't' && index == 0) { out = 1000.0; return true; }
+        if (spellId == 72368 && code == 'd') { out = 10.0; return true; }
+        if (spellId == 0 && code == 'd') { out = 4.0; return true; }
+        return false;
+    };
+    double v = 0.0;
+    REQUIRE(evaluateSpellExpression("$1510d/6", ctx, v));
+    CHECK(v == Catch::Approx(1.0));
+    REQUIRE(evaluateSpellExpression("$72368m1*1000*$72368d/$72368t1", ctx, v));
+    CHECK(v == Catch::Approx(70.0));
+    REQUIRE(evaluateSpellExpression("$d*2", ctx, v));
+    CHECK(v == Catch::Approx(8.0));
+    CHECK_FALSE(evaluateSpellExpression("$999m1", ctx, v));
+}
+
+TEST_CASE("$/N; and $*N; scale both ends", "[spell][description]") {
+    // "$/10;s1" over 100..100, "$/1000;S" keeps the fraction.
+    CHECK(shown('s', scaledSpellPoints({100.0f, 100.0f}, 0.1f)) == "10");
+    CHECK(shown('S', scaledSpellPoints({1500.0f, 1500.0f}, 0.001f)) == "1.5");
+    CHECK(shown('s', scaledSpellPoints({3.0f, 3.0f}, 10.0f)) == "30");
+}

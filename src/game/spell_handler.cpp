@@ -6130,6 +6130,11 @@ void SpellHandler::loadSpellNameCache() const {
                     "extracted and does not refresh itself.");
     }
     const uint32_t aura0Field = spellL ? spellL->field("EffectApplyAuraName0") : 0xFFFFFFFF;
+    // EffectAmplitude follows EffectApplyAuraName in every layout; a data dir
+    // copied before it was named still finds it.
+    uint32_t amplitude0Field = spellL ? spellL->tryField("EffectAmplitude0") : 0xFFFFFFFF;
+    if (amplitude0Field == 0xFFFFFFFF && aura0Field != 0xFFFFFFFF) amplitude0Field = aura0Field + 3;
+    const uint32_t procFlagsField = spellL ? spellL->tryField("ProcFlags") : 0xFFFFFFFF;
     const uint32_t misc0Field = spellL ? spellL->tryField("EffectMiscValue0") : 0xFFFFFFFF;
     const uint32_t miscB0Field = spellL ? spellL->tryField("EffectMiscValueB0") : 0xFFFFFFFF;
     const uint32_t aura1Field = spellL ? spellL->field("EffectApplyAuraName1") : 0xFFFFFFFF;
@@ -6220,6 +6225,7 @@ void SpellHandler::loadSpellNameCache() const {
                 if (familyFlagsField != 0xFFFFFFFF && familyFlagsField + w < fieldCount)
                     entry.spellFamilyFlags[w] = dbc->getUInt32(i, familyFlagsField + w);
             }
+            if (procFlagsField < fieldCount) entry.procFlags = dbc->getUInt32(i, procFlagsField);
             if (targetsField != 0xFFFFFFFF) {
                 entry.targetFlags = dbc->getUInt32(i, targetsField);
             }
@@ -6253,6 +6259,10 @@ void SpellHandler::loadSpellNameCache() const {
                 }
                 if (auraFields[effect] != 0xFFFFFFFF && auraFields[effect] < fieldCount) {
                     entry.effectAuraIds[effect] = dbc->getUInt32(i, auraFields[effect]);
+                }
+                if (amplitude0Field != 0xFFFFFFFF && amplitude0Field + effect < fieldCount) {
+                    entry.effectAmplitudeMs[effect] = static_cast<int32_t>(
+                        dbc->getUInt32(i, amplitude0Field + static_cast<uint32_t>(effect)));
                 }
                 // The three effects' misc values follow each other.
                 if (misc0Field != 0xFFFFFFFF && misc0Field + effect < fieldCount)
@@ -6298,18 +6308,31 @@ void SpellHandler::loadSpellNameCache() const {
     }
     auto durDbc = am->loadDBC("SpellDuration.dbc");
     if (durDbc && durDbc->isLoaded()) {
-        std::unordered_map<uint32_t, float> durMap;
+        struct DurationRow { int32_t base, perLevel, max; };
+        std::unordered_map<uint32_t, DurationRow> durMap;
+        const bool hasRowShape = durDbc->getFieldCount() >= 4;
         for (uint32_t di = 0; di < durDbc->getRecordCount(); ++di) {
             uint32_t durId = durDbc->getUInt32(di, 0);
-            int32_t baseMs = static_cast<int32_t>(durDbc->getUInt32(di, 1));
-            if (baseMs > 0 && baseMs < 100000000)
-                durMap[durId] = baseMs / 1000.0f;
+            const int32_t baseMs = static_cast<int32_t>(durDbc->getUInt32(di, 1));
+            DurationRow row{baseMs, 0, baseMs};
+            if (hasRowShape) {
+                row.perLevel = static_cast<int32_t>(durDbc->getUInt32(di, 2));
+                row.max = static_cast<int32_t>(durDbc->getUInt32(di, 3));
+            }
+            durMap[durId] = row;
         }
         for (auto& [sid, entry] : owner_.spellNameCacheRef()) {
             uint32_t durIdx = static_cast<uint32_t>(entry.durationSec);
             if (durIdx > 0) {
                 auto it = durMap.find(durIdx);
-                entry.durationSec = (it != durMap.end()) ? it->second : 0.0f;
+                const DurationRow* row = (it != durMap.end()) ? &it->second : nullptr;
+                entry.durationSec = (row && row->base > 0 && row->base < 100000000)
+                    ? row->base / 1000.0f : 0.0f;
+                if (row) {
+                    entry.durationBaseMs = row->base;
+                    entry.durationPerLevelMs = row->perLevel;
+                    entry.durationMaxMs = row->max;
+                }
             }
         }
     }

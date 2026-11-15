@@ -1,5 +1,7 @@
 #include "game/spell_description_eval.hpp"
 
+#include "ui/plural_escape.hpp"
+
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -135,7 +137,16 @@ bool Parser::value(const std::string& text, std::size_t& i, double& out) {
         return nested.whole(known ? thenBody : elseBody, out);
     }
 
-    // $m1 / $M1 / $s1 / $o1 - the spell's own magnitudes.
+    // $m1 / $M1 / $s1 / $o1 - the spell's own magnitudes - with another
+    // spell's number in front for that spell's: "${$72368m1*1000*$72368d/
+    // $72368t1}". $d is the duration in seconds, $t1 the period in
+    // milliseconds (0x005782d0).
+    uint32_t refId = 0;
+    while (i < text.size() && std::isdigit(static_cast<unsigned char>(text[i]))) {
+        refId = refId * 10 + static_cast<uint32_t>(text[i] - '0');
+        ++i;
+    }
+    if (i >= text.size()) return false;
     const char code = text[i++];
     int index = 0;
     if (i < text.size() && text[i] >= '1' && text[i] <= '3') {
@@ -144,7 +155,10 @@ bool Parser::value(const std::string& text, std::size_t& i, double& out) {
     }
     switch (code) {
         case 's': case 'S': case 'm': case 'M': case 'o': case 'O':
+            if (refId != 0) return ctx.quantity && ctx.quantity(refId, code, index, out);
             return ctx.magnitude && ctx.magnitude(code, index, out);
+        case 'd': case 'D': case 't': case 'T':
+            return ctx.quantity && ctx.quantity(refId, code, index, out);
         default:
             // $AP, $b1, $PL and the rest are quantities this client does not
             // keep. Refusing is better than standing in a number for them:
@@ -285,6 +299,79 @@ SpellPointsText formatSpellPoints(char code, const SpellEffectPoints& points,
     }
     r.text = formatSpellNumbers(intSpreadTemplate, {static_cast<double>(loN), static_cast<double>(hiN)});
     return r;
+}
+
+int spellDurationMs(int baseMs, int perLevelMs, int maxMs, int casterLevel, int baseLevel) {
+    const int grown = (casterLevel - baseLevel) * perLevelMs + baseMs;
+    return grown < maxMs ? grown : maxMs;
+}
+
+bool spellTimeIsWhole(float ms) {
+    float v;
+    if (ms >= 8.64e7f) v = ms * 1.1574074e-08f;        // days
+    else if (ms >= 3.6e6f) v = ms * 2.777778e-07f;     // hours
+    else if (ms >= 60000.0f) v = ms * 1.6666667e-05f;  // minutes
+    else v = ms * 0.001f;                              // seconds
+    return v - std::floor(v) < 0.01f;
+}
+
+namespace {
+struct DurationKey {
+    const char* key;
+    const char* enUS;
+};
+}  // namespace
+
+std::string formatSpellDuration(int ms, const SpellTextSource& text) {
+    if (ms < 1) return text("SPELL_DURATION_UNTIL_CANCELLED", "until cancelled");
+    constexpr int kMinute = 60000, kHour = kMinute * 60, kDay = kHour * 24;
+    std::string formatted;
+    if (spellTimeIsWhole(static_cast<float>(ms))) {
+        // 0x0061a9e0, rounding down.
+        DurationKey k{"INT_SPELL_DURATION_SEC", "%d sec"};
+        int n = ms / 1000;
+        if (ms >= kDay) {
+            n = ms / kDay; k = {"INT_SPELL_DURATION_DAYS", "%d |4day:days;"};
+        } else if (ms >= kHour) {
+            n = ms / kHour;
+            if (n == 24) { n = 1; k = {"INT_SPELL_DURATION_DAYS", "%d |4day:days;"}; }
+            else k = {"INT_SPELL_DURATION_HOURS", "%d |4hour:hrs;"};
+        } else if (ms >= kMinute) {
+            n = ms / kMinute;
+            if (n == 60) { n = 1; k = {"INT_SPELL_DURATION_HOURS", "%d |4hour:hrs;"}; }
+            else k = {"INT_SPELL_DURATION_MIN", "%d min"};
+        }
+        formatted = formatSpellNumbers(text(k.key, k.enUS), {static_cast<double>(n)});
+    } else {
+        // 0x0061aee0: the same units, with a fraction.
+        const float f = static_cast<float>(ms);
+        DurationKey k{"SPELL_DURATION_SEC", "%.2f sec"};
+        float v = f * 0.001f;
+        if (ms >= kDay) { v = f / 8.64e7f; k = {"SPELL_DURATION_DAYS", "%.2f |4day:days;"}; }
+        else if (ms >= kHour) { v = f / 3.6e6f; k = {"SPELL_DURATION_HOURS", "%.2f |4hour:hrs;"}; }
+        else if (ms >= kMinute) { v = f * 1.6666667e-05f; k = {"SPELL_DURATION_MIN", "%.2f min"}; }
+        formatted = formatSpellNumbers(text(k.key, k.enUS), {static_cast<double>(v)});
+    }
+    return ui::resolvePluralEscapes(formatted);
+}
+
+std::string formatSpellPeriod(int ms) {
+    char buf[32];
+    if (spellTimeIsWhole(static_cast<float>(ms)))
+        std::snprintf(buf, sizeof(buf), "%d", ms / 1000);
+    else
+        std::snprintf(buf, sizeof(buf), "%.2f", static_cast<double>(static_cast<float>(ms) * 0.001f));
+    return buf;
+}
+
+SpellEffectPoints spellPeriodicTotal(const SpellEffectPoints& tick, int amplitudeMs,
+                                     int durationMs, bool tickOnApply) {
+    int period = amplitudeMs;
+    if (period == 0) period = 5000;
+    if (period < 0 || durationMs <= 0) return {};
+    const float span = static_cast<float>((tickOnApply ? period : 0) + durationMs);
+    const float p = static_cast<float>(period);
+    return {tick.min * span / p, tick.max * span / p};
 }
 
 bool spellDeclarationOf(const SpellDescriptionContext& ctx,

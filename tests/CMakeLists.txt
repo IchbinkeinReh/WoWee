@@ -239,7 +239,8 @@ wowee_add_test(test_hill_climbing
 # SpellDescriptionVariables.dbc and the formatter had no branch for "$<".
 wowee_add_test(test_spell_description_eval
     SOURCES test_spell_description_eval.cpp
-            ${CMAKE_SOURCE_DIR}/src/game/spell_description_eval.cpp)
+            ${CMAKE_SOURCE_DIR}/src/game/spell_description_eval.cpp
+            ${CMAKE_SOURCE_DIR}/src/ui/plural_escape.cpp)
 
 # ── test_app_lifecycle ──────────────────────────────────────
 # What the client decides when Android sends it to the background and back,
