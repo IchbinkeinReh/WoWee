@@ -8315,7 +8315,7 @@ void SpellHandler::handleItemEnchantTimeUpdate(network::Packet& packet) {
                            [enchSlot](const GameHandler::TempEnchantTimer& t) { return t.slot == enchSlot; }),
             owner_.tempEnchantTimersRef().end());
     } else {
-        uint64_t expireMs = nowMs + static_cast<uint64_t>(durationSec) * 1000u;
+        uint64_t expireMs = nowMs + static_cast<uint64_t>(durationSec) * 1000u;   // 0x007070e0
         bool found = false;
         for (auto& t : owner_.tempEnchantTimersRef()) {
             if (t.slot == enchSlot) { t.expireMs = expireMs; found = true; break; }
