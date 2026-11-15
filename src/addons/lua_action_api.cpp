@@ -4585,6 +4585,12 @@ void registerActionLuaAPI(lua_State* L) {
                 // zero, which is the only thing between them.
                 {"CancelItemTempEnchantment", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
+            // 0x008021d0: once there is a player, anything but a number that
+            // truncates to 1 or 2 is the usage line.
+            if (gh && gh->isInWorld()) {
+                const int slot = lua_isnumber(L, 1) ? static_cast<int>(lua_tonumber(L, 1)) : 0;
+                if (slot != 1 && slot != 2) return luaL_error(L, "Usage: CancelItemTempEnchantment(slot)");
+            }
             const int hand = static_cast<int>(luaL_optnumber(L, 1, 0));
             if (gh && (hand == 1 || hand == 2)) {
                 gh->cancelTempEnchantment(static_cast<uint8_t>(hand - 1));

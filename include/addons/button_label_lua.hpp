@@ -50,6 +50,8 @@ function mt:GetNormalFontObject()
 end
 
 function mt:SetFontString(fs)
+    -- 0x009777c0: anything but a font string object is the usage line.
+    if type(fs) ~= 'table' then __WoweeUsageError(self, 'Usage: %s:SetFontString(fontstring)') end
     if fs == self.__fontString then return end
     self.__fontString = fs
     if not fs then return end

@@ -1353,6 +1353,11 @@ int lua_Model_SetRotation(lua_State* L) {
     if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: SetRotation(rotation (in radians))");   // 0x00597a10
     return lua_Model_SetFacing(L);
 }
+/// Model:SetFacing(facing) (0x009606e0): a number, or the usage line.
+static int lua_Model_SetFacingMethod(lua_State* L) {
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetFacing(facing)", frameNameOnStack(L, 1));
+    return lua_Model_SetFacing(L);
+}
 int lua_Model_GetFacing(lua_State* L) {
     const auto* w = widgetOf(L, 1);
     lua_pushnumber(L, w ? w->modelFacing : 0.0);
@@ -1394,6 +1399,8 @@ int lua_Model_GetPosition(lua_State* L) {
     return 3;
 }
 int lua_Model_SetModelScale(lua_State* L) {
+    // 0x00960760: a number, or a usage line that names the method SetScale.
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetScale(scale)", frameNameOnStack(L, 1));
     if (auto* w = widgetOf(L, 1)) {
         const float scale = static_cast<float>(luaL_optnumber(L, 2, 1.0));
         if (scale > 0.0f) w->modelScale = scale;
@@ -1502,7 +1509,8 @@ int lua_Model_GetFogColor(lua_State* L) {
 int lua_Model_SetFogNear(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
-    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetFogNear(value)", w->name.c_str());
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetFogNear(value)",
+                                         w->name.empty() ? "<unnamed>" : w->name.c_str());   // 0x009612d0
     w->modelFogNear = static_cast<float>(lua_tonumber(L, 2));
     return 0;
 }
@@ -1514,7 +1522,8 @@ int lua_Model_GetFogNear(lua_State* L) {
 int lua_Model_SetFogFar(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
-    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetFogFar(value)", w->name.c_str());
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetFogFar(value)",
+                                         w->name.empty() ? "<unnamed>" : w->name.c_str());   // 0x009613a0
     w->modelFogFar = static_cast<float>(lua_tonumber(L, 2));
     return 0;
 }
@@ -1744,6 +1753,15 @@ const char* usageName(lua_State* L, int index) {
     const auto* w = widgetOf(L, index);
     return (w && !w->name.empty()) ? w->name.c_str() : "<unnamed>";
 }
+/// The client's word compare for the keywords its setters take (0x0076e780
+/// with no length): equal ignoring ASCII case.
+bool sameWord(const char* a, const char* b) {
+    for (; *a && *b; ++a, ++b) {
+        if (std::toupper(static_cast<unsigned char>(*a)) != std::toupper(static_cast<unsigned char>(*b)))
+            return false;
+    }
+    return *a == *b;
+}
 }  // namespace
 
 // SetWidth(width) / SetHeight(height) (0x0049d480, 0x0049d620): a number, or
@@ -1819,6 +1837,7 @@ int lua_Region_GetTextWidth(lua_State* L) {
 // apply the width immediately rather than at the next layout. Ours sizes
 // tooltips every frame, so there is nothing for it to force.
 int lua_Frame_SetMinimumWidth(lua_State* L) {
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetMinimumWidth(width [,force])", usageName(L, 1));   // 0x0061d040
     if (auto* w = widgetOf(L, 1)) {
         w->tooltipMinWidth = static_cast<float>(luaL_optnumber(L, 2, 0.0));
     }
@@ -2482,6 +2501,7 @@ float scrollOffsetArg(lua_State* L, int index) {
 
 int lua_ScrollFrame_SetVerticalScroll(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetVerticalScroll(offset)", usageName(L, 1));   // 0x00972560
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     if (!tree || id == 0) return 0;
@@ -2501,6 +2521,7 @@ int lua_ScrollFrame_SetVerticalScroll(lua_State* L) {
 }
 int lua_ScrollFrame_SetHorizontalScroll(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetHorizontalScroll(offset)", usageName(L, 1));   // 0x00972490
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     if (!tree || id == 0) return 0;
@@ -2583,11 +2604,14 @@ int lua_CheckButton_GetChecked(lua_State* L) {
 int lua_Button_SetButtonState(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
-    const std::string state = luaL_optstring(L, 2, "NORMAL");
+    // 0x00977280: one of DISABLED, NORMAL or PUSHED in any case (0x00976fd0),
+    // and anything else - no argument among it - the usage line.
+    const char* state = lua_isstring(L, 2) ? lua_tostring(L, 2) : nullptr;
     using F = wowee::ui::Widget::Forced;
-    if      (state == "PUSHED")   w->forcedState = F::Pushed;
-    else if (state == "DISABLED") w->forcedState = F::Disabled;
-    else                          w->forcedState = F::Normal;
+    if      (state && sameWord(state, "PUSHED"))   w->forcedState = F::Pushed;
+    else if (state && sameWord(state, "DISABLED")) w->forcedState = F::Disabled;
+    else if (state && sameWord(state, "NORMAL"))   w->forcedState = F::Normal;
+    else return luaL_error(L, "Usage: %s:SetButtonState(\"state\", lock)", usageName(L, 1));
     return 0;
 }
 int lua_Button_GetButtonState(lua_State* L) {
@@ -2638,6 +2662,10 @@ int lua_Frame_SetWheelEnabled(lua_State* L) {
 int lua_MessageFrame_AddMessage(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
+    // A scrolling message frame (0x00972f20) refuses anything but text with
+    // its usage line; a plain message frame (0x009747c0) has no such line.
+    if (sameWord(w->objectType.c_str(), "ScrollingMessageFrame") && !lua_isstring(L, 2))
+        return luaL_error(L, "Usage: %s:AddMessage(\"text\", [r, g, b,] typeID, backFill, accessID, extraData)", usageName(L, 1));
     wowee::ui::Widget::Message m;
     // The same escape a label gets. Chat and the error frame carry counted
     // strings too - "you may not do that for another %d |4second:seconds;" -
@@ -2692,6 +2720,7 @@ int lua_MessageFrame_AddMessage(lua_State* L) {
 /// came back nil, and the next line read a field off it. Opening a whisper in
 /// its own window raised on the first message it tried to carry.
 int lua_MessageFrame_GetMessageInfo(lua_State* L) {
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:GetMessageInfo(index[, accessID])", usageName(L, 1));   // 0x00973150
     const auto* w = widgetOf(L, 1);
     const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
     if (!w || index < 1) return 0;
@@ -2709,7 +2738,10 @@ int lua_MessageFrame_GetMessageInfo(lua_State* L) {
     } else if (index <= static_cast<int>(w->messages.size())) {
         found = &w->messages[static_cast<size_t>(index) - 1];
     }
-    if (!found) return 0;
+    // 0x00973150: no such line is an error, worded with the zero-based index.
+    if (!found)
+        return luaL_error(L, "%s:GetMessageInfo - A line with accessID %d and index %d does not exist.",
+                          usageName(L, 1), static_cast<int>(lua_tointeger(L, 3)), index - 1);
     const auto& m = *found;
     lua_pushstring(L, m.text.c_str());
     lua_pushnumber(L, m.accessId);
@@ -2726,6 +2758,7 @@ int lua_MessageFrame_GetMessageInfo(lua_State* L) {
 /// Without this they stayed in both, so a conversation pulled out of the main
 /// window appeared twice.
 int lua_MessageFrame_RemoveMessagesByAccessID(lua_State* L) {
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:RemoveMessagesByAccessID(accessID)", usageName(L, 1));   // 0x00973270
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
     const double id = luaL_optnumber(L, 2, 0.0);
@@ -2875,6 +2908,8 @@ int lua_Cooldown_SetDrawEdge(lua_State* L) {
 }
 
 int lua_MessageFrame_SetTimeVisible(lua_State* L) {
+    // 0x00973930 (scrolling) and 0x00974620 (plain) say the same.
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetTimeVisible(seconds)", usageName(L, 1));
     auto* w = widgetOf(L, 1);
     if (w) w->messageDuration = static_cast<float>(luaL_optnumber(L, 2, 0.0));
     return 0;
@@ -2885,14 +2920,20 @@ int lua_MessageFrame_GetTimeVisible(lua_State* L) {
     return 1;
 }
 int lua_MessageFrame_SetFadeDuration(lua_State* L) {
+    // 0x00973a00 (scrolling) and 0x009746f0 (plain) say the same.
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetFadeDuration(seconds)", usageName(L, 1));
     auto* w = widgetOf(L, 1);
     if (w) w->messageFadeDuration = static_cast<float>(luaL_optnumber(L, 2, 3.0));
     return 0;
 }
 int lua_MessageFrame_SetInsertMode(lua_State* L) {
-    auto* w = widgetOf(L, 1);
-    const char* mode = luaL_optstring(L, 2, "BOTTOM");
-    if (w) w->messagesInsertTop = (mode && std::string(mode) == "TOP");
+    // 0x00973b10 (scrolling) and 0x00974380 (plain): TOP or BOTTOM in any
+    // case, and anything else - no argument among it - the usage line.
+    const char* mode = lua_isstring(L, 2) ? lua_tostring(L, 2) : nullptr;
+    const bool top = mode && sameWord(mode, "TOP");
+    if (!top && !(mode && sameWord(mode, "BOTTOM")))
+        return luaL_error(L, "Usage: %s:SetInsertMode(\"TOP\" or \"BOTTOM\")", usageName(L, 1));
+    if (auto* w = widgetOf(L, 1)) w->messagesInsertTop = top;
     return 0;
 }
 
@@ -2960,6 +3001,7 @@ int lua_Tooltip_AddLine(lua_State* L) {
 /// A no-op answered it, so the tooltip was correct and the key was missing,
 /// which is the kind of absence nobody reports.
 int lua_Tooltip_AppendText(lua_State* L) {
+    if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:AppendText(\"text\")", usageName(L, 1));   // 0x0061ee90
     auto* w = widgetOf(L, 1);
     const char* text = luaL_optstring(L, 2, "");
     if (!w || !text || !*text || w->tooltipLines.empty()) return 0;
@@ -3229,6 +3271,8 @@ int lua_Tooltip_SetText(lua_State* L) {
     // tooltip that sometimes had no title.
     const bool isTooltipFrame = w && (w->isTooltip || w->objectType == "GameTooltip");
     if (!isTooltipFrame) { lua_pushboolean(L, 0); return 1; }
+    // 0x006204e0: the text must be a string.
+    if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:SetText(\"text\" [, color])", usageName(L, 1));
     w->isTooltip = true;
     w->tooltipLines.clear();
     // SetText starts a tooltip over, so whatever it was showing is no longer
@@ -4495,6 +4539,10 @@ static std::string withPlural(std::string text, int n) {
 /// white and a debuff in red, described it with the spell's description, and
 /// counted down in English seconds.
 int lua_Tooltip_SetUnitAura(lua_State* L) {
+    // 0x00626240 (through 0x006110a0 from the second argument): a unit text,
+    // then an index or a name - a number is also a string to that test.
+    if (!lua_isstring(L, 2) || !lua_isstring(L, 3))
+        return luaL_error(L, "Usage: %s:SetUnitAura(\"unit\", [index] or [\"name\", \"rank\"][, \"filter\"])", usageName(L, 1));
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
     if (!w || !gh) { lua_pushboolean(L, 0); return 1; }
@@ -4604,6 +4652,7 @@ int lua_Tooltip_SetGlyph(lua_State* L) {
 /// binding already does - SMSG_LFG_PLAYER_REWARD carries the item ids and this
 /// client has been parsing them. Without it the icon had an empty box over it.
 int lua_Tooltip_SetLFGCompletionReward(lua_State* L) {
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: Tooltip:SetLFGCompletionReward(lootIndex)");   // 0x00630b90
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
@@ -4631,6 +4680,7 @@ int lua_Tooltip_SetLFGCompletionReward(lua_State* L) {
 /// item nobody can name. An item the player no longer holds resolves to no id
 /// and is called out in red, which is the whole reason to hover a set.
 int lua_Tooltip_SetEquipmentSet(lua_State* L) {
+    if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:SetEquipmentSet(\"setName\")", usageName(L, 1));   // 0x006264d0
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
     const char* wanted = luaL_optstring(L, 2, "");
@@ -4833,6 +4883,10 @@ int lua_Tooltip_SetTradeSkillItem(lua_State* L) {
 /// question: a tooltip set for "target" is describing "mouseover" whenever
 /// they are the same unit, and the caller is asking exactly that.
 static int lua_Tooltip_IsUnit(lua_State* L) {
+    // 0x0061da20. Its usage line hands luaL_error no name for the %s, which
+    // then reads whatever sits next on the stack; the frame's name is the
+    // nearest this can come to it.
+    if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:IsUnit(\"unit\")", usageName(L, 1));
     const auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
     const char* asked = luaL_optstring(L, 2, nullptr);
@@ -4869,6 +4923,8 @@ int lua_Tooltip_SetUnit(lua_State* L) {
         }
         return 0;
     }
+    // GameTooltip:SetUnit (0x00625e10): the unit must be a string.
+    if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:SetUnit(\"unit\"[, hideStatus])", usageName(L, 1));
     auto* gh = wowee::addons::getGameHandler(L);
     const char* uid = luaL_optstring(L, 2, "player");
     if (!w || !gh) { lua_pushboolean(L, 0); return 1; }
@@ -6289,6 +6345,7 @@ int lua_Tooltip_SetInventoryItem(lua_State* L) {
 /// there - and shows both side by side when a click would replace one with the
 /// other.
 int lua_Tooltip_SetSocketGem(lua_State* L) {
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetSocketGem(index)", usageName(L, 1));   // 0x00630250
     auto* gh = wowee::addons::getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 2, 1)) - 1;
     if (!widgetOf(L, 1) || !gh || index < 0 || index > 2) { lua_pushboolean(L, 0); return 1; }
@@ -6304,6 +6361,8 @@ int lua_Tooltip_SetSocketGem(lua_State* L) {
 /// item is described, so it is read and not used rather than silently ignored:
 /// the shopping tooltip it fills is positioned by the caller.
 int lua_Tooltip_SetExistingSocketGem(lua_State* L) {
+    // 0x00630370, whose usage line names the other method.
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetSocketGem(index, [toDestroy])", usageName(L, 1));
     auto* gh = wowee::addons::getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 2, 1)) - 1;
     if (!widgetOf(L, 1) || !gh || index < 0 || index > 2) { lua_pushboolean(L, 0); return 1; }
@@ -6327,6 +6386,7 @@ int lua_Tooltip_SetSocketedItem(lua_State* L) {
 /// This sat in the method allowlist, which means it was answered with a no-op:
 /// the button existed, hovering it did nothing, and nothing raised to say so.
 int lua_Tooltip_SetQuestLogSpecialItem(lua_State* L) {
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetQuestLogSpecialItem(index)", usageName(L, 1));   // 0x00630990
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
@@ -6353,6 +6413,7 @@ int lua_Tooltip_SetBackpackToken(lua_State* L) {
 }
 
 int lua_Tooltip_SetCurrencyToken(lua_State* L) {
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetCurrencyToken(index)", usageName(L, 1));   // 0x00630620
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
@@ -7913,6 +7974,14 @@ int lua_Frame_SetNormalFontObject(lua_State* L) {
     }
     return 0;
 }
+/// SetNormalFontObject("fontname" or fontObject) (0x00977340): a font's
+/// name or a font object, or the usage line. SetTextFontObject shares the
+/// setter and is not this method.
+static int lua_Frame_SetNormalFontObjectMethod(lua_State* L) {
+    if (const int t = lua_type(L, 2); t != LUA_TSTRING && t != LUA_TTABLE)
+        return luaL_error(L, "Usage: %s:SetNormalFontObject(\"fontname\" or fontObject)", usageName(L, 1));
+    return lua_Frame_SetNormalFontObject(L);
+}
 
 int lua_Region_GetSize(lua_State* L);  // with GetChildren, below
 
@@ -8140,6 +8209,9 @@ static void applyStateColor(lua_State* L, int fontIndex, float out[4], bool& fla
 }
 
 int lua_Frame_SetHighlightFontObject(lua_State* L) {
+    // 0x00977640: a font's name or a font object.
+    if (const int t = lua_type(L, 2); t != LUA_TSTRING && t != LUA_TTABLE)
+        return luaL_error(L, "Usage: %s:SetHighlightFontObject(\"fontname\")", usageName(L, 1));
     if (auto* w = widgetOf(L, 1)) {
         applyStateColor(L, 2, w->highlightColor, w->hasHighlightColor);
         w->highlightFontName = lua_type(L, 2) == LUA_TSTRING ? lua_tostring(L, 2) : "";
@@ -8147,6 +8219,9 @@ int lua_Frame_SetHighlightFontObject(lua_State* L) {
     return 0;
 }
 int lua_Frame_SetDisabledFontObject(lua_State* L) {
+    // 0x009774c0: a font's name or a font object.
+    if (const int t = lua_type(L, 2); t != LUA_TSTRING && t != LUA_TTABLE)
+        return luaL_error(L, "Usage: %s:SetDisabledFontObject(\"fontname\")", usageName(L, 1));
     if (auto* w = widgetOf(L, 1)) {
         applyStateColor(L, 2, w->disabledColor, w->hasDisabledColor);
         w->disabledFontName = lua_type(L, 2) == LUA_TSTRING ? lua_tostring(L, 2) : "";
@@ -8222,6 +8297,8 @@ int lua_Frame_SetHighlightTextColor(lua_State* L) {
 }
 
 int lua_Frame_SetPushedTextOffset(lua_State* L) {
+    if (!lua_isnumber(L, 2) || !lua_isnumber(L, 3))   // 0x00977f60
+        return luaL_error(L, "Usage: %s:SetPushedTextOffset(x, y)", usageName(L, 1));
     if (auto* w = widgetOf(L, 1)) {
         w->pushedTextOffsetX = static_cast<float>(luaL_optnumber(L, 2, 0.0));
         w->pushedTextOffsetY = static_cast<float>(luaL_optnumber(L, 3, 0.0));
@@ -8750,6 +8827,26 @@ int lua_Frame_SetBackdropBorderColor(lua_State* L) {
 }
 
 int lua_StatusBar_SetMinMaxValues(lua_State* L) {
+    // Two numbers, or the usage line. Past that the widgets part: a slider
+    // (0x00971df0) answers a minimum above the maximum with the usage line;
+    // a status bar (0x009713c0) takes either order but refuses values past
+    // 1e12 either way, and a range wider than that. The minimum is compared
+    // as the float it is stored in, the maximum as given.
+    if (!lua_isnumber(L, 2) || !lua_isnumber(L, 3))
+        return luaL_error(L, "Usage: %s:SetMinMaxValues(min, max)", usageName(L, 1));
+    {
+        const double lo = static_cast<float>(lua_tonumber(L, 2));
+        const double hi = lua_tonumber(L, 3);
+        const auto* bar = widgetOf(L, 1);
+        if (bar && bar->isSlider) {
+            if (!(lo <= hi)) return luaL_error(L, "Usage: %s:SetMinMaxValues(min, max)", usageName(L, 1));
+        } else {
+            constexpr double kLimit = 1000000000000.0;
+            if (!(lo >= -kLimit && lo <= kLimit && hi >= -kLimit && hi <= kLimit))
+                return luaL_error(L, "Min or Max out of range");
+            if (!(hi - lo <= kLimit)) return luaL_error(L, "Min and Max too far apart");
+        }
+    }
     if (auto* w = widgetOf(L, 1)) {
         w->barMin = static_cast<float>(luaL_optnumber(L, 2, 0.0));
         w->barMax = static_cast<float>(luaL_optnumber(L, 3, 1.0));
@@ -8802,6 +8899,13 @@ int lua_StatusBar_SetValue(lua_State* L) {
         lua_pop(L, 1);
     }
     return 0;
+}
+/// StatusBar/Slider:SetValue(value) (0x00971540, 0x00971f00): a number, or
+/// the usage line. A slider's SetDisplayValue shares the setter and is not
+/// this method.
+static int lua_StatusBar_SetValueMethod(lua_State* L) {
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetValue(value)", usageName(L, 1));
+    return lua_StatusBar_SetValue(L);
 }
 /// ColorSelect:SetColorRGB(r, g, b) - the colour the picker is showing.
 ///
@@ -8925,6 +9029,7 @@ static void queueTextChanged(lua_State* L, int frameIndex) {
 int lua_EditBox_SetText(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
+    if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:SetText(\"text\")", usageName(L, 1));   // 0x00975e80
     w->editText = luaL_optstring(L, 2, "");
     w->cursorPos = w->editText.size();
     // The text no longer came from the history, so the arrows start again from
@@ -8991,6 +9096,8 @@ int lua_EditBox_GetText(lua_State* L) {
 int lua_EditBox_SetNumber(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
+    // 0x00975f80 asks for a string, which a number also is.
+    if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:SetNumber(number)", usageName(L, 1));
     const double value = luaL_optnumber(L, 2, 0.0);
     char buf[32];
     if (value == std::floor(value) && std::fabs(value) < 1e15) {
@@ -9024,6 +9131,15 @@ int lua_EditBox_SetHistoryLines(lua_State* L) {
         w->editHistory.resize(static_cast<size_t>(std::max(0, w->editHistoryLines)));
     }
     return 0;
+}
+/// SetHistoryLines(numLines) (0x00976770): a number that truncates above
+/// zero, or the usage line. The XML loader keeps none on its own path
+/// (historyLines="0", 0x00960000 page) and so does the emitter, through
+/// __WoweeXmlSetHistoryLines, which is the setter above without this test.
+static int lua_EditBox_SetHistoryLinesMethod(lua_State* L) {
+    if (!lua_isnumber(L, 2) || static_cast<int>(lua_tonumber(L, 2)) <= 0)
+        return luaL_error(L, "Usage: %s:SetHistoryLines(numLines)", usageName(L, 1));
+    return lua_EditBox_SetHistoryLines(L);
 }
 /// ClearHistory() - forget what has been typed into this box.
 ///
@@ -9081,6 +9197,8 @@ int lua_EditBox_SetIgnoreArrows(lua_State* L) {
 }
 
 int lua_EditBox_AddHistoryLine(lua_State* L) {
+    // 0x00976110 counts the arguments: the box and one more, exactly.
+    if (lua_gettop(L) != 2) return luaL_error(L, "Usage: %s:AddHistoryLine(\"text\")", usageName(L, 1));
     auto* w = widgetOf(L, 1);
     const char* text = luaL_optstring(L, 2, "");
     if (!w || !text || !*text) return 0;
@@ -9129,6 +9247,9 @@ int lua_MessageFrame_GetPadding(lua_State* L) {
 }
 
 int lua_EditBox_SetTextInsets(lua_State* L) {
+    // 0x009761e0: four numbers.
+    if (!lua_isnumber(L, 2) || !lua_isnumber(L, 3) || !lua_isnumber(L, 4) || !lua_isnumber(L, 5))
+        return luaL_error(L, "Usage: %s:SetTextInsets(l, r, t, b)", usageName(L, 1));
     if (auto* w = widgetOf(L, 1)) {
         w->textInsetLeft   = static_cast<float>(luaL_optnumber(L, 2, 0.0));
         w->textInsetRight  = static_cast<float>(luaL_optnumber(L, 3, 0.0));
@@ -9150,6 +9271,12 @@ int lua_EditBox_SetMaxLetters(lua_State* L) {
     if (auto* w = widgetOf(L, 1))
         w->editMaxLetters = static_cast<int>(luaL_optnumber(L, 2, 0));
     return 0;
+}
+/// SetMaxLetters(max) (0x009765d0) counts its arguments: the box and one
+/// more, exactly. SetMaxBytes shares the setter and is not this method.
+static int lua_EditBox_SetMaxLettersMethod(lua_State* L) {
+    if (lua_gettop(L) != 2) return luaL_error(L, "Usage: %s:SetMaxLetters(max)", usageName(L, 1));
+    return lua_EditBox_SetMaxLetters(L);
 }
 /// GetMaxLetters() - the limit set on the box, or 0 for none.
 ///
@@ -9207,6 +9334,7 @@ int lua_EditBox_HighlightText(lua_State* L) {
 int lua_EditBox_SetCursorPosition(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetCursorPosition(position)", usageName(L, 1));   // 0x009769a0
     const double at = luaL_optnumber(L, 2, 0.0);
     // Snapped to a place the caret can be. Stepping keeps it on a boundary and
     // erasing removes exactly one step, so a caret dropped inside a link by a
@@ -9333,6 +9461,7 @@ int lua_Cooldown_Clear(lua_State* L) {
 }
 
 int lua_Slider_SetValueStep(lua_State* L) {
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetValueStep(value)", usageName(L, 1));   // 0x00971fd0
     if (auto* w = widgetOf(L, 1))
         w->sliderStep = static_cast<float>(luaL_optnumber(L, 2, 0.0));
     return 0;
@@ -9383,15 +9512,27 @@ int lua_ColorSelect_GetValueThumbTexture(lua_State* L) {
     return getColorRole(L, wowee::ui::Widget::ColorRole::ValueThumb);
 }
 int lua_ColorSelect_SetWheelTexture(lua_State* L) {
+    // 0x009708b0: a texture or nil - an absent argument is neither.
+    if (const int t = lua_type(L, 2); t != LUA_TTABLE && t != LUA_TNIL)
+        return luaL_error(L, "Usage: %s:SetColorWheelTexture(texture or nil)", usageName(L, 1));
     return setColorRole(L, wowee::ui::Widget::ColorRole::Wheel);
 }
 int lua_ColorSelect_SetWheelThumbTexture(lua_State* L) {
+    // 0x00970a60: a texture, a path or nil.
+    if (const int t = lua_type(L, 2); t != LUA_TTABLE && t != LUA_TNIL && !lua_isstring(L, 2))
+        return luaL_error(L, "Usage: %s:SetColorWheelThumbTexture(texture or \"texture\" or nil)", usageName(L, 1));
     return setColorRole(L, wowee::ui::Widget::ColorRole::WheelThumb);
 }
 int lua_ColorSelect_SetValueTexture(lua_State* L) {
+    // 0x00970c40: a texture or nil.
+    if (const int t = lua_type(L, 2); t != LUA_TTABLE && t != LUA_TNIL)
+        return luaL_error(L, "Usage: %s:SetColorValueTexture(texture or nil)", usageName(L, 1));
     return setColorRole(L, wowee::ui::Widget::ColorRole::Value);
 }
 int lua_ColorSelect_SetValueThumbTexture(lua_State* L) {
+    // 0x00970df0: a texture, a path or nil.
+    if (const int t = lua_type(L, 2); t != LUA_TTABLE && t != LUA_TNIL && !lua_isstring(L, 2))
+        return luaL_error(L, "Usage: %s:SetColorValueThumbTexture(texture or \"texture\" or nil)", usageName(L, 1));
     return setColorRole(L, wowee::ui::Widget::ColorRole::ValueThumb);
 }
 
@@ -9476,6 +9617,9 @@ int lua_StatusBar_GetValue(lua_State* L) {
     return 1;
 }
 int lua_StatusBar_SetStatusBarTexture(lua_State* L) {
+    // 0x00971650: a texture, a path or nil; an absent argument is none.
+    if (const int t = lua_type(L, 2); t != LUA_TTABLE && t != LUA_TNIL && !lua_isstring(L, 2))
+        return luaL_error(L, "Usage: %s:SetStatusBarTexture(texture or \"texture\" or nil [, \"layer\"])", usageName(L, 1));
     if (auto* w = widgetOf(L, 1)) {
         // Takes a path or an existing texture object, and addons use both.
         if (lua_isstring(L, 2)) w->barTexture = lua_tostring(L, 2);
@@ -9495,10 +9639,14 @@ int lua_StatusBar_SetStatusBarColor(lua_State* L) {
     return 0;
 }
 int lua_StatusBar_SetOrientation(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) {
-        const std::string o = luaL_optstring(L, 2, "HORIZONTAL");
-        w->barVertical = (o == "VERTICAL");
-    }
+    // 0x00971290 (status bar) and 0x00971cc0 (slider): a string, and one of
+    // the two words in any case (0x00815110).
+    if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:SetOrientation(\"orientation\")", usageName(L, 1));
+    const char* o = lua_tostring(L, 2);
+    const bool vertical = sameWord(o, "VERTICAL");
+    if (!vertical && !sameWord(o, "HORIZONTAL"))
+        return luaL_error(L, "%s:SetOrientation(): Unknown orientation: %s", usageName(L, 1), o);
+    if (auto* w = widgetOf(L, 1)) w->barVertical = vertical;
     return 0;
 }
 
@@ -10100,6 +10248,11 @@ static int lua_RecordMissingApi(lua_State* L) {
 
 // CreateFrame(frameType, name, parent, template)
 static int lua_CreateFrame(lua_State* L) {
+    // 0x0081bb20: the type must be a string, and the parent, when there is
+    // a third argument at all, nil or a frame - a parent's name is not one.
+    if (const int t = lua_type(L, 3);
+        !lua_isstring(L, 1) || (t != LUA_TNONE && t != LUA_TNIL && t != LUA_TTABLE))
+        return luaL_error(L, "Usage: CreateFrame(\"frameType\" [, \"name\"] [, parent] [, \"template\"] [, id])");
     const char* frameType = luaL_optstring(L, 1, "Frame");
     const char* name = luaL_optstring(L, 2, nullptr);
     // Which of the per-type methods go on this frame; see where they are set,
@@ -11089,7 +11242,7 @@ void LuaEngine::registerCoreAPI() {
         // gave the methods to everything except the things that use them.
         {"SetMovable",      lua_Frame_SetMovable},
         {"SetRotation",     lua_Model_SetRotation},
-        {"SetFacing",       lua_Model_SetFacing},
+        {"SetFacing",       lua_Model_SetFacingMethod},
         {"GetFacing",       lua_Model_GetFacing},
         {"SetModel",        lua_Model_SetModel},
         {"GetModel",        lua_Model_GetModel},
@@ -11277,7 +11430,7 @@ void LuaEngine::registerCoreAPI() {
         {"SetMotionScriptsWhileDisabled", lua_Frame_SetMotionScriptsWhileDisabled},
         {"GetMotionScriptsWhileDisabled", lua_Frame_GetMotionScriptsWhileDisabled},
         {"IsMouseEnabled",  lua_Frame_IsMouseEnabled},
-        {"SetNormalFontObject",   lua_Frame_SetNormalFontObject},
+        {"SetNormalFontObject",   lua_Frame_SetNormalFontObjectMethod},
         {"SetTextColor",          lua_FontString_SetTextColor},
         // And reading it back. The setter has been on this table since it was
         // written and the getter never was, so a frame could be coloured and
@@ -11330,7 +11483,7 @@ void LuaEngine::registerCoreAPI() {
         {"SetBackdropBorderColor",lua_Frame_SetBackdropBorderColor},
         {"SetMinMaxValues",       lua_StatusBar_SetMinMaxValues},
         {"GetMinMaxValues",       lua_StatusBar_GetMinMaxValues},
-        {"SetValue",              lua_StatusBar_SetValue},
+        {"SetValue",              lua_StatusBar_SetValueMethod},
         {"GetValue",              lua_StatusBar_GetValue},
         {"SetStatusBarTexture",   lua_StatusBar_SetStatusBarTexture},
         {"SetStatusBarColor",     lua_StatusBar_SetStatusBarColor},
@@ -11402,7 +11555,7 @@ void LuaEngine::registerCoreAPI() {
         {"GetNumber",             lua_EditBox_GetNumber},
         {"SetNumber",             lua_EditBox_SetNumber},
         {"AddHistoryLine",        lua_EditBox_AddHistoryLine},
-        {"SetHistoryLines",       lua_EditBox_SetHistoryLines},
+        {"SetHistoryLines",       lua_EditBox_SetHistoryLinesMethod},
         {"ClearHistory",          lua_EditBox_ClearHistory},
         {"SetCountInvisibleLetters", lua_EditBox_SetCountInvisibleLetters},
         {"GetCountInvisibleLetters", lua_EditBox_GetCountInvisibleLetters},
@@ -11412,7 +11565,7 @@ void LuaEngine::registerCoreAPI() {
         {"GetAltArrowKeyMode",    lua_EditBox_GetAltArrowKeyMode},
         {"IsInIMECompositionMode", lua_EditBox_IsInIMECompositionMode},
         {"Insert",                lua_EditBox_Insert},
-        {"SetMaxLetters",         lua_EditBox_SetMaxLetters},        // The limit here is applied against the text's size in bytes, which is
+        {"SetMaxLetters",         lua_EditBox_SetMaxLettersMethod},        // The limit here is applied against the text's size in bytes, which is
         // what SetMaxBytes asks for; SetMaxLetters is the same field because
         // this counts the same way for both. Reporting it back matters more
         // than the distinction: an edit box that answers nothing for its limit
@@ -12371,6 +12524,19 @@ void LuaEngine::registerCoreAPI() {
     // :SetVertexColor(...) - which FrameXML does constantly to grey out an
     // unusable action - fails somewhere far from the cause.
     bootstrap(
+        // A usage line raised from a Lua-defined method, worded as the
+        // client's C methods word theirs: the frame's name or "<unnamed>" in
+        // place of %s, and no position in front of it (luaL_error from a C
+        // function has none to give).
+        "function __WoweeUsageError(self, fmt)\n"
+        "    local name = type(self) == 'table' and self.GetName and self:GetName()\n"
+        "    error(fmt:format(name or '<unnamed>'), 0)\n"
+        "end\n"
+        // What lua_isstring answers: a string, or a number.
+        "function __WoweeIsText(v)\n"
+        "    local t = type(v)\n"
+        "    return t == 'string' or t == 'number'\n"
+        "end\n"
         "local mt = __WoweeFrameMT\n"
         // A path is as valid an argument as a texture, and FrameXML uses both:
         // LoadMicroButtonTextures does
@@ -12383,7 +12549,19 @@ void LuaEngine::registerCoreAPI() {
         "                       'DisabledCheckedTexture'}) do\n"
         "    local key = '__' .. slot\n"
         "    local layer = (slot == 'HighlightTexture') and 'HIGHLIGHT' or 'ARTWORK'\n"
-        "    mt['Set' .. slot] = function(self, tex)\n"
+        // A texture, a path or nil; nothing at all, or anything else, is the
+        // usage line - SetNormalTexture, SetPushedTexture and
+        // SetDisabledTexture through 0x00977a70, the other three their own
+        // (0x00977d30, whose line drops a bracket; 0x00976c70; 0x00976e50).
+        "    local usage = (slot == 'HighlightTexture')\n"
+        "        and 'Usage: %s:SetHighlightTexture(texture or \"texture\" or nil [, \"blendmode\")'\n"
+        "        or ('Usage: %s:Set' .. slot .. '(texture or \"texture\" or nil)')\n"
+        "    mt['Set' .. slot] = function(self, ...)\n"
+        "        local tex = ...\n"
+        "        local t = type(tex)\n"
+        "        if select('#', ...) == 0 or (t ~= 'table' and t ~= 'string' and t ~= 'number' and t ~= 'nil') then\n"
+        "            __WoweeUsageError(self, usage)\n"
+        "        end\n"
         "        if type(tex) == 'string' then\n"
         "            local existing = self[key]\n"
         "            if type(existing) == 'table' then existing:SetTexture(tex) return end\n"
@@ -12834,6 +13012,8 @@ void LuaEngine::registerCoreAPI() {
     // CreateFrame function
     lua_pushcfunction(L_, lua_EditBox_SetText);
     lua_setglobal(L_, "__WoweeEditSetText");
+    lua_pushcfunction(L_, lua_EditBox_SetHistoryLines);
+    lua_setglobal(L_, "__WoweeXmlSetHistoryLines");
     // The same call a font string's SetText makes, reachable from the frame
     // metatable. A SimpleHTML holds its text on the frame and nothing else
     // could put it there - see mt:SetText.
@@ -13336,6 +13516,9 @@ void LuaEngine::registerCoreAPI() {
         "    return false\n"
         "end\n"
         "function __WoweeFrameMT:SetHyperlinkCompareItem(link, index, shift, anchor)\n"
+        "    if not __WoweeIsText(link) then\n"   // 0x00631b60
+        "        __WoweeUsageError(self, 'Usage: %s:SetHyperlinkCompareItem(\"hyperlink\" [, offset, shiftButton])')\n"
+        "    end\n"
         "    self:ClearLines()\n"
         // And hidden, because a refusal below returns false and
         // GameTooltip_ShowCompareItem answers that by simply not showing this
@@ -13417,6 +13600,10 @@ void LuaEngine::registerCoreAPI() {
         // NumLines and GetText come from the widget itself, which is where
         // the lines now live.
         "function __WoweeFrameMT:SetUnitBuff(unit, index, filter)\n"
+        // 0x006262c0 (through 0x006110a0): a unit text and an index or name.
+        "    if not __WoweeIsText(unit) or not __WoweeIsText(index) then\n"
+        "        __WoweeUsageError(self, 'Usage: %s:SetUnitBuff(\"unit\", [index] or [\"name\", \"rank\"][, \"filter\"])')\n"
+        "    end\n"
         "    if filter and filter ~= '' then\n"
         "        if not string.find(filter, 'HELPFUL') then filter = filter .. '|HELPFUL' end\n"
         "    else\n"
@@ -13495,6 +13682,9 @@ void LuaEngine::registerCoreAPI() {
         "    if name then self:SetText(name, 1, 1, 1) end\n"
         "end\n"
         "function __WoweeFrameMT:SetBuybackItem(index)\n"
+        "    if type(index) ~= 'number' and not tonumber(index) then\n"   // 0x0062ff60
+        "        __WoweeUsageError(self, 'Usage: %s:SetBuybackItem(slot)')\n"
+        "    end\n"
         "    self:ClearLines()\n"
         "    local link = GetBuybackItemLink and GetBuybackItemLink(index)\n"
         "    if link then return __WoweeSetHyperlinkCounted(self, link, select(4, GetBuybackItemInfo(index))) end\n"
@@ -13641,6 +13831,10 @@ void LuaEngine::registerCoreAPI() {
         // because GetLFGCompletionRewardItem's contract is a texture and a
         // quantity and there is no name behind it.
         "function __WoweeFrameMT:SetLFGDungeonReward(dungeonId, rewardIndex)\n"
+        // 0x00630a80: two numbers; its usage line names no frame.
+        "    if not tonumber(dungeonId) or not tonumber(rewardIndex) then\n"
+        "        error('Usage: Tooltip:SetLFGDungeonReward(dungeonID, lootIndex)', 0)\n"
+        "    end\n"
         "    self:ClearLines()\n"
         "    local name, _, count = GetLFGDungeonRewardInfo(dungeonId, rewardIndex)\n"
         "    if not name or name == '' then return end\n"
@@ -13655,6 +13849,10 @@ void LuaEngine::registerCoreAPI() {
         // description - so a debuff tooltip said strictly less than a buff's,
         // and any line added to one had to be remembered for the other.
         "function __WoweeFrameMT:SetUnitDebuff(unit, index, filter)\n"
+        // 0x00626350 (through 0x006110a0): a unit text and an index or name.
+        "    if not __WoweeIsText(unit) or not __WoweeIsText(index) then\n"
+        "        __WoweeUsageError(self, 'Usage: %s:SetUnitDebuff(\"unit\", [index] or [\"name\", \"rank\"][, \"filter\"])')\n"
+        "    end\n"
         // HARMFUL is what makes UnitAura count debuffs rather than buffs, and
         // a caller's own filter - 'RAID' from the raid frames - has to keep it
         // rather than replace it.
@@ -14216,7 +14414,11 @@ void LuaEngine::registerCoreAPI() {
         // all. FrameXML calls it from CursorOnUpdate, so it raised every frame
         // until the device went down.
         "function __WoweeFrameMT:GetOwner() return rawget(self, '__owner') end\n"
-        "function __WoweeFrameMT:IsOwned(f) return rawget(self, '__owner') == f end\n"
+        // 0x0061d210: anything but a table is the usage line.
+        "function __WoweeFrameMT:IsOwned(f)\n"
+        "    if type(f) ~= 'table' then __WoweeUsageError(self, 'Usage: %s:IsOwned(frame)') end\n"
+        "    return rawget(self, '__owner') == f\n"
+        "end\n"
         // ShoppingTooltip: used by comparison tooltips
         "ShoppingTooltip1 = CreateFrame('Frame', 'ShoppingTooltip1')\n"
         "ShoppingTooltip2 = CreateFrame('Frame', 'ShoppingTooltip2')\n"
