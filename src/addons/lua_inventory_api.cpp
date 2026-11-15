@@ -419,6 +419,7 @@ static int lua_CloseMerchant(lua_State* L) {
 /// GetMerchantItemMaxStack(index) → the largest stack that can be bought at
 /// once. The item's own stack limit, which is what it means.
 static int lua_GetMerchantItemMaxStack(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetMerchantItemMaxStack(index)");   // 0x005842d0
     auto* gh = getGameHandler(L);
     const int index = static_cast<int>(luaL_checknumber(L, 1));
     if (!gh || index < 1) { lua_pushnumber(L, 1); return 1; }
@@ -530,6 +531,7 @@ static int lua_GetMerchantItemCostInfo(lua_State* L) {
 // entries, so the second cost is the second one shown rather than whatever sits
 // in the second of five fixed fields.
 static int lua_GetMerchantItemCostItem(lua_State* L) {
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: GetMerchantItemCostItem(index, itemIndex)");   // 0x00584820
     auto* gh = getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
     const int which = static_cast<int>(luaL_optnumber(L, 2, 0));
@@ -570,6 +572,7 @@ static int lua_GetMerchantNumItems(lua_State* L) {
 
 // GetMerchantItemInfo(index) → name, texture, price, stackCount, numAvailable, isUsable
 static int lua_GetMerchantItemInfo(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetMerchantItemInfo(index)");   // 0x00584e10
     auto* gh = getGameHandler(L);
     int index = static_cast<int>(luaL_checknumber(L, 1));
     if (!gh || index < 1) { return luaReturnNil(L); }
@@ -607,6 +610,7 @@ static int lua_GetMerchantItemInfo(lua_State* L) {
 
 // GetMerchantItemLink(index) → item link
 static int lua_GetMerchantItemLink(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetMerchantItemLink(index)");   // 0x00584200
     auto* gh = getGameHandler(L);
     int index = static_cast<int>(luaL_checknumber(L, 1));
     if (!gh || index < 1) { return luaReturnNil(L); }
@@ -900,6 +904,7 @@ static int lua_WoweeTryOn(lua_State* L) {
 /// building the model needs the offscreen view and those live in the render
 /// loop; zero clears it.
 static int lua_WoweeSetModelCreature(lua_State* L) {
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: SetCreature(creatureID)");   // 0x00597960
     auto* tree = getWidgetTree(L);
     if (!tree || !lua_istable(L, 1)) return 0;
     lua_getfield(L, 1, "__wid");
@@ -1194,6 +1199,7 @@ static int lua_AddTradeMoney(lua_State* L) {
 /// amount, all of it - which is what the money frame passes when the whole
 /// figure is dragged.
 static int lua_PickupTradeMoney(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: PickupTradeMoney(amount)");   // 0x00586810
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     const uint64_t offered = gh->getMyTradeGold();
@@ -1851,6 +1857,7 @@ const game::MailAttachment* attachmentAt(const game::MailMessage* mail, int slot
 
 // GetInboxItem(index, slot) → name, texture, count, quality, canUse
 static int lua_GetInboxItem(lua_State* L) {
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: GetInboxItem(messageIndex, attachIndex)");   // 0x00570f10
     auto* gh = getGameHandler(L);
     const auto* mail = mailAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
     const auto* att = attachmentAt(mail, static_cast<int>(luaL_optnumber(L, 2, 1)));
@@ -1866,6 +1873,7 @@ static int lua_GetInboxItem(lua_State* L) {
 
 // GetInboxItemLink(index, slot) → the link for a tooltip
 static int lua_GetInboxItemLink(lua_State* L) {
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: GetInboxItemLink(messageIndex, attachIndex)");   // 0x0056eca0
     auto* gh = getGameHandler(L);
     const auto* mail = mailAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
     const auto* att = attachmentAt(mail, static_cast<int>(luaL_optnumber(L, 2, 1)));
@@ -1880,6 +1888,7 @@ static int lua_GetInboxItemLink(lua_State* L) {
 // TakeInboxItem(index, slot) - an attachment is asked for by its own id, not by
 // where it sits in the list
 static int lua_TakeInboxItem(lua_State* L) {
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: TakeInboxItem(messageIndex, attachIndex)");   // 0x005711c0
     auto* gh = getGameHandler(L);
     const auto* mail = mailAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
     const auto* att = attachmentAt(mail, static_cast<int>(luaL_optnumber(L, 2, 1)));
@@ -1888,6 +1897,7 @@ static int lua_TakeInboxItem(lua_State* L) {
 }
 
 static int lua_TakeInboxMoney(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: TakeInboxMoney(index)");   // 0x0056edf0
     auto* gh = getGameHandler(L);
     const auto* mail = mailAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
     if (gh && mail) gh->mailTakeMoney(mail->messageId);
@@ -1895,6 +1905,7 @@ static int lua_TakeInboxMoney(lua_State* L) {
 }
 
 static int lua_DeleteInboxItem(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: DeleteInboxItem(index)");   // 0x0056f140
     auto* gh = getGameHandler(L);
     const auto* mail = mailAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
     if (gh && mail) gh->mailDelete(mail->messageId);
@@ -1909,6 +1920,7 @@ static int lua_InboxItemCanDelete(lua_State* L) {
 
 // AutoLootMailItem(index) - the coin first, then every attachment
 static int lua_AutoLootMailItem(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: AutoLootMailItem(index)");   // 0x00571450
     auto* gh = getGameHandler(L);
     const auto* mail = mailAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
     if (!gh || !mail) return 0;
@@ -2064,6 +2076,7 @@ static int lua_GetCoinTextureString(lua_State* L) {
 }
 
 static int lua_ReturnInboxItem(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: ReturnInboxItem(index)");   // 0x0056f000
     auto* gh = getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
     if (!gh || index < 1) return 0;
@@ -2150,12 +2163,14 @@ static int lua_CloseMail(lua_State* L) {
 /// being fixed - a dialog whose Accept silently does nothing - for anyone whose
 /// money had not finished syncing.
 static int lua_SetSendMailMoney(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetSendMailMoney(amount)");   // 0x005706c0
     s_sendMailMoney = copperArg(L, 1);
     luaPushOneOrNil(L, 1);
     return 1;
 }
 
 static int lua_SetSendMailCOD(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetSendMailCOD(amount)");   // 0x0056d610
     s_sendMailCOD = copperArg(L, 1);
     return 0;
 }
@@ -5034,6 +5049,7 @@ static const game::LootItem* lootItemAtSlot(game::GameHandler* gh, int slot) {
 
 // LootSlotIsCoin(slot) → whether this slot is the money
 static int lua_LootSlotIsCoin(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: LootSlotIsCoin(slot)");   // 0x00588810
     auto* gh = getGameHandler(L);
     const int slot = static_cast<int>(luaL_optnumber(L, 1, 0));
     luaPushOneOrNil(L, (lootHasCoin(gh) && slot == 1) ? 1 : 0);
@@ -5042,6 +5058,7 @@ static int lua_LootSlotIsCoin(lua_State* L) {
 
 // LootSlotIsItem(slot) → whether this slot is a real item
 static int lua_LootSlotIsItem(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: LootSlotIsItem(slot)");   // 0x00588750
     luaPushOneOrNil(L, lootItemAtSlot(getGameHandler(L),
                                       static_cast<int>(luaL_optnumber(L, 1, 0))) ? 1 : 0);
     return 1;
@@ -5135,6 +5152,7 @@ static int lua_GetLootSlotInfo(lua_State* L) {
 
 // GetLootSlotLink(slot) → itemLink
 static int lua_GetLootSlotLink(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetLootSlotLink(slot)");   // 0x005886d0
     auto* gh = getGameHandler(L);
     int slot = static_cast<int>(luaL_checknumber(L, 1));
     if (!gh || !gh->isLootWindowOpen()) { return luaReturnNil(L); }
@@ -5152,6 +5170,7 @@ static int lua_GetLootSlotLink(lua_State* L) {
 
 // LootSlot(slot) - take item from loot
 static int lua_LootSlot(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: LootSlot(slot)");   // 0x00589520
     auto* gh = getGameHandler(L);
     int slot = static_cast<int>(luaL_checknumber(L, 1));
     if (!gh || !gh->isLootWindowOpen()) return 0;
@@ -5274,6 +5293,7 @@ static int lua_GetLootRollItemInfo(lua_State* L) {
 }
 
 static int lua_GetLootRollItemLink(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetLootRollItemLink(id)");   // 0x00588c00
     auto* gh = getGameHandler(L);
     const auto* roll = rollFor(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
     if (!roll) { return luaReturnNil(L); }
@@ -5302,6 +5322,7 @@ static int lua_GetLootRollTimeLeft(lua_State* L) {
 // is both the order the buttons carry as their id and the order the server
 // expects.
 static int lua_RollOnLoot(lua_State* L) {
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: RollOnLoot(id, rollType)");   // 0x00588d60
     auto* gh = getGameHandler(L);
     const int rollId = static_cast<int>(luaL_optnumber(L, 1, 0));
     const auto* roll = rollFor(gh, rollId);
@@ -5359,6 +5380,7 @@ static int lua_RollOnLoot(lua_State* L) {
 // ConfirmLootRoll(rollId, rollType) - the answer to the popup above, which is
 // the only caller. Sends without asking again, because this *is* the asking.
 static int lua_ConfirmLootRoll(lua_State* L) {
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: ConfirmLootRoll(id, rollType)");   // 0x00588dd0
     auto* gh = getGameHandler(L);
     const auto* roll = rollFor(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
     if (!roll) return 0;
@@ -5376,6 +5398,7 @@ static int lua_ConfirmLootRoll(lua_State* L) {
 // menu left open while the loot changed would otherwise name whoever now
 // happens to sit at that position.
 static int lua_GiveMasterLoot(lua_State* L) {
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: GiveMasterLoot(slot, index)");   // 0x00589600
     auto* gh = getGameHandler(L);
     const int slot = static_cast<int>(luaL_optnumber(L, 1, 0));
     const int candidate = static_cast<int>(luaL_optnumber(L, 2, 0));
@@ -5957,6 +5980,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // held request is sent instead, and the slot the dialog passes
                 // is not read - only one can be waiting.
                 {"ConfirmLootSlot", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: LootSlot(slot)");   // 0x00589590
             if (auto* gh = getGameHandler(L)) gh->confirmPendingLoot();
             return 0;
         }},
@@ -6039,6 +6063,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // MAIL_UNLOCK_SEND_ITEMS either way: the lock is the dialog
                 // being up, and it comes down whichever button was pressed.
                 {"RespondMailLockSendItem", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: RespondMailLockSendItem(slot, keepItem)");   // 0x0056f410
             auto* gh = getGameHandler(L);
             const int slot = static_cast<int>(luaL_optnumber(L, 1, 0));
             const bool keep = lua_toboolean(L, 2) != 0;
@@ -6133,6 +6158,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"GetTabardCreationCost", lua_GetTabardCreationCost},
                 {"GetSendMailPrice",    lua_GetSendMailPrice},
                 {"BuyMerchantItem", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: BuyMerchantItem(index)");   // 0x005854c0
             auto* gh = getGameHandler(L);
             int index = static_cast<int>(luaL_checknumber(L, 1));
             int count = static_cast<int>(luaL_optnumber(L, 2, 1));
@@ -6696,6 +6722,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"CanCancelAuction", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: CanCancelAuction(index)");   // 0x0059c9f0
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
             const auto* res = gh ? &gh->getAuctionOwnerResults() : nullptr;
@@ -6928,6 +6955,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // the older shape of this binding would otherwise start raising
                 // where it used to work.
                 {"SetAuctionsTabShowing", [](lua_State* L) -> int {
+            if (lua_type(L, 1) != LUA_TBOOLEAN) return luaL_error(L, "Usage: SetAuctionsTabShowing(bool)");   // 0x0059b0b0
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
             if (lua_isboolean(L, 1)) {
@@ -6940,6 +6968,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"SetSelectedAuctionItem", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: SetSelectedAuctionItem(\"type\", index)");   // 0x0059c830
             auctionSelection() = static_cast<int>(luaL_optnumber(L, 2, 0));
             return 0;
         }},
@@ -6963,6 +6992,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // It reported zero before, which was honest while the sell slot
                 // could not hold anything. It can now.
                 {"CalculateAuctionDeposit", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: CalculateAuctionDeposit(runTime)");   // 0x0059d270
             auto* gh = getGameHandler(L);
             // The same duration the dropdown hands StartAuction, and in the
             // same 1..3 shape: read as minutes it made `blocks` zero below, so
@@ -6997,6 +7027,7 @@ void registerInventoryLuaAPI(lua_State* L) {
         }},
                 // Sorting is the panel's own, applied to what the server sent.
                 {"SortAuctionSetSort", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1) || !lua_isstring(L, 2)) return luaL_error(L, "Usage: SortAuctionAddSort(\"type\", \"sort\", \"reverse\")");   // 0x0059af10
             const std::string which = luaL_optstring(L, 1, "list");
             const char* column = luaL_optstring(L, 2, "");
             if (!column || !*column) return 0;
@@ -7004,6 +7035,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"SortAuctionClearSort", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: SortAuctionClearSort(\"type\")");   // 0x0059ae70
             auctionSortState()[luaL_optstring(L, 1, "list")].clear();
             return 0;
         }},
@@ -7012,6 +7044,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // Index one is the primary, and the primary is the key set
                 // *last* - FrameXML pushes them least significant first.
                 {"GetAuctionSort", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: GetAuctionSort(\"type\", \"index\")");   // 0x0059ad40
             const auto& keys = auctionSortState()[luaL_optstring(L, 1, "list")];
             const int index = static_cast<int>(luaL_optnumber(L, 2, 1));
             if (index < 1 || index > static_cast<int>(keys.size())) return 0;
@@ -7023,6 +7056,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // Applied least significant first, each pass stable, which is
                 // how a multi-column sort is built out of single-column ones.
                 {"SortAuctionApplySort", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: SortAuctionApplySort(\"type\")");   // 0x0059cab0
             applyAuctionSort(getGameHandler(L), luaL_optstring(L, 1, "list"));
             return 0;
         }},
@@ -7112,6 +7146,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             return game::kNumAuctionClasses - 1;
         }},
                 {"GetAuctionItemSubClasses", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetAuctionItemSubClasses(index)");   // 0x0059c480
             const int ci = static_cast<int>(luaL_optnumber(L, 1, 0));
             if (ci < 1 || ci >= game::kNumAuctionClasses) return 0;
             int count = 0;
@@ -7138,6 +7173,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // one clicked, silently. auctionSlotsFor answers positions for
                 // exactly that reason.
                 {"GetAuctionInvTypes", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: GetAuctionInvTypes(classIndex, subClassIndex)");   // 0x0059c590
             const int ci = static_cast<int>(luaL_optnumber(L, 1, 0));
             const int si = static_cast<int>(luaL_optnumber(L, 2, 0));
             if (ci < 1 || ci >= game::kNumAuctionClasses) return 0;
@@ -7246,6 +7282,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             return 13;
         }},
                 {"GetAuctionItemTimeLeft", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: GetAuctionItemTimeLeft(\"type\", index)");   // 0x0059fd60
             auto* gh = getGameHandler(L);
             const char* listType = luaL_checkstring(L, 1);
             int index = static_cast<int>(luaL_checknumber(L, 2));
@@ -7263,6 +7300,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"GetAuctionItemLink", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: GetAuctionItemLink(\"type\", index)");   // 0x0059c2d0
             auto* gh = getGameHandler(L);
             const char* listType = luaL_checkstring(L, 1);
             int index = static_cast<int>(luaL_checknumber(L, 2));

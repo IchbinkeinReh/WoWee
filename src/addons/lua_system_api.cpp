@@ -11092,6 +11092,7 @@ void registerSystemLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"TaxiNodeName", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: TaxiNodeName(slot)");   // 0x00590d60
             auto* gh = getGameHandler(L);
             const uint32_t id = taxiNodeAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
             if (id == 0) { lua_pushstring(L, ""); return 1; }
@@ -11108,6 +11109,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 // or 1 is never equal to any of them, so every node counted as
                 // shown, including the ones the player has never been to.
                 {"TaxiNodeGetType", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: TaxiNodeGetType(slot)");   // 0x00590ed0
             auto* gh = getGameHandler(L);
             const uint32_t id = taxiNodeAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
             if (id == 0) { lua_pushstring(L, "NONE"); return 1; }
@@ -11127,6 +11129,7 @@ void registerSystemLuaAPI(lua_State* L) {
         }},
                 // TaxiNodePosition(index) → x, y as fractions of the map.
                 {"TaxiNodePosition", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: TaxiNodePosition(slot)");   // 0x00590e00
             auto* gh = getGameHandler(L);
             const uint32_t id = taxiNodeAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
             float u = 0, v = 0;
@@ -11139,6 +11142,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 // route to. Works out the journey once; the frame then asks
                 // about each leg of it.
                 {"TaxiNodeSetCurrent", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: TaxiNodeSetCurrent(slot)");   // 0x00591e60
             auto* gh = getGameHandler(L);
             const uint32_t id = taxiNodeAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
             taxiRouteShown() = (id != 0 && gh) ? gh->getTaxiRouteTo(id)
@@ -11228,6 +11232,7 @@ void registerSystemLuaAPI(lua_State* L) {
         }},
                 // TaxiNodeCost(index) → the fare in copper, for the tooltip.
                 {"TaxiNodeCost", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: TaxiNodeCost(slot)");   // 0x005915e0
             auto* gh = getGameHandler(L);
             const uint32_t id = taxiNodeAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
             lua_pushnumber(L, id != 0 ? static_cast<double>(gh->getTaxiCostTo(id)) : 0.0);

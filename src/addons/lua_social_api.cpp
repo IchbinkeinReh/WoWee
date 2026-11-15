@@ -1618,6 +1618,8 @@ static int lua_GetNumMacroIcons(lua_State* L) {
 
 // GetMacroIconInfo(index) → a texture path, or nil past the end
 static int lua_GetMacroIconInfo(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetMacroItemIconInfo(index)");   // 0x00564f60
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetMacroIconInfo(index)");   // 0x00564e90
     const auto* icons = iconList(L);
     const int index = static_cast<int>(luaL_checknumber(L, 1));
     if (!icons || index < 1 || index > static_cast<int>(icons->size())) {
@@ -2216,6 +2218,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 // next - which reports it refuses, whose report it remembers,
                 // and the inbox it asks for again - is at reportMailSpam.
                 {"ComplainInboxItem", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: ComplainInboxItem(index)");   // 0x00571350
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 0)) - 1;
             if (!gh) return 0;
@@ -2346,7 +2349,10 @@ void registerSocialLuaAPI(lua_State* L) {
                 // The last two the social frame reaches for, both belonging to
                 // systems this server has no counterpart to: Battle.net
                 // presence, and picking which voice channel is live.
-                {"GetAutoCompletePresenceID", [](lua_State* L) -> int { return luaReturnNil(L); }},
+                {"GetAutoCompletePresenceID", [](lua_State* L) -> int {
+                    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetAutoCompletePresenceID(\"name\")");   // 0x0057b500
+                    return luaReturnNil(L);
+                }},
                 {"SetActiveVoiceChannelBySessionID", [](lua_State* L) -> int { (void)L; return 0; }},
                 // AddMute(name) - 0x006b6c30, which hands the argument to
                 // 0x006b62c0. That walks the client's mute array and asks the
@@ -2639,6 +2645,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 // AuctionMailInvoice::ownerGuidLow was one, and a field nobody
                 // reads usually means a branch nobody runs.
                 {"GetInboxInvoiceInfo", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetInboxInvoiceInfo(index)");   // 0x0056e9b0
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
             if (!gh) {
@@ -2811,6 +2818,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 // frame's XML rather than its Lua, which is why a scan of the
                 // Lua alone never reported it.
                 {"TakeInboxTextItem", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: TakeInboxTextItem(index)");   // 0x0056eef0
             auto* gh = getGameHandler(L);
             const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
             if (gh && id) gh->takeInboxTextItem(id);
@@ -2826,6 +2834,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 // click on a bag item went to the branch below it and used the
                 // item instead - the food got eaten rather than posted.
                 {"SetSendMailShowing", [](lua_State* L) -> int {
+                    if (lua_type(L, 1) != LUA_TBOOLEAN) return luaL_error(L, "Usage: SetSendMailShowing(bool)");   // 0x0056d570
                     auto* gh = getGameHandler(L);
                     if (gh) gh->setMailComposeShowing(lua_toboolean(L, 1) != 0);
                     return 0;
@@ -3957,9 +3966,11 @@ void registerSocialLuaAPI(lua_State* L) {
             return n;
         }},
                 {"SelectGossipAvailableQuest", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SelectGossipAvailableQuest(index)");   // 0x0058b600
             return selectGossipQuestAt(L, /*available=*/true);
         }},
                 {"SelectGossipActiveQuest", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SelectGossipActiveQuest(index)");   // 0x0058b670
             return selectGossipQuestAt(L, /*available=*/false);
         }},
                 // The greeting panel, shown when a quest giver has several
@@ -3980,15 +3991,19 @@ void registerSocialLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"GetAvailableTitle", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetAvailableTitle(index)");   // 0x0058be30
             return pushGossipQuestTitle(L, /*available=*/true);
         }},
                 {"GetActiveTitle", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetActiveTitle(index)");   // 0x0058bed0
             return pushGossipQuestTitle(L, /*available=*/false);
         }},
                 {"SelectAvailableQuest", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SelectAvailableQuest(index)");   // 0x0058d4d0
             return selectGossipQuestAt(L, /*available=*/true);
         }},
                 {"SelectActiveQuest", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SelectActiveQuest(index)");   // 0x0058d540
             // 0x0058ccb0: the greeting's one, unlike the gossip's, triggers
             // tutorial 0x21 as it hands the quest in.
             if (auto* gh = getGameHandler(L); gh && lua_isnumber(L, 1) && lua_tonumber(L, 1) >= 1)
@@ -4323,6 +4338,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 // The third argument is FrameXML saying the player has now
                 // answered: GOSSIP_CONFIRM's Accept calls back with it true.
                 {"SelectGossipOption", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SelectGossipOption(index)");   // 0x0058b590
             auto* gh = getGameHandler(L);
             int index = static_cast<int>(luaL_checknumber(L, 1));
             if (!gh || index < 1) return 0;
@@ -5187,7 +5203,10 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"BNIsFriend", lua_BNNothing},
                 {"BNIsToonBlocked", lua_BNNothing},
                 {"BNGetNumFriendInvites", [](lua_State* L) -> int { lua_pushnumber(L, 0); return 1; }},
-                {"GetClickFrame",         [](lua_State* L) -> int { lua_pushnil(L); return 1; }},
+                {"GetClickFrame",         [](lua_State* L) -> int {
+                    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetClickFrame(\"name\")");   // 0x00564130
+                    lua_pushnil(L); return 1;
+                }},
                 // Pet autocast is left alone deliberately rather than wired to
                 // togglePetSpellAutocast: these two say enable and disable, the
                 // client can only toggle, and nothing reads back which state a

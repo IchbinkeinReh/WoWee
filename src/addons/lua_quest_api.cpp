@@ -4719,6 +4719,7 @@ static int lua_GetQuestItemInfo(lua_State* L) {
 // pieces. Nil when there is no such reward, which is what the click handler
 // checks before doing anything with it.
 static int lua_GetQuestItemLink(lua_State* L) {
+    if (!lua_isstring(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: GetQuestItemLink(\"type\", index)");   // 0x0058c2b0
     auto* gh = getGameHandler(L);
     const char* type = luaL_optstring(L, 1, "reward");
     const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
