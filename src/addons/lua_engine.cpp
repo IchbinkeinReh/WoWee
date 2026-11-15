@@ -12620,6 +12620,17 @@ void LuaEngine::registerCoreAPI() {
         "        if select('#', ...) == 0 or (t ~= 'table' and t ~= 'string' and t ~= 'number' and t ~= 'nil') then\n"
         "            __WoweeUsageError(self, usage)\n"
         "        end\n"
+        // A table has to be a texture (0x00977a70, which the normal, pushed
+        // and disabled setters share): one that is no object at all, and an
+        // object of another type, each raise their own line.
+        "        if t == 'table' and (slot == 'NormalTexture' or slot == 'PushedTexture' or slot == 'DisabledTexture') then\n"
+        "            local name = self.GetName and self:GetName() or '<unnamed>'\n"
+        "            if rawget(tex, '__wid') == nil then\n"
+        "                error((\"%s:Set%s(): Couldn't find 'this' in texture\"):format(name, slot), 0)\n"
+        "            elseif not (tex.IsObjectType and tex:IsObjectType('Texture')) then\n"
+        "                error(('%s:Set%s(): Wrong object type, expected texture'):format(name, slot), 0)\n"
+        "            end\n"
+        "        end\n"
         "        if type(tex) == 'string' then\n"
         "            local existing = self[key]\n"
         "            if type(existing) == 'table' then existing:SetTexture(tex) return end\n"
