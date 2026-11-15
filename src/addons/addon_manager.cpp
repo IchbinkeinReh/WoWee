@@ -1133,7 +1133,11 @@ bool AddonManager::loadFrameXml(const std::string& frameXmlDir) {
         // The nine the interface knows, in CALENDAR_INVITESTATUS_* order.
         // Not the ten the server has: it also carries REMOVED, which is an
         // instruction rather than a state and has no row to show.
-        "function CalendarEventGetStatusOptions()\n"
+        // 0x005bb130: the invitee's index as a number, or the usage error.
+        "function CalendarEventGetStatusOptions(index)\n"
+        "  if not tonumber(index) then\n"
+        "    error('Usage: CalendarEventGetStatusOptions(index)', 2)\n"
+        "  end\n"
         "  return CALENDAR_STATUS_INVITED, CALENDAR_STATUS_ACCEPTED,\n"
         "         CALENDAR_STATUS_DECLINED, CALENDAR_STATUS_CONFIRMED,\n"
         "         CALENDAR_STATUS_OUT, CALENDAR_STATUS_STANDBY,\n"
