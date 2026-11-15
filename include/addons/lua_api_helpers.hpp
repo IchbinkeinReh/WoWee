@@ -1482,6 +1482,10 @@ int lua_QuestBlob_GetTooltipIndex(lua_State* L);
 /// recipe. The tooltip did exactly that: hovering "Enchant Bracer - Lesser
 /// Spirit" described "Enchant Bracer - Minor Deflection", three rows further
 /// down, because that is what index 4 is in a list with no heading in it.
+/// The item in the auction house's sell slot, or null - what
+/// GetAuctionSellItemInfo describes and SetAuctionSellItem shows.
+const game::ItemSlot* auctionSellHeldItem(game::GameHandler* gh);
+
 const game::GameHandler::CraftRecipe* recipeAtTradeSkillRow(game::GameHandler* gh,
                                                             int index);
 

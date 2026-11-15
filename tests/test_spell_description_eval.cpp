@@ -388,3 +388,24 @@ TEST_CASE("$/N; and $*N; scale both ends", "[spell][description]") {
     CHECK(shown('S', scaledSpellPoints({1500.0f, 1500.0f}, 0.001f)) == "1.5");
     CHECK(shown('s', scaledSpellPoints({3.0f, 3.0f}, 10.0f)) == "30");
 }
+
+TEST_CASE("$d of a periodic spell haste shortens is hasted, as 0x00800a70 does",
+          "[spell][description]") {
+    // Mind Flay: 3000 ms, AttributesEx5 0x2000, at 20% haste
+    // (UNIT_MOD_CAST_SPEED 1/1.2).
+    const float hasted = 1.0f / 1.2f;
+    CHECK(hastedSpellDurationMs(3000, true, true, 0, hasted) == 2500);
+    // Not periodic (no EffectAmplitude): untouched.
+    CHECK(hastedSpellDurationMs(3000, false, true, 0, hasted) == 3000);
+    // Periodic, but neither the attribute nor an aura 316 reaches it.
+    CHECK(hastedSpellDurationMs(18000, true, false, 0, hasted) == 18000);
+    // AttributesEx3 0x20000000 keeps it as written.
+    CHECK(hastedSpellDurationMs(3000, true, true, 0x20000000u, hasted) == 3000);
+    // No haste field yet (0) or a factor of 0.001 and under: untouched.
+    CHECK(hastedSpellDurationMs(3000, true, true, 0, 0.0f) == 3000);
+    CHECK(hastedSpellDurationMs(3000, true, true, 0, 0.001f) == 3000);
+    // Rounded to nearest, after the talents: 5000 at 1/1.15 is 4347.8.
+    CHECK(hastedSpellDurationMs(5000, true, true, 0, 1.0f / 1.15f) == 4348);
+    // Until cancelled stays until cancelled.
+    CHECK(hastedSpellDurationMs(-1, true, true, 0, hasted) == -1);
+}

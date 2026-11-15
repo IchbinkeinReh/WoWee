@@ -5226,6 +5226,7 @@ public:
     CombatHandler* getCombatHandler() { return combatHandler_.get(); }
     MovementHandler* getMovementHandler() { return movementHandler_.get(); }
     SpellHandler* getSpellHandler() { return spellHandler_.get(); }
+    const SpellHandler* getSpellHandler() const { return spellHandler_.get(); }
     QuestHandler* getQuestHandler() { return questHandler_.get(); }
     InventoryHandler* getInventoryHandler() { return inventoryHandler_.get(); }
 

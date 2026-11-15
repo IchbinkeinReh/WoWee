@@ -306,6 +306,15 @@ int spellDurationMs(int baseMs, int perLevelMs, int maxMs, int casterLevel, int 
     return grown < maxMs ? grown : maxMs;
 }
 
+int hastedSpellDurationMs(int ms, bool periodic, bool hasteShortens, uint32_t attrEx3,
+                          float castSpeed) {
+    constexpr uint32_t kAttrEx3NoHaste = 0x20000000u;
+    if (!periodic || !hasteShortens || (attrEx3 & kAttrEx3NoHaste) != 0) return ms;
+    if (!(castSpeed > 0.001f)) return ms;
+    // ROUND: the x87 store, to nearest.
+    return static_cast<int>(std::nearbyint(static_cast<float>(ms) * castSpeed));
+}
+
 bool spellTimeIsWhole(float ms) {
     float v;
     if (ms >= 8.64e7f) v = ms * 1.1574074e-08f;        // days

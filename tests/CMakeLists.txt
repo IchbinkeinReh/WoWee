@@ -233,6 +233,14 @@ wowee_add_test(test_world_state_ui
 wowee_add_test(test_hill_climbing
     SOURCES test_movement_limits.cpp)
 
+# ── test_tooltip_setter_rules ───────────────────────────────
+# What a GameTooltip setter builds, and so which OnTooltipSet* script it ends
+# with: SetTradeSkillItem's item, spell or reagent (0x0062eae0), the count it
+# prices (0x008016c0), and the item a trade spell's tooltip ends with
+# (0x006238a0). Header-only.
+wowee_add_test(test_tooltip_setter_rules
+    SOURCES test_tooltip_setter_rules.cpp)
+
 # ── test_spell_description_eval ─────────────────────────────
 # The expression language spell descriptions are written in. Sinister Strike's
 # tooltip read "percent>% of your normal weapon damage" because nothing read
