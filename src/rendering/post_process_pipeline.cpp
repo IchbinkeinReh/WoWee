@@ -195,6 +195,7 @@ bool PostProcessPipeline::executePostProcessing(VkCommandBuffer cmd, uint32_t im
     currentCmd_ = cmd;
     camera_ = camera;
     lastDeltaTime_ = deltaTime;
+    sceneDepthLayout_ = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     bool inlineMode = false;
 
     if (fsr2_.enabled && fsr2_.sceneFramebuffer) {
@@ -1393,6 +1394,7 @@ void PostProcessPipeline::dispatchMotionVectors() {
         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
         VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    sceneDepthLayout_ = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 
     // Transition motion vectors: UNDEFINED → GENERAL
     transitionImageLayout(currentCmd_, fsr2_.motionVectors.image,

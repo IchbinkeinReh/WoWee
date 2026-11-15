@@ -22,17 +22,20 @@ class VkContext;
  * them; these are what the eye does looking into the sun, and show whenever it
  * is on screen or just off it.
  *
- * Built from the frame itself rather than its depth. Depth lives in a different
- * image on every path this renderer has - the swapchain's, the multisampled
- * resolve, FSR's or FXAA's own targets, and with MSAA and no depth resolve in
- * nothing a shader can read - while the finished frame is always on the
- * swapchain, in one layout, before the interface goes over it. Bright pixels
- * near the sun are what the rays come from; a tree against the sky is dark and
- * casts none, which is the whole effect.
+ * Only the sky streams. The rays are gathered from the finished frame, but
+ * only where the scene's depth holds nothing in front of the far plane - the
+ * sky, its clouds, the sun's disc - so the terrain, the buildings and the WDL
+ * horizon block the rays and never send any of their own, however brightly
+ * they are lit. Gathered from brightness alone, a sunlit slope or wall near
+ * the sun on screen poured its own rays over everything in front of it and
+ * washed the picture out. The depth is the scene's own, wherever this frame's
+ * path left it (FrameInputs), read in the same frame: nothing here is carried
+ * over from an earlier one.
  *
  * Each frame: the swapchain image is blitted to a quarter-size copy, a compute
- * pass marches every pixel of that copy toward the sun gathering what it
- * passes, and the result is added into the overlay pass ahead of the UI.
+ * pass keeps of it only the sky (sun_shafts_mask.comp.glsl), another marches
+ * every pixel toward the sun gathering the sky it passes, and the result is
+ * added into the overlay pass ahead of the UI.
  * Double-buffered per frame in flight.
  */
 class SunShafts {
@@ -45,6 +48,16 @@ public:
         glm::vec3 tint{1.0f};
         /// 0 draws nothing this frame.
         float strength = 0.0f;
+        /// The scene's depth, as the scene's last pass left it: single- or
+        /// multisampled, at the scene's size (an upscaler's is smaller), in
+        /// depthLayout. Without one there is no telling sky from ground, and
+        /// nothing is drawn.
+        VkImage depthImage = VK_NULL_HANDLE;
+        bool depthMultisampled = false;
+        VkImageLayout depthLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        /// Changes whenever the scene's targets are made again: a new depth
+        /// image can come back with the old one's handle.
+        uint64_t depthGeneration = 0;
     };
 
     SunShafts() = default;
@@ -74,19 +87,37 @@ private:
     bool ensureTargets(VkExtent2D extent);
     void destroyTargets();
     bool ensureCompositePipeline();
+    /// The depth view for this frame's depth image, made anew when the image
+    /// or its generation changes; the old one goes once no frame can use it.
+    VkImageView depthViewFor(VkImage image, uint64_t generation);
 
     VkContext* ctx_ = nullptr;
     bool usable_ = false;
 
-    // Quarter the swapchain's size, per frame slot: the copy of the frame and
-    // the rays marched out of it.
+    // Quarter the swapchain's size, per frame slot: the copy of the frame, its
+    // sky (the rest black), and the rays marched out of that.
     Target frameCopy_[MAX_FRAMES];
+    Target source_[MAX_FRAMES];
     Target rays_[MAX_FRAMES];
     VkExtent2D targetExtent_{.width = 0, .height = 0};
     VkExtent2D sourceExtent_{.width = 0, .height = 0};
     bool drawThisFrame_[MAX_FRAMES] = {};
 
     VkSampler sampler_ = VK_NULL_HANDLE;  // owned by the context cache
+    VkSampler pointSampler_ = VK_NULL_HANDLE;  // the depth's; also the cache's
+
+    // The depth view, and which one each slot's mask set was last written
+    // with (by serial: a destroyed view's handle can be given out again).
+    VkImage depthImage_ = VK_NULL_HANDLE;
+    uint64_t depthGeneration_ = 0;
+    VkImageView depthView_ = VK_NULL_HANDLE;
+    uint64_t depthViewSerial_ = 0;
+    uint64_t maskSetSerial_[MAX_FRAMES] = {};
+
+    VkDescriptorSetLayout maskSetLayout_ = VK_NULL_HANDLE;
+    VkPipelineLayout maskLayout_ = VK_NULL_HANDLE;
+    VkPipeline maskPipeline_ = VK_NULL_HANDLE;    // single-sampled depth
+    VkPipeline maskPipelineMs_ = VK_NULL_HANDLE;  // multisampled, unresolved
 
     VkDescriptorSetLayout marchSetLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout marchLayout_ = VK_NULL_HANDLE;
@@ -101,6 +132,7 @@ private:
     VkFormat compositeFormat_ = VK_FORMAT_UNDEFINED;
 
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
+    VkDescriptorSet maskSets_[MAX_FRAMES] = {};
     VkDescriptorSet marchSets_[MAX_FRAMES] = {};
     VkDescriptorSet compositeSets_[MAX_FRAMES] = {};
 };

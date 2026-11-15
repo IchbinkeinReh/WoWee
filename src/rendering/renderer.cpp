@@ -7889,15 +7889,11 @@ void Renderer::recordSunShafts() {
             // Rain and snow put a lid over it.
             if (weather) strength *= 1.0f - 0.8f * glm::clamp(weather->getIntensity(), 0.0f, 1.0f);
             // Only while the sun can be seen from here, as the lens flare
-            // (sampleSunOcclusion, eased in update). The rays come from
-            // whatever is bright near the sun's place on screen, not from the
-            // sky alone - there is no depth to tell them apart (sun_shafts.hpp)
-            // - so with the sun behind a house its sunlit roof, wall and the
-            // leaves beside it streamed light across the house and the ground
-            // in its shadow, and a sun just past the screen's edge poured a
-            // shaft down that edge from whatever lit wall stood there. The
-            // occlusion includes the sun's occlusion query, so a sun behind a
-            // tree's crown puts them out as a roof does.
+            // (sampleSunOcclusion, eased in update): the occlusion includes
+            // the sun's occlusion query, so a sun behind a tree's crown or a
+            // mountain puts them out as a roof does. The rays themselves come
+            // from the sky alone - the scene's depth below tells it from the
+            // ground (sun_shafts.hpp).
             strength *= 1.0f - glm::clamp(sunScreenOcclusion_, 0.0f, 1.0f);
 
             // The sun's own colour, kept in hue and not in brightness, and
@@ -7907,6 +7903,19 @@ void Renderer::recordSunShafts() {
             in.tint = glm::mix(glm::vec3(1.0f), c / peak, 0.5f);
             in.sunUV = sun.uv;
             in.strength = strength;
+
+            // The scene's depth this frame, as its last pass left it - the
+            // same image the water's refraction copy reads.
+            if (postProcessPipeline_ && postProcessPipeline_->getSceneFramebuffer() != VK_NULL_HANDLE) {
+                in.depthImage = postProcessPipeline_->getSceneDepthImage();
+                in.depthMultisampled = postProcessPipeline_->sceneDepthIsMsaa();
+                in.depthLayout = postProcessPipeline_->sceneDepthLayout();
+            } else {
+                in.depthImage = vkCtx->getDepthCopySourceImage();
+                in.depthMultisampled = vkCtx->isDepthCopySourceMsaa();
+            }
+            const uint64_t ppGen = postProcessPipeline_ ? postProcessPipeline_->targetsGeneration() : 0;
+            in.depthGeneration = (vkCtx->swapchainGeneration() << 32) ^ ppGen;
         }
     }
     // Called every frame, strength zero included, so the composite knows

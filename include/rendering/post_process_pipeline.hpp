@@ -62,6 +62,10 @@ public:
     [[nodiscard]] VkImage getSceneColorImage() const;
     [[nodiscard]] VkImage getSceneDepthImage() const;
     [[nodiscard]] bool sceneDepthIsMsaa() const;
+    /// The layout getSceneDepthImage() is in once executePostProcessing has
+    /// run this frame: the upscaler's passes leave it read-only, everything
+    /// else as the scene pass ended it.
+    [[nodiscard]] VkImageLayout sceneDepthLayout() const { return sceneDepthLayout_; }
     /// The scene framebuffer's colour attachment 0 (its MSAA image under
     /// MSAA) and depth, as views, and the depth image: what the ray traced
     /// lighting's G-buffer pass draws into beside its own targets. False
@@ -151,6 +155,7 @@ private:
 
     // Per-frame state set during executePostProcessing
     VkCommandBuffer currentCmd_ = VK_NULL_HANDLE;
+    VkImageLayout sceneDepthLayout_ = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     Camera* camera_ = nullptr;
     float lastDeltaTime_ = 0.0f;
 

@@ -7,12 +7,14 @@
 // it passes, the nearer samples counting for more. A pixel whose walk crosses a
 // gap in the leaves lights up; one whose walk runs into a trunk does not - so
 // the gaps pour streaks out across the picture and the branches cast dark ones.
-// What counts as a source is bright and near the sun: the sky and clouds
-// around it, not a white wall on the other side of the screen.
+// What counts as a source is sky, bright and near the sun: uSource is the frame
+// with everything that has depth in front of the far plane taken out
+// (sun_shafts_mask.comp.glsl), so terrain, buildings and the WDL horizon only
+// ever block the rays, however brightly the sun lights them.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-layout(set = 0, binding = 0) uniform sampler2D uFrame;
+layout(set = 0, binding = 0) uniform sampler2D uSource;  // the frame's sky, rest black
 layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D uRays;
 
 layout(push_constant) uniform Push {
@@ -27,8 +29,8 @@ const int kSamples = 48;
 // pixel, so a gap a quarter of the screen from the sun still casts one.
 const float kDecay = 0.98;
 const float kReach = 0.8;
-// Brightness at which the frame starts to count as sky near the sun, and at
-// which it counts fully. In the swapchain's own values.
+// Brightness at which the sky starts to count as a source near the sun, and
+// at which it counts fully. In the swapchain's own values.
 const float kThresholdLow = 0.55;
 const float kThresholdHigh = 0.95;
 // How far from the sun, in screen heights, the sources fade out.
@@ -54,7 +56,7 @@ void main() {
     for (int i = 0; i < kSamples; ++i) {
         total += weight;
         if (at.x >= 0.0 && at.x <= 1.0 && at.y >= 0.0 && at.y <= 1.0) {
-            vec3 c = textureLod(uFrame, at, 0.0).rgb;
+            vec3 c = textureLod(uSource, at, 0.0).rgb;
             float bright = smoothstep(kThresholdLow, kThresholdHigh,
                                       dot(c, vec3(0.2126, 0.7152, 0.0722)));
             vec2 fromSun = (at - push.sun.xy) * vec2(push.sun.z, 1.0);

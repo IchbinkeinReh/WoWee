@@ -631,6 +631,8 @@ function(compile_shaders TARGET_NAME)
     # hence the target environment on the hardware tracer.
     set(SHADER_VARIANTS
         "rt_prepare.comp.glsl|rt_prepare_ms.comp.spv|-DRT_MSAA"
+        # The sun shafts' sky mask over a multisampled depth left unresolved.
+        "sun_shafts_mask.comp.glsl|sun_shafts_mask_ms.comp.spv|-DSHAFTS_MSAA"
         "rt_apply_ms.frag.glsl|rt_apply_msp.frag.spv|-DRT_MSAA_PIXEL"
         "rt_trace.comp.glsl|rt_trace_hw.comp.spv|-DRT_HARDWARE --target-env=vulkan1.2"
         "rt_gi_trace.comp.glsl|rt_gi_trace_hw.comp.spv|-DRT_HARDWARE --target-env=vulkan1.2"
