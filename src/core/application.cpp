@@ -7574,6 +7574,13 @@ void Application::render() {
                 for (const Route& r : kRoutes) {
                     if (!ui::frameXmlOwns(r.element)) continue;
                     if (!K::getInstance().isActionPressed(r.action)) continue;
+                    // SHIFT-B is OPENALLBAGS in 3.3.5's DefaultBindings.wtf
+                    // and B alone TOGGLEBACKPACK - the key that opens every
+                    // bag, now that I is the Dungeon Finder's again.
+                    if (r.element == UiElement::Bags && ImGui::GetIO().KeyShift) {
+                        engine->executeString("OpenAllBags()");
+                        continue;
+                    }
                     engine->executeString(r.call);
                 }
             }

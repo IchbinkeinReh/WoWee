@@ -3357,6 +3357,7 @@ const LiveBinding kLiveBindings[] = {
     {"TOGGLEWORLDMAP",    wowee::ui::KeybindingManager::Action::TOGGLE_WORLD_MAP},
     {"TOGGLEMINIMAP",     wowee::ui::KeybindingManager::Action::TOGGLE_MINIMAP},
     {"TOGGLEACHIEVEMENT", wowee::ui::KeybindingManager::Action::TOGGLE_ACHIEVEMENTS},
+    {"TOGGLELFGPARENT",   wowee::ui::KeybindingManager::Action::TOGGLE_DUNGEON_FINDER},
     {"TOGGLEGUILDTAB",    wowee::ui::KeybindingManager::Action::TOGGLE_GUILD_ROSTER},
 };
 

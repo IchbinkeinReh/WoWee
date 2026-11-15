@@ -25,7 +25,11 @@ KeybindingManager::KeybindingManager() {
 void KeybindingManager::initializeDefaults() {
     // Set default keybindings
     bindings_[static_cast<int>(Action::TOGGLE_CHARACTER_SCREEN)] = ImGuiKey_C;
-    bindings_[static_cast<int>(Action::TOGGLE_INVENTORY)] = ImGuiKey_I;
+    // I is the Dungeon Finder in 3.3.5 (DefaultBindings.wtf: "bind I
+    // TOGGLELFGPARENT"); opening every bag is SHIFT-B (OPENALLBAGS), which
+    // the bag route below answers. This action stays for anyone who bound it
+    // and has no key of its own.
+    bindings_[static_cast<int>(Action::TOGGLE_INVENTORY)] = ImGuiKey_None;
     bindings_[static_cast<int>(Action::TOGGLE_BAGS)] = ImGuiKey_B;
     bindings_[static_cast<int>(Action::TOGGLE_SPELLBOOK)] = ImGuiKey_P;  // WoW standard key
     bindings_[static_cast<int>(Action::TOGGLE_TALENTS)] = ImGuiKey_N;     // WoW standard key
@@ -34,7 +38,7 @@ void KeybindingManager::initializeDefaults() {
     bindings_[static_cast<int>(Action::TOGGLE_SETTINGS)] = ImGuiKey_Escape;
     bindings_[static_cast<int>(Action::TOGGLE_CHAT)] = ImGuiKey_Enter;
     bindings_[static_cast<int>(Action::TOGGLE_GUILD_ROSTER)] = ImGuiKey_O;
-    bindings_[static_cast<int>(Action::TOGGLE_DUNGEON_FINDER)] = ImGuiKey_J;  // Originally I, reassigned to avoid conflict
+    bindings_[static_cast<int>(Action::TOGGLE_DUNGEON_FINDER)] = ImGuiKey_I;  // WoW 3.3.5: I is TOGGLELFGPARENT
     bindings_[static_cast<int>(Action::TOGGLE_WORLD_MAP)] = ImGuiKey_M;  // WoW standard: M opens world map
     bindings_[static_cast<int>(Action::TOGGLE_NAMEPLATES)] = ImGuiKey_V;
     bindings_[static_cast<int>(Action::TOGGLE_ACHIEVEMENTS)] = ImGuiKey_Y;  // WoW standard key (Shift+Y in retail)
@@ -282,6 +286,20 @@ void KeybindingManager::loadFromConfigFile(const std::string& filePath) {
     }
 
     file.close();
+
+    // Every settings file this client wrote before carries the old defaults
+    // spelled out - inventory on I, the Dungeon Finder on J, a key the
+    // original leaves unbound - so new defaults alone would reach nobody.
+    // That exact pair is the old defaults rather than anyone's choice, and is
+    // moved to the client's: I opens the Dungeon Finder, and the bags are on
+    // B and SHIFT-B as in 3.3.5.
+    if (bindings_[static_cast<int>(Action::TOGGLE_INVENTORY)] == ImGuiKey_I &&
+        bindings_[static_cast<int>(Action::TOGGLE_DUNGEON_FINDER)] == ImGuiKey_J) {
+        bindings_[static_cast<int>(Action::TOGGLE_INVENTORY)] = ImGuiKey_None;
+        bindings_[static_cast<int>(Action::TOGGLE_DUNGEON_FINDER)] = ImGuiKey_I;
+        LOG_INFO("KeybindingManager: moved the Dungeon Finder from J to I and "
+                 "freed I from the inventory, as 3.3.5 binds them");
+    }
     LOG_INFO("KeybindingManager: Loaded keybindings from ", filePath);
 }
 
