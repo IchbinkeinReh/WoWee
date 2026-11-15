@@ -7640,6 +7640,7 @@ static int lua_GetLFGCompletionReward(lua_State* L) {
 // earns its place - the reward can name an item the bags have never held and
 // so have no cached query behind it.
 static int lua_GetLFGCompletionRewardItem(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetLFGCompletionRewardItem(index)");   // 0x00557f70
     auto* gh = getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
     const game::LfgCompletionReward* r = gh ? &gh->getLfgCompletionReward() : nullptr;
