@@ -513,6 +513,7 @@ static int lua_GetMerchantItemPurchaseGroup(lua_State* L) {
 // `itemCount > 0` - against nil that is an error rather than a false, and it
 // runs for every slot the vendor shows.
 static int lua_GetMerchantItemCostInfo(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetMerchantItemCostInfo(index)");   // 0x005846e0
     const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
     const auto* cost = merchantCost(L, index);
     if (!cost) {
@@ -1832,6 +1833,7 @@ static int lua_SplitContainerItem(lua_State* L) {
 // Arithmetic, not state: the twenty-eight general bank slots follow the
 // equipment at forty, and the seven bank bag slots at sixty-eight.
 static int lua_BankButtonIDToInvSlotID(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: BankButtonIDToInvSlotID(buttonID)");   // 0x0057b940
     // Both from the interface's own constants: the general slots start one past
     // the offset, and the bank bags start one past the last of them. Written as
     // the sum rather than as sixty-seven so the arithmetic is visible.
@@ -5203,6 +5205,7 @@ static int lua_GetNumLootItems(lua_State* L) {
 
 // GetLootSlotInfo(slot) → texture, name, quantity, quality, locked
 static int lua_GetLootSlotInfo(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetLootSlotInfo(slot)");   // 0x00588570
     auto* gh = getGameHandler(L);
     int slot = static_cast<int>(luaL_checknumber(L, 1)); // 1-indexed
     if (!gh || !gh->isLootWindowOpen()) {
@@ -5424,6 +5427,7 @@ static int lua_GetLootRollItemLink(lua_State* L) {
 // It is not nothing here: the bar under the item is drawn from it, so it sat
 // empty for the whole roll.
 static int lua_GetLootRollTimeLeft(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetLootRollTimeLeft(id)");   // 0x00588cc0
     auto* gh = getGameHandler(L);
     const auto* roll = rollFor(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
     if (!roll) { lua_pushnumber(L, 0); return 1; }
@@ -7167,6 +7171,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"GetSelectedAuctionItem", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetSelectedAuctionItem(\"type\")");   // 0x0059c920
             lua_pushnumber(L, auctionSelection());
             return 1;
         }},

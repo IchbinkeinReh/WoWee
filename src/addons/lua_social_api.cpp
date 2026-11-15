@@ -2170,6 +2170,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 // BuyGuildCharter takes the name typed into the frame; the
                 // vendor is whichever one this client is standing at.
                 {"BuyGuildCharter", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: BuyGuildCharter(guildName)");   // 0x0059a130
             auto* gh = getGameHandler(L);
             const char* name = luaL_optstring(L, 1, "");
             if (gh && name && *name && gh->getPetitionNpcGuid() != 0 && guildCharterPurchaseAllowed(gh))

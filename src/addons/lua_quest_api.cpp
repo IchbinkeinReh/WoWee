@@ -4803,6 +4803,15 @@ static int lua_IsQuestCompletable(lua_State* L) {
 static int lua_GetQuestReward(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
+    // 0x0058d620 / 0x0058cfa0: on the reward page of a quest that offers a
+    // choice, the choice (zero-based; a non-number counts as -1) has to be
+    // one of them. A quest without choices takes any value.
+    if (gh->isQuestOfferRewardOpen()) {
+        const int numChoices = static_cast<int>(countRewards(&gh->getQuestOfferReward().choiceRewards));
+        const int pick = lua_isnumber(L, 1) ? static_cast<int>(lua_tonumber(L, 1)) - 1 : -1;
+        if (numChoices > 0 && (pick < 0 || pick >= numChoices))
+            return luaL_error(L, "Invalid reward choice in GetQuestReward([choice])");
+    }
     // One-based, and zero means the quest offered nothing to choose between.
     const int choice = static_cast<int>(luaL_optnumber(L, 1, 0));
     gh->chooseQuestReward(choice > 0 ? static_cast<uint32_t>(choice - 1) : 0);
@@ -4828,6 +4837,8 @@ static int lua_CloseQuest(lua_State* L) {
 // type is "choice" for the rewards a player picks between and "reward" for the
 // ones always given.
 static int lua_GetQuestItemInfo(lua_State* L) {
+    if (!lua_isstring(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Invalid quest item in GetQuestItemInfo(\"type\", index)");   // 0x0058d980
     auto* gh = getGameHandler(L);
     const char* type = luaL_optstring(L, 1, "reward");
     const int index = static_cast<int>(luaL_optnumber(L, 2, 0));

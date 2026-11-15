@@ -530,6 +530,7 @@ void registerLfgLuaAPI(lua_State* L) {
     // there is one and lists them in a tooltip when there are several; with
     // nothing to answer, every check read as "multiple dungeons".
     {"GetLFGRoleUpdateSlot", [](lua_State* L) -> int {
+        if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetLFGRoleUpdateSlot(index)");   // 0x00554690
         auto* gh = getGameHandler(L);
         const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
         if (!gh || index < 1) return luaReturnNil(L);
@@ -721,6 +722,7 @@ void registerLfgLuaAPI(lua_State* L) {
     // server sends none, so those stay nil rather than being invented, and the
     // dialog draws a role icon and a tick per row, which is what it is for.
     {"GetLFGProposalMember", [](lua_State* L) -> int {
+        if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetLFGProposalMember(index)");   // 0x00553000
         auto* gh = getGameHandler(L);
         const int index = static_cast<int>(luaL_optinteger(L, 1, 0));
         if (!gh || index < 1) return luaReturnNil(L);
@@ -842,6 +844,7 @@ void registerLfgLuaAPI(lua_State* L) {
     // The server sends one money and one experience figure with the variable
     // parts zeroed, so the totals come out right either way.
     {"GetLFGDungeonRewards", [](lua_State* L) -> int {
+        if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetLFGDungeonRewards(dungeonID)");   // 0x00557aa0
         auto* gh = getGameHandler(L);
         const uint32_t dungeonId = static_cast<uint32_t>(luaL_optinteger(L, 1, 0));
         const game::LfgReward* r = nullptr;
@@ -1006,6 +1009,7 @@ void registerLfgLuaAPI(lua_State* L) {
     // the id and the type into the name. IsLFGDungeonJoinable was then asked
     // about a string.
     {"GetLFGRandomDungeonInfo", [](lua_State* L) -> int {
+        if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetLFGRandomDungeonInfo(index)");   // 0x005555d0
         auto* gh = getGameHandler(L);
         const int index = static_cast<int>(luaL_optinteger(L, 1, 0));
         if (!gh || index < 1) return luaReturnNil(L);
