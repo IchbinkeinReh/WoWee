@@ -126,8 +126,8 @@ bool TouchControls::handleEvent(const SDL_Event& event, int windowWidth, int win
             if (lookFingerId_ == kNoFinger) {
                 lookFingerId_ = id;
                 lookIsStick_ = false;
-                lookX_ = lookOriginX_ = x;
-                lookY_ = lookOriginY_ = y;
+                lookX_ = x;
+                lookY_ = y;
                 lookMoved_ = false;
                 lookTravel_ = 0.0f;
                 lookDownMs_ = SDL_GetTicks();
@@ -150,8 +150,8 @@ bool TouchControls::handleEvent(const SDL_Event& event, int windowWidth, int win
             LOG_DEBUG("touch: camera stick at ", x, ",", y);
             lookFingerId_ = id;
             lookIsStick_ = true;
-            lookX_ = lookOriginX_ = x;
-            lookY_ = lookOriginY_ = y;
+            lookX_ = x;
+            lookY_ = y;
             lookMoved_ = false;
             lookTravel_ = 0.0f;
             lookDownMs_ = SDL_GetTicks();
@@ -340,10 +340,6 @@ void TouchControls::endPinch() {
         stickOriginX_ = stickAtX_;
         stickOriginY_ = stickAtY_;
         stickX_ = stickY_ = 0.0f;
-    }
-    if (pinchA_ == lookFingerId_ && lookFingerId_ != kNoFinger) {
-        lookOriginX_ = lookX_;
-        lookOriginY_ = lookY_;
     }
     pinchA_ = pinchB_ = kNoFinger;
 }

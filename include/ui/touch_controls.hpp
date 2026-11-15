@@ -150,7 +150,6 @@ private:
     // a long press when it landed on the interface.
     SDL_FingerID lookFingerId_ = kNoFinger;
     bool lookIsStick_ = false;
-    float lookOriginX_ = 0.0f, lookOriginY_ = 0.0f;
     float lookX_ = 0.0f, lookY_ = 0.0f;           // where the finger is now
     bool lookMoved_ = false;
     float lookTravel_ = 0.0f;
