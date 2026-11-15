@@ -15,13 +15,17 @@ count passes and is meant to be followed by lowering the ceiling here - a
 ratchet, not a snapshot. Where the honest answer is none, the ceiling is zero
 and lowering it is not possible.
 
-These run in about a minute together, which is why they are the ones wired
-into the build; the slower reports - element readiness, the unbound global
-scan, the ungated-draw walk - stay manual. The line here used to say six of
-them in under three seconds, and had said so for long enough that the count was
-out by a factor of five: a comment about how much a thing costs stops being
-true the moment someone adds to it, and this one is worth keeping honest
-because it is the argument for what belongs here.
+These run in about two minutes together (114 s on Windows, 2026-11-15), which
+is why they are the ones wired into the build; the slower reports - element
+readiness, the unbound global scan, the ungated-draw walk - stay manual. The
+line here used to say six of them in under three seconds, and had said so for
+long enough that the count was out by a factor of five; then it said about a
+minute while the run took nineteen, because seven sweeps had become quadratic
+in the tree or started a process per name, and grew with it until ctest's
+300 s timeout cut the guard off under a parallel build. A comment about how
+much a thing costs stops being true the moment someone adds to it, and this
+one is worth keeping honest because it is the argument for what belongs here.
+Time a new sweep against the whole tree before adding it to the tables below.
 """
 import argparse
 import pathlib
