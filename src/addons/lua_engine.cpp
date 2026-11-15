@@ -13380,7 +13380,7 @@ void LuaEngine::registerCoreAPI() {
         // missing, and FrameXML calls both.
         // Positional format specifiers, which this Lua does not have.
         //
-        // The client's format accepts "%2$s" - argument two, whatever its
+        // The client's format (0x00818070) accepts "%2$s" - argument two, whatever its
         // place in the string - and the interface leans on it hard: 189 uses
         // of %2$s, 184 of %4$s, 154 of %1$s, nearly all of them combat log
         // lines in GlobalStrings. Stock Lua 5.1 answers "invalid option '%$'
