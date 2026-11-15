@@ -494,13 +494,29 @@ static int lua_CancelPlayerBuff(lua_State* L) {
     return 0;
 }
 
-static int lua_UnitBuff(lua_State* L) { return lua_UnitAura(L, true); }
-static int lua_UnitDebuff(lua_State* L) { return lua_UnitAura(L, false); }
+static int lua_UnitBuff(lua_State* L) {
+    // 0x00614ca0 (through 0x006110a0): a unit text, then an index or a name - a
+    // number is also a string to that test.
+    if (!lua_isstring(L, 1) || !lua_isstring(L, 2))
+        return luaL_error(L, "Usage: UnitBuff(\"unit\", [index] or [\"name\", \"rank\"][, \"filter\"])");
+    return lua_UnitAura(L, true);
+}
+static int lua_UnitDebuff(lua_State* L) {
+    // 0x00614cf0 (through 0x006110a0): a unit text, then an index or a name - a
+    // number is also a string to that test.
+    if (!lua_isstring(L, 1) || !lua_isstring(L, 2))
+        return luaL_error(L, "Usage: UnitDebuff(\"unit\", [index] or [\"name\", \"rank\"][, \"filter\"])");
+    return lua_UnitAura(L, false);
+}
 
 // UnitAura(unit, index, filter) - generic aura query with filter string
 // filter: "HELPFUL" = buffs, "HARMFUL" = debuffs, "PLAYER" = cast by player,
 //         "HELPFUL|PLAYER" = buffs cast by player, etc.
 static int lua_UnitAuraGeneric(lua_State* L) {
+    // 0x00614d40 (through 0x006110a0): a unit text, then an index or a name - a
+    // number is also a string to that test.
+    if (!lua_isstring(L, 1) || !lua_isstring(L, 2))
+        return luaL_error(L, "Usage: UnitAura(\"unit\", [index] or [\"name\", \"rank\"][, \"filter\"])");
     const char* filter = luaL_optstring(L, 3, "HELPFUL");
     std::string f(filter ? filter : "HELPFUL");
     for (char& c : f) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -599,8 +615,14 @@ static int lua_UnitCastInfo(lua_State* L, bool wantChannel) {
     return wantChannel ? 8 : 9;
 }
 
-static int lua_UnitCastingInfo(lua_State* L) { return lua_UnitCastInfo(L, false); }
-static int lua_UnitChannelInfo(lua_State* L) { return lua_UnitCastInfo(L, true); }
+static int lua_UnitCastingInfo(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitCastingInfo(\"unit\")");   // 0x00611df0
+    return lua_UnitCastInfo(L, false);
+}
+static int lua_UnitChannelInfo(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitChannelInfo(\"unit\")");   // 0x00612090
+    return lua_UnitCastInfo(L, true);
+}
 
 static int lua_CastSpellByName(lua_State* L) {
     auto* gh = getGameHandler(L);
@@ -1484,18 +1506,19 @@ static int lua_GetSpellLink(lua_State* L) {
 /// its ranks through the SpellRank table), and one rank of a spell at a time is
 /// all a unit can carry, so a name match picks the same aura either way.
 static int lua_CancelUnitBuff(lua_State* L) {
+    // The reference parses the unit and the aura's ident in one go, and insists
+    // on a unit text and, next to it, a number or a string (0x006110a0 asks for
+    // both before 0x00608390 reads the second either way). Given neither it
+    // raises its Usage line (0x00804220), before the player is looked at; this
+    // returned without touching anything, which hid a typo in a macro as an
+    // aura that would not drop.
+    if (!lua_isstring(L, 1) || (!lua_isnumber(L, 2) && !lua_isstring(L, 2))) {
+        return luaL_error(L, "Usage: CancelUnitBuff(\"unit\", [index] or [\"name\", \"rank\"][, \"filter\"])");
+    }
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     std::string uidStr(luaL_optstring(L, 1, "player"));
     toLowerInPlace(uidStr);
-    // The reference parses the unit and the aura's ident in one go, and insists
-    // the argument next to the unit be a number or a string (0x006110a0 asks for
-    // one before 0x00608390 reads it either way). Given neither form it raises
-    // its Usage line; this returned without touching anything, which hid a typo
-    // in a macro as an aura that would not drop.
-    if (!lua_isnumber(L, 2) && !lua_isstring(L, 2)) {
-        return luaL_error(L, "Usage: CancelUnitBuff(\"unit\", [index] or [\"name\", \"rank\"][, \"filter\"])");
-    }
     if (uidStr != "player") return 0;   // only one's own auras can be cancelled
 
     const auto& auras = gh->getPlayerAuras();
