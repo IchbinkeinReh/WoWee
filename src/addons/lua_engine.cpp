@@ -11547,13 +11547,29 @@ void LuaEngine::registerCoreAPI() {
         "    local icon = GetInventoryItemTexture(unit, slot)\n"
         "    if icon then tex:SetTexture(icon) end\n"
         "end\n"
+        // GameTooltip:SetTracking() (0x00625940): the lines cleared; the
+        // menu's own entry when one is chosen, by its GlobalStrings name;
+        // else the running tracking spell's own tooltip; else
+        // MINIMAP_TRACKING_TOOLTIP_NONE - one line in AddLine's colour, then
+        // shown. Every word from the client's GlobalStrings: this said an
+        // English "Tracking" from a global no client defines.
         "function mt:SetTracking()\n"
-        "    local active\n"
+        "    self:ClearLines()\n"
         "    for i = 1, GetNumTrackingTypes() do\n"
-        "        local name, _, on = GetTrackingInfo(i)\n"
-        "        if on then active = name break end\n"
+        "        local name, _, on, kind = GetTrackingInfo(i)\n"
+        "        if on and kind == 'other' and name then\n"
+        "            self:AddLine(name)\n"
+        "            self:Show()\n"
+        "            return\n"
+        "        end\n"
         "    end\n"
-        "    self:SetText(active or MINIMAP_TRACKING or 'Tracking')\n"
+        "    local spellId = __WoweeActiveTrackingSpell and __WoweeActiveTrackingSpell()\n"
+        "    if spellId and self.SetSpellByID then\n"
+        "        self:SetSpellByID(spellId)\n"
+        "        self:Show()\n"
+        "        return\n"
+        "    end\n"
+        "    self:AddLine(MINIMAP_TRACKING_TOOLTIP_NONE or 'MINIMAP_TRACKING_TOOLTIP_NONE')\n"
         "    self:Show()\n"
         "end\n"
         // A model frame's dressing room. Written here because the two verbs
