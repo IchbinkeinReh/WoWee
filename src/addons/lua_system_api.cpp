@@ -6568,6 +6568,9 @@ static int lua_GetPVPRankProgress(lua_State* L) { lua_pushnumber(L, 0); return 1
 // Which team an index names comes from the same list GetArenaTeam reads.
 // ArenaTeamRoster(index) - ask the server for the roster.
 static int lua_ArenaTeamRoster(lua_State* L) {
+    // 0x005a3cf0
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: ArenaTeamRoster(team)");
     auto* gh = getGameHandler(L);
     const uint32_t teamId = arenaTeamIdAtIndex(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
     if (gh && teamId) gh->requestArenaTeamRoster(teamId);
@@ -6582,6 +6585,9 @@ static int lua_ArenaTeamRoster(lua_State* L) {
 // the panel does test before using, and rank and level are zero because the
 // roster carries neither.
 static int lua_GetArenaTeamRosterInfo(lua_State* L) {
+    // 0x005a2fc0
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: GetArenaTeamRosterInfo(team, index)");
     auto* gh = getGameHandler(L);
     const uint32_t teamId = arenaTeamIdAtIndex(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
     const int member = static_cast<int>(luaL_optnumber(L, 2, 0));
@@ -6824,6 +6830,9 @@ static int lua_HasKey(lua_State* L) {
 // style and colours and nothing here reads them. Those eight answer zero rather
 // than nil, so the tabard draws black instead of raising mid-arithmetic.
 static int lua_GetArenaTeam(lua_State* L) {
+    // 0x005a3860
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: GetArenaTeam(team)");
     auto* gh = getGameHandler(L);
     const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
     if (!gh || idx < 1) return luaReturnNil(L);
@@ -8598,6 +8607,9 @@ void registerSystemLuaAPI(lua_State* L) {
                 // SortArenaTeamRoster(column) - the details frame's column
                 // headers. Unbound, every one of them raised on click.
                 {"SortArenaTeamRoster", [](lua_State* L) -> int {
+            // 0x005a3490
+            if (!lua_isstring(L, 1))
+                return luaL_error(L, "Usgae: SortArenaTeamRoster(\"type\")");
             auto* gh = getGameHandler(L);
             const char* key = luaL_optstring(L, 1, "");
             if (gh && key && *key) gh->sortArenaTeamRosters(key);
@@ -9525,6 +9537,9 @@ void registerSystemLuaAPI(lua_State* L) {
                 // "n/total" label beside the player's own. Zero for everyone
                 // drew their bar empty however much they had done.
                 {"GetComparisonCategoryNumAchievements", [](lua_State* L) -> int {
+            // 0x005b3b30
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetComparisonCategoryNumAchievements(categoryID)");
             auto* gh = getGameHandler(L);
             const auto category = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
             if (!gh) { lua_pushnumber(L, 0); return 1; }
@@ -9618,6 +9633,9 @@ void registerSystemLuaAPI(lua_State* L) {
                 // IsStackableAction(action) )`, and GetActionCount underneath
                 // it has been counting across every bag the whole time.
                 {"IsAttackAction", [](lua_State* L) -> int {
+            // 0x005a9ba0
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: IsAttackAction(slot)");
             auto* gh = getGameHandler(L);
             const int slot = static_cast<int>(luaL_optnumber(L, 1, 0)) - 1;
             if (!gh || slot < 0) { luaPushOneOrNil(L, 0); return 1; }
@@ -9631,6 +9649,9 @@ void registerSystemLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"IsConsumableAction", [](lua_State* L) -> int {
+            // 0x005a9c80
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: IsConsumableAction(slot)");
             auto* gh = getGameHandler(L);
             const int slot = static_cast<int>(luaL_optnumber(L, 1, 0)) - 1;
             if (!gh || slot < 0) { luaPushOneOrNil(L, 0); return 1; }
@@ -9645,6 +9666,9 @@ void registerSystemLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"IsEquippedAction", [](lua_State* L) -> int {
+            // 0x005a8bc0
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: IsEquippedAction(slot)");
             auto* gh = getGameHandler(L);
             const int slot = static_cast<int>(luaL_optnumber(L, 1, 0)) - 1;
             if (!gh || slot < 0) { luaPushOneOrNil(L, 0); return 1; }
@@ -9662,6 +9686,9 @@ void registerSystemLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"IsStackableAction", [](lua_State* L) -> int {
+            // 0x005a8720
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: IsStackableAction(slot)");
             auto* gh = getGameHandler(L);
             const int slot = static_cast<int>(luaL_optnumber(L, 1, 0)) - 1;
             if (!gh || slot < 0) { luaPushOneOrNil(L, 0); return 1; }
@@ -9855,7 +9882,12 @@ void registerSystemLuaAPI(lua_State* L) {
         }},
                 {"RegisterForSave",          lua_RegisterForSave},
                 {"RegisterForSavePerCharacter", lua_RegisterForSavePerCharacter},
-                {"RegisterStaticConstants",  lua_ReturnNothing},
+                {"RegisterStaticConstants",  [](lua_State* L) -> int {
+            // 0x005ac320: a table, nothing else.
+            if (lua_type(L, 1) != LUA_TTABLE)
+                return luaL_error(L, "Usage: RegisterStaticConstants(table)");
+            return lua_ReturnNothing(L);
+        }},
                 {"SetChatWindowName",        lua_SetChatWindowName},
                 {"SetupFullscreenScale",     lua_SetupFullscreenScale},
                 // DropCursorMoney is real now, and lives with the rest of the
@@ -10610,6 +10642,9 @@ void registerSystemLuaAPI(lua_State* L) {
                 // PositionWorldMapArrowFrame, above) are both answered.
                 {"UpdateWorldMapArrowFrames",   lua_UpdateWorldMapArrowFrames},
                 {"SetSelectedSkill", [](lua_State* L) -> int {
+            // 0x005cd860
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: SetSelectedSkill(index)");
             selectedSkill() = static_cast<int>(luaL_optnumber(L, 1, 0)); return 0; }},
                 {"Sound_GameSystem_GetOutputDriverNameByIndex", lua_Sound_GetOutputDriverNameByIndex},
                 {"PlaySound",           lua_PlaySound},
@@ -11654,6 +11689,9 @@ void registerSystemLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"CalendarGetNumDayEvents", [](lua_State* L) -> int {
+            // 0x005b9bf0
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+                return luaL_error(L, "Usage: CalendarGetNumDayEvents([-1,0,1], monthDay)");
             lua_pushnumber(L, static_cast<double>(calendarDayRows(L).size()));
             return 1;
         }},
@@ -11782,6 +11820,9 @@ void registerSystemLuaAPI(lua_State* L) {
                 // that is not a lockout answers nothing rather than the wrong
                 // raid.
                 {"CalendarGetRaidInfo", [](lua_State* L) -> int {
+            // 0x005ba000
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2) || !lua_isnumber(L, 3))
+                return luaL_error(L, "Usage: CalendarGetRaidInfo([-1,0,1], monthDay, index)");
             const auto rows = calendarDayRows(L);
             const int index = static_cast<int>(luaL_optnumber(L, 3, 0));
             if (index < 1 || static_cast<size_t>(index) > rows.size()) return 0;
@@ -11843,6 +11884,9 @@ void registerSystemLuaAPI(lua_State* L) {
                 // and asks the server; the answer arrives as
                 // CALENDAR_UPDATE_EVENT and CalendarGetEventInfo reads it.
                 {"CalendarOpenEvent", [](lua_State* L) -> int {
+            // 0x005b9eb0
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2) || !lua_isnumber(L, 3))
+                return luaL_error(L, "Usage: CalendarOpenEvent([-1,0,1], monthDay, index)");
             const auto rows = calendarDayRows(L);
             const int index = static_cast<int>(luaL_optnumber(L, 3, 0));
             auto* gh = getGameHandler(L);
@@ -12210,6 +12254,9 @@ void registerSystemLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"CalendarEventSetDate", [](lua_State* L) -> int {
+            // 0x005bb4a0
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2) || !lua_isnumber(L, 3))
+                return luaL_error(L, "Usage: CalendarEventSetDate(month, day, year)");
             auto& d = calendarDraft();
             d.eventTime.month = static_cast<int>(luaL_optnumber(L, 1, d.eventTime.month));
             d.eventTime.day   = static_cast<int>(luaL_optnumber(L, 2, d.eventTime.day));
@@ -12223,6 +12270,9 @@ void registerSystemLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"CalendarEventSetTime", [](lua_State* L) -> int {
+            // 0x005bb5a0
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+                return luaL_error(L, "Usage: CalendarEventSetTime(hour, minute)");
             auto& d = calendarDraft();
             d.eventTime.hour   = static_cast<int>(luaL_optnumber(L, 1, d.eventTime.hour));
             d.eventTime.minute = static_cast<int>(luaL_optnumber(L, 2, d.eventTime.minute));
@@ -12310,6 +12360,9 @@ void registerSystemLuaAPI(lua_State* L) {
                 // status arrives one-based from the interface where the wire
                 // counts from zero.
                 {"CalendarEventSetStatus", [](lua_State* L) -> int {
+            // 0x005b8730
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+                return luaL_error(L, "Usage: CalendarEventSetStatus(index, status)");
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
             const int uiStatus = static_cast<int>(luaL_optnumber(L, 2, 1));
@@ -12322,6 +12375,9 @@ void registerSystemLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"CalendarEventSetModerator", [](lua_State* L) -> int {
+            // 0x005b87d0
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: CalendarEventSetModerator(index)");
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
             if (!gh) return 0;
@@ -12332,6 +12388,9 @@ void registerSystemLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"CalendarEventClearModerator", [](lua_State* L) -> int {
+            // 0x005b8840
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: CalendarEventClearModerator(index)");
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
             if (!gh) return 0;
@@ -12401,6 +12460,9 @@ void registerSystemLuaAPI(lua_State* L) {
                 // the menu asks for it back - the dropdown is built in one
                 // call and clicked in another, with nothing carried between.
                 {"CalendarContextSelectEvent", [](lua_State* L) -> int {
+            // 0x005ba5b0
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2) || !lua_isnumber(L, 3))
+                return luaL_error(L, "Usage: CalendarContextSelectEvent([-1.0.1], monthDay, index)");
             calendarContextRow() = {
                 .monthOffset = static_cast<int>(luaL_optnumber(L, 1, 0)),
                 .day = static_cast<int>(luaL_optnumber(L, 2, 0)),
@@ -12558,15 +12620,31 @@ void registerSystemLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"CalendarContextInviteAvailable", [](lua_State* L) -> int {
+            // 0x005bab50: three numbers naming a row, or the row the menu
+            // is about; with neither, the usage error.
+            if (uint64_t named = 0; !calendarNamedOrContextEvent(L, named))
+                return luaL_error(L, "Usage: CalendarContextInviteAvailable([-1.0.1], monthDay, index)");
             return calendarRespondToContextInvite(L, 1);   // accepted
         }},
                 {"CalendarContextInviteDecline", [](lua_State* L) -> int {
+            // 0x005bad00: three numbers naming a row, or the row the menu
+            // is about; with neither, the usage error.
+            if (uint64_t named = 0; !calendarNamedOrContextEvent(L, named))
+                return luaL_error(L, "Usage: CalendarContextInviteDecline([-1.0.1], monthDay, index)");
             return calendarRespondToContextInvite(L, 2);   // declined
         }},
                 {"CalendarContextInviteTentative", [](lua_State* L) -> int {
+            // 0x005bcf30: three numbers naming a row, or the row the menu
+            // is about; with neither, the usage error.
+            if (uint64_t named = 0; !calendarNamedOrContextEvent(L, named))
+                return luaL_error(L, "Usage: Script_CalendarContextInviteTentative([-1.0.1], monthDay, index)");
             return calendarRespondToContextInvite(L, 8);   // tentative
         }},
                 {"CalendarContextInviteRemove", [](lua_State* L) -> int {
+            // 0x005bd040: three numbers naming a row, or the row the menu
+            // is about; with neither, the usage error.
+            if (uint64_t named = 0; !calendarNamedOrContextEvent(L, named))
+                return luaL_error(L, "Usage: CalendarContextInviteRemove([-1.0.1], monthDay, index)");
             return calendarRespondToContextInvite(L, 9);   // removed
         }},
                 // Whether the player may edit or delete the row the menu is
@@ -12574,6 +12652,10 @@ void registerSystemLuaAPI(lua_State* L) {
                 // for real and refuses otherwise; this is what greys the menu
                 // entry rather than letting it be clicked and rejected.
                 {"CalendarContextEventCanEdit", [](lua_State* L) -> int {
+            // 0x005baeb0: three numbers naming a row, or the row the menu
+            // is about; with neither, the usage error.
+            if (uint64_t named = 0; !calendarNamedOrContextEvent(L, named))
+                return luaL_error(L, "Usage: CalendarContextEventCanEdit([-1.0.1], monthDay, index)");
             auto* gh = getGameHandler(L);
             if (!gh) { lua_pushboolean(L, 0); return 1; }
             const auto rows = calendarDayRows(L);
@@ -12638,6 +12720,10 @@ void registerSystemLuaAPI(lua_State* L) {
         }},
                 // Delete the row the menu is about.
                 {"CalendarContextEventRemove", [](lua_State* L) -> int {
+            // 0x005bd220: three numbers naming a row, or the row the menu
+            // is about; with neither, the usage error.
+            if (uint64_t named = 0; !calendarNamedOrContextEvent(L, named))
+                return luaL_error(L, "Usage: Script_CalendarContextEventRemove([-1.0.1], monthDay, index)");
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
             const auto& row = calendarContextRow();
@@ -12693,12 +12779,20 @@ void registerSystemLuaAPI(lua_State* L) {
                 // Signing up to a guild event, which is an RSVP with the
                 // signed-up status rather than a separate request.
                 {"CalendarContextEventSignUp", [](lua_State* L) -> int {
+            // 0x005bd130: three numbers naming a row, or the row the menu
+            // is about; with neither, the usage error.
+            if (uint64_t named = 0; !calendarNamedOrContextEvent(L, named))
+                return luaL_error(L, "Usage: CalendarContextEventSignUp([-1.0.1], monthDay, index)");
             return calendarRespondToContextInvite(L, 6);   // SIGNED_UP
         }},
                 // Which of the six kinds the menu's row is, so the menu can
                 // offer the right verbs. Read from the same day list the row
                 // was chosen out of.
                 {"CalendarContextEventGetCalendarType", [](lua_State* L) -> int {
+            // 0x005bafc0: three numbers naming a row, or the row the menu
+            // is about; with neither, the usage error.
+            if (uint64_t named = 0; !calendarNamedOrContextEvent(L, named))
+                return luaL_error(L, "Usage: CalendarContextEventGetCalendarType([-1.0.1], monthDay, index)");
             const auto& row = calendarContextRow();
             auto* gh = getGameHandler(L);
             // Nil rather than nothing, for the same reason as
@@ -12741,6 +12835,9 @@ void registerSystemLuaAPI(lua_State* L) {
                 // invite". The invite list the server sends is not per-day, so
                 // a day has one only when one of its events is in it.
                 {"CalendarGetFirstPendingInvite", [](lua_State* L) -> int {
+            // 0x005b9e10
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+                return luaL_error(L, "Usage: CalendarGetDay([-1,0,1], monthDay)");
             const auto rows = calendarDayRows(L);
             auto* gh = getGameHandler(L);
             if (!gh) { lua_pushnumber(L, 0); return 1; }
@@ -12781,6 +12878,9 @@ void registerSystemLuaAPI(lua_State* L) {
             return 4;
         }},
                 {"CalendarSetMonth", [](lua_State* L) -> int {
+            // 0x005bcc00
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: CalendarSetMonth(offsetMonths)");
             const int offset = static_cast<int>(luaL_checknumber(L, 1));
             const auto viewed = calendarViewedMonth();
             const auto info = wowee::game::calendarMonthAt(
@@ -12789,6 +12889,9 @@ void registerSystemLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"CalendarSetAbsMonth", [](lua_State* L) -> int {
+            // 0x005c43b0
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: CalendarSetAbsMonth(month[, year])");
             calendarSetViewedMonth(static_cast<int>(luaL_checknumber(L, 1)),
                                    static_cast<int>(luaL_checknumber(L, 2)));
             return 0;

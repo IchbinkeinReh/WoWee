@@ -815,6 +815,9 @@ static int lua_IsInGuild(lua_State* L) {
 
 // GetGuildInfo("player") → guildName, guildRankName, guildRankIndex
 static int lua_GetGuildInfoFunc(lua_State* L) {
+    // 0x005eaaf0
+    if (!lua_isstring(L, 1))
+        return luaL_error(L, "Usage: GetGuildInfo(\"unit\")");
     auto* gh = getGameHandler(L);
     if (!gh || !gh->isInGuild()) { return luaReturnNil(L); }
     lua_pushstring(L, gh->getGuildName().c_str());
@@ -1816,6 +1819,9 @@ static int lua_GetNumGuildEvents(lua_State* L) {
 }
 
 static int lua_GetGuildEventInfo(lua_State* L) {
+    // 0x005ccd90
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: GetGuildEventInfo(index)");
     auto* gh = getGameHandler(L);
     const int index = static_cast<int>(luaL_checknumber(L, 1));
     if (!gh) return luaReturnNil(L);
@@ -2074,6 +2080,9 @@ void registerSocialLuaAPI(lua_State* L) {
                 // tab and waits for a callback when the answer is nothing,
                 // which is what happens before the item query comes back.
                 {"GetPetitionItemInfo", [](lua_State* L) -> int {
+            // 0x005a1fb0
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetPetitionItemInfo(index)");
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 1)) - 1;
             uint32_t itemId = 0, displayId = 0, cost = 0;
@@ -2145,6 +2154,9 @@ void registerSocialLuaAPI(lua_State* L) {
                 // plus one, and it is the only thing telling the server a
                 // five-person charter from a two-person one.
                 {"BuyPetition", [](lua_State* L) -> int {
+            // 0x005a2530
+            if (!lua_isnumber(L, 1) || !lua_isstring(L, 2))
+                return luaL_error(L, "Usage: BuyPetition(index, name)");
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 1));
             const char* name = luaL_optstring(L, 2, "");
@@ -2172,6 +2184,9 @@ void registerSocialLuaAPI(lua_State* L) {
                 // be turned in under. The petition being renamed is the one
                 // whose window is open.
                 {"RenamePetition", [](lua_State* L) -> int {
+            // 0x005cf450
+            if (!lua_isstring(L, 1))
+                return luaL_error(L, "Usage(RenamePetition(\"name\")");
             auto* gh = getGameHandler(L);
             const char* newName = luaL_optstring(L, 1, "");
             if (gh && newName && *newName) {
@@ -2318,6 +2333,9 @@ void registerSocialLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"SetGuildInfoText", [](lua_State* L) -> int {
+            // 0x005cb820
+            if (!lua_isstring(L, 1))
+                return luaL_error(L, "Usage: SetGuildInfoText(text)");
             auto* gh = getGameHandler(L);
             const char* text = luaL_optstring(L, 1, "");
             if (gh && text) gh->setGuildInfoText(text);
@@ -2405,6 +2423,9 @@ void registerSocialLuaAPI(lua_State* L) {
                 // GetGuildRosterLastOnline(index) → how long since that member
                 // was last seen, as years, months, days, hours.
                 {"GetGuildRosterLastOnline", [](lua_State* L) -> int {
+            // 0x005cabb0
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetGuildRosterLastOnline(index)");
             auto* gh = getGameHandler(L);
             const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
             if (!gh || idx < 1) return luaReturnNil(L);
@@ -2600,6 +2621,9 @@ void registerSocialLuaAPI(lua_State* L) {
                 // view 0x01, deposit 0x02, update text 0x04 - the same the
                 // roster reports.
                 {"SetGuildBankTabPermissions", [](lua_State* L) -> int {
+            // 0x005cb470
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+                return luaL_error(L, "Usage: SetGuildTabPermissions(tab, index, enabled)");
             auto* gh = getGameHandler(L);
             const int tab  = static_cast<int>(luaL_optnumber(L, 1, 0));
             const int perm = static_cast<int>(luaL_optnumber(L, 2, 0));
@@ -2612,6 +2636,9 @@ void registerSocialLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"SetGuildBankTabWithdraw", [](lua_State* L) -> int {
+            // 0x005cb760
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+                return luaL_error(L, "Usage: SetGuildBankTabWithdraw(tab, amount)");
             auto* gh = getGameHandler(L);
             const int tab = static_cast<int>(luaL_optnumber(L, 1, 0));
             const auto n  = static_cast<uint32_t>(luaL_optnumber(L, 2, 0));
@@ -2884,7 +2911,12 @@ void registerSocialLuaAPI(lua_State* L) {
                 // reachable from the static tables - and there is no reader for the
                 // opcode here either, so sending numbers whose meaning is guessed
                 // would only buy a log line nobody can read.
-                {"GMReportLag", [](lua_State* L) -> int { (void)L; return 0; }},
+                {"GMReportLag", [](lua_State* L) -> int {
+            // 0x005ad020
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GMReportLag(number)");
+            return 0;
+        }},
                 // GMResponseNeedMoreHelp(ticketDescription) - the button under
                 // a GM's answer that says the answer did not settle it.
                 //
@@ -2953,6 +2985,9 @@ void registerSocialLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"GuildControlGetRankName", [](lua_State* L) -> int {
+            // 0x005ccc90
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GuildControlGetRankName(index)");
             auto* gh = getGameHandler(L);
             const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
             if (!gh || idx < 1) return luaReturnNil(L);
@@ -2966,6 +3001,9 @@ void registerSocialLuaAPI(lua_State* L) {
                 // takes no argument, so this is the only thing that says which
                 // rank it is being asked about.
                 {"GuildControlSetRank", [](lua_State* L) -> int {
+            // 0x005ca260
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GuildControlSetRank(rank)");
             auto* gh = getGameHandler(L);
             const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
             if (gh && idx >= 1) gh->setSelectedGuildRank(idx);
@@ -3005,6 +3043,9 @@ void registerSocialLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"GuildControlAddRank", [](lua_State* L) -> int {
+            // 0x005cb330
+            if (!lua_isstring(L, 1))
+                return luaL_error(L, "Usage: GuildControlAddRank(name)");
             auto* gh = getGameHandler(L);
             const char* name = luaL_optstring(L, 1, "");
             if (gh && name && *name) gh->addGuildRank(name);
@@ -3023,6 +3064,9 @@ void registerSocialLuaAPI(lua_State* L) {
                 // same table, and for the same reason: the panel's order is not
                 // the bit order.
                 {"GuildControlSetRankFlag", [](lua_State* L) -> int {
+            // 0x005ca2b0
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GuildControlSetRankFlag(index, enabled)");
             auto* gh = getGameHandler(L);
             const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
             const bool on = lua_toboolean(L, 2) != 0;
@@ -3608,6 +3652,9 @@ void registerSocialLuaAPI(lua_State* L) {
                 // the header's only way of saying so: it sends the field and
                 // nothing else, and expects the API to remember.
                 {"SortGuildRoster", [](lua_State* L) -> int {
+            // 0x005cb000
+            if (!lua_isstring(L, 1))
+                return luaL_error(L, "Usage: SortGuildRoster(\"type\")");
             const std::string field = luaL_optstring(L, 1, "name");
             if (field == guildSortField()) guildSortReverse() = !guildSortReverse();
             else { guildSortField() = field; guildSortReverse() = false; }
@@ -3680,6 +3727,9 @@ void registerSocialLuaAPI(lua_State* L) {
         }},
                 {"GetGuildRosterInfo",      lua_GetGuildRosterInfo},
                 {"SetGuildRosterSelection", [](lua_State* L) -> int {
+            // 0x005caf40
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: SetGuildRosterSelection(index)");
             selectedGuildRosterRow() = static_cast<int>(luaL_optnumber(L, 1, 0));
             return 0;
         }},
@@ -3693,12 +3743,18 @@ void registerSocialLuaAPI(lua_State* L) {
                 // here. Neither was bound at all, so both dialogs accepted
                 // text and threw it away.
                 {"GuildRosterSetPublicNote", [](lua_State* L) -> int {
+            // 0x005cad00
+            if (!lua_isnumber(L, 1) || !lua_isstring(L, 2))
+                return luaL_error(L, "Usage: GuildRosterSetPublicNote(index, note)");
             auto* gh = getGameHandler(L);
             const std::string name = guildRosterNameAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
             if (!name.empty()) gh->setGuildPublicNote(name, luaL_optstring(L, 2, ""));
             return 0;
         }},
                 {"GuildRosterSetOfficerNote", [](lua_State* L) -> int {
+            // 0x005cae20
+            if (!lua_isnumber(L, 1) || !lua_isstring(L, 2))
+                return luaL_error(L, "Usage: GuildRosterSetOfficerNote(index, note)");
             auto* gh = getGameHandler(L);
             const std::string name = guildRosterNameAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
             if (!name.empty()) gh->setGuildOfficerNote(name, luaL_optstring(L, 2, ""));
@@ -3935,9 +3991,9 @@ void registerSocialLuaAPI(lua_State* L) {
                 if (!gossipQuestIsAvailable(q.questIcon)) continue;
                 lua_pushstring(L, q.title.c_str());
                 lua_pushnumber(L, q.questLevel);
-                // Trivial greys the title out. Nothing here knows a quest's
-                // green range, and guessing it would grey quests that are not.
-                luaPushOneOrNil(L, 0);
+                // Trivial greys the title out, by the client's grey table
+                // (0x0058aba0) as IsAvailableQuestTrivial answers it.
+                luaPushOneOrNil(L, greetingQuestIsTrivial(gh, q.questLevel) ? 1 : 0);
                 luaPushOneOrNil(L, (q.questFlags & kQuestFlagsDaily) ? 1 : 0);
                 luaPushOneOrNil(L, q.isRepeatable ? 1 : 0);
                 n += 5;
@@ -3959,7 +4015,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 if (!gossipQuestIsActive(q.questIcon)) continue;
                 lua_pushstring(L, q.title.c_str());
                 lua_pushnumber(L, q.questLevel);
-                luaPushOneOrNil(L, 0);
+                luaPushOneOrNil(L, greetingQuestIsTrivial(gh, q.questLevel) ? 1 : 0);   // 0x0058b490
                 luaPushOneOrNil(L, gossipQuestIsComplete(gh, q) ? 1 : 0);
                 n += 4;
             }
@@ -4161,6 +4217,9 @@ void registerSocialLuaAPI(lua_State* L) {
                 // atWarWith, canToggleAtWar, isHeader, isCollapsed, hasRep,
                 // isWatched, isChild
                 {"GetFactionInfo", [](lua_State* L) -> int {
+            // 0x005d1150
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetFactionInfo(index)");
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_checknumber(L, 1));
             if (!gh || index < 1) { return luaReturnNil(L); }
@@ -4180,6 +4239,9 @@ void registerSocialLuaAPI(lua_State* L) {
                 // before sending anything: declaring war on "Classic" is not a
                 // request the server has an answer for.
                 {"SetWatchedFactionIndex", [](lua_State* L) -> int {
+            // 0x005d1420
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: SetWatchedFactionIndex(index)");
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
             if (!gh) return 0;
@@ -4193,6 +4255,9 @@ void registerSocialLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"FactionToggleAtWar", [](lua_State* L) -> int {
+            // 0x005d1390
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: FactionToggleAtWar(index)");
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
             if (!gh || index < 1) return 0;
@@ -4205,6 +4270,9 @@ void registerSocialLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"SetFactionActive", [](lua_State* L) -> int {
+            // 0x005d1ee0
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: SetFactionActive(index)");
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
             if (!gh || index < 1) return 0;
@@ -4216,6 +4284,9 @@ void registerSocialLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"SetFactionInactive", [](lua_State* L) -> int {
+            // 0x005d1e50
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: SetFactionInactive(index)");
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
             if (!gh || index < 1) return 0;
@@ -4235,9 +4306,15 @@ void registerSocialLuaAPI(lua_State* L) {
                 // row's click handler regardless of what the row is, so a
                 // non-header index is ignored rather than refused.
                 {"ExpandFactionHeader", [](lua_State* L) -> int {
+            // 0x005d2000
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: ExpandFactionHeader(index)");
             return factionHeaderSetCollapsed(L, false);
         }},
                 {"CollapseFactionHeader", [](lua_State* L) -> int {
+            // 0x005d1f70
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: CollapseFactionHeader(index)");
             return factionHeaderSetCollapsed(L, true);
         }},
                 // CollapseAllFactionHeaders / ExpandAllFactionHeaders
@@ -4252,6 +4329,9 @@ void registerSocialLuaAPI(lua_State* L) {
             return allTopFactionHeadersSetCollapsed(L, false);
         }},
                 {"IsFactionInactive", [](lua_State* L) -> int {
+            // 0x005d0740
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: IsFactionInactive(index)");
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_checknumber(L, 1));
             const auto* rows = gh ? &gh->getReputationRows() : nullptr;
@@ -4266,6 +4346,9 @@ void registerSocialLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"SetSelectedFaction", [](lua_State* L) -> int {
+            // 0x005d07b0
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: SetSelectedFaction(index)");
             selectedFaction() = static_cast<int>(luaL_checknumber(L, 1));
             return 0;
         }},

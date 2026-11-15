@@ -430,6 +430,9 @@ static void castPetSlot(lua_State* L, game::GameHandler* gh, uint32_t packed, in
 }
 
 static int lua_HasAction(lua_State* L) {
+    // 0x005a8220
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: HasAction(slot)");
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnNil(L); }
     int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1; // WoW uses 1-indexed slots
@@ -947,6 +950,9 @@ static int lua_GetActionAutocast(lua_State* L) {
 
 // GetActionTexture(slot) → texturePath or nil
 static int lua_GetActionTexture(lua_State* L) {
+    // 0x005a9b30
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: GetActionTexture(slot)");
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnNil(L); }
     int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
@@ -1248,6 +1254,9 @@ static int lua_GetActionInfo(lua_State* L) {
 
 // GetActionCount(slot) → count (item stack count or 0)
 static int lua_GetActionCount(lua_State* L) {
+    // 0x005a7d10
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: GetActionCount(slot)");
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnZero(L); }
     int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
@@ -1555,6 +1564,9 @@ static int lua_CursorHasMacro(lua_State* L) {
 /// half only understood a spell, so an item or a macro dropped on a free slot
 /// vanished.
 static int lua_PickupAction(lua_State* L) {
+    // 0x005ac090
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: PickupAction(slot)");
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     int slot = static_cast<int>(luaL_checknumber(L, 1));
@@ -1664,6 +1676,9 @@ static int lua_PickupAction(lua_State* L) {
 // PickupAction while holding something is exactly that swap, so this is it.
 // With nothing placeable held it does nothing, and leaves the cursor alone.
 static int lua_PlaceAction(lua_State* L) {
+    // 0x005ab840
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: PlaceAction(slot)");
     const bool holding = (s_cursorId != 0 &&
                           (s_cursorType == CursorType::SPELL ||
                            s_cursorType == CursorType::ITEM ||
@@ -1742,6 +1757,9 @@ static int lua_PlaceGlyphInSocket(lua_State* L) {
 // The tab and slot are FrameXML's, counted from one; the wire counts from zero,
 // which is the shift AutoStoreGuildBankItem already applies.
 static int lua_PickupGuildBankItem(lua_State* L) {
+    // 0x005a6200
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: PickupGuildBankItem(tab, slot)");
     auto* gh = getGameHandler(L);
     const int tab = static_cast<int>(luaL_optnumber(L, 1, 0));
     const int slot = static_cast<int>(luaL_optnumber(L, 2, 0));
@@ -1794,6 +1812,9 @@ static int lua_PickupGuildBankItem(lua_State* L) {
 // attached: the wire carries the split on the *withdrawal* rather than on the
 // pickup, so the amount rides on the cursor until the drop says where it goes.
 static int lua_SplitGuildBankItem(lua_State* L) {
+    // 0x005a6600
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2) || !lua_isnumber(L, 3))
+        return luaL_error(L, "Usage: SplitGuildBankItem(tab, slot, amount)");
     const int amount = static_cast<int>(luaL_optnumber(L, 3, 0));
     lua_settop(L, 2);
     lua_PickupGuildBankItem(L);
@@ -3946,6 +3967,9 @@ void registerActionLuaAPI(lua_State* L) {
                 // The names were there: GetMacroInfo has been reading them off
                 // the same handler all along.
                 {"GetActionText", [](lua_State* L) -> int {
+            // 0x005a7d90
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetActionText(slot)");
             auto* gh = getGameHandler(L);
             const int slot = static_cast<int>(luaL_optnumber(L, 1, 0)) - 1;
             if (!gh || slot < 0) { lua_pushnil(L); return 1; }
@@ -4603,6 +4627,9 @@ void registerActionLuaAPI(lua_State* L) {
                 // Answering a flat false meant even a correct path would have
                 // been used the wrong way round.
                 {"GetPetActionInfo", [](lua_State* L) -> int {
+            // 0x005d4ec0
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetPetActionInfo(index)");
             auto* gh = getGameHandler(L);
             int index = static_cast<int>(luaL_checknumber(L, 1));
             if (!gh || index < 1 || index > game::GameHandler::PET_ACTION_BAR_SLOTS) {
@@ -4677,6 +4704,9 @@ void registerActionLuaAPI(lua_State* L) {
                 // IsPetAttackAction(index) - which slot is the attack command,
                 // so the bar can flash it while the pet is on a target.
                 {"IsPetAttackAction", [](lua_State* L) -> int {
+            // 0x005d5a10
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: IsPetAttackAction(index)");
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
             bool isAttack = false;

@@ -269,7 +269,7 @@ bool PacketParsers::parseMailList(network::Packet& packet, std::vector<MailMessa
     const size_t payloadSizeTotal = packet.getSize();
     uint32_t totalCount = packet.readUInt32();
     uint8_t shownCount = packet.readUInt8();
-    (void)totalCount;
+    mailListTotal_ = totalCount;
 
     LOG_INFO("SMSG_MAIL_LIST_RESULT (WotLK): total=", totalCount, " shown=", static_cast<int>(shownCount),
              " payloadBytes=", payloadSizeTotal);

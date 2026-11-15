@@ -9312,6 +9312,8 @@ int lua_MovieFrame_EnableSubtitles(lua_State* L) {
 }
 
 int lua_Cooldown_SetCooldown(lua_State* L) {
+    // 0x005ece80
+    if (!requireNumbers(L, 2, 2, "Usage: %s:SetCooldown(start, duration)")) return 0;
     if (auto* w = widgetOf(L, 1)) {
         w->cooldownStart = luaL_optnumber(L, 2, 0.0);
         w->cooldownDuration = luaL_optnumber(L, 3, 0.0);

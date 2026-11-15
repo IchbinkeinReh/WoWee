@@ -1332,6 +1332,7 @@ bool ClassicPacketParsers::parseMailList(network::Packet& packet,
     if (remaining < 1) return false;
 
     uint8_t count = packet.readUInt8();
+    mailListTotal_ = count;
     LOG_INFO("SMSG_MAIL_LIST_RESULT (Classic): count=", static_cast<int>(count));
 
     inbox.clear();
