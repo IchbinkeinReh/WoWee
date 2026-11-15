@@ -5086,6 +5086,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 // usage line for no argument and reads nothing, which the interface
                 // never reaches (every call site is the loop over the queues).
                 {"GetBattlefieldPortExpiration", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetBattlefieldPortExpiration(index)");   // 0x00549b80
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
             const int32_t seconds = (gh && index >= 1) ? gh->battlefieldPortExpirationSec(

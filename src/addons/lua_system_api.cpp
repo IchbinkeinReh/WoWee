@@ -3522,9 +3522,15 @@ static int lua_GetMapOverlayInfo(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetMapOverlayInfo(index)");
     auto* svc = getLuaServices(L);
     const int index = static_cast<int>(std::lround(lua_tonumber(L, 1)));
-    if (!svc || !svc->getMapOverlays || index < 1) return luaReturnNil(L);
+    // 0x00545c80: nil and six zeros for an index with no overlay.
+    const auto none = [](lua_State* S) {
+        lua_pushnil(S);
+        for (int i = 0; i < 6; ++i) lua_pushnumber(S, 0);
+        return 7;
+    };
+    if (!svc || !svc->getMapOverlays || index < 1) return none(L);
     const auto overlays = svc->getMapOverlays();
-    if (index > static_cast<int>(overlays.size())) return luaReturnNil(L);
+    if (index > static_cast<int>(overlays.size())) return none(L);
     const auto& o = overlays[static_cast<size_t>(index) - 1];
 
     lua_pushstring(L, o.texture.c_str());   // 1: texture prefix
@@ -4358,6 +4364,7 @@ static int bgCount(game::GameHandler* gh, int group) {
 /// each frame whose position comes back as zero. On an AzerothCore realm that
 /// is every one of them: the server writes the count and never the entries.
 static int lua_GetBattlefieldPosition(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetBattlefieldPosition(index)");   // 0x0054c2e0
     auto* gh = getGameHandler(L);
     auto* svc = getLuaServices(L);
     const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
@@ -6978,6 +6985,7 @@ static int lua_HearthAndResurrectFromArea(lua_State* L) {
 // zone's name (nil for none), the queue id and the seconds left to accept,
 // both numbers, both 0 with nothing queued.
 static int lua_GetWorldPVPQueueStatus(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetWorldPVPQueueStatus(index)");   // 0x0054c8a0
     if (static_cast<int>(luaL_checknumber(L, 1)) != 1) return 0;
     lua_pushstring(L, "none");
     lua_pushnil(L);
@@ -7393,6 +7401,7 @@ static uint32_t& selectedBattlegroundTypeId() { static uint32_t typeId = 0; retu
 // had no way to ask for. The index is a row in the list above, not a
 // battleground id, so it is translated before it goes on the wire.
 static int lua_RequestBattlegroundInstanceInfo(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: RequestBattlegroundInstanceInfo(index)");   // 0x0054e6d0
     auto* gh = getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
     if (!gh) return 0;
@@ -7423,6 +7432,7 @@ static int lua_GetSelectedBattlefield(lua_State* L) {
 // SetSelectedBattlefield(index) - called unguarded from two places, so it has
 // to exist before it has to do anything.
 static int lua_SetSelectedBattlefield(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetSelectedBattlefield(index)");   // 0x0054bb40
     selectedBattlefield() = static_cast<int>(luaL_optnumber(L, 1, 0));
     return 0;
 }
@@ -7479,6 +7489,7 @@ static bool battlefieldJoinAllowed(game::GameHandler* gh, uint32_t bgTypeId, boo
 }
 
 static int lua_JoinBattlefield(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: JoinBattlefield(index)");   // 0x0054d990
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
@@ -8012,8 +8023,10 @@ static int lua_GetGamma(lua_State* L) {
 }
 
 static int lua_SetGamma(lua_State* L) {
+    // 0x0054ea90: a number or the usage line.
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetGamma(value)");
     auto* svc = getLuaServices(L);
-    if (svc && svc->setGamma) svc->setGamma(static_cast<float>(luaL_optnumber(L, 1, 1.0)));
+    if (svc && svc->setGamma) svc->setGamma(static_cast<float>(lua_tonumber(L, 1)));
     return 0;
 }
 
@@ -8037,15 +8050,17 @@ static int lua_SetGamma(lua_State* L) {
 /// yet. The slider works and remembers where it was put, which is the whole of
 /// what the panel can observe, and a value is here for the renderer to read
 /// when it grows one.
-static int& terrainMip() { static int level = 1; return level; }
-
+// The client keeps it as the shadowLevel CVar, the other way up: GetTerrainMip
+// (0x0054eb10) is 1 - shadowLevel, and SetTerrainMip (0x0054eb40) a number,
+// truncated, or the usage line, stored as 1 - value.
 static int lua_GetTerrainMip(lua_State* L) {
-    lua_pushnumber(L, terrainMip());
+    lua_pushnumber(L, 1.0 - static_cast<double>(static_cast<int>(cvarNumber(L, "shadowLevel"))));
     return 1;
 }
 
 static int lua_SetTerrainMip(lua_State* L) {
-    terrainMip() = static_cast<int>(luaL_optnumber(L, 1, 1));
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetTerrainMip(value)");
+    setCVarText(L, "shadowLevel", std::to_string(1 - static_cast<int>(lua_tonumber(L, 1))));
     return 0;
 }
 
@@ -9252,6 +9267,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 // both - a queue that always read as just-joined with no
                 // estimate, which is the whole content of that window.
                 {"GetBattlefieldTimeWaited", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetBattlefieldTimeWaited(index)");   // 0x00549dd0
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 1));
             // Counted on from the server's last word, which comes about once
@@ -9271,6 +9287,7 @@ void registerSystemLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"GetBattlefieldEstimatedWaitTime", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetBattlefieldEstimatedWaitTime(index)");   // 0x00549d30
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 1));
             double ms = 0.0;
@@ -10776,9 +10793,33 @@ void registerSystemLuaAPI(lua_State* L) {
                 // answer here has somewhere to go; it is the id table, not the
                 // missing verb, that holds this up.
                 // ClickLandmark(mapLinkID) (0x00546ef0): a number or the usage
-                // line. Following the link to its map is not done here.
+                // line, rounded. The link is a DungeonMap row: the map shows
+                // the WorldMapArea of that row's map, at the row's floor
+                // (0x00546310 with -2). A link with no row, or no area for
+                // its map, does nothing.
                 {"ClickLandmark", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: ClickLandmark(mapLinkID)");
+            const long link = std::lround(lua_tonumber(L, 1));
+            auto* gh = getGameHandler(L);
+            auto* svc = getLuaServices(L);
+            auto* am = gh ? gh->services().assetManager : nullptr;
+            if (!svc || !svc->setMapWorldAreaId || !am || !am->isInitialized() || link <= 0) return 0;
+            // DungeonMap: ID, MapID, FloorIndex. WorldMapArea: ID, MapID, ...
+            auto floors = am->loadDBCOptional("DungeonMap.dbc");
+            auto areas = am->loadDBCOptional("WorldMapArea.dbc");
+            if (!floors || !floors->isLoaded() || floors->getFieldCount() < 3 ||
+                !areas || !areas->isLoaded() || areas->getFieldCount() < 2) return 0;
+            const int32_t row = floors->findRecordById(static_cast<uint32_t>(link));
+            if (row < 0) return 0;
+            const uint32_t mapId = floors->getUInt32(static_cast<uint32_t>(row), 1);
+            const uint32_t floor = floors->getUInt32(static_cast<uint32_t>(row), 2);
+            for (uint32_t r = 0; r < areas->getRecordCount(); ++r) {
+                if (areas->getUInt32(r, 1) != mapId) continue;
+                svc->setMapWorldAreaId(areas->getUInt32(r, 0));
+                if (svc->setMapDungeonLevel) svc->setMapDungeonLevel(static_cast<int>(floor));
+                fireWorldMapUpdate(L);
+                break;
+            }
             return 0;
         }},
                 // The pins on the shown map: counted by GetNumMapLandmarks and

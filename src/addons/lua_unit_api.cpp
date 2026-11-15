@@ -4040,6 +4040,7 @@ void registerUnitLuaAPI(lua_State* L) {
                 // ending. Four reads as active because the battleground is
                 // still the one the player is standing in.
                 {"GetBattlefieldStatus", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetBattlefieldStatus(index)");   // 0x0054bc30
             auto* gh = getGameHandler(L);
             const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
             const char* status = "none";
@@ -4136,6 +4137,7 @@ void registerUnitLuaAPI(lua_State* L) {
                 // A name is sensible ascending and a score is not, so a fresh
                 // column starts descending for everything but the name.
                 {"SortBattlefieldScoreData", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usgae: SortBattlefieldScoreData(\"type\")");   // 0x0054de00
             std::string column(luaL_optstring(L, 1, ""));
             if (column.empty()) return 0;
             if (column == battlefieldSortColumn()) {
@@ -4217,6 +4219,7 @@ void registerUnitLuaAPI(lua_State* L) {
                 // passes the test and dies on the concatenation. This client
                 // has no artwork per column, and "" is how the frame is told so.
                 {"GetBattlefieldStatInfo", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetBattlefieldStatInfo(index)");   // 0x0054c170
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_checknumber(L, 1));
             const auto* sb = gh ? gh->getBgScoreboard() : nullptr;
@@ -4243,6 +4246,7 @@ void registerUnitLuaAPI(lua_State* L) {
                 // Always a number. The frame compares it against zero the line
                 // after it asks, so nil is not "no value" there, it is an error.
                 {"GetBattlefieldStatData", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: GetBattlefieldStatData(playerIndex, statIndex)");   // 0x00549f60
             auto* gh = getGameHandler(L);
             const int playerIndex = static_cast<int>(luaL_checknumber(L, 1));
             const int statIndex   = static_cast<int>(luaL_checknumber(L, 2));
@@ -4261,6 +4265,7 @@ void registerUnitLuaAPI(lua_State* L) {
                 // The three words MSG_PVP_LOG_DATA carries for the team, as
                 // they came (0x0054a180).
                 {"GetBattlefieldTeamInfo", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetBattlefieldTeamInfo(index)");   // 0x0054a180
             auto* gh = getGameHandler(L);
             const int faction = static_cast<int>(luaL_checknumber(L, 1));
             const auto* sb = gh ? gh->getBgScoreboard() : nullptr;
@@ -4303,6 +4308,7 @@ void registerUnitLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"AcceptBattlefieldPort", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: AcceptBattlefieldPort(index, accept)");   // 0x0054da10
             // AcceptBattlefieldPort(queue, accept): the queue counts from one,
             // and a refusal is also how a queue still waiting is left. The
             // queue used to be dropped, which sent every answer to whichever
