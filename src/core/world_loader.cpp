@@ -470,15 +470,6 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
                 LOG_WARNING("Failed to read root WMO file: ", wdtInfo.rootWMOPath);
             }
 
-            // Build collision cache for the instance WMO
-            showProgress("Building collision cache...", 0.88f);
-            ui.pump();
-            wmoRenderer->loadFloorCache();
-            if (wmoRenderer->getFloorCacheSize() == 0) {
-                showProgress("Computing walkable surfaces...", 0.90f);
-                ui.pump();
-                wmoRenderer->precomputeFloorCache();
-            }
         }
 
         // Snap player to WMO floor so they don't fall through on first frame
@@ -512,7 +503,6 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
         LOG_DEBUG("=== INSTANCE WMO LOAD COMPLETE ===");
         LOG_DEBUG("  wmoRenderer models loaded: ", wmoRenderer->getLoadedModelCount());
         LOG_DEBUG("  wmoRenderer instances: ", wmoRenderer->getInstanceCount());
-        LOG_DEBUG("  wmoRenderer floor cache: ", wmoRenderer->getFloorCacheSize());
 
         terrainOk = true;  // Mark as OK so post-load setup runs
     } else {
@@ -680,17 +670,14 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
             // Restore full load radius - remaining tiles stream in-game
             terrainMgr->setLoadRadius(savedLoadRadius);
 
-            // Load/precompute collision cache
-            if (renderer_->getWMORenderer()) {
-                showProgress("Building collision cache...", 0.88f);
-                ui.pump();
-                renderer_->getWMORenderer()->loadFloorCache();
-                if (renderer_->getWMORenderer()->getFloorCacheSize() == 0) {
-                    showProgress("Computing walkable surfaces...", 0.90f);
-                    ui.pump();
-                    renderer_->getWMORenderer()->precomputeFloorCache();
-                }
-            }
+            // No floor grid is computed here. One was, over every building on
+            // the map from ten yards above its top - which is outside the
+            // height window getFloorHeight answers in (a building is looked at
+            // from at most four yards above its bounds), so all 796874 samples
+            // over Kalimdor came back empty, each building under the start
+            // logged "No WMO floor" 32 times, and nothing ever read the grid.
+            // The client has no such pass: its height query (0x007c2a70) is
+            // a segment cast down from the unit when it is asked.
         }
     }
 }
