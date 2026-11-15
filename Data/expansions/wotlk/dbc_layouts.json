@@ -11,8 +11,10 @@
   "AchievementCriteria": {
     "AchievementID": 1,
     "Description": 9,
+    "Flags": 26,
     "ID": 0,
-    "Quantity": 4
+    "Quantity": 4,
+    "TimeLimit": 29
   },
   "AreaPOI": {
     "ID": 0,
@@ -452,6 +454,7 @@
     "CastingTimeIndex": 28,
     "CategoryRecoveryTime": 30,
     "Description": 170,
+    "DescriptionVariables": 232,
     "DispelType": 2,
     "DurationIndex": 40,
     "Effect0": 71,

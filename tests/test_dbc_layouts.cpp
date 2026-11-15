@@ -65,9 +65,40 @@ TEST_CASE("Spell layout exposes the fields the spell logic reads", "[dbc][layout
         REQUIRE(spell->field("DurationIndex") != kMissing);
 
         // School is per-expansion: a bitmask on TBC/WotLK, a 0-6 enum on Classic/Turtle.
-        const bool hasSchool = spell->field("SchoolMask") != kMissing ||
-                               spell->field("SchoolEnum") != kMissing;
+        const bool hasSchool = spell->tryField("SchoolMask") != kMissing ||
+                               spell->tryField("SchoolEnum") != kMissing;
         REQUIRE(hasSchool);
+    }
+}
+
+TEST_CASE("WotLK layout declares the 3.3.5a columns read at login", "[dbc][layout]") {
+    // Read at every login, and each one the installed layout lacked was a
+    // DBCLayout warning. Checked against 3.3.5a (12340) data: Spell.dbc has
+    // 234 fields; 225 holds the school bits (1, 2, 4 ... 64) and 232 the
+    // SpellDescriptionVariables.dbc row (Sinister Strike 171, Frostbolt 167,
+    // every non-zero one but two -1s a row of that table). Achievement_Criteria
+    // has 31; 29 is the timer, non-zero on 59 rows ("in under 7 minutes" = 420),
+    // and 26 the flags, bit one on the 160 "Complete N quests" bars.
+    DBCLayout layout;
+    REQUIRE(layout.loadFromJson(layoutPath("wotlk")));
+    const auto* spell = layout.getLayout("Spell");
+    const auto* criteria = layout.getLayout("AchievementCriteria");
+    REQUIRE(spell != nullptr);
+    REQUIRE(criteria != nullptr);
+    CHECK(spell->tryField("SchoolMask") == 225);
+    CHECK(spell->tryField("DescriptionVariables") == 232);
+    CHECK(spell->tryField("SpellDifficultyId") == 233);
+    // WotLK's school is the mask alone; the enum belongs to 1.x.
+    CHECK(spell->tryField("SchoolEnum") == kMissing);
+    CHECK(criteria->tryField("Flags") == 26);
+    CHECK(criteria->tryField("TimeLimit") == 29);
+
+    // Before 3.0 there is no description variable column to declare.
+    for (const char* older : {"classic", "tbc", "turtle"}) {
+        INFO("expansion: " << older);
+        DBCLayout l;
+        REQUIRE(l.loadFromJson(layoutPath(older)));
+        CHECK(l.getLayout("Spell")->tryField("DescriptionVariables") == kMissing);
     }
 }
 

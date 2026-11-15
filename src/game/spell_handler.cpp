@@ -5954,10 +5954,15 @@ void SpellHandler::loadSpellNameCache() const {
     uint32_t schoolMaskField = 0, schoolEnumField = 0;
     bool hasSchoolMask = false, hasSchoolEnum = false;
     if (spellL) {
-        uint32_t f = spellL->field("SchoolMask");
+        // One or the other, by expansion: Spell.dbc carries a 0-6 school
+        // before 2.x and the SchoolMask bits from then on (225 in 3.3.5a), so
+        // each layout declares only its own. Asking for both with field()
+        // reported the other one as missing on every login.
+        uint32_t f = spellL->tryField("SchoolMask");
         if (f != 0xFFFFFFFF && f < dbc->getFieldCount()) { schoolMaskField = f; hasSchoolMask = true; }
-        f = spellL->field("SchoolEnum");
+        f = spellL->tryField("SchoolEnum");
         if (f != 0xFFFFFFFF && f < dbc->getFieldCount()) { schoolEnumField = f; hasSchoolEnum = true; }
+        if (!hasSchoolMask && !hasSchoolEnum) pipeline::noteMissingLayoutField("Spell", "SchoolMask or SchoolEnum");
     }
 
     uint32_t dispelField = 0xFFFFFFFF;
@@ -6034,9 +6039,12 @@ void SpellHandler::loadSpellNameCache() const {
     // column otherwise, and only for a file that really is WotLK's - an index
     // written out here is right for one file and wrong for every other, which
     // is what the reagent columns above were.
+    //
+    // Asked rather than read: the column arrived in 3.0 (SpellDescriptionVariableID,
+    // 232 of 234 in 3.3.5a), so a Classic or TBC layout without it is not behind.
     uint32_t descVarField = 0xFFFFFFFF;
     if (spellL) {
-        uint32_t f = spellL->field("DescriptionVariables");
+        uint32_t f = spellL->tryField("DescriptionVariables");
         if (f != 0xFFFFFFFF && f < fieldCount) descVarField = f;
     }
     if (descVarField == 0xFFFFFFFF && fieldCount == 234) descVarField = 232;
