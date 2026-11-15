@@ -5559,6 +5559,14 @@ static int lua_GetZonePVPInfo(lua_State* L) {
 /// name for a Stormwind guard as much as for a human - and nil, nil without
 /// one. The template is the unit's own; a player out of sight is taken from
 /// the name cache's race (ChrRaces FactionID).
+///
+/// "player" is never asked of an object: the client answers it from the race
+/// of the character it logged in with (0x006b1070) through ChrRaces, before
+/// the player's object exists and whatever its faction template says later.
+/// Answered from the object here, it was nil, nil for the first events of a
+/// login - and PVPBattlegroundFrame's UPDATE_BATTLEFIELD_STATUS handler
+/// concatenates it ("PVP-Currency-"..UnitFactionGroup("player")), so every
+/// login raised "attempt to concatenate a nil value" at its line 123.
 static int lua_UnitFactionGroup(lua_State* L) {
     auto* gh = getGameHandler(L);
     std::string uid(luaL_checkstring(L, 1));
@@ -5567,7 +5575,7 @@ static int lua_UnitFactionGroup(lua_State* L) {
     if (!gh) return nothing();
     auto* am = gh->services().assetManager;
     const bool assets = am && am->isInitialized();
-    const uint64_t guid = resolveUnitGuid(gh, uid);
+    const uint64_t guid = uid == "player" ? 0 : resolveUnitGuid(gh, uid);
     uint32_t templateId = 0;
     if (auto entity = guid != 0 ? gh->getEntityManager().getEntity(guid) : nullptr; entity && entity->isUnit()) {
         templateId = entity->getField(game::fieldIndex(game::UF::UNIT_FIELD_FACTIONTEMPLATE));
