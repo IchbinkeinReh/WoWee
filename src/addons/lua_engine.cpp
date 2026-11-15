@@ -11225,7 +11225,6 @@ void LuaEngine::registerCoreAPI() {
     // name 5.1 dropped is a name nothing here can be shadowing.
     bootstrap(
         "function getglobal(name) return _G[name] end\n"
-        "function setglobal(name, value) _G[name] = value end\n"
         "string.gfind = string.gfind or string.gmatch\n"
         "gfind = string.gfind\n");
 
@@ -11235,14 +11234,6 @@ void LuaEngine::registerCoreAPI() {
     lua_getfield(L_, -1, "pi");
     lua_setglobal(L_, "PI");
     lua_pop(L_, 1);
-
-    // WoW-specific and not derivable from a standard library.
-    bootstrap(
-        "function strtrim(s, chars)\n"
-        "  chars = chars or ' \\t\\r\\n'\n"
-        "  local p = '[' .. chars:gsub('(%W)', '%%%1') .. ']'\n"
-        "  return (s:gsub('^' .. p .. '*', ''):gsub(p .. '*$', ''))\n"
-        "end\n");
 
     // SlashCmdList table - addons register slash commands here
     lua_newtable(L_);
@@ -14504,7 +14495,6 @@ void LuaEngine::registerCoreAPI() {
         // Blizzard_DebugTools calls getglobal at file scope and failed to load
         // whole without it.
         "function getglobal(n) return _G[n] end\n"
-        "function setglobal(n, v) _G[n] = v end\n"
         // scrub keeps what can cross the secure boundary and drops the rest:
         // strings, numbers and booleans pass, everything else becomes nil.
         // The count has to survive, because securehandlers.lua returns it
@@ -14943,9 +14933,6 @@ void LuaEngine::registerCoreAPI() {
         "strrev = string.reverse\n"
         "gsub = string.gsub\n"
         "gmatch = string.gmatch\n"
-        "strjoin = function(delim, ...)\n"
-        "    return table.concat({...}, delim)\n"
-        "end\n"
     );
     // Bit operations (WoW provides these; Lua 5.1 doesn't): kBitLibLua.
     executeString(kBitLibLua);

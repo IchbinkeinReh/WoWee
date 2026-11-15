@@ -1232,8 +1232,29 @@ static int lua_GetAutoCompleteResults(lua_State* L) {
 
 /// Which row the friends and ignore lists have selected. The client has no
 /// opinion about either; they are what the player last clicked.
-static int& selectedFriend() { static int v = 0; return v; }
-static int& selectedIgnore() { static int v = 0; return v; }
+/// The selected friend and ignore, by guid so the selection follows the entry
+/// when the list reorders (0x006b4400, 0x006b48a0).
+static uint64_t& selectedFriendGuid() { static uint64_t v = 0; return v; }
+static uint64_t& selectedIgnoreGuid() { static uint64_t v = 0; return v; }
+/// The n-th contact (from 1) with that flag, or null.
+static const game::ContactEntry* contactAt(game::GameHandler* gh, uint32_t flag, int index) {
+    if (!gh || index < 1) return nullptr;
+    int n = 0;
+    for (const auto& c : gh->getContacts())
+        if ((c.flags & flag) && ++n == index) return &c;
+    return nullptr;
+}
+/// Where a guid sits in that list, from 1; 0 for nowhere.
+static int contactIndexOf(game::GameHandler* gh, uint32_t flag, uint64_t guid) {
+    if (!gh || guid == 0) return 0;
+    int n = 0;
+    for (const auto& c : gh->getContacts()) {
+        if (!(c.flags & flag)) continue;
+        ++n;
+        if (c.guid == guid) return n;
+    }
+    return 0;
+}
 
 // SendSystemMessage(text) - put a line in the chat as the client itself would
 /// SendSystemMessage("message") (0x0050d8a0): a string or the usage error,
@@ -2398,9 +2419,15 @@ void registerSocialLuaAPI(lua_State* L) {
                 // contract as SortGuildRoster: the same field twice reverses.
                 {"SortWho", [](lua_State* L) -> int {
             if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: SortWho(\"type\")");   // 0x006b4eb0
-            const std::string field = luaL_optstring(L, 1, "name");
+            // The key without case, an unknown one as "name"; the list redraws
+            // at once (WHO_LIST_UPDATE).
+            std::string field = lua_tostring(L, 1);
+            toLowerInPlace(field);
+            static const char* const kKeys[] = {"name", "zone", "guild", "race", "level", "class", "group"};
+            if (std::find(std::begin(kKeys), std::end(kKeys), field) == std::end(kKeys)) field = "name";
             if (field == whoSortField()) whoSortReverse() = !whoSortReverse();
             else { whoSortField() = field; whoSortReverse() = false; }
+            if (auto* gh = getGameHandler(L)) gh->fireAddonEvent("WHO_LIST_UPDATE", {});
             return 0;
         }},
                 // Voice again: nothing can be muted, so nothing is added to the
@@ -3911,31 +3938,41 @@ void registerSocialLuaAPI(lua_State* L) {
             }
             return 0;
         }},
+                // AddFriend / AddIgnore / DelIgnore do nothing for an
+                // argument that is not a string (0x006b6af0, 0x006b6c00,
+                // 0x006b7d70).
                 {"AddFriend", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const char* name = luaL_checkstring(L, 1);
-            const char* note = luaL_optstring(L, 2, "");
-            if (gh) gh->addFriend(name, note);
+            const char* name = lua_tostring(L, 1);
+            const char* note = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
+            if (gh && name) gh->addFriend(name, note);
             return 0;
         }},
                 {"RemoveFriend", [](lua_State* L) -> int {
             // 0x006b7bd0: an index or a name - a number is also a string to that test.
             if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: RemoveFriend([\"name\"] or [index])");
             auto* gh = getGameHandler(L);
-            const char* name = luaL_checkstring(L, 1);
-            if (gh) gh->removeFriend(name);
+            if (!gh) return 0;
+            // A number is a friend's index (rounded, 1..100), removed by its
+            // entry; anything else a name.
+            if (lua_isnumber(L, 1)) {
+                if (const auto* c = contactAt(gh, 0x1, static_cast<int>(std::lround(lua_tonumber(L, 1)))))
+                    gh->removeFriend(c->name);
+                return 0;
+            }
+            gh->removeFriend(lua_tostring(L, 1));
             return 0;
         }},
                 {"AddIgnore", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const char* name = luaL_checkstring(L, 1);
-            if (gh) gh->addIgnore(name);
+            const char* name = lua_tostring(L, 1);
+            if (gh && name) gh->addIgnore(name);
             return 0;
         }},
                 {"DelIgnore", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const char* name = luaL_checkstring(L, 1);
-            if (gh) gh->removeIgnore(name);
+            const char* name = lua_tostring(L, 1);
+            if (gh && name) gh->removeIgnore(name);
             return 0;
         }},
                 // ShowFriends() - not a panel verb despite the name: it asks
@@ -3964,10 +4001,16 @@ void registerSocialLuaAPI(lua_State* L) {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetWhoInfo(index)");   // 0x006b4a80
             // GetWhoInfo(index) → name, guild, level, race, class, zone, classFileName
             auto* gh = getGameHandler(L);
-            int index = static_cast<int>(luaL_checknumber(L, 1));
-            if (!gh || index < 1) { return luaReturnNil(L); }
+            // Rounded; out of range: nil, nil, 0 and four nils (0x006b4a80).
+            const auto none = [L]() {
+                lua_pushnil(L); lua_pushnil(L); lua_pushnumber(L, 0);
+                for (int i = 0; i < 4; ++i) lua_pushnil(L);
+                return 7;
+            };
+            int index = static_cast<int>(std::lround(lua_tonumber(L, 1)));
+            if (!gh || index < 1) { return none(); }
             const auto view = whoResultsView(gh);
-            if (index > static_cast<int>(view.size())) { return luaReturnNil(L); }
+            if (index > static_cast<int>(view.size())) { return none(); }
             const auto& w = *view[static_cast<size_t>(index) - 1];
 
 
@@ -4009,7 +4052,7 @@ void registerSocialLuaAPI(lua_State* L) {
             // true in Lua, so lua_toboolean would read "off" as "on" and this
             // would be a no-op with extra steps.
             if (auto* gh = getGameHandler(L)) {
-                gh->setWhoToUI(luaOptNumberText(L, 1, 0.0) != 0.0);
+                gh->setWhoToUI(luaClientSwitchArg(L, 1, false));   // 0x006b3430
             }
             return 0;
         }},
@@ -4148,15 +4191,20 @@ void registerSocialLuaAPI(lua_State* L) {
         }},
                 {"SendSystemMessage",   lua_SendSystemMessage},
                 {"GetSelectedFriend", [](lua_State* L) -> int {
-            lua_pushnumber(L, selectedFriend()); return 1; }},
+            lua_pushnumber(L, contactIndexOf(getGameHandler(L), 0x1, selectedFriendGuid())); return 1; }},
                 {"SetSelectedFriend", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetSelectedFriend(index)");   // 0x006b4400
-            selectedFriend() = static_cast<int>(luaL_optnumber(L, 1, 0)); return 0; }},
+            // Rounded; outside 1..101 clears the selection.
+            const auto* c = contactAt(getGameHandler(L), 0x1, static_cast<int>(std::lround(lua_tonumber(L, 1))));
+            selectedFriendGuid() = c ? c->guid : 0;
+            return 0; }},
                 {"GetSelectedIgnore", [](lua_State* L) -> int {
-            lua_pushnumber(L, selectedIgnore()); return 1; }},
+            lua_pushnumber(L, contactIndexOf(getGameHandler(L), 0x2, selectedIgnoreGuid())); return 1; }},
                 {"SetSelectedIgnore", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetSelectedIgnore(index)");   // 0x006b48a0
-            selectedIgnore() = static_cast<int>(luaL_optnumber(L, 1, 0)); return 0; }},
+            const auto* c = contactAt(getGameHandler(L), 0x2, static_cast<int>(std::lround(lua_tonumber(L, 1))));
+            selectedIgnoreGuid() = c ? c->guid : 0;
+            return 0; }},
                 {"AddOrRemoveFriend",   lua_AddOrRemoveFriend},
                 {"AddOrDelIgnore",      lua_AddOrDelIgnore},
                 // DoReadyCheck() - what /readycheck does

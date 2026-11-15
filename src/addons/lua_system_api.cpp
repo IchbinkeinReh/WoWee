@@ -3838,45 +3838,72 @@ static int lua_GetInstanceDifficulty(lua_State* L) {
     return 1;
 }
 
+// strsplit(delimiters, text[, pieces]) (0x00816a60): any character of the
+// first argument splits; a piece count stops after that many pieces, the
+// last holding the rest. "strsplit(): Stack overflow" when the stack cannot
+// grow.
 static int lua_strsplit(lua_State* L) {
-    const char* delim = luaL_checkstring(L, 1);
-    const char* str = luaL_checkstring(L, 2);
-    if (!delim[0]) { lua_pushstring(L, str); return 1; }
-    int count = 0;
-    std::string s(str);
-    // One value per field, and the field count follows from the string rather
-    // than from anything this client chose. Lua guarantees only a small slack
-    // above the arguments, and pushing past the top corrupts the heap rather
-    // than raising - so the room is asked for before any of it is used.
-    // A chat line of commas is all it takes.
-    const size_t fields = static_cast<size_t>(
-        std::count(s.begin(), s.end(), delim[0])) + 1;
-    if (!lua_checkstack(L, static_cast<int>(fields) + 1)) {
-        lua_pushstring(L, str);
-        return 1;
-    }
-    size_t pos = 0;
-    while (pos <= s.size()) {
-        size_t found = s.find(delim[0], pos);
-        if (found == std::string::npos) {
-            lua_pushstring(L, s.substr(pos).c_str());
-            count++;
-            break;
+    const char* delims = luaL_checkstring(L, 1);
+    const char* text = luaL_checkstring(L, 2);
+    const int limit = static_cast<int>(luaL_optinteger(L, 3, 0));
+    lua_settop(L, 0);
+    int n = 0;
+    const char* start = text;
+    if (limit == 0 || limit > 1) {
+        for (const char* p = text; *p; ++p) {
+            if (!std::strchr(delims, *p) || *delims == '\0') continue;
+            ++n;
+            if (!lua_checkstack(L, n)) return luaL_error(L, "strsplit(): Stack overflow");
+            lua_pushlstring(L, start, static_cast<size_t>(p - start));
+            start = p + 1;
+            if (n == limit - 1) break;
         }
-        lua_pushstring(L, s.substr(pos, found - pos).c_str());
-        count++;
-        pos = found + 1;
     }
-    return count;
+    if (!lua_checkstack(L, n + 1)) return luaL_error(L, "strsplit(): Stack overflow");
+    lua_pushstring(L, start);
+    return n + 1;
 }
 
-// strtrim(str) - remove leading/trailing whitespace
+// strjoin(delimiter, ...) (0x00816b60): the pieces joined by lua_concat, so a
+// piece that is not a string or a number raises; none is "".
+static int lua_strjoin(lua_State* L) {
+    size_t len = 0;
+    const char* delim = luaL_checklstring(L, 1, &len);
+    const int top = lua_gettop(L);
+    const int pieces = top - 1;
+    if (len == 0) {
+        lua_concat(L, top);
+        return 1;
+    }
+    if (pieces == 0) { lua_pushstring(L, ""); return 1; }
+    if (!lua_checkstack(L, pieces * 2)) return luaL_error(L, "strjoin(): Stack overflow");
+    for (int k = 1; k < pieces; ++k) {
+        lua_pushlstring(L, delim, len);
+        lua_insert(L, 2 + k * 2);
+    }
+    lua_concat(L, pieces * 2 - 1);
+    return 1;
+}
+
+// setglobal(name, value) (0x008168d0): the name must be a string (a number
+// is stored under its text).
+static int lua_wowSetglobal(lua_State* L) {
+    const char* name = luaL_checkstring(L, 1);
+    lua_settop(L, 2);
+    lua_setglobal(L, name);
+    return 0;
+}
+
+// strtrim(text[, chars]) (0x00816960): the characters (by default space, tab,
+// CR and LF) taken off both ends; text must be a string or a number.
 static int lua_strtrim(lua_State* L) {
-    const char* str = luaL_checkstring(L, 1);
-    std::string s(str);
-    size_t start = s.find_first_not_of(" \t\r\n");
-    size_t end = s.find_last_not_of(" \t\r\n");
-    lua_pushstring(L, (start == std::string::npos) ? "" : s.substr(start, end - start + 1).c_str());
+    size_t len = 0;
+    const char* s = luaL_checklstring(L, 1, &len);
+    const char* chars = luaL_optstring(L, 2, " \t\r\n");
+    size_t b = 0, e = len;
+    while (b < e && *chars && std::strchr(chars, s[b])) ++b;
+    while (e > b && *chars && std::strchr(chars, s[e - 1])) --e;
+    lua_pushlstring(L, s + b, e - b);
     return 1;
 }
 
@@ -11057,6 +11084,8 @@ void registerSystemLuaAPI(lua_State* L) {
                 // guards never shows.
                 {"CanShowResetInstances", lua_ReturnNil},
                 {"strsplit",          lua_strsplit},
+                {"strjoin",           lua_strjoin},
+                {"setglobal",         lua_wowSetglobal},
                 {"strtrim",           lua_strtrim},
                 {"strlenutf8",        lua_strlenutf8},
                 {"wipe",              lua_wipe},
