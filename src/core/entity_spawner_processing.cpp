@@ -493,7 +493,14 @@ void EntitySpawner::processCreatureSpawnQueue(bool unlimited) {
                                 for (const std::string* path : {&sections.bodySkin, &sections.skinExtra,
                                                                 &sections.faceLower, &sections.faceUpper,
                                                                 &sections.hair}) {
-                                    if (!path->empty()) displaySkinPaths.push_back(*path);
+                                    if (path->empty()) continue;
+                                    // The hair row keeps its name whether or
+                                    // not the file exists; every Tauren row
+                                    // names one no 3.3.5a archive has, and the
+                                    // spawn no longer asks for those (see
+                                    // applyHumanoidInstanceOverrides).
+                                    if (path == &sections.hair && !am->fileExists(*path)) continue;
+                                    displaySkinPaths.push_back(*path);
                                 }
                                 for (const auto& uw : sections.underwear) displaySkinPaths.push_back(uw);
                             }

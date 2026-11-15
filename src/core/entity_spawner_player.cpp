@@ -227,8 +227,14 @@ void EntitySpawner::spawnOnlinePlayer(uint64_t guid,
         }
     }
 
+    // Hair only for a model with a hair slot, and only art the archives carry:
+    // a Tauren has no type 6 texture and its hair rows name files no 3.3.5a
+    // archive has. The client loads it all the same and the load fails
+    // without a word (0x004ea150); here it warned twice for every Tauren in
+    // sight. See applyHumanoidInstanceOverrides.
     rendering::VkTexture* hairTex = nullptr;
-    if (!hairTexturePath.empty()) {
+    if (!hairTexturePath.empty() && playerTextureSlotsByModelId_[modelId].hair >= 0 &&
+        assetManager_ && assetManager_->fileExists(hairTexturePath)) {
         hairTex = charRenderer->loadTexture(hairTexturePath);
     }
     // Texture type 8 is Skin Extra: the head detail sheet an HD model draws its
