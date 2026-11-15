@@ -188,3 +188,80 @@ TEST_CASE("a higher sensitivity adjusts a view the default leaves alone", "[eye]
     const Params d;
     CHECK(exposureFor(0.5f * (d.neutralLow + d.neutralHigh), paramsFor(30, 2.5f, 100)) == 1.0f);
 }
+
+TEST_CASE("the exposure keeps a clipped white white and leaves the rest a plain multiply", "[eye]") {
+    // At an exposure of one, nothing changes anywhere.
+    for (int i = 0; i <= 255; ++i) {
+        const float v = static_cast<float>(i) / 255.0f;
+        CHECK(exposeHighlight(v, 1.0f) == Catch::Approx(v).margin(1e-5));
+        // There and back is the identity.
+        CHECK(highlightToScreen(highlightToScene(v)) == Catch::Approx(v).margin(1e-5));
+    }
+    // Under the knee, exactly the multiply it was - the rest of the frame
+    // as bright as before.
+    for (const float e : {0.5f, 0.75f, 0.9f}) {
+        for (float v = 0.0f; v <= kHighlightKnee; v += 0.05f) {
+            CHECK(exposeHighlight(v, e) == Catch::Approx(v * e).margin(1e-6));
+        }
+    }
+    // The sky round the low sun: a clipped white, under the lowest exposure
+    // the settings allow (one half), stays white, not 0x80 grey.
+    CHECK(exposeHighlight(1.0f, 0.5f) * 255.0f > 245.0f);
+    CHECK(exposeHighlight(1.0f, 0.55f) * 255.0f > 245.0f);
+    // A dark room brightened: values meet white through the shoulder, not
+    // at a hard clip, and never pass it.
+    CHECK(exposeHighlight(0.3f, 2.0f) == Catch::Approx(0.6f));
+    CHECK(exposeHighlight(0.6f, 2.0f) < 1.0f);
+    CHECK(exposeHighlight(1.0f, 2.0f) <= 1.0f);
+}
+
+TEST_CASE("the highlight roll-off is smooth and monotonic", "[eye]") {
+    for (const float e : {0.5f, 0.6f, 0.75f, 1.3f, 2.0f}) {
+        float last = -1.0f;
+        for (int i = 0; i <= 255; ++i) {
+            const float out = exposeHighlight(static_cast<float>(i) / 255.0f, e);
+            CHECK(out >= last);
+            CHECK(out <= 1.0f);
+            // No jump between neighbouring 8-bit levels bigger than a
+            // gentle ramp's: the shoulder joins the straight part without a
+            // step and does not crush a band into a plateau or a cliff.
+            if (i > 0) CHECK(out - last < 6.0f / 255.0f);
+            last = out;
+        }
+    }
+    // The slope is continuous at the knee: just below and just above match.
+    const float k = kHighlightKnee, d = 1e-3f;
+    const float below = (highlightToScene(k) - highlightToScene(k - d)) / d;
+    const float above = (highlightToScene(k + d) - highlightToScene(k)) / d;
+    CHECK(below == Catch::Approx(1.0f).margin(1e-2));
+    CHECK(above == Catch::Approx(1.0f).margin(0.05));
+}
+
+TEST_CASE("only white highlights are kept; a coloured bright pixel keeps the plain multiply", "[eye]") {
+    const float e = 0.6f;
+    // The clipped sky round the sun, white in all three: white still.
+    float white[3] = {1.0f, 1.0f, 1.0f};
+    exposeColour(white, e);
+    for (float c : white) CHECK(c * 255.0f > 245.0f);
+    // A warm glow near it, whiter than the knee: brighter than the multiply,
+    // its hue (the order of its channels) kept.
+    float warm[3] = {1.0f, 0.95f, 0.85f};
+    exposeColour(warm, e);
+    CHECK(warm[0] > e + 0.05f);
+    CHECK(warm[0] >= warm[1]);
+    CHECK(warm[1] >= warm[2]);
+    // A sunlit yellow field and a noon sky, bright in one or two channels:
+    // exactly the multiply, as before.
+    float yellow[3] = {1.0f, 1.0f, 0.3f};
+    exposeColour(yellow, e);
+    CHECK(yellow[0] == Catch::Approx(e));
+    CHECK(yellow[2] == Catch::Approx(0.3f * e));
+    float sky[3] = {0.5f, 0.7f, 1.0f};
+    exposeColour(sky, e);
+    CHECK(sky[0] == Catch::Approx(0.5f * e));
+    CHECK(sky[2] == Catch::Approx(e));
+    // Black stays black.
+    float black[3] = {0.0f, 0.0f, 0.0f};
+    exposeColour(black, e);
+    CHECK(black[0] == 0.0f);
+}

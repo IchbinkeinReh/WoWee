@@ -24,8 +24,15 @@ class VkContext;
  * where the world is, not the interface's bars and frames - blitted down to
  * a few thousand pixels and copied to a buffer the CPU reads two frames
  * later, when that slot comes round again and its fence has been waited on.
- * The few thousand pixels' mean takes microseconds; the exposure is then one
- * full-screen multiply in the overlay pass, ahead of the interface.
+ * The few thousand pixels' mean takes microseconds.
+ *
+ * The exposure is then laid over the frame in the overlay pass, ahead of the
+ * interface and after the shafts and the screen effects. Not as a multiply:
+ * the frame is 8-bit and its highlights already clipped, and white times an
+ * exposure under one is grey - the low sun's glow was a flat grey disc. The
+ * frame as it stands then is copied (prepareComposite, between two overlay
+ * passes) and redrawn from the copy through eye_adaptation::exposeHighlight:
+ * value x exposure under the knee as before, a clipped white kept white.
  *
  * With the lighting off nothing is recorded or drawn, and the picture is
  * exactly what it was.
@@ -47,9 +54,21 @@ public:
     void record(VkCommandBuffer cmd, uint32_t frame, VkImage swapchainImage, VkExtent2D extent, bool active,
                 float dt);
 
-    /// Scale the picture by the exposure. Inside the overlay pass, viewport
-    /// set, before the interface. Draws nothing at an exposure of one.
-    void composite(VkCommandBuffer cmd);
+    /// Whether there is an exposure to lay over this frame: false at an
+    /// exposure of one, when nothing is copied or drawn.
+    [[nodiscard]] bool wantsComposite() const;
+
+    /// Copy the frame as it stands - the overlay pass that drew the shafts
+    /// over it ended, the image in PRESENT_SRC - for composite() to read.
+    /// Outside any render pass; leaves the image in PRESENT_SRC. False when
+    /// there is nothing to draw or the copy cannot be made.
+    [[nodiscard]] bool prepareComposite(VkCommandBuffer cmd, uint32_t frame, VkImage swapchainImage,
+                                        VkExtent2D extent);
+
+    /// Redraw the picture from that copy under the exposure. Inside the
+    /// overlay pass, viewport set, before the interface; only after
+    /// prepareComposite returned true for this frame.
+    void composite(VkCommandBuffer cmd, uint32_t frame);
 
     /// How far and how fast the eye adapts (eye_adaptation::paramsFor).
     void setParams(const eye_adaptation::Params& params) { params_ = params; }
@@ -64,6 +83,8 @@ private:
     static constexpr uint32_t kHeight = 32;
 
     bool ensureCompositePipeline();
+    bool ensureCopies(VkExtent2D extent);
+    void destroyCopies();
     void forget();
 
     VkContext* ctx_ = nullptr;
@@ -80,6 +101,14 @@ private:
     eye_adaptation::Params params_{};
     float logTimer_ = 0.0f;
     bool log_ = false;
+
+    /// The frame as the shafts left it, full size, one a slot.
+    ScreenTarget frameCopy_[MAX_FRAMES];
+    VkExtent2D copyExtent_{};
+    VkSampler sampler_ = VK_NULL_HANDLE;  // the context's cache owns it
+    VkDescriptorSetLayout compositeSetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorPool descPool_ = VK_NULL_HANDLE;
+    VkDescriptorSet compositeSets_[MAX_FRAMES] = {};
 
     VkPipelineLayout compositeLayout_ = VK_NULL_HANDLE;
     VkPipeline compositePipeline_ = VK_NULL_HANDLE;

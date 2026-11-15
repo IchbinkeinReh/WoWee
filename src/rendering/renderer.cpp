@@ -2031,9 +2031,25 @@ void Renderer::endFrame() {
         // the glow and death passes, then the shafts screened over it.
         if (screenEffects_) screenEffects_->composite(currentCmd, vkCtx->getCurrentFrame());
         if (sunShafts_) sunShafts_->composite(currentCmd, vkCtx->getCurrentFrame());
-        // The eye's exposure over all of it, the interface left out.
-        if (eyeAdaptation_) eyeAdaptation_->composite(currentCmd);
         vkCtx->gpuMark(currentCmd, "effects composite");
+        // The eye's exposure over all of it, the interface left out. It is
+        // not a multiply - white times an exposure under one is grey, and
+        // the clipped sky round a low sun was a grey disc - so the frame as
+        // it now stands is copied and redrawn through the highlight shoulder
+        // (eye_adaptation_pass.hpp): the overlay pass is ended for the copy
+        // and begun again. Only while there is an exposure other than one.
+        if (eyeAdaptation_ && eyeAdaptation_->wantsComposite()) {
+            const auto& images = vkCtx->getSwapchainImages();
+            vkCmdEndRenderPass(currentCmd);
+            const bool copied = eyeAdaptation_->prepareComposite(
+                currentCmd, vkCtx->getCurrentFrame(),
+                currentImageIndex < images.size() ? images[currentImageIndex] : VK_NULL_HANDLE, ext);
+            vkCmdBeginRenderPass(currentCmd, &overlayRp, VK_SUBPASS_CONTENTS_INLINE);
+            vkCmdSetViewport(currentCmd, 0, 1, &vp);
+            vkCmdSetScissor(currentCmd, 0, 1, &sc);
+            if (copied) eyeAdaptation_->composite(currentCmd, vkCtx->getCurrentFrame());
+            vkCtx->gpuMark(currentCmd, "eye adaptation composite");
+        }
 
         // After the water's capture of the finished frame, or the traced
         // water mirrors the map as a disc in the pond.

@@ -119,6 +119,66 @@ inline float initialAdaptation(float measuredLog2, const Params& p = {}) {
     return std::clamp(measuredLog2, p.neutralLow, p.neutralHigh);
 }
 
+/// The exposure over a finished picture whose highlights are already clipped.
+///
+/// The frame is drawn straight into the 8-bit swapchain, so the sky round a
+/// low sun - far brighter than white - is stored as white, 1.0, and a plain
+/// multiply by an exposure under one made it a flat grey disc where the
+/// picture without the traced lighting is white. The picture is taken back
+/// to the light it stands for first: below the knee as it is, above it
+/// through a shoulder that reaches kHighlightWhite at 1.0 - what a clipped
+/// white is taken to have been. The exposure scales that, and the same
+/// shoulder brings it back down to the screen. Under the knee the result is
+/// exactly value x exposure, as the multiply had it; a clipped white stays
+/// (nearly) white at any exposure down to one half, and what lies between
+/// rolls off into it smoothly. At an exposure of one it is the identity.
+///
+/// Per pixel it is the whiteness - the dimmest of the three channels - that
+/// is taken through the shoulder, and the colour scaled by what that gives:
+/// the clipped sky round the sun is white in all three, while a sunlit
+/// yellow field or a blue noon sky, bright in one or two, is only ever the
+/// plain multiply, so the picture by day is what it was (exposeColour;
+/// eye_adaptation.frag.glsl does the same).
+constexpr float kHighlightKnee = 0.7f;
+constexpr float kHighlightWhite = 8.0f;
+
+namespace detail {
+/// The shoulder's shape: s = x(1 + a) / (x + a) over x, s in 0..1, with `a`
+/// chosen so the slope meets the straight part's at the knee.
+constexpr float kShoulderA = (1.0f - kHighlightKnee) / (kHighlightWhite - 1.0f);
+}  // namespace detail
+
+/// Screen value (0..1) to the light it stands for (0..kHighlightWhite).
+inline float highlightToScene(float v) {
+    const float k = kHighlightKnee, a = detail::kShoulderA;
+    if (v <= k) return std::max(v, 0.0f);
+    const float s = std::min((v - k) / (1.0f - k), 1.0f);
+    const float x = s * a / (1.0f + a - s);
+    return k + x * (kHighlightWhite - k);
+}
+
+/// The light (0..) back to a screen value (0..1).
+inline float highlightToScreen(float h) {
+    const float k = kHighlightKnee, a = detail::kShoulderA;
+    if (h <= k) return std::max(h, 0.0f);
+    const float x = (h - k) / (kHighlightWhite - k);
+    const float s = std::min(x * (1.0f + a) / (x + a), 1.0f);
+    return k + s * (1.0f - k);
+}
+
+/// A screen value (0..1) under `exposure`.
+inline float exposeHighlight(float v, float exposure) {
+    return highlightToScreen(exposure * highlightToScene(v));
+}
+
+/// A pixel (0..1 each) under `exposure`: the colour scaled by what the
+/// shoulder makes of its dimmest channel, never past white.
+inline void exposeColour(float rgb[3], float exposure) {
+    const float white = std::min(rgb[0], std::min(rgb[1], rgb[2]));
+    const float scale = white > 1e-4f ? exposeHighlight(white, exposure) / white : exposure;
+    for (int i = 0; i < 3; ++i) rgb[i] = std::clamp(rgb[i] * scale, 0.0f, 1.0f);
+}
+
 /// log2 of the mean luminance of an 8-bit picture, `width` x `height`
 /// pixels four bytes each, in display encoding: blue first when `bgra`.
 /// The mean is of the logs (a geometric mean), so one lamp's glare does not
