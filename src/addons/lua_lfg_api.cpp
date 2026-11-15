@@ -638,9 +638,27 @@ void registerLfgLuaAPI(lua_State* L) {
     }},
     // Whether a row can be queued for at all. Nothing is locked here - see
     // GetLFDChoiceLockedState - so the answer is yes and the server decides.
+    // IsLFGDungeonJoinable(dungeonID) (0x0055a040 -> 0x00559c90): nothing for a
+    // dungeon LFGDungeons has no row for; else false where the player's own
+    // lock list locks it, or - for any dungeon but type 2 - any party member's
+    // does, and true otherwise.
     {"IsLFGDungeonJoinable", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: IsLFGDungeonJoinable(dungeonID)");   // 0x0055a040
-            lua_pushnumber(L, 1);
+            auto* gh = getGameHandler(L);
+            const auto id = static_cast<uint32_t>(lua_tointeger(L, 1)) & 0x00FFFFFFu;
+            const game::LfgDungeon* d = gh ? lfgDungeonById(gh, id) : nullptr;
+            if (!d) return 0;
+            bool joinable = true;
+            if (gh->hasLfgPlayerLocks()) {
+                const auto& locks = gh->getLfgLocks();
+                if (auto it = locks.find(id); it != locks.end() && it->second != 0) joinable = false;
+            }
+            if (joinable && d->typeId != 2 && gh->hasLfgPartyLocks()) {
+                for (const auto& member : gh->getLfgPartyLocks())
+                    for (const auto& [entry, status] : member.locks)
+                        if ((entry & 0x00FFFFFFu) == id && status != 0) joinable = false;
+            }
+            lua_pushboolean(L, joinable ? 1 : 0);
             return 1;
         }},
     // GetLFGQueueStats() → hasData, leaderNeeds, tankNeeds, healerNeeds,

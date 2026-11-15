@@ -2,6 +2,7 @@
 // not have: voice chat, Battle.net, the knowledge base, script CPU profiling
 // and the scripts' file access. Each is what wow.exe 12340 answers with the
 // subsystem off or never loaded, read from its function.
+#include "addons/lua_engine.hpp"
 #include "addons/lua_api_helpers.hpp"
 #include "addons/lua_api_registrations.hpp"
 
@@ -193,6 +194,34 @@ constexpr char kAmUnread[] = "AccountMsg_GetNumUnreadMsgs() failed because the h
 constexpr char kAmSetRead[] = "AccountMsg_SetMsgRead() failed because the headers are not loaded";
 constexpr char kAmLoadHeaders[] = "AccountMsg_LoadHeaders() failed";
 
+// The knowledge base (0x00551720-0x00552580) is the same kind of service: its
+// setup, query and article come from Blizzard's web host, which is not asked,
+// so none is ever loaded. The loaders start nothing, the IsLoaded checks say
+// false, and the readers raise the client's own lines.
+constexpr char kKbCategoryCount[] = "KBSetup_GetCategoryCount() failed because setup is not loaded";
+constexpr char kKbCategoryData[] = "KBSetup_GetCategoryData() failed because setup is not loaded";
+constexpr char kKbSubCount[] = "KBSetup_GetSubCategoryCount() failed because setup is not loaded";
+constexpr char kKbSubData[] = "KBSetup_GetSubCategoryData() failed because setup is not loaded";
+constexpr char kKbSetupHeaderCount[] = "KBSetup_GetArticleHeaderCount() failed because setup is not loaded";
+constexpr char kKbSetupTotal[] = "KBSetup_GetTotalArticleCount() failed because setup is not loaded";
+constexpr char kKbQueryHeaderCount[] = "KBQuery_GetArticleHeaderCount() failed because query is not loaded";
+constexpr char kKbQueryTotal[] = "KBQuery_GetTotalArticleCount() failed because query is not loaded";
+constexpr char kKbQueryBegin[] = "KBQuery_BeginLoading() failed because setup is not loaded";
+constexpr char kKbArticleData[] = "KBArticle_GetData() failed because article is not loaded";
+/// A loader asked for a load that cannot be made: the request fails at once
+/// (0x00550e10 with the request refused: state 3 and the failure callback),
+/// which says so with the matching LOAD_FAILURE event.
+template <const char* Event>
+int kbLoadFails(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "wowee_lua_engine");
+    auto* engine = static_cast<LuaEngine*>(lua_touserdata(L, -1));
+    lua_pop(L, 1);
+    if (engine) engine->fireEvent(Event, {});
+    return 0;
+}
+constexpr char kKbSetupFailed[] = "KNOWLEDGE_BASE_SETUP_LOAD_FAILURE";
+constexpr char kKbArticleFailed[] = "KNOWLEDGE_BASE_ARTICLE_LOAD_FAILURE";
+
 void registerAbsentLuaAPI(lua_State* L) {
     static const luaL_Reg fns[] = {
         {"IsVoiceChatAllowed",                       isVoiceChatAllowed},
@@ -226,6 +255,23 @@ void registerAbsentLuaAPI(lua_State* L) {
         {"BNSetFocus",                               nothing},
         {"KBSystem_GetServerStatus",                 kbServerStatus},
         {"KBArticle_IsLoaded",                       kbNotLoaded},
+        {"KBSetup_IsLoaded",                         kbNotLoaded},
+        {"KBSetup_BeginLoading",                     kbLoadFails<kKbSetupFailed>},
+        {"KBArticle_BeginLoading",                   kbLoadFails<kKbArticleFailed>},
+        {"KBQuery_BeginLoading",                     accountMsgNotLoaded<kKbQueryBegin>},
+        {"KBSetup_GetCategoryCount",                 accountMsgNotLoaded<kKbCategoryCount>},
+        {"KBSetup_GetCategoryData",                  accountMsgNotLoaded<kKbCategoryData>},
+        {"KBSetup_GetSubCategoryCount",              accountMsgNotLoaded<kKbSubCount>},
+        {"KBSetup_GetSubCategoryData",               accountMsgNotLoaded<kKbSubData>},
+        {"KBSetup_GetArticleHeaderCount",            accountMsgNotLoaded<kKbSetupHeaderCount>},
+        {"KBSetup_GetTotalArticleCount",             accountMsgNotLoaded<kKbSetupTotal>},
+        {"KBQuery_GetArticleHeaderCount",            accountMsgNotLoaded<kKbQueryHeaderCount>},
+        {"KBQuery_GetTotalArticleCount",             accountMsgNotLoaded<kKbQueryTotal>},
+        {"KBArticle_GetData",                        accountMsgNotLoaded<kKbArticleData>},
+        // The message of the day and the notice (0x00551fb0, 0x00551ff0):
+        // strings the setup would bring, none until then.
+        {"KBSystem_GetMOTD",                         kbServerStatus},
+        {"KBSystem_GetServerNotice",                 kbServerStatus},
         {"KBQuery_IsLoaded",                         kbNotLoaded},
         {"KBSetup_GetLanguageCount",                 kbLanguageCount},
         {"KBSetup_GetLanguageData",                  kbLanguageData},
