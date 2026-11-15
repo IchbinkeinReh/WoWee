@@ -29,6 +29,12 @@ bool isFrameElement(const std::string& n) {
         "ScrollFrame", "ScrollingMessageFrame", "MessageFrame", "SimpleHTML",
         "ColorSelect", "Model", "PlayerModel", "DressUpModel", "TabardModel",
         "Cooldown", "GameTooltip", "MovieFrame", "ArchaeologyDigSiteFrame",
+        // A widget type of the client's own (0x00a02a70 names it), not a
+        // template: WorldMapFrame.xml builds the map's quest blobs as
+        // <QuestPOIFrame name="WorldMapBlobFrame">. Read as a template name,
+        // every login warned "missing XML template: QuestPOIFrame" and the
+        // frame came back typed "Frame".
+        "QuestPOIFrame",
         // Both are ordinary frames as far as this goes - the client draws what
         // is inside them. Leaving Minimap out skipped the whole minimap
         // subtree, which is why every MinimapNorthTag and MiniMapLFGFrame in
@@ -1819,10 +1825,17 @@ EmitResult emitFrameXml(const XmlNode& rootIn) {
     }
     for (const XmlNode& node : root.children) {
         if (node.name == "Script") {
-            if (const std::string* file = node.attr("file")) e.result.scriptFiles.push_back(*file);
-            else if (!node.text.empty()) e.result.lua += node.text + "\n";
+            if (const std::string* file = node.attr("file")) {
+                e.result.scriptFiles.push_back(*file);
+                e.result.filesInOrder.push_back({*file, false, e.result.lua.size()});
+            } else if (!node.text.empty()) {
+                e.result.lua += node.text + "\n";
+            }
         } else if (node.name == "Include") {
-            if (const std::string* file = node.attr("file")) e.result.includeFiles.push_back(*file);
+            if (const std::string* file = node.attr("file")) {
+                e.result.includeFiles.push_back(*file);
+                e.result.filesInOrder.push_back({*file, true, e.result.lua.size()});
+            }
         } else if (node.name == "Font") {
             e.emitFont(node);
         } else if (node.name == "AnimationGroup" && node.attrBool("virtual")) {

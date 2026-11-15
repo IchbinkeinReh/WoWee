@@ -484,6 +484,37 @@ TEST_CASE("Referenced files are reported rather than loaded", "[framexml][emit]"
     REQUIRE(r.includeFiles[0] == "Bar.xml");
 }
 
+TEST_CASE("A script runs after the templates declared above it", "[framexml][emit]") {
+    // SecureTemplates.xml, cut down: the template, then the two scripts that
+    // build their manager frames from it at load.
+    XmlNode root = parseOrFail(
+        "<Ui><Frame name=\"SecureFrameTemplate\" protected=\"true\" virtual=\"true\"/>"
+        "<Script file=\"SecureStateDriver.lua\"/><Script file=\"SecureHoverDriver.lua\"/>"
+        "<Frame name=\"After\"/></Ui>");
+    const EmitResult r = emitFrameXml(root);
+    REQUIRE(r.filesInOrder.size() == 2);
+    CHECK(r.filesInOrder[0].file == "SecureStateDriver.lua");
+    CHECK_FALSE(r.filesInOrder[0].include);
+    CHECK(r.filesInOrder[1].file == "SecureHoverDriver.lua");
+    // The template is in the Lua before the first script's place in it, and
+    // the frame declared after the scripts is not.
+    const std::string before = r.lua.substr(0, r.filesInOrder[0].luaOffset);
+    CHECK(has(before, "__WoweeTemplates[\"SecureFrameTemplate\"] = function(self)"));
+    CHECK_FALSE(has(before, "\"After\""));
+    CHECK(has(r.lua.substr(r.filesInOrder[1].luaOffset), "\"After\""));
+}
+
+TEST_CASE("QuestPOIFrame is a frame type, not a template", "[framexml][emit]") {
+    // WorldMapFrame.xml's quest blob frame.
+    XmlNode root = parseOrFail(
+        "<Ui><Frame name=\"WorldMapButton\"><Frames>"
+        "<QuestPOIFrame name=\"WorldMapBlobFrame\"/>"
+        "</Frames></Frame></Ui>");
+    const EmitResult r = emitFrameXml(root);
+    CHECK(has(r.lua, "CreateFrame(\"QuestPOIFrame\""));
+    CHECK_FALSE(has(r.lua, "__WoweeMissingTemplate(\"QuestPOIFrame\")"));
+}
+
 TEST_CASE("Nested frames are parented to the frame containing them",
           "[framexml][emit]") {
     XmlNode root = parseOrFail(
