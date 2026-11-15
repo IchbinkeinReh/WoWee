@@ -2833,6 +2833,11 @@ void GameHandler::ensureAchievementCriteriaLoaded() {
 }
 
 // ---------------------------------------------------------------------------
+void GameHandler::queryInspectAchievements(uint64_t guid) {
+    if (guid == 0 || !isInWorld() || !socket) return;
+    socket->send(QueryInspectAchievementsPacket::build(guid));
+}
+
 // SMSG_ALL_ACHIEVEMENT_DATA (WotLK 3.3.5a)
 //   Achievement records: repeated { uint32 id, uint32 packedDate } until 0xFFFFFFFF sentinel
 //   Criteria records:    repeated { uint32 id, uint64 counter, uint32 packedDate, ... } until 0xFFFFFFFF
@@ -2865,6 +2870,7 @@ void GameHandler::handleAllAchievementData(network::Packet& packet) {
         noteCriteriaForLatestStats(id, rec.flags);
     }
 
+    achievementDataReceived_ = true;
     LOG_INFO("SMSG_ALL_ACHIEVEMENT_DATA: loaded ", earnedAchievements_.size(),
              " achievements, ", criteriaProgress_.size(), " criteria");
     // The panel builds its whole tree on this, and it arrives once at login -

@@ -666,7 +666,8 @@
     "ID": 0,
     "Name": 1,
     "OrderIndex": 22,
-    "PetTalentMask": 21
+    "PetTalentMask": 21,
+    "SpellIconID": 18
   },
   "TaxiNodes": {
     "ID": 0,

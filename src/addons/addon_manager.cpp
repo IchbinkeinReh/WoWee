@@ -1126,23 +1126,10 @@ bool AddonManager::loadFrameXml(const std::string& frameXmlDir) {
         "  return CALENDAR_TYPE_RAID, CALENDAR_TYPE_DUNGEON, CALENDAR_TYPE_PVP,\n"
         "         CALENDAR_TYPE_MEETING, CALENDAR_TYPE_OTHER\n"
         "end\n"
+        // The four of 0x00ad1684 (0x005b89c0).
         "function CalendarEventGetRepeatOptions()\n"
         "  return CALENDAR_REPEAT_NEVER, CALENDAR_REPEAT_WEEKLY,\n"
-        "         CALENDAR_REPEAT_BIWEEKLY\n"
-        "end\n"
-        // The nine the interface knows, in CALENDAR_INVITESTATUS_* order.
-        // Not the ten the server has: it also carries REMOVED, which is an
-        // instruction rather than a state and has no row to show.
-        // 0x005bb130: the invitee's index as a number, or the usage error.
-        "function CalendarEventGetStatusOptions(index)\n"
-        "  if not tonumber(index) then\n"
-        "    error('Usage: CalendarEventGetStatusOptions(index)', 2)\n"
-        "  end\n"
-        "  return CALENDAR_STATUS_INVITED, CALENDAR_STATUS_ACCEPTED,\n"
-        "         CALENDAR_STATUS_DECLINED, CALENDAR_STATUS_CONFIRMED,\n"
-        "         CALENDAR_STATUS_OUT, CALENDAR_STATUS_STANDBY,\n"
-        "         CALENDAR_STATUS_SIGNEDUP, CALENDAR_STATUS_NOT_SIGNEDUP,\n"
-        "         CALENDAR_STATUS_TENTATIVE\n"
+        "         CALENDAR_REPEAT_BIWEEKLY, CALENDAR_REPEAT_MONTHLY\n"
         "end\n");
 
     // Report the quest dialog's own geometry, at the moment it is built.

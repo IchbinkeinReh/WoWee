@@ -3759,6 +3759,7 @@ void SpellHandler::loadTalentDbc() {
         const uint32_t ttBgField    = ttL ? (*ttL)["BackgroundFile"] : 23;
         // Named only in a layout that has it: before 3.x there are no pet trees.
         const uint32_t ttPetField   = ttL ? ttL->tryField("PetTalentMask") : 0xFFFFFFFFu;
+        const uint32_t ttIconField  = ttL ? ttL->tryField("SpellIconID") : 0xFFFFFFFFu;
 
         uint32_t count = tabDbc->getRecordCount();
         for (uint32_t i = 0; i < count; ++i) {
@@ -3771,6 +3772,7 @@ void SpellHandler::loadTalentDbc() {
             entry.petTalentMask = ttPetField != 0xFFFFFFFFu ? tabDbc->getUInt32(i, ttPetField) : 0;
             entry.orderIndex = static_cast<uint8_t>(tabDbc->getUInt32(i, ttOrderField));
             entry.backgroundFile = tabDbc->getString(i, ttBgField);
+            entry.spellIconId = ttIconField != 0xFFFFFFFFu ? tabDbc->getUInt32(i, ttIconField) : 0;
 
             talentTabCache_[entry.tabId] = entry;
 

@@ -3857,6 +3857,9 @@ public:
                                                      uint32_t current, uint32_t required)>;
     void setQuestProgressCallback(QuestProgressCallback cb) { questProgressCallback_ = std::move(cb); }
     const std::unordered_map<uint32_t, uint64_t>& getCriteriaProgress() const { return criteriaProgress_; }
+    /// The achievement data has come (SMSG_ALL_ACHIEVEMENT_DATA): what
+    /// CanShowAchievementUI answers (DAT_00c1f454).
+    bool achievementDataReceived() const { return achievementDataReceived_; }
     /// Returns the WoW PackedTime earn date for an achievement, or 0 if unknown.
     uint32_t getAchievementDate(uint32_t id) const {
         auto it = achievementDates_.find(id);
@@ -4216,6 +4219,8 @@ public:
     /// Who the achievement comparison tab is looking at, or zero.
     uint64_t getAchievementComparisonGuid() const { return achievementComparisonGuid_; }
     void setAchievementComparisonGuid(uint64_t guid) { achievementComparisonGuid_ = guid; }
+    /// CMSG_QUERY_INSPECT_ACHIEVEMENTS for a player (0x005b1ab0).
+    void queryInspectAchievements(uint64_t guid);
 
     // Server-triggered music callback - fires when SMSG_PLAY_MUSIC is received.
     // The soundId corresponds to a SoundEntries.dbc record. The receiver is
@@ -7089,6 +7094,7 @@ private:
     std::unordered_map<uint32_t, uint32_t> achievementDates_;
     // Criteria progress: criteriaId → current value (from SMSG_CRITERIA_UPDATE)
     std::unordered_map<uint32_t, uint64_t> criteriaProgress_;
+    bool achievementDataReceived_ = false;
     void handleAllAchievementData(network::Packet& packet);
 
     // Per-player achievement data from SMSG_RESPOND_INSPECT_ACHIEVEMENTS

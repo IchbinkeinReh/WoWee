@@ -230,16 +230,10 @@ static const char* calendarTypeName(const wowee::game::CalendarEvent& ev) {
 /// server wants both it and the event id, and an event the player was never
 /// invited to has no invite to answer. Silent when there is none rather than
 /// sending a request the server would refuse.
-static int calendarRespondToContextInvite(lua_State* L, uint32_t status) {
+static int calendarRespondToContextInvite(lua_State* L, uint64_t eventId, uint32_t status) {
     auto* gh = getGameHandler(L);
-    const auto& row = calendarContextRow();
-    if (!gh || row.day < 1) return 0;
-    const auto rows = calendarRowsFor(*gh, row.monthOffset, row.day);
-    if (row.index < 1 || static_cast<size_t>(row.index) > rows.size()) return 0;
-    const auto& entry = rows[static_cast<size_t>(row.index) - 1];
-    if (entry.kind != wowee::game::CalendarEntryKind::Event) return 0;
+    if (!gh || eventId == 0) return 0;
     const auto& cal = gh->getCalendarData();
-    const uint64_t eventId = cal.events[entry.index].eventId;
     for (const auto& invite : cal.invites) {
         if (invite.eventId != eventId) continue;
         gh->respondToCalendarInvite(eventId, invite.inviteId, status);
@@ -8310,7 +8304,9 @@ static int lua_RequestRaidInfo(lua_State* L) {
 
 // CanShowAchievementUI() → whether the achievement panel may open
 static int lua_CanShowAchievementUI(lua_State* L) {
-    lua_pushboolean(L, 1);
+    // 0x005b0ce0: whether the achievement data has come.
+    auto* gh = getGameHandler(L);
+    lua_pushboolean(L, gh && gh->achievementDataReceived() ? 1 : 0);
     return 1;
 }
 
@@ -11748,13 +11744,15 @@ void registerSystemLuaAPI(lua_State* L) {
             return 10;
         }},
                 {"CalendarGetDate", [](lua_State* L) -> int {
-            // CalendarGetDate() → weekday, month, day, year
-            time_t now = time(nullptr);
-            const std::tm t = core::localTime(now);
-            lua_pushnumber(L, t.tm_wday + 1); // weekday (1=Sun)
-            lua_pushnumber(L, t.tm_mon + 1);  // month (1-12)
-            lua_pushnumber(L, t.tm_mday);     // day
-            lua_pushnumber(L, t.tm_year + 1900); // year
+            // CalendarGetDate() → weekday, month, day, year: the realm's game
+            // date (0x005b8160, 0x00d37fa0..), which reads 1, 1, 1, 2000
+            // before the server has given one.
+            auto* gh = getGameHandler(L);
+            const auto date = gh ? gh->getGameDate() : std::nullopt;
+            lua_pushnumber(L, date ? date->weekday + 1 : 1);
+            lua_pushnumber(L, date ? date->month : 1);
+            lua_pushnumber(L, date ? date->day : 1);
+            lua_pushnumber(L, date ? date->fullYear() : 2000);
             return 4;
         }},
                 // How many calendar invites are waiting to be answered. The
@@ -11903,21 +11901,30 @@ void registerSystemLuaAPI(lua_State* L) {
             // 0x005ba000
             if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2) || !lua_isnumber(L, 3))
                 return luaL_error(L, "Usage: CalendarGetRaidInfo([-1,0,1], monthDay, index)");
+            // No such row: nil, "", 0, 0, 0, 0, "" (0x005ba000). The sixth is
+            // the difficulty counted from one and the seventh its
+            // MapDifficulty name.
+            const auto none = [L]() {
+                lua_pushnil(L); lua_pushstring(L, "");
+                for (int i = 0; i < 4; ++i) lua_pushnumber(L, 0);
+                lua_pushstring(L, "");
+                return 7;
+            };
             const auto rows = calendarDayRows(L);
-            const int index = static_cast<int>(luaL_optnumber(L, 3, 0));
-            if (index < 1 || static_cast<size_t>(index) > rows.size()) return 0;
+            const int index = static_cast<int>(std::lround(lua_tonumber(L, 3)));
+            if (index < 1 || static_cast<size_t>(index) > rows.size()) return none();
             const auto& row = rows[static_cast<size_t>(index) - 1];
-            if (row.kind != wowee::game::CalendarEntryKind::RaidLockout) return 0;
+            if (row.kind != wowee::game::CalendarEntryKind::RaidLockout) return none();
             auto* gh = getGameHandler(L);
-            if (!gh) return 0;
+            if (!gh) return none();
             const auto& lock = gh->getCalendarData().lockouts[row.index];
             lua_pushstring(L, gh->getMapName(lock.mapId).c_str());
             lua_pushstring(L, "RAID_LOCKOUT");
             lua_pushnumber(L, static_cast<double>(lock.mapId));
             lua_pushnumber(L, row.hour);
             lua_pushnumber(L, row.minute);
-            lua_pushnumber(L, lock.difficulty);
-            lua_pushstring(L, "");
+            lua_pushnumber(L, lock.difficulty + 1);
+            lua_pushstring(L, gh->savedInstanceDifficultyName(lock.mapId, lock.difficulty).c_str());
             return 7;
         }},
                 // Ask the server for the calendar. The addon's OnShow calls
@@ -11937,18 +11944,25 @@ void registerSystemLuaAPI(lua_State* L) {
                 // minLevel, maxLevel, rank - the default filter a guild event
                 // is created with. The whole guild, which is what the server
                 // defaults to as well.
+                // 0x005bcda0: the expansion's level cap twice and the guild's
+                // rank count; 0, 0, 0 without a player.
                 {"CalendarDefaultGuildFilter", [](lua_State* L) -> int {
-            lua_pushnumber(L, 1);
-            lua_pushnumber(L, 80);
-            lua_pushnumber(L, 0);
+            auto* gh = getGameHandler(L);
+            const bool me = gh && gh->getEntityManager().getEntity(gh->getPlayerGuid());
+            const double cap = me ? 80.0 : 0.0;
+            lua_pushnumber(L, cap);
+            lua_pushnumber(L, cap);
+            lua_pushnumber(L, me ? static_cast<double>(gh->getGuildQueryData().rankCount) : 0.0);
             return 3;
         }},
                 // Whether the player may put an event on the guild's calendar.
                 // The server decides for real; this is the guild-membership
                 // half of it, which is the half that gates the button.
+                // CanEditGuildEvent() (0x005cc360): the rank's calendar right
+                // (0x100000).
                 {"CanEditGuildEvent", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            luaPushOneOrNil(L, (gh && !gh->getGuildName().empty()) ? 1 : 0);
+            luaPushOneOrNil(L, gh && gh->isInGuild() && (gh->getPlayerGuildRankRights() & 0x00100000u));
             return 1;
         }},
                 // Arena team events need a team. No arena team is tracked, so
@@ -11986,9 +12000,19 @@ void registerSystemLuaAPI(lua_State* L) {
                 // answers nothing rather than a row of blanks.
                 {"CalendarGetEventInfo", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (!gh) return 0;
+            // No open event: nil, nil, "", sixteen zeros, three nils, 0, 0,
+            // "" (0x005bd8a0).
+            const auto none = [L]() {
+                lua_pushnil(L); lua_pushnil(L); lua_pushstring(L, "");
+                for (int i = 0; i < 16; ++i) lua_pushnumber(L, 0);
+                lua_pushnil(L); lua_pushnil(L); lua_pushnil(L);
+                lua_pushnumber(L, 0); lua_pushnumber(L, 0);
+                lua_pushstring(L, "");
+                return 25;
+            };
+            if (!gh || !gh->isCalendarEventOpen()) return none();
             const auto& ev = gh->getCalendarEventDetail();
-            if (ev.eventId == 0) return 0;
+            if (ev.eventId == 0) return none();
             lua_pushstring(L, ev.title.c_str());
             lua_pushstring(L, ev.description.c_str());
             lua_pushstring(L, gh->lookupName(ev.creatorGuid).c_str());
@@ -12552,10 +12576,8 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"CalendarContextGetEventIndex", [](lua_State* L) -> int {
             const auto& row = calendarContextRow();
             if (row.day < 1 || row.index < 1) {
-                // Three nils rather than none: the interface unpacks this as a
-                // group, and a short answer is the shape framexml_short_returns
-                // exists to catch.
-                lua_pushnil(L); lua_pushnil(L); lua_pushnil(L);
+                // 0, 0, 0 with none (0x005ba680).
+                lua_pushinteger(L, 0); lua_pushinteger(L, 0); lua_pushinteger(L, 0);
                 return 3;
             }
             lua_pushnumber(L, row.monthOffset);
@@ -12702,56 +12724,54 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"CalendarContextInviteAvailable", [](lua_State* L) -> int {
             // 0x005bab50: three numbers naming a row, or the row the menu
             // is about; with neither, the usage error.
-            if (uint64_t named = 0; !calendarNamedOrContextEvent(L, named))
+            uint64_t named = 0;
+            if (!calendarNamedOrContextEvent(L, named))
                 return luaL_error(L, "Usage: CalendarContextInviteAvailable([-1.0.1], monthDay, index)");
-            return calendarRespondToContextInvite(L, 1);   // accepted
+            return calendarRespondToContextInvite(L, named, 1);   // accepted
         }},
                 {"CalendarContextInviteDecline", [](lua_State* L) -> int {
             // 0x005bad00: three numbers naming a row, or the row the menu
             // is about; with neither, the usage error.
-            if (uint64_t named = 0; !calendarNamedOrContextEvent(L, named))
+            uint64_t named = 0;
+            if (!calendarNamedOrContextEvent(L, named))
                 return luaL_error(L, "Usage: CalendarContextInviteDecline([-1.0.1], monthDay, index)");
-            return calendarRespondToContextInvite(L, 2);   // declined
+            return calendarRespondToContextInvite(L, named, 2);   // declined
         }},
                 {"CalendarContextInviteTentative", [](lua_State* L) -> int {
             // 0x005bcf30: three numbers naming a row, or the row the menu
             // is about; with neither, the usage error.
-            if (uint64_t named = 0; !calendarNamedOrContextEvent(L, named))
+            uint64_t named = 0;
+            if (!calendarNamedOrContextEvent(L, named))
                 return luaL_error(L, "Usage: Script_CalendarContextInviteTentative([-1.0.1], monthDay, index)");
-            return calendarRespondToContextInvite(L, 8);   // tentative
+            return calendarRespondToContextInvite(L, named, 8);   // tentative
         }},
                 {"CalendarContextInviteRemove", [](lua_State* L) -> int {
             // 0x005bd040: three numbers naming a row, or the row the menu
             // is about; with neither, the usage error.
-            if (uint64_t named = 0; !calendarNamedOrContextEvent(L, named))
+            uint64_t named = 0;
+            if (!calendarNamedOrContextEvent(L, named))
                 return luaL_error(L, "Usage: CalendarContextInviteRemove([-1.0.1], monthDay, index)");
-            return calendarRespondToContextInvite(L, 9);   // removed
+            return calendarRespondToContextInvite(L, named, 9);   // removed
         }},
                 // Whether the player may edit or delete the row the menu is
                 // about, which is whether they created it. The server decides
                 // for real and refuses otherwise; this is what greys the menu
                 // entry rather than letting it be clicked and rejected.
                 {"CalendarContextEventCanEdit", [](lua_State* L) -> int {
-            // 0x005baeb0: three numbers naming a row, or the row the menu
-            // is about; with neither, the usage error.
-            if (uint64_t named = 0; !calendarNamedOrContextEvent(L, named))
+            // 0x005baeb0: the record three numbers name, or the menu's; with
+            // neither, the usage error. A guild event or announcement (flags
+            // 0x440) asks the rank's calendar right, anything else the
+            // invite's creator or moderator bits (0x6).
+            std::optional<CalendarRecord> rec;
+            if (!calendarRecordArg(L, rec))
                 return luaL_error(L, "Usage: CalendarContextEventCanEdit([-1.0.1], monthDay, index)");
             auto* gh = getGameHandler(L);
-            if (!gh) { lua_pushboolean(L, 0); return 1; }
-            const auto rows = calendarDayRows(L);
-            const int index = static_cast<int>(luaL_optnumber(L, 3, 0));
-            if (index < 1 || static_cast<size_t>(index) > rows.size()) {
-                lua_pushboolean(L, 0);
-                return 1;
+            bool can = false;
+            if (gh && rec) {
+                if (rec->flags & 0x440u) can = gh->isInGuild() && (gh->getPlayerGuildRankRights() & 0x00100000u);
+                else can = (rec->invite.flags & 0x6u) != 0;
             }
-            const auto& row = rows[static_cast<size_t>(index) - 1];
-            if (row.kind != wowee::game::CalendarEntryKind::Event) {
-                lua_pushboolean(L, 0);
-                return 1;
-            }
-            const auto& ev = gh->getCalendarData().events[row.index];
-            lua_pushboolean(L, ev.creatorGuid != 0 &&
-                                   ev.creatorGuid == gh->getPlayerGuid() ? 1 : 0);
+            lua_pushboolean(L, can ? 1 : 0);
             return 1;
         }},
                 // CalendarContextEventCanComplain([monthOffset, day, index])
@@ -12802,17 +12822,11 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"CalendarContextEventRemove", [](lua_State* L) -> int {
             // 0x005bd220: three numbers naming a row, or the row the menu
             // is about; with neither, the usage error.
-            if (uint64_t named = 0; !calendarNamedOrContextEvent(L, named))
+            uint64_t named = 0;
+            if (!calendarNamedOrContextEvent(L, named))
                 return luaL_error(L, "Usage: Script_CalendarContextEventRemove([-1.0.1], monthDay, index)");
-            auto* gh = getGameHandler(L);
-            if (!gh) return 0;
-            const auto& row = calendarContextRow();
-            const auto rows = calendarRowsFor(*gh, row.monthOffset, row.day);
-            if (row.index < 1 || static_cast<size_t>(row.index) > rows.size()) return 0;
-            const auto& entry = rows[static_cast<size_t>(row.index) - 1];
-            if (entry.kind != wowee::game::CalendarEntryKind::Event) return 0;
-            gh->removeCalendarEvent(
-                gh->getCalendarData().events[entry.index].eventId, 0);
+            // The event the numbers name, else the menu's.
+            if (auto* gh = getGameHandler(L); gh && named) gh->removeCalendarEvent(named, 0);
             return 0;
         }},
                 // CalendarContextEventCopy([monthOffset, day, index]) - keep
@@ -12861,36 +12875,25 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"CalendarContextEventSignUp", [](lua_State* L) -> int {
             // 0x005bd130: three numbers naming a row, or the row the menu
             // is about; with neither, the usage error.
-            if (uint64_t named = 0; !calendarNamedOrContextEvent(L, named))
+            uint64_t named = 0;
+            if (!calendarNamedOrContextEvent(L, named))
                 return luaL_error(L, "Usage: CalendarContextEventSignUp([-1.0.1], monthDay, index)");
-            return calendarRespondToContextInvite(L, 6);   // SIGNED_UP
+            return calendarRespondToContextInvite(L, named, 6);   // SIGNED_UP
         }},
                 // Which of the six kinds the menu's row is, so the menu can
                 // offer the right verbs. Read from the same day list the row
                 // was chosen out of.
                 {"CalendarContextEventGetCalendarType", [](lua_State* L) -> int {
-            // 0x005bafc0: three numbers naming a row, or the row the menu
-            // is about; with neither, the usage error.
-            if (uint64_t named = 0; !calendarNamedOrContextEvent(L, named))
+            // 0x005bafc0: the record three numbers name, or the menu's; with
+            // neither, the usage error. Its kind by its flags (0x005b7fd0).
+            std::optional<CalendarRecord> rec;
+            if (!calendarRecordArg(L, rec))
                 return luaL_error(L, "Usage: CalendarContextEventGetCalendarType([-1.0.1], monthDay, index)");
-            const auto& row = calendarContextRow();
             auto* gh = getGameHandler(L);
-            // Nil rather than nothing, for the same reason as
-            // CalendarContextGetEventIndex above: the arity belongs at the
-            // binding rather than resting on Lua filling the gap.
-            if (!gh || row.day < 1) { lua_pushnil(L); return 1; }
-            const auto rows = calendarRowsFor(*gh, row.monthOffset, row.day);
-            if (row.index < 1 || static_cast<size_t>(row.index) > rows.size()) {
-                lua_pushnil(L);
-                return 1;
-            }
-            const auto& entry = rows[static_cast<size_t>(row.index) - 1];
-            if (entry.kind == wowee::game::CalendarEntryKind::Holiday) {
-                lua_pushstring(L, "HOLIDAY");
-            } else {
-                lua_pushstring(L, calendarTypeName(
-                    gh->getCalendarData().events[entry.index]));
-            }
+            if (!gh || !rec) { lua_pushnil(L); return 1; }
+            if (rec->entry.kind == wowee::game::CalendarEntryKind::Holiday) lua_pushstring(L, "HOLIDAY");
+            else if (rec->event) lua_pushstring(L, calendarTypeName(*rec->event));
+            else lua_pushnil(L);
             return 1;
         }},
                 // Which event is selected, as monthOffset, day, index.
@@ -12901,10 +12904,63 @@ void registerSystemLuaAPI(lua_State* L) {
                 // binding that answers short is the shape framexml_short_returns
                 // is pinned at zero to catch: it reads as correct here only
                 // because Lua happens to fill the rest with nil.
+                // CalendarGetEventIndex() (0x005b9f80): where the open event
+                // sits - month offset, day, index - or 0, 0, 0.
+                // CalendarEventGetStatusOptions(index) (0x005bb130): for the
+                // open event's invitee at that index, the statuses the player
+                // may set as (status index, text) pairs - 1-5 and 8, not 1
+                // or 2 on a guild event (0x400), never the one they have.
+                // Not allowed to edit: CALENDAR_ERROR_PERMISSIONS and nothing.
+                {"CalendarEventGetStatusOptions", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: CalendarEventGetStatusOptions(index)");
+            auto* gh = getGameHandler(L);
+            if (!gh || !gh->isCalendarEventOpen()) return 0;
+            if (!gh->calendarCanEditOpenEvent()) {
+                gh->calendarSayError("CALENDAR_ERROR_PERMISSIONS", "You do not have permission to do that.");
+                return 0;
+            }
+            static constexpr const char* kStatus[9] = {
+                "CALENDAR_STATUS_INVITED", "CALENDAR_STATUS_ACCEPTED", "CALENDAR_STATUS_DECLINED",
+                "CALENDAR_STATUS_CONFIRMED", "CALENDAR_STATUS_OUT", "CALENDAR_STATUS_STANDBY",
+                "CALENDAR_STATUS_SIGNEDUP", "CALENDAR_STATUS_NOT_SIGNEDUP", "CALENDAR_STATUS_TENTATIVE"};
+            const auto& detail = gh->getCalendarEventDetail();
+            const int index = static_cast<int>(std::lround(lua_tonumber(L, 1))) - 1;
+            if (index < 0 || static_cast<size_t>(index) >= detail.invitees.size()) return 0;
+            const uint8_t current = detail.invitees[static_cast<size_t>(index)].status;
+            int n = 0;
+            for (uint32_t s = 1; s < 9; ++s) {
+                if (s == 6 || s == 7) continue;
+                if ((detail.flags & 0x400u) && (s == 1 || s == 2)) continue;
+                if (s == current) continue;
+                lua_pushinteger(L, s + 1);
+                pushGlobalText(L, kStatus[s]);
+                n += 2;
+            }
+            return n;
+        }},
                 {"CalendarGetEventIndex", [](lua_State* L) -> int {
-            lua_pushnil(L);
-            lua_pushnil(L);
-            lua_pushnil(L);
+            auto* gh = getGameHandler(L);
+            if (gh && gh->isCalendarEventOpen()) {
+                const uint64_t open = gh->getCalendarEventDetail().eventId;
+                const auto viewed = calendarViewedMonth();
+                for (int offset = -1; offset <= 1 && open; ++offset) {
+                    const auto info = wowee::game::calendarMonthAt(viewed.first, viewed.second, offset);
+                    for (int day = 1; day <= info.numDays; ++day) {
+                        const auto rows = calendarRowsFor(*gh, offset, day);
+                        for (size_t i = 0; i < rows.size(); ++i) {
+                            if (rows[i].kind != wowee::game::CalendarEntryKind::Event) continue;
+                            if (gh->getCalendarData().events[rows[i].index].eventId != open) continue;
+                            lua_pushinteger(L, offset);
+                            lua_pushinteger(L, day);
+                            lua_pushinteger(L, static_cast<lua_Integer>(i + 1));
+                            return 3;
+                        }
+                    }
+                }
+            }
+            lua_pushinteger(L, 0);
+            lua_pushinteger(L, 0);
+            lua_pushinteger(L, 0);
             return 3;
         }},
                 // The first unanswered invite on a day, or zero.
@@ -12972,8 +13028,10 @@ void registerSystemLuaAPI(lua_State* L) {
             // 0x005c43b0
             if (!lua_isnumber(L, 1))
                 return luaL_error(L, "Usage: CalendarSetAbsMonth(month[, year])");
-            calendarSetViewedMonth(static_cast<int>(luaL_checknumber(L, 1)),
-                                   static_cast<int>(luaL_checknumber(L, 2)));
+            // The year is optional and stays the one viewed (0x005c43b0).
+            calendarSetViewedMonth(static_cast<int>(lua_tonumber(L, 1)),
+                                   lua_isnumber(L, 2) ? static_cast<int>(lua_tonumber(L, 2))
+                                                      : calendarViewedMonth().second);
             return 0;
         }},
                 // The ends of the range, both as weekday, month, day, year.
@@ -13044,8 +13102,14 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, info.firstWeekday);
             return 4;
         }},
+                // CalendarGetMinDate() (0x005b81f0): 24 November 2004, as
+                // weekday, month, day, year.
                 {"CalendarGetMinDate", [](lua_State* L) -> int {
-            return pushCalendarBoundDate(L, -12);
+            lua_pushnumber(L, wowee::game::weekdayOf(11, 24, 2004));
+            lua_pushnumber(L, 11);
+            lua_pushnumber(L, 24);
+            lua_pushnumber(L, 2004);
+            return 4;
         }},
                 {"CalendarGetMaxCreateDate", [](lua_State* L) -> int {
             return pushCalendarBoundDate(L, 12);

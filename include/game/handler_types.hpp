@@ -45,6 +45,8 @@ struct TalentTabEntry {
     uint32_t petTalentMask = 0;
     uint8_t orderIndex = 0;
     std::string backgroundFile;
+    /// SpellIcon.dbc row (field 18), the tab's icon (0x005c6150 +0x8).
+    uint32_t spellIconId = 0;
 };
 
 // ---- Spell / cast state ----
