@@ -1291,6 +1291,7 @@ static int lua_TargetNearestFriend(lua_State* L) {
 
 // GetRaidTargetIndex(unit) → icon index (1-8) or nil
 static int lua_GetRaidTargetIndex(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetRaidTargetIndex(unit)");   // 0x00572ab0
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnNil(L); }
     const char* uid = luaL_optstring(L, 1, "target");

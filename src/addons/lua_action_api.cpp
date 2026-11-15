@@ -2910,6 +2910,7 @@ static int lua_IsModifiedClick(lua_State* L) {
 
 // GetModifiedClick(action) → the binding it is on ("SHIFT", "CTRL-BUTTON1", "NONE")
 static int lua_GetModifiedClick(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetModifiedClick(\"action\")");   // 0x0055fc20
     const char* action = luaL_optstring(L, 1, "");
     std::string act(action);
     for (char& c : act) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -3169,6 +3170,7 @@ static int pushTradeLink(lua_State* L, game::GameHandler* gh,
 }
 
 static int lua_GetTradePlayerItemLink(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetTradePlayerItemLink(index)");   // 0x00586d00
     auto* gh = getGameHandler(L);
     const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
     if (!gh || i < 1 || i > game::GameHandler::TRADE_SLOT_COUNT) { return luaReturnNil(L); }
@@ -3176,6 +3178,7 @@ static int lua_GetTradePlayerItemLink(lua_State* L) {
 }
 
 static int lua_GetTradeTargetItemLink(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetTradeTargetItemLink(index)");   // 0x005865f0
     auto* gh = getGameHandler(L);
     const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
     if (!gh || i < 1 || i > game::GameHandler::TRADE_SLOT_COUNT) { return luaReturnNil(L); }
@@ -3257,6 +3260,7 @@ static int lua_ClickTargetTradeButton(lua_State* L) {
 }
 
 static int lua_SetTradeMoney(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetTradeMoney(amount)");   // 0x00586870
     auto* gh = getGameHandler(L);
     if (gh) gh->setTradeGold(static_cast<uint64_t>(luaL_optnumber(L, 1, 0)));
     return 0;
@@ -3561,6 +3565,7 @@ static int lua_GetBindingKey(lua_State* L) {
 // attempt to bind a key that was not already bound to something failed that
 // way - a controller button being the case where that is always true.
 static int lua_GetBindingAction(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetBindingAction(\"KEY\"[, checkOverride][, mode])");   // 0x00562550
     seedBindingDefaults();
     const std::string key = luaL_checkstring(L, 1);
     // checkOverride (0x00562490): the key's overrides answer first.
@@ -4288,6 +4293,7 @@ void registerActionLuaAPI(lua_State* L) {
                 // else answers nil, which is what WoW answers for an unbound
                 // key and which lets the dialog's own key handling run.
                 {"GetBindingByKey", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetBindingByKey(\"action\"[, mode])");   // 0x005625f0
             std::string key(luaL_optstring(L, 1, ""));
             for (char& c : key) c = static_cast<char>(std::toupper(
                 static_cast<unsigned char>(c)));

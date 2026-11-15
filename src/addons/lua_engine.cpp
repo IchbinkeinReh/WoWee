@@ -1347,6 +1347,12 @@ int lua_Model_SetFacing(lua_State* L) {
     }
     return 0;
 }
+// SetRotation is its own method in the client (0x00597a10) and the one of the
+// pair that refuses a call without a number.
+int lua_Model_SetRotation(lua_State* L) {
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: SetRotation(rotation (in radians))");   // 0x00597a10
+    return lua_Model_SetFacing(L);
+}
 int lua_Model_GetFacing(lua_State* L) {
     const auto* w = widgetOf(L, 1);
     lua_pushnumber(L, w ? w->modelFacing : 0.0);
@@ -6665,6 +6671,7 @@ int lua_Region_GetNumPoints(lua_State* L) {
 // compares GetZoom() against GetZoomLevels() - 1 to decide whether to grey the
 // zoom-in button out, and nil there is arithmetic on nothing.
 int lua_Minimap_SetZoom(lua_State* L) {
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: SetZoom(level)");   // 0x0057bfd0
     if (auto* w = widgetOf(L, 1)) {
         const int z = static_cast<int>(std::lround(luaL_optnumber(L, 2, 0)));
         w->zoomLevel = rendering::minimap_zoom::clampLevel(z);
@@ -11079,7 +11086,7 @@ void LuaEngine::registerCoreAPI() {
         // installed on textures and font strings alone - putting them there
         // gave the methods to everything except the things that use them.
         {"SetMovable",      lua_Frame_SetMovable},
-        {"SetRotation",     lua_Model_SetFacing},
+        {"SetRotation",     lua_Model_SetRotation},
         {"SetFacing",       lua_Model_SetFacing},
         {"GetFacing",       lua_Model_GetFacing},
         {"SetModel",        lua_Model_SetModel},

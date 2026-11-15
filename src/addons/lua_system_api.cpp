@@ -9269,36 +9269,8 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, gh ? static_cast<double>(gh->getCompanions(mounts).size()) : 0.0);
             return 1;
         }},
-                // The knowledge base is the server's FAQ, and there is no
-                // server here answering for it. Its category dropdown is
-                // reached from the "?" micro button beside the action bar, so
-                // the raise was one click away rather than in a corner.
-                {"KBSetup_GetCategoryCount",    lua_ReturnZero},
-                {"KBSetup_GetSubCategoryCount", lua_ReturnZero},
-                // The other thirteen, which the note above should have covered
-                // and did not: two counts were bound and the rest of the same
-                // window was not, so the "?" button still raised - on
-                // KBSetup_BeginLoading, which KnowledgeBaseFrame_OnShow calls
-                // before anything else.
-                //
-                // Every caller here guards, and guards on exactly what an
-                // absent knowledge base should say. KnowledgeBaseFrame_Search
-                // returns early unless KBSetup_IsLoaded, the MOTD and notice
-                // are both `if ( x )`, and the article lists are walked by the
-                // counts. Never loaded, nothing in it.
-                {"KBSetup_IsLoaded",            luaReturnNil},
-                {"KBSetup_BeginLoading",        lua_ReturnNothing},
-                {"KBQuery_BeginLoading",        lua_ReturnNothing},
-                {"KBArticle_BeginLoading",      lua_ReturnNothing},
-                {"KBSetup_GetArticleHeaderCount", lua_ReturnZero},
-                {"KBSetup_GetTotalArticleCount",  lua_ReturnZero},
-                {"KBQuery_GetArticleHeaderCount", lua_ReturnZero},
-                {"KBQuery_GetTotalArticleCount",  lua_ReturnZero},
-                {"KBSetup_GetCategoryData",     lua_ReturnNil},
-                {"KBSetup_GetSubCategoryData",  lua_ReturnNil},
-                {"KBArticle_GetData",           lua_ReturnNil},
-                {"KBSystem_GetMOTD",            lua_ReturnNil},
-                {"KBSystem_GetServerNotice",    lua_ReturnNil},
+                // The knowledge base is bound in lua_absent_api.cpp, as the
+                // client answers while it is never loaded.
                 // Three more counts read straight into a comparison or a
                 // format, with the same result: the socketing window walks
                 // `i <= numSockets`, the PvP frame formats the season number
@@ -11120,6 +11092,7 @@ void registerSystemLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"TaxiNodeName", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: TaxiNodeName(slot)");   // 0x00590d60
             auto* gh = getGameHandler(L);
             const uint32_t id = taxiNodeAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
             if (id == 0) { lua_pushstring(L, ""); return 1; }
@@ -11136,6 +11109,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 // or 1 is never equal to any of them, so every node counted as
                 // shown, including the ones the player has never been to.
                 {"TaxiNodeGetType", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: TaxiNodeGetType(slot)");   // 0x00590ed0
             auto* gh = getGameHandler(L);
             const uint32_t id = taxiNodeAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
             if (id == 0) { lua_pushstring(L, "NONE"); return 1; }
@@ -11155,6 +11129,7 @@ void registerSystemLuaAPI(lua_State* L) {
         }},
                 // TaxiNodePosition(index) → x, y as fractions of the map.
                 {"TaxiNodePosition", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: TaxiNodePosition(slot)");   // 0x00590e00
             auto* gh = getGameHandler(L);
             const uint32_t id = taxiNodeAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
             float u = 0, v = 0;
@@ -11167,6 +11142,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 // route to. Works out the journey once; the frame then asks
                 // about each leg of it.
                 {"TaxiNodeSetCurrent", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: TaxiNodeSetCurrent(slot)");   // 0x00591e60
             auto* gh = getGameHandler(L);
             const uint32_t id = taxiNodeAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
             taxiRouteShown() = (id != 0 && gh) ? gh->getTaxiRouteTo(id)
@@ -11256,6 +11232,7 @@ void registerSystemLuaAPI(lua_State* L) {
         }},
                 // TaxiNodeCost(index) → the fare in copper, for the tooltip.
                 {"TaxiNodeCost", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: TaxiNodeCost(slot)");   // 0x005915e0
             auto* gh = getGameHandler(L);
             const uint32_t id = taxiNodeAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
             lua_pushnumber(L, id != 0 ? static_cast<double>(gh->getTaxiCostTo(id)) : 0.0);
