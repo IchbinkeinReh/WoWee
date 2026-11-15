@@ -71,15 +71,22 @@ struct CharacterSectionTextures {
 
 /// Scan CharSections.dbc for one character's textures.
 ///
-/// `keepUnderwear` is asked for each underwear path before it is kept - the
-/// tables name art that is not always present, and a caller that can check the
-/// filesystem should. Pass nothing to keep them all.
+/// `present` is asked for each underwear, facial hair and scalp path before it
+/// is kept - the tables name art that is not always present, and a caller that
+/// can check the filesystem should. Pass nothing to keep them all.
+///
+/// The 3.3.5a table names 188 textures that no archive carries: every Blood
+/// Elf facial hair and scalp row among them (FacialLowerHair00_00.blp and on),
+/// and most Draenei, Broken and Naga_ scalps. The client composites a head
+/// layer only once its image has loaded (0x004f08a0 asks 0x004f2d80 first)
+/// and skips one that never will without a word; a reader that kept the name
+/// warned twice for it on every login of such a character.
 CharacterSectionTextures resolveCharacterSections(
     const DBCFile* charSections,
     const CharSectionsFields& fields,
     const CharacterAppearance& who,
-    bool (*keepUnderwear)(const std::string&, void*) = nullptr,
-    void* keepUnderwearContext = nullptr);
+    bool (*present)(const std::string&, void*) = nullptr,
+    void* presentContext = nullptr);
 
 /// A layer on one of the head's two regions of the body texture.
 struct FaceRegionLayer {

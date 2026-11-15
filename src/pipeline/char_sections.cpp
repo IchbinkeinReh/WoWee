@@ -19,11 +19,18 @@ CharacterSectionTextures resolveCharacterSections(
     const DBCFile* charSections,
     const CharSectionsFields& f,
     const CharacterAppearance& who,
-    bool (*keepUnderwear)(const std::string&, void*),
-    void* keepUnderwearContext) {
+    bool (*present)(const std::string&, void*),
+    void* presentContext) {
 
     CharacterSectionTextures out;
     if (!charSections) return out;
+
+    // A named texture the data does not carry is dropped here, so that no
+    // compositor asks for it (see the header).
+    auto kept = [&](std::string tex) {
+        if (!tex.empty() && present && !present(tex, presentContext)) tex.clear();
+        return tex;
+    };
 
     // The nearest usable face, kept in case the exact pair is absent.
     //
@@ -57,12 +64,14 @@ CharacterSectionTextures resolveCharacterSections(
                    variation == who.hairStyleId && colour == who.hairColorId) {
             out.hair = charSections->getString(r, f.texture1);
             out.haveHair = !out.hair.empty();
-            out.scalpLower = charSections->getString(r, f.texture2);
-            out.scalpUpper = charSections->getString(r, f.texture3);
+            out.scalpLower = kept(charSections->getString(r, f.texture2));
+            out.scalpUpper = kept(charSections->getString(r, f.texture3));
         } else if (section == kSectionFacialHair && !foundFacial && who.facialHairId >= 0 &&
                    variation == static_cast<uint32_t>(who.facialHairId) && colour == who.hairColorId) {
-            out.facialLower = charSections->getString(r, f.texture1);
-            out.facialUpper = charSections->getString(r, f.texture2);
+            // The row still counts as found when its art is absent: it is the
+            // style's row, and the client has nothing else to draw for it.
+            out.facialLower = kept(charSections->getString(r, f.texture1));
+            out.facialUpper = kept(charSections->getString(r, f.texture2));
             foundFacial = true;
         } else if (section == kSectionFace && !out.exactFace &&
                    variation == who.faceId && colour == who.skinId) {
@@ -85,7 +94,7 @@ CharacterSectionTextures resolveCharacterSections(
             for (uint32_t col = f.texture1; col <= f.texture1 + 2; col++) {
                 std::string tex = charSections->getString(r, col);
                 if (tex.empty()) continue;
-                if (keepUnderwear && !keepUnderwear(tex, keepUnderwearContext)) continue;
+                if (present && !present(tex, presentContext)) continue;
                 out.underwear.push_back(tex);
             }
             foundUnderwear = !out.underwear.empty();
