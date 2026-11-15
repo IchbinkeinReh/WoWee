@@ -4407,7 +4407,14 @@ static bool auctionItemRepaired(game::GameHandler* gh, const game::ItemSlot& slo
 }
 
 static const game::ItemSlot* auctionSellItemSlot(game::GameHandler* gh,
-                                                 uint64_t* guidOut = nullptr) {
+                                                 uint64_t* guidOut = nullptr);
+
+const game::ItemSlot* auctionSellHeldItem(game::GameHandler* gh) {
+    return auctionSellItemSlot(gh);
+}
+
+static const game::ItemSlot* auctionSellItemSlot(game::GameHandler* gh,
+                                                 uint64_t* guidOut) {
     if (guidOut) *guidOut = 0;
     const AuctionSellSlot& sel = auctionSellSlot();
     if (!gh || !sel.held) return nullptr;

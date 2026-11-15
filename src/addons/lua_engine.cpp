@@ -26,6 +26,8 @@
 #include <SDL3/SDL.h>
 #include "addons/lua_api_helpers.hpp"
 #include "addons/object_type.hpp"
+#include "addons/tooltip_setter_rules.hpp"
+#include "game/spell_description_eval.hpp"
 #include "network/world_socket.hpp"
 #include "addons/addon_lua_snippets.hpp"
 #include "game/chat_channels.hpp"
@@ -2463,6 +2465,17 @@ static void fireTooltipSetSpell(lua_State* L, const wowee::ui::Widget* w, uint32
     lua_settop(L, tip - 1);
 }
 
+/// One of the OnTooltipSet* scripts a builder ends with that carries nothing
+/// with it: OnTooltipSetAchievement at the end of the achievement builder
+/// (0x00627220, +0x50c), OnTooltipSetEquipmentSet at the end of the
+/// equipment set builder (0x00622dd0, +0x514).
+static void fireTooltipScript(lua_State* L, const wowee::ui::Widget* w, const char* script) {
+    if (!w || !pushFrameOfWidget(L, w->id)) return;
+    const int tip = lua_gettop(L);
+    callScriptOnTable(L, tip, script, 0.0);
+    lua_settop(L, tip - 1);
+}
+
 // Scroll frames. A window onto a taller child: the child is laid out at its
 // full size and moved by the offset, and what falls outside the frame is
 // clipped. Until now SetVerticalScroll was a no-op and every getter answered
@@ -3357,6 +3370,37 @@ int lua_Tooltip_SetText(lua_State* L) {
     return 1;
 }
 
+static std::string globalOr(lua_State* L, const char* name, const char* fallback);
+
+/// An item not known at all yet (0x00623760). The client says so rather than
+/// leaving the frame empty: the item is asked for, the tooltip holds the one
+/// red line RETRIEVING_ITEM_INFO and is shown, it no longer names an item for
+/// GetItem - and OnTooltipSetItem still fires, as at the end of every item
+/// the builder (0x006277f0) is handed, known or not. When the answer lands the
+/// client refills it through its cache callback (0x00626650); here the
+/// owner's UpdateTooltip does that on the next tick. `append` is the item
+/// builder's eighth argument - the item a trade spell's tooltip ends with -
+/// which keeps the lines already there.
+static void showItemRetrieving(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh,
+                               uint32_t itemId, bool append) {
+    if (!w || !gh) return;
+    gh->ensureItemInfo(itemId);
+    w->isTooltip = true;
+    if (!append) clearTooltipLines(L, w);
+    wowee::ui::Widget::TooltipLine line;
+    line.left = globalOr(L, "RETRIEVING_ITEM_INFO", "Retrieving item information");
+    // The client's colour for it, 0x00ad2d34: ff2020.
+    constexpr float kRetrievingRed[4] = {1.0f, 32.0f / 255.0f, 32.0f / 255.0f, 1.0f};
+    for (int i = 0; i < 4; ++i) line.lc[i] = line.rc[i] = kRetrievingRed[i];
+    w->tooltipLines.push_back(std::move(line));
+    if (!append && lua_istable(L, 1)) {
+        lua_pushnil(L);
+        lua_setfield(L, 1, "__itemId");
+    }
+    w->shown = true;
+    fireTooltipSetItem(L);
+}
+
 /// Fills a tooltip from an action bar slot: the spell's or item's name and
 /// what it does. ActionButton_SetTooltip asks for this and checks the answer -
 /// `if (GameTooltip:SetAction(self.action))` - so returning nothing meant
@@ -3967,18 +4011,20 @@ static bool buildSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHand
     if (talent && talent->hints && talent->facts) addTalentHints(L, w, *talent->facts);
 
     // A trade spell that makes an item (Attributes 0x20 with effect 0x18,
-    // 0x9d or 0x3b) ends with that item's tooltip, EffectItemType[0]'s,
-    // appended (0x006277f0); one the cache has not answered is asked for.
+    // 0x9d or 0x3b before any 0x35) ends with that item's tooltip,
+    // EffectItemType[0]'s, appended (0x006277f0 with its eighth argument) -
+    // and that builder ends as it always does, with OnTooltipSetItem, ahead
+    // of the OnTooltipSetSpell this one ends with. One the cache has not
+    // answered is the red RETRIEVING_ITEM_INFO line under the spell
+    // (0x00623760), and asked for.
     if (const auto ie = gh->spellNameCacheRef().find(spellId); ie != gh->spellNameCacheRef().end()) {
         const auto& sp = ie->second;
-        const bool makes = (sp.attr & 0x20u) != 0 &&
-            std::any_of(std::begin(sp.effectIds), std::end(sp.effectIds), [](uint32_t x) {
-                return x == 0x18 || x == 0x9d || x == 0x3b;
-            });
-        if (makes && sp.effectItemType0 != 0 && widgetOf(L, 1) == w) {
+        const bool makes = wowee::addons::tooltip_rules::spellTooltipAppendsItem(
+            sp.attr, sp.effectIds, sp.effectItemType0);
+        if (makes && widgetOf(L, 1) == w) {
             const auto* item = gh->getItemInfo(sp.effectItemType0);
             if (!item || !item->valid) {
-                gh->ensureItemInfo(sp.effectItemType0);
+                showItemRetrieving(L, w, gh, sp.effectItemType0, true);
             } else {
                 lua_getglobal(L, "_WoweePopulateItemTooltip");
                 if (lua_isfunction(L, -1)) {
@@ -3987,6 +4033,7 @@ static bool buildSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHand
                     lua_pushnil(L);
                     lua_pushboolean(L, 1);
                     if (lua_pcall(L, 4, 0, 0) != 0) lua_pop(L, 1);
+                    else fireTooltipSetItem(L);
                 } else {
                     lua_pop(L, 1);
                 }
@@ -4452,8 +4499,10 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
         filled = fillQuestTooltip(L, w, gh, id);
     else if (kind == "glyph")
         filled = fillGlyphLinkTooltip(L, w, gh, link, colon);
-    else if (kind == "achievement")
+    else if (kind == "achievement") {
         filled = fillAchievementLinkTooltip(L, w, gh, link, colon);
+        if (filled) fireTooltipScript(L, w, "OnTooltipSetAchievement");
+    }
 
     // A tooltip whose item was not known yet waits for it, as the client's
     // does (its item cache calls 0x00626650 back to fill it in): it goes in
@@ -4734,7 +4783,9 @@ int lua_Tooltip_SetLFGCompletionReward(lua_State* L) {
         return 1;
     }
     const uint32_t itemId = reward.items[static_cast<size_t>(index) - 1].itemId;
-    lua_pushboolean(L, itemId && fillItemTooltipById(w, gh, itemId) ? 1 : 0);
+    // Through the item builder every other item setter uses (0x00630b90 ->
+    // 0x006277f0), which ends with OnTooltipSetItem.
+    lua_pushboolean(L, itemId && fillItemTooltipById(L, gh, itemId) ? 1 : 0);
     return 1;
 }
 
@@ -4788,6 +4839,8 @@ int lua_Tooltip_SetEquipmentSet(lua_State* L) {
             }
         }
     }
+    w->shown = true;
+    fireTooltipScript(L, w, "OnTooltipSetEquipmentSet");
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -4897,50 +4950,68 @@ int lua_Tooltip_SetTalent(lua_State* L) {
     return 0;
 }
 
-/// SetTradeSkillItem(index) - what a recipe in the open profession makes.
+/// SetTradeSkillItem(index [, reagent]) (0x0062eae0) - a recipe of the open
+/// profession, or one of its reagents.
 ///
-/// This client knows a recipe by its crafting spell rather than by the item it
-/// produces, so what is shown is that spell: its name and its description,
-/// which is the line that says what gets made. Not the crafted item's own
-/// tooltip, which is what the real client shows - but the useful half of it,
-/// and it is what this client actually knows.
+/// What the client describes is decided by tooltip_rules::tradeSkillTooltip:
+/// a recipe whose first effect makes an item is that item's tooltip (the item
+/// builder, 0x006277f0, so OnTooltipSetItem), priced for what one craft makes
+/// - the least and the most of the effect (0x008016c0) at +0x4b8/+0x4bc, a
+/// range priced as one; any other recipe - an enchant above all - is the
+/// spell's (0x006238a0, so OnTooltipSetSpell); a reagent is that item's,
+/// priced for the count the recipe takes. A row that is no recipe, or a
+/// reagent past the last, raises the client's error. Answers nothing.
+///
+/// This showed the recipe's name and description for every one of those: no
+/// item, no reagent - the reagent buttons described the recipe again - and
+/// none of the scripts, so neither the shift-key comparison nor any addon
+/// hooking OnTooltipSetItem reached a crafted item.
 int lua_Tooltip_SetTradeSkillItem(lua_State* L) {
+    static const char* const kInvalid = "Invalid trade skill item in SetTradeSkillItem(index [,reagent])";
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
-    const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
-    if (!w || !gh || index < 1) { lua_pushboolean(L, 0); return 1; }
+    if (!lua_isnumber(L, 2)) return luaL_error(L, "%s", kInvalid);
+    if (!w || !gh) return 0;
+    const auto* recipe = wowee::addons::recipeAtTradeSkillRow(gh, static_cast<int>(lua_tonumber(L, 2)));
+    const uint32_t spellId = recipe ? recipe->spellId : 0;
+    if (spellId != 0) gh->getSpellName(spellId);  // fills the cache
+    const auto it = spellId != 0 ? gh->spellNameCacheRef().find(spellId) : gh->spellNameCacheRef().end();
+    if (it == gh->spellNameCacheRef().end()) return luaL_error(L, "%s", kInvalid);
+    const auto& sp = it->second;
 
-    // A drawn-row index, not an index into the recipe list. The panel groups
-    // recipes under subclass headings and filters them, so the two lists have
-    // neither the same length nor the same order: subscripting the recipes
-    // described whatever happened to sit at that offset - "Enchant Bracer -
-    // Lesser Spirit" was shown as "Enchant Bracer - Minor Deflection".
-    const auto* recipe = wowee::addons::recipeAtTradeSkillRow(gh, index);
-    if (!recipe) { lua_pushboolean(L, 0); return 1; }
-    const uint32_t spellId = recipe->spellId;
-    if (spellId == 0) { lua_pushboolean(L, 0); return 1; }
-
-    w->isTooltip = true;
-    clearTooltipLines(L, w);
-    wowee::ui::Widget::TooltipLine title;
-    title.left = recipe->name;
-    title.lc[0] = 1.0f; title.lc[1] = 0.82f; title.lc[2] = 0.0f; title.lc[3] = 1.0f;
-    title.rc[0] = title.rc[1] = title.rc[2] = title.rc[3] = 1.0f;
-    w->tooltipLines.push_back(std::move(title));
-
-    const std::string body =
-        gh->formatSpellDescription(spellId, gh->getSpellDescription(spellId));
-    if (!body.empty()) {
-        wowee::ui::Widget::TooltipLine desc;
-        desc.left = body;
-        desc.lc[0] = desc.lc[1] = desc.lc[2] = 1.0f; desc.lc[3] = 1.0f;
-        desc.rc[0] = desc.rc[1] = desc.rc[2] = desc.rc[3] = 1.0f;
-        desc.wrap = true;  // prose; see fillSpellTooltip
-        w->tooltipLines.push_back(std::move(desc));
+    namespace rules = wowee::addons::tooltip_rules;
+    const int reagent = lua_isnumber(L, 3) ? static_cast<int>(lua_tonumber(L, 3)) : 0;
+    const auto made = wowee::game::spellEffectPoints(sp.effectBasePoints[0], sp.effectDieSides[0],
+                                                     sp.effectPointsPerLevel[0],
+                                                     static_cast<int>(gh->getPlayerLevel()),
+                                                     sp.baseLevel, sp.maxLevel);
+    rules::Reagent slots[8];
+    for (int i = 0; i < 8; ++i) slots[i] = {sp.reagents[i].itemId, sp.reagents[i].count};
+    const auto what = rules::tradeSkillTooltip(sp.effectIds[0], sp.effectItemType0, made.min, made.max,
+                                               slots, 8, reagent);
+    switch (what.subject) {
+        case rules::TradeSkillSubject::Spell:
+            fillSpellTooltip(L, w, gh, spellId);
+            return 0;
+        case rules::TradeSkillSubject::CraftedItem:
+        case rules::TradeSkillSubject::Reagent: {
+            lua_pushnumber(L, what.minCount);
+            lua_setglobal(L, "__WoweeTooltipItemCount");
+            if (what.maxCount > what.minCount) {
+                lua_pushnumber(L, what.maxCount);
+                lua_setglobal(L, "__WoweeTooltipItemMaxCount");
+            }
+            fillItemTooltipById(L, gh, what.itemId);
+            lua_pushnil(L);
+            lua_setglobal(L, "__WoweeTooltipItemCount");
+            lua_pushnil(L);
+            lua_setglobal(L, "__WoweeTooltipItemMaxCount");
+            return 0;
+        }
+        case rules::TradeSkillSubject::Invalid:
+            break;
     }
-    w->shown = true;
-    lua_pushboolean(L, 1);
-    return 1;
+    return luaL_error(L, "%s", kInvalid);
 }
 
 /// A unit's name and level, which is what hovering a unit frame shows.
@@ -6070,25 +6141,38 @@ static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
         fireTooltipSetItem(L);
         return true;
     }
-    // Not known at all yet. The client says so rather than leaving the frame
-    // empty (0x00623760): the item is asked for, the tooltip holds the one red
-    // line RETRIEVING_ITEM_INFO and is shown, it no longer names an item for
-    // GetItem, and the setter still answers that it found nothing. When the
-    // answer lands the client refills it through its cache callback
-    // (0x00626650); here the owner's UpdateTooltip does that on the next tick.
-    gh->ensureItemInfo(itemId);
-    w->isTooltip = true;
-    clearTooltipLines(L, w);
-    wowee::ui::Widget::TooltipLine line;
-    line.left = globalOr(L, "RETRIEVING_ITEM_INFO", "Retrieving item information");
-    // The client's colour for it, 0x00ad2d34: ff2020.
-    constexpr float kRetrievingRed[4] = {1.0f, 32.0f / 255.0f, 32.0f / 255.0f, 1.0f};
-    for (int i = 0; i < 4; ++i) line.lc[i] = line.rc[i] = kRetrievingRed[i];
-    w->tooltipLines.push_back(std::move(line));
-    lua_pushnil(L);
-    lua_setfield(L, 1, "__itemId");
-    w->shown = true;
+    showItemRetrieving(L, w, gh, itemId, false);
     return false;
+}
+
+/// __WoweeTooltipItemBuilt(self, filled, itemId): the end of the item builder
+/// (0x006277f0) for the setters written in Lua, which run
+/// _WoweePopulateItemTooltip themselves - SetBagItem, an item's SetAction, a
+/// recipe's SetTrainerService - and so ended without OnTooltipSetItem, the
+/// script every one of them ends with in the client. Filled: the script.
+/// Not: what fillItemTooltipById falls back to - the short builder, else the
+/// red RETRIEVING_ITEM_INFO line - and the script all the same. Answers
+/// whether anything named the item.
+static int lua_WoweeTooltipItemBuilt(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    auto* gh = wowee::addons::getGameHandler(L);
+    const uint32_t itemId = static_cast<uint32_t>(luaL_optnumber(L, 3, 0));
+    if (!w || !gh || !lua_istable(L, 1)) { lua_pushboolean(L, 0); return 1; }
+    if (lua_toboolean(L, 2)) {
+        fireTooltipSetItem(L);
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    if (itemId == 0) { lua_pushboolean(L, 0); return 1; }
+    if (fillItemTooltipById(w, gh, itemId)) {
+        noteTooltipItem(L, itemId);
+        fireTooltipSetItem(L);
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    showItemRetrieving(L, w, gh, itemId, false);
+    lua_pushboolean(L, 0);
+    return 1;
 }
 
 /// SetAuctionItem(list, index) - the item on an auction row.
@@ -6517,6 +6601,18 @@ static int lua_Tooltip_AddTexture(lua_State* L) {
     escape += "|t ";
     w->tooltipLines.back().left = escape + w->tooltipLines.back().left;
     return 0;
+}
+
+/// SetAuctionSellItem() (0x0062fc20): the item in the sell slot, the item
+/// itself through the item builder - so OnTooltipSetItem - and 1; nil with
+/// nothing there. It drew the name and a stack count in English, and nothing
+/// else.
+static int lua_Tooltip_SetAuctionSellItem(lua_State* L) {
+    auto* gh = wowee::addons::getGameHandler(L);
+    const auto* held = gh && widgetOf(L, 1) ? wowee::addons::auctionSellHeldItem(gh) : nullptr;
+    if (!held || held->empty()) { luaPushOneOrNil(L, 0); return 1; }
+    luaPushOneOrNil(L, fillItemTooltipById(L, gh, held->item.itemId, &held->item) ? 1 : 0);
+    return 1;
 }
 
 /// SetSendMailItem(index) (0x0062f8b0): the attachment's full tooltip, from
@@ -11678,7 +11774,7 @@ void LuaEngine::registerCoreAPI() {
         lua_Tooltip_SetFrameStack, lua_Tooltip_SetUnitAura, lua_Tooltip_SetSendMailItem,
         lua_Tooltip_SetPetAction, lua_Tooltip_SetShapeshift, lua_Tooltip_AdoptFontStrings,
         lua_Tooltip_SetPossession, lua_Tooltip_SetQuestRewardSpell, lua_Tooltip_SetTotem,
-        lua_Tooltip_SetText,
+        lua_Tooltip_SetText, lua_WoweeTooltipItemBuilt, lua_Tooltip_SetAuctionSellItem,
     };
     const auto pushMethod = [this](lua_CFunction fn) {
         if (std::find(std::begin(kTooltipFillers), std::end(kTooltipFillers), fn) !=
@@ -13066,6 +13162,10 @@ void LuaEngine::registerCoreAPI() {
     lua_setglobal(L_, "__WoweeTooltipSetQuestRewardSpell");
     lua_pushcfunction(L_, lua_Tooltip_SetTotem);
     lua_setglobal(L_, "__WoweeTooltipSetTotem");
+    lua_pushcfunction(L_, lua_WoweeTooltipItemBuilt);
+    lua_setglobal(L_, "__WoweeTooltipItemBuilt");
+    lua_pushcfunction(L_, lua_Tooltip_SetAuctionSellItem);
+    lua_setglobal(L_, "__WoweeTooltipSetAuctionSellItem");
 
     // CreateFrame function
     lua_pushcfunction(L_, lua_EditBox_SetText);
@@ -13087,7 +13187,7 @@ void LuaEngine::registerCoreAPI() {
          {"__WoweeTooltipSetSpellByID", "__WoweeTooltipSetUnitAura", "__WoweeTooltipSetSendMailItem",
           "__WoweeTooltipSetPetAction", "__WoweeTooltipSetShapeshift", "__WoweeTooltipAdoptFontStrings",
           "__WoweeTooltipSetPossession", "__WoweeTooltipSetQuestRewardSpell", "__WoweeTooltipSetTotem",
-          "__WoweeTooltipSetText"}) {
+          "__WoweeTooltipSetText", "__WoweeTooltipItemBuilt", "__WoweeTooltipSetAuctionSellItem"}) {
         lua_getglobal(L_, builder);
         const lua_CFunction fn = lua_tocfunction(L_, -1);
         lua_pop(L_, 1);
@@ -13793,17 +13893,10 @@ void LuaEngine::registerCoreAPI() {
         // recipe - else the service's own spell. Answers nothing.
         "function __WoweeFrameMT:SetTrainerService(index)\n"
         "    local kind, id, pet = __WoweeTrainerServiceTooltip(index)\n"
-        "    if kind == 'item' then _WoweePopulateItemTooltip(self, id)\n"
+        "    if kind == 'item' then __WoweeTooltipItemBuilt(self, _WoweePopulateItemTooltip(self, id), id)\n"
         "    elseif kind == 'spell' then self:SetSpellByID(id, pet) end\n"
         "end\n"
-        "function __WoweeFrameMT:SetAuctionSellItem()\n"
-        "    self:ClearLines()\n"
-        "    local name, _, count, quality = GetAuctionSellItemInfo()\n"
-        "    if not name then return end\n"
-        "    local r, g, b = GetItemQualityColor(quality or 1)\n"
-        "    self:SetText(name, r, g, b)\n"
-        "    if count and count > 1 then self:AddLine(count .. ' in stack', 1, 1, 1) end\n"
-        "end\n"
+        "function __WoweeFrameMT:SetAuctionSellItem() return __WoweeTooltipSetAuctionSellItem(self) end\n"
         "function __WoweeFrameMT:SetQuestLogItem(itemType, index)\n"
         "    self:ClearLines()\n"
         "    local link = GetQuestLogItemLink and GetQuestLogItemLink(itemType, index)\n"
@@ -13896,6 +13989,10 @@ void LuaEngine::registerCoreAPI() {
         "    self:ClearLines()\n"
         "    local name, _, count = GetLFGDungeonRewardInfo(dungeonId, rewardIndex)\n"
         "    if not name or name == '' then return end\n"
+        // The reward's own item tooltip, priced for its count (0x00630a80 ->
+        // 0x006277f0 with +0x4b8), ending with OnTooltipSetItem.
+        "    local link = GetLFGDungeonRewardLink(dungeonId, rewardIndex)\n"
+        "    if link then return __WoweeSetHyperlinkCounted(self, link, count) end\n"
         "    self:SetText(name, 1, 1, 1)\n"
         "    if count and count > 1 then self:AddLine('x' .. count, 1, 1, 1) end\n"
         "end\n"
@@ -14346,8 +14443,12 @@ void LuaEngine::registerCoreAPI() {
         "    elseif sellPrice and sellPrice > 0 then\n"
         "        local money = (inst and inst.price and inst.price > 0) and inst.price\n"
         "            or sellPrice * math.max(1, tonumber(__WoweeTooltipItemCount) or 1)\n"
+        // A recipe that makes a range (0x0062eae0's +0x4bc over +0x4b8):
+        // the most it makes, priced, as the script's maxcost.
+        "        local most = tonumber(__WoweeTooltipItemMaxCount)\n"
+        "        local maxMoney = (not inst and most and most > (tonumber(__WoweeTooltipItemCount) or 1)) and sellPrice * most or nil\n"
         "        local onMoney = self.GetScript and self:GetScript('OnTooltipAddMoney')\n"
-        "        if onMoney then onMoney(self, money)\n"
+        "        if onMoney then onMoney(self, money, maxMoney)\n"
         "        else self:AddLine(format('%s: ', SELL_PRICE or 'Sell Price')..GetCoinTextureString(money), 1, 1, 1) end\n"
         "    elseif inst and inst.unsellable then\n"
         "        self:AddLine(ITEM_UNSELLABLE or 'No sell price', 1, 1, 1)\n"
@@ -14371,8 +14472,13 @@ void LuaEngine::registerCoreAPI() {
         "    if not link then return end\n"
         "    local id = link:match('item:(%d+)')\n"
         "    if not id then return end\n"
-        "    _WoweePopulateItemTooltip(self, tonumber(id), _WoweeContainerItemInstance(bag, slot))\n"
-        "    self:_WoweeAppendItemEnchants(bag, slot)\n"
+        // The enchants are the item builder's own lines (0x006277f0), so they
+        // are in before the OnTooltipSetItem it ends with - an addon reading
+        // the tooltip from that script sees them.
+        "    id = tonumber(id)\n"
+        "    local filled = _WoweePopulateItemTooltip(self, id, _WoweeContainerItemInstance(bag, slot))\n"
+        "    if filled then self:_WoweeAppendItemEnchants(bag, slot) end\n"
+        "    __WoweeTooltipItemBuilt(self, filled, id)\n"
         // As 0x0062f420 answers: whether the tooltip counts something down
         // (a cooldown running), and what repairing the item costs - the bag
         // button's repair mode reads the second.
@@ -14446,7 +14552,12 @@ void LuaEngine::registerCoreAPI() {
         "        self:SetSpellByID(id, nil, nil, GetCVar('UberTooltips') == '0')\n"
         "        return self:NumLines() > 0\n"
         "    elseif actionType == 'item' and id and id > 0 then\n"
-        "        _WoweePopulateItemTooltip(self, id)\n"
+        "        __WoweeTooltipItemBuilt(self, _WoweePopulateItemTooltip(self, id), id)\n"
+        "        return self:NumLines() > 0\n"
+        // An equipment set on the bar is the set's own tooltip (0x00631000 ->
+        // 0x00622dd0), OnTooltipSetEquipmentSet and all.
+        "    elseif actionType == 'equipmentset' and id then\n"
+        "        self:SetEquipmentSet(id)\n"
         "        return self:NumLines() > 0\n"
         "    end\n"
         "    return false\n"

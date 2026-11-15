@@ -1,0 +1,123 @@
+#pragma once
+
+/**
+ * tooltip_setter_rules.hpp - what a GameTooltip setter builds, decided the
+ * way the client decides it, free of the game so it can be tested.
+ *
+ * Which OnTooltipSet* script a setter ends with is not the setter's own
+ * choice: each script is fired at the end of one builder, and a setter only
+ * picks the builder. The scripts sit at GameTooltip +0x4ec (Unit), +0x4f4
+ * (Item), +0x4fc (Spell), +0x504 (Quest), +0x50c (Achievement) and +0x514
+ * (EquipmentSet) (0x0061a280), and are fired by
+ *
+ *   0x00621070  the unit builder           OnTooltipSetUnit
+ *   0x006277f0  the item builder           OnTooltipSetItem, at its end
+ *   0x00623760  the item not yet known     OnTooltipSetItem too, under the
+ *               (RETRIEVING_ITEM_INFO)     red RETRIEVING_ITEM_INFO line
+ *   0x006238a0  the spell builder          OnTooltipSetSpell
+ *   0x00626e20  the talent builder         OnTooltipSetSpell
+ *   0x00622960  the quest builder          OnTooltipSetQuest
+ *   0x00627220  the achievement builder    OnTooltipSetAchievement
+ *   0x00622dd0  the equipment set builder  OnTooltipSetEquipmentSet
+ *
+ * and nothing else fires one: the aura builder (0x00625350: SetUnitAura,
+ * SetUnitBuff, SetUnitDebuff, SetTracking), the glyph builder (0x00622ba0:
+ * SetGlyph, a glyph link), SetTotem (0x006205c0) and SetFrameStack
+ * (0x00626560) announce nothing past the OnTooltipCleared every one of them
+ * starts with (0x0061c620).
+ */
+
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+
+namespace wowee::addons::tooltip_rules {
+
+/// Spell.dbc effects that make an item: CREATE_ITEM (24), CREATE_RANDOM_ITEM
+/// (59) and CREATE_ITEM_2 (157) - the three 0x0062eae0 and 0x006238a0 test.
+constexpr bool createsItem(uint32_t effect) {
+    return effect == 0x18 || effect == 0x3b || effect == 0x9d;
+}
+
+/// Whether a spell's tooltip ends with the tooltip of the item it makes
+/// (0x006238a0): a trade spell (Attributes 0x20) whose effects, walked in
+/// order, reach an item-making one before an ENCHANT_ITEM (53) - that one
+/// stops the walk - and whose EffectItemType[0] names an item.
+constexpr bool spellTooltipAppendsItem(uint32_t attributes, const uint32_t (&effects)[3],
+                                       uint32_t effectItemType0) {
+    if ((attributes & 0x20u) == 0 || effectItemType0 == 0) return false;
+    for (const uint32_t e : effects) {
+        if (e == 0x35) return false;
+        if (createsItem(e)) return true;
+    }
+    return false;
+}
+
+/// How many of an item an effect makes, its least or its most
+/// (0x008016c0 over 0x007ff770's two values): doubled, a half added away
+/// from zero, rounded to nearest by the x87 store and halved by a shift.
+inline int craftedCount(float value) {
+    const float twice = value + value;
+    const float biased = twice > 0.0f ? twice + 0.5f : twice - 0.5f;
+    return static_cast<int>(std::nearbyint(biased)) >> 1;
+}
+
+/// What SetTradeSkillItem(index [, reagent]) describes (0x0062eae0).
+enum class TradeSkillSubject {
+    Invalid,      ///< "Invalid trade skill item in SetTradeSkillItem(index [,reagent])"
+    CraftedItem,  ///< the item builder, with the count made (+0x4b8/+0x4bc)
+    Spell,        ///< the spell builder: an enchant, or anything not made
+    Reagent,      ///< the item builder, with the count needed (+0x4b8)
+};
+
+struct TradeSkillTooltip {
+    TradeSkillSubject subject = TradeSkillSubject::Invalid;
+    uint32_t itemId = 0;
+    int minCount = 0;   ///< the count the price is multiplied by
+    int maxCount = 0;   ///< more than minCount: a range, priced as one
+};
+
+struct Reagent {
+    uint32_t itemId = 0;
+    uint32_t count = 0;
+};
+
+/// The recipe's first effect and its EffectItemType[0], the least and the most
+/// that effect makes (0x007ff770), its eight reagent slots, and the reagent
+/// asked for - zero when the call gave none.
+///
+/// Without a reagent: a recipe whose first effect makes an item, an item
+/// named, is that item's tooltip, priced for what one craft makes; anything
+/// else (an enchant, a smelt that only converts, a recipe whose item is in a
+/// later effect) is the spell's. With one: the reagent-th of the slots that
+/// name an item, counted over the empty ones; past the last, the error.
+inline TradeSkillTooltip tradeSkillTooltip(uint32_t firstEffect, uint32_t firstItemType,
+                                           float madeMin, float madeMax,
+                                           const Reagent* reagents, std::size_t reagentSlots,
+                                           int reagentIndex) {
+    TradeSkillTooltip out;
+    if (reagentIndex == 0) {
+        if (createsItem(firstEffect) && firstItemType != 0) {
+            out.subject = TradeSkillSubject::CraftedItem;
+            out.itemId = firstItemType;
+            out.minCount = craftedCount(madeMin);
+            out.maxCount = craftedCount(madeMax);
+        } else {
+            out.subject = TradeSkillSubject::Spell;
+        }
+        return out;
+    }
+    int seen = 0;
+    for (std::size_t i = 0; i < reagentSlots && i < 8; ++i) {
+        if (reagents[i].itemId == 0) continue;
+        if (++seen != reagentIndex) continue;
+        out.subject = TradeSkillSubject::Reagent;
+        out.itemId = reagents[i].itemId;
+        out.minCount = static_cast<int>(reagents[i].count);
+        out.maxCount = 0;
+        return out;
+    }
+    return out;
+}
+
+}  // namespace wowee::addons::tooltip_rules

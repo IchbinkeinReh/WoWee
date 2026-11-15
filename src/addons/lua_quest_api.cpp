@@ -6,6 +6,8 @@
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "addons/tooltip_setter_rules.hpp"
+#include "game/spell_description_eval.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/lua_engine.hpp"
 #include "game/auction_filters.hpp"
@@ -5820,10 +5822,15 @@ void registerQuestLuaAPI(lua_State* L) {
                 if (rec) {
                     auto it = gh->spellNameCacheRef().find(rec->spellId);
                     if (it != gh->spellNameCacheRef().end()) {
-                        // The count is not in what this client parses; one is
-                        // right for the great majority of recipes and wrong
-                        // only in the amount, never in the item.
-                        (void)it;
+                        // The first effect's least and most (0x008016c0 over
+                        // 0x007ff770) - the counts SetTradeSkillItem prices
+                        // the made item for.
+                        const auto& sp = it->second;
+                        const auto made = game::spellEffectPoints(
+                            sp.effectBasePoints[0], sp.effectDieSides[0], sp.effectPointsPerLevel[0],
+                            static_cast<int>(gh->getPlayerLevel()), sp.baseLevel, sp.maxLevel);
+                        lo = tooltip_rules::craftedCount(made.min);
+                        hi = tooltip_rules::craftedCount(made.max);
                     }
                 }
             }
