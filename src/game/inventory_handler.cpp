@@ -4201,6 +4201,13 @@ void InventoryHandler::checkInbox() {
     owner_.getSocket()->send(GetMailListPacket::build(mailboxGuid_));
 }
 
+void InventoryHandler::refreshMailList() {
+    if (!mailboxOpen_ || mailboxGuid_ == 0) return;
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    auto packet = GetMailListPacket::build(mailboxGuid_);
+    owner_.getSocket()->send(packet);
+}
+
 void InventoryHandler::refuseSend(const std::string& reason, const char* logLine) {
     // The compose frame disables its Send button the moment it is pressed and
     // re-enables it only when it hears how the send went. A refusal on this
