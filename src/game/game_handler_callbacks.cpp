@@ -910,18 +910,15 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
     if (tutorials_.loaded()) triggerEntryTutorials();
     else entryTutorialsPending_ = true;
     // Every way into the world (0x00528010, once per entry - 0x00528c30
-    // clears it on the way out): the battleground queues' status asked for
-    // (0x0054ca50, CMSG_BATTLEFIELD_STATUS), then the dungeon finder's
-    // (0x00557240: CMSG_LFG_GET_STATUS, 0x00555920, and the player's lock
-    // list, 0x00555990). All three are bare opcodes.
-    if (socket) {
-        for (Opcode op : {Opcode::CMSG_BATTLEFIELD_STATUS, Opcode::CMSG_LFG_GET_STATUS,
-                          Opcode::CMSG_LFD_PLAYER_LOCK_INFO_REQUEST}) {
-            if (wireOpcode(op) == 0xFFFF) continue;
-            network::Packet pkt(wireOpcode(op));
-            socket->send(pkt);
-        }
-    }
+    // clears it on the way out): the queues' status asked for. Only once
+    // the interface exists, or the answers raise their events to no one -
+    // the dungeon finder's LFG_UPDATE_RANDOM_INFO among them, which is what
+    // picks LFDQueueFrame's random dungeon. Missed, the panel opened on its
+    // XML defaults (the PUG line over the reward line, the money frame still
+    // showing what SmallMoneyFrame_OnLoad put there) until its own OnShow
+    // request was answered.
+    if (interfaceLoaded_) requestEntryQueueStatus();
+    else entryQueueStatusPending_ = true;
 
     // Fire PLAYER_ENTERING_WORLD - THE most important event for addon initialization.
     // Fires on initial login, teleports, instance transitions, and zone changes.
@@ -3028,6 +3025,26 @@ void GameHandler::triggerTutorial(uint32_t id) {
         fireAddonEvent("TUTORIAL_TRIGGER", {std::to_string(id + 1)});
         break;
     }
+}
+
+// 0x00528010: the battleground queues' status (0x0054ca50,
+// CMSG_BATTLEFIELD_STATUS), then the dungeon finder's (0x00557240:
+// CMSG_LFG_GET_STATUS, 0x00555920, and the player's lock list, 0x00555990).
+// All three are bare opcodes.
+void GameHandler::requestEntryQueueStatus() {
+    entryQueueStatusPending_ = false;
+    if (!socket) return;
+    for (Opcode op : {Opcode::CMSG_BATTLEFIELD_STATUS, Opcode::CMSG_LFG_GET_STATUS,
+                      Opcode::CMSG_LFD_PLAYER_LOCK_INFO_REQUEST}) {
+        if (wireOpcode(op) == 0xFFFF) continue;
+        network::Packet pkt(wireOpcode(op));
+        socket->send(pkt);
+    }
+}
+
+void GameHandler::setInterfaceLoaded(bool loaded) {
+    interfaceLoaded_ = loaded;
+    if (loaded && entryQueueStatusPending_ && state == WorldState::IN_WORLD) requestEntryQueueStatus();
 }
 
 void GameHandler::triggerEntryTutorials() {

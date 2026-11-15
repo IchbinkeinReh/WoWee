@@ -1573,6 +1573,17 @@ public:
     void resetTutorials();
     /// 0x00528010's four (0x29, 1, 2, 0).
     void triggerEntryTutorials();
+    /// 0x00528010's queue questions: CMSG_BATTLEFIELD_STATUS (0x0054ca50),
+    /// CMSG_LFG_GET_STATUS and the player's lock list (0x00557240). Asked on
+    /// every way into the world once the interface is there to hear the
+    /// answers - see setInterfaceLoaded.
+    void requestEntryQueueStatus();
+    /// The interface (FrameXML and the addons) is loaded and has been told
+    /// PLAYER_ENTERING_WORLD. The client loads it before the world, so the
+    /// answers to 0x00528010's questions always find LFDFrame listening; here
+    /// the first world entry comes before it, and the questions asked then are
+    /// asked again from here, where their events can be heard.
+    void setInterfaceLoaded(bool loaded);
     /// CMSG_SET_ACTIONBAR_TOGGLES: the multi-bars shown, bits 0 to 3, u8
     /// (0x005a8290).
     void sendActionBarToggles(uint8_t mask);
@@ -6881,6 +6892,8 @@ private:
     vehicle::VehicleRoster vehicleRoster_;
     TutorialState tutorials_;
     bool entryTutorialsPending_ = false;
+    bool interfaceLoaded_ = false;
+    bool entryQueueStatusPending_ = false;
     std::chrono::steady_clock::time_point nextLoadingKeepAlive_{};  ///< 0xb2fe70
     std::chrono::steady_clock::time_point nextWorldStateTimerQuery_{};  ///< 0xbe8f40
     cast_visual::Roster castVisuals_;

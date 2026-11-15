@@ -6449,6 +6449,10 @@ void Application::update(float deltaTime) {
             addonManager_->fireEvent("UPDATE_CHAT_WINDOWS");
             addonManager_->fireEvent("PLAYER_LOGIN");
             addonManager_->fireEvent("PLAYER_ENTERING_WORLD");
+            // 0x00528010 runs again for the new interface, and with it the
+            // queue questions whose answers set up the dungeon finder.
+            if (gameHandler && gameHandler->getState() == game::WorldState::IN_WORLD)
+                gameHandler->requestEntryQueueStatus();
             // A player still fighting is told so again, which is what puts the
             // new interface into combat lockdown (0x00528010: after
             // PLAYER_ENTERING_WORLD, UNIT_FLAG_IN_COMBAT is event 0x98 and
