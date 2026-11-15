@@ -4971,9 +4971,14 @@ static int lua_Tooltip_GetUnit(lua_State* L) {
     auto* gh = wowee::addons::getGameHandler(L);
     if (!w || !gh || w->tooltipUnit.empty()) return 0;
     if (wowee::addons::resolveUnitGuid(gh, w->tooltipUnit) == 0) return 0;
+    // The name first, off the stack, then both values.
+    std::string name;
     lua_getglobal(L, "UnitName");
     lua_pushstring(L, w->tooltipUnit.c_str());
-    if (lua_pcall(L, 1, 1, 0) != 0 || !lua_isstring(L, -1)) { lua_pop(L, 1); return 0; }
+    if (lua_pcall(L, 1, 1, 0) == 0 && lua_isstring(L, -1)) name = lua_tostring(L, -1);
+    lua_settop(L, 1);
+    if (name.empty()) return 0;
+    lua_pushstring(L, name.c_str());
     lua_pushstring(L, w->tooltipUnit.c_str());
     return 2;
 }
