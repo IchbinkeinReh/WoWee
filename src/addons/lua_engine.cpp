@@ -2411,6 +2411,58 @@ static void noteTooltipItem(lua_State* L, uint32_t itemId) {
     lua_setfield(L, 1, "__itemId");
 }
 
+/// The frame table of a widget, pushed when there is one - which is the only
+/// case that leaves anything on the stack. The setters below are reached with
+/// the tooltip at different stack slots, and the world's mouseover with none.
+static bool pushFrameOfWidget(lua_State* L, uint32_t wid) {
+    if (wid == 0) return false;
+    lua_getglobal(L, "__WoweeFramesByWid");
+    if (!lua_istable(L, -1)) { lua_pop(L, 1); return false; }
+    lua_pushinteger(L, static_cast<lua_Integer>(wid));
+    lua_rawget(L, -2);
+    lua_remove(L, -2);
+    if (!lua_istable(L, -1)) { lua_pop(L, 1); return false; }
+    return true;
+}
+
+/// A tooltip started over (0x0061c620). Every setter begins here - SetOwner,
+/// ClearLines, SetText and each Set* - and so does every refill: the lines
+/// go, and with them what the tooltip was showing (the item GetItem answers
+/// and the spell GetSpell answers are among the fields it zeroes). Then, and
+/// only where there had been lines, OnTooltipCleared - which is
+/// GameTooltipTemplate's GameTooltip_ClearMoney.
+///
+/// The setters cleared their lines in place and fired nothing, so the money
+/// frame of an item's sell price, a frame and not a line, stayed on under the
+/// unit or spell the tooltip was next set to, until something hid it.
+static void clearTooltipLines(lua_State* L, wowee::ui::Widget* w) {
+    if (!w) return;
+    const bool hadLines = !w->tooltipLines.empty();
+    w->tooltipLines.clear();
+    if (!pushFrameOfWidget(L, w->id)) return;
+    const int tip = lua_gettop(L);
+    lua_pushnil(L);
+    lua_setfield(L, tip, "__itemId");
+    lua_pushnil(L);
+    lua_setfield(L, tip, "__spellId");
+    if (hadLines) callScriptOnTable(L, tip, "OnTooltipCleared", 0.0);
+    lua_settop(L, tip - 1);
+}
+
+/// A spell's tooltip built (0x006238a0's end, and the talent builder's,
+/// 0x00626e20): the spell GetSpell answers recorded, then OnTooltipSetSpell.
+/// Fired for SetSpell, SetSpellByID, a spell's SetAction, SetPetAction,
+/// SetShapeshift, SetPossession, SetTalent, a spell's SetHyperlink and
+/// SetTrainerService, the quest reward spells - every caller of the builder.
+static void fireTooltipSetSpell(lua_State* L, const wowee::ui::Widget* w, uint32_t spellId) {
+    if (!w || !pushFrameOfWidget(L, w->id)) return;
+    const int tip = lua_gettop(L);
+    lua_pushnumber(L, static_cast<lua_Number>(spellId));
+    lua_setfield(L, tip, "__spellId");
+    callScriptOnTable(L, tip, "OnTooltipSetSpell", 0.0);
+    lua_settop(L, tip - 1);
+}
+
 // Scroll frames. A window onto a taller child: the child is laid out at its
 // full size and moved by the offset, and what falls outside the frame is
 // clipped. Until now SetVerticalScroll was a no-op and every getter answered
@@ -3042,7 +3094,7 @@ int lua_Tooltip_SetFrameStack(lua_State* L) {
     });
 
     w->isTooltip = true;
-    w->tooltipLines.clear();
+    clearTooltipLines(L, w);
     auto line = [&](std::string text, float r, float g, float b) {
         wowee::ui::Widget::TooltipLine tl;
         tl.left = std::move(text);
@@ -3193,7 +3245,7 @@ int lua_Tooltip_SetOwner(lua_State* L) {
     if (!w) return 0;
     w->isTooltip = true;
     // Cleared here, because SetOwner is what precedes a fresh set of lines.
-    w->tooltipLines.clear();
+    clearTooltipLines(L, w);
     // And a fade under way is called off, the tooltip whole again (0x0061ea00).
     w->tooltipFadeLeft = 0.0f;
     w->alpha = 1.0f;
@@ -3274,7 +3326,7 @@ int lua_Tooltip_SetText(lua_State* L) {
     // 0x006204e0: the text must be a string.
     if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:SetText(\"text\" [, color])", usageName(L, 1));
     w->isTooltip = true;
-    w->tooltipLines.clear();
+    clearTooltipLines(L, w);
     // SetText starts a tooltip over, so whatever it was showing is no longer
     // what it is showing. __itemId is what GameTooltip:GetItem() answers from
     // and what GameTooltip_ShowCompareItem needs before it will do anything,
@@ -3342,7 +3394,7 @@ static void appendDurabilityLine(wowee::ui::Widget* w, const game::ItemDef& item
 /// for, and answering false there is still the right answer. The caller reads
 /// it: `if ( GameTooltip:SetHyperlink(link) )` decides whether to show the
 /// tooltip at all.
-static bool fillQuestTooltip(wowee::ui::Widget* w, game::GameHandler* gh,
+static bool fillQuestTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh,
                              uint32_t questId) {
     if (!w || !gh || questId == 0) return false;
     // Through the public log rather than the private finder beside it: this
@@ -3355,7 +3407,7 @@ static bool fillQuestTooltip(wowee::ui::Widget* w, game::GameHandler* gh,
     if (q->title.empty() && q->objectives.empty()) return false;
 
     w->isTooltip = true;
-    w->tooltipLines.clear();
+    clearTooltipLines(L, w);
     auto line = [&w](std::string text, float r, float g, float b) {
         wowee::ui::Widget::TooltipLine t;
         t.left = std::move(text);
@@ -3378,6 +3430,11 @@ static bool fillQuestTooltip(wowee::ui::Widget* w, game::GameHandler* gh,
         line(q->completionText, 1.0f, 1.0f, 1.0f);
     } else if (!q->objectives.empty()) {
         line(q->objectives, 0.75f, 0.75f, 0.75f);
+    }
+    // And the quest builder's own script at its end (0x00622960).
+    if (pushFrameOfWidget(L, w->id)) {
+        callScriptOnTable(L, lua_gettop(L), "OnTooltipSetQuest", 0.0);
+        lua_pop(L, 1);
     }
     return true;
 }
@@ -3509,9 +3566,9 @@ static bool uberTooltips(lua_State* L) { return cvarOn(L, "UberTooltips"); }
 /// `brief` is 0x006238a0's third argument - SetAction's with UberTooltips
 /// off: the name with its rank, no cost, reach or cast. `showRank` is its
 /// sixth, SetSpellByID's fourth: the rank beside the name in a full one.
-static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh,
-                             uint32_t spellId, bool brief = false, bool showRank = false,
-                             const TalentTooltipPart* talent = nullptr, bool pet = false) {
+static bool buildSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh,
+                              uint32_t spellId, bool brief, bool showRank,
+                              const TalentTooltipPart* talent, bool pet) {
     // 0x006238a0's fifth argument: a pet's spell is costed, timed, formed
     // and levelled by the pet, and says nothing of tools or reagents.
     const uint64_t casterGuid = pet ? gh->getPetGuid() : 0;
@@ -3535,7 +3592,7 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
         line(" ", "", 1.0f, 1.0f, 1.0f);
         line(globalOr(L, "TOOLTIP_TALENT_NEXT_RANK", "Next Rank:"), "", 1.0f, 1.0f, 1.0f);
     } else {
-        w->tooltipLines.clear();
+        clearTooltipLines(L, w);
         // A trade spell (Attributes 0x20 with an enchant or create-item
         // effect) is titled "<skill>: <name>" in gold by its skill line for
         // the player's race and class (0x00812410), and has no title at all
@@ -3941,6 +3998,19 @@ static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
     return true;
 }
 
+/// The spell builder and the script it ends with: OnTooltipSetSpell for every
+/// spell it describes, a brief one included, and once for each half of a
+/// talent's two ranks. `announce` is false only for a glyph, which the client
+/// builds through its own glyph builder (0x00622ba0) and announces nothing.
+static bool fillSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh,
+                             uint32_t spellId, bool brief = false, bool showRank = false,
+                             const TalentTooltipPart* talent = nullptr, bool pet = false,
+                             bool announce = true) {
+    const bool filled = buildSpellTooltip(L, w, gh, spellId, brief, showRank, talent, pet);
+    if (filled && announce) fireTooltipSetSpell(L, w, spellId);
+    return filled;
+}
+
 int lua_Tooltip_SetAction(lua_State* L) {
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
@@ -4100,7 +4170,7 @@ static bool fillGlyphLinkTooltip(lua_State* L, wowee::ui::Widget* w, game::GameH
     if (propertiesId == 0) return false;
     gh->ensureGlyphPropertiesLoaded();
     const uint32_t spellId = gh->getGlyphSpellId(propertiesId);
-    if (spellId == 0 || !fillSpellTooltip(L, w, gh, spellId)) return false;
+    if (spellId == 0 || !fillSpellTooltip(L, w, gh, spellId, false, false, nullptr, false, false)) return false;
     uint32_t type = 0;
     const bool minor = gh->getGlyphSlotType(slotId, type) && type != 0;
     wowee::ui::Widget::TooltipLine line;
@@ -4221,7 +4291,7 @@ static bool fillAchievementLinkTooltip(lua_State* L, wowee::ui::Widget* w, game:
     };
 
     w->isTooltip = true;
-    w->tooltipLines.clear();
+    clearTooltipLines(L, w);
 
     // The earner is whoever the link names, not whoever is reading it, so the
     // name comes out of the guid through the name cache - and an unknown one is
@@ -4379,7 +4449,7 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
         gh->ensureItemInfo(id);
     }
     else if (kind == "quest")
-        filled = fillQuestTooltip(w, gh, id);
+        filled = fillQuestTooltip(L, w, gh, id);
     else if (kind == "glyph")
         filled = fillGlyphLinkTooltip(L, w, gh, link, colon);
     else if (kind == "achievement")
@@ -4489,7 +4559,7 @@ static int lua_Tooltip_SetTotem(lua_State* L) {
     const auto& totem = gh->getTotemSlot(slot - 1);
     if (!totem.active()) return 0;
     w->isTooltip = true;
-    w->tooltipLines.clear();
+    clearTooltipLines(L, w);
     const auto add = [&w](std::string text, float r, float g, float b) {
         wowee::ui::Widget::TooltipLine l;
         l.left = std::move(text);
@@ -4572,7 +4642,7 @@ int lua_Tooltip_SetUnitAura(lua_State* L) {
         w->tooltipLines.push_back(std::move(t));
     };
     w->isTooltip = true;
-    w->tooltipLines.clear();
+    clearTooltipLines(L, w);
 
     // The dispel type's own name, from SpellDispelType.dbc, where that type
     // is one an immunity can name (its fourth column).
@@ -4641,7 +4711,7 @@ int lua_Tooltip_SetGlyph(lua_State* L) {
     if (glyphId == 0) { lua_pushboolean(L, 0); return 1; }
     gh->ensureGlyphPropertiesLoaded();
     const uint32_t spellId = gh->getGlyphSpellId(glyphId);
-    lua_pushboolean(L, spellId && fillSpellTooltip(L, w, gh, spellId) ? 1 : 0);
+    lua_pushboolean(L, spellId && fillSpellTooltip(L, w, gh, spellId, false, false, nullptr, false, false) ? 1 : 0);
     return 1;
 }
 
@@ -4692,7 +4762,7 @@ int lua_Tooltip_SetEquipmentSet(lua_State* L) {
     if (!set) { lua_pushboolean(L, 0); return 1; }
 
     w->isTooltip = true;
-    w->tooltipLines.clear();
+    clearTooltipLines(L, w);
     auto line = [&](std::string text, float r, float g, float b) {
         wowee::ui::Widget::TooltipLine tl;
         tl.left = std::move(text);
@@ -4791,7 +4861,7 @@ int lua_Tooltip_SetTalent(lua_State* L) {
     const std::string& shownName = shown ? gh->getSpellName(shown) : std::string();
     const std::string& nextName = next ? gh->getSpellName(next) : std::string();
     w->isTooltip = true;
-    w->tooltipLines.clear();
+    clearTooltipLines(L, w);
     if (shownName.empty() && nextName.empty()) return 0;
     const auto add = [&w](std::string text, const float* rgb, bool wrap) {
         wowee::ui::Widget::TooltipLine l;
@@ -4821,6 +4891,9 @@ int lua_Tooltip_SetTalent(lua_State* L) {
     }
     addTalentHints(L, w, f);
     w->shown = true;
+    // The talent builder ends as the spell builder does (0x00626e20), naming
+    // the rank shown - none where no rank is learnt.
+    fireTooltipSetSpell(L, w, shown);
     return 0;
 }
 
@@ -4848,7 +4921,7 @@ int lua_Tooltip_SetTradeSkillItem(lua_State* L) {
     if (spellId == 0) { lua_pushboolean(L, 0); return 1; }
 
     w->isTooltip = true;
-    w->tooltipLines.clear();
+    clearTooltipLines(L, w);
     wowee::ui::Widget::TooltipLine title;
     title.left = recipe->name;
     title.lc[0] = 1.0f; title.lc[1] = 0.82f; title.lc[2] = 0.0f; title.lc[3] = 1.0f;
@@ -4941,7 +5014,7 @@ int lua_Tooltip_SetUnit(lua_State* L) {
     w->isTooltip = true;
     // Whose tooltip this is, for IsUnit below.
     w->tooltipUnit = uidStr;
-    w->tooltipLines.clear();
+    clearTooltipLines(L, w);
 
     auto addLine = [&w](std::string text, float r, float g, float b) {
         if (text.empty()) return;
@@ -5457,7 +5530,7 @@ static bool fillGameObjectTooltip(lua_State* L, wowee::ui::Widget* w, game::Game
     lua_checkstack(L, 8);
     w->isTooltip = true;
     w->tooltipUnit.clear();
-    w->tooltipLines.clear();
+    clearTooltipLines(L, w);
     auto addLine = [&w](std::string text, const float (&c)[3], bool wrap = false) {
         if (text.empty()) return;
         wowee::ui::Widget::TooltipLine line;
@@ -5869,7 +5942,7 @@ static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
     lua_getglobal(L, "_WoweePopulateItemTooltip");
     if (lua_isfunction(L, -1)) {
         w->isTooltip = true;
-        w->tooltipLines.clear();
+        clearTooltipLines(L, w);
         lua_pushvalue(L, 1);                                  // self
         lua_pushnumber(L, static_cast<lua_Number>(itemId));
         // What this one item is, beside what its template says: whether it
@@ -5980,7 +6053,7 @@ static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
             lua_settop(L, top);
             if (ok) { w->shown = true; fireTooltipSetItem(L); return true; }
             // Nothing written, so leave the frame as the fallback finds it.
-            w->tooltipLines.clear();
+            clearTooltipLines(L, w);
         } else {
             lua_settop(L, top);
         }
@@ -6005,7 +6078,7 @@ static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
     // (0x00626650); here the owner's UpdateTooltip does that on the next tick.
     gh->ensureItemInfo(itemId);
     w->isTooltip = true;
-    w->tooltipLines.clear();
+    clearTooltipLines(L, w);
     wowee::ui::Widget::TooltipLine line;
     line.left = globalOr(L, "RETRIEVING_ITEM_INFO", "Retrieving item information");
     // The client's colour for it, 0x00ad2d34: ff2020.
@@ -6485,7 +6558,7 @@ int lua_Tooltip_SetBagItem(lua_State* L) {
         // caller that shows the tooltip anyway - which is what a bag window
         // does, one call for every slot it draws - showed the last item's
         // tooltip over an empty square.
-        w->tooltipLines.clear();
+        clearTooltipLines(L, w);
         w->shown = false;
         luaPushOneOrNil(L, 0);
         return 1;
@@ -6547,26 +6620,11 @@ int lua_Tooltip_SetGuildBankItem(lua_State* L) {
 }
 
 int lua_Tooltip_ClearLines(lua_State* L) {
-    if (auto* w = widgetOf(L, 1)) w->tooltipLines.clear();
-    // And what the tooltip was showing, which is a different question from
-    // what is written in it.
-    //
-    // __itemId is what GameTooltip:GetItem() answers from, and
-    // GameTooltip_ShowCompareItem returns on its first line without one. It
-    // was set by every item setter and cleared by nothing, so it named
-    // whatever item had last been hovered for the rest of the session: hold
-    // shift over the game menu button and the interface dutifully compared
-    // the bags from the last bag slot the cursor crossed.
-    if (lua_istable(L, 1)) {
-        lua_pushnil(L);
-        lua_setfield(L, 1, "__itemId");
-    }
-    // GameTooltip declares OnTooltipCleared and nothing fired it. What it runs
-    // is GameTooltip_ClearMoney, so a tooltip that had shown a price kept its
-    // money line when it was next filled with something that has none - the
-    // lines are cleared here and the money frames are not, because they are
-    // frames rather than lines.
-    callScriptOnTable(L, 1, "OnTooltipCleared", 0);
+    // 0x0061d7d0 is 0x0061c620 and nothing else: the lines, what they were
+    // showing (__itemId, which GetItem answers from and which once named the
+    // last bag slot crossed for the rest of the session), and OnTooltipCleared
+    // where there had been lines.
+    clearTooltipLines(L, widgetOf(L, 1));
     return 0;
 }
 int lua_Tooltip_NumLines(lua_State* L) {
@@ -15328,7 +15386,7 @@ void LuaEngine::worldMouseoverChanged(uint64_t oldGuid, uint64_t newGuid, Mouseo
         corpseTooltipWaiting_ = 0;
         w->isTooltip = true;
         w->tooltipUnit.clear();
-        w->tooltipLines.clear();
+        clearTooltipLines(L_, w);
         wowee::ui::Widget::TooltipLine line;
         line.left = formatGlobal(L_, globalOr(L_, "CORPSE_TOOLTIP", "Corpse of %s"), {it->second});
         for (int i = 0; i < 4; ++i) line.lc[i] = line.rc[i] = 1.0f;
