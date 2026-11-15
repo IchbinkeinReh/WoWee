@@ -2099,18 +2099,18 @@ bool BattlefieldListParser::parse(network::Packet& packet, BattlefieldListData& 
     data.minLevel = packet.readUInt8();
     data.maxLevel = packet.readUInt8();
     // hasWin, winHonor, winArena, lossHonor, then isRandom and, for the
-    // random battleground, the same four again.
-    packet.readUInt8();
-    packet.readUInt32();
-    packet.readUInt32();
-    packet.readUInt32();
+    // random battleground, the same four again (0x0054e390).
+    const auto rewards = [&packet](BattlefieldListData::Rewards& r) {
+        r.hasWin = packet.readUInt8() != 0;
+        r.winHonor = packet.readUInt32();
+        r.winArena = packet.readUInt32();
+        r.lossHonor = packet.readUInt32();
+    };
+    rewards(data.holiday);
     const bool isRandom = packet.readUInt8() != 0;
     if (isRandom) {
         if (!packet.hasRemaining(13)) return false;
-        packet.readUInt8();
-        packet.readUInt32();
-        packet.readUInt32();
-        packet.readUInt32();
+        rewards(data.random);
     }
     if (!packet.hasRemaining(4)) return false;
     const uint32_t count = packet.readUInt32();

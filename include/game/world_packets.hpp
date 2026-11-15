@@ -3652,8 +3652,18 @@ struct BattlefieldListData {
     uint32_t bgTypeId = 0;
     uint8_t  minLevel = 0;
     uint8_t  maxLevel = 0;
-    // The reward block (and the random battleground's second one) is stepped
-    // over: the panel takes its rewards from elsewhere.
+    /// A reward block: whether today's first win is still to be had, and the
+    /// honor and arena points for a win and the honor for a loss.
+    struct Rewards {
+        bool     hasWin = false;
+        uint32_t winHonor = 0;
+        uint32_t winArena = 0;
+        uint32_t lossHonor = 0;
+    };
+    /// The battleground's own rewards (0x00bea548..), and the random
+    /// battleground's (0x00bea549..), zero when the packet carries none.
+    Rewards holiday;
+    Rewards random;
     std::vector<uint32_t> instanceIds;
 };
 

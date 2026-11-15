@@ -4709,7 +4709,8 @@ void SocialHandler::handleBattlefieldList(network::Packet& packet) {
         info.bgTypeId = data.bgTypeId;
         info.minLevel = data.minLevel;
         info.maxLevel = data.maxLevel;
-        info.instanceIds = std::move(data.instanceIds);
+        info.instanceIds = data.instanceIds;
+        lastBattlefieldList_ = data;   // 0x00bea53c onward: the list the panel shows
         bool updated = false;
         for (auto& existing : availableBgs_) { if (existing.bgTypeId == info.bgTypeId) { existing = std::move(info); updated = true; break; } }
         if (!updated) availableBgs_.push_back(std::move(info));

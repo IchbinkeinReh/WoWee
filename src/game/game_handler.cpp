@@ -5373,6 +5373,10 @@ bool GameHandler::setDungeonDifficulty(uint32_t difficulty) {
     return socialHandler_ && socialHandler_->setDungeonDifficulty(difficulty);
 }
 
+const BattlefieldListData* GameHandler::lastBattlefieldList() const {
+    return socialHandler_ ? &socialHandler_->lastBattlefieldList() : nullptr;
+}
+
 bool GameHandler::setRaidDifficulty(uint32_t difficulty) {
     return socialHandler_ && socialHandler_->setRaidDifficulty(difficulty);
 }

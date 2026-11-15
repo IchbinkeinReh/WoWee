@@ -772,6 +772,9 @@ public:
     [[nodiscard]] uint32_t battlefieldMapId() const { return battlefieldMapId_; }
     /// The battlemaster whose list was opened last (0x00bea568).
     [[nodiscard]] uint64_t battlemasterGuid() const { return battlemasterGuid_; }
+    /// The last SMSG_BATTLEFIELD_LIST as it came: its battleground, rewards
+    /// and instances, which the battlemaster panel reads.
+    [[nodiscard]] const BattlefieldListData& lastBattlefieldList() const { return lastBattlefieldList_; }
     void clearBattlemasterGuid() { battlemasterGuid_ = 0; }
     /// SetArenaTeamRosterShowOffline (0x005a2e10): on a change every roster is
     /// sorted again and ARENA_TEAM_ROSTER_UPDATE raised for each that has
@@ -1071,6 +1074,7 @@ private:
     /// only with the owning slot's empty record.
     uint32_t battlefieldMapId_ = 0;
     uint64_t battlemasterGuid_ = 0;
+    BattlefieldListData lastBattlefieldList_;
     std::vector<AvailableBgInfo> availableBgs_;
     BgScoreboardData bgScoreboard_;
     /// UPDATE_BATTLEFIELD_SCORE waits for every row's name (0x0054ca30

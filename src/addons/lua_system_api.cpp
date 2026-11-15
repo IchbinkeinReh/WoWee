@@ -6860,14 +6860,22 @@ static int lua_GetArenaTeam(lua_State* L) {
 // volunteer, so "none available" is the honest answer rather than a placeholder
 // for one. Reachable, unlike most of this file's absences: the random
 // battleground row is drawn from GetBattlegroundInfo, which answers for real.
-static int lua_BattlegroundHonorBonusesNone(lua_State* L) {
-    lua_pushboolean(L, 0);   // hasWin - the daily is not known to be waiting
-    lua_pushnumber(L, 0);    // winHonor
-    lua_pushnumber(L, 0);    // winArena
-    lua_pushnumber(L, 0);    // lossHonor
-    lua_pushnumber(L, 0);    // lossArena
+// GetHolidayBGHonorCurrencyBonuses / GetRandomBGHonorCurrencyBonuses
+// (0x0054a300, 0x0054a370) → hasWin, winHonor, winArena, lossHonor, lossArena:
+// the rewards the last battleground list carried, the last always 0.
+static int pushBgRewards(lua_State* L, bool random) {
+    auto* gh = getGameHandler(L);
+    const auto* list = gh ? gh->lastBattlefieldList() : nullptr;
+    const game::BattlefieldListData::Rewards none{};
+    const auto& r = list ? (random ? list->random : list->holiday) : none;
+    lua_pushboolean(L, r.hasWin ? 1 : 0);
+    lua_pushnumber(L, r.winHonor);
+    lua_pushnumber(L, r.winArena);
+    lua_pushnumber(L, r.lossHonor);
+    lua_pushnumber(L, 0);
     return 5;
 }
+static int lua_GetHolidayBGHonorCurrencyBonuses(lua_State* L) { return pushBgRewards(L, false); }
 
 /// GetRandomBGHonorCurrencyBonuses() → hasWin, winHonor, winArena, lossHonor,
 /// lossArena - what the random battleground pays on top of the match itself.
@@ -6886,14 +6894,7 @@ static int lua_BattlegroundHonorBonusesNone(lua_State* L) {
 /// hasWin is false because whether *today's* first win is still waiting is
 /// per-character daily state the server keeps to itself. The panel does not
 /// read it; it is the fifth return only because the API has five.
-static int lua_GetRandomBGHonorCurrencyBonuses(lua_State* L) {
-    lua_pushboolean(L, 0);    // hasWin
-    lua_pushnumber(L, 30);    // winHonor
-    lua_pushnumber(L, 25);    // winArena
-    lua_pushnumber(L, 5);     // lossHonor
-    lua_pushnumber(L, 0);     // lossArena
-    return 5;
-}
+static int lua_GetRandomBGHonorCurrencyBonuses(lua_State* L) { return pushBgRewards(L, true); }
 
 // GetBattlefieldInstanceInfo(index) → which numbered instance that row is.
 //
@@ -6901,21 +6902,15 @@ static int lua_GetRandomBGHonorCurrencyBonuses(lua_State* L) {
 // selection means. The server numbers instances only for a client that asks to
 // pick one, and nothing here does.
 static int lua_GetBattlefieldInstanceInfo(lua_State* L) {
-    // The instance number of the i-th battleground instance on offer, counting
-    // from one. A flat zero before, so every row in the list read "Warsong
-    // Gulch 0" - and the count beside it, GetNumBattlefields, was not bound at
-    // all, so the list never got that far: it raised on a nil global.
-    //
-    // SMSG_BATTLEFIELD_LIST carries these and they were parsed into
-    // AvailableBgInfo::instanceIds all along.
+    // 0x0054d8f0: the instance number of the list's index-th instance, from
+    // one; nothing for an index past it. Its usage line names
+    // GetBattlefieldInfo, as the client's does.
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetBattlefieldInfo(index)");
     auto* gh = getGameHandler(L);
-    const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
-    if (!gh || index < 1) { lua_pushnumber(L, 0); return 1; }
-    const auto& bgs = gh->getAvailableBgs();
-    if (bgs.empty()) { lua_pushnumber(L, 0); return 1; }
-    const auto& ids = bgs.back().instanceIds;
-    if (index > static_cast<int>(ids.size())) { lua_pushnumber(L, 0); return 1; }
-    lua_pushnumber(L, ids[static_cast<size_t>(index) - 1]);
+    const int index = static_cast<int>(std::lround(lua_tonumber(L, 1)));
+    const auto* list = gh ? gh->lastBattlefieldList() : nullptr;
+    if (!list || index < 1 || index > static_cast<int>(list->instanceIds.size())) return 0;
+    lua_pushnumber(L, list->instanceIds[static_cast<size_t>(index) - 1]);
     return 1;
 }
 
@@ -6955,9 +6950,23 @@ static int lua_LFGTeleport(lua_State* L) {
 //
 // Both of these answered nil, which the battlefield frame and the arena frame
 // each read as "not an arena". That is right until the player is in one.
-static int lua_IsBattlefieldArena(lua_State* L) {
+/// A column of the BattlemasterList row of the battleground the last list
+/// offered (0x00bea53c): 9 InstanceType, 10 GroupsAllowed.
+static uint32_t offeredBattlemasterField(lua_State* L, uint32_t field) {
     auto* gh = getGameHandler(L);
-    luaPushOneOrNil(L, gh && gh->isArenaMap(gh->getCurrentMapId()) ? 1 : 0);
+    const auto* list = gh ? gh->lastBattlefieldList() : nullptr;
+    auto* am = gh ? gh->services().assetManager : nullptr;
+    if (!list || !am || !am->isInitialized()) return 0;
+    auto dbc = am->loadDBCOptional("BattlemasterList.dbc");
+    if (!dbc || !dbc->isLoaded() || field >= dbc->getFieldCount()) return 0;
+    const int32_t row = dbc->findRecordById(list->bgTypeId);
+    return row < 0 ? 0 : dbc->getUInt32(static_cast<uint32_t>(row), field);
+}
+
+// IsBattlefieldArena() (0x0054bae0): the offered battleground is an arena
+// (its InstanceType 4).
+static int lua_IsBattlefieldArena(lua_State* L) {
+    luaPushOneOrNil(L, offeredBattlemasterField(L, 9) == 4 ? 1 : 0);
     return 1;
 }
 
@@ -8614,7 +8623,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"HasKey",                       lua_HasKey},
                 {"GetArenaTeam",             lua_GetArenaTeam},
                 {"GetRandomBGHonorCurrencyBonuses",  lua_GetRandomBGHonorCurrencyBonuses},
-                {"GetHolidayBGHonorCurrencyBonuses", lua_BattlegroundHonorBonusesNone},
+                {"GetHolidayBGHonorCurrencyBonuses", lua_GetHolidayBGHonorCurrencyBonuses},
                 {"GetBattlefieldInstanceInfo",       lua_GetBattlefieldInstanceInfo},
                 {"GetNumBattlefields",       lua_GetNumBattlefields},
                 // SortBGList() (0x0054c9f0): the battleground list put back in
@@ -9343,12 +9352,10 @@ void registerSystemLuaAPI(lua_State* L) {
                 // The server decides for itself when the request arrives; this
                 // only says whether it is worth offering, which is a party the
                 // player leads. Solo, there is no group to bring.
+                // CanJoinBattlefieldAsGroup() (0x0054c6e0): the offered
+                // battleground lets a group queue together (GroupsAllowed).
                 {"CanJoinBattlefieldAsGroup", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            if (!gh) { luaPushOneOrNil(L, 0); return 1; }
-            const auto& pd = gh->getPartyData();
-            const bool leadsAParty = !pd.isEmpty() && pd.leaderGuid == gh->getPlayerGuid();
-            luaPushOneOrNil(L, leadsAParty ? 1 : 0);
+            luaPushOneOrNil(L, offeredBattlemasterField(L, 10) != 0 ? 1 : 0);
             return 1;
         }},
                 // The instance's own two clocks, answered in **milliseconds**:

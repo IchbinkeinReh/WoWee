@@ -905,6 +905,8 @@ public:
     int64_t battlefieldInstanceExpirationMs() const;
     int64_t battlefieldInstanceRunTimeMs() const;
     const std::vector<AvailableBgInfo>& getAvailableBgs() const override;
+    /// The last battleground list the server sent (the battlemaster panel's).
+    const BattlefieldListData* lastBattlefieldList() const;
 
     // BG scoreboard (aliased from handler_types.hpp)
     using BgPlayerScore = game::BgPlayerScore;
