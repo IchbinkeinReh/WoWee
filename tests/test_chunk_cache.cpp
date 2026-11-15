@@ -359,16 +359,15 @@ TEST_CASE("A loading screen drops older runs' chunks, never this run's", "[chunk
     ChunkCache::setRun(1);
 }
 
-TEST_CASE("Past the disk limit, chunks are held in the view's memory only", "[chunks][limit]") {
+TEST_CASE("Past the disk limit, chunks are held in memory only", "[chunks][limit]") {
     Dir d;
     Remote r(8 * kChunk);
     const fs::path local = d.root / "patch-3.MPQ";
-    std::vector<uint8_t> view(r.bytes.size(), 0);   // the archive's private view
     const uint64_t mem0 = ChunkCache::memoryBytes();
     {
         ChunkCache cache;
         REQUIRE(cache.open(local.string(), r.bytes.size(), kChunk, "v1", r.fetcher()));
-        cache.setView(view.data());
+        CHECK_FALSE(cache.readMemory(0, r.bytes.size(), nullptr));
         // Room on disk for two chunks more than now.
         ChunkCache::setDiskLimit(ChunkCache::diskBytes() + 2 * kChunk);
         ChunkCache::setMemoryLimit(3 * kChunk);
@@ -378,10 +377,16 @@ TEST_CASE("Past the disk limit, chunks are held in the view's memory only", "[ch
         CHECK(cache.chunksPresent() == 2);              // not in the bitmap
         CHECK(cache.chunksInMemory() == 2);
         CHECK(ChunkCache::memoryBytes() == mem0 + 2 * kChunk);
-        // Readable from the view, the server's bytes (its SHA-256 is the
+        // Readable from memory, the server's bytes (its SHA-256 is the
         // fetcher's to check, as for any chunk); not written to the copy.
-        CHECK(std::vector<uint8_t>(view.begin() + 2 * kChunk, view.begin() + 4 * kChunk) ==
-              std::vector<uint8_t>(r.bytes.begin() + 2 * kChunk, r.bytes.begin() + 4 * kChunk));
+        // A range across disk and memory: the reader reads it from the copy
+        // and lays the memory chunks over it.
+        CHECK_FALSE(cache.readMemory(0, 2 * kChunk, nullptr));
+        CHECK(cache.readMemory(kChunk + 10, kChunk, nullptr));
+        std::vector<uint8_t> range = readLocal(local, kChunk + 10, 2 * kChunk);
+        CHECK(range != std::vector<uint8_t>(r.bytes.begin() + kChunk + 10, r.bytes.begin() + 3 * kChunk + 10));
+        CHECK(cache.readMemory(kChunk + 10, 2 * kChunk, range.data()));
+        CHECK(range == std::vector<uint8_t>(r.bytes.begin() + kChunk + 10, r.bytes.begin() + 3 * kChunk + 10));
         CHECK(readLocal(local, 2 * kChunk, kChunk) == std::vector<uint8_t>(kChunk, 0));
         // Held: reading it again fetches nothing.
         const int before = r.requests;

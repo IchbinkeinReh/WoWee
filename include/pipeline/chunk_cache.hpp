@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <set>
@@ -127,15 +128,18 @@ public:
     //
     // On-disk bytes of all caches together are counted (diskBytes). With a
     // disk limit set and reached, a fetched chunk is not written to the copy:
-    // it goes into the reader's copy-on-write view of the archive (setView),
-    // private memory of this process, and is held there for this session -
-    // readable, its SHA-256 checked like any other, but not in the on-disk
-    // bitmap, so the next start fetches it again. That memory is bounded
-    // (setMemoryLimit); past it chunks go to disk after all, past the limit.
+    // it is held in this cache's memory for this session - readable
+    // (readMemory: the archive reader lays it over what it read from the
+    // copy, which has a hole there), its SHA-256 checked like any other, but
+    // not in the on-disk bitmap, so the next start fetches it again. That
+    // memory is bounded (setMemoryLimit); past it chunks go to disk after
+    // all, past the limit. (It used to be the archive's copy-on-write view,
+    // which Windows charges as commit in full: 17 GB for a 3.3.5a install.)
 
-    /// The archive's mapped view, writable copy-on-write (MpqArchiveSet maps
-    /// streamed archives so); null while unmapped.
-    void setView(uint8_t* view);
+    /// Copies the parts of [offset, offset + length) held in memory only over
+    /// `dst` (the same range as read from the copy). With `dst` null, only
+    /// says whether any part of the range is held so. True when any is.
+    bool readMemory(uint64_t offset, uint64_t length, uint8_t* dst) const;
     static void setDiskLimit(uint64_t bytes);
     static uint64_t diskLimit();
     static uint64_t diskBytes();
@@ -163,8 +167,11 @@ private:
     uint64_t fetched_ = 0;
     uint64_t requests_ = 0;
     bool loggedFailure_ = false;
-    uint8_t* view_ = nullptr;
-    std::vector<uint8_t> inMemory_;   // per chunk: held in the view only
+    std::vector<uint8_t> inMemory_;   // per chunk: held in memory only (memory_)
+    std::map<uint64_t, std::vector<uint8_t>> memory_;   // chunk -> its bytes
+    std::atomic<uint64_t> memoryChunks_{0};             // memory_.size(), read without the lock
+    /// Forgets the chunks held in memory (under mutex_).
+    void dropMemory();
     uint64_t diskCounted_ = 0;        // this copy's bytes in the shared count
     bool loggedMemoryFull_ = false;
     bool present(uint64_t chunk) const {

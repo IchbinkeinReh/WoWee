@@ -593,12 +593,15 @@ std::string DataStream::start(const StreamConfig& config, const std::string& cac
     }
     active_ = !entries_.empty();
     applyCacheSettings();
-    // Each streamed archive's copy-on-write view, for the chunks held in
-    // memory past the disk limit.
-    MpqArchiveSet::ViewSink viewSink = [this](const std::string& path, uint8_t* view) {
-        if (ChunkCache* cache = cacheFor(path)) cache->setView(view);
-    };
-    MpqArchiveSet::setStreamViewSink(std::move(viewSink));
+    // The chunks held in memory past the disk limit, laid over what the
+    // reader reads from the copy.
+    MpqArchiveSet::setStreamMemorySource([this](const std::string& path) -> MpqArchiveSet::MemoryRead {
+        ChunkCache* cache = cacheFor(path);
+        if (!cache) return {};
+        return [cache](uint64_t offset, uint64_t length, uint8_t* dst) {
+            return cache->readMemory(offset, length, dst);
+        };
+    });
     MpqArchiveSet::setRangeSource([this](const std::string& path) -> MpqArchiveSet::RangeFetch {
         ChunkCache* cache = cacheFor(path);
         if (!cache) return {};

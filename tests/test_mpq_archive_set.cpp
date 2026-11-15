@@ -321,12 +321,13 @@ TEST_CASE("Streaming: the archives read through a chunk cache, fetching only wha
             byPath[fs::absolute(dst).lexically_normal().string()] = c.get();
             caches.push_back(std::move(c));
         }
-        // The view each streamed archive is mapped to, as the stream hands
-        // it to its cache (pipeline/data_stream): where a chunk fetched after
-        // the archive was mapped reaches the reader on macOS.
-        MpqArchiveSet::setStreamViewSink([&byPath](const std::string& p, uint8_t* view) {
+        // The chunks held in memory past the disk limit, as the stream hands
+        // them to the reader (pipeline/data_stream).
+        MpqArchiveSet::setStreamMemorySource([&byPath](const std::string& p) -> MpqArchiveSet::MemoryRead {
             auto it = byPath.find(fs::absolute(fs::path(p)).lexically_normal().string());
-            if (it != byPath.end()) it->second->setView(view);
+            if (it == byPath.end()) return {};
+            ChunkCache* c = it->second;
+            return [c](uint64_t o, uint64_t l, uint8_t* d) { return c->readMemory(o, l, d); };
         });
         MpqArchiveSet::setRangeSource([&byPath](const std::string& p) -> MpqArchiveSet::RangeFetch {
             auto it = byPath.find(fs::absolute(fs::path(p)).lexically_normal().string());
@@ -350,7 +351,7 @@ TEST_CASE("Streaming: the archives read through a chunk cache, fetching only wha
         CHECK(std::string(stored.begin(), stored.end()) == "locale bytes");
         set.close();
         MpqArchiveSet::setRangeSource({});
-        MpqArchiveSet::setStreamViewSink({});
+        MpqArchiveSet::setStreamMemorySource({});
     };
 
     for (const auto& rel : {"Data/common.MPQ", "Data/deDE/locale-deDE.MPQ", "Data/patch.MPQ"}) {
@@ -373,3 +374,136 @@ TEST_CASE("Streaming: the archives read through a chunk cache, fetching only wha
     std::error_code ec;
     fs::remove_all(mirror, ec);
 }
+
+namespace {
+/// A streamed copy of `remote`'s archives under `mirror`: one ChunkCache per
+/// archive (chunks of `chunk` bytes, fetched from the remote file, padded
+/// with zeros to `padTo` when that is larger), wired to MpqArchiveSet as
+/// pipeline/data_stream wires it. Unwired again when it goes.
+struct StreamedCopy {
+    std::vector<std::unique_ptr<wowee::pipeline::ChunkCache>> caches;
+    std::map<std::string, wowee::pipeline::ChunkCache*> byPath;
+
+    StreamedCopy(const fs::path& remote, const fs::path& mirror, const std::vector<std::string>& rels,
+                 uint32_t chunk, uint64_t padTo = 0) {
+        using wowee::pipeline::ChunkCache;
+        for (const auto& rel : rels) {
+            const fs::path src = remote / rel;
+            const uint64_t real = fs::file_size(src);
+            const uint64_t size = std::max(real, padTo);
+            auto c = std::make_unique<ChunkCache>();
+            const std::string srcPath = src.string();
+            REQUIRE(c->open((mirror / rel).string(), size, chunk, "v1",
+                            [srcPath, real](uint64_t off, uint64_t len, std::vector<uint8_t>& out, std::string&) {
+                                out.assign(static_cast<size_t>(len), 0);
+                                if (off < real) {
+                                    std::ifstream in(srcPath, std::ios::binary);
+                                    in.seekg(static_cast<std::streamoff>(off));
+                                    in.read(reinterpret_cast<char*>(out.data()),
+                                            static_cast<std::streamsize>(std::min(len, real - off)));
+                                }
+                                return true;
+                            }));
+            byPath[fs::absolute(mirror / rel).lexically_normal().string()] = c.get();
+            caches.push_back(std::move(c));
+        }
+        auto find = [this](const std::string& p) -> ChunkCache* {
+            auto it = byPath.find(fs::absolute(fs::path(p)).lexically_normal().string());
+            return it == byPath.end() ? nullptr : it->second;
+        };
+        MpqArchiveSet::setRangeSource([find](const std::string& p) -> MpqArchiveSet::RangeFetch {
+            ChunkCache* c = find(p);
+            if (!c) return {};
+            return [c](uint64_t o, uint64_t l) { return c->ensure(o, l); };
+        });
+        MpqArchiveSet::setStreamMemorySource([find](const std::string& p) -> MpqArchiveSet::MemoryRead {
+            ChunkCache* c = find(p);
+            if (!c) return {};
+            return [c](uint64_t o, uint64_t l, uint8_t* d) { return c->readMemory(o, l, d); };
+        });
+    }
+    ~StreamedCopy() {
+        MpqArchiveSet::setRangeSource({});
+        MpqArchiveSet::setStreamMemorySource({});
+    }
+};
+}  // namespace
+
+TEST_CASE("Streaming past the disk limit: what is held in memory reads through the archives",
+          "[mpq][stream][limit]") {
+    // Chunks past the limit are not written to the copy (it has holes there);
+    // the reader lays them over what it read, mapped or not.
+    using wowee::pipeline::ChunkCache;
+    TempData remote;
+    const fs::path mirror = remote.root.parent_path() / (remote.root.filename().string() + "_memmirror");
+    const std::vector<std::string> rels = {"Data/common.MPQ", "Data/deDE/locale-deDE.MPQ", "Data/patch.MPQ"};
+    for (const bool map : {true, false}) {
+        INFO("mapped: " << map);
+        std::error_code ec;
+        fs::remove_all(mirror, ec);
+        MpqArchiveSet::setMapArchives(map);
+        {
+            StreamedCopy copy(remote.root, mirror, rels, 512);
+            // Full already: every chunk fetched from here goes to memory.
+            ChunkCache::setDiskLimit(ChunkCache::diskBytes() + 1);
+            MpqArchiveSet set;
+            REQUIRE(set.open(mirror.string()));
+            CHECK(set.archiveCount() == 3);
+            CHECK(set.read("a\\crc.bin") == pattern(10000));
+            CHECK(set.read("a\\zipped.bin") == pattern(5000));
+            const auto stored = set.read("a\\stored.txt");
+            CHECK(std::string(stored.begin(), stored.end()) == "locale bytes");
+            uint64_t inMemory = 0, onDisk = 0;
+            for (const auto& c : copy.caches) {
+                inMemory += c->chunksInMemory();
+                onDisk += c->chunksPresent();
+            }
+            CHECK(inMemory > 0);
+            CHECK(onDisk == 0);   // nothing reached the copies
+            set.close();
+            ChunkCache::setDiskLimit(0);
+        }
+    }
+    MpqArchiveSet::setMapArchives(true);
+    std::error_code ec;
+    fs::remove_all(mirror, ec);
+}
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <psapi.h>
+
+TEST_CASE("A streamed archive is mapped without charging its size as commit", "[mpq][stream]") {
+    // A copy-on-write view (what streamed archives were mapped as) is charged
+    // its whole size as commit when it is mapped: 17 GB for a 3.3.5a install,
+    // and on a PC with a small pagefile archives would not map at all. A
+    // read-only view of the file is backed by the file.
+    TempData remote;
+    const fs::path mirror = remote.root.parent_path() / (remote.root.filename().string() + "_commitmirror");
+    std::error_code ec;
+    fs::remove_all(mirror, ec);
+    constexpr uint64_t kSize = 512ull << 20;   // sparse: only what is read takes room
+    auto commit = [] {
+        PROCESS_MEMORY_COUNTERS_EX pmc{};
+        pmc.cb = sizeof(pmc);
+        K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), pmc.cb);
+        return static_cast<uint64_t>(pmc.PrivateUsage);
+    };
+    MpqArchiveSet::setMapArchives(true);
+    {
+        StreamedCopy copy(remote.root, mirror, {"Data/common.MPQ"}, 64 * 1024, kSize);
+        const uint64_t before = commit();
+        MpqArchiveSet set;
+        REQUIRE(set.open(mirror.string()));
+        const uint64_t after = commit();
+        CHECK(set.read("a\\crc.bin") == pattern(10000));
+        INFO("commit before " << before << ", after open " << after);
+        CHECK(after < before + kSize / 8);
+        set.close();
+    }
+    fs::remove_all(mirror, ec);
+}
+#endif

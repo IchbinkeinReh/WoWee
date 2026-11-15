@@ -57,13 +57,18 @@ public:
     /// Where archives opened from now on get their RangeFetch: by path, an
     /// empty function for a file that is all on disk. Unset = all on disk.
     static void setRangeSource(std::function<RangeFetch(const std::string& path)> source);
-    /// Told of each streamed archive's view as it is mapped (and of null as
-    /// it is unmapped). A streamed archive is mapped copy-on-write: a write
-    /// to the view stays in this process and never reaches the file, which
-    /// is how the stream holds chunks past its disk limit in memory
-    /// (ChunkCache::setView). An archive on disk stays mapped read-only.
-    using ViewSink = std::function<void(const std::string& path, uint8_t* view)>;
-    static void setStreamViewSink(ViewSink sink);
+    /// Streaming mode: the parts of a range the stream holds in memory only
+    /// (chunks fetched past its disk limit, ChunkCache::readMemory), which
+    /// the file has a hole for. With `dst` null: whether any part of
+    /// [offset, offset + length) is such; else copies those parts over `dst`
+    /// (the range as read from the file). True when any part is.
+    using MemoryRead = std::function<bool(uint64_t offset, uint64_t length, uint8_t* dst)>;
+    /// Where archives opened from now on get their MemoryRead, by path; an
+    /// empty function for a file with nothing in memory. A streamed archive
+    /// is mapped read-only like any other (never copy-on-write: Windows
+    /// charges a copy-on-write view's whole size as commit, 17 GB for a
+    /// 3.3.5a install), so the reader lays these bytes over what it read.
+    static void setStreamMemorySource(std::function<MemoryRead(const std::string& path)> source);
 
     /// Whether archives opened from now on are mapped whole into the address
     /// space (the default on a 64-bit desktop) or read a range at a time

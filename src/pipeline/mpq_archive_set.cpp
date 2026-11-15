@@ -136,20 +136,16 @@ void MpqArchiveSet::setRangeSource(std::function<RangeFetch(const std::string& p
 }
 
 namespace {
-MpqArchiveSet::ViewSink g_viewSink;   // under g_rangeSourceMutex
-void tellView(const std::string& path, uint8_t* view) {
-    MpqArchiveSet::ViewSink sink;
-    {
-        std::lock_guard<std::mutex> lock(g_rangeSourceMutex);
-        sink = g_viewSink;
-    }
-    if (sink) sink(path, view);
+std::function<MpqArchiveSet::MemoryRead(const std::string&)> g_memorySource;   // under g_rangeSourceMutex
+MpqArchiveSet::MemoryRead memorySourceFor(const std::string& path) {
+    std::lock_guard<std::mutex> lock(g_rangeSourceMutex);
+    return g_memorySource ? g_memorySource(path) : MpqArchiveSet::MemoryRead{};
 }
 }  // namespace
 
-void MpqArchiveSet::setStreamViewSink(ViewSink sink) {
+void MpqArchiveSet::setStreamMemorySource(std::function<MemoryRead(const std::string& path)> source) {
     std::lock_guard<std::mutex> lock(g_rangeSourceMutex);
-    g_viewSink = std::move(sink);
+    g_memorySource = std::move(source);
 }
 
 // ---- how archives are read ------------------------------------------------------
@@ -203,6 +199,9 @@ struct MpqArchiveSet::Archive {
     bool need(uint64_t offset, uint64_t length) const {
         return !stream || stream(offset, length);
     }
+    // The chunks the stream holds in memory only (past its disk limit); the
+    // file has holes where they are. Empty when nothing can be.
+    MpqArchiveSet::MemoryRead memory;
     uint64_t size = 0;
     uint64_t header = 0;  // offset of the MPQ header in the file
     uint32_t sectorSize = 4096;
@@ -227,15 +226,23 @@ struct MpqArchiveSet::Archive {
     ~Archive() { unmap(); }
 
     /// `length` bytes from `offset`, fetched first when streamed: a pointer
-    /// into the mapping, or into `scratch` read from the file. Null when the
-    /// range is outside the file or cannot be had (a chunk that would not
-    /// fetch, a read error) - never a pointer to bytes that are not there.
+    /// into the mapping, or into `scratch` read from the file (and from the
+    /// stream's memory where it holds a chunk). Null when the range is
+    /// outside the file or cannot be had (a chunk that would not fetch, a
+    /// read error) - never a pointer to bytes that are not there.
     const uint8_t* at(uint64_t offset, uint64_t length, std::vector<uint8_t>& scratch) const {
         if (offset > size || length > size - offset) return nullptr;
         if (!need(offset, length)) return nullptr;
-        if (base) return base + offset;
+        const bool held = memory && memory(offset, length, nullptr);
+        if (base && !held) return base + offset;
         scratch.resize(static_cast<size_t>(length));
-        return readFile(offset, scratch.data(), static_cast<size_t>(length)) ? scratch.data() : nullptr;
+        if (base) {
+            std::memcpy(scratch.data(), base + offset, static_cast<size_t>(length));
+        } else if (!readFile(offset, scratch.data(), static_cast<size_t>(length))) {
+            return nullptr;
+        }
+        if (held) memory(offset, length, scratch.data());
+        return scratch.data();
     }
 
     bool readFile(uint64_t offset, uint8_t* dst, size_t length) const {
@@ -271,16 +278,18 @@ struct MpqArchiveSet::Archive {
         if (!GetFileSizeEx(file, &li) || li.QuadPart <= 0) return false;
         size = static_cast<uint64_t>(li.QuadPart);
         stream = rangeSourceFor(path);
+        memory = memorySourceFor(path);
         if (!mapArchives()) return true;
-        // Streamed: copy-on-write (see setStreamViewSink); else read-only.
-        mapping = CreateFileMappingW(file, nullptr, stream ? PAGE_WRITECOPY : PAGE_READONLY, 0, 0, nullptr);
-        if (mapping) {
-            base = static_cast<const uint8_t*>(
-                MapViewOfFile(mapping, stream ? FILE_MAP_COPY : FILE_MAP_READ, 0, 0, 0));
-        }
+        // Read-only, streamed or not: a read-only view of a file is backed by
+        // the file and charges no commit; a copy-on-write one (what streamed
+        // archives had) is charged in full, 17 GB for a 3.3.5a install, and
+        // on a PC with a small pagefile archives failed to map. A chunk the
+        // stream writes to the copy later shows in the view (file I/O and
+        // views of a local file are coherent).
+        mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
+        if (mapping) base = static_cast<const uint8_t*>(MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0));
         if (!base) {
-            // No room for it in the address space, or for the commit a
-            // copy-on-write view is charged in full: read it instead.
+            // No room for it in the address space: read it instead.
             const DWORD err = GetLastError();
             if (mapping) CloseHandle(mapping);
             mapping = nullptr;
@@ -288,7 +297,6 @@ struct MpqArchiveSet::Archive {
                         " bytes) could not be mapped (error ", err, "); reading it instead");
             return true;
         }
-        if (stream) tellView(path, const_cast<uint8_t*>(base));
         return true;
 #else
         fd = ::open(path.c_str(), O_RDONLY);
@@ -297,10 +305,14 @@ struct MpqArchiveSet::Archive {
         if (fstat(fd, &st) != 0 || st.st_size <= 0) return false;
         size = static_cast<uint64_t>(st.st_size);
         stream = rangeSourceFor(path);
+        memory = memorySourceFor(path);
         if (!mapArchives()) return true;
-        // Streamed: private, writable (see setStreamViewSink); else shared, read-only.
-        void* p = stream ? mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0)
-                         : mmap(nullptr, size, PROT_READ, MAP_SHARED, fd, 0);
+        // Shared and read-only, streamed or not: a private writable mapping
+        // is counted against the commit limit in full (Linux, Android), and
+        // on macOS its untouched pages keep the file as it was when mapped,
+        // so a chunk the stream wrote later never showed. A shared one is
+        // the file as it is now, and costs no commit.
+        void* p = mmap(nullptr, size, PROT_READ, MAP_SHARED, fd, 0);
         if (p == MAP_FAILED) {
             const int err = errno;
             LOG_WARNING("MPQ: ", fs::path(path).filename().string(), " (", size,
@@ -308,13 +320,11 @@ struct MpqArchiveSet::Archive {
             return true;
         }
         base = static_cast<const uint8_t*>(p);
-        if (stream) tellView(path, static_cast<uint8_t*>(p));
         return true;
 #endif
     }
 
     void unmap() {
-        if (base && stream) tellView(path, nullptr);
 #ifdef _WIN32
         if (base) UnmapViewOfFile(base);
         if (mapping) CloseHandle(mapping);

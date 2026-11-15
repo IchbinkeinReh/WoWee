@@ -58,25 +58,39 @@ uint64_t ChunkCache::diskBytes() { return g_diskBytes.load(); }
 uint64_t ChunkCache::memoryBytes() { return g_memoryBytes.load(); }
 void ChunkCache::setMemoryLimit(uint64_t bytes) { g_memoryLimit = bytes; }
 
-void ChunkCache::setView(uint8_t* view) {
+bool ChunkCache::readMemory(uint64_t offset, uint64_t length, uint8_t* dst) const {
+    // Every read of a streamed archive asks; almost always nothing is held.
+    if (length == 0 || memoryChunks_.load(std::memory_order_acquire) == 0) return false;
     std::lock_guard<std::mutex> lock(mutex_);
-    view_ = view;
-    if (view_) return;
-    // Unmapped: what the view held is gone with it.
-    uint64_t freed = 0;
-    for (size_t c = 0; c < inMemory_.size(); ++c) {
-        if (!inMemory_[c]) continue;
-        inMemory_[c] = 0;
-        freed += std::min<uint64_t>(chunk_, size_ - c * chunk_);
+    if (chunk_ == 0 || offset >= size_) return false;
+    const uint64_t end = offset + std::min(length, size_ - offset);
+    bool any = false;
+    for (auto it = memory_.lower_bound(offset / chunk_); it != memory_.end(); ++it) {
+        const uint64_t chunkStart = it->first * chunk_;
+        if (chunkStart >= end) break;
+        any = true;
+        if (!dst) return true;
+        const uint64_t from = std::max(offset, chunkStart);
+        const uint64_t to = std::min<uint64_t>(end, chunkStart + it->second.size());
+        if (to > from) std::memcpy(dst + (from - offset), it->second.data() + (from - chunkStart), to - from);
     }
+    return any;
+}
+
+void ChunkCache::dropMemory() {
+    uint64_t freed = 0;
+    for (const auto& [c, bytes] : memory_) {
+        freed += bytes.size();
+        if (c < inMemory_.size()) inMemory_[static_cast<size_t>(c)] = 0;
+    }
+    memory_.clear();
+    memoryChunks_.store(0, std::memory_order_release);
     g_memoryBytes -= freed;
 }
 
 uint64_t ChunkCache::chunksInMemory() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    uint64_t n = 0;
-    for (uint8_t b : inMemory_) n += b ? 1 : 0;
-    return n;
+    return memory_.size();
 }
 
 // ---- bitmap --------------------------------------------------------------------
@@ -167,9 +181,7 @@ bool ChunkBitmap::load(const std::string& path, uint64_t fileSize, uint32_t chun
 ChunkCache::~ChunkCache() {
     g_diskBytes -= diskCounted_;
     uint64_t memory = 0;
-    for (size_t c = 0; c < inMemory_.size(); ++c) {
-        if (inMemory_[c]) memory += std::min<uint64_t>(chunk_, size_ - c * chunk_);
-    }
+    for (const auto& [c, bytes] : memory_) memory += bytes.size();
     g_memoryBytes -= memory;
 #ifdef _WIN32
     if (file_) CloseHandle(static_cast<HANDLE>(file_));
@@ -227,6 +239,7 @@ bool ChunkCache::open(const std::string& dataPath, uint64_t fileSize, uint32_t c
 
     // The chunks' last-read runs. Missing or for another size: what is held
     // counts as read before any run (0), the first to go.
+    dropMemory();
     inMemory_.assign(static_cast<size_t>(bitmap_.chunkCount()), 0);
     {
         // This copy's bytes in the shared on-disk count (the limit's).
@@ -414,20 +427,15 @@ bool ChunkCache::ensure(uint64_t offset, uint64_t length) {
         std::vector<uint8_t> bytes;
         std::string error;
         bool ok = fetcher_ && fetcher_(from, to - from, bytes, error) && bytes.size() == to - from;
-        // Past the disk limit: into the view's private memory, not the copy.
-        // The view is only written here, for chunks no reader has yet - they
-        // are in flight, so every reader of them waits - and a chunk is whole
-        // pages (chunks are 256 KiB aligned), so no other chunk's page moves.
+        // Past the disk limit: held in memory (memory_), not written to the
+        // copy. Only chunks no reader has yet - they are in flight, so every
+        // reader of them waits until they are in memory_ below.
         bool toMemory = false;
         if (ok) {
             const uint64_t limit = g_diskLimit.load();
             if (limit != 0 && g_diskBytes.load() + bytes.size() > limit) {
-                // Under the lock, so the view cannot be unmapped meanwhile
-                // (setView(nullptr) takes it too).
-                std::lock_guard<std::mutex> viewLock(mutex_);
                 const uint64_t mem = g_memoryBytes.fetch_add(bytes.size());
-                if (view_ && mem + bytes.size() <= g_memoryLimit.load()) {
-                    std::memcpy(view_ + from, bytes.data(), bytes.size());
+                if (mem + bytes.size() <= g_memoryLimit.load()) {
                     toMemory = true;
                 } else {
                     g_memoryBytes -= bytes.size();
@@ -438,16 +446,6 @@ bool ChunkCache::ensure(uint64_t offset, uint64_t length) {
             ok = false;
             error = "could not write the cache copy";
         }
-#ifdef __APPLE__
-        // A streamed archive is mapped MAP_PRIVATE. Linux shows a private
-        // mapping's untouched pages as the file is now; macOS keeps them as
-        // the file was when it was mapped, so a chunk written to the copy
-        // after that never reaches the reader. Put it in the view as well.
-        if (ok && !toMemory) {
-            std::lock_guard<std::mutex> viewLock(mutex_);
-            if (view_) std::memcpy(view_ + from, bytes.data(), bytes.size());
-        }
-#endif
 
         lock.lock();
         for (uint64_t k = c; k <= end; ++k) inFlight_.erase(k);
@@ -456,14 +454,20 @@ bool ChunkCache::ensure(uint64_t offset, uint64_t length) {
             ++requests_;
             fetched_ += bytes.size();
             if (toMemory) {
-                for (uint64_t k = c; k <= end; ++k) inMemory_[static_cast<size_t>(k)] = 1;
+                for (uint64_t k = c; k <= end; ++k) {
+                    const uint64_t at = (k - c) * chunk_;
+                    const uint64_t n = std::min<uint64_t>(chunk_, bytes.size() - at);
+                    memory_[k].assign(bytes.begin() + static_cast<std::ptrdiff_t>(at),
+                                      bytes.begin() + static_cast<std::ptrdiff_t>(at + n));
+                    inMemory_[static_cast<size_t>(k)] = 1;
+                }
+                memoryChunks_.store(memory_.size(), std::memory_order_release);
             } else {
                 if (g_diskLimit.load() != 0 && g_diskBytes.load() + bytes.size() > g_diskLimit.load() &&
                     !loggedMemoryFull_) {
                     loggedMemoryFull_ = true;
-                    LOG_WARNING("STREAM: cache limit reached and ", view_ ? "the memory for chunks past it is full"
-                                                                          : "no view to hold chunks in memory",
-                                "; ", fs::path(path_).filename().string(), " writes to disk past the limit");
+                    LOG_WARNING("STREAM: cache limit reached and the memory for chunks past it is full; ",
+                                fs::path(path_).filename().string(), " writes to disk past the limit");
                 }
                 for (uint64_t k = c; k <= end; ++k) bitmap_.set(k);
                 bitmap_.save(indexPath_);
@@ -507,6 +511,7 @@ bool ChunkCache::clear() {
     diskCounted_ = 0;
     std::fill(lastUse_.begin(), lastUse_.end(), 0u);
     useDirty_ = true;
+    dropMemory();
     // The bitmap first: a crash between the two leaves chunks that are on
     // disk but not marked, which costs a fetch, never the reverse.
     const bool saved = bitmap_.save(indexPath_);
