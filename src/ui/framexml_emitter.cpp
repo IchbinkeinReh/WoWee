@@ -220,8 +220,24 @@ struct Emitter {
             // Present but empty is not a name. Emitted as one it produces
             // SetScript("X", ) - a syntax error that loses the whole file, not
             // just the handler.
+            //
+            // Looked up raw, and set only when it is a function. The client's
+            // loader does the same: a name that is not a function is "Frame
+            // %s: Unknown function %s in element %s" in its log and the
+            // script is left alone, while the frame goes on being built. Read
+            // through _G, the missing-API fallback answers an unknown name
+            // with its no-op object, SetScript refuses that as "Usage:
+            // SetScript("type", function)", and the error takes the rest of
+            // the file with it. Blizzard_Calendar.xml names
+            // CalendarViewEventFrame_OnUpdate, which 3.3.5's calendar never
+            // defines, so the calendar failed to load ("Beschädigt") on
+            // every open.
             if (const std::string* fn = s.attr("function"); fn && !fn->empty()) {
-                guarded(s.name, var + ":SetScript(" + quote(s.name) + ", " + *fn + ")");
+                line("do local __fn = rawget(_G, " + quote(*fn) + ") if type(__fn) == \"function\" then");
+                guarded(s.name, var + ":SetScript(" + quote(s.name) + ", __fn)");
+                line("elseif __WoweeLogWarning then __WoweeLogWarning(\"Frame \" .. tostring(" + var +
+                     ".GetName and " + var + ":GetName()) .. \": Unknown function " + *fn +
+                     " in element " + s.name + "\") end end");
                 continue;
             }
             std::string body = s.text;

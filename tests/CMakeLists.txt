@@ -4091,3 +4091,19 @@ wowee_add_test(test_eax_reverb
 # dead, not lying dead.
 wowee_add_test(test_nearest_enemy_filter
     SOURCES test_nearest_enemy_filter.cpp)
+
+# ── test_keybinding_defaults ─────────────────────────────────
+# The client's own key defaults against 3.3.5's DefaultBindings.wtf: I is the
+# Dungeon Finder, and a settings file that spells out the old J/I pair is moved.
+add_executable(test_keybinding_defaults
+    test_keybinding_defaults.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/keybinding_manager.cpp
+    ${TEST_COMMON_SOURCES})
+target_include_directories(test_keybinding_defaults PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_keybinding_defaults SYSTEM PRIVATE
+    ${TEST_SYSTEM_INCLUDE_DIRS}
+    ${CMAKE_SOURCE_DIR}/extern/imgui
+)
+target_link_libraries(test_keybinding_defaults PRIVATE catch2_main imgui)
+add_test(NAME keybinding_defaults COMMAND test_keybinding_defaults)
+register_test_target(test_keybinding_defaults)
