@@ -467,7 +467,16 @@ TEST_CASE("Scripts bind both inline bodies and named functions",
     const EmitResult r = emitFrameXml(root);
     REQUIRE(has(r.lua, ":SetScript(\"OnLoad\", function(self, ...)"));
     REQUIRE(has(r.lua, "self:SetAlpha(0.5)"));
-    REQUIRE(has(r.lua, ":SetScript(\"OnClick\", MyHandler)"));
+    // A named handler is looked up raw and bound only when it is a function,
+    // as the client's loader does ("Unknown function %s in element %s" and the
+    // frame goes on). A bare global read reaches the missing-API fallback,
+    // whose no-op object SetScript refuses - which lost Blizzard_Calendar.xml
+    // to CalendarViewEventFrame_OnUpdate, a name 3.3.5 never defines.
+    REQUIRE(has(r.lua, "rawget(_G, \"MyHandler\")"));
+    REQUIRE(has(r.lua, "type(__fn) == \"function\""));
+    REQUIRE(has(r.lua, ":SetScript(\"OnClick\", __fn)"));
+    REQUIRE_FALSE(has(r.lua, ":SetScript(\"OnClick\", MyHandler)"));
+    REQUIRE(has(r.lua, "Unknown function MyHandler in element OnClick"));
     // OnLoad is expected to run once the frame is built, which is what every
     // handler in FrameXML assumes about itself. Through the engine, which is
     // what puts `this` in scope for an interface written before 3.0.
@@ -953,7 +962,8 @@ TEST_CASE("An empty function attribute is not emitted as a handler name",
         "</Scripts></Frame></Ui>");
     const EmitResult r = emitFrameXml(root);
     REQUIRE_FALSE(has(r.lua, "SetScript(\"OnMouseWheel\", )"));
-    REQUIRE(has(r.lua, "SetScript(\"OnShow\", RealHandler)"));
+    REQUIRE(has(r.lua, "rawget(_G, \"RealHandler\")"));
+    REQUIRE(has(r.lua, "SetScript(\"OnShow\", __fn)"));
 }
 
 TEST_CASE("$parent follows the parent attribute, not the file structure",
