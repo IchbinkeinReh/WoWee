@@ -174,9 +174,39 @@ int accessDenied(lua_State* L) {
 
 }  // namespace
 
+// ---- Account messages (0x0054fde0-0x00550910) ----
+//
+// Blizzard's account notices, fetched over HTTP from its own service. The
+// headers are never loaded here: wowee asks no Blizzard host, so the load
+// fails as an unreachable request does, and every reader raises the client's
+// own "not loaded" line - their wording as it stands, copy-pasted names
+// included.
+template <const char* Text>
+int accountMsgNotLoaded(lua_State* L) { return luaL_error(L, "%s", Text); }
+
+constexpr char kAmTotal[] = "AccountMsg_GetNumTotalMsgs() failed because the headers are not loaded";
+constexpr char kAmSubject[] = "AccountMsg_GetHeaderSubject() failed because the headers are not loaded";
+constexpr char kAmPriority[] = "AccountMsg_GetHeaderPriority() failed because the headers are not loaded";
+constexpr char kAmLoadBody[] = "AccountMsg_LoadBody() failed because the headers are not loaded";
+constexpr char kAmBody[] = "AccountMsg_GetBody() failed because the body was not loaded";
+constexpr char kAmUnread[] = "AccountMsg_GetNumUnreadMsgs() failed because the headers are not loaded";
+constexpr char kAmSetRead[] = "AccountMsg_SetMsgRead() failed because the headers are not loaded";
+constexpr char kAmLoadHeaders[] = "AccountMsg_LoadHeaders() failed";
+
 void registerAbsentLuaAPI(lua_State* L) {
     static const luaL_Reg fns[] = {
         {"IsVoiceChatAllowed",                       isVoiceChatAllowed},
+        {"AccountMsg_GetNumTotalMsgs",               accountMsgNotLoaded<kAmTotal>},
+        {"AccountMsg_GetHeaderSubject",              accountMsgNotLoaded<kAmSubject>},
+        {"AccountMsg_GetHeaderPriority",             accountMsgNotLoaded<kAmPriority>},
+        {"AccountMsg_LoadBody",                      accountMsgNotLoaded<kAmLoadBody>},
+        {"AccountMsg_GetBody",                       accountMsgNotLoaded<kAmBody>},
+        {"AccountMsg_GetNumUnreadMsgs",              accountMsgNotLoaded<kAmUnread>},
+        {"AccountMsg_GetNumUnreadUrgentMsgs",        accountMsgNotLoaded<kAmUnread>},
+        {"AccountMsg_GetIndexHighestPriorityUnreadMsg", accountMsgNotLoaded<kAmSubject>},
+        {"AccountMsg_GetIndexNextUnreadMsg",         accountMsgNotLoaded<kAmSubject>},
+        {"AccountMsg_SetMsgRead",                    accountMsgNotLoaded<kAmSetRead>},
+        {"AccountMsg_LoadHeaders",                   accountMsgNotLoaded<kAmLoadHeaders>},
         {"VoiceGetCurrentCaptureDevice",             noVoiceDevice},
         {"VoiceGetCurrentOutputDevice",              noVoiceDevice},
         {"Sound_GameSystem_GetNumInputDrivers",      numInputDrivers},
