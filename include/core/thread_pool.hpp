@@ -49,16 +49,24 @@ public:
     ThreadPool& operator=(const ThreadPool&) = delete;
 
     // Shared pool for per-frame render/update work, sized for the machine.
+    //
+    // The two shared pools are never destroyed. A process that ends through
+    // ExitProcess with them still running - a crash's exit, an exit under a
+    // job's memory limit - has its workers killed while they wait on cv_, and
+    // the destructor run afterwards by the C runtime's exit handlers then
+    // destroyed a condition variable with waiters that would never leave:
+    // MinGW's pthread_cond_destroy waits for them, forever. The client sat at
+    // its last thread with gigabytes still committed, and could not be ended.
     static ThreadPool& frameWorkers() {
-        static ThreadPool pool(defaultThreadCount());
-        return pool;
+        static ThreadPool* pool = new ThreadPool(defaultThreadCount());
+        return *pool;
     }
 
     // Small, separate pool for blocking filesystem work. Keeping it distinct from
     // frameWorkers prevents a slow disk read from occupying render/update workers.
     static ThreadPool& ioWorkers() {
-        static ThreadPool pool(2);
-        return pool;
+        static ThreadPool* pool = new ThreadPool(2);
+        return *pool;
     }
 
     // Schedule fn on a worker thread. The returned future carries fn's result
