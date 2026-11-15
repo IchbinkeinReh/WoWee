@@ -1434,6 +1434,16 @@ static int lua_UnitGUID(lua_State* L) {
     toLowerInPlace(uidStr);
     uint64_t guid = resolveUnitGuid(gh, uidStr);
     if (guid == 0) { return luaReturnNil(L); }
+    // A creature or vehicle whose template has type flag 0x4000 shows only
+    // the top byte of its low word (0x0060e630), as the combat log hides it.
+    const uint32_t high = static_cast<uint32_t>(guid >> 32);
+    if ((high & 0xF0F00000u) == 0xF0300000u || (high & 0xF0F00000u) == 0xF0500000u) {
+        const uint32_t entry = (static_cast<uint32_t>(guid) >> 24) | ((high & 0xFFFFFu) << 8);
+        const auto& cache = gh->getCreatureInfoCache();
+        const auto it = cache.find(entry);
+        if (it != cache.end() && (it->second.typeFlags & 0x4000u))
+            guid &= 0xFFFFFFFFFF000000ull;
+    }
     char buf[32];
     snprintf(buf, sizeof(buf), "0x%016llX", (unsigned long long)guid);
     lua_pushstring(L, buf);

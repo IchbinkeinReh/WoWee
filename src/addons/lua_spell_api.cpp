@@ -251,15 +251,47 @@ static bool classCanDispel(uint8_t classId, uint8_t dispelType) {
     }
 }
 
-static int lua_UnitAura(lua_State* L, bool wantBuff) {
+/// What UnitAura, UnitBuff and UnitDebuff are asked (0x00608390): an index,
+/// or a name with an optional rank, and a filter of words split on '|'.
+/// `forced` is 1 for UnitBuff (HELPFUL), 2 for UnitDebuff (HARMFUL), 0 for
+/// UnitAura (HELPFUL unless the filter says HARMFUL).
+static int lua_UnitAura(lua_State* L, int forced) {
     auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnNil(L); }
-    const char* uid = luaL_optstring(L, 1, "player");
-    int index = static_cast<int>(luaL_optnumber(L, 2, 1));
-    if (index < 1) { return luaReturnNil(L); }
-
-    std::string uidStr(uid);
+    if (!gh) { return 0; }
+    std::string uidStr(lua_tostring(L, 1));
     toLowerInPlace(uidStr);
+    int index = 0;
+    std::string wantName, wantRank;
+    int filterArg = 3;
+    if (lua_isnumber(L, 2)) {
+        index = static_cast<int>(lua_tointeger(L, 2));
+    } else {
+        wantName = lua_tostring(L, 2);
+        if (lua_isstring(L, 3)) wantRank = lua_tostring(L, 3);
+        filterArg = 4;
+    }
+    bool helpful = true, onlyPlayer = false, raid = false, cancelable = false, notCancelable = false;
+    if (lua_isstring(L, filterArg)) {
+        std::string f(lua_tostring(L, filterArg));
+        for (char& c : f) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        size_t at = 0;
+        while (at <= f.size()) {
+            const size_t bar = f.find('|', at);
+            const std::string word = f.substr(at, bar == std::string::npos ? std::string::npos : bar - at);
+            if (word == "HELPFUL") helpful = true;
+            else if (word == "HARMFUL") helpful = false;
+            else if (word == "PLAYER") onlyPlayer = true;
+            else if (word == "RAID") raid = true;
+            else if (word == "CANCELABLE") cancelable = true;
+            else if (word == "NOT_CANCELABLE") notCancelable = true;
+            if (bar == std::string::npos) break;
+            at = bar + 1;
+        }
+    }
+    if (forced == 1) helpful = true;
+    if (forced == 2) helpful = false;
+    const bool wantBuff = helpful;
+    if (wantName.empty() && index < 1) { return 0; }
 
     const std::vector<game::AuraSlot>* auras = nullptr;
     if (uidStr == "player")      auras = &gh->getPlayerAuras();
@@ -269,19 +301,13 @@ static int lua_UnitAura(lua_State* L, bool wantBuff) {
         uint64_t guid = resolveUnitGuid(gh, uidStr);
         if (guid != 0) auras = gh->getUnitAuras(guid);
     }
-    if (!auras) { return luaReturnNil(L); }
+    if (!auras) { return 0; }
 
     // "RAID" on a debuff means only what this character can remove. The index
     // counts into the filtered list, so the test has to come before the count
     // - filtering after it would answer the wrong aura for every index past
     // the first one skipped.
-    const char* filterArg = luaL_optstring(L, 3, "");
-    bool dispellableOnly = false;
-    if (!wantBuff && filterArg) {
-        std::string f(filterArg);
-        for (char& c : f) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        dispellableOnly = f.find("RAID") != std::string::npos;
-    }
+    const bool dispellableOnly = raid && !wantBuff;
     const uint8_t playerClass = gh->getPlayerClass();
 
     // Filter to buffs or debuffs and find the Nth one
@@ -294,8 +320,20 @@ static int lua_UnitAura(lua_State* L, bool wantBuff) {
             !classCanDispel(playerClass, gh->getSpellDispelType(aura.spellId))) {
             continue;
         }
-        found++;
-        if (found == index) {
+        // PLAYER: cast by the player; CANCELABLE and NOT_CANCELABLE by the
+        // aura's flag 0x10 (0x0072c9b0).
+        if (onlyPlayer && aura.casterGuid != gh->getPlayerGuid()) continue;
+        if ((aura.flags & 0x10) ? notCancelable : cancelable) continue;
+        bool hit;
+        if (!wantName.empty()) {
+            std::string have = gh->getSpellName(aura.spellId), rank = gh->getSpellRank(aura.spellId);
+            std::string want = wantName, wantR = wantRank;
+            toLowerInPlace(have); toLowerInPlace(rank); toLowerInPlace(want); toLowerInPlace(wantR);
+            hit = have == want && (wantR.empty() || rank == wantR);
+        } else {
+            hit = ++found == index;
+        }
+        if (hit) {
             // Return: name, rank, icon, count, debuffType, duration, expirationTime, ...spellId
             std::string name = gh->getSpellName(aura.spellId);
             if (name.empty()) {
@@ -499,14 +537,14 @@ static int lua_UnitBuff(lua_State* L) {
     // number is also a string to that test.
     if (!lua_isstring(L, 1) || !lua_isstring(L, 2))
         return luaL_error(L, "Usage: UnitBuff(\"unit\", [index] or [\"name\", \"rank\"][, \"filter\"])");
-    return lua_UnitAura(L, true);
+    return lua_UnitAura(L, 1);
 }
 static int lua_UnitDebuff(lua_State* L) {
     // 0x00614cf0 (through 0x006110a0): a unit text, then an index or a name - a
     // number is also a string to that test.
     if (!lua_isstring(L, 1) || !lua_isstring(L, 2))
         return luaL_error(L, "Usage: UnitDebuff(\"unit\", [index] or [\"name\", \"rank\"][, \"filter\"])");
-    return lua_UnitAura(L, false);
+    return lua_UnitAura(L, 2);
 }
 
 // UnitAura(unit, index, filter) - generic aura query with filter string
@@ -517,22 +555,19 @@ static int lua_UnitAuraGeneric(lua_State* L) {
     // number is also a string to that test.
     if (!lua_isstring(L, 1) || !lua_isstring(L, 2))
         return luaL_error(L, "Usage: UnitAura(\"unit\", [index] or [\"name\", \"rank\"][, \"filter\"])");
-    const char* filter = luaL_optstring(L, 3, "HELPFUL");
-    std::string f(filter ? filter : "HELPFUL");
-    for (char& c : f) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    bool wantBuff = (f.find("HARMFUL") == std::string::npos);
-    return lua_UnitAura(L, wantBuff);
+    return lua_UnitAura(L, 0);
 }
 
 // ---------- UnitCastingInfo / UnitChannelInfo ----------
 // Internal helper: pushes cast/channel info for a unit.
 // Returns number of Lua return values (0 if not casting/channeling the requested type).
 static int lua_UnitCastInfo(lua_State* L, bool wantChannel) {
+    // No cast: nothing (0x00611df0, 0x00612090). The token without case.
     auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnNil(L); }
+    if (!gh) { return 0; }
 
-    const char* uid = luaL_optstring(L, 1, "player");
-    std::string uidStr(uid ? uid : "player");
+    std::string uidStr(lua_tostring(L, 1));
+    toLowerInPlace(uidStr);
 
     // Use shared GetTime() epoch for consistent timestamps
     double nowSec = luaGetTimeNow();
@@ -555,9 +590,9 @@ static int lua_UnitCastInfo(lua_State* L, bool wantChannel) {
         interruptible = true;
     } else {
         uint64_t guid = resolveUnitGuid(gh, uidStr);
-        if (guid == 0) { return luaReturnNil(L); }
+        if (guid == 0) { return 0; }
         const auto* state = gh->getUnitCastState(guid);
-        if (!state) { return luaReturnNil(L); }
+        if (!state) { return 0; }
         isCasting = state->casting;
         isChannel = state->isChannel;
         spellId = state->spellId;
@@ -566,11 +601,11 @@ static int lua_UnitCastInfo(lua_State* L, bool wantChannel) {
         interruptible = state->interruptible;
     }
 
-    if (!isCasting) { return luaReturnNil(L); }
+    if (!isCasting) { return 0; }
 
     // UnitCastingInfo: only returns for non-channel casts
     // UnitChannelInfo: only returns for channels
-    if (wantChannel != isChannel) { return luaReturnNil(L); }
+    if (wantChannel != isChannel) { return 0; }
 
     // Spell name + icon
     const std::string& name = gh->getSpellName(spellId);
@@ -602,14 +637,31 @@ static int lua_UnitCastInfo(lua_State* L, bool wantChannel) {
     // The spell's own name, because that is what this is for every spell. It
     // differs only for a trade skill, where the real client puts the item
     // being made here, and this client has no such cast in flight to name.
-    lua_pushstring(L, name.empty() ? "Unknown" : name.c_str()); // text
-    if (!iconPath.empty()) lua_pushstring(L, iconPath.c_str());
-    else lua_pushstring(L, "Interface\\Icons\\INV_Misc_QuestionMark");  // texture
+    // The text: a cast's is "" for AttributesEx3 0x4; the player's channel
+    // reads CHANNELING unless AttributesEx 0x20000000.
+    const auto& cache = gh->spellNameCacheRef();
+    const auto entry = cache.find(spellId);
+    const uint32_t attr = entry != cache.end() ? entry->second.attr : 0u;
+    const uint32_t attrEx = entry != cache.end() ? entry->second.attrEx : 0u;
+    const uint32_t attrEx3 = entry != cache.end() ? entry->second.attrEx3 : 0u;
+    if (wantChannel) {
+        if (uidStr == "player" && !(attrEx & 0x20000000u)) {
+            lua_getglobal(L, "CHANNELING");
+            if (!lua_isstring(L, -1)) { lua_pop(L, 1); lua_pushstring(L, name.c_str()); }
+        } else {
+            lua_pushstring(L, name.c_str());
+        }
+    } else {
+        lua_pushstring(L, (attrEx3 & 0x4u) ? "" : name.c_str());
+    }
+    lua_pushstring(L, iconPath.c_str());                        // texture, "" when none
     lua_pushnumber(L, startTimeMs);                              // startTime (ms)
     lua_pushnumber(L, endTimeMs);                                // endTime (ms)
-    lua_pushboolean(L, gh->isProfessionSpell(spellId) ? 1 : 0); // isTradeSkill
+    lua_pushboolean(L, (attr & 0x20u) ? 1 : 0);                 // isTradeSkill (Attributes 0x20)
     if (!wantChannel) {
-        lua_pushnumber(L, spellId);                              // castID (UnitCastingInfo only)
+        // castID, the cast's count byte (+0xa5c).
+        const auto* sh = gh->getSpellHandler();
+        lua_pushnumber(L, uidStr == "player" && sh ? sh->runningCastCount() : 0);
     }
     lua_pushboolean(L, interruptible ? 0 : 1);                  // notInterruptible
     return wantChannel ? 8 : 9;
