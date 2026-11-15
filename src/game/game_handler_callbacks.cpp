@@ -4784,7 +4784,11 @@ SpellDescriptionContext GameHandler::descriptionContext(
         out = std::abs(static_cast<double>(bp[index]) + 1.0);
         return true;
     };
-    ctx.knowsSpell = [this](uint32_t id) { return isSpellKnownToClient(id); };
+    // Known to the PLAYER - the spell book, talents included - not merely a
+    // row of Spell.dbc. isSpellKnownToClient answers the latter, which is true
+    // for every spell in the game, so "$?s61331[${115}][...]" took the
+    // talent's branch for anyone and Sinister Strike read 115% for a mage.
+    ctx.knowsSpell = [this](uint32_t id) { return spellHandler_ && spellHandler_->hasKnownSpell(id); };
     return ctx;
 }
 
