@@ -1163,7 +1163,8 @@ void registerLfgLuaAPI(lua_State* L) {
     // Accept and be saved to the instance, or decline and go to the graveyard.
     // The server does neither until one of the two arrives.
     {"RespondInstanceLock", [](lua_State* L) -> int {
-        if (auto* gh = getGameHandler(L)) gh->respondInstanceLock(lua_toboolean(L, 1) != 0);
+        // 0 and "0" are no (0x00613ed0).
+        if (auto* gh = getGameHandler(L)) gh->respondInstanceLock(luaClientSwitchArg(L, 1, false));
         return 0;
     }},
     // Whether a unit is sitting out a deserter or a random-dungeon cooldown.

@@ -3,6 +3,9 @@
 #include "addons/unit_or_name.hpp"
 #include "game/gossip_quest_status.hpp"
 #include "game/name_rules.hpp"
+#include "game/spell_mods.hpp"
+#include "pipeline/dbc_layout.hpp"
+#include "pipeline/asset_manager.hpp"
 #include "game/grey_triviality.hpp"
 #include "game/interface_text.hpp"
 #include <algorithm>
@@ -3648,7 +3651,18 @@ void registerSocialLuaAPI(lua_State* L) {
             return channelSilenceVoice(L, game::Opcode::CMSG_CHANNEL_UNSILENCE_VOICE, "ChannelUnSilenceVoice");
         }},
                 // Vehicles are not modelled in the raid frames.
-                {"UnitTargetsVehicleInRaidUI", luaReturnNil},
+                // UnitTargetsVehicleInRaidUI(unit) (0x00613780): the unit's
+                // seat has VehicleSeat flagsB 0x8; false without one.
+                {"UnitTargetsVehicleInRaidUI", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            const char* uid = lua_tostring(L, 1);
+            std::string u(uid ? uid : "");
+            toLowerInPlace(u);
+            const uint64_t guid = gh ? resolveUnitGuid(gh, u) : 0;
+            const auto* seat = guid ? gh->vehicleRoster().seatOf(guid) : nullptr;
+            lua_pushboolean(L, seat && (seat->flagsB & 0x8u) ? 1 : 0);
+            return 1;
+        }},
                 {"GetNumLanguages",   lua_GetNumLanguages},
                 // The 1.12 client's own spelling, and not a typo on this side:
                 // stock ChatFrame.lua opens LanguageMenu_LoadLanguages with
@@ -4223,13 +4237,44 @@ void registerSocialLuaAPI(lua_State* L) {
                 // nil is what "none" looks like here, and it picks the
                 // no-sickness wording rather than printing "0 min".
                 {"GetResSicknessDuration", [](lua_State* L) -> int {
+            // 0x006118c0: the player's race's sickness spell (ChrRaces
+            // field 9, else 15007), its SpellDuration at the player's level
+            // (base + per level, at most the maximum) through the player's
+            // duration modifiers; a second or more as INT_GENERAL_DURATION,
+            // else nil.
             auto* gh = getGameHandler(L);
-            const uint32_t level = gh ? gh->getPlayerLevel() : 0;
-            constexpr uint32_t kSicknessLevel = 11;
-            if (level < kSicknessLevel) { lua_pushnil(L); return 1; }
-            const uint32_t minutes = level >= kSicknessLevel + 9
-                ? 10u : (level - kSicknessLevel + 1u);
-            lua_pushstring(L, (std::to_string(minutes) + " min").c_str());
+            if (!gh) { lua_pushnil(L); return 1; }
+            uint32_t spell = 15007;
+            const auto me = gh->getEntityManager().getEntity(gh->getPlayerGuid());
+            if (me) {
+                const uint32_t race = me->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0)) & 0xFFu;
+                auto* am = gh->services().assetManager;
+                const auto* layouts = pipeline::getActiveDBCLayout();
+                const auto* layout = layouts ? layouts->getLayout("ChrRaces") : nullptr;
+                const uint32_t f = layout ? layout->tryField("ResSicknessSpellID") : 0xFFFFFFFFu;
+                auto dbc = am && am->isInitialized() ? am->loadDBCOptional("ChrRaces.dbc") : nullptr;
+                if (dbc && dbc->isLoaded() && f < dbc->getFieldCount())
+                    for (uint32_t r = 0; r < dbc->getRecordCount(); ++r)
+                        if (dbc->getUInt32(r, 0) == race) { if (const uint32_t s = dbc->getUInt32(r, f)) spell = s; break; }
+            }
+            gh->getSpellName(spell);
+            const auto& cache = gh->spellNameCacheRef();
+            const auto it = cache.find(spell);
+            if (it == cache.end() || (it->second.durationBaseMs == 0 && it->second.durationMaxMs == 0)) { lua_pushnil(L); return 1; }
+            const auto& e = it->second;
+            int32_t ms = e.durationBaseMs + e.durationPerLevelMs * static_cast<int32_t>(gh->getPlayerLevel());
+            if (e.durationMaxMs <= ms) ms = e.durationMaxMs;
+            ms = static_cast<int32_t>(game::spell_mods::apply(static_cast<float>(ms),
+                gh->getSpellModifiers(spell, game::GameHandler::SpellModOp::Duration)));
+            if (ms <= 999) { lua_pushnil(L); return 1; }
+            const game::difficulty_change::Duration d = game::difficulty_change::intDuration(static_cast<uint32_t>(ms));
+            const std::string key = std::string("INT_GENERAL_DURATION") + d.suffix;
+            lua_getglobal(L, key.c_str());
+            const std::string fmt = lua_isstring(L, -1) ? lua_tostring(L, -1) : "%d";
+            lua_pop(L, 1);
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), fmt.c_str(), static_cast<int>(d.value));
+            lua_pushstring(L, buf);
             return 1;
         }},
                 {"DeclineResurrect",    lua_DeclineResurrect},

@@ -13,6 +13,7 @@
 #include "game/power_prediction.hpp"
 #include "game/unit_level_display.hpp"
 #include "game/known_titles.hpp"
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
@@ -262,7 +263,7 @@ static int lua_UnitLevel(lua_State* L) {
 }
 
 static int lua_UnitExists(lua_State* L) {
-    const char* uid = luaL_optstring(L, 1, "player");
+    const char* uid = luaL_optstring(L, 1, "");
     auto* unit = resolveUnit(L, uid);
     // A game object is not a unit, and saying otherwise here does not stop at
     // the name. This client targets objects because its right-click path reads
@@ -461,22 +462,10 @@ static int lua_UnitIsDND(lua_State* L) {
 
 // UnitPlayerControlled(unit) - true for players and player-controlled pets
 static int lua_UnitPlayerControlled(lua_State* L) {
-    const char* uid = luaL_optstring(L, 1, "player");
-    auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnNil(L); }
-    std::string uidStr(uid);
-    toLowerInPlace(uidStr);
-    uint64_t guid = resolveUnitGuid(gh, uidStr);
-    if (guid == 0) { return luaReturnNil(L); }
-    auto entity = gh->getEntityManager().getEntity(guid);
-    if (!entity) { return luaReturnNil(L); }
-    // Players are always player-controlled; pets check UNIT_FLAG_PLAYER_CONTROLLED (0x01000000)
-    if (entity->getType() == game::ObjectType::PLAYER) {
-        luaPushOneOrNil(L, 1);
-    } else {
-        uint32_t flags = entity->getField(game::fieldIndex(game::UF::UNIT_FIELD_FLAGS));
-        luaPushOneOrNil(L, (flags & 0x01000000) != 0);
-    }
+    // UNIT_FLAG_PLAYER_CONTROLLED (0x8) on any unit (0x0060cba0).
+    auto* unit = lua_isstring(L, 1) ? resolveUnit(L, lua_tostring(L, 1)) : nullptr;
+    if (!unit) { return luaReturnNil(L); }
+    luaPushOneOrNil(L, (unit->getField(game::fieldIndex(game::UF::UNIT_FIELD_FLAGS)) & 0x8u) != 0);
     return 1;
 }
 
@@ -493,25 +482,20 @@ static int lua_UnitIsTapped(lua_State* L) {
 // UnitIsTappedByPlayer(unit) - true if tapped by the local player (can loot)
 static int lua_UnitIsTappedByPlayer(lua_State* L) {
     if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitIsTappedByPlayer(\"unit\")");   // 0x006111b0
-    const char* uid = luaL_optstring(L, 1, "target");
-    auto* unit = resolveUnit(L, uid);
+    auto* unit = resolveUnit(L, lua_tostring(L, 1));
     if (!unit) { return luaReturnNil(L); }
-    uint32_t df = unit->getDynamicFlags();
-    // Tapped by player: has TAPPED flag but also LOOTABLE or TAPPED_BY_ALL
-    bool tapped = (df & 0x0004) != 0;
-    bool lootable = (df & 0x0001) != 0;
-    bool sharedTag = (df & 0x0008) != 0;
-    luaPushOneOrNil(L, tapped && (lootable || sharedTag));
+    // UNIT_DYNFLAG_TAPPED_BY_PLAYER (0x8).
+    luaPushOneOrNil(L, (unit->getDynamicFlags() & 0x0008) != 0);
     return 1;
 }
 
 // UnitIsTappedByAllThreatList(unit) - true if shared-tag mob
 static int lua_UnitIsTappedByAllThreatList(lua_State* L) {
     if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitIsTappedByAllThreatList(\"unit\")");   // 0x00611230
-    const char* uid = luaL_optstring(L, 1, "target");
-    auto* unit = resolveUnit(L, uid);
+    auto* unit = resolveUnit(L, lua_tostring(L, 1));
     if (!unit) { return luaReturnNil(L); }
-    luaPushOneOrNil(L, (unit->getDynamicFlags() & 0x0008) != 0);
+    // UNIT_DYNFLAG_TAPPED_BY_ALL_THREAT_LIST (0x80).
+    luaPushOneOrNil(L, (unit->getDynamicFlags() & 0x0080) != 0);
     return 1;
 }
 
@@ -587,13 +571,13 @@ static int lua_UnitThreatSituation(lua_State* L) {
     if (!lua_isstring(L, 1) || !*lua_tostring(L, 1) || (lua_isstring(L, 2) && !*lua_tostring(L, 2)))
         return luaL_error(L, "Usage: UnitThreatSituation(\"unit\" [, \"mob\"])");
     auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnZero(L); }
+    if (!gh) { return 0; }
     const char* uid = luaL_optstring(L, 1, "player");
     const char* mobUid = luaL_optstring(L, 2, nullptr);
     std::string uidStr(uid);
     toLowerInPlace(uidStr);
     uint64_t playerUnitGuid = resolveUnitGuid(gh, uidStr);
-    if (playerUnitGuid == 0) { return luaReturnZero(L); }
+    if (playerUnitGuid == 0) { return 0; }
     // If no mob specified, check general combat threat against current target
     uint64_t mobGuid = 0;
     if (mobUid && *mobUid) {
@@ -611,23 +595,8 @@ static int lua_UnitThreatSituation(lua_State* L) {
         lua_pushnumber(L, standing.status);
         return 1;
     }
-    // Approximate threat: check if the mob is targeting this unit
-    if (mobGuid != 0) {
-        auto mobEntity = gh->getEntityManager().getEntity(mobGuid);
-        if (mobEntity) {
-            if (game::unitTargetGuid(*mobEntity) == playerUnitGuid) {
-                lua_pushnumber(L, 3); // securely tanking
-                return 1;
-            }
-        }
-    }
-    // Check if player is in combat (basic threat indicator)
-    if (playerUnitGuid == gh->getPlayerGuid() && gh->isInCombat()) {
-        lua_pushnumber(L, 1); // in combat but not tanking
-        return 1;
-    }
-    lua_pushnumber(L, 0);
-    return 1;
+    // Not on any threat list: nothing (0x00613a60).
+    return 0;
 }
 
 // UnitDetailedThreatSituation(unit, mobUnit) → isTanking, status, threatPct, rawThreatPct, threatValue
@@ -639,8 +608,7 @@ static int lua_UnitDetailedThreatSituation(lua_State* L) {
     // Use UnitThreatSituation logic for the basics
     auto* gh = getGameHandler(L);
     if (!gh) {
-        luaPushOneOrNil(L, 0); lua_pushnumber(L, 0); lua_pushnumber(L, 0); lua_pushnumber(L, 0); lua_pushnumber(L, 0);
-        return 5;
+        return 0;   // no such unit or mob: nothing (0x00613b40)
     }
     const char* uid = luaL_optstring(L, 1, "player");
     const char* mobUid = luaL_optstring(L, 2, nullptr);
@@ -672,24 +640,8 @@ static int lua_UnitDetailedThreatSituation(lua_State* L) {
         lua_pushnumber(L, standing.threat);
         return 5;
     }
-
-    // No list for this mob yet. The same guess UnitThreatSituation falls back
-    // to, and the same lack of a number behind it.
-    bool isTanking = false;
-    int status = 0;
-    if (unitGuid != 0 && mobGuid != 0) {
-        auto mobEnt = gh->getEntityManager().getEntity(mobGuid);
-        if (mobEnt && game::unitTargetGuid(*mobEnt) == unitGuid) {
-            isTanking = true;
-            status = 3;
-        }
-    }
-    luaPushOneOrNil(L, isTanking);
-    lua_pushnumber(L, status);
-    lua_pushnumber(L, isTanking ? 100.0 : 0.0); // threatPct
-    lua_pushnumber(L, isTanking ? 100.0 : 0.0); // rawThreatPct
-    lua_pushnumber(L, 0); // threatValue - unknown without the list
-    return 5;
+    // Not on its threat list: nothing.
+    return 0;
 }
 
 // CheckInteractDistance(unit, distIndex) → boolean
@@ -762,7 +714,7 @@ static int lua_IsRaidLeader(lua_State* L) {
 
 // UnitIsVisible(unit) → boolean (entity exists in the client's entity manager)
 static int lua_UnitIsVisible(lua_State* L) {
-    const char* uid = luaL_optstring(L, 1, "target");
+    const char* uid = luaL_optstring(L, 1, "");
     auto* unit = resolveUnit(L, uid);
     luaPushOneOrNil(L, unit != nullptr);
     return 1;
@@ -792,7 +744,7 @@ static int lua_UnitGroupRolesAssigned(lua_State* L) {
     };
     auto* gh = getGameHandler(L);
     if (!gh) return pushRoles(false, false, false);
-    const char* uid = luaL_optstring(L, 1, "player");
+    const char* uid = luaL_optstring(L, 1, "");
     std::string uidStr(uid);
     toLowerInPlace(uidStr);
     uint64_t guid = resolveUnitGuid(gh, uidStr);
@@ -895,16 +847,10 @@ static int lua_UnitCreatureFamily(lua_State* L) {
 // UnitOnTaxi(unit) → boolean (true if on a flight path)
 static int lua_UnitOnTaxi(lua_State* L) {
     if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitOnTaxi(\"unit\")");   // 0x0060f350
-    const char* uid = luaL_optstring(L, 1, "player");
-    auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnNil(L); }
-    std::string uidStr(uid);
-    toLowerInPlace(uidStr);
-    if (uidStr == "player") {
-        luaPushOneOrNil(L, gh->isOnTaxiFlight());
-    } else {
-        luaPushOneOrNil(L, 0); // Can't determine for other units
-    }
+    // UNIT_FLAG_TAXI_FLIGHT (0x100000) on any unit.
+    auto* unit = resolveUnit(L, lua_tostring(L, 1));
+    if (!unit) { return luaReturnNil(L); }
+    luaPushOneOrNil(L, (unit->getField(game::fieldIndex(game::UF::UNIT_FIELD_FLAGS)) & 0x00100000u) != 0);
     return 1;
 }
 
@@ -1268,7 +1214,8 @@ static int lua_GetSpellCritChance(lua_State* L) {
     // and anything outside 1..7 - no argument among it - is the usage line.
     const int school = static_cast<int>(lua_tonumber(L, 1));
     if (school < 1 || school > 7) return luaL_error(L, "Usage: GetSpellCritChance(school)");
-    float v = gh ? gh->getSpellCritPct(school) : 0.0f;
+    // School 1 is physical, the first of the seven crit fields.
+    float v = gh ? gh->getSpellCritPct(school - 1) : 0.0f;
     lua_pushnumber(L, v >= 0 ? v : 0.0);
     return 1;
 }
@@ -1283,7 +1230,7 @@ static int lua_GetCombatRating(lua_State* L) {
     if (const long r = std::lround(lua_tonumber(L, 1)); r < 1 || r > 25)
         return luaL_error(L, "ratingIndex is in the range 1 .. %d", 25);
     auto* gh = getGameHandler(L);
-    int cr = static_cast<int>(lua_tonumber(L, 1)) - 1;
+    int cr = static_cast<int>(std::lround(lua_tonumber(L, 1))) - 1;   // rounded (0x0060ddb0)
     int32_t v = gh ? gh->getCombatRating(cr) : 0;
     lua_pushnumber(L, v >= 0 ? v : 0);
     return 1;
@@ -1523,7 +1470,7 @@ static int lua_UnitPVPName(lua_State* L) {
 }
 
 static int lua_UnitIsPlayer(lua_State* L) {
-    const char* uid = luaL_optstring(L, 1, "player");
+    const char* uid = luaL_optstring(L, 1, "");
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnNil(L); }
     std::string uidStr(uid);
@@ -1753,10 +1700,9 @@ static uint64_t guidField(game::GameHandler* gh, uint64_t unitGuid, game::UF fie
 /// UNIT_FIELD_CHARM names what it controls, and it was not read because the
 /// field was not in the table. Both these answered a flat false and said so.
 static int lua_UnitIsPossessed(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    const char* uid = luaL_optstring(L, 1, "player");
-    const uint64_t guid = gh ? resolveUnitGuid(gh, uid) : 0;
-    luaPushOneOrNil(L, guidField(gh, guid, game::UF::UNIT_FIELD_CHARM) != 0);
+    // UNIT_FLAG_POSSESSED (0x01000000) on the unit (0x0060d860).
+    auto* unit = lua_isstring(L, 1) ? resolveUnit(L, lua_tostring(L, 1)) : nullptr;
+    luaPushOneOrNil(L, unit && (unit->getField(game::fieldIndex(game::UF::UNIT_FIELD_FLAGS)) & 0x01000000u));
     return 1;
 }
 
@@ -1771,7 +1717,7 @@ static int lua_UnitIsPossessed(lua_State* L) {
 /// find that out.
 static int lua_UnitIsCharmed(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const char* uid = luaL_optstring(L, 1, "player");
+    const char* uid = luaL_optstring(L, 1, "");
     const uint64_t guid = gh ? resolveUnitGuid(gh, uid) : 0;
     luaPushOneOrNil(L, guidField(gh, guid, game::UF::UNIT_FIELD_CHARMEDBY) != 0);
     return 1;
@@ -1826,7 +1772,7 @@ static int lua_UnitInBattleground(lua_State* L) {
 /// True for a unit in the player's own group, and for its pet. The party
 /// frames use this to decide whether a unit is one of ours at all.
 static int lua_UnitPlayerOrPetInParty(lua_State* L) {
-    const char* uid = luaL_optstring(L, 1, "player");
+    const char* uid = luaL_optstring(L, 1, "");
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnNil(L); }
     std::string uidStr(uid);
@@ -2046,13 +1992,25 @@ static int lua_IsStealthed(lua_State* L) {
 
 static int lua_GetUnitSpeed(lua_State* L) {
     if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetUnitSpeed(\"unit\")");   // 0x00613290
+    // The unit's current speed from its movement state, 0 standing - any
+    // unit (CMovement::GetCurrentSpeed, +0x8c).
     auto* gh = getGameHandler(L);
-    const char* uid = luaL_optstring(L, 1, "player");
-    if (!gh || std::string(uid) != "player") {
-        lua_pushnumber(L, 0);
-        return 1;
+    std::string uid(lua_tostring(L, 1));
+    toLowerInPlace(uid);
+    const uint64_t guid = gh ? resolveUnitGuid(gh, uid) : 0;
+    const auto e = guid ? gh->getEntityManager().getEntity(guid) : nullptr;
+    if (!e) { lua_pushnumber(L, 0); return 1; }
+    uint32_t flags = e->getReportedMoveFlags();
+    game::MovementSpeeds speeds = e->getMovementSpeeds();
+    if (guid == gh->getPlayerGuid()) {
+        flags = gh->getMovementInfo().flags;
+        speeds.run = gh->getServerRunSpeed();
+        speeds.walk = gh->getServerWalkSpeed();
+        speeds.runBack = gh->getServerRunBackSpeed();
+        speeds.swim = gh->getServerSwimSpeed();
+        speeds.flight = gh->getServerFlightSpeed();
     }
-    lua_pushnumber(L, gh->getServerRunSpeed());
+    lua_pushnumber(L, game::Entity::speedForFlags(speeds, flags));
     return 1;
 }
 
@@ -2328,14 +2286,45 @@ static int lua_UnitRangedAttackPower(lua_State* L) {
 /// CR_DEFENSE_SKILL)) and each point is worth 0.04% avoidance. It was a flat
 /// zero, so a geared tank's defense showed only the level cap with no sign of
 /// the defence rating that pushes it to the crit-immunity threshold.
+/// The skill line a weapon of this subclass trains (unarmed with none), and
+/// a skill's value and modifier with a negative total clamped to zero
+/// (0x0071b740's readers for UnitAttackBothHands, UnitRangedAttack and
+/// UnitDefense).
+static uint32_t weaponSkillLine(const game::ItemQueryResponseData* weapon) {
+    if (!weapon || weapon->itemClass != 2) return 162;   // unarmed
+    switch (weapon->subClass) {
+        case 0: return 44;   case 1: return 172;  case 2: return 45;   case 3: return 46;
+        case 4: return 54;   case 5: return 160;  case 6: return 229;  case 7: return 43;
+        case 8: return 55;   case 10: return 136; case 13: return 473; case 15: return 173;
+        case 16: return 176; case 18: return 226; case 19: return 228;
+        default: return 162;
+    }
+}
+static void pushSkillPair(lua_State* L, game::GameHandler* gh, uint32_t line) {
+    const auto& skills = gh->getPlayerSkills();
+    const auto it = skills.find(line);
+    int base = it != skills.end() ? it->second.value : 0;
+    int mod = it != skills.end() ? it->second.bonusTemp + it->second.bonusPerm : 0;
+    if (base + mod < 0) mod = -base;
+    lua_pushnumber(L, base);
+    lua_pushnumber(L, mod);
+}
+/// The skill readers answer for the player only; anyone else is zeros.
+static bool skillUnitIsPlayer(lua_State* L, game::GameHandler* gh) {
+    std::string uid(lua_tostring(L, 1));
+    toLowerInPlace(uid);
+    return gh && resolveUnitGuid(gh, uid) == gh->getPlayerGuid() && gh->getPlayerGuid() != 0;
+}
+static const game::ItemQueryResponseData* wornWeapon(game::GameHandler* gh, game::EquipSlot slot) {
+    const auto& s = gh->getInventory().getEquipSlot(slot);
+    return s.empty() ? nullptr : gh->getItemInfo(s.item.itemId);
+}
+
 static int lua_UnitDefense(lua_State* L) {
     if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitDefense(\"unit\")");   // 0x00610de0
     auto* gh = getGameHandler(L);
-    const int level = gh ? static_cast<int>(gh->getPlayerLevel()) : 1;
-    constexpr int kCrDefenseSkill = 1;  // 0-based CombatRating enum
-    const int modifier = gh ? static_cast<int>(gh->getCombatRatingBonus(kCrDefenseSkill)) : 0;
-    lua_pushnumber(L, level * 5);
-    lua_pushnumber(L, modifier);
+    if (!skillUnitIsPlayer(L, gh)) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); return 2; }
+    pushSkillPair(L, gh, 95);   // Defense
     return 2;
 }
 
@@ -2581,9 +2570,10 @@ static int lua_UnitRangedDamage(lua_State* L) {
 static int lua_UnitRangedAttack(lua_State* L) {
     if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitRangedAttack(\"unit\")");   // 0x006107d0
     auto* gh = getGameHandler(L);
-    const int level = gh ? static_cast<int>(gh->getPlayerLevel()) : 1;
-    lua_pushnumber(L, level * 5);
-    lua_pushnumber(L, 0);
+    if (!skillUnitIsPlayer(L, gh)) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); return 2; }
+    const auto* ranged = wornWeapon(gh, game::EquipSlot::RANGED);
+    if (!ranged || ranged->itemClass != 2) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); return 2; }
+    pushSkillPair(L, gh, weaponSkillLine(ranged));
     return 2;
 }
 
@@ -2592,11 +2582,9 @@ static int lua_UnitRangedAttack(lua_State* L) {
 static int lua_UnitAttackBothHands(lua_State* L) {
     if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitAttackBothHands(\"unit\")");   // 0x00610450
     auto* gh = getGameHandler(L);
-    const int level = gh ? static_cast<int>(gh->getPlayerLevel()) : 1;
-    lua_pushnumber(L, level * 5);
-    lua_pushnumber(L, 0);
-    lua_pushnumber(L, level * 5);
-    lua_pushnumber(L, 0);
+    if (!skillUnitIsPlayer(L, gh)) { for (int i = 0; i < 4; ++i) lua_pushnumber(L, 0); return 4; }
+    pushSkillPair(L, gh, weaponSkillLine(wornWeapon(gh, game::EquipSlot::MAIN_HAND)));
+    pushSkillPair(L, gh, weaponSkillLine(wornWeapon(gh, game::EquipSlot::OFF_HAND)));
     return 4;
 }
 
@@ -2606,9 +2594,12 @@ static int lua_UnitAttackBothHands(lua_State* L) {
 /// interrupted twin), so this reads them rather than modelling the spirit and
 /// intellect formula - it was a flat zero, so every caster's mana regen read 0.
 static int lua_GetManaRegen(lua_State* L) {
+    // 0x00612a90: 0, 0 unless the player's power is mana; each plus 0.001.
     auto* gh = getGameHandler(L);
-    lua_pushnumber(L, gh ? gh->getManaRegen() : 0.0);
-    lua_pushnumber(L, gh ? gh->getManaRegenCasting() : 0.0);
+    const auto me = gh ? gh->getEntityManager().getEntity(gh->getPlayerGuid()) : nullptr;
+    const bool mana = me && ((me->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0)) >> 24) & 0xFFu) == 0;
+    lua_pushnumber(L, mana ? gh->getManaRegen() + 0.001 : 0.0);
+    lua_pushnumber(L, mana ? gh->getManaRegenCasting() + 0.001 : 0.0);
     return 2;
 }
 
@@ -2639,8 +2630,9 @@ static int lua_GetCombatRatingBonus(lua_State* L) {
     if (const long r = std::lround(lua_tonumber(L, 1)); r < 1 || r > 25)
         return luaL_error(L, "ratingIndex is in the range 1 .. %d", 25);
     auto* gh = getGameHandler(L);
-    // Same 1-based CR_* → 0-based table convention as GetCombatRating above.
-    const int cr = static_cast<int>(lua_tonumber(L, 1)) - 1;
+    // Same 1-based CR_* → 0-based table convention as GetCombatRating above,
+    // the index rounded (0x0060de70).
+    const int cr = static_cast<int>(std::lround(lua_tonumber(L, 1))) - 1;
     lua_pushnumber(L, gh ? gh->getCombatRatingBonus(cr) : 0.0);
     return 1;
 }
@@ -2674,7 +2666,8 @@ static int lua_GetUnitManaRegenRateFromSpirit(lua_State* L) {
     auto* gh = getGameHandler(L);
     std::string unit(luaL_optstring(L, 1, "player"));
     toLowerInPlace(unit);
-    lua_pushnumber(L, (gh && unit == "player") ? gh->getManaRegenFromSpirit() : 0.0);
+    // Plus 0.001 (0x00612a00).
+    lua_pushnumber(L, (gh && unit == "player") ? gh->getManaRegenFromSpirit() + 0.001 : 0.0);
     return 1;
 }
 
@@ -3015,7 +3008,17 @@ static int lua_GetMaxCombatRatingBonus(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetMaxCombatRatingBonus(ratingIndex)");   // 0x006082c0
     if (const long r = std::lround(lua_tonumber(L, 1)); r < 1 || r > 25)
         return luaL_error(L, "ratingIndex is in the range 1 .. %d", 25);
-    lua_pushnumber(L, 100);
+    // -1 for every rating but the three crit-taken ones (15-17), whose cap is
+    // the double 0x404080000B000000 (0x006082c0).
+    const long r = std::lround(lua_tonumber(L, 1));
+    if (r >= 15 && r <= 17) {
+        const uint64_t bits = 0x404080000B000000ull;
+        double d;
+        std::memcpy(&d, &bits, sizeof d);
+        lua_pushnumber(L, d);
+    } else {
+        lua_pushnumber(L, -1);
+    }
     return 1;
 }
 
@@ -3088,7 +3091,12 @@ static int lua_GetPetSpellBonusDamage(lua_State* L) {
 }
 
 static int lua_HasFullControl(lua_State* L) {
-    luaPushOneOrNil(L, 1);
+    // 0x00611600: a player that is alive and whose control the server has
+    // not taken away.
+    auto* gh = getGameHandler(L);
+    const auto me = gh ? gh->getEntityManager().getEntity(gh->getPlayerGuid()) : nullptr;
+    const auto* unit = me && me->isUnit() ? static_cast<const game::Unit*>(me.get()) : nullptr;
+    luaPushOneOrNil(L, unit && unit->getHealth() > 0 && gh->isServerMovementAllowed());
     return 1;
 }
 
@@ -3181,7 +3189,7 @@ static int lua_GetNumPartyMembers(lua_State* L) {
 }
 
 static int lua_UnitInParty(lua_State* L) {
-    const char* uid = luaL_optstring(L, 1, "player");
+    const char* uid = luaL_optstring(L, 1, "");
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnNil(L); }
     std::string uidStr(uid);
@@ -3202,24 +3210,22 @@ static int lua_UnitInParty(lua_State* L) {
 }
 
 static int lua_UnitInRaid(lua_State* L) {
-    const char* uid = luaL_optstring(L, 1, "player");
+    // The unit's place in the raid roster, from 0, or nil (0x0060ca20 ->
+    // 0x00608130) - the roster raidN counts from 1.
     auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnFalse(L); }
+    const char* uid = lua_tostring(L, 1);
+    if (!gh || !uid) { return luaReturnNil(L); }
     std::string uidStr(uid);
     toLowerInPlace(uidStr);
-    const auto& pd = gh->getPartyData();
-    if (!game::groupIsRaid(pd.groupType)) { return luaReturnFalse(L); }
-    if (uidStr == "player") {
-        lua_pushboolean(L, 1);
-        return 1;
+    const uint64_t guid = resolveUnitGuid(gh, uidStr);
+    if (guid == 0 || !game::groupIsRaid(gh->getPartyData().groupType)) { return luaReturnNil(L); }
+    for (int n = 1; n <= 40; ++n) {
+        if (resolveUnitGuid(gh, "raid" + std::to_string(n)) == guid) {
+            lua_pushnumber(L, n - 1);
+            return 1;
+        }
     }
-    uint64_t guid = resolveUnitGuid(gh, uidStr);
-    bool found = false;
-    for (const auto& m : pd.members) {
-        if (m.guid == guid) { found = true; break; }
-    }
-    lua_pushboolean(L, found);
-    return 1;
+    return luaReturnNil(L);
 }
 
 // GetRaidRosterInfo(index) → name, rank, subgroup, level, class, fileName,
@@ -3323,13 +3329,15 @@ static int lua_UnregisterUnitWatch(lua_State* L) { (void)L; return 0; }
 static int lua_UnitIsUnit(lua_State* L) {
     if (!lua_isstring(L, 1) || !lua_isstring(L, 2))   // 0x0060c3d0
         return luaL_error(L, "Usage: UnitIsUnit(\"unit\", \"otherUnit\")");
-    auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnNil(L); }
     const char* uid1 = luaL_checkstring(L, 1);
     const char* uid2 = luaL_checkstring(L, 2);
     std::string u1(uid1), u2(uid2);
     toLowerInPlace(u1);
     toLowerInPlace(u2);
+    // The same token is the same unit, whoever is behind it (0x0060c3d0).
+    if (u1 == u2) { lua_pushnumber(L, 1); return 1; }
+    auto* gh = getGameHandler(L);
+    if (!gh) { return luaReturnNil(L); }
     uint64_t g1 = resolveUnitGuid(gh, u1);
     uint64_t g2 = resolveUnitGuid(gh, u2);
     luaPushOneOrNil(L, g1 != 0 && g1 == g2);
@@ -3470,7 +3478,7 @@ static int lua_GetPlayerInfoByGUID(lua_State* L) {
 static int lua_UnitClassification(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { lua_pushstring(L, "normal"); return 1; }
-    const char* uid = luaL_optstring(L, 1, "target");
+    const char* uid = luaL_optstring(L, 1, "");
     std::string uidStr(uid);
     toLowerInPlace(uidStr);
     uint64_t guid = resolveUnitGuid(gh, uidStr);
@@ -3999,7 +4007,7 @@ void registerUnitLuaAPI(lua_State* L) {
         }},
                 {"UnitIsPartyLeader", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const char* uid = luaL_optstring(L, 1, "player");
+            const char* uid = luaL_optstring(L, 1, "");
             std::string uidStr(uid);
             toLowerInPlace(uidStr);
             const uint64_t guid = gh ? resolveUnitGuid(gh, uidStr) : 0;
@@ -4542,12 +4550,25 @@ void registerUnitLuaAPI(lua_State* L) {
                 // and read its stats as a ranged weapon's.
                 {"UnitHasRelicSlot",        [](lua_State* L) -> int {
             if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitHasRelicSlot(\"unit\")");   // 0x00611330
+            // A player unit whose class's ChrClasses flags hold 0x8
+            // (0x00611330).
             auto* gh = getGameHandler(L);
-            const char* uid = luaL_optstring(L, 1, "player");
-            // Only the player's class is known well enough to answer this.
-            if (!gh || std::string(uid) != "player") { luaPushOneOrNil(L, 0); return 1; }
-            const uint8_t c = gh->getPlayerClass();
-            luaPushOneOrNil(L, c == 2 || c == 6 || c == 7 || c == 11);
+            std::string uid(lua_tostring(L, 1));
+            toLowerInPlace(uid);
+            auto* unit = gh ? resolveUnit(L, uid.c_str()) : nullptr;
+            if (!unit || unit->getType() != game::ObjectType::PLAYER) { luaPushOneOrNil(L, 0); return 1; }
+            const uint8_t c = unitClassId(L, gh, uid);
+            auto* am = gh->services().assetManager;
+            const auto* layouts = pipeline::getActiveDBCLayout();
+            const auto* layout = layouts ? layouts->getLayout("ChrClasses") : nullptr;
+            const uint32_t flagsF = layout ? layout->tryField("Flags") : 0xFFFFFFFFu;
+            auto dbc = am && am->isInitialized() ? am->loadDBCOptional("ChrClasses.dbc") : nullptr;
+            bool relic = false;
+            if (dbc && dbc->isLoaded() && flagsF < dbc->getFieldCount()) {
+                for (uint32_t r = 0; r < dbc->getRecordCount(); ++r)
+                    if (dbc->getUInt32(r, 0) == c) { relic = (dbc->getUInt32(r, flagsF) & 0x8u) != 0; break; }
+            }
+            luaPushOneOrNil(L, relic);
             return 1;
         }},
                 // Whether the repair cursor is up. A flat false meant the

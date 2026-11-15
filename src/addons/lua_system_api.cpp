@@ -8359,7 +8359,12 @@ static int lua_GetAddOnMemoryUsage(lua_State* L) {
 // Nothing here can turn it off, so this is a definite no rather than an absent
 // answer - the reputation panel reads it to decide whether to offer the bar.
 static int lua_IsXPUserDisabled(lua_State* L) {
-    lua_pushboolean(L, 0);
+    // PLAYER_FLAGS_NO_XP_GAIN (0x02000000), nothing without a player
+    // (0x00614140).
+    auto* gh = getGameHandler(L);
+    const auto me = gh ? gh->getEntityManager().getEntity(gh->getPlayerGuid()) : nullptr;
+    if (!me) return 0;
+    lua_pushboolean(L, (me->getField(game::fieldIndex(game::UF::PLAYER_FLAGS)) & 0x02000000u) ? 1 : 0);
     return 1;
 }
 
@@ -9757,14 +9762,19 @@ void registerSystemLuaAPI(lua_State* L) {
                 // The renderer knows whether the camera is inside a WMO, and
                 // the macro conditionals [indoors] / [outdoors] have read it
                 // all along. These two answered a flat false and a flat true.
+                // Both nil without a player (0x00612360).
                 {"IsIndoors", [](lua_State* L) -> int {
             auto* svc = getLuaServices(L);
-            luaPushOneOrNil(L, svc && svc->isPlayerIndoors && svc->isPlayerIndoors());
+            auto* gh = getGameHandler(L);
+            const bool me = gh && gh->getEntityManager().getEntity(gh->getPlayerGuid());
+            luaPushOneOrNil(L, me && svc && svc->isPlayerIndoors && svc->isPlayerIndoors());
             return 1;
         }},
                 {"IsOutdoors", [](lua_State* L) -> int {
             auto* svc = getLuaServices(L);
-            luaPushOneOrNil(L, !(svc && svc->isPlayerIndoors && svc->isPlayerIndoors()));
+            auto* gh = getGameHandler(L);
+            const bool me = gh && gh->getEntityManager().getEntity(gh->getPlayerGuid());
+            luaPushOneOrNil(L, me && !(svc && svc->isPlayerIndoors && svc->isPlayerIndoors()));
             return 1;
         }},
                 // IsPossessBarVisible() (0x005a8820): the possess bar's spell
@@ -11681,7 +11691,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"GetArenaCurrency", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             lua_pushnumber(L, gh ? gh->getArenaPoints() : 0);
-            lua_pushnumber(L, 5000);
+            lua_pushnumber(L, 10000);   // the cap (0x0060fcc0)
             return 2;
         }},
                 // GetBindLocation() (0x00516b20): the bind area's name, or the
@@ -11975,8 +11985,13 @@ void registerSystemLuaAPI(lua_State* L) {
                 // Arena team events need a team. No arena team is tracked, so
                 // the honest answer is no and the option stays out of the
                 // create menu rather than leading to a request that fails.
+                // IsInArenaTeam() (0x0060dbf0): any of the player's three
+                // arena team slots holds a team.
                 {"IsInArenaTeam", [](lua_State* L) -> int {
-            lua_pushboolean(L, 0);
+            auto* gh = getGameHandler(L);
+            bool any = false;
+            for (int i = 1; i <= 3 && gh; ++i) any = any || arenaTeamIdAtIndex(gh, i) != 0;
+            lua_pushboolean(L, any ? 1 : 0);
             return 1;
         }},
                 // ---- Opening one event ----
