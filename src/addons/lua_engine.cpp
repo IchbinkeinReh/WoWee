@@ -6,6 +6,7 @@
 #include "ui/text_markup.hpp"
 #include "ui/plural_escape.hpp"
 #include "ui/widget_tree.hpp"
+#include "ui/tooltip_line_strings.hpp"
 #include "ui/interface_fonts.hpp"
 #include "ui/ui_colors.hpp"
 #include "ui/framexml_takeover.hpp"
@@ -829,6 +830,11 @@ wowee::ui::Widget* measuredWidgetOf(lua_State* L, int index) {
 ///
 /// Twenty-two sites across FrameXML and the Blizzard addons write a name this
 /// way, the achievement frame's three columns among them.
+uint32_t makeTooltipLineString(lua_State* L, uint32_t tooltipId, std::size_t line, bool right);
+void syncTooltipLineStrings(lua_State* L, uint32_t tooltipId);
+void syncTooltipLineStringOf(lua_State* L, const wowee::ui::Widget* fontString);
+void tooltipLineStringWritten(lua_State* L, const wowee::ui::Widget* fontString);
+
 uint32_t widgetIdByAnchorName(lua_State* L, int selfIndex, const char* name) {
     auto* tree = wowee::addons::getWidgetTree(L);
     if (!tree || !name) return 0;
@@ -848,11 +854,12 @@ uint32_t widgetIdByAnchorName(lua_State* L, int selfIndex, const char* name) {
         if (const wowee::ui::Widget* w = tree->findByName(resolved)) id = w->id;
     }
     // A tooltip's individual lines. FrameXML anchors to them by name -
-    // SetTooltipMoney puts the coin frame at TextLeft<NumLines()>, and a
-    // tooltip's lines are strings here rather than regions, so the name found
-    // nothing and SetPoint fell back to the tooltip itself: the flight cost
-    // was drawn across the destination's name instead of under it. Stand-ins
-    // are made on demand and given their line's box by the sizing pass.
+    // SetTooltipMoney puts the coin frame at TextLeft<NumLines()> - and a line
+    // past those the tooltip has made so far found nothing, so SetPoint fell
+    // back to the tooltip itself: the flight cost was drawn across the
+    // destination's name instead of under it. The line's font string is made
+    // on demand, as AddLine would make it, and given its line's box by the
+    // sizing pass.
     if (id == 0) {
         const std::string kMark = "TextLeft";
         const size_t at = resolved.rfind(kMark);
@@ -865,9 +872,14 @@ uint32_t widgetIdByAnchorName(lua_State* L, int selfIndex, const char* name) {
                 if (owner && owner->isTooltip && n >= 1 && n <= 64) {
                     if (owner->tooltipLineAnchors.size() < static_cast<size_t>(n))
                         owner->tooltipLineAnchors.resize(static_cast<size_t>(n), 0);
-                    uint32_t& slot = owner->tooltipLineAnchors[static_cast<size_t>(n) - 1];
-                    if (slot == 0)
-                        slot = tree->create(wowee::ui::WidgetKind::Frame, owner->id, resolved);
+                    const uint32_t ownerId = owner->id;
+                    uint32_t slot = owner->tooltipLineAnchors[static_cast<size_t>(n) - 1];
+                    if (slot == 0) {
+                        // Making it grows the tree; the owner is found again.
+                        slot = makeTooltipLineString(L, ownerId, static_cast<size_t>(n), false);
+                        if (auto* again = tree->get(ownerId); again && slot != 0)
+                            again->tooltipLineAnchors[static_cast<size_t>(n) - 1] = slot;
+                    }
                     id = slot;
                 }
             }
@@ -1779,6 +1791,7 @@ const wowee::ui::Widget* textWidgetOf(lua_State* L, int index) {
 }
 
 int lua_Region_GetTextWidth(lua_State* L) {
+    syncTooltipLineStringOf(L, widgetOf(L, 1));
     const auto* w = textWidgetOf(L, 1);
     lua_pushnumber(L, w ? measureTextWidth(w->text, w->fontFace, w->fontHeight) : 0.0);
     return 1;
@@ -2175,6 +2188,144 @@ int lua_Region_IsObjectType(lua_State* L) {
     return 1;
 }
 
+/// One of a tooltip's line font strings, made as AddLine makes the next pair
+/// (0x0061fec0): an ARTWORK font string named "<tooltip>TextLeft<n>" (or
+/// TextRight), in the font of the one above it, hidden, the left one under
+/// the left one above less two units and the right one forty units right of
+/// its line's left one. Published under its name like any other. 0 where the
+/// tooltip has no frame to make it on.
+uint32_t makeTooltipLineString(lua_State* L, uint32_t tooltipId, std::size_t line, bool right) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    const wowee::ui::Widget* tip = tree ? tree->get(tooltipId) : nullptr;
+    if (!tip || tip->name.empty()) return 0;
+    const std::string tipName = tip->name;
+    const std::string name = wowee::ui::tooltipLineStringName(tipName, line, right);
+    const int top = lua_gettop(L);
+    // Made by the client, not by whoever's call caused it.
+    taint::Scope secure(0);
+    pushFrameByWid(L, tooltipId);
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        lua_getglobal(L, tipName.c_str());
+    }
+    if (!lua_istable(L, -1)) { lua_settop(L, top); return 0; }
+    const int tipIdx = lua_gettop(L);
+    lua_getfield(L, tipIdx, "CreateFontString");
+    if (!lua_isfunction(L, -1)) { lua_settop(L, top); return 0; }
+    lua_pushvalue(L, tipIdx);
+    lua_pushstring(L, name.c_str());
+    lua_pushstring(L, "ARTWORK");
+    if (lua_pcall(L, 3, 1, 0) != 0 || !lua_istable(L, -1)) {
+        LOG_WARNING("tooltip line ", name, ": ", lua_isstring(L, -1) ? lua_tostring(L, -1) : "not made");
+        lua_settop(L, top);
+        return 0;
+    }
+    const int fsIdx = lua_gettop(L);
+    const uint32_t id = widgetIdOf(L, fsIdx);
+    // The font of the line above (0x0061fec0 hands the new one the previous
+    // line's font object); the first line has none above it.
+    if (line > 1) {
+        lua_getglobal(L, wowee::ui::tooltipLineStringName(tipName, line - 1, right).c_str());
+        const int prevIdx = lua_gettop(L);
+        if (lua_istable(L, prevIdx)) {
+            lua_getfield(L, prevIdx, "GetFontObject");
+            if (lua_isfunction(L, -1)) {
+                lua_pushvalue(L, prevIdx);
+                if (lua_pcall(L, 1, 1, 0) == 0 && !lua_isnil(L, -1)) {
+                    const int fontIdx = lua_gettop(L);
+                    lua_getfield(L, fsIdx, "SetFontObject");
+                    if (lua_isfunction(L, -1)) {
+                        lua_pushvalue(L, fsIdx);
+                        lua_pushvalue(L, fontIdx);
+                        if (lua_pcall(L, 2, 0, 0) != 0) lua_pop(L, 1);
+                    }
+                }
+            }
+        }
+    }
+    lua_settop(L, top);
+    tree = wowee::addons::getWidgetTree(L);
+    wowee::ui::Widget* fs = tree ? tree->get(id) : nullptr;
+    if (!fs) return id;
+    fs->shown = false;
+    wowee::ui::Anchor a;
+    if (right) {
+        const wowee::ui::Widget* left =
+            tree->findByName(wowee::ui::tooltipLineStringName(tipName, line, false));
+        a.point = "RIGHT";
+        a.relativeTo = left ? left->id : tooltipId;
+        a.relativePoint = "LEFT";
+        a.x = 40.0f;
+    } else {
+        const wowee::ui::Widget* above =
+            line > 1 ? tree->findByName(wowee::ui::tooltipLineStringName(tipName, line - 1, false)) : nullptr;
+        a.point = "TOPLEFT";
+        a.relativeTo = above ? above->id : tooltipId;
+        a.relativePoint = above ? "BOTTOMLEFT" : "TOPLEFT";
+        a.y = above ? -2.0f : 0.0f;
+    }
+    tree->clearPoints(id);
+    tree->addPoint(id, a);
+    return id;
+}
+
+/// The tooltip's lines written into its line font strings, made where
+/// missing (ui/tooltip_line_strings.hpp). The stack is left as found.
+void syncTooltipLineStrings(lua_State* L, uint32_t tooltipId) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    if (!tree || tooltipId == 0) return;
+    const wowee::ui::Widget* tip = tree->get(tooltipId);
+    if (!tip || tip->objectType != "GameTooltip" || tip->name.empty()) return;
+    const int top = lua_gettop(L);
+    wowee::ui::mirrorTooltipLines(*tree, tooltipId, [L, tooltipId](std::size_t line, bool right) {
+        return makeTooltipLineString(L, tooltipId, line, right);
+    });
+    lua_settop(L, top);
+}
+
+/// A line font string about to be read: its tooltip's lines written into it
+/// first, so it answers what the tooltip holds now.
+void syncTooltipLineStringOf(lua_State* L, const wowee::ui::Widget* fontString) {
+    if (fontString && fontString->tooltipLineOwner != 0)
+        syncTooltipLineStrings(L, fontString->tooltipLineOwner);
+}
+
+/// A line font string just written: the write carried into its line.
+void tooltipLineStringWritten(lua_State* L, const wowee::ui::Widget* fontString) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    if (tree && fontString && fontString->tooltipLineOwner != 0)
+        wowee::ui::tooltipLineStringChanged(*tree, *fontString);
+}
+
+/// The C bindings that fill or change a tooltip's lines. Each is installed
+/// through tooltipMethodTrampoline, so the line font strings hold the lines as
+/// soon as the call returns - an addon reading TextLeft2 straight after
+/// SetHyperlink reads what it just asked for.
+std::vector<lua_CFunction>& tooltipMethodTargets() {
+    static std::vector<lua_CFunction> targets;
+    return targets;
+}
+
+int tooltipMethodTrampoline(lua_State* L) {
+    const auto at = static_cast<std::size_t>(lua_tointeger(L, lua_upvalueindex(1)));
+    const auto& targets = tooltipMethodTargets();
+    if (at >= targets.size()) return 0;
+    const uint32_t tooltipId = widgetIdOf(L, 1);
+    const int results = targets[at](L);
+    // Above the results and back down to them.
+    if (tooltipId != 0) syncTooltipLineStrings(L, tooltipId);
+    return results;
+}
+
+/// Pushes a tooltip binding wrapped as above.
+void pushTooltipMethod(lua_State* L, lua_CFunction fn) {
+    auto& targets = tooltipMethodTargets();
+    auto it = std::find(targets.begin(), targets.end(), fn);
+    if (it == targets.end()) it = targets.insert(targets.end(), fn);
+    lua_pushinteger(L, static_cast<lua_Integer>(it - targets.begin()));
+    lua_pushcclosure(L, tooltipMethodTrampoline, 1);
+}
+
 /// Runs a frame's own handler, given its table already on the stack.
 ///
 /// Separate from callFrameScript, which starts from a widget id and looks the
@@ -2186,6 +2337,10 @@ static void callScriptOnTable(lua_State* L, int tableIdx, const char* script,
     // Positive indices only, which is all any caller here has: lua_absindex
     // is 5.2 and this is 5.1.
     const int abs = tableIdx;
+    // A tooltip's own scripts read its lines through the line font strings -
+    // OnTooltipSetUnit colours TextLeft1, an addon's OnTooltipSetItem scans
+    // them - so those hold the lines before the script runs.
+    if (std::strncmp(script, "OnTooltip", 9) == 0) syncTooltipLineStrings(L, widgetIdOf(L, abs));
     // Reached as the client reaches a script, by reference: finding it taints
     // nobody, and the caller is left as it was found (0x0048ec10).
     taint::Quiet quiet;
@@ -6773,6 +6928,7 @@ int lua_Region_Show(lua_State* L) {
         if (auto* tree = wowee::addons::getWidgetTree(L)) tree->markVisibilityPending(w->id);
         becameShown = !w->shown;
         w->shown = true;
+        tooltipLineStringWritten(L, w);
     }
     lua_pushboolean(L, 1); lua_setfield(L, 1, "__visible");
     // A frame shown to play a model animation has already finished it.
@@ -6864,11 +7020,13 @@ int lua_Region_Hide(lua_State* L) {
             lua_setfield(L, 1, "__owner");
         }
         w->shown = false;
+        tooltipLineStringWritten(L, w);
     }
     lua_pushboolean(L, 0); lua_setfield(L, 1, "__visible");
     return 0;
 }
 int lua_Region_IsShown(lua_State* L) {
+    syncTooltipLineStringOf(L, widgetOf(L, 1));
     const auto* w = widgetOf(L, 1);
     luaPushOneOrNil(L, w ? (w->shown ? 1 : 0) : 0);
     return 1;
@@ -6886,6 +7044,7 @@ int lua_Region_IsShown(lua_State* L) {
 /// is only right after a layout pass - a frame shown and asked in the same
 /// handler would otherwise answer no.
 int lua_Region_IsVisible(lua_State* L) {
+    syncTooltipLineStringOf(L, widgetOf(L, 1));
     const auto* w = widgetOf(L, 1);
     auto* tree = wowee::addons::getWidgetTree(L);
     bool on = w != nullptr && w->shown;
@@ -7292,7 +7451,11 @@ int lua_FontString_SetText(lua_State* L) {
     // chatconfigframe's whole OnEvent.
     const char* text = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
     const std::string shown = wowee::ui::resolvePluralEscapes(text);
-    if (auto* w = widgetToRemeasure(L, 1)) w->text = shown;
+    if (auto* w = widgetToRemeasure(L, 1)) {
+        w->text = shown;
+        // A tooltip's line: the tooltip draws what the interface wrote.
+        tooltipLineStringWritten(L, w);
+    }
     // GetText answers what was set, not what is drawn. WoW resolves the escape
     // on the way to the screen and hands the original back, and FrameXML reads
     // its own labels back in a few places to re-format them.
@@ -7300,9 +7463,16 @@ int lua_FontString_SetText(lua_State* L) {
     lua_setfield(L, 1, "_text");
     return 0;
 }
+/// GetText() -> the text, or nil for none (0x0048d730 pushes a null for an
+/// empty string). A tooltip's line answers the line as the tooltip holds it.
 int lua_FontString_GetText(lua_State* L) {
+    syncTooltipLineStringOf(L, widgetOf(L, 1));
     const auto* w = widgetOf(L, 1);
-    lua_pushstring(L, w ? w->text.c_str() : "");
+    if (!w || w->text.empty()) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_pushstring(L, w->text.c_str());
     return 1;
 }
 namespace {
@@ -7359,6 +7529,7 @@ int lua_FontString_GetJustifyH(lua_State* L) {
 /// SetTextColor() with no arguments - which defaults to white rather than to
 /// the colour the font object actually carries.
 int lua_FontString_GetTextColor(lua_State* L) {
+    syncTooltipLineStringOf(L, widgetOf(L, 1));
     auto* tree = wowee::addons::getWidgetTree(L);
     wowee::ui::Widget* w = widgetOf(L, 1);
     // A button colours the label it holds, exactly as the setter does.
@@ -7405,6 +7576,9 @@ int lua_FontString_SetTextColor(lua_State* L) {
         w->color[1] = static_cast<float>(luaL_optnumber(L, 3, 1.0));
         w->color[2] = static_cast<float>(luaL_optnumber(L, 4, 1.0));
         w->color[3] = static_cast<float>(luaL_optnumber(L, 5, 1.0));
+        // A tooltip's line - TextLeft1 coloured by reaction in
+        // OnTooltipSetUnit - takes the colour where it is drawn.
+        tooltipLineStringWritten(L, w);
     }
     return 0;
 }
@@ -11267,10 +11441,37 @@ void LuaEngine::registerCoreAPI() {
         {"CreateFontString", lua_Frame_CreateFontString},
         {nullptr, nullptr}
     };
+    // The bindings that fill or change a tooltip's lines, installed so that
+    // the line font strings hold the lines when they return
+    // (tooltipMethodTrampoline).
+    static const lua_CFunction kTooltipFillers[] = {
+        lua_Tooltip_AddLine, lua_Tooltip_AddDoubleLine, lua_Tooltip_AddTexture,
+        lua_Tooltip_AppendText, lua_Tooltip_ClearLines, lua_Tooltip_NumLines,
+        lua_Tooltip_SetOwner, lua_Tooltip_SetAction, lua_Tooltip_SetInventoryItem,
+        lua_Tooltip_SetBagItem, lua_Tooltip_SetQuestLogSpecialItem, lua_Tooltip_SetSocketGem,
+        lua_Tooltip_SetExistingSocketGem, lua_Tooltip_SetSocketedItem, lua_Tooltip_SetCurrencyToken,
+        lua_Tooltip_SetBackpackToken, lua_Tooltip_SetGuildBankItem, lua_Tooltip_SetSpellByID,
+        lua_Tooltip_SetQuestLogRewardSpell, lua_Tooltip_SetEquipmentSet,
+        lua_Tooltip_SetLFGCompletionReward, lua_Tooltip_SetGlyph, lua_Tooltip_SetHyperlink,
+        lua_Tooltip_SetTalent, lua_Tooltip_SetAuctionItem, lua_Tooltip_AppendItemEnchants,
+        lua_Tooltip_AppendEquippedEnchants, lua_Tooltip_SetTradeSkillItem, lua_Tooltip_SetUnit,
+        lua_Tooltip_SetFrameStack, lua_Tooltip_SetUnitAura, lua_Tooltip_SetSendMailItem,
+        lua_Tooltip_SetPetAction, lua_Tooltip_SetShapeshift, lua_Tooltip_AdoptFontStrings,
+        lua_Tooltip_SetPossession, lua_Tooltip_SetQuestRewardSpell, lua_Tooltip_SetTotem,
+        lua_Tooltip_SetText,
+    };
+    const auto pushMethod = [this](lua_CFunction fn) {
+        if (std::find(std::begin(kTooltipFillers), std::end(kTooltipFillers), fn) !=
+            std::end(kTooltipFillers)) {
+            pushTooltipMethod(L_, fn);
+        } else {
+            lua_pushcfunction(L_, fn);
+        }
+    };
     auto applyFrameMethods = [&]() {
         lua_getglobal(L_, "__WoweeFrameMT");
         for (const luaL_Reg* r = frameMethods; r->name; r++) {
-            lua_pushcfunction(L_, r->func);
+            pushMethod(r->func);
             lua_setfield(L_, -2, r->name);
         }
         addTabardModelMethods(L_);
@@ -11278,7 +11479,7 @@ void LuaEngine::registerCoreAPI() {
     };
 
     for (const luaL_Reg* r = frameMethods; r->name; r++) {
-        lua_pushcfunction(L_, r->func);
+        pushMethod(r->func);
         lua_setfield(L_, -2, r->name);
     }
     addTabardModelMethods(L_);
@@ -12617,6 +12818,20 @@ void LuaEngine::registerCoreAPI() {
     lua_setglobal(L_, "__WoweeTooltipSetText");
     lua_pushcfunction(L_, lua_EditBox_GetText);
     lua_setglobal(L_, "__WoweeEditGetText");
+    // The tooltip builders the bootstrap Lua calls by these names fill lines
+    // too, so they hold the line font strings to the lines the same way.
+    for (const char* builder :
+         {"__WoweeTooltipSetSpellByID", "__WoweeTooltipSetUnitAura", "__WoweeTooltipSetSendMailItem",
+          "__WoweeTooltipSetPetAction", "__WoweeTooltipSetShapeshift", "__WoweeTooltipAdoptFontStrings",
+          "__WoweeTooltipSetPossession", "__WoweeTooltipSetQuestRewardSpell", "__WoweeTooltipSetTotem",
+          "__WoweeTooltipSetText"}) {
+        lua_getglobal(L_, builder);
+        const lua_CFunction fn = lua_tocfunction(L_, -1);
+        lua_pop(L_, 1);
+        if (fn == nullptr) continue;
+        pushMethod(fn);
+        lua_setglobal(L_, builder);
+    }
 
     lua_pushcfunction(L_, lua_CreateFrame);
     lua_setglobal(L_, "CreateFrame");
@@ -14863,6 +15078,7 @@ void LuaEngine::worldMouseoverChanged(uint64_t oldGuid, uint64_t newGuid, Mouseo
     if (kind == MouseoverKind::GameObject) {
         callFrameScript(wid, "OnTooltipSetDefaultAnchor");
         if (auto* w = widgets_.get(wid)) fillGameObjectTooltip(L_, w, gh, newGuid);
+        syncTooltipLineStrings(L_, wid);
         return;
     }
     if (kind == MouseoverKind::Corpse) {
@@ -14891,6 +15107,7 @@ void LuaEngine::worldMouseoverChanged(uint64_t oldGuid, uint64_t newGuid, Mouseo
         for (int i = 0; i < 4; ++i) line.lc[i] = line.rc[i] = 1.0f;
         w->tooltipLines.push_back(std::move(line));
         w->shown = true;
+        syncTooltipLineStrings(L_, wid);
         return;
     }
     callFrameScript(wid, "OnTooltipSetDefaultAnchor");

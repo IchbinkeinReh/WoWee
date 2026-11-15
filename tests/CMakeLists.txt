@@ -803,6 +803,14 @@ target_link_libraries(test_widget_tree PRIVATE catch2_main)
 add_test(NAME widget_tree COMMAND test_widget_tree)
 register_test_target(test_widget_tree)
 
+# ── test_tooltip_line_strings ───────────────────────────────
+# A tooltip's lines held by its TextLeft<n> / TextRight<n> font strings.
+wowee_add_test(test_tooltip_line_strings SOURCES
+    test_tooltip_line_strings.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/tooltip_line_strings.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/widget_tree.cpp
+)
+
 # ── test_text_edit ──────────────────────────────────────────
 wowee_add_test(test_text_edit SOURCES
     test_text_edit.cpp

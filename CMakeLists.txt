@@ -1170,6 +1170,7 @@ set(WOWEE_SOURCES
     src/ui/map_window.cpp
     src/ui/ui_upload_budget.cpp
     src/ui/widget_tree.cpp
+    src/ui/tooltip_line_strings.cpp
     src/ui/xml_parser.cpp
     src/ui/framexml_emitter.cpp
     src/ui/framexml_takeover.cpp

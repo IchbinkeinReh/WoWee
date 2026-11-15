@@ -527,8 +527,10 @@ void WidgetRenderer::sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree
         // it ever set a height, the box kept whatever size it had, and the
         // lines past that drew below its bottom edge.
         if (line.wrap) continue;
-        float wide = measure(line.left) + (line.icon.empty() ? 0.0f : size + 2.0f);
-        if (!line.right.empty()) {
+        // A side whose font string is hidden keeps its row and adds no width.
+        float wide = (line.leftVisible() ? measure(line.left) : 0.0f) +
+                     (line.icon.empty() ? 0.0f : size + 2.0f);
+        if (!line.right.empty() && line.rightVisible()) {
             // Left and right text share a line with a gap between them.
             wide += 20.0f + measure(line.right);
         }
@@ -614,13 +616,13 @@ void WidgetRenderer::sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree
     // GameTooltipTextLeft<n> is a real FontString - the template declares
     // the first two and anything past that is made on demand - and
     // FrameXML anchors to them by name: SetTooltipMoney hangs the coin
-    // frame off TextLeft<NumLines()>. The text of a line lives in
-    // tooltipLines here and is drawn from there, so those FontStrings hold
-    // nothing, size to nothing, and the template's own chain chases that:
-    // TextLeft2 sits at TextLeft1's BOTTOMLEFT less two units, and with
-    // every height zero the whole column collapses into the top of the
-    // tooltip two units apart. The flight cost was drawn across the
-    // destination's name for exactly that reason.
+    // frame off TextLeft<NumLines()>. The text of a line is drawn from
+    // tooltipLines here; the font strings hold a copy of it for the
+    // interface (mirrorTooltipLines) and are not drawn, so their own sizes
+    // do not follow the rows. The template's chain - TextLeft2 at
+    // TextLeft1's BOTTOMLEFT less two units - then puts each where the rows
+    // are not: the flight cost was drawn across the destination's name for
+    // exactly that reason.
     //
     // Their own anchors are replaced rather than their heights corrected,
     // so the boxes agree with the rows actually drawn instead of
@@ -2488,6 +2490,11 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
     for (const Widget* w : order) {
         // A title region draws nothing; it is only where the frame is held.
         if (w->isTitleRegion) continue;
+        // A tooltip's line font strings hold its lines for the interface to
+        // read and write; the tooltip draws those lines itself (see
+        // ui/tooltip_line_strings.hpp), so drawn here as well each line would
+        // be on screen twice.
+        if (w->tooltipLineOwner != 0) continue;
         // A region in a layer its frame has disabled is not drawn.
         if ((w->kind == WidgetKind::Texture || w->kind == WidgetKind::FontString) && w->parent) {
             const Widget* owner = tree.get(w->parent);
@@ -2724,10 +2731,14 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                         }
                         textX += size + 2.0f;
                     }
-                    drawMarkupText(dl, font, size, ImVec2(textX, y),
-                                   packColor(lc, w->alpha), w->alpha, line.left,
-                                   line.wrap ? textW : 0.0f);
-                    if (!line.right.empty()) {
+                    // A side whose font string was hidden keeps its row
+                    // and shows nothing, as a hidden region does.
+                    if (line.leftVisible()) {
+                        drawMarkupText(dl, font, size, ImVec2(textX, y),
+                                       packColor(lc, w->alpha), w->alpha, line.left,
+                                       line.wrap ? textW : 0.0f);
+                    }
+                    if (!line.right.empty() && line.rightVisible()) {
                         float rc[4] = {line.rc[0], line.rc[1], line.rc[2], line.rc[3]};
                         const float rw = font->CalcTextSizeA(
                             size, FLT_MAX, 0.0f, strippedText(line.right).c_str()).x;

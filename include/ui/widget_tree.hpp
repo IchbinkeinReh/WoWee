@@ -691,6 +691,18 @@ struct Widget {
         /// Lines the wrap produced, filled by the sizing pass so the draw and
         /// the height agree on how tall this line is.
         mutable int lines = 1;
+        /// Whether each side's font string (<name>TextLeft<n>, TextRight<n>)
+        /// is shown, once something other than AddLine has decided it - a
+        /// Show or Hide on it, or a write to it, which carries its state
+        /// over. -1 is AddLine's own rule: shown where the side has text
+        /// (0x0061fec0). A hidden side keeps its row and draws nothing.
+        int8_t leftShown = -1, rightShown = -1;
+        [[nodiscard]] bool leftVisible() const {
+            return leftShown < 0 ? !left.empty() : leftShown != 0;
+        }
+        [[nodiscard]] bool rightVisible() const {
+            return rightShown < 0 ? !right.empty() : rightShown != 0;
+        }
     };
     std::vector<TooltipLine> tooltipLines;
     /// Where an item tooltip's enchants go: the line its sockets start at,
@@ -706,6 +718,17 @@ struct Widget {
     /// i holds the region standing in for line i + 1; the sizing pass gives
     /// each one the box its line occupies.
     std::vector<uint32_t> tooltipLineAnchors;
+    /// GameTooltipTextRight1..N the same way, index i for line i + 1. Both
+    /// are the line font strings mirrorTooltipLines writes the lines into
+    /// (ui/tooltip_line_strings.hpp).
+    std::vector<uint32_t> tooltipRightStrings;
+    /// On a font string standing for a tooltip line: that tooltip, the line
+    /// (from 0) and the side. The tooltip draws the line itself, so a font
+    /// string with an owner is not drawn on its own; a write to it is carried
+    /// into the line (tooltipLineStringChanged). 0 for any other font string.
+    uint32_t tooltipLineOwner = 0;
+    uint32_t tooltipLineIndex = 0;
+    bool tooltipLineRight = false;
     /// A floor on the width the sizing pass may settle on, from
     /// SetMinimumWidth. FrameXML uses it to keep a money frame from being
     /// clipped by a tooltip narrower than the coins it is about to draw:
