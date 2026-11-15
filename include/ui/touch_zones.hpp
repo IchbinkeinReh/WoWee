@@ -46,25 +46,4 @@ inline Half halfAt(float x, const Area& area) {
     return x < splitX(area) ? Half::Move : Half::Look;
 }
 
-/// How far a held look stick turns the view in one update, in the pixels a
-/// mouse drag would have moved - the camera takes those through the player's
-/// own sensitivity, so the stick respects it.
-///
-/// A stick held at a deflection turns at a rate rather than one-to-one: a stick
-/// that had to keep moving to keep turning would be a drag with a ring drawn on
-/// it. Inside the deadzone nothing turns, and past it the turn starts from
-/// nothing, so the ring's edge is not a jump.
-struct Turn {
-    float dx = 0.0f;
-    float dy = 0.0f;
-};
-inline Turn lookStickTurn(float stickX, float stickY, float deadzone, float pixelsPerSecond,
-                          float seconds) {
-    const float mag = std::hypot(stickX, stickY);
-    if (mag <= deadzone || seconds <= 0.0f || deadzone >= 1.0f) return {};
-    const float gain = (std::fmin(mag, 1.0f) - deadzone) / (1.0f - deadzone);
-    const float step = pixelsPerSecond * seconds * gain;
-    return Turn{stickX / mag * step, stickY / mag * step};
-}
-
 }  // namespace wowee::ui::touch

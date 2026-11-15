@@ -128,7 +128,6 @@ bool TouchControls::handleEvent(const SDL_Event& event, int windowWidth, int win
                 lookIsStick_ = false;
                 lookX_ = lookOriginX_ = x;
                 lookY_ = lookOriginY_ = y;
-                lookStickX_ = lookStickY_ = 0.0f;
                 lookMoved_ = false;
                 lookTravel_ = 0.0f;
                 lookDownMs_ = SDL_GetTicks();
@@ -153,7 +152,6 @@ bool TouchControls::handleEvent(const SDL_Event& event, int windowWidth, int win
             lookIsStick_ = true;
             lookX_ = lookOriginX_ = x;
             lookY_ = lookOriginY_ = y;
-            lookStickX_ = lookStickY_ = 0.0f;
             lookMoved_ = false;
             lookTravel_ = 0.0f;
             lookDownMs_ = SDL_GetTicks();
@@ -198,7 +196,6 @@ bool TouchControls::handleEvent(const SDL_Event& event, int windowWidth, int win
             lookFingerId_ = kNoFinger;
             lookIsStick_ = false;
             lookMoved_ = false;
-            lookStickX_ = lookStickY_ = 0.0f;
             // The finger is off, so SDL has let go of its left button and
             // there is nothing left to read as up.
             unmaskLeft();
@@ -228,12 +225,17 @@ bool TouchControls::handleEvent(const SDL_Event& event, int windowWidth, int win
                 letHeldPressThrough();
             }
         }
+        // The view follows the finger one to one, the way a held mouse button
+        // drags it: no rate, no centre to come back to. Only once it is a
+        // push, so a tap on a target does not swing the view, and not while
+        // the finger is half of a pinch, which zooms.
+        if (lookIsStick_ && lookMoved_ && pinchA_ != id && inWorld_ && camera_) {
+            const float dx = x - lookX_;
+            const float dy = y - lookY_;
+            if (dx != 0.0f || dy != 0.0f) camera_->applyLookDelta(dx, dy);
+        }
         lookX_ = x;
         lookY_ = y;
-        if (lookIsStick_ && pinchA_ != id) {
-            lookStickX_ = std::clamp((x - lookOriginX_) / radius, -1.0f, 1.0f);
-            lookStickY_ = std::clamp((y - lookOriginY_) / radius, -1.0f, 1.0f);
-        }
     } else if (id == pinchB_) {
         pinchBX_ = x;
         pinchBY_ = y;
@@ -342,7 +344,6 @@ void TouchControls::endPinch() {
     if (pinchA_ == lookFingerId_ && lookFingerId_ != kNoFinger) {
         lookOriginX_ = lookX_;
         lookOriginY_ = lookY_;
-        lookStickX_ = lookStickY_ = 0.0f;
     }
     pinchA_ = pinchB_ = kNoFinger;
 }
@@ -417,21 +418,6 @@ void TouchControls::update() {
     if (leftPress_.update() == touch::PressStep::Deliver) letHeldPressThrough();
     updateLongPress();
 
-    // The camera stick turns at a rate, so it needs the time since the last
-    // update; a frame held up by a load is not a second and a half of turning.
-    const uint64_t nowNs = SDL_GetTicksNS();
-    const float seconds = lastUpdateNs_ == 0
-        ? 0.0f
-        : std::min(static_cast<float>(nowNs - lastUpdateNs_) * 1e-9f, 0.1f);
-    lastUpdateNs_ = nowNs;
-
-    if (inWorld_ && isLookStickHeld() && camera_ &&
-        !(pinchA_ != kNoFinger && !pinchOfMoveStick_)) {
-        const touch::Turn turn = touch::lookStickTurn(lookStickX_, lookStickY_, kLookDeadzone,
-                                                      kLookStickPixelsPerSecond, seconds);
-        if (turn.dx != 0.0f || turn.dy != 0.0f) camera_->applyLookDelta(turn.dx, turn.dy);
-    }
-
     if (!inWorld_ || stickFingerId_ == kNoFinger ||
         (pinchA_ != kNoFinger && pinchOfMoveStick_)) {
         wasForward_ = wasBack_ = wasLeft_ = wasRight_ = false;
@@ -486,10 +472,9 @@ void TouchControls::draw() const {
         dl->AddCircle(origin, radius * kStrafeDeadzone, IM_COL32(255, 255, 255, 35), 40, 2.0f);
         dl->AddCircleFilled(knob, radius * 0.28f, IM_COL32(255, 255, 255, 95), 32);
     };
+    // Only the movement stick: the right thumb drags the view directly and
+    // has no stick to show.
     if (stickFingerId_ != kNoFinger) ring(stickOriginX_, stickOriginY_, stickX_, stickY_);
-    // The camera stick once it is being pushed: a finger resting there may be
-    // a tap or a long press, which have their own ring.
-    if (isLookStickHeld() && lookMoved_) ring(lookOriginX_, lookOriginY_, lookStickX_, lookStickY_);
 }
 
 void TouchControls::reset() {
@@ -498,7 +483,6 @@ void TouchControls::reset() {
     lookIsStick_ = false;
     lookMoved_ = false;
     lookTravel_ = 0.0f;
-    lookStickX_ = lookStickY_ = 0.0f;
     pinchA_ = pinchB_ = kNoFinger;
     stickX_ = stickY_ = 0.0f;
     wasForward_ = wasBack_ = wasLeft_ = wasRight_ = false;
