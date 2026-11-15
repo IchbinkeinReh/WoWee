@@ -92,6 +92,7 @@
 #include "addons/lua_api_registrations.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "addons/addon_manager.hpp"
+#include "addons/lua_taint.hpp"
 #include "addons/lua_api_helpers.hpp"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -7816,7 +7817,17 @@ void Application::render() {
         } else if (nextRun >= 0.0 && now >= nextRun && addonManager_ && addonManager_->getLuaEngine()) {
             LOG_WARNING("WOWEE_AUTO_LUA: running ", autoLua);
             addonManager_->getLuaEngine()->executeString("__WoweeTestSession=" + std::to_string(session));
-            addonManager_->getLuaEngine()->executeString(autoLua);
+            // Under /run's taint (0x00510b30), not none. The line is typed by
+            // someone, not shipped by Blizzard: run with no taint it was the
+            // interface's own code, so whatever it reached through an addon's
+            // function - CloseAllBags is WoweeAllBags's - took that addon's
+            // taint into the script's own state, and a protected call it made
+            // seconds later was ADDON_ACTION_FORBIDDEN against WoweeAllBags. A
+            // closure /run makes holds its taint while it runs (0x00857ca0), so
+            // the refusal now names the script: MACRO_ACTION_FORBIDDEN, as a
+            // typed /run InteractUnit("target") is. Protected actions are for
+            // the keys (__WoweePressKey), whose bindings run secure.
+            addonManager_->getLuaEngine()->runScriptAs(autoLua, addons::taint::macro());
             const char* repeat = std::getenv("WOWEE_AUTO_LUA_REPEAT");
             const double every = (repeat && *repeat) ? std::atof(repeat) : 0.0;
             nextRun = every > 0.0 ? now + every : -1.0;
