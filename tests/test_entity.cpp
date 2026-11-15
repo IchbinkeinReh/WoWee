@@ -110,6 +110,26 @@ TEST_CASE("A unit's speed follows its flags as GetCurrentSpeed picks it",
     REQUIRE(Entity::speedForFlags(speeds, kForward | kWalking) == Catch::Approx(2.0f));
 }
 
+TEST_CASE("Only a unit moved by its flags is moved as the collision moves it",
+          "[entity][movement]") {
+    // 0x006e9e20: a unit on a spline is set at the spline's point as it is,
+    // one moved on by its flags goes through the collision; a unit moved
+    // towards a packet's position is neither.
+    Entity e;
+    e.setPosition(0.0f, 0.0f, 0.0f, 0.0f);
+    const std::vector<std::array<float, 3>> path = {
+        {{2.0f, 0.0f, 1.0f}}, {{4.0f, 0.0f, 2.0f}}};
+    e.startMoveAlongPath(path, 0.0f, 2.0f);
+    REQUIRE(e.isActivelyMoving());
+    REQUIRE_FALSE(e.isMovingByFlags());
+    e.startMoveTo(6.0f, 0.0f, 0.0f, 0.0f, 1.0f);
+    REQUIRE_FALSE(e.isMovingByFlags());
+    e.startMoveByFlags(6.0f, 0.0f, 0.0f, 0.0f, kForward, 0, 0.12f);
+    REQUIRE(e.isMovingByFlags());
+    e.setPosition(6.0f, 0.0f, 0.0f, 0.0f);
+    REQUIRE_FALSE(e.isMovingByFlags());
+}
+
 TEST_CASE("A player starts moving on its start packet", "[entity][movement]") {
     // A start packet has no displacement: the unit moves from it at its
     // speed, not from the next heartbeat.

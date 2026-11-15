@@ -486,6 +486,25 @@ float heightOverFloor(const game::Entity& entity, float z, float floorZ) {
     return entity.isFallingByFlags() ? std::max(z, floorZ) : floorZ;
 }
 
+// Whether a moving unit is drawn on the floor found under it, or where its
+// movement puts it.
+//
+// The client moves another unit each frame in CMovement's update (0x006eac40).
+// On a spline it takes the point the spline gives for the time (0x006e9c30 ->
+// 0x0098ca00: the curve or the straight line between the server's points,
+// its height changed only by a falling or parabolic spline's gravity) and
+// 0x006e9e20 sets the unit there as it is - no collision and no floor below
+// it - for every unit but the one the player moves. Moved on by its flags
+// instead - another player between its packets - the same 0x006e9e20 sends
+// it through the collision (0x00762e00 -> 0x007620f0), which keeps it on the
+// ground it walks over; the floor found here stands in for that.
+//
+// A unit moved towards a packet's position is not moved by the client at all
+// (it is set where the packet says), so it keeps the packet's height as well.
+bool unitOnFloorWhileMoving(const game::Entity& entity) {
+    return entity.isMovingByFlags();
+}
+
 std::optional<float> movingEntityFloor(rendering::Renderer* renderer,
                                         const glm::vec3& renderPos,
                                         const std::optional<glm::vec3>& previousRenderPos) {
@@ -5657,18 +5676,17 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                     ? std::optional<glm::vec3>(posIt->second)
                     : std::nullopt;
 
-            // Ground-moving entities need client floor projection between server
-            // spline points. Use the floor nearest server Z so outdoor terrain
-            // above a tunnel cannot move the model into/onto the WMO shell.
-            // A creature riding (UNIT_FIELD_MOUNTDISPLAYID) is drawn on its
-            // mount as a player is: the mount where the unit stands, the
-            // rider up on its seat (0x0073d5d0).
+            // On the ground only a unit moved on by its flags is put on the
+            // floor (unitOnFloorWhileMoving); one on a spline is drawn at the
+            // spline's height. A creature riding (UNIT_FIELD_MOUNTDISPLAYID)
+            // is drawn on its mount as a player is: the mount where the unit
+            // stands, the rider up on its seat (0x0073d5d0).
             const auto* creatureMount = entitySpawner_->getRemotePlayerMount(guid);
             std::optional<glm::vec3> previousGroundPos = previousRenderPos;
             if (creatureMount && previousGroundPos) previousGroundPos->z -= creatureMount->riderHeight;
             const bool groundCreature = !_creatureFlyingState.count(guid) &&
                                         !_creatureSwimmingState.count(guid);
-            if (entity->isActivelyMoving() && groundCreature) {
+            if (unitOnFloorWhileMoving(*entity) && groundCreature) {
                 if (auto floorZ = unitMovingFloor(guid, renderer.get(), renderPos,
                                                   previousGroundPos, floorFrameNo)) {
                     renderPos.z = heightOverFloor(*entity, renderPos.z, *floorZ);
@@ -5932,11 +5950,10 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 previousMountPos->z -= remoteMount->riderHeight;
             }
 
-            // Match creature projection: terrain alone is not a valid floor in
-            // WMO overlap regions (tunnels, buildings, bridges).
+            // As the creatures: on the floor only while moved on by its flags.
             const bool groundPlayer = !_pCreatureFlyingState.count(guid) &&
                                       !_pCreatureSwimmingState.count(guid);
-            if (entity->isActivelyMoving() && groundPlayer) {
+            if (unitOnFloorWhileMoving(*entity) && groundPlayer) {
                 if (auto floorZ = unitMovingFloor(guid, renderer.get(), renderPos,
                                                   previousMountPos, floorFrameNo)) {
                     renderPos.z = heightOverFloor(*entity, renderPos.z, *floorZ);
