@@ -2373,7 +2373,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
     // fails, and the device is lost. Hoisting them out means the wait happens
     // between frames instead of during one, and the budget means a screen full
     // of new art costs several quiet frames rather than one very long one.
-    // Three, not eight.
+    // Once three a frame, not eight (and now a time budget - see below).
     //
     // Each one is a BLP decode, a staging buffer, a copy and a wait - and the
     // batch around them is synchronous, so the whole cost lands inside
@@ -2388,7 +2388,26 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
     // during a load. Spreading the same work over more frames costs a texture
     // appearing a frame or two later, which is invisible, and shortens each
     // stall to something that cannot sit across a driver's patience.
-    constexpr int kUploadsPerFrame = 3;
+    //
+    // Counted in time, not in files. Three a frame was a frame or two for a
+    // window with a few pieces of art, but the achievement panel names some
+    // sixty (header, parchments, borders, shields, one icon per row), and at
+    // three a frame it opened as bare text on the dark tutorial background and
+    // filled in over a couple of seconds - long enough to be what a screenshot
+    // of it caught. The client loads a region's file when SetTexture names it,
+    // so the window is whole on the frame it first draws. Here the files are
+    // still read between frames, but as many as fit in a few milliseconds of
+    // decoding, which is most windows in one frame and the largest in two or
+    // three, while the wait at the end stays one batch and one short copy.
+    constexpr int kUploadsPerFrame = 96;
+    static const double kUploadBudgetMs = [] {
+        const char* v = std::getenv("WOWEE_UI_UPLOAD_MS");
+        const double ms = (v && *v) ? std::atof(v) : 12.0;
+        return ms > 0.0 ? ms : 12.0;
+    }();
+    // At least this many go every frame however slow the files are, so a run
+    // of large ones still makes progress.
+    constexpr int kUploadsAlways = 3;
     std::vector<std::pair<const std::string*, uint8_t>> wanted;
     wanted.reserve(kUploadsPerFrame);
     auto want = [&](const std::string& path, uint8_t variant = 0) {
@@ -2458,9 +2477,24 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
     // landed. Nothing to upload means no batch at all, so an idle frame does
     // not allocate a command buffer to record nothing into.
     if (!wanted.empty() && vkCtx_) {
+        static const bool uploadDiag = std::getenv("WOWEE_UI_UPLOAD_DIAG") != nullptr;
+        const auto t0 = std::chrono::steady_clock::now();
+        int done = 0;
         vkCtx_->beginUploadBatch();
-        for (const auto& p : wanted) texture(*p.first, p.second);
+        for (const auto& p : wanted) {
+            if (done >= kUploadsAlways &&
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() >
+                    kUploadBudgetMs)
+                break;
+            texture(*p.first, p.second);
+            ++done;
+        }
         vkCtx_->endUploadBatchSync();
+        if (uploadDiag) {
+            LOG_WARNING("UI uploads: ", done, " of ", wanted.size(), " wanted in ",
+                        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(),
+                        " ms (budget ", kUploadBudgetMs, " ms)");
+        }
     }
 
     // Interface units to pixels. The tree is laid out against a virtual screen

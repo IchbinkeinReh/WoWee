@@ -1499,6 +1499,9 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         addonManager_->fireEvent("UPDATE_CHAT_WINDOWS");
         addonManager_->fireEvent("PLAYER_LOGIN");
         addonManager_->fireEvent("PLAYER_ENTERING_WORLD");
+        // Now that something is listening: the queue status this entry asked
+        // for before the interface existed (see GameHandler::setInterfaceLoaded).
+        if (gameHandler_) gameHandler_->setInterfaceLoaded(true);
     } else if (addonManager_ && app_.addonsLoaded_) {
         // Subsequent world entries (e.g. teleport, instance entry)
         addonManager_->fireEvent("PLAYER_ENTERING_WORLD");
