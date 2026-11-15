@@ -624,6 +624,11 @@ public:
     /// than along the ground.
     [[nodiscard]] bool isFallingByFlags() const { return movingByFlags_ && falling_; }
 
+    /// Moved on by its movement flags (startMoveByFlags), as the client moves
+    /// another player between that player's packets - not along a spline and
+    /// not towards a packet's position.
+    [[nodiscard]] bool isMovingByFlags() const { return isMoving_ && movingByFlags_; }
+
     [[nodiscard]] const MovementSpeeds& getMovementSpeeds() const { return speeds_; }
     MovementSpeeds& movementSpeeds() { return speeds_; }
 

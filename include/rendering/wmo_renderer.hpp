@@ -415,11 +415,15 @@ public:
                                std::vector<collision::Facet>& out) const;
     /// With `outGroundType`, the TerrainType id of the floor found (its
     /// triangle's MOMT ground type, 0x007b39b0), or -1.
+    /// `reportMiss` false: no "No WMO floor" report when a building covers
+    /// the spot and nothing is found - for a probe where finding nothing is an
+    /// ordinary answer rather than something to fall through.
     std::optional<float> getFloorHeight(float glX, float glY, float glZ,
                                         float* outNormalZ = nullptr,
                                         float referenceZ =
                                             std::numeric_limits<float>::quiet_NaN(),
-                                        int32_t* outGroundType = nullptr) const;
+                                        int32_t* outGroundType = nullptr,
+                                        bool reportMiss = true) const;
 
     /** Query floor collision from one moving WMO instance. */
     /// The planes of an instance's model's convex volume (MCVP), in the

@@ -3567,7 +3567,7 @@ void WMORenderer::gatherCollisionFacets(const glm::vec3& boxMin, const glm::vec3
 }
 
 std::optional<float> WMORenderer::getFloorHeight(float glX, float glY, float glZ, float* outNormalZ, float referenceZ,
-                                                 int32_t* outGroundType) const {
+                                                 int32_t* outGroundType, bool reportMiss) const {
     const bool byReference = std::isfinite(referenceZ);
     // Per-frame cache disabled: camera and player query the same (x,y) at
     // different Z within a single frame. The allowAbove filter depends on glZ,
@@ -3813,7 +3813,7 @@ std::optional<float> WMORenderer::getFloorHeight(float glX, float glY, float glZ
     // not. A place is a couple of units across, and after enough of them the
     // report says so and stops: a run that is finding hundreds has one
     // problem, not hundreds.
-    if (!bestFloor && overlappedInXY) {
+    if (!bestFloor && overlappedInXY && reportMiss) {
         struct ReportedPlace { float x, y, z; };
         static std::vector<ReportedPlace> reported;
         static bool reportedCap = false;

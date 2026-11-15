@@ -409,13 +409,21 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
 
     // The ground a unit stands on (0x007c2a70 from z + 0.1 down): a
     // building's floor material's, else the terrain's quad's, else none.
+    //
+    // Nothing found is an answer here, not a fault: a unit whose position is
+    // a little under a building's floor - which the client draws where it is
+    // - has no floor below a tenth of a yard over its feet, in the client as
+    // here. Not reported as a floor missing, then;
+    // it was most of what the report said in a city (27 of 32 places in
+    // Orgrimmar).
     const auto groundTerrainType = [&](const glm::vec3& at) -> int32_t {
         const float probeZ = at.z + 0.1f;
         std::optional<float> buildingFloor;
         int32_t buildingType = -1;
         if (auto* wmo = renderer_->getWMORenderer()) {
             buildingFloor = wmo->getFloorHeight(at.x, at.y, probeZ, nullptr,
-                                                std::numeric_limits<float>::quiet_NaN(), &buildingType);
+                                                std::numeric_limits<float>::quiet_NaN(), &buildingType,
+                                                /*reportMiss=*/false);
         }
         std::optional<float> terrainFloor;
         std::optional<int32_t> terrainType;
