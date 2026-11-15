@@ -3182,16 +3182,6 @@ void Application::shutdown() {
         gameHandler->disconnect();
     }
 
-    // Save floor cache before renderer is destroyed
-    if (renderer && renderer->getWMORenderer()) {
-        size_t cacheSize = renderer->getWMORenderer()->getFloorCacheSize();
-        if (cacheSize > 0) {
-            LOG_DEBUG("Saving WMO floor cache (", cacheSize, " entries)...");
-            renderer->getWMORenderer()->saveFloorCache();
-            LOG_DEBUG("Floor cache saved.");
-        }
-    }
-
     // The portrait's offscreen view holds Vulkan resources and is registered
     // with the renderer, so it has to let go before the renderer does. Left to
     // member destruction order it would free images against a device that has

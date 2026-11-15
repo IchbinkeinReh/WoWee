@@ -640,15 +640,9 @@ public:
      */
     void updateActiveGroup(float glX, float glY, float glZ);
 
-    // Floor cache persistence (zone-specific files)
+    // The map loaded now.
     void setMapName(const std::string& name) { mapName_ = name; }
     const std::string& getMapName() const { return mapName_; }
-    bool saveFloorCache() const;  // Saves to cache/wmo_floor_<mapName>.bin
-    bool loadFloorCache();        // Loads from cache/wmo_floor_<mapName>.bin
-    size_t getFloorCacheSize() const { return precomputedFloorGrid.size(); }
-
-    // Pre-compute floor cache for all loaded WMO instances
-    void precomputeFloorCache();
 
     // Pre-decoded BLP cache: set before calling loadModel() to skip main-thread BLP decode
     void setPredecodedBLPCache(std::unordered_map<std::string, pipeline::BLPImage>* cache) { predecodedBLPCache_ = cache; }
@@ -1153,7 +1147,7 @@ private:
     static void gatherGlows(ModelData& modelData);
     void releaseRtModel(uint32_t modelId);
 
-    // Current map name for zone-specific floor cache
+    // Current map name
     std::string mapName_;
 
     // Vulkan pipelines
@@ -1325,18 +1319,7 @@ private:
     mutable std::atomic<double> queryTimeMs{0.0};
     mutable std::atomic<uint32_t> queryCallCount{0};
 
-    // Floor height cache - persistent precomputed grid
-    static constexpr float FLOOR_GRID_CELL_SIZE = 2.0f;  // 2 unit grid cells
-    mutable std::unordered_map<uint64_t, float> precomputedFloorGrid;  // key -> floor height
     mutable uint32_t currentFrameId = 0;
-
-    uint64_t floorGridKey(float x, float y) const {
-        int32_t ix = static_cast<int32_t>(std::floor(x / FLOOR_GRID_CELL_SIZE));
-        int32_t iy = static_cast<int32_t>(std::floor(y / FLOOR_GRID_CELL_SIZE));
-        return (static_cast<uint64_t>(static_cast<uint32_t>(ix)) << 32) |
-               static_cast<uint64_t>(static_cast<uint32_t>(iy));
-    }
-
 
     // Active WMO group tracking - reduces per-query group iteration
     struct ActiveGroupInfo {

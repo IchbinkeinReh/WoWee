@@ -1425,7 +1425,6 @@ void WMORenderer::clearInstances() {
     instances.clear();
     spatialGrid.clear();
     instanceIndexById.clear();
-    precomputedFloorGrid.clear();  // Invalidate floor cache when instances change
     ++instanceGeneration_;
     core::Logger::getInstance().info("Cleared all WMO instances");
 }
@@ -1476,7 +1475,6 @@ void WMORenderer::clearAll() {
     loggedTextureLoadFails_.clear();
     textureLookupSerial_ = 0;
     textureBudgetRejectWarnings_ = 0;
-    precomputedFloorGrid.clear();
 
     LOG_INFO("Cleared all WMO models, instances, and texture cache");
 }
@@ -1490,151 +1488,6 @@ void WMORenderer::resetQueryStats() {
     queryTimeMs = 0.0;
     queryCallCount = 0;
     currentFrameId++;
-    // Note: precomputedFloorGrid is persistent and not cleared per-frame
-}
-
-bool WMORenderer::saveFloorCache() const {
-    if (mapName_.empty()) {
-        core::Logger::getInstance().warning("Cannot save floor cache: no map name set");
-        return false;
-    }
-
-    std::string filepath = core::getCacheRoot() + "/wmo_floor_" + mapName_ + ".bin";
-
-    // Create directory if needed
-    std::filesystem::path path(filepath);
-    std::filesystem::path absPath = std::filesystem::absolute(path);
-    core::Logger::getInstance().info("Saving floor cache to: ", absPath.string());
-
-    if (path.has_parent_path()) {
-        std::error_code ec;
-        std::filesystem::create_directories(path.parent_path(), ec);
-        if (ec) {
-            core::Logger::getInstance().error("Failed to create cache directory: ", ec.message());
-        }
-    }
-
-    std::ofstream file(filepath, std::ios::binary);
-    if (!file) {
-        core::Logger::getInstance().error("Failed to open floor cache file for writing: ", filepath);
-        return false;
-    }
-
-    // Write header: magic + version + count
-    const uint32_t magic = 0x574D4F46;  // "WMOF"
-    const uint32_t version = 1;
-    const uint64_t count = precomputedFloorGrid.size();
-
-    file.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
-    file.write(reinterpret_cast<const char*>(&version), sizeof(version));
-    file.write(reinterpret_cast<const char*>(&count), sizeof(count));
-
-    // Write each entry: key (uint64) + height (float)
-    for (const auto& [key, height] : precomputedFloorGrid) {
-        file.write(reinterpret_cast<const char*>(&key), sizeof(key));
-        file.write(reinterpret_cast<const char*>(&height), sizeof(height));
-    }
-
-    core::Logger::getInstance().info("Saved WMO floor cache (", mapName_, "): ", count, " entries");
-    return true;
-}
-
-bool WMORenderer::loadFloorCache() {
-    if (mapName_.empty()) {
-        core::Logger::getInstance().warning("Cannot load floor cache: no map name set");
-        return false;
-    }
-
-    std::string filepath = core::getCacheRoot() + "/wmo_floor_" + mapName_ + ".bin";
-
-    std::ifstream file(filepath, std::ios::binary);
-    if (!file) {
-        core::Logger::getInstance().info("No existing floor cache for map: ", mapName_);
-        return false;
-    }
-
-    // Read and validate header
-    uint32_t magic = 0, version = 0;
-    uint64_t count = 0;
-
-    file.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-    file.read(reinterpret_cast<char*>(&version), sizeof(version));
-    file.read(reinterpret_cast<char*>(&count), sizeof(count));
-
-    if (magic != 0x574D4F46 || version != 1) {
-        core::Logger::getInstance().warning("Invalid floor cache file format: ", filepath);
-        return false;
-    }
-
-    // Read entries
-    precomputedFloorGrid.clear();
-    precomputedFloorGrid.reserve(count);
-
-    for (uint64_t i = 0; i < count; i++) {
-        uint64_t key;
-        float height;
-        file.read(reinterpret_cast<char*>(&key), sizeof(key));
-        file.read(reinterpret_cast<char*>(&height), sizeof(height));
-        precomputedFloorGrid[key] = height;
-    }
-
-    core::Logger::getInstance().info("Loaded WMO floor cache (", mapName_, "): ", precomputedFloorGrid.size(), " entries");
-    return true;
-}
-
-void WMORenderer::precomputeFloorCache() {
-    if (instances.empty()) {
-        core::Logger::getInstance().info("precomputeFloorCache: no instances to precompute");
-        return;
-    }
-
-    size_t startSize = precomputedFloorGrid.size();
-    size_t samplesChecked = 0;
-
-    core::Logger::getInstance().info("Pre-computing floor cache for ", instances.size(), " WMO instances...");
-
-    for (const auto& instance : instances) {
-        // Get world bounds for this instance
-        const glm::vec3& boundsMin = instance.worldBoundsMin;
-        const glm::vec3& boundsMax = instance.worldBoundsMax;
-
-        // Sample reference Z is above the structure
-        float refZ = boundsMax.z + 10.0f;
-
-        // Iterate over grid points within the bounds
-        float startX = std::floor(boundsMin.x / FLOOR_GRID_CELL_SIZE) * FLOOR_GRID_CELL_SIZE;
-        float startY = std::floor(boundsMin.y / FLOOR_GRID_CELL_SIZE) * FLOOR_GRID_CELL_SIZE;
-
-        int stepsX = static_cast<int>((boundsMax.x - startX) / FLOOR_GRID_CELL_SIZE) + 1;
-        int stepsY = static_cast<int>((boundsMax.y - startY) / FLOOR_GRID_CELL_SIZE) + 1;
-        for (int ix = 0; ix < stepsX; ++ix) {
-            float x = startX + ix * FLOOR_GRID_CELL_SIZE;
-            for (int iy = 0; iy < stepsY; ++iy) {
-                float y = startY + iy * FLOOR_GRID_CELL_SIZE;
-                // Sample at grid cell center
-                float sampleX = x + FLOOR_GRID_CELL_SIZE * 0.5f;
-                float sampleY = y + FLOOR_GRID_CELL_SIZE * 0.5f;
-
-                // Check if already cached
-                uint64_t key = floorGridKey(sampleX, sampleY);
-                if (precomputedFloorGrid.find(key) != precomputedFloorGrid.end()) {
-                    continue;  // Already computed
-                }
-
-                samplesChecked++;
-
-                // Query floor height and store result in the precomputed grid
-                auto h = getFloorHeight(sampleX, sampleY, refZ);
-                if (h) {
-                    precomputedFloorGrid[key] = *h;
-                }
-            }
-        }
-    }
-
-    size_t newEntries = precomputedFloorGrid.size() - startSize;
-    core::Logger::getInstance().info("Floor cache precompute complete: ", samplesChecked, " samples checked, ",
-                                     newEntries, " new entries, total ", precomputedFloorGrid.size());
 }
 
 void WMORenderer::rebuildSpatialIndex() {
@@ -3900,8 +3753,6 @@ std::optional<float> WMORenderer::getFloorHeight(float glX, float glY, float glZ
             }
             continue;
         }
-        if (insideXY) overlappedInXY = true;
-
         // World-space pre-pass: check which groups' world XY bounds contain
         // the query point. For a vertical ray this eliminates most groups
         // before any local-space math.
@@ -3912,7 +3763,15 @@ std::optional<float> WMORenderer::getFloorHeight(float glX, float glY, float glZ
                 glY >= gMin.y && glY <= gMax.y &&
                 glZ - 4.0f <= gMax.z) {
                 anyGroupOverlaps = true;
-                break;
+                // For the report below: a group reaching down under the probe
+                // is one whose floor the ray should have met. Inside the
+                // building's box alone is not - Orgrimmar's box takes in most
+                // of the city's open ground, where the floor is the terrain's
+                // and finding no building floor is the right answer.
+                if (gMin.z <= glZ) {
+                    overlappedInXY = true;
+                    break;
+                }
             }
         }
         if (!anyGroupOverlaps) continue;
@@ -3940,8 +3799,6 @@ std::optional<float> WMORenderer::getFloorHeight(float glX, float glY, float glZ
             testGroupFloor(instance, model, group, localOrigin, localDir);
         }
     }
-
-    // Persistent grid cache disabled (see above comment about stairs fall-through)
 
     // Standing over a building and told there is no floor.
     //

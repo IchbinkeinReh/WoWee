@@ -414,7 +414,6 @@ void PerformanceHUD::render(const Renderer* renderer, const Camera* camera) {
             ImGui::Text("Instances: %u", wmoRenderer->getInstanceCount());
             ImGui::Text("Triangles: %u", wmoRenderer->getTotalTriangleCount());
             ImGui::Text("Draw Calls: %u", wmoRenderer->getDrawCallCount());
-            ImGui::Text("Floor Cache: %zu", wmoRenderer->getFloorCacheSize());
             ImGui::Text("Dist Culled: %u groups", wmoRenderer->getDistanceCulledGroups());
             ImGui::Text("Off-screen: %u groups", wmoRenderer->getFrustumCulledGroups());
             if (wmoRenderer->isOcclusionCullingEnabled()) {

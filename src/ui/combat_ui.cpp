@@ -82,17 +82,27 @@ void CombatUI::playSoundsForNewChat(game::GameHandler& gameHandler) {
 // Floating Combat Text
 // ============================================================
 
-// Not gated, and there is no element to gate it on.
+// The engine's numbers over the world, not Blizzard_CombatText's column.
 //
-// FrameXML's own floating combat text lives in Blizzard_CombatText, which is
-// load-on-demand and reached from exactly one place: the float-mode dropdown in
-// the Interface Options combat panel, which calls UIParentLoadAddOn for it. So
-// it is absent until a player touches that setting, and drawing beside it after
-// that is a latent double rather than a live one.
+// The client draws a number over a unit the player (or the player's pet) hurt
+// or healed, and over no other: its three floaters - 0x0071f990 for a miss,
+// block or the like, 0x00722340 for damage, 0x00722440 for healing - each
+// return first when the unit is the active player, and are gated by
+// CombatDamage, CombatLogPeriodicSpells, PetMeleeDamage, PetSpellDamage and
+// CombatHealing, never by enableCombatText. What happens *to* the character -
+// damage and heals taken, "You Dodge", power gained, honour, a reactive
+// proc - is Blizzard_CombatText's, which COMBAT_TEXT_UPDATE feeds
+// (combat_log_feed.cpp). That addon is not waiting for a player to touch the
+// float-mode dropdown: the "Show Combat Text" checkbox loads it as the options
+// panel initialises, and enableCombatText is registered on, so it is up from
+// the first frame in the world.
 //
-// Left alone deliberately. Covering it means a new UiElement and a suppression
-// entry, which is a decision about what this interface owns rather than a fix
-// to something broken - and the client's combat text is the one on screen today.
+// This drew every entry the handler kept, the player's own included, over the
+// character or in a screen-space column - so each hit taken was shown twice,
+// once in the addon's column and once here, and the takeover's sweep reported
+// 'CombatText' as on screen with nothing accounting for it. What the handler
+// keeps is filtered by those cvars already (combat_text_filter.hpp); what is
+// left to decide here is only whose numbers these are.
 void CombatUI::renderCombatText(game::GameHandler& gameHandler) {
     const auto& entries = gameHandler.getCombatText();
     if (entries.empty()) return;
@@ -112,53 +122,36 @@ void CombatUI::renderCombatText(game::GameHandler& gameHandler) {
     ImFont* font = ImGui::GetFont();
     const float baseFontSize = ImGui::GetFontSize();
 
-    // HUD fallback: entries without world-space anchor use classic screen-position layout.
-    // We still need an ImGui window for those.
-    const float hudIncomingX = screenW * 0.40f;
-    const float hudOutgoingX = screenW * 0.68f;
-    int hudInIdx = 0, hudOutIdx = 0;
-    bool needsHudWindow = false;
+    // Over the unit or not at all: a unit not in the world has nothing for the
+    // number to stand over, and the client has no screen-space fallback.
+    if (!camera) return;
 
-    // What kind of number the player asked to see.
-    //
-    // The interface offers eighteen of these and read none of them, so every
-    // kind was drawn together. Three cover what this client actually produces;
-    // the rest name things it does not draw at all - reputation changes, aura
-    // gains, combo points - and there is nothing yet for them to filter.
-    //
-    // Read once for the frame rather than per entry: a busy fight puts dozens
-    // through this loop and the answer cannot change inside it.
-    const bool showDamage =
-        addons::storedCVarValue("fctDamage", "1") != "0";
-    const bool showHealing =
-        addons::storedCVarValue("fctHealing", "1") != "0";
-    // Registered off, unlike damage and healing (all three at 0x00510000).
-    const bool showMisses =
-        addons::storedCVarValue("fctDodgeParryMiss", "0") != "0";
-
-    const auto wanted = [&](game::CombatTextEntry::Type t) {
-        using T = game::CombatTextEntry;
+    const uint64_t playerGuid = gameHandler.getPlayerGuid();
+    const uint64_t petGuid = gameHandler.getPetGuid();
+    // Over another unit, and caused by the player or the pet: the engine's.
+    // Anything else - on the character, or with no unit to stand over (an
+    // honour or experience line, a proc) - belongs to the column.
+    const auto wanted = [&](const game::CombatTextEntry& e) {
+        if (e.dstGuid == 0 || e.dstGuid == playerGuid) return false;
+        return e.isPlayerSource || (petGuid != 0 && e.srcGuid == petGuid);
+    };
+    using MissT = game::CombatTextEntry;
+    // A miss and its kin are 0x0071f990's, under CombatDamage alone; the
+    // handler's filter leaves them unfiltered.
+    const bool showMisses = addons::storedCVarValue("CombatDamage", "1") != "0";
+    const auto isMissKind = [](game::CombatTextEntry::Type t) {
         switch (t) {
-            case T::MELEE_DAMAGE: case T::SPELL_DAMAGE: case T::CRIT_DAMAGE:
-            case T::PERIODIC_DAMAGE: case T::ENVIRONMENTAL: case T::GLANCING:
-            case T::CRUSHING:
-                return showDamage;
-            case T::HEAL: case T::CRIT_HEAL: case T::PERIODIC_HEAL:
-                return showHealing;
-            case T::MISS: case T::DODGE: case T::PARRY: case T::BLOCK:
-            case T::EVADE: case T::IMMUNE: case T::DEFLECT: case T::REFLECT:
-            case T::RESIST: case T::ABSORB:
-                return showMisses;
-            default:
-                // Everything else - energy, experience, honour, dispels - has
-                // no switch of its own here and is left alone rather than
-                // hidden by somebody else's.
+            case MissT::MISS: case MissT::DODGE: case MissT::PARRY: case MissT::BLOCK:
+            case MissT::EVADE: case MissT::DEFLECT:
                 return true;
+            default:
+                return false;
         }
     };
 
     for (const auto& entry : entries) {
-        if (!wanted(entry.type)) continue;
+        if (!wanted(entry)) continue;
+        if (isMissKind(entry.type) && !showMisses) continue;
         const float alpha = 1.0f - (entry.age / game::CombatTextEntry::LIFETIME);
         const bool outgoing = entry.isPlayerSource;
 
@@ -373,14 +366,8 @@ void CombatUI::renderCombatText(game::GameHandler& gameHandler) {
         ImU32 shadowCol = IM_COL32(0, 0, 0, static_cast<int>(alpha * 180));
         ImU32 textCol   = ImGui::ColorConvertFloat4ToU32(color);
 
-        // --- Try world-space anchor if we have a destination entity ---
-        // Types that should always stay as HUD elements (no world anchor)
-        bool isHudOnly = (entry.type == game::CombatTextEntry::XP_GAIN ||
-                          entry.type == game::CombatTextEntry::HONOR_GAIN ||
-                          entry.type == game::CombatTextEntry::PROC_TRIGGER);
-
-        bool rendered = false;
-        if (!isHudOnly && camera && entry.dstGuid != 0) {
+        // Over the unit it landed on.
+        {
             // Look up the destination entity's render position
             glm::vec3 renderPos;
             bool havePos = core::Application::getInstance().getRenderPositionForGuid(entry.dstGuid, renderPos);
@@ -423,44 +410,10 @@ void CombatUI::renderCombatText(game::GameHandler& gameHandler) {
                                           ImVec2(sx + 1.0f, sy + 1.0f), shadowCol, text);
                         drawList->AddText(font, renderFontSize,
                                           ImVec2(sx, sy), textCol, text);
-                        rendered = true;
                     }
                 }
             }
         }
-
-        // --- HUD fallback for entries without world anchor or HUD-only types ---
-        if (!rendered) {
-            if (!needsHudWindow) {
-                needsHudWindow = true;
-                ImGui::SetNextWindowPos(ImVec2(0, 0));
-                ImGui::SetNextWindowSize(ImVec2(screenW, 400));
-                ImGuiWindowFlags flags = ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoDecoration |
-                                         ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav;
-                ImGui::Begin("##CombatText", nullptr, flags);
-            }
-
-            float yOffset = 200.0f - entry.age * 60.0f;
-            int& idx = outgoing ? hudOutIdx : hudInIdx;
-            float baseX = outgoing ? hudOutgoingX : hudIncomingX;
-            float xOffset = baseX + (idx % 3 - 1) * 60.0f;
-            ++idx;
-
-            ImGui::SetCursorPos(ImVec2(xOffset, yOffset));
-            ImVec2 screenPos = ImGui::GetCursorScreenPos();
-
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            dl->AddText(font, renderFontSize, ImVec2(screenPos.x + 1.0f, screenPos.y + 1.0f),
-                        shadowCol, text);
-            dl->AddText(font, renderFontSize, screenPos, textCol, text);
-
-            ImVec2 ts = font->CalcTextSizeA(renderFontSize, FLT_MAX, 0.0f, text);
-            ImGui::Dummy(ts);
-        }
-    }
-
-    if (needsHudWindow) {
-        ImGui::End();
     }
 }
 
