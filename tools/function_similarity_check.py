@@ -248,32 +248,133 @@ def main() -> int:
         buckets[len(rec[2]) // 3].append(rec)
 
     settled = settled_pairs()
-    seen, hits = set(), []
+    hits = []
+
+    def compare(rec_a, rec_b):
+        """The old loop's body for one pair, from the settled check on."""
+        file_a, name_a, code_a = rec_a
+        file_b, name_b, code_b = rec_b
+        if tuple(sorted((name_a, name_b))) in settled:
+            return
+        # ratio() is 2*M/T, M the lines the two have in common in order. M is
+        # no more than the shorter body, nor more than the lines the two share
+        # in any order - the bounds difflib's own real_quick_ratio() and
+        # quick_ratio() give. A pair whose bound is under the threshold cannot
+        # reach it, so it is passed by without the quadratic match.
+        total = len(code_a) + len(code_b)
+        if 2.0 * min(len(code_a), len(code_b)) / total < THRESHOLD:
+            return
+        sa, sb = distinct[id(code_a)], distinct[id(code_b)]
+        # The lines shared in any order are at most the distinct lines shared
+        # plus the repeats of the body with fewer repeats - a bound set
+        # intersection gives at C speed, ahead of the exact count.
+        both = len(sa & sb)
+        if 2.0 * (both + min(len(code_a) - len(sa), len(code_b) - len(sb))) / total < THRESHOLD:
+            return
+        ca, cb = counts[id(code_a)], counts[id(code_b)]
+        if len(ca) > len(cb):
+            ca, cb = cb, ca
+        shared = sum(min(n, cb[k]) for k, n in ca.items() if k in cb)
+        if 2.0 * shared / total < THRESHOLD:
+            return
+        ratio = difflib.SequenceMatcher(None, code_a, code_b).ratio()
+        if ratio >= THRESHOLD:
+            hits.append((ratio, len(code_a), file_a, name_a, file_b, name_b))
+
+    # Every bucket within six of this one, not just the next.
+    #
+    # Buckets are three code lines wide, so comparing only the neighbour meant
+    # two functions whose lengths differed by more than about six lines were
+    # never compared at all - however alike they were. A ninety-line parser
+    # and its ninety-eight-line copy score 0.96 and were invisible; so, for
+    # that matter, would the guild roster's 31-line and 99-line copies have
+    # been.
+    #
+    # The pairs compared, and which of the two is named first, are what a
+    # walk of every bucket against its thirteen neighbours gives, taking each
+    # pair the first time it comes up. That walk visited thirteen million
+    # pairs by 2026-11 and took twenty minutes - sweep_guard's whole budget
+    # many times over, and past ctest's timeout under a parallel build. Most
+    # of those pairs differ in length by more than 0.88 allows, so each body
+    # now looks only at the bodies whose length could pass: the same pairs,
+    # the same order, a few hundred thousand of them.
+    order = {}
     for key, group in sorted(buckets.items()):
-        # Every bucket within six of this one, not just the next.
-        #
-        # Buckets are three code lines wide, so comparing only the neighbour
-        # meant two functions whose lengths differed by more than about six
-        # lines were never compared at all - however alike they were. A
-        # ninety-line parser and its ninety-eight-line copy score 0.96 and were
-        # invisible; so, for that matter, would the guild roster's 31-line and
-        # 99-line copies have been. Costs seven seconds over the whole tree.
-        near = []
-        for offset in range(-6, 7):
-            near += buckets.get(key + offset, [])
-        for file_a, name_a, code_a in group:
-            for file_b, name_b, code_b in near:
+        for rec in group:
+            order[id(rec)] = len(order)
+    line_ids = {}
+    counts, distinct = {}, {}
+    for rec in found:
+        ids = [line_ids.setdefault(line, len(line_ids)) for line in rec[2]]
+        counts[id(rec[2])] = collections.Counter(ids)
+        distinct[id(rec[2])] = frozenset(ids)
+    # A name that occurs twice in one file (overloads) is one key to the old
+    # walk, which took only the first pair it met for two keys; those bodies
+    # keep that walk exactly, below.
+    key_count = collections.Counter((f, n) for f, n, _ in found)
+    shared_key = {id(rec) for rec in found if key_count[(rec[0], rec[1])] > 1}
+    shared_in = {key: [rec for rec in group if id(rec) in shared_key]
+                 for key, group in buckets.items()}
+    # Per bucket, by length: the length, the walk's order, the distinct
+    # lines, the repeats, and the body - what the inner step reads, at hand.
+    by_length = {}
+    for key, group in buckets.items():
+        ranked = sorted(group, key=lambda r: len(r[2]))
+        by_length[key] = [(order[id(r)], len(r[2]), distinct[id(r[2])],
+                           len(r[2]) - len(distinct[id(r[2])]), r)
+                          for r in ranked if id(r) not in shared_key]
+    # Lengths that can still score THRESHOLD against a body of n lines, with
+    # a line to spare either side; the exact test is in compare().
+    reach = (2.0 - THRESHOLD) / THRESHOLD
+
+    seen = set()
+    for key, group in sorted(buckets.items()):
+        near_keys = [key + offset for offset in range(-6, 7) if key + offset in buckets]
+        for rec_a in group:
+            file_a, name_a, code_a = rec_a
+            n = len(code_a)
+            if id(rec_a) in shared_key:
+                near = [b for k in near_keys for b in buckets[k]]
+            else:
+                near = [b for k in near_keys for b in shared_in[k]]
+            # The old walk, for every pair with a shared key in it.
+            for rec_b in near:
+                file_b, name_b, _ = rec_b
                 if (file_a, name_a) == (file_b, name_b):
                     continue
                 pair = tuple(sorted([(file_a, name_a), (file_b, name_b)]))
                 if pair in seen:
                     continue
                 seen.add(pair)
-                if tuple(sorted((name_a, name_b))) in settled:
-                    continue
-                ratio = difflib.SequenceMatcher(None, code_a, code_b).ratio()
-                if ratio >= THRESHOLD:
-                    hits.append((ratio, len(code_a), file_a, name_a, file_b, name_b))
+                compare(rec_a, rec_b)
+            if id(rec_a) in shared_key:
+                continue
+            # Every other pair, met once, from whichever body the walk reaches
+            # first - and only where the lengths leave it a chance.
+            #
+            # The two bounds compare() opens with are repeated inline: this is
+            # the step taken a few hundred thousand times, and a call per
+            # pair was most of what it cost.
+            lo, hi = int(n / reach) - 1, int(n * reach) + 1
+            mine = order[id(rec_a)]
+            sa = distinct[id(code_a)]
+            ea = n - len(sa)
+            for k in near_keys:
+                for rank, m, sb, eb, rec_b in by_length[k]:
+                    if m < lo:
+                        continue
+                    if m > hi:
+                        break
+                    if rank <= mine:
+                        continue
+                    total = n + m
+                    if 2.0 * (n if n < m else m) / total < THRESHOLD:
+                        continue
+                    if 2.0 * (len(sa & sb) + (ea if ea < eb else eb)) / total < THRESHOLD:
+                        continue
+                    if (file_a, name_a) == (rec_b[0], rec_b[1]):
+                        continue
+                    compare(rec_a, rec_b)
 
     hits.sort(reverse=True)
     print(f"{len(found)} function bodies of {MIN_LINES}..{MAX_LINES} code lines")

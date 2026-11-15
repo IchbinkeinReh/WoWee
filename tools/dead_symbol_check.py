@@ -142,7 +142,13 @@ def use_counts(names):
     declaration or out-of-line definition."""
     counts = collections.Counter()
     wanted = set(names)
-    pattern = re.compile(r"\b(" + "|".join(re.escape(n) for n in names) + r")\b")
+    # Every name is a run of word characters, so \b(name|name|...)\b finds
+    # exactly the whole runs that are one of them: a run's inside has no word
+    # boundary to start a match at, and only the alternative as long as the
+    # run is followed by one. Splitting the line into runs and looking each up
+    # finds the same - where the alternation of some four thousand names,
+    # tried at every position of every line, was two minutes of sweep_guard.
+    pattern = re.compile(r"\w+")
     for folder in ("src", "include", "tools", "tests"):
         base = ROOT / folder
         if not base.exists():
@@ -187,8 +193,9 @@ def use_counts(names):
                 # This file's own prose is counted too, so do not name a dead
                 # function here.
                 stripped_line = re.sub(r"//.*|/\*.*?\*/", "", stripped_line)
-                for match in pattern.finditer(stripped_line):
-                    name = match.group(1)
+                for name in pattern.findall(stripped_line):
+                    if name not in wanted:
+                        continue
                     # A function's own definition is not a use of it; anything
                     # else on the same line still is.
                     if name == defined_here and name in wanted:
