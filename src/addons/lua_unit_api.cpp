@@ -1261,14 +1261,19 @@ static int lua_GetRangedCritChance(lua_State* L) {
     return 1;
 }
 
-// GetSpellCritChance(school) → percent  (1=Holy,2=Fire,3=Nature,4=Frost,5=Shadow,6=Arcane)
+// GetSpellCritChance(school) → percent  (1=Physical,2=Holy,3=Fire,4=Nature,5=Frost,6=Shadow,7=Arcane)
+// The client (0x0060e290) reads PLAYER_SPELL_CRIT_PERCENTAGE1 + (school - 1):
+// the argument is one-based, the field run zero-based. Passing the school
+// straight through read the next school's field and answered 0 for Arcane
+// (7), which is past the run - and the character sheet shows the minimum
+// over schools 2..7, so its spell crit read 0.00% for every caster.
 static int lua_GetSpellCritChance(lua_State* L) {
     auto* gh = getGameHandler(L);
     // 0x0060e290: the school is truncated from whatever the argument reads as,
     // and anything outside 1..7 - no argument among it - is the usage line.
     const int school = static_cast<int>(lua_tonumber(L, 1));
     if (school < 1 || school > 7) return luaL_error(L, "Usage: GetSpellCritChance(school)");
-    float v = gh ? gh->getSpellCritPct(school) : 0.0f;
+    float v = gh ? gh->getSpellCritPct(school - 1) : 0.0f;
     lua_pushnumber(L, v >= 0 ? v : 0.0);
     return 1;
 }
