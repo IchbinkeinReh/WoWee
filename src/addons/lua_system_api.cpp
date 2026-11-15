@@ -633,9 +633,11 @@ static int lua_StopMusic(lua_State* L) {
 /// `if ( x == 0 and y == 0 )` and hides its marker, which is what should happen
 /// for someone in another zone.
 static int lua_GetPlayerMapPosition(lua_State* L) {
+    // 0x00545880: a unit or the usage line.
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetPlayerMapPosition(\"player\")");
     auto* gh = getGameHandler(L);
     auto* svc = getLuaServices(L);
-    const char* uid = luaL_optstring(L, 1, "player");
+    const char* uid = lua_tostring(L, 1);
     if (!gh || !svc || !svc->mapUVForWorldPos || !uid) {
         lua_pushnumber(L, 0);
         lua_pushnumber(L, 0);
@@ -3318,7 +3320,21 @@ static int lua_GetCurrentMapZone(lua_State* L) {
 
 // SetMapZoom(continent [, zone]) - sets map view to continent/zone
 static int lua_SetMapZoom(lua_State* L) {
-    s_mapContinent = static_cast<int>(luaL_checknumber(L, 1));
+    // 0x005469e0: a number or the usage line; a continent from -1 (the
+    // cosmic map) to the last one, or the same line saying it is out of
+    // bounds.
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetMapZoom(continentIndex [,zoneIndex])");
+    {
+        int continents = 4;
+        if (auto* svc = getLuaServices(L); svc && svc->getMapContinentNames) {
+            const auto names = svc->getMapContinentNames();
+            if (!names.empty()) continents = static_cast<int>(names.size());
+        }
+        const auto asked = static_cast<int>(lua_tonumber(L, 1));
+        if (asked < -1 || asked > continents)
+            return luaL_error(L, "Usage: SetMapZoom(continentIndex [,zoneIndex]) .. requested continent out of bounds");
+    }
+    s_mapContinent = static_cast<int>(lua_tonumber(L, 1));
     s_mapZone = static_cast<int>(luaL_optnumber(L, 2, 0));
     // Tell the map, which this never did. Every route out of a zone map runs
     // through here - the zone dropdown, the continent dropdown, and four of
@@ -3369,7 +3385,9 @@ static int lua_GetMapContinents(lua_State* L) {
 // handed to SetMapZoom as the zone to show, so the dropdown offered four
 // zones out of dozens and choosing one of them did nothing anyway.
 static int lua_GetMapZones(lua_State* L) {
-    const int cont = static_cast<int>(luaL_checknumber(L, 1));
+    // 0x00544b90: a number or the usage line.
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetMapZones(continentIndex)");
+    const int cont = static_cast<int>(lua_tonumber(L, 1));
     auto* zonesSvc = getLuaServices(L);
     if (!zonesSvc || !zonesSvc->getMapZoneNames) {
         LOG_WARNING("GetMapZones(", cont, "): no map to ask, so the zone"
@@ -3447,8 +3465,10 @@ static int lua_GetNumMapLandmarks(lua_State* L) {
 /// table (0x00ad4f0c rows, 0x00ad4f20, stride 0x44) is still unnamed: its rows
 /// carry a map's id second and up to four area ids third to sixth.
 static int lua_GetMapLandmarkInfo(lua_State* L) {
+    // 0x00545a30: a number or the usage line, rounded.
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetMapLandmarkInfo(index)");
     auto* svc = getLuaServices(L);
-    const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
+    const int index = static_cast<int>(std::lround(lua_tonumber(L, 1)));
     if (!svc || !svc->getMapLandmarks || index < 1) return luaReturnNil(L);
     const auto marks = svc->getMapLandmarks();
     if (index > static_cast<int>(marks.size())) return luaReturnNil(L);
@@ -3498,8 +3518,10 @@ static int lua_GetNumMapOverlays(lua_State* L) {
 }
 
 static int lua_GetMapOverlayInfo(lua_State* L) {
+    // 0x00545c80: a number or the usage line, rounded.
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetMapOverlayInfo(index)");
     auto* svc = getLuaServices(L);
-    const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
+    const int index = static_cast<int>(std::lround(lua_tonumber(L, 1)));
     if (!svc || !svc->getMapOverlays || index < 1) return luaReturnNil(L);
     const auto overlays = svc->getMapOverlays();
     if (index > static_cast<int>(overlays.size())) return luaReturnNil(L);
@@ -10659,7 +10681,10 @@ void registerSystemLuaAPI(lua_State* L) {
                 // that does not zoom rather than one that zooms wrongly.
                 // Clicking a continent drills into the zone under the point,
                 // which is the same ZMP lookup the hover uses.
+                // ProcessMapClick(x, y) (0x00546e80): two numbers or the usage line.
                 {"ProcessMapClick", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+                return luaL_error(L, "Usage: ProcessMapClick(x, y)");
             auto* svc = getLuaServices(L);
             if (svc && svc->clickMapPoint) {
                 svc->clickMapPoint(static_cast<float>(luaL_optnumber(L, 1, -1.0)),
@@ -10684,9 +10709,11 @@ void registerSystemLuaAPI(lua_State* L) {
                 // which is how the quest log's "show on map" and the map's own
                 // windowed-size toggle both landed wherever the map already
                 // was.
+                // SetMapByID(mapID) (0x00546c50): a number or the usage line.
                 {"SetMapByID", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetMapByID(mapID)");
             auto* svc = getLuaServices(L);
-            const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
+            const auto id = static_cast<uint32_t>(lua_tonumber(L, 1));
             if (svc && svc->setMapWorldAreaId && id != 0) svc->setMapWorldAreaId(id);
             fireWorldMapUpdate(L);
             return 0;
@@ -10740,7 +10767,12 @@ void registerSystemLuaAPI(lua_State* L) {
                 // across the map code, five of them passing the same -2 - so an
                 // answer here has somewhere to go; it is the id table, not the
                 // missing verb, that holds this up.
-                {"ClickLandmark",       lua_ReturnNothing},
+                // ClickLandmark(mapLinkID) (0x00546ef0): a number or the usage
+                // line. Following the link to its map is not done here.
+                {"ClickLandmark", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: ClickLandmark(mapLinkID)");
+            return 0;
+        }},
                 // The pins on the shown map: counted by GetNumMapLandmarks and
                 // described by GetMapLandmarkInfo, whose note above is where the
                 // reference's own families are worked out.
