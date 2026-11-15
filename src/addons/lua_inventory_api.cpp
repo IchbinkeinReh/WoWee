@@ -246,6 +246,9 @@ static int lua_GetContainerItemCooldown(lua_State* L) {
 /// The border a quest item draws in the bags comes from this; false is the
 /// answer for an ordinary item and is what nearly every slot holds.
 static int lua_GetContainerItemQuestInfo(lua_State* L) {
+    // 0x005d9400
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: GetContainerItemQuestInfo(index, slot)");
     lua_pushboolean(L, 0);
     lua_pushnil(L);
     lua_pushboolean(L, 0);
@@ -256,6 +259,9 @@ static int lua_GetContainerItemQuestInfo(lua_State* L) {
 /// to. The keyring holds nothing here, and the identity is the least
 /// surprising mapping for code that indexes with the result.
 static int lua_KeyRingButtonIDToInvSlotID(lua_State* L) {
+    // 0x005e7700
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: KeyRingButtonIDToInvSlotID(buttonID)");
     lua_pushnumber(L, luaL_optnumber(L, 1, 0));
     return 1;
 }
@@ -1779,6 +1785,9 @@ static int lua_GetItemCount(lua_State* L) {
 // nineteen plus its index with slots from zero. The mapping is the one this
 // client's own inventory uses, taken from there rather than restated.
 static int lua_SplitContainerItem(lua_State* L) {
+    // 0x005d84f0
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2) || !lua_isnumber(L, 3))
+        return luaL_error(L, "Usage: SplitContainerItem(index, slot, amount)");
     auto* gh = getGameHandler(L);
     const int bag = static_cast<int>(luaL_checknumber(L, 1));
     const int slot = static_cast<int>(luaL_checknumber(L, 2));
@@ -2426,6 +2435,9 @@ static int lua_GetEquipmentSetInfoByName(lua_State* L) {
 
 // GetEquipmentSetItemIDs(name) → one entry per slot, walked with ipairs
 static int lua_GetEquipmentSetItemIDs(lua_State* L) {
+    // 0x005aef90
+    if (!lua_isstring(L, 1))
+        return luaL_error(L, "Usage: GetEquipmentSetItemIDs(\"setName\" [, returnTable])");
     auto* gh = getGameHandler(L);
     const auto* set = equipmentSetByName(gh, luaL_optstring(L, 1, ""));
     const auto* guids = (gh && set) ? gh->getEquipmentSetItems(set->setId) : nullptr;
@@ -2448,6 +2460,9 @@ static int lua_GetEquipmentSetItemIDs(lua_State* L) {
 
 // SaveEquipmentSet(name, iconIndex) - asks the server to keep it
 static int lua_SaveEquipmentSet(lua_State* L) {
+    // 0x005af9c0
+    if (!lua_isstring(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: SaveEquipmentSet(\"setName\", iconIndex)");
     auto* gh = getGameHandler(L);
     const std::string name = luaL_optstring(L, 1, "");
     if (!gh || name.empty()) return 0;
@@ -2558,6 +2573,9 @@ static int lua_GetEquipmentSetLocations(lua_State* L) {
 }
 
 static int lua_DeleteEquipmentSet(lua_State* L) {
+    // 0x005ae800
+    if (!lua_isstring(L, 1))
+        return luaL_error(L, "Usage: DeleteEquipmentSet(\"setName\")");
     auto* gh = getGameHandler(L);
     if (const auto* set = equipmentSetByName(gh, luaL_optstring(L, 1, ""))) {
         gh->deleteEquipmentSet(set->setGuid);
@@ -2579,15 +2597,24 @@ static int lua_UseEquipmentSet(lua_State* L) {
 
 // EquipmentSetContainsLockedItems(name) - nothing here locks an item
 static int lua_EquipmentSetContainsLockedItems(lua_State* L) {
+    // 0x005af320
+    if (!lua_isstring(L, 1))
+        return luaL_error(L, "Usage: EquipmentSetContainsLockedItems(\"setName\")");
     lua_pushboolean(L, 0);
     return 1;
 }
 
 static int lua_EquipmentManagerIgnoreSlotForSave(lua_State* L) {
+    // 0x005ad770
+    if (static_cast<uint32_t>(luaToClientInt(L, 1)) - 1u >= 19u)
+        return luaL_error(L, "Usage: EquipmentManagerIgnoreSlotForSave(slot)");
     pendingIgnoredSlots().insert(static_cast<int>(luaL_optnumber(L, 1, 0)));
     return 0;
 }
 static int lua_EquipmentManagerUnignoreSlotForSave(lua_State* L) {
+    // 0x005ad830
+    if (static_cast<uint32_t>(luaToClientInt(L, 1)) - 1u >= 19u)
+        return luaL_error(L, "Usage: UpdatePendingEquipmentSetSlot(slot)");
     pendingIgnoredSlots().erase(static_cast<int>(luaL_optnumber(L, 1, 0)));
     return 0;
 }
@@ -2613,7 +2640,22 @@ static int lua_EquipmentManagerClearIgnoredSlotsForSave(lua_State* L) {
 // bag the bag index shifted left eight with the slot in the low bits. The
 // interface subtracts the slot id from the equipped entry to recognise and drop
 // it, so the equipped item has to be in there too.
+static int lua_GetInventorySlotInfo(lua_State* L);
 static int lua_GetInventoryItemsForSlot(lua_State* L) {
+    // 0x005e95c0: a slot number, or a slot's name PaperDollItemFrame.dbc
+    // numbers other than 0; anything else is the usage error.
+    if (!lua_isnumber(L, 1)) {
+        int named = 0;
+        if (lua_isstring(L, 1)) {
+            lua_pushcfunction(L, lua_GetInventorySlotInfo);
+            lua_pushvalue(L, 1);
+            if (lua_pcall(L, 1, 1, 0) == 0 && lua_isnumber(L, -1))
+                named = static_cast<int>(lua_tonumber(L, -1));
+            lua_pop(L, 1);
+        }
+        if (named == 0)
+            return luaL_error(L, "Usage: GetInventoryItemsForSlot(slot [, returnTable])");
+    }
     auto* gh = getGameHandler(L);
     const int slotId = static_cast<int>(luaL_optnumber(L, 1, 0));
     if (!gh || slotId < 1 || slotId > kEquipSlots || !lua_istable(L, 2)) return 0;
@@ -4045,6 +4087,9 @@ static int lua_GetContainerItemGems(lua_State* L) {
 // loop are not tracked per slot here, and answering an empty table for them
 // says "nothing free" rather than inventing space that is not there.
 static int lua_GetContainerFreeSlots(lua_State* L) {
+    // 0x005d7820
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: GetContainerFreeSlots(index [, returnTable])");
     auto* gh = getGameHandler(L);
     const int container = static_cast<int>(luaL_checknumber(L, 1));
     // Reuse the caller's table when given one; otherwise make the result.
@@ -4075,6 +4120,9 @@ static int lua_GetContainerFreeSlots(lua_State* L) {
 // something to equip - so it is the cheapest of the container queries and was
 // the only one of them missing.
 static int lua_GetContainerItemID(lua_State* L) {
+    // 0x005d7d00
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: GetContainerItemID(index, slot)");
     auto* gh = getGameHandler(L);
     const int container = static_cast<int>(luaL_checknumber(L, 1));
     const int slot = static_cast<int>(luaL_checknumber(L, 2));
@@ -4147,6 +4195,9 @@ static int lua_GetContainerItemInfo(lua_State* L) {
 
 // GetContainerItemLink(container, slot) → item link string
 static int lua_GetContainerItemLink(lua_State* L) {
+    // 0x005d7c80
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: GetContainerItemLink(index, slot)");
     auto* gh = getGameHandler(L);
     int container = static_cast<int>(luaL_checknumber(L, 1));
     int slot = static_cast<int>(luaL_checknumber(L, 2));
@@ -4772,6 +4823,11 @@ static int lua_GetInventoryItemTexture(lua_State* L) {
 /// asks for this to put the bag's own tooltip on itself, and left undefined the
 /// call answered nil, which asked for the tooltip of no slot at all.
 static int lua_ContainerIDToInventoryID(lua_State* L) {
+    // 0x005d6f60: a number, and one naming a bag (1-11).
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: ContainerIDToInventoryID(containerID)");
+    if (static_cast<uint32_t>(luaToClientInt(L, 1)) - 1u >= 11u)
+        return luaL_error(L, "ContainerIDToInventoryID(): invalid container ID");
     const int bag = static_cast<int>(luaL_checknumber(L, 1));
     lua_pushnumber(L, bag + 19);
     return 1;
@@ -4781,6 +4837,9 @@ static int lua_ContainerIDToInventoryID(lua_State* L) {
 /// one. The backpack is bag 0 and has a fixed name; the interface uses this to
 /// label the bag buttons and their tooltips.
 static int lua_GetBagName(lua_State* L) {
+    // 0x005d8c70
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: GetBagName(index)");
     auto* gh = getGameHandler(L);
     const int bag = static_cast<int>(luaL_optnumber(L, 1, 0));
     if (bag == 0) { lua_pushstring(L, "Backpack"); return 1; }
@@ -4799,6 +4858,12 @@ static int lua_GetBagName(lua_State* L) {
 /// worn in equipment slots 20 to 23, so the icon is the equipped bag's own -
 /// which is why every open bag used to wear the same generic pack.
 static int lua_SetBagPortraitTexture(lua_State* L) {
+    // 0x005d7180: the slot as a number; one past the eleven bags is an error,
+    // one below them does nothing.
+    if (!lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: SetBagPortraitTexture(texture, slot)");
+    if (luaToClientInt(L, 2) - 1 >= 11)
+        return luaL_error(L, "Invalid slot in SetBagPortraitTexture");
     if (!lua_istable(L, 1)) return 0;
     const int bag = static_cast<int>(luaL_optnumber(L, 2, 0));
 
@@ -5714,7 +5779,12 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"PickupTradeMoney",        lua_PickupTradeMoney},
                 {"PickupSendMailMoney",     lua_PickupSendMailMoney},
                 {"PickupSendMailCOD",       lua_MoneyCursorNoop},
-                {"PickupGuildBankMoney",    lua_MoneyCursorNoop},
+                {"PickupGuildBankMoney",    [](lua_State* L) -> int {
+            // 0x005a4330
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: PickupGuildBankMoney(amount)");
+            return lua_MoneyCursorNoop(L);
+        }},
                 {"AddTradeMoney",           lua_AddTradeMoney},
                 {"GetCurrencyListSize", [](lua_State* L) -> int {
             lua_pushnumber(L, static_cast<lua_Number>(buildCurrencyList(L).size()));
@@ -5846,6 +5916,9 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // the pair to its settings store, which is why the choice survives a
                 // session there; here it lasts as long as the client does.
                 {"SetCurrencyBackpack", [](lua_State* L) -> int {
+            // 0x005b0a20
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+                return luaL_error(L, "Usage: SetCurrencyBackpack(index,backpack)");
             auto* gh = getGameHandler(L);
             const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
             const bool on = lua_toboolean(L, 2) != 0;
@@ -5868,6 +5941,9 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // puts 1 in the flag for every category), and a collapsed category
                 // keeps its header while its rows stop being walked.
                 {"ExpandCurrencyList", [](lua_State* L) -> int {
+            // 0x005b0940
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+                return luaL_error(L, "Usage: ExpandCurrencyList(index,expand)");
             const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
             const bool on = luaL_optnumber(L, 2, 0) != 0;
             const auto rows = buildCurrencyList(L);
@@ -5885,6 +5961,9 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // moves its row out of the category its record names and into the
                 // bucket, and unmarking it puts it back where it came from.
                 {"SetCurrencyUnused", [](lua_State* L) -> int {
+            // 0x005b09b0
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+                return luaL_error(L, "Usage: SetCurrencyUnused(index,unused)");
             const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
             const bool on = luaL_optnumber(L, 2, 0) != 0;
             const auto rows = buildCurrencyList(L);
@@ -6238,6 +6317,9 @@ void registerInventoryLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"SetCurrentGuildBankTab", [](lua_State* L) -> int {
+            // 0x005a43c0
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: SetCurrentTab(tab)");
             auto* gh = getGameHandler(L);
             const int tab = static_cast<int>(luaL_optnumber(L, 1, 1));
             if (gh && tab >= 1) {
@@ -6246,6 +6328,9 @@ void registerInventoryLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"QueryGuildBankTab", [](lua_State* L) -> int {
+            // 0x005a5ce0
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: QueryGuildBankTab(tab)");
             auto* gh = getGameHandler(L);
             const int tab = static_cast<int>(luaL_optnumber(L, 1, 1));
             if (gh && tab >= 1) gh->queryGuildBankTab(static_cast<uint8_t>(tab - 1));
@@ -6314,6 +6399,9 @@ void registerInventoryLuaAPI(lua_State* L) {
         }},
                 // GetGuildBankItemInfo(tab, slot) → texture, count, locked
                 {"GetGuildBankItemInfo", [](lua_State* L) -> int {
+            // 0x005a6000
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+                return luaL_error(L, "Usage: GetGuildBankItemInfo(tab, slot)");
             auto* gh = getGameHandler(L);
             const int tab  = static_cast<int>(luaL_optnumber(L, 1, 0));
             const int slot = static_cast<int>(luaL_optnumber(L, 2, 0));
@@ -6341,6 +6429,9 @@ void registerInventoryLuaAPI(lua_State* L) {
         }},
                 // GetGuildBankItemLink(tab, slot) → hyperlink
                 {"GetGuildBankItemLink", [](lua_State* L) -> int {
+            // 0x005a4d30
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+                return luaL_error(L, "Usage: GetGuildBankItemLink(tab, slot)");
             auto* gh = getGameHandler(L);
             const int tab  = static_cast<int>(luaL_optnumber(L, 1, 0));
             const int slot = static_cast<int>(luaL_optnumber(L, 2, 0));
@@ -6371,18 +6462,27 @@ void registerInventoryLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"DepositGuildBankMoney", [](lua_State* L) -> int {
+            // 0x005a5e20
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: DepositGuildBankMoney(money)");
             auto* gh = getGameHandler(L);
             if (gh) gh->depositGuildBankMoney(
                 static_cast<uint32_t>(luaL_optnumber(L, 1, 0)));
             return 0;
         }},
                 {"WithdrawGuildBankMoney", [](lua_State* L) -> int {
+            // 0x005a5ef0
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: WithdrawGuildBankMoney(money)");
             auto* gh = getGameHandler(L);
             if (gh) gh->withdrawGuildBankMoney(
                 static_cast<uint32_t>(luaL_optnumber(L, 1, 0)));
             return 0;
         }},
                 {"AutoStoreGuildBankItem", [](lua_State* L) -> int {
+            // 0x005a63f0
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+                return luaL_error(L, "Usage: AutoStoreGuildBankItem(tab, slot)");
             auto* gh = getGameHandler(L);
             const int tab  = static_cast<int>(luaL_optnumber(L, 1, 1));
             const int slot = static_cast<int>(luaL_optnumber(L, 2, 1));
@@ -6418,6 +6518,9 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // always found none - an empty page over a log the server
                 // keeps. Tab seven in FrameXML's numbering is the money log.
                 {"QueryGuildBankLog", [](lua_State* L) -> int {
+            // 0x005a6d50
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: QueryGuildBankLog(tab)");
             auto* gh = getGameHandler(L);
             const int tab = static_cast<int>(luaL_optnumber(L, 1, 1));
             if (gh && tab >= 1) gh->requestGuildBankLog(static_cast<uint8_t>(tab - 1));
@@ -6426,6 +6529,9 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // Ask for a tab's info text. The panel calls this when a tab is
                 // opened and reads the answer with GetGuildBankText below.
                 {"QueryGuildBankText",  [](lua_State* L) -> int {
+            // 0x005a7110
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: QueryGuildBankLog(tab)");
             auto* gh = getGameHandler(L);
             const int tab = static_cast<int>(luaL_optnumber(L, 1, 0));
             if (gh && tab >= 1) gh->queryGuildBankText(static_cast<uint8_t>(tab - 1));
@@ -6436,6 +6542,9 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // does `if ( text )` and its else branch clears the box, so an
                 // empty string would claim to know the tab has none.
                 {"GetGuildBankText",    [](lua_State* L) -> int {
+            // 0x005a45e0
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetGuildBankText(tab)");
             auto* gh = getGameHandler(L);
             const int tab = static_cast<int>(luaL_optnumber(L, 1, 0));
             if (gh && tab >= 1) {
@@ -6451,6 +6560,9 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // the wire counts from zero, the same offset
                 // GetCurrentGuildBankTab already applies in reverse.
                 {"SetGuildBankText", [](lua_State* L) -> int {
+            // 0x005a7180
+            if (!lua_isnumber(L, 1) || !lua_isstring(L, 2))
+                return luaL_error(L, "Usage: SetGuildBankText(tab, text)");
             auto* gh = getGameHandler(L);
             const int tab = static_cast<int>(luaL_optnumber(L, 1, 0));
             const char* text = luaL_optstring(L, 2, "");
@@ -6459,6 +6571,9 @@ void registerInventoryLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"GetNumGuildBankTransactions", [](lua_State* L) -> int {
+            // 0x005a4520
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetNumGuildBankTransactions(tab)");
             auto* gh = getGameHandler(L);
             const int tab = static_cast<int>(luaL_optnumber(L, 1, 1));
             lua_pushnumber(L, (gh && tab >= 1)
@@ -6475,6 +6590,9 @@ void registerInventoryLuaAPI(lua_State* L) {
         }},
                 // type, name, itemLink, count, tab1, tab2, year, month, day, hour
                 {"GetGuildBankTransaction", [](lua_State* L) -> int {
+            // 0x005a6dc0
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+                return luaL_error(L, "Usage: GetGuildBankTransaction(tab, index)");
             auto* gh = getGameHandler(L);
             const int tab = static_cast<int>(luaL_optnumber(L, 1, 1));
             const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
@@ -6494,6 +6612,9 @@ void registerInventoryLuaAPI(lua_State* L) {
         }},
                 // type, name, amount, year, month, day, hour
                 {"GetGuildBankMoneyTransaction", [](lua_State* L) -> int {
+            // 0x005a4e50
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetGuildBankMoneyTransaction(index)");
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
             if (!gh || index < 1) return 0;
@@ -6582,6 +6703,9 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // SetGuildBankTabInfo(tab, name, icon) - the rename popup's
                 // Okay. The tab is FrameXML's, counted from one.
                 {"SetGuildBankTabInfo", [](lua_State* L) -> int {
+            // 0x005a6a00
+            if (!lua_isnumber(L, 1) || !lua_isstring(L, 2) || !lua_isnumber(L, 3))
+                return luaL_error(L, "Usage: SetGuildBankTabInfo(tab, name, iconIndex)");
             auto* gh = getGameHandler(L);
             const int tab = static_cast<int>(luaL_optnumber(L, 1, 0));
             const char* name = luaL_optstring(L, 2, "");
