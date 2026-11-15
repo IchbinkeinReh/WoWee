@@ -10074,6 +10074,11 @@ static int lua_RecordMissingApi(lua_State* L) {
 
 // CreateFrame(frameType, name, parent, template)
 static int lua_CreateFrame(lua_State* L) {
+    // 0x0081bb20: the type must be a string, and the parent, when there is
+    // a third argument at all, nil or a frame - a parent's name is not one.
+    if (const int t = lua_type(L, 3);
+        !lua_isstring(L, 1) || (t != LUA_TNONE && t != LUA_TNIL && t != LUA_TTABLE))
+        return luaL_error(L, "Usage: CreateFrame(\"frameType\" [, \"name\"] [, parent] [, \"template\"] [, id])");
     const char* frameType = luaL_optstring(L, 1, "Frame");
     const char* name = luaL_optstring(L, 2, nullptr);
     // Which of the per-type methods go on this frame; see where they are set,

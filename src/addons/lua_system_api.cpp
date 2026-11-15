@@ -4311,10 +4311,28 @@ static int lua_Sound_GetNumOutputDrivers(lua_State* L) {
 
 /// The driver at that index, counted from zero as the panel counts it.
 static int lua_Sound_GetOutputDriverNameByIndex(lua_State* L) {
+    // 0x00985ca0, whose usage line drops the "GameSystem_" from its name.
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: Sound_GetOutputDriverNameByIndex(OutputDriverIndex)");
     const int index = static_cast<int>(luaL_optnumber(L, 1, -1));
     std::string name = audio::AudioEngine::instance().getOutputDeviceName();
     if (index != 0 || name.empty()) { lua_pushnil(L); return 1; }
     lua_pushstring(L, name.c_str());
+    return 1;
+}
+
+/// The voice chat system's drivers by index. There are none here, so no
+/// name; the index must still be a number, or the usage line
+/// (0x00985a50, 0x00985b10).
+static int lua_Sound_ChatSystem_GetInputDriverNameByIndex(lua_State* L) {
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: Sound_ChatSystem_GetInputDriverNameByIndex(InputDriverIndex)");
+    lua_pushnil(L);
+    return 1;
+}
+static int lua_Sound_ChatSystem_GetOutputDriverNameByIndex(lua_State* L) {
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: Sound_ChatSystem_GetOutputDriverNameByIndex(OutputDriverIndex)");
+    lua_pushnil(L);
     return 1;
 }
 
@@ -10185,8 +10203,8 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"Sound_GameSystem_GetNumOutputDrivers", lua_Sound_GetNumOutputDrivers},
                 {"Sound_ChatSystem_GetNumInputDrivers",  lua_ReturnZero},
                 {"Sound_ChatSystem_GetNumOutputDrivers", lua_ReturnZero},
-                {"Sound_ChatSystem_GetInputDriverNameByIndex",  lua_ReturnNil},
-                {"Sound_ChatSystem_GetOutputDriverNameByIndex", lua_ReturnNil},
+                {"Sound_ChatSystem_GetInputDriverNameByIndex",  lua_Sound_ChatSystem_GetInputDriverNameByIndex},
+                {"Sound_ChatSystem_GetOutputDriverNameByIndex", lua_Sound_ChatSystem_GetOutputDriverNameByIndex},
                 // Nothing selected, which is a number rather than
                 // nothing: SkillFrame passes the result straight to
                 // GetSkillLineInfo as an index.
