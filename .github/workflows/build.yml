@@ -705,6 +705,15 @@ jobs:
       CCACHE_DIR: ${{ github.workspace }}/../ccache
       CMAKE_C_COMPILER_LAUNCHER: ccache
       CMAKE_CXX_COMPILER_LAUNCHER: ccache
+      # Clang and LLD rather than GCC and GNU ld: the Release links of wowee
+      # and wowee_vr are then ThinLTO (CMake's IPO with Clang), which runs on
+      # every core, where GCC's full LTO through GNU ld ran mostly on one -
+      # about 90 s against 570 s per link on a 12-thread desktop. The client
+      # is no slower for it: the same in-game scenes, A/B, ran 4-9% faster
+      # where the CPU sets the frame rate and the same where the GPU does.
+      # Read by CMake at configure, and by the StormLib build as well.
+      CC: clang
+      CXX: clang++
     steps:
     - name: Checkout
       uses: actions/checkout@v7
@@ -730,7 +739,10 @@ jobs:
       run: |
         packages=(
           mingw-w64-ucrt-x86_64-cmake
-          mingw-w64-ucrt-x86_64-gcc
+          # Clang brings GCC along (libstdc++, the runtime the DLLs bundled
+          # below come from); LLD is not a dependency of either.
+          mingw-w64-ucrt-x86_64-clang
+          mingw-w64-ucrt-x86_64-lld
           mingw-w64-ucrt-x86_64-ninja
           mingw-w64-ucrt-x86_64-pkgconf
           mingw-w64-ucrt-x86_64-sdl3
@@ -772,8 +784,8 @@ jobs:
       uses: actions/cache/restore@v6
       with:
         path: ${{ github.workspace }}/../ccache
-        key: ccache-windows-x86-64-${{ github.sha }}
-        restore-keys: ccache-windows-x86-64-
+        key: ccache-windows-x86-64-clang-${{ github.sha }}
+        restore-keys: ccache-windows-x86-64-clang-
 
     - name: Reset compiler cache statistics
       shell: msys2 {0}
@@ -781,8 +793,17 @@ jobs:
 
     - name: Configure
       shell: msys2 {0}
-      # As on arm64: the editor ships, the tests are not built here.
-      run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DWOWEE_BUILD_EDITOR=ON -DWOWEE_BUILD_TESTS=OFF
+      # As on arm64: the editor ships, the tests are not built here. UCRT64's
+      # Clang links with GNU ld unless told otherwise; LLD is what makes the
+      # LTO link a parallel ThinLTO one.
+      run: |
+        cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DWOWEE_BUILD_EDITOR=ON -DWOWEE_BUILD_TESTS=OFF \
+          -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld -DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld -DCMAKE_MODULE_LINKER_FLAGS=-fuse-ld=lld
+        # The compiler is chosen by CC/CXX above, the LTO by the LLD flag
+        # (CMakeLists.txt, "LTO: on"). A build that lost either would still
+        # pass, only slower to link or to run, and say nothing.
+        grep -q 'set(CMAKE_CXX_COMPILER_ID "Clang")' build/CMakeFiles/*/CMakeCXXCompiler.cmake
+        grep -q -- '-flto=thin' build/build.ninja
 
     - name: Assert AMD FSR2 target
       shell: msys2 {0}
@@ -819,7 +840,7 @@ jobs:
       uses: actions/cache/save@v6
       with:
         path: ${{ github.workspace }}/../ccache
-        key: ccache-windows-x86-64-${{ github.sha }}
+        key: ccache-windows-x86-64-clang-${{ github.sha }}
 
     - name: Bundle DLLs
       shell: msys2 {0}

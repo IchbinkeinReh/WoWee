@@ -1847,6 +1847,18 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_EXE_LINKER_FLAGS MATCHES "-fus
     set(_ipo_supported FALSE)
     message(STATUS "LTO: off (GCC with LLD cannot link GCC's LTO objects)")
 endif()
+# Clang on MinGW (MSYS2 UCRT64/MINGW64) links with GNU ld unless told
+# -fuse-ld=lld, and GNU ld cannot read Clang's bitcode. check_ipo_supported's
+# test project is given neither CMAKE_EXE_LINKER_FLAGS nor CMAKE_LINKER_TYPE,
+# so it links with GNU ld - and archives with llvm-ar, which those
+# environments' Clang does not bring - and fails, while this build links with
+# LLD, which does ThinLTO. The LTO targets here are executables linked from
+# their own objects, never from a bitcode archive, so llvm-ar is not needed.
+if(NOT _ipo_supported AND MINGW AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+   AND (CMAKE_EXE_LINKER_FLAGS MATCHES "-fuse-ld=lld" OR CMAKE_LINKER_TYPE STREQUAL "LLD"))
+    set(_ipo_supported TRUE)
+    message(STATUS "LTO: on (ThinLTO: Clang with LLD, which CMake's own check does not link with)")
+endif()
 if(_ipo_supported)
     set_property(TARGET wowee PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
     # test_game_replay links wowee's own objects (tests/CMakeLists.txt), which
