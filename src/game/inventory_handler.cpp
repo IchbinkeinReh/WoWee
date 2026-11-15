@@ -3973,12 +3973,8 @@ void InventoryHandler::openMailbox(uint64_t guid) {
     owner_.setInteractionObject(guid);
     mailboxGuid_ = guid;
     mailboxOpen_ = true;
-    // Through the setter, which is the only thing that says so. Assigning the
-    // member cleared the flag and told nobody: this client's own minimap asks
-    // hasNewMail() again on every frame it draws, so it went out by itself,
-    // and an interface that is told once kept the envelope up for the rest of
-    // the session.
-    setHasNewMail(false);
+    // The time to the next letter is left alone (0x0056da60 does not touch
+    // it): the envelope goes when the last unread letter is read.
     selectedMailIndex_ = -1;
     showMailCompose_ = false;
     clearMailAttachments();
@@ -4100,16 +4096,13 @@ void InventoryHandler::closeMailbox() {
     // A paper's item that never answered is asked for again at the next mailbox.
     stationeryItemsQueried_.clear();
     clearMailAttachments();
+    inboxCheckPending_ = false;
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("MAIL_CLOSED", {});
     // A look for mail held over while it was open goes out now, with nothing
     // known until the answer (0x00571730 -> 0x0056ff70).
     if (mailCheckOnClose_) {
         mailCheckOnClose_ = false;
-        hasNewMail_ = false;
-        if (owner_.isInWorld() && owner_.getSocket()) {
-            network::Packet query(wireOpcode(Opcode::MSG_QUERY_NEXT_MAIL_TIME));
-            owner_.getSocket()->send(query);
-        }
+        queryNextMailTime();
     }
 }
 
@@ -4118,6 +4111,8 @@ void InventoryHandler::forgetMailbox() {
     // (0x00406510 -> 0x00529160 -> 0x00571630).
     mailInbox_.clear();
     selectedMailIndex_ = -1;
+    mailTotalCount_ = 0;
+    inboxCheckPending_ = false;
 }
 
 void InventoryHandler::checkForMail(float delay) {
@@ -4125,25 +4120,85 @@ void InventoryHandler::checkForMail(float delay) {
         mailCheckOnClose_ = true;
         return;
     }
-    // 0x0056ff70 asks, knowing nothing until the answer; then a zero delay
-    // marks mail as there and says so (UPDATE_PENDING_MAIL). Any other delay
-    // is kept quietly as the time to the next letter, which the answer
-    // replaces - this client keeps no countdown of its own, so nothing is
-    // shown until then.
+    // 0x005704d0: ask, then a zero delay is mail there now; any other delay
+    // replaces the countdown unless one already runs out sooner.
     mailCheckOnClose_ = false;
+    const bool wasNew = hasNewMail();
+    queryNextMailTime();
+    if (std::fabs(delay) >= kMailTimeEpsilon) {
+        if (!(nextMailTime_ >= 0.0f && nextMailTime_ <= delay)) nextMailTime_ = delay;
+        return;
+    }
+    nextMailTime_ = 0.0f;
+    nextMailTimeChanged(wasNew);
+}
+
+void InventoryHandler::queryNextMailTime() {
     if (owner_.isInWorld() && owner_.getSocket()) {
         network::Packet query(wireOpcode(Opcode::MSG_QUERY_NEXT_MAIL_TIME));
         owner_.getSocket()->send(query);
     }
-    if (std::fabs(delay) < 2.3841858e-07f) setHasNewMail(true);
-    else hasNewMail_ = false;
+    nextMailTime_ = -1.0f;
 }
 
-void InventoryHandler::refreshMailList() {
-    if (!mailboxOpen_ || mailboxGuid_ == 0) return;
+void InventoryHandler::nextMailTimeChanged(bool wasNew) {
+    if (!wasNew && hasNewMail()) {
+        if (auto* ac = owner_.services().audioCoordinator)
+            if (auto* sfx = ac->getUiSoundManager()) sfx->playMailReceived();
+    }
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("UPDATE_PENDING_MAIL", {});
+}
+
+void InventoryHandler::tickPendingMail(float deltaTime) {
+    // 0x0056ded0: every listed letter and the next-letter time run down to
+    // zero, and each one reaching it says so.
+    bool changed = false;
+    for (auto& p : pendingMail_) {
+        if (p.empty() || !(p.delay > 0.0f)) continue;
+        p.delay = std::max(0.0f, p.delay - deltaTime);
+        if (std::fabs(p.delay) < kMailTimeEpsilon) changed = true;
+    }
+    if (changed) nextMailTimeChanged(true);
+    if (nextMailTime_ > 0.0f) {
+        nextMailTime_ = std::max(0.0f, nextMailTime_ - deltaTime);
+        if (std::fabs(nextMailTime_) < kMailTimeEpsilon) nextMailTimeChanged(false);
+    }
+}
+
+void InventoryHandler::dropReadPendingSenders() {
+    // 0x0056de00: a listed sender stays while an unread letter of theirs is
+    // in the inbox - matched by the player's guid, or by the creature or
+    // object entry.
+    bool dropped = false;
+    for (auto& p : pendingMail_) {
+        if (p.senderGuid == 0 && p.senderEntry == 0) continue;
+        bool unread = false;
+        for (const auto& mail : mailInbox_) {
+            if (mail.read) continue;
+            if ((p.senderGuid != 0 && p.senderGuid == mail.senderGuid) ||
+                (p.senderEntry != 0 && p.senderEntry == mail.senderEntry)) {
+                unread = true;
+                break;
+            }
+        }
+        if (!unread) { p = PendingMail{}; dropped = true; }
+    }
+    if (dropped && owner_.addonEventCallbackRef())
+        owner_.addonEventCallbackRef()("UPDATE_PENDING_MAIL", {});
+}
+
+void InventoryHandler::checkInbox() {
+    // 0x0056e440: only at a mailbox and with no list already asked for.
+    if (inboxCheckPending_ || mailboxGuid_ == 0 || !mailboxOpen_) return;
+    const auto now = std::chrono::steady_clock::now();
+    if (inboxCheckAllowedAt_ != std::chrono::steady_clock::time_point{} && now < inboxCheckAllowedAt_) {
+        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("MAIL_INBOX_UPDATE", {});
+        return;
+    }
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    auto packet = GetMailListPacket::build(mailboxGuid_);
-    owner_.getSocket()->send(packet);
+    inboxCheckAllowedAt_ = now + std::chrono::seconds(60);
+    inboxCheckPending_ = true;
+    owner_.getSocket()->send(GetMailListPacket::build(mailboxGuid_));
 }
 
 void InventoryHandler::refuseSend(const std::string& reason, const char* logLine) {
@@ -4435,12 +4490,18 @@ void InventoryHandler::mailMarkAsRead(uint32_t mailId) {
     // alone. So the last unread letter could be read with the list in front of
     // the player and the notification stayed up - nothing had said the thing
     // it was reporting had stopped being true.
+    // 0x0056fe30: the read letter's sender may leave the latest-senders
+    // list, and with nothing unread left the waiting mail is gone too.
     if (marked) {
+        dropReadPendingSenders();
         bool anyUnread = false;
         for (const auto& mail : mailInbox_) {
             if (!mail.read) { anyUnread = true; break; }
         }
-        if (anyUnread != hasNewMail_) setHasNewMail(anyUnread);
+        if (hasNewMail() && !anyUnread) {
+            nextMailTime_ = -1.0f;
+            nextMailTimeChanged(true);
+        }
     }
 }
 
@@ -4457,7 +4518,9 @@ void InventoryHandler::handleShowMailbox(network::Packet& packet) {
 }
 
 void InventoryHandler::handleMailListResult(network::Packet& packet) {
+    inboxCheckPending_ = false;
     if (!owner_.getPacketParsers()->parseMailList(packet, mailInbox_)) return;
+    mailTotalCount_ = owner_.getPacketParsers()->mailListTotal();
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("MAIL_INBOX_UPDATE", {});
     for (const auto& mail : mailInbox_) {
         // Player mail carries a GUID, not a name. Ask for it once here; the UI
@@ -4574,26 +4637,25 @@ void InventoryHandler::handleReceivedMail(network::Packet& packet) {
 }
 
 void InventoryHandler::handleQueryNextMailTime(network::Packet& packet) {
+    // 0x0056daf0: the next-letter time, then up to three letters on their way
+    // (sender guid, entry, message type, paper, seconds to go); slots the
+    // packet leaves out are emptied.
     if (!packet.hasRemaining(8)) return;
-    // readFloat() uses memcpy internally, avoiding the strict aliasing violation
-    // that the previous reinterpret_cast<float*> on raw packet bytes had.
-    float nextTime = packet.readFloat();
-    uint32_t count = packet.readUInt32();
-    setHasNewMail(nextTime >= 0.0f && count > 0);
-    packet.skipAll();
-}
-
-void InventoryHandler::setHasNewMail(bool value) {
-    // The sound only on the rising edge (no unread -> unread), so the periodic
-    // next-mail-time poll doesn't repeat it while mail sits unread. No chat
-    // line: the real client shows the minimap's letter (UPDATE_PENDING_MAIL,
-    // 0x005704d0) and says nothing - "You have new mail." was this client's.
-    if (value && !hasNewMail_) {
-        if (auto* ac = owner_.services().audioCoordinator)
-            if (auto* sfx = ac->getUiSoundManager()) sfx->playMailReceived();
+    const bool wasNew = hasNewMail();
+    nextMailTime_ = packet.readFloat();
+    const uint32_t count = packet.readUInt32();
+    size_t i = 0;
+    for (; i < pendingMail_.size() && i < count && packet.hasRemaining(28); ++i) {
+        auto& p = pendingMail_[i];
+        p.senderGuid = packet.readUInt64();
+        p.senderEntry = packet.readUInt32();
+        p.messageType = packet.readUInt32();
+        p.stationery = packet.readUInt32();
+        p.delay = packet.readFloat();
     }
-    hasNewMail_ = value;
-    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("UPDATE_PENDING_MAIL", {});
+    for (; i < pendingMail_.size(); ++i) pendingMail_[i] = PendingMail{};
+    packet.skipAll();
+    nextMailTimeChanged(wasNew);
 }
 
 // ============================================================

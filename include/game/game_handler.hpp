@@ -4745,6 +4745,14 @@ public:
     void mailReturnToSender(uint32_t mailId);
     void mailMarkAsRead(uint32_t mailId);
     void refreshMailList();
+    /// CheckInbox (0x0056e440): the list at most once a minute.
+    void checkInbox();
+    /// GetInboxNumItems' second value: the mailbox's letters, shown or not.
+    uint32_t getMailTotalCount() const;
+    /// GetLatestThreeSenders (0x0056f3a0): who sent the letters already at
+    /// the mailbox, from the server's latest three; a GM's letter (paper 61)
+    /// is named gmName.
+    std::vector<std::string> latestMailSenders(const std::string& gmName) const;
 
     // Bank
     void openBank(uint64_t guid);

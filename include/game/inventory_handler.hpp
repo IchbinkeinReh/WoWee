@@ -8,6 +8,7 @@
 #include "network/packet.hpp"
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <deque>
 #include <functional>
 #include <map>
@@ -512,7 +513,27 @@ public:
     void setMailComposeShowing(bool showing) { showMailCompose_ = showing; }
     void openMailCompose() { showMailCompose_ = true; clearMailAttachments(); }
     void closeMailCompose() { showMailCompose_ = false; clearMailAttachments(); }
-    bool hasNewMail() const { return hasNewMail_; }
+    /// Mail waits at the mailbox: the time to the next letter has run down to
+    /// zero (HasNewMail, 0x0056f350).
+    bool hasNewMail() const { return std::fabs(nextMailTime_) < kMailTimeEpsilon; }
+    /// One letter on its way, as MSG_QUERY_NEXT_MAIL_TIME lists it
+    /// (0x0056daf0): the sender, the paper, and the seconds until it is there.
+    struct PendingMail {
+        uint64_t senderGuid = 0;
+        uint32_t senderEntry = 0;
+        uint32_t messageType = 0;
+        uint32_t stationery = 0;
+        float delay = 0.0f;
+        bool empty() const { return senderGuid == 0 && senderEntry == 0 && messageType == 0; }
+    };
+    /// The server's latest three, empty slots included.
+    const std::array<PendingMail, 3>& pendingMail() const { return pendingMail_; }
+    /// The countdowns, once a frame (0x0056ded0).
+    void tickPendingMail(float deltaTime);
+    /// CheckInbox (0x0056e440): ask for the list, at most once a minute; a
+    /// call inside the minute only redraws what is there (MAIL_INBOX_UPDATE).
+    void checkInbox();
+    uint32_t mailTotalCount() const { return mailTotalCount_; }
     void openMailbox(uint64_t guid);
     /// How many guild bank lists have arrived (SMSG_GUILD_BANK_LIST).
     uint32_t guildBankListCount() const { return guildBankListCount_; }
@@ -903,8 +924,14 @@ private:
     void handleSendMailResult(network::Packet& packet);
     void handleReceivedMail(network::Packet& packet);
     void handleQueryNextMailTime(network::Packet& packet);
-    // Update the unread-mail flag, announcing (chat + sound) once on the rising edge.
-    void setHasNewMail(bool value);
+    /// Ask the server for the next mail time, knowing nothing until it answers
+    /// (0x0056ff70).
+    void queryNextMailTime();
+    /// The time to the next letter changed: UPDATE_PENDING_MAIL, and the
+    /// letter sound when it has just reached zero.
+    void nextMailTimeChanged(bool wasNew);
+    /// Senders whose letters are all read leave the list (0x0056de00).
+    void dropReadPendingSenders();
     void handleEquipmentSetList(network::Packet& packet);
 
     void categorizeTrainerSpells();
@@ -1116,7 +1143,17 @@ private:
     std::vector<MailMessage> mailInbox_;
     int selectedMailIndex_ = -1;
     bool showMailCompose_ = false;
-    bool hasNewMail_ = false;
+    static constexpr float kMailTimeEpsilon = 2.3841858e-07f;
+    /// Seconds to the next letter; zero is mail waiting, negative none known
+    /// (DAT_00ace60c, -1 while a query is out).
+    float nextMailTime_ = -1.0f;
+    std::array<PendingMail, 3> pendingMail_{};
+    /// The mailbox's letter count as the last list gave it (DAT_00beb1dc).
+    uint32_t mailTotalCount_ = 0;
+    /// CheckInbox's throttle (DAT_00beb1e0 / DAT_00beb1e4): when the next
+    /// list may be asked for, and whether one is outstanding.
+    std::chrono::steady_clock::time_point inboxCheckAllowedAt_{};
+    bool inboxCheckPending_ = false;
     /// The paper the next letter is written on - a Stationery.dbc row id, or 0
     /// for none, which is also what the client sends when nothing was picked
     /// (MailInfo.cpp's DAT_00beb1cc).

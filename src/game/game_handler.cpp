@@ -681,6 +681,7 @@ void GameHandler::updateTimers(float deltaTime) {
     // Tick InventoryHandler's auction search cooldown (the authoritative
     // timer - GameHandler previously ticked its own never-set duplicate).
     if (inventoryHandler_) inventoryHandler_->tickAuctionSearchDelay(deltaTime);
+    if (inventoryHandler_) inventoryHandler_->tickPendingMail(deltaTime);
 
     // Tick QuestHandler's pending-accept timeouts (the authoritative maps -
     // GameHandler previously ticked its own never-populated copies, so lost
@@ -1612,6 +1613,34 @@ void GameHandler::closeMailbox() {
 
 void GameHandler::refreshMailList() {
     if (inventoryHandler_) inventoryHandler_->refreshMailList();
+}
+
+void GameHandler::checkInbox() {
+    if (inventoryHandler_) inventoryHandler_->checkInbox();
+}
+
+uint32_t GameHandler::getMailTotalCount() const {
+    return inventoryHandler_ ? inventoryHandler_->mailTotalCount() : 0;
+}
+
+std::vector<std::string> GameHandler::latestMailSenders(const std::string& gmName) const {
+    std::vector<std::string> out;
+    if (!inventoryHandler_) return out;
+    constexpr uint32_t kGmStationery = 61;   // 0x0056d960's 0x3d
+    for (const auto& p : inventoryHandler_->pendingMail()) {
+        if (p.senderGuid == 0 && p.senderEntry == 0 && p.messageType == 0) continue;
+        if (p.delay > 0.0f) continue;   // still on its way
+        if ((p.messageType == 0 || p.messageType == 5) && p.stationery == kGmStationery) {
+            out.push_back(gmName);
+            continue;
+        }
+        MailMessage m;
+        m.messageType = static_cast<uint8_t>(p.messageType);
+        m.senderGuid = p.senderGuid;
+        m.senderEntry = p.senderEntry;
+        out.push_back(getMailSenderName(m));
+    }
+    return out;
 }
 
 void GameHandler::sendMail(const std::string& recipient, const std::string& subject,

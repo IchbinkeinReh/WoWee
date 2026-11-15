@@ -333,6 +333,13 @@ public:
 
     /** Parse SMSG_MAIL_LIST_RESULT into a vector of MailMessage */
     virtual bool parseMailList(network::Packet& packet, std::vector<MailMessage>& inbox);
+    /** How many letters the last list said the mailbox holds, shown or not
+     *  (GetInboxNumItems' second value; the shown count where the format
+     *  carries no total). */
+    [[nodiscard]] uint32_t mailListTotal() const { return mailListTotal_; }
+protected:
+    uint32_t mailListTotal_ = 0;
+public:
 
     /** Build CMSG_MAIL_TAKE_ITEM */
     virtual network::Packet buildMailTakeItem(uint64_t mailboxGuid, uint32_t mailId, uint32_t itemGuidLow) {

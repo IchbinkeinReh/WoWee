@@ -3991,9 +3991,9 @@ void registerSocialLuaAPI(lua_State* L) {
                 if (!gossipQuestIsAvailable(q.questIcon)) continue;
                 lua_pushstring(L, q.title.c_str());
                 lua_pushnumber(L, q.questLevel);
-                // Trivial greys the title out. Nothing here knows a quest's
-                // green range, and guessing it would grey quests that are not.
-                luaPushOneOrNil(L, 0);
+                // Trivial greys the title out, by the client's grey table
+                // (0x0058aba0) as IsAvailableQuestTrivial answers it.
+                luaPushOneOrNil(L, greetingQuestIsTrivial(gh, q.questLevel) ? 1 : 0);
                 luaPushOneOrNil(L, (q.questFlags & kQuestFlagsDaily) ? 1 : 0);
                 luaPushOneOrNil(L, q.isRepeatable ? 1 : 0);
                 n += 5;
@@ -4015,7 +4015,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 if (!gossipQuestIsActive(q.questIcon)) continue;
                 lua_pushstring(L, q.title.c_str());
                 lua_pushnumber(L, q.questLevel);
-                luaPushOneOrNil(L, 0);
+                luaPushOneOrNil(L, greetingQuestIsTrivial(gh, q.questLevel) ? 1 : 0);   // 0x0058b490
                 luaPushOneOrNil(L, gossipQuestIsComplete(gh, q) ? 1 : 0);
                 n += 4;
             }

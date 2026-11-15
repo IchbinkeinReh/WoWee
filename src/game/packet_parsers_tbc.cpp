@@ -885,6 +885,7 @@ bool TbcPacketParsers::parseMailList(network::Packet& packet, std::vector<MailMe
     if (remaining < 1) return false;
 
     uint8_t count = packet.readUInt8();
+    mailListTotal_ = count;
     LOG_INFO("SMSG_MAIL_LIST_RESULT (TBC): count=", static_cast<int>(count));
 
     inbox.clear();

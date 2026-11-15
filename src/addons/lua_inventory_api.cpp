@@ -1921,9 +1921,17 @@ static int lua_DeleteInboxItem(lua_State* L) {
     return 0;
 }
 
-// InboxItemCanDelete(index) - nothing here refuses a deletion
+// InboxItemCanDelete(index) (0x0056f280) - 1, or nil when the letter is a
+// player's (message type 0), was not sent back (flags 0x2, 0x200) nor carries
+// the 0x8 flag, and still holds money or an attachment: the inbox offers
+// Return rather than Delete for those. Nil for an index past the inbox too.
 static int lua_InboxItemCanDelete(lua_State* L) {
-    luaPushOneOrNil(L, 1);
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: InboxItemCanDelete(index)");   // 0x0056f280
+    const auto* mail = mailAt(getGameHandler(L), static_cast<int>(std::lround(lua_tonumber(L, 1))));
+    if (!mail) { lua_pushnil(L); return 1; }
+    const bool keep = (mail->flags & 0x20au) == 0 && mail->messageType == 0 &&
+                      (!mail->attachments.empty() || mail->money != 0);
+    luaPushOneOrNil(L, keep ? 0 : 1);
     return 1;
 }
 
@@ -2096,7 +2104,7 @@ static int lua_ReturnInboxItem(lua_State* L) {
 }
 
 static int lua_CheckInbox(lua_State* L) {
-    if (auto* gh = getGameHandler(L)) gh->refreshMailList();
+    if (auto* gh = getGameHandler(L)) gh->checkInbox();
     return 0;
 }
 
@@ -3939,29 +3947,26 @@ static int lua_GetKeyRingSize(lua_State* L) {
 }
 
 // GetContainerItemInfo(container, slot) → texture, count, locked, quality, readable, lootable, link
-// GetLatestThreeSenders() - who the unread mail is from.
+// GetLatestThreeSenders() - who the waiting mail is from.
 //
 // The minimap's mail icon builds its tooltip from these: with a name it says
 // "You have mail from", with none just "You have mail". This client has had
 // the inbox and the sender names all along and the tooltip only ever managed
 // the second, shorter sentence.
 //
-// Newest first, which is the order the tooltip reads them in, and only unread
-// mail - a sender whose letter has been opened is not news. Fewer than three
-// is normal and the caller tests each one, so the tail is simply absent.
+// From the server's list of letters on their way rather than the inbox, which
+// is only there at a mailbox; a sender leaves it once their letters are read.
 static int lua_GetLatestThreeSenders(lua_State* L) {
+    // 0x0056f3a0: as many names as letters have arrived from the server's
+    // latest three, none at all when there are none.
     auto* gh = getGameHandler(L);
-    if (!gh) { lua_pushnil(L); lua_pushnil(L); lua_pushnil(L); return 3; }
-
-    const auto& inbox = gh->getMailInbox();
-    int pushed = 0;
-    for (auto it = inbox.rbegin(); it != inbox.rend() && pushed < 3; ++it) {
-        if (it->read || it->senderName.empty()) continue;
-        lua_pushstring(L, it->senderName.c_str());
-        ++pushed;
-    }
-    for (; pushed < 3; ++pushed) lua_pushnil(L);
-    return 3;
+    if (!gh) return 0;
+    lua_getglobal(L, "GM_EMAIL_NAME");
+    const std::string gmName = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+    lua_pop(L, 1);
+    const auto names = gh->latestMailSenders(gmName);
+    for (const auto& n : names) lua_pushstring(L, n.c_str());
+    return static_cast<int>(names.size());
 }
 
 // GetContainerItemDurability(bag, slot) → current, maximum (0x005d7ef0)
@@ -5079,7 +5084,7 @@ static std::string lootCoinText(uint32_t copper) {
     std::string out;
     auto add = [&out](uint32_t v, const char* unit) {
         if (v == 0) return;
-        if (!out.empty()) out += ", ";
+        if (!out.empty()) out += '\n';
         out += std::to_string(v);
         out += ' ';
         out += unit;
@@ -5158,25 +5163,22 @@ static int lua_GetLootSlotInfo(lua_State* L) {
     if (lootHasCoin(gh) && slot == 1) {
         // Taken: the slot stays, empty, as an item's does.
         if (loot.goldLooted) return luaReturnNil(L);
-        // The coin slot describes itself: the interface shows the amount as the
-        // name and has a texture of its own for it.
-        //
-        // Which coin depends on how much, as it does everywhere else money is
-        // drawn: gold at a gold and above, silver at a silver, copper below.
-        // This was pinned to the gold pile, so a corpse carrying eight copper
-        // was looted from a heap of gold.
-        //
-        // The same thresholds GetCoinIcon uses, against the icon set's own
-        // grouping - the pairs run gold, silver, copper.
-        constexpr uint32_t kCopperPerSilver = 100;
-        constexpr uint32_t kCopperPerGold   = 100 * 100;
-        const char* coin = (loot.gold >= kCopperPerGold)   ? "Interface\\Icons\\INV_Misc_Coin_01"
-                         : (loot.gold >= kCopperPerSilver) ? "Interface\\Icons\\INV_Misc_Coin_03"
-                                                           : "Interface\\Icons\\INV_Misc_Coin_05";
+        // The coin slot describes itself (0x00588570): an icon by the amount
+        // (0x007e7cc0), the amount as the name, one unit to a line
+        // (0x007e7d80 with "\n"), and quantity and quality both zero - the
+        // loot frame draws a count over anything above one, and the copper
+        // amount was drawn there.
+        const uint32_t c = static_cast<uint32_t>(loot.gold);
+        const char* coin = c < 10     ? "Interface\\Icons\\INV_Misc_Coin_05"
+                         : c < 100    ? "Interface\\Icons\\INV_Misc_Coin_06"
+                         : c < 1000   ? "Interface\\Icons\\INV_Misc_Coin_03"
+                         : c < 10000  ? "Interface\\Icons\\INV_Misc_Coin_04"
+                         : c < 100000 ? "Interface\\Icons\\INV_Misc_Coin_01"
+                                      : "Interface\\Icons\\INV_Misc_Coin_02";
         lua_pushstring(L, coin);
         lua_pushstring(L, lootCoinText(loot.gold).c_str());
-        lua_pushnumber(L, loot.gold);
-        lua_pushnumber(L, 1);
+        lua_pushnumber(L, 0);
+        lua_pushnumber(L, 0);
         luaPushOneOrNil(L, 0);
         return 5;
     }
@@ -7452,9 +7454,9 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // has been sent, so none is waiting out of view.
                 {"GetInboxNumItems", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const double n = gh ? static_cast<double>(gh->getMailInbox().size()) : 0.0;
-            lua_pushnumber(L, n);
-            lua_pushnumber(L, n);
+            // 0x0056d6d0: the letters shown, then all the mailbox holds.
+            lua_pushnumber(L, gh ? static_cast<double>(gh->getMailInbox().size()) : 0.0);
+            lua_pushnumber(L, gh ? static_cast<double>(gh->getMailTotalCount()) : 0.0);
             return 2;
         }},
                 {"GetInboxHeaderInfo", [](lua_State* L) -> int {
@@ -7636,13 +7638,8 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"HasNewMail", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) { return luaReturnNil(L); }
-            bool hasNew = gh->hasNewMail();
-            if (!hasNew) {
-                for (const auto& m : gh->getMailInbox()) {
-                    if (!m.read) { hasNew = true; break; }
-                }
-            }
-            luaPushOneOrNil(L, hasNew ? 1 : 0);
+            // 0x0056f350: the time to the next letter has run out.
+            luaPushOneOrNil(L, gh->hasNewMail() ? 1 : 0);
             return 1;
         }},
     };
