@@ -236,8 +236,9 @@ wowee_add_test(test_hill_climbing
 # ── test_tooltip_setter_rules ───────────────────────────────
 # What a GameTooltip setter builds, and so which OnTooltipSet* script it ends
 # with: SetTradeSkillItem's item, spell or reagent (0x0062eae0), the count it
-# prices (0x008016c0), and the item a trade spell's tooltip ends with
-# (0x006238a0). Header-only.
+# prices (0x008016c0), the item a trade spell's tooltip ends with
+# (0x006238a0), what an action-bar macro is hovered to (0x00630d20) and the
+# aura filter (0x00608390). Header-only.
 wowee_add_test(test_tooltip_setter_rules
     SOURCES test_tooltip_setter_rules.cpp)
 
@@ -569,6 +570,20 @@ target_include_directories(test_addon_lua_snippets SYSTEM PRIVATE
 target_link_libraries(test_addon_lua_snippets PRIVATE catch2_main lua51)
 add_test(NAME addon_lua_snippets COMMAND test_addon_lua_snippets)
 register_test_target(test_addon_lua_snippets)
+
+# ── test_unit_aura_call ─────────────────────────────────────
+# The UnitAura call GameTooltip:SetUnitAura makes. With no filter its missing
+# slot read as UnitAura itself, so SetUnitAura("player", 1) built nothing.
+add_executable(test_unit_aura_call
+    test_unit_aura_call.cpp
+    ${TEST_COMMON_SOURCES}
+)
+target_include_directories(test_unit_aura_call PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_unit_aura_call SYSTEM PRIVATE
+    ${TEST_SYSTEM_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/extern/lua-5.1.5/src)
+target_link_libraries(test_unit_aura_call PRIVATE catch2_main lua51)
+add_test(NAME unit_aura_call COMMAND test_unit_aura_call)
+register_test_target(test_unit_aura_call)
 
 # ── framexml_compiles ───────────────────────────────────────
 # Not a unit test: it emits every real FrameXML file and asks Lua itself

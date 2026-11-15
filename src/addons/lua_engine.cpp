@@ -27,6 +27,7 @@
 #include "addons/lua_api_helpers.hpp"
 #include "addons/object_type.hpp"
 #include "addons/tooltip_setter_rules.hpp"
+#include "addons/unit_aura_call.hpp"
 #include "game/spell_description_eval.hpp"
 #include "network/world_socket.hpp"
 #include "addons/addon_lua_snippets.hpp"
@@ -4081,8 +4082,63 @@ int lua_Tooltip_SetAction(lua_State* L) {
         luaPushOneOrNil(L, fillSpellTooltip(L, w, gh, action.id, !uberTooltips(L)) ? 1 : 0);
         return 1;
     }
-    // A macro is the third kind a slot can hold and it has no tooltip of its
-    // own - WoW shows the macro's name from the button rather than from here.
+    if (action.type == game::ActionBarSlot::MACRO) {
+        // 0x00630d20 (SetAction's macro branch, 0x00631000 via 0x005648d0):
+        // a macro with a #showtooltip line is the tooltip of what it shows -
+        // its item, through the item builder with the carried instance where
+        // the player has one (0x00754a20), else its spell, brief as a spell
+        // on the bar is - and either ends with its own OnTooltipSet* script.
+        // Anything else is the macro's name in white, and SetAction answers
+        // nil. The answer is the builder's, or'd with whether the macro can
+        // change (+0x574), which keeps ActionButton_SetTooltip refreshing it.
+        // Whatever spell an earlier setter left for GetSpell goes; the spell
+        // builder sets its own.
+        lua_pushnil(L);
+        lua_setfield(L, 1, "__spellId");
+        wowee::addons::MacroShownState shown;
+        if (!wowee::addons::macroShownState(L, gh, action.id, shown)) {
+            luaPushOneOrNil(L, 0);
+            return 1;
+        }
+        using wowee::addons::tooltip_rules::MacroTooltip;
+        switch (wowee::addons::tooltip_rules::macroActionTooltip(shown.showTooltip, shown.item, shown.spell)) {
+        case MacroTooltip::Item: {
+            const game::ItemDef* carried = nullptr;
+            gh->getInventory().forEachCarried([&](const game::ItemDef& d) {
+                if (!carried && d.itemId == shown.item) carried = &d;
+            });
+            const bool built = fillItemTooltipById(L, gh, shown.item, carried);
+            luaPushOneOrNil(L, built || shown.dynamic ? 1 : 0);
+            return 1;
+        }
+        case MacroTooltip::Spell: {
+            // -1, a command that named nothing, is refused by the builder,
+            // which hides the tooltip (0x006238a0 -> 0x0048f620). The pet's
+            // flag (+0x56c) goes to the cooldown only: the builder is asked
+            // as for the player's own spell, as a spell on the bar is.
+            const bool built = shown.spell > 0 &&
+                fillSpellTooltip(L, w, gh, static_cast<uint32_t>(shown.spell), !uberTooltips(L));
+            if (!built) {
+                clearTooltipLines(L, w);
+                w->shown = false;
+            }
+            luaPushOneOrNil(L, built || shown.dynamic ? 1 : 0);
+            return 1;
+        }
+        case MacroTooltip::Name:
+            break;
+        }
+        w->isTooltip = true;
+        clearTooltipLines(L, w);
+        wowee::ui::Widget::TooltipLine line;
+        line.left = gh->getMacroName(action.id);
+        line.lc[0] = line.lc[1] = line.lc[2] = line.lc[3] = 1.0f;
+        line.rc[0] = line.rc[1] = line.rc[2] = line.rc[3] = 1.0f;
+        w->tooltipLines.push_back(std::move(line));
+        w->shown = true;
+        luaPushOneOrNil(L, 0);
+        return 1;
+    }
     luaPushOneOrNil(L, 0);
     return 1;
 }
@@ -4664,15 +4720,13 @@ int lua_Tooltip_SetUnitAura(lua_State* L) {
         return luaL_error(L, "Usage: %s:SetUnitAura(\"unit\", [index] or [\"name\", \"rank\"][, \"filter\"])", usageName(L, 1));
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
-    if (!w || !gh) { lua_pushboolean(L, 0); return 1; }
+    // 0x00625f00 answers nothing either way: built or not, the call returns
+    // no values.
+    if (!w || !gh) return 0;
 
-    // Through UnitAura itself, so the index means what the buff frame meant.
-    lua_getglobal(L, "UnitAura");
-    if (!lua_isfunction(L, -1)) { lua_pop(L, 1); lua_pushboolean(L, 0); return 1; }
-    lua_pushvalue(L, 2);
-    lua_pushvalue(L, 3);
-    lua_pushvalue(L, 4);
-    if (lua_pcall(L, 3, 11, 0) != 0) { lua_pop(L, 1); lua_pushboolean(L, 0); return 1; }
+    // Through UnitAura itself, so the index means what the buff frame meant,
+    // and the filter defaults as UnitAura's does - to HELPFUL (0x00608390).
+    if (!wowee::addons::callUnitAuraForSetter(L)) return 0;
     const int base = lua_gettop(L) - 10;
     const char* auraName = lua_tostring(L, base);
     const double duration = lua_tonumber(L, base + 5);
@@ -4680,7 +4734,7 @@ int lua_Tooltip_SetUnitAura(lua_State* L) {
     const uint32_t spellId = static_cast<uint32_t>(lua_tonumber(L, base + 10));
     const std::string name = auraName ? auraName : "";
     lua_pop(L, 11);
-    if (name.empty()) { lua_pushboolean(L, 0); return 1; }
+    if (name.empty()) return 0;
 
     auto line = [&w](std::string l, std::string r, float cr, float cg, float cb) {
         wowee::ui::Widget::TooltipLine t;
@@ -13141,6 +13195,9 @@ void LuaEngine::registerCoreAPI() {
     lua_setglobal(L_, "__WoweeTooltipSetSpellByID");
     lua_pushcfunction(L_, lua_Tooltip_SetUnitAura);
     lua_setglobal(L_, "__WoweeTooltipSetUnitAura");
+    // SetAction's macro branch, which the Lua SetAction hands a macro to.
+    lua_pushcfunction(L_, lua_Tooltip_SetAction);
+    lua_setglobal(L_, "__WoweeTooltipSetAction");
     // The spell-shaped setters the client builds itself (0x006238a0).
     lua_pushcfunction(L_, lua_Tooltip_SetSendMailItem);
     lua_setglobal(L_, "__WoweeTooltipSetSendMailItem");
@@ -13184,7 +13241,8 @@ void LuaEngine::registerCoreAPI() {
     // The tooltip builders the bootstrap Lua calls by these names fill lines
     // too, so they hold the line font strings to the lines the same way.
     for (const char* builder :
-         {"__WoweeTooltipSetSpellByID", "__WoweeTooltipSetUnitAura", "__WoweeTooltipSetSendMailItem",
+         {"__WoweeTooltipSetSpellByID", "__WoweeTooltipSetUnitAura", "__WoweeTooltipSetAction",
+          "__WoweeTooltipSetSendMailItem",
           "__WoweeTooltipSetPetAction", "__WoweeTooltipSetShapeshift", "__WoweeTooltipAdoptFontStrings",
           "__WoweeTooltipSetPossession", "__WoweeTooltipSetQuestRewardSpell", "__WoweeTooltipSetTotem",
           "__WoweeTooltipSetText", "__WoweeTooltipItemBuilt", "__WoweeTooltipSetAuctionSellItem"}) {
@@ -14559,6 +14617,10 @@ void LuaEngine::registerCoreAPI() {
         "    elseif actionType == 'equipmentset' and id then\n"
         "        self:SetEquipmentSet(id)\n"
         "        return self:NumLines() > 0\n"
+        // A macro is what its #showtooltip shows, or its name (0x00631000 ->
+        // 0x00630d20), built by the C binding (lua_Tooltip_SetAction).
+        "    elseif actionType == 'macro' then\n"
+        "        return __WoweeTooltipSetAction(self, slot)\n"
         "    end\n"
         "    return false\n"
         "end\n"

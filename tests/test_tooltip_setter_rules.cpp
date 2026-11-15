@@ -103,3 +103,50 @@ TEST_CASE("a trade spell ends with the tooltip of the item it makes", "[tooltip]
     const uint32_t enchantAfter[3] = {kCreateItem, kEnchantItem, 0};
     CHECK(spellTooltipAppendsItem(0x20, enchantAfter, 1251));
 }
+
+// ── An action-bar macro, hovered (0x00630d20) ───────────────────────────────
+// A macro on the bar answered nothing at all. The client describes what a
+// #showtooltip macro shows - its item first, then its spell - and names any
+// other macro in white.
+
+TEST_CASE("a #showtooltip macro is its item's tooltip before its spell's", "[tooltip][macro]") {
+    CHECK(macroActionTooltip(true, 6948, 8690) == MacroTooltip::Item);
+    CHECK(macroActionTooltip(true, 6948, 0) == MacroTooltip::Item);
+}
+
+TEST_CASE("a #showtooltip macro with no item is its spell's tooltip", "[tooltip][macro]") {
+    CHECK(macroActionTooltip(true, 0, 133) == MacroTooltip::Spell);
+    // A command that named nothing (-1) still goes to the spell builder,
+    // which refuses it and hides the tooltip.
+    CHECK(macroActionTooltip(true, 0, -1) == MacroTooltip::Spell);
+}
+
+TEST_CASE("a macro without #showtooltip, or showing nothing, is its name", "[tooltip][macro]") {
+    CHECK(macroActionTooltip(false, 6948, 0) == MacroTooltip::Name);
+    CHECK(macroActionTooltip(false, 0, 133) == MacroTooltip::Name);
+    CHECK(macroActionTooltip(true, 0, 0) == MacroTooltip::Name);
+}
+
+// ── The aura filter (0x00608390) ────────────────────────────────────────────
+
+TEST_CASE("no aura filter counts buffs", "[tooltip][aura]") {
+    CHECK(auraFilterBits(nullptr) == kAuraHelpful);
+    CHECK(auraFilterBits("") == kAuraHelpful);
+    CHECK(auraFilterBits("  | ") == kAuraHelpful);
+}
+
+TEST_CASE("HELPFUL and HARMFUL replace each other, the last one winning", "[tooltip][aura]") {
+    CHECK(auraFilterBits("HARMFUL") == kAuraHarmful);
+    CHECK(auraFilterBits("harmful") == kAuraHarmful);
+    CHECK(auraFilterBits("HARMFUL|HELPFUL") == kAuraHelpful);
+    CHECK(auraFilterBits("HELPFUL HARMFUL") == kAuraHarmful);
+}
+
+TEST_CASE("the other filter words add their bit and unknown words are passed over", "[tooltip][aura]") {
+    CHECK(auraFilterBits("PLAYER") == (kAuraHelpful | kAuraPlayer));
+    CHECK(auraFilterBits("HARMFUL|RAID") == (kAuraHarmful | kAuraRaid));
+    CHECK(auraFilterBits("CANCELABLE") == (kAuraHelpful | kAuraCancelable));
+    CHECK(auraFilterBits("NOT_CANCELABLE") == (kAuraHelpful | kAuraNotCancelable));
+    CHECK(auraFilterBits("HELPFULX|PLAYERS") == kAuraHelpful);
+    CHECK(auraFilterBits("Player|harmful") == (kAuraHarmful | kAuraPlayer));
+}

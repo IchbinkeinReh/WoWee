@@ -27,9 +27,11 @@
  * starts with (0x0061c620).
  */
 
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 namespace wowee::addons::tooltip_rules {
 
@@ -118,6 +120,77 @@ inline TradeSkillTooltip tradeSkillTooltip(uint32_t firstEffect, uint32_t firstI
         return out;
     }
     return out;
+}
+
+/// What a macro on the action bar is hovered to (0x00630d20, reached from
+/// SetAction 0x00631000 for a slot holding a macro, 0x005648d0).
+///
+/// Only a macro whose text has a "#showtooltip" line (+0x570, set as the text
+/// is read, 0x00565c40) describes what it shows: its item (+0x568) through
+/// the item builder - ending OnTooltipSetItem - else its spell (+0x564)
+/// through the spell builder - ending OnTooltipSetSpell. Anything else, a
+/// macro without the line or one whose line names nothing, is the macro's
+/// name alone in white, and SetAction answers nil.
+enum class MacroTooltip {
+    Name,   ///< the macro's name (macro +0x20), white, no script
+    Item,   ///< the item builder 0x006277f0
+    Spell,  ///< the spell builder 0x006238a0
+};
+
+/// `spell` as the macro holds it: 0 when no command applied, -1 for one that
+/// named nothing (which the spell builder refuses: the tooltip hides).
+constexpr MacroTooltip macroActionTooltip(bool showTooltip, uint32_t item, int32_t spell) {
+    if (!showTooltip) return MacroTooltip::Name;
+    if (item != 0) return MacroTooltip::Item;
+    if (spell != 0) return MacroTooltip::Spell;
+    return MacroTooltip::Name;
+}
+
+/// The aura filter bits 0x00608390 builds for UnitAura, UnitBuff, UnitDebuff,
+/// CancelUnitBuff and the tooltip's SetUnitAura / SetUnitBuff / SetUnitDebuff.
+enum AuraFilter : uint8_t {
+    kAuraHelpful = 0x01,
+    kAuraHarmful = 0x02,
+    kAuraPlayer = 0x04,
+    kAuraRaid = 0x08,
+    kAuraCancelable = 0x10,
+    kAuraNotCancelable = 0x20,
+};
+
+/// 0x00608390's filter: HELPFUL (1) before anything is read - so no filter,
+/// nil or "" counts buffs - then the text split on spaces and '|'
+/// (0x0076f1e0 with " |", a word cut to 31 characters), each word compared
+/// without case (0x0076e780): HELPFUL and HARMFUL replace each other, the
+/// last one read winning, PLAYER, RAID, CANCELABLE and NOT_CANCELABLE add
+/// their bit, and any other word is passed over.
+inline uint8_t auraFilterBits(const char* filter) {
+    uint8_t bits = kAuraHelpful;
+    if (!filter) return bits;
+    const auto is = [](const std::string& word, const char* name) {
+        std::size_t i = 0;
+        for (; name[i] != '\0'; ++i) {
+            if (i >= word.size() ||
+                std::toupper(static_cast<unsigned char>(word[i])) != static_cast<unsigned char>(name[i]))
+                return false;
+        }
+        return i == word.size();
+    };
+    const char* p = filter;
+    while (*p != '\0') {
+        while (*p == ' ' || *p == '|') ++p;
+        if (*p == '\0') break;
+        std::string word;
+        for (; *p != '\0' && *p != ' ' && *p != '|'; ++p) {
+            if (word.size() < 31) word.push_back(*p);
+        }
+        if (is(word, "HELPFUL")) bits = static_cast<uint8_t>((bits & ~kAuraHarmful) | kAuraHelpful);
+        else if (is(word, "HARMFUL")) bits = static_cast<uint8_t>((bits & ~kAuraHelpful) | kAuraHarmful);
+        else if (is(word, "PLAYER")) bits |= kAuraPlayer;
+        else if (is(word, "RAID")) bits |= kAuraRaid;
+        else if (is(word, "CANCELABLE")) bits |= kAuraCancelable;
+        else if (is(word, "NOT_CANCELABLE")) bits |= kAuraNotCancelable;
+    }
+    return bits;
 }
 
 }  // namespace wowee::addons::tooltip_rules

@@ -771,6 +771,17 @@ static const MacroShown* macroShown(lua_State* L, game::GameHandler* gh, uint32_
     return &m;
 }
 
+bool macroShownState(lua_State* L, game::GameHandler* gh, uint32_t macroId, MacroShownState& out) {
+    const MacroShown* m = macroShown(L, gh, macroId);
+    if (!m) return false;
+    out.showTooltip = m->parsed.showTooltip;
+    out.dynamic = m->parsed.dynamic;
+    out.item = m->result.item;
+    out.spell = m->result.spell;
+    out.petSpell = m->result.petSpell;
+    return true;
+}
+
 /// 0x00566660, every frame (it is called from the game UI's idle, 0x0052b1c0):
 /// each macro on the bars whose answer can change is worked out again, and
 /// the bar slots of one whose answer moved redraw (0x005aa920).
@@ -4104,6 +4115,7 @@ void registerActionLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             const MacroShown* m = macroShown(L, gh, macroArg(L, gh, 1));
             if (!m) return 0;
+            gh->loadSpellNameCache();
             const auto it = m->result.spell > 0
                 ? gh->spellNameCacheRef().find(static_cast<uint32_t>(m->result.spell))
                 : gh->spellNameCacheRef().end();
@@ -4126,6 +4138,23 @@ void registerActionLuaAPI(lua_State* L) {
             if (!info || !info->valid) {
                 gh->ensureItemInfo(m->result.item);
                 return 0;
+            }
+            // One the player carries is named and linked as that item
+            // (0x00754a20 -> 0x00707c20, 0x0061e3a0): its rolled suffix, its
+            // enchant and its gems; else the template's (0x00706d70,
+            // 0x0061e360).
+            const game::ItemDef* carried = nullptr;
+            gh->getInventory().forEachCarried([&](const game::ItemDef& d) {
+                if (!carried && d.itemId == m->result.item) carried = &d;
+            });
+            if (carried && carried->guid != 0) {
+                game::ItemLinkInstance inst = gh->itemLinkInstance(carried->guid);
+                if (inst.randomPropertyId == 0) inst.randomPropertyId = carried->randomPropertyId;
+                const std::string name = gh->itemNameWithProperty(info->name, inst.randomPropertyId);
+                lua_pushstring(L, name.c_str());
+                lua_pushstring(L, game::itemChatLink(m->result.item, info->quality, name, inst,
+                                                     gh->getPlayerLevel()).c_str());
+                return 2;
             }
             lua_pushstring(L, info->name.c_str());
             lua_pushstring(L, game::buildItemLink(m->result.item, info->quality, info->name,
