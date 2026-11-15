@@ -6882,20 +6882,13 @@ void SocialHandler::sendBfMgrResponse(Opcode op, uint32_t battleId, bool accept,
     owner_.getSocket()->send(pkt);
 }
 
-void SocialHandler::acceptBfMgrInvite() {
-    if (!owner_.bfMgrInvitePendingRef()) return;
-    sendBfMgrResponse(Opcode::CMSG_BATTLEFIELD_MGR_ENTRY_INVITE_RESPONSE,
-                      owner_.getBfMgrBattleId(), true, true);
+// BattlefieldMgrEntryInviteResponse(battleId, accept) (0x0054e160 ->
+// 0x0054d4f0): CMSG_BATTLEFIELD_MGR_ENTRY_INVITE_RESPONSE with the battle the
+// caller named and the answer, asked whatever is pending.
+void SocialHandler::respondBfMgrEntryInvite(uint32_t battleId, bool accept) {
+    sendBfMgrResponse(Opcode::CMSG_BATTLEFIELD_MGR_ENTRY_INVITE_RESPONSE, battleId, accept, true);
     owner_.bfMgrInvitePendingRef() = false;
-    LOG_INFO("acceptBfMgrInvite: battle ", owner_.getBfMgrBattleId());
-}
-
-void SocialHandler::declineBfMgrInvite() {
-    if (!owner_.bfMgrInvitePendingRef()) return;
-    sendBfMgrResponse(Opcode::CMSG_BATTLEFIELD_MGR_ENTRY_INVITE_RESPONSE,
-                      owner_.getBfMgrBattleId(), false, true);
-    owner_.bfMgrInvitePendingRef() = false;
-    LOG_INFO("declineBfMgrInvite: battle ", owner_.getBfMgrBattleId());
+    LOG_INFO("respondBfMgrEntryInvite: battle ", battleId, accept ? " accepted" : " declined");
 }
 
 void SocialHandler::respondBfMgrQueueInvite(uint32_t battleId, bool accept) {

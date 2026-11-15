@@ -486,8 +486,7 @@ public:
     void declineSummon();
 
     // Battlefield Manager
-    void acceptBfMgrInvite();
-    void declineBfMgrInvite();
+    void respondBfMgrEntryInvite(uint32_t battleId, bool accept);
     void respondBfMgrQueueInvite(uint32_t battleId, bool accept);
     void requestBfMgrExit(uint32_t battleId);
 

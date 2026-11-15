@@ -1031,8 +1031,7 @@ public:
     bool isInBfMgrZone()   const { return bfMgrActive_; }
     uint32_t getBfMgrZoneId() const { return bfMgrZoneId_; }
     uint32_t getBfMgrBattleId() const { return bfMgrBattleId_; }
-    void acceptBfMgrInvite();
-    void declineBfMgrInvite();
+    void respondBfMgrEntryInvite(uint32_t battleId, bool accept);
     void respondBfMgrQueueInvite(uint32_t battleId, bool accept);
     void requestBfMgrExit(uint32_t battleId);
     void requestBfMgrQueue(uint32_t battleId);

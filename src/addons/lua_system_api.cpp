@@ -6966,11 +6966,19 @@ static int lua_IsBattlefieldArena(lua_State* L) {
 // The second is whether the team is a registered one rather than a skirmish,
 // which needs the arena team the server never mentions outside a match. Left
 // nil, and the frame treats that as unregistered - which a skirmish is.
+// IsActiveBattlefieldArena() (0x00549ad0) → in an arena, and whether the
+// battle the player is in is a rated one (the active queue's rated flag).
 static int lua_IsActiveBattlefieldArena(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (gh && gh->isArenaMap(gh->getCurrentMapId())) luaPushOneOrNil(L, 1);
     else lua_pushnil(L);
-    lua_pushnil(L);
+    bool rated = false;
+    if (gh) {
+        constexpr uint32_t kStatusActive = 3;
+        for (const auto& q : gh->getBgQueues())
+            if (q.statusId == kStatusActive) { rated = q.isRated; break; }
+    }
+    luaPushOneOrNil(L, rated ? 1 : 0);
     return 2;
 }
 
