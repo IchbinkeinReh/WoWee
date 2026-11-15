@@ -22,13 +22,23 @@ mkdir -p "$work" "$out"
 # FFmpeg, from the official release tarball at a pinned hash.
 FFMPEG_VERSION=9.0.2
 FFMPEG_SHA256=8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
-tarball="$work/ffmpeg-${FFMPEG_VERSION}.tar.xz"
-if [ ! -f "$tarball" ]; then
-    curl -fsSL --retry 3 -o "$tarball" "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
+# The FFmpeg build depends only on its version and the two scripts that
+# configure it; a prefix stamped with those is reused as it is (CI restores it
+# from a cache), which saves most of the job's time.
+ffmpeg_stamp="${FFMPEG_VERSION}-$(cat "$0" "$src/tools/build-ffmpeg-minimal.sh" | sha256sum | cut -c1-16)"
+if [ -f "$work/ffmpeg/.wowee-stamp" ] && [ "$(cat "$work/ffmpeg/.wowee-stamp")" = "$ffmpeg_stamp" ]; then
+    echo "FFmpeg ${FFMPEG_VERSION}: reusing the build in $work/ffmpeg"
+else
+    rm -rf "$work/ffmpeg" "$work/ffmpeg-build"
+    tarball="$work/ffmpeg-${FFMPEG_VERSION}.tar.xz"
+    if [ ! -f "$tarball" ]; then
+        curl -fsSL --retry 3 -o "$tarball" "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
+    fi
+    echo "${FFMPEG_SHA256}  ${tarball}" | sha256sum -c -
+    tar -xf "$tarball" -C "$work"
+    bash "$src/tools/build-ffmpeg-minimal.sh" "$work/ffmpeg-${FFMPEG_VERSION}" "$work/ffmpeg" "$work/ffmpeg-build"
+    echo "$ffmpeg_stamp" > "$work/ffmpeg/.wowee-stamp"
 fi
-echo "${FFMPEG_SHA256}  ${tarball}" | sha256sum -c -
-tar -xf "$tarball" -C "$work"
-bash "$src/tools/build-ffmpeg-minimal.sh" "$work/ffmpeg-${FFMPEG_VERSION}" "$work/ffmpeg" "$work/ffmpeg-build"
 
 cmake -S "$src" -B "$work/build" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \

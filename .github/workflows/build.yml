@@ -7,20 +7,34 @@ on:
   pull_request:
     branches: [ master ]
 
-# A newer push to the same branch, or to the same pull request, supersedes
-# this run. Without it every commit queued its own full run, and a busy day
-# left the release build waiting hours behind builds nobody would look at.
+# One run per branch or pull request at a time. A run in progress finishes,
+# so master gets its release and the compiler caches get saved; pushes made
+# meanwhile wait, and only the newest of them runs next (GitHub replaces a
+# pending run with a newer one). Cancelling instead meant that on a busy day
+# no run ever finished and there was no release for days. Pull requests
+# still cancel: only their newest commit matters.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # The desktop jobs put ccache in front of the compiler (their own env:
+  # CMake reads CMAKE_<LANG>_COMPILER_LAUNCHER as the default). Most commits
+  # touch a few files, so a run restored from the last one's cache
+  # recompiles only those. The sloppiness is for the precompiled header: its
+  # mtime and the date/time macros must not make every object a miss.
+  CCACHE_SLOPPINESS: pch_defines,time_macros,include_file_mtime,include_file_ctime
+  CCACHE_MAXSIZE: 1500M
 
 jobs:
   build:
     name: Build (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/../ccache
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
     strategy:
       fail-fast: false
       matrix:
@@ -75,7 +89,8 @@ jobs:
           libwayland-dev \
           wayland-protocols \
           libdecor-0-dev \
-          libx11-dev
+          libx11-dev \
+          ccache
         sudo apt-get install -y libstorm-dev || true
 
     - name: Build SDL3 from source
@@ -92,6 +107,16 @@ jobs:
         cmake --build /tmp/SDL3/build --parallel "$(nproc)"
         sudo cmake --install /tmp/SDL3/build
         sudo ldconfig
+
+    - name: Restore compiler cache
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ github.workspace }}/../ccache
+        key: ccache-linux-${{ matrix.arch }}-${{ github.sha }}
+        restore-keys: ccache-linux-${{ matrix.arch }}-
+
+    - name: Reset compiler cache statistics
+      run: ccache -z
 
     - name: Configure
       run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DWOWEE_BUILD_TESTS=ON
@@ -123,13 +148,26 @@ jobs:
     # work does not need it - so nothing was compiling it, here or locally, and
     # it rotted: twenty files lost an include and a helper lost a method that
     # twelve callers still used, and it sat broken with no signal at all.
-    # Built on this job only; one platform is enough to catch a missing include
-    # or a changed signature, and the other jobs stay as quick as they were.
+    # Built on the x86-64 job only; one platform is enough to catch a missing
+    # include or a changed signature, and the arm64 runner, which compiles
+    # with two jobs, spent a quarter of an hour on it.
     - name: Build editor
+      if: matrix.arch == 'x86-64'
       run: cmake --build build --target wowee_editor --parallel ${{ matrix.build_jobs }}
 
     - name: Run tests
       run: cd build && ctest --output-on-failure
+
+    - name: Compiler cache statistics
+      if: always()
+      run: ccache -s
+
+    - name: Save compiler cache
+      if: always() && !cancelled()
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ github.workspace }}/../ccache
+        key: ccache-linux-${{ matrix.arch }}-${{ github.sha }}
 
     # cpack builds `all` again before packaging (its preinstall target), and
     # serially unless told otherwise. A clean tree makes that a no-op; the
@@ -152,6 +190,10 @@ jobs:
     # been reliable and still gates the run. Publish release below checks its
     # result on its own.
     continue-on-error: ${{ matrix.arch == 'arm64' }}
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/../ccache
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
     strategy:
       fail-fast: false
       matrix:
@@ -179,7 +221,17 @@ jobs:
     - name: Install dependencies
       run: |
         brew install cmake pkg-config sdl3 glm openssl@3 zlib ffmpeg unicorn \
-          stormlib vulkan-loader vulkan-headers molten-vk shaderc
+          stormlib vulkan-loader vulkan-headers molten-vk shaderc ccache
+
+    - name: Restore compiler cache
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ github.workspace }}/../ccache
+        key: ccache-macos-${{ matrix.arch }}-${{ github.sha }}
+        restore-keys: ccache-macos-${{ matrix.arch }}-
+
+    - name: Reset compiler cache statistics
+      run: ccache -z
 
     - name: Configure
       run: |
@@ -218,6 +270,17 @@ jobs:
 
     - name: Run tests
       run: cd build && ctest --output-on-failure
+
+    - name: Compiler cache statistics
+      if: always()
+      run: ccache -s
+
+    - name: Save compiler cache
+      if: always() && !cancelled()
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ github.workspace }}/../ccache
+        key: ccache-macos-${{ matrix.arch }}-${{ github.sha }}
 
     - name: Configure Developer ID signing
       env:
@@ -479,6 +542,10 @@ jobs:
   build-windows-arm:
     name: Build (windows-arm64)
     runs-on: windows-11-arm
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/../ccache
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
     steps:
     - name: Checkout
       uses: actions/checkout@v7
@@ -517,6 +584,7 @@ jobs:
           mingw-w64-clang-aarch64-shaderc
           mingw-w64-clang-aarch64-libtommath
           mingw-w64-clang-aarch64-libtomcrypt
+          mingw-w64-clang-aarch64-ccache
           git
         )
         for attempt in 1 2 3; do
@@ -543,11 +611,24 @@ jobs:
         cmake --build /tmp/StormLib/build --parallel $(nproc)
         cmake --install /tmp/StormLib/build
 
+    - name: Restore compiler cache
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ github.workspace }}/../ccache
+        key: ccache-windows-arm64-${{ github.sha }}
+        restore-keys: ccache-windows-arm64-
+
+    - name: Reset compiler cache statistics
+      shell: msys2 {0}
+      run: ccache -z
+
     - name: Configure
       shell: msys2 {0}
       # The editor ships in the Windows package as well: in the default build,
-      # so the package's install rule picks it up.
-      run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DWOWEE_BUILD_EDITOR=ON
+      # so the package's install rule picks it up. The tests are not built:
+      # they run on the Linux and macOS jobs, and this job never ran them - it
+      # only compiled and linked some four hundred executables for nothing.
+      run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DWOWEE_BUILD_EDITOR=ON -DWOWEE_BUILD_TESTS=OFF
 
     - name: Assert AMD FSR2 target
       shell: msys2 {0}
@@ -573,6 +654,18 @@ jobs:
     - name: Build
       shell: msys2 {0}
       run: cmake --build build --parallel $(nproc)
+
+    - name: Compiler cache statistics
+      shell: msys2 {0}
+      if: always()
+      run: ccache -s
+
+    - name: Save compiler cache
+      if: always() && !cancelled()
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ github.workspace }}/../ccache
+        key: ccache-windows-arm64-${{ github.sha }}
 
     - name: Bundle DLLs
       shell: msys2 {0}
@@ -608,6 +701,10 @@ jobs:
   build-windows:
     name: Build (windows-x86-64)
     runs-on: windows-latest
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/../ccache
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
     steps:
     - name: Checkout
       uses: actions/checkout@v7
@@ -648,6 +745,7 @@ jobs:
           mingw-w64-ucrt-x86_64-nsis
           mingw-w64-ucrt-x86_64-libtommath
           mingw-w64-ucrt-x86_64-libtomcrypt
+          mingw-w64-ucrt-x86_64-ccache
           git
         )
         for attempt in 1 2 3; do
@@ -670,11 +768,21 @@ jobs:
         cmake --build /tmp/StormLib/build --parallel $(nproc)
         cmake --install /tmp/StormLib/build
 
+    - name: Restore compiler cache
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ github.workspace }}/../ccache
+        key: ccache-windows-x86-64-${{ github.sha }}
+        restore-keys: ccache-windows-x86-64-
+
+    - name: Reset compiler cache statistics
+      shell: msys2 {0}
+      run: ccache -z
+
     - name: Configure
       shell: msys2 {0}
-      # The editor ships in the Windows package as well: in the default build,
-      # so the package's install rule picks it up.
-      run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DWOWEE_BUILD_EDITOR=ON
+      # As on arm64: the editor ships, the tests are not built here.
+      run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DWOWEE_BUILD_EDITOR=ON -DWOWEE_BUILD_TESTS=OFF
 
     - name: Assert AMD FSR2 target
       shell: msys2 {0}
@@ -700,6 +808,18 @@ jobs:
     - name: Build
       shell: msys2 {0}
       run: cmake --build build --parallel $(nproc)
+
+    - name: Compiler cache statistics
+      shell: msys2 {0}
+      if: always()
+      run: ccache -s
+
+    - name: Save compiler cache
+      if: always() && !cancelled()
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ github.workspace }}/../ccache
+        key: ccache-windows-x86-64-${{ github.sha }}
 
     - name: Bundle DLLs
       shell: msys2 {0}
@@ -742,6 +862,10 @@ jobs:
   build-windows-dropin:
     name: Build (windows-x86-64 drop-in)
     runs-on: windows-latest
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/../ccache
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
     steps:
     - name: Checkout
       uses: actions/checkout@v7
@@ -775,6 +899,7 @@ jobs:
           mingw-w64-ucrt-x86_64-shaderc
           mingw-w64-ucrt-x86_64-libtommath
           mingw-w64-ucrt-x86_64-libtomcrypt
+          mingw-w64-ucrt-x86_64-ccache
           git make diffutils curl
         )
         for attempt in 1 2 3; do
@@ -794,9 +919,40 @@ jobs:
         cmake --build /tmp/StormLib/build --parallel $(nproc)
         cmake --install /tmp/StormLib/build
 
+    - name: Restore compiler cache
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ github.workspace }}/../ccache
+        key: ccache-windows-dropin-${{ github.sha }}
+        restore-keys: ccache-windows-dropin-
+
+    - name: Reset compiler cache statistics
+      shell: msys2 {0}
+      run: ccache -z
+
+    # The minimal static FFmpeg the drop-in links is rebuilt only when its
+    # version or its build scripts change (the script stamps the prefix).
+    - name: Cache the drop-in FFmpeg
+      uses: actions/cache@v6
+      with:
+        path: ${{ runner.temp }}/wowee-dropin/ffmpeg
+        key: dropin-ffmpeg-${{ hashFiles('tools/ci/build_windows_dropin.sh', 'tools/build-ffmpeg-minimal.sh') }}
+
     - name: Build the drop-in executables
       shell: msys2 {0}
-      run: bash tools/ci/build_windows_dropin.sh dropin-out
+      run: WOWEE_DROPIN_WORK="$(cygpath -u '${{ runner.temp }}')/wowee-dropin" bash tools/ci/build_windows_dropin.sh dropin-out
+
+    - name: Compiler cache statistics
+      shell: msys2 {0}
+      if: always()
+      run: ccache -s
+
+    - name: Save compiler cache
+      if: always() && !cancelled()
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ github.workspace }}/../ccache
+        key: ccache-windows-dropin-${{ github.sha }}
 
     - name: Upload drop-in executables
       uses: actions/upload-artifact@v7
