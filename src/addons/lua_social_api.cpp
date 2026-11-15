@@ -2439,7 +2439,14 @@ void registerSocialLuaAPI(lua_State* L) {
                     if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetAutoCompletePresenceID(\"name\")");   // 0x0057b500
                     return luaReturnNil(L);
                 }},
-                {"SetActiveVoiceChannelBySessionID", [](lua_State* L) -> int { (void)L; return 0; }},
+                // SetActiveVoiceChannelBySessionID(id) (0x007db280): an id
+                // under 1 leaves the active voice channel and answers 1; with
+                // no voice sessions any other is nil.
+                {"SetActiveVoiceChannelBySessionID", [](lua_State* L) -> int {
+            if (lua_isnumber(L, 1) && luaToClientInt(L, 1) < 1) { lua_pushnumber(L, 1); return 1; }
+            lua_pushnil(L);
+            return 1;
+        }},
                 // AddMute(name) - 0x006b6c30, which hands the argument to
                 // 0x006b62c0. That walks the client's mute array and asks the
                 // realm by NAME (CMSG_ADD_VOICE_IGNORE, 0x3db) only for a name

@@ -735,6 +735,10 @@ struct Widget {
     /// SetTooltipMoney measures the money frame, asks the tooltip whether it is
     /// already that wide, and widens it if not.
     float tooltipMinWidth = 0.0f;
+    /// SetMinimumWidth's force flag, what GetMinimumWidth answers second.
+    bool tooltipMinWidthForced = false;
+    /// GameTooltip:SetPadding's one value (0x0061d150).
+    float tooltipPadding = 0.0f;
     /// The width the sizing pass wrapped this tooltip's lines at, in interface
     /// units, and the width the draw must wrap them at too.
     ///

@@ -8244,8 +8244,9 @@ static int lua_GetCVarMax(lua_State* L) {
 // usable: the audio options page reads the microphone level from an OnUpdate,
 // so one absent global there raises every frame the page is open.
 static int lua_IsVoiceChatAllowedByServer(lua_State* L) { luaPushOneOrNil(L, 0); return 1; }
-static int lua_VoiceChat_IsRecordingLoopbackSound(lua_State* L) { lua_pushboolean(L, 0); return 1; }
-static int lua_VoiceChat_IsPlayingLoopbackSound(lua_State* L) { lua_pushboolean(L, 0); return 1; }
+// Numbers, 0 with nothing looped back (0x00985e00, 0x00985e30).
+static int lua_VoiceChat_IsRecordingLoopbackSound(lua_State* L) { lua_pushnumber(L, 0); return 1; }
+static int lua_VoiceChat_IsPlayingLoopbackSound(lua_State* L) { lua_pushnumber(L, 0); return 1; }
 static int lua_VoiceChat_GetCurrentMicrophoneSignalLevel(lua_State* L) { lua_pushnumber(L, 0); return 1; }
 
 // GetVoiceSessionInfo(i) → name, active
