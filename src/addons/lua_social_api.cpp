@@ -3610,8 +3610,9 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"BattlefieldMgrEntryInviteResponse", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
-            if (lua_toboolean(L, 2)) gh->acceptBfMgrInvite();
-            else                     gh->declineBfMgrInvite();
+            // 0x0054e160: the battle named, truncated, and the answer.
+            gh->respondBfMgrEntryInvite(static_cast<uint32_t>(luaToClientInt(L, 1)),
+                                        luaClientSwitchArg(L, 2, false));
             return 0;
         }},
                 {"BattlefieldMgrQueueInviteResponse", [](lua_State* L) -> int {

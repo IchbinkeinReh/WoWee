@@ -2979,12 +2979,59 @@ static int lua_GetMouseButtonName(lua_State* L) {
     return 1;
 }
 
+/// A modified-click binding as 0x0055e180 accepts it: none at all, "NONE", or
+/// ALT, CTRL and SHIFT in any order, each with or without a '-', ending in
+/// nothing or BUTTON and a number.
+static bool modifiedClickBindingValid(const char* binding) {
+    if (!binding || !*binding) return true;
+    std::string b(binding);
+    for (char& c : b) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    if (b == "NONE") return true;
+    size_t at = 0;
+    for (bool more = true; more;) {
+        more = false;
+        for (const char* mod : {"ALT", "CTRL", "SHIFT"}) {
+            const size_t n = std::strlen(mod);
+            if (b.compare(at, n, mod) == 0) {
+                at += n;
+                if (at < b.size() && b[at] == '-') ++at;
+                more = true;
+            }
+        }
+    }
+    if (at == b.size()) return true;
+    if (b.compare(at, 6, "BUTTON") != 0) return false;
+    at += 6;
+    if (at == b.size()) return false;
+    for (; at < b.size(); ++at)
+        if (!std::isdigit(static_cast<unsigned char>(b[at]))) return false;
+    return true;
+}
+
+// SetModifiedClick("action", "binding") (0x0055fb90): the usage line for an
+// action that is no string; "Unknown action (%s) or binding (%s)" for an
+// action Bindings.xml did not declare or a binding that is not one.
 static int lua_SetModifiedClick(lua_State* L) {
-    const char* action = luaL_optstring(L, 1, "");
-    const char* binding = luaL_optstring(L, 2, "NONE");
-    if (!action || !*action) return 0;
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: SetModifiedClick(\"action\", \"binding\")");
+    const char* action = lua_tostring(L, 1);
+    const char* given = lua_isstring(L, 2) ? lua_tostring(L, 2) : nullptr;
     std::string act(action);
     for (char& c : act) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    bool known = false;
+    {
+        taint::Quiet quiet;   // see modifiedClickBinding
+        lua_getglobal(L, "__WoweeModifiedClick");
+        if (lua_istable(L, -1)) {
+            lua_getfield(L, -1, act.c_str());
+            known = !lua_isnil(L, -1);
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+    }
+    if (!known || !modifiedClickBindingValid(given))
+        return luaL_error(L, "SetModifiedClick(): Unknown action (%s) or binding (%s)",
+                          action, given ? given : "(null)");
+    const char* binding = given ? given : "NONE";
     {
         taint::Quiet quiet;   // see modifiedClickBinding
         lua_getglobal(L, "__WoweeModifiedClick");
@@ -3482,6 +3529,7 @@ int clientImGuiKeyForBinding(const std::string& command) {
 // client is pointed at - and a panel with no way to name another mode cannot
 // show the tables this one does not keep.
 static int lua_GetBindingKey(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetBindingKey(\"COMMAND\"[, mode])");   // 0x0055e9b0
     seedBindingDefaults();
     const std::string command = luaL_checkstring(L, 1);
     if (auto live = liveKeyFor(command)) {

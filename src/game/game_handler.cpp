@@ -4360,12 +4360,8 @@ void GameHandler::handleUpdateAuraDuration(uint8_t slot, uint32_t durationMs) {
 
 // ---- Battlefield Manager (WotLK Wintergrasp / outdoor battlefields) ----
 
-void GameHandler::acceptBfMgrInvite() {
-    if (socialHandler_) socialHandler_->acceptBfMgrInvite();
-}
-
-void GameHandler::declineBfMgrInvite() {
-    if (socialHandler_) socialHandler_->declineBfMgrInvite();
+void GameHandler::respondBfMgrEntryInvite(uint32_t battleId, bool accept) {
+    if (socialHandler_) socialHandler_->respondBfMgrEntryInvite(battleId, accept);
 }
 
 void GameHandler::respondBfMgrQueueInvite(uint32_t battleId, bool accept) {
@@ -5375,6 +5371,10 @@ std::pair<uint32_t, uint32_t> GameHandler::getDungeonDifficulty() const {
 
 bool GameHandler::setDungeonDifficulty(uint32_t difficulty) {
     return socialHandler_ && socialHandler_->setDungeonDifficulty(difficulty);
+}
+
+const BattlefieldListData* GameHandler::lastBattlefieldList() const {
+    return socialHandler_ ? &socialHandler_->lastBattlefieldList() : nullptr;
 }
 
 bool GameHandler::setRaidDifficulty(uint32_t difficulty) {

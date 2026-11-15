@@ -4123,9 +4123,15 @@ void registerUnitLuaAPI(lua_State* L) {
                 // two functions below, because the rows the frame draws are
                 // the rows they hand back - the frame does no filtering of its
                 // own and would otherwise show everyone under either tab.
+                // SetBattlefieldScoreFaction([faction]) (0x0054c120): 0 or 1, or
+                // anything not a number for both; any other number is ignored.
+                // The rows are filtered as they are read, so the list follows
+                // at once, as 0x0054aa30's refilter does.
                 {"SetBattlefieldScoreFaction", [](lua_State* L) -> int {
-            if (lua_isnoneornil(L, 1)) battlefieldScoreFaction() = -1;
-            else battlefieldScoreFaction() = static_cast<int>(lua_tonumber(L, 1));
+            if (!lua_isnumber(L, 1)) { battlefieldScoreFaction() = -1; return 0; }
+            const int faction = static_cast<int>(lua_tonumber(L, 1));
+            if (faction != -1 && (faction < 0 || faction > 1)) return 0;
+            battlefieldScoreFaction() = faction;
             return 0;
         }},
                 // SortBattlefieldScoreData(column) - order the rows.

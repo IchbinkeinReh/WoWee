@@ -175,6 +175,12 @@ TEST_CASE("SMSG_BATTLEFIELD_LIST as the cores build it", "[battleground]") {
     CHECK(data.bgTypeId == 2u);
     REQUIRE(data.instanceIds.size() == 3);
     CHECK(data.instanceIds[2] == 15u);
+    // The reward block, as GetHolidayBGHonorCurrencyBonuses answers it.
+    CHECK(data.holiday.hasWin);
+    CHECK(data.holiday.winHonor == 1240u);
+    CHECK(data.holiday.winArena == 0u);
+    CHECK(data.holiday.lossHonor == 310u);
+    CHECK_FALSE(data.random.hasWin);
 }
 
 TEST_CASE("SMSG_BATTLEFIELD_LIST for the random battleground has a second block", "[battleground]") {

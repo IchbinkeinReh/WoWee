@@ -278,6 +278,7 @@ void registerLfgLuaAPI(lua_State* L) {
     // headers included. FrameXML calls this once and keeps the result: "this
     // will never change (without a patch)".
     {"GetLFDChoiceInfo", [](lua_State* L) -> int {
+        if (!lua_isnoneornil(L, 1) && !lua_istable(L, 1)) return luaL_error(L, "Usage: GetLFDChoiceInfo([table])");   // 0x005551e0
         auto* gh = getGameHandler(L);
         lua_newtable(L);
         if (!gh) return 1;
@@ -313,10 +314,12 @@ void registerLfgLuaAPI(lua_State* L) {
     }},
 
     {"GetLFDChoiceOrder", [](lua_State* L) -> int {
+        if (!lua_isnoneornil(L, 1) && !lua_istable(L, 1)) return luaL_error(L, "Usage: GetLFDChoiceOrder([table])");   // 0x00554be0
         pushChoiceOrder(L, getGameHandler(L), /*dungeonSide=*/true);
         return 1;
     }},
     {"GetLFRChoiceOrder", [](lua_State* L) -> int {
+        if (!lua_isnoneornil(L, 1) && !lua_istable(L, 1)) return luaL_error(L, "Usage: GetLFRChoiceOrder([table])");   // 0x00554d20
         pushChoiceOrder(L, getGameHandler(L), /*dungeonSide=*/false);
         return 1;
     }},
@@ -327,6 +330,7 @@ void registerLfgLuaAPI(lua_State* L) {
     // first read; these are the starting values.
 
     {"GetLFDChoiceEnabledState", [](lua_State* L) -> int {
+        if (!lua_isnoneornil(L, 1) && !lua_istable(L, 1)) return luaL_error(L, "Usage: GetLFDChoiceEnabledState([table])");   // 0x005567e0
         lua_newtable(L);
         for (const auto& [id, on] : enabledDungeons()) {
             lua_pushboolean(L, on ? 1 : 0);
@@ -335,6 +339,7 @@ void registerLfgLuaAPI(lua_State* L) {
         return 1;
     }},
     {"GetLFDChoiceCollapseState", [](lua_State* L) -> int {
+        if (!lua_isnoneornil(L, 1) && !lua_istable(L, 1)) return luaL_error(L, "Usage: GetLFDChoiceCollapseState([table])");   // 0x005564d0
         lua_newtable(L);
         for (const auto& [id, folded] : collapsedHeaders()) {
             lua_pushboolean(L, folded ? 1 : 0);
@@ -418,11 +423,13 @@ void registerLfgLuaAPI(lua_State* L) {
     }},
 
     {"SetLFGDungeonEnabled", [](lua_State* L) -> int {
+        if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetLFGDungeonEnabled(dungeonID, isEnabled)");   // 0x00556b60
         const int id = static_cast<int>(luaL_optinteger(L, 1, 0));
         if (id != 0) enabledDungeons()[id] = lua_toboolean(L, 2) != 0;
         return 0;
     }},
     {"SetLFGHeaderCollapsed", [](lua_State* L) -> int {
+        if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetLFGHeaderCollapsed(headerID, isCollapsed)");   // 0x00556ad0
         const int id = static_cast<int>(luaL_optinteger(L, 1, 0));
         if (id != 0) collapsedHeaders()[id] = lua_toboolean(L, 2) != 0;
         return 0;
@@ -631,7 +638,11 @@ void registerLfgLuaAPI(lua_State* L) {
     }},
     // Whether a row can be queued for at all. Nothing is locked here - see
     // GetLFDChoiceLockedState - so the answer is yes and the server decides.
-    {"IsLFGDungeonJoinable", luaReturnOne},
+    {"IsLFGDungeonJoinable", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: IsLFGDungeonJoinable(dungeonID)");   // 0x0055a040
+            lua_pushnumber(L, 1);
+            return 1;
+        }},
     // GetLFGQueueStats() → hasData, leaderNeeds, tankNeeds, healerNeeds,
     //   dpsNeeds, instanceType, instanceName, averageWait, tankWait,
     //   healerWait, damageWait, myWait, queuedTime
@@ -872,6 +883,7 @@ void registerLfgLuaAPI(lua_State* L) {
     // which shift-clicking a reward icon puts in chat. Same row
     // GetLFGDungeonRewardInfo below reads, said as a link.
     {"GetLFGDungeonRewardLink", [](lua_State* L) -> int {
+        if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: GetLFGDungeonRewardLink(dungeonID, lootIndex)");   // 0x00557d60
         auto* gh = getGameHandler(L);
         const uint32_t dungeonId = static_cast<uint32_t>(luaL_optinteger(L, 1, 0));
         const int index = static_cast<int>(luaL_optinteger(L, 2, 0));
@@ -992,6 +1004,7 @@ void registerLfgLuaAPI(lua_State* L) {
     // GetLFGDungeonInfo(id) - the same twelve values as a row of the info
     // table, asked one at a time. Answered from the same catalogue.
     {"GetLFGDungeonInfo", [](lua_State* L) -> int {
+        if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetLFGDungeonInfo(dungeonID)");   // 0x00555590
         auto* gh = getGameHandler(L);
         const uint32_t id = static_cast<uint32_t>(luaL_optinteger(L, 1, 0));
         if (!gh || id == 0) return luaReturnNil(L);
