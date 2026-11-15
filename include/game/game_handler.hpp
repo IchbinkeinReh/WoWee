@@ -833,6 +833,8 @@ public:
     /// SocialHandler::arenaTeamQuery: a team's name, size and banner, asked
     /// for once when not known.
     const ArenaTeamQueryData* arenaTeamQuery(uint32_t teamId);
+    /// The cached record for a team, without asking for it.
+    const ArenaTeamQueryData* knownArenaTeam(uint32_t teamId) const;
     const std::array<uint32_t, 19>* getOtherPlayerVisibleEquipment(uint64_t guid) const {
         auto it = otherPlayerVisibleItemEntries_.find(guid);
         return (it != otherPlayerVisibleItemEntries_.end()) ? &it->second : nullptr;
@@ -3375,6 +3377,11 @@ public:
     };
     /// The label a timer is shown with (0x005199a0): its spell's name, or
     /// else the interface's "<NAME>_LABEL" string.
+    /// GMReportLag (0x005acf30): CMSG_GM_REPORT_LAG with the type, the map
+    /// and where the player stands.
+    void reportLag(uint32_t type);
+    /// A name the client refused, worded on the error line (0x005218c0).
+    void showNameError(uint32_t reason);
     std::string mirrorTimerLabel(uint32_t type, uint32_t spellId);
     const MirrorTimer& getMirrorTimer(int type) const {
         static MirrorTimer empty;

@@ -6610,9 +6610,15 @@ static int lua_GetArenaTeamRosterInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
     const uint32_t teamId = arenaTeamIdAtIndex(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
     const int member = static_cast<int>(luaL_optnumber(L, 2, 0));
-    if (!gh || teamId == 0 || member < 1) return luaReturnNil(L);
+    // A bad team or member (0x005a2fc0): nil, 0, 0, nil, nil and five zeros.
+    const auto none = [L]() {
+        lua_pushnil(L); lua_pushnumber(L, 0); lua_pushnumber(L, 0); lua_pushnil(L); lua_pushnil(L);
+        for (int i = 0; i < 5; ++i) lua_pushnumber(L, 0);
+        return 10;
+    };
+    if (!gh || teamId == 0 || member < 1) return none();
     const auto* roster = gh->getArenaTeamRoster(teamId);
-    if (!roster || member > static_cast<int>(roster->members.size())) return luaReturnNil(L);
+    if (!roster || member > static_cast<int>(roster->members.size())) return none();
     const auto& m = roster->members[static_cast<size_t>(member) - 1];
 
     // 0x005a3080: the rank the roster carries (0 the captain), the level, and
@@ -6849,29 +6855,52 @@ static int lua_HasKey(lua_State* L) {
 // style and colours and nothing here reads them. Those eight answer zero rather
 // than nil, so the tabard draws black instead of raising mid-arithmetic.
 static int lua_GetArenaTeam(lua_State* L) {
-    // 0x005a3860
+    // 0x005a3860: the team in that slot - its cached name and size, the
+    // stats SMSG_ARENA_TEAM_STATS gave, the player's own games and rating
+    // from the slot's fields, and the banner colours as 0..1 with the emblem
+    // and border styles. Anything unknown: nil and 21 zeros.
     if (!lua_isnumber(L, 1))
         return luaL_error(L, "Usage: GetArenaTeam(team)");
     auto* gh = getGameHandler(L);
-    const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
-    if (!gh || idx < 1) return luaReturnNil(L);
-    const auto& teams = gh->getArenaTeamStats();
-    if (idx > static_cast<int>(teams.size())) return luaReturnNil(L);
-    const auto& t = teams[static_cast<size_t>(idx) - 1];
-
-    lua_pushstring(L, t.teamName.c_str());  // 1: teamName
-    lua_pushnumber(L, t.teamType);          // 2: teamSize (2, 3 or 5)
-    lua_pushnumber(L, t.rating);            // 3: teamRating
-    lua_pushnumber(L, t.weekGames);         // 4: teamPlayed
-    lua_pushnumber(L, t.weekWins);          // 5: teamWins
-    lua_pushnumber(L, t.seasonGames);       // 6: seasonTeamPlayed
-    lua_pushnumber(L, t.seasonWins);        // 7: seasonTeamWins
-    // Per-player totals come with the roster, not the team summary.
-    lua_pushnumber(L, 0);                   // 8: playerPlayed
-    lua_pushnumber(L, 0);                   // 9: seasonPlayerPlayed
-    lua_pushnumber(L, t.rank);              // 10: teamRank
-    lua_pushnumber(L, 0);                   // 11: playerRating
-    for (int i = 0; i < 11; ++i) lua_pushnumber(L, 0);  // 12-22: tabard
+    const int idx = static_cast<int>(std::lround(lua_tonumber(L, 1)));
+    const uint32_t teamId = arenaTeamIdAtIndex(gh, idx);
+    const game::ArenaTeamStats* stats = nullptr;
+    if (gh && teamId) {
+        for (const auto& t : gh->getArenaTeamStats())
+            if (t.teamId == teamId) { stats = &t; break; }
+    }
+    const auto* record = (gh && teamId) ? gh->knownArenaTeam(teamId) : nullptr;
+    const uint16_t base = game::fieldIndex(game::UF::PLAYER_FIELD_ARENA_TEAM_INFO_1_1);
+    const auto me = gh ? gh->getEntityManager().getEntity(gh->getPlayerGuid()) : nullptr;
+    if (!stats || !record || !me || base == 0xFFFF) {
+        lua_pushnil(L);
+        for (int i = 0; i < 21; ++i) lua_pushnumber(L, 0);
+        return 22;
+    }
+    const auto slotField = [&](int k) {
+        return static_cast<double>(me->getField(static_cast<uint16_t>(base + (idx - 1) * 7 + k)));
+    };
+    const auto colour = [L](uint32_t argb) {
+        lua_pushnumber(L, static_cast<float>((argb >> 16) & 0xFF) * 0.003921569f);
+        lua_pushnumber(L, static_cast<float>((argb >> 8) & 0xFF) * 0.003921569f);
+        lua_pushnumber(L, static_cast<float>(argb & 0xFF) * 0.003921569f);
+    };
+    lua_pushstring(L, record->name.c_str());  // 1: teamName
+    lua_pushnumber(L, record->size);          // 2: teamSize
+    lua_pushnumber(L, stats->rating);         // 3: teamRating
+    lua_pushnumber(L, stats->weekGames);      // 4: teamPlayed
+    lua_pushnumber(L, stats->weekWins);       // 5: teamWins
+    lua_pushnumber(L, stats->seasonGames);    // 6: seasonTeamPlayed
+    lua_pushnumber(L, stats->seasonWins);     // 7: seasonTeamWins
+    lua_pushnumber(L, slotField(3));          // 8: playerPlayed
+    lua_pushnumber(L, slotField(4));          // 9: seasonPlayerPlayed
+    lua_pushnumber(L, stats->rank);           // 10: teamRank
+    lua_pushnumber(L, slotField(6));          // 11: playerRating
+    colour(record->background);               // 12-14
+    lua_pushnumber(L, record->emblem);        // 15
+    colour(record->emblemColor);              // 16-18
+    lua_pushnumber(L, record->border);        // 19
+    colour(record->borderColor);              // 20-22
     return 22;
 }
 
@@ -9905,7 +9934,15 @@ void registerSystemLuaAPI(lua_State* L) {
             // 0x005ac320: a table, nothing else.
             if (lua_type(L, 1) != LUA_TTABLE)
                 return luaL_error(L, "Usage: RegisterStaticConstants(table)");
-            return lua_ReturnNothing(L);
+            // The seven constants of 0x00acfac0, written into the table.
+            static constexpr std::pair<const char*, int> kConstants[] = {
+                {"STATIC_CONSTANTS", 0}, {"Loot", 1}, {"AuctionHouse", 2}, {"Mail", 3},
+                {"Chat", 4}, {"Movement", 5}, {"Spell", 6}};
+            for (const auto& [key, value] : kConstants) {
+                lua_pushnumber(L, value);
+                lua_setfield(L, 1, key);
+            }
+            return 0;
         }},
                 {"SetChatWindowName",        lua_SetChatWindowName},
                 {"SetupFullscreenScale",     lua_SetupFullscreenScale},
@@ -11080,7 +11117,26 @@ void registerSystemLuaAPI(lua_State* L) {
                 // The equipment manager exists here - GetNumEquipmentSets and
                 // the rest of its API are bound - so the panel's checkbox is
                 // offering something real.
-                {"CanUseEquipmentSets",         luaReturnOne},
+                // CanUseEquipmentSets() (0x005ad880): 1 with the
+                // equipmentManager CVar on, else 0; a change of answer
+                // redraws the bars' usability (0x005aa470,
+                // ACTIONBAR_UPDATE_USABLE).
+                {"CanUseEquipmentSets",         [](lua_State* L) -> int {
+            bool on = false;
+            lua_getglobal(L, "GetCVarBool");
+            if (lua_isfunction(L, -1)) {
+                lua_pushstring(L, "equipmentManager");
+                if (lua_pcall(L, 1, 1, 0) == 0) on = lua_toboolean(L, -1) != 0;
+            }
+            lua_pop(L, 1);
+            static bool s_last = false;
+            if (on != s_last) {
+                s_last = on;
+                if (auto* gh = getGameHandler(L)) gh->fireAddonEvent("ACTIONBAR_UPDATE_USABLE", {});
+            }
+            lua_pushnumber(L, on ? 1 : 0);
+            return 1;
+        }},
                 // 0x00530700: 1 when any has been triggered, else nil.
                 {"CanResetTutorials", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);

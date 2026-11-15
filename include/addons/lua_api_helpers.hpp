@@ -1396,6 +1396,9 @@ uint32_t cursorItemId();
 /// up has to displace an item and ClearCursor has to drop both.
 uint64_t cursorMoney();
 void setCursorMoney(lua_State* L, uint64_t copper);
+/// Guild bank money on the cursor (PickupGuildBankMoney, 0x005a4330).
+void setCursorGuildBankMoney(lua_State* L, uint64_t copper);
+bool cursorMoneyFromGuildBank();
 /// Money on the cursor added to the trade offer (0x00704220): only when the
 /// new total is not more than the player has, and then the cursor is put down;
 /// otherwise the money stays held. AddTradeMoney and ClickTargetTradeButton

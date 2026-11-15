@@ -2,6 +2,7 @@
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "addons/unit_or_name.hpp"
 #include "game/gossip_quest_status.hpp"
+#include "game/name_rules.hpp"
 #include "game/grey_triviality.hpp"
 #include "game/interface_text.hpp"
 #include <algorithm>
@@ -765,11 +766,16 @@ std::vector<const game::WhoEntry*> whoResultsView(game::GameHandler* gh) {
 
 // Declared in lua_api_helpers.hpp: the system API asks the same question and
 // had its own copy under another name.
+//
+// The index is the player's arena team slot (PLAYER_FIELD_ARENA_TEAM_INFO,
+// seven fields each, the team id first), as every client function that takes
+// a team index reads it (0x005a3860 and its neighbours).
 uint32_t arenaTeamIdAtIndex(game::GameHandler* gh, int index) {
-    if (!gh || index < 1) return 0;
-    const auto& teams = gh->getArenaTeamStats();
-    if (index > static_cast<int>(teams.size())) return 0;
-    return teams[static_cast<size_t>(index) - 1].teamId;
+    if (!gh || index < 1 || index > 3) return 0;
+    const uint16_t base = game::fieldIndex(game::UF::PLAYER_FIELD_ARENA_TEAM_INFO_1_1);
+    const auto me = gh->getEntityManager().getEntity(gh->getPlayerGuid());
+    if (!me || base == 0xFFFF) return 0;
+    return me->getField(static_cast<uint16_t>(base + (index - 1) * 7));
 }
 
 /// The arena team commands that take a team row and a name (0x00515cc0 and
@@ -1620,9 +1626,7 @@ static int lua_GetNumMacroIcons(lua_State* L) {
 }
 
 // GetMacroIconInfo(index) → a texture path, or nil past the end
-static int lua_GetMacroIconInfo(lua_State* L) {
-    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetMacroItemIconInfo(index)");   // 0x00564f60
-    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetMacroIconInfo(index)");   // 0x00564e90
+static int macroIconAt(lua_State* L) {
     const auto* icons = iconList(L);
     const int index = static_cast<int>(luaL_checknumber(L, 1));
     if (!icons || index < 1 || index > static_cast<int>(icons->size())) {
@@ -1631,6 +1635,14 @@ static int lua_GetMacroIconInfo(lua_State* L) {
     }
     lua_pushstring(L, (*icons)[static_cast<size_t>(index - 1)].c_str());
     return 1;
+}
+static int lua_GetMacroIconInfo(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetMacroIconInfo(index)");   // 0x00564e90
+    return macroIconAt(L);
+}
+static int lua_GetMacroItemIconInfo(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetMacroItemIconInfo(index)");   // 0x00564f60
+    return macroIconAt(L);
 }
 
 // ── Guild and arena charters ──────────────────────────────────────────
@@ -2086,10 +2098,12 @@ void registerSocialLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 1)) - 1;
             uint32_t itemId = 0, displayId = 0, cost = 0;
-            if (!gh || !gh->getPetitionCharter(index, itemId, displayId, cost)) return 0;
+            // An unknown row or an item not yet known: nil, nil, 0.
+            const auto none = [L]() { lua_pushnil(L); lua_pushnil(L); lua_pushnumber(L, 0); return 3; };
+            if (!gh || !gh->getPetitionCharter(index, itemId, displayId, cost)) return none();
             const auto* info = gh->getItemInfo(itemId);
             // Asked for; the answer raises PETITION_VENDOR_UPDATE (0x005a1f30).
-            if (!info || !info->valid) { askItemForEvent(gh, itemId, "PETITION_VENDOR_UPDATE"); return 0; }
+            if (!info || !info->valid) { askItemForEvent(gh, itemId, "PETITION_VENDOR_UPDATE"); return none(); }
             lua_pushstring(L, info->name.c_str());
             lua_pushstring(L, gh->getItemIconPath(
                 displayId ? displayId : info->displayInfoId).c_str());
@@ -2158,13 +2172,19 @@ void registerSocialLuaAPI(lua_State* L) {
             if (!lua_isnumber(L, 1) || !lua_isstring(L, 2))
                 return luaL_error(L, "Usage: BuyPetition(index, name)");
             auto* gh = getGameHandler(L);
-            const int index = static_cast<int>(luaL_optnumber(L, 1, 1));
-            const char* name = luaL_optstring(L, 2, "");
-            if (gh && name && *name && index >= 1 && gh->getPetitionNpcGuid() != 0 &&
-                petitionPurchaseAllowed(gh, index - 1))
-                gh->buyPetition(gh->getPetitionNpcGuid(), name,
-                                static_cast<uint32_t>(index));
-            return 0;
+            const int index = static_cast<int>(std::lround(lua_tonumber(L, 1)));
+            const char* name = lua_tostring(L, 2);
+            // The team name passes the client's name rules first (0x007e1f60);
+            // a refused one is worded on the error line and answers nil.
+            if (const uint32_t reason = game::name_rules::checkCharterName(name)) {
+                if (gh) gh->showNameError(reason);
+                lua_pushnil(L);
+                return 1;
+            }
+            if (gh && index >= 1 && gh->getPetitionNpcGuid() != 0 && petitionPurchaseAllowed(gh, index - 1))
+                gh->buyPetition(gh->getPetitionNpcGuid(), name, static_cast<uint32_t>(index));
+            lua_pushnumber(L, 1);
+            return 1;
         }},
                 {"CloseGuildRegistrar", [](lua_State* L) -> int {
             if (auto* gh = getGameHandler(L)) gh->closePetitionVendor();
@@ -2320,7 +2340,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 // The guild bank tab dialog picks from the same icons under a
                 // name of its own.
                 {"GetNumMacroItemIcons", lua_GetNumMacroIcons},
-                {"GetMacroItemIconInfo", lua_GetMacroIconInfo},
+                {"GetMacroItemIconInfo", lua_GetMacroItemIconInfo},
                 {"NewGMTicket",         lua_NewGMTicket},
                 {"DeleteGMTicket",      lua_DeleteGMTicket},
                 // The long-form guild information, which is a different field
@@ -2888,34 +2908,15 @@ void registerSocialLuaAPI(lua_State* L) {
             if (gh) gh->castSpell(7355);
             return 0;
         }},
-                // GMReportLag(type) - the help frame's /lagro (helpframe.lua:455),
-                // and the client really does send it. 0x005acf30 casts the local
-                // player's own object (the assert-cast names Player_C.h, size 0x10),
-                // thiscalls that object's vtable slot 0x2c with one out-pointer, and
-                // that fills **three** floats on the stack at ebp-0xc/-0x8/-0x4. The
-                // packet it then writes is CMSG_GM_REPORT_LAG (0x502) as a dword of
-                // the type one below what Lua passes, a dword read at +0xcc off the
-                // object the connection handle reaches (0x004d37e0: handle table
-                // entry, +8, +0xcc - a field of a heap object, not a TLS slot, which
-                // is what an earlier reading of that `fs:0x2c` had it as), then those
-                // three floats: each is loaded with flds and stored with fstps before
-                // the writer (0x0047b160, four bytes at a time) takes it, so 24 bytes
-                // in all. The send call follows at 0x005acfe4.
-                //
-                // That +0xcc dword reaches this site from a `jmp 0x004d37e0` thunk at
-                // 0x006ceaf0, one of the stubs that live in the int3 runs between
-                // blocks - the decompile shows it as `thunk_FUN_004d37e0`, but a grep
-                // for the target address finds no call here.
-                //
-                // Not reproduced, and the layout is written down instead: what the
-                // two floats measure is still unnamed - Player_C's vtable is not
-                // reachable from the static tables - and there is no reader for the
-                // opcode here either, so sending numbers whose meaning is guessed
-                // would only buy a log line nobody can read.
+                // GMReportLag(type) - the help frame's /lagro (helpframe.lua:455).
+                // 0x005acf30 sends CMSG_GM_REPORT_LAG (0x502): the type one
+                // below what Lua passes, the map (+0xcc), then the position
+                // the player object's vtable slot 0x2c gives.
                 {"GMReportLag", [](lua_State* L) -> int {
             // 0x005ad020
             if (!lua_isnumber(L, 1))
                 return luaL_error(L, "Usage: GMReportLag(number)");
+            if (auto* gh = getGameHandler(L)) gh->reportLag(static_cast<uint32_t>(luaToClientInt(L, 1) - 1));
             return 0;
         }},
                 // GMResponseNeedMoreHelp(ticketDescription) - the button under

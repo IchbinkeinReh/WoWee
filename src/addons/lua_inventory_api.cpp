@@ -1695,22 +1695,37 @@ namespace {
 /// FrameXML's name for a bank log line, which is what its own branches compare
 /// against. AzerothCore's GuildBankEventLogTypes on one side, and the four
 /// strings blizzard_guildbankui.lua tests for on the other.
+/// An item tab's log line type (0x005a6dc0).
 const char* bankLogTypeName(uint8_t type) {
     switch (type) {
-        case 1: case 4: return "deposit";
-        case 2: case 5: return "withdraw";
+        case 1:         return "deposit";
+        case 2:         return "withdraw";
         case 3: case 7: return "move";
-        case 6:         return "repair";
-        case 9:         return "buytab";
-        default:        return "deposit";
+        default:        return "unknown";
     }
 }
 
-/// An item link for the log line, or nil when the entry carries no item -
-/// which is every money line, and nil is what the format string skips.
-void pushItemLinkOrNil(lua_State* L, game::GameHandler* gh, uint32_t itemId) {
+/// A name from the cache, or nil for a player not known (0x0067d770).
+void pushNameOrNil(lua_State* L, const std::string& name) {
+    if (name.empty()) lua_pushnil(L);
+    else lua_pushstring(L, name.c_str());
+}
+
+/// A money log line's type (0x005a4e50).
+const char* bankMoneyLogTypeName(uint8_t type) {
+    switch (type) {
+        case 4:  return "deposit";
+        case 5:  return "withdraw";
+        case 8:  return "withdrawForTab";
+        case 9:  return "buyTab";
+        default: return "repair";
+    }
+}
+
+/// The log line's item link, "" for an item not yet known (0x0061e360).
+void pushItemLinkOrEmpty(lua_State* L, game::GameHandler* gh, uint32_t itemId) {
     const auto* info = itemId ? gh->getItemInfo(itemId) : nullptr;
-    if (!info || info->name.empty()) { lua_pushnil(L); return; }
+    if (!info || info->name.empty()) { lua_pushstring(L, ""); return; }
     const uint32_t quality = info->quality < 8 ? info->quality : 1u;
     const std::string link = game::itemChatLink(itemId, quality, info->name, {}, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
@@ -2201,7 +2216,7 @@ static int lua_AddSendMailMoney(lua_State* L) {
     const uint32_t named = copperArg(L, 1);
     if (named > 0) { s_sendMailMoney += named; return 0; }
     const uint64_t held = cursorMoney();
-    if (held == 0) return 0;
+    if (held == 0 || cursorMoneyFromGuildBank()) return 0;
     s_sendMailMoney += static_cast<uint32_t>(held);
     setCursorMoney(L, 0);
     return 0;
@@ -2450,7 +2465,11 @@ static int lua_GetEquipmentSetItemIDs(lua_State* L) {
     const auto* set = equipmentSetByName(gh, luaL_optstring(L, 1, ""));
     const auto* guids = (gh && set) ? gh->getEquipmentSetItems(set->setId) : nullptr;
     const uint32_t ignoreMask = (gh && set) ? gh->getEquipmentSetIgnoreMask(set->setId) : 0u;
-    lua_newtable(L);
+    // An unknown set answers nothing; the second argument, when a table, is
+    // filled instead of a new one (0x005aef90).
+    if (!set) return 0;
+    if (lua_istable(L, 2)) lua_pushvalue(L, 2);
+    else lua_newtable(L);
     for (int i = 0; i < kEquipSlots; ++i) {
         // Dense from one: the interface reads this with ipairs and would stop
         // at the first hole. An ignored slot is one, which is what the
@@ -2477,9 +2496,23 @@ static int lua_SaveEquipmentSet(lua_State* L) {
 
     // The icon arrives as a position in the same list the macro picker shows,
     // and the server wants its name rather than its path.
-    std::string iconName = "INV_Misc_QuestionMark";
-    const int iconIndex = static_cast<int>(luaL_optnumber(L, 2, 0));
-    if (auto* svc = getLuaServices(L); svc && svc->listIconTextures && iconIndex >= 1) {
+    std::string iconName;
+    const int iconIndex = luaToClientInt(L, 2);
+    if (iconIndex < 0) {
+        // A negative index -n is the icon of the item worn in slot n - 1
+        // (0x005af9c0, slots 0-18).
+        const int slot = -iconIndex - 1;
+        if (slot <= 18) {
+            if (const auto* worn = inventorySlotItem(gh->getInventory(), slot + 1)) {
+                const auto* info = gh->getItemInfo(worn->item.itemId);
+                const uint32_t display = worn->item.displayInfoId ? worn->item.displayInfoId
+                                                                   : (info ? info->displayInfoId : 0);
+                const std::string path = display ? gh->getItemIconPath(display) : std::string();
+                const size_t slash = path.find_last_of("\\/");
+                iconName = slash == std::string::npos ? path : path.substr(slash + 1);
+            }
+        }
+    } else if (auto* svc = getLuaServices(L); svc && svc->listIconTextures && iconIndex >= 1) {
         const auto& icons = svc->listIconTextures();
         if (iconIndex <= static_cast<int>(icons.size())) {
             const std::string& path = icons[static_cast<size_t>(iconIndex - 1)];
@@ -2487,9 +2520,13 @@ static int lua_SaveEquipmentSet(lua_State* L) {
             iconName = (slash == std::string::npos) ? path : path.substr(slash + 1);
         }
     }
+    if (iconName.empty()) iconName = "INV_Misc_QuestionMark";
     // Overwriting one keeps its guid, which is how the server knows it is the
-    // same set rather than a new one with the same name.
+    // same set rather than a new one with the same name. A new one needs a
+    // free place among the ten.
     const auto* existing = equipmentSetByName(gh, name);
+    if (!existing && gh->getEquipmentSets().size() >= 10)
+        return luaL_error(L, "Too many sets! You can only have %d sets", 10);
     gh->saveEquipmentSet(name, iconName, existing ? existing->setGuid : 0,
                          existing ? existing->setId : 0xFFFFFFFFu, pendingIgnoredSlotMask());
     return 0;
@@ -2605,10 +2642,22 @@ static int lua_UseEquipmentSet(lua_State* L) {
 
 // EquipmentSetContainsLockedItems(name) - nothing here locks an item
 static int lua_EquipmentSetContainsLockedItems(lua_State* L) {
-    // 0x005af320
+    // 0x005af320 -> 0x005ad940: true when one of the set's items is locked,
+    // nothing otherwise. An item here is locked while it is on the cursor.
     if (!lua_isstring(L, 1))
         return luaL_error(L, "Usage: EquipmentSetContainsLockedItems(\"setName\")");
-    lua_pushboolean(L, 0);
+    auto* gh = getGameHandler(L);
+    const auto* set = equipmentSetByName(gh, lua_tostring(L, 1));
+    const auto* guids = (gh && set) ? gh->getEquipmentSetItems(set->setId) : nullptr;
+    if (!guids) return 0;
+    const auto& held = cursorItemSlot();
+    if (held.bag < 0 && !held.equipped) return 0;
+    const auto& inv = gh->getInventory();
+    const game::ItemSlot* s = held.equipped ? inventorySlotItem(inv, held.slot)
+                                            : containerItemSlot(inv, held.bag, held.slot);
+    const uint64_t guid = s ? s->item.guid : 0;
+    if (guid == 0 || std::find(guids->begin(), guids->end(), guid) == guids->end()) return 0;
+    lua_pushboolean(L, 1);
     return 1;
 }
 
@@ -5785,7 +5834,12 @@ void registerInventoryLuaAPI(lua_State* L) {
             // 0x005a4330
             if (!lua_isnumber(L, 1))
                 return luaL_error(L, "Usage: PickupGuildBankMoney(amount)");
-            return lua_MoneyCursorNoop(L);
+            // A non-zero amount no larger than the bank holds goes on the
+            // cursor as guild bank money.
+            auto* gh = getGameHandler(L);
+            const auto want = static_cast<uint64_t>(std::llround(lua_tonumber(L, 1)));
+            if (gh && want != 0 && want <= gh->getGuildBankData().money) setCursorGuildBankMoney(L, want);
+            return 0;
         }},
                 {"AddTradeMoney",           lua_AddTradeMoney},
                 {"GetCurrencyListSize", [](lua_State* L) -> int {
@@ -5923,7 +5977,8 @@ void registerInventoryLuaAPI(lua_State* L) {
                 return luaL_error(L, "Usage: SetCurrencyBackpack(index,backpack)");
             auto* gh = getGameHandler(L);
             const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
-            const bool on = lua_toboolean(L, 2) != 0;
+            // A number: 0 is off (0x005b0a20).
+            const bool on = luaToClientInt(L, 2) != 0;
             if (!gh) return 0;
             const auto rows = buildCurrencyList(L);
             if (idx < 1 || idx > static_cast<int>(rows.size())) return 0;
@@ -6407,16 +6462,18 @@ void registerInventoryLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             const int tab  = static_cast<int>(luaL_optnumber(L, 1, 0));
             const int slot = static_cast<int>(luaL_optnumber(L, 2, 0));
-            if (!gh) return luaReturnNil(L);
+            // An empty slot or an item not yet known: nil, 0, nil.
+            const auto none = [L]() { lua_pushnil(L); lua_pushnumber(L, 0); lua_pushnil(L); return 3; };
+            if (!gh) return none();
             const auto* found = guildBankItemAt(gh, tab, slot);
-            if (!found) return luaReturnNil(L);   // empty slot
+            if (!found) return none();
             const auto& it = *found;
             gh->ensureItemInfo(it.itemEntry);
             const auto* info = gh->getItemInfo(it.itemEntry);
             const std::string icon =
                 info ? gh->getItemIconPath(info->displayInfoId) : std::string();
-            lua_pushstring(L, icon.empty()
-                ? "Interface\\Icons\\INV_Misc_QuestionMark" : icon.c_str());
+            if (icon.empty()) return none();
+            lua_pushstring(L, icon.c_str());
             lua_pushnumber(L, it.stackCount);
             // Locked while its item is on the cursor (0x005137d0), and after
             // a move until the bank's next list unlocks it (0x00513800).
@@ -6437,13 +6494,13 @@ void registerInventoryLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             const int tab  = static_cast<int>(luaL_optnumber(L, 1, 0));
             const int slot = static_cast<int>(luaL_optnumber(L, 2, 0));
-            if (!gh) return luaReturnNil(L);
+            if (!gh) return 0;
             const auto* found = guildBankItemAt(gh, tab, slot);
-            if (!found) return luaReturnNil(L);   // empty slot
+            if (!found) return 0;   // empty slot: nothing
             const auto& it = *found;
             gh->ensureItemInfo(it.itemEntry);
             const auto* info = gh->getItemInfo(it.itemEntry);
-            if (!info) return luaReturnNil(L);
+            if (!info) return 0;
             // The same shape GetContainerItemLink builds, so a link from
             // the guild bank behaves like one from a bag everywhere it is
             // handed on to.
@@ -6539,19 +6596,17 @@ void registerInventoryLuaAPI(lua_State* L) {
             if (gh && tab >= 1) gh->queryGuildBankText(static_cast<uint8_t>(tab - 1));
             return 0;
         }},
-                // What the query above brought back, or nil for a tab nothing
-                // has answered for yet. Still nil rather than "": the panel
-                // does `if ( text )` and its else branch clears the box, so an
-                // empty string would claim to know the tab has none.
+                // A purchased tab's text, "" when it has none; nil for a tab
+                // the bank does not have (0x005a45e0).
                 {"GetGuildBankText",    [](lua_State* L) -> int {
             // 0x005a45e0
             if (!lua_isnumber(L, 1))
                 return luaL_error(L, "Usage: GetGuildBankText(tab)");
             auto* gh = getGameHandler(L);
-            const int tab = static_cast<int>(luaL_optnumber(L, 1, 0));
-            if (gh && tab >= 1) {
-                const std::string& text = gh->getGuildBankTabText(static_cast<uint8_t>(tab - 1));
-                if (!text.empty()) { lua_pushstring(L, text.c_str()); return 1; }
+            const int tab = static_cast<int>(std::lround(lua_tonumber(L, 1)));
+            if (gh && tab >= 1 && tab <= 6 && tab <= static_cast<int>(gh->getGuildBankData().tabs.size())) {
+                lua_pushstring(L, gh->getGuildBankTabText(static_cast<uint8_t>(tab - 1)).c_str());
+                return 1;
             }
             lua_pushnil(L);
             return 1;
@@ -6604,11 +6659,14 @@ void registerInventoryLuaAPI(lua_State* L) {
             const auto& e = log[static_cast<size_t>(index) - 1];
 
             lua_pushstring(L, bankLogTypeName(e.type));
-            lua_pushstring(L, gh->lookupName(e.playerGuid).c_str());
-            pushItemLinkOrNil(L, gh, e.itemId);
+            pushNameOrNil(L, gh->lookupName(e.playerGuid));
+            pushItemLinkOrEmpty(L, gh, e.itemId);
             lua_pushnumber(L, e.count);
-            lua_pushnumber(L, tab);                  // the tab it happened on
-            lua_pushnumber(L, e.otherTab + 1);       // and the one it moved to
+            // A move out of this tab (3) is (this tab, the other); a move into
+            // it (7) the other way round; anything else nil, nil.
+            if (e.type == 3) { lua_pushnumber(L, tab); lua_pushnumber(L, e.otherTab + 1); }
+            else if (e.type == 7) { lua_pushnumber(L, e.otherTab + 1); lua_pushnumber(L, tab); }
+            else { lua_pushnil(L); lua_pushnil(L); }
             pushTimeAgo(L, e.secondsAgo);
             return 10;
         }},
@@ -6624,8 +6682,8 @@ void registerInventoryLuaAPI(lua_State* L) {
             if (index > static_cast<int>(log.size())) return 0;
             const auto& e = log[static_cast<size_t>(index) - 1];
 
-            lua_pushstring(L, bankLogTypeName(e.type));
-            lua_pushstring(L, gh->lookupName(e.playerGuid).c_str());
+            lua_pushstring(L, bankMoneyLogTypeName(e.type));
+            pushNameOrNil(L, gh->lookupName(e.playerGuid));
             lua_pushnumber(L, e.count);              // copper
             pushTimeAgo(L, e.secondsAgo);
             return 7;
@@ -6657,15 +6715,17 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // back to its own default background - so a wrong name would be
                 // worse than no name, since a non-nil one stops that fallback.
                 {"GetGuildTabardFileNames", [](lua_State* L) -> int {
+            // No tabard: six nils (0x005a6ba0).
+            const auto none = [L]() { for (int i = 0; i < 6; ++i) lua_pushnil(L); return 6; };
             auto* gh = getGameHandler(L);
-            if (!gh) return 0;
+            if (!gh) return none();
             const auto& g = gh->getGuildQueryData();
-            if (g.guildId == 0) return 0;
+            if (g.guildId == 0) return none();
             const uint32_t kBorderColors = (g.borderStyle <= 5) ? 16u : 3u;
             if (g.backgroundColor > 50 || g.emblemStyle > 169 ||
                 g.emblemColor > 16 || g.borderStyle > 9 ||
                 g.borderColor > kBorderColors) {
-                return 0;
+                return none();
             }
             auto push = [&](const char* kind, uint32_t a, int b, const char* half) {
                 char buf[128];
@@ -6709,11 +6769,19 @@ void registerInventoryLuaAPI(lua_State* L) {
             if (!lua_isnumber(L, 1) || !lua_isstring(L, 2) || !lua_isnumber(L, 3))
                 return luaL_error(L, "Usage: SetGuildBankTabInfo(tab, name, iconIndex)");
             auto* gh = getGameHandler(L);
-            const int tab = static_cast<int>(luaL_optnumber(L, 1, 0));
-            const char* name = luaL_optstring(L, 2, "");
-            const char* icon = luaL_optstring(L, 3, "");
-            if (gh && tab >= 1)
-                gh->setGuildBankTabInfo(static_cast<uint8_t>(tab - 1), name, icon);
+            // The third argument is an index into the icon list the macro
+            // frame offers (0x00564d90); its icon's name is what is sent.
+            const int tab = static_cast<int>(std::lround(lua_tonumber(L, 1)));
+            const char* name = lua_tostring(L, 2);
+            lua_getglobal(L, "GetMacroIconInfo");
+            lua_pushvalue(L, 3);
+            std::string icon;
+            if (lua_pcall(L, 1, 1, 0) == 0 && lua_isstring(L, -1)) icon = lua_tostring(L, -1);
+            lua_pop(L, 1);
+            // The list holds full paths; the bank keeps the bare icon name.
+            if (const auto slash = icon.find_last_of('\\'); slash != std::string::npos) icon.erase(0, slash + 1);
+            if (gh && tab >= 1 && !icon.empty())
+                gh->setGuildBankTabInfo(static_cast<uint8_t>(tab - 1), name, icon.c_str());
             return 0;
         }},
                 // What the next tab costs, in copper, or nil once all six are

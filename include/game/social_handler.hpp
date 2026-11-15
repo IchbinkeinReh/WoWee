@@ -756,6 +756,11 @@ public:
     /// (CMSG_ARENA_TEAM_QUERY) - the answer raises INSPECT_HONOR_UPDATE
     /// (0x005e7640).
     const ArenaTeamQueryData* arenaTeamQuery(uint32_t teamId);
+    /// The cached record alone, asking nothing.
+    const ArenaTeamQueryData* knownArenaTeam(uint32_t teamId) const {
+        const auto it = arenaTeamQueries_.find(teamId);
+        return it != arenaTeamQueries_.end() ? &it->second : nullptr;
+    }
     void requestArenaTeamRoster(uint32_t teamId);
     [[nodiscard]] const ArenaTeamRoster* getArenaTeamRoster(uint32_t teamId) const {
         for (const auto& r : arenaTeamRosters_)
