@@ -11,6 +11,7 @@
 #include <optional>
 #include <chrono>
 #include <cstring>
+#include <cctype>
 #include <cmath>
 #include <algorithm>
 
@@ -225,6 +226,29 @@ inline double luaOptNumberText(lua_State* L, int idx, double def) {
 // widget's stored time had the same offset.
 inline double luaGetTimeNow() {
     return wowee::core::appTimeSeconds();
+}
+
+/// The companion type argument (0x0053b600): "CRITTER" (0) or "MOUNT" (1),
+/// in any case; -1 for anything else, which the callers answer with their
+/// usage line.
+inline int companionTypeArg(lua_State* L, int idx) {
+    const char* kind = lua_isstring(L, idx) ? lua_tostring(L, idx) : nullptr;
+    if (!kind) return -1;
+    const auto same = [](const char* a, const char* b) {
+        for (; *a && *b; ++a, ++b)
+            if (std::tolower(static_cast<unsigned char>(*a)) != std::tolower(static_cast<unsigned char>(*b)))
+                return false;
+        return *a == *b;
+    };
+    if (same(kind, "CRITTER")) return 0;
+    if (same(kind, "MOUNT")) return 1;
+    return -1;
+}
+
+/// The companion index argument as the client reads it (FUN_0084e030): a
+/// number, rounded; 0 for anything else, which is the usage line.
+inline long companionIndexArg(lua_State* L, int idx) {
+    return lua_isnumber(L, idx) ? std::lround(lua_tonumber(L, idx)) : 0;
 }
 
 /// The mouse buttons as WoW names them, in the order the state arrays are

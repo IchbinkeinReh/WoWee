@@ -9078,12 +9078,16 @@ void registerSystemLuaAPI(lua_State* L) {
                 //
                 // "MOUNT" or "CRITTER". Both are spells the player knows, told
                 // apart by what the spell does - see rebuildCompanions.
+                // GetCompanionInfo(type, index) (0x0053e2c0): the type and a
+                // non-zero index, or the usage line; the index rounded.
                 {"GetCompanionInfo", [](lua_State* L) -> int {
+            const int type = companionTypeArg(L, 1);
+            const long idx = companionIndexArg(L, 2);
+            if (type < 0 || idx == 0) return luaL_error(L, "Usage: GetCompanionInfo(type, index)");
             auto* gh = getGameHandler(L);
-            const char* kind = luaL_optstring(L, 1, "");
-            const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
+            const int index = static_cast<int>(idx);
             if (!gh || index < 1) return luaReturnNil(L);
-            const bool mounts = std::string(kind) == "MOUNT";
+            const bool mounts = type == 1;
             const auto& list = gh->getCompanions(mounts);
             if (index > static_cast<int>(list.size())) return luaReturnNil(L);
             const auto& c = list[static_cast<size_t>(index) - 1];
@@ -9159,10 +9163,13 @@ void registerSystemLuaAPI(lua_State* L) {
                                         : static_cast<double>(game::kKnownTitleCount));
             return 1;
         }},
+                // GetNumCompanions(type) (0x0053c2a0): CRITTER or MOUNT in any
+                // case, or the usage line.
                 {"GetNumCompanions", [](lua_State* L) -> int {
+            const int type = companionTypeArg(L, 1);
+            if (type < 0) return luaL_error(L, "Usage: GetNumCompanions(type)");
             auto* gh = getGameHandler(L);
-            const char* kind = luaL_optstring(L, 1, "");
-            const bool mounts = std::string(kind) == "MOUNT";
+            const bool mounts = type == 1;
             lua_pushnumber(L, gh ? static_cast<double>(gh->getCompanions(mounts).size()) : 0.0);
             return 1;
         }},
@@ -9794,9 +9801,9 @@ void registerSystemLuaAPI(lua_State* L) {
                 // is hidden, and leaving it hidden is the honest outcome.
                 {"AchievementMicroButton_Update", [](lua_State* L) -> int {
             (void)L; return 0; }},
-                {"BNFeaturesEnabled",        luaReturnNil},
-                {"BNFeaturesEnabledAndConnected", luaReturnNil},
-                {"BNGetMaxPlayersInConversation", lua_ReturnZero},
+                {"BNFeaturesEnabled", [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
+                {"BNFeaturesEnabledAndConnected", [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
+                {"BNGetMaxPlayersInConversation", lua_ReturnNothing},
                 {"GetSummonFriendCooldown",  lua_ReturnNoCooldown},
                 {"GetScreenResolutions",     lua_GetScreenResolutions},
                 {"GetCurrentResolution",     lua_GetCurrentResolution},

@@ -1816,11 +1816,14 @@ static int lua_SplitGuildBankItem(lua_State* L) {
 static int lua_PickupCompanion(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
+    // 0x0053c310: the type and a non-zero index, rounded, or the usage line.
+    const int type = companionTypeArg(L, 1);
+    const long idx = companionIndexArg(L, 2);
+    if (type < 0 || idx == 0) return luaL_error(L, "Usage: PickupCompanion(type, index)");
     if (!taint::allowed(L, 0xe)) return 0;   // 0x0053bbc0
-    const char* mode = luaL_optstring(L, 1, "");
-    const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
+    const int index = static_cast<int>(idx);
     if (index < 1) return 0;
-    const auto& list = gh->getCompanions(std::string(mode) == "MOUNT");
+    const auto& list = gh->getCompanions(type == 1);
     if (index > static_cast<int>(list.size())) return 0;
     const uint32_t spellId = list[static_cast<size_t>(index) - 1].spellId;
     // As PickupSpell: put down, then the same summon held is the drop and an

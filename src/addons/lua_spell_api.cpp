@@ -626,10 +626,20 @@ static int lua_CastSpellByName(lua_State* L) {
     return 0;
 }
 
+// IsSpellKnown(spellID[, isPet]) (0x0053c3a0): a positive number or the
+// usage line; the pet's spells with isPet set.
 static int lua_IsSpellKnown(lua_State* L) {
+    const long id = lua_isnumber(L, 1) ? static_cast<long>(lua_tointeger(L, 1)) : 0;
+    if (id <= 0) return luaL_error(L, "Usage: IsSpellKnown(spellID[, isPet])");
     auto* gh = getGameHandler(L);
-    uint32_t spellId = static_cast<uint32_t>(luaL_checknumber(L, 1));
-    lua_pushboolean(L, gh && gh->getKnownSpells().count(spellId));
+    const auto spellId = static_cast<uint32_t>(id);
+    bool known = false;
+    if (gh && luaClientSwitchArg(L, 2, false)) {
+        for (const uint32_t s : gh->getPetSpells()) known = known || s == spellId;
+    } else if (gh) {
+        known = gh->getKnownSpells().count(spellId) != 0;
+    }
+    lua_pushboolean(L, known ? 1 : 0);
     return 1;
 }
 
@@ -693,8 +703,10 @@ static std::vector<size_t> highestRankIndices(const game::GameHandler& gh,
 // have emptied the spellbook, which is exactly what a stubbed four-value
 // version did when it was tried.
 static int lua_GetSpellTabInfo(lua_State* L) {
+    // 0x0053be70: a number or the usage line, rounded.
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetSpellTabInfo(index)");
     auto* gh = getGameHandler(L);
-    int tabIdx = static_cast<int>(luaL_checknumber(L, 1));
+    int tabIdx = static_cast<int>(std::lround(lua_tonumber(L, 1)));
     // An empty tab rather than one nil, because the caller does arithmetic on
     // what comes back without checking it.
     //
@@ -1695,9 +1707,12 @@ void registerSpellLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"CastShapeshiftForm", [](lua_State* L) -> int {
-            // CastShapeshiftForm(index) - cast the spell for the given form slot
+            // CastShapeshiftForm(index) (0x0053c0f0): a non-zero number or the
+            // usage line, rounded; the spell for that form slot.
+            const double asked = lua_isnumber(L, 1) ? lua_tonumber(L, 1) : 0.0;
+            if (asked == 0.0) return luaL_error(L, "Usage: CastShapeshiftForm(index)");
             auto* gh = getGameHandler(L);
-            int index = static_cast<int>(luaL_checknumber(L, 1));
+            int index = static_cast<int>(std::lround(asked));
             if (!gh || index < 1) return 0;
             uint8_t classId = gh->getPlayerClass();
             const auto forms = game::knownShapeshiftForms(classId, gh->getKnownSpells());

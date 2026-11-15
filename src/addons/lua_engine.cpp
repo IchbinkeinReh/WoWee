@@ -13374,7 +13374,9 @@ void LuaEngine::registerCoreAPI() {
         // It answered a flat no-cooldown before, so a stance swapped on a
         // cooldown showed none - and the shapeshift bar is on screen the whole
         // time for five classes.
+        // 0x0053c180: a non-zero index or the usage line.
         "function GetShapeshiftFormCooldown(index)\n"
+        "    if (tonumber(index) or 0) == 0 then error('Usage: GetShapeshiftFormCooldown(index)', 0) end\n"
         "    local _, name = GetShapeshiftFormInfo(index)\n"
         "    if not name then return 0, 0, 1 end\n"
         "    return GetSpellCooldown(name)\n"
