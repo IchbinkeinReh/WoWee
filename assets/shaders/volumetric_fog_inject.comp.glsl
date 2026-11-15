@@ -153,6 +153,29 @@ float phaseHG(float cosTheta, float g) {
     return (1.0 - g2) / pow(max(1.0 + g2 - 2.0 * g * cosTheta, 1e-4), 1.5);
 }
 
+// The light the air takes on, brought under white without changing its hue.
+//
+// What a surface or the sky does with the volume is color * a + rgb, and rgb
+// is this light averaged along the ray times 1 - a: a blend between what lies
+// behind and the air's own light. Kept at or under 1, that blend can never
+// pass white wherever the colour behind it does not. Over 1 it can, and the
+// frame clamps each channel on its own: toward a low sun the forward lobe
+// took the air to several times the sun's colour, every channel clipped over
+// a wide round of the sky and the ground - a flat grey-white disc - and at its
+// edge, where the channels came back under 1 one after another, a ring of
+// colours. Scaled as a whole by its brightest channel, the light keeps the
+// sun's hue, and the shoulder, smooth from the knee up, keeps the glow
+// fading outward instead of flat. fogAirLightShoulder (volumetric_fog_math.hpp)
+// is the same, for the tests.
+vec3 airLightShoulder(vec3 light) {
+    const float knee = 0.4;
+    float peak = max(max(light.r, light.g), light.b);
+    if (peak <= knee) return light;
+    float over = (peak - knee) / (1.0 - knee);
+    float shaped = knee + (1.0 - knee) * over / (1.0 + over);
+    return light * (shaped / peak);
+}
+
 void main() {
     ivec3 cell = ivec3(gl_GlobalInvocationID);
     if (any(greaterThanEqual(cell, vol.dims.xyz))) return;
@@ -168,11 +191,13 @@ void main() {
     // zone's fog colour, at half: shade under trees is darker than the open
     // haze, and a shaft reads against the shade beside it. Sunlight comes on
     // top, and mostly forward, as it does off mist and dust: looking at the
-    // sun the air takes nineteen times the light it would scattering evenly,
-    // ten degrees off it twelve, thirty degrees off two and a half, and from
-    // forty five degrees on about one or less. That is where shafts are seen
-    // outdoors - toward a sun low enough to look at, through whatever stands
-    // in front of it.
+    // sun the air takes seven times the light it would scattering evenly,
+    // ten degrees off it six, thirty degrees off two and a half, forty five
+    // degrees off one and a half, and from sixty on about one or less. That
+    // is where shafts are seen outdoors - toward a sun low enough to look at,
+    // through whatever stands in front of it. A broad lobe rather than a
+    // spike: the shafts live thirty and forty degrees out, and a spike only
+    // piled light onto the sun's own place in the sky (see airLightShoulder).
     //
     // Only while the sun is up, by the drawn sun's own height. At night the
     // light's direction stands in for it, coming down from a sky with no sun
@@ -184,11 +209,12 @@ void main() {
     // The forward lobe only while the sun itself can be seen from the eye
     // (lighting.y): behind a tree's crown or a roof the glow round it and the
     // shafts toward it go, and the air keeps its even share of the sunlight.
-    float phase = mix(1.0, phaseHG(dot(travel, toCamera), 0.75), 0.65 * clamp(vol.lighting.y, 0.0, 1.0));
+    float phase = mix(1.0, phaseHG(dot(travel, toCamera), 0.6), 0.65 * clamp(vol.lighting.y, 0.0, 1.0));
     vec3 light = fogColor.rgb * vol.lighting.z;
     if (sunUp > 0.0) {
         light += lightColor.rgb * (sunVisibility(p) * phase * sunUp * vol.lighting.x);
     }
+    light = airLightShoulder(max(light, vec3(0.0)));
 
     vec4 result = vec4(light * density, density);
 

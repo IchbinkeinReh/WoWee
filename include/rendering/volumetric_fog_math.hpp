@@ -33,4 +33,23 @@ inline std::array<glm::vec3, 4> froxelCornerRays(const glm::mat4& view, const gl
     return rays;
 }
 
+/// The light the fog's air takes on, brought under white without changing its
+/// hue: volumetric_fog_inject.comp.glsl's airLightShoulder, mirrored for the
+/// tests. Up to the knee it is the light itself; above it the brightest
+/// channel eases toward 1 and the others keep their share of it.
+///
+/// A surface takes color * a + rgb from the volume, and rgb is this light
+/// averaged along the ray times 1 - a - a blend that passes white nowhere the
+/// colour behind it does not, while the light stays at or under 1. Over 1,
+/// the frame clamped each channel on its own: the grey-white disc round a
+/// low sun and the coloured ring at its edge.
+inline glm::vec3 fogAirLightShoulder(glm::vec3 light) {
+    constexpr float knee = 0.4f;
+    const float peak = glm::max(glm::max(light.r, light.g), light.b);
+    if (peak <= knee) return light;
+    const float over = (peak - knee) / (1.0f - knee);
+    const float shaped = knee + (1.0f - knee) * over / (1.0f + over);
+    return light * (shaped / peak);
+}
+
 }  // namespace wowee::rendering

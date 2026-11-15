@@ -13,6 +13,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+using wowee::rendering::fogAirLightShoulder;
 using wowee::rendering::froxelCornerRays;
 
 namespace {
@@ -78,4 +79,31 @@ TEST_CASE("the corner rays are one yard deep and span the screen the right way u
     CHECK(rays[1].z > 0.0f);
     CHECK(rays[2].z < 0.0f);
     CHECK(rays[3].z < 0.0f);
+}
+
+// The low sun's forward lobe took the air to several times the sun's colour;
+// clamped channel by channel on screen that was a flat disc with a ring of
+// colours round it. The light the air takes on must stay under white, keep its
+// hue, and still grow with the light that reaches it.
+TEST_CASE("the air's light stays under white and keeps its hue", "[volumetric]") {
+    const glm::vec3 dim(0.3f, 0.2f, 0.1f);
+    CHECK(glm::length(fogAirLightShoulder(dim) - dim) < 1e-6f);
+
+    const glm::vec3 sun(1.0f, 0.72f, 0.45f);  // an evening sun's colour
+    float last = 0.0f;
+    for (float k = 0.25f; k <= 20.0f; k *= 1.25f) {
+        const glm::vec3 lit = fogAirLightShoulder(sun * k);
+        INFO("sun x " << k << " -> (" << lit.r << ", " << lit.g << ", " << lit.b << ")");
+        CHECK(lit.r <= 1.0f);
+        CHECK(lit.g <= 1.0f);
+        CHECK(lit.b <= 1.0f);
+        CHECK(lit.g / lit.r == Catch::Approx(sun.g / sun.r).epsilon(1e-4));
+        CHECK(lit.b / lit.r == Catch::Approx(sun.b / sun.r).epsilon(1e-4));
+        CHECK(lit.r > last);  // brighter light, brighter air: the glow fades outward, not flat
+        last = lit.r;
+    }
+    // Smooth at the knee: just over it differs from just under by as little.
+    const glm::vec3 a = fogAirLightShoulder(glm::vec3(0.399f));
+    const glm::vec3 b = fogAirLightShoulder(glm::vec3(0.401f));
+    CHECK(b.r - a.r == Catch::Approx(0.002f).margin(2e-5f));
 }
