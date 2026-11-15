@@ -750,6 +750,14 @@ std::vector<std::string> frameXmlAccountedFrames() {
     // are the engine's, over other units only - see frameXmlDrawsCombatText
     // and CombatUI::renderCombatText.
     out.push_back("CombatText");
+    // GameTooltip is the interface's one tooltip, FrameXML's to fill: the
+    // world's mouseover reaches it through commitMouseover (SetUnit and the
+    // rest, 0x0051f790), the minimap's blips through showMinimapHover
+    // (0x0057c720), and every FrameXML button through its own OnEnter. This
+    // client's own tooltips are ImGui's, inside its own windows and over its
+    // own minimap only - not up while FrameXML holds those - so there is
+    // nothing of this client's to be drawn beside it.
+    out.push_back("GameTooltip");
     // Both tables, and every element in them rather than only the owned ones:
     // the question is whether a name has been considered at all, not whether
     // its element won.
