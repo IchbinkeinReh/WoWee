@@ -4846,20 +4846,37 @@ static int lua_ContainerIDToInventoryID(lua_State* L) {
 }
 
 /// GetBagName(bagID) → the name of the bag in that slot, or nil for an empty
-/// one. The backpack is bag 0 and has a fixed name; the interface uses this to
-/// label the bag buttons and their tooltips.
+/// one. The container frame's title is this, and so is the bag button's
+/// tooltip.
+///
+/// 0x005d8c70: the backpack (0) is the global string BACKPACK_TOOLTIP, looked
+/// up like any other (0x00819d40) - "Rucksack" in a German client. Bags 1 to
+/// 11, the four worn and the seven in the bank, are the name of the item in
+/// that slot, from the item cache; no item there, or one not answered yet, is
+/// nil. This answered the English "Backpack" for the first and the literal
+/// "Bag" for every worn bag, so a German backpack was titled in English and
+/// every bag was called "Bag"; the bank's bags had no name at all.
 static int lua_GetBagName(lua_State* L) {
-    // 0x005d8c70
     if (!lua_isnumber(L, 1))
         return luaL_error(L, "Usage: GetBagName(index)");
     auto* gh = getGameHandler(L);
-    const int bag = static_cast<int>(luaL_optnumber(L, 1, 0));
-    if (bag == 0) { lua_pushstring(L, "Backpack"); return 1; }
-    if (!gh || bag < 1 || bag > 4) { return luaReturnNil(L); }
-    // An empty bag slot has no size, which is how the interface knows not to
-    // draw a bag there at all.
-    if (gh->getInventory().getBagSize(bag - 1) == 0) { return luaReturnNil(L); }
-    lua_pushstring(L, "Bag");
+    if (!gh) return luaReturnNil(L);
+    const int bag = static_cast<int>(lua_tonumber(L, 1));
+    if (bag == 0) {
+        lua_pushstring(L, game::interfaceString("BACKPACK_TOOLTIP", "Backpack").c_str());
+        return 1;
+    }
+    const auto& inv = gh->getInventory();
+    const game::ItemSlot* slot = nullptr;
+    if (bag >= 1 && bag <= 4)
+        slot = &inv.getEquipSlot(static_cast<game::EquipSlot>(static_cast<int>(game::EquipSlot::BAG1) + bag - 1));
+    else if (isBankBagContainer(bag))
+        slot = &inv.getBankBagItem(bag - kFirstBankBagContainer);
+    if (!slot || slot->empty()) return luaReturnNil(L);
+    std::string name = slot->item.name;
+    if (const auto* info = gh->getItemInfo(slot->item.itemId); info && !info->name.empty()) name = info->name;
+    if (name.empty()) return luaReturnNil(L);
+    lua_pushstring(L, name.c_str());
     return 1;
 }
 
