@@ -1484,9 +1484,15 @@ struct Emitter {
         // arrow keys. The chat box asks for thirty-two; the money fields, the
         // mail recipient and the knowledge base ask for none, and a box told to
         // keep none should not quietly keep twenty.
+        //
+        // Not through the method: EditBox:SetHistoryLines refuses anything
+        // below one with its usage line (0x00976770), while the XML loader
+        // takes historyLines="0" and anything under one as none, on its own
+        // path (the 0x00960000 page). __WoweeXmlSetHistoryLines is the setter
+        // without the method's test.
         if (const std::string* hist = node.attr("historyLines"); hist && !hist->empty()) {
-            line(var + ":SetHistoryLines(" +
-                 std::to_string(static_cast<int>(node.attrFloat("historyLines", 0.0f))) + ")");
+            const int lines = static_cast<int>(node.attrFloat("historyLines", 0.0f));
+            line("__WoweeXmlSetHistoryLines(" + var + ", " + std::to_string(lines < 1 ? 0 : lines) + ")");
         }
         // A box that declares this does not take the left and right arrows for
         // its cursor - they reach the game, which is how a player turns while
