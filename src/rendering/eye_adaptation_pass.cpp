@@ -22,6 +22,21 @@ constexpr float kRegionTop = 0.1f, kRegionBottom = 0.75f;
 /// Below this the exposure is taken as one and nothing is drawn.
 constexpr float kNeutral = 0.004f;
 
+/// The clip mask: one channel is all it needs, but a four-channel half float
+/// is the storage format every device has.
+constexpr VkFormat kMaskFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+
+struct MaskPush {
+    int32_t frameWidth;
+    int32_t frameHeight;
+    int32_t cell;
+};
+
+struct CompositePush {
+    float exposure;
+    float cell;
+};
+
 bool isBgra(VkFormat format) {
     return format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB;
 }
@@ -57,8 +72,12 @@ bool EyeAdaptationPass::initialize(VkContext* ctx) {
     bgra_ = isBgra(format);
 
     for (uint32_t i = 0; i < MAX_FRAMES; i++) {
+        // Sampled too, though only ever blitted and copied: the target comes
+        // with a view, and a view of an image with no usage a view serves is
+        // invalid (VUID-VkImageViewCreateInfo-image-04441).
         if (!createScreenTarget(*ctx_, small_[i], {.width = kWidth, .height = kHeight}, format,
-                                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) {
+                                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                                    VK_IMAGE_USAGE_SAMPLED_BIT)) {
             LOG_WARNING("EyeAdaptation: could not allocate its copy - no eye adaptation");
             return false;
         }
@@ -77,7 +96,19 @@ bool EyeAdaptationPass::initialize(VkContext* ctx) {
         }
     }
 
-    // The composite reads its copy of the frame texel for texel.
+    // The clip mask is stored by a compute pass and filtered by the
+    // composite; a device without either keeps the plain multiply's place
+    // empty rather than lose the session.
+    VkFormatProperties maskProps{};
+    vkGetPhysicalDeviceFormatProperties(ctx_->getPhysicalDevice(), kMaskFormat, &maskProps);
+    const VkFormatFeatureFlags maskNeeded =
+        VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+    if ((maskProps.optimalTilingFeatures & maskNeeded) != maskNeeded) {
+        LOG_WARNING("EyeAdaptation: the clip mask cannot be stored and filtered here - no eye adaptation");
+        return false;
+    }
+
+    // The frame's copy is read texel for texel; the mask filtered.
     VkSamplerCreateInfo sampCI{.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
     sampCI.magFilter = VK_FILTER_NEAREST;
     sampCI.minFilter = VK_FILTER_NEAREST;
@@ -86,16 +117,30 @@ bool EyeAdaptationPass::initialize(VkContext* ctx) {
     sampCI.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sampCI.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sampler_ = ctx_->getOrCreateSampler(sampCI);
+    sampCI.magFilter = VK_FILTER_LINEAR;
+    sampCI.minFilter = VK_FILTER_LINEAR;
+    linearSampler_ = ctx_->getOrCreateSampler(sampCI);
+
     VkDescriptorSetLayoutBinding frameIn{.binding = 0, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                                          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT};
-    compositeSetLayout_ = createDescriptorSetLayout(device, {frameIn});
-    VkDescriptorPoolSize poolSize{.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = MAX_FRAMES};
+    VkDescriptorSetLayoutBinding maskIn{.binding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                        .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT};
+    compositeSetLayout_ = createDescriptorSetLayout(device, {frameIn, maskIn});
+    VkDescriptorSetLayoutBinding maskFrame{.binding = 0, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                           .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT};
+    VkDescriptorSetLayoutBinding maskOut{.binding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                                         .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT};
+    maskSetLayout_ = createDescriptorSetLayout(device, {maskFrame, maskOut});
+    VkDescriptorPoolSize poolSizes[2] = {
+        {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = MAX_FRAMES * 3},
+        {.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = MAX_FRAMES},
+    };
     VkDescriptorPoolCreateInfo poolCI{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    poolCI.maxSets = MAX_FRAMES;
-    poolCI.poolSizeCount = 1;
-    poolCI.pPoolSizes = &poolSize;
-    if (sampler_ == VK_NULL_HANDLE || compositeSetLayout_ == VK_NULL_HANDLE ||
-        vkCreateDescriptorPool(device, &poolCI, nullptr, &descPool_) != VK_SUCCESS) {
+    poolCI.maxSets = MAX_FRAMES * 2;
+    poolCI.poolSizeCount = 2;
+    poolCI.pPoolSizes = poolSizes;
+    if (sampler_ == VK_NULL_HANDLE || linearSampler_ == VK_NULL_HANDLE || compositeSetLayout_ == VK_NULL_HANDLE ||
+        maskSetLayout_ == VK_NULL_HANDLE || vkCreateDescriptorPool(device, &poolCI, nullptr, &descPool_) != VK_SUCCESS) {
         LOG_WARNING("EyeAdaptation: could not make the composite's descriptors - no eye adaptation");
         return false;
     }
@@ -105,10 +150,34 @@ bool EyeAdaptationPass::initialize(VkContext* ctx) {
         alloc.descriptorSetCount = 1;
         alloc.pSetLayouts = &compositeSetLayout_;
         if (vkAllocateDescriptorSets(device, &alloc, &compositeSets_[i]) != VK_SUCCESS) return false;
+        alloc.pSetLayouts = &maskSetLayout_;
+        if (vkAllocateDescriptorSets(device, &alloc, &maskSets_[i]) != VK_SUCCESS) return false;
+    }
+
+    const VkPushConstantRange maskPush{.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT, .offset = 0,
+                                       .size = sizeof(MaskPush)};
+    maskLayout_ = createPipelineLayout(device, {maskSetLayout_}, {maskPush});
+    if (maskLayout_ == VK_NULL_HANDLE) return false;
+    {
+        VkShaderModule module;
+        if (!module.loadFromFile(device, "assets/shaders/eye_highlight_mask.comp.spv")) {
+            LOG_ERROR("EyeAdaptation: failed to load the clip mask shader");
+            return false;
+        }
+        VkComputePipelineCreateInfo cpCI{.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+        cpCI.stage = module.stageInfo(VK_SHADER_STAGE_COMPUTE_BIT);
+        cpCI.layout = maskLayout_;
+        const bool ok = vkCreateComputePipelines(device, ctx_->getPipelineCache(), 1, &cpCI, nullptr,
+                                                 &maskPipeline_) == VK_SUCCESS;
+        module.destroy();
+        if (!ok) {
+            LOG_ERROR("EyeAdaptation: failed to create the clip mask pipeline");
+            return false;
+        }
     }
 
     const VkPushConstantRange push{.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 0,
-                                   .size = sizeof(float)};
+                                   .size = sizeof(CompositePush)};
     compositeLayout_ = createPipelineLayout(device, {compositeSetLayout_}, {push});
     if (compositeLayout_ == VK_NULL_HANDLE || !ensureCompositePipeline()) return false;
 
@@ -280,8 +349,13 @@ bool EyeAdaptationPass::wantsComposite() const {
 }
 
 void EyeAdaptationPass::destroyCopies() {
-    for (uint32_t i = 0; i < MAX_FRAMES; i++) destroyScreenTarget(*ctx_, frameCopy_[i]);
+    for (uint32_t i = 0; i < MAX_FRAMES; i++) {
+        destroyScreenTarget(*ctx_, frameCopy_[i]);
+        destroyScreenTarget(*ctx_, mask_[i]);
+    }
     copyExtent_ = {};
+    maskExtent_ = {};
+    cell_ = 0;
 }
 
 bool EyeAdaptationPass::ensureCopies(VkExtent2D extent) {
@@ -294,33 +368,56 @@ bool EyeAdaptationPass::ensureCopies(VkExtent2D extent) {
     ::wowee::rendering::deviceWaitIdle(ctx_->getDevice());
     destroyCopies();
     const VkFormat format = ctx_->getSwapchainFormat();
+    const uint32_t cell = eye_adaptation::glareCell(extent.height);
+    const VkExtent2D maskExtent{.width = (extent.width + cell - 1) / cell, .height = (extent.height + cell - 1) / cell};
     for (uint32_t i = 0; i < MAX_FRAMES; i++) {
         if (!createScreenTarget(*ctx_, frameCopy_[i], extent, format,
-                                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)) {
+                                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT) ||
+            !createScreenTarget(*ctx_, mask_[i], maskExtent, kMaskFormat,
+                                VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)) {
             LOG_WARNING("EyeAdaptation: could not allocate the ", extent.width, "x", extent.height,
                         " frame copy - the exposure is left off");
             destroyCopies();
             return false;
         }
-        VkDescriptorImageInfo in{.sampler = sampler_, .imageView = frameCopy_[i].view,
-                                 .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        VkWriteDescriptorSet w{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        w.dstSet = compositeSets_[i];
-        w.dstBinding = 0;
-        w.descriptorCount = 1;
-        w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        w.pImageInfo = &in;
-        vkUpdateDescriptorSets(ctx_->getDevice(), 1, &w, 0, nullptr);
+        VkDescriptorImageInfo frameIn{.sampler = sampler_, .imageView = frameCopy_[i].view,
+                                      .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkDescriptorImageInfo maskIn{.sampler = linearSampler_, .imageView = mask_[i].view,
+                                     .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
+        VkDescriptorImageInfo maskOut{.sampler = VK_NULL_HANDLE, .imageView = mask_[i].view,
+                                      .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
+        VkWriteDescriptorSet w[4]{};
+        for (auto& write : w) {
+            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.descriptorCount = 1;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        }
+        w[0].dstSet = compositeSets_[i];
+        w[0].dstBinding = 0;
+        w[0].pImageInfo = &frameIn;
+        w[1].dstSet = compositeSets_[i];
+        w[1].dstBinding = 1;
+        w[1].pImageInfo = &maskIn;
+        w[2].dstSet = maskSets_[i];
+        w[2].dstBinding = 0;
+        w[2].pImageInfo = &frameIn;
+        w[3].dstSet = maskSets_[i];
+        w[3].dstBinding = 1;
+        w[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        w[3].pImageInfo = &maskOut;
+        vkUpdateDescriptorSets(ctx_->getDevice(), 4, w, 0, nullptr);
     }
     copyExtent_ = extent;
+    maskExtent_ = maskExtent;
+    cell_ = cell;
     return true;
 }
 
 bool EyeAdaptationPass::prepareComposite(VkCommandBuffer cmd, uint32_t frame, VkImage swapchainImage,
                                          VkExtent2D extent) {
     if (frame >= MAX_FRAMES || cmd == VK_NULL_HANDLE || swapchainImage == VK_NULL_HANDLE || !wantsComposite() ||
-        compositeSets_[frame] == VK_NULL_HANDLE || extent.width == 0 || extent.height == 0 ||
-        !ensureCopies(extent)) {
+        compositeSets_[frame] == VK_NULL_HANDLE || maskSets_[frame] == VK_NULL_HANDLE ||
+        maskPipeline_ == VK_NULL_HANDLE || extent.width == 0 || extent.height == 0 || !ensureCopies(extent)) {
         return false;
     }
     const auto barrier = [&](VkImage image, VkImageLayout from, VkImageLayout to, VkPipelineStageFlags2 srcStage,
@@ -347,10 +444,11 @@ bool EyeAdaptationPass::prepareComposite(VkCommandBuffer cmd, uint32_t frame, Vk
     barrier(swapchainImage, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-    // Its last contents were read by this slot's composite two frames ago.
+    // Its last contents were read by this slot's mask pass and composite two
+    // frames ago.
     barrier(frameCopy_[frame].image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, 0, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-            VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, 0,
+            VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
     VkImageCopy copy{};
     copy.srcSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .baseArrayLayer = 0,
                            .layerCount = 1};
@@ -364,17 +462,38 @@ bool EyeAdaptationPass::prepareComposite(VkCommandBuffer cmd, uint32_t frame, Vk
             VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
     barrier(frameCopy_[frame].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+
+    // Where the copy is clipped white, one texel a cell. The mask's last
+    // contents were read by this slot's composite two frames ago; all of it
+    // is written again.
+    barrier(mask_[frame].image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, 0, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+    const MaskPush maskPush{.frameWidth = static_cast<int32_t>(extent.width),
+                            .frameHeight = static_cast<int32_t>(extent.height),
+                            .cell = static_cast<int32_t>(cell_)};
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, maskPipeline_);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, maskLayout_, 0, 1, &maskSets_[frame], 0, nullptr);
+    vkCmdPushConstants(cmd, maskLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(maskPush), &maskPush);
+    vkCmdDispatch(cmd, (maskExtent_.width + 7) / 8, (maskExtent_.height + 7) / 8, 1);
+    barrier(mask_[frame].image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
     return true;
 }
 
 void EyeAdaptationPass::composite(VkCommandBuffer cmd, uint32_t frame) {
-    if (frame >= MAX_FRAMES || !wantsComposite() || frameCopy_[frame].view == VK_NULL_HANDLE) return;
-    const float exposure = exposure_;
+    if (frame >= MAX_FRAMES || !wantsComposite() || frameCopy_[frame].view == VK_NULL_HANDLE ||
+        mask_[frame].view == VK_NULL_HANDLE || cell_ == 0) {
+        return;
+    }
+    const CompositePush push{.exposure = exposure_, .cell = static_cast<float>(cell_)};
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositeLayout_, 0, 1, &compositeSets_[frame], 0,
                             nullptr);
-    vkCmdPushConstants(cmd, compositeLayout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(float), &exposure);
+    vkCmdPushConstants(cmd, compositeLayout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
     vkCmdDraw(cmd, 3, 1, 0, 0);
 }
 
@@ -388,13 +507,18 @@ void EyeAdaptationPass::shutdown() {
         readback_[i] = {};
         measured_[i] = false;
         compositeSets_[i] = VK_NULL_HANDLE;
+        maskSets_[i] = VK_NULL_HANDLE;
     }
     destroyCopies();
     destroy(device, descPool_);
     destroy(device, compositePipeline_);
     destroy(device, compositeLayout_);
     destroy(device, compositeSetLayout_);
+    destroy(device, maskPipeline_);
+    destroy(device, maskLayout_);
+    destroy(device, maskSetLayout_);
     sampler_ = VK_NULL_HANDLE;
+    linearSampler_ = VK_NULL_HANDLE;
     compositeFormat_ = VK_FORMAT_UNDEFINED;
     usable_ = false;
     ctx_ = nullptr;

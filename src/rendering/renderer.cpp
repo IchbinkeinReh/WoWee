@@ -2033,11 +2033,12 @@ void Renderer::endFrame() {
         if (sunShafts_) sunShafts_->composite(currentCmd, vkCtx->getCurrentFrame());
         vkCtx->gpuMark(currentCmd, "effects composite");
         // The eye's exposure over all of it, the interface left out. It is
-        // not a multiply - white times an exposure under one is grey, and
-        // the clipped sky round a low sun was a grey disc - so the frame as
-        // it now stands is copied and redrawn through the highlight shoulder
-        // (eye_adaptation_pass.hpp): the overlay pass is ended for the copy
-        // and begun again. Only while there is an exposure other than one.
+        // not a plain multiply - white times an exposure under one is grey,
+        // and the clipped sky round a low sun was a grey disc - so the frame
+        // as it now stands is copied, its clipped white marked, and redrawn
+        // with the exposure let go round that (eye_adaptation_pass.hpp): the
+        // overlay pass is ended for the copy and begun again. Only while
+        // there is an exposure other than one.
         if (eyeAdaptation_ && eyeAdaptation_->wantsComposite()) {
             const auto& images = vkCtx->getSwapchainImages();
             vkCmdEndRenderPass(currentCmd);

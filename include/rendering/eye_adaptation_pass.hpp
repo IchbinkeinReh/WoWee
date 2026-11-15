@@ -27,12 +27,15 @@ class VkContext;
  * The few thousand pixels' mean takes microseconds.
  *
  * The exposure is then laid over the frame in the overlay pass, ahead of the
- * interface and after the shafts and the screen effects. Not as a multiply:
- * the frame is 8-bit and its highlights already clipped, and white times an
- * exposure under one is grey - the low sun's glow was a flat grey disc. The
- * frame as it stands then is copied (prepareComposite, between two overlay
- * passes) and redrawn from the copy through eye_adaptation::exposeHighlight:
- * value x exposure under the knee as before, a clipped white kept white.
+ * interface and after the shafts and the screen effects. Not as a plain
+ * multiply: the frame is 8-bit and its highlights already clipped, and white
+ * times an exposure under one is grey - the low sun's glow was a flat grey
+ * disc. The frame as it stands then is copied (prepareComposite, between two
+ * overlay passes), a compute pass marks where the copy is clipped white, one
+ * texel per cell of pixels, and the copy is redrawn under the exposure let
+ * go toward one round those cells (eye_adaptation::exposeFrame): the
+ * burnt-out sky stays white, its glare falls off softly, and everywhere else
+ * it is the multiply it was.
  *
  * With the lighting off nothing is recorded or drawn, and the picture is
  * exactly what it was.
@@ -102,13 +105,22 @@ private:
     float logTimer_ = 0.0f;
     bool log_ = false;
 
-    /// The frame as the shafts left it, full size, one a slot.
+    /// The frame as the shafts left it, full size, one a slot; and where it
+    /// is clipped white, one texel per cell_ x cell_ pixels.
     ScreenTarget frameCopy_[MAX_FRAMES];
+    ScreenTarget mask_[MAX_FRAMES];
     VkExtent2D copyExtent_{};
-    VkSampler sampler_ = VK_NULL_HANDLE;  // the context's cache owns it
+    VkExtent2D maskExtent_{};
+    uint32_t cell_ = 0;
+    VkSampler sampler_ = VK_NULL_HANDLE;        // the context's cache owns both
+    VkSampler linearSampler_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout compositeSetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout maskSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
     VkDescriptorSet compositeSets_[MAX_FRAMES] = {};
+    VkDescriptorSet maskSets_[MAX_FRAMES] = {};
+    VkPipelineLayout maskLayout_ = VK_NULL_HANDLE;
+    VkPipeline maskPipeline_ = VK_NULL_HANDLE;
 
     VkPipelineLayout compositeLayout_ = VK_NULL_HANDLE;
     VkPipeline compositePipeline_ = VK_NULL_HANDLE;
