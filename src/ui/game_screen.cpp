@@ -735,18 +735,11 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     }
     renderLightKindOverlay();       // Debug Graphics: the lights' kinds
     combatUI_.playSoundsForNewChat(gameHandler);
-    // Blizzard_CombatText draws its own once it is loaded, which happens the
-    // moment the player touches the float-mode dropdown in the interface
-    // options. Not an element gate: the addon arrives mid-run, so this has to
-    // keep drawing until it does and then stand down.
     offerPendingTradeItem(gameHandler);
-    // The master switch for the damage and healing numbers, which the panel
-    // offers and nothing read: the numbers were drawn whatever it said. Its own
-    // eighteen filters - fctDamage, fctHealing and the rest - are still
-    // unread; this is the one that turns the whole thing off, which is what
-    // somebody who does not want numbers over the world actually reaches for.
-    if (!frameXmlDrawsCombatText() &&
-        addons::storedCVarValue("enableCombatText", "1") != "0") {
+    // Not under enableCombatText: that is Blizzard_CombatText's switch, and
+    // the numbers over the world answer to CombatDamage and CombatHealing,
+    // which the handler reads as each one arrives (renderCombatText).
+    if (!frameXmlDrawsCombatText()) {
         combatUI_.renderCombatText(gameHandler);
     }
     dialogManager_.renderDialogs(gameHandler);

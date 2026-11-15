@@ -273,9 +273,11 @@ bool frameXmlDrawsCombatText() {
     // 0x0074d430 tests, in the damage handler and in the heal one, where the
     // name it hands along is the healer's. The numbers over the world are the
     // engine's own floating combat text: a different set of cvars
-    // (enableCombatText and the fct filters this still does not read), drawn
-    // over whoever dealt or took the damage, and gated by nothing that knows an
-    // add-on is drawing a column somewhere else. Loading the add-on is the
+    // (CombatDamage, CombatHealing and their pet and periodic rows - not
+    // enableCombatText, which is the addon's), drawn over the unit the player
+    // or the pet hurt or healed and never over the player (0x0071f990,
+    // 0x00722340 and 0x00722440 all return for the active player), and gated
+    // by nothing that knows an add-on is drawing a column somewhere else. Loading the add-on is the
     // player asking for one more thing to be shown, not for the other to stop.
     //
     // The function stays because a load-on-demand addon is a gate no UiElement
@@ -525,7 +527,12 @@ const Check kChecks[] = {
         {UiElement::RepBar,       "ReputationWatchBar ReputationWatchStatusBar"},
         {UiElement::StanceBar,    "ShapeshiftBarFrame ShapeshiftButton1"},
         {UiElement::CastBar,      "CastingBarFrame CastingBarFrameBorder CastingBarFrameText"},
-        {UiElement::Chat,         "ChatFrame1 ChatFrame1EditBox GeneralDockManager"},
+        // The two buttons over the chat frame's button strip are chat's as
+        // well: FloatingChatFrame.xml declares both on UIParent rather than in
+        // ChatFrame1, which is why the on-screen sweep found them unclaimed.
+        // The client shows both; this one draws neither.
+        {UiElement::Chat,         "ChatFrame1 ChatFrame1EditBox GeneralDockManager "
+                                  "ChatFrameMenuButton FriendsMicroButton"},
         // Both are hidden except during the fade, so NOT BUILT is the fault to
         // look for here and hidden is the normal state.
         {UiElement::ZoneText,     "ZoneTextFrame ZoneTextString SubZoneTextFrame"},
@@ -736,6 +743,13 @@ void appendFrames(const char* frames, std::vector<std::string>& out) {
 
 std::vector<std::string> frameXmlAccountedFrames() {
     std::vector<std::string> out;
+    // Considered and belonging to no element. CombatText is Blizzard_CombatText's
+    // column, which the options panel's "Show Combat Text" checkbox loads at
+    // start-up when enableCombatText is on (its default). What happens to the
+    // character is that column's alone; this client's numbers over the world
+    // are the engine's, over other units only - see frameXmlDrawsCombatText
+    // and CombatUI::renderCombatText.
+    out.push_back("CombatText");
     // Both tables, and every element in them rather than only the owned ones:
     // the question is whether a name has been considered at all, not whether
     // its element won.

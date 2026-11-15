@@ -1033,8 +1033,9 @@ constexpr SettingDesc kSchema[] = {
 
     // ------------------------------------------------------------- Combat Text
     // Blizzard_CombatText's own switches, which the game's page held. The six
-    // engine-side rows that page also had are not here: this client floats
-    // its own damage and healing and reads none of them.
+    // engine-side rows that page also had are not here: they govern the
+    // numbers over the units the player hits, which the combat handler
+    // filters by those cvars as each line arrives (combat_text_filter.hpp).
     {"combattext", "Floating combat text", SettingKind::Bool, 0, 0, 0, "Combat Text", "Over your character",
      "Float the notices below over your character as they happen.", "", 1,
      "", "cvar:enableCombatText", "", "SHOW_COMBAT_TEXT = v"},
