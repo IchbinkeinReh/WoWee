@@ -188,3 +188,121 @@ TEST_CASE("a higher sensitivity adjusts a view the default leaves alone", "[eye]
     const Params d;
     CHECK(exposureFor(0.5f * (d.neutralLow + d.neutralHigh), paramsFor(30, 2.5f, 100)) == 1.0f);
 }
+
+namespace {
+// A sunset-like test frame, 320 x 180: a sky gradient, a burnt-out white disc
+// (the clipped glare round the sun) centred at (160, 60), radius 25, a pale
+// yellow cloud at (60, 50), a sunlit yellow field below y 120.
+struct Frame {
+    static constexpr uint32_t W = 320, H = 180;
+    std::vector<float> px = std::vector<float>(size_t(W) * H * 3);
+    float* at(uint32_t x, uint32_t y) { return px.data() + (size_t(y) * W + x) * 3; }
+    const float* at(uint32_t x, uint32_t y) const { return px.data() + (size_t(y) * W + x) * 3; }
+};
+
+Frame sunset(bool withSun) {
+    Frame f;
+    for (uint32_t y = 0; y < Frame::H; ++y) {
+        for (uint32_t x = 0; x < Frame::W; ++x) {
+            float* p = f.at(x, y);
+            if (y >= 120) { p[0] = 1.0f; p[1] = 0.9f; p[2] = 0.25f; continue; }   // field
+            const float t = float(y) / 120.0f;
+            p[0] = 0.45f + 0.4f * t; p[1] = 0.6f + 0.25f * t; p[2] = 0.85f;        // sky
+            const float dc = std::hypot(float(x) - 60.0f, float(y) - 50.0f);
+            if (dc < 15.0f) { p[0] = 1.0f; p[1] = 0.88f; p[2] = 0.72f; }           // pale cloud
+            if (withSun) {
+                const float d = std::hypot(float(x) - 160.0f, float(y) - 60.0f);
+                if (d < 25.0f) { p[0] = p[1] = p[2] = 1.0f; }                     // clipped
+                else if (d < 60.0f) {                                              // glow, not white
+                    const float g = 0.995f * (1.0f - (d - 25.0f) / 35.0f);
+                    for (int c = 0; c < 3; ++c) p[c] = std::max(p[c], g);
+                }
+            }
+        }
+    }
+    return f;
+}
+}  // namespace
+
+TEST_CASE("away from clipped white the exposure is exactly the multiply", "[eye]") {
+    // A frame with nothing clipped white: a noon field, a blue sky, a pale
+    // cloud - every pixel times the exposure, as it always was.
+    Frame f = sunset(false);
+    const Frame orig = f;
+    exposeFrame(f.px.data(), Frame::W, Frame::H, 0.6f);
+    for (size_t i = 0; i < f.px.size(); ++i) CHECK(f.px[i] == Catch::Approx(orig.px[i] * 0.6f).margin(1e-6));
+    // At an exposure of one, or above it, nothing but the multiply anywhere.
+    Frame g = sunset(true);
+    const Frame gOrig = g;
+    exposeFrame(g.px.data(), Frame::W, Frame::H, 1.0f);
+    for (size_t i = 0; i < g.px.size(); ++i) CHECK(g.px[i] == Catch::Approx(gOrig.px[i]).margin(1e-6));
+    Frame h = sunset(true);
+    exposeFrame(h.px.data(), Frame::W, Frame::H, 1.5f);
+    CHECK(h.at(10, 10)[0] == Catch::Approx(std::min(1.0f, gOrig.px[(10 * Frame::W + 10) * 3] * 1.5f)));
+    CHECK(h.at(160, 60)[0] == 1.0f);
+}
+
+TEST_CASE("clipped white stays white and the glare round it falls off smoothly", "[eye]") {
+    const float e = 0.6f;
+    Frame f = sunset(true);
+    const Frame orig = f;
+    exposeFrame(f.px.data(), Frame::W, Frame::H, e);
+    // The burnt-out core: white, not 0.6 grey.
+    CHECK(f.at(160, 60)[0] > 0.97f);
+    CHECK(f.at(160, 60)[2] > 0.97f);
+    // Along a row out from the sun: never brighter further out (the image
+    // only gets darker there), and no step between neighbours bigger than a
+    // gentle ramp's - no edge.
+    float last = f.at(160, 60)[1];
+    for (uint32_t x = 160; x < 300; ++x) {
+        const float v = f.at(x, 60)[1];
+        CHECK(v <= last + 1e-4f);
+        CHECK(last - v < 0.06f);
+        last = std::min(last, v);
+    }
+    // Far from it the multiply again.
+    CHECK(f.at(310, 10)[1] == Catch::Approx(orig.at(310, 10)[1] * e).margin(0.01));
+    // The field below keeps the multiply - bright in two channels, not white.
+    CHECK(f.at(20, 170)[0] == Catch::Approx(e).margin(0.01));
+}
+
+TEST_CASE("a pale coloured cloud keeps its hue", "[eye]") {
+    const float e = 0.6f;
+    Frame f = sunset(true);
+    const Frame orig = f;
+    exposeFrame(f.px.data(), Frame::W, Frame::H, e);
+    // Its own pixel ratios are kept: only ever scaled.
+    const float* c = f.at(60, 50);
+    const float* o = orig.at(60, 50);
+    CHECK(c[1] / c[0] == Catch::Approx(o[1] / o[0]).epsilon(1e-4));
+    CHECK(c[2] / c[0] == Catch::Approx(o[2] / o[0]).epsilon(1e-4));
+    // And far from the sun it is not lifted at all.
+    CHECK(c[0] == Catch::Approx(o[0] * e).margin(0.01));
+    // Only white in all three channels counts as clipped.
+    CHECK(clipShare(1.0f, 1.0f, 1.0f) == 1.0f);
+    CHECK(clipShare(1.0f, 0.88f, 0.72f) == 0.0f);
+    CHECK(clipShare(1.0f, 1.0f, 0.25f) == 0.0f);
+    CHECK(glareScale(e, 0.0f) == e);
+    CHECK(glareScale(e, 1.0f) == 1.0f);
+    CHECK(glareScale(1.4f, 1.0f) == 1.4f);
+}
+
+TEST_CASE("a small clipped disc on its own is brought up with a soft halo", "[eye]") {
+    // The sun's disc low over a ridge: a few pixels clipped white in a
+    // plain sky, too small for the wide glare.
+    const float e = 0.65f;
+    Frame f;
+    for (uint32_t y = 0; y < Frame::H; ++y) {
+        for (uint32_t x = 0; x < Frame::W; ++x) {
+            float* p = f.at(x, y);
+            p[0] = 0.8f; p[1] = 0.65f; p[2] = 0.5f;
+            if (std::hypot(float(x) - 150.0f, float(y) - 90.0f) < 2.5f) p[0] = p[1] = p[2] = 1.0f;
+        }
+    }
+    const Frame orig = f;
+    exposeFrame(f.px.data(), Frame::W, Frame::H, e);
+    CHECK(f.at(150, 90)[1] > e + 0.15f);
+    // Far away, the multiply; in between, never a step.
+    CHECK(f.at(20, 20)[1] == Catch::Approx(orig.at(20, 20)[1] * e).margin(1e-4));
+    for (uint32_t x = 154; x < 300; ++x) CHECK(f.at(x - 1, 90)[1] - f.at(x, 90)[1] < 0.05f);
+}

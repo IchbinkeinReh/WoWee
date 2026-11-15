@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <vector>
 
 namespace wowee::rendering::eye_adaptation {
 
@@ -117,6 +118,126 @@ inline float adapt(float adaptedLog2, float measuredLog2, float dt, const Params
 /// adapts from there, rather than starting adapted.
 inline float initialAdaptation(float measuredLog2, const Params& p = {}) {
     return std::clamp(measuredLog2, p.neutralLow, p.neutralHigh);
+}
+
+/// The exposure over a finished picture whose highlights are already clipped.
+///
+/// The frame is drawn straight into the 8-bit swapchain, so the sky round a
+/// low sun - far brighter than white - is stored as white, 1.0, and a plain
+/// multiply by an exposure under one made it a flat grey disc where the
+/// picture without the traced lighting is white. So where the frame is
+/// clipped to white in all three channels, and round it, the exposure is let
+/// go toward one: the burnt-out sky stays white, as it is without the traced
+/// lighting, and the glare falls off softly into the exposed sky round it.
+///
+/// Per cell of the frame (eye_highlight_mask.comp.glsl) the share of pixels
+/// clipped white (clipShare); that blurred wide - a 5 x 5 Gaussian over the
+/// cells, kGlareSpread cells apart - gives the glare weight (glareWeight,
+/// with a tighter blur for a small core on its own),
+/// and the pixel's colour is scaled by the exposure mixed toward one by it
+/// (glareScale; eye_adaptation.frag.glsl). Only ever a scale, so a pale
+/// coloured cloud keeps its hue; only white in all three channels counts, so
+/// a sunlit yellow field or a blue noon sky is never mistaken for it; and far
+/// from any clipped white - by day, in an inn - it is exactly the multiply.
+/// Above an exposure of one (a dark room brightened) it is the multiply too.
+constexpr float kClipLow = 0.96f;
+constexpr float kClipHigh = 0.995f;
+constexpr float kGlareGain = 2.5f;
+constexpr float kGlareSpread = 2.0f;
+/// A small clipped core on its own - the sun's disc low over a ridge - is
+/// too small to count in the wide blur: a tighter one (kCoreSpread cells
+/// apart) brings it up too, but only where the wide one sees next to nothing
+/// (below kIsolatedLow..kIsolatedHigh), so a large burnt-out sky keeps the
+/// wide blur's soft edge.
+constexpr float kCoreGain = 3.0f;
+constexpr float kCoreSpread = 0.5f;
+constexpr float kIsolatedLow = 0.02f;
+constexpr float kIsolatedHigh = 0.15f;
+
+/// The cell, in pixels a side, for a frame `height` pixels high: 32 at 1080,
+/// so the glare's reach is the same share of the screen at any size.
+inline uint32_t glareCell(uint32_t height) {
+    return std::max(4u, static_cast<uint32_t>(std::lround(static_cast<double>(height) / 33.75)));
+}
+
+inline float smoothstep01(float a, float b, float x) {
+    const float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+/// How far one pixel (0..1 each channel) is clipped white: 0 unless all
+/// three channels are at the top.
+inline float clipShare(float r, float g, float b) {
+    return smoothstep01(kClipLow, kClipHigh, std::min(r, std::min(g, b)));
+}
+
+/// The glare weight from the share of clipped white round a pixel, blurred
+/// wide (kGlareSpread) and tight (kCoreSpread).
+inline float glareWeight(float wideShare, float coreShare) {
+    const float wide = smoothstep01(0.0f, 1.0f, std::clamp(wideShare * kGlareGain, 0.0f, 1.0f));
+    const float core = smoothstep01(0.0f, 1.0f, std::clamp(coreShare * kCoreGain, 0.0f, 1.0f));
+    return std::max(wide, core * (1.0f - smoothstep01(kIsolatedLow, kIsolatedHigh, wideShare)));
+}
+
+/// What a pixel's colour is multiplied by.
+inline float glareScale(float exposure, float weight) {
+    if (!(exposure < 1.0f)) return exposure;
+    return exposure + (1.0f - exposure) * std::clamp(weight, 0.0f, 1.0f);
+}
+
+/// The whole of it on the CPU, for the tests: `rgb` is `width` x `height`
+/// pixels, three floats each, 0..1, exposed in place. The mask texels and
+/// the composite's filtered taps as the shaders have them.
+inline void exposeFrame(float* rgb, uint32_t width, uint32_t height, float exposure) {
+    if (!rgb || width == 0 || height == 0) return;
+    const uint32_t cell = glareCell(height);
+    const uint32_t mw = (width + cell - 1) / cell, mh = (height + cell - 1) / cell;
+    std::vector<float> mask(size_t(mw) * mh, 0.0f);
+    for (uint32_t my = 0; my < mh; ++my) {
+        for (uint32_t mx = 0; mx < mw; ++mx) {
+            float sum = 0.0f, count = 0.0f;
+            for (uint32_t y = my * cell; y < std::min(height, (my + 1) * cell); ++y) {
+                for (uint32_t x = mx * cell; x < std::min(width, (mx + 1) * cell); ++x) {
+                    const float* p = rgb + (size_t(y) * width + x) * 3;
+                    sum += clipShare(p[0], p[1], p[2]);
+                    count += 1.0f;
+                }
+            }
+            mask[size_t(my) * mw + mx] = count > 0.0f ? sum / count : 0.0f;
+        }
+    }
+    // A linear, clamped-to-edge fetch of the mask at mask texel coordinates.
+    const auto fetch = [&](float u, float v) {
+        u = std::clamp(u - 0.5f, 0.0f, float(mw - 1));
+        v = std::clamp(v - 0.5f, 0.0f, float(mh - 1));
+        const uint32_t x0 = uint32_t(u), y0 = uint32_t(v);
+        const uint32_t x1 = std::min(x0 + 1, mw - 1), y1 = std::min(y0 + 1, mh - 1);
+        const float fx = u - float(x0), fy = v - float(y0);
+        const auto m = [&](uint32_t x, uint32_t y) { return mask[size_t(y) * mw + x]; };
+        return (m(x0, y0) * (1 - fx) + m(x1, y0) * fx) * (1 - fy) + (m(x0, y1) * (1 - fx) + m(x1, y1) * fx) * fy;
+    };
+    for (uint32_t y = 0; y < height; ++y) {
+        for (uint32_t x = 0; x < width; ++x) {
+            float scale = exposure;
+            if (exposure < 1.0f) {
+                const float u = (float(x) + 0.5f) / float(cell), v = (float(y) + 0.5f) / float(cell);
+                const auto share = [&](float spread) {
+                    float sum = 0.0f, weights = 0.0f;
+                    for (int dy = -2; dy <= 2; ++dy) {
+                        for (int dx = -2; dx <= 2; ++dx) {
+                            const float w = std::exp(-float(dx * dx + dy * dy) / 4.5f);
+                            sum += w * fetch(u + dx * spread, v + dy * spread);
+                            weights += w;
+                        }
+                    }
+                    return sum / weights;
+                };
+                scale = glareScale(exposure, glareWeight(share(kGlareSpread), share(kCoreSpread)));
+            }
+            float* p = rgb + (size_t(y) * width + x) * 3;
+            for (int c = 0; c < 3; ++c) p[c] = std::clamp(p[c] * scale, 0.0f, 1.0f);
+        }
+    }
 }
 
 /// log2 of the mean luminance of an 8-bit picture, `width` x `height`
