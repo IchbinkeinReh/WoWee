@@ -4640,12 +4640,16 @@ void registerUnitLuaAPI(lua_State* L) {
         }},
                 // Summoning a mount or a critter is casting its spell - there
                 // is no separate companion message on the wire in 3.3.5.
+                // CallCompanion(type, index) (0x0053e5e0): the usage line for a
+                // bad type or a zero index; the index rounded.
                 {"CallCompanion", [](lua_State* L) -> int {
+            const int type = companionTypeArg(L, 1);
+            const long idx = companionIndexArg(L, 2);
+            if (type < 0 || idx == 0) return luaL_error(L, "Usage: CallCompanion(type, index)");
             auto* gh = getGameHandler(L);
-            const char* kind = luaL_optstring(L, 1, "");
-            const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
+            const int index = static_cast<int>(idx);
             if (!gh || index < 1) return 0;
-            const auto& list = gh->getCompanions(std::string(kind) == "MOUNT");
+            const auto& list = gh->getCompanions(type == 1);
             if (index <= static_cast<int>(list.size())) {
                 gh->castSpell(list[static_cast<size_t>(index) - 1].spellId, 0);
             }
@@ -4663,11 +4667,14 @@ void registerUnitLuaAPI(lua_State* L) {
         }},
                 // Putting one away is cancelling its aura, which is the same
                 // thing right-clicking the buff does.
+                // DismissCompanion(type) (0x0053e6b0): the usage line for a type
+                // that is neither CRITTER nor MOUNT.
                 {"DismissCompanion", [](lua_State* L) -> int {
+            const int type = companionTypeArg(L, 1);
+            if (type < 0) return luaL_error(L, "Usage: DismissCompanion(type)");
             auto* gh = getGameHandler(L);
-            const char* kind = luaL_optstring(L, 1, "");
             if (!gh) return 0;
-            const auto& list = gh->getCompanions(std::string(kind) == "MOUNT");
+            const auto& list = gh->getCompanions(type == 1);
             for (const auto& c : list) {
                 for (const auto& a : gh->getPlayerAuras()) {
                     if (a.spellId != c.spellId) continue;

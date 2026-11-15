@@ -626,10 +626,20 @@ static int lua_CastSpellByName(lua_State* L) {
     return 0;
 }
 
+// IsSpellKnown(spellID[, isPet]) (0x0053c3a0): a positive number or the
+// usage line; the pet's spells with isPet set.
 static int lua_IsSpellKnown(lua_State* L) {
+    const long id = lua_isnumber(L, 1) ? static_cast<long>(lua_tointeger(L, 1)) : 0;
+    if (id <= 0) return luaL_error(L, "Usage: IsSpellKnown(spellID[, isPet])");
     auto* gh = getGameHandler(L);
-    uint32_t spellId = static_cast<uint32_t>(luaL_checknumber(L, 1));
-    lua_pushboolean(L, gh && gh->getKnownSpells().count(spellId));
+    const auto spellId = static_cast<uint32_t>(id);
+    bool known = false;
+    if (gh && luaClientSwitchArg(L, 2, false)) {
+        for (const uint32_t s : gh->getPetSpells()) known = known || s == spellId;
+    } else if (gh) {
+        known = gh->getKnownSpells().count(spellId) != 0;
+    }
+    lua_pushboolean(L, known ? 1 : 0);
     return 1;
 }
 
@@ -693,8 +703,10 @@ static std::vector<size_t> highestRankIndices(const game::GameHandler& gh,
 // have emptied the spellbook, which is exactly what a stubbed four-value
 // version did when it was tried.
 static int lua_GetSpellTabInfo(lua_State* L) {
+    // 0x0053be70: a number or the usage line, rounded.
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetSpellTabInfo(index)");
     auto* gh = getGameHandler(L);
-    int tabIdx = static_cast<int>(luaL_checknumber(L, 1));
+    int tabIdx = static_cast<int>(std::lround(lua_tonumber(L, 1)));
     // An empty tab rather than one nil, because the caller does arithmetic on
     // what comes back without checking it.
     //
@@ -807,10 +819,11 @@ static int lua_GetSpellName(lua_State* L) {
     // spellbook passes SpellBookFrame.bookType to every one of these, and
     // resolving a pet slot through the player's tabs names one of the player's
     // own spells - the wrong answer wearing the shape of a right one.
+    // 0x005407f0: name and rank, or nil, nil for a slot or spell not known.
     const uint32_t id = spellIdForCall(L, gh);
-    if (id == 0) { return luaReturnNil(L); }
+    if (id == 0) { lua_pushnil(L); lua_pushnil(L); return 2; }
     const std::string& name = gh->getSpellName(id);
-    lua_pushstring(L, name.empty() ? "Unknown" : name.c_str());
+    lua_pushstring(L, name.c_str());
     // Its Spell.dbc rank ("Rank 5"), which the book prints under the name.
     lua_pushstring(L, gh->getSpellRank(id).c_str());
     return 2;
@@ -865,8 +878,32 @@ static int lua_IsPassiveSpell(lua_State* L) {
 
 /// IsSelectedSpell(slot, bookType) → whether the book is highlighting it.
 /// Nothing selects a spell here; the highlight follows the cursor.
+// IsSelectedSpell(slot, bookType) (0x005412c0 -> 0x0053d350): a profession's
+// spell (effect 47) while its trade skill window is open, or a form's spell
+// (aura 36) while the player is in that form.
 static int lua_IsSelectedSpell(lua_State* L) {
-    luaPushOneOrNil(L, 0);
+    auto* gh = getGameHandler(L);
+    const uint32_t id = spellIdForCall(L, gh);
+    bool selected = false;
+    if (gh && id != 0) {
+        gh->loadSpellNameCache();
+        const auto& cache = gh->spellNameCacheRef();
+        if (const auto it = cache.find(id); it != cache.end()) {
+            const auto& e = it->second;
+            if (e.effectIds[0] == 47 && gh->isCraftingWindowOpen() &&
+                gh->getCraftingSkillLine() == gh->spellSkillLine(id)) {
+                selected = true;
+            } else {
+                for (int i = 0; i < 3; ++i) {
+                    if (e.effectAuraIds[i] != 36) continue;
+                    const uint32_t form = e.effectMiscValues[i];
+                    selected = form != 0 && gh->getShapeshiftFormId() == form;
+                    break;
+                }
+            }
+        }
+    }
+    luaPushOneOrNil(L, selected ? 1 : 0);
     return 1;
 }
 
@@ -874,18 +911,27 @@ static int lua_IsSelectedSpell(lua_State* L) {
 /// Pet spells only, and pet action bars are not modelled: false says the
 /// little rotating border is not drawn, which is right for every spell a
 /// player has.
+// GetSpellAutocast(slot, bookType) (0x00541010) → autocastable, autostate:
+// the pet book's spell on the pet's bar, each 1 or nil; nil, nil for the
+// player's book.
 static int lua_GetSpellAutocast(lua_State* L) {
-    luaPushOneOrNil(L, 0);
-    luaPushOneOrNil(L, 0);
+    auto* gh = getGameHandler(L);
+    const uint32_t id = spellIdForCall(L, gh);
+    const char* book = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
+    const bool pet = (book[0] == 'p' || book[0] == 'P') && (book[1] == 'e' || book[1] == 'E') &&
+                     (book[2] == 't' || book[2] == 'T') && book[3] == '\0';
+    const bool castable = gh && pet && id != 0 && gh->isPetSpellAutocastable(id);
+    luaPushOneOrNil(L, castable ? 1 : 0);
+    luaPushOneOrNil(L, castable && gh->isPetSpellAutocast(id) ? 1 : 0);
     return 2;
 }
 /// GetKnownSlotFromHighestRankSlot(slot) → the slot actually known: a slot
 /// of the highest-rank numbering (highestRankIndices) back to the book's.
 static int lua_GetKnownSlotFromHighestRankSlot(lua_State* L) {
     auto* gh = getGameHandler(L);
-    int slot = static_cast<int>(luaL_optnumber(L, 1, 0));
+    int slot = static_cast<int>(lua_tointeger(L, 1));
     if (!gh || slot < 1) {
-        lua_pushnumber(L, slot);
+        lua_pushnumber(L, 0);
         return 1;
     }
     int bookOffset = 0;
@@ -898,7 +944,8 @@ static int lua_GetKnownSlotFromHighestRankSlot(lua_State* L) {
         slot -= static_cast<int>(kept.size());
         bookOffset += static_cast<int>(tab.spellIds.size());
     }
-    lua_pushnumber(L, luaL_optnumber(L, 1, 0));
+    // 0x0053b650: 0 for a slot that maps to none.
+    lua_pushnumber(L, 0);
     return 1;
 }
 
@@ -1695,9 +1742,12 @@ void registerSpellLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"CastShapeshiftForm", [](lua_State* L) -> int {
-            // CastShapeshiftForm(index) - cast the spell for the given form slot
+            // CastShapeshiftForm(index) (0x0053c0f0): a non-zero number or the
+            // usage line, rounded; the spell for that form slot.
+            const double asked = lua_isnumber(L, 1) ? lua_tonumber(L, 1) : 0.0;
+            if (asked == 0.0) return luaL_error(L, "Usage: CastShapeshiftForm(index)");
             auto* gh = getGameHandler(L);
-            int index = static_cast<int>(luaL_checknumber(L, 1));
+            int index = static_cast<int>(std::lround(asked));
             if (!gh || index < 1) return 0;
             uint8_t classId = gh->getPlayerClass();
             const auto forms = game::knownShapeshiftForms(classId, gh->getKnownSpells());

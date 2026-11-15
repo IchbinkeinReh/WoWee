@@ -1017,13 +1017,6 @@ static int lua_BNNilRow(lua_State* L) {
     return N;
 }
 
-/// BNGetNumFOF() → total, online. Two, because both are read.
-static int lua_BNTwoZeros(lua_State* L) {
-    lua_pushnumber(L, 0.0);
-    lua_pushnumber(L, 0.0);
-    return 2;
-}
-
 /// BNGetCustomMessageTable(t) → t, online broadcasts, offline broadcasts.
 ///
 /// The two counts go straight into the scroll height arithmetic, so they have
@@ -2003,19 +1996,19 @@ void registerSocialLuaAPI(lua_State* L) {
     static const struct { const char* name; lua_CFunction func; } api[] = {
                 {"BNGetNumFriends",     lua_BNGetNumFriends},
                 {"BNConnected",              lua_BNFalse},
-                {"BNIsSelf",                 lua_BNFalse},
-                {"BNGetMatureLanguageFilter", lua_BNFalse},
+                {"BNIsSelf", lua_BNNothing},
+                {"BNGetMatureLanguageFilter", lua_BNNothing},
                 {"BNGetNumBlocked",          lua_BNZero},
                 {"BNGetNumBlockedToons",     lua_BNZero},
                 {"BNGetNumFriendToons",      lua_BNZero},
                 {"BNGetSelectedFriend",      lua_BNZero},
                 {"BNGetSelectedBlock",       lua_BNZero},
                 {"BNGetSelectedToonBlock",   lua_BNZero},
-                {"BNGetNumFOF",              lua_BNTwoZeros},
+                {"BNGetNumFOF", lua_BNNothing},
                 {"BNGetBlockedInfo",         lua_BNNilRow<2>},
                 {"BNGetBlockedToonInfo",     lua_BNNilRow<2>},
                 {"BNGetFOFInfo",             lua_BNNilRow<4>},
-                {"BNGetInfo",                lua_BNNilRow<5>},
+                {"BNGetInfo", lua_BNNothing},
                 {"BNGetFriendToonInfo",      lua_BNNilRow<12>},
                 {"BNGetCustomMessageTable",  lua_BNCustomMessageTable},
                 // The verbs. Nothing to send them to, and a name that is not
@@ -5189,8 +5182,8 @@ void registerSocialLuaAPI(lua_State* L) {
             else lua_pushnil(L);
             return 1;
         }},
-                {"BNIsFriend",      [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
-                {"BNIsToonBlocked", [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
+                {"BNIsFriend", lua_BNNothing},
+                {"BNIsToonBlocked", lua_BNNothing},
                 {"BNGetNumFriendInvites", [](lua_State* L) -> int { lua_pushnumber(L, 0); return 1; }},
                 {"GetClickFrame",         [](lua_State* L) -> int { lua_pushnil(L); return 1; }},
                 // Pet autocast is left alone deliberately rather than wired to
