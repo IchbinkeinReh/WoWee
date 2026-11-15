@@ -22,7 +22,8 @@ namespace ui {
  * It reads the finger events SDL sends alongside the mouse ones, and claims
  * only what it needs. The thumbs split the display's safe area down the
  * middle: a thumb landing in the left half becomes the movement stick, one in
- * the right half the camera stick, each the full height of its half. A press
+ * the right half drags the view one to one, as a held mouse button does, each
+ * the full height of its half. A press
  * on the interface - an action button, the minimap, a unit frame, one of this
  * client's own windows - is the interface's and never becomes a stick. A
  * second finger in the half whose stick is held makes a pinch with it, which is
@@ -100,12 +101,6 @@ private:
     /// ahead does not need a steady hand.
     static constexpr float kWalkDeadzone = 0.30f;
     static constexpr float kStrafeDeadzone = 0.45f;
-    /// The camera stick's centre, the inner ring both sticks draw: a thumb
-    /// inside it does not turn the view.
-    static constexpr float kLookDeadzone = kStrafeDeadzone;
-    /// How fast a held camera stick turns the view at full deflection, in the
-    /// pixels a mouse drag would have moved.
-    static constexpr float kLookStickPixelsPerSecond = 900.0f;
     /// How far back inside the deadzone a direction has to fall before it lets
     /// go, so a thumb resting on the edge does not stutter.
     static constexpr float kReleaseHysteresis = 0.10f;
@@ -157,11 +152,9 @@ private:
     bool lookIsStick_ = false;
     float lookOriginX_ = 0.0f, lookOriginY_ = 0.0f;
     float lookX_ = 0.0f, lookY_ = 0.0f;           // where the finger is now
-    float lookStickX_ = 0.0f, lookStickY_ = 0.0f; // -1..1
     bool lookMoved_ = false;
     float lookTravel_ = 0.0f;
     uint64_t lookDownMs_ = 0;
-    uint64_t lastUpdateNs_ = 0;
     // The long press: whether it has fired, whether the right button it
     // pressed is still down (it is let go the next frame), and whether the
     // left button the finger is holding is being read as up.

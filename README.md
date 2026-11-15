@@ -441,7 +441,7 @@ for the profiles and how to check one.
 | Input | Action |
 |---|---|
 | Left thumb, left half | Move and strafe |
-| Right thumb, right half | Camera stick: push to turn the view; the character faces where it looks |
+| Right thumb, right half | Drag to turn the view one to one; the character faces where it looks |
 | Two fingers in one half | Zoom the camera |
 | Tap | Target, interact, and everything in the interface |
 
