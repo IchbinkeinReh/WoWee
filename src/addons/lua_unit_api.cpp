@@ -1931,13 +1931,33 @@ static int lua_UnitCharacterPoints(lua_State* L) {
 }
 
 static int lua_PetHasActionBar(lua_State* L) {
+    // 0x005d3720 -> 0x005d35b0: a living pet in view, and not while the
+    // vehicle bar has the bars (DAT_00c1e5a0 bit 0).
     auto* gh = getGameHandler(L);
-    luaPushOneOrNil(L, gh && gh->hasPet());
+    const auto pet = gh && gh->hasPet() ? gh->getEntityManager().getEntity(gh->getPetGuid()) : nullptr;
+    const auto* unit = pet && pet->isUnit() ? static_cast<const game::Unit*>(pet.get()) : nullptr;
+    luaPushOneOrNil(L, unit && unit->getHealth() > 0 && !gh->isInVehicle());
     return 1;
 }
 static int lua_PetCanBeDismissed(lua_State* L) {
+    // 0x005d3820: 1, except for the player's own summon whose creature
+    // template has type flag 0x20.
     auto* gh = getGameHandler(L);
-    luaPushOneOrNil(L, gh && gh->hasPet());
+    const auto pet = gh && gh->hasPet() ? gh->getEntityManager().getEntity(gh->getPetGuid()) : nullptr;
+    bool can = true;
+    if (pet && pet->getType() == game::ObjectType::UNIT) {
+        const auto* unit = static_cast<const game::Unit*>(pet.get());
+        const uint16_t lo = game::fieldIndex(game::UF::UNIT_FIELD_SUMMONEDBY_LO);
+        const uint16_t hi = game::fieldIndex(game::UF::UNIT_FIELD_SUMMONEDBY_HI);
+        const uint64_t summoner = (lo != 0xFFFF && hi != 0xFFFF)
+            ? (static_cast<uint64_t>(pet->getField(hi)) << 32) | pet->getField(lo) : 0;
+        if (summoner == gh->getPlayerGuid()) {
+            const auto& cache = gh->getCreatureInfoCache();
+            const auto it = cache.find(unit->getEntry());
+            if (it != cache.end() && (it->second.typeFlags & 0x20u)) can = false;
+        }
+    }
+    luaPushOneOrNil(L, can);
     return 1;
 }
 // Abandoning is a hunter's pet, and nothing here knows which kind it has yet.
@@ -3936,11 +3956,8 @@ void registerUnitLuaAPI(lua_State* L) {
             const auto& slot = gh->getInventory().getEquipSlot(game::EquipSlot::OFF_HAND);
             if (slot.empty()) { luaPushOneOrNil(L, 0); return 1; }
             const auto* info = gh->getItemInfo(slot.item.itemId);
-            const uint8_t t = info ? info->inventoryType : 0;
-            // A weapon, not a shield or a held book: OFF_HAND in this table
-            // is the held-in-off-hand class, which is not one.
-            luaPushOneOrNil(L, (t == game::InvType::ONE_HAND ||
-                                t == game::InvType::TWO_HAND) ? 1 : 0);
+            // Item class 2, a weapon (0x005eac10).
+            luaPushOneOrNil(L, info && info->itemClass == 2);
             return 1;
         }},
                 // 0x0060da00: 0x00521bf0 with its last argument 0. A creature

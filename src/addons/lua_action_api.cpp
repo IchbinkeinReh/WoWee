@@ -4611,8 +4611,14 @@ void registerActionLuaAPI(lua_State* L) {
         }},
                 // Only referenced from commented-out code in 3.3.5, but a
                 // temporary pet's timer is nil when there is no timer.
+                // GetPetTimeRemaining() (0x005d3180): ms until a timed pet
+                // runs out, nil for a permanent one or none.
                 {"GetPetTimeRemaining", [](lua_State* L) -> int {
-            lua_pushnil(L);
+            auto* gh = getGameHandler(L);
+            const auto end = gh ? gh->petExpiry() : std::chrono::steady_clock::time_point{};
+            if (!gh || !gh->hasPet() || end == std::chrono::steady_clock::time_point{}) return luaReturnNil(L);
+            const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(end - std::chrono::steady_clock::now()).count();
+            lua_pushnumber(L, left > 0 ? static_cast<double>(left) : 0.0);
             return 1;
         }},
                 // GetPetActionSlotUsable(index) → whether the pet can use it
@@ -4695,11 +4701,11 @@ void registerActionLuaAPI(lua_State* L) {
                 return luaL_error(L, "Usage: GetPetActionInfo(index)");
             auto* gh = getGameHandler(L);
             int index = static_cast<int>(luaL_checknumber(L, 1));
-            if (!gh || index < 1 || index > game::GameHandler::PET_ACTION_BAR_SLOTS) {
-                return luaReturnNil(L);
-            }
+            // Empty or invalid: seven nils (0x005d4ec0).
+            const auto none = [L]() { for (int i = 0; i < 7; ++i) lua_pushnil(L); return 7; };
+            if (!gh || index < 1 || index > game::GameHandler::PET_ACTION_BAR_SLOTS) return none();
             const uint32_t packed = gh->getPetActionSlot(index - 1);
-            if (packed == 0) { return luaReturnNil(L); }
+            if (packed == 0) return none();
 
             const uint32_t action = game::pet::petActionId(packed);
             const auto type = game::pet::petActionType(packed);
@@ -4812,12 +4818,29 @@ void registerActionLuaAPI(lua_State* L) {
         }},
                 {"PetAttack", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            // Through CGPetInfo::SendPetAction (0x005d4210), kind 2.
+            // Through CGPetInfo::SendPetAction (0x005d4210), kind 2. A unit
+            // token or name in the first argument names the victim
+            // (0x005d55b0); without one, the target.
             if (gh && gh->hasPet() && !taint::allowed(L, 2)) return 0;
-            if (gh && gh->hasPet() && gh->hasTarget())
+            if (!gh || !gh->hasPet()) return 0;
+            uint64_t victim = gh->getTargetGuid();
+            if (const char* named = lua_tostring(L, 1); named && *named) {
+                std::string u(named);
+                toLowerInPlace(u);
+                victim = resolveUnitGuid(gh, u);
+                // Not a token: a unit in view by that name (0x00520190).
+                for (const auto& [guid, e] : gh->getEntityManager().getEntities()) {
+                    if (victim) break;
+                    if (!e || !e->isUnit()) continue;
+                    const auto* unit = static_cast<const game::Unit*>(e.get());
+                    std::string n = unit->getName();
+                    toLowerInPlace(n);
+                    if (!n.empty() && n == u) victim = guid;
+                }
+            }
+            if (victim)
                 gh->sendPetAction(
-                    game::pet::packPetAction(game::pet::ActionType::Command, game::pet::kAttack),
-                    gh->getTargetGuid());
+                    game::pet::packPetAction(game::pet::ActionType::Command, game::pet::kAttack), victim);
             return 0;
         }},
                 // PetStopAttack() (0x005d5640 -> 0x005d4650): only while the

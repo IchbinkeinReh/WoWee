@@ -821,26 +821,28 @@ static int lua_IsInGuild(lua_State* L) {
 
 // GetGuildInfo("player") → guildName, guildRankName, guildRankIndex
 static int lua_GetGuildInfoFunc(lua_State* L) {
-    // 0x005eaaf0
+    // 0x005eaaf0: for any unit that is a player in a guild whose record is
+    // known - its name, the unit's rank name and rank index; else nil, nil, 0.
     if (!lua_isstring(L, 1))
         return luaL_error(L, "Usage: GetGuildInfo(\"unit\")");
     auto* gh = getGameHandler(L);
-    if (!gh || !gh->isInGuild()) { return luaReturnNil(L); }
-    lua_pushstring(L, gh->getGuildName().c_str());
-    // Get rank name for the player
-    const auto& roster = gh->getGuildRoster();
-    std::string rankName;
-    uint32_t rankIndex = 0;
-    for (const auto& m : roster.members) {
-        if (m.guid == gh->getPlayerGuid()) {
-            rankIndex = m.rankIndex;
-            const auto& rankNames = gh->getGuildRankNames();
-            if (rankIndex < rankNames.size()) rankName = rankNames[rankIndex];
-            break;
-        }
+    std::string unit(lua_tostring(L, 1));
+    toLowerInPlace(unit);
+    const uint64_t guid = gh ? resolveUnitGuid(gh, unit) : 0;
+    const auto entity = guid ? gh->getEntityManager().getEntity(guid) : nullptr;
+    // PLAYER_GUILDRANK, the word after PLAYER_GUILDID (UNIT_END + 3).
+    const uint16_t unitEnd = game::fieldIndex(game::UF::UNIT_END);
+    const uint16_t rankField = unitEnd != 0xFFFF ? static_cast<uint16_t>(unitEnd + 4) : 0xFFFF;
+    const uint32_t guildId = (entity && entity->getType() == game::ObjectType::PLAYER) ? gh->getEntityGuildId(guid) : 0;
+    const std::string name = guildId ? gh->lookupGuildName(guildId) : std::string();
+    if (name.empty()) {
+        lua_pushnil(L); lua_pushnil(L); lua_pushnumber(L, 0);
+        return 3;
     }
-    lua_pushstring(L, rankName.c_str());
-    lua_pushnumber(L, rankIndex);
+    const uint32_t rank = rankField != 0xFFFF ? entity->getField(rankField) : 0;
+    lua_pushstring(L, name.c_str());
+    lua_pushstring(L, gh->guildRankNameById(guildId, rank).c_str());
+    lua_pushnumber(L, rank);
     return 3;
 }
 

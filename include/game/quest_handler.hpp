@@ -132,6 +132,7 @@ public:
         std::string endText;
         /// The spell the quest offers as a reward, or zero.
         uint32_t rewardSpellId = 0;
+        uint32_t rewardSpellCastId = 0;
         uint32_t rewardXPId = 0;  // QuestXP.dbc column; reward XP = that column at this quest's level
         uint32_t rewardHonor = 0;
         /// The quest's honour multiplier, kept because the client's honour answer
@@ -226,6 +227,14 @@ public:
     // QuestSort.dbc name ("Seasonal", class/profession sorts, ...) for negative
     // ZoneOrSort values; empty if unknown
     const std::string& getQuestSortName(uint32_t sortId);
+    /// The quest's QuestInfo name, its tag ("Elite", "Group", ...), empty
+    /// for none or a quest not queried (0x005e0070).
+    const std::string& questTagName(uint32_t questId);
+    /// The quest's suggested group size, 0 for none (0x005ded30).
+    uint32_t questSuggestedPlayers(uint32_t questId) const {
+        const auto it = queriedQuests_.find(questId);
+        return it != queriedQuests_.end() ? it->second.suggestedPlayers : 0u;
+    }
 
     /// The table's number for a quest: QuestXP.dbc read at a level row, in the
     /// column its XP-difficulty index selects. Zero when the level or index is
@@ -372,6 +381,8 @@ private:
     // QuestSort.dbc names, loaded lazily
     std::unordered_map<uint32_t, std::string> questSortNames_;
     bool questSortDbcLoaded_ = false;
+    std::unordered_map<uint32_t, std::string> questInfoNames_;
+    bool questInfoDbcLoaded_ = false;
     // QuestXP.dbc, keyed by level; each row is the ten difficulty columns.
     std::unordered_map<int32_t, std::array<uint32_t, 10>> questXpByLevel_;
     bool questXpDbcLoaded_ = false;
@@ -395,6 +406,8 @@ private:
     /// (+0x14) and title.
     struct QueriedQuest {
         uint32_t type = 0;
+        /// SuggestedPlayers (+0x18 of the client's record).
+        uint32_t suggestedPlayers = 0;
         std::string title;
     };
     std::unordered_map<uint32_t, QueriedQuest> queriedQuests_;

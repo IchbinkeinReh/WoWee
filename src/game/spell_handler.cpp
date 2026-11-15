@@ -5477,7 +5477,13 @@ void SpellHandler::handlePetSpells(network::Packet& packet) {
             packet.readUInt16();  // creature family
         }
         if (!packet.hasRemaining(4)) break;
-        packet.readUInt32();      // duration in ms; zero for a permanent pet
+        // Duration in ms, zero for a permanent pet: kept as the time it runs
+        // out, which GetPetTimeRemaining counts down to (0x00c234cc).
+        {
+            const uint32_t ms = packet.readUInt32();
+            owner_.setPetExpiry(ms ? std::chrono::steady_clock::now() + std::chrono::milliseconds(ms)
+                                   : std::chrono::steady_clock::time_point{});
+        }
 
         if (!packet.hasRemaining(4)) break;
         owner_.petReactRef()   = packet.readUInt8();

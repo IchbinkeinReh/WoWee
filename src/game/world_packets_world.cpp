@@ -1623,6 +1623,8 @@ QuestQueryRewardsData QuestQueryRewardsParser::parse(const std::vector<uint8_t>&
         // The same plausibility gate the items get: a layout that has slipped
         // lands in float or string data and answers something enormous.
         if (spell <= 0x000FFFFFu) out.rewardSpellId = spell;
+        const uint32_t cast = fieldAt(rewardSpellField + 1);
+        if (cast <= 0x000FFFFFu) out.rewardSpellCastId = cast;
     }
     if (xpIdField) {
         // QuestXP.dbc has ten difficulty columns (indices 0..9), so a valid index

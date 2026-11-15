@@ -3699,6 +3699,10 @@ const std::string& GameHandler::lookupGuildName(uint32_t guildId) {
     return kEmpty;
 }
 
+std::string GameHandler::guildRankNameById(uint32_t guildId, uint32_t rank) const {
+    return socialHandler_ ? socialHandler_->guildRankNameById(guildId, rank) : std::string();
+}
+
 uint32_t GameHandler::getEntityGuildId(uint64_t guid) const {
     if (socialHandler_) return socialHandler_->getEntityGuildId(guid);
     return 0;

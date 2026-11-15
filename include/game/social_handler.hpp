@@ -327,6 +327,11 @@ public:
     void offerPetition(uint64_t petitionGuid, uint64_t targetGuid);
 
     // Guild name lookup
+    /// A guild's rank name from its query answer, empty when not known.
+    std::string guildRankNameById(uint32_t guildId, uint32_t rank) const {
+        const auto it = guildRankNamesById_.find(guildId);
+        return it != guildRankNamesById_.end() && rank < it->second.size() ? it->second[rank] : std::string();
+    }
     const std::string& lookupGuildName(uint32_t guildId);
     /// A guild's tabard design from its query answer, asking for it when
     /// it is not known yet (the guild cache, 0x0067d930).
@@ -981,6 +986,7 @@ private:
     GuildQueryResponseData guildQueryData_;
     bool hasGuildRoster_ = false;
     std::unordered_map<uint32_t, std::string> guildNameCache_;
+    std::unordered_map<uint32_t, std::vector<std::string>> guildRankNamesById_;
     std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> pendingGuildNameQueries_;
     std::unordered_map<uint32_t, GuildEmblem> guildEmblems_;
     uint32_t guildEmblemGeneration_ = 0;

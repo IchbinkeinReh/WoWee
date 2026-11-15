@@ -1318,6 +1318,7 @@ public:
     // Returns the guild name for a given guildId, or empty if unknown.
     // Automatically queries the server for unknown guild IDs.
     const std::string& lookupGuildName(uint32_t guildId);
+    std::string guildRankNameById(uint32_t guildId, uint32_t rank) const;
     // Returns the guildId for a player entity (from PLAYER_GUILDID update field).
     uint32_t getEntityGuildId(uint64_t guid) const;
     /// A guild's tabard design, asked of the server when not known yet.
@@ -3206,6 +3207,8 @@ public:
     void reconcileQuestItemObjectives(const std::unordered_map<uint32_t, uint32_t>& carriedCounts);
     // QuestSort.dbc name for negative ZoneOrSort values (class/profession/seasonal)
     const std::string& getQuestSortName(uint32_t sortId) const;
+    const std::string& questTagName(uint32_t questId) const;
+    uint32_t questSuggestedPlayers(uint32_t questId) const;
     int getSelectedQuestLogIndex() const;
     // Writes through to the QuestHandler, which is where getSelectedQuestLogIndex
     // reads it from. The two used to touch different variables - the setter this
@@ -4217,6 +4220,10 @@ public:
     bool isStatisticCriteria(uint32_t criteriaId);
 
     /// Who the achievement comparison tab is looking at, or zero.
+    /// When a timed pet runs out (SMSG_PET_SPELLS' duration); none for a
+    /// permanent one.
+    void setPetExpiry(std::chrono::steady_clock::time_point t) { petExpiry_ = t; }
+    std::chrono::steady_clock::time_point petExpiry() const { return petExpiry_; }
     uint64_t getAchievementComparisonGuid() const { return achievementComparisonGuid_; }
     void setAchievementComparisonGuid(uint64_t guid) { achievementComparisonGuid_ = guid; }
     /// CMSG_QUERY_INSPECT_ACHIEVEMENTS for a player (0x005b1ab0).
@@ -5116,6 +5123,17 @@ public:
         if (it == onlineItems_.end()) return {0, 0};
         return {it->second.permanentEnchantId, it->second.temporaryEnchantId};
     }
+    /// The temporary enchant's ms left, run down from when it was given, and
+    /// its charges (0x005e8290, 0x005e82c0).
+    std::pair<uint32_t, uint32_t> getItemTempEnchantTime(uint64_t guid) const {
+        auto it = onlineItems_.find(guid);
+        if (it == onlineItems_.end()) return {0, 0};
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - it->second.temporaryEnchantSetAt).count();
+        const uint32_t ms = it->second.temporaryEnchantMs;
+        const uint32_t left = elapsed >= static_cast<long long>(ms) ? 0u : ms - static_cast<uint32_t>(elapsed);
+        return {left, it->second.temporaryEnchantCharges};
+    }
     // Returns the socket gem enchant IDs (3 slots; 0 = empty socket) for an item by GUID.
     /// The enchant in the item's prismatic slot (ITEM_FIELD_ENCHANTMENT 6):
     /// a socket added to it, a belt buckle's (0x006277f0's walk).
@@ -6002,6 +6020,12 @@ public:
         uint32_t maxDurability = 0;
         uint32_t permanentEnchantId = 0;
         uint32_t temporaryEnchantId = 0;
+        /// The temporary enchant's time left in ms and its charges
+        /// (ITEM_FIELD_ENCHANTMENT slot 1's second and third words), with
+        /// when the time was given, so it can be run down (0x00707120).
+        uint32_t temporaryEnchantMs = 0;
+        uint32_t temporaryEnchantCharges = 0;
+        std::chrono::steady_clock::time_point temporaryEnchantSetAt{};
         std::array<uint32_t, 3> socketEnchantIds{};
         uint32_t flags = 0;              // ITEM_FIELD_FLAGS (bit 0x1 = soulbound)
         /// ITEM_FIELD_SPELL_CHARGES, the first of the five (STACK_COUNT + 2):
@@ -7094,6 +7118,7 @@ private:
     std::unordered_map<uint32_t, uint32_t> achievementDates_;
     // Criteria progress: criteriaId → current value (from SMSG_CRITERIA_UPDATE)
     std::unordered_map<uint32_t, uint64_t> criteriaProgress_;
+    std::chrono::steady_clock::time_point petExpiry_{};
     bool achievementDataReceived_ = false;
     void handleAllAchievementData(network::Packet& packet);
 

@@ -5368,18 +5368,25 @@ static int lua_GetDefaultLanguage(lua_State* L) {
 /// the frame reads expiration only to write a countdown under an icon it has
 /// already decided to show. Zero there costs the countdown, not the icon.
 static int lua_GetWeaponEnchantInfo(lua_State* L) {
+    // 0x005eaca0: per hand 1 or nil, the ms left and the charges - nil, nil
+    // for a hand without a temporary enchant; six nils without a player.
     auto* gh = getGameHandler(L);
+    if (!gh || !gh->getEntityManager().getEntity(gh->getPlayerGuid())) {
+        for (int i = 0; i < 6; ++i) lua_pushnil(L);
+        return 6;
+    }
     const game::EquipSlot kHands[2] = {game::EquipSlot::MAIN_HAND,
                                        game::EquipSlot::OFF_HAND};
     for (const game::EquipSlot hand : kHands) {
-        bool enchanted = false;
-        if (gh) {
-            const uint64_t guid = gh->getEquipSlotGuid(static_cast<int>(hand));
-            if (guid != 0) enchanted = gh->getItemEnchantIds(guid).second != 0;
+        const uint64_t guid = gh->getEquipSlotGuid(static_cast<int>(hand));
+        if (guid == 0 || gh->getItemEnchantIds(guid).second == 0) {
+            lua_pushnil(L); lua_pushnil(L); lua_pushnil(L);
+            continue;
         }
-        luaPushOneOrNil(L, enchanted ? 1 : 0);   // hasEnchant
-        lua_pushnumber(L, 0.0);                  // expiration, not tracked
-        lua_pushnumber(L, 0.0);                  // charges
+        const auto [ms, charges] = gh->getItemTempEnchantTime(guid);
+        lua_pushnumber(L, 1);
+        lua_pushnumber(L, ms);
+        lua_pushnumber(L, charges);
     }
     return 6;
 }

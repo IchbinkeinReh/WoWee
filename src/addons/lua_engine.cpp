@@ -2950,12 +2950,14 @@ int lua_WoweeReportFrame(lua_State* L) {
 
 int lua_Cooldown_SetReverse(lua_State* L) {
     auto* w = widgetOf(L, 1);
-    if (w) w->cooldownReverse = lua_toboolean(L, 2) != 0;
+    // No argument is on, 0 and "0" off (0x005ec9a0).
+    if (w) w->cooldownReverse = luaClientSwitchArg(L, 2, true);
     return 0;
 }
 int lua_Cooldown_SetDrawEdge(lua_State* L) {
     auto* w = widgetOf(L, 1);
-    if (w) w->cooldownDrawEdge = lua_toboolean(L, 2) != 0;
+    // No argument is on, 0 and "0" off (0x005eca30).
+    if (w) w->cooldownDrawEdge = luaClientSwitchArg(L, 2, true);
     return 0;
 }
 

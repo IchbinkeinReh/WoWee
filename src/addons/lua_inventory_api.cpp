@@ -249,9 +249,20 @@ static int lua_GetContainerItemQuestInfo(lua_State* L) {
     // 0x005d9400
     if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
         return luaL_error(L, "Usage: GetContainerItemQuestInfo(index, slot)");
-    lua_pushboolean(L, 0);
-    lua_pushnil(L);
-    lua_pushboolean(L, 0);
+    // isQuestItem - true for a quest-bound template (bonding 4) - then the
+    // quest it starts and whether that quest is in the log; nil where not
+    // (0x005d9400).
+    auto* gh = getGameHandler(L);
+    const auto* s = gh ? containerItemSlot(gh->getInventory(), luaToClientInt(L, 1), luaToClientInt(L, 2)) : nullptr;
+    const auto* info = (s && !s->empty()) ? gh->getItemInfo(s->item.itemId) : nullptr;
+    if (!info) { lua_pushnil(L); lua_pushnil(L); lua_pushnil(L); return 3; }
+    if (info->bindType == 4) lua_pushboolean(L, 1); else lua_pushnil(L);
+    if (info->startQuestId == 0) { lua_pushnil(L); lua_pushnil(L); return 3; }
+    lua_pushnumber(L, info->startQuestId);
+    const auto& log = gh->getQuestLog();
+    const bool active = std::any_of(log.begin(), log.end(),
+                                    [&](const auto& q) { return q.questId == info->startQuestId; });
+    lua_pushboolean(L, active ? 1 : 0);
     return 3;
 }
 
@@ -262,7 +273,8 @@ static int lua_KeyRingButtonIDToInvSlotID(lua_State* L) {
     // 0x005e7700
     if (!lua_isnumber(L, 1))
         return luaL_error(L, "Usage: KeyRingButtonIDToInvSlotID(buttonID)");
-    lua_pushnumber(L, luaL_optnumber(L, 1, 0));
+    // The keyring starts at inventory slot 87 (0x005e7700 adds 86).
+    lua_pushnumber(L, luaToClientInt(L, 1) + 86);
     return 1;
 }
 
@@ -2714,10 +2726,19 @@ static int lua_GetInventoryItemsForSlot(lua_State* L) {
         }
         if (named == 0)
             return luaL_error(L, "Usage: GetInventoryItemsForSlot(slot [, returnTable])");
+        lua_pushnumber(L, named);
+        lua_replace(L, 1);
     }
     auto* gh = getGameHandler(L);
-    const int slotId = static_cast<int>(luaL_optnumber(L, 1, 0));
-    if (!gh || slotId < 1 || slotId > kEquipSlots || !lua_istable(L, 2)) return 0;
+    const int slotId = static_cast<int>(std::lround(lua_tonumber(L, 1)));
+    if (slotId < 1 || slotId > kEquipSlots) return 0;
+    // The table given, else a new one; either is what comes back.
+    if (!lua_istable(L, 2)) {
+        lua_settop(L, 1);
+        lua_newtable(L);
+    }
+    lua_settop(L, 2);
+    if (!gh) return 1;
 
     constexpr uint32_t kLocationPlayer = 0x00100000;
     constexpr uint32_t kLocationBags   = 0x00200000;
@@ -2759,7 +2780,7 @@ static int lua_GetInventoryItemsForSlot(lua_State* L) {
             offer(location, sl.item.itemId);
         }
     }
-    return 0;
+    return 1;
 }
 
 
@@ -4191,7 +4212,8 @@ static int lua_GetContainerItemID(lua_State* L) {
     const game::ItemSlot* itemSlot = containerItemSlot(inv, container, slot);
     // An empty slot has no id, and nil is how that is said - zero would be an
     // item, and the callers test the result rather than compare it.
-    if (!itemSlot || itemSlot->empty()) { return luaReturnNil(L); }
+    // An empty slot answers nothing (0x005d7d00).
+    if (!itemSlot || itemSlot->empty()) { return 0; }
     lua_pushnumber(L, itemSlot->item.itemId);
     return 1;
 }
@@ -4257,7 +4279,7 @@ static int lua_GetContainerItemLink(lua_State* L) {
     auto* gh = getGameHandler(L);
     int container = static_cast<int>(luaL_checknumber(L, 1));
     int slot = static_cast<int>(luaL_checknumber(L, 2));
-    if (!gh) { return luaReturnNil(L); }
+    if (!gh) { return 0; }
 
     const auto& inv = gh->getInventory();
     // One lookup for every container the interface can name, the keyring
@@ -4265,7 +4287,8 @@ static int lua_GetContainerItemLink(lua_State* L) {
     // through, so the keyring frame opened with nothing in it.
     const game::ItemSlot* itemSlot = containerItemSlot(inv, container, slot);
 
-    if (!itemSlot || itemSlot->empty()) { return luaReturnNil(L); }
+    // An empty slot answers nothing (0x005d7c80).
+    if (!itemSlot || itemSlot->empty()) { return 0; }
     const auto* info = gh->getItemInfo(itemSlot->item.itemId);
     std::string name = info ? info->name : ("Item #" + std::to_string(itemSlot->item.itemId));
     uint32_t q = info ? info->quality : 0;
@@ -4884,8 +4907,9 @@ static int lua_ContainerIDToInventoryID(lua_State* L) {
         return luaL_error(L, "Usage: ContainerIDToInventoryID(containerID)");
     if (static_cast<uint32_t>(luaToClientInt(L, 1)) - 1u >= 11u)
         return luaL_error(L, "ContainerIDToInventoryID(): invalid container ID");
-    const int bag = static_cast<int>(luaL_checknumber(L, 1));
-    lua_pushnumber(L, bag + 19);
+    // Bags 1-4 sit in slots 20-23, the bank's 5-11 in 68-74.
+    const int bag = luaToClientInt(L, 1);
+    lua_pushnumber(L, bag <= 4 ? bag + 19 : bag + 63);
     return 1;
 }
 
@@ -4893,17 +4917,26 @@ static int lua_ContainerIDToInventoryID(lua_State* L) {
 /// one. The backpack is bag 0 and has a fixed name; the interface uses this to
 /// label the bag buttons and their tooltips.
 static int lua_GetBagName(lua_State* L) {
-    // 0x005d8c70
+    // 0x005d8c70: the backpack's BACKPACK_TOOLTIP, else the name of the bag
+    // in that slot - the four worn and the seven in the bank - or nil while
+    // the bag or its template is not known.
     if (!lua_isnumber(L, 1))
         return luaL_error(L, "Usage: GetBagName(index)");
     auto* gh = getGameHandler(L);
-    const int bag = static_cast<int>(luaL_optnumber(L, 1, 0));
-    if (bag == 0) { lua_pushstring(L, "Backpack"); return 1; }
-    if (!gh || bag < 1 || bag > 4) { return luaReturnNil(L); }
-    // An empty bag slot has no size, which is how the interface knows not to
-    // draw a bag there at all.
-    if (gh->getInventory().getBagSize(bag - 1) == 0) { return luaReturnNil(L); }
-    lua_pushstring(L, "Bag");
+    const int bag = luaToClientInt(L, 1);
+    if (bag == 0) {
+        lua_getglobal(L, "BACKPACK_TOOLTIP");
+        if (!lua_isstring(L, -1)) { lua_pop(L, 1); lua_pushstring(L, "Backpack"); }
+        return 1;
+    }
+    if (!gh || bag < 1 || bag > 11) { return luaReturnNil(L); }
+    const auto& inv = gh->getInventory();
+    const game::ItemSlot& item = bag <= 4 ? inv.getEquipSlot(static_cast<game::EquipSlot>(
+                                                static_cast<int>(game::EquipSlot::BAG1) + bag - 1))
+                                          : inv.getBankBagItem(bag - 5);
+    const auto* info = item.empty() ? nullptr : gh->getItemInfo(item.item.itemId);
+    if (!info || !info->valid) { return luaReturnNil(L); }
+    lua_pushstring(L, info->name.c_str());
     return 1;
 }
 

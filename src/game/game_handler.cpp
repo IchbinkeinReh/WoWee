@@ -6372,6 +6372,15 @@ void GameHandler::reconcileQuestItemObjectives(
     const std::unordered_map<uint32_t, uint32_t>& carriedCounts) {
     if (questHandler_) questHandler_->reconcileItemObjectivesFromInventory(carriedCounts);
 }
+const std::string& GameHandler::questTagName(uint32_t questId) const {
+    static const std::string empty;
+    return questHandler_ ? questHandler_->questTagName(questId) : empty;
+}
+
+uint32_t GameHandler::questSuggestedPlayers(uint32_t questId) const {
+    return questHandler_ ? questHandler_->questSuggestedPlayers(questId) : 0u;
+}
+
 const std::string& GameHandler::getQuestSortName(uint32_t sortId) const {
     static const std::string empty;
     return questHandler_ ? questHandler_->getQuestSortName(sortId) : empty;

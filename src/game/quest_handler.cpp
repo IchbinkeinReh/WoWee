@@ -1265,6 +1265,8 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             QueriedQuest& known = queriedQuests_[questId];
             if (questLogStride >= 5 && packet.getData().size() >= 24)
                 known.type = network::wire::loadLE32(packet.getData(), 20);
+            if (questLogStride >= 5 && packet.getData().size() >= 28)
+                known.suggestedPlayers = network::wire::loadLE32(packet.getData(), 24);
             if (!parsed.title.empty()) known.title = parsed.title;
         }
 
@@ -1353,6 +1355,7 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                 q.rewardMoney = rwds.rewardMoney;
                 q.rewardMoneyMaxLevel = rwds.rewardMoneyMaxLevel;
                 if (rwds.rewardSpellId != 0) q.rewardSpellId = rwds.rewardSpellId;
+                if (rwds.rewardSpellCastId != 0) q.rewardSpellCastId = rwds.rewardSpellCastId;
                 if (rwds.xpId != 0) q.rewardXPId = rwds.xpId;
                 q.rewardHonor = rwds.rewardHonor;
                 q.rewardHonorMultiplier = rwds.rewardHonorMultiplier;
@@ -1838,6 +1841,26 @@ const std::string& QuestHandler::getQuestSortName(uint32_t sortId) {
     }
     auto it = questSortNames_.find(sortId);
     return it != questSortNames_.end() ? it->second : kEmpty;
+}
+
+const std::string& QuestHandler::questTagName(uint32_t questId) {
+    static const std::string kEmpty;
+    const auto known = queriedQuests_.find(questId);
+    if (known == queriedQuests_.end() || known->second.type == 0) return kEmpty;
+    if (!questInfoDbcLoaded_) {
+        questInfoDbcLoaded_ = true;
+        auto* am = owner_.services().assetManager;
+        if (am && am->isInitialized()) {
+            // QuestInfo.dbc: ID, then the name's locstring.
+            auto dbc = am->loadDBC("QuestInfo.dbc");
+            if (dbc && dbc->isLoaded() && dbc->getFieldCount() >= 2) {
+                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
+                    questInfoNames_[dbc->getUInt32(i, 0)] = dbc->getString(i, 1);
+            }
+        }
+    }
+    const auto it = questInfoNames_.find(known->second.type);
+    return it != questInfoNames_.end() ? it->second : kEmpty;
 }
 
 uint32_t QuestHandler::getQuestRewardXP(int32_t level, uint32_t xpDifficulty) {

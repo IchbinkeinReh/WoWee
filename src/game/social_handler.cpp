@@ -3488,6 +3488,9 @@ void SocialHandler::handleGuildQueryResponse(network::Packet& packet) {
         if (!data.guildName.empty()) {
             rememberGuildName(data.guildId, data.guildName);
         }
+        // The rank names too: the client's guild cache answers them for any
+        // player's guild (0x005eaaf0 reads +100 + rank * 0x40).
+        guildRankNamesById_[data.guildId].assign(std::begin(data.rankNames), std::end(data.rankNames));
         const GuildEmblem emblem{.emblemStyle = data.emblemStyle,
                                  .emblemColor = data.emblemColor,
                                  .borderStyle = data.borderStyle,
