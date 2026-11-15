@@ -35,7 +35,6 @@ sound before deciding which of the three it is.
 import argparse
 import pathlib
 import re
-import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -54,16 +53,35 @@ def collections():
     return found
 
 
-def mentions(name):
-    out = subprocess.run(["grep", "-rn", name, "src/", "include/"],
-                         capture_output=True, text=True, cwd=ROOT).stdout
-    return out.splitlines()
+def _tree_lines():
+    """Every line under src/ and include/ as `grep -rn` printed it.
+
+    Read again on each call rather than kept: the canary below edits two of
+    these files between scans. One read of the tree per scan, where one grep
+    process per collection - each reading the whole tree - was most of twenty
+    seconds of sweep_guard.
+    """
+    out = []
+    for base in ("src", "include"):
+        for path in sorted((ROOT / base).rglob("*")):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(ROOT).as_posix()
+            text = path.read_text(encoding="latin-1")
+            out.extend((f"{rel}:{n}:", line)
+                       for n, line in enumerate(text.split("\n"), 1))
+    return out
+
+
+def mentions(name, tree):
+    return [where + line for where, line in tree if name in line]
 
 
 def scan():
     hits = []
+    tree = _tree_lines()
     for name, header in sorted(collections().items()):
-        lines = mentions(name)
+        lines = mentions(name, tree)
         used = [l for l in lines
                 if not l.split(":")[0].endswith(".hpp")
                 and not any(tok in l for tok in LOAD_ONLY)]

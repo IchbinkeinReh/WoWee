@@ -58,6 +58,8 @@ def main():
               + ", ".join(missing))
         return 1
 
+    calls = {name: re.compile(r"(?<![\w:])(?:std::)?%s\s*\(" % re.escape(name))
+             for name in WRAPPED}
     offenders = []
     for base in TREE:
         if not base.is_dir():
@@ -77,7 +79,11 @@ def main():
                 for name, wrapper in WRAPPED.items():
                     if rel == wrapper:
                         continue
-                    if re.search(r"(?<![\w:])(?:std::)?%s\s*\(" % re.escape(name), raw):
+                    # The name is in any line the pattern matches, so a line
+                    # without it is passed by before the regex - which, built
+                    # anew for every name on every line, was most of this
+                    # sweep's time.
+                    if name in raw and calls[name].search(raw):
                         offenders.append((rel, i + 1, name, wrapper))
 
     print(f"{len(WRAPPED)} POSIX-only function(s) with a portable wrapper\n")

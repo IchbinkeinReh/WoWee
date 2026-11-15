@@ -81,18 +81,38 @@ for m in re.finditer(r"\b([a-z][A-Za-z0-9_]*)\s*\(", hdr):
         methods.add(name)
 
 
+# Every line under a directory, read once and kept.
+#
+# This asked grep, three times for each of some fifteen hundred names - four
+# and a half thousand processes, each reading the whole of src/ui again, two
+# minutes of sweep_guard on its own. These are the lines grep -rn printed: a
+# file read as bytes and split on newlines, each behind the "path:line:" grep
+# put in front of it - which the definition test below has always seen, so a
+# line opening ": name(" still reads as "::" and as a definition.
+_LINES = {}
+
+
+def _lines(where: str) -> list:
+    if where not in _LINES:
+        out = []
+        for path in sorted((ROOT / where).rglob("*")):
+            if path.is_file():
+                text = path.read_bytes().decode("latin-1")
+                out.extend(":" + line for line in text.split("\n"))
+        _LINES[where] = out
+    return _LINES[where]
+
+
 def count(name: str, where: str) -> int:
     """Callers of name under a directory, excluding its own declaration."""
-    try:
-        out = subprocess.run(
-            ["grep", "-rn", f"{name}(", str(ROOT / where)],
-            capture_output=True, text=True).stdout
-    except Exception:
-        return 0
+    needle = f"{name}("
+    definition = re.compile(rf"::\s*{re.escape(name)}\s*\(")
     n = 0
-    for line in out.splitlines():
+    for line in _lines(where):
+        if needle not in line:
+            continue
         # A definition is not a call.
-        if re.search(rf"::\s*{re.escape(name)}\s*\(", line):
+        if definition.search(line):
             continue
         n += 1
     return n

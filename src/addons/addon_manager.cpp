@@ -1648,12 +1648,22 @@ bool AddonManager::loadXmlFile(const std::string& path, int depth) {
         return dir / name;
     };
 
-    // Order matters and is not the order the emitter reports things in. Includes
-    // carry the templates a file inherits from, and scripts define the functions
-    // its handlers name, so both have to be in place before any frame is built.
-    // A file is only as loadable as what it pulls in, so the reason kept here is
-    // the first real one - the include or script that actually broke - rather
-    // than the name of whichever file happened to reference it.
+    // In document order, as the client reads a <Ui> file: what an <Include>
+    // or <Script> names is loaded when the reader reaches that element, after
+    // the frames and templates above it and before the ones below. Includes
+    // carry the templates a file inherits from and scripts the functions its
+    // handlers name, and Blizzard's files put both ahead of the frames that
+    // use them - but not always ahead of the templates the scripts use.
+    // SecureTemplates.xml declares SecureFrameTemplate and then runs
+    // SecureStateDriver.lua and SecureHoverDriver.lua, each of which builds its
+    // manager frame from that template at load. Loading every file before any
+    // frame ran them against a template not yet declared: "CreateFrame:
+    // template 'SecureFrameTemplate' is not defined" on every start, and both
+    // managers built without it.
+    //
+    // A file is only as loadable as what it pulls in, so the reason kept here
+    // is the first real one - the include or script that actually broke -
+    // rather than the name of whichever file happened to reference it.
     // Which element named the file does not decide how to read it - the
     // extension does.
     //
@@ -1668,7 +1678,7 @@ bool AddonManager::loadXmlFile(const std::string& path, int depth) {
                (name.compare(name.size() - 4, 4, ".lua") == 0 ||
                 name.compare(name.size() - 4, 4, ".LUA") == 0);
     };
-    for (const auto& inc : emitted.includeFiles) {
+    const auto loadInclude = [&](const std::string& inc) {
         const bool loaded = isLua(inc)
             ? luaEngine_.executeFile(sibling(inc).string())
             : loadXmlFile(sibling(inc).string(), depth + 1);
@@ -1679,8 +1689,8 @@ bool AddonManager::loadXmlFile(const std::string& path, int depth) {
             }
             ok = false;
         }
-    }
-    for (const auto& script : emitted.scriptFiles) {
+    };
+    const auto loadScript = [&](const std::string& script) {
         // A file the manifest names and the package does not ship is not a
         // failure. Addons carry these routinely - Bagnon's config lists seven
         // localisations and ships five, and a widget it no longer has - and
@@ -1694,7 +1704,7 @@ bool AddonManager::loadXmlFile(const std::string& path, int depth) {
         if (!fs::exists(sibling(script))) {
             LOG_WARNING("AddonManager: ", path, " names ", script,
                         ", which this addon does not ship - skipped");
-            continue;
+            return;
         }
         // And the other way round, for the same reason.
         const bool loaded = isLua(script)
@@ -1708,15 +1718,41 @@ bool AddonManager::loadXmlFile(const std::string& path, int depth) {
             LOG_ERROR("AddonManager: ", path, " referenced ", script, " which failed");
             ok = false;
         }
-    }
-    if (!emitted.lua.empty()) {
-        if (!luaEngine_.executeString(emitted.lua)) {
+    };
+
+    // The frames between two files run as one chunk. The emitted Lua opens
+    // with "local __w = {}", the table its frame temporaries live in, and a
+    // chunk cannot see a local of the one before it - so each hands the table
+    // to the next through a global named for this load alone, which a nested
+    // file's own chunks cannot clobber.
+    static unsigned long long xmlLoadSerial = 0;
+    const std::string temps = "__WoweeXmlTemps" + std::to_string(++xmlLoadSerial);
+    std::size_t emittedUpTo = 0;
+    bool framesFailed = false;
+    const auto runFrames = [&](std::size_t to) {
+        to = std::min(to, emitted.lua.size());
+        if (to <= emittedUpTo) return;
+        std::string chunk;
+        if (emittedUpTo > 0) chunk = "local __w = " + temps + "\n";
+        chunk.append(emitted.lua, emittedUpTo, to - emittedUpTo);
+        chunk += "\n" + temps + " = __w\n";
+        emittedUpTo = to;
+        if (!luaEngine_.executeString(chunk)) {
             if (ok) lastXmlError_ = "frames: " + luaEngine_.lastError();
             LOG_ERROR("AddonManager: frames from ", path, " failed to build");
             ok = false;
-        } else {
-            LOG_INFO("AddonManager: built frames from ", path);
+            framesFailed = true;
         }
+    };
+    for (const auto& at : emitted.filesInOrder) {
+        runFrames(at.luaOffset);
+        if (at.include) loadInclude(at.file);
+        else loadScript(at.file);
+    }
+    runFrames(emitted.lua.size());
+    luaEngine_.executeString(temps + " = nil");
+    if (!emitted.lua.empty() && !framesFailed) {
+        LOG_INFO("AddonManager: built frames from ", path);
     }
     return ok;
 }

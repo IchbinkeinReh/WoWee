@@ -38,7 +38,6 @@ has a row in the schema, and the schema's own checks cover those.
 """
 
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -70,15 +69,28 @@ def main():
             continue
         fields.setdefault(key, member)
 
+    # Every line of src/ and include/, read once, as `grep -rn` printed it -
+    # "path:line:text" - since the declaration test below reads that prefix.
+    # This ran grep -rnw over both trees for each of some ninety fields, which
+    # on Windows was a minute and a half of sweep_guard. Paths are absolute,
+    # because this is not always run from the root: under sweep_guard the
+    # working directory is the build tree, where "src" does not exist - so
+    # every field found nothing and looked unread.
+    corpus = []
+    for base in (ROOT / "src", ROOT / "include"):
+        for path in sorted(base.rglob("*")):
+            if path.suffix not in (".cpp", ".hpp") or not path.is_file():
+                continue
+            text = path.read_text(encoding="latin-1")
+            for number, line in enumerate(text.split("\n"), 1):
+                corpus.append((f"{path}:{number}:", line))
+
     unread = []
     for key, member in sorted(fields.items()):
-        found = subprocess.run(
-            # Absolute, because this is not always run from the root: under
-            # sweep_guard the working directory is the build tree, where "src"
-            # does not exist - so every field found nothing and looked unread.
-            ["grep", "-rn", "--include=*.cpp", "--include=*.hpp", "-w", member,
-             str(ROOT / "src"), str(ROOT / "include")],
-            capture_output=True, text=True).stdout.splitlines()
+        # grep -w: the name with no letter, digit or underscore either side.
+        whole = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(member) + r"(?![A-Za-z0-9_])")
+        found = [where + line for where, line in corpus
+                 if member in line and whole.search(line)]
         # Three kinds of mention are not a use of the value.
         #
         # Its own declaration, which every field in a header has - without this

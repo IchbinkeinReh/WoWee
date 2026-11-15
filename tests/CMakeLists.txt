@@ -692,8 +692,9 @@ register_test_target(test_warden_check_grader)
 # The fast interface sweeps, run as a test so they stop depending on someone
 # remembering. Each fault they catch raises nothing, logs nothing and fails no
 # other test: a panel drawn twice, a binding answering short, a manifest entry
-# resolving to no file, bootstrap Lua replacing the binding beneath it. Under
-# three seconds for all of them; the slower reports stay manual.
+# resolving to no file, bootstrap Lua replacing the binding beneath it. About
+# two minutes for all of them (tools/sweep_guard.py says why it is worth
+# keeping that figure true); the slower reports stay manual.
 if(Python3_Interpreter_FOUND)
     add_test(NAME sweep_guard
              COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/sweep_guard.py)

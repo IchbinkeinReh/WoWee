@@ -48,6 +48,16 @@
 namespace wowee {
 namespace core {
 
+namespace {
+/// Whether a model has a texture slot the client fills itself with this
+/// type - 6 the hair, 1 the body, 2 the cape.
+bool hasTextureOfType(const pipeline::M2Model& model, uint32_t type) {
+    for (const auto& texture : model.textures)
+        if (texture.type == type) return true;
+    return false;
+}
+}  // namespace
+
 // The geoset numbers come from appearance_composer.hpp, which this file used to
 // keep its own copy of.
 //
@@ -2226,7 +2236,10 @@ bool EntitySpawner::creatureDressPrepared(uint32_t displayId) {
                      {lookupCharSection(extra.raceId, extra.sexId, 3, extra.hairStyleId, extra.hairColorId, 0),
                       lookupCharSection(extra.raceId, extra.sexId, 0, 0, extra.skinId, 1),
                       lookupCharSection(extra.raceId, extra.sexId, 0, 0, extra.skinId, 0)}) {
-                    if (!path.empty()) files.textures.push_back(path);
+                    // Not one the archives lack: every Tauren hair row names one
+                    // (see applyHumanoidInstanceOverrides), and there is
+                    // nothing to wait for in a file that will never arrive.
+                    if (!path.empty() && assetManager_->fileExists(path)) files.textures.push_back(path);
                 }
             }
         }
@@ -2361,6 +2374,22 @@ void EntitySpawner::applyHumanoidInstanceOverrides(uint32_t instanceId, uint32_t
                     rendering::VkTexture* whiteTex = charRenderer->loadTexture("");
                     std::string hairPath = lookupCharSection(
                         extra.raceId, extra.sexId, 3, extra.hairStyleId, extra.hairColorId, 0);
+                    // Only for a model with a hair slot, and only a file the
+                    // archives carry. The client loads the row's hair texture
+                    // and hands it to slot 6 (0x004ea150) - a no-op on a model
+                    // without one, and a load that fails without a word when
+                    // the file is not there. Both at once for every Tauren:
+                    // neither Tauren model has a type 6 texture, and each of
+                    // their hair rows names a file no 3.3.5a archive has
+                    // (Character\Tauren\Hair00_NN.blp, and for the males
+                    // Character\Tauren\TaurenMaleFaceLower04_18.blp). Loaded
+                    // anyway, every Tauren NPC in sight logged "Texture not
+                    // found" and "Failed to load texture" for art that could
+                    // not have been drawn on it.
+                    if (!hairPath.empty() &&
+                        (!hasTextureOfType(*md, 6) || !assetManager_->fileExists(hairPath))) {
+                        hairPath.clear();
+                    }
                     if (!hairPath.empty()) {
                         rendering::VkTexture* hairTex = charRenderer->loadTexture(hairPath);
                         if (hairTex && hairTex != whiteTex) {
@@ -2677,7 +2706,15 @@ void EntitySpawner::applyCreatureDisplayTextures(uint32_t displayId, uint32_t mo
                             def.hairTexturePath =
                                 pipeline::resolveCharacterSections(csDbc.get(), csF, who).hair;
 
-                            if (!def.hairTexturePath.empty()) {
+                            // Nothing to load for a model with no hair slot or
+                            // a file the archives do not carry - the Tauren
+                            // case, see applyHumanoidInstanceOverrides. Not
+                            // the bald case below either: the row names hair,
+                            // and the client draws no bake in its place.
+                            if (!def.hairTexturePath.empty() &&
+                                (def.hairTextureSlots.empty() || !am->fileExists(def.hairTexturePath))) {
+                                def.hairTexturePath.clear();
+                            } else if (!def.hairTexturePath.empty()) {
                                 allPaths.push_back(def.hairTexturePath);
                             } else if (def.hasBakedSkin && !def.hairTextureSlots.empty()) {
                                 def.useBakedForHair = true;

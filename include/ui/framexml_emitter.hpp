@@ -13,6 +13,7 @@
 // Emitting source rather than driving Lua directly also makes this testable
 // without a Lua state: the output is a string, and a test can read it.
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -28,6 +29,18 @@ struct EmitResult {
     /// not the emitter's.
     std::vector<std::string> scriptFiles;
     std::vector<std::string> includeFiles;
+    /// The same files in document order, each with how much of `lua` had been
+    /// written when its element was read. The client loads a <Ui> document
+    /// top to bottom: SecureTemplates.xml declares SecureFrameTemplate and
+    /// then runs SecureStateDriver.lua, which builds its manager frame from
+    /// that template - so the frames before a file are in place before it
+    /// runs, and the frames after it are not yet.
+    struct FileAt {
+        std::string file;
+        bool include = false;
+        std::size_t luaOffset = 0;
+    };
+    std::vector<FileAt> filesInOrder;
     std::vector<std::string> warnings;
 };
 

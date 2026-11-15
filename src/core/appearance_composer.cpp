@@ -191,11 +191,17 @@ void AppearanceComposer::compositePlayerSkin(uint32_t modelSlotId, const PlayerT
         }
     }
 
-    // Override hair texture on GPU (type-6 slot) after model load
-    if (!texInfo.hairTexturePath.empty()) {
+    // Override hair texture on GPU (type-6 slot) after model load - for a
+    // model that has one: a Tauren does not, and its hair rows name art no
+    // 3.3.5a archive carries (see EntitySpawner's humanoid overrides).
+    const auto* hairModel = charRenderer->getModelData(modelSlotId);
+    const bool hasHairSlot = hairModel &&
+        std::any_of(hairModel->textures.begin(), hairModel->textures.end(),
+                    [](const auto& t) { return t.type == 6; });
+    if (!texInfo.hairTexturePath.empty() && hasHairSlot) {
         rendering::VkTexture* hairTex = charRenderer->loadTexture(texInfo.hairTexturePath);
         if (hairTex) {
-            auto* modelData = charRenderer->getModelData(modelSlotId);
+            const auto* modelData = hairModel;
             if (modelData) {
                 for (size_t ti = 0; ti < modelData->textures.size(); ti++) {
                     if (modelData->textures[ti].type == 6) {

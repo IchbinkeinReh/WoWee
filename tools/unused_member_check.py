@@ -82,6 +82,17 @@ def main():
     # write. Counting mentions alone is not enough: `nextResourceId_++` and
     # `markupParser_.parse(...)` are one mention each and are real uses.
     lines_for = {}
+    # Which files hold each word, as \b<word>\b finds it: a run of word
+    # characters with none either side.
+    holds_word = {}
+    # And which hold it qualified, as (?:\.|->)\s*<word> finds it: the
+    # whole run of word characters after a "." or "->".
+    holds_qualified = {}
+    for path, text in corpus.items():
+        for w in set(re.findall(r"\w+", text)):
+            holds_word.setdefault(w, set()).add(path)
+        for w in set(re.findall(r"(?:\.|->)\s*(\w+)", text)):
+            holds_qualified.setdefault(w, set()).add(path)
     for path, text in corpus.items():
         for raw in text.split("\n"):
             for name in set(re.findall(r"\b(\w+_)\b", raw)):
@@ -146,10 +157,21 @@ def main():
     OPENER = re.compile(r"\b(class|struct|union)\b[^;{}]*\{(?:\.\w+\s*=\s*)?")
     ACCESS_LABEL = re.compile(r"\b(public|protected|private)\s*:")
 
+    # The scan below walks a header from its first character to the
+    # declaration, one character at a time, and was started over for every
+    # declaration asked about - most of five minutes of sweep_guard went on
+    # game_handler.hpp alone. Declarations are asked about in file order, so
+    # the walk now carries on from where the last one stopped: the same
+    # characters in the same order, each read once.
+    access_walk = {}
+
     def is_private_at(text, at):
         """Whether a declaration at this offset sits in a private section."""
-        stack = []
-        i = 0
+        stack, i = [], 0
+        resume = access_walk.get(id(text))
+        if resume is not None and resume[0] is text and resume[1] <= at:
+            _, i, stack = resume
+            stack = list(stack)
         while i < at:
             ch = text[i]
             if ch == "{":
@@ -166,6 +188,7 @@ def main():
                 if m and stack and stack[-1] is not None:
                     stack[-1] = m.group(1)
             i += 1
+        access_walk[id(text)] = (text, i, list(stack))
         for access in reversed(stack):
             if access is not None:
                 return access == "private"
@@ -178,26 +201,32 @@ def main():
         index is keyed on the trailing-underscore convention and this question
         has to cover members that do not follow it.
         """
-        word = re.compile(r"\b%s\b" % re.escape(name))
-        qualified = re.compile(r"(?:\.|->)\s*%s\b" % re.escape(name))
-        for where in (scope if scope is not None else corpus):
-            text = corpus.get(where)
-            if text is None or not word.search(text):
-                continue
-            for raw in text.split("\n"):
-                if not word.search(raw):
-                    continue
-                if where == path and raw.strip() == decl_line.strip():
+        # Answered from holds_word rather than by running a regex over every
+        # file of the tree for every name, which was most of five minutes of
+        # sweep_guard. A file holding the name as a word has a line that
+        # mentions it, and only a line of the declaring header can be the
+        # declaration itself - so any other such file is a mention, and only
+        # the header has to be read line by line.
+        holding = holds_word.get(name, set())
+        within = holding if scope is None else holding & scope
+        if any(where != path for where in within):
+            return False
+        if path in within:
+            word = re.compile(r"\b%s\b" % re.escape(name))
+            text = corpus[path]
+            # Its lines that hold the word, in order: found in the whole text
+            # and cut out at the newlines either side.
+            for found in word.finditer(text):
+                start = text.rfind("\n", 0, found.start()) + 1
+                end = text.find("\n", found.end())
+                raw = text[start:end if end >= 0 else len(text)]
+                if raw.strip() == decl_line.strip():
                     continue
                 return False
         # A public member can be read through an object from anywhere, so a
         # qualified mention outside the scope still counts.
-        if scope is not None:
-            for where, text in corpus.items():
-                if where in scope:
-                    continue
-                if qualified.search(text):
-                    return False
+        if scope is not None and holds_qualified.get(name, set()) - scope:
+            return False
         return True
 
     dead, unreferenced = [], []

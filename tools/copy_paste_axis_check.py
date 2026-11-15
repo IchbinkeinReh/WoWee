@@ -47,6 +47,7 @@ mistake: projecting onto a plane really does write `.y` twice. Those are named
 in SETTLED below with the reason.
 """
 import argparse
+import functools
 import pathlib
 import re
 import sys
@@ -95,8 +96,14 @@ def skeletonise(line, members):
     # and an intersection - `lo = std::max(a.min, b.min); hi = std::min(a.max,
     # b.max)` - comes out as three columns agreeing and one disagreeing, which
     # is exactly the report shape and exactly right code.
-    pattern = r"(?<!:)\b(?:" + "|".join(re.escape(m) for m in members) + r")\b"
-    return re.sub(pattern, take, line), tokens
+    return _axis_pattern(tuple(members)).sub(take, line), tokens
+
+
+@functools.lru_cache(maxsize=None)
+def _axis_pattern(members):
+    """The pattern for one family, built once rather than for every line - an
+    escape per member per line was half of what this sweep cost."""
+    return re.compile(r"(?<!:)\b(?:" + "|".join(re.escape(m) for m in members) + r")\b")
 
 
 def runs_in(lines, members):
