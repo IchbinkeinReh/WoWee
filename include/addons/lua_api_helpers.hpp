@@ -1229,12 +1229,27 @@ inline uint32_t spellIdForCall(lua_State* L, game::GameHandler* gh) {
     // beats raising out of a caller that only wanted an icon.
     if (!lua_isnoneornil(L, 2) && lua_isnumber(L, 1)) {
         const int slot = static_cast<int>(lua_tonumber(L, 1));
+        // 0x00540670: a slot is one of 1024, or "<function>(): Invalid spell
+        // slot" with the running function's name.
+        if (slot < 1 || slot > 1024) {
+            lua_Debug ar;
+            const char* fn = "?";
+            if (lua_getstack(L, 0, &ar) && lua_getinfo(L, "n", &ar) && ar.name) fn = ar.name;
+            luaL_error(L, "%s(): Invalid spell slot", fn);
+            return 0;
+        }
         // The pet book is a list of its own, not a tab in the player's.
         // Resolving a pet slot through the player's tabs answers with one of
         // the player's own spells - a wrong answer that looks like a right
-        // one, which is worse than none.
+        // one, which is worse than none. "pet" in any case (0x0076e780).
         const char* book = lua_tostring(L, 2);
-        if (book && std::string(book) == "pet") {
+        const auto isPet = [](const char* b) {
+            const char* want = "pet";
+            for (; *b && *want; ++b, ++want)
+                if (std::tolower(static_cast<unsigned char>(*b)) != *want) return false;
+            return *b == '\0' && *want == '\0';
+        };
+        if (book && isPet(book)) {
             const auto& pet = gh->getPetSpells();
             if (slot < 1 || slot > static_cast<int>(pet.size())) return 0;
             return pet[static_cast<size_t>(slot - 1)];
