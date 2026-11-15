@@ -2357,6 +2357,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 // group, from a column header or the sort dropdown. Same
                 // contract as SortGuildRoster: the same field twice reverses.
                 {"SortWho", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: SortWho(\"type\")");   // 0x006b4eb0
             const std::string field = luaL_optstring(L, 1, "name");
             if (field == whoSortField()) whoSortReverse() = !whoSortReverse();
             else { whoSortField() = field; whoSortReverse() = false; }
@@ -3768,6 +3769,10 @@ void registerSocialLuaAPI(lua_State* L) {
                 // nothing and the old note came back on the next roster
                 // update.
                 {"SetFriendNotes", [](lua_State* L) -> int {
+            // 0x006b7c90: the notes must be a string, and the friend an index or a name
+            // (a number is also a string to that test).
+            if (!lua_isstring(L, 2) || !lua_isstring(L, 1))
+                return luaL_error(L, "Usage: SetFriendNotes([\"name\"] or [index], [\"notes\"])");
             auto* gh = getGameHandler(L);
             const char* note = lua_tostring(L, 2);
             if (!gh || !note) return 0;
@@ -3878,6 +3883,8 @@ void registerSocialLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"RemoveFriend", [](lua_State* L) -> int {
+            // 0x006b7bd0: an index or a name - a number is also a string to that test.
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: RemoveFriend([\"name\"] or [index])");
             auto* gh = getGameHandler(L);
             const char* name = luaL_checkstring(L, 1);
             if (gh) gh->removeFriend(name);
@@ -3918,6 +3925,7 @@ void registerSocialLuaAPI(lua_State* L) {
             return 2;
         }},
                 {"GetWhoInfo", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetWhoInfo(index)");   // 0x006b4a80
             // GetWhoInfo(index) → name, guild, level, race, class, zone, classFileName
             auto* gh = getGameHandler(L);
             int index = static_cast<int>(luaL_checknumber(L, 1));
@@ -3947,6 +3955,7 @@ void registerSocialLuaAPI(lua_State* L) {
             return 7;
         }},
                 {"SendWho", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: SendWho(\"filter\")");   // 0x006b6b50
             auto* gh = getGameHandler(L);
             const char* query = luaL_optstring(L, 1, "");
             if (gh) gh->queryWho(query);
@@ -4105,10 +4114,12 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"GetSelectedFriend", [](lua_State* L) -> int {
             lua_pushnumber(L, selectedFriend()); return 1; }},
                 {"SetSelectedFriend", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetSelectedFriend(index)");   // 0x006b4400
             selectedFriend() = static_cast<int>(luaL_optnumber(L, 1, 0)); return 0; }},
                 {"GetSelectedIgnore", [](lua_State* L) -> int {
             lua_pushnumber(L, selectedIgnore()); return 1; }},
                 {"SetSelectedIgnore", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetSelectedIgnore(index)");   // 0x006b48a0
             selectedIgnore() = static_cast<int>(luaL_optnumber(L, 1, 0)); return 0; }},
                 {"AddOrRemoveFriend",   lua_AddOrRemoveFriend},
                 {"AddOrDelIgnore",      lua_AddOrDelIgnore},
@@ -4624,6 +4635,7 @@ void registerSocialLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"UnitIsInMyGuild", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitIsInMyGuild(\"name\")");   // 0x0060c550
             auto* gh = getGameHandler(L);
             const char* name = luaL_optstring(L, 1, "");
             if (!gh || !name || !*name) { luaPushOneOrNil(L, 0); return 1; }
@@ -5449,6 +5461,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 // and did nothing while the client's own reload sat behind them.
                 // Routed to the same request ReloadUI makes.
                 {"ConsoleExec", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: ConsoleExec(\"console_command\")");   // 0x00608270
             const std::string typed(luaL_optstring(L, 1, ""));
             std::string cmd = typed;
             toLowerInPlace(cmd);
