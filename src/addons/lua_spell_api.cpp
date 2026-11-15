@@ -6,6 +6,7 @@
 #include "core/coordinates.hpp"
 #include "rendering/camera.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "addons/tooltip_setter_rules.hpp"
 #include "game/totem_bar.hpp"
 #include "game/spell_handler.hpp"
 #include "game/interface_text.hpp"
@@ -517,11 +518,10 @@ static int lua_UnitAuraGeneric(lua_State* L) {
     // number is also a string to that test.
     if (!lua_isstring(L, 1) || !lua_isstring(L, 2))
         return luaL_error(L, "Usage: UnitAura(\"unit\", [index] or [\"name\", \"rank\"][, \"filter\"])");
-    const char* filter = luaL_optstring(L, 3, "HELPFUL");
-    std::string f(filter ? filter : "HELPFUL");
-    for (char& c : f) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    bool wantBuff = (f.find("HARMFUL") == std::string::npos);
-    return lua_UnitAura(L, wantBuff);
+    // 0x00608390: HELPFUL before the filter is read, so no filter counts
+    // buffs; of HELPFUL and HARMFUL the last word read wins.
+    const uint8_t bits = tooltip_rules::auraFilterBits(lua_isstring(L, 3) ? lua_tostring(L, 3) : nullptr);
+    return lua_UnitAura(L, (bits & tooltip_rules::kAuraHelpful) != 0);
 }
 
 // ---------- UnitCastingInfo / UnitChannelInfo ----------

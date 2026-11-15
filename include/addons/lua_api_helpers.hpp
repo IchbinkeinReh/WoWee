@@ -1218,6 +1218,20 @@ bool flyableHere(lua_State* L, uint64_t unit);
 
 bool spellCastAllowed(lua_State* L, game::GameHandler* gh, uint32_t spellId);
 
+/// What a macro shows, as GetMacroSpell, GetMacroItem and the action bar's
+/// tooltip read it (lua_action_api.cpp, UIMacros.cpp).
+struct MacroShownState {
+    bool showTooltip = false;  ///< +0x570: the text has a #showtooltip line
+    bool dynamic = false;      ///< +0x574: its answer can change
+    uint32_t item = 0;         ///< +0x568
+    int32_t spell = 0;         ///< +0x564: 0 none applied, -1 named nothing
+    bool petSpell = false;     ///< +0x56c
+};
+
+/// The macro `macroId`'s state, worked out again where its answer can have
+/// changed. False for no such macro.
+bool macroShownState(lua_State* L, game::GameHandler* gh, uint32_t macroId, MacroShownState& out);
+
 /// The same for using an item (lua_inventory_api.cpp): equipping it, or the
 /// cast of its use spell. `worn` for one already equipped, which is used.
 bool itemUseAllowed(lua_State* L, game::GameHandler* gh, uint32_t itemId, bool worn);
