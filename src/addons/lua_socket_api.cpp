@@ -136,6 +136,9 @@ int pushGemLink(lua_State* L, game::GameHandler* gh, uint32_t gemItemId) {
 
 /// GetExistingSocketLink(index) - the gem already in the socket.
 int lua_GetExistingSocketLink(lua_State* L) {
+    // 0x005c5340
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: GetExistingSocketLink(index)");
     auto* gh = getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 1, 1)) - 1;
     if (!gh || !gh->isSocketingOpen() || index < 0 || index > 2) return 0;
@@ -145,6 +148,9 @@ int lua_GetExistingSocketLink(lua_State* L) {
 
 /// GetNewSocketLink(index) - the gem waiting to go in.
 int lua_GetNewSocketLink(lua_State* L) {
+    // 0x005c4d10
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: GetNewSocketLink(index)");
     auto* gh = getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 1, 1)) - 1;
     if (!gh || !gh->isSocketingOpen() || index < 0 || index > 2) return 0;
@@ -162,6 +168,9 @@ int lua_SocketInventoryItem(lua_State* L) {
 
 /// SocketContainerItem(bag, slot) - the same entry on a bag item.
 int lua_SocketContainerItem(lua_State* L) {
+    // 0x005d8b10
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: SocketContainerItem(index, slot)");
     auto* gh = getGameHandler(L);
     const int bag = static_cast<int>(luaL_optnumber(L, 1, 0));
     const int slot = static_cast<int>(luaL_optnumber(L, 2, 0));
@@ -186,6 +195,9 @@ int lua_GetNumSockets(lua_State* L) {
 
 /// GetSocketTypes(index) → the colour name, which indexes GEM_TYPE_INFO.
 int lua_GetSocketTypes(lua_State* L) {
+    // 0x005c4550
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: GetSocketType(index)");
     auto* gh = getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 1, 1)) - 1;
     lua_pushstring(L, socketColorName(socketMaskAt(gh, index)));
@@ -199,6 +211,9 @@ int lua_GetSocketTypes(lua_State* L) {
 /// enchantment id rather than an item. SpellItemEnchantment.Src_ItemID is the
 /// way back to the gem.
 int lua_GetExistingSocketInfo(lua_State* L) {
+    // 0x005c5160
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: GetExistingSocketInfo(index)");
     auto* gh = getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 1, 1)) - 1;
     if (!gh || !gh->isSocketingOpen() || index < 0 || index > 2) {
@@ -210,6 +225,9 @@ int lua_GetExistingSocketInfo(lua_State* L) {
 
 /// GetNewSocketInfo(index) → the gem the player has put in but not committed.
 int lua_GetNewSocketInfo(lua_State* L) {
+    // 0x005c4b60
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: GetNewSocketInfo(index)");
     auto* gh = getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 1, 1)) - 1;
     if (!gh || !gh->isSocketingOpen() || index < 0 || index > 2) {
@@ -237,6 +255,9 @@ int lua_GetSocketItemInfo(lua_State* L) {
 /// the server and cannot be removed by clicking it; the panel's own artwork
 /// says so by drawing closed brackets around it.
 int lua_ClickSocketButton(lua_State* L) {
+    // 0x005c4dc0
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: ClickSocketButton(index)");
     auto* gh = getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 1, 1)) - 1;
     if (!gh || !gh->isSocketingOpen() || index < 0 || index > 2) return 0;

@@ -4514,6 +4514,10 @@ void registerUnitLuaAPI(lua_State* L) {
                 // already tracked and already answered by
                 // GetInventoryItemDurability; only this was left saying no.
                 {"GetInventoryItemBroken",  [](lua_State* L) -> int {
+            // 0x005e9d80 -> 0x005e7cf0: the unit as a string, or the usage
+            // line with the function's own name in it.
+            if (!lua_isstring(L, 1))
+                return luaL_error(L, "Usage: %s(unit, slot)", "GetInventoryItemBroken");
             auto* gh = getGameHandler(L);
             const int slotId = static_cast<int>(luaL_optnumber(L, 2, 0));
             if (!gh || slotId < 1 || slotId > 19) { luaPushOneOrNil(L, 0); return 1; }
