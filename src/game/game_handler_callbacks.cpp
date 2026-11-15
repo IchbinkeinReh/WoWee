@@ -4785,15 +4785,31 @@ int modifiedBy(const GameHandler& gh, uint32_t spellId, GameHandler::SpellModOp 
 
 /// How long a spell lasts for this player, in milliseconds (0x00800a70):
 /// SpellDuration.dbc's row at the player's level, then the talents that
-/// lengthen it. Haste on a periodic spell's duration is not modelled.
-/// Zero for a spell without a row; negative for one that lasts until
-/// cancelled.
-int spellDurationFor(const GameHandler& gh, uint32_t spellId) {
+/// lengthen it - and, where `haste` (its fifth argument) asks, the player's
+/// haste on a periodic spell whose period it shortens (hastedSpellDurationMs).
+/// $d asks; $o's total does not. Zero for a spell without a row; negative
+/// for one that lasts until cancelled.
+int spellDurationFor(const GameHandler& gh, uint32_t spellId, bool haste = false) {
     const auto* e = spellEntryOf(gh, spellId);
     if (!e) return 0;
     const int ms = spellDurationMs(e->durationBaseMs, e->durationPerLevelMs, e->durationMaxMs,
                                    static_cast<int>(gh.getPlayerLevel()), e->baseLevel);
-    return modifiedBy(gh, spellId, GameHandler::SpellModOp::Duration, ms);
+    const int modified = modifiedBy(gh, spellId, GameHandler::SpellModOp::Duration, ms);
+    if (!haste) return modified;
+    const auto player = gh.getEntityManager().getEntity(gh.getPlayerGuid());
+    if (!player) return modified;
+    const bool periodic = e->effectAmplitudeMs[0] != 0 || e->effectAmplitudeMs[1] != 0 ||
+                          e->effectAmplitudeMs[2] != 0;
+    constexpr uint32_t kAttrEx5HasteAffectsDuration = 0x2000u;
+    constexpr uint32_t kAuraPeriodicHaste = 316;
+    const auto* sh = gh.getSpellHandler();
+    const bool shortens = (e->attrEx5 & kAttrEx5HasteAffectsDuration) != 0 ||
+                          (sh && sh->playerAuraAffects(kAuraPeriodicHaste, spellId));
+    const uint16_t speedIdx = fieldIndex(UF::UNIT_MOD_CAST_SPEED);
+    const uint32_t raw = speedIdx != 0xFFFF ? player->getField(speedIdx) : 0u;
+    float speed = 0.0f;
+    std::memcpy(&speed, &raw, sizeof speed);
+    return hastedSpellDurationMs(modified, periodic, shortens, e->attrEx3, speed);
 }
 
 /// An effect's period in milliseconds as $t reads it (0x00579e50): five
@@ -4846,7 +4862,7 @@ SpellDescriptionContext GameHandler::descriptionContext(
         if (!spellEntryOf(*this, target)) return false;
         switch (code) {
             case 'd': case 'D':
-                out = spellDurationFor(*this, target) * 0.001;
+                out = spellDurationFor(*this, target, true) * 0.001;
                 return true;
             case 't': case 'T':
                 out = spellPeriodFor(*this, target, index);
@@ -5031,7 +5047,7 @@ std::string GameHandler::formatSpellDescription(uint32_t selfSpellId,
                 // "5 Sek.", "1.50 Min.", "bis Abbruch" - the interface's own
                 // words for the duration (0x0061a9e0, 0x0061aee0).
                 if (spellEntryOf(*this, target)) {
-                    out += formatSpellDuration(spellDurationFor(*this, target), interfaceString);
+                    out += formatSpellDuration(spellDurationFor(*this, target, true), interfaceString);
                     resolved = true;
                 }
                 break;

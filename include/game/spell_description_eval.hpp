@@ -102,6 +102,17 @@ std::string formatSpellNumbers(const std::string& fmt, std::initializer_list<dou
 /// the row's maximum. Negative for a spell that lasts until cancelled (-1).
 int spellDurationMs(int baseMs, int perLevelMs, int maxMs, int casterLevel, int baseLevel);
 
+/// 0x00800a70's last step, taken only when its fifth argument asks for it -
+/// which the description formatter's $d does (0x00579e50 'd', and $d inside
+/// an expression, 0x005782d0 0x2c/0x2d) and its $o does not. A periodic spell
+/// (an EffectAmplitude set) whose period haste shortens - AttributesEx5
+/// 0x2000, or an aura 316 of the player's that reaches it (0x007283a0) - and
+/// that does not carry AttributesEx3 0x20000000 lasts its duration (after
+/// the talents) times the player's UNIT_MOD_CAST_SPEED, rounded, where that
+/// factor is over 0.001.
+int hastedSpellDurationMs(int ms, bool periodic, bool hasteShortens, uint32_t attrEx3,
+                          float castSpeed);
+
 /// A talent's flat and percent modifier on a whole number, as 0x007fdb50
 /// applies it: (value + flat) x pct / 100, cut toward zero.
 inline int applySpellModifier(int value, int flat, int pct) {
