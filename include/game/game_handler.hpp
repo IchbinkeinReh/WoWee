@@ -4906,6 +4906,7 @@ public:
     /// and quietly send the first.
     void mailTakeMoney(uint32_t mailId);
     void mailTakeItem(uint32_t mailId, uint32_t itemGuidLow);
+    void autoLootMail(uint32_t mailId);
     void mailDelete(uint32_t mailId);
     /// Send a letter back where it came from, with whatever is still attached.
     void mailReturnToSender(uint32_t mailId);
