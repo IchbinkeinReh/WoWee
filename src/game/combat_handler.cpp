@@ -564,6 +564,10 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
     //
     // Never in the air, unless Auto Dismount in Flight asks for it: a hostile
     // right-clicked from a flying mount dropped the player out of the sky.
+    //
+    // 0x006e2610 -> 0x00806550 first: the player's pending ranged casts
+    // (Attributes 0x2) are cancelled, the server told of one with a cast time.
+    if (auto* sh = owner_.getSpellHandler()) sh->cancelPendingCasts(0x2u);
     if (owner_.isMounted()) {
         if (owner_.isPlayerFlying() && !owner_.isTaxiMountActive() &&
             addons::storedCVarValue("autoDismountFlying", "0") == "0") {
@@ -655,6 +659,9 @@ void CombatHandler::stopAutoAttack() {
         auto packet = AttackStopPacket::build();
         owner_.getSocket()->send(packet);
     }
+    // 0x006e1660 -> 0x00806480 after the stop goes out: a cast waiting on the
+    // next swing (Attributes 0x404) is cancelled with CMSG_CANCEL_CAST.
+    if (auto* sh = owner_.getSpellHandler()) sh->cancelPendingCasts(0x404u);
     LOG_INFO("Stopping auto-attack");
     if (owner_.addonEventCallbackRef())
         owner_.addonEventCallbackRef()("PLAYER_LEAVE_COMBAT", {});
