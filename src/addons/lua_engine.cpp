@@ -5,6 +5,7 @@
 #include "ui/link_hit.hpp"
 #include "ui/text_markup.hpp"
 #include "ui/plural_escape.hpp"
+#include "game/expansion_profile.hpp"
 #include "ui/widget_tree.hpp"
 #include "ui/tooltip_line_strings.hpp"
 #include "ui/interface_fonts.hpp"
@@ -4727,13 +4728,23 @@ int lua_Tooltip_SetSpellByID(lua_State* L) {
 
 /// `text` with its |4singular:plural; picked for `n`, as the client's own
 /// formatter does - GlobalStrings writes its counted words that way.
+/// The form is the one 0x00817d10 picks for the client's locale; a form the
+/// escape does not have writes nothing.
 static std::string withPlural(std::string text, int n) {
+    const int form = wowee::ui::pluralFormIndex(static_cast<long>(n));
     for (size_t at = text.find("|4"); at != std::string::npos; at = text.find("|4", at)) {
-        const size_t colon = text.find(':', at);
-        const size_t end = colon == std::string::npos ? colon : text.find(';', colon);
+        const size_t end = text.find(';', at);
         if (end == std::string::npos) break;
-        const std::string pick = n == 1 ? text.substr(at + 2, colon - at - 2)
-                                        : text.substr(colon + 1, end - colon - 1);
+        size_t from = at + 2;
+        for (int k = 0; k < form && from <= end; ++k) {
+            const size_t colon = text.find(':', from);
+            from = (colon == std::string::npos || colon > end) ? end + 1 : colon + 1;
+        }
+        std::string pick;
+        if (from <= end) {
+            const size_t colon = text.find(':', from);
+            pick = text.substr(from, std::min(colon, end) - from);
+        }
         text.replace(at, end + 1 - at, pick);
         at += pick.size();
     }
@@ -11284,6 +11295,9 @@ void LuaEngine::setGameHandler(game::GameHandler* handler) {
 
 void LuaEngine::setLuaServices(const LuaServices& services) {
     luaServices_ = services;
+    // 0x00405dd0 -> 0x00817d00: the |4 escapes' rule follows the locale.
+    if (const auto* profile = services.expansionRegistry ? services.expansionRegistry->getActive() : nullptr)
+        wowee::ui::setPluralLocale(profile->locale);
     if (L_) {
         lua_pushlightuserdata(L_, &luaServices_);
         lua_setfield(L_, LUA_REGISTRYINDEX, "wowee_lua_services");

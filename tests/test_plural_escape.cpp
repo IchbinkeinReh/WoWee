@@ -16,7 +16,10 @@
 
 #include "ui/plural_escape.hpp"
 
+using wowee::ui::pluralFormIndex;
+using wowee::ui::pluralRuleForLocale;
 using wowee::ui::resolvePluralEscapes;
+using wowee::ui::setPluralLocale;
 
 TEST_CASE("one takes the singular, anything else the plural", "[plural]") {
     CHECK(resolvePluralEscapes("1 |4second:seconds;") == "1 second");
@@ -52,12 +55,15 @@ TEST_CASE("the whole string around it survives", "[plural]") {
     CHECK(resolvePluralEscapes("") == "");
 }
 
-TEST_CASE("a malformed escape is left as it was written", "[plural]") {
-    // Eating it would lose text the string meant to show, and a half-written
-    // escape is a data fault worth seeing rather than hiding.
-    CHECK(resolvePluralEscapes("5 |4second") == "5 |4second");
-    CHECK(resolvePluralEscapes("5 |4second;") == "5 |4second;");
-    CHECK(resolvePluralEscapes("|4") == "|4");
+TEST_CASE("a malformed escape ends as the client's text pass ends it", "[plural]") {
+    // 0x00481fc0: an escape never closed by ';' ends the text, and one with
+    // fewer forms than the count asks for writes nothing.
+    CHECK(resolvePluralEscapes("5 |4second") == "5 ");
+    CHECK(resolvePluralEscapes("5 |4second;") == "5 ");
+    CHECK(resolvePluralEscapes("1 |4second;") == "1 second");
+    CHECK(resolvePluralEscapes("|4") == "");
+    // A digit after the 4 makes it no escape at all.
+    CHECK(resolvePluralEscapes("|45a:b;") == "|45a:b;");
 }
 
 TEST_CASE("an empty half is honoured rather than skipped", "[plural]") {
@@ -67,8 +73,12 @@ TEST_CASE("an empty half is honoured rather than skipped", "[plural]") {
 }
 
 TEST_CASE("digits touching the escape still count", "[plural]") {
-    // No space between the number and the escape.
-    CHECK(resolvePluralEscapes("1|4 second: seconds;") == "1 second");
+    // No space between the number and the escape; the form's own leading
+    // spaces are dropped.
+    CHECK(resolvePluralEscapes("1|4 second: seconds;") == "1second");
+    CHECK(resolvePluralEscapes("1 |4 second: seconds;") == "1 second");
+    // A number written with a leading zero is still one.
+    CHECK(resolvePluralEscapes("01 |4second:seconds;") == "01 second");
     // And words in between, which is the commoner shape in the real strings.
     CHECK(resolvePluralEscapes("1 more daily |4quest:quests;") ==
           "1 more daily quest");
@@ -83,4 +93,42 @@ TEST_CASE("other bar escapes are left alone", "[plural]") {
     CHECK(resolvePluralEscapes("|1a:b;") == "|1a:b;");
     CHECK(resolvePluralEscapes("|cffffffff1 |4gem:gems;|r") ==
           "|cffffffff1 gem|r");
+}
+
+TEST_CASE("each locale picks its form as 0x00817d10 does", "[plural]") {
+    CHECK(pluralRuleForLocale("enUS") == 0);
+    CHECK(pluralRuleForLocale("deDE") == 0);
+    CHECK(pluralRuleForLocale("frFR") == 1);
+    CHECK(pluralRuleForLocale("koKR") == 1);
+    CHECK(pluralRuleForLocale("zhTW") == 1);
+    CHECK(pluralRuleForLocale("ruRU") == 2);
+    // English and German: plural for all but 1.
+    CHECK(pluralFormIndex(0, 0) == 1);
+    CHECK(pluralFormIndex(0, 1) == 0);
+    CHECK(pluralFormIndex(0, 2) == 1);
+    // French: zero is singular.
+    CHECK(pluralFormIndex(1, 0) == 0);
+    CHECK(pluralFormIndex(1, 1) == 0);
+    CHECK(pluralFormIndex(1, 2) == 1);
+    // Russian: three forms.
+    CHECK(pluralFormIndex(2, 1) == 0);
+    CHECK(pluralFormIndex(2, 21) == 0);
+    CHECK(pluralFormIndex(2, 2) == 1);
+    CHECK(pluralFormIndex(2, 24) == 1);
+    CHECK(pluralFormIndex(2, 5) == 2);
+    CHECK(pluralFormIndex(2, 11) == 2);
+    CHECK(pluralFormIndex(2, 14) == 2);
+    CHECK(pluralFormIndex(2, 111) == 2);
+    CHECK(pluralFormIndex(2, 0) == 2);
+}
+
+TEST_CASE("the escape follows the locale's rule", "[plural]") {
+    setPluralLocale("ruRU");
+    CHECK(resolvePluralEscapes("1 |4a:b:c;") == "1 a");
+    CHECK(resolvePluralEscapes("3 |4a:b:c;") == "3 b");
+    CHECK(resolvePluralEscapes("12 |4a:b:c;") == "12 c");
+    setPluralLocale("frFR");
+    CHECK(resolvePluralEscapes("0 |4seconde:secondes;") == "0 seconde");
+    setPluralLocale("enUS");
+    CHECK(resolvePluralEscapes("0 |4second:seconds;") == "0 seconds");
 }

@@ -827,9 +827,8 @@ bool pickPluralForm(const std::string& raw, std::size_t& at, long count, std::st
     const std::size_t semi = raw.find(';', p);
     if (semi == std::string::npos) return false;
     at = semi + 1;
-    // 0x00817d10 for the German and English clients: the second form for
-    // any count but one.
-    const int form = count != 1 ? 1 : 0;
+    // 0x00817d10, by the rule of the client's locale.
+    const int form = ui::pluralFormIndex(count);
     for (int k = 0; k < form; ++k) {
         while (p < semi && raw[p] != ':') ++p;
         if (p >= semi) return true;  // too few forms: nothing written
