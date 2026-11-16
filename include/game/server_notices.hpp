@@ -179,6 +179,12 @@ inline constexpr GameError kUnitNotFound{  // row 0x13a: any other token, resolv
 inline constexpr GameError kInternalBagError{
     0xc, "ERR_INTERNAL_BAG_ERROR", "", Line::Error};
 
+// Model:TryOn (0x00598830) ends here when its argument names nothing it can
+// put on the model: no item link, no trade spell that makes an item, and no
+// carried item by that name.
+inline constexpr GameError kNotEquippable{
+    0x15, "ERR_NOT_EQUIPPABLE", "", Line::Error};
+
 // The attach half of ClickSendMailItemButton (0x0056fff0) ends with this row
 // when the square it was handed is not one of the letter's twelve, and with the
 // same row when it was handed "anywhere" and every row is filled already.  Row

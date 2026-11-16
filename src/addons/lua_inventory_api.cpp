@@ -904,7 +904,55 @@ static int lua_WoweeTryOn(lua_State* L) {
     auto* w = tree->get(id);
     if (!w) return 0;
 
-    const uint32_t itemId = itemIdFromArg(L, 2);
+    // What 0x00598830 accepts: a number is an item id; a string holding
+    // "item:" is a link; one holding "enchant:" names a trade spell
+    // (Attributes 0x20) whose first effect makes an item (EffectItemType[0]),
+    // which is what is tried on; any other string is the name of an item the
+    // player carries (0x00754c30, the carried set 0x247). Anything else, or a
+    // spell or name that finds nothing, is ERR_NOT_EQUIPPABLE.
+    uint32_t itemId = 0;
+    bool found = false;
+    if (lua_isnumber(L, 2)) {
+        itemId = static_cast<uint32_t>(lua_tonumber(L, 2));
+        found = true;
+    } else if (lua_isstring(L, 2)) {
+        const std::string arg = lua_tostring(L, 2);
+        if (const auto at = arg.find("item:"); at != std::string::npos) {
+            itemId = static_cast<uint32_t>(std::strtoul(arg.c_str() + at + 5, nullptr, 10));
+            found = true;
+        } else if (const auto en = arg.find("enchant:"); en != std::string::npos) {
+            const long spellId = std::strtol(arg.c_str() + en + 8, nullptr, 10);
+            if (spellId > 0) {
+                gh->loadSpellNameCache();
+                const auto& cache = gh->spellNameCacheRef();
+                const auto sp = cache.find(static_cast<uint32_t>(spellId));
+                if (sp != cache.end() && (sp->second.attr & 0x20u) != 0 &&
+                    sp->second.effectItemType0 != 0) {
+                    itemId = sp->second.effectItemType0;
+                    found = true;
+                }
+            }
+        } else if (!arg.empty()) {
+            std::string wanted = arg;
+            toLowerInPlace(wanted);
+            gh->getInventory().forEachCarried([&](const game::ItemDef& item) {
+                if (found) return;
+                std::string name = item.name;
+                if (name.empty()) {
+                    if (const auto* known = gh->getItemInfo(item.itemId)) name = known->name;
+                }
+                toLowerInPlace(name);
+                if (!name.empty() && name == wanted) {
+                    itemId = item.itemId;
+                    found = true;
+                }
+            });
+        }
+    }
+    if (!found) {
+        gh->sayGameError(game::server_notice::kNotEquippable);
+        return 0;
+    }
     const auto* info = itemId ? gh->getItemInfo(itemId) : nullptr;
     if (!info || info->displayInfoId == 0) return 0;
 
