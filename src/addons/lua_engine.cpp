@@ -2543,8 +2543,8 @@ static float scrollRange(wowee::ui::WidgetTree& tree, uint32_t id, bool vertical
 
 /// A scroll offset from a script, with NaN read as no offset.
 ///
-/// The clamp below cannot catch one: NaN is neither under zero nor over the
-/// range, so it was stored as it came. FrameXML hands one over honestly - the
+/// The offset is stored as given, unclamped, as the client does, so nothing
+/// else would catch one: a NaN would be stored as it came. FrameXML hands one over honestly - the
 /// chat dock sizes its tabs from its scroll frame's width before it has
 /// anchored that frame, gets a tab size of zero, divides by it, and scrolls to
 /// zero times the result. The scroll child then sat at x = NaN, and so would
@@ -2554,6 +2554,9 @@ float scrollOffsetArg(lua_State* L, int index) {
     return std::isnan(v) ? 0.0f : static_cast<float>(v);
 }
 
+/// The least change of offset a scroll frame takes, 2^-20 (0x0096b440).
+constexpr float kScrollEpsilon = 9.536743e-07f;
+
 int lua_ScrollFrame_SetVerticalScroll(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
     if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetVerticalScroll(offset)", usageName(L, 1));   // 0x00972560
@@ -2561,16 +2564,17 @@ int lua_ScrollFrame_SetVerticalScroll(lua_State* L) {
     const uint32_t id = widgetIdOf(L, 1);
     if (!tree || id == 0) return 0;
     if (auto* w = tree->get(id)) {
+        // 0x0096b480: stored as given - not clamped to the scroll range; the
+        // scroll bar's own range is what keeps FrameXML inside it - and only
+        // on a change of 2^-20 or more.
         const float v = scrollOffsetArg(L, 2);
-        const float max = scrollRange(*tree, id, true);
-        const float clamped = (v < 0.0f) ? 0.0f : (v > max ? max : v);
-        const bool moved = (clamped != w->scrollY);
-        w->scrollY = clamped;
+        if (!(std::fabs(v - w->scrollY) >= kScrollEpsilon)) return 0;
+        w->scrollY = v;
         // OnVerticalScroll is how the scroll bar beside the frame learns where
         // the frame now is; UIPanelScrollFrameTemplate's body sets the bar's
         // value from it. Announced only on a change, because the interface
         // sets the scroll it already has on every update.
-        if (moved) callScriptOnTable(L, 1, "OnVerticalScroll", clamped);
+        callScriptOnTable(L, 1, "OnVerticalScroll", v);
     }
     return 0;
 }
@@ -2581,12 +2585,11 @@ int lua_ScrollFrame_SetHorizontalScroll(lua_State* L) {
     const uint32_t id = widgetIdOf(L, 1);
     if (!tree || id == 0) return 0;
     if (auto* w = tree->get(id)) {
+        // 0x0096b440: as the vertical one.
         const float v = scrollOffsetArg(L, 2);
-        const float max = scrollRange(*tree, id, false);
-        const float clamped = (v < 0.0f) ? 0.0f : (v > max ? max : v);
-        const bool moved = (clamped != w->scrollX);
-        w->scrollX = clamped;
-        if (moved) callScriptOnTable(L, 1, "OnHorizontalScroll", clamped);
+        if (!(std::fabs(v - w->scrollX) >= kScrollEpsilon)) return 0;
+        w->scrollX = v;
+        callScriptOnTable(L, 1, "OnHorizontalScroll", v);
     }
     return 0;
 }
