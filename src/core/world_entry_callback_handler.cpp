@@ -217,41 +217,22 @@ void WorldEntryCallbackHandler::setupCallbacks() {
 
         // Same-map teleport (taxi landing, GM teleport, hearthstone on same continent):
         if (mapId == currentLoadedMap && renderer_.getTerrainManager()) {
-            // Check if teleport is far enough to need terrain loading (>500 render units)
             glm::vec3 oldPos = renderer_.getCharacterPosition();
             glm::vec3 canonical = core::coords::serverToCanonical(glm::vec3(x, y, z));
             glm::vec3 renderPos = core::coords::canonicalToRender(canonical);
-            float teleportDistSq = glm::dot(renderPos - oldPos, renderPos - oldPos);
-            bool farTeleport = (teleportDistSq > 500.0f * 500.0f);
-            // Past 150 yards the client shows a loading screen, and its end
-            // stops the world's music and ambience (0x0074b620 -> 0x00409550).
-            // A far teleport reloads here and stops them at its own end.
+            // Past 150 yards the client takes the new place behind the
+            // map's loading screen, reading in the area about it before the
+            // player is next updated (0x006ecf80 -> 0x0074b620 ->
+            // 0x00781500; WorldLoader::relocateOnLoadedMap). Never the whole
+            // world again: its units and interface stay, and it raises no
+            // PLAYER_ENTERING_WORLD. Under that a teleport is a move.
+            const bool behindLoadingScreen = teleportShowsLoadingScreen(oldPos, renderPos);
             // A transport's crossing armed for this move (a passenger moved
-            // along a one-map route) is for a world load; a move too short
-            // for one has none.
-            if (!farTeleport) (void)gameHandler_.takeLoadingScreenCrossing();
-            if (!farTeleport && teleportShowsLoadingScreen(oldPos, renderPos)) {
-                if (auto* ac = renderer_.getAudioCoordinator()) ac->leaveWorld();
-            }
-
-            if (farTeleport) {
-                // Far same-map teleport (hearthstone, etc.): defer full world reload
-                // to next frame to avoid blocking the packet handler for 20+ seconds.
-                LOG_WARNING("Far same-map teleport (dist=", std::sqrt(teleportDistSq),
-                            "), deferring world reload to next frame");
-                // Update position immediately so the player doesn't keep moving at old location
-                renderer_.getCharacterPosition() = renderPos;
-                if (renderer_.getCameraController()) {
-                    renderer_.getCameraController()->teleportTo(renderPos);
-                    renderer_.getCameraController()->clearMovementInputs();
-                    renderer_.getCameraController()->suppressMovementFor(1.0f);
-                    renderer_.getCameraController()->suspendGravityFor(10.0f);
-                }
-                faceServerOrientation();
-                if (worldLoader_) worldLoader_->setPendingEntry(mapId, x, y, z);
-                return;
-            }
-            LOG_INFO("Same-map teleport (map ", mapId, "), skipping full world reload");
+            // along a one-map route) is for that loading screen; a move too
+            // short for one has none.
+            if (!behindLoadingScreen) (void)gameHandler_.takeLoadingScreenCrossing();
+            LOG_WARNING("Same-map teleport (map ", mapId, ", ", glm::length(renderPos - oldPos), " yards)",
+                        behindLoadingScreen ? ": the area about it is read in behind the loading screen" : "");
             faceServerOrientation();
             // canonical and renderPos already computed above for distance check
             renderer_.getCharacterPosition() = renderPos;
@@ -285,6 +266,8 @@ void WorldEntryCallbackHandler::setupCallbacks() {
             // This ensures background workers immediately start loading everything
             // visible from the new position (hearthstone may land far from old location).
             precacheNearbyTiles(renderer_.getTerrainManager(), renderPos, 8);
+            // Taken after this packet, before the next frame moves anyone.
+            if (behindLoadingScreen && worldLoader_) worldLoader_->setPendingRelocation(mapId, x, y, z);
             return;
         }
 

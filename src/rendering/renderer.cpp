@@ -88,6 +88,7 @@
 #include "pipeline/adt_loader.hpp"
 #include "pipeline/terrain_mesh.hpp"
 #include "core/application.hpp"
+#include "core/world_loader.hpp"
 #include "core/window.hpp"
 #include "core/logger.hpp"
 #include "game/world.hpp"
@@ -2578,6 +2579,17 @@ void Renderer::updatePlayerArea() {
     if (!gh || !gh->isInWorld()) {
         zoneTextsKnown_ = false;
         zoneUpdateZone_ = zoneUpdateArea_ = 0xFFFFFFFFu;
+        return;
+    }
+    // Nor while a world is being entered. The client's area check
+    // (0x006d7bb0, every tenth tick) needs the player object, which a
+    // transfer only builds once the new world is in - and that is where
+    // PLAYER_ENTERING_WORLD is raised (0x006e7f50 -> 0x00528010) - so the
+    // first ZONE_CHANGED_NEW_AREA of a map comes after it. Asked from the
+    // load's own frames, the event came twenty seconds before it, with
+    // the loading screen still up.
+    if (const auto* loader = core::Application::getInstance().getWorldLoader();
+        loader && loader->isWorldEntryUnderway()) {
         return;
     }
     if (!terrainManager || !zoneManager) return;

@@ -357,6 +357,12 @@ public:
      */
     [[nodiscard]] bool isTileLoadedAt(float glX, float glY) const;
 
+    /// The tile at (x, y) - ADT indices, as worldToTile gives them - is in,
+    /// or nothing of it is coming: no ADT there (open sea), it failed, or it
+    /// was never asked for. What a same-map teleport waits for behind its
+    /// loading screen (WorldLoader::relocateOnLoadedMap).
+    [[nodiscard]] bool isTileSettled(int x, int y);
+
     /**
      * The render-space (minX, minY, maxX, maxY) of each tile that came or went
      * since the last call, for what caches the ground (the weather's heights):

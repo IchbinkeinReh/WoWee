@@ -2553,6 +2553,15 @@ bool TerrainManager::isTileLoadedAt(float glX, float glY) const {
     return loadedTiles.find(worldToTile(glX, glY)) != loadedTiles.end();
 }
 
+bool TerrainManager::isTileSettled(int x, int y) {
+    const TileCoord coord = {.x = x, .y = y};
+    if (loadedTiles.find(coord) != loadedTiles.end()) return true;
+    std::lock_guard<std::mutex> lock(queueMutex);
+    // pendingTiles holds a tile from its enqueueing to the end of its
+    // finalization, and loses it as well where a worker could not read it.
+    return pendingTiles.find(coord) == pendingTiles.end();
+}
+
 bool TerrainManager::isHoleAt(float glX, float glY) const {
     float fracX = 0.0f, fracY = 0.0f;
     const pipeline::MapChunk* chunk = findChunkAt(glX, glY, fracX, fracY);
