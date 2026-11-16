@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 
 /// The talents' and auras' spell modifiers as the client keeps and applies
@@ -51,6 +52,18 @@ constexpr Sum modifiers(uint32_t spellFamily, const uint32_t familyFlags[3], uin
 /// (value + flat) x pct / 100, where any applies.
 constexpr float apply(float value, const Sum& s) {
     return s.any ? (value + static_cast<float>(s.flat)) * static_cast<float>(s.pct) * 0.01f : value;
+}
+
+/// 0x008016c0's whole number of one of 0x007ff770's values: doubled, a
+/// half taken away (zero or more) or added (less than zero), stored by the
+/// x87 to the nearest, even on a tie (FISTP), and halved by a shift. That
+/// is the floor of a value of zero or more - 1.5 makes 1 - and the nearest,
+/// a half towards zero, of a smaller one (FLDZ / FCOMP / TEST AH,0x41 / JP
+/// at 0x008016eb).
+inline int32_t wholeEffectPoints(float value) {
+    const float twice = value + value;
+    const float biased = value >= 0.0f ? twice - 0.5f : twice + 0.5f;
+    return static_cast<int32_t>(std::nearbyint(biased)) >> 1;
 }
 
 }  // namespace wowee::game::spell_mods

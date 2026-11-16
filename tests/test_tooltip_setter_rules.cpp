@@ -79,13 +79,21 @@ TEST_CASE("a reagent is counted over the slots that name an item", "[tooltip]") 
 }
 
 TEST_CASE("the count made rounds as 0x008016c0 does", "[tooltip]") {
+    // FISTP(2v - 0.5) >> 1 for v >= 0: the floor.
     CHECK(craftedCount(1.0f) == 1);
     CHECK(craftedCount(1.25f) == 1);
-    CHECK(craftedCount(1.5f) == 2);
-    CHECK(craftedCount(1.75f) == 2);
+    CHECK(craftedCount(1.5f) == 1);
+    CHECK(craftedCount(1.75f) == 1);
+    CHECK(craftedCount(1.9921875f) == 1);
     CHECK(craftedCount(2.0f) == 2);
     CHECK(craftedCount(5.0f) == 5);
     CHECK(craftedCount(0.0f) == 0);
+    CHECK(craftedCount(0.75f) == 0);
+    // FISTP(2v + 0.5) >> 1 below zero: the nearest, a half towards zero.
+    CHECK(craftedCount(-1.0f) == -1);
+    CHECK(craftedCount(-2.25f) == -2);
+    CHECK(craftedCount(-2.5f) == -2);
+    CHECK(craftedCount(-2.75f) == -3);
 }
 
 TEST_CASE("a trade spell ends with the tooltip of the item it makes", "[tooltip]") {

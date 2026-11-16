@@ -670,6 +670,72 @@ TEST_CASE("a whole kind ends whole, the rest to a 128th", "[spell][description][
     CHECK(aura.min == Catch::Approx(1080.0f));
 }
 
+TEST_CASE("Seed of Corruption's ticks under 25 percent read as a range", "[spell][description][mods]") {
+    // 47836 effect 1: BasePoints 252, DieSides 1 - 253 a tick either way.
+    // Op 22 at 125%: 316.25 (316.24997 in the client's own soft floats,
+    // 0x0095d230 truncating; a 128th puts it back on 316.25). A periodic
+    // damage aura ends whole, the least down and the most up (0x007ff9e0:
+    // 0x0095d460 / 0x0095d500), so 316 and 317 - and $o, six ticks of each
+    // (0x0057a16d), is "1896 to 1902": 0x0057a3d4 writes the spread for any
+    // least and most that differ.
+    const auto seed = finishSpellEffectPoints({253.0f, 253.0f}, 0, 6, 3, talents({{22, 0, 25}}));
+    CHECK(seed.min == 316.0f);
+    CHECK(seed.max == 317.0f);
+    const auto total = spellPeriodicTotal(seed, 3000, 18000, false);
+    CHECK(total.min == 1896.0f);
+    CHECK(total.max == 1902.0f);
+    // Corruption's 180 at 135% is 243 exactly: one number.
+    const auto corruption = finishSpellEffectPoints({180.0f, 180.0f}, 0, 6, 3, talents({{22, 0, 35}}));
+    CHECK(corruption.min == 243.0f);
+    CHECK(corruption.max == 243.0f);
+}
+
+TEST_CASE("0x007ff770 in the client's own floats", "[spell][description][mods]") {
+    // Each pair is what wow12340.exe's own 0x007ff770 returned for the row,
+    // its code run under an emulator (Spell.dbc layout, the talent tables
+    // 0xd3c658 / 0xd397d8 filled by hand). Its products and sums drop the
+    // low bits rather than round them (0x0095d230, 0x0095d2f0).
+    struct Case {
+        uint32_t effect, aura;
+        int32_t basePoints, dieSides;
+        float perLevel;
+        int level;
+        uint8_t op;
+        int32_t flat, pct;
+        float min, max;
+    };
+    const Case cases[] = {
+        // 189999.98 is no 128th from 190000 in a float that size: down.
+        {2, 0, 99999, 1, 0.0f, 80, 3, 0, 90, 189999.0f, 190000.0f},
+        {6, 29, 29999, 1, 0.0f, 79, 3, 0, 112, 63599.9921875f, 63599.9921875f},
+        {6, 29, 190, 27, 1.9f, 79, 3, 0, -42, 197.8359375f, 212.9140625f},
+        {6, 29, -24, 1, -4.4f, 79, 3, 0, -47, -196.4140625f, -196.4140625f},
+        {6, 3, 252, 1, 0.0f, 80, 22, 0, 25, 316.0f, 317.0f},
+        {6, 3, 252, 1, 0.0f, 80, 22, 0, 0, 253.0f, 253.0f},
+        {6, 3, 144, 1, 0.0f, 80, 22, 0, 30, 188.0f, 189.0f},
+        {2, 0, 10, 1, 0.0f, 1, 0, 3, -50, 7.0f, 7.0f},
+    };
+    for (const Case& c : cases) {
+        const auto raw = spellEffectPoints(c.basePoints, c.dieSides, c.perLevel, c.level, 0, 0);
+        const auto mods = c.pct != 0 || c.flat != 0 ? talents({{c.op, c.flat, c.pct}}) : SpellModifierLookup{};
+        const auto p = finishSpellEffectPoints(raw, 0, c.effect, c.aura, mods);
+        INFO(c.basePoints << " " << c.dieSides << " " << c.perLevel << " " << c.pct);
+        CHECK(p.min == c.min);
+        CHECK(p.max == c.max);
+    }
+}
+
+TEST_CASE("0x008016c0 makes a value whole", "[spell][description][mods]") {
+    using wowee::game::spell_mods::wholeEffectPoints;
+    CHECK(wholeEffectPoints(3.0f) == 3);
+    CHECK(wholeEffectPoints(2.5f) == 2);
+    CHECK(wholeEffectPoints(2.99f) == 2);
+    CHECK(wholeEffectPoints(0.0f) == 0);
+    CHECK(wholeEffectPoints(-3.0f) == -3);
+    CHECK(wholeEffectPoints(-2.75f) == -3);
+    CHECK(wholeEffectPoints(-2.5f) == -2);
+}
+
 // ── Plural, gender and the text's own numbers ──────────────────────────────
 
 TEST_CASE("$l picks the form the last number counts", "[spell][description][text]") {

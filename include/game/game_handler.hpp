@@ -3589,6 +3589,12 @@ public:
     /// those of the SpellFamilyFlags bits it has, where its family is the
     /// class's. spell_mods::apply makes the value.
     [[nodiscard]] spell_mods::Sum getSpellModifiers(uint32_t spellId, SpellModOp op) const;
+    /// The least and the most effect `index` (0-2) of the player's spell
+    /// makes, as 0x008016c0's callers ask 0x007ff770 for them (level 0, the
+    /// eighth argument 0): at the player's level, through the talents'
+    /// modifiers, to the nearest 128th and, for a damage or healing kind,
+    /// the least down and the most up. False for an unknown spell or index.
+    bool playerSpellEffectRange(uint32_t spellId, int index, float& min, float& max) const;
 
     struct FactionStandingInit {
         uint8_t flags = 0;

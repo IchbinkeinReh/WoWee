@@ -2,6 +2,7 @@
 
 #include "ui/plural_escape.hpp"
 
+#include <bit>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -419,17 +420,139 @@ bool Parser::expression(const std::string& text, std::size_t& i, float& out) {
 
 }  // namespace
 
+namespace {
+namespace client_float {
+// 0x007ff770 and 0x007fdbe0 work in the client's own software floats
+// (0x0095d210-0x0095d617), on the IEEE single bit pattern but without its
+// rounding: a product or a sum keeps the bits that fit and drops the rest -
+// 253 x 125 x 0.01 is 316.24997, not 316.25. Each function below is the one
+// at its address, step for step.
+
+uint32_t bits(float f) { return std::bit_cast<uint32_t>(f); }
+float value(uint32_t b) { return std::bit_cast<float>(b); }
+uint32_t sar(uint32_t x, int n) { return static_cast<uint32_t>(static_cast<int32_t>(x) >> n); }
+int leadingZeros(uint32_t x) { return x == 0 ? 32 : std::countl_zero(x); }  // 0x0095d210
+
+/// 0x0095d5c0: a whole number.
+uint32_t fromInt(int32_t i) {
+    uint32_t v = static_cast<uint32_t>(i);
+    if (v == 0) return 0;
+    const uint32_t sign = v & 0x80000000u;
+    if (i < 0) v = 0u - v;
+    const int lz = leadingZeros(v);
+    const int shift = lz - 8;
+    v = shift >= 0 ? v << shift : sar(v, -shift);
+    return (static_cast<uint32_t>(0x1f - lz + 0x7f) << 23) | (v & 0x7fffffu) | sign;
+}
+
+/// 0x0095d230: a product, its low bits dropped.
+uint32_t mul(uint32_t a, uint32_t b) {
+    const uint32_t sign = (a ^ b) & 0x80000000u;
+    const uint32_t ea = a & 0x7f800000u, eb = b & 0x7f800000u;
+    const uint32_t ma = a & 0x7fffffu, mb = b & 0x7fffffu;
+    if (ma != 0 && mb != 0) {
+        const uint32_t e = eb + ea + 0xc0800000u;
+        const uint64_t p = static_cast<uint64_t>((ma | 0xff800000u) << 8) * ((mb | 0xff800000u) << 8);
+        uint32_t hi = static_cast<uint32_t>(p >> 32);
+        const uint32_t carry = hi >> 31;
+        hi >>= carry;
+        const uint32_t r = ((hi >> 7) & 0x7fffffu) | ((carry << 23) + e) | sign;
+        return r & ~sar(e + 0xff800000u, 31);
+    }
+    if (ea != 0 && eb != 0) {
+        const uint32_t e = eb + ea + 0xc0800000u;
+        return (e | mb | ma | sign) & ~sar(e + 0xff800000u, 31);
+    }
+    return 0;
+}
+
+/// 0x0095d2f0: a sum, the smaller one's low bits shifted out first.
+uint32_t add(uint32_t a, uint32_t b) {
+    uint32_t ea = a & 0x7f800000u;
+    if (ea == 0) return b;
+    const uint32_t eb = b & 0x7f800000u;
+    if (eb == 0) return a;
+    const int32_t sa = static_cast<int32_t>(a) >> 31, sb = static_cast<int32_t>(b) >> 31;
+    int32_t ia = static_cast<int32_t>((((a & 0x7fffffu) | 0x800000u) * 2) ^ static_cast<uint32_t>(sa)) - sa;
+    int32_t ib = static_cast<int32_t>((((b & 0x7fffffu) | 0x800000u) * 2) ^ static_cast<uint32_t>(sb)) - sb;
+    const int32_t d = static_cast<int32_t>(eb - ea);
+    if (d < 1) {
+        if (d < -0xb7fffff) return a;
+        ib >>= ((ea - eb) >> 23) & 0x1f;
+    } else {
+        if (0xb7fffff < d) return b;
+        ia >>= (static_cast<uint32_t>(d) >> 23) & 0x1f;
+        ea = eb;
+    }
+    uint32_t sum = static_cast<uint32_t>(ib + ia);
+    if (sum == 0) return 0;
+    const uint32_t sign = sum & 0x80000000u;
+    if (static_cast<int32_t>(sum) < 0) sum = 0u - sum;
+    const int lz = leadingZeros(sum);
+    const int k = 8 - lz;
+    sum = k < 0 ? sum << -k : sar(sum, k);
+    return (static_cast<uint32_t>((7 - lz) * 0x800000) + ea) | (sum & 0x7fffffu) | sign;
+}
+
+/// 0x0095d460: the floor (-1 for a negative under one in size, 0x00dce218).
+uint32_t floorOf(uint32_t u) {
+    const int e = static_cast<int>((u >> 23) & 0xff) - 0x7f;
+    if (e < 0) return ((u * 2) & sar(u, 31)) != 0 ? bits(-1.0f) : 0u;
+    if (e < 0x17) {
+        const uint32_t m = sar(0x80000000u, static_cast<int>(((u >> 23) + 0x89) & 0x1f));
+        if (((u * 2) & ~sar(u, 31)) != 0) return u & m;
+        const uint32_t v = ((u & 0x7fffffu) + ~m) & m;
+        return (static_cast<uint32_t>(e + static_cast<int>(v >> 23) + 0x7f) << 23) | (v & 0x7fffffu) |
+               0x80000000u;
+    }
+    return u;
+}
+
+/// 0x0095d500: the ceiling - 1 for anything under one in size but a
+/// negative, zero included (0x00dce2a8).
+uint32_t ceilOf(uint32_t u) {
+    const int e = static_cast<int>((u >> 23) & 0xff) - 0x7f;
+    if (e < 0) return ((u * 2) & sar(u, 31)) != 0 ? 0u : bits(1.0f);
+    if (e < 0x17) {
+        const uint32_t m = sar(0x80000000u, static_cast<int>(((u >> 23) + 0x89) & 0x1f));
+        if (((u * 2) & sar(u, 31)) != 0) return u & m;
+        const uint32_t v = ((u & 0x7fffffu) + ~m) & m;
+        return (static_cast<uint32_t>(e + static_cast<int>(v >> 23) + 0x7f) << 23) | (v & 0x7fffffu);
+    }
+    return u;
+}
+
+/// 0x007ff960-0x007ff9de: to the nearest 128th - the exponent raised by 7
+/// where there is one, 0x0095d590 (0.5 added, then 0x0095d460), the exponent
+/// lowered by 7 unless that underflows.
+uint32_t nearest128th(uint32_t u) {
+    if ((u & 0x7f800000u) != 0) u += 0x3800000u;
+    u = floorOf(add(u, bits(0.5f)));
+    const uint32_t keep = ~sar((u + 0xfc000000u) ^ u, 31);
+    return (u + 0xfc800000u) & keep;
+}
+
+/// 0x007fdbe0: (value + flat) x pct x 0.01 (0x00dce234), where any applies.
+uint32_t modified(uint32_t v, const spell_mods::Sum& s) {
+    if (!s.any) return v;
+    return mul(mul(add(v, fromInt(s.flat)), fromInt(s.pct)), bits(0.01f));
+}
+}  // namespace client_float
+}  // namespace
+
 SpellEffectPoints spellEffectPoints(int32_t basePoints, int32_t dieSides,
                                     float pointsPerLevel, int casterLevel,
                                     int baseLevel, int maxLevel) {
+    namespace cf = client_float;
     int level = casterLevel;
     if (maxLevel > 0 && maxLevel <= level) level = maxLevel;
     level -= baseLevel;
     if (level < 0) level = 0;
-    const float perLevel = pointsPerLevel * static_cast<float>(level);
+    // 0x007ff7df-0x007ff86e, in the client's floats.
+    const uint32_t perLevel = cf::mul(cf::bits(pointsPerLevel), cf::fromInt(level));
     SpellEffectPoints p;
-    p.min = static_cast<float>(basePoints + 1) + perLevel;
-    p.max = static_cast<float>(basePoints + dieSides) + perLevel;
+    p.min = cf::value(cf::add(cf::fromInt(basePoints + 1), perLevel));
+    p.max = cf::value(cf::add(cf::fromInt(basePoints + dieSides), perLevel));
     return p;
 }
 
@@ -655,30 +778,16 @@ SpellEffectKind spellEffectKind(uint32_t effect, uint32_t aura) {
     }
 }
 
-namespace {
-/// 0x0095d500 on a whole-number kind's most: under one in size its answer
-/// is 0 for a negative and 1 otherwise - zero included (0x00dce2a8 holds
-/// 1.0).
-float clientCeil(float v) {
-    if (std::fabs(v) < 1.0f) return (std::signbit(v) && v != 0.0f) ? 0.0f : 1.0f;
-    return std::ceil(v);
-}
-/// 0x007ff770's rounding: to the nearest 128th (the exponent raised by 7,
-/// 0.5 added and the floor taken, the exponent lowered again).
-float nearest128th(float v) {
-    if (v == 0.0f) return v;
-    return std::floor(v * 128.0f + 0.5f) / 128.0f;
-}
-}  // namespace
-
 SpellEffectPoints finishSpellEffectPoints(SpellEffectPoints raw, int index, uint32_t effect,
                                           uint32_t aura, const SpellModifierLookup& mods) {
+    namespace cf = client_float;
     const SpellEffectKind kind = spellEffectKind(effect, aura);
+    uint32_t lo = cf::bits(raw.min), hi = cf::bits(raw.max);
     if (mods) {
         auto through = [&](uint8_t op) {
             const spell_mods::Sum s = mods(op);
-            raw.min = spell_mods::apply(raw.min, s);
-            raw.max = spell_mods::apply(raw.max, s);
+            lo = cf::modified(lo, s);
+            hi = cf::modified(hi, s);
         };
         through(8);
         if (index == 0) through(3);
@@ -687,13 +796,13 @@ SpellEffectPoints finishSpellEffectPoints(SpellEffectPoints raw, int index, uint
         if (kind.damage) through(kind.periodic ? 22 : 0);
         if (aura == 10 || aura == 103 || aura == 183) through(2);
     }
-    raw.min = nearest128th(raw.min);
-    raw.max = nearest128th(raw.max);
+    lo = cf::nearest128th(lo);
+    hi = cf::nearest128th(hi);
     if (kind.whole) {
-        raw.min = std::floor(raw.min);  // 0x0095d460
-        raw.max = clientCeil(raw.max);
+        lo = cf::floorOf(lo);  // 0x0095d460
+        hi = cf::ceilOf(hi);   // 0x0095d500
     }
-    return raw;
+    return {cf::value(lo), cf::value(hi)};
 }
 
 long spellRoundHalfAway(float v) {
