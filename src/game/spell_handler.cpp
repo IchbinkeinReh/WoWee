@@ -1,5 +1,6 @@
 #include "game/spell_handler.hpp"
 #include "game/shapeshift_forms.hpp"
+#include "game/spell_rank.hpp"
 #include "addons/lua_api_helpers.hpp"
 #include "addons/tooltip_setter_rules.hpp"
 #include "addons/lua_api_registrations.hpp"
@@ -3630,6 +3631,11 @@ const std::vector<SpellHandler::SpellBookTab>& SpellHandler::getSpellBookTabs() 
     std::vector<uint32_t> general;
 
     for (uint32_t spellId : knownSpells_) {
+        // 0x00542030 files a spell in the book only past its filters: no
+        // spell hidden from it (Attributes 0x80 - a talent's teaching spell
+        // such as Metamorphosis' 59672 beside the form 47241 it teaches), no
+        // recipe (0x20), no companion or mount, no AttributesEx4 0x8000.
+        if (!owner_.spellInPlayerBook(spellId)) continue;
         auto slIt = owner_.spellToSkillLineRef().find(spellId);
         if (slIt != owner_.spellToSkillLineRef().end()) {
             uint32_t skillLineId = slIt->second;
@@ -3643,8 +3649,24 @@ const std::vector<SpellHandler::SpellBookTab>& SpellHandler::getSpellBookTabs() 
         general.push_back(spellId);
     }
 
-    auto byName = [this](uint32_t a, uint32_t b) {
-        return owner_.getSpellName(a) < owner_.getSpellName(b);
+    // 0x0053c8b0: by name, then by the number in the rank (SpellLevel where
+    // it has none), then by the rank's text - so the ranks of one spell
+    // stand in order, Rang 1 first, and the book's highest-rank numbering
+    // (0x0053ca70) keeps the last of them. By name alone the ranks came in
+    // whatever order the known-spell set gave them.
+    owner_.loadSpellNameCache();
+    const auto levelOf = [this](uint32_t id) -> uint32_t {
+        const auto it = owner_.spellNameCacheRef().find(id);
+        return it != owner_.spellNameCacheRef().end() ? it->second.spellLevel : 0;
+    };
+    auto byName = [this, &levelOf](uint32_t a, uint32_t b) {
+        const std::string& na = owner_.getSpellName(a);
+        const std::string& nb = owner_.getSpellName(b);
+        const std::string& ra = owner_.getSpellRank(a);
+        const std::string& rb = owner_.getSpellRank(b);
+        if (spell_rank::bookBefore(na, ra, levelOf(a), nb, rb, levelOf(b))) return true;
+        if (spell_rank::bookBefore(nb, rb, levelOf(b), na, ra, levelOf(a))) return false;
+        return a < b;
     };
 
     if (!general.empty()) {
@@ -5867,7 +5889,7 @@ struct CastCheckColumns {
     uint32_t mechanic, stances, stancesNot, casterState, casterStateNot, casterAura, excludeAura, interrupt,
         auraInterrupt, channelInterrupt, powerType, manaCost, perLevel, costPct, perSecond, perSecondPerLevel,
         baseLevel, maxLevel,
-        castTimeIndex, effectMechanic, trigger, prevention, minFaction, minRep, auraVision, areaGroup, itemClass,
+        castTimeIndex, spellLevel, effectMechanic, trigger, prevention, minFaction, minRep, auraVision, areaGroup, itemClass,
         itemSubClassMask, runeCost, targetStateNot, targetAura, excludeTargetAura, totem, totemCategory, dieSides, pointsPerLevel,
         spellDifficulty, spellFocus;
 
@@ -5881,6 +5903,7 @@ struct CastCheckColumns {
         channelInterrupt = named("ChannelInterruptFlags"), powerType = named("PowerType");
         manaCost = named("ManaCost"), perLevel = named("ManaCostPerLevel"), costPct = named("ManaCostPercentage");
         baseLevel = named("BaseLevel"), maxLevel = named("MaxLevel"), castTimeIndex = named("CastingTimeIndex");
+        spellLevel = named("SpellLevel");
         // The per-level column follows ManaPerSecond in every layout; a
         // data dir copied before it was named still finds it.
         perSecond = named("ManaPerSecond"), perSecondPerLevel = named("ManaPerSecondPerLevel");
@@ -5923,6 +5946,7 @@ struct CastCheckColumns {
         entry.manaPerSecondPerLevel = n(perSecondPerLevel);
         entry.baseLevel = n(baseLevel);
         entry.maxLevel = n(maxLevel);
+        entry.spellLevel = u(spellLevel);
         entry.castingTimeIndex = u(castTimeIndex);
         for (uint32_t k = 0; k < 3; ++k) {
             if (dieSides < fieldCount) entry.effectDieSides[k] = n(dieSides + k);

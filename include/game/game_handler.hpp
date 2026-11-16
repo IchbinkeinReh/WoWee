@@ -1660,6 +1660,16 @@ public:
     /// scaling and "(DND)" passives - in name then rank order. What the pet
     /// book's slots count, HasPetSpells and GetSpellName(i, "pet") read.
     [[nodiscard]] std::vector<uint32_t> getPetBookSpells() const;
+    /// The spell a name stands for, as the client's name list answers it
+    /// (0x00540200 -> 0x0053f5e0, spell_rank::spellByName): the player's
+    /// spells in that list (spell_rank::inNameList - no spell hidden from
+    /// the book, no recipe), then the pet's book; `pet` says which. 0 for
+    /// none.
+    [[nodiscard]] uint32_t spellByName(std::string_view text, bool* pet = nullptr) const;
+    /// Whether a spell the player knows has a place in the spellbook
+    /// (0x00542030): spell_rank::inPlayerBook and not a companion or mount.
+    /// A spell this client has no row of keeps its place.
+    [[nodiscard]] bool spellInPlayerBook(uint32_t spellId) const;
     // Pet autocast set (spellIds that have autocast enabled)
     bool isPetSpellAutocast(uint32_t spellId) const {
         return petAutocastSpells_.count(spellId) != 0;
@@ -6012,6 +6022,9 @@ public:
         int32_t manaPerSecondPerLevel = 0;
         int32_t baseLevel = 0;
         int32_t maxLevel = 0;
+        /// Spell.dbc SpellLevel (+0x9c): what orders the ranks of one name
+        /// where the rank text has no number (0x0053c8b0, 0x00541df0).
+        uint32_t spellLevel = 0;
         uint32_t castingTimeIndex = 0;
         uint32_t effectMechanic[3] = {0, 0, 0};
         uint32_t effectTriggerSpell[3] = {0, 0, 0};

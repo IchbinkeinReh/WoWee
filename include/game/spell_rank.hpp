@@ -53,14 +53,37 @@ struct Candidate {
     uint32_t id = 0;
     std::string_view name;
     std::string_view rank;
+    /// Spell.dbc SpellLevel, which stands in for a rank with no number when
+    /// the ranks of one name are put in order (0x00541df0).
+    uint32_t level = 0;
 };
 
+/// Whether a spell the player knows is one a name can stand for: the
+/// client's name list (0x00541df0) is filled from 0x00542030 after it has
+/// passed over a spell hidden from the book (Attributes 0x80) and a trade
+/// skill's recipe (0x20). A talent's own spell is such a hidden one -
+/// Metamorphosis' talent 59672 only teaches the form, 47241 - and as one
+/// more "Metamorphose" with no rank it used to win the name, so casting it
+/// by name or key sent the teaching spell and the server answered "Ihr
+/// beherrscht bereits Metamorphose".
+[[nodiscard]] constexpr bool inNameList(uint32_t attributes) {
+    return (attributes & 0xA0u) == 0;
+}
+
+/// Whether a spell the player knows is in the player's spellbook
+/// (0x00542030): in the name list, not a companion or mount (0x008009b0 -
+/// the caller asks that), and not AttributesEx4 0x8000.
+[[nodiscard]] constexpr bool inPlayerBook(uint32_t attributes, uint32_t attributesEx4) {
+    return inNameList(attributes) && (attributesEx4 & 0x8000u) == 0;
+}
+
 /// The spell a name stands for (0x00540200 -> 0x0053f5e0): the whole text
-/// as a name, every rank of it, the highest numbered one; failing that, the
+/// as a name, every rank of it, the highest numbered one (a rank with no
+/// number by its SpellLevel, as 0x00541df0 files it); failing that, the
 /// text before "(" as the name and the text inside up to ")" as the rank,
-/// matched as written. Of spells with no number, or the same one, the
-/// highest id - a choice that does not change from one run to the next. 0
-/// for none.
+/// matched as written. Of spells with the same number, the highest id - a
+/// choice that does not change from one run to the next. 0 for none.
+/// `known` holds only what is in the name list (inNameList).
 [[nodiscard]] inline uint32_t spellByName(const std::vector<Candidate>& known, std::string_view text) {
     if (!text.empty() && text.front() == '!') text.remove_prefix(1);
     if (text.empty()) return 0;
@@ -68,7 +91,8 @@ struct Candidate {
     uint32_t bestRank = 0;
     for (const Candidate& c : known) {
         if (compareNoCase(c.name, text) != 0) continue;
-        const uint32_t r = rankNumber(c.rank);
+        uint32_t r = rankNumber(c.rank);
+        if (r == 0) r = c.level;
         if (best == 0 || r > bestRank || (r == bestRank && c.id > best)) {
             best = c.id;
             bestRank = r;
@@ -99,6 +123,28 @@ struct Candidate {
     if (rb == 0) rb = levelB;
     if (ra != 0 && rb != 0) return ra < rb;
     return compareNoCase(rankA, rankB) < 0;
+}
+
+/// One entry of a spellbook tab, as the book is ordered.
+struct BookEntry {
+    std::string_view name;
+    std::string_view rank;
+};
+
+/// The book's second numbering, the one it shows with ShowAllSpellRanks off
+/// (0x0053ca70, read back by GetSpellTabInfo's last pair and
+/// GetKnownSlotFromHighestRankSlot): of a tab in book order, the indices
+/// kept. An entry is dropped when the one after it has the same name and a
+/// rank with a number - so of a run of ranks only the last, the highest,
+/// stays, and spells with no rank number all stay.
+[[nodiscard]] inline std::vector<size_t> highestRankSlots(const std::vector<BookEntry>& tab) {
+    std::vector<size_t> kept;
+    kept.reserve(tab.size());
+    for (size_t i = 0; i < tab.size(); ++i) {
+        const bool last = i + 1 == tab.size();
+        if (last || tab[i + 1].name != tab[i].name || rankNumber(tab[i + 1].rank) == 0) kept.push_back(i);
+    }
+    return kept;
 }
 
 } // namespace spell_rank

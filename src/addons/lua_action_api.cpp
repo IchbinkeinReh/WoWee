@@ -515,30 +515,6 @@ static int macroSlashKind(lua_State* L, const std::string& word) {
     return 0;
 }
 
-/// A spell in a spellbook by its exact name and, when given, rank (0x0053f5e0):
-/// with no rank the highest the book has.
-static uint32_t macroSpellInBook(game::GameHandler* gh, const std::vector<uint32_t>& book,
-                                 const std::string& name, const std::string& rank) {
-    uint32_t best = 0;
-    int bestRank = -1;
-    for (uint32_t id : book) {
-        if (gh->getSpellName(id) != name) continue;
-        const std::string& r = gh->getSpellRank(id);
-        if (!rank.empty()) {
-            if (r == rank) return id;
-            continue;
-        }
-        int n = 0;
-        const size_t digits = r.find_first_of("0123456789");
-        if (digits != std::string::npos) n = std::atoi(r.c_str() + digits);
-        if (n > bestRank) {
-            bestRank = n;
-            best = id;
-        }
-    }
-    return best;
-}
-
 namespace {
 /// Call a global with string arguments, leaving `results` values on the
 /// stack; false (and nothing left) when it is not a function or it raised.
@@ -734,23 +710,9 @@ static game::macro_eval::Hooks macroHooks(lua_State* L, game::GameHandler* gh) {
     // 0x00540200: "!" dropped; the whole text as a name, else the name before
     // "(" with the rank inside it.
     h.spellByName = [gh](const std::string& text, bool& pet) -> uint32_t {
-        std::string name = !text.empty() && text[0] == '!' ? text.substr(1) : text;
-        if (name.empty()) return 0;
-        std::vector<uint32_t> book(gh->getKnownSpells().begin(), gh->getKnownSpells().end());
-        const auto petBook = gh->getPetBookSpells();
-        const auto lookup = [&](const std::string& n, const std::string& r) -> uint32_t {
-            pet = false;
-            if (const uint32_t id = macroSpellInBook(gh, book, n, r)) return id;
-            pet = true;
-            return macroSpellInBook(gh, petBook, n, r);
-        };
-        if (const uint32_t id = lookup(name, "")) return id;
-        const size_t open = name.find('(');
-        if (open == std::string::npos) return 0;
-        std::string rank = name.substr(open + 1);
-        const size_t close = rank.find(')');
-        if (close != std::string::npos) rank.resize(close);
-        return lookup(name.substr(0, open), rank);
+        // The client's name list: the player's spells it holds (no spell
+        // hidden from the book, no recipe), then the pet's book.
+        return gh->spellByName(text, &pet);
     };
     h.itemInSlot = [gh](int bag, int slot) -> uint32_t {
         const auto& inv = gh->getInventory();

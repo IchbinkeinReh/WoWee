@@ -428,6 +428,7 @@
     "ProcCharges": 36,
     "MaxLevel": 37,
     "BaseLevel": 38,
+    "SpellLevel": 39,
     "ManaCostPerLevel": 43,
     "ManaPerSecond": 44,
     "ManaPerSecondPerLevel": 45,

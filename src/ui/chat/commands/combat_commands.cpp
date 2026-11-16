@@ -6,7 +6,6 @@
 #include "ui/chat_panel.hpp"
 #include "game/game_handler.hpp"
 #include "game/inventory.hpp"
-#include "game/spell_rank.hpp"
 #include <imgui.h>
 #include <algorithm>
 #include <cctype>
@@ -23,15 +22,14 @@ inline void trimInPlace(std::string& s) {
     while (!s.empty() && s.back()  == ' ') s.pop_back();
 }
 
-// The spell a name stands for among the known ones: its highest rank by the
-// number in the rank text whatever the client's language, or one rank asked
-// for as "Name(Rank N)" (game/spell_rank.hpp, 0x00540200). 0 for none.
+// The spell a name stands for among the player's spells of the client's name
+// list: its highest rank by the number in the rank text whatever the client's
+// language, or one rank asked for as "Name(Rank N)" (GameHandler::spellByName,
+// 0x00540200). 0 for none.
 uint32_t resolveSpellByName(game::GameHandler& gh, const std::string& spellArg) {
-    std::vector<game::spell_rank::Candidate> known;
-    known.reserve(gh.getKnownSpells().size());
-    for (uint32_t sid : gh.getKnownSpells())
-        known.push_back({sid, gh.getSpellName(sid), gh.getSpellRank(sid)});
-    return game::spell_rank::spellByName(known, spellArg);
+    bool pet = false;
+    const uint32_t id = gh.spellByName(spellArg, &pet);
+    return pet ? 0 : id;
 }
 
 // Try to parse numeric spell ID (with optional '#' prefix). Returns 0 if not numeric.

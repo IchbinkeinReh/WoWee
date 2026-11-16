@@ -1283,14 +1283,11 @@ inline uint32_t spellIdForCall(lua_State* L, game::GameHandler* gh) {
     if (lua_isnumber(L, 1)) return static_cast<uint32_t>(lua_tonumber(L, 1));
     const char* name = lua_tostring(L, 1);
     if (!name || !*name) return 0;
-    std::string nameLow(name);
-    toLowerInPlace(nameLow);
-    for (uint32_t sid : gh->getKnownSpells()) {
-        std::string sn = gh->getSpellName(sid);
-        toLowerInPlace(sn);
-        if (sn == nameLow) return sid;
-    }
-    return 0;
+    // 0x00540670 -> 0x00540200: the name list's answer - the highest rank,
+    // "Name(Rank)" for one, never a spell hidden from the book. The first
+    // known spell whose name matched was a rank picked by the set's order,
+    // and for "Metamorphose" as likely the talent's teaching spell 59672.
+    return gh->spellByName(name);
 }
 
 inline uint64_t containerSlotGuid(game::GameHandler* gh, int bag, int slot) {
