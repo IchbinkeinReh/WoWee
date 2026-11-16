@@ -2752,6 +2752,8 @@ struct SpellStartData {
     uint32_t castFlags = 0;
     uint32_t castTime = 0;
     uint64_t targetGuid = 0;
+    /// SpellCastTargets' flags, where the parser read them: 0x2 a unit.
+    std::optional<uint32_t> targetFlags;
     /// Cast flag 0x800: the caster's power of the spell's type (0x00806700).
     bool hasPower = false;
     uint32_t power = 0;

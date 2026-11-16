@@ -313,3 +313,26 @@ TEST_CASE("a follow gives up thirty yards out, flat on the ground", "[click_to_m
     flat.subject = glm::vec3(30.0f, 0.0f, 0.0f);
     CHECK(step(t, flat).outcome == Outcome::Stop);
 }
+
+TEST_CASE("a spell's facing kinds turn to the unit and keep facing it", "[click_to_move]") {
+    State s = start(Kind::Kind0, 7, glm::vec3(0.0f), 0.0f, 0.0f, glm::vec3(0.0f), false, kPi, 0);
+    StepIn in = standingAt(glm::vec3(0.0f), 0.0f);
+    in.subject = glm::vec3(0.0f, 10.0f, 0.0f);
+    StepOut out = step(s, in);
+    CHECK(out.outcome == Outcome::Continue);
+    REQUIRE(out.facing);
+    CHECK(*out.facing > 0.0f);
+    CHECK_FALSE(out.forward);  // it goes nowhere
+    // Facing it, it does not end as a plain turn does; it goes on facing it.
+    in.facing = kPi * 0.5f;
+    out = step(s, in);
+    CHECK(out.outcome == Outcome::Continue);
+    CHECK_FALSE(out.facing);
+    CHECK_FALSE(out.forward);
+    // Far away is no reason to give up: the kind has no limit.
+    in.subject = glm::vec3(0.0f, 500.0f, 0.0f);
+    CHECK(step(s, in).outcome == Outcome::Continue);
+    // Its unit gone, it ends.
+    in.subject.reset();
+    CHECK(step(s, in).outcome == Outcome::Stop);
+}

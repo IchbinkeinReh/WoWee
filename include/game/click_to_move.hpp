@@ -25,8 +25,8 @@ inline constexpr float kTwoPi = 6.2831855f;
 
 /// What the mover was sent to do (0x00ca11f4). 13 is nothing.
 enum class Kind : uint8_t {
-    Kind0 = 0,           // started by spell code through 0x0072b4a0; not used here
-    Kind1 = 1,           // likewise
+    Kind0 = 0,           // face the target through a cast (Attributes 0x400000; 0x00806700)
+    Kind1 = 1,           // face the channel's unit (AttributesEx 0x4000; 0x0072bc70, 0x0073a520)
     Face = 2,            // turn to a facing and stop (0x0072b660, 0x0072e430)
     Follow = 3,          // /follow (0x0072b4a0 case 3)
     Move = 4,            // to a place on the ground (0x0072b6d0)

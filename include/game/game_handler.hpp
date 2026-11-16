@@ -3243,6 +3243,19 @@ public:
     ClickToMoveSteer stepClickToMove(float facingYawDeg, float dtSeconds, bool mouseSteering);
     /// 0x0071b1e0: the player stopped at rest; an arrival's action is taken.
     void clickToMoveMoverStopped();
+    /// 0x00806700 for the active player's cast the server started: a spell
+    /// with Attributes 0x400000 (it tracks its target) turns the player to
+    /// the unit it is cast at, else the target, all through the cast (kind 0).
+    void clickToMoveCastStarted(uint32_t spellId, std::optional<uint32_t> targetFlags, uint64_t targetGuid);
+    /// A cast ending on its caster (0x007fecc0): castVisuals().ended, and
+    /// where that was the cast shown, 0x0072e430 - the caster not
+    /// channeling and the active mover, a kind 0 left turns to face its
+    /// unit once and stops (kind 2).
+    void castVisualEnded(uint64_t caster, uint8_t castCount, uint32_t spellId);
+    /// 0x0072bc70 and 0x0073a520 for the active player: channeling a spell
+    /// with AttributesEx 0x4000 (it tracks its target) at a unit turns the
+    /// player to that unit throughout (kind 1). Asked every frame.
+    void clickToMoveWatchChannel();
     /// 0x007275c0: where the ring goes (canonical) and its radius.
     std::optional<std::pair<glm::vec3, float>> clickToMoveMarker() const;
     /// The world's surface at a place (canonical in, canonical height out):
@@ -6613,6 +6626,8 @@ private:
     click_to_move::Pending ctmPending_;
     float ctmObjectReach_ = 0.0f;               // 0x00ca11e8
     GroundHeightQuery groundHeightQuery_;
+    uint32_t ctmChannelSpellSeen_ = 0;          // UNIT_CHANNEL_SPELL as last seen
+    uint64_t ctmChannelObjectSeen_ = 0;         // UNIT_FIELD_CHANNEL_OBJECT as last seen
     std::optional<float> ctmFaceOnStop_;        // 0x00ca11d8 for 0x007272c0's turn
     std::optional<glm::vec3> clickToMoveSubject(uint64_t guid) const;
     bool playerAliveAsMover() const;

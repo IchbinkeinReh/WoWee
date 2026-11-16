@@ -121,9 +121,16 @@ public:
         started.sentHere = false;
         apply(caster, started);
     }
-    void ended(uint64_t caster, uint8_t castCount, uint32_t spellId) {
+    /// True where the cast shown was this one and is now hidden (0x0072e430
+    /// went on past its check).
+    bool ended(uint64_t caster, uint8_t castCount, uint32_t spellId) {
         sentHere_.erase({caster, castCount, spellId});
-        if (auto it = states_.find(caster); it != states_.end()) end(it->second, castCount, spellId);
+        if (auto it = states_.find(caster); it != states_.end() && it->second.spellId != 0 &&
+                                             castCount == it->second.castCount && spellId == it->second.spellId) {
+            end(it->second, castCount, spellId);
+            return true;
+        }
+        return false;
     }
     void autoRepeatStopped(uint64_t unit) {
         if (auto it = states_.find(unit); it != states_.end()) it->second.autoRepeatShown = false;

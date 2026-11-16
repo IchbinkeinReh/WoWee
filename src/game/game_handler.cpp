@@ -902,6 +902,10 @@ void GameHandler::update(float deltaTime) {
     // itself go (0x00524350, CombatHandler::unitLeavesView), and one of the
     // group stays the target out of view, as in the client.
 
+    // The player's channel, for click-to-move's kind 1 (0x0072bc70,
+    // 0x0073a520).
+    clickToMoveWatchChannel();
+
     // Update auto-follow: refresh render position or cancel if entity disappeared
     if (followTargetGuid_ != 0) {
         auto followEnt = entityController_->getEntityManager().getEntity(followTargetGuid_);

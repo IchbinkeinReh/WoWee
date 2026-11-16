@@ -3380,7 +3380,7 @@ void SpellHandler::cancelCast() {
     }
     // 0x00806200 on the running cast: it ends (0x007fecc0).
     if (currentCastSpellId_ != 0)
-        owner_.castVisuals().ended(owner_.getPlayerGuid(), runningCastCount_, currentCastSpellId_);
+        owner_.castVisualEnded(owner_.getPlayerGuid(), runningCastCount_, currentCastSpellId_);
     casting_ = false;
     castIsChannel_ = false;
     currentCastSpellId_ = 0;
@@ -4154,7 +4154,7 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     // (0x007fecc0); auto-repeating, its auto-repeat bit goes for any result
     // but 0x1b (0x00807560, only while 0x00d397d0 - the player's
     // auto-repeat target - is set).
-    owner_.castVisuals().ended(owner_.getPlayerGuid(), data.castCount, data.spellId);
+    owner_.castVisualEnded(owner_.getPlayerGuid(), data.castCount, data.spellId);
     if (owner_.isAutoRepeating() && data.result != 0x1b)
         owner_.castVisuals().autoRepeatStopped(owner_.getPlayerGuid());
     // The repeating spell itself refused: the repeat ends and the server is
@@ -4333,6 +4333,9 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
         owner_.castVisuals().started(data.casterUnit, begin);
     }
     if (data.casterUnit == owner_.getPlayerGuid()) runningCastCount_ = data.castCount;
+    // 0x00806700: the active player's cast turns it to its unit (kind 0).
+    if (data.casterUnit == owner_.getPlayerGuid())
+        owner_.clickToMoveCastStarted(data.spellId, data.targetFlags, data.targetGuid);
 
     // Track cast bar for any non-player caster
     if (data.casterUnit != owner_.getPlayerGuid() && data.castTime > 0 && !rangedWeaponAttack) {
@@ -4449,7 +4452,7 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
     if ((data.castFlags & 0x1u) == 0) failureHold_.forget();
     // 0x0080e1b0 -> 0x007fecc0 for a cast not pending: the caster's shown
     // cast ends where it is this one.
-    if ((data.castFlags & 0x1u) == 0) owner_.castVisuals().ended(data.casterUnit, data.castCount, data.spellId);
+    if ((data.castFlags & 0x1u) == 0) owner_.castVisualEnded(data.casterUnit, data.castCount, data.spellId);
     if (data.hasPower) castPowerSaid(data.casterUnit, data.spellId, data.power, true);
     // 0x00805330 for a cast that had no start (instant), as for one that had.
     if (owner_.spellCastBeginCallbackRef()) owner_.spellCastBeginCallbackRef()(data.casterUnit, data.spellId);
@@ -7443,7 +7446,7 @@ void SpellHandler::handleSpellFailedOther(network::Packet& packet) {
         const uint32_t spellId = packet.readUInt32();
         if (packet.hasRemaining(1)) failOtherResult = packet.readUInt8();
         packet.setReadPos(at);
-        owner_.castVisuals().ended(failOtherGuid, castCount, spellId);
+        owner_.castVisualEnded(failOtherGuid, castCount, spellId);
     }
     if (failOtherGuid != 0 && failOtherGuid != owner_.getPlayerGuid()) {
         // Which spell it was, before the state that says so is dropped: the
@@ -7703,7 +7706,7 @@ void SpellHandler::handleSpellFailure(network::Packet& packet) {
                 // told (0x00807560(1)).
                 owner_.stopAutoRepeat(true);
             }
-            owner_.castVisuals().ended(caster, failCastCount, failSpellId);
+            owner_.castVisualEnded(caster, failCastCount, failSpellId);
         }
         // Classic result enum starts at 0=AFFECTING_COMBAT; shift +1 for WotLK table
         uint8_t failReason = isClassic ? static_cast<uint8_t>(rawFailReason + 1) : rawFailReason;

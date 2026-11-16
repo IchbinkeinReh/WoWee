@@ -425,6 +425,54 @@ void GameHandler::clickToMoveMoverStopped() {
     }
 }
 
+void GameHandler::clickToMoveCastStarted(uint32_t spellId, std::optional<uint32_t> targetFlags,
+                                         uint64_t targetGuid) {
+    // 0x00806700, the caster the active player (0x004cee50): Attributes
+    // 0x400000 faces the unit the targets name (flag 0x2), or the target
+    // where they name none (0x00bd07b0), through 0x0072b4a0 kind 0.
+    const auto it = spellNameCache_.find(spellId);
+    if (it == spellNameCache_.end() || (it->second.attr & 0x400000u) == 0) return;
+    const bool unitNamed = targetFlags ? (*targetFlags & 0x2u) != 0 : true;
+    const uint64_t at = unitNamed && targetGuid != 0 ? targetGuid : getTargetGuid();
+    if (at != 0) clickToMoveApproach(at, ctm::Kind::Kind0);
+}
+
+void GameHandler::castVisualEnded(uint64_t caster, uint8_t castCount, uint32_t spellId) {
+    if (!castVisuals_.ended(caster, castCount, spellId)) return;
+    // 0x007fec00 -> 0x0072e430(spell, not channeling, 1).
+    auto unit = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(caster));
+    const uint16_t channelField = fieldIndex(UF::UNIT_CHANNEL_SPELL);
+    const bool channeling = unit && channelField != 0xFFFF && unit->getField(channelField) != 0;
+    if (channeling || caster != playerGuid || !isClickToMoving() || ctm_.kind != ctm::Kind::Kind0) return;
+    // Facing the unit it tracked, once, then done (0x00727400 kind 2).
+    if (const auto at = clickToMoveSubject(ctm_.guid)) {
+        const glm::vec3 me = toServer(glm::vec3(movementInfo.x, movementInfo.y, movementInfo.z));
+        startClickToMove(ctm::Kind::Face, 0, glm::vec3(0.0f), ctm::wrapTwoPi(ctm::facingTo(me, *at)));
+    }
+}
+
+void GameHandler::clickToMoveWatchChannel() {
+    // The player's channel spell and channel object, as their changes come
+    // in (0x0072bc70 for the spell, 0x0073f4f0 -> 0x0073a520 for the
+    // object); each, for the active player, faces the object where it is a
+    // unit and the spell has AttributesEx 0x4000 (0x0072b4a0 kind 1).
+    auto me = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(playerGuid));
+    const uint16_t spellField = fieldIndex(UF::UNIT_CHANNEL_SPELL);
+    const uint16_t objectField = fieldIndex(UF::UNIT_FIELD_CHANNEL_OBJECT);
+    if (!me || spellField == 0xFFFF || objectField == 0xFFFF) return;
+    const uint32_t spell = me->getField(spellField);
+    const uint64_t object = static_cast<uint64_t>(me->getField(objectField)) |
+                            (static_cast<uint64_t>(me->getField(static_cast<uint16_t>(objectField + 1))) << 32);
+    const bool spellChanged = spell != ctmChannelSpellSeen_;
+    const bool objectChanged = object != ctmChannelObjectSeen_;
+    ctmChannelSpellSeen_ = spell;
+    ctmChannelObjectSeen_ = object;
+    if ((!spellChanged && !objectChanged) || spell == 0 || object == 0) return;
+    const auto it = spellNameCache_.find(spell);
+    if (it == spellNameCache_.end() || (it->second.attrEx & 0x4000u) == 0) return;
+    clickToMoveApproach(object, ctm::Kind::Kind1);
+}
+
 std::optional<std::pair<glm::vec3, float>> GameHandler::clickToMoveMarker() const {
     // 0x007275c0: the ring on the place a Move or an AttackPosition is
     // going to, while it goes.
