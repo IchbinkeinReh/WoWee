@@ -87,6 +87,7 @@ void ChatPanel::renderBubbles(game::GameHandler& gameHandler) {
     // The setting is the chat panel's; the manager only needs to know. Told
     // every frame rather than on change, so there is no change to miss.
     bubbleManager_.setBubblesShown(settings.showBubbles);
+    bubbleManager_.setPartyBubblesShown(settings.partyBubbles);
     bubbleManager_.render(gameHandler, services_);
 }
 

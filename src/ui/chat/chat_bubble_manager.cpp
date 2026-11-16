@@ -39,9 +39,6 @@ void ChatBubbleManager::addBubble(uint64_t senderGuid, const std::string& messag
 }
 
 void ChatBubbleManager::render(game::GameHandler& gameHandler, const UIServices& services) {
-    // Off means off: the queue is dropped as well, so turning the setting off
-    // clears what is on screen rather than leaving it to fade for five seconds.
-    if (!show_) { bubbles_.clear(); return; }
     if (bubbles_.empty()) return;
 
     auto* renderer = services.renderer;
@@ -162,7 +159,9 @@ void ChatBubbleManager::setupCallback(game::GameHandler& gameHandler) {
         // text, which is why an NPC line read correctly in the log and showed
         // its raw $r/$c/$g markers in the bubble over their head.
         gameHandler.setChatBubbleCallback(
-            [this, &gameHandler](uint64_t guid, const std::string& msg, bool isYell) {
+            [this, &gameHandler](uint64_t guid, const std::string& msg, bool isYell, bool party) {
+                // 0x00720010: the setting of the line's kind, at the time.
+                if (!(party ? partyShown_ : show_)) return;
                 addBubble(guid, chat_utils::replaceGenderPlaceholders(msg, gameHandler), isYell,
                           guid == gameHandler.getPlayerGuid());
             });

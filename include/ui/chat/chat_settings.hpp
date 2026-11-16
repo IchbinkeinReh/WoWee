@@ -34,7 +34,7 @@ struct ChatSettings {
     /// Social page had the two boxes and the client drew the bubbles; now
     /// both are here, where the chat panel's other settings are.
     bool showBubbles  = true;
-    bool partyBubbles = false;
+    bool partyBubbles = true;
 
     // No window state here. This client drew its own chat window once and kept
     // three fields for it - whether it was locked, and the size a resize left
