@@ -47,6 +47,11 @@ class Application;
 
 class EntitySpawner {
 public:
+    /// After the interface is loaded again: the player's own seat, said
+    /// again - UNIT_ENTERING_VEHICLE while climbing in, and with
+    /// UNIT_ENTERED_VEHICLE once seated - so the new interface puts its
+    /// vehicle bar back (0x00749ed0).
+    void refirePlayerSeatEvents();
     /// The decoded textures and parsed models it keeps between spawns, for /mem.
     void memoryReport(std::vector<rendering::MemoryEntry>& out) const;
     /// Drops the display cache's entries for the creature models the
