@@ -427,7 +427,7 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
                                 if (!skinData.empty() && m2Model.version >= 264) {
                                     pipeline::M2Loader::loadSkin(skinData, m2Model);
                                 }
-                                if (!m2Model.isValid()) continue;
+                                if (!m2Model.hasDrawableContent()) continue;
 
                                 glm::quat fixedRotation(doodad.rotation.w, doodad.rotation.x,
                                                         doodad.rotation.y, doodad.rotation.z);
