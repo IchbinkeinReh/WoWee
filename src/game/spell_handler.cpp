@@ -533,6 +533,17 @@ std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data,
         trajectoryData.elevation = data.missileElevation;
         trajectoryData.flightSeconds = static_cast<float>(data.missileDelayMs) * 0.001f;
         trajectoryData.spellMissileId = spellIt->second.spellMissileId;
+        // 0x00732ff0's flag 0x200000: a caster the client controls (+0xa30
+        // 0x400), or the active mover on no transport. The unit its
+        // collision passes over is the caster or the vehicle it sits in
+        // (0x00700880).
+        const MovementHandler* movement = owner_.getMovementHandler();
+        trajectoryData.clientControlled =
+            (movement && movement->unitHasClientControl(data.casterUnit)) ||
+            (data.casterUnit == owner_.activeMover() && owner_.movementInfoRef().transportGuid == 0);
+        trajectoryData.collisionCaster = data.casterUnit;
+        if (const auto seat = owner_.vehicleRoster().passenger(data.casterUnit))
+            trajectoryData.collisionCaster = seat->vehicleGuid;
         trajectory = &trajectoryData;
     }
 
@@ -1383,20 +1394,19 @@ bool SpellHandler::spellCanTargetUnit(uint64_t unitGuid) const {
            takeUnit(unitTarget_.spellId, unitTarget_.caster, unitGuid, unitTarget_.required, false).taken;
 }
 
-SpellHandler::TrajectoryCast SpellHandler::buildTrajectoryCast(uint32_t spellId, uint64_t caster, uint64_t target,
-                                                               network::Packet& out) {
+namespace {
+/// The SpellMissile row of a spell, as 0x006fcd60 reads it, where it has one.
+std::optional<missile_trajectory::MissileRow> aimedMissileRow(uint32_t spellMissileId) {
     namespace mt = missile_trajectory;
-    const auto it = owner_.spellNameCacheRef().find(spellId);
-    if (it == owner_.spellNameCacheRef().end() || it->second.spellMissileId == 0) return TrajectoryCast::NotAimed;
+    if (spellMissileId == 0) return std::nullopt;
     auto* am = core::Application::getInstance().getAssetManager();
     auto missiles = am ? am->loadDBCOptional("SpellMissile.dbc") : nullptr;
-    if (!missiles || missiles->getFieldCount() < 14) return TrajectoryCast::NotAimed;
-    const int32_t found = missiles->findRecordById(it->second.spellMissileId);
-    if (found < 0) return TrajectoryCast::NotAimed;
+    if (!missiles || missiles->getFieldCount() < 14) return std::nullopt;
+    const int32_t found = missiles->findRecordById(spellMissileId);
+    if (found < 0) return std::nullopt;
     const auto r = static_cast<uint32_t>(found);
     mt::MissileRow row;
     row.flags = missiles->getUInt32(r, 1);
-    if ((row.flags & mt::kFlagAimed) == 0) return TrajectoryCast::NotAimed;
     row.pitchMin = missiles->getFloat(r, 2);
     row.pitchMax = missiles->getFloat(r, 3);
     row.speedMin = missiles->getFloat(r, 4);
@@ -1409,14 +1419,36 @@ SpellHandler::TrajectoryCast SpellHandler::buildTrajectoryCast(uint32_t spellId,
     row.speedRandMax = missiles->getFloat(r, 11);
     row.gravity = missiles->getFloat(r, 12);
     row.maxDuration = missiles->getFloat(r, 13);
+    if (missiles->getFieldCount() > 14) row.collisionRadius = missiles->getFloat(r, 14);
+    return row;
+}
+
+/// The client's milliseconds (0x0086ae20, DAT_00cd76ac).
+uint32_t clientMs() { return static_cast<uint32_t>(static_cast<int64_t>(core::appTimeSeconds() * 1000.0)); }
+}  // namespace
+
+bool SpellHandler::spellIsAimed(uint32_t spellId) {
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return false;
+    const auto row = aimedMissileRow(it->second.spellMissileId);
+    return row && (row->flags & missile_trajectory::kFlagAimed) != 0;
+}
+
+SpellHandler::AimSolve SpellHandler::solveAimedShot(uint32_t spellId, uint64_t caster, AimedShot& out) {
+    namespace mt = missile_trajectory;
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return AimSolve::NotAimed;
+    const auto row = aimedMissileRow(it->second.spellMissileId);
+    if (!row || (row->flags & mt::kFlagAimed) == 0) return AimSolve::NotAimed;
+    out.row = *row;
+    out.spellMissileId = it->second.spellMissileId;
     // 0x0080ac90: only the active mover casts one.
     const uint64_t mover = owner_.activeMover();
     MovementHandler* movement = owner_.getMovementHandler();
-    if (caster != mover || !movement) {
-        LOG_WARNING("Missile trajectory does not have active mover caster");
-        return TrajectoryCast::Refused;
-    }
-    const MovementInfo wire = movement->moverWireInfo();
+    if (caster != mover || !movement) return AimSolve::NoMover;
+    out.wire = movement->moverWireInfo();
+    const MovementInfo& wire = out.wire;
     // 0x006fcd60. The world's frame here is the wire's, as the renderer's is.
     mt::AimInput in;
     if (const vehicle::VehicleRecord* v = owner_.vehicleRowOf(caster)) {
@@ -1437,16 +1469,132 @@ SpellHandler::TrajectoryCast SpellHandler::buildTrajectoryCast(uint32_t spellId,
                             : rendering::SpellVisualSystem::TrajectoryOrigin{from.position,
                                                                             from.position + glm::vec3(0, 0, 1)};
     in.launch = origin.launch;
+    // The client's generator (0x00464580 on 0x00b2fa30): a float in [0, 1).
     static std::mt19937 rng{std::random_device{}()};
     std::uniform_real_distribution<float> unit(0.0f, 1.0f);
-    const mt::Aim aim = mt::chooseAim(row, in, [&] { return unit(rng); });
-    const mt::Flight flight = mt::fly(row, aim, origin.middle, [renderer](const glm::vec3& a, const glm::vec3& b) {
+    out.aim = mt::chooseAim(out.row, in, [&] { return unit(rng); });
+    out.flight = mt::fly(out.row, out.aim, origin.middle, [renderer](const glm::vec3& a, const glm::vec3& b) {
         return renderer ? renderer->intersectSegment(a, b) : std::nullopt;
     });
-    out = CastSpellPacket::buildTrajectory(spellId, ++castCount_, target, aim.launch, flight.impact, aim.pitch,
-                                           aim.speed, mover, wire);
-    LOG_INFO("Aimed cast ", spellId, ": pitch ", aim.pitch, " speed ", aim.speed, " lands in ", flight.seconds, " s");
+    return AimSolve::Solved;
+}
+
+SpellHandler::TrajectoryCast SpellHandler::buildTrajectoryCast(uint32_t spellId, uint64_t caster, uint64_t target,
+                                                               network::Packet& out) {
+    namespace mt = missile_trajectory;
+    AimedShot shot;
+    const AimSolve solved = solveAimedShot(spellId, caster, shot);
+    if (solved == AimSolve::NotAimed) return TrajectoryCast::NotAimed;
+    if (solved == AimSolve::NoMover) {
+        LOG_WARNING("Missile trajectory does not have active mover caster");
+        return TrajectoryCast::Refused;
+    }
+    // 0x00809f80: an aimed cast sent and begun and not yet let go
+    // (0x006fbeb0) refuses another, SPELL_FAILED_SPELL_IN_PROGRESS
+    // (0x00808200).
+    if (aimState_.busy()) {
+        reportLocalCastFailure(spellId, 0x69);
+        return TrajectoryCast::Refused;
+    }
+    out = CastSpellPacket::buildTrajectory(spellId, ++castCount_, target, shot.aim.launch, shot.flight.impact,
+                                           shot.aim.pitch, shot.aim.speed, caster, shot.wire);
+    // 0x0080ac90 once it is sent: the mover's aimed cast is this spell, sent
+    // now (0x006fbe30).
+    aimState_.sent(spellId, clientMs());
+    LOG_INFO("Aimed cast ", spellId, ": pitch ", shot.aim.pitch, " speed ", shot.aim.speed, " lands in ",
+             shot.flight.seconds, " s");
     return TrajectoryCast::Built;
+}
+
+void SpellHandler::tickAimedCast() {
+    // 0x006fe7e0 (WorldFrame, each frame, for the active mover): sent, begun,
+    // no missile held, and the cast time passed since it was sent.
+    if (!aimState_.due(clientMs())) return;
+    // The client holds a missile for it instead where the cast is found, not
+    // yet aimed, and its visual has a missile and a cast kit with a start
+    // animation without visual flag 0x4 - and works the shot out again when
+    // that missile is let go (0x0072df00). Missiles here are not held on
+    // their caster, so the shot is worked out now, as it is otherwise.
+    updateMissileTrajectory();
+}
+
+void SpellHandler::updateMissileTrajectory() {
+    namespace mt = missile_trajectory;
+    const uint32_t spellId = aimState_.spellId;
+    const uint64_t mover = owner_.activeMover();
+    AimedShot shot;
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() ||
+        solveAimedShot(spellId, mover, shot) != AimSolve::Solved) {
+        // 0x006fd6b0 with no spell row or no solution sends nothing. The
+        // client keeps the state on the unit that cast, which 0x006fe7e0 no
+        // longer asks once another unit is moved; here it is let go.
+        aimState_.clear(spellId);
+        return;
+    }
+    const struct {
+        float pitch, speed;
+        glm::vec3 launch, impact;
+    } sent{shot.aim.pitch, shot.aim.speed, shot.aim.launch, shot.flight.impact};
+    owner_.getSocket()->send(UpdateMissileTrajectoryPacket::build(mover, spellId, sent.pitch, sent.speed,
+                                                                  sent.launch, sent.impact, mover, shot.wire));
+    LOG_INFO("Aimed cast ", spellId, " updated: pitch ", sent.pitch, " speed ", sent.speed, " lands in ",
+             shot.flight.seconds, " s");
+    // Half the latency and a fifth of a second more, at most 1.3 times as
+    // long (0x006320d0).
+    const float flight = mt::flightWithLatency(shot.flight.seconds, owner_.getLatencyMs());
+    // 0x00805180: the cast object of the mover's current cast.
+    const bool castFound = moverCast_ && moverCast_->caster == mover && moverCast_->spellId == spellId;
+    if (castFound) {
+        // Target flag 0x40 at the impact, marked aimed (+0x139), the pitch
+        // and speed on it (+0x124, +0x128), its missile launched now with
+        // that flight (0x00800dd0, 0x0072e240).
+        aimedCasts_.push_back(*moverCast_);
+        if (aimedCasts_.size() > 8) aimedCasts_.erase(aimedCasts_.begin());
+        auto* renderer = owner_.services().renderer;
+        auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
+        const auto spellIt = owner_.spellNameCacheRef().find(spellId);
+        const float speed = spellIt != owner_.spellNameCacheRef().end() ? spellIt->second.missileSpeed : 0.0f;
+        const uint32_t visualId = resolveSpellVisualId(spellId);
+        rendering::SpellVisualSystem::MissileEnd from;
+        if (svs && visualId != 0 && resolveUnitPosition(mover, from.position)) {
+            from.renderInstanceId = owner_.resolveUnitRenderInstance(mover);
+            const rendering::SpellVisualSystem::MissileEnd to{0, sent.impact};
+            rendering::SpellVisualSystem::MissileTrajectory trajectory;
+            trajectory.elevation = sent.pitch;
+            trajectory.castSpeed = sent.speed;
+            trajectory.flightSeconds = flight;
+            trajectory.spellMissileId = shot.spellMissileId;
+            // 0x00732ff0's flag 0x200000, as for SMSG_SPELL_GO's missiles.
+            const MovementHandler* movement = owner_.getMovementHandler();
+            trajectory.clientControlled = (movement && movement->unitHasClientControl(mover)) ||
+                                          owner_.movementInfoRef().transportGuid == 0;
+            trajectory.collisionCaster = mover;
+            if (const auto seat = owner_.vehicleRoster().passenger(mover))
+                trajectory.collisionCaster = seat->vehicleGuid;
+            // The cast's own speed where Spell.dbc gives none: the arc times it.
+            svs->launchSpellMissile(visualId, speed > 0.0f ? speed : sent.speed, from, to, {to}, &trajectory,
+                                    spellId, mover, moverCast_->castCount);
+        }
+    }
+    // 0x006fbe80.
+    aimState_.clear(spellId);
+}
+
+void SpellHandler::castEnded(uint64_t caster, uint8_t castCount, uint32_t spellId) {
+    // 0x007fecc0 -> 0x007fec00 where the cast is the unit's current one.
+    if (!moverCast_ || moverCast_->caster != caster || moverCast_->castCount != castCount ||
+        moverCast_->spellId != spellId)
+        return;
+    moverCast_.reset();
+    if (caster == owner_.activeMover()) aimState_.clear(spellId);
+}
+
+void SpellHandler::sendProjectilePosition(uint64_t casterGuid, uint32_t spellId, uint8_t castCount,
+                                          const glm::vec3& point) {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    owner_.getSocket()->send(UpdateProjectilePositionPacket::build(casterGuid, spellId, castCount, point));
+    LOG_DEBUG("CMSG_UPDATE_PROJECTILE_POSITION: caster=0x", std::hex, casterGuid, std::dec, " spell=", spellId,
+              " castCount=", static_cast<int>(castCount));
 }
 
 void SpellHandler::sendPetCast(uint32_t spellId, uint64_t caster, uint64_t target) {
@@ -3370,6 +3518,7 @@ void SpellHandler::cancelCast() {
     // 0x00806200 on the running cast: it ends (0x007fecc0).
     if (currentCastSpellId_ != 0)
         owner_.castVisuals().ended(owner_.getPlayerGuid(), runningCastCount_, currentCastSpellId_);
+    if (currentCastSpellId_ != 0) castEnded(owner_.getPlayerGuid(), runningCastCount_, currentCastSpellId_);
     casting_ = false;
     castIsChannel_ = false;
     currentCastSpellId_ = 0;
@@ -3929,6 +4078,8 @@ void SpellHandler::syncPreWotlkTalentsFromKnownSpells() {
 void SpellHandler::updateTimers(float dt) {
     // 0x00804c10: the missiles that have arrived leave the list.
     missilesInFlight_.expire(historyNowMs());
+    // 0x006fe7e0 from WorldFrame's update.
+    tickAimedCast();
     // Tick down cast bar
     if (casting_ && castTimeRemaining_ > 0.0f) {
         castTimeRemaining_ -= dt;
@@ -4140,6 +4291,7 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     // but 0x1b (0x00807560, only while 0x00d397d0 - the player's
     // auto-repeat target - is set).
     owner_.castVisuals().ended(owner_.getPlayerGuid(), data.castCount, data.spellId);
+    castEnded(owner_.getPlayerGuid(), data.castCount, data.spellId);
     if (owner_.isAutoRepeating() && data.result != 0x1b)
         owner_.castVisuals().autoRepeatStopped(owner_.getPlayerGuid());
     // The repeating spell itself refused: the repeat ends and the server is
@@ -4306,8 +4458,9 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
     if (owner_.spellCastBeginCallbackRef()) owner_.spellCastBeginCallbackRef()(data.casterUnit, data.spellId);
     // 0x00806700 -> 0x00805330(spell, cast time, 0) for a start not pending
     // (cast flags 0x1): the cast the caster shows. No cast object here is
-    // aimed (+0x139): only 0x00809f80 marks one, on the trajectory cast the
-    // player sends; buildTrajectoryCast sends it but keeps no cast object.
+    // aimed (+0x139) as it starts: 0x00809f80 marks an instant trajectory
+    // cast, which buildTrajectoryCast sends without one, and 0x006fd6b0 one
+    // whose cast time has passed (aimedCasts_).
     if ((data.castFlags & 0x1u) == 0) {
         cast_visual::Begin begin;
         begin.castCount = data.castCount;
@@ -4318,6 +4471,15 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
         owner_.castVisuals().started(data.casterUnit, begin);
     }
     if (data.casterUnit == owner_.getPlayerGuid()) runningCastCount_ = data.castCount;
+    // 0x00805330: the active mover's current cast (+0xa5c, +0xa60), which
+    // its aimed cast's object is found by (0x00805180).
+    const uint64_t mover = owner_.activeMover();
+    if ((data.castFlags & 0x1u) == 0 && mover != 0 && data.casterUnit == mover)
+        moverCast_ = MoverCast{data.casterUnit, data.castCount, data.spellId};
+    // 0x00806700: the mover's aimed spell (SpellMissile Flags 0x1) begun
+    // with a cast time - when it began and how long (0x006fbe50).
+    if (mover != 0 && data.casterUnit == mover && data.castTime > 0 && spellIsAimed(data.spellId))
+        aimState_.started(data.spellId, clientMs(), data.castTime);
 
     // Track cast bar for any non-player caster
     if (data.casterUnit != owner_.getPlayerGuid() && data.castTime > 0 && !rangedWeaponAttack) {
@@ -4435,6 +4597,7 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
     // 0x0080e1b0 -> 0x007fecc0 for a cast not pending: the caster's shown
     // cast ends where it is this one.
     if ((data.castFlags & 0x1u) == 0) owner_.castVisuals().ended(data.casterUnit, data.castCount, data.spellId);
+    if ((data.castFlags & 0x1u) == 0) castEnded(data.casterUnit, data.castCount, data.spellId);
     if (data.hasPower) castPowerSaid(data.casterUnit, data.spellId, data.power, true);
     // 0x00805330 for a cast that had no start (instant), as for one that had.
     if (owner_.spellCastBeginCallbackRef()) owner_.spellCastBeginCallbackRef()(data.casterUnit, data.spellId);
@@ -4769,7 +4932,15 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
             // Impact visual at each hit target - when a missile carries it,
             // on the missile's arrival instead.
             bool flewToPlace = false;
-            const std::vector<uint64_t> carried = launchSpellMissiles(data, visualId, &flewToPlace);
+            // 0x0080e1b0: no missiles for a cast marked aimed (+0x139) - the
+            // client launched its own (0x006fd6b0).
+            const auto aimed = std::find_if(aimedCasts_.begin(), aimedCasts_.end(), [&](const MoverCast& c) {
+                return c.caster == data.casterUnit && c.castCount == data.castCount && c.spellId == data.spellId;
+            });
+            const bool launchedHere = aimed != aimedCasts_.end();
+            if (launchedHere) aimedCasts_.erase(aimed);
+            const std::vector<uint64_t> carried =
+                launchedHere ? std::vector<uint64_t>{} : launchSpellMissiles(data, visualId, &flewToPlace);
             // A cast at a place (target flag 0x40) plays its area kits there;
             // the ImpactAreaKit as its missile lands where one flies
             // (0x0080e1b0, 0x00700e20).
@@ -7365,6 +7536,7 @@ void SpellHandler::handleSpellFailedOther(network::Packet& packet) {
         if (packet.hasRemaining(1)) failOtherResult = packet.readUInt8();
         packet.setReadPos(at);
         owner_.castVisuals().ended(failOtherGuid, castCount, spellId);
+        castEnded(failOtherGuid, castCount, spellId);
     }
     if (failOtherGuid != 0 && failOtherGuid != owner_.getPlayerGuid()) {
         // Which spell it was, before the state that says so is dropped: the
@@ -7625,6 +7797,7 @@ void SpellHandler::handleSpellFailure(network::Packet& packet) {
                 owner_.stopAutoRepeat(true);
             }
             owner_.castVisuals().ended(caster, failCastCount, failSpellId);
+            castEnded(caster, failCastCount, failSpellId);
         }
         // Classic result enum starts at 0=AFFECTING_COMBAT; shift +1 for WotLK table
         uint8_t failReason = isClassic ? static_cast<uint8_t>(rawFailReason + 1) : rawFailReason;

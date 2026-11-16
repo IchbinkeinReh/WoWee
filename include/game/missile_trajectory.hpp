@@ -33,6 +33,7 @@ struct MissileRow {
     float speedRandMax = 0.0f;   ///< 11
     float gravity = 0.0f;        ///< 12, yards per second squared
     float maxDuration = 0.0f;    ///< 13, seconds; none for 20
+    float collisionRadius = 0.0f;///< 14, added to each unit's sphere (0x006fc0a0)
 };
 inline constexpr uint32_t kFlagAimed = 0x1;
 
@@ -158,6 +159,59 @@ struct Flight {
     flight.impact = from + (to - from) * *hit;
     flight.seconds = (static_cast<float>(steps - left) + *hit) * 0.1f;
     return flight;
+}
+
+/// The aimed cast the active mover has going (its +0xf68..+0xf78): the
+/// spell and when it was sent (0x006fbe30, after 0x0080ac90 sends the
+/// cast), when SMSG_SPELL_START said it began and its cast time (0x006fbe50,
+/// from 0x00806700), and the cast count of a missile held for it
+/// (0x006fe7e0). Times are the client's milliseconds.
+struct AimState {
+    uint32_t spellId = 0;        ///< +0xf68
+    uint32_t sentMs = 0;         ///< +0xf6c
+    uint32_t startedMs = 0;      ///< +0xf70
+    uint32_t castMs = 0;         ///< +0xf74
+    uint8_t heldCastCount = 0;   ///< +0xf78
+
+    /// 0x006fbe30.
+    void sent(uint32_t spell, uint32_t nowMs) {
+        spellId = spell;
+        sentMs = nowMs;
+    }
+    /// 0x006fbe50: only for the spell sent.
+    void started(uint32_t spell, uint32_t nowMs, uint32_t castTimeMs) {
+        if (spell != spellId) return;
+        startedMs = nowMs;
+        castMs = castTimeMs;
+    }
+    /// 0x006fbe80: only for the spell sent; the cast time is left.
+    void clear(uint32_t spell) {
+        if (spell != spellId) return;
+        spellId = 0;
+        sentMs = 0;
+        startedMs = 0;
+        heldCastCount = 0;
+    }
+    /// 0x006fbeb0: sent and begun - another aimed cast is refused
+    /// (0x00809f80, SPELL_FAILED_SPELL_IN_PROGRESS).
+    [[nodiscard]] bool busy() const { return sentMs != 0 && startedMs != 0; }
+    /// 0x006fbed0: and a missile held for it.
+    [[nodiscard]] bool holding() const { return busy() && heldCastCount != 0; }
+    /// 0x006fe7e0: none held, and the cast time has passed since it was
+    /// sent.
+    [[nodiscard]] bool due(uint32_t nowMs) const {
+        return sentMs != 0 && startedMs != 0 && heldCastCount == 0 &&
+               static_cast<int32_t>(nowMs - castMs - sentMs) >= 0;
+    }
+};
+
+/// How long the shot is let fly (0x00809f80, 0x006fd6b0): half the latency,
+/// the solved time and a fifth of a second, at most 1.3 times the solved
+/// time.
+[[nodiscard]] inline float flightWithLatency(float seconds, uint32_t latencyMs) {
+    const float padded = static_cast<float>(latencyMs) * 0.001f * 0.5f + seconds + 0.2f;
+    const float cap = seconds * 1.3f;
+    return cap < padded ? cap : padded;
 }
 
 }  // namespace wowee::game::missile_trajectory

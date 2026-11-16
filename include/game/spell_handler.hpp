@@ -7,6 +7,7 @@
 #include "game/spell_defines.hpp"
 #include "game/spell_mods.hpp"
 #include "game/ground_target.hpp"
+#include "game/missile_trajectory.hpp"
 #include "game/spell_history.hpp"
 #include "game/spell_missiles_in_flight.hpp"
 #include "game/cast_checks.hpp"
@@ -775,6 +776,13 @@ private:
 public:
     /// The cast count of the running cast (UnitCastingInfo's castID).
     [[nodiscard]] uint8_t runningCastCount() const { return runningCastCount_; }
+    /// 0x007fec00 for a unit's cast that ended or failed: where it is the
+    /// active mover's current cast, the aimed cast of that spell is let go
+    /// (0x006fbe80).
+    void castEnded(uint64_t caster, uint8_t castCount, uint32_t spellId);
+    /// CMSG_UPDATE_PROJECTILE_POSITION (0x00703640), point in wire
+    /// coordinates.
+    void sendProjectilePosition(uint64_t casterGuid, uint32_t spellId, uint8_t castCount, const glm::vec3& point);
 private:
     GameHandler& owner_;
 
@@ -864,6 +872,41 @@ private:
     /// out; Built with the cast in `out`.
     enum class TrajectoryCast { NotAimed, Refused, Built };
     TrajectoryCast buildTrajectoryCast(uint32_t spellId, uint64_t caster, uint64_t target, network::Packet& out);
+    /// 0x006fcd60 for the spell, from the caster as it is now: the row,
+    /// the aim, where the shot lands and how long it flies, and the mover's
+    /// movement. NotAimed for a spell with no aimed SpellMissile row,
+    /// NoMover where the caster is not the active mover.
+    struct AimedShot {
+        missile_trajectory::MissileRow row;
+        uint32_t spellMissileId = 0;
+        missile_trajectory::Aim aim;
+        missile_trajectory::Flight flight;
+        MovementInfo wire;
+    };
+    enum class AimSolve { NotAimed, NoMover, Solved };
+    AimSolve solveAimedShot(uint32_t spellId, uint64_t caster, AimedShot& out);
+    /// Whether the spell's SpellMissile row has Flags bit 1.
+    bool spellIsAimed(uint32_t spellId);
+    /// 0x006fe7e0, each frame: once the aimed cast's time has passed since it
+    /// was sent, 0x006fd6b0.
+    void tickAimedCast();
+    /// 0x006fd6b0: the shot worked out again and sent with
+    /// CMSG_UPDATE_MISSILE_TRAJECTORY; where the cast is still the mover's,
+    /// it is marked aimed and its missile launched on the new arc.
+    void updateMissileTrajectory();
+    /// The aimed cast the active mover has going (+0xf68..+0xf78).
+    missile_trajectory::AimState aimState_;
+    /// The active mover's current cast as SMSG_SPELL_START set it (+0xa5c,
+    /// +0xa60), which 0x00805180 finds the cast object by.
+    struct MoverCast {
+        uint64_t caster = 0;
+        uint8_t castCount = 0;
+        uint32_t spellId = 0;
+    };
+    std::optional<MoverCast> moverCast_;
+    /// The casts whose missile the client launched itself (+0x139): SMSG_SPELL_GO
+    /// launches none for them (0x0080e1b0).
+    std::vector<MoverCast> aimedCasts_;
     /// CMSG_PET_CAST_SPELL at a unit or at none (0x0080ac90).
     void sendPetCast(uint32_t spellId, uint64_t caster, uint64_t target);
     /// CMSG_CAST_SPELL from the player at a unit, at none, or at an item

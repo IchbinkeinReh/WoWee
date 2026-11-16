@@ -1051,6 +1051,7 @@ void SpellVisualSystem::aimMissile(ActiveMissile& missile, const MissileVisual& 
                                                     trajectory.flightSeconds);
         if (!missile.arc.onArc) missile.speed = missile.arc.straightSpeed;
         flight = missile.arc.flightSeconds;
+        planMissileCollision(missile, target);
     }
     // A missile chasing a unit that runs from it takes longer than this, so
     // the cap is generous; it only stops one that can never arrive.
@@ -1063,6 +1064,58 @@ void SpellVisualSystem::aimMissile(ActiveMissile& missile, const MissileVisual& 
     missile.baseSpeed = missile.speed;
     missile.lastDrawn = missile.position - (target - missile.position);
     missile.hasDrawnDelta = false;
+}
+
+void SpellVisualSystem::planMissileCollision(ActiveMissile& missile, const glm::vec3& target) {
+    namespace mc = missile_collision;
+    missile.hasCollision = false;
+    missile.collisionUnits.clear();
+    // 0x00700880: flag 0x200000 and the row's Flags 0x3c (0x006fc920 makes
+    // the object at +0x148).
+    const MissileTrajectory& trajectory = missile.trajectory;
+    const spell_missile::SpellMissileRow* row = spellMissileRow(trajectory.spellMissileId);
+    if (!trajectory.clientControlled || !row || (row->flags & mc::kFlagsCollide) == 0) return;
+    missile.hasCollision = true;
+    // 0x006fcb60: from where it is let go (+0x38) to where it lands, at the
+    // arc's pitch and speed.
+    missile.collisionPath =
+        mc::makePath(missile.position, target, missile.arc.pitch, missile.arc.launchSpeed, row->collisionRadius);
+    if (!collisionUnitsQuery_) return;
+    // 0x004d4b30 over every object with 0x006fcaa0: a unit, not the caster,
+    // that 0x006fc4a0 measures, and that neither is nor rides the caster;
+    // the search stops at 128.
+    std::vector<mc::Scored> found;
+    for (const CollisionUnit& unit : collisionUnitsQuery_(nullptr)) {
+        if (unit.guid == 0 || unit.guid == trajectory.collisionCaster) continue;
+        if (!mc::rowMeets(row->flags, unit.kind)) continue;
+        const mc::Sphere sphere = mc::unitSphere(unit.shape, missile.collisionPath.dir, row->collisionRadius);
+        const float score = mc::unitScore(missile.collisionPath, sphere, unit.maxSpeed);
+        if (score == -1.0f) continue;
+        if (unit.vehicle == trajectory.collisionCaster) continue;
+        found.push_back({unit.guid, score});
+        if (found.size() >= mc::kMaxSearched) break;
+    }
+    missile.collisionUnits = mc::keepUnits(std::move(found));
+}
+
+float SpellVisualSystem::traceMissileStep(const ActiveMissile& missile, const glm::vec3& from,
+                                          const glm::vec3& to) const {
+    namespace mc = missile_collision;
+    if (!missile.hasCollision || missile.collisionUnits.empty() || !collisionUnitsQuery_) return -1.0f;
+    // 0x006fc0a0: a sphere about each of its units where it stands now, in
+    // the order they were kept; one no longer in the world is passed over.
+    const std::vector<CollisionUnit> units = collisionUnitsQuery_(&missile.collisionUnits);
+    std::vector<mc::Sphere> spheres;
+    spheres.reserve(missile.collisionUnits.size());
+    for (uint64_t guid : missile.collisionUnits) {
+        for (const CollisionUnit& unit : units) {
+            if (unit.guid != guid) continue;
+            spheres.push_back(
+                mc::unitSphere(unit.shape, missile.collisionPath.dir, missile.collisionPath.rowRadius));
+            break;
+        }
+    }
+    return mc::stepHit(from, to, spheres);
 }
 
 bool SpellVisualSystem::launchMissile(uint32_t visualId, float speed, const MissileEnd& from, const MissileEnd& to,
@@ -1202,7 +1255,8 @@ glm::vec3 SpellVisualSystem::runMissileMotion(ActiveMissile& missile, const glm:
 }
 
 // SpellMissile.dbc, all fifteen columns 4 bytes (0x008b8310): the arc reads
-// the two speeds at 4 and 5 and the gravity at 12 (0x00700880).
+// the two speeds at 4 and 5 and the gravity at 12 (0x00700880), its
+// collision the Flags at 1 and the CollisionRadius at 14 (0x006fc0a0).
 const spell_missile::SpellMissileRow* SpellVisualSystem::spellMissileRow(uint32_t id) {
     if (!spellMissileDbcLoaded_) {
         spellMissileDbcLoaded_ = true;
@@ -1215,6 +1269,8 @@ const spell_missile::SpellMissileRow* SpellVisualSystem::spellMissileRow(uint32_
                 row.speeds[0] = dbc->getFloat(i, 4);
                 row.speeds[1] = dbc->getFloat(i, 5);
                 row.gravity = dbc->getFloat(i, 12);
+                row.flags = dbc->getUInt32(i, 1);
+                row.collisionRadius = dbc->getFloat(i, 14);
                 spellMissileRows_[dbc->getUInt32(i, 0)] = row;
             }
         }
@@ -1366,6 +1422,28 @@ void SpellVisualSystem::updateMissiles(float deltaTime) {
             step.position = it->position;
             it->targetInstanceId = 0;
             it->lastTarget = it->position;
+        }
+        // Its collision object (+0x148): a step that meets one of its units
+        // takes it to where it does, the client says so with
+        // CMSG_UPDATE_PROJECTILE_POSITION, and it lands there with no unit,
+        // that place its destination (0x007015d0 -> 0x006fc9b0, 0x00703640,
+        // 0x00703410).
+        if (!step.arrived && it->hasCollision) {
+            const float t = traceMissileStep(*it, it->position, step.position);
+            if (t >= 0.0f) {
+                const glm::vec3 met = it->position + (step.position - it->position) * t;
+                if (projectilePositionSink_)
+                    projectilePositionSink_(it->casterGuid, it->spellId, it->castCount, met);
+                it->position = met;
+                step.arrived = true;
+                step.position = met;
+                it->targetInstanceId = 0;
+                it->lastTarget = met;
+                it->hasStop = true;
+                it->stopPoint = met;
+                for (MissileEnd& impact : it->impacts)
+                    if (impact.renderInstanceId == 0) impact.position = met;
+            }
         }
         if (!step.arrived && it->elapsed < it->maxLifetime) {
             it->position = step.position;

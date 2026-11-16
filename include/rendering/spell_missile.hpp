@@ -158,6 +158,10 @@ inline constexpr float kDefaultMissileGravity = 19.29f;
 struct SpellMissileRow {
     float speeds[2] = {0.0f, 0.0f};
     float gravity = kDefaultMissileGravity;
+    /// Flags (+4), whose 0x3c give a missile its collision object, and
+    /// CollisionRadius (+0x38, column 14) - 0x00700880, 0x006fc0a0.
+    uint32_t flags = 0;
+    float collisionRadius = 0.0f;
 };
 
 /// An elevation past straight up or down folded back into [-pi/2, pi/2]
@@ -229,6 +233,11 @@ struct MissileArc {
     float straightSpeed = 0.0f;
     /// Seconds from launch to landing.
     float flightSeconds = 0.0f;
+    /// The pitch the arc was solved at and the speed it leaves at (0x00700880's
+    /// local_8 and local_c), which its collision path is drawn from
+    /// (0x006fcb60).
+    float pitch = 0.0f;
+    float launchSpeed = 0.0f;
 };
 
 /// Plan the flight from a launch point to a target `delta` away, at the
@@ -258,15 +267,24 @@ inline MissileArc planMissileArc(float elevation, float castSpeed, const glm::ve
         if (!row) {
             onArc = false;
         } else {
-            time = arcTimeAtSpeed(pitch, castSpeed, delta, arc.gravity);
-            if (time < 1e-4f) time = arcTimeAtSpeed(pitch, row->speeds[0], delta, arc.gravity);
-            if (time < 1e-4f) time = arcTimeAtSpeed(pitch, row->speeds[1], delta, arc.gravity);
+            speed = castSpeed;
+            time = arcTimeAtSpeed(pitch, speed, delta, arc.gravity);
+            if (time < 1e-4f) {
+                speed = row->speeds[0];
+                time = arcTimeAtSpeed(pitch, speed, delta, arc.gravity);
+            }
+            if (time < 1e-4f) {
+                speed = row->speeds[1];
+                time = arcTimeAtSpeed(pitch, speed, delta, arc.gravity);
+            }
             if (time < 1e-4f) onArc = false;
             else velocity = delta * (1.0f / time);
         }
     }
     const float remaining = std::max(flightSeconds, 1e-4f);
     arc.flightSeconds = std::max(flightSeconds, 0.0f);
+    arc.pitch = pitch;
+    arc.launchSpeed = speed;
     arc.onArc = onArc;
     if (!onArc) {
         arc.straightSpeed = glm::length(delta) / remaining;

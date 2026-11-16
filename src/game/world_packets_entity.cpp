@@ -1440,6 +1440,45 @@ network::Packet CastSpellPacket::buildTrajectory(uint32_t spellId, uint8_t castC
     return packet;
 }
 
+network::Packet UpdateMissileTrajectoryPacket::build(uint64_t casterGuid, uint32_t spellId, float pitch, float speed,
+                                                     const glm::vec3& launch, const glm::vec3& impact,
+                                                     uint64_t moverGuid, const MovementInfo& moverWire) {
+    // 0x006fd6b0: the guid whole, the spell, the pitch and speed, the
+    // launch and impact points.
+    network::Packet packet(wireOpcode(Opcode::CMSG_UPDATE_MISSILE_TRAJECTORY));
+    packet.writeUInt64(casterGuid);
+    packet.writeUInt32(spellId);
+    packet.writeFloat(pitch);
+    packet.writeFloat(speed);
+    packet.writeFloat(launch.x);
+    packet.writeFloat(launch.y);
+    packet.writeFloat(launch.z);
+    packet.writeFloat(impact.x);
+    packet.writeFloat(impact.y);
+    packet.writeFloat(impact.z);
+    // 0x0071f060(unit, 0xb7, packet, 1) -> 0x0071ef80: there is movement,
+    // its opcode, the mover and its movement.
+    packet.writeUInt8(1);
+    packet.writeUInt32(wireOpcode(Opcode::MSG_MOVE_STOP));
+    packet.writePackedGuid(moverGuid);
+    MovementPacket::writeMovementPayload(packet, moverWire);
+    return packet;
+}
+
+network::Packet UpdateProjectilePositionPacket::build(uint64_t casterGuid, uint32_t spellId, uint8_t castCount,
+                                                      const glm::vec3& point) {
+    // 0x00703640: the missile's caster (+0), spell (+0x1c), cast count
+    // (+0x20) and where it is (+0x2c).
+    network::Packet packet(wireOpcode(Opcode::CMSG_UPDATE_PROJECTILE_POSITION));
+    packet.writeUInt64(casterGuid);
+    packet.writeUInt32(spellId);
+    packet.writeUInt8(castCount);
+    packet.writeFloat(point.x);
+    packet.writeFloat(point.y);
+    packet.writeFloat(point.z);
+    return packet;
+}
+
 network::Packet CastSpellPacket::asPetCast(uint64_t casterGuid, const network::Packet& cast) {
     // 0x0080ac90: opcode 0x1f0, the caster, then castCount, spell, cast
     // flags and targets as CMSG_CAST_SPELL has them.

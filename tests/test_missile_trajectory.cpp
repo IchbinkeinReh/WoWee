@@ -132,3 +132,32 @@ TEST_CASE("a shot meeting nothing stops when its steps run out", "[trajectory]")
     CHECK(f.seconds == Approx(1.0f));
     CHECK(f.impact.x == Approx(10.0f));
 }
+
+TEST_CASE("the aim state is sent, begun, due once its cast time has passed, and let go", "[trajectory]") {
+    mt::AimState s;
+    s.sent(100, 5000);
+    CHECK_FALSE(s.busy());
+    CHECK_FALSE(s.due(99999));
+    s.started(200, 5100, 1500);  // another spell: nothing
+    CHECK_FALSE(s.busy());
+    s.started(100, 5100, 1500);
+    CHECK(s.busy());
+    CHECK_FALSE(s.due(6499));
+    CHECK(s.due(6500));  // from when it was sent, not begun
+    s.heldCastCount = 3;
+    CHECK(s.holding());
+    CHECK_FALSE(s.due(7000));
+    s.clear(200);
+    CHECK(s.busy());
+    s.clear(100);
+    CHECK_FALSE(s.busy());
+    CHECK(s.spellId == 0);
+    CHECK(s.heldCastCount == 0);
+    CHECK(s.castMs == 1500);  // 0x006fbe80 leaves it
+}
+
+TEST_CASE("the shot flies half the latency and a fifth more, at most 1.3 times", "[trajectory]") {
+    CHECK(mt::flightWithLatency(2.0f, 100) == Approx(2.25f));
+    CHECK(mt::flightWithLatency(0.5f, 100) == Approx(0.65f));
+    CHECK(mt::flightWithLatency(0.0f, 0) == 0.0f);
+}

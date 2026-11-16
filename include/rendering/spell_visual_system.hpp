@@ -13,6 +13,7 @@
 #include <glm/glm.hpp>
 
 #include "audio/voice_priority.hpp"
+#include "rendering/missile_collision.hpp"
 #include "rendering/missile_motion.hpp"
 #include "rendering/spell_missile.hpp"
 #include "rendering/spell_kit.hpp"
@@ -147,6 +148,13 @@ public:
         float flightSeconds = 0.0f;
         uint32_t spellMissileId = 0;
         float castSpeed = 0.0f;
+        /// Missile flag 0x200000 (0x00732ff0): the caster is one the client
+        /// controls (+0xa30 0x400), or the active mover on no transport.
+        /// With the row's Flags 0x3c it meets units on its way (0x00700880).
+        bool clientControlled = false;
+        /// The unit no unit it meets may be or ride (0x00700880 -> 0x006fcaa0):
+        /// the caster, or the vehicle it sits in.
+        uint64_t collisionCaster = 0;
     };
 
     /// Launch the visual's missile from `from` to `to` at `speed` yards per
@@ -180,6 +188,26 @@ public:
     /// would take it further from there than it is (0x006ff2c0, 0x006fc290,
     /// flag 0x400000 in 0x007015d0).
     void setProjectilePosition(uint64_t casterGuid, uint8_t castCount, const glm::vec3& point);
+
+    /// A unit as a missile's collision looks at it (0x006fcaa0, 0x006fc4a0,
+    /// 0x006fbff0): its shape, what kind it is, the most of its run, swim
+    /// and flight speeds (CMovement +0x94, +0x9c, +0xa4), and the vehicle
+    /// it rides or is (0x0074c650 / 0x00748040), 0 for none.
+    struct CollisionUnit {
+        uint64_t guid = 0;
+        missile_collision::UnitShape shape;
+        missile_collision::UnitKind kind;
+        float maxSpeed = 0.0f;
+        uint64_t vehicle = 0;
+    };
+    /// Every unit in the world, or just those `only` names.
+    using CollisionUnitsQuery = std::function<std::vector<CollisionUnit>(const std::vector<uint64_t>* only)>;
+    void setCollisionUnitsQuery(CollisionUnitsQuery query) { collisionUnitsQuery_ = std::move(query); }
+    /// Where CMSG_UPDATE_PROJECTILE_POSITION goes (0x00703640): the
+    /// missile's caster, spell, cast count and where it met a unit.
+    using ProjectilePositionSink =
+        std::function<void(uint64_t casterGuid, uint32_t spellId, uint8_t castCount, const glm::vec3& point)>;
+    void setProjectilePositionSink(ProjectilePositionSink sink) { projectilePositionSink_ = std::move(sink); }
 
     /// Let go of every missile flying at this render instance, with no
     /// impact (0x00703a80, as SMSG_PRE_RESURRECT does).
@@ -801,6 +829,8 @@ private:
     MountSink mountSink_;
     GroundQuery groundQuery_;
     SegmentQuery segmentQuery_;
+    CollisionUnitsQuery collisionUnitsQuery_;
+    ProjectilePositionSink projectilePositionSink_;
     /// 0x007265c0 case 16 for a kit on a unit.
     void startMountTransition(uint32_t renderInstanceId, uint32_t spellId, spell_kit::KitType type,
                               uint32_t castTimeMs);
@@ -1052,6 +1082,11 @@ private:
         float launchSpeed = 0.0f;
         bool hasTrajectory = false;
         MissileTrajectory trajectory;
+        // Its collision object (+0x148, 0x00700880): its path from above
+        // and the units it may meet, in the order they are traced.
+        bool hasCollision = false;
+        missile_collision::Path collisionPath;
+        std::vector<uint64_t> collisionUnits;
         // Where its model was last placed: the world matrix a landing
         // missile is kept at (0x00700700).
         glm::mat4 lastTransform{1.0f};
@@ -1076,6 +1111,12 @@ private:
     /// Point a missile at `to` from where it is and plan its flight, as
     /// 0x007022d0 does at a launch and at each relaunch.
     void aimMissile(ActiveMissile& missile, const MissileVisual& visual, const MissileEnd& to);
+    /// 0x00700880's end: a client-controlled missile on an arc whose row has
+    /// Flags 0x3c gets its collision object and the units it may meet.
+    void planMissileCollision(ActiveMissile& missile, const glm::vec3& target);
+    /// 0x006fc9b0 for a step from `from` to `to`: the share of it at which it
+    /// meets one of its units, -1 for none.
+    float traceMissileStep(const ActiveMissile& missile, const glm::vec3& from, const glm::vec3& to) const;
     /// Launch the visual's missile (launchSpellMissile's body) with `hops`
     /// for it to bounce along after `to`.
     bool launchMissile(uint32_t visualId, float speed, const MissileEnd& from, const MissileEnd& to,
