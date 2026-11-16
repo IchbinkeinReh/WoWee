@@ -3250,6 +3250,7 @@ struct ItemClassNames {
     bool loaded = false;
     std::map<uint32_t, std::string> classes;
     std::map<std::pair<uint32_t, uint32_t>, std::pair<std::string, std::string>> subclasses;
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> subclassDisplayFlags;   // field 5
 };
 
 const ItemClassNames& itemClassNames(game::GameHandler* gh) {
@@ -3264,6 +3265,7 @@ const ItemClassNames& itemClassNames(game::GameHandler* gh) {
     if (auto dbc = am->loadDBCOptional("ItemSubClass.dbc"); dbc && dbc->isLoaded() && dbc->getFieldCount() > 27) {
         for (uint32_t r = 0; r < dbc->getRecordCount(); ++r) {
             t.subclasses[{dbc->getUInt32(r, 0), dbc->getUInt32(r, 1)}] = {dbc->getString(r, 10), dbc->getString(r, 27)};
+            t.subclassDisplayFlags[{dbc->getUInt32(r, 0), dbc->getUInt32(r, 1)}] = dbc->getUInt32(r, 5);
         }
     }
     return t;
@@ -3330,6 +3332,14 @@ static std::string itemSubclassDisplayName(game::GameHandler* gh, uint32_t itemC
     if (it == t.subclasses.end()) return {};
     if (verbose && !it->second.second.empty()) return it->second.second;
     return it->second.first;
+}
+
+/// ItemSubClass.dbc's display flags (field 5) for a class and subclass; zero
+/// where the row is unknown.
+static uint32_t itemSubclassDisplayFlags(game::GameHandler* gh, uint32_t itemClass, uint32_t subClass) {
+    const auto& t = itemClassNames(gh);
+    const auto it = t.subclassDisplayFlags.find({itemClass, subClass});
+    return it != t.subclassDisplayFlags.end() ? it->second : 0u;
 }
 
 namespace {
@@ -3788,11 +3798,25 @@ static int lua_GetItemTooltipData(lua_State* L) {
         }
     }
     pushItemRequirements(L, gh, *info);
-    // The type line's name: the subclass's DisplayName (0x006277f0).
+    // The type line's name: the subclass's DisplayName (0x006277f0) - as
+    // subclassName always (a bag's slot line names it), and as typeSubclass
+    // only where the type line shows it: not for a row whose display flag
+    // 0x1 is set (junk, cloth, potions, recipes - every one of them would
+    // otherwise name its kind), and not for a cloak.
     {
         std::string sub = itemSubclassDisplayName(gh, info->itemClass, info->subClass, false);
+        const bool known = !sub.empty();
         if (sub.empty()) sub = info->subclassName;
-        if (!sub.empty()) { lua_pushstring(L, sub.c_str()); lua_setfield(L, -2, "subclassName"); }
+        if (!sub.empty()) {
+            lua_pushstring(L, sub.c_str());
+            lua_setfield(L, -2, "subclassName");
+            constexpr uint32_t kHideOnTooltip = 0x1, kInvTypeCloak = 16;
+            const uint32_t flags = known ? itemSubclassDisplayFlags(gh, info->itemClass, info->subClass) : 0;
+            if ((flags & kHideOnTooltip) == 0 && info->inventoryType != kInvTypeCloak) {
+                lua_pushstring(L, sub.c_str());
+                lua_setfield(L, -2, "typeSubclass");
+            }
+        }
     }
     // The stat and resistance lines, in the client's order and words
     // (item_stat_text.hpp): white primaries, green "Equip:" ratings.

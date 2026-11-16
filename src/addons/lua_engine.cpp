@@ -14200,21 +14200,31 @@ void LuaEngine::registerCoreAPI() {
         "            self:AddLine(text, r, g, b)\n"
         "        end\n"
         "    end\n"
-        "    if equipSlot and equipSlot ~= '' then\n"
-        "        local slotText = _G[equipSlot] or ''\n"
-        "        local subText = (data and data.subclassName) or ((subclass and subclass ~= '') and subclass or '')\n"
+        // The type line (0x006277f0): a bag says CONTAINER_SLOTS with its
+        // subclass; a glyph has none; anything else puts the slot on the
+        // left - a projectile its class instead - and on the right the
+        // subclass where ItemSubClass.dbc lets it be shown (typeSubclass).
+        // Both empty, there is no line: no class name stands in for them, so
+        // junk, cloth and potions do not read "Verschiedenes",
+        // "Handwerkswaren" and "Verbrauchbar" under their names.
+        "    if equipSlot == 'INVTYPE_BAG' then\n"
+        "        local kind = (data and data.subclassName) or ((subclass and subclass ~= '') and subclass or '')\n"
+        "        if data and data.containerSlots and kind ~= '' then\n"
+        "            self:AddLine(format(CONTAINER_SLOTS or '%d Slot %s', data.containerSlots, kind), 1, 1, 1)\n"
+        "        end\n"
+        "    elseif not (data and data.itemClass == 16) then\n"
+        "        local slotText = (equipSlot and equipSlot ~= '' and _G[equipSlot]) or ''\n"
+        "        if data and data.itemClass == 6 then slotText = class or '' end\n"
+        "        local subText = (data and data.typeSubclass) or ''\n"
         "        local lr, lg, lb = 1, 1, 1\n"
         "        local rr, rg, rb = 1, 1, 1\n"
         "        if data and data.offHandOk == false then lr, lg, lb = 1, 0.125, 0.125 end\n"
         "        if data and data.subclassOk == false then rr, rg, rb = 1, 0.125, 0.125 end\n"
-        "        if slotText ~= '' or subText ~= '' then\n"
+        "        if slotText ~= '' then\n"
         "            self:AddDoubleLine(slotText, subText, lr,lg,lb, rr,rg,rb)\n"
+        "        elseif subText ~= '' then\n"
+        "            self:AddLine(subText, rr,rg,rb)\n"
         "        end\n"
-        "    elseif data and data.containerSlots then\n"
-        "        local kind = (subclass and subclass ~= '') and subclass or (class or '')\n"
-        "        self:AddLine(format(CONTAINER_SLOTS or '%d Slot %s', data.containerSlots, kind), 1, 1, 1)\n"
-        "    elseif class and class ~= '' then\n"
-        "        self:AddLine(class, 1, 1, 1)\n"
         "    end\n"
         "    if data then\n"
         // Each damage entry its own line (0x006277f0): the minimum down and
