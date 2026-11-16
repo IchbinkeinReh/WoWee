@@ -3947,6 +3947,31 @@ void Application::connectWorldHooks() {
                 }
                 return units;
             });
+            // 0x004fa5f0: the sound listener at the listener object
+            // (0x007450b0) while Sound_ListenerAtCharacter is on - a unit
+            // facing its own way (0x004f6a90), anything else the camera's.
+            renderer->setSoundListenerAnchorQuery([this]() -> std::optional<audio::sound_listener::Anchor> {
+                if (!gameHandler || !renderer) return std::nullopt;
+                if (addons::storedCVarValue("Sound_ListenerAtCharacter", "1") == "0") return std::nullopt;
+                const uint64_t guid = gameHandler->listenerObject();
+                const auto entity = guid != 0 ? gameHandler->getEntityManager().getEntity(guid) : nullptr;
+                if (!entity) return std::nullopt;
+                audio::sound_listener::Anchor anchor;
+                if (guid == gameHandler->getPlayerGuid()) {
+                    // The renderer's own character is where the player is drawn.
+                    anchor.position = renderer->getCharacterPosition();
+                    anchor.facing = audio::sound_listener::levelFacing(glm::radians(renderer->getCharacterYaw()));
+                } else {
+                    anchor.position = core::coords::canonicalToRender(
+                        glm::vec3(entity->getX(), entity->getY(), entity->getZ()));
+                    if (entity->isUnit()) {
+                        // Render yaw is canonical yaw plus a quarter turn.
+                        anchor.facing = audio::sound_listener::levelFacing(
+                            glm::radians(core::coords::canonicalToCharacterYawDeg(entity->getOrientation())));
+                    }
+                }
+                return anchor;
+            });
             // 0x006f7b00: a spell effect's $SND on the active mover's unit.
             renderer->getM2EventSounds().setMoverInstanceQuery([this]() -> uint32_t {
                 return gameHandler ? gameHandler->resolveUnitRenderInstance(gameHandler->activeMover()) : 0;

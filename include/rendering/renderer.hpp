@@ -1,6 +1,7 @@
 #pragma once
 
 #include "rendering/swim_wave.hpp"
+#include "audio/sound_listener.hpp"
 #include "rendering/water_unit_share.hpp"
 #include "rendering/rt_normal_blend.hpp"
 #include "rendering/rt_memory_guard.hpp"
@@ -125,6 +126,11 @@ public:
     /// called each frame once the units are animated, before the twins'
     /// particles step (M2Renderer::stepPosedParticles).
     void setParticleTwinPoser(std::function<void()> poser) { particleTwinPoser_ = std::move(poser); }
+    /// The object the sound listener stands at each frame, in render space
+    /// (0x004fa5f0: the listener object with Sound_ListenerAtCharacter on),
+    /// or nothing for the listener at the camera.
+    using SoundListenerAnchorQuery = std::function<std::optional<audio::sound_listener::Anchor>()>;
+    void setSoundListenerAnchorQuery(SoundListenerAnchorQuery query) { soundListenerAnchor_ = std::move(query); }
     void setAfterInterfaceRecorder(std::function<void(VkCommandBuffer)> recorder) {
         afterInterface_ = std::move(recorder);
     }
@@ -414,6 +420,7 @@ public:
 private:
     std::function<void(VkCommandBuffer)> afterInterface_;
     std::function<void()> particleTwinPoser_;
+    SoundListenerAnchorQuery soundListenerAnchor_;
 
     // True when water is drawn in the scene continuation pass rather than in
     // the scene pass itself (see renderWorld).

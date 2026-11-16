@@ -2913,11 +2913,10 @@ void Renderer::update(float deltaTime) {
             LOG_WARNING("SLOW cameraController->update: ", lastCameraUpdateMs, "ms");
         }
 
-        // Update 3D audio listener position/orientation to match camera.
-        // getUp() internally calls getRight() which calls getForward() again,
-        // and we ask for getForward() once more on the same line - that's 3
-        // independent trig sequences. Cache the basis vectors once.
-        if (camera) {
+        // At the camera, facing its way. getUp() internally calls getRight()
+        // which calls getForward() again - three independent trig sequences -
+        // so the basis is built once here.
+        const auto setListenerAtCamera = [this]() {
             const glm::vec3 fwd = camera->getForward();
             const glm::vec3 worldUp(0.0f, 0.0f, 1.0f);
             glm::vec3 right = glm::cross(fwd, worldUp);
@@ -2928,6 +2927,23 @@ void Renderer::update(float deltaTime) {
             up = (uLen < 1e-6f) ? glm::vec3(0.0f, 0.0f, 1.0f) : up / uLen;
             audio::AudioEngine::instance().setListenerPosition(camera->getPosition());
             audio::AudioEngine::instance().setListenerOrientation(fwd, up);
+        };
+        // The sound listener, once the camera has moved (0x004fa5f0): with
+        // Sound_ListenerAtCharacter on, two yards behind the listener object
+        // and four above it, facing its way, the world's up its up; else at
+        // the camera, facing the camera's way - as it is while a cinematic
+        // drives the camera (the camera's +0x50 set, 0x005fe310).
+        if (camera && soundListenerAnchor_ && !cinematicView_) {
+            if (const auto anchor = soundListenerAnchor_()) {
+                const auto placed =
+                    audio::sound_listener::place(anchor, camera->getPosition(), camera->getForward());
+                audio::AudioEngine::instance().setListenerPosition(placed.position);
+                audio::AudioEngine::instance().setListenerOrientation(placed.forward, placed.up);
+            } else {
+                setListenerAtCamera();
+            }
+        } else if (camera) {
+            setListenerAtCamera();
         }
     } else {
         lastCameraUpdateMs = 0.0;
