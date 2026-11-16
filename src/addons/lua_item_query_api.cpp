@@ -430,7 +430,7 @@ int findSpellBookSlotByID(lua_State* L) {
     const auto id = static_cast<uint32_t>(lua_tonumber(L, 1));
     int found = -1;
     if (gh && lua_toboolean(L, 2)) {
-        const auto& pet = gh->getPetSpells();
+        const auto pet = gh->getPetBookSpells();
         for (size_t i = pet.size(); i-- > 0;)
             if (pet[i] == id) { found = static_cast<int>(i) + 1; break; }
     } else if (gh) {

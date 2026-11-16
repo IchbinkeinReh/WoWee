@@ -5613,19 +5613,38 @@ void SpellHandler::petChangedWhileDead(uint64_t petBefore) {
 
 void SpellHandler::sendPetAction(uint32_t action, uint64_t targetGuid) {
     if (!owner_.hasPet() || owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    // 0x005d4210 settles the pet bar's own state before the action goes:
+    // a stance becomes the pet's react (0x005d2ff0), stay or follow its
+    // command (0x005d3020), and an attack holds it to be attacking
+    // (0x00c234dc) - each with PET_BAR_UPDATE, so the bar checks the button
+    // just pressed and unchecks the others. The server sends nothing back
+    // for these.
+    switch (const auto local = pet::petLocalState(action); local.kind) {
+        case pet::PetLocalState::React: owner_.petReactRef() = local.value; break;
+        case pet::PetLocalState::Command: owner_.petCommandRef() = local.value; break;
+        case pet::PetLocalState::Attack: owner_.setPetAttacking(true); break;
+        case pet::PetLocalState::None: break;
+    }
+    if (pet::petLocalState(action).kind != pet::PetLocalState::None) owner_.fireAddonEvent("PET_BAR_UPDATE", {});
     auto pkt = PetActionPacket::build(owner_.petGuidRef(), action, targetGuid);
     owner_.getSocket()->send(pkt);
-    // The attack command holds the pet to be attacking (0x005d3790, command
-    // 2 -> 0x00c234dc).
-    if (action == pet::packPetAction(pet::ActionType::Command, pet::kAttack)) owner_.setPetAttacking(true);
     LOG_DEBUG("sendPetAction: petGuid=0x", std::hex, owner_.petGuidRef(),
               " action=0x", action, " target=0x", targetGuid, std::dec);
 }
 
 void SpellHandler::togglePetSpellAutocast(uint32_t spellId) {
     if (owner_.petGuidRef() == 0 || spellId == 0 || owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    // 0x005d5e10: only a spell the pet may cast by itself - its entry's top
+    // bit in the spell list.
+    if (owner_.petAutocastableSpellsRef().count(spellId) == 0) return;
     bool currentlyOn = owner_.petAutocastSpellsRef().count(spellId) != 0;
     uint8_t newState = currentlyOn ? 0 : 1;
+    // Every bar slot holding the spell goes along with it.
+    for (int i = 0; i < GameHandler::PET_ACTION_BAR_SLOTS; ++i) {
+        uint32_t& slot = owner_.petActionSlotsRef()[i];
+        if ((slot & 0x00FFFFFFu) != spellId || (slot & 0x3F000000u) != 0x01000000u) continue;
+        slot = newState ? (slot | 0x40000000u) : (slot & ~0x40000000u);
+    }
     network::Packet pkt(wireOpcode(Opcode::CMSG_PET_SPELL_AUTOCAST));
     pkt.writeUInt64(owner_.petGuidRef());
     pkt.writeUInt32(spellId);
@@ -5635,6 +5654,7 @@ void SpellHandler::togglePetSpellAutocast(uint32_t spellId) {
         owner_.petAutocastSpellsRef().insert(spellId);
     else
         owner_.petAutocastSpellsRef().erase(spellId);
+    owner_.fireAddonEvent("PET_BAR_UPDATE", {});
     LOG_DEBUG("togglePetSpellAutocast: spellId=", spellId, " autocast=", static_cast<int>(newState));
 }
 

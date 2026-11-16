@@ -4,6 +4,7 @@
 #include "game/spell_history.hpp"
 
 #include <array>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -353,4 +354,64 @@ TEST_CASE("the possess bar's spell is the first aura that possesses", "[pet]") {
     CHECK(possessBarSpell({summon}, false) == 33u);
     summon.summonControl[2] = 2;  // a pet's
     CHECK_FALSE(possessBarSpell({summon}, false).has_value());
+}
+
+// GetPetActionInfo (0x005d4ec0): the stance the pet holds and the command it
+// follows are drawn checked, and attack while it attacks.
+TEST_CASE("pet bar tokens: which button is checked", "[pet]") {
+    const uint32_t stay = packPetAction(ActionType::Command, kStay);
+    const uint32_t follow = packPetAction(ActionType::Command, kFollow);
+    const uint32_t attack = packPetAction(ActionType::Command, kAttack);
+    const uint32_t dismiss = packPetAction(ActionType::Command, kAbandon);
+    const uint32_t passive = packPetAction(ActionType::Reaction, kPassive);
+    const uint32_t defensive = packPetAction(ActionType::Reaction, kDefensive);
+
+    // react defensive, command follow, not attacking
+    REQUIRE(std::string(petTokenInfo(follow, 1, 1, false).word) == "FOLLOW");
+    REQUIRE(petTokenInfo(follow, 1, 1, false).active);
+    REQUIRE_FALSE(petTokenInfo(stay, 1, 1, false).active);
+    REQUIRE(std::string(petTokenInfo(stay, 1, 1, false).word) == "WAIT");
+    REQUIRE_FALSE(petTokenInfo(attack, 1, 1, false).active);
+    REQUIRE(petTokenInfo(attack, 1, 1, true).active);
+    REQUIRE(std::string(petTokenInfo(dismiss, 1, 1, false).word) == "DISMISS");
+    REQUIRE_FALSE(petTokenInfo(dismiss, 1, 1, false).mode);
+    REQUIRE(petTokenInfo(defensive, 1, 1, false).active);
+    REQUIRE(petTokenInfo(defensive, 1, 1, false).mode);
+    REQUIRE_FALSE(petTokenInfo(passive, 1, 1, false).active);
+    REQUIRE(petTokenInfo(0x01000085u, 1, 1, false).word == nullptr);   // a spell
+}
+
+// 0x005d4210: pressing a stance or stay/follow changes the client's own
+// state at once - the server sends nothing back for it.
+TEST_CASE("pressing a stance or a command settles the bar's state", "[pet]") {
+    REQUIRE(petLocalState(packPetAction(ActionType::Reaction, kPassive)).kind == PetLocalState::React);
+    REQUIRE(petLocalState(packPetAction(ActionType::Reaction, kAggressive)).value == 2);
+    REQUIRE(petLocalState(packPetAction(ActionType::Command, kStay)).kind == PetLocalState::Command);
+    REQUIRE(petLocalState(packPetAction(ActionType::Command, kFollow)).value == 1);
+    REQUIRE(petLocalState(packPetAction(ActionType::Command, kAttack)).kind == PetLocalState::Attack);
+    REQUIRE(petLocalState(packPetAction(ActionType::Command, kAbandon)).kind == PetLocalState::None);
+    REQUIRE(petLocalState(0xC1000085u).kind == PetLocalState::None);
+}
+
+// The slot's own bits say whether its spell may be autocast and is
+// (0x005d4ec0), and only an autocastable one is turned over (0x005d5d20).
+TEST_CASE("pet slot autocast bits", "[pet]") {
+    REQUIRE(petSlotIsSpell(0xC1000085u));
+    REQUIRE(petSlotIsSpell(0x01000085u));
+    REQUIRE_FALSE(petSlotIsSpell(packPetAction(ActionType::Reaction, kPassive)));
+    REQUIRE(petSlotAutocastAllowed(0x81000085u));
+    REQUIRE_FALSE(petSlotAutocastOn(0x81000085u));
+    REQUIRE(petSlotAutocastOn(0xC1000085u));
+    REQUIRE_FALSE(petSlotAutocastAllowed(0x01000085u));
+    REQUIRE(petSlotToggledAutocast(0x81000085u) == 0xC1000085u);
+    REQUIRE(petSlotToggledAutocast(0xC1000085u) == 0x81000085u);
+    REQUIRE(petSlotToggledAutocast(0x01000085u) == 0x01000085u);
+}
+
+// 0x00542ee0: the pet's hidden passives stay out of its spellbook.
+TEST_CASE("pet spellbook leaves out hidden spells", "[pet]") {
+    REQUIRE(petSpellInBook(0x0, 0x0));
+    REQUIRE(petSpellInBook(0x40, 0x0));            // an ordinary passive stays
+    REQUIRE_FALSE(petSpellInBook(0x80, 0x0));      // hidden on the client
+    REQUIRE_FALSE(petSpellInBook(0x0, 0x8000));
 }

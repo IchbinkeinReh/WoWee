@@ -306,6 +306,66 @@ inline constexpr int32_t kSummonControlPossessed = 3;
     return std::nullopt;
 }
 
+/// What GetPetActionInfo (0x005d4ec0) says of a slot that is a stance (state
+/// 6) or a command (state 7): the word its globals are built from
+/// ("PET_MODE_%s" / "PET_ACTION_%s" and "PET_%s_TEXTURE", from the tables at
+/// 0x00a1a860 and 0x00a1a8c0) and whether it is drawn checked - the pet's
+/// react for a stance; for stay and follow the pet's command, for attack
+/// whether it attacks. No word for any other slot.
+struct PetTokenInfo {
+    const char* word = nullptr;
+    bool mode = false;    ///< a stance, so "PET_MODE_", else "PET_ACTION_"
+    bool active = false;
+};
+[[nodiscard]] constexpr PetTokenInfo petTokenInfo(uint32_t packed, uint8_t react, uint8_t command, bool attacking) {
+    constexpr const char* kModes[] = {"PASSIVE", "DEFENSIVE", "AGGRESSIVE"};
+    constexpr const char* kCommands[] = {"WAIT", "FOLLOW", "ATTACK", "DISMISS"};
+    const uint32_t state = (packed >> 24) & 0x3Fu;
+    const uint32_t id = packed & 0x00FFFFFFu;
+    if (state == 6 && id < 3) return {kModes[id], true, id == react};
+    if (state == 7 && id < 4) return {kCommands[id], false, id == kAttack ? attacking : id == command};
+    return {};
+}
+
+/// A slot GetPetActionInfo reads as a spell: state 1 or 8..17.
+[[nodiscard]] constexpr bool petSlotIsSpell(uint32_t packed) {
+    const uint32_t state = (packed >> 24) & 0x3Fu;
+    return state == 1 || (state >= 8 && state <= 0x11);
+}
+/// Its autocast allowed and on: the slot's own top two bits (0x005d4ec0).
+[[nodiscard]] constexpr bool petSlotAutocastAllowed(uint32_t packed) { return (packed & 0x80000000u) != 0; }
+[[nodiscard]] constexpr bool petSlotAutocastOn(uint32_t packed) { return (packed & 0x40000000u) != 0; }
+
+/// What pressing a pet action changes on the client before it is sent
+/// (0x005d4210): a stance becomes the react (0x005d2ff0), stay or follow the
+/// command (0x005d3020), attack the attacking flag - each followed by
+/// PET_BAR_UPDATE. Nothing for a spell or dismiss.
+struct PetLocalState {
+    enum Kind : uint8_t { None, React, Command, Attack } kind = None;
+    uint8_t value = 0;
+};
+[[nodiscard]] constexpr PetLocalState petLocalState(uint32_t packed) {
+    const uint32_t state = (packed >> 24) & 0x3Fu;
+    const uint32_t id = packed & 0x00FFFFFFu;
+    if (state == 6) return {PetLocalState::React, static_cast<uint8_t>(id)};
+    if (state == 7 && id < 2) return {PetLocalState::Command, static_cast<uint8_t>(id)};
+    if (state == 7 && id == kAttack) return {PetLocalState::Attack, 1};
+    return {};
+}
+
+/// 0x005d5d20: a slot's autocast turned over - only one carrying the
+/// autocastable bit; anything else is left as it is.
+[[nodiscard]] constexpr uint32_t petSlotToggledAutocast(uint32_t packed) {
+    return petSlotAutocastAllowed(packed) ? packed ^ 0x40000000u : packed;
+}
+
+/// Whether a pet spell goes into the pet's spellbook (0x00542ee0): not one
+/// with Attributes 0x80 (hidden on the client) nor AttributesEx4 0x8000 -
+/// the scaling and "(DND)" passives every summoned demon carries.
+[[nodiscard]] constexpr bool petSpellInBook(uint32_t attributes, uint32_t attributesEx4) {
+    return (attributes & 0x80u) == 0 && (attributesEx4 & 0x8000u) == 0;
+}
+
 } // namespace pet
 } // namespace game
 } // namespace wowee
