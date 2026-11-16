@@ -3241,6 +3241,10 @@ public:
     /// 0x00729620: whether the client offers this unit's services - its
     /// service cursor - at all.
     bool npcServiceOffered(uint64_t guid) const;
+    /// 0x005220b0: the object the client makes the mouseover while its cursor
+    /// is turned off - the best in front of the mover by 0x00519e80's gates
+    /// (game/soft_interact.hpp); 0 for none.
+    uint64_t softInteractTarget();
     /// 0x00408520: on a loading screen, CMSG_KEEP_ALIVE every thirty seconds.
     /// Starting (0x0040a990) sets the first one thirty seconds out; each
     /// progress step after sends one once that time has come.

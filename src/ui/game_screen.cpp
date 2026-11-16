@@ -2143,7 +2143,12 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
         }
     }
     worldMouseover_ = 0;
-    if (!io.WantCaptureMouse && !frameXmlOwnsMouse() && !gameHandler.isGroundTargeting()) {
+    if (gamepadControls().cursorTurnedOff()) {
+        // The cursor off: the mouseover is the object most nearly ahead of
+        // the mover that would answer it (0x005220b0 -> 0x00519e80), not
+        // one under a pointer.
+        worldMouseover_ = gameHandler.softInteractTarget();
+    } else if (!io.WantCaptureMouse && !frameXmlOwnsMouse() && !gameHandler.isGroundTargeting()) {
         auto* renderer = services_.renderer;
         auto* camera = renderer ? renderer->getCamera() : nullptr;
         auto* window = services_.window;

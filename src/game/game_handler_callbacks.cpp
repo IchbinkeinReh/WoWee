@@ -6,6 +6,7 @@
 #include "game/spell_rank.hpp"
 #include "game/pet_action.hpp"
 #include "game/unit_combat.hpp"
+#include "game/soft_interact.hpp"
 #include "game/vehicle_mover.hpp"
 #include "game/unit_name_rules.hpp"
 #include "rendering/mount_transition.hpp"
@@ -4170,6 +4171,93 @@ bool GameHandler::npcServiceOffered(uint64_t guid) const {
     a.reactionToPlayer = toPlayer;
     a.playerReaction = fromPlayer;
     return npc_interaction::serviceOffered(a);
+}
+
+uint64_t GameHandler::softInteractTarget() {
+    namespace si = soft_interact;
+    auto playerEntity = getEntityManager().getEntity(playerGuid);
+    const auto* player = dynamic_cast<const Unit*>(playerEntity.get());
+    if (!player) return 0;
+    // The mover (0x006dd060), else the player: where the search stands and
+    // the way it faces (vfunc +0x2c, +0x34).
+    const uint64_t moverGuid = activeMover() != 0 ? activeMover() : playerGuid;
+    auto moverEntity = getEntityManager().getEntity(moverGuid);
+    if (!moverEntity) moverEntity = playerEntity;
+    const bool moverIsPlayer = moverEntity->getGuid() == playerGuid;
+    const glm::vec3 from = core::coords::canonicalToServer(
+        moverIsPlayer ? glm::vec3(movementInfo.x, movementInfo.y, movementInfo.z)
+                      : glm::vec3(moverEntity->getX(), moverEntity->getY(), moverEntity->getZ()));
+    si::Asker ask;
+    ask.facing = core::coords::canonicalToServerYaw(moverIsPlayer ? movementInfo.orientation
+                                                                  : moverEntity->getOrientation());
+    ask.playerIsMover = moverIsPlayer;
+    ask.playerPacified = (player->getUnitFlags() & 0x20000u) != 0;
+    ask.hasControl = isServerMovementAllowed();
+
+    // The gather spells the player knows (0x00542xxx as each is learned):
+    // SKINNING (95) by its kind - 0 skinning, 1 herbs, 2 ore, 3 parts - and
+    // SKIN_PLAYER_CORPSE (116).
+    std::array<uint32_t, 4> gather{};
+    loadSpellNameCache();
+    for (const uint32_t id : getKnownSpells()) {
+        const auto it = spellNameCache_.find(id);
+        if (it == spellNameCache_.end()) continue;
+        for (int e = 0; e < 3; ++e)
+            if (it->second.effectIds[e] == 95 && it->second.effectMiscValues[e] < 4)
+                gather[it->second.effectMiscValues[e]] = id;
+    }
+    const bool looting = isLootWindowOpen();
+    const uint64_t lootObject = looting ? getCurrentLoot().lootGuid : 0;
+    const float playerReach = player->getCombatReach();
+    std::vector<si::Candidate> objects;
+    objects.reserve(getEntityManager().getEntities().size());
+    for (const auto& [guid, e] : getEntityManager().getEntities()) {
+        if (!e) continue;
+        si::Candidate c;
+        c.guid = guid;
+        c.isMover = guid == moverEntity->getGuid();
+        const glm::vec3 at = guid == playerGuid
+            ? core::coords::canonicalToServer(glm::vec3(movementInfo.x, movementInfo.y, movementInfo.z))
+            : core::coords::canonicalToServer(glm::vec3(e->getX(), e->getY(), e->getZ()));
+        c.dx = at.x - from.x;
+        c.dy = at.y - from.y;
+        c.dz = at.z - from.z;
+        if (e->getType() == ObjectType::GAMEOBJECT) {
+            c.kind = si::Kind::GameObject;
+            // The handler's +0x18 and +0x1c: clickable, usable now.
+            c.goUsable = gameObjectPointer(guid).interactive;
+        } else if (e->isUnit()) {
+            const auto& u = static_cast<const Unit&>(*e);
+            c.kind = si::Kind::Unit;
+            c.serviceOffered = npcServiceOffered(guid);
+            c.npcFlags = u.getNpcFlags();
+            c.combatReach = u.getCombatReach();
+            const uint32_t dyn = u.getDynamicFlags();
+            // 0x00717b60: dead and lootable.
+            c.lootableDead = u.getHealth() < 1 && (dyn & UNIT_DYNFLAG_LOOTABLE) != 0;
+            // 0x006d5a60: within the larger of five yards and both reaches
+            // and a third, while the player loots nothing and is not stunned.
+            const float reach = std::max(5.0f, u.getCombatReach() + playerReach + 4.0f / 3.0f);
+            c.playerMayLoot = c.lootableDead && !looting && (player->getUnitFlags() & 0x40000u) == 0 &&
+                              c.dx * c.dx + c.dy * c.dy + c.dz * c.dz <= reach * reach;
+            c.playersLootTarget = lootObject == guid;
+            // UNIT_FLAG_SKINNABLE with the player's spell for its kind.
+            if ((u.getUnitFlags() & 0x4000000u) != 0 && e->getType() == ObjectType::UNIT) {
+                // 0x00715e50: its kind by the creature's type flags.
+                uint32_t kind = 0;
+                const auto& infos = getCreatureInfoCache();
+                if (auto it = infos.find(u.getEntry()); it != infos.end()) {
+                    const uint32_t tf = it->second.typeFlags;
+                    kind = (tf & 0x100u) ? 1u : (tf & 0x200u) ? 2u : (tf & 0x8000u) ? 3u : 0u;
+                }
+                if (gather[kind] != 0 && spellHandler_) c.gatherReach = spellHandler_->getSpellMaxRange(gather[kind]);
+            }
+            // 0x00729a70: one the player may fight, alive or showing dead.
+            c.attackable = (u.getHealth() > 0 || (dyn & UNIT_DYNFLAG_DEAD) != 0) && unitMayAttack(playerGuid, guid);
+        }
+        objects.push_back(c);
+    }
+    return si::pick(ask, objects);
 }
 
 bool GameHandler::clickUnitBeyondHellos(uint64_t guid) {
