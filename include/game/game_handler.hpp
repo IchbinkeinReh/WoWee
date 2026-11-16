@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/achievement_tracking.hpp"
 #include "game/npc_interaction.hpp"
 #include "game/tutorials.hpp"
 #include "game/item_text.hpp"   // ItemLinkInstance - the numbers an item link carries
@@ -4148,10 +4149,24 @@ public:
         for (uint32_t id : earnedAchievements_) total += getAchievementPoints(id);
         return total;
     }
-    const std::unordered_set<uint32_t>& getTrackedAchievements() const { return trackedAchievements_; }
-    void setAchievementTracked(uint32_t id, bool tracked) {
-        if (tracked) trackedAchievements_.insert(id); else trackedAchievements_.erase(id);
+    /// The watched achievements in the order they were added (0x005b2040).
+    const std::vector<uint32_t>& getTrackedAchievements() const { return trackedAchievements_; }
+    bool isAchievementTracked(uint32_t id) const {
+        return std::find(trackedAchievements_.begin(), trackedAchievements_.end(), id) !=
+               trackedAchievements_.end();
     }
+    /// Track one (0x005b23e0): on the end of the list, at most ten; true when
+    /// the client raises TRACKED_ACHIEVEMENT_UPDATE, which it does for one
+    /// already tracked too, but not when the list is full.
+    bool trackAchievement(uint32_t id) {
+        return achievement_tracking::track(trackedAchievements_, id) !=
+               achievement_tracking::TrackResult::Full;
+    }
+    /// Stop tracking one (0x005b24d0); true when it was tracked.
+    bool untrackAchievement(uint32_t id) {
+        return achievement_tracking::untrack(trackedAchievements_, id);
+    }
+    void clearTrackedAchievements() { trackedAchievements_.clear(); }
     /// An achievement's reward line (Achievement.dbc Reward), or empty.
     const std::string& getAchievementRewardText(uint32_t id) const {
         auto it = achievementRewardCache_.find(id);
@@ -7169,7 +7184,7 @@ private:
     std::unordered_map<uint32_t, AchievementCriterionIndex> achievementCriterionById_;
     bool achievementCriteriaLoaded_ = false;
     // Client-side, like the quest tracker's set - nothing is sent for it.
-    std::unordered_set<uint32_t> trackedAchievements_;
+    std::vector<uint32_t> trackedAchievements_;
     bool achievementNameCacheLoaded_ = false;
     // Set of achievement IDs earned by the player (populated from SMSG_ALL_ACHIEVEMENT_DATA)
     std::unordered_set<uint32_t> earnedAchievements_;

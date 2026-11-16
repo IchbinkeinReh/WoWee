@@ -15785,6 +15785,31 @@ void LuaEngine::fireEventWith(const std::string& eventName, int nargs,
     }
     if (eventName == "TRADE_SHOW") wowee::addons::onTradeShown(L_);
 
+    // The tracked achievements, read back from trackedAchievements as the
+    // character's settings come in (0x005128d0 -> 0x005b3840: each id put on
+    // the list as AddTrackedAchievement would, event and all), and written
+    // to it after PLAYER_LOGOUT (0x005b1fa0) before the list goes with the
+    // rest of the achievement data (0x005b4f00). A list already held is a
+    // reload, not a login.
+    if (eventName == "PLAYER_LOGIN" && gameHandler_ &&
+        gameHandler_->getTrackedAchievements().empty()) {
+        for (uint32_t id : game::achievement_tracking::decode(
+                 storedCVarValue("trackedAchievements", ""))) {
+            if (gameHandler_->trackAchievement(id)) {
+                gameHandler_->fireAddonEvent("TRACKED_ACHIEVEMENT_UPDATE", {std::to_string(id)});
+            }
+        }
+    }
+    struct SaveTrackedAfter {
+        game::GameHandler* gh;
+        ~SaveTrackedAfter() {
+            if (!gh) return;
+            setStoredCVar("trackedAchievements",
+                          game::achievement_tracking::encode(gh->getTrackedAchievements()));
+            gh->clearTrackedAchievements();
+        }
+    } saveTrackedAfter{eventName == "PLAYER_LOGOUT" ? gameHandler_ : nullptr};
+
     // Combat lockdown is the flag these two events announce, and 0x00524600
     // moves it on the far side of each: leaving combat lifts it before
     // PLAYER_REGEN_ENABLED goes out, entering it locks only after every

@@ -2017,6 +2017,9 @@ register_test_target(test_font_em_scale)
 # pick used to be "whichever is longer", which answered a different question.
 wowee_add_test(test_quest_text SOURCES test_quest_text.cpp)
 
+# The tracked-achievement list and the trackedAchievements CVar it is saved in.
+wowee_add_test(test_achievement_tracking SOURCES test_achievement_tracking.cpp)
+
 # ── test_interface_text_lines ────────────────────────────────
 # How many lines a label takes, measured on demand rather than read off the
 # last frame. The quest tracker sizes every row from that answer, and a stale

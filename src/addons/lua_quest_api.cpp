@@ -7889,7 +7889,7 @@ void registerQuestLuaAPI(lua_State* L) {
                 {"IsTrackedAchievement", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-            lua_pushboolean(L, gh && gh->getTrackedAchievements().count(id) ? 1 : 0);
+            lua_pushboolean(L, gh && gh->isAchievementTracked(id) ? 1 : 0);
             return 1;
         }},
                 {"AddTrackedAchievement", [](lua_State* L) -> int {
@@ -7906,7 +7906,9 @@ void registerQuestLuaAPI(lua_State* L) {
                 if (!known) return luaL_error(L, "Usage: AddTrackedAchievement(achievementID)");
             }
             const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-            if (gh && id) { gh->setAchievementTracked(id, true); gh->fireAddonEvent("TRACKED_ACHIEVEMENT_UPDATE", {std::to_string(id)}); }
+            // 0x005b23e0: the event goes out for an id already tracked as
+            // well, and not when ten are tracked already.
+            if (gh && id && gh->trackAchievement(id)) gh->fireAddonEvent("TRACKED_ACHIEVEMENT_UPDATE", {std::to_string(id)});
             return 0;
         }},
                 {"RemoveTrackedAchievement", [](lua_State* L) -> int {
@@ -7915,7 +7917,8 @@ void registerQuestLuaAPI(lua_State* L) {
                 return luaL_error(L, "Usage: RemoveTrackedAchievement(achievementID)");
             auto* gh = getGameHandler(L);
             const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-            if (gh && id) { gh->setAchievementTracked(id, false); gh->fireAddonEvent("TRACKED_ACHIEVEMENT_UPDATE", {std::to_string(id)}); }
+            // 0x005b24d0: the event only when it was tracked.
+            if (gh && id && gh->untrackAchievement(id)) gh->fireAddonEvent("TRACKED_ACHIEVEMENT_UPDATE", {std::to_string(id)});
             return 0;
         }},
                 {"GetNumTrackedAchievements", [](lua_State* L) -> int {
