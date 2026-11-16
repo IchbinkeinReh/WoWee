@@ -3622,6 +3622,20 @@ void Renderer::update(float deltaTime) {
         blobShadowRenderer->prepareSelection(circle, selectionCircle_ ? selectionCircle_->color : glm::vec4(0.0f),
                                              camera ? camera->getViewProjectionMatrix() : glm::mat4(1.0f),
                                              terrainManager.get(), wmoRenderer.get(), m2Renderer.get());
+        // The pet's ring (0x00725bf0), laid the same way about the pet.
+        std::optional<blob_shadow::Projection> pulseCircle;
+        glm::vec4 pulseColor(0.0f);
+        if (petPulseGuid_ != 0 && selectionCirclePlace_ && camera) {
+            if (const auto place = selectionCirclePlace_(petPulseGuid_)) {
+                if (const auto pulse = selection_circle::petPulse(place->second, petPulseMs_)) {
+                    pulseCircle = selection_circle::project(place->first, pulse->radius, camera->getPosition());
+                    pulseColor = pulse->color;
+                }
+            }
+        }
+        blobShadowRenderer->preparePetPulse(pulseCircle, pulseColor,
+                                            camera ? camera->getViewProjectionMatrix() : glm::mat4(1.0f),
+                                            terrainManager.get(), wmoRenderer.get(), m2Renderer.get());
         // A spell's circle on the place under the cursor (0x004f8a40).
         std::optional<blob_shadow::Projection> spellCircle;
         if (spellTargetCircle_) {

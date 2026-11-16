@@ -4114,6 +4114,8 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
     if (handler) handler->onValuesUpdate(block, entity);
 
     if (watchesTarget && unitTargetGuid(*entity) != oldTarget) {
+        // 0x00716900: the time it moved, which the pet's ring reads.
+        if (auto* unit = dynamic_cast<Unit*>(entity.get())) unit->noteTargetChanged(core::appTimeSeconds());
         // The token is not decoration: the interface ignores a unit event whose
         // argument is not the unit it is showing, so a change said about nobody
         // reaches nothing. Once for every token naming the unit, as 0x0060bf10

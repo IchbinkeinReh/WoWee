@@ -935,6 +935,11 @@ void GameScreen::render(game::GameHandler& gameHandler) {
                 ghostOpacityLastInstanceId_ = charInstId;
             }
         }
+        // The pet's ring for a second after it is given a target (0x00725bf0).
+        if (const auto pulse = gameHandler.petPulse())
+            renderer->setPetPulse(pulse->first, pulse->second);
+        else
+            renderer->setPetPulse(0, 0);
         if (gameHandler.hasTarget()) {
             auto target = gameHandler.getTarget();
             if (target) {

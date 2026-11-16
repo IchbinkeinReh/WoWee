@@ -1552,6 +1552,10 @@ public:
     std::optional<GroundTargetAim> aimGroundTarget(std::optional<ground_target::Place> place);
     void cancelAura(uint32_t spellId);
     void cancelOpenStableAuras();
+    /// 0x00725bf0's ring: the player's charm, else its summon, and the
+    /// milliseconds since its UNIT_FIELD_TARGET was written, while that is
+    /// under a second.
+    std::optional<std::pair<uint64_t, int>> petPulse() const;
     void dismissPet();
     void renamePet(const std::string& newName);
     bool hasPet() const { return petGuid_ != 0; }

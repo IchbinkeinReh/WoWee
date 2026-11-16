@@ -368,6 +368,9 @@ public:
     /// circle wobbling under a vendor on the deck.
     void setSelectionCircleTarget(uint64_t guid, const glm::vec4& color);
     void clearSelectionCircle();
+    /// The ring on the player's pet (selection_circle::petPulse), `elapsedMs`
+    /// into its second; cleared with a zero guid.
+    void setPetPulse(uint64_t guid, int elapsedMs) { petPulseGuid_ = guid; petPulseMs_ = elapsedMs; }
     /// The unit's place and the circle's radius, or none while it is not
     /// drawn (Application::getSelectionCircle).
     using SelectionCirclePlace = std::function<std::optional<std::pair<glm::vec3, float>>(uint64_t)>;
@@ -552,6 +555,8 @@ private:
     };
     std::optional<SelectionCircle> selectionCircle_;
     uint64_t selectionTarget_ = 0;
+    uint64_t petPulseGuid_ = 0;
+    int petPulseMs_ = 0;
     glm::vec4 selectionColor_{0.0f};
     SelectionCirclePlace selectionCirclePlace_;
     struct SpellTargetCircle {

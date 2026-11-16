@@ -129,6 +129,33 @@ inline std::optional<blob_shadow::Projection> project(const glm::vec3& unit, flo
     return p;
 }
 
+/// The ring 0x00725bf0 draws on the player's pet (the world frame's +0x388
+/// unit) for a second after the player's charm - else its summon - had its
+/// UNIT_FIELD_TARGET written (0x00716900 stamps +0x9e4): its radius eases
+/// from 1.5r + 2.3 down to the selection radius r by (1 - t)^3, and its
+/// colour is (0x60, 0x60, 0xff) with an alpha that rises as (4t)^2 over the
+/// first quarter second and falls as 1 - (4(t - 0.75))^2 over the last.
+struct Pulse {
+    float radius = 0.0f;
+    glm::vec4 color{0.0f};
+};
+inline std::optional<Pulse> petPulse(float r, int elapsedMs) {
+    if (elapsedMs < 0 || elapsedMs - 1000 >= 0) return std::nullopt;
+    const float t = static_cast<float>(elapsedMs) * 0.001f;
+    const float u = 1.0f - t;
+    Pulse p;
+    p.radius = ((r * 1.5f + 2.3f) - r) * u * u * u + r;
+    int alpha = 0xff;
+    if (t > 0.75f) {
+        const float f = (t - 0.75f) * 4.0f;
+        alpha = static_cast<int>(std::nearbyint((1.0f - f * f) * 255.0f));
+    } else if (t < 0.25f) {
+        alpha = static_cast<int>(std::nearbyint(t * 4.0f * t * 4.0f * 255.0f));
+    }
+    p.color = glm::vec4(96.0f / 255.0f, 96.0f / 255.0f, 1.0f, static_cast<float>(alpha & 0xff) / 255.0f);
+    return p;
+}
+
 /// The alpha ref the client sets for blend mode 3 (0x00ad8b7c[3]): texels
 /// with no alpha are not drawn.
 constexpr float kAlphaRef = 1.0f / 255.0f;

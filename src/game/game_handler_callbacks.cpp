@@ -1,3 +1,4 @@
+#include "core/app_clock.hpp"
 #include "game/ground_target.hpp"
 #include <array>
 #include <string_view>
@@ -3099,6 +3100,19 @@ void GameHandler::setPossessSpell(uint32_t spellId) {
     if (possessSpellId_ == spellId) return;
     possessSpellId_ = spellId;
     fireAddonEvent("UPDATE_BONUS_ACTIONBAR", {});  // event 0xb4
+}
+
+std::optional<std::pair<uint64_t, int>> GameHandler::petPulse() const {
+    const auto player = getEntityManager().getEntity(playerGuid);
+    if (!player) return std::nullopt;
+    uint64_t pet = guidFieldOf(*player, UF::UNIT_FIELD_CHARM);
+    if (pet == 0) pet = guidFieldOf(*player, UF::UNIT_FIELD_SUMMON);
+    const auto entity = pet != 0 ? getEntityManager().getEntity(pet) : nullptr;
+    const auto* unit = entity ? dynamic_cast<const Unit*>(entity.get()) : nullptr;
+    if (!unit || !unit->targetChangedAt()) return std::nullopt;
+    const int elapsedMs = static_cast<int>((core::appTimeSeconds() - *unit->targetChangedAt()) * 1000.0);
+    if (elapsedMs < 0 || elapsedMs >= 1000) return std::nullopt;
+    return std::make_pair(pet, elapsedMs);
 }
 
 void GameHandler::updatePossessSpell() {

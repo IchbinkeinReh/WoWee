@@ -167,6 +167,7 @@ void BlobShadowRenderer::shutdown() {
     destroy(device, selectionPipeline_);
     selectionSet_ = VK_NULL_HANDLE;
     selectionDraw_.reset();
+    petPulseDraw_.reset();
     for (int i = 0; i < 2; ++i) {
         spellTargetTextures_[i].destroy(device, allocator);
         spellTargetSets_[i] = VK_NULL_HANDLE;
@@ -344,6 +345,7 @@ void BlobShadowRenderer::prepare(uint32_t frameIndex, const std::vector<blob_sha
                                  const WMORenderer* wmo, const M2Renderer* m2) {
     draws_.clear();
     selectionDraw_.reset();
+    petPulseDraw_.reset();
     spellTargetDraw_.reset();
     written_ = 0;
     frame_ = frameIndex % MAX_FRAMES_IN_FLIGHT;
@@ -380,6 +382,21 @@ void BlobShadowRenderer::prepareSelection(const std::optional<blob_shadow::Proje
     if (!frustum.intersectsAABB(circle->boxMin, circle->boxMax)) return;
     selectionDraw_ = gather(*circle, terrain, wmo, m2, dst);
     if (selectionDraw_) selectionDraw_->push.params = color;
+}
+
+void BlobShadowRenderer::preparePetPulse(const std::optional<blob_shadow::Projection>& circle,
+                                         const glm::vec4& color, const glm::mat4& viewProj,
+                                         const TerrainManager* terrain, const WMORenderer* wmo,
+                                         const M2Renderer* m2) {
+    petPulseDraw_.reset();
+    if (!circle || !vkCtx_ || !selectionPipeline_ || selectionSet_ == VK_NULL_HANDLE) return;
+    auto* dst = static_cast<glm::vec3*>(vertexMapped_[frame_]);
+    if (!dst) return;
+    Frustum frustum;
+    frustum.extractFromMatrix(viewProj);
+    if (!frustum.intersectsAABB(circle->boxMin, circle->boxMax)) return;
+    petPulseDraw_ = gather(*circle, terrain, wmo, m2, dst);
+    if (petPulseDraw_) petPulseDraw_->push.params = color;
 }
 
 void BlobShadowRenderer::prepareSpellTarget(const std::optional<blob_shadow::Projection>& circle,
@@ -426,15 +443,18 @@ void BlobShadowRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet
 }
 
 void BlobShadowRenderer::renderSelection(VkCommandBuffer cmd, VkDescriptorSet perFrameSet) {
-    if (!selectionDraw_ || !selectionPipeline_ || !vertexBuffer_[frame_]) return;
+    if ((!selectionDraw_ && !petPulseDraw_) || !selectionPipeline_ || !vertexBuffer_[frame_]) return;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, selectionPipeline_);
     const VkDescriptorSet sets[2] = {perFrameSet, selectionSet_};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 2, sets, 0, nullptr);
     VkDeviceSize offset = 0;
     vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer_[frame_], &offset);
-    vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0, sizeof(Push), &selectionDraw_->push);
-    vkCmdDraw(cmd, selectionDraw_->vertexCount, 1, selectionDraw_->firstVertex, 0);
+    for (const auto* d : {&selectionDraw_, &petPulseDraw_}) {
+        if (!*d) continue;
+        vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(Push), &(*d)->push);
+        vkCmdDraw(cmd, (*d)->vertexCount, 1, (*d)->firstVertex, 0);
+    }
 }
 
 }  // namespace wowee::rendering
