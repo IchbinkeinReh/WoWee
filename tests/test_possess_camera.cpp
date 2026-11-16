@@ -1,14 +1,18 @@
-// Possession and the camera's pivot, as the client has them: a possessed
-// unit moves without its master (0x00729010, 0x006e2880 -> 0x004f6f50), and
-// the camera pivots at the followed model's Breath attachment under its
-// collision height (0x00604e00, 0x00718080).
+// Possession, the camera's pivot and the spellbook's tabs, as the client
+// has them: a possessed unit moves without its master (0x00729010,
+// 0x006e2880 -> 0x004f6f50), the camera pivots at the followed model's
+// Breath attachment under its collision height (0x00604e00, 0x00718080),
+// and a spell goes under its skill line unless SkillRaceClassInfo flag 0x80
+// files it under General (0x00542030, 0x0053ba40).
 #include <catch_amalgamated.hpp>
 
+#include "game/spell_book_tabs.hpp"
 #include "game/vehicle_mover.hpp"
 #include "rendering/camera_pivot.hpp"
 
 using Catch::Matchers::WithinAbs;
 namespace cp = wowee::rendering::camera_pivot;
+namespace tabs = wowee::game::spell_book_tabs;
 using wowee::game::vehicle::moverIsPossessed;
 
 namespace {
@@ -63,4 +67,23 @@ TEST_CASE("the pivot is held between 0.8333 and the ceiling", "[camera]") {
                WithinAbs(0.876871f, 1e-5));
     // No ceiling: 15.
     CHECK_THAT(cp::clampPivot(20.0f, 0.0f), WithinAbs(15.0f, 1e-6));
+}
+
+TEST_CASE("a spell goes under its skill line unless flag 0x80 sends it to General", "[spellbook]") {
+    // Demonology (354): SkillRaceClassInfo flags 0x410.
+    CHECK(tabs::tabSkillLine(354, 0x410u) == 354u);
+    // Mining (186), Cooking (185), riding (762): 0xa0, 0x80, 0x90.
+    CHECK(tabs::tabSkillLine(186, 0xa0u) == 0u);
+    CHECK(tabs::tabSkillLine(185, 0x80u) == 0u);
+    CHECK(tabs::tabSkillLine(762, 0x90u) == 0u);
+    // No row for this race and class, or no skill line: General.
+    CHECK(tabs::tabSkillLine(354, std::nullopt) == 0u);
+    CHECK(tabs::tabSkillLine(0, 0u) == 0u);
+}
+
+TEST_CASE("General stands first and the rest by name without case", "[spellbook]") {
+    CHECK(tabs::tabBefore(0, "Allgemein", 354, "Affliction"));
+    CHECK_FALSE(tabs::tabBefore(354, "Affliction", 0, "Allgemein"));
+    CHECK(tabs::tabBefore(355, "Affliction", 354, "demonology"));
+    CHECK_FALSE(tabs::tabBefore(354, "Demonology", 355, "affliction"));
 }

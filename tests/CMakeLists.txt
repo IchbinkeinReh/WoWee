@@ -3566,7 +3566,7 @@ wowee_add_test(test_vehicle_mover
 
 # ── test_possess_camera ──────────────────────────────
 # A possessed unit moves without its master, the camera's pivot on the model
-# it follows (0x00604e00, 0x00718080).
+# it follows (0x00604e00, 0x00718080), the spellbook's tabs (0x00542030).
 wowee_add_test(test_possess_camera
     SOURCES test_possess_camera.cpp)
 
