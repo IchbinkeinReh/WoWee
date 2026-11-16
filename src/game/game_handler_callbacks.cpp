@@ -5663,6 +5663,40 @@ std::vector<uint32_t> GameHandler::getPetBookSpells() const {
     return book;
 }
 
+uint32_t GameHandler::spellByName(std::string_view text, bool* pet) const {
+    loadSpellNameCache();
+    const auto candidate = [this](uint32_t id) {
+        const auto it = spellNameCache_.find(id);
+        const uint32_t level = it != spellNameCache_.end() ? it->second.spellLevel : 0;
+        return spell_rank::Candidate{id, getSpellName(id), getSpellRank(id), level};
+    };
+    std::vector<spell_rank::Candidate> known;
+    known.reserve(getKnownSpells().size());
+    for (const uint32_t id : getKnownSpells()) {
+        const auto it = spellNameCache_.find(id);
+        if (it != spellNameCache_.end() && !spell_rank::inNameList(it->second.attr)) continue;
+        known.push_back(candidate(id));
+    }
+    if (pet) *pet = false;
+    if (const uint32_t id = spell_rank::spellByName(known, text)) return id;
+    known.clear();
+    for (const uint32_t id : getPetBookSpells()) known.push_back(candidate(id));
+    const uint32_t id = spell_rank::spellByName(known, text);
+    if (pet) *pet = id != 0;
+    return id;
+}
+
+bool GameHandler::spellInPlayerBook(uint32_t spellId) const {
+    loadSpellNameCache();
+    const auto it = spellNameCache_.find(spellId);
+    if (it != spellNameCache_.end() && !spell_rank::inPlayerBook(it->second.attr, it->second.attrEx4)) return false;
+    // 0x008009b0: a companion or a mount goes to its own list instead.
+    for (const bool mounts : {false, true})
+        for (const Companion& c : getCompanions(mounts))
+            if (c.spellId == spellId) return false;
+    return true;
+}
+
 std::optional<uint32_t> GameHandler::getSpellAttributes(uint32_t spellId) const {
     if (spellId == 0) return std::nullopt;
     loadSpellNameCache();

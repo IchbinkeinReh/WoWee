@@ -355,6 +355,8 @@ private:
     /// How many events are being dispatched inside one another right now.
     /// Guards against two handlers triggering each other without end.
     int eventDepth_ = 0;
+    /// Time since the action bars' usability was last rescanned (dispatchOnUpdate).
+    float usabilityRescanTimer_ = 0.0f;
     std::string lastError_;
     unsigned long long chunkTimeoutMs_ = 0;
 

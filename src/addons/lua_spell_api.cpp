@@ -39,12 +39,12 @@ namespace wowee::addons {
 /// rank the known-spell set yielded first.
 uint32_t highestKnownRankByName(game::GameHandler* gh, const std::string& name) {
     // 0x00540200: the name's highest rank by the number in its rank text
-    // (0x0053b540), or "Name(Rank)" for one rank - in any client language.
-    std::vector<game::spell_rank::Candidate> known;
-    known.reserve(gh->getKnownSpells().size());
-    for (uint32_t sid : gh->getKnownSpells())
-        known.push_back({sid, gh->getSpellName(sid), gh->getSpellRank(sid)});
-    return game::spell_rank::spellByName(known, name);
+    // (0x0053b540), or "Name(Rank)" for one rank - in any client language -
+    // among the spells of the client's name list (no hidden talent spell, no
+    // recipe). The player's own here; the pet's are not cast from this path.
+    bool pet = false;
+    const uint32_t id = gh->spellByName(name, &pet);
+    return pet ? 0 : id;
 }
 
 
@@ -936,36 +936,15 @@ static int lua_GetNumSpellTabs(lua_State* L) {
 // is what it shows with ShowAllSpellRanks off (SpellBook_GetTabInfo takes
 // GetSpellTabInfo's last pair, SpellBook_GetSpellID maps back through
 // GetKnownSlotFromHighestRankSlot). For each tab, the indices into its list
-// that survive: of the spells sharing a name whose rank carries a number
-// ("Rank 5"), the highest; every spell without one. Both answered the whole
-// tab, so the book showed every rank whatever the box said.
+// that survive, as 0x0053ca70 builds them over the tab in book order: an
+// entry goes when the next has the same name and a rank with a number
+// (spell_rank::highestRankSlots).
 static std::vector<size_t> highestRankIndices(const game::GameHandler& gh,
                                               const std::vector<uint32_t>& spellIds) {
-    const auto rankNumber = [&](uint32_t id) {
-        int n = 0;
-        bool any = false;
-        for (char c : gh.getSpellRank(id)) {
-            if (c >= '0' && c <= '9') { n = n * 10 + (c - '0'); any = true; }
-            else if (any) break;
-        }
-        return any ? n : -1;
-    };
-    std::unordered_map<std::string, size_t> best;  // name -> index of its highest rank
-    for (size_t i = 0; i < spellIds.size(); ++i) {
-        const int r = rankNumber(spellIds[i]);
-        if (r < 0) continue;
-        const std::string& name = gh.getSpellName(spellIds[i]);
-        auto [it, inserted] = best.emplace(name, i);
-        if (!inserted && r > rankNumber(spellIds[it->second])) it->second = i;
-    }
-    std::vector<size_t> out;
-    out.reserve(spellIds.size());
-    for (size_t i = 0; i < spellIds.size(); ++i) {
-        if (rankNumber(spellIds[i]) < 0) { out.push_back(i); continue; }
-        auto it = best.find(gh.getSpellName(spellIds[i]));
-        if (it != best.end() && it->second == i) out.push_back(i);
-    }
-    return out;
+    std::vector<game::spell_rank::BookEntry> tab;
+    tab.reserve(spellIds.size());
+    for (const uint32_t id : spellIds) tab.push_back({gh.getSpellName(id), gh.getSpellRank(id)});
+    return game::spell_rank::highestRankSlots(tab);
 }
 
 // GetSpellTabInfo(tabIndex) → name, texture, offset, numSpells,
