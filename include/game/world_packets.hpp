@@ -4152,7 +4152,7 @@ public:
                                   uint8_t levelMin, uint8_t levelMax,
                                   uint32_t invTypeMask, uint32_t itemClass,
                                   uint32_t itemSubClass, uint32_t quality,
-                                  uint8_t usableOnly, uint8_t exactMatch,
+                                  uint8_t usableOnly, uint8_t getAll,
                                   const std::vector<AuctionSortKey>& sort = {});
 };
 

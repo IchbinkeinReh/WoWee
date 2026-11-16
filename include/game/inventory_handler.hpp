@@ -1,6 +1,7 @@
 #pragma once
 
 #include "game/world_packets.hpp"
+#include "game/auction_query_gate.hpp"
 #include "game/opcode_table.hpp"
 #include "game/item_text.hpp"      // ItemLinkInstance - what a trade row's link carries
 #include "game/inventory.hpp"
@@ -757,7 +758,7 @@ public:
     void auctionSearch(const std::string& name, uint8_t levelMin, uint8_t levelMax,
                        uint32_t quality, uint32_t itemClass, uint32_t itemSubClass,
                        uint32_t invTypeMask, uint8_t usableOnly, uint32_t offset = 0,
-                       const std::vector<AuctionSortKey>& sort = {});
+                       const std::vector<AuctionSortKey>& sort = {}, bool getAll = false);
     void auctionSellItem(int backpackIndex, uint32_t bid,
                          uint32_t buyout, uint32_t duration);
     // Post an auction for an item identified by its server GUID, so items in any
@@ -793,6 +794,14 @@ public:
     int getAuctionActiveTab() const { return auctionActiveTab_; }
     void setAuctionActiveTab(int tab) { auctionActiveTab_ = tab; }
     float getAuctionSearchDelay() const { return auctionSearchDelayTimer_; }
+    /// Whether a getAll query may go out: fifteen minutes since the last one
+    /// this session (0x0059c740, 0x0059bcf0 at 0x00c0f418).
+    bool auctionGetAllAllowed() const;
+    /// The selected row (from 0) of list 0 "list", 1 "owner" or 2 "bidder",
+    /// kept as the auction's id (0x0059b2e0/0x0059b320/0x0059b360) and found
+    /// again by it (0x0059b3a0/0x0059b3e0/0x0059b420); -1 for none.
+    int auctionSelectedRow(int list) const;
+    void setAuctionSelectedRow(int list, int row);
     // Ticked from GameHandler::update - this member is the authoritative
     // timer (GameHandler used to decrement its own never-set copy, leaving
     // the search button disabled forever after the first search).
@@ -1225,6 +1234,11 @@ private:
     AuctionListResult auctionBidderResults_;
     int auctionActiveTab_ = 0;
     float auctionSearchDelayTimer_ = 0.0f;
+    /// When the last getAll query went (steady milliseconds, 0 never).
+    uint64_t auctionGetAllSentMs_ = 0;
+    /// Each list's selected auction id (0x00acf62c, 0x00acf630, 0x00acf634).
+    std::array<uint32_t, 3> auctionSelectedIds_{kNoAuctionSelected, kNoAuctionSelected,
+                                                kNoAuctionSelected};
     struct AuctionSearchParams {
         std::string name;
         uint8_t levelMin = 0, levelMax = 0;

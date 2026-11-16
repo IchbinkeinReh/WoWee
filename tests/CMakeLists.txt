@@ -2023,6 +2023,9 @@ wowee_add_test(test_achievement_tracking SOURCES test_achievement_tracking.cpp)
 # The camera CVars' registered ranges, which SetCVar and the console enforce.
 wowee_add_test(test_camera_cvar_ranges SOURCES test_camera_cvar_ranges.cpp)
 
+# The auction house's getAll interval and the selection kept per list.
+wowee_add_test(test_auction_query_gate SOURCES test_auction_query_gate.cpp)
+
 # ── test_interface_text_lines ────────────────────────────────
 # How many lines a label takes, measured on demand rather than read off the
 # last frame. The quest tracker sizes every row from that answer, and a stale

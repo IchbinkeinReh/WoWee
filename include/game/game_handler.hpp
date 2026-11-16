@@ -4861,7 +4861,7 @@ public:
     void auctionSearch(const std::string& name, uint8_t levelMin, uint8_t levelMax,
                        uint32_t quality, uint32_t itemClass, uint32_t itemSubClass,
                        uint32_t invTypeMask, uint8_t usableOnly, uint32_t offset = 0,
-                       const std::vector<AuctionSortKey>& sort = {});
+                       const std::vector<AuctionSortKey>& sort = {}, bool getAll = false);
     void auctionSellItem(int backpackIndex, uint32_t bid,
                          uint32_t buyout, uint32_t duration);
     void auctionSellItems(const std::vector<std::pair<uint64_t, uint32_t>>& sources, uint32_t bid,

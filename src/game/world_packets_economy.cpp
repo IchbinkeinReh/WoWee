@@ -659,7 +659,7 @@ network::Packet AuctionListItemsPacket::build(
     uint8_t levelMin, uint8_t levelMax,
     uint32_t invTypeMask, uint32_t itemClass,
     uint32_t itemSubClass, uint32_t quality,
-    uint8_t usableOnly, uint8_t exactMatch,
+    uint8_t usableOnly, uint8_t getAll,
     const std::vector<AuctionSortKey>& sort)
 {
     network::Packet p(wireOpcode(Opcode::CMSG_AUCTION_LIST_ITEMS));
@@ -673,10 +673,10 @@ network::Packet AuctionListItemsPacket::build(
     p.writeUInt32(itemSubClass);
     p.writeUInt32(quality);
     p.writeUInt8(usableOnly);
-    p.writeUInt8(0);  // getAll (0 = normal search)
-    // WotLK has no exact-match field here; the next byte is the sort count.
-    // Keep the API argument for callers shared with older server profiles.
-    (void)exactMatch;
+    // getAll: every auction at once (QueryAuctionItems' tenth argument,
+    // 0x0059bcf0). WotLK has no exact-match field here; the next byte is the
+    // sort count.
+    p.writeUInt8(getAll);
 
     // The ordering, which used to be a hardcoded zero - no columns, no sort.
     // That is not a small loss: the browse tab does not sort what it already

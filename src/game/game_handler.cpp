@@ -1999,8 +1999,8 @@ void GameHandler::closeAuctionHouse() {
 void GameHandler::auctionSearch(const std::string& name, uint8_t levelMin, uint8_t levelMax,
                                  uint32_t quality, uint32_t itemClass, uint32_t itemSubClass,
                                  uint32_t invTypeMask, uint8_t usableOnly, uint32_t offset,
-                                 const std::vector<AuctionSortKey>& sort) {
-    if (inventoryHandler_) inventoryHandler_->auctionSearch(name, levelMin, levelMax, quality, itemClass, itemSubClass, invTypeMask, usableOnly, offset, sort);
+                                 const std::vector<AuctionSortKey>& sort, bool getAll) {
+    if (inventoryHandler_) inventoryHandler_->auctionSearch(name, levelMin, levelMax, quality, itemClass, itemSubClass, invTypeMask, usableOnly, offset, sort, getAll);
 }
 
 void GameHandler::auctionSellItem(int backpackIndex, uint32_t bid,

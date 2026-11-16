@@ -4710,9 +4710,17 @@ static const game::AuctionListResult& auctionListFor(game::GameHandler* gh,
     return gh->getAuctionBrowseResults();
 }
 
-/// The panel's own state: which row is selected, and which bag slot is sitting
-/// in the sell box. Neither is anything the client has an opinion about.
-static int& auctionSelection() { static int sel = 0; return sel; }
+/// Which of the three lists a type names, as SetSelectedAuctionItem and
+/// GetSelectedAuctionItem compare it (0x0059c830, 0x0059c920): "list" 0,
+/// "owner" 1, "bidder" 2, anything else -1. Case-insensitive, as 0x0076e780.
+static int auctionListIndex(const char* type) {
+    std::string t = type ? type : "";
+    for (char& c : t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (t == "owner") return 1;
+    if (t == "bidder") return 2;
+    if (t == "list") return 0;
+    return -1;
+}
 
 /// The item sitting in the sell box, as the flat (container, slot) pair the
 /// cursor speaks in. Kept in that form rather than as a backpack index so a
@@ -7140,13 +7148,14 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // send and none of which the interface could reach.
                 {"CanSendAuctionQuery", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            // Two returns: whether a search may be sent, and whether a
-            // getAll sweep may be. The second is always no - it asks the
-            // server for every auction at once and is rate-limited to once
-            // every fifteen minutes even where it is allowed.
+            // Two returns (0x0059c740): whether a search may be sent, and
+            // whether a getAll sweep may be - the same, and fifteen minutes
+            // since the last getAll this session.
             const bool open = gh && gh->isAuctionHouseOpen();
-            luaPushOneOrNil(L, open && gh->getAuctionSearchDelay() <= 0.0f);
-            luaPushOneOrNil(L, 0);
+            const bool may = open && gh->getAuctionSearchDelay() <= 0.0f;
+            const auto* inv = gh ? gh->getInventoryHandler() : nullptr;
+            luaPushOneOrNil(L, may);
+            luaPushOneOrNil(L, may && inv && inv->auctionGetAllAllowed());
             return 2;
         }},
                 // QueryAuctionItems(name, minLevel, maxLevel, invType, class,
@@ -7206,8 +7215,17 @@ void registerInventoryLuaAPI(lua_State* L) {
             // SortAuctionApplySort, so nothing sorts the browse list locally
             // and a query that leaves the sort block empty leaves the headers
             // inert.
+            // The tenth, a boolean, asks for every auction at once; refused
+            // without a word inside fifteen minutes of the last one, or while
+            // a search may not go (0x0059bcf0).
+            const bool getAll = lua_isboolean(L, 10) && lua_toboolean(L, 10);
+            if (getAll) {
+                const auto* handler = gh->getInventoryHandler();
+                if (gh->getAuctionSearchDelay() > 0.0f || !handler || !handler->auctionGetAllAllowed())
+                    return 0;
+            }
             gh->auctionSearch(name, lo, hi, quality, cls, sub, inv, usable,
-                              page * 50, wireAuctionSort("list"));
+                              page * 50, wireAuctionSort("list"), getAll);
             return 0;
         }},
                 {"GetOwnerAuctionItems", [](lua_State* L) -> int {
@@ -7492,12 +7510,24 @@ void registerInventoryLuaAPI(lua_State* L) {
         }},
                 {"SetSelectedAuctionItem", [](lua_State* L) -> int {
             if (!lua_isstring(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: SetSelectedAuctionItem(\"type\", index)");   // 0x0059c830
-            auctionSelection() = static_cast<int>(luaL_optnumber(L, 2, 0));
+            // Kept per list, as the auction's id: the row's, or none past
+            // the list's end; an unknown type does nothing.
+            auto* gh = getGameHandler(L);
+            auto* inv = gh ? gh->getInventoryHandler() : nullptr;
+            const int list = auctionListIndex(lua_tostring(L, 1));
+            const int row = static_cast<int>(std::lround(lua_tonumber(L, 2))) - 1;
+            if (inv && list >= 0) inv->setAuctionSelectedRow(list, row);
             return 0;
         }},
                 {"GetSelectedAuctionItem", [](lua_State* L) -> int {
             if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetSelectedAuctionItem(\"type\")");   // 0x0059c920
-            lua_pushnumber(L, auctionSelection());
+            // The row holding that list's selected auction, from 1; 0 when
+            // it is in none of the rows; 1 for a type that names no list.
+            auto* gh = getGameHandler(L);
+            const auto* inv = gh ? gh->getInventoryHandler() : nullptr;
+            const int list = auctionListIndex(lua_tostring(L, 1));
+            if (list < 0) { lua_pushnumber(L, 1); return 1; }
+            lua_pushnumber(L, (inv ? inv->auctionSelectedRow(list) : -1) + 1);
             return 1;
         }},
                 // CalculateAuctionDeposit(minutes [, count]) → copper

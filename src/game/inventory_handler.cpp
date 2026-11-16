@@ -5121,8 +5121,40 @@ void InventoryHandler::openAuctionHouse(uint64_t guid) {
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("AUCTION_HOUSE_SHOW", {});
 }
 
+bool InventoryHandler::auctionGetAllAllowed() const {
+    const auto now = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count()) + 1;
+    return game::auctionGetAllAllowed(auctionGetAllSentMs_, now);
+}
+
+namespace {
+std::vector<uint32_t> auctionIdsOf(const AuctionListResult& list) {
+    std::vector<uint32_t> ids;
+    ids.reserve(list.auctions.size());
+    for (const auto& a : list.auctions) ids.push_back(a.auctionId);
+    return ids;
+}
+}  // namespace
+
+int InventoryHandler::auctionSelectedRow(int list) const {
+    if (list < 0 || list > 2) return -1;
+    const AuctionListResult& rows = list == 1 ? auctionOwnerResults_
+                                  : list == 2 ? auctionBidderResults_ : auctionBrowseResults_;
+    return game::auctionSelectionRow(auctionIdsOf(rows), auctionSelectedIds_[static_cast<size_t>(list)]);
+}
+
+void InventoryHandler::setAuctionSelectedRow(int list, int row) {
+    if (list < 0 || list > 2) return;
+    const AuctionListResult& rows = list == 1 ? auctionOwnerResults_
+                                  : list == 2 ? auctionBidderResults_ : auctionBrowseResults_;
+    auctionSelectedIds_[static_cast<size_t>(list)] = game::auctionSelectionFor(auctionIdsOf(rows), row);
+}
+
 void InventoryHandler::closeAuctionHouse() {
     auctionOpen_ = false;
+    // 0x0059dfb0: the three selections go with the window.
+    auctionSelectedIds_.fill(kNoAuctionSelected);
     auctioneerGuid_ = 0;
     auctionHouseId_ = 0;   // 0x0059f150
     // The three lists go with the window (0x0059f150 frees 0xc0f448,
@@ -5137,7 +5169,7 @@ void InventoryHandler::closeAuctionHouse() {
 void InventoryHandler::auctionSearch(const std::string& name, uint8_t levelMin, uint8_t levelMax,
                                       uint32_t quality, uint32_t itemClass, uint32_t itemSubClass,
                                       uint32_t invTypeMask, uint8_t usableOnly, uint32_t offset,
-                                      const std::vector<AuctionSortKey>& sort) {
+                                      const std::vector<AuctionSortKey>& sort, bool getAll) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || auctioneerGuid_ == 0) return;
     lastAuctionSearch_ = {.name = name, .levelMin = levelMin, .levelMax = levelMax, .quality = quality, .itemClass = itemClass, .itemSubClass = itemSubClass,
                           .invTypeMask = invTypeMask, .usableOnly = usableOnly, .offset = offset, .sort = sort};
@@ -5150,9 +5182,15 @@ void InventoryHandler::auctionSearch(const std::string& name, uint8_t levelMin, 
              " usable=", static_cast<int>(usableOnly));
     auto packet = AuctionListItemsPacket::build(auctioneerGuid_, offset, name,
                                                   levelMin, levelMax, invTypeMask,
-                                                  itemClass, itemSubClass, quality, usableOnly, 0,
-                                                  sort);
+                                                  itemClass, itemSubClass, quality, usableOnly,
+                                                  getAll ? 1 : 0, sort);
     owner_.getSocket()->send(packet);
+    // 0x0059bcf0: a getAll query starts the fifteen minutes before the next.
+    if (getAll) {
+        auctionGetAllSentMs_ = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count()) + 1;
+    }
     // Blocks the Search button until the answer comes back. The result carries
     // the server's own wait and replaces this with it, so five seconds is only
     // what applies while a reply is outstanding - and on Classic and TBC, whose
