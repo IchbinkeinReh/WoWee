@@ -2349,6 +2349,7 @@ void QuestHandler::handleGossipMessage(network::Packet& packet) {
     if (!ok) return;
     if (questDetailsOpen_) return; // Don't reopen gossip while viewing quest
     gossipWindowOpen_ = true;
+    gossipIsQuestGreeting_ = false;
     // 0x0058a550: a gossip window with another object sets it.
     if (currentGossip_.npcGuid != gossipBefore) owner_.setInteractionObject(currentGossip_.npcGuid, go_interaction::Window::Gossip);
     // Gossip carries its text as an npc-text id, not inline, so any greeting
@@ -2452,6 +2453,7 @@ void QuestHandler::handleQuestgiverQuestList(network::Packet& packet) {
 
     currentGossip_ = std::move(data);
     gossipWindowOpen_ = true;
+    gossipIsQuestGreeting_ = true;
     // The quest frame's greeting (0x0058c5a0 with 0), which wowee keeps as
     // its gossip window.
     owner_.setQuestInteractionObject(currentGossip_.npcGuid, go_interaction::Window::Gossip);
@@ -2781,6 +2783,27 @@ void QuestHandler::handleQuestDetails(network::Packet& packet) {
     if (!ok) {
         LOG_WARNING("Failed to parse SMSG_QUESTGIVER_QUEST_DETAILS");
         return;
+    }
+    // A quest a player shares while a quest window is already open - the
+    // greeting list, details, progress or reward (0x00c0d648, set by
+    // 0x0058c5a0) - is not shown: the sharer (or the giver) is told the
+    // player is busy, MSG_QUEST_PUSH_RESULT with the quest and 4, and the
+    // open window stays (0x006d0460).
+    const bool questFrameOpen = questDetailsOpen_ || questRequestItemsOpen_ || questOfferRewardOpen_ ||
+                                (gossipWindowOpen_ && gossipIsQuestGreeting_);
+    if (questFrameOpen && data.npcGuid != 0) {
+        const auto giver = owner_.getEntityManager().getEntity(data.npcGuid);
+        if (giver && giver->getType() == ObjectType::PLAYER) {
+            const uint16_t wireOp = wireOpcode(Opcode::MSG_QUEST_PUSH_RESULT);
+            if (wireOp != 0xFFFF && owner_.getSocket()) {
+                network::Packet reply(wireOp);
+                reply.writeUInt64(data.informUnit != 0 ? data.informUnit : data.npcGuid);
+                reply.writeUInt32(data.questId);
+                reply.writeUInt8(4);
+                owner_.getSocket()->send(reply);
+            }
+            return;
+        }
     }
     currentQuestDetails_ = data;
     questFrameFlags_ = data.questFlags;

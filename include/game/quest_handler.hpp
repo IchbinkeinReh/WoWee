@@ -362,6 +362,9 @@ private:
     bool gossipWindowOpen_ = false;
     /// GOSSIP_SHOW held back until the greeting's text has arrived.
     bool gossipShowAwaitingText_ = false;
+    /// The gossip window is the quest giver's greeting list (0x0058c5a0),
+    /// which counts as an open quest window.
+    bool gossipIsQuestGreeting_ = false;
     GossipMessageData currentGossip_;
     std::string questGreeting_;
     std::vector<GossipPoi> gossipPois_;
