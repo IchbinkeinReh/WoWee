@@ -10,6 +10,7 @@
 #include "game/flat_field_map.hpp"
 #include "game/handler_types.hpp"
 #include "game/who_filter.hpp"
+#include "game/dialog_emotes.hpp"
 #include <array>
 #include <functional>
 #include <optional>
@@ -2759,6 +2760,9 @@ struct SpellStartData {
     /// Cast flag 0x800: the caster's power of the spell's type (0x00806700).
     bool hasPower = false;
     uint32_t power = 0;
+    /// Cast flag 0x20: the ammunition's ItemDisplayInfo id, 0 without
+    /// (0x00806700 hands it to 0x007206a0 for a ranged spell).
+    uint32_t ammoDisplayId = 0;
 
     [[nodiscard]] bool isValid() const { return spellId != 0; }
 };
@@ -3321,6 +3325,8 @@ struct QuestRewardItem {
 /** SMSG_QUESTGIVER_QUEST_DETAILS data (simplified) */
 struct QuestDetailsData {
     uint64_t npcGuid = 0;
+    /// The giver's (delay, emote) pairs (0x006d0460 -> 0x0071a260), 3.x.
+    std::vector<DialogEmote> emotes;
     /// Who shared the quest, 0 for none - 3.x only. The quest window's
     /// answer to a player goes to it (0x0058ca70, 0xc0d650).
     uint64_t informUnit = 0;
@@ -3357,6 +3363,8 @@ public:
 /** SMSG_QUESTGIVER_REQUEST_ITEMS data (turn-in progress check) */
 struct QuestRequestItemsData {
     uint64_t npcGuid = 0;
+    /// The giver's (delay, emote) pair (0x006d08f0 -> 0x0071a260), 3.x.
+    std::vector<DialogEmote> emotes;
     uint32_t questId = 0;
     std::string title;
     std::string completionText;
@@ -3380,6 +3388,8 @@ public:
 /** SMSG_QUESTGIVER_OFFER_REWARD data (choose reward) */
 struct QuestOfferRewardData {
     uint64_t npcGuid = 0;
+    /// The giver's (delay, emote) pairs (0x006d0ab0 -> 0x0071a260), 3.x.
+    std::vector<DialogEmote> emotes;
     uint32_t questId = 0;
     std::string title;
     std::string rewardText;

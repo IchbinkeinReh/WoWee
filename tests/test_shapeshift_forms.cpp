@@ -326,3 +326,26 @@ TEST_CASE("a stance's number keys press its own bar", "[actionbar]") {
     // A page turned by hand is not the bonus bar's.
     CHECK(wowee::ui::ActionBarPanel::mainBarSlot(2, 1, 0) == 12);
 }
+
+TEST_CASE("the player may mount only as itself or a mountable character display (0x00721da0)", "[shapeshift]") {
+    using wowee::game::MountShownInput;
+    using wowee::game::mayMountAsShown;
+    MountShownInput in;
+    CHECK(mayMountAsShown(in));
+    in.inForm = true;
+    CHECK_FALSE(mayMountAsShown(in));
+    in.inForm = false;
+    in.nativeShown = false;
+    // A creature display, with no extra row.
+    CHECK_FALSE(mayMountAsShown(in));
+    in.hasExtra = true;
+    CHECK_FALSE(mayMountAsShown(in));
+    in.modelFlags = 0x80;
+    CHECK(mayMountAsShown(in));
+    in.modelFlags = 0;
+    in.raceFlags = 0x4;
+    CHECK(mayMountAsShown(in));
+    // Model and race flags count only for a display with an extra row.
+    in.hasExtra = false;
+    CHECK_FALSE(mayMountAsShown(in));
+}

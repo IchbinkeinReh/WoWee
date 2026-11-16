@@ -89,6 +89,9 @@ public:
     [[nodiscard]] bool onMoveSpline(uint64_t guid);
     /// The flags of a unit's move spline while it still runs.
     [[nodiscard]] std::optional<uint32_t> moveSplineFlags(uint64_t guid);
+    /// The flags of the unit's move spline as the client keeps it (+0xbc),
+    /// with 0x400 once it has run out; none when it has no spline kept.
+    [[nodiscard]] std::optional<uint32_t> keptMoveSplineFlags(uint64_t guid) const;
     /// 0x00717c50 at world entry: the player again, and no other unit
     /// controlled.
     void resetActiveMover();
@@ -567,7 +570,14 @@ private:
     std::optional<Opcode> heldPitchStart_;
     uint32_t heldPitchStartMs_ = 0;
     bool pitchStartSent_ = false;
+    // A full-speed turner's (flags2 0x8) held START_TURN (+0x950, +0x948)
+    // and whether one went out since (+0xa30 0x4000000).
+    std::optional<Opcode> heldTurnStart_;
+    uint32_t heldTurnStartMs_ = 0;
+    bool turnStartSent_ = false;
     bool flushingPitchStart_ = false;
+    /// 0x00721c20: the held START_TURN and START_PITCH out, in that order.
+    void flushHeldStarts();
     float lastSentFacing_ = 0.0f;           ///< +0x294
     float lastSentPitch_ = 0.0f;            ///< +0x295
     [[nodiscard]] float moverPitchRate() const;

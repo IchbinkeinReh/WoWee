@@ -85,10 +85,11 @@ struct PitchOverTime {
 /// 0x400 and 0x800).
 [[nodiscard]] inline int aimKeyDirection(bool up, bool down) { return (up ? 1 : 0) - (down ? 1 : 0); }
 
-/// What a full-speed pitcher's start is held for (0x00721ac0 / 0x00721b90):
-/// a START_PITCH waits 100 ms and goes out after; a stop before then goes as
-/// one MSG_MOVE_SET_PITCH instead, and none where neither the facing nor
-/// the pitch moved 0.1 from what was last sent (0x0071ae80).
+/// What a full-speed pitcher's or turner's start is held for (0x00721ac0,
+/// 0x007219f0 / 0x00721b90): a START_PITCH or START_TURN waits 100 ms and
+/// goes out after; a stop before then goes as one MSG_MOVE_SET_PITCH or
+/// MSG_MOVE_SET_FACING instead, and none where neither the facing nor the
+/// pitch moved 0.1 from what was last sent (0x0071ae80).
 inline constexpr uint32_t kPitchStartHoldMs = 100;
 [[nodiscard]] inline bool pitchUnchangedSinceSent(float facing, float sentFacing, float pitch, float sentPitch,
                                                   bool pitchSent) {

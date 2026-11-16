@@ -772,6 +772,13 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
     const bool canPitch = movementInfo.hasFlag(MovementFlags::SWIMMING) ||
                           movementInfo.hasFlag(MovementFlags::FLYING) || (movementInfo.flags2 & 0x0020) != 0;
     if (pitchOpcode && !canPitch) return;
+    // 0x007413f0: with flags2 0x8 the turn's packets go through 0x007219f0,
+    // with 0x10 the pitch's through 0x00721ac0; any other packet takes the
+    // starts they hold out after it (0x00721c20).
+    const bool turnOpcode = opcode == Opcode::MSG_MOVE_START_TURN_LEFT ||
+                            opcode == Opcode::MSG_MOVE_START_TURN_RIGHT || opcode == Opcode::MSG_MOVE_STOP_TURN;
+    const bool heldRoute = (turnOpcode && (movementInfo.flags2 & 0x0008) != 0) ||
+                           (pitchOpcode && (movementInfo.flags2 & 0x0010) != 0);
 
     // Update movement flags based on opcode
     switch (opcode) {
@@ -933,6 +940,28 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
             break;
     }
     if (moverIsPlayer) moverEvent(opcode, flagsBefore, launchedBefore);
+
+    // A full-speed turner (flags2 0x8) holds its START_TURN for 100 ms; a
+    // stop before it went out is one MSG_MOVE_SET_FACING, or nothing where
+    // the facing and pitch are where they were sent (0x007219f0, 0x0071ae80).
+    if ((movementInfo.flags2 & 0x0008) != 0 && !flushingPitchStart_) {
+        if (opcode == Opcode::MSG_MOVE_START_TURN_LEFT || opcode == Opcode::MSG_MOVE_START_TURN_RIGHT) {
+            heldTurnStart_ = opcode;
+            heldTurnStartMs_ = movementTime;
+            return;
+        }
+        if (opcode == Opcode::MSG_MOVE_STOP_TURN) {
+            const bool startHeld = heldTurnStart_.has_value() && !turnStartSent_;
+            heldTurnStart_.reset();
+            turnStartSent_ = false;
+            if (startHeld) {
+                if (vehicle::pitchUnchangedSinceSent(movementInfo.orientation, lastSentFacing_, movementInfo.pitch,
+                                                     lastSentPitch_, canPitch))
+                    return;
+                opcode = Opcode::MSG_MOVE_SET_FACING;
+            }
+        }
+    }
 
     // A full-speed pitcher (flags2 0x10) holds its START_PITCH for 100 ms; a
     // stop before it went out is one MSG_MOVE_SET_PITCH, or nothing where the
@@ -1173,9 +1202,13 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
     if (trailer) packet.writeUInt32(*trailer);
     owner_.getSocket()->send(packet);
     // What went out (0x0071f0c0): the facing, the pitch where it can pitch,
-    // and whether a pitch is under way since (+0xa30 0x8000000).
+    // and whether a turn (+0xa30 0x4000000) or a pitch (0x8000000) is
+    // under way since.
     lastSentFacing_ = movementInfo.orientation;
     if (canPitch) lastSentPitch_ = movementInfo.pitch;
+    if ((movementInfo.flags & (static_cast<uint32_t>(MovementFlags::TURN_LEFT) |
+                               static_cast<uint32_t>(MovementFlags::TURN_RIGHT))) != 0)
+        turnStartSent_ = true;
     if ((movementInfo.flags & (static_cast<uint32_t>(MovementFlags::PITCH_UP) |
                                static_cast<uint32_t>(MovementFlags::PITCH_DOWN))) != 0)
         pitchStartSent_ = true;
@@ -1196,14 +1229,24 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
     } else {
         lastNonHeartbeatMoveSendTimeMs_ = movementInfo.time;
     }
-    // Any other packet takes a held START_PITCH out after it (0x00721c20).
-    if (heldPitchStart_ && !pitchOpcode && !flushingPitchStart_) {
+    // Any other packet takes a held START_TURN, then a held START_PITCH,
+    // out after it (0x00721c20).
+    if (!heldRoute && !flushingPitchStart_) flushHeldStarts();
+}
+
+void MovementHandler::flushHeldStarts() {
+    flushingPitchStart_ = true;
+    if (heldTurnStart_) {
+        const Opcode held = *heldTurnStart_;
+        heldTurnStart_.reset();
+        sendMovement(held);
+    }
+    if (heldPitchStart_) {
         const Opcode held = *heldPitchStart_;
         heldPitchStart_.reset();
-        flushingPitchStart_ = true;
         sendMovement(held);
-        flushingPitchStart_ = false;
     }
+    flushingPitchStart_ = false;
 }
 
 // ============================================================
@@ -4742,6 +4785,14 @@ void MovementHandler::updateMoverSplineDone() {
     if (owner_.getSocket()) sendMovement(Opcode::CMSG_MOVE_SPLINE_DONE, splineId);
 }
 
+std::optional<uint32_t> MovementHandler::keptMoveSplineFlags(uint64_t guid) const {
+    // A spline that has run out is marked finished (0x400) rather than
+    // freed (0x0098ba90, 0x006eaf50).
+    const auto it = moveSplines_.find(guid);
+    if (it == moveSplines_.end()) return std::nullopt;
+    return it->second.flags | (vehicle::moveSplineRunning(it->second, movementClockMs()) ? 0u : 0x400u);
+}
+
 std::optional<uint32_t> MovementHandler::moveSplineFlags(uint64_t guid) {
     if (!onMoveSpline(guid)) return std::nullopt;
     return moveSplines_[guid].flags;
@@ -4792,6 +4843,8 @@ void MovementHandler::resetActiveMover() {
     aimKeyPitching_ = false;
     heldPitchStart_.reset();
     pitchStartSent_ = false;
+    heldTurnStart_.reset();
+    turnStartSent_ = false;
 }
 
 void MovementHandler::setActiveMover(uint64_t guid) {
@@ -4826,6 +4879,8 @@ void MovementHandler::setActiveMover(uint64_t guid) {
     pitchingToTarget_ = false;
     heldPitchStart_.reset();
     pitchStartSent_ = false;
+    heldTurnStart_.reset();
+    turnStartSent_ = false;
     aimKeyPitching_ = false;
     activeMover_ = guid;
     if (guid == 0) return;
@@ -5060,7 +5115,15 @@ void MovementHandler::setAimKey(bool up, bool held) {
 
 bool MovementHandler::updateMoverPitch(float deltaTime) {
     const uint32_t now = movementClockMs();
-    // 0x00721b90: a full-speed pitcher's START_PITCH after 100 ms.
+    // 0x00721b90: a full-speed turner's START_TURN, then a full-speed
+    // pitcher's START_PITCH, after 100 ms.
+    if (heldTurnStart_ && now - heldTurnStartMs_ > vehicle::kPitchStartHoldMs) {
+        const Opcode held = *heldTurnStart_;
+        heldTurnStart_.reset();
+        flushingPitchStart_ = true;
+        sendMovement(held);
+        flushingPitchStart_ = false;
+    }
     if (heldPitchStart_ && now - heldPitchStartMs_ > vehicle::kPitchStartHoldMs) {
         const Opcode held = *heldPitchStart_;
         heldPitchStart_.reset();

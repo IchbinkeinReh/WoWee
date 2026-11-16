@@ -3,9 +3,12 @@
 // A gossip greeting (SMSG_NPC_TEXT_UPDATE) and the one line of it the client
 // shows each time the window opens (0x0058ac30).
 
+#include "game/dialog_emotes.hpp"
+
 #include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace wowee::game::npc_text {
 
@@ -13,7 +16,20 @@ struct Option {
     float probability = 0.0f;
     std::array<std::string, 2> text;   ///< [0] the male text, [1] the female
     uint32_t language = 0;
+    /// Three (delay, emote) pairs (+0x20 the delays, +0x38 the emotes).
+    std::array<DialogEmote, 3> emotes{};
 };
+
+/// 0x0058ac30: the chosen option's emotes the speaker plays - its pairs up
+/// to the first with no emote.
+inline std::vector<DialogEmote> optionEmotes(const Option& o) {
+    std::vector<DialogEmote> out;
+    for (const DialogEmote& e : o.emotes) {
+        if (e.emote == 0) break;
+        out.push_back(e);
+    }
+    return out;
+}
 
 struct NpcText {
     std::array<Option, 8> options;

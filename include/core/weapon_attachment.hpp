@@ -575,11 +575,28 @@ constexpr std::optional<SheathState> channelSheathState(SheathState current, uin
     return SheathState::Melee;
 }
 
+/// 0x007206a0: where a unit's ammunition hangs. Asked with 0x1e (a ranged
+/// spell's start, a new model) it is Bullet (24), or 25 where the unit's
+/// ranged item is thrown (inventory type 25); asked with 24 (the player's
+/// PLAYER_AMMO_ID changing) it is 24.
+inline constexpr uint32_t kAmmoAskForRanged = 0x1e;
+inline constexpr uint32_t kAmmoAttachBullet = 24;
+constexpr uint32_t ammoAttachment(uint32_t ask, std::optional<uint8_t> rangedInventoryType) {
+    if (ask != kAmmoAskForRanged) return ask;
+    return rangedInventoryType && *rangedInventoryType == 25 ? 25u : kAmmoAttachBullet;
+}
+/// 0x004eab50: the folder its model is in - Ammo at 24, Weapon at 25.
+inline const char* ammoModelFolder(uint32_t attachment) {
+    return attachment == 25 ? "Item\\ObjectComponents\\Weapon\\" : "Item\\ObjectComponents\\Ammo\\";
+}
+
 /// What 0x006dd9e0 (the active player sending a text emote) reads.
 struct TextEmoteSheathInput {
     bool emoteKnown = false;    ///< EmotesText's EmoteRef names an Emotes row
     uint32_t emoteFlags = 0;    ///< Emotes +0xc
     uint32_t specProc = 0;      ///< Emotes +0x10
+    uint32_t specProcParam = 0; ///< Emotes +0x14, the stand state for proc 1
+    uint32_t animId = 0;        ///< Emotes +0x8, its AnimationData id
     uint8_t standState = 0;     ///< UNIT_FIELD_BYTES_1 byte 0
     uint32_t moveFlags = 0;     ///< the movement flags
     uint32_t unitFlags = 0;     ///< UNIT_FIELD_FLAGS
@@ -601,6 +618,13 @@ constexpr bool textEmoteAllowed(const TextEmoteSheathInput& in) {
     if ((f & 0x8000u) != 0 && (in.onFlyingSpline || (in.moveFlags & 0x2000000u) != 0)) return false;
     if ((f & 0x200u) == 0 && (in.standState == 3 || in.standState == 7)) return false;
     return true;
+}
+
+/// 0x006dd9e0, a text emote sent: an emote whose EmoteSpecProc is 1 and
+/// whose param is a stand state of 0x00ada2e0's (0x10b: stand, sit, sleep,
+/// kneel) asks for that stand state (0x006dcb40) instead of an animation.
+constexpr bool textEmoteSetsStandState(uint32_t specProc, uint32_t param) {
+    return specProc == 1 && param < 32 && ((0x10bu >> param) & 1u) != 0;
 }
 
 /// What 0x006dd9e0 does with a text emote the active player sends.

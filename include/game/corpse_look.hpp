@@ -90,6 +90,31 @@ constexpr uint32_t corpsePoseAnimation(std::optional<float> liquidLevel, float z
     return kCorpseAnimDead;
 }
 
+/// 0x0073af80: the animation a unit dies with - Drown (131) when it swims
+/// (movement flag 0x200000), or when it is held up on a spline and at least
+/// half its height is in liquid; else DeathStart (466), which AnimationData
+/// takes back to Death (1) for a model without it.
+///
+/// Held up (0x0071c6c0, asked only while the unit has a spline): the spline,
+/// not finished (0x400), flies (0x2000) and does not fall (0x200); or the
+/// unit levitates (0x400) or hovers (0x40000000). In liquid: 0x0077f360
+/// finds a level there, and the unit stands no higher than that level less
+/// half its height (0x00717ad0, the GeoBox's height times its scale), plus
+/// a tenth of a yard.
+constexpr uint32_t kDeathAnimDrown = 131;
+constexpr uint32_t kDeathAnimDeathStart = 466;
+constexpr uint32_t deathAnimation(uint32_t moveFlags, std::optional<uint32_t> splineFlags,
+                                  std::optional<float> liquidLevel, float z, float height) {
+    if ((moveFlags & 0x200000u) != 0) return kDeathAnimDrown;
+    if (!splineFlags) return kDeathAnimDeathStart;
+    const uint32_t sf = *splineFlags;
+    const bool splineFlies = (sf & 0x400u) == 0 && (sf & 0x200u) == 0 && (sf & 0x2000u) != 0;
+    const bool heldUp = splineFlies || (moveFlags & 0x400u) != 0 || (moveFlags & 0x40000000u) != 0;
+    if (!heldUp || !liquidLevel) return kDeathAnimDeathStart;
+    if ((*liquidLevel - height * 0.5f) + 0.1f < z) return kDeathAnimDeathStart;
+    return kDeathAnimDrown;
+}
+
 /// 0x00705670: bones are the race's death skeleton - ChrRaces +0x2c, the
 /// race's file string, then "Male", "Female" or "NOSEX" by sex.
 inline std::string corpseBonesModelPath(uint8_t race, uint8_t gender) {

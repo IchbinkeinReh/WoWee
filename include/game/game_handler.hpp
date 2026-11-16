@@ -40,6 +40,7 @@
 #include "game/movement_handler.hpp"
 #include "game/entity_controller.hpp"
 #include "game/skill_ups.hpp"
+#include "game/dialog_emotes.hpp"
 #include "game/game_services.hpp"
 #include "network/packet.hpp"
 #include "core/logger.hpp"
@@ -1981,6 +1982,19 @@ public:
     uint32_t resolveUnitRenderInstance(uint64_t guid) const {
         return unitRenderInstanceResolver_ ? unitRenderInstanceResolver_(guid) : 0;
     }
+    /// The length in ms of an animation on a unit's model (0x0082ced0's
+    /// sequence), 0 where it has none. Wired by AnimationCallbackHandler.
+    using UnitAnimationLengthResolver = std::function<uint32_t(uint64_t guid, uint32_t animId)>;
+    void setUnitAnimationLengthResolver(UnitAnimationLengthResolver cb) {
+        unitAnimationLengthResolver_ = std::move(cb);
+    }
+    /// 0x0071a260: the (delay, emote) pairs an NPC's dialog carries, queued
+    /// on it to play one after another (0x0073adc0, updateDialogEmotes).
+    void queueDialogEmotes(uint64_t guid, const std::vector<DialogEmote>& pairs);
+    /// A unit's model built again from what it now is (vtable +0x1c).
+    void rebuildUnitModel(uint64_t guid);
+    /// The display aura 233 draws a unit as, 0 for its own (+0x9d4).
+    uint32_t humanoidMorphDisplay(uint64_t guid) const;
 
     // NPC respawn callback (health 0 → >0, resets animation to idle)
     using NpcRespawnCallback = std::function<void(uint64_t guid)>;
@@ -2038,6 +2052,12 @@ public:
     /// A spell's cast beginning on a unit (SMSG_SPELL_START, or
     /// SMSG_SPELL_GO), where 0x00805330 calls 0x007fa2e0.
     using SpellCastBeginCallback = std::function<void(uint64_t casterGuid, uint32_t spellId)>;
+    /// 0x007206a0 asked of a unit: its ammunition shown - an ItemDisplayInfo
+    /// id from a ranged spell's start (`ask` 0x1e), or the player's
+    /// PLAYER_AMMO_ID item entry changing (`ask` 24, `isItemEntry`).
+    using UnitAmmoCallback = std::function<void(uint64_t guid, uint32_t value, uint32_t ask, bool isItemEntry)>;
+    void setUnitAmmoCallback(UnitAmmoCallback cb) { unitAmmoCallback_ = std::move(cb); }
+    auto& unitAmmoCallbackRef() { return unitAmmoCallback_; }
     void setSpellCastBeginCallback(SpellCastBeginCallback cb) { spellCastBeginCallback_ = std::move(cb); }
     /// Any unit's melee swing (SMSG_ATTACKERSTATEUPDATE, 0x00756800).
     using UnitAttackSwingCallback = std::function<void(uint64_t attackerGuid)>;
@@ -3481,6 +3501,20 @@ public:
     /// 0x00726ce0: cancel each positive aura (0x10) whose shapeshift effect
     /// (aura 36) names the form in effect.
     void leaveShapeshiftForm();
+    /// 0x00721da0: whether the player may mount as it is shown now.
+    bool mayMountAsShown() const;
+    /// 0x00726f30: before a mount spell or item where 0x00721da0 fails and
+    /// autoUnshift lets it - the form left (0x00726ce0), and, shown as
+    /// another display, each positive aura cancelled that shapeshifts into a
+    /// form one of whose displays' models is not flagged 0x80.
+    void leaveFormForMount();
+    /// A spell about to be cast or used from an item: one applying aura 78
+    /// leaves the form first where 0x00721da0 fails and 0x0071b130 lets it
+    /// (0x0080ac90, 0x00708c20).
+    void unshiftForMountSpell(uint32_t spellId);
+    /// CreatureModelData Flags of a display's model, none where a table or
+    /// row is missing.
+    std::optional<uint32_t> displayModelFlags(uint32_t displayId) const;
     /// The player's UNIT_FIELD_BYTES_2 byte 3 changed (0x006da130): the
     /// form, its preset spells, and the events to fire, in order.
     std::vector<const char*> setPlayerShapeshiftForm(uint8_t form);
@@ -4585,6 +4619,8 @@ public:
     bool onMoveSpline(uint64_t guid);
     /// The flags of a unit's running move spline (MoveSplineFlags).
     std::optional<uint32_t> moveSplineFlags(uint64_t guid);
+    /// The unit's kept move spline's flags, 0x400 once run out (+0xbc).
+    std::optional<uint32_t> keptMoveSplineFlags(uint64_t guid) const;
     /// A spell's AttributesEx2.
     [[nodiscard]] uint32_t getSpellAttributesEx2(uint32_t spellId) const;
     /// An auto-repeating ranged spell of the player's going (+0xa38 0x200):
@@ -7415,6 +7451,11 @@ private:
     NpcDeathCallback npcDeathCallback_;
     NpcDeathCallback unitDiedCallback_;
     UnitRenderInstanceResolver unitRenderInstanceResolver_;
+    UnitAnimationLengthResolver unitAnimationLengthResolver_;
+    /// Each unit's dialog emotes waiting to play (+0x9fc).
+    std::unordered_map<uint64_t, DialogEmoteQueue> dialogEmotes_;
+    /// 0x0073adc0 for each unit with dialog emotes queued, once a frame.
+    void updateDialogEmotes();
     NpcRespawnCallback npcRespawnCallback_;
     StandStateCallback standStateCallback_;
     LogoutCompleteCallback logoutCompleteCallback_;
@@ -7425,6 +7466,7 @@ private:
     MeleeSwingCallback meleeSwingCallback_;
     FaceCameraProvider faceCameraProvider_;
     SpellCastBeginCallback spellCastBeginCallback_;
+    UnitAmmoCallback unitAmmoCallback_;
     UnitAttackSwingCallback unitAttackSwingCallback_;
     MeleeHitCallback meleeHitCallback_;
     AttackStopCallback attackStopCallback_;

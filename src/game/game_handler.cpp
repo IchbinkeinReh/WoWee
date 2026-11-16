@@ -936,6 +936,8 @@ void GameHandler::update(float deltaTime) {
         if (movementHandler_) movementHandler_->updateMoverPitch(deltaTime);
         // The mover's server-driven spline run out (0x006eae70).
         if (movementHandler_) movementHandler_->updateMoverSplineDone();
+        // NPC dialog emotes as they come due (0x0073adc0).
+        updateDialogEmotes();
 
         const float currentPingInterval =
             (isPreWotlk()) ? game::CLASSIC_PING_INTERVAL_SEC : pingInterval;
@@ -3958,6 +3960,11 @@ const ShapeshiftFormRow* GameHandler::shapeshiftFormRow(uint8_t form) const {
                 if (roundField < dbc->getFieldCount()) r.combatRoundTime = dbc->getUInt32(row, roundField);
                 if (presetField != 0xFFFFFFFFu && presetField + 8 <= dbc->getFieldCount()) {
                     for (uint32_t i = 0; i < 8; ++i) r.presetSpells[i] = dbc->getUInt32(row, presetField + i);
+                }
+                // CreatureDisplayID[4] (+0x1c), where the layout has it.
+                const uint32_t displayField = layout ? layout->tryField("CreatureDisplayID0") : 0xFFFFFFFFu;
+                if (displayField != 0xFFFFFFFFu && displayField + 4 <= dbc->getFieldCount()) {
+                    for (uint32_t i = 0; i < 4; ++i) r.displays[i] = dbc->getUInt32(row, displayField + i);
                 }
                 found = r;
                 break;

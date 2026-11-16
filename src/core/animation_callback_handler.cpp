@@ -44,6 +44,18 @@ void AnimationCallbackHandler::setupCallbacks() {
         if (instanceId == 0) instanceId = entitySpawner_.getPlayerInstanceId(guid);
         return instanceId;
     });
+    // An animation's length on a unit's model (0x0082ced0): its first
+    // variation's sequence, for the NPC dialog emotes' spacing.
+    gameHandler_.setUnitAnimationLengthResolver([this](uint64_t guid, uint32_t animId) -> uint32_t {
+        auto* cr = renderer_.getCharacterRenderer();
+        const uint32_t instanceId = gameHandler_.resolveUnitRenderInstance(guid);
+        std::vector<pipeline::M2Sequence> sequences;
+        if (!cr || instanceId == 0 || !cr->getAnimationSequences(instanceId, sequences)) return 0;
+        for (const auto& s : sequences) {
+            if (s.id == animId && s.variationIndex == 0) return s.duration;
+        }
+        return 0;
+    });
 
     // NPC/player death callback (online mode) - play death animation
     // What it says as it dies, before anything else - the same branch of
@@ -57,8 +69,11 @@ void AnimationCallbackHandler::setupCallbacks() {
         if (!renderer_.getCharacterRenderer()) return;
         uint32_t instanceId = entitySpawner_.getCreatureInstanceId(guid);
         if (instanceId == 0) instanceId = entitySpawner_.getPlayerInstanceId(guid);
+        // 0x0073af80: Drown or DeathStart, AnimationData taking DeathStart
+        // back to Death for a model without it.
         if (instanceId != 0) {
-            renderer_.getCharacterRenderer()->playAnimation(instanceId, rendering::anim::DEATH, false);
+            renderer_.getCharacterRenderer()->playAnimation(instanceId, entitySpawner_.dyingAnimation(guid, instanceId),
+                                                            false);
         }
     });
 
@@ -294,6 +309,17 @@ void AnimationCallbackHandler::setupCallbacks() {
                 }
                 cr->playAnimation(emoteInstanceId, emoteAnim, false, resumeAnim);
             }
+            return;
+        }
+        // The active player's own (0x006cfe70 -> 0x0073ab90): not asleep
+        // or swimming, not what it already plays, not while it channels or
+        // casts, and in combat only LiftOff and Land.
+        if (guid == gameHandler_.getPlayerGuid()) {
+            const uint32_t self = renderer_.getCharacterInstanceId();
+            const auto* unit = self ? cr->unitAnimationState(self) : nullptr;
+            if (self == 0 || (unit && !rendering::upper_body::serverEmotePlays(*unit, emoteAnim, cr->unitPlaying(self))))
+                return;
+            cr->playAnimation(self, emoteAnim, isState);
             return;
         }
         emoteInstanceId = entitySpawner_.getPlayerInstanceId(guid);

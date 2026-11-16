@@ -10,6 +10,9 @@
 #include "pipeline/dbc_layout.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/m2_loader.hpp"
+#include "game/entity.hpp"
+#include "game/game_handler.hpp"
+#include "rendering/character_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/water_renderer.hpp"
@@ -125,6 +128,31 @@ void EntitySpawner::spawnCorpseBones(uint64_t guid, const std::string& modelPath
     m2Renderer->setInstanceIsGameObject(instanceId, true);
     m2Renderer->setSkipCollision(instanceId, true);
     corpseBonesInstances_[guid] = instanceId;
+}
+
+uint32_t EntitySpawner::dyingAnimation(uint64_t guid, uint32_t renderInstanceId) const {
+    // 0x0073af80: the movement flags (+0xd8 +0x44), the kept spline (+0xbc),
+    // the liquid where the unit stands (0x0077f360) and its height
+    // (0x00717ad0).
+    if (!gameHandler_) return game::kDeathAnimDeathStart;
+    const auto entity = gameHandler_->getEntityManager().getEntity(guid);
+    if (!entity) return game::kDeathAnimDeathStart;
+    const uint32_t moveFlags = entity->getReportedMoveFlags();
+    const auto splineFlags = gameHandler_->keptMoveSplineFlags(guid);
+    std::optional<float> liquid;
+    const float z = entity->getZ();
+    if (splineFlags) {
+        if (auto* water = renderer_ ? renderer_->getWaterRenderer() : nullptr) {
+            const glm::vec3 renderPos = core::coords::canonicalToRender(glm::vec3(entity->getX(), entity->getY(), z));
+            liquid = water->getNearestWaterHeightAt(renderPos.x, renderPos.y, renderPos.z);
+        }
+    }
+    float height = unitGeoBoxHeight(renderInstanceId);
+    glm::mat4 frame(1.0f);
+    if (auto* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+        cr && cr->getInstanceFrame(renderInstanceId, frame))
+        height *= glm::length(glm::vec3(frame[0]));
+    return game::deathAnimation(moveFlags, splineFlags, liquid, z, height);
 }
 
 std::optional<uint32_t> EntitySpawner::corpsePose(uint64_t guid) const {

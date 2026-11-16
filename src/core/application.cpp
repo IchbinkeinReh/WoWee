@@ -1455,10 +1455,6 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
             if (!uim || !gh) return false;
             return uim->getGameScreen().getChatPanel().runRegistryCommand(*gh, alias, args);
         };
-        luaSvc.playEmoteAnimation = [rend = renderer.get()](const std::string& name) {
-            if (!rend) return;
-            if (auto* ac = rend->getAnimationController()) ac->playEmote(name);
-        };
         luaSvc.getGamma = [uim = uiManager.get()]() -> float {
             return uim ? uim->getGameScreen().getGamma() : 1.0f;
         };
@@ -3766,6 +3762,17 @@ void Application::connectWorldHooks() {
                 entitySpawner_->onUnitSpellCastBegin(caster, spellId);
             }
         });
+        // A unit's ammunition (0x007206a0): from a ranged spell's start, or
+        // the player's PLAYER_AMMO_ID.
+        gameHandler->setUnitAmmoCallback([this](uint64_t guid, uint32_t value, uint32_t ask, bool isItemEntry) {
+            if (!gameHandler || !entitySpawner_) return;
+            uint32_t inst = 0;
+            if (guid == gameHandler->getPlayerGuid()) inst = renderer ? renderer->getCharacterInstanceId() : 0;
+            else inst = entitySpawner_->getCreatureInstanceId(guid);
+            if (inst == 0) inst = entitySpawner_->getPlayerInstanceId(guid);
+            if (inst == 0) return;
+            entitySpawner_->showUnitAmmo(guid, inst, isItemEntry ? entitySpawner_->itemDisplayId(value) : value, ask);
+        });
         // Any unit's swing draws its melee weapons (0x00756800).
         gameHandler->setUnitAttackSwingCallback([this](uint64_t attacker) {
             if (!gameHandler) return;
@@ -4017,7 +4024,7 @@ void Application::connectWorldHooks() {
             switch (appearanceComposer_->onTextEmote(textEmoteId)) {
                 case core::TextEmoteVerdict::Refused: return Gate::Refuse;
                 case core::TextEmoteVerdict::RefusedWhileMoving: return Gate::RefuseWhileMoving;
-                default: return Gate::Send;
+                default: playTextEmoteLocally(textEmoteId); return Gate::Send;
             }
         });
         // A player difficulty change shows the current map's loading screen
@@ -5481,6 +5488,34 @@ rendering::upper_body::Unit Application::playerAnimationState(const game::Unit& 
     return u;
 }
 
+// 0x006dd9e0, a text emote the player sends: a stand-state emote asks for
+// its stand state (0x006dcb40); any other animation plays at once only where
+// 0x00724410 lets it - on the move - and otherwise waits for the server's
+// SMSG_EMOTE (0x006cfe70).
+void Application::playTextEmoteLocally(uint32_t textEmoteId) {
+    if (!appearanceComposer_ || !gameHandler) return;
+    const TextEmoteSheathInput row = appearanceComposer_->textEmoteRow(textEmoteId);
+    if (!row.emoteKnown) return;
+    if (textEmoteSetsStandState(row.specProc, row.specProcParam)) {
+        gameHandler->setStandState(static_cast<uint8_t>(row.specProcParam));
+        return;
+    }
+    if (row.animId == 0) return;
+    auto* cr = renderer ? renderer->getCharacterRenderer() : nullptr;
+    const uint32_t instanceId = renderer ? renderer->getCharacterInstanceId() : 0;
+    auto entity = gameHandler->getEntityManager().getEntity(gameHandler->getPlayerGuid());
+    const auto* self = dynamic_cast<const game::Unit*>(entity.get());
+    if (!cr || instanceId == 0 || !self) return;
+    rendering::upper_body::Unit u = playerAnimationState(*self);
+    if (const auto seen = cr->unitStandStateSeen(instanceId)) u.standStateSeen = *seen;
+    // 0x006dac10: a ghost (PLAYER_FLAGS 0x10) is dead to it.
+    bool ghost = false;
+    if (const uint16_t pf = game::fieldIndex(game::UF::PLAYER_FLAGS); pf != 0xFFFF)
+        ghost = (self->getField(pf) & 0x10u) != 0;
+    if (!rendering::upper_body::localEmotePlays(u, ghost)) return;
+    cr->playAnimation(instanceId, row.animId, row.specProc == 2);
+}
+
 // A drop off a ledge the player is in the air for: not a jump, not in water,
 // in flight or on a ride locked to a transport, and lasting as long as a fall
 // the landing is sent for (CameraController, MSG_MOVE_FALL_LAND).
@@ -5672,6 +5707,15 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 self && self->isUnit()) {
                 syncPlayerDisplayModel(static_cast<const game::Unit&>(*self));
                 syncPlayerAnimation(static_cast<const game::Unit&>(*self));
+                // 0x006e8280: a new model of the player's shows its
+                // ammunition (PLAYER_AMMO_ID) again (0x007206a0, 0x1e).
+                if (const uint32_t inst = renderer ? renderer->getCharacterInstanceId() : 0;
+                    inst != 0 && inst != ammoInstanceSeen_) {
+                    ammoInstanceSeen_ = inst;
+                    entitySpawner_->showUnitAmmo(gameHandler->getPlayerGuid(), inst,
+                                                 entitySpawner_->itemDisplayId(gameHandler->getAmmoId()),
+                                                 kAmmoAskForRanged);
+                }
             }
         }
         const float syncRadiusSq = 320.0f * 320.0f;

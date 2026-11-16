@@ -122,13 +122,6 @@ struct LuaServices {
     /// client's panel, and handing over the menu must not hide them.
     std::function<void(const std::string&)> openSettings;
 
-    /// Play an emote's animation on the player, by emote name.
-    ///
-    /// DoEmote sent the emote to the server and stopped there, so the player
-    /// stood still while everyone was told they had danced. This client's own
-    /// chat panel had always done both halves - the animation was one of the
-    /// cases handing chat over to FrameXML quietly dropped.
-    std::function<void(const std::string&)> playEmoteAnimation;
 
     /// Screen gamma, for the interface's own video options. Callbacks rather
     /// than a renderer pointer, to keep this header off the rendering ones.

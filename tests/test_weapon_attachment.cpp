@@ -564,3 +564,26 @@ TEST_CASE("each swap sounds the weapon it moved (0x00732500, 0x004d07b0)", "[att
     CHECK(sheathSwapSound(reach, 0, guns).item == &gun);
     CHECK(sheathSwapSound(reach, 1, guns).item == nullptr);
 }
+
+TEST_CASE("a stand-state text emote asks for stand, sit, sleep or kneel (0x006dd9e0)", "[weapon_attachment]") {
+    CHECK(textEmoteSetsStandState(1, 0));
+    CHECK(textEmoteSetsStandState(1, 1));
+    CHECK(textEmoteSetsStandState(1, 3));
+    CHECK(textEmoteSetsStandState(1, 8));
+    CHECK_FALSE(textEmoteSetsStandState(1, 2));
+    CHECK_FALSE(textEmoteSetsStandState(1, 7));
+    CHECK_FALSE(textEmoteSetsStandState(0, 1));
+    CHECK_FALSE(textEmoteSetsStandState(2, 1));
+    CHECK_FALSE(textEmoteSetsStandState(1, 40));
+}
+
+TEST_CASE("ammunition hangs at Bullet, or at 25 for a thrown ranged item (0x007206a0)", "[weapon_attachment]") {
+    CHECK(ammoAttachment(kAmmoAskForRanged, std::nullopt) == 24u);
+    CHECK(ammoAttachment(kAmmoAskForRanged, uint8_t{15}) == 24u);  // a bow
+    CHECK(ammoAttachment(kAmmoAskForRanged, uint8_t{26}) == 24u);  // a gun
+    CHECK(ammoAttachment(kAmmoAskForRanged, uint8_t{25}) == 25u);  // thrown
+    // The player's PLAYER_AMMO_ID asks for 24 whatever it holds.
+    CHECK(ammoAttachment(24, uint8_t{25}) == 24u);
+    CHECK(std::string(ammoModelFolder(24)) == "Item\\ObjectComponents\\Ammo\\");
+    CHECK(std::string(ammoModelFolder(25)) == "Item\\ObjectComponents\\Weapon\\");
+}

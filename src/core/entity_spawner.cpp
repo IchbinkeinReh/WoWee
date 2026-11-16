@@ -800,6 +800,62 @@ bool EntitySpawner::resolveUnitWeaponItems(const UnitWeaponEntries& slots, std::
     return true;
 }
 
+uint32_t EntitySpawner::itemDisplayId(uint32_t itemEntry) const {
+    if (itemEntry == 0 || !gameHandler_) return 0;
+    if (const auto* info = gameHandler_->getItemInfo(itemEntry); info && info->valid) return info->displayInfoId;
+    auto itemDbc = assetManager_ ? assetManager_->loadDBCOptional("Item.dbc") : nullptr;
+    const int32_t row = itemDbc && itemDbc->getFieldCount() >= 8 ? itemDbc->findRecordById(itemEntry) : -1;
+    return row >= 0 ? itemDbc->getUInt32(static_cast<uint32_t>(row), 5) : 0u;
+}
+
+void EntitySpawner::showUnitAmmo(uint64_t guid, uint32_t instanceId, uint32_t displayId, uint32_t ask) {
+    auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    if (!charRenderer || instanceId == 0 || !gameHandler_ || !assetManager_) return;
+    AmmoShown& shown = ammoShown_[instanceId];
+    // Nothing to do for the display already hung.
+    if (shown.displayId == displayId && shown.attached) return;
+    if (shown.attached) charRenderer->detachWeapon(instanceId, shown.attachment);
+    shown.attached = false;
+    shown.displayId = displayId;
+    if (displayId == 0) return;
+    // The unit's ranged item (vtable +300 slot 2): thrown hangs at 25.
+    std::optional<uint8_t> rangedType;
+    if (guid == gameHandler_->getPlayerGuid()) {
+        const auto& slot = gameHandler_->getInventory().getEquipSlot(game::EquipSlot::RANGED);
+        if (!slot.empty()) {
+            if (const auto* info = gameHandler_->getItemInfo(slot.item.itemId); info && info->valid)
+                rangedType = static_cast<uint8_t>(info->inventoryType);
+        }
+    } else if (auto entity = gameHandler_->getEntityManager().getEntity(guid)) {
+        const bool isPlayer = entity->getType() == game::ObjectType::PLAYER;
+        if (const auto slots = unitWeaponEntries(guid, *entity, isPlayer); slots && slots->entries[2] != 0) {
+            std::array<UnitWeaponItem, 3> items{};
+            std::array<uint32_t, 3> displays{};
+            if (resolveUnitWeaponItems(*slots, items, displays)) rangedType = items[2].inventoryType;
+        }
+    }
+    const uint32_t attachment = ammoAttachment(ask, rangedType);
+    shown.attachment = attachment;
+    // 0x004eab50: the display's second model and texture (+8, +0x10), both
+    // named, from Ammo\ - or Weapon\ for a thrown one.
+    auto displayDbc = assetManager_->loadDBCOptional("ItemDisplayInfo.dbc");
+    const int32_t rec = displayDbc ? displayDbc->findRecordById(displayId) : -1;
+    if (rec < 0) return;
+    const auto* layouts = pipeline::getActiveDBCLayout();
+    const auto* layout = layouts ? layouts->getLayout("ItemDisplayInfo") : nullptr;
+    const uint32_t modelField = layout ? (*layout)["RightModel"] : 2u;
+    const uint32_t textureField = layout ? (*layout)["RightModelTexture"] : 4u;
+    if (modelField >= displayDbc->getFieldCount() || textureField >= displayDbc->getFieldCount()) return;
+    const std::string modelName = displayDbc->getString(static_cast<uint32_t>(rec), modelField);
+    const std::string textureName = displayDbc->getString(static_cast<uint32_t>(rec), textureField);
+    if (modelName.empty() || textureName.empty()) return;
+    const std::string dir = ammoModelFolder(attachment);
+    pipeline::M2Model model;
+    if (!loadWeaponM2(dir + pipeline::modelPathToM2(modelName), model)) return;
+    shown.attached =
+        charRenderer->attachWeapon(instanceId, attachment, model, nextWeaponModelId_++, dir + textureName + ".blp");
+}
+
 bool EntitySpawner::dressUnitWeapons(uint32_t instanceId, const UnitWeaponEntries& slots,
                                      const UnitWeaponDress& dress) {
     auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;

@@ -542,6 +542,7 @@
   "SpellShapeshiftForm": {
     "BonusActionBar": 1,
     "CombatRoundTime": 22,
+    "CreatureDisplayID0": 23,
     "CreatureType": 20,
     "Flags": 19,
     "RequiredSpellId": 20,

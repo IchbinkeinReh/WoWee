@@ -9,6 +9,7 @@
 #include "game/vehicle_mover.hpp"
 #include "game/unit_name_rules.hpp"
 #include "rendering/mount_transition.hpp"
+#include "rendering/animation_controller.hpp"
 #include "game/game_handler.hpp"
 #include "game/chat_profanity.hpp"
 #include "game/inventory_alerts.hpp"
@@ -1146,6 +1147,54 @@ bool GameHandler::onMoveSpline(uint64_t guid) {
 
 std::optional<uint32_t> GameHandler::moveSplineFlags(uint64_t guid) {
     return movementHandler_ ? movementHandler_->moveSplineFlags(guid) : std::nullopt;
+}
+
+namespace {
+// The client's millisecond clock as 0x0086ae20 reads it.
+uint32_t dialogClockMs() { return static_cast<uint32_t>(core::appTimeSeconds() * 1000.0); }
+}  // namespace
+
+void GameHandler::rebuildUnitModel(uint64_t guid) {
+    if (entityController_) entityController_->forceDisplayUpdate(guid);
+}
+
+uint32_t GameHandler::humanoidMorphDisplay(uint64_t guid) const {
+    return spellHandler_ ? spellHandler_->humanoidMorphDisplay(guid) : 0u;
+}
+
+void GameHandler::queueDialogEmotes(uint64_t guid, const std::vector<DialogEmote>& pairs) {
+    if (guid == 0) return;
+    // Only one-shot rows (EmoteSpecProc 0) are queued; a row this client
+    // has no animation for is read as one it does not have.
+    dialogEmotes_[guid].start(pairs, dialogClockMs(), [](uint32_t emote) {
+        return rendering::AnimationController::getEmoteAnimByEmotesId(emote) != 0 &&
+               !rendering::AnimationController::isStateEmoteById(emote);
+    });
+    if (!dialogEmotes_[guid].active()) dialogEmotes_.erase(guid);
+}
+
+void GameHandler::updateDialogEmotes() {
+    if (dialogEmotes_.empty()) return;
+    const uint32_t now = dialogClockMs();
+    for (auto it = dialogEmotes_.begin(); it != dialogEmotes_.end();) {
+        const uint64_t guid = it->first;
+        // Its AnimID played as any animation asked of the unit (0x007385c0),
+        // the next one waiting out this one's length (0x0082ced0) and half
+        // a second.
+        const auto played = it->second.take(now, [&](uint32_t emote) -> uint32_t {
+            const uint32_t anim = rendering::AnimationController::getEmoteAnimByEmotesId(emote);
+            return unitAnimationLengthResolver_ ? unitAnimationLengthResolver_(guid, anim) : 0u;
+        });
+        if (played && emoteAnimCallback_ && getEntityManager().getEntity(guid)) {
+            emoteAnimCallback_(guid, rendering::AnimationController::getEmoteAnimByEmotesId(*played), false);
+        }
+        if (!it->second.active()) it = dialogEmotes_.erase(it);
+        else ++it;
+    }
+}
+
+std::optional<uint32_t> GameHandler::keptMoveSplineFlags(uint64_t guid) const {
+    return movementHandler_ ? movementHandler_->keptMoveSplineFlags(guid) : std::nullopt;
 }
 
 uint32_t GameHandler::getSpellAttributesEx2(uint32_t spellId) const {
@@ -6000,6 +6049,95 @@ bool GameHandler::wouldAutoUnshift() const {
         return false;
     const auto* row = shapeshiftFormRow(getShapeshiftFormId());
     return !row || (row->flags & 0x100u) == 0;
+}
+
+std::optional<uint32_t> GameHandler::displayModelFlags(uint32_t displayId) const {
+    auto* am = services_.assetManager;
+    if (!am || !am->isInitialized() || displayId == 0) return std::nullopt;
+    const auto displays = am->loadDBCOptional("CreatureDisplayInfo.dbc");
+    const auto models = am->loadDBCOptional("CreatureModelData.dbc");
+    if (!displays || !models) return std::nullopt;
+    const int32_t drow = displays->findRecordById(displayId);
+    if (drow < 0 || displays->getFieldCount() <= 1) return std::nullopt;
+    const int32_t mrow = models->findRecordById(displays->getUInt32(static_cast<uint32_t>(drow), 1));
+    if (mrow < 0 || models->getFieldCount() <= 1) return std::nullopt;
+    return models->getUInt32(static_cast<uint32_t>(mrow), 1);
+}
+
+bool GameHandler::mayMountAsShown() const {
+    MountShownInput in;
+    const uint8_t form = getShapeshiftFormId();
+    in.inForm = inShapeshiftForm(form, shapeshiftFormRow(form));
+    const auto me = getEntityManager().getEntity(playerGuid);
+    if (me && !in.inForm) {
+        const auto field = [&](UF f) {
+            const uint16_t i = fieldIndex(f);
+            return i != 0xFFFF ? me->getField(i) : 0u;
+        };
+        const uint32_t display = field(UF::UNIT_FIELD_DISPLAYID);
+        in.nativeShown = display == field(UF::UNIT_FIELD_NATIVEDISPLAYID);
+        auto* am = services_.assetManager;
+        if (!in.nativeShown && am && am->isInitialized()) {
+            // CreatureDisplayInfo ExtendedDisplayInfoID (+0xc) to its extra
+            // row, whose race (+4) is a ChrRaces row.
+            const auto displays = am->loadDBCOptional("CreatureDisplayInfo.dbc");
+            const auto extras = am->loadDBCOptional("CreatureDisplayInfoExtra.dbc");
+            const auto races = am->loadDBCOptional("ChrRaces.dbc");
+            const int32_t drow = displays ? displays->findRecordById(display) : -1;
+            if (drow >= 0 && extras && displays->getFieldCount() > 3) {
+                const int32_t erow = extras->findRecordById(displays->getUInt32(static_cast<uint32_t>(drow), 3));
+                if (erow >= 0) {
+                    in.hasExtra = true;
+                    in.modelFlags = displayModelFlags(display).value_or(0);
+                    const int32_t rrow = races && extras->getFieldCount() > 1
+                                             ? races->findRecordById(extras->getUInt32(static_cast<uint32_t>(erow), 1))
+                                             : -1;
+                    if (rrow >= 0 && races->getFieldCount() > 1)
+                        in.raceFlags = races->getUInt32(static_cast<uint32_t>(rrow), 1);
+                }
+            }
+        }
+    }
+    return game::mayMountAsShown(in);
+}
+
+void GameHandler::leaveFormForMount() {
+    const uint8_t form = getShapeshiftFormId();
+    if (inShapeshiftForm(form, shapeshiftFormRow(form))) leaveShapeshiftForm();
+    const auto me = getEntityManager().getEntity(playerGuid);
+    if (!me) return;
+    const uint16_t displayField = fieldIndex(UF::UNIT_FIELD_DISPLAYID);
+    const uint16_t nativeField = fieldIndex(UF::UNIT_FIELD_NATIVEDISPLAYID);
+    if (displayField == 0xFFFF || nativeField == 0xFFFF || me->getField(displayField) == me->getField(nativeField))
+        return;
+    loadSpellNameCache();
+    std::vector<uint32_t> cancel;
+    for (const auto& aura : getPlayerAuras()) {
+        if ((aura.flags & 0x10) == 0 || aura.spellId == 0) continue;
+        const auto it = spellNameCache_.find(aura.spellId);
+        if (it == spellNameCache_.end()) continue;
+        bool hit = false;
+        for (int k = 0; k < 3 && !hit; ++k) {
+            if (it->second.effectAuraIds[k] != kAuraModShapeshift) continue;
+            const auto* row = shapeshiftFormRow(static_cast<uint8_t>(it->second.effectMiscValues[k]));
+            if (!row) continue;
+            for (uint32_t display : row->displays) {
+                if (display == 0) continue;
+                const auto flags = displayModelFlags(display);
+                if (flags && (*flags & kModelFlagMountable) == 0) {
+                    hit = true;
+                    break;
+                }
+            }
+        }
+        if (hit) cancel.push_back(aura.spellId);
+    }
+    for (uint32_t spellId : cancel) cancelAura(spellId);
+}
+
+void GameHandler::unshiftForMountSpell(uint32_t spellId) {
+    if (spellId == 0 || !spellAppliesAura(spellId, 78)) return;
+    if (!mayMountAsShown() && wouldAutoUnshift()) leaveFormForMount();
 }
 
 void GameHandler::leaveShapeshiftForm() {

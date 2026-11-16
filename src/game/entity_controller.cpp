@@ -2172,6 +2172,10 @@ void EntityController::dispatchEntitySpawn(uint64_t guid, ObjectType objectType,
     if (objectType == ObjectType::PLAYER && guid == owner_.getPlayerGuid()) {
         return;  // Skip local player - spawned separately via spawnPlayerCharacter()
     }
+    // A humanoid the player's aura 233 draws as another creature's display
+    // (0x0072e270, +0x9d4) is built as that display.
+    const uint32_t morph = owner_.humanoidMorphDisplay(guid);
+    const uint32_t shownDisplay = morph != 0 ? morph : unit->getDisplayId();
     if (objectType == ObjectType::PLAYER) {
         // Asked again whenever its display changes: a form or a morph swaps
         // the character for the display's creature and back (0x00717a20).
@@ -2179,7 +2183,7 @@ void EntityController::dispatchEntitySpawn(uint64_t guid, ObjectType objectType,
             uint8_t race = 0, gender = 0, facial = 0;
             uint32_t appearanceBytes = 0;
             if (extractPlayerAppearance(entity->getFields(), race, gender, appearanceBytes, facial)) {
-                owner_.playerSpawnCallbackRef()(guid, unit->getDisplayId(), race, gender,
+                owner_.playerSpawnCallbackRef()(guid, shownDisplay, race, gender,
                                     appearanceBytes, facial,
                                     unit->getX(), unit->getY(), unit->getZ(), unit->getOrientation());
             } else {
@@ -2202,7 +2206,7 @@ void EntityController::dispatchEntitySpawn(uint64_t guid, ObjectType objectType,
                 if (unitScale <= 0.01f || unitScale > 100.0f) unitScale = 1.0f;
             }
         }
-        owner_.creatureSpawnCallbackRef()(guid, unit->getDisplayId(),
+        owner_.creatureSpawnCallbackRef()(guid, shownDisplay,
             unit->getX(), unit->getY(), unit->getZ(), unit->getOrientation(), unitScale);
     }
     if (isDead && owner_.npcDeathCallbackRef()) {
@@ -3524,8 +3528,12 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
             const auto now = block.fields.find(ammoIdx);
             if (now != block.fields.end()) {
                 const auto was = lastFields.find(ammoIdx);
-                if ((was == lastFields.end() ? 0u : was->second) != now->second)
+                if ((was == lastFields.end() ? 0u : was->second) != now->second) {
                     pendingEvents_.emit("UNIT_INVENTORY_CHANGED", {"player"});
+                    // 0x005e83e0: the ammunition's model on the player, at 24.
+                    if (owner_.unitAmmoCallbackRef())
+                        owner_.unitAmmoCallbackRef()(owner_.getPlayerGuid(), now->second, 24, true);
+                }
             }
         }
         // What it costs to take the ring back, and when each piece of it was
@@ -3676,6 +3684,11 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
         }
         owner_.maybeDetectVisibleItemLayout();
         owner_.detectInventorySlotBases(block.fields);
+        // The aura vision, PLAYER_FIELD_BYTES2's high byte (0x006d7030 ->
+        // 0x00727a70): the state kits of the auras a changed bit shows or
+        // hides.
+        if (auto* spells = owner_.getSpellHandler())
+            spells->onPlayerAuraVision(static_cast<uint8_t>(owner_.playerAuraVision()));
 
         // The override spells (PLAYER_FIELD_BYTES2's low word, 0x006d1c5d ->
         // 0x005abb40).
@@ -4127,6 +4140,19 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
     const bool watchesLanguages = block.guid == owner_.getPlayerGuid() && flags2 != 0xFFFF &&
                                   block.fields.find(flags2) != block.fields.end();
     const uint32_t oldFlags2 = watchesLanguages ? entity->getField(flags2) : 0;
+    // UNIT_FIELD_CHARMEDBY, which the client watches (0x00741e9e registers
+    // 0x00728d60 on it) for the client-triggered auras of a unit the player
+    // comes to charm, or stops charming.
+    const uint16_t charmedByLo = fieldIndex(UF::UNIT_FIELD_CHARMEDBY);
+    const bool watchesCharmer = (entity->getType() == ObjectType::UNIT || entity->getType() == ObjectType::PLAYER) &&
+                                charmedByLo != 0xFFFF &&
+                                (block.fields.find(charmedByLo) != block.fields.end() ||
+                                 block.fields.find(static_cast<uint16_t>(charmedByLo + 1)) != block.fields.end());
+    const auto charmerOf = [&]() {
+        return entity->getField(charmedByLo) |
+               (static_cast<uint64_t>(entity->getField(static_cast<uint16_t>(charmedByLo + 1))) << 32);
+    };
+    const uint64_t oldCharmer = watchesCharmer ? charmerOf() : 0;
 
     // Set fields (common)
     for (const auto& field : block.fields) {
@@ -4136,6 +4162,8 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
     // Dispatch to type-specific handler
     auto* handler = getTypeHandler(entity->getType());
     if (handler) handler->onValuesUpdate(block, entity);
+    if (watchesCharmer && charmerOf() != oldCharmer && owner_.getSpellHandler())
+        owner_.getSpellHandler()->onUnitCharmedByChanged(block.guid, oldCharmer);
 
     if (watchesTarget && unitTargetGuid(*entity) != oldTarget) {
         // 0x00716900: the time it moved, which the pet's ring reads.
@@ -4408,6 +4436,8 @@ void EntityController::handleDestroyObject(network::Packet& packet) {
     if (owner_.getSpellHandler()) owner_.getSpellHandler()->removeUnitCastState(data.guid);
     // Clean up cached auras
     if (owner_.getSpellHandler()) owner_.getSpellHandler()->removeUnitAuraCache(data.guid);
+    // 0x007357f2: its client-triggered auras' timers (0x0080dfe0).
+    if (owner_.getSpellHandler()) owner_.getSpellHandler()->removeClientTriggers(data.guid);
 
     owner_.tabCycleStaleRef() = true;
 }

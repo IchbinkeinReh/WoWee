@@ -298,7 +298,10 @@ void ChatPanel::sendChatMessage(game::GameHandler& gameHandler) {
                     // same emote twice. One the client does not send it does
                     // not play either (0x006dd9e0).
                     uint64_t targetGuid = gameHandler.hasTarget() ? gameHandler.getTargetGuid() : 0;
-                    played = gameHandler.sendTextEmote(dbcId, targetGuid);
+                    // Its animation is sendTextEmote's to play (0x006dd9e0) or
+                    // the server's echo's (0x006cfe70).
+                    gameHandler.sendTextEmote(dbcId, targetGuid);
+                    played = false;
                 }
                 if (auto* renderer = services_.renderer; renderer && played) {
                     if (auto* ac = renderer->getAnimationController()) ac->playEmote(cmdLower);

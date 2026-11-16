@@ -709,7 +709,7 @@ public:
     /// 0x00708c20's refusals for an item with a use spell, before the spell
     /// goes; true when it may be used (leaving a form first where it must).
     bool itemUseAllowed(uint8_t wowBag, uint8_t wowSlot, uint64_t itemGuid,
-                        const ItemQueryResponseData& info);
+                        const ItemQueryResponseData& info, uint32_t spellId);
     /// The item at the wire's bag and slot, 0 when none is known there.
     [[nodiscard]] uint64_t itemGuidAtWire(uint8_t bag, uint8_t slot) const;
     /// An item sent off to the bank or the guild bank by a right-click

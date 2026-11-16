@@ -25,6 +25,7 @@
 #include "game/spell_target_point.hpp"
 #include "game/missile_trajectory.hpp"
 #include "game/totem_bar.hpp"
+#include "game/spell_description_eval.hpp"
 #include "game/movement_handler.hpp"
 #include "game/vehicle.hpp"
 #include "rendering/renderer.hpp"
@@ -2149,6 +2150,10 @@ void SpellHandler::sendPlayerCast(uint32_t spellId, uint64_t target, uint64_t it
                     }
                 }
             }
+            // 0x0080ac90: a spell applying aura 78 (Mounted) where the player
+            // may not mount as it is shown (0x00721da0) leaves the form
+            // first, where autoUnshift lets it (0x0071b130, 0x00726f30).
+            owner_.unshiftForMountSpell(spellId);
         }
     }
     // Remembered so that, if this cast turns out to be what mounted the player,
@@ -3923,6 +3928,20 @@ void SpellHandler::syncPreWotlkTalentsFromKnownSpells() {
 void SpellHandler::updateTimers(float dt) {
     // 0x00804c10: the missiles that have arrived leave the list.
     missilesInFlight_.expire(historyNowMs());
+    // 0x00734390 -> 0x0072e270: aura 233's displays on the other humanoids.
+    if (owner_.getState() == WorldState::IN_WORLD) updateHumanoidMorphs();
+    // 0x0080ddd0: each client-triggered aura's spell, cast by its unit as it
+    // comes due - the player's own as the player's casts go, another unit's
+    // as a pet's (0x0080cce0) - where the unit is in view.
+    if (!clientTriggers_.timers().empty() && owner_.getState() == WorldState::IN_WORLD) {
+        clientTriggers_.fire(static_cast<uint32_t>(core::appTimeSeconds() * 1000.0),
+                             [this](uint64_t unit, uint32_t spell) {
+                                 auto e = owner_.getEntityManager().getEntity(unit);
+                                 if (!e || !e->isUnit() || spell == 0) return;
+                                 if (unit == owner_.getPlayerGuid()) castSpell(spell, 0);
+                                 else castPetSpell(unit, spell, 0);
+                             });
+    }
     // Tick down cast bar
     if (casting_ && castTimeRemaining_ > 0.0f) {
         castTimeRemaining_ -= dt;
@@ -4299,6 +4318,12 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
     const bool rangedWeaponAttack = spellclass::isRangedWeaponAutoAttack(data.spellId);
     // 0x00805330: the cast's beginning on the caster (0x007fa2e0).
     if (owner_.spellCastBeginCallbackRef()) owner_.spellCastBeginCallbackRef()(data.casterUnit, data.spellId);
+    // 0x00806700: a ranged spell (Attributes 0x2) shows the ammunition the
+    // packet names on its caster (0x007206a0), none where it names none.
+    if (owner_.unitAmmoCallbackRef()) {
+        if (const auto attr = owner_.getSpellAttributes(data.spellId); attr && (*attr & 0x2u) != 0)
+            owner_.unitAmmoCallbackRef()(data.casterUnit, data.ammoDisplayId, 0x1e, false);
+    }
     // 0x00806700 -> 0x00805330(spell, cast time, 0) for a start not pending
     // (cast flags 0x1): the cast the caster shows. No cast object here is
     // aimed (+0x139): only 0x00809f80 marks one, on the trajectory cast the
@@ -4933,6 +4958,140 @@ void SpellHandler::replayAuraStateKits() {
     }
 }
 
+bool SpellHandler::clientTriggersRunOn(uint64_t unitGuid) const {
+    const uint64_t player = owner_.getPlayerGuid();
+    if (unitGuid == 0 || player == 0) return false;
+    if (unitGuid == player) return true;
+    // 0x00718b70: the unit's charmer, else its creator - the unit itself
+    // where it has neither - if a player; else that one's charmer or
+    // creator, if a player. Each must be in view.
+    auto& entities = owner_.getEntityManager();
+    const auto master = [](const Entity& e) {
+        const uint64_t c = entityGuidField(e, UF::UNIT_FIELD_CHARMEDBY);
+        return c != 0 ? c : entityGuidField(e, UF::UNIT_FIELD_CREATEDBY);
+    };
+    auto first = entities.getEntity(unitGuid);
+    if (!first || !first->isUnit()) return false;
+    if (const uint64_t m = master(*first); m != 0) first = entities.getEntity(m);
+    if (!first || !first->isUnit()) return false;
+    if (first->getType() == ObjectType::PLAYER) return first->getGuid() == player;
+    const uint64_t m2 = master(*first);
+    if (m2 == 0) return false;
+    const auto second = entities.getEntity(m2);
+    return second && second->getType() == ObjectType::PLAYER && second->getGuid() == player;
+}
+
+void SpellHandler::startClientTriggers(uint64_t unitGuid, uint32_t spellId) {
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return;
+    const auto& e = it->second;
+    const uint32_t now = static_cast<uint32_t>(core::appTimeSeconds() * 1000.0);
+    for (int k = 0; k < 3; ++k) {
+        if (e.effectAuraIds[k] != kAuraPeriodicTriggerFromClient) continue;
+        // EffectAmplitude through the player's spell mods, op 0x13
+        // (0x007fdb50).
+        int period = e.effectAmplitudeMs[k];
+        const spell_mods::Sum mods = owner_.getSpellModifiers(spellId, GameHandler::SpellModOp::ActivationTime);
+        if (mods.any) period = applySpellModifier(period, mods.flat, mods.pct);
+        clientTriggers_.add(unitGuid, spellId, e.effectTriggerSpell[k], static_cast<uint32_t>(period), now);
+    }
+}
+
+void SpellHandler::updateHumanoidMorphs() {
+    if (humanoidMorphEntry_ == 0 && humanoidShown_.empty()) return;
+    const uint64_t player = owner_.getPlayerGuid();
+    auto& entities = owner_.getEntityManager();
+    const auto self = entities.getEntity(player);
+    // 0x0072cc30: a humanoid (creature type 7), not the player; with flag 1
+    // only a player the player regards as hostile (0x00514080).
+    const auto qualifies = [&](const Entity& e) {
+        if (!e.isUnit() || e.getGuid() == player) return false;
+        if (creatureTypeOf(owner_, e) != 7) return false;
+        if ((humanoidMorphFlags_ & 1u) != 0) {
+            if (e.getType() != ObjectType::PLAYER) return false;
+            if (self && owner_.unitReactionsBothWays(*self, e).first >= 2) return false;
+        }
+        return true;
+    };
+    std::vector<uint64_t> rebuild;
+    for (const auto& [guid, entity] : entities.getEntities()) {
+        if (!entity || !entity->isUnit()) continue;
+        HumanoidShown& shown = humanoidShown_[guid];
+        if (!qualifies(*entity)) {
+            if (shown.display != 0) {
+                shown = {};
+                rebuild.push_back(guid);
+            }
+        } else if (humanoidMorphEntry_ == 0 || humanoidMorphEntry_ == shown.entry) {
+            if (humanoidMorphEntry_ == 0 && shown.entry != 0) {
+                shown = {};
+                rebuild.push_back(guid);
+            }
+        } else {
+            // A random one of the entry's displays (the creature query's
+            // four, 0x0067b6a0), once its answer is in.
+            const auto& cache = owner_.getCreatureInfoCache();
+            const auto it = cache.find(humanoidMorphEntry_);
+            if (it == cache.end()) {
+                owner_.queryCreatureInfo(humanoidMorphEntry_, 0);
+                continue;
+            }
+            uint32_t n = 0;
+            for (uint32_t d : it->second.displayId) n += d != 0 ? 1u : 0u;
+            if (n == 0) continue;
+            shown.entry = humanoidMorphEntry_;
+            shown.display = it->second.displayId[static_cast<uint32_t>(std::rand()) % n];
+            rebuild.push_back(guid);
+        }
+    }
+    std::erase_if(humanoidShown_, [&](const auto& kv) {
+        return kv.second.entry == 0 && kv.second.display == 0;
+    });
+    // Its model built again with the display (vtable +0x1c).
+    for (uint64_t guid : rebuild) owner_.rebuildUnitModel(guid);
+}
+
+void SpellHandler::onUnitCharmedByChanged(uint64_t unitGuid, uint64_t oldCharmer) {
+    const uint64_t player = owner_.getPlayerGuid();
+    if (player == 0) return;
+    if (oldCharmer == player) {
+        clientTriggers_.remove(unitGuid, 0);
+        return;
+    }
+    auto entity = owner_.getEntityManager().getEntity(unitGuid);
+    if (!entity || !entity->isUnit() || entityGuidField(*entity, UF::UNIT_FIELD_CHARMEDBY) != player) return;
+    const auto it = unitAurasCache_.find(unitGuid);
+    if (it == unitAurasCache_.end()) return;
+    for (const AuraSlot& a : it->second) {
+        if (a.spellId != 0) startClientTriggers(unitGuid, a.spellId);
+    }
+}
+
+void SpellHandler::onPlayerAuraVision(uint8_t vision) {
+    const std::optional<uint8_t> before = std::exchange(auraVisionSeen_, vision);
+    if (!before || *before == vision) return;
+    const auto changed = static_cast<uint32_t>(*before ^ vision);
+    auto* renderer = owner_.services().renderer;
+    auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
+    if (!svs) return;
+    // 0x00727a70 for each unit: an aura whose vision mask (0x007fe3e0)
+    // meets a changed bit is taken off (0x0071e930) where the player now
+    // lacks the vision, and put on again (0x00724820) where it has it -
+    // setUnitAuraSlot asks the player's vision as it is now.
+    const auto again = [&](uint64_t guid, const std::vector<AuraSlot>& auras) {
+        for (size_t slot = 0; slot < auras.size(); ++slot) {
+            const uint32_t spellId = auras[slot].spellId;
+            if (spellId == 0 || (owner_.spellRequiredVision(spellId) & changed) == 0) continue;
+            svs->setUnitAuraSlot(guid, static_cast<uint32_t>(slot), spellId, auras[slot].casterGuid);
+        }
+    };
+    if (owner_.getPlayerGuid() != 0) again(owner_.getPlayerGuid(), playerAuras_);
+    for (const auto& [guid, auras] : unitAurasCache_) {
+        if (owner_.getEntityManager().getEntity(guid)) again(guid, auras);
+    }
+}
+
 void SpellHandler::logAuraChanges(uint64_t unit, const std::vector<AuraSlot>& before,
                                   const std::vector<std::pair<uint8_t, AuraSlot>>& updates, uint64_t nowMs) {
     auto& feed = owner_.combatLogFeed();
@@ -4980,6 +5139,9 @@ void SpellHandler::handleAuraUpdate(network::Packet& packet, bool isAll) {
     }
 
     if (auraList) {
+        // The slots as they were, for the client-triggered auras that come
+        // and go with them (0x00724820, 0x0071e930).
+        const std::vector<AuraSlot> slotsBefore = *auraList;
         if (isAll) {
             auraList->clear();
         }
@@ -5020,6 +5182,46 @@ void SpellHandler::handleAuraUpdate(network::Packet& packet, bool isAll) {
             (*auraList)[slot] = aura;
         }
         mirrorAurasByGuid(data.guid, *auraList);
+
+        // Aura 48 (PERIODIC_TRIGGER_SPELL_FROM_CLIENT): a spell gone from a
+        // slot takes its timers with it (0x0071e930 -> 0x0080dfe0); one come
+        // to a unit the player controls starts them (0x00724820 ->
+        // 0x0080df10).
+        {
+            const auto spellAt = [](const std::vector<AuraSlot>& v, size_t s) {
+                return s < v.size() ? v[s].spellId : 0u;
+            };
+            const size_t n = std::max(slotsBefore.size(), auraList->size());
+            const bool runs = clientTriggersRunOn(data.guid);
+            for (size_t s = 0; s < n; ++s) {
+                const uint32_t was = spellAt(slotsBefore, s);
+                const uint32_t is = spellAt(*auraList, s);
+                if (was == is) continue;
+                if (was != 0 && owner_.spellAppliesAura(was, kAuraPeriodicTriggerFromClient))
+                    clientTriggers_.remove(data.guid, was);
+                if (is != 0 && runs && owner_.spellAppliesAura(is, kAuraPeriodicTriggerFromClient))
+                    startClientTriggers(data.guid, is);
+                // Aura 233 on the player (0x00724820, 0x0071e930 ->
+                // 0x006d73b0): the entry and flags it names, none once gone.
+                if (data.guid != owner_.getPlayerGuid()) continue;
+                const auto morphOf = [&](uint32_t spell) -> const GameHandler::SpellNameEntry* {
+                    if (spell == 0 || !owner_.spellAppliesAura(spell, 233)) return nullptr;
+                    const auto f = owner_.spellNameCacheRef().find(spell);
+                    return f != owner_.spellNameCacheRef().end() ? &f->second : nullptr;
+                };
+                if (morphOf(was)) {
+                    humanoidMorphEntry_ = 0;
+                    humanoidMorphFlags_ = 0;
+                }
+                if (const auto* e = morphOf(is)) {
+                    for (int k = 0; k < 3; ++k) {
+                        if (e->effectAuraIds[k] != 233) continue;
+                        humanoidMorphEntry_ = static_cast<uint32_t>(e->effectMiscValues[k]);
+                        humanoidMorphFlags_ = static_cast<uint32_t>(e->effectMiscValuesB[k]);
+                    }
+                }
+            }
+        }
 
         // 0x00722090 / 0x00727760: an aura of a stance bar spell that is no
         // shapeshift (aura 36) - Stealth, a presence - came or went. A real

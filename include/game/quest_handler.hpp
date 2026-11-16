@@ -446,6 +446,9 @@ private:
     /// The greeting option chosen for the window now open (0x0058ac30).
     std::string gossipText_;
     void chooseGossipText();
+    /// 0x0071a260 on a quest giver that is a unit (and, without
+    /// `playersToo`, not a player).
+    void queueGiverEmotes(uint64_t guid, const std::vector<DialogEmote>& emotes, bool playersToo);
 
     // Shared quest state
     bool        pendingSharedQuest_       = false;
