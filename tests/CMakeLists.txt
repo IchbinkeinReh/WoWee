@@ -1447,6 +1447,10 @@ wowee_add_packet_test(test_lfg_join_packet)
 # The rank field counts from zero on the wire and from one everywhere else.
 wowee_add_packet_test(test_learn_talent_packet)
 
+# ── test_cancel_cast_packet ─────────────────────────────────
+# CMSG_CANCEL_CAST: a one-byte cast count, then the spell id (0x00806200).
+wowee_add_packet_test(test_cancel_cast_packet)
+
 # ── test_item_query_sockets ─────────────────────────────────
 # The socket block of the item query, which the layout sweep cannot reach.
 wowee_add_packet_test(test_item_query_sockets)

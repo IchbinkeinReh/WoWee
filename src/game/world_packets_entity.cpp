@@ -31,9 +31,13 @@ network::Packet AttackStopPacket::build() {
     return packet;
 }
 
-network::Packet CancelCastPacket::build(uint32_t spellId) {
+network::Packet CancelCastPacket::build(uint32_t spellId, uint8_t castCount, bool wotlkLayout) {
     network::Packet packet(wireOpcode(Opcode::CMSG_CANCEL_CAST));
-    packet.writeUInt32(0); // cast count/sequence
+    // 0x00806200: uint8 cast count, then uint32 spell id. Four bytes of count
+    // put the id three bytes late, so the server read another spell and the
+    // cast went on.
+    if (wotlkLayout) packet.writeUInt8(castCount);
+    else packet.writeUInt32(0);
     packet.writeUInt32(spellId);
     LOG_DEBUG("Built CMSG_CANCEL_CAST for spell: ", spellId);
     return packet;

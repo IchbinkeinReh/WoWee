@@ -1883,10 +1883,14 @@ public:
     static network::Packet build();
 };
 
-/** CMSG_CANCEL_CAST packet builder */
+/** CMSG_CANCEL_CAST packet builder.
+ *
+ * 0x00806200 writes the pending cast's count as one byte (+0x24) and then
+ * the spell id; the server skips the byte and reads the id. Before WotLK
+ * there is no count byte, and the old layout is kept there. */
 class CancelCastPacket {
 public:
-    static network::Packet build(uint32_t spellId);
+    static network::Packet build(uint32_t spellId, uint8_t castCount, bool wotlkLayout = true);
 };
 
 // ============================================================
