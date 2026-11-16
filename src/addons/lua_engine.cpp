@@ -4758,9 +4758,9 @@ int lua_Tooltip_SetLFGCompletionReward(lua_State* L) {
 /// left as an empty box over every set button.
 ///
 /// A slot the set was told to leave alone is written as a guid of one, which is
-/// what the ignore mask records; those are skipped rather than listed as an
-/// item nobody can name. An item the player no longer holds resolves to no id
-/// and is called out in red, which is the whole reason to hover a set.
+/// what the ignore mask records; those are counted, not named. An item the
+/// player no longer holds is called out in red by its slot, which is the whole
+/// reason to hover a set.
 int lua_Tooltip_SetEquipmentSet(lua_State* L) {
     if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:SetEquipmentSet(\"setName\")", usageName(L, 1));   // 0x006264d0
     auto* w = widgetOf(L, 1);
@@ -4773,33 +4773,79 @@ int lua_Tooltip_SetEquipmentSet(lua_State* L) {
         if (es.name == wanted) { set = &es; break; }
     if (!set) { lua_pushboolean(L, 0); return 1; }
 
+    // 0x00622dd0: the set's name with "%d items" (ITEMS_VARIABLE_QUANTITY,
+    // gold) on its right, then counts rather than names - ITEMS_EQUIPPED
+    // (gold), ITEMS_IN_INVENTORY (white: the bags, and the bank while it is
+    // open), ITEM_SLOTS_IGNORED (grey, a slot whose guid is 1) - and one red
+    // ITEM_MISSING line per slot whose item is nowhere, by its slot's name,
+    // last slot first.
     w->isTooltip = true;
     clearTooltipLines(L, w);
-    auto line = [&](std::string text, float r, float g, float b) {
+    auto line = [&](std::string left, std::string right, const float* lc, const float* rc) {
         wowee::ui::Widget::TooltipLine tl;
-        tl.left = std::move(text);
-        tl.lc[0] = r; tl.lc[1] = g; tl.lc[2] = b; tl.lc[3] = 1.0f;
-        tl.rc[0] = tl.rc[1] = tl.rc[2] = tl.rc[3] = 1.0f;
+        tl.left = std::move(left);
+        tl.right = std::move(right);
+        tl.lc[0] = lc[0]; tl.lc[1] = lc[1]; tl.lc[2] = lc[2]; tl.lc[3] = 1.0f;
+        tl.rc[0] = rc[0]; tl.rc[1] = rc[1]; tl.rc[2] = rc[2]; tl.rc[3] = 1.0f;
         w->tooltipLines.push_back(std::move(tl));
     };
-    line(set->name, 1.0f, 1.0f, 1.0f);
+    static constexpr float kWhite[3] = {1.0f, 1.0f, 1.0f};
+    static constexpr float kGold[3] = {1.0f, 0.824f, 0.0f};   // 0xad2d2c
+    static constexpr float kRed[3] = {1.0f, 0.125f, 0.125f};  // 0xad2d34
+    static constexpr float kGrey[3] = {0.5f, 0.5f, 0.5f};     // 0xad2d38
+    // 0x005d9f00: the slot's GlobalStrings name.
+    static const char* const kSlotNames[19] = {
+        "HEADSLOT", "NECKSLOT", "SHOULDERSLOT", "SHIRTSLOT", "CHESTSLOT", "WAISTSLOT",
+        "LEGSSLOT", "FEETSLOT", "WRISTSLOT", "HANDSSLOT", "FINGER0SLOT_UNIQUE",
+        "FINGER1SLOT_UNIQUE", "TRINKET0SLOT_UNIQUE", "TRINKET1SLOT_UNIQUE", "BACKSLOT",
+        "MAINHANDSLOT", "SECONDARYHANDSLOT", "RANGEDSLOT", "TABARDSLOT"};
 
-    const auto* guids = gh->getEquipmentSetItems(set->setId);
-    const uint32_t ignored = gh->getEquipmentSetIgnoreMask(set->setId);
-    if (guids) {
+    auto carried = [gh](uint64_t guid) {
+        for (int i = 0; i < 16; ++i)
+            if (gh->getBackpackItemGuid(i) == guid) return true;
+        for (int bag = 0; bag < 4; ++bag)
+            for (int i = 0; i < 36; ++i)
+                if (gh->getBagItemGuid(bag, i) == guid) return true;
+        if (gh->isBankOpen()) {
+            for (int i = 0; i < 28; ++i)
+                if (gh->getBankSlotGuid(i) == guid) return true;
+            for (int bag = 0; bag < 7; ++bag)
+                for (int i = 0; i < 36; ++i)
+                    if (gh->getBankBagItemGuid(bag, i) == guid) return true;
+        }
+        return false;
+    };
+    int equipped = 0, inBags = 0, ignoredCount = 0;
+    std::vector<int> missing;
+    const uint32_t ignoreMask = gh->getEquipmentSetIgnoreMask(set->setId);
+    if (const auto* guids = gh->getEquipmentSetItems(set->setId)) {
         for (int slot = 0; slot < 19; ++slot) {
-            if (ignored & (1u << slot)) continue;
             const uint64_t guid = (*guids)[static_cast<size_t>(slot)];
+            if (guid == 1 || (ignoreMask & (1u << slot))) { ++ignoredCount; continue; }
             if (guid == 0) continue;
-            const uint32_t itemId = gh->getItemIdByGuid(guid);
-            const auto* info = itemId ? gh->getItemInfo(itemId) : nullptr;
-            if (info && info->valid && !info->name.empty()) {
-                line(info->name, 1.0f, 1.0f, 1.0f);
-            } else {
-                line("Missing item", 1.0f, 0.1f, 0.1f);
-            }
+            bool worn = false;
+            for (int e = 0; e < 19 && !worn; ++e) worn = gh->getEquipSlotGuid(e) == guid;
+            if (worn) ++equipped;
+            else if (carried(guid)) ++inBags;
+            else missing.push_back(slot);
         }
     }
+    auto counted = [&](const char* key, const char* fallback, int n) {
+        return withPlural(formatGlobal(L, globalOr(L, key, fallback), {std::to_string(n)}), n);
+    };
+    const int total = equipped + inBags + static_cast<int>(missing.size());
+    const std::string count = counted("ITEMS_VARIABLE_QUANTITY", "%d |4item:items;", total);
+    line(set->name, count, kWhite, count.empty() ? kWhite : kGold);
+    if (equipped)
+        line(counted("ITEMS_EQUIPPED", "%d |4item:items; equipped", equipped), "", kGold, kGold);
+    if (inBags)
+        line(counted("ITEMS_IN_INVENTORY", "%d |4item:items; in inventory", inBags), "", kWhite, kWhite);
+    if (ignoredCount)
+        line(counted("ITEM_SLOTS_IGNORED", "%d |4slot:slots; ignored", ignoredCount), "", kGrey, kGrey);
+    for (auto it = missing.rbegin(); it != missing.rend(); ++it)
+        line(formatGlobal(L, globalOr(L, "ITEM_MISSING", "%s missing"),
+                          {globalOr(L, kSlotNames[*it], kSlotNames[*it])}),
+             "", kRed, kRed);
     lua_pushboolean(L, 1);
     return 1;
 }
