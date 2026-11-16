@@ -44,19 +44,28 @@ bool parseAuctionMailSubject(const std::string& subject, AuctionMailSubject& res
     return true;
 }
 
-std::string formatAuctionMailSubject(const AuctionMailSubject& subject,
-                                     const std::string& itemName) {
-    static constexpr std::array<const char*, 7> kPrefixes = {
-        "Outbid on ",
-        "Auction won: ",
-        "Auction successful: ",
-        "Auction expired: ",
-        "Auction cancelled: ",
-        "Auction cancelled: ",
-        "Sale Pending: ",
-    };
-    if (subject.response >= kPrefixes.size()) return itemName;
-    return std::string(kPrefixes[subject.response]) + itemName;
+std::string formatAuctionMailSubject(
+    const AuctionMailSubject& subject, const std::string& itemName,
+    const std::function<std::string(const char* key, const char* enUS)>& text) {
+    // The response picks the global string, 4 and 5 sharing one (0x0056f5c0);
+    // the English is enUS GlobalStrings' wording of each.
+    struct Line { const char* key; const char* enUS; };
+    static constexpr std::array<Line, 7> kLines = {{
+        {"AUCTION_OUTBID_MAIL_SUBJECT",  "Outbid on %s"},
+        {"AUCTION_WON_MAIL_SUBJECT",     "Auction won: %s"},
+        {"AUCTION_SOLD_MAIL_SUBJECT",    "Auction successful: %s"},
+        {"AUCTION_EXPIRED_MAIL_SUBJECT", "Auction expired: %s"},
+        {"AUCTION_REMOVED_MAIL_SUBJECT", "Auction cancelled: %s"},
+        {"AUCTION_REMOVED_MAIL_SUBJECT", "Auction cancelled: %s"},
+        {"AUCTION_INVOICE_MAIL_SUBJECT", "Sale Pending: %s"},
+    }};
+    if (subject.response >= kLines.size()) return itemName;
+    const Line& line = kLines[subject.response];
+    std::string format = text ? text(line.key, line.enUS) : std::string(line.enUS);
+    if (format.empty()) format = line.enUS;
+    const size_t at = format.find("%s");
+    if (at == std::string::npos) return format;
+    return format.replace(at, 2, itemName);
 }
 
 // Auction-house mail carries a machine-readable invoice as its body:

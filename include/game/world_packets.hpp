@@ -3841,8 +3841,13 @@ struct AuctionMailInvoice {
 };
 
 bool parseAuctionMailSubject(const std::string& subject, AuctionMailSubject& result);
-std::string formatAuctionMailSubject(const AuctionMailSubject& subject,
-                                     const std::string& itemName);
+/// The subject as the inbox shows it: the interface's AUCTION_*_MAIL_SUBJECT
+/// string for the response with the item's name put in (0x0056f5c0 picks the
+/// key, FrameScript_GetText 0x00819d40 words it). `text(key, enUS)` answers a
+/// global string; without one the English strings are used.
+std::string formatAuctionMailSubject(
+    const AuctionMailSubject& subject, const std::string& itemName,
+    const std::function<std::string(const char* key, const char* enUS)>& text = {});
 bool parseAuctionMailBody(const std::string& body, AuctionMailInvoice& result);
 
 /** CMSG_GET_MAIL_LIST packet builder */
