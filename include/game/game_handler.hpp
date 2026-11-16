@@ -3221,6 +3221,9 @@ public:
     const std::string& getQuestSortName(uint32_t sortId) const;
     const std::string& questTagName(uint32_t questId) const;
     uint32_t questSuggestedPlayers(uint32_t questId) const;
+    /// The quest cache's record for a quest whose query answered (0x0067de90),
+    /// null otherwise.
+    const QuestLogEntry* questCacheRecord(uint32_t questId) const;
     int getSelectedQuestLogIndex() const;
     // Writes through to the QuestHandler, which is where getSelectedQuestLogIndex
     // reads it from. The two used to touch different variables - the setter this

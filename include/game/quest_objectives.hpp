@@ -13,6 +13,9 @@
 // so the two cannot word an objective differently.
 
 #include "game/game_handler.hpp"
+#include "game/quest_progress.hpp"
+
+#include <functional>
 
 #include <string>
 #include <vector>
@@ -90,6 +93,106 @@ bool questObjectiveSlotLine(GameHandler& gh, const GameHandler::QuestLogEntry& q
 /// client has it - see questObjectiveLine.
 std::vector<QuestObjective> questObjectives(GameHandler& gh,
                                             const GameHandler::QuestLogEntry& quest);
+
+/// What a quest link's tooltip needs looked up for its requirement lines:
+/// names by id, how many of an item are carried, and a standing's label.
+struct QuestTooltipLookup {
+    std::function<std::string(int32_t npcOrGoId)> targetName;
+    std::function<std::string(uint32_t itemId)> itemName;
+    std::function<uint32_t(uint32_t itemId)> carried;
+    std::function<std::string(uint32_t factionId)> factionName;
+    std::function<std::string(int32_t value)> standingLabel;
+    QuestTextSource text;
+};
+
+/// How many requirement lines a quest link's tooltip asks for (0x005e1300):
+/// one for the EndText, one per kill or object slot naming anything, one per
+/// item slot except the quest's own item wanted once, one for a reputation
+/// objective and one for players slain. With none of those, one for a quest
+/// in the log whose objectives are met (0x005e0ea0), else none. Unlike the
+/// log's count, a slot needs only an id, not a count.
+inline int questTooltipRequirementCount(const QuestHandler::QuestLogEntry& q, bool completeInLog) {
+    int n = q.endText.empty() ? 0 : 1;
+    for (const auto& kill : q.killObjectives) {
+        if (kill.npcOrGoId != 0) ++n;
+    }
+    for (const auto& item : q.itemObjectives) {
+        if (item.itemId > 0 && (item.itemId != q.sourceItemId || item.required > 1)) ++n;
+    }
+    if (q.repObjectiveFaction != 0) ++n;
+    if (q.playersSlain != 0) ++n;
+    if (n == 0 && completeInLog) n = 1;
+    return n;
+}
+
+/// One requirement line of a quest link's tooltip, by its 0-based place, as
+/// 0x005e1460 builds it with no progress (the tooltip's context clears the
+/// progress flag, so every line is a _NOPROGRESS wording): the EndText; the
+/// kill and object slots; the item slots; while the quest is not met in the
+/// log, the items it hands over; then, for any later place, the players
+/// slain, else the reputation, else - met in the log - the objectives text.
+/// Empty when there is no line there.
+inline std::string questTooltipRequirementLine(const QuestHandler::QuestLogEntry& q, int index,
+                                               bool completeInLog, const QuestTooltipLookup& look) {
+    auto num = [](int64_t v) { return std::to_string(v); };
+    auto shown = [](const std::string& name) { return name.empty() ? questUnknownName() : name; };
+    int at = -1;
+    if (!q.endText.empty()) {
+        at = 0;
+        if (index == 0) return q.endText;
+    }
+    for (size_t i = 0; i < q.killObjectives.size(); ++i) {
+        const auto& kill = q.killObjectives[i];
+        if (kill.npcOrGoId == 0) continue;
+        if (++at != index) continue;
+        const std::string required = num(kill.required);
+        if (!q.objectiveTexts[i].empty()) {
+            return chat_channels::luaFormat(look.text("QUEST_OBJECTS_FOUND_NOPROGRESS", "%s x %d"),
+                                            {q.objectiveTexts[i], required});
+        }
+        const std::string name = shown(look.targetName ? look.targetName(kill.npcOrGoId) : std::string());
+        if (kill.npcOrGoId < 0) {
+            return chat_channels::luaFormat(look.text("QUEST_OBJECTS_FOUND_NOPROGRESS", "%s x %d"),
+                                            {name, required});
+        }
+        return chat_channels::luaFormat(look.text("QUEST_MONSTERS_KILLED_NOPROGRESS", "%s x %d"),
+                                        {name, required});
+    }
+    for (const auto& item : q.itemObjectives) {
+        if (item.itemId < 1 || (item.itemId == q.sourceItemId && item.required < 2)) continue;
+        if (++at != index) continue;
+        return chat_channels::luaFormat(look.text("QUEST_ITEMS_NEEDED_NOPROGRESS", "%s x %d"),
+                                        {shown(look.itemName ? look.itemName(item.itemId) : std::string()),
+                                         num(item.required)});
+    }
+    if (!completeInLog) {
+        for (const uint32_t item : q.objectiveSourceItems) {
+            if (item < 1) continue;
+            if (++at != index) continue;
+            return chat_channels::luaFormat(
+                look.text("QUEST_INTERMEDIATE_ITEMS_NEEDED", "%s: (%d)"),
+                {shown(look.itemName ? look.itemName(item) : std::string()),
+                 num(look.carried ? look.carried(item) : 0)});
+        }
+    }
+    if (q.playersSlain != 0) {
+        return chat_channels::luaFormat(look.text("QUEST_PLAYERS_KILLED_NOPROGRESS", "Players x %d"),
+                                        {num(q.playersSlain)});
+    }
+    if (q.repObjectiveFaction != 0) {
+        return chat_channels::luaFormat(
+            look.text("QUEST_FACTION_NEEDED_NOPROGRESS", "%s:  %s"),
+            {look.factionName ? look.factionName(q.repObjectiveFaction) : std::string(),
+             look.standingLabel ? look.standingLabel(q.repObjectiveValue) : std::string()});
+    }
+    if (completeInLog) return q.objectives;
+    return {};
+}
+
+/// The same lines with this client's caches behind the lookups.
+std::vector<std::string> questTooltipRequirementLines(GameHandler& gh,
+                                                      const GameHandler::QuestLogEntry& quest,
+                                                      bool completeInLog);
 
 }  // namespace game
 }  // namespace wowee

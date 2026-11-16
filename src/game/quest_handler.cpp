@@ -1270,6 +1270,37 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             if (questLogStride >= 5 && packet.getData().size() >= 28)
                 known.suggestedPlayers = network::wire::loadLE32(packet.getData(), 24);
             if (!parsed.title.empty()) known.title = parsed.title;
+            // The cache record a quest link's tooltip reads (0x00622960),
+            // whether or not the quest is in the log.
+            QuestLogEntry& rec = known.record;
+            rec.questId = questId;
+            rec.title = parsed.title;
+            rec.objectives = parsed.objectives;
+            rec.description = parsed.description;
+            rec.completionText = parsed.completionText;
+            rec.endText = parsed.endText;
+            if (questLevel != 0) rec.level = questLevel;
+            if (objs.valid) {
+                for (int i = 0; i < 4; ++i) {
+                    rec.killObjectives[i].npcOrGoId = objs.kills[i].npcOrGoId;
+                    rec.killObjectives[i].required = objs.kills[i].required;
+                    rec.objectiveSourceItems[i] = objs.kills[i].sourceItem;
+                    rec.objectiveSourceCounts[i] = objs.kills[i].sourceCount;
+                    rec.objectiveTexts[i] = objs.texts[i];
+                }
+                for (int i = 0; i < 6; ++i) {
+                    rec.itemObjectives[i].itemId = objs.items[i].itemId;
+                    rec.itemObjectives[i].required = objs.items[i].required;
+                }
+            }
+            if (rwds.valid) {
+                rec.sourceItemId = rwds.sourceItemId;
+                rec.questFlags = rwds.questFlags;
+                rec.playersSlain = rwds.playersSlain;
+                rec.repObjectiveFaction = rwds.repObjectiveFaction;
+                rec.repObjectiveFaction2 = rwds.repObjectiveFaction2;
+                rec.repObjectiveValue = rwds.repObjectiveValue;
+            }
         }
 
         for (auto& q : questLog_) {

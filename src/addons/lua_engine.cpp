@@ -3448,55 +3448,58 @@ static void appendDurabilityLine(wowee::ui::Widget* w, const game::ItemDef& item
 ///
 /// Laid out as WoW lays it out: cost on the left of its line with the range on
 /// the right, then the cast time, then the description.
-/// A quest link, filled from the log.
+/// A quest link, built from the quest cache as 0x00622960 builds it.
 ///
-/// This used to answer false for every quest, on the grounds that the client
-/// kept nothing beyond the title and a tooltip holding only a name is worse
-/// than the caller knowing it failed. The first half stopped being true: a log
-/// entry now carries the quest giver's own text and the objective list, both
-/// read from the query response.
-///
-/// Only for a quest in the player's own log, which is the honest limit - a
-/// link to a quest they have never taken names an id nothing here has text
-/// for, and answering false there is still the right answer. The caller reads
-/// it: `if ( GameTooltip:SetHyperlink(link) )` decides whether to show the
-/// tooltip at all.
+/// Any quest whose query has answered, not only one in the log: the client
+/// reads its quest cache (0x0067de90) and, for a quest it does not hold yet,
+/// sends the query and answers false. Lines: the title (gold);
+/// QUEST_TOOLTIP_ACTIVE in green while the quest is in the player's log; a
+/// blank line; the objectives text in white, wrapped; then, when the quest
+/// has requirements (0x005e1300), a blank line, QUEST_TOOLTIP_REQUIREMENTS
+/// and " - " before each requirement line (0x005e1460) in white. No level
+/// line and no description.
 static bool fillQuestTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh,
                              uint32_t questId) {
     if (!w || !gh || questId == 0) return false;
-    // Through the public log rather than the private finder beside it: this
-    // wants the same entry the quest log itself draws from.
-    const game::GameHandler::QuestLogEntry* q = nullptr;
-    for (const auto& e : gh->getQuestLog()) {
-        if (e.questId == questId) { q = &e; break; }
+    const game::GameHandler::QuestLogEntry* rec = gh->questCacheRecord(questId);
+    if (!rec) {
+        gh->requestQuestQuery(questId, false);
+        return false;
     }
-    if (!q) return false;
-    if (q->title.empty() && q->objectives.empty()) return false;
+    const game::GameHandler::QuestLogEntry* inLog = nullptr;
+    for (const auto& e : gh->getQuestLog()) {
+        if (e.questId == questId) { inLog = &e; break; }
+    }
 
     w->isTooltip = true;
     clearTooltipLines(L, w);
-    auto line = [&w](std::string text, float r, float g, float b) {
+    auto line = [&w](std::string text, float r, float g, float b, bool wrap) {
         wowee::ui::Widget::TooltipLine t;
         t.left = std::move(text);
         t.lc[0] = r; t.lc[1] = g; t.lc[2] = b; t.lc[3] = 1.0f;
         t.rc[0] = t.rc[1] = t.rc[2] = 1.0f; t.rc[3] = 1.0f;
-        // Prose, so it breaks to fit rather than making the tooltip as wide
-        // as the sentence.
-        t.wrap = true;
+        t.wrap = wrap;
         w->tooltipLines.push_back(std::move(t));
     };
-    line(q->title.empty() ? ("Quest #" + std::to_string(questId)) : q->title,
-         1.0f, 0.82f, 0.0f);
-    if (q->level > 0) {
-        line("Level " + std::to_string(q->level), 1.0f, 1.0f, 1.0f);
-    }
-    if (!q->description.empty()) line(q->description, 1.0f, 1.0f, 1.0f);
-    // What is left to do, or what to do now it is done - the same two the log
-    // shows, and the same order.
-    if (q->complete && !q->completionText.empty()) {
-        line(q->completionText, 1.0f, 1.0f, 1.0f);
-    } else if (!q->objectives.empty()) {
-        line(q->objectives, 0.75f, 0.75f, 0.75f);
+    auto global = [L](const char* name, const char* fallback) {
+        std::string out = fallback;
+        lua_getglobal(L, name);
+        if (lua_type(L, -1) == LUA_TSTRING) out = lua_tostring(L, -1);
+        lua_pop(L, 1);
+        return out;
+    };
+    // Colours 0x00ad2d2c (gold), 0x00ad2d40 (green), 0x00ad2d30 (white).
+    line(rec->title, 1.0f, 0.82f, 0.0f, false);
+    if (inLog) line(global("QUEST_TOOLTIP_ACTIVE", "You are on this quest"), 0.0f, 1.0f, 0.0f, false);
+    line(" ", 1.0f, 0.82f, 0.0f, false);
+    line(rec->objectives, 1.0f, 1.0f, 1.0f, true);
+    const bool completeInLog = inLog && inLog->complete;
+    const std::vector<std::string> reqs =
+        game::questTooltipRequirementLines(*gh, *rec, completeInLog);
+    if (game::questTooltipRequirementCount(*rec, completeInLog) > 0) {
+        line(" ", 1.0f, 0.82f, 0.0f, false);
+        line(global("QUEST_TOOLTIP_REQUIREMENTS", "Requirements:"), 1.0f, 0.82f, 0.0f, false);
+        for (const std::string& r : reqs) line(" - " + r, 1.0f, 1.0f, 1.0f, false);
     }
     // And the quest builder's own script at its end (0x00622960).
     if (pushFrameOfWidget(L, w->id)) {

@@ -231,6 +231,13 @@ public:
     /// The quest's QuestInfo name, its tag ("Elite", "Group", ...), empty
     /// for none or a quest not queried (0x005e0070).
     const std::string& questTagName(uint32_t questId);
+    /// What the quest cache (0x0067de90) holds for a quest whose query has
+    /// answered, as a log entry without progress; null for one never answered.
+    [[nodiscard]] const QuestLogEntry* questCacheRecord(uint32_t questId) const {
+        const auto it = queriedQuests_.find(questId);
+        return it != queriedQuests_.end() && it->second.record.questId != 0 ? &it->second.record
+                                                                              : nullptr;
+    }
     /// The quest's suggested group size, 0 for none (0x005ded30).
     uint32_t questSuggestedPlayers(uint32_t questId) const {
         const auto it = queriedQuests_.find(questId);
@@ -413,6 +420,10 @@ private:
         /// SuggestedPlayers (+0x18 of the client's record).
         uint32_t suggestedPlayers = 0;
         std::string title;
+        /// The rest of the query answer, laid out as a log entry with no
+        /// progress in it: what a quest link's tooltip is built from
+        /// (0x00622960 reads the quest cache 0x0067de90, not the log).
+        QuestLogEntry record;
     };
     std::unordered_map<uint32_t, QueriedQuest> queriedQuests_;
     std::unordered_set<uint32_t> pendingQuestAddedNotices_;

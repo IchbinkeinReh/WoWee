@@ -6422,6 +6422,10 @@ uint32_t GameHandler::questSuggestedPlayers(uint32_t questId) const {
     return questHandler_ ? questHandler_->questSuggestedPlayers(questId) : 0u;
 }
 
+const GameHandler::QuestLogEntry* GameHandler::questCacheRecord(uint32_t questId) const {
+    return questHandler_ ? questHandler_->questCacheRecord(questId) : nullptr;
+}
+
 const std::string& GameHandler::getQuestSortName(uint32_t sortId) const {
     static const std::string empty;
     return questHandler_ ? questHandler_->getQuestSortName(sortId) : empty;
