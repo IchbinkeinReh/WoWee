@@ -250,3 +250,13 @@ TEST_CASE("a bouncing missile passes over targets that are not there as it turns
     CHECK(nextPresentHop(5, present.size(), there) == 5);
     CHECK(nextPresentHop(0, 1, there) == 1);  // none there: past the end
 }
+
+TEST_CASE("A missile's first launch makes up the time since the cast", "[spell_missile]") {
+    using wowee::rendering::spell_missile::retimedLaunchSpeed;
+    CHECK(retimedLaunchSpeed(20.0f, 40.0f, 0.0f) == Catch::Approx(20.0f));   // let go at once
+    CHECK(retimedLaunchSpeed(20.0f, 40.0f, 0.5f) == Catch::Approx(40.0f / 1.5f));
+    CHECK(retimedLaunchSpeed(20.0f, 40.0f, 1.5f) == Catch::Approx(40.0f));   // at most twice
+    CHECK(retimedLaunchSpeed(20.0f, 40.0f, 3.0f) == Catch::Approx(40.0f));   // no time left
+    CHECK(retimedLaunchSpeed(20.0f, 0.0f, 0.0f) == Catch::Approx(40.0f));    // nowhere to go
+    CHECK(retimedLaunchSpeed(0.0f, 40.0f, 1.0f) == Catch::Approx(0.0f));     // no speed: untouched
+}

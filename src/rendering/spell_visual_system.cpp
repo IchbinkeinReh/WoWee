@@ -988,9 +988,9 @@ glm::vec3 SpellVisualSystem::missileTargetPoint(ActiveMissile& missile) const {
 bool SpellVisualSystem::launchSpellMissile(uint32_t visualId, float speed, const MissileEnd& from,
                                            const MissileEnd& to, std::vector<MissileEnd> impacts,
                                            const MissileTrajectory* trajectory, uint32_t spellId,
-                                           uint64_t casterGuid, uint8_t castCount) {
+                                           uint64_t casterGuid, uint8_t castCount, float sinceCastSeconds) {
     return launchMissile(visualId, speed, from, to, std::move(impacts), trajectory, spellId, casterGuid, castCount,
-                         {});
+                         {}, 0, sinceCastSeconds);
 }
 
 // 0x00732ff0 for AttributesEx4 0x40000: the missile goes to the first of
@@ -998,7 +998,8 @@ bool SpellVisualSystem::launchSpellMissile(uint32_t visualId, float speed, const
 bool SpellVisualSystem::launchBouncingSpellMissile(uint32_t visualId, float speed, const MissileEnd& from,
                                                    std::vector<BounceHop> hops,
                                                    const MissileTrajectory* trajectory, uint32_t spellId,
-                                                   uint64_t casterGuid, uint8_t castCount) {
+                                                   uint64_t casterGuid, uint8_t castCount,
+                                                   float sinceCastSeconds) {
     if (hops.empty()) return false;   // 0x00703730: none to fly to
     // 0x007022d0 at the launch: a first target whose unit is not there is
     // passed over for the next (0x00702a60). With none there at all the
@@ -1011,7 +1012,7 @@ bool SpellVisualSystem::launchBouncingSpellMissile(uint32_t visualId, float spee
     std::vector<MissileEnd> impacts;
     if (hops[first].hit) impacts.push_back(to);
     return launchMissile(visualId, speed, from, to, std::move(impacts), trajectory, spellId, casterGuid, castCount,
-                         std::move(hops), first);
+                         std::move(hops), first, sinceCastSeconds);
 }
 
 bool SpellVisualSystem::resolveBounceHop(BounceHop& hop) {
@@ -1079,6 +1080,20 @@ void SpellVisualSystem::aimMissile(ActiveMissile& missile, const MissileVisual& 
         }
         flight = missile.arc.flightSeconds;
     }
+    // 0x007022d0 at the first launch: the speed (+0x24) retimed to make up
+    // the time since the cast made it (local_28), over the way from the
+    // caster where it stands now to the target - from where it was let go
+    // for a SpellVisual with Flags 0x80, or with the caster gone.
+    if (!relaunch && missile.speed > 0.0f && !(missile.adjusted && missile.arc.onArc)) {
+        glm::vec3 from = missile.position;
+        glm::mat4 casterFrame;
+        if ((visual.flags & 0x80u) == 0 && missile.casterInstanceId != 0 && charRenderer &&
+            charRenderer->getInstanceFrame(missile.casterInstanceId, casterFrame))
+            from = glm::vec3(casterFrame[3]);
+        missile.speed =
+            spell_missile::retimedLaunchSpeed(missile.speed, glm::length(target - from), missile.sinceCast);
+        if (!missile.adjusted) flight = spell_missile::flightTime(glm::length(target - missile.position), missile.speed);
+    }
     // A missile chasing a unit that runs from it takes longer than this, so
     // the cap is generous; it only stops one that can never arrive.
     missile.maxLifetime = flight * 3.0f + 5.0f;
@@ -1095,7 +1110,7 @@ void SpellVisualSystem::aimMissile(ActiveMissile& missile, const MissileVisual& 
 bool SpellVisualSystem::launchMissile(uint32_t visualId, float speed, const MissileEnd& from, const MissileEnd& to,
                                       std::vector<MissileEnd> impacts, const MissileTrajectory* trajectory,
                                       uint32_t spellId, uint64_t casterGuid, uint8_t castCount,
-                                      std::vector<BounceHop> hops, size_t firstHop) {
+                                      std::vector<BounceHop> hops, size_t firstHop, float sinceCastSeconds) {
     if (!m2Renderer_ || visualId == 0 || !(speed > 0.0f)) return false;
     const SyncEffectLoadScope syncLoads(syncEffectLoads_,
                                         involvesPlayer(from.renderInstanceId, to.renderInstanceId));
@@ -1121,6 +1136,7 @@ bool SpellVisualSystem::launchMissile(uint32_t visualId, float speed, const Miss
     missile.launchSpeed = speed;
     missile.hops = std::move(hops);
     missile.hopIndex = firstHop;
+    missile.sinceCast = sinceCastSeconds;
     if (trajectory) {
         missile.hasTrajectory = true;
         missile.trajectory = *trajectory;

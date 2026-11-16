@@ -156,10 +156,13 @@ public:
     /// missile, no speed, no model), so the caller plays the impacts itself.
     /// `casterGuid` and `castCount` name the missile as the client keeps it
     /// (+0, +0x20) for SMSG_SET_PROJECTILE_POSITION.
+    /// `sinceCastSeconds`: how long ago the cast made the missile, which its
+    /// first launch makes up for (0x007022d0); missiles here are launched as
+    /// the cast makes them.
     bool launchSpellMissile(uint32_t visualId, float speed, const MissileEnd& from,
                             const MissileEnd& to, std::vector<MissileEnd> impacts,
                             const MissileTrajectory* trajectory = nullptr, uint32_t spellId = 0,
-                            uint64_t casterGuid = 0, uint8_t castCount = 0);
+                            uint64_t casterGuid = 0, uint8_t castCount = 0, float sinceCastSeconds = 0.0f);
 
     /// One target of a bouncing missile: its unit, where it was last known
     /// to be and whether the cast hit it there (its miss reason 0,
@@ -177,7 +180,8 @@ public:
     /// as it lands there. False when nothing was launched.
     bool launchBouncingSpellMissile(uint32_t visualId, float speed, const MissileEnd& from,
                                     std::vector<BounceHop> hops, const MissileTrajectory* trajectory = nullptr,
-                                    uint32_t spellId = 0, uint64_t casterGuid = 0, uint8_t castCount = 0);
+                                    uint32_t spellId = 0, uint64_t casterGuid = 0, uint8_t castCount = 0,
+                                    float sinceCastSeconds = 0.0f);
 
     /// SMSG_SET_PROJECTILE_POSITION (0x008005a0): the missiles of this
     /// caster's cast stop at `point` - each lands where it is once a step
@@ -1067,6 +1071,9 @@ private:
         bool hasTrajectory = false;
         MissileTrajectory trajectory;
         float flownBeforeHop = 0.0f;
+        // How long before its launch the cast made it (+0xe4 to +0x180),
+        // which its first launch makes up for (0x007022d0).
+        float sinceCast = 0.0f;
         // Where its model was last placed: the world matrix a landing
         // missile is kept at (0x00700700).
         glm::mat4 lastTransform{1.0f};
@@ -1098,7 +1105,7 @@ private:
     bool launchMissile(uint32_t visualId, float speed, const MissileEnd& from, const MissileEnd& to,
                        std::vector<MissileEnd> impacts, const MissileTrajectory* trajectory, uint32_t spellId,
                        uint64_t casterGuid, uint8_t castCount, std::vector<BounceHop> hops,
-                       size_t firstHop = 0);
+                       size_t firstHop = 0, float sinceCastSeconds = 0.0f);
     /// One frame of a missile's motion script (0x00700350, 0x00700550,
     /// 0x006feb20): where it is drawn and how its model is turned, its speed
     /// changed; the drawn place is its own where it has no script.

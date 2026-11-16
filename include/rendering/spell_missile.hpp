@@ -278,6 +278,20 @@ inline MissileArc planMissileArc(float elevation, float castSpeed, const glm::ve
     return arc;
 }
 
+/// A missile's speed at its first launch (0x007022d0, hop +0xf0 zero, with
+/// a speed): the time since the cast made it (+0x180 now less +0xe4) comes
+/// off its flight over `distance`, and it flies at the speed that lands it
+/// then (local_28), at most twice its speed - and at twice it where no time
+/// is left, a missile with no way to go included.
+inline float retimedLaunchSpeed(float speed, float distance, float sinceCastSeconds) {
+    if (!(speed > 0.0f)) return speed;
+    const float most = speed + speed;
+    const float left = distance / speed - sinceCastSeconds;
+    if (!(left > 0.0f)) return most;
+    const float s = distance / left;
+    return most < s ? most : s;
+}
+
 /// The time an ADJUST_MISSILE relaunch is planned to land in (0x00700880):
 /// the hit time (+0x134) is fixed once, at the cast, so a bouncing missile's
 /// later hops get what is left of it after the hops already flown - nothing,
