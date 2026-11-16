@@ -549,6 +549,12 @@ struct Widget {
     /// for a slider that never declared one.
     uint32_t thumbRegion = 0;
     float barMin = 0.0f, barMax = 1.0f, barValue = 0.0f;
+    /// The bar's flags (+0x29c in the client, 2 and 4): a range has been set,
+    /// and a value has. SetValue does nothing until the first, and a new range
+    /// or step re-applies the value only once the second holds (0x00961800,
+    /// 0x00961890, 0x0096c090).
+    bool  barRangeSet = false;
+    bool  barValueSet = false;
     std::string barTexture;
     float barColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     /// Which layer the bar's fill draws in. In the real client the fill is a

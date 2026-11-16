@@ -8913,6 +8913,29 @@ int lua_Frame_SetBackdropBorderColor(lua_State* L) {
     return 0;
 }
 
+/// A bar's OnValueChanged(self, value) or OnMinMaxChanged(self, min, max),
+/// with the bar's table at index 1 (0x00961890, 0x00961560, 0x0096c090,
+/// 0x0096bbb0).
+static void fireBarScript(lua_State* L, const char* script, int nargs, double a, double b = 0.0) {
+    taint::Quiet quiet;   // see callScriptOnTable
+    lua_getfield(L, 1, "__scripts");
+    if (lua_istable(L, -1)) {
+        lua_getfield(L, -1, script);
+        if (lua_isfunction(L, -1)) {
+            lua_pushvalue(L, 1);
+            lua_pushnumber(L, a);
+            if (nargs > 1) lua_pushnumber(L, b);
+            if (pcallScript(L, script, nargs + 1, 0) != 0)
+                recordScriptError(L, script);
+        } else {
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+}
+
+static void applyBarValue(lua_State* L, float value);
+
 int lua_StatusBar_SetMinMaxValues(lua_State* L) {
     // Two numbers, or the usage line. Past that the widgets part: a slider
     // (0x00971df0) answers a minimum above the maximum with the usage line;
@@ -8934,10 +8957,22 @@ int lua_StatusBar_SetMinMaxValues(lua_State* L) {
             if (!(hi - lo <= kLimit)) return luaL_error(L, "Min and Max too far apart");
         }
     }
-    if (auto* w = widgetOf(L, 1)) {
-        w->barMin = static_cast<float>(luaL_optnumber(L, 2, 0.0));
-        w->barMax = static_cast<float>(luaL_optnumber(L, 3, 1.0));
-    }
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    float lo = static_cast<float>(lua_tonumber(L, 2));
+    const float hi = static_cast<float>(lua_tonumber(L, 3));
+    // 0x00961800: a maximum under the minimum pulls the minimum down to it.
+    // Only a real change is stored and announced; OnMinMaxChanged(min, max)
+    // is 0x00961560, and the value already set is then set again, which is
+    // what clamps it into the new range (and fires OnValueChanged if that
+    // moved it).
+    if (hi < lo) lo = hi;
+    if (w->barRangeSet && w->barMin == lo && w->barMax == hi) return 0;
+    w->barMin = lo;
+    w->barMax = hi;
+    w->barRangeSet = true;
+    fireBarScript(L, "OnMinMaxChanged", 2, lo, hi);
+    if (auto* after = widgetOf(L, 1); after && after->barValueSet) applyBarValue(L, after->barValue);
     return 0;
 }
 int lua_StatusBar_GetMinMaxValues(lua_State* L) {
@@ -8946,12 +8981,29 @@ int lua_StatusBar_GetMinMaxValues(lua_State* L) {
     lua_pushnumber(L, w ? w->barMax : 1.0);
     return 2;
 }
-int lua_StatusBar_SetValue(lua_State* L) {
+
+/// The value core, with the bar's table at index 1.
+///
+/// A status bar's (0x00961890) does nothing until a range has been set,
+/// clamps into it - a NaN, being under nothing, lands on the maximum - and
+/// stores and announces only a change.
+static void applyBarValue(lua_State* L, float value) {
     auto* w = widgetOf(L, 1);
-    if (!w) return 0;
-    const float value = static_cast<float>(luaL_optnumber(L, 2, 0.0));
-    const bool changed = (value != w->barValue);
+    if (!w) return;
+    if (w->isSlider) {
+        const bool changed = (value != w->barValue);
+        w->barValue = value;
+        w->barValueSet = true;
+        if (changed) fireBarScript(L, "OnValueChanged", 1, value);
+        return;
+    }
+    if (!w->barRangeSet) return;
+    if (!(value <= w->barMax)) value = w->barMax;
+    else if (value < w->barMin) value = w->barMin;
+    const bool changed = !w->barValueSet || value != w->barValue;
+    if (!changed) return;
     w->barValue = value;
+    w->barValueSet = true;
 
     // A value set from code fires OnValueChanged, as in WoW - for a status bar
     // as well as a slider. The note here used to say a status bar does not,
@@ -8969,22 +9021,11 @@ int lua_StatusBar_SetValue(lua_State* L) {
     // real change, because several of these set the value they already have on
     // every update - which also stops a handler that sets its own bar from
     // recurring.
-    if (changed) {
-        taint::Quiet quiet;   // see callScriptOnTable
-        lua_getfield(L, 1, "__scripts");
-        if (lua_istable(L, -1)) {
-            lua_getfield(L, -1, "OnValueChanged");
-            if (lua_isfunction(L, -1)) {
-                lua_pushvalue(L, 1);
-                lua_pushnumber(L, value);
-                if (pcallScript(L, "OnValueChanged", 2, 0) != 0)
-                    recordScriptError(L, "OnValueChanged");
-            } else {
-                lua_pop(L, 1);
-            }
-        }
-        lua_pop(L, 1);
-    }
+    fireBarScript(L, "OnValueChanged", 1, value);
+}
+int lua_StatusBar_SetValue(lua_State* L) {
+    if (!widgetOf(L, 1)) return 0;
+    applyBarValue(L, static_cast<float>(luaL_optnumber(L, 2, 0.0)));
     return 0;
 }
 /// StatusBar/Slider:SetValue(value) (0x00971540, 0x00971f00): a number, or
@@ -17595,6 +17636,7 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
                 }
                 if (value != w->barValue) {
                     w->barValue = value;
+                    w->barValueSet = true;
                     // With the value, because that is the argument the handler
                     // names and uses: UIPanelScrollBarTemplate's body is
                     // self:GetParent():SetVerticalScroll(value), and a nil

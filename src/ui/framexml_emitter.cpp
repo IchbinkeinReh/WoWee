@@ -1097,10 +1097,14 @@ struct Emitter {
         if (const std::string* strata = node.attr("frameStrata")) {
             line(var + ":SetFrameStrata(" + quote(*strata) + ")");
         }
-        // A slider's range, step and orientation, declared as attributes. The
-        // range has to be set before the value, or the value is clamped to a
-        // default range it was never meant to sit in.
-        if (node.attr("minValue") || node.attr("maxValue")) {
+        // A bar's or slider's range, step and orientation, declared as
+        // attributes. The range is read only when both ends are given, and
+        // defaultValue only inside that - a bar with no range ignores a value
+        // anyway (StatusBar 0x00961e30, Slider 0x0096c500).
+        const std::string* minAttr = node.attr("minValue");
+        const std::string* maxAttr = node.attr("maxValue");
+        const bool hasRange = minAttr && !minAttr->empty() && maxAttr && !maxAttr->empty();
+        if (hasRange) {
             line(var + ":SetMinMaxValues(" +
                  std::to_string(node.attrFloat("minValue", 0.0f)) + ", " +
                  std::to_string(node.attrFloat("maxValue", 1.0f)) + ")");
@@ -1120,7 +1124,7 @@ struct Emitter {
         if (const std::string* r = node.attr("rotatesTexture"); r && !r->empty()) {
             line(var + ":SetRotatesTexture(" + (node.attrBool("rotatesTexture") ? "true" : "false") + ")");
         }
-        if (node.attr("defaultValue")) {
+        if (const std::string* dv = node.attr("defaultValue"); hasRange && dv && !dv->empty()) {
             line(var + ":SetValue(" +
                  std::to_string(node.attrFloat("defaultValue", 0.0f)) + ")");
         }

@@ -655,6 +655,16 @@ TEST_CASE("A slider carries its range, step and grip", "[framexml][emit]") {
     REQUIRE(r.lua.find(":SetMinMaxValues(") < r.lua.find(":SetValue("));
 }
 
+TEST_CASE("A bar's range is read only when both ends are given", "[framexml][emit]") {
+    // StatusBar 0x00961e30 and Slider 0x0096c500 read minValue only together
+    // with maxValue, and defaultValue only inside that.
+    XmlNode root = parseOrFail(
+        "<Ui><StatusBar name=\"B\" minValue=\"0\" defaultValue=\"5\"/></Ui>");
+    const EmitResult r = emitFrameXml(root);
+    REQUIRE_FALSE(has(r.lua, ":SetMinMaxValues("));
+    REQUIRE_FALSE(has(r.lua, ":SetValue("));
+}
+
 TEST_CASE("A frame's id becomes SetID", "[framexml][emit]") {
     // How a frame in a numbered set knows which one it is. FrameXML builds
     // names out of it - PartyMemberFrame_RefreshPetDebuffs reaches for
