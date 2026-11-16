@@ -6,6 +6,7 @@
 
 #include <set>
 #include "addons/lua_api_registrations.hpp"
+#include "game/chat_bubble_rule.hpp"
 #include "game/chat_filters.hpp"
 #include "game/chat_language.hpp"
 #include "game/chat_profanity.hpp"
@@ -1252,22 +1253,26 @@ void ChatHandler::deliverChatMessage(MessageChatData data, bool alreadyWaited) {
         }
     }
 
-    // Trigger chat bubble for SAY/YELL messages from others
-    if (owner_.chatBubbleCallbackRef() && data.senderGuid != 0) {
-        bool bubble = (data.type == ChatType::SAY || data.type == ChatType::YELL ||
-                       data.type == ChatType::MONSTER_SAY || data.type == ChatType::MONSTER_YELL ||
-                       data.type == ChatType::MONSTER_PARTY);
-        // Party Chat Bubbles, a separate box beside the one for say and yell,
-        // and read by nothing until now: party lines never floated over anyone
-        // whichever way it was set. Registered on beside chatBubbles at
-        // 0x00510000, so a party's lines float over its members until the box
-        // is unticked.
-        if (!bubble && (data.type == ChatType::PARTY || data.type == ChatType::RAID)) {
-            bubble = addons::storedCVarValue("chatBubblesParty", "1") != "0";
-        }
-        if (bubble) {
-            bool isYell = (data.type == ChatType::YELL || data.type == ChatType::MONSTER_YELL);
-            owner_.chatBubbleCallbackRef()(data.senderGuid, data.message, isYell);
+    // 0x00720010: a bubble over the speaker for say, yell and their monster
+    // forms (chatBubbles) and for party and party-leader lines
+    // (chatBubblesParty) - none for raid or monster-party lines - from a
+    // speaker this client has, with a non-empty line, within 25 yards of the
+    // player. The two settings are asked where the bubble is made, by the
+    // bubble manager, which holds them.
+    if (owner_.chatBubbleCallbackRef() && data.senderGuid != 0 && !data.message.empty()) {
+        const auto setting = chat_bubble_rule::settingFor(static_cast<uint8_t>(data.type));
+        auto& entities = owner_.getEntityManager();
+        const auto speaker = setting != chat_bubble_rule::Setting::None ? entities.getEntity(data.senderGuid) : nullptr;
+        const auto player = speaker ? entities.getEntity(owner_.getPlayerGuid()) : nullptr;
+        if (speaker && player) {
+            const float dx = speaker->getX() - player->getX();
+            const float dy = speaker->getY() - player->getY();
+            const float dz = speaker->getZ() - player->getZ();
+            if (chat_bubble_rule::inRange(dx * dx + dy * dy + dz * dz)) {
+                const bool isYell = (data.type == ChatType::YELL || data.type == ChatType::MONSTER_YELL);
+                owner_.chatBubbleCallbackRef()(data.senderGuid, data.message, isYell,
+                                               setting == chat_bubble_rule::Setting::ChatBubblesParty);
+            }
         }
     }
 

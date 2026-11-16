@@ -17,7 +17,7 @@ void ChatSettings::restoreDefaults() {
     autoJoinLFG          = true;
     autoJoinLocal        = true;
     showBubbles          = true;
-    partyBubbles         = false;
+    partyBubbles         = true;   // chatBubblesParty "1" (0x00510000)
 }
 
 // Render the "Chat" tab inside the Settings window.

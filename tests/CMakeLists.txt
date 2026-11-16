@@ -229,6 +229,10 @@ wowee_add_test(test_chat_outgoing
 wowee_add_test(test_chat_bubble_timing
     SOURCES test_chat_bubble_timing.cpp)
 
+# Which chat lines get a bubble, and from how far (0x00720010).
+wowee_add_test(test_chat_bubble_rule
+    SOURCES test_chat_bubble_rule.cpp)
+
 # The gossip greeting option shown, by probability and gender
 # (0x0058ac30). Header-only.
 wowee_add_test(test_npc_text

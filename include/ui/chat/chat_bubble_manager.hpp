@@ -28,12 +28,13 @@ public:
 
     [[nodiscard]] bool empty() const { return bubbles_.empty(); }
 
-    /// The chatBubbles CVar. The interface options put a checkbox on it and
-    /// nothing here read it, so turning bubbles off left them on the screen.
-    /// Turning it off drops what is queued too, rather than leaving the last
-    /// few to fade.
+    /// The chatBubbles and chatBubblesParty CVars. Each is asked when a
+    /// bubble is made (0x00720010) - say and yell lines by the first, party
+    /// lines by the second - and not afterwards: a bubble already up stays
+    /// for its time when either is turned off.
     [[nodiscard]] bool bubblesShown() const { return show_; }
     void setBubblesShown(bool shown) { show_ = shown; }
+    void setPartyBubblesShown(bool shown) { partyShown_ = shown; }
 
 private:
     struct ChatBubble {
@@ -47,6 +48,7 @@ private:
     std::vector<ChatBubble> bubbles_;
     bool callbackSet_ = false;
     bool show_ = true;
+    bool partyShown_ = true;
 
     static constexpr size_t kMaxBubbles = 10;
 };
