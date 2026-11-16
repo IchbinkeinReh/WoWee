@@ -1782,6 +1782,11 @@ void SpellHandler::castSent(uint32_t spellId, uint64_t caster) {
         owner_.askVehicleSeatChange();
         owner_.stopMover();
     }
+    // 0x0080ac90 -> 0x00805010: the cast waits in the pending list until it
+    // goes off or fails. Kept here for one on the next swing (Attributes
+    // 0x404), which waits for the swing (0x00806480, 0x00805f30).
+    if (caster == owner_.getPlayerGuid() && (it->second.attr & 0x404u) != 0)
+        setPendingSwing(PendingSwing{spellId, castCount_});
     // 0x0080ac90 -> 0x00805330(spell, 0, 1): the cast sent, shown on its
     // caster as one sent here.
     {
@@ -3385,6 +3390,42 @@ void SpellHandler::cancelCast() {
     }
 }
 
+void SpellHandler::setPendingSwing(const PendingSwing& swing) {
+    pendingSwing_ = swing;
+    // 0x0053b480: ACTIONBAR_UPDATE_STATE (0xb1), CURRENT_SPELL_CAST_CHANGED
+    // (0xf3) - how the button of a spell on the next swing lights and goes
+    // out (IsCurrentSpell, 0x00805f30).
+    if (owner_.addonEventCallbackRef()) {
+        owner_.addonEventCallbackRef()("ACTIONBAR_UPDATE_STATE", {});
+        owner_.addonEventCallbackRef()("CURRENT_SPELL_CAST_CHANGED", {});
+    }
+}
+
+void SpellHandler::cancelPendingCasts(uint32_t attributeMask) {
+    // 0x00806480 / 0x00806550: each pending cast whose Spell Attributes meet
+    // the mask goes through 0x00806200(cast, 0, 1, 0x1b), which sends
+    // CMSG_CANCEL_CAST when the cast has a cast time or is on the next swing
+    // (0x404), and ends it.
+    const auto& cache = owner_.spellNameCacheRef();
+    auto attributesOf = [&](uint32_t spellId) -> uint32_t {
+        const auto it = cache.find(spellId);
+        return it != cache.end() ? it->second.attr : 0u;
+    };
+    if (pendingSwing_.spellId != 0 && (attributesOf(pendingSwing_.spellId) & attributeMask) != 0) {
+        const PendingSwing swing = pendingSwing_;
+        setPendingSwing(PendingSwing{});
+        if (owner_.getState() == WorldState::IN_WORLD && owner_.getSocket()) {
+            auto packet = CancelCastPacket::build(swing.spellId, swing.castCount, !isPreWotlk());
+            owner_.getSocket()->send(packet);
+        }
+        owner_.castVisuals().ended(owner_.getPlayerGuid(), swing.castCount, swing.spellId);
+    }
+    // The running cast, which has a cast time; a channel is not in the list.
+    if (casting_ && !castIsChannel_ && !restorationActive_ && currentCastSpellId_ != 0 &&
+        (attributesOf(currentCastSpellId_) & attributeMask) != 0)
+        cancelCast();
+}
+
 void SpellHandler::startCraftQueue(uint32_t spellId, int count) {
     // castSpell() dismounts a ground mount and then casts, so crafting while
     // mounted just works. But while airborne on a flying mount it blocks the
@@ -4140,6 +4181,7 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     // but 0x1b (0x00807560, only while 0x00d397d0 - the player's
     // auto-repeat target - is set).
     owner_.castVisuals().ended(owner_.getPlayerGuid(), data.castCount, data.spellId);
+    forgetPendingSwing(data.spellId);
     if (owner_.isAutoRepeating() && data.result != 0x1b)
         owner_.castVisuals().autoRepeatStopped(owner_.getPlayerGuid());
     // The repeating spell itself refused: the repeat ends and the server is
@@ -4435,6 +4477,7 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
     // 0x0080e1b0 -> 0x007fecc0 for a cast not pending: the caster's shown
     // cast ends where it is this one.
     if ((data.castFlags & 0x1u) == 0) owner_.castVisuals().ended(data.casterUnit, data.castCount, data.spellId);
+    if (data.casterUnit == owner_.getPlayerGuid() && (data.castFlags & 0x1u) == 0) forgetPendingSwing(data.spellId);
     if (data.hasPower) castPowerSaid(data.casterUnit, data.spellId, data.power, true);
     // 0x00805330 for a cast that had no start (instant), as for one that had.
     if (owner_.spellCastBeginCallbackRef()) owner_.spellCastBeginCallbackRef()(data.casterUnit, data.spellId);
@@ -5834,6 +5877,7 @@ void SpellHandler::stopCasting() {
 }
 
 void SpellHandler::resetCastState() {
+    pendingSwing_ = PendingSwing{};
     restorationActive_ = false;
     restorationSpellId_ = 0;
     restorationTimeRemaining_ = 0.0f;
@@ -7618,6 +7662,7 @@ void SpellHandler::handleSpellFailure(network::Packet& packet) {
         // for results 0x34..0x36 (0x00807560).
         if (!isClassic) {
             const uint64_t caster = failGuid != 0 ? failGuid : owner_.getPlayerGuid();
+            if (caster == owner_.getPlayerGuid()) forgetPendingSwing(failSpellId);
             if (caster == owner_.getPlayerGuid() && rawFailReason >= 0x34 && rawFailReason <= 0x36) {
                 owner_.castVisuals().autoRepeatStopped(caster);
                 // Not the visual alone: the repeat ends and the server is

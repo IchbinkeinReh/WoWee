@@ -3983,6 +3983,8 @@ bool GameHandler::isCurrentSpell(uint32_t spellId) const {
     // spell object's +0x20) - the cast or channel under way, the repeating
     // shot.
     if ((isCasting() && getCurrentCastSpellId() == spellId) || autoRepeatSpellId() == spellId) return true;
+    // A spell waiting on the next swing is in that list until it goes off.
+    if (spellHandler_ && spellHandler_->pendingSwingSpellId() == spellId) return true;
     // Effect 0 ATTACK (0x4e): while the player swings (Player_C +0xa20/+0xa24,
     // the auto-attack target).
     // The target is set when the swing is asked for, ahead of the server's

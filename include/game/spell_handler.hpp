@@ -775,7 +775,29 @@ private:
 public:
     /// The cast count of the running cast (UnitCastingInfo's castID).
     [[nodiscard]] uint8_t runningCastCount() const { return runningCastCount_; }
+    /// 0x00806480 / 0x00806550: the player's pending casts whose Spell
+    /// Attributes meet `attributeMask` are cancelled (0x00806200 with error
+    /// 0x1b): CMSG_CANCEL_CAST for one with a cast time or on the next swing.
+    /// 0x404 when the melee stops (0x006e1660), 0x2 when it starts
+    /// (0x006e2610).
+    void cancelPendingCasts(uint32_t attributeMask);
+    /// The on-next-swing spell (Attributes 0x404) the player sent that has
+    /// not yet gone off or failed: still in the client's pending list, so
+    /// IsCurrentSpell answers for it (0x00805f30). 0 for none.
+    [[nodiscard]] uint32_t pendingSwingSpellId() const { return pendingSwing_.spellId; }
 private:
+    /// The next-swing cast sent and not yet resolved (an entry of 0x00af5254).
+    struct PendingSwing {
+        uint32_t spellId = 0;
+        uint8_t castCount = 0;
+    };
+    PendingSwing pendingSwing_;
+    /// The pending swing set or gone: 0x00805330 and 0x008054f0 each end
+    /// with 0x0053b480 (ACTIONBAR_UPDATE_STATE, CURRENT_SPELL_CAST_CHANGED).
+    void setPendingSwing(const PendingSwing& swing);
+    void forgetPendingSwing(uint32_t spellId) {
+        if (pendingSwing_.spellId != 0 && pendingSwing_.spellId == spellId) setPendingSwing(PendingSwing{});
+    }
     GameHandler& owner_;
 
     // --- Spell state ---
