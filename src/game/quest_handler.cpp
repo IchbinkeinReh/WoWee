@@ -1434,6 +1434,10 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
         }
 
         pendingQuestQueryIds_.erase(questId);
+        // The quest cache's callbacks (0x0067de90): an open quest link's
+        // tooltip is drawn again (0x0061de20).
+        if (owner_.addonEventCallbackRef() && questCacheRecord(questId))
+            owner_.addonEventCallbackRef()("WOWEE_QUEST_QUERY_RECEIVED", {std::to_string(questId)});
         // 0x006df2b0: the quest added before it was known, now that it is.
         if (pendingQuestAddedNotices_.erase(questId) != 0) announceQuestAdded(questId);
     };

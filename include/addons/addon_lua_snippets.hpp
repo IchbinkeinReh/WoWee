@@ -2352,7 +2352,14 @@ end)
 inline constexpr const char* kTooltipItemDataRefreshLua = R"LUA(
 local watcher = CreateFrame("Frame")
 watcher:RegisterEvent("WOWEE_ITEM_INFO_RECEIVED")
+watcher:RegisterEvent("WOWEE_QUEST_QUERY_RECEIVED")
 watcher:SetScript("OnEvent", function(self, event, a1)
+    -- A quest link's tooltip drawn again once the quest is known
+    -- (0x0061de20), shown or not.
+    if event == "WOWEE_QUEST_QUERY_RECEIVED" then
+        if __WoweeQuestQueryAnswered then __WoweeQuestQueryAnswered(tonumber(a1)) end
+        return
+    end
     -- A tooltip set from a link before its item was known: set it again now
     -- (see lua_Tooltip_SetHyperlink). The chat link's ItemRefTooltip is the
     -- one this is for - nothing else fills it in.

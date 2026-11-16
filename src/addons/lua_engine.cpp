@@ -2477,6 +2477,9 @@ static void clearTooltipLines(lua_State* L, wowee::ui::Widget* w) {
     lua_setfield(L, tip, "__itemId");
     lua_pushnil(L);
     lua_setfield(L, tip, "__spellId");
+    // +0x368, the quest a quest link waits to be drawn again for.
+    lua_pushnil(L);
+    lua_setfield(L, tip, "__pendingQuestId");
     if (hadLines) callScriptOnTable(L, tip, "OnTooltipCleared", 0.0);
     lua_settop(L, tip - 1);
 }
@@ -3474,9 +3477,38 @@ static void appendDurabilityLine(wowee::ui::Widget* w, const game::ItemDef& item
 /// has requirements (0x005e1300), a blank line, QUEST_TOOLTIP_REQUIREMENTS
 /// and " - " before each requirement line (0x005e1460) in white. No level
 /// line and no description.
+///
+/// It starts as every builder does, with the lines cleared (0x0061c620), and
+/// keeps the quest (+0x368) on the tooltip whether it is known or not: the
+/// query's answer calls 0x0061de20, which runs this again for a tooltip still
+/// holding that quest (see redrawQuestTooltips). Anything that clears the
+/// tooltip lets it go.
 static bool fillQuestTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh,
                              uint32_t questId) {
     if (!w || !gh || questId == 0) return false;
+    w->isTooltip = true;
+    clearTooltipLines(L, w);
+    if (pushFrameOfWidget(L, w->id)) {
+        const int tip = lua_gettop(L);
+        lua_pushnumber(L, static_cast<lua_Number>(questId));
+        lua_setfield(L, tip, "__pendingQuestId");
+        // Remembered, weakly, so the answer can find it.
+        lua_getglobal(L, "__WoweeQuestTooltips");
+        if (!lua_istable(L, -1)) {
+            lua_pop(L, 1);
+            lua_newtable(L);
+            lua_newtable(L);
+            lua_pushstring(L, "k");
+            lua_setfield(L, -2, "__mode");
+            lua_setmetatable(L, -2);
+            lua_pushvalue(L, -1);
+            lua_setglobal(L, "__WoweeQuestTooltips");
+        }
+        lua_pushvalue(L, tip);
+        lua_pushboolean(L, 1);
+        lua_rawset(L, -3);
+        lua_settop(L, tip - 1);
+    }
     const game::GameHandler::QuestLogEntry* rec = gh->questCacheRecord(questId);
     if (!rec) {
         gh->requestQuestQuery(questId, false);
@@ -3487,8 +3519,6 @@ static bool fillQuestTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
         if (e.questId == questId) { inLog = &e; break; }
     }
 
-    w->isTooltip = true;
-    clearTooltipLines(L, w);
     auto line = [&w](std::string text, float r, float g, float b, bool wrap) {
         wowee::ui::Widget::TooltipLine t;
         t.left = std::move(text);
@@ -3523,6 +3553,48 @@ static bool fillQuestTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandl
         lua_pop(L, 1);
     }
     return true;
+}
+
+/// The quest query has answered (0x0061de20 as the cache's callback): every
+/// tooltip still holding that quest (+0x368) is built again (0x00622960) and
+/// laid out (0x0061caf0). __WoweeQuestQueryAnswered(questId), called by the
+/// watcher in kTooltipItemDataRefreshLua.
+static int lua_WoweeQuestQueryAnswered(lua_State* L) {
+    auto* gh = wowee::addons::getGameHandler(L);
+    const lua_Number id = luaL_optnumber(L, 1, 0);
+    if (!gh || id <= 0) return 0;
+    const int base = lua_gettop(L);
+    lua_getglobal(L, "__WoweeQuestTooltips");
+    if (!lua_istable(L, -1)) {
+        lua_settop(L, base);
+        return 0;
+    }
+    const int all = lua_gettop(L);
+    // Gathered first: building one again writes its key in the table.
+    lua_newtable(L);
+    const int due = lua_gettop(L);
+    int count = 0;
+    lua_pushnil(L);
+    while (lua_next(L, all) != 0) {
+        lua_pop(L, 1);  // the value
+        if (lua_istable(L, -1)) {
+            lua_pushstring(L, "__pendingQuestId");
+            lua_rawget(L, -2);
+            const bool waits = lua_isnumber(L, -1) && lua_tonumber(L, -1) == id;
+            lua_pop(L, 1);
+            if (waits) {
+                lua_pushvalue(L, -1);
+                lua_rawseti(L, due, ++count);
+            }
+        }
+    }
+    for (int i = 1; i <= count; ++i) {
+        lua_rawgeti(L, due, i);
+        if (auto* w = widgetOf(L, lua_gettop(L))) fillQuestTooltip(L, w, gh, static_cast<uint32_t>(id));
+        lua_settop(L, due);
+    }
+    lua_settop(L, base);
+    return 0;
 }
 
 /// A GlobalStrings.lua text by name - the client's own wording, in its
@@ -11409,6 +11481,7 @@ void LuaEngine::registerCoreAPI() {
     taint::registerLuaApi(L_);
     lua_register(L_, "__WoweeSetProtected", lua_WoweeSetProtected);
     lua_register(L_, "__WoweeModelCentered", lua_WoweeModelCentered);
+    lua_register(L_, "__WoweeQuestQueryAnswered", lua_WoweeQuestQueryAnswered);
     // __WoweeNoticeFallback(word, locale): chat_channels::noticeFallbackFormat.
     lua_register(L_, "__WoweeNoticeFallback", [](lua_State* L) -> int {
         const char* word = luaL_optstring(L, 1, "");

@@ -1224,9 +1224,16 @@ public:
     /// So the ceiling is that constraint stated directly rather than a number
     /// chosen to feel safe. kCVarRanges gives the slider the same value, and
     /// the confirmation dialog is the second line of defence.
+    ///
+    /// On a screen narrower than 4:3 the chosen scale is held to three
+    /// quarters of the screen's aspect (0x00518b60 as uiScale is set,
+    /// 0x005237e0 as useUiScale is, 0x005240e0 as the screen changes), so the
+    /// chosen value is kept and capped again for each screen size.
     void setUserScale(float scale) {
         // A scale the player chose, which the default no longer overrides.
         userScaleIsDefault_ = false;
+        chosenUserScale_ = scale;
+        scale = narrowAspectCap(scale, lastPixelW_, lastPixelH_);
         const float clamped = scale < 0.64f ? 0.64f
                             : (scale > kMaxUserScale ? kMaxUserScale : scale);
         // 0x00513240 raises UPDATE_FLOATING_CHAT_WINDOWS whenever it sets the
@@ -1256,6 +1263,16 @@ public:
     /// (0x0051fb80): 1 up to 768 pixels high, else 768 / height; on a screen
     /// narrower than 4:3 no more than three quarters of its aspect; and never
     /// below 0.9 (nor 0.64).
+    /// The client's cap for a screen narrower than 4:3 (aspect * 3 < 4):
+    /// a scale at or above three quarters of the aspect becomes exactly that
+    /// (0x00518b60, 0x005237e0, 0x005240e0, 0x0051fb80). Unknown screen
+    /// sizes leave it alone.
+    [[nodiscard]] static float narrowAspectCap(float scale, float pixelW, float pixelH) {
+        if (pixelW <= 0.0f || pixelH <= 0.0f) return scale;
+        const float aspect = pixelW / pixelH;
+        if (aspect * 3.0f < 4.0f && aspect * 0.75f <= scale) return aspect * 0.75f;
+        return scale;
+    }
     [[nodiscard]] static float defaultUserScale(float pixelW, float pixelH) {
         if (pixelW <= 0.0f || pixelH <= 0.0f) return 1.0f;
         const float aspect = pixelW / pixelH;
@@ -1538,6 +1555,8 @@ private:
     float userScale_ = 1.0f;
     /// No UI Scale chosen: the default applies (see useDefaultUserScale).
     bool userScaleIsDefault_ = true;
+    /// The uiScale the player chose, before the narrow-screen cap.
+    float chosenUserScale_ = 1.0f;
 #ifdef WOWEE_MOBILE
     bool fitScaleByDefault_ = true;
 #else
@@ -1545,7 +1564,12 @@ private:
 #endif
     /// The default scale for this screen and safe area, when it applies.
     void applyDefaultUserScale(float pixelW, float pixelH) {
-        if (!userScaleIsDefault_) return;
+        if (!userScaleIsDefault_) {
+            // The chosen scale, capped again for this screen (0x005240e0).
+            const float s = narrowAspectCap(chosenUserScale_, pixelW, pixelH);
+            userScale_ = s < 0.64f ? 0.64f : (s > kMaxUserScale ? kMaxUserScale : s);
+            return;
+        }
         userScale_ = fitScaleByDefault_
             ? fitUserScale(pixelW, pixelH, safeLeft_, safeRight_, safeTop_, safeBottom_)
             : defaultUserScale(pixelW, pixelH);

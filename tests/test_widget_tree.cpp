@@ -518,14 +518,14 @@ TEST_CASE("The interface is laid out in units, whatever the display is",
     }
 
     SECTION("a portrait display is narrow in units and scaled up") {
-        // 1080x1920 rotated. The virtual screen is 432 units across, so the
-        // interface is drawn at two and a half times size against very little
-        // width - which is the original client's behaviour on the same
-        // monitor, not a fault to correct here.
+        // 1080x1920 rotated: the height alone would draw the interface at two
+        // and a half times size. Narrower than 4:3, the chosen scale of 1 is
+        // held to three quarters of the aspect (0x00518b60), which the floor
+        // of 0.64 then lifts (0x00513240), so 1.6 pixels a unit.
         tree.layout(1080.0f, 1920.0f);
-        REQUIRE(tree.uiScale() == Catch::Approx(2.5f));
-        REQUIRE(tree.get(tree.root())->rectW == Catch::Approx(432.0f));
-        REQUIRE(tree.get(tree.root())->rectH == Catch::Approx(768.0f));
+        REQUIRE(tree.uiScale() == Catch::Approx(2.5f * 0.64f));
+        REQUIRE(tree.get(tree.root())->rectW == Catch::Approx(1080.0f / 1.6f));
+        REQUIRE(tree.get(tree.root())->rectH == Catch::Approx(1920.0f / 1.6f));
     }
 
     SECTION("a frame keeps its authored size in units on every display") {
@@ -3338,6 +3338,25 @@ TEST_CASE("On a desktop the default scale is the client's for the screen", "[wid
     REQUIRE(WidgetTree::defaultUserScale(1280.0f, 1024.0f) == Catch::Approx(0.9f));
     REQUIRE(WidgetTree::defaultUserScale(2560.0f, 1440.0f) == Catch::Approx(0.9f));
     REQUIRE(WidgetTree::defaultUserScale(800.0f, 600.0f) == Catch::Approx(1.0f));
+}
+
+TEST_CASE("A chosen UI scale is capped on a screen narrower than 4:3", "[widget][scale]") {
+    // 0x00518b60 / 0x005237e0 / 0x005240e0: aspect * 3 < 4 holds the chosen
+    // scale to three quarters of the aspect.
+    REQUIRE(WidgetTree::narrowAspectCap(1.0f, 1280.0f, 1024.0f) == Catch::Approx(0.9375f));
+    REQUIRE(WidgetTree::narrowAspectCap(0.8f, 1280.0f, 1024.0f) == Catch::Approx(0.8f));
+    REQUIRE(WidgetTree::narrowAspectCap(1.0f, 1024.0f, 768.0f) == Catch::Approx(1.0f));  // 4:3 is not narrower
+    REQUIRE(WidgetTree::narrowAspectCap(1.0f, 0.0f, 0.0f) == Catch::Approx(1.0f));
+    WidgetTree tree;
+    tree.setFitScaleByDefault(false);
+    tree.layout(1280.0f, 1024.0f);
+    tree.setUserScale(1.0f);
+    REQUIRE(tree.userScale() == Catch::Approx(0.9375f));
+    // The choice is kept and capped again for each screen.
+    tree.layout(1920.0f, 1080.0f);
+    REQUIRE(tree.userScale() == Catch::Approx(1.0f));
+    tree.layout(1280.0f, 1024.0f);
+    REQUIRE(tree.userScale() == Catch::Approx(0.9375f));
 }
 
 TEST_CASE("Setting the scale or resizing asks for the floating chat windows", "[widget][scale]") {
