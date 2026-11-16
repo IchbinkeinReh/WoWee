@@ -381,6 +381,10 @@ public:
     /// +0xa30 0x10000, its weapons away and no cast.
     using UnarmedKitsQuery = std::function<bool(uint64_t unitGuid)>;
     void setUnarmedKitsQuery(UnarmedKitsQuery query) { unarmedKitsQuery_ = std::move(query); }
+    /// Whether a unit's health is below 1 (UNIT_FIELD_HEALTH, +0x48 of its
+    /// descriptors): a missile reaching it plays no wound (0x00702db0).
+    using UnitDeadQuery = std::function<bool(uint64_t unitGuid)>;
+    void setUnitDeadQuery(UnitDeadQuery query) { unitDeadQuery_ = std::move(query); }
     /// A unit's CreatureModelData AttachedEffectScale (+0x60), which sizes
     /// every kit model on it (0x006f8c50).
     using AttachedEffectScale = std::function<float(uint32_t renderInstanceId)>;
@@ -920,6 +924,7 @@ private:
     [[nodiscard]] bool instanceIsListener(uint32_t renderInstanceId) const;
     TransportFrameQuery transportFrameQuery_;
     UnarmedKitsQuery unarmedKitsQuery_;
+    UnitDeadQuery unitDeadQuery_;
     AttachedEffectScale attachedEffectScale_;
     /// 0x00720400 for a unit: hide or show its Flags 8 kits as asked.
     void stepUnarmedKits(uint64_t unitGuid, UnitAuraKits& unit, bool force);

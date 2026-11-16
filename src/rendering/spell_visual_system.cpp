@@ -1327,8 +1327,25 @@ void SpellVisualSystem::updateMissiles(float deltaTime) {
         const uint32_t casterInstance = it->casterInstanceId;
         const uint32_t missileSpell = it->spellId;
         const glm::vec3 landedAt = it->position;
+        const uint32_t reachedUnit = it->targetInstanceId;
         std::vector<MissileEnd> impacts = std::move(it->impacts);
         it = activeMissiles_.erase(it);
+        // 0x00702db0: a missile that hits the unit it reached (0x00703410,
+        // 0x006fefb0) first has it react: a living unit takes the wound a
+        // blow gives (0x00736640(0), not critical) unless the SpellVisual's
+        // Flags has 0x40. A dead one is laid down by 0x0073af80 instead,
+        // which the unit's own death has already done here.
+        if (reachedUnit != 0 && charRenderer &&
+            std::any_of(impacts.begin(), impacts.end(),
+                        [reachedUnit](const MissileEnd& e) { return e.renderInstanceId == reachedUnit; })) {
+            const uint64_t unitGuid = instanceUnitResolver_ ? instanceUnitResolver_(reachedUnit) : 0;
+            const bool dead = unitGuid != 0 && unitDeadQuery_ && unitDeadQuery_(unitGuid);
+            const MissileVisual* visual = findMissileVisual(visualId);
+            if (!dead && (!visual || (visual->flags & 0x40u) == 0)) {
+                if (const auto wound = charRenderer->woundFor(reachedUnit, false))
+                    charRenderer->playWound(reachedUnit, *wound);
+            }
+        }
         // 0x00700e20: the visual's ImpactAreaKit (+0x60) where it lands.
         if (auto kitsIt = visualKits_.find(visualId); kitsIt != visualKits_.end() && kitsIt->second.impactArea != 0)
             playKitOnUnit(kitsIt->second.impactArea, spell_kit::KitType::Area, 0, landedAt, &landedAt, 0,
