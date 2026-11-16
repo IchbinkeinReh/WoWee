@@ -6188,6 +6188,22 @@ void buildTooltipItemInstance(lua_State* L, game::GameHandler* gh, const game::I
     // What is left of its first spell's charges (ITEM_FIELD_SPELL_CHARGES).
     lua_pushnumber(L, gh->getItemSpellCharges(instance.guid));
     lua_setfield(L, -2, "charges0");
+    // The saved equipment sets holding this very item (0x005ae380): their
+    // names in the sets' own order, once per slot that names its guid.
+    if (instance.guid != 0) {
+        int n = 0;
+        for (const auto& set : gh->getEquipmentSets()) {
+            const auto* guids = gh->getEquipmentSetItems(set.setId);
+            if (!guids) continue;
+            for (uint64_t g : *guids) {
+                if (g != instance.guid) continue;
+                if (n == 0) lua_newtable(L);
+                lua_pushstring(L, set.name.c_str());
+                lua_rawseti(L, -2, ++n);
+            }
+        }
+        if (n > 0) lua_setfield(L, -2, "equipmentSets");
+    }
     // Its lock opened (ITEM_FIELD_FLAGS 0x4): no LOCKED line.
     if ((gh->getItemFieldFlags(instance.guid) & 0x4u) != 0) {
         lua_pushboolean(L, 1);
@@ -14969,6 +14985,14 @@ void LuaEngine::registerCoreAPI() {
         "                local t = format(ITEM_DISENCHANT_MIN_SKILL or 'Disenchanting requires %s (%d)', d.skill, d.rank)\n"
         "                if d.met then self:AddLine(t, 0.533, 0.667, 1) else self:AddLine(t, 1, 0.125, 0.125) end\n"
         "            end\n"
+        "        end\n"
+        // The saved sets it is in (0x006277f0 at 0x0062d3a0, names from
+        // 0x005ae380): with equipmentManager on and
+        // dontShowEquipmentSetsOnItems off, EQUIPMENT_SETS over the names
+        // joined by PLAYER_LIST_DELIMITER, gold, wrapped.
+        "        if inst and inst.equipmentSets and EQUIPMENT_SETS and GetCVarBool('equipmentManager')\n"
+        "            and not GetCVarBool('dontShowEquipmentSetsOnItems') then\n"
+        "            self:AddLine(format(EQUIPMENT_SETS, table.concat(inst.equipmentSets, PLAYER_LIST_DELIMITER or ', ')), 1, 0.82, 0, 1)\n"
         "        end\n"
         // Still tradeable for a while (0x006277f0): a spacer, then
         // BIND_TRADE_TIME_REMAINING in light blue - an hour and the minutes
