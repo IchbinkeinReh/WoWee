@@ -272,3 +272,29 @@ TEST_CASE("the spell book notes the last ranged attack learned", "[click_to_move
     r.clear();
     CHECK(r.rangedAttack == 0);
 }
+
+TEST_CASE("the spell book notes a skinning spell per kind of corpse", "[click_to_move]") {
+    using wowee::game::spell_book::Records;
+    using wowee::game::spell_book::Row;
+    Records r;
+    Row skinning{0, 95, 0};
+    Row herbs{0, 95, 1};
+    Row mining{0, 95, 2};
+    Row insignia{0, 116, 0};
+    r.learned(8613, skinning);
+    r.learned(2366, herbs);
+    r.learned(2575, mining);
+    r.learned(22027, insignia);
+    CHECK(r.skin[0] == 8613);
+    CHECK(r.skin[1] == 2366);
+    CHECK(r.skin[2] == 2575);
+    CHECK(r.skin[3] == 0);
+    CHECK(r.skinPlayerCorpse == 22027);
+    // A misc value past the four is noted nowhere.
+    r.learned(1, Row{0, 95, 7});
+    r.removed(2366);
+    CHECK(r.skin[1] == 0);
+    r.removed(22027);
+    CHECK(r.skinPlayerCorpse == 0);
+    CHECK(r.skin[0] == 8613);
+}

@@ -3209,6 +3209,20 @@ public:
     /// 0x006d71e0: with autoRangedCombat on, the ranged attack the spell
     /// book noted (0x00be5d84); else 0.
     uint32_t autoRangedAttackSpell() const;
+    /// 0x0053bce0: the spell the book noted for what this corpse gives - a
+    /// player's or a corpse object's insignia (0x00be5d7c), a creature's
+    /// skin, herbs, ore or parts by its type flags (0x00715e50); 0 for none.
+    uint32_t skinSpellFor(uint64_t guid) const;
+    /// 0x00731260 for a dead unit right-clicked by the player as the mover:
+    /// looted where it may be (0x00717b60), else skinned where it is
+    /// skinnable (UNIT_FLAG 0x4000000) and the player's skill is enough -
+    /// a player's corpse only where the player may not help them - else
+    /// nothing. `clickToMove` is 0x00721f50.
+    void clickDeadUnit(uint64_t guid, bool clickToMove);
+    /// 0x006d6f40: the skinning spell cast at the corpse, or, out of its
+    /// reach with click-to-move, walked to first (kind 9); `setAutoLoot`
+    /// sets whether its loot is taken at once (0x00513700).
+    void skinCorpse(uint64_t guid, bool clickToMove, bool setAutoLoot);
     /// 0x0072b730: to an object out of reach, `reach` being its use reach.
     bool clickToMoveToObject(uint64_t guid, float reach);
     /// What the camera is to do this frame (0x007317a0): a facing to take,

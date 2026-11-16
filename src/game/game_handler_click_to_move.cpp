@@ -211,6 +211,84 @@ bool GameHandler::clickToMoveToObject(uint64_t guid, float reach) {
     return true;
 }
 
+uint32_t GameHandler::skinSpellFor(uint64_t guid) const {
+    // 0x0053bce0 by the object's type mask (+8): a player or a corpse
+    // (0x90), the insignia spell; a unit (0x8), by 0x00715e50 - the
+    // creature's type flags 0x100 herbs, 0x200 ore, 0x8000 parts, else its
+    // skin; anything else, none.
+    auto e = getEntityManager().getEntity(guid);
+    if (!e || !spellHandler_) return 0;
+    const spell_book::Records& book = spellHandler_->spellBookRecords();
+    if (e->getType() == ObjectType::PLAYER || e->getType() == ObjectType::CORPSE) return book.skinPlayerCorpse;
+    const auto* unit = dynamic_cast<const Unit*>(e.get());
+    if (!unit) return 0;
+    uint32_t typeFlags = 0;
+    const auto& cache = getCreatureInfoCache();
+    if (const auto it = cache.find(unit->getEntry()); it != cache.end()) typeFlags = it->second.typeFlags;
+    const int i = (typeFlags & 0x100u) ? 1 : (typeFlags & 0x200u) ? 2 : (typeFlags & 0x8000u) ? 3 : 0;
+    return book.skin[i];
+}
+
+void GameHandler::clickDeadUnit(uint64_t guid, bool clickToMove) {
+    auto unit = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(guid));
+    if (!unit) return;
+    // 0x00717b60: dead and lootable (UNIT_DYNFLAG_LOOTABLE) - looted.
+    if ((unit->getDynamicFlags() & UNIT_DYNFLAG_LOOTABLE) != 0) {
+        lootCorpse(guid, clickToMove);
+        return;
+    }
+    // Skinnable (UNIT_FLAG_SKINNABLE, 0x4000000), with a spell for it.
+    if ((unit->getUnitFlags() & 0x04000000u) == 0) return;
+    const uint32_t spell = skinSpellFor(guid);
+    if (spell == 0) return;
+    if (unit->getType() == ObjectType::PLAYER) {
+        // Not the insignia of one the player may help (0x007293d0).
+        if (unitMayAssist(playerGuid, guid)) return;
+        skinCorpse(guid, clickToMove, true);
+        return;
+    }
+    // The spell's first skinning effect (95) is the skill it stands for
+    // (0x008016c0); the creature asks 1 up to level 10, ten a level past
+    // ten under 20, five a level from then on.
+    int32_t skill = 0;
+    if (const auto it = spellNameCache_.find(spell); it != spellNameCache_.end()) {
+        for (int k = 0; k < 3; ++k) {
+            if (it->second.effectIds[k] == spell_book::kEffectSkinning) {
+                skill = openLockEffectValue(spell, k);
+                break;
+            }
+        }
+    }
+    const int32_t level = static_cast<int32_t>(unit->getLevel());
+    const int32_t need = level < 11 ? 1 : level < 20 ? (level * 5 - 50) * 2 : level * 5;
+    if (skill < need) {
+        // ERR_USE_LOCKED_WITH_SPELL_KNOWN_SI (0xef): "Requires <spell> <n>".
+        sayGameObjectError(go_use::err::kLockedWithSpellKnown, {getSpellName(spell), std::to_string(need)});
+        return;
+    }
+    skinCorpse(guid, clickToMove, true);
+}
+
+void GameHandler::skinCorpse(uint64_t guid, bool clickToMove, bool setLoot) {
+    // 0x006d6f40: the spell's reach at the corpse (0x00802c30); within it,
+    // or without click-to-move, the spell is cast at it (0x0080da40), else
+    // the player walks there (0x0072b4a0, kind 9).
+    auto subject = getEntityManager().getEntity(guid);
+    if (!subject || !spellHandler_) return;
+    const uint32_t spell = skinSpellFor(guid);
+    const float range = spellHandler_->spellReachAt(spell, playerGuid, guid).max;
+    const float dx = movementInfo.x - subject->getX();
+    const float dy = movementInfo.y - subject->getY();
+    const float dz = movementInfo.z - subject->getZ();
+    if (dx * dx + dy * dy + dz * dz < range * range || !clickToMove) {
+        if (spell != 0) castSpell(spell, guid);
+    } else {
+        clickToMoveApproach(guid, ctm::Kind::Skin, range);
+    }
+    // Whether the loot it gives is taken at once (0x00513700).
+    if (setLoot) setAutoLoot(clickAutoLoots());
+}
+
 GameHandler::ClickToMoveSteer GameHandler::stepClickToMove(float facingYawDeg, float dtSeconds, bool mouseSteering) {
     ClickToMoveSteer steer;
     const auto toYawDeg = [](float serverFacing) {
@@ -305,7 +383,8 @@ void GameHandler::clickToMoveMoverStopped() {
         if (getEntityManager().getEntity(t.guid)) interactWithGameObject(t.guid);
         break;
     case ctm::Action::Skin:
-        // 0x006d6f40, skinning - not a right click this client has.
+        // 0x006d6f40, the spell cast where it now is.
+        if (getEntityManager().getEntity(t.guid)) skinCorpse(t.guid, false, false);
         break;
     case ctm::Action::Npc:
         if (getEntityManager().getEntity(t.guid)) interactWithNpc(t.guid, false);

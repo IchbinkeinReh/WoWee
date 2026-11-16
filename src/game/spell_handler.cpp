@@ -6071,6 +6071,8 @@ template <class Entry>
 spell_book::Row bookRow(const Entry& e) {
     spell_book::Row row;
     row.attrEx4 = e.attrEx4;
+    row.effect0 = e.effectIds[0];
+    row.misc0 = static_cast<int32_t>(e.effectMiscValues[0]);
     return row;
 }
 }  // namespace

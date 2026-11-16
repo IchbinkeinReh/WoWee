@@ -2582,8 +2582,14 @@ void GameScreen::interactWithTarget(game::GameHandler& gameHandler) {
                 // With autoInteract each of these walks to it first when it
                 // is out of reach (0x00721f50 handed down).
                 const bool clickToMove = gameHandler.clickToMoveAllowed();
-                if (unit->getHealth() == 0 && unit->getMaxHealth() > 0) {
-                    gameHandler.lootCorpse(target->getGuid(), clickToMove);
+                // 0x00731260: a dead unit (not one shown as dead, dynamic
+                // flag 0x20) clicked by the player as the mover is looted,
+                // skinned or left; anything else is spoken to or attacked.
+                const bool dead = unit->getHealth() == 0 && unit->getMaxHealth() > 0 &&
+                                  (unit->getDynamicFlags() & game::UNIT_DYNFLAG_DEAD) == 0 &&
+                                  gameHandler.activeMover() == gameHandler.getPlayerGuid();
+                if (dead) {
+                    gameHandler.clickDeadUnit(target->getGuid(), clickToMove);
                 } else {
                     // Interact with service NPCs; otherwise treat non-interactable living units
                     // as attackable fallback (covers bad faction-template classification).
@@ -2634,6 +2640,12 @@ void GameScreen::interactWithTarget(game::GameHandler& gameHandler) {
                 // 0x00731260 for another player: nothing to talk to, so
                 // attacked when the player may attack them.
                 auto other = std::static_pointer_cast<game::Unit>(target);
+                // Dead, their insignia to take (0x00731260's dead unit).
+                if (other->getHealth() == 0 && other->getMaxHealth() > 0 &&
+                    (other->getDynamicFlags() & game::UNIT_DYNFLAG_DEAD) == 0 && gameHandler.activeMover() == gameHandler.getPlayerGuid()) {
+                    gameHandler.clickDeadUnit(target->getGuid(), gameHandler.clickToMoveAllowed());
+                    return;
+                }
                 // 0x006ddbb0 for a group member: their vehicle, if it has a
                 // free seat (CMSG_PLAYER_VEHICLE_ENTER).
                 if (other->getHealth() > 0 && gameHandler.clickUnitBeyondHellos(target->getGuid())) return;

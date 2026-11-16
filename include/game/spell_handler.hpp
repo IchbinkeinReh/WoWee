@@ -216,7 +216,8 @@ public:
     // Known spells
     [[nodiscard]] const std::unordered_set<uint32_t>& getKnownSpells() const { return knownSpells_; }
     /// The spells the book notes down as they are learned and forgotten
-    /// (0x00542030, 0x0053fad0, 0x0053ec40): the ranged attack (0x00be5d84).
+    /// (0x00542030, 0x0053fad0, 0x0053ec40): the ranged attack (0x00be5d84),
+    /// the skinning spells (0x00be5d6c..0x00be5d7c).
     [[nodiscard]] const spell_book::Records& spellBookRecords() const;
 
     // Cast state
