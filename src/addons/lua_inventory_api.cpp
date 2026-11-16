@@ -7290,9 +7290,17 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // makes FrameXML's 1-based index land on the right row of the
                 // shared table, and an unselected filter arrive as zero and
                 // read as "any" without a special case.
+                //
+                // The names are ItemClass.dbc's (0x0059c420 pushes field 3 of
+                // each class's row), so a German client reads Waffe, Rüstung,
+                // Behälter - the table's English is only for a class the file
+                // does not have.
                 {"GetAuctionItemClasses", [](lua_State* L) -> int {
-            for (int i = 1; i < game::kNumAuctionClasses; ++i)
-                lua_pushstring(L, game::kAuctionClasses[i].label);
+            auto* gh = getGameHandler(L);
+            for (int i = 1; i < game::kNumAuctionClasses; ++i) {
+                const std::string name = itemClassDisplayName(gh, game::kAuctionClasses[i].classId);
+                lua_pushstring(L, name.empty() ? game::kAuctionClasses[i].label : name.c_str());
+            }
             return game::kNumAuctionClasses - 1;
         }},
                 {"GetAuctionItemSubClasses", [](lua_State* L) -> int {
@@ -7302,7 +7310,13 @@ void registerInventoryLuaAPI(lua_State* L) {
             int count = 0;
             const auto* subs = game::auctionSubsFor(game::kAuctionClasses[ci].classId, count);
             if (!subs) return 0;
-            for (int i = 1; i < count; ++i) lua_pushstring(L, subs[i].label);
+            // ItemSubClass.dbc's VerboseName, else its DisplayName (0x0059c480).
+            auto* gh = getGameHandler(L);
+            for (int i = 1; i < count; ++i) {
+                const std::string name = itemSubclassDisplayName(
+                    gh, game::kAuctionClasses[ci].classId, subs[i].subId, true);
+                lua_pushstring(L, name.empty() ? subs[i].label : name.c_str());
+            }
             return count - 1;
         }},
                 // The third tier of the filter tree: where an item is worn.
