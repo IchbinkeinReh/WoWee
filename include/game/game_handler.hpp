@@ -5775,10 +5775,15 @@ public:
     void clearTransportAttachment(uint64_t childGuid);
     std::string guidToUnitId(uint64_t guid) const;
     /// Every unit token that names this guid (0x0060bb70's walk), in its
-    /// order: player, vehicle, pet, partyN, raidN, arenaN/arenapetN, bossN,
+    /// order: player, vehicle, pet, partyN/partypetN, raidN/raidpetN,
+    /// arenaN/arenapetN, bossN,
     /// target, focus, npc - a unit event the client raises per unit goes once
     /// to each.
     std::vector<std::string> unitTokensForGuid(uint64_t guid) const;
+    /// partypetN (0x00512a70 -> 0x0052c6e0), slot 1-4; zero when empty.
+    uint64_t partyPetGuid(int slot) const;
+    /// raidpetN (0x00518ce0), index 1-40; zero when empty.
+    uint64_t raidPetGuid(int index) const;
     /// UNIT_COMBAT for every token of the unit (0x005132c0).
     void fireUnitCombat(uint64_t guid, const char* action, int32_t amount, int32_t school, uint32_t hitInfo);
     Unit* getUnitByGuid(uint64_t guid);

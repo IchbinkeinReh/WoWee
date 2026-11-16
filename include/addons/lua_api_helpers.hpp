@@ -687,6 +687,18 @@ inline uint64_t resolveUnitGuid(game::GameHandler* gh, const std::string& uid) {
     if (uid == "focustarget")     return getEntityTargetGuid(gh, gh->getFocusGuid());
     if (uid == "pettarget")       return getEntityTargetGuid(gh, gh->getPetGuid());
     if (uid == "mouseovertarget") return getEntityTargetGuid(gh, gh->getMouseoverGuid());
+    // partypet1-partypet4 and raidpet1-raidpet40, tested before party and
+    // raid as 0x0060abf0 does: the member's pet (0x0052c6e0, 0x00518ce0).
+    if (uid.rfind("partypet", 0) == 0 && uid.size() > 8) {
+        int idx = 0;
+        try { idx = std::stoi(uid.substr(8)); } catch (...) { return 0; }
+        return gh->partyPetGuid(idx);
+    }
+    if (uid.rfind("raidpet", 0) == 0 && uid.size() > 7) {
+        int idx = 0;
+        try { idx = std::stoi(uid.substr(7)); } catch (...) { return 0; }
+        return gh->raidPetGuid(idx);
+    }
     // party1-party4, raid1-raid40
     if (uid.rfind("party", 0) == 0 && uid.size() > 5) {
         int idx = 0;
