@@ -1097,7 +1097,15 @@ struct Emitter {
         if (const std::string* strata = node.attr("frameStrata")) {
             line(var + ":SetFrameStrata(" + quote(*strata) + ")");
         }
-        // A bar's or slider's range, step and orientation, declared as
+        // A slider's step is set by every <Slider> the loader reads, 0.001
+        // when it does not say (0x0096c500) - before the range, as there.
+        if (const std::string* vs = node.attr("valueStep"); vs && !vs->empty()) {
+            line(var + ":SetValueStep(" +
+                 std::to_string(node.attrFloat("valueStep", 0.0f)) + ")");
+        } else if (node.name == "Slider") {
+            line(var + ":SetValueStep(0.001)");
+        }
+        // A bar's or slider's range and orientation, declared as
         // attributes. The range is read only when both ends are given, and
         // defaultValue only inside that - a bar with no range ignores a value
         // anyway (StatusBar 0x00961e30, Slider 0x0096c500).
@@ -1108,10 +1116,6 @@ struct Emitter {
             line(var + ":SetMinMaxValues(" +
                  std::to_string(node.attrFloat("minValue", 0.0f)) + ", " +
                  std::to_string(node.attrFloat("maxValue", 1.0f)) + ")");
-        }
-        if (node.attr("valueStep")) {
-            line(var + ":SetValueStep(" +
-                 std::to_string(node.attrFloat("valueStep", 0.0f)) + ")");
         }
         if (const std::string* o = node.attr("orientation")) {
             line(var + ":SetOrientation(" + quote(*o) + ")");

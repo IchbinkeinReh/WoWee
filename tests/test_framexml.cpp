@@ -655,6 +655,13 @@ TEST_CASE("A slider carries its range, step and grip", "[framexml][emit]") {
     REQUIRE(r.lua.find(":SetMinMaxValues(") < r.lua.find(":SetValue("));
 }
 
+TEST_CASE("A slider that names no step gets 0.001", "[framexml][emit]") {
+    // 0x0096c500: valueStep defaults to 0.001 for every <Slider> read.
+    XmlNode root = parseOrFail("<Ui><Slider name=\"S\"/></Ui>");
+    const EmitResult r = emitFrameXml(root);
+    REQUIRE(has(r.lua, ":SetValueStep(0.001)"));
+}
+
 TEST_CASE("A bar's range is read only when both ends are given", "[framexml][emit]") {
     // StatusBar 0x00961e30 and Slider 0x0096c500 read minValue only together
     // with maxValue, and defaultValue only inside that.

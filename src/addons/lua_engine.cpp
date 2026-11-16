@@ -8935,6 +8935,18 @@ static void fireBarScript(lua_State* L, const char* script, int nargs, double a,
 }
 
 static void applyBarValue(lua_State* L, float value);
+/// How far apart two slider numbers must be to count as different (0x0096c090).
+constexpr float kSliderEpsilon = 2.3841858e-07f;
+
+/// A slider value put on its step (0x0096bc10): min + step * n, n the steps
+/// from the minimum rounded half away from zero; no step, no rounding.
+static float sliderStepValue(const wowee::ui::Widget& w, float value) {
+    if (w.sliderStep == 0.0f) return value;
+    const float d = value - w.barMin;
+    const float half = w.sliderStep * 0.5f;
+    const float n = std::trunc((d > 0.0f ? d + half : d - half) / w.sliderStep);
+    return n * w.sliderStep + w.barMin;
+}
 
 int lua_StatusBar_SetMinMaxValues(lua_State* L) {
     // Two numbers, or the usage line. Past that the widgets part: a slider
@@ -8966,6 +8978,21 @@ int lua_StatusBar_SetMinMaxValues(lua_State* L) {
     // is 0x00961560, and the value already set is then set again, which is
     // what clamps it into the new range (and fires OnValueChanged if that
     // moved it).
+    if (w->isSlider) {
+        // A slider (0x0096c470) keeps the minimum and the span, compares both
+        // within 2.38e-7, and announces OnMinMaxChanged(min, min + span)
+        // (0x0096bbb0).
+        const float span = hi - lo;
+        if (w->barRangeSet && std::fabs(span - (w->barMax - w->barMin)) < kSliderEpsilon &&
+            std::fabs(w->barMin - lo) < kSliderEpsilon)
+            return 0;
+        w->barMin = lo;
+        w->barMax = lo + span;
+        w->barRangeSet = true;
+        fireBarScript(L, "OnMinMaxChanged", 2, lo, lo + span);
+        if (auto* after = widgetOf(L, 1); after && after->barValueSet) applyBarValue(L, after->barValue);
+        return 0;
+    }
     if (hi < lo) lo = hi;
     if (w->barRangeSet && w->barMin == lo && w->barMax == hi) return 0;
     w->barMin = lo;
@@ -8991,10 +9018,21 @@ static void applyBarValue(lua_State* L, float value) {
     auto* w = widgetOf(L, 1);
     if (!w) return;
     if (w->isSlider) {
-        const bool changed = (value != w->barValue);
-        w->barValue = value;
+        // A slider's (0x0096c090) likewise waits for a range, clamps, puts
+        // the value on its step, and takes a value within one step of either
+        // end to that end - which is how a step that does not divide the range
+        // still reaches the maximum. A change under 2.38e-7 is none.
+        if (!w->barRangeSet) return;
+        const float lo = w->barMin, hi = w->barMax;
+        float v = value < lo ? lo : value;
+        if (!(v <= hi)) v = hi;   // a NaN too
+        v = sliderStepValue(*w, v);
+        if (hi < v + w->sliderStep) v = hi;
+        if (v - w->sliderStep < lo) v = lo;
+        if (w->barValueSet && std::fabs(v - w->barValue) < kSliderEpsilon) return;
+        w->barValue = v;
         w->barValueSet = true;
-        if (changed) fireBarScript(L, "OnValueChanged", 1, value);
+        fireBarScript(L, "OnValueChanged", 1, v);
         return;
     }
     if (!w->barRangeSet) return;
@@ -9598,8 +9636,15 @@ int lua_Cooldown_Clear(lua_State* L) {
 
 int lua_Slider_SetValueStep(lua_State* L) {
     if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetValueStep(value)", usageName(L, 1));   // 0x00971fd0
-    if (auto* w = widgetOf(L, 1))
-        w->sliderStep = static_cast<float>(luaL_optnumber(L, 2, 0.0));
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    // 0x0096c1b0: never under FLT_EPSILON, stored only on a change of 2.38e-7
+    // or more, and a value already set is set again on the new step.
+    float step = static_cast<float>(lua_tonumber(L, 2));
+    if (step < 1.1920929e-07f) step = 1.1920929e-07f;
+    if (!(std::fabs(step - w->sliderStep) >= kSliderEpsilon)) return 0;
+    w->sliderStep = step;
+    if (w->barValueSet) applyBarValue(L, w->barValue);
     return 0;
 }
 int lua_Slider_GetValueStep(lua_State* L) {
@@ -17329,8 +17374,17 @@ void LuaEngine::advanceWheelGlide(float elapsed) {
     const float remaining = wheelGlide_.target - bar->barValue;
     float value = bar->barValue + remaining * (1.0f - std::exp(-kRate * elapsed));
     if (std::abs(wheelGlide_.target - value) < 0.5f) value = wheelGlide_.target;
+    const float before = bar->barValue;
     setSliderValue(wheelGlide_.slider, value);
     const auto* after = widgets_.get(wheelGlide_.slider);
+    // SetValue puts the value on the slider's step (0x0096c090), so a move
+    // smaller than half a step comes back where it was; finish there rather
+    // than easing toward a target the step will never let it reach.
+    if (after && value != wheelGlide_.target && after->barValue == before) {
+        setSliderValue(wheelGlide_.slider, wheelGlide_.target);
+        after = widgets_.get(wheelGlide_.slider);
+        value = wheelGlide_.target;
+    }
     if (value == wheelGlide_.target || !after) {
         wheelGlide_ = {};
         return;
