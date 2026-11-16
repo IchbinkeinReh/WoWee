@@ -191,3 +191,18 @@ TEST_CASE("the stamp's hash takes the key's bytes as they are", "[trajectory]") 
     CHECK(cl::stringHash("ab", false) != cl::stringHash("ab"));
     CHECK(cl::stringHash("AB", false) == cl::stringHash("ab"));
 }
+
+TEST_CASE("Queued missiles are let go when the cast kit's animation is over, or after two seconds",
+          "[missile_trajectory]") {
+    using wowee::game::missile_trajectory::releaseDue;
+    bool seen = false;
+    CHECK_FALSE(releaseDue(1000, 1000, false, seen));  // not started yet
+    CHECK_FALSE(releaseDue(1100, 1000, true, seen));
+    CHECK(seen);
+    CHECK(releaseDue(1200, 1000, false, seen));        // over
+    bool never = false;
+    CHECK_FALSE(releaseDue(2999, 1000, false, never));
+    CHECK(releaseDue(3000, 1000, false, never));       // two seconds
+    bool still = false;
+    CHECK(releaseDue(3000, 1000, true, still));        // two seconds while it plays
+}

@@ -1508,29 +1508,223 @@ SpellHandler::TrajectoryCast SpellHandler::buildTrajectoryCast(uint32_t spellId,
         reportLocalCastFailure(spellId, 0x69);
         return TrajectoryCast::Refused;
     }
+    // A parked cast sent at its release is already marked aimed (+0x139):
+    // built with its own count, neither parked again nor launched here.
+    const std::optional<uint8_t> releasing = std::exchange(releasingCastCount_, std::nullopt);
+    // An instant cast (0x007ff180 under 1 ms) by a unit with no cast going
+    // (+0xa60), not yet aimed, whose visual has a missile (+0x1c).
+    bool instantMissile = false;
+    int32_t kitAnim = -1;
+    bool holds = false;
+    auto* renderer = owner_.services().renderer;
+    auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
+    if (!releasing) {
+        loadSpellNameCache();
+        auto self = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+        const bool instant = !self || castTimeMs(spellId, *self) < 1;
+        const bool casterCasting = caster == owner_.getPlayerGuid() ? casting_ : unitCastStates_.count(caster) != 0;
+        const uint32_t visualId = resolveSpellVisualId(spellId);
+        instantMissile = !casterCasting && instant && svs && visualId != 0 && svs->findMissileVisual(visualId);
+        holds = instantMissile && castKitHoldsMissile(spellId, kitAnim);
+    }
+    if (holds) {
+        // Parked: one at a time, and not while the caster already plays the
+        // cast kit's animation (+0xfa4); else SPELL_FAILED_SPELL_IN_PROGRESS.
+        uint32_t playing = 0;
+        float t = 0.0f, d = 0.0f;
+        auto* cr = renderer ? renderer->getCharacterRenderer() : nullptr;
+        const uint32_t instance = owner_.resolveUnitRenderInstance(caster);
+        const bool kitPlaying = cr && instance != 0 && cr->getAnimationState(instance, playing, t, d) &&
+                                static_cast<int32_t>(playing) == kitAnim;
+        if (aimedRelease_ || kitPlaying) {
+            reportLocalCastFailure(spellId, 0x69);
+            return TrajectoryCast::Refused;
+        }
+        // The cast's count is taken now, as its object is made; its missile
+        // held (0x00722950, for a visual with Flags 0x20) and its cast kit
+        // played (0x00800dd0); the cast waits for the missile (0x00d3f4e8).
+        const uint8_t castCount = ++castCount_;
+        svs->holdMissile(resolveSpellVisualId(spellId), instance, castCount);
+        playAimedCastKit(spellId, caster);
+        AimedRelease parked;
+        parked.caster = caster;
+        parked.castCount = castCount;
+        parked.spellId = spellId;
+        parked.target = target;
+        parked.anim = kitAnim;
+        parked.queuedMs = clientMs();
+        parked.parked = true;
+        aimedRelease_ = parked;
+        LOG_INFO("Aimed cast ", spellId, " parked until its missile is let go");
+        return TrajectoryCast::Parked;
+    }
     // 0x0080ac90: the figures stamped (0x007fe520) before they are written.
     const mt::Stamped sent = mt::stamp(trajectoryStampCount_, shot.aim.pitch, shot.aim.speed, shot.aim.launch,
                                        shot.flight.impact);
-    out = CastSpellPacket::buildTrajectory(spellId, ++castCount_, target, sent.launch, sent.impact, sent.pitch,
+    const uint8_t castCount = releasing ? *releasing : ++castCount_;
+    out = CastSpellPacket::buildTrajectory(spellId, castCount, target, sent.launch, sent.impact, sent.pitch,
                                            sent.speed, caster, shot.wire);
     // 0x0080ac90 once it is sent: the mover's aimed cast is this spell, sent
     // now (0x006fbe30).
     aimState_.sent(spellId, clientMs());
     LOG_INFO("Aimed cast ", spellId, ": pitch ", shot.aim.pitch, " speed ", shot.aim.speed, " lands in ",
              shot.flight.seconds, " s");
+    if (releasing) {
+        // 0x006fc210 on the held missiles: the release launches them on it.
+        releasedShot_ = shot;
+        releasedStamp_ = sent;
+    } else if (instantMissile) {
+        // An instant one with no cast kit animation to wait for: its cast kit
+        // and its missile now, marked aimed (0x00800dd0, 0x0072e240).
+        playAimedCastKit(spellId, caster);
+        launchAimedMissile(spellId, caster, castCount, shot, sent);
+    }
     return TrajectoryCast::Built;
+}
+
+bool SpellHandler::castKitHoldsMissile(uint32_t spellId, int32_t& anim) {
+    // 0x006fe7e0 / 0x00809f80: the unit's visual for the spell (vfunc
+    // +0xbc) has a missile (+0x1c), its CastKit an AnimID of 1 or more, and
+    // its Flags lack 0x4.
+    anim = -1;
+    auto* renderer = owner_.services().renderer;
+    auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
+    const uint32_t visualId = resolveSpellVisualId(spellId);
+    if (!svs || visualId == 0) return false;
+    const auto* missile = svs->findMissileVisual(visualId);
+    if (!missile || (missile->flags & 0x4u) != 0) return false;
+    anim = svs->castAnimations(spellId).castAnim;
+    return anim >= 1;
+}
+
+void SpellHandler::playAimedCastKit(uint32_t spellId, uint64_t caster) {
+    auto* renderer = owner_.services().renderer;
+    auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
+    const uint32_t visualId = resolveSpellVisualId(spellId);
+    glm::vec3 at;
+    if (!svs || visualId == 0 || !resolveUnitPosition(caster, at)) return;
+    svs->playSpellVisual(visualId, at, /*useImpactKit=*/false, owner_.resolveUnitRenderInstance(caster), false,
+                         spellId);
+}
+
+void SpellHandler::launchAimedMissile(uint32_t spellId, uint64_t mover, uint8_t castCount, const AimedShot& shot,
+                                      const missile_trajectory::Stamped& sent) {
+    namespace mt = missile_trajectory;
+    // Half the latency and a fifth of a second more, at most 1.3 times as
+    // long (0x006320d0).
+    const float flight = mt::flightWithLatency(shot.flight.seconds, owner_.getLatencyMs());
+    // Marked aimed (+0x139): SMSG_SPELL_GO launches none for it.
+    aimedCasts_.push_back(MoverCast{mover, castCount, spellId});
+    if (aimedCasts_.size() > 8) aimedCasts_.erase(aimedCasts_.begin());
+    auto* renderer = owner_.services().renderer;
+    auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
+    const auto spellIt = owner_.spellNameCacheRef().find(spellId);
+    const float speed = spellIt != owner_.spellNameCacheRef().end() ? spellIt->second.missileSpeed : 0.0f;
+    const uint32_t visualId = resolveSpellVisualId(spellId);
+    rendering::SpellVisualSystem::MissileEnd from;
+    if (!svs || visualId == 0 || !resolveUnitPosition(mover, from.position)) return;
+    from.renderInstanceId = owner_.resolveUnitRenderInstance(mover);
+    const rendering::SpellVisualSystem::MissileEnd to{0, sent.impact};
+    rendering::SpellVisualSystem::MissileTrajectory trajectory;
+    trajectory.elevation = sent.pitch;
+    trajectory.castSpeed = sent.speed;
+    trajectory.flightSeconds = flight;
+    trajectory.spellMissileId = shot.spellMissileId;
+    // 0x00732ff0's flag 0x200000, as for SMSG_SPELL_GO's missiles.
+    const MovementHandler* movement = owner_.getMovementHandler();
+    trajectory.clientControlled = (movement && movement->unitHasClientControl(mover)) ||
+                                  owner_.movementInfoRef().transportGuid == 0;
+    trajectory.collisionCaster = mover;
+    if (const auto seat = owner_.vehicleRoster().passenger(mover)) trajectory.collisionCaster = seat->vehicleGuid;
+    // The cast's own speed where Spell.dbc gives none: the arc times it.
+    svs->launchSpellMissile(visualId, speed > 0.0f ? speed : sent.speed, from, to, {to}, &trajectory, spellId, mover,
+                            castCount);
 }
 
 void SpellHandler::tickAimedCast() {
     // 0x006fe7e0 (WorldFrame, each frame, for the active mover): sent, begun,
     // no missile held, and the cast time passed since it was sent.
     if (!aimState_.due(clientMs())) return;
-    // The client holds a missile for it instead where the cast is found, not
-    // yet aimed, and its visual has a missile and a cast kit with a start
-    // animation without visual flag 0x4 - and works the shot out again when
-    // that missile is let go (0x0072df00). Missiles here are not held on
-    // their caster, so the shot is worked out now, as it is otherwise.
+    // Where the cast is found and not yet aimed, and its visual has a missile
+    // and a cast kit with an animation without visual flag 0x4, the shot
+    // waits for that missile to be let go: the cast is marked aimed, its cast
+    // kit plays, and the held cast count (+0xf78) stops this asking again
+    // (0x00800dd0; 0x0072df00 -> 0x006fd6b0 sends it).
+    const uint64_t mover = owner_.activeMover();
+    const uint32_t spellId = aimState_.spellId;
+    const bool castFound = moverCast_ && moverCast_->caster == mover && moverCast_->spellId == spellId;
+    const bool aimed = castFound && std::any_of(aimedCasts_.begin(), aimedCasts_.end(), [&](const MoverCast& c) {
+        return c.caster == mover && c.castCount == moverCast_->castCount && c.spellId == spellId;
+    });
+    int32_t anim = -1;
+    if (castFound && !aimed && castKitHoldsMissile(spellId, anim)) {
+        const uint8_t castCount = moverCast_->castCount;
+        aimedCasts_.push_back(*moverCast_);
+        if (aimedCasts_.size() > 8) aimedCasts_.erase(aimedCasts_.begin());
+        playAimedCastKit(spellId, mover);
+        aimState_.heldCastCount = castCount;
+        AimedRelease held;
+        held.caster = mover;
+        held.castCount = castCount;
+        held.spellId = spellId;
+        held.anim = anim;
+        held.queuedMs = clientMs();
+        aimedRelease_ = held;
+        return;
+    }
     updateMissileTrajectory();
+}
+
+void SpellHandler::tickAimedRelease() {
+    // 0x00734390 for the mover's queued missiles: let go two seconds after
+    // they were queued (+0x9e8), or once the unit plays its cast kit's
+    // animation no more (+0xfa4 -1). The model's own release event
+    // (+0xa30 0x80000000) is not read here.
+    if (!aimedRelease_) return;
+    AimedRelease& r = *aimedRelease_;
+    uint32_t playing = 0;
+    float t = 0.0f, d = 0.0f;
+    auto* cr = owner_.services().renderer ? owner_.services().renderer->getCharacterRenderer() : nullptr;
+    const uint32_t instance = owner_.resolveUnitRenderInstance(r.caster);
+    const bool kit = cr && instance != 0 && cr->getAnimationState(instance, playing, t, d) &&
+                     static_cast<int32_t>(playing) == r.anim && !(d > 0.0f && t >= d);
+    if (missile_trajectory::releaseDue(clientMs(), r.queuedMs, kit, r.animSeen)) releaseAimedMissiles();
+}
+
+void SpellHandler::releaseAimedMissiles() {
+    if (!aimedRelease_) return;
+    const AimedRelease r = *aimedRelease_;
+    aimedRelease_.reset();
+    if (r.parked) {
+        // 0x0080de60: the parked cast is sent now, by the mover only; it is
+        // let go either way. Sent through the whole cast as the player or
+        // the vehicle casts it (0x0080cce0), built with its own count; the
+        // missile then leaves on the shot it was sent with (0x006fc210,
+        // 0x007022d0).
+        if (r.caster != owner_.activeMover()) return;
+        releasingCastCount_ = r.castCount;
+        releasedShot_.reset();
+        if (r.caster == owner_.getPlayerGuid()) sendPlayerCast(r.spellId, r.target);
+        else sendPetCast(r.spellId, r.caster, r.target);
+        releasingCastCount_.reset();
+        if (releasedShot_) launchAimedMissile(r.spellId, r.caster, r.castCount, *releasedShot_, releasedStamp_);
+        releasedShot_.reset();
+        return;
+    }
+    // 0x0072df00: the cast the missile was held for is the aimed one still
+    // (0x006fbed0, +0xf78): its shot is worked out and sent now, and the
+    // missile launched on it (0x006fd6b0).
+    if (aimState_.holding() && aimState_.heldCastCount == r.castCount) {
+        aimState_.heldCastCount = 0;
+        // Marked aimed when it was held; the launch below marks it again.
+        aimedCasts_.erase(std::remove_if(aimedCasts_.begin(), aimedCasts_.end(),
+                                         [&](const MoverCast& c) {
+                                             return c.caster == r.caster && c.castCount == r.castCount &&
+                                                    c.spellId == r.spellId;
+                                         }),
+                          aimedCasts_.end());
+        updateMissileTrajectory();
+    }
 }
 
 void SpellHandler::updateMissileTrajectory() {
@@ -1552,43 +1746,12 @@ void SpellHandler::updateMissileTrajectory() {
                                                                   sent.launch, sent.impact, mover, shot.wire));
     LOG_INFO("Aimed cast ", spellId, " updated: pitch ", sent.pitch, " speed ", sent.speed, " lands in ",
              shot.flight.seconds, " s");
-    // Half the latency and a fifth of a second more, at most 1.3 times as
-    // long (0x006320d0).
-    const float flight = mt::flightWithLatency(shot.flight.seconds, owner_.getLatencyMs());
-    // 0x00805180: the cast object of the mover's current cast.
-    const bool castFound = moverCast_ && moverCast_->caster == mover && moverCast_->spellId == spellId;
-    if (castFound) {
-        // Target flag 0x40 at the impact, marked aimed (+0x139), the pitch
-        // and speed on it (+0x124, +0x128), its missile launched now with
-        // that flight (0x00800dd0, 0x0072e240).
-        aimedCasts_.push_back(*moverCast_);
-        if (aimedCasts_.size() > 8) aimedCasts_.erase(aimedCasts_.begin());
-        auto* renderer = owner_.services().renderer;
-        auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
-        const auto spellIt = owner_.spellNameCacheRef().find(spellId);
-        const float speed = spellIt != owner_.spellNameCacheRef().end() ? spellIt->second.missileSpeed : 0.0f;
-        const uint32_t visualId = resolveSpellVisualId(spellId);
-        rendering::SpellVisualSystem::MissileEnd from;
-        if (svs && visualId != 0 && resolveUnitPosition(mover, from.position)) {
-            from.renderInstanceId = owner_.resolveUnitRenderInstance(mover);
-            const rendering::SpellVisualSystem::MissileEnd to{0, sent.impact};
-            rendering::SpellVisualSystem::MissileTrajectory trajectory;
-            trajectory.elevation = sent.pitch;
-            trajectory.castSpeed = sent.speed;
-            trajectory.flightSeconds = flight;
-            trajectory.spellMissileId = shot.spellMissileId;
-            // 0x00732ff0's flag 0x200000, as for SMSG_SPELL_GO's missiles.
-            const MovementHandler* movement = owner_.getMovementHandler();
-            trajectory.clientControlled = (movement && movement->unitHasClientControl(mover)) ||
-                                          owner_.movementInfoRef().transportGuid == 0;
-            trajectory.collisionCaster = mover;
-            if (const auto seat = owner_.vehicleRoster().passenger(mover))
-                trajectory.collisionCaster = seat->vehicleGuid;
-            // The cast's own speed where Spell.dbc gives none: the arc times it.
-            svs->launchSpellMissile(visualId, speed > 0.0f ? speed : sent.speed, from, to, {to}, &trajectory,
-                                    spellId, mover, moverCast_->castCount);
-        }
-    }
+    // 0x00805180: the cast object of the mover's current cast. Target flag
+    // 0x40 at the impact, marked aimed (+0x139), the pitch and speed on it
+    // (+0x124, +0x128), its missile launched now with that flight (0x00800dd0,
+    // 0x0072e240).
+    if (moverCast_ && moverCast_->caster == mover && moverCast_->spellId == spellId)
+        launchAimedMissile(spellId, mover, moverCast_->castCount, shot, sent);
     // 0x006fbe80.
     aimState_.clear(spellId);
 }
@@ -1614,7 +1777,8 @@ void SpellHandler::sendPetCast(uint32_t spellId, uint64_t caster, uint64_t targe
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     network::Packet aimed;
     const TrajectoryCast how = buildTrajectoryCast(spellId, caster, target, aimed);
-    if (how == TrajectoryCast::Refused) return;
+    // Parked: sent when its held missile is let go (0x0080de60).
+    if (how == TrajectoryCast::Refused || how == TrajectoryCast::Parked) return;
     const auto cast = how == TrajectoryCast::Built ? aimed
                       : owner_.getPacketParsers()
                           ? owner_.getPacketParsers()->buildCastSpell(spellId, target, ++castCount_)
@@ -2338,7 +2502,8 @@ void SpellHandler::sendPlayerCast(uint32_t spellId, uint64_t target, uint64_t it
     network::Packet aimed;
     const TrajectoryCast how =
         item == 0 ? buildTrajectoryCast(spellId, owner_.getPlayerGuid(), target, aimed) : TrajectoryCast::NotAimed;
-    if (how == TrajectoryCast::Refused) return;
+    // Parked: sent when its held missile is let go (0x0080de60).
+    if (how == TrajectoryCast::Refused || how == TrajectoryCast::Parked) return;
     auto packet = how == TrajectoryCast::Built ? aimed
         : item != 0
         ? (owner_.getPacketParsers() ? owner_.getPacketParsers()->buildCastSpellOnItem(spellId, item)
@@ -4092,8 +4257,10 @@ void SpellHandler::syncPreWotlkTalentsFromKnownSpells() {
 void SpellHandler::updateTimers(float dt) {
     // 0x00804c10: the missiles that have arrived leave the list.
     missilesInFlight_.expire(historyNowMs());
-    // 0x006fe7e0 from WorldFrame's update.
+    // 0x006fe7e0 from WorldFrame's update; the held missiles let go
+    // (0x00734390).
     tickAimedCast();
+    tickAimedRelease();
     // Tick down cast bar
     if (casting_ && castTimeRemaining_ > 0.0f) {
         castTimeRemaining_ -= dt;

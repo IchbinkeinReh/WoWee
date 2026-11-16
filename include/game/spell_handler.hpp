@@ -876,7 +876,12 @@ private:
     /// SpellMissile row has Flags bit 1. NotAimed for any other; Refused
     /// where the caster is not the active mover or nothing could be worked
     /// out; Built with the cast in `out`.
-    enum class TrajectoryCast { NotAimed, Refused, Built };
+    ///
+    /// Parked: an instant cast whose visual has a missile and a cast kit with
+    /// an animation is not sent yet (0x00809f80 returns 0): its cast kit
+    /// plays, its missile is held, and the cast waits (0x00d3f4e8) to be
+    /// sent when that missile is let go (0x0080de60).
+    enum class TrajectoryCast { NotAimed, Refused, Built, Parked };
     TrajectoryCast buildTrajectoryCast(uint32_t spellId, uint64_t caster, uint64_t target, network::Packet& out);
     /// 0x006fcd60 for the spell, from the caster as it is now: the row,
     /// the aim, where the shot lands and how long it flies, and the mover's
@@ -891,6 +896,43 @@ private:
     };
     enum class AimSolve { NotAimed, NoMover, Solved };
     AimSolve solveAimedShot(uint32_t spellId, uint64_t caster, AimedShot& out);
+    /// The mover's missiles waiting to be let go (Unit_C +0x9ec, queued by
+    /// 0x00800dd0) for an aimed cast: let go when the cast kit's animation
+    /// is over or two seconds after they were queued (0x00734390), when the
+    /// shot is worked out and sent (0x0072df00 -> 0x006fd6b0, or for a parked
+    /// cast 0x0080de60) and the missile launched on it.
+    struct AimedRelease {
+        uint64_t caster = 0;
+        uint8_t castCount = 0;
+        uint32_t spellId = 0;
+        uint64_t target = 0;
+        int32_t anim = -1;        ///< the cast kit's AnimID
+        uint32_t queuedMs = 0;    ///< +0x9e8
+        bool parked = false;      ///< the cast itself waits too (0x00d3f4e8)
+        bool animSeen = false;    ///< the kit's animation has been seen playing
+    };
+    std::optional<AimedRelease> aimedRelease_;
+    /// A parked cast being sent at its release: its cast count, so the cast
+    /// is built with it and not parked again (+0x139 set).
+    std::optional<uint8_t> releasingCastCount_;
+    /// The shot a released parked cast was sent with, and its figures as
+    /// stamped, for its missile.
+    std::optional<AimedShot> releasedShot_;
+    missile_trajectory::Stamped releasedStamp_;
+    /// Whether the spell's visual has a missile and a cast kit with an
+    /// animation, without visual Flags 0x4 (0x006fe7e0, 0x00809f80): `anim`
+    /// the kit's AnimID.
+    bool castKitHoldsMissile(uint32_t spellId, int32_t& anim);
+    /// 0x00800dd0 for an aimed cast: its cast kit on the caster.
+    void playAimedCastKit(uint32_t spellId, uint64_t caster);
+    /// The missile of an aimed cast launched on the shot sent (0x0072e240,
+    /// 0x007022d0), the cast marked aimed so SMSG_SPELL_GO launches none.
+    void launchAimedMissile(uint32_t spellId, uint64_t caster, uint8_t castCount, const AimedShot& shot,
+                            const missile_trajectory::Stamped& sent);
+    /// 0x00734390, each frame: the held missiles let go when due.
+    void tickAimedRelease();
+    /// 0x0072df00 for the held aimed cast.
+    void releaseAimedMissiles();
     /// Whether the spell's SpellMissile row has Flags bit 1.
     bool spellIsAimed(uint32_t spellId);
     /// 0x006fe7e0, each frame: once the aimed cast's time has passed since it
