@@ -1052,7 +1052,27 @@ private:
         float launchSpeed = 0.0f;
         bool hasTrajectory = false;
         MissileTrajectory trajectory;
+        // Where its model was last placed: the world matrix a landing
+        // missile is kept at (0x00700700).
+        glm::mat4 lastTransform{1.0f};
+        bool placed = false;
     };
+    // A missile that has landed and plays IMPACT (0x00700700): its model,
+    // carried on the target's attachment where it reached one, until the
+    // animation ends.
+    struct LandedMissile {
+        uint32_t instanceId = 0;
+        uint32_t targetInstanceId = 0;
+        int32_t attachment = -1;
+        glm::mat4 local{1.0f};
+        float remaining = 0.0f;
+    };
+    std::vector<LandedMissile> landedMissiles_;
+    /// 0x00700700 for a missile model that is placed (flag 0x8000): IMPACT
+    /// played on it where it landed, false when it has no such sequence and
+    /// is to go at once.
+    bool keepLandedMissile(const ActiveMissile& missile);
+    void updateLandedMissiles(float deltaTime);
     /// Point a missile at `to` from where it is and plan its flight, as
     /// 0x007022d0 does at a launch and at each relaunch.
     void aimMissile(ActiveMissile& missile, const MissileVisual& visual, const MissileEnd& to);
