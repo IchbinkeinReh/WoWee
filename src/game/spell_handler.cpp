@@ -8425,10 +8425,73 @@ void SpellHandler::handleSpellLogExecute(network::Packet& packet) {
             case SpellEffect::FEED_PET:
                 logEffectFeedPet(entry, data.casterGuid);
                 break;
+            case SpellEffect::OPEN_LOCK:
+                logEffectOpenLock(entry, data.casterGuid, data.spellId);
+                break;
+            case SpellEffect::DISMISS_PET:
+                logEffectDismissPet(entry, data.casterGuid);
+                break;
             default:
                 break;
         }
     }
+}
+
+void SpellHandler::logEffectOpenLock(const SpellLogExecuteEntry& entry, uint64_t casterGuid, uint32_t spellId) {
+    // SPELL_EFFECT_OPEN_LOCK (0x006d3220's case -> 0x0050ebe0): an OPENING
+    // line, OPEN_LOCK_SELF with the spell and the target's name for the
+    // player, OPEN_LOCK_OTHER with the caster's name before them for anyone
+    // else (0x0050dde0 for an item, 0x0050deb0 for a game object). Only for a
+    // spell Spell.dbc has, with a name and without Attributes 0x180, and a
+    // target this client has whose name is already cached - the client does
+    // not wait for one.
+    const auto attrs = owner_.getSpellAttributes(spellId);
+    if (!attrs || (*attrs & 0x180u) != 0) return;
+    const std::string spellName = owner_.getSpellName(spellId);
+    if (spellName.empty()) return;
+    const auto target = owner_.getEntityManager().getEntity(entry.targetGuid);
+    if (!target) return;
+    // Named by its entry (OBJECT_FIELD_ENTRY, field 3) through the item or
+    // game object cache.
+    std::string targetName;
+    const auto type = target->getType();
+    if (type == ObjectType::ITEM || type == ObjectType::CONTAINER) {
+        const auto* info = owner_.getItemInfo(target->getField(3));
+        if (!info || !info->valid) return;
+        targetName = info->name;
+    } else if (type == ObjectType::GAMEOBJECT) {
+        const auto* info = owner_.getCachedGameObjectInfo(target->getField(3));
+        if (!info) return;
+        targetName = info->name;
+    } else {
+        return;
+    }
+    std::string line;
+    if (casterGuid == owner_.getPlayerGuid()) {
+        line = interfaceFormat("OPEN_LOCK_SELF", "You perform %s on %s.", {spellName, targetName});
+    } else {
+        std::string caster = owner_.lookupName(casterGuid);
+        if (caster.empty()) caster = interfaceString("UNKNOWNOBJECT", "Unknown");
+        line = interfaceFormat("OPEN_LOCK_OTHER", "%s performs %s on %s.", {caster, spellName, targetName});
+    }
+    owner_.addLocalChatLine(ChatType::OPENING, line);
+}
+
+void SpellHandler::logEffectDismissPet(const SpellLogExecuteEntry& entry, uint64_t casterGuid) {
+    // SPELL_EFFECT_DISMISS_PET (0x006d3220's case -> 0x0050bcc0): a PET_INFO
+    // line, SPELLDISMISSPETSELF with the pet's name for the player,
+    // SPELLDISMISSPETOTHER with the caster's and the pet's for anyone else;
+    // a name not known is UNKNOWNOBJECT (0x0074d750).
+    auto nameOf = [this](uint64_t guid) {
+        std::string n = guid != 0 ? owner_.lookupName(guid) : std::string();
+        if (n.empty()) n = interfaceString("UNKNOWNOBJECT", "Unknown");
+        return n;
+    };
+    const std::string pet = nameOf(entry.targetGuid);
+    const std::string line = casterGuid == owner_.getPlayerGuid()
+        ? interfaceFormat("SPELLDISMISSPETSELF", "You dismiss %s.", {pet})
+        : interfaceFormat("SPELLDISMISSPETOTHER", "%s dismisses %s.", {nameOf(casterGuid), pet});
+    owner_.addLocalChatLine(ChatType::PET_INFO, line);
 }
 
 void SpellHandler::handleClearExtraAuraInfo(network::Packet& packet) {
