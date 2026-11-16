@@ -1380,6 +1380,16 @@ void SpellVisualSystem::setProjectilePosition(uint64_t casterGuid, uint8_t castC
     }
 }
 
+void SpellVisualSystem::dropMissilesAt(uint32_t targetInstanceId) {
+    if (targetInstanceId == 0) return;
+    for (auto it = activeMissiles_.begin(); it != activeMissiles_.end();) {
+        if (it->targetInstanceId != targetInstanceId) { ++it; continue; }
+        if (m2Renderer_) m2Renderer_->removeInstance(it->instanceId);
+        audio::AudioEngine::instance().stopSoundWithFade(it->soundHandle, spell_missile::kMissileSoundFadeSeconds);
+        it = activeMissiles_.erase(it);
+    }
+}
+
 bool SpellVisualSystem::kitModelTransform(uint32_t renderInstanceId, int32_t attachment, const glm::mat4& local,
                                           float effectScale, float minScale, float maxScale, glm::mat4& out,
                                           float& scale) {

@@ -6036,6 +6036,8 @@ void SocialHandler::lfgTeleport(bool toLfgDungeon) {
     const uint16_t wire = wireOpcode(Opcode::CMSG_LFG_TELEPORT);
     if (wire == 0xFFFF) return;   // no dungeon finder before Wrath
     network::Packet pkt(wire);
+    // The byte is "out" (0x00556bc0 writes the Lua argument): 0 goes in,
+    // 1 comes back out.
     pkt.writeUInt8(toLfgDungeon ? 0 : 1);
     owner_.getSocket()->send(pkt);
 }

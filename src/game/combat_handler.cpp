@@ -295,8 +295,9 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
                 // threat list makes a noise until the player turns that off.
                 if (topNow && threatWarningWanted() &&
                     addons::storedCVarValue("threatPlaySounds", "1") != "0") {
+                    // SoundEntries 15262 (0x0071c3b0 plays 0x3b9e).
                     if (auto* ac = owner_.services().audioCoordinator) {
-                        if (auto* sfx = ac->getUiSoundManager()) sfx->playError();
+                        if (auto* sfx = ac->getUiSoundManager()) sfx->playById(15262);
                     }
                 }
             }

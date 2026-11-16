@@ -513,9 +513,11 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
                 break;
             }
             // 0x007464d0: the model's foley material's sound, two yards above
-            // the unit, while Sound_EnableArmorFoleySoundForOthers is on -
-            // every unit's, the player's own too (nothing reads ...ForSelf).
-            if (addons::storedCVarValue("Sound_EnableArmorFoleySoundForOthers", "1") != "0") {
+            // the unit - the player's own while
+            // Sound_EnableArmorFoleySoundForSelf is on, everyone else's while
+            // ...ForOthers is (0x007633f0).
+            if (addons::storedCVarValue(activePlayer ? "Sound_EnableArmorFoleySoundForSelf"
+                                                     : "Sound_EnableArmorFoleySoundForOthers", "1") != "0") {
                 if (const uint32_t foley = armourFoleySound(unit)) {
                     const glm::vec3 at = unitPosition + glm::vec3(0.0f, 0.0f, 2.0f);
                     player.playOnce(foley, &at, 1.0f, assetManager_);

@@ -3061,11 +3061,14 @@ void GameHandler::registerRemainingOpcodes() {
         // SMSG_PRE_RESURRECT: packed GUID of the player who can self-resurrect.
         // Sent when the dead player has Reincarnation (Shaman), Twisting Nether (Warlock),
         // or Deathpact (Death Knight passive). The client must send CMSG_SELF_RES to accept.
-        uint64_t targetGuid = packet.readPackedGuid();
-        if (targetGuid == playerGuid || targetGuid == 0) {
-            selfResAvailable_ = true;
-            LOG_INFO("SMSG_PRE_RESURRECT: self-resurrection available (guid=0x",
-                     std::hex, targetGuid, std::dec, ")");
+        // 0x00716d80: the only thing the client does with it is let go of
+        // the missiles still flying at that unit (0x00703a80). It does not
+        // offer a self-resurrection - that is PLAYER_SELF_RES_SPELL's.
+        const uint64_t targetGuid = packet.readPackedGuid();
+        if (targetGuid != 0) {
+            auto* renderer = services().renderer;
+            if (auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr)
+                svs->dropMissilesAt(resolveUnitRenderInstance(targetGuid));
         }
     };
     dispatchTable_[Opcode::SMSG_PLAYERBINDERROR] = [this](network::Packet& packet) {

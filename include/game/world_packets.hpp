@@ -2689,6 +2689,9 @@ public:
 inline constexpr uint8_t kCastResultRequiresSpellFocus = 102;
 inline constexpr uint8_t kCastResultTotemCategory = 130;
 inline constexpr uint8_t kCastResultTotems = 131;
+/// SPELL_FAILED_CUSTOM_ERROR: one id, worded as SPELL_FAILED_CUSTOM_ERROR_<id>
+/// (0x007fef10).
+inline constexpr uint8_t kCastResultCustomError = 172;
 
 /// Read the optional trailing ids of a cast failure payload (see above).
 inline void readCastResultArgs(network::Packet& packet, uint8_t result,
@@ -2697,6 +2700,7 @@ inline void readCastResultArgs(network::Packet& packet, uint8_t result,
     arg2 = 0;
     switch (result) {
         case kCastResultRequiresSpellFocus:
+        case kCastResultCustomError:
             if (packet.hasRemaining(4)) arg1 = packet.readUInt32();
             break;
         case kCastResultTotems:
