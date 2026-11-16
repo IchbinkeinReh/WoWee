@@ -243,6 +243,10 @@ wowee_add_test(test_arena_opponents
 wowee_add_test(test_unit_combat
     SOURCES test_unit_combat.cpp)
 
+# The macro and item icon lists (0x00565840). Header-only.
+wowee_add_test(test_macro_icon_lists
+    SOURCES test_macro_icon_lists.cpp)
+
 # The tabard designer's design (game/tabard_design.hpp): cycling, the start,
 # the save's refusals and answer, the files. Header-only.
 wowee_add_test(test_tabard_design

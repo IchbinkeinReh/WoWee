@@ -3,6 +3,7 @@
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #pragma once
 
+#include "addons/macro_icon_lists.hpp"
 #include <array>
 #include <functional>
 #include <string>
@@ -605,6 +606,20 @@ inline LuaServices* getLuaServices(lua_State* L) {
     auto* svc = static_cast<LuaServices*>(lua_touserdata(L, -1));
     lua_pop(L, 1);
     return svc;
+}
+
+/// The macro and item icon lists (0x00565840), built once from the icon
+/// files on the first ask - which in the client is GetNumMacroIcons or
+/// GetNumMacroItemIcons; null without the service.
+inline const macro_icons::Lists* macroIconLists(lua_State* L) {
+    static macro_icons::Lists lists;
+    static bool built = false;
+    if (built) return &lists;
+    auto* svc = getLuaServices(L);
+    if (!svc || !svc->listIconTextures) return nullptr;
+    lists = macro_icons::build(svc->listIconTextures());
+    built = true;
+    return &lists;
 }
 
 // ---- Unit resolution helpers ----

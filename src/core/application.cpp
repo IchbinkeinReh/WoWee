@@ -1720,15 +1720,11 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
             static const std::string kPrefix = "interface\\icons\\";
             // From the manifest or the archives' listfiles, whichever is the
             // source.
+            // The file name with its extension: the client's lists take only
+            // a .blp or a .tga (0x00565550), and drop the extension themselves.
             for (const std::string& path : am->listFiles(kPrefix)) {
-                // SetTexture wants the path without the extension, which is
-                // also how every icon is named everywhere else in the
-                // interface.
-                const size_t dot = path.rfind('.');
-                const std::string name = path.substr(
-                    kPrefix.size(),
-                    dot == std::string::npos ? std::string::npos : dot - kPrefix.size());
-                if (!name.empty()) icons.push_back("Interface\\Icons\\" + name);
+                const std::string name = path.substr(kPrefix.size());
+                if (!name.empty() && name.find('\\') == std::string::npos) icons.push_back(name);
             }
             // A grid the player scrolls through, so the order has to be stable
             // between one frame and the next - the manifest is a hash map and
