@@ -6007,6 +6007,53 @@ uint32_t GameHandler::getSpellVisualId(uint32_t spellId) const {
                                                             std::to_string(spell_visual::kViolenceLevelLimit))));
 }
 
+uint32_t GameHandler::rangedWeaponDisplayId(uint64_t unitGuid) const {
+    // vfunc +0x134(2): a player's visible ranged item (Player_C +0x1008,
+    // record 17), a creature's third virtual item slot (Unit_C +0x998).
+    const auto entity = entityController_->getEntityManager().getEntity(unitGuid);
+    if (!entity || !entity->isUnit()) return 0;
+    uint32_t entry = 0;
+    if (entity->getType() == ObjectType::PLAYER) {
+        constexpr int kSlotRanged = 17;
+        if (visibleItemEntryBase_ >= 0)
+            entry = visibleItemEntryField(
+                entity->getField(static_cast<uint16_t>(visibleItemEntryBase_ + kSlotRanged * 2)));
+    } else {
+        const uint16_t slots = fieldIndex(UF::UNIT_VIRTUAL_ITEM_SLOT_ID);
+        if (slots != 0xFFFF) entry = entity->getField(static_cast<uint16_t>(slots + 2));
+    }
+    if (entry == 0) return 0;
+    if (const auto* info = getItemInfo(entry); info && info->valid) return info->displayInfoId;
+    // Item.dbc's display (WotLK's eight columns: display at 5) while the
+    // item's query is out.
+    auto* am = services_.assetManager;
+    auto items = am && am->isInitialized() ? am->loadDBCOptional("Item.dbc") : nullptr;
+    const int32_t row = items && items->getFieldCount() >= 8 ? items->findRecordById(entry) : -1;
+    return row >= 0 ? items->getUInt32(static_cast<uint32_t>(row), 5) : 0u;
+}
+
+uint32_t GameHandler::getUnitSpellVisualId(uint64_t casterGuid, uint32_t spellId) const {
+    const uint32_t own = getSpellVisualId(spellId);
+    // 0x00720f80: only a spell with Attributes 0x2 (a ranged one) takes from
+    // the caster's ranged weapon.
+    const auto attributes = getSpellAttributes(spellId);
+    if (!attributes || (*attributes & 0x2u) == 0 || casterGuid == 0) return own;
+    const uint32_t display = rangedWeaponDisplayId(casterGuid);
+    if (display == 0) return own;
+    auto* am = services_.assetManager;
+    auto displays = am && am->isInitialized() ? am->loadDBCOptional("ItemDisplayInfo.dbc") : nullptr;
+    const auto* layout = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("ItemDisplayInfo")
+                                                        : nullptr;
+    const uint32_t visualField = layout ? layout->tryField("SpellVisualID") : 0xFFFFFFFFu;
+    if (!displays || visualField >= displays->getFieldCount()) return own;
+    const int32_t row = displays->findRecordById(display);
+    const uint32_t weaponVisual = row >= 0 ? displays->getUInt32(static_cast<uint32_t>(row), visualField) : 0u;
+    auto* renderer = services_.renderer;
+    auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
+    if (weaponVisual == 0 || !svs) return own;
+    return svs->mergedVisual(own, weaponVisual);
+}
+
 uint64_t GameHandler::listenerObject() const {
     auto& entities = entityController_->getEntityManager();
     uint64_t object = 0;

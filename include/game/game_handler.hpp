@@ -5202,6 +5202,12 @@ public:
     /// The SpellVisual the client shows for a spell (0x007fa290, see
     /// spell_visual_choice.hpp); 0 for none.
     uint32_t getSpellVisualId(uint32_t spellId) const;
+    /// The visual a unit's cast of the spell shows: for a ranged spell
+    /// (Attributes 0x2) the spell's own completed from the caster's ranged
+    /// weapon's ItemDisplayInfo SpellVisualID (0x00720f80).
+    uint32_t getUnitSpellVisualId(uint64_t casterGuid, uint32_t spellId) const;
+    /// The ItemDisplayInfo id of the unit's ranged weapon (vfunc +0x134(2)), 0 for none.
+    uint32_t rangedWeaponDisplayId(uint64_t unitGuid) const;
     /// 0x00804cc0: whether a missile of the cast a dynamic object carries
     /// (DYNAMICOBJECT_CASTER, SPELLID, CASTTIME) still flies.
     bool isSpellMissileInFlight(uint64_t caster, uint32_t spellId, uint32_t castTime) const;
