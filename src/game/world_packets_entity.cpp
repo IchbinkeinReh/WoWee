@@ -1533,6 +1533,36 @@ bool SpellStartParser::parse(network::Packet& packet, SpellStartData& data) {
         data.hasPower = true;
         data.power = packet.readUInt32();
     }
+    // Then, in 0x00806700's order: 0x200000 the runes (what was ready, what
+    // is ready now, a byte per rune that went), 0x20 the ammo (two words),
+    // and 0x4000000 the caster's school and mechanic immunities.
+    bool whole = targetsWhole && ((data.castFlags & 0x800u) == 0 || data.hasPower);
+    if (whole && (data.castFlags & 0x200000u) != 0) {
+        whole = packet.hasRemaining(2);
+        if (whole) {
+            const uint8_t had = packet.readUInt8();
+            const uint8_t now = packet.readUInt8();
+            for (int i = 0; i < 6 && whole; ++i) {
+                const uint8_t bit = static_cast<uint8_t>(1u << i);
+                if ((had & bit) != 0 && (now & bit) == 0) {
+                    whole = packet.hasRemaining(1);
+                    if (whole) (void)packet.readUInt8();
+                }
+            }
+        }
+    }
+    if (whole && (data.castFlags & 0x20u) != 0) {
+        whole = packet.hasRemaining(8);
+        if (whole) {
+            (void)packet.readUInt32();
+            (void)packet.readUInt32();
+        }
+    }
+    if (whole && (data.castFlags & 0x4000000u) != 0 && packet.hasRemaining(8)) {
+        data.hasImmunities = true;
+        data.schoolImmunity = packet.readUInt32();
+        data.mechanicImmunity = packet.readUInt32();
+    }
 
     LOG_DEBUG("Spell start: spell=", data.spellId, " castTime=", data.castTime, "ms");
     return true;

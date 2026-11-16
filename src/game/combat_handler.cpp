@@ -2034,6 +2034,9 @@ void CombatHandler::setTarget(uint64_t guid) {
 
     // Clear previous target's cast bar on target change
     // (the new target's cast state is naturally fetched from spellHandler_->unitCastStates_ by GUID)
+    // 0x00524bf0: the new target's cast, else its channel, is judged for
+    // whether the player can interrupt it (0x007262e0).
+    if (owner_.getSpellHandler()) owner_.getSpellHandler()->reevaluateTargetCastLock(guid);
 
     // Inform server of target selection
     if (owner_.isInWorld()) {

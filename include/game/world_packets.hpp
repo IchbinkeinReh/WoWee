@@ -2755,6 +2755,11 @@ struct SpellStartData {
     /// Cast flag 0x800: the caster's power of the spell's type (0x00806700).
     bool hasPower = false;
     uint32_t power = 0;
+    /// Cast flag 0x4000000: the caster's school and mechanic immunities,
+    /// which the client keeps on the unit (+0xa64, +0xa68) for 0x007262e0.
+    bool hasImmunities = false;
+    uint32_t schoolImmunity = 0;
+    uint32_t mechanicImmunity = 0;
 
     [[nodiscard]] bool isValid() const { return spellId != 0; }
 };

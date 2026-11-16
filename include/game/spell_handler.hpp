@@ -10,6 +10,7 @@
 #include "game/spell_history.hpp"
 #include "game/spell_missiles_in_flight.hpp"
 #include "game/cast_checks.hpp"
+#include "game/cast_interrupt.hpp"
 #include "game/cast_failure_error.hpp"
 #include "game/spell_unit_target.hpp"
 #include "game/handler_types.hpp"
@@ -298,8 +299,20 @@ public:
         auto it = unitCastStates_.find(guid);
         return (it != unitCastStates_.end() && it->second.casting) ? &it->second : nullptr;
     }
-    void clearUnitCastStates() { unitCastStates_.clear(); unitCastEnds_.clear(); }
-    void removeUnitCastState(uint64_t guid) { unitCastStates_.erase(guid); unitCastEnds_.erase(guid); }
+    void clearUnitCastStates() { unitCastStates_.clear(); unitCastEnds_.clear(); castLocks_.clear(); }
+    void removeUnitCastState(uint64_t guid) {
+        unitCastStates_.erase(guid);
+        unitCastEnds_.erase(guid);
+        castLocks_.erase(guid);
+    }
+    /// 0x0071ab20: whether the unit's cast reports itself as one the player
+    /// cannot interrupt - the bit 0x007262e0 left on the unit, while the
+    /// player knows an interrupt at all.
+    [[nodiscard]] bool castNotInterruptible(uint64_t guid) const;
+    /// 0x00524bf0: the new target's cast (else its channel) judged again.
+    void reevaluateTargetCastLock(uint64_t guid);
+    /// The player's spells changed: 0x0053ca70 builds its masks afresh.
+    void markInterruptMasksDirty() { interruptMasksDirty_ = true; }
     [[nodiscard]] const UnitCastEnd* getUnitCastEnd(uint64_t guid) const {
         auto it = unitCastEnds_.find(guid);
         return it != unitCastEnds_.end() ? &it->second : nullptr;
@@ -319,6 +332,7 @@ public:
     void addKnownSpell(uint32_t spellId) {
         knownSpells_.insert(spellId);
         noteLearnOrder(spellId);
+        interruptMasksDirty_ = true;
     }
     /// Where a known spell stands in the order it was learned - the order
     /// the client's spell list keeps (0x00542030 appends) - for a spell this
@@ -978,6 +992,31 @@ private:
 
     // Per-unit cast state
     std::unordered_map<uint64_t, UnitCastState> unitCastStates_;
+    /// What the client keeps on a unit for 0x007262e0: the not-interruptible
+    /// bit (+0xa34 0x8) and the immunities SMSG_SPELL_START's cast flag
+    /// 0x4000000 last gave it (+0xa64 schools, +0xa68 mechanics).
+    struct CastLock {
+        bool lock = false;
+        uint32_t schoolImmunity = 0;
+        uint32_t mechanicImmunity = 0;
+    };
+    std::unordered_map<uint64_t, CastLock> castLocks_;
+    /// 0x0053ca70's masks of the player's spells, built when they change.
+    mutable cast_interrupt::Masks interruptMasks_;
+    mutable bool interruptMasksDirty_ = true;
+    const cast_interrupt::Masks& interruptMasks() const;
+    /// 0x007262e0 on the unit for one of its casts; nullopt for a spell
+    /// Spell.dbc lacks (the client then does not call it).
+    std::optional<cast_interrupt::Outcome> evaluateCastLock(uint64_t guid, uint32_t spellId);
+    /// Whether the client judges a cast on this unit when it begins: the
+    /// target, the focus, and - with `arenaToo` - an arena opponent
+    /// (0x0072ab60, 0x0072ad20; 0x0072ac50 and 0x0072ae00 leave them out).
+    [[nodiscard]] bool castLockWatched(uint64_t guid, bool arenaToo) const;
+    /// The unit's current cast's spell, else its channel's; 0 for none.
+    [[nodiscard]] uint32_t unitCastOrChannelSpell(uint64_t guid) const;
+    /// 0x0072f5d0's tail: after an aura update on the unit, a cast a silence
+    /// prevents is judged again and a change raised.
+    void reevaluateCastLockAfterAuras(uint64_t guid, bool aurasChanged);
     std::unordered_map<uint64_t, UnitCastEnd> unitCastEnds_;
     void noteUnitCastEnd(uint64_t guid, bool channelZeroed) {
         auto& e = unitCastEnds_[guid];

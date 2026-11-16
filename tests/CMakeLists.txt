@@ -3554,6 +3554,12 @@ wowee_add_test(test_vehicle_transition
 wowee_add_test(test_vehicle_ui
     SOURCES test_vehicle_ui.cpp ${CMAKE_SOURCE_DIR}/src/game/vehicle.cpp)
 
+# ── test_cast_interrupt ──────────────────────────────
+# Whether a cast shows as not interruptible (0x0053ca70, 0x007262e0,
+# 0x0071ab20).
+wowee_add_test(test_cast_interrupt
+    SOURCES test_cast_interrupt.cpp)
+
 # ── test_vehicle_mover ───────────────────────────────
 # The active mover's switches and the pitch over time (vehicle_mover.hpp).
 wowee_add_test(test_vehicle_mover

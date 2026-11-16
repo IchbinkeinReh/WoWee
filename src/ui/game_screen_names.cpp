@@ -767,7 +767,9 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
             const auto attrs = cs->spellId ? gameHandler.getSpellAttributes(cs->spellId) : std::nullopt;
             const bool spellShown = attrs && (*attrs & 0x20u) == 0;
             const float v = cs->isChannel ? cs->timeRemaining : cs->timeTotal - cs->timeRemaining;
-            castBar.set(0.0f, cs->timeTotal, v, cs->spellId, spellShown, cs->isChannel, !cs->interruptible);
+            // The shield: the target's own answer (0x00720e50 -> 0x0071ab20).
+            castBar.set(0.0f, cs->timeTotal, v, cs->spellId, spellShown, cs->isChannel,
+                        gameHandler.isCastNotInterruptible(targetGuid));
         } else if (end && end->serial != castBarEndSerial) {
             if (end->channelZeroed && castBar.shown && castBar.channel)
                 castBar.set(castBar.min, castBar.max, castBar.min, castBar.spellId, true, true,

@@ -796,7 +796,7 @@ static int lua_UnitCastInfo(lua_State* L, bool wantChannel) {
     uint32_t spellId = 0;
     float timeTotal = 0.0f;
     float timeRemaining = 0.0f;
-    bool interruptible = true;
+    uint64_t castGuid = 0;
 
     if (uidStr == "player") {
         isCasting = gh->isCasting();
@@ -804,8 +804,7 @@ static int lua_UnitCastInfo(lua_State* L, bool wantChannel) {
         spellId = gh->getCurrentCastSpellId();
         timeTotal = gh->getCastTimeTotal();
         timeRemaining = gh->getCastTimeRemaining();
-        // Player interruptibility: always true for own casts (server controls actual interrupt)
-        interruptible = true;
+        castGuid = gh->getPlayerGuid();
     } else {
         uint64_t guid = resolveUnitGuid(gh, uidStr);
         if (guid == 0) { return 0; }
@@ -816,7 +815,7 @@ static int lua_UnitCastInfo(lua_State* L, bool wantChannel) {
         spellId = state->spellId;
         timeTotal = state->timeTotal;
         timeRemaining = state->timeRemaining;
-        interruptible = state->interruptible;
+        castGuid = guid;
     }
 
     if (!isCasting) { return 0; }
@@ -881,7 +880,10 @@ static int lua_UnitCastInfo(lua_State* L, bool wantChannel) {
         const auto* sh = gh->getSpellHandler();
         lua_pushnumber(L, uidStr == "player" && sh ? sh->runningCastCount() : 0);
     }
-    lua_pushboolean(L, interruptible ? 0 : 1);                  // notInterruptible
+    // notInterruptible: the unit's own answer (0x0071ab20), the same for
+    // the player's cast.
+    const auto* castSh = gh->getSpellHandler();
+    lua_pushboolean(L, castSh && castSh->castNotInterruptible(castGuid) ? 1 : 0);
     return wantChannel ? 8 : 9;
 }
 
