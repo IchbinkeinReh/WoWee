@@ -2142,6 +2142,10 @@ void SpellHandler::sendPlayerCast(uint32_t spellId, uint64_t target, uint64_t it
                     }
                 }
             }
+            // 0x0080ac90: a spell applying aura 78 (Mounted) where the player
+            // may not mount as it is shown (0x00721da0) leaves the form
+            // first, where autoUnshift lets it (0x0071b130, 0x00726f30).
+            owner_.unshiftForMountSpell(spellId);
         }
     }
     // Remembered so that, if this cast turns out to be what mounted the player,
