@@ -224,6 +224,10 @@ wowee_add_test(test_chat_log
 wowee_add_test(test_arena_opponents
     SOURCES test_arena_opponents.cpp)
 
+# UNIT_COMBAT's flag and action words (0x005132c0). Header-only.
+wowee_add_test(test_unit_combat
+    SOURCES test_unit_combat.cpp)
+
 # The tabard designer's design (game/tabard_design.hpp): cycling, the start,
 # the save's refusals and answer, the files. Header-only.
 wowee_add_test(test_tabard_design

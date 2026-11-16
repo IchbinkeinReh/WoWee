@@ -3,6 +3,7 @@
 #include <string_view>
 #include "game/interface_text.hpp"
 #include "game/pet_action.hpp"
+#include "game/unit_combat.hpp"
 #include "game/vehicle_mover.hpp"
 #include "game/unit_name_rules.hpp"
 #include "rendering/mount_transition.hpp"
@@ -4188,30 +4189,68 @@ Unit* GameHandler::getUnitByGuid(uint64_t guid) {
     return static_cast<Unit*>(entity.get());
 }
 
+// 0x0060bb70, in its order: player, vehicle, pet, the first party slot,
+// the first raid slot, the first arena slot (opponent before its pet), the
+// first boss slot, target, focus and npc (the unit whose window is open,
+// 0x00bd07a8). Mouseover (0x00bd07a0) is not on the list: no per-unit event
+// reaches a frame watching "mouseover". partypetN and raidpetN are on the
+// client's list too, but party members' pets are not tracked here.
 std::vector<std::string> GameHandler::unitTokensForGuid(uint64_t guid) const {
     std::vector<std::string> out;
     if (guid == 0) return out;
     if (guid == playerGuid) out.emplace_back("player");
+    if (vehicleRoster_.seatState(playerGuid) == 3) {
+        if (const auto p = vehicleRoster_.passenger(playerGuid); p && p->vehicleGuid == guid)
+            out.emplace_back("vehicle");
+    }
     if (guid == petGuid_) out.emplace_back("pet");
     if (isInGroup()) {
         const auto& group = getPartyData();
-        for (int slot = 1; slot <= 4; ++slot)
-            if (partySlotGuid(group, playerGuid, slot) == guid) out.push_back("party" + std::to_string(slot));
-        if (groupIsRaid(group.groupType)) {
-            for (size_t i = 0; i < group.members.size() && i < 40; ++i)
-                if (group.members[i].guid == guid) out.push_back("raid" + std::to_string(i + 1));
+        for (int slot = 1; slot <= 4; ++slot) {
+            if (partySlotGuid(group, playerGuid, slot) == guid) {
+                out.push_back("party" + std::to_string(slot));
+                break;
+            }
         }
+        if (groupIsRaid(group.groupType)) {
+            for (size_t i = 0; i < group.members.size() && i < 40; ++i) {
+                if (group.members[i].guid == guid) {
+                    out.push_back("raid" + std::to_string(i + 1));
+                    break;
+                }
+            }
+        }
+    }
+    for (size_t i = 0; i < arena::Roster::kSlots; ++i) {
+        if (arenaRoster_.opponent(i) == guid) { out.push_back("arena" + std::to_string(i + 1)); break; }
+        if (arenaRoster_.pet(i) == guid) { out.push_back("arenapet" + std::to_string(i + 1)); break; }
+    }
+    for (uint32_t i = 0; i < kMaxEncounterSlots; ++i) {
+        if (getEncounterUnitGuid(i) == guid) { out.push_back("boss" + std::to_string(i + 1)); break; }
     }
     if (guid == targetGuid) out.emplace_back("target");
     if (guid == focusGuid) out.emplace_back("focus");
-    if (guid == mouseoverGuid_) out.emplace_back("mouseover");
-    for (size_t i = 0; i < arena::Roster::kSlots; ++i) {
-        if (arenaRoster_.opponent(i) == guid) out.push_back("arena" + std::to_string(i + 1));
-        if (arenaRoster_.pet(i) == guid) out.push_back("arenapet" + std::to_string(i + 1));
-    }
-    for (uint32_t i = 0; i < kMaxEncounterSlots; ++i)
-        if (getEncounterUnitGuid(i) == guid) out.push_back("boss" + std::to_string(i + 1));
+    // The interaction unit: whichever NPC's window is open.
+    uint64_t npc = getCurrentGossip().npcGuid;
+    if (npc == 0) npc = getQuestDetails().npcGuid;
+    if (npc == 0) npc = getVendorGuid();
+    if (npc == 0) npc = getBankerGuid();
+    if (guid == npc) out.emplace_back("npc");
     return out;
+}
+
+// UNIT_COMBAT, once per token naming the unit (0x005132c0): "%s%s%s%d%d" -
+// the unit, the action, the flag the amount and hit flags give, the amount
+// and the school mask.
+void GameHandler::fireUnitCombat(uint64_t guid, const char* action, int32_t amount, int32_t school,
+                                 uint32_t hitInfo) {
+    if (!action || guid == 0) return;
+    const char* flag = unit_combat::flag(amount, hitInfo);
+    for (const auto& unit : unitTokensForGuid(guid)) {
+        fireAddonEventValues("UNIT_COMBAT", {combat_log::Arg::str(unit), combat_log::Arg::str(action),
+                                             combat_log::Arg::str(flag), combat_log::Arg::num(amount),
+                                             combat_log::Arg::num(school)});
+    }
 }
 
 std::string GameHandler::guidToUnitId(uint64_t guid) const {

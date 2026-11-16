@@ -702,10 +702,15 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
                 owner_.addSystemChatMessage(
                     interfaceFormat("RAID_MEMBER_NOT_READY", "%s is not ready", {rname}));
         }
-        if (owner_.addonEventCallbackRef()) {
-            char guidBuf[32];
-            snprintf(guidBuf, sizeof(guidBuf), "0x%016llX", (unsigned long long)respGuid);
-            owner_.addonEventCallbackRef()("READY_CHECK_CONFIRM", {guidBuf, isReady ? "1" : "0"});
+        // READY_CHECK_CONFIRM "%s%b" (0x005724e0): once for every unit token
+        // naming the member who answered, with whether they are ready - and
+        // only for a member of the group (0x005744f0 raises it from its walk
+        // of the party or the raid list).
+        const bool member = std::any_of(partyData.members.begin(), partyData.members.end(),
+                                        [respGuid](const GroupMember& m) { return m.guid == respGuid; });
+        if (member) {
+            for (const auto& unit : owner_.unitTokensForGuid(respGuid))
+                owner_.fireAddonEvent("READY_CHECK_CONFIRM", {unit, eventBool(isReady != 0)});
         }
     };
     table[Opcode::MSG_RAID_READY_CHECK_FINISHED] = [this](network::Packet& /*packet*/) {

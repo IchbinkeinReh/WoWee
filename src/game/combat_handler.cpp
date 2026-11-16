@@ -4,6 +4,7 @@
 #include "addons/lua_api_registrations.hpp"
 #include "game/cast_failure_error.hpp"
 #include "game/combat_text_filter.hpp"
+#include "game/unit_combat.hpp"
 #include "ui/framexml_takeover.hpp"
 #include "game/game_handler.hpp"
 #include "game/game_utils.hpp"
@@ -227,6 +228,14 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
         // 0x00755270 -> 0x00751150: the combat log has it for anyone.
         owner_.combatLogFeed().environmental(victimGuid, envType, static_cast<int32_t>(dmg),
                                              static_cast<int32_t>(envAbs), static_cast<int32_t>(envRes));
+        // UNIT_COMBAT when it is the player's own (0x00755270): a WOUND in the
+        // school the damage type names (table 0x00a2d394).
+        if (victimGuid == owner_.getPlayerGuid() && (dmg != 0 || envAbs != 0 || envRes != 0)) {
+            static constexpr uint8_t kEnvSchool[] = {0, 0, 0, 2, 3, 2, 5};
+            const int32_t school = envType < 7 ? (1 << kEnvSchool[envType]) : 1;
+            owner_.fireUnitCombat(victimGuid, "WOUND", static_cast<int32_t>(dmg), school,
+                                  unit_combat::hitInfoFromLog(envAbs, envRes, 0, false));
+        }
         if (victimGuid == owner_.getPlayerGuid()) {
             // Environmental damage: pass envType via powerType field for display differentiation
             if (dmg > 0)
@@ -650,48 +659,9 @@ void CombatHandler::addCombatText(CombatTextEntry::Type type, int32_t amount, ui
     entry.xSeed = dist(rng);
     combatText_.push_back(entry);
 
-    // UNIT_COMBAT - the same hit, for the frames that draw their own feedback
-    // over a portrait. This client renders the floating numbers itself from the
-    // list above; the interface's unit frames render theirs from this event and
-    // were never told, so a pet or target frame showed nothing while the world
-    // filled with numbers.
-    //
-    // The tokens are not invented: CombatFeedback_OnCombatEvent enumerates the
-    // ones it acts on, and everything else falls through its final else to a
-    // blank. Only a unit the interface has a token for is worth announcing -
-    // the frame compares the first argument against its own unit.
-    if (dstGuid != 0 && owner_.addonEventCallbackRef()) {
-        const std::string unitId = owner_.guidToUnitId(dstGuid);
-        if (!unitId.empty()) {
-            const char* action = nullptr;
-            const char* flags  = "";
-            switch (type) {
-                case CombatTextEntry::MELEE_DAMAGE:
-                case CombatTextEntry::SPELL_DAMAGE:
-                case CombatTextEntry::PERIODIC_DAMAGE: action = "WOUND"; break;
-                case CombatTextEntry::CRIT_DAMAGE: action = "WOUND"; flags = "CRITICAL"; break;
-                case CombatTextEntry::GLANCING:    action = "WOUND"; flags = "GLANCING"; break;
-                case CombatTextEntry::CRUSHING:    action = "WOUND"; flags = "CRUSHING"; break;
-                case CombatTextEntry::ABSORB:      action = "WOUND"; flags = "ABSORB";   break;
-                case CombatTextEntry::MISS:   action = "MISS";   break;
-                case CombatTextEntry::DODGE:  action = "DODGE";  break;
-                case CombatTextEntry::PARRY:  action = "PARRY";  break;
-                case CombatTextEntry::BLOCK:  action = "BLOCK";  break;
-                case CombatTextEntry::EVADE:  action = "EVADE";  break;
-                case CombatTextEntry::IMMUNE: action = "IMMUNE"; break;
-                case CombatTextEntry::RESIST: action = "RESIST"; break;
-                case CombatTextEntry::HEAL:
-                case CombatTextEntry::PERIODIC_HEAL: action = "HEAL"; break;
-                case CombatTextEntry::CRIT_HEAL: action = "HEAL"; flags = "CRITICAL"; break;
-                default: break;  // energize, xp, honour - not combat feedback
-            }
-            if (action) {
-                owner_.addonEventCallbackRef()(
-                    "UNIT_COMBAT",
-                    {unitId, action, flags, std::to_string(amount), "0"});
-            }
-        }
-    }
+    // UNIT_COMBAT is not raised from here: the client raises it from each
+    // log packet (GameHandler::fireUnitCombat), whatever the floating-text
+    // settings, for every unit with a token.
 
     // Persistent combat log - use explicit GUIDs if provided, else fall back to
     // player/current-target (the old behaviour for events without specific participants).
@@ -856,6 +826,11 @@ void CombatHandler::handleAttackerStateUpdate(network::Packet& packet) {
     if ((data.hitInfo & 0x800000u) != 0) owner_.addPredictedPower(data.attackerGuid, 1, data.rageGained);
     // Then the combat log, whoever fought.
     owner_.combatLogFeed().swing(data);
+    // UNIT_COMBAT for the victim, whoever fought (0x00755a60 -> 0x005133b0):
+    // the action by its state, the total, the first sub-damage's school.
+    owner_.fireUnitCombat(data.targetGuid, unit_combat::meleeAction(data.victimState), data.totalDamage,
+                          data.subDamages.empty() ? 0 : static_cast<int32_t>(data.subDamages.front().schoolMask),
+                          data.hitInfo);
 
     bool isPlayerAttacker = (data.attackerGuid == owner_.getPlayerGuid());
     bool isPlayerTarget = (data.targetGuid == owner_.getPlayerGuid());
@@ -994,6 +969,14 @@ void CombatHandler::handleSpellDamageLog(network::Packet& packet) {
         }
     }
 
+    // UNIT_COMBAT for the target, whoever cast (0x006d3840): a WOUND of the
+    // damage in the spell's school, for a spell the client knows that is not
+    // hidden from the log (Attributes 0x100).
+    if (unit_combat::spellRaises(owner_.getSpellAttributes(data.spellId)))
+        owner_.fireUnitCombat(data.targetGuid, "WOUND", static_cast<int32_t>(data.damage), data.schoolMask,
+                              unit_combat::hitInfoFromLog(data.absorbed, data.resisted, data.blocked,
+                                                          (data.hitFlags & 0x2u) != 0));
+
     bool isPlayerSource = (data.attackerGuid == owner_.getPlayerGuid());
     bool isPlayerTarget = (data.targetGuid == owner_.getPlayerGuid());
     if (!isPlayerSource && !isPlayerTarget) return;  // Not our combat
@@ -1022,6 +1005,12 @@ void CombatHandler::handleSpellHealLog(network::Packet& packet) {
                                          static_cast<int32_t>(data.absorbed), data.isCrit,
                                          owner_.combatLogFeed().periodicByAttribute(data.spellId));
     }
+
+    // UNIT_COMBAT for the target (0x006d3c30 -> 0x00513480): a HEAL of a
+    // non-zero amount, physical school, CRITICAL when it crit.
+    if (data.heal != 0 && unit_combat::spellRaises(owner_.getSpellAttributes(data.spellId)))
+        owner_.fireUnitCombat(data.targetGuid, "HEAL", static_cast<int32_t>(data.heal),
+                              unit_combat::kPhysicalSchoolMask, data.isCrit ? 0x200u : 0u);
 
     bool isPlayerSource = (data.casterGuid == owner_.getPlayerGuid());
     bool isPlayerTarget = (data.targetGuid == owner_.getPlayerGuid());
@@ -1355,6 +1344,9 @@ void CombatHandler::handleSpellDamageShield(network::Packet& packet) {
         // 0x00752c90: the first guid deals it, the second takes it.
         owner_.combatLogFeed().damageShield(d.victimGuid, d.casterGuid, d.spellId, static_cast<int32_t>(d.damage),
                                             static_cast<int32_t>(d.overkill), d.schoolMask);
+        // UNIT_COMBAT for the one it struck (0x006d3750 -> 0x00513380).
+        owner_.fireUnitCombat(d.casterGuid, "WOUND", static_cast<int32_t>(d.damage),
+                              static_cast<int32_t>(d.schoolMask), 0);
         if (d.casterGuid == owner_.getPlayerGuid())
             addCombatText(CombatTextEntry::SPELL_DAMAGE, static_cast<int32_t>(d.damage), d.spellId, true, 0, d.casterGuid, d.victimGuid);
         else if (d.victimGuid == owner_.getPlayerGuid())

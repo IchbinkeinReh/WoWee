@@ -1,4 +1,5 @@
 #include "game/spell_handler.hpp"
+#include "game/unit_combat.hpp"
 #include "game/shapeshift_forms.hpp"
 #include "addons/lua_api_helpers.hpp"
 #include "addons/tooltip_setter_rules.hpp"
@@ -4678,6 +4679,22 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
             owner_.spellMissCallbackRef()(missCaster, m.targetGuid, m.missType, data.spellId);
     }
 
+    // UNIT_COMBAT for each target missed, and for the caster where a
+    // reflected spell came back with a result of its own (0x0080e1b0 ->
+    // 0x00513410). The client raises it here for a spell with no travel
+    // time and at the missile's impact (0x00700e20, 0x00702fc0) otherwise;
+    // here it is raised at the cast for both.
+    if (!data.missTargets.empty() && unit_combat::spellRaises(owner_.getSpellAttributes(data.spellId))) {
+        const uint64_t reflectVictim = data.casterUnit != 0 ? data.casterUnit : data.casterGuid;
+        for (const auto& m : data.missTargets) {
+            owner_.fireUnitCombat(m.targetGuid, unit_combat::missAction(m.missType), 0,
+                                  unit_combat::kPhysicalSchoolMask, 0);
+            if (m.missType == 11 && m.reflectResult != 0)
+                owner_.fireUnitCombat(reflectVictim, unit_combat::missAction(m.reflectResult), 0,
+                                      unit_combat::kPhysicalSchoolMask, 0);
+        }
+    }
+
     // Miss combat text
     if (!data.missTargets.empty()) {
         const uint64_t spellCasterGuid = data.casterUnit != 0 ? data.casterUnit : data.casterGuid;
@@ -7466,7 +7483,13 @@ void SpellHandler::handleSpellLogMiss(network::Packet& packet) {
             return;
         }
         if (d.debug) return;
+        const bool raisesCombat = unit_combat::spellRaises(owner_.getSpellAttributes(d.spellId));
         for (const auto& miss : d.misses) {
+            // UNIT_COMBAT for the victim (0x006d3090 -> 0x00513410): the miss
+            // reason's word, no amount, physical school.
+            if (raisesCombat)
+                owner_.fireUnitCombat(miss.victimGuid, unit_combat::missAction(miss.missInfo), 0,
+                                      unit_combat::kPhysicalSchoolMask, 0);
             // A damage shield's miss (0x00751b80 with that flag): this packet
             // is what a shield that failed to strike sends.
             owner_.combatLogFeed().spellMissed(d.casterGuid, miss.victimGuid, d.spellId, miss.missInfo, true, false);
@@ -7721,6 +7744,7 @@ void SpellHandler::handlePeriodicAuraLog(network::Packet& packet) {
         packet.skipAll();
         return;
     }
+    const bool raisesCombat = unit_combat::spellRaises(owner_.getSpellAttributes(spellId));
     // SpellPeriodicAuraLogInfo serializes AuraType as uint32 on the wire.
     // Reading one byte leaves three zero bytes in front of the amount and
     // turns ordinary poison ticks into corrupt multi-byte damage values.
@@ -7747,6 +7771,10 @@ void SpellHandler::handlePeriodicAuraLog(network::Packet& packet) {
                 feed.spellDamage(casterGuid, victimGuid, spellId, static_cast<int32_t>(dmg),
                                  static_cast<int32_t>(overkill), school, static_cast<int32_t>(abs),
                                  static_cast<int32_t>(res), 0, dotCrit ? 2u : 0u, true);
+            // UNIT_COMBAT for the victim, every tick (0x007531f0 -> 0x00513380).
+            if (raisesCombat)
+                owner_.fireUnitCombat(victimGuid, "WOUND", static_cast<int32_t>(dmg), static_cast<int32_t>(school),
+                                      unit_combat::hitInfoFromLog(abs, res, 0, dotCrit));
             if (!ours) continue;
             if (dmg > 0)
                 owner_.addCombatText(dotCrit ? CombatTextEntry::CRIT_DAMAGE : CombatTextEntry::PERIODIC_DAMAGE,
@@ -7776,6 +7804,10 @@ void SpellHandler::handlePeriodicAuraLog(network::Packet& packet) {
             if (logIt)
                 feed.spellHeal(casterGuid, victimGuid, spellId, static_cast<int32_t>(heal),
                                static_cast<int32_t>(overheal), static_cast<int32_t>(hotAbs), hotCrit, true);
+            // UNIT_COMBAT for the victim, a tick that healed (0x007531f0 -> 0x00513480).
+            if (raisesCombat && heal != 0)
+                owner_.fireUnitCombat(victimGuid, "HEAL", static_cast<int32_t>(heal),
+                                      unit_combat::kPhysicalSchoolMask, hotCrit ? 0x200u : 0u);
             if (!ours) continue;
             owner_.addCombatText(hotCrit ? CombatTextEntry::CRIT_HEAL : CombatTextEntry::PERIODIC_HEAL,
                           static_cast<int32_t>(heal),
