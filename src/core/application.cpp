@@ -4176,6 +4176,21 @@ void Application::connectWorldHooks() {
             });
             // 0x00702db0: a unit whose health is below 1 takes no wound
             // from a missile.
+            // A bouncing missile's next target (0x007022d0): the unit the
+            // client knows by that guid (0x004d4db0, mask 8), where it is.
+            svs->setUnitEndResolver([this](uint64_t guid, rendering::SpellVisualSystem::MissileEnd& end) {
+                if (!gameHandler) return false;
+                if (guid == gameHandler->getPlayerGuid() && renderer) {
+                    end.position = renderer->getCharacterPosition();
+                } else {
+                    auto entity = gameHandler->getEntityManager().getEntity(guid);
+                    if (!entity || !entity->isUnit()) return false;
+                    end.position = core::coords::canonicalToRender(
+                        glm::vec3(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ()));
+                }
+                end.renderInstanceId = gameHandler->resolveUnitRenderInstance(guid);
+                return true;
+            });
             svs->setUnitDeadQuery([this](uint64_t guid) {
                 auto entity = gameHandler ? gameHandler->getEntityManager().getEntity(guid) : nullptr;
                 const auto* unit = dynamic_cast<const game::Unit*>(entity.get());

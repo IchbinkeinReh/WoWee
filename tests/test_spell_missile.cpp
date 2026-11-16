@@ -242,3 +242,34 @@ TEST_CASE("a held missile is turned a quarter and sized against its unit", "[spe
     CHECK(glm::vec3(m[3]) == glm::vec3(0.0f));
     CHECK(sm::kVisualFlagHeldMissile == 0x20u);
 }
+
+TEST_CASE("a bouncing missile's relaunch lands at what is left of the cast's time", "[spell_missile]") {
+    using wowee::rendering::spell_missile::planMissileArc;
+    using wowee::rendering::spell_missile::relaunchFlightSeconds;
+    CHECK(relaunchFlightSeconds(2.0f, 0.5f) == Catch::Approx(1.5f));
+    // Run out: planned to land at once.
+    const float left = relaunchFlightSeconds(1.0f, 1.25f);
+    CHECK(left < 0.0f);
+    const auto arc = planMissileArc(0.3f, 0.0f, glm::vec3(10.0f, 0.0f, 0.0f), nullptr, left);
+    CHECK(arc.flightSeconds == 0.0f);
+}
+
+TEST_CASE("a bouncing missile passes over targets that are not there as it turns", "[spell_missile]") {
+    using wowee::rendering::spell_missile::nextPresentHop;
+    const std::vector<bool> present = {false, true, false, false, true};
+    const auto there = [&](size_t i) { return present[i]; };
+    CHECK(nextPresentHop(0, present.size(), there) == 1);
+    CHECK(nextPresentHop(2, present.size(), there) == 4);
+    CHECK(nextPresentHop(5, present.size(), there) == 5);
+    CHECK(nextPresentHop(0, 1, there) == 1);  // none there: past the end
+}
+
+TEST_CASE("A missile's first launch makes up the time since the cast", "[spell_missile]") {
+    using wowee::rendering::spell_missile::retimedLaunchSpeed;
+    CHECK(retimedLaunchSpeed(20.0f, 40.0f, 0.0f) == Catch::Approx(20.0f));   // let go at once
+    CHECK(retimedLaunchSpeed(20.0f, 40.0f, 0.5f) == Catch::Approx(40.0f / 1.5f));
+    CHECK(retimedLaunchSpeed(20.0f, 40.0f, 1.5f) == Catch::Approx(40.0f));   // at most twice
+    CHECK(retimedLaunchSpeed(20.0f, 40.0f, 3.0f) == Catch::Approx(40.0f));   // no time left
+    CHECK(retimedLaunchSpeed(20.0f, 0.0f, 0.0f) == Catch::Approx(40.0f));    // nowhere to go
+    CHECK(retimedLaunchSpeed(0.0f, 40.0f, 1.0f) == Catch::Approx(0.0f));     // no speed: untouched
+}
