@@ -222,3 +222,13 @@ TEST_CASE("$DTH: the death thud by size and ground, water and the default", "[un
     CHECK(t.sound(1, 7, false) == 0);
     CHECK(t.sound(-1, 1, false) == 0);
 }
+
+TEST_CASE("a unit's loop sound plays while it lives and does not feign death (0x007467f0)", "[unit_events][loop]") {
+    CHECK(ue::kColumnLoop == 24);
+    CHECK(ue::loopSoundWanted(100, 0, 6131));
+    CHECK_FALSE(ue::loopSoundWanted(0, 0, 6131));      // dead
+    CHECK_FALSE(ue::loopSoundWanted(100, 0x1, 6131));  // feigning death
+    CHECK(ue::loopSoundWanted(100, 0x2, 6131));        // another flag
+    CHECK_FALSE(ue::loopSoundWanted(100, 0, 0));       // no loop in its row
+    CHECK(ue::kLoopFadeOutSeconds == 0.5f);
+}

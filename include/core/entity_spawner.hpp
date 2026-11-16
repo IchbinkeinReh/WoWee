@@ -393,6 +393,10 @@ public:
     /// game/object_effect.hpp): the sounds its display's package gives the
     /// states its movement and its animation put it in.
     void updateObjectEffects(float deltaTime);
+    /// Each unit's CreatureSoundData loop (LoopSoundID), kept on it while
+    /// it lives and is not feigning death, faded out over half a second
+    /// otherwise (0x007467f0).
+    void updateUnitLoopSounds();
     /// The race splash of each unit wading across four tenths of its height
     /// into or out of water (rendering/unit_splash.hpp).
     void playUnitSplashes(uint32_t localPlayerInstance);
@@ -1378,6 +1382,14 @@ private:
         bool gameObject = false;
     };
     std::unordered_map<uint64_t, ObjectEffectState> objectEffects_;
+    /// The loop each unit plays (its +0x2b1 sound object): its handle and
+    /// SoundEntries row.
+    struct UnitLoopSound {
+        uint32_t handle = 0;
+        uint32_t sound = 0;
+        glm::vec3 at{0.0f};
+    };
+    std::unordered_map<uint64_t, UnitLoopSound> unitLoopSounds_;
     std::unordered_map<uint32_t, uint32_t> objectEffectPackageByGoDisplay_;
     std::shared_ptr<const game::object_effect::Tables> objectEffectTables_;
     std::unordered_map<uint32_t, uint32_t> objectEffectPackageByDisplay_;
