@@ -9,9 +9,9 @@
 #include <imgui.h>
 #include "ui/chat/chat_utils.hpp"
 #include "ui/chat/chat_bubble_timing.hpp"
-#include "ui/sight_cache.hpp"
 
 #include <glm/glm.hpp>
+#include <algorithm>
 
 namespace wowee { namespace ui {
 
@@ -64,32 +64,32 @@ void ChatBubbleManager::render(game::GameHandler& gameHandler, const UIServices&
 
         // Get entity position
         auto entity = gameHandler.getEntityManager().getEntity(bubble.senderGuid);
-        glm::vec3 renderPos(0.0f);
-        bool inSight = false;
-        if (entity) {
-            // Convert canonical → render coordinates, offset up by 2.5 units for bubble above head
-            glm::vec3 canonical(entity->getX(), entity->getY(), entity->getZ() + 2.5f);
-            renderPos = core::coords::canonicalToRender(canonical);
-            // Faded out from 25 yards of the camera, and back in on coming
-            // nearer (0x0056c500: squared distance 625).
-            const glm::vec3 d = renderPos - camera->getPosition();
-            inSight = glm::dot(d, d) < chat_bubble::kRangeYards * chat_bubble::kRangeYards;
-            // Not through a wall. A bubble carries a name as well as a line, so
-            // one drawn over the building someone is standing behind says they are
-            // in front of it - the same fault the nameplates had, answered by the
-            // same query.
-            static SightCache sight;
-            if (inSight && sight.blocked(renderer->queryWMORenderer(), bubble.senderGuid,
-                                         camera->getPosition(), renderPos)) {
-                inSight = false;
-            }
+        // A speaker no longer there takes its bubble with it, at once
+        // (0x0056d050, 0x0056cf80).
+        if (!entity) {
+            bubbles_.erase(bubbles_.begin() + i);
+            continue;
+        }
+        // Convert canonical → render coordinates, offset up by 2.5 units for bubble above head
+        glm::vec3 canonical(entity->getX(), entity->getY(), entity->getZ() + 2.5f);
+        const glm::vec3 renderPos = core::coords::canonicalToRender(canonical);
+        // Faded out from 25 yards of the active player - the speaker's own
+        // position against the player's, not the camera's - and back in on
+        // coming nearer (0x0056c500: squared distance 625). Walls do not
+        // hide it: the client asks only whether the speaker is in range.
+        bool inSight = true;
+        {
+            const auto& me = gameHandler.getMovementInfo();
+            const float dx = entity->getX() - me.x, dy = entity->getY() - me.y,
+                        dz = entity->getZ() - me.z;
+            inSight = dx * dx + dy * dy + dz * dz < chat_bubble::kRangeYards * chat_bubble::kRangeYards;
         }
         bubble.alpha = chat_bubble::stepAlpha(bubble.alpha, !expiring && inSight, dt);
         if (expiring && bubble.alpha <= 0.0f) {
             bubbles_.erase(bubbles_.begin() + i);
             continue;
         }
-        if (!entity || bubble.alpha <= 0.0f) continue;
+        if (bubble.alpha <= 0.0f) continue;
 
         // Project to screen
         glm::vec4 clipPos = viewProj * glm::vec4(renderPos, 1.0f);
@@ -123,7 +123,10 @@ void ChatBubbleManager::render(game::GameHandler& gameHandler, const UIServices&
         // hard to read over a busy scene.
         constexpr float kBubbleScale = 1.1f;
         const float fontSize = ImGui::GetFontSize() * kBubbleScale;
-        constexpr float kWrapWidth = 200.0f * kBubbleScale;
+        // The text is as wide as it runs, held between two 16-pixel edges
+        // and a fifth of the screen's height - the interface's unit - beyond
+        // which it wraps (0x0056c7f0).
+        const float kWrapWidth = std::max(32.0f, 0.2f * screenH);
         const ImVec2 padding(13.0f, 9.0f);
 
         const ImVec2 textSize =
