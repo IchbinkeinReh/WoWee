@@ -184,6 +184,16 @@ wowee_add_test(test_sell_count
 wowee_add_test(test_item_stat_text
     SOURCES test_item_stat_text.cpp)
 
+# An heirloom's stat budget, armour, damage and spell power out of one
+# ScalingStatValues row (0x0061a650, 0x0061a6b0, 0x0061a830). Header-only.
+wowee_add_test(test_heirloom_scaling
+    SOURCES test_heirloom_scaling.cpp)
+
+# What 0x006277f0 picks from a template: the uniqueness line, the item level
+# line's classes, a glyph's kind, a set's piece total. Header-only.
+wowee_add_test(test_item_tooltip_rules
+    SOURCES test_item_tooltip_rules.cpp)
+
 # An item's requirements as the tooltip reds them and the merchant's
 # isUsable (0x006277f0, 0x006dc3f0). Header-only.
 wowee_add_test(test_item_requirements

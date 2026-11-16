@@ -5980,8 +5980,9 @@ static void appendItemStats(wowee::ui::Widget* w, const game::ItemQueryResponseD
         {"ITEM_BIND_QUEST", "Quest Item"},
     };
     if (info.bindType >= 1 && info.bindType <= 4) white(text(kBind[info.bindType].first, kBind[info.bindType].second));
-    if (info.maxCount == 1)                     white(text("ITEM_UNIQUE", "Unique"));
-    else if (info.itemFlags & 0x1000000u)       white(text("ITEM_UNIQUE_EQUIPPABLE", "Unique-Equipped"));
+    // Unique-equipped (flag 0x80000) before MaxCount (0x00627fb4).
+    if (info.itemClass != 10 && (info.itemFlags & 0x80000u) != 0) white(text("ITEM_UNIQUE_EQUIPPABLE", "Unique-Equipped"));
+    else if (info.itemClass != 10 && info.maxCount == 1)          white(text("ITEM_UNIQUE", "Unique"));
 
     if (info.containerSlots > 0) {
         white(game::interfaceFormat("CONTAINER_SLOTS", "%d Slot %s",
@@ -6048,6 +6049,107 @@ static bool fillItemTooltipById(wowee::ui::Widget* w, game::GameHandler* gh,
     return true;
 }
 
+/// What one held item is beside its template, for _WoweePopulateItemTooltip's
+/// `inst` (the instance's fields 0x006277f0 reads): pushed as a new table.
+/// Every path that shows one held item hands this over - a bag slot's
+/// (SetBagItem through _WoweeContainerItemInstance) as much as a worn one's -
+/// so the open/read line, the maker, the charges and the price are the same
+/// wherever the item is hovered.
+void buildTooltipItemInstance(lua_State* L, game::GameHandler* gh, const game::ItemDef& instance,
+                              uint32_t itemId) {
+    lua_newtable(L);
+    lua_pushboolean(L, instance.soulbound ? 1 : 0);
+    lua_setfield(L, -2, "soulbound");
+    lua_pushnumber(L, static_cast<lua_Number>(instance.curDurability));
+    lua_setfield(L, -2, "durability");
+    lua_pushnumber(L, static_cast<lua_Number>(instance.maxDurability));
+    lua_setfield(L, -2, "maxDurability");
+    lua_pushnumber(L, static_cast<lua_Number>(
+        gh->itemSellPriceShown(instance.guid, itemId, instance.stackCount)));
+    lua_setfield(L, -2, "price");
+    // Raid loot still tradeable among those who could have looted it:
+    // soulbound, flagged 0x100, and under two hours of the player's
+    // played time since it was made (0x00708520, 0x00708b40) - the
+    // seconds left, for BIND_TRADE_TIME_REMAINING.
+    {
+        const uint32_t own = gh->getItemFieldFlags(instance.guid);
+        const int64_t played = gh->playedTimeNow();
+        const auto& online = gh->onlineItemsRef();
+        const auto oi = online.find(instance.guid);
+        if ((own & 0x1u) != 0 && (own & 0x100u) != 0 && played >= 0 && oi != online.end()) {
+            const int64_t left = static_cast<int64_t>(oi->second.createPlayedTime) - played + 7200;
+            if (left > 0) {
+                lua_pushnumber(L, static_cast<lua_Number>(left));
+                lua_setfield(L, -2, "tradeLeft");
+            }
+        }
+    }
+    // How long it has left, for an item that lasts a while
+    // (ITEM_FIELD_DURATION, seconds; 0x007070b0).
+    lua_pushnumber(L, gh->getItemDurationByGuid(instance.guid));
+    lua_setfield(L, -2, "duration");
+    // What is left of its first spell's charges (ITEM_FIELD_SPELL_CHARGES).
+    lua_pushnumber(L, gh->getItemSpellCharges(instance.guid));
+    lua_setfield(L, -2, "charges0");
+    // Its lock opened (ITEM_FIELD_FLAGS 0x4): no LOCKED line.
+    if ((gh->getItemFieldFlags(instance.guid) & 0x4u) != 0) {
+        lua_pushboolean(L, 1);
+        lua_setfield(L, -2, "unlocked");
+    }
+    // The one action line the instance gets (0x006277f0): openable -
+    // a lootable item (flag 0x4) not locked or unlocked (instance
+    // 0x4), or flag 0x200 with instance 0x8 - else readable (a page,
+    // or instance 0x200), else socketable (any socket).
+    if (const auto* tmpl = gh->getItemInfo(itemId); tmpl && tmpl->valid) {
+        const uint32_t own = gh->getItemFieldFlags(instance.guid);
+        const char* action = nullptr;
+        if (((tmpl->itemFlags & 0x4u) != 0 && (tmpl->lockId == 0 || (own & 0x4u) != 0)) ||
+            ((tmpl->itemFlags & 0x200u) != 0 && (own & 0x8u) != 0)) {
+            action = "ITEM_OPENABLE";
+        } else if (tmpl->pageTextId != 0 || (own & 0x200u) != 0) {
+            action = "ITEM_READABLE";
+        } else if (tmpl->socketColor[0] != 0 || tmpl->socketColor[1] != 0 || tmpl->socketColor[2] != 0) {
+            action = "ITEM_SOCKETABLE";
+        }
+        if (action) {
+            lua_pushstring(L, action);
+            lua_setfield(L, -2, "action");
+        }
+        // No price at a vendor for one the player carries rather than
+        // wears: ITEM_UNSELLABLE where the price would be.
+        if (tmpl->sellPrice == 0 && gh->isVendorWindowOpen()) {
+            bool worn = false;
+            for (int e = 0; e < 19 && !worn; ++e) {
+                const auto& slot = gh->getInventory().getEquipSlot(static_cast<game::EquipSlot>(e));
+                worn = !slot.empty() && slot.item.guid == instance.guid;
+            }
+            if (!worn) {
+                lua_pushboolean(L, 1);
+                lua_setfield(L, -2, "unsellable");
+            }
+        }
+    }
+    // Who made it (ITEM_FIELD_CREATOR), named once the name cache has
+    // them - asked for otherwise, and the owner's UpdateTooltip fills
+    // the line in, as the client's callback 0x00626650 does - and
+    // whether it was written rather than made (ITEM_FIELD_FLAGS
+    // 0x200: ITEM_WRITTEN_BY in place of ITEM_CREATED_BY).
+    if (const uint64_t creator = gh->getItemCreatorByGuid(instance.guid); creator != 0) {
+        const std::string& maker = gh->lookupName(creator);
+        if (maker.empty()) {
+            gh->queryPlayerName(creator);
+        } else {
+            lua_pushstring(L, maker.c_str());
+            lua_setfield(L, -2, "creator");
+            lua_pushboolean(L, (gh->getItemFieldFlags(instance.guid) & 0x200u) != 0 ? 1 : 0);
+            lua_setfield(L, -2, "written");
+        }
+    }
+    // The gems in its sockets, which the template only has the
+    // colours of (0x006277f0's enchantment walk).
+    pushSocketedGems(L, gh, instance.guid, itemId);
+}
+
 /// The same, through the bootstrap's builder - which is the fuller of the two.
 ///
 /// There were two item tooltips. The bootstrap Lua defines
@@ -6083,97 +6185,7 @@ static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
         // What this one item is, beside what its template says: whether it
         // is bound, and its durability (the instance's fields, 0x006277f0).
         if (instance) {
-            lua_newtable(L);
-            lua_pushboolean(L, instance->soulbound ? 1 : 0);
-            lua_setfield(L, -2, "soulbound");
-            lua_pushnumber(L, static_cast<lua_Number>(instance->curDurability));
-            lua_setfield(L, -2, "durability");
-            lua_pushnumber(L, static_cast<lua_Number>(instance->maxDurability));
-            lua_setfield(L, -2, "maxDurability");
-            lua_pushnumber(L, static_cast<lua_Number>(
-                gh->itemSellPriceShown(instance->guid, itemId, instance->stackCount)));
-            lua_setfield(L, -2, "price");
-            // Raid loot still tradeable among those who could have looted it:
-            // soulbound, flagged 0x100, and under two hours of the player's
-            // played time since it was made (0x00708520, 0x00708b40) - the
-            // seconds left, for BIND_TRADE_TIME_REMAINING.
-            {
-                const uint32_t own = gh->getItemFieldFlags(instance->guid);
-                const int64_t played = gh->playedTimeNow();
-                const auto& online = gh->onlineItemsRef();
-                const auto oi = online.find(instance->guid);
-                if ((own & 0x1u) != 0 && (own & 0x100u) != 0 && played >= 0 && oi != online.end()) {
-                    const int64_t left = static_cast<int64_t>(oi->second.createPlayedTime) - played + 7200;
-                    if (left > 0) {
-                        lua_pushnumber(L, static_cast<lua_Number>(left));
-                        lua_setfield(L, -2, "tradeLeft");
-                    }
-                }
-            }
-            // How long it has left, for an item that lasts a while
-            // (ITEM_FIELD_DURATION, seconds; 0x007070b0).
-            lua_pushnumber(L, gh->getItemDurationByGuid(instance->guid));
-            lua_setfield(L, -2, "duration");
-            // What is left of its first spell's charges (ITEM_FIELD_SPELL_CHARGES).
-            lua_pushnumber(L, gh->getItemSpellCharges(instance->guid));
-            lua_setfield(L, -2, "charges0");
-            // Its lock opened (ITEM_FIELD_FLAGS 0x4): no LOCKED line.
-            if ((gh->getItemFieldFlags(instance->guid) & 0x4u) != 0) {
-                lua_pushboolean(L, 1);
-                lua_setfield(L, -2, "unlocked");
-            }
-            // The one action line the instance gets (0x006277f0): openable -
-            // a lootable item (flag 0x4) not locked or unlocked (instance
-            // 0x4), or flag 0x200 with instance 0x8 - else readable (a page,
-            // or instance 0x200), else socketable (any socket).
-            if (const auto* tmpl = gh->getItemInfo(itemId); tmpl && tmpl->valid) {
-                const uint32_t own = gh->getItemFieldFlags(instance->guid);
-                const char* action = nullptr;
-                if (((tmpl->itemFlags & 0x4u) != 0 && (tmpl->lockId == 0 || (own & 0x4u) != 0)) ||
-                    ((tmpl->itemFlags & 0x200u) != 0 && (own & 0x8u) != 0)) {
-                    action = "ITEM_OPENABLE";
-                } else if (tmpl->pageTextId != 0 || (own & 0x200u) != 0) {
-                    action = "ITEM_READABLE";
-                } else if (tmpl->socketColor[0] != 0 || tmpl->socketColor[1] != 0 || tmpl->socketColor[2] != 0) {
-                    action = "ITEM_SOCKETABLE";
-                }
-                if (action) {
-                    lua_pushstring(L, action);
-                    lua_setfield(L, -2, "action");
-                }
-                // No price at a vendor for one the player carries rather than
-                // wears: ITEM_UNSELLABLE where the price would be.
-                if (tmpl->sellPrice == 0 && gh->isVendorWindowOpen()) {
-                    bool worn = false;
-                    for (int e = 0; e < 19 && !worn; ++e) {
-                        const auto& slot = gh->getInventory().getEquipSlot(static_cast<game::EquipSlot>(e));
-                        worn = !slot.empty() && slot.item.guid == instance->guid;
-                    }
-                    if (!worn) {
-                        lua_pushboolean(L, 1);
-                        lua_setfield(L, -2, "unsellable");
-                    }
-                }
-            }
-            // Who made it (ITEM_FIELD_CREATOR), named once the name cache has
-            // them - asked for otherwise, and the owner's UpdateTooltip fills
-            // the line in, as the client's callback 0x00626650 does - and
-            // whether it was written rather than made (ITEM_FIELD_FLAGS
-            // 0x200: ITEM_WRITTEN_BY in place of ITEM_CREATED_BY).
-            if (const uint64_t creator = gh->getItemCreatorByGuid(instance->guid); creator != 0) {
-                const std::string& maker = gh->lookupName(creator);
-                if (maker.empty()) {
-                    gh->queryPlayerName(creator);
-                } else {
-                    lua_pushstring(L, maker.c_str());
-                    lua_setfield(L, -2, "creator");
-                    lua_pushboolean(L, (gh->getItemFieldFlags(instance->guid) & 0x200u) != 0 ? 1 : 0);
-                    lua_setfield(L, -2, "written");
-                }
-            }
-            // The gems in its sockets, which the template only has the
-            // colours of (0x006277f0's enchantment walk).
-            pushSocketedGems(L, gh, instance->guid, itemId);
+            buildTooltipItemInstance(L, gh, *instance, itemId);
         } else if (linkGems && ((*linkGems)[0] | (*linkGems)[1] | (*linkGems)[2])) {
             // A link's gems: its fields 3-5 are the sockets' enchant ids, as
             // 0x0061e3a0 wrote them off the item, and the tooltip of the link
@@ -14139,7 +14151,10 @@ void LuaEngine::registerCoreAPI() {
         "    if not name then return false end\n"
         "    local qColors = {[0]={0.62,0.62,0.62},[1]={1,1,1},[2]={0.12,1,0},[3]={0,0.44,0.87},[4]={0.64,0.21,0.93},[5]={1,0.5,0},[6]={0.9,0.8,0.5},[7]={0,0.8,1}}\n"
         "    local c = qColors[quality or 1] or {1,1,1}\n"
-        "    if append then self:AddLine(name, c[1], c[2], c[3])\n"
+        // Appended under what the tooltip holds, the name opens with a newline
+        // - a blank line between the two (0x006277f0's "\n%s" with its eighth
+        // argument).
+        "    if append then self:AddLine('\\n'..name, c[1], c[2], c[3])\n"
         "    elseif __WoweeTooltipEquippedHeader then\n"
         "        self:SetText(CURRENTLY_EQUIPPED or 'Currently Equipped', 0.5, 0.5, 0.5)\n"
         "        self:AddLine(name, c[1], c[2], c[3])\n"
@@ -14180,8 +14195,17 @@ void LuaEngine::registerCoreAPI() {
         "                or ({[1]='ITEM_BIND_ON_PICKUP',[2]='ITEM_BIND_ON_EQUIP',[3]='ITEM_BIND_ON_USE',[4]='ITEM_BIND_QUEST'})[data.bindType]\n"
         "        end\n"
         "        if bind and _G[bind] then self:AddLine(_G[bind], 1, 1, 1) end\n"
-        "        if data.isUnique then self:AddLine(ITEM_UNIQUE or 'Unique', 1, 1, 1)\n"
-        "        elseif data.isUniqueEquipped then self:AddLine(ITEM_UNIQUE_EQUIPPABLE or 'Unique-Equipped', 1, 1, 1) end\n"
+        // The uniqueness line (0x00627fb4): unique-equipped (flag 0x80000)
+        // first, then the item's MaxCount - "Unique", or "Unique (%d)" - then
+        // its ItemLimitCategory by name and quantity. Then, at once under it,
+        // whether the item starts a quest (0x00628120).
+        "        if data.uniqueKey and _G[data.uniqueKey] then\n"
+        "            local u = _G[data.uniqueKey]\n"
+        "            if data.uniqueName then u = format(u, data.uniqueName, data.uniqueCount or 0)\n"
+        "            elseif data.uniqueCount then u = format(u, data.uniqueCount) end\n"
+        "            self:AddLine(u, 1, 1, 1)\n"
+        "        end\n"
+        "        if data.startsQuest then self:AddLine(ITEM_STARTS_QUEST or 'This Item Begins a Quest', 1, 1, 1) end\n"
         // A lock not opened (0x006277f0): LOCKED, or ENCRYPTED, in the colour
         // of how the player's opening spell measures against it - grey a
         // hundred over, green fifty, yellow twenty-five, orange at it, red
@@ -14212,7 +14236,12 @@ void LuaEngine::registerCoreAPI() {
         "        if data and data.containerSlots and kind ~= '' then\n"
         "            self:AddLine(format(CONTAINER_SLOTS or '%d Slot %s', data.containerSlots, kind), 1, 1, 1)\n"
         "        end\n"
-        "    elseif not (data and data.itemClass == 16) then\n"
+        // A glyph says its kind there instead, light blue (0x006286f0).
+        "    elseif data and data.itemClass == 16 then\n"
+        "        for _, k in ipairs(data.glyphLines or {}) do\n"
+        "            if _G[k] then self:AddLine(_G[k], 0.4, 0.733, 1) end\n"
+        "        end\n"
+        "    else\n"
         "        local slotText = (equipSlot and equipSlot ~= '' and _G[equipSlot]) or ''\n"
         "        if data and data.itemClass == 6 then slotText = class or '' end\n"
         "        local subText = (data and data.typeSubclass) or ''\n"
@@ -14233,7 +14262,13 @@ void LuaEngine::registerCoreAPI() {
         // (SPELL_SCHOOL<n>_CAP), and every entry after the first with the
         // PLUS_ form. A weapon's first line carries its speed, and its damage
         // per second takes every entry.
-        "        if data.damages then\n"
+        // An heirloom's at its level instead: one DAMAGE_TEMPLATE line with
+        // the speed, and a weapon's damage per second (0x00628ef8).
+        "        if data.scaledDamage then\n"
+        "            local d = data.scaledDamage\n"
+        "            self:AddDoubleLine(format(DAMAGE_TEMPLATE or '%d - %d Damage', d.lo, d.hi), format('%s %.2f', SPEED or 'Speed', (data.speed or 0) / 1000), 1,1,1, 1,1,1)\n"
+        "            if data.itemClass == 2 then self:AddLine(format(DPS_TEMPLATE or '(%.1f damage per second)', d.dps), 1, 1, 1) end\n"
+        "        elseif data.damages then\n"
         "            local weapon, ammo = data.itemClass == 2, data.itemClass == 6\n"
         "            local speed = (data.speed or 0) / 1000\n"
         "            local first, total = true, 0\n"
@@ -14265,14 +14300,17 @@ void LuaEngine::registerCoreAPI() {
         "                self:AddLine(format(DPS_TEMPLATE or '(%.1f damage per second)', total / speed), 1, 1, 1)\n"
         "            end\n"
         "        end\n"
-        "        if data.armor and data.armor > 0 then\n"
-        "            self:AddLine(format(ARMOR_TEMPLATE or '%d Armor', data.armor), 1, 1, 1)\n"
+        // The armour: an heirloom's at its level, in white; else the
+        // template's, green when it carries armour beyond the base
+        // (ArmorDamageModifier above zero, 0x00628fd9).
+        "        if data.scaledArmor then\n"
+        "            self:AddLine(format(ARMOR_TEMPLATE or '%d Armor', data.scaledArmor), 1, 1, 1)\n"
+        "        elseif data.armor and data.armor > 0 then\n"
+        "            if data.armorBonus then self:AddLine(format(ARMOR_TEMPLATE or '%d Armor', data.armor), 0, 1, 0)\n"
+        "            else self:AddLine(format(ARMOR_TEMPLATE or '%d Armor', data.armor), 1, 1, 1) end\n"
         "        end\n"
         // A shield's block, under its armour.
         "        if data.block then self:AddLine(format(SHIELD_BLOCK_TEMPLATE or '%d Block', data.block), 1, 1, 1) end\n"
-        "        if data.feralAttackPower then\n"
-        "            self:AddLine(format(FERAL_DRUID_ITEM_AP or 'Increases attack power by %d in Cat, Bear, Dire Bear, and Moonkin forms only.', data.feralAttackPower), 0, 1, 0, 1)\n"
-        "        end\n"
         "        if data.statLines then\n"
         "            for _, st in ipairs(data.statLines) do\n"
         "                if not st.equip then self:AddLine(st.text, 1, 1, 1) end\n"
@@ -14303,7 +14341,9 @@ void LuaEngine::registerCoreAPI() {
         "                if fmt then\n"
         "                    if c.valueForm then text = format(fmt, c.number, ca) else text = format(fmt, ca, cb) end\n"
         "                end\n"
-        "                local req = format(ENCHANT_CONDITION_REQUIRES or 'Requires %s', text)\n"
+        // ENCHANT_CONDITION_REQUIRES is "Requires " with no %s: the
+        // condition follows it (0x0061c0b0's "  %s%s%s%s").
+        "                local req = (ENCHANT_CONDITION_REQUIRES or 'Requires ')..text\n"
         "                if c.met then self:AddLine('  '..req, 1, 1, 1) else self:AddLine('  '..req, 0.5, 0.5, 0.5) end\n"
         "            end\n"
         "            if not g.skillOk and g.skillName then\n"
@@ -14348,6 +14388,23 @@ void LuaEngine::registerCoreAPI() {
         "        if data.randomEnchant and not inst and not rawget(self, '__linkRolled') then\n"
         "            self:AddLine(ITEM_RANDOM_ENCHANT or '<Random enchantment>', 0, 1, 0)\n"
         "        end\n"
+        // A gem's own line - what it does once socketed - white, red while
+        // the skill it asks for is short, and each of its conditions under
+        // it, white when met and grey when not (0x0062a8c0, 0x0061c0b0).
+        "        if data.gemProperty then\n"
+        "            local g = data.gemProperty\n"
+        "            if g.ok then self:AddLine(g.text, 1, 1, 1) else self:AddLine(g.text, 1, 0.125, 0.125) end\n"
+        "            for _, c in ipairs(g.conditions or {}) do\n"
+        "                local fmt = c.key and _G[c.key]\n"
+        "                local ca, cb = _G[c.colorA] or c.colorA, _G[c.colorB] or c.colorB\n"
+        "                local text = ''\n"
+        "                if fmt then\n"
+        "                    if c.valueForm then text = format(fmt, c.number, ca) else text = format(fmt, ca, cb) end\n"
+        "                end\n"
+        "                local line = '  '..(ENCHANT_CONDITION_REQUIRES or 'Requires ')..text\n"
+        "                if c.met then self:AddLine(line, 1, 1, 1) else self:AddLine(line, 0.5, 0.5, 0.5) end\n"
+        "            end\n"
+        "        end\n"
         // The durability, between what the item is and what it asks for
         // (0x006277f0): white, red once broken.
         "        if inst and inst.maxDurability and inst.maxDurability > 0 then\n"
@@ -14375,6 +14432,8 @@ void LuaEngine::registerCoreAPI() {
         "            else key, n = 'ITEM_DURATION_DAYS', math.ceil(s / 86400) end\n"
         "            if _G[key] then self:AddLine(format(_G[key], n), 1, 1, 1) end\n"
         "        end\n"
+        // The holiday it is for, white (0x0062abca).
+        "        if data.holidayName then self:AddLine(format(ITEM_REQ_SKILL or 'Requires %s', data.holidayName), 1, 1, 1) end\n"
         "        local function req(text, ok)\n"
         "            if ok == false then self:AddLine(text, 1, 0.125, 0.125)\n"
         "            else self:AddLine(text, 1, 1, 1) end\n"
@@ -14394,7 +14453,8 @@ void LuaEngine::registerCoreAPI() {
         "        elseif data.requiredLevel and data.requiredLevel > 1 then\n"
         "            req(format(ITEM_MIN_LEVEL or 'Requires Level %d', data.requiredLevel), data.levelOk)\n"
         "        end\n"
-        "        if equipSlot and equipSlot ~= '' and iLevel and iLevel > 0 and GetCVar('showItemLevel') == '1' then\n"
+        // Only for weapons, armour, reagents and projectiles (0x0062b1ad).
+        "        if data.showItemLevel and iLevel and GetCVar('showItemLevel') == '1' then\n"
         "            self:AddLine(format(ITEM_LEVEL or 'Item Level %d', iLevel), 1, 1, 1)\n"
         "        end\n"
         "        if data.requiredSkillName then\n"
@@ -14404,6 +14464,7 @@ void LuaEngine::registerCoreAPI() {
         "                req(format(ITEM_REQ_SKILL or 'Requires %s', data.requiredSkillName), data.skillOk)\n"
         "            end\n"
         "        end\n"
+        "        if data.processKey and _G[data.processKey] then req(_G[data.processKey], data.processOk) end\n"
         "        if data.spellKnown then\n"
         "            req(ITEM_SPELL_KNOWN or 'Already known', false)\n"
         "        end\n"
@@ -14429,27 +14490,49 @@ void LuaEngine::registerCoreAPI() {
         "            local standing = _G['FACTION_STANDING_LABEL'..data.requiredFactionStanding] or ''\n"
         "            req(format(ITEM_REQ_REPUTATION or 'Requires %s - %s', data.requiredFactionName, standing), data.reputationOk)\n"
         "        end\n"
+        // A druid's feral attack power, green, ahead of the other green
+        // lines (0x0062bb82).
+        "        if data.feralAttackPower then\n"
+        "            self:AddLine(format(FERAL_DRUID_ITEM_AP or 'Increases attack power by %d in Cat, Bear, Dire Bear, and Moonkin forms only.', data.feralAttackPower), 0, 1, 0, 1)\n"
+        "        end\n"
         "        if data.statLines then\n"
         "            for _, st in ipairs(data.statLines) do\n"
         "                if st.equip then self:AddLine(st.text, 0, 1, 0, 1) end\n"
         "            end\n"
         "        end\n"
+        // Each spell by its description - one without is left out, its name
+        // never stands in - after its trigger's label (0x0062bf8f). A recipe
+        // (trigger 6) says "Use:" with the item's own description, which is
+        // then not said again; where what it teaches makes an item, that line
+        // is white, the item's tooltip follows it and then the reagents
+        // (0x0062c21f..0x0062c4f0).
+        "        local usedDescription = false\n"
         "        if data.itemSpells then\n"
         "            local triggerKeys = {[0]='ITEM_SPELL_TRIGGER_ONUSE',[1]='ITEM_SPELL_TRIGGER_ONEQUIP',[2]='ITEM_SPELL_TRIGGER_ONPROC'}\n"
         "            for _, sp in ipairs(data.itemSpells) do\n"
-        "                local text = sp.description or sp.name or ''\n"
+        "                local text = sp.description or ''\n"
+        "                if sp.recipe then\n"
+        "                    text = (ITEM_SPELL_TRIGGER_ONUSE or 'Use:')..' '..(data.description or '')\n"
+        "                    usedDescription = true\n"
+        "                end\n"
         "                if text ~= '' then\n"
         "                    local key = triggerKeys[sp.trigger]\n"
         "                    local label = key and _G[key]\n"
-        "                    if label then text = label .. ' ' .. text end\n"
-        "                    if sp.cooldown then text = text .. ' ' .. format(ITEM_COOLDOWN_TOTAL or '(%s Cooldown)', _WoweeCooldownText(sp.cooldown)) end\n"
-        "                    self:AddLine(text, 0, 1, 0, 1)\n"
+        "                    if label and not sp.recipe then text = label .. ' ' .. text end\n"
+        "                    if sp.cooldown and not sp.recipe then text = text .. ' ' .. format(ITEM_COOLDOWN_TOTAL or '(%s Cooldown)', _WoweeCooldownText(sp.cooldown)) end\n"
+        "                    if sp.createdItem then self:AddLine(text, 1, 1, 1, 1) else self:AddLine(text, 0, 1, 0, 1) end\n"
         "                    if sp.charges then\n"
         "                        local n = sp.charges\n"
         "                        if inst and sp.slot == 0 and inst.charges0 then n = inst.charges0 end\n"
         "                        n = math.abs(n)\n"
         "                        if n == 0 then self:AddLine(ITEM_SPELL_CHARGES_NONE or 'No charges', 1, 1, 1)\n"
         "                        else self:AddLine(format(ITEM_SPELL_CHARGES or '%d Charges', n), 1, 1, 1) end\n"
+        "                    end\n"
+        "                    if sp.createdItem then\n"
+        "                        if not _WoweePopulateItemTooltip(self, sp.createdItem, nil, true) then\n"
+        "                            self:AddLine(RETRIEVING_ITEM_INFO or 'Retrieving item information', 1, 0.125, 0.125)\n"
+        "                        end\n"
+        "                        if sp.reagents then self:AddLine('\\n'..format(ITEM_REQ_SKILL or 'Requires %s', sp.reagents), 1, 1, 1, 1) end\n"
         "                    end\n"
         "                end\n"
         "            end\n"
@@ -14478,7 +14561,7 @@ void LuaEngine::registerCoreAPI() {
         "                else self:AddLine(format(ITEM_SET_BONUS_GRAY or '(%d) Set: %s', bonus.threshold, bonus.text), 0.5, 0.5, 0.5, 1) end\n"
         "            end\n"
         "        end\n"
-        "        if data.description then self:AddLine('\"'..data.description..'\"', 1, 0.82, 0, 1) end\n"
+        "        if data.description and not usedDescription then self:AddLine('\"'..data.description..'\"', 1, 0.82, 0, 1) end\n"
         // Who made it, under the flavour text (0x006277f0): ITEM_CREATED_BY,
         // or ITEM_WRITTEN_BY for something written, in white.
         "        if inst and inst.creator then\n"
@@ -14511,7 +14594,6 @@ void LuaEngine::registerCoreAPI() {
         "            self:AddLine(' ', 1, 0.82, 0)\n"
         "            self:AddLine(format(BIND_TRADE_TIME_REMAINING or 'You may trade this item with players that were also eligible to loot this item for the next %s.', t), 0, 0.8, 1, 1)\n"
         "        end\n"
-        "        if data.startsQuest then self:AddLine(ITEM_STARTS_QUEST or 'This Item Begins a Quest', 1, 1, 1) end\n"
         "    end\n"
         // The price (0x006277f0's end): none for a merchant's own item or
         // one appended under a recipe; else the tooltip's OnTooltipAddMoney
@@ -19001,6 +19083,13 @@ bool LuaEngine::executeString(const std::string& code) {
         return false;
     }
     return true;
+}
+
+// Outside the file's unnamed namespaces, for lua_inventory_api.cpp's
+// _WoweeContainerItemInstance (lua_api_helpers.hpp).
+void pushTooltipItemInstance(lua_State* L, game::GameHandler* gh, const game::ItemDef& instance,
+                             uint32_t itemId) {
+    buildTooltipItemInstance(L, gh, instance, itemId);
 }
 
 } // namespace wowee::addons

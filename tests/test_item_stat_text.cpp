@@ -42,10 +42,12 @@ TEST_CASE("Ratings and powers are green Equip: lines", "[item_stat_text]") {
     REQUIRE(lines.size() == 3);
     CHECK(lines[0].text == "+10 Ausdauer");
     CHECK_FALSE(lines[0].equip);
-    // The hit rating (31) comes before the spell power (45) in the client's table.
-    CHECK(lines[1].text == "Anlegen: Erh\xc3\xb6ht Trefferwertung um 20.");
+    // The green ones keep the item's order (0x0062bc90 walks the item's
+    // stats): the spell power (45) it names first comes before its hit rating.
+    CHECK(lines[1].text == "Anlegen: Erh\xc3\xb6ht die Zaubermacht um 30.");
     CHECK(lines[1].equip);
-    CHECK(lines[2].text == "Anlegen: Erh\xc3\xb6ht die Zaubermacht um 30.");
+    CHECK(lines[2].text == "Anlegen: Erh\xc3\xb6ht Trefferwertung um 20.");
+    CHECK(lines[2].equip);
     CHECK(itemStatLines({{31, 20}}, english)[0].text == "Equip: Improves hit rating by 20.");
 }
 

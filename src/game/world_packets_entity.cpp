@@ -624,10 +624,12 @@ bool ItemQueryResponseParser::parse(network::Packet& packet, ItemQueryResponseDa
         // ItemLimitCategory - GetItemUniqueness's (0x00516ed0).
         if (packet.hasRemaining(16)) {
             data.requiredDisenchantSkill = static_cast<int32_t>(packet.readUInt32());
-            packet.readFloat();
+            data.armorDamageModifier = packet.readFloat();
             data.itemDuration = packet.readUInt32();
             data.itemLimitCategory = packet.readUInt32();
         }
+        // HolidayId, the last word.
+        if (packet.hasRemaining(4)) data.holidayId = packet.readUInt32();
     }
 
     data.valid = !data.name.empty();
