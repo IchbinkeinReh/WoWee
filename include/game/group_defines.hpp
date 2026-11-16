@@ -31,7 +31,24 @@ struct GroupMember {
     int16_t posY = 0;
     uint16_t onlineStatus = 0;   // GROUP_UPDATE_FLAG_STATUS bitmask
     bool hasPartyStats = false;  // true once we've received stats
+    /// The member's pet as the stats packets last named it (flag 0x400,
+    /// block +0x160 in 0x006cf9b0). A full stats packet starts from an empty
+    /// block, so one without the flag clears it.
+    uint64_t petGuid = 0;
 };
+
+/// A group member's pet, the way 0x0052c6e0 (partypetN) and 0x00518ce0
+/// (raidpetN) answer it. When the member's player object is known, its
+/// UNIT_FIELD_CHARM, else its UNIT_FIELD_SUMMON. Otherwise the pet guid from
+/// the stats packets: a party slot gives it only while the member's status
+/// has the online bit (0x0052c6e0: block +8 & 1), a raid record always.
+inline uint64_t groupMemberPetGuid(const GroupMember& m, bool raidRecord, bool memberObjectKnown,
+                                   uint64_t objectCharm, uint64_t objectSummon) {
+    if (m.guid == 0) return 0;
+    if (memberObjectKnown) return objectCharm != 0 ? objectCharm : objectSummon;
+    if (!raidRecord && (m.onlineStatus & 0x0001) == 0) return 0;
+    return m.petGuid;
+}
 
 /**
  * Full group/party data from SMSG_GROUP_LIST

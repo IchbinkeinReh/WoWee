@@ -250,6 +250,10 @@ wowee_add_test(test_arena_opponents
 # Header-only.
 wowee_add_test(test_soft_interact
     SOURCES test_soft_interact.cpp)
+# A group member's pet, the unit partypetN and raidpetN name (0x0052c6e0,
+# 0x00518ce0). Header-only.
+wowee_add_test(test_group_member_pet
+    SOURCES test_group_member_pet.cpp)
 
 # UNIT_COMBAT's flag and action words (0x005132c0). Header-only.
 wowee_add_test(test_unit_combat

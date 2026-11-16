@@ -4521,8 +4521,8 @@ Unit* GameHandler::getUnitByGuid(uint64_t guid) {
 // the first raid slot, the first arena slot (opponent before its pet), the
 // first boss slot, target, focus and npc (the unit whose window is open,
 // 0x00bd07a8). Mouseover (0x00bd07a0) is not on the list: no per-unit event
-// reaches a frame watching "mouseover". partypetN and raidpetN are on the
-// client's list too, but party members' pets are not tracked here.
+// reaches a frame watching "mouseover". Within a party slot the member comes
+// before its pet (partyN, then partypetN), and the same for a raid index.
 std::vector<std::string> GameHandler::unitTokensForGuid(uint64_t guid) const {
     std::vector<std::string> out;
     if (guid == 0) return out;
@@ -4539,11 +4539,19 @@ std::vector<std::string> GameHandler::unitTokensForGuid(uint64_t guid) const {
                 out.push_back("party" + std::to_string(slot));
                 break;
             }
+            if (partyPetGuid(slot) == guid) {
+                out.push_back("partypet" + std::to_string(slot));
+                break;
+            }
         }
         if (groupIsRaid(group.groupType)) {
             for (size_t i = 0; i < group.members.size() && i < 40; ++i) {
                 if (group.members[i].guid == guid) {
                     out.push_back("raid" + std::to_string(i + 1));
+                    break;
+                }
+                if (raidPetGuid(static_cast<int>(i + 1)) == guid) {
+                    out.push_back("raidpet" + std::to_string(i + 1));
                     break;
                 }
             }
@@ -4565,6 +4573,36 @@ std::vector<std::string> GameHandler::unitTokensForGuid(uint64_t guid) const {
     if (npc == 0) npc = getBankerGuid();
     if (guid == npc) out.emplace_back("npc");
     return out;
+}
+
+namespace {
+// 0x0052c6e0 / 0x00518ce0: the member's own player object, when the client
+// knows it, names the pet by its UNIT_FIELD_CHARM, else UNIT_FIELD_SUMMON.
+uint64_t memberPetGuid(const EntityManager& entities, const GroupMember& m, bool raidRecord) {
+    const auto e = m.guid != 0 ? entities.getEntity(m.guid) : nullptr;
+    const bool known = e && e->getType() == ObjectType::PLAYER;
+    return groupMemberPetGuid(m, raidRecord, known, known ? guidFieldOf(*e, UF::UNIT_FIELD_CHARM) : 0,
+                              known ? guidFieldOf(*e, UF::UNIT_FIELD_SUMMON) : 0);
+}
+}  // namespace
+
+uint64_t GameHandler::partyPetGuid(int slot) const {
+    if (!isInGroup()) return 0;
+    const auto& group = getPartyData();
+    const uint64_t member = partySlotGuid(group, playerGuid, slot);
+    if (member == 0) return 0;
+    for (const auto& m : group.members)
+        if (m.guid == member) return memberPetGuid(getEntityManager(), m, false);
+    return 0;
+}
+
+uint64_t GameHandler::raidPetGuid(int index) const {
+    if (!isInGroup()) return 0;
+    const auto& group = getPartyData();
+    if (!groupIsRaid(group.groupType) || index < 1 || index > 40 ||
+        index > static_cast<int>(group.members.size()))
+        return 0;
+    return memberPetGuid(getEntityManager(), group.members[static_cast<size_t>(index - 1)], true);
 }
 
 // UNIT_COMBAT, once per token naming the unit (0x005132c0): "%s%s%s%d%d" -
