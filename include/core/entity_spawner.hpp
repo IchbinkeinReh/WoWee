@@ -566,6 +566,12 @@ public:
 
     // Dead creature tracking (spawn in corpse/death pose)
     void markCreatureDead(uint64_t guid) { deadCreatureGuids_.insert(guid); }
+    /// 0x007206a0: the unit's ammunition shown on `renderInstanceId` - an
+    /// ItemDisplayInfo id, 0 for none - hung where ammoAttachment says.
+    void showUnitAmmo(uint64_t guid, uint32_t renderInstanceId, uint32_t displayId, uint32_t ask);
+    /// An item entry's ItemDisplayInfo id (Item.dbc, else its query), 0 for
+    /// none (0x006de7e0).
+    uint32_t itemDisplayId(uint32_t itemEntry) const;
     /// The animation a unit seen dying plays (0x0073af80): Drown when it
     /// swims or floats half under liquid, else DeathStart.
     uint32_t dyingAnimation(uint64_t guid, uint32_t renderInstanceId) const;
@@ -1132,6 +1138,14 @@ private:
     /// Hangs a unit's three weapon slots as 0x0072dbc0 does. False while an
     /// item is not known yet (its query is asked for).
     bool dressUnitWeapons(uint32_t instanceId, const UnitWeaponEntries& slots, const UnitWeaponDress& dress);
+    /// The ammunition each instance shows (+0xb48 its display, +0xb44 its
+    /// model) and where it hangs.
+    struct AmmoShown {
+        uint32_t displayId = 0;
+        uint32_t attachment = 0;
+        bool attached = false;
+    };
+    std::unordered_map<uint32_t, AmmoShown> ammoShown_;
     std::unordered_map<uint32_t, bool> modelIdIsWolfLike_;
 
     void syncCreatureStealthVisuals();

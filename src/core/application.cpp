@@ -3760,6 +3760,17 @@ void Application::connectWorldHooks() {
                 entitySpawner_->onUnitSpellCastBegin(caster, spellId);
             }
         });
+        // A unit's ammunition (0x007206a0): from a ranged spell's start, or
+        // the player's PLAYER_AMMO_ID.
+        gameHandler->setUnitAmmoCallback([this](uint64_t guid, uint32_t value, uint32_t ask, bool isItemEntry) {
+            if (!gameHandler || !entitySpawner_) return;
+            uint32_t inst = 0;
+            if (guid == gameHandler->getPlayerGuid()) inst = renderer ? renderer->getCharacterInstanceId() : 0;
+            else inst = entitySpawner_->getCreatureInstanceId(guid);
+            if (inst == 0) inst = entitySpawner_->getPlayerInstanceId(guid);
+            if (inst == 0) return;
+            entitySpawner_->showUnitAmmo(guid, inst, isItemEntry ? entitySpawner_->itemDisplayId(value) : value, ask);
+        });
         // Any unit's swing draws its melee weapons (0x00756800).
         gameHandler->setUnitAttackSwingCallback([this](uint64_t attacker) {
             if (!gameHandler) return;
@@ -5655,6 +5666,15 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 self && self->isUnit()) {
                 syncPlayerDisplayModel(static_cast<const game::Unit&>(*self));
                 syncPlayerAnimation(static_cast<const game::Unit&>(*self));
+                // 0x006e8280: a new model of the player's shows its
+                // ammunition (PLAYER_AMMO_ID) again (0x007206a0, 0x1e).
+                if (const uint32_t inst = renderer ? renderer->getCharacterInstanceId() : 0;
+                    inst != 0 && inst != ammoInstanceSeen_) {
+                    ammoInstanceSeen_ = inst;
+                    entitySpawner_->showUnitAmmo(gameHandler->getPlayerGuid(), inst,
+                                                 entitySpawner_->itemDisplayId(gameHandler->getAmmoId()),
+                                                 kAmmoAskForRanged);
+                }
             }
         }
         const float syncRadiusSq = 320.0f * 320.0f;

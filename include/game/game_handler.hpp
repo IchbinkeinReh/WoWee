@@ -2023,6 +2023,12 @@ public:
     /// A spell's cast beginning on a unit (SMSG_SPELL_START, or
     /// SMSG_SPELL_GO), where 0x00805330 calls 0x007fa2e0.
     using SpellCastBeginCallback = std::function<void(uint64_t casterGuid, uint32_t spellId)>;
+    /// 0x007206a0 asked of a unit: its ammunition shown - an ItemDisplayInfo
+    /// id from a ranged spell's start (`ask` 0x1e), or the player's
+    /// PLAYER_AMMO_ID item entry changing (`ask` 24, `isItemEntry`).
+    using UnitAmmoCallback = std::function<void(uint64_t guid, uint32_t value, uint32_t ask, bool isItemEntry)>;
+    void setUnitAmmoCallback(UnitAmmoCallback cb) { unitAmmoCallback_ = std::move(cb); }
+    auto& unitAmmoCallbackRef() { return unitAmmoCallback_; }
     void setSpellCastBeginCallback(SpellCastBeginCallback cb) { spellCastBeginCallback_ = std::move(cb); }
     /// Any unit's melee swing (SMSG_ATTACKERSTATEUPDATE, 0x00756800).
     using UnitAttackSwingCallback = std::function<void(uint64_t attackerGuid)>;
@@ -7421,6 +7427,7 @@ private:
     MeleeSwingCallback meleeSwingCallback_;
     FaceCameraProvider faceCameraProvider_;
     SpellCastBeginCallback spellCastBeginCallback_;
+    UnitAmmoCallback unitAmmoCallback_;
     UnitAttackSwingCallback unitAttackSwingCallback_;
     MeleeHitCallback meleeHitCallback_;
     AttackStopCallback attackStopCallback_;

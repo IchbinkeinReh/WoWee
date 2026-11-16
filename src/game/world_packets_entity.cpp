@@ -1533,6 +1533,28 @@ bool SpellStartParser::parse(network::Packet& packet, SpellStartData& data) {
         data.hasPower = true;
         data.power = packet.readUInt32();
     }
+    // 0x200000: the runes before and after, and a byte for each of the six
+    // ready before and not after; then 0x20: the ammunition's display and
+    // inventory type.
+    bool whole = targetsWhole;
+    if (whole && (data.castFlags & 0x200000u) != 0) {
+        if (!packet.hasRemaining(2)) {
+            whole = false;
+        } else {
+            const uint8_t before = packet.readUInt8();
+            const uint8_t after = packet.readUInt8();
+            for (uint32_t rune = 0; rune < 6 && whole; ++rune) {
+                const auto bit = static_cast<uint8_t>(1u << rune);
+                if ((before & bit) == 0 || (after & bit) != 0) continue;
+                if (!packet.hasRemaining(1)) whole = false;
+                else packet.readUInt8();
+            }
+        }
+    }
+    if (whole && (data.castFlags & 0x20u) != 0 && packet.hasRemaining(8)) {
+        data.ammoDisplayId = packet.readUInt32();
+        packet.readUInt32();  // inventory type
+    }
 
     LOG_DEBUG("Spell start: spell=", data.spellId, " castTime=", data.castTime, "ms");
     return true;

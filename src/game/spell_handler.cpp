@@ -4321,6 +4321,12 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
     const bool rangedWeaponAttack = spellclass::isRangedWeaponAutoAttack(data.spellId);
     // 0x00805330: the cast's beginning on the caster (0x007fa2e0).
     if (owner_.spellCastBeginCallbackRef()) owner_.spellCastBeginCallbackRef()(data.casterUnit, data.spellId);
+    // 0x00806700: a ranged spell (Attributes 0x2) shows the ammunition the
+    // packet names on its caster (0x007206a0), none where it names none.
+    if (owner_.unitAmmoCallbackRef()) {
+        if (const auto attr = owner_.getSpellAttributes(data.spellId); attr && (*attr & 0x2u) != 0)
+            owner_.unitAmmoCallbackRef()(data.casterUnit, data.ammoDisplayId, 0x1e, false);
+    }
     // 0x00806700 -> 0x00805330(spell, cast time, 0) for a start not pending
     // (cast flags 0x1): the cast the caster shows. No cast object here is
     // aimed (+0x139): only 0x00809f80 marks one, on the trajectory cast the

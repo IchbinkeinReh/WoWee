@@ -575,6 +575,21 @@ constexpr std::optional<SheathState> channelSheathState(SheathState current, uin
     return SheathState::Melee;
 }
 
+/// 0x007206a0: where a unit's ammunition hangs. Asked with 0x1e (a ranged
+/// spell's start, a new model) it is Bullet (24), or 25 where the unit's
+/// ranged item is thrown (inventory type 25); asked with 24 (the player's
+/// PLAYER_AMMO_ID changing) it is 24.
+inline constexpr uint32_t kAmmoAskForRanged = 0x1e;
+inline constexpr uint32_t kAmmoAttachBullet = 24;
+constexpr uint32_t ammoAttachment(uint32_t ask, std::optional<uint8_t> rangedInventoryType) {
+    if (ask != kAmmoAskForRanged) return ask;
+    return rangedInventoryType && *rangedInventoryType == 25 ? 25u : kAmmoAttachBullet;
+}
+/// 0x004eab50: the folder its model is in - Ammo at 24, Weapon at 25.
+inline const char* ammoModelFolder(uint32_t attachment) {
+    return attachment == 25 ? "Item\\ObjectComponents\\Weapon\\" : "Item\\ObjectComponents\\Ammo\\";
+}
+
 /// What 0x006dd9e0 (the active player sending a text emote) reads.
 struct TextEmoteSheathInput {
     bool emoteKnown = false;    ///< EmotesText's EmoteRef names an Emotes row

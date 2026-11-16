@@ -3524,8 +3524,12 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
             const auto now = block.fields.find(ammoIdx);
             if (now != block.fields.end()) {
                 const auto was = lastFields.find(ammoIdx);
-                if ((was == lastFields.end() ? 0u : was->second) != now->second)
+                if ((was == lastFields.end() ? 0u : was->second) != now->second) {
                     pendingEvents_.emit("UNIT_INVENTORY_CHANGED", {"player"});
+                    // 0x005e83e0: the ammunition's model on the player, at 24.
+                    if (owner_.unitAmmoCallbackRef())
+                        owner_.unitAmmoCallbackRef()(owner_.getPlayerGuid(), now->second, 24, true);
+                }
             }
         }
         // What it costs to take the ring back, and when each piece of it was

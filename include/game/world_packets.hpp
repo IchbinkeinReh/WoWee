@@ -2756,6 +2756,9 @@ struct SpellStartData {
     /// Cast flag 0x800: the caster's power of the spell's type (0x00806700).
     bool hasPower = false;
     uint32_t power = 0;
+    /// Cast flag 0x20: the ammunition's ItemDisplayInfo id, 0 without
+    /// (0x00806700 hands it to 0x007206a0 for a ranged spell).
+    uint32_t ammoDisplayId = 0;
 
     [[nodiscard]] bool isValid() const { return spellId != 0; }
 };

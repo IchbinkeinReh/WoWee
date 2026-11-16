@@ -550,6 +550,8 @@ private:
         bool swimming = false;
     };
     PlayerAnimationSeen playerAnimationSeen_;
+    /// The player's instance its ammunition was last hung on (0x006e8280).
+    uint32_t ammoInstanceSeen_ = 0;
 
     // M2 transport riding: last frame's locked (canonical) render position, used to
     // detect how far the player tried to walk this frame so that delta can be applied
