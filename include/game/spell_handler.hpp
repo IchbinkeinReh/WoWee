@@ -809,6 +809,8 @@ private:
     void logEffectInterruptCast(const SpellLogExecuteEntry& entry, uint64_t caster, uint32_t spellId,
                                 bool isPlayerCaster);
     void logEffectFeedPet(const SpellLogExecuteEntry& entry, uint64_t casterGuid);
+    void logEffectOpenLock(const SpellLogExecuteEntry& entry, uint64_t casterGuid, uint32_t spellId);
+    void logEffectDismissPet(const SpellLogExecuteEntry& entry, uint64_t casterGuid);
 
     // Find the on-use spell for an item (trigger=0 Use or trigger=5 NoDelay).
     // CMSG_USE_ITEM requires a valid spellId or the server silently ignores it.
