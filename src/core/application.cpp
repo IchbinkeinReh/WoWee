@@ -1279,6 +1279,11 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
         gameHandler->setVehicleMoveHoldCallback([this](uint64_t mover, uint64_t transport, uint8_t seat) {
             return entitySpawner_ && entitySpawner_->holdVehicleMove(mover, transport, seat);
         });
+        // SMSG_OVERRIDE_LIGHT into the lighting (0x007f10a0, 0x007f11a0).
+        gameHandler->setOverrideLightCallback([this](uint32_t areaLight, uint32_t overrideLight, uint32_t ms) {
+            if (renderer && renderer->getLightingManager())
+                renderer->getLightingManager()->overrideLight(areaLight, overrideLight, ms);
+        });
 
         appearanceComposer_ = std::make_unique<AppearanceComposer>(
             renderer.get(), assetManager.get(), gameHandler.get(),

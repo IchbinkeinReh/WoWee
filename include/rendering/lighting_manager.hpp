@@ -344,6 +344,14 @@ public:
                 float weatherIntensity = 0.0f, const CameraLiquid& liquid = {},
                 int lightOverride = -1);
 
+    /// SMSG_OVERRIDE_LIGHT (0x00526530): the override already on that area
+    /// light starts fading out (0x007f11a0) and, for a non-zero override,
+    /// that Light row - in the area light's place and radii - fades in over
+    /// `transitionMs` (0x007f10a0).
+    void overrideLight(uint32_t areaLightId, uint32_t overrideLightId, uint32_t transitionMs);
+    /// Every override dropped, as leaving the world does (0x007f1d30).
+    void clearLightOverrides() { lightOverrides_.clear(); }
+
     /// A fog put up in place of the light's (0x007ed870; 0x007ed820 takes it
     /// down): to `end` yards or the far clip, from `startScalar` of that, in
     /// `colour`. The WMO fog still blends over it (0x007f16f0).
@@ -542,6 +550,23 @@ private:
         uint32_t flags = 0;
     };
     std::map<uint32_t, LiquidTypeLight> liquidTypes_;
+
+    // Every Light row by its ID, for SMSG_OVERRIDE_LIGHT.
+    std::map<uint32_t, LightVolume> lightsById_;
+    /// The overrides on area lights (0x00d3901c, 0x18 bytes each): the area
+    /// light, the override row with the area light's place and radii, how
+    /// much of it shows, fading in (1) or out (2), when it was last moved on
+    /// and the transition time.
+    struct LightOverride {
+        uint32_t areaLightId = 0;
+        LightVolume volume;
+        float weight = 0.0f;
+        bool fadingIn = true;
+        uint64_t lastMs = 0;
+        uint32_t transitionMs = 0;
+    };
+    std::vector<LightOverride> lightOverrides_;
+    uint32_t overridesMapId_ = 0xFFFFFFFFu;
 
     // Current state
     LightingParams currentParams_;

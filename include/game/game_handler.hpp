@@ -2060,6 +2060,10 @@ public:
     /// takes it to and the seat; true holds it, and releaseVehicleMove plays
     /// it out (0x00748230 -> 0x00747990).
     using VehicleMoveHoldCallback = std::function<bool(uint64_t mover, uint64_t transport, uint8_t seat)>;
+    /// SMSG_OVERRIDE_LIGHT (0x00526530): the area light, its override (0 to
+    /// fade the override back out) and the transition in milliseconds.
+    using OverrideLightCallback = std::function<void(uint32_t areaLight, uint32_t overrideLight, uint32_t ms)>;
+    void setOverrideLightCallback(OverrideLightCallback cb) { overrideLightCallback_ = std::move(cb); }
     void setVehicleMoveHoldCallback(VehicleMoveHoldCallback cb) { vehicleMoveHoldCallback_ = std::move(cb); }
     [[nodiscard]] const VehicleMoveHoldCallback& vehicleMoveHoldCallback() const { return vehicleMoveHoldCallback_; }
     void releaseVehicleMove(uint64_t mover);
@@ -7025,6 +7029,7 @@ private:
     float vehicleAimPower_ = 0.0f;  ///< DAT_00c24958
     std::array<int, 12> inventoryAlerts_{};  ///< DAT_00c24238
     VehicleMoveHoldCallback vehicleMoveHoldCallback_;
+    OverrideLightCallback overrideLightCallback_;
     bool petActionsOnBonusBar_ = false;
     bool overrideBarActive_ = false;
     uint32_t overrideSpellsId_ = 0;

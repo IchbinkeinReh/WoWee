@@ -10,6 +10,7 @@
 #include "pipeline/wmo_doodad_light.hpp"
 #include "core/logger.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <ctime>
 
@@ -123,6 +124,7 @@ bool LightingManager::loadLightDbc(pipeline::AssetManager* assetManager) {
         // usually is - fell to invented constants.
         //
         // Light ID 1 stands in for a map that has no default of its own.
+        lightsById_[volume.lightId] = volume;
         if (volume.lightId == 1) {
             globalDefaultLight_ = volume;
             hasGlobalDefaultLight_ = true;
@@ -352,6 +354,12 @@ void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
                               int lightOverride) {
     const bool cameraInLiquid = liquid.submerged;
     if (!initialized_) return;
+    // The overrides go with the map they were put up on (0x007f1d30, from
+    // the world's unload 0x007c3830).
+    if (mapId != overridesMapId_) {
+        lightOverrides_.clear();
+        overridesMapId_ = mapId;
+    }
 
     // Update time
     if (!manualTime_) {
@@ -444,6 +452,32 @@ void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
             sampleLight(*wv.volume, cameraInLiquid, storm, timeHalfMinutes, skyboxId);
         newParams = lerpLightingParams(newParams, sampled, wv.weight);
         addSky(skyboxId, wv.weight);
+    }
+    // Then the SMSG_OVERRIDE_LIGHT overrides, in 0x007f1360 after the area
+    // lights (so not under a liquid with its own light, where that is never
+    // called): each moved on by the time since it last was, lerped over the
+    // blend where the camera is inside the area light's outer radius, and
+    // dropped once faded out.
+    if (!liquidParams && !lightOverrides_.empty()) {
+        const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                         std::chrono::steady_clock::now().time_since_epoch())
+                                                         .count());
+        for (auto it = lightOverrides_.begin(); it != lightOverrides_.end();) {
+            const auto elapsed = static_cast<uint32_t>(nowMs - it->lastMs);
+            it->lastMs = nowMs;
+            it->weight = daynight::overrideLightWeight(it->weight, it->fadingIn, elapsed, it->transitionMs);
+            const float shown = daynight::overrideLightShown(it->weight, glm::length(playerPos - it->volume.position),
+                                                             it->volume.innerRadius, it->volume.outerRadius);
+            if (shown > 0.0f) {
+                uint32_t skyboxId = 0;
+                const LightingParams sampled =
+                    sampleLight(it->volume, cameraInLiquid, storm, timeHalfMinutes, skyboxId);
+                newParams = lerpLightingParams(newParams, sampled, shown);
+                addSky(skyboxId, shown);
+            }
+            if (!it->fadingIn && it->weight == 0.0f) it = lightOverrides_.erase(it);
+            else ++it;
+        }
     }
 
     // ScreenEffect's light (0x007f3230, the override slot from 0x007ecec0 -
@@ -675,6 +709,39 @@ void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
     // exp(-5 dt), so a teleport, a death or a cave mouth took a second or
     // more to arrive at a light the client shows at once.
     currentParams_ = newParams;
+}
+
+void LightingManager::overrideLight(uint32_t areaLightId, uint32_t overrideLightId, uint32_t transitionMs) {
+    const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                     std::chrono::steady_clock::now().time_since_epoch())
+                                                     .count());
+    // 0x007f11a0: the first override on that area light fades out from
+    // where it stands.
+    for (auto& o : lightOverrides_) {
+        if (o.areaLightId != areaLightId) continue;
+        o.fadingIn = false;
+        o.lastMs = nowMs;
+        o.transitionMs = transitionMs;
+        break;
+    }
+    if (overrideLightId == 0) return;
+    // 0x007f10a0: both rows must exist; the override row's params in the
+    // area light's place and radii, fading in from nothing.
+    const auto area = lightsById_.find(areaLightId);
+    const auto row = lightsById_.find(overrideLightId);
+    if (area == lightsById_.end() || row == lightsById_.end()) return;
+    LightOverride o;
+    o.areaLightId = areaLightId;
+    o.volume = row->second;
+    o.volume.mapId = area->second.mapId;
+    o.volume.position = area->second.position;
+    o.volume.innerRadius = area->second.innerRadius;
+    o.volume.outerRadius = area->second.outerRadius;
+    o.weight = 0.0f;
+    o.fadingIn = true;
+    o.lastMs = nowMs;
+    o.transitionMs = transitionMs;
+    lightOverrides_.push_back(o);
 }
 
 std::vector<LightingManager::WeightedVolume> LightingManager::findLightVolumes(const glm::vec3& playerPos, uint32_t mapId) const {
