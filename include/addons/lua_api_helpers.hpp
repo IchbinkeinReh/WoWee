@@ -41,6 +41,18 @@ int questLogRowForQuest(game::GameHandler* gh, uint32_t questId);
 /// The highest-rank known spell with this name, or 0 (lua_spell_api.cpp).
 uint32_t highestKnownRankByName(game::GameHandler* gh, const std::string& name);
 
+/// What IsUsableItem / IsUsableSpell / IsUsableAction answer: usable, or
+/// usable but short of power (noMana), or neither.
+struct UsableState {
+    bool usable = false;
+    bool noMana = false;
+};
+/// IsUsableItem's test (0x0051c450, lua_item_query_api.cpp).
+UsableState itemUsableState(game::GameHandler* gh, uint32_t itemId);
+/// The player's known spell as the action bar and IsUsableSpell test it:
+/// 0x0080b5d0, then the power (0x008017e0).
+UsableState playerSpellUsableState(game::GameHandler* gh, uint32_t spellId);
+
 /// Put FrameXML's quest log in front of `questId`.
 ///
 /// Asked for by a quest link in chat and by the objective tracker, neither of
@@ -66,6 +78,10 @@ extern "C" {
 }
 
 namespace wowee::addons {
+
+/// Rewrites the bars' 144 IsUsableAction answers and says whether any
+/// changed since the last time (0x005aa470; lua_action_api.cpp).
+bool rescanActionUsability(lua_State* L);
 
 /// A PowerDisplay.dbc row: ActualType, GlobalStringBaseTag and its colour,
 /// three bytes after the strings (0x0065c290's record +4, +8, +0xc..+0xe).

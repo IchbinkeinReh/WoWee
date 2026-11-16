@@ -18881,6 +18881,16 @@ void LuaEngine::dispatchOnUpdate(float elapsed) {
     tickTooltipFades(L_, elapsed);
     tickDestructibleBar(L_);
 
+    // The action bars' usability, rewritten and announced on a change
+    // (0x005aa470): see rescanActionUsability. Ten times a second, which is
+    // as often as a button's range is looked at (TOOLTIP_UPDATE_TIME 0.2).
+    usabilityRescanTimer_ += elapsed;
+    if (usabilityRescanTimer_ >= 0.1f) {
+        usabilityRescanTimer_ = 0.0f;
+        if (auto* gh = getGameHandler(L_); gh && gh->isInWorld() && rescanActionUsability(L_))
+            fireEvent("ACTIONBAR_UPDATE_USABLE", {});
+    }
+
     // The MovieFrame's movie: subtitle lines and its end, to the frame that
     // started it (CSimpleMovieFrame's scripts, 0x0095db80).
     {

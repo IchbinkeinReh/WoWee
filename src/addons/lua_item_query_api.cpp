@@ -109,9 +109,7 @@ uint64_t bookCaster(lua_State* L, game::GameHandler* gh) {
 /// or its category's over fifteen minutes. Then its spell: none in
 /// Spell.dbc is usable; else 0x0080b5d0 with the item, and the power
 /// (0x008017e0) - short of it, nil and 1.
-int isUsableItem(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    const uint32_t itemId = itemArg(L, gh, 1);
+UsableState itemUsable(game::GameHandler* gh, uint32_t itemId) {
     auto* sh = gh ? gh->getSpellHandler() : nullptr;
     const auto player = gh ? gh->getEntityManager().getEntity(gh->getPlayerGuid()) : nullptr;
     bool usable = false, noMana = false;
@@ -148,8 +146,14 @@ int isUsableItem(lua_State* L) {
             }
         }
     }
-    if (usable) lua_pushnumber(L, 1); else lua_pushnil(L);
-    if (noMana) lua_pushnumber(L, 1); else lua_pushnil(L);
+    return {usable, noMana};
+}
+
+int isUsableItem(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const UsableState u = itemUsable(gh, itemArg(L, gh, 1));
+    if (u.usable) lua_pushnumber(L, 1); else lua_pushnil(L);
+    if (u.noMana) lua_pushnumber(L, 1); else lua_pushnil(L);
     return 2;
 }
 
@@ -766,6 +770,23 @@ int getItemUniqueness(lua_State* L) {
 }
 
 }  // namespace
+
+UsableState itemUsableState(game::GameHandler* gh, uint32_t itemId) {
+    return itemUsable(gh, itemId);
+}
+
+UsableState playerSpellUsableState(game::GameHandler* gh, uint32_t spellId) {
+    auto* sh = gh ? gh->getSpellHandler() : nullptr;
+    if (!sh || spellId == 0 || gh->getKnownSpells().count(spellId) == 0) return {};
+    const auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid());
+    if (!player || !player->isUnit()) return {};
+    // 0x005a9e20 / 0x00541680: 0x0080b5d0 first - the form, the tools, the
+    // caster's state - and only then the power (0x008017e0). A spell that
+    // fails the first is not usable at all, whatever the mana says.
+    if (spellKnownToClient(gh, spellId) && !sh->spellUsable(spellId, nullptr)) return {};
+    const bool enough = sh->enoughPower(spellId, static_cast<const game::Unit&>(*player));
+    return {enough, !enough};
+}
 
 void registerItemQueryLuaAPI(lua_State* L) {
     static const luaL_Reg fns[] = {

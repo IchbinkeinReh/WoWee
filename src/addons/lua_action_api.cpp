@@ -1045,10 +1045,7 @@ static int lua_IsCurrentAction(lua_State* L) {
 
 // IsUsableAction(slot) → (1, nil) usable, (nil, 1) its power is short,
 // (nil, nil) everything else. Never a pair of no's - see the shapes below.
-static int lua_IsUsableAction(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    if (!gh) { lua_pushnil(L); lua_pushnil(L); return 2; }
-    int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
+static UsableState actionUsable(lua_State* L, game::GameHandler* gh, int slot) {
     if (const auto ref = petActionRef(gh, slot)) {
         // 0x005a9e20 for a pet's slot: its spell is cast by the pet
         // (0x005d3390), which must be there and afford it of its own power
@@ -1073,17 +1070,13 @@ static int lua_IsUsableAction(lua_State* L) {
                 }
             }
         }
-        luaPushOneOrNil(L, usable ? 1 : 0);
-        luaPushOneOrNil(L, noPower ? 1 : 0);
-        return 2;
+        return {usable, noPower};
     }
     const auto& bar = gh->getActionBar();
     if (slot < 0 || slot >= static_cast<int>(bar.size()) || bar[slot].isEmpty()) {
         // The client's third shape: its slot test runs to 144 and an empty or
         // out-of-range slot reads (nil, nil), never a pair of no's.
-        lua_pushnil(L);
-        lua_pushnil(L);
-        return 2;
+        return {};
     }
     const auto& action = bar[slot];
     // Not the cooldown. WoW's answer here is about whether the action *could*
@@ -1105,27 +1098,28 @@ static int lua_IsUsableAction(lua_State* L) {
     // 0x100000|0x400000 against 0x00513920's per-target store), which is why a
     // finisher with no points on its target sits bright on the client's bar and
     // only fails when pressed.
+    // What the slot holds is tested as 0x005a9e20 tests it: a spell through
+    // 0x0080b5d0 - its form, tools, the caster's state - and then the power
+    // (0x008017e0); an item as IsUsableItem does (carried, not held, its use
+    // spell the same way); a macro by the spell or item it shows. A spell
+    // that fails 0x0080b5d0 is grey on the client's bar (nil, nil) whatever
+    // the mana, and was bright here - Immolation Aura outside Metamorphosis,
+    // a summon with no shard.
     bool usable = true;
     bool noPower = false;
+    const auto apply = [&](const UsableState& u) {
+        usable = u.usable;
+        noPower = !u.usable && u.noMana;
+    };
     if (action.type == game::ActionBarSlot::SPELL) {
-        usable = gh->getKnownSpells().count(action.id) > 0;
-        if (usable && action.id != 0) {
-            const auto pe = gh->getEntityManager().getEntity(gh->getPlayerGuid());
-            const auto* unit = pe ? dynamic_cast<game::Unit*>(pe.get()) : nullptr;
-            // The client has one cost test, 0x008017e0, and it is the same one
-            // behind the button and behind the flags the button is drawn from.
-            // Asking it here rather than writing a second copy of it matters:
-            // the flags ACTIONBAR_UPDATE_USABLE announces are kept by
-            // enoughPower(), so a hand-rolled manaCost compare here could call
-            // an action affordable while the rescan that repaints the icon
-            // called it short - and that test reads the power type the *spell*
-            // names (0x0071c2e0), not the caster's current one, and takes the
-            // cost after its modifiers, not the template's number.
-            auto* sh = gh->getSpellHandler();
-            if (unit && sh && !sh->enoughPower(action.id, *unit)) {
-                noPower = true;
-                usable = false;
-            }
+        apply(playerSpellUsableState(gh, action.id));
+    } else if (action.type == game::ActionBarSlot::ITEM) {
+        apply(itemUsableState(gh, action.id));
+    } else if (action.type == game::ActionBarSlot::MACRO) {
+        if (const MacroShown* m = macroShown(L, gh, action.id)) {
+            if (m->result.item != 0) apply(itemUsableState(gh, m->result.item));
+            else if (m->result.spell > 0 && !m->result.petSpell)
+                apply(playerSpellUsableState(gh, static_cast<uint32_t>(m->result.spell)));
         }
     }
     // 0x005a9e20 under an override bar's row: an item only with its Flags
@@ -1141,10 +1135,18 @@ static int lua_IsUsableAction(lua_State* L) {
             noPower = false;
         }
     }
-    if (usable) {
+    return {usable, !usable && noPower};
+}
+
+static int lua_IsUsableAction(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!gh) { lua_pushnil(L); lua_pushnil(L); return 2; }
+    const int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
+    const UsableState u = actionUsable(L, gh, slot);
+    if (u.usable) {
         lua_pushnumber(L, 1.0);
         lua_pushnil(L);
-    } else if (noPower) {
+    } else if (u.noMana) {
         lua_pushnil(L);
         lua_pushnumber(L, 1.0);
     } else {
@@ -1154,17 +1156,44 @@ static int lua_IsUsableAction(lua_State* L) {
     return 2;
 }
 
-// IsActionInRange(slot) → 1 if in range, 0 if out, nil if no range check applicable
-/// 0x005a95e0: the slot's spell and whether SpellRange gives it a range.
-static bool actionHasRange(lua_State* L, int slot) {
+// The client keeps the two flags IsUsableAction reads per slot (DAT_00c1ded8,
+// DAT_00c1dc98) and rewrites all 144 whenever the player's state may have
+// moved them - an aura, a form, the bags, the target, a spell learned
+// (0x0053cf10 -> 0x005aa470) - announcing ACTIONBAR_UPDATE_USABLE (0xb2) when
+// any changed. That is the only thing that repaints a button's colour:
+// ActionButton_UpdateUsable runs on that event and on a slot or page change.
+// WoWee answers IsUsableAction from the live state, so here the 144 answers
+// are compared with the last ones instead, and a change is announced the same
+// way. Without it a button went grey or bright again only when the power
+// changed - entering Metamorphosis left its spells grey.
+bool rescanActionUsability(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh || slot < 0 || slot >= 0x90) return false;
+    if (!gh) return false;
+    static uint8_t last[0x90] = {};
+    bool changed = false;
+    for (int slot = 0; slot < 0x90; ++slot) {
+        const UsableState u = actionUsable(L, gh, slot);
+        const uint8_t now = static_cast<uint8_t>((u.usable ? 1u : 0u) | (u.noMana ? 2u : 0u));
+        if (now != last[slot]) {
+            last[slot] = now;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+
+// IsActionInRange(slot) → 1 if in range, 0 if out, nil if no range check applicable
+/// 0x005a8c30 as the range tests read it: the spell a slot casts - its
+/// own, a pet slot's, an item's use spell, or what a macro shows.
+static uint32_t actionSpell(lua_State* L, game::GameHandler* gh, int slot) {
+    if (!gh || slot < 0 || slot >= 0x90) return 0;
     uint32_t spell = 0;
     if (const auto ref = petActionRef(gh, slot)) {
         spell = petSlotSpell(ref->packed);
     } else {
         const auto& bar = gh->getActionBar();
-        if (slot >= static_cast<int>(bar.size())) return false;
+        if (slot >= static_cast<int>(bar.size())) return 0;
         const auto& action = bar[static_cast<size_t>(slot)];
         uint32_t item = 0;
         if (action.type == game::ActionBarSlot::SPELL) {
@@ -1184,6 +1213,13 @@ static bool actionHasRange(lua_State* L, int slot) {
             }
         }
     }
+    return spell;
+}
+
+/// 0x005a95e0: the slot's spell and whether SpellRange gives it a range.
+static bool actionHasRange(lua_State* L, int slot) {
+    auto* gh = getGameHandler(L);
+    const uint32_t spell = actionSpell(L, gh, slot);
     if (spell == 0) return false;
     const auto data = gh->getSpellData(spell);
     return data.minRange != 0.0f || data.maxRange > 0.0f;
@@ -1206,15 +1242,11 @@ static int lua_IsActionInRange(lua_State* L) {
         lua_pushnil(L);
         return 1;
     }
-    const auto& action = bar[slot];
-    uint32_t spellId = 0;
-    if (action.type == game::ActionBarSlot::SPELL) {
-        spellId = action.id;
-    } else {
-        // Items/macros: no range check for now
-        lua_pushnil(L);
-        return 1;
-    }
+    // The spell the slot casts (0x005a94c0 -> 0x005a8c30): an item's use
+    // spell and a macro's shown spell or item are measured the same way, not
+    // left without an answer - a macro's button stayed grey at any range.
+    const uint32_t spellId = actionSpell(L, gh, slot);
+    if (spellId == 0) return luaReturnNil(L);
     return pushSpellRangeAnswer(L, gh, spellId, gh->getTargetGuid());
 }
 
