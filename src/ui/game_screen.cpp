@@ -2436,24 +2436,9 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
             }
         }
 
-        // If a gameobject is already targeted, prioritize interacting with that target
-        // instead of re-picking under cursor (which can hit nearby decorative GOs).
-        // Exclude chair-type GOs (type 7): otherwise any right-click (including the
-        // start of a camera rotate) auto-sits the player whenever a chair is targeted.
-        if (gameHandler.hasTarget()) {
-            auto target = gameHandler.getTarget();
-            if (target && target->getType() == game::ObjectType::GAMEOBJECT) {
-                auto go = std::static_pointer_cast<game::GameObject>(target);
-                auto* goInfo = gameHandler.getCachedGameObjectInfo(go->getEntry());
-                if (!goInfo || goInfo->type != 7) {
-                    LOG_DEBUG("[GO-DIAG] Right-click: re-interacting with targeted GO 0x",
-                                std::hex, target->getGuid(), std::dec);
-                    gameHandler.targetUnit(target->getGuid());
-                    gameHandler.interactWithGameObject(target->getGuid());
-                    return;
-                }
-            }
-        }
+        // A targeted object is not used again ahead of the pick: the right
+        // click is whatever is under the pointer (0x004f7880), an object
+        // there, the ground (walked to with autoInteract) or nothing.
 
         // If no target or right-clicking in world, try to pick one under cursor
         {
