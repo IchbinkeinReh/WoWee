@@ -764,6 +764,11 @@ void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_
     // A destructible building shows its state's look, not its display field.
     if (DestructibleLook look; destructibleLook(guid, entry, look)) {
         destructibleStates_[guid] = look.state;
+        if (auto e = gameHandler_ ? gameHandler_->getEntityManager().getEntity(guid) : nullptr) {
+            const uint16_t flagsField = game::fieldIndex(game::UF::GAMEOBJECT_FLAGS);
+            if (flagsField != 0xFFFF && !destructibleFlags_.count(guid))
+                destructibleFlags_[guid] = e->getField(flagsField);
+        }
         if (look.display != 0) displayId = look.display;
     }
 

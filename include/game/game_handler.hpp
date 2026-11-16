@@ -2105,6 +2105,15 @@ public:
     /// takes it to and the seat; true holds it, and releaseVehicleMove plays
     /// it out (0x00748230 -> 0x00747990).
     using VehicleMoveHoldCallback = std::function<bool(uint64_t mover, uint64_t transport, uint8_t seat)>;
+    /// SMSG_OVERRIDE_LIGHT (0x00526530): the area light, its override (0 to
+    /// fade the override back out) and the transition in milliseconds.
+    using OverrideLightCallback = std::function<void(uint32_t areaLight, uint32_t overrideLight, uint32_t ms)>;
+    /// The placed fall queued for the player (0x006eccf0, event 9).
+    using PlacedFallCallback = std::function<void()>;
+    void setPlacedFallCallback(PlacedFallCallback cb) { placedFallCallback_ = std::move(cb); }
+    /// A vehicle unit went away (0x007576e0): its riders let go of it.
+    void vehicleGone(uint64_t vehicleGuid);
+    void setOverrideLightCallback(OverrideLightCallback cb) { overrideLightCallback_ = std::move(cb); }
     void setVehicleMoveHoldCallback(VehicleMoveHoldCallback cb) { vehicleMoveHoldCallback_ = std::move(cb); }
     [[nodiscard]] const VehicleMoveHoldCallback& vehicleMoveHoldCallback() const { return vehicleMoveHoldCallback_; }
     void releaseVehicleMove(uint64_t mover);
@@ -3223,6 +3232,9 @@ public:
     bool clickUnitBeyondHellos(uint64_t guid);
     /// What 0x006ddbb0 reads of a unit to choose the hello.
     npc_interaction::Unit npcInteractionFacts(uint64_t guid) const;
+    /// 0x00729620: whether the client offers this unit's services - its
+    /// service cursor - at all.
+    bool npcServiceOffered(uint64_t guid) const;
     /// 0x00408520: on a loading screen, CMSG_KEEP_ALIVE every thirty seconds.
     /// Starting (0x0040a990) sets the first one thirty seconds out; each
     /// progress step after sends one once that time has come.
@@ -5800,7 +5812,7 @@ public:
     // ── Methods moved from private (domain handler use) ──────────────
     void addCombatText(CombatTextEntry::Type type, int32_t amount, uint32_t spellId,
                        bool isPlayerSource, uint8_t powerType = 0,
-                       uint64_t srcGuid = 0, uint64_t dstGuid = 0);
+                       uint64_t srcGuid = 0, uint64_t dstGuid = 0, bool spellFlag = false);
     bool shouldLogSpellstealAura(uint64_t casterGuid, uint64_t victimGuid, uint32_t spellId);
     void addSystemChatMessage(const std::string& message);
     /// A chat line of a given kind - money looted, experience gained, a
@@ -5960,6 +5972,9 @@ public:
         /// (0x0080ac90).
         uint32_t attrEx4 = 0;
         uint32_t attrEx7 = 0;
+        /// Spell.dbc modalNextSpell (field 48, +0xc0): what follows the
+        /// player's cast when it ends (0x008054f0).
+        uint32_t modalNextSpell = 0;
         /// AttributesEx2 (+0x18) and TargetCreatureType (+0x44): a spell at
         /// the dead (0x1), and the creature types it may be cast at
         /// (0x0080bc80).
@@ -7092,6 +7107,8 @@ private:
     float vehicleAimPower_ = 0.0f;  ///< DAT_00c24958
     std::array<int, 12> inventoryAlerts_{};  ///< DAT_00c24238
     VehicleMoveHoldCallback vehicleMoveHoldCallback_;
+    OverrideLightCallback overrideLightCallback_;
+    PlacedFallCallback placedFallCallback_;
     bool petActionsOnBonusBar_ = false;
     bool overrideBarActive_ = false;
     uint32_t overrideSpellsId_ = 0;

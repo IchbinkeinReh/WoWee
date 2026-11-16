@@ -2,6 +2,8 @@
 
 #include "game/spell_history.hpp"
 
+#include <array>
+
 // The player's spell history as 0x00807980 reads it: a spell's own cooldown,
 // its category's and its global cooldown, the longest of them.
 
@@ -101,4 +103,29 @@ TEST_CASE("an item's cooldown is its use spell's as cast from it (0x00807980)", 
     REQUIRE_FALSE(h.query(6263, 0, 0, 1000, kNoShared, std::nullopt, noRunes, 19005).running);
     // Another item whose template gives the spell category 4 shares it.
     REQUIRE(h.query(6262, 4, 0, 1000, kNoShared, std::nullopt, noRunes, 5511).running);
+}
+
+TEST_CASE("an item slot's cooldown falls back to the spell's (0x00706c50, 0x00808de0)", "[spell_history]") {
+    // The slot's own values where set.
+    auto h = itemSpellEntry(2687, 5512, 1000, false, 120000, 4, 120000, 0, 0, 0);
+    REQUIRE(h.duration == 120000);
+    REQUIRE(h.category == 4);
+    REQUIRE(h.categoryDuration == 120000);
+    REQUIRE(h.start == 1000);
+    REQUIRE(h.categoryStart == 1000);
+    REQUIRE(h.itemId == 5512);
+    // Under zero (the category under one), the spell's.
+    h = itemSpellEntry(2687, 5512, 1000, true, -1, 0, -1, 30000, 11, 60000);
+    REQUIRE(h.duration == 30000);
+    REQUIRE(h.category == 11);
+    REQUIRE(h.categoryDuration == 60000);
+    REQUIRE(h.onHold);
+}
+
+TEST_CASE("the late template's slot is the one naming the spell, whatever its trigger", "[spell_history]") {
+    struct Slot { uint32_t spellId; uint32_t spellTrigger; };
+    const std::array<Slot, 5> slots{{{100, 1}, {0, 0}, {200, 2}, {0, 0}, {0, 0}}};
+    REQUIRE(itemSlotForSpell(slots, 200) == 2);
+    REQUIRE(itemSlotForSpell(slots, 100) == 0);
+    REQUIRE(itemSlotForSpell(slots, 300) == -1);
 }

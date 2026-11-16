@@ -2534,6 +2534,22 @@ target_link_libraries(test_cast_checks PRIVATE catch2_main)
 add_test(NAME cast_checks COMMAND test_cast_checks)
 register_test_target(test_cast_checks)
 
+# ── test_dispel_check ───────────────────────────────────────
+# 0x00803500 / 0x00728500: dispels and spellsteals with nothing to remove.
+wowee_add_test(test_dispel_check
+    SOURCES test_dispel_check.cpp)
+
+# ── test_destructible_state ─────────────────────────────────
+# A destructible building's flags: hits, state changes, the fall through.
+wowee_add_test(test_destructible_state
+    SOURCES test_destructible_state.cpp)
+
+# ── test_world_text ─────────────────────────────────────────
+# The floating text over units: the kinds at 0x00af4748, their fade, pop,
+# rise and size, the screen clamp and the rank badge.
+wowee_add_test(test_world_text
+    SOURCES test_world_text.cpp)
+
 # ── test_chat_profanity ─────────────────────────────────────
 add_executable(test_chat_profanity
     test_chat_profanity.cpp

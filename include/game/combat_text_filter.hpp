@@ -63,6 +63,52 @@ inline bool worldFloaterShown(CombatTextEntry::Type type, FloaterSource source, 
     }
 }
 
+/// The world-text kind a floater is drawn as: damage 0 and a crit 2
+/// (0x00722340), a heal 6 and a crit heal 7 (0x00722440), and for a miss
+/// and its kin the table at 0x00a34c20 - absorb 1, the rest 3 (0x0071f990).
+inline uint8_t floaterKindOf(CombatTextEntry::Type type) {
+    using T = CombatTextEntry;
+    switch (type) {
+        case T::CRIT_DAMAGE: return static_cast<uint8_t>(FloaterKind::Crit);
+        case T::HEAL: case T::PERIODIC_HEAL: return static_cast<uint8_t>(FloaterKind::Heal);
+        case T::CRIT_HEAL: return static_cast<uint8_t>(FloaterKind::CritHeal);
+        case T::ABSORB: return static_cast<uint8_t>(FloaterKind::Absorb);
+        case T::MISS: case T::RESIST: case T::DODGE: case T::PARRY: case T::BLOCK:
+        case T::EVADE: case T::IMMUNE: case T::DEFLECT: case T::REFLECT:
+            return static_cast<uint8_t>(FloaterKind::Miss);
+        default: return 0;
+    }
+}
+
+/// Whether 0x00722340 takes a damage line for a swing: its maker's input
+/// flag (the low byte of its last argument) clear, and no spell record or
+/// one with AttributesEx3 0x8000. Only SMSG_SPELLDAMAGESHIELD's line
+/// (0x006d3750) sets the flag, and passes no record: a spell's line. A
+/// swing is gated and coloured as one (PetMeleeDamage, the pet's orange);
+/// anything else as a spell (PetSpellDamage, the spell's yellow).
+[[nodiscard]] inline bool floaterIsSwing(bool spellFlag, bool hasSpell, uint32_t attrEx3) {
+    return !spellFlag && (!hasSpell || (attrEx3 & 0x8000u) != 0);
+}
+
+/// The colour a damage or miss floater's maker gives it (0x00722340,
+/// 0x0071f990): a swing (no spell, or AttributesEx3 0x8000) the player's own
+/// none - its kind's (world_text::colourOf) - and one of the player's unit's
+/// 0xffff8400; anything a spell did 0xffffde00. A heal gives none
+/// (0x00722440). Zero for none.
+inline uint32_t floaterColour(CombatTextEntry::Type type, FloaterSource source, bool meleeLike) {
+    using T = CombatTextEntry;
+    switch (type) {
+        case T::MISS: case T::RESIST: case T::DODGE: case T::PARRY: case T::BLOCK:
+        case T::EVADE: case T::IMMUNE: case T::DEFLECT: case T::ABSORB: case T::REFLECT:
+        case T::MELEE_DAMAGE: case T::SPELL_DAMAGE: case T::CRIT_DAMAGE: case T::PERIODIC_DAMAGE:
+        case T::GLANCING: case T::CRUSHING:
+            if (!meleeLike) return world_text::kSpellColour;
+            return source == FloaterSource::PlayersUnit ? world_text::kPetSwingColour : 0u;
+        default:
+            return 0u;
+    }
+}
+
 /// The global string 0x0071f990 shows for a miss and its kin - the table at
 /// 0x00adbfdc - or nullptr for a line that is not one.
 inline const char* missFloaterKey(CombatTextEntry::Type type) {

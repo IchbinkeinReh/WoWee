@@ -393,6 +393,10 @@ public:
     /// game/object_effect.hpp): the sounds its display's package gives the
     /// states its movement and its animation put it in.
     void updateObjectEffects(float deltaTime);
+    /// Each unit's CreatureSoundData loop (LoopSoundID), kept on it while
+    /// it lives and is not feigning death, faded out over half a second
+    /// otherwise (0x007467f0).
+    void updateUnitLoopSounds();
     /// The race splash of each unit wading across four tenths of its height
     /// into or out of water (rendering/unit_splash.hpp).
     void playUnitSplashes(uint32_t localPlayerInstance);
@@ -1400,6 +1404,14 @@ private:
         bool gameObject = false;
     };
     std::unordered_map<uint64_t, ObjectEffectState> objectEffects_;
+    /// The loop each unit plays (its +0x2b1 sound object): its handle and
+    /// SoundEntries row.
+    struct UnitLoopSound {
+        uint32_t handle = 0;
+        uint32_t sound = 0;
+        glm::vec3 at{0.0f};
+    };
+    std::unordered_map<uint64_t, UnitLoopSound> unitLoopSounds_;
     std::unordered_map<uint32_t, uint32_t> objectEffectPackageByGoDisplay_;
     std::shared_ptr<const game::object_effect::Tables> objectEffectTables_;
     std::unordered_map<uint32_t, uint32_t> objectEffectPackageByDisplay_;
@@ -1436,16 +1448,37 @@ private:
         float height = 0.0f, oldHeight = 0.0f;
         uint32_t riseStartMs = 0, riseMs = 0;
         uint32_t fxInstance = 0;
+        /// The impact set a hit hung on the look showing (0x0070e6a0):
+        /// which look, which set, and its doodads.
+        uint32_t impactOn = 0;
+        uint32_t impactSet = 0;
+        std::vector<uint32_t> impactDoodads;
     };
-    struct DoodadAnimChain { uint32_t instance = 0; uint32_t endMs = 0; uint32_t then = 0; };
+    /// A doodad's one-shot animation, then `then`: looped, or - with an
+    /// `after` - played once and followed by `after` looped.
+    static constexpr uint32_t kNoAnim = 0xFFFFFFFFu;
+    struct DoodadAnimChain {
+        uint32_t instance = 0;
+        uint32_t endMs = 0;
+        uint32_t then = 0;
+        uint32_t after = kNoAnim;
+    };
     bool destructibleLook(uint64_t guid, uint32_t entry, DestructibleLook& out) const;
     const pipeline::WMOModel* destructibleRoot(const std::string& wmoPath);
     std::vector<uint32_t> hangDoodadSet(uint32_t wmoInstance, const pipeline::WMOModel& root, uint32_t set);
-    void startDoodadChain(uint32_t instance, uint32_t once, uint32_t then);
+    void startDoodadChain(uint32_t instance, uint32_t once, uint32_t then, uint32_t after = kNoAnim);
+    /// The state's impact doodad set played on the look showing (0x0070e6a0).
+    void playDestructibleImpact(uint64_t guid, uint32_t state);
+    /// The player dropped through a look that worsened under it (0x0070dfa0).
+    void dropPlayerThroughDestructible(uint32_t oldState, uint32_t newState, uint32_t oldInstance,
+                                       bool oldIsWmo, const std::string& oldWmoPath);
     void spawnDestructibleDoodads(uint64_t guid, const std::string& wmoPath);
     void clearDestructible(uint64_t guid);
     void updateDestructibles();
     std::unordered_map<uint64_t, uint32_t> destructibleStates_;
+    /// Each building's GAMEOBJECT_FLAGS as last seen, for the bits that
+    /// changed (0x0070ed00).
+    std::unordered_map<uint64_t, uint32_t> destructibleFlags_;
     std::unordered_map<uint64_t, DestructibleRun> destructibleRuns_;
     std::vector<DoodadAnimChain> destructibleAnimChains_;
     std::unordered_map<std::string, std::shared_ptr<pipeline::WMOModel>> destructibleWmoRoots_;

@@ -2643,8 +2643,9 @@ void GameHandler::stopAutoAttack() {
 }
 
 void GameHandler::addCombatText(CombatTextEntry::Type type, int32_t amount, uint32_t spellId, bool isPlayerSource, uint8_t powerType,
-                                uint64_t srcGuid, uint64_t dstGuid) {
-    if (combatHandler_) combatHandler_->addCombatText(type, amount, spellId, isPlayerSource, powerType, srcGuid, dstGuid);
+                                uint64_t srcGuid, uint64_t dstGuid, bool spellFlag) {
+    if (combatHandler_)
+        combatHandler_->addCombatText(type, amount, spellId, isPlayerSource, powerType, srcGuid, dstGuid, spellFlag);
 }
 
 bool GameHandler::shouldLogSpellstealAura(uint64_t casterGuid, uint64_t victimGuid, uint32_t spellId) {
@@ -4096,6 +4097,74 @@ npc_interaction::Unit GameHandler::npcInteractionFacts(uint64_t guid) const {
     u.emptySeats = vehicleRoster_.emptySeats(guid);
     u.taxiNodeUnknown = isTaxiNodeUnknown(guid);
     return u;
+}
+
+void GameHandler::vehicleGone(uint64_t vehicleGuid) {
+    // 0x007576e0, as the vehicle object goes: every rider is taken off with
+    // no transport (0x006f0c70(0, 0, 0xff, 1)). The active mover's placed
+    // fall is queued first (0x006eccf0) and the server is told the transport
+    // changed (CMSG_MOVE_CHNG_TRANSPORT, 0x38d); any other rider is let go
+    // (0x006eb650). Only a vehicle (a unit with a Vehicle.dbc row) has
+    // this; a transport's riders are another matter.
+    if (vehicleRoster_.vehicleId(vehicleGuid) == 0) return;
+    std::vector<uint64_t> riders;
+    for (const auto& [guid, seat] : vehicleRoster_.passengers())
+        if (seat.vehicleGuid == vehicleGuid) riders.push_back(guid);
+    const uint64_t mover = activeMover();
+    for (const uint64_t rider : riders) {
+        const bool own = rider == mover;
+        if (own && placedFallCallback_) placedFallCallback_();
+        vehicleRoster_.leave(rider);
+        clearTransportAttachment(rider);
+        if (own) {
+            if (playerTransportGuid_ == vehicleGuid) clearPlayerTransport();
+            sendMovement(Opcode::CMSG_MOVE_CHNG_TRANSPORT);
+        }
+    }
+}
+
+bool GameHandler::npcServiceOffered(uint64_t guid) const {
+    // 0x00729620 with the player as asker.
+    auto entity = getEntityManager().getEntity(guid);
+    auto* unit = dynamic_cast<Unit*>(entity.get());
+    auto playerEntity = getEntityManager().getEntity(playerGuid);
+    auto* player = dynamic_cast<Unit*>(playerEntity.get());
+    if (!unit || !player) return false;
+    const auto field = [](const Entity& e, UF f) -> uint32_t {
+        const uint16_t i = fieldIndex(f);
+        return i == 0xFFFF ? 0u : e.getField(i);
+    };
+    const auto guidField = [](const Entity& e, UF f) -> uint64_t {
+        const uint16_t i = fieldIndex(f);
+        if (i == 0xFFFF) return 0;
+        return (static_cast<uint64_t>(e.getField(static_cast<uint16_t>(i + 1))) << 32) | e.getField(i);
+    };
+    npc_interaction::ServiceAsk a;
+    a.playerUnitFlags = player->getUnitFlags();
+    a.playerFlags2 = field(*player, UF::UNIT_FIELD_FLAGS_2);
+    a.playerCharmed = guidField(*player, UF::UNIT_FIELD_CHARMEDBY) != 0;
+    a.playerAlive = player->getHealth() > 0;
+    a.playerGhost = isPlayerGhost();
+    a.playerInForm = playerInForm();
+    if (const auto* row = shapeshiftFormRow(getShapeshiftFormId())) a.formFlags = row->flags;
+    a.wouldAutoUnshift = wouldAutoUnshift();
+    a.alive = unit->getHealth() > 0;
+    if (const auto& infos = getCreatureInfoCache(); entity->getType() == ObjectType::UNIT)
+        if (auto it = infos.find(unit->getEntry()); it != infos.end())
+        a.typeFlags = it->second.typeFlags;
+    a.charmed = guidField(*unit, UF::UNIT_FIELD_CHARMEDBY) != 0;
+    a.vehicle = vehicleRoster_.vehicleId(guid) != 0;
+    a.inCombat = (unit->getUnitFlags() & 0x800u) != 0 || getUnitMeleeTarget(guid) != 0;
+    a.isPlayer = entity->getType() == ObjectType::PLAYER;
+    a.unitFlags = unit->getUnitFlags();
+    a.npcFlags = unit->getNpcFlags();
+    a.flags2 = field(*unit, UF::UNIT_FIELD_FLAGS_2);
+    a.createdByOther = guidField(*unit, UF::UNIT_FIELD_CREATEDBY) != playerGuid;
+    a.spellClickable = npc_interaction::spellClickable(npcInteractionFacts(guid));
+    const auto [toPlayer, fromPlayer] = unitReactionsBothWays(*unit, *player);
+    a.reactionToPlayer = toPlayer;
+    a.playerReaction = fromPlayer;
+    return npc_interaction::serviceOffered(a);
 }
 
 bool GameHandler::clickUnitBeyondHellos(uint64_t guid) {

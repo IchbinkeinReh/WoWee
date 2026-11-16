@@ -1353,6 +1353,10 @@ bool GameScreen::drawVendorCursor(game::GameHandler& gameHandler,
         // distance.
         path = "Interface\\Cursor\\Attack.blp";
     } else {
+        // The whole service ladder is behind 0x00729620: nothing is offered
+        // by a unit the player could not be served by now (dead, on a taxi,
+        // charmed, shapeshifted, the unit in combat or unfriendly, ...).
+        if (!gameHandler.npcServiceOffered(unit->getGuid())) return false;
         // 0x00715ea0 at the head of the friendly ladder (0x004f7a50, a unit
         // with npc flags): the creature template's IconName, "Unable" before
         // it out of reach - a name the cursor table lacks still drawn as

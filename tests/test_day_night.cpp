@@ -497,3 +497,27 @@ TEST_CASE("Without an occlusion query the screen goes by the line", "[day_night]
     stepSkyBodyOcclusion(s, 1.0f, -1.0f, 0.12f);
     CHECK(s.screenEased == Catch::Approx(1.0f));
 }
+
+TEST_CASE("an override light fades in and out over its transition (0x007f1360)", "[day_night][override_light]") {
+    using wowee::rendering::daynight::overrideLightWeight;
+    CHECK(overrideLightWeight(0.0f, true, 500, 2000) == Catch::Approx(0.25f));
+    CHECK(overrideLightWeight(0.9f, true, 500, 2000) == 1.0f);
+    CHECK(overrideLightWeight(1.0f, false, 500, 2000) == Catch::Approx(0.75f));
+    CHECK(overrideLightWeight(0.1f, false, 500, 2000) == 0.0f);
+    // No transition: at once.
+    CHECK(overrideLightWeight(0.0f, true, 0, 0) == 1.0f);
+    CHECK(overrideLightWeight(1.0f, false, 0, 0) == 0.0f);
+}
+
+TEST_CASE("an override shows inside the area light, no more than its falloff", "[day_night][override_light]") {
+    using wowee::rendering::daynight::overrideLightShown;
+    // Inside the inner radius: the fade alone.
+    CHECK(overrideLightShown(0.5f, 10.0f, 20.0f, 40.0f) == Catch::Approx(0.5f));
+    // Half way out: the falloff caps it.
+    CHECK(overrideLightShown(1.0f, 30.0f, 20.0f, 40.0f) == Catch::Approx(0.5f));
+    // Outside, or not faded in at all: none.
+    CHECK(overrideLightShown(1.0f, 40.0f, 20.0f, 40.0f) == 0.0f);
+    CHECK(overrideLightShown(0.0f, 10.0f, 20.0f, 40.0f) == 0.0f);
+    // A default light (radius 0) never shows one.
+    CHECK(overrideLightShown(1.0f, 0.0f, 0.0f, 0.0f) == 0.0f);
+}

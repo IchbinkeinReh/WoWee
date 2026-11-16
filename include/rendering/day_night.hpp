@@ -240,6 +240,26 @@ inline float lightFalloffWeight(float dist, float innerRadius, float outerRadius
     return w > 0.0f ? w : 0.0f;  // also a NaN from outer == inner
 }
 
+/// An SMSG_OVERRIDE_LIGHT override's weight after `elapsedMs` (0x007f1360):
+/// fading in it climbs by elapsed / transition to 1, fading out it falls by
+/// the same to 0. A transition of 0 is over at once.
+inline float overrideLightWeight(float weight, bool fadingIn, uint32_t elapsedMs, uint32_t transitionMs) {
+    const float step = transitionMs == 0 ? 1.0f
+                                         : static_cast<float>(elapsedMs) / static_cast<float>(transitionMs);
+    if (fadingIn) return weight + step > 1.0f ? 1.0f : weight + step;
+    return weight - step < 0.0f ? 0.0f : weight - step;
+}
+
+/// How much of an override shows at `dist` yards from the area light it
+/// replaces, which lends it its place and radii (0x007f1360 ->
+/// 0x007ee5d0): none outside the outer radius, else the lesser of its fade
+/// and the light's own falloff.
+inline float overrideLightShown(float fadeWeight, float dist, float innerRadius, float outerRadius) {
+    if (!(fadeWeight > 0.0f) || !(dist < outerRadius)) return 0.0f;
+    const float falloff = lightFalloffWeight(dist, innerRadius, outerRadius);
+    return falloff < fadeWeight ? falloff : fadeWeight;
+}
+
 /// The client skips lights whose outer radius is under 3 yards
 /// (0x007f1360, with DAT_00af4a68 set).
 inline constexpr float kMinLightOuterRadius = 3.0f;

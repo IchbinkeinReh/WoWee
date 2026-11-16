@@ -26,6 +26,7 @@
 #include <bit>
 #include <chrono>
 #include <limits>
+#include <unordered_set>
 
 namespace wowee::core {
 
@@ -171,6 +172,67 @@ void EntitySpawner::playUnitSlot(const game::Unit& unit, uint32_t slot, bool alw
     if (at) where = *at;
     else where = unitSoundPosition(guid);
     if (where) player.playOnce(sound, &*where, 1.0f, assetManager_, type, false, priority);
+}
+
+void EntitySpawner::updateUnitLoopSounds() {
+    // 0x007467f0 for each unit: alive and not feigning death, with a loop in
+    // its sound row, the loop plays on it - unless it plays already, or the
+    // same sound plays within sqrt(6) yards (0x004cfe00); otherwise it fades
+    // out over half a second (0x004c6390). A unit gone takes its loop with
+    // it the same way (0x008799e0).
+    if (!renderer_ || !gameHandler_ || !assetManager_) return;
+    auto& audio = audio::AudioEngine::instance();
+    auto sounds = assetManager_->loadDBCOptional("CreatureSoundData.dbc");
+    const bool table = sounds && sounds->getFieldCount() > ue::kColumnLoop;
+    const uint16_t flags2Field = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS_2);
+    std::vector<uint64_t> units;
+    units.reserve(creatureInstances_.size() + playerInstances_.size() + 1);
+    for (const auto& [guid, instance] : creatureInstances_) units.push_back(guid);
+    for (const auto& [guid, instance] : playerInstances_) units.push_back(guid);
+    const uint64_t self = gameHandler_->getPlayerGuid();
+    if (self != 0 && !playerInstances_.count(self)) units.push_back(self);
+    std::unordered_set<uint64_t> present;
+    for (const uint64_t guid : units) {
+        present.insert(guid);
+        auto entity = gameHandler_->getEntityManager().getEntity(guid);
+        const auto* unit = entity && entity->isUnit() ? static_cast<const game::Unit*>(entity.get()) : nullptr;
+        uint32_t loop = 0;
+        if (unit && table) {
+            if (const int32_t row = unitSoundRow(*unit, true); row >= 0)
+                loop = sounds->getUInt32(static_cast<uint32_t>(row), ue::kColumnLoop);
+        }
+        const uint32_t flags2 = unit && flags2Field != 0xFFFF ? unit->getField(flags2Field) : 0u;
+        const bool wanted = unit && ue::loopSoundWanted(unit->getHealth(), flags2, loop);
+        auto it = unitLoopSounds_.find(guid);
+        if (!wanted) {
+            if (it != unitLoopSounds_.end()) {
+                audio.stopSoundWithFade(it->second.handle, ue::kLoopFadeOutSeconds);
+                unitLoopSounds_.erase(it);
+            }
+            continue;
+        }
+        const auto at = unitSoundPosition(guid);
+        if (!at) continue;
+        if (it != unitLoopSounds_.end() && audio.isSoundPlaying(it->second.handle)) {
+            audio.setSoundPosition(it->second.handle, *at);
+            it->second.at = *at;
+            continue;
+        }
+        bool sameNear = false;
+        for (const auto& [other, playing] : unitLoopSounds_) {
+            if (other == guid || playing.sound != loop) continue;
+            const glm::vec3 d = playing.at - *at;
+            if (glm::dot(d, d) < ue::kSameSoundNearSq) { sameNear = true; break; }
+        }
+        if (sameNear) continue;
+        const uint32_t handle = renderer_->getM2EventSounds().playLoop(loop, *at, 0.0f, assetManager_);
+        if (handle != 0) unitLoopSounds_[guid] = UnitLoopSound{handle, loop, *at};
+    }
+    for (auto it = unitLoopSounds_.begin(); it != unitLoopSounds_.end();) {
+        if (present.count(it->first)) { ++it; continue; }
+        audio.stopSoundWithFade(it->second.handle, rendering::m2_event::kOwnerGoneFadeSeconds);
+        it = unitLoopSounds_.erase(it);
+    }
 }
 
 void EntitySpawner::playUnitJumpSound(const game::Unit& unit, uint32_t slot) {

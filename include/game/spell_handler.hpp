@@ -11,6 +11,7 @@
 #include "game/spell_history.hpp"
 #include "game/spell_missiles_in_flight.hpp"
 #include "game/cast_checks.hpp"
+#include "game/dispel_check.hpp"
 #include "game/cast_failure_error.hpp"
 #include "game/spell_unit_target.hpp"
 #include "game/handler_types.hpp"
@@ -38,6 +39,18 @@ public:
     using DispatchTable = std::unordered_map<LogicalOpcode, PacketHandler>;
 
     explicit SpellHandler(GameHandler& owner);
+
+    /// The count the next CMSG_CAST_SPELL or CMSG_USE_ITEM carries
+    /// (0x00805010: 1..255, never 0, one counter for both).
+    uint8_t nextCastCount() { return cast_check::nextCastCount(castCount_); }
+
+    /// An item template arrived: the cooldown of a cast from that item made
+    /// before it was cached (0x00808de0).
+    void itemTemplateArrived(uint32_t itemEntry);
+
+    /// The player's pending cast of this count went, failed or was
+    /// cancelled: its modalNextSpell follows (0x008054f0).
+    void pendingCastEnded(uint8_t castCount);
 
     void registerOpcodes(DispatchTable& table);
 
@@ -821,7 +834,7 @@ private:
     std::unordered_set<uint32_t> knownSpells_;
     std::unordered_map<uint32_t, uint64_t> learnOrder_;
     uint64_t nextLearnOrder_ = 0;
-    uint8_t castCount_ = 0;
+    uint8_t castCount_ = 0;  ///< the count last sent (0x00805010)
     AttackStreak attackStreak_;  ///< 0x0080cce0's tutorial counter
     /// The cast count of the player's cast the server last started: the
     /// running cast a cancel ends (0x00806200).
@@ -849,6 +862,21 @@ private:
     uint64_t castItemGuid_ = 0;
     spell_history::History petHistory_;
     spell_history::History playerHistory_;
+    /// Item casts whose template was not cached at SPELL_GO, by item entry
+    /// (0x006f6020): the spell, when it went and whether it is held.
+    struct LateItemCooldown {
+        uint32_t spellId = 0;
+        int64_t start = 0;
+        bool onHold = false;
+    };
+    std::unordered_map<uint32_t, LateItemCooldown> lateItemCooldowns_;
+    /// The player's casts sent and not yet ended, by cast count: the spell
+    /// and the unit it was aimed at (the pending cast's +0x30).
+    struct SentCast {
+        uint32_t spellId = 0;
+        uint64_t target = 0;
+    };
+    std::unordered_map<uint8_t, SentCast> sentCasts_;
     /// The last failure 0x00808200 reported, held three seconds. Mutable:
     /// the const reach test reports through it.
     mutable cast_failure::RepeatHold failureHold_;
@@ -977,7 +1005,10 @@ private:
     /// where it wants none.
     bool armGroundTarget(uint32_t spellId, uint64_t caster);
     /// What SendCast does once the cast is out (0x0080ac90).
-    void castSent(uint32_t spellId, uint64_t caster);
+    void castSent(uint32_t spellId, uint64_t caster, uint64_t target = 0);
+    /// 0x00803500: SPELL_FAILED_NOTHING_TO_DISPEL / _STEAL for a removal
+    /// with nothing to remove on its units; 0 when the cast may go.
+    [[nodiscard]] uint8_t removalRefusal(uint32_t spellId, uint64_t target) const;
     bool casting_ = false;
     bool castIsChannel_ = false;
     uint32_t currentCastSpellId_ = 0;

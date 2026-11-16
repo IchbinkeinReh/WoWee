@@ -13,6 +13,7 @@
 #include "ui/spellbook_screen.hpp"
 #include "ui/inventory_screen.hpp"
 #include "ui/ui_colors.hpp"
+#include "game/transport_manager.hpp"
 #include "ui/ui_helpers.hpp"
 #include "core/application.hpp"
 #include "core/logger.hpp"
@@ -22,6 +23,9 @@
 #include "game/game_handler.hpp"
 #include "game/bg_score_defs.hpp"
 #include "game/combat_text_filter.hpp"
+#include "game/world_text.hpp"
+#include "rendering/camera_controller.hpp"
+#include "ui/ui_texture_load.hpp"
 #include "game/interface_text.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "audio/audio_coordinator.hpp"
@@ -33,6 +37,7 @@
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include <unordered_map>
 
 namespace {
     using namespace wowee::ui::colors;
@@ -106,6 +111,7 @@ void CombatUI::playSoundsForNewChat(game::GameHandler& gameHandler) {
 // keeps is filtered by those cvars already (combat_text_filter.hpp); what is
 // left to decide here is only whose numbers these are.
 void CombatUI::renderCombatText(game::GameHandler& gameHandler) {
+    namespace wt = game::world_text;
     const auto& entries = gameHandler.getCombatText();
     if (entries.empty()) return;
 
@@ -117,118 +123,157 @@ void CombatUI::renderCombatText(game::GameHandler& gameHandler) {
     // Camera for world-space projection
     auto* appRenderer = services_.renderer;
     rendering::Camera* camera = appRenderer ? appRenderer->getCamera() : nullptr;
-    glm::mat4 viewProj;
-    if (camera) viewProj = camera->getProjectionMatrix() * camera->getViewMatrix();
-
-    ImDrawList* drawList = ImGui::GetForegroundDrawList();
-    ImFont* font = ImGui::GetFont();
-    const float baseFontSize = ImGui::GetFontSize();
-
     // Over the unit or not at all: a unit not in the world has nothing for the
     // number to stand over, and the client has no screen-space fallback.
     if (!camera) return;
+    const glm::mat4 viewProj = camera->getProjectionMatrix() * camera->getViewMatrix();
+    // The plane a tenth of the view's height under its top (0x007e5c30,
+    // wt::topOfViewPlane), inside where a x + b y + c z + d >= 0: clip y is
+    // down on the screen here, so up is -y.
+    const float rowUp[4] = {-viewProj[0][1], -viewProj[1][1], -viewProj[2][1], -viewProj[3][1]};
+    const float rowW[4] = {viewProj[0][3], viewProj[1][3], viewProj[2][3], viewProj[3][3]};
+    float topPlane[4];
+    wt::topOfViewPlane(rowUp, rowW, topPlane);
+    // The transport the player stands on (the camera's, +0xa0, a game
+    // object): lines are kept in its frame and drawn in it (0x007e5c30,
+    // 0x007e70d0).
+    const glm::mat4* transportFrame = nullptr;
+    if (auto* transports = gameHandler.getTransportManager(); transports && gameHandler.isOnTransport()) {
+        if (const auto* t = transports->getTransport(gameHandler.getPlayerTransportGuid())) transportFrame = &t->transform;
+    }
+
+    ImDrawList* drawList = ImGui::GetForegroundDrawList();
+    ImFont* font = ImGui::GetFont();
+    auto& app = core::Application::getInstance();
+
+    // First person: the camera this close to its unit (0x005fe3a0).
+    const auto* cc = appRenderer->getCameraController();
+    const bool firstPerson = cc && cc->getCurrentDistance() < wt::kFirstPersonDistance;
+    const uint64_t cameraUnit = gameHandler.cameraTarget();
+
+    // Lines standing over each unit now, for the four the client keeps.
+    std::unordered_map<uint64_t, int> standing;
+    for (const auto& entry : entries)
+        if (entry.anchored && !entry.dropped) ++standing[entry.dstGuid];
 
     // Only the floaters are kept (CombatHandler::addCombatText gates them as
     // 0x0071f990, 0x00722340 and 0x00722440 do; addWorldText adds the
     // client's own lines), so each is drawn over the unit it names.
     for (const auto& entry : entries) {
-        const float alpha = 1.0f - (entry.age / game::CombatTextEntry::LIFETIME);
         using T = game::CombatTextEntry;
+        if (entry.dropped) continue;
+
+        // Placed once, as the line is made (0x007e6030 -> 0x007e5c30): none
+        // over the camera's unit in first person, none past four over one
+        // unit, and the rest under the unit's name position by a third of a
+        // yard, where it stays.
+        if (!entry.anchored) {
+            entry.anchored = true;
+            if ((firstPerson && entry.dstGuid == cameraUnit) || standing[entry.dstGuid] >= wt::kMaxPerUnit) {
+                entry.dropped = true;
+                continue;
+            }
+            glm::vec3 at(0.0f);
+            if (auto name = app.getUnitNamePosition(entry.dstGuid)) {
+                at = *name;
+            } else if (glm::vec3 pos; app.getRenderPositionForGuid(entry.dstGuid, pos)) {
+                at = pos + glm::vec3(0.0f, 0.0f, 2.3f);
+            } else {
+                entry.dropped = true;
+                continue;
+            }
+            at.z -= wt::kBelowName;
+            // Under the top of the view, room left for its rise; then into
+            // the transport's frame.
+            at.z = wt::zUnderTopOfView(topPlane, at.x, at.y, at.z, entry.kind);
+            if (transportFrame) at = glm::vec3(glm::inverse(*transportFrame) * glm::vec4(at, 1.0f));
+            entry.anchor[0] = at.x;
+            entry.anchor[1] = at.y;
+            entry.anchor[2] = at.z;
+            ++standing[entry.dstGuid];
+        }
+
+        const uint32_t ms = static_cast<uint32_t>(entry.age * 1000.0f);
+        if (wt::expired(entry.kind, ms)) continue;
+        const wt::Alpha alpha = wt::alphaAt(entry.kind, ms);
+        const float a = static_cast<float>(alpha.text) / 255.0f;
 
         // The text as the client builds it: damage "%d" (0x00722340), healing
         // "+%d" (0x00722440), a miss and its kin the global string of the
         // table at 0x00adbfdc (0x0071f990), world text as given.
-        ImVec4 color;
+        // Its maker's colour, else its kind's (0x007e6dc0, the table at
+        // 0x00af4760); the fade sets the alpha (0x007e6850).
+        const uint32_t argb = entry.colour != 0 ? entry.colour : wt::colourOf(entry.kind);
+        const ImVec4 color(static_cast<float>((argb >> 16) & 0xffu) / 255.0f,
+                           static_cast<float>((argb >> 8) & 0xffu) / 255.0f,
+                           static_cast<float>(argb & 0xffu) / 255.0f, a);
         std::string text;
         switch (entry.type) {
             case T::MELEE_DAMAGE: case T::SPELL_DAMAGE: case T::PERIODIC_DAMAGE:
-            case T::GLANCING: case T::CRUSHING:
+            case T::GLANCING: case T::CRUSHING: case T::CRIT_DAMAGE:
                 text = std::to_string(entry.amount);
-                color = ImVec4(1.0f, 1.0f, 0.3f, alpha);
-                break;
-            case T::CRIT_DAMAGE:
-                text = std::to_string(entry.amount);
-                color = ImVec4(1.0f, 0.8f, 0.0f, alpha);
                 break;
             case T::HEAL: case T::CRIT_HEAL: case T::PERIODIC_HEAL:
                 text = "+" + std::to_string(entry.amount);
-                color = ImVec4(0.3f, 1.0f, 0.3f, alpha);
                 break;
             case T::WORLD_TEXT:
                 text = entry.text;
-                switch (static_cast<game::FloaterKind>(entry.worldKind)) {
-                    case game::FloaterKind::Experience: color = ImVec4(0.7f, 0.3f, 1.0f, alpha); break;
-                    case game::FloaterKind::Honor:      color = ImVec4(1.0f, 0.85f, 0.0f, alpha); break;
-                    case game::FloaterKind::Threat:     color = ImVec4(1.0f, 0.3f, 0.3f, alpha); break;
-                    default:                            color = ImVec4(1.0f, 1.0f, 1.0f, alpha); break;
-                }
                 break;
             default:
-                if (const char* key = game::missFloaterKey(entry.type)) {
-                    text = game::interfaceString(key, nullptr);
-                    color = ImVec4(0.7f, 0.7f, 0.7f, alpha);
-                }
+                if (const char* key = game::missFloaterKey(entry.type)) text = game::interfaceString(key, nullptr);
                 break;
         }
         if (text.empty()) continue;
 
-        // --- Rendering style ---
-        bool isCrit = (entry.type == game::CombatTextEntry::CRIT_DAMAGE ||
-                       entry.type == game::CombatTextEntry::CRIT_HEAL);
-        float renderFontSize = isCrit ? baseFontSize * 1.35f : baseFontSize;
+        // Its height by its kind, the crits popping (0x007e6cc0), in pixels of
+        // a screen whose diagonal is one interface unit (0x007e66f0).
+        const float fontPx = wt::pixels(wt::scaleAt(entry.kind, ms), screenW, screenH);
+        // Straight up from where it was put by its kind's rise (0x007e6590),
+        // then onto the screen and kept inside it, centred (0x007e70d0).
+        // Out of the transport's frame, whichever the player is on now, then
+        // up by its rise.
+        glm::vec3 at(entry.anchor[0], entry.anchor[1], entry.anchor[2]);
+        if (transportFrame) at = glm::vec3(*transportFrame * glm::vec4(at, 1.0f));
+        at.z += wt::riseAt(entry.kind, ms);
+        const glm::vec4 clip = viewProj * glm::vec4(at, 1.0f);
+        if (clip.w <= 0.01f) continue;
+        const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+        const ImVec2 ts = font->CalcTextSizeA(fontPx, FLT_MAX, 0.0f, text.c_str());
+        const float cx = wt::clampCentre((ndc.x * 0.5f + 0.5f) * screenW, ts.x * 0.5f, screenW);
+        const float cy = wt::clampCentre((ndc.y * 0.5f + 0.5f) * screenH, ts.y * 0.5f, screenH);
+        const float left = cx - ts.x * 0.5f;
+        const float top = cy - ts.y * 0.5f;
 
-        ImU32 shadowCol = IM_COL32(0, 0, 0, static_cast<int>(alpha * 180));
-        ImU32 textCol   = ImGui::ColorConvertFloat4ToU32(color);
+        const ImU32 shadowCol = IM_COL32(0, 0, 0, alpha.shadow);
+        const ImU32 textCol = ImGui::ColorConvertFloat4ToU32(color);
+        drawList->AddText(font, fontPx, ImVec2(left + 1.0f, top + 1.0f), shadowCol, text.c_str());
+        drawList->AddText(font, fontPx, ImVec2(left, top), textCol, text.c_str());
 
-        // Over the unit it landed on.
-        {
-            // Look up the destination entity's render position
-            glm::vec3 renderPos;
-            bool havePos = core::Application::getInstance().getRenderPositionForGuid(entry.dstGuid, renderPos);
-            if (!havePos) {
-                // Fallback to entity canonical position
-                auto entity = gameHandler.getEntityManager().getEntity(entry.dstGuid);
-                if (entity) {
-                    auto* unit = entity->isUnit() ? static_cast<game::Unit*>(entity.get()) : nullptr;
-                    if (unit) {
-                        renderPos = core::coords::canonicalToRender(
-                            glm::vec3(unit->getX(), unit->getY(), unit->getZ()));
-                        havePos = true;
-                    }
-                }
-            }
-
-            if (havePos) {
-                // Float upward from above the entity's head
-                renderPos.z += 2.5f + entry.age * 1.2f;
-
-                // Project to screen
-                glm::vec4 clipPos = viewProj * glm::vec4(renderPos, 1.0f);
-                if (clipPos.w > 0.01f) {
-                    glm::vec3 ndc = glm::vec3(clipPos) / clipPos.w;
-                    if (ndc.x >= -1.5f && ndc.x <= 1.5f && ndc.y >= -1.5f && ndc.y <= 1.5f) {
-                        float sx = (ndc.x * 0.5f + 0.5f) * screenW;
-                        float sy = (ndc.y * 0.5f + 0.5f) * screenH;
-
-                        // Horizontal stagger using the random seed
-                        sx += entry.xSeed * 40.0f;
-
-                        // Center the text horizontally on the projected point
-                        ImVec2 ts = font->CalcTextSizeA(renderFontSize, FLT_MAX, 0.0f, text.c_str());
-                        sx -= ts.x * 0.5f;
-
-                        // Clamp to screen bounds
-                        sx = std::max(2.0f, std::min(sx, screenW - ts.x - 2.0f));
-
-                        drawList->AddText(font, renderFontSize,
-                                          ImVec2(sx + 1.0f, sy + 1.0f), shadowCol, text.c_str());
-                        drawList->AddText(font, renderFontSize,
-                                          ImVec2(sx, sy), textCol, text.c_str());
-                    }
+        // An honourable kill's line carries the victim's rank badge, as tall
+        // as the text, 40 pixels left of it (0x007e7390, 0x007e7490).
+        if (entry.kind == static_cast<uint8_t>(game::FloaterKind::Honor)) {
+            if (const uint32_t badge = wt::rankBadge(entry.rank)) {
+                char path[64];
+                std::snprintf(path, sizeof(path), "Interface\\PvPRankBadges\\PvPRank%02u.blp", static_cast<unsigned>(badge));
+                if (VkDescriptorSet tex = rankBadgeTexture(path)) {
+                    const float side = ts.y;
+                    drawList->AddImage((ImTextureID)(uintptr_t)tex, ImVec2(left - 40.0f, top),
+                                       ImVec2(left - 40.0f + side, top + side), ImVec2(0, 0), ImVec2(1, 1),
+                                       IM_COL32(255, 255, 255, alpha.text));
                 }
             }
         }
     }
+}
+
+VkDescriptorSet CombatUI::rankBadgeTexture(const char* path) {
+    // Loaded once each (0x007e7c20 loads all fifteen up front).
+    if (ui::uiTexturesReplaced(rankBadgeGenerationSeen_)) rankBadges_.clear();
+    auto it = rankBadges_.find(path);
+    if (it != rankBadges_.end()) return it->second;
+    VkDescriptorSet tex = ui::uploadUiTextureFromBlp(services_.assetManager, path, services_.window, nullptr);
+    rankBadges_[path] = tex;
+    return tex;
 }
 
 // ─── Combat Log Window ────────────────────────────────────────────────────────

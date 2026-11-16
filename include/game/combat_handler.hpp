@@ -92,15 +92,18 @@ public:
     // Combat text creation (used by other handlers, e.g. spell handler for periodic damage)
     /// A line of world text over `unit` (0x007e6030), of `kind`; with
     /// `replace`, the unit's earlier line of that kind goes first (0x007e5100).
-    void addWorldText(uint64_t unit, uint8_t kind, const std::string& text, bool replace = false);
+    void addWorldText(uint64_t unit, uint8_t kind, const std::string& text, bool replace = false,
+                      uint32_t rank = 0);
     /// The spell-mechanic floaters an aura landing or refreshed raises over
     /// its unit (0x0074db80 -> 0x0074da70).
     void addMechanicFloaters(uint64_t unit, uint64_t caster, uint32_t spellId);
     /// The interrupted floater (0x007523d0: SpellMechanic 26).
     void addInterruptFloater(uint64_t unit, uint64_t caster, uint32_t spellId);
+    /// `spellFlag`: 0x00722340's input flag, the line is a spell's whatever
+    /// its spell (floaterIsSwing).
     void addCombatText(CombatTextEntry::Type type, int32_t amount, uint32_t spellId,
                        bool isPlayerSource, uint8_t powerType = 0,
-                       uint64_t srcGuid = 0, uint64_t dstGuid = 0);
+                       uint64_t srcGuid = 0, uint64_t dstGuid = 0, bool spellFlag = false);
 
     // Spellsteal dedup (used by aura update handler)
     bool shouldLogSpellstealAura(uint64_t casterGuid, uint64_t victimGuid, uint32_t spellId);

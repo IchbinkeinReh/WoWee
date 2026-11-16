@@ -1446,7 +1446,7 @@ SpellHandler::TrajectoryCast SpellHandler::buildTrajectoryCast(uint32_t spellId,
     const mt::Flight flight = mt::fly(row, aim, origin.middle, [renderer](const glm::vec3& a, const glm::vec3& b) {
         return renderer ? renderer->intersectSegment(a, b) : std::nullopt;
     });
-    out = CastSpellPacket::buildTrajectory(spellId, ++castCount_, target, aim.launch, flight.impact, aim.pitch,
+    out = CastSpellPacket::buildTrajectory(spellId, nextCastCount(), target, aim.launch, flight.impact, aim.pitch,
                                            aim.speed, mover, wire);
     LOG_INFO("Aimed cast ", spellId, ": pitch ", aim.pitch, " speed ", aim.speed, " lands in ", flight.seconds, " s");
     return TrajectoryCast::Built;
@@ -1459,8 +1459,8 @@ void SpellHandler::sendPetCast(uint32_t spellId, uint64_t caster, uint64_t targe
     if (how == TrajectoryCast::Refused) return;
     const auto cast = how == TrajectoryCast::Built ? aimed
                       : owner_.getPacketParsers()
-                          ? owner_.getPacketParsers()->buildCastSpell(spellId, target, ++castCount_)
-                          : CastSpellPacket::build(spellId, target, ++castCount_);
+                          ? owner_.getPacketParsers()->buildCastSpell(spellId, target, nextCastCount())
+                          : CastSpellPacket::build(spellId, target, nextCastCount());
     owner_.getSocket()->send(CastSpellPacket::asPetCast(caster, cast));
     LOG_INFO("Pet 0x", std::hex, caster, " casting spell: ", std::dec, spellId, " on 0x", std::hex, target, std::dec);
     castSent(spellId, caster);
@@ -1775,7 +1775,10 @@ void SpellHandler::notePetCastFailed(uint32_t spellId) {
         owner_.addonEventCallbackRef()("PET_BAR_UPDATE_COOLDOWN", {});
 }
 
-void SpellHandler::castSent(uint32_t spellId, uint64_t caster) {
+void SpellHandler::castSent(uint32_t spellId, uint64_t caster, uint64_t target) {
+    // 0x0080cce0 -> 0x00805010: the player's pending cast, its count, spell
+    // and target (+0x30), until it goes, fails or is cancelled.
+    if (caster == owner_.getPlayerGuid()) sentCasts_[castCount_] = SentCast{spellId, target};
     // 0x0080ac90: AttributesEx7 0x80 from the active mover - the player's
     // seat change is asked (0x00747fa0, the player seated), then the mover
     // stops, its keys as they are (0x0071ae10).
@@ -1805,6 +1808,36 @@ void SpellHandler::castSent(uint32_t spellId, uint64_t caster) {
     if (caster == owner_.getPlayerGuid()) {
         noteGlobalCooldown(spellId, caster, playerHistory_);
         playerCooldownsChanged();
+    }
+}
+
+void SpellHandler::pendingCastEnded(uint8_t castCount) {
+    // 0x008054f0: the player's pending cast of this count has ended. Its
+    // spell's modalNextSpell follows: the attack started again where it is
+    // the auto-repeat spell already running (Auto Shot after Aimed, Arcane,
+    // Steady or Multi-Shot), else that spell cast at the same target.
+    const auto sent = sentCasts_.find(castCount);
+    if (sent == sentCasts_.end()) return;
+    const SentCast cast = sent->second;
+    sentCasts_.erase(sent);
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(cast.spellId);
+    if (it == owner_.spellNameCacheRef().end()) return;
+    const uint32_t next = it->second.modalNextSpell;
+    if (next == 0) return;
+    // The player's unit descriptor +0x18: UNIT_FIELD_CHARMEDBY.
+    bool charmed = false;
+    if (auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid()))
+        charmed = entityGuidField(*player, UF::UNIT_FIELD_CHARMEDBY) != 0;
+    switch (cast_check::modalNextAction(next, owner_.autoRepeatSpellId(), owner_.isAutoAttacking(), charmed)) {
+    case cast_check::ModalNext::RestartAttack:
+        owner_.attackTarget();
+        break;
+    case cast_check::ModalNext::Cast:
+        castSpell(next, cast.target);
+        break;
+    case cast_check::ModalNext::None:
+        break;
     }
 }
 
@@ -2075,7 +2108,8 @@ bool SpellHandler::castAtGameObject(uint32_t spellId, uint64_t gameObjectGuid, u
     if (!castChecksPass(spellId, 0)) return false;
     playCastActivateSound(spellId, itemGuid);
     if (itemGuid != 0) {
-        owner_.getSocket()->send(UseItemPacket::build(bag, slot, itemGuid, spellId, 0, 0, gameObjectGuid));
+        owner_.getSocket()->send(UseItemPacket::build(bag, slot, itemGuid, spellId, 0, 0, gameObjectGuid, 0, 0,
+                                                      nextCastCount()));
     } else {
         owner_.getSocket()->send(owner_.getPacketParsers()
                                      ? owner_.getPacketParsers()->buildCastGameObjectSpell(spellId, gameObjectGuid, 0)
@@ -2120,8 +2154,81 @@ uint64_t SpellHandler::enchantWeapon(uint32_t spellId) const {
     return 0;
 }
 
+uint8_t SpellHandler::removalRefusal(uint32_t spellId, uint64_t target) const {
+    // 0x0080ac90 -> 0x00803500: a dispel, mechanic dispel or spellsteal
+    // whose units hold nothing it could take is refused before it is sent.
+    const auto& cache = owner_.spellNameCacheRef();
+    const auto it = cache.find(spellId);
+    if (it == cache.end()) return 0;
+    const auto& e = it->second;
+    const std::array<uint32_t, 3> effects{e.effectIds[0], e.effectIds[1], e.effectIds[2]};
+    // The units: the caster where an effect targets it (TARGET_UNIT_CASTER
+    // as A or B), then the unit aimed at.
+    std::vector<uint64_t> units;
+    for (int i = 0; i < 3; ++i) {
+        if (e.implicitTargetsA[i] == 1 || e.implicitTargetsB[i] == 1) {
+            units.push_back(owner_.getPlayerGuid());
+            break;
+        }
+    }
+    if (target != 0) units.push_back(target);
+    auto& em = owner_.getEntityManager();
+    const auto auraSpellOf = [&](uint32_t id) -> std::optional<dispel_check::AuraSpell> {
+        const auto a = cache.find(id);
+        if (id == 0 || a == cache.end()) return std::nullopt;
+        dispel_check::AuraSpell s;
+        s.attributes = a->second.attr;
+        s.attributesEx = a->second.attrEx;
+        s.attributesEx4 = a->second.attrEx4;
+        s.dispel = a->second.dispelType;
+        s.mechanic = a->second.mechanic;
+        for (size_t k = 0; k < 3; ++k) {
+            s.effect[k] = a->second.effectIds[k];
+            s.effectMechanic[k] = a->second.effectMechanic[k];
+        }
+        return s;
+    };
+    return dispel_check::refusal(effects, e.attrEx4, units.size(), [&](size_t u, size_t i) -> std::optional<bool> {
+        const uint64_t guid = units[u];
+        const auto unit = em.getEntity(guid);
+        if (!unit || !unit->isUnit()) return std::nullopt;
+        dispel_check::Side side = dispel_check::Side::Any;
+        if ((e.attrEx & 0x10000u) == 0) {
+            if (unitMayAttack(owner_.getPlayerGuid(), guid)) side = dispel_check::Side::Hostile;
+            else if (unitMayAssist(owner_.getPlayerGuid(), guid)) side = dispel_check::Side::Friendly;
+            else return std::nullopt;
+        }
+        // A charmed unit (descriptor +0x18, UNIT_FIELD_CHARMEDBY) that is not
+        // a vehicle (guid high 0xF150).
+        const bool charmed = entityGuidField(*unit, UF::UNIT_FIELD_CHARMEDBY) != 0 &&
+                                 ((guid >> 32) & 0xF0F00000u) != 0xF0500000u;
+        const std::vector<AuraSlot>* slots = guid == owner_.getPlayerGuid()   ? &playerAuras_
+                                             : guid == owner_.getTargetGuid() ? &targetAuras_
+                                                                              : getUnitAuras(guid);
+        std::vector<dispel_check::Aura> auras;
+        if (slots) {
+            auras.reserve(slots->size());
+            for (const auto& a : *slots) auras.push_back({a.flags, auraSpellOf(a.spellId)});
+        }
+        const uint32_t misc = e.effectMiscValues[i];
+        // SpellDispelType.dbc gives a Mask only to type 7 (all: magic, curse,
+        // disease and poison, 30); every other type is its own bit.
+        const uint32_t dbcMask = misc == 7 ? 30u : 0u;
+        return dispel_check::unitHasRemovable(auras, misc, side, effects[i] == dispel_check::kEffectDispelMechanic,
+                                              effects[i] == dispel_check::kEffectStealBuff, charmed, dbcMask);
+    });
+}
+
 void SpellHandler::sendPlayerCast(uint32_t spellId, uint64_t target, uint64_t item) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    // 0x0080ac90 -> 0x00803500: nothing to dispel or steal, said through
+    // 0x00808200 and not sent.
+    if (item == 0) {
+        if (const uint8_t refused = removalRefusal(spellId, target); refused != 0) {
+            reportLocalCastFailure(spellId, refused);
+            return;
+        }
+    }
     // 0x0080ac90 before it sends: the player stands (0x0071a360) unless
     // Attributes 0x8000000, gets down (0x007412e0) unless Attributes
     // 0x1000000, and leaves a form the spell may not be cast in
@@ -2193,15 +2300,15 @@ void SpellHandler::sendPlayerCast(uint32_t spellId, uint64_t target, uint64_t it
     auto packet = how == TrajectoryCast::Built ? aimed
         : item != 0
         ? (owner_.getPacketParsers() ? owner_.getPacketParsers()->buildCastSpellOnItem(spellId, item)
-                                     : CastSpellPacket::buildItemTarget(spellId, item, ++castCount_))
+                                     : CastSpellPacket::buildItemTarget(spellId, item, nextCastCount()))
         : owner_.getPacketParsers()
-        ? owner_.getPacketParsers()->buildCastSpell(spellId, target, ++castCount_)
-        : CastSpellPacket::build(spellId, target, ++castCount_);
+        ? owner_.getPacketParsers()->buildCastSpell(spellId, target, nextCastCount())
+        : CastSpellPacket::build(spellId, target, nextCastCount());
     LOG_DEBUG("CMSG_CAST_SPELL: spellId=", spellId, " target=0x", std::hex, target, std::dec,
               " castCount=", static_cast<int>(castCount_), " packetSize=", packet.getSize());
     owner_.getSocket()->send(packet);
     LOG_INFO("Casting spell: ", spellId, " on 0x", std::hex, item != 0 ? item : target, std::dec);
-    castSent(spellId, owner_.getPlayerGuid());
+    castSent(spellId, owner_.getPlayerGuid(), target);
 
     // The cast routine (0x0080ac90) ends a cast with UNIT_SPELLCAST_SENT (323),
     // and its shape is four strings: the literal "player", the spell's name, its
@@ -3311,9 +3418,9 @@ void SpellHandler::castAtLocation(uint32_t spellId, const ground_target::Place& 
     const glm::vec3 wire = onTransport ? place.transportOffset : core::coords::canonicalToServer(place.canonical);
     const uint64_t transportGuid = onTransport ? place.transportGuid : 0;
     auto packet = owner_.getPacketParsers()
-        ? owner_.getPacketParsers()->buildCastSpellAtLocation(spellId, wire.x, wire.y, wire.z, ++castCount_,
+        ? owner_.getPacketParsers()->buildCastSpellAtLocation(spellId, wire.x, wire.y, wire.z, nextCastCount(),
                                                               transportGuid)
-        : CastSpellPacket::buildDestination(spellId, wire.x, wire.y, wire.z, ++castCount_, transportGuid);
+        : CastSpellPacket::buildDestination(spellId, wire.x, wire.y, wire.z, nextCastCount(), transportGuid);
     // A pet's, by the pet (0x0080ac90's 0x1f0).
     owner_.getSocket()->send(caster != 0 ? CastSpellPacket::asPetCast(caster, packet) : packet);
     castSent(spellId, caster != 0 ? caster : owner_.getPlayerGuid());
@@ -3382,6 +3489,7 @@ void SpellHandler::cancelCast() {
     // 0x00806200 on the running cast: it ends (0x007fecc0).
     if (currentCastSpellId_ != 0)
         owner_.castVisuals().ended(owner_.getPlayerGuid(), runningCastCount_, currentCastSpellId_);
+    const uint8_t cancelledCount = runningCastCount_;
     casting_ = false;
     castIsChannel_ = false;
     currentCastSpellId_ = 0;
@@ -3395,6 +3503,8 @@ void SpellHandler::cancelCast() {
         if (auto* svs = renderer->getSpellVisualSystem())
             svs->cancelAllPrecastVisuals();
     }
+    // 0x00806200 -> 0x008054f0.
+    pendingCastEnded(cancelledCount);
 }
 
 void SpellHandler::setPendingSwing(const PendingSwing& swing) {
@@ -4156,6 +4266,11 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     forgetPendingSwing(data.spellId);
     if (owner_.isAutoRepeating() && data.result != 0x1b)
         owner_.castVisuals().autoRepeatStopped(owner_.getPlayerGuid());
+    // ...and 0x00808200 -> 0x008054f0 once the failure is shown (below).
+    struct EndPending {
+        SpellHandler& h; uint8_t count; bool wotlk;
+        ~EndPending() { if (wotlk) h.pendingCastEnded(count); }
+    } endPending{*this, data.castCount, isActiveExpansion("wotlk")};
     // The repeating spell itself refused: the repeat ends and the server is
     // told (0x00808200 -> 0x00807560(1)).
     if (owner_.isAutoRepeating() && data.result != 0x1b && data.spellId == owner_.autoRepeatSpellId())
@@ -4456,6 +4571,14 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
     // cast ends where it is this one.
     if ((data.castFlags & 0x1u) == 0) owner_.castVisuals().ended(data.casterUnit, data.castCount, data.spellId);
     if (data.casterUnit == owner_.getPlayerGuid() && (data.castFlags & 0x1u) == 0) forgetPendingSwing(data.spellId);
+    // 0x0080e1b0 -> 0x008054f0 at its close, for the player's pending cast
+    // (not a pending go): its modalNextSpell follows.
+    struct EndPending {
+        SpellHandler& h; uint8_t count; bool ends;
+        ~EndPending() { if (ends) h.pendingCastEnded(count); }
+    } endPending{*this, data.castCount,
+                 (data.castFlags & 0x1u) == 0 && data.casterUnit == owner_.getPlayerGuid() &&
+                     isActiveExpansion("wotlk")};
     if (data.hasPower) castPowerSaid(data.casterUnit, data.spellId, data.power, true);
     // 0x00805330 for a cast that had no start (instant), as for one that had.
     if (owner_.spellCastBeginCallbackRef()) owner_.spellCastBeginCallbackRef()(data.casterUnit, data.spellId);
@@ -4543,19 +4666,21 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
             for (size_t k = 0; info && info->valid && k < info->spells.size() && !use; ++k)
                 if (info->spells[k].spellId != 0 && info->spells[k].spellTrigger == 0) use = &info->spells[k];
             if (it != owner_.spellNameCacheRef().end() && use && use->spellId == data.spellId) {
-                spell_history::Entry h;
-                h.spellId = data.spellId;
-                h.itemId = item->second.entry;
-                h.start = now;
-                h.duration = use->cooldown < 0 ? static_cast<int32_t>(it->second.recoveryMs) : use->cooldown;
-                h.category = static_cast<int32_t>(use->category) < 1 ? it->second.category : use->category;
-                h.categoryStart = now;
-                h.categoryDuration = use->categoryCooldown < 0 ? static_cast<int32_t>(it->second.categoryRecoveryMs)
-                                                               : use->categoryCooldown;
-                h.onHold = (it->second.attr & 0x2000000u) != 0;
-                playerHistory_.add(h);
+                playerHistory_.add(spell_history::itemSpellEntry(
+                    data.spellId, item->second.entry, now, (it->second.attr & 0x2000000u) != 0,
+                    use->cooldown, static_cast<int32_t>(use->category), use->categoryCooldown,
+                    static_cast<int32_t>(it->second.recoveryMs), it->second.category,
+                    static_cast<int32_t>(it->second.categoryRecoveryMs)));
                 playerCooldownsChanged();
                 if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("BAG_UPDATE_COOLDOWN", {});
+            } else if (it != owner_.spellNameCacheRef().end() && item != owner_.onlineItemsRef().end() &&
+                       !(info && info->valid)) {
+                // The template is not cached: the client asks for it with
+                // 0x00808de0 as the callback, keeping the cast's spell, its
+                // start and its hold by the item (0x006f6020 takes it back).
+                lateItemCooldowns_[item->second.entry] =
+                    LateItemCooldown{data.spellId, now, (it->second.attr & 0x2000000u) != 0};
+                owner_.ensureItemInfo(item->second.entry);
             }
         }
         // A rune spell (PowerType 5) of the player's says which runes it
@@ -6326,6 +6451,7 @@ void SpellHandler::loadSpellNameCache() const {
     const uint32_t dmgClassField = spellL ? spellL->tryField("DmgClass") : 0xFFFFFFFF;
     const uint32_t attrEx4Field = spellL ? spellL->tryField("AttributesEx4") : 0xFFFFFFFF;
     const uint32_t attrEx7Field = spellL ? spellL->tryField("AttributesEx7") : 0xFFFFFFFF;
+    const uint32_t modalNextField = spellL ? spellL->tryField("ModalNextSpell") : 0xFFFFFFFF;
     const uint32_t stackAmountField = spellL ? spellL->tryField("StackAmount") : 0xFFFFFFFF;
     const uint32_t attrEx5Field = spellL ? spellL->tryField("AttributesEx5") : 0xFFFFFFFF;
     const uint32_t attrEx6Field = spellL ? spellL->tryField("AttributesEx6") : 0xFFFFFFFF;
@@ -6574,6 +6700,7 @@ void SpellHandler::loadSpellNameCache() const {
             }
             if (attrEx4Field < fieldCount) entry.attrEx4 = dbc->getUInt32(i, attrEx4Field);
             if (attrEx7Field < fieldCount) entry.attrEx7 = dbc->getUInt32(i, attrEx7Field);
+            if (modalNextField < fieldCount) entry.modalNextSpell = dbc->getUInt32(i, modalNextField);
             if (stackAmountField < fieldCount) entry.stackAmount = dbc->getUInt32(i, stackAmountField);
             if (attrEx5Field < fieldCount) entry.attrEx5 = dbc->getUInt32(i, attrEx5Field);
             if (attrEx6Field < fieldCount) entry.attrEx6 = dbc->getUInt32(i, attrEx6Field);
@@ -7847,6 +7974,8 @@ void SpellHandler::handleSpellFailure(network::Packet& packet) {
                 owner_.stopAutoRepeat(true);
             }
             owner_.castVisuals().ended(caster, failCastCount, failSpellId);
+            // 0x00809c70 -> 0x008054f0 for the player's pending cast.
+            if (caster == owner_.getPlayerGuid() && hasCastCount) pendingCastEnded(failCastCount);
         }
         // Classic result enum starts at 0=AFFECTING_COMBAT; shift +1 for WotLK table
         uint8_t failReason = isClassic ? static_cast<uint8_t>(rawFailReason + 1) : rawFailReason;
@@ -8943,6 +9072,33 @@ void SpellHandler::unstablePet(uint32_t petNumber) {
     auto pkt = UnstablePetPacket::build(owner_.stableMasterGuidRef(), petNumber);
     owner_.getSocket()->send(pkt);
     LOG_INFO("Sent CMSG_UNSTABLE_PET: petNumber=", petNumber);
+}
+
+void SpellHandler::itemTemplateArrived(uint32_t itemEntry) {
+    // 0x00808de0: the item's template came after the cast it was cast from.
+    // The slot whose spell is the cast's, whatever its trigger, gives the
+    // entry, begun when the cast went; nothing is written when neither the
+    // cooldown nor the category's runs.
+    const auto pending = lateItemCooldowns_.find(itemEntry);
+    if (pending == lateItemCooldowns_.end()) return;
+    const LateItemCooldown late = pending->second;
+    lateItemCooldowns_.erase(pending);
+    const auto* info = owner_.getItemInfo(itemEntry);
+    if (!info || !info->valid) return;
+    const int k = spell_history::itemSlotForSpell(info->spells, late.spellId);
+    if (k < 0) return;
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(late.spellId);
+    if (it == owner_.spellNameCacheRef().end()) return;
+    const auto& slot = info->spells[static_cast<size_t>(k)];
+    const auto h = spell_history::itemSpellEntry(
+        late.spellId, itemEntry, late.start, late.onHold, slot.cooldown, static_cast<int32_t>(slot.category),
+        slot.categoryCooldown, static_cast<int32_t>(it->second.recoveryMs), it->second.category,
+        static_cast<int32_t>(it->second.categoryRecoveryMs));
+    if (h.duration == 0 && h.categoryDuration == 0) return;
+    playerHistory_.add(h);
+    playerCooldownsChanged();
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("BAG_UPDATE_COOLDOWN", {});
 }
 
 } // namespace game

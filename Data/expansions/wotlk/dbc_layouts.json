@@ -516,6 +516,7 @@
     "SpellFamilyFlags": 209,
     "SpellFamilyName": 208,
     "Speed": 47,
+    "ModalNextSpell": 48,
     "SpellMissileID": 227,
     "PowerDisplayId": 228,
     "SpellDifficultyId": 233,

@@ -692,7 +692,7 @@ bool combatTextIsDamage(CombatTextEntry::Type type) {
 }  // namespace
 
 void CombatHandler::addCombatText(CombatTextEntry::Type type, int32_t amount, uint32_t spellId, bool isPlayerSource, uint8_t powerType,
-                                  uint64_t srcGuid, uint64_t dstGuid) {
+                                  uint64_t srcGuid, uint64_t dstGuid, bool spellFlag) {
     // A hit that did the player damage (playerDamageHits), before the
     // filters: the player is its target (by guid, or by no target given and
     // the player not its source), and it took health.
@@ -705,6 +705,7 @@ void CombatHandler::addCombatText(CombatTextEntry::Type type, int32_t amount, ui
     // happens to the character - is Blizzard_CombatText's, and the log and
     // UNIT_COMBAT below are not filtered by these.
     bool floater = false;
+    uint32_t floaterArgb = 0;
     if (dstGuid != 0) {
         const auto on = [](const char* cvar) { return addons::storedCVarValue(cvar, "1") != "0"; };
         FloaterSettings settings;
@@ -713,14 +714,20 @@ void CombatHandler::addCombatText(CombatTextEntry::Type type, int32_t amount, ui
         settings.petMeleeDamage = on("PetMeleeDamage");
         settings.petSpellDamage = on("PetSpellDamage");
         settings.combatHealing = on("CombatHealing");
-        bool meleeLike = spellId == 0;
-        if (!meleeLike) {
-            owner_.getSpellName(spellId);  // loads the cache
-            const auto it = owner_.spellNameCacheRef().find(spellId);
-            meleeLike = it != owner_.spellNameCacheRef().end() && (it->second.attrEx3 & 0x8000u) != 0;
+        // A swing (0x00722340): no maker's flag, and no spell or a weapon one.
+        bool meleeLike = false;
+        if (!spellFlag) {
+            meleeLike = spellId == 0;
+            if (!meleeLike) {
+                owner_.getSpellName(spellId);  // loads the cache
+                const auto it = owner_.spellNameCacheRef().find(spellId);
+                meleeLike = it != owner_.spellNameCacheRef().end() &&
+                            floaterIsSwing(false, true, it->second.attrEx3);
+            }
         }
-        floater = worldFloaterShown(type, static_cast<FloaterSource>(floaterSourceOf(srcGuid, isPlayerSource)),
-                                    dstGuid == owner_.getPlayerGuid(), false, meleeLike, settings);
+        const auto source = static_cast<FloaterSource>(floaterSourceOf(srcGuid, isPlayerSource));
+        floater = worldFloaterShown(type, source, dstGuid == owner_.getPlayerGuid(), false, meleeLike, settings);
+        floaterArgb = floaterColour(type, source, meleeLike);
     }
 
     CombatTextEntry entry;
@@ -732,10 +739,10 @@ void CombatHandler::addCombatText(CombatTextEntry::Type type, int32_t amount, ui
     entry.powerType = powerType;
     entry.srcGuid = srcGuid;
     entry.dstGuid = dstGuid;
-    // Random horizontal stagger so simultaneous hits don't stack vertically
-    static std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
-    entry.xSeed = dist(rng);
+    // Drawn as its kind (0x0071f990, 0x00722340, 0x00722440); the client
+    // staggers nothing.
+    entry.kind = floaterKindOf(type);
+    entry.colour = floaterArgb;
     if (floater) combatText_.push_back(entry);
 
     // UNIT_COMBAT is not raised from here: the client raises it from each
@@ -790,7 +797,7 @@ int CombatHandler::floaterSourceOf(uint64_t src, bool isPlayerSource) const {
     return static_cast<int>(FloaterSource::Other);
 }
 
-void CombatHandler::addWorldText(uint64_t unit, uint8_t kind, const std::string& text, bool replace) {
+void CombatHandler::addWorldText(uint64_t unit, uint8_t kind, const std::string& text, bool replace, uint32_t rank) {
     if (unit == 0 || text.empty()) return;
     if (replace) {
         combatText_.erase(std::remove_if(combatText_.begin(), combatText_.end(),
@@ -805,6 +812,11 @@ void CombatHandler::addWorldText(uint64_t unit, uint8_t kind, const std::string&
     entry.dstGuid = unit;
     entry.text = text;
     entry.worldKind = kind;
+    entry.kind = kind;
+    entry.rank = rank;
+    // A spell mechanic's line is the spell colour (0x0074da70 hands
+    // 0x00adb93c); the rest take their kind's.
+    if (kind == static_cast<uint8_t>(FloaterKind::Mechanic)) entry.colour = world_text::kSpellColour;
     combatText_.push_back(std::move(entry));
 }
 
@@ -1503,7 +1515,10 @@ void CombatHandler::handlePvpCredit(network::Packet& packet) {
                 }
                 std::string hk = interfaceString("HK", nullptr);
                 if (hk.empty()) hk = "HK";
-                addWorldText(victimGuid, static_cast<uint8_t>(FloaterKind::Honor), hk + ": " + title);
+                // The victim's rank goes with it, for its badge (0x007155d0
+                // hands 0x007e6030 the rank; 0x007e7390 draws it).
+                addWorldText(victimGuid, static_cast<uint8_t>(FloaterKind::Honor), hk + ": " + title, false,
+                             static_cast<uint32_t>(rank));
             }
         }
         if (owner_.pvpHonorCallbackRef()) owner_.pvpHonorCallbackRef()(honor, victimGuid, rank);
@@ -1562,10 +1577,13 @@ void CombatHandler::handleSpellDamageShield(network::Packet& packet) {
         // UNIT_COMBAT for the one it struck (0x006d3750 -> 0x00513380).
         owner_.fireUnitCombat(d.casterGuid, "WOUND", static_cast<int32_t>(d.damage),
                               static_cast<int32_t>(d.schoolMask), 0);
-        if (d.casterGuid == owner_.getPlayerGuid())
-            addCombatText(CombatTextEntry::SPELL_DAMAGE, static_cast<int32_t>(d.damage), d.spellId, true, 0, d.casterGuid, d.victimGuid);
-        else if (d.victimGuid == owner_.getPlayerGuid())
-            addCombatText(CombatTextEntry::SPELL_DAMAGE, static_cast<int32_t>(d.damage), d.spellId, false, 0, d.casterGuid, d.victimGuid);
+        // The number over the one it struck, from the shield's owner, with
+        // 0x00722340's input flag set and no spell record: a spell's line,
+        // gated and coloured as one, whatever the shield's spell.
+        if (d.casterGuid == owner_.getPlayerGuid() || d.victimGuid == owner_.getPlayerGuid())
+            addCombatText(CombatTextEntry::SPELL_DAMAGE, static_cast<int32_t>(d.damage), d.spellId,
+                          d.victimGuid == owner_.getPlayerGuid(), 0, d.victimGuid, d.casterGuid,
+                          /*spellFlag=*/true);
         return;
     }
     const bool shieldTbc = isActiveExpansion("tbc");

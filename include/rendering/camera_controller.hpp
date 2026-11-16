@@ -182,6 +182,10 @@ public:
     [[nodiscard]] bool isFalling() const { return !grounded && !swimming && verticalVelocity <= 0.0f; }
     /// How long it has been off the ground: zero on it.
     [[nodiscard]] float airborneSeconds() const { return airborneSeconds_; }
+    /// The placed fall queued for the active mover (0x006eccf0, event 9):
+    /// on its next step it starts to fall from where it is unless it stands
+    /// on ground, swims, flies or is rooted.
+    void queuePlacedFall() { portPlacedFall_ = true; }
 
     // Call every frame while riding a transport that forces Z to a locked value
     // externally (e.g. the Deeprun Tram, which has no real floor mid-tunnel).
@@ -483,6 +487,8 @@ public:
     /// 0x005ffa60: the way over the time, whatever the zoom speed).
     void zoomOverTime(float distance, float seconds);
     [[nodiscard]] float getUserTargetDistance() const { return userTargetDistance; }
+    /// How far the camera stands from its unit now (the camera's +0x118).
+    [[nodiscard]] float getCurrentDistance() const { return currentDistance; }
     /// A camera view (camera +0xb8, one of eight): its distance, its pitch
     /// in degrees with up positive, and its yaw in degrees from where the
     /// character faces.

@@ -3090,7 +3090,7 @@ public:
                                  uint64_t itemGuid, uint32_t spellId = 0,
                                  uint64_t targetGuid = 0, uint64_t itemTargetGuid = 0,
                                  uint64_t gameObjectGuid = 0, uint32_t glyphIndex = 0,
-                                 uint32_t noTargetFlags = 0);
+                                 uint32_t noTargetFlags = 0, uint8_t castCount = 0);
 };
 
 /** CMSG_OPEN_ITEM packet builder (for locked containers / lockboxes) */

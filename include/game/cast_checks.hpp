@@ -451,4 +451,35 @@ struct Usable {
     return !casting || (result != kSpellInProgress && sameSpell);
 }
 
+/// 0x00805010: the pending cast takes the shared counter DAT_00d397d5, made
+/// 1 when it is 0, and then steps it on. The counts sent run 1..255 and wrap
+/// back to 1 - never 0. CMSG_USE_ITEM carries the same byte (0x0080b2ad
+/// writes the pending cast's +0x24), so spells and item uses share it.
+/// `last` holds the count last handed out; the sequence is the client's.
+[[nodiscard]] constexpr uint8_t nextCastCount(uint8_t& last) {
+    last = static_cast<uint8_t>(last + 1);
+    if (last == 0) last = 1;
+    return last;
+}
+
+/// 0x008054f0, run as each of the player's pending casts ends - its SPELL_GO
+/// (0x0080e1b0, not a pending go), its failure (0x00808200, 0x00806ad0,
+/// 0x00809c70) or its cancel (0x00806200) - for a spell with a
+/// modalNextSpell (Spell.dbc field 48).
+enum class ModalNext : uint8_t {
+    None,
+    RestartAttack,  ///< 0x0072c2b0(0, 0, 0): the attack at the target
+    Cast,           ///< 0x0080cce0: modalNextSpell at the cast's target
+};
+
+/// `runningRepeatSpell` is the auto-repeat spell while it runs (0x006d71e0),
+/// `swinging` the player's swing or melee target (+0x1858 0x2, +0xa20) and
+/// `charmed` its UNIT_FIELD_CHARMEDBY.
+[[nodiscard]] constexpr ModalNext modalNextAction(uint32_t modalNextSpell, uint32_t runningRepeatSpell,
+                                                  bool swinging, bool charmed) {
+    if (modalNextSpell == 0) return ModalNext::None;
+    if (modalNextSpell != runningRepeatSpell) return ModalNext::Cast;
+    return swinging || charmed ? ModalNext::None : ModalNext::RestartAttack;
+}
+
 }  // namespace wowee::game::cast_check
