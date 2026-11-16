@@ -3,6 +3,7 @@
 #include "game/tutorials.hpp"
 
 #include "game/world_packets.hpp"
+#include "game/xp_gain_line.hpp"
 #include "game/opcode_table.hpp"
 #include "game/spell_defines.hpp"
 #include "network/packet.hpp"
@@ -188,6 +189,11 @@ public:
     void removeCombatTextForGuid(uint64_t guid);
 
 private:
+    // Exhaustion.dbc, read once, for the experience line's rest-state forms.
+    xp_gain_line::ExhaustionRow exhaustionRow(int id);
+    std::unordered_map<int, xp_gain_line::ExhaustionRow> exhaustionRows_;
+    bool exhaustionLoaded_ = false;
+
     // Last tab-target press (steady-clock ms); a pause restarts the cycle
     // from the nearest enemy instead of resuming a stale rotation.
     uint64_t lastTabTargetMs_ = 0;

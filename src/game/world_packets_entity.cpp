@@ -1212,15 +1212,16 @@ bool XpGainParser::parse(network::Packet& packet, XpGainData& data) {
     data.totalXp = packet.readUInt32();
     data.type = packet.readUInt8();
     // A kill goes on with the experience before the rested bonus (uint32)
-    // and the group rate (float), then the Recruit-a-Friend byte. This read
-    // the uint32 as the float, so the "group bonus" it worked out was noise;
-    // the group and rested wordings that would want them are not given (see
-    // CombatHandler::handleXpGain), so they are passed over.
+    // and the group rate (float), then the Recruit-a-Friend byte
+    // (0x0050c720, the rate 1 when not given). The chat line's rested,
+    // group and raid forms are chosen from them (game/xp_gain_line.hpp).
+    data.restlessXp = 0;
+    data.groupRate = 1.0f;
     if (data.type == 0 && packet.hasRemaining(8)) {
-        packet.readUInt32();  // experience without the rested bonus
-        packet.readFloat();   // group rate
+        data.restlessXp = packet.readUInt32();
+        data.groupRate = packet.readFloat();
     }
-    if (packet.hasRemaining(1)) packet.readUInt8();  // Recruit-a-Friend bonus
+    data.referAFriend = packet.hasRemaining(1) && packet.readUInt8() != 0;
     LOG_DEBUG("XP gain: ", data.totalXp, " xp (type=", static_cast<int>(data.type), ")");
     return data.totalXp > 0;
 }
