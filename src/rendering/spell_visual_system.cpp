@@ -609,6 +609,79 @@ void SpellVisualSystem::playSpellVisualPrecast(uint32_t visualId, const glm::vec
                   attachInstanceId == 0 ? &worldPosition : nullptr, castTimeMs, spellId);
 }
 
+void SpellVisualSystem::holdMissile(uint32_t visualId, uint32_t casterInstanceId, uint8_t castCount) {
+    if (!m2Renderer_ || casterInstanceId == 0) return;
+    if (!spellVisualDbcLoaded_) loadSpellVisualDbc();
+    // 0x007fa2e0 -> 0x00722950 for a visual with Flags 0x20: what the caster
+    // held goes first; then the missile model, at the MissileAttachment the
+    // visual names (none at -1), stays in place there until it flies.
+    const MissileVisual* visual = findMissileVisual(visualId);
+    if (!visual || (visual->flags & spell_missile::kVisualFlagHeldMissile) == 0) return;
+    dropHeldMissile(casterInstanceId, 0);
+    if (visual->sourceAttachment < 0) return;
+    const uint32_t modelId = acquireEffectModel(visual->modelPath);
+    if (modelId == 0) return;
+    HeldMissile held;
+    held.casterInstanceId = casterInstanceId;
+    held.attachment = static_cast<uint32_t>(visual->sourceAttachment);
+    held.scale = visual->scale;
+    held.castCount = castCount;
+    glm::mat4 transform;
+    if (!heldMissileTransform(held, transform)) return;
+    held.instanceId = m2Renderer_->createInstance(modelId, glm::vec3(transform[3]), glm::vec3(0.0f), 1.0f);
+    if (held.instanceId == 0) return;
+    m2Renderer_->restartInstanceAnimation(held.instanceId);
+    m2Renderer_->setInstanceTransform(held.instanceId, transform);
+    heldMissiles_[casterInstanceId] = held;
+}
+
+bool SpellVisualSystem::heldMissileTransform(const HeldMissile& held, glm::mat4& out) const {
+    CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    glm::mat4 attach;
+    if (!charRenderer || !charRenderer->getAttachmentTransform(held.casterInstanceId, held.attachment, attach))
+        return false;
+    // 0x00722950: turned a quarter about Z the negative way and sized by the
+    // effect's Scale over the unit's own (0x008251d0), so the unit's size
+    // does not grow it.
+    glm::mat4 frame;
+    float unitScale = 1.0f;
+    if (charRenderer->getInstanceFrame(held.casterInstanceId, frame)) unitScale = glm::length(glm::vec3(frame[0]));
+    out = attach * spell_missile::heldMissileLocal(held.scale, unitScale);
+    return true;
+}
+
+bool SpellVisualSystem::heldMissilePosition(const HeldMissile& held, glm::vec3& out) const {
+    glm::mat4 transform;
+    if (!heldMissileTransform(held, transform)) return false;
+    out = glm::vec3(transform[3]);
+    return true;
+}
+
+void SpellVisualSystem::dropHeldMissile(uint32_t casterInstanceId, uint8_t castCount) {
+    // 0x0071bff0: the held model goes for any cast (0) or the one it was
+    // held for.
+    const auto it = heldMissiles_.find(casterInstanceId);
+    if (it == heldMissiles_.end()) return;
+    if (castCount != 0 && castCount != it->second.castCount) return;
+    if (m2Renderer_ && it->second.instanceId != 0) m2Renderer_->removeInstance(it->second.instanceId);
+    heldMissiles_.erase(it);
+}
+
+void SpellVisualSystem::updateHeldMissiles() {
+    if (!m2Renderer_) return;
+    for (auto it = heldMissiles_.begin(); it != heldMissiles_.end();) {
+        glm::mat4 transform;
+        if (!heldMissileTransform(it->second, transform)) {
+            // The caster's model is gone, and what it held with it.
+            m2Renderer_->removeInstance(it->second.instanceId);
+            it = heldMissiles_.erase(it);
+            continue;
+        }
+        m2Renderer_->setInstanceTransform(it->second.instanceId, transform);
+        ++it;
+    }
+}
+
 void SpellVisualSystem::playSpellVisual(uint32_t visualId, const glm::vec3& worldPosition,
                                          bool useImpactKit, uint32_t attachInstanceId, bool onCaster,
                                          uint32_t spellId) {
@@ -1087,6 +1160,14 @@ bool SpellVisualSystem::launchMissile(uint32_t visualId, float speed, const Miss
     missile.impacts = std::move(impacts);
     missile.impactOffset = visual->impactOffset;
     missile.position = missileSource(*visual, from);
+    // 0x0072df00: a missile model the caster holds for this cast (Flags
+    // 0x20) is what flies, from where it is held; one held for another cast
+    // goes all the same.
+    if (const auto held = heldMissiles_.find(from.renderInstanceId); held != heldMissiles_.end()) {
+        glm::vec3 at;
+        if (held->second.castCount == castCount && heldMissilePosition(held->second, at)) missile.position = at;
+        dropHeldMissile(from.renderInstanceId, 0);
+    }
     missile.casterInstanceId = from.renderInstanceId;
     missile.spellId = spellId;
     missile.casterGuid = casterGuid;
@@ -3080,6 +3161,7 @@ void SpellVisualSystem::update(float deltaTime) {
     // First: an arrival plays its impact kit, which joins activeSpellVisuals_.
     colourClockMs_ += static_cast<uint32_t>(std::lround(deltaTime * 1000.0f));
     updateMissiles(deltaTime);
+    updateHeldMissiles();
     updateAuraKits(deltaTime);
     updateUnitColours();
     updateUnitAlphas();
@@ -3415,6 +3497,10 @@ void SpellVisualSystem::cancelAllPrecastVisuals() {
 }
 
 void SpellVisualSystem::reset() {
+    if (m2Renderer_) {
+        for (const auto& [caster, held] : heldMissiles_) m2Renderer_->removeInstance(held.instanceId);
+    }
+    heldMissiles_.clear();
     for (DynamicObjectVisual& object : dynamicObjects_) releaseDynamicObject(object);
     dynamicObjects_.clear();
     for (const FallingModels& falling : fallingModels_) {

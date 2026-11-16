@@ -229,3 +229,16 @@ TEST_CASE("a stopped missile lands once a step takes it past the stop", "[spell_
     CHECK_FALSE(sm::passedStop(glm::vec3(8.0f, 3.0f, 0.0f), glm::vec3(10.0f, 3.0f, 0.0f), stop));
     CHECK(sm::passedStop(glm::vec3(10.0f, 3.0f, 0.0f), glm::vec3(12.0f, 3.0f, 0.0f), stop));
 }
+
+TEST_CASE("a held missile is turned a quarter and sized against its unit", "[spell_missile]") {
+    // 0x00722950 -> 0x008251d0: -pi/2 about Z, the effect's Scale over the
+    // unit's, so a unit at twice its size still holds the model at its own.
+    const glm::mat4 m = sm::heldMissileLocal(1.5f, 2.0f);
+    const glm::vec3 x = glm::vec3(m * glm::vec4(1.0f, 0.0f, 0.0f, 0.0f));
+    const glm::vec3 y = glm::vec3(m * glm::vec4(0.0f, 1.0f, 0.0f, 0.0f));
+    CHECK(x.y == Catch::Approx(-0.75f));
+    CHECK(x.x == Catch::Approx(0.0f));
+    CHECK(y.x == Catch::Approx(0.75f));
+    CHECK(glm::vec3(m[3]) == glm::vec3(0.0f));
+    CHECK(sm::kVisualFlagHeldMissile == 0x20u);
+}

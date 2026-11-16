@@ -410,7 +410,16 @@ glm::vec3 SpellHandler::targetPointInWorld(uint64_t frameGuid, float x, float y,
                                           });
 }
 
-void SpellHandler::triggerCastVisual(uint32_t spellId, uint64_t casterGuid, uint32_t castTimeMs) {
+void SpellHandler::dropHeldMissile(uint64_t casterGuid, uint8_t castCount) {
+    // 0x007fecc0 -> 0x0071bff0: a cast's end lets go of the missile model
+    // its caster held for it.
+    auto* renderer = owner_.services().renderer;
+    auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
+    const uint32_t instance = svs && casterGuid != 0 ? owner_.resolveUnitRenderInstance(casterGuid) : 0u;
+    if (instance != 0) svs->dropHeldMissile(instance, castCount);
+}
+
+void SpellHandler::triggerCastVisual(uint32_t spellId, uint64_t casterGuid, uint32_t castTimeMs, uint8_t castCount) {
     LOG_INFO("SpellVisual: triggerCastVisual spellId=", spellId, " casterGuid=0x", std::hex, casterGuid, std::dec);
     auto* renderer = owner_.services().renderer;
     if (!renderer) { LOG_WARNING("SpellVisual: triggerCastVisual - no renderer"); return; }
@@ -423,6 +432,9 @@ void SpellHandler::triggerCastVisual(uint32_t spellId, uint64_t casterGuid, uint
     LOG_INFO("SpellVisual: triggerCastVisual visualId=", visualId, " pos=(", casterPos.x, ",", casterPos.y, ",", casterPos.z, ") castTimeMs=", castTimeMs);
     svs->playSpellVisualPrecast(visualId, casterPos, castTimeMs,
                                 owner_.resolveUnitRenderInstance(casterGuid), spellId);
+    // 0x007fa2e0: a visual with Flags 0x20 puts its missile in the caster's
+    // hand until it flies (0x00722950).
+    svs->holdMissile(visualId, owner_.resolveUnitRenderInstance(casterGuid), castCount);
 }
 
 void SpellHandler::triggerImpactVisual(uint32_t spellId, uint64_t targetGuid, uint64_t casterGuid) {
@@ -3370,6 +3382,7 @@ void SpellHandler::cancelCast() {
     // 0x00806200 on the running cast: it ends (0x007fecc0).
     if (currentCastSpellId_ != 0)
         owner_.castVisuals().ended(owner_.getPlayerGuid(), runningCastCount_, currentCastSpellId_);
+    if (currentCastSpellId_ != 0) dropHeldMissile(owner_.getPlayerGuid(), runningCastCount_);
     casting_ = false;
     castIsChannel_ = false;
     currentCastSpellId_ = 0;
@@ -4140,6 +4153,7 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     // but 0x1b (0x00807560, only while 0x00d397d0 - the player's
     // auto-repeat target - is set).
     owner_.castVisuals().ended(owner_.getPlayerGuid(), data.castCount, data.spellId);
+    dropHeldMissile(owner_.getPlayerGuid(), data.castCount);
     if (owner_.isAutoRepeating() && data.result != 0x1b)
         owner_.castVisuals().autoRepeatStopped(owner_.getPlayerGuid());
     // The repeating spell itself refused: the repeat ends and the server is
@@ -4382,7 +4396,7 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
     // every spell's, a profession's too - its kit hangs the tool in the hand
     // (0x0073a6c0).
     if (!rangedWeaponAttack) {
-        triggerCastVisual(data.spellId, data.casterUnit, data.castTime);
+        triggerCastVisual(data.spellId, data.casterUnit, data.castTime, data.castCount);
     }
 }
 
@@ -4795,6 +4809,9 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
                     triggerImpactVisual(data.spellId, tgt, data.casterUnit);
                 }
             }
+            // The cast has gone; a held missile its launch did not take goes
+            // with it (0x0080e1b0 -> 0x007fecc0).
+            if ((data.castFlags & 0x1u) == 0) dropHeldMissile(data.casterUnit, data.castCount);
         }
     }
 }
@@ -7365,6 +7382,7 @@ void SpellHandler::handleSpellFailedOther(network::Packet& packet) {
         if (packet.hasRemaining(1)) failOtherResult = packet.readUInt8();
         packet.setReadPos(at);
         owner_.castVisuals().ended(failOtherGuid, castCount, spellId);
+        dropHeldMissile(failOtherGuid, castCount);
     }
     if (failOtherGuid != 0 && failOtherGuid != owner_.getPlayerGuid()) {
         // Which spell it was, before the state that says so is dropped: the
@@ -7625,6 +7643,7 @@ void SpellHandler::handleSpellFailure(network::Packet& packet) {
                 owner_.stopAutoRepeat(true);
             }
             owner_.castVisuals().ended(caster, failCastCount, failSpellId);
+            dropHeldMissile(caster, failCastCount);
         }
         // Classic result enum starts at 0=AFFECTING_COMBAT; shift +1 for WotLK table
         uint8_t failReason = isClassic ? static_cast<uint8_t>(rawFailReason + 1) : rawFailReason;

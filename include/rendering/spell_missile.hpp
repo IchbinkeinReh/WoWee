@@ -60,6 +60,24 @@ inline int32_t m2AttachmentFor(int32_t dbcValue, uint32_t visualFlags) {
     return kVisualAttachmentToM2[static_cast<size_t>(dbcValue)];
 }
 
+/// SpellVisual Flags 0x20: the caster holds the missile model from the
+/// cast's start until it flies (0x007fa2e0 -> 0x00722950).
+inline constexpr uint32_t kVisualFlagHeldMissile = 0x20;
+
+/// The held missile's frame within its attachment (0x00722950 ->
+/// 0x008251d0): turned -pi/2 about Z, scaled by the effect's Scale over the
+/// unit's own scale (which the attachment already carries).
+inline glm::mat4 heldMissileLocal(float effectScale, float unitScale) {
+    const float s = unitScale > 0.0f ? effectScale / unitScale : effectScale;
+    // RotZ(-pi/2): x -> -y, y -> x (0x004c3290 with cos 0, sin -1).
+    glm::mat4 m(0.0f);
+    m[0] = glm::vec4(0.0f, -s, 0.0f, 0.0f);
+    m[1] = glm::vec4(s, 0.0f, 0.0f, 0.0f);
+    m[2] = glm::vec4(0.0f, 0.0f, s, 0.0f);
+    m[3] = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    return m;
+}
+
 /// SpellVisual.dbc offsets are stored with y mirrored: the client negates it
 /// before carrying the offset through the attachment's frame (FUN_00720bf0,
 /// FUN_00732ff0).
