@@ -4233,6 +4233,34 @@ void GameHandler::closeNpcInteraction() {
     fireAddonEvent("BATTLEFIELDS_CLOSED", {});
 }
 
+void GameHandler::capturePointGone(uint64_t guid) {
+    constexpr uint32_t kCapturePoint = 29;
+    auto& entities = entityController_->getEntityManager();
+    // The capture point's world state (0x00527a30 keeps data index 2 - field
+    // 0x43 in the type's table, 0x00746190 - as the node's +0x14).
+    const auto worldStateOf = [&](const Entity& e) -> uint32_t {
+        if (e.getType() != ObjectType::GAMEOBJECT) return 0;
+        const auto* info = getCachedGameObjectInfo(static_cast<const GameObject&>(e).getEntry());
+        if (!info || info->type != kCapturePoint || !info->hasData) return 0;
+        return info->data[2];
+    };
+    const auto gone = entities.getEntity(guid);
+    if (!gone) return;
+    const uint32_t worldState = worldStateOf(*gone);
+    if (worldState == 0) return;
+    // 0x00548d10: only a world state that is there and set.
+    const auto it = worldStates_.find(worldState);
+    if (it == worldStates_.end() || it->second == 0) return;
+    // Another capture point still showing it keeps it.
+    for (const auto& [other, entity] : entities.getEntities()) {
+        if (other != guid && entity && worldStateOf(*entity) == worldState) return;
+    }
+    // 0x00549440(state, 0), the frame's lines again (0x00546310), and
+    // UPDATE_WORLD_STATES (0x1d0).
+    it->second = 0;
+    fireAddonEvent("UPDATE_WORLD_STATES", {});
+}
+
 void GameHandler::tickCapturePointWarning() {
     const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();

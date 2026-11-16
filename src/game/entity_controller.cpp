@@ -317,6 +317,7 @@ void EntityController::processOutOfRangeObjects(const std::vector<uint64_t>& gui
         serverUpdatedTransportGuids_.erase(guid);
         owner_.clearTransportAttachment(guid);
         // 0x007576e0: its riders let go first.
+        owner_.capturePointGone(guid);  // 0x0070ca30
         owner_.vehicleGone(guid);
         owner_.vehicleRoster().forget(guid);
         owner_.castVisuals().forget(guid);
@@ -4424,6 +4425,7 @@ void EntityController::handleDestroyObject(network::Packet& packet) {
         }
         owner_.clearTransportAttachment(data.guid);
         // 0x007576e0: its riders let go first.
+        owner_.capturePointGone(data.guid);  // 0x0070ca30
         owner_.vehicleGone(data.guid);
         owner_.vehicleRoster().forget(data.guid);
         owner_.castVisuals().forget(data.guid);

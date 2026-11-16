@@ -1794,6 +1794,11 @@ public:
     /// while not flagged for PvP and not on a taxi, PVP_REQUIRED_FOR_CAPTURE is
     /// said, then nothing for five minutes.
     void tickCapturePointWarning();
+    /// A capture point leaving (0x0070ca30 -> 0x00529550 -> 0x005285f0): when
+    /// its world state (GAMEOBJECT_TYPE_CAPTURE_POINT data[2], worldState1) is
+    /// set and no other capture point in view shows the same one, the client
+    /// puts it to 0 and raises UPDATE_WORLD_STATES, so its capture bar goes.
+    void capturePointGone(uint64_t guid);
     int64_t capturePointWarnAfterMs_ = 0;
     void tickMinimapPings(float dt) {
         for (auto& p : minimapPings_) p.age += dt;
