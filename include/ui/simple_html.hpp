@@ -41,6 +41,8 @@ struct HtmlBlock {
     /// Image blocks: the file, and the size the tag asked for - zero where it
     /// asked nothing, which means the picture's own.
     std::string src;
+    /// Text blocks: 0 for P (and loose text), 1-3 for H1-H3.
+    int element = 0;
     float width = 0.0f;
     float height = 0.0f;
 };
@@ -151,10 +153,11 @@ inline std::vector<HtmlBlock> parseSimpleHtml(const std::string& in,
         cur.text.clear();
         lastSpace = true;
     };
-    auto startBlock = [&](std::string align) {
+    auto startBlock = [&](std::string align, int element) {
         flush();
         cur.kind = HtmlBlock::Kind::Text;
         cur.align = std::move(align);
+        cur.element = element;
     };
     auto put = [&](char c) {
         if (std::isspace(static_cast<unsigned char>(c))) {
@@ -208,7 +211,8 @@ inline std::vector<HtmlBlock> parseSimpleHtml(const std::string& in,
         const std::string name = detail::htmlUpper(body.substr(0, nameEnd));
 
         if (name == "P" || name == "H1" || name == "H2" || name == "H3") {
-            startBlock(closing ? std::string() : detail::htmlAlign(body));
+            startBlock(closing ? std::string() : detail::htmlAlign(body),
+                       closing || name == "P" ? 0 : name[1] - '0');
         } else if (name == "BR") {
             // Kept even at the start of a block: a page opening with BRs is
             // asking for the space above its first line.
@@ -245,7 +249,7 @@ inline std::vector<HtmlBlock> parseSimpleHtml(const std::string& in,
                 linkHref.clear();
             }
         } else if ((name == "BODY" || name == "HTML") && closing) {
-            startBlock({});
+            startBlock({}, 0);
         }
         // Anything else is not a tag this frame knows, and its text stands.
     }

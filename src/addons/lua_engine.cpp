@@ -10977,6 +10977,70 @@ void LuaEngine::setLuaServices(const LuaServices& services) {
 }
 
 
+/// The font methods of a SimpleHTML (0x00974a10 on) each start with
+/// 0x009748f0: a string second argument equal, in any case, to "P", "H1",
+/// "H2" or "H3" is taken off and names the element the call is about;
+/// anything else leaves the arguments alone and means P. So
+/// html:SetTextColor("H1", r, g, b) colours the headings, and
+/// ItemTextFrame does that for every page it opens.
+///
+/// P is the frame's own font, which the wrapped method already reaches. A
+/// heading here draws in the frame's font, with a colour of its own once one
+/// is set; that colour is all a heading keeps, so its other setters do
+/// nothing and its getters answer what P has.
+static bool isSimpleHtmlFontMethod(lua_CFunction fn) {
+    static const lua_CFunction kMethods[] = {
+        lua_FontString_SetFontObject, lua_FontString_GetFontObject, lua_FontString_SetFont,
+        lua_FontString_GetFont, lua_FontString_SetTextColor, lua_FontString_GetTextColor,
+        lua_FontString_SetShadowColor, lua_FontString_GetShadowColor, lua_FontString_SetShadowOffset,
+        lua_FontString_GetShadowOffset, lua_FontString_SetSpacing, lua_FontString_GetSpacing,
+        lua_FontString_SetJustifyH, lua_FontString_GetJustifyH, lua_FontString_SetJustifyV,
+        lua_FontString_GetJustifyV, lua_FontString_SetIndentedWordWrap,
+        lua_FontString_GetIndentedWordWrap,
+    };
+    return std::find(std::begin(kMethods), std::end(kMethods), fn) != std::end(kMethods);
+}
+static bool isSimpleHtmlFontGetter(lua_CFunction fn) {
+    static const lua_CFunction kGetters[] = {
+        lua_FontString_GetFontObject, lua_FontString_GetFont, lua_FontString_GetTextColor,
+        lua_FontString_GetShadowColor, lua_FontString_GetShadowOffset, lua_FontString_GetSpacing,
+        lua_FontString_GetJustifyH, lua_FontString_GetJustifyV, lua_FontString_GetIndentedWordWrap,
+    };
+    return std::find(std::begin(kGetters), std::end(kGetters), fn) != std::end(kGetters);
+}
+static int simpleHtmlFontMethodTrampoline(lua_State* L) {
+    const lua_CFunction fn = lua_tocfunction(L, lua_upvalueindex(1));
+    const auto* w = widgetOf(L, 1);
+    if (!w || !w->isSimpleHtml || lua_type(L, 2) != LUA_TSTRING) return fn(L);
+    static const char* kElements[] = {"P", "H1", "H2", "H3"};
+    const char* arg = lua_tostring(L, 2);
+    int element = -1;
+    for (int i = 0; i < 4 && element < 0; ++i) {
+        const char* a = arg;
+        const char* e = kElements[i];
+        while (*a && *e && std::toupper(static_cast<unsigned char>(*a)) == *e) { ++a; ++e; }
+        if (*a == '\0' && *e == '\0') element = i;
+    }
+    if (element < 0) return fn(L);
+    lua_remove(L, 2);
+    if (element == 0) return fn(L);
+    auto* html = widgetOf(L, 1);
+    const int h = element - 1;
+    if (fn == lua_FontString_SetTextColor) {
+        html->htmlHeadingColor[h][0] = static_cast<float>(luaL_optnumber(L, 2, 1.0));
+        html->htmlHeadingColor[h][1] = static_cast<float>(luaL_optnumber(L, 3, 1.0));
+        html->htmlHeadingColor[h][2] = static_cast<float>(luaL_optnumber(L, 4, 1.0));
+        html->htmlHeadingColor[h][3] = static_cast<float>(luaL_optnumber(L, 5, 1.0));
+        html->htmlHeadingColorSet[h] = true;
+        return 0;
+    }
+    if (fn == lua_FontString_GetTextColor && html->htmlHeadingColorSet[h]) {
+        for (float component : html->htmlHeadingColor[h]) lua_pushnumber(L, component);
+        return 4;
+    }
+    return isSimpleHtmlFontGetter(fn) ? fn(L) : 0;
+}
+
 void LuaEngine::registerCoreAPI() {
     // The taint vocabulary - issecure, issecurevariable, forceinsecure,
     // securecall, hooksecurefunc - is the client's own C (0x00816da0 to
@@ -11855,6 +11919,10 @@ void LuaEngine::registerCoreAPI() {
         if (std::find(std::begin(kTooltipFillers), std::end(kTooltipFillers), fn) !=
             std::end(kTooltipFillers)) {
             pushTooltipMethod(L_, fn);
+        } else if (isSimpleHtmlFontMethod(fn)) {
+            // A SimpleHTML's element argument (0x009748f0).
+            lua_pushcfunction(L_, fn);
+            lua_pushcclosure(L_, simpleHtmlFontMethodTrampoline, 1);
         } else {
             lua_pushcfunction(L_, fn);
         }

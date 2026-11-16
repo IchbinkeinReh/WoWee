@@ -589,6 +589,10 @@ struct Widget {
     /// SetHyperlinkFormat / hyperlinkFormat="..." (0x0096c770): how an <A>
     /// is written, href then text.
     std::string htmlLinkFormat = kDefaultHyperlinkFormat;
+    /// The H1-H3 text colours, from SetTextColor("H1", ...) (0x009748f0
+    /// selects the element). A heading not given one draws in the frame's.
+    float htmlHeadingColor[3][4] = {};
+    bool  htmlHeadingColorSet[3] = {false, false, false};
     /// A scrolling message frame keeps its own lines rather than a single
     /// string: chat is a list that grows at one end and falls off the other,
     /// and the frame draws as many as fit from the bottom up.
