@@ -4707,6 +4707,14 @@ void MovementHandler::updateMoverSplineDone() {
     if (owner_.getSocket()) sendMovement(Opcode::CMSG_MOVE_SPLINE_DONE, splineId);
 }
 
+std::optional<uint32_t> MovementHandler::keptMoveSplineFlags(uint64_t guid) const {
+    // A spline that has run out is marked finished (0x400) rather than
+    // freed (0x0098ba90, 0x006eaf50).
+    const auto it = moveSplines_.find(guid);
+    if (it == moveSplines_.end()) return std::nullopt;
+    return it->second.flags | (vehicle::moveSplineRunning(it->second, movementClockMs()) ? 0u : 0x400u);
+}
+
 std::optional<uint32_t> MovementHandler::moveSplineFlags(uint64_t guid) {
     if (!onMoveSpline(guid)) return std::nullopt;
     return moveSplines_[guid].flags;

@@ -566,6 +566,9 @@ public:
 
     // Dead creature tracking (spawn in corpse/death pose)
     void markCreatureDead(uint64_t guid) { deadCreatureGuids_.insert(guid); }
+    /// The animation a unit seen dying plays (0x0073af80): Drown when it
+    /// swims or floats half under liquid, else DeathStart.
+    uint32_t dyingAnimation(uint64_t guid, uint32_t renderInstanceId) const;
     void unmarkCreatureDead(uint64_t guid) { deadCreatureGuids_.erase(guid); }
     void clearDeadCreatureGuids() { deadCreatureGuids_.clear(); }
 

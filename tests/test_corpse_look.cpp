@@ -64,3 +64,23 @@ TEST_CASE("a corpse's dynamic flag 1 is lootable (0x00705900)", "[corpse]") {
     look.dynamicFlags = kCorpseDynamicFlagLootable;
     CHECK(look.lootable());
 }
+
+TEST_CASE("a unit dies drowning when it swims or floats half under (0x0073af80)", "[corpse]") {
+    // Swimming drowns wherever it is.
+    CHECK(deathAnimation(0x200000u, std::nullopt, std::nullopt, 0.0f, 2.0f) == kDeathAnimDrown);
+    // On the ground, no spline: DeathStart, whatever the liquid.
+    CHECK(deathAnimation(0, std::nullopt, 50.0f, 0.0f, 2.0f) == kDeathAnimDeathStart);
+    // A flying spline half under: level 10, height 2 -> drowns at z <= 9.1.
+    CHECK(deathAnimation(0, 0x2000u, 10.0f, 9.1f, 2.0f) == kDeathAnimDrown);
+    CHECK(deathAnimation(0, 0x2000u, 10.0f, 9.2f, 2.0f) == kDeathAnimDeathStart);
+    // No liquid there.
+    CHECK(deathAnimation(0, 0x2000u, std::nullopt, 0.0f, 2.0f) == kDeathAnimDeathStart);
+    // A finished or falling flying spline holds nothing up...
+    CHECK(deathAnimation(0, 0x2400u, 10.0f, 5.0f, 2.0f) == kDeathAnimDeathStart);
+    CHECK(deathAnimation(0, 0x2200u, 10.0f, 5.0f, 2.0f) == kDeathAnimDeathStart);
+    // ...but levitating or hovering on any spline does.
+    CHECK(deathAnimation(0x400u, 0x400u, 10.0f, 5.0f, 2.0f) == kDeathAnimDrown);
+    CHECK(deathAnimation(0x40000000u, 0u, 10.0f, 5.0f, 2.0f) == kDeathAnimDrown);
+    // Levitating with no spline is not asked.
+    CHECK(deathAnimation(0x400u, std::nullopt, 10.0f, 5.0f, 2.0f) == kDeathAnimDeathStart);
+}
