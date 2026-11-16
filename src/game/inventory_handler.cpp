@@ -1,4 +1,5 @@
 #include "game/inventory_handler.hpp"
+#include "game/mail_ignore.hpp"
 #include "game/stationery.hpp"
 #include "game/text_tokens.hpp"
 #include "game/tutorials.hpp"
@@ -4474,7 +4475,12 @@ void InventoryHandler::mailTakeItem(uint32_t mailId, uint32_t itemGuidLow) {
 
 void InventoryHandler::mailReturnToSender(uint32_t mailId) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || mailboxGuid_ == 0) return;
-    auto packet = MailReturnToSenderPacket::build(mailboxGuid_, mailId);
+    // With the letter's sender on WotLK, as ReturnInboxItem writes it.
+    uint64_t sender = 0;
+    for (const auto& mail : mailInbox_) {
+        if (mail.messageId == mailId) { sender = mail.senderGuid; break; }
+    }
+    auto packet = MailReturnToSenderPacket::build(mailboxGuid_, mailId, sender, !isPreWotlk());
     owner_.getSocket()->send(packet);
     // Same as deleting: the letter being read is this one, and the view over it
     // hides when told which mail closed.
@@ -4556,6 +4562,35 @@ void InventoryHandler::handleMailListResult(network::Packet& packet) {
     inboxCheckPending_ = false;
     if (!owner_.getPacketParsers()->parseMailList(packet, mailInbox_)) return;
     mailTotalCount_ = owner_.getPacketParsers()->mailListTotal();
+    // 0x00571c50: a player's letter from someone on the ignore list is not
+    // listed - deleted when it carries nothing, else sent back - and the
+    // total counts one fewer for each.
+    if (owner_.getState() == WorldState::IN_WORLD && owner_.getSocket() && mailboxGuid_ != 0) {
+        const auto ignored = [this](uint64_t guid) {
+            if (guid == 0) return false;
+            for (const auto& c : owner_.getContacts()) {
+                if (c.guid == guid && c.isIgnored()) return true;
+            }
+            return false;
+        };
+        for (auto it = mailInbox_.begin(); it != mailInbox_.end();) {
+            int items = 0;
+            for (const auto& att : it->attachments) {
+                if (att.itemId != 0) ++items;
+            }
+            const auto action = ignoredMailAction(it->messageType, it->flags,
+                                                  ignored(it->senderGuid), items, it->money);
+            if (action == IgnoredMailAction::Keep) { ++it; continue; }
+            if (action == IgnoredMailAction::Delete) {
+                owner_.getSocket()->send(MailDeletePacket::build(mailboxGuid_, it->messageId, 1));
+            } else {
+                owner_.getSocket()->send(MailReturnToSenderPacket::build(
+                    mailboxGuid_, it->messageId, it->senderGuid, !isPreWotlk()));
+            }
+            if (mailTotalCount_ > 0) --mailTotalCount_;
+            it = mailInbox_.erase(it);
+        }
+    }
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("MAIL_INBOX_UPDATE", {});
     for (const auto& mail : mailInbox_) {
         // Player mail carries a GUID, not a name. Ask for it once here; the UI

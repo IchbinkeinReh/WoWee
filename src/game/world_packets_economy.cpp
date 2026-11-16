@@ -254,10 +254,12 @@ network::Packet MailDeletePacket::build(uint64_t mailboxGuid, uint32_t mailId, u
     return packet;
 }
 
-network::Packet MailReturnToSenderPacket::build(uint64_t mailboxGuid, uint32_t mailId) {
+network::Packet MailReturnToSenderPacket::build(uint64_t mailboxGuid, uint32_t mailId,
+                                                uint64_t senderGuid, bool withSender) {
     network::Packet packet(wireOpcode(Opcode::CMSG_MAIL_RETURN_TO_SENDER));
     packet.writeUInt64(mailboxGuid);
     packet.writeUInt32(mailId);
+    if (withSender) packet.writeUInt64(senderGuid);
     return packet;
 }
 

@@ -3911,7 +3911,10 @@ public:
 /** CMSG_MAIL_RETURN_TO_SENDER packet builder */
 class MailReturnToSenderPacket {
 public:
-    static network::Packet build(uint64_t mailboxGuid, uint32_t mailId);
+    /// WotLK carries the letter's sender after the id (0x00571c50 and
+    /// ReturnInboxItem write it); the earlier layouts end at the id.
+    static network::Packet build(uint64_t mailboxGuid, uint32_t mailId, uint64_t senderGuid = 0,
+                                 bool withSender = false);
 };
 
 /** CMSG_MAIL_MARK_AS_READ packet builder */
