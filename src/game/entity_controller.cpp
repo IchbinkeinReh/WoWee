@@ -142,6 +142,7 @@ void EntityController::clearAll() {
     serverUpdatedTransportGuids_.clear();
     entityManager.clear();
     playerFeigningDeath_ = false;
+    auraVisionSeen_ = false;
 }
 
 // ============================================================
@@ -3681,6 +3682,29 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
         if (const uint16_t b2 = fieldIndex(UF::PLAYER_FIELD_BYTES2);
             b2 != 0xFFFF && block.fields.find(b2) != block.fields.end()) {
             owner_.updateOverrideSpellBar();
+            // Its high byte, the aura vision (0x006d7030 -> 0x00727a70): each
+            // unit with an aura asking for a vision bit that changed is told
+            // UNIT_AURA, since which of its auras UnitAura shows has changed.
+            const auto vision = static_cast<uint8_t>((entity->getField(b2) >> 24) & 0xFFu);
+            const auto changed = static_cast<uint8_t>(vision ^ lastAuraVision_);
+            const bool announce = auraVisionSeen_ && changed != 0;
+            lastAuraVision_ = vision;
+            auraVisionSeen_ = true;
+            if (announce) {
+                auto tell = [&](uint64_t guid, const std::vector<AuraSlot>& auras) {
+                    if (guid == 0) return;
+                    const bool affected = std::any_of(auras.begin(), auras.end(), [&](const AuraSlot& a) {
+                        return a.spellId != 0 && (owner_.spellRequiredVision(a.spellId) & changed) != 0;
+                    });
+                    if (!affected) return;
+                    for (const auto& uid : owner_.unitTokensForGuid(guid)) pendingEvents_.emit("UNIT_AURA", {uid});
+                };
+                tell(owner_.getPlayerGuid(), owner_.getPlayerAuras());
+                tell(owner_.getTargetGuid(), owner_.getTargetAuras());
+                for (const auto& [guid, auras] : owner_.unitAurasCacheRef()) {
+                    if (guid != owner_.getPlayerGuid() && guid != owner_.getTargetGuid()) tell(guid, auras);
+                }
+            }
         }
         // The unit the player looks through (0x006e4fd0): whether the bonus
         // bar holds the pet's actions is asked again (0x005d4ad0).
