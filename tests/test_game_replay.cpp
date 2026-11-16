@@ -235,17 +235,36 @@ wowee::network::Packet spellGoMiss(uint64_t victim, uint32_t spellId, uint8_t mi
 
 }  // namespace
 
+// A spell with no Speed settles its misses as the cast goes off (0x0080e1b0's
+// loop at 0x0080ea84); the client always has the spell's record, which the
+// gate on Attributes 0x100 reads, so the record is given here.
 TEST_CASE("a spell go miss shows what the server says happened", "[replay]") {
     for (const auto& [missInfo, type] : missTypes()) {
         CAPTURE(missInfo);
         Session s;
         huntMob(s);
+        auto& spell = s.handler().spellNameCacheRef()[kArcaneShot];
+        spell.name = "Arcane Shot";
+        spell.missileSpeed = 0.0f;
         s.handler().setTarget(kMob);
         s.receive(spellGoMiss(kMob, kArcaneShot, missInfo));
         std::vector<wowee::game::CombatTextEntry::Type> types;
         for (const auto& e : s.handler().getCombatText()) types.push_back(e.type);
         CHECK(types == std::vector<wowee::game::CombatTextEntry::Type>{type});
     }
+}
+
+// One that flies settles them where its missile lands (0x00702fc0): nothing
+// at SMSG_SPELL_GO.
+TEST_CASE("a flying spell's miss is not shown as the cast goes off", "[replay]") {
+    Session s;
+    huntMob(s);
+    auto& spell = s.handler().spellNameCacheRef()[kArcaneShot];
+    spell.name = "Arcane Shot";
+    spell.missileSpeed = 35.0f;
+    s.handler().setTarget(kMob);
+    s.receive(spellGoMiss(kMob, kArcaneShot, 1));
+    CHECK(s.handler().getCombatText().empty());
 }
 
 // IsCurrentSpell / IsCurrentAction's spell leg (0x00806030): Attack, whose
