@@ -1618,7 +1618,15 @@ struct Emitter {
         // The frame's own font, which is a <FontString> child of the frame
         // itself rather than one inside a Layer. See emitFontInstance.
         for (const XmlNode& child : node.children) {
-            if (child.name == "FontString") emitFontInstance(child, var);
+            if (child.name != "FontString") continue;
+            emitFontInstance(child, var);
+            // An edit box reads its byte limit off that font string
+            // (0x00967290): bytes="n" holds the text to n-1 bytes, and
+            // anything under one is no limit - which is SetMaxBytes(n).
+            if (const std::string* b = child.attr("bytes"); b && !b->empty() && node.name == "EditBox") {
+                line(var + ":SetMaxBytes(" +
+                     std::to_string(static_cast<int>(child.attrFloat("bytes", 0.0f))) + ")");
+            }
         }
         // Before Frames and Scripts, so a child anchoring to $parentNormalTexture
         // and an OnLoad reading its own label both find something there.

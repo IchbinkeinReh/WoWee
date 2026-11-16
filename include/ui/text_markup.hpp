@@ -338,5 +338,94 @@ inline EditCaret moveCaret(size_t caret, const EditSelection& sel, size_t target
     return out;
 }
 
+/// The start of the line the caret is on: back until the character before it
+/// is a line break (0x00964200, plain Home).
+inline size_t caretLineStart(const std::string& s, size_t at) {
+    size_t p = (at < s.size()) ? at : s.size();
+    while (p > 0 && s[p - 1] != '\n') {
+        const size_t q = caretStepLeft(s, p);
+        if (q >= p) break;
+        p = q;
+    }
+    return p;
+}
+
+/// The end of the caret's line: forward until the character at it is a line
+/// break or the text ends (0x009642e0, plain End).
+inline size_t caretLineEnd(const std::string& s, size_t at) {
+    size_t p = (at < s.size()) ? at : s.size();
+    while (p < s.size() && s[p] != '\n') {
+        const size_t q = caretStepRight(s, p);
+        if (q <= p) break;
+        p = q;
+    }
+    return p;
+}
+
+/// The caret one line up (dir < 0) or down (dir > 0) in a multi-line box,
+/// as 0x00964550 moves it: as many characters into the new line as it was
+/// into its own, and no further than that line's end. `moved` is false when
+/// there is no line that way. The lines are the ones drawn, and an edit box
+/// here draws its text unwrapped, so they are the text's own line breaks.
+inline size_t caretLineMove(const std::string& s, size_t at, int dir, bool& moved) {
+    const size_t caret = (at < s.size()) ? at : s.size();
+    const size_t start = caretLineStart(s, caret);
+    size_t column = 0;
+    for (size_t p = start; p < caret;) {
+        const size_t q = caretStepRight(s, p);
+        if (q <= p) break;
+        ++column;
+        p = q;
+    }
+    size_t target;
+    if (dir < 0) {
+        if (start == 0) { moved = false; return caret; }
+        target = caretLineStart(s, start - 1);
+    } else {
+        const size_t end = caretLineEnd(s, caret);
+        if (end >= s.size()) { moved = false; return caret; }
+        target = end + 1;
+    }
+    moved = true;
+    for (; column > 0 && target < s.size() && s[target] != '\n'; --column) {
+        const size_t q = caretStepRight(s, target);
+        if (q <= target) break;
+        target = q;
+    }
+    return target;
+}
+
+/// Whitespace as the word deletes see it (iswspace): the ASCII kind; a byte
+/// of a multi-byte character never is.
+inline bool editIsSpace(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r';
+}
+
+/// Where Ctrl+Backspace / Ctrl+W deletes back to (0x00963b60): over the
+/// whitespace before the caret, then over the word before that.
+inline size_t wordDeleteBackFrom(const std::string& s, size_t at) {
+    size_t p = (at < s.size()) ? at : s.size();
+    while (p > 0) {
+        const size_t q = caretStepLeft(s, p);
+        if (!editIsSpace(s[q])) break;
+        p = q;
+    }
+    while (p > 0) {
+        const size_t q = caretStepLeft(s, p);
+        if (editIsSpace(s[q])) break;
+        p = q;
+    }
+    return p;
+}
+
+/// Where Ctrl+Delete deletes forward to (0x00963a10): over the whitespace
+/// after the caret, then over the word after that.
+inline size_t wordDeleteForwardTo(const std::string& s, size_t at) {
+    size_t p = (at < s.size()) ? at : s.size();
+    while (p < s.size() && editIsSpace(s[p])) p = caretStepRight(s, p);
+    while (p < s.size() && !editIsSpace(s[p])) p = caretStepRight(s, p);
+    return p;
+}
+
 }  // namespace ui
 }  // namespace wowee

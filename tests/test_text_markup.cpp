@@ -443,3 +443,36 @@ TEST_CASE("Shift extends the selection from its anchor", "[markup][edit]") {
     CHECK(m.sel.start == 0);
     CHECK(m.sel.stop == 9);
 }
+
+TEST_CASE("Home and End stop at the caret's own line", "[text_markup][editbox]") {
+    // 0x00964200 / 0x009642e0.
+    const std::string t = "ab\ncde\nf";
+    CHECK(wowee::ui::caretLineStart(t, 5) == 3);
+    CHECK(wowee::ui::caretLineEnd(t, 4) == 6);
+    CHECK(wowee::ui::caretLineStart(t, 1) == 0);
+    CHECK(wowee::ui::caretLineEnd(t, 7) == 8);
+}
+
+TEST_CASE("Up and Down in a multi-line box keep the column", "[text_markup][editbox]") {
+    // 0x00964550: as far into the next line as into this one, never past
+    // its end; nothing above the first line or below the last.
+    const std::string t = "abcd\nx\nwxyz";
+    bool moved = false;
+    CHECK(wowee::ui::caretLineMove(t, 3, 1, moved) == 6);   // "abc|d" -> "x|"
+    CHECK(moved);
+    CHECK(wowee::ui::caretLineMove(t, 6, 1, moved) == 8);   // "x|" -> "w|xyz"
+    CHECK(wowee::ui::caretLineMove(t, 10, -1, moved) == 6);
+    CHECK(wowee::ui::caretLineMove(t, 2, -1, moved) == 2);
+    CHECK_FALSE(moved);
+    CHECK(wowee::ui::caretLineMove(t, 11, 1, moved) == 11);
+    CHECK_FALSE(moved);
+}
+
+TEST_CASE("Word deletes take the spaces and one word", "[text_markup][editbox]") {
+    // 0x00963b60 back, 0x00963a10 forward.
+    const std::string t = "one two  three";
+    CHECK(wowee::ui::wordDeleteBackFrom(t, 9) == 4);     // "one |two  |three"
+    CHECK(wowee::ui::wordDeleteBackFrom(t, 2) == 0);
+    CHECK(wowee::ui::wordDeleteForwardTo(t, 7) == 14);   // "two|  three|"
+    CHECK(wowee::ui::wordDeleteForwardTo(t, 0) == 3);
+}

@@ -9390,13 +9390,59 @@ int lua_EditBox_GetNumber(lua_State* L) {
     lua_pushnumber(L, w ? std::atof(w->editText.c_str()) : 0.0);
     return 1;
 }
+/// Text into an edit box at the caret, the way 0x00965960 puts it there for
+/// typing, pasting and Insert() alike. A highlighted run goes first. A
+/// numeric box then refuses the whole string if any of it is not a digit -
+/// not the digits out of it. What is inserted is then held to both limits
+/// in turn, the bytes (SetMaxBytes) and the letters (SetMaxLetters, counted
+/// as drawn unless countInvisibleLetters), by taking characters off before
+/// the caret until it fits. Returns whether the text changed.
+static bool insertEditText(wowee::ui::Widget& w, const std::string& add) {
+    const std::string before = w.editText;
+    if (w.hasSelection) {
+        w.cursorPos = ui::replaceSelection(w.editText, w.cursorPos,
+                                           {true, w.selStart, w.selEnd});
+        w.hasSelection = false;
+    }
+    if (w.editNumeric) {
+        for (const char c : add) {
+            if (c < '0' || c > '9') return w.editText != before;
+        }
+    }
+    const size_t at = std::min(w.cursorPos, w.editText.size());
+    w.editText.insert(at, add);
+    w.cursorPos = at + add.size();
+    const auto trimBeforeCaret = [&w](auto over) {
+        while (over() && w.cursorPos > 0) {
+            const size_t from = ui::caretStepLeft(w.editText, w.cursorPos);
+            if (from >= w.cursorPos) break;
+            w.editText.erase(from, w.cursorPos - from);
+            w.cursorPos = from;
+        }
+    };
+    if (w.editMaxBytes >= 0) {
+        trimBeforeCaret([&w] { return static_cast<int>(w.editText.size()) > w.editMaxBytes; });
+    }
+    if (w.editMaxLetters > 0) {
+        // Counted the way the box asked to be counted. A limit is in
+        // characters shown, not bytes held, unless countInvisibleLetters says
+        // otherwise: the chat box declares letters="255" and nothing else, so
+        // the escapes a shift-clicked item link brings - about sixty bytes for
+        // eighteen visible characters - must not be charged against it.
+        trimBeforeCaret([&w] {
+            const size_t held = w.countInvisibleLetters ? w.editText.size()
+                                                         : ui::visibleLength(w.editText);
+            return static_cast<int>(held) > w.editMaxLetters;
+        });
+    }
+    return w.editText != before;
+}
+
 int lua_EditBox_Insert(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
     const std::string add = luaL_optstring(L, 2, "");
-    const size_t at = std::min(w->cursorPos, w->editText.size());
-    w->editText.insert(at, add);
-    w->cursorPos = at + add.size();
+    insertEditText(*w, add);   // 0x00975e10
     return 0;
 }
 int lua_MessageFrame_SetPadding(lua_State* L) {
@@ -9464,6 +9510,22 @@ static int lua_EditBox_SetMaxLettersMethod(lua_State* L) {
 int lua_EditBox_GetMaxLetters(lua_State* L) {
     auto* w = widgetOf(L, 1);
     lua_pushnumber(L, w ? static_cast<lua_Number>(w->editMaxLetters) : 0.0);
+    return 1;
+}
+/// SetMaxBytes(max) (0x009764e0): the box and one more, exactly; kept as one
+/// under it, the terminator's byte, and anything under one is no limit.
+int lua_EditBox_SetMaxBytes(lua_State* L) {
+    if (lua_gettop(L) != 2) return luaL_error(L, "Usage: %s:SetMaxBytes(max)", usageName(L, 1));
+    if (auto* w = widgetOf(L, 1)) {
+        const int max = static_cast<int>(lua_tonumber(L, 2));
+        w->editMaxBytes = max > 0 ? max - 1 : -1;
+    }
+    return 0;
+}
+/// GetMaxBytes() (0x00976580): what was set, which is 0 for no limit.
+int lua_EditBox_GetMaxBytes(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? static_cast<lua_Number>(w->editMaxBytes + 1) : 0.0);
     return 1;
 }
 int lua_EditBox_SetNumeric(lua_State* L) {
@@ -11858,14 +11920,12 @@ void LuaEngine::registerCoreAPI() {
         {"GetAltArrowKeyMode",    lua_EditBox_GetAltArrowKeyMode},
         {"IsInIMECompositionMode", lua_EditBox_IsInIMECompositionMode},
         {"Insert",                lua_EditBox_Insert},
-        {"SetMaxLetters",         lua_EditBox_SetMaxLettersMethod},        // The limit here is applied against the text's size in bytes, which is
-        // what SetMaxBytes asks for; SetMaxLetters is the same field because
-        // this counts the same way for both. Reporting it back matters more
-        // than the distinction: an edit box that answers nothing for its limit
-        // is one FrameXML will not stop typing into.
-        {"SetMaxBytes",          lua_EditBox_SetMaxLetters},
+        {"SetMaxLetters",         lua_EditBox_SetMaxLettersMethod},
+        // Two limits, each its own field and both enforced (0x00965960): the
+        // bytes the text may hold, and the letters it may show.
+        {"SetMaxBytes",          lua_EditBox_SetMaxBytes},
         {"GetMaxLetters",        lua_EditBox_GetMaxLetters},
-        {"GetMaxBytes",          lua_EditBox_GetMaxLetters},
+        {"GetMaxBytes",          lua_EditBox_GetMaxBytes},
         {"SetTextInsets",        lua_EditBox_SetTextInsets},
         {"SetPadding",           lua_MessageFrame_SetPadding},
         {"GetPadding",           lua_MessageFrame_GetPadding},
@@ -16355,40 +16415,33 @@ void LuaEngine::dispatchText(const char* utf8) {
     if (add.empty()) return;
     // Typing leaves the history, for the same reason SetText does.
     w->editHistoryPos = -1;
-    // A numeric box takes digits and nothing else, which is what stops a
-    // quantity field filling with letters.
-    if (w->editNumeric) {
-        add.erase(std::remove_if(add.begin(), add.end(),
-                                 [](unsigned char c) { return std::isdigit(c) == 0; }),
-                  add.end());
-        if (add.empty()) return;
+    // One character at a time, as the client takes them (0x00965ce0, and
+    // a paste through it too, 0x00965ed0). A control character is dropped,
+    // except a tab, which is four spaces, and a line break in a multi-line
+    // box. A typed '|' goes in doubled, as a literal bar: the player types
+    // what they see and cannot type an escape - "|cff" colours nothing.
+    bool changed = false;
+    for (size_t i = 0; i < add.size();) {
+        const unsigned char c = static_cast<unsigned char>(add[i]);
+        size_t n = 1;
+        if (c >= 0xF0) n = 4;
+        else if (c >= 0xE0) n = 3;
+        else if (c >= 0xC0) n = 2;
+        n = std::min(n, add.size() - i);
+        std::string one = add.substr(i, n);
+        i += n;
+        if (c < 0x20 || c == 0x7f) {
+            if (c == '\t') one = "    ";
+            else if (!(c == '\n' && w->editMultiLine)) continue;
+        } else if (c == '|') {
+            one = "||";
+        }
+        if (insertEditText(*w, one)) changed = true;
+        w = widgets_.get(focusedWid_);
+        if (!w) return;
     }
-    // Counted the way the box asked to be counted. A limit is in characters
-    // shown, not bytes held, unless countInvisibleLetters says otherwise: the
-    // chat box declares letters="255" and nothing else, so the escapes a
-    // shift-clicked item link brings - about sixty bytes for eighteen visible
-    // characters - must not be charged against it.
-    const int held = w->countInvisibleLetters
-                         ? static_cast<int>(w->editText.size())
-                         : static_cast<int>(ui::visibleLength(w->editText));
-    const int adding = w->countInvisibleLetters
-                           ? static_cast<int>(add.size())
-                           : static_cast<int>(ui::visibleLength(add));
-    if (w->editMaxLetters > 0 && held + adding > w->editMaxLetters) {
-        const int room = w->editMaxLetters - held;
-        if (room <= 0) return;
-        add.resize(static_cast<size_t>(room));
-    }
+    if (!changed) return;
 
-    // A selected run is replaced by what is typed, which is the whole point of
-    // having one: autocomplete highlights the name it completed so the next
-    // character overwrites it rather than following it.
-    w->cursorPos = ui::replaceSelection(
-        w->editText, w->cursorPos, {w->hasSelection, w->selStart, w->selEnd});
-    w->hasSelection = false;
-    const size_t at = std::min(w->cursorPos, w->editText.size());
-    w->editText.insert(at, add);
-    w->cursorPos = at + add.size();
     // The handler that tells a search field to filter, and a chat box to look
     // for a channel prefix.
     fireCursorChanged(focusedWid_);
@@ -16820,6 +16873,33 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
         }
         return;
     }
+    // Ctrl+W, Ctrl+Backspace and Ctrl+Delete delete a word (0x00967760):
+    // back to the start of the word before the caret (0x00963b60) or on to
+    // the end of the one after it (0x00963a10), the whitespace between going
+    // with it. A highlighted run is what goes instead, when there is one.
+    constexpr int kDeleteKey = 0x4000004C;  // SDLK_DELETE
+    if (ctrlHeld && (sdlKeycode == 'w' || sdlKeycode == 'W' || sdlKeycode == '\b' ||
+                     sdlKeycode == kDeleteKey)) {
+        const size_t len = w->editText.size();
+        size_t from = std::min(w->cursorPos, len);
+        size_t to = from;
+        if (w->hasSelection && w->selEnd > w->selStart && w->selEnd <= len) {
+            from = w->selStart;
+            to = w->selEnd;
+        } else if (sdlKeycode == kDeleteKey) {
+            to = ui::wordDeleteForwardTo(w->editText, from);
+        } else {
+            from = ui::wordDeleteBackFrom(w->editText, from);
+        }
+        w->hasSelection = false;
+        if (to > from) {
+            w->editText.erase(from, to - from);
+            w->cursorPos = from;
+            fireCursorChanged(focusedWid_);
+            callFrameScript(focusedWid_, "OnTextChanged");
+        }
+        return;
+    }
     // Ctrl+A highlights the whole line, the caret at its end (0x00967760).
     if (ctrlHeld && (sdlKeycode == 'a' || sdlKeycode == 'A')) {
         w->selStart = 0;
@@ -16897,28 +16977,58 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
         // the newest end empties the box rather than sticking on the last
         // line, which is what leaving the history means.
         case kUp:
+        case kDown:
+            // A multi-line box moves the caret a line instead (0x00964550),
+            // Shift carrying the highlight; only a single-line box walks its
+            // history.
+            if (w->editMultiLine) {
+                const size_t caret = std::min(w->cursorPos, len);
+                bool moved = false;
+                const size_t target = ui::caretLineMove(
+                    w->editText, caret, sdlKeycode == kUp ? -1 : 1, moved);
+                const ui::EditSelection sel{w->hasSelection, w->selStart, w->selEnd};
+                const bool selected = sel.active && sel.stop > sel.start && sel.stop <= len;
+                if (!moved) {
+                    if (!shiftHeld && w->hasSelection) {
+                        w->hasSelection = false;
+                        fireCursorChanged(focusedWid_);
+                    }
+                    break;
+                }
+                const ui::EditCaret to = ui::moveCaret(
+                    caret, selected ? sel : ui::EditSelection{}, target, shiftHeld);
+                w->cursorPos = to.caret;
+                w->hasSelection = to.sel.active;
+                if (to.sel.active) {
+                    w->selStart = to.sel.start;
+                    w->selEnd = to.sel.stop;
+                }
+                fireCursorChanged(focusedWid_);
+                break;
+            }
+            if (sdlKeycode == kDown) {
+                if (w->editHistoryPos >= 0) {
+                    w->hasSelection = false;
+                    const int last = static_cast<int>(w->editHistory.size()) - 1;
+                    if (w->editHistoryPos >= last) {
+                        w->editHistoryPos = -1;
+                        w->editText.clear();
+                    } else {
+                        ++w->editHistoryPos;
+                        w->editText = w->editHistory[static_cast<size_t>(w->editHistoryPos)];
+                    }
+                    w->cursorPos = w->editText.size();
+                    fireCursorChanged(focusedWid_);
+                    callFrameScript(focusedWid_, "OnTextChanged");
+                }
+                break;
+            }
             if (!w->editHistory.empty()) {
                 w->hasSelection = false;
                 const int last = static_cast<int>(w->editHistory.size()) - 1;
                 w->editHistoryPos = (w->editHistoryPos < 0)
                     ? last : std::max(0, w->editHistoryPos - 1);
                 w->editText = w->editHistory[static_cast<size_t>(w->editHistoryPos)];
-                w->cursorPos = w->editText.size();
-                fireCursorChanged(focusedWid_);
-                callFrameScript(focusedWid_, "OnTextChanged");
-            }
-            break;
-        case kDown:
-            if (w->editHistoryPos >= 0) {
-                w->hasSelection = false;
-                const int last = static_cast<int>(w->editHistory.size()) - 1;
-                if (w->editHistoryPos >= last) {
-                    w->editHistoryPos = -1;
-                    w->editText.clear();
-                } else {
-                    ++w->editHistoryPos;
-                    w->editText = w->editHistory[static_cast<size_t>(w->editHistoryPos)];
-                }
                 w->cursorPos = w->editText.size();
                 fireCursorChanged(focusedWid_);
                 callFrameScript(focusedWid_, "OnTextChanged");
@@ -16944,8 +17054,11 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
             const ui::EditSelection sel{w->hasSelection, w->selStart, w->selEnd};
             const bool selected = sel.active && sel.stop > sel.start && sel.stop <= len;
             size_t target = caret;
-            if (sdlKeycode == kHome) target = 0;
-            else if (sdlKeycode == kEnd) target = len;
+            // Home and End go to the ends of the caret's line (0x00964200,
+            // 0x009642e0); with Ctrl to the ends of the text (0x009643c0,
+            // 0x00964480).
+            if (sdlKeycode == kHome) target = ctrlHeld ? 0 : ui::caretLineStart(w->editText, caret);
+            else if (sdlKeycode == kEnd) target = ctrlHeld ? len : ui::caretLineEnd(w->editText, caret);
             else if (selected && !shiftHeld && !ctrlHeld)
                 target = (sdlKeycode == kLeft) ? sel.start : sel.stop;
             else if (sdlKeycode == kLeft)
@@ -16980,16 +17093,11 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
             // multiLine and submits, the mail body has it and does not, and
             // both are the same OnEnterPressed handler.
             if (w->editMultiLine) {
-                // The break counts against the limit like any other character;
-                // inserting it directly would let a full box grow by one every
-                // time return was pressed.
-                if (w->editMaxLetters > 0 &&
-                    static_cast<int>(w->editText.size()) >= w->editMaxLetters) {
-                    break;
-                }
-                const size_t at = std::min(w->cursorPos, w->editText.size());
-                w->editText.insert(at, 1, '\n');
-                w->cursorPos = at + 1;
+                // The break counts against the limits like any other
+                // character, going in by the same path (0x00965960); inserting
+                // it directly would let a full box grow by one every time
+                // return was pressed.
+                if (!insertEditText(*w, "\n")) break;
                 fireCursorChanged(focusedWid_);
                 callFrameScript(focusedWid_, "OnTextChanged");
                 break;

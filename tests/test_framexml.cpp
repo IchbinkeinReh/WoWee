@@ -672,6 +672,16 @@ TEST_CASE("A bar's range is read only when both ends are given", "[framexml][emi
     REQUIRE_FALSE(has(r.lua, ":SetValue("));
 }
 
+TEST_CASE("An edit box's byte limit comes from its font string", "[framexml][emit]") {
+    // 0x00967290 reads bytes= off the <FontString> inside an <EditBox>.
+    XmlNode root = parseOrFail(
+        "<Ui><EditBox name=\"E\" letters=\"10\"><FontString inherits=\"ChatFontNormal\" bytes=\"64\"/>"
+        "</EditBox></Ui>");
+    const EmitResult r = emitFrameXml(root);
+    REQUIRE(has(r.lua, ":SetMaxLetters(10)"));
+    REQUIRE(has(r.lua, ":SetMaxBytes(64)"));
+}
+
 TEST_CASE("A frame's id becomes SetID", "[framexml][emit]") {
     // How a frame in a numbered set knows which one it is. FrameXML builds
     // names out of it - PartyMemberFrame_RefreshPetDebuffs reaches for

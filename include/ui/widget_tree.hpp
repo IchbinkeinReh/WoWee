@@ -493,6 +493,11 @@ struct Widget {
     bool  editNumeric = false;
     bool  editMultiLine = false;
     int   editMaxLetters = 0;   ///< Zero is no limit, which is WoW's default.
+    /// SetMaxBytes / <FontString bytes="">: the most bytes the text may hold,
+    /// kept as the client keeps it (+0x2c4) - one under the number given,
+    /// the terminator's byte - and -1 for no limit (0x009764e0). Separate from
+    /// the letter limit: a box can have both and both hold (0x00965960).
+    int   editMaxBytes = -1;
     /// Whether the markup that draws nothing counts against that limit. WoW's
     /// default is no, and four boxes in the interface ask for yes - the macro
     /// editor among them, where the escapes are the point.
