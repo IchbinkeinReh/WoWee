@@ -1964,8 +1964,18 @@ int lua_Region_GetHeight(lua_State* L) {
     const bool staleAutoSize =
         w && w->kind == wowee::ui::WidgetKind::FontString && w->autoSized &&
         !w->text.empty() && w->text != w->measuredText;
+    // And a paragraph - a declared width that wraps, its height following the
+    // text - is as stale once its text changes: the renderer wrote last
+    // frame's line count into its height. StaticPopup_Show sets the text and
+    // StaticPopup_Resize reads text:GetHeight() in the same breath, so a
+    // dialog reused after a one-line popup (the release timer) was sized for
+    // one line, and the spirit healer's seven-line warning ran out of its
+    // box with the Accept and Cancel buttons drawn over the middle of it.
+    const bool staleParagraph =
+        w && w->kind == wowee::ui::WidgetKind::FontString && w->wrapsToWidth &&
+        !w->text.empty() && w->text != w->measuredText;
     if (w && !w->text.empty() && w->kind == wowee::ui::WidgetKind::FontString &&
-        (staleAutoSize || (w->rectH <= 0.0f && w->height <= 0.0f))) {
+        (staleAutoSize || staleParagraph || (w->rectH <= 0.0f && w->height <= 0.0f))) {
         // A font string that was never given a height is as tall as its text,
         // the same way one never given a width is as wide as it - and the
         // interface reads that. `<Size x="160" y="0"/>` is how a wrapping

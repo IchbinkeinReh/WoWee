@@ -41,6 +41,27 @@ TEST_CASE("Auction mail subjects decode into localized-style item text", "[mail]
     CHECK(formatAuctionMailSubject(subject, "Test Boots") == "Auction expired: Test Boots");
 }
 
+TEST_CASE("Auction mail subjects are worded by the interface's global strings", "[mail][auction]") {
+    AuctionMailSubject subject;
+    REQUIRE(parseAuctionMailSubject("2589:0:5:1:1", subject));
+    const auto deDE = [](const char* key, const char* enUS) -> std::string {
+        if (std::string(key) == "AUCTION_REMOVED_MAIL_SUBJECT") return "Auktion abgebrochen: %s";
+        if (std::string(key) == "AUCTION_OUTBID_MAIL_SUBJECT") return "Höheres Gebot für %s";
+        return enUS;
+    };
+    // 4 and 5 share AUCTION_REMOVED_MAIL_SUBJECT (0x0056f5c0).
+    CHECK(formatAuctionMailSubject(subject, "Leinenstoff", deDE) == "Auktion abgebrochen: Leinenstoff");
+    subject.response = 4;
+    CHECK(formatAuctionMailSubject(subject, "Leinenstoff", deDE) == "Auktion abgebrochen: Leinenstoff");
+    subject.response = 0;
+    CHECK(formatAuctionMailSubject(subject, "Leinenstoff", deDE) == "Höheres Gebot für Leinenstoff");
+    // A string the interface does not carry falls back to the English one.
+    subject.response = 6;
+    CHECK(formatAuctionMailSubject(subject, "Leinenstoff", deDE) == "Sale Pending: Leinenstoff");
+    const auto none = [](const char*, const char*) { return std::string(); };
+    CHECK(formatAuctionMailSubject(subject, "Leinenstoff", none) == "Sale Pending: Leinenstoff");
+}
+
 TEST_CASE("Auction mail invoice body decodes into a money breakdown", "[mail][auction]") {
     AuctionMailInvoice invoice;
 

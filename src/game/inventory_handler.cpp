@@ -1,5 +1,6 @@
 #include "game/inventory_handler.hpp"
 #include "game/stationery.hpp"
+#include "game/text_tokens.hpp"
 #include "game/tutorials.hpp"
 #include "game/totem_bar.hpp"
 #include "game/spell_handler.hpp"
@@ -3779,6 +3780,10 @@ void InventoryHandler::handleTrainerList(network::Packet& packet) {
     const uint64_t trainerBefore = trainerWindowOpen_ ? currentTrainerList_.trainerGuid : 0;
     if (!TrainerListParser::parse(packet, currentTrainerList_, isClassic)) return;
     currentTrainerList_.serial = ++trainerListSerial_;
+    // 0x00596450 keeps the greeting through the quest text parser (0x00579590)
+    // for the active player, so "$gHexenmeister:Hexenmeisterin;" reaches
+    // GetTrainerGreetingText as the word for this character.
+    currentTrainerList_.greeting = resolveTextTokens(currentTrainerList_.greeting, owner_);
     trainerWindowOpen_ = true;
     // 0x005940e0: a trainer other than the one open sets the interaction
     // object, unless it is the player itself.

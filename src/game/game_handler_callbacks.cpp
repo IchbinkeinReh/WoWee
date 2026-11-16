@@ -1593,7 +1593,9 @@ std::string GameHandler::getMailDisplaySubject(const MailMessage& mail) {
     const std::string itemName = info && !info->name.empty()
         ? info->name
         : "Item #" + std::to_string(auction.itemEntry);
-    return formatAuctionMailSubject(auction, itemName);
+    return formatAuctionMailSubject(auction, itemName, [](const char* key, const char* enUS) {
+        return interfaceString(key, enUS);
+    });
 }
 int GameHandler::getSelectedMailIndex() const {
     return inventoryHandler_ ? inventoryHandler_->getSelectedMailIndex() : selectedMailIndex_;
