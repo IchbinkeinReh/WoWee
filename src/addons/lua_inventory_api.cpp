@@ -5146,22 +5146,14 @@ static int lua_ResetCursor(lua_State* L) {
     return 0;
 }
 
-/// Coin as words, for the name of the money slot: "1 Gold, 20 Silver".
-/// Empty denominations are left out rather than shown as zero.
+/// Coin as words, for the name of the money slot: GOLD_AMOUNT, SILVER_AMOUNT
+/// and COPPER_AMOUNT, one to a line (0x00588430 -> 0x007e7d80 with "\n"), so
+/// a German client reads "20 Silber" where this wrote "20 Silver". Empty
+/// denominations are left out.
 static std::string lootCoinText(uint32_t copper) {
-    const uint32_t g = copper / 10000, s = (copper / 100) % 100, c = copper % 100;
-    std::string out;
-    auto add = [&out](uint32_t v, const char* unit) {
-        if (v == 0) return;
-        if (!out.empty()) out += '\n';
-        out += std::to_string(v);
-        out += ' ';
-        out += unit;
-    };
-    add(g, "Gold");
-    add(s, "Silver");
-    add(c, "Copper");
-    return out;
+    return game::interface_text::moneyText(copper, [](const char* key, const char* enUS) {
+        return game::interfaceString(key, enUS);
+    }, "\n");
 }
 
 /// Money occupies a loot slot in the interface but not on the wire.
@@ -5191,7 +5183,11 @@ static int lua_LootSlotIsCoin(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: LootSlotIsCoin(slot)");   // 0x00588810
     auto* gh = getGameHandler(L);
     const int slot = static_cast<int>(luaL_optnumber(L, 1, 0));
-    luaPushOneOrNil(L, (lootHasCoin(gh) && slot == 1) ? 1 : 0);
+    // 0x00588810 asks for money still there (`0 < money`): once taken, the
+    // slot keeps its place but is no longer coin - the loot frame would
+    // otherwise ask GetLootSlotInfo for a quality the empty slot lacks.
+    const bool coinLeft = gh && gh->isLootWindowOpen() && gh->getCurrentLoot().goldLeft();
+    luaPushOneOrNil(L, (coinLeft && slot == 1) ? 1 : 0);
     return 1;
 }
 
@@ -5270,19 +5266,13 @@ static int lua_GetLootSlotInfo(lua_State* L) {
 
     lua_pushnumber(L, item.count);                           // quantity
     lua_pushnumber(L, info ? info->quality : 1);             // quality
-    // locked - the row the loot window draws in red and refuses to take.
-    //
-    // Answered false because the slot type was "not tracked". It is tracked:
-    // SMSG_LOOT_RESPONSE carries one per item and the parser has always stored
-    // it. AzerothCore's LootSlotType is ALLOW_LOOT 0, ROLL_ONGOING 1, MASTER 2,
-    // LOCKED 3, OWNER 4 - so everything except the two that mean "take it" is
-    // locked, which covers a roll still running and an item only the master
-    // looter can hand out. Both used to draw as ordinary loot that silently did
-    // nothing when clicked.
-    constexpr uint8_t kAllowLoot = 0, kOwner = 4;
-    const bool locked = item.lootSlotType != kAllowLoot &&
-                        item.lootSlotType != kOwner;
-    luaPushOneOrNil(L, locked ? 1 : 0);
+    // locked - the row the loot window draws in red. SMSG_LOOT_RESPONSE's slot
+    // type is stored raw (0x006d4304), and 0x00588570 answers 1 for LOCKED (3)
+    // alone. A roll still running (1) and a master looter's item (2) draw as
+    // ordinary loot; LootSlot answers those with their own line or the
+    // candidate menu.
+    constexpr uint8_t kLocked = 3;
+    luaPushOneOrNil(L, item.lootSlotType == kLocked ? 1 : 0);
     return 5;
 }
 

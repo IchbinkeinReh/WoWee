@@ -52,6 +52,12 @@ TEST_CASE("money is worded coin by coin, zeros left out, joined by a comma", "[i
     CHECK(it::moneyText(0, deDE).empty());
 }
 
+TEST_CASE("the loot window's coin slot is worded one coin to a line", "[interface_text]") {
+    // 0x00588430 -> 0x007e7d80 with "\n": German coin names, not English.
+    CHECK(it::moneyText(2017, deDE, "\n") == "20 Silber\n17 Kupfer");
+    CHECK(it::moneyText(10203, deDE, "\n") == "1 Gold\n2 Silber\n3 Kupfer");
+}
+
 TEST_CASE("looted money is YOU_LOOT_MONEY alone and LOOT_MONEY_SPLIT shared", "[interface_text]") {
     CHECK(it::lootMoneyLine(5, true, deDE) == "Ihr plündert 5 Kupfer");
     CHECK(it::lootMoneyLine(150, false, deDE) == "Euer Anteil an der Beute ist 1 Silber, 50 Kupfer.");
