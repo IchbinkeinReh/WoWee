@@ -2315,6 +2315,9 @@ void GameHandler::registerRemainingOpcodes() {
             uint32_t transitionMs    = packet.readUInt32();
             overrideLightId_      = overrideLightId;
             overrideLightTransMs_ = transitionMs;
+            // 0x00526530 -> 0x007f11a0 / 0x007f10a0: cross-faded by the
+            // lighting.
+            if (overrideLightCallback_) overrideLightCallback_(zoneLightId, overrideLightId, transitionMs);
             LOG_DEBUG("SMSG_OVERRIDE_LIGHT: zone=", zoneLightId,
                       " override=", overrideLightId, " transition=", transitionMs, "ms");
         }
