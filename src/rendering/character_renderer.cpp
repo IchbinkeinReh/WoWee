@@ -6338,6 +6338,19 @@ bool CharacterRenderer::getInstanceCameraPivotZ(uint32_t instanceId, float& outZ
     return true;
 }
 
+bool CharacterRenderer::getInstanceSequenceTopZ(uint32_t instanceId, uint32_t animId, float& outZ) const {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return false;
+    auto mIt = models.find(it->second.modelId);
+    if (mIt == models.end()) return false;
+    for (const auto& seq : mIt->second.data.sequences) {
+        if (seq.id != animId) continue;
+        outZ = seq.boundMax.z * std::max(0.001f, it->second.scale);
+        return true;
+    }
+    return false;
+}
+
 bool CharacterRenderer::getInstanceHeight(uint32_t instanceId, float& outHeight) const {
     auto it = instances.find(instanceId);
     if (it == instances.end()) return false;

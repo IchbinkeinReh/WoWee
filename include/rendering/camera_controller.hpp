@@ -423,6 +423,18 @@ public:
     void setMounted(bool m) { mounted_ = m; }
     void setIntoxication(float amount) { intoxication_ = std::clamp(amount, 0.0f, 1.0f); }
     void setMountHeightOffset(float offset) { mountHeightOffset_ = offset; }
+    /// What the camera's height is measured by while the player rides
+    /// (0x00604e00, 0x006d7720): the mount's render instance and its size
+    /// (the mount display's scale, +0x990), its attachment 0 in the model
+    /// if it has one, and the player's collision height on it. None while
+    /// on foot.
+    struct MountPivot {
+        uint32_t mountInstance = 0;
+        float mountScale = 1.0f;
+        std::optional<float> seatZ;
+        float collisionHeight = 0.0f;
+    };
+    void setMountPivot(const std::optional<MountPivot>& mount) { mountPivot_ = mount; }
     void setExternalFollow(bool enabled) { externalFollow_ = enabled; }
     void setExternalMoving(bool moving) { externalMoving_ = moving; }
     /// The character is carried by a server move spline other than a flight
@@ -913,11 +925,34 @@ public:
     /// against its default, so the default is the client's own pivot. The
     /// barber shop's close view, and a model not measured yet, keep the
     /// head-bone rule above.
+    ///
+    /// On the player's mount the rider's Mount pose lowers it and the seat
+    /// lifts it, under the mounted collision height; swimming, the Swim
+    /// pose lowers it (0x00604e00 -> 0x00604640).
     [[nodiscard]] float followedPivotHeight() const {
         if (barberView_ || followedModelPivot_ <= 0.0f)
-            return pivotHeightFor(pivotHeight_, followedHeight_, followedHeadZ_);
-        return camera_pivot::clampPivot(followedModelPivot_ * (pivotHeight_ / PIVOT_HEIGHT_DEFAULT),
-                                        camera_pivot::pivotCeiling(followedCollisionHeight(), !followingOtherUnit()));
+            return pivotHeightFor(pivotHeight_, followedHeight_, followedHeadZ_) +
+                   (mounted_ && !followingOtherUnit() ? mountHeightOffset_ : 0.0f);
+        return camera_pivot::selectHeight(followedTargetHeights(), swimming && !followingOtherUnit());
+    }
+    /// 0x00604e00's heights for whoever is followed.
+    [[nodiscard]] camera_pivot::TargetHeights followedTargetHeights() const {
+        const bool riding = followingMount();
+        const float height = riding && mountPivot_->collisionHeight > 0.0f ? mountPivot_->collisionHeight
+                                                                            : followedCollisionHeight();
+        return camera_pivot::targetHeights(followedModelPivot_ * (pivotHeight_ / PIVOT_HEIGHT_DEFAULT), riding,
+                                           followedMountPoseDrop_, followedSwimPoseDrop_,
+                                           riding ? followedSeatLift_ : 0.0f,
+                                           camera_pivot::pivotCeiling(height, !followingOtherUnit()));
+    }
+    /// Whether the camera follows the player on its mount.
+    [[nodiscard]] bool followingMount() const {
+        return mounted_ && mountPivot_.has_value() && !followingOtherUnit();
+    }
+    /// The pivot's height this frame: the target eased to (0x00603230 ->
+    /// 0x006010e0) and drawn down by what is over the unit (0x00605d60).
+    [[nodiscard]] float currentPivotHeight() const {
+        return pivotEase_.placed ? pivotCollided_ : followedPivotHeight();
     }
     /// The unit the camera follows in the player's stead - a possessed unit
     /// the client moves (the camera's +0x88 is the farsight object): its
@@ -955,6 +990,24 @@ private:
     /// The followed model's own pivot (camera_pivot::modelPivot), zero until
     /// measured.
     float followedModelPivot_ = 0.0f;
+    /// The followed model's Mount (91) and Swim (42) poses' drops below its
+    /// Stand top (camera_pivot::poseDrop), and the mount's seat lift.
+    float followedMountPoseDrop_ = 0.0f;
+    float followedSwimPoseDrop_ = 0.0f;
+    float followedSeatLift_ = 0.0f;
+    std::optional<MountPivot> mountPivot_;
+    /// The pivot's height, eased to its target (+0x128), and as the frame's
+    /// collision over the unit leaves it.
+    camera_pivot::Ease pivotEase_;
+    float pivotCollided_ = 0.0f;
+    /// The camera's distance after a collision drew it in (+0x118), easing
+    /// back out to the zoom over two seconds.
+    camera_pivot::Ease pullInEase_;
+    /// Measures the followed model's poses for the heights above.
+    void measureFollowedPoses();
+    /// 0x00605d60's line straight up over the feet: the eased height drawn
+    /// down by whatever is over the unit.
+    float collideFollowedPivot(const glm::vec3& feet, float deltaTime);
     /// A possessed unit's render instance the camera follows; 0 the player.
     uint32_t followedUnitInstance_ = 0;
     /// The collision height the pivot is held below: the player's (+0x854),

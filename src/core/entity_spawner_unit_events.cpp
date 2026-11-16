@@ -8,6 +8,7 @@
 #include "game/update_field_table.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
+#include "rendering/camera_pivot.hpp"
 #include "rendering/character_renderer.hpp"
 #include "rendering/m2_event_sounds.hpp"
 #include "rendering/renderer.hpp"
@@ -636,6 +637,38 @@ float EntitySpawner::playerCollisionHeight() {
     collisionHeightDisplay_ = unit.getDisplayId();
     collisionHeightScaleBits_ = scaleBits;
     return collisionHeight_;
+}
+
+float EntitySpawner::playerMountedCollisionHeight(uint32_t mountDisplayId) {
+    namespace us = rendering::unit_splash;
+    constexpr uint32_t kModelMountHeightColumn = 16;  // CreatureModelData +0x40
+    if (!gameHandler_ || !assetManager_) return 0.0f;
+    auto entity = gameHandler_->getEntityManager().getEntity(gameHandler_->getPlayerGuid());
+    if (!entity || !entity->isUnit()) return 0.0f;
+    const auto& unit = static_cast<const game::Unit&>(*entity);
+    auto displays = assetManager_->loadDBCOptional("CreatureDisplayInfo.dbc");
+    auto models = assetManager_->loadDBCOptional("CreatureModelData.dbc");
+    if (!displays || !models || models->getFieldCount() <= kModelMountHeightColumn) return 0.0f;
+    const int32_t display = displays->findRecordById(unit.getDisplayId());
+    const int32_t mountDisplay = displays->findRecordById(mountDisplayId);
+    if (display < 0 || mountDisplay < 0) return 0.0f;
+    const auto drow = static_cast<uint32_t>(display);
+    const auto mdrow = static_cast<uint32_t>(mountDisplay);
+    const int32_t model = models->findRecordById(displays->getUInt32(drow, 1));
+    const int32_t mountModel = models->findRecordById(displays->getUInt32(mdrow, 1));
+    if (model < 0 || mountModel < 0) return 0.0f;
+    const auto mrow = static_cast<uint32_t>(model);
+    const uint16_t scaleField = game::fieldIndex(game::UF::OBJECT_FIELD_SCALE_X);
+    const uint32_t scaleBits = scaleField != 0xFFFF ? unit.getField(scaleField) : 0u;
+    const float objectScale = scaleBits != 0 ? std::bit_cast<float>(scaleBits) : 1.0f;
+    // The rider's scale as its standing height has it (us::collisionHeight).
+    const float scale = us::collisionHeight(1.0f, objectScale, displays->getFloat(drow, us::kDisplayScaleColumn),
+                                            models->getFloat(mrow, us::kModelScaleColumn));
+    float mountScale = displays->getFloat(mdrow, us::kDisplayScaleColumn);
+    if (!(mountScale > 0.0f)) mountScale = 1.0f;
+    return rendering::camera_pivot::mountedCollisionHeight(
+        models->getFloat(mrow, us::kModelCollisionHeightColumn),
+        models->getFloat(static_cast<uint32_t>(mountModel), kModelMountHeightColumn), mountScale, scale);
 }
 
 std::pair<float, float> EntitySpawner::unitRippleSize(const game::Unit& unit) {

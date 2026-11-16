@@ -514,6 +514,7 @@ void AnimationController::clearMount() {
     if (auto* cameraController = renderer_->getCameraController()) {
         cameraController->setMounted(false);
         cameraController->setMountHeightOffset(0.0f);
+        cameraController->setMountPivot(std::nullopt);
     }
 
     if (renderer_->getAudioCoordinator()->getMountSoundManager()) {

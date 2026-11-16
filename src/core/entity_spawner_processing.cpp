@@ -1943,9 +1943,13 @@ void EntitySpawner::processPendingMount() {
     const auto* modelData = charRenderer->getModelData(modelId);
     float heightOffset = 1.8f;
     bool haveSeatPoint = false;
+    // The seat as the camera measures it (0x00604e00): attachment 0 as it
+    // stands in the model, whatever its height; none, no seat.
+    std::optional<float> cameraSeatZ;
     if (modelData) {
         for (const auto& att : modelData->attachments) {
             if (att.id == 0) {
+                cameraSeatZ = att.position.z;
                 heightOffset = att.position.z;
                 haveSeatPoint = (heightOffset > 0.1f);
                 if (haveSeatPoint) {
@@ -1986,6 +1990,19 @@ void EntitySpawner::processPendingMount() {
     // The seat by the mount's size.
     heightOffset = rendering::mount_seat::seatHeight(heightOffset, mountScale);
     if (auto* ac = renderer_->getAnimationController()) ac->setMounted(instanceId, mountDisplayId, heightOffset, m2Path);
+    // The camera's height on it (0x00604e00): the seat at the mount's size,
+    // under the player's mounted collision height (0x006d7720).
+    if (auto* cc = renderer_->getCameraController()) {
+        rendering::CameraController::MountPivot mp;
+        mp.mountInstance = instanceId;
+        mp.mountScale = mountScale;
+        mp.seatZ = cameraSeatZ;
+        mp.collisionHeight = playerMountedCollisionHeight(mountDisplayId);
+        LOG_WARNING("Camera mount: display ", mountDisplayId, " seat ",
+                    cameraSeatZ ? *cameraSeatZ : -1.0f, " x ", mountScale, ", mounted collision height ",
+                    mp.collisionHeight);
+        cc->setMountPivot(mp);
+    }
 
     // For taxi mounts, start with flying animation; for ground mounts, start with stand
     bool isTaxi = gameHandler_ && gameHandler_->isOnTaxiFlight();

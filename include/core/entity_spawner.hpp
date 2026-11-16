@@ -400,6 +400,11 @@ public:
     /// CreatureModelData CollisionHeight at its scale, 73/36 where there is
     /// none. Swimming is measured by it.
     float playerCollisionHeight();
+    /// The player's collision height on a mount of that display (0x006d7720):
+    /// half its own model's CollisionHeight plus the mount model's MountHeight
+    /// at the mount display's scale - its own where that is more - at its
+    /// scale. 0 where the tables do not say.
+    float playerMountedCollisionHeight(uint32_t mountDisplayId);
     /// The player's body half-width for the collision port (0x006e9570),
     /// read with the height; a third of a yard where there is none.
     [[nodiscard]] float playerCollisionHalfWidth() const { return collisionHalfWidth_; }
