@@ -496,7 +496,12 @@ TEST_CASE("The interface is laid out in units, whatever the display is",
     // rather than larger ones - and why a portrait display, where the height
     // is the long side, draws the interface bigger. That is what the original
     // client does too.
+    //
+    // At a UI Scale of 1. With "Use UI Scale" off the client picks its own
+    // below 1 for a screen over 768 high (0x0051fb80, see the desktop default
+    // scale case below), which shows more units rather than fewer.
     WidgetTree tree;
+    tree.setUserScale(1.0f);
 
     SECTION("a 768-tall display is one unit per pixel") {
         tree.layout(1024.0f, 768.0f);
@@ -3314,7 +3319,8 @@ TEST_CASE("With no scale chosen, a phone starts at the largest the frames fit at
     REQUIRE(tree.userScale() == Catch::Approx(WidgetTree::kMaxUserScale));
 }
 
-TEST_CASE("On a desktop the default scale is still 1", "[widget][scale]") {
+TEST_CASE("On a desktop the default scale is the client's for the screen", "[widget][scale]") {
+    // 0x0051fb80: 1 up to 768 high, else 768 / height, never below 0.9.
     WidgetTree tree;
     tree.setFitScaleByDefault(false);
     tree.layout(kScreenW, kScreenH);
@@ -3325,4 +3331,28 @@ TEST_CASE("On a desktop the default scale is still 1", "[widget][scale]") {
     tree.useDefaultUserScale();
     tree.layout(kScreenW, kScreenH);
     REQUIRE(tree.userScale() == Catch::Approx(1.0f));
+    tree.layout(1920.0f, 1080.0f);
+    REQUIRE(tree.userScale() == Catch::Approx(0.9f));
+
+    REQUIRE(WidgetTree::defaultUserScale(1366.0f, 800.0f) == Catch::Approx(768.0f / 800.0f));
+    REQUIRE(WidgetTree::defaultUserScale(1280.0f, 1024.0f) == Catch::Approx(0.9f));
+    REQUIRE(WidgetTree::defaultUserScale(2560.0f, 1440.0f) == Catch::Approx(0.9f));
+    REQUIRE(WidgetTree::defaultUserScale(800.0f, 600.0f) == Catch::Approx(1.0f));
+}
+
+TEST_CASE("Setting the scale or resizing asks for the floating chat windows", "[widget][scale]") {
+    // 0x00513240 and 0x0051fb80 raise UPDATE_FLOATING_CHAT_WINDOWS.
+    WidgetTree tree;
+    tree.setFitScaleByDefault(false);
+    tree.layout(kScreenW, kScreenH);
+    REQUIRE_FALSE(tree.takeFloatingChatUpdateDue());
+    tree.layout(kScreenW, kScreenH);
+    REQUIRE_FALSE(tree.takeFloatingChatUpdateDue());
+    tree.layout(1920.0f, 1080.0f);
+    REQUIRE(tree.takeFloatingChatUpdateDue());
+    REQUIRE_FALSE(tree.takeFloatingChatUpdateDue());
+    tree.setUserScale(1.0f);
+    REQUIRE(tree.takeFloatingChatUpdateDue());
+    tree.useDefaultUserScale();
+    REQUIRE(tree.takeFloatingChatUpdateDue());
 }

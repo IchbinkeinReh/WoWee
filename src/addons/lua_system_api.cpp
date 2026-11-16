@@ -2447,7 +2447,8 @@ static void applyCVarSideEffects(lua_State* L, const std::string& key,
     if (key == "useuiscale") {
         if (auto* tree = getWidgetTree(L)) {
             if (value == "0") {
-                // The default: 1, or on a phone the largest the frames fit at.
+                // The default: the client's for the screen (0x0051fb80), or on
+                // a phone the largest the frames fit at.
                 tree->useDefaultUserScale();
             } else {
                 tree->setUserScale(

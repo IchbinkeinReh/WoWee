@@ -1229,6 +1229,9 @@ public:
         userScaleIsDefault_ = false;
         const float clamped = scale < 0.64f ? 0.64f
                             : (scale > kMaxUserScale ? kMaxUserScale : scale);
+        // 0x00513240 raises UPDATE_FLOATING_CHAT_WINDOWS whenever it sets the
+        // scale, changed or not.
+        floatingChatUpdateDue_ = true;
         if (clamped == userScale_) return;
         userScale_ = clamped;
         // Every rect is stale after a scale change, and this said so through
@@ -1239,17 +1242,36 @@ public:
     [[nodiscard]] float userScale() const { return userScale_; }
 
     /// Back to the scale the interface has while the player has not chosen
-    /// one - "Use UI Scale" turned off. 1 on a desktop, which is the size the
-    /// screen's height alone gives; with fitScaleByDefault, the largest the
-    /// frames fit at, worked out again at every layout.
+    /// one - "Use UI Scale" turned off. On a desktop the client's own default
+    /// for the screen (defaultUserScale); with fitScaleByDefault, the largest
+    /// the frames fit at. Worked out again at every layout.
     void useDefaultUserScale() {
         userScaleIsDefault_ = true;
-        if (fitScaleByDefault_) {
-            markLayoutDirty();
-        } else if (userScale_ != 1.0f) {
-            userScale_ = 1.0f;
-            markLayoutDirty();
-        }
+        floatingChatUpdateDue_ = true;   // 0x0051fb80 raises it too
+        if (lastPixelW_ > 0.0f && lastPixelH_ > 0.0f) applyDefaultUserScale(lastPixelW_, lastPixelH_);
+        markLayoutDirty();
+    }
+
+    /// The UI scale the client gives a screen while "Use UI Scale" is off
+    /// (0x0051fb80): 1 up to 768 pixels high, else 768 / height; on a screen
+    /// narrower than 4:3 no more than three quarters of its aspect; and never
+    /// below 0.9 (nor 0.64).
+    [[nodiscard]] static float defaultUserScale(float pixelW, float pixelH) {
+        if (pixelW <= 0.0f || pixelH <= 0.0f) return 1.0f;
+        const float aspect = pixelW / pixelH;
+        float s = pixelH < 769.0f ? 1.0f : 768.0f / pixelH;
+        if (aspect * 3.0f < 4.0f && aspect * 0.75f <= s) s = aspect * 0.75f;
+        if (s <= 0.9f) s = 0.9f;
+        if (s <= 0.64f) s = 0.64f;
+        return s;
+    }
+
+    /// Whether UPDATE_FLOATING_CHAT_WINDOWS is due: the scale was set, or the
+    /// screen changed size (0x00513240, 0x0051fb80). Taken once.
+    bool takeFloatingChatUpdateDue() {
+        const bool due = floatingChatUpdateDue_;
+        floatingChatUpdateDue_ = false;
+        return due;
     }
 
     /// Whether the default scale is the largest the frames fit at rather than
@@ -1260,7 +1282,10 @@ public:
     void setFitScaleByDefault(bool fit) {
         if (fitScaleByDefault_ == fit) return;
         fitScaleByDefault_ = fit;
-        if (!fit && userScaleIsDefault_) userScale_ = 1.0f;
+        if (!fit && userScaleIsDefault_) {
+            userScale_ = (lastPixelW_ > 0.0f && lastPixelH_ > 0.0f)
+                             ? defaultUserScale(lastPixelW_, lastPixelH_) : 1.0f;
+        }
         markLayoutDirty();
     }
     [[nodiscard]] bool fitScaleByDefault() const { return fitScaleByDefault_; }
@@ -1520,9 +1545,12 @@ private:
 #endif
     /// The default scale for this screen and safe area, when it applies.
     void applyDefaultUserScale(float pixelW, float pixelH) {
-        if (!fitScaleByDefault_ || !userScaleIsDefault_) return;
-        userScale_ = fitUserScale(pixelW, pixelH, safeLeft_, safeRight_, safeTop_, safeBottom_);
+        if (!userScaleIsDefault_) return;
+        userScale_ = fitScaleByDefault_
+            ? fitUserScale(pixelW, pixelH, safeLeft_, safeRight_, safeTop_, safeBottom_)
+            : defaultUserScale(pixelW, pixelH);
     }
+    bool floatingChatUpdateDue_ = false;
     float safeLeft_ = 0.0f, safeRight_ = 0.0f, safeTop_ = 0.0f, safeBottom_ = 0.0f;
     std::vector<uint32_t> scrollFrames_;
     /// Which unit each portrait texture is showing, and the reverse. Two maps

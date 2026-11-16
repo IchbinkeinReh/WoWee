@@ -17573,6 +17573,9 @@ void LuaEngine::reportEventListenersOnce() {
 void LuaEngine::updateSizeChanges() {
     taint::Quiet quiet;   // as dispatchText
     if (!L_) return;
+    // The UI scale set, or the screen resized (0x00513240, 0x0051fb80): the
+    // chat frames are told to put their floating windows back on screen.
+    if (widgets_.takeFloatingChatUpdateDue()) fireEvent("UPDATE_FLOATING_CHAT_WINDOWS");
     for (uint32_t id = widgets_.takeResizePending(1); id != 0;
          id = widgets_.takeResizePending(id + 1)) {
         const ui::Widget* wp = widgets_.get(id);
