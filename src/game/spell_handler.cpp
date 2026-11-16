@@ -1,5 +1,6 @@
 #include "game/spell_handler.hpp"
 #include "game/unit_combat.hpp"
+#include "game/cast_event_gate.hpp"
 #include "game/shapeshift_forms.hpp"
 #include "addons/lua_api_helpers.hpp"
 #include "addons/tooltip_setter_rules.hpp"
@@ -7440,26 +7441,47 @@ void SpellHandler::handleSpellDelayed(network::Packet& packet) {
         ? packet.readUInt64() : packet.readPackedGuid();
     if (!packet.hasRemaining(4)) return;
     uint32_t delayMs = packet.readUInt32();
-    if (delayMs == 0) return;
-    float delaySec = delayMs / 1000.0f;
-    if (caster == owner_.getPlayerGuid()) {
-        if (casting_) {
-            castTimeRemaining_ += delaySec;
-            castTimeTotal_     += delaySec;
-        }
+    // 0x00801b80: the delay moves the cast the unit has (+0xa6c) - nothing
+    // without one, or for a spell the gate hides - and raises
+    // UNIT_SPELLCAST_DELAYED (unit, name, rank, cast count) for each token.
+    const bool isPlayer = caster == owner_.getPlayerGuid();
+    uint32_t castSpell = 0;
+    auto other = unitCastStates_.end();
+    if (isPlayer) {
+        if (casting_ && !castIsChannel_) castSpell = currentCastSpellId_;
     } else {
-        auto it = unitCastStates_.find(caster);
-        if (it != unitCastStates_.end() && it->second.casting) {
-            it->second.timeRemaining += delaySec;
-            it->second.timeTotal     += delaySec;
-        }
+        other = unitCastStates_.find(caster);
+        if (other != unitCastStates_.end() && other->second.casting && !other->second.isChannel)
+            castSpell = other->second.spellId;
+    }
+    if (castSpell == 0 || !castEventShownFor(castSpell, isPlayer, false)) return;
+    const float delaySec = delayMs / 1000.0f;
+    if (isPlayer) {
+        castTimeRemaining_ += delaySec;
+        castTimeTotal_     += delaySec;
+    } else {
+        other->second.timeRemaining += delaySec;
+        other->second.timeTotal     += delaySec;
     }
     // The cast bar redraws itself from this: it is already on screen and its
     // end moved, so without the event it counts down to the wrong moment.
-    const std::string delayedUnit = owner_.guidToUnitId(caster);
-    if (!delayedUnit.empty()) {
-        owner_.fireAddonEvent("UNIT_SPELLCAST_DELAYED", {delayedUnit});
-    }
+    for (const auto& unitId : owner_.unitTokensForGuid(caster))
+        owner_.fireAddonEvent("UNIT_SPELLCAST_DELAYED", spellcastArgs(unitId, castSpell));
+}
+
+bool SpellHandler::castEventShownFor(uint32_t spellId, bool casterIsPlayer, bool channel) {
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return false;
+    const auto& e = it->second;
+    return castEventShown(e.attr, e.attrEx3, e.attrEx4, casterIsPlayer, channel);
+}
+
+/// A channel's events carry the spell's name and rank and a 0 where a cast's
+/// carry its count (0x00801c90 and 0x00801db0 pass 0 to 0x0060bf60).
+std::vector<std::string> SpellHandler::channelEventArgs(const std::string& unitId,
+                                                        uint32_t spellId) const {
+    return {unitId, owner_.getSpellName(spellId), owner_.getSpellRank(spellId), "0"};
 }
 
 // ============================================================
@@ -8531,7 +8553,13 @@ void SpellHandler::handleChannelStart(network::Packet& packet) {
     if (!packet.hasRemaining(8)) return;
     uint32_t chanSpellId = packet.readUInt32();
     uint32_t chanTotalMs = packet.readUInt32();
-    if (chanTotalMs > 0 && chanCaster != 0) {
+    // 0x00801c90: a duration, a spell Spell.dbc has, the gate, and the
+    // unit in the world; then the channel is set (0x0072ad20) and
+    // UNIT_SPELLCAST_CHANNEL_START raised for each token.
+    if (chanTotalMs == 0 || chanCaster == 0) return;
+    if (!castEventShownFor(chanSpellId, chanCaster == owner_.getPlayerGuid(), true)) return;
+    if (!owner_.getEntityManager().getEntity(chanCaster)) return;
+    {
         if (chanCaster == owner_.getPlayerGuid()) {
             casting_            = true;
             castIsChannel_      = true;
@@ -8559,12 +8587,8 @@ void SpellHandler::handleChannelStart(network::Packet& packet) {
             owner_.spellCastAnimCallbackRef()(chanCaster, true, true, chanType);
         }
 
-        // Fire UNIT_SPELLCAST_CHANNEL_START for Lua addons
-        if (owner_.addonEventCallbackRef()) {
-            auto unitId = owner_.guidToUnitId(chanCaster);
-            if (!unitId.empty())
-                owner_.fireAddonEvent("UNIT_SPELLCAST_CHANNEL_START", spellcastArgs(unitId, chanSpellId));
-        }
+        for (const auto& unitId : owner_.unitTokensForGuid(chanCaster))
+            owner_.fireAddonEvent("UNIT_SPELLCAST_CHANNEL_START", channelEventArgs(unitId, chanSpellId));
     }
 }
 
@@ -8576,39 +8600,44 @@ void SpellHandler::handleChannelUpdate(network::Packet& packet) {
         : packet.readPackedGuid();
     if (!packet.hasRemaining(4)) return;
     uint32_t chanRemainMs = packet.readUInt32();
-    if (chanCaster2 == owner_.getPlayerGuid()) {
+    // 0x00801db0: the unit's own channel (+0xa80) - nothing without one, or
+    // for a spell the gate hides. Time left moves its end and raises
+    // UNIT_SPELLCAST_CHANNEL_UPDATE; none ends it (0x00726220), raises
+    // UNIT_SPELLCAST_CHANNEL_STOP instead, and stops its visual.
+    if (chanCaster2 == 0) return;
+    const bool isPlayer = chanCaster2 == owner_.getPlayerGuid();
+    uint32_t chanSpell = 0;
+    auto other = unitCastStates_.end();
+    if (isPlayer) {
+        if (casting_ && castIsChannel_) chanSpell = currentCastSpellId_;
+    } else {
+        other = unitCastStates_.find(chanCaster2);
+        if (other != unitCastStates_.end() && other->second.casting && other->second.isChannel)
+            chanSpell = other->second.spellId;
+    }
+    if (chanSpell == 0 || !castEventShownFor(chanSpell, isPlayer, true)) return;
+    if (isPlayer) {
         castTimeRemaining_ = chanRemainMs / 1000.0f;
         if (chanRemainMs == 0) {
             casting_ = false;
             castIsChannel_ = false;
             currentCastSpellId_ = 0;
         }
-    } else if (chanCaster2 != 0) {
-        auto it = unitCastStates_.find(chanCaster2);
-        if (it != unitCastStates_.end()) {
-            it->second.timeRemaining = chanRemainMs / 1000.0f;
-            if (chanRemainMs == 0) {
-                unitCastStates_.erase(it);
-                noteUnitCastEnd(chanCaster2, true);
-            }
+    } else {
+        other->second.timeRemaining = chanRemainMs / 1000.0f;
+        if (chanRemainMs == 0) {
+            unitCastStates_.erase(other);
+            noteUnitCastEnd(chanCaster2, true);
         }
     }
     LOG_DEBUG("MSG_CHANNEL_UPDATE: caster=0x", std::hex, chanCaster2, std::dec,
               " remaining=", chanRemainMs, "ms");
-    // Every update, not only the last: a channel that reticks or is pushed
-    // back moves its bar, and the bar is already on screen.
-    if (const std::string chanUnit = owner_.guidToUnitId(chanCaster2); !chanUnit.empty()) {
-        owner_.fireAddonEvent("UNIT_SPELLCAST_CHANNEL_UPDATE", {chanUnit});
-    }
-    // Fire UNIT_SPELLCAST_CHANNEL_STOP when channel ends
-    if (chanRemainMs == 0) {
-        // Stop channeling animation - return to idle
-        if (owner_.spellCastAnimCallbackRef()) {
-            owner_.spellCastAnimCallbackRef()(chanCaster2, false, true, SpellCastType::OMNI);
-        }
-        auto unitId = owner_.guidToUnitId(chanCaster2);
-        if (!unitId.empty())
-            owner_.fireAddonEvent("UNIT_SPELLCAST_CHANNEL_STOP", {unitId});
+    const char* event = chanRemainMs != 0 ? "UNIT_SPELLCAST_CHANNEL_UPDATE" : "UNIT_SPELLCAST_CHANNEL_STOP";
+    for (const auto& unitId : owner_.unitTokensForGuid(chanCaster2))
+        owner_.fireAddonEvent(event, channelEventArgs(unitId, chanSpell));
+    if (chanRemainMs == 0 && owner_.spellCastAnimCallbackRef()) {
+        // The channel's visual stops (0x00721190): back to idle.
+        owner_.spellCastAnimCallbackRef()(chanCaster2, false, true, SpellCastType::OMNI);
     }
 }
 

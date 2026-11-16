@@ -637,6 +637,11 @@ public:
     /// unit, spell name, rank, cast id, spell id - in that order, which is what
     /// FrameXML unpacks. These were being fired as just the unit and the spell
     /// id, so the id sat where the name belongs and the cast id was absent.
+    /// castEventShown (cast_event_gate.hpp) for a spell's Spell.dbc row;
+    /// false for a spell it does not have.
+    bool castEventShownFor(uint32_t spellId, bool casterIsPlayer, bool channel);
+    [[nodiscard]] std::vector<std::string> channelEventArgs(const std::string& unitId,
+                                                            uint32_t spellId) const;
     [[nodiscard]] std::vector<std::string> spellcastArgs(const std::string& unitId,
                                            uint32_t spellId) const;
 

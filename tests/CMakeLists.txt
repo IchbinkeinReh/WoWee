@@ -4148,3 +4148,6 @@ target_include_directories(test_keybinding_defaults SYSTEM PRIVATE
 target_link_libraries(test_keybinding_defaults PRIVATE catch2_main imgui)
 add_test(NAME keybinding_defaults COMMAND test_keybinding_defaults)
 register_test_target(test_keybinding_defaults)
+
+# Which casts' delays and channels the client acts on (cast_event_gate.hpp).
+wowee_add_test(test_cast_event_gate SOURCES test_cast_event_gate.cpp)

@@ -103,11 +103,42 @@ TEST_CASE("another unit's failed cast names its caster as the server writes it",
     }
 }
 
+// The cast SMSG_SPELL_DELAYED moves is the one the unit has (0x00801b80),
+// so one is started first - in each expansion's SMSG_SPELL_START layout.
+static void startCast(Session& s, const std::string& expansion) {
+    auto& fireball = s.handler().spellNameCacheRef()[133];
+    fireball.name = "Fireball";
+    Packet p(wireOpcode(Opcode::SMSG_SPELL_START));
+    p.writePackedGuid(kMob);
+    p.writePackedGuid(kMob);
+    if (expansion == "wotlk") {
+        p.writeUInt8(1);
+        p.writeUInt32(133);
+        p.writeUInt32(0);
+        p.writeUInt32(3000);
+        p.writeUInt32(0);  // target flags
+    } else if (expansion == "tbc") {
+        p.writeUInt32(133);
+        p.writeUInt8(1);
+        p.writeUInt16(0);
+        p.writeUInt32(3000);
+        p.writeUInt32(0);
+    } else {
+        p.writeUInt32(133);
+        p.writeUInt16(0);
+        p.writeUInt32(3000);
+        p.writeUInt16(0);
+    }
+    s.receive(p);
+}
+
 TEST_CASE("a pushed-back cast names its caster as the server writes it", "[replay][castguid]") {
     for (const char* expansion : {"wotlk", "tbc", "classic"}) {
         CAPTURE(expansion);
         Session s(expansion);
         TargetEvents events(s);
+        startCast(s, expansion);
+        events.names.clear();
         // Spell::Delayed's SMSG_SPELL_DELAYED.
         Packet p(wireOpcode(Opcode::SMSG_SPELL_DELAYED));
         writeCaster(p, std::string(expansion) == "classic");
@@ -115,4 +146,16 @@ TEST_CASE("a pushed-back cast names its caster as the server writes it", "[repla
         s.receive(p);
         CHECK(events.names == std::vector<std::string>{"UNIT_SPELLCAST_DELAYED"});
     }
+}
+
+TEST_CASE("a delay for a unit casting nothing raises nothing", "[replay][castguid]") {
+    // 0x00801b80 looks the unit's own cast up; with none there is no record
+    // and so no event.
+    Session s;
+    TargetEvents events(s);
+    Packet p(wireOpcode(Opcode::SMSG_SPELL_DELAYED));
+    writeCaster(p, false);
+    p.writeUInt32(500);
+    s.receive(p);
+    CHECK(events.names.empty());
 }
