@@ -2516,6 +2516,11 @@ register_test_target(test_cast_checks)
 wowee_add_test(test_dispel_check
     SOURCES test_dispel_check.cpp)
 
+# ── test_destructible_state ─────────────────────────────────
+# A destructible building's flags: hits, state changes, the fall through.
+wowee_add_test(test_destructible_state
+    SOURCES test_destructible_state.cpp)
+
 # ── test_chat_profanity ─────────────────────────────────────
 add_executable(test_chat_profanity
     test_chat_profanity.cpp

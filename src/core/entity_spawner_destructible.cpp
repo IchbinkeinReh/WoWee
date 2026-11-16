@@ -26,13 +26,16 @@
 // while the old look sinks, and the row's RepairGroundFx model stands at the
 // building's foot meanwhile. HealEffect 4 is no rise at all.
 #include "core/entity_spawner.hpp"
+#include "core/coordinates.hpp"
 #include "core/logger.hpp"
+#include "game/destructible_state.hpp"
 #include "game/game_handler.hpp"
 #include "game/update_field_table.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/m2_loader.hpp"
 #include "pipeline/wmo_loader.hpp"
+#include "rendering/camera_controller.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/wmo_renderer.hpp"
@@ -156,17 +159,71 @@ std::vector<uint32_t> EntitySpawner::hangDoodadSet(uint32_t wmoInstance, const p
     return made;
 }
 
-void EntitySpawner::startDoodadChain(uint32_t inst, uint32_t once, uint32_t then) {
+void EntitySpawner::startDoodadChain(uint32_t inst, uint32_t once, uint32_t then, uint32_t after) {
     auto* m2 = renderer_ ? renderer_->getM2Renderer() : nullptr;
     if (!m2) return;
     if (!m2->hasAnimation(inst, once)) {
+        if (after != kNoAnim) {
+            startDoodadChain(inst, then, after);
+            return;
+        }
         if (m2->hasAnimation(inst, then)) m2->setInstanceAnimation(inst, then, true);
         return;
     }
     m2->setInstanceAnimation(inst, once, false);
     uint32_t length = 0;
     if (const auto pb = m2->getInstanceAnimPlayback(inst)) length = static_cast<uint32_t>(pb->durationMs);
-    destructibleAnimChains_.push_back({inst, nowMs() + length, then});
+    destructibleAnimChains_.push_back({inst, nowMs() + length, then, after});
+}
+
+void EntitySpawner::playDestructibleImpact(uint64_t guid, uint32_t state) {
+    // 0x0070e6a0 -> 0x0070b720: the state's impact set (none for
+    // rebuilding) shown on the look showing, Custom0, then Custom1 (0x0070b830),
+    // then Stand.
+    auto goIt = gameObjectInstances_.find(guid);
+    auto entity = gameHandler_ ? gameHandler_->getEntityManager().getEntity(guid) : nullptr;
+    const uint16_t entryField = game::fieldIndex(game::UF::OBJECT_FIELD_ENTRY);
+    if (goIt == gameObjectInstances_.end() || !goIt->second.isWmo || !entity || entryField == 0xFFFF) return;
+    DestructibleLook look;
+    if (!destructibleLook(guid, entity->getField(entryField), look) || state > 3) return;
+    const uint32_t set = look.impactSet[state];
+    auto runIt = destructibleRuns_.find(guid);
+    if (set == 0 || runIt == destructibleRuns_.end()) return;
+    DestructibleRun& run = runIt->second;
+    const pipeline::WMOModel* root = destructibleRoot(run.wmoPath);
+    if (!root) return;
+    const uint32_t instance = goIt->second.instanceId;
+    // Enabling a set twice shows it once.
+    if (run.impactOn != instance || run.impactSet != set) {
+        run.impactDoodads = hangDoodadSet(instance, *root, set);
+        run.impactOn = instance;
+        run.impactSet = set;
+    }
+    for (uint32_t inst : run.impactDoodads) startDoodadChain(inst, kAnimCustom0, kAnimCustom1, kAnimStand);
+}
+
+void EntitySpawner::dropPlayerThroughDestructible(uint32_t oldState, uint32_t newState, uint32_t oldInstance,
+                                                  bool oldIsWmo, const std::string& oldWmoPath) {
+    // 0x0070dfa0: the old look's bounds (0x00780130), the active mover's
+    // place in the building's own space, and the placed fall (0x007189f0 ->
+    // 0x006eccf0) for a mover inside them.
+    if (!gameHandler_ || !renderer_ || !oldIsWmo || oldInstance == 0) return;
+    auto* wmo = renderer_->getWMORenderer();
+    const pipeline::WMOModel* root = oldWmoPath.empty() ? nullptr : destructibleRoot(oldWmoPath);
+    const auto model = wmo ? wmo->getInstanceModelMatrix(oldInstance) : std::nullopt;
+    bool inside = false;
+    if (root && model) {
+        const auto& m = gameHandler_->getMovementInfo();
+        const glm::vec3 at = core::coords::canonicalToRender(glm::vec3(m.x, m.y, m.z));
+        const glm::vec3 local = glm::vec3(glm::inverse(*model) * glm::vec4(at, 1.0f));
+        inside = glm::all(glm::greaterThanEqual(local, root->boundingBoxMin)) &&
+                 glm::all(glm::lessThanEqual(local, root->boundingBoxMax));
+    }
+    const bool inVehicle = gameHandler_->vehicleRoster().passenger(gameHandler_->getPlayerGuid()).has_value();
+    if (!game::destructible::playerFallsThrough(oldState, newState, true, inVehicle,
+                                                gameHandler_->getMovementInfo().flags, inside))
+        return;
+    if (auto* cc = renderer_->getCameraController()) cc->queuePlacedFall();
 }
 
 void EntitySpawner::spawnDestructibleDoodads(uint64_t guid, const std::string& wmoPath) {
@@ -276,9 +333,16 @@ void EntitySpawner::updateDestructibles() {
     // Doodads whose one-shot has played go on to what follows it.
     for (auto it = destructibleAnimChains_.begin(); it != destructibleAnimChains_.end();) {
         if (static_cast<int32_t>(now - it->endMs) < 0) { ++it; continue; }
-        if (m2->hasInstance(it->instance) && m2->hasAnimation(it->instance, it->then))
-            m2->setInstanceAnimation(it->instance, it->then, true);
+        const DoodadAnimChain done = *it;
         it = destructibleAnimChains_.erase(it);
+        if (!m2->hasInstance(done.instance)) continue;
+        if (done.after != kNoAnim) {
+            // Custom1 played out too (0x0070b830), then the last.
+            startDoodadChain(done.instance, done.then, done.after);
+            it = destructibleAnimChains_.begin();
+            continue;
+        }
+        if (m2->hasAnimation(done.instance, done.then)) m2->setInstanceAnimation(done.instance, done.then, true);
     }
     const auto lowered = [](const glm::mat4& base, float by) {
         return glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -by)) * base;
@@ -318,6 +382,7 @@ void EntitySpawner::updateDestructibles() {
 
 void EntitySpawner::clearDestructible(uint64_t guid) {
     destructibleStates_.erase(guid);
+    destructibleFlags_.erase(guid);
     auto it = destructibleRuns_.find(guid);
     if (it == destructibleRuns_.end()) return;
     // What a change kept alive past the look it belonged to.
@@ -338,11 +403,21 @@ void EntitySpawner::applyDestructibleFlags(uint64_t guid) {
     auto entity = gameHandler_->getEntityManager().getEntity(guid);
     const uint16_t flagsField = game::fieldIndex(game::UF::GAMEOBJECT_FLAGS);
     if (!entity || flagsField == 0xFFFF) return;
-    const uint32_t now = stateOfFlags(entity->getField(flagsField));
+    // 0x0070ed00 -> 0x0070e6a0: the bits that changed. A hit plays the
+    // state's impact set, then the state is looked at (0x0070dfa0).
+    const uint32_t flags = entity->getField(flagsField);
+    auto lastIt = destructibleFlags_.try_emplace(guid, flags).first;
+    const uint32_t changed = flags ^ lastIt->second;
+    lastIt->second = flags;
+    if (game::destructible::impactPlays(changed)) playDestructibleImpact(guid, stateOfFlags(flags));
+    const uint32_t now = stateOfFlags(flags);
     if (now == state->second) return;
     const auto& go = static_cast<const game::GameObject&>(*entity);
     auto goIt = gameObjectInstances_.find(guid);
     if (goIt == gameObjectInstances_.end()) return;
+    // Worse under the player: it falls through (0x0070dfa0).
+    dropPlayerThroughDestructible(state->second, now, goIt->second.instanceId, goIt->second.isWmo,
+                                  destructibleRuns_.count(guid) ? destructibleRuns_[guid].wmoPath : std::string());
     // Another look (0x0070e0d0). The one showing is kept back from the
     // despawn: it stays until the new one is up, and through a rise.
     DestructibleRun& run = destructibleRuns_[guid];

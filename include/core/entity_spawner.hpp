@@ -1426,16 +1426,37 @@ private:
         float height = 0.0f, oldHeight = 0.0f;
         uint32_t riseStartMs = 0, riseMs = 0;
         uint32_t fxInstance = 0;
+        /// The impact set a hit hung on the look showing (0x0070e6a0):
+        /// which look, which set, and its doodads.
+        uint32_t impactOn = 0;
+        uint32_t impactSet = 0;
+        std::vector<uint32_t> impactDoodads;
     };
-    struct DoodadAnimChain { uint32_t instance = 0; uint32_t endMs = 0; uint32_t then = 0; };
+    /// A doodad's one-shot animation, then `then`: looped, or - with an
+    /// `after` - played once and followed by `after` looped.
+    static constexpr uint32_t kNoAnim = 0xFFFFFFFFu;
+    struct DoodadAnimChain {
+        uint32_t instance = 0;
+        uint32_t endMs = 0;
+        uint32_t then = 0;
+        uint32_t after = kNoAnim;
+    };
     bool destructibleLook(uint64_t guid, uint32_t entry, DestructibleLook& out) const;
     const pipeline::WMOModel* destructibleRoot(const std::string& wmoPath);
     std::vector<uint32_t> hangDoodadSet(uint32_t wmoInstance, const pipeline::WMOModel& root, uint32_t set);
-    void startDoodadChain(uint32_t instance, uint32_t once, uint32_t then);
+    void startDoodadChain(uint32_t instance, uint32_t once, uint32_t then, uint32_t after = kNoAnim);
+    /// The state's impact doodad set played on the look showing (0x0070e6a0).
+    void playDestructibleImpact(uint64_t guid, uint32_t state);
+    /// The player dropped through a look that worsened under it (0x0070dfa0).
+    void dropPlayerThroughDestructible(uint32_t oldState, uint32_t newState, uint32_t oldInstance,
+                                       bool oldIsWmo, const std::string& oldWmoPath);
     void spawnDestructibleDoodads(uint64_t guid, const std::string& wmoPath);
     void clearDestructible(uint64_t guid);
     void updateDestructibles();
     std::unordered_map<uint64_t, uint32_t> destructibleStates_;
+    /// Each building's GAMEOBJECT_FLAGS as last seen, for the bits that
+    /// changed (0x0070ed00).
+    std::unordered_map<uint64_t, uint32_t> destructibleFlags_;
     std::unordered_map<uint64_t, DestructibleRun> destructibleRuns_;
     std::vector<DoodadAnimChain> destructibleAnimChains_;
     std::unordered_map<std::string, std::shared_ptr<pipeline::WMOModel>> destructibleWmoRoots_;
