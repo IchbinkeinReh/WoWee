@@ -5,6 +5,7 @@
 #include "game/world_packets.hpp"
 #include "game/opcode_table.hpp"
 #include "game/spell_defines.hpp"
+#include "game/client_periodic_triggers.hpp"
 #include "game/spell_mods.hpp"
 #include "game/ground_target.hpp"
 #include "game/spell_history.hpp"
@@ -318,6 +319,12 @@ public:
     /// is: where a bit changed, each unit's aura asking for it has its state
     /// kit shown or taken away again (0x006d7030 -> 0x00727a70).
     void onPlayerAuraVision(uint8_t vision);
+    /// A unit's UNIT_FIELD_CHARMEDBY changed from `oldCharmer` (0x00728d60):
+    /// charmed by the player now, its client-triggered auras start their
+    /// timers (0x00728880); charmed by the player before, they stop.
+    void onUnitCharmedByChanged(uint64_t unit, uint64_t oldCharmer);
+    /// The unit gone: its client-triggered timers with it (0x0080dfe0).
+    void removeClientTriggers(uint64_t unit) { clientTriggers_.remove(unit, 0); }
 
     // Known spells mutation (formerly accessed via friend)
     void addKnownSpell(uint32_t spellId) {
@@ -1016,6 +1023,14 @@ private:
     std::unordered_map<uint64_t, std::vector<AuraSlot>> unitAurasCache_;
     /// The player's aura vision last seen, none before the first.
     std::optional<uint8_t> auraVisionSeen_;
+    /// Aura 48's timers on the units the player controls (0x0080df10).
+    ClientTriggerTimers clientTriggers_;
+    /// 0x00718b70 is the player, or the unit is the player: whose aura 48
+    /// the client runs itself (0x00724820, 0x0071e930).
+    bool clientTriggersRunOn(uint64_t unit) const;
+    /// 0x00724820 / 0x00728880: a timer for each of the spell's aura 48
+    /// effects on the unit.
+    void startClientTriggers(uint64_t unit, uint32_t spellId);
 
     // Spell book tabs
     std::vector<SpellBookTab> spellBookTabs_;

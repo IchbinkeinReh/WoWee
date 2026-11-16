@@ -3722,6 +3722,11 @@ wowee_add_test(test_pvp_flags
 wowee_add_test(test_character_component
     SOURCES test_character_component.cpp)
 
+# ── test_client_periodic_triggers ────────────────────────────
+# Aura 48's client timers (game/client_periodic_triggers.hpp).
+wowee_add_test(test_client_periodic_triggers
+    SOURCES test_client_periodic_triggers.cpp)
+
 # ── test_dialog_emotes ───────────────────────────────────────
 # An NPC's dialog emotes played one after another (game/dialog_emotes.hpp).
 wowee_add_test(test_dialog_emotes

@@ -4132,6 +4132,19 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
     const bool watchesLanguages = block.guid == owner_.getPlayerGuid() && flags2 != 0xFFFF &&
                                   block.fields.find(flags2) != block.fields.end();
     const uint32_t oldFlags2 = watchesLanguages ? entity->getField(flags2) : 0;
+    // UNIT_FIELD_CHARMEDBY, which the client watches (0x00741e9e registers
+    // 0x00728d60 on it) for the client-triggered auras of a unit the player
+    // comes to charm, or stops charming.
+    const uint16_t charmedByLo = fieldIndex(UF::UNIT_FIELD_CHARMEDBY);
+    const bool watchesCharmer = (entity->getType() == ObjectType::UNIT || entity->getType() == ObjectType::PLAYER) &&
+                                charmedByLo != 0xFFFF &&
+                                (block.fields.find(charmedByLo) != block.fields.end() ||
+                                 block.fields.find(static_cast<uint16_t>(charmedByLo + 1)) != block.fields.end());
+    const auto charmerOf = [&]() {
+        return entity->getField(charmedByLo) |
+               (static_cast<uint64_t>(entity->getField(static_cast<uint16_t>(charmedByLo + 1))) << 32);
+    };
+    const uint64_t oldCharmer = watchesCharmer ? charmerOf() : 0;
 
     // Set fields (common)
     for (const auto& field : block.fields) {
@@ -4141,6 +4154,8 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
     // Dispatch to type-specific handler
     auto* handler = getTypeHandler(entity->getType());
     if (handler) handler->onValuesUpdate(block, entity);
+    if (watchesCharmer && charmerOf() != oldCharmer && owner_.getSpellHandler())
+        owner_.getSpellHandler()->onUnitCharmedByChanged(block.guid, oldCharmer);
 
     if (watchesTarget && unitTargetGuid(*entity) != oldTarget) {
         // 0x00716900: the time it moved, which the pet's ring reads.
@@ -4413,6 +4428,8 @@ void EntityController::handleDestroyObject(network::Packet& packet) {
     if (owner_.getSpellHandler()) owner_.getSpellHandler()->removeUnitCastState(data.guid);
     // Clean up cached auras
     if (owner_.getSpellHandler()) owner_.getSpellHandler()->removeUnitAuraCache(data.guid);
+    // 0x007357f2: its client-triggered auras' timers (0x0080dfe0).
+    if (owner_.getSpellHandler()) owner_.getSpellHandler()->removeClientTriggers(data.guid);
 
     owner_.tabCycleStaleRef() = true;
 }
