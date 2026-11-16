@@ -3676,6 +3676,11 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
         }
         owner_.maybeDetectVisibleItemLayout();
         owner_.detectInventorySlotBases(block.fields);
+        // The aura vision, PLAYER_FIELD_BYTES2's high byte (0x006d7030 ->
+        // 0x00727a70): the state kits of the auras a changed bit shows or
+        // hides.
+        if (auto* spells = owner_.getSpellHandler())
+            spells->onPlayerAuraVision(static_cast<uint8_t>(owner_.playerAuraVision()));
 
         // The override spells (PLAYER_FIELD_BYTES2's low word, 0x006d1c5d ->
         // 0x005abb40).

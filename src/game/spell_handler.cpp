@@ -4937,6 +4937,30 @@ void SpellHandler::replayAuraStateKits() {
     }
 }
 
+void SpellHandler::onPlayerAuraVision(uint8_t vision) {
+    const std::optional<uint8_t> before = std::exchange(auraVisionSeen_, vision);
+    if (!before || *before == vision) return;
+    const auto changed = static_cast<uint32_t>(*before ^ vision);
+    auto* renderer = owner_.services().renderer;
+    auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
+    if (!svs) return;
+    // 0x00727a70 for each unit: an aura whose vision mask (0x007fe3e0)
+    // meets a changed bit is taken off (0x0071e930) where the player now
+    // lacks the vision, and put on again (0x00724820) where it has it -
+    // setUnitAuraSlot asks the player's vision as it is now.
+    const auto again = [&](uint64_t guid, const std::vector<AuraSlot>& auras) {
+        for (size_t slot = 0; slot < auras.size(); ++slot) {
+            const uint32_t spellId = auras[slot].spellId;
+            if (spellId == 0 || (owner_.spellRequiredVision(spellId) & changed) == 0) continue;
+            svs->setUnitAuraSlot(guid, static_cast<uint32_t>(slot), spellId, auras[slot].casterGuid);
+        }
+    };
+    if (owner_.getPlayerGuid() != 0) again(owner_.getPlayerGuid(), playerAuras_);
+    for (const auto& [guid, auras] : unitAurasCache_) {
+        if (owner_.getEntityManager().getEntity(guid)) again(guid, auras);
+    }
+}
+
 void SpellHandler::logAuraChanges(uint64_t unit, const std::vector<AuraSlot>& before,
                                   const std::vector<std::pair<uint8_t, AuraSlot>>& updates, uint64_t nowMs) {
     auto& feed = owner_.combatLogFeed();
