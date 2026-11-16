@@ -7413,6 +7413,10 @@ private:
     std::function<bool()> worldLoadingProbe_;
     bool releasedSpirit_ = false;
     uint32_t corpseMapId_ = 0;
+    /// The map the corpse itself lies on (MSG_CORPSE_QUERY's second map,
+    /// 0x00bd081c); corpseMapId_ is where its coordinates are, the instance's
+    /// entrance for a corpse inside one (0x00bd0818).
+    uint32_t corpseLiesOnMapId_ = 0;
     bool corpsePositionValid_ = false;
     float corpseX_ = 0.0f, corpseY_ = 0.0f, corpseZ_ = 0.0f;
     /// The transport the corpse lies on, its low guid (0xbd0830), 0 for the

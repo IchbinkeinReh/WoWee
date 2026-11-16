@@ -1047,6 +1047,7 @@ void GameHandler::registerCoreOpcodes() {
         corpseZ_ = movementInfo.z;
         corpseTransportLow_ = 0;
         corpseMapId_ = currentMapId_;
+        corpseLiesOnMapId_ = currentMapId_;
         corpsePositionValid_ = true;
         if (ghostStateCallback_) ghostStateCallback_(false);
         // The stamp first, then the event: 0x006e0000.c:2497 runs the death
@@ -1136,6 +1137,7 @@ void GameHandler::registerCoreOpcodes() {
         corpseY_ = cy;
         corpseZ_ = cz;
         corpseMapId_ = travelMapId;
+        corpseLiesOnMapId_ = corpseMapId;
         corpsePositionValid_ = true;
         LOG_INFO("MSG_CORPSE_QUERY: walk to (", cx, ",", cy, ",", cz,
                  ") on map ", travelMapId,

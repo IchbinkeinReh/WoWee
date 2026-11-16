@@ -718,11 +718,26 @@ void GameHandler::updateTimers(float deltaTime) {
     // with StaticPopup "RECOVER_CORPSE", whose button calls RetrieveCorpse;
     // without the edge that prompt could never appear and this client's own
     // button was the only way back from a corpse run.
+    //
+    // The edge is the client's (0x0051f5c0 -> 0x00512c40): within 40 yards
+    // (squared distance under 1600, 0x00ac8a78) of where the corpse query
+    // placed it, whether or not the corpse itself is in sight. Arriving
+    // there fires CORPSE_IN_INSTANCE instead when that place is the entrance
+    // of the instance the corpse lies in - the two maps differ - and the
+    // interface tells the ghost to go in to be resurrected.
     {
-        const bool inRange = releasedSpirit_ && canReclaimCorpse();
+        bool inRange = false;
+        if (releasedSpirit_ && corpsePositionValid_ && currentMapId_ == corpseMapId_) {
+            const glm::vec3 corpse = corpseServerPos();
+            const float dx = movementInfo.x - corpse.y;
+            const float dy = movementInfo.y - corpse.x;
+            const float dz = movementInfo.z - corpse.z;
+            inRange = dx * dx + dy * dy + dz * dz < 1600.0f;
+        }
         if (inRange != corpseInRangeAnnounced_) {
             corpseInRangeAnnounced_ = inRange;
-            fireAddonEvent(inRange ? "CORPSE_IN_RANGE" : "CORPSE_OUT_OF_RANGE", {});
+            if (!inRange) fireAddonEvent("CORPSE_OUT_OF_RANGE", {});
+            else fireAddonEvent(corpseLiesOnMapId_ != corpseMapId_ ? "CORPSE_IN_INSTANCE" : "CORPSE_IN_RANGE", {});
         }
     }
 
