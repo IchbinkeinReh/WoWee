@@ -4116,6 +4116,7 @@ std::optional<std::string> InventoryHandler::stationeryArt(uint32_t id) const {
 void InventoryHandler::closeMailbox() {
     mailboxOpen_ = false;
     mailboxGuid_ = 0;
+    mailAutoLootId_ = 0;   // 0x00571730
     showMailCompose_ = false;
     // The client's MailInfo reset clears the chosen paper with the rest of the
     // mail store (0x00571530 zeroes the count, the choice and the draft money
@@ -4473,6 +4474,37 @@ void InventoryHandler::mailTakeItem(uint32_t mailId, uint32_t itemGuidLow) {
     owner_.getSocket()->send(packet);
 }
 
+void InventoryHandler::autoLootMail(uint32_t mailId) {
+    // 0x00571450: nothing while an earlier take is unanswered, or with no
+    // mailbox open. 0x00570410: the money first, then the attachments.
+    if (mailTakePending_ || mailboxGuid_ == 0) return;
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    const auto it = std::find_if(mailInbox_.begin(), mailInbox_.end(),
+        [mailId](const MailMessage& m) { return m.messageId == mailId; });
+    if (it == mailInbox_.end()) return;
+    if (it->money > 0) mailTakeMoney(mailId);
+    autoLootNextAttachment(mailId);
+}
+
+void InventoryHandler::autoLootNextAttachment(uint32_t mailId) {
+    // 0x00570270: with less money than the letter's COD, ERR_NOT_ENOUGH_MONEY
+    // and nothing taken. Otherwise the first attachment there is, the take
+    // marked as waiting for its answer, and the letter kept to go on with
+    // when another attachment follows it.
+    const auto it = std::find_if(mailInbox_.begin(), mailInbox_.end(),
+        [mailId](const MailMessage& m) { return m.messageId == mailId; });
+    if (it == mailInbox_.end()) return;
+    if (owner_.getMoneyCopper() < it->cod) {
+        owner_.addUIError(uiText("ERR_NOT_ENOUGH_MONEY", "You don't have enough money."));
+        owner_.playGameErrorSound("ERR_NOT_ENOUGH_MONEY");
+        return;
+    }
+    if (it->attachments.empty()) return;
+    mailTakeItem(mailId, it->attachments.front().itemGuidLow);
+    mailTakePending_ = true;
+    if (it->attachments.size() > 1) mailAutoLootId_ = mailId;
+}
+
 void InventoryHandler::mailReturnToSender(uint32_t mailId) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || mailboxGuid_ == 0) return;
     // With the letter's sender on WotLK, as ReturnInboxItem writes it.
@@ -4560,6 +4592,11 @@ void InventoryHandler::handleShowMailbox(network::Packet& packet) {
 
 void InventoryHandler::handleMailListResult(network::Packet& packet) {
     inboxCheckPending_ = false;
+    // The list resets the mail store and the waiting take with it
+    // (0x00571590). The auto-loot's letter is kept: this client asks for the
+    // list again after every answer, which the client does not, and a reset
+    // here would end the auto-loot after its second item.
+    mailTakePending_ = false;
     if (!owner_.getPacketParsers()->parseMailList(packet, mailInbox_)) return;
     mailTotalCount_ = owner_.getPacketParsers()->mailListTotal();
     // 0x00571c50: a player's letter from someone on the ignore list is not
@@ -4675,7 +4712,8 @@ void InventoryHandler::handleSendMailResult(network::Packet& packet) {
         if (error == 0) {
             if (owner_.addonEventCallbackRef()) fireBagUpdates();
         }
-    } else if (action == MAIL_MONEY_TAKEN) {
+    }
+ else if (action == MAIL_MONEY_TAKEN) {
         if (error == 0) {
             if (mailIt != mailInbox_.end()) mailIt->money = 0;
             if (owner_.addonEventCallbackRef()) {
@@ -4693,6 +4731,29 @@ void InventoryHandler::handleSendMailResult(network::Packet& packet) {
             }
             if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("MAIL_INBOX_UPDATE", {});
         }
+    }
+    // 0x005717b0: a taken item's answer carries the item and its count
+    // (also for code 0x15); the letter loses that attachment here. A failed
+    // take ends the auto-loot; a good one goes on to the letter's next
+    // attachment, and anything else lets the next take through.
+    if (action == MAIL_ITEM_TAKEN && (error == 0 || error == 0x15) && packet.hasRemaining(8)) {
+        const uint32_t takenGuid = packet.readUInt32();
+        packet.readUInt32();  // count
+        if (mailIt != mailInbox_.end()) {
+            auto& atts = mailIt->attachments;
+            atts.erase(std::remove_if(atts.begin(), atts.end(),
+                           [takenGuid](const MailAttachment& a) { return a.itemGuidLow == takenGuid; }),
+                       atts.end());
+        }
+    }
+    if (action == MAIL_ITEM_TAKEN && error != 0) mailAutoLootId_ = 0;
+    if (error == 0 && action == MAIL_ITEM_TAKEN && mailAutoLootId_ != 0) {
+        const uint32_t next = mailAutoLootId_;
+        mailAutoLootId_ = 0;
+        mailTakePending_ = false;
+        autoLootNextAttachment(next);
+    } else {
+        mailTakePending_ = false;
     }
     refreshMailList();
 }

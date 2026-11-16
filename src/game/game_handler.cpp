@@ -1712,6 +1712,10 @@ void GameHandler::mailTakeItem(uint32_t mailId, uint32_t itemGuidLow) {
     if (inventoryHandler_) inventoryHandler_->mailTakeItem(mailId, itemGuidLow);
 }
 
+void GameHandler::autoLootMail(uint32_t mailId) {
+    if (inventoryHandler_) inventoryHandler_->autoLootMail(mailId);
+}
+
 void GameHandler::mailDelete(uint32_t mailId) {
     if (inventoryHandler_) inventoryHandler_->mailDelete(mailId);
 }

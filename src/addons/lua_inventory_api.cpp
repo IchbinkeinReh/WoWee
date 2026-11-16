@@ -2027,10 +2027,9 @@ static int lua_AutoLootMailItem(lua_State* L) {
     auto* gh = getGameHandler(L);
     const auto* mail = mailAt(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
     if (!gh || !mail) return 0;
-    if (mail->money > 0) gh->mailTakeMoney(mail->messageId);
-    for (const auto& att : mail->attachments) {
-        gh->mailTakeItem(mail->messageId, att.itemGuidLow);
-    }
+    // The money, then the attachments one at a time as each is answered,
+    // and none while the player cannot pay the COD (0x00570410, 0x00570270).
+    gh->autoLootMail(mail->messageId);
     return 0;
 }
 

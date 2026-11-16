@@ -613,6 +613,9 @@ public:
     int getMailAttachmentCount() const;
     void mailTakeMoney(uint32_t mailId);
     void mailTakeItem(uint32_t mailId, uint32_t itemGuidLow);
+    /// AutoLootMailItem (0x00571450 -> 0x00570410): the letter's money, then
+    /// its attachments one at a time, each after the last one's answer.
+    void autoLootMail(uint32_t mailId);
     void mailDelete(uint32_t mailId);
     void mailReturnToSender(uint32_t mailId);
     void mailMarkAsRead(uint32_t mailId);
@@ -1153,6 +1156,15 @@ private:
     /// A look for mail held over until the mailbox closes (0x00beb1e8).
     bool mailCheckOnClose_ = false;
     uint64_t mailboxGuid_ = 0;
+    /// A take the auto-loot sent and has had no answer to (0x00beb1e4):
+    /// nothing more is sent until it comes.
+    bool mailTakePending_ = false;
+    /// The letter whose remaining attachments the auto-loot takes next, as
+    /// each answer comes back (0x00beb1ec); 0 for none.
+    uint32_t mailAutoLootId_ = 0;
+    /// 0x00570270: the next attachment of that letter, if the player can pay
+    /// its COD.
+    void autoLootNextAttachment(uint32_t mailId);
     std::vector<MailMessage> mailInbox_;
     int selectedMailIndex_ = -1;
     bool showMailCompose_ = false;
