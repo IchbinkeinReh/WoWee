@@ -7051,15 +7051,25 @@ static int lua_GetNumBattlefields(lua_State* L) {
     return 1;
 }
 
-// IsInLFGDungeon() - standing inside a dungeon the finder put you in.
-//
-// The state is already tracked: SocialHandler keeps an LfgState and InDungeon
-// is one of its values. Nothing read it, so the minimap's dungeon button could
-// not tell inside from outside and offered the wrong direction.
+// IsInLFGDungeon() - standing inside the dungeon the finder put the group in
+// (0x00555660): the group roster's finder dungeon (0xbd19a4) has an
+// LFGDungeons.dbc row, and that row's map (+0x1c) and difficulty (+0x20) are
+// the current map and the current dungeon difficulty. Nothing at all for no
+// finder dungeon or one without a row. Not the finder's state, which stays
+// "in dungeon" while the player is teleported out to the entrance.
 static int lua_IsInLFGDungeon(lua_State* L) {
     auto* gh = getGameHandler(L);
-    lua_pushboolean(L, gh && gh->getLfgState() == game::LfgState::InDungeon ? 1 : 0);
-    return 1;
+    if (!gh) return 0;
+    const uint32_t entry = gh->getPartyData().lfgDungeonEntry;
+    if (entry == 0) return 0;
+    const uint32_t row = entry & 0xFFFFFFu;
+    for (const auto& d : gh->getLfgDungeons()) {
+        if (d.id != row) continue;
+        lua_pushboolean(L, d.mapId == gh->getCurrentMapId() &&
+                               d.difficulty == gh->getInstanceDifficulty() ? 1 : 0);
+        return 1;
+    }
+    return 0;
 }
 
 // LFGTeleport(out) - out to the dungeon's entrance, or back in.
