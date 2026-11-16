@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <deque>
 #include <cstdio>
 #include <fstream>
 #include <filesystem>
@@ -3249,6 +3250,7 @@ struct ItemClassNames {
     bool loaded = false;
     std::map<uint32_t, std::string> classes;
     std::map<std::pair<uint32_t, uint32_t>, std::pair<std::string, std::string>> subclasses;
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> subclassDisplayFlags;   // field 5
 };
 
 const ItemClassNames& itemClassNames(game::GameHandler* gh) {
@@ -3263,9 +3265,54 @@ const ItemClassNames& itemClassNames(game::GameHandler* gh) {
     if (auto dbc = am->loadDBCOptional("ItemSubClass.dbc"); dbc && dbc->isLoaded() && dbc->getFieldCount() > 27) {
         for (uint32_t r = 0; r < dbc->getRecordCount(); ++r) {
             t.subclasses[{dbc->getUInt32(r, 0), dbc->getUInt32(r, 1)}] = {dbc->getString(r, 10), dbc->getString(r, 27)};
+            t.subclassDisplayFlags[{dbc->getUInt32(r, 0), dbc->getUInt32(r, 1)}] = dbc->getUInt32(r, 5);
         }
     }
     return t;
+}
+}  // namespace
+
+namespace {
+/// ItemSubClass.dbc's rows in record order, as the auction house walks them
+/// (0x0059c480, 0x0059c590, 0x0059bcf0): ids, flags, display flags and the
+/// listed name - VerboseName, else DisplayName. The built-in copy stands in
+/// for a client without the file. Read once.
+struct AuctionSubClassTable {
+    bool loaded = false;
+    std::deque<std::string> names;   // owns what rows[i].label points at
+    std::vector<game::AuctionSubClassRow> rows;
+};
+
+const std::vector<game::AuctionSubClassRow>& auctionSubClassTable(game::GameHandler* gh) {
+    static AuctionSubClassTable t;
+    static const std::vector<game::AuctionSubClassRow> fallback(
+        std::begin(game::kItemSubClassFallback), std::end(game::kItemSubClassFallback));
+    if (t.loaded) return t.rows;
+    auto* am = gh ? gh->services().assetManager : nullptr;
+    if (!am || !am->isInitialized()) return fallback;
+    t.loaded = true;
+    auto dbc = am->loadDBCOptional("ItemSubClass.dbc");
+    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() <= 27) {
+        t.rows = fallback;
+        return t.rows;
+    }
+    for (uint32_t r = 0; r < dbc->getRecordCount(); ++r) {
+        std::string name = dbc->getString(r, 27);
+        if (name.empty()) name = dbc->getString(r, 10);
+        t.names.push_back(std::move(name));
+        t.rows.push_back({dbc->getUInt32(r, 0), dbc->getUInt32(r, 1), dbc->getUInt32(r, 4),
+                          dbc->getUInt32(r, 5), t.names.back().c_str()});
+    }
+    return t.rows;
+}
+
+/// The subclass rows listed under a 1-based class index; empty for a class
+/// that is not divided (Quest) or an index outside the twelve.
+std::vector<const game::AuctionSubClassRow*> auctionListedSubClasses(game::GameHandler* gh, int classIndex) {
+    const auto* cls = game::auctionClassAt(classIndex);
+    if (!cls || !cls->hasSubClasses) return {};
+    const auto& rows = auctionSubClassTable(gh);
+    return game::auctionSubClassRows(rows.data(), rows.size(), cls->classId);
 }
 }  // namespace
 
@@ -3285,6 +3332,14 @@ static std::string itemSubclassDisplayName(game::GameHandler* gh, uint32_t itemC
     if (it == t.subclasses.end()) return {};
     if (verbose && !it->second.second.empty()) return it->second.second;
     return it->second.first;
+}
+
+/// ItemSubClass.dbc's display flags (field 5) for a class and subclass; zero
+/// where the row is unknown.
+static uint32_t itemSubclassDisplayFlags(game::GameHandler* gh, uint32_t itemClass, uint32_t subClass) {
+    const auto& t = itemClassNames(gh);
+    const auto it = t.subclassDisplayFlags.find({itemClass, subClass});
+    return it != t.subclassDisplayFlags.end() ? it->second : 0u;
 }
 
 namespace {
@@ -3743,11 +3798,25 @@ static int lua_GetItemTooltipData(lua_State* L) {
         }
     }
     pushItemRequirements(L, gh, *info);
-    // The type line's name: the subclass's DisplayName (0x006277f0).
+    // The type line's name: the subclass's DisplayName (0x006277f0) - as
+    // subclassName always (a bag's slot line names it), and as typeSubclass
+    // only where the type line shows it: not for a row whose display flag
+    // 0x1 is set (junk, cloth, potions, recipes - every one of them would
+    // otherwise name its kind), and not for a cloak.
     {
         std::string sub = itemSubclassDisplayName(gh, info->itemClass, info->subClass, false);
+        const bool known = !sub.empty();
         if (sub.empty()) sub = info->subclassName;
-        if (!sub.empty()) { lua_pushstring(L, sub.c_str()); lua_setfield(L, -2, "subclassName"); }
+        if (!sub.empty()) {
+            lua_pushstring(L, sub.c_str());
+            lua_setfield(L, -2, "subclassName");
+            constexpr uint32_t kHideOnTooltip = 0x1, kInvTypeCloak = 16;
+            const uint32_t flags = known ? itemSubclassDisplayFlags(gh, info->itemClass, info->subClass) : 0;
+            if ((flags & kHideOnTooltip) == 0 && info->inventoryType != kInvTypeCloak) {
+                lua_pushstring(L, sub.c_str());
+                lua_setfield(L, -2, "typeSubclass");
+            }
+        }
     }
     // The stat and resistance lines, in the client's order and words
     // (item_stat_text.hpp): white primaries, green "Equip:" ratings.
@@ -5101,22 +5170,14 @@ static int lua_ResetCursor(lua_State* L) {
     return 0;
 }
 
-/// Coin as words, for the name of the money slot: "1 Gold, 20 Silver".
-/// Empty denominations are left out rather than shown as zero.
+/// Coin as words, for the name of the money slot: GOLD_AMOUNT, SILVER_AMOUNT
+/// and COPPER_AMOUNT, one to a line (0x00588430 -> 0x007e7d80 with "\n"), so
+/// a German client reads "20 Silber" where this wrote "20 Silver". Empty
+/// denominations are left out.
 static std::string lootCoinText(uint32_t copper) {
-    const uint32_t g = copper / 10000, s = (copper / 100) % 100, c = copper % 100;
-    std::string out;
-    auto add = [&out](uint32_t v, const char* unit) {
-        if (v == 0) return;
-        if (!out.empty()) out += '\n';
-        out += std::to_string(v);
-        out += ' ';
-        out += unit;
-    };
-    add(g, "Gold");
-    add(s, "Silver");
-    add(c, "Copper");
-    return out;
+    return game::interface_text::moneyText(copper, [](const char* key, const char* enUS) {
+        return game::interfaceString(key, enUS);
+    }, "\n");
 }
 
 /// Money occupies a loot slot in the interface but not on the wire.
@@ -5146,7 +5207,11 @@ static int lua_LootSlotIsCoin(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: LootSlotIsCoin(slot)");   // 0x00588810
     auto* gh = getGameHandler(L);
     const int slot = static_cast<int>(luaL_optnumber(L, 1, 0));
-    luaPushOneOrNil(L, (lootHasCoin(gh) && slot == 1) ? 1 : 0);
+    // 0x00588810 asks for money still there (`0 < money`): once taken, the
+    // slot keeps its place but is no longer coin - the loot frame would
+    // otherwise ask GetLootSlotInfo for a quality the empty slot lacks.
+    const bool coinLeft = gh && gh->isLootWindowOpen() && gh->getCurrentLoot().goldLeft();
+    luaPushOneOrNil(L, (coinLeft && slot == 1) ? 1 : 0);
     return 1;
 }
 
@@ -5225,19 +5290,13 @@ static int lua_GetLootSlotInfo(lua_State* L) {
 
     lua_pushnumber(L, item.count);                           // quantity
     lua_pushnumber(L, info ? info->quality : 1);             // quality
-    // locked - the row the loot window draws in red and refuses to take.
-    //
-    // Answered false because the slot type was "not tracked". It is tracked:
-    // SMSG_LOOT_RESPONSE carries one per item and the parser has always stored
-    // it. AzerothCore's LootSlotType is ALLOW_LOOT 0, ROLL_ONGOING 1, MASTER 2,
-    // LOCKED 3, OWNER 4 - so everything except the two that mean "take it" is
-    // locked, which covers a roll still running and an item only the master
-    // looter can hand out. Both used to draw as ordinary loot that silently did
-    // nothing when clicked.
-    constexpr uint8_t kAllowLoot = 0, kOwner = 4;
-    const bool locked = item.lootSlotType != kAllowLoot &&
-                        item.lootSlotType != kOwner;
-    luaPushOneOrNil(L, locked ? 1 : 0);
+    // locked - the row the loot window draws in red. SMSG_LOOT_RESPONSE's slot
+    // type is stored raw (0x006d4304), and 0x00588570 answers 1 for LOCKED (3)
+    // alone. A roll still running (1) and a master looter's item (2) draw as
+    // ordinary loot; LootSlot answers those with their own line or the
+    // candidate menu.
+    constexpr uint8_t kLocked = 3;
+    luaPushOneOrNil(L, item.lootSlotType == kLocked ? 1 : 0);
     return 5;
 }
 
@@ -6801,20 +6860,23 @@ void registerInventoryLuaAPI(lua_State* L) {
             // search by name found nothing but food. Row zero of each shared
             // list is "All", so the lookup turns both cases into the right
             // answer at once.
+            //
+            // As 0x0059bcf0 reads them: the slot is a row of all fourteen,
+            // whatever the class - FrameXML numbers it by its pair position in
+            // GetAuctionInvTypes' answer, hidden rows included. The subclass
+            // is the n-th listed ItemSubClass row of the class, read only
+            // when a class was given.
             const int invIdx = static_cast<int>(luaOptNumberText(L, 4, 0));
             const int clsIdx = static_cast<int>(luaOptNumberText(L, 5, 0));
             const int subIdx = static_cast<int>(luaOptNumberText(L, 6, 0));
-            const uint32_t cls = (clsIdx > 0 && clsIdx < game::kNumAuctionClasses)
-                ? game::kAuctionClasses[clsIdx].classId : game::kAuctionAny;
-            // The slot arrives as a position in the list GetAuctionInvTypes
-            // offered for this class, which is a subset - so it has to be read
-            // back through the same subset rather than straight off the table.
-            const uint32_t inv = game::auctionSlotIdAt(cls, subIdx, invIdx);
+            const auto* clsRow = game::auctionClassAt(clsIdx);
+            const uint32_t cls = clsRow ? clsRow->classId : game::kAuctionAny;
+            const uint32_t inv = game::auctionInvTypeIdAt(invIdx);
             uint32_t sub = game::kAuctionAny;
-            if (cls != game::kAuctionAny && subIdx > 0) {
-                int count = 0;
-                const auto* subs = game::auctionSubsFor(cls, count);
-                if (subs && subIdx < count) sub = subs[subIdx].subId;
+            if (clsRow && subIdx > 0) {
+                const auto& rows = auctionSubClassTable(gh);
+                const auto listed = game::auctionSubClassRows(rows.data(), rows.size(), cls);
+                if (subIdx <= static_cast<int>(listed.size())) sub = listed[subIdx - 1]->subId;
             }
             const uint32_t page = static_cast<uint32_t>(luaOptNumberText(L, 7, 0));
             const uint8_t usable = lua_toboolean(L, 8) ? 1 : 0;
@@ -7282,14 +7344,9 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // into CLASS_FILTERS - so answering nothing left the whole left
                 // pane blank and the auction house searchable by name only.
                 //
-                // The lists are the ones this client's own auction window has
-                // always shown, now shared, because the *position* in them is
-                // the protocol: FrameXML hands the index back to
-                // QueryAuctionItems and it has to mean the same thing on the
-                // way in. Row zero is "All" and is not returned here - which
-                // makes FrameXML's 1-based index land on the right row of the
-                // shared table, and an unselected filter arrive as zero and
-                // read as "any" without a special case.
+                // Row zero of kAuctionClasses is "All" and is not returned
+                // here, so FrameXML's 1-based index lands on the right row and
+                // an unselected filter arrives as zero and reads as "any".
                 //
                 // The names are ItemClass.dbc's (0x0059c420 pushes field 3 of
                 // each class's row), so a German client reads Waffe, Rüstung,
@@ -7303,62 +7360,48 @@ void registerInventoryLuaAPI(lua_State* L) {
             }
             return game::kNumAuctionClasses - 1;
         }},
+                // Every ItemSubClass.dbc row of the class that is not hidden
+                // (display flag 0x2), in record order (0x0059c480) - eleven of
+                // the twelve classes are divided, Quest alone is not. The
+                // position is the index QueryAuctionItems is handed back.
                 {"GetAuctionItemSubClasses", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetAuctionItemSubClasses(index)");   // 0x0059c480
             const int ci = static_cast<int>(luaL_optnumber(L, 1, 0));
-            if (ci < 1 || ci >= game::kNumAuctionClasses) return 0;
-            int count = 0;
-            const auto* subs = game::auctionSubsFor(game::kAuctionClasses[ci].classId, count);
-            if (!subs) return 0;
-            // ItemSubClass.dbc's VerboseName, else its DisplayName (0x0059c480).
-            auto* gh = getGameHandler(L);
-            for (int i = 1; i < count; ++i) {
-                const std::string name = itemSubclassDisplayName(
-                    gh, game::kAuctionClasses[ci].classId, subs[i].subId, true);
-                lua_pushstring(L, name.empty() ? subs[i].label : name.c_str());
-            }
-            return count - 1;
+            const auto listed = auctionListedSubClasses(getGameHandler(L), ci);
+            if (listed.empty() || !lua_checkstack(L, static_cast<int>(listed.size()))) return 0;
+            for (const auto* row : listed) lua_pushstring(L, row->label);
+            return static_cast<int>(listed.size());
         }},
-                // The third tier of the filter tree: where an item is worn.
-                //
-                // This answered nothing, on the grounds that the real client
-                // has no such tier. It does - Armor, Cloth, Head - and with
-                // nothing here the auction house could not be searched by slot
-                // at all.
+                // The third tier of the filter tree: where an item is worn
+                // (0x0059c590). Only a subclass flagged 0x200 has one -
+                // armour's Miscellaneous, Cloth, Leather, Mail and Plate.
                 //
                 // Pairs, which is the shape AuctionFrameFilters_UpdateInvTypes
-                // reads: the name of a global string, then a flag saying the
-                // row is offered. The interface resolves the name itself, so
-                // the wording is not written out a second time here.
-                //
-                // The number handed back is a position in kAuctionSlots, and
-                // QueryAuctionItems reads that same table at that position -
-                // so a renumbered subset would search a slot other than the
-                // one clicked, silently. auctionSlotsFor answers positions for
-                // exactly that reason.
+                // reads: the name of a global string, then 1 where the row is
+                // offered and nil where it is not. All fourteen rows come back
+                // either way, because FrameXML numbers a row by its pair
+                // position and QueryAuctionItems reads the same fourteen at
+                // that position.
                 {"GetAuctionInvTypes", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: GetAuctionInvTypes(classIndex, subClassIndex)");   // 0x0059c590
             const int ci = static_cast<int>(luaL_optnumber(L, 1, 0));
-            const int si = static_cast<int>(luaL_optnumber(L, 2, 0));
-            if (ci < 1 || ci >= game::kNumAuctionClasses) return 0;
-            int count = 0;
-            const uint8_t* slots =
-                game::auctionSlotsFor(game::kAuctionClasses[ci].classId, si, count);
-            if (!slots || count <= 0) return 0;
-            // Two per row, and Lua guarantees room for twenty results without
-            // being asked. Asking is what makes a longer list safe.
-            if (!lua_checkstack(L, count * 2)) return 0;
-            int pushed = 0;
-            for (int i = 0; i < count; ++i) {
-                const uint8_t at = slots[i];
-                if (at >= game::kNumAuctionSlots) continue;
-                lua_pushstring(L, game::kAuctionSlots[at].token);
-                // The interface reads this only as "this row is offered"; the
-                // row's own number is its position in what is returned here.
-                lua_pushnumber(L, 1);
-                pushed += 2;
+            const int si = static_cast<int>(luaL_optnumber(L, 2, 0)) - 1;
+            const auto* cls = game::auctionClassAt(ci);
+            if (!cls || !cls->hasSubClasses) return 0;
+            const auto listed = auctionListedSubClasses(getGameHandler(L), ci);
+            // A listed subclass without the flag has no tier; an index past
+            // the list is not refused, as in the original.
+            if (si >= 0 && si < static_cast<int>(listed.size()) &&
+                (listed[si]->flags & game::kAuctionSubClassHasSlots) == 0) {
+                return 0;
             }
-            return pushed;
+            if (!lua_checkstack(L, game::kNumAuctionInvTypes * 2)) return 0;
+            for (int i = 0; i < game::kNumAuctionInvTypes; ++i) {
+                lua_pushstring(L, game::kAuctionInvTypes[i].token);
+                if (game::auctionInvTypeOffered(cls->classId, si, i)) lua_pushnumber(L, 1);
+                else lua_pushnil(L);
+            }
+            return game::kNumAuctionInvTypes * 2;
         }},
                 {"GetNumAuctionItems", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);

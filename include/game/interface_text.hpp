@@ -63,16 +63,18 @@ namespace interface_text {
 using TextSource = std::function<std::string(const char* key, const char* enUS)>;
 
 /// An amount of money as 0x007e7d80 writes it: GOLD_AMOUNT, SILVER_AMOUNT and
-/// COPPER_AMOUNT for the coins there are, highest first, joined by ", " - "1
-/// Gold, 5 Kupfer". A coin of zero is left out; nothing at all is empty.
-inline std::string moneyText(uint64_t copper, const TextSource& text) {
+/// COPPER_AMOUNT for the coins there are, highest first, joined by the
+/// separator - ", " for "1 Gold, 5 Kupfer", or "\n" for the loot window's coin
+/// slot (0x00588430). A coin of zero is left out; nothing at all is empty.
+inline std::string moneyText(uint64_t copper, const TextSource& text,
+                             const char* separator = ", ") {
     const uint64_t gold = copper / 10000;
     const uint64_t silver = (copper / 100) % 100;
     const uint64_t cop = copper % 100;
     std::string out;
     auto add = [&](uint64_t n, const char* key, const char* enUS) {
         if (n == 0) return;
-        if (!out.empty()) out += ", ";
+        if (!out.empty()) out += separator;
         out += chat_channels::luaFormat(text(key, enUS), {std::to_string(n)});
     };
     add(gold, "GOLD_AMOUNT", "%d Gold");

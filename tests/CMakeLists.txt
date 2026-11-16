@@ -3058,9 +3058,9 @@ wowee_add_test(test_json_table_scan
             ${TEST_COMMON_SOURCES})
 
 # ── test_auction_slot_filter ─────────────────────────────────
-# The auction house's equipment-slot filter. FrameXML numbers the rows it is
-# given from one, so the number that comes back is a position in the subset
-# offered for that class rather than in the whole slot table.
+# The auction house's filter tree: classes, ItemSubClass.dbc rows in record
+# order and the fourteen-row slot tier, read back by QueryAuctionItems the way
+# the original lists them (0x0059c480, 0x0059c590, 0x0059bcf0).
 wowee_add_test(test_auction_slot_filter
     SOURCES test_auction_slot_filter.cpp
             ${TEST_COMMON_SOURCES})

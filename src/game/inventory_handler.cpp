@@ -661,10 +661,18 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
             // reads arg1 to know which button to refresh, so a bare fire would
             // make it redraw the wrong one.
             //
-            // Slots are zero-based on the wire and one-based in the interface.
+            // The interface's slot is the item's place in the list, after the
+            // coin when there is one (0x00589a30), not the server's number.
             if (owner_.addonEventCallbackRef()) {
-                owner_.addonEventCallbackRef()("LOOT_SLOT_CHANGED",
-                                               {std::to_string(slotIdx + 1)});
+                const auto& items = currentLoot_.items;
+                for (size_t i = 0; i < items.size(); ++i) {
+                    if (items[i].slotIndex != slotIdx) continue;
+                    const int display = static_cast<int>(i) + 1 +
+                                        (currentLoot_.hasCoinSlot() ? 1 : 0);
+                    owner_.addonEventCallbackRef()("LOOT_SLOT_CHANGED",
+                                                   {std::to_string(display)});
+                    break;
+                }
             }
         }
     };
@@ -1537,7 +1545,15 @@ void InventoryHandler::autoTakeLoot() {
 }
 
 void InventoryHandler::handleLootReleaseResponse(network::Packet& packet) {
-    (void)packet;
+    // The server's answer to a release - which this client has usually already
+    // acted on: CloseLoot let the loot go and said LOOT_CLOSED. The original
+    // says it once, from the call that sets or clears the loot object (0x005896b0
+    // fires 0xfc only while one is set), so an answer for loot no longer open
+    // - or for other loot than what is open now - closes nothing.
+    const uint64_t released = packet.hasRemaining(8) ? packet.readUInt64() : 0;
+    packet.skipAll();
+    if (released != 0) localLootState_.erase(released);
+    if (!lootWindowOpen_ || (released != 0 && released != currentLoot_.lootGuid)) return;
     const uint64_t lootGuid = currentLoot_.lootGuid;
     localLootState_.erase(lootGuid);
     lootWindowOpen_ = false;
@@ -1557,8 +1573,15 @@ void InventoryHandler::handleLootRemoved(network::Packet& packet) {
             // updates the open loot window; announcing here duplicated chat and
             // the loot sound for the same item.
             it->looted = true;
+            // The slot the interface knows, not the server's (0x00589920):
+            // the item's place in the list, after the coin when there is one.
+            // The server's number skips slots the player is not shown, and
+            // with coin on the corpse it named the button before the item's -
+            // taking the first item hid the money and left the item drawn.
+            const int display = static_cast<int>(it - currentLoot_.items.begin()) + 1 +
+                                (currentLoot_.hasCoinSlot() ? 1 : 0);
             if (owner_.addonEventCallbackRef())
-                owner_.addonEventCallbackRef()("LOOT_SLOT_CLEARED", {std::to_string(slotIndex + 1)});
+                owner_.addonEventCallbackRef()("LOOT_SLOT_CLEARED", {std::to_string(display)});
             break;
         }
     }
@@ -5120,6 +5143,11 @@ void InventoryHandler::auctionSearch(const std::string& name, uint8_t levelMin, 
                           .invTypeMask = invTypeMask, .usableOnly = usableOnly, .offset = offset, .sort = sort};
     hasAuctionSearch_ = true;
     pendingAuctionTarget_ = AuctionResultTarget::BROWSE;
+    LOG_INFO("CMSG_AUCTION_LIST_ITEMS: offset=", offset, " class=", static_cast<int32_t>(itemClass),
+             " subclass=", static_cast<int32_t>(itemSubClass), " invType=",
+             static_cast<int32_t>(invTypeMask), " quality=", static_cast<int32_t>(quality),
+             " levels=", static_cast<int>(levelMin), "-", static_cast<int>(levelMax),
+             " usable=", static_cast<int>(usableOnly));
     auto packet = AuctionListItemsPacket::build(auctioneerGuid_, offset, name,
                                                   levelMin, levelMax, invTypeMask,
                                                   itemClass, itemSubClass, quality, usableOnly, 0,
