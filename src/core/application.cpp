@@ -6450,6 +6450,10 @@ void Application::update(float deltaTime) {
             addonManager_->fireEvent("UPDATE_CHAT_WINDOWS");
             addonManager_->fireEvent("PLAYER_LOGIN");
             addonManager_->fireEvent("PLAYER_ENTERING_WORLD");
+            // The new interface has not heard the login's UPDATE_FACTION either
+            // (see WorldLoader::loadOnlineWorldTerrain): the experience bar
+            // against the max-level bar and the watched faction.
+            addonManager_->fireEvent("UPDATE_FACTION");
             // 0x00528010 runs again for the new interface, and with it the
             // queue questions whose answers set up the dungeon finder.
             if (gameHandler && gameHandler->getState() == game::WorldState::IN_WORLD)

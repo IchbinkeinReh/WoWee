@@ -1499,12 +1499,27 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         addonManager_->fireEvent("UPDATE_CHAT_WINDOWS");
         addonManager_->fireEvent("PLAYER_LOGIN");
         addonManager_->fireEvent("PLAYER_ENTERING_WORLD");
+        // What the login said about reputation, said again to an interface that
+        // was not there to hear it. The client is already listening when
+        // SMSG_INITIALIZE_FACTIONS (0x005d2e30) and the player's watched-faction
+        // field (watch on +0x10e8) raise UPDATE_FACTION, and that event is the
+        // only thing that runs ReputationWatchBar_Update: without it a level 80
+        // kept the empty experience bar the XML starts with, never the max-level
+        // bar, and a watched faction's bar stayed hidden until it next moved.
+        addonManager_->fireEvent("UPDATE_FACTION");
         // Now that something is listening: the queue status this entry asked
         // for before the interface existed (see GameHandler::setInterfaceLoaded).
         if (gameHandler_) gameHandler_->setInterfaceLoaded(true);
     } else if (addonManager_ && app_.addonsLoaded_) {
         // Subsequent world entries (e.g. teleport, instance entry)
         addonManager_->fireEvent("PLAYER_ENTERING_WORLD");
+        // A transfer resends SMSG_INITIALIZE_FACTIONS ahead of the player
+        // object, so its UPDATE_FACTION found UnitLevel("player") at 0 and put
+        // the experience bar back over the max-level bar. The client's own
+        // watch on the watched-faction field fires again when the player
+        // object is built anew with its level (+0x10e8, see EntityController);
+        // this is that, now that the player is here.
+        addonManager_->fireEvent("UPDATE_FACTION");
     }
     // The cinematic that came while the world loaded (0x006e8190 ->
     // 0x00528af0).

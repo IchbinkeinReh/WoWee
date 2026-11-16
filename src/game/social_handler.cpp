@@ -6608,6 +6608,9 @@ void SocialHandler::handleInitializeFactions(network::Packet& packet) {
     // Whether each faction with a standing is hostile is the at-war flag this
     // packet carries, so units judged before it arrived are judged again.
     owner_.refreshUnitHostility();
+    // 0x005d2e30 ends in event 0x16a, UPDATE_FACTION: the reputation tab and
+    // the watched-faction bar redraw from the list that has just arrived.
+    owner_.fireAddonEvent("UPDATE_FACTION", {});
 }
 
 void SocialHandler::handleSetFactionStanding(network::Packet& packet) {
