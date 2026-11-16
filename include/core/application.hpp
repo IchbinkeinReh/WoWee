@@ -220,6 +220,9 @@ private:
     void syncRenderInstancesToEntities(float deltaTime);
     /// What 0x007385c0 reads of the player's own unit for its upper body.
     rendering::upper_body::Unit playerAnimationState(const game::Unit& self) const;
+    /// A text emote the player has just sent: its stand state, or its
+    /// animation where 0x00724410 plays it at once (0x006dd9e0).
+    void playTextEmoteLocally(uint32_t textEmoteId);
     /// The player's unit onto its instance, and its base animation asked
     /// again where what it reads has changed.
     void syncPlayerAnimation(const game::Unit& self);

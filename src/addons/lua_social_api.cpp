@@ -3934,15 +3934,10 @@ void registerSocialLuaAPI(lua_State* L) {
             if (current) {
                 target = gh->hasTarget() ? gh->getTargetGuid() : 0;
             }
-            // 0x006dd9e0: an emote the client does not send it does not play.
-            if (!gh->sendTextEmote(emoteId, target)) return 0;
-            // And the animation, which this did not do. Telling the server is
-            // the half that is seen by everyone else; playing it is the half
-            // seen by the player, and standing still while the room is told you
-            // danced is what an emote that "does nothing" looks like.
-            if (auto* svc = getLuaServices(L); svc && svc->playEmoteAnimation) {
-                svc->playEmoteAnimation(name);
-            }
+            // 0x006dd9e0: sending it plays it on the player where 0x00724410
+            // lets it (on the move), else the server's SMSG_EMOTE does
+            // (0x006cfe70) - both behind GameHandler::sendTextEmote.
+            gh->sendTextEmote(emoteId, target);
             return 0;
         }},
                 // AddFriend / AddIgnore / DelIgnore do nothing for an

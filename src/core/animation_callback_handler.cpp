@@ -299,6 +299,17 @@ void AnimationCallbackHandler::setupCallbacks() {
             }
             return;
         }
+        // The active player's own (0x006cfe70 -> 0x0073ab90): not asleep
+        // or swimming, not what it already plays, not while it channels or
+        // casts, and in combat only LiftOff and Land.
+        if (guid == gameHandler_.getPlayerGuid()) {
+            const uint32_t self = renderer_.getCharacterInstanceId();
+            const auto* unit = self ? cr->unitAnimationState(self) : nullptr;
+            if (self == 0 || (unit && !rendering::upper_body::serverEmotePlays(*unit, emoteAnim, cr->unitPlaying(self))))
+                return;
+            cr->playAnimation(self, emoteAnim, isState);
+            return;
+        }
         emoteInstanceId = entitySpawner_.getPlayerInstanceId(guid);
         if (emoteInstanceId != 0) {
             if (emoteAnim == 0) {

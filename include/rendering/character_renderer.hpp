@@ -115,6 +115,14 @@ public:
     /// 0x0073e840 picks, SpineLow else the head - as the client shares it
     /// (upper_body::decide); without it the body takes everything.
     void setUnitAnimationState(uint32_t instanceId, const upper_body::Unit& unit);
+    /// The unit last given to the instance (setUnitAnimationState), none
+    /// before it was given one.
+    [[nodiscard]] const upper_body::Unit* unitAnimationState(uint32_t instanceId) const;
+    /// +0x9f8: the stand state its animation was last given for.
+    [[nodiscard]] std::optional<uint8_t> unitStandStateSeen(uint32_t instanceId) const;
+    /// 0x00717260: what the unit plays - its upper body's own animation,
+    /// else its body's; -1 for nothing.
+    [[nodiscard]] int32_t unitPlaying(uint32_t instanceId) const;
     /// A spell visual kit played on the unit: its animation, as 0x0073b140
     /// plays it (kit_animation::onKitPlayed).
     void playKitAnimation(uint32_t instanceId, const kit_animation::KitPlay& kit);

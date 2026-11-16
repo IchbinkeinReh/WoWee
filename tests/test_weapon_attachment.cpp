@@ -564,3 +564,15 @@ TEST_CASE("each swap sounds the weapon it moved (0x00732500, 0x004d07b0)", "[att
     CHECK(sheathSwapSound(reach, 0, guns).item == &gun);
     CHECK(sheathSwapSound(reach, 1, guns).item == nullptr);
 }
+
+TEST_CASE("a stand-state text emote asks for stand, sit, sleep or kneel (0x006dd9e0)", "[weapon_attachment]") {
+    CHECK(textEmoteSetsStandState(1, 0));
+    CHECK(textEmoteSetsStandState(1, 1));
+    CHECK(textEmoteSetsStandState(1, 3));
+    CHECK(textEmoteSetsStandState(1, 8));
+    CHECK_FALSE(textEmoteSetsStandState(1, 2));
+    CHECK_FALSE(textEmoteSetsStandState(1, 7));
+    CHECK_FALSE(textEmoteSetsStandState(0, 1));
+    CHECK_FALSE(textEmoteSetsStandState(2, 1));
+    CHECK_FALSE(textEmoteSetsStandState(1, 40));
+}

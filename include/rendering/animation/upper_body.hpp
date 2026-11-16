@@ -138,6 +138,40 @@ struct Unit {
     bool inCombat = false;
 };
 
+/// 0x00724410: whether the active player's text emote animation plays at
+/// once as it is sent (0x006dd9e0) rather than when the server's SMSG_EMOTE
+/// comes back. Only on the move - forward, back or strafing - and only
+/// standing (stand state 0, and given for 0, +0x9f8): not dead, a ghost or
+/// feigning death (0x0071f560, vtable +0x128); not in a leap or a long fall
+/// (0x1000 with 0x2000, or with a fall speed, 0x005fee10); not looting
+/// (0x0071b6b0 with 0x007222a0); neither channelling, casting with a
+/// precast animation (+0xa38 0x400), swinging (+0xa20), turning on the spot
+/// (0x0071de90) nor auto-shooting with the ranged weapon out (+0xb5c 2,
+/// +0xa38 0x200).
+[[nodiscard]] constexpr bool localEmotePlays(const Unit& u, bool ghost) {
+    const bool deadPose = !u.alive || u.feignDeath || u.standState == 7 || u.deathKitAnim.has_value();
+    if (deadPose || ghost) return false;
+    if (u.standState == 9) return false;
+    if ((u.moveFlags & kMoveFalling) != 0 && u.leaping) return false;
+    if ((u.moveFlags & kMoveDirection) == 0) return false;
+    if (u.looting && u.canLoot) return false;
+    if (u.channeling || u.castTimed || u.autoAttacking || u.turningInPlace) return false;
+    if (u.rangedDrawn && u.autoRepeat) return false;
+    return u.standState == 0 && u.standStateSeen == 0;
+}
+
+/// 0x006cfe70 -> 0x0073ab90: whether SMSG_EMOTE's animation `anim` plays on
+/// the unit: not asleep (stand state 3) or swimming; not what it already
+/// plays (0x00717260); not channelling or casting with a precast animation
+/// (+0xa38 0x400); and in combat (0x0071afb0, UNIT_FIELD_FLAGS 0x800 or a
+/// melee target) only LiftOff (192) and Land (200).
+[[nodiscard]] constexpr bool serverEmotePlays(const Unit& u, uint32_t anim, int32_t playing) {
+    if (u.standState == 3 || (u.moveFlags & kMoveSwimming) != 0) return false;
+    if (anim >= 0x1fa || static_cast<int32_t>(anim) == playing) return false;
+    if (u.channeling || u.castTimed) return false;
+    return anim == 0xc0 || anim == 200 || !u.inCombat;
+}
+
 /// What a slot plays, from where (0x008266b0's state): -1 for an upper body
 /// with nothing of its own.
 struct Slot {

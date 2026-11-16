@@ -740,20 +740,17 @@ void AppearanceComposer::onSpellCastBegin(uint32_t spellId) {
     }
 }
 
-TextEmoteVerdict AppearanceComposer::onTextEmote(uint32_t textEmoteId) {
-    // Without the player or the tables there is nothing to judge it by.
-    if (!gameHandler_ || !assetManager_) return TextEmoteVerdict::Send;
-    auto entity = gameHandler_->getEntityManager().getEntity(gameHandler_->getPlayerGuid());
-    if (!entity) return TextEmoteVerdict::Send;
+TextEmoteSheathInput AppearanceComposer::textEmoteRow(uint32_t textEmoteId) const {
     TextEmoteSheathInput in;
-    // EmotesText +8 (EmoteRef) names the Emotes row: its EmoteFlags (+0xc)
-    // and EmoteSpecProc (+0x10).
+    if (!assetManager_) return in;
+    // EmotesText +8 (EmoteRef) names the Emotes row: its AnimID (+8),
+    // EmoteFlags (+0xc), EmoteSpecProc (+0x10) and its param (+0x14).
     const auto* layouts = pipeline::getActiveDBCLayout();
     const auto* textLayout = layouts ? layouts->getLayout("EmotesText") : nullptr;
     const auto* emoteLayout = layouts ? layouts->getLayout("Emotes") : nullptr;
     auto texts = assetManager_->loadDBCOptional("EmotesText.dbc");
     auto emotes = assetManager_->loadDBCOptional("Emotes.dbc");
-    if (!texts || !emotes) return TextEmoteVerdict::Send;
+    if (!texts || !emotes) return in;
     const int32_t textRow = texts->findRecordById(textEmoteId);
     const uint32_t refField = textLayout ? textLayout->tryField("EmoteRef") : 2;
     if (textRow >= 0 && refField < texts->getFieldCount()) {
@@ -761,13 +758,28 @@ TextEmoteVerdict AppearanceComposer::onTextEmote(uint32_t textEmoteId) {
             emotes->findRecordById(texts->getUInt32(static_cast<uint32_t>(textRow), refField));
         if (emoteRow >= 0) {
             in.emoteKnown = true;
+            const uint32_t animField = emoteLayout ? emoteLayout->tryField("AnimID") : 2;
             const uint32_t flagsField = emoteLayout ? emoteLayout->tryField("EmoteFlags") : 3;
             const uint32_t procField = emoteLayout ? emoteLayout->tryField("EmoteSpecProc") : 4;
+            const uint32_t paramField = procField + 1;
             const auto r = static_cast<uint32_t>(emoteRow);
+            if (animField < emotes->getFieldCount()) in.animId = emotes->getUInt32(r, animField);
             if (flagsField < emotes->getFieldCount()) in.emoteFlags = emotes->getUInt32(r, flagsField);
             if (procField < emotes->getFieldCount()) in.specProc = emotes->getUInt32(r, procField);
+            if (paramField < emotes->getFieldCount()) in.specProcParam = emotes->getUInt32(r, paramField);
         }
     }
+    return in;
+}
+
+TextEmoteVerdict AppearanceComposer::onTextEmote(uint32_t textEmoteId) {
+    // Without the player or the tables there is nothing to judge it by.
+    if (!gameHandler_ || !assetManager_) return TextEmoteVerdict::Send;
+    auto entity = gameHandler_->getEntityManager().getEntity(gameHandler_->getPlayerGuid());
+    if (!entity) return TextEmoteVerdict::Send;
+    if (!assetManager_->loadDBCOptional("EmotesText.dbc") || !assetManager_->loadDBCOptional("Emotes.dbc"))
+        return TextEmoteVerdict::Send;
+    TextEmoteSheathInput in = textEmoteRow(textEmoteId);
     in.standState = gameHandler_->getStandState();
     in.moveFlags = gameHandler_->getMovementInfo().flags;
     // A flight path is the server's flying spline on the player (0x004f5260).
