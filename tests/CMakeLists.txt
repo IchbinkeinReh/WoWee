@@ -224,6 +224,11 @@ wowee_add_test(test_chat_log
 wowee_add_test(test_chat_outgoing
     SOURCES test_chat_outgoing.cpp)
 
+# A chat bubble's lifetime by its words and its fades (0x0056c1c0,
+# 0x0056c500). Header-only.
+wowee_add_test(test_chat_bubble_timing
+    SOURCES test_chat_bubble_timing.cpp)
+
 # The arena opponent roster (BattlefieldInfo.cpp): slots, pets beside their
 # owners, and ARENA_OPPONENT_UPDATE's words. Header-only.
 wowee_add_test(test_arena_opponents
