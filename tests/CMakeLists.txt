@@ -1330,6 +1330,13 @@ wowee_add_test(test_teleport_ack_gate
     SOURCES test_teleport_ack_gate.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_transport_entry_wait ────────────────────────────────
+# A transfer on a transport ends its load once the transport is known on the
+# new map, not with the rider at the map's origin. Header-only.
+wowee_add_test(test_transport_entry_wait
+    SOURCES test_transport_entry_wait.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_attacker_state_layout ─────────────────────────────────────────
 # SMSG_ATTACKERSTATEUPDATE for classic and TBC, pinned before the shared head
 # was factored out. Same link set as the other two layout tests.
