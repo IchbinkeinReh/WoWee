@@ -212,5 +212,34 @@ std::vector<QuestObjective> questObjectives(GameHandler& gh,
     return out;
 }
 
+std::vector<std::string> questTooltipRequirementLines(GameHandler& gh,
+                                                      const GameHandler::QuestLogEntry& quest,
+                                                      bool completeInLog) {
+    // 0x00622960 asks 0x005e1300 for the count, then 0x005e1460 for each line.
+    QuestTooltipLookup look;
+    look.targetName = [&gh](int32_t id) { return targetName(gh, id); };
+    look.itemName = [&gh](uint32_t id) {
+        const auto* info = gh.getItemInfo(id);
+        if (info && !info->name.empty()) return info->name;
+        gh.queryItemInfo(id, 0);
+        return std::string();
+    };
+    look.carried = [&gh](uint32_t id) { return static_cast<uint32_t>(gh.countItemInBags(id)); };
+    look.factionName = [&gh](uint32_t id) { return gh.getFactionNamePublic(id); };
+    look.standingLabel = [](int32_t value) {
+        const auto standing = reputationStandingFor(value);
+        const std::string key = "FACTION_STANDING_LABEL" + std::to_string(standing.id);
+        return interfaceString(key.c_str(), standing.name);
+    };
+    look.text = interfaceString;
+    std::vector<std::string> out;
+    const int count = questTooltipRequirementCount(quest, completeInLog);
+    for (int i = 0; i < count; ++i) {
+        std::string line = questTooltipRequirementLine(quest, i, completeInLog, look);
+        if (!line.empty()) out.push_back(std::move(line));
+    }
+    return out;
+}
+
 }  // namespace game
 }  // namespace wowee

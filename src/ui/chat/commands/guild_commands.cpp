@@ -22,7 +22,7 @@ public:
 class GuildRosterCommand : public IChatCommand {
 public:
     ChatCommandResult execute(ChatCommandContext& ctx) override {
-        ctx.gameHandler.requestGuildRoster();
+        ctx.gameHandler.requestGuildRosterThrottled();   // as GuildRoster(), 0x005ca9b0
         return {};
     }
     [[nodiscard]] std::vector<std::string> aliases() const override { return {"groster", "guildroster"}; }

@@ -17,6 +17,7 @@
 #include "game/game_utils.hpp"
 #include "game/stationery.hpp"
 #include "game/auction_filters.hpp"
+#include "game/auction_deposit.hpp"
 #include "ui/framexml_takeover.hpp"
 #include "core/logger.hpp"
 #include "core/config_paths.hpp"
@@ -904,7 +905,55 @@ static int lua_WoweeTryOn(lua_State* L) {
     auto* w = tree->get(id);
     if (!w) return 0;
 
-    const uint32_t itemId = itemIdFromArg(L, 2);
+    // What 0x00598830 accepts: a number is an item id; a string holding
+    // "item:" is a link; one holding "enchant:" names a trade spell
+    // (Attributes 0x20) whose first effect makes an item (EffectItemType[0]),
+    // which is what is tried on; any other string is the name of an item the
+    // player carries (0x00754c30, the carried set 0x247). Anything else, or a
+    // spell or name that finds nothing, is ERR_NOT_EQUIPPABLE.
+    uint32_t itemId = 0;
+    bool found = false;
+    if (lua_isnumber(L, 2)) {
+        itemId = static_cast<uint32_t>(lua_tonumber(L, 2));
+        found = true;
+    } else if (lua_isstring(L, 2)) {
+        const std::string arg = lua_tostring(L, 2);
+        if (const auto at = arg.find("item:"); at != std::string::npos) {
+            itemId = static_cast<uint32_t>(std::strtoul(arg.c_str() + at + 5, nullptr, 10));
+            found = true;
+        } else if (const auto en = arg.find("enchant:"); en != std::string::npos) {
+            const long spellId = std::strtol(arg.c_str() + en + 8, nullptr, 10);
+            if (spellId > 0) {
+                gh->loadSpellNameCache();
+                const auto& cache = gh->spellNameCacheRef();
+                const auto sp = cache.find(static_cast<uint32_t>(spellId));
+                if (sp != cache.end() && (sp->second.attr & 0x20u) != 0 &&
+                    sp->second.effectItemType0 != 0) {
+                    itemId = sp->second.effectItemType0;
+                    found = true;
+                }
+            }
+        } else if (!arg.empty()) {
+            std::string wanted = arg;
+            toLowerInPlace(wanted);
+            gh->getInventory().forEachCarried([&](const game::ItemDef& item) {
+                if (found) return;
+                std::string name = item.name;
+                if (name.empty()) {
+                    if (const auto* known = gh->getItemInfo(item.itemId)) name = known->name;
+                }
+                toLowerInPlace(name);
+                if (!name.empty() && name == wanted) {
+                    itemId = item.itemId;
+                    found = true;
+                }
+            });
+        }
+    }
+    if (!found) {
+        gh->sayGameError(game::server_notice::kNotEquippable);
+        return 0;
+    }
     const auto* info = itemId ? gh->getItemInfo(itemId) : nullptr;
     if (!info || info->displayInfoId == 0) return 0;
 
@@ -1217,17 +1266,22 @@ static int lua_AddTradeMoney(lua_State* L) {
     return 0;
 }
 
-/// The pick-up half: take money back off the trade onto the cursor. Without an
-/// amount, all of it - which is what the money frame passes when the whole
-/// figure is dragged.
+/// The pick-up half: take money back off the trade onto the cursor
+/// (0x00586810 -> 0x00704320): only an amount above nothing and no more than
+/// is offered; the trade is left at the rest and the amount goes on the
+/// cursor. Any other amount does nothing at all.
 static int lua_PickupTradeMoney(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: PickupTradeMoney(amount)");   // 0x00586810
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     const uint64_t offered = gh->getMyTradeGold();
-    if (offered == 0) return 0;
-    uint64_t take = static_cast<uint64_t>(luaL_optnumber(L, 1, 0));
-    if (take == 0 || take > offered) take = offered;
+    const int32_t amount = luaToClientInt(L, 1);
+    if (amount <= 0 || static_cast<uint64_t>(amount) > offered) {
+        LOG_WARNING("PickupTradeMoney(", amount, "): not between 1 and the ", offered,
+                    " offered, ignored as the client ignores it");
+        return 0;
+    }
+    const uint64_t take = static_cast<uint64_t>(amount);
     gh->setTradeGold(offered - take);
     setCursorMoney(L, take);
     return 0;
@@ -2794,32 +2848,90 @@ static int lua_GetInventoryItemsForSlot(lua_State* L) {
 // items can share a name and only the link says which.
 
 /// The first carried item whose id or name matches, or zero.
-static uint32_t carriedItemMatching(game::GameHandler* gh, lua_State* L, int arg) {
-    if (!gh) return 0;
+/// Where a carried item is: its entry, and a backpack index (bag -1) or a
+/// bag and slot.
+struct CarriedItem {
+    uint32_t itemId = 0;
+    int bag = -1;
+    int slot = -1;
+};
+
+/// The instance numbers of an "item:" link as 0x0050f630 reads them: the
+/// enchant, the first three gems, the suffix and the seed (the unique id).
+struct LinkedInstance {
+    uint32_t enchant = 0;
+    uint32_t gems[3] = {0, 0, 0};
+    int32_t suffix = 0;
+    uint32_t seed = 0;
+};
+
+static bool linkedInstance(const std::string& text, LinkedInstance& out) {
+    const auto pos = text.find("item:");
+    if (pos == std::string::npos) return false;
+    // id:enchant:gem1:gem2:gem3:gem4:suffix:unique
+    long v[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    const char* p = text.c_str() + pos + 5;
+    for (int i = 0; i < 8; ++i) {
+        char* end = nullptr;
+        v[i] = std::strtol(p, &end, 10);
+        if (*end != ':') break;
+        p = end + 1;
+    }
+    out.enchant = static_cast<uint32_t>(v[1]);
+    out.gems[0] = static_cast<uint32_t>(v[2]);
+    out.gems[1] = static_cast<uint32_t>(v[3]);
+    out.gems[2] = static_cast<uint32_t>(v[4]);
+    out.suffix = static_cast<int32_t>(v[6]);
+    out.seed = static_cast<uint32_t>(v[7]);
+    return true;
+}
+
+/// 0x007545d0: a carried item answers a link when each number the link
+/// names - enchant, gems, suffix, seed - is the item's own. An item whose
+/// field flag 0x8 is up has none of them (GameHandler::itemLinkInstance), so
+/// only a link naming none answers for it.
+static bool itemAnswersLink(game::GameHandler* gh, uint64_t guid, const LinkedInstance& link) {
+    const game::ItemLinkInstance have = gh->itemLinkInstance(guid);
+    if (link.enchant != 0 && link.enchant != have.enchantId) return false;
+    for (int i = 0; i < 3; ++i) {
+        if (link.gems[i] != 0 && link.gems[i] != have.gems[static_cast<size_t>(i)]) return false;
+    }
+    if (link.suffix != 0 && link.suffix != have.randomPropertyId) return false;
+    if (link.seed != 0 && link.seed != have.seed) return false;
+    return true;
+}
+
+static CarriedItem carriedItemMatching(game::GameHandler* gh, lua_State* L, int arg) {
+    if (!gh) return {};
     const uint32_t byId = itemIdFromArg(L, arg);
     std::string byName = lua_isstring(L, arg) ? lua_tostring(L, arg) : "";
+    // A link names one item, its enchant, gems, suffix and seed as well
+    // (0x00754c30 -> 0x007545d0); an id or a name only the entry.
+    LinkedInstance link;
+    const bool isLink = !lua_isnumber(L, arg) && linkedInstance(byName, link);
     // A link parsed to an id above; treat the text as a name only otherwise.
     if (byId != 0) byName.clear();
 
     const auto& inv = gh->getInventory();
-    auto matches = [&](uint32_t itemId) {
+    auto matches = [&](const game::ItemSlot& sl) {
+        const uint32_t itemId = sl.item.itemId;
         if (itemId == 0) return false;
-        if (byId != 0) return itemId == byId;
+        if (byId != 0) return itemId == byId && (!isLink || itemAnswersLink(gh, sl.item.guid, link));
         if (byName.empty()) return false;
         const auto* info = gh->getItemInfo(itemId);
         return info && info->name == byName;
     };
     for (int i = 0; i < inv.getBackpackSize(); ++i) {
         const auto& sl = inv.getBackpackSlot(i);
-        if (!sl.empty() && matches(sl.item.itemId)) return sl.item.itemId;
+        if (!sl.empty() && matches(sl)) return {sl.item.itemId, -1, i};
     }
     for (int bag = 0; bag < game::Inventory::NUM_BAG_SLOTS; ++bag) {
         for (int i = 0; i < inv.getBagSize(bag); ++i) {
             const auto& sl = inv.getBagSlot(bag, i);
-            if (!sl.empty() && matches(sl.item.itemId)) return sl.item.itemId;
+            if (!sl.empty() && matches(sl)) return {sl.item.itemId, bag, i};
         }
     }
-    return 0;
+    return {};
 }
 
 // The pair both durability bindings answer, and the one gate the client puts in
@@ -2893,9 +3005,13 @@ uint64_t usedOnUnit(lua_State* L, int index) {
 
 static int lua_UseItemByName(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const uint32_t itemId = carriedItemMatching(gh, L, 1);
-    if (gh && itemId != 0 && itemUseAllowed(L, gh, itemId, false))
-        gh->useItemById(itemId, usedOnUnit(L, 2));
+    const CarriedItem found = carriedItemMatching(gh, L, 1);
+    if (gh && found.itemId != 0 && itemUseAllowed(L, gh, found.itemId, false)) {
+        // The item found, not merely the first of its entry: a link may name
+        // one of several by its enchant or gems.
+        if (found.bag < 0) gh->useItemBySlot(found.slot, false, usedOnUnit(L, 2));
+        else gh->useItemInBag(found.bag, found.slot, false, usedOnUnit(L, 2));
+    }
     return 0;
 }
 
@@ -2910,7 +3026,8 @@ static int lua_UseItemByName(lua_State* L) {
 static int lua_EquipItemByName(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
-    const uint32_t itemId = carriedItemMatching(gh, L, 1);
+    const CarriedItem found = carriedItemMatching(gh, L, 1);
+    const uint32_t itemId = found.itemId;
     if (itemId == 0) return 0;
     // 0x0051cdb0 -> 0x006dff90 / AutoEquipItem, which ask the taint check
     // (kind 0x16).
@@ -2918,8 +3035,10 @@ static int lua_EquipItemByName(lua_State* L) {
     const int wantSlot = static_cast<int>(luaL_optnumber(L, 2, 0));
     // Zero is "no slot named", not slot zero - the interface's own numbering
     // starts at one, so there is no ambiguity to resolve.
+    const auto& inv = gh->getInventory();
     if (wantSlot >= 1 && wantSlot <= game::Inventory::NUM_EQUIP_SLOTS) {
-        const uint64_t guid = gh->resolveOnlineItemGuid(itemId);
+        const auto& held = found.bag < 0 ? inv.getBackpackSlot(found.slot) : inv.getBagSlot(found.bag, found.slot);
+        const uint64_t guid = held.item.guid != 0 ? held.item.guid : gh->resolveOnlineItemGuid(itemId);
         if (guid != 0) {
             gh->equipItemToSlot(guid, static_cast<uint8_t>(wantSlot - 1));
             return 0;
@@ -2927,20 +3046,9 @@ static int lua_EquipItemByName(lua_State* L) {
         // No guid for it - fall through and let the server choose, which is
         // better than doing nothing at all.
     }
-    const auto& inv = gh->getInventory();
-    for (int i = 0; i < inv.getBackpackSize(); ++i) {
-        const auto& sl = inv.getBackpackSlot(i);
-        if (!sl.empty() && sl.item.itemId == itemId) { gh->autoEquipItemBySlot(i); return 0; }
-    }
-    for (int bag = 0; bag < game::Inventory::NUM_BAG_SLOTS; ++bag) {
-        for (int i = 0; i < inv.getBagSize(bag); ++i) {
-            const auto& sl = inv.getBagSlot(bag, i);
-            if (!sl.empty() && sl.item.itemId == itemId) {
-                gh->autoEquipItemInBag(bag, i);
-                return 0;
-            }
-        }
-    }
+    // The item found, not the first of its entry (0x00754c30 -> 0x007545d0).
+    if (found.bag < 0) gh->autoEquipItemBySlot(found.slot);
+    else gh->autoEquipItemInBag(found.bag, found.slot);
     return 0;
 }
 
@@ -4710,9 +4818,17 @@ static const game::AuctionListResult& auctionListFor(game::GameHandler* gh,
     return gh->getAuctionBrowseResults();
 }
 
-/// The panel's own state: which row is selected, and which bag slot is sitting
-/// in the sell box. Neither is anything the client has an opinion about.
-static int& auctionSelection() { static int sel = 0; return sel; }
+/// Which of the three lists a type names, as SetSelectedAuctionItem and
+/// GetSelectedAuctionItem compare it (0x0059c830, 0x0059c920): "list" 0,
+/// "owner" 1, "bidder" 2, anything else -1. Case-insensitive, as 0x0076e780.
+static int auctionListIndex(const char* type) {
+    std::string t = type ? type : "";
+    for (char& c : t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (t == "owner") return 1;
+    if (t == "bidder") return 2;
+    if (t == "list") return 0;
+    return -1;
+}
 
 /// The item sitting in the sell box, as the flat (container, slot) pair the
 /// cursor speaks in. Kept in that form rather than as a backpack index so a
@@ -5848,8 +5964,17 @@ static int lua_GiveMasterLoot(lua_State* L) {
 
     const auto& candidates = gh->getMasterLootCandidates();
     if (candidate > static_cast<int>(candidates.size())) return 0;
-    gh->lootMasterGive(static_cast<uint8_t>(slot - 1),
-                       candidates[static_cast<size_t>(candidate - 1)]);
+    // 0x005893a0: only a slot holding an item, one of the first eighteen
+    // after the coin, whose loot slot type is 2 - the master looter's to
+    // hand out - and by the server's own slot number, not the display's.
+    const game::LootItem* item = lootItemAtSlot(gh, slot);
+    const int itemRow = lootHasCoin(gh) ? slot - 2 : slot - 1;
+    if (!item || itemRow >= 0x12 || item->itemId == 0 || item->lootSlotType != 2 ||
+        gh->getCurrentLoot().lootGuid == 0) {
+        LOG_WARNING("GiveMasterLoot(", slot, "): not an item the master looter hands out, ignored");
+        return 0;
+    }
+    gh->lootMasterGive(item->slotIndex, candidates[static_cast<size_t>(candidate - 1)]);
     return 0;
 }
 
@@ -7140,13 +7265,14 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // send and none of which the interface could reach.
                 {"CanSendAuctionQuery", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            // Two returns: whether a search may be sent, and whether a
-            // getAll sweep may be. The second is always no - it asks the
-            // server for every auction at once and is rate-limited to once
-            // every fifteen minutes even where it is allowed.
+            // Two returns (0x0059c740): whether a search may be sent, and
+            // whether a getAll sweep may be - the same, and fifteen minutes
+            // since the last getAll this session.
             const bool open = gh && gh->isAuctionHouseOpen();
-            luaPushOneOrNil(L, open && gh->getAuctionSearchDelay() <= 0.0f);
-            luaPushOneOrNil(L, 0);
+            const bool may = open && gh->getAuctionSearchDelay() <= 0.0f;
+            const auto* inv = gh ? gh->getInventoryHandler() : nullptr;
+            luaPushOneOrNil(L, may);
+            luaPushOneOrNil(L, may && inv && inv->auctionGetAllAllowed());
             return 2;
         }},
                 // QueryAuctionItems(name, minLevel, maxLevel, invType, class,
@@ -7206,8 +7332,17 @@ void registerInventoryLuaAPI(lua_State* L) {
             // SortAuctionApplySort, so nothing sorts the browse list locally
             // and a query that leaves the sort block empty leaves the headers
             // inert.
+            // The tenth, a boolean, asks for every auction at once; refused
+            // without a word inside fifteen minutes of the last one, or while
+            // a search may not go (0x0059bcf0).
+            const bool getAll = lua_isboolean(L, 10) && lua_toboolean(L, 10);
+            if (getAll) {
+                const auto* handler = gh->getInventoryHandler();
+                if (gh->getAuctionSearchDelay() > 0.0f || !handler || !handler->auctionGetAllAllowed())
+                    return 0;
+            }
             gh->auctionSearch(name, lo, hi, quality, cls, sub, inv, usable,
-                              page * 50, wireAuctionSort("list"));
+                              page * 50, wireAuctionSort("list"), getAll);
             return 0;
         }},
                 {"GetOwnerAuctionItems", [](lua_State* L) -> int {
@@ -7492,61 +7627,50 @@ void registerInventoryLuaAPI(lua_State* L) {
         }},
                 {"SetSelectedAuctionItem", [](lua_State* L) -> int {
             if (!lua_isstring(L, 1) || !lua_isnumber(L, 2)) return luaL_error(L, "Usage: SetSelectedAuctionItem(\"type\", index)");   // 0x0059c830
-            auctionSelection() = static_cast<int>(luaL_optnumber(L, 2, 0));
+            // Kept per list, as the auction's id: the row's, or none past
+            // the list's end; an unknown type does nothing.
+            auto* gh = getGameHandler(L);
+            auto* inv = gh ? gh->getInventoryHandler() : nullptr;
+            const int list = auctionListIndex(lua_tostring(L, 1));
+            const int row = static_cast<int>(std::lround(lua_tonumber(L, 2))) - 1;
+            if (inv && list >= 0) inv->setAuctionSelectedRow(list, row);
             return 0;
         }},
                 {"GetSelectedAuctionItem", [](lua_State* L) -> int {
             if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetSelectedAuctionItem(\"type\")");   // 0x0059c920
-            lua_pushnumber(L, auctionSelection());
+            // The row holding that list's selected auction, from 1; 0 when
+            // it is in none of the rows; 1 for a type that names no list.
+            auto* gh = getGameHandler(L);
+            const auto* inv = gh ? gh->getInventoryHandler() : nullptr;
+            const int list = auctionListIndex(lua_tostring(L, 1));
+            if (list < 0) { lua_pushnumber(L, 1); return 1; }
+            lua_pushnumber(L, (inv ? inv->auctionSelectedRow(list) : -1) + 1);
             return 1;
         }},
-                // CalculateAuctionDeposit(minutes [, count]) → copper
-                //
-                // AuctionHouseMgr::GetAuctionDeposit, which is what the server
-                // will actually charge:
-                //
-                //   deposit = depositPercent * 3 / 100 * sellPrice * count
-                //             * (minutes / 720)
-                //
-                // floored at a hundred copper. depositPercent comes from
-                // AuctionHouse.dbc - five for a faction house, twenty-five for
-                // the neutral one - and the twelve-hour block is the unit, so
-                // the three durations multiply by one, two and four.
-                //
-                // It reported zero before, which was honest while the sell slot
-                // could not hold anything. It can now.
+                // CalculateAuctionDeposit(runTime [, count]) → copper, as
+                // 0x0059d270 works it: 0 without the open house's
+                // AuctionHouse.dbc row, an item in the sell slot or its
+                // template; else 0x0076dde0 over the row's DepositRate, the
+                // template's sell price times the count (the slot's stack
+                // when none is given) and the run time's minutes.
                 {"CalculateAuctionDeposit", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: CalculateAuctionDeposit(runTime)");   // 0x0059d270
             auto* gh = getGameHandler(L);
-            // The same duration the dropdown hands StartAuction, and in the
-            // same 1..3 shape: read as minutes it made `blocks` zero below, so
-            // every deposit was the one-silver floor whatever the item or the
-            // length.
-            const double minutes = static_cast<double>(game::auctionDurationMinutes(
-                static_cast<uint32_t>(luaL_optnumber(L, 1, 1))));
-            const auto* held = auctionSellItemSlot(gh);
-            if (!held || minutes <= 0) {
-                lua_pushnumber(L, 0);
-                return 1;
+            double result = 0.0;
+            auto* am = gh ? gh->services().assetManager : nullptr;
+            auto dbc = am && am->isInitialized() ? am->loadDBC("AuctionHouse.dbc") : nullptr;
+            const int32_t row = dbc && dbc->isLoaded() ? dbc->findRecordById(gh->getAuctionHouseId()) : -1;
+            const auto* held = row >= 0 ? auctionSellItemSlot(gh) : nullptr;
+            const auto* info = held ? gh->getItemInfo(held->item.itemId) : nullptr;
+            if (info && info->valid) {
+                const uint32_t minutes = game::auction_deposit::minutesForRunTime(lua_tonumber(L, 1));
+                const uint32_t count = lua_isnumber(L, 2)
+                    ? static_cast<uint32_t>(static_cast<int64_t>(std::nearbyint(lua_tonumber(L, 2))))
+                    : held->item.stackCount;
+                const uint32_t depositRate = dbc->getUInt32(static_cast<uint32_t>(row), 2);
+                result = game::auction_deposit::deposit(depositRate, info->sellPrice * count, minutes);
             }
-            const auto& s = *held;
-            const auto* info = gh->getItemInfo(s.item.itemId);
-            const double sellPrice = (info && info->valid) ? info->sellPrice : 0.0;
-            constexpr double kMinimumDeposit = 100.0;
-            if (sellPrice <= 0.0) {
-                lua_pushnumber(L, kMinimumDeposit);
-                return 1;
-            }
-            const double count = luaL_optnumber(L, 2, s.item.stackCount ? s.item.stackCount : 1);
-            // Faction houses take five percent, the neutral one twenty-five.
-            // Which one this is is not tracked, so the cheaper is assumed -
-            // understating a deposit is the kinder way to be wrong, and it is
-            // right at every auctioneer but Booty Bay's.
-            constexpr double kDepositPercent = 5.0;
-            const double blocks = std::floor(minutes / 720.0);
-            const double deposit = (kDepositPercent * 3.0 / 100.0) * sellPrice
-                                   * count * blocks;
-            lua_pushnumber(L, deposit < kMinimumDeposit ? kMinimumDeposit : deposit);
+            lua_pushnumber(L, result);
             return 1;
         }},
                 // Sorting is the panel's own, applied to what the server sent.

@@ -4001,6 +4001,13 @@ void Application::connectWorldHooks() {
                     return appearanceComposer_ && appearanceComposer_->unarmedKitsShown();
                 return entitySpawner_ && entitySpawner_->unarmedKitsShown(guid);
             });
+            // 0x00702db0: a unit whose health is below 1 takes no wound
+            // from a missile.
+            svs->setUnitDeadQuery([this](uint64_t guid) {
+                auto entity = gameHandler ? gameHandler->getEntityManager().getEntity(guid) : nullptr;
+                const auto* unit = dynamic_cast<const game::Unit*>(entity.get());
+                return unit && unit->getHealth() < 1;
+            });
         }
         // Whether a text emote is sent, and the player's weapons put
         // away when it is (0x006dd9e0).

@@ -419,6 +419,19 @@ TEST_CASE("$parent expands against the frame that owns the region",
     REQUIRE(has(r.lua, "__WoweeXmlSetAllPoints("));
 }
 
+TEST_CASE("A colour element reads as the client's colour reader reads it", "[framexml][emit]") {
+    // 0x00815c30: r, g, b default to 0 and a to 1; each is held to 0..1.
+    XmlNode root = parseOrFail(
+        "<Ui><Frame name=\"ColFrame\"><Layers><Layer level=\"BACKGROUND\">"
+        "<Texture name=\"$parentA\"><Color g=\"0.5\"/></Texture>"
+        "<Texture name=\"$parentB\"><Color r=\"2\" g=\"-1\" b=\"0.25\" a=\"-3\"/></Texture>"
+        "</Layer></Layers></Frame></Ui>");
+    const EmitResult r = emitFrameXml(root);
+    CHECK(has(r.lua, ":SetVertexColor(0.000000, 0.500000, 0.000000, 1.000000)"));
+    CHECK(has(r.lua, ":SetVertexColor(1.000000, 0.000000, 0.250000, 0.000000)"));
+    CHECK_FALSE(has(r.lua, ":SetVertexColor(1.000000, 0.500000"));
+}
+
 TEST_CASE("alphaMode reaches the texture as a blend mode", "[framexml][emit]") {
     // Art declared this way is a glow on black with no alpha channel of its
     // own. Dropping the attribute draws it as an opaque black shape over

@@ -8,23 +8,24 @@
 #include "core/window.hpp"
 #include <imgui.h>
 #include "ui/chat/chat_utils.hpp"
+#include "ui/chat/chat_bubble_timing.hpp"
 #include "ui/sight_cache.hpp"
 
 #include <glm/glm.hpp>
 
 namespace wowee { namespace ui {
 
-void ChatBubbleManager::addBubble(uint64_t senderGuid, const std::string& message, bool isYell) {
-    float duration = 8.0f + static_cast<float>(message.size()) * 0.06f;
-    if (isYell) duration += 2.0f;
-    if (duration > 15.0f) duration = 15.0f;
+void ChatBubbleManager::addBubble(uint64_t senderGuid, const std::string& message, bool isYell, bool own) {
+    // 2000 ms and 750 a word, or 1000 and 500 for the player's own
+    // (0x0056c1c0); a yell is timed as any other line.
+    const float duration = static_cast<float>(chat_bubble::durationMs(message, own)) * 0.001f;
 
     // Replace existing bubble for same sender
     for (auto& b : bubbles_) {
         if (b.senderGuid == senderGuid) {
             b.message = message;
-            b.timeRemaining = duration;
-            b.totalDuration = duration;
+            b.elapsed = 0.0f;
+            b.duration = duration;
             b.isYell = isYell;
             return;
         }
@@ -33,7 +34,8 @@ void ChatBubbleManager::addBubble(uint64_t senderGuid, const std::string& messag
     if (bubbles_.size() >= kMaxBubbles) {
         bubbles_.erase(bubbles_.begin());
     }
-    bubbles_.push_back({.senderGuid = senderGuid, .message = message, .timeRemaining = duration, .totalDuration = duration, .isYell = isYell});
+    bubbles_.push_back({.senderGuid = senderGuid, .message = message, .elapsed = 0.0f, .duration = duration,
+                        .alpha = 0.0f, .isYell = isYell});
 }
 
 void ChatBubbleManager::render(game::GameHandler& gameHandler, const UIServices& services) {
@@ -58,29 +60,39 @@ void ChatBubbleManager::render(game::GameHandler& gameHandler, const UIServices&
     // Update and render bubbles
     for (int i = static_cast<int>(bubbles_.size()) - 1; i >= 0; --i) {
         auto& bubble = bubbles_[i];
-        bubble.timeRemaining -= dt;
-        if (bubble.timeRemaining <= 0.0f) {
-            bubbles_.erase(bubbles_.begin() + i);
-            continue;
-        }
+        // 0x0056c500: up for its duration after a 250 ms fade in, then a
+        // 250 ms fade out, and gone.
+        bubble.elapsed += dt;
+        const bool expiring = bubble.elapsed > bubble.duration + chat_bubble::kFadeSeconds;
 
         // Get entity position
         auto entity = gameHandler.getEntityManager().getEntity(bubble.senderGuid);
-        if (!entity) continue;
-
-        // Convert canonical → render coordinates, offset up by 2.5 units for bubble above head
-        glm::vec3 canonical(entity->getX(), entity->getY(), entity->getZ() + 2.5f);
-        glm::vec3 renderPos = core::coords::canonicalToRender(canonical);
-
-        // Not through a wall. A bubble carries a name as well as a line, so
-        // one drawn over the building someone is standing behind says they are
-        // in front of it - the same fault the nameplates had, answered by the
-        // same query.
-        static SightCache sight;
-        if (sight.blocked(renderer->queryWMORenderer(), bubble.senderGuid,
-                          camera->getPosition(), renderPos)) {
+        glm::vec3 renderPos(0.0f);
+        bool inSight = false;
+        if (entity) {
+            // Convert canonical → render coordinates, offset up by 2.5 units for bubble above head
+            glm::vec3 canonical(entity->getX(), entity->getY(), entity->getZ() + 2.5f);
+            renderPos = core::coords::canonicalToRender(canonical);
+            // Faded out from 25 yards of the camera, and back in on coming
+            // nearer (0x0056c500: squared distance 625).
+            const glm::vec3 d = renderPos - camera->getPosition();
+            inSight = glm::dot(d, d) < chat_bubble::kRangeYards * chat_bubble::kRangeYards;
+            // Not through a wall. A bubble carries a name as well as a line, so
+            // one drawn over the building someone is standing behind says they are
+            // in front of it - the same fault the nameplates had, answered by the
+            // same query.
+            static SightCache sight;
+            if (inSight && sight.blocked(renderer->queryWMORenderer(), bubble.senderGuid,
+                                         camera->getPosition(), renderPos)) {
+                inSight = false;
+            }
+        }
+        bubble.alpha = chat_bubble::stepAlpha(bubble.alpha, !expiring && inSight, dt);
+        if (expiring && bubble.alpha <= 0.0f) {
+            bubbles_.erase(bubbles_.begin() + i);
             continue;
         }
+        if (!entity || bubble.alpha <= 0.0f) continue;
 
         // Project to screen
         glm::vec4 clipPos = viewProj * glm::vec4(renderPos, 1.0f);
@@ -96,11 +108,7 @@ void ChatBubbleManager::render(game::GameHandler& gameHandler, const UIServices&
         if (screenX < -200.0f || screenX > screenW + 200.0f ||
             screenY < -100.0f || screenY > screenH + 100.0f) continue;
 
-        // Fade alpha over last 2 seconds
-        float alpha = 1.0f;
-        if (bubble.timeRemaining < 2.0f) {
-            alpha = bubble.timeRemaining / 2.0f;
-        }
+        const float alpha = bubble.alpha;
 
         // Into the background draw list, which is where the interface is
         // drawn - and drawn into before it, so the interface covers this.
@@ -155,7 +163,8 @@ void ChatBubbleManager::setupCallback(game::GameHandler& gameHandler) {
         // its raw $r/$c/$g markers in the bubble over their head.
         gameHandler.setChatBubbleCallback(
             [this, &gameHandler](uint64_t guid, const std::string& msg, bool isYell) {
-                addBubble(guid, chat_utils::replaceGenderPlaceholders(msg, gameHandler), isYell);
+                addBubble(guid, chat_utils::replaceGenderPlaceholders(msg, gameHandler), isYell,
+                          guid == gameHandler.getPlayerGuid());
             });
         callbackSet_ = true;
     }

@@ -1,81 +1,102 @@
-// Which Combat Text panel checkbox covers each floating line.
-//
-// Six of those checkboxes named a CVar that nothing read, so the panel
-// remembered a choice the screen ignored. These cases pin the mapping that
-// replaced that, including the two that are easy to get backwards: a pet's
-// swing must not be answered by the player's own damage row, and effects are
-// read against the unit they landed on rather than who caused them.
+// The floaters over the world and the settings that gate them
+// (0x0071f990, 0x00722340, 0x00722440, 0x00719220, 0x0074da00).
 #include <catch_amalgamated.hpp>
 #include "game/combat_text_filter.hpp"
+
+#include <string>
 
 using namespace wowee::game;
 using T = CombatTextEntry;
 
 namespace {
-constexpr uint64_t kPlayer = 0x1000;
-constexpr uint64_t kPet    = 0x2000;
-constexpr uint64_t kTarget = 0x3000;
-constexpr uint64_t kOther  = 0x4000;
-
-CombatTextFilterRule ruleFor(CombatTextEntry::Type type, bool playerSource,
-                             uint64_t src, uint64_t dst) {
-    return combatTextFilterFor(type, playerSource, src, dst, kPet, kTarget);
+bool shown(T::Type type, FloaterSource src, bool meleeLike = true, const FloaterSettings& s = {},
+           bool onPlayer = false) {
+    return worldFloaterShown(type, src, onPlayer, false, meleeLike, s);
 }
 }  // namespace
 
-TEST_CASE("damage the player deals answers to the damage row", "[combattext]") {
-    const auto r = ruleFor(T::MELEE_DAMAGE, true, kPlayer, kTarget);
-    REQUIRE(r.cvar != nullptr);
-    CHECK(std::string(r.cvar) == "CombatDamage");
-    CHECK(std::string(r.fallback) == "1");
+TEST_CASE("the player's and its units' hits are floaters, no one else's", "[combattext]") {
+    CHECK(shown(T::MELEE_DAMAGE, FloaterSource::Player));
+    CHECK(shown(T::SPELL_DAMAGE, FloaterSource::PlayersUnit, false));
+    CHECK_FALSE(shown(T::MELEE_DAMAGE, FloaterSource::Other));
 }
 
-TEST_CASE("a pet's swing answers to the pet row, not the player's", "[combattext]") {
-    const auto r = ruleFor(T::MELEE_DAMAGE, false, kPet, kTarget);
-    REQUIRE(r.cvar != nullptr);
-    CHECK(std::string(r.cvar) == "PetMeleeDamage");
+TEST_CASE("nothing floats over the active player", "[combattext]") {
+    CHECK_FALSE(shown(T::MELEE_DAMAGE, FloaterSource::Player, true, {}, true));
+    CHECK_FALSE(shown(T::HEAL, FloaterSource::Player, true, {}, true));
 }
 
-TEST_CASE("damage arriving at the player is not filtered here", "[combattext]") {
-    // "Target Damage" does not mean "damage taken"; incoming hits have their
-    // own rows elsewhere in the panel and must keep showing.
-    CHECK(ruleFor(T::MELEE_DAMAGE, false, kOther, kPlayer).cvar == nullptr);
-    CHECK(ruleFor(T::CRIT_DAMAGE, false, kOther, kPlayer).cvar == nullptr);
-    CHECK(ruleFor(T::HEAL, false, kOther, kPlayer).cvar == nullptr);
+TEST_CASE("CombatDamage gates damage and misses for everyone", "[combattext]") {
+    FloaterSettings off;
+    off.combatDamage = false;
+    CHECK_FALSE(shown(T::MELEE_DAMAGE, FloaterSource::Player, true, off));
+    CHECK_FALSE(shown(T::DODGE, FloaterSource::Player, true, off));
+    CHECK_FALSE(shown(T::MELEE_DAMAGE, FloaterSource::PlayersUnit, true, off));
+    CHECK(shown(T::HEAL, FloaterSource::Player, true, off));
 }
 
-TEST_CASE("periodic and healing have their own rows", "[combattext]") {
-    CHECK(std::string(ruleFor(T::PERIODIC_DAMAGE, true, kPlayer, kTarget).cvar)
-          == "CombatLogPeriodicSpells");
-    CHECK(std::string(ruleFor(T::PERIODIC_HEAL, true, kPlayer, kPlayer).cvar)
-          == "CombatLogPeriodicSpells");
-    CHECK(std::string(ruleFor(T::HEAL, true, kPlayer, kPlayer).cvar) == "CombatHealing");
-    CHECK(std::string(ruleFor(T::CRIT_HEAL, true, kPlayer, kPlayer).cvar) == "CombatHealing");
+TEST_CASE("a periodic tick also needs CombatLogPeriodicSpells", "[combattext]") {
+    FloaterSettings off;
+    off.periodicSpells = false;
+    CHECK_FALSE(shown(T::PERIODIC_DAMAGE, FloaterSource::Player, false, off));
+    CHECK(shown(T::SPELL_DAMAGE, FloaterSource::Player, false, off));
 }
 
-TEST_CASE("effects are read against the unit they landed on", "[combattext]") {
-    // On your target, and on anything else, are two different rows - and the
-    // second is off in the real client, which is the whole reason the fallback
-    // travels with the name.
-    const auto onTarget = ruleFor(T::IMMUNE, true, kPlayer, kTarget);
-    REQUIRE(onTarget.cvar != nullptr);
-    CHECK(std::string(onTarget.cvar) == "fctSpellMechanics");
-    // Registered off too (0x00510000 "0"): the line is opt-in on your target
-    // as well as on anyone else.
-    CHECK(std::string(onTarget.fallback) == "0");
-
-    const auto elsewhere = ruleFor(T::IMMUNE, true, kPlayer, kOther);
-    REQUIRE(elsewhere.cvar != nullptr);
-    CHECK(std::string(elsewhere.cvar) == "fctSpellMechanicsOther");
-    CHECK(std::string(elsewhere.fallback) == "0");
-
-    // Who caused it does not enter into it.
-    CHECK(std::string(ruleFor(T::RESIST, false, kOther, kTarget).cvar) == "fctSpellMechanics");
+TEST_CASE("a pet's swing and spell answer to their own rows", "[combattext]") {
+    FloaterSettings melee;
+    melee.petMeleeDamage = false;
+    CHECK_FALSE(shown(T::MELEE_DAMAGE, FloaterSource::PlayersUnit, true, melee));
+    CHECK(shown(T::SPELL_DAMAGE, FloaterSource::PlayersUnit, false, melee));
+    // The player's own swing is not the pet's row.
+    CHECK(shown(T::MELEE_DAMAGE, FloaterSource::Player, true, melee));
+    FloaterSettings spell;
+    spell.petSpellDamage = false;
+    CHECK_FALSE(shown(T::SPELL_DAMAGE, FloaterSource::PlayersUnit, false, spell));
+    CHECK(shown(T::MISS, FloaterSource::PlayersUnit, true, spell));
 }
 
-TEST_CASE("lines these six rows do not describe are left alone", "[combattext]") {
-    CHECK(ruleFor(T::XP_GAIN, true, kPlayer, kPlayer).cvar == nullptr);
-    CHECK(ruleFor(T::HONOR_GAIN, true, kPlayer, kPlayer).cvar == nullptr);
-    CHECK(ruleFor(T::ENERGIZE, true, kPlayer, kPlayer).cvar == nullptr);
-    CHECK(ruleFor(T::MISS, true, kPlayer, kTarget).cvar == nullptr);
+TEST_CASE("healing floats for the player's own heals alone", "[combattext]") {
+    CHECK(shown(T::HEAL, FloaterSource::Player));
+    CHECK_FALSE(shown(T::HEAL, FloaterSource::PlayersUnit));
+    FloaterSettings off;
+    off.combatHealing = false;
+    CHECK_FALSE(shown(T::CRIT_HEAL, FloaterSource::Player, true, off));
+}
+
+TEST_CASE("lines that are not floaters are never drawn over the world", "[combattext]") {
+    CHECK_FALSE(shown(T::XP_GAIN, FloaterSource::Player));
+    CHECK_FALSE(shown(T::HONOR_GAIN, FloaterSource::Player));
+    CHECK_FALSE(shown(T::ENERGIZE, FloaterSource::Player));
+    CHECK_FALSE(shown(T::INTERRUPT, FloaterSource::Player));
+}
+
+TEST_CASE("misses show the client's global strings", "[combattext]") {
+    CHECK(std::string(missFloaterKey(T::MISS)) == "COMBAT_TEXT_MISS");
+    CHECK(std::string(missFloaterKey(T::REFLECT)) == "COMBAT_TEXT_REFLECT");
+    CHECK(missFloaterKey(T::MELEE_DAMAGE) == nullptr);
+}
+
+TEST_CASE("threat status as the client keeps it", "[combattext]") {
+    const uint32_t clear[] = {1000, 500};
+    CHECK(clientThreatStatus(clear, 2, 0) == 4);
+    CHECK(clientThreatStatus(clear, 2, 1) == 1);
+    CHECK(clientThreatStatus(clear, 2, 2) == 0);
+    const uint32_t tied[] = {1000, 1000};
+    CHECK(clientThreatStatus(tied, 2, 0) == 3);
+    CHECK(clientThreatStatus(tied, 2, 1) == 2);
+}
+
+TEST_CASE("the threat floater skips 2 to 1 and 3 to 4", "[combattext]") {
+    CHECK_FALSE(threatFloaterShown(2, 1));
+    CHECK_FALSE(threatFloaterShown(3, 4));
+    CHECK(threatFloaterShown(1, 4));
+    CHECK(threatFloaterShown(4, 1));
+}
+
+TEST_CASE("mechanic floaters follow the fct settings", "[combattext]") {
+    CHECK(mechanicFloaterShown(true, false, false, false));
+    CHECK(mechanicFloaterShown(false, true, false, true));
+    CHECK_FALSE(mechanicFloaterShown(false, true, false, false));
+    CHECK(mechanicFloaterShown(false, true, true, false));
+    CHECK_FALSE(mechanicFloaterShown(false, false, true, true));
 }

@@ -172,6 +172,8 @@ public:
     // Guild
     void requestGuildInfo();
     void requestGuildRoster();
+    /// GuildRoster() from the interface: at most one request in ten seconds.
+    void requestGuildRosterThrottled();
     /// MSG_GUILD_PERMISSIONS, empty: the rights of the player's rank, asked
     /// for by 0x005caa40.
     void requestGuildPermissions();
@@ -545,6 +547,8 @@ public:
     void updateLogoutCountdown(float deltaTime);
     /// 0x00573390: the ready check's timer, for the one who started it.
     void updateReadyCheckTimer();
+    /// The duel countdown's next line, once its second is up.
+    void updateDuelCountdown();
     void resetTransferState();
     GroupListData& mutablePartyData() { return partyData; }
     /// The player's own group as it stands outside a battleground - the "real"
@@ -972,6 +976,11 @@ private:
     std::string duelChallengerName_;
     uint32_t duelCountdownMs_   = 0;
     std::chrono::steady_clock::time_point duelCountdownStartedAt_{};
+    /// The DUEL_COUNTDOWN lines still to say (0x00c22b68) and when the next
+    /// is due (the 0x00c22b6c timer).
+    int32_t duelCountdownSecondsLeft_ = 0;
+    std::optional<std::chrono::steady_clock::time_point> duelCountdownNextAt_;
+    void sayDuelCountdown();
 
     // Guild
     std::string guildName_;
@@ -983,6 +992,8 @@ private:
     /// rank it names (0x005cb9f0). Every reader of a rank's rights reads it.
     std::array<GuildRankInfo, 10> guildRankTable_{};
     GuildInfoData guildInfoData_;
+    /// When GuildRoster() may ask again (0x00c22ac8).
+    std::chrono::steady_clock::time_point guildRosterAllowedAt_{};
     GuildQueryResponseData guildQueryData_;
     bool hasGuildRoster_ = false;
     std::unordered_map<uint32_t, std::string> guildNameCache_;

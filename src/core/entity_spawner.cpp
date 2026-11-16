@@ -3237,6 +3237,16 @@ void EntitySpawner::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float
 
     // Track instance
     creatureInstances_[guid] = instanceId;
+    // 0x00730100: a unit whose model has come in is announced to the
+    // interface - UNIT_PORTRAIT_UPDATE then UNIT_MODEL_CHANGED (0x00512b50 ->
+    // 0x00618110 with 3), for each token naming it - so a portrait asked for
+    // before the model was there is drawn again now that it is.
+    if (gameHandler_) {
+        for (const auto& unit : gameHandler_->unitTokensForGuid(guid)) {
+            gameHandler_->fireAddonEvent("UNIT_PORTRAIT_UPDATE", {unit});
+            gameHandler_->fireAddonEvent("UNIT_MODEL_CHANGED", {unit});
+        }
+    }
     creatureAppliedScale_[guid] = scale;
     spawnCreatureParticleTwin(guid, displayId, modelId, instanceId);
     creatureModelIds_[guid] = modelId;

@@ -702,10 +702,15 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
                 owner_.addSystemChatMessage(
                     interfaceFormat("RAID_MEMBER_NOT_READY", "%s is not ready", {rname}));
         }
-        if (owner_.addonEventCallbackRef()) {
-            char guidBuf[32];
-            snprintf(guidBuf, sizeof(guidBuf), "0x%016llX", (unsigned long long)respGuid);
-            owner_.addonEventCallbackRef()("READY_CHECK_CONFIRM", {guidBuf, isReady ? "1" : "0"});
+        // READY_CHECK_CONFIRM "%s%b" (0x005724e0): once for every unit token
+        // naming the member who answered, with whether they are ready - and
+        // only for a member of the group (0x005744f0 raises it from its walk
+        // of the party or the raid list).
+        const bool member = std::any_of(partyData.members.begin(), partyData.members.end(),
+                                        [respGuid](const GroupMember& m) { return m.guid == respGuid; });
+        if (member) {
+            for (const auto& unit : owner_.unitTokensForGuid(respGuid))
+                owner_.fireAddonEvent("READY_CHECK_CONFIRM", {unit, eventBool(isReady != 0)});
         }
     };
     table[Opcode::MSG_RAID_READY_CHECK_FINISHED] = [this](network::Packet& /*packet*/) {
@@ -757,6 +762,10 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
             uint32_t ms = packet.readUInt32();
             duelCountdownMs_ = (ms > 0 && ms <= 30000) ? ms : 3000;
             duelCountdownStartedAt_ = std::chrono::steady_clock::now();
+            // 0x005cfa50: the whole seconds, said at once and then once a
+            // second (0x005cf870, the "ProcessCountdown" timer).
+            duelCountdownSecondsLeft_ = static_cast<int32_t>(ms / 1000);
+            sayDuelCountdown();
         }
     };
     table[Opcode::SMSG_PARTYKILLLOG] = [this](network::Packet& packet) {
@@ -1786,10 +1795,28 @@ void SocialHandler::setFriendNote(const std::string& playerName, const std::stri
     LOG_INFO("Set friend note for: ", playerName);
 }
 
+static bool sameMuteName(const std::string& a, const std::string& b);
+
+// AddIgnore (0x006b5f70): a name already on the ignore list - compared
+// case-blind against each row's name - gets ERR_IGNORE_ALREADY_S naming that
+// row (0x005216f0(0x120, record)) and nothing is sent; otherwise the name
+// goes out as CMSG_ADD_IGNORE (0x6c), silent until SMSG_FRIEND_STATUS.
 void SocialHandler::addIgnore(const std::string& playerName) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    // Silent until the server answers with SMSG_FRIEND_STATUS.
     if (playerName.empty()) return;
+    const auto already = [this](const std::string& name) {
+        gameError(owner_, ErrTo::Chat, "ERR_IGNORE_ALREADY_S", "%s is already being ignored.", {name});
+    };
+    for (const auto& c : owner_.contactsRef()) {
+        if (!c.isIgnored() || !sameMuteName(c.name, playerName)) continue;
+        already(c.name);
+        return;
+    }
+    for (const auto& [name, guid] : owner_.ignoreCacheRef()) {
+        if (!owner_.ignoreListGuidsRef().count(guid) || !sameMuteName(name, playerName)) continue;
+        already(name);
+        return;
+    }
     auto packet = AddIgnorePacket::build(playerName);
     owner_.getSocket()->send(packet);
     LOG_INFO("Sent ignore request for: ", playerName);
@@ -1940,10 +1967,20 @@ void SocialHandler::requestGuildInfo() {
     owner_.getSocket()->send(packet);
 }
 
+// GuildRoster() (0x005ca9b0): sent only when ten seconds have passed since
+// the last roster request, whoever made it.
+void SocialHandler::requestGuildRosterThrottled() {
+    if (std::chrono::steady_clock::now() < guildRosterAllowedAt_) return;
+    requestGuildRoster();
+}
+
 void SocialHandler::requestGuildRoster() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     auto packet = GuildRosterPacket::build();
     owner_.getSocket()->send(packet);
+    // Every request restarts the ten seconds GuildRoster() waits out
+    // (0x00c22ac8 = now + 10000, set by 0x005ca9b0 and 0x005caaf0 alike).
+    guildRosterAllowedAt_ = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     // Said in the log, not to the player. This is asked for far more often
     // than a person would ask for it: eight places here request a roster after
     // a guild change, and the interface asks whenever the mail frame or the
@@ -2309,6 +2346,8 @@ void SocialHandler::handleDuelComplete(network::Packet& packet) {
     uint8_t started = packet.readUInt8();
     pendingDuelRequest_ = false;
     duelCountdownMs_ = 0;
+    // The countdown's timer is cancelled with the duel (0x005cfa90).
+    duelCountdownNextAt_.reset();
     duelOpponentGuid_ = 0;
     // ERR_DUEL_CANCELLED for a duel that never began, in yellow on screen as
     // the table routes it (0x005cfa90). This was an English chat line.
@@ -4841,6 +4880,13 @@ void SocialHandler::reportPvpAfk(uint64_t playerGuid) {
     network::Packet pkt(wireOpcode(Opcode::CMSG_REPORT_PVP_AFK));
     pkt.writeUInt64(playerGuid);
     owner_.getSocket()->send(pkt);
+    // 0x006d74b0: then, when the name cache knows the player, a system line
+    // saying so.
+    const std::string& name = owner_.lookupName(playerGuid);
+    if (!name.empty()) {
+        owner_.addSystemChatMessage(
+            interfaceFormat("REPORT_PVP_AFK_SENT", "You have reported %s as AFK.", {name}));
+    }
 }
 
 void SocialHandler::leaveBattlefield() {
@@ -6409,6 +6455,23 @@ void SocialHandler::handlePvpLogData(network::Packet& packet) {
                            });
     }
     if (bgScorePending_ == 0) announce();
+}
+
+// 0x005cf870: DUEL_COUNTDOWN with the seconds left as a system line, then one
+// second fewer, and again in a second until none are left. (The client's own
+// counter goes on below zero for a countdown under a second; this stops.)
+void SocialHandler::sayDuelCountdown() {
+    owner_.addSystemChatMessage(interfaceFormat("DUEL_COUNTDOWN", "Duel starting: %d",
+                                                {std::to_string(duelCountdownSecondsLeft_)}));
+    --duelCountdownSecondsLeft_;
+    if (duelCountdownSecondsLeft_ > 0)
+        duelCountdownNextAt_ = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    else
+        duelCountdownNextAt_.reset();
+}
+
+void SocialHandler::updateDuelCountdown() {
+    if (duelCountdownNextAt_ && std::chrono::steady_clock::now() >= *duelCountdownNextAt_) sayDuelCountdown();
 }
 
 void SocialHandler::updateReadyCheckTimer() {

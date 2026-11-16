@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include "game/spell_defines.hpp"
@@ -7,70 +8,114 @@
 namespace wowee {
 namespace game {
 
-/// Which Combat Text panel checkbox covers one floating line.
-///
-/// Six controls in that panel name a CVar that nothing read, so clearing any
-/// of them changed the panel and not the screen. They divide one stream by what
-/// produced it, so the mapping is decided once, here, rather than at each of
-/// the call sites that raise a line.
-///
-/// The rule is returned rather than applied: this header knows which question
-/// to ask and what the answer is when nobody has chosen, and the caller does
-/// the CVar lookup. That keeps the decision testable without a settings store,
-/// and keeps the store out of a header that only describes combat text.
-struct CombatTextFilterRule {
-    /// The CVar that governs this line, or nullptr when none does.
-    const char* cvar = nullptr;
-    /// What that CVar means when it has never been set.
-    const char* fallback = "1";
+/// Who caused a line, as 0x007190a0 answers it: the active player itself, a
+/// unit of the player's (its CHARMEDBY, else CREATEDBY, is the player, or is
+/// a unit whose own is - a pet's totem or guardian), or neither.
+enum class FloaterSource : uint8_t { Other, Player, PlayersUnit };
+
+/// The world-text kinds the client's floaters are drawn as (0x007e6030's
+/// second argument): a mechanic 0, a crit 2, the miss table's 3 (absorb 1,
+/// no-text 11), experience 4, honour 5, a heal 6 or a crit heal 7, threat 10.
+enum class FloaterKind : uint8_t {
+    Mechanic = 0, Absorb = 1, Crit = 2, Miss = 3, Experience = 4, Honor = 5,
+    Heal = 6, CritHeal = 7, Threat = 10, None = 11,
 };
 
-/// The rule covering one line, given who caused it and where it landed.
+/// The settings a damage, miss or heal floater over the world reads
+/// (0x0071f990, 0x00722340, 0x00722440).
+struct FloaterSettings {
+    bool combatDamage = true;           ///< CombatDamage
+    bool periodicSpells = true;         ///< CombatLogPeriodicSpells
+    bool petMeleeDamage = true;         ///< PetMeleeDamage
+    bool petSpellDamage = true;         ///< PetSpellDamage
+    bool combatHealing = true;          ///< CombatHealing
+};
+
+/// Whether a combat text line is drawn over the unit it landed on.
 ///
-/// Only lines the player caused are filtered. Damage arriving at the player is
-/// a different question with its own rows in the panel, and a checkbox reading
-/// "Target Damage" does not mean "damage taken".
-inline CombatTextFilterRule combatTextFilterFor(CombatTextEntry::Type type,
-                                                bool isPlayerSource,
-                                                uint64_t srcGuid,
-                                                uint64_t dstGuid,
-                                                uint64_t petGuid,
-                                                uint64_t targetGuid) {
+/// Never over the active player (each of the three returns first for it),
+/// and only for a source 0x007190a0 claims. A miss and its kin (0x0071f990)
+/// and damage (0x00722340) need CombatDamage, a periodic one also
+/// CombatLogPeriodicSpells, and a unit of the player's also PetMeleeDamage
+/// for a swing (no spell, or one with AttributesEx3 0x8000) or
+/// PetSpellDamage for a spell. Healing (0x00722440) is the player's own
+/// alone, under CombatHealing. Nothing else in the combat text is a floater:
+/// what happens to the character is Blizzard_CombatText's.
+inline bool worldFloaterShown(CombatTextEntry::Type type, FloaterSource source, bool onActivePlayer,
+                              bool periodic, bool meleeLike, const FloaterSettings& s) {
+    using T = CombatTextEntry;
+    if (onActivePlayer || source == FloaterSource::Other) return false;
+    switch (type) {
+        case T::MISS: case T::RESIST: case T::DODGE: case T::PARRY: case T::BLOCK:
+        case T::EVADE: case T::IMMUNE: case T::DEFLECT: case T::ABSORB: case T::REFLECT:
+        case T::MELEE_DAMAGE: case T::SPELL_DAMAGE: case T::CRIT_DAMAGE: case T::PERIODIC_DAMAGE:
+        case T::GLANCING: case T::CRUSHING: {
+            if (!s.combatDamage) return false;
+            if ((periodic || type == T::PERIODIC_DAMAGE) && !s.periodicSpells) return false;
+            if (source == FloaterSource::PlayersUnit)
+                return meleeLike ? s.petMeleeDamage : s.petSpellDamage;
+            return true;
+        }
+        case T::HEAL: case T::CRIT_HEAL: case T::PERIODIC_HEAL:
+            return source == FloaterSource::Player && s.combatHealing;
+        default:
+            return false;
+    }
+}
+
+/// The global string 0x0071f990 shows for a miss and its kin - the table at
+/// 0x00adbfdc - or nullptr for a line that is not one.
+inline const char* missFloaterKey(CombatTextEntry::Type type) {
     using T = CombatTextEntry;
     switch (type) {
-        // Effects rather than numbers, read against the unit they landed on
-        // instead of who caused them: the panel offers your target and
-        // everything else as two separate rows.
-        case T::IMMUNE: case T::RESIST: case T::DEFLECT: case T::REFLECT:
-        case T::INTERRUPT: case T::DISPEL: case T::STEAL: case T::ABSORB: {
-            const bool onTarget = (dstGuid != 0 && dstGuid == targetGuid);
-            // Both halves registered off at 0x00510000: the line saying a
-            // spell was absorbed, reflected or stolen is opt-in on your own
-            // target as well as on anyone else.
-            return onTarget ? CombatTextFilterRule{.cvar = "fctSpellMechanics", .fallback = "0"}
-                            : CombatTextFilterRule{.cvar = "fctSpellMechanicsOther", .fallback = "0"};
-        }
-        // A pet's swing is its own row, and it is answered before the damage
-        // row below so that clearing pet damage does not also require the
-        // player to clear their own.
-        case T::MELEE_DAMAGE:
-            if (petGuid != 0 && srcGuid == petGuid) {
-                return {.cvar = "PetMeleeDamage", .fallback = "1"};
-            }
-            [[fallthrough]];
-        case T::SPELL_DAMAGE: case T::CRIT_DAMAGE:
-        case T::GLANCING: case T::CRUSHING:
-            if (!isPlayerSource) return {};
-            return {.cvar = "CombatDamage", .fallback = "1"};
-        case T::PERIODIC_DAMAGE: case T::PERIODIC_HEAL:
-            if (!isPlayerSource) return {};
-            return {.cvar = "CombatLogPeriodicSpells", .fallback = "1"};
-        case T::HEAL: case T::CRIT_HEAL:
-            if (!isPlayerSource) return {};
-            return {.cvar = "CombatHealing", .fallback = "1"};
-        default:
-            return {};
+        case T::MISS: return "COMBAT_TEXT_MISS";
+        case T::RESIST: return "COMBAT_TEXT_RESIST";
+        case T::DODGE: return "COMBAT_TEXT_DODGE";
+        case T::PARRY: return "COMBAT_TEXT_PARRY";
+        case T::BLOCK: return "COMBAT_TEXT_BLOCK";
+        case T::EVADE: return "COMBAT_TEXT_EVADE";
+        case T::IMMUNE: return "COMBAT_TEXT_IMMUNE";
+        case T::DEFLECT: return "COMBAT_TEXT_DEFLECT";
+        case T::ABSORB: return "COMBAT_TEXT_ABSORB";
+        case T::REFLECT: return "COMBAT_TEXT_REFLECT";
+        default: return nullptr;
     }
+}
+
+/// A victim's threat status on a unit's list as the client keeps it (+0x28 of
+/// the entry): 0 off the list; the unit's top (0x00737620) 4, or 3 while
+/// another entry stands at 2; anyone else 2 with threat at least the top's,
+/// else 1 (0x0071c3b0: the percentage of the top's threat, 100 when the top
+/// has none). `threats` is the list highest first.
+inline int clientThreatStatus(const uint32_t* threats, size_t count, size_t index) {
+    if (index >= count) return 0;
+    const uint32_t top = threats[0];
+    const auto pct = [&](size_t i) -> int64_t {
+        if (top == 0) return 100;
+        const int64_t v = static_cast<int64_t>(threats[i]) * 100 / static_cast<int64_t>(top);
+        return v > 250 ? 250 : v;
+    };
+    if (index != 0) return pct(index) >= 100 ? 2 : 1;
+    for (size_t i = 1; i < count; ++i)
+        if (pct(i) >= 100) return 3;
+    return 4;
+}
+
+/// Whether the threat floater (0x00719220) shows for a status moving from
+/// `before` to `now` (its callers raise it only on a change): not for 2 -> 1
+/// nor 3 -> 4. Its text is the global string COMBAT_THREAT_INCREASE_<now>
+/// where `now` is above `before`, else COMBAT_THREAT_DECREASE_<now>.
+constexpr bool threatFloaterShown(int before, int now) {
+    if (before == 2 && now == 1) return false;
+    if (before == 3 && now == 4) return false;
+    return true;
+}
+
+/// The mechanic floater's gate (0x0074da00): fctAllSpellMechanics, or
+/// fctSpellMechanics with the record concerning the player (0x0074d430) or
+/// fctSpellMechanicsOther.
+constexpr bool mechanicFloaterShown(bool all, bool mechanics, bool mechanicsOther, bool concernsPlayer) {
+    return all || (mechanics && (concernsPlayer || mechanicsOther));
 }
 
 } // namespace game

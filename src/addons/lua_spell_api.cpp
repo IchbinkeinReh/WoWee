@@ -16,6 +16,7 @@
 #include "game/item_text.hpp"
 #include "addons/lua_engine.hpp"
 #include "core/logger.hpp"
+#include <algorithm>
 #include <cmath>
 #include <set>
 #include <unordered_map>
@@ -253,6 +254,209 @@ static bool classCanDispel(uint8_t classId, uint8_t dispelType) {
     }
 }
 
+// ── The order UnitAura counts in ────────────────────────────────────────────
+//
+// UnitAura, UnitBuff, UnitDebuff, CancelUnitBuff and the tooltip's
+// SetUnitAura do not walk a unit's aura slots: they walk one of two ordered
+// lists of them the client keeps on the unit (0x0072c9b0), list 0 for every
+// filter but RAID and list 1 for RAID. 0x0072c510 keeps the lists: it first
+// drops each entry whose slot no longer holds the spell it was taken in with
+// (or holds it with none of the effect bits 1|2|4 up), closing the gap; then
+// it walks the slots from the last to the first and takes in each aura it
+// shows (0x0053d580) that a list does not hold yet. Taking one in
+// (0x00727c00) puts an aura the player cast (0x0053bd70) after the player's
+// own already there and ahead of everything else, one of the player's spells
+// or summons (0x0053d750) after those and ahead of the rest, and any other at
+// the end. The lists are kept between calls: an aura stays where it went in
+// until it goes, so a new buff of the player's goes in after the player's
+// older ones.
+namespace {
+
+using AuraOrderEntry = std::pair<uint32_t, uint32_t>;  // slot, spell
+struct UnitAuraOrder {
+    std::vector<AuraOrderEntry> lists[2];
+};
+
+std::unordered_map<uint64_t, UnitAuraOrder>& unitAuraOrders() {
+    static std::unordered_map<uint64_t, UnitAuraOrder> orders;
+    return orders;
+}
+
+const game::GameHandler::SpellNameEntry* auraSpellRow(game::GameHandler* gh, uint32_t spellId) {
+    gh->loadSpellNameCache();
+    const auto& cache = gh->spellNameCacheRef();
+    const auto it = cache.find(spellId);
+    return it == cache.end() ? nullptr : &it->second;
+}
+
+uint64_t unitGuidField(const game::Entity& e, game::UF field) {
+    const uint16_t i = game::fieldIndex(field);
+    if (i == 0xFFFF) return 0;
+    return (static_cast<uint64_t>(e.getField(static_cast<uint16_t>(i + 1))) << 32) | e.getField(i);
+}
+
+/// The area aura effects (0x0076bed0); 0x0076bd50 adds APPLY_AURA (6).
+bool isAreaAuraEffect(uint32_t effect) {
+    switch (effect) {
+        case 27: case 35: case 65: case 119: case 128: case 129: case 143: return true;
+        default: return false;
+    }
+}
+
+bool playerOrPetKnows(game::GameHandler* gh, uint32_t spellId) {
+    if (gh->getKnownSpells().count(spellId) != 0) return true;
+    const auto& pet = gh->getPetSpells();
+    return std::find(pet.begin(), pet.end(), spellId) != pet.end();
+}
+
+/// 0x0053bd70: the player cast it - the caster is the player, or a unit
+/// whose charm (its summon when it charms nothing) or whose charmer (its
+/// creator when nobody charms it) is the player.
+bool auraCastByPlayer(game::GameHandler* gh, const game::AuraSlot& a) {
+    const uint64_t me = gh->getPlayerGuid();
+    if (me == 0 || a.casterGuid == 0) return false;
+    if (a.casterGuid == me) return true;
+    const auto caster = gh->getEntityManager().getEntity(a.casterGuid);
+    if (!caster || !caster->isUnit()) return false;
+    uint64_t charm = unitGuidField(*caster, game::UF::UNIT_FIELD_CHARM);
+    if (charm == 0) charm = unitGuidField(*caster, game::UF::UNIT_FIELD_SUMMON);
+    if (charm == me) return true;
+    uint64_t owner = unitGuidField(*caster, game::UF::UNIT_FIELD_CHARMEDBY);
+    if (owner == 0) owner = unitGuidField(*caster, game::UF::UNIT_FIELD_CREATEDBY);
+    return owner == me;
+}
+
+/// The creatures the player's spells summon: the misc value of each known
+/// spell whose first effect is SUMMON (28) or SUMMON_PET (56), as learning
+/// one lists it (0x00542030).
+bool playerSummonsEntry(game::GameHandler* gh, uint32_t entry) {
+    if (entry == 0) return false;
+    for (uint32_t id : gh->getKnownSpells()) {
+        const auto* row = auraSpellRow(gh, id);
+        if (row && (row->effectIds[0] == 28 || row->effectIds[0] == 56) && row->effectMiscValues[0] == entry)
+            return true;
+    }
+    return false;
+}
+
+/// 0x0053d750: one of the player's (or the pet's) spells that puts an aura
+/// on, or cast by a creature of the player's, one its spells summon.
+bool auraOfPlayersSpells(game::GameHandler* gh, const game::AuraSlot& a) {
+    if (playerOrPetKnows(gh, a.spellId)) {
+        if (const auto* row = auraSpellRow(gh, a.spellId)) {
+            for (uint32_t effect : row->effectIds) {
+                if (effect == 6 || isAreaAuraEffect(effect)) return true;
+            }
+        }
+    }
+    if (a.casterGuid == 0) return false;
+    const auto caster = gh->getEntityManager().getEntity(a.casterGuid);
+    if (!caster || caster->getType() != game::ObjectType::UNIT) return false;
+    uint64_t owner = unitGuidField(*caster, game::UF::UNIT_FIELD_CHARMEDBY);
+    if (owner == 0) owner = unitGuidField(*caster, game::UF::UNIT_FIELD_CREATEDBY);
+    return owner != 0 && playerSummonsEntry(gh, static_cast<const game::Unit&>(*caster).getEntry());
+}
+
+/// 0x0053d580: whether the aura is shown at all.
+bool auraShown(game::GameHandler* gh, const game::GameHandler::SpellNameEntry& row, const game::AuraSlot& a) {
+    if ((row.attr & 0x80u) != 0 || (row.attrEx & 0x10000000u) != 0) return false;
+    if ((row.attr & 0x40u) != 0 &&
+        std::none_of(std::begin(row.effectIds), std::end(row.effectIds), isAreaAuraEffect))
+        return false;
+    // Aura flag 0x08: the unit cast it on itself.
+    if ((row.attrEx5 & ((a.flags & 0x08u) != 0 ? 0x8000000u : 0x10000000u)) != 0) return false;
+    if ((row.attrEx6 & 0x100000u) != 0) {
+        if (a.casterGuid == 0) return false;
+        if (a.casterGuid != gh->getPlayerGuid() && a.casterGuid != gh->getPetGuid()) return false;
+    }
+    if (row.requiredAuraVision == 0) return true;
+    const uint32_t bit = row.requiredAuraVision <= 8 ? 1u << (row.requiredAuraVision - 1) : 0u;
+    return (gh->playerAuraVision() & bit) != 0;
+}
+
+/// The RAID list's test (0x0072c510): a buff one of the player's own spells
+/// puts on others (0x0053d8a0), or a debuff of a type a spell the player
+/// knows dispels from a friend (0x0053bdf0, the list 0x00542030 builds).
+bool auraForRaid(game::GameHandler* gh, const game::GameHandler::SpellNameEntry& row, const game::AuraSlot& a) {
+    if ((a.flags & 0x80u) == 0) {
+        if (!playerOrPetKnows(gh, a.spellId)) return false;
+        if ((row.attrEx3 & 0x4000u) != 0 || row.implicitTargetsA[0] == 1) return false;
+        return std::none_of(std::begin(row.effectIds), std::end(row.effectIds), isAreaAuraEffect);
+    }
+    for (uint32_t id : gh->getKnownSpells()) {
+        const auto* known = auraSpellRow(gh, id);
+        if (!known) continue;
+        for (int k = 0; k < 3; ++k) {
+            if (known->effectIds[k] == 38 && known->implicitTargetsA[k] != 6 &&
+                known->effectMiscValues[k] == row.dispelType)
+                return true;
+        }
+    }
+    return false;
+}
+
+/// 0x00727c00: where in its list a new aura goes.
+void takeAuraIn(game::GameHandler* gh, std::vector<AuraOrderEntry>& list,
+                const std::vector<game::AuraSlot>& auras, uint32_t slot) {
+    const game::AuraSlot& a = auras[slot];
+    auto at = list.size();
+    const auto entryAura = [&](size_t i) -> const game::AuraSlot* {
+        return list[i].first < auras.size() ? &auras[list[i].first] : nullptr;
+    };
+    if (auraCastByPlayer(gh, a)) {
+        while (at > 0) {
+            const auto* e = entryAura(at - 1);
+            if (e && auraCastByPlayer(gh, *e)) break;
+            --at;
+        }
+    } else if (auraOfPlayersSpells(gh, a)) {
+        while (at > 0) {
+            const auto* e = entryAura(at - 1);
+            if (e && (auraCastByPlayer(gh, *e) || auraOfPlayersSpells(gh, *e))) break;
+            --at;
+        }
+    }
+    list.insert(list.begin() + static_cast<std::ptrdiff_t>(at), AuraOrderEntry{slot, a.spellId});
+}
+
+}  // namespace
+
+/// The unit's auras in the order the client counts them, list 1 for RAID
+/// (0x0072c510 bringing the lists up to date first, as 0x0072c9b0 does).
+/// Before WotLK the slots, in order.
+static std::vector<const game::AuraSlot*> unitAuraWalk(game::GameHandler* gh, uint64_t guid,
+                                                const std::vector<game::AuraSlot>& auras, bool raid) {
+    std::vector<const game::AuraSlot*> out;
+    if (game::isPreWotlk() || guid == 0) {
+        for (const auto& a : auras)
+            if (!a.isEmpty()) out.push_back(&a);
+        return out;
+    }
+    auto& orders = unitAuraOrders();
+    if (orders.size() > 512 && orders.find(guid) == orders.end()) orders.clear();
+    UnitAuraOrder& order = orders[guid];
+    for (auto& list : order.lists) {
+        std::erase_if(list, [&](const AuraOrderEntry& e) {
+            return e.first >= auras.size() || auras[e.first].spellId != e.second || (auras[e.first].flags & 7u) == 0;
+        });
+    }
+    for (size_t s = auras.size(); s-- > 0;) {
+        const game::AuraSlot& a = auras[s];
+        if (a.spellId == 0 || (a.flags & 7u) == 0) continue;
+        const auto* row = auraSpellRow(gh, a.spellId);
+        if (!row || !auraShown(gh, *row, a)) continue;
+        const auto holds = [&](const std::vector<AuraOrderEntry>& list) {
+            return std::any_of(list.begin(), list.end(),
+                               [&](const AuraOrderEntry& e) { return e.first == s && e.second == a.spellId; });
+        };
+        if (!holds(order.lists[0])) takeAuraIn(gh, order.lists[0], auras, static_cast<uint32_t>(s));
+        if (auraForRaid(gh, *row, a) && !holds(order.lists[1]))
+            takeAuraIn(gh, order.lists[1], auras, static_cast<uint32_t>(s));
+    }
+    for (const auto& e : order.lists[raid ? 1 : 0]) out.push_back(&auras[e.first]);
+    return out;
+}
+
 UnitAuraAnswer& lastUnitAuraAnswer() {
     static UnitAuraAnswer answer;
     return answer;
@@ -301,25 +505,30 @@ static int lua_UnitAura(lua_State* L, int forced) {
     if (wantName.empty() && index < 1) { return 0; }
 
     const std::vector<game::AuraSlot>* auras = nullptr;
-    if (uidStr == "player")      auras = &gh->getPlayerAuras();
-    else if (uidStr == "target") auras = &gh->getTargetAuras();
-    else {
+    uint64_t unitGuid = 0;
+    if (uidStr == "player") {
+        auras = &gh->getPlayerAuras();
+        unitGuid = gh->getPlayerGuid();
+    } else if (uidStr == "target") {
+        auras = &gh->getTargetAuras();
+        unitGuid = gh->getTargetGuid();
+    } else {
         // Try party/raid/focus via GUID lookup in unitAurasCache
-        uint64_t guid = resolveUnitGuid(gh, uidStr);
-        if (guid != 0) auras = gh->getUnitAuras(guid);
+        unitGuid = resolveUnitGuid(gh, uidStr);
+        if (unitGuid != 0) auras = gh->getUnitAuras(unitGuid);
     }
     if (!auras) { return 0; }
 
-    // "RAID" on a debuff means only what this character can remove. The index
-    // counts into the filtered list, so the test has to come before the count
-    // - filtering after it would answer the wrong aura for every index past
-    // the first one skipped.
-    const bool dispellableOnly = raid && !wantBuff;
+    // Before WotLK, "RAID" on a debuff means only what this character can
+    // remove; from WotLK on the RAID list itself says what is in it.
+    const bool dispellableOnly = raid && !wantBuff && game::isPreWotlk();
     const uint8_t playerClass = gh->getPlayerClass();
 
-    // Filter to buffs or debuffs and find the Nth one
+    // Filter to buffs or debuffs and find the Nth one, in the order of the
+    // unit's list (0x0072c9b0).
     int found = 0;
-    for (const auto& aura : *auras) {
+    for (const game::AuraSlot* auraPtr : unitAuraWalk(gh, unitGuid, *auras, raid)) {
+        const auto& aura = *auraPtr;
         if (aura.isEmpty() || aura.spellId == 0) continue;
         bool isDebuff = (aura.flags & 0x80) != 0;
         if (wantBuff ? isDebuff : !isDebuff) continue;
@@ -1582,13 +1791,16 @@ static int lua_CancelUnitBuff(lua_State* L) {
     toLowerInPlace(uidStr);
     if (uidStr != "player") return 0;   // only one's own auras can be cancelled
 
-    const auto& auras = gh->getPlayerAuras();
+    // Counted in the order of the player's aura list, as UnitBuff counts
+    // (0x00608390 -> 0x0072c9b0), so the button clicked is the buff dropped.
+    const auto auras = unitAuraWalk(gh, gh->getPlayerGuid(), gh->getPlayerAuras(), false);
     const bool byName = lua_isstring(L, 2) && !lua_isnumber(L, 2);
 
     if (byName) {
         std::string want(lua_tostring(L, 2));
         toLowerInPlace(want);
-        for (const auto& a : auras) {
+        for (const game::AuraSlot* ap : auras) {
+            const auto& a = *ap;
             if (a.isEmpty() || (a.flags & 0x80) != 0) continue;
             std::string have = gh->getSpellName(a.spellId);
             toLowerInPlace(have);
@@ -1600,7 +1812,8 @@ static int lua_CancelUnitBuff(lua_State* L) {
     const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
     if (index < 1) return 0;
     int buffCount = 0;
-    for (const auto& a : auras) {
+    for (const game::AuraSlot* ap : auras) {
+        const auto& a = *ap;
         if (a.isEmpty()) continue;
         if ((a.flags & 0x80) != 0) continue;   // debuffs are not cancellable
         if (++buffCount == index) { gh->cancelAura(a.spellId); return 0; }

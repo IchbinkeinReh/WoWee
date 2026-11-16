@@ -796,6 +796,14 @@ void AppearanceComposer::updateWeaponsFromFields() {
         animationSheathKey_ = {};
         standSeen_ = gameHandler_ ? gameHandler_->getStandState() : 0;
         channelObjectSeen_ = playerChannelObject();
+        // 0x00730100: the player's own model come in, UNIT_PORTRAIT_UPDATE
+        // then UNIT_MODEL_CHANGED for each token naming it (0x00618110 with 3).
+        if (instanceId != 0 && gameHandler_) {
+            for (const auto& unit : gameHandler_->unitTokensForGuid(gameHandler_->getPlayerGuid())) {
+                gameHandler_->fireAddonEvent("UNIT_PORTRAIT_UPDATE", {unit});
+                gameHandler_->fireAddonEvent("UNIT_MODEL_CHANGED", {unit});
+            }
+        }
     } else if (field && fieldSheathSeen_ && *field != *fieldSheathSeen_) {
         // 0x00737aa0: the server's change, taken when the player was in the
         // state it changed from.

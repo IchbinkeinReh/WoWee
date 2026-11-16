@@ -142,6 +142,7 @@ void EntityController::clearAll() {
     serverUpdatedTransportGuids_.clear();
     entityManager.clear();
     playerFeigningDeath_ = false;
+    auraVisionSeen_ = false;
 }
 
 // ============================================================
@@ -2344,6 +2345,17 @@ void EntityController::trackItemOnCreate(const UpdateBlock& block, bool& newItem
             info.socketEnchantIds  != prev.socketEnchantIds;
         if (itemChanged) newItemCreated = true;
         owner_.queryItemInfo(info.entry, block.guid);
+        // 0x0070aa40, as the item object is made: a refundable item of the
+        // player's asks for its refund record. ITEM_FIELD_OWNER is the pair
+        // four fields before ITEM_FIELD_CREATOR in every layout.
+        if (isNew && creatorField != 0xFFFF && creatorField >= 4) {
+            const auto ownerLo = block.fields.find(static_cast<uint16_t>(creatorField - 4u));
+            const auto ownerHi = block.fields.find(static_cast<uint16_t>(creatorField - 3u));
+            if (ownerLo != block.fields.end() && ownerHi != block.fields.end()) {
+                const uint64_t ownerGuid = ownerLo->second | (static_cast<uint64_t>(ownerHi->second) << 32);
+                owner_.noteItemObjectCreated(block.guid, info.entry, ownerGuid);
+            }
+        }
     }
     // Extract container slot GUIDs for bags
     if (block.objectType == ObjectType::CONTAINER) {
@@ -3670,6 +3682,29 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
         if (const uint16_t b2 = fieldIndex(UF::PLAYER_FIELD_BYTES2);
             b2 != 0xFFFF && block.fields.find(b2) != block.fields.end()) {
             owner_.updateOverrideSpellBar();
+            // Its high byte, the aura vision (0x006d7030 -> 0x00727a70): each
+            // unit with an aura asking for a vision bit that changed is told
+            // UNIT_AURA, since which of its auras UnitAura shows has changed.
+            const auto vision = static_cast<uint8_t>((entity->getField(b2) >> 24) & 0xFFu);
+            const auto changed = static_cast<uint8_t>(vision ^ lastAuraVision_);
+            const bool announce = auraVisionSeen_ && changed != 0;
+            lastAuraVision_ = vision;
+            auraVisionSeen_ = true;
+            if (announce) {
+                auto tell = [&](uint64_t guid, const std::vector<AuraSlot>& auras) {
+                    if (guid == 0) return;
+                    const bool affected = std::any_of(auras.begin(), auras.end(), [&](const AuraSlot& a) {
+                        return a.spellId != 0 && (owner_.spellRequiredVision(a.spellId) & changed) != 0;
+                    });
+                    if (!affected) return;
+                    for (const auto& uid : owner_.unitTokensForGuid(guid)) pendingEvents_.emit("UNIT_AURA", {uid});
+                };
+                tell(owner_.getPlayerGuid(), owner_.getPlayerAuras());
+                tell(owner_.getTargetGuid(), owner_.getTargetAuras());
+                for (const auto& [guid, auras] : owner_.unitAurasCacheRef()) {
+                    if (guid != owner_.getPlayerGuid() && guid != owner_.getTargetGuid()) tell(guid, auras);
+                }
+            }
         }
         // The unit the player looks through (0x006e4fd0): whether the bonus
         // bar holds the pet's actions is asked again (0x005d4ad0).
@@ -4103,6 +4138,8 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
     if (handler) handler->onValuesUpdate(block, entity);
 
     if (watchesTarget && unitTargetGuid(*entity) != oldTarget) {
+        // 0x00716900: the time it moved, which the pet's ring reads.
+        if (auto* unit = dynamic_cast<Unit*>(entity.get())) unit->noteTargetChanged(core::appTimeSeconds());
         // The token is not decoration: the interface ignores a unit event whose
         // argument is not the unit it is showing, so a change said about nobody
         // reaches nothing. Once for every token naming the unit, as 0x0060bf10

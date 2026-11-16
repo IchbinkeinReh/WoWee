@@ -17,8 +17,8 @@ namespace ui {
  */
 class ChatBubbleManager {
 public:
-    /** Add or replace a bubble for the given entity. */
-    void addBubble(uint64_t senderGuid, const std::string& message, bool isYell);
+    /** Add or replace a bubble for the given entity; `own` for the player's. */
+    void addBubble(uint64_t senderGuid, const std::string& message, bool isYell, bool own = false);
 
     /** Render and tick all active bubbles (projects to screen via camera). */
     void render(game::GameHandler& gameHandler, const UIServices& services);
@@ -39,8 +39,9 @@ private:
     struct ChatBubble {
         uint64_t senderGuid = 0;
         std::string message;
-        float timeRemaining = 0.0f;
-        float totalDuration = 0.0f;
+        float elapsed = 0.0f;    ///< seconds since it was said
+        float duration = 0.0f;   ///< seconds up before the fade out (chat_bubble::durationMs)
+        float alpha = 0.0f;      ///< 0..1, faded in and out over 250 ms
         bool isYell = false;
     };
     std::vector<ChatBubble> bubbles_;

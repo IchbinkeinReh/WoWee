@@ -1837,10 +1837,11 @@ public:
     static network::Packet build();
 };
 
-/** CMSG_ACCEPT_TRADE packet builder (no payload - lock in current offer) */
+/** CMSG_ACCEPT_TRADE packet builder (0x00703f50): one uint32, the trade's
+ *  state index the trader's side last reported (0xca0b70). */
 class AcceptTradePacket {
 public:
-    static network::Packet build();
+    static network::Packet build(uint32_t traderStateIndex);
 };
 
 /** CMSG_SET_TRADE_ITEM packet builder (tradeSlot, bag, bagSlot) */
@@ -2057,6 +2058,9 @@ struct GameObjectQueryResponseData {
     std::string name;
     uint32_t type = 0;       // GameObjectType (e.g. 3=chest, 2=questgiver, 15=MO_TRANSPORT)
     uint32_t displayId = 0;
+    /// The template's IconName (+8 of the client's cache record): the cursor
+    /// the object wears (0x0070ce10). Empty on vanilla, which has none.
+    std::string iconName;
     uint32_t data[24] = {};  // Type-specific data fields (e.g. data[0]=taxiPathId for MO_TRANSPORT)
     bool hasData = false;    // Whether data[] was parsed
     /// The template's size, after the data fields (+0x74 in the client's
@@ -2330,6 +2334,8 @@ struct MonsterMoveData {
     float facingSpotX = 0, facingSpotY = 0;  // FacingSpot, server coords; its height is not needed
     uint32_t splineFlags = 0;
     uint32_t duration = 0;
+    /// The move's spline id (WotLK), which CMSG_MOVE_SPLINE_DONE hands back.
+    uint32_t splineId = 0;
     // Destination (final point of the spline, server coords)
     float destX = 0, destY = 0, destZ = 0;
     bool hasDest = false;
@@ -3911,7 +3917,10 @@ public:
 /** CMSG_MAIL_RETURN_TO_SENDER packet builder */
 class MailReturnToSenderPacket {
 public:
-    static network::Packet build(uint64_t mailboxGuid, uint32_t mailId);
+    /// WotLK carries the letter's sender after the id (0x00571c50 and
+    /// ReturnInboxItem write it); the earlier layouts end at the id.
+    static network::Packet build(uint64_t mailboxGuid, uint32_t mailId, uint64_t senderGuid = 0,
+                                 bool withSender = false);
 };
 
 /** CMSG_MAIL_MARK_AS_READ packet builder */
@@ -4152,7 +4161,7 @@ public:
                                   uint8_t levelMin, uint8_t levelMax,
                                   uint32_t invTypeMask, uint32_t itemClass,
                                   uint32_t itemSubClass, uint32_t quality,
-                                  uint8_t usableOnly, uint8_t exactMatch,
+                                  uint8_t usableOnly, uint8_t getAll,
                                   const std::vector<AuctionSortKey>& sort = {});
 };
 

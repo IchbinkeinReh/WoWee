@@ -1,4 +1,6 @@
 #include "game/spell_handler.hpp"
+#include "game/unit_combat.hpp"
+#include "game/cast_event_gate.hpp"
 #include "game/shapeshift_forms.hpp"
 #include "addons/lua_api_helpers.hpp"
 #include "addons/tooltip_setter_rules.hpp"
@@ -544,7 +546,47 @@ std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data,
     };
 
     const size_t targetCount = data.hitTargets.size() + data.missTargets.size();
-    switch (sm::chooseTargeting(data.targetFlags, targetCount, missile->flags)) {
+    const bool hasLocation =
+        (data.targetFlags & (sm::kTargetFlagSourceLocation | sm::kTargetFlagDestLocation)) != 0;
+    // AttributesEx4 0x40000 (0x0080f4d7 -> 0x00800180): never a missile per
+    // target. At a location the one missile flies to the point; otherwise it
+    // goes to the first target and, carrying the list (flag 0x200), is
+    // relaunched on each arrival to the next (0x00702a60). The list is the
+    // hit targets then the missed ones, or the missed first with cast flag
+    // 0x400; a missed one is flown to but takes no impact (0x006fefb0).
+    const bool bouncy = (spellIt->second.attrEx4 & 0x40000u) != 0;
+    if (bouncy && !hasLocation) {
+        std::vector<rendering::SpellVisualSystem::BounceHop> hops;
+        std::vector<uint64_t> hitsFlownTo;
+        const auto addHits = [&] {
+            for (uint64_t guid : data.hitTargets) {
+                MissileEnd end;
+                if (!unitEnd(guid, end)) continue;
+                hops.push_back({end, true});
+                hitsFlownTo.push_back(guid);
+            }
+        };
+        const auto addMisses = [&] {
+            for (const auto& miss : data.missTargets) {
+                MissileEnd end;
+                if (unitEnd(miss.targetGuid, end)) hops.push_back({end, false});
+            }
+        };
+        if (data.castFlags & 0x400u) {
+            addMisses();
+            addHits();
+        } else {
+            addHits();
+            addMisses();
+        }
+        if (svs->launchBouncingSpellMissile(visualId, speed, from, std::move(hops), trajectory, data.spellId,
+                                            data.casterUnit, data.castCount))
+            carried = std::move(hitsFlownTo);
+        return carried;
+    }
+    auto targeting = sm::chooseTargeting(data.targetFlags, targetCount, missile->flags);
+    if (bouncy) targeting = sm::Targeting::Location;
+    switch (targeting) {
     case sm::Targeting::EachTarget: {
         for (uint64_t guid : data.hitTargets) {
             MissileEnd to;
@@ -3373,6 +3415,21 @@ void SpellHandler::cancelCraftQueue() {
     craftQueueRemaining_ = 0;
 }
 
+void SpellHandler::cancelOpenStableAuras() {
+    constexpr uint8_t kAuraFlagPositive = 0x10;
+    constexpr uint32_t kAuraOpenStable = 292;
+    loadSpellNameCache();
+    // A copy: a cancel may reach the aura list before the loop is done.
+    const std::vector<AuraSlot> auras = playerAuras_;
+    for (const AuraSlot& aura : auras) {
+        if (aura.isEmpty() || (aura.flags & kAuraFlagPositive) == 0) continue;
+        const auto it = owner_.spellNameCacheRef().find(aura.spellId);
+        if (it == owner_.spellNameCacheRef().end()) continue;
+        for (const uint32_t auraType : it->second.effectAuraIds)
+            if (auraType == kAuraOpenStable) cancelAura(aura.spellId);
+    }
+}
+
 void SpellHandler::cancelAura(uint32_t spellId) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     // 0x00802f80: the aura of a form the player is in. The form is left at
@@ -4210,7 +4267,13 @@ void SpellHandler::castPowerSaid(uint64_t casterUnit, uint32_t spellId, uint32_t
     const auto it = owner_.spellNameCacheRef().find(spellId);
     if (!unit || it == owner_.spellNameCacheRef().end()) return;
     const auto type = static_cast<int32_t>(it->second.powerType);
-    if (type == -2 || type == 5) return;
+    // Health (-2): the predicted health, through 0x00716050.
+    if (type == -2) {
+        if ((entityField(*unit, UF::UNIT_FIELD_FLAGS_2) & 0x100u) == 0)
+            unit->setPredictedHealth(static_cast<int32_t>(power));
+        return;
+    }
+    if (type == 5) return;
     if ((entityField(*unit, UF::UNIT_FIELD_FLAGS_2) & 0x100u) == 0)
         owner_.setPredictedPower(*unit, type, static_cast<int32_t>(power));
     if (go && type == 0) owner_.startFiveSecondRule(*unit);
@@ -4636,6 +4699,22 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
         }
         for (const auto& m : data.missTargets)
             owner_.spellMissCallbackRef()(missCaster, m.targetGuid, m.missType, data.spellId);
+    }
+
+    // UNIT_COMBAT for each target missed, and for the caster where a
+    // reflected spell came back with a result of its own (0x0080e1b0 ->
+    // 0x00513410). The client raises it here for a spell with no travel
+    // time and at the missile's impact (0x00700e20, 0x00702fc0) otherwise;
+    // here it is raised at the cast for both.
+    if (!data.missTargets.empty() && unit_combat::spellRaises(owner_.getSpellAttributes(data.spellId))) {
+        const uint64_t reflectVictim = data.casterUnit != 0 ? data.casterUnit : data.casterGuid;
+        for (const auto& m : data.missTargets) {
+            owner_.fireUnitCombat(m.targetGuid, unit_combat::missAction(m.missType), 0,
+                                  unit_combat::kPhysicalSchoolMask, 0);
+            if (m.missType == 11 && m.reflectResult != 0)
+                owner_.fireUnitCombat(reflectVictim, unit_combat::missAction(m.reflectResult), 0,
+                                      unit_combat::kPhysicalSchoolMask, 0);
+        }
     }
 
     // Miss combat text
@@ -7383,26 +7462,47 @@ void SpellHandler::handleSpellDelayed(network::Packet& packet) {
         ? packet.readUInt64() : packet.readPackedGuid();
     if (!packet.hasRemaining(4)) return;
     uint32_t delayMs = packet.readUInt32();
-    if (delayMs == 0) return;
-    float delaySec = delayMs / 1000.0f;
-    if (caster == owner_.getPlayerGuid()) {
-        if (casting_) {
-            castTimeRemaining_ += delaySec;
-            castTimeTotal_     += delaySec;
-        }
+    // 0x00801b80: the delay moves the cast the unit has (+0xa6c) - nothing
+    // without one, or for a spell the gate hides - and raises
+    // UNIT_SPELLCAST_DELAYED (unit, name, rank, cast count) for each token.
+    const bool isPlayer = caster == owner_.getPlayerGuid();
+    uint32_t castSpell = 0;
+    auto other = unitCastStates_.end();
+    if (isPlayer) {
+        if (casting_ && !castIsChannel_) castSpell = currentCastSpellId_;
     } else {
-        auto it = unitCastStates_.find(caster);
-        if (it != unitCastStates_.end() && it->second.casting) {
-            it->second.timeRemaining += delaySec;
-            it->second.timeTotal     += delaySec;
-        }
+        other = unitCastStates_.find(caster);
+        if (other != unitCastStates_.end() && other->second.casting && !other->second.isChannel)
+            castSpell = other->second.spellId;
+    }
+    if (castSpell == 0 || !castEventShownFor(castSpell, isPlayer, false)) return;
+    const float delaySec = delayMs / 1000.0f;
+    if (isPlayer) {
+        castTimeRemaining_ += delaySec;
+        castTimeTotal_     += delaySec;
+    } else {
+        other->second.timeRemaining += delaySec;
+        other->second.timeTotal     += delaySec;
     }
     // The cast bar redraws itself from this: it is already on screen and its
     // end moved, so without the event it counts down to the wrong moment.
-    const std::string delayedUnit = owner_.guidToUnitId(caster);
-    if (!delayedUnit.empty()) {
-        owner_.fireAddonEvent("UNIT_SPELLCAST_DELAYED", {delayedUnit});
-    }
+    for (const auto& unitId : owner_.unitTokensForGuid(caster))
+        owner_.fireAddonEvent("UNIT_SPELLCAST_DELAYED", spellcastArgs(unitId, castSpell));
+}
+
+bool SpellHandler::castEventShownFor(uint32_t spellId, bool casterIsPlayer, bool channel) {
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return false;
+    const auto& e = it->second;
+    return castEventShown(e.attr, e.attrEx3, e.attrEx4, casterIsPlayer, channel);
+}
+
+/// A channel's events carry the spell's name and rank and a 0 where a cast's
+/// carry its count (0x00801c90 and 0x00801db0 pass 0 to 0x0060bf60).
+std::vector<std::string> SpellHandler::channelEventArgs(const std::string& unitId,
+                                                        uint32_t spellId) const {
+    return {unitId, owner_.getSpellName(spellId), owner_.getSpellRank(spellId), "0"};
 }
 
 // ============================================================
@@ -7426,7 +7526,13 @@ void SpellHandler::handleSpellLogMiss(network::Packet& packet) {
             return;
         }
         if (d.debug) return;
+        const bool raisesCombat = unit_combat::spellRaises(owner_.getSpellAttributes(d.spellId));
         for (const auto& miss : d.misses) {
+            // UNIT_COMBAT for the victim (0x006d3090 -> 0x00513410): the miss
+            // reason's word, no amount, physical school.
+            if (raisesCombat)
+                owner_.fireUnitCombat(miss.victimGuid, unit_combat::missAction(miss.missInfo), 0,
+                                      unit_combat::kPhysicalSchoolMask, 0);
             // A damage shield's miss (0x00751b80 with that flag): this packet
             // is what a shield that failed to strike sends.
             owner_.combatLogFeed().spellMissed(d.casterGuid, miss.victimGuid, d.spellId, miss.missInfo, true, false);
@@ -7681,6 +7787,7 @@ void SpellHandler::handlePeriodicAuraLog(network::Packet& packet) {
         packet.skipAll();
         return;
     }
+    const bool raisesCombat = unit_combat::spellRaises(owner_.getSpellAttributes(spellId));
     // SpellPeriodicAuraLogInfo serializes AuraType as uint32 on the wire.
     // Reading one byte leaves three zero bytes in front of the amount and
     // turns ordinary poison ticks into corrupt multi-byte damage values.
@@ -7707,6 +7814,10 @@ void SpellHandler::handlePeriodicAuraLog(network::Packet& packet) {
                 feed.spellDamage(casterGuid, victimGuid, spellId, static_cast<int32_t>(dmg),
                                  static_cast<int32_t>(overkill), school, static_cast<int32_t>(abs),
                                  static_cast<int32_t>(res), 0, dotCrit ? 2u : 0u, true);
+            // UNIT_COMBAT for the victim, every tick (0x007531f0 -> 0x00513380).
+            if (raisesCombat)
+                owner_.fireUnitCombat(victimGuid, "WOUND", static_cast<int32_t>(dmg), static_cast<int32_t>(school),
+                                      unit_combat::hitInfoFromLog(abs, res, 0, dotCrit));
             if (!ours) continue;
             if (dmg > 0)
                 owner_.addCombatText(dotCrit ? CombatTextEntry::CRIT_DAMAGE : CombatTextEntry::PERIODIC_DAMAGE,
@@ -7736,6 +7847,10 @@ void SpellHandler::handlePeriodicAuraLog(network::Packet& packet) {
             if (logIt)
                 feed.spellHeal(casterGuid, victimGuid, spellId, static_cast<int32_t>(heal),
                                static_cast<int32_t>(overheal), static_cast<int32_t>(hotAbs), hotCrit, true);
+            // UNIT_COMBAT for the victim, a tick that healed (0x007531f0 -> 0x00513480).
+            if (raisesCombat && heal != 0)
+                owner_.fireUnitCombat(victimGuid, "HEAL", static_cast<int32_t>(heal),
+                                      unit_combat::kPhysicalSchoolMask, hotCrit ? 0x200u : 0u);
             if (!ours) continue;
             owner_.addCombatText(hotCrit ? CombatTextEntry::CRIT_HEAL : CombatTextEntry::PERIODIC_HEAL,
                           static_cast<int32_t>(heal),
@@ -8459,7 +8574,13 @@ void SpellHandler::handleChannelStart(network::Packet& packet) {
     if (!packet.hasRemaining(8)) return;
     uint32_t chanSpellId = packet.readUInt32();
     uint32_t chanTotalMs = packet.readUInt32();
-    if (chanTotalMs > 0 && chanCaster != 0) {
+    // 0x00801c90: a duration, a spell Spell.dbc has, the gate, and the
+    // unit in the world; then the channel is set (0x0072ad20) and
+    // UNIT_SPELLCAST_CHANNEL_START raised for each token.
+    if (chanTotalMs == 0 || chanCaster == 0) return;
+    if (!castEventShownFor(chanSpellId, chanCaster == owner_.getPlayerGuid(), true)) return;
+    if (!owner_.getEntityManager().getEntity(chanCaster)) return;
+    {
         if (chanCaster == owner_.getPlayerGuid()) {
             casting_            = true;
             castIsChannel_      = true;
@@ -8487,12 +8608,8 @@ void SpellHandler::handleChannelStart(network::Packet& packet) {
             owner_.spellCastAnimCallbackRef()(chanCaster, true, true, chanType);
         }
 
-        // Fire UNIT_SPELLCAST_CHANNEL_START for Lua addons
-        if (owner_.addonEventCallbackRef()) {
-            auto unitId = owner_.guidToUnitId(chanCaster);
-            if (!unitId.empty())
-                owner_.fireAddonEvent("UNIT_SPELLCAST_CHANNEL_START", spellcastArgs(unitId, chanSpellId));
-        }
+        for (const auto& unitId : owner_.unitTokensForGuid(chanCaster))
+            owner_.fireAddonEvent("UNIT_SPELLCAST_CHANNEL_START", channelEventArgs(unitId, chanSpellId));
     }
 }
 
@@ -8504,39 +8621,44 @@ void SpellHandler::handleChannelUpdate(network::Packet& packet) {
         : packet.readPackedGuid();
     if (!packet.hasRemaining(4)) return;
     uint32_t chanRemainMs = packet.readUInt32();
-    if (chanCaster2 == owner_.getPlayerGuid()) {
+    // 0x00801db0: the unit's own channel (+0xa80) - nothing without one, or
+    // for a spell the gate hides. Time left moves its end and raises
+    // UNIT_SPELLCAST_CHANNEL_UPDATE; none ends it (0x00726220), raises
+    // UNIT_SPELLCAST_CHANNEL_STOP instead, and stops its visual.
+    if (chanCaster2 == 0) return;
+    const bool isPlayer = chanCaster2 == owner_.getPlayerGuid();
+    uint32_t chanSpell = 0;
+    auto other = unitCastStates_.end();
+    if (isPlayer) {
+        if (casting_ && castIsChannel_) chanSpell = currentCastSpellId_;
+    } else {
+        other = unitCastStates_.find(chanCaster2);
+        if (other != unitCastStates_.end() && other->second.casting && other->second.isChannel)
+            chanSpell = other->second.spellId;
+    }
+    if (chanSpell == 0 || !castEventShownFor(chanSpell, isPlayer, true)) return;
+    if (isPlayer) {
         castTimeRemaining_ = chanRemainMs / 1000.0f;
         if (chanRemainMs == 0) {
             casting_ = false;
             castIsChannel_ = false;
             currentCastSpellId_ = 0;
         }
-    } else if (chanCaster2 != 0) {
-        auto it = unitCastStates_.find(chanCaster2);
-        if (it != unitCastStates_.end()) {
-            it->second.timeRemaining = chanRemainMs / 1000.0f;
-            if (chanRemainMs == 0) {
-                unitCastStates_.erase(it);
-                noteUnitCastEnd(chanCaster2, true);
-            }
+    } else {
+        other->second.timeRemaining = chanRemainMs / 1000.0f;
+        if (chanRemainMs == 0) {
+            unitCastStates_.erase(other);
+            noteUnitCastEnd(chanCaster2, true);
         }
     }
     LOG_DEBUG("MSG_CHANNEL_UPDATE: caster=0x", std::hex, chanCaster2, std::dec,
               " remaining=", chanRemainMs, "ms");
-    // Every update, not only the last: a channel that reticks or is pushed
-    // back moves its bar, and the bar is already on screen.
-    if (const std::string chanUnit = owner_.guidToUnitId(chanCaster2); !chanUnit.empty()) {
-        owner_.fireAddonEvent("UNIT_SPELLCAST_CHANNEL_UPDATE", {chanUnit});
-    }
-    // Fire UNIT_SPELLCAST_CHANNEL_STOP when channel ends
-    if (chanRemainMs == 0) {
-        // Stop channeling animation - return to idle
-        if (owner_.spellCastAnimCallbackRef()) {
-            owner_.spellCastAnimCallbackRef()(chanCaster2, false, true, SpellCastType::OMNI);
-        }
-        auto unitId = owner_.guidToUnitId(chanCaster2);
-        if (!unitId.empty())
-            owner_.fireAddonEvent("UNIT_SPELLCAST_CHANNEL_STOP", {unitId});
+    const char* event = chanRemainMs != 0 ? "UNIT_SPELLCAST_CHANNEL_UPDATE" : "UNIT_SPELLCAST_CHANNEL_STOP";
+    for (const auto& unitId : owner_.unitTokensForGuid(chanCaster2))
+        owner_.fireAddonEvent(event, channelEventArgs(unitId, chanSpell));
+    if (chanRemainMs == 0 && owner_.spellCastAnimCallbackRef()) {
+        // The channel's visual stops (0x00721190): back to idle.
+        owner_.spellCastAnimCallbackRef()(chanCaster2, false, true, SpellCastType::OMNI);
     }
 }
 

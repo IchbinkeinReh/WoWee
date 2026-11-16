@@ -41,7 +41,6 @@ private:
     // ---- LFG role state ----
 
     // ---- Individual dialog renderers ----
-    void renderDuelCountdown(game::GameHandler& gameHandler);
     void renderPetUnlearnConfirmDialog(game::GameHandler& gameHandler);
 };
 

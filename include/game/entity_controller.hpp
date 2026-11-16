@@ -395,6 +395,10 @@ private:
 
     // The player's UNIT_DYNFLAG_DEAD is Feign Death, not a death.
     bool playerFeigningDeath_ = false;
+    // The player's aura vision (PLAYER_FIELD_BYTES2 >> 24) as last seen, and
+    // whether it has been seen yet (0x006d7030 watches it from its first value).
+    uint8_t lastAuraVision_ = 0;
+    bool auraVisionSeen_ = false;
 };
 
 } // namespace game

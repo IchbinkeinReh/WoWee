@@ -207,6 +207,10 @@ public:
     /// (ChannelInterruptFlags 0x10 with AttributesEx 0x4000, 0x0072e7e0).
     void cancelChannelOnTurn();
     void cancelAura(uint32_t spellId);
+    /// 0x00726e10, as ClosePetStables (0x005a1950) runs it: each positive
+    /// aura of the player's (aura flag 0x10) is cancelled once for every
+    /// effect of it that applies aura 292, SPELL_AURA_OPEN_STABLE.
+    void cancelOpenStableAuras();
 
     // Known spells
     [[nodiscard]] const std::unordered_set<uint32_t>& getKnownSpells() const { return knownSpells_; }
@@ -637,6 +641,11 @@ public:
     /// unit, spell name, rank, cast id, spell id - in that order, which is what
     /// FrameXML unpacks. These were being fired as just the unit and the spell
     /// id, so the id sat where the name belongs and the cast id was absent.
+    /// castEventShown (cast_event_gate.hpp) for a spell's Spell.dbc row;
+    /// false for a spell it does not have.
+    bool castEventShownFor(uint32_t spellId, bool casterIsPlayer, bool channel);
+    [[nodiscard]] std::vector<std::string> channelEventArgs(const std::string& unitId,
+                                                            uint32_t spellId) const;
     [[nodiscard]] std::vector<std::string> spellcastArgs(const std::string& unitId,
                                            uint32_t spellId) const;
 

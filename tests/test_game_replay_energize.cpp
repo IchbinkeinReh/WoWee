@@ -20,13 +20,14 @@ TEST_CASE("an energize log has packed guids in every expansion", "[replay][energ
         p.writeUInt32(1);  // rage
         p.writeUInt32(20);
         s.receive(p);
-        const auto& texts = s.handler().getCombatText();
-        REQUIRE(texts.size() == 1);
-        CHECK(texts.front().type == CombatTextEntry::ENERGIZE);
-        CHECK(texts.front().amount == 20);
-        CHECK(texts.front().powerType == 1);
-        CHECK(texts.front().srcGuid == kShaman);
-        CHECK(texts.front().dstGuid == Session::kPlayerGuid);
-        CHECK_FALSE(texts.front().isPlayerSource);
+        // A power gain is no floater over the world (only damage, misses and
+        // the player's heals are), so the log entry is what shows the read.
+        CHECK(s.handler().getCombatText().empty());
+        const auto& log = s.handler().getCombatLog();
+        REQUIRE_FALSE(log.empty());
+        CHECK(log.back().type == CombatTextEntry::ENERGIZE);
+        CHECK(log.back().amount == 20);
+        CHECK(log.back().powerType == 1);
+        CHECK_FALSE(log.back().isPlayerSource);
     }
 }

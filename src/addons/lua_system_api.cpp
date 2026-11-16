@@ -44,6 +44,7 @@
 #include "addons/chat_color_table.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/chat_window_background.hpp"
+#include "addons/camera_cvar_ranges.hpp"
 #include "addons/client_cvar_registry.hpp"
 #include "ui/display_modes.hpp"
 #include "ui/fullscreen_scale.hpp"
@@ -144,6 +145,29 @@ static int pushCalendarBoundDate(lua_State* L, int monthOffset) {
     return 4;
 }
 
+static std::unordered_map<std::string, std::string>& cvarStore();
+
+/// The calendarShow* CVars as the day lists read them (0x005c0240): the
+/// stored value, else the client's default, and 0 hides that kind of row.
+static wowee::game::CalendarShowFilter calendarShowFilter() {
+    auto on = [](const char* lower) {
+        std::string v;
+        if (auto it = cvarStore().find(lower); it != cvarStore().end()) {
+            v = it->second;
+        } else if (auto d = clientCVarDefault(lower)) {
+            v = std::string(*d);
+        }
+        return std::atof(v.c_str()) != 0.0;
+    };
+    wowee::game::CalendarShowFilter f;
+    f.weeklyHolidays = on("calendarshowweeklyholidays");
+    f.darkmoon = on("calendarshowdarkmoon");
+    f.battlegrounds = on("calendarshowbattlegrounds");
+    f.lockouts = on("calendarshowlockouts");
+    f.resets = on("calendarshowresets");
+    return f;
+}
+
 /// The rows on the day an interface call is asking about.
 ///
 /// Every day-indexed calendar getter takes (monthOffset, day) and indexes the
@@ -161,7 +185,7 @@ static std::vector<wowee::game::CalendarDayEntry> calendarDayRows(lua_State* L) 
                                                    monthOffset);
     if (day > info.numDays) return {};
     return wowee::game::calendarEntriesForDay(gh->getCalendarData(), info.month,
-                                              day, info.year);
+                                              day, info.year, calendarShowFilter());
 }
 
 /// The event being built up before it is sent.
@@ -209,7 +233,7 @@ static std::vector<wowee::game::CalendarDayEntry> calendarRowsFor(
                                                    monthOffset);
     if (day > info.numDays) return {};
     return wowee::game::calendarEntriesForDay(gh.getCalendarData(), info.month,
-                                              day, info.year);
+                                              day, info.year, calendarShowFilter());
 }
 
 /// Which of the six kinds of row this event is, as the string the interface
@@ -1160,6 +1184,8 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     else if (n == "spelleffectlevel") lua_pushstring(L, "9");
     // On (0x0051d9b0): UnitPower and the cast read the predicted power.
     else if (n == "predictedpower") lua_pushstring(L, "1");
+    // On (0x00510000 "1"): UnitHealth reads the predicted health (0x0071c2c0).
+    else if (n == "predictedhealth") lua_pushstring(L, "1");
     // 0x004d0000's registration: "32" (0x009e21dc), the real voices the
     // sound engine is set up with (audio/voice_priority.hpp).
     else if (n == "sound_numchannels") lua_pushstring(L, "32");
@@ -1170,6 +1196,8 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     else if (n == "uiscale") lua_pushstring(L, "1");
     // The tracking menu's own entry, by name; none (0x0057e070).
     else if (n == "minimaptrackedinfo") lua_pushstring(L, "");
+    // The tracked achievements, none (0x005b1fa0 writes the list at logout).
+    else if (n == "trackedachievements") lua_pushstring(L, "");
     // Off, as registered (0x00520000 "0", setter FUN_005237e0): the scale the
     // interface uses is the one its own code picks for the resolution, and the
     // "Use UI Scale" checkbox is what makes uiscale override that.
@@ -1289,6 +1317,8 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     // On, as registered (0x00510000 "1"): losing the top of the threat list
     // makes a noise unless the player has turned that off.
     else if (n == "threatplaysounds") lua_pushstring(L, "1");
+    // On, as registered: the threat floaters over a unit (0x00719220).
+    else if (n == "threatworldtext") lua_pushstring(L, "1");
     // Two that were relying on the generic zero rather than saying so. Both
     // want off, so the behaviour was right - but by coincidence, and the rule
     // this file keeps proving is that a value nobody registers is a value
@@ -2423,7 +2453,8 @@ static void applyCVarSideEffects(lua_State* L, const std::string& key,
     if (key == "useuiscale") {
         if (auto* tree = getWidgetTree(L)) {
             if (value == "0") {
-                // The default: 1, or on a phone the largest the frames fit at.
+                // The default: the client's for the screen (0x0051fb80), or on
+                // a phone the largest the frames fit at.
                 tree->useDefaultUserScale();
             } else {
                 tree->setUserScale(
@@ -2636,6 +2667,18 @@ static bool cVarStatedDefault(lua_State* L, const std::string& lower, std::strin
     return answered;
 }
 
+/// A camera CVar's range check (0x005fd630-0x005fd8c0): false, with the
+/// console told, when the value is outside it and must not be written.
+static bool cvarValueInRange(const std::string& lower, const std::string& value) {
+    if (cameraCVarAccepts(lower, value)) return true;
+    const auto range = cameraCVarRange(lower);
+    char line[96];
+    std::snprintf(line, sizeof(line), "Value out of range (%f - %f)",
+                  static_cast<double>(range->min), static_cast<double>(range->max));
+    LOG_INFO("Console: ", line);
+    return false;
+}
+
 /// The console commands' write: the store, the file, and back into whatever
 /// reads the CVar - and nothing else. No CVAR_UPDATE, because the client's
 /// reset path assigns the CVar's own string (0x0047cf80) and raises no event;
@@ -2656,6 +2699,7 @@ static void writeCVarFromConsole(lua_State* L, const std::string& lower,
     toLowerInPlace(current);
     toLowerInPlace(wanted);
     if (current == wanted) return;
+    if (!cvarValueInRange(lower, target)) return;
     cvarStore()[lower] = target;
     saveStoredCVars();
     applyCVarSideEffects(L, lower, target);
@@ -2797,13 +2841,18 @@ static int lua_SetCVar(lua_State* L) {
     // would be invisible to a read of "uiscale".
     std::string key(name);
     toLowerInPlace(key);
-    const auto existing = cvarStore().find(key);
-    const bool changed = (existing == cvarStore().end() || existing->second != value);
-    cvarStore()[key] = value;
-    // Only on a real change. A slider drag calls SetCVar on every frame it
-    // moves, and most of those calls set the value it already has.
-    if (changed) saveStoredCVars();
-    applyCVarSideEffects(L, key, value);
+    // A camera CVar refuses a value outside its range and keeps the one it
+    // had (0x007668c0 asks the CVar's check first); CVAR_UPDATE below goes
+    // out all the same, as 0x00514c10 raises it whatever the write did.
+    if (cvarValueInRange(key, value)) {
+        const auto existing = cvarStore().find(key);
+        const bool changed = (existing == cvarStore().end() || existing->second != value);
+        cvarStore()[key] = value;
+        // Only on a real change. A slider drag calls SetCVar on every frame it
+        // moves, and most of those calls set the value it already has.
+        if (changed) saveStoredCVars();
+        applyCVarSideEffects(L, key, value);
+    }
     // What is announced is the caller's *third argument*, not a spelling of the
     // name. SetCVar's binding in the binary (FUN_00514c10, and the fire at
     // 0x00514cff) tests that argument for being a string or a number
@@ -7009,15 +7058,25 @@ static int lua_GetNumBattlefields(lua_State* L) {
     return 1;
 }
 
-// IsInLFGDungeon() - standing inside a dungeon the finder put you in.
-//
-// The state is already tracked: SocialHandler keeps an LfgState and InDungeon
-// is one of its values. Nothing read it, so the minimap's dungeon button could
-// not tell inside from outside and offered the wrong direction.
+// IsInLFGDungeon() - standing inside the dungeon the finder put the group in
+// (0x00555660): the group roster's finder dungeon (0xbd19a4) has an
+// LFGDungeons.dbc row, and that row's map (+0x1c) and difficulty (+0x20) are
+// the current map and the current dungeon difficulty. Nothing at all for no
+// finder dungeon or one without a row. Not the finder's state, which stays
+// "in dungeon" while the player is teleported out to the entrance.
 static int lua_IsInLFGDungeon(lua_State* L) {
     auto* gh = getGameHandler(L);
-    lua_pushboolean(L, gh && gh->getLfgState() == game::LfgState::InDungeon ? 1 : 0);
-    return 1;
+    if (!gh) return 0;
+    const uint32_t entry = gh->getPartyData().lfgDungeonEntry;
+    if (entry == 0) return 0;
+    const uint32_t row = entry & 0xFFFFFFu;
+    for (const auto& d : gh->getLfgDungeons()) {
+        if (d.id != row) continue;
+        lua_pushboolean(L, d.mapId == gh->getCurrentMapId() &&
+                               d.difficulty == gh->getInstanceDifficulty() ? 1 : 0);
+        return 1;
+    }
+    return 0;
 }
 
 // LFGTeleport(out) - out to the dungeon's entrance, or back in.

@@ -4,6 +4,7 @@
 #include "addons/lua_api_registrations.hpp"
 #include "game/cast_failure_error.hpp"
 #include "game/combat_text_filter.hpp"
+#include "game/unit_combat.hpp"
 #include "ui/framexml_takeover.hpp"
 #include "game/game_handler.hpp"
 #include "game/game_utils.hpp"
@@ -22,6 +23,7 @@
 #include "core/logger.hpp"
 #include "network/world_socket.hpp"
 #include "game/interface_text.hpp"
+#include "pipeline/asset_manager.hpp"
 #include <algorithm>
 #include <cmath>
 #include <ctime>
@@ -104,6 +106,14 @@ std::string petSpellNameWithRank(const GameHandler& owner, uint32_t spellId) {
 CombatHandler::CombatHandler(GameHandler& owner)
     : owner_(owner) {}
 
+/// A unit event the client queues for a unit (0x006143f0): raised once for
+/// each unit token that names it, and not at all for a unit without one.
+void CombatHandler::fireUnitEvent(const char* event, uint64_t guid) {
+    if (!owner_.addonEventCallbackRef() || guid == 0) return;
+    for (const auto& unitId : owner_.unitTokensForGuid(guid))
+        owner_.addonEventCallbackRef()(event, {unitId});
+}
+
 /// The same rule the threat indicator uses, kept in step with it.
 ///
 /// threatWarning is 0 never, 1 in instances, 2 in a party, 3 always - and
@@ -128,23 +138,58 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
         autoAttacking_ = false;
         autoAttackTarget_ = 0;
     };
-    table[Opcode::SMSG_THREAT_CLEAR] = [this](network::Packet& /*packet*/) {
-        threatLists_.clear();
-        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("UNIT_THREAT_LIST_UPDATE", {});
+    table[Opcode::SMSG_THREAT_CLEAR] = [this](network::Packet& packet) {
+        // 0x00734b00 -> 0x007345c0: the unit's own list, and only while the
+        // unit is in the world and its list has anyone on it. Each victim's
+        // situation is reset and UNIT_THREAT_SITUATION_UPDATE queued for it,
+        // then UNIT_THREAT_LIST_UPDATE for the unit and its threat display
+        // refreshed (0x00512ab0).
+        if (!packet.hasRemaining(1)) return;
+        const uint64_t unitGuid = packet.readPackedGuid();
+        if (!owner_.getEntityManager().getEntity(unitGuid)) return;
+        auto it = threatLists_.find(unitGuid);
+        if (it == threatLists_.end() || it->second.empty()) return;
+        const std::vector<ThreatEntry> victims = std::move(it->second);
+        threatLists_.erase(it);
+        playerTopThreatOn_.erase(unitGuid);
+        playerThreatStatus_.erase(unitGuid);  // reset without a floater (0x0052a160)
+        for (const ThreatEntry& e : victims) fireUnitEvent("UNIT_THREAT_SITUATION_UPDATE", e.victimGuid);
+        fireUnitEvent("UNIT_THREAT_LIST_UPDATE", unitGuid);
     };
     table[Opcode::SMSG_THREAT_REMOVE] = [this](network::Packet& packet) {
         if (!packet.hasRemaining(1)) return;
         uint64_t unitGuid   = packet.readPackedGuid();
         if (!packet.hasRemaining(1)) return;
         uint64_t victimGuid = packet.readPackedGuid();
+        // 0x00737750: nothing unless the victim is on the unit's list. Its
+        // entry goes and its situation is reset (UNIT_THREAT_SITUATION_UPDATE
+        // for it); the top is picked again where it was the top (0x00737620,
+        // the list here is kept highest first); then UNIT_THREAT_LIST_UPDATE
+        // for the unit.
         auto it = threatLists_.find(unitGuid);
-        if (it != threatLists_.end()) {
-            auto& list = it->second;
-            list.erase(std::remove_if(list.begin(), list.end(),
-                [victimGuid](const ThreatEntry& e){ return e.victimGuid == victimGuid; }),
-                list.end());
-            if (list.empty()) threatLists_.erase(it);
+        if (it == threatLists_.end()) return;
+        auto& list = it->second;
+        const auto victim = std::find_if(list.begin(), list.end(),
+            [victimGuid](const ThreatEntry& e) { return e.victimGuid == victimGuid; });
+        if (victim == list.end()) return;
+        list.erase(victim);
+        if (list.empty()) threatLists_.erase(it);
+        if (victimGuid == owner_.getPlayerGuid()) {
+            playerTopThreatOn_.erase(unitGuid);
+            playerThreatStatus_.erase(unitGuid);  // reset without a floater (0x0052a160)
+        } else if (const auto left = threatLists_.find(unitGuid); left != threatLists_.end()) {
+            // The top picked again (0x00737620) may move the player's status.
+            std::vector<uint32_t> threats;
+            size_t mine = left->second.size();
+            for (size_t i = 0; i < left->second.size(); ++i) {
+                threats.push_back(left->second[i].threat);
+                if (left->second[i].victimGuid == owner_.getPlayerGuid()) mine = i;
+            }
+            if (mine < threats.size())
+                notePlayerThreatStatus(unitGuid, clientThreatStatus(threats.data(), threats.size(), mine));
         }
+        fireUnitEvent("UNIT_THREAT_SITUATION_UPDATE", victimGuid);
+        fireUnitEvent("UNIT_THREAT_LIST_UPDATE", unitGuid);
     };
     table[Opcode::SMSG_CANCEL_COMBAT] = [this](network::Packet& /*packet*/) {
         autoAttacking_ = false;
@@ -227,6 +272,13 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
         // 0x00755270 -> 0x00751150: the combat log has it for anyone.
         owner_.combatLogFeed().environmental(victimGuid, envType, static_cast<int32_t>(dmg),
                                              static_cast<int32_t>(envAbs), static_cast<int32_t>(envRes));
+        // UNIT_COMBAT when it is the player's own (0x00755270): a WOUND in the
+        // school the damage type names (table 0x00a2d394).
+        if (victimGuid == owner_.getPlayerGuid() && (dmg != 0 || envAbs != 0 || envRes != 0)) {
+            const auto school = static_cast<int32_t>(unit_combat::environmentSchoolMask(envType));
+            owner_.fireUnitCombat(victimGuid, "WOUND", static_cast<int32_t>(dmg), school,
+                                  unit_combat::hitInfoFromLog(envAbs, envRes, 0, false));
+        }
         if (victimGuid == owner_.getPlayerGuid()) {
             // Environmental damage: pass envType via powerType field for display differentiation
             if (dmg > 0)
@@ -315,6 +367,19 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
                     owner_.triggerTutorial(0x35);
             }
             threatLists_[unitGuid] = std::move(list);
+            {
+                // The player's status on the unit, as the client keeps it, for
+                // its threat floater (0x0071c3b0, 0x00737620).
+                const auto& l = threatLists_[unitGuid];
+                std::vector<uint32_t> threats;
+                threats.reserve(l.size());
+                size_t mine = l.size();
+                for (size_t i = 0; i < l.size(); ++i) {
+                    threats.push_back(l[i].threat);
+                    if (l[i].victimGuid == owner_.getPlayerGuid()) mine = i;
+                }
+                notePlayerThreatStatus(unitGuid, clientThreatStatus(threats.data(), threats.size(), mine));
+            }
             if (!owner_.addonEventCallbackRef()) return;
             auto fire = owner_.addonEventCallbackRef();
             // The list changed, and separately: whether each unit on it is
@@ -510,6 +575,23 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
         owner_.dismount();
     }
 
+    // 0x008038f0: while one of the player's own casts in progress is one an
+    // attack would interrupt (Spell.dbc InterruptFlags 0x8), the attack start
+    // 0x006e2610 sends no CMSG_ATTACKSWING and starts nothing, unless an attack
+    // is already under way. Nothing sends the held swing when the cast ends:
+    // none of 0x006e2610's callers is reached from a cast finishing, so the
+    // player asks again. (The channel half of 0x008038f0, ChannelInterruptFlags
+    // 0x1000, is covered by the channel refusal above, which stops every
+    // attack while a channel runs.)
+    if (!autoAttacking_ && !autoAttackRequested_ && owner_.isCasting() &&
+        !owner_.isChanneling()) {
+        owner_.loadSpellNameCache();
+        const auto& cache = owner_.spellNameCacheRef();
+        if (const auto it = cache.find(owner_.getCurrentCastSpellId());
+            it != cache.end() && (it->second.interruptFlags & 0x8u) != 0)
+            return;
+    }
+
     autoAttackRequested_ = true;
     autoAttackRetryPending_ = true;
     // Keep combat animation/state server-authoritative. We only flip autoAttacking
@@ -611,12 +693,28 @@ void CombatHandler::addCombatText(CombatTextEntry::Type type, int32_t amount, ui
         (dstGuid == owner_.getPlayerGuid() || (dstGuid == 0 && !isPlayerSource))) {
         ++playerDamageHits_;
     }
-    // The panel's filters, before anything is built or announced. The mapping
-    // lives in combat_text_filter.hpp so it can be tested without a settings
-    // store; only the lookup is here.
-    const auto rule = combatTextFilterFor(type, isPlayerSource, srcGuid, dstGuid,
-                                          owner_.getPetGuid(), owner_.getTargetGuid());
-    if (rule.cvar && addons::storedCVarValue(rule.cvar, rule.fallback) == "0") return;
+    // Over the world, only what 0x0071f990, 0x00722340 and 0x00722440 would
+    // draw, under their settings (combat_text_filter.hpp). The rest - what
+    // happens to the character - is Blizzard_CombatText's, and the log and
+    // UNIT_COMBAT below are not filtered by these.
+    bool floater = false;
+    if (dstGuid != 0) {
+        const auto on = [](const char* cvar) { return addons::storedCVarValue(cvar, "1") != "0"; };
+        FloaterSettings settings;
+        settings.combatDamage = on("CombatDamage");
+        settings.periodicSpells = on("CombatLogPeriodicSpells");
+        settings.petMeleeDamage = on("PetMeleeDamage");
+        settings.petSpellDamage = on("PetSpellDamage");
+        settings.combatHealing = on("CombatHealing");
+        bool meleeLike = spellId == 0;
+        if (!meleeLike) {
+            owner_.getSpellName(spellId);  // loads the cache
+            const auto it = owner_.spellNameCacheRef().find(spellId);
+            meleeLike = it != owner_.spellNameCacheRef().end() && (it->second.attrEx3 & 0x8000u) != 0;
+        }
+        floater = worldFloaterShown(type, static_cast<FloaterSource>(floaterSourceOf(srcGuid, isPlayerSource)),
+                                    dstGuid == owner_.getPlayerGuid(), false, meleeLike, settings);
+    }
 
     CombatTextEntry entry;
     entry.type = type;
@@ -631,50 +729,11 @@ void CombatHandler::addCombatText(CombatTextEntry::Type type, int32_t amount, ui
     static std::mt19937 rng(std::random_device{}());
     std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
     entry.xSeed = dist(rng);
-    combatText_.push_back(entry);
+    if (floater) combatText_.push_back(entry);
 
-    // UNIT_COMBAT - the same hit, for the frames that draw their own feedback
-    // over a portrait. This client renders the floating numbers itself from the
-    // list above; the interface's unit frames render theirs from this event and
-    // were never told, so a pet or target frame showed nothing while the world
-    // filled with numbers.
-    //
-    // The tokens are not invented: CombatFeedback_OnCombatEvent enumerates the
-    // ones it acts on, and everything else falls through its final else to a
-    // blank. Only a unit the interface has a token for is worth announcing -
-    // the frame compares the first argument against its own unit.
-    if (dstGuid != 0 && owner_.addonEventCallbackRef()) {
-        const std::string unitId = owner_.guidToUnitId(dstGuid);
-        if (!unitId.empty()) {
-            const char* action = nullptr;
-            const char* flags  = "";
-            switch (type) {
-                case CombatTextEntry::MELEE_DAMAGE:
-                case CombatTextEntry::SPELL_DAMAGE:
-                case CombatTextEntry::PERIODIC_DAMAGE: action = "WOUND"; break;
-                case CombatTextEntry::CRIT_DAMAGE: action = "WOUND"; flags = "CRITICAL"; break;
-                case CombatTextEntry::GLANCING:    action = "WOUND"; flags = "GLANCING"; break;
-                case CombatTextEntry::CRUSHING:    action = "WOUND"; flags = "CRUSHING"; break;
-                case CombatTextEntry::ABSORB:      action = "WOUND"; flags = "ABSORB";   break;
-                case CombatTextEntry::MISS:   action = "MISS";   break;
-                case CombatTextEntry::DODGE:  action = "DODGE";  break;
-                case CombatTextEntry::PARRY:  action = "PARRY";  break;
-                case CombatTextEntry::BLOCK:  action = "BLOCK";  break;
-                case CombatTextEntry::EVADE:  action = "EVADE";  break;
-                case CombatTextEntry::IMMUNE: action = "IMMUNE"; break;
-                case CombatTextEntry::RESIST: action = "RESIST"; break;
-                case CombatTextEntry::HEAL:
-                case CombatTextEntry::PERIODIC_HEAL: action = "HEAL"; break;
-                case CombatTextEntry::CRIT_HEAL: action = "HEAL"; flags = "CRITICAL"; break;
-                default: break;  // energize, xp, honour - not combat feedback
-            }
-            if (action) {
-                owner_.addonEventCallbackRef()(
-                    "UNIT_COMBAT",
-                    {unitId, action, flags, std::to_string(amount), "0"});
-            }
-        }
-    }
+    // UNIT_COMBAT is not raised from here: the client raises it from each
+    // log packet (GameHandler::fireUnitCombat), whatever the floating-text
+    // settings, for every unit with a token.
 
     // Persistent combat log - use explicit GUIDs if provided, else fall back to
     // player/current-target (the old behaviour for events without specific participants).
@@ -699,6 +758,117 @@ void CombatHandler::addCombatText(CombatTextEntry::Type type, int32_t amount, ui
     combatLog_.push_back(std::move(log));
     // The interface's combat log is not this one: it is filled by the log
     // packets themselves (CombatLogFeed), whether or not a line is drawn here.
+}
+
+int CombatHandler::floaterSourceOf(uint64_t src, bool isPlayerSource) const {
+    const uint64_t player = owner_.getPlayerGuid();
+    if (src == 0) src = isPlayerSource ? player : 0;
+    if (src == 0) return static_cast<int>(FloaterSource::Other);
+    if (src == player) return static_cast<int>(FloaterSource::Player);
+    // CHARMEDBY, else CREATEDBY (0x007190a0 reads +0x18, else +0x28).
+    const auto ownerOf = [this](uint64_t guid) -> uint64_t {
+        const auto e = owner_.getEntityManager().getEntity(guid);
+        if (!e) return 0;
+        const auto at = [&](UF f) -> uint64_t {
+            const uint16_t i = fieldIndex(f);
+            if (i == 0xFFFF) return 0;
+            return e->getField(i) | (static_cast<uint64_t>(e->getField(static_cast<uint16_t>(i + 1))) << 32);
+        };
+        const uint64_t charmer = at(UF::UNIT_FIELD_CHARMEDBY);
+        return charmer != 0 ? charmer : at(UF::UNIT_FIELD_CREATEDBY);
+    };
+    const uint64_t master = ownerOf(src);
+    if (master == 0) return static_cast<int>(FloaterSource::Other);
+    if (master == player || ownerOf(master) == player) return static_cast<int>(FloaterSource::PlayersUnit);
+    return static_cast<int>(FloaterSource::Other);
+}
+
+void CombatHandler::addWorldText(uint64_t unit, uint8_t kind, const std::string& text, bool replace) {
+    if (unit == 0 || text.empty()) return;
+    if (replace) {
+        combatText_.erase(std::remove_if(combatText_.begin(), combatText_.end(),
+                                         [&](const CombatTextEntry& e) {
+                                             return e.type == CombatTextEntry::WORLD_TEXT && e.dstGuid == unit &&
+                                                    e.worldKind == kind;
+                                         }),
+                          combatText_.end());
+    }
+    CombatTextEntry entry;
+    entry.type = CombatTextEntry::WORLD_TEXT;
+    entry.dstGuid = unit;
+    entry.text = text;
+    entry.worldKind = kind;
+    combatText_.push_back(std::move(entry));
+}
+
+void CombatHandler::addMechanicFloater(uint64_t unit, uint64_t caster, uint32_t spellAttrEx6, uint32_t mechanicId) {
+    // 0x0074da00: AttributesEx6 0x200000 and the fct settings.
+    if ((spellAttrEx6 & 0x200000u) == 0) return;
+    const auto on = [](const char* cvar) {
+        try { return std::stoi(addons::storedCVarValue(cvar, "0")); } catch (...) { return 0; }
+    };
+    const bool concernsPlayer = caster == owner_.getPlayerGuid();
+    if (!mechanicFloaterShown(on("fctAllSpellMechanics") > 0, on("fctSpellMechanics") != 0,
+                              on("fctSpellMechanicsOther") != 0, concernsPlayer))
+        return;
+    const std::string* name = owner_.getSpellMechanicName(mechanicId);
+    if (!name || name->empty()) return;
+    // 0x007e1130: the first letter upper-cased.
+    std::string text = *name;
+    if (static_cast<unsigned char>(text[0]) < 0x80) text[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(text[0])));
+    // "%s (%s)" with the caster's name, unless the caster is the player.
+    if (!concernsPlayer) text += " (" + owner_.lookupName(caster) + ")";
+    addWorldText(unit, static_cast<uint8_t>(FloaterKind::Mechanic), text);
+}
+
+void CombatHandler::addMechanicFloaters(uint64_t unit, uint64_t caster, uint32_t spellId) {
+    owner_.getSpellName(spellId);
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return;
+    const auto& s = it->second;
+    // 0x0074d3f0: not a spell hidden from the log, one that teaches a spell
+    // (effect 36), nor one with AttributesEx4 0x1.
+    if ((s.attr & 0x180u) != 0 || s.name.empty() || (s.attrEx4 & 0x1u) != 0) return;
+    for (uint32_t e : s.effectIds) {
+        if (e == 36) return;
+        if (e == 33) return;  // 0x0074db80: an opening spell shows none
+    }
+    // Each effect's mechanic once, then the spell's own where no effect has
+    // it; never SpellMechanic 26.
+    constexpr uint32_t kMechanicInterrupt = 26;
+    for (int i = 0; i < 3; ++i) {
+        const uint32_t m = s.effectMechanic[i];
+        if (m == 0 || m == kMechanicInterrupt) continue;
+        bool seen = false;
+        for (int j = 0; j < i; ++j) seen = seen || s.effectMechanic[j] == m;
+        if (!seen) addMechanicFloater(unit, caster, s.attrEx6, m);
+    }
+    const uint32_t own = s.mechanic;
+    if (own != 0 && own != kMechanicInterrupt && own != s.effectMechanic[0] && own != s.effectMechanic[1] &&
+        own != s.effectMechanic[2])
+        addMechanicFloater(unit, caster, s.attrEx6, own);
+}
+
+void CombatHandler::addInterruptFloater(uint64_t unit, uint64_t caster, uint32_t spellId) {
+    owner_.getSpellName(spellId);
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end()) return;
+    addMechanicFloater(unit, caster, it->second.attrEx6, 26);
+}
+
+void CombatHandler::notePlayerThreatStatus(uint64_t unit, int now) {
+    int& was = playerThreatStatus_[unit];
+    const int before = was;
+    was = now;
+    if (now == 0) playerThreatStatus_.erase(unit);
+    if (before == now) return;
+    // 0x00719220: while threat warnings apply and threatWorldText is on.
+    if (!threatWarningWanted() || addons::storedCVarValue("threatWorldText", "1") == "0") return;
+    if (!threatFloaterShown(before, now)) return;
+    const std::string key = std::string("COMBAT_THREAT_") + (now > before ? "INCREASE" : "DECREASE") + "_" +
+                            std::to_string(now);
+    const std::string text = interfaceString(key.c_str(), nullptr);
+    if (!text.empty()) addWorldText(unit, static_cast<uint8_t>(FloaterKind::Threat), text, true);
 }
 
 bool CombatHandler::shouldLogSpellstealAura(uint64_t casterGuid, uint64_t victimGuid, uint32_t spellId) {
@@ -839,6 +1009,11 @@ void CombatHandler::handleAttackerStateUpdate(network::Packet& packet) {
     if ((data.hitInfo & 0x800000u) != 0) owner_.addPredictedPower(data.attackerGuid, 1, data.rageGained);
     // Then the combat log, whoever fought.
     owner_.combatLogFeed().swing(data);
+    // UNIT_COMBAT for the victim, whoever fought (0x00755a60 -> 0x005133b0):
+    // the action by its state, the total, the first sub-damage's school.
+    owner_.fireUnitCombat(data.targetGuid, unit_combat::meleeAction(data.victimState), data.totalDamage,
+                          data.subDamages.empty() ? 0 : static_cast<int32_t>(data.subDamages.front().schoolMask),
+                          data.hitInfo);
 
     bool isPlayerAttacker = (data.attackerGuid == owner_.getPlayerGuid());
     bool isPlayerTarget = (data.targetGuid == owner_.getPlayerGuid());
@@ -977,6 +1152,14 @@ void CombatHandler::handleSpellDamageLog(network::Packet& packet) {
         }
     }
 
+    // UNIT_COMBAT for the target, whoever cast (0x006d3840): a WOUND of the
+    // damage in the spell's school, for a spell the client knows that is not
+    // hidden from the log (Attributes 0x100).
+    if (unit_combat::spellRaises(owner_.getSpellAttributes(data.spellId)))
+        owner_.fireUnitCombat(data.targetGuid, "WOUND", static_cast<int32_t>(data.damage), data.schoolMask,
+                              unit_combat::hitInfoFromLog(data.absorbed, data.resisted, data.blocked,
+                                                          (data.hitFlags & 0x2u) != 0));
+
     bool isPlayerSource = (data.attackerGuid == owner_.getPlayerGuid());
     bool isPlayerTarget = (data.targetGuid == owner_.getPlayerGuid());
     if (!isPlayerSource && !isPlayerTarget) return;  // Not our combat
@@ -1005,6 +1188,12 @@ void CombatHandler::handleSpellHealLog(network::Packet& packet) {
                                          static_cast<int32_t>(data.absorbed), data.isCrit,
                                          owner_.combatLogFeed().periodicByAttribute(data.spellId));
     }
+
+    // UNIT_COMBAT for the target (0x006d3c30 -> 0x00513480): a HEAL of a
+    // non-zero amount, physical school, CRITICAL when it crit.
+    if (data.heal != 0 && unit_combat::spellRaises(owner_.getSpellAttributes(data.spellId)))
+        owner_.fireUnitCombat(data.targetGuid, "HEAL", static_cast<int32_t>(data.heal),
+                              unit_combat::kPhysicalSchoolMask, data.isCrit ? 0x200u : 0u);
 
     bool isPlayerSource = (data.casterGuid == owner_.getPlayerGuid());
     bool isPlayerTarget = (data.targetGuid == owner_.getPlayerGuid());
@@ -1174,11 +1363,10 @@ void CombatHandler::handleHealthUpdate(network::Packet& packet) {
     uint64_t guid = huTbc ? packet.readUInt64() : packet.readPackedGuid();
     if (!packet.hasRemaining(4)) return;
     uint32_t hp = packet.readUInt32();
-    if (auto* unit = owner_.getUnitByGuid(guid)) unit->setHealth(hp);
-    if (guid != 0) {
-        auto unitId = owner_.guidToUnitId(guid);
-        if (!unitId.empty()) owner_.fireAddonEvent("UNIT_HEALTH", {unitId});
-    }
+    // 0x00716d20: the predicted health alone, and no event - the field and
+    // UNIT_HEALTH are the update's. The frames that show it poll it while
+    // predictedHealth is on.
+    if (auto* unit = owner_.getUnitByGuid(guid)) unit->setPredictedHealth(static_cast<int32_t>(hp));
 }
 
 void CombatHandler::handlePowerUpdate(network::Packet& packet) {
@@ -1285,6 +1473,32 @@ void CombatHandler::handlePvpCredit(network::Packet& packet) {
         }
         if (!msg.empty()) owner_.addLocalChatLine(ChatType::COMBAT_HONOR_GAIN, msg);
         if (honor > 0) addCombatText(CombatTextEntry::HONOR_GAIN, static_cast<int32_t>(honor), 0, true);
+        // 0x0050b6d0 -> 0x007155d0: a ranked victim this client has, for some
+        // honour, gets "HK: <rank title>" over it (world text kind 5). The
+        // title is PVP_RANK_<rank>_<n>, n by the victim's FactionTemplate
+        // group: 0 for the Horde's (4), 1 for the Alliance's (2), none else.
+        // The DK form needs an honour below 1, which never gets this far.
+        if (static_cast<int32_t>(honor) > 0 && static_cast<int32_t>(rank) >= 0) {
+            if (const auto victim = owner_.getEntityManager().getEntity(victimGuid)) {
+                std::string title;
+                const uint16_t ft = fieldIndex(UF::UNIT_FIELD_FACTIONTEMPLATE);
+                auto* am = owner_.services().assetManager;
+                auto templates = am && am->isInitialized() ? am->loadDBCOptional("FactionTemplate.dbc") : nullptr;
+                const int32_t row = templates && templates->isLoaded() && ft != 0xFFFF
+                    ? templates->findRecordById(victim->getField(ft)) : -1;
+                if (row >= 0) {
+                    const uint32_t group = templates->getUInt32(static_cast<uint32_t>(row), 3);
+                    const int side = (group & 4u) != 0 ? 0 : ((group & 2u) != 0 ? 1 : -1);
+                    if (side >= 0) {
+                        const std::string key = "PVP_RANK_" + std::to_string(rank) + "_" + std::to_string(side);
+                        title = interfaceString(key.c_str(), nullptr);
+                    }
+                }
+                std::string hk = interfaceString("HK", nullptr);
+                if (hk.empty()) hk = "HK";
+                addWorldText(victimGuid, static_cast<uint8_t>(FloaterKind::Honor), hk + ": " + title);
+            }
+        }
         if (owner_.pvpHonorCallbackRef()) owner_.pvpHonorCallbackRef()(honor, victimGuid, rank);
     }
 }
@@ -1338,6 +1552,9 @@ void CombatHandler::handleSpellDamageShield(network::Packet& packet) {
         // 0x00752c90: the first guid deals it, the second takes it.
         owner_.combatLogFeed().damageShield(d.victimGuid, d.casterGuid, d.spellId, static_cast<int32_t>(d.damage),
                                             static_cast<int32_t>(d.overkill), d.schoolMask);
+        // UNIT_COMBAT for the one it struck (0x006d3750 -> 0x00513380).
+        owner_.fireUnitCombat(d.casterGuid, "WOUND", static_cast<int32_t>(d.damage),
+                              static_cast<int32_t>(d.schoolMask), 0);
         if (d.casterGuid == owner_.getPlayerGuid())
             addCombatText(CombatTextEntry::SPELL_DAMAGE, static_cast<int32_t>(d.damage), d.spellId, true, 0, d.casterGuid, d.victimGuid);
         else if (d.victimGuid == owner_.getPlayerGuid())
@@ -2460,6 +2677,12 @@ void CombatHandler::handleXpGain(network::Packet& packet) {
     if (!XpGainParser::parse(packet, data)) return;
 
     addCombatText(CombatTextEntry::XP_GAIN, static_cast<int32_t>(data.totalXp), 0, true);
+    // 0x0050c720 -> 0x0050b300 -> 0x007191a0, for a victim other than the
+    // player: "XP: <amount>" over the player, world text kind 4.
+    if (data.victimGuid != owner_.getPlayerGuid() && owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
+        addWorldText(owner_.getPlayerGuid(), static_cast<uint8_t>(FloaterKind::Experience),
+                     interfaceString("XP", "XP") + ": " + std::to_string(data.totalXp));
+    }
 
     // As 0x0050c720 words it, as CHAT_MSG_COMBAT_XP_GAIN: the player's own
     // guid as the victim is COMBATLOG_XPLOSS_FIRSTPERSON_UNNAMED; a victim

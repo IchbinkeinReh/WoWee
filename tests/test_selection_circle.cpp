@@ -183,3 +183,26 @@ TEST_CASE("a fragment is the texel by the colour, its alpha faded at the box's e
     // the sixth the fade comes in over: a little under half in.
     CHECK(sc::shade(texel, red, 1.0f / 12.0f).a == Catch::Approx(0.8f * 0.46f).margin(0.01f));
 }
+
+TEST_CASE("the pet's ring shrinks onto its circle over a second", "[selectioncircle]") {
+    using wowee::rendering::selection_circle::petPulse;
+    // At the start: 1.5r + 2.3, and no alpha yet.
+    const auto start = petPulse(2.0f, 0);
+    REQUIRE(start);
+    CHECK(start->radius == Catch::Approx(5.3f));
+    CHECK(start->color.a == Catch::Approx(0.0f));
+    // Halfway: (1 - 0.5)^3 of the way out, and fully opaque.
+    const auto mid = petPulse(2.0f, 500);
+    REQUIRE(mid);
+    CHECK(mid->radius == Catch::Approx(2.0f + 3.3f * 0.125f));
+    CHECK(mid->color.a == Catch::Approx(1.0f));
+    CHECK(mid->color.r == Catch::Approx(96.0f / 255.0f));
+    CHECK(mid->color.b == Catch::Approx(1.0f));
+    // Fading over the last quarter: 1 - (4 x 0.125)^2 = 0.75.
+    const auto late = petPulse(2.0f, 875);
+    REQUIRE(late);
+    CHECK(late->color.a == Catch::Approx(191.0f / 255.0f));
+    // Gone at a second, and before it began.
+    CHECK_FALSE(petPulse(2.0f, 1000));
+    CHECK_FALSE(petPulse(2.0f, -1));
+}

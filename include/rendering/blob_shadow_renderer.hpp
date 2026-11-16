@@ -52,6 +52,11 @@ public:
     /// Draw the circle prepareSelection gathered. The client draws it once the
     /// world is down (0x004f6f90 from CGWorldFrame::Render).
     void renderSelection(VkCommandBuffer cmd, VkDescriptorSet perFrameSet);
+    /// The ring on the player's pet (0x00725bf0), gathered as the target's
+    /// circle is and drawn with it by renderSelection.
+    void preparePetPulse(const std::optional<blob_shadow::Projection>& circle, const glm::vec4& color,
+                         const glm::mat4& viewProj, const TerrainManager* terrain,
+                         const WMORenderer* wmo, const M2Renderer* m2);
 
     /// Gather the ground under the circle of a spell waiting for a place
     /// (0x004f8a40), `unacceptable` choosing Spell-Shadow-Unacceptable. After
@@ -95,6 +100,7 @@ private:
     VkDescriptorSet selectionSet_ = VK_NULL_HANDLE;
     VkPipeline selectionPipeline_ = VK_NULL_HANDLE;
     std::optional<Draw> selectionDraw_;
+    std::optional<Draw> petPulseDraw_;
     // The spell's circle: its two textures, their sets, and the pipeline
     // (blend mode 2).
     VkTexture spellTargetTextures_[2];

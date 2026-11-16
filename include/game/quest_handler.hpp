@@ -4,6 +4,7 @@
 #include "game/opcode_table.hpp"
 #include "game/handler_types.hpp"
 #include "game/quest_poi_icons.hpp"
+#include "game/npc_text.hpp"
 #include "network/packet.hpp"
 #include <array>
 #include <chrono>
@@ -230,6 +231,13 @@ public:
     /// The quest's QuestInfo name, its tag ("Elite", "Group", ...), empty
     /// for none or a quest not queried (0x005e0070).
     const std::string& questTagName(uint32_t questId);
+    /// What the quest cache (0x0067de90) holds for a quest whose query has
+    /// answered, as a log entry without progress; null for one never answered.
+    [[nodiscard]] const QuestLogEntry* questCacheRecord(uint32_t questId) const {
+        const auto it = queriedQuests_.find(questId);
+        return it != queriedQuests_.end() && it->second.record.questId != 0 ? &it->second.record
+                                                                              : nullptr;
+    }
     /// The quest's suggested group size, 0 for none (0x005ded30).
     uint32_t questSuggestedPlayers(uint32_t questId) const {
         const auto it = queriedQuests_.find(questId);
@@ -361,6 +369,9 @@ private:
     bool gossipWindowOpen_ = false;
     /// GOSSIP_SHOW held back until the greeting's text has arrived.
     bool gossipShowAwaitingText_ = false;
+    /// The gossip window is the quest giver's greeting list (0x0058c5a0),
+    /// which counts as an open quest window.
+    bool gossipIsQuestGreeting_ = false;
     GossipMessageData currentGossip_;
     std::string questGreeting_;
     std::vector<GossipPoi> gossipPois_;
@@ -409,6 +420,10 @@ private:
         /// SuggestedPlayers (+0x18 of the client's record).
         uint32_t suggestedPlayers = 0;
         std::string title;
+        /// The rest of the query answer, laid out as a log entry with no
+        /// progress in it: what a quest link's tooltip is built from
+        /// (0x00622960 reads the quest cache 0x0067de90, not the log).
+        QuestLogEntry record;
     };
     std::unordered_map<uint32_t, QueriedQuest> queriedQuests_;
     std::unordered_set<uint32_t> pendingQuestAddedNotices_;
@@ -426,8 +441,11 @@ private:
     // Quest giver status per NPC
     std::unordered_map<uint64_t, QuestGiverStatus> npcQuestStatus_;
 
-    // NPC gossip text cache (textId → body text)
-    std::unordered_map<uint32_t, std::string> npcTextCache_;
+    // NPC gossip text cache (textId → its eight options)
+    std::unordered_map<uint32_t, npc_text::NpcText> npcTextCache_;
+    /// The greeting option chosen for the window now open (0x0058ac30).
+    std::string gossipText_;
+    void chooseGossipText();
 
     // Shared quest state
     bool        pendingSharedQuest_       = false;

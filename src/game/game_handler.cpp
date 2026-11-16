@@ -718,11 +718,26 @@ void GameHandler::updateTimers(float deltaTime) {
     // with StaticPopup "RECOVER_CORPSE", whose button calls RetrieveCorpse;
     // without the edge that prompt could never appear and this client's own
     // button was the only way back from a corpse run.
+    //
+    // The edge is the client's (0x0051f5c0 -> 0x00512c40): within 40 yards
+    // (squared distance under 1600, 0x00ac8a78) of where the corpse query
+    // placed it, whether or not the corpse itself is in sight. Arriving
+    // there fires CORPSE_IN_INSTANCE instead when that place is the entrance
+    // of the instance the corpse lies in - the two maps differ - and the
+    // interface tells the ghost to go in to be resurrected.
     {
-        const bool inRange = releasedSpirit_ && canReclaimCorpse();
+        bool inRange = false;
+        if (releasedSpirit_ && corpsePositionValid_ && currentMapId_ == corpseMapId_) {
+            const glm::vec3 corpse = corpseServerPos();
+            const float dx = movementInfo.x - corpse.y;
+            const float dy = movementInfo.y - corpse.x;
+            const float dz = movementInfo.z - corpse.z;
+            inRange = dx * dx + dy * dy + dz * dz < 1600.0f;
+        }
         if (inRange != corpseInRangeAnnounced_) {
             corpseInRangeAnnounced_ = inRange;
-            fireAddonEvent(inRange ? "CORPSE_IN_RANGE" : "CORPSE_OUT_OF_RANGE", {});
+            if (!inRange) fireAddonEvent("CORPSE_OUT_OF_RANGE", {});
+            else fireAddonEvent(corpseLiesOnMapId_ != corpseMapId_ ? "CORPSE_IN_INSTANCE" : "CORPSE_IN_RANGE", {});
         }
     }
 
@@ -919,6 +934,8 @@ void GameHandler::update(float deltaTime) {
         if (movementHandler_) movementHandler_->timeSinceLastMoveHeartbeatRef() += deltaTime;
         // The mover's pitch over time and a full-speed pitcher's held start.
         if (movementHandler_) movementHandler_->updateMoverPitch(deltaTime);
+        // The mover's server-driven spline run out (0x006eae70).
+        if (movementHandler_) movementHandler_->updateMoverSplineDone();
 
         const float currentPingInterval =
             (isPreWotlk()) ? game::CLASSIC_PING_INTERVAL_SEC : pingInterval;
@@ -985,6 +1002,7 @@ void GameHandler::update(float deltaTime) {
         // Tick logout countdown
         if (socialHandler_) socialHandler_->updateLogoutCountdown(deltaTime);
         if (socialHandler_) socialHandler_->updateReadyCheckTimer();
+        if (socialHandler_) socialHandler_->updateDuelCountdown();
 
         updateTaxiAndMountState(deltaTime);
 
@@ -1000,15 +1018,32 @@ void GameHandler::update(float deltaTime) {
             if (!windowOpen || npcGuid == 0) return;
             auto npc = entityController_->getEntityManager().getEntity(npcGuid);
             if (!npc) return;
+            // 0x0051fde0 against the limit 0x0051fce0 sets: for a creature its
+            // bounding radius + 4 yards, for a player 123.4568 squared (about
+            // 11.1 yards), both against the squared 3D distance (0x004f61d0).
+            // Game objects keep the flat limit: the client asks each type's
+            // own interaction radius there (0x0070bad0).
+            float limit = game::NPC_INTERACT_MAX_DISTANCE;
+            float limitSq = limit * limit;
             float dx = movementInfo.x - npc->getX();
             float dy = movementInfo.y - npc->getY();
-            const float distance = std::sqrt(dx * dx + dy * dy);
-            if (distance > game::NPC_INTERACT_MAX_DISTANCE) {
+            float distSq = dx * dx + dy * dy;
+            if (npc->getType() == ObjectType::PLAYER) {
+                limitSq = 123.45678f;
+                const float dz = movementInfo.z - npc->getZ();
+                distSq += dz * dz;
+            } else if (npc->getType() == ObjectType::UNIT) {
+                limit = static_cast<const Unit&>(*npc).getBoundingRadius() + 4.0f;
+                limitSq = limit * limit;
+                const float dz = movementInfo.z - npc->getZ();
+                distSq += dz * dz;
+            }
+            if (distSq > limitSq) {
                 closeFn();
                 // Warning: a window closing by itself is a report waiting to
                 // happen, and the client is the one deciding.
-                LOG_WARNING(label, " closed: ", distance, " yards from the NPC, past ",
-                            game::NPC_INTERACT_MAX_DISTANCE);
+                LOG_WARNING(label, " closed: ", std::sqrt(distSq), " yards from the NPC, past ",
+                            std::sqrt(limitSq));
             }
         };
         // A hello the server never answered. It says nothing when it refuses,
@@ -1966,8 +2001,8 @@ void GameHandler::closeAuctionHouse() {
 void GameHandler::auctionSearch(const std::string& name, uint8_t levelMin, uint8_t levelMax,
                                  uint32_t quality, uint32_t itemClass, uint32_t itemSubClass,
                                  uint32_t invTypeMask, uint8_t usableOnly, uint32_t offset,
-                                 const std::vector<AuctionSortKey>& sort) {
-    if (inventoryHandler_) inventoryHandler_->auctionSearch(name, levelMin, levelMax, quality, itemClass, itemSubClass, invTypeMask, usableOnly, offset, sort);
+                                 const std::vector<AuctionSortKey>& sort, bool getAll) {
+    if (inventoryHandler_) inventoryHandler_->auctionSearch(name, levelMin, levelMax, quality, itemClass, itemSubClass, invTypeMask, usableOnly, offset, sort, getAll);
 }
 
 void GameHandler::auctionSellItem(int backpackIndex, uint32_t bid,
@@ -3339,12 +3374,25 @@ void GameHandler::setWatchedFactionId(uint32_t factionId) {
 }
 
 void GameHandler::setFactionAtWar(uint32_t repListId, bool atWar) {
-    if (repListId >= initialFactions_.size()) return;
-    // The server forbids declaring war on some factions; don't fight the flag.
-    if (atWar && isFactionPeaceForced(repListId)) return;
-    // Optimistic local update; the server echoes SMSG_SET_FACTION_ATWAR to confirm.
-    if (atWar) initialFactions_[repListId].flags |=  FACTION_FLAG_AT_WAR;
-    else       initialFactions_[repListId].flags &= ~FACTION_FLAG_AT_WAR;
+    // 0x005d0a10. A faction the reputation list has a row for (its index
+    // under 0x80), and making peace only above -3001 standing (Hated stays
+    // at war).
+    if (repListId >= initialFactions_.size() || repListId >= 0x80) return;
+    if (!atWar && getFactionStanding(getFactionIdByRepListId(repListId)) <= -3001) return;
+    // Making peace mid-fight is refused with ERR_NOT_IN_COMBAT.
+    if (!atWar) {
+        const uint16_t flagsIdx = fieldIndex(UF::UNIT_FIELD_FLAGS);
+        const auto player = getEntityManager().getEntity(getPlayerGuid());
+        if (player && flagsIdx != 0xFFFF && (player->getField(flagsIdx) & UNIT_FLAG_IN_COMBAT) != 0) {
+            sayGameError(server_notice::kNotInCombat);
+            return;
+        }
+    }
+    // The local at-war bit is set only where the faction's flags allow it -
+    // a peace-forced faction (0x10) keeps it clear - but the request goes to
+    // the realm either way.
+    if (atWar && !isFactionPeaceForced(repListId)) initialFactions_[repListId].flags |= FACTION_FLAG_AT_WAR;
+    else initialFactions_[repListId].flags &= ~FACTION_FLAG_AT_WAR;
     if (!isInWorld() || !socket) return;
     // CMSG_SET_FACTION_ATWAR: uint32 repListId + uint8 flag
     network::Packet pkt(wireOpcode(Opcode::CMSG_SET_FACTION_ATWAR));
@@ -4755,8 +4803,8 @@ void GameHandler::calendarEventInvite(const std::string& name) {
         return;
     }
     // 0x005f2070, on the open event: none to a guild announcement, none past
-    // a hundred, none to a name already on the list - the name cut to what
-    // its 0x30-byte buffer holds, against each invitee whose name is known.
+    // a hundred, none to a name already on the list - the name normalised and
+    // cut to what its 0x30-byte buffer holds, against each invitee whose name is known.
     // A new event's list is its maker and whoever has been pre-invited since
     // (0x005f2a20, 0x005f32b0).
     const uint32_t flags = open.flags;
@@ -4769,7 +4817,9 @@ void GameHandler::calendarEventInvite(const std::string& name) {
                             "You cannot invite more than %d players to this event.", {"100"});
         return;
     }
-    const std::string who = name.substr(0, 0x2F);
+    // 0x007e2040: the name as the client writes it - first letter upper
+    // case, the rest lower case - is what is checked, shown and sent.
+    const std::string who = calendarInviteName(name);
     bool already = false;
     for (const auto& inv : open.invitees) {
         const std::string known = lookupName(inv.guid);
@@ -5236,6 +5286,32 @@ void GameHandler::requestItemRefundInfo(uint64_t itemGuid) {
     network::Packet packet(wireOpcode(Opcode::CMSG_ITEM_REFUND_INFO));
     packet.writeUInt64(itemGuid);
     getSocket()->send(packet);
+}
+
+void GameHandler::noteItemObjectCreated(uint64_t itemGuid, uint32_t entry, uint64_t ownerGuid) {
+    // 0x0070aa40: only for an item the active player owns.
+    if (itemGuid == 0 || entry == 0 || ownerGuid != getPlayerGuid()) return;
+    const auto it = itemInfoCache_.find(entry);
+    if (it == itemInfoCache_.end()) {
+        refundCheckAwaitingTemplate_[entry].push_back(itemGuid);
+        return;
+    }
+    // ItemTemplate Flags 0x1000, refundable: CMSG_ITEM_REFUND_INFO (0x007089e0),
+    // which asks only once per item.
+    constexpr uint32_t kItemFlagRefundable = 0x1000u;
+    if ((it->second.itemFlags & kItemFlagRefundable) != 0 && !itemRefundInfo_.count(itemGuid))
+        requestItemRefundInfo(itemGuid);
+}
+
+void GameHandler::itemTemplateArrivedForRefund(uint32_t entry) {
+    const auto waiting = refundCheckAwaitingTemplate_.find(entry);
+    if (waiting == refundCheckAwaitingTemplate_.end()) return;
+    const std::vector<uint64_t> guids = std::move(waiting->second);
+    refundCheckAwaitingTemplate_.erase(waiting);
+    for (const uint64_t guid : guids) {
+        // Only items still held: one gone since has nothing to ask about.
+        if (onlineItems_.count(guid)) noteItemObjectCreated(guid, entry, getPlayerGuid());
+    }
 }
 
 void GameHandler::refundItem(uint64_t itemGuid) {
@@ -6385,6 +6461,10 @@ const std::string& GameHandler::questTagName(uint32_t questId) const {
 
 uint32_t GameHandler::questSuggestedPlayers(uint32_t questId) const {
     return questHandler_ ? questHandler_->questSuggestedPlayers(questId) : 0u;
+}
+
+const GameHandler::QuestLogEntry* GameHandler::questCacheRecord(uint32_t questId) const {
+    return questHandler_ ? questHandler_->questCacheRecord(questId) : nullptr;
 }
 
 const std::string& GameHandler::getQuestSortName(uint32_t sortId) const {

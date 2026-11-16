@@ -98,6 +98,35 @@ const game::LfgDungeon* lfgDungeonById(game::GameHandler* gh, uint32_t id) {
     return nullptr;
 }
 
+/// A catalogue row's values as GetLFGDungeonInfo answers them (0x005553f0),
+/// pushed; how many, none for an id without a row.
+int pushLfgDungeonInfo(lua_State* L, game::GameHandler* gh, uint32_t id) {
+    const game::LfgDungeon* found = lfgDungeonById(gh, id);
+    if (!found) return 0;
+    const game::LfgDungeon& d = *found;
+    lua_pushstring(L, d.name.c_str());
+    lua_pushinteger(L, static_cast<lua_Integer>(d.typeId));
+    const auto lv = gh->lfgDungeonLevels(d);
+    lua_pushinteger(L, static_cast<lua_Integer>(lv.minLevel));
+    lua_pushinteger(L, static_cast<lua_Integer>(lv.maxLevel));
+    lua_pushinteger(L, static_cast<lua_Integer>(d.recLevel));
+    lua_pushinteger(L, static_cast<lua_Integer>(lv.minRecLevel));
+    lua_pushinteger(L, static_cast<lua_Integer>(lv.maxRecLevel));
+    lua_pushinteger(L, static_cast<lua_Integer>(d.expansion));
+    lua_pushinteger(L, headerIdFor(d.groupId));
+    lua_pushstring(L, d.texture.c_str());
+    lua_pushinteger(L, static_cast<lua_Integer>(d.difficulty));
+    lua_pushinteger(L, maxPlayersFor(d));
+    // Fourteen, not twelve. LFG_RETURN_VALUES names the first dozen and
+    // stops, but LFDQueueFrameRandom_UpdateFrame reads two more off the
+    // end - and it is the last of them that decides whether a dungeon
+    // is drawn as a holiday at all, so without it the seasonal bosses
+    // were listed as ordinary random dungeons with the wrong artwork.
+    lua_pushstring(L, d.description.c_str());   // 13: description
+    lua_pushboolean(L, d.isHoliday ? 1 : 0);    // 14: isHoliday
+    return 14;
+}
+
 /// CanPartyLFGBackfill's one gate, which three bindings read the same way
 /// (0x00553170, 0x005556d0 and 0x0055a0c0 all spell the same four tests):
 ///
@@ -984,77 +1013,39 @@ void registerLfgLuaAPI(lua_State* L) {
         return 1;
     }},
     // The random dungeon's own row, which the picker shows above the list.
-    // GetNumRandomDungeons() - how many of the catalogue are the random kind.
-    //
-    // Unbound, so opening the dungeon finder's type dropdown called a nil
-    // global and raised. Type 6 is random, which is the same field
-    // GetLFGRandomDungeonInfo below reports.
+    // GetNumRandomDungeons() (0x005553b0) - how many random dungeons the realm
+    // offers: the length of SMSG_LFG_PLAYER_INFO's list (0xbeaa74), not the
+    // catalogue's random rows.
     {"GetNumRandomDungeons", [](lua_State* L) -> int {
         auto* gh = getGameHandler(L);
-        int n = 0;
-        if (gh) {
-            for (const auto& d : gh->getLfgDungeons()) {
-                if (d.typeId == 6) ++n;
-            }
-        }
-        lua_pushinteger(L, n);
+        lua_pushinteger(L, gh ? static_cast<lua_Integer>(gh->getLfgRewards().size()) : 0);
         return 1;
     }},
-    // GetLFGRandomDungeonInfo(index) → id, name
-    //
-    // An index into the random dungeons, counted the same way as the call
-    // above, and the id first. This took a dungeon id and answered name and
-    // type - so the one caller, which walks 1..GetNumRandomDungeons and reads
-    // id and name, looked up dungeon 1, then dungeon 2, and put the name into
-    // the id and the type into the name. IsLFGDungeonJoinable was then asked
-    // about a string.
+    // GetLFGRandomDungeonInfo(index) (0x005555d0) → id, then the fourteen
+    // values GetLFGDungeonInfo gives for it (0x005553f0). The index names an
+    // entry of the realm's list, in its order; the id is that entry's low 24
+    // bits. An id with no catalogue row is the id alone; past the list,
+    // nothing.
     {"GetLFGRandomDungeonInfo", [](lua_State* L) -> int {
         if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetLFGRandomDungeonInfo(index)");   // 0x005555d0
         auto* gh = getGameHandler(L);
-        const int index = static_cast<int>(luaL_optinteger(L, 1, 0));
-        if (!gh || index < 1) return luaReturnNil(L);
-        int n = 0;
-        for (const auto& d : gh->getLfgDungeons()) {
-            if (d.typeId != 6) continue;
-            if (++n != index) continue;
-            lua_pushinteger(L, static_cast<lua_Integer>(d.id));
-            lua_pushstring(L, d.name.c_str());
-            return 2;
-        }
-        return luaReturnNil(L);
+        const lua_Integer index = static_cast<lua_Integer>(lua_tonumber(L, 1));
+        if (!gh) return 0;
+        const auto& list = gh->getLfgRewards();
+        if (index < 1 || static_cast<size_t>(index) > list.size()) return 0;
+        const uint32_t id = list[static_cast<size_t>(index - 1)].dungeonId & 0xFFFFFFu;
+        lua_pushinteger(L, static_cast<lua_Integer>(id));
+        return 1 + pushLfgDungeonInfo(L, gh, id);
     }},
-    // GetLFGDungeonInfo(id) - the same twelve values as a row of the info
-    // table, asked one at a time. Answered from the same catalogue.
+    // GetLFGDungeonInfo(id) - the same values as a row of the info table,
+    // asked one at a time (0x00555590 -> 0x005553f0).
     {"GetLFGDungeonInfo", [](lua_State* L) -> int {
         if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetLFGDungeonInfo(dungeonID)");   // 0x00555590
         auto* gh = getGameHandler(L);
         const uint32_t id = static_cast<uint32_t>(luaL_optinteger(L, 1, 0));
         if (!gh || id == 0) return luaReturnNil(L);
-        for (const auto& d : gh->getLfgDungeons()) {
-            if (d.id != id) continue;
-            lua_pushstring(L, d.name.c_str());
-            lua_pushinteger(L, static_cast<lua_Integer>(d.typeId));
-            const auto lv = gh->lfgDungeonLevels(d);
-            lua_pushinteger(L, static_cast<lua_Integer>(lv.minLevel));
-            lua_pushinteger(L, static_cast<lua_Integer>(lv.maxLevel));
-            lua_pushinteger(L, static_cast<lua_Integer>(d.recLevel));
-            lua_pushinteger(L, static_cast<lua_Integer>(lv.minRecLevel));
-            lua_pushinteger(L, static_cast<lua_Integer>(lv.maxRecLevel));
-            lua_pushinteger(L, static_cast<lua_Integer>(d.expansion));
-            lua_pushinteger(L, headerIdFor(d.groupId));
-            lua_pushstring(L, d.texture.c_str());
-            lua_pushinteger(L, static_cast<lua_Integer>(d.difficulty));
-            lua_pushinteger(L, maxPlayersFor(d));
-            // Fourteen, not twelve. LFG_RETURN_VALUES names the first dozen and
-            // stops, but LFDQueueFrameRandom_UpdateFrame reads two more off the
-            // end - and it is the last of them that decides whether a dungeon
-            // is drawn as a holiday at all, so without it the seasonal bosses
-            // were listed as ordinary random dungeons with the wrong artwork.
-            lua_pushstring(L, d.description.c_str());   // 13: description
-            lua_pushboolean(L, d.isHoliday ? 1 : 0);    // 14: isHoliday
-            return 14;
-        }
-        return luaReturnNil(L);
+        const int n = pushLfgDungeonInfo(L, gh, id);
+        return n > 0 ? n : luaReturnNil(L);
     }},
     // GetInstanceLockTimeRemainingEncounter(encounterIndex) → name, texture, isKilled
     //

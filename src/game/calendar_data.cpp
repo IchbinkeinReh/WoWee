@@ -208,12 +208,16 @@ WowDate addMinutes(const WowDate& date, int64_t minutes) {
 
 std::vector<CalendarDayEntry> calendarEntriesForDay(const CalendarData& data,
                                                     int month, int day,
-                                                    int year) {
+                                                    int year,
+                                                    const CalendarShowFilter& filter) {
     std::vector<CalendarDayEntry> out;
     const int64_t wanted = dayNumber(year, month, day);
 
     for (size_t h = 0; h < data.holidays.size(); ++h) {
         const CalendarHoliday& holiday = data.holidays[h];
+        // 0x005c0240 / 0x005c04f0: a holiday's list is skipped while the
+        // calendarShow* CVar for its filter type reads 0.
+        if (!filter.showsHoliday(holiday.calendarFilterType)) continue;
         for (int i = 0; i < CalendarHoliday::kNumDates; ++i) {
             if (holiday.dates[i] == 0) continue;
             const WowDate start = unpackWowPackedTime(holiday.dates[i]);
@@ -240,7 +244,7 @@ std::vector<CalendarDayEntry> calendarEntriesForDay(const CalendarData& data,
     // date a lockout only by how long it has left, and the client adds that
     // to the zone time the same packet carries (0x005c29c0) - the server's
     // own wall clock in the realm's zone, not this machine's.
-    for (size_t l = 0; l < data.lockouts.size(); ++l) {
+    for (size_t l = 0; filter.lockouts && l < data.lockouts.size(); ++l) {
         const WowDate& when = data.lockouts[l].expires;
         if (dayNumber(when.fullYear(), when.month, when.day) != wanted) continue;
         CalendarDayEntry entry;
@@ -1248,6 +1252,68 @@ uint64_t calendarOwnInviteId(const CalendarEventDetail& open, uint64_t player) {
     for (const auto& inv : open.invitees)
         if (player != 0 && inv.guid == player) return inv.rank != 0 ? inv.inviteId : 0;
     return 0;
+}
+
+// 0x007e2040: UTF-8 to UTF-16 (0x00775eb0), the case rules, UTF-16 back to
+// UTF-8 into the caller's buffer (0x00775bd0), which takes a character only
+// while it fits.
+std::string calendarInviteName(const std::string& typed) {
+    constexpr size_t kBufferBytes = 0x30;
+    std::string out;
+    size_t i = 0;
+    bool first = true;
+    while (i < typed.size()) {
+        const auto b0 = static_cast<unsigned char>(typed[i]);
+        uint32_t cp = b0;
+        size_t len = 1;
+        if (b0 >= 0xC0 && b0 < 0xE0) { len = 2; cp = b0 & 0x1Fu; }
+        else if (b0 >= 0xE0 && b0 < 0xF0) { len = 3; cp = b0 & 0x0Fu; }
+        else if (b0 >= 0xF0 && b0 < 0xF8) { len = 4; cp = b0 & 0x07u; }
+        bool valid = len == 1 ? b0 < 0x80 : i + len <= typed.size();
+        for (size_t k = 1; valid && k < len; ++k) {
+            const auto bk = static_cast<unsigned char>(typed[i + k]);
+            if ((bk & 0xC0u) != 0x80u) valid = false;
+            else cp = (cp << 6) | (bk & 0x3Fu);
+        }
+        std::string enc;
+        if (!valid) {
+            len = 1;
+            enc.assign(1, typed[i]);   // not text: passed through as it came
+        } else {
+            if (first) {
+                if ((cp >= 0x61 && cp <= 0x7A) || (cp >= 0xE0 && cp <= 0xFE) ||
+                    (cp >= 0x430 && cp <= 0x44F)) cp -= 0x20;
+                else if (cp == 0x153) cp = 0x152;
+                else if (cp == 0x451) cp = 0x401;
+            } else {
+                if ((cp >= 0x41 && cp <= 0x5A) || (cp >= 0xC0 && cp <= 0xDE) ||
+                    (cp >= 0x410 && cp <= 0x42F)) cp += 0x20;
+                else if (cp == 0x152) cp = 0x153;
+                else if (cp == 0x401) cp = 0x451;
+            }
+            if (cp == 0) break;
+            if (cp < 0x80) {
+                enc.push_back(static_cast<char>(cp));
+            } else if (cp < 0x800) {
+                enc.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+                enc.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+            } else if (cp < 0x10000) {
+                enc.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+                enc.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+                enc.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+            } else {
+                enc.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+                enc.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+                enc.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+                enc.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+            }
+        }
+        if (out.size() + enc.size() > kBufferBytes - 1) break;
+        out += enc;
+        i += len;
+        first = false;
+    }
+    return out;
 }
 
 }  // namespace game

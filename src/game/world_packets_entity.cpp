@@ -266,7 +266,10 @@ bool parseGameObjectQueryBody(network::Packet& packet,
     // whichever way it is settled, the change is one number and a failing
     // test rather than an archaeology exercise. The alignment check after the
     // data fields below is what asks the server, so one TBC session answers it.
-    for (int i = 0; i < extraStrings; ++i) packet.readString();
+    for (int i = 0; i < extraStrings; ++i) {
+        std::string s = packet.readString();
+        if (i == 0) data.iconName = std::move(s);
+    }
 
     // Read 24 type-specific data fields
     size_t remaining = packet.getRemainingSize();
@@ -657,7 +660,7 @@ bool MonsterMoveParser::parse(network::Packet& packet, MonsterMoveData& data) {
 
     // uint32 splineId
     if (!packet.hasRemaining(4)) return false;
-    packet.readUInt32();
+    data.splineId = packet.readUInt32();
 
     // uint8 moveType
     {

@@ -49,6 +49,17 @@ inline constexpr const char* const kMaxPowerEvents[7] = {
     "UNIT_MAXMANA", "UNIT_MAXRAGE", "UNIT_MAXFOCUS", "UNIT_MAXENERGY",
     "UNIT_MAXHAPPINESS", nullptr, "UNIT_MAXRUNIC_POWER"};
 
+/// 0x0071c260: a combat log's delta on a unit's predicted health. A loss is
+/// not taken while UNIT_FIELD_FLAGS_2 0x100 holds the unit's stats; the
+/// result is never under 1 nor over the unit's maximum.
+[[nodiscard]] constexpr int32_t predictedHealthAfter(int32_t predicted, int32_t delta, int32_t maxHealth,
+                                                     uint32_t unitFlags2) {
+    if (delta < 0 && (unitFlags2 & 0x100u) != 0) return predicted;
+    const int32_t v = predicted + delta;
+    if (v < 1) return 1;
+    return v > maxHealth ? maxHealth : v;
+}
+
 struct Predicted {
     std::array<int32_t, 7> value{};  ///< +0xfb4
     uint32_t carry = 0;              ///< +0xfd0: thousandths not yet a whole point

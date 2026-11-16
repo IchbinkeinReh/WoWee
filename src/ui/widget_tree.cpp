@@ -766,6 +766,9 @@ void WidgetTree::scrollContentExtent(uint32_t childId, float& outW, float& outH)
 
 void WidgetTree::noteScreenSize(float pixelW, float pixelH) {
     if (pixelW <= 0.0f || pixelH <= 0.0f) return;
+    // A new size for a screen already laid out (0x005240e0 -> 0x0051fb80 or
+    // 0x00513240) raises UPDATE_FLOATING_CHAT_WINDOWS.
+    if (lastPixelW_ > 0.0f && (lastPixelW_ != pixelW || lastPixelH_ != pixelH)) floatingChatUpdateDue_ = true;
     lastPixelW_ = pixelW;
     lastPixelH_ = pixelH;
     applyDefaultUserScale(pixelW, pixelH);
@@ -832,6 +835,7 @@ void WidgetTree::layout(float pixelW, float pixelH) {
     if (layingOut_) return;
     layingOut_ = true;
     struct Done { bool& f; ~Done() { f = false; } } done{layingOut_};
+    if (lastPixelW_ > 0.0f && (lastPixelW_ != pixelW || lastPixelH_ != pixelH)) floatingChatUpdateDue_ = true;
     lastPixelW_ = pixelW;
     lastPixelH_ = pixelH;
     // How many pixels one interface unit is worth. Everything below works in

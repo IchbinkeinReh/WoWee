@@ -51,7 +51,10 @@ struct CombatTextEntry {
         MELEE_DAMAGE, SPELL_DAMAGE, HEAL, MISS, DODGE, PARRY, BLOCK,
         EVADE, CRIT_DAMAGE, CRIT_HEAL, PERIODIC_DAMAGE, PERIODIC_HEAL, ENVIRONMENTAL,
         ENERGIZE, POWER_DRAIN, XP_GAIN, IMMUNE, ABSORB, RESIST, DEFLECT, REFLECT, PROC_TRIGGER,
-        DISPEL, STEAL, INTERRUPT, INSTAKILL, HONOR_GAIN, GLANCING, CRUSHING
+        DISPEL, STEAL, INTERRUPT, INSTAKILL, HONOR_GAIN, GLANCING, CRUSHING,
+        /// A line of world text the client builds itself - experience,
+        /// an honourable kill, threat, a mechanic - shown as `text`.
+        WORLD_TEXT
     };
     Type type;
     int32_t amount = 0;
@@ -62,6 +65,8 @@ struct CombatTextEntry {
     uint64_t srcGuid = 0;       // Source entity (attacker/caster)
     uint64_t dstGuid = 0;       // Destination entity (victim/target) - used for world-space positioning
     float xSeed = 0.0f;         // Random horizontal offset seed (-1..1) to stagger overlapping text
+    std::string text;           // WORLD_TEXT: the line itself
+    uint8_t worldKind = 0;      // WORLD_TEXT: 0x007e6030's kind (FloaterKind)
 
     static constexpr float LIFETIME = 2.5f;
     [[nodiscard]] bool isExpired() const { return age >= LIFETIME; }

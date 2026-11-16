@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/achievement_tracking.hpp"
 #include "game/npc_interaction.hpp"
 #include "game/tutorials.hpp"
 #include "game/item_text.hpp"   // ItemLinkInstance - the numbers an item link carries
@@ -983,6 +984,7 @@ public:
     // Guild commands
     void requestGuildInfo();
     void requestGuildRoster();
+    void requestGuildRosterThrottled();
     void setGuildInfoText(const std::string& text);
     void takeInboxTextItem(uint32_t mailId);
     void setGuildMotd(const std::string& motd);
@@ -1549,6 +1551,16 @@ public:
     };
     std::optional<GroundTargetAim> aimGroundTarget(std::optional<ground_target::Place> place);
     void cancelAura(uint32_t spellId);
+    void cancelOpenStableAuras();
+    /// A chest's cursor from its lock (0x0070f9b0): the LockType.dbc row its
+    /// Lock.dbc row's first Index names, that row's CursorName and its id.
+    /// Empty when the lock has no such row or the row no cursor.
+    std::pair<std::string, uint32_t> chestLockCursor(const GameObject& go,
+                                                     const GameObjectQueryResponseData* info) const;
+    /// 0x00725bf0's ring: the player's charm, else its summon, and the
+    /// milliseconds since its UNIT_FIELD_TARGET was written, while that is
+    /// under a second.
+    std::optional<std::pair<uint64_t, int>> petPulse() const;
     void dismissPet();
     void renamePet(const std::string& newName);
     bool hasPet() const { return petGuid_ != 0; }
@@ -3220,6 +3232,9 @@ public:
     const std::string& getQuestSortName(uint32_t sortId) const;
     const std::string& questTagName(uint32_t questId) const;
     uint32_t questSuggestedPlayers(uint32_t questId) const;
+    /// The quest cache's record for a quest whose query answered (0x0067de90),
+    /// null otherwise.
+    const QuestLogEntry* questCacheRecord(uint32_t questId) const;
     int getSelectedQuestLogIndex() const;
     // Writes through to the QuestHandler, which is where getSelectedQuestLogIndex
     // reads it from. The two used to touch different variables - the setter this
@@ -3525,6 +3540,9 @@ public:
     /// 0x00722c50: the prediction of `type` set to `value`, no more than the
     /// maximum.
     void setPredictedPower(Unit& unit, int type, int32_t value);
+    /// 0x0071c260 on the unit `guid` names, when it is in the world: the
+    /// combat log's damage (negative) or healing on its predicted health.
+    void addPredictedHealth(uint64_t guid, int32_t delta);
     /// 0x00722cf0: the prediction moved by an energize (+) or a drain (-).
     void addPredictedPower(uint64_t guid, int type, int32_t delta);
     /// What a unit's update said of its powers: its power type changed
@@ -4144,10 +4162,24 @@ public:
         for (uint32_t id : earnedAchievements_) total += getAchievementPoints(id);
         return total;
     }
-    const std::unordered_set<uint32_t>& getTrackedAchievements() const { return trackedAchievements_; }
-    void setAchievementTracked(uint32_t id, bool tracked) {
-        if (tracked) trackedAchievements_.insert(id); else trackedAchievements_.erase(id);
+    /// The watched achievements in the order they were added (0x005b2040).
+    const std::vector<uint32_t>& getTrackedAchievements() const { return trackedAchievements_; }
+    bool isAchievementTracked(uint32_t id) const {
+        return std::find(trackedAchievements_.begin(), trackedAchievements_.end(), id) !=
+               trackedAchievements_.end();
     }
+    /// Track one (0x005b23e0): on the end of the list, at most ten; true when
+    /// the client raises TRACKED_ACHIEVEMENT_UPDATE, which it does for one
+    /// already tracked too, but not when the list is full.
+    bool trackAchievement(uint32_t id) {
+        return achievement_tracking::track(trackedAchievements_, id) !=
+               achievement_tracking::TrackResult::Full;
+    }
+    /// Stop tracking one (0x005b24d0); true when it was tracked.
+    bool untrackAchievement(uint32_t id) {
+        return achievement_tracking::untrack(trackedAchievements_, id);
+    }
+    void clearTrackedAchievements() { trackedAchievements_.clear(); }
     /// An achievement's reward line (Achievement.dbc Reward), or empty.
     const std::string& getAchievementRewardText(uint32_t id) const {
         auto it = achievementRewardCache_.find(id);
@@ -4842,7 +4874,7 @@ public:
     void auctionSearch(const std::string& name, uint8_t levelMin, uint8_t levelMax,
                        uint32_t quality, uint32_t itemClass, uint32_t itemSubClass,
                        uint32_t invTypeMask, uint8_t usableOnly, uint32_t offset = 0,
-                       const std::vector<AuctionSortKey>& sort = {});
+                       const std::vector<AuctionSortKey>& sort = {}, bool getAll = false);
     void auctionSellItem(int backpackIndex, uint32_t bid,
                          uint32_t buyout, uint32_t duration);
     void auctionSellItems(const std::vector<std::pair<uint64_t, uint32_t>>& sources, uint32_t bid,
@@ -4968,6 +5000,13 @@ public:
     /// Ask the server what an item cost. The answer arrives asynchronously and
     /// lands in the map below.
     void requestItemRefundInfo(uint64_t itemGuid);
+    /// An item object of the player's created (0x0070aa40): one whose
+    /// template carries flag 0x1000 (refundable) asks for its refund record
+    /// at once, or as soon as the template arrives.
+    void noteItemObjectCreated(uint64_t itemGuid, uint32_t entry, uint64_t ownerGuid);
+    /// The item template `entry` arrived: the items created while it was
+    /// unknown are looked at now.
+    void itemTemplateArrivedForRefund(uint32_t entry);
     /// Hand an item back for what was paid for it.
     void refundItem(uint64_t itemGuid);
     const ItemRefundInfo* getItemRefundInfo(uint64_t itemGuid) const {
@@ -5735,10 +5774,13 @@ public:
                                 bool offsetNeedsTransportResolution = false);
     void clearTransportAttachment(uint64_t childGuid);
     std::string guidToUnitId(uint64_t guid) const;
-    /// Every unit token that names this guid (0x0060bb70's walk): player, pet,
-    /// party1-4, raid1-40, target, focus, mouseover, arena1-5, arenapet1-5,
-    /// boss1-5 - a unit event the client raises per unit goes once to each.
+    /// Every unit token that names this guid (0x0060bb70's walk), in its
+    /// order: player, vehicle, pet, partyN, raidN, arenaN/arenapetN, bossN,
+    /// target, focus, npc - a unit event the client raises per unit goes once
+    /// to each.
     std::vector<std::string> unitTokensForGuid(uint64_t guid) const;
+    /// UNIT_COMBAT for every token of the unit (0x005132c0).
+    void fireUnitCombat(uint64_t guid, const char* action, int32_t amount, int32_t school, uint32_t hitInfo);
     Unit* getUnitByGuid(uint64_t guid);
     uint64_t resolveOnlineItemGuid(uint32_t itemId) const;
     void rebuildOnlineInventory();
@@ -6515,6 +6557,8 @@ private:
     std::unordered_map<uint64_t, OnlineItemInfo> onlineItems_;
     std::unordered_map<uint64_t, ItemRefundInfo> itemRefundInfo_;
     std::set<uint64_t> itemRefundAsked_;
+    /// Items created before their template was known, by template entry.
+    std::unordered_map<uint32_t, std::vector<uint64_t>> refundCheckAwaitingTemplate_;
     std::unordered_map<uint32_t, ItemQueryResponseData> itemInfoCache_;
     std::unordered_set<uint32_t> pendingItemQueries_;
     std::unordered_set<uint32_t> trainerDescriptionItems_;
@@ -7162,7 +7206,7 @@ private:
     std::unordered_map<uint32_t, AchievementCriterionIndex> achievementCriterionById_;
     bool achievementCriteriaLoaded_ = false;
     // Client-side, like the quest tracker's set - nothing is sent for it.
-    std::unordered_set<uint32_t> trackedAchievements_;
+    std::vector<uint32_t> trackedAchievements_;
     bool achievementNameCacheLoaded_ = false;
     // Set of achievement IDs earned by the player (populated from SMSG_ALL_ACHIEVEMENT_DATA)
     std::unordered_set<uint32_t> earnedAchievements_;
@@ -7410,6 +7454,10 @@ private:
     std::function<bool()> worldLoadingProbe_;
     bool releasedSpirit_ = false;
     uint32_t corpseMapId_ = 0;
+    /// The map the corpse itself lies on (MSG_CORPSE_QUERY's second map,
+    /// 0x00bd081c); corpseMapId_ is where its coordinates are, the instance's
+    /// entrance for a corpse inside one (0x00bd0818).
+    uint32_t corpseLiesOnMapId_ = 0;
     bool corpsePositionValid_ = false;
     float corpseX_ = 0.0f, corpseY_ = 0.0f, corpseZ_ = 0.0f;
     /// The transport the corpse lies on, its low guid (0xbd0830), 0 for the

@@ -5,6 +5,7 @@
 #include "ui/link_hit.hpp"
 #include "ui/text_markup.hpp"
 #include "ui/plural_escape.hpp"
+#include "game/expansion_profile.hpp"
 #include "ui/widget_tree.hpp"
 #include "ui/tooltip_line_strings.hpp"
 #include "ui/interface_fonts.hpp"
@@ -421,6 +422,21 @@ static int lua_Frame_UnregisterEvent(lua_State* L) {
                 lua_rawseti(L, -2, listeners);
                 break;
             }
+        }
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+
+    // While this event is going out, the frame is not called for the rest of
+    // it (0x0081a8c0 puts it on the pending-removal list, which 0x0081aa00
+    // checks before each listener). The set exists only during a dispatch.
+    lua_getfield(L, LUA_REGISTRYINDEX, "wowee_event_dropped");
+    if (lua_istable(L, -1)) {
+        lua_getfield(L, -1, eventName);
+        if (lua_istable(L, -1)) {
+            lua_pushvalue(L, 1);
+            lua_pushboolean(L, 1);
+            lua_rawset(L, -3);
         }
         lua_pop(L, 1);
     }
@@ -3448,55 +3464,58 @@ static void appendDurabilityLine(wowee::ui::Widget* w, const game::ItemDef& item
 ///
 /// Laid out as WoW lays it out: cost on the left of its line with the range on
 /// the right, then the cast time, then the description.
-/// A quest link, filled from the log.
+/// A quest link, built from the quest cache as 0x00622960 builds it.
 ///
-/// This used to answer false for every quest, on the grounds that the client
-/// kept nothing beyond the title and a tooltip holding only a name is worse
-/// than the caller knowing it failed. The first half stopped being true: a log
-/// entry now carries the quest giver's own text and the objective list, both
-/// read from the query response.
-///
-/// Only for a quest in the player's own log, which is the honest limit - a
-/// link to a quest they have never taken names an id nothing here has text
-/// for, and answering false there is still the right answer. The caller reads
-/// it: `if ( GameTooltip:SetHyperlink(link) )` decides whether to show the
-/// tooltip at all.
+/// Any quest whose query has answered, not only one in the log: the client
+/// reads its quest cache (0x0067de90) and, for a quest it does not hold yet,
+/// sends the query and answers false. Lines: the title (gold);
+/// QUEST_TOOLTIP_ACTIVE in green while the quest is in the player's log; a
+/// blank line; the objectives text in white, wrapped; then, when the quest
+/// has requirements (0x005e1300), a blank line, QUEST_TOOLTIP_REQUIREMENTS
+/// and " - " before each requirement line (0x005e1460) in white. No level
+/// line and no description.
 static bool fillQuestTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh,
                              uint32_t questId) {
     if (!w || !gh || questId == 0) return false;
-    // Through the public log rather than the private finder beside it: this
-    // wants the same entry the quest log itself draws from.
-    const game::GameHandler::QuestLogEntry* q = nullptr;
-    for (const auto& e : gh->getQuestLog()) {
-        if (e.questId == questId) { q = &e; break; }
+    const game::GameHandler::QuestLogEntry* rec = gh->questCacheRecord(questId);
+    if (!rec) {
+        gh->requestQuestQuery(questId, false);
+        return false;
     }
-    if (!q) return false;
-    if (q->title.empty() && q->objectives.empty()) return false;
+    const game::GameHandler::QuestLogEntry* inLog = nullptr;
+    for (const auto& e : gh->getQuestLog()) {
+        if (e.questId == questId) { inLog = &e; break; }
+    }
 
     w->isTooltip = true;
     clearTooltipLines(L, w);
-    auto line = [&w](std::string text, float r, float g, float b) {
+    auto line = [&w](std::string text, float r, float g, float b, bool wrap) {
         wowee::ui::Widget::TooltipLine t;
         t.left = std::move(text);
         t.lc[0] = r; t.lc[1] = g; t.lc[2] = b; t.lc[3] = 1.0f;
         t.rc[0] = t.rc[1] = t.rc[2] = 1.0f; t.rc[3] = 1.0f;
-        // Prose, so it breaks to fit rather than making the tooltip as wide
-        // as the sentence.
-        t.wrap = true;
+        t.wrap = wrap;
         w->tooltipLines.push_back(std::move(t));
     };
-    line(q->title.empty() ? ("Quest #" + std::to_string(questId)) : q->title,
-         1.0f, 0.82f, 0.0f);
-    if (q->level > 0) {
-        line("Level " + std::to_string(q->level), 1.0f, 1.0f, 1.0f);
-    }
-    if (!q->description.empty()) line(q->description, 1.0f, 1.0f, 1.0f);
-    // What is left to do, or what to do now it is done - the same two the log
-    // shows, and the same order.
-    if (q->complete && !q->completionText.empty()) {
-        line(q->completionText, 1.0f, 1.0f, 1.0f);
-    } else if (!q->objectives.empty()) {
-        line(q->objectives, 0.75f, 0.75f, 0.75f);
+    auto global = [L](const char* name, const char* fallback) {
+        std::string out = fallback;
+        lua_getglobal(L, name);
+        if (lua_type(L, -1) == LUA_TSTRING) out = lua_tostring(L, -1);
+        lua_pop(L, 1);
+        return out;
+    };
+    // Colours 0x00ad2d2c (gold), 0x00ad2d40 (green), 0x00ad2d30 (white).
+    line(rec->title, 1.0f, 0.82f, 0.0f, false);
+    if (inLog) line(global("QUEST_TOOLTIP_ACTIVE", "You are on this quest"), 0.0f, 1.0f, 0.0f, false);
+    line(" ", 1.0f, 0.82f, 0.0f, false);
+    line(rec->objectives, 1.0f, 1.0f, 1.0f, true);
+    const bool completeInLog = inLog && inLog->complete;
+    const std::vector<std::string> reqs =
+        game::questTooltipRequirementLines(*gh, *rec, completeInLog);
+    if (game::questTooltipRequirementCount(*rec, completeInLog) > 0) {
+        line(" ", 1.0f, 0.82f, 0.0f, false);
+        line(global("QUEST_TOOLTIP_REQUIREMENTS", "Requirements:"), 1.0f, 0.82f, 0.0f, false);
+        for (const std::string& r : reqs) line(" - " + r, 1.0f, 1.0f, 1.0f, false);
     }
     // And the quest builder's own script at its end (0x00622960).
     if (pushFrameOfWidget(L, w->id)) {
@@ -4724,13 +4743,23 @@ int lua_Tooltip_SetSpellByID(lua_State* L) {
 
 /// `text` with its |4singular:plural; picked for `n`, as the client's own
 /// formatter does - GlobalStrings writes its counted words that way.
+/// The form is the one 0x00817d10 picks for the client's locale; a form the
+/// escape does not have writes nothing.
 static std::string withPlural(std::string text, int n) {
+    const int form = wowee::ui::pluralFormIndex(static_cast<long>(n));
     for (size_t at = text.find("|4"); at != std::string::npos; at = text.find("|4", at)) {
-        const size_t colon = text.find(':', at);
-        const size_t end = colon == std::string::npos ? colon : text.find(';', colon);
+        const size_t end = text.find(';', at);
         if (end == std::string::npos) break;
-        const std::string pick = n == 1 ? text.substr(at + 2, colon - at - 2)
-                                        : text.substr(colon + 1, end - colon - 1);
+        size_t from = at + 2;
+        for (int k = 0; k < form && from <= end; ++k) {
+            const size_t colon = text.find(':', from);
+            from = (colon == std::string::npos || colon > end) ? end + 1 : colon + 1;
+        }
+        std::string pick;
+        if (from <= end) {
+            const size_t colon = text.find(':', from);
+            pick = text.substr(from, std::min(colon, end) - from);
+        }
         text.replace(at, end + 1 - at, pick);
         at += pick.size();
     }
@@ -6185,6 +6214,22 @@ void buildTooltipItemInstance(lua_State* L, game::GameHandler* gh, const game::I
     // What is left of its first spell's charges (ITEM_FIELD_SPELL_CHARGES).
     lua_pushnumber(L, gh->getItemSpellCharges(instance.guid));
     lua_setfield(L, -2, "charges0");
+    // The saved equipment sets holding this very item (0x005ae380): their
+    // names in the sets' own order, once per slot that names its guid.
+    if (instance.guid != 0) {
+        int n = 0;
+        for (const auto& set : gh->getEquipmentSets()) {
+            const auto* guids = gh->getEquipmentSetItems(set.setId);
+            if (!guids) continue;
+            for (uint64_t g : *guids) {
+                if (g != instance.guid) continue;
+                if (n == 0) lua_newtable(L);
+                lua_pushstring(L, set.name.c_str());
+                lua_rawseti(L, -2, ++n);
+            }
+        }
+        if (n > 0) lua_setfield(L, -2, "equipmentSets");
+    }
     // Its lock opened (ITEM_FIELD_FLAGS 0x4): no LOCKED line.
     if ((gh->getItemFieldFlags(instance.guid) & 0x4u) != 0) {
         lua_pushboolean(L, 1);
@@ -10786,6 +10831,21 @@ static int lua_CreateFrame(lua_State* L) {
         const char* asked = lua_tostring(L, 1);
         bool known = false;
         for (const char* t : kTypes) known = known || sameWord(asked, t);
+        // WorldFrame is registered as a one-off type (0x00813d20 with its
+        // third argument set): the first frame made of it - FrameXML's own
+        // WorldFrame.xml - takes the type out of the factory list (0x00812fa0),
+        // and any later one is an unknown type. A new interface registers it
+        // again, which is a new state here.
+        if (known && sameWord(asked, "WorldFrame")) {
+            lua_getfield(L, LUA_REGISTRYINDEX, "wowee_worldframe_made");
+            const bool made = lua_toboolean(L, -1) != 0;
+            lua_pop(L, 1);
+            if (made) known = false;
+            else {
+                lua_pushboolean(L, 1);
+                lua_setfield(L, LUA_REGISTRYINDEX, "wowee_worldframe_made");
+            }
+        }
         if (!known) return luaL_error(L, "CreateFrame: Unknown frame type '%s'", asked);
     }
     const char* frameType = luaL_optstring(L, 1, "Frame");
@@ -11265,6 +11325,9 @@ void LuaEngine::setGameHandler(game::GameHandler* handler) {
 
 void LuaEngine::setLuaServices(const LuaServices& services) {
     luaServices_ = services;
+    // 0x00405dd0 -> 0x00817d00: the |4 escapes' rule follows the locale.
+    if (const auto* profile = services.expansionRegistry ? services.expansionRegistry->getActive() : nullptr)
+        wowee::ui::setPluralLocale(profile->locale);
     if (L_) {
         lua_pushlightuserdata(L_, &luaServices_);
         lua_setfield(L_, LUA_REGISTRYINDEX, "wowee_lua_services");
@@ -14967,6 +15030,14 @@ void LuaEngine::registerCoreAPI() {
         "                if d.met then self:AddLine(t, 0.533, 0.667, 1) else self:AddLine(t, 1, 0.125, 0.125) end\n"
         "            end\n"
         "        end\n"
+        // The saved sets it is in (0x006277f0 at 0x0062d3a0, names from
+        // 0x005ae380): with equipmentManager on and
+        // dontShowEquipmentSetsOnItems off, EQUIPMENT_SETS over the names
+        // joined by PLAYER_LIST_DELIMITER, gold, wrapped.
+        "        if inst and inst.equipmentSets and EQUIPMENT_SETS and GetCVarBool('equipmentManager')\n"
+        "            and not GetCVarBool('dontShowEquipmentSetsOnItems') then\n"
+        "            self:AddLine(format(EQUIPMENT_SETS, table.concat(inst.equipmentSets, PLAYER_LIST_DELIMITER or ', ')), 1, 0.82, 0, 1)\n"
+        "        end\n"
         // Still tradeable for a while (0x006277f0): a spacer, then
         // BIND_TRADE_TIME_REMAINING in light blue - an hour and the minutes
         // past it when over an hour is left, else one unit of
@@ -15758,6 +15829,31 @@ void LuaEngine::fireEventWith(const std::string& eventName, int nargs,
     }
     if (eventName == "TRADE_SHOW") wowee::addons::onTradeShown(L_);
 
+    // The tracked achievements, read back from trackedAchievements as the
+    // character's settings come in (0x005128d0 -> 0x005b3840: each id put on
+    // the list as AddTrackedAchievement would, event and all), and written
+    // to it after PLAYER_LOGOUT (0x005b1fa0) before the list goes with the
+    // rest of the achievement data (0x005b4f00). A list already held is a
+    // reload, not a login.
+    if (eventName == "PLAYER_LOGIN" && gameHandler_ &&
+        gameHandler_->getTrackedAchievements().empty()) {
+        for (uint32_t id : game::achievement_tracking::decode(
+                 storedCVarValue("trackedAchievements", ""))) {
+            if (gameHandler_->trackAchievement(id)) {
+                gameHandler_->fireAddonEvent("TRACKED_ACHIEVEMENT_UPDATE", {std::to_string(id)});
+            }
+        }
+    }
+    struct SaveTrackedAfter {
+        game::GameHandler* gh;
+        ~SaveTrackedAfter() {
+            if (!gh) return;
+            setStoredCVar("trackedAchievements",
+                          game::achievement_tracking::encode(gh->getTrackedAchievements()));
+            gh->clearTrackedAchievements();
+        }
+    } saveTrackedAfter{eventName == "PLAYER_LOGOUT" ? gameHandler_ : nullptr};
+
     // Combat lockdown is the flag these two events announce, and 0x00524600
     // moves it on the far side of each: leaving combat lifts it before
     // PLAYER_REGEN_ENABLED goes out, entering it locks only after every
@@ -15888,9 +15984,39 @@ void LuaEngine::fireEventWith(const std::string& eventName, int nargs,
                 lua_rawseti(L_, -2, i);
             }
             lua_remove(L_, -2);   // drop the live list; the copy stands in
+            const int copyIdx = lua_gettop(L_);
+            // A frame unregistered while the event is going out is passed over
+            // for the rest of it (0x0081aa00 skips every listener on the
+            // pending-removal list 0x0081a8c0 keeps while the event fires) -
+            // whoever unregistered it, an earlier handler or the frame itself.
+            // One set per event name, made by the outermost dispatch of it;
+            // UnregisterEvent marks the frame in it.
+            lua_getfield(L_, LUA_REGISTRYINDEX, "wowee_event_dropped");
+            if (!lua_istable(L_, -1)) {
+                lua_pop(L_, 1);
+                lua_newtable(L_);
+                lua_pushvalue(L_, -1);
+                lua_setfield(L_, LUA_REGISTRYINDEX, "wowee_event_dropped");
+            }
+            const int droppedRootIdx = lua_gettop(L_);
+            lua_getfield(L_, droppedRootIdx, eventName.c_str());
+            bool outermost = false;
+            if (!lua_istable(L_, -1)) {
+                lua_pop(L_, 1);
+                lua_newtable(L_);
+                lua_pushvalue(L_, -1);
+                lua_setfield(L_, droppedRootIdx, eventName.c_str());
+                outermost = true;
+            }
+            const int droppedIdx = lua_gettop(L_);
             for (int i = 1; i <= frameCount; i++) {
-                lua_rawgeti(L_, -1, i);
+                lua_rawgeti(L_, copyIdx, i);
                 if (!lua_istable(L_, -1)) { lua_pop(L_, 1); continue; }
+                lua_pushvalue(L_, -1);
+                lua_rawget(L_, droppedIdx);
+                const bool dropped = lua_toboolean(L_, -1) != 0;
+                lua_pop(L_, 1);
+                if (dropped) { lua_pop(L_, 1); continue; }
 
                 // Get the frame's OnEvent script
                 lua_getfield(L_, -1, "__scripts");
@@ -15914,6 +16040,11 @@ void LuaEngine::fireEventWith(const std::string& eventName, int nargs,
                 }
                 lua_pop(L_, 2); // pop __scripts + frame
             }
+            if (outermost) {
+                lua_pushnil(L_);
+                lua_setfield(L_, droppedRootIdx, eventName.c_str());
+            }
+            lua_settop(L_, copyIdx);   // the copy stays for the pop below
         } else if (traced.count(eventName)) {
             LOG_WARNING("EventTrace: ", eventName, " (",
                         traceArg,
@@ -17521,6 +17652,9 @@ void LuaEngine::reportEventListenersOnce() {
 void LuaEngine::updateSizeChanges() {
     taint::Quiet quiet;   // as dispatchText
     if (!L_) return;
+    // The UI scale set, or the screen resized (0x00513240, 0x0051fb80): the
+    // chat frames are told to put their floating windows back on screen.
+    if (widgets_.takeFloatingChatUpdateDue()) fireEvent("UPDATE_FLOATING_CHAT_WINDOWS");
     for (uint32_t id = widgets_.takeResizePending(1); id != 0;
          id = widgets_.takeResizePending(id + 1)) {
         const ui::Widget* wp = widgets_.get(id);

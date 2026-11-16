@@ -1,4 +1,5 @@
 #include "game/inventory_handler.hpp"
+#include "game/mail_ignore.hpp"
 #include "game/stationery.hpp"
 #include "game/text_tokens.hpp"
 #include "game/tutorials.hpp"
@@ -4474,7 +4475,12 @@ void InventoryHandler::mailTakeItem(uint32_t mailId, uint32_t itemGuidLow) {
 
 void InventoryHandler::mailReturnToSender(uint32_t mailId) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || mailboxGuid_ == 0) return;
-    auto packet = MailReturnToSenderPacket::build(mailboxGuid_, mailId);
+    // With the letter's sender on WotLK, as ReturnInboxItem writes it.
+    uint64_t sender = 0;
+    for (const auto& mail : mailInbox_) {
+        if (mail.messageId == mailId) { sender = mail.senderGuid; break; }
+    }
+    auto packet = MailReturnToSenderPacket::build(mailboxGuid_, mailId, sender, !isPreWotlk());
     owner_.getSocket()->send(packet);
     // Same as deleting: the letter being read is this one, and the view over it
     // hides when told which mail closed.
@@ -4556,6 +4562,35 @@ void InventoryHandler::handleMailListResult(network::Packet& packet) {
     inboxCheckPending_ = false;
     if (!owner_.getPacketParsers()->parseMailList(packet, mailInbox_)) return;
     mailTotalCount_ = owner_.getPacketParsers()->mailListTotal();
+    // 0x00571c50: a player's letter from someone on the ignore list is not
+    // listed - deleted when it carries nothing, else sent back - and the
+    // total counts one fewer for each.
+    if (owner_.getState() == WorldState::IN_WORLD && owner_.getSocket() && mailboxGuid_ != 0) {
+        const auto ignored = [this](uint64_t guid) {
+            if (guid == 0) return false;
+            for (const auto& c : owner_.getContacts()) {
+                if (c.guid == guid && c.isIgnored()) return true;
+            }
+            return false;
+        };
+        for (auto it = mailInbox_.begin(); it != mailInbox_.end();) {
+            int items = 0;
+            for (const auto& att : it->attachments) {
+                if (att.itemId != 0) ++items;
+            }
+            const auto action = ignoredMailAction(it->messageType, it->flags,
+                                                  ignored(it->senderGuid), items, it->money);
+            if (action == IgnoredMailAction::Keep) { ++it; continue; }
+            if (action == IgnoredMailAction::Delete) {
+                owner_.getSocket()->send(MailDeletePacket::build(mailboxGuid_, it->messageId, 1));
+            } else {
+                owner_.getSocket()->send(MailReturnToSenderPacket::build(
+                    mailboxGuid_, it->messageId, it->senderGuid, !isPreWotlk()));
+            }
+            if (mailTotalCount_ > 0) --mailTotalCount_;
+            it = mailInbox_.erase(it);
+        }
+    }
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("MAIL_INBOX_UPDATE", {});
     for (const auto& mail : mailInbox_) {
         // Player mail carries a GUID, not a name. Ask for it once here; the UI
@@ -5121,8 +5156,40 @@ void InventoryHandler::openAuctionHouse(uint64_t guid) {
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("AUCTION_HOUSE_SHOW", {});
 }
 
+bool InventoryHandler::auctionGetAllAllowed() const {
+    const auto now = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count()) + 1;
+    return game::auctionGetAllAllowed(auctionGetAllSentMs_, now);
+}
+
+namespace {
+std::vector<uint32_t> auctionIdsOf(const AuctionListResult& list) {
+    std::vector<uint32_t> ids;
+    ids.reserve(list.auctions.size());
+    for (const auto& a : list.auctions) ids.push_back(a.auctionId);
+    return ids;
+}
+}  // namespace
+
+int InventoryHandler::auctionSelectedRow(int list) const {
+    if (list < 0 || list > 2) return -1;
+    const AuctionListResult& rows = list == 1 ? auctionOwnerResults_
+                                  : list == 2 ? auctionBidderResults_ : auctionBrowseResults_;
+    return game::auctionSelectionRow(auctionIdsOf(rows), auctionSelectedIds_[static_cast<size_t>(list)]);
+}
+
+void InventoryHandler::setAuctionSelectedRow(int list, int row) {
+    if (list < 0 || list > 2) return;
+    const AuctionListResult& rows = list == 1 ? auctionOwnerResults_
+                                  : list == 2 ? auctionBidderResults_ : auctionBrowseResults_;
+    auctionSelectedIds_[static_cast<size_t>(list)] = game::auctionSelectionFor(auctionIdsOf(rows), row);
+}
+
 void InventoryHandler::closeAuctionHouse() {
     auctionOpen_ = false;
+    // 0x0059dfb0: the three selections go with the window.
+    auctionSelectedIds_.fill(kNoAuctionSelected);
     auctioneerGuid_ = 0;
     auctionHouseId_ = 0;   // 0x0059f150
     // The three lists go with the window (0x0059f150 frees 0xc0f448,
@@ -5137,7 +5204,7 @@ void InventoryHandler::closeAuctionHouse() {
 void InventoryHandler::auctionSearch(const std::string& name, uint8_t levelMin, uint8_t levelMax,
                                       uint32_t quality, uint32_t itemClass, uint32_t itemSubClass,
                                       uint32_t invTypeMask, uint8_t usableOnly, uint32_t offset,
-                                      const std::vector<AuctionSortKey>& sort) {
+                                      const std::vector<AuctionSortKey>& sort, bool getAll) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || auctioneerGuid_ == 0) return;
     lastAuctionSearch_ = {.name = name, .levelMin = levelMin, .levelMax = levelMax, .quality = quality, .itemClass = itemClass, .itemSubClass = itemSubClass,
                           .invTypeMask = invTypeMask, .usableOnly = usableOnly, .offset = offset, .sort = sort};
@@ -5150,9 +5217,15 @@ void InventoryHandler::auctionSearch(const std::string& name, uint8_t levelMin, 
              " usable=", static_cast<int>(usableOnly));
     auto packet = AuctionListItemsPacket::build(auctioneerGuid_, offset, name,
                                                   levelMin, levelMax, invTypeMask,
-                                                  itemClass, itemSubClass, quality, usableOnly, 0,
-                                                  sort);
+                                                  itemClass, itemSubClass, quality, usableOnly,
+                                                  getAll ? 1 : 0, sort);
     owner_.getSocket()->send(packet);
+    // 0x0059bcf0: a getAll query starts the fifteen minutes before the next.
+    if (getAll) {
+        auctionGetAllSentMs_ = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count()) + 1;
+    }
     // Blocks the Search button until the answer comes back. The result carries
     // the server's own wait and replaces this with it, so five seconds is only
     // what applies while a reply is outstanding - and on Classic and TBC, whose
@@ -5566,7 +5639,7 @@ void InventoryHandler::acceptTrade() {
     // way to add the other.
     if (!isTradeOpen()) return;
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    auto packet = AcceptTradePacket::build();
+    auto packet = AcceptTradePacket::build(tradeStateIndex_[1]);
     owner_.getSocket()->send(packet);
     tradeSelfAccepted_ = true;
     fireTradeAcceptUpdate();
@@ -5763,6 +5836,7 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
         }
         case 2:   // OPEN_WINDOW
             tradeStatus_ = TradeStatus::Open;
+            tradeStateIndex_[0] = tradeStateIndex_[1] = 1;  // 0x007044a0 case 2
             tradeSelfAccepted_ = false;
             tradePartnerAccepted_ = false;
             // The table starts empty.  Status 2 (0x007044a0 case 2) zeroes the
@@ -5950,7 +6024,8 @@ void InventoryHandler::handleTradeStatusExtended(network::Packet& packet) {
     const uint8_t traderData = packet.readUInt8();
     /*uint32_t tradeId    =*/ packet.readUInt32();
     const uint32_t slotCount = packet.readUInt32();
-    /*uint32_t slotCount2 =*/ packet.readUInt32();
+    // The side's state index (0x00704690 keeps it at 0xca0b6c + side * 4).
+    const uint32_t stateIndex = packet.readUInt32();
     const uint32_t gold = packet.readUInt32();
     const uint32_t spell = packet.readUInt32();
 
@@ -5961,6 +6036,7 @@ void InventoryHandler::handleTradeStatusExtended(network::Packet& packet) {
     // Kept by side, exactly as the packet says it, and read back the other way
     // round - which is the client's own mix-up, not a translation of it.
     tradeEnchantSpell_[ownSide ? 0 : 1] = spell;
+    tradeStateIndex_[traderData != 0 ? 1 : 0] = stateIndex;
 
     uint32_t count = slotCount;
     if (count > TRADE_SLOT_COUNT) count = TRADE_SLOT_COUNT;
@@ -6347,6 +6423,8 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
 
     if (data.valid) {
         owner_.itemInfoCacheRef()[data.entry] = data;
+        // 0x0070aa40 for the items that were waiting on this template.
+        owner_.itemTemplateArrivedForRefund(data.entry);
         rebuildOnlineInventory();
         maybeDetectVisibleItemLayout();
         // The bar's buttons holding this item, re-read now that it has an

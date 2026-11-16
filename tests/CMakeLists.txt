@@ -219,10 +219,29 @@ wowee_add_test(test_combat_log
 wowee_add_test(test_chat_log
     SOURCES test_chat_log.cpp)
 
+# An outgoing line's %t/%f tokens and drunk slurring (0x00577d00,
+# 0x00577f60). Header-only.
+wowee_add_test(test_chat_outgoing
+    SOURCES test_chat_outgoing.cpp)
+
+# A chat bubble's lifetime by its words and its fades (0x0056c1c0,
+# 0x0056c500). Header-only.
+wowee_add_test(test_chat_bubble_timing
+    SOURCES test_chat_bubble_timing.cpp)
+
+# The gossip greeting option shown, by probability and gender
+# (0x0058ac30). Header-only.
+wowee_add_test(test_npc_text
+    SOURCES test_npc_text.cpp)
+
 # The arena opponent roster (BattlefieldInfo.cpp): slots, pets beside their
 # owners, and ARENA_OPPONENT_UPDATE's words. Header-only.
 wowee_add_test(test_arena_opponents
     SOURCES test_arena_opponents.cpp)
+
+# UNIT_COMBAT's flag and action words (0x005132c0). Header-only.
+wowee_add_test(test_unit_combat
+    SOURCES test_unit_combat.cpp)
 
 # The tabard designer's design (game/tabard_design.hpp): cycling, the start,
 # the save's refusals and answer, the files. Header-only.
@@ -2011,6 +2030,18 @@ register_test_target(test_font_em_scale)
 # Which of a quest's five strings holds the line a finished quest shows. The
 # pick used to be "whichever is longer", which answered a different question.
 wowee_add_test(test_quest_text SOURCES test_quest_text.cpp)
+
+# The tracked-achievement list and the trackedAchievements CVar it is saved in.
+wowee_add_test(test_achievement_tracking SOURCES test_achievement_tracking.cpp)
+
+# The camera CVars' registered ranges, which SetCVar and the console enforce.
+wowee_add_test(test_camera_cvar_ranges SOURCES test_camera_cvar_ranges.cpp)
+
+# The auction house's getAll interval and the selection kept per list.
+wowee_add_test(test_auction_query_gate SOURCES test_auction_query_gate.cpp)
+
+# What becomes of a letter from an ignored player.
+wowee_add_test(test_mail_ignore SOURCES test_mail_ignore.cpp)
 
 # ── test_interface_text_lines ────────────────────────────────
 # How many lines a label takes, measured on demand rather than read off the
@@ -4137,3 +4168,15 @@ target_include_directories(test_keybinding_defaults SYSTEM PRIVATE
 target_link_libraries(test_keybinding_defaults PRIVATE catch2_main imgui)
 add_test(NAME keybinding_defaults COMMAND test_keybinding_defaults)
 register_test_target(test_keybinding_defaults)
+
+# Which casts' delays and channels the client acts on (cast_event_gate.hpp).
+wowee_add_test(test_cast_event_gate SOURCES test_cast_event_gate.cpp)
+
+# A combat log's delta on predicted health (power_prediction.hpp).
+wowee_add_test(test_predicted_health SOURCES test_predicted_health.cpp)
+
+# CalculateAuctionDeposit's arithmetic (auction_deposit.hpp).
+wowee_add_test(test_auction_deposit SOURCES test_auction_deposit.cpp)
+
+# The cursor table looked up by art name (ui/cursor_art.hpp).
+wowee_add_test(test_cursor_art SOURCES test_cursor_art.cpp)

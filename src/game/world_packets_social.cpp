@@ -1552,8 +1552,9 @@ network::Packet CancelTradePacket::build() {
     return packet;
 }
 
-network::Packet AcceptTradePacket::build() {
+network::Packet AcceptTradePacket::build(uint32_t traderStateIndex) {
     network::Packet packet(wireOpcode(Opcode::CMSG_ACCEPT_TRADE));
+    packet.writeUInt32(traderStateIndex);
     LOG_DEBUG("Built CMSG_ACCEPT_TRADE");
     return packet;
 }

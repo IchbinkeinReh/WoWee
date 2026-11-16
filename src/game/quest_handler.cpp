@@ -10,6 +10,8 @@
 #include "game/update_field_table.hpp"
 #include "game/quest_progress.hpp"
 #include "game/quest_text.hpp"
+#include "game/npc_text.hpp"
+#include <random>
 #include "game/packet_parsers.hpp"
 #include "network/world_socket.hpp"
 #include "network/wire_format.hpp"
@@ -1268,6 +1270,37 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             if (questLogStride >= 5 && packet.getData().size() >= 28)
                 known.suggestedPlayers = network::wire::loadLE32(packet.getData(), 24);
             if (!parsed.title.empty()) known.title = parsed.title;
+            // The cache record a quest link's tooltip reads (0x00622960),
+            // whether or not the quest is in the log.
+            QuestLogEntry& rec = known.record;
+            rec.questId = questId;
+            rec.title = parsed.title;
+            rec.objectives = parsed.objectives;
+            rec.description = parsed.description;
+            rec.completionText = parsed.completionText;
+            rec.endText = parsed.endText;
+            if (questLevel != 0) rec.level = questLevel;
+            if (objs.valid) {
+                for (int i = 0; i < 4; ++i) {
+                    rec.killObjectives[i].npcOrGoId = objs.kills[i].npcOrGoId;
+                    rec.killObjectives[i].required = objs.kills[i].required;
+                    rec.objectiveSourceItems[i] = objs.kills[i].sourceItem;
+                    rec.objectiveSourceCounts[i] = objs.kills[i].sourceCount;
+                    rec.objectiveTexts[i] = objs.texts[i];
+                }
+                for (int i = 0; i < 6; ++i) {
+                    rec.itemObjectives[i].itemId = objs.items[i].itemId;
+                    rec.itemObjectives[i].required = objs.items[i].required;
+                }
+            }
+            if (rwds.valid) {
+                rec.sourceItemId = rwds.sourceItemId;
+                rec.questFlags = rwds.questFlags;
+                rec.playersSlain = rwds.playersSlain;
+                rec.repObjectiveFaction = rwds.repObjectiveFaction;
+                rec.repObjectiveFaction2 = rwds.repObjectiveFaction2;
+                rec.repObjectiveValue = rwds.repObjectiveValue;
+            }
         }
 
         for (auto& q : questLog_) {
@@ -2347,6 +2380,7 @@ void QuestHandler::handleGossipMessage(network::Packet& packet) {
     if (!ok) return;
     if (questDetailsOpen_) return; // Don't reopen gossip while viewing quest
     gossipWindowOpen_ = true;
+    gossipIsQuestGreeting_ = false;
     // 0x0058a550: a gossip window with another object sets it.
     if (currentGossip_.npcGuid != gossipBefore) owner_.setInteractionObject(currentGossip_.npcGuid, go_interaction::Window::Gossip);
     // Gossip carries its text as an npc-text id, not inline, so any greeting
@@ -2383,8 +2417,10 @@ void QuestHandler::handleGossipMessage(network::Packet& packet) {
         }
     }
 
-    if (!gossipShowAwaitingText_ && owner_.addonEventCallbackRef())
-        owner_.addonEventCallbackRef()("GOSSIP_SHOW", {});
+    if (!gossipShowAwaitingText_) {
+        chooseGossipText();
+        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("GOSSIP_SHOW", {});
+    }
     owner_.closeVendor(); // Close vendor if gossip opens
 
     // Classify gossip quests and update quest log + overhead NPC markers.
@@ -2448,6 +2484,7 @@ void QuestHandler::handleQuestgiverQuestList(network::Packet& packet) {
 
     currentGossip_ = std::move(data);
     gossipWindowOpen_ = true;
+    gossipIsQuestGreeting_ = true;
     // The quest frame's greeting (0x0058c5a0 with 0), which wowee keeps as
     // its gossip window.
     owner_.setQuestInteractionObject(currentGossip_.npcGuid, go_interaction::Window::Gossip);
@@ -2571,38 +2608,72 @@ void QuestHandler::handleGossipComplete(network::Packet& packet) {
 void QuestHandler::handleNpcTextUpdate(network::Packet& packet) {
     if (!packet.hasRemaining(4)) return;
     uint32_t textId = packet.readUInt32();
-    // 8 text entries: each has probability(4) + text0 + text1 + lang(4) + 6 emote fields(24)
+    // 8 options, each probability(4) + male text + female text + lang(4) +
+    // 3 x (emote delay, emote)(24) - all eight kept, both genders and their
+    // weights, for 0x0058ac30 to choose from each time the window opens.
+    npc_text::NpcText text;
     for (int i = 0; i < 8; ++i) {
         if (!packet.hasRemaining(4)) break;
-        /*float prob =*/ packet.readFloat();
+        auto& option = text.options[i];
+        option.probability = packet.readFloat();
         if (!packet.hasData()) break;
-        std::string text0 = packet.readString();
+        option.text[0] = packet.readString();
         if (!packet.hasData()) break;
-        std::string text1 = packet.readString();
+        option.text[1] = packet.readString();
         if (!packet.hasRemaining(28)) break; // lang(4) + 6×emote(4) = 28
-        packet.setReadPos(packet.getReadPos() + 28);
-        if (!text0.empty() && !npcTextCache_.count(textId)) {
-            npcTextCache_[textId] = std::move(text0);
-        } else if (!text1.empty() && !npcTextCache_.count(textId)) {
-            npcTextCache_[textId] = std::move(text1);
-        }
+        option.language = packet.readUInt32();
+        packet.setReadPos(packet.getReadPos() + 24);
     }
-    LOG_DEBUG("NPC text update: id=", textId,
-             " cached=", npcTextCache_.count(textId) ? "yes" : "no");
+    npcTextCache_[textId] = std::move(text);
+    LOG_DEBUG("NPC text update: id=", textId);
 
     // The window is open and was waiting on exactly this text: now it is
     // announced (handleGossipMessage held GOSSIP_SHOW back for it), once, so
     // the greeting is drawn on a first visit as on every later one.
     if (gossipWindowOpen_ && gossipShowAwaitingText_ && currentGossip_.titleTextId == textId) {
         gossipShowAwaitingText_ = false;
+        chooseGossipText();
         if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("GOSSIP_SHOW", {});
     }
 }
 
+// 0x0058ac30, each time the gossip window is shown: one of the greeting's
+// eight options at random by their probabilities, in the female text for a
+// female unit (UNIT_FIELD_BYTES_0 byte 2 == 1) and the male one for any
+// other unit; anything that is not a unit takes the male text unless the
+// first option has none. No option with text is "Missing gossip text!" and
+// an empty window.
+void QuestHandler::chooseGossipText() {
+    gossipText_.clear();
+    const auto it = npcTextCache_.find(currentGossip_.titleTextId);
+    if (it == npcTextCache_.end()) return;
+    const auto entity = owner_.getEntityManager().getEntity(currentGossip_.npcGuid);
+    const bool isUnit = entity && entity->isUnit();
+    uint8_t gender = 0;
+    if (isUnit) {
+        const uint16_t bytes0 = fieldIndex(UF::UNIT_FIELD_BYTES_0);
+        if (bytes0 != 0xFFFF) gender = static_cast<uint8_t>((entity->getField(bytes0) >> 16) & 0xFFu);
+    }
+    const int col = npc_text::column(it->second, isUnit, gender);
+    static std::mt19937 rng(std::random_device{}());
+    std::uniform_real_distribution<float> roll(0.0f, 1.0f);
+    const int chosen = npc_text::choose(it->second, col, roll(rng));
+    if (chosen < 0) {
+        LOG_WARNING("Missing gossip text! (", currentGossip_.titleTextId, ")");
+        return;
+    }
+    gossipText_ = it->second.options[static_cast<size_t>(chosen)].text[static_cast<size_t>(col)];
+}
+
 const std::string& QuestHandler::getNpcText(uint32_t textId) const {
     static const std::string empty;
+    if (gossipWindowOpen_ && textId == currentGossip_.titleTextId) return gossipText_;
     auto it = npcTextCache_.find(textId);
-    return (it != npcTextCache_.end()) ? it->second : empty;
+    if (it == npcTextCache_.end()) return empty;
+    for (const auto& o : it->second.options)
+        for (const auto& t : o.text)
+            if (!t.empty()) return t;
+    return empty;
 }
 
 void QuestHandler::refreshQuestPois() {
@@ -2743,6 +2814,27 @@ void QuestHandler::handleQuestDetails(network::Packet& packet) {
     if (!ok) {
         LOG_WARNING("Failed to parse SMSG_QUESTGIVER_QUEST_DETAILS");
         return;
+    }
+    // A quest a player shares while a quest window is already open - the
+    // greeting list, details, progress or reward (0x00c0d648, set by
+    // 0x0058c5a0) - is not shown: the sharer (or the giver) is told the
+    // player is busy, MSG_QUEST_PUSH_RESULT with the quest and 4, and the
+    // open window stays (0x006d0460).
+    const bool questFrameOpen = questDetailsOpen_ || questRequestItemsOpen_ || questOfferRewardOpen_ ||
+                                (gossipWindowOpen_ && gossipIsQuestGreeting_);
+    if (questFrameOpen && data.npcGuid != 0) {
+        const auto giver = owner_.getEntityManager().getEntity(data.npcGuid);
+        if (giver && giver->getType() == ObjectType::PLAYER) {
+            const uint16_t wireOp = wireOpcode(Opcode::MSG_QUEST_PUSH_RESULT);
+            if (wireOp != 0xFFFF && owner_.getSocket()) {
+                network::Packet reply(wireOp);
+                reply.writeUInt64(data.informUnit != 0 ? data.informUnit : data.npcGuid);
+                reply.writeUInt32(data.questId);
+                reply.writeUInt8(4);
+                owner_.getSocket()->send(reply);
+            }
+            return;
+        }
     }
     currentQuestDetails_ = data;
     questFrameFlags_ = data.questFlags;

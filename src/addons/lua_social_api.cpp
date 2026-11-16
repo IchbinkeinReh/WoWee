@@ -3714,7 +3714,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"GetNumGuildMembers",      lua_GetNumGuildMembers},
                 {"GuildRoster", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (gh) gh->requestGuildRoster();
+            if (gh) gh->requestGuildRosterThrottled();   // 0x005ca9b0
             return 0;
         }},
                 // SortGuildRoster(field) - one of name, zone, level, class,

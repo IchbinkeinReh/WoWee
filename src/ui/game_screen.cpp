@@ -935,6 +935,11 @@ void GameScreen::render(game::GameHandler& gameHandler) {
                 ghostOpacityLastInstanceId_ = charInstId;
             }
         }
+        // The pet's ring for a second after it is given a target (0x00725bf0).
+        if (const auto pulse = gameHandler.petPulse())
+            renderer->setPetPulse(pulse->first, pulse->second);
+        else
+            renderer->setPetPulse(0, 0);
         if (gameHandler.hasTarget()) {
             auto target = gameHandler.getTarget();
             if (target) {
@@ -1148,7 +1153,6 @@ std::string scriptCursorPath() {
 const char* objectCursorPath(uint32_t goType) {
     switch (goType) {
         case 2:  return "Interface\\Cursor\\Quest.blp";
-        case 3:  return "Interface\\Cursor\\LootAll.blp";
         case 9:  return "Interface\\Cursor\\Inspect.blp";   // text: a book or plaque
         case 17: return "Interface\\Cursor\\Fishing.blp";
         case 19: return "Interface\\Cursor\\Mail.blp";
@@ -1349,9 +1353,20 @@ bool GameScreen::drawVendorCursor(game::GameHandler& gameHandler,
         // distance.
         path = "Interface\\Cursor\\Attack.blp";
     } else {
-        const char* friendly = isPlayer ? nullptr : friendlyUnitCursorPath(unit->getNpcFlags());
-        if (!friendly) return false;
-        path = outOfReach ? unableCursorPath(friendly) : std::string(friendly);
+        // 0x00715ea0 at the head of the friendly ladder (0x004f7a50, a unit
+        // with npc flags): the creature template's IconName, "Unable" before
+        // it out of reach - a name the cursor table lacks still drawn as
+        // Interface\Cursor\<name>.blp (0x00715f20).
+        if (!isPlayer && unit->getNpcFlags() != 0) {
+            const auto& creatures = gameHandler.getCreatureInfoCache();
+            if (auto it = creatures.find(unit->getEntry()); it != creatures.end() && !it->second.iconName.empty())
+                path = std::string("Interface\\Cursor\\") + (outOfReach ? "Unable" : "") + it->second.iconName + ".blp";
+        }
+        if (path.empty()) {
+            const char* friendly = isPlayer ? nullptr : friendlyUnitCursorPath(unit->getNpcFlags());
+            if (!friendly) return false;
+            path = outOfReach ? unableCursorPath(friendly) : std::string(friendly);
+        }
     }
 
     VkDescriptorSet tex = cursorTexture(services_.assetManager, services_.window, path.c_str());
@@ -1391,9 +1406,29 @@ bool GameScreen::drawWorldObjectCursor(game::GameHandler& gameHandler,
         constexpr float kUseDistance = 10.0f;
         const bool cannotUse = gameHandler.isPlayerDead() ||
                                dx * dx + dy * dy + dz * dz > kUseDistance * kUseDistance;
-        const std::string cursorPath = cannotUse
-            ? unableCursorPath(objectCursorPath(info ? info->type : 0u))
-            : std::string(objectCursorPath(info ? info->type : 0u));
+        std::string cursorPath;
+        if (info && !info->iconName.empty()) {
+            // 0x0070ce10 / 0x0070cec0: the template's IconName, "Unable"
+            // before it when the object cannot be used.
+            cursorPath = std::string("Interface\\Cursor\\") + (cannotUse ? "Unable" : "") + info->iconName + ".blp";
+        } else if (info && info->type == 3) {
+            // 0x0070f9b0, a chest: its lock's LockType CursorName - "Unable"
+            // before it when it cannot be used, but for LockType 1 - and only
+            // a name the cursor table has; with no LockType cursor, Interact
+            // (5) or UnableInteract (0x1f).
+            const auto [name, lockType] = gameHandler.chestLockCursor(*go, info);
+            if (!name.empty()) {
+                const std::string art = (cannotUse && lockType != 1) ? "Unable" + name : name;
+                const int kind = ui::cursorKindForArt(art);
+                if (kind == kCursorKindNone) return false;
+                cursorPath = cursorPathForKind(kind);
+            } else {
+                cursorPath = cursorPathForKind(cannotUse ? 0x1f : 5);
+            }
+        } else {
+            cursorPath = cannotUse ? unableCursorPath(objectCursorPath(info ? info->type : 0u))
+                                   : std::string(objectCursorPath(info ? info->type : 0u));
+        }
         VkDescriptorSet tex = cursorTexture(services_.assetManager, services_.window,
                                             cursorPath.c_str());
         if (!tex) return false;

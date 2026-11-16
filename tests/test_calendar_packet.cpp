@@ -412,6 +412,39 @@ TEST_CASE("A raid lockout lands on the day it expires", "[calendar]") {
     CHECK(calendarEntriesForDay(cal, 10, 9, 2009).empty());
 }
 
+TEST_CASE("The calendarShow filters hide holidays by type and lockouts", "[calendar]") {
+    // 0x005c0240: a holiday of filter type 0, 1 or 2 is behind the weekly,
+    // Darkmoon and battleground CVars; any other type always shows.
+    CalendarData cal;
+    CalendarHoliday h;
+    h.dates[0] = (26u << 24) | (7u << 20) | (10u << 14);  // 11 August 2026
+    h.durations[0] = 24;
+    for (uint32_t type : {0u, 1u, 2u, 3u}) {
+        h.calendarFilterType = type;
+        cal.holidays.push_back(h);
+    }
+    CalendarRaidLockout lock;
+    lock.expires = unpackWowPackedTime((26u << 24) | (7u << 20) | (10u << 14));
+    cal.lockouts.push_back(lock);
+
+    CHECK(calendarEntriesForDay(cal, 8, 11, 2026).size() == 5);
+
+    CalendarShowFilter f;
+    f.battlegrounds = false;
+    auto rows = calendarEntriesForDay(cal, 8, 11, 2026, f);
+    REQUIRE(rows.size() == 4);
+    for (const auto& r : rows) {
+        if (r.kind == CalendarEntryKind::Holiday) CHECK(cal.holidays[r.index].calendarFilterType != 2);
+    }
+
+    f.weeklyHolidays = false;
+    f.darkmoon = false;
+    f.lockouts = false;
+    rows = calendarEntriesForDay(cal, 8, 11, 2026, f);
+    REQUIRE(rows.size() == 1);
+    CHECK(cal.holidays[rows[0].index].calendarFilterType == 3);
+}
+
 TEST_CASE("Adding minutes to a packed date crosses months, years and weekdays", "[calendar]") {
     WowDate d;
     d.yearSince2000 = 9; d.month = 12; d.day = 31; d.hour = 23; d.minute = 30;
@@ -1033,6 +1066,32 @@ TEST_CASE("Invitations are two seconds apart", "[calendar]") {
     CHECK_FALSE(calendarInviteThrottled(10000, 12000));
     CHECK(calendarInviteThrottled(0xFFFFFF00u, 0x00000100u));   // across the wrap
     CHECK_FALSE(calendarInviteThrottled(0xFFFFFF00u, 0x00000800u));
+}
+
+TEST_CASE("An invited name is written as the client writes it", "[calendar]") {
+    // 0x007e2040: first character upper case, the rest lower case.
+    CHECK(calendarInviteName("tHRALL") == "Thrall");
+    CHECK(calendarInviteName("thrall") == "Thrall");
+    CHECK(calendarInviteName("") == "");
+    // Latin-1: \u00e9 -> \u00c9 first, \u00c9 -> \u00e9 after.
+    CHECK(calendarInviteName("\xC3\xA9MILE") == "\xC3\x89mile");
+    CHECK(calendarInviteName("Z\xC3\x89") == "Z\xC3\xA9");
+    // The client's ranges take the multiplication / division signs too.
+    CHECK(calendarInviteName("\xC3\xB7") == "\xC3\x97");
+    CHECK(calendarInviteName("a\xC3\x97") == "A\xC3\xB7");
+    // \u0153 -> \u0152 first; \u0152 -> \u0153 after.
+    CHECK(calendarInviteName("\xC5\x93\xC5\x92") == "\xC5\x92\xC5\x93");
+    // Cyrillic, with \u0451 / \u0401: "\u0451\u0416" -> "\u0401\u0436".
+    CHECK(calendarInviteName("\xD1\x91\xD0\x96") == "\xD0\x81\xD0\xB6");
+    // "\u0430\u0401" -> "\u0410\u0451".
+    CHECK(calendarInviteName("\xD0\xB0\xD0\x81") == "\xD0\x90\xD1\x91");
+    // Other characters stay as typed.
+    CHECK(calendarInviteName("1x-") == "1x-");
+    // Cut at a character to the 47 bytes before the buffer's terminator.
+    CHECK(calendarInviteName(std::string(60, 'a')).size() == 47);
+    std::string cyr;
+    for (int k = 0; k < 30; ++k) cyr += "\xD0\xB0";
+    CHECK(calendarInviteName(cyr).size() == 46);
 }
 
 TEST_CASE("Events added are five seconds apart", "[calendar]") {
