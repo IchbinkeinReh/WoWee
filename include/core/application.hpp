@@ -243,6 +243,9 @@ private:
     /// world wires up (setState), and a world rebuilt after a lost device
     /// has to have wired again.
     void connectWorldHooks();
+    /// Click-to-move's part of it: the camera's steer and cancel, and the
+    /// ground under a place.
+    void connectClickToMoveHooks();
     /// Every portrait and model view the interface draws, let go of with
     /// their offscreen targets.
     void shutdownPortraits();

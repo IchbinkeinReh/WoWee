@@ -3627,6 +3627,47 @@ void Application::setState(AppState newState) {
 // Run by setState on the way in, and again by recoverFromDeviceLoss - the
 // camera controller and the spell visual system are made again with the
 // renderer, and the state does not change, so setState would not run it.
+void Application::connectClickToMoveHooks() {
+    auto* cc = renderer ? renderer->getCameraController() : nullptr;
+    if (cc) {
+        // Click-to-move, steered by the game's state and moved by the camera
+        // with the keys' own packets (0x007317a0).
+        cc->setClickToMoveSteer([this](float facingYawDeg, float dt, bool mouseSteering,
+                                       const rendering::CameraController::ClickToMoveMoverIn& mover) {
+            rendering::CameraController::ClickToMoveSteer out;
+            if (!gameHandler) return out;
+            game::GameHandler::ClickToMoveMoverIn in;
+            in.pitchRad = mover.pitchRad;
+            in.liquidAbove = mover.liquidAbove;
+            in.swimDepth = mover.swimDepth;
+            const auto st = gameHandler->stepClickToMove(facingYawDeg, dt, mouseSteering, in);
+            out.active = st.active;
+            out.facingYawDeg = st.facingYawDeg;
+            out.forward = st.forward;
+            out.stopForward = st.stopForward;
+            out.trackAsMove = st.trackAsMove;
+            out.pitchRad = st.pitchRad;
+            out.takeOff = st.takeOff;
+            return out;
+        });
+        cc->setClickToMoveCancel([this]() {
+            if (gameHandler) gameHandler->stopClickToMove();
+        });
+    }
+    if (gameHandler) {
+        // The surface at a place, for an enemy's place walked to (0x0072ee20
+        // -> 0x00783a40): a yard either side of it, straight down.
+        gameHandler->setGroundHeightQuery([this](const glm::vec3& canonical) -> std::optional<float> {
+            if (!renderer) return std::nullopt;
+            const glm::vec3 from = core::coords::canonicalToRender(canonical + glm::vec3(0.0f, 0.0f, 1.0f));
+            const glm::vec3 down = core::coords::canonicalToRender(canonical - glm::vec3(0.0f, 0.0f, 1.0f)) - from;
+            const auto hit = renderer->pickGround(from, down, glm::length(down));
+            if (!hit) return std::nullopt;
+            return core::coords::renderToCanonical(*hit).z;
+        });
+    }
+}
+
 void Application::connectWorldHooks() {
     // Wire up movement opcodes from camera controller
     if (renderer && renderer->getCameraController()) {
@@ -3709,42 +3750,10 @@ void Application::connectWorldHooks() {
                 gameHandler->cancelFollow();
             }
         });
-        // Click-to-move, steered by the game's state and moved by the camera
-        // with the keys' own packets (0x007317a0).
-        cc->setClickToMoveSteer([this](float facingYawDeg, float dt, bool mouseSteering,
-                                       const rendering::CameraController::ClickToMoveMoverIn& mover) {
-            rendering::CameraController::ClickToMoveSteer out;
-            if (!gameHandler) return out;
-            game::GameHandler::ClickToMoveMoverIn in;
-            in.pitchRad = mover.pitchRad;
-            in.liquidAbove = mover.liquidAbove;
-            in.swimDepth = mover.swimDepth;
-            const auto st = gameHandler->stepClickToMove(facingYawDeg, dt, mouseSteering, in);
-            out.active = st.active;
-            out.facingYawDeg = st.facingYawDeg;
-            out.forward = st.forward;
-            out.stopForward = st.stopForward;
-            out.trackAsMove = st.trackAsMove;
-            out.pitchRad = st.pitchRad;
-            out.takeOff = st.takeOff;
-            return out;
-        });
-        cc->setClickToMoveCancel([this]() {
-            if (gameHandler) gameHandler->stopClickToMove();
-        });
         cc->setUseWoWSpeed(true);
     }
+    connectClickToMoveHooks();
     if (gameHandler) {
-        // The surface at a place, for an enemy's place walked to (0x0072ee20
-        // -> 0x00783a40): a yard either side of it, straight down.
-        gameHandler->setGroundHeightQuery([this](const glm::vec3& canonical) -> std::optional<float> {
-            if (!renderer) return std::nullopt;
-            const glm::vec3 from = core::coords::canonicalToRender(canonical + glm::vec3(0.0f, 0.0f, 1.0f));
-            const glm::vec3 down = core::coords::canonicalToRender(canonical - glm::vec3(0.0f, 0.0f, 1.0f)) - from;
-            const auto hit = renderer->pickGround(from, down, glm::length(down));
-            if (!hit) return std::nullopt;
-            return core::coords::renderToCanonical(*hit).z;
-        });
         gameHandler->setFaceCameraProvider([this]() -> float {
             // Turn the character to the camera's look direction and report it in
             // canonical space (same camera-yaw→canonical mapping as the per-frame

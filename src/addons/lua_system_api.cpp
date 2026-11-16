@@ -1370,11 +1370,12 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     else if (n == "petmeleedamage") lua_pushstring(L, "1");
     else if (n == "fctspellmechanics") lua_pushstring(L, "0");
     else if (n == "fctspellmechanicsother") lua_pushstring(L, "0");
-    // Camera Following Style and Camera Following Speed (degrees a second),
-    // at the client's own defaults as wow.exe registers them: "4"
-    // (PTR_DAT_00ad1c2c) and "180" (0x00a1e7a8). Stored and answered back
-    // like any other CVar; nothing here reads either.
-    else if (n == "camerasmoothstyle") lua_pushstring(L, "4");
+    // Camera Following Style, its style while click-to-move steers, and
+    // Camera Following Speed (degrees a second), at the client's own
+    // defaults as wow.exe registers them: "4" (PTR_DAT_00ad1c2c, both
+    // styles) and "180" (0x00a1e7a8). The camera reads both styles
+    // (0x00602760).
+    else if (n == "camerasmoothstyle" || n == "camerasmoothtrackingstyle") lua_pushstring(L, "4");
     else if (n == "camerayawsmoothspeed") lua_pushstring(L, "180");
     // The same group's other rates, and the window a view blend is held to.
     // These are not left for the generic stand-in because this client does
