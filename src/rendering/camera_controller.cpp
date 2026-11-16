@@ -2206,7 +2206,25 @@ void CameraController::update(float deltaTime) {
             clickToMoveForward_ = false;
         }
         if (clickToMoveSteer_ && thirdPerson && followTarget && !keysStart && !introActive) {
-            const ClickToMoveSteer st = clickToMoveSteer_(facingYaw, deltaTime, rightMouseDown);
+            ClickToMoveMoverIn mover;
+            mover.pitchRad = glm::radians(swimming ? swimPitchDeg_ : isFlightAirborne() ? flightPitchDeg_ : 0.0f);
+            if (waterRenderer) {
+                if (const auto waterH = waterRenderer->getWaterHeightAt(followTarget->x, followTarget->y))
+                    mover.liquidAbove = *waterH - followTarget->z;
+            }
+            mover.swimDepth = swimFloatDepth();
+            const ClickToMoveSteer st = clickToMoveSteer_(facingYaw, deltaTime, rightMouseDown, mover);
+            // The pitch it set (0x0072ead0): where a swimmer or a flyer goes.
+            if (st.pitchRad) {
+                const float deg = glm::clamp(glm::degrees(*st.pitchRad), -90.0f, 90.0f);
+                if (swimming) swimPitchDeg_ = deg;
+                if (isFlightAirborne()) flightPitchDeg_ = deg;
+            }
+            // Taking to the air (0x006ef230), as the jump key does.
+            if (st.takeOff && flyingActive_ && !flightAirborne_) {
+                flightAirborne_ = true;
+                portFlyMs_ = 0;
+            }
             if (st.facingYawDeg) {
                 float delta = std::fmod(*st.facingYawDeg - facingYaw, 360.0f);
                 if (delta > 180.0f) delta -= 360.0f;

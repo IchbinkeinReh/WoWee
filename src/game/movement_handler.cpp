@@ -4996,6 +4996,14 @@ void MovementHandler::requestMoverPitch(float pitch) {
     startMoverPitch(way.up);
 }
 
+void MovementHandler::setMoverPitchNow(float pitch) {
+    const vehicle::VehicleRecord* row = owner_.vehicleRowOf(activeMover());
+    if (row && (row->flags & vehicle::kVehicleFlagPitchLimits)) pitch = vehicle::clampAim(row, pitch);
+    pitchingToTarget_ = false;
+    movementInfo.pitch = pitch;
+    sendMovement(Opcode::MSG_MOVE_SET_PITCH);
+}
+
 void MovementHandler::setAimKey(bool up, bool held) {
     const int bit = up ? 1 : 2;
     aimKeys_ = held ? (aimKeys_ | bit) : (aimKeys_ & ~bit);

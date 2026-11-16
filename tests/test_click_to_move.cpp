@@ -336,3 +336,63 @@ TEST_CASE("a spell's facing kinds turn to the unit and keep facing it", "[click_
     in.subject.reset();
     CHECK(step(s, in).outcome == Outcome::Stop);
 }
+
+TEST_CASE("a swimmer or flyer pitches toward the place at pi a second", "[click_to_move]") {
+    // Straight over: up; level: none; 30 degrees up.
+    CHECK_THAT(pitchTo(glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 5.0f)), WithinAbs(kPi * 0.5, 1e-6));
+    CHECK_THAT(pitchTo(glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, -5.0f)), WithinAbs(-kPi * 0.5, 1e-6));
+    CHECK_THAT(pitchTo(glm::vec3(0.0f), glm::vec3(10.0f, 0.0f, 0.0f)), WithinAbs(0.0, 1e-6));
+    CHECK_THAT(pitchTo(glm::vec3(0.0f), glm::vec3(std::sqrt(3.0f), 0.0f, 1.0f)), WithinAbs(kPi / 6.0, 1e-5));
+    // A step at most, flagged far while more than 22.5 degrees off.
+    PitchStep p = stepPitch(10.0f, 0.0f, 1.0f, 0.1f, 0.0f, std::nullopt, 1.5f);
+    CHECK(p.pitching);
+    CHECK_THAT(*p.pitch, WithinAbs(0.1, 1e-6));
+    CHECK(p.farOff);
+    p = stepPitch(10.0f, 0.0f, 0.15f, 0.1f, 0.1f, std::nullopt, 1.5f);
+    CHECK_THAT(*p.pitch, WithinAbs(0.15, 1e-6));
+    CHECK_FALSE(p.farOff);
+    // There already: done, nothing set.
+    p = stepPitch(10.0f, 0.0f, 0.15f, 0.1f, 0.1505f, std::nullopt, 1.5f);
+    CHECK_FALSE(p.pitching);
+    CHECK_FALSE(p.pitch);
+    // Floating at the surface with the place above: levelled, and done.
+    p = stepPitch(10.0f, 0.0f, 1.0f, 0.1f, 0.3f, 1.5f, 1.5f);
+    CHECK_FALSE(p.pitching);
+    REQUIRE(p.pitch);
+    CHECK(*p.pitch == 0.0f);
+}
+
+TEST_CASE("a pitching swimmer holds still until near its pitch", "[click_to_move]") {
+    State s = start(Kind::Move, 0, glm::vec3(10.0f, 0.0f, 10.0f), 0.0f, 0.25f, glm::vec3(0.0f), false, kPi, 0);
+    StepIn in = standingAt(glm::vec3(0.0f), 0.0f);
+    in.swimOrFly = true;
+    in.dtSeconds = 0.1f;
+    const StepOut out = step(s, in);
+    REQUIRE(out.pitch);
+    CHECK_THAT(*out.pitch, WithinAbs(kPi * 0.1, 1e-5));
+    // 45 degrees wanted, 18 reached: not yet forward.
+    CHECK_FALSE(out.forward);
+    in.pitch = kPi * 0.25f - 0.01f;
+    const StepOut near = step(s, in);
+    CHECK(near.forward == true);
+}
+
+TEST_CASE("one that can fly takes off for a steep place", "[click_to_move]") {
+    State s = start(Kind::Move, 0, glm::vec3(2.0f, 0.0f, 20.0f), 0.0f, 0.25f, glm::vec3(0.0f), false, kPi, 0);
+    StepIn in = standingAt(glm::vec3(0.0f), 0.0f);
+    in.canFly = true;
+    StepOut out = step(s, in);
+    CHECK(out.takeOff);
+    CHECK_FALSE(out.forward);
+    // A shallow one is walked to.
+    State t = start(Kind::Move, 0, glm::vec3(20.0f, 0.0f, 2.0f), 0.0f, 0.25f, glm::vec3(0.0f), false, kPi, 0);
+    out = step(t, in);
+    CHECK_FALSE(out.takeOff);
+    CHECK(out.forward == true);
+}
+
+TEST_CASE("a direction clicked into while swimming gives its pitch", "[click_to_move]") {
+    CHECK(pitchOfDirection(glm::vec3(1.0f, 0.0f, 0.1f)) == 0.0f);
+    CHECK_THAT(pitchOfDirection(glm::vec3(0.0f, 0.0f, -1.0f)), WithinAbs(-kPi * 0.5, 1e-6));
+    CHECK_THAT(pitchOfDirection(glm::vec3(0.0f, std::cos(0.5f), std::sin(0.5f))), WithinAbs(0.5, 1e-5));
+}

@@ -184,6 +184,14 @@ void GameHandler::clickToMoveFaceDirection(const glm::vec3& canonicalDir) {
     const glm::vec3 dir = toServer(canonicalDir);
     if (glm::dot(dir, dir) == 0.0f) return;
     const glm::vec3 n = glm::normalize(dir);
+    // Swimming or flying (0x2200000), the mover is pitched that way first,
+    // at once (0x0072ead0, which ends any click-to-move under way).
+    if ((movementInfo.flags & kSwimOrFly) != 0) {
+        stopClickToMove();
+        const float p = ctm::pitchOfDirection(n);
+        if (movementHandler_) movementHandler_->setMoverPitchNow(p);
+        ctmPitchOnce_ = movementInfo.pitch;
+    }
     startClickToMove(ctm::Kind::FaceDirection, 0, glm::vec3(0.0f), ctm::facingOfDirection(n));
 }
 
@@ -316,8 +324,13 @@ void GameHandler::skinCorpse(uint64_t guid, bool clickToMove, bool setLoot) {
     if (setLoot) setAutoLoot(clickAutoLoots());
 }
 
-GameHandler::ClickToMoveSteer GameHandler::stepClickToMove(float facingYawDeg, float dtSeconds, bool mouseSteering) {
+GameHandler::ClickToMoveSteer GameHandler::stepClickToMove(float facingYawDeg, float dtSeconds, bool mouseSteering,
+                                                           const ClickToMoveMoverIn& mover) {
     ClickToMoveSteer steer;
+    if (ctmPitchOnce_) {
+        steer.pitchRad = ctmPitchOnce_;
+        ctmPitchOnce_.reset();
+    }
     const auto toYawDeg = [](float serverFacing) {
         return core::coords::canonicalToCharacterYawDeg(core::coords::serverToCanonicalYaw(serverFacing));
     };
@@ -361,6 +374,9 @@ GameHandler::ClickToMoveSteer GameHandler::stepClickToMove(float facingYawDeg, f
     const uint8_t stand = me ? me->getStandState() : 0;
     in.mayMove = me && static_cast<int32_t>(me->getHealth()) > 0 && (flags & 0x100a00u) == 0 && stand != 7 &&
                  !movementHandler_->onMoveSpline(playerGuid) && isServerMovementAllowed();
+    in.pitch = mover.pitchRad;
+    in.liquidAbove = mover.liquidAbove;
+    in.swimDepth = mover.swimDepth;
 
     const ctm::Kind kindNow = ctm_.kind;
     const ctm::StepOut out = ctm::step(ctm_, in);
@@ -372,6 +388,13 @@ GameHandler::ClickToMoveSteer GameHandler::stepClickToMove(float facingYawDeg, f
     steer.stopForward = (out.forward && !*out.forward) ||
                         (out.outcome != ctm::Outcome::Continue && ctm::row(kindNow).used);
     steer.trackAsMove = kindNow == ctm::Kind::Follow && !autoInteractOn();
+    // 0x0072ed40 -> 0x0072ead0: the pitch set and sent, the mover allowed
+    // to move by itself (0x005fa060).
+    if (out.pitch && isServerMovementAllowed()) {
+        movementHandler_->setMoverPitchNow(*out.pitch);
+        steer.pitchRad = movementInfo.pitch;
+    }
+    steer.takeOff = out.takeOff;
     switch (out.outcome) {
     case ctm::Outcome::Continue:
         break;

@@ -3711,15 +3711,22 @@ void Application::connectWorldHooks() {
         });
         // Click-to-move, steered by the game's state and moved by the camera
         // with the keys' own packets (0x007317a0).
-        cc->setClickToMoveSteer([this](float facingYawDeg, float dt, bool mouseSteering) {
+        cc->setClickToMoveSteer([this](float facingYawDeg, float dt, bool mouseSteering,
+                                       const rendering::CameraController::ClickToMoveMoverIn& mover) {
             rendering::CameraController::ClickToMoveSteer out;
             if (!gameHandler) return out;
-            const auto st = gameHandler->stepClickToMove(facingYawDeg, dt, mouseSteering);
+            game::GameHandler::ClickToMoveMoverIn in;
+            in.pitchRad = mover.pitchRad;
+            in.liquidAbove = mover.liquidAbove;
+            in.swimDepth = mover.swimDepth;
+            const auto st = gameHandler->stepClickToMove(facingYawDeg, dt, mouseSteering, in);
             out.active = st.active;
             out.facingYawDeg = st.facingYawDeg;
             out.forward = st.forward;
             out.stopForward = st.stopForward;
             out.trackAsMove = st.trackAsMove;
+            out.pitchRad = st.pitchRad;
+            out.takeOff = st.takeOff;
             return out;
         });
         cc->setClickToMoveCancel([this]() {
@@ -4532,6 +4539,9 @@ void Application::applyServerMovementState(float deltaTime) {
             if (gameHandler->isMounted()) {
                 if (auto* ac = renderer->getAnimationController()) ac->setMountPitchRoll(pitchRad, 0.0f);
             }
+        } else if (gameHandler->isSwimming() && renderer->getCameraController()->isClickToMoveSteering()) {
+            // Click-to-move pitches a swimmer itself (0x0072f1f0).
+            gameHandler->setMovementPitch(renderer->getCameraController()->getSwimPitchRad());
         } else if (gameHandler->isSwimming()) {
             // A swimmer goes where the camera looks, so its pitch is the camera's.
             if (auto* cam = renderer->getCamera()) {

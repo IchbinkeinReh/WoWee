@@ -358,8 +358,24 @@ public:
         bool stopForward = false;
         /// Its Track read as Move (a follow with autoInteract off).
         bool trackAsMove = false;
+        /// A swimmer's or flyer's pitch to take (0x0072ead0), radians up.
+        std::optional<float> pitchRad;
+        /// One that can fly takes to the air (0x006ef230(t, 1)).
+        bool takeOff = false;
     };
-    using ClickToMoveSteerFn = std::function<ClickToMoveSteer(float facingYawDeg, float dt, bool mouseSteering)>;
+    /// The mover as the camera has it: its pitch, the liquid's surface over
+    /// its feet where it is in one, and the depth a swimmer floats at.
+    struct ClickToMoveMoverIn {
+        float pitchRad = 0.0f;
+        std::optional<float> liquidAbove;
+        float swimDepth = 0.0f;
+    };
+    using ClickToMoveSteerFn = std::function<ClickToMoveSteer(float facingYawDeg, float dt, bool mouseSteering,
+                                                              const ClickToMoveMoverIn& mover)>;
+    /// Click-to-move is steering the mover.
+    [[nodiscard]] bool isClickToMoveSteering() const { return clickToMoveActive_; }
+    /// A swimmer's pitch, radians up.
+    [[nodiscard]] float getSwimPitchRad() const { return glm::radians(swimPitchDeg_); }
     void setClickToMoveSteer(ClickToMoveSteerFn fn) { clickToMoveSteer_ = std::move(fn); }
     /// Told when a key starts a move of its own, which ends click-to-move
     /// (0x0072e5d0 and the other starts -> 0x007272c0).

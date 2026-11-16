@@ -11,6 +11,7 @@
 // it the mover and acts on what it answers.
 
 #include <glm/glm.hpp>
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -206,6 +207,8 @@ struct State {
 };
 
 inline constexpr uint32_t kFlagFacing = 2;
+/// 0x00ca1200 4: a swimmer's or flyer's pitch has come to where it wanted.
+inline constexpr uint32_t kFlagPitched = 4;
 
 /// 0x00727400's part that is not checks: the state for a start.
 inline State start(Kind k, uint64_t guid, const glm::vec3& dest, float facing, float reachSqValue,
@@ -251,6 +254,13 @@ struct StepIn {
     /// 0x005fa9e0 and the rest: alive, not rooted, on no transport, not
     /// stood dead, no spline, a seat that lets it.
     bool mayMove = true;
+    /// The mover's pitch (+0x14c), radians up.
+    float pitch = 0.0f;
+    /// In a liquid (0x0077f1e0, its flag 0x20): how far its surface is over
+    /// the mover's feet. And three quarters of the mover's height, the depth
+    /// a swimmer floats at (+0x854 * 0.75).
+    std::optional<float> liquidAbove;
+    float swimDepth = 0.0f;
 };
 
 enum class Outcome {
@@ -263,13 +273,65 @@ struct StepOut {
     Outcome outcome = Outcome::Continue;
     std::optional<float> facing;     // the turn this frame (0x00731600)
     std::optional<bool> forward;     // start (true) or stop (false) moving forward
+    std::optional<float> pitch;      // a swimmer's or flyer's pitch this frame (0x0072ed40)
+    bool takeOff = false;            // one that can fly takes to the air (0x006ef230(t, 1))
 };
+
+/// 0x0071b580: the pitch from the mover to a place - straight up or down
+/// where the place is right over or under it.
+inline float pitchTo(const glm::vec3& from, const glm::vec3& to) {
+    const glm::vec3 d = to - from;
+    const float len = std::sqrt(glm::dot(d, d));
+    if (len <= 0.0f || (std::fabs(d.x / len) < 0.001f && std::fabs(d.y / len) < 0.001f))
+        return to.z <= from.z ? -1.5707964f : 1.5707964f;
+    return std::asin(std::clamp(d.z / len, -1.0f, 1.0f));
+}
+
+struct PitchStep {
+    bool pitching = false;          // the pitch still moving (0x0072f1f0's answer)
+    std::optional<float> pitch;     // the pitch to set
+    bool farOff = false;            // more than 22.5 degrees from it after the step
+};
+
+/// 0x0072f1f0: a swimmer at the surface with its place above levels out (a
+/// pitch of 0) and is done; otherwise the pitch steps toward `desired` by at
+/// most `maxStep`, and is done once within a thousandth of it.
+inline PitchStep stepPitch(float targetZ, float moverZ, float desired, float maxStep, float pitch,
+                           std::optional<float> liquidAbove, float swimDepth) {
+    PitchStep out;
+    if (moverZ < targetZ && liquidAbove && *liquidAbove > 0.0f && std::fabs(*liquidAbove - swimDepth) < 0.001f) {
+        if (pitch != 0.0f) out.pitch = 0.0f;
+        return out;
+    }
+    if (std::fabs(desired - pitch) < 0.001f) return out;
+    float p = pitch;
+    if (desired <= p) {
+        p -= maxStep;
+        if (!(desired < p)) p = desired;
+    } else {
+        p += maxStep;
+        if (!(p < desired)) p = desired;
+    }
+    out.pitching = true;
+    out.pitch = p;
+    out.farOff = std::fabs(p - desired) > 0.3926991f;
+    return out;
+}
+
+/// 0x0072f040's pitch for a direction clicked into while swimming or
+/// flying: straight up or down past 60 degrees, level under 10, else the
+/// direction's own (0x00714c10, 0x0088d9b0).
+inline float pitchOfDirection(const glm::vec3& unitDir) {
+    const float s = std::fabs(unitDir.z);
+    if (s > 0.86602f) return unitDir.z < 0.0f ? -1.5707964f : 1.5707964f;
+    if (s > 0.17364f) return std::asin(std::clamp(unitDir.z, -1.0f, 1.0f));
+    return 0.0f;
+}
 
 /// The square of 0x00adaa74: less than this moved in a frame is not moving.
 inline constexpr float kStuckMoveSq = 7.716049367445521e-06f;
 
-/// 0x007317a0, less the pitch of a swimmer or flyer (0x0072f1f0) and the
-/// take-off of one that can fly (0x006ef230).
+/// 0x007317a0.
 inline StepOut step(State& s, const StepIn& in) {
     StepOut out;
     const Row r = row(s.kind);
@@ -335,6 +397,18 @@ inline StepOut step(State& s, const StepIn& in) {
         }
         s.flags |= kFlagFacing;
     }
+    // A swimmer or flyer going to a place pitches toward it (0x0072f1f0) at
+    // pi a second - or, steered with the mouse once there, keeps the pitch
+    // it is given - unless it is all but there.
+    PitchStep pitch;
+    if (in.swimOrFly && hasPlace && kStuckMoveSq < dist3Sq) {
+        const bool keepMouse = in.mouseSteering && in.movingForwardBack && (s.flags & kFlagPitched) != 0;
+        const float desiredPitch = keepMouse ? in.pitch : pitchTo(in.pos, target);
+        const float maxPitchStep = std::fmod(3.1415927f * in.dtSeconds, 6.283185307179586f);
+        pitch = stepPitch(target.z, in.pos.z, desiredPitch, maxPitchStep, in.pitch, in.liquidAbove, in.swimDepth);
+        out.pitch = pitch.pitch;
+        if (!pitch.pitching) s.flags |= kFlagPitched;
+    }
     if (!r.used) return out;
     if (in.mouseSteering && (s.flags & kFlagFacing) != 0) {
         // Steered round until the subject is behind: given up.
@@ -344,7 +418,7 @@ inline StepOut step(State& s, const StepIn& in) {
             return out;
         }
     }
-    if (in.movingForwardBack && !turn.turning && r.stuckCheck) {
+    if (in.movingForwardBack && !turn.turning && !pitch.pitching && r.stuckCheck) {
         const glm::vec3 m = in.pos - prev;
         if (glm::dot(m, m) < kStuckMoveSq) {
             stuckNow = true;
@@ -366,7 +440,19 @@ inline StepOut step(State& s, const StepIn& in) {
         }
     }
     if (!stuckNow) s.stuck = 0;
-    const bool forward = in.mayMove;
+    // One that can fly, on the ground, going to a place more than half a
+    // yard off and steeper than 45 degrees, takes to the air (0x006ef230)
+    // and does nothing else this frame.
+    if (!pitch.pitching && hasPlace && !in.swimOrFly && in.canFly) {
+        const glm::vec3 v = target - in.pos;
+        const float lenSq = glm::dot(v, v);
+        if (2.0f < lenSq && 0.70710677f < std::fabs(v.z / std::sqrt(lenSq))) {
+            out.takeOff = true;
+            return out;
+        }
+    }
+    // Pitching still, more than 22.5 degrees off, it does not go forward.
+    const bool forward = (!pitch.pitching || !pitch.farOff) && in.mayMove;
     if (forward != in.movingForwardBack) {
         if (!forward) {
             out.forward = false;

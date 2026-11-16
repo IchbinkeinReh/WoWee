@@ -113,6 +113,9 @@ public:
     /// MSG_MOVE_SET_PITCH, or - movement flags2 0x10 - over time at its
     /// pitch rate (0x0072d470).
     void requestMoverPitch(float pitch);
+    /// 0x0072ead0 -> 0x006ee460: the mover's pitch set at once, held in its
+    /// vehicle row's limits (Flags 0x40), and sent (MSG_MOVE_SET_PITCH).
+    void setMoverPitchNow(float pitch);
     /// The aim keys (VehicleAimUp/DownStart/Stop, 0x005fb1a0): the mover
     /// pitches up or down at its pitch rate while one is held.
     void setAimKey(bool up, bool held);

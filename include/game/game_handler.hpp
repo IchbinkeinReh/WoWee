@@ -3239,8 +3239,19 @@ public:
         /// A follow with autoInteract off: the camera reads its Track as
         /// Move (0x00602760, camera +0x9c bit 1 from 0x005fe6a0).
         bool trackAsMove = false;
+        /// A swimmer's or flyer's pitch set (0x0072ead0), radians up.
+        std::optional<float> pitchRad;
+        /// One that can fly takes to the air (0x006ef230(t, 1)).
+        bool takeOff = false;
     };
-    ClickToMoveSteer stepClickToMove(float facingYawDeg, float dtSeconds, bool mouseSteering);
+    /// What the camera knows of the mover that the step needs.
+    struct ClickToMoveMoverIn {
+        float pitchRad = 0.0f;                 ///< its pitch now
+        std::optional<float> liquidAbove;      ///< a liquid's surface over its feet
+        float swimDepth = 0.0f;                ///< three quarters of its height
+    };
+    ClickToMoveSteer stepClickToMove(float facingYawDeg, float dtSeconds, bool mouseSteering,
+                                     const ClickToMoveMoverIn& mover);
     /// 0x0071b1e0: the player stopped at rest; an arrival's action is taken.
     void clickToMoveMoverStopped();
     /// 0x00806700 for the active player's cast the server started: a spell
@@ -6626,6 +6637,7 @@ private:
     click_to_move::Pending ctmPending_;
     float ctmObjectReach_ = 0.0f;               // 0x00ca11e8
     GroundHeightQuery groundHeightQuery_;
+    std::optional<float> ctmPitchOnce_;         // 0x0072f040's pitch, for the next steer
     uint32_t ctmChannelSpellSeen_ = 0;          // UNIT_CHANNEL_SPELL as last seen
     uint64_t ctmChannelObjectSeen_ = 0;         // UNIT_FIELD_CHANNEL_OBJECT as last seen
     std::optional<float> ctmFaceOnStop_;        // 0x00ca11d8 for 0x007272c0's turn
