@@ -2198,6 +2198,9 @@ public:
     /// 0x00812410 for the player's race and class: the skill line a spell is
     /// listed under, 0 for none.
     uint32_t spellSkillLine(uint32_t spellId);
+    /// The skill's SkillRaceClassInfo row for this race and class, the
+    /// tables read first (0x00810ed0).
+    const SkillUps::RaceClassInfo* skillRaceClassInfo(uint32_t skillId);
     /// The player's skill points, PLAYER_CHARACTER_POINTS2 (0x005cd970(1)).
     uint32_t getSkillPoints() const;
     /// GetAdjustedSkillPoints (0x005ce540): the points less those pending.
@@ -4564,6 +4567,12 @@ public:
     /// The unit the client moves (DAT_00ca1238): the player, a vehicle it
     /// drives, or none.
     uint64_t activeMover() const;
+    /// Whether the active mover is a unit the player possesses (an Eye of
+    /// Kilrogg, a mind-controlled unit) rather than a vehicle it rides: the
+    /// keys move that unit while the player stays where it stood.
+    bool moverPossessed() const;
+    /// The player's own movement, kept aside while another unit moves.
+    const MovementInfo& playerMovementInfo() const;
     /// The unit the camera looks at: the player, or its PLAYER_FARSIGHT
     /// object where that is in view.
     uint64_t cameraTarget() const;
@@ -7377,8 +7386,6 @@ private:
     // ---- Player skills ----
     std::unordered_map<uint32_t, PlayerSkill> playerSkills_;
     SkillUps skillUps_;
-    /// The skill's row for this race and class, the tables read first.
-    const SkillUps::RaceClassInfo* skillRaceClassInfo(uint32_t skillId);
     std::unordered_map<uint32_t, std::string> skillLineNames_;
     std::unordered_map<uint32_t, uint32_t> skillLineCategories_;
     /// The headings the skills tab groups under, from SkillLineCategory.dbc,

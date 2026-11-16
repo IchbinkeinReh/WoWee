@@ -3138,7 +3138,18 @@ void Renderer::update(float deltaTime) {
     }
 
     // Sync character model position/rotation and animation with follow target
-    if (characterInstanceId > 0 && characterRenderer && cameraController) {
+    if (characterInstanceId > 0 && characterRenderer && cameraController && heldCharacter_) {
+        // The player stands where it was while the keys move a unit it
+        // possesses: its model is not the camera's character now, and is
+        // neither moved nor turned by them. Its animation is what its own
+        // state asks (the channel it keeps up), not the keys' locomotion.
+        characterRenderer->setInstancePosition(characterInstanceId, heldCharacter_->position);
+        characterBody_.body = body_yaw::wrap(glm::radians(heldCharacter_->yawDeg));
+        characterBodyInstance_ = characterInstanceId;
+        characterRenderer->setInstanceRotation(characterInstanceId, glm::vec3(0.0f, 0.0f, characterBody_.body));
+        characterRenderer->setInstanceTorsoYaw(characterInstanceId, 0.0f, 0.0f);
+        if (animationController_) animationController_->setTurnShuffle(body_yaw::TurnShuffle::None);
+    } else if (characterInstanceId > 0 && characterRenderer && cameraController) {
         characterRenderer->setInstancePosition(characterInstanceId, characterPosition);
 
         // Movement-facing comes from camera controller and is decoupled from LMB orbit.

@@ -48,6 +48,7 @@
 #include "core/geoset_rules.hpp"
 #include "core/logger.hpp"
 #include "rendering/ray_mesh.hpp"
+#include "rendering/camera_pivot.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/quaternion.hpp>
@@ -6315,6 +6316,26 @@ bool CharacterRenderer::getInstanceKeyBonePivotZ(uint32_t instanceId, int32_t ke
         return true;
     }
     return false;
+}
+
+bool CharacterRenderer::getInstanceCameraPivotZ(uint32_t instanceId, float& outZ) const {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return false;
+    auto mIt = models.find(it->second.modelId);
+    if (mIt == models.end()) return false;
+    const auto& m = mIt->second.data;
+    std::optional<float> breathZ;
+    constexpr uint32_t kBreath = 17;
+    if (kBreath < m.attachmentLookup.size()) {
+        const uint16_t idx = m.attachmentLookup[kBreath];
+        if (idx < m.attachments.size()) breathZ = m.attachments[idx].position.z;
+    } else {
+        for (const auto& a : m.attachments) {
+            if (a.id == kBreath) { breathZ = a.position.z; break; }
+        }
+    }
+    outZ = camera_pivot::modelPivot(breathZ, m.boundMin.z, m.boundMax.z, std::max(0.001f, it->second.scale));
+    return true;
 }
 
 bool CharacterRenderer::getInstanceHeight(uint32_t instanceId, float& outHeight) const {

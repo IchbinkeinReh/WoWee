@@ -38,6 +38,18 @@ namespace wowee::game::vehicle {
     return playerControlled ? player : 0;
 }
 
+/// Whether the active mover is a unit the player moves without riding it -
+/// a possessed one (Eye of Kilrogg, Mind Control, the Eye of Acherus): no
+/// vehicle (it has no VehicleID) and the player in no seat. Such a unit goes
+/// where the keys take it while the player stays where it stood (0x00729010
+/// swaps only the mover; the player's own movement is kept), and the camera
+/// looks through it as the farsight object (0x006e2880 -> 0x004f6f50). A
+/// vehicle the player drives carries the player along instead.
+[[nodiscard]] inline bool moverIsPossessed(uint64_t mover, uint64_t player, uint32_t moverVehicleId,
+                                           bool playerSeated) {
+    return mover != 0 && mover != player && moverVehicleId == 0 && !playerSeated;
+}
+
 /// Whether CMSG_FAR_SIGHT goes out on that change and with what (0x006e2880,
 /// the player's +0x1858 0x1): 1 the first time the farsight object is in
 /// view, 0 once it is cleared after that.

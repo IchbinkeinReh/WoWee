@@ -11436,9 +11436,17 @@ void LuaEngine::registerCoreAPI() {
     // Only in such a run (WOWEE_AUTO_LUA set): otherwise any addon could make
     // the hardware presses the protected actions wait for.
     if (const char* autoLua = std::getenv("WOWEE_AUTO_LUA"); autoLua != nullptr && *autoLua != '\0') {
+        // __WoweePressKey("W", true) holds the key down in the game's key
+        // state until __WoweePressKey("W", false) lets it go - for what the
+        // game reads as held each frame (a move key, autorun's NumLock),
+        // which a press and release in one event batch never shows it.
         lua_pushcfunction(L_, [](lua_State* L) -> int {
             const SDL_Scancode sc = SDL_GetScancodeFromName(luaL_checkstring(L, 1));
             if (sc == SDL_SCANCODE_UNKNOWN) return 0;
+            if (lua_isboolean(L, 2)) {
+                core::Input::getInstance().setVirtualKey(sc, lua_toboolean(L, 2) != 0);
+                return 0;
+            }
             for (const bool down : {true, false}) {
                 SDL_Event e{};
                 e.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;

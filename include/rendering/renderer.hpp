@@ -300,6 +300,16 @@ public:
     /// getCharacterBodyYaw.
     float getCharacterYaw() const { return characterYaw; }
     void setCharacterYaw(float yawDeg) { characterYaw = yawDeg; }
+    /// Where the player's own model stands while the camera's character is
+    /// a unit it possesses (the keys move that one): its place in render
+    /// space and its facing in degrees. Its model is held there, not moved
+    /// with the camera's character.
+    struct HeldCharacter {
+        glm::vec3 position{0.0f};
+        float yawDeg = 0.0f;
+    };
+    void setHeldCharacter(std::optional<HeldCharacter> held) { heldCharacter_ = held; }
+    [[nodiscard]] const std::optional<HeldCharacter>& heldCharacter() const { return heldCharacter_; }
     /// The transport under the player turned by `degrees`: the body turns
     /// with the deck as the facing does (0x004f42a0), so the turn is not
     /// read as a turn on the spot.
@@ -1082,6 +1092,7 @@ private:
     uint32_t characterInstanceId = 0;
     bool characterShownAsDisplay_ = false;
     float characterYaw = 0.0f;
+    std::optional<HeldCharacter> heldCharacter_;
     // The drawn body's yaw behind the facing (body_yaw::update), and the
     // instance it was last turned for: another instance starts at the facing.
     body_yaw::State characterBody_;

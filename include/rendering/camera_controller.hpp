@@ -1,5 +1,7 @@
 #pragma once
 
+#include "rendering/camera_pivot.hpp"
+
 #include "rendering/camera_shake.hpp"
 #include "rendering/camera_smooth.hpp"
 #include "rendering/camera.hpp"
@@ -904,9 +906,27 @@ public:
     }
 
     /// The pivot for whoever is being followed right now.
+    ///
+    /// Measured on the model as the client measures it (camera_pivot.hpp,
+    /// 0x00604e00): its Breath attachment, held between 0.8333 and the
+    /// followed unit's collision height less 1/6. The setting scales that
+    /// against its default, so the default is the client's own pivot. The
+    /// barber shop's close view, and a model not measured yet, keep the
+    /// head-bone rule above.
     [[nodiscard]] float followedPivotHeight() const {
-        return pivotHeightFor(pivotHeight_, followedHeight_, followedHeadZ_);
+        if (barberView_ || followedModelPivot_ <= 0.0f)
+            return pivotHeightFor(pivotHeight_, followedHeight_, followedHeadZ_);
+        return camera_pivot::clampPivot(followedModelPivot_ * (pivotHeight_ / PIVOT_HEIGHT_DEFAULT),
+                                        camera_pivot::pivotCeiling(followedCollisionHeight(), !followingOtherUnit()));
     }
+    /// The unit the camera follows in the player's stead - a possessed unit
+    /// the client moves (the camera's +0x88 is the farsight object): its
+    /// render instance, and that it is no player. 0 follows the player.
+    void setFollowedUnitInstance(uint32_t instanceId) { followedUnitInstance_ = instanceId; }
+    [[nodiscard]] uint32_t followedInstance() const {
+        return followedUnitInstance_ != 0 ? followedUnitInstance_ : playerInstanceId;
+    }
+    [[nodiscard]] bool followingOtherUnit() const { return followedUnitInstance_ != 0; }
 private:
     static constexpr float PIVOT_HEIGHT_DEFAULT = 1.6f;
     /// The height PIVOT_HEIGHT_DEFAULT was chosen against, so the default puts
@@ -932,6 +952,17 @@ private:
     /// The followed character's head bone in model Z, zero until measured or
     /// if its skeleton names no head.
     float followedHeadZ_ = 0.0f;
+    /// The followed model's own pivot (camera_pivot::modelPivot), zero until
+    /// measured.
+    float followedModelPivot_ = 0.0f;
+    /// A possessed unit's render instance the camera follows; 0 the player.
+    uint32_t followedUnitInstance_ = 0;
+    /// The collision height the pivot is held below: the player's (+0x854),
+    /// or 73/36 for another unit followed (a creature's is, unless its
+    /// model sizes it).
+    [[nodiscard]] float followedCollisionHeight() const {
+        return followingOtherUnit() ? camera_pivot::kUnitCeilingHeight : collisionHeight_;
+    }
     /// Whether the terrain is currently raising the pivot, so that starting
     /// and stopping is said once each rather than every frame.
     bool pivotLiftActive_ = false;

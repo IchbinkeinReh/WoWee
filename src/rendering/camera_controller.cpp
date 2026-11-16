@@ -1472,14 +1472,27 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
     // Hide player model when in first-person (camera too close)
     // WoW fades between ~1.0m and ~0.5m, hides fully below 0.5m
     // For now, just hide below first-person threshold
-    if (characterRenderer && playerInstanceId > 0) {
+    if (characterRenderer && followedInstance() > 0) {
+        const uint32_t followed = followedInstance();
+        // The client's own pivot on the model followed (0x00604e00): its
+        // Breath attachment, at its scale - Metamorphosis' demon and a
+        // possessed unit by theirs.
+        float modelPivot = 0.0f;
+        if (characterRenderer->getInstanceCameraPivotZ(followed, modelPivot) && modelPivot > 0.01f &&
+            std::abs(modelPivot - followedModelPivot_) > 0.01f) {
+            LOG_WARNING("Camera pivot: model pivot ", modelPivot, " (Breath + 3.5/36), held to ",
+                        camera_pivot::clampPivot(modelPivot, camera_pivot::pivotCeiling(
+                                                                 followedCollisionHeight(), !followingOtherUnit())),
+                        " below collision height ", followedCollisionHeight());
+            followedModelPivot_ = modelPivot;
+        }
         // How tall whoever is being followed actually is, so the pivot lands
         // on them rather than at a fixed distance above their feet. Measured
         // here because it changes with the model: a race change, a mount, a
         // shapeshift. Kept if it ever fails to measure, so a frame that could
         // not answer does not snap the camera.
         float height = 0.0f;
-        if (characterRenderer->getInstanceHeight(playerInstanceId, height) && height > 0.01f) {
+        if (characterRenderer->getInstanceHeight(followed, height) && height > 0.01f) {
             // The head bone, which is what the pivot is placed against. A
             // skeleton that does not name one leaves this zero and falls back
             // to the height.
@@ -1494,7 +1507,7 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
             // on the doorstep and stayed up.
             float headZ = 0.0f;
             const bool measuredHead =
-                characterRenderer->getInstanceKeyBonePivotZ(playerInstanceId, kKeyBoneHead, headZ)
+                characterRenderer->getInstanceKeyBonePivotZ(followed, kKeyBoneHead, headZ)
                 && headZ > 0.01f;
             if (!measuredHead) headZ = followedHeadZ_;
             if (std::abs(height - followedHeight_) > 0.01f ||
@@ -1528,7 +1541,7 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
         // extra term was meant for, since it reads the target distance, not
         // the squeezed one.
         bool shouldHidePlayer = isFirstPersonView();
-        characterRenderer->setInstanceVisible(playerInstanceId, !shouldHidePlayer);
+        characterRenderer->setInstanceVisible(followed, !shouldHidePlayer);
         applyCameraFade(actualCam, glm::length(actualCam - pivot), pivot.z - targetPos.z);
 
         // Note: the Renderer's CharAnimState machine drives player character animations
@@ -1847,7 +1860,7 @@ void CameraController::applyCameraFade(const glm::vec3& cameraPos, float distanc
     // it is on (0x004f8660), and from it to whoever rides it (0x00737390).
     float nearDistance = game::vehicle::kCameraFadeNear;
     float farDistance = game::vehicle::kCameraFadeFar;
-    uint32_t target = playerInstanceId;
+    uint32_t target = followedInstance();
     if (cameraFadeTarget_ && cameraFadeTarget_->instanceId != 0) {
         target = cameraFadeTarget_->instanceId;
         glm::vec3 center(0.0f);
@@ -2022,7 +2035,7 @@ void CameraController::update(float deltaTime) {
             }
 
             camera->setPosition(actualCam);
-            if (characterRenderer && playerInstanceId > 0)
+            if (characterRenderer && followedInstance() > 0)
                 applyCameraFade(actualCam, glm::length(actualCam - pivot), pivot.z - targetPos.z);
         }
         // The vehicle's pitch offset tilts the view and not where it stands

@@ -1305,6 +1305,9 @@ void MovementHandler::setPosition(float x, float y, float z) {
     if (mover != 0 && mover != owner_.getPlayerGuid()) {
         if (auto unit = owner_.getEntityManager().getEntity(mover)) unit->setPosition(x, y, z, movementInfo.orientation);
     }
+    // A possessed unit goes without the player, who stays where it stood
+    // (the Eye of Kilrogg flies off, the warlock keeps channelling).
+    if (moverPossessed()) return;
     if (auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
         player->setPosition(x, y, z, movementInfo.orientation);
     }
@@ -4691,6 +4694,13 @@ uint64_t MovementHandler::activeMover() const {
     return activeMover_ ? *activeMover_ : owner_.getPlayerGuid();
 }
 
+bool MovementHandler::moverPossessed() const {
+    const uint64_t mover = activeMover();
+    return moverPossessed_ && mover != 0 && mover != owner_.getPlayerGuid();
+}
+
+const MovementInfo& MovementHandler::playerMovement() const { return movementOf(owner_.getPlayerGuid()); }
+
 bool MovementHandler::unitHasClientControl(uint64_t guid) const {
     if (guid == 0) return false;
     if (guid == owner_.getPlayerGuid()) return serverMovementAllowed_;
@@ -4773,6 +4783,7 @@ void MovementHandler::resetActiveMover() {
     if (moverInfoOwner_ != 0 && moverInfoOwner_ != player) movementInfo = heldPlayerMovement_;
     activeMover_ = player;
     moverInfoOwner_ = 0;
+    moverPossessed_ = false;
     unitControl_.clear();
     pendingControl_.reset();
     farSightAnnounced_ = false;
@@ -4833,12 +4844,19 @@ void MovementHandler::setActiveMover(uint64_t guid) {
         if (owner == player) heldPlayerMovement_ = movementInfo;
         if (guid == player) {
             movementInfo = heldPlayerMovement_;
-            movementInfo.x = last.x;
-            movementInfo.y = last.y;
-            movementInfo.z = last.z;
+            // A vehicle carried the player to where it stopped; a possessed
+            // unit went off without it, and the player is where it stood.
+            if (!moverPossessed_) {
+                movementInfo.x = last.x;
+                movementInfo.y = last.y;
+                movementInfo.z = last.z;
+            }
             movementInfo.flags &= ~kTransient;
             moverInfoOwner_ = 0;
+            moverPossessed_ = false;
         } else {
+            moverPossessed_ = vehicle::moverIsPossessed(guid, player, owner_.vehicleRoster().vehicleId(guid),
+                                                        owner_.vehicleRoster().passenger(player).has_value());
             MovementInfo unitInfo;
             if (auto unit = entities.getEntity(guid)) {
                 unitInfo.x = unit->getX();
@@ -4851,6 +4869,11 @@ void MovementHandler::setActiveMover(uint64_t guid) {
             unitInfo.pitch = owner_.vehicleRoster().pitch(guid);
             movementInfo = unitInfo;
             moverInfoOwner_ = guid;
+            if (auto unit = entities.getEntity(guid)) {
+                LOG_INFO("Active mover 0x", std::hex, guid, " flags 0x", unitInfo.flags, " flags2 0x",
+                         unitInfo.flags2, std::dec, " run ", unit->movementSpeeds().run, " possessed ",
+                         moverPossessed_ ? 1 : 0);
+            }
         }
         isFalling_ = false;
         fallStartMs_ = 0;

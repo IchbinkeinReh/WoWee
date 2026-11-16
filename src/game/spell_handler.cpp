@@ -1,4 +1,5 @@
 #include "game/spell_handler.hpp"
+#include "game/spell_book_tabs.hpp"
 #include "game/unit_combat.hpp"
 #include "game/cast_event_gate.hpp"
 #include "game/shapeshift_forms.hpp"
@@ -3646,64 +3647,23 @@ const std::vector<SpellHandler::SpellBookTab>& SpellHandler::getSpellBookTabs() 
     spellBookTabsDirty_ = false;
     spellBookTabs_.clear();
 
-    // Which SkillLine.dbc categories earn a tab of their own.
-    //
-    // Only the class one did, so everything else fell into General - and what
-    // falls into General is not a handful of odds and ends but every recipe
-    // the character knows. A miner's General tab listed Smelt Copper, Smelt
-    // Tin, Smelt Silver and the rest beside Hearthstone, and a tailor's ran to
-    // a hundred entries. The recipes belong under the skill that makes them.
-    static constexpr uint32_t SKILLLINE_CATEGORY_CLASS     = 7;
-    static constexpr uint32_t SKILLLINE_CATEGORY_SECONDARY = 9;   // Cooking, First Aid, Fishing
-    static constexpr uint32_t SKILLLINE_CATEGORY_PROFESSION = 11; // Mining, Tailoring, ...
-    // Category 9 is not only Cooking, First Aid and Fishing: it also holds
-    // every racial and every riding skill - Dwarven Racial, Horse Riding, Kodo
-    // Riding, twenty-four lines in all. Tabbing the category wholesale would
-    // put a tab named "Kodo Riding" beside Mining. So a secondary line earns
-    // one only when the character knows something in it that is actually made:
-    // a spell with reagents or a created item. That is the same question the
-    // General tab was answering wrongly, asked once here instead.
-    const auto lineHasRecipe = [this](uint32_t skillLine) {
-        for (uint32_t known : knownSpells_) {
-            auto kslIt = owner_.spellToSkillLineRef().find(known);
-            if (kslIt == owner_.spellToSkillLineRef().end() ||
-                kslIt->second != skillLine) continue;
-            auto cacheIt = owner_.spellNameCacheRef().find(known);
-            if (cacheIt == owner_.spellNameCacheRef().end()) continue;
-            if (cacheIt->second.createdItemId != 0) return true;
-            for (const auto& reagent : cacheIt->second.reagents) {
-                if (reagent.itemId != 0) return true;
-            }
-        }
-        return false;
-    };
-    const auto earnsOwnTab = [&](uint32_t category, uint32_t skillLine) {
-        if (category == SKILLLINE_CATEGORY_CLASS) return true;
-        if (category == SKILLLINE_CATEGORY_PROFESSION) return true;
-        if (category == SKILLLINE_CATEGORY_SECONDARY) return lineHasRecipe(skillLine);
-        return false;
-    };
-
+    // 0x00542030: each spell under its skill line where the player's
+    // SkillRaceClassInfo row for it lacks flag 0x80, else under General
+    // (spell_book_tabs.hpp). The tabs in the order a spell first opens one,
+    // then sorted (0x0053ba40) - General first, the rest by name.
     std::map<uint32_t, std::vector<uint32_t>> bySkillLine;
-    std::vector<uint32_t> general;
-
     for (uint32_t spellId : knownSpells_) {
         // 0x00542030 files a spell in the book only past its filters: no
         // spell hidden from it (Attributes 0x80 - a talent's teaching spell
         // such as Metamorphosis' 59672 beside the form 47241 it teaches), no
         // recipe (0x20), no companion or mount, no AttributesEx4 0x8000.
         if (!owner_.spellInPlayerBook(spellId)) continue;
-        auto slIt = owner_.spellToSkillLineRef().find(spellId);
-        if (slIt != owner_.spellToSkillLineRef().end()) {
-            uint32_t skillLineId = slIt->second;
-            auto catIt = owner_.skillLineCategoriesRef().find(skillLineId);
-            if (catIt != owner_.skillLineCategoriesRef().end() &&
-                earnsOwnTab(catIt->second, skillLineId)) {
-                bySkillLine[skillLineId].push_back(spellId);
-                continue;
-            }
+        const uint32_t line = owner_.spellSkillLine(spellId);
+        std::optional<uint32_t> flags;
+        if (line != 0) {
+            if (const auto* info = owner_.skillRaceClassInfo(line)) flags = info->flags;
         }
-        general.push_back(spellId);
+        bySkillLine[spell_book_tabs::tabSkillLine(line, flags)].push_back(spellId);
     }
 
     // 0x0053c8b0: by name, then by the number in the rank (SpellLevel where
@@ -3726,65 +3686,36 @@ const std::vector<SpellHandler::SpellBookTab>& SpellHandler::getSpellBookTabs() 
         return a < b;
     };
 
-    if (!general.empty()) {
-        std::sort(general.begin(), general.end(), byName);
-        spellBookTabs_.push_back({.name = "General", .texture = "Interface\\Icons\\INV_Misc_Book_09", .spellIds = std::move(general)});
-    }
-
-    // Each tab's own picture, from SkillLine.dbc's icon column. Every tab used
-    // to carry the same book, so the row of tabs down the side of the
-    // spellbook was a column of identical squares that said nothing about
-    // which was which - the tooltip was the only way to tell them apart.
-    //
-    // The book stays as the fallback: a skill line with no icon, or an icon
-    // this install cannot resolve, keeps what it had rather than going blank.
-    static constexpr const char* kDefaultTabIcon = "Interface\\Icons\\INV_Misc_Book_09";
+    // GetSpellTabInfo (0x0053be70): General is GENERAL_SPELLS with
+    // Ability_Kick; any other tab its SkillLine name and its SpellIcon.
     auto tabIcon = [this](uint32_t skillLineId) -> std::string {
         auto it = owner_.skillLineIconsRef().find(skillLineId);
-        if (it == owner_.skillLineIconsRef().end()) return kDefaultTabIcon;
-        std::string path = owner_.getIconPath(it->second);
-        return path.empty() ? kDefaultTabIcon : path;
+        if (it == owner_.skillLineIconsRef().end()) return {};
+        return owner_.getIconPath(it->second);
     };
-
-    // Down the side of the book in the order the kinds belong in, not in one
-    // alphabetical run: General, then the class's own lines, then the crafting
-    // ones. Sorting every tab by name alone dealt them together - Affliction,
-    // Alchemy, Arms, Blacksmithing - so a warlock's specialisations and their
-    // professions read as one undifferentiated column.
-    //
-    // Alphabetical within each kind, which is what the sort was right about.
-    const auto tabRank = [&](uint32_t skillLineId) {
-        auto catIt = owner_.skillLineCategoriesRef().find(skillLineId);
-        if (catIt == owner_.skillLineCategoriesRef().end()) return 3;
-        switch (catIt->second) {
-            case SKILLLINE_CATEGORY_CLASS:      return 0;
-            case SKILLLINE_CATEGORY_PROFESSION: return 1;
-            case SKILLLINE_CATEGORY_SECONDARY:  return 2;
-            default:                            return 3;
-        }
-    };
-
     struct NamedTab {
-        int rank;
+        uint32_t line;
         std::string name;
-        std::string icon;
         std::vector<uint32_t> spells;
     };
     std::vector<NamedTab> named;
     for (auto& [skillLineId, spells] : bySkillLine) {
-        auto nameIt = owner_.skillLineNamesRef().find(skillLineId);
-        std::string tabName = (nameIt != owner_.skillLineNamesRef().end()) ? nameIt->second : "Unknown";
+        std::string tabName;
+        if (skillLineId == 0) {
+            tabName = interfaceString("GENERAL_SPELLS", "General");
+        } else {
+            auto nameIt = owner_.skillLineNamesRef().find(skillLineId);
+            tabName = nameIt != owner_.skillLineNamesRef().end() ? nameIt->second : std::string();
+        }
         std::sort(spells.begin(), spells.end(), byName);
-        named.push_back({.rank = tabRank(skillLineId), .name = std::move(tabName), .icon = tabIcon(skillLineId),
-                         .spells = std::move(spells)});
+        named.push_back({.line = skillLineId, .name = std::move(tabName), .spells = std::move(spells)});
     }
-    std::sort(named.begin(), named.end(), [](const NamedTab& a, const NamedTab& b) {
-        if (a.rank != b.rank) return a.rank < b.rank;
-        return a.name < b.name;
+    std::stable_sort(named.begin(), named.end(), [](const NamedTab& a, const NamedTab& b) {
+        return spell_book_tabs::tabBefore(a.line, a.name, b.line, b.name);
     });
-
     for (auto& tab : named) {
-        spellBookTabs_.push_back({.name = std::move(tab.name), .texture = std::move(tab.icon),
+        std::string icon = tab.line == 0 ? std::string(spell_book_tabs::kGeneralIcon) : tabIcon(tab.line);
+        spellBookTabs_.push_back({.name = std::move(tab.name), .texture = std::move(icon),
                                   .spellIds = std::move(tab.spells)});
     }
 
