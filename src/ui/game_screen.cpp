@@ -2143,7 +2143,9 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
         }
     }
     worldMouseover_ = 0;
-    if (gamepadControls().cursorTurnedOff()) {
+    // The cursor off: a pad driving the world with its pointer away, or a
+    // key bound to TOGGLEMOUSE (0x00562d60).
+    if (gamepadControls().cursorTurnedOff() || addons::cursorTurnedOffByBinding()) {
         // The cursor off: the mouseover is the object most nearly ahead of
         // the mover that would answer it (0x005220b0 -> 0x00519e80), not
         // one under a pointer.

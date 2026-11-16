@@ -21,8 +21,39 @@ namespace wowee::game::soft_interact {
 enum class Kind : uint8_t {
     Unit,        ///< type mask 0x8
     GameObject,  ///< type mask 0x20
-    Other,       ///< corpses (mask 0x80) and anything else: never taken here
+    Corpse,      ///< type mask 0x80
+    Other,       ///< anything else: never taken here
 };
+
+/// 0x006d5a60: whether the player may loot a unit or corpse now.
+struct LootCheck {
+    /// 0x00721f50: the player alive, the active mover, and autoInteract on -
+    /// then any distance will do (the player is walked there).
+    bool anyDistance = false;
+    /// The reach squared: for a unit max(5, both combat reaches + 4/3)
+    /// (0x004f5f40), anything else 5.
+    float reachSq = 25.0f;
+    float distSq = 0.0f;
+    /// 0x00721ca0 (a form that is not a stance) with that form's
+    /// SpellShapeshiftForm Flags 0x100.
+    bool formForbids = false;
+    bool looting = false;        ///< the player's loot object (+0x18e0) set
+    bool deadOrGhost = false;    ///< vtable +0x128
+    bool falling = false;        ///< movement flags 0x1000 (+0xd8 +0x44)
+    bool stunned = false;        ///< UNIT_FLAG 0x40000
+    bool clientControl = true;   ///< +0xa30 0x400 (0x00714ac0)
+};
+[[nodiscard]] inline bool playerMayLoot(const LootCheck& c) {
+    if (c.formForbids) return false;
+    if (!c.anyDistance && c.distSq > c.reachSq) return false;
+    return !c.looting && !c.deadOrGhost && !c.falling && !c.stunned && c.clientControl;
+}
+/// The reach 0x006d5a60 loots a unit within (0x004f5f40): its and the
+/// player's combat reach and four thirds, at least five yards.
+[[nodiscard]] inline float lootReach(float unitReach, float playerReach) {
+    const float r = unitReach + playerReach + 4.0f / 3.0f;
+    return r < 5.0f ? 5.0f : r;
+}
 
 struct Candidate {
     uint64_t guid = 0;
@@ -36,17 +67,26 @@ struct Candidate {
     uint32_t npcFlags = 0;        ///< UNIT_NPC_FLAGS (+0x130)
     float combatReach = 0.0f;     ///< UNIT_FIELD_COMBATREACH (+0xf0)
     bool lootableDead = false;    ///< 0x00717b60: dead, LOOTABLE (dynamic flags 0x1)
-    bool playerMayLoot = false;   ///< 0x006d5a60
+    bool playerMayLoot = false;   ///< 0x006d5a60 (playerMayLoot), a unit's or a corpse's
     bool playersLootTarget = false;  ///< the player's loot object (+0x18e0) is it
     /// UNIT_FLAG_SKINNABLE (0x4000000) with a gather spell the player knows
-    /// for it (0x0053bce0), unless it is a player 0x007293d0 turns down: that
-    /// spell's reach (0x00802c30); negative for none.
+    /// for it (0x0053bce0: a creature's SKINNING spell by its kind, a
+    /// player's SKIN_PLAYER_CORPSE), unless it is a player the player may
+    /// help (0x007293d0 with 0); for a corpse, CORPSE_FLAG 0x20 with the
+    /// SKIN_PLAYER_CORPSE spell: that spell's reach (0x00802c30); negative
+    /// for none.
     float gatherReach = -1.0f;
     bool attackable = false;      ///< 0x00729a70
 
     // A game object: its type handler's +0x18 and +0x1c both say yes
     // (0x0070ba00, 0x0070ba10).
     bool goUsable = false;
+
+    // A corpse: CORPSE_FIELD_DYNAMIC_FLAGS 0x1, lootable (0x007058f0); and
+    // whether the player regards its race's faction as friendly (0x0071f890:
+    // 0x00718c20 above 3), which keeps it from being skinned.
+    bool corpseLootable = false;
+    bool corpseFriendly = false;
 };
 
 struct Asker {
@@ -102,6 +142,15 @@ inline uint64_t pick(const Asker& a, const std::vector<Candidate>& objects) {
                 take = reachSq >= 0.0f && !(reachSq < distSq);
                 break;
             }
+            case Kind::Corpse:
+                // Only for the player's own moving.
+                if (!a.playerIsMover) break;
+                if (c.corpseLootable) {
+                    take = c.playerMayLoot || c.playersLootTarget;
+                } else if (c.gatherReach >= 0.0f && !c.corpseFriendly) {
+                    take = !(c.gatherReach * c.gatherReach < distSq);
+                }
+                break;
             case Kind::Other:
                 break;
         }

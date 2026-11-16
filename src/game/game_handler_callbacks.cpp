@@ -4195,20 +4195,65 @@ uint64_t GameHandler::softInteractTarget() {
     ask.hasControl = isServerMovementAllowed();
 
     // The gather spells the player knows (0x00542xxx as each is learned):
-    // SKINNING (95) by its kind - 0 skinning, 1 herbs, 2 ore, 3 parts - and
-    // SKIN_PLAYER_CORPSE (116).
+    // SKINNING (95) by its kind - 0 skinning, 1 herbs, 2 ore, 3 parts
+    // (0x00be5d6c) - and SKIN_PLAYER_CORPSE (116, 0x00be5d7c), a player's or a
+    // corpse's (0x0053bce0, type mask 0x90).
     std::array<uint32_t, 4> gather{};
+    uint32_t skinPlayer = 0;
     loadSpellNameCache();
     for (const uint32_t id : getKnownSpells()) {
         const auto it = spellNameCache_.find(id);
         if (it == spellNameCache_.end()) continue;
-        for (int e = 0; e < 3; ++e)
+        for (int e = 0; e < 3; ++e) {
             if (it->second.effectIds[e] == 95 && it->second.effectMiscValues[e] < 4)
                 gather[it->second.effectMiscValues[e]] = id;
+            if (it->second.effectIds[e] == 116) skinPlayer = id;
+        }
     }
     const bool looting = isLootWindowOpen();
     const uint64_t lootObject = looting ? getCurrentLoot().lootGuid : 0;
     const float playerReach = player->getCombatReach();
+    // 0x006d5a60's questions of the player, the same for every object.
+    si::LootCheck lootBase;
+    // 0x00721f50: the player alive (UNIT_FIELD_HEALTH above 0), the active
+    // mover, and autoInteract on - registered by 0x0051d990 with "1" for the
+    // koKR client (locale index 0x00c5de9c 1) and "0" for every other.
+    {
+        const auto* profile = services_.expansionRegistry ? services_.expansionRegistry->getActive() : nullptr;
+        const bool korean = profile && chat_profanity::localeIndex(profile->locale) == 1;
+        const bool autoInteract = addons::storedCVarValue("autoInteract", korean ? "1" : "0") != "0";
+        lootBase.anyDistance = player->getHealth() > 0 && activeMover() == playerGuid && autoInteract;
+    }
+    // 0x00721ca0 with the form's Flags 0x100.
+    if (playerInForm()) {
+        const auto* form = shapeshiftFormRow(getShapeshiftFormId());
+        lootBase.formForbids = form && (form->flags & 0x100u) != 0;
+    }
+    lootBase.looting = looting;
+    lootBase.deadOrGhost = isPlayerDead() || isPlayerGhost();
+    lootBase.falling = (movementInfo.flags & 0x1000u) != 0;
+    lootBase.stunned = (player->getUnitFlags() & 0x40000u) != 0;
+    lootBase.clientControl = movementHandler_ && movementHandler_->unitHasClientControl(playerGuid);
+    // The race a corpse was, by CORPSE_FIELD_BYTES_1's second byte, and that
+    // race's faction (ChrRaces FactionID, 0x00705a80) as the player regards
+    // it (0x00718c20 -> 0x00715440).
+    const auto corpseFriendly = [&](const Entity& corpse) {
+        const uint16_t bytes1 = fieldIndex(UF::CORPSE_FIELD_BYTES_1);
+        if (bytes1 == 0xFFFF) return false;
+        const uint32_t race = (corpse.getField(bytes1) >> 8) & 0xFFu;
+        auto* am = core::Application::getInstance().getAssetManager();
+        auto races = am ? am->loadDBCOptional("ChrRaces.dbc") : nullptr;
+        const auto* layout = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("ChrRaces")
+                                                            : nullptr;
+        const uint32_t field = layout ? layout->tryField("FactionID") : 0xFFFFFFFF;
+        const int32_t row = races && field < races->getFieldCount() ? races->findRecordById(race) : -1;
+        if (row < 0) return false;
+        const auto mine = factionTemplates_.find(player->getFactionTemplate());
+        const auto theirs = factionTemplates_.find(races->getUInt32(static_cast<uint32_t>(row), field));
+        // 0x00718c20 answers 3 where either has no template.
+        if (mine == factionTemplates_.end() || theirs == factionTemplates_.end()) return false;
+        return reaction::templateReaction(mine->second, theirs->second) > reaction::kNeutral;
+    };
     std::vector<si::Candidate> objects;
     objects.reserve(getEntityManager().getEntities().size());
     for (const auto& [guid, e] : getEntityManager().getEntities()) {
@@ -4222,10 +4267,28 @@ uint64_t GameHandler::softInteractTarget() {
         c.dx = at.x - from.x;
         c.dy = at.y - from.y;
         c.dz = at.z - from.z;
+        const float distSq = c.dx * c.dx + c.dy * c.dy + c.dz * c.dz;
         if (e->getType() == ObjectType::GAMEOBJECT) {
             c.kind = si::Kind::GameObject;
             // The handler's +0x18 and +0x1c: clickable, usable now.
             c.goUsable = gameObjectPointer(guid).interactive;
+        } else if (e->getType() == ObjectType::CORPSE) {
+            c.kind = si::Kind::Corpse;
+            const uint16_t dynIdx = fieldIndex(UF::CORPSE_FIELD_DYNAMIC_FLAGS);
+            const uint16_t flagsIdx = fieldIndex(UF::CORPSE_FIELD_FLAGS);
+            // 0x007058f0: CORPSE_FIELD_DYNAMIC_FLAGS 0x1.
+            c.corpseLootable = dynIdx != 0xFFFF && (e->getField(dynIdx) & 0x1u) != 0;
+            // 0x006d5a60 within five yards: a corpse is no unit.
+            si::LootCheck check = lootBase;
+            check.reachSq = 25.0f;
+            check.distSq = distSq;
+            c.playerMayLoot = c.corpseLootable && lootObject != guid && si::playerMayLoot(check);
+            c.playersLootTarget = lootObject == guid;
+            // CORPSE_FIELD_FLAGS 0x20 with SKIN_PLAYER_CORPSE.
+            if (!c.corpseLootable && flagsIdx != 0xFFFF && (e->getField(flagsIdx) & 0x20u) != 0 && skinPlayer != 0) {
+                c.corpseFriendly = corpseFriendly(*e);
+                if (!c.corpseFriendly && spellHandler_) c.gatherReach = spellHandler_->getSpellMaxRange(skinPlayer);
+            }
         } else if (e->isUnit()) {
             const auto& u = static_cast<const Unit&>(*e);
             c.kind = si::Kind::Unit;
@@ -4236,13 +4299,22 @@ uint64_t GameHandler::softInteractTarget() {
             // 0x00717b60: dead and lootable.
             c.lootableDead = u.getHealth() < 1 && (dyn & UNIT_DYNFLAG_LOOTABLE) != 0;
             // 0x006d5a60: within the larger of five yards and both reaches
-            // and a third, while the player loots nothing and is not stunned.
-            const float reach = std::max(5.0f, u.getCombatReach() + playerReach + 4.0f / 3.0f);
-            c.playerMayLoot = c.lootableDead && !looting && (player->getUnitFlags() & 0x40000u) == 0 &&
-                              c.dx * c.dx + c.dy * c.dy + c.dz * c.dz <= reach * reach;
+            // and four thirds (any distance with autoInteract and a target),
+            // in no form that forbids it, looting nothing, alive, not
+            // falling, not stunned and in the client's control.
+            si::LootCheck check = lootBase;
+            const float reach = si::lootReach(u.getCombatReach(), playerReach);
+            check.reachSq = reach * reach;
+            check.distSq = distSq;
+            c.playerMayLoot = c.lootableDead && lootObject != guid && si::playerMayLoot(check);
             c.playersLootTarget = lootObject == guid;
-            // UNIT_FLAG_SKINNABLE with the player's spell for its kind.
-            if ((u.getUnitFlags() & 0x4000000u) != 0 && e->getType() == ObjectType::UNIT) {
+            // UNIT_FLAG_SKINNABLE with the player's spell for it: a player's
+            // SKIN_PLAYER_CORPSE, unless the player may help it (0x007293d0
+            // with 0, which sends it on to the fight's reach).
+            if ((u.getUnitFlags() & 0x4000000u) != 0 && e->getType() == ObjectType::PLAYER) {
+                if (skinPlayer != 0 && !unitMayAssist(playerGuid, guid) && spellHandler_)
+                    c.gatherReach = spellHandler_->getSpellMaxRange(skinPlayer);
+            } else if ((u.getUnitFlags() & 0x4000000u) != 0 && e->getType() == ObjectType::UNIT) {
                 // 0x00715e50: its kind by the creature's type flags.
                 uint32_t kind = 0;
                 const auto& infos = getCreatureInfoCache();

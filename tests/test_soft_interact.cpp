@@ -82,3 +82,57 @@ TEST_CASE("Game objects only for the player's own moving", "[soft_interact]") {
     a.playerIsMover = false;
     CHECK(si::pick(a, {go}) == 0);
 }
+
+TEST_CASE("A corpse is taken to loot or to skin, by the player's own moving", "[soft_interact]") {
+    si::Asker a;
+    si::Candidate corpse;
+    corpse.guid = 7;
+    corpse.kind = si::Kind::Corpse;
+    corpse.dx = 30.0f;
+    corpse.corpseLootable = true;
+    corpse.playerMayLoot = true;
+    CHECK(si::pick(a, {corpse}) == 7);
+    corpse.playerMayLoot = false;
+    CHECK(si::pick(a, {corpse}) == 0);
+    corpse.playersLootTarget = true;  // what the player loots now
+    CHECK(si::pick(a, {corpse}) == 7);
+    a.playerIsMover = false;          // a vehicle moved: none
+    CHECK(si::pick(a, {corpse}) == 0);
+    a.playerIsMover = true;
+    // Skinned within the spell's reach, not a friendly race's.
+    si::Candidate skin;
+    skin.guid = 8;
+    skin.kind = si::Kind::Corpse;
+    skin.dx = 4.0f;
+    skin.gatherReach = 5.0f;
+    CHECK(si::pick(a, {skin}) == 8);
+    skin.corpseFriendly = true;
+    CHECK(si::pick(a, {skin}) == 0);
+    skin.corpseFriendly = false;
+    skin.dx = 6.0f;
+    CHECK(si::pick(a, {skin}) == 0);
+}
+
+TEST_CASE("Looting asks the form, the reach unless autoInteract, and the player's state", "[soft_interact]") {
+    si::LootCheck c;
+    c.reachSq = 25.0f;
+    c.distSq = 24.0f;
+    CHECK(si::playerMayLoot(c));
+    c.distSq = 26.0f;
+    CHECK_FALSE(si::playerMayLoot(c));
+    c.anyDistance = true;              // autoInteract, alive, the mover
+    CHECK(si::playerMayLoot(c));
+    c.formForbids = true;
+    CHECK_FALSE(si::playerMayLoot(c));
+    c.formForbids = false;
+    for (bool si::LootCheck::*f : {&si::LootCheck::looting, &si::LootCheck::deadOrGhost,
+                                   &si::LootCheck::falling, &si::LootCheck::stunned}) {
+        si::LootCheck d = c;
+        d.*f = true;
+        CHECK_FALSE(si::playerMayLoot(d));
+    }
+    c.clientControl = false;
+    CHECK_FALSE(si::playerMayLoot(c));
+    CHECK(si::lootReach(0.5f, 0.5f) == Catch::Approx(5.0f));
+    CHECK(si::lootReach(3.0f, 1.5f) == Catch::Approx(4.5f + 4.0f / 3.0f));
+}
