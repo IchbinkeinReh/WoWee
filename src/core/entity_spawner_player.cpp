@@ -289,6 +289,14 @@ void EntitySpawner::spawnOnlinePlayer(uint64_t guid,
         charRenderer->playAnimation(instanceId, idleAnim, true);
     }
     playerInstances_[guid] = instanceId;
+    // 0x00730100: the model come in, UNIT_PORTRAIT_UPDATE then
+    // UNIT_MODEL_CHANGED for each token naming the unit (0x00618110 with 3).
+    if (gameHandler_) {
+        for (const auto& unit : gameHandler_->unitTokensForGuid(guid)) {
+            gameHandler_->fireAddonEvent("UNIT_PORTRAIT_UPDATE", {unit});
+            gameHandler_->fireAddonEvent("UNIT_MODEL_CHANGED", {unit});
+        }
+    }
 
     // The mount field may have arrived before this render instance, or the
     // player may be re-created without another values update. Reconcile from
