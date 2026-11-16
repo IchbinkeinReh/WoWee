@@ -105,6 +105,14 @@ std::string petSpellNameWithRank(const GameHandler& owner, uint32_t spellId) {
 CombatHandler::CombatHandler(GameHandler& owner)
     : owner_(owner) {}
 
+/// A unit event the client queues for a unit (0x006143f0): raised once for
+/// each unit token that names it, and not at all for a unit without one.
+void CombatHandler::fireUnitEvent(const char* event, uint64_t guid) {
+    if (!owner_.addonEventCallbackRef() || guid == 0) return;
+    for (const auto& unitId : owner_.unitTokensForGuid(guid))
+        owner_.addonEventCallbackRef()(event, {unitId});
+}
+
 /// The same rule the threat indicator uses, kept in step with it.
 ///
 /// threatWarning is 0 never, 1 in instances, 2 in a party, 3 always - and
@@ -129,23 +137,44 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
         autoAttacking_ = false;
         autoAttackTarget_ = 0;
     };
-    table[Opcode::SMSG_THREAT_CLEAR] = [this](network::Packet& /*packet*/) {
-        threatLists_.clear();
-        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("UNIT_THREAT_LIST_UPDATE", {});
+    table[Opcode::SMSG_THREAT_CLEAR] = [this](network::Packet& packet) {
+        // 0x00734b00 -> 0x007345c0: the unit's own list, and only while the
+        // unit is in the world and its list has anyone on it. Each victim's
+        // situation is reset and UNIT_THREAT_SITUATION_UPDATE queued for it,
+        // then UNIT_THREAT_LIST_UPDATE for the unit and its threat display
+        // refreshed (0x00512ab0).
+        if (!packet.hasRemaining(1)) return;
+        const uint64_t unitGuid = packet.readPackedGuid();
+        if (!owner_.getEntityManager().getEntity(unitGuid)) return;
+        auto it = threatLists_.find(unitGuid);
+        if (it == threatLists_.end() || it->second.empty()) return;
+        const std::vector<ThreatEntry> victims = std::move(it->second);
+        threatLists_.erase(it);
+        playerTopThreatOn_.erase(unitGuid);
+        for (const ThreatEntry& e : victims) fireUnitEvent("UNIT_THREAT_SITUATION_UPDATE", e.victimGuid);
+        fireUnitEvent("UNIT_THREAT_LIST_UPDATE", unitGuid);
     };
     table[Opcode::SMSG_THREAT_REMOVE] = [this](network::Packet& packet) {
         if (!packet.hasRemaining(1)) return;
         uint64_t unitGuid   = packet.readPackedGuid();
         if (!packet.hasRemaining(1)) return;
         uint64_t victimGuid = packet.readPackedGuid();
+        // 0x00737750: nothing unless the victim is on the unit's list. Its
+        // entry goes and its situation is reset (UNIT_THREAT_SITUATION_UPDATE
+        // for it); the top is picked again where it was the top (0x00737620,
+        // the list here is kept highest first); then UNIT_THREAT_LIST_UPDATE
+        // for the unit.
         auto it = threatLists_.find(unitGuid);
-        if (it != threatLists_.end()) {
-            auto& list = it->second;
-            list.erase(std::remove_if(list.begin(), list.end(),
-                [victimGuid](const ThreatEntry& e){ return e.victimGuid == victimGuid; }),
-                list.end());
-            if (list.empty()) threatLists_.erase(it);
-        }
+        if (it == threatLists_.end()) return;
+        auto& list = it->second;
+        const auto victim = std::find_if(list.begin(), list.end(),
+            [victimGuid](const ThreatEntry& e) { return e.victimGuid == victimGuid; });
+        if (victim == list.end()) return;
+        list.erase(victim);
+        if (list.empty()) threatLists_.erase(it);
+        if (victimGuid == owner_.getPlayerGuid()) playerTopThreatOn_.erase(unitGuid);
+        fireUnitEvent("UNIT_THREAT_SITUATION_UPDATE", victimGuid);
+        fireUnitEvent("UNIT_THREAT_LIST_UPDATE", unitGuid);
     };
     table[Opcode::SMSG_CANCEL_COMBAT] = [this](network::Packet& /*packet*/) {
         autoAttacking_ = false;

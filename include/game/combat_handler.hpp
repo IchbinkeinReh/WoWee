@@ -267,6 +267,7 @@ private:
     /// question IsThreatWarningEnabled answers for the indicator, asked from
     /// C++ so the sound and the picture agree about when they are wanted.
     [[nodiscard]] bool threatWarningWanted() const;
+    void fireUnitEvent(const char* event, uint64_t guid);
 
     // Forced faction reactions
     std::unordered_map<uint32_t, uint8_t> forcedReactions_;
