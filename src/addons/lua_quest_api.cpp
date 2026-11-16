@@ -2,6 +2,7 @@
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "core/local_time.hpp"
 #include "game/item_text.hpp"
+#include "game/item_stat_text.hpp"
 #include "pipeline/dbc_layout.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/asset_manager.hpp"
@@ -3318,6 +3319,118 @@ static std::vector<std::string> tradeSkillInvSlots(game::GameHandler* gh) {
     return out;
 }
 
+/// The search box's word against one recipe (0x005dc110): not only its name
+/// but every line the recipe and the item it makes would show. Each candidate
+/// is put in the locale's search form first (0x007e11d0 - lower case, which is
+/// all it does for enUS) and the word looked for inside it. In the client's
+/// order: the made item's stat lines, its resistances, its spells with their
+/// "Use:" / "Equip:" / "Chance on hit:" lead, its empty sockets, the gem it
+/// is, its description; then the spell's own name, its reagents, its tools,
+/// its tool categories, the object it needs nearby and its description.
+/// `needle` is already lower case.
+static bool tradeSkillSearchMatches(game::GameHandler* gh,
+                                    const game::GameHandler::CraftRecipe& r,
+                                    const std::string& needle) {
+    const auto hit = [&needle](std::string text) {
+        toLowerInPlace(text);
+        return text.find(needle) != std::string::npos;
+    };
+    const auto text = [](const char* key, const char* enUS) { return game::interfaceString(key, enUS); };
+    const auto spellIt = gh->spellNameCacheRef().find(r.spellId);
+    const auto* spell = spellIt != gh->spellNameCacheRef().end() ? &spellIt->second : nullptr;
+    // EffectItemType[0], the item 0x005dc110 asks the cache for.
+    const game::ItemQueryResponseData* item = nullptr;
+    if (spell && spell->effectItemType0 != 0) {
+        gh->ensureItemInfo(spell->effectItemType0);
+        const auto* info = gh->getItemInfo(spell->effectItemType0);
+        if (info && info->valid) item = info;
+    }
+    if (item) {
+        // Each stat above zero through the ITEM_MOD table (0x00ad6640),
+        // printed with the sign as a character and then the size - so a
+        // wording whose first conversion is %d prints the sign's code, as the
+        // client's does.
+        for (const auto& s : item->statPairs) {
+            if (s.statValue <= 0) continue;
+            const game::ItemModKey k = game::itemModKey(s.statType);
+            if (!k.key) continue;
+            const std::string fmt = text(k.key, k.enUS);
+            const int args[2] = {'+', s.statValue};
+            int next = 0;
+            std::string line;
+            for (size_t i = 0; i < fmt.size(); ++i) {
+                if (fmt[i] == '%' && i + 1 < fmt.size() && (fmt[i + 1] == 'c' || fmt[i + 1] == 'd')) {
+                    const int v = next < 2 ? args[next] : 0;
+                    ++next;
+                    if (fmt[i + 1] == 'c') line += static_cast<char>(v);
+                    else line += std::to_string(v);
+                    ++i;
+                } else {
+                    line += fmt[i];
+                }
+            }
+            if (hit(line)) return true;
+        }
+        const int32_t res[6] = {item->holyRes, item->fireRes, item->natureRes,
+                                item->frostRes, item->shadowRes, item->arcaneRes};
+        for (const auto& line : game::itemResistLines(res, text))
+            if (hit(line)) return true;
+        // The item's spells, described, behind the word for how they go off.
+        for (const auto& s : item->spells) {
+            if (s.spellId == 0) continue;
+            gh->getSpellName(s.spellId);
+            if (gh->spellNameCacheRef().find(s.spellId) == gh->spellNameCacheRef().end()) continue;
+            const std::string desc = gh->formatSpellDescription(s.spellId, gh->getSpellDescription(s.spellId));
+            const char* lead = s.spellTrigger == 0 ? "ITEM_SPELL_TRIGGER_ONUSE"
+                             : s.spellTrigger == 1 ? "ITEM_SPELL_TRIGGER_ONEQUIP"
+                             : s.spellTrigger == 2 ? "ITEM_SPELL_TRIGGER_ONPROC" : nullptr;
+            const char* leadEnUS = s.spellTrigger == 0 ? "Use:" : s.spellTrigger == 1 ? "Equip:" : "Chance on hit:";
+            if (hit(lead ? text(lead, leadEnUS) + " " + desc : desc)) return true;
+        }
+        // EMPTY_SOCKET_<colour> for each colour bit of each socket.
+        static const char* const kSocket[4][2] = {{"EMPTY_SOCKET_META", "Meta Socket"},
+                                                  {"EMPTY_SOCKET_RED", "Red Socket"},
+                                                  {"EMPTY_SOCKET_YELLOW", "Yellow Socket"},
+                                                  {"EMPTY_SOCKET_BLUE", "Blue Socket"}};
+        for (const uint32_t mask : item->socketColor)
+            for (int b = 0; b < 4; ++b)
+                if ((mask & (1u << b)) && hit(text(kSocket[b][0], kSocket[b][1]))) return true;
+        // A gem: its GemProperties row's enchantment, by name.
+        if (item->gemProperties != 0) {
+            auto* am = gh->services().assetManager;
+            auto dbc = am && am->isInitialized() ? am->loadDBC("GemProperties.dbc") : nullptr;
+            const int32_t row = dbc && dbc->isLoaded() ? dbc->findRecordById(item->gemProperties) : -1;
+            if (row >= 0) {
+                const uint32_t enchant = dbc->getUInt32(static_cast<uint32_t>(row), 1);
+                if (enchant != 0 && hit(gh->getEnchantName(enchant))) return true;
+            }
+        }
+        if (!item->description.empty() && hit(item->description)) return true;
+    }
+    if (hit(r.name)) return true;
+    if (!spell) return false;
+    for (const auto& g : spell->reagents) {
+        if (g.itemId == 0 || g.count == 0) continue;
+        gh->ensureItemInfo(g.itemId);
+        const auto* info = gh->getItemInfo(g.itemId);
+        if (info && info->valid && hit(info->name)) return true;
+    }
+    for (const uint32_t tool : spell->totems) {
+        if (tool == 0) continue;
+        gh->ensureItemInfo(tool);
+        const auto* info = gh->getItemInfo(tool);
+        if (info && info->valid && hit(info->name)) return true;
+    }
+    for (const uint32_t cat : spell->totemCategories)
+        if (cat != 0 && hit(gh->getTotemCategoryName(cat))) return true;
+    if (spell->requiresSpellFocus != 0 && hit(gh->getSpellFocusName(spell->requiresSpellFocus)))
+        return true;
+    if (!spell->description.empty() &&
+        hit(gh->formatSpellDescription(r.spellId, spell->description)))
+        return true;
+    return false;
+}
+
 static std::vector<game::GameHandler::CraftRecipe> visibleCraftingRecipes(
         game::GameHandler* gh) {
     std::vector<game::GameHandler::CraftRecipe> out;
@@ -3334,11 +3447,7 @@ static std::vector<game::GameHandler::CraftRecipe> visibleCraftingRecipes(
     for (const auto& r : gh->getCraftingRecipes()) {
         if (tradeSkillOnlyMakeable() && r.canMake <= 0) continue;
         if (tradeSkillOnlySkillUps() && r.difficulty >= 3) continue;
-        if (!needle.empty()) {
-            std::string name = r.name;
-            toLowerInPlace(name);
-            if (name.find(needle) == std::string::npos) continue;
-        }
+        if (!needle.empty() && !tradeSkillSearchMatches(gh, r, needle)) continue;
         if (level.second > 0) {
             const auto* made = craftedItem(gh, r.spellId);
             // Shown while unknown, for the same reason as the two filters
