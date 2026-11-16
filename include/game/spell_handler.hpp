@@ -783,6 +783,10 @@ public:
     /// active mover's current cast, the aimed cast of that spell is let go
     /// (0x006fbe80).
     void castEnded(uint64_t caster, uint8_t castCount, uint32_t spellId);
+    /// A unit's model has passed a release event ($CSL, $CSR, $CST, $BWR;
+    /// 0x00732650): where it has missiles queued, they are let go on its next
+    /// update (0x00715a50 marks +0xa30 0x80000000, 0x00734390 reads it).
+    void modelReleaseEvent(uint64_t unit);
     /// 0x006e6b40 -> 0x007fe510: the active player's object made, its
     /// guid's low half starts the aimed shot's stamp count.
     void seedTrajectoryStamp(uint32_t guidLow) { trajectoryStampCount_ = guidLow; }
@@ -910,6 +914,7 @@ private:
         uint32_t queuedMs = 0;    ///< +0x9e8
         bool parked = false;      ///< the cast itself waits too (0x00d3f4e8)
         bool animSeen = false;    ///< the kit's animation has been seen playing
+        bool releaseEvent = false; ///< +0xa30 0x80000000: its model passed a release event
     };
     std::optional<AimedRelease> aimedRelease_;
     /// A parked cast being sent at its release: its cast count, so the cast
@@ -940,8 +945,9 @@ private:
     void tickAimedCast();
     /// 0x006fd6b0: the shot worked out again and sent with
     /// CMSG_UPDATE_MISSILE_TRAJECTORY; where the cast is still the mover's,
-    /// it is marked aimed and its missile launched on the new arc.
-    void updateMissileTrajectory();
+    /// it is marked aimed and its missile launched on the new arc. True when
+    /// that missile was launched.
+    bool updateMissileTrajectory();
     /// The aimed cast the active mover has going (+0xf68..+0xf78).
     missile_trajectory::AimState aimState_;
     /// 0x00d3f4ec.

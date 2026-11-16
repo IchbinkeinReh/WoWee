@@ -1675,11 +1675,16 @@ void SpellHandler::tickAimedCast() {
     updateMissileTrajectory();
 }
 
+void SpellHandler::modelReleaseEvent(uint64_t unit) {
+    // 0x00732650: only while the unit has missiles queued (+0x9ec).
+    if (aimedRelease_ && aimedRelease_->caster == unit) aimedRelease_->releaseEvent = true;
+}
+
 void SpellHandler::tickAimedRelease() {
-    // 0x00734390 for the mover's queued missiles: let go two seconds after
-    // they were queued (+0x9e8), or once the unit plays its cast kit's
-    // animation no more (+0xfa4 -1). The model's own release event
-    // (+0xa30 0x80000000) is not read here.
+    // 0x00734390 for the mover's queued missiles: let go once its model has
+    // passed a release event (+0xa30 0x80000000), two seconds after they were
+    // queued (+0x9e8), or once the unit plays its cast kit's animation no
+    // more (+0xfa4 -1).
     if (!aimedRelease_) return;
     AimedRelease& r = *aimedRelease_;
     uint32_t playing = 0;
@@ -1688,7 +1693,8 @@ void SpellHandler::tickAimedRelease() {
     const uint32_t instance = owner_.resolveUnitRenderInstance(r.caster);
     const bool kit = cr && instance != 0 && cr->getAnimationState(instance, playing, t, d) &&
                      static_cast<int32_t>(playing) == r.anim && !(d > 0.0f && t >= d);
-    if (missile_trajectory::releaseDue(clientMs(), r.queuedMs, kit, r.animSeen)) releaseAimedMissiles();
+    const bool event = std::exchange(r.releaseEvent, false);
+    if (missile_trajectory::releaseDue(clientMs(), r.queuedMs, kit, r.animSeen, event)) releaseAimedMissiles();
 }
 
 void SpellHandler::releaseAimedMissiles() {
@@ -1713,21 +1719,41 @@ void SpellHandler::releaseAimedMissiles() {
     }
     // 0x0072df00: the cast the missile was held for is the aimed one still
     // (0x006fbed0, +0xf78): its shot is worked out and sent now, and the
-    // missile launched on it (0x006fd6b0).
-    if (aimState_.holding() && aimState_.heldCastCount == r.castCount) {
-        aimState_.heldCastCount = 0;
-        // Marked aimed when it was held; the launch below marks it again.
+    // missile launched on it (0x006fd6b0 -> 0x006fc210).
+    const auto unmark = [&] {
         aimedCasts_.erase(std::remove_if(aimedCasts_.begin(), aimedCasts_.end(),
                                          [&](const MoverCast& c) {
                                              return c.caster == r.caster && c.castCount == r.castCount &&
                                                     c.spellId == r.spellId;
                                          }),
                           aimedCasts_.end());
-        updateMissileTrajectory();
+    };
+    if (aimState_.holding() && aimState_.heldCastCount == r.castCount) {
+        aimState_.heldCastCount = 0;
+        // Marked aimed when it was held; the launch marks it again.
+        unmark();
+        if (updateMissileTrajectory()) return;
     }
+    // The queued missile leaves all the same (0x0072df00 -> 0x007022d0),
+    // on the shot it was queued with where nothing set a new one: the cast
+    // ended first - SMSG_SPELL_GO came before the release and let the aim go
+    // (0x007fecc0 -> 0x006fbe80) - or 0x006fd6b0 found no shot or no cast.
+    // 0x006fe7e0 queued it (0x00800dd0) at the cast's point with target flag
+    // 0x40, which it had cleared (+0x64..+0x6c zero, no transport), a pitch
+    // of 0 and a speed of 1 (+0x124, +0x128), and no flight time of its own.
+    unmark();
+    AimedShot queued;
+    loadSpellNameCache();
+    if (const auto it = owner_.spellNameCacheRef().find(r.spellId); it != owner_.spellNameCacheRef().end())
+        queued.spellMissileId = it->second.spellMissileId;
+    missile_trajectory::Stamped queuedAt;
+    queuedAt.pitch = 0.0f;
+    queuedAt.speed = 1.0f;
+    queuedAt.impact = glm::vec3(0.0f);
+    launchAimedMissile(r.spellId, r.caster, r.castCount, queued, queuedAt);
 }
 
-void SpellHandler::updateMissileTrajectory() {
+bool SpellHandler::updateMissileTrajectory() {
     namespace mt = missile_trajectory;
     const uint32_t spellId = aimState_.spellId;
     const uint64_t mover = owner_.activeMover();
@@ -1738,7 +1764,7 @@ void SpellHandler::updateMissileTrajectory() {
         // client keeps the state on the unit that cast, which 0x006fe7e0 no
         // longer asks once another unit is moved; here it is let go.
         aimState_.clear(spellId);
-        return;
+        return false;
     }
     const mt::Stamped sent = mt::stamp(trajectoryStampCount_, shot.aim.pitch, shot.aim.speed, shot.aim.launch,
                                        shot.flight.impact);
@@ -1750,10 +1776,14 @@ void SpellHandler::updateMissileTrajectory() {
     // 0x40 at the impact, marked aimed (+0x139), the pitch and speed on it
     // (+0x124, +0x128), its missile launched now with that flight (0x00800dd0,
     // 0x0072e240).
-    if (moverCast_ && moverCast_->caster == mover && moverCast_->spellId == spellId)
+    bool launched = false;
+    if (moverCast_ && moverCast_->caster == mover && moverCast_->spellId == spellId) {
         launchAimedMissile(spellId, mover, moverCast_->castCount, shot, sent);
+        launched = true;
+    }
     // 0x006fbe80.
     aimState_.clear(spellId);
+    return launched;
 }
 
 void SpellHandler::castEnded(uint64_t caster, uint8_t castCount, uint32_t spellId) {

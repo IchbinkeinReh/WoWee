@@ -222,3 +222,13 @@ TEST_CASE("$DTH: the death thud by size and ground, water and the default", "[un
     CHECK(t.sound(1, 7, false) == 0);
     CHECK(t.sound(-1, 1, false) == 0);
 }
+
+TEST_CASE("a model's cast and bow release events let queued missiles go", "[unit_model_events]") {
+    using namespace wowee::rendering::unit_event;
+    CHECK(releasesQueuedMissiles(fourCC("$CSL")));
+    CHECK(releasesQueuedMissiles(fourCC("$CSR")));
+    CHECK(releasesQueuedMissiles(fourCC("$CST")));
+    CHECK(releasesQueuedMissiles(fourCC("$BWR")));
+    CHECK_FALSE(releasesQueuedMissiles(fourCC("$FSD")));
+    CHECK(classify(fourCC("$CSL")).kind == Kind::None);  // no sound of its own
+}

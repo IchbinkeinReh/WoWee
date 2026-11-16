@@ -209,11 +209,14 @@ struct AimState {
     }
 };
 
-/// Whether a unit's queued missiles are let go now (0x00734390): two
+/// Whether a unit's queued missiles are let go now (0x00734390): when its
+/// model has passed a release event (+0xa30 0x80000000, 0x00715a50), two
 /// seconds after they were queued (+0x9e8), or once the unit no longer plays
 /// the cast kit's animation it was seen playing (+0xfa4). `animSeen` is
 /// updated with whether it plays it now.
-[[nodiscard]] inline bool releaseDue(uint32_t nowMs, uint32_t queuedMs, bool kitPlaying, bool& animSeen) {
+[[nodiscard]] inline bool releaseDue(uint32_t nowMs, uint32_t queuedMs, bool kitPlaying, bool& animSeen,
+                                     bool releaseEvent = false) {
+    if (releaseEvent) return true;
     if (static_cast<int32_t>(nowMs - queuedMs - 2000u) >= 0) return true;
     if (kitPlaying) {
         animSeen = true;

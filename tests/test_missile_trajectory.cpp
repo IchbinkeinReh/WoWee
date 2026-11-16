@@ -205,4 +205,7 @@ TEST_CASE("Queued missiles are let go when the cast kit's animation is over, or 
     CHECK(releaseDue(3000, 1000, false, never));       // two seconds
     bool still = false;
     CHECK(releaseDue(3000, 1000, true, still));        // two seconds while it plays
+    bool evented = false;
+    CHECK(releaseDue(1001, 1000, true, evented, true)); // the model's release event
 }
+
