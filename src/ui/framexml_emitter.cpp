@@ -4,6 +4,8 @@
 #include "ui/xml_parser.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstdlib>
 #include <set>
 #include <sstream>
 
@@ -18,6 +20,32 @@ namespace {
 /// different things: absent leaves the template's state, written overrides it.
 inline bool attrIsTrue(const std::string& value) {
     return value == "true" || value == "1";
+}
+
+/// The client's one XML colour reader (0x00815c30), used by every colour
+/// element it knows (Color, Shadow/Color, BorderColor, MinColor/MaxColor,
+/// FogColor, BarColor, ...): r, g and b default to 0 and a to 1 when the
+/// attribute is missing or empty; one written is read as atof reads it and
+/// held to 0..1.
+std::array<float, 4> xmlColor(const XmlNode& c) {
+    const auto read = [&](const char* key, float fallback) {
+        const std::string* v = c.attr(key);
+        if (!v || v->empty()) return fallback;
+        const float f = static_cast<float>(std::strtod(v->c_str(), nullptr));
+        // Its comparisons, in its order: a NaN falls to 0 for r, g, b and to
+        // 1 for a.
+        if (fallback == 0.0f) return f >= 1.0f ? 1.0f : (f > 0.0f ? f : 0.0f);
+        if (f < 1.0f && !(f > 0.0f)) return 0.0f;
+        return f < 1.0f ? f : 1.0f;
+    };
+    return {read("r", 0.0f), read("g", 0.0f), read("b", 0.0f), read("a", 1.0f)};
+}
+
+/// The same colour as "r, g, b, a", for a setter's arguments.
+std::string xmlColorArgs(const XmlNode& c) {
+    const auto rgba = xmlColor(c);
+    return std::to_string(rgba[0]) + ", " + std::to_string(rgba[1]) + ", " +
+           std::to_string(rgba[2]) + ", " + std::to_string(rgba[3]);
 }
 
 /// Element names that produce a frame rather than a region. Everything here is
@@ -345,8 +373,7 @@ struct Emitter {
             const XmlNode* mx = grad->child("MaxColor");
             auto rgba = [](const XmlNode* c) {
                 if (!c) return std::string("1, 1, 1, 1");
-                return c->attrOr("r", "0") + ", " + c->attrOr("g", "0") + ", " + c->attrOr("b", "0") + ", " +
-                       c->attrOr("a", "1");
+                return xmlColorArgs(*c);   // 0x00815c30
             };
             line(var + ":SetGradientAlpha(" + quote(grad->attrOr("orientation", "HORIZONTAL")) + ", " + rgba(mn) +
                  ", " + rgba(mx) + ")");
@@ -388,11 +415,7 @@ struct Emitter {
                  std::to_string(tc->attrFloat("bottom", 1.0f)) + ")");
         }
         if (const XmlNode* col = node.child("Color")) {
-            const std::string args =
-                std::to_string(col->attrFloat("r", 1.0f)) + ", " +
-                std::to_string(col->attrFloat("g", 1.0f)) + ", " +
-                std::to_string(col->attrFloat("b", 1.0f)) + ", " +
-                std::to_string(col->attrFloat("a", 1.0f));
+            const std::string args = xmlColorArgs(*col);   // 0x00815c30
             line(var + (isTexture ? ":SetVertexColor(" : ":SetTextColor(") + args + ")");
         }
         if (const XmlNode* anchors = node.child("Anchors"))
@@ -668,11 +691,7 @@ struct Emitter {
             line(var + ":SetTextHeight(" + std::to_string(height) + ")");
         }
         if (const XmlNode* col = node.child("Color")) {
-            line(var + ":SetTextColor(" +
-                 std::to_string(col->attrFloat("r", 1.0f)) + ", " +
-                 std::to_string(col->attrFloat("g", 1.0f)) + ", " +
-                 std::to_string(col->attrFloat("b", 1.0f)) + ", " +
-                 std::to_string(col->attrFloat("a", 1.0f)) + ")");
+            line(var + ":SetTextColor(" + xmlColorArgs(*col) + ")");   // 0x00815c30
         }
         if (const XmlNode* sh = node.child("Shadow")) {
             float sx = 1.0f, sy = -1.0f;
@@ -685,11 +704,7 @@ struct Emitter {
             line(var + ":SetShadowOffset(" + std::to_string(sx) + ", " +
                  std::to_string(sy) + ")");
             if (const XmlNode* sc = sh->child("Color")) {
-                line(var + ":SetShadowColor(" +
-                     std::to_string(sc->attrFloat("r", 0.0f)) + ", " +
-                     std::to_string(sc->attrFloat("g", 0.0f)) + ", " +
-                     std::to_string(sc->attrFloat("b", 0.0f)) + ", " +
-                     std::to_string(sc->attrFloat("a", 1.0f)) + ")");
+                line(var + ":SetShadowColor(" + xmlColorArgs(*sc) + ")");   // 0x00815c30
             }
         }
         if (const std::string* j = node.attr("justifyH"))
@@ -798,10 +813,11 @@ struct Emitter {
         if (const std::string* o = node.attr("outline"))
             line(name + ".outline = " + quote(*o));
         if (const XmlNode* col = node.child("Color")) {
-            line(name + ".r = " + std::to_string(col->attrFloat("r", 1.0f)));
-            line(name + ".g = " + std::to_string(col->attrFloat("g", 1.0f)));
-            line(name + ".b = " + std::to_string(col->attrFloat("b", 1.0f)));
-            line(name + ".a = " + std::to_string(col->attrFloat("a", 1.0f)));
+            const auto rgba = xmlColor(*col);   // 0x00815c30
+            line(name + ".r = " + std::to_string(rgba[0]));
+            line(name + ".g = " + std::to_string(rgba[1]));
+            line(name + ".b = " + std::to_string(rgba[2]));
+            line(name + ".a = " + std::to_string(rgba[3]));
         }
         // <Shadow> - a dark copy of the glyphs one pixel down and across,
         // which is what keeps a label readable over the world and over the
@@ -818,10 +834,11 @@ struct Emitter {
             line(name + ".shadowX = " + std::to_string(sx));
             line(name + ".shadowY = " + std::to_string(sy));
             if (const XmlNode* sc = sh->child("Color")) {
-                line(name + ".shadowR = " + std::to_string(sc->attrFloat("r", 0.0f)));
-                line(name + ".shadowG = " + std::to_string(sc->attrFloat("g", 0.0f)));
-                line(name + ".shadowB = " + std::to_string(sc->attrFloat("b", 0.0f)));
-                line(name + ".shadowA = " + std::to_string(sc->attrFloat("a", 1.0f)));
+                const auto rgba = xmlColor(*sc);   // 0x00815c30
+                line(name + ".shadowR = " + std::to_string(rgba[0]));
+                line(name + ".shadowG = " + std::to_string(rgba[1]));
+                line(name + ".shadowB = " + std::to_string(rgba[2]));
+                line(name + ".shadowA = " + std::to_string(rgba[3]));
             }
         }
         // Which way the text sits in its box, which for a font object is most
@@ -1366,8 +1383,7 @@ struct Emitter {
             if (const std::string* ff = node.attr("fogFar"))
                 line(var + ":SetFogFar(math.max(0, " + *ff + "))");
             if (const XmlNode* fog = node.child("FogColor")) {
-                line(var + ":SetFogColor(" + fog->attrOr("r", "0") + ", " + fog->attrOr("g", "0") + ", " +
-                     fog->attrOr("b", "0") + ", " + fog->attrOr("a", "1") + ")");
+                line(var + ":SetFogColor(" + xmlColorArgs(*fog) + ")");   // 0x00815c30
             }
         }
         if (node.attr("toplevel")) {
@@ -1428,11 +1444,7 @@ struct Emitter {
                                    : sub.name == "BorderColor" ? ":SetBackdropBorderColor("
                                                                : nullptr;
                 if (!setter) continue;
-                line(var + setter +
-                     std::to_string(sub.attrFloat("r", 1.0f)) + ", " +
-                     std::to_string(sub.attrFloat("g", 1.0f)) + ", " +
-                     std::to_string(sub.attrFloat("b", 1.0f)) + ", " +
-                     std::to_string(sub.attrFloat("a", 1.0f)) + ")");
+                line(var + setter + xmlColorArgs(sub) + ")");   // 0x00815c30
             }
             break;  // one backdrop to a frame
         }
@@ -1608,11 +1620,7 @@ struct Emitter {
             }
         }
         if (const XmlNode* col = node.child("BarColor")) {
-            line(var + ":SetStatusBarColor(" +
-                 std::to_string(col->attrFloat("r", 1.0f)) + ", " +
-                 std::to_string(col->attrFloat("g", 1.0f)) + ", " +
-                 std::to_string(col->attrFloat("b", 1.0f)) + ", " +
-                 std::to_string(col->attrFloat("a", 1.0f)) + ")");
+            line(var + ":SetStatusBarColor(" + xmlColorArgs(*col) + ")");   // 0x00815c30
         }
 
         if (const XmlNode* layers = node.child("Layers")) {
