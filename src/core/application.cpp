@@ -1455,10 +1455,6 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
             if (!uim || !gh) return false;
             return uim->getGameScreen().getChatPanel().runRegistryCommand(*gh, alias, args);
         };
-        luaSvc.playEmoteAnimation = [rend = renderer.get()](const std::string& name) {
-            if (!rend) return;
-            if (auto* ac = rend->getAnimationController()) ac->playEmote(name);
-        };
         luaSvc.getGamma = [uim = uiManager.get()]() -> float {
             return uim ? uim->getGameScreen().getGamma() : 1.0f;
         };
@@ -4015,7 +4011,7 @@ void Application::connectWorldHooks() {
             switch (appearanceComposer_->onTextEmote(textEmoteId)) {
                 case core::TextEmoteVerdict::Refused: return Gate::Refuse;
                 case core::TextEmoteVerdict::RefusedWhileMoving: return Gate::RefuseWhileMoving;
-                default: return Gate::Send;
+                default: playTextEmoteLocally(textEmoteId); return Gate::Send;
             }
         });
         // A player difficulty change shows the current map's loading screen
@@ -5442,6 +5438,34 @@ rendering::upper_body::Unit Application::playerAnimationState(const game::Unit& 
         }
     }
     return u;
+}
+
+// 0x006dd9e0, a text emote the player sends: a stand-state emote asks for
+// its stand state (0x006dcb40); any other animation plays at once only where
+// 0x00724410 lets it - on the move - and otherwise waits for the server's
+// SMSG_EMOTE (0x006cfe70).
+void Application::playTextEmoteLocally(uint32_t textEmoteId) {
+    if (!appearanceComposer_ || !gameHandler) return;
+    const TextEmoteSheathInput row = appearanceComposer_->textEmoteRow(textEmoteId);
+    if (!row.emoteKnown) return;
+    if (textEmoteSetsStandState(row.specProc, row.specProcParam)) {
+        gameHandler->setStandState(static_cast<uint8_t>(row.specProcParam));
+        return;
+    }
+    if (row.animId == 0) return;
+    auto* cr = renderer ? renderer->getCharacterRenderer() : nullptr;
+    const uint32_t instanceId = renderer ? renderer->getCharacterInstanceId() : 0;
+    auto entity = gameHandler->getEntityManager().getEntity(gameHandler->getPlayerGuid());
+    const auto* self = dynamic_cast<const game::Unit*>(entity.get());
+    if (!cr || instanceId == 0 || !self) return;
+    rendering::upper_body::Unit u = playerAnimationState(*self);
+    if (const auto seen = cr->unitStandStateSeen(instanceId)) u.standStateSeen = *seen;
+    // 0x006dac10: a ghost (PLAYER_FLAGS 0x10) is dead to it.
+    bool ghost = false;
+    if (const uint16_t pf = game::fieldIndex(game::UF::PLAYER_FLAGS); pf != 0xFFFF)
+        ghost = (self->getField(pf) & 0x10u) != 0;
+    if (!rendering::upper_body::localEmotePlays(u, ghost)) return;
+    cr->playAnimation(instanceId, row.animId, row.specProc == 2);
 }
 
 // A drop off a ledge the player is in the air for: not a jump, not in water,

@@ -580,6 +580,8 @@ struct TextEmoteSheathInput {
     bool emoteKnown = false;    ///< EmotesText's EmoteRef names an Emotes row
     uint32_t emoteFlags = 0;    ///< Emotes +0xc
     uint32_t specProc = 0;      ///< Emotes +0x10
+    uint32_t specProcParam = 0; ///< Emotes +0x14, the stand state for proc 1
+    uint32_t animId = 0;        ///< Emotes +0x8, its AnimationData id
     uint8_t standState = 0;     ///< UNIT_FIELD_BYTES_1 byte 0
     uint32_t moveFlags = 0;     ///< the movement flags
     uint32_t unitFlags = 0;     ///< UNIT_FIELD_FLAGS
@@ -601,6 +603,13 @@ constexpr bool textEmoteAllowed(const TextEmoteSheathInput& in) {
     if ((f & 0x8000u) != 0 && (in.onFlyingSpline || (in.moveFlags & 0x2000000u) != 0)) return false;
     if ((f & 0x200u) == 0 && (in.standState == 3 || in.standState == 7)) return false;
     return true;
+}
+
+/// 0x006dd9e0, a text emote sent: an emote whose EmoteSpecProc is 1 and
+/// whose param is a stand state of 0x00ada2e0's (0x10b: stand, sit, sleep,
+/// kneel) asks for that stand state (0x006dcb40) instead of an animation.
+constexpr bool textEmoteSetsStandState(uint32_t specProc, uint32_t param) {
+    return specProc == 1 && param < 32 && ((0x10bu >> param) & 1u) != 0;
 }
 
 /// What 0x006dd9e0 does with a text emote the active player sends.

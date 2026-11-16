@@ -452,3 +452,56 @@ TEST_CASE("a rider's state kit animation goes to its upper body (0x0071e400)", "
     ub::applyRiderKitAnimation(data, slots(kMount), d, kRun);
     CHECK(d.upper.anim == -1);
 }
+
+TEST_CASE("the player's emote plays at once only on the move (0x00724410)", "[upper_body]") {
+    ub::Unit u;
+    // Standing still it waits for the server's SMSG_EMOTE.
+    CHECK_FALSE(ub::localEmotePlays(u, false));
+    u.moveFlags = 0x1;  // forward
+    CHECK(ub::localEmotePlays(u, false));
+    u.moveFlags = 0x8;  // strafing
+    CHECK(ub::localEmotePlays(u, false));
+    CHECK_FALSE(ub::localEmotePlays(u, true));  // a ghost
+    ub::Unit dead = u;
+    dead.alive = false;
+    CHECK_FALSE(ub::localEmotePlays(dead, false));
+    ub::Unit leaping = u;
+    leaping.moveFlags |= ub::kMoveFalling;
+    leaping.leaping = true;
+    CHECK_FALSE(ub::localEmotePlays(leaping, false));
+    ub::Unit casting = u;
+    casting.castTimed = true;
+    CHECK_FALSE(ub::localEmotePlays(casting, false));
+    ub::Unit shooting = u;
+    shooting.rangedDrawn = true;
+    CHECK(ub::localEmotePlays(shooting, false));
+    shooting.autoRepeat = true;
+    CHECK_FALSE(ub::localEmotePlays(shooting, false));
+    ub::Unit looting = u;
+    looting.looting = looting.canLoot = true;
+    CHECK_FALSE(ub::localEmotePlays(looting, false));
+    ub::Unit sitting = u;
+    sitting.standStateSeen = 1;
+    CHECK_FALSE(ub::localEmotePlays(sitting, false));
+}
+
+TEST_CASE("SMSG_EMOTE's animation on the player (0x0073ab90)", "[upper_body]") {
+    ub::Unit u;
+    CHECK(ub::serverEmotePlays(u, 10, 0));
+    CHECK_FALSE(ub::serverEmotePlays(u, 10, 10));  // already playing it
+    ub::Unit asleep = u;
+    asleep.standState = 3;
+    CHECK_FALSE(ub::serverEmotePlays(asleep, 10, 0));
+    ub::Unit swimming = u;
+    swimming.moveFlags = ub::kMoveSwimming;
+    CHECK_FALSE(ub::serverEmotePlays(swimming, 10, 0));
+    ub::Unit fighting = u;
+    fighting.inCombat = true;
+    CHECK_FALSE(ub::serverEmotePlays(fighting, 10, 0));
+    CHECK(ub::serverEmotePlays(fighting, 192, 0));
+    CHECK(ub::serverEmotePlays(fighting, 200, 0));
+    ub::Unit channeling = u;
+    channeling.channeling = true;
+    CHECK_FALSE(ub::serverEmotePlays(channeling, 192, 0));
+    CHECK_FALSE(ub::serverEmotePlays(u, 0x1fa, 0));
+}

@@ -102,6 +102,9 @@ public:
     /// The player sending a text emote (0x006dd9e0): whether it is sent,
     /// and its weapons put away when it is.
     TextEmoteVerdict onTextEmote(uint32_t textEmoteId);
+    /// The Emotes row a text emote names (EmotesText +8): its flags, spec
+    /// proc and param, and animation; `emoteKnown` false without one.
+    TextEmoteSheathInput textEmoteRow(uint32_t textEmoteId) const;
     /// Once a frame: the field's changes (0x00737aa0), the stand state's
     /// (0x0073f060), the channel object's (0x0073a520), the animation's,
     /// cast's and attack's (0x00738180), then the weapons dressed again

@@ -2492,6 +2492,32 @@ void CharacterRenderer::setUnitAnimationState(uint32_t instanceId, const upper_b
     if (kitChanged || dismounted) playBaseAnimation(instanceId);
 }
 
+const upper_body::Unit* CharacterRenderer::unitAnimationState(uint32_t instanceId) const {
+    auto it = instances.find(instanceId);
+    if (it == instances.end() || !it->second.unitAnimation) return nullptr;
+    return &it->second.unit;
+}
+
+std::optional<uint8_t> CharacterRenderer::unitStandStateSeen(uint32_t instanceId) const {
+    auto it = instances.find(instanceId);
+    if (it == instances.end() || it->second.standStateSeen < 0) return std::nullopt;
+    return static_cast<uint8_t>(it->second.standStateSeen);
+}
+
+int32_t CharacterRenderer::unitPlaying(uint32_t instanceId) const {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return -1;
+    const auto& instance = it->second;
+    // The upper body's own (+0xb84), else the body's (0x008267e0(-1)).
+    const int32_t bone = instance.upperBodyBone;
+    if (bone >= 0) {
+        for (const auto& k : instance.keyBoneAnimations) {
+            if (k.keyBoneId == bone && k.sequence >= 0 && !k.returning) return static_cast<int32_t>(k.animationId);
+        }
+    }
+    return instance.currentSequenceIndex >= 0 ? static_cast<int32_t>(instance.currentAnimationId) : -1;
+}
+
 int32_t CharacterRenderer::upperBodyBone(CharacterInstance& instance) {
     if (instance.upperBodyBone == -2) {
         const auto& bones = models[instance.modelId].data.bones;
