@@ -1184,6 +1184,8 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     else if (n == "spelleffectlevel") lua_pushstring(L, "9");
     // On (0x0051d9b0): UnitPower and the cast read the predicted power.
     else if (n == "predictedpower") lua_pushstring(L, "1");
+    // On (0x00510000 "1"): UnitHealth reads the predicted health (0x0071c2c0).
+    else if (n == "predictedhealth") lua_pushstring(L, "1");
     // 0x004d0000's registration: "32" (0x009e21dc), the real voices the
     // sound engine is set up with (audio/voice_priority.hpp).
     else if (n == "sound_numchannels") lua_pushstring(L, "32");
@@ -1315,6 +1317,8 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     // On, as registered (0x00510000 "1"): losing the top of the threat list
     // makes a noise unless the player has turned that off.
     else if (n == "threatplaysounds") lua_pushstring(L, "1");
+    // On, as registered: the threat floaters over a unit (0x00719220).
+    else if (n == "threatworldtext") lua_pushstring(L, "1");
     // Two that were relying on the generic zero rather than saying so. Both
     // want off, so the behaviour was right - but by coincidence, and the rule
     // this file keeps proving is that a value nobody registers is a value
