@@ -10,6 +10,90 @@ namespace wowee {
 namespace game {
 namespace {
 
+/// 0x005797f0 over [p, end): terms left to right, '&' stopping at the first
+/// false and '|' at the first true, '!' turning the next term or group.
+bool branchCondition(const std::string& s, std::size_t& p, std::size_t end,
+                     const std::function<bool(char, uint32_t)>& holds, int depth) {
+    bool value = false;
+    while (p < end) {
+        const char c = s[p];
+        if (c == ')') return value;
+        if (c == '&' || c == '|') {
+            if (c == '&' && !value) return false;
+            if (c == '|' && value) return true;
+            ++p;
+            value = depth < 16 && branchCondition(s, p, end, holds, depth + 1);
+            continue;
+        }
+        bool negate = false;
+        std::size_t q = p;
+        while (q < end && s[q] == '!') { negate = !negate; ++q; }
+        if (q < end && s[q] == '(') {
+            p = q + 1;
+            value = depth < 16 && branchCondition(s, p, end, holds, depth + 1);
+            if (p < end && s[p] == ')') ++p;
+            if (negate) value = !value;
+            continue;
+        }
+        if (q < end && (s[q] == 's' || s[q] == 'S' || s[q] == 'a' || s[q] == 'A')) {
+            const char letter = static_cast<char>(std::tolower(static_cast<unsigned char>(s[q])));
+            ++q;
+            uint32_t id = 0;
+            while (q < end && std::isdigit(static_cast<unsigned char>(s[q]))) id = id * 10 + static_cast<uint32_t>(s[q++] - '0');
+            value = holds && holds(letter, id);
+            if (negate) value = !value;
+            p = q;
+            continue;
+        }
+        p = q + 1;  // anything else is stepped over, as the client steps over it
+    }
+    return value;
+}
+
+}  // namespace
+
+DescriptionBranch pickDescriptionBranch(const std::string& raw, std::size_t at,
+                                        const std::function<bool(char, uint32_t)>& holds) {
+    DescriptionBranch out;
+    std::size_t condAt = at;
+    for (int links = 0; links < 16; ++links) {
+        const std::size_t open = raw.find('[', condAt);
+        if (open == std::string::npos) return out;
+        const std::size_t close = raw.find(']', open);
+        if (close == std::string::npos) return out;
+        std::size_t p = condAt;
+        if (branchCondition(raw, p, open, holds, 0)) {
+            // Taken: find where the chain ends, past every later branch.
+            std::size_t tail = close;
+            while (tail + 1 < raw.size() && raw[tail + 1] == '?') {
+                const std::size_t o = raw.find('[', tail + 2);
+                if (o == std::string::npos) return out;
+                tail = raw.find(']', o);
+                if (tail == std::string::npos) return out;
+            }
+            const std::size_t elseOpen = tail + 1;
+            if (elseOpen >= raw.size() || raw[elseOpen] != '[') return out;
+            const std::size_t elseClose = raw.find(']', elseOpen);
+            if (elseClose == std::string::npos) return out;
+            out = {true, elseClose + 1, raw.substr(open + 1, close - open - 1)};
+            return out;
+        }
+        if (close + 1 < raw.size() && raw[close + 1] == '?') {
+            condAt = close + 2;
+            continue;
+        }
+        const std::size_t elseOpen = close + 1;
+        if (elseOpen >= raw.size() || raw[elseOpen] != '[') return out;
+        const std::size_t elseClose = raw.find(']', elseOpen);
+        if (elseClose == std::string::npos) return out;
+        out = {true, elseClose + 1, raw.substr(elseOpen + 1, elseClose - elseOpen - 1)};
+        return out;
+    }
+    return out;
+}
+
+namespace {
+
 struct Parser {
     const SpellDescriptionContext& ctx;
     int depth = 0;   ///< a row may name itself; stop rather than recurse forever

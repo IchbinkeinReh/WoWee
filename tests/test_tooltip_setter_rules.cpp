@@ -150,3 +150,46 @@ TEST_CASE("the other filter words add their bit and unknown words are passed ove
     CHECK(auraFilterBits("HELPFULX|PLAYERS") == kAuraHelpful);
     CHECK(auraFilterBits("Player|harmful") == (kAuraHarmful | kAuraPlayer));
 }
+
+TEST_CASE("a time left is worded as 0x0061a9e0 words it", "[tooltip]") {
+    // ITEM_COOLDOWN_TIME rounds up: seconds stay rounded down under a minute.
+    CHECK(std::string(timeLeft(59999, true).suffix) == "_SEC");
+    CHECK(timeLeft(59999, true).value == 59);
+    CHECK(timeLeft(500, true).value == 0);
+    // A minute and a moment is two minutes; sixty is an hour, 24 hours a day.
+    CHECK(std::string(timeLeft(60001, true).suffix) == "_MIN");
+    CHECK(timeLeft(60001, true).value == 2);
+    CHECK(std::string(timeLeft(59 * 60000 + 1, true).suffix) == "_HOURS");
+    CHECK(timeLeft(59 * 60000 + 1, true).value == 1);
+    CHECK(std::string(timeLeft(90 * 60000, true).suffix) == "_HOURS");
+    CHECK(timeLeft(90 * 60000, true).value == 2);
+    CHECK(std::string(timeLeft(23 * 3600000ull + 1, true).suffix) == "_DAYS");
+    CHECK(timeLeft(23 * 3600000ull + 1, true).value == 1);
+    CHECK(timeLeft(3 * 86400000ull + 1, true).value == 4);
+    // Rounding down, as SPELL_DURATION's callers without the flag have it.
+    CHECK(std::string(timeLeft(119999, false).suffix) == "_MIN");
+    CHECK(timeLeft(119999, false).value == 1);
+    CHECK(std::string(timeLeft(59 * 60000 + 59999, false).suffix) == "_MIN");
+    CHECK(timeLeft(59 * 60000 + 59999, false).value == 59);
+}
+
+TEST_CASE("an aura's description is multiplied by its stacks, not its charges", "[tooltip]") {
+    // Sunder Armor stacks to 5: five doses read five times the armour.
+    CHECK(auraTooltipStacks(5, 3) == 3);
+    // Lightning Shield's count is charges (StackAmount 0): read once.
+    CHECK(auraTooltipStacks(0, 3) == 1);
+    CHECK(auraTooltipStacks(1, 3) == 1);
+    CHECK(auraTooltipStacks(2, 2) == 2);
+}
+
+TEST_CASE("a ranged spell's cast time follows the ranged swing (0x007ff180)", "[tooltip]") {
+    // Steady Shot 1.5 s + 0.5 s, a 2.8 s bow swung at 2.8 s: unchanged.
+    CHECK(rangedCastTimeMs(2000, 2800, 2800) == 2000);
+    // Hasted to 2.24 s (a 25% quiver): 1600.
+    CHECK(rangedCastTimeMs(2000, 2240, 2800) == 1600);
+    // Truncated, not rounded: 2000 * 2001 / 2800 = 1429.29.
+    CHECK(rangedCastTimeMs(2000, 2001, 2800) == 1429);
+    // No weapon delay or no ranged swing: left alone.
+    CHECK(rangedCastTimeMs(2000, 0, 2800) == 2000);
+    CHECK(rangedCastTimeMs(2000, 2240, 0) == 2000);
+}

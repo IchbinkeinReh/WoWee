@@ -547,7 +547,7 @@ bool ItemQueryResponseParser::parse(network::Packet& packet, ItemQueryResponseDa
     data.arcaneRes = static_cast<int32_t>(packet.readUInt32()); // ArcaneRes
     data.delayMs = packet.readUInt32();
     data.ammoType = packet.readUInt32();
-    packet.readFloat();  // RangedModRange
+    data.rangedModRange = packet.readFloat();
 
     // 5 item spells: SpellId, SpellTrigger, SpellCharges, SpellCooldown, SpellCategory, SpellCategoryCooldown
     for (int i = 0; i < 5; i++) {

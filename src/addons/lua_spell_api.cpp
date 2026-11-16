@@ -7,6 +7,7 @@
 #include "rendering/camera.hpp"
 #include "addons/lua_api_helpers.hpp"
 #include "addons/tooltip_setter_rules.hpp"
+#include "addons/unit_aura_call.hpp"
 #include "game/totem_bar.hpp"
 #include "game/spell_handler.hpp"
 #include "game/interface_text.hpp"
@@ -252,6 +253,11 @@ static bool classCanDispel(uint8_t classId, uint8_t dispelType) {
     }
 }
 
+UnitAuraAnswer& lastUnitAuraAnswer() {
+    static UnitAuraAnswer answer;
+    return answer;
+}
+
 static int lua_UnitAura(lua_State* L, bool wantBuff) {
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnNil(L); }
@@ -362,6 +368,7 @@ static int lua_UnitAura(lua_State* L, bool wantBuff) {
             lua_pushboolean(L, 0);           // isStealable
             lua_pushboolean(L, 0);           // shouldConsolidate
             lua_pushnumber(L, aura.spellId); // spellId
+            lastUnitAuraAnswer() = {true, aura.level, aura.charges};
             return 11;
         }
     }

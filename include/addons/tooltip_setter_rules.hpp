@@ -55,6 +55,52 @@ constexpr bool spellTooltipAppendsItem(uint32_t attributes, const uint32_t (&eff
     return false;
 }
 
+/// A time left as 0x0061a9e0 words it under a GlobalStrings base key
+/// (ITEM_COOLDOWN_TIME, SPELL_TIME_REMAINING): the key's suffix and the
+/// number for its %d. Whole seconds under a minute, always rounded down;
+/// minutes, hours and days rounded up where `roundUp` (its seventh argument)
+/// asks and down where not - sixty minutes reading one hour and twenty-four
+/// hours one day only on the way up.
+struct TimeLeft {
+    const char* suffix;  ///< "_SEC", "_MIN", "_HOURS" or "_DAYS"
+    uint64_t value;
+};
+constexpr TimeLeft timeLeft(uint64_t ms, bool roundUp) {
+    constexpr uint64_t kMinute = 60000, kHour = kMinute * 60, kDay = kMinute * 1440;
+    const auto over = [roundUp](uint64_t v, uint64_t unit) {
+        return roundUp ? (v == 0 ? 0 : (v - 1) / unit + 1) : v / unit;
+    };
+    if (ms >= kDay) return {"_DAYS", over(ms, kDay)};
+    if (ms >= kHour) {
+        const uint64_t hours = over(ms, kHour);
+        return hours == 24 ? TimeLeft{"_DAYS", 1} : TimeLeft{"_HOURS", hours};
+    }
+    if (ms >= kMinute) {
+        const uint64_t minutes = over(ms, kMinute);
+        return minutes == 60 ? TimeLeft{"_HOURS", 1} : TimeLeft{"_MIN", minutes};
+    }
+    return {"_SEC", ms / 1000};
+}
+
+/// The stack count an aura's tooltip multiplies its $s, $m, $M and $o by
+/// (0x00625350 into 0x00579e50): the aura's count, but one for a spell
+/// whose StackAmount is under two - there the count is charges, not doses.
+constexpr int auraTooltipStacks(uint32_t stackAmount, int count) {
+    return static_cast<int32_t>(stackAmount) < 2 ? 1 : count;
+}
+
+/// A ranged spell's cast time with a ranged weapon in hand (0x007ff180's
+/// tail, the player's own cast only): the half second Attributes 0x2 adds
+/// already in `castMs`, then scaled by UNIT_FIELD_RANGEDATTACKTIME over the
+/// weapon's Delay (item +0xf4) and truncated (_ftol2). Unchanged where
+/// either is zero.
+inline int32_t rangedCastTimeMs(int32_t castMs, uint32_t rangedAttackTime, uint32_t weaponDelay) {
+    if (rangedAttackTime == 0 || weaponDelay == 0) return castMs;
+    const double scaled = static_cast<double>(rangedAttackTime) /
+                          static_cast<double>(static_cast<int32_t>(weaponDelay)) * static_cast<double>(castMs);
+    return static_cast<int32_t>(static_cast<int64_t>(scaled));
+}
+
 /// How many of an item an effect makes, its least or its most
 /// (0x008016c0 over 0x007ff770's two values): doubled, a half added away
 /// from zero, rounded to nearest by the x87 store and halved by a shift.

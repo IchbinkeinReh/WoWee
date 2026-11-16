@@ -3529,8 +3529,8 @@ struct TalentTooltipPart {
     bool hints = false;
 };
 static constexpr float kTalentWhite[3] = {1.0f, 1.0f, 1.0f};
-static constexpr float kTalentGold[3] = {1.0f, 0.824f, 0.0f};    // 0xad2d2c
-static constexpr float kTalentRed[3] = {1.0f, 0.125f, 0.125f};   // 0xad2d34
+static constexpr float kTalentGold[3] = {1.0f, 210.0f / 255.0f, 0.0f};          // 0xad2d2c
+static constexpr float kTalentRed[3] = {1.0f, 32.0f / 255.0f, 32.0f / 255.0f};  // 0xad2d34
 static constexpr float kTalentGreen[3] = {0.0f, 1.0f, 0.0f};     // 0xad2d40
 static std::string withPlural(std::string text, int n);
 
@@ -3642,10 +3642,10 @@ static bool buildSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHand
 
     w->isTooltip = true;
     if (talent && talent->nextRank) {
-        // A talent's next rank goes on under the one shown, headed
-        // "\n" TOOLTIP_TALENT_NEXT_RANK in white.
-        line(" ", "", 1.0f, 1.0f, 1.0f);
-        line(globalOr(L, "TOOLTIP_TALENT_NEXT_RANK", "Next Rank:"), "", 1.0f, 1.0f, 1.0f);
+        // A talent's next rank goes on under the one shown, headed by one
+        // line "\n" TOOLTIP_TALENT_NEXT_RANK in white ("\n%s", 0x00a25978) -
+        // its break the blank row above the words, not a line of its own.
+        line("\n" + globalOr(L, "TOOLTIP_TALENT_NEXT_RANK", "Next Rank:"), "", 1.0f, 1.0f, 1.0f);
     } else {
         clearTooltipLines(L, w);
         // A trade spell (Attributes 0x20 with an enchant or create-item
@@ -3661,10 +3661,10 @@ static bool buildSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHand
         if (trade) {
             if (const uint32_t skill = gh->spellSkillLine(spellId); skill != 0) {
                 if (const std::string& skillName = gh->getSkillName(skill); !skillName.empty()) {
-                    line(skillName + ": " + name, "", 1.0f, 0.824f, 0.0f);
-                    w->tooltipLines.back().rc[0] = 1.0f;
-                    w->tooltipLines.back().rc[1] = 0.824f;
-                    w->tooltipLines.back().rc[2] = 0.0f;
+                    line(skillName + ": " + name, "", kTalentGold[0], kTalentGold[1], kTalentGold[2]);
+                    w->tooltipLines.back().rc[0] = kTalentGold[0];
+                    w->tooltipLines.back().rc[1] = kTalentGold[1];
+                    w->tooltipLines.back().rc[2] = kTalentGold[2];
                 }
             }
         } else {
@@ -3673,7 +3673,7 @@ static bool buildSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHand
             // SetHyperlink and a full SetAction leave the rank off.
             line(name, brief || showRank ? gh->getSpellRank(spellId) : std::string(), 1.0f, 1.0f, 1.0f);
             auto& title = w->tooltipLines.back();
-            title.rc[0] = title.rc[1] = title.rc[2] = 0.5f;
+            title.rc[0] = title.rc[1] = title.rc[2] = 128.0f / 255.0f;  // 0xad2d38: ff808080
         }
         if (talent && talent->facts) addTalentRankAndPrereqs(L, w, gh, *talent->facts);
     }
@@ -3853,10 +3853,9 @@ static bool buildSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHand
             const std::string& named = gh->getTotemCategoryName(cat);
             if (!named.empty()) add(named, sh && sh->carriesTotemCategory(cat));
         }
-        if (!tools.empty() && (!allThere || !brief)) {
-            line(tools, "", 1.0f, 1.0f, 1.0f);
-            w->tooltipLines.back().wrap = true;
-        }
+        // Not wrapped: 0x006238a0 adds it with the wrap flag clear, where
+        // the reagents' line has it set.
+        if (!tools.empty() && (!allThere || !brief)) line(tools, "", 1.0f, 1.0f, 1.0f);
     }
 
     // Then what the spell asks of the player, each line white where it is
@@ -3869,7 +3868,7 @@ static bool buildSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHand
         const auto needLine = [&](const char* key, const char* keyBrief, const std::string& what, bool met, bool wrap) {
             if (what.empty() || (met && brief)) return;
             const std::string fmt = globalOr(L, met || !brief ? key : keyBrief, "Requires %s");
-            line(formatGlobal(L, fmt, {what}), "", 1.0f, met ? 1.0f : 0.125f, met ? 1.0f : 0.125f);
+            line(formatGlobal(L, fmt, {what}), "", 1.0f, met ? 1.0f : kTalentRed[1], met ? 1.0f : kTalentRed[2]);
             w->tooltipLines.back().wrap = wrap;
         };
         const auto eq = sh->tooltipEquipped(spellId);
@@ -3880,9 +3879,12 @@ static bool buildSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHand
             const std::string& faction = gh->getFactionNamePublic(rep.faction);
             const std::string standing =
                 genderedGlobal(L, "FACTION_STANDING_LABEL" + std::to_string(rep.rank + 1));
+            // A faction Faction.dbc has no row for is the bare word UNKNOWN,
+            // not its GlobalStrings text: 0x006238a0 hands the key itself
+            // to the format.
             line(formatGlobal(L, globalOr(L, "ITEM_REQ_REPUTATION", "Requires %s - %s"),
-                              {faction.empty() ? globalOr(L, "UNKNOWN", "Unknown") : faction, standing}),
-                 "", 1.0f, rep.met ? 1.0f : 0.125f, rep.met ? 1.0f : 0.125f);
+                              {faction.empty() ? std::string("UNKNOWN") : faction, standing}),
+                 "", 1.0f, rep.met ? 1.0f : kTalentRed[1], rep.met ? 1.0f : kTalentRed[2]);
         }
         if (const auto pe = gh->spellNameCacheRef().find(spellId); pe != gh->spellNameCacheRef().end() && !brief) {
             const auto& sp = pe->second;
@@ -3892,14 +3894,18 @@ static bool buildSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHand
                 });
             const bool passive = sp.effectIds[0] == 0x2f || (sp.attr & 0x40u) != 0;
             int32_t casterLevel = static_cast<int32_t>(gh->getPlayerLevel());
+            bool haveCaster = true;
             if (pet) {
+                // No pet in the world: 0x006238a0's caster is null and the
+                // line is not written.
                 const auto petUnit = gh->getEntityManager().getEntity(casterGuid);
                 const uint16_t li = game::fieldIndex(game::UF::UNIT_FIELD_LEVEL);
+                haveCaster = petUnit != nullptr;
                 casterLevel = petUnit && li != 0xFFFF ? static_cast<int32_t>(petUnit->getField(li)) : 0;
             }
-            if (!trade && passive && sp.baseLevel > 0 && casterLevel < sp.baseLevel) {
+            if (!trade && passive && haveCaster && casterLevel < sp.baseLevel) {
                 line(formatGlobal(L, globalOr(L, "ITEM_MIN_LEVEL", "Requires Level %d"), {std::to_string(sp.baseLevel)}),
-                     "", 1.0f, 0.125f, 0.125f);
+                     "", kTalentRed[0], kTalentRed[1], kTalentRed[2]);
             }
         }
     }
@@ -3917,7 +3923,9 @@ static bool buildSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHand
         bool short_ = false;
         std::string reagents;
         for (const auto& r : se->second.reagents) {
-            if (r.itemId == 0 || r.count == 0) continue;
+            // Any reagent the row names, a count of none included (never
+            // short, and written without a count).
+            if (static_cast<int32_t>(r.itemId) <= 0) continue;
             const auto* item = gh->getItemInfo(r.itemId);
             if (!item || !item->valid || item->name.empty()) {
                 gh->ensureItemInfo(r.itemId);
@@ -3941,19 +3949,21 @@ static bool buildSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHand
 
     // What is left of its cooldown, after the reagents (ITEM_COOLDOWN_TIME).
     // From the history, held cooldowns aside (0x00625b90 -> 0x00809000).
+    // Worded by 0x0061a9e0 under ITEM_COOLDOWN_TIME rounding up: whole
+    // seconds (rounded down) under a minute, then minutes, hours and days -
+    // "Verbleibende Abklingzeit: 2 Stunden" past the hour.
     const auto cd = gh->playerSpellCooldown(spellId);
-    if (const float left = cd.enabled && cd.start != 0 && cd.duration != 0
-                               ? static_cast<float>(static_cast<double>(cd.start + cd.duration) * 0.001 - luaGetTimeNow())
-                               : 0.0f;
-        left > 0.1f) {
-        const bool minutes = left >= 60.0f;
-        std::string text = globalOr(L, minutes ? "ITEM_COOLDOWN_TIME_MIN" : "ITEM_COOLDOWN_TIME_SEC",
-                                    minutes ? "Cooldown remaining: %d min" : "Cooldown remaining: %d sec");
-        const int amount = static_cast<int>(std::ceil(minutes ? left / 60.0f : left));
-        if (const size_t at = text.find("%d"); at != std::string::npos) {
-            text.replace(at, 2, std::to_string(amount));
-        }
-        line(text, "", 1.0f, 1.0f, 1.0f);
+    if (const int64_t leftMs = cd.enabled && cd.start != 0 && cd.duration != 0
+                                   ? static_cast<int64_t>(cd.start) + static_cast<int64_t>(cd.duration) -
+                                         static_cast<int64_t>(std::llround(luaGetTimeNow() * 1000.0))
+                                   : 0;
+        leftMs > 0) {
+        const auto t = wowee::addons::tooltip_rules::timeLeft(static_cast<uint64_t>(leftMs), true);
+        const std::string key = std::string("ITEM_COOLDOWN_TIME") + t.suffix;
+        const int amount = static_cast<int>(t.value);
+        line(withPlural(formatGlobal(L, globalOr(L, key.c_str(), "Cooldown remaining: %d"), {std::to_string(amount)}),
+                        amount),
+             "", 1.0f, 1.0f, 1.0f);
     }
     // A brief tooltip ends here: no description.
     if (brief) {
@@ -4015,8 +4025,8 @@ static bool buildSpellTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHand
         // Wrapped, as every line of prose in a tooltip is: a line that does
         // not wrap sets the tooltip's width, and a description is a sentence
         // or three - the tooltip grew as wide as the screen and ran off it.
-        // Gold, NORMAL_FONT_COLOR, as the client writes a description.
-        line(body, "", 1.0f, 0.82f, 0.0f);
+        // Gold, 0xad2d2c (ffffd200), as the client writes a description.
+        line(body, "", kTalentGold[0], kTalentGold[1], kTalentGold[2]);
         w->tooltipLines.back().wrap = true;
     }
     if (talent && talent->hints && talent->facts) addTalentHints(L, w, *talent->facts);
@@ -4736,9 +4746,12 @@ int lua_Tooltip_SetUnitAura(lua_State* L) {
 
     // Through UnitAura itself, so the index means what the buff frame meant,
     // and the filter defaults as UnitAura's does - to HELPFUL (0x00608390).
+    wowee::addons::lastUnitAuraAnswer() = {};
     if (!wowee::addons::callUnitAuraForSetter(L)) return 0;
+    const auto answer = wowee::addons::lastUnitAuraAnswer();
     const int base = lua_gettop(L) - 10;
     const char* auraName = lua_tostring(L, base);
+    const int count = static_cast<int>(lua_tonumber(L, base + 3));
     const double duration = lua_tonumber(L, base + 5);
     const double expires = lua_tonumber(L, base + 6);
     const uint32_t spellId = static_cast<uint32_t>(lua_tonumber(L, base + 10));
@@ -4772,12 +4785,17 @@ int lua_Tooltip_SetUnitAura(lua_State* L) {
             }
         }
     }
-    line(name, dispel, 1.0f, 0.82f, 0.0f);
+    line(name, dispel, kTalentGold[0], kTalentGold[1], kTalentGold[2]);
 
+    // Worked out at the level the aura was cast at and times its stacks -
+    // one where the spell does not stack (0x00625350 into 0x0057abc0).
     gh->loadSpellNameCache();
     if (auto se = gh->spellNameCacheRef().find(spellId); se != gh->spellNameCacheRef().end() &&
         !se->second.auraDescription.empty()) {
-        line(gh->formatSpellDescription(spellId, se->second.auraDescription), "", 1.0f, 1.0f, 1.0f);
+        const int stacks = wowee::addons::tooltip_rules::auraTooltipStacks(
+            se->second.stackAmount, answer.valid ? answer.count : count);
+        line(gh->formatAuraDescription(spellId, se->second.auraDescription, answer.valid ? answer.level : 0, stacks),
+             "", 1.0f, 1.0f, 1.0f);
         w->tooltipLines.back().wrap = true;
     }
 
@@ -4794,7 +4812,7 @@ int lua_Tooltip_SetUnitAura(lua_State* L) {
         const std::string key = std::string("SPELL_TIME_REMAINING") + d.suffix;
         const int amount = static_cast<int>(d.value);
         line(withPlural(formatGlobal(L, globalOr(L, key.c_str(), "%d"), {std::to_string(amount)}), amount), "",
-             1.0f, 0.82f, 0.0f);
+             kTalentGold[0], kTalentGold[1], kTalentGold[2]);
     }
 
     lua_pushnumber(L, spellId);

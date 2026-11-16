@@ -22,6 +22,17 @@ extern "C" {
 
 namespace wowee::addons {
 
+/// The aura UnitAura last answered with: SetUnitAura's builder (0x00625350)
+/// reads the aura's own caster level and count off it for the description,
+/// neither of which UnitAura returns. Cleared before the setter's call, so a
+/// hooked UnitAura that answers otherwise leaves it invalid.
+struct UnitAuraAnswer {
+    bool valid = false;
+    int level = 0;
+    int count = 0;
+};
+UnitAuraAnswer& lastUnitAuraAnswer();
+
 /// UnitAura(unit, index or name, filter or rank, filter) from a setter's
 /// (self, unit, ...) arguments. True with UnitAura's eleven answers on top of
 /// the stack; false with nothing pushed, when UnitAura is missing or raised.

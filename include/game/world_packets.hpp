@@ -2228,6 +2228,9 @@ struct ItemQueryResponseData {
     struct Damage { float min = 0.0f; float max = 0.0f; uint32_t type = 0; };
     std::array<Damage, 2> damages{};
     uint32_t ammoType = 0;          ///< +0xf8
+    /// RangedModRange (+0xfc): a ranged spell's reach with this weapon in
+    /// the ranged slot, as a percentage (0x007ff480).
+    float rangedModRange = 100.0f;
     int32_t block = 0;              ///< +0x1a4
     uint32_t totemCategory = 0;     ///< +0x1bc
     uint32_t itemLimitCategory = 0; ///< +0x1ec (ItemLimitCategory.dbc)

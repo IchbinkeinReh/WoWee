@@ -1,6 +1,7 @@
 #include "game/spell_handler.hpp"
 #include "game/shapeshift_forms.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "addons/tooltip_setter_rules.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "game/cast_failure_error.hpp"
 #include "game/protocol_constants.hpp"
@@ -2508,6 +2509,14 @@ unit_target::Range SpellHandler::spellReach(uint32_t spellId, const Entity& cast
     in.rowMin = std::max(0.0f, e.rangeMin[k]);
     in.rowMax = std::max(0.0f, e.rangeMax[k]);
     in.casterReach = caster.isUnit() ? static_cast<const Unit&>(caster).getCombatReach() : 0.0f;
+    if ((e.attr & 0x2u) != 0 && caster.getGuid() == owner_.getPlayerGuid()) {
+        const uint64_t guid = owner_.getEquipSlotGuid(static_cast<int>(EquipSlot::RANGED));
+        const auto item = owner_.onlineItemsRef().find(guid);
+        if (const auto* info = item != owner_.onlineItemsRef().end() ? owner_.getItemInfo(item->second.entry)
+                                                                      : nullptr;
+            info && info->valid)
+            in.rangedModRange = info->rangedModRange;
+    }
     if (unit && unit->isUnit()) {
         in.hasUnit = true;
         in.unitReach = static_cast<const Unit&>(*unit).getCombatReach();
@@ -2854,7 +2863,21 @@ int32_t SpellHandler::castTimeMs(uint32_t spellId, const Entity& player) const {
         const float speed = castSpeedOf(player);
         if (speed != 1.0f) t = static_cast<int32_t>(std::nearbyint(static_cast<float>(t) * speed));
     }
-    if ((e.attr & 0x2u) != 0) t += 500;
+    if ((e.attr & 0x2u) != 0) {
+        t += 500;
+        // The player's own, with a weapon in the ranged slot: as long as the
+        // ranged swing makes it against the weapon's own Delay.
+        if (player.getGuid() == owner_.getPlayerGuid()) {
+            const uint64_t guid = owner_.getEquipSlotGuid(static_cast<int>(EquipSlot::RANGED));
+            const auto item = owner_.onlineItemsRef().find(guid);
+            if (const auto* info = item != owner_.onlineItemsRef().end() ? owner_.getItemInfo(item->second.entry)
+                                                                          : nullptr;
+                info && info->valid) {
+                t = addons::tooltip_rules::rangedCastTimeMs(t, entityField(player, UF::UNIT_FIELD_RANGEDATTACKTIME),
+                                                            info->delayMs);
+            }
+        }
+    }
     return t;
 }
 
