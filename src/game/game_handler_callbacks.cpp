@@ -733,6 +733,7 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
     movementInfo.flags2 = 0;
     if (movementHandler_) {
         movementHandler_->resetMovementClock();
+        movementHandler_->dropTeleportAck();
     }
     movementInfo.time = nextMovementTimestampMs();
     if (movementHandler_) {

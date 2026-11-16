@@ -101,6 +101,9 @@ public:
         pendingWorldEntry_ = PendingWorldEntry{.mapId = mapId, .x = x, .y = y, .z = z, .relocate = true};
     }
 
+    /// The held MSG_MOVE_TELEPORT_ACK, once the place is in.
+    void releaseTeleportAck();
+
     // Reset methods (for logout / character switch)
     void resetLoadedMap() { loadedMapId_ = 0xFFFFFFFF; }
     void resetMapNameCache() { mapNameCacheLoaded_ = false; mapNameById_.clear(); mapAreaById_.clear(); }

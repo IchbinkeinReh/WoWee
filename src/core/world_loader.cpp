@@ -3,6 +3,7 @@
 
 #include "rendering/animation/melee_anim_chains.hpp"
 #include "core/world_loader.hpp"
+#include "core/transport_entry_wait.hpp"
 #include "core/config_paths.hpp"
 #include "core/application.hpp"
 #include "core/world_entry_callback_handler.hpp"
@@ -195,8 +196,16 @@ void WorldLoader::processPendingEntry() {
     pendingWorldEntry_.reset();
     if (entry.relocate && entry.mapId == loadedMapId_) {
         relocateOnLoadedMap(entry.mapId, entry.x, entry.y, entry.z);
+        // The area is in: the teleport is answered now (0x006ed0f0 sends
+        // MSG_MOVE_TELEPORT_ACK after 0x006ecf80 -> 0x0074b620 returns).
+        releaseTeleportAck();
         return;
     }
+    // Whatever held it, the world this load brings is the place.
+    struct AckAfterLoad {
+        WorldLoader& loader;
+        ~AckAfterLoad() { loader.releaseTeleportAck(); }
+    } ackAfterLoad{*this};
     LOG_DEBUG("Processing deferred world entry: map ", entry.mapId);
     if (app_.worldEntryCallbacks_) {
         app_.worldEntryCallbacks_->setWorldEntryMovementGraceTimer(2.0f);
@@ -221,6 +230,11 @@ void WorldLoader::processPendingEntry() {
         app_.disconnectNotice_ = "Not enough memory to load the world.";
         app_.logoutToLogin();
     }
+}
+
+void WorldLoader::releaseTeleportAck() {
+    if (!gameHandler_) return;
+    if (auto* mh = gameHandler_->getMovementHandler()) mh->releaseTeleportAck();
 }
 
 void WorldLoader::reloadAfterDeviceLoss(uint32_t mapId, float x, float y, float z) {
@@ -1139,6 +1153,7 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         };
         float lastWarmupLogTime = 0.0f;
         bool areaLoadedLogged = false;
+        bool transportWaitLogged = false;
         int warmupIterations = 0;
         const auto logWarmup = [&](float elapsed, const char* what) {
             std::string stages;
@@ -1244,8 +1259,27 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
             // for the whole ninety-second cap on every map change (106 s on
             // 2026-11-08). The transport is the floor once the player is
             // back on it (completePlayerTransportWorldTransfer).
-            if (gameHandler_ && gameHandler_->isOnTransport()) groundReady = true;
-            if (renderer_ && !groundReady) {
+            //
+            // Not before it is: until the transport is known on this map the
+            // player is still tied to the old map's guid, and the place this
+            // load was asked for is the offset on the deck taken as a world
+            // position - the map's origin. Let in then, the world ran with
+            // the rider at the origin (off the transport, the old one not
+            // being here) until the transport's create came and put them
+            // back on it (Borean Tundra, 2026-11-16: 0.55 s at 0,0,-5.8
+            // after a 6.4 s load). The original has no rider in the world
+            // before the server's create puts it on the transport; the screen
+            // stays up for it here, for as long as the server takes.
+            const auto transportGround = core::transportEntryGround(
+                gameHandler_ && gameHandler_->isOnTransport(),
+                gameHandler_ && gameHandler_->hasPendingPlayerTransportWorldTransfer(), elapsed);
+            if (transportGround.groundReady) groundReady = true;
+            const bool awaitTransport = transportGround.awaitTransport;
+            if (awaitTransport && !transportWaitLogged) {
+                transportWaitLogged = true;
+                LOG_WARNING("Warmup: waiting for the transport that carries the player onto this map");
+            }
+            if (renderer_ && !groundReady && !awaitTransport) {
                 // spawnRender already went server -> canonical -> render above.
                 // Applying canonicalToRender directly to the server tuple here
                 // swapped X/Y a second time, so WMO-only instances checked for a
