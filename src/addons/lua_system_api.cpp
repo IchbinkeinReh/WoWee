@@ -11236,15 +11236,6 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"TaxiGetSrcY",  lua_TaxiLegCoord<0, false>},
                 {"TaxiGetDestX", lua_TaxiLegCoord<1, true>},
                 {"TaxiGetDestY", lua_TaxiLegCoord<1, false>},
-                // SetTaxiMap(texture) - the flight map's own picture.
-                //
-                // This client has continent artwork, but not in the shape this
-                // call wants: its flight map is a mode of the world map, which
-                // draws the continent from tiles and puts taxi nodes over it,
-                // where SetTaxiMap hands over one texture to point at a single
-                // TAXIMAP image. So the texture keeps whatever its XML set.
-                // Named rather than left out so it does not read as a gap that
-                // was missed.
                 // SetTaxiMap(texture) - the continent behind the flight points.
                 //
                 // TaxiFrame_OnEvent hands its TaxiMap texture to this and
