@@ -2672,6 +2672,29 @@ uint32_t CombatHandler::killXp(uint32_t playerLevel, uint32_t victimLevel) {
     return static_cast<uint32_t>(baseXp * multiplier);
 }
 
+// An Exhaustion.dbc row (the table at 0x00ad3838): its factor (+8) and its
+// localized name (+0x14).
+xp_gain_line::ExhaustionRow CombatHandler::exhaustionRow(int id) {
+    if (!exhaustionLoaded_) {
+        auto* am = owner_.services().assetManager;
+        if (am && am->isInitialized()) {
+            exhaustionLoaded_ = true;
+            if (auto dbc = am->loadDBC("Exhaustion.dbc"); dbc && dbc->isLoaded()) {
+                // ID, XP, Factor, OutdoorHours, InnHours, Name_lang.
+                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                    xp_gain_line::ExhaustionRow r;
+                    r.found = true;
+                    r.factor = dbc->getFloat(i, 2);
+                    r.name = dbc->getString(i, 5);
+                    exhaustionRows_[static_cast<int>(dbc->getUInt32(i, 0))] = std::move(r);
+                }
+            }
+        }
+    }
+    const auto it = exhaustionRows_.find(id);
+    return it == exhaustionRows_.end() ? xp_gain_line::ExhaustionRow{} : it->second;
+}
+
 void CombatHandler::handleXpGain(network::Packet& packet) {
     XpGainData data;
     if (!XpGainParser::parse(packet, data)) return;
@@ -2685,29 +2708,33 @@ void CombatHandler::handleXpGain(network::Packet& packet) {
     }
 
     // As 0x0050c720 words it, as CHAT_MSG_COMBAT_XP_GAIN: the player's own
-    // guid as the victim is COMBATLOG_XPLOSS_FIRSTPERSON_UNNAMED; a victim
-    // that is a unit this client has, COMBATLOG_XPGAIN_FIRSTPERSON with its
-    // name; anything else COMBATLOG_XPGAIN_FIRSTPERSON_UNNAMED (0x0050b1d0).
-    // This was English.
-    //
-    // Not given: the rested-bonus forms (COMBATLOG_XPGAIN_EXHAUSTION*, which
-    // need the experience before the bonus that the parser does not keep,
-    // and the rest state's name) and the group and raid ones.
+    // guid as the victim is COMBATLOG_XPLOSS_FIRSTPERSON_UNNAMED (0x0050b660);
+    // anything else goes to 0x0050b300, which picks among the rested and
+    // tired forms, the group-bonus and raid-penalty forms, the
+    // Recruit-a-Friend quest form and the plain ones (game/xp_gain_line.hpp).
     const std::string xp = std::to_string(data.totalXp);
     std::string msg;
     if (data.victimGuid != 0 && data.victimGuid == owner_.getPlayerGuid()) {
         msg = interfaceFormat("COMBATLOG_XPLOSS_FIRSTPERSON_UNNAMED", "You lose %d experience.", {xp});
     } else {
-        std::string victimName;
+        // Nothing at all without the player's own object (0x0050b300).
+        if (!owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) return;
+        xp_gain_line::Gain g;
+        g.xp = static_cast<int32_t>(data.totalXp);
+        g.type = data.type;
+        g.restlessXp = static_cast<int32_t>(data.restlessXp);
+        g.groupRate = data.groupRate;
+        g.referAFriend = data.referAFriend;
+        g.restState = owner_.getPlayerRestState();
         if (data.victimGuid != 0) {
-            auto victim = owner_.getEntityManager().getEntity(data.victimGuid);
-            if (victim && (victim->getType() == ObjectType::UNIT || victim->getType() == ObjectType::PLAYER))
-                victimName = owner_.lookupName(data.victimGuid);
+            if (auto victim = owner_.getEntityManager().getEntity(data.victimGuid)) {
+                g.haveVictim = true;
+                g.victimIsUnit = victim->getType() == ObjectType::UNIT || victim->getType() == ObjectType::PLAYER;
+                g.victimName = owner_.lookupName(data.victimGuid);
+            }
         }
-        msg = victimName.empty()
-            ? interfaceFormat("COMBATLOG_XPGAIN_FIRSTPERSON_UNNAMED", "You gain %d experience.", {xp})
-            : interfaceFormat("COMBATLOG_XPGAIN_FIRSTPERSON", "%s dies, you gain %d experience.",
-                              {victimName, xp});
+        const xp_gain_line::Line line = xp_gain_line::choose(g, [this](int id) { return exhaustionRow(id); });
+        msg = interfaceFormat(line.key, line.enUS, line.args);
     }
     owner_.addLocalChatLine(ChatType::COMBAT_XP_GAIN, msg);
 }

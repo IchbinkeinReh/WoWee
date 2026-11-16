@@ -243,6 +243,10 @@ wowee_add_test(test_arena_opponents
 wowee_add_test(test_unit_combat
     SOURCES test_unit_combat.cpp)
 
+# The experience line's wording (0x0050b300, 0x0050b1d0). Header-only.
+wowee_add_test(test_xp_gain_line
+    SOURCES test_xp_gain_line.cpp)
+
 # The tabard designer's design (game/tabard_design.hpp): cycling, the start,
 # the save's refusals and answer, the files. Header-only.
 wowee_add_test(test_tabard_design

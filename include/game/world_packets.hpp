@@ -2615,6 +2615,9 @@ struct XpGainData {
     uint64_t victimGuid = 0;    // 0 for non-kill XP (quest, exploration)
     uint32_t totalXp = 0;
     uint8_t type = 0;           // 0 = kill, 1 = non-kill
+    uint32_t restlessXp = 0;    // a kill's experience before the rested bonus
+    float groupRate = 1.0f;     // a kill's group rate; 1 for anything else (0x0050c720)
+    bool referAFriend = false;  // the Recruit-a-Friend byte
 
     [[nodiscard]] bool isValid() const { return totalXp > 0; }
 };
