@@ -1833,6 +1833,11 @@ public:
     float getTargetCastProgress() const { return spellHandler_ ? spellHandler_->getTargetCastProgress() : 0.0f; }
     float getTargetCastTimeRemaining() const { return spellHandler_ ? spellHandler_->getTargetCastTimeRemaining() : 0.0f; }
     bool isTargetCastInterruptible() const { return spellHandler_ ? spellHandler_->isTargetCastInterruptible() : true; }
+    /// 0x0071ab20: whether the unit's cast shows as one the player cannot
+    /// interrupt.
+    bool isCastNotInterruptible(uint64_t guid) const {
+        return spellHandler_ && spellHandler_->castNotInterruptible(guid);
+    }
 
     // Talents - delegate to SpellHandler as canonical authority
     uint8_t getActiveTalentSpec() const { return spellHandler_ ? spellHandler_->getActiveTalentSpec() : 0; }

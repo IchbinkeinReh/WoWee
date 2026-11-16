@@ -68,7 +68,6 @@ struct UnitCastState {
     uint32_t      spellId         = 0;
     float         timeRemaining   = 0.0f;
     float         timeTotal       = 0.0f;
-    bool          interruptible   = true;
     SpellCastType castType        = SpellCastType::OMNI;
 };
 

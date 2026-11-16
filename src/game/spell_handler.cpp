@@ -995,8 +995,7 @@ float SpellHandler::getTargetCastTimeRemaining() const {
 }
 
 bool SpellHandler::isTargetCastInterruptible() const {
-    auto* s = getUnitCastState(owner_.getTargetGuid());
-    return s ? s->interruptible : true;
+    return !castNotInterruptible(owner_.getTargetGuid());
 }
 
 bool SpellHandler::armGroundTarget(uint32_t spellId, uint64_t caster) {
@@ -4555,6 +4554,7 @@ void SpellHandler::handleInitialSpells(network::Packet& packet) {
     // Ensure Attack and Hearthstone are always present
     knownSpells_.insert(SPELL_ID_ATTACK);
     knownSpells_.insert(SPELL_ID_HEARTHSTONE);
+    markInterruptMasksDirty();  // 0x0053ca70 builds the masks afresh
     if (isPreWotlk()) {
         loadTalentDbc();
         syncPreWotlkTalentsFromKnownSpells();
@@ -4828,6 +4828,13 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
     // with a cast time - when it began and how long (0x006fbe50).
     if (mover != 0 && data.casterUnit == mover && data.castTime > 0 && spellIsAimed(data.spellId))
         aimState_.started(data.spellId, clientMs(), data.castTime);
+    // 0x00806700: cast flag 0x4000000 gives the caster's immunities, which
+    // the unit keeps (+0xa64 schools, +0xa68 mechanics, 0x00715aa0/0x00715ab0).
+    if (data.hasImmunities && owner_.getEntityManager().getEntity(data.casterUnit)) {
+        auto& lock = castLocks_[data.casterUnit];
+        lock.schoolImmunity = data.schoolImmunity;
+        lock.mechanicImmunity = data.mechanicImmunity;
+    }
 
     // Track cast bar for any non-player caster
     if (data.casterUnit != owner_.getPlayerGuid() && data.castTime > 0 && !rangedWeaponAttack) {
@@ -4837,7 +4844,6 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
         s.spellId        = data.spellId;
         s.timeTotal      = data.castTime / 1000.0f;
         s.timeRemaining  = s.timeTotal;
-        s.interruptible  = owner_.isSpellInterruptible(data.spellId);
         s.castType       = castType;
         if (owner_.spellCastAnimCallbackRef()) {
             owner_.spellCastAnimCallbackRef()(data.casterUnit, true, false, castType);
@@ -4867,24 +4873,20 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
         }
     }
 
+    // 0x00805330 -> 0x0072ab60: a timed cast of the target, the focus or an
+    // arena opponent is judged (0x007262e0) as it begins, before
+    // UNIT_SPELLCAST_START; nothing else is raised for it - the bar reads
+    // notInterruptible from UnitCastingInfo.
+    if (isActiveExpansion("wotlk") && (data.castFlags & 0x1u) == 0 && data.castTime > 0 && !rangedWeaponAttack &&
+        castLockWatched(data.casterUnit, true) &&
+        castEventShownFor(data.spellId, data.casterUnit == owner_.getPlayerGuid(), false))
+        (void)evaluateCastLock(data.casterUnit, data.spellId);
+
     // Fire UNIT_SPELLCAST_START
     if (owner_.addonEventCallbackRef() && !rangedWeaponAttack) {
         std::string unitId = owner_.guidToUnitId(data.casterUnit);
         if (!unitId.empty()) {
             owner_.addonEventCallbackRef()("UNIT_SPELLCAST_START", spellcastArgs(unitId, data.spellId));
-            // Whether the cast can be kicked, which the cast bar draws as a
-            // shield around itself. This client already worked it out for the
-            // cast it is tracking and kept it - so a boss casting something
-            // uninterruptible looked exactly like one that could be stopped.
-            //
-            // After START, not before: the bar sets its shield up when the cast
-            // begins and these only change the border, so arriving first would
-            // be undone by the start it is describing.
-            owner_.addonEventCallbackRef()(
-                owner_.isSpellInterruptible(data.spellId)
-                    ? "UNIT_SPELLCAST_INTERRUPTIBLE"
-                    : "UNIT_SPELLCAST_NOT_INTERRUPTIBLE",
-                {unitId});
         }
     }
 
@@ -5663,6 +5665,7 @@ void SpellHandler::handleAuraUpdate(network::Packet& packet, bool isAll) {
         // The combat log, from the slots as they were (0x0072f5d0). A whole
         // list logs nothing.
         if (!isAll && isActiveExpansion("wotlk")) logAuraChanges(data.guid, *auraList, data.updates, nowMs);
+        const size_t slotCountBefore = auraList->size();
         // Grow once to fit the highest slot, instead of push_back-in-a-loop per update.
         if (!data.updates.empty()) {
             size_t maxSlot = 0;
@@ -5687,6 +5690,22 @@ void SpellHandler::handleAuraUpdate(network::Packet& packet, bool isAll) {
                 }
             }
         }
+        // 0x0072f5d0: whether an aura came or went - a slot sent empty, an
+        // aura in force replaced or put out of force, one put in force that
+        // was not. A whole list (SMSG_AURA_UPDATE_ALL) says neither.
+        bool aurasCameOrWent = false;
+        if (!isAll) {
+            const size_t before = slotCountBefore;
+            for (const auto& [slot, aura] : data.updates) {
+                const AuraSlot old = slot < before ? (*auraList)[slot] : AuraSlot{};
+                const bool oldInForce = old.spellId != 0 && (old.flags & 7u) != 0;
+                const bool newInForce = aura.spellId != 0 && (aura.flags & 7u) != 0;
+                if ((oldInForce && !(newInForce && aura.spellId == old.spellId)) ||
+                    (slot < before && aura.spellId == 0) ||
+                    (newInForce && !(oldInForce && aura.spellId == old.spellId)))
+                    aurasCameOrWent = true;
+            }
+        }
         for (auto [slot, aura] : data.updates) {
             if (aura.durationMs >= 0) {
                 aura.receivedAtMs = nowMs;
@@ -5694,6 +5713,7 @@ void SpellHandler::handleAuraUpdate(network::Packet& packet, bool isAll) {
             (*auraList)[slot] = aura;
         }
         mirrorAurasByGuid(data.guid, *auraList);
+        reevaluateCastLockAfterAuras(data.guid, aurasCameOrWent);
 
         // Aura 48 (PERIODIC_TRIGGER_SPELL_FROM_CLIENT): a spell gone from a
         // slot takes its timers with it (0x0071e930 -> 0x0080dfe0); one come
@@ -5820,6 +5840,7 @@ void SpellHandler::handleLearnedSpell(network::Packet& packet) {
 
     const bool alreadyKnown = knownSpells_.count(spellId) > 0;
     knownSpells_.insert(spellId);
+    markInterruptMasksDirty();
     noteLearnOrder(spellId);
     LOG_INFO("Learned spell: ", spellId, alreadyKnown ? " (already known)" : "");
     if (isPreWotlk()) {
@@ -5941,6 +5962,7 @@ void SpellHandler::handleRemovedSpell(network::Packet& packet) {
     if (packet.getRemainingSize() < minSz) return;
     uint32_t spellId = classicSpellId ? packet.readUInt16() : packet.readUInt32();
     knownSpells_.erase(spellId);
+    markInterruptMasksDirty();
     syncPreWotlkTalentsFromKnownSpells();
     LOG_INFO("Removed spell: ", spellId);
     // Braced. The two lines below were indented as though they sat inside the
@@ -6017,6 +6039,7 @@ void SpellHandler::handleSupercededSpell(network::Packet& packet) {
     const bool newSpellAlreadyAnnounced = knownSpells_.count(newSpellId) > 0;
 
     knownSpells_.insert(newSpellId);
+    markInterruptMasksDirty();
     syncPreWotlkTalentsFromKnownSpells();
 
     LOG_INFO("Spell superceded: ", oldSpellId, " -> ", newSpellId);
@@ -6055,6 +6078,7 @@ void SpellHandler::handleUnlearnSpells(network::Packet& packet) {
     for (uint32_t i = 0; i < spellCount && packet.getRemainingSize() >= 4; ++i) {
         uint32_t spellId = packet.readUInt32();
         knownSpells_.erase(spellId);
+        markInterruptMasksDirty();
         LOG_INFO("  Unlearned spell: ", spellId);
         for (auto& slot : owner_.actionBarRef()) {
             if (slot.type == ActionBarSlot::SPELL && slot.id == spellId) {
@@ -6580,6 +6604,7 @@ void SpellHandler::resetCastState() {
 
 void SpellHandler::resetAllState() {
     knownSpells_.clear();
+    markInterruptMasksDirty();
     learnOrder_.clear();
     nextLearnOrder_ = 0;
     playerHistory_.clear();  // 0x00802a50
@@ -7741,6 +7766,131 @@ bool SpellHandler::isSpellInterruptible(uint32_t spellId) const {
     auto it = owner_.spellNameCacheRef().find(spellId);
     if (it == owner_.spellNameCacheRef().end()) return true;
     return (it->second.attrEx & 0x00000010u) == 0;
+}
+
+namespace {
+cast_interrupt::SpellFields castInterruptFields(const GameHandler::SpellNameEntry& e) {
+    cast_interrupt::SpellFields f;
+    f.attrEx7 = e.attrEx7;
+    for (int i = 0; i < 3; ++i) {
+        f.effect[i] = e.effectIds[i];
+        f.auraName[i] = e.effectAuraIds[i];
+        f.miscValue[i] = e.effectMiscValues[i];
+    }
+    f.preventionType = e.preventionType;
+    f.schoolMask = e.schoolMask;
+    return f;
+}
+}  // namespace
+
+const cast_interrupt::Masks& SpellHandler::interruptMasks() const {
+    // 0x0053ca70: every spell the player knows, by its effects and
+    // AttributesEx7, into the four masks.
+    if (interruptMasksDirty_) {
+        loadSpellNameCache();
+        const auto& cache = owner_.spellNameCacheRef();
+        if (!cache.empty()) {
+            cast_interrupt::Masks m;
+            for (uint32_t id : knownSpells_) {
+                const auto it = cache.find(id);
+                if (it != cache.end()) cast_interrupt::addKnownSpell(m, castInterruptFields(it->second));
+            }
+            interruptMasks_ = m;
+            interruptMasksDirty_ = false;
+        }
+    }
+    return interruptMasks_;
+}
+
+bool SpellHandler::castLockWatched(uint64_t guid, bool arenaToo) const {
+    if (guid == 0) return false;
+    if (guid == owner_.getTargetGuid() || guid == owner_.getFocusGuid()) return true;
+    if (!arenaToo) return false;
+    // 0x006cf670: the five arena opponents (0x00be9f48).
+    for (size_t i = 0; i < arena::Roster::kSlots; ++i)
+        if (owner_.arenaRoster().opponent(i) == guid) return true;
+    return false;
+}
+
+uint32_t SpellHandler::unitCastOrChannelSpell(uint64_t guid) const {
+    if (guid == owner_.getPlayerGuid()) return casting_ ? currentCastSpellId_ : 0;
+    const auto* s = getUnitCastState(guid);
+    return s ? s->spellId : 0;
+}
+
+std::optional<cast_interrupt::Outcome> SpellHandler::evaluateCastLock(uint64_t guid, uint32_t spellId) {
+    // 0x007262e0 on the unit; it is called only for a spell Spell.dbc has.
+    loadSpellNameCache();
+    const auto& cache = owner_.spellNameCacheRef();
+    const auto spell = cache.find(spellId);
+    if (spellId == 0 || spell == cache.end()) return std::nullopt;
+    auto& lock = castLocks_[guid];
+    cast_interrupt::Caster caster;
+    const auto entity = owner_.getEntityManager().getEntity(guid);
+    caster.isPlayer = entity && entity->getType() == ObjectType::PLAYER;
+    caster.schoolImmunity = lock.schoolImmunity;
+    caster.mechanicImmunity = lock.mechanicImmunity;
+    const auto* auras = guid == owner_.getPlayerGuid() ? &playerAuras_ : getUnitAuras(guid);
+    if (auras) {
+        for (const auto& a : *auras) {
+            if (a.spellId == 0) continue;
+            const auto as = cache.find(a.spellId);
+            if (as == cache.end()) continue;
+            caster.auras.push_back({castInterruptFields(as->second), static_cast<uint8_t>(a.flags & 7u)});
+        }
+    }
+    const bool havePlayer = owner_.getEntityManager().getEntity(owner_.getPlayerGuid()) != nullptr;
+    const auto outcome =
+        cast_interrupt::evaluate(interruptMasks(), havePlayer, castInterruptFields(spell->second), caster);
+    lock.lock = outcome.lock;
+    return outcome;
+}
+
+bool SpellHandler::castNotInterruptible(uint64_t guid) const {
+    if (!isActiveExpansion("wotlk")) {
+        // Before 3.3.5 this client has only the spell's own word for it.
+        const uint32_t spellId = unitCastOrChannelSpell(guid);
+        return spellId != 0 && !isSpellInterruptible(spellId);
+    }
+    // 0x0071ab20: the unit's bit, while the player knows an interrupt.
+    const auto it = castLocks_.find(guid);
+    if (it == castLocks_.end()) return false;
+    const auto entity = owner_.getEntityManager().getEntity(guid);
+    const bool casterIsPlayer = entity && entity->getType() == ObjectType::PLAYER;
+    return cast_interrupt::notInterruptible(it->second.lock, interruptMasks(), casterIsPlayer);
+}
+
+void SpellHandler::reevaluateTargetCastLock(uint64_t guid) {
+    // 0x00524bf0: a unit made the target has its cast (+0xa6c), else its
+    // channel (+0xa80), judged (0x007262e0); the bar is redrawn from it.
+    if (!isActiveExpansion("wotlk") || guid == 0) return;
+    if (!std::dynamic_pointer_cast<Unit>(owner_.getEntityManager().getEntity(guid))) return;
+    if (const uint32_t spellId = unitCastOrChannelSpell(guid)) (void)evaluateCastLock(guid, spellId);
+}
+
+void SpellHandler::reevaluateCastLockAfterAuras(uint64_t guid, bool aurasChanged) {
+    // 0x0072f5d0, after the slots: an arena opponent always, the target or
+    // focus when an aura came or went. A cast (else a channel) a silence
+    // prevents (PreventionType 1) is judged again (0x007262e0); where the
+    // answer differs from what the cast reported (0x0071ab20), the bar is
+    // redrawn and 0x14e + answer raised through 0x0060bf10 -
+    // UNIT_SPELLCAST_INTERRUPTIBLE or _NOT_INTERRUPTIBLE - before UNIT_AURA.
+    if (!isActiveExpansion("wotlk") || guid == 0) return;
+    bool arena = false;
+    for (size_t i = 0; i < arena::Roster::kSlots; ++i)
+        if (owner_.arenaRoster().opponent(i) == guid) arena = true;
+    if (!arena && !(aurasChanged && castLockWatched(guid, false))) return;
+    const uint32_t spellId = unitCastOrChannelSpell(guid);
+    if (spellId == 0) return;
+    loadSpellNameCache();
+    const auto spell = owner_.spellNameCacheRef().find(spellId);
+    if (spell == owner_.spellNameCacheRef().end() || spell->second.preventionType != 1) return;
+    const bool before = castNotInterruptible(guid);
+    const auto outcome = evaluateCastLock(guid, spellId);
+    if (!outcome || outcome->result == before) return;
+    for (const auto& unitId : owner_.unitTokensForGuid(guid))
+        owner_.fireAddonEvent(outcome->result ? "UNIT_SPELLCAST_NOT_INTERRUPTIBLE" : "UNIT_SPELLCAST_INTERRUPTIBLE",
+                              {unitId});
 }
 
 bool SpellHandler::isSpellPassive(uint32_t spellId) const {
@@ -9295,6 +9445,11 @@ void SpellHandler::handleResumeCastBar(network::Packet& packet) {
             s.timeTotal     = totalMs  / 1000.0f;
             s.timeRemaining = remainMs / 1000.0f;
         }
+        // 0x0072ac50 / 0x0072ae00: the resumed cast or channel of the target
+        // or the focus - no arena opponent here - is judged (0x007262e0).
+        if (isActiveExpansion("wotlk") && castLockWatched(caster, false) &&
+            owner_.getEntityManager().getEntity(caster))
+            (void)evaluateCastLock(caster, spellId);
         LOG_DEBUG("SMSG_RESUME_CAST_BAR: caster=0x", std::hex, caster, std::dec,
                   " spell=", spellId, " remaining=", remainMs, "ms total=", totalMs, "ms",
                   channel ? " (channel)" : "");
@@ -9336,8 +9491,11 @@ void SpellHandler::handleChannelStart(network::Packet& packet) {
             s.spellId        = chanSpellId;
             s.timeTotal      = chanTotalMs / 1000.0f;
             s.timeRemaining  = s.timeTotal;
-            s.interruptible  = owner_.isSpellInterruptible(chanSpellId);
         }
+        // 0x0072ad20: the channel of the target, the focus or an arena
+        // opponent is judged (0x007262e0).
+        if (isActiveExpansion("wotlk") && castLockWatched(chanCaster, true))
+            (void)evaluateCastLock(chanCaster, chanSpellId);
         LOG_DEBUG("MSG_CHANNEL_START: caster=0x", std::hex, chanCaster, std::dec,
                   " spell=", chanSpellId, " total=", chanTotalMs, "ms");
 

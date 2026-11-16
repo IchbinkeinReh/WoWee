@@ -2782,6 +2782,11 @@ struct SpellStartData {
     /// Cast flag 0x20: the ammunition's ItemDisplayInfo id, 0 without
     /// (0x00806700 hands it to 0x007206a0 for a ranged spell).
     uint32_t ammoDisplayId = 0;
+    /// Cast flag 0x4000000: the caster's school and mechanic immunities,
+    /// which the client keeps on the unit (+0xa64, +0xa68) for 0x007262e0.
+    bool hasImmunities = false;
+    uint32_t schoolImmunity = 0;
+    uint32_t mechanicImmunity = 0;
 
     [[nodiscard]] bool isValid() const { return spellId != 0; }
 };
