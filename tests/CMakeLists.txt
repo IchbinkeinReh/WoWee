@@ -2049,6 +2049,11 @@ wowee_add_test(test_tutorials SOURCES test_tutorials.cpp)
 # The pet bar's ten slots as 0x005d6020 moves actions between them.
 wowee_add_test(test_pet_action_bar SOURCES test_pet_action_bar.cpp)
 
+# ── test_spell_rank ──────────────────────────────────────────
+# A spell's name to the spell it casts, and the book's order, as the
+# spellbook reads rank texts in any language (0x0053b540, 0x00540200).
+wowee_add_test(test_spell_rank SOURCES test_spell_rank.cpp)
+
 # ── test_missile_trajectory ──────────────────────────────────
 # The aimed trajectory cast's solver (0x006fcd60): the pitch, speed and facing
 # a vehicle's shot leaves with, and where its stepped path meets the world.

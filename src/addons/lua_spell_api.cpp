@@ -9,6 +9,7 @@
 #include "addons/tooltip_setter_rules.hpp"
 #include "addons/unit_aura_call.hpp"
 #include "game/totem_bar.hpp"
+#include "game/spell_rank.hpp"
 #include "game/spell_handler.hpp"
 #include "game/interface_text.hpp"
 #include "addons/lua_taint.hpp"
@@ -31,32 +32,18 @@ namespace wowee::addons {
 /// picking the wrong one is silent - the spell goes off, it is simply the
 /// rank-one version.
 ///
-/// Rank arrives from the DBC as text, "Rank 4", so the number is parsed out of
-/// it. A spell with no rank string, which is most of them, sorts as rank zero:
-/// right, because it is the only one of its name.
+/// Rank arrives from the DBC as text in the client's language ("Rank 4",
+/// "Rang 4"), so the number is read out of it wherever it stands; only an
+/// English "rank " prefix used to count, and a German client cast whichever
+/// rank the known-spell set yielded first.
 uint32_t highestKnownRankByName(game::GameHandler* gh, const std::string& name) {
-    std::string wanted(name);
-    toLowerInPlace(wanted);
-
-    uint32_t bestId = 0;
-    int bestRank = -1;
-    for (uint32_t sid : gh->getKnownSpells()) {
-        std::string known = gh->getSpellName(sid);
-        toLowerInPlace(known);
-        if (known != wanted) continue;
-
-        int rank = 0;
-        const std::string& rankText = gh->getSpellRank(sid);
-        if (!rankText.empty()) {
-            std::string lowered = rankText;
-            toLowerInPlace(lowered);
-            if (lowered.rfind("rank ", 0) == 0) {
-                try { rank = std::stoi(lowered.substr(5)); } catch (...) {}
-            }
-        }
-        if (rank > bestRank) { bestRank = rank; bestId = sid; }
-    }
-    return bestId;
+    // 0x00540200: the name's highest rank by the number in its rank text
+    // (0x0053b540), or "Name(Rank)" for one rank - in any client language.
+    std::vector<game::spell_rank::Candidate> known;
+    known.reserve(gh->getKnownSpells().size());
+    for (uint32_t sid : gh->getKnownSpells())
+        known.push_back({sid, gh->getSpellName(sid), gh->getSpellRank(sid)});
+    return game::spell_rank::spellByName(known, name);
 }
 
 

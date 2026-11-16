@@ -6,6 +6,7 @@
 #include "ui/chat_panel.hpp"
 #include "game/game_handler.hpp"
 #include "game/inventory.hpp"
+#include "game/spell_rank.hpp"
 #include <imgui.h>
 #include <algorithm>
 #include <cctype>
@@ -22,54 +23,15 @@ inline void trimInPlace(std::string& s) {
     while (!s.empty() && s.back()  == ' ') s.pop_back();
 }
 
-// Try to parse a spell by name among known spells, optionally with a specific
-// rank.  Returns the best matching spell ID, or 0 if none found.
-uint32_t resolveSpellByName(game::GameHandler& gh, const std::string& spellArg, int requestedRank = -1) {
-    std::string spellName = spellArg;
-    // Parse optional "(Rank N)" suffix
-    {
-        auto rankPos = spellArg.find('(');
-        if (rankPos != std::string::npos) {
-            std::string rankStr = spellArg.substr(rankPos + 1);
-            auto closePos = rankStr.find(')');
-            if (closePos != std::string::npos) rankStr = rankStr.substr(0, closePos);
-            for (char& c : rankStr) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            if (rankStr.rfind("rank ", 0) == 0) {
-                try { requestedRank = std::stoi(rankStr.substr(5)); } catch (...) {}
-            }
-            spellName = spellArg.substr(0, rankPos);
-            while (!spellName.empty() && spellName.back() == ' ') spellName.pop_back();
-        }
-    }
-
-    std::string spellNameLower = spellName;
-    for (char& c : spellNameLower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-
-    uint32_t bestId = 0;
-    int bestRank = -1;
-    for (uint32_t sid : gh.getKnownSpells()) {
-        const std::string& sName = gh.getSpellName(sid);
-        if (sName.empty()) continue;
-        std::string sLow = sName;
-        for (char& c : sLow) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        if (sLow != spellNameLower) continue;
-
-        int sRank = 0;
-        const std::string& rk = gh.getSpellRank(sid);
-        if (!rk.empty()) {
-            std::string rLow = rk;
-            for (char& c : rLow) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            if (rLow.rfind("rank ", 0) == 0) {
-                try { sRank = std::stoi(rLow.substr(5)); } catch (...) {}
-            }
-        }
-        if (requestedRank >= 0) {
-            if (sRank == requestedRank) return sid;
-        } else {
-            if (sRank > bestRank) { bestRank = sRank; bestId = sid; }
-        }
-    }
-    return bestId;
+// The spell a name stands for among the known ones: its highest rank by the
+// number in the rank text whatever the client's language, or one rank asked
+// for as "Name(Rank N)" (game/spell_rank.hpp, 0x00540200). 0 for none.
+uint32_t resolveSpellByName(game::GameHandler& gh, const std::string& spellArg) {
+    std::vector<game::spell_rank::Candidate> known;
+    known.reserve(gh.getKnownSpells().size());
+    for (uint32_t sid : gh.getKnownSpells())
+        known.push_back({sid, gh.getSpellName(sid), gh.getSpellRank(sid)});
+    return game::spell_rank::spellByName(known, spellArg);
 }
 
 // Try to parse numeric spell ID (with optional '#' prefix). Returns 0 if not numeric.
