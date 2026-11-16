@@ -2998,6 +2998,10 @@ void GameHandler::spellTargetUnit(uint64_t unitGuid) {
 bool GameHandler::spellCanTargetUnit(uint64_t unitGuid) const {
     return spellHandler_ && spellHandler_->spellCanTargetUnit(unitGuid);
 }
+uint32_t GameHandler::worldPickFlags() const { return spellHandler_ ? spellHandler_->worldPickFlags() : 0u; }
+bool GameHandler::worldPickTakes(uint64_t guid, uint32_t flags) const {
+    return spellHandler_ && spellHandler_->worldPickTakes(guid, flags);
+}
 bool GameHandler::turnOrCancelGroundTargeting() {
     return spellHandler_ && spellHandler_->turnOrCancelGroundTargeting();
 }

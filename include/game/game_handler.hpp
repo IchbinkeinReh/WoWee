@@ -1536,6 +1536,10 @@ public:
     [[nodiscard]] bool isUnitTargeting() const;
     void spellTargetUnit(uint64_t unitGuid);
     [[nodiscard]] bool spellCanTargetUnit(uint64_t unitGuid) const;
+    /// The world frame's pick flags (0x004f7650) and its filter of what its
+    /// ray pick may take (0x004f7530) - SpellHandler::worldPickFlags.
+    [[nodiscard]] uint32_t worldPickFlags() const;
+    [[nodiscard]] bool worldPickTakes(uint64_t guid, uint32_t flags) const;
     void placeGroundTarget(const ground_target::Place& place);
     [[nodiscard]] std::optional<ground_target::Place> groundTargetCursor() const;
     /// The game object whose model the cursor's place shows, 0 for none, and
