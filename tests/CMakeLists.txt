@@ -2097,7 +2097,19 @@ wowee_add_test(test_spell_rank SOURCES test_spell_rank.cpp)
 # ── test_missile_trajectory ──────────────────────────────────
 # The aimed trajectory cast's solver (0x006fcd60): the pitch, speed and facing
 # a vehicle's shot leaves with, and where its stepped path meets the world.
-wowee_add_test(test_missile_trajectory SOURCES test_missile_trajectory.cpp)
+wowee_add_test(test_missile_trajectory SOURCES test_missile_trajectory.cpp
+               ${CMAKE_SOURCE_DIR}/src/game/chat_language.cpp)
+
+# ── test_missile_collision ───────────────────────────────────
+# A siege missile meeting a unit on its way: the path from above
+# (0x006fcb60), each unit's sphere (0x006fbff0), which units a row meets and
+# how they are measured (0x006fc4a0), and the step's trace (0x006fc360).
+wowee_add_test(test_missile_collision SOURCES test_missile_collision.cpp)
+
+# ── test_missile_packets ─────────────────────────────────────
+# CMSG_UPDATE_MISSILE_TRAJECTORY (0x006fd6b0) and
+# CMSG_UPDATE_PROJECTILE_POSITION (0x00703640).
+wowee_add_packet_test(test_missile_packets)
 
 # ── test_override_bindings ───────────────────────────────────
 # SetOverrideBinding's store: priority first, then the newest, per owner.

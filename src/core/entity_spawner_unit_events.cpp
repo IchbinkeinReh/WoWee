@@ -5,6 +5,7 @@
 #include "addons/lua_api_registrations.hpp"
 #include "game/entity.hpp"
 #include "game/game_handler.hpp"
+#include "game/spell_handler.hpp"
 #include "game/update_field_table.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
@@ -525,6 +526,13 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
         // A melee swing's whoosh and landing (0x00756240).
         if (event.id == rendering::melee_sound::kEventSwing || rendering::melee_sound::isLandEvent(event.id)) {
             if (const uint64_t attacker = ownerOf(event.instanceId)) meleeModelEvent(attacker, event.id, event.position);
+            continue;
+        }
+        // A cast's hand or target point, or a bow's release: the unit's
+        // queued missiles are let go (0x00732650 -> 0x00715a50).
+        if (ue::releasesQueuedMissiles(event.id)) {
+            if (const uint64_t unit = ownerOf(event.instanceId))
+                if (game::SpellHandler* spells = gameHandler_->getSpellHandler()) spells->modelReleaseEvent(unit);
             continue;
         }
         const ue::Action action = ue::classify(event.id);

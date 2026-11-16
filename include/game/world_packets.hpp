@@ -2680,6 +2680,25 @@ public:
     static network::Packet asPetCast(uint64_t casterGuid, const network::Packet& cast);
 };
 
+/// CMSG_UPDATE_MISSILE_TRAJECTORY (0x462, 0x006fd6b0): an aimed cast's shot
+/// worked out again as its cast time ends - the mover's guid, the spell, the
+/// pitch and speed, the launch and impact points - then the mover's
+/// movement as MSG_MOVE_STOP carries it (0x0071f060). Wire coordinates.
+class UpdateMissileTrajectoryPacket {
+public:
+    static network::Packet build(uint64_t casterGuid, uint32_t spellId, float pitch, float speed,
+                                 const glm::vec3& launch, const glm::vec3& impact, uint64_t moverGuid,
+                                 const MovementInfo& moverWire);
+};
+
+/// CMSG_UPDATE_PROJECTILE_POSITION (0x4be, 0x00703640): where a missile of
+/// a cast the client controls met a unit - the caster's guid, the spell, the
+/// cast count and the point. Wire coordinates.
+class UpdateProjectilePositionPacket {
+public:
+    static network::Packet build(uint64_t casterGuid, uint32_t spellId, uint8_t castCount, const glm::vec3& point);
+};
+
 /** CMSG_CANCEL_AURA packet builder */
 class CancelAuraPacket {
 public:

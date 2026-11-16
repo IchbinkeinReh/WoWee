@@ -11,10 +11,14 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <optional>
+#include <string_view>
 
 #include <glm/glm.hpp>
+
+#include "game/chat_language.hpp"
 
 namespace wowee::game::missile_trajectory {
 
@@ -33,6 +37,7 @@ struct MissileRow {
     float speedRandMax = 0.0f;   ///< 11
     float gravity = 0.0f;        ///< 12, yards per second squared
     float maxDuration = 0.0f;    ///< 13, seconds; none for 20
+    float collisionRadius = 0.0f;///< 14, added to each unit's sphere (0x006fc0a0)
 };
 inline constexpr uint32_t kFlagAimed = 0x1;
 
@@ -158,6 +163,147 @@ struct Flight {
     flight.impact = from + (to - from) * *hit;
     flight.seconds = (static_cast<float>(steps - left) + *hit) * 0.1f;
     return flight;
+}
+
+/// The aimed cast the active mover has going (its +0xf68..+0xf78): the
+/// spell and when it was sent (0x006fbe30, after 0x0080ac90 sends the
+/// cast), when SMSG_SPELL_START said it began and its cast time (0x006fbe50,
+/// from 0x00806700), and the cast count of a missile held for it
+/// (0x006fe7e0). Times are the client's milliseconds.
+struct AimState {
+    uint32_t spellId = 0;        ///< +0xf68
+    uint32_t sentMs = 0;         ///< +0xf6c
+    uint32_t startedMs = 0;      ///< +0xf70
+    uint32_t castMs = 0;         ///< +0xf74
+    uint8_t heldCastCount = 0;   ///< +0xf78
+
+    /// 0x006fbe30.
+    void sent(uint32_t spell, uint32_t nowMs) {
+        spellId = spell;
+        sentMs = nowMs;
+    }
+    /// 0x006fbe50: only for the spell sent.
+    void started(uint32_t spell, uint32_t nowMs, uint32_t castTimeMs) {
+        if (spell != spellId) return;
+        startedMs = nowMs;
+        castMs = castTimeMs;
+    }
+    /// 0x006fbe80: only for the spell sent; the cast time is left.
+    void clear(uint32_t spell) {
+        if (spell != spellId) return;
+        spellId = 0;
+        sentMs = 0;
+        startedMs = 0;
+        heldCastCount = 0;
+    }
+    /// 0x006fbeb0: sent and begun - another aimed cast is refused
+    /// (0x00809f80, SPELL_FAILED_SPELL_IN_PROGRESS).
+    [[nodiscard]] bool busy() const { return sentMs != 0 && startedMs != 0; }
+    /// 0x006fbed0: and a missile held for it.
+    [[nodiscard]] bool holding() const { return busy() && heldCastCount != 0; }
+    /// 0x006fe7e0: none held, and the cast time has passed since it was
+    /// sent.
+    [[nodiscard]] bool due(uint32_t nowMs) const {
+        return sentMs != 0 && startedMs != 0 && heldCastCount == 0 &&
+               static_cast<int32_t>(nowMs - castMs - sentMs) >= 0;
+    }
+};
+
+/// Whether a unit's queued missiles are let go now (0x00734390): when its
+/// model has passed a release event (+0xa30 0x80000000, 0x00715a50), two
+/// seconds after they were queued (+0x9e8), or once the unit no longer plays
+/// the cast kit's animation it was seen playing (+0xfa4). `animSeen` is
+/// updated with whether it plays it now.
+[[nodiscard]] inline bool releaseDue(uint32_t nowMs, uint32_t queuedMs, bool kitPlaying, bool& animSeen,
+                                     bool releaseEvent = false) {
+    if (releaseEvent) return true;
+    if (static_cast<int32_t>(nowMs - queuedMs - 2000u) >= 0) return true;
+    if (kitPlaying) {
+        animSeen = true;
+        return false;
+    }
+    return animSeen;
+}
+
+/// How long the shot is let fly (0x00809f80, 0x006fd6b0): half the latency,
+/// the solved time and a fifth of a second, at most 1.3 times the solved
+/// time.
+[[nodiscard]] inline float flightWithLatency(float seconds, uint32_t latencyMs) {
+    const float padded = static_cast<float>(latencyMs) * 0.001f * 0.5f + seconds + 0.2f;
+    const float cap = seconds * 1.3f;
+    return cap < padded ? cap : padded;
+}
+
+/// The bits 0x007fe520 sets in an aimed shot's figures before they are
+/// sent: a hash of some of their bits and a running count (0x00d3f4ec,
+/// which the active player's object starts at its guid's low half,
+/// 0x006e6b40 -> 0x007fe510, and each stamp moves on by one) is spread over
+/// their lowest bits, then each takes one bit by 0x28d7's parity table.
+/// The change is far below a millimetre.
+struct Stamped {
+    float pitch = 0.0f;
+    float speed = 0.0f;
+    glm::vec3 launch{0.0f};
+    glm::vec3 impact{0.0f};
+};
+[[nodiscard]] inline uint32_t floatBits(float f) {
+    uint32_t u;
+    std::memcpy(&u, &f, sizeof u);
+    return u;
+}
+[[nodiscard]] inline float bitsFloat(uint32_t u) {
+    float f;
+    std::memcpy(&f, &u, sizeof f);
+    return f;
+}
+[[nodiscard]] inline Stamped stamp(uint32_t& counter, float pitch, float speed, const glm::vec3& launch,
+                                   const glm::vec3& impact) {
+    uint32_t p1 = floatBits(pitch);
+    uint32_t p2 = floatBits(speed);
+    uint32_t p3[3] = {floatBits(launch.x), floatBits(launch.y), floatBits(launch.z)};
+    uint32_t p4[3] = {floatBits(impact.x), floatBits(impact.y), floatBits(impact.z)};
+    const uint32_t key = ((((p3[2] & 0xf000u) ^ p3[0]) & 0x2f000u) ^ (p3[1] & 0x300ee630u) ^ (p1 & 0x6000cf0u) ^
+                          (p4[1] & 0x60e0400u) ^ (p2 & 0x240e00u) ^ (p4[0] & 0xa9070f01u) ^ counter) |
+                         0x1010101u;
+    ++counter;
+    // 0x0076f340(key's four bytes, 1, 0): none of them is 0.
+    const char text[4] = {static_cast<char>(key), static_cast<char>(key >> 8), static_cast<char>(key >> 16),
+                          static_cast<char>(key >> 24)};
+    const uint32_t h = chat_language::stringHash(std::string_view(text, 4), false);
+    p1 = (h >> 0x1b & 2u) | (h >> 10 & 1u) | (p1 & 0xfffffffcu);
+    p2 = (h >> 0x13 & 8u) | (h >> 1 & 1u) | (p2 & 0xfffffff6u);
+    p3[0] = (((h >> 9 & 0x10000u) | (h & 0x8000u)) >> 0xe) | (p3[0] & 0xfffffff9u);
+    p3[1] = p3[1] ^ ((p3[1] ^ h >> 1) & 2u);
+    p3[1] = p3[1] ^ ((h >> 0xb ^ p3[1]) & 8u);
+    p3[2] = p3[2] ^ ((p3[2] ^ h >> 6) & 8u);
+    p3[2] = p3[2] ^ ((h >> 0x1c ^ p3[2]) & 4u);
+    p4[0] = (h >> 3 & 4u) | (h >> 6 & 2u) | (p4[0] & 0xfffffff9u);
+    p4[1] = p4[1] ^ ((h >> 0x1d ^ p4[1]) & 1u);
+    p4[1] = p4[1] ^ ((p4[1] ^ h >> 3) & 8u);
+    p4[2] = p4[2] ^ ((h >> 0x14 ^ p4[2]) & 1u);
+    p4[2] = p4[2] ^ ((p4[2] ^ h >> 10) & 4u);
+    // Each value's parity bit, by 0x28d7 over the folded value without it.
+    const auto parity = [](uint32_t& v, uint32_t bit) {
+        const uint32_t kept = v & ~bit;
+        uint32_t x = kept ^ (v >> 0x10);
+        x = x ^ (x >> 8);
+        const uint32_t index = (static_cast<uint8_t>(x >> 4) ^ static_cast<uint8_t>(x)) & 0xfu;
+        v = ((0x28d7u >> index) & 1u ? bit : 0u) | kept;
+    };
+    parity(p1, 8u);
+    parity(p2, 2u);
+    parity(p3[0], 8u);
+    parity(p3[1], 4u);
+    parity(p3[2], 1u);
+    parity(p4[0], 1u);
+    parity(p4[1], 4u);
+    parity(p4[2], 2u);
+    Stamped out;
+    out.pitch = bitsFloat(p1);
+    out.speed = bitsFloat(p2);
+    out.launch = glm::vec3(bitsFloat(p3[0]), bitsFloat(p3[1]), bitsFloat(p3[2]));
+    out.impact = glm::vec3(bitsFloat(p4[0]), bitsFloat(p4[1]), bitsFloat(p4[2]));
+    return out;
 }
 
 }  // namespace wowee::game::missile_trajectory

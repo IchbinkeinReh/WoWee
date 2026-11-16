@@ -3636,6 +3636,77 @@ void Application::setState(AppState newState) {
 // Run by setState on the way in, and again by recoverFromDeviceLoss - the
 // camera controller and the spell visual system are made again with the
 // renderer, and the state does not change, so setState would not run it.
+namespace {
+// A siege missile's collision (0x006fcaa0, 0x006fc4a0, 0x006fbff0): each
+// unit's place, scale, CreatureModelData collision columns, kind, the most
+// of its run, swim and flight speeds, and the vehicle it rides or is - of
+// every unit, or of those `only` names.
+std::vector<rendering::SpellVisualSystem::CollisionUnit> missileCollisionUnits(
+    game::GameHandler* gameHandler, pipeline::AssetManager* assetManager, EntitySpawner* entitySpawner,
+    rendering::Renderer* renderer, const std::vector<uint64_t>* only) {
+    std::vector<rendering::SpellVisualSystem::CollisionUnit> units;
+    if (!gameHandler) return units;
+    auto& entities = gameHandler->getEntityManager();
+    const uint64_t mover = gameHandler->activeMover();
+    const bool hasMover = mover != 0 && entities.getEntity(mover) != nullptr;
+    auto displays = assetManager ? assetManager->loadDBCOptional("CreatureDisplayInfo.dbc") : nullptr;
+    auto models = assetManager ? assetManager->loadDBCOptional("CreatureModelData.dbc") : nullptr;
+    const auto known = [&entities](uint64_t g) { return entities.getEntity(g) != nullptr; };
+    const auto& creatures = gameHandler->getCreatureInfoCache();
+    const auto add = [&](uint64_t guid, const game::Entity& e) {
+        if (!e.isUnit()) return;
+        const auto& unit = static_cast<const game::Unit&>(e);
+        rendering::SpellVisualSystem::CollisionUnit c;
+        c.guid = guid;
+        // 0x00717fc0: where it stands.
+        if (guid == gameHandler->getPlayerGuid() && renderer)
+            c.shape.position = renderer->getCharacterPosition();
+        else
+            c.shape.position =
+                core::coords::canonicalToRender(glm::vec3(e.getLatestX(), e.getLatestY(), e.getLatestZ()));
+        // Its scale (vtable +0x7c) and CreatureModelData row (0x00717a20).
+        c.shape.scale = entitySpawner ? entitySpawner->unitModelScale(guid) : 1.0f;
+        const int32_t display = displays ? displays->findRecordById(unit.getDisplayId()) : -1;
+        if (display >= 0 && models && models->getFieldCount() > 27) {
+            const int32_t model = models->findRecordById(displays->getUInt32(static_cast<uint32_t>(display), 1));
+            if (model >= 0) {
+                const auto row = static_cast<uint32_t>(model);
+                c.shape.hasModelData = true;
+                c.shape.collisionHeight = models->getFloat(row, 15);
+                c.shape.missileRadius = models->getFloat(row, 25);
+                c.shape.missilePush = models->getFloat(row, 26);
+                c.shape.missileRaise = models->getFloat(row, 27);
+            }
+        }
+        c.kind.isPlayer = e.getType() == game::ObjectType::PLAYER;
+        if (!c.kind.isPlayer) {
+            const auto it = creatures.find(unit.getEntry());
+            c.kind.collidesWithMissiles =
+                it != creatures.end() &&
+                (it->second.typeFlags & rendering::missile_collision::kTypeFlagCollidesWithMissiles) != 0;
+        }
+        c.kind.hasMover = hasMover;
+        c.kind.moverMayAttack = hasMover && gameHandler->unitMayAttack(mover, guid);
+        const auto& speeds = e.getMovementSpeeds();
+        c.maxSpeed = std::max(std::max(speeds.run, speeds.swim), speeds.flight);
+        // 0x00748040 for a passenger, else 0x0074c650(0).
+        if (const auto seat = gameHandler->vehicleRoster().passenger(guid))
+            c.vehicle = seat->vehicleGuid;
+        else
+            c.vehicle = gameHandler->vehicleRoster().rootVehicle(guid, 0, known);
+        units.push_back(c);
+    };
+    if (only) {
+        for (uint64_t guid : *only)
+            if (const auto e = entities.getEntity(guid)) add(guid, *e);
+    } else {
+        for (const auto& [guid, e] : entities.getEntities())
+            if (e) add(guid, *e);
+    }
+    return units;
+}
+}  // namespace
+
 void Application::connectWorldHooks() {
     // Wire up movement opcodes from camera controller
     if (renderer && renderer->getCameraController()) {
@@ -3954,6 +4025,20 @@ void Application::connectWorldHooks() {
             svs->setSegmentQuery([this](const glm::vec3& from, const glm::vec3& to) -> std::optional<float> {
                 return renderer ? renderer->intersectSegment(from, to) : std::nullopt;
             });
+            // A siege missile's collision (0x006fcaa0, 0x006fc4a0, 0x006fbff0):
+            // each unit's place, scale, CreatureModelData collision columns,
+            // kind, the most of its run, swim and flight speeds, and the
+            // vehicle it rides or is.
+            svs->setCollisionUnitsQuery([this](const std::vector<uint64_t>* only) {
+                return missileCollisionUnits(gameHandler.get(), assetManager.get(), entitySpawner_.get(),
+                                             renderer.get(), only);
+            });
+            // CMSG_UPDATE_PROJECTILE_POSITION (0x00703640).
+            svs->setProjectilePositionSink(
+                [this](uint64_t casterGuid, uint32_t spellId, uint8_t castCount, const glm::vec3& point) {
+                    if (auto* spells = gameHandler ? gameHandler->getSpellHandler() : nullptr)
+                        spells->sendProjectilePosition(casterGuid, spellId, castCount, point);
+                });
             svs->setSpellVisualResolver([this](uint32_t spellId) -> uint32_t {
                 return gameHandler ? gameHandler->getSpellVisualId(spellId) : 0;
             });

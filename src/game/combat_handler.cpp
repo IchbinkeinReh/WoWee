@@ -1809,6 +1809,8 @@ void CombatHandler::handlePetCastFailed(network::Packet& packet) {
             pet = guidAt(UF::UNIT_FIELD_CHARM);
             if (pet == 0) pet = guidAt(UF::UNIT_FIELD_SUMMON);
             if (pet != 0 && hasCount) owner_.castVisuals().ended(pet, castCount, spellId);
+            if (pet != 0 && hasCount)
+                if (SpellHandler* spells = owner_.getSpellHandler()) spells->castEnded(pet, castCount, spellId);
         }
         uint8_t  reason    = (packet.hasRemaining(1))
                                  ? packet.readUInt8() : 0;

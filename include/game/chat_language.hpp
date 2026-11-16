@@ -23,8 +23,9 @@
 namespace wowee::game::chat_language {
 
 /// 0x0076f340 with its defaults: seed 0x7fed7fed, a-z folded to A-Z and '/'
-/// to '\\'; never 0.
-uint32_t stringHash(std::string_view s);
+/// to '\\'; never 0. Without `foldCase` (its second argument's bit 1, as
+/// the aimed shot's stamp asks, 0x007fe520) the bytes are taken as they are.
+uint32_t stringHash(std::string_view s, bool foldCase = true);
 
 /// 0x007e1680: |c and its eight digits, |r, |H...|h link data, the brackets
 /// of a link's shown text, |h and |T...|t textures go; any other |x stays.

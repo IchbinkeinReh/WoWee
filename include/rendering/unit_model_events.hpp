@@ -133,6 +133,17 @@ constexpr bool loopSoundWanted(uint32_t health, uint32_t flags2, uint32_t loopSo
 /// 0x004cfe00: a sound is not started where the same SoundEntries row
 /// already plays within this many square yards of it.
 constexpr float kSameSoundNearSq = 6.0f;
+/// The model events that let a unit's queued missiles go (0x00732650 ->
+/// 0x00715a50): a spell cast's hand or target point ($CSL, $CSR, $CST) and a
+/// bow's release ($BWR).
+constexpr uint32_t kEventCastLeft = 0x4C534324u;   ///< $CSL
+constexpr uint32_t kEventCastRight = 0x52534324u;  ///< $CSR
+constexpr uint32_t kEventCastTarget = 0x54534324u; ///< $CST
+constexpr uint32_t kEventBowRelease = 0x52574224u; ///< $BWR
+[[nodiscard]] constexpr bool releasesQueuedMissiles(uint32_t eventId) {
+    return eventId == kEventCastLeft || eventId == kEventCastRight || eventId == kEventCastTarget ||
+           eventId == kEventBowRelease;
+}
 
 /// What an event of a unit's model does with its sounds.
 constexpr Action classify(uint32_t eventId) {

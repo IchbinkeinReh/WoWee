@@ -4019,6 +4019,10 @@ void EntityController::handleCreateObject(const UpdateBlock& block, bool& newIte
     // destruction - starts with no cancelled form pending (0x0073f660).
     if (block.guid == owner_.getPlayerGuid() && !entityManager.hasEntity(block.guid)) {
         owner_.clearShapeshiftFormPending();
+        // 0x006e6b40 -> 0x007fe510: the aimed shot's stamp count starts at
+        // the guid's low half.
+        if (SpellHandler* spells = owner_.getSpellHandler())
+            spells->seedTrajectoryStamp(static_cast<uint32_t>(block.guid));
     }
 
     // A dynamic object the client already has is not made again: its

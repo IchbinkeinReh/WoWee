@@ -232,3 +232,13 @@ TEST_CASE("a unit's loop sound plays while it lives and does not feign death (0x
     CHECK_FALSE(ue::loopSoundWanted(100, 0, 0));       // no loop in its row
     CHECK(ue::kLoopFadeOutSeconds == 0.5f);
 }
+
+TEST_CASE("a model's cast and bow release events let queued missiles go", "[unit_model_events]") {
+    using namespace wowee::rendering::unit_event;
+    CHECK(releasesQueuedMissiles(fourCC("$CSL")));
+    CHECK(releasesQueuedMissiles(fourCC("$CSR")));
+    CHECK(releasesQueuedMissiles(fourCC("$CST")));
+    CHECK(releasesQueuedMissiles(fourCC("$BWR")));
+    CHECK_FALSE(releasesQueuedMissiles(fourCC("$FSD")));
+    CHECK(classify(fourCC("$CSL")).kind == Kind::None);  // no sound of its own
+}

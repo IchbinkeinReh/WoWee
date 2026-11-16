@@ -8,6 +8,7 @@
 #include "game/client_periodic_triggers.hpp"
 #include "game/spell_mods.hpp"
 #include "game/ground_target.hpp"
+#include "game/missile_trajectory.hpp"
 #include "game/spell_history.hpp"
 #include "game/spell_missiles_in_flight.hpp"
 #include "game/cast_checks.hpp"
@@ -773,7 +774,10 @@ private:
     /// `frameGuid`, or as it came where that is 0 or not known (0x009ab810).
     glm::vec3 targetPointInWorld(uint64_t frameGuid, float x, float y, float z);
     // Play the cast/precast visual effect at the caster's position.
-    void triggerCastVisual(uint32_t spellId, uint64_t casterGuid, uint32_t castTimeMs = 0);
+    void triggerCastVisual(uint32_t spellId, uint64_t casterGuid, uint32_t castTimeMs = 0, uint8_t castCount = 0);
+    /// 0x007fecc0 -> 0x0071bff0: the missile model the caster holds for this
+    /// cast (SpellVisual Flags 0x20) goes.
+    void dropHeldMissile(uint64_t casterGuid, uint8_t castCount);
     // Play the impact visual effect at the target's position.
     void triggerImpactVisual(uint32_t spellId, uint64_t targetGuid, uint64_t casterGuid);
     void launchRangedWeaponProjectile(uint32_t spellId, uint64_t targetGuid);
@@ -815,6 +819,20 @@ public:
     /// not yet gone off or failed: still in the client's pending list, so
     /// IsCurrentSpell answers for it (0x00805f30). 0 for none.
     [[nodiscard]] uint32_t pendingSwingSpellId() const { return pendingSwing_.spellId; }
+    /// 0x007fec00 for a unit's cast that ended or failed: where it is the
+    /// active mover's current cast, the aimed cast of that spell is let go
+    /// (0x006fbe80).
+    void castEnded(uint64_t caster, uint8_t castCount, uint32_t spellId);
+    /// A unit's model has passed a release event ($CSL, $CSR, $CST, $BWR;
+    /// 0x00732650): where it has missiles queued, they are let go on its next
+    /// update (0x00715a50 marks +0xa30 0x80000000, 0x00734390 reads it).
+    void modelReleaseEvent(uint64_t unit);
+    /// 0x006e6b40 -> 0x007fe510: the active player's object made, its
+    /// guid's low half starts the aimed shot's stamp count.
+    void seedTrajectoryStamp(uint32_t guidLow) { trajectoryStampCount_ = guidLow; }
+    /// CMSG_UPDATE_PROJECTILE_POSITION (0x00703640), point in wire
+    /// coordinates.
+    void sendProjectilePosition(uint64_t casterGuid, uint32_t spellId, uint8_t castCount, const glm::vec3& point);
 private:
     /// The next-swing cast sent and not yet resolved (an entry of 0x00af5254).
     struct PendingSwing {
@@ -929,8 +947,89 @@ private:
     /// SpellMissile row has Flags bit 1. NotAimed for any other; Refused
     /// where the caster is not the active mover or nothing could be worked
     /// out; Built with the cast in `out`.
-    enum class TrajectoryCast { NotAimed, Refused, Built };
+    ///
+    /// Parked: an instant cast whose visual has a missile and a cast kit with
+    /// an animation is not sent yet (0x00809f80 returns 0): its cast kit
+    /// plays, its missile is held, and the cast waits (0x00d3f4e8) to be
+    /// sent when that missile is let go (0x0080de60).
+    enum class TrajectoryCast { NotAimed, Refused, Built, Parked };
     TrajectoryCast buildTrajectoryCast(uint32_t spellId, uint64_t caster, uint64_t target, network::Packet& out);
+    /// 0x006fcd60 for the spell, from the caster as it is now: the row,
+    /// the aim, where the shot lands and how long it flies, and the mover's
+    /// movement. NotAimed for a spell with no aimed SpellMissile row,
+    /// NoMover where the caster is not the active mover.
+    struct AimedShot {
+        missile_trajectory::MissileRow row;
+        uint32_t spellMissileId = 0;
+        missile_trajectory::Aim aim;
+        missile_trajectory::Flight flight;
+        MovementInfo wire;
+    };
+    enum class AimSolve { NotAimed, NoMover, Solved };
+    AimSolve solveAimedShot(uint32_t spellId, uint64_t caster, AimedShot& out);
+    /// The mover's missiles waiting to be let go (Unit_C +0x9ec, queued by
+    /// 0x00800dd0) for an aimed cast: let go when the cast kit's animation
+    /// is over or two seconds after they were queued (0x00734390), when the
+    /// shot is worked out and sent (0x0072df00 -> 0x006fd6b0, or for a parked
+    /// cast 0x0080de60) and the missile launched on it.
+    struct AimedRelease {
+        uint64_t caster = 0;
+        uint8_t castCount = 0;
+        uint32_t spellId = 0;
+        uint64_t target = 0;
+        int32_t anim = -1;        ///< the cast kit's AnimID
+        uint32_t queuedMs = 0;    ///< +0x9e8
+        bool parked = false;      ///< the cast itself waits too (0x00d3f4e8)
+        bool animSeen = false;    ///< the kit's animation has been seen playing
+        bool releaseEvent = false; ///< +0xa30 0x80000000: its model passed a release event
+    };
+    std::optional<AimedRelease> aimedRelease_;
+    /// A parked cast being sent at its release: its cast count, so the cast
+    /// is built with it and not parked again (+0x139 set).
+    std::optional<uint8_t> releasingCastCount_;
+    /// The shot a released parked cast was sent with, and its figures as
+    /// stamped, for its missile.
+    std::optional<AimedShot> releasedShot_;
+    missile_trajectory::Stamped releasedStamp_;
+    /// Whether the spell's visual has a missile and a cast kit with an
+    /// animation, without visual Flags 0x4 (0x006fe7e0, 0x00809f80): `anim`
+    /// the kit's AnimID.
+    bool castKitHoldsMissile(uint32_t spellId, int32_t& anim);
+    /// 0x00800dd0 for an aimed cast: its cast kit on the caster.
+    void playAimedCastKit(uint32_t spellId, uint64_t caster);
+    /// The missile of an aimed cast launched on the shot sent (0x0072e240,
+    /// 0x007022d0), the cast marked aimed so SMSG_SPELL_GO launches none.
+    void launchAimedMissile(uint32_t spellId, uint64_t caster, uint8_t castCount, const AimedShot& shot,
+                            const missile_trajectory::Stamped& sent);
+    /// 0x00734390, each frame: the held missiles let go when due.
+    void tickAimedRelease();
+    /// 0x0072df00 for the held aimed cast.
+    void releaseAimedMissiles();
+    /// Whether the spell's SpellMissile row has Flags bit 1.
+    bool spellIsAimed(uint32_t spellId);
+    /// 0x006fe7e0, each frame: once the aimed cast's time has passed since it
+    /// was sent, 0x006fd6b0.
+    void tickAimedCast();
+    /// 0x006fd6b0: the shot worked out again and sent with
+    /// CMSG_UPDATE_MISSILE_TRAJECTORY; where the cast is still the mover's,
+    /// it is marked aimed and its missile launched on the new arc. True when
+    /// that missile was launched.
+    bool updateMissileTrajectory();
+    /// The aimed cast the active mover has going (+0xf68..+0xf78).
+    missile_trajectory::AimState aimState_;
+    /// 0x00d3f4ec.
+    uint32_t trajectoryStampCount_ = 0;
+    /// The active mover's current cast as SMSG_SPELL_START set it (+0xa5c,
+    /// +0xa60), which 0x00805180 finds the cast object by.
+    struct MoverCast {
+        uint64_t caster = 0;
+        uint8_t castCount = 0;
+        uint32_t spellId = 0;
+    };
+    std::optional<MoverCast> moverCast_;
+    /// The casts whose missile the client launched itself (+0x139): SMSG_SPELL_GO
+    /// launches none for them (0x0080e1b0).
+    std::vector<MoverCast> aimedCasts_;
     /// CMSG_PET_CAST_SPELL at a unit or at none (0x0080ac90).
     void sendPetCast(uint32_t spellId, uint64_t caster, uint64_t target);
     /// CMSG_CAST_SPELL from the player at a unit, at none, or at an item
