@@ -255,6 +255,9 @@ wowee_add_test(test_unit_combat
 # The experience line's wording (0x0050b300, 0x0050b1d0). Header-only.
 wowee_add_test(test_xp_gain_line
     SOURCES test_xp_gain_line.cpp)
+# The macro and item icon lists (0x00565840). Header-only.
+wowee_add_test(test_macro_icon_lists
+    SOURCES test_macro_icon_lists.cpp)
 
 # The tabard designer's design (game/tabard_design.hpp): cycling, the start,
 # the save's refusals and answer, the files. Header-only.

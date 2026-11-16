@@ -360,12 +360,13 @@ struct LuaServices {
     /// ResetDisabledAddOns does.
     std::function<void()> resetAddOnsEnabled;
 
-    /// Every icon this install carries, as paths SetTexture accepts.
+    /// Every file under Interface\Icons\ this install carries: its name with
+    /// its extension, without the folder.
     ///
-    /// The macro and guild bank pickers are grids over this list: they ask how
-    /// many there are and then for one at a time by index. Built from the asset
-    /// manifest rather than a fixed list, so an install carrying different art
-    /// offers what it actually has.
+    /// The macro and item icon lists the pickers are grids over are built from
+    /// it as the client builds them (addons/macro_icon_lists.hpp, 0x00565840).
+    /// From the asset manifest rather than a fixed list, so an install carrying
+    /// different art offers what it actually has.
     std::function<const std::vector<std::string>&()> listIconTextures;
 
     /// Save a screenshot, as the client's own binding and /screenshot do.

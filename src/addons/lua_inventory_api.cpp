@@ -2583,13 +2583,10 @@ static int lua_SaveEquipmentSet(lua_State* L) {
                 iconName = slash == std::string::npos ? path : path.substr(slash + 1);
             }
         }
-    } else if (auto* svc = getLuaServices(L); svc && svc->listIconTextures && iconIndex >= 1) {
-        const auto& icons = svc->listIconTextures();
-        if (iconIndex <= static_cast<int>(icons.size())) {
-            const std::string& path = icons[static_cast<size_t>(iconIndex - 1)];
-            const size_t slash = path.find_last_of("\\/");
-            iconName = (slash == std::string::npos) ? path : path.substr(slash + 1);
-        }
+    } else if (const auto* lists = macroIconLists(L); lists && iconIndex >= 1) {
+        // The macro icon list (0x00564d70): Ability_ and Spell_ icons.
+        if (iconIndex <= static_cast<int>(lists->macro.size()))
+            iconName = lists->macro[static_cast<size_t>(iconIndex - 1)];
     }
     if (iconName.empty()) iconName = "INV_Misc_QuestionMark";
     // Overwriting one keeps its guid, which is how the server knows it is the

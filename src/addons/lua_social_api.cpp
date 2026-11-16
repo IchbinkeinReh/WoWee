@@ -1635,40 +1635,45 @@ static int lua_DeleteGMTicket(lua_State* L) {
 
 // --- Icon pickers ---
 //
-// The macro frame and the guild bank tab dialog are both grids over the same
-// list of icons: how many, then one at a time by index. WoW numbers them from
-// one, and the first is the question mark every unset macro shows.
+// The client keeps two lists (0x00565840, addons/macro_icon_lists.hpp): the
+// macro icons - Ability_ and Spell_ - and the item icons - INV_ - each with
+// the question mark first. Numbered from one.
 
-static const std::vector<std::string>* iconList(lua_State* L) {
-    auto* services = getLuaServices(L);
-    if (!services || !services->listIconTextures) return nullptr;
-    return &services->listIconTextures();
-}
-
+// GetNumMacroIcons() (0x00566490) / GetNumMacroItemIcons() (0x005664e0):
+// the list's size, built on this first ask.
 static int lua_GetNumMacroIcons(lua_State* L) {
-    const auto* icons = iconList(L);
-    lua_pushnumber(L, icons ? static_cast<double>(icons->size()) : 0.0);
+    const auto* lists = macroIconLists(L);
+    lua_pushnumber(L, lists ? static_cast<double>(lists->macro.size()) : 0.0);
+    return 1;
+}
+static int lua_GetNumMacroItemIcons(lua_State* L) {
+    const auto* lists = macroIconLists(L);
+    lua_pushnumber(L, lists ? static_cast<double>(lists->item.size()) : 0.0);
     return 1;
 }
 
-// GetMacroIconInfo(index) → a texture path, or nil past the end
-static int macroIconAt(lua_State* L) {
-    const auto* icons = iconList(L);
-    const int index = static_cast<int>(luaL_checknumber(L, 1));
-    if (!icons || index < 1 || index > static_cast<int>(icons->size())) {
-        lua_pushnil(L);
+// GetMacroIconInfo(index) (0x00564e90) / GetMacroItemIconInfo(index)
+// (0x00564f60): the index rounded to nearest, "Interface\Icons\" and the
+// name - the empty string past the end, not nil.
+static int macroIconAt(lua_State* L, const std::vector<std::string>* list) {
+    const long long index = std::llrint(lua_tonumber(L, 1));
+    if (!list || index < 1 || index > static_cast<long long>(list->size()) ||
+        (*list)[static_cast<size_t>(index - 1)].empty()) {
+        lua_pushstring(L, "");
         return 1;
     }
-    lua_pushstring(L, (*icons)[static_cast<size_t>(index - 1)].c_str());
+    lua_pushstring(L, ("Interface\\Icons\\" + (*list)[static_cast<size_t>(index - 1)]).c_str());
     return 1;
 }
 static int lua_GetMacroIconInfo(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetMacroIconInfo(index)");   // 0x00564e90
-    return macroIconAt(L);
+    const auto* lists = macroIconLists(L);
+    return macroIconAt(L, lists ? &lists->macro : nullptr);
 }
 static int lua_GetMacroItemIconInfo(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetMacroItemIconInfo(index)");   // 0x00564f60
-    return macroIconAt(L);
+    const auto* lists = macroIconLists(L);
+    return macroIconAt(L, lists ? &lists->item : nullptr);
 }
 
 // ── Guild and arena charters ──────────────────────────────────────────
@@ -2379,7 +2384,7 @@ void registerSocialLuaAPI(lua_State* L) {
         }},
                 // The guild bank tab dialog picks from the same icons under a
                 // name of its own.
-                {"GetNumMacroItemIcons", lua_GetNumMacroIcons},
+                {"GetNumMacroItemIcons", lua_GetNumMacroItemIcons},
                 {"GetMacroItemIconInfo", lua_GetMacroItemIconInfo},
                 {"NewGMTicket",         lua_NewGMTicket},
                 {"DeleteGMTicket",      lua_DeleteGMTicket},
