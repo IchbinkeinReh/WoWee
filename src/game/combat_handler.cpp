@@ -1208,11 +1208,10 @@ void CombatHandler::handleHealthUpdate(network::Packet& packet) {
     uint64_t guid = huTbc ? packet.readUInt64() : packet.readPackedGuid();
     if (!packet.hasRemaining(4)) return;
     uint32_t hp = packet.readUInt32();
-    if (auto* unit = owner_.getUnitByGuid(guid)) unit->setHealth(hp);
-    if (guid != 0) {
-        auto unitId = owner_.guidToUnitId(guid);
-        if (!unitId.empty()) owner_.fireAddonEvent("UNIT_HEALTH", {unitId});
-    }
+    // 0x00716d20: the predicted health alone, and no event - the field and
+    // UNIT_HEALTH are the update's. The frames that show it poll it while
+    // predictedHealth is on.
+    if (auto* unit = owner_.getUnitByGuid(guid)) unit->setPredictedHealth(static_cast<int32_t>(hp));
 }
 
 void CombatHandler::handlePowerUpdate(network::Packet& packet) {

@@ -4151,3 +4151,6 @@ register_test_target(test_keybinding_defaults)
 
 # Which casts' delays and channels the client acts on (cast_event_gate.hpp).
 wowee_add_test(test_cast_event_gate SOURCES test_cast_event_gate.cpp)
+
+# A combat log's delta on predicted health (power_prediction.hpp).
+wowee_add_test(test_predicted_health SOURCES test_predicted_health.cpp)

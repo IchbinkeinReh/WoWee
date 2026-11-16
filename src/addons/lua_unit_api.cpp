@@ -10,6 +10,7 @@
 #include "addons/lua_api_helpers.hpp"
 #include "addons/object_type.hpp"
 #include "addons/lua_taint.hpp"
+#include "addons/lua_api_registrations.hpp"
 #include "game/power_prediction.hpp"
 #include "game/unit_level_display.hpp"
 #include "game/known_titles.hpp"
@@ -117,7 +118,12 @@ static int lua_UnitHealth(lua_State* L) {
     const char* uid = luaL_optstring(L, 1, "player");
     auto* unit = resolveUnit(L, uid);
     if (unit) {
-        lua_pushnumber(L, hidesItsBars(L, *unit) ? 0 : unit->getHealth());
+        // 0x0060eb60 -> 0x0071c2c0: the predicted health while the CVar
+        // predictedHealth (registered "1") is on, else the field.
+        const bool predicted = addons::storedCVarValue("predictedHealth", "1") != "0";
+        const double health = predicted ? static_cast<double>(unit->getPredictedHealth())
+                                        : static_cast<double>(unit->getHealth());
+        lua_pushnumber(L, hidesItsBars(L, *unit) ? 0 : health);
     } else {
         // Fallback: party member stats for out-of-range members
         auto* gh = getGameHandler(L);

@@ -4267,7 +4267,13 @@ void SpellHandler::castPowerSaid(uint64_t casterUnit, uint32_t spellId, uint32_t
     const auto it = owner_.spellNameCacheRef().find(spellId);
     if (!unit || it == owner_.spellNameCacheRef().end()) return;
     const auto type = static_cast<int32_t>(it->second.powerType);
-    if (type == -2 || type == 5) return;
+    // Health (-2): the predicted health, through 0x00716050.
+    if (type == -2) {
+        if ((entityField(*unit, UF::UNIT_FIELD_FLAGS_2) & 0x100u) == 0)
+            unit->setPredictedHealth(static_cast<int32_t>(power));
+        return;
+    }
+    if (type == 5) return;
     if ((entityField(*unit, UF::UNIT_FIELD_FLAGS_2) & 0x100u) == 0)
         owner_.setPredictedPower(*unit, type, static_cast<int32_t>(power));
     if (go && type == 0) owner_.startFiveSecondRule(*unit);

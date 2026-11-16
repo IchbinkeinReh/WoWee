@@ -1163,7 +1163,16 @@ public:
 
     // Health
     [[nodiscard]] uint32_t getHealth() const { return health; }
-    void setHealth(uint32_t h) { health = h; }
+    /// The field, and the predicted health with it: a health field landing
+    /// sets both (0x0073f330), as the unit's creation does (0x007237f0).
+    void setHealth(uint32_t h) {
+        health = h;
+        predictedHealth = static_cast<int32_t>(h);
+    }
+    /// The health the client predicts (+0xfb0), which UnitHealth answers
+    /// while the CVar predictedHealth is on (0x0071c2c0).
+    [[nodiscard]] int32_t getPredictedHealth() const { return predictedHealth; }
+    void setPredictedHealth(int32_t h) { predictedHealth = h; }
 
     [[nodiscard]] uint32_t getMaxHealth() const { return maxHealth; }
     void setMaxHealth(uint32_t h) { maxHealth = h; }
@@ -1271,6 +1280,7 @@ public:
 protected:
     std::string name;
     uint32_t health = 0;
+    int32_t predictedHealth = 0;
     uint32_t maxHealth = 0;
     uint32_t powers[7] = {};     // Indexed by power type (0=mana,1=rage,2=focus,3=energy,4=happiness,5=runes,6=runic)
     uint32_t maxPowers[7] = {};  // Max values per power type

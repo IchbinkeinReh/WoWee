@@ -3531,6 +3531,9 @@ public:
     /// 0x00722c50: the prediction of `type` set to `value`, no more than the
     /// maximum.
     void setPredictedPower(Unit& unit, int type, int32_t value);
+    /// 0x0071c260 on the unit `guid` names, when it is in the world: the
+    /// combat log's damage (negative) or healing on its predicted health.
+    void addPredictedHealth(uint64_t guid, int32_t delta);
     /// 0x00722cf0: the prediction moved by an energize (+) or a drain (-).
     void addPredictedPower(uint64_t guid, int type, int32_t delta);
     /// What a unit's update said of its powers: its power type changed

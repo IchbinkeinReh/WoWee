@@ -712,6 +712,8 @@ void CombatLogFeed::swing(const AttackerStateUpdateData& d) {
 
 void CombatLogFeed::environmental(uint64_t victim, uint32_t type, int32_t damage, int32_t absorbed,
                                   int32_t resisted) {
+    // 0x00751150 -> 0x0071c260.
+    owner_.addPredictedHealth(victim, -damage);
     cl::Entry& e = create(cl::Event::EnvironmentalDamage, 0, victim, nullptr);
     e.suffix |= cl::suffix::kEnvironmental | cl::suffix::kDamage;
     e.environmentalType = type;
@@ -748,6 +750,8 @@ void CombatLogFeed::spellDamage(uint64_t src, uint64_t dst, uint32_t spellId, in
     if (!rec || !rec->shown()) return;
     const bool ranged = (rec->attrEx3 & 0x8000u) != 0;
     if (damage != 0) {
+        // 0x00751c40 -> 0x00750660 -> 0x0071c260 on the unit hit.
+        owner_.addPredictedHealth(dst, -damage);
         const cl::Event event = periodic ? cl::Event::SpellPeriodicDamage
                                          : (ranged ? cl::Event::RangeDamage : cl::Event::SpellDamage);
         cl::Entry& e = create(event, src, dst, &*rec);
@@ -791,6 +795,8 @@ void CombatLogFeed::damageSplit(uint64_t src, uint64_t dst, uint32_t spellId, in
                                 uint32_t hitFlags) {
     const auto rec = spell(spellId);
     if (!rec || !rec->shown()) return;
+    // 0x00752de0 -> 0x00750660 -> 0x0071c260.
+    owner_.addPredictedHealth(dst, -damage);
     cl::Entry& e = create(cl::Event::DamageSplit, src, dst, &*rec);
     e.suffix |= cl::suffix::kDamage;
     e.damage.amount = damage;
@@ -806,6 +812,9 @@ void CombatLogFeed::damageSplit(uint64_t src, uint64_t dst, uint32_t spellId, in
 void CombatLogFeed::spellHeal(uint64_t src, uint64_t dst, uint32_t spellId, int32_t heal, int32_t overheal,
                               int32_t absorbed, bool critical, bool periodic) {
     if (heal == 0 && overheal == 0 && absorbed == 0) return;
+    // 0x00751f70: the healed unit's predicted health, before the spell is
+    // looked at.
+    owner_.addPredictedHealth(dst, heal);
     const auto rec = spell(spellId);
     if (!rec || !rec->shown()) return;
     cl::Entry& e = create(periodic ? cl::Event::SpellPeriodicHeal : cl::Event::SpellHeal, src, dst, &*rec);
@@ -979,6 +988,8 @@ void CombatLogFeed::damageShield(uint64_t src, uint64_t dst, uint32_t spellId, i
                                  uint32_t school) {
     const auto rec = spell(spellId);
     if (!rec || !rec->shown()) return;
+    // 0x00752c90 -> 0x0071c260 on the one the shield struck.
+    owner_.addPredictedHealth(dst, -damage);
     cl::Entry& e = create(cl::Event::DamageShield, src, dst, &*rec);
     e.suffix |= cl::suffix::kDamage;
     e.damage.amount = damage;

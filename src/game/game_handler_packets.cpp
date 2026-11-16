@@ -390,6 +390,14 @@ bool GameHandler::shapeshiftCastabilityChanged() {
     return changed;
 }
 
+void GameHandler::addPredictedHealth(uint64_t guid, int32_t delta) {
+    Unit* unit = getUnitByGuid(guid);
+    if (!unit) return;
+    unit->setPredictedHealth(power_prediction::predictedHealthAfter(
+        unit->getPredictedHealth(), delta, static_cast<int32_t>(unit->getMaxHealth()),
+        fieldIndex(UF::UNIT_FIELD_FLAGS_2) != 0xFFFF ? unit->getField(fieldIndex(UF::UNIT_FIELD_FLAGS_2)) : 0u));
+}
+
 void GameHandler::setPredictedPower(Unit& unit, int type, int32_t value) {
     if (power_prediction::set(unit.predictedPower(), type, value,
                               static_cast<int32_t>(unit.getMaxPowerByType(static_cast<uint8_t>(type)))))
