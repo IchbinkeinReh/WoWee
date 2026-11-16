@@ -31,7 +31,7 @@ inline uint32_t durationMs(const std::string& text, bool own) {
 /// The fade in and the fade out, each 250 ms (0x0056c500, 0xfa).
 inline constexpr float kFadeSeconds = 0.25f;
 
-/// Shown only within 25 yards of the camera: the client hides a bubble
+/// Shown only within 25 yards of the active player: the client hides a bubble
 /// whose squared distance reaches 625 (0x0056c500).
 inline constexpr float kRangeYards = 25.0f;
 
