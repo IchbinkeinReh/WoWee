@@ -4020,13 +4020,15 @@ void GameHandler::registerRemainingOpcodes() {
         packet.skipAll();
     };
     // Someone has taken the player's insignia, so the corpse is gone and any
-    // resurrect offer against it is void. The body carries a free-repop flag
-    // the interface reads only in code Blizzard commented out, so it is not
-    // parsed here - the message and the cancelled offers are the whole effect.
-    // UIParent answers PLAYER_SKINNED with DEATH_CORPSE_SKINNED on the error
-    // line itself; this put English "Insignia Taken - ..." there as well.
+    // resurrect offer against it is void. UIParent answers PLAYER_SKINNED with
+    // DEATH_CORPSE_SKINNED on the error line itself; this put English
+    // "Insignia Taken - ..." there as well.
+    //
+    // The packet's one byte, the free-repop flag, is the event's argument as
+    // a number, 1 or 0 (0x006cdf00 -> 0x00512520, "%d" of byte != 0).
     dispatchTable_[Opcode::SMSG_PLAYER_SKINNED] = [this](network::Packet& packet) {
-        if (addonEventCallback_) addonEventCallback_("PLAYER_SKINNED", {});
+        const bool freeRepop = packet.hasRemaining(1) && packet.readUInt8() != 0;
+        if (addonEventCallback_) addonEventCallback_("PLAYER_SKINNED", {freeRepop ? "1" : "0"});
         packet.skipAll();
     };
     // These packets are not damage-shield events. Consume them without
