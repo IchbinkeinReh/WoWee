@@ -184,8 +184,9 @@ static std::optional<std::string> mailTemplateBody(game::GameHandler* gh, uint32
     return it->second;
 }
 
-static int lua_GetBankSlotCost(lua_State* L) {
-    auto* gh = getGameHandler(L);
+// BankBagSlotPrices.dbc's price for the next slot after those bought, 0
+// past the table (0x0057ba30).
+static uint32_t nextBankSlotPrice(game::GameHandler* gh) {
     static std::unordered_map<uint32_t, uint32_t> prices;
     static bool loaded = false;
     if (!loaded && gh) {
@@ -198,7 +199,11 @@ static int lua_GetBankSlotCost(lua_State* L) {
     }
     const uint32_t next = gh ? gh->getInventory().getPurchasedBankBagSlots() + 1u : 1u;
     const auto it = prices.find(next);
-    lua_pushnumber(L, it != prices.end() ? static_cast<double>(it->second) : 0.0);
+    return it != prices.end() ? it->second : 0u;
+}
+
+static int lua_GetBankSlotCost(lua_State* L) {
+    lua_pushnumber(L, static_cast<double>(nextBankSlotPrice(getGameHandler(L))));
     return 1;
 }
 
@@ -6510,8 +6515,27 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // asked, took the answer and bought nothing. GetBankSlotCost
                 // and GetNumBankSlots beside it were both already bound, which
                 // is what let the dialog price the slot it could not buy.
+                // 0x0057bbc0: only with the player there, the bank open and
+                // fewer than seven slots bought (PLAYER_BYTES_2's byte 2); with
+                // less money than the next slot's price, the game error
+                // ERR_BANKSLOT_INSUFFICIENT_FUNDS and nothing sent.
                 {"PurchaseSlot", [](lua_State* L) -> int {
-            if (auto* gh = getGameHandler(L)) gh->buyBankSlot();
+            auto* gh = getGameHandler(L);
+            if (!gh) return 0;
+            if (!gh->getEntityManager().getEntity(gh->getPlayerGuid()) || !gh->isBankOpen()) {
+                LOG_WARNING("PurchaseSlot: no bank open, ignored");
+                return 0;
+            }
+            if (gh->getInventory().getPurchasedBankBagSlots() >= 7) {
+                LOG_WARNING("PurchaseSlot: every bank bag slot is bought, ignored");
+                return 0;
+            }
+            if (gh->getMoneyCopper() < nextBankSlotPrice(gh)) {
+                gh->playGameErrorSound("ERR_BANKSLOT_INSUFFICIENT_FUNDS");
+                gh->addUIError(game::interfaceString("ERR_BANKSLOT_INSUFFICIENT_FUNDS", "You can't afford that bank slot."));
+                return 0;
+            }
+            gh->buyBankSlot();
             return 0;
         }},
                 {"ContainerIDToInventoryID", lua_ContainerIDToInventoryID},
