@@ -722,8 +722,10 @@ void MovementHandler::sendMovement(Opcode opcode) {
     const uint32_t flagsBefore = movementInfo.flags;
     const bool launchedBefore = movementInfo.jumpVelocity != 0.0f;
 
-    // Cancel any timed non-channel cast, plus food/water restoration, the moment
-    // the player starts moving. Other channels retain their normal behavior.
+    // Starting to move (0x005faa40 -> 0x00806620) walks the pending casts and
+    // cancels, with CMSG_CANCEL_CAST, only those whose spell's InterruptFlags
+    // (Spell.dbc word 31) has 0x1; a cast without it keeps going while the
+    // player moves. Food/water restoration still ends when the player gets up.
     if (owner_.isCasting() && (!owner_.isChanneling() || owner_.isRestoring())) {
         const bool isPositionalMove =
             opcode == Opcode::MSG_MOVE_START_FORWARD  ||
@@ -732,7 +734,15 @@ void MovementHandler::sendMovement(Opcode opcode) {
             opcode == Opcode::MSG_MOVE_START_STRAFE_RIGHT ||
             opcode == Opcode::MSG_MOVE_JUMP;
         if (isPositionalMove) {
-            owner_.cancelCast();
+            bool cancel = owner_.isRestoring();
+            if (!cancel) {
+                // 0x00806620
+                owner_.loadSpellNameCache();
+                const auto it = owner_.spellNameCacheRef().find(owner_.getCurrentCastSpellId());
+                cancel = it != owner_.spellNameCacheRef().end() &&
+                         (it->second.interruptFlags & 0x1u) != 0;
+            }
+            if (cancel) owner_.cancelCast();
         }
     }
     // A move key, autorun, both mouse buttons or a jump (0x005fbe10,
