@@ -193,6 +193,10 @@ void WorldLoader::processPendingEntry() {
     if (!pendingWorldEntry_ || loadingWorld_) return;
     auto entry = *pendingWorldEntry_;
     pendingWorldEntry_.reset();
+    if (entry.relocate && entry.mapId == loadedMapId_) {
+        relocateOnLoadedMap(entry.mapId, entry.x, entry.y, entry.z);
+        return;
+    }
     LOG_DEBUG("Processing deferred world entry: map ", entry.mapId);
     if (app_.worldEntryCallbacks_) {
         app_.worldEntryCallbacks_->setWorldEntryMovementGraceTimer(2.0f);
@@ -759,8 +763,9 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     bool hasRendererData = renderer_ && (renderer_->getWMORenderer() || renderer_->getM2Renderer());
     if (loadedMapId_ != 0xFFFFFFFF || hasRendererData) {
         LOG_WARNING("Map change: cleaning up old map ", loadedMapId_, " before loading map ", mapId);
-        // A far move on the same map is rebuilt here as a map change, but to
-        // the server nothing left: what it shows the whole map - Undercity's
+        // A world rebuilt on the same map (a far move was, before such moves
+        // were taken as the client takes them, relocateOnLoadedMap) is to
+        // the server nothing that left: what it shows the whole map - Undercity's
         // lifts and their gates are static transports it sends once - is
         // still known to the client and never sent again. Dropped with the
         // old world's instances and transports below, the lifts were gone
@@ -1247,57 +1252,7 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
                 // floor at the wrong location and eventually released at hard cap.
                 float rx = spawnRender.x, ry = spawnRender.y, rz = spawnRender.z;
 
-                // Asked where the player will stand. Only the camera sets the
-                // collision focus, and it has not run here, so the focus is
-                // wherever the last map left it; the queries below are about
-                // the spawn.
-                if (auto* wmo = renderer_->getWMORenderer()) {
-                    wmo->setCollisionFocus(glm::vec3(rx, ry, rz), 120.0f);
-                }
-                if (auto* m2 = renderer_->getM2Renderer()) {
-                    m2->setCollisionFocus(glm::vec3(rx, ry, rz), 120.0f);
-                }
-                // Check WMO floor FIRST (cities like Stormwind stand on WMO floors).
-                // Terrain exists below WMOs but at the wrong height.
-                // From just above the feet, as the player's own physics asks,
-                // and only then from higher: a probe five yards up starts
-                // above whatever overhangs the spot - an arch, a balcony -
-                // and in Dalaran it answered with a floor two hundred yards
-                // down, so the loading screen waited out its cap for a floor
-                // the player was already standing on.
-                if (auto* wmo = renderer_->getWMORenderer()) {
-                    for (const float lift : {1.0f, 5.0f}) {
-                        auto wmoH = wmo->getFloorHeight(rx, ry, rz + lift);
-                        if (wmoH.has_value() && std::abs(*wmoH - rz) < 15.0f) {
-                            groundReady = true;
-                            break;
-                        }
-                    }
-                }
-                // Or a doodad's, which the player's physics stands on as well.
-                if (!groundReady) {
-                    if (auto* m2 = renderer_->getM2Renderer()) {
-                        auto m2H = m2->getFloorHeight(rx, ry, rz + 1.0f);
-                        if (m2H.has_value() && std::abs(*m2H - rz) < 15.0f) {
-                            groundReady = true;
-                        }
-                    }
-                }
-                // Check terrain - but only if it's close to spawn Z (within 15 units).
-                // Terrain far below a WMO city doesn't count as ground.
-                if (!groundReady) {
-                    if (auto* tm = renderer_->getTerrainManager()) {
-                        // Not far under the feet: that is the ground under a
-                        // building still streaming in (Darnassus' terrain
-                        // 12.5 yards under the temple terrace), which the
-                        // player would then stand on.
-                        auto tH = tm->getHeightAt(rx, ry);
-                        if (tH.has_value() && *tH < rz + 15.0f &&
-                            *tH >= rz - rendering::movement::kTeleportFloorReachDown) {
-                            groundReady = true;
-                        }
-                    }
-                }
+                groundReady = floorUnder(spawnRender);
                 // The map's area around the spawn loaded: the client drops its
                 // loading screen once the area about the new position has been
                 // read in (SMSG_NEW_WORLD -> 0x00403b70 -> 0x00781430 ->
@@ -1524,6 +1479,201 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     // The cinematic that came while the world loaded (0x006e8190 ->
     // 0x00528af0).
     if (gameHandler_) gameHandler_->startDeferredCinematic();
+}
+
+bool WorldLoader::floorUnder(const glm::vec3& at) const {
+    if (!renderer_) return false;
+    const float rx = at.x, ry = at.y, rz = at.z;
+
+    // Asked where the player will stand. Only the camera sets the
+    // collision focus, and it has not run here, so the focus is
+    // wherever the last map left it; the queries below are about
+    // the spawn.
+    if (auto* wmo = renderer_->getWMORenderer()) {
+        wmo->setCollisionFocus(glm::vec3(rx, ry, rz), 120.0f);
+    }
+    if (auto* m2 = renderer_->getM2Renderer()) {
+        m2->setCollisionFocus(glm::vec3(rx, ry, rz), 120.0f);
+    }
+    // Check WMO floor FIRST (cities like Stormwind stand on WMO floors).
+    // Terrain exists below WMOs but at the wrong height.
+    // From just above the feet, as the player's own physics asks,
+    // and only then from higher: a probe five yards up starts
+    // above whatever overhangs the spot - an arch, a balcony -
+    // and in Dalaran it answered with a floor two hundred yards
+    // down, so the loading screen waited out its cap for a floor
+    // the player was already standing on.
+    if (auto* wmo = renderer_->getWMORenderer()) {
+        for (const float lift : {1.0f, 5.0f}) {
+            auto wmoH = wmo->getFloorHeight(rx, ry, rz + lift);
+            if (wmoH.has_value() && std::abs(*wmoH - rz) < 15.0f) return true;
+        }
+    }
+    // Or a doodad's, which the player's physics stands on as well.
+    if (auto* m2 = renderer_->getM2Renderer()) {
+        auto m2H = m2->getFloorHeight(rx, ry, rz + 1.0f);
+        if (m2H.has_value() && std::abs(*m2H - rz) < 15.0f) return true;
+    }
+    // Check terrain - but only if it's close to spawn Z (within 15 units).
+    // Terrain far below a WMO city doesn't count as ground.
+    if (auto* tm = renderer_->getTerrainManager()) {
+        // Not far under the feet: that is the ground under a
+        // building still streaming in (Darnassus' terrain
+        // 12.5 yards under the temple terrace), which the
+        // player would then stand on.
+        auto tH = tm->getHeightAt(rx, ry);
+        if (tH.has_value() && *tH < rz + 15.0f &&
+            *tH >= rz - rendering::movement::kTeleportFloorReachDown) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The client's far teleport on its own map (MSG_MOVE_TELEPORT(_ACK), the
+// mover's event 0x2c in 0x006ed0f0 -> 0x006ecf80, acknowledged with 0xc7 once
+// it returns). Past 150 yards (0x006ecf80 hands 0x0074b620 22500 < d^2) it
+// takes the new place behind the loading screen (0x00781500 with 1): the
+// map's own picture and bar (0x0040ab70 with the map's screen, 0x00adfbc4),
+// the areas it holds let go (0x007bd9f0 -> 0x007c3730) and those about the
+// new place read in, four passes each waiting until no file read is pending
+// (0x007b6b00 with 0x00adfbc8 set -> 0x004bae10), then the screen's end
+// (0x00409550). It all happens inside the packet's handler: no frame runs,
+// nothing moves, and the ground is there when the player is next updated.
+// Nothing else of the world is touched - no PLAYER_LEAVING_WORLD, no
+// PLAYER_ENTERING_WORLD, no units dropped - and the zone's events come from
+// the next ticks (0x006d7bb0), as for any other move.
+//
+// Here the area is the tile under the new place and the eight about it: what
+// the tiles bring - ground, buildings, doodads, water - is in once they are,
+// and the rest of the load radius streams in after, as it does while walking.
+void WorldLoader::relocateOnLoadedMap(uint32_t mapId, float x, float y, float z) {
+    auto* terrainMgr = renderer_ ? renderer_->getTerrainManager() : nullptr;
+    auto* camera = renderer_ ? renderer_->getCamera() : nullptr;
+    if (!terrainMgr || !camera || !window_) return;
+
+    loadingWorld_ = true;
+    const auto start = std::chrono::steady_clock::now();
+    const glm::vec3 dest =
+        core::coords::canonicalToRender(core::coords::serverToCanonical(glm::vec3(x, y, z)));
+
+    auto screenOwned = std::make_unique<rendering::LoadingScreen>();
+    rendering::LoadingScreen& screen = *screenOwned;
+    screen.setVkContext(window_->getVkContext());
+    screen.setSDLWindow(window_->getSDLWindow());
+    // A passenger carried along a one-map route (the Grom'gol zeppelin's leg
+    // change, 0x007134a0 -> 0x0040ae30): the crossing's screen.
+    if (gameHandler_) {
+        if (const auto crossing = gameHandler_->takeLoadingScreenCrossing())
+            screen.setTransportCrossing(
+                crossing->taxiPathId, crossing->fromMapId,
+                crossing->leftFromWire
+                    ? std::optional<rendering::loading_screen_route::Point>(
+                          rendering::loading_screen_route::Point{crossing->leftFromWire->x, crossing->leftFromWire->y})
+                    : std::nullopt);
+    }
+    const bool screenOk = screen.initialize(assetManager_, mapId);
+    // 0x0040a990: the loading screen starts the keep-alive's thirty seconds.
+    if (gameHandler_) gameHandler_->loadingKeepAlive(/*starting=*/true);
+
+    // Ring first, the tile under the feet last: each goes to the front of the
+    // queue, so the workers take the centre first.
+    const auto [tileX, tileY] = core::coords::worldToTile(dest.x, dest.y);
+    std::vector<std::pair<int, int>> area;
+    for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx)
+            if (dx != 0 || dy != 0) area.emplace_back(tileX + dx, tileY + dy);
+    area.emplace_back(tileX, tileY);
+    terrainMgr->precacheTiles(area);
+    (void)terrainMgr->takeWorkerReport();
+
+    constexpr float kMaxSeconds = 60.0f;
+    constexpr float kStallSeconds = 15.0f;
+    auto lastChange = start;
+    int lastSettled = -1;
+    int settled = 0;
+    int finalized = 0;
+    int frames = 0;
+    bool quit = false;
+    while (true) {
+        ++frames;
+        app_.beatWatchdog();
+        SDL_Event event;
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_EVENT_QUIT) {
+                window_->setShouldClose(true);
+                quit = true;
+            } else if (event.type == SDL_EVENT_WINDOW_RESIZED) {
+                const int w = event.window.data1;
+                const int h = event.window.data2;
+                window_->setSize(w, h);
+                if (h > 0) camera->setAspectRatio(static_cast<float>(w) / h);
+            }
+        }
+        if (quit) break;
+        // 0x0040a920 -> 0x00408520: a keep-alive once the thirty seconds are up.
+        if (gameHandler_) gameHandler_->loadingKeepAlive(/*starting=*/false);
+
+        // Streams about the camera, which the teleport already put there, and
+        // queues the old place's tiles for unloading.
+        terrainMgr->update(*camera, 0.016f);
+        finalized += terrainMgr->processOneReadyTile();
+
+        settled = 0;
+        for (const auto& [tx, ty] : area)
+            if (terrainMgr->isTileSettled(tx, ty)) ++settled;
+        const auto now = std::chrono::steady_clock::now();
+        if (settled != lastSettled) {
+            lastSettled = settled;
+            lastChange = now;
+        }
+        if (settled == static_cast<int>(area.size())) break;
+        if (std::chrono::duration<float>(now - start).count() > kMaxSeconds) {
+            LOG_WARNING("Same-map teleport: area still loading after ", kMaxSeconds, " s (", settled, "/",
+                        area.size(), " tiles)");
+            break;
+        }
+        if (std::chrono::duration<float>(now - lastChange).count() > kStallSeconds) {
+            LOG_WARNING("Same-map teleport: area loading stalled for ", kStallSeconds, " s (", settled, "/",
+                        area.size(), " tiles)");
+            break;
+        }
+        if (screenOk) {
+            screen.setProgress(static_cast<float>(settled) / static_cast<float>(area.size()));
+            screen.render();
+            window_->swapBuffers();
+        }
+        if (terrainMgr->getReadyQueueCount() == 0) SDL_Delay(4);
+    }
+
+    const bool onTransport = gameHandler_ && gameHandler_->isOnTransport();
+    const bool floor = onTransport || floorUnder(dest);
+    // A passenger stands where the offset on the deck puts them now: the
+    // route went on while the area loaded (0x004f4460).
+    if (onTransport) gameHandler_->markTransportArrival();
+
+    if (!quit) {
+        // What the tiles uploaded, flushed before the first frame draws it
+        // (as after any world load).
+        if (renderer_->getVkContext()) renderer_->getVkContext()->waitIdle("same-map teleport flush");
+        if (screenOk) {
+            screen.setProgress(1.0f);
+            screen.render();
+            window_->swapBuffers();
+        }
+    }
+    // The loading screen's end (0x00409550): the music and ambience of the
+    // place left stop, and the new place's start on the next ticks.
+    if (auto* ac = renderer_->getAudioCoordinator()) ac->leaveWorld();
+    screen.shutdown();
+    loadingWorld_ = false;
+
+    const auto workers = terrainMgr->takeWorkerReport();
+    LOG_WARNING("Same-map teleport: map ", mapId, " area loaded in ",
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(), " s (", settled,
+                "/", area.size(), " tiles about [", tileX, ",", tileY, "], ", finalized, " finalized over ", frames,
+                " loading-screen frames, workers ", workers.prepareSec, " s; floor under the player: ",
+                floor ? "yes" : "no", ")");
 }
 
 void WorldLoader::startWorldPreload(uint32_t mapId, const std::string& mapName,

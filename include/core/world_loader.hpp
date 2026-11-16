@@ -77,6 +77,11 @@ public:
     [[nodiscard]] uint32_t getLoadedMapId() const { return loadedMapId_; }
     [[nodiscard]] bool isLoadingWorld() const { return loadingWorld_; }
     [[nodiscard]] bool hasPendingEntry() const { return pendingWorldEntry_.has_value(); }
+    /// A world is being entered or is about to be: from the server's word
+    /// (SMSG_NEW_WORLD, a far teleport) to the end of its load. The client
+    /// has no player to place in the world until then, so nothing asks where
+    /// the player stands (0x006d7bb0 finds no player object and returns).
+    [[nodiscard]] bool isWorldEntryUnderway() const { return loadingWorld_ || pendingWorldEntry_.has_value(); }
 
     // Get cached map name by ID (returns empty string if not found)
     [[nodiscard]] std::string getMapNameById(uint32_t mapId) const {
@@ -87,6 +92,13 @@ public:
     // Set pending world entry for deferred processing via processPendingEntry()
     void setPendingEntry(uint32_t mapId, float x, float y, float z) {
         pendingWorldEntry_ = PendingWorldEntry{.mapId = mapId, .x = x, .y = y, .z = z};
+    }
+    /// A teleport of more than 150 yards on the map that is loaded, taken
+    /// next frame behind the map's loading screen (relocateOnLoadedMap):
+    /// the area about the new place is read in, nothing else of the world
+    /// is touched and the world is not entered again.
+    void setPendingRelocation(uint32_t mapId, float x, float y, float z) {
+        pendingWorldEntry_ = PendingWorldEntry{.mapId = mapId, .x = x, .y = y, .z = z, .relocate = true};
     }
 
     // Reset methods (for logout / character switch)
@@ -138,7 +150,20 @@ private:
 
     struct PendingWorldEntry {
         uint32_t mapId; float x, y, z;
+        bool relocate = false;  ///< setPendingRelocation's
     };
+
+    /// The client's far teleport on the map it has loaded (0x006ecf80 ->
+    /// 0x0074b620 -> 0x00781500): the loading screen up, the map's areas let
+    /// go and the ones about the new place read in until nothing of them is
+    /// pending (0x007bd9f0 -> 0x007b6b00, 0x004bae10), the screen down. Its
+    /// units, objects and interface stay as they are, and no
+    /// PLAYER_ENTERING_WORLD is raised - the player never left the world.
+    void relocateOnLoadedMap(uint32_t mapId, float x, float y, float z);
+
+    /// Ground the player can stand on at a render position: a building's
+    /// floor or a doodad's near the height, or terrain not far under it.
+    bool floorUnder(const glm::vec3& renderPos) const;
     std::optional<PendingWorldEntry> pendingWorldEntry_;
 
     // Map.dbc name cache (loaded once per session)
