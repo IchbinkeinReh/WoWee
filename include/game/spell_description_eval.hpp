@@ -17,16 +17,18 @@
  * an unknown token and left the rest of the name in the sentence, so the
  * tooltip read "percent>% of your normal weapon damage".
  *
- * Three constructs, and only these three:
+ * The language is the client's (0x005778b0 parses, 0x00578d10 runs):
  *
- *     ${ arithmetic }         + - * / and parentheses
- *     $?s<id>[then][else]     whether the player knows that spell
- *     $<name>                 another declaration in the same row
+ *     + - * / % ^ and parentheses, with the usual precedence
+ *     $abs( $ceil( $floor( $min( $max( $gt( $lt( $gte( $lte( $eq(
+ *     $cond( $clamp(       functions, by any case (0x00576b10)
+ *     $<name>              another declaration in the same row
+ *     $m1 $AP $SPH ...     the variables of 0x00ace8f8, by exact case,
+ *                          another spell's with its number in front
  *
- * with $m1 $M1 $s1 $o1 for the spell's own magnitudes, $d and $t1 for its
- * duration and period, and any of them with another spell's number in front. Anything else fails the
- * whole expression rather than guessing at it, and the caller drops a token it
- * could not work out rather than leaking the name into the sentence.
+ * with $?s<id>[then][else] besides, which the declarations of a row are
+ * written with. A token the table does not name fails the expression, and
+ * the formatter then writes "$" where it stood, as 0x0057aaf0 does.
  *
  * Free of the game handler so it can be tested: what a magnitude is and which
  * spells are known are asked of the caller.
@@ -38,6 +40,8 @@
 #include <functional>
 #include <initializer_list>
 #include <string>
+
+#include "game/spell_mods.hpp"
 
 namespace wowee {
 namespace game {
@@ -55,6 +59,11 @@ struct SpellDescriptionContext {
     /// "$72368m1", "$1510d" (0x005782d0). `spellId` is 0 for the spell's
     /// own. False when it cannot, which fails the expression.
     std::function<bool(uint32_t spellId, char code, int index, double& out)> quantity;
+    /// Every other variable of the client's table (0x00ace8f8, 0x005782d0)
+    /// - "a1", "h", "AP", "SPH", "MWS", "pl" ... - by its exact name; another
+    /// spell's where `spellId` is not 0. False where the caller cannot
+    /// answer, which fails the expression.
+    std::function<bool(uint32_t spellId, const std::string& name, double& out)> variable;
     /// Whether the player knows a spell, for $?s<id>[then][else].
     std::function<bool(uint32_t spellId)> knowsSpell;
     /// The "$name=expression" lines this spell draws on, or null.
@@ -77,6 +86,56 @@ struct SpellEffectPoints {
 SpellEffectPoints spellEffectPoints(int32_t basePoints, int32_t dieSides,
                                     float pointsPerLevel, int casterLevel,
                                     int baseLevel, int maxLevel);
+
+/// What 0x007fd440 makes of an effect, by its Effect and EffectApplyAuraName:
+/// whether its points end whole (the least down, the most up), whether the
+/// talents' damage ops reach it, and whether that is the periodic one.
+///
+///   direct damage and healing (2 9 10 17 31 58 67 75 121): whole, damage
+///   an aura (6 27 35 65 119 128 129 143) of periodic damage, healing or
+///   leech (3 8 20 53 62 89): whole, damage, periodic; a damage shield or
+///   proc damage (15 43): whole, damage; periodic power (21 24 63 64 162):
+///   whole
+///   energize and the like (8 30 62 146): whole
+struct SpellEffectKind {
+    bool whole = false;
+    bool damage = false;
+    bool periodic = false;
+};
+SpellEffectKind spellEffectKind(uint32_t effect, uint32_t aura);
+
+/// The talents' modifiers for one op, as 0x007fd970 sums them for a spell.
+using SpellModifierLookup = std::function<spell_mods::Sum(uint8_t op)>;
+
+/// The rest of 0x007ff770, after the level: unless `mods` is empty (an
+/// aura's tooltip, its eighth argument set), both ends through op 8 (all
+/// effects), the effect's own op (3, 12, 23 for the first, second, third),
+/// op 22 (periodic damage) or op 0 (damage) where spellEffectKind says
+/// damage, and op 2 (threat) for an aura of threat (10, 103, 183); then to
+/// the nearest 128th, and for a whole kind the least down and the most up
+/// to a whole number - where the client's own ceiling makes 1 of a zero
+/// (0x0095d500).
+SpellEffectPoints finishSpellEffectPoints(SpellEffectPoints raw, int index, uint32_t effect,
+                                          uint32_t aura, const SpellModifierLookup& mods);
+
+/// 0x005773b0: to the nearest whole number, halves away from zero ($F).
+long spellRoundHalfAway(float v);
+
+/// "$lsingular:plural;" (0x00576ef0) from `at`, just past the letter: the
+/// form the count picks - the first for one, the second for any other, as
+/// 0x00817d10 has it for the German and English clients - with the spaces
+/// in front of the body and around the form dropped. `at` ends past the
+/// ';'. False where there is no ';', and the text goes on as written.
+bool pickPluralForm(const std::string& raw, std::size_t& at, long count, std::string& out);
+
+/// "$gmale:female;" (0x00576cd0) from `at`, just past the letter: the first
+/// form for a male player (`female` false), the second for a female one - a
+/// third, past another ':', is never chosen. Spaces as for the plural.
+bool pickGenderForm(const std::string& raw, std::size_t& at, bool female, std::string& out);
+
+/// A "${...}" written into the text (0x00579980): "%.0f", or "%.<n>f"
+/// where ".<n>" (1 to 9) follows the brace.
+std::string formatSpellExpressionValue(float v, int decimals);
 
 /// A bare $m / $M / $s / $S token as 0x00579e50 writes it into the text:
 /// $m the least, $M the most, $s the one number when least and most agree

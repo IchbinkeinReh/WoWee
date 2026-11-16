@@ -4773,40 +4773,17 @@ const std::string& GameHandler::getSpellDescription(uint32_t spellId) const {
 }
 
 namespace {
-/// How an aura's tooltip has its description worked out (0x00625350): the
-/// aura's level - zero for the player's own, as every other tooltip has it -
-/// and the stack count its points are multiplied by.
+/// How a description is worked out (0x0057abc0's last arguments): the
+/// aura's level - zero for anything but another's aura, as every other
+/// tooltip has it - the stack count its points are multiplied by, and
+/// whether it is an aura's tooltip, whose values the talents do not touch
+/// (0x00625350 passes 1 for 0x007ff770's eighth argument and 0x00800a70's
+/// fourth; the spell tooltip, 0x006238a0, passes 0).
 struct AuraScale {
     int level = 0;
     int stacks = 1;
+    bool aura = false;
 };
-
-/// The least and the most effect `index` of a spell does at the player's
-/// level (0x007ff770) - or, for an aura, at the level `scale` gives
-/// (auraTokenLevel; `reference` for another spell's token). False for an
-/// unknown spell or index.
-bool spellEffectPointsOf(const GameHandler& gh, uint32_t spellId, int index, SpellEffectPoints& out,
-                         const AuraScale& scale = {}, bool reference = false) {
-    if (spellId == 0 || index < 0 || index > 2) return false;
-    if (!gh.getSpellEffectBasePoints(spellId)) return false;  // also loads the cache
-    const auto& cache = gh.spellNameCacheRef();
-    const auto it = cache.find(spellId);
-    if (it == cache.end()) return false;
-    const auto& e = it->second;
-    const std::size_t k = static_cast<std::size_t>(index);
-    int level = static_cast<int>(gh.getPlayerLevel());
-    int maxLevel = e.maxLevel;
-    if (scale.level > 0) {
-        const AuraTokenLevel at = auraTokenLevel(reference, scale.level, level, e.attrEx2);
-        level = at.level;
-        if (!at.heldToMaxLevel) maxLevel = 0;
-    }
-    out = spellEffectPoints(e.effectBasePoints[k], e.effectDieSides[k], e.effectPointsPerLevel[k],
-                            level, e.baseLevel, maxLevel);
-    out.min *= static_cast<float>(scale.stacks);
-    out.max *= static_cast<float>(scale.stacks);
-    return true;
-}
 
 const GameHandler::SpellNameEntry* spellEntryOf(const GameHandler& gh, uint32_t spellId) {
     if (spellId == 0) return nullptr;
@@ -4816,27 +4793,80 @@ const GameHandler::SpellNameEntry* spellEntryOf(const GameHandler& gh, uint32_t 
     return it != cache.end() ? &it->second : nullptr;
 }
 
+/// The talents' modifiers on a spell, op by op - none for an aura's tooltip.
+SpellModifierLookup modifiersFor(const GameHandler& gh, uint32_t spellId, const AuraScale& scale) {
+    if (scale.aura) return {};
+    return [&gh, spellId](uint8_t op) {
+        return gh.getSpellModifiers(spellId, static_cast<GameHandler::SpellModOp>(op));
+    };
+}
+
+/// The least and the most effect `index` of a spell does (0x007ff770) at
+/// the player's level - or, for an aura, at the level `scale` gives
+/// (auraTokenLevel; `reference` for another spell's token) - through the
+/// talents unless it is an aura's, rounded as the effect's kind has it, and
+/// times the stacks. False for an unknown spell or index.
+bool spellEffectPointsOf(const GameHandler& gh, uint32_t spellId, int index, SpellEffectPoints& out,
+                         const AuraScale& scale = {}, bool reference = false) {
+    if (spellId == 0 || index < 0 || index > 2) return false;
+    if (!gh.getSpellEffectBasePoints(spellId)) return false;  // also loads the cache
+    const auto* e = spellEntryOf(gh, spellId);
+    if (!e) return false;
+    const std::size_t k = static_cast<std::size_t>(index);
+    int level = static_cast<int>(gh.getPlayerLevel());
+    int maxLevel = e->maxLevel;
+    if (scale.level > 0) {
+        const AuraTokenLevel at = auraTokenLevel(reference, scale.level, level, e->attrEx2);
+        level = at.level;
+        if (!at.heldToMaxLevel) maxLevel = 0;
+    }
+    out = spellEffectPoints(e->effectBasePoints[k], e->effectDieSides[k], e->effectPointsPerLevel[k],
+                            level, e->baseLevel, maxLevel);
+    out = finishSpellEffectPoints(out, index, e->effectIds[k], e->effectAuraIds[k],
+                                  modifiersFor(gh, spellId, scale));
+    out.min *= static_cast<float>(scale.stacks);
+    out.max *= static_cast<float>(scale.stacks);
+    return true;
+}
+
 /// A whole number through the player's talents for an op (0x007fdb50).
 int modifiedBy(const GameHandler& gh, uint32_t spellId, GameHandler::SpellModOp op, int value) {
     const spell_mods::Sum mods = gh.getSpellModifiers(spellId, op);
     return mods.any ? applySpellModifier(value, mods.flat, mods.pct) : value;
 }
 
+/// A number with a fraction through them (0x007fdba0).
+float modifiedBy(const GameHandler& gh, uint32_t spellId, GameHandler::SpellModOp op, float value) {
+    return spell_mods::apply(value, gh.getSpellModifiers(spellId, op));
+}
+
+/// The player's UNIT_MOD_CAST_SPEED, 0 without a player.
+float playerCastSpeed(const GameHandler& gh) {
+    const auto player = gh.getEntityManager().getEntity(gh.getPlayerGuid());
+    if (!player) return 0.0f;
+    const uint16_t speedIdx = fieldIndex(UF::UNIT_MOD_CAST_SPEED);
+    const uint32_t raw = speedIdx != 0xFFFF ? player->getField(speedIdx) : 0u;
+    float speed = 0.0f;
+    std::memcpy(&speed, &raw, sizeof speed);
+    return speed;
+}
+
 /// How long a spell lasts for this player, in milliseconds (0x00800a70):
 /// SpellDuration.dbc's row at the player's level, then the talents that
-/// lengthen it - and, where `haste` (its fifth argument) asks, the player's
-/// haste on a periodic spell whose period it shortens (hastedSpellDurationMs).
-/// $d asks; $o's total does not. Zero for a spell without a row; negative
-/// for one that lasts until cancelled.
-int spellDurationFor(const GameHandler& gh, uint32_t spellId, bool haste = false) {
+/// lengthen it unless `scale` is an aura's (its fourth argument) - and, where
+/// `haste` (its fifth) asks, the player's haste on a periodic spell whose
+/// period it shortens (hastedSpellDurationMs). $d asks; $o's total does not.
+/// Zero for a spell without a row; negative for one that lasts until
+/// cancelled.
+int spellDurationFor(const GameHandler& gh, uint32_t spellId, bool haste = false,
+                     const AuraScale& scale = {}) {
     const auto* e = spellEntryOf(gh, spellId);
     if (!e) return 0;
     const int ms = spellDurationMs(e->durationBaseMs, e->durationPerLevelMs, e->durationMaxMs,
                                    static_cast<int>(gh.getPlayerLevel()), e->baseLevel);
-    const int modified = modifiedBy(gh, spellId, GameHandler::SpellModOp::Duration, ms);
+    const int modified = scale.aura ? ms : modifiedBy(gh, spellId, GameHandler::SpellModOp::Duration, ms);
     if (!haste) return modified;
-    const auto player = gh.getEntityManager().getEntity(gh.getPlayerGuid());
-    if (!player) return modified;
+    if (!gh.getEntityManager().getEntity(gh.getPlayerGuid())) return modified;
     const bool periodic = e->effectAmplitudeMs[0] != 0 || e->effectAmplitudeMs[1] != 0 ||
                           e->effectAmplitudeMs[2] != 0;
     constexpr uint32_t kAttrEx5HasteAffectsDuration = 0x2000u;
@@ -4844,16 +4874,12 @@ int spellDurationFor(const GameHandler& gh, uint32_t spellId, bool haste = false
     const auto* sh = gh.getSpellHandler();
     const bool shortens = (e->attrEx5 & kAttrEx5HasteAffectsDuration) != 0 ||
                           (sh && sh->playerAuraAffects(kAuraPeriodicHaste, spellId));
-    const uint16_t speedIdx = fieldIndex(UF::UNIT_MOD_CAST_SPEED);
-    const uint32_t raw = speedIdx != 0xFFFF ? player->getField(speedIdx) : 0u;
-    float speed = 0.0f;
-    std::memcpy(&speed, &raw, sizeof speed);
-    return hastedSpellDurationMs(modified, periodic, shortens, e->attrEx3, speed);
+    return hastedSpellDurationMs(modified, periodic, shortens, e->attrEx3, playerCastSpeed(gh));
 }
 
-/// An effect's period in milliseconds as $t reads it (0x00579e50): five
-/// seconds for a spell with ProcFlags bit 0, else EffectAmplitude through the
-/// talents' ActivationTime op.
+/// An effect's period in milliseconds as an expression's $t reads it
+/// (0x005782d0 0x38-0x3d): five seconds for a spell with ProcFlags bit 0,
+/// else EffectAmplitude through the talents' ActivationTime op.
 int spellPeriodFor(const GameHandler& gh, uint32_t spellId, int index) {
     const auto* e = spellEntryOf(gh, spellId);
     if (!e || index < 0 || index > 2) return 0;
@@ -4862,31 +4888,282 @@ int spellPeriodFor(const GameHandler& gh, uint32_t spellId, int index) {
                       e->effectAmplitudeMs[index]);
 }
 
-/// $o: the effect's least and most over the whole duration (0x00579e50).
+/// The period the text's $t writes (0x00579e50 't'): the same, and then -
+/// where the spell has a period at all, haste shortens it (AttributesEx5
+/// 0x2000) and AttributesEx3 0x20000000 does not forbid it - times the
+/// player's UNIT_MOD_CAST_SPEED where that is over 0.001, rounded.
+int spellPeriodTextFor(const GameHandler& gh, uint32_t spellId, int index) {
+    const auto* e = spellEntryOf(gh, spellId);
+    if (!e || index < 0 || index > 2) return 0;
+    if (e->procFlags & 1u) return 5000;
+    const int ms = spellPeriodFor(gh, spellId, index);
+    const bool periodic = e->effectAmplitudeMs[0] != 0 || e->effectAmplitudeMs[1] != 0 ||
+                          e->effectAmplitudeMs[2] != 0;
+    if (!periodic || (e->attrEx5 & 0x2000u) == 0 || (e->attrEx3 & 0x20000000u) != 0) return ms;
+    const float speed = playerCastSpeed(gh);
+    if (!(speed > 0.001f)) return ms;
+    return static_cast<int>(std::nearbyint(static_cast<float>(ms) * speed));
+}
+
+/// $o: the effect's least and most over the whole duration (0x00579e50),
+/// the duration through the talents as the points are.
 bool spellPeriodicPointsOf(const GameHandler& gh, uint32_t spellId, int index, SpellEffectPoints& out,
                            const AuraScale& scale = {}, bool reference = false) {
     if (!spellEffectPointsOf(gh, spellId, index, out, scale, reference)) return false;
     const auto* e = spellEntryOf(gh, spellId);
     if (!e) return false;
     constexpr uint32_t kAttrEx5TickOnApply = 0x200;
-    out = spellPeriodicTotal(out, e->effectAmplitudeMs[index], spellDurationFor(gh, spellId),
+    out = spellPeriodicTotal(out, e->effectAmplitudeMs[index], spellDurationFor(gh, spellId, false, scale),
                              (e->attrEx5 & kAttrEx5TickOnApply) != 0);
     return true;
 }
+
+/// An effect's radius as SpellRadius.dbc has it (+4), 0 without a row.
+float spellRadiusOf(const GameHandler::SpellNameEntry& e, int index) {
+    return e.effectRadiusIndex[index] != 0 ? e.effectRadius[index] : 0.0f;
+}
+
+/// The hostile maximum of the spell's SpellRange row (+0xc) - row 1 where
+/// its index is not over 1 (0x00579e50 'r').
+float spellRangeOf(const GameHandler::SpellNameEntry& e) {
+    if (e.rangeIndex <= 1 || !e.hasRangeRow) return 0.0f;
+    return e.rangeMax[0] > 0.0f ? e.rangeMax[0] : 0.0f;
+}
+
+/// The local player's update field `f` + `offset`, 0 without one.
+uint32_t playerField(const GameHandler& gh, UF f, uint32_t offset = 0) {
+    const auto player = gh.getEntityManager().getEntity(gh.getPlayerGuid());
+    const uint16_t i = fieldIndex(f);
+    if (!player || i == 0xFFFF) return 0u;
+    return player->getField(static_cast<uint16_t>(i + offset));
+}
+float playerFloatField(const GameHandler& gh, UF f, uint32_t offset = 0) {
+    const uint32_t raw = playerField(gh, f, offset);
+    float v = 0.0f;
+    std::memcpy(&v, &raw, sizeof v);
+    return v;
+}
 }  // namespace
+
+/// The variables of 0x005782d0 beyond the spell's magnitudes, duration and
+/// period: the spell record's (radius, cost, chain targets, proc chance ...)
+/// and the player's (stats, attack and spell power, weapon damage ...).
+bool GameHandler::descriptionVariable(uint32_t spellId, const std::string& name, int stacks, bool aura,
+                                      double& out) const {
+    const auto* e = spellEntryOf(*this, spellId);
+    if (!e) return false;
+    (void)stacks;  // the talents reach these whatever the tooltip (0x007fdb50, 0x007fdba0)
+    (void)aura;
+    const char c = name[0];
+    const bool indexed = name.size() >= 2 && std::isdigit(static_cast<unsigned char>(name.back()));
+    const int index = indexed ? std::clamp(name.back() - '1', 0, 2) : 0;
+    const std::string lower = [&] {
+        std::string s = name;
+        for (auto& ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        return s;
+    }();
+
+    // The spell's own columns.
+    if (name.size() == 2 && indexed) {
+        switch (c) {
+            case 'a': case 'A':   // radius, through op 6 (0x007fdba0)
+                out = modifiedBy(*this, spellId, SpellModOp::Radius, spellRadiusOf(*e, index));
+                return true;
+            case 'x': case 'X':
+                out = modifiedBy(*this, spellId, SpellModOp::JumpTargets,
+                                 static_cast<int>(e->effectChainTarget[index]));
+                return true;
+            case 'b': case 'B':
+                out = e->effectPointsPerComboPoint[index];
+                return true;
+            case 'e': case 'E':
+                out = modifiedBy(*this, spellId, SpellModOp::ValueMultiplier, e->effectMultipleValue[index]);
+                return true;
+            case 'f': case 'F':
+                out = e->effectDamageMultiplier[index];
+                return true;
+            case 'q': case 'Q':
+                // 0x005782d0 takes 0x54/0x57 from these ids as from $f's,
+                // which leaves an index of 3 or more: always 0.
+                out = 0.0;
+                return true;
+            default: break;
+        }
+    }
+    if (lower == "bc1" || lower == "bc2" || lower == "bc3") {
+        out = modifiedBy(*this, spellId, SpellModOp::BonusMultiplier, e->effectBonusMultiplier[index]);
+        return true;
+    }
+    if (name.size() == 1) {
+        switch (c) {
+            case 'c': case 'C':
+                out = spellHandler_ ? spellHandler_->tooltipCost(spellId).cost : 0;
+                return true;
+            case 'p': case 'P':
+                out = spellHandler_ ? spellHandler_->tooltipCost(spellId).perSecond : 0;
+                return true;
+            case 'h': case 'H':
+                out = modifiedBy(*this, spellId, SpellModOp::ChanceOfSuccess, static_cast<int>(e->procChance));
+                return true;
+            case 'n': case 'N':
+                out = modifiedBy(*this, spellId, SpellModOp::Charges, static_cast<int>(e->procCharges));
+                return true;
+            case 'u': case 'U': out = static_cast<int32_t>(e->stackAmount); return true;
+            case 'v': case 'V': out = static_cast<int32_t>(e->maxTargetLevel); return true;
+            case 'i': case 'I': out = static_cast<int32_t>(e->maxAffectedTargets); return true;
+            default: break;
+        }
+    }
+
+    // The player's.
+    static constexpr const char* kStats[] = {"str", "agi", "sta", "int", "spi"};
+    for (uint32_t s = 0; s < 5; ++s) {
+        if (lower != kStats[s]) continue;
+        const int32_t stat = static_cast<int32_t>(playerField(*this, UF::UNIT_FIELD_STAT0, s));
+        if (std::isupper(static_cast<unsigned char>(c))) {
+            out = stat < 0 ? 0 : stat;  // 0x005774b0
+        } else {
+            out = static_cast<double>(stat) -
+                  static_cast<int32_t>(playerField(*this, UF::UNIT_FIELD_POSSTAT0, s)) -
+                  static_cast<int32_t>(playerField(*this, UF::UNIT_FIELD_NEGSTAT0, s));
+        }
+        return true;
+    }
+    auto attackPower = [&](UF base, UF mods, UF mult, bool full) {
+        const int32_t ap = static_cast<int32_t>(playerField(*this, base));
+        if (!full) return static_cast<double>(std::max(ap, 0));
+        const uint32_t m = playerField(*this, mods);
+        const float v = (playerFloatField(*this, mult) + 1.0f) *
+                        static_cast<float>(static_cast<int16_t>(m >> 16) + static_cast<int16_t>(m & 0xFFFF) + ap);
+        return static_cast<double>(std::max(v, 0.0f));
+    };
+    if (name == "ap" || name == "AP") {
+        out = attackPower(UF::UNIT_FIELD_ATTACK_POWER, UF::UNIT_FIELD_ATTACK_POWER_MODS,
+                          UF::UNIT_FIELD_ATTACK_POWER_MULTIPLIER, c == 'A');
+        return true;
+    }
+    if (name == "rap" || name == "RAP") {
+        out = attackPower(UF::UNIT_FIELD_RANGED_ATTACK_POWER, UF::UNIT_FIELD_RANGED_ATTACK_POWER_MODS,
+                          UF::UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER, c == 'R');
+        return true;
+    }
+    // A weapon's own damage, from its template: 0 for no weapon, or one whose
+    // first damage is not physical.
+    if (lower == "mwb" || lower == "owb" || lower == "rwb") {
+        const EquipSlot slot = lower[0] == 'm' ? EquipSlot::MAIN_HAND
+                             : lower[0] == 'o' ? EquipSlot::OFF_HAND : EquipSlot::RANGED;
+        out = 0.0;
+        const auto it = onlineItems_.find(getEquipSlotGuid(static_cast<int>(slot)));
+        if (it != onlineItems_.end()) {
+            if (const auto* info = getItemInfo(it->second.entry); info && info->damages[0].type == 0)
+                out = std::isupper(static_cast<unsigned char>(name[1])) ? info->damages[0].max
+                                                                        : info->damages[0].min;
+        }
+        return true;
+    }
+    // The damage the character sheet shows: at least 1, the least down and
+    // the most up.
+    if (lower == "mw" || lower == "ow" || lower == "rw") {
+        const UF lo = lower[0] == 'm' ? UF::UNIT_FIELD_MINDAMAGE
+                    : lower[0] == 'o' ? UF::UNIT_FIELD_MINOFFHANDDAMAGE : UF::UNIT_FIELD_MINRANGEDDAMAGE;
+        const UF hi = lower[0] == 'm' ? UF::UNIT_FIELD_MAXDAMAGE
+                    : lower[0] == 'o' ? UF::UNIT_FIELD_MAXOFFHANDDAMAGE : UF::UNIT_FIELD_MAXRANGEDDAMAGE;
+        const bool most = std::isupper(static_cast<unsigned char>(c));
+        const float v = most ? std::ceil(playerFloatField(*this, hi)) : std::floor(playerFloatField(*this, lo));
+        out = std::max(v, 1.0f);
+        return true;
+    }
+    if (lower == "ar") {
+        // 0x004f54d0 for armour: $ar its base (the whole less the buffs),
+        // $AR the whole, not under 0.
+        const int32_t whole = static_cast<int32_t>(playerField(*this, UF::UNIT_FIELD_RESISTANCES));
+        if (c == 'A') {
+            out = std::max(whole, 0);
+        } else {
+            out = static_cast<double>(whole) -
+                  static_cast<int32_t>(playerField(*this, UF::UNIT_FIELD_RESISTANCEBUFFMODSPOSITIVE)) -
+                  static_cast<int32_t>(playerField(*this, UF::UNIT_FIELD_RESISTANCEBUFFMODSNEGATIVE));
+        }
+        return true;
+    }
+    if (lower == "mws" || lower == "ows" || lower == "rws") {
+        const uint32_t ms = lower[0] == 'm' ? playerField(*this, UF::UNIT_FIELD_BASEATTACKTIME)
+                          : lower[0] == 'o' ? playerField(*this, UF::UNIT_FIELD_BASEATTACKTIME, 1)
+                                            : playerField(*this, UF::UNIT_FIELD_RANGEDATTACKTIME);
+        out = static_cast<double>(ms) * 0.001;
+        return true;
+    }
+    if (lower == "pl") {
+        out = static_cast<int32_t>(playerField(*this, UF::UNIT_FIELD_LEVEL));
+        return true;
+    }
+    if (lower == "hnd") {
+        // 0x00714c80: a two-handed weapon (class 2, subclass 1 5 6 8 10 12
+        // 17 20) in the main hand makes 2.
+        out = 1.0;
+        const auto it = onlineItems_.find(getEquipSlotGuid(static_cast<int>(EquipSlot::MAIN_HAND)));
+        if (it != onlineItems_.end()) {
+            if (const auto* info = getItemInfo(it->second.entry); info && info->itemClass == 2) {
+                switch (info->subClass) {
+                    case 1: case 5: case 6: case 8: case 10: case 12: case 17: case 20: out = 2.0; break;
+                    default: break;
+                }
+            }
+        }
+        return true;
+    }
+    // Spell power: a school's PLAYER_FIELD_MOD_DAMAGE_DONE_POS and _NEG
+    // (0x00578210, 0x00578250); $sp the least of the six.
+    auto schoolPower = [&](uint32_t school) {
+        return static_cast<int32_t>(playerField(*this, UF::PLAYER_FIELD_MOD_DAMAGE_DONE_POS, school)) +
+               static_cast<int32_t>(playerField(*this, UF::PLAYER_FIELD_MOD_DAMAGE_DONE_NEG, school));
+    };
+    static constexpr const char* kSchools[] = {"h", "fi", "n", "fr", "s", "a"};
+    if (lower == "sp") {
+        int32_t least = schoolPower(1);
+        for (uint32_t s = 2; s <= 6; ++s) least = std::min(least, schoolPower(s));
+        out = least;
+        return true;
+    }
+    for (uint32_t s = 0; s < 6; ++s) {
+        if (lower == std::string("sp") + kSchools[s]) {
+            out = schoolPower(s + 1);
+            return true;
+        }
+        if (lower == std::string("p") + kSchools[s]) {
+            out = playerFloatField(*this, UF::PLAYER_FIELD_MOD_DAMAGE_DONE_PCT, s + 1);
+            return true;
+        }
+    }
+    if (lower == "bh") {
+        out = static_cast<int32_t>(playerField(*this, UF::PLAYER_FIELD_MOD_HEALING_DONE_POS));
+        return true;
+    }
+    if (lower == "pbh" || lower == "pbhd") {
+        // PLAYER_FIELD_MOD_HEALING_PCT and _DONE_PCT, the two after it.
+        out = playerFloatField(*this, UF::PLAYER_FIELD_MOD_HEALING_DONE_POS, lower.size() == 3 ? 1u : 2u);
+        return true;
+    }
+    return false;
+}
 
 /// The evaluator's window onto this client: what a magnitude is, and which
 /// spells the player knows.
 SpellDescriptionContext GameHandler::descriptionContext(
         uint32_t spellId, const std::string* declarations) const {
+    return descriptionContext(spellId, declarations, 1, false);
+}
+
+SpellDescriptionContext GameHandler::descriptionContext(
+        uint32_t spellId, const std::string* declarations, int stacks, bool aura) const {
     SpellDescriptionContext ctx;
     ctx.declarations = declarations;
-    // Inside an expression $m1 is the least and $M1 the most, sign and all
-    // (0x005782d0 over 0x007ff770); $s and $o, which that table does not
-    // name, stand for the least.
-    ctx.magnitude = [this, spellId](char code, int index, double& out) {
+    const AuraScale scale{0, stacks, aura};
+    // Inside an expression $m1 is the least and $M1 the most, sign and all,
+    // times the stacks (0x005782d0 0x20-0x25 over 0x007ff770).
+    ctx.magnitude = [this, spellId, scale](char code, int index, double& out) {
         SpellEffectPoints points;
-        if (!spellEffectPointsOf(*this, spellId, index, points)) return false;
+        if (!spellEffectPointsOf(*this, spellId, index, points, scale)) return false;
         out = (code == 'M') ? points.max : points.min;
         return true;
     };
@@ -4897,41 +5174,49 @@ SpellDescriptionContext GameHandler::descriptionContext(
     ctx.knowsSpell = [this](uint32_t id) { return spellHandler_ && spellHandler_->hasKnownSpell(id); };
     // $d in seconds, $t in milliseconds, and another spell's tokens
     // (0x005782d0).
-    ctx.quantity = [this, spellId](uint32_t refId, char code, int index, double& out) {
+    ctx.quantity = [this, spellId, scale](uint32_t refId, char code, int index, double& out) {
         const uint32_t target = refId != 0 ? refId : spellId;
         if (!spellEntryOf(*this, target)) return false;
         switch (code) {
             case 'd': case 'D':
-                out = spellDurationFor(*this, target, true) * 0.001;
+                out = spellDurationFor(*this, target, true, scale) * 0.001;
                 return true;
             case 't': case 'T':
                 out = spellPeriodFor(*this, target, index);
                 return true;
             default: {
                 SpellEffectPoints points;
-                if (!spellEffectPointsOf(*this, target, index, points)) return false;
+                if (!spellEffectPointsOf(*this, target, index, points, scale)) return false;
                 out = (code == 'M') ? points.max : points.min;
                 return true;
             }
         }
+    };
+    ctx.variable = [this, spellId, scale](uint32_t refId, const std::string& name, double& out) {
+        return descriptionVariable(refId != 0 ? refId : spellId, name, scale.stacks, scale.aura, out);
     };
     return ctx;
 }
 
 std::string GameHandler::formatSpellDescription(uint32_t selfSpellId,
                                                 const std::string& raw) const {
-    return formatAuraDescription(selfSpellId, raw, 0, 1);
+    return formatAuraDescription(selfSpellId, raw, 0, 1, false);
 }
 
+namespace {
+/// What a $l counts: the last number a token set (0x00beb660). The client
+/// keeps it in one global that nothing clears between descriptions.
+long gDescriptionCount = 0;
+}  // namespace
+
 std::string GameHandler::formatAuraDescription(uint32_t selfSpellId, const std::string& raw,
-                                               int auraLevel, int stacks) const {
+                                               int auraLevel, int stacks, bool aura) const {
     if (raw.empty()) return raw;
-    const AuraScale scale{auraLevel, stacks};
+    const AuraScale scale{auraLevel, stacks, aura};
 
     std::string out;
     out.reserve(raw.size());
     const size_t n = raw.size();
-    long lastValue = -1;  // drives $l plural selection
 
     // The client's own words for a spread: "%1$d bis %2$d" on a German one.
     auto spreadText = [](const char* key, const char* english) {
@@ -4943,125 +5228,93 @@ std::string GameHandler::formatAuraDescription(uint32_t selfSpellId, const std::
         }
         return std::string(english);
     };
+    auto declarationsOf = [this](uint32_t spellId) -> const std::string* {
+        const auto& cache = const_cast<GameHandler*>(this)->spellNameCacheRef();
+        const auto entry = cache.find(spellId);
+        if (entry == cache.end() || entry->second.descriptionVariableId == 0) return nullptr;
+        auto& table = const_cast<GameHandler*>(this)->spellDescriptionVariablesRef();
+        const auto row = table.find(entry->second.descriptionVariableId);
+        return row != table.end() ? &row->second : nullptr;
+    };
+    auto printed = [](const char* fmt, double v) {
+        char buf[64];
+        if (std::strcmp(fmt, "%d") == 0) std::snprintf(buf, sizeof(buf), "%ld", static_cast<long>(v));
+        else std::snprintf(buf, sizeof(buf), fmt, v);
+        return std::string(buf);
+    };
 
     for (size_t i = 0; i < n; ) {
-        char c = raw[i];
+        const char c = raw[i];
         if (c != '$') { out += c; ++i; continue; }
-        if (i + 1 >= n) { out += c; ++i; continue; }
+        // What follows a '$' the formatter could not use is written as it
+        // stands, behind the '$' (0x0057aaf0 appends "$" and goes on from
+        // where the token's reading stopped).
+        size_t j = i + 1;
+        auto failAt = [&](size_t resume) {
+            out += '$';
+            i = resume;
+        };
+        if (j >= n) { failAt(j); continue; }
+        const char next = raw[j];
 
-        char next = raw[i + 1];
-
-        // Plural "$lsingular:plural;" / gender "$gmale:female;" - emit one branch.
-        if (next == 'l' || next == 'L' || next == 'g' || next == 'G') {
-            size_t semi = raw.find(';', i + 2);
-            if (semi != std::string::npos) {
-                std::string body = raw.substr(i + 2, semi - (i + 2));
-                size_t colon = body.find(':');
-                std::string a = (colon == std::string::npos) ? body : body.substr(0, colon);
-                std::string b = (colon == std::string::npos) ? body : body.substr(colon + 1);
-                bool plural = (next == 'l' || next == 'L') ? (lastValue != 1) : false;
-                out += plural ? b : a;
-                i = semi + 1;
-                continue;
-            }
-        }
-
-        // A choice in the sentence itself, "$?s58079[ und ...][.]" (0x00579ba0):
-        // the branch the player's spells and auras pick, written out as any
-        // other text. Only "${...}" handled these, so a bare one lost its
-        // "$?" and left "s58079[ und ...][.]" in Unending Breath's tooltip.
-        if (next == '?') {
-            const DescriptionBranch branch = pickDescriptionBranch(raw, i + 2, [this](char letter, uint32_t id) {
-                if (letter == 's') return spellHandler_ && spellHandler_->hasKnownSpell(id);
-                for (const auto& a : getPlayerAuras())
-                    if (!a.isEmpty() && a.spellId == id) return true;
-                return false;
-            });
-            if (branch.ok) {
-                out += formatAuraDescription(selfSpellId, branch.body, auraLevel, stacks);
-                i = branch.end;
-                continue;
-            }
-        }
-
-        // A named variable "$<percent>", declared in this spell's row of
-        // SpellDescriptionVariables.dbc. Nothing read that table, and the
-        // parser had no branch for '<' - so it dropped the "$<" as an unknown
-        // token and left "percent>" sitting in the sentence.
-        if (next == '<') {
-            const size_t close = raw.find('>', i + 2);
+        // ${ expression }[.N] (0x00579980): the value in "%.0f", or with N
+        // decimals.
+        if (next == '{') {
+            const size_t close = raw.find('}', j + 1);
             if (close != std::string::npos) {
-                const std::string name = raw.substr(i + 2, close - (i + 2));
-                i = close + 1;
-
-                const auto& cache = const_cast<GameHandler*>(this)->spellNameCacheRef();
-                const auto entry = cache.find(selfSpellId);
-                const std::string* decls = nullptr;
-                if (entry != cache.end() && entry->second.descriptionVariableId != 0) {
-                    auto& table = const_cast<GameHandler*>(this)->spellDescriptionVariablesRef();
-                    const auto row = table.find(entry->second.descriptionVariableId);
-                    if (row != table.end()) decls = &row->second;
+                size_t resume = close + 1;
+                int decimals = 0;
+                if (resume + 1 < n && raw[resume] == '.' && raw[resume + 1] >= '1' && raw[resume + 1] <= '9') {
+                    decimals = raw[resume + 1] - '0';
+                    resume += 2;
                 }
+                const SpellDescriptionContext ctx =
+                    descriptionContext(selfSpellId, declarationsOf(selfSpellId), stacks, aura);
+                double v = 0.0;
+                if (evaluateSpellExpression(raw.substr(j + 1, close - (j + 1)), ctx, v)) {
+                    out += formatSpellExpressionValue(static_cast<float>(v), decimals);
+                    gDescriptionCount = std::lround(v);
+                    i = resume;
+                } else {
+                    failAt(resume);
+                }
+                continue;
+            }
+        }
 
-                const SpellDescriptionContext ctx = descriptionContext(selfSpellId, decls);
+        // $<name>: a declaration of SpellDescriptionVariables.dbc's row for
+        // the spell (0x00577c40), written as its "${...}" was.
+        if (next == '<') {
+            const size_t close = raw.find('>', j + 1);
+            if (close != std::string::npos) {
+                const std::string name = raw.substr(j + 1, close - (j + 1));
+                const std::string* decls = declarationsOf(selfSpellId);
+                const SpellDescriptionContext ctx = descriptionContext(selfSpellId, decls, stacks, aura);
                 std::string decl;
                 double v = 0.0;
-                if (decls && spellDeclarationOf(ctx, name, decl) &&
-                    evaluateSpellExpression(decl, ctx, v)) {
-                    const long rounded = std::lround(v);
-                    out += std::to_string(rounded);
-                    lastValue = rounded;
-                } else if (i < n && raw[i] == '%') {
-                    // Unresolvable: drop the token and the percent sign it
-                    // qualified, rather than leave a bare "%" behind.
-                    ++i;
-                }
-                continue;
-            }
-        }
-
-        // Bracketed math expression "${...}" - evaluate where it can be, strip
-        // it (and a trailing %) where it cannot.
-        if (next == '{') {
-            size_t close = raw.find('}', i + 2);
-            if (close != std::string::npos) {
-                const auto& cache = const_cast<GameHandler*>(this)->spellNameCacheRef();
-                const auto entry = cache.find(selfSpellId);
-                const std::string* decls = nullptr;
-                if (entry != cache.end() && entry->second.descriptionVariableId != 0) {
-                    auto& table = const_cast<GameHandler*>(this)->spellDescriptionVariablesRef();
-                    const auto row = table.find(entry->second.descriptionVariableId);
-                    if (row != table.end()) decls = &row->second;
-                }
-                const SpellDescriptionContext ctx = descriptionContext(selfSpellId, decls);
-                double v = 0.0;
-                if (evaluateSpellExpression(raw.substr(i + 2, close - (i + 2)), ctx, v)) {
-                    const long rounded = std::lround(v);
-                    out += std::to_string(rounded);
-                    lastValue = rounded;
+                if (decls && spellDeclarationOf(ctx, name, decl) && evaluateSpellExpression(decl, ctx, v)) {
+                    out += formatSpellExpressionValue(static_cast<float>(v), 0);
+                    gDescriptionCount = std::lround(v);
                     i = close + 1;
-                    continue;
+                } else {
+                    failAt(j);
                 }
-                i = close + 1;
-                if (i < n && raw[i] == '%') ++i;
                 continue;
             }
         }
 
-        // "$/N;" or "$*N;" in front of a value token divides or multiplies it
-        // - "$/5;s1" is s1 a fifth (food: "Restores $/5;s1 health per
-        // second"), "$/1000;S" a thousandth with its fraction (0x00579e50).
-        size_t j = i + 1;
+        // "$/N;" or "$*N;" in front of a token divides or multiplies it.
         float factor = 1.0f;
-        if (next == '/' || next == '*') {
-            const size_t semi = raw.find(';', i + 2);
-            if (semi == std::string::npos) { out += c; ++i; continue; }
-            const int n = std::atoi(raw.substr(i + 2, semi - (i + 2)).c_str());
-            if (n != 0) factor = (next == '/') ? 1.0f / static_cast<float>(n) : static_cast<float>(n);
+        if ((next == '/' || next == '*') && raw.find(';', j + 1) != std::string::npos) {
+            const size_t semi = raw.find(';', j + 1);
+            const int k = static_cast<int>(std::atof(raw.substr(j + 1, semi - (j + 1)).c_str()));
+            if (k != 0) factor = (next == '/') ? 1.0f / static_cast<float>(k) : static_cast<float>(k);
             j = semi + 1;
         }
 
-        // General token: $ [spellId] letter [effectIndex]
+        // Another spell's number: its record, at the player's level where it
+        // says so (AttributesEx2 0x1000000) - one that is not there fails the
+        // token, the number read.
         uint32_t refId = 0;
         bool hasRef = false;
         while (j < n && raw[j] >= '0' && raw[j] <= '9') {
@@ -5069,108 +5322,174 @@ std::string GameHandler::formatAuraDescription(uint32_t selfSpellId, const std::
             hasRef = true;
             ++j;
         }
-        if (j >= n) { out += c; ++i; continue; }
-        char code = raw[j++];
+        const uint32_t target = hasRef ? refId : selfSpellId;
+        const auto* e = spellEntryOf(*this, target);
+        if (hasRef && !e) { failAt(j); continue; }
+        if (j >= n) { failAt(j); continue; }
+
+        const char code = raw[j];
+        // A digit after the letter is the effect: 1 to 3, anything up to 9
+        // read and taken as the first.
         int idx = 0;
-        if (j < n && raw[j] >= '1' && raw[j] <= '3') { idx = raw[j] - '1'; ++j; }
-        uint32_t target = hasRef ? refId : selfSpellId;
+        bool digit = false;
+        if (j + 1 < n && raw[j + 1] >= '1' && raw[j + 1] <= '9') {
+            digit = true;
+            idx = raw[j + 1] - '1';
+            if (idx > 2) idx = 0;
+        }
+        const size_t after = j + 1 + (digit ? 1 : 0);
 
-        bool resolved = false;
+        // The plural, gender and branch forms read on from the letter.
+        if (code == 'l' || code == 'L') {
+            size_t at = j + 1;
+            std::string form;
+            if (pickPluralForm(raw, at, gDescriptionCount, form)) { out += form; i = at; }
+            else i = j + 1;
+            continue;
+        }
+        if (code == 'g' || code == 'G') {
+            size_t at = j + 1;
+            std::string form;
+            uint8_t gender = static_cast<uint8_t>((playerField(*this, UF::UNIT_FIELD_BYTES_0) >> 16) & 0xFF);
+            if (gender == 2) gender = static_cast<uint8_t>(playerField(*this, UF::PLAYER_BYTES_3) & 0xFF);
+            if (pickGenderForm(raw, at, gender == 1, form)) { out += form; i = at; }
+            else i = j + 1;
+            continue;
+        }
+        if (code == '?') {
+            // A choice in the sentence (0x00579ba0): the branch the player's
+            // spells and auras pick, written out as any other text.
+            const DescriptionBranch branch = pickDescriptionBranch(raw, j + 1, [this](char letter, uint32_t id) {
+                if (letter == 's') return spellHandler_ && spellHandler_->hasKnownSpell(id);
+                for (const auto& a : getPlayerAuras())
+                    if (!a.isEmpty() && a.spellId == id) return true;
+                return false;
+            });
+            if (branch.ok) {
+                out += formatAuraDescription(selfSpellId, branch.body, auraLevel, stacks, aura);
+                i = branch.end;
+            } else {
+                i = j + 1;
+            }
+            continue;
+        }
+
+        if (!e) { failAt(j); continue; }
+        auto count = [](long v) { gDescriptionCount = v; };
+        bool resolved = true;
         switch (code) {
-            case 's': case 'S': case 'm': case 'M': {
+            case 's': case 'S': case 'm': case 'M': case 'o': case 'O': {
                 // $m the least, $M the most, $s both - "least to most" - when
-                // the dice can vary the effect (0x00579e50).
+                // the dice can vary the effect; $o all of a periodic effect's
+                // ticks, written as $s (0x00579e50).
                 SpellEffectPoints points;
-                if (spellEffectPointsOf(*this, target, idx, points, scale, hasRef)) {
-                    const SpellPointsText shown = formatSpellPoints(
-                        code, scaledSpellPoints(points, factor),
-                        spreadText("INT_SPELL_POINTS_SPREAD_TEMPLATE", "%d to %d"),
-                        spreadText("SPELL_POINTS_SPREAD_TEMPLATE", "%.1f to %.1f"));
-                    out += shown.text;
-                    lastValue = shown.shown;
-                    resolved = true;
-                }
+                const bool periodic = code == 'o' || code == 'O';
+                const bool ok = periodic ? spellPeriodicPointsOf(*this, target, idx, points, scale, hasRef)
+                                         : spellEffectPointsOf(*this, target, idx, points, scale, hasRef);
+                if (!ok) { resolved = false; break; }
+                const SpellPointsText shown = formatSpellPoints(
+                    periodic ? 's' : code, scaledSpellPoints(points, factor),
+                    spreadText("INT_SPELL_POINTS_SPREAD_TEMPLATE", "%d to %d"),
+                    spreadText("SPELL_POINTS_SPREAD_TEMPLATE", "%.1f to %.1f"));
+                out += shown.text;
+                count(shown.shown);
                 break;
             }
-            case 'o': case 'O': {
-                // What a periodic effect does in all: each tick times the
-                // duration over the period, written as $s writes its points.
-                SpellEffectPoints total;
-                if (spellPeriodicPointsOf(*this, target, idx, total, scale, hasRef)) {
-                    const SpellPointsText shown = formatSpellPoints(
-                        's', scaledSpellPoints(total, factor),
-                        spreadText("INT_SPELL_POINTS_SPREAD_TEMPLATE", "%d to %d"),
-                        spreadText("SPELL_POINTS_SPREAD_TEMPLATE", "%.1f to %.1f"));
-                    out += shown.text;
-                    lastValue = shown.shown;
-                    resolved = true;
-                }
+            case 'a': case 'A': {
+                // The radius, cut to a whole number, through op 6.
+                const int r = static_cast<int>(spellRadiusOf(*e, idx));
+                out += std::to_string(modifiedBy(*this, target, SpellModOp::Radius, r));
                 break;
             }
-            case 'd': case 'D': {
-                // "5 Sek.", "1.50 Min.", "bis Abbruch" - the interface's own
-                // words for the duration (0x0061a9e0, 0x0061aee0).
-                if (spellEntryOf(*this, target)) {
-                    out += formatSpellDuration(spellDurationFor(*this, target, true), interfaceString);
-                    resolved = true;
-                }
+            case 'b': case 'B': {
+                const long v = static_cast<long>(e->effectPointsPerComboPoint[idx]);
+                out += std::to_string(v);
+                count(v);
                 break;
             }
-            case 't': case 'T': {
+            case 'c': case 'C':
+                out += std::to_string(spellHandler_ ? spellHandler_->tooltipCost(target).cost : 0);
+                break;
+            case 'p': case 'P':
+                out += std::to_string(spellHandler_ ? spellHandler_->tooltipCost(target).perSecond : 0);
+                break;
+            case 'd': case 'D':
+                // "5 Sek.", "1.50 Min.", "bis Abbruch" (0x0061a9e0, 0x0061aee0).
+                out += formatSpellDuration(spellDurationFor(*this, target, true, scale), interfaceString);
+                break;
+            case 'e': case 'E':
+                out += printed("%.1f", modifiedBy(*this, target, SpellModOp::ValueMultiplier,
+                                                  e->effectMultipleValue[idx]) * factor);
+                break;
+            case 'f':
+                out += printed("%.1f", e->effectDamageMultiplier[idx] * factor);
+                break;
+            case 'F':
+                out += std::to_string(spellRoundHalfAway(e->effectDamageMultiplier[idx] * factor));
+                break;
+            case 'h': case 'H': {
+                const int v = modifiedBy(*this, target, SpellModOp::ChanceOfSuccess, static_cast<int>(e->procChance));
+                out += std::to_string(v);
+                count(v);
+                break;
+            }
+            case 'n': case 'N': {
+                const int v = modifiedBy(*this, target, SpellModOp::Charges, static_cast<int>(e->procCharges));
+                out += std::to_string(v);
+                count(v);
+                break;
+            }
+            case 'x': case 'X': {
+                const int v = modifiedBy(*this, target, SpellModOp::JumpTargets,
+                                         static_cast<int>(e->effectChainTarget[idx]));
+                out += std::to_string(v);
+                count(v);
+                break;
+            }
+            case 'i': case 'I':
+                out += std::to_string(static_cast<int32_t>(e->maxAffectedTargets));
+                count(static_cast<int32_t>(e->maxAffectedTargets));
+                break;
+            case 'u': case 'U':
+                out += std::to_string(static_cast<int32_t>(e->stackAmount));
+                count(static_cast<int32_t>(e->stackAmount));
+                break;
+            case 'v': case 'V':
+                out += std::to_string(static_cast<int32_t>(e->maxTargetLevel));
+                count(static_cast<int32_t>(e->maxTargetLevel));
+                break;
+            case 'q': case 'Q':
+                out += std::to_string(static_cast<int32_t>(e->effectMiscValues[idx]));
+                count(static_cast<int32_t>(e->effectMiscValues[idx]));
+                break;
+            case 'r': case 'R': {
+                // The reach through op 5: written cut to a whole number,
+                // counted rounded up.
+                const float r = modifiedBy(*this, target, SpellModOp::Range, spellRangeOf(*e));
+                out += std::to_string(static_cast<long>(r));
+                count(static_cast<long>(std::ceil(r)));
+                break;
+            }
+            case 't': case 'T':
                 // An effect's period in seconds: "alle 3 Sek.".
-                if (spellEntryOf(*this, target)) {
-                    out += formatSpellPeriod(spellPeriodFor(*this, target, idx));
-                    resolved = true;
-                }
+                out += formatSpellPeriod(spellPeriodTextFor(*this, target, idx));
                 break;
-            }
-            case 'z': {
-                // Where the hearthstone sends you. Spell.dbc says "Returns you
-                // to $z.", and with the token dropped the tooltip read
-                // "Returns you to ." - which is the one fact the line exists
-                // to carry. The bind zone comes from SMSG_BINDPOINTUPDATE; the
-                // continent is a poor second but beats a blank.
+            case 'z': case 'Z': {
+                // Where the hearthstone sends you: the bind area's name, else
+                // HOME_INN.
                 std::string home = getAreaName(getHomeBindZoneId());
-                if (home.empty()) {
-                    uint32_t bindMap = 0;
-                    glm::vec3 bindPos(0.0f);
-                    if (getHomeBind(bindMap, bindPos)) home = getMapName(bindMap);
-                }
-                if (!home.empty()) { out += home; resolved = true; }
+                if (home.empty()) home = interfaceString("HOME_INN", "your inn");
+                out += home;
                 break;
             }
-            default: break;  // $h proc chance, $a radius, ... - not resolvable here
+            default:
+                resolved = false;
+                break;
         }
-
-        if (resolved) {
-            i = j;
-        } else {
-            // Drop the whole token; a value slot immediately followed by '%' drops that too,
-            // so we don't leave a dangling "%".
-            i = j;
-            if (i < n && raw[i] == '%') ++i;
-        }
+        if (resolved) i = after;
+        else failAt(j);
     }
-
-    // Collapse whitespace left behind by stripped tokens ("a  chance" -> "a chance").
-    std::string cleaned;
-    cleaned.reserve(out.size());
-    bool prevSpace = false;
-    for (char c : out) {
-        bool isSpace = (c == ' ');
-        if (isSpace && prevSpace) continue;
-        // A token that could not be resolved leaves the space in front of it
-        // sitting against the punctuation that followed it - "Returns you to ."
-        // Drop that space too, so an unresolved token reads as a gap in the
-        // sentence rather than as a typo.
-        if (!cleaned.empty() && prevSpace &&
-            (c == '.' || c == ',' || c == ';' || c == '!' || c == '?' || c == ')')) {
-            cleaned.pop_back();
-        }
-        cleaned += c;
-        prevSpace = isSpace;
-    }
-    return cleaned;
+    return out;
 }
 
 const std::string* GameHandler::getSpellMechanicName(uint32_t mechanicId) const {

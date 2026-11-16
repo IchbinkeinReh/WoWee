@@ -9,6 +9,9 @@
 #include <catch2/catch_amalgamated.hpp>
 
 #include <algorithm>
+#include <cmath>
+#include <tuple>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -78,11 +81,11 @@ TEST_CASE("a declaration can name another one", "[spell][description]") {
     CHECK(evaluated("opportunity1", ctx) == Catch::Approx(110.0));
 }
 
-TEST_CASE("arithmetic, in the order it is written", "[spell][description]") {
+TEST_CASE("arithmetic, products before sums", "[spell][description]") {
     const auto ctx = contextFor("$a=${2+3*4}\r\n$b=${(2+3)*4}\r\n$c=${10/4}");
-    // Left to right, which is what these expressions are written for - the
-    // parenthesised form is how the data groups when it means to.
-    CHECK(evaluated("a", ctx) == Catch::Approx(20.0));
+    // 0x005778b0 sums terms that 0x005777f0 has multiplied out first: not
+    // left to right.
+    CHECK(evaluated("a", ctx) == Catch::Approx(14.0));
     CHECK(evaluated("b", ctx) == Catch::Approx(20.0));
     CHECK(evaluated("c", ctx) == Catch::Approx(2.5));
 }
@@ -103,12 +106,14 @@ TEST_CASE("a quantity this client does not keep fails the whole expression",
     CHECK_FALSE(evaluateSpellExpression(decl, ctx, out));
 }
 
-TEST_CASE("a name that is not declared is not a number", "[spell][description]") {
+TEST_CASE("a name that is not declared is nought in an expression", "[spell][description]") {
     const auto ctx = contextFor(kSinisterStrike);
     std::string decl;
     CHECK_FALSE(spellDeclarationOf(ctx, "nosuchthing", decl));
-    double out = 0.0;
-    CHECK_FALSE(evaluateSpellExpression("$<nosuchthing>", ctx, out));
+    // 0x005774d0 answers 0 for a name the row's table does not hold.
+    double out = 1.0;
+    REQUIRE(evaluateSpellExpression("$<nosuchthing>+2", ctx, out));
+    CHECK(out == Catch::Approx(2.0));
 }
 
 TEST_CASE("a declaration naming itself stops rather than recurring forever",
@@ -125,7 +130,6 @@ TEST_CASE("malformed expressions are refused, not guessed at",
     CHECK_FALSE(evaluateSpellExpression("${1+}", ctx, out));
     CHECK_FALSE(evaluateSpellExpression("${(1+2}", ctx, out));
     CHECK_FALSE(evaluateSpellExpression("$?s123[10]", ctx, out));   // one branch
-    CHECK_FALSE(evaluateSpellExpression("${1/0}", ctx, out));
     CHECK_FALSE(evaluateSpellExpression("", ctx, out));
 }
 
@@ -465,4 +469,272 @@ TEST_CASE("a choice in the sentence picks its branch (0x00579ba0)", "[spell_desc
     CHECK(pickDescriptionBranch("$?!(s1|a8)[T][F]", 2, knows).body == "T");
     // Malformed: no else.
     CHECK_FALSE(pickDescriptionBranch("$?s1[T] rest", 2, knows).ok);
+}
+
+// ── The client's expression language (0x005778b0, 0x00578d10) ──────────────
+
+namespace {
+
+/// A context whose variables answer from a table, and which records what it
+/// was asked.
+struct VariableTable {
+    std::vector<std::pair<std::string, double>> values;
+    std::vector<std::string> asked;
+};
+
+SpellDescriptionContext variableContext(VariableTable& t) {
+    SpellDescriptionContext ctx;
+    ctx.variable = [&t](uint32_t ref, const std::string& name, double& out) {
+        t.asked.push_back(ref ? std::to_string(ref) + name : name);
+        for (const auto& [n, v] : t.values) {
+            if (n == name) { out = v; return true; }
+        }
+        return false;
+    };
+    ctx.magnitude = [](char code, int index, double& out) {
+        out = (code == 'M' ? 20.0 : 10.0) + index;
+        return true;
+    };
+    return ctx;
+}
+
+double value(const std::string& text, const SpellDescriptionContext& ctx) {
+    double out = 0.0;
+    REQUIRE(evaluateSpellExpression(text, ctx, out));
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("products bind tighter than sums, powers tighter still", "[spell][description][expr]") {
+    VariableTable t;
+    const auto ctx = variableContext(t);
+    CHECK(value("2+3*4", ctx) == Catch::Approx(14.0));
+    CHECK(value("(2+3)*4", ctx) == Catch::Approx(20.0));
+    CHECK(value("2*3^2", ctx) == Catch::Approx(18.0));
+    CHECK(value("10-4-3", ctx) == Catch::Approx(3.0));
+    // '%' is the dividend less the fraction of the quotient times the
+    // divisor (0x00577ad0 case 7): the whole multiples, not the remainder.
+    CHECK(value("7%3", ctx) == Catch::Approx(6.0));
+    // The sign takes only the operand after it (0x00577530).
+    CHECK(value("-2^2", ctx) == Catch::Approx(4.0));
+    CHECK(value("2*-3", ctx) == Catch::Approx(-6.0));
+    CHECK(value(".5*4", ctx) == Catch::Approx(2.0));
+}
+
+TEST_CASE("the twelve functions, by any case", "[spell][description][expr]") {
+    VariableTable t;
+    const auto ctx = variableContext(t);
+    CHECK(value("$abs(-3)", ctx) == Catch::Approx(3.0));
+    CHECK(value("$ceil(2.1)", ctx) == Catch::Approx(3.0));
+    CHECK(value("$FLOOR(2.9)", ctx) == Catch::Approx(2.0));
+    CHECK(value("$min(4,2)", ctx) == Catch::Approx(2.0));
+    CHECK(value("$Max(4,2)", ctx) == Catch::Approx(4.0));
+    CHECK(value("$gt(4,2)+$lt(4,2)", ctx) == Catch::Approx(1.0));
+    CHECK(value("$gte(2,2)+$lte(3,2)", ctx) == Catch::Approx(1.0));
+    CHECK(value("$eq(0.33333,1/3)", ctx) == Catch::Approx(1.0));
+    CHECK(value("$cond(0,1,2)", ctx) == Catch::Approx(2.0));
+    CHECK(value("$COND(5,1,2)", ctx) == Catch::Approx(1.0));
+    CHECK(value("$clamp(5,0,3)", ctx) == Catch::Approx(3.0));
+    CHECK(value("$clamp(-5,0,3)", ctx) == Catch::Approx(0.0));
+    CHECK(value("$clamp(2,0,3)", ctx) == Catch::Approx(2.0));
+    double out = 0.0;
+    CHECK_FALSE(evaluateSpellExpression("$min(1)", ctx, out));   // one short
+    CHECK_FALSE(evaluateSpellExpression("$max 1,2", ctx, out));  // no parenthesis
+    CHECK_FALSE(evaluateSpellExpression("$sqrt(4)", ctx, out));  // no such function
+}
+
+TEST_CASE("food's level scaling (65418) and Restore Energy's (9512)", "[spell][description][expr]") {
+    VariableTable t;
+    t.values = {{"pl", 80.0}, {"PL", 80.0}};
+    const auto ctx = variableContext(t);
+    // ${$FLOOR($COND($GT($pl,15),$pl-15,0)*0.554)+4}: 65 * 0.554 = 36.01
+    CHECK(value("$FLOOR($COND($GT($pl,15),$pl-15,0)*0.554)+4", ctx) == Catch::Approx(40.0));
+    CHECK(value("100-2*$max(0,$PL-40)", ctx) == Catch::Approx(20.0));
+    CHECK(value("60-4*$max(0,$min(15,$PL-60))", ctx) == Catch::Approx(0.0));
+}
+
+TEST_CASE("variables are the table's names, by exact case", "[spell][description][expr]") {
+    VariableTable t;
+    t.values = {{"AP", 1000.0}, {"ap", 900.0}, {"SPH", 50.0}, {"h", 25.0}, {"a1", 8.0}};
+    const auto ctx = variableContext(t);
+    // Shred's sort of sum: $m1 is the caller's magnitude, $AP a variable.
+    CHECK(value("$m1+$AP*0.07", ctx) == Catch::Approx(80.0));
+    CHECK(value("$ap", ctx) == Catch::Approx(900.0));
+    CHECK(value("$m1+0.15*$SPH", ctx) == Catch::Approx(17.5));
+    CHECK(value("$h/2", ctx) == Catch::Approx(12.5));
+    CHECK(value("$a1*2", ctx) == Catch::Approx(16.0));
+    double out = 0.0;
+    // Not in 0x00ace8f8: no "Ap", no "s1", no "o1" - the expression fails.
+    CHECK_FALSE(evaluateSpellExpression("$Ap", ctx, out));
+    CHECK_FALSE(evaluateSpellExpression("$s1", ctx, out));
+    CHECK_FALSE(evaluateSpellExpression("$o1", ctx, out));
+    // Another spell's variable goes with its number.
+    t.values.push_back({"u", 3.0});
+    t.asked.clear();
+    CHECK(value("$71432u-1", ctx) == Catch::Approx(2.0));
+    REQUIRE(t.asked.size() == 1);
+    CHECK(t.asked[0] == "71432u");
+}
+
+TEST_CASE("a division by zero is the x87's infinity", "[spell][description][expr]") {
+    VariableTable t;
+    const auto ctx = variableContext(t);
+    CHECK(std::isinf(value("1/0", ctx)));
+}
+
+// ── 0x007ff770's rounding and the talents ──────────────────────────────────
+
+TEST_CASE("0x007fd440 sorts effects", "[spell][description][mods]") {
+    const auto school = spellEffectKind(2, 0);
+    CHECK(school.whole);
+    CHECK(school.damage);
+    CHECK_FALSE(school.periodic);
+    const auto dot = spellEffectKind(6, 3);
+    CHECK(dot.whole);
+    CHECK(dot.damage);
+    CHECK(dot.periodic);
+    const auto shield = spellEffectKind(6, 15);
+    CHECK(shield.damage);
+    CHECK_FALSE(shield.periodic);
+    const auto energize = spellEffectKind(30, 0);
+    CHECK(energize.whole);
+    CHECK_FALSE(energize.damage);
+    const auto periodicMana = spellEffectKind(6, 24);
+    CHECK(periodicMana.whole);
+    CHECK_FALSE(periodicMana.damage);
+    const auto stat = spellEffectKind(6, 29);
+    CHECK_FALSE(stat.whole);
+    CHECK_FALSE(stat.damage);
+}
+
+namespace {
+/// A talent table: op -> {flat, pct}.
+SpellModifierLookup talents(std::vector<std::tuple<uint8_t, int32_t, int32_t>> mods,
+                            std::vector<uint8_t>* asked = nullptr) {
+    return [mods, asked](uint8_t op) {
+        if (asked) asked->push_back(op);
+        wowee::game::spell_mods::Sum s;
+        for (const auto& [o, flat, pct] : mods) {
+            if (o != op) continue;
+            s.flat += flat;
+            s.pct += pct;
+            s.any = true;
+        }
+        return s;
+    };
+}
+}  // namespace
+
+TEST_CASE("the talents' ops in 0x007ff770's order", "[spell][description][mods]") {
+    std::vector<uint8_t> asked;
+    // A direct damage first effect: all effects, then its own, then damage.
+    finishSpellEffectPoints({100.0f, 100.0f}, 0, 2, 0, talents({}, &asked));
+    CHECK(asked == std::vector<uint8_t>{8, 3, 0});
+    asked.clear();
+    // A periodic damage aura as the second effect: op 22, not 0.
+    finishSpellEffectPoints({100.0f, 100.0f}, 1, 6, 3, talents({}, &asked));
+    CHECK(asked == std::vector<uint8_t>{8, 12, 22});
+    asked.clear();
+    // A threat aura as the third: its op, and threat's.
+    finishSpellEffectPoints({100.0f, 100.0f}, 2, 6, 10, talents({}, &asked));
+    CHECK(asked == std::vector<uint8_t>{8, 23, 2});
+}
+
+TEST_CASE("Corruption with ten percent more periodic damage", "[spell][description][mods]") {
+    // 47813 rank 10 ticks 1080 at level 80; Improved Corruption 5/5 and
+    // Contagion each add their percent through op 22.
+    const auto p = finishSpellEffectPoints({1080.0f, 1080.0f}, 0, 6, 3, talents({{22, 0, 5}, {22, 0, 5}}));
+    CHECK(p.min == Catch::Approx(1188.0f));
+    CHECK(p.max == Catch::Approx(1188.0f));
+    // A flat point and a percent: (value + flat) x pct.
+    const auto q = finishSpellEffectPoints({10.0f, 10.0f}, 0, 2, 0, talents({{0, 2, 50}}));
+    CHECK(q.min == Catch::Approx(18.0f));
+}
+
+TEST_CASE("a whole kind ends whole, the rest to a 128th", "[spell][description][mods]") {
+    const auto dmg = finishSpellEffectPoints({20.5f, 22.25f}, 0, 2, 0, {});
+    CHECK(dmg.min == Catch::Approx(20.0f));
+    CHECK(dmg.max == Catch::Approx(23.0f));
+    const auto stat = finishSpellEffectPoints({1.3f, 1.3f}, 0, 6, 29, {});
+    CHECK(stat.min == Catch::Approx(166.0f / 128.0f));
+    // The client's ceiling makes 1 of a zero (0x0095d500 under one).
+    const auto zero = finishSpellEffectPoints({0.0f, 0.0f}, 0, 2, 0, {});
+    CHECK(zero.min == Catch::Approx(0.0f));
+    CHECK(zero.max == Catch::Approx(1.0f));
+    const auto negative = finishSpellEffectPoints({-0.5f, -0.5f}, 0, 2, 0, {});
+    CHECK(negative.min == Catch::Approx(-1.0f));
+    CHECK(negative.max == Catch::Approx(0.0f));
+    // An aura's tooltip passes no talents: the values stay as they are.
+    const auto aura = finishSpellEffectPoints({1080.0f, 1080.0f}, 0, 6, 3, {});
+    CHECK(aura.min == Catch::Approx(1080.0f));
+}
+
+// ── Plural, gender and the text's own numbers ──────────────────────────────
+
+TEST_CASE("$l picks the form the last number counts", "[spell][description][text]") {
+    const std::string raw = "$lSekunde:Sekunden; lang";
+    std::size_t at = 2;
+    std::string form;
+    REQUIRE(pickPluralForm(raw, at, 1, form));
+    CHECK(form == "Sekunde");
+    CHECK(raw.substr(at) == " lang");
+    at = 2;
+    REQUIRE(pickPluralForm(raw, at, 3, form));
+    CHECK(form == "Sekunden");
+    at = 2;
+    REQUIRE(pickPluralForm(raw, at, 0, form));
+    CHECK(form == "Sekunden");
+    // Spaces in front and around the form go (0x00576ef0).
+    const std::string spaced = "$l  Ziel : Ziele ;.";
+    at = 2;
+    REQUIRE(pickPluralForm(spaced, at, 2, form));
+    CHECK(form == "Ziele");
+    CHECK(spaced.substr(at) == ".");
+    // One form only and a plural asked for: nothing written.
+    const std::string single = "$lJahr;!";
+    at = 2;
+    REQUIRE(pickPluralForm(single, at, 5, form));
+    CHECK(form.empty());
+    CHECK(single.substr(at) == "!");
+    // No ';': nothing taken.
+    const std::string open = "$lJahr:Jahre";
+    at = 2;
+    CHECK_FALSE(pickPluralForm(open, at, 5, form));
+}
+
+TEST_CASE("$g picks by the player's sex", "[spell][description][text]") {
+    // Earth Elemental Totem (2062): "$gden Zaubernden:die Zaubernde;".
+    const std::string raw = "$gden Zaubernden:die Zaubernde; und";
+    std::size_t at = 2;
+    std::string form;
+    REQUIRE(pickGenderForm(raw, at, false, form));
+    CHECK(form == "den Zaubernden");
+    CHECK(raw.substr(at) == " und");
+    at = 2;
+    REQUIRE(pickGenderForm(raw, at, true, form));
+    CHECK(form == "die Zaubernde");
+    // A third form is never the answer.
+    const std::string three = "$ger:sie:es;";
+    at = 2;
+    REQUIRE(pickGenderForm(three, at, true, form));
+    CHECK(form == "sie");
+    at = 2;
+    CHECK_FALSE(pickGenderForm(std::string("$gnone"), at, true, form));
+}
+
+TEST_CASE("${...} is written %.0f, or with the decimals after it", "[spell][description][text]") {
+    CHECK(formatSpellExpressionValue(36.01f, 0) == "36");
+    CHECK(formatSpellExpressionValue(2.5f, 0) == "3");
+    CHECK(formatSpellExpressionValue(-2.5f, 0) == "-3");
+    // Ferocious Bite (22568): "${$f1+$AP/410}.1".
+    CHECK(formatSpellExpressionValue(9.26f, 1) == "9.3");
+    CHECK(formatSpellExpressionValue(1.0f, 2) == "1.00");
+}
+
+TEST_CASE("$F rounds halves away from zero (0x005773b0)", "[spell][description][text]") {
+    CHECK(spellRoundHalfAway(2.5f) == 3);
+    CHECK(spellRoundHalfAway(2.4f) == 2);
+    CHECK(spellRoundHalfAway(-2.5f) == -3);
+    CHECK(spellRoundHalfAway(0.0f) == 0);
 }

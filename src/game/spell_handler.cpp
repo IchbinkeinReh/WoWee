@@ -6158,6 +6158,20 @@ void SpellHandler::loadSpellNameCache() const {
     uint32_t amplitude0Field = spellL ? spellL->tryField("EffectAmplitude0") : 0xFFFFFFFF;
     if (amplitude0Field == 0xFFFFFFFF && aura0Field != 0xFFFFFFFF) amplitude0Field = aura0Field + 3;
     const uint32_t procFlagsField = spellL ? spellL->tryField("ProcFlags") : 0xFFFFFFFF;
+    // The columns the description's tokens read (0x00579e50), by name, or
+    // where they stand beside a named one in every layout: ProcChance and
+    // ProcCharges after ProcFlags, EffectMultipleValue and EffectChainTarget
+    // three and six after EffectAmplitude, EffectPointsPerComboPoint after
+    // EffectTriggerSpell, MaxTargetLevel after StartRecoveryTime,
+    // MaxAffectedTargets after SpellFamilyFlags, the damage multipliers four
+    // after it; the bonus multipliers after PowerDisplayId (WotLK only).
+    const auto columnOr = [&](const char* name, uint32_t base, uint32_t offset) -> uint32_t {
+        const uint32_t f = spellL ? spellL->tryField(name) : 0xFFFFFFFF;
+        if (f != 0xFFFFFFFF) return f;
+        return base != 0xFFFFFFFF ? base + offset : 0xFFFFFFFF;
+    };
+    const uint32_t procChanceField = columnOr("ProcChance", procFlagsField, 1);
+    const uint32_t procChargesField = columnOr("ProcCharges", procFlagsField, 2);
     const uint32_t misc0Field = spellL ? spellL->tryField("EffectMiscValue0") : 0xFFFFFFFF;
     const uint32_t miscB0Field = spellL ? spellL->tryField("EffectMiscValueB0") : 0xFFFFFFFF;
     const uint32_t aura1Field = spellL ? spellL->field("EffectApplyAuraName1") : 0xFFFFFFFF;
@@ -6179,6 +6193,15 @@ void SpellHandler::loadSpellNameCache() const {
     const uint32_t speedField = spellL ? spellL->tryField("Speed") : 0xFFFFFFFF;
     const uint32_t spellMissileField = spellL ? spellL->tryField("SpellMissileID") : 0xFFFFFFFF;
     const uint32_t powerDisplayField = spellL ? spellL->tryField("PowerDisplayId") : 0xFFFFFFFF;
+    const uint32_t multipleValueField = columnOr("EffectMultipleValue0", amplitude0Field, 3);
+    const uint32_t chainTargetField = columnOr("EffectChainTarget0", amplitude0Field, 6);
+    const uint32_t triggerSpell0Field = spellL ? spellL->tryField("EffectTriggerSpell0") : 0xFFFFFFFF;
+    const uint32_t comboPointsField = columnOr("EffectPointsPerComboPoint0", triggerSpell0Field, 3);
+    const uint32_t maxTargetLevelField = columnOr("MaxTargetLevel", startTimeField, 1);
+    const uint32_t maxTargetsField = columnOr("MaxAffectedTargets", familyFlagsField, familyFlagWords);
+    const uint32_t dmgMultiplierField = columnOr("EffectDamageMultiplier0", maxTargetsField, 4);
+    const uint32_t bonusMultiplierField =
+        columnOr("EffectBonusMultiplier0", isPreWotlk() ? 0xFFFFFFFFu : powerDisplayField, 1);
     // Read off the file's own shape. Only TBC's layout named these two, so on
     // WotLK, Classic and Turtle every cooldown this client worked out for itself
     // came back zero - which is most of them, since the server sends a cooldown
@@ -6249,6 +6272,22 @@ void SpellHandler::loadSpellNameCache() const {
                     entry.spellFamilyFlags[w] = dbc->getUInt32(i, familyFlagsField + w);
             }
             if (procFlagsField < fieldCount) entry.procFlags = dbc->getUInt32(i, procFlagsField);
+            if (procChanceField < fieldCount) entry.procChance = dbc->getUInt32(i, procChanceField);
+            if (procChargesField < fieldCount) entry.procCharges = dbc->getUInt32(i, procChargesField);
+            if (maxTargetLevelField < fieldCount) entry.maxTargetLevel = dbc->getUInt32(i, maxTargetLevelField);
+            if (maxTargetsField < fieldCount) entry.maxAffectedTargets = dbc->getUInt32(i, maxTargetsField);
+            for (uint32_t k = 0; k < 3; ++k) {
+                if (multipleValueField + k < fieldCount && multipleValueField != 0xFFFFFFFF)
+                    entry.effectMultipleValue[k] = dbc->getFloat(i, multipleValueField + k);
+                if (chainTargetField + k < fieldCount && chainTargetField != 0xFFFFFFFF)
+                    entry.effectChainTarget[k] = dbc->getUInt32(i, chainTargetField + k);
+                if (comboPointsField + k < fieldCount && comboPointsField != 0xFFFFFFFF)
+                    entry.effectPointsPerComboPoint[k] = dbc->getFloat(i, comboPointsField + k);
+                if (dmgMultiplierField + k < fieldCount && dmgMultiplierField != 0xFFFFFFFF)
+                    entry.effectDamageMultiplier[k] = dbc->getFloat(i, dmgMultiplierField + k);
+                if (bonusMultiplierField + k < fieldCount && bonusMultiplierField != 0xFFFFFFFF)
+                    entry.effectBonusMultiplier[k] = dbc->getFloat(i, bonusMultiplierField + k);
+            }
             if (targetsField != 0xFFFFFFFF) {
                 entry.targetFlags = dbc->getUInt32(i, targetsField);
             }
