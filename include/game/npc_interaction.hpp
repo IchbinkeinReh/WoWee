@@ -118,4 +118,63 @@ inline constexpr uint32_t kMailboxFlag = 0x04000000u;
     return Action::Nothing;
 }
 
+/// What 0x00729620 reads of the player and of a unit before the client offers
+/// that unit's services: the cursor over it (0x004f7a50) and the nearest-NPC
+/// search (0x00519e80).
+struct ServiceAsk {
+    // The player.
+    uint32_t playerUnitFlags = 0;     ///< UNIT_FIELD_FLAGS (0x100000: on a taxi)
+    uint32_t playerFlags2 = 0;        ///< UNIT_FIELD_FLAGS_2 (0x4000)
+    bool playerCharmed = false;       ///< UNIT_FIELD_CHARMEDBY set
+    bool playerAlive = true;          ///< UNIT_FIELD_HEALTH above 0
+    bool playerGhost = false;         ///< PLAYER_FLAGS 0x10
+    bool playerInForm = false;        ///< 0x00721ca0: a form that is not a stance
+    uint32_t formFlags = 0;           ///< its SpellShapeshiftForm Flags (8)
+    bool wouldAutoUnshift = false;    ///< 0x0071b130
+    // The unit.
+    bool alive = true;
+    uint32_t typeFlags = 0;           ///< the creature's type flags (+0x964 +0xc)
+    bool charmed = false;             ///< UNIT_FIELD_CHARMEDBY set
+    bool vehicle = false;             ///< has a vehicle (+0xf5c +0xc)
+    bool inCombat = false;            ///< 0x0071afb0: UNIT_FLAG 0x800 or a melee target
+    bool isPlayer = false;
+    uint32_t unitFlags = 0;           ///< UNIT_FIELD_FLAGS (0x2000000)
+    uint32_t npcFlags = 0;            ///< UNIT_NPC_FLAGS
+    uint32_t flags2 = 0;              ///< UNIT_FIELD_FLAGS_2 (0x4000)
+    bool createdByOther = false;      ///< UNIT_FIELD_CREATEDBY is not the player
+    bool spellClickable = false;      ///< 0x0071c570
+    int reactionToPlayer = 3;         ///< 0x007251c0, 0 hated..7 exalted
+    int playerReaction = 3;           ///< how the player regards it
+};
+
+/// 0x00729620 (and 0x00729530 at its end): whether the client offers the
+/// unit's services at all.
+[[nodiscard]] constexpr bool serviceOffered(const ServiceAsk& a) {
+    // The player alive, off a taxi and not charmed.
+    if ((a.playerUnitFlags & 0x100000u) != 0 || a.playerCharmed || !a.playerAlive) return false;
+    // In a form only one flagged 8, or one autoUnshift would leave.
+    if (a.playerInForm && (a.formFlags & 0x8u) == 0 && !a.wouldAutoUnshift) return false;
+    // The unit alive, or of a kind spoken to dead (type flag 0x80); and not
+    // charmed, unless it is a vehicle.
+    if (!a.alive && (a.typeFlags & 0x80u) == 0) return false;
+    if (a.charmed && !a.vehicle) return false;
+    // Not in combat, unless its type flags 0x40000 or the player's
+    // UNIT_FIELD_FLAGS_2 0x4000 allow it.
+    if (a.inCombat && (a.typeFlags & 0x40000u) == 0 && (a.playerFlags2 & 0x4000u) == 0) return false;
+    // A spell click unit must take the click (0x0071c570).
+    if ((a.npcFlags & 0x1000000u) != 0 && !a.spellClickable) return false;
+    // 0x00729530: a ghost speaks only to what ghosts see (type flag 2).
+    if (a.playerGhost && (a.typeFlags & 0x2u) == 0) return false;
+    // A gossip creature flagged 0x800000 speaks only to whoever made it.
+    if ((a.npcFlags & 0x1u) != 0 && !a.isPlayer && (a.typeFlags & 0x800000u) != 0 && a.createdByOther)
+        return false;
+    // Selectable, with services, and neutral or better both ways round -
+    // or UNIT_FIELD_FLAGS_2 0x4000 on the unit.
+    if ((a.unitFlags & 0x2000000u) == 0 && a.npcFlags != 0) {
+        if (a.reactionToPlayer > 2 && a.playerReaction > 2) return true;
+        if ((a.flags2 & 0x4000u) != 0) return true;
+    }
+    return false;
+}
+
 }  // namespace wowee::game::npc_interaction

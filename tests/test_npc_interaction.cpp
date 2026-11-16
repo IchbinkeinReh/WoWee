@@ -51,3 +51,93 @@ TEST_CASE("a group member's vehicle with a free seat is entered", "[npc][interac
     u.isPlayer = false;
     CHECK(decide(u) == Action::Nothing);  // a creature is a spell click or nothing
 }
+
+// 0x00729620: whether the client offers a unit's services at all.
+namespace {
+ServiceAsk vendor() {
+    ServiceAsk a;
+    a.npcFlags = 0x80u;
+    a.reactionToPlayer = 4;
+    a.playerReaction = 4;
+    return a;
+}
+}  // namespace
+
+TEST_CASE("a friendly vendor is offered", "[npc][service]") {
+    CHECK(serviceOffered(vendor()));
+}
+
+TEST_CASE("the player must be alive, off a taxi and not charmed", "[npc][service]") {
+    auto a = vendor();
+    a.playerUnitFlags = 0x100000u;
+    CHECK_FALSE(serviceOffered(a));
+    a = vendor();
+    a.playerCharmed = true;
+    CHECK_FALSE(serviceOffered(a));
+    a = vendor();
+    a.playerAlive = false;
+    CHECK_FALSE(serviceOffered(a));
+}
+
+TEST_CASE("a form keeps services unless it is flagged 8 or would be left", "[npc][service]") {
+    auto a = vendor();
+    a.playerInForm = true;
+    CHECK_FALSE(serviceOffered(a));
+    a.formFlags = 0x8u;
+    CHECK(serviceOffered(a));
+    a.formFlags = 0;
+    a.wouldAutoUnshift = true;
+    CHECK(serviceOffered(a));
+}
+
+TEST_CASE("the unit: dead, charmed or fighting", "[npc][service]") {
+    auto a = vendor();
+    a.alive = false;
+    CHECK_FALSE(serviceOffered(a));
+    a.typeFlags = 0x80u;
+    CHECK(serviceOffered(a));
+    a = vendor();
+    a.charmed = true;
+    CHECK_FALSE(serviceOffered(a));
+    a.vehicle = true;
+    CHECK(serviceOffered(a));
+    a = vendor();
+    a.inCombat = true;
+    CHECK_FALSE(serviceOffered(a));
+    a.typeFlags = 0x40000u;
+    CHECK(serviceOffered(a));
+    a.typeFlags = 0;
+    a.playerFlags2 = 0x4000u;
+    CHECK(serviceOffered(a));
+}
+
+TEST_CASE("ghosts, owners, selection and standing", "[npc][service]") {
+    auto a = vendor();
+    a.playerGhost = true;
+    CHECK_FALSE(serviceOffered(a));
+    a.typeFlags = 0x2u;
+    CHECK(serviceOffered(a));
+    a = vendor();
+    a.npcFlags = 0x1u;
+    a.typeFlags = 0x800000u;
+    a.createdByOther = true;
+    CHECK_FALSE(serviceOffered(a));
+    a.createdByOther = false;
+    CHECK(serviceOffered(a));
+    a = vendor();
+    a.unitFlags = 0x2000000u;
+    CHECK_FALSE(serviceOffered(a));
+    a = vendor();
+    a.reactionToPlayer = 2;
+    CHECK_FALSE(serviceOffered(a));
+    a.flags2 = 0x4000u;
+    CHECK(serviceOffered(a));
+    a = vendor();
+    a.npcFlags = 0;
+    CHECK_FALSE(serviceOffered(a));
+    a = vendor();
+    a.npcFlags = 0x1000000u;
+    CHECK_FALSE(serviceOffered(a));
+    a.spellClickable = true;
+    CHECK(serviceOffered(a));
+}

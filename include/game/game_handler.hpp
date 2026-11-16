@@ -3175,6 +3175,9 @@ public:
     bool clickUnitBeyondHellos(uint64_t guid);
     /// What 0x006ddbb0 reads of a unit to choose the hello.
     npc_interaction::Unit npcInteractionFacts(uint64_t guid) const;
+    /// 0x00729620: whether the client offers this unit's services - its
+    /// service cursor - at all.
+    bool npcServiceOffered(uint64_t guid) const;
     /// 0x00408520: on a loading screen, CMSG_KEEP_ALIVE every thirty seconds.
     /// Starting (0x0040a990) sets the first one thirty seconds out; each
     /// progress step after sends one once that time has come.
