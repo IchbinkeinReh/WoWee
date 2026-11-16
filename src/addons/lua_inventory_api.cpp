@@ -24,6 +24,8 @@
 #include "pipeline/dbc_layout.hpp"
 #include "game/item_requirements.hpp"
 #include "game/item_stat_text.hpp"
+#include "game/heirloom_scaling.hpp"
+#include "game/item_tooltip_rules.hpp"
 #include "game/reputation_standing.hpp"
 #include "game/server_notices.hpp"
 #include <algorithm>
@@ -3458,6 +3460,19 @@ void pushItemRequirements(lua_State* L, game::GameHandler* gh, const game::ItemQ
         lua_pushnumber(L, info.requiredSkillRank);
         lua_setfield(L, -2, "requiredSkillRank");
         flag("skillOk", v.skillOk);
+    } else if (info.requiredSkill != 0) {
+        // One that can be prospected or milled says so in the skill line's
+        // place - ITEM_PROSPECTABLE, else ITEM_MILLABLE - and only to a
+        // player with the skill at all; white once the rank is reached, red
+        // short of it (0x0062b2a0).
+        const auto& skills = gh->getPlayerSkills();
+        const auto known = skills.find(info.requiredSkill);
+        const int have = known != skills.end() && known->second.value != 0 ? known->second.effectiveValue() : 0;
+        if (const char* key = game::item_tooltip::processKey(info.itemFlags); key && have >= 1) {
+            lua_pushstring(L, key);
+            lua_setfield(L, -2, "processKey");
+            flag("processOk", have >= static_cast<int>(info.requiredSkillRank));
+        }
     }
     // A recipe whose spell is already known: "Already known" in red, after the
     // skill line and before the required spell (0x006277f0).
@@ -3485,25 +3500,27 @@ void pushItemRequirements(lua_State* L, game::GameHandler* gh, const game::ItemQ
 // _GetItemTooltipData(itemId) → table with armor, bind, stats, damage, description
 // Returns a Lua table with detailed item info for tooltip building
 // _WoweeContainerItemInstance(bag, slot) - what one held item is beside its
-// template, for the item tooltip (_WoweePopulateItemTooltip's `inst`): its
-// soulbound flag and durability. nil for an empty slot.
+// template, for the item tooltip (_WoweePopulateItemTooltip's `inst`). nil
+// for an empty slot. The same table every other held item's tooltip gets: it
+// gave the soulbound flag, the durability, the gems and the price alone, so a
+// clam in the bags never said <Right Click to Open>, a letter never
+// <Right Click to Read>, and no bag item named its maker or its charges left.
 static int lua_WoweeContainerItemInstance(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int bag = static_cast<int>(luaL_optnumber(L, 1, -1));
     const int slot = static_cast<int>(luaL_optnumber(L, 2, 0));
     const game::ItemSlot* s = gh ? containerItemSlot(gh->getInventory(), bag, slot) : nullptr;
     if (!s || s->empty()) { lua_pushnil(L); return 1; }
-    lua_newtable(L);
-    lua_pushboolean(L, s->item.soulbound ? 1 : 0);
-    lua_setfield(L, -2, "soulbound");
-    lua_pushnumber(L, static_cast<lua_Number>(s->item.curDurability));
-    lua_setfield(L, -2, "durability");
-    lua_pushnumber(L, static_cast<lua_Number>(s->item.maxDurability));
-    lua_setfield(L, -2, "maxDurability");
-    pushSocketedGems(L, gh, s->item.guid, s->item.itemId);
-    lua_pushnumber(L, static_cast<lua_Number>(gh->itemSellPriceShown(s->item.guid, s->item.itemId, s->item.stackCount)));
-    lua_setfield(L, -2, "price");
+    pushTooltipItemInstance(L, gh, s->item, s->item.itemId);
     return 1;
+}
+
+/// A DBC the item tooltip reads a row of, loaded; null where there is none.
+static std::shared_ptr<pipeline::DBCFile> tooltipDbc(game::GameHandler* gh, const char* name) {
+    auto* am = gh ? gh->services().assetManager : nullptr;
+    if (!am || !am->isInitialized()) return nullptr;
+    auto file = am->loadDBCOptional(name);
+    return file && file->isLoaded() ? file : nullptr;
 }
 
 /// One ItemSet.dbc row: the set's name, its seventeen item ids, its eight
@@ -3568,8 +3585,17 @@ static void pushItemSet(lua_State* L, game::GameHandler* gh, uint32_t setId) {
         worn.push_back(slot.item.itemId);
         if (const auto* w = gh->getItemInfo(slot.item.itemId); w && w->valid && w->itemSetId == setId) ++count;
     }
-    uint32_t total = 0;
-    for (const uint32_t item : set->items) total += item != 0 ? 1u : 0u;
+    // Out of how many: each slot once (0x0062ba00, item_tooltip_rules.hpp).
+    std::vector<uint32_t> slots;
+    for (const uint32_t item : set->items) {
+        const auto* p = item != 0 ? gh->getItemInfo(item) : nullptr;
+        if (item != 0 && (!p || !p->valid)) gh->ensureItemInfo(item);
+        slots.push_back(p && p->valid ? p->inventoryType : 0u);
+    }
+    const uint32_t total = game::item_tooltip::setPieceTotal(slots);
+    // Its bonuses are all grey while the skill it asks for is short
+    // (0x006dc550).
+    bool setSkillOk = true;
 
     lua_newtable(L);
     lua_pushstring(L, set->name.c_str());
@@ -3589,6 +3615,7 @@ static void pushItemSet(lua_State* L, game::GameHandler* gh, uint32_t setId) {
         const auto& skills = gh->getPlayerSkills();
         const auto known = skills.find(set->skill);
         const bool ok = known != skills.end() && known->second.effectiveValue() >= set->skillRank;
+        setSkillOk = ok;
         lua_pushboolean(L, ok ? 1 : 0);
         lua_setfield(L, -2, "skillOk");
     }
@@ -3627,7 +3654,7 @@ static void pushItemSet(lua_State* L, game::GameHandler* gh, uint32_t setId) {
         lua_setfield(L, -2, "text");
         lua_pushnumber(L, set->thresholds[i]);
         lua_setfield(L, -2, "threshold");
-        lua_pushboolean(L, count >= set->thresholds[i] ? 1 : 0);
+        lua_pushboolean(L, setSkillOk && count >= set->thresholds[i] ? 1 : 0);
         lua_setfield(L, -2, "active");
         lua_rawseti(L, -2, ++bonuses);
     }
@@ -3656,10 +3683,64 @@ static int lua_GetItemTooltipData(lua_State* L) {
         lua_pushnumber(L, info->containerSlots);
         lua_setfield(L, -2, "containerSlots");
     }
-    // Unique / Heroic flags
-    if (info->maxCount == 1) { lua_pushboolean(L, 1); lua_setfield(L, -2, "isUnique"); }
+    // The uniqueness line (0x006277f0, item_tooltip_rules.hpp): its key,
+    // and what the key takes - MaxCount, or the ItemLimitCategory's name and
+    // quantity (Name 1, Quantity 18, Flags 19).
+    {
+        bool hasCategory = false;
+        uint32_t categoryFlags = 0;
+        std::string categoryName;
+        int32_t categoryQuantity = 0;
+        if (info->itemLimitCategory != 0) {
+            if (auto f = tooltipDbc(gh, "ItemLimitCategory.dbc"); f && f->getFieldCount() > 19) {
+                if (const int32_t r = f->findRecordById(info->itemLimitCategory); r >= 0) {
+                    hasCategory = true;
+                    categoryName = f->getString(static_cast<uint32_t>(r), 1);
+                    categoryQuantity = f->getInt32(static_cast<uint32_t>(r), 18);
+                    categoryFlags = f->getUInt32(static_cast<uint32_t>(r), 19);
+                }
+            }
+        }
+        const auto u = game::item_tooltip::uniqueLine(info->itemClass, info->itemFlags, info->maxCount, hasCategory,
+                                                      categoryFlags);
+        if (u.key) {
+            lua_pushstring(L, u.key);
+            lua_setfield(L, -2, "uniqueKey");
+            if (u.count) {
+                lua_pushnumber(L, info->maxCount);
+                lua_setfield(L, -2, "uniqueCount");
+            } else if (u.category) {
+                lua_pushstring(L, categoryName.c_str());
+                lua_setfield(L, -2, "uniqueName");
+                lua_pushnumber(L, categoryQuantity);
+                lua_setfield(L, -2, "uniqueCount");
+            }
+        }
+    }
     if (info->itemFlags & 0x8) { lua_pushboolean(L, 1); lua_setfield(L, -2, "isHeroic"); }
-    if (info->itemFlags & 0x1000000) { lua_pushboolean(L, 1); lua_setfield(L, -2, "isUniqueEquipped"); }
+    // A glyph's kind under its name, in place of the type line (0x006277f0
+    // at 0x006286f0): for each of its spells' APPLY_GLYPH effects, the
+    // GlyphProperties row's TypeFlags - MAJOR_GLYPH for zero, MINOR_GLYPH else.
+    if (info->itemClass == 16) {
+        gh->loadSpellNameCache();
+        const auto& spells = gh->spellNameCacheRef();
+        auto glyphs = tooltipDbc(gh, "GlyphProperties.dbc");
+        lua_newtable(L);
+        int n = 0;
+        for (const auto& sp : info->spells) {
+            const auto it = spells.find(sp.spellId);
+            if (sp.spellId == 0 || it == spells.end() || !glyphs || glyphs->getFieldCount() < 3) continue;
+            for (int e = 0; e < 3; ++e) {
+                if (it->second.effectIds[e] != game::item_tooltip::kSpellEffectApplyGlyph) continue;
+                const int32_t r = glyphs->findRecordById(it->second.effectMiscValues[e]);
+                if (r < 0) continue;
+                lua_pushstring(L, game::item_tooltip::glyphKey(glyphs->getUInt32(static_cast<uint32_t>(r), 2)));
+                lua_rawseti(L, -2, ++n);
+            }
+        }
+        if (n > 0) lua_setfield(L, -2, "glyphLines");
+        else lua_pop(L, 1);
+    }
     // Bind type
     lua_pushnumber(L, info->bindType);
     lua_setfield(L, -2, "bindType");
@@ -3696,6 +3777,27 @@ static int lua_GetItemTooltipData(lua_State* L) {
     if (info->block > 0) {
         lua_pushnumber(L, info->block);
         lua_setfield(L, -2, "block");
+    }
+    // Armour beyond the base (ArmorDamageModifier above zero): its line is
+    // green (0x006277f0).
+    if (info->armorDamageModifier > 0.0f) {
+        lua_pushboolean(L, 1);
+        lua_setfield(L, -2, "armorBonus");
+    }
+    // The holiday it is for, as a requirement in white: Holidays.dbc's
+    // HolidayNameID (49), HolidayNames.dbc's name (0x005b9430).
+    if (info->holidayId != 0) {
+        auto holidays = tooltipDbc(gh, "Holidays.dbc");
+        auto names = tooltipDbc(gh, "HolidayNames.dbc");
+        const int32_t r = holidays && holidays->getFieldCount() > 49 ? holidays->findRecordById(info->holidayId) : -1;
+        const int32_t n = r >= 0 && names ? names->findRecordById(holidays->getUInt32(static_cast<uint32_t>(r), 49)) : -1;
+        if (n >= 0) {
+            const std::string name = names->getString(static_cast<uint32_t>(n), 1);
+            if (!name.empty()) {
+                lua_pushstring(L, name.c_str());
+                lua_setfield(L, -2, "holidayName");
+            }
+        }
     }
     // Where it works, if only somewhere: the zone (AreaTable) and the
     // instance (Map) it is limited to, by name.
@@ -3780,22 +3882,77 @@ static int lua_GetItemTooltipData(lua_State* L) {
     // of the plain level - the required level, the row's MaxLevel and the
     // level it is shown at, which is the player's held between the two
     // (0x0061e740); red below the range or above it (0x006277f0).
+    // The stats as the tooltip shows them, in the item's order: the
+    // template's pairs as sent, or an heirloom's at its level.
+    std::vector<std::pair<uint32_t, int32_t>> stats;
+    for (const auto& st : info->statPairs) stats.emplace_back(st.statType, st.statValue);
+    if (info->statPairs.empty()) {
+        // A parser that keeps no pairs (vanilla, TBC): the five, then the rest.
+        stats = {{3, info->agility}, {4, info->strength}, {5, info->intellect}, {6, info->spirit}, {7, info->stamina}};
+        for (const auto& es : info->extraStats) stats.emplace_back(es.statType, es.statValue);
+    }
+    int32_t heirloomSpellPower = 0;
     if (info->scalingStatValue != 0) {
         const uint32_t ssdMax = scalingStatMaxLevel(gh, info->scalingStatDistribution);
+        const int req = static_cast<int>(info->requiredLevel);
+        const int player = static_cast<int>(gh->getPlayerLevel());
+        int shown = player;
         if (ssdMax != 0) {
-            const int req = static_cast<int>(info->requiredLevel);
             const int top = static_cast<int>(ssdMax);
-            const int player = static_cast<int>(gh->getPlayerLevel());
-            int shown = player < req ? req : player;
+            shown = player < req ? req : player;
             if (shown > top) shown = top;
-            if (shown < 1) shown = 1;
             lua_pushnumber(L, top);
             lua_setfield(L, -2, "levelRangeMax");
-            lua_pushnumber(L, shown);
+            lua_pushnumber(L, shown < 1 ? 1 : shown);
             lua_setfield(L, -2, "levelRangeCurrent");
             lua_pushboolean(L, (player >= req && player <= top) ? 1 : 0);
             lua_setfield(L, -2, "levelRangeOk");
         }
+        if (shown < 1) shown = 1;
+        // The numbers at that level (0x006277f0 with ScalingStatValues row
+        // level - 1 and the ScalingStatDistribution row): the damage, the
+        // armour, the stats and the spell power; heirloom_scaling.hpp.
+        namespace hl = game::heirloom;
+        const uint32_t ssv = info->scalingStatValue;
+        std::array<int32_t, hl::kScalingStatValuesColumns> row{};
+        bool haveRow = false;
+        if (auto values = tooltipDbc(gh, "ScalingStatValues.dbc");
+            values && values->getFieldCount() >= row.size() &&
+            static_cast<uint32_t>(shown) <= values->getRecordCount()) {
+            for (size_t c = 0; c < row.size(); ++c)
+                row[c] = values->getInt32(static_cast<uint32_t>(shown - 1), static_cast<uint32_t>(c));
+            haveRow = true;
+        }
+        auto dist = tooltipDbc(gh, "ScalingStatDistribution.dbc");
+        const int32_t distRow =
+            dist && dist->getFieldCount() > 21 ? dist->findRecordById(info->scalingStatDistribution) : -1;
+        if (haveRow && hl::scalesDamage(ssv)) {
+            float lo = 0.0f, hi = 0.0f;
+            hl::damage(row.data(), row.size(), ssv, info->delayMs, lo, hi);
+            lua_newtable(L);
+            lua_pushnumber(L, std::nearbyint(lo));
+            lua_setfield(L, -2, "lo");
+            lua_pushnumber(L, std::nearbyint(hi));
+            lua_setfield(L, -2, "hi");
+            const float swing = static_cast<float>(info->delayMs) * 0.001f;
+            lua_pushnumber(L, swing > 0.0f ? (lo + hi) * 0.5f / swing : 0.0f);
+            lua_setfield(L, -2, "dps");
+            lua_setfield(L, -2, "scaledDamage");
+        }
+        if (hl::scalesArmour(ssv)) {
+            lua_pushnumber(L, haveRow ? hl::armour(row.data(), row.size(), ssv) : 0);
+            lua_setfield(L, -2, "scaledArmor");
+        }
+        stats.clear();
+        if (distRow >= 0) {
+            const int32_t budget = haveRow ? hl::statBudget(row.data(), row.size(), ssv) : 0;
+            for (uint32_t k = 0; k < 10; ++k) {
+                const int32_t stat = dist->getInt32(static_cast<uint32_t>(distRow), 1 + k);
+                const int32_t mod = dist->getInt32(static_cast<uint32_t>(distRow), 11 + k);
+                if (mod != 0) stats.emplace_back(static_cast<uint32_t>(stat), hl::scaledStat(mod, budget));
+            }
+        }
+        if (haveRow) heirloomSpellPower = hl::spellPower(row.data(), row.size(), ssv);
     }
     pushItemRequirements(L, gh, *info);
     // The type line's name: the subclass's DisplayName (0x006277f0) - as
@@ -3818,14 +3975,26 @@ static int lua_GetItemTooltipData(lua_State* L) {
             }
         }
     }
+    // Whether the item level line may show (0x0062b1ad).
+    if (game::item_tooltip::showsItemLevel(info->itemClass)) {
+        lua_pushboolean(L, 1);
+        lua_setfield(L, -2, "showItemLevel");
+    }
+    pushGemItemProperty(L, gh, *info);
     // The stat and resistance lines, in the client's order and words
     // (item_stat_text.hpp): white primaries, green "Equip:" ratings.
     {
-        std::vector<std::pair<uint32_t, int32_t>> stats = {
-            {3, info->agility}, {4, info->strength}, {5, info->intellect},
-            {6, info->spirit}, {7, info->stamina}};
-        for (const auto& es : info->extraStats) stats.emplace_back(es.statType, es.statValue);
-        const auto lines = game::itemStatLines(stats, game::interfaceString);
+        auto lines = game::itemStatLines(stats, game::interfaceString);
+        // An heirloom's spell power, after its other green lines and worded
+        // with the figure alone (0x006277f0).
+        if (heirloomSpellPower != 0) {
+            const std::string fmt = game::interfaceString("ITEM_MOD_SPELL_POWER", "Increases spell power by %d.");
+            if (!fmt.empty()) {
+                lines.push_back({game::interfaceString("ITEM_SPELL_TRIGGER_ONEQUIP", "Equip:") + " " +
+                                     game::chat_channels::luaFormat(fmt, {std::to_string(heirloomSpellPower)}),
+                                 true});
+            }
+        }
         lua_newtable(L);
         for (size_t i = 0; i < lines.size(); ++i) {
             lua_newtable(L);
@@ -3906,6 +4075,52 @@ static int lua_GetItemTooltipData(lua_State* L) {
                 info->spells[i].spellId,
                 gh->getSpellDescription(info->spells[i].spellId));
             if (!sDesc.empty()) { lua_pushstring(L, sDesc.c_str()); lua_setfield(L, -2, "description"); }
+            // A recipe (trigger 6), or a spell whose first effect teaches one
+            // (36): its line is "Use:" with the item's description. Where what
+            // it teaches makes an item - a first effect of 24, 157 or 59 with
+            // an item - the line is white, that item's tooltip follows it and
+            // then what making it takes: each reagent by name, its count after
+            // it from two up, all known or none (0x0062c21f..0x0062c4f0).
+            {
+                gh->loadSpellNameCache();
+                const auto& cache = gh->spellNameCacheRef();
+                const auto own = cache.find(info->spells[i].spellId);
+                uint32_t teach = 0;
+                if (info->spells[i].spellTrigger == 6 && own != cache.end()) {
+                    teach = info->spells[i].spellId;
+                    lua_pushboolean(L, 1);
+                    lua_setfield(L, -2, "recipe");
+                } else if (own != cache.end() && own->second.effectIds[0] == 36) {
+                    teach = own->second.effectTriggerSpell[0];
+                }
+                const auto taught = teach != 0 ? cache.find(teach) : cache.end();
+                if (taught != cache.end()) {
+                    const uint32_t e0 = taught->second.effectIds[0];
+                    const uint32_t made = taught->second.effectItemType0;
+                    if ((e0 == 24 || e0 == 157 || e0 == 59) && made != 0) {
+                        lua_pushnumber(L, made);
+                        lua_setfield(L, -2, "createdItem");
+                        std::string list;
+                        bool any = false, missing = false;
+                        for (const auto& r : taught->second.reagents) {
+                            if (static_cast<int32_t>(r.itemId) <= 0) continue;
+                            const auto* ri = gh->getItemInfo(r.itemId);
+                            if (!ri || !ri->valid) {
+                                gh->ensureItemInfo(r.itemId);
+                                missing = true;
+                                continue;
+                            }
+                            if (any) list += ", ";
+                            any = true;
+                            list += r.count < 2 ? ri->name : ri->name + " (" + std::to_string(r.count) + ")";
+                        }
+                        if (any && !missing) {
+                            lua_pushstring(L, list.c_str());
+                            lua_setfield(L, -2, "reagents");
+                        }
+                    }
+                }
+            }
             lua_rawseti(L, -2, spellCount);
         }
         if (spellCount > 0) lua_setfield(L, -2, "itemSpells");

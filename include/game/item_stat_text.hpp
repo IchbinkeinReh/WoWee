@@ -8,13 +8,15 @@
 /// Erhöht Trefferwertung um 20."), and the resistances as ITEM_RESIST_SINGLE
 /// with SPELL_SCHOOL<n>_CAP, or ITEM_RESIST_ALL when all five are the same.
 ///
-/// The order is the client's, not the item's: two fixed tables
-/// (0x00a262f0 for the white ones, 0x00a25f78 for the green) walked in turn,
-/// each taking the first of the item's stats of that type.
+/// The white ones are in the client's order, not the item's: the fixed table
+/// at 0x00a262f0 walked, each entry taking the first of the item's stats of
+/// that type. The green ones are in the item's order: its stats walked, each
+/// one shown that the table at 0x00a25f78 holds (0x0062bc90).
 ///
 /// Pure: the text source is an argument (game::interfaceString in the game);
 /// tests/test_item_stat_text.cpp checks it.
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <functional>
@@ -119,24 +121,29 @@ inline ItemStatLine itemStatLine(uint32_t type, int32_t value, bool equip, const
     return line;
 }
 
-/// Every stat line of an item whose stats are `stats` (type, value), white
-/// ones first, each table in its own order and taking the first stat of each
-/// type; a stat of zero is left out.
+/// Every stat line of an item whose stats are `stats` (type, value) in the
+/// item's own order, white ones first: those by the white table, the first
+/// stat of each type; then each green one where the item has it. A stat of
+/// zero is left out.
 inline std::vector<ItemStatLine> itemStatLines(const std::vector<std::pair<uint32_t, int32_t>>& stats,
                                                const ItemTextSource& text) {
     std::vector<ItemStatLine> out;
-    auto walk = [&](const uint32_t* order, size_t n, bool equip) {
-        for (size_t i = 0; i < n; ++i) {
-            for (const auto& [type, value] : stats) {
-                if (type != order[i] || value == 0) continue;
-                ItemStatLine line = itemStatLine(type, value, equip, text);
-                if (!line.text.empty()) out.push_back(std::move(line));
-                break;
-            }
+    for (const uint32_t want : kItemWhiteStatOrder) {
+        for (const auto& [type, value] : stats) {
+            if (type != want || value == 0) continue;
+            ItemStatLine line = itemStatLine(type, value, false, text);
+            if (!line.text.empty()) out.push_back(std::move(line));
+            break;
         }
-    };
-    walk(kItemWhiteStatOrder, std::size(kItemWhiteStatOrder), false);
-    walk(kItemEquipStatOrder, std::size(kItemEquipStatOrder), true);
+    }
+    for (const auto& [type, value] : stats) {
+        if (value == 0 || type == 0xFFFFFFFFu) continue;
+        if (std::find(std::begin(kItemEquipStatOrder), std::end(kItemEquipStatOrder), type) ==
+            std::end(kItemEquipStatOrder))
+            continue;
+        ItemStatLine line = itemStatLine(type, value, true, text);
+        if (!line.text.empty()) out.push_back(std::move(line));
+    }
     return out;
 }
 

@@ -2231,6 +2231,12 @@ struct ItemQueryResponseData {
     int32_t block = 0;              ///< +0x1a4
     uint32_t totemCategory = 0;     ///< +0x1bc
     uint32_t itemLimitCategory = 0; ///< +0x1ec (ItemLimitCategory.dbc)
+    /// ArmorDamageModifier (+0x1e4): above zero, the armour line is green
+    /// (0x006277f0) - armour the item adds beyond its base.
+    float armorDamageModifier = 0.0f;
+    /// HolidayId (+0x1f0): the holiday it works in, named as a requirement
+    /// (0x006277f0, Holidays.dbc -> HolidayNames.dbc).
+    uint32_t holidayId = 0;
 
     /// File one (type, value) pair from an item query into this item.
     ///

@@ -86,6 +86,16 @@ void pushSocketedGems(lua_State* L, game::GameHandler* gh, uint64_t itemGuid,
 /// The same for gems named by their enchant ids - an item link's gem fields.
 void pushSocketedGems(lua_State* L, game::GameHandler* gh,
                       const std::array<uint32_t, 3>& enchants, uint32_t itemId);
+/// What one held item is beside its template, as a new table for
+/// _WoweePopulateItemTooltip's `inst` (lua_engine.cpp): bound, durability,
+/// price, charges, its open/read/socket line, its maker, its gems.
+void pushTooltipItemInstance(lua_State* L, game::GameHandler* gh, const game::ItemDef& instance,
+                             uint32_t itemId);
+/// A gem's own line, for the gem's tooltip (lua_socket_api.cpp): sets
+/// `gemProperty` - its GemProperties enchantment's text, whether the player
+/// has the skill the gem asks for, and the enchantment's conditions - on the
+/// table at the top of the stack. Nothing for an item that is not a gem.
+void pushGemItemProperty(lua_State* L, game::GameHandler* gh, const game::ItemQueryResponseData& gem);
 
 /// Which interface is loaded, as its manifest's `## Interface:` number - 11200
 /// for 1.12, 20400 for 2.4.3, 30300 for 3.3.5a, 40300 for 4.3.4 - or 0 where

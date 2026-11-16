@@ -551,6 +551,42 @@ void pushSocketedGems(lua_State* L, game::GameHandler* gh,
     lua_setfield(L, -2, "socketBonusMatched");
 }
 
+/// A gem's own line (0x006277f0 at 0x0062a8c0, for an item with
+/// GemProperties): its GemProperties row's enchantment (+4) by name, white -
+/// red while the player has not the skill and rank the gem's template asks
+/// for - and under it the enchantment's conditions, each white when met and
+/// grey when not (0x0061c0b0).
+void pushGemItemProperty(lua_State* L, game::GameHandler* gh, const game::ItemQueryResponseData& gem) {
+    if (!gh || gem.gemProperties == 0) return;
+    auto* am = gh->services().assetManager;
+    if (!am || !am->isInitialized()) return;
+    auto dbc = am->loadDBC("GemProperties.dbc");
+    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() < 2) return;
+    const int32_t row = dbc->findRecordById(gem.gemProperties);
+    if (row < 0) return;
+    const uint32_t ench = dbc->getUInt32(static_cast<uint32_t>(row), 1);
+    const std::string text = ench != 0 ? gh->getEnchantName(ench) : std::string();
+    if (text.empty()) return;
+    bool ok = true;
+    if (gem.requiredSkill != 0) {
+        const auto& skills = gh->getPlayerSkills();
+        const auto it = skills.find(gem.requiredSkill);
+        ok = it != skills.end() && it->second.value != 0 &&
+             it->second.effectiveValue() >= static_cast<int>(gem.requiredSkillRank);
+    }
+    lua_newtable(L);
+    lua_pushstring(L, text.c_str());
+    lua_setfield(L, -2, "text");
+    lua_pushboolean(L, ok ? 1 : 0);
+    lua_setfield(L, -2, "ok");
+    game::gem_conditions::Row cond;
+    if (conditionRow(gh, gemEnchantRow(gh, ench).conditionId, cond)) {
+        pushConditionLines(L, game::gem_conditions::evaluate(cond, equippedGemCounts(gh)));
+        lua_setfield(L, -2, "conditions");
+    }
+    lua_setfield(L, -2, "gemProperty");
+}
+
 void registerSocketLuaAPI(lua_State* L) {
     static const luaL_Reg fns[] = {
         {"SocketInventoryItem",        lua_SocketInventoryItem},
