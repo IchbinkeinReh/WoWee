@@ -8,7 +8,9 @@
 #include "game/update_field_table.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
+#include "rendering/camera_controller.hpp"
 #include "rendering/character_renderer.hpp"
+#include "rendering/collision_fit.hpp"
 #include "rendering/m2_event_sounds.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/unit_model_events.hpp"
@@ -23,6 +25,8 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
+#include <optional>
 #include <chrono>
 #include <limits>
 
@@ -636,6 +640,95 @@ float EntitySpawner::playerCollisionHeight() {
     collisionHeightDisplay_ = unit.getDisplayId();
     collisionHeightScaleBits_ = scaleBits;
     return collisionHeight_;
+}
+
+bool EntitySpawner::growthNoLongerFits(uint64_t guid, float oldScale) {
+    namespace us = rendering::unit_splash;
+    namespace col = rendering::collision;
+    // CreatureModelData MountHeight (+0x40).
+    constexpr uint32_t kModelMountHeightColumn = 16;
+    if (!gameHandler_ || !assetManager_ || !renderer_) return false;
+    auto entity = gameHandler_->getEntityManager().getEntity(guid);
+    // 0x00725f50: a unit that is not a player always fits.
+    if (!entity || entity->getType() != game::ObjectType::PLAYER) return false;
+    const auto& unit = static_cast<const game::Unit&>(*entity);
+    auto displays = assetManager_->loadDBCOptional("CreatureDisplayInfo.dbc");
+    auto models = assetManager_->loadDBCOptional("CreatureModelData.dbc");
+    if (!displays || !models || models->getFieldCount() <= kModelMountHeightColumn) return false;
+    const auto field = [&](game::UF f) -> uint32_t {
+        const uint16_t i = game::fieldIndex(f);
+        return i != 0xFFFF ? unit.getField(i) : 0u;
+    };
+    const float newScale = std::bit_cast<float>(field(game::UF::OBJECT_FIELD_SCALE_X));
+    // 0x0072a560: the fit is tested only while the unit grows, and only for
+    // the active player (0x004cee50).
+    const bool tested = col::scaleGrew(newScale, oldScale) && guid == gameHandler_->getPlayerGuid();
+    // A display's record and its model's, or nothing.
+    struct Rows {
+        uint32_t display;
+        uint32_t model;
+    };
+    const auto rowsOf = [&](uint32_t displayId) -> std::optional<Rows> {
+        const int32_t d = displays->findRecordById(displayId);
+        if (d < 0) return std::nullopt;
+        const int32_t m = models->findRecordById(displays->getUInt32(static_cast<uint32_t>(d), 1));
+        if (m < 0) return std::nullopt;
+        return Rows{static_cast<uint32_t>(d), static_cast<uint32_t>(m)};
+    };
+    // 0x006cf350: the collision scale, the object scale at least 1 times the
+    // display's and the model's.
+    const auto collisionScale = [&](const Rows& r, float objectScale) {
+        return us::collisionHeight(1.0f, objectScale, displays->getFloat(r.display, us::kDisplayScaleColumn),
+                                   models->getFloat(r.model, us::kModelScaleColumn));
+    };
+    // The collision box is the native display's (unit +0xf8), whatever form
+    // the unit is drawn in.
+    const auto native = rowsOf(field(game::UF::UNIT_FIELD_NATIVEDISPLAYID));
+    auto* cc = renderer_->getCameraController();
+    const glm::vec3 feet = renderer_->getCharacterPosition();
+    const auto mountDisplay = static_cast<int32_t>(field(game::UF::UNIT_FIELD_MOUNTDISPLAYID));
+    if (mountDisplay > 0) {
+        // 0x0072a5a2: mounted on a display the client has no model for, it
+        // asks for the growth to go without testing anything.
+        const auto mount = rowsOf(static_cast<uint32_t>(mountDisplay));
+        if (!mount) return true;
+        // 0x006d7720; a rider with no model is a fatal error there.
+        if (!native) return false;
+        const float riderHeight = models->getFloat(native->model, us::kModelCollisionHeightColumn);
+        const float riderWidth = models->getFloat(native->model, us::kModelCollisionWidthColumn);
+        const float mountHeight = models->getFloat(mount->model, kModelMountHeightColumn);
+        // +0x990: the mount display's scale.
+        const float mountScale = displays->getFloat(mount->display, us::kDisplayScaleColumn);
+        if (!tested || !cc) return false;
+        const float oldCollisionScale = collisionScale(*native, oldScale);
+        // The body as it is (+0x850, +0x854): the rider's half-width and its
+        // height on the mount at the old scale.
+        const float halfWidth = riderWidth * oldCollisionScale * 0.5f;
+        const float currentHeight =
+            col::mountedRiderHeight(riderHeight, mountHeight, mountScale) * oldCollisionScale;
+        const auto box = col::mountedGrowthBox(feet, halfWidth, currentHeight, riderHeight, mountHeight,
+                                               mountScale, collisionScale(*native, newScale));
+        if (!box) return false;
+        // 0x0075e480: a gather that fails is no room.
+        const auto facets = cc->gatherWorldFacets(box->lo, box->hi);
+        return !facets || col::boxOverlapsFacets(box->lo, box->hi, *facets);
+    }
+    // 0x006d78c0; a unit with no model is a fatal error there.
+    if (!native) return false;
+    const float width = models->getFloat(native->model, us::kModelCollisionWidthColumn);
+    const float height = models->getFloat(native->model, us::kModelCollisionHeightColumn);
+    // NOCOLLISIONBOX, ZEROSCALEUNIT: logged, and it fits.
+    constexpr float kZero = 9.536743e-07f;
+    if (std::abs(width) < kZero || std::abs(height) < kZero) return false;
+    const float scale = collisionScale(*native, newScale);
+    if (std::abs(scale) < kZero) return false;
+    if (!tested || !cc) return false;
+    // 0x006e8ff0 -> 0x0075e500: the movement body at the grown size, and
+    // the faces round it.
+    const col::FitExtents ext = col::growthFitExtents(width, height, scale);
+    const col::Body body(feet, ext.halfWidth, ext.height);
+    const auto facets = cc->gatherWorldFacets(body.boxMin(), body.boxMax());
+    return !facets || col::bodyOverlapsFacets(body, *facets);
 }
 
 std::pair<float, float> EntitySpawner::unitRippleSize(const game::Unit& unit) {

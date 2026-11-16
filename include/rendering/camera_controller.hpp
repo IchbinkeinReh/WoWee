@@ -216,6 +216,13 @@ public:
     }
     [[nodiscard]] bool isJumpKeyPressed() const { return jumpBufferTimer > 0.0f; }
     [[nodiscard]] float collisionHeight() const { return collisionHeight_; }
+    /// The faces of the ground, buildings and doodads in a box, gathered as
+    /// the client gathers them for the active mover (0x00783a40, flags
+    /// 0x100111), or nothing where that gather fails: the box leaves the
+    /// map, or reaches ground that exists but is not loaded yet (0x007a5f20,
+    /// 0x007a5a60). Used by the growth fit (collision_fit.hpp).
+    [[nodiscard]] std::optional<std::vector<collision::Facet>> gatherWorldFacets(const glm::vec3& lo,
+                                                                                const glm::vec3& hi);
     [[nodiscard]] bool isMovingForward() const { return moveForwardActive; }
     [[nodiscard]] bool isMovingBackward() const { return moveBackwardActive; }
     [[nodiscard]] bool isStrafingLeft() const { return strafeLeftActive; }

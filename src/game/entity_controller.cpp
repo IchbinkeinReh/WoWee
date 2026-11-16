@@ -4127,6 +4127,14 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
     const bool watchesLanguages = block.guid == owner_.getPlayerGuid() && flags2 != 0xFFFF &&
                                   block.fields.find(flags2) != block.fields.end();
     const uint32_t oldFlags2 = watchesLanguages ? entity->getField(flags2) : 0;
+    // The unit's scale, which the client watches (0x00741d00 registers
+    // 0x0072d070 on OBJECT_FIELD_SCALE_X) and hands, with its old value, to
+    // 0x0072a560. Only a player unit can come out of that needing the
+    // growth cancelled: any other answers that it fits (0x00725f50).
+    const uint16_t scaleIdx = fieldIndex(UF::OBJECT_FIELD_SCALE_X);
+    const bool watchesScale = entity->getType() == ObjectType::PLAYER && scaleIdx != 0xFFFF &&
+                              block.fields.find(scaleIdx) != block.fields.end();
+    const uint32_t oldScaleBits = watchesScale ? entity->getField(scaleIdx) : 0;
 
     // Set fields (common)
     for (const auto& field : block.fields) {
@@ -4147,6 +4155,18 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
         // and a raid frame both hear of it.
         for (const auto& uid : owner_.unitTokensForGuid(block.guid))
             pendingEvents_.emit("UNIT_TARGET", {uid});
+    }
+
+    // 0x0072a560: a grown player that no longer fits where it stands asks
+    // the server to take the growth away - an empty CMSG_CANCEL_GROWTH_AURA.
+    if (watchesScale && entity->getField(scaleIdx) != oldScaleBits && owner_.growthFitCallbackRef() &&
+        owner_.growthFitCallbackRef()(block.guid, bitsToFloat(oldScaleBits)) && owner_.getSocket()) {
+        const uint16_t wire = wireOpcode(Opcode::CMSG_CANCEL_GROWTH_AURA);
+        if (wire != 0xFFFF) {
+            network::Packet pkt(wire);
+            owner_.getSocket()->send(pkt);
+            LOG_INFO("Sent CMSG_CANCEL_GROWTH_AURA: grown past the room at 0x", std::hex, block.guid, std::dec);
+        }
     }
 
     if (watchesLanguages && ((entity->getField(flags2) ^ oldFlags2) & 0x8u) != 0)

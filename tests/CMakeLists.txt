@@ -3296,6 +3296,14 @@ wowee_add_test(test_collision_sweep
             ${CMAKE_SOURCE_DIR}/src/rendering/collision_sweep.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_collision_fit ───────────────────────────────────────
+# Whether a grown unit still fits where it stands (0x0072a560): the grown
+# body's size, and the body and box overlap tests against world faces.
+wowee_add_test(test_collision_fit
+    SOURCES test_collision_fit.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/collision_sweep.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_collision_hover ─────────────────────────────────────
 # Hovering: held the hover height over the ground, made up at 3.5 yards a
 # second, a fall where the ground drops away, a slide along a wall.

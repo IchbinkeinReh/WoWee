@@ -127,6 +127,12 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
         entitySpawner_.setRemotePlayerMountDisplayId(guid, mountDisplayId);
     });
 
+    // A player's scale changed: whether it grew past the room it stands in
+    // (0x0072a560), for CMSG_CANCEL_GROWTH_AURA.
+    gameHandler_.setGrowthFitCallback([this](uint64_t guid, float oldScale) {
+        return entitySpawner_.growthNoLongerFits(guid, oldScale);
+    });
+
     // Creature despawn callback (online mode) - remove creature models
     gameHandler_.setCreatureDespawnCallback([this](uint64_t guid) {
         lastCreatureSpawns_.erase(guid);

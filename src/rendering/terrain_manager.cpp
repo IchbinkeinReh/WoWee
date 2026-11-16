@@ -2553,6 +2553,11 @@ bool TerrainManager::isTileLoadedAt(float glX, float glY) const {
     return loadedTiles.find(worldToTile(glX, glY)) != loadedTiles.end();
 }
 
+bool TerrainManager::isTileSettledAt(float glX, float glY) {
+    const TileCoord coord = worldToTile(glX, glY);
+    return isTileSettled(coord.x, coord.y);
+}
+
 bool TerrainManager::isTileSettled(int x, int y) {
     const TileCoord coord = {.x = x, .y = y};
     if (loadedTiles.find(coord) != loadedTiles.end()) return true;
