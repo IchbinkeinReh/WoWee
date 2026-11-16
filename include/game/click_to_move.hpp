@@ -41,6 +41,24 @@ enum class Kind : uint8_t {
     None = 13,
 };
 
+/// 0x00717b60: a unit the player may loot now - dead (UNIT_FIELD_HEALTH
+/// below 1 as a signed number), its loot not held back to a later time
+/// (+0xac0, zero for none, the time it was seen dying: never later than now
+/// where the client sets it) and UNIT_DYNFLAG_LOOTABLE.
+inline bool lootableNow(int32_t health, uint32_t lootFromMs, uint32_t nowMs, uint32_t dynamicFlags) {
+    if (health >= 1) return false;
+    if (lootFromMs != 0 && static_cast<int32_t>(nowMs - lootFromMs) < 0) return false;
+    return (dynamicFlags & 0x1u) != 0;
+}
+
+/// 0x0071bc50: whether `at` is before a unit at `from` facing `facing`
+/// (server radians): the way to it and the way it faces not apart by more
+/// than a right angle.
+inline bool inFrontHalf(const glm::vec3& from, float facing, const glm::vec3& at) {
+    const glm::vec3 d = at - from;
+    return std::cos(facing) * d.x + std::sin(facing) * d.y >= 0.0f;
+}
+
 /// A row of the table at 0x00adaab8 (12 bytes a kind): whether the kind
 /// goes anywhere at all, the square of the distance past which it gives up
 /// (0 for none), whether a mover that stops getting anywhere is stopped, and

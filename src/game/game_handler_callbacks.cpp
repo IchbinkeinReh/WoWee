@@ -3799,6 +3799,11 @@ void GameHandler::lootTarget(uint64_t guid) {
 
 void GameHandler::lootCorpse(uint64_t guid, bool clickToMove) {
     if (!isInWorld()) return;
+    // 0x006dad90 asks 0x00717b60 of the unit first: dead, its loot not held
+    // back (+0xac0) and lootable.
+    if (auto unit = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(guid));
+        unit && !click_to_move::lootableNow(static_cast<int32_t>(unit->getHealth()), 0, 0, unit->getDynamicFlags()))
+        return;
     // 0x006dad90 with click-to-move: a corpse further than the two units'
     // melee reach (0x004f5f40) is walked to (kind 6), and looted there.
     if (clickToMove) {

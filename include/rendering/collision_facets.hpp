@@ -32,6 +32,7 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <optional>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -175,6 +176,17 @@ inline void appendBoxFacets(const glm::vec3& lo, const glm::vec3& hi, std::vecto
         out.push_back(makeFacet(n, k[s[0]], k[s[1]], k[s[2]]));
         out.push_back(makeFacet(n, k[s[0]], k[s[2]], k[s[3]]));
     }
+}
+
+/// The height of the first facet's plane over (x, y): what 0x0072ee20 reads
+/// from 0x00783a40's answer, -(a x + b y + d) / c with the plane's a, b, c,
+/// d. Nothing where no facet was found, or for an upright one, whose plane
+/// has no height there (the client divides by its zero c).
+inline std::optional<float> firstFacetHeight(const std::vector<Facet>& facets, float x, float y) {
+    if (facets.empty()) return std::nullopt;
+    const Facet& f = facets.front();
+    if (f.n.z == 0.0f) return std::nullopt;
+    return -(f.n.x * x + f.n.y * y + f.d) / f.n.z;
 }
 
 }  // namespace wowee::rendering::collision

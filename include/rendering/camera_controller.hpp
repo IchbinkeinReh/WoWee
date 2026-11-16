@@ -341,8 +341,6 @@ public:
     void setSitDownCallback(SitDownCallback cb) { sitDownCallback_ = std::move(cb); }
 
     // Callback invoked when auto-follow is cancelled by user movement input.
-    using AutoFollowCancelCallback = std::function<void()>;
-    void setAutoFollowCancelCallback(AutoFollowCancelCallback cb) { autoFollowCancelCallback_ = std::move(cb); }
 
     /// Click-to-move (0x007317a0, run for the player each frame by
     /// 0x00734390): asked with the facing, the frame's time and whether the
@@ -380,6 +378,14 @@ public:
     /// Told when a key starts a move of its own, which ends click-to-move
     /// (0x0072e5d0 and the other starts -> 0x007272c0).
     void setClickToMoveCancel(std::function<void()> fn) { clickToMoveCancel_ = std::move(fn); }
+    /// 0x0071aee0, as 0x007272c0 ends a click-to-move with its stop: what it
+    /// had going ends, and a mover going forward or back stops and lets its
+    /// autorun go (0x005f95f0) - whoever ended it.
+    void stopClickToMoveMover() {
+        clickToMoveActive_ = false;
+        clickToMoveForward_ = false;
+        if (wasMovingForward || wasMovingBackward) autoRunning = false;
+    }
 
     void setUseWoWSpeed(bool use) { useWoWSpeed = use; }
     void setRunSpeedOverride(float speed) { runSpeedOverride_ = speed; }
@@ -572,13 +578,6 @@ public:
     /// press is a press, where a key still held from before is not.
     void suppressHeldMovementFor(float seconds) { movementSuppressTimer_ = seconds; }
     void suspendGravityFor(float seconds) { gravitySuspendTimer_ = seconds; }
-
-    // Auto-follow: walk toward a target position each frame (WoW /follow).
-    // The caller updates *targetPos every frame with the followed entity's render position.
-    // Stops within FOLLOW_STOP_DIST; cancels on manual WASD input.
-    void setAutoFollow(const glm::vec3* targetPos) { autoFollowTarget_ = targetPos; }
-    void cancelAutoFollow() { autoFollowTarget_ = nullptr; }
-    [[nodiscard]] bool isAutoFollowing() const { return autoFollowTarget_ != nullptr; }
 
     // Trigger mount jump (applies vertical velocity for physics hop)
     void triggerMountJump();
@@ -1138,11 +1137,6 @@ private:
     bool clickToMoveKeysHeld_ = false;
     bool clickToMoveTrackAsMove_ = false;
 
-    // Auto-follow target position (WoW /follow). Non-null when following.
-    const glm::vec3* autoFollowTarget_ = nullptr;
-    static constexpr float FOLLOW_STOP_DIST = 3.0f;   // Stop within 3 units of target
-    static constexpr float FOLLOW_MAX_DIST  = 40.0f;  // Cancel if > 40 units away
-
     // Movement state tracking (for sending opcodes on state change)
     bool wasMovingForward = false;
     bool wasMovingBackward = false;
@@ -1189,7 +1183,6 @@ private:
     MovementCallback movementCallback;
     StandUpCallback standUpCallback_;
     SitDownCallback sitDownCallback_;
-    AutoFollowCancelCallback autoFollowCancelCallback_;
 
     // Movement speeds
     bool useWoWSpeed = false;

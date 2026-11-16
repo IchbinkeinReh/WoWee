@@ -2231,8 +2231,6 @@ public:
     void setPlayerSoundCallback(PlayerSoundCallback cb) { playerSoundCallback_ = std::move(cb); }
 
     // Auto-follow callback: pass render-space position pointer to start, nullptr to cancel.
-    using AutoFollowCallback = std::function<void(const glm::vec3* renderPos)>;
-    void setAutoFollowCallback(AutoFollowCallback cb) { autoFollowCallback_ = std::move(cb); }
 
     // Unstuck callback (resets player Z to floor height)
     using UnstuckCallback = std::function<void()>;
@@ -3191,8 +3189,14 @@ public:
     bool clickToMoveAllowed() const;
     /// 0x00721f90: a click-to-move under way for the player.
     bool isClickToMoving() const;
-    /// 0x007272c0: given up or done; the mover stops moving forward.
+    /// 0x007272c0: given up or done; the mover stops moving forward. With
+    /// `stopMoving`, for a kind that goes anywhere (0x00adaab8), 0x0071aee0:
+    /// the mover's own moving stopped (MSG_MOVE_STOP) and its autorun let go
+    /// - whatever ended it: a key, a teleport, a facing set.
     void stopClickToMove(bool faceSubject = false, bool stopMoving = true);
+    /// Who carries 0x0071aee0 out: the camera, which moves the mover.
+    using ClickToMoveStopMover = std::function<void()>;
+    void setClickToMoveStopMover(ClickToMoveStopMover hook) { ctmStopMover_ = std::move(hook); }
     /// A follow (kind 3) under way ended as 0x007272c0 ends it.
     void stopClickToMoveFollow();
     /// 0x0072b4a0: toward a unit or corpse for kind 3 (/follow), 5, 6 or 9.
@@ -3267,11 +3271,17 @@ public:
     /// with AttributesEx 0x4000 (it tracks its target) at a unit turns the
     /// player to that unit throughout (kind 1). Asked every frame.
     void clickToMoveWatchChannel();
+    /// 0x007fa2e0 as the player's own cast is made (0x00805330): a spell with
+    /// Attributes 0x400000 at a unit faces it (0x0072b4a0 kind 0) - with
+    /// FacingCasterFlags 0x1 only when the unit is already before the player
+    /// (0x0071bce0).
+    void clickToMoveCastSent(uint32_t spellId, uint64_t targetGuid);
     /// 0x007275c0: where the ring goes (canonical) and its radius.
     std::optional<std::pair<glm::vec3, float>> clickToMoveMarker() const;
     /// The world's surface at a place (canonical in, canonical height out):
     /// what 0x0072ee20 asks of 0x00783a40 to put an enemy's place on the
-    /// ground. None where there is nothing there.
+    /// ground - the plane of the first facet a box of no size there reaches.
+    /// None where there is nothing there.
     using GroundHeightQuery = std::function<std::optional<float>(const glm::vec3& canonical)>;
     void setGroundHeightQuery(GroundHeightQuery q) { groundHeightQuery_ = std::move(q); }
     uint64_t getHookedFishingBobberGuid() const { return hookedFishingBobberGuid_; }
@@ -5496,8 +5506,6 @@ public:
     auto& dndStatusRef() { return dndStatus_; }
 
     // ── Movement & Transport ─────────────────────────────────────────
-    auto& followRenderPosRef() { return followRenderPos_; }
-    auto& followTargetGuidRef() { return followTargetGuid_; }
     auto& onTaxiFlightRef() { return onTaxiFlight_; }
     auto& taxiLandingCooldownRef() { return taxiLandingCooldown_; }
     auto& taxiMountActiveRef() { return taxiMountActive_; }
@@ -5750,7 +5758,6 @@ public:
     auto& combatLogEventCallbackRef() { return combatLogEventCallback_; }
     auto& appearanceChangedCallbackRef() { return appearanceChangedCallback_; }
     auto& playerModelRebuildCallbackRef() { return playerModelRebuildCallback_; }
-    auto& autoFollowCallbackRef() { return autoFollowCallback_; }
     auto& chatBubbleCallbackRef() { return chatBubbleCallback_; }
     auto& creatureDespawnCallbackRef() { return creatureDespawnCallback_; }
     auto& creatureMoveCallbackRef() { return creatureMoveCallback_; }
@@ -6005,6 +6012,9 @@ public:
         uint32_t spellFamilyFlags[3] = {0, 0, 0};
         // Spell.dbc Targets bitmask (SpellCastTargetFlags) - 0x10 = TARGET_FLAG_ITEM
         uint32_t targetFlags = 0;
+        /// FacingCasterFlags (Spell.dbc +0x4c): 0x1, the caster must face
+        /// the target.
+        uint32_t facingCasterFlags = 0;
         // Spell.dbc RangeIndex resolved against SpellRange.dbc. A max range of 0
         // means "Self Only" (shouts, self-buffs); negative means SpellRange.dbc
         // was unavailable, so callers should not infer anything from it.
@@ -6637,6 +6647,7 @@ private:
     click_to_move::Pending ctmPending_;
     float ctmObjectReach_ = 0.0f;               // 0x00ca11e8
     GroundHeightQuery groundHeightQuery_;
+    ClickToMoveStopMover ctmStopMover_;
     std::optional<float> ctmPitchOnce_;         // 0x0072f040's pitch, for the next steer
     uint32_t ctmChannelSpellSeen_ = 0;          // UNIT_CHANNEL_SPELL as last seen
     uint64_t ctmChannelObjectSeen_ = 0;         // UNIT_FIELD_CHANNEL_OBJECT as last seen
@@ -6647,8 +6658,6 @@ private:
                           std::optional<float> spellRange = std::nullopt);
 
     // ---- Follow state ----
-    uint64_t followTargetGuid_ = 0;
-    glm::vec3 followRenderPos_{0.0f};  // Render-space position of followed entity (updated each frame)
 
     // ---- AFK/DND status ----
     bool afkStatus_ = false;
@@ -6757,7 +6766,6 @@ private:
     MoverStopCallback moverStopCallback_;
     CameraShakeCallback cameraShakeCallback_;
     PlayerSoundCallback playerSoundCallback_;
-    AutoFollowCallback autoFollowCallback_;
     UnstuckCallback unstuckCallback_;
     UnstuckCallback unstuckGyCallback_;
     UnstuckCallback unstuckHearthCallback_;

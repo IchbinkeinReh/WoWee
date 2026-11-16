@@ -396,3 +396,19 @@ TEST_CASE("a direction clicked into while swimming gives its pitch", "[click_to_
     CHECK_THAT(pitchOfDirection(glm::vec3(0.0f, 0.0f, -1.0f)), WithinAbs(-kPi * 0.5, 1e-6));
     CHECK_THAT(pitchOfDirection(glm::vec3(0.0f, std::cos(0.5f), std::sin(0.5f))), WithinAbs(0.5, 1e-5));
 }
+
+TEST_CASE("A cast that needs facing faces only a unit already before the player", "[click_to_move]") {
+    const glm::vec3 me(0.0f, 0.0f, 0.0f);
+    CHECK(inFrontHalf(me, 0.0f, {5.0f, 1.0f, 0.0f}));
+    CHECK(inFrontHalf(me, 0.0f, {0.0f, 5.0f, 0.0f}));      // square to it: still before
+    CHECK_FALSE(inFrontHalf(me, 0.0f, {-1.0f, 5.0f, 0.0f}));
+    CHECK(inFrontHalf(me, 90.0f * kDeg, {0.0f, 3.0f, 9.0f}));
+}
+
+TEST_CASE("A unit is looted dead, lootable and not held back", "[click_to_move]") {
+    CHECK(lootableNow(0, 0, 1000, 0x1));
+    CHECK_FALSE(lootableNow(1, 0, 1000, 0x1));             // alive
+    CHECK_FALSE(lootableNow(0, 0, 1000, 0x20));            // dead, not lootable
+    CHECK_FALSE(lootableNow(0, 1500, 1000, 0x1));          // held back until 1500
+    CHECK(lootableNow(0, 1000, 1000, 0x1));
+}

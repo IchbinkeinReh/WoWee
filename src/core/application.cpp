@@ -3653,17 +3653,27 @@ void Application::connectClickToMoveHooks() {
         cc->setClickToMoveCancel([this]() {
             if (gameHandler) gameHandler->stopClickToMove();
         });
+        // 0x007272c0(.., 1) -> 0x0071aee0, whoever ends it.
+        if (gameHandler) {
+            gameHandler->setClickToMoveStopMover([this]() {
+                if (renderer && renderer->getCameraController()) renderer->getCameraController()->stopClickToMoveMover();
+            });
+        }
     }
     if (gameHandler) {
         // The surface at a place, for an enemy's place walked to (0x0072ee20
-        // -> 0x00783a40): a yard either side of it, straight down.
+        // -> 0x00783a40): the facets of the ground, the buildings and the
+        // doodads (flags 0x100111) a box of no size at the place reaches -
+        // those not wholly beyond one side of it - and the first one's plane
+        // read at the place's x and y.
         gameHandler->setGroundHeightQuery([this](const glm::vec3& canonical) -> std::optional<float> {
             if (!renderer) return std::nullopt;
-            const glm::vec3 from = core::coords::canonicalToRender(canonical + glm::vec3(0.0f, 0.0f, 1.0f));
-            const glm::vec3 down = core::coords::canonicalToRender(canonical - glm::vec3(0.0f, 0.0f, 1.0f)) - from;
-            const auto hit = renderer->pickGround(from, down, glm::length(down));
-            if (!hit) return std::nullopt;
-            return core::coords::renderToCanonical(*hit).z;
+            const glm::vec3 at = core::coords::canonicalToRender(canonical);
+            std::vector<rendering::collision::Facet> facets;
+            if (auto* terrain = renderer->getTerrainManager()) terrain->gatherCollisionFacets(at, at, facets);
+            if (auto* wmo = renderer->getWMORenderer()) wmo->gatherCollisionFacets(at, at, facets);
+            if (auto* m2 = renderer->getM2Renderer()) m2->gatherCollisionFacets(at, at, facets);
+            return rendering::collision::firstFacetHeight(facets, at.x, at.y);
         });
     }
 }
@@ -3745,11 +3755,6 @@ void Application::connectWorldHooks() {
         // owns the one callback slot for it. A second registration here
         // replaced or was replaced by that one depending on which was
         // built last, which is how the seated flag stopped arriving.
-        cc->setAutoFollowCancelCallback([this]() {
-            if (gameHandler) {
-                gameHandler->cancelFollow();
-            }
-        });
         cc->setUseWoWSpeed(true);
     }
     connectClickToMoveHooks();
@@ -4123,15 +4128,6 @@ void Application::connectWorldHooks() {
         gameHandler->setPlayerSoundCallback([this](uint32_t soundId) {
             auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
             if (svs) svs->playOwnSoundAt(soundId, renderer->getCharacterPosition());
-        });
-        gameHandler->setAutoFollowCallback([this](const glm::vec3* renderPos) {
-            if (renderer && renderer->getCameraController()) {
-                if (renderPos) {
-                    renderer->getCameraController()->setAutoFollow(renderPos);
-                } else {
-                    renderer->getCameraController()->cancelAutoFollow();
-                }
-            }
         });
         // Barber shop and other live appearance changes rebuild the model.
         gameHandler->setPlayerModelRebuildCallback([this]() {

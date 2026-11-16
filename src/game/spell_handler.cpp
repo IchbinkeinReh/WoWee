@@ -2187,9 +2187,14 @@ void SpellHandler::sendPlayerCast(uint32_t spellId, uint64_t target, uint64_t it
         : CastSpellPacket::build(spellId, target, ++castCount_);
     LOG_DEBUG("CMSG_CAST_SPELL: spellId=", spellId, " target=0x", std::hex, target, std::dec,
               " castCount=", static_cast<int>(castCount_), " packetSize=", packet.getSize());
+    // 0x0080ac90 -> 0x00805330: with no cast of the player's going (+0xa60)
+    // and the cast not aimed (+0x139), 0x007fa2e0 as the cast is made.
+    const bool castGoing = casting_;
     owner_.getSocket()->send(packet);
     LOG_INFO("Casting spell: ", spellId, " on 0x", std::hex, item != 0 ? item : target, std::dec);
     castSent(spellId, owner_.getPlayerGuid());
+    if (!castGoing && how != TrajectoryCast::Built && item == 0 && target != 0)
+        owner_.clickToMoveCastSent(spellId, target);
 
     // The cast routine (0x0080ac90) ends a cast with UNIT_SPELLCAST_SENT (323),
     // and its shape is four strings: the literal "player", the spell's name, its
@@ -6366,6 +6371,7 @@ void SpellHandler::loadSpellNameCache() const {
     // Only the WotLK layout names Speed: it is what gates spell missiles.
     const uint32_t speedField = spellL ? spellL->tryField("Speed") : 0xFFFFFFFF;
     const uint32_t spellMissileField = spellL ? spellL->tryField("SpellMissileID") : 0xFFFFFFFF;
+    const uint32_t facingCasterField = spellL ? spellL->tryField("FacingCasterFlags") : 0xFFFFFFFF;
     const uint32_t powerDisplayField = spellL ? spellL->tryField("PowerDisplayId") : 0xFFFFFFFF;
     const uint32_t multipleValueField = columnOr("EffectMultipleValue0", amplitude0Field, 3);
     const uint32_t chainTargetField = columnOr("EffectChainTarget0", amplitude0Field, 6);
@@ -6523,6 +6529,8 @@ void SpellHandler::loadSpellNameCache() const {
                 entry.missileSpeed = dbc->getFloat(i, speedField);
             if (spellMissileField != 0xFFFFFFFF && spellMissileField < fieldCount)
                 entry.spellMissileId = dbc->getUInt32(i, spellMissileField);
+            if (facingCasterField != 0xFFFFFFFF && facingCasterField < fieldCount)
+                entry.facingCasterFlags = dbc->getUInt32(i, facingCasterField);
             if (powerDisplayField != 0xFFFFFFFF && powerDisplayField < fieldCount)
                 entry.powerDisplayId = dbc->getUInt32(i, powerDisplayField);
             if (recoveryField != 0xFFFFFFFF && recoveryField < fieldCount)

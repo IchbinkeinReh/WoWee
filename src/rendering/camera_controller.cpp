@@ -2139,51 +2139,14 @@ void CameraController::update(float deltaTime) {
         autoRunning = !autoRunning;
     }
     tildeWasDown = tildeDown;
-    // Helper: cancel auto-follow and notify game handler
-    auto doCancelAutoFollow = [&]() {
-        if (autoFollowTarget_) {
-            autoFollowTarget_ = nullptr;
-            if (autoFollowCancelCallback_) autoFollowCancelCallback_();
-        }
-    };
 
     if (keyW || keyS) {
         autoRunning = false;
-        doCancelAutoFollow();
     }
 
     bool mouseAutorun = !uiWantsKeyboard && !sitting && leftMouseDown && rightMouseDown;
     if (mouseAutorun) {
         autoRunning = false;
-        doCancelAutoFollow();
-    }
-
-    // Auto-follow: face target and run toward them when within range
-    bool autoFollowMove = false;
-    if (autoFollowTarget_ && followTarget && !movementRooted_) {
-        glm::vec3 myPos = *followTarget;
-        glm::vec3 tgtPos = *autoFollowTarget_;
-        float dx = tgtPos.x - myPos.x;
-        float dy = tgtPos.y - myPos.y;
-        float distSq2D = dx * dx + dy * dy;
-
-        if (distSq2D > FOLLOW_MAX_DIST * FOLLOW_MAX_DIST) {
-            doCancelAutoFollow();
-        } else if (distSq2D > FOLLOW_STOP_DIST * FOLLOW_STOP_DIST) {
-            // Face target (render-space yaw: atan2(-dx, -dy) -> degrees)
-            float targetYawRad = std::atan2(-dx, -dy);
-            float targetYawDeg = targetYawRad * 180.0f / core::coords::PI;
-            facingYaw = targetYawDeg;
-            yaw = targetYawDeg;
-            autoFollowMove = true;
-        }
-        // else: within stop distance, stay put
-
-        // Cancel on strafe/turn keys
-        if (keyA || keyD || keyQ || keyE) {
-            doCancelAutoFollow();
-            autoFollowMove = false;
-        }
     }
 
     // Click-to-move. A key that starts a move of its own ends it first
@@ -2198,8 +2161,13 @@ void CameraController::update(float deltaTime) {
         clickToMoveKeysHeld_ = keysHeld;
         if (keysStart && clickToMoveActive_) {
             clickToMoveActive_ = false;
+            // The stop lets autorun go (stopClickToMoveMover); the autorun
+            // key that is the start sets it again after.
+            const bool autorunStart = autorunPressed && autoRunning;
+            const bool ctmForward = clickToMoveForward_;
             if (clickToMoveCancel_) clickToMoveCancel_();
-            if (clickToMoveForward_ && wasMovingForward && movementCallback) {
+            if (autorunStart) autoRunning = true;
+            if (ctmForward && wasMovingForward && movementCallback) {
                 movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_STOP));
                 wasMovingForward = false;
             }
@@ -2253,8 +2221,6 @@ void CameraController::update(float deltaTime) {
     if (moverHeld_) autoRunning = false;
     // When the server has rooted the player, suppress all horizontal movement input.
     const bool movBlocked = movementRooted_ || moverHeld_;
-    // Auto-follow uses run speed (same as auto-run), not walk speed
-    if (autoFollowMove) autoRunning = true;
     // A mover stopped by a cast (0x0071ae10) stays stopped while its keys
     // are held as they were (0x005fae70), counted as it counts them.
     const bool forwardKeys = keyW || mouseAutorun || autoRunning || clickToMoveForward_;

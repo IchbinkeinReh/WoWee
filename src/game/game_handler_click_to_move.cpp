@@ -72,10 +72,8 @@ std::optional<glm::vec3> GameHandler::clickToMoveSubject(uint64_t guid) const {
 
 bool GameHandler::startClickToMove(ctm::Kind kind, uint64_t guid, const glm::vec3& canonicalAt, float facing,
                                    std::optional<float> spellRange) {
-    // 0x00727400. Whatever the mover was doing ends first, a follow with
-    // AUTOFOLLOW_END (0x0081b530(0x166)) - here WoWee's own follow, which is
-    // the client's kind 3.
-    if (followTargetGuid_ != 0) cancelFollow();
+    // 0x00727400. Whatever the mover was doing ends first, a follow (kind 3)
+    // with AUTOFOLLOW_END (0x0081b530(0x166)).
     if (isClickToMoving() && ctm_.kind == ctm::Kind::Follow) fireAddonEvent("AUTOFOLLOW_END", {});
     if (ctm_.kind != ctm::Kind::None) ctm_ = ctm::State{};
     if (!movementHandler_) return false;
@@ -106,10 +104,17 @@ bool GameHandler::startClickToMove(ctm::Kind kind, uint64_t guid, const glm::vec
 }
 
 void GameHandler::stopClickToMove(bool faceSubject, bool stopMoving) {
-    // 0x007272c0. Only the camera can turn the mover and stop it, so the
-    // two halves are left for the next steer to carry out.
-    (void)stopMoving;  // the steer stops whatever click-to-move started
+    // 0x007272c0. Only the camera can turn the mover and stop it: the turn
+    // is left for its next steer, the stop (0x0071aee0) handed to it now.
     if (!isClickToMoving()) return;
+    // 0x0071aee0 for a kind that goes anywhere (+0 of its row), unless the
+    // player's UNIT_FIELD_FLAGS_2 has 0x40.
+    bool stopMover = stopMoving && ctm::row(ctm_.kind).used;
+    if (stopMover) {
+        auto me = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(playerGuid));
+        const uint16_t flags2 = fieldIndex(UF::UNIT_FIELD_FLAGS_2);
+        if (me && flags2 != 0xFFFF && (me->getField(flags2) & 0x40u) != 0) stopMover = false;
+    }
     if (ctm_.kind == ctm::Kind::Follow) fireAddonEvent("AUTOFOLLOW_END", {});
     if (faceSubject) {
         if (const auto at = clickToMoveSubject(ctm_.guid)) {
@@ -118,6 +123,7 @@ void GameHandler::stopClickToMove(bool faceSubject, bool stopMoving) {
         }
     }
     ctm_ = ctm::State{};
+    if (stopMover && ctmStopMover_) ctmStopMover_();
 }
 
 void GameHandler::stopClickToMoveFollow() {
@@ -267,8 +273,21 @@ uint32_t GameHandler::skinSpellFor(uint64_t guid) const {
 void GameHandler::clickDeadUnit(uint64_t guid, bool clickToMove) {
     auto unit = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(guid));
     if (!unit) return;
-    // 0x00717b60: dead and lootable (UNIT_DYNFLAG_LOOTABLE) - looted.
-    if ((unit->getDynamicFlags() & UNIT_DYNFLAG_LOOTABLE) != 0) {
+    // 0x00731260 -> 0x00717b60: dead, its loot not held back (+0xac0, which
+    // the client only ever sets to the time it saw the unit die) and
+    // lootable - looted. A seated player stands first where autoStand lets
+    // it (0x0071b090), else is told it must stand (ERR_LOOT_NOTSTANDING,
+    // 0x8e) and nothing more is done.
+    if (ctm::lootableNow(static_cast<int32_t>(unit->getHealth()), 0, 0, unit->getDynamicFlags())) {
+        if (getStandState() != 0) {
+            if (addons::storedCVarValue("autoStand", "1") == "0") {
+                playGameErrorSound("ERR_LOOT_NOTSTANDING");
+                raiseUiError(interfaceString("ERR_LOOT_NOTSTANDING",
+                                             "You need to be standing up to loot something!"));
+                return;
+            }
+            setStandState(0);  // 0x006dcb40(0)
+        }
         lootCorpse(guid, clickToMove);
         return;
     }
@@ -458,6 +477,26 @@ void GameHandler::clickToMoveCastStarted(uint32_t spellId, std::optional<uint32_
     const bool unitNamed = targetFlags ? (*targetFlags & 0x2u) != 0 : true;
     const uint64_t at = unitNamed && targetGuid != 0 ? targetGuid : getTargetGuid();
     if (at != 0) clickToMoveApproach(at, ctm::Kind::Kind0);
+}
+
+void GameHandler::clickToMoveCastSent(uint32_t spellId, uint64_t targetGuid) {
+    // 0x007fa2e0, the caster the active player (0x004cee50): a spell with
+    // Attributes 0x400000 at a unit (target flag 0x2, a guid) faces it
+    // through 0x0072b4a0 kind 0 - for FacingCasterFlags 0x1, only where the
+    // unit is before the player already (0x0071bce0 -> 0x0071bc50).
+    // The rest - the player as the mover, alive - is 0x0072b4a0's to ask.
+    if (targetGuid == 0) return;
+    loadSpellNameCache();
+    const auto it = spellNameCache_.find(spellId);
+    if (it == spellNameCache_.end() || (it->second.attr & 0x400000u) == 0) return;
+    if ((it->second.facingCasterFlags & 0x1u) != 0) {
+        auto target = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(targetGuid));
+        if (!target) return;
+        const glm::vec3 me = toServer(glm::vec3(movementInfo.x, movementInfo.y, movementInfo.z));
+        const glm::vec3 at = toServer(glm::vec3(target->getX(), target->getY(), target->getZ()));
+        if (!ctm::inFrontHalf(me, core::coords::canonicalToServerYaw(movementInfo.orientation), at)) return;
+    }
+    clickToMoveApproach(targetGuid, ctm::Kind::Kind0);
 }
 
 void GameHandler::castVisualEnded(uint64_t caster, uint8_t castCount, uint32_t spellId) {

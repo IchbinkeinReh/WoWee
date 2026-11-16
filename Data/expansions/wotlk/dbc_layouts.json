@@ -419,6 +419,7 @@
     "ExcludeTargetAuraSpell": 27,
     "Totem": 50,
     "TotemCategory": 222,
+    "FacingCasterFlags": 19,
     "RequiresSpellFocus": 18,
     "InterruptFlags": 31,
     "AuraInterruptFlags": 32,

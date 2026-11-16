@@ -53,14 +53,6 @@ public:
     // there is no "make it the target first" step to borrow.
     void followGuid(uint64_t guid);
     void cancelFollow();
-    // Per-frame movement toward the followed target's live position, called
-    // from GameHandler::update() alongside the existing followRenderPos_
-    // refresh. A no-op when no follow target is set. Recomputes the target
-    // position fresh every call (from the live entity, not a stored point),
-    // so it doesn't need the long-distance Z-interpolation guard the
-    // headless client's single-shot /movement/goto needs - there's never a
-    // large stale remaining distance to interpolate across.
-    void updateFollowMovement(float deltaTime);
 
     // Area trigger detection
     void loadAreaTriggerDbc();
@@ -540,7 +532,6 @@ private:
     // BFS predecessor per node from buildTaxiCostMap; getTaxiRouteTo walks it.
     std::unordered_map<uint32_t, uint32_t> taxiPrevMap_;
 
-    bool followMoveMoving_ = false;  // whether MSG_MOVE_START_FORWARD has been sent for the current follow
 
     // --- The active mover ---
     std::optional<uint64_t> activeMover_;  ///< DAT_00ca1238; none set: the player

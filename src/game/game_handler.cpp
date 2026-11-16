@@ -906,17 +906,6 @@ void GameHandler::update(float deltaTime) {
     // 0x0073a520).
     clickToMoveWatchChannel();
 
-    // Update auto-follow: refresh render position or cancel if entity disappeared
-    if (followTargetGuid_ != 0) {
-        auto followEnt = entityController_->getEntityManager().getEntity(followTargetGuid_);
-        if (followEnt) {
-            followRenderPos_ = core::coords::canonicalToRender(
-                glm::vec3(followEnt->getX(), followEnt->getY(), followEnt->getZ()));
-            if (movementHandler_) movementHandler_->updateFollowMovement(deltaTime);
-        } else {
-            cancelFollow();
-        }
-    }
 
     // Entering and leaving combat is fired from the update block that carries
     // UNIT_FLAG_IN_COMBAT, in EntityController - not from here.
