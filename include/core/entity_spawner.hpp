@@ -412,6 +412,10 @@ public:
     /// The player's body half-width for the collision port (0x006e9570),
     /// read with the height; a third of a yard where there is none.
     [[nodiscard]] float playerCollisionHalfWidth() const { return collisionHalfWidth_; }
+    /// Whether the player unit `guid`, whose OBJECT_FIELD_SCALE_X has just
+    /// changed from `oldScale`, no longer fits where it stands, so that
+    /// CMSG_CANCEL_GROWTH_AURA is due (0x0072a560, collision_fit.hpp).
+    bool growthNoLongerFits(uint64_t guid, float oldScale);
     /// A unit's object scale and collision height, for its ripples.
     std::pair<float, float> unitRippleSize(const game::Unit& unit);
     /// A unit's jump's own sound, asked of it outright as its movement

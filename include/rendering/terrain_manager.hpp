@@ -362,6 +362,8 @@ public:
     /// was never asked for. What a same-map teleport waits for behind its
     /// loading screen (WorldLoader::relocateOnLoadedMap).
     [[nodiscard]] bool isTileSettled(int x, int y);
+    /// isTileSettled for the tile covering a world position.
+    [[nodiscard]] bool isTileSettledAt(float glX, float glY);
 
     /**
      * The render-space (minX, minY, maxX, maxY) of each tile that came or went

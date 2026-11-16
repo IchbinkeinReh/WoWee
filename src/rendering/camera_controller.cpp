@@ -23,6 +23,7 @@
 #include "rendering/collision_geometry.hpp"
 #include "rendering/collision_facets.hpp"
 #include "rendering/collision_sweep.hpp"
+#include "rendering/collision_fit.hpp"
 #include "rendering/collision_fall.hpp"
 #include "rendering/collision_swim.hpp"
 #include "rendering/collision_hover.hpp"
@@ -45,6 +46,24 @@ void CameraController::gatherPortFacets(const glm::vec3& lo, const glm::vec3& hi
     if (terrainManager) terrainManager->gatherCollisionFacets(lo, hi, out);
     if (wmoRenderer) wmoRenderer->gatherCollisionFacets(lo, hi, out);
     if (m2Renderer) m2Renderer->gatherCollisionFacets(lo, hi, out);
+}
+
+std::optional<std::vector<collision::Facet>> CameraController::gatherWorldFacets(const glm::vec3& lo,
+                                                                                const glm::vec3& hi) {
+    // 0x007a5f20: nothing for a box not wholly inside the map.
+    if (!collision::boxInsideMap(lo, hi)) return std::nullopt;
+    // 0x007a5a60: an area whose ADT exists but is not loaded fails the
+    // gather; one with no ADT at all is simply empty. The box is a few
+    // yards at most, so its corners name every tile it reaches.
+    if (terrainManager) {
+        const glm::vec2 corners[4] = {{lo.x, lo.y}, {lo.x, hi.y}, {hi.x, lo.y}, {hi.x, hi.y}};
+        for (const auto& c : corners) {
+            if (!terrainManager->isTileSettledAt(c.x, c.y)) return std::nullopt;
+        }
+    }
+    std::vector<collision::Facet> out;
+    gatherPortFacets(lo, hi, out);
+    return out;
 }
 
 bool CameraController::fallOverUnloadedWorld(const glm::vec3& at) const {

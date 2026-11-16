@@ -4478,6 +4478,12 @@ public:
     using OtherPlayerMountCallback = std::function<void(uint64_t guid, uint32_t mountDisplayId)>;
     void setOtherPlayerMountCallback(OtherPlayerMountCallback cb) { otherPlayerMountCallback_ = std::move(cb); }
 
+    // A player unit's OBJECT_FIELD_SCALE_X changed (0x0072d070, with the
+    // old value): answers whether it no longer fits where it stands, so
+    // CMSG_CANCEL_GROWTH_AURA is due (0x0072a560). See collision_fit.hpp.
+    using GrowthFitCallback = std::function<bool(uint64_t guid, float oldScale)>;
+    void setGrowthFitCallback(GrowthFitCallback cb) { growthFitCallback_ = std::move(cb); }
+
     // Taxi terrain precaching callback
     using TaxiPrecacheCallback = std::function<void(const std::vector<glm::vec3>&)>;
     void setTaxiPrecacheCallback(TaxiPrecacheCallback cb) { taxiPrecacheCallback_ = std::move(cb); }
@@ -5812,6 +5818,7 @@ public:
     auto& openLfgCallbackRef() { return openLfgCallback_; }
     auto& otherPlayerLevelUpCallbackRef() { return otherPlayerLevelUpCallback_; }
     auto& otherPlayerMountCallbackRef() { return otherPlayerMountCallback_; }
+    auto& growthFitCallbackRef() { return growthFitCallback_; }
     auto& playerDespawnCallbackRef() { return playerDespawnCallback_; }
     auto& playerEquipmentCallbackRef() { return playerEquipmentCallback_; }
     auto& playerSpawnCallbackRef() { return playerSpawnCallback_; }
@@ -7541,6 +7548,7 @@ private:
     mutable bool languageNamesLoaded_ = false;
     OtherPlayerLevelUpCallback otherPlayerLevelUpCallback_;
     OtherPlayerMountCallback otherPlayerMountCallback_;
+    GrowthFitCallback growthFitCallback_;
     AchievementEarnedCallback achievementEarnedCallback_;
     AreaDiscoveryCallback areaDiscoveryCallback_;
     QuestProgressCallback questProgressCallback_;
