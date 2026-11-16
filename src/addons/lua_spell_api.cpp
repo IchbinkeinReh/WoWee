@@ -350,8 +350,12 @@ static int lua_UnitAura(lua_State* L, int forced) {
                                 ", caster 0x", std::hex, aura.casterGuid, std::dec, ")");
                 }
             }
+            // 0x006147c0: name, rank, icon, count, debuffType, duration,
+            // expirationTime, caster unit (0x0060b420, nil when the caster
+            // has no unit token), isStealable and shouldConsolidate (1 or
+            // nil), spellId.
             lua_pushstring(L, name.empty() ? "Unknown" : name.c_str()); // name
-            lua_pushstring(L, "");           // rank
+            lua_pushstring(L, gh->getSpellRank(aura.spellId).c_str()); // rank
             std::string iconPath = gh->getSpellIconPath(aura.spellId);
             if (!iconPath.empty()) lua_pushstring(L, iconPath.c_str());
             else lua_pushnil(L);             // icon texture path
@@ -388,16 +392,13 @@ static int lua_UnitAura(lua_State* L, int forced) {
                     lua_pushstring(L, "focus");
                 else if (aura.casterGuid == gh->getPetGuid())
                     lua_pushstring(L, "pet");
-                else {
-                    char cBuf[32];
-                    snprintf(cBuf, sizeof(cBuf), "0x%016llX", (unsigned long long)aura.casterGuid);
-                    lua_pushstring(L, cBuf);
-                }
+                else
+                    lua_pushnil(L);
             } else {
                 lua_pushnil(L);
             }
-            lua_pushboolean(L, 0);           // isStealable
-            lua_pushboolean(L, 0);           // shouldConsolidate
+            lua_pushnil(L);                  // isStealable
+            lua_pushnil(L);                  // shouldConsolidate
             lua_pushnumber(L, aura.spellId); // spellId
             return 11;
         }
