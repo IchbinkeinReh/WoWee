@@ -1791,10 +1791,28 @@ void SocialHandler::setFriendNote(const std::string& playerName, const std::stri
     LOG_INFO("Set friend note for: ", playerName);
 }
 
+static bool sameMuteName(const std::string& a, const std::string& b);
+
+// AddIgnore (0x006b5f70): a name already on the ignore list - compared
+// case-blind against each row's name - gets ERR_IGNORE_ALREADY_S naming that
+// row (0x005216f0(0x120, record)) and nothing is sent; otherwise the name
+// goes out as CMSG_ADD_IGNORE (0x6c), silent until SMSG_FRIEND_STATUS.
 void SocialHandler::addIgnore(const std::string& playerName) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    // Silent until the server answers with SMSG_FRIEND_STATUS.
     if (playerName.empty()) return;
+    const auto already = [this](const std::string& name) {
+        gameError(owner_, ErrTo::Chat, "ERR_IGNORE_ALREADY_S", "%s is already being ignored.", {name});
+    };
+    for (const auto& c : owner_.contactsRef()) {
+        if (!c.isIgnored() || !sameMuteName(c.name, playerName)) continue;
+        already(c.name);
+        return;
+    }
+    for (const auto& [name, guid] : owner_.ignoreCacheRef()) {
+        if (!owner_.ignoreListGuidsRef().count(guid) || !sameMuteName(name, playerName)) continue;
+        already(name);
+        return;
+    }
     auto packet = AddIgnorePacket::build(playerName);
     owner_.getSocket()->send(packet);
     LOG_INFO("Sent ignore request for: ", playerName);
