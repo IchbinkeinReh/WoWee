@@ -161,9 +161,13 @@ public:
                             const MissileTrajectory* trajectory = nullptr, uint32_t spellId = 0,
                             uint64_t casterGuid = 0, uint8_t castCount = 0);
 
-    /// One target of a bouncing missile: where it goes and whether the cast
-    /// hit it there (its miss reason 0, 0x006fefb0).
+    /// One target of a bouncing missile: its unit, where it was last known
+    /// to be and whether the cast hit it there (its miss reason 0,
+    /// 0x006fefb0). The list holds guids (+0xa8); where each unit is, and
+    /// whether it is there at all, is looked up as the missile turns to it
+    /// (0x007022d0).
     struct BounceHop {
+        uint64_t guid = 0;
         MissileEnd end;
         bool hit = false;
     };
@@ -399,6 +403,11 @@ public:
     /// descriptors): a missile reaching it plays no wound (0x00702db0).
     using UnitDeadQuery = std::function<bool(uint64_t unitGuid)>;
     void setUnitDeadQuery(UnitDeadQuery query) { unitDeadQuery_ = std::move(query); }
+    /// A unit the client knows (0x004d4db0, type mask 8): where it stands
+    /// and the instance drawing it. False when it is not there, which a
+    /// bouncing missile turning to it passes over (0x007022d0).
+    using UnitEndResolver = std::function<bool(uint64_t unitGuid, MissileEnd& end)>;
+    void setUnitEndResolver(UnitEndResolver resolver) { unitEndResolver_ = std::move(resolver); }
     /// A unit's CreatureModelData AttachedEffectScale (+0x60), which sizes
     /// every kit model on it (0x006f8c50).
     using AttachedEffectScale = std::function<float(uint32_t renderInstanceId)>;
@@ -939,6 +948,10 @@ private:
     TransportFrameQuery transportFrameQuery_;
     UnarmedKitsQuery unarmedKitsQuery_;
     UnitDeadQuery unitDeadQuery_;
+    UnitEndResolver unitEndResolver_;
+    /// Bring a bouncing missile's target up to where its unit is now: false
+    /// when the unit has gone (0x007022d0 finding none).
+    bool resolveBounceHop(BounceHop& hop);
     AttachedEffectScale attachedEffectScale_;
     /// 0x00720400 for a unit: hide or show its Flags 8 kits as asked.
     void stepUnarmedKits(uint64_t unitGuid, UnitAuraKits& unit, bool force);
@@ -1044,14 +1057,16 @@ private:
         bool hasDrawnDelta = false;
         glm::vec3 drawnDelta{0.0f};
         // A bouncing missile's targets with whether each was hit (flag 0x200;
-        // +0xa4/+0xa8 and the miss reasons +0xc4/+0xc8), which it flies to
-        // (+0xf0), and the speed and ADJUST_MISSILE flight it is relaunched
-        // with.
+        // +0xa4/+0xa8 and the miss reasons +0xc4/+0xc8) and which it flies to
+        // (+0xf0). Its speed at launch, and the ADJUST_MISSILE flight (flag
+        // 0x10000, dropped once a plan finds no arc) with the time flown
+        // before this hop - the hit time (+0x134) runs from the cast.
         std::vector<BounceHop> hops;
         size_t hopIndex = 0;
         float launchSpeed = 0.0f;
         bool hasTrajectory = false;
         MissileTrajectory trajectory;
+        float flownBeforeHop = 0.0f;
         // Where its model was last placed: the world matrix a landing
         // missile is kept at (0x00700700).
         glm::mat4 lastTransform{1.0f};
@@ -1074,13 +1089,16 @@ private:
     bool keepLandedMissile(const ActiveMissile& missile);
     void updateLandedMissiles(float deltaTime);
     /// Point a missile at `to` from where it is and plan its flight, as
-    /// 0x007022d0 does at a launch and at each relaunch.
-    void aimMissile(ActiveMissile& missile, const MissileVisual& visual, const MissileEnd& to);
+    /// 0x007022d0 does at a launch and at each relaunch (`relaunch`), which
+    /// keeps the speed it flies at.
+    void aimMissile(ActiveMissile& missile, const MissileVisual& visual, const MissileEnd& to,
+                    bool relaunch = false);
     /// Launch the visual's missile (launchSpellMissile's body) with `hops`
-    /// for it to bounce along after `to`.
+    /// for it to bounce along after `to`, which is hop `firstHop`.
     bool launchMissile(uint32_t visualId, float speed, const MissileEnd& from, const MissileEnd& to,
                        std::vector<MissileEnd> impacts, const MissileTrajectory* trajectory, uint32_t spellId,
-                       uint64_t casterGuid, uint8_t castCount, std::vector<BounceHop> hops);
+                       uint64_t casterGuid, uint8_t castCount, std::vector<BounceHop> hops,
+                       size_t firstHop = 0);
     /// One frame of a missile's motion script (0x00700350, 0x00700550,
     /// 0x006feb20): where it is drawn and how its model is turned, its speed
     /// changed; the drawn place is its own where it has no script.

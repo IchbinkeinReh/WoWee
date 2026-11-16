@@ -554,23 +554,26 @@ std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data,
     // relaunched on each arrival to the next (0x00702a60). The list is the
     // hit targets then the missed ones, or the missed first with cast flag
     // 0x400; a missed one is flown to but takes no impact (0x006fefb0).
+    // The list is of guids: a target the client cannot place now stays on
+    // it and is looked for when the missile turns to it, passed over then
+    // if it is still not there (0x007022d0 -> 0x00702a60). Every hit is the
+    // missile's to play, landed on or passed over.
     const bool bouncy = (spellIt->second.attrEx4 & 0x40000u) != 0;
     if (bouncy && !hasLocation) {
         std::vector<rendering::SpellVisualSystem::BounceHop> hops;
         std::vector<uint64_t> hitsFlownTo;
+        const auto addHop = [&](uint64_t guid, bool hit) {
+            if (guid == 0) return;
+            MissileEnd end;
+            unitEnd(guid, end);
+            hops.push_back({guid, end, hit});
+            if (hit) hitsFlownTo.push_back(guid);
+        };
         const auto addHits = [&] {
-            for (uint64_t guid : data.hitTargets) {
-                MissileEnd end;
-                if (!unitEnd(guid, end)) continue;
-                hops.push_back({end, true});
-                hitsFlownTo.push_back(guid);
-            }
+            for (uint64_t guid : data.hitTargets) addHop(guid, true);
         };
         const auto addMisses = [&] {
-            for (const auto& miss : data.missTargets) {
-                MissileEnd end;
-                if (unitEnd(miss.targetGuid, end)) hops.push_back({end, false});
-            }
+            for (const auto& miss : data.missTargets) addHop(miss.targetGuid, false);
         };
         if (data.castFlags & 0x400u) {
             addMisses();

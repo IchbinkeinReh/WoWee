@@ -278,6 +278,25 @@ inline MissileArc planMissileArc(float elevation, float castSpeed, const glm::ve
     return arc;
 }
 
+/// The time an ADJUST_MISSILE relaunch is planned to land in (0x00700880):
+/// the hit time (+0x134) is fixed once, at the cast, so a bouncing missile's
+/// later hops get what is left of it after the hops already flown - nothing,
+/// once it has run out, which planMissileArc takes as landing at once.
+inline float relaunchFlightSeconds(float flightSeconds, float flownSeconds) {
+    return flightSeconds - flownSeconds;
+}
+
+/// The bouncing missile's next target (0x00702a60 -> 0x007022d0): the first
+/// from `from` on whose unit is still there; a target that is not is passed
+/// over when the missile reaches it, not when it was cast. `count` when none
+/// is left.
+template <class Present>
+inline size_t nextPresentHop(size_t from, size_t count, Present present) {
+    for (size_t i = from; i < count; ++i)
+        if (present(i)) return i;
+    return count;
+}
+
 /// Where a missile on its arc is `elapsed` seconds after leaving `start`
 /// (0x007015d0): along the launch velocity, fallen under gravity, both in the
 /// arc's own time.
