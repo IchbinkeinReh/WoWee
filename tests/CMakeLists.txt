@@ -2511,6 +2511,11 @@ target_link_libraries(test_cast_checks PRIVATE catch2_main)
 add_test(NAME cast_checks COMMAND test_cast_checks)
 register_test_target(test_cast_checks)
 
+# ── test_dispel_check ───────────────────────────────────────
+# 0x00803500 / 0x00728500: dispels and spellsteals with nothing to remove.
+wowee_add_test(test_dispel_check
+    SOURCES test_dispel_check.cpp)
+
 # ── test_chat_profanity ─────────────────────────────────────
 add_executable(test_chat_profanity
     test_chat_profanity.cpp

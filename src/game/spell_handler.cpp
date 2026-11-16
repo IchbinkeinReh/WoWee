@@ -2146,8 +2146,81 @@ uint64_t SpellHandler::enchantWeapon(uint32_t spellId) const {
     return 0;
 }
 
+uint8_t SpellHandler::removalRefusal(uint32_t spellId, uint64_t target) const {
+    // 0x0080ac90 -> 0x00803500: a dispel, mechanic dispel or spellsteal
+    // whose units hold nothing it could take is refused before it is sent.
+    const auto& cache = owner_.spellNameCacheRef();
+    const auto it = cache.find(spellId);
+    if (it == cache.end()) return 0;
+    const auto& e = it->second;
+    const std::array<uint32_t, 3> effects{e.effectIds[0], e.effectIds[1], e.effectIds[2]};
+    // The units: the caster where an effect targets it (TARGET_UNIT_CASTER
+    // as A or B), then the unit aimed at.
+    std::vector<uint64_t> units;
+    for (int i = 0; i < 3; ++i) {
+        if (e.implicitTargetsA[i] == 1 || e.implicitTargetsB[i] == 1) {
+            units.push_back(owner_.getPlayerGuid());
+            break;
+        }
+    }
+    if (target != 0) units.push_back(target);
+    auto& em = owner_.getEntityManager();
+    const auto auraSpellOf = [&](uint32_t id) -> std::optional<dispel_check::AuraSpell> {
+        const auto a = cache.find(id);
+        if (id == 0 || a == cache.end()) return std::nullopt;
+        dispel_check::AuraSpell s;
+        s.attributes = a->second.attr;
+        s.attributesEx = a->second.attrEx;
+        s.attributesEx4 = a->second.attrEx4;
+        s.dispel = a->second.dispelType;
+        s.mechanic = a->second.mechanic;
+        for (size_t k = 0; k < 3; ++k) {
+            s.effect[k] = a->second.effectIds[k];
+            s.effectMechanic[k] = a->second.effectMechanic[k];
+        }
+        return s;
+    };
+    return dispel_check::refusal(effects, e.attrEx4, units.size(), [&](size_t u, size_t i) -> std::optional<bool> {
+        const uint64_t guid = units[u];
+        const auto unit = em.getEntity(guid);
+        if (!unit || !unit->isUnit()) return std::nullopt;
+        dispel_check::Side side = dispel_check::Side::Any;
+        if ((e.attrEx & 0x10000u) == 0) {
+            if (unitMayAttack(owner_.getPlayerGuid(), guid)) side = dispel_check::Side::Hostile;
+            else if (unitMayAssist(owner_.getPlayerGuid(), guid)) side = dispel_check::Side::Friendly;
+            else return std::nullopt;
+        }
+        // A charmed unit (descriptor +0x18, UNIT_FIELD_CHARMEDBY) that is not
+        // a vehicle (guid high 0xF150).
+        const bool charmed = entityGuidField(*unit, UF::UNIT_FIELD_CHARMEDBY) != 0 &&
+                                 ((guid >> 32) & 0xF0F00000u) != 0xF0500000u;
+        const std::vector<AuraSlot>* slots = guid == owner_.getPlayerGuid()   ? &playerAuras_
+                                             : guid == owner_.getTargetGuid() ? &targetAuras_
+                                                                              : getUnitAuras(guid);
+        std::vector<dispel_check::Aura> auras;
+        if (slots) {
+            auras.reserve(slots->size());
+            for (const auto& a : *slots) auras.push_back({a.flags, auraSpellOf(a.spellId)});
+        }
+        const uint32_t misc = e.effectMiscValues[i];
+        // SpellDispelType.dbc gives a Mask only to type 7 (all: magic, curse,
+        // disease and poison, 30); every other type is its own bit.
+        const uint32_t dbcMask = misc == 7 ? 30u : 0u;
+        return dispel_check::unitHasRemovable(auras, misc, side, effects[i] == dispel_check::kEffectDispelMechanic,
+                                              effects[i] == dispel_check::kEffectStealBuff, charmed, dbcMask);
+    });
+}
+
 void SpellHandler::sendPlayerCast(uint32_t spellId, uint64_t target, uint64_t item) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    // 0x0080ac90 -> 0x00803500: nothing to dispel or steal, said through
+    // 0x00808200 and not sent.
+    if (item == 0) {
+        if (const uint8_t refused = removalRefusal(spellId, target); refused != 0) {
+            reportLocalCastFailure(spellId, refused);
+            return;
+        }
+    }
     // 0x0080ac90 before it sends: the player stands (0x0071a360) unless
     // Attributes 0x8000000, gets down (0x007412e0) unless Attributes
     // 0x1000000, and leaves a form the spell may not be cast in

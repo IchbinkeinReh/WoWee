@@ -10,6 +10,7 @@
 #include "game/spell_history.hpp"
 #include "game/spell_missiles_in_flight.hpp"
 #include "game/cast_checks.hpp"
+#include "game/dispel_check.hpp"
 #include "game/cast_failure_error.hpp"
 #include "game/spell_unit_target.hpp"
 #include "game/handler_types.hpp"
@@ -966,6 +967,9 @@ private:
     bool armGroundTarget(uint32_t spellId, uint64_t caster);
     /// What SendCast does once the cast is out (0x0080ac90).
     void castSent(uint32_t spellId, uint64_t caster, uint64_t target = 0);
+    /// 0x00803500: SPELL_FAILED_NOTHING_TO_DISPEL / _STEAL for a removal
+    /// with nothing to remove on its units; 0 when the cast may go.
+    [[nodiscard]] uint8_t removalRefusal(uint32_t spellId, uint64_t target) const;
     bool casting_ = false;
     bool castIsChannel_ = false;
     uint32_t currentCastSpellId_ = 0;
