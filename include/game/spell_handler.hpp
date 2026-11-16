@@ -325,6 +325,12 @@ public:
     void onUnitCharmedByChanged(uint64_t unit, uint64_t oldCharmer);
     /// The unit gone: its client-triggered timers with it (0x0080dfe0).
     void removeClientTriggers(uint64_t unit) { clientTriggers_.remove(unit, 0); }
+    /// The display another unit is drawn as while the player carries an
+    /// aura 233 (CHANGE_MODEL_FOR_ALL_HUMANOIDS, +0x9d4), 0 for its own.
+    [[nodiscard]] uint32_t humanoidMorphDisplay(uint64_t unit) const {
+        const auto it = humanoidShown_.find(unit);
+        return it != humanoidShown_.end() ? it->second.display : 0u;
+    }
 
     // Known spells mutation (formerly accessed via friend)
     void addKnownSpell(uint32_t spellId) {
@@ -1025,6 +1031,19 @@ private:
     std::optional<uint8_t> auraVisionSeen_;
     /// Aura 48's timers on the units the player controls (0x0080df10).
     ClientTriggerTimers clientTriggers_;
+    /// Aura 233 on the player (0x006d73b0): the creature entry every other
+    /// humanoid is drawn as, and its flags (EffectMiscValueB; 1 for enemy
+    /// players alone).
+    uint32_t humanoidMorphEntry_ = 0;
+    uint32_t humanoidMorphFlags_ = 0;
+    /// Each unit's entry and display chosen for it (+0x9d0, +0x9d4).
+    struct HumanoidShown {
+        uint32_t entry = 0;
+        uint32_t display = 0;
+    };
+    std::unordered_map<uint64_t, HumanoidShown> humanoidShown_;
+    /// 0x0072e270 for every unit, once a frame.
+    void updateHumanoidMorphs();
     /// 0x00718b70 is the player, or the unit is the player: whose aura 48
     /// the client runs itself (0x00724820, 0x0071e930).
     bool clientTriggersRunOn(uint64_t unit) const;

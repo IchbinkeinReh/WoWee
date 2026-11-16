@@ -1145,6 +1145,14 @@ namespace {
 uint32_t dialogClockMs() { return static_cast<uint32_t>(core::appTimeSeconds() * 1000.0); }
 }  // namespace
 
+void GameHandler::rebuildUnitModel(uint64_t guid) {
+    if (entityController_) entityController_->forceDisplayUpdate(guid);
+}
+
+uint32_t GameHandler::humanoidMorphDisplay(uint64_t guid) const {
+    return spellHandler_ ? spellHandler_->humanoidMorphDisplay(guid) : 0u;
+}
+
 void GameHandler::queueDialogEmotes(uint64_t guid, const std::vector<DialogEmote>& pairs) {
     if (guid == 0) return;
     // Only one-shot rows (EmoteSpecProc 0) are queued; a row this client

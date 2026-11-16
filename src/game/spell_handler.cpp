@@ -3934,6 +3934,8 @@ void SpellHandler::syncPreWotlkTalentsFromKnownSpells() {
 void SpellHandler::updateTimers(float dt) {
     // 0x00804c10: the missiles that have arrived leave the list.
     missilesInFlight_.expire(historyNowMs());
+    // 0x00734390 -> 0x0072e270: aura 233's displays on the other humanoids.
+    if (owner_.getState() == WorldState::IN_WORLD) updateHumanoidMorphs();
     // 0x0080ddd0: each client-triggered aura's spell, cast by its unit as it
     // comes due - the player's own as the player's casts go, another unit's
     // as a pet's (0x0080cce0) - where the unit is in view.
@@ -5000,6 +5002,60 @@ void SpellHandler::startClientTriggers(uint64_t unitGuid, uint32_t spellId) {
     }
 }
 
+void SpellHandler::updateHumanoidMorphs() {
+    if (humanoidMorphEntry_ == 0 && humanoidShown_.empty()) return;
+    const uint64_t player = owner_.getPlayerGuid();
+    auto& entities = owner_.getEntityManager();
+    const auto self = entities.getEntity(player);
+    // 0x0072cc30: a humanoid (creature type 7), not the player; with flag 1
+    // only a player the player regards as hostile (0x00514080).
+    const auto qualifies = [&](const Entity& e) {
+        if (!e.isUnit() || e.getGuid() == player) return false;
+        if (creatureTypeOf(owner_, e) != 7) return false;
+        if ((humanoidMorphFlags_ & 1u) != 0) {
+            if (e.getType() != ObjectType::PLAYER) return false;
+            if (self && owner_.unitReactionsBothWays(*self, e).first >= 2) return false;
+        }
+        return true;
+    };
+    std::vector<uint64_t> rebuild;
+    for (const auto& [guid, entity] : entities.getEntities()) {
+        if (!entity || !entity->isUnit()) continue;
+        HumanoidShown& shown = humanoidShown_[guid];
+        if (!qualifies(*entity)) {
+            if (shown.display != 0) {
+                shown = {};
+                rebuild.push_back(guid);
+            }
+        } else if (humanoidMorphEntry_ == 0 || humanoidMorphEntry_ == shown.entry) {
+            if (humanoidMorphEntry_ == 0 && shown.entry != 0) {
+                shown = {};
+                rebuild.push_back(guid);
+            }
+        } else {
+            // A random one of the entry's displays (the creature query's
+            // four, 0x0067b6a0), once its answer is in.
+            const auto& cache = owner_.getCreatureInfoCache();
+            const auto it = cache.find(humanoidMorphEntry_);
+            if (it == cache.end()) {
+                owner_.queryCreatureInfo(humanoidMorphEntry_, 0);
+                continue;
+            }
+            uint32_t n = 0;
+            for (uint32_t d : it->second.displayId) n += d != 0 ? 1u : 0u;
+            if (n == 0) continue;
+            shown.entry = humanoidMorphEntry_;
+            shown.display = it->second.displayId[static_cast<uint32_t>(std::rand()) % n];
+            rebuild.push_back(guid);
+        }
+    }
+    std::erase_if(humanoidShown_, [&](const auto& kv) {
+        return kv.second.entry == 0 && kv.second.display == 0;
+    });
+    // Its model built again with the display (vtable +0x1c).
+    for (uint64_t guid : rebuild) owner_.rebuildUnitModel(guid);
+}
+
 void SpellHandler::onUnitCharmedByChanged(uint64_t unitGuid, uint64_t oldCharmer) {
     const uint64_t player = owner_.getPlayerGuid();
     if (player == 0) return;
@@ -5149,6 +5205,25 @@ void SpellHandler::handleAuraUpdate(network::Packet& packet, bool isAll) {
                     clientTriggers_.remove(data.guid, was);
                 if (is != 0 && runs && owner_.spellAppliesAura(is, kAuraPeriodicTriggerFromClient))
                     startClientTriggers(data.guid, is);
+                // Aura 233 on the player (0x00724820, 0x0071e930 ->
+                // 0x006d73b0): the entry and flags it names, none once gone.
+                if (data.guid != owner_.getPlayerGuid()) continue;
+                const auto morphOf = [&](uint32_t spell) -> const GameHandler::SpellNameEntry* {
+                    if (spell == 0 || !owner_.spellAppliesAura(spell, 233)) return nullptr;
+                    const auto f = owner_.spellNameCacheRef().find(spell);
+                    return f != owner_.spellNameCacheRef().end() ? &f->second : nullptr;
+                };
+                if (morphOf(was)) {
+                    humanoidMorphEntry_ = 0;
+                    humanoidMorphFlags_ = 0;
+                }
+                if (const auto* e = morphOf(is)) {
+                    for (int k = 0; k < 3; ++k) {
+                        if (e->effectAuraIds[k] != 233) continue;
+                        humanoidMorphEntry_ = static_cast<uint32_t>(e->effectMiscValues[k]);
+                        humanoidMorphFlags_ = static_cast<uint32_t>(e->effectMiscValuesB[k]);
+                    }
+                }
             }
         }
 

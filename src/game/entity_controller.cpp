@@ -2172,6 +2172,10 @@ void EntityController::dispatchEntitySpawn(uint64_t guid, ObjectType objectType,
     if (objectType == ObjectType::PLAYER && guid == owner_.getPlayerGuid()) {
         return;  // Skip local player - spawned separately via spawnPlayerCharacter()
     }
+    // A humanoid the player's aura 233 draws as another creature's display
+    // (0x0072e270, +0x9d4) is built as that display.
+    const uint32_t morph = owner_.humanoidMorphDisplay(guid);
+    const uint32_t shownDisplay = morph != 0 ? morph : unit->getDisplayId();
     if (objectType == ObjectType::PLAYER) {
         // Asked again whenever its display changes: a form or a morph swaps
         // the character for the display's creature and back (0x00717a20).
@@ -2179,7 +2183,7 @@ void EntityController::dispatchEntitySpawn(uint64_t guid, ObjectType objectType,
             uint8_t race = 0, gender = 0, facial = 0;
             uint32_t appearanceBytes = 0;
             if (extractPlayerAppearance(entity->getFields(), race, gender, appearanceBytes, facial)) {
-                owner_.playerSpawnCallbackRef()(guid, unit->getDisplayId(), race, gender,
+                owner_.playerSpawnCallbackRef()(guid, shownDisplay, race, gender,
                                     appearanceBytes, facial,
                                     unit->getX(), unit->getY(), unit->getZ(), unit->getOrientation());
             } else {
@@ -2202,7 +2206,7 @@ void EntityController::dispatchEntitySpawn(uint64_t guid, ObjectType objectType,
                 if (unitScale <= 0.01f || unitScale > 100.0f) unitScale = 1.0f;
             }
         }
-        owner_.creatureSpawnCallbackRef()(guid, unit->getDisplayId(),
+        owner_.creatureSpawnCallbackRef()(guid, shownDisplay,
             unit->getX(), unit->getY(), unit->getZ(), unit->getOrientation(), unitScale);
     }
     if (isDead && owner_.npcDeathCallbackRef()) {

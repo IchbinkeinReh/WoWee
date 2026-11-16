@@ -1966,6 +1966,10 @@ public:
     /// 0x0071a260: the (delay, emote) pairs an NPC's dialog carries, queued
     /// on it to play one after another (0x0073adc0, updateDialogEmotes).
     void queueDialogEmotes(uint64_t guid, const std::vector<DialogEmote>& pairs);
+    /// A unit's model built again from what it now is (vtable +0x1c).
+    void rebuildUnitModel(uint64_t guid);
+    /// The display aura 233 draws a unit as, 0 for its own (+0x9d4).
+    uint32_t humanoidMorphDisplay(uint64_t guid) const;
 
     // NPC respawn callback (health 0 → >0, resets animation to idle)
     using NpcRespawnCallback = std::function<void(uint64_t guid)>;
