@@ -917,8 +917,12 @@ void WidgetRenderer::drawSimpleHtml(ImDrawList* dl, WidgetTree& tree,
                            packColor(sc, w.alpha * w.shadowColor[3]), w.alpha,
                            b.text, wrapW, false, align.c_str(), true);
         }
+        // A heading in its own colour where one was set for it.
+        const float* color = (b.element >= 1 && b.element <= 3 && w.htmlHeadingColorSet[b.element - 1])
+                                 ? w.htmlHeadingColor[b.element - 1]
+                                 : w.color;
         float h = drawMarkupText(dl, font, size, ImVec2(x0, y),
-                                 packColor(w.color, w.alpha), w.alpha, b.text,
+                                 packColor(color, w.alpha), w.alpha, b.text,
                                  wrapW, false, align.c_str(), false, &tree, w.id);
         // A break at the end of a block finishes its last line rather than
         // opening another: "text<BR/></P>" is one line, and a lone <BR/>

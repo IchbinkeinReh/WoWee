@@ -412,6 +412,28 @@ std::string EntitySpawner::soundEntryName(uint32_t id) {
     return it != soundEntryNames_.end() ? it->second : std::string();
 }
 
+void EntitySpawner::refirePlayerSeatEvents() {
+    // 0x00749ed0, from the interface load (0x0052af40): the player's seat
+    // state 1 or 2 says entering, 3 entering and entered; only for a seat
+    // the vehicle's table has.
+    if (!gameHandler_) return;
+    const uint64_t guid = gameHandler_->getPlayerGuid();
+    const auto it = seatedPassengers_.find(guid);
+    if (it == seatedPassengers_.end() || !vehicleTables_.seatById(it->second.seatId)) return;
+    using game::vehicle::SeatState;
+    switch (it->second.state) {
+        case SeatState::EnterDelay:
+        case SeatState::Entering:
+            fireSeatEvents(guid, it->second, SeatState::None, SeatState::EnterDelay);
+            break;
+        case SeatState::Seated:
+            fireSeatEvents(guid, it->second, SeatState::None, SeatState::Seated);
+            break;
+        default:
+            break;
+    }
+}
+
 void EntitySpawner::fireSeatEvents(uint64_t guid, const SeatedPassenger& p, SeatState from, SeatState to) {
     if (!gameHandler_) return;
     // The unit's tokens (0x0060bb70): the player, a party or raid member.

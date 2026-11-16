@@ -493,6 +493,11 @@ struct Widget {
     bool  editNumeric = false;
     bool  editMultiLine = false;
     int   editMaxLetters = 0;   ///< Zero is no limit, which is WoW's default.
+    /// SetMaxBytes / <FontString bytes="">: the most bytes the text may hold,
+    /// kept as the client keeps it (+0x2c4) - one under the number given,
+    /// the terminator's byte - and -1 for no limit (0x009764e0). Separate from
+    /// the letter limit: a box can have both and both hold (0x00965960).
+    int   editMaxBytes = -1;
     /// Whether the markup that draws nothing counts against that limit. WoW's
     /// default is no, and four boxes in the interface ask for yes - the macro
     /// editor among them, where the escapes are the point.
@@ -549,6 +554,12 @@ struct Widget {
     /// for a slider that never declared one.
     uint32_t thumbRegion = 0;
     float barMin = 0.0f, barMax = 1.0f, barValue = 0.0f;
+    /// The bar's flags (+0x29c in the client, 2 and 4): a range has been set,
+    /// and a value has. SetValue does nothing until the first, and a new range
+    /// or step re-applies the value only once the second holds (0x00961800,
+    /// 0x00961890, 0x0096c090).
+    bool  barRangeSet = false;
+    bool  barValueSet = false;
     std::string barTexture;
     float barColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     /// Which layer the bar's fill draws in. In the real client the fill is a
@@ -583,6 +594,10 @@ struct Widget {
     /// SetHyperlinkFormat / hyperlinkFormat="..." (0x0096c770): how an <A>
     /// is written, href then text.
     std::string htmlLinkFormat = kDefaultHyperlinkFormat;
+    /// The H1-H3 text colours, from SetTextColor("H1", ...) (0x009748f0
+    /// selects the element). A heading not given one draws in the frame's.
+    float htmlHeadingColor[3][4] = {};
+    bool  htmlHeadingColorSet[3] = {false, false, false};
     /// A scrolling message frame keeps its own lines rather than a single
     /// string: chat is a list that grows at one end and falls off the other,
     /// and the frame draws as many as fit from the bottom up.

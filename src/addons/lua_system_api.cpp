@@ -7021,9 +7021,41 @@ static int lua_IsInLFGDungeon(lua_State* L) {
 }
 
 // LFGTeleport(out) - out to the dungeon's entrance, or back in.
+// LFGTeleport([out]) (0x00556bc0): the argument is whether to leave the
+// dungeon - LFDFrame's "teleport out" passes true. Refused, with the error
+// line, in combat, dead, falling, under someone else's control or with the
+// fatigue timer run out; more than two calls inside ten seconds answer
+// false silently. True once it is sent.
 static int lua_LFGTeleport(lua_State* L) {
-    if (auto* gh = getGameHandler(L)) gh->lfgTeleport(lua_toboolean(L, 1) != 0);
-    return 0;
+    auto* gh = getGameHandler(L);
+    const auto me = gh ? gh->getEntityManager().getEntity(gh->getPlayerGuid()) : nullptr;
+    if (!me) return 0;
+    static int s_calls = 0;
+    static double s_since = 0.0;
+    const double now = luaGetTimeNow();
+    if (++s_calls > 2) {
+        if (now - s_since < 10.0) { lua_pushboolean(L, 0); return 1; }
+        s_since = now;
+        s_calls = 0;
+    }
+    const auto refuse = [&](const char* key, const char* enUS) {
+        gh->playGameErrorSound(key);
+        gh->addUIError(game::interfaceString(key, enUS));
+        lua_pushboolean(L, 0);
+        return 1;
+    };
+    if (gh->isInCombat()) return refuse("ERR_NOT_IN_COMBAT", "You can't do that while in combat");
+    if (gh->isPlayerDead()) return refuse("ERR_PLAYER_DEAD", "You can't do that when you're dead.");
+    if (gh->getMovementInfo().flags & 0x1000u) return refuse("ERR_NOT_WHILE_FALLING", "You can't do that while jumping or falling");
+    const uint16_t charmedBy = game::fieldIndex(game::UF::UNIT_FIELD_CHARMEDBY);
+    if (charmedBy != 0xFFFF && (me->getField(charmedBy) | me->getField(static_cast<uint16_t>(charmedBy + 1))))
+        return refuse("ERR_CLIENT_LOCKED_OUT", "You can't do that right now.");
+    const auto& fatigue = gh->getMirrorTimer(0);
+    if (fatigue.active() && fatigue.value < 0)
+        return refuse("ERR_NOT_WHILE_FATIGUED", "You can't do that while fatigued");
+    gh->lfgTeleport(!luaClientSwitchArg(L, 1, false));
+    lua_pushboolean(L, 1);
+    return 1;
 }
 
 // Whether the world the player is standing in is an arena.

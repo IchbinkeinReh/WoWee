@@ -334,7 +334,12 @@ std::string castFailureMessage(const GameHandler& owner, uint32_t spellId,
         case 0xb5:  // FISHING_TOO_LOW: the rank it wants
             fill({std::to_string(miscArg)});
             break;
-        case 0x1d: case 0x1e: case 0x1f: case 0x36: case 0x5e: case 0x93: case 0xac: case 0xb0: {
+        case 0xac: {  // CUSTOM_ERROR: the interface's line for its id (0x007fef10)
+            const std::string key = "SPELL_FAILED_CUSTOM_ERROR_" + std::to_string(miscArg);
+            text = interfaceString(key.c_str(), key.c_str());
+            break;
+        }
+        case 0x1d: case 0x1e: case 0x1f: case 0x36: case 0x5e: case 0x93: case 0xb0: {
             const char* enUS = getSpellCastResultString(result, powerType);
             if (enUS) text = enUS;
             break;

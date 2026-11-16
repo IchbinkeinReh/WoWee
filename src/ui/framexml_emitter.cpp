@@ -1113,17 +1113,25 @@ struct Emitter {
         if (const std::string* strata = node.attr("frameStrata")) {
             line(var + ":SetFrameStrata(" + quote(*strata) + ")");
         }
-        // A slider's range, step and orientation, declared as attributes. The
-        // range has to be set before the value, or the value is clamped to a
-        // default range it was never meant to sit in.
-        if (node.attr("minValue") || node.attr("maxValue")) {
+        // A slider's step is set by every <Slider> the loader reads, 0.001
+        // when it does not say (0x0096c500) - before the range, as there.
+        if (const std::string* vs = node.attr("valueStep"); vs && !vs->empty()) {
+            line(var + ":SetValueStep(" +
+                 std::to_string(node.attrFloat("valueStep", 0.0f)) + ")");
+        } else if (node.name == "Slider") {
+            line(var + ":SetValueStep(0.001)");
+        }
+        // A bar's or slider's range and orientation, declared as
+        // attributes. The range is read only when both ends are given, and
+        // defaultValue only inside that - a bar with no range ignores a value
+        // anyway (StatusBar 0x00961e30, Slider 0x0096c500).
+        const std::string* minAttr = node.attr("minValue");
+        const std::string* maxAttr = node.attr("maxValue");
+        const bool hasRange = minAttr && !minAttr->empty() && maxAttr && !maxAttr->empty();
+        if (hasRange) {
             line(var + ":SetMinMaxValues(" +
                  std::to_string(node.attrFloat("minValue", 0.0f)) + ", " +
                  std::to_string(node.attrFloat("maxValue", 1.0f)) + ")");
-        }
-        if (node.attr("valueStep")) {
-            line(var + ":SetValueStep(" +
-                 std::to_string(node.attrFloat("valueStep", 0.0f)) + ")");
         }
         if (const std::string* o = node.attr("orientation")) {
             line(var + ":SetOrientation(" + quote(*o) + ")");
@@ -1136,7 +1144,7 @@ struct Emitter {
         if (const std::string* r = node.attr("rotatesTexture"); r && !r->empty()) {
             line(var + ":SetRotatesTexture(" + (node.attrBool("rotatesTexture") ? "true" : "false") + ")");
         }
-        if (node.attr("defaultValue")) {
+        if (const std::string* dv = node.attr("defaultValue"); hasRange && dv && !dv->empty()) {
             line(var + ":SetValue(" +
                  std::to_string(node.attrFloat("defaultValue", 0.0f)) + ")");
         }
@@ -1626,7 +1634,15 @@ struct Emitter {
         // The frame's own font, which is a <FontString> child of the frame
         // itself rather than one inside a Layer. See emitFontInstance.
         for (const XmlNode& child : node.children) {
-            if (child.name == "FontString") emitFontInstance(child, var);
+            if (child.name != "FontString") continue;
+            emitFontInstance(child, var);
+            // An edit box reads its byte limit off that font string
+            // (0x00967290): bytes="n" holds the text to n-1 bytes, and
+            // anything under one is no limit - which is SetMaxBytes(n).
+            if (const std::string* b = child.attr("bytes"); b && !b->empty() && node.name == "EditBox") {
+                line(var + ":SetMaxBytes(" +
+                     std::to_string(static_cast<int>(child.attrFloat("bytes", 0.0f))) + ")");
+            }
         }
         // Before Frames and Scripts, so a child anchoring to $parentNormalTexture
         // and an OnLoad reading its own label both find something there.

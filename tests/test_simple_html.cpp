@@ -100,3 +100,14 @@ TEST_CASE("A link with no words is left out", "[simple_html]") {
     REQUIRE(blocks.size() == 1);
     CHECK(blocks[0].text == "ab");
 }
+
+TEST_CASE("A block knows which element it is", "[simple_html]") {
+    // SetTextColor("H1", ...) colours headings apart from paragraphs
+    // (0x009748f0), so the draw has to know which a block is.
+    const auto blocks = parseSimpleHtml(
+        "<HTML><BODY><H1>Title</H1><P>Body</P><h3>Sub</h3></BODY></HTML>");
+    REQUIRE(blocks.size() == 3);
+    CHECK(blocks[0].element == 1);
+    CHECK(blocks[1].element == 0);
+    CHECK(blocks[2].element == 3);
+}

@@ -5167,8 +5167,13 @@ void registerSocialLuaAPI(lua_State* L) {
         }},
                 // False: the corpse is always recoverable here. Answering true
                 // would make the death popup close itself.
+                // CannotBeResurrected() (0x00802270): 1 while the player has
+                // an aura of type 314 (PREVENT_RESURRECTION), else nil.
                 {"CannotBeResurrected", [](lua_State* L) -> int {
-            lua_pushboolean(L, 0); return 1;
+            auto* gh = getGameHandler(L);
+            const auto* sh = gh ? gh->getSpellHandler() : nullptr;
+            luaPushOneOrNil(L, sh && sh->unitHasAuraType(gh->getPlayerGuid(), 314));
+            return 1;
         }},
                 // IsActiveBattlefieldArena is not here. lua_system_api has the
                 // one that answers it - whether the current map is an arena,

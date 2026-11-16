@@ -6471,6 +6471,8 @@ void Application::update(float deltaTime) {
                     addonManager_->fireEvent("PLAYER_REGEN_DISABLED");
                 }
             }
+            // Then the player's vehicle seat, said again (0x00749ed0).
+            if (entitySpawner_) entitySpawner_->refirePlayerSeatEvents();
             addons::LuaEngine::setUiSoundsSuppressed(false);
         }
     }

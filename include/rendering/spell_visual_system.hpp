@@ -167,6 +167,10 @@ public:
     /// flag 0x400000 in 0x007015d0).
     void setProjectilePosition(uint64_t casterGuid, uint8_t castCount, const glm::vec3& point);
 
+    /// Let go of every missile flying at this render instance, with no
+    /// impact (0x00703a80, as SMSG_PRE_RESURRECT does).
+    void dropMissilesAt(uint32_t targetInstanceId);
+
     /// Whether the unit drawn by a CharacterRenderer instance holds a kit's
     /// weapon effects - its CreatureModelData +4 lacks 0x10 (0x0073a6c0,
     /// 0x006f8c50) - and then its AttachedEffectScale (+0x60); nothing when

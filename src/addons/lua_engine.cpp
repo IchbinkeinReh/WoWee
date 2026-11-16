@@ -2567,8 +2567,8 @@ static float scrollRange(wowee::ui::WidgetTree& tree, uint32_t id, bool vertical
 
 /// A scroll offset from a script, with NaN read as no offset.
 ///
-/// The clamp below cannot catch one: NaN is neither under zero nor over the
-/// range, so it was stored as it came. FrameXML hands one over honestly - the
+/// The offset is stored as given, unclamped, as the client does, so nothing
+/// else would catch one: a NaN would be stored as it came. FrameXML hands one over honestly - the
 /// chat dock sizes its tabs from its scroll frame's width before it has
 /// anchored that frame, gets a tab size of zero, divides by it, and scrolls to
 /// zero times the result. The scroll child then sat at x = NaN, and so would
@@ -2578,6 +2578,9 @@ float scrollOffsetArg(lua_State* L, int index) {
     return std::isnan(v) ? 0.0f : static_cast<float>(v);
 }
 
+/// The least change of offset a scroll frame takes, 2^-20 (0x0096b440).
+constexpr float kScrollEpsilon = 9.536743e-07f;
+
 int lua_ScrollFrame_SetVerticalScroll(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
     if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetVerticalScroll(offset)", usageName(L, 1));   // 0x00972560
@@ -2585,16 +2588,17 @@ int lua_ScrollFrame_SetVerticalScroll(lua_State* L) {
     const uint32_t id = widgetIdOf(L, 1);
     if (!tree || id == 0) return 0;
     if (auto* w = tree->get(id)) {
+        // 0x0096b480: stored as given - not clamped to the scroll range; the
+        // scroll bar's own range is what keeps FrameXML inside it - and only
+        // on a change of 2^-20 or more.
         const float v = scrollOffsetArg(L, 2);
-        const float max = scrollRange(*tree, id, true);
-        const float clamped = (v < 0.0f) ? 0.0f : (v > max ? max : v);
-        const bool moved = (clamped != w->scrollY);
-        w->scrollY = clamped;
+        if (!(std::fabs(v - w->scrollY) >= kScrollEpsilon)) return 0;
+        w->scrollY = v;
         // OnVerticalScroll is how the scroll bar beside the frame learns where
         // the frame now is; UIPanelScrollFrameTemplate's body sets the bar's
         // value from it. Announced only on a change, because the interface
         // sets the scroll it already has on every update.
-        if (moved) callScriptOnTable(L, 1, "OnVerticalScroll", clamped);
+        callScriptOnTable(L, 1, "OnVerticalScroll", v);
     }
     return 0;
 }
@@ -2605,12 +2609,11 @@ int lua_ScrollFrame_SetHorizontalScroll(lua_State* L) {
     const uint32_t id = widgetIdOf(L, 1);
     if (!tree || id == 0) return 0;
     if (auto* w = tree->get(id)) {
+        // 0x0096b440: as the vertical one.
         const float v = scrollOffsetArg(L, 2);
-        const float max = scrollRange(*tree, id, false);
-        const float clamped = (v < 0.0f) ? 0.0f : (v > max ? max : v);
-        const bool moved = (clamped != w->scrollX);
-        w->scrollX = clamped;
-        if (moved) callScriptOnTable(L, 1, "OnHorizontalScroll", clamped);
+        if (!(std::fabs(v - w->scrollX) >= kScrollEpsilon)) return 0;
+        w->scrollX = v;
+        callScriptOnTable(L, 1, "OnHorizontalScroll", v);
     }
     return 0;
 }
@@ -4888,9 +4891,9 @@ int lua_Tooltip_SetLFGCompletionReward(lua_State* L) {
 /// left as an empty box over every set button.
 ///
 /// A slot the set was told to leave alone is written as a guid of one, which is
-/// what the ignore mask records; those are skipped rather than listed as an
-/// item nobody can name. An item the player no longer holds resolves to no id
-/// and is called out in red, which is the whole reason to hover a set.
+/// what the ignore mask records; those are counted, not named. An item the
+/// player no longer holds is called out in red by its slot, which is the whole
+/// reason to hover a set.
 int lua_Tooltip_SetEquipmentSet(lua_State* L) {
     if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:SetEquipmentSet(\"setName\")", usageName(L, 1));   // 0x006264d0
     auto* w = widgetOf(L, 1);
@@ -4903,33 +4906,79 @@ int lua_Tooltip_SetEquipmentSet(lua_State* L) {
         if (es.name == wanted) { set = &es; break; }
     if (!set) { lua_pushboolean(L, 0); return 1; }
 
+    // 0x00622dd0: the set's name with "%d items" (ITEMS_VARIABLE_QUANTITY,
+    // gold) on its right, then counts rather than names - ITEMS_EQUIPPED
+    // (gold), ITEMS_IN_INVENTORY (white: the bags, and the bank while it is
+    // open), ITEM_SLOTS_IGNORED (grey, a slot whose guid is 1) - and one red
+    // ITEM_MISSING line per slot whose item is nowhere, by its slot's name,
+    // last slot first.
     w->isTooltip = true;
     clearTooltipLines(L, w);
-    auto line = [&](std::string text, float r, float g, float b) {
+    auto line = [&](std::string left, std::string right, const float* lc, const float* rc) {
         wowee::ui::Widget::TooltipLine tl;
-        tl.left = std::move(text);
-        tl.lc[0] = r; tl.lc[1] = g; tl.lc[2] = b; tl.lc[3] = 1.0f;
-        tl.rc[0] = tl.rc[1] = tl.rc[2] = tl.rc[3] = 1.0f;
+        tl.left = std::move(left);
+        tl.right = std::move(right);
+        tl.lc[0] = lc[0]; tl.lc[1] = lc[1]; tl.lc[2] = lc[2]; tl.lc[3] = 1.0f;
+        tl.rc[0] = rc[0]; tl.rc[1] = rc[1]; tl.rc[2] = rc[2]; tl.rc[3] = 1.0f;
         w->tooltipLines.push_back(std::move(tl));
     };
-    line(set->name, 1.0f, 1.0f, 1.0f);
+    static constexpr float kWhite[3] = {1.0f, 1.0f, 1.0f};
+    static constexpr float kGold[3] = {1.0f, 0.824f, 0.0f};   // 0xad2d2c
+    static constexpr float kRed[3] = {1.0f, 0.125f, 0.125f};  // 0xad2d34
+    static constexpr float kGrey[3] = {0.5f, 0.5f, 0.5f};     // 0xad2d38
+    // 0x005d9f00: the slot's GlobalStrings name.
+    static const char* const kSlotNames[19] = {
+        "HEADSLOT", "NECKSLOT", "SHOULDERSLOT", "SHIRTSLOT", "CHESTSLOT", "WAISTSLOT",
+        "LEGSSLOT", "FEETSLOT", "WRISTSLOT", "HANDSSLOT", "FINGER0SLOT_UNIQUE",
+        "FINGER1SLOT_UNIQUE", "TRINKET0SLOT_UNIQUE", "TRINKET1SLOT_UNIQUE", "BACKSLOT",
+        "MAINHANDSLOT", "SECONDARYHANDSLOT", "RANGEDSLOT", "TABARDSLOT"};
 
-    const auto* guids = gh->getEquipmentSetItems(set->setId);
-    const uint32_t ignored = gh->getEquipmentSetIgnoreMask(set->setId);
-    if (guids) {
+    auto carried = [gh](uint64_t guid) {
+        for (int i = 0; i < 16; ++i)
+            if (gh->getBackpackItemGuid(i) == guid) return true;
+        for (int bag = 0; bag < 4; ++bag)
+            for (int i = 0; i < 36; ++i)
+                if (gh->getBagItemGuid(bag, i) == guid) return true;
+        if (gh->isBankOpen()) {
+            for (int i = 0; i < 28; ++i)
+                if (gh->getBankSlotGuid(i) == guid) return true;
+            for (int bag = 0; bag < 7; ++bag)
+                for (int i = 0; i < 36; ++i)
+                    if (gh->getBankBagItemGuid(bag, i) == guid) return true;
+        }
+        return false;
+    };
+    int equipped = 0, inBags = 0, ignoredCount = 0;
+    std::vector<int> missing;
+    const uint32_t ignoreMask = gh->getEquipmentSetIgnoreMask(set->setId);
+    if (const auto* guids = gh->getEquipmentSetItems(set->setId)) {
         for (int slot = 0; slot < 19; ++slot) {
-            if (ignored & (1u << slot)) continue;
             const uint64_t guid = (*guids)[static_cast<size_t>(slot)];
+            if (guid == 1 || (ignoreMask & (1u << slot))) { ++ignoredCount; continue; }
             if (guid == 0) continue;
-            const uint32_t itemId = gh->getItemIdByGuid(guid);
-            const auto* info = itemId ? gh->getItemInfo(itemId) : nullptr;
-            if (info && info->valid && !info->name.empty()) {
-                line(info->name, 1.0f, 1.0f, 1.0f);
-            } else {
-                line("Missing item", 1.0f, 0.1f, 0.1f);
-            }
+            bool worn = false;
+            for (int e = 0; e < 19 && !worn; ++e) worn = gh->getEquipSlotGuid(e) == guid;
+            if (worn) ++equipped;
+            else if (carried(guid)) ++inBags;
+            else missing.push_back(slot);
         }
     }
+    auto counted = [&](const char* key, const char* fallback, int n) {
+        return withPlural(formatGlobal(L, globalOr(L, key, fallback), {std::to_string(n)}), n);
+    };
+    const int total = equipped + inBags + static_cast<int>(missing.size());
+    const std::string count = counted("ITEMS_VARIABLE_QUANTITY", "%d |4item:items;", total);
+    line(set->name, count, kWhite, count.empty() ? kWhite : kGold);
+    if (equipped)
+        line(counted("ITEMS_EQUIPPED", "%d |4item:items; equipped", equipped), "", kGold, kGold);
+    if (inBags)
+        line(counted("ITEMS_IN_INVENTORY", "%d |4item:items; in inventory", inBags), "", kWhite, kWhite);
+    if (ignoredCount)
+        line(counted("ITEM_SLOTS_IGNORED", "%d |4slot:slots; ignored", ignoredCount), "", kGrey, kGrey);
+    for (auto it = missing.rbegin(); it != missing.rend(); ++it)
+        line(formatGlobal(L, globalOr(L, "ITEM_MISSING", "%s missing"),
+                          {globalOr(L, kSlotNames[*it], kSlotNames[*it])}),
+             "", kRed, kRed);
     w->shown = true;
     fireTooltipScript(L, w, "OnTooltipSetEquipmentSet");
     lua_pushboolean(L, 1);
@@ -9103,6 +9152,41 @@ int lua_Frame_SetBackdropBorderColor(lua_State* L) {
     return 0;
 }
 
+/// A bar's OnValueChanged(self, value) or OnMinMaxChanged(self, min, max),
+/// with the bar's table at index 1 (0x00961890, 0x00961560, 0x0096c090,
+/// 0x0096bbb0).
+static void fireBarScript(lua_State* L, const char* script, int nargs, double a, double b = 0.0) {
+    taint::Quiet quiet;   // see callScriptOnTable
+    lua_getfield(L, 1, "__scripts");
+    if (lua_istable(L, -1)) {
+        lua_getfield(L, -1, script);
+        if (lua_isfunction(L, -1)) {
+            lua_pushvalue(L, 1);
+            lua_pushnumber(L, a);
+            if (nargs > 1) lua_pushnumber(L, b);
+            if (pcallScript(L, script, nargs + 1, 0) != 0)
+                recordScriptError(L, script);
+        } else {
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+}
+
+static void applyBarValue(lua_State* L, float value);
+/// How far apart two slider numbers must be to count as different (0x0096c090).
+constexpr float kSliderEpsilon = 2.3841858e-07f;
+
+/// A slider value put on its step (0x0096bc10): min + step * n, n the steps
+/// from the minimum rounded half away from zero; no step, no rounding.
+static float sliderStepValue(const wowee::ui::Widget& w, float value) {
+    if (w.sliderStep == 0.0f) return value;
+    const float d = value - w.barMin;
+    const float half = w.sliderStep * 0.5f;
+    const float n = std::trunc((d > 0.0f ? d + half : d - half) / w.sliderStep);
+    return n * w.sliderStep + w.barMin;
+}
+
 int lua_StatusBar_SetMinMaxValues(lua_State* L) {
     // Two numbers, or the usage line. Past that the widgets part: a slider
     // (0x00971df0) answers a minimum above the maximum with the usage line;
@@ -9124,10 +9208,37 @@ int lua_StatusBar_SetMinMaxValues(lua_State* L) {
             if (!(hi - lo <= kLimit)) return luaL_error(L, "Min and Max too far apart");
         }
     }
-    if (auto* w = widgetOf(L, 1)) {
-        w->barMin = static_cast<float>(luaL_optnumber(L, 2, 0.0));
-        w->barMax = static_cast<float>(luaL_optnumber(L, 3, 1.0));
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    float lo = static_cast<float>(lua_tonumber(L, 2));
+    const float hi = static_cast<float>(lua_tonumber(L, 3));
+    // 0x00961800: a maximum under the minimum pulls the minimum down to it.
+    // Only a real change is stored and announced; OnMinMaxChanged(min, max)
+    // is 0x00961560, and the value already set is then set again, which is
+    // what clamps it into the new range (and fires OnValueChanged if that
+    // moved it).
+    if (w->isSlider) {
+        // A slider (0x0096c470) keeps the minimum and the span, compares both
+        // within 2.38e-7, and announces OnMinMaxChanged(min, min + span)
+        // (0x0096bbb0).
+        const float span = hi - lo;
+        if (w->barRangeSet && std::fabs(span - (w->barMax - w->barMin)) < kSliderEpsilon &&
+            std::fabs(w->barMin - lo) < kSliderEpsilon)
+            return 0;
+        w->barMin = lo;
+        w->barMax = lo + span;
+        w->barRangeSet = true;
+        fireBarScript(L, "OnMinMaxChanged", 2, lo, lo + span);
+        if (auto* after = widgetOf(L, 1); after && after->barValueSet) applyBarValue(L, after->barValue);
+        return 0;
     }
+    if (hi < lo) lo = hi;
+    if (w->barRangeSet && w->barMin == lo && w->barMax == hi) return 0;
+    w->barMin = lo;
+    w->barMax = hi;
+    w->barRangeSet = true;
+    fireBarScript(L, "OnMinMaxChanged", 2, lo, hi);
+    if (auto* after = widgetOf(L, 1); after && after->barValueSet) applyBarValue(L, after->barValue);
     return 0;
 }
 int lua_StatusBar_GetMinMaxValues(lua_State* L) {
@@ -9136,12 +9247,40 @@ int lua_StatusBar_GetMinMaxValues(lua_State* L) {
     lua_pushnumber(L, w ? w->barMax : 1.0);
     return 2;
 }
-int lua_StatusBar_SetValue(lua_State* L) {
+
+/// The value core, with the bar's table at index 1.
+///
+/// A status bar's (0x00961890) does nothing until a range has been set,
+/// clamps into it - a NaN, being under nothing, lands on the maximum - and
+/// stores and announces only a change.
+static void applyBarValue(lua_State* L, float value) {
     auto* w = widgetOf(L, 1);
-    if (!w) return 0;
-    const float value = static_cast<float>(luaL_optnumber(L, 2, 0.0));
-    const bool changed = (value != w->barValue);
+    if (!w) return;
+    if (w->isSlider) {
+        // A slider's (0x0096c090) likewise waits for a range, clamps, puts
+        // the value on its step, and takes a value within one step of either
+        // end to that end - which is how a step that does not divide the range
+        // still reaches the maximum. A change under 2.38e-7 is none.
+        if (!w->barRangeSet) return;
+        const float lo = w->barMin, hi = w->barMax;
+        float v = value < lo ? lo : value;
+        if (!(v <= hi)) v = hi;   // a NaN too
+        v = sliderStepValue(*w, v);
+        if (hi < v + w->sliderStep) v = hi;
+        if (v - w->sliderStep < lo) v = lo;
+        if (w->barValueSet && std::fabs(v - w->barValue) < kSliderEpsilon) return;
+        w->barValue = v;
+        w->barValueSet = true;
+        fireBarScript(L, "OnValueChanged", 1, v);
+        return;
+    }
+    if (!w->barRangeSet) return;
+    if (!(value <= w->barMax)) value = w->barMax;
+    else if (value < w->barMin) value = w->barMin;
+    const bool changed = !w->barValueSet || value != w->barValue;
+    if (!changed) return;
     w->barValue = value;
+    w->barValueSet = true;
 
     // A value set from code fires OnValueChanged, as in WoW - for a status bar
     // as well as a slider. The note here used to say a status bar does not,
@@ -9159,22 +9298,11 @@ int lua_StatusBar_SetValue(lua_State* L) {
     // real change, because several of these set the value they already have on
     // every update - which also stops a handler that sets its own bar from
     // recurring.
-    if (changed) {
-        taint::Quiet quiet;   // see callScriptOnTable
-        lua_getfield(L, 1, "__scripts");
-        if (lua_istable(L, -1)) {
-            lua_getfield(L, -1, "OnValueChanged");
-            if (lua_isfunction(L, -1)) {
-                lua_pushvalue(L, 1);
-                lua_pushnumber(L, value);
-                if (pcallScript(L, "OnValueChanged", 2, 0) != 0)
-                    recordScriptError(L, "OnValueChanged");
-            } else {
-                lua_pop(L, 1);
-            }
-        }
-        lua_pop(L, 1);
-    }
+    fireBarScript(L, "OnValueChanged", 1, value);
+}
+int lua_StatusBar_SetValue(lua_State* L) {
+    if (!widgetOf(L, 1)) return 0;
+    applyBarValue(L, static_cast<float>(luaL_optnumber(L, 2, 0.0)));
     return 0;
 }
 /// StatusBar/Slider:SetValue(value) (0x00971540, 0x00971f00): a number, or
@@ -9498,13 +9626,59 @@ int lua_EditBox_GetNumber(lua_State* L) {
     lua_pushnumber(L, w ? std::atof(w->editText.c_str()) : 0.0);
     return 1;
 }
+/// Text into an edit box at the caret, the way 0x00965960 puts it there for
+/// typing, pasting and Insert() alike. A highlighted run goes first. A
+/// numeric box then refuses the whole string if any of it is not a digit -
+/// not the digits out of it. What is inserted is then held to both limits
+/// in turn, the bytes (SetMaxBytes) and the letters (SetMaxLetters, counted
+/// as drawn unless countInvisibleLetters), by taking characters off before
+/// the caret until it fits. Returns whether the text changed.
+static bool insertEditText(wowee::ui::Widget& w, const std::string& add) {
+    const std::string before = w.editText;
+    if (w.hasSelection) {
+        w.cursorPos = ui::replaceSelection(w.editText, w.cursorPos,
+                                           {true, w.selStart, w.selEnd});
+        w.hasSelection = false;
+    }
+    if (w.editNumeric) {
+        for (const char c : add) {
+            if (c < '0' || c > '9') return w.editText != before;
+        }
+    }
+    const size_t at = std::min(w.cursorPos, w.editText.size());
+    w.editText.insert(at, add);
+    w.cursorPos = at + add.size();
+    const auto trimBeforeCaret = [&w](auto over) {
+        while (over() && w.cursorPos > 0) {
+            const size_t from = ui::caretStepLeft(w.editText, w.cursorPos);
+            if (from >= w.cursorPos) break;
+            w.editText.erase(from, w.cursorPos - from);
+            w.cursorPos = from;
+        }
+    };
+    if (w.editMaxBytes >= 0) {
+        trimBeforeCaret([&w] { return static_cast<int>(w.editText.size()) > w.editMaxBytes; });
+    }
+    if (w.editMaxLetters > 0) {
+        // Counted the way the box asked to be counted. A limit is in
+        // characters shown, not bytes held, unless countInvisibleLetters says
+        // otherwise: the chat box declares letters="255" and nothing else, so
+        // the escapes a shift-clicked item link brings - about sixty bytes for
+        // eighteen visible characters - must not be charged against it.
+        trimBeforeCaret([&w] {
+            const size_t held = w.countInvisibleLetters ? w.editText.size()
+                                                         : ui::visibleLength(w.editText);
+            return static_cast<int>(held) > w.editMaxLetters;
+        });
+    }
+    return w.editText != before;
+}
+
 int lua_EditBox_Insert(lua_State* L) {
     auto* w = widgetOf(L, 1);
     if (!w) return 0;
     const std::string add = luaL_optstring(L, 2, "");
-    const size_t at = std::min(w->cursorPos, w->editText.size());
-    w->editText.insert(at, add);
-    w->cursorPos = at + add.size();
+    insertEditText(*w, add);   // 0x00975e10
     return 0;
 }
 int lua_MessageFrame_SetPadding(lua_State* L) {
@@ -9572,6 +9746,22 @@ static int lua_EditBox_SetMaxLettersMethod(lua_State* L) {
 int lua_EditBox_GetMaxLetters(lua_State* L) {
     auto* w = widgetOf(L, 1);
     lua_pushnumber(L, w ? static_cast<lua_Number>(w->editMaxLetters) : 0.0);
+    return 1;
+}
+/// SetMaxBytes(max) (0x009764e0): the box and one more, exactly; kept as one
+/// under it, the terminator's byte, and anything under one is no limit.
+int lua_EditBox_SetMaxBytes(lua_State* L) {
+    if (lua_gettop(L) != 2) return luaL_error(L, "Usage: %s:SetMaxBytes(max)", usageName(L, 1));
+    if (auto* w = widgetOf(L, 1)) {
+        const int max = static_cast<int>(lua_tonumber(L, 2));
+        w->editMaxBytes = max > 0 ? max - 1 : -1;
+    }
+    return 0;
+}
+/// GetMaxBytes() (0x00976580): what was set, which is 0 for no limit.
+int lua_EditBox_GetMaxBytes(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? static_cast<lua_Number>(w->editMaxBytes + 1) : 0.0);
     return 1;
 }
 int lua_EditBox_SetNumeric(lua_State* L) {
@@ -9747,8 +9937,15 @@ int lua_Cooldown_Clear(lua_State* L) {
 
 int lua_Slider_SetValueStep(lua_State* L) {
     if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetValueStep(value)", usageName(L, 1));   // 0x00971fd0
-    if (auto* w = widgetOf(L, 1))
-        w->sliderStep = static_cast<float>(luaL_optnumber(L, 2, 0.0));
+    auto* w = widgetOf(L, 1);
+    if (!w) return 0;
+    // 0x0096c1b0: never under FLT_EPSILON, stored only on a change of 2.38e-7
+    // or more, and a value already set is set again on the new step.
+    float step = static_cast<float>(lua_tonumber(L, 2));
+    if (step < 1.1920929e-07f) step = 1.1920929e-07f;
+    if (!(std::fabs(step - w->sliderStep) >= kSliderEpsilon)) return 0;
+    w->sliderStep = step;
+    if (w->barValueSet) applyBarValue(L, w->barValue);
     return 0;
 }
 int lua_Slider_GetValueStep(lua_State* L) {
@@ -11078,6 +11275,70 @@ void LuaEngine::setLuaServices(const LuaServices& services) {
 }
 
 
+/// The font methods of a SimpleHTML (0x00974a10 on) each start with
+/// 0x009748f0: a string second argument equal, in any case, to "P", "H1",
+/// "H2" or "H3" is taken off and names the element the call is about;
+/// anything else leaves the arguments alone and means P. So
+/// html:SetTextColor("H1", r, g, b) colours the headings, and
+/// ItemTextFrame does that for every page it opens.
+///
+/// P is the frame's own font, which the wrapped method already reaches. A
+/// heading here draws in the frame's font, with a colour of its own once one
+/// is set; that colour is all a heading keeps, so its other setters do
+/// nothing and its getters answer what P has.
+static bool isSimpleHtmlFontMethod(lua_CFunction fn) {
+    static const lua_CFunction kMethods[] = {
+        lua_FontString_SetFontObject, lua_FontString_GetFontObject, lua_FontString_SetFont,
+        lua_FontString_GetFont, lua_FontString_SetTextColor, lua_FontString_GetTextColor,
+        lua_FontString_SetShadowColor, lua_FontString_GetShadowColor, lua_FontString_SetShadowOffset,
+        lua_FontString_GetShadowOffset, lua_FontString_SetSpacing, lua_FontString_GetSpacing,
+        lua_FontString_SetJustifyH, lua_FontString_GetJustifyH, lua_FontString_SetJustifyV,
+        lua_FontString_GetJustifyV, lua_FontString_SetIndentedWordWrap,
+        lua_FontString_GetIndentedWordWrap,
+    };
+    return std::find(std::begin(kMethods), std::end(kMethods), fn) != std::end(kMethods);
+}
+static bool isSimpleHtmlFontGetter(lua_CFunction fn) {
+    static const lua_CFunction kGetters[] = {
+        lua_FontString_GetFontObject, lua_FontString_GetFont, lua_FontString_GetTextColor,
+        lua_FontString_GetShadowColor, lua_FontString_GetShadowOffset, lua_FontString_GetSpacing,
+        lua_FontString_GetJustifyH, lua_FontString_GetJustifyV, lua_FontString_GetIndentedWordWrap,
+    };
+    return std::find(std::begin(kGetters), std::end(kGetters), fn) != std::end(kGetters);
+}
+static int simpleHtmlFontMethodTrampoline(lua_State* L) {
+    const lua_CFunction fn = lua_tocfunction(L, lua_upvalueindex(1));
+    const auto* w = widgetOf(L, 1);
+    if (!w || !w->isSimpleHtml || lua_type(L, 2) != LUA_TSTRING) return fn(L);
+    static const char* kElements[] = {"P", "H1", "H2", "H3"};
+    const char* arg = lua_tostring(L, 2);
+    int element = -1;
+    for (int i = 0; i < 4 && element < 0; ++i) {
+        const char* a = arg;
+        const char* e = kElements[i];
+        while (*a && *e && std::toupper(static_cast<unsigned char>(*a)) == *e) { ++a; ++e; }
+        if (*a == '\0' && *e == '\0') element = i;
+    }
+    if (element < 0) return fn(L);
+    lua_remove(L, 2);
+    if (element == 0) return fn(L);
+    auto* html = widgetOf(L, 1);
+    const int h = element - 1;
+    if (fn == lua_FontString_SetTextColor) {
+        html->htmlHeadingColor[h][0] = static_cast<float>(luaL_optnumber(L, 2, 1.0));
+        html->htmlHeadingColor[h][1] = static_cast<float>(luaL_optnumber(L, 3, 1.0));
+        html->htmlHeadingColor[h][2] = static_cast<float>(luaL_optnumber(L, 4, 1.0));
+        html->htmlHeadingColor[h][3] = static_cast<float>(luaL_optnumber(L, 5, 1.0));
+        html->htmlHeadingColorSet[h] = true;
+        return 0;
+    }
+    if (fn == lua_FontString_GetTextColor && html->htmlHeadingColorSet[h]) {
+        for (float component : html->htmlHeadingColor[h]) lua_pushnumber(L, component);
+        return 4;
+    }
+    return isSimpleHtmlFontGetter(fn) ? fn(L) : 0;
+}
+
 void LuaEngine::registerCoreAPI() {
     // The taint vocabulary - issecure, issecurevariable, forceinsecure,
     // securecall, hooksecurefunc - is the client's own C (0x00816da0 to
@@ -11895,14 +12156,12 @@ void LuaEngine::registerCoreAPI() {
         {"GetAltArrowKeyMode",    lua_EditBox_GetAltArrowKeyMode},
         {"IsInIMECompositionMode", lua_EditBox_IsInIMECompositionMode},
         {"Insert",                lua_EditBox_Insert},
-        {"SetMaxLetters",         lua_EditBox_SetMaxLettersMethod},        // The limit here is applied against the text's size in bytes, which is
-        // what SetMaxBytes asks for; SetMaxLetters is the same field because
-        // this counts the same way for both. Reporting it back matters more
-        // than the distinction: an edit box that answers nothing for its limit
-        // is one FrameXML will not stop typing into.
-        {"SetMaxBytes",          lua_EditBox_SetMaxLetters},
+        {"SetMaxLetters",         lua_EditBox_SetMaxLettersMethod},
+        // Two limits, each its own field and both enforced (0x00965960): the
+        // bytes the text may hold, and the letters it may show.
+        {"SetMaxBytes",          lua_EditBox_SetMaxBytes},
         {"GetMaxLetters",        lua_EditBox_GetMaxLetters},
-        {"GetMaxBytes",          lua_EditBox_GetMaxLetters},
+        {"GetMaxBytes",          lua_EditBox_GetMaxBytes},
         {"SetTextInsets",        lua_EditBox_SetTextInsets},
         {"SetPadding",           lua_MessageFrame_SetPadding},
         {"GetPadding",           lua_MessageFrame_GetPadding},
@@ -11956,6 +12215,10 @@ void LuaEngine::registerCoreAPI() {
         if (std::find(std::begin(kTooltipFillers), std::end(kTooltipFillers), fn) !=
             std::end(kTooltipFillers)) {
             pushTooltipMethod(L_, fn);
+        } else if (isSimpleHtmlFontMethod(fn)) {
+            // A SimpleHTML's element argument (0x009748f0).
+            lua_pushcfunction(L_, fn);
+            lua_pushcclosure(L_, simpleHtmlFontMethodTrampoline, 1);
         } else {
             lua_pushcfunction(L_, fn);
         }
@@ -14329,19 +14592,23 @@ void LuaEngine::registerCoreAPI() {
         // A lock not opened (0x006277f0): LOCKED, or ENCRYPTED, in the colour
         // of how the player's opening spell measures against it - grey a
         // hundred over, green fifty, yellow twenty-five, orange at it, red
-        // short - and green with no such spell (0x0061a1f0).
+        // short - and green with no such spell (0x0061a1f0). With
+        // colorblindMode on, the line starts with the colour's mark
+        // ("", "[+] ", "[++] ", "[+++] ", "[-] "; green with no spell is
+        // "[+] ", 0x0061a1c0).
         "        if data.lock and not (inst and inst.unlocked) then\n"
         "            local l = data.lock\n"
-        "            local r, g, b = 0.25, 0.75, 0.25\n"
+        "            local r, g, b, mark = 0.25, 0.75, 0.25, '[+] '\n"
         "            if l.hasSpell then\n"
-        "                if l.value >= l.required + 100 then r, g, b = 0.5, 0.5, 0.5\n"
-        "                elseif l.value >= l.required + 50 then r, g, b = 0.25, 0.75, 0.25\n"
-        "                elseif l.value >= l.required + 25 then r, g, b = 1, 1, 0\n"
-        "                elseif l.value >= l.required then r, g, b = 1, 0.5, 0.25\n"
-        "                else r, g, b = 1, 0.125, 0.125 end\n"
+        "                if l.value >= l.required + 100 then r, g, b, mark = 0.5, 0.5, 0.5, ''\n"
+        "                elseif l.value >= l.required + 50 then r, g, b, mark = 0.25, 0.75, 0.25, '[+] '\n"
+        "                elseif l.value >= l.required + 25 then r, g, b, mark = 1, 1, 0, '[++] '\n"
+        "                elseif l.value >= l.required then r, g, b, mark = 1, 0.5, 0.25, '[+++] '\n"
+        "                else r, g, b, mark = 1, 0.125, 0.125, '[-] ' end\n"
         "            end\n"
+        "            if not colorblind then mark = '' end\n"
         "            local text = l.encrypted and (ENCRYPTED or 'Encrypted') or (LOCKED or 'Locked')\n"
-        "            self:AddLine(text, r, g, b)\n"
+        "            self:AddLine(mark .. text, r, g, b)\n"
         "        end\n"
         "    end\n"
         // The type line (0x006277f0): a bag says CONTAINER_SLOTS with its
@@ -16491,40 +16758,33 @@ void LuaEngine::dispatchText(const char* utf8) {
     if (add.empty()) return;
     // Typing leaves the history, for the same reason SetText does.
     w->editHistoryPos = -1;
-    // A numeric box takes digits and nothing else, which is what stops a
-    // quantity field filling with letters.
-    if (w->editNumeric) {
-        add.erase(std::remove_if(add.begin(), add.end(),
-                                 [](unsigned char c) { return std::isdigit(c) == 0; }),
-                  add.end());
-        if (add.empty()) return;
+    // One character at a time, as the client takes them (0x00965ce0, and
+    // a paste through it too, 0x00965ed0). A control character is dropped,
+    // except a tab, which is four spaces, and a line break in a multi-line
+    // box. A typed '|' goes in doubled, as a literal bar: the player types
+    // what they see and cannot type an escape - "|cff" colours nothing.
+    bool changed = false;
+    for (size_t i = 0; i < add.size();) {
+        const unsigned char c = static_cast<unsigned char>(add[i]);
+        size_t n = 1;
+        if (c >= 0xF0) n = 4;
+        else if (c >= 0xE0) n = 3;
+        else if (c >= 0xC0) n = 2;
+        n = std::min(n, add.size() - i);
+        std::string one = add.substr(i, n);
+        i += n;
+        if (c < 0x20 || c == 0x7f) {
+            if (c == '\t') one = "    ";
+            else if (!(c == '\n' && w->editMultiLine)) continue;
+        } else if (c == '|') {
+            one = "||";
+        }
+        if (insertEditText(*w, one)) changed = true;
+        w = widgets_.get(focusedWid_);
+        if (!w) return;
     }
-    // Counted the way the box asked to be counted. A limit is in characters
-    // shown, not bytes held, unless countInvisibleLetters says otherwise: the
-    // chat box declares letters="255" and nothing else, so the escapes a
-    // shift-clicked item link brings - about sixty bytes for eighteen visible
-    // characters - must not be charged against it.
-    const int held = w->countInvisibleLetters
-                         ? static_cast<int>(w->editText.size())
-                         : static_cast<int>(ui::visibleLength(w->editText));
-    const int adding = w->countInvisibleLetters
-                           ? static_cast<int>(add.size())
-                           : static_cast<int>(ui::visibleLength(add));
-    if (w->editMaxLetters > 0 && held + adding > w->editMaxLetters) {
-        const int room = w->editMaxLetters - held;
-        if (room <= 0) return;
-        add.resize(static_cast<size_t>(room));
-    }
+    if (!changed) return;
 
-    // A selected run is replaced by what is typed, which is the whole point of
-    // having one: autocomplete highlights the name it completed so the next
-    // character overwrites it rather than following it.
-    w->cursorPos = ui::replaceSelection(
-        w->editText, w->cursorPos, {w->hasSelection, w->selStart, w->selEnd});
-    w->hasSelection = false;
-    const size_t at = std::min(w->cursorPos, w->editText.size());
-    w->editText.insert(at, add);
-    w->cursorPos = at + add.size();
     // The handler that tells a search field to filter, and a chat box to look
     // for a channel prefix.
     fireCursorChanged(focusedWid_);
@@ -16956,6 +17216,33 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
         }
         return;
     }
+    // Ctrl+W, Ctrl+Backspace and Ctrl+Delete delete a word (0x00967760):
+    // back to the start of the word before the caret (0x00963b60) or on to
+    // the end of the one after it (0x00963a10), the whitespace between going
+    // with it. A highlighted run is what goes instead, when there is one.
+    constexpr int kDeleteKey = 0x4000004C;  // SDLK_DELETE
+    if (ctrlHeld && (sdlKeycode == 'w' || sdlKeycode == 'W' || sdlKeycode == '\b' ||
+                     sdlKeycode == kDeleteKey)) {
+        const size_t len = w->editText.size();
+        size_t from = std::min(w->cursorPos, len);
+        size_t to = from;
+        if (w->hasSelection && w->selEnd > w->selStart && w->selEnd <= len) {
+            from = w->selStart;
+            to = w->selEnd;
+        } else if (sdlKeycode == kDeleteKey) {
+            to = ui::wordDeleteForwardTo(w->editText, from);
+        } else {
+            from = ui::wordDeleteBackFrom(w->editText, from);
+        }
+        w->hasSelection = false;
+        if (to > from) {
+            w->editText.erase(from, to - from);
+            w->cursorPos = from;
+            fireCursorChanged(focusedWid_);
+            callFrameScript(focusedWid_, "OnTextChanged");
+        }
+        return;
+    }
     // Ctrl+A highlights the whole line, the caret at its end (0x00967760).
     if (ctrlHeld && (sdlKeycode == 'a' || sdlKeycode == 'A')) {
         w->selStart = 0;
@@ -17033,28 +17320,58 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
         // the newest end empties the box rather than sticking on the last
         // line, which is what leaving the history means.
         case kUp:
+        case kDown:
+            // A multi-line box moves the caret a line instead (0x00964550),
+            // Shift carrying the highlight; only a single-line box walks its
+            // history.
+            if (w->editMultiLine) {
+                const size_t caret = std::min(w->cursorPos, len);
+                bool moved = false;
+                const size_t target = ui::caretLineMove(
+                    w->editText, caret, sdlKeycode == kUp ? -1 : 1, moved);
+                const ui::EditSelection sel{w->hasSelection, w->selStart, w->selEnd};
+                const bool selected = sel.active && sel.stop > sel.start && sel.stop <= len;
+                if (!moved) {
+                    if (!shiftHeld && w->hasSelection) {
+                        w->hasSelection = false;
+                        fireCursorChanged(focusedWid_);
+                    }
+                    break;
+                }
+                const ui::EditCaret to = ui::moveCaret(
+                    caret, selected ? sel : ui::EditSelection{}, target, shiftHeld);
+                w->cursorPos = to.caret;
+                w->hasSelection = to.sel.active;
+                if (to.sel.active) {
+                    w->selStart = to.sel.start;
+                    w->selEnd = to.sel.stop;
+                }
+                fireCursorChanged(focusedWid_);
+                break;
+            }
+            if (sdlKeycode == kDown) {
+                if (w->editHistoryPos >= 0) {
+                    w->hasSelection = false;
+                    const int last = static_cast<int>(w->editHistory.size()) - 1;
+                    if (w->editHistoryPos >= last) {
+                        w->editHistoryPos = -1;
+                        w->editText.clear();
+                    } else {
+                        ++w->editHistoryPos;
+                        w->editText = w->editHistory[static_cast<size_t>(w->editHistoryPos)];
+                    }
+                    w->cursorPos = w->editText.size();
+                    fireCursorChanged(focusedWid_);
+                    callFrameScript(focusedWid_, "OnTextChanged");
+                }
+                break;
+            }
             if (!w->editHistory.empty()) {
                 w->hasSelection = false;
                 const int last = static_cast<int>(w->editHistory.size()) - 1;
                 w->editHistoryPos = (w->editHistoryPos < 0)
                     ? last : std::max(0, w->editHistoryPos - 1);
                 w->editText = w->editHistory[static_cast<size_t>(w->editHistoryPos)];
-                w->cursorPos = w->editText.size();
-                fireCursorChanged(focusedWid_);
-                callFrameScript(focusedWid_, "OnTextChanged");
-            }
-            break;
-        case kDown:
-            if (w->editHistoryPos >= 0) {
-                w->hasSelection = false;
-                const int last = static_cast<int>(w->editHistory.size()) - 1;
-                if (w->editHistoryPos >= last) {
-                    w->editHistoryPos = -1;
-                    w->editText.clear();
-                } else {
-                    ++w->editHistoryPos;
-                    w->editText = w->editHistory[static_cast<size_t>(w->editHistoryPos)];
-                }
                 w->cursorPos = w->editText.size();
                 fireCursorChanged(focusedWid_);
                 callFrameScript(focusedWid_, "OnTextChanged");
@@ -17080,8 +17397,11 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
             const ui::EditSelection sel{w->hasSelection, w->selStart, w->selEnd};
             const bool selected = sel.active && sel.stop > sel.start && sel.stop <= len;
             size_t target = caret;
-            if (sdlKeycode == kHome) target = 0;
-            else if (sdlKeycode == kEnd) target = len;
+            // Home and End go to the ends of the caret's line (0x00964200,
+            // 0x009642e0); with Ctrl to the ends of the text (0x009643c0,
+            // 0x00964480).
+            if (sdlKeycode == kHome) target = ctrlHeld ? 0 : ui::caretLineStart(w->editText, caret);
+            else if (sdlKeycode == kEnd) target = ctrlHeld ? len : ui::caretLineEnd(w->editText, caret);
             else if (selected && !shiftHeld && !ctrlHeld)
                 target = (sdlKeycode == kLeft) ? sel.start : sel.stop;
             else if (sdlKeycode == kLeft)
@@ -17116,16 +17436,11 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
             // multiLine and submits, the mail body has it and does not, and
             // both are the same OnEnterPressed handler.
             if (w->editMultiLine) {
-                // The break counts against the limit like any other character;
-                // inserting it directly would let a full box grow by one every
-                // time return was pressed.
-                if (w->editMaxLetters > 0 &&
-                    static_cast<int>(w->editText.size()) >= w->editMaxLetters) {
-                    break;
-                }
-                const size_t at = std::min(w->cursorPos, w->editText.size());
-                w->editText.insert(at, 1, '\n');
-                w->cursorPos = at + 1;
+                // The break counts against the limits like any other
+                // character, going in by the same path (0x00965960); inserting
+                // it directly would let a full box grow by one every time
+                // return was pressed.
+                if (!insertEditText(*w, "\n")) break;
                 fireCursorChanged(focusedWid_);
                 callFrameScript(focusedWid_, "OnTextChanged");
                 break;
@@ -17581,8 +17896,17 @@ void LuaEngine::advanceWheelGlide(float elapsed) {
     const float remaining = wheelGlide_.target - bar->barValue;
     float value = bar->barValue + remaining * (1.0f - std::exp(-kRate * elapsed));
     if (std::abs(wheelGlide_.target - value) < 0.5f) value = wheelGlide_.target;
+    const float before = bar->barValue;
     setSliderValue(wheelGlide_.slider, value);
     const auto* after = widgets_.get(wheelGlide_.slider);
+    // SetValue puts the value on the slider's step (0x0096c090), so a move
+    // smaller than half a step comes back where it was; finish there rather
+    // than easing toward a target the step will never let it reach.
+    if (after && value != wheelGlide_.target && after->barValue == before) {
+        setSliderValue(wheelGlide_.slider, wheelGlide_.target);
+        after = widgets_.get(wheelGlide_.slider);
+        value = wheelGlide_.target;
+    }
     if (value == wheelGlide_.target || !after) {
         wheelGlide_ = {};
         return;
@@ -17888,6 +18212,7 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
                 }
                 if (value != w->barValue) {
                     w->barValue = value;
+                    w->barValueSet = true;
                     // With the value, because that is the argument the handler
                     // names and uses: UIPanelScrollBarTemplate's body is
                     // self:GetParent():SetVerticalScroll(value), and a nil

@@ -664,6 +664,33 @@ TEST_CASE("A slider carries its range, step and grip", "[framexml][emit]") {
     REQUIRE(r.lua.find(":SetMinMaxValues(") < r.lua.find(":SetValue("));
 }
 
+TEST_CASE("A slider that names no step gets 0.001", "[framexml][emit]") {
+    // 0x0096c500: valueStep defaults to 0.001 for every <Slider> read.
+    XmlNode root = parseOrFail("<Ui><Slider name=\"S\"/></Ui>");
+    const EmitResult r = emitFrameXml(root);
+    REQUIRE(has(r.lua, ":SetValueStep(0.001)"));
+}
+
+TEST_CASE("A bar's range is read only when both ends are given", "[framexml][emit]") {
+    // StatusBar 0x00961e30 and Slider 0x0096c500 read minValue only together
+    // with maxValue, and defaultValue only inside that.
+    XmlNode root = parseOrFail(
+        "<Ui><StatusBar name=\"B\" minValue=\"0\" defaultValue=\"5\"/></Ui>");
+    const EmitResult r = emitFrameXml(root);
+    REQUIRE_FALSE(has(r.lua, ":SetMinMaxValues("));
+    REQUIRE_FALSE(has(r.lua, ":SetValue("));
+}
+
+TEST_CASE("An edit box's byte limit comes from its font string", "[framexml][emit]") {
+    // 0x00967290 reads bytes= off the <FontString> inside an <EditBox>.
+    XmlNode root = parseOrFail(
+        "<Ui><EditBox name=\"E\" letters=\"10\"><FontString inherits=\"ChatFontNormal\" bytes=\"64\"/>"
+        "</EditBox></Ui>");
+    const EmitResult r = emitFrameXml(root);
+    REQUIRE(has(r.lua, ":SetMaxLetters(10)"));
+    REQUIRE(has(r.lua, ":SetMaxBytes(64)"));
+}
+
 TEST_CASE("A frame's id becomes SetID", "[framexml][emit]") {
     // How a frame in a numbered set knows which one it is. FrameXML builds
     // names out of it - PartyMemberFrame_RefreshPetDebuffs reaches for
