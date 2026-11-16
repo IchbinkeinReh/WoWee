@@ -2979,6 +2979,10 @@ void GameHandler::cancelAura(uint32_t spellId) {
     if (spellHandler_) spellHandler_->cancelAura(spellId);
 }
 
+void GameHandler::cancelOpenStableAuras() {
+    if (spellHandler_) spellHandler_->cancelOpenStableAuras();
+}
+
 uint32_t GameHandler::getTempEnchantRemainingMs(uint32_t slot) const {
     return inventoryHandler_ ? inventoryHandler_->getTempEnchantRemainingMs(slot) : 0u;
 }

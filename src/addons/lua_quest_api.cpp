@@ -2468,7 +2468,12 @@ static int lua_GetStablePetFoodTypes(lua_State* L) {
 }
 
 static int lua_ClosePetStables(lua_State* L) {
-    if (auto* gh = getGameHandler(L)) gh->closeStableWindow();
+    // 0x005a1950: the player's open-stable auras cancelled (0x00726e10),
+    // then the stable closed.
+    if (auto* gh = getGameHandler(L)) {
+        gh->cancelOpenStableAuras();
+        gh->closeStableWindow();
+    }
     return 0;
 }
 

@@ -1551,6 +1551,7 @@ public:
     };
     std::optional<GroundTargetAim> aimGroundTarget(std::optional<ground_target::Place> place);
     void cancelAura(uint32_t spellId);
+    void cancelOpenStableAuras();
     void dismissPet();
     void renamePet(const std::string& newName);
     bool hasPet() const { return petGuid_ != 0; }

@@ -207,6 +207,10 @@ public:
     /// (ChannelInterruptFlags 0x10 with AttributesEx 0x4000, 0x0072e7e0).
     void cancelChannelOnTurn();
     void cancelAura(uint32_t spellId);
+    /// 0x00726e10, as ClosePetStables (0x005a1950) runs it: each positive
+    /// aura of the player's (aura flag 0x10) is cancelled once for every
+    /// effect of it that applies aura 292, SPELL_AURA_OPEN_STABLE.
+    void cancelOpenStableAuras();
 
     // Known spells
     [[nodiscard]] const std::unordered_set<uint32_t>& getKnownSpells() const { return knownSpells_; }

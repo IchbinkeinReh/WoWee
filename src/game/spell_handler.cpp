@@ -3415,6 +3415,21 @@ void SpellHandler::cancelCraftQueue() {
     craftQueueRemaining_ = 0;
 }
 
+void SpellHandler::cancelOpenStableAuras() {
+    constexpr uint8_t kAuraFlagPositive = 0x10;
+    constexpr uint32_t kAuraOpenStable = 292;
+    loadSpellNameCache();
+    // A copy: a cancel may reach the aura list before the loop is done.
+    const std::vector<AuraSlot> auras = playerAuras_;
+    for (const AuraSlot& aura : auras) {
+        if (aura.isEmpty() || (aura.flags & kAuraFlagPositive) == 0) continue;
+        const auto it = owner_.spellNameCacheRef().find(aura.spellId);
+        if (it == owner_.spellNameCacheRef().end()) continue;
+        for (const uint32_t auraType : it->second.effectAuraIds)
+            if (auraType == kAuraOpenStable) cancelAura(aura.spellId);
+    }
+}
+
 void SpellHandler::cancelAura(uint32_t spellId) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     // 0x00802f80: the aura of a form the player is in. The form is left at
