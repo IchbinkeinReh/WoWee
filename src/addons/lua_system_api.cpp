@@ -1931,8 +1931,22 @@ static int lua_RegisterForSavePerCharacter(lua_State* L) { return registerForSav
 
 static int lua_GetLocale(lua_State* L);
 
+static std::optional<uint32_t> registeredCVarFlags(const std::string& lower);
+
 static int lua_GetCVar(lua_State* L) {
-    const char* name = luaL_checkstring(L, 1);
+    // 0x00510040: a string or the usage line; a CVar that is not registered,
+    // or is hidden (flag 0x40), answers nil (0x00767460).
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetCVar(\"cvar\")");
+    const char* name = lua_tostring(L, 1);
+    {
+        std::string lower(name);
+        toLowerInPlace(lower);
+        const auto flags = registeredCVarFlags(lower);
+        if (!flags || (*flags & kCVarHidden)) {
+            lua_pushnil(L);
+            return 1;
+        }
+    }
     // Folded to lower case, because the client's CVar names are not
     // case-sensitive and the interface does not spell them consistently.
     // uidropdownmenu.lua asks for "uiscale" where everything else says
@@ -2057,11 +2071,33 @@ static int lua_GetCVar(lua_State* L) {
 /// load and the Defaults button writes it back, so aliasing the two made that
 /// button restore each control to the value it already had.
 static int lua_GetCVarDefault(lua_State* L) {
-    const char* name = luaL_checkstring(L, 1);
-    std::string n(name);
+    // 0x00510150: the usage line without a string, and an error for a CVar
+    // that is not registered or is hidden.
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetCVarDefault(\"cvar\")");
+    std::string n(lua_tostring(L, 1));
     toLowerInPlace(n);
+    const auto flags = registeredCVarFlags(n);
+    if (!flags || (*flags & kCVarHidden))
+        return luaL_error(L, "Couldn't find CVar named '%s'", lua_tostring(L, 1));
     pushCvarDefault(L, n);
     return 1;
+}
+
+/// The client's reading of a setting as yes or no (0x00815400 with no
+/// default, through 0x008154e0): a leading 0, F or N (any case) is no and a
+/// leading 1-9, T or Y yes; otherwise "off" and "disabled" are no and "on"
+/// and "enabled" yes, without regard to case, and anything else no.
+static bool cvarTruth(const char* v) {
+    if (!v) return false;
+    switch (*v) {
+        case '0': case 'F': case 'N': case 'f': case 'n': return false;
+        case '1': case '2': case '3': case '4': case '5': case '6': case '7': case '8': case '9':
+        case 'T': case 'Y': case 't': case 'y': return true;
+        default: break;
+    }
+    std::string s(v);
+    toLowerInPlace(s);
+    return s == "on" || s == "enabled";
 }
 
 /// GetCVarBool(name) → the setting as a boolean.
@@ -2073,11 +2109,13 @@ static int lua_GetCVarDefault(lua_State* L) {
 /// is the branch that works here, but only until the fallback is off, when the
 /// same call errors instead.
 static int lua_GetCVarBool(lua_State* L) {
+    // 0x005100c0: the usage line without a string; nil for a CVar that is not
+    // registered or is hidden; else 1 or nil by the client's reading of it.
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetCVarBool(\"cvar\")");
     lua_pushvalue(L, 1);
     lua_GetCVar(L);
-    const char* v = lua_tostring(L, -1);
-    const bool on = v && *v && std::string(v) != "0";
-    lua_pop(L, 1);
+    const bool on = !lua_isnil(L, -1) && cvarTruth(lua_tostring(L, -1));
+    lua_settop(L, 1);
     luaPushOneOrNil(L, on);
     return 1;
 }
