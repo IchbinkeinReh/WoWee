@@ -156,17 +156,38 @@ public:
     /// missile, no speed, no model), so the caller plays the impacts itself.
     /// `casterGuid` and `castCount` name the missile as the client keeps it
     /// (+0, +0x20) for SMSG_SET_PROJECTILE_POSITION.
+    ///
+    /// `misses` are the units the cast missed that this missile answers for:
+    /// on arrival each is handed to the miss sink (UNIT_COMBAT at impact,
+    /// 0x00700e20 / 0x00702fc0). A missile flown at one missed unit
+    /// (`missesAtUnit`) answers only when it lands on it, not once it has
+    /// been stopped short and let it go; a missile to a place answers for its
+    /// whole list wherever it lands.
+    struct MissedUnit {
+        uint64_t guid = 0;
+        uint32_t reason = 0;  // SpellMissInfo, nonzero
+    };
     bool launchSpellMissile(uint32_t visualId, float speed, const MissileEnd& from,
                             const MissileEnd& to, std::vector<MissileEnd> impacts,
                             const MissileTrajectory* trajectory = nullptr, uint32_t spellId = 0,
-                            uint64_t casterGuid = 0, uint8_t castCount = 0);
+                            uint64_t casterGuid = 0, uint8_t castCount = 0,
+                            std::vector<MissedUnit> misses = {}, bool missesAtUnit = false);
 
-    /// One target of a bouncing missile: where it goes and whether the cast
-    /// hit it there (its miss reason 0, 0x006fefb0).
+    /// One target of a bouncing missile: its unit, where it goes and whether
+    /// the cast hit it there (its miss reason 0, 0x006fefb0), else why not.
     struct BounceHop {
+        uint64_t guid = 0;
         MissileEnd end;
         bool hit = false;
+        uint32_t missReason = 0;
     };
+
+    /// A missile has landed for a unit its cast missed (0x00702fc0 for the
+    /// unit it reached, 0x00700e20 for each on a place missile's list, the
+    /// first of its copies only): the game raises UNIT_COMBAT for it then
+    /// (0x00513410), not at SMSG_SPELL_GO.
+    using MissileMissSink = std::function<void(uint32_t spellId, uint64_t unitGuid, uint32_t missReason)>;
+    void setMissileMissSink(MissileMissSink sink) { missileMissSink_ = std::move(sink); }
     /// A spell with AttributesEx4 0x40000 (missile flag 0x200, 0x00732ff0):
     /// one missile to the first of `hops`, relaunched on each arrival from
     /// where it is to the next in turn (0x00702a60), each hit's impact played
@@ -939,6 +960,7 @@ private:
     TransportFrameQuery transportFrameQuery_;
     UnarmedKitsQuery unarmedKitsQuery_;
     UnitDeadQuery unitDeadQuery_;
+    MissileMissSink missileMissSink_;
     AttachedEffectScale attachedEffectScale_;
     /// 0x00720400 for a unit: hide or show its Flags 8 kits as asked.
     void stepUnarmedKits(uint64_t unitGuid, UnitAuraKits& unit, bool force);
@@ -1008,6 +1030,11 @@ private:
         glm::vec3 impactOffset{0.0f};
         glm::vec3 lastTarget{0.0f};
         std::vector<MissileEnd> impacts;  // where the impact kit plays on arrival
+        // The missed units it answers for on arrival (+0xa8 with the miss
+        // reasons +0xc8, or its own target with +0x94), and whether only on
+        // landing on that unit.
+        std::vector<MissedUnit> misses;
+        bool missesAtUnit = false;
         float elapsed = 0.0f;
         float maxLifetime = 0.0f;
         uint32_t soundHandle = 0;  // its MissileSound, looping where it flies
@@ -1080,7 +1107,8 @@ private:
     /// for it to bounce along after `to`.
     bool launchMissile(uint32_t visualId, float speed, const MissileEnd& from, const MissileEnd& to,
                        std::vector<MissileEnd> impacts, const MissileTrajectory* trajectory, uint32_t spellId,
-                       uint64_t casterGuid, uint8_t castCount, std::vector<BounceHop> hops);
+                       uint64_t casterGuid, uint8_t castCount, std::vector<BounceHop> hops,
+                       std::vector<MissedUnit> misses = {}, bool missesAtUnit = false);
     /// One frame of a missile's motion script (0x00700350, 0x00700550,
     /// 0x006feb20): where it is drawn and how its model is turned, its speed
     /// changed; the drawn place is its own where it has no script.

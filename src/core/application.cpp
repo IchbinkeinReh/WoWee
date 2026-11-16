@@ -4003,6 +4003,11 @@ void Application::connectWorldHooks() {
             });
             // 0x00702db0: a unit whose health is below 1 takes no wound
             // from a missile.
+            // UNIT_COMBAT for a missed unit as the missile lands
+            // (0x00702fc0, 0x00700e20).
+            svs->setMissileMissSink([this](uint32_t spellId, uint64_t guid, uint32_t reason) {
+                if (gameHandler) gameHandler->fireSpellMissileMiss(spellId, guid, reason);
+            });
             svs->setUnitDeadQuery([this](uint64_t guid) {
                 auto entity = gameHandler ? gameHandler->getEntityManager().getEntity(guid) : nullptr;
                 const auto* unit = dynamic_cast<const game::Unit*>(entity.get());

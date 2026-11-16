@@ -545,15 +545,17 @@ std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data,
         return true;
     };
 
-    const size_t targetCount = data.hitTargets.size() + data.missTargets.size();
     const bool hasLocation =
         (data.targetFlags & (sm::kTargetFlagSourceLocation | sm::kTargetFlagDestLocation)) != 0;
+    using MissedUnit = rendering::SpellVisualSystem::MissedUnit;
     // AttributesEx4 0x40000 (0x0080f4d7 -> 0x00800180): never a missile per
     // target. At a location the one missile flies to the point; otherwise it
     // goes to the first target and, carrying the list (flag 0x200), is
     // relaunched on each arrival to the next (0x00702a60). The list is the
     // hit targets then the missed ones, or the missed first with cast flag
-    // 0x400; a missed one is flown to but takes no impact (0x006fefb0).
+    // 0x400; a missed one is flown to but takes no impact (0x006fefb0), and
+    // its miss reason is raised as UNIT_COMBAT when the missile lands on it
+    // (0x00702fc0).
     const bool bouncy = (spellIt->second.attrEx4 & 0x40000u) != 0;
     if (bouncy && !hasLocation) {
         std::vector<rendering::SpellVisualSystem::BounceHop> hops;
@@ -562,14 +564,14 @@ std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data,
             for (uint64_t guid : data.hitTargets) {
                 MissileEnd end;
                 if (!unitEnd(guid, end)) continue;
-                hops.push_back({end, true});
+                hops.push_back({guid, end, true, 0});
                 hitsFlownTo.push_back(guid);
             }
         };
         const auto addMisses = [&] {
             for (const auto& miss : data.missTargets) {
                 MissileEnd end;
-                if (unitEnd(miss.targetGuid, end)) hops.push_back({end, false});
+                if (unitEnd(miss.targetGuid, end)) hops.push_back({miss.targetGuid, end, false, miss.missType});
             }
         };
         if (data.castFlags & 0x400u) {
@@ -584,49 +586,65 @@ std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data,
             carried = std::move(hitsFlownTo);
         return carried;
     }
-    auto targeting = sm::chooseTargeting(data.targetFlags, targetCount, missile->flags);
-    if (bouncy) targeting = sm::Targeting::Location;
-    switch (targeting) {
-    case sm::Targeting::EachTarget: {
+    // The wire's points (0x00732ff0): the one it flies to in the frame of
+    // its transport guid; with both, the source is where it starts, taken
+    // as a place in the world.
+    const auto point = [](const glm::vec3& canonical) {
+        return MissileEnd{0, core::coords::canonicalToRender(canonical)};
+    };
+    MissileEnd placeFrom = from;
+    MissileEnd place;
+    bool havePlace = false;
+    if (data.hasDestLocation) {
+        place = point(targetPointInWorld(data.destTransportGuid, data.destX, data.destY, data.destZ));
+        if (data.hasSourceLocation)
+            placeFrom = point(core::coords::serverToCanonical(glm::vec3(data.sourceX, data.sourceY, data.sourceZ)));
+        havePlace = true;
+    } else if (data.hasSourceLocation) {
+        place = point(targetPointInWorld(data.sourceTransportGuid, data.sourceX, data.sourceY, data.sourceZ));
+        havePlace = true;
+    }
+    // A bouncing spell cast at a place (0x00800180): its one missile flies
+    // to the point carrying every target, hit ones with no reason and missed
+    // ones with theirs. Landing (0x00700e20) with a reason list, it plays no
+    // target's impact - only the point's - and raises each miss.
+    if (bouncy) {
+        if (!havePlace) return carried;
+        std::vector<MissedUnit> misses;
+        for (const auto& miss : data.missTargets) misses.push_back({miss.targetGuid, miss.missType});
+        if (svs->launchSpellMissile(visualId, speed, placeFrom, place, {place}, trajectory, data.spellId,
+                                    data.casterUnit, data.castCount, std::move(misses))) {
+            carried = data.hitTargets;
+            if (flewToPlace) *flewToPlace = true;
+        }
+        return carried;
+    }
+    // 0x0080e1b0 runs 0x007fffb0 once for the hit list and, when there are
+    // misses, again for the miss list with their reasons; each run chooses
+    // its own missiles by its own list's count.
+    const auto targetingFor = [&](size_t count) {
+        return sm::chooseTargeting(data.targetFlags, count, missile->flags);
+    };
+    // The hit run.
+    switch (targetingFor(data.hitTargets.size())) {
+    case sm::Targeting::EachTarget:
         for (uint64_t guid : data.hitTargets) {
             MissileEnd to;
             if (unitEnd(guid, to) && svs->launchSpellMissile(visualId, speed, from, to, {to}, trajectory,
                                                              data.spellId, data.casterUnit, data.castCount))
                 carried.push_back(guid);
         }
-        for (const auto& miss : data.missTargets) {
-            MissileEnd to;
-            if (unitEnd(miss.targetGuid, to))
-                svs->launchSpellMissile(visualId, speed, from, to, {}, trajectory, data.spellId, data.casterUnit,
-                                        data.castCount);
-        }
         break;
-    }
     case sm::Targeting::Location: {
-        // The wire's points (0x00732ff0): the one it flies to in the frame
-        // of its transport guid; with both, the source is where it starts,
-        // taken as a place in the world.
-        const auto point = [](const glm::vec3& canonical) {
-            return MissileEnd{0, core::coords::canonicalToRender(canonical)};
-        };
-        MissileEnd to;
-        if (data.hasDestLocation) {
-            to = point(targetPointInWorld(data.destTransportGuid, data.destX, data.destY, data.destZ));
-            if (data.hasSourceLocation)
-                from = point(core::coords::serverToCanonical(glm::vec3(data.sourceX, data.sourceY, data.sourceZ)));
-        } else if (data.hasSourceLocation) {
-            to = point(targetPointInWorld(data.sourceTransportGuid, data.sourceX, data.sourceY, data.sourceZ));
-        } else {
-            break;
-        }
+        if (!havePlace) break;
         std::vector<MissileEnd> impacts;
         for (uint64_t guid : data.hitTargets) {
             MissileEnd end;
             if (unitEnd(guid, end)) impacts.push_back(end);
         }
         // 0x00700e20: and at the point it flies to, whatever it hit.
-        impacts.push_back(to);
-        if (svs->launchSpellMissile(visualId, speed, from, to, std::move(impacts), trajectory, data.spellId,
+        impacts.push_back(place);
+        if (svs->launchSpellMissile(visualId, speed, placeFrom, place, std::move(impacts), trajectory, data.spellId,
                                     data.casterUnit, data.castCount)) {
             carried = data.hitTargets;
             if (flewToPlace) *flewToPlace = true;
@@ -635,6 +653,33 @@ std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data,
     }
     case sm::Targeting::None:
         break;
+    }
+    // The miss run: no impact on any of them; each missed unit's UNIT_COMBAT
+    // when its missile lands on it (0x00702fc0), or, for a missile to the
+    // place carrying the list with its reasons, when that one lands
+    // (0x00700e20).
+    if (!data.missTargets.empty()) {
+        switch (targetingFor(data.missTargets.size())) {
+        case sm::Targeting::EachTarget:
+            for (const auto& miss : data.missTargets) {
+                MissileEnd to;
+                if (unitEnd(miss.targetGuid, to))
+                    svs->launchSpellMissile(visualId, speed, from, to, {}, trajectory, data.spellId,
+                                            data.casterUnit, data.castCount, {{miss.targetGuid, miss.missType}},
+                                            /*missesAtUnit=*/true);
+            }
+            break;
+        case sm::Targeting::Location: {
+            if (!havePlace) break;
+            std::vector<MissedUnit> misses;
+            for (const auto& miss : data.missTargets) misses.push_back({miss.targetGuid, miss.missType});
+            svs->launchSpellMissile(visualId, speed, placeFrom, place, {}, trajectory, data.spellId,
+                                    data.casterUnit, data.castCount, std::move(misses));
+            break;
+        }
+        case sm::Targeting::None:
+            break;
+        }
     }
     return carried;
 }
@@ -4703,11 +4748,21 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
 
     // UNIT_COMBAT for each target missed, and for the caster where a
     // reflected spell came back with a result of its own (0x0080e1b0 ->
-    // 0x00513410). The client raises it here for a spell with no travel
-    // time and at the missile's impact (0x00700e20, 0x00702fc0) otherwise;
-    // here it is raised at the cast for both.
-    if (!data.missTargets.empty() && unit_combat::spellRaises(owner_.getSpellAttributes(data.spellId))) {
-        const uint64_t reflectVictim = data.casterUnit != 0 ? data.casterUnit : data.casterGuid;
+    // 0x00513410). Here only for a spell with no Speed whose AttributesEx2
+    // lacks 0x80; any other's are raised where its missile lands, for the
+    // unit it lands on (0x00702fc0, 0x00700e20 - SpellVisualSystem's miss
+    // sink), with no reflected result for the caster. The reflected result
+    // goes to the cast's unit, the packet's second guid (0x0080eb84 pushes
+    // -0x38(%ebp), loaded from the packet's +0x10 at 0x0080e1d5), whatever
+    // it is.
+    const float missSpeed = [&] {
+        owner_.loadSpellNameCache();
+        const auto it = owner_.spellNameCacheRef().find(data.spellId);
+        return it != owner_.spellNameCacheRef().end() ? it->second.missileSpeed : 0.0f;
+    }();
+    if (!data.missTargets.empty() && unit_combat::spellRaises(owner_.getSpellAttributes(data.spellId)) &&
+        unit_combat::missesRaisedAtCast(missSpeed, owner_.getSpellAttributesEx2(data.spellId))) {
+        const uint64_t reflectVictim = data.casterUnit;
         for (const auto& m : data.missTargets) {
             owner_.fireUnitCombat(m.targetGuid, unit_combat::missAction(m.missType), 0,
                                   unit_combat::kPhysicalSchoolMask, 0);
