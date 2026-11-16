@@ -1443,7 +1443,7 @@ SpellHandler::TrajectoryCast SpellHandler::buildTrajectoryCast(uint32_t spellId,
     const mt::Flight flight = mt::fly(row, aim, origin.middle, [renderer](const glm::vec3& a, const glm::vec3& b) {
         return renderer ? renderer->intersectSegment(a, b) : std::nullopt;
     });
-    out = CastSpellPacket::buildTrajectory(spellId, ++castCount_, target, aim.launch, flight.impact, aim.pitch,
+    out = CastSpellPacket::buildTrajectory(spellId, nextCastCount(), target, aim.launch, flight.impact, aim.pitch,
                                            aim.speed, mover, wire);
     LOG_INFO("Aimed cast ", spellId, ": pitch ", aim.pitch, " speed ", aim.speed, " lands in ", flight.seconds, " s");
     return TrajectoryCast::Built;
@@ -1456,8 +1456,8 @@ void SpellHandler::sendPetCast(uint32_t spellId, uint64_t caster, uint64_t targe
     if (how == TrajectoryCast::Refused) return;
     const auto cast = how == TrajectoryCast::Built ? aimed
                       : owner_.getPacketParsers()
-                          ? owner_.getPacketParsers()->buildCastSpell(spellId, target, ++castCount_)
-                          : CastSpellPacket::build(spellId, target, ++castCount_);
+                          ? owner_.getPacketParsers()->buildCastSpell(spellId, target, nextCastCount())
+                          : CastSpellPacket::build(spellId, target, nextCastCount());
     owner_.getSocket()->send(CastSpellPacket::asPetCast(caster, cast));
     LOG_INFO("Pet 0x", std::hex, caster, " casting spell: ", std::dec, spellId, " on 0x", std::hex, target, std::dec);
     castSent(spellId, caster);
@@ -2067,7 +2067,8 @@ bool SpellHandler::castAtGameObject(uint32_t spellId, uint64_t gameObjectGuid, u
     if (!castChecksPass(spellId, 0)) return false;
     playCastActivateSound(spellId, itemGuid);
     if (itemGuid != 0) {
-        owner_.getSocket()->send(UseItemPacket::build(bag, slot, itemGuid, spellId, 0, 0, gameObjectGuid));
+        owner_.getSocket()->send(UseItemPacket::build(bag, slot, itemGuid, spellId, 0, 0, gameObjectGuid, 0, 0,
+                                                      nextCastCount()));
     } else {
         owner_.getSocket()->send(owner_.getPacketParsers()
                                      ? owner_.getPacketParsers()->buildCastGameObjectSpell(spellId, gameObjectGuid, 0)
@@ -2181,10 +2182,10 @@ void SpellHandler::sendPlayerCast(uint32_t spellId, uint64_t target, uint64_t it
     auto packet = how == TrajectoryCast::Built ? aimed
         : item != 0
         ? (owner_.getPacketParsers() ? owner_.getPacketParsers()->buildCastSpellOnItem(spellId, item)
-                                     : CastSpellPacket::buildItemTarget(spellId, item, ++castCount_))
+                                     : CastSpellPacket::buildItemTarget(spellId, item, nextCastCount()))
         : owner_.getPacketParsers()
-        ? owner_.getPacketParsers()->buildCastSpell(spellId, target, ++castCount_)
-        : CastSpellPacket::build(spellId, target, ++castCount_);
+        ? owner_.getPacketParsers()->buildCastSpell(spellId, target, nextCastCount())
+        : CastSpellPacket::build(spellId, target, nextCastCount());
     LOG_DEBUG("CMSG_CAST_SPELL: spellId=", spellId, " target=0x", std::hex, target, std::dec,
               " castCount=", static_cast<int>(castCount_), " packetSize=", packet.getSize());
     owner_.getSocket()->send(packet);
@@ -3299,9 +3300,9 @@ void SpellHandler::castAtLocation(uint32_t spellId, const ground_target::Place& 
     const glm::vec3 wire = onTransport ? place.transportOffset : core::coords::canonicalToServer(place.canonical);
     const uint64_t transportGuid = onTransport ? place.transportGuid : 0;
     auto packet = owner_.getPacketParsers()
-        ? owner_.getPacketParsers()->buildCastSpellAtLocation(spellId, wire.x, wire.y, wire.z, ++castCount_,
+        ? owner_.getPacketParsers()->buildCastSpellAtLocation(spellId, wire.x, wire.y, wire.z, nextCastCount(),
                                                               transportGuid)
-        : CastSpellPacket::buildDestination(spellId, wire.x, wire.y, wire.z, ++castCount_, transportGuid);
+        : CastSpellPacket::buildDestination(spellId, wire.x, wire.y, wire.z, nextCastCount(), transportGuid);
     // A pet's, by the pet (0x0080ac90's 0x1f0).
     owner_.getSocket()->send(caster != 0 ? CastSpellPacket::asPetCast(caster, packet) : packet);
     castSent(spellId, caster != 0 ? caster : owner_.getPlayerGuid());

@@ -38,6 +38,10 @@ public:
 
     explicit SpellHandler(GameHandler& owner);
 
+    /// The count the next CMSG_CAST_SPELL or CMSG_USE_ITEM carries
+    /// (0x00805010: 1..255, never 0, one counter for both).
+    uint8_t nextCastCount() { return cast_check::nextCastCount(castCount_); }
+
     void registerOpcodes(DispatchTable& table);
 
     // Talent data structures (aliased from handler_types.hpp)
@@ -782,7 +786,7 @@ private:
     std::unordered_set<uint32_t> knownSpells_;
     std::unordered_map<uint32_t, uint64_t> learnOrder_;
     uint64_t nextLearnOrder_ = 0;
-    uint8_t castCount_ = 0;
+    uint8_t castCount_ = 0;  ///< the count last sent (0x00805010)
     AttackStreak attackStreak_;  ///< 0x0080cce0's tutorial counter
     /// The cast count of the player's cast the server last started: the
     /// running cast a cancel ends (0x00806200).

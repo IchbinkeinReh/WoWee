@@ -640,11 +640,13 @@ network::Packet UseItemPacket::build(uint8_t bagIndex, uint8_t slotIndex,
                                      uint64_t itemGuid, uint32_t spellId,
                                      uint64_t targetGuid, uint64_t itemTargetGuid,
                                      uint64_t gameObjectGuid, uint32_t glyphIndex,
-                                     uint32_t noTargetFlags) {
+                                     uint32_t noTargetFlags, uint8_t castCount) {
     network::Packet packet(wireOpcode(Opcode::CMSG_USE_ITEM));
     packet.writeUInt8(bagIndex);
     packet.writeUInt8(slotIndex);
-    packet.writeUInt8(0);  // cast count
+    // 0x0080b2ad: the pending cast's count (0x00805010), shared with
+    // CMSG_CAST_SPELL.
+    packet.writeUInt8(castCount);
     packet.writeUInt32(spellId); // spell id from item data
     packet.writeUInt64(itemGuid); // full 8-byte GUID
     packet.writeUInt32(glyphIndex); // the socket, when a glyph is being placed

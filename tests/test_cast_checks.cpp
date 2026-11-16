@@ -352,3 +352,16 @@ TEST_CASE("indoors is the building group's, else the ground's area (0x0077fbf0)"
     p.rowFlags = 0x4;  // outdoors
     REQUIRE(outdoors(p, 0));
 }
+
+TEST_CASE("cast count runs 1..255 and never sends 0 (0x00805010)", "[cast_checks]") {
+    uint8_t last = 0;
+    REQUIRE(nextCastCount(last) == 1);
+    REQUIRE(nextCastCount(last) == 2);
+    last = 254;
+    REQUIRE(nextCastCount(last) == 255);
+    REQUIRE(nextCastCount(last) == 1);
+    REQUIRE(last == 1);
+    uint8_t seen0 = 0;
+    for (int i = 0; i < 1000; ++i) seen0 |= nextCastCount(last) == 0;
+    REQUIRE(seen0 == 0);
+}

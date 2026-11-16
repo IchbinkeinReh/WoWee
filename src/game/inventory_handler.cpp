@@ -2710,10 +2710,14 @@ void InventoryHandler::dispatchUseItem(uint8_t wowBag, uint8_t wowSlot, uint64_t
 
 void InventoryHandler::sendUseItem(uint8_t wowBag, uint8_t wowSlot, uint64_t itemGuid,
                                    uint32_t spellId, uint64_t targetGuid, uint64_t itemTargetGuid) {
+    // 0x0080b2ad: the use carries the pending cast's count, the counter the
+    // spell casts step (0x00805010).
+    const uint8_t castCount = owner_.getSpellHandler() ? owner_.getSpellHandler()->nextCastCount() : 0;
     auto packet = owner_.getPacketParsers()
         ? owner_.getPacketParsers()->buildUseItem(wowBag, wowSlot, itemGuid, spellId,
-                                                  targetGuid, itemTargetGuid)
-        : UseItemPacket::build(wowBag, wowSlot, itemGuid, spellId, targetGuid, itemTargetGuid);
+                                                  targetGuid, itemTargetGuid, castCount)
+        : UseItemPacket::build(wowBag, wowSlot, itemGuid, spellId, targetGuid, itemTargetGuid,
+                               0, 0, 0, castCount);
     // The unit target and how it was decided, because "the item did nothing"
     // is a question about exactly this and the packet is where it is answered.
     // WOWEE_LOG_LEVEL=info opens it.
@@ -2841,7 +2845,9 @@ bool InventoryHandler::castPendingAtTradeSlot() {
         // slot follows it.
         network::Packet packet = UseItemPacket::build(pending.bag, pending.slot, pending.itemGuid,
                                                       pending.spellId, 0, 0, 0, 0,
-                                                      kTargetFlagTradeItem);
+                                                      kTargetFlagTradeItem,
+                                                      owner_.getSpellHandler()
+                                                          ? owner_.getSpellHandler()->nextCastCount() : 0);
         packet.writePackedGuid(static_cast<uint64_t>(TRADE_SLOT_NONTRADED));
         owner_.getSocket()->send(packet);
     }
@@ -3152,7 +3158,9 @@ bool InventoryHandler::placePendingGlyph(uint32_t socketIndex) {
     // The socket is the use's glyph index, and the cast is aimed at a glyph
     // socket (0x0080c3e0 puts 0x20000 on its target mask).
     auto packet = UseItemPacket::build(pending.bag, pending.slot, pending.itemGuid, pending.spellId,
-                                       0, 0, 0, socketIndex, glyph_socket::kTargetFlagGlyph);
+                                       0, 0, 0, socketIndex, glyph_socket::kTargetFlagGlyph,
+                                       owner_.getSpellHandler()
+                                           ? owner_.getSpellHandler()->nextCastCount() : 0);
     LOG_INFO("Placing glyph: bag=", static_cast<int>(pending.bag), " slot=",
              static_cast<int>(pending.slot), " spell=", pending.spellId, " socket=", socketIndex);
     owner_.getSocket()->send(packet);

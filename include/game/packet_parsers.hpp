@@ -108,8 +108,10 @@ public:
      *  itemTargetGuid selects TARGET_FLAG_ITEM for spells that enchant another item. */
     virtual network::Packet buildUseItem(uint8_t bagIndex, uint8_t slotIndex,
                                          uint64_t itemGuid, uint32_t spellId = 0,
-                                         uint64_t targetGuid = 0, uint64_t itemTargetGuid = 0) {
-        return UseItemPacket::build(bagIndex, slotIndex, itemGuid, spellId, targetGuid, itemTargetGuid);
+                                         uint64_t targetGuid = 0, uint64_t itemTargetGuid = 0,
+                                         uint8_t castCount = 0) {
+        return UseItemPacket::build(bagIndex, slotIndex, itemGuid, spellId, targetGuid, itemTargetGuid,
+                                    0, 0, 0, castCount);
     }
 
     // --- Character Enumeration ---
@@ -412,7 +414,8 @@ public:
     // TBC 2.4.3 CMSG_USE_ITEM uses spellIndex + castCount + itemGuid + targets.
     network::Packet buildUseItem(uint8_t bagIndex, uint8_t slotIndex,
                                  uint64_t itemGuid, uint32_t spellId = 0,
-                                 uint64_t targetGuid = 0, uint64_t itemTargetGuid = 0) override;
+                                 uint64_t targetGuid = 0, uint64_t itemTargetGuid = 0,
+                                 uint8_t castCount = 0) override;
     // TBC 2.4.3 SMSG_MONSTER_MOVE has no unk byte after packed GUID (WotLK added it)
     bool parseMonsterMove(network::Packet& packet, MonsterMoveData& data) override;
     // TBC 2.4.3 SMSG_GOSSIP_MESSAGE quests lack questFlags(u32)+isRepeatable(u8) (WotLK added them)
@@ -506,7 +509,8 @@ public:
                                              uint8_t castCount, uint64_t transportGuid = 0) override;
     network::Packet buildUseItem(uint8_t bagIndex, uint8_t slotIndex,
                                  uint64_t itemGuid, uint32_t spellId = 0,
-                                 uint64_t targetGuid = 0, uint64_t itemTargetGuid = 0) override;
+                                 uint64_t targetGuid = 0, uint64_t itemTargetGuid = 0,
+                                 uint8_t castCount = 0) override;
     bool parseCastFailed(network::Packet& packet, CastFailedData& data) override;
     bool parseCastResult(network::Packet& packet, uint32_t& spellId, uint8_t& result,
                          uint32_t& miscArg, uint32_t& miscArg2) override;

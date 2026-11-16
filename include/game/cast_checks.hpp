@@ -451,4 +451,15 @@ struct Usable {
     return !casting || (result != kSpellInProgress && sameSpell);
 }
 
+/// 0x00805010: the pending cast takes the shared counter DAT_00d397d5, made
+/// 1 when it is 0, and then steps it on. The counts sent run 1..255 and wrap
+/// back to 1 - never 0. CMSG_USE_ITEM carries the same byte (0x0080b2ad
+/// writes the pending cast's +0x24), so spells and item uses share it.
+/// `last` holds the count last handed out; the sequence is the client's.
+[[nodiscard]] constexpr uint8_t nextCastCount(uint8_t& last) {
+    last = static_cast<uint8_t>(last + 1);
+    if (last == 0) last = 1;
+    return last;
+}
+
 }  // namespace wowee::game::cast_check
