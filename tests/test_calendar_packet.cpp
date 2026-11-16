@@ -412,6 +412,39 @@ TEST_CASE("A raid lockout lands on the day it expires", "[calendar]") {
     CHECK(calendarEntriesForDay(cal, 10, 9, 2009).empty());
 }
 
+TEST_CASE("The calendarShow filters hide holidays by type and lockouts", "[calendar]") {
+    // 0x005c0240: a holiday of filter type 0, 1 or 2 is behind the weekly,
+    // Darkmoon and battleground CVars; any other type always shows.
+    CalendarData cal;
+    CalendarHoliday h;
+    h.dates[0] = (26u << 24) | (7u << 20) | (10u << 14);  // 11 August 2026
+    h.durations[0] = 24;
+    for (uint32_t type : {0u, 1u, 2u, 3u}) {
+        h.calendarFilterType = type;
+        cal.holidays.push_back(h);
+    }
+    CalendarRaidLockout lock;
+    lock.expires = unpackWowPackedTime((26u << 24) | (7u << 20) | (10u << 14));
+    cal.lockouts.push_back(lock);
+
+    CHECK(calendarEntriesForDay(cal, 8, 11, 2026).size() == 5);
+
+    CalendarShowFilter f;
+    f.battlegrounds = false;
+    auto rows = calendarEntriesForDay(cal, 8, 11, 2026, f);
+    REQUIRE(rows.size() == 4);
+    for (const auto& r : rows) {
+        if (r.kind == CalendarEntryKind::Holiday) CHECK(cal.holidays[r.index].calendarFilterType != 2);
+    }
+
+    f.weeklyHolidays = false;
+    f.darkmoon = false;
+    f.lockouts = false;
+    rows = calendarEntriesForDay(cal, 8, 11, 2026, f);
+    REQUIRE(rows.size() == 1);
+    CHECK(cal.holidays[rows[0].index].calendarFilterType == 3);
+}
+
 TEST_CASE("Adding minutes to a packed date crosses months, years and weekdays", "[calendar]") {
     WowDate d;
     d.yearSince2000 = 9; d.month = 12; d.day = 31; d.hour = 23; d.minute = 30;

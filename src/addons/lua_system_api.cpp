@@ -144,6 +144,29 @@ static int pushCalendarBoundDate(lua_State* L, int monthOffset) {
     return 4;
 }
 
+static std::unordered_map<std::string, std::string>& cvarStore();
+
+/// The calendarShow* CVars as the day lists read them (0x005c0240): the
+/// stored value, else the client's default, and 0 hides that kind of row.
+static wowee::game::CalendarShowFilter calendarShowFilter() {
+    auto on = [](const char* lower) {
+        std::string v;
+        if (auto it = cvarStore().find(lower); it != cvarStore().end()) {
+            v = it->second;
+        } else if (auto d = clientCVarDefault(lower)) {
+            v = std::string(*d);
+        }
+        return std::atof(v.c_str()) != 0.0;
+    };
+    wowee::game::CalendarShowFilter f;
+    f.weeklyHolidays = on("calendarshowweeklyholidays");
+    f.darkmoon = on("calendarshowdarkmoon");
+    f.battlegrounds = on("calendarshowbattlegrounds");
+    f.lockouts = on("calendarshowlockouts");
+    f.resets = on("calendarshowresets");
+    return f;
+}
+
 /// The rows on the day an interface call is asking about.
 ///
 /// Every day-indexed calendar getter takes (monthOffset, day) and indexes the
@@ -161,7 +184,7 @@ static std::vector<wowee::game::CalendarDayEntry> calendarDayRows(lua_State* L) 
                                                    monthOffset);
     if (day > info.numDays) return {};
     return wowee::game::calendarEntriesForDay(gh->getCalendarData(), info.month,
-                                              day, info.year);
+                                              day, info.year, calendarShowFilter());
 }
 
 /// The event being built up before it is sent.
@@ -209,7 +232,7 @@ static std::vector<wowee::game::CalendarDayEntry> calendarRowsFor(
                                                    monthOffset);
     if (day > info.numDays) return {};
     return wowee::game::calendarEntriesForDay(gh.getCalendarData(), info.month,
-                                              day, info.year);
+                                              day, info.year, calendarShowFilter());
 }
 
 /// Which of the six kinds of row this event is, as the string the interface

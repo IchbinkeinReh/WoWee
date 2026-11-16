@@ -208,12 +208,16 @@ WowDate addMinutes(const WowDate& date, int64_t minutes) {
 
 std::vector<CalendarDayEntry> calendarEntriesForDay(const CalendarData& data,
                                                     int month, int day,
-                                                    int year) {
+                                                    int year,
+                                                    const CalendarShowFilter& filter) {
     std::vector<CalendarDayEntry> out;
     const int64_t wanted = dayNumber(year, month, day);
 
     for (size_t h = 0; h < data.holidays.size(); ++h) {
         const CalendarHoliday& holiday = data.holidays[h];
+        // 0x005c0240 / 0x005c04f0: a holiday's list is skipped while the
+        // calendarShow* CVar for its filter type reads 0.
+        if (!filter.showsHoliday(holiday.calendarFilterType)) continue;
         for (int i = 0; i < CalendarHoliday::kNumDates; ++i) {
             if (holiday.dates[i] == 0) continue;
             const WowDate start = unpackWowPackedTime(holiday.dates[i]);
@@ -240,7 +244,7 @@ std::vector<CalendarDayEntry> calendarEntriesForDay(const CalendarData& data,
     // date a lockout only by how long it has left, and the client adds that
     // to the zone time the same packet carries (0x005c29c0) - the server's
     // own wall clock in the realm's zone, not this machine's.
-    for (size_t l = 0; l < data.lockouts.size(); ++l) {
+    for (size_t l = 0; filter.lockouts && l < data.lockouts.size(); ++l) {
         const WowDate& when = data.lockouts[l].expires;
         if (dayNumber(when.fullYear(), when.month, when.day) != wanted) continue;
         CalendarDayEntry entry;

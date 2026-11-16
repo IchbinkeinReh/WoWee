@@ -532,9 +532,35 @@ struct CalendarDayEntry {
  * walked together: a holiday with several date/duration pairs is several
  * separate runs in the same row, which is how a recurring one is sent.
  */
+/// Which kinds of row the calendarShow* CVars let into a day (0x005c0240).
+///
+/// The client files each row under one of eight lists and a list is skipped
+/// while its CVar reads 0: raid lockouts under calendarShowLockouts, raid
+/// resets under calendarShowResets, and a holiday by its calendar filter type -
+/// 0 calendarShowWeeklyHolidays, 1 calendarShowDarkmoon, 2
+/// calendarShowBattlegrounds; any other type is always shown (0x005c04f0).
+struct CalendarShowFilter {
+    bool weeklyHolidays = true;
+    bool darkmoon = true;
+    bool battlegrounds = true;
+    bool lockouts = true;
+    bool resets = true;
+
+    /// Whether a holiday with that calendar filter type is shown.
+    bool showsHoliday(uint32_t calendarFilterType) const {
+        switch (calendarFilterType) {
+            case 0: return weeklyHolidays;
+            case 1: return darkmoon;
+            case 2: return battlegrounds;
+            default: return true;
+        }
+    }
+};
+
 std::vector<CalendarDayEntry> calendarEntriesForDay(const CalendarData& data,
                                                     int month, int day,
-                                                    int year);
+                                                    int year,
+                                                    const CalendarShowFilter& filter = {});
 
 }  // namespace game
 }  // namespace wowee
