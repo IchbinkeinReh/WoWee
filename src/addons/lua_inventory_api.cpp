@@ -2848,32 +2848,90 @@ static int lua_GetInventoryItemsForSlot(lua_State* L) {
 // items can share a name and only the link says which.
 
 /// The first carried item whose id or name matches, or zero.
-static uint32_t carriedItemMatching(game::GameHandler* gh, lua_State* L, int arg) {
-    if (!gh) return 0;
+/// Where a carried item is: its entry, and a backpack index (bag -1) or a
+/// bag and slot.
+struct CarriedItem {
+    uint32_t itemId = 0;
+    int bag = -1;
+    int slot = -1;
+};
+
+/// The instance numbers of an "item:" link as 0x0050f630 reads them: the
+/// enchant, the first three gems, the suffix and the seed (the unique id).
+struct LinkedInstance {
+    uint32_t enchant = 0;
+    uint32_t gems[3] = {0, 0, 0};
+    int32_t suffix = 0;
+    uint32_t seed = 0;
+};
+
+static bool linkedInstance(const std::string& text, LinkedInstance& out) {
+    const auto pos = text.find("item:");
+    if (pos == std::string::npos) return false;
+    // id:enchant:gem1:gem2:gem3:gem4:suffix:unique
+    long v[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    const char* p = text.c_str() + pos + 5;
+    for (int i = 0; i < 8; ++i) {
+        char* end = nullptr;
+        v[i] = std::strtol(p, &end, 10);
+        if (*end != ':') break;
+        p = end + 1;
+    }
+    out.enchant = static_cast<uint32_t>(v[1]);
+    out.gems[0] = static_cast<uint32_t>(v[2]);
+    out.gems[1] = static_cast<uint32_t>(v[3]);
+    out.gems[2] = static_cast<uint32_t>(v[4]);
+    out.suffix = static_cast<int32_t>(v[6]);
+    out.seed = static_cast<uint32_t>(v[7]);
+    return true;
+}
+
+/// 0x007545d0: a carried item answers a link when each number the link
+/// names - enchant, gems, suffix, seed - is the item's own. An item whose
+/// field flag 0x8 is up has none of them (GameHandler::itemLinkInstance), so
+/// only a link naming none answers for it.
+static bool itemAnswersLink(game::GameHandler* gh, uint64_t guid, const LinkedInstance& link) {
+    const game::ItemLinkInstance have = gh->itemLinkInstance(guid);
+    if (link.enchant != 0 && link.enchant != have.enchantId) return false;
+    for (int i = 0; i < 3; ++i) {
+        if (link.gems[i] != 0 && link.gems[i] != have.gems[static_cast<size_t>(i)]) return false;
+    }
+    if (link.suffix != 0 && link.suffix != have.randomPropertyId) return false;
+    if (link.seed != 0 && link.seed != have.seed) return false;
+    return true;
+}
+
+static CarriedItem carriedItemMatching(game::GameHandler* gh, lua_State* L, int arg) {
+    if (!gh) return {};
     const uint32_t byId = itemIdFromArg(L, arg);
     std::string byName = lua_isstring(L, arg) ? lua_tostring(L, arg) : "";
+    // A link names one item, its enchant, gems, suffix and seed as well
+    // (0x00754c30 -> 0x007545d0); an id or a name only the entry.
+    LinkedInstance link;
+    const bool isLink = !lua_isnumber(L, arg) && linkedInstance(byName, link);
     // A link parsed to an id above; treat the text as a name only otherwise.
     if (byId != 0) byName.clear();
 
     const auto& inv = gh->getInventory();
-    auto matches = [&](uint32_t itemId) {
+    auto matches = [&](const game::ItemSlot& sl) {
+        const uint32_t itemId = sl.item.itemId;
         if (itemId == 0) return false;
-        if (byId != 0) return itemId == byId;
+        if (byId != 0) return itemId == byId && (!isLink || itemAnswersLink(gh, sl.item.guid, link));
         if (byName.empty()) return false;
         const auto* info = gh->getItemInfo(itemId);
         return info && info->name == byName;
     };
     for (int i = 0; i < inv.getBackpackSize(); ++i) {
         const auto& sl = inv.getBackpackSlot(i);
-        if (!sl.empty() && matches(sl.item.itemId)) return sl.item.itemId;
+        if (!sl.empty() && matches(sl)) return {sl.item.itemId, -1, i};
     }
     for (int bag = 0; bag < game::Inventory::NUM_BAG_SLOTS; ++bag) {
         for (int i = 0; i < inv.getBagSize(bag); ++i) {
             const auto& sl = inv.getBagSlot(bag, i);
-            if (!sl.empty() && matches(sl.item.itemId)) return sl.item.itemId;
+            if (!sl.empty() && matches(sl)) return {sl.item.itemId, bag, i};
         }
     }
-    return 0;
+    return {};
 }
 
 // The pair both durability bindings answer, and the one gate the client puts in
@@ -2947,9 +3005,13 @@ uint64_t usedOnUnit(lua_State* L, int index) {
 
 static int lua_UseItemByName(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const uint32_t itemId = carriedItemMatching(gh, L, 1);
-    if (gh && itemId != 0 && itemUseAllowed(L, gh, itemId, false))
-        gh->useItemById(itemId, usedOnUnit(L, 2));
+    const CarriedItem found = carriedItemMatching(gh, L, 1);
+    if (gh && found.itemId != 0 && itemUseAllowed(L, gh, found.itemId, false)) {
+        // The item found, not merely the first of its entry: a link may name
+        // one of several by its enchant or gems.
+        if (found.bag < 0) gh->useItemBySlot(found.slot, false, usedOnUnit(L, 2));
+        else gh->useItemInBag(found.bag, found.slot, false, usedOnUnit(L, 2));
+    }
     return 0;
 }
 
@@ -2964,7 +3026,8 @@ static int lua_UseItemByName(lua_State* L) {
 static int lua_EquipItemByName(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
-    const uint32_t itemId = carriedItemMatching(gh, L, 1);
+    const CarriedItem found = carriedItemMatching(gh, L, 1);
+    const uint32_t itemId = found.itemId;
     if (itemId == 0) return 0;
     // 0x0051cdb0 -> 0x006dff90 / AutoEquipItem, which ask the taint check
     // (kind 0x16).
@@ -2972,8 +3035,10 @@ static int lua_EquipItemByName(lua_State* L) {
     const int wantSlot = static_cast<int>(luaL_optnumber(L, 2, 0));
     // Zero is "no slot named", not slot zero - the interface's own numbering
     // starts at one, so there is no ambiguity to resolve.
+    const auto& inv = gh->getInventory();
     if (wantSlot >= 1 && wantSlot <= game::Inventory::NUM_EQUIP_SLOTS) {
-        const uint64_t guid = gh->resolveOnlineItemGuid(itemId);
+        const auto& held = found.bag < 0 ? inv.getBackpackSlot(found.slot) : inv.getBagSlot(found.bag, found.slot);
+        const uint64_t guid = held.item.guid != 0 ? held.item.guid : gh->resolveOnlineItemGuid(itemId);
         if (guid != 0) {
             gh->equipItemToSlot(guid, static_cast<uint8_t>(wantSlot - 1));
             return 0;
@@ -2981,20 +3046,9 @@ static int lua_EquipItemByName(lua_State* L) {
         // No guid for it - fall through and let the server choose, which is
         // better than doing nothing at all.
     }
-    const auto& inv = gh->getInventory();
-    for (int i = 0; i < inv.getBackpackSize(); ++i) {
-        const auto& sl = inv.getBackpackSlot(i);
-        if (!sl.empty() && sl.item.itemId == itemId) { gh->autoEquipItemBySlot(i); return 0; }
-    }
-    for (int bag = 0; bag < game::Inventory::NUM_BAG_SLOTS; ++bag) {
-        for (int i = 0; i < inv.getBagSize(bag); ++i) {
-            const auto& sl = inv.getBagSlot(bag, i);
-            if (!sl.empty() && sl.item.itemId == itemId) {
-                gh->autoEquipItemInBag(bag, i);
-                return 0;
-            }
-        }
-    }
+    // The item found, not the first of its entry (0x00754c30 -> 0x007545d0).
+    if (found.bag < 0) gh->autoEquipItemBySlot(found.slot);
+    else gh->autoEquipItemInBag(found.bag, found.slot);
     return 0;
 }
 
