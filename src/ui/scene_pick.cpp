@@ -4,6 +4,7 @@
 #include "core/coordinates.hpp"
 #include "game/game_handler.hpp"
 #include "game/entity.hpp"
+#include "game/world_pick.hpp"
 #include "rendering/camera.hpp"
 #include "rendering/ray_mesh.hpp"
 #include "rendering/renderer.hpp"
@@ -32,12 +33,19 @@ bool isDeadUnit(const std::shared_ptr<game::Entity>& entity) {
 
 } // namespace
 
+// The client's scene ray pick, 0x004f9930 (from 0x004f9da0): the world
+// first, then the nearest object model the flags let it take in front of it.
 ScenePick pickScene(game::GameHandler& gameHandler,
                     const rendering::Ray& ray,
                     const ScenePickParams& params,
                     const ScenePickHit& onHit) {
     ScenePick pick;
-    const uint64_t myGuid = gameHandler.getPlayerGuid();
+    // 0x004f9da0 -> 0x004f7650: what the frame may pick - every object kind
+    // with no spell held, only what a held spell wants with one (a spell
+    // waiting for a place picks no object at all). The hover and the click
+    // ask the same.
+    const uint32_t pickFlags = gameHandler.worldPickFlags();
+    if ((pickFlags & game::world_pick::kObjectMask) == 0) return pick;
 
     // Where the ray first meets the world - a building's collision triangles
     // or the ground; only what the ray reaches before that can be picked.
@@ -75,6 +83,11 @@ ScenePick pickScene(game::GameHandler& gameHandler,
     for (const auto& [guid, entity] : gameHandler.getEntityManager().getEntities()) {
         if (!entity) continue;
         const auto type = entity->getType();
+        // 0x004f9550 runs every candidate through 0x004f7530: the kinds the
+        // flags want, never the player itself nor the unit it possesses
+        // unless a held spell may be cast on the caster (0x004f7350,
+        // 0x004f7250), and with a spell held only what the spell takes.
+        if (!gameHandler.worldPickTakes(guid, pickFlags)) continue;
         if (type == game::ObjectType::CORPSE) {
             // For the pointer only, behind anything a click would take.
             glm::vec3 c;
@@ -92,7 +105,6 @@ ScenePick pickScene(game::GameHandler& gameHandler,
         if (type != game::ObjectType::UNIT &&
             type != game::ObjectType::PLAYER &&
             type != game::ObjectType::GAMEOBJECT) continue;
-        if (guid == myGuid) continue;  // never target yourself
 
         // Nor the scenery. A trigger is an ordinary unit on the wire - it has
         // health, a name and a model - and UNIT_FLAG_NOT_SELECTABLE is the

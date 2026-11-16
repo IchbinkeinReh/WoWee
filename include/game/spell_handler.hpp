@@ -103,6 +103,14 @@ public:
     /// (0x00803a50): the Cast cursor over it, else UnableCast (0x004f8190).
     [[nodiscard]] bool spellCanTargetUnit(uint64_t unitGuid) const;
 
+    // --- What the world frame's ray pick may find (WorldFrame.cpp) ---
+    /// 0x004f7650: the pick flags for the frame - every object kind with no
+    /// spell held, only what the held spell wants with one (game/world_pick.hpp).
+    [[nodiscard]] uint32_t worldPickFlags() const;
+    /// 0x004f7530 (0x004f7350 for a unit, 0x007ffea0 for a corpse): whether
+    /// the scene ray pick (0x004f9930) may take the object under those flags.
+    [[nodiscard]] bool worldPickTakes(uint64_t guid, uint32_t flags) const;
+
     /// 0x00804cc0: whether a missile of the cast a dynamic object carries
     /// (its DYNAMICOBJECT_CASTER, SPELLID and CASTTIME) still flies.
     [[nodiscard]] bool isMissileInFlight(uint64_t caster, uint32_t spellId, uint32_t castTime) const {

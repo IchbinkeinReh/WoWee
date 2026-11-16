@@ -13,6 +13,7 @@
 #include "game/pet_action.hpp"
 #include "game/pvp_flags.hpp"
 #include "game/spell_unit_target.hpp"
+#include "game/world_pick.hpp"
 #include "game/vehicle_mover.hpp"
 #include "game/game_handler.hpp"
 #include "game/game_utils.hpp"
@@ -1381,6 +1382,98 @@ void SpellHandler::spellTargetUnit(uint64_t unitGuid) {
 bool SpellHandler::spellCanTargetUnit(uint64_t unitGuid) const {
     return unitTarget_.spellId != 0 &&
            takeUnit(unitTarget_.spellId, unitTarget_.caster, unitGuid, unitTarget_.required, false).taken;
+}
+
+uint32_t SpellHandler::worldPickFlags() const {
+    // 0x004f7650. The spell the cursor holds, for a unit or for a place
+    // (0x00d3f4e4), and what it still wants (0x00d3f4e0).
+    world_pick::FlagsInput in;
+    const uint32_t held = unitTarget_.spellId != 0 ? unitTarget_.spellId : groundTarget_.spellId;
+    in.spellHeld = held != 0;
+    if (in.spellHeld) {
+        in.targetMask = unitTarget_.spellId != 0 ? unitTarget_.required : groundTarget_.required;
+        if (const auto it = owner_.spellNameCacheRef().find(held); it != owner_.spellNameCacheRef().end()) {
+            in.attrEx = it->second.attrEx;
+            in.attrEx2 = it->second.attrEx2;
+            in.attrEx6 = it->second.attrEx6;
+        }
+    }
+    auto& em = owner_.getEntityManager();
+    in.activePlayer = em.getEntity(owner_.getPlayerGuid()) != nullptr;
+    // 0x00721f50 (the active mover alive, autoInteract on, no click-to-move
+    // under way) adds the ground bits, which only click to move reads; this
+    // client has no click to move, so they stay clear and the pick never
+    // answers the ground.
+    in.moverClickToMove = false;
+    in.moverMoveFlags = owner_.getMovementInfo().flags;
+    return world_pick::pickFlags(in);
+}
+
+bool SpellHandler::worldPickTakes(uint64_t guid, uint32_t flags) const {
+    auto& em = owner_.getEntityManager();
+    const auto e = em.getEntity(guid);
+    if (!e) return false;
+    const bool spellHeld = unitTarget_.spellId != 0 || groundTarget_.spellId != 0;
+    const uint32_t mask = unitTarget_.spellId != 0 ? unitTarget_.required : groundTarget_.required;
+    const uint64_t playerGuid = owner_.getPlayerGuid();
+    switch (e->getType()) {
+        case ObjectType::UNIT:
+        case ObjectType::PLAYER: {
+            // 0x004f7530 cases 0x9 and 0x19: the kind wanted, then 0x004f7350.
+            if ((flags & (e->getType() == ObjectType::PLAYER ? world_pick::kPlayers : world_pick::kUnits)) == 0)
+                return false;
+            world_pick::UnitInput u;
+            u.isActivePlayer = guid == playerGuid;
+            const uint32_t unitFlags = entityField(*e, UF::UNIT_FIELD_FLAGS);
+            u.unitFlags = unitFlags;
+            const uint64_t charmer = entityGuidField(*e, UF::UNIT_FIELD_CHARMEDBY);
+            if ((unitFlags & world_pick::kUnitFlagPossessed) != 0) {
+                // 0x004f7250: its charmer, else its creator.
+                const uint64_t controller = charmer != 0 ? charmer : entityGuidField(*e, UF::UNIT_FIELD_CREATEDBY);
+                u.possessedByActivePlayer = controller != 0 && controller == playerGuid;
+            }
+            u.charmed = charmer != 0;
+            u.health = static_cast<int32_t>(static_cast<const Unit&>(*e).getHealth());
+            const auto player = em.getEntity(playerGuid);
+            if ((flags & (world_pick::kRelationMask | world_pick::kCompanion)) != 0 && player) {
+                const auto r = relationsOf(owner_, player, e, 0);
+                u.inParty = r.inParty;
+                u.inRaid = r.inRaid;
+                u.mayAssist = r.mayAssist;
+                u.mayAttack = r.mayAttack;
+                u.creatureType = creatureTypeOf(owner_, *e);
+            }
+            u.spellHeld = spellHeld;
+            if (spellHeld) {
+                const uint32_t held = unitTarget_.spellId != 0 ? unitTarget_.spellId : groundTarget_.spellId;
+                if (const auto it = owner_.spellNameCacheRef().find(held); it != owner_.spellNameCacheRef().end()) {
+                    u.attrEx3 = it->second.attrEx3;
+                    u.attrEx5 = it->second.attrEx5;
+                }
+            }
+            return world_pick::unitPickable(flags, u);
+        }
+        case ObjectType::GAMEOBJECT:
+            // 0x004f7530 case 0x21; with a spell held, 0x007fff20: one that
+            // wants an object (its lock, 0x0070f010, is the server's to judge here).
+            return world_pick::gameObjectPickable(flags, spellHeld, (mask & world_pick::kTargetGameObject) != 0);
+        case ObjectType::CORPSE: {
+            // 0x004f7530 case 0x81 -> 0x004f58e0 -> 0x007ffea0.
+            world_pick::CorpseInput c;
+            c.spellHeld = spellHeld;
+            c.targetMask = mask;
+            c.bones = (entityField(*e, UF::CORPSE_FIELD_FLAGS) & 0x1u) != 0;
+            // 0x0071f890: the player's reaction to it above neutral - its
+            // owner's (CORPSE_FIELD_OWNER, fields 6 and 7) where known.
+            const uint64_t ownerGuid = (static_cast<uint64_t>(e->getField(7)) << 32) | e->getField(6);
+            const auto player = em.getEntity(playerGuid);
+            if (const auto ownerEntity = ownerGuid != 0 ? em.getEntity(ownerGuid) : nullptr; ownerEntity && player)
+                c.friendly = owner_.unitReaction(*player, *ownerEntity) > 3;
+            return world_pick::corpsePickable(flags, c);
+        }
+        default:
+            return false;
+    }
 }
 
 SpellHandler::TrajectoryCast SpellHandler::buildTrajectoryCast(uint32_t spellId, uint64_t caster, uint64_t target,

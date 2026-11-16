@@ -3817,6 +3817,11 @@ wowee_add_test(test_minimap_zoom
 wowee_add_test(test_minimap_blips
     SOURCES test_minimap_blips.cpp)
 
+# ── test_world_pick ──────────────────────────────────────────
+# What the world frame's ray pick may find (game/world_pick.hpp).
+wowee_add_test(test_world_pick
+    SOURCES test_world_pick.cpp)
+
 # ── test_unit_model_events ───────────────────────────────────
 # What a unit's model events play: fidgets, wings, births, footfalls (rendering/unit_model_events.hpp).
 wowee_add_test(test_unit_model_events
