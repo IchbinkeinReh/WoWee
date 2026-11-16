@@ -4650,6 +4650,30 @@ void GameHandler::fireUnitCombat(uint64_t guid, const char* action, int32_t amou
     }
 }
 
+void GameHandler::fireSpellMissileMiss(uint32_t spellId, uint64_t casterGuid, uint64_t unitGuid,
+                                       uint32_t missReason) {
+    if (missReason == 0 || unitGuid == 0) return;
+    // 0x00702fc0 names the unit the missile reached, 0x00700e20 only a
+    // listed one it can find (0x004d4db0, type mask 8).
+    if (unitGuid != playerGuid) {
+        const auto e = getEntityManager().getEntity(unitGuid);
+        if (!e || !e->isUnit()) return;
+    }
+    // For a spell its log does not hide: the unit's combat text (0x0071f990)
+    // and UNIT_COMBAT (0x00513410).
+    if (unit_combat::spellRaises(getSpellAttributes(spellId))) {
+        const bool playerIsCaster = casterGuid != 0 && casterGuid == playerGuid;
+        if (playerIsCaster || unitGuid == playerGuid)
+            addCombatText(combatTextTypeFromSpellMissInfo(missReason), 0, spellId, playerIsCaster, 0, casterGuid,
+                          unitGuid);
+        if (const char* action = unit_combat::missAction(missReason))
+            fireUnitCombat(unitGuid, action, 0, unit_combat::kPhysicalSchoolMask, 0);
+    }
+    // Its combat log line, from the missile's caster (0x00751b80 with the
+    // missile's +0; it tests the spell itself).
+    if (isActiveExpansion("wotlk")) combatLogFeed().spellMissed(casterGuid, unitGuid, spellId, missReason, false, false);
+}
+
 std::string GameHandler::guidToUnitId(uint64_t guid) const {
     if (guid == playerGuid)      return "player";
     if (guid == targetGuid)      return "target";

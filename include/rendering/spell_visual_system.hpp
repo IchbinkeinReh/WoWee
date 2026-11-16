@@ -185,21 +185,45 @@ public:
     /// `sinceCastSeconds`: how long ago the cast made the missile, which its
     /// first launch makes up for (0x007022d0); missiles here are launched as
     /// the cast makes them.
+    ///
+    /// `misses` are the units the cast missed that this missile answers for:
+    /// on arrival each is handed to the miss sink (UNIT_COMBAT at impact,
+    /// 0x00700e20 / 0x00702fc0). A missile flown at one missed unit
+    /// (`missesAtUnit`) answers only when it lands on it, not once it has
+    /// been stopped short and let it go; a missile to a place answers for its
+    /// whole list wherever it lands.
+    struct MissedUnit {
+        uint64_t guid = 0;
+        uint32_t reason = 0;  // SpellMissInfo, nonzero
+    };
     bool launchSpellMissile(uint32_t visualId, float speed, const MissileEnd& from,
                             const MissileEnd& to, std::vector<MissileEnd> impacts,
                             const MissileTrajectory* trajectory = nullptr, uint32_t spellId = 0,
-                            uint64_t casterGuid = 0, uint8_t castCount = 0, float sinceCastSeconds = 0.0f);
+                            uint64_t casterGuid = 0, uint8_t castCount = 0,
+                            std::vector<MissedUnit> misses = {}, bool missesAtUnit = false,
+                            float sinceCastSeconds = 0.0f);
 
     /// One target of a bouncing missile: its unit, where it was last known
     /// to be and whether the cast hit it there (its miss reason 0,
-    /// 0x006fefb0). The list holds guids (+0xa8); where each unit is, and
-    /// whether it is there at all, is looked up as the missile turns to it
-    /// (0x007022d0).
+    /// 0x006fefb0), else why not. The list holds guids (+0xa8); where each
+    /// unit is, and whether it is there at all, is looked up as the missile
+    /// turns to it (0x007022d0).
     struct BounceHop {
         uint64_t guid = 0;
         MissileEnd end;
         bool hit = false;
+        uint32_t missReason = 0;
     };
+
+    /// A missile has landed for a unit its cast missed (0x00702fc0 for the
+    /// unit it reached, 0x00700e20 for each on a place missile's list, the
+    /// first of its copies only): the game shows its combat text
+    /// (0x0071f990), raises UNIT_COMBAT (0x00513410) and writes its combat
+    /// log line (0x00751b80, from the missile's caster) then, not at
+    /// SMSG_SPELL_GO.
+    using MissileMissSink =
+        std::function<void(uint32_t spellId, uint64_t casterGuid, uint64_t unitGuid, uint32_t missReason)>;
+    void setMissileMissSink(MissileMissSink sink) { missileMissSink_ = std::move(sink); }
     /// A spell with AttributesEx4 0x40000 (missile flag 0x200, 0x00732ff0):
     /// one missile to the first of `hops`, relaunched on each arrival from
     /// where it is to the next in turn (0x00702a60), each hit's impact played
@@ -1004,6 +1028,7 @@ private:
     /// Bring a bouncing missile's target up to where its unit is now: false
     /// when the unit has gone (0x007022d0 finding none).
     bool resolveBounceHop(BounceHop& hop);
+    MissileMissSink missileMissSink_;
     AttachedEffectScale attachedEffectScale_;
     /// 0x00720400 for a unit: hide or show its Flags 8 kits as asked.
     void stepUnarmedKits(uint64_t unitGuid, UnitAuraKits& unit, bool force);
@@ -1094,6 +1119,11 @@ private:
         glm::vec3 impactOffset{0.0f};
         glm::vec3 lastTarget{0.0f};
         std::vector<MissileEnd> impacts;  // where the impact kit plays on arrival
+        // The missed units it answers for on arrival (+0xa8 with the miss
+        // reasons +0xc8, or its own target with +0x94), and whether only on
+        // landing on that unit.
+        std::vector<MissedUnit> misses;
+        bool missesAtUnit = false;
         float elapsed = 0.0f;
         float maxLifetime = 0.0f;
         uint32_t soundHandle = 0;  // its MissileSound, looping where it flies
@@ -1185,7 +1215,8 @@ private:
     bool launchMissile(uint32_t visualId, float speed, const MissileEnd& from, const MissileEnd& to,
                        std::vector<MissileEnd> impacts, const MissileTrajectory* trajectory, uint32_t spellId,
                        uint64_t casterGuid, uint8_t castCount, std::vector<BounceHop> hops,
-                       size_t firstHop = 0, float sinceCastSeconds = 0.0f);
+                       size_t firstHop = 0, std::vector<MissedUnit> misses = {}, bool missesAtUnit = false,
+                       float sinceCastSeconds = 0.0f);
     /// One frame of a missile's motion script (0x00700350, 0x00700550,
     /// 0x006feb20): where it is drawn and how its model is turned, its speed
     /// changed; the drawn place is its own where it has no script.

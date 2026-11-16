@@ -54,3 +54,10 @@ TEST_CASE("Environmental damage has its type's school", "[unit_combat]") {
     CHECK(uc::environmentSchoolMask(6) == 32u);   // the void: shadow
     CHECK(uc::environmentSchoolMask(9) == 1u);
 }
+
+TEST_CASE("Only a spell with no speed raises its misses at the cast", "[unit_combat]") {
+    CHECK(uc::missesRaisedAtCast(0.0f, 0));
+    CHECK_FALSE(uc::missesRaisedAtCast(0.0f, 0x80));   // AttributesEx2 0x80
+    CHECK_FALSE(uc::missesRaisedAtCast(24.0f, 0));     // at its missile's impact
+    CHECK(uc::missesRaisedAtCast(0.0f, 0x7f | 0x100));
+}

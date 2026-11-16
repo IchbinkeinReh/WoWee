@@ -36,6 +36,10 @@ namespace game {
 class GameHandler;
 class Entity;
 
+/// The floating combat text a spell miss reason shows (0x0071f990's
+/// COMBAT_TEXT_ table by reason).
+CombatTextEntry::Type combatTextTypeFromSpellMissInfo(uint8_t missInfo);
+
 class SpellHandler {
 public:
     using PacketHandler = std::function<void(network::Packet&)>;

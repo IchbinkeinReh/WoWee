@@ -359,7 +359,7 @@ std::string castFailureMessage(const GameHandler& owner, uint32_t spellId,
 
 } // namespace
 
-static CombatTextEntry::Type combatTextTypeFromSpellMissInfo(uint8_t missInfo) {
+CombatTextEntry::Type combatTextTypeFromSpellMissInfo(uint8_t missInfo) {
     switch (missInfo) {
         case SpellMissInfo::MISS:    return CombatTextEntry::MISS;
         case SpellMissInfo::DODGE:   return CombatTextEntry::DODGE;
@@ -573,9 +573,9 @@ std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data,
         return true;
     };
 
-    const size_t targetCount = data.hitTargets.size() + data.missTargets.size();
     const bool hasLocation =
         (data.targetFlags & (sm::kTargetFlagSourceLocation | sm::kTargetFlagDestLocation)) != 0;
+    using MissedUnit = rendering::SpellVisualSystem::MissedUnit;
     // AttributesEx4 0x40000 (0x0080f4d7 -> 0x00800180): never a missile per
     // target. At a location the one missile flies to the point; otherwise it
     // goes to the first target and, carrying the list (flag 0x200), is
@@ -586,22 +586,24 @@ std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data,
     // it and is looked for when the missile turns to it, passed over then
     // if it is still not there (0x007022d0 -> 0x00702a60). Every hit is the
     // missile's to play, landed on or passed over.
+    // A missed one's miss reason is raised as UNIT_COMBAT when the missile
+    // lands on it (0x00702fc0).
     const bool bouncy = (spellIt->second.attrEx4 & 0x40000u) != 0;
     if (bouncy && !hasLocation) {
         std::vector<rendering::SpellVisualSystem::BounceHop> hops;
         std::vector<uint64_t> hitsFlownTo;
-        const auto addHop = [&](uint64_t guid, bool hit) {
+        const auto addHop = [&](uint64_t guid, bool hit, uint32_t missReason) {
             if (guid == 0) return;
             MissileEnd end;
             unitEnd(guid, end);
-            hops.push_back({guid, end, hit});
+            hops.push_back({guid, end, hit, missReason});
             if (hit) hitsFlownTo.push_back(guid);
         };
         const auto addHits = [&] {
-            for (uint64_t guid : data.hitTargets) addHop(guid, true);
+            for (uint64_t guid : data.hitTargets) addHop(guid, true, 0);
         };
         const auto addMisses = [&] {
-            for (const auto& miss : data.missTargets) addHop(miss.targetGuid, false);
+            for (const auto& miss : data.missTargets) addHop(miss.targetGuid, false, miss.missType);
         };
         if (data.castFlags & 0x400u) {
             addMisses();
@@ -615,49 +617,65 @@ std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data,
             carried = std::move(hitsFlownTo);
         return carried;
     }
-    auto targeting = sm::chooseTargeting(data.targetFlags, targetCount, missile->flags);
-    if (bouncy) targeting = sm::Targeting::Location;
-    switch (targeting) {
-    case sm::Targeting::EachTarget: {
+    // The wire's points (0x00732ff0): the one it flies to in the frame of
+    // its transport guid; with both, the source is where it starts, taken
+    // as a place in the world.
+    const auto point = [](const glm::vec3& canonical) {
+        return MissileEnd{0, core::coords::canonicalToRender(canonical)};
+    };
+    MissileEnd placeFrom = from;
+    MissileEnd place;
+    bool havePlace = false;
+    if (data.hasDestLocation) {
+        place = point(targetPointInWorld(data.destTransportGuid, data.destX, data.destY, data.destZ));
+        if (data.hasSourceLocation)
+            placeFrom = point(core::coords::serverToCanonical(glm::vec3(data.sourceX, data.sourceY, data.sourceZ)));
+        havePlace = true;
+    } else if (data.hasSourceLocation) {
+        place = point(targetPointInWorld(data.sourceTransportGuid, data.sourceX, data.sourceY, data.sourceZ));
+        havePlace = true;
+    }
+    // A bouncing spell cast at a place (0x00800180): its one missile flies
+    // to the point carrying every target, hit ones with no reason and missed
+    // ones with theirs. Landing (0x00700e20) with a reason list, it plays no
+    // target's impact - only the point's - and raises each miss.
+    if (bouncy) {
+        if (!havePlace) return carried;
+        std::vector<MissedUnit> misses;
+        for (const auto& miss : data.missTargets) misses.push_back({miss.targetGuid, miss.missType});
+        if (svs->launchSpellMissile(visualId, speed, placeFrom, place, {place}, trajectory, data.spellId,
+                                    data.casterUnit, data.castCount, std::move(misses))) {
+            carried = data.hitTargets;
+            if (flewToPlace) *flewToPlace = true;
+        }
+        return carried;
+    }
+    // 0x0080e1b0 runs 0x007fffb0 once for the hit list and, when there are
+    // misses, again for the miss list with their reasons; each run chooses
+    // its own missiles by its own list's count.
+    const auto targetingFor = [&](size_t count) {
+        return sm::chooseTargeting(data.targetFlags, count, missile->flags);
+    };
+    // The hit run.
+    switch (targetingFor(data.hitTargets.size())) {
+    case sm::Targeting::EachTarget:
         for (uint64_t guid : data.hitTargets) {
             MissileEnd to;
             if (unitEnd(guid, to) && svs->launchSpellMissile(visualId, speed, from, to, {to}, trajectory,
                                                              data.spellId, data.casterUnit, data.castCount))
                 carried.push_back(guid);
         }
-        for (const auto& miss : data.missTargets) {
-            MissileEnd to;
-            if (unitEnd(miss.targetGuid, to))
-                svs->launchSpellMissile(visualId, speed, from, to, {}, trajectory, data.spellId, data.casterUnit,
-                                        data.castCount);
-        }
         break;
-    }
     case sm::Targeting::Location: {
-        // The wire's points (0x00732ff0): the one it flies to in the frame
-        // of its transport guid; with both, the source is where it starts,
-        // taken as a place in the world.
-        const auto point = [](const glm::vec3& canonical) {
-            return MissileEnd{0, core::coords::canonicalToRender(canonical)};
-        };
-        MissileEnd to;
-        if (data.hasDestLocation) {
-            to = point(targetPointInWorld(data.destTransportGuid, data.destX, data.destY, data.destZ));
-            if (data.hasSourceLocation)
-                from = point(core::coords::serverToCanonical(glm::vec3(data.sourceX, data.sourceY, data.sourceZ)));
-        } else if (data.hasSourceLocation) {
-            to = point(targetPointInWorld(data.sourceTransportGuid, data.sourceX, data.sourceY, data.sourceZ));
-        } else {
-            break;
-        }
+        if (!havePlace) break;
         std::vector<MissileEnd> impacts;
         for (uint64_t guid : data.hitTargets) {
             MissileEnd end;
             if (unitEnd(guid, end)) impacts.push_back(end);
         }
         // 0x00700e20: and at the point it flies to, whatever it hit.
-        impacts.push_back(to);
-        if (svs->launchSpellMissile(visualId, speed, from, to, std::move(impacts), trajectory, data.spellId,
+        impacts.push_back(place);
+        if (svs->launchSpellMissile(visualId, speed, placeFrom, place, std::move(impacts), trajectory, data.spellId,
                                     data.casterUnit, data.castCount)) {
             carried = data.hitTargets;
             if (flewToPlace) *flewToPlace = true;
@@ -666,6 +684,35 @@ std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data,
     }
     case sm::Targeting::None:
         break;
+    }
+    // The miss run: no impact on any of them; each missed unit's UNIT_COMBAT
+    // when its missile lands on it (0x00702fc0), or, for a missile to the
+    // place carrying the list with its reasons, when that one lands
+    // (0x00700e20). That one still plays the point's impact where it lands
+    // (0x00700e20's loop over the points, which no miss reason skips), so a
+    // cast at a place with hits and misses plays it once for each missile.
+    if (!data.missTargets.empty()) {
+        switch (targetingFor(data.missTargets.size())) {
+        case sm::Targeting::EachTarget:
+            for (const auto& miss : data.missTargets) {
+                MissileEnd to;
+                if (unitEnd(miss.targetGuid, to))
+                    svs->launchSpellMissile(visualId, speed, from, to, {}, trajectory, data.spellId,
+                                            data.casterUnit, data.castCount, {{miss.targetGuid, miss.missType}},
+                                            /*missesAtUnit=*/true);
+            }
+            break;
+        case sm::Targeting::Location: {
+            if (!havePlace) break;
+            std::vector<MissedUnit> misses;
+            for (const auto& miss : data.missTargets) misses.push_back({miss.targetGuid, miss.missType});
+            svs->launchSpellMissile(visualId, speed, placeFrom, place, {place}, trajectory, data.spellId,
+                                    data.casterUnit, data.castCount, std::move(misses));
+            break;
+        }
+        case sm::Targeting::None:
+            break;
+        }
     }
     return carried;
 }
@@ -5330,46 +5377,60 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
     // Clear unit cast bar
     unitCastStates_.erase(data.casterUnit);
 
-    // Each target missed, on the target (0x00755850): its parry and block
-    // sounds (rendering/melee_sound.hpp). The caster is the cast's where
-    // that is a unit or game object, else its unit (0x0080e1b0).
-    if (!data.missTargets.empty() && owner_.spellMissCallbackRef()) {
+    // A spell with no Speed whose AttributesEx2 lacks 0x80 settles its misses
+    // here (0x0080e1b0's loop at 0x0080ea84); any other's settle where its
+    // missile lands (0x00702fc0, 0x00700e20 - SpellVisualSystem's miss sink,
+    // GameHandler::fireSpellMissileMiss) - their combat text, UNIT_COMBAT
+    // and log line - and never play the parry and block sounds, which only
+    // this loop plays.
+    const float missSpeed = [&] {
+        owner_.loadSpellNameCache();
+        const auto it = owner_.spellNameCacheRef().find(data.spellId);
+        return it != owner_.spellNameCacheRef().end() ? it->second.missileSpeed : 0.0f;
+    }();
+    const bool missesAtCast =
+        unit_combat::missesRaisedAtCast(missSpeed, owner_.getSpellAttributesEx2(data.spellId));
+    if (missesAtCast && !data.missTargets.empty()) {
+        // The misses' caster: the cast's first guid where that is a unit or
+        // a game object, else its unit (0x0080e9ba).
         uint64_t missCaster = data.casterUnit;
         if (auto casterEntity = owner_.getEntityManager().getEntity(data.casterGuid);
             casterEntity && (casterEntity->isUnit() || casterEntity->getType() == ObjectType::GAMEOBJECT)) {
             missCaster = data.casterGuid;
         }
-        for (const auto& m : data.missTargets)
-            owner_.spellMissCallbackRef()(missCaster, m.targetGuid, m.missType, data.spellId);
-    }
-
-    // UNIT_COMBAT for each target missed, and for the caster where a
-    // reflected spell came back with a result of its own (0x0080e1b0 ->
-    // 0x00513410). The client raises it here for a spell with no travel
-    // time and at the missile's impact (0x00700e20, 0x00702fc0) otherwise;
-    // here it is raised at the cast for both.
-    if (!data.missTargets.empty() && unit_combat::spellRaises(owner_.getSpellAttributes(data.spellId))) {
-        const uint64_t reflectVictim = data.casterUnit != 0 ? data.casterUnit : data.casterGuid;
-        for (const auto& m : data.missTargets) {
-            owner_.fireUnitCombat(m.targetGuid, unit_combat::missAction(m.missType), 0,
-                                  unit_combat::kPhysicalSchoolMask, 0);
-            if (m.missType == 11 && m.reflectResult != 0)
-                owner_.fireUnitCombat(reflectVictim, unit_combat::missAction(m.reflectResult), 0,
-                                      unit_combat::kPhysicalSchoolMask, 0);
-        }
-    }
-
-    // Miss combat text
-    if (!data.missTargets.empty()) {
+        const bool raises = unit_combat::spellRaises(owner_.getSpellAttributes(data.spellId));
         const uint64_t spellCasterGuid = data.casterUnit != 0 ? data.casterUnit : data.casterGuid;
         const bool playerIsCaster = (spellCasterGuid == owner_.getPlayerGuid());
-
+        const auto unitKnown = [&](uint64_t guid) {
+            if (guid == owner_.getPlayerGuid() && guid != 0) return true;
+            const auto e = owner_.getEntityManager().getEntity(guid);
+            return e && e->isUnit();
+        };
         for (const auto& m : data.missTargets) {
-            if (!playerIsCaster && m.targetGuid != owner_.getPlayerGuid()) {
-                continue;
+            // Its combat text (0x0071f990, on a unit the client knows) and
+            // UNIT_COMBAT (0x00513410), for a spell its log does not hide.
+            if (raises) {
+                if (unitKnown(m.targetGuid) && (playerIsCaster || m.targetGuid == owner_.getPlayerGuid()))
+                    owner_.addCombatText(combatTextTypeFromSpellMissInfo(m.missType), 0, data.spellId,
+                                         playerIsCaster, 0, spellCasterGuid, m.targetGuid);
+                owner_.fireUnitCombat(m.targetGuid, unit_combat::missAction(m.missType), 0,
+                                      unit_combat::kPhysicalSchoolMask, 0);
             }
-            CombatTextEntry::Type ct = combatTextTypeFromSpellMissInfo(m.missType);
-            owner_.addCombatText(ct, 0, data.spellId, playerIsCaster, 0, spellCasterGuid, m.targetGuid);
+            // A reflected spell that came back with a result of its own: the
+            // same for the cast's unit, the packet's second guid (0x0080eb84
+            // pushes -0x38(%ebp), loaded from the packet's +0x10 at
+            // 0x0080e1d5), whatever it is.
+            if (m.missType == 11 && m.reflectResult != 0 && raises) {
+                if (unitKnown(data.casterUnit) && (playerIsCaster || data.casterUnit == owner_.getPlayerGuid()))
+                    owner_.addCombatText(combatTextTypeFromSpellMissInfo(m.reflectResult), 0, data.spellId,
+                                         playerIsCaster, 0, spellCasterGuid, data.casterUnit);
+                owner_.fireUnitCombat(data.casterUnit, unit_combat::missAction(m.reflectResult), 0,
+                                      unit_combat::kPhysicalSchoolMask, 0);
+            }
+            // On a target the client knows, its parry and block sounds
+            // (0x00755850; rendering/melee_sound.hpp).
+            if (owner_.spellMissCallbackRef() && unitKnown(m.targetGuid))
+                owner_.spellMissCallbackRef()(missCaster, m.targetGuid, m.missType, data.spellId);
         }
     }
 

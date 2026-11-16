@@ -1110,9 +1110,11 @@ glm::vec3 SpellVisualSystem::missileTargetPoint(ActiveMissile& missile) const {
 bool SpellVisualSystem::launchSpellMissile(uint32_t visualId, float speed, const MissileEnd& from,
                                            const MissileEnd& to, std::vector<MissileEnd> impacts,
                                            const MissileTrajectory* trajectory, uint32_t spellId,
-                                           uint64_t casterGuid, uint8_t castCount, float sinceCastSeconds) {
+                                           uint64_t casterGuid, uint8_t castCount,
+                                           std::vector<MissedUnit> misses, bool missesAtUnit,
+                                           float sinceCastSeconds) {
     return launchMissile(visualId, speed, from, to, std::move(impacts), trajectory, spellId, casterGuid, castCount,
-                         {}, 0, sinceCastSeconds);
+                         {}, 0, std::move(misses), missesAtUnit, sinceCastSeconds);
 }
 
 // 0x00732ff0 for AttributesEx4 0x40000: the missile goes to the first of
@@ -1134,7 +1136,7 @@ bool SpellVisualSystem::launchBouncingSpellMissile(uint32_t visualId, float spee
     std::vector<MissileEnd> impacts;
     if (hops[first].hit) impacts.push_back(to);
     return launchMissile(visualId, speed, from, to, std::move(impacts), trajectory, spellId, casterGuid, castCount,
-                         std::move(hops), first, sinceCastSeconds);
+                         std::move(hops), first, {}, false, sinceCastSeconds);
 }
 
 bool SpellVisualSystem::resolveBounceHop(BounceHop& hop) {
@@ -1285,7 +1287,9 @@ float SpellVisualSystem::traceMissileStep(const ActiveMissile& missile, const gl
 bool SpellVisualSystem::launchMissile(uint32_t visualId, float speed, const MissileEnd& from, const MissileEnd& to,
                                       std::vector<MissileEnd> impacts, const MissileTrajectory* trajectory,
                                       uint32_t spellId, uint64_t casterGuid, uint8_t castCount,
-                                      std::vector<BounceHop> hops, size_t firstHop, float sinceCastSeconds) {
+                                      std::vector<BounceHop> hops, size_t firstHop,
+                                      std::vector<MissedUnit> misses, bool missesAtUnit,
+                                      float sinceCastSeconds) {
     if (!m2Renderer_ || visualId == 0 || !(speed > 0.0f)) return false;
     const SyncEffectLoadScope syncLoads(syncEffectLoads_,
                                         involvesPlayer(from.renderInstanceId, to.renderInstanceId));
@@ -1320,6 +1324,8 @@ bool SpellVisualSystem::launchMissile(uint32_t visualId, float speed, const Miss
     missile.hops = std::move(hops);
     missile.hopIndex = firstHop;
     missile.sinceCast = sinceCastSeconds;
+    missile.misses = std::move(misses);
+    missile.missesAtUnit = missesAtUnit;
     if (trajectory) {
         missile.hasTrajectory = true;
         missile.trajectory = *trajectory;
@@ -1669,6 +1675,25 @@ void SpellVisualSystem::updateMissiles(float deltaTime) {
         const glm::vec3 landedAt = it->position;
         const uint32_t reachedUnit = it->targetInstanceId;
         std::vector<MissileEnd> impacts = std::move(it->impacts);
+        // UNIT_COMBAT for the missed units it answers for, by the first of
+        // its copies (+0x110 zero) only. A bouncing missile on a missed
+        // target, or one flown at a missed unit, answers on landing on it
+        // (0x00703410 -> 0x00702fc0); stopped short it has let the unit go
+        // and answers for none. A place missile answers for its whole list
+        // (0x00700e20).
+        if (missileMissSink_ && it->missileIndex == 0) {
+            if (!it->hops.empty()) {
+                if (!it->hasStop && it->hopIndex < it->hops.size()) {
+                    const BounceHop& hop = it->hops[it->hopIndex];
+                    if (!hop.hit && hop.guid != 0 && hop.missReason != 0)
+                        missileMissSink_(it->spellId, it->casterGuid, hop.guid, hop.missReason);
+                }
+            } else if (!(it->missesAtUnit && it->hasStop)) {
+                for (const MissedUnit& miss : it->misses)
+                    if (miss.guid != 0 && miss.reason != 0)
+                        missileMissSink_(it->spellId, it->casterGuid, miss.guid, miss.reason);
+            }
+        }
         // 0x00702a60: a bouncing missile (flag 0x200) that has not been
         // stopped goes on from where it is to its next target, the same
         // missile relaunched (0x007022d0); only past the last is it gone.

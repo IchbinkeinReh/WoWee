@@ -56,6 +56,14 @@ inline uint32_t environmentSchoolMask(uint32_t type) {
     return 1u << (type < 7 ? kSchoolBit[type] : 0u);
 }
 
+/// Whether SMSG_SPELL_GO itself raises its misses' UNIT_COMBAT (0x0080e1b0):
+/// only for a spell with no Speed (+0xbc) whose AttributesEx2 (+0x18) lacks
+/// 0x80. Any other spell's misses are raised where its missile lands
+/// (0x00702fc0, 0x00700e20) - or never, where no missile flies.
+inline bool missesRaisedAtCast(float spellSpeed, uint32_t attributesEx2) {
+    return spellSpeed == 0.0f && (attributesEx2 & 0x80u) == 0;
+}
+
 /// Whether a spell's log raises UNIT_COMBAT: the client has its record and
 /// its Attributes lack 0x100, the hidden-from-log bit (0x006d3840,
 /// 0x006d3c30, 0x007531f0, 0x006d3090 test the record they looked up).

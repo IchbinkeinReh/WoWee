@@ -89,8 +89,8 @@ public:
     void buildingDamage(uint64_t src, uint64_t building, uint32_t spellId, int32_t amount);  // 0x00753000
     void buildingHeal(uint64_t src, uint64_t building, uint32_t spellId, int32_t amount);    // 0x00753100
     void castStart(uint64_t caster, uint32_t spellId, uint32_t castFlags);         // 0x00751920
-    /// SPELL_CAST_SUCCESS, and the cast's misses - at once, or as each
-    /// target's missile lands.
+    /// SPELL_CAST_SUCCESS, and the cast's misses where no missile carries
+    /// them (a missile's are written as it lands, 0x00751b80).
     void castGo(const SpellGoData& go);                                             // 0x0080e1b0
     void castFailed(uint32_t spellId, const std::string& text);                    // 0x00751ad0
     void partyKill(uint64_t killer, uint64_t victim);                              // 0x00750c90
@@ -102,9 +102,6 @@ public:
     /// AttributesEx3 0x02000000: a heal or a power gain the log calls
     /// periodic (0x006d3c30, 0x006d3df0, 0x006d3220).
     [[nodiscard]] bool periodicByAttribute(uint32_t spellId) const;
-
-    /// Missiles whose misses wait for them to land.
-    void update();
 
     // The answers entries wait for.
     void playerNameAnswered(uint64_t guid, const std::string& name, const std::string& realm, bool found);
@@ -153,13 +150,6 @@ private:
     bool loggingCombat_ = false;  ///< 0xb759d4
     std::ofstream logFile_;       ///< 0xb759dc: Logs\WoWCombatLog.txt
     uint32_t replayDelay_ = 0;
-
-    struct PendingMiss {
-        int64_t landsAt = 0;
-        uint64_t src = 0, dst = 0;
-        uint32_t spellId = 0, missInfo = 0;
-    };
-    std::vector<PendingMiss> pendingMisses_;
 };
 
 }  // namespace wowee::game
