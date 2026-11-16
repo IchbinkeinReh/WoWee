@@ -371,6 +371,9 @@ private:
     /// Whether the filter would mask anything in `text`, whatever
     /// profanityFilter says.
     bool isProfane(std::string text);
+    /// The line as sendChatMessage sends it: tokens named, then slurred
+    /// when drunk (chat_outgoing.hpp).
+    std::string prepareOutgoingLine(const std::string& message);
     chat_profanity::Filter profanity_;
     bool profanityLoaded_ = false;
     bool languageWordsLoaded_ = false;

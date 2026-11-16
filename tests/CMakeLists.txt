@@ -219,6 +219,11 @@ wowee_add_test(test_combat_log
 wowee_add_test(test_chat_log
     SOURCES test_chat_log.cpp)
 
+# An outgoing line's %t/%f tokens and drunk slurring (0x00577d00,
+# 0x00577f60). Header-only.
+wowee_add_test(test_chat_outgoing
+    SOURCES test_chat_outgoing.cpp)
+
 # The arena opponent roster (BattlefieldInfo.cpp): slots, pets beside their
 # owners, and ARENA_OPPONENT_UPDATE's words. Header-only.
 wowee_add_test(test_arena_opponents

@@ -9,6 +9,7 @@
 #include "game/chat_filters.hpp"
 #include "game/chat_language.hpp"
 #include "game/chat_profanity.hpp"
+#include "game/chat_outgoing.hpp"
 #include "game/expansion_profile.hpp"
 #include "game/text_tokens.hpp"
 #include "game/game_handler.hpp"
@@ -38,6 +39,7 @@
 #include <cstring>
 #include <filesystem>
 #include <iomanip>
+#include <random>
 #include <sstream>
 #include <ctime>
 #include "core/local_time.hpp"
@@ -639,8 +641,10 @@ void ChatHandler::sendChatMessage(ChatType type, const std::string& message, con
         return;
     }
 
+    const std::string sent = prepareOutgoingLine(message);
+
     LOG_INFO("OUTGOING CHAT: type=", static_cast<int>(type),
-             " (", getChatTypeString(type), ") target='", target, "' msg='", message.substr(0, 60), "'");
+             " (", getChatTypeString(type), ") target='", target, "' msg='", sent.substr(0, 60), "'");
 
     // Use the player's faction language. AzerothCore rejects wrong language.
     // Alliance races: Human(1), Dwarf(3), NightElf(4), Gnome(7), Draenei(11) → COMMON (7)
@@ -651,7 +655,7 @@ void ChatHandler::sendChatMessage(ChatType type, const std::string& message, con
     // Unless the line names one (SendChatMessage's third argument, 0x0050d170).
     if (languageId != 0) language = static_cast<ChatLanguage>(languageId);
 
-    auto packet = MessageChatPacket::build(type, language, message, target);
+    auto packet = MessageChatPacket::build(type, language, sent, target);
     if (chatPacketDiagEnabled()) {
         const auto& raw = packet.getData();
         LOG_WARNING("CHAT PACKET DIAG TX CMSG_MESSAGECHAT type=", getChatTypeString(type),
@@ -665,6 +669,40 @@ void ChatHandler::sendChatMessage(ChatType type, const std::string& message, con
     // nothing). A line shown on sending showed a GM command (".go xyz ...")
     // as the player saying it, which the server never broadcast, and showed
     // a line the server refused (muted, too far, wrong language) as said.
+}
+
+// 0x0050d170, before it sends: the %t and %f tokens become names
+// (0x00577d00), then a drunk player's line is slurred (0x00577f60) - drunk
+// when PLAYER_BYTES_3's inebriation byte or the fake inebriation is set
+// (0x004ffd80), by the larger of the two out of 100 (0x004f7290).
+std::string ChatHandler::prepareOutgoingLine(const std::string& message) {
+    std::string line = message;
+    if (line.find('%') != std::string::npos) {
+        std::string targetName, focusName;
+        if (const uint64_t t = owner_.getTargetGuid(); t != 0) targetName = owner_.lookupName(t);
+        if (const uint64_t f = owner_.getFocusGuid(); f != 0) focusName = owner_.lookupName(f);
+        if (targetName.empty()) targetName = interfaceString("TARGET_TOKEN_NOT_FOUND", "<no target>");
+        if (focusName.empty()) focusName = interfaceString("FOCUS_TOKEN_NOT_FOUND", "<no focus>");
+        line = chat_outgoing::replaceTokens(line, targetName, focusName);
+    } else if (line.size() > chat_outgoing::kMaxLine) {
+        line.resize(chat_outgoing::kMaxLine);
+    }
+    const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    if (!player) return line;
+    const uint16_t bytes3Field = fieldIndex(UF::PLAYER_BYTES_3);
+    const uint16_t fakeField = fieldIndex(UF::PLAYER_FAKE_INEBRIATION);
+    const uint32_t real = bytes3Field != 0xFFFF ? (player->getField(bytes3Field) >> 8) & 0xFFu : 0u;
+    const int32_t fake = fakeField != 0xFFFF ? static_cast<int32_t>(player->getField(fakeField)) : 0;
+    if (real == 0 && fake == 0) return line;
+    const int32_t most = std::max(static_cast<int32_t>(real), fake);
+    const float factor = most >= 100 ? 1.0f
+                       : fake < static_cast<int32_t>(real) ? static_cast<float>(real) * 0.01f
+                       : static_cast<float>(static_cast<uint32_t>(fake) & 0xFFu) * 0.01f;
+    static std::mt19937 rng(std::random_device{}());
+    std::uniform_real_distribution<float> roll(0.0f, 1.0f);
+    return chat_outgoing::slur(line, factor, [&] { return roll(rng); },
+                               [this](const std::string& word) { return isProfane(word); },
+                               interfaceString("SLURRED_SPEECH", "%s ...hic!"));
 }
 
 void ChatHandler::sendAddonMessage(ChatType type, const std::string& message, const std::string& target) {
