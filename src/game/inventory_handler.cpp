@@ -5639,7 +5639,7 @@ void InventoryHandler::acceptTrade() {
     // way to add the other.
     if (!isTradeOpen()) return;
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    auto packet = AcceptTradePacket::build();
+    auto packet = AcceptTradePacket::build(tradeStateIndex_[1]);
     owner_.getSocket()->send(packet);
     tradeSelfAccepted_ = true;
     fireTradeAcceptUpdate();
@@ -5836,6 +5836,7 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
         }
         case 2:   // OPEN_WINDOW
             tradeStatus_ = TradeStatus::Open;
+            tradeStateIndex_[0] = tradeStateIndex_[1] = 1;  // 0x007044a0 case 2
             tradeSelfAccepted_ = false;
             tradePartnerAccepted_ = false;
             // The table starts empty.  Status 2 (0x007044a0 case 2) zeroes the
@@ -6023,7 +6024,8 @@ void InventoryHandler::handleTradeStatusExtended(network::Packet& packet) {
     const uint8_t traderData = packet.readUInt8();
     /*uint32_t tradeId    =*/ packet.readUInt32();
     const uint32_t slotCount = packet.readUInt32();
-    /*uint32_t slotCount2 =*/ packet.readUInt32();
+    // The side's state index (0x00704690 keeps it at 0xca0b6c + side * 4).
+    const uint32_t stateIndex = packet.readUInt32();
     const uint32_t gold = packet.readUInt32();
     const uint32_t spell = packet.readUInt32();
 
@@ -6034,6 +6036,7 @@ void InventoryHandler::handleTradeStatusExtended(network::Packet& packet) {
     // Kept by side, exactly as the packet says it, and read back the other way
     // round - which is the client's own mix-up, not a translation of it.
     tradeEnchantSpell_[ownSide ? 0 : 1] = spell;
+    tradeStateIndex_[traderData != 0 ? 1 : 0] = stateIndex;
 
     uint32_t count = slotCount;
     if (count > TRADE_SLOT_COUNT) count = TRADE_SLOT_COUNT;

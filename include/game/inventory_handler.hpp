@@ -1016,6 +1016,10 @@ private:
     uint64_t peerTradeGold_ = 0;
     /// 0xca0ff0 and 0xca0ff4: the enchant spell each side's offer names.
     uint32_t tradeEnchantSpell_[2] = {};
+    /// Each side's state index (0xca0b6c, 0xca0b70): 1 as the window opens,
+    /// then the third uint32 of that side's SMSG_TRADE_STATUS_EXTENDED
+    /// (0x00704690). CMSG_ACCEPT_TRADE carries the trader's.
+    uint32_t tradeStateIndex_[2] = {1, 1};
     /// What the window has already been told, per side and per slot: the rows
     /// the last offers announced and the enchant spells they announced with
     /// them.  0x00586dc0 keeps exactly this, beside the partner's mirrored

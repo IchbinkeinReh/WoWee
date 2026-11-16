@@ -1837,10 +1837,11 @@ public:
     static network::Packet build();
 };
 
-/** CMSG_ACCEPT_TRADE packet builder (no payload - lock in current offer) */
+/** CMSG_ACCEPT_TRADE packet builder (0x00703f50): one uint32, the trade's
+ *  state index the trader's side last reported (0xca0b70). */
 class AcceptTradePacket {
 public:
-    static network::Packet build();
+    static network::Packet build(uint32_t traderStateIndex);
 };
 
 /** CMSG_SET_TRADE_ITEM packet builder (tradeSlot, bag, bagSlot) */
