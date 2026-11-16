@@ -446,6 +446,9 @@ private:
     /// world, and the nameplate it is over, which wins. Committed once a
     /// frame (commitMouseover), so a change is announced once.
     uint64_t worldMouseover_ = 0;
+    /// worldMouseover_ came from a protected unit frame under the pointer
+    /// rather than the world (0x004fa040): the mouseover, but no tooltip.
+    bool mouseoverFromFrame_ = false;
     /// The extra bars the realm keeps for the character, as last applied.
     std::optional<uint8_t> appliedBarToggles_;
     uint64_t plateMouseover_ = 0;

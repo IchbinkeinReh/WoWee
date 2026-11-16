@@ -16365,6 +16365,36 @@ void LuaEngine::retryCorpseTooltip(uint64_t mouseover) {
     worldMouseoverChanged(0, mouseover, MouseoverKind::Corpse);
 }
 
+uint64_t LuaEngine::protectedFocusUnitGuid() {
+    // 0x004fa040: with the mouse focus a frame other than the world and
+    // explicitly protected (+0x60 bit 0x10000, what IsProtected answers), the
+    // client calls SecureButton_GetModifiedUnit(frame, GetRunningMacroButton())
+    // with the running code secure, and takes the unit it names (0x0060abf0)
+    // only when the call raised nothing and left the code secure; that unit
+    // then goes the way of a unit under the pointer (0x004f8190).
+    if (!L_) return 0;
+    const uint32_t hovered = widgets_.hoveredWidget();
+    const auto* w = hovered != 0 ? widgets_.get(hovered) : nullptr;
+    if (!w || !w->protectedFrame) return 0;
+    auto* gh = wowee::addons::getGameHandler(L_);
+    if (!gh) return 0;
+    const int top = lua_gettop(L_);
+    taint::Scope secure(0);
+    lua_getglobal(L_, "SecureButton_GetModifiedUnit");
+    if (!lua_isfunction(L_, -1)) { lua_settop(L_, top); return 0; }
+    pushFrameByWid(L_, hovered);
+    // No macro is running here, so GetRunningMacroButton is nil (0x00564c70).
+    lua_pushnil(L_);
+    uint64_t guid = 0;
+    if (lua_pcall(L_, 2, 1, 0) == 0 && lua_isstring(L_, -1) && taint::current() == 0) {
+        std::string unit = lua_tostring(L_, -1);
+        for (auto& c : unit) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        guid = wowee::addons::resolveUnitGuid(gh, unit);
+    }
+    lua_settop(L_, top);
+    return guid;
+}
+
 bool LuaEngine::frameHasScript(uint32_t wid, const char* script) {
     if (!L_ || wid == 0) return false;
     taint::Quiet quiet;   // see callScriptOnTable
