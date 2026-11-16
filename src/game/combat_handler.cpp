@@ -1860,6 +1860,11 @@ void CombatHandler::clearTarget() {
         // the current target see null (consistent with setTarget which updates
         // targetGuid before the event).
         owner_.setTargetGuidRaw(0);
+        // 0x005241b0(target, 1): the server told there is no selection any
+        // more (CMSG_SET_SELECTION 0x13d with 0). Without it the server kept
+        // the old one, and anything aimed at "the selected unit" - a GM
+        // command among them - still went at a creature long let go.
+        if (owner_.isInWorld() && owner_.getSocket()) owner_.getSocket()->send(SetSelectionPacket::build(0));
         owner_.fireAddonEvent("PLAYER_TARGET_CHANGED", {});
         // A repeating shot has nothing left to shoot at (0x00524bf0 with
         // none -> 0x00807560(1)).
