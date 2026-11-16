@@ -1460,7 +1460,7 @@ void GameScreen::commitMouseover(game::GameHandler& gameHandler) {
     const auto entity = guid != 0 ? gameHandler.getEntityManager().getEntity(guid) : nullptr;
     using Kind = addons::LuaEngine::MouseoverKind;
     Kind kind = Kind::None;
-    if (entity) {
+    if (entity && !(mouseoverFromFrame_ && guid == worldMouseover_ && plateMouseover_ == 0)) {
         switch (entity->getType()) {
             case game::ObjectType::UNIT: case game::ObjectType::PLAYER: kind = Kind::Unit; break;
             case game::ObjectType::GAMEOBJECT: kind = Kind::GameObject; break;
@@ -2139,6 +2139,7 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
         }
     }
     worldMouseover_ = 0;
+    mouseoverFromFrame_ = false;
     if (!io.WantCaptureMouse && !frameXmlOwnsMouse() && !gameHandler.isGroundTargeting()) {
         auto* renderer = services_.renderer;
         auto* camera = renderer ? renderer->getCamera() : nullptr;
@@ -2182,6 +2183,18 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
             }
             highlightGuid = hoverPick.mouseover();
             worldMouseover_ = highlightGuid;
+        }
+    } else if (frameXmlOwnsMouse() && !io.WantCaptureMouse) {
+        // A protected unit frame under the pointer - a party, raid or target
+        // frame - makes its unit the mouseover, as one in the world would
+        // (0x004fa040), so [target=mouseover] macros and UnitExists
+        // ("mouseover") work over the frames. Without the world tooltip: the
+        // client shows that only while the world frame has the mouse
+        // (0x0051f790).
+        auto* engine = services_.addonManager ? services_.addonManager->getLuaEngine() : nullptr;
+        if (engine) {
+            worldMouseover_ = engine->protectedFocusUnitGuid();
+            mouseoverFromFrame_ = worldMouseover_ != 0;
         }
     }
     // A cursor the interface asked for with SetCursor, drawn last so it covers

@@ -287,6 +287,12 @@ public:
     /// Each frame with the mouseover unchanged: a corpse whose owner's name
     /// was not yet known gets its tooltip once the name arrives.
     void retryCorpseTooltip(uint64_t mouseover);
+    /// The unit a protected frame under the pointer stands for, made the
+    /// mouseover as a unit in the world would be (0x004fa040): the frame's
+    /// SecureButton_GetModifiedUnit, run secure and kept only if it stayed
+    /// secure. Zero when the pointer is not on a protected frame or the
+    /// frame names no unit that exists.
+    uint64_t protectedFocusUnitGuid();
     /// The minimap's hover (0x0057c720): GameTooltip at the cursor against
     /// Minimap with the text, or hidden where the text is empty.
     void showMinimapTooltip(const std::string& text);
