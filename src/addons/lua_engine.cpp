@@ -10831,6 +10831,21 @@ static int lua_CreateFrame(lua_State* L) {
         const char* asked = lua_tostring(L, 1);
         bool known = false;
         for (const char* t : kTypes) known = known || sameWord(asked, t);
+        // WorldFrame is registered as a one-off type (0x00813d20 with its
+        // third argument set): the first frame made of it - FrameXML's own
+        // WorldFrame.xml - takes the type out of the factory list (0x00812fa0),
+        // and any later one is an unknown type. A new interface registers it
+        // again, which is a new state here.
+        if (known && sameWord(asked, "WorldFrame")) {
+            lua_getfield(L, LUA_REGISTRYINDEX, "wowee_worldframe_made");
+            const bool made = lua_toboolean(L, -1) != 0;
+            lua_pop(L, 1);
+            if (made) known = false;
+            else {
+                lua_pushboolean(L, 1);
+                lua_setfield(L, LUA_REGISTRYINDEX, "wowee_worldframe_made");
+            }
+        }
         if (!known) return luaL_error(L, "CreateFrame: Unknown frame type '%s'", asked);
     }
     const char* frameType = luaL_optstring(L, 1, "Frame");
