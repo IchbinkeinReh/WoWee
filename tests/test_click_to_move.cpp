@@ -2,6 +2,7 @@
 // the frame step (0x007317a0).
 #include <catch_amalgamated.hpp>
 #include "game/click_to_move.hpp"
+#include "game/spell_book_records.hpp"
 
 using namespace wowee::game::click_to_move;
 using Catch::Matchers::WithinAbs;
@@ -249,4 +250,25 @@ TEST_CASE("a direction's facing", "[click_to_move]") {
     CHECK_THAT(facingOfDirection(glm::vec3(0.0f, 1.0f, 0.0f)), WithinAbs(kPi * 0.5, 1e-6));
     CHECK_THAT(facingOfDirection(glm::vec3(0.0f, -1.0f, 0.0f)), WithinAbs(kPi * 1.5, 1e-6));
     CHECK_THAT(facingOfDirection(glm::vec3(-1.0f, 0.0f, 0.0f)), WithinAbs(kPi, 1e-6));
+}
+
+TEST_CASE("the spell book notes the last ranged attack learned", "[click_to_move]") {
+    using wowee::game::spell_book::Records;
+    using wowee::game::spell_book::Row;
+    Records r;
+    Row ranged;
+    ranged.attrEx4 = 0x01000000u;
+    r.learned(75, ranged);       // Auto Shot
+    r.learned(133, Row{});       // nothing to note
+    CHECK(r.rangedAttack == 75);
+    r.learned(5019, ranged);     // Shoot, learned later
+    CHECK(r.rangedAttack == 5019);
+    // Forgetting the noted one leaves none, not the one before.
+    r.removed(75);
+    CHECK(r.rangedAttack == 5019);
+    r.removed(5019);
+    CHECK(r.rangedAttack == 0);
+    r.learned(75, ranged);
+    r.clear();
+    CHECK(r.rangedAttack == 0);
 }

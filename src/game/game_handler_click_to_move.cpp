@@ -8,6 +8,7 @@
 #include "game/expansion_profile.hpp"
 #include "game/interface_text.hpp"
 #include "game/movement_handler.hpp"
+#include "game/spell_handler.hpp"
 #include "game/update_field_table.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "core/coordinates.hpp"
@@ -165,6 +166,12 @@ void GameHandler::clickToMoveFaceDirection(const glm::vec3& canonicalDir) {
     startClickToMove(ctm::Kind::FaceDirection, 0, glm::vec3(0.0f), ctm::facingOfDirection(n));
 }
 
+uint32_t GameHandler::autoRangedAttackSpell() const {
+    // 0x006d71e0: the CVar (0x00bd091c, default "1") and the spell.
+    if (!spellHandler_ || addons::storedCVarValue("autoRangedCombat", "1") == "0") return 0;
+    return spellHandler_->spellBookRecords().rangedAttack;
+}
+
 void GameHandler::clickToMoveAttack(uint64_t guid) {
     // 0x0072ee20, after the attack the right click started (0x00731260).
     auto target = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(guid));
@@ -180,10 +187,16 @@ void GameHandler::clickToMoveAttack(uint64_t guid) {
         return;
     }
     if (!clickToMoveAllowed()) return;
-    // Kind 11 (AttackGuid) is for a player with autoRangedCombat on and a
-    // ranged attack of its own (0x006d71e0: 0x00be5d84); this client keeps
-    // no record of that spell, so the approach is always to melee.
-    startClickToMove(ctm::Kind::AttackPosition, guid, glm::vec3(target->getX(), target->getY(), target->getZ()), 0.0f);
+    // The player as the mover with a ranged attack (0x006d71e0) closes in to
+    // shoot (kind 11): to nine tenths of that attack's reach at the unit
+    // (0x0071b3b0 -> 0x00802c30). Otherwise to melee (kind 10).
+    const uint32_t ranged = movementHandler_ && movementHandler_->activeMover() == playerGuid
+                                ? autoRangedAttackSpell()
+                                : 0;
+    std::optional<float> spellRange;
+    if (ranged != 0 && spellHandler_) spellRange = spellHandler_->spellReachAt(ranged, playerGuid, guid).max;
+    startClickToMove(ranged != 0 ? ctm::Kind::AttackGuid : ctm::Kind::AttackPosition, guid,
+                     glm::vec3(target->getX(), target->getY(), target->getZ()), 0.0f, spellRange);
 }
 
 bool GameHandler::clickToMoveToObject(uint64_t guid, float reach) {

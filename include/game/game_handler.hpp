@@ -3202,8 +3202,13 @@ public:
     void clickToMoveFace(float facing);
     /// 0x0072f040: turn toward a direction clicked into nothing, and go.
     void clickToMoveFaceDirection(const glm::vec3& canonicalDir);
-    /// 0x0072ee20: into melee reach of a unit just attacked, or face it.
+    /// 0x0072ee20: into melee reach of a unit just attacked, or face it;
+    /// with autoRangedCombat and a ranged attack, into nine tenths of its
+    /// reach instead (kind 11).
     void clickToMoveAttack(uint64_t guid);
+    /// 0x006d71e0: with autoRangedCombat on, the ranged attack the spell
+    /// book noted (0x00be5d84); else 0.
+    uint32_t autoRangedAttackSpell() const;
     /// 0x0072b730: to an object out of reach, `reach` being its use reach.
     bool clickToMoveToObject(uint64_t guid, float reach);
     /// What the camera is to do this frame (0x007317a0): a facing to take,

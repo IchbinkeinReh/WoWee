@@ -2576,6 +2576,17 @@ unit_target::Range SpellHandler::spellReach(uint32_t spellId, const Entity& cast
     });
 }
 
+unit_target::Range SpellHandler::spellReachAt(uint32_t spellId, uint64_t casterGuid, uint64_t unitGuid) const {
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    const auto caster = owner_.getEntityManager().getEntity(casterGuid);
+    if (it == owner_.spellNameCacheRef().end() || !caster) return {};
+    const auto unit = unitGuid != 0 ? owner_.getEntityManager().getEntity(unitGuid) : nullptr;
+    const bool friendly = unit && unit->isUnit() ? owner_.unitMayAssist(casterGuid, unitGuid)
+                                                 : owner_.getSpellTargetKind(spellId) == 1;
+    return spellReach(spellId, *caster, unit.get(), friendly);
+}
+
 std::optional<unit_target::Range> SpellHandler::spellRange(uint32_t spellId, uint64_t casterGuid) const {
     loadSpellNameCache();
     const auto it = owner_.spellNameCacheRef().find(spellId);
@@ -4062,6 +4073,10 @@ void SpellHandler::handleInitialSpells(network::Packet& packet) {
     learnOrder_.clear();
     nextLearnOrder_ = 0;
     for (const uint32_t id : data.spellIds) noteLearnOrder(id);
+    // The book emptied (0x0053ec40) and each spell learned in the list's
+    // order (0x00542030).
+    clearBookRecords();
+    for (const uint32_t id : data.spellIds) noteBookLearned(id);
 
     LOG_DEBUG("Initial spells include: 527=", knownSpells_.count(527u),
               " 988=", knownSpells_.count(988u), " 1180=", knownSpells_.count(1180u));
@@ -5111,6 +5126,7 @@ void SpellHandler::handleLearnedSpell(network::Packet& packet) {
     const bool alreadyKnown = knownSpells_.count(spellId) > 0;
     knownSpells_.insert(spellId);
     noteLearnOrder(spellId);
+    noteBookLearned(spellId);  // 0x00542030
     LOG_INFO("Learned spell: ", spellId, alreadyKnown ? " (already known)" : "");
     if (isPreWotlk()) {
         loadTalentDbc();
@@ -5231,6 +5247,7 @@ void SpellHandler::handleRemovedSpell(network::Packet& packet) {
     if (packet.getRemainingSize() < minSz) return;
     uint32_t spellId = classicSpellId ? packet.readUInt16() : packet.readUInt32();
     knownSpells_.erase(spellId);
+    noteBookRemoved(spellId);  // 0x0053fad0
     syncPreWotlkTalentsFromKnownSpells();
     LOG_INFO("Removed spell: ", spellId);
     // Braced. The two lines below were indented as though they sat inside the
@@ -5298,6 +5315,10 @@ void SpellHandler::handleSupercededSpell(network::Packet& packet) {
     uint32_t newSpellId = classicSpellId ? packet.readUInt16() : packet.readUInt32();
 
     knownSpells_.erase(oldSpellId);
+    // 0x006e7e00: the old rank forgotten (0x0053fad0), the new one learned
+    // (0x00542030).
+    noteBookRemoved(oldSpellId);
+    noteBookLearned(newSpellId);
     // The new rank takes the old one's place in the list.
     if (const auto old = learnOrder_.find(oldSpellId); old != learnOrder_.end()) {
         learnOrder_[newSpellId] = old->second;
@@ -5345,6 +5366,7 @@ void SpellHandler::handleUnlearnSpells(network::Packet& packet) {
     for (uint32_t i = 0; i < spellCount && packet.getRemainingSize() >= 4; ++i) {
         uint32_t spellId = packet.readUInt32();
         knownSpells_.erase(spellId);
+        noteBookRemoved(spellId);  // 0x0053fad0
         LOG_INFO("  Unlearned spell: ", spellId);
         for (auto& slot : owner_.actionBarRef()) {
             if (slot.type == ActionBarSlot::SPELL && slot.id == spellId) {
@@ -5851,6 +5873,7 @@ void SpellHandler::resetAllState() {
     knownSpells_.clear();
     learnOrder_.clear();
     nextLearnOrder_ = 0;
+    clearBookRecords();
     playerHistory_.clear();  // 0x00802a50
     petHistory_.clear();
     playerAuras_.clear();
@@ -6041,6 +6064,60 @@ uint32_t SpellHandler::difficultySpell(uint32_t spellId) const {
     if (pick == 0 && difficulty == 3) pick = v[1];
     if (pick == 0) pick = v[0];
     return pick != 0 ? pick : spellId;
+}
+
+namespace {
+template <class Entry>
+spell_book::Row bookRow(const Entry& e) {
+    spell_book::Row row;
+    row.attrEx4 = e.attrEx4;
+    return row;
+}
+}  // namespace
+
+void SpellHandler::noteBookLearned(uint32_t spellId) {
+    // 0x00542030: the spell's row (0x004cfd20); none, nothing noted.
+    loadSpellNameCache();
+    const auto& cache = owner_.spellNameCacheRef();
+    if (cache.empty()) {
+        bookRecordsStale_ = true;
+        return;
+    }
+    const auto it = cache.find(spellId);
+    if (it == cache.end()) return;
+    bookRecords_.learned(spellId, bookRow(it->second));
+}
+
+void SpellHandler::noteBookRemoved(uint32_t spellId) {
+    // 0x0053fad0.
+    bookRecords_.removed(spellId);
+}
+
+void SpellHandler::clearBookRecords() {
+    // 0x0053ec40.
+    bookRecords_.clear();
+    bookRecordsStale_ = false;
+}
+
+const spell_book::Records& SpellHandler::spellBookRecords() const {
+    // Spells learned before Spell.dbc could be read: the book again, in the
+    // order it was learned, once it can.
+    if (bookRecordsStale_) {
+        loadSpellNameCache();
+        const auto& cache = owner_.spellNameCacheRef();
+        if (!cache.empty()) {
+            std::vector<uint32_t> book(knownSpells_.begin(), knownSpells_.end());
+            std::sort(book.begin(), book.end(),
+                      [this](uint32_t a, uint32_t b) { return learnOrder(a) < learnOrder(b); });
+            bookRecords_.clear();
+            for (const uint32_t id : book) {
+                const auto it = cache.find(id);
+                if (it != cache.end()) bookRecords_.learned(id, bookRow(it->second));
+            }
+            bookRecordsStale_ = false;
+        }
+    }
+    return bookRecords_;
 }
 
 void SpellHandler::loadSpellNameCache() const {
