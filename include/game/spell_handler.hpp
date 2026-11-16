@@ -731,8 +731,6 @@ private:
 
     // --- Internal helpers ---
 
-    // Resolve SpellVisualID from Spell.dbc cache for a given spellId.
-    uint32_t resolveSpellVisualId(uint32_t spellId);
     // Resolve render-space position for a unit GUID (player or entity).
     bool resolveUnitPosition(uint64_t guid, glm::vec3& outPos);
     /// A wire point in the frame of the object `guid` names, put in the

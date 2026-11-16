@@ -242,6 +242,7 @@
     "LeftModelTexture": 3,
     "RightModel": 2,
     "RightModelTexture": 4,
+    "SpellVisualID": 11,
     "TextureArmLower": 16,
     "TextureArmUpper": 15,
     "TextureFoot": 22,

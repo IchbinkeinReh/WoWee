@@ -374,8 +374,6 @@ static CombatTextEntry::Type combatTextTypeFromSpellMissInfo(uint8_t missInfo) {
 
 // ---- Spell visual effect helpers ----
 
-uint32_t SpellHandler::resolveSpellVisualId(uint32_t spellId) { return owner_.getSpellVisualId(spellId); }
-
 bool SpellHandler::resolveUnitPosition(uint64_t guid, glm::vec3& outPos) {
     auto* renderer = owner_.services().renderer;
     if (!renderer) return false;
@@ -416,7 +414,7 @@ void SpellHandler::triggerCastVisual(uint32_t spellId, uint64_t casterGuid, uint
     if (!renderer) { LOG_WARNING("SpellVisual: triggerCastVisual - no renderer"); return; }
     auto* svs = renderer->getSpellVisualSystem();
     if (!svs) { LOG_WARNING("SpellVisual: triggerCastVisual - no SpellVisualSystem"); return; }
-    uint32_t visualId = resolveSpellVisualId(spellId);
+    uint32_t visualId = owner_.getUnitSpellVisualId(casterGuid, spellId);
     if (visualId == 0) { LOG_WARNING("SpellVisual: triggerCastVisual - visualId=0 for spellId=", spellId); return; }
     glm::vec3 casterPos;
     if (!resolveUnitPosition(casterGuid, casterPos)) { LOG_DEBUG("SpellVisual: triggerCastVisual - cannot resolve caster position for guid=0x", std::hex, casterGuid, std::dec); return; }
@@ -431,7 +429,7 @@ void SpellHandler::triggerImpactVisual(uint32_t spellId, uint64_t targetGuid, ui
     if (!renderer) return;
     auto* svs = renderer->getSpellVisualSystem();
     if (!svs) return;
-    uint32_t visualId = resolveSpellVisualId(spellId);
+    uint32_t visualId = owner_.getUnitSpellVisualId(casterGuid, spellId);
     if (visualId == 0) { LOG_WARNING("SpellVisual: triggerImpactVisual - visualId=0 for spellId=", spellId); return; }
     glm::vec3 targetPos;
     if (!resolveUnitPosition(targetGuid, targetPos)) return;
@@ -449,6 +447,9 @@ void SpellHandler::launchRangedWeaponProjectile(uint32_t spellId, uint64_t targe
     auto* visuals = renderer->getSpellVisualSystem();
     auto* characters = renderer->getCharacterRenderer();
     if (!visuals || !characters) return;
+    // A weapon whose visual flies a missile of its own - a wand's bolt -
+    // has it flown with the cast's visual (0x00720f80); no second one here.
+    if (visuals->findMissileVisual(owner_.getUnitSpellVisualId(owner_.getPlayerGuid(), spellId))) return;
 
     glm::vec3 start = renderer->getCharacterPosition() + glm::vec3(0.0f, 0.0f, 1.0f);
     glm::mat4 handTransform(1.0f);
@@ -661,7 +662,7 @@ void SpellHandler::handleNotifyDestLocSpellCast(network::Packet& packet) {
             return;
         rememberDestLocationCount(d.caster, d.counter);
     }
-    const uint32_t visualId = resolveSpellVisualId(d.spellId);
+    const uint32_t visualId = owner_.getUnitSpellVisualId(d.caster, d.spellId);
     auto* renderer = owner_.services().renderer;
     auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
     if (visualId == 0 || !svs) return;
@@ -4380,10 +4381,9 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
 
     // Trigger cast visual effect (precast/cast kit M2) at the caster's position:
     // every spell's, a profession's too - its kit hangs the tool in the hand
-    // (0x0073a6c0).
-    if (!rangedWeaponAttack) {
-        triggerCastVisual(data.spellId, data.casterUnit, data.castTime);
-    }
+    // (0x0073a6c0). A ranged weapon's shot as well: its kits are the
+    // weapon's (0x00720f80).
+    triggerCastVisual(data.spellId, data.casterUnit, data.castTime);
 }
 
 void SpellHandler::noteMissileInFlight(const SpellGoData& data) {
@@ -4744,9 +4744,10 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
     // spell's school was played here at SMSG_SPELL_GO instead.
 
     // Trigger spell visual effects: cast kit at caster + impact kit at each
-    // hit target, for every spell but a ranged weapon's shot.
-    if (!rangedWeaponAttack) {
-        uint32_t visualId = resolveSpellVisualId(data.spellId);
+    // hit target. A ranged weapon's shot too, which shows its weapon's visual
+    // (0x00720f80): a bow's kits, a wand's bolt.
+    {
+        uint32_t visualId = owner_.getUnitSpellVisualId(data.casterUnit, data.spellId);
         if (visualId != 0) {
             // Cast-complete visual at caster (for instant spells that skip SPELL_START)
             glm::vec3 casterPos;

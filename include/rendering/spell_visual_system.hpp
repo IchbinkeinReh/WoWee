@@ -1,5 +1,8 @@
 #pragma once
 
+#include "rendering/spell_visual_merge.hpp"
+#include <map>
+
 #include <array>
 #include <cstdint>
 #include <string>
@@ -116,6 +119,14 @@ public:
     /// one naming a weapon or ammunition, which the client takes from the
     /// caster's items rather than from the visual).
     const MissileVisual* findMissileVisual(uint32_t visualId);
+
+    /// 0x00720f80: the visual a ranged spell (Attributes 0x2) shows when its
+    /// caster carries a ranged weapon whose ItemDisplayInfo names
+    /// `weaponVisual` - the spell's own `spellVisual` with every cast kit,
+    /// missile column and sound it leaves empty taken from the weapon's. An
+    /// id of its own, made once per pair; `spellVisual` itself when the
+    /// weapon has no visual.
+    uint32_t mergedVisual(uint32_t spellVisual, uint32_t weaponVisual);
 
     /// One end of a missile's flight. A unit end names its CharacterRenderer
     /// instance so the missile can leave from and home on its attachments;
@@ -976,6 +987,27 @@ private:
     WeaponEffectHolder weaponEffectHolder_;
     /// SpellVisualEffectName's models by id, kept for playEffectModelOnUnit.
     std::unordered_map<uint32_t, std::string> effectNamePaths_;
+    std::unordered_map<uint32_t, float> effectNameScales_;  ///< SpellVisualEffectName Scale
+    /// SpellVisual.dbc's rows, whole, for 0x00720f80's merges.
+    std::unordered_map<uint32_t, spell_visual_merge::Row> visualRows_;
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> mergedVisualIds_;
+    uint32_t nextMergedVisualId_ = 0x40000000u;  ///< above every SpellVisual id
+    /// The SpellVisual columns a cast reads (0xFFFFFFFF where the layout has none).
+    struct CastColumns {
+        uint32_t missileModel = 0xFFFFFFFFu;
+        uint32_t flags = 0xFFFFFFFFu;
+        uint32_t missileAttachment = 0xFFFFFFFFu;
+        uint32_t missileDestination = 0xFFFFFFFFu;
+        uint32_t missileSound = 0xFFFFFFFFu;
+        uint32_t missileMotion = 0xFFFFFFFFu;
+        uint32_t castOffset[3] = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
+        uint32_t impactOffset[3] = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
+        uint32_t kits[7] = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu,
+                            0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
+    };
+    CastColumns castColumns_;
+    /// A visual's missile, cast kits and ends from its row.
+    void buildCastEntries(uint32_t vid, const spell_visual_merge::Row& row);
     /// A unit's CreatureModelData WorldEffectScale (+0x5c), which sizes
     /// the kit models it places in the world (0x006f7950).
     AttachedEffectScale worldEffectScale_;

@@ -229,6 +229,10 @@ wowee_add_test(test_chat_outgoing
 wowee_add_test(test_chat_bubble_timing
     SOURCES test_chat_bubble_timing.cpp)
 
+# A ranged spell's visual completed from the ranged weapon's (0x00720f80).
+wowee_add_test(test_spell_visual_merge
+    SOURCES test_spell_visual_merge.cpp)
+
 # The gossip greeting option shown, by probability and gender
 # (0x0058ac30). Header-only.
 wowee_add_test(test_npc_text

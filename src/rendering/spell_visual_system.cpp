@@ -1,4 +1,6 @@
 #include "rendering/spell_visual_system.hpp"
+#include "rendering/spell_visual_merge.hpp"
+#include <bit>
 #include "rendering/animation/upper_body.hpp"
 #include <cctype>
 #include <future>
@@ -98,8 +100,10 @@ void SpellVisualSystem::loadSpellVisualDbc() {
             p = pipeline::modelPathToM2(p);
             effectPaths[id] = p;
             effectNamePaths_[id] = p;
-            if (fxScaleField < fxDbc->getFieldCount())
+            if (fxScaleField < fxDbc->getFieldCount()) {
                 effectScales[id] = fxDbc->getFloat(i, fxScaleField);
+                effectNameScales_[id] = effectScales[id];
+            }
             if (fxMinScaleField < fxDbc->getFieldCount() && fxMaxScaleField < fxDbc->getFieldCount())
                 effectAllowedScales[id] = {fxDbc->getFloat(i, fxMinScaleField), fxDbc->getFloat(i, fxMaxScaleField)};
             if (fxAreaSizeField < fxDbc->getFieldCount()) effectAreaSizes[id] = fxDbc->getFloat(i, fxAreaSizeField);
@@ -307,59 +311,32 @@ void SpellVisualSystem::loadSpellVisualDbc() {
                                      svColumn("ImpactKit"),       svColumn("CasterImpactKit"),
                                      svColumn("TargetImpactKit"), svColumn("InstantAreaKit"),
                                      svColumn("ImpactAreaKit")};
+    // The columns the cast's missile, kits and ends are read from, kept for
+    // the visuals 0x00720f80 builds later (mergedVisual).
+    castColumns_.missileModel = svMissileField < svFc ? svMissileField : 0xFFFFFFFFu;
+    castColumns_.flags = svFlagsField;
+    castColumns_.missileAttachment = svMissileAttField;
+    castColumns_.missileDestination = svMissileDstField;
+    castColumns_.missileSound = svMissileSoundField;
+    castColumns_.missileMotion = svMissileMotionField;
+    for (int axis = 0; axis < 3; ++axis) {
+        castColumns_.castOffset[axis] = svCastOffField[axis];
+        castColumns_.impactOffset[axis] = svImpactOffField[axis];
+    }
+    for (size_t k = 0; k < 7; ++k) castColumns_.kits[k] = svKitFields[k];
     auto svInt = [&](uint32_t row, uint32_t field, int32_t fallback) {
         return field != 0xFFFFFFFFu ? svDbc->getInt32(row, field) : fallback;
-    };
-    auto svVec = [&](uint32_t row, const uint32_t (&fields)[3]) {
-        glm::vec3 v(0.0f);
-        for (int axis = 0; axis < 3; ++axis)
-            if (fields[axis] != 0xFFFFFFFFu) v[axis] = svDbc->getFloat(row, fields[axis]);
-        return v;
     };
     for (uint32_t i = 0; i < svDbc->getRecordCount(); ++i) {
         uint32_t vid = svDbc->getUInt32(i, 0);
         if (!vid) continue;
 
-        // Missile: MissileModel names a SpellVisualEffectName row. Negative
-        // values are the caster's weapons and ammunition (FUN_00732ff0's -1
-        // to -5), which this does not fly.
-        if (svMissileField < svFc) {
-            const int32_t missileModel = svDbc->getInt32(i, svMissileField);
-            auto fxIt = missileModel > 0 ? effectPaths.find(static_cast<uint32_t>(missileModel))
-                                         : effectPaths.end();
-            if (fxIt != effectPaths.end()) {
-                MissileVisual missile;
-                missile.modelPath = fxIt->second;
-                auto scaleIt = effectScales.find(static_cast<uint32_t>(missileModel));
-                if (scaleIt != effectScales.end() && scaleIt->second > 0.0f)
-                    missile.scale = scaleIt->second;
-                missile.flags = static_cast<uint32_t>(svInt(i, svFlagsField, 0));
-                missile.sourceAttachment = spell_missile::m2AttachmentFor(
-                    svInt(i, svMissileAttField, -1), missile.flags);
-                missile.destinationAttachment = spell_missile::m2AttachmentFor(
-                    svInt(i, svMissileDstField, -1), missile.flags);
-                missile.castOffset = spell_missile::attachmentOffset(svVec(i, svCastOffField));
-                missile.impactOffset = spell_missile::attachmentOffset(svVec(i, svImpactOffField));
-                missile.soundId = static_cast<uint32_t>(std::max(svInt(i, svMissileSoundField, 0), 0));
-                missile.motionId = static_cast<uint32_t>(std::max(svInt(i, svMissileMotionField, 0), 0));
-                missileVisuals_[vid] = std::move(missile);
-            }
-        }
-
-        // The cast's kits, those the kit table has.
-        {
-            std::array<uint32_t, 7> ids{};
-            bool any = false;
-            for (size_t k = 0; k < ids.size(); ++k) {
-                const auto id = static_cast<uint32_t>(std::max(svInt(i, svKitFields[k], 0), 0));
-                ids[k] = kits_.count(id) != 0 ? id : 0u;
-                any = any || ids[k] != 0;
-            }
-            if (any)
-                visualKits_[vid] = VisualKits{.precast = ids[0], .cast = ids[1], .impact = ids[2],
-                                              .casterImpact = ids[3], .targetImpact = ids[4],
-                                              .instantArea = ids[5], .impactArea = ids[6]};
-        }
+        // The whole row, kept for 0x00720f80's merges, and what a cast
+        // reads of it: missile, kits and ends.
+        spell_visual_merge::Row row{};
+        for (uint32_t f = 0; f < row.size() && f < svFc; ++f) row[f] = svDbc->getInt32(i, f);
+        if (svFc >= row.size()) visualRows_[vid] = row;
+        buildCastEntries(vid, row);
         // The aura kits: StateKit and StateDoneKit, and the Flags that
         // keep a state kit to an unarmed, idle unit; and the ChannelKit a
         // channel holds on its caster (0x0072bc70).
@@ -400,17 +377,6 @@ void SpellVisualSystem::loadSpellVisualDbc() {
             }
             if (!area.modelPath.empty() || area.soundId != 0 || !area.fallingModel.empty())
                 persistentAreas_[vid] = std::move(area);
-        }
-        // Where a chain leaves and meets a unit (0x007fc5f0, 0x007fabf0).
-        {
-            const auto visualFlags = static_cast<uint32_t>(svInt(i, svFlagsField, 0));
-            VisualEnds ends;
-            ends.sourceAttachment = spell_missile::m2AttachmentFor(svInt(i, svMissileAttField, -1), visualFlags);
-            ends.destinationAttachment = spell_missile::m2AttachmentFor(svInt(i, svMissileDstField, -1), visualFlags);
-            ends.castOffset = spell_missile::attachmentOffset(svVec(i, svCastOffField));
-            ends.impactOffset = spell_missile::attachmentOffset(svVec(i, svImpactOffField));
-            ends.flags = visualFlags;
-            visualEnds_[vid] = ends;
         }
     }
     LOG_INFO("SpellVisual: loaded ", kits_.size(), " kits, ", visualKits_.size(), " visuals' cast kits, ",
@@ -903,6 +869,89 @@ void SpellVisualSystem::playPhysicalProjectile(const std::string& modelPath,
     if (instanceId == 0) return;
     physicalProjectiles_.push_back({.instanceId = instanceId, .start = start, .end = end, .rotation = rotation, .elapsed = 0.0f,
                                     .duration = std::max(duration, 0.05f), .spin = spin});
+}
+
+void SpellVisualSystem::buildCastEntries(uint32_t vid, const spell_visual_merge::Row& row) {
+    const CastColumns& c = castColumns_;
+    auto at = [&](uint32_t field, int32_t fallback) {
+        return field < row.size() ? row[field] : fallback;
+    };
+    auto vec = [&](const uint32_t (&fields)[3]) {
+        glm::vec3 v(0.0f);
+        for (int axis = 0; axis < 3; ++axis)
+            if (fields[axis] < row.size()) v[axis] = std::bit_cast<float>(row[fields[axis]]);
+        return v;
+    };
+    const auto flags = static_cast<uint32_t>(at(c.flags, 0));
+    // Missile: MissileModel names a SpellVisualEffectName row. Negative
+    // values are the caster's weapons and ammunition (FUN_00732ff0's -1
+    // to -5), which this does not fly.
+    if (c.missileModel < row.size()) {
+        const int32_t missileModel = row[c.missileModel];
+        auto fxIt = missileModel > 0 ? effectNamePaths_.find(static_cast<uint32_t>(missileModel))
+                                     : effectNamePaths_.end();
+        if (fxIt != effectNamePaths_.end()) {
+            MissileVisual missile;
+            missile.modelPath = fxIt->second;
+            auto scaleIt = effectNameScales_.find(static_cast<uint32_t>(missileModel));
+            if (scaleIt != effectNameScales_.end() && scaleIt->second > 0.0f) missile.scale = scaleIt->second;
+            missile.flags = flags;
+            missile.sourceAttachment = spell_missile::m2AttachmentFor(at(c.missileAttachment, -1), flags);
+            missile.destinationAttachment = spell_missile::m2AttachmentFor(at(c.missileDestination, -1), flags);
+            missile.castOffset = spell_missile::attachmentOffset(vec(c.castOffset));
+            missile.impactOffset = spell_missile::attachmentOffset(vec(c.impactOffset));
+            missile.soundId = static_cast<uint32_t>(std::max(at(c.missileSound, 0), 0));
+            missile.motionId = static_cast<uint32_t>(std::max(at(c.missileMotion, 0), 0));
+            missileVisuals_[vid] = std::move(missile);
+        }
+    }
+    // The cast's kits, those the kit table has.
+    {
+        std::array<uint32_t, 7> ids{};
+        bool any = false;
+        for (size_t k = 0; k < ids.size(); ++k) {
+            const auto id = static_cast<uint32_t>(std::max(at(c.kits[k], 0), 0));
+            ids[k] = kits_.count(id) != 0 ? id : 0u;
+            any = any || ids[k] != 0;
+        }
+        if (any)
+            visualKits_[vid] = VisualKits{.precast = ids[0], .cast = ids[1], .impact = ids[2],
+                                          .casterImpact = ids[3], .targetImpact = ids[4],
+                                          .instantArea = ids[5], .impactArea = ids[6]};
+    }
+    // Where a chain leaves and meets a unit (0x007fc5f0, 0x007fabf0).
+    VisualEnds ends;
+    ends.sourceAttachment = spell_missile::m2AttachmentFor(at(c.missileAttachment, -1), flags);
+    ends.destinationAttachment = spell_missile::m2AttachmentFor(at(c.missileDestination, -1), flags);
+    ends.castOffset = spell_missile::attachmentOffset(vec(c.castOffset));
+    ends.impactOffset = spell_missile::attachmentOffset(vec(c.impactOffset));
+    ends.flags = flags;
+    visualEnds_[vid] = ends;
+}
+
+uint32_t SpellVisualSystem::mergedVisual(uint32_t spellVisual, uint32_t weaponVisual) {
+    if (!spellVisualDbcLoaded_) loadSpellVisualDbc();
+    // 0x00720f80: nothing to take without the weapon's visual.
+    const auto weapon = weaponVisual != 0 ? visualRows_.find(weaponVisual) : visualRows_.end();
+    if (weapon == visualRows_.end()) return spellVisual;
+    const auto key = std::make_pair(spellVisual, weaponVisual);
+    if (const auto it = mergedVisualIds_.find(key); it != mergedVisualIds_.end()) return it->second;
+    const auto spell = spellVisual != 0 ? visualRows_.find(spellVisual) : visualRows_.end();
+    spell_visual_merge::Row merged =
+        spell_visual_merge::fillFromWeapon(spell != visualRows_.end() ? &spell->second : nullptr, weapon->second);
+    // An id no SpellVisual row has, for the merged record.
+    const uint32_t id = nextMergedVisualId_++;
+    merged[0] = static_cast<int32_t>(id);
+    buildCastEntries(id, merged);
+    // What the merge leaves as the spell's own: its aura and area kits.
+    if (spellVisual != 0) {
+        if (auto it = visualAuraKits_.find(spellVisual); it != visualAuraKits_.end()) visualAuraKits_[id] = it->second;
+        if (auto it = visualStateKitAnim_.find(spellVisual); it != visualStateKitAnim_.end())
+            visualStateKitAnim_[id] = it->second;
+        if (auto it = persistentAreas_.find(spellVisual); it != persistentAreas_.end()) persistentAreas_[id] = it->second;
+    }
+    mergedVisualIds_[key] = id;
+    return id;
 }
 
 const SpellVisualSystem::MissileVisual* SpellVisualSystem::findMissileVisual(uint32_t visualId) {
