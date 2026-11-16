@@ -251,6 +251,9 @@ public:
     const WMORenderer* queryWMORenderer() const { return wmoRenderer.get(); }
     Minimap* getMinimap() const { return minimap.get(); }
     WorldMap* getWorldMap() const { return worldMap.get(); }
+    /// The world map set to the player's zone now, open or not
+    /// (SetMapToCurrentZone, 0x00547170).
+    void syncWorldMapToPlayer();
     QuestGiverMarkers* getQuestGiverMarkers() const { syncWorldRecording(); return questGiverMarkers_.get(); }
     FootprintRenderer* getFootprintRenderer() const { return footprintRenderer.get(); }
     FishingLineRenderer* getFishingLineRenderer() const { return fishingLines_.get(); }

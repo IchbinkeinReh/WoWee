@@ -183,6 +183,7 @@ struct WorldMapFacade::Impl {
     void initOverlayLayers();
     void closeMap();
     void reloadMap(const std::string& newMapName);
+    void recenter(const glm::vec3& playerRenderPos);
     void switchToMap(const std::string& newMapName);
     void showIndex(int idx, ViewLevel level);
     void applyZoom(const ViewStateMachine::ZoomResult& zr);
@@ -420,6 +421,176 @@ void WorldMapFacade::compositePass(VkCommandBuffer cmd) {
                                      impl_->exploration.hasServerMask());
 }
 
+// Where the player is, made the map's: the zone they stand in, or the
+// continent, or the map an instance is entered from. What the first open and
+// SetMapToCurrentZone run (0x00547170), and what entering a map runs before
+// the map is ever opened (0x005204c0 on a map's first area) - so a closed map
+// answers GetPlayerMapPosition and GetCurrentMapAreaID for where the player
+// is, as the client's does.
+void WorldMapFacade::Impl::recenter(const glm::vec3& playerRenderPos) {
+    auto& d = *this;
+    const int physicalMapId = folderToMapId(d.physicalMapName);
+    auto displayedPlayerPosition = [&]() {
+        if (d.showingEntrance) return glm::vec3(1.0e9f, 1.0e9f, 0.0f);
+        return physicalMapId >= 0
+            ? d.data.transformRenderPosition(
+                  static_cast<uint32_t>(physicalMapId), playerRenderPos)
+            : playerRenderPos;
+    };
+    glm::vec3 displayPlayerRenderPos = displayedPlayerPosition();
+    // From the map the player is on. One browsed to says nothing about
+    // where they are now, and one shown in place of theirs - a continent
+    // that draws their zone, an instance's entrance - only while it still
+    // holds them. Kept when it does, because the interface asks for this
+    // on every quest log change and reloading two maps each time is a
+    // hitch the player can see.
+    if (d.virtualMapOverride) {
+        bool keep = d.showingEntrance && d.mapName == mapIdToFolder(d.entranceMapId);
+        if (!keep && !d.showingEntrance) {
+            const int z = findZoneForPlayer(d.data.zones(), displayPlayerRenderPos,
+                                            d.playerZoneId);
+            keep = z >= 0 &&
+                   static_cast<int>(d.data.zones()[z].mapID) != d.data.currentMapId() &&
+                   static_cast<int>(d.data.zones()[z].displayMapID) == d.data.currentMapId();
+        }
+        if (!keep) {
+            d.virtualMapOverride = false;
+            d.showingEntrance = false;
+            d.reloadMap(d.physicalMapName);
+        }
+    } else if (d.mapName != d.physicalMapName) {
+        d.reloadMap(d.physicalMapName);
+    }
+    if (d.data.zones().empty()) {
+        d.data.loadZones(d.mapName, *d.assetManager);
+        d.zoneMetadata.initialize();
+        d.viewState.setCosmicEnabled(d.data.cosmicEnabled());
+    }
+    displayPlayerRenderPos = displayedPlayerPosition();
+
+    const auto& entrance = d.data.entrance();
+    // In render space, which keeps the server's order.
+    const glm::vec3 entrancePos = core::coords::canonicalToRender(
+        core::coords::serverToCanonical(glm::vec3(entrance.x, entrance.y, 0.0f)));
+    int playerZone = d.showingEntrance
+        ? findZoneForPlayer(d.data.zones(), d.entrancePos, 0)
+        : findZoneForPlayer(d.data.zones(), displayPlayerRenderPos, d.playerZoneId);
+    // A zone on this continent that has no map of its own - Hyjal, in
+    // 3.3.5 - opens the continent, as the real client does. Left to the
+    // rectangles, a neighbour whose box reached into it was shown instead.
+    if (!d.showingEntrance && d.playerZoneId != 0 &&
+        findZoneByAreaId(d.data.zones(), d.playerZoneId) < 0 &&
+        d.data.mapIdForArea(d.playerZoneId) != 0 &&
+        static_cast<int>(d.data.mapIdForArea(d.playerZoneId)) == d.data.currentMapId()) {
+        playerZone = -1;
+    }
+
+    // Some zones are stored on a different physical map from the continent
+    // shown by the world-map UI. The draenei islands are the important case:
+    // terrain/minimap data comes from Expansion01 (map 530), while their
+    // WorldMapArea DisplayMapID is Kalimdor (map 1); Eversong Woods and
+    // the rest of Quel'Thalas are the same with the Eastern Kingdoms (map
+    // 0). Follow that metadata instead of opening Outland merely because
+    // the terrain map is 530.
+    const char* displayFolder = "";
+    if (playerZone >= 0 && !d.showingEntrance) {
+        const Zone& zone = d.data.zones()[playerZone];
+        if (zone.displayMapID != zone.mapID &&
+            static_cast<int>(zone.displayMapID) != d.data.currentMapId()) {
+            displayFolder = mapIdToFolder(zone.displayMapID);
+        }
+    }
+    // An instance with no map of its own opens on the zone it is entered
+    // from, which is what the client calls "Inside Instance"; one with a
+    // map of its own has a zone row and is shown below like any zone.
+    const bool hasContinent = std::any_of(
+        d.data.zones().begin(), d.data.zones().end(),
+        [](const Zone& z) { return z.areaID == 0 && z.wmaID != 0; });
+    if (playerZone < 0 && !hasContinent && !d.showingEntrance) {
+        // An instance map whose rectangle is its dungeon floors' rather
+        // than its own: its zone row is the map, wherever the player is.
+        for (int i = 0; i < static_cast<int>(d.data.zones().size()); ++i) {
+            const Zone& z = d.data.zones()[static_cast<size_t>(i)];
+            if (z.areaID != 0 && static_cast<int>(z.mapID) == d.data.currentMapId()) {
+                playerZone = i;
+                break;
+            }
+        }
+    }
+    const bool toEntrance = playerZone < 0 && !hasContinent && entrance.valid &&
+                            *mapIdToFolder(entrance.mapId) != '\0';
+    const uint32_t entranceMapId = entrance.mapId;
+    if (toEntrance) displayFolder = mapIdToFolder(entrance.mapId);
+
+    if (*displayFolder && !isUiOnlyMapFolder(displayFolder)) {
+        d.virtualMapOverride = true;
+        d.reloadMap(displayFolder);
+        if (toEntrance) {
+            // The entrance read off the instance's own Map.dbc row, which
+            // the reload has just replaced - so taken before it.
+            d.showingEntrance = true;
+            d.entrancePos = entrancePos;
+            d.entranceMapId = entranceMapId;
+            playerZone = findZoneForPlayer(d.data.zones(), entrancePos, 0);
+            displayPlayerRenderPos = displayedPlayerPosition();
+        } else {
+            displayPlayerRenderPos = displayedPlayerPosition();
+            playerZone = findZoneForPlayer(d.data.zones(), displayPlayerRenderPos,
+                                           d.playerZoneId);
+        }
+        LOG_INFO("World map virtual continent: physical='",
+                 d.physicalMapName, "' display='", d.mapName, "'");
+    }
+
+    int bestContinent = findBestContinentForPlayer(
+        d.data.zones(), d.showingEntrance ? d.entrancePos : displayPlayerRenderPos);
+    if (bestContinent >= 0 && bestContinent != d.viewState.continentIdx()) {
+        d.viewState.setContinentIdx(bestContinent);
+        d.compositor.invalidateComposite();
+    }
+
+    // Flight map is always the continent overview - never open at zone level.
+    if (!d.taxiMode &&
+        playerZone >= 0 && d.viewState.continentIdx() >= 0 &&
+        zoneBelongsToContinent(d.data.zones(), playerZone, d.viewState.continentIdx())) {
+        d.showIndex(playerZone, ViewLevel::ZONE);
+        d.exploration.update(d.data.zones(), displayPlayerRenderPos, playerZone,
+                             d.data.exploreFlagByAreaId(), d.playerZoneId);
+    } else if (d.viewState.continentIdx() >= 0) {
+        d.showIndex(d.viewState.continentIdx(), ViewLevel::CONTINENT);
+    } else if (playerZone >= 0) {
+        // A map with no continent over it: an instance with a map of its
+        // own, which is all there is to show.
+        d.showIndex(playerZone, ViewLevel::ZONE);
+    }
+    // The floor the player is on (0x00547170 -> 0x005439e0): the building
+    // they stand in and their height pick the DungeonMap row. Where no
+    // row answers on a map with floors, the client falls to the terrain
+    // map ("NO MAP FOUND (will use terrain)"), not the area's default.
+    if (!d.taxiMode && playerZone >= 0 &&
+        playerZone < static_cast<int>(d.data.zones().size()) &&
+        d.viewState.currentLevel() == ViewLevel::ZONE && d.viewState.currentZoneIdx() == playerZone) {
+        const Zone& z = d.data.zones()[static_cast<size_t>(playerZone)];
+        if (z.defaultDungeonFloorRowId != -1) {
+            const int row = d.playerWmoId != 0
+                ? d.data.dungeonMapForChunk(z.mapID, d.playerWmoId, displayPlayerRenderPos.z) : -1;
+            d.dungeonLevelAreaId = z.wmaID;
+            d.dungeonLevelRowId = row > 0 ? row : -1;
+        }
+    }
+    // The view has only now become the player's zone, and the interface
+    // asked before it did.
+    //
+    // SetMapToCurrentZone runs on every open and fires WORLD_MAP_UPDATE on
+    // the spot, which is when both dropdowns rebuild themselves. All this
+    // call does here is raise the recenter flag - the move happens in this
+    // block, one frame later - so GetCurrentMapContinent answered 0 while
+    // the dropdowns were being built, and 0 is what makes watchframe's
+    // ClearAll branch run and GetMapZones(0) return an empty list. Both
+    // came up blank and stayed blank, because nothing asked again.
+    d.viewChanged = true;
+}
+
 void WorldMapFacade::render(const glm::vec3& playerRenderPos,
                              int screenWidth, int screenHeight,
                              float playerYawDeg) {
@@ -473,157 +644,8 @@ void WorldMapFacade::render(const glm::vec3& playerRenderPos,
     if (!d.open || d.data.zones().empty() || d.recenterOnPlayer) {
         d.open = true;
         d.recenterOnPlayer = false;
-        // From the map the player is on. One browsed to says nothing about
-        // where they are now, and one shown in place of theirs - a continent
-        // that draws their zone, an instance's entrance - only while it still
-        // holds them. Kept when it does, because the interface asks for this
-        // on every quest log change and reloading two maps each time is a
-        // hitch the player can see.
-        if (d.virtualMapOverride) {
-            bool keep = d.showingEntrance && d.mapName == mapIdToFolder(d.entranceMapId);
-            if (!keep && !d.showingEntrance) {
-                const int z = findZoneForPlayer(d.data.zones(), displayPlayerRenderPos,
-                                                d.playerZoneId);
-                keep = z >= 0 &&
-                       static_cast<int>(d.data.zones()[z].mapID) != d.data.currentMapId() &&
-                       static_cast<int>(d.data.zones()[z].displayMapID) == d.data.currentMapId();
-            }
-            if (!keep) {
-                d.virtualMapOverride = false;
-                d.showingEntrance = false;
-                d.reloadMap(d.physicalMapName);
-            }
-        } else if (d.mapName != d.physicalMapName) {
-            d.reloadMap(d.physicalMapName);
-        }
-        if (d.data.zones().empty()) {
-            d.data.loadZones(d.mapName, *d.assetManager);
-            d.zoneMetadata.initialize();
-            d.viewState.setCosmicEnabled(d.data.cosmicEnabled());
-        }
+        d.recenter(playerRenderPos);
         displayPlayerRenderPos = displayedPlayerPosition();
-
-        const auto& entrance = d.data.entrance();
-        // In render space, which keeps the server's order.
-        const glm::vec3 entrancePos = core::coords::canonicalToRender(
-            core::coords::serverToCanonical(glm::vec3(entrance.x, entrance.y, 0.0f)));
-        int playerZone = d.showingEntrance
-            ? findZoneForPlayer(d.data.zones(), d.entrancePos, 0)
-            : findZoneForPlayer(d.data.zones(), displayPlayerRenderPos, d.playerZoneId);
-        // A zone on this continent that has no map of its own - Hyjal, in
-        // 3.3.5 - opens the continent, as the real client does. Left to the
-        // rectangles, a neighbour whose box reached into it was shown instead.
-        if (!d.showingEntrance && d.playerZoneId != 0 &&
-            findZoneByAreaId(d.data.zones(), d.playerZoneId) < 0 &&
-            d.data.mapIdForArea(d.playerZoneId) != 0 &&
-            static_cast<int>(d.data.mapIdForArea(d.playerZoneId)) == d.data.currentMapId()) {
-            playerZone = -1;
-        }
-
-        // Some zones are stored on a different physical map from the continent
-        // shown by the world-map UI. The draenei islands are the important case:
-        // terrain/minimap data comes from Expansion01 (map 530), while their
-        // WorldMapArea DisplayMapID is Kalimdor (map 1); Eversong Woods and
-        // the rest of Quel'Thalas are the same with the Eastern Kingdoms (map
-        // 0). Follow that metadata instead of opening Outland merely because
-        // the terrain map is 530.
-        const char* displayFolder = "";
-        if (playerZone >= 0 && !d.showingEntrance) {
-            const Zone& zone = d.data.zones()[playerZone];
-            if (zone.displayMapID != zone.mapID &&
-                static_cast<int>(zone.displayMapID) != d.data.currentMapId()) {
-                displayFolder = mapIdToFolder(zone.displayMapID);
-            }
-        }
-        // An instance with no map of its own opens on the zone it is entered
-        // from, which is what the client calls "Inside Instance"; one with a
-        // map of its own has a zone row and is shown below like any zone.
-        const bool hasContinent = std::any_of(
-            d.data.zones().begin(), d.data.zones().end(),
-            [](const Zone& z) { return z.areaID == 0 && z.wmaID != 0; });
-        if (playerZone < 0 && !hasContinent && !d.showingEntrance) {
-            // An instance map whose rectangle is its dungeon floors' rather
-            // than its own: its zone row is the map, wherever the player is.
-            for (int i = 0; i < static_cast<int>(d.data.zones().size()); ++i) {
-                const Zone& z = d.data.zones()[static_cast<size_t>(i)];
-                if (z.areaID != 0 && static_cast<int>(z.mapID) == d.data.currentMapId()) {
-                    playerZone = i;
-                    break;
-                }
-            }
-        }
-        const bool toEntrance = playerZone < 0 && !hasContinent && entrance.valid &&
-                                *mapIdToFolder(entrance.mapId) != '\0';
-        const uint32_t entranceMapId = entrance.mapId;
-        if (toEntrance) displayFolder = mapIdToFolder(entrance.mapId);
-
-        if (*displayFolder && !isUiOnlyMapFolder(displayFolder)) {
-            d.virtualMapOverride = true;
-            d.reloadMap(displayFolder);
-            if (toEntrance) {
-                // The entrance read off the instance's own Map.dbc row, which
-                // the reload has just replaced - so taken before it.
-                d.showingEntrance = true;
-                d.entrancePos = entrancePos;
-                d.entranceMapId = entranceMapId;
-                playerZone = findZoneForPlayer(d.data.zones(), entrancePos, 0);
-                displayPlayerRenderPos = displayedPlayerPosition();
-            } else {
-                displayPlayerRenderPos = displayedPlayerPosition();
-                playerZone = findZoneForPlayer(d.data.zones(), displayPlayerRenderPos,
-                                               d.playerZoneId);
-            }
-            LOG_INFO("World map virtual continent: physical='",
-                     d.physicalMapName, "' display='", d.mapName, "'");
-        }
-
-        int bestContinent = findBestContinentForPlayer(
-            d.data.zones(), d.showingEntrance ? d.entrancePos : displayPlayerRenderPos);
-        if (bestContinent >= 0 && bestContinent != d.viewState.continentIdx()) {
-            d.viewState.setContinentIdx(bestContinent);
-            d.compositor.invalidateComposite();
-        }
-
-        // Flight map is always the continent overview - never open at zone level.
-        if (!d.taxiMode &&
-            playerZone >= 0 && d.viewState.continentIdx() >= 0 &&
-            zoneBelongsToContinent(d.data.zones(), playerZone, d.viewState.continentIdx())) {
-            d.showIndex(playerZone, ViewLevel::ZONE);
-            d.exploration.update(d.data.zones(), displayPlayerRenderPos, playerZone,
-                                 d.data.exploreFlagByAreaId(), d.playerZoneId);
-        } else if (d.viewState.continentIdx() >= 0) {
-            d.showIndex(d.viewState.continentIdx(), ViewLevel::CONTINENT);
-        } else if (playerZone >= 0) {
-            // A map with no continent over it: an instance with a map of its
-            // own, which is all there is to show.
-            d.showIndex(playerZone, ViewLevel::ZONE);
-        }
-        // The floor the player is on (0x00547170 -> 0x005439e0): the building
-        // they stand in and their height pick the DungeonMap row. Where no
-        // row answers on a map with floors, the client falls to the terrain
-        // map ("NO MAP FOUND (will use terrain)"), not the area's default.
-        if (!d.taxiMode && playerZone >= 0 &&
-            playerZone < static_cast<int>(d.data.zones().size()) &&
-            d.viewState.currentLevel() == ViewLevel::ZONE && d.viewState.currentZoneIdx() == playerZone) {
-            const Zone& z = d.data.zones()[static_cast<size_t>(playerZone)];
-            if (z.defaultDungeonFloorRowId != -1) {
-                const int row = d.playerWmoId != 0
-                    ? d.data.dungeonMapForChunk(z.mapID, d.playerWmoId, displayPlayerRenderPos.z) : -1;
-                d.dungeonLevelAreaId = z.wmaID;
-                d.dungeonLevelRowId = row > 0 ? row : -1;
-            }
-        }
-        // The view has only now become the player's zone, and the interface
-        // asked before it did.
-        //
-        // SetMapToCurrentZone runs on every open and fires WORLD_MAP_UPDATE on
-        // the spot, which is when both dropdowns rebuild themselves. All this
-        // call does here is raise the recenter flag - the move happens in this
-        // block, one frame later - so GetCurrentMapContinent answered 0 while
-        // the dropdowns were being built, and 0 is what makes watchframe's
-        // ClearAll branch run and GetMapZones(0) return an empty list. Both
-        // came up blank and stayed blank, because nothing asked again.
-        d.viewChanged = true;
     }
 
     // Process input
@@ -1892,6 +1914,20 @@ bool WorldMapFacade::takeViewChanged() {
 void WorldMapFacade::showPlayerZone() {
     impl_->userMapOverride = false;
     impl_->recenterOnPlayer = true;
+}
+
+void WorldMapFacade::syncToPlayer(const glm::vec3& playerRenderPos) {
+    auto& d = *impl_;
+    if (!d.initialized || !d.assetManager || d.taxiMode) return;
+    d.userMapOverride = false;
+    d.recenterOnPlayer = false;
+    // Not opened by this: the map still opens on the player when it is
+    // shown, wherever they have gone by then.
+    const bool wasOpen = d.open;
+    d.open = true;
+    d.recenter(playerRenderPos);
+    d.open = wasOpen;
+    if (!wasOpen) d.recenterOnPlayer = true;
 }
 
 uint32_t WorldMapFacade::currentWorldMapAreaId() const {

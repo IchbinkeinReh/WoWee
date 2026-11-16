@@ -216,6 +216,12 @@ public:
     /// every time the map is shown, and used to reach nothing.
     void showPlayerZone();
 
+    /// Make the zone the player stands in the map's at once, shown or not
+    /// (SetMapToCurrentZone, 0x00547170): what GetPlayerMapPosition and
+    /// GetCurrentMapAreaID answer from. Takes the player's render position;
+    /// the map name and zone must already be fed.
+    void syncToPlayer(const glm::vec3& playerRenderPos);
+
     /// The WorldMapArea id of the zone being shown, or zero when the map is
     /// not showing one. This is the id the interface passes back to
     /// showWorldMapArea - not the AreaTable id, and not the physical map the
