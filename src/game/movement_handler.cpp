@@ -3031,12 +3031,14 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
         owner_.worldEntryCallbackRef()(mapId, serverX, serverY, serverZ, isSameMap);
     }
 
-    if (owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("PLAYER_ENTERING_WORLD", {"0"});
-        // Not ZONE_CHANGED_NEW_AREA: the client raises it only from the
-        // player's area (0x005204c0, Renderer::updatePlayerArea), which
-        // forgets its texts on a new map so the first area is still new.
-    }
+    // No PLAYER_ENTERING_WORLD here. The client raises it once per world
+    // entry, when the new world is in (0x00528010, event 0xff), which is
+    // WorldLoader's after the load; raised here as well it came twice per
+    // transfer, the first time straight after PLAYER_LEAVING_WORLD, with
+    // the old zone's texts still up. Nor ZONE_CHANGED_NEW_AREA: the client
+    // raises it only from the player's area (0x005204c0,
+    // Renderer::updatePlayerArea), which forgets its texts on a new map so
+    // the first area is still new.
 }
 
 // ============================================================
