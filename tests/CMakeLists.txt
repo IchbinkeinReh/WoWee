@@ -3911,6 +3911,11 @@ wowee_add_test(test_minimap_zoom
 wowee_add_test(test_minimap_blips
     SOURCES test_minimap_blips.cpp)
 
+# ── test_sound_listener ──────────────────────────────────────
+# Where the world frame puts the sound listener (audio/sound_listener.hpp).
+wowee_add_test(test_sound_listener
+    SOURCES test_sound_listener.cpp)
+
 # ── test_unit_model_events ───────────────────────────────────
 # What a unit's model events play: fidgets, wings, births, footfalls (rendering/unit_model_events.hpp).
 wowee_add_test(test_unit_model_events
