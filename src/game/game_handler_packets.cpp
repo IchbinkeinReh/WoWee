@@ -1077,6 +1077,14 @@ void GameHandler::registerCoreOpcodes() {
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now().time_since_epoch()).count());
             corpseReclaimAvailableMs_ = nowMs + delayMs;
+            // 0x00513a80: a stamp of zero is taken as one, so it still reads
+            // as set; and a ghost already at the corpse is told again
+            // (CORPSE_IN_INSTANCE where the corpse lies in the instance this
+            // is the entrance of, else CORPSE_IN_RANGE) so the interface's
+            // recover dialog shows the new delay.
+            if (corpseReclaimAvailableMs_ == 0) corpseReclaimAvailableMs_ = 1;
+            if (corpseInRangeAnnounced_)
+                fireAddonEvent(corpseLiesOnMapId_ != corpseMapId_ ? "CORPSE_IN_INSTANCE" : "CORPSE_IN_RANGE", {});
             LOG_INFO("SMSG_CORPSE_RECLAIM_DELAY: ", delayMs, "ms");
         }
     };
