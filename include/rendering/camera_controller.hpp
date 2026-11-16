@@ -353,6 +353,9 @@ public:
         bool active = false;
         std::optional<float> facingYawDeg;
         std::optional<bool> forward;
+        /// 0x0071aee0: a mover going forward or back stops and lets its
+        /// autorun go (input control 0x1000).
+        bool stopForward = false;
     };
     using ClickToMoveSteerFn = std::function<ClickToMoveSteer(float facingYawDeg, float dt, bool mouseSteering)>;
     void setClickToMoveSteer(ClickToMoveSteerFn fn) { clickToMoveSteer_ = std::move(fn); }

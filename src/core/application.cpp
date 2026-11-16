@@ -3718,6 +3718,7 @@ void Application::connectWorldHooks() {
             out.active = st.active;
             out.facingYawDeg = st.facingYawDeg;
             out.forward = st.forward;
+            out.stopForward = st.stopForward;
             return out;
         });
         cc->setClickToMoveCancel([this]() {
@@ -3726,6 +3727,16 @@ void Application::connectWorldHooks() {
         cc->setUseWoWSpeed(true);
     }
     if (gameHandler) {
+        // The surface at a place, for an enemy's place walked to (0x0072ee20
+        // -> 0x00783a40): a yard either side of it, straight down.
+        gameHandler->setGroundHeightQuery([this](const glm::vec3& canonical) -> std::optional<float> {
+            if (!renderer) return std::nullopt;
+            const glm::vec3 from = core::coords::canonicalToRender(canonical + glm::vec3(0.0f, 0.0f, 1.0f));
+            const glm::vec3 down = core::coords::canonicalToRender(canonical - glm::vec3(0.0f, 0.0f, 1.0f)) - from;
+            const auto hit = renderer->pickGround(from, down, glm::length(down));
+            if (!hit) return std::nullopt;
+            return core::coords::renderToCanonical(*hit).z;
+        });
         gameHandler->setFaceCameraProvider([this]() -> float {
             // Turn the character to the camera's look direction and report it in
             // canonical space (same camera-yaw→canonical mapping as the per-frame

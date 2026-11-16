@@ -3231,12 +3231,20 @@ public:
         bool active = false;
         std::optional<float> facingYawDeg;
         std::optional<bool> forward;
+        /// 0x0071aee0 ran: a mover going forward or back is stopped, and its
+        /// autorun (input control 0x1000) is let go.
+        bool stopForward = false;
     };
     ClickToMoveSteer stepClickToMove(float facingYawDeg, float dtSeconds, bool mouseSteering);
     /// 0x0071b1e0: the player stopped at rest; an arrival's action is taken.
     void clickToMoveMoverStopped();
     /// 0x007275c0: where the ring goes (canonical) and its radius.
     std::optional<std::pair<glm::vec3, float>> clickToMoveMarker() const;
+    /// The world's surface at a place (canonical in, canonical height out):
+    /// what 0x0072ee20 asks of 0x00783a40 to put an enemy's place on the
+    /// ground. None where there is nothing there.
+    using GroundHeightQuery = std::function<std::optional<float>(const glm::vec3& canonical)>;
+    void setGroundHeightQuery(GroundHeightQuery q) { groundHeightQuery_ = std::move(q); }
     uint64_t getHookedFishingBobberGuid() const { return hookedFishingBobberGuid_; }
     void selectGossipOption(uint32_t optionId, const std::string& code = "");
     void selectGossipQuest(uint32_t questId);
@@ -6599,6 +6607,7 @@ private:
     click_to_move::State ctm_;
     click_to_move::Pending ctmPending_;
     float ctmObjectReach_ = 0.0f;               // 0x00ca11e8
+    GroundHeightQuery groundHeightQuery_;
     std::optional<float> ctmFaceOnStop_;        // 0x00ca11d8 for 0x007272c0's turn
     std::optional<glm::vec3> clickToMoveSubject(uint64_t guid) const;
     bool playerAliveAsMover() const;

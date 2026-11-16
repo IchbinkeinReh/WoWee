@@ -195,8 +195,14 @@ void GameHandler::clickToMoveAttack(uint64_t guid) {
                                 : 0;
     std::optional<float> spellRange;
     if (ranged != 0 && spellHandler_) spellRange = spellHandler_->spellReachAt(ranged, playerGuid, guid).max;
-    startClickToMove(ranged != 0 ? ctm::Kind::AttackGuid : ctm::Kind::AttackPosition, guid,
-                     glm::vec3(target->getX(), target->getY(), target->getZ()), 0.0f, spellRange);
+    // The place is the unit's put on the world's surface there: 0x00783a40
+    // asked at the point (flags 0x100111), the first facet's plane read at
+    // the unit's x and y. Nothing there, the unit's own height.
+    glm::vec3 at(target->getX(), target->getY(), target->getZ());
+    if (groundHeightQuery_) {
+        if (const auto z = groundHeightQuery_(at)) at.z = *z;
+    }
+    startClickToMove(ranged != 0 ? ctm::Kind::AttackGuid : ctm::Kind::AttackPosition, guid, at, 0.0f, spellRange);
 }
 
 bool GameHandler::clickToMoveToObject(uint64_t guid, float reach) {
@@ -335,10 +341,15 @@ GameHandler::ClickToMoveSteer GameHandler::stepClickToMove(float facingYawDeg, f
     in.mayMove = me && static_cast<int32_t>(me->getHealth()) > 0 && (flags & 0x100a00u) == 0 && stand != 7 &&
                  !movementHandler_->onMoveSpline(playerGuid) && isServerMovementAllowed();
 
+    const ctm::Kind kindNow = ctm_.kind;
     const ctm::StepOut out = ctm::step(ctm_, in);
     steer.active = true;
     if (out.facing) steer.facingYawDeg = toYawDeg(*out.facing);
     if (out.forward) steer.forward = *out.forward;
+    // 0x0071aee0: the step's own stop, an arrival's, and 0x007272c0's for a
+    // kind that goes anywhere (0x00adaab8).
+    steer.stopForward = (out.forward && !*out.forward) ||
+                        (out.outcome != ctm::Outcome::Continue && ctm::row(kindNow).used);
     switch (out.outcome) {
     case ctm::Outcome::Continue:
         break;

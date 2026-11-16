@@ -2219,6 +2219,12 @@ void CameraController::update(float deltaTime) {
             }
             if (st.forward) clickToMoveForward_ = *st.forward;
             if (!st.active) clickToMoveForward_ = false;
+            // 0x0071aee0 -> 0x005f95f0: stopping a mover that goes forward
+            // or back lets its autorun go too.
+            if (st.stopForward && (wasMovingForward || wasMovingBackward)) {
+                autoRunning = false;
+                clickToMoveForward_ = false;
+            }
             clickToMoveActive_ = st.active;
         }
     }
