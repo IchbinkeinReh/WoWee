@@ -510,6 +510,23 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
         owner_.dismount();
     }
 
+    // 0x008038f0: while one of the player's own casts in progress is one an
+    // attack would interrupt (Spell.dbc InterruptFlags 0x8), the attack start
+    // 0x006e2610 sends no CMSG_ATTACKSWING and starts nothing, unless an attack
+    // is already under way. Nothing sends the held swing when the cast ends:
+    // none of 0x006e2610's callers is reached from a cast finishing, so the
+    // player asks again. (The channel half of 0x008038f0, ChannelInterruptFlags
+    // 0x1000, is covered by the channel refusal above, which stops every
+    // attack while a channel runs.)
+    if (!autoAttacking_ && !autoAttackRequested_ && owner_.isCasting() &&
+        !owner_.isChanneling()) {
+        owner_.loadSpellNameCache();
+        const auto& cache = owner_.spellNameCacheRef();
+        if (const auto it = cache.find(owner_.getCurrentCastSpellId());
+            it != cache.end() && (it->second.interruptFlags & 0x8u) != 0)
+            return;
+    }
+
     autoAttackRequested_ = true;
     autoAttackRetryPending_ = true;
     // Keep combat animation/state server-authoritative. We only flip autoAttacking
