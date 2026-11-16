@@ -57,8 +57,11 @@ void AnimationCallbackHandler::setupCallbacks() {
         if (!renderer_.getCharacterRenderer()) return;
         uint32_t instanceId = entitySpawner_.getCreatureInstanceId(guid);
         if (instanceId == 0) instanceId = entitySpawner_.getPlayerInstanceId(guid);
+        // 0x0073af80: Drown or DeathStart, AnimationData taking DeathStart
+        // back to Death for a model without it.
         if (instanceId != 0) {
-            renderer_.getCharacterRenderer()->playAnimation(instanceId, rendering::anim::DEATH, false);
+            renderer_.getCharacterRenderer()->playAnimation(instanceId, entitySpawner_.dyingAnimation(guid, instanceId),
+                                                            false);
         }
     });
 

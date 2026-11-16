@@ -1049,8 +1049,9 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
             spawner->markCreatureDead(guid);
             uint32_t instanceId = spawner->getCreatureInstanceId(guid);
             if (instanceId == 0) instanceId = spawner->getPlayerInstanceId(guid);
+            // 0x0073af80: Drown or DeathStart (falling back to Death).
             if (instanceId != 0 && cr) {
-                cr->playAnimation(instanceId, rendering::anim::DEATH, false);
+                cr->playAnimation(instanceId, spawner->dyingAnimation(guid, instanceId), false);
             }
         });
 

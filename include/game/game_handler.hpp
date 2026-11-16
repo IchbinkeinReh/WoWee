@@ -4551,6 +4551,8 @@ public:
     bool onMoveSpline(uint64_t guid);
     /// The flags of a unit's running move spline (MoveSplineFlags).
     std::optional<uint32_t> moveSplineFlags(uint64_t guid);
+    /// The unit's kept move spline's flags, 0x400 once run out (+0xbc).
+    std::optional<uint32_t> keptMoveSplineFlags(uint64_t guid) const;
     /// A spell's AttributesEx2.
     [[nodiscard]] uint32_t getSpellAttributesEx2(uint32_t spellId) const;
     /// An auto-repeating ranged spell of the player's going (+0xa38 0x200):

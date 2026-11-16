@@ -88,6 +88,9 @@ public:
     [[nodiscard]] bool onMoveSpline(uint64_t guid);
     /// The flags of a unit's move spline while it still runs.
     [[nodiscard]] std::optional<uint32_t> moveSplineFlags(uint64_t guid);
+    /// The flags of the unit's move spline as the client keeps it (+0xbc),
+    /// with 0x400 once it has run out; none when it has no spline kept.
+    [[nodiscard]] std::optional<uint32_t> keptMoveSplineFlags(uint64_t guid) const;
     /// 0x00717c50 at world entry: the player again, and no other unit
     /// controlled.
     void resetActiveMover();
