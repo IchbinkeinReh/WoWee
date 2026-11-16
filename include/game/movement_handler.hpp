@@ -5,6 +5,7 @@
 #include "core/coordinates.hpp"
 #include "game/opcode_table.hpp"
 #include "game/vehicle_mover.hpp"
+#include "game/teleport_ack_gate.hpp"
 #include "network/packet.hpp"
 #include <glm/glm.hpp>
 #include <chrono>
@@ -313,7 +314,20 @@ public:
     /// A movement packet for the mover, in server coordinates.
     [[nodiscard]] MovementInfo moverWireInfo();
 
+    /// MSG_MOVE_TELEPORT_ACK goes out once the place teleported to is in
+    /// (TeleportAckGate): the world-entry callback holds it when it queues
+    /// the area load, and the loader lets it go when the load is done.
+    void holdTeleportAck() { teleportAck_.hold(); }
+    /// Sends the held acknowledgement, if any. Returns whether one went.
+    bool releaseTeleportAck();
+    [[nodiscard]] bool hasPendingTeleportAck() const { return teleportAck_.pending(); }
+    /// A new session's world: a teleport of the last one is not answered.
+    void dropTeleportAck() { teleportAck_.drop(); }
+
 private:
+    TeleportAckGate teleportAck_;
+    void sendTeleportAck(const TeleportAckGate::Ack& pending);
+
     /// A monster move held for a vehicle's enter or exit animation, kept as
     /// it came (0x00748170) and run again as it is let go.
     struct HeldVehicleMove {

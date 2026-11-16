@@ -195,8 +195,16 @@ void WorldLoader::processPendingEntry() {
     pendingWorldEntry_.reset();
     if (entry.relocate && entry.mapId == loadedMapId_) {
         relocateOnLoadedMap(entry.mapId, entry.x, entry.y, entry.z);
+        // The area is in: the teleport is answered now (0x006ed0f0 sends
+        // MSG_MOVE_TELEPORT_ACK after 0x006ecf80 -> 0x0074b620 returns).
+        releaseTeleportAck();
         return;
     }
+    // Whatever held it, the world this load brings is the place.
+    struct AckAfterLoad {
+        WorldLoader& loader;
+        ~AckAfterLoad() { loader.releaseTeleportAck(); }
+    } ackAfterLoad{*this};
     LOG_DEBUG("Processing deferred world entry: map ", entry.mapId);
     if (app_.worldEntryCallbacks_) {
         app_.worldEntryCallbacks_->setWorldEntryMovementGraceTimer(2.0f);
@@ -221,6 +229,11 @@ void WorldLoader::processPendingEntry() {
         app_.disconnectNotice_ = "Not enough memory to load the world.";
         app_.logoutToLogin();
     }
+}
+
+void WorldLoader::releaseTeleportAck() {
+    if (!gameHandler_) return;
+    if (auto* mh = gameHandler_->getMovementHandler()) mh->releaseTeleportAck();
 }
 
 void WorldLoader::reloadAfterDeviceLoss(uint32_t mapId, float x, float y, float z) {

@@ -2702,24 +2702,18 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
     owner_.areaTriggerSuppressFirstRef() = true;
     owner_.areaTriggerCooldownRef() = deeprunTram ? 1.5f : 10.0f;
 
-    if (owner_.getSocket()) {
-        network::Packet ack(wireOpcode(Opcode::MSG_MOVE_TELEPORT_ACK));
-        const bool legacyGuidAck =
-            isActiveExpansion("classic") || isActiveExpansion("tbc") || isActiveExpansion("turtle");
-        if (legacyGuidAck) {
-            ack.writeUInt64(owner_.getPlayerGuid());
-        } else {
-            ack.writePackedGuid(owner_.getPlayerGuid());
-        }
-        ack.writeUInt32(counter);
-        ack.writeUInt32(moveTime);
-        owner_.getSocket()->send(ack);
-        LOG_INFO("Sent MSG_MOVE_TELEPORT_ACK response");
-
-        // Immediately tell the server our position so it doesn't keep using
-        // stale pre-teleport coordinates for area-trigger / anti-cheat checks.
-        sendMovement(Opcode::MSG_MOVE_STOP);
-        sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
+    // The acknowledgement waits for the place to be in. The client answers
+    // from the same handler, after 0x006ecf80 has moved the player and read
+    // in the area about the new place behind the loading screen
+    // (0x006ed0f0: 0x006ecf80 -> 0x0074b620, then 0x007413f0 with 0xC7).
+    // Sent first, the server took the player as arrived - creatures, area
+    // triggers, the next teleport - while the ground was still loading.
+    // The world-entry callback holds it when it queues that load
+    // (WorldLoader::relocateOnLoadedMap lets it go); otherwise it goes now.
+    if (const auto earlier = teleportAck_.arrive(counter, moveTime)) {
+        // One from a teleport not yet answered: the server waits for it.
+        LOG_WARNING("MSG_MOVE_TELEPORT_ACK: earlier acknowledgement still held - sent now");
+        sendTeleportAck(*earlier);
     }
 
     // Only where the destination was taken. A misfire leaves the player where
@@ -2727,6 +2721,35 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
     if (!originMisfire && owner_.worldEntryCallbackRef()) {
         owner_.worldEntryCallbackRef()(owner_.currentMapIdRef(), serverX, serverY, serverZ, false);
     }
+    if (const auto ack = teleportAck_.settle()) sendTeleportAck(*ack);
+}
+
+bool MovementHandler::releaseTeleportAck() {
+    const auto ack = teleportAck_.release();
+    if (!ack) return false;
+    sendTeleportAck(*ack);
+    return true;
+}
+
+void MovementHandler::sendTeleportAck(const TeleportAckGate::Ack& pending) {
+    if (!owner_.getSocket()) return;
+    network::Packet ack(wireOpcode(Opcode::MSG_MOVE_TELEPORT_ACK));
+    const bool legacyGuidAck =
+        isActiveExpansion("classic") || isActiveExpansion("tbc") || isActiveExpansion("turtle");
+    if (legacyGuidAck) {
+        ack.writeUInt64(owner_.getPlayerGuid());
+    } else {
+        ack.writePackedGuid(owner_.getPlayerGuid());
+    }
+    ack.writeUInt32(pending.counter);
+    ack.writeUInt32(pending.moveTime);
+    owner_.getSocket()->send(ack);
+    LOG_WARNING("Sent MSG_MOVE_TELEPORT_ACK counter=", pending.counter);
+
+    // Immediately tell the server our position so it doesn't keep using
+    // stale pre-teleport coordinates for area-trigger / anti-cheat checks.
+    sendMovement(Opcode::MSG_MOVE_STOP);
+    sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
 }
 
 // SMSG_TRANSFER_PENDING: the client's handler is 0x00401480.

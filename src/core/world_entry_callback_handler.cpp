@@ -267,7 +267,12 @@ void WorldEntryCallbackHandler::setupCallbacks() {
             // visible from the new position (hearthstone may land far from old location).
             precacheNearbyTiles(renderer_.getTerrainManager(), renderPos, 8);
             // Taken after this packet, before the next frame moves anyone.
-            if (behindLoadingScreen && worldLoader_) worldLoader_->setPendingRelocation(mapId, x, y, z);
+            // The teleport's acknowledgement goes when that area is in
+            // (0x006ed0f0 sends 0xC7 after 0x006ecf80 returns).
+            if (behindLoadingScreen && worldLoader_) {
+                worldLoader_->setPendingRelocation(mapId, x, y, z);
+                if (auto* mh = gameHandler_.getMovementHandler()) mh->holdTeleportAck();
+            }
             return;
         }
 

@@ -1323,6 +1323,13 @@ wowee_add_test(test_movement_flags
     SOURCES test_movement_flags.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_teleport_ack_gate ───────────────────────────────────
+# When MSG_MOVE_TELEPORT_ACK goes out: after the area about the new place is
+# in (0x006ed0f0 -> 0x006ecf80, then 0xC7). Header-only.
+wowee_add_test(test_teleport_ack_gate
+    SOURCES test_teleport_ack_gate.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_attacker_state_layout ─────────────────────────────────────────
 # SMSG_ATTACKERSTATEUPDATE for classic and TBC, pinned before the shared head
 # was factored out. Same link set as the other two layout tests.
