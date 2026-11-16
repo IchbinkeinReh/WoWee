@@ -229,6 +229,11 @@ wowee_add_test(test_chat_outgoing
 wowee_add_test(test_chat_bubble_timing
     SOURCES test_chat_bubble_timing.cpp)
 
+# The gossip greeting option shown, by probability and gender
+# (0x0058ac30). Header-only.
+wowee_add_test(test_npc_text
+    SOURCES test_npc_text.cpp)
+
 # The arena opponent roster (BattlefieldInfo.cpp): slots, pets beside their
 # owners, and ARENA_OPPONENT_UPDATE's words. Header-only.
 wowee_add_test(test_arena_opponents

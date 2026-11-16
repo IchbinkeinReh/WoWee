@@ -4,6 +4,7 @@
 #include "game/opcode_table.hpp"
 #include "game/handler_types.hpp"
 #include "game/quest_poi_icons.hpp"
+#include "game/npc_text.hpp"
 #include "network/packet.hpp"
 #include <array>
 #include <chrono>
@@ -426,8 +427,11 @@ private:
     // Quest giver status per NPC
     std::unordered_map<uint64_t, QuestGiverStatus> npcQuestStatus_;
 
-    // NPC gossip text cache (textId → body text)
-    std::unordered_map<uint32_t, std::string> npcTextCache_;
+    // NPC gossip text cache (textId → its eight options)
+    std::unordered_map<uint32_t, npc_text::NpcText> npcTextCache_;
+    /// The greeting option chosen for the window now open (0x0058ac30).
+    std::string gossipText_;
+    void chooseGossipText();
 
     // Shared quest state
     bool        pendingSharedQuest_       = false;

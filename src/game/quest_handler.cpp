@@ -10,6 +10,8 @@
 #include "game/update_field_table.hpp"
 #include "game/quest_progress.hpp"
 #include "game/quest_text.hpp"
+#include "game/npc_text.hpp"
+#include <random>
 #include "game/packet_parsers.hpp"
 #include "network/world_socket.hpp"
 #include "network/wire_format.hpp"
@@ -2383,8 +2385,10 @@ void QuestHandler::handleGossipMessage(network::Packet& packet) {
         }
     }
 
-    if (!gossipShowAwaitingText_ && owner_.addonEventCallbackRef())
-        owner_.addonEventCallbackRef()("GOSSIP_SHOW", {});
+    if (!gossipShowAwaitingText_) {
+        chooseGossipText();
+        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("GOSSIP_SHOW", {});
+    }
     owner_.closeVendor(); // Close vendor if gossip opens
 
     // Classify gossip quests and update quest log + overhead NPC markers.
@@ -2571,38 +2575,72 @@ void QuestHandler::handleGossipComplete(network::Packet& packet) {
 void QuestHandler::handleNpcTextUpdate(network::Packet& packet) {
     if (!packet.hasRemaining(4)) return;
     uint32_t textId = packet.readUInt32();
-    // 8 text entries: each has probability(4) + text0 + text1 + lang(4) + 6 emote fields(24)
+    // 8 options, each probability(4) + male text + female text + lang(4) +
+    // 3 x (emote delay, emote)(24) - all eight kept, both genders and their
+    // weights, for 0x0058ac30 to choose from each time the window opens.
+    npc_text::NpcText text;
     for (int i = 0; i < 8; ++i) {
         if (!packet.hasRemaining(4)) break;
-        /*float prob =*/ packet.readFloat();
+        auto& option = text.options[i];
+        option.probability = packet.readFloat();
         if (!packet.hasData()) break;
-        std::string text0 = packet.readString();
+        option.text[0] = packet.readString();
         if (!packet.hasData()) break;
-        std::string text1 = packet.readString();
+        option.text[1] = packet.readString();
         if (!packet.hasRemaining(28)) break; // lang(4) + 6×emote(4) = 28
-        packet.setReadPos(packet.getReadPos() + 28);
-        if (!text0.empty() && !npcTextCache_.count(textId)) {
-            npcTextCache_[textId] = std::move(text0);
-        } else if (!text1.empty() && !npcTextCache_.count(textId)) {
-            npcTextCache_[textId] = std::move(text1);
-        }
+        option.language = packet.readUInt32();
+        packet.setReadPos(packet.getReadPos() + 24);
     }
-    LOG_DEBUG("NPC text update: id=", textId,
-             " cached=", npcTextCache_.count(textId) ? "yes" : "no");
+    npcTextCache_[textId] = std::move(text);
+    LOG_DEBUG("NPC text update: id=", textId);
 
     // The window is open and was waiting on exactly this text: now it is
     // announced (handleGossipMessage held GOSSIP_SHOW back for it), once, so
     // the greeting is drawn on a first visit as on every later one.
     if (gossipWindowOpen_ && gossipShowAwaitingText_ && currentGossip_.titleTextId == textId) {
         gossipShowAwaitingText_ = false;
+        chooseGossipText();
         if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("GOSSIP_SHOW", {});
     }
 }
 
+// 0x0058ac30, each time the gossip window is shown: one of the greeting's
+// eight options at random by their probabilities, in the female text for a
+// female unit (UNIT_FIELD_BYTES_0 byte 2 == 1) and the male one for any
+// other unit; anything that is not a unit takes the male text unless the
+// first option has none. No option with text is "Missing gossip text!" and
+// an empty window.
+void QuestHandler::chooseGossipText() {
+    gossipText_.clear();
+    const auto it = npcTextCache_.find(currentGossip_.titleTextId);
+    if (it == npcTextCache_.end()) return;
+    const auto entity = owner_.getEntityManager().getEntity(currentGossip_.npcGuid);
+    const bool isUnit = entity && entity->isUnit();
+    uint8_t gender = 0;
+    if (isUnit) {
+        const uint16_t bytes0 = fieldIndex(UF::UNIT_FIELD_BYTES_0);
+        if (bytes0 != 0xFFFF) gender = static_cast<uint8_t>((entity->getField(bytes0) >> 16) & 0xFFu);
+    }
+    const int col = npc_text::column(it->second, isUnit, gender);
+    static std::mt19937 rng(std::random_device{}());
+    std::uniform_real_distribution<float> roll(0.0f, 1.0f);
+    const int chosen = npc_text::choose(it->second, col, roll(rng));
+    if (chosen < 0) {
+        LOG_WARNING("Missing gossip text! (", currentGossip_.titleTextId, ")");
+        return;
+    }
+    gossipText_ = it->second.options[static_cast<size_t>(chosen)].text[static_cast<size_t>(col)];
+}
+
 const std::string& QuestHandler::getNpcText(uint32_t textId) const {
     static const std::string empty;
+    if (gossipWindowOpen_ && textId == currentGossip_.titleTextId) return gossipText_;
     auto it = npcTextCache_.find(textId);
-    return (it != npcTextCache_.end()) ? it->second : empty;
+    if (it == npcTextCache_.end()) return empty;
+    for (const auto& o : it->second.options)
+        for (const auto& t : o.text)
+            if (!t.empty()) return t;
+    return empty;
 }
 
 void QuestHandler::refreshQuestPois() {
