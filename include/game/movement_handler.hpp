@@ -546,7 +546,14 @@ private:
     std::optional<Opcode> heldPitchStart_;
     uint32_t heldPitchStartMs_ = 0;
     bool pitchStartSent_ = false;
+    // A full-speed turner's (flags2 0x8) held START_TURN (+0x950, +0x948)
+    // and whether one went out since (+0xa30 0x4000000).
+    std::optional<Opcode> heldTurnStart_;
+    uint32_t heldTurnStartMs_ = 0;
+    bool turnStartSent_ = false;
     bool flushingPitchStart_ = false;
+    /// 0x00721c20: the held START_TURN and START_PITCH out, in that order.
+    void flushHeldStarts();
     float lastSentFacing_ = 0.0f;           ///< +0x294
     float lastSentPitch_ = 0.0f;            ///< +0x295
     [[nodiscard]] float moverPitchRate() const;
