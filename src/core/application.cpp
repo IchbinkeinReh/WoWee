@@ -6146,6 +6146,7 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
         entitySpawner_->playUnitModelEvents(renderer->getCharacterInstanceId());
         entitySpawner_->playUnitSplashes(renderer->getCharacterInstanceId());
         entitySpawner_->updateObjectEffects(deltaTime);
+        entitySpawner_->updateUnitLoopSounds();
     }
 }
 

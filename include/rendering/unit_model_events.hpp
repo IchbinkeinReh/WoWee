@@ -119,6 +119,21 @@ constexpr uint32_t kColumnSubmerged = 36;
 constexpr uint32_t kColumnPetRow = 37;  ///< CreatureSoundDataIDPet
 constexpr uint32_t kColumnCount = 38;
 
+/// LoopSoundID (+0x60): a positional loop on the unit while it lives
+/// (0x007467f0). 141 rows name one.
+constexpr uint32_t kColumnLoop = 24;
+/// How long the loop takes to fade once the unit dies or feigns death
+/// (0x007467f0 -> 0x004c6390 with 0.5).
+constexpr float kLoopFadeOutSeconds = 0.5f;
+/// 0x007467f0's test: alive, not feigning death (UNIT_FIELD_FLAGS_2 0x1),
+/// and a loop in its sound row.
+constexpr bool loopSoundWanted(uint32_t health, uint32_t flags2, uint32_t loopSound) {
+    return health > 0 && (flags2 & 0x1u) == 0 && loopSound != 0;
+}
+/// 0x004cfe00: a sound is not started where the same SoundEntries row
+/// already plays within this many square yards of it.
+constexpr float kSameSoundNearSq = 6.0f;
+
 /// What an event of a unit's model does with its sounds.
 constexpr Action classify(uint32_t eventId) {
     for (uint32_t i = 0; i < 5; ++i) {
