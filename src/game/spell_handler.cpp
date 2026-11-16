@@ -4523,19 +4523,21 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
             for (size_t k = 0; info && info->valid && k < info->spells.size() && !use; ++k)
                 if (info->spells[k].spellId != 0 && info->spells[k].spellTrigger == 0) use = &info->spells[k];
             if (it != owner_.spellNameCacheRef().end() && use && use->spellId == data.spellId) {
-                spell_history::Entry h;
-                h.spellId = data.spellId;
-                h.itemId = item->second.entry;
-                h.start = now;
-                h.duration = use->cooldown < 0 ? static_cast<int32_t>(it->second.recoveryMs) : use->cooldown;
-                h.category = static_cast<int32_t>(use->category) < 1 ? it->second.category : use->category;
-                h.categoryStart = now;
-                h.categoryDuration = use->categoryCooldown < 0 ? static_cast<int32_t>(it->second.categoryRecoveryMs)
-                                                               : use->categoryCooldown;
-                h.onHold = (it->second.attr & 0x2000000u) != 0;
-                playerHistory_.add(h);
+                playerHistory_.add(spell_history::itemSpellEntry(
+                    data.spellId, item->second.entry, now, (it->second.attr & 0x2000000u) != 0,
+                    use->cooldown, static_cast<int32_t>(use->category), use->categoryCooldown,
+                    static_cast<int32_t>(it->second.recoveryMs), it->second.category,
+                    static_cast<int32_t>(it->second.categoryRecoveryMs)));
                 playerCooldownsChanged();
                 if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("BAG_UPDATE_COOLDOWN", {});
+            } else if (it != owner_.spellNameCacheRef().end() && item != owner_.onlineItemsRef().end() &&
+                       !(info && info->valid)) {
+                // The template is not cached: the client asks for it with
+                // 0x00808de0 as the callback, keeping the cast's spell, its
+                // start and its hold by the item (0x006f6020 takes it back).
+                lateItemCooldowns_[item->second.entry] =
+                    LateItemCooldown{data.spellId, now, (it->second.attr & 0x2000000u) != 0};
+                owner_.ensureItemInfo(item->second.entry);
             }
         }
         // A rune spell (PowerType 5) of the player's says which runes it
@@ -8722,6 +8724,33 @@ void SpellHandler::unstablePet(uint32_t petNumber) {
     auto pkt = UnstablePetPacket::build(owner_.stableMasterGuidRef(), petNumber);
     owner_.getSocket()->send(pkt);
     LOG_INFO("Sent CMSG_UNSTABLE_PET: petNumber=", petNumber);
+}
+
+void SpellHandler::itemTemplateArrived(uint32_t itemEntry) {
+    // 0x00808de0: the item's template came after the cast it was cast from.
+    // The slot whose spell is the cast's, whatever its trigger, gives the
+    // entry, begun when the cast went; nothing is written when neither the
+    // cooldown nor the category's runs.
+    const auto pending = lateItemCooldowns_.find(itemEntry);
+    if (pending == lateItemCooldowns_.end()) return;
+    const LateItemCooldown late = pending->second;
+    lateItemCooldowns_.erase(pending);
+    const auto* info = owner_.getItemInfo(itemEntry);
+    if (!info || !info->valid) return;
+    const int k = spell_history::itemSlotForSpell(info->spells, late.spellId);
+    if (k < 0) return;
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(late.spellId);
+    if (it == owner_.spellNameCacheRef().end()) return;
+    const auto& slot = info->spells[static_cast<size_t>(k)];
+    const auto h = spell_history::itemSpellEntry(
+        late.spellId, itemEntry, late.start, late.onHold, slot.cooldown, static_cast<int32_t>(slot.category),
+        slot.categoryCooldown, static_cast<int32_t>(it->second.recoveryMs), it->second.category,
+        static_cast<int32_t>(it->second.categoryRecoveryMs));
+    if (h.duration == 0 && h.categoryDuration == 0) return;
+    playerHistory_.add(h);
+    playerCooldownsChanged();
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("BAG_UPDATE_COOLDOWN", {});
 }
 
 } // namespace game

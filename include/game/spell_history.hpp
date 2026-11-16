@@ -28,6 +28,39 @@ struct Entry {
     int32_t gcd = 0;
 };
 
+/// An item spell's entry from its template slot (0x00706c50 for the slot
+/// already cached at SPELL_GO, 0x00808de0 for one that arrives later): the
+/// slot's cooldown, category and category cooldown, the spell's own where
+/// the slot's is under zero (the category under one), all begun at `start`.
+[[nodiscard]] constexpr Entry itemSpellEntry(uint32_t spellId, uint32_t itemId, int64_t start, bool onHold,
+                                             int32_t slotCooldown, int32_t slotCategory,
+                                             int32_t slotCategoryCooldown, int32_t spellRecovery,
+                                             uint32_t spellCategory, int32_t spellCategoryRecovery) {
+    Entry h;
+    h.spellId = spellId;
+    h.itemId = itemId;
+    h.start = start;
+    h.duration = slotCooldown < 0 ? spellRecovery : slotCooldown;
+    h.category = slotCategory < 1 ? spellCategory : static_cast<uint32_t>(slotCategory);
+    h.categoryStart = start;
+    h.categoryDuration = slotCategoryCooldown < 0 ? spellCategoryRecovery : slotCategoryCooldown;
+    h.onHold = onHold;
+    return h;
+}
+
+/// 0x00808de0: the late template's slot is the one whose spell is the cast's,
+/// whatever its trigger, among the five; -1 when none is.
+template <typename Slots>
+[[nodiscard]] constexpr int itemSlotForSpell(const Slots& slots, uint32_t spellId) {
+    int i = 0;
+    for (const auto& slot : slots) {
+        if (i >= 5) break;
+        if (slot.spellId == spellId) return i;
+        ++i;
+    }
+    return -1;
+}
+
 /// 0x00807d40's window: a spell whose cooldown began less than this long ago.
 inline constexpr int64_t kRecentMs = 1500;
 

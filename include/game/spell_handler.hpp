@@ -42,6 +42,10 @@ public:
     /// (0x00805010: 1..255, never 0, one counter for both).
     uint8_t nextCastCount() { return cast_check::nextCastCount(castCount_); }
 
+    /// An item template arrived: the cooldown of a cast from that item made
+    /// before it was cached (0x00808de0).
+    void itemTemplateArrived(uint32_t itemEntry);
+
     void registerOpcodes(DispatchTable& table);
 
     // Talent data structures (aliased from handler_types.hpp)
@@ -814,6 +818,14 @@ private:
     uint64_t castItemGuid_ = 0;
     spell_history::History petHistory_;
     spell_history::History playerHistory_;
+    /// Item casts whose template was not cached at SPELL_GO, by item entry
+    /// (0x006f6020): the spell, when it went and whether it is held.
+    struct LateItemCooldown {
+        uint32_t spellId = 0;
+        int64_t start = 0;
+        bool onHold = false;
+    };
+    std::unordered_map<uint32_t, LateItemCooldown> lateItemCooldowns_;
     /// The last failure 0x00808200 reported, held three seconds. Mutable:
     /// the const reach test reports through it.
     mutable cast_failure::RepeatHold failureHold_;

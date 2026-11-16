@@ -6433,6 +6433,8 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
         owner_.itemInfoCacheRef()[data.entry] = data;
         // 0x0070aa40 for the items that were waiting on this template.
         owner_.itemTemplateArrivedForRefund(data.entry);
+        // 0x00808de0: a cast from this item whose cooldown waited on it.
+        if (auto* spells = owner_.getSpellHandler()) spells->itemTemplateArrived(data.entry);
         rebuildOnlineInventory();
         maybeDetectVisibleItemLayout();
         // The bar's buttons holding this item, re-read now that it has an
