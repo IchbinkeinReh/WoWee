@@ -92,6 +92,7 @@
     "Shortcut": 20
   },
   "ChrClasses": {
+    "Flags": 57,
     "ID": 0,
     "Name": 4,
     "SpellClassSet": 56
@@ -104,7 +105,8 @@
     "Flags": 1,
     "HairCustomization": 67,
     "ID": 0,
-    "Name": 14
+    "Name": 14,
+    "ResSicknessSpellID": 9
   },
   "CreatureDisplayInfo": {
     "CreatureModelScale": 4,
@@ -668,7 +670,8 @@
     "ID": 0,
     "Name": 1,
     "OrderIndex": 22,
-    "PetTalentMask": 21
+    "PetTalentMask": 21,
+    "SpellIconID": 18
   },
   "TaxiNodes": {
     "ID": 0,

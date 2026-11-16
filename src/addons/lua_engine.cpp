@@ -1405,8 +1405,8 @@ int lua_Model_SetModelScale(lua_State* L) {
     // 0x00960760: a number, or a usage line that names the method SetScale.
     if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetScale(scale)", frameNameOnStack(L, 1));
     if (auto* w = widgetOf(L, 1)) {
-        const float scale = static_cast<float>(luaL_optnumber(L, 2, 1.0));
-        if (scale > 0.0f) w->modelScale = scale;
+        // Any number is kept.
+        w->modelScale = static_cast<float>(luaL_optnumber(L, 2, 1.0));
     }
     return 0;
 }
@@ -1843,14 +1843,17 @@ int lua_Frame_SetMinimumWidth(lua_State* L) {
     if (!lua_isnumber(L, 2)) return luaL_error(L, "Usage: %s:SetMinimumWidth(width [,force])", usageName(L, 1));   // 0x0061d040
     if (auto* w = widgetOf(L, 1)) {
         w->tooltipMinWidth = static_cast<float>(luaL_optnumber(L, 2, 0.0));
+        w->tooltipMinWidthForced = luaClientSwitchArg(L, 3, false);
     }
     return 0;
 }
 
 int lua_Frame_GetMinimumWidth(lua_State* L) {
+    // The width and 1 or nil for the force flag (0x0061d0d0).
     const auto* w = widgetOf(L, 1);
     lua_pushnumber(L, w ? w->tooltipMinWidth : 0.0);
-    return 1;
+    luaPushOneOrNil(L, w && w->tooltipMinWidthForced);
+    return 2;
 }
 
 // FontString:GetFieldSize() → how many bytes of text this string will hold.
@@ -2649,9 +2652,11 @@ int lua_CheckButton_SetChecked(lua_State* L) {
         // turned off. BagSlotButton_UpdateChecked is one: it counts the open
         // container frames and passes 0 or 1 straight in, so every bag button
         // stayed lit whether or not its bag was open.
+        // Strings read as the client reads a switch, "0", "no" and "off"
+        // unchecking (0x00976b40).
         w->checked = lua_isnone(L, 2)    ? true
                    : lua_isnumber(L, 2)  ? (lua_tonumber(L, 2) != 0)
-                                         : (lua_toboolean(L, 2) != 0);
+                                         : luaClientSwitchArg(L, 2, true);
     }
     return 0;
 }
@@ -2742,6 +2747,8 @@ int lua_MessageFrame_AddMessage(lua_State* L) {
     // its usage line; a plain message frame (0x009747c0) has no such line.
     if (sameWord(w->objectType.c_str(), "ScrollingMessageFrame") && !lua_isstring(L, 2))
         return luaL_error(L, "Usage: %s:AddMessage(\"text\", [r, g, b,] typeID, backFill, accessID, extraData)", usageName(L, 1));
+    // An empty or absent text adds no line (0x00972f20, 0x009747c0).
+    if (!lua_isstring(L, 2) || !*lua_tostring(L, 2)) return 0;
     wowee::ui::Widget::Message m;
     // The same escape a label gets. Chat and the error frame carry counted
     // strings too - "you may not do that for another %d |4second:seconds;" -
@@ -2974,12 +2981,14 @@ int lua_WoweeReportFrame(lua_State* L) {
 
 int lua_Cooldown_SetReverse(lua_State* L) {
     auto* w = widgetOf(L, 1);
-    if (w) w->cooldownReverse = lua_toboolean(L, 2) != 0;
+    // No argument is on, 0 and "0" off (0x005ec9a0).
+    if (w) w->cooldownReverse = luaClientSwitchArg(L, 2, true);
     return 0;
 }
 int lua_Cooldown_SetDrawEdge(lua_State* L) {
     auto* w = widgetOf(L, 1);
-    if (w) w->cooldownDrawEdge = lua_toboolean(L, 2) != 0;
+    // No argument is on, 0 and "0" off (0x005eca30).
+    if (w) w->cooldownDrawEdge = luaClientSwitchArg(L, 2, true);
     return 0;
 }
 
@@ -5108,6 +5117,24 @@ int lua_Tooltip_SetTradeSkillItem(lua_State* L) {
 /// Compared by guid rather than by token, which is the whole point of the
 /// question: a tooltip set for "target" is describing "mouseover" whenever
 /// they are the same unit, and the caller is asking exactly that.
+/// GameTooltip:GetUnit() (0x0061dad0): the unit's name and its token, or
+/// nothing when the tooltip shows no unit.
+static int lua_Tooltip_GetUnit(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    auto* gh = wowee::addons::getGameHandler(L);
+    if (!w || !gh || w->tooltipUnit.empty()) return 0;
+    if (wowee::addons::resolveUnitGuid(gh, w->tooltipUnit) == 0) return 0;
+    // The name first, off the stack, then both values.
+    std::string name;
+    lua_getglobal(L, "UnitName");
+    lua_pushstring(L, w->tooltipUnit.c_str());
+    if (lua_pcall(L, 1, 1, 0) == 0 && lua_isstring(L, -1)) name = lua_tostring(L, -1);
+    lua_settop(L, 1);
+    if (name.empty()) return 0;
+    lua_pushstring(L, name.c_str());
+    lua_pushstring(L, w->tooltipUnit.c_str());
+    return 2;
+}
 static int lua_Tooltip_IsUnit(lua_State* L) {
     // 0x0061da20. Its usage line hands luaL_error no name for the %s, which
     // then reads whatever sits next on the stack; the frame's name is the
@@ -5153,13 +5180,13 @@ int lua_Tooltip_SetUnit(lua_State* L) {
     if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s:SetUnit(\"unit\"[, hideStatus])", usageName(L, 1));
     auto* gh = wowee::addons::getGameHandler(L);
     const char* uid = luaL_optstring(L, 2, "player");
-    if (!w || !gh) { lua_pushboolean(L, 0); return 1; }
+    if (!w || !gh) { lua_pushnil(L); return 1; }
     std::string uidStr(uid);
     for (char& c : uidStr) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     const uint64_t guid = wowee::addons::resolveUnitGuid(gh, uidStr);
-    if (guid == 0) { lua_pushboolean(L, 0); return 1; }
+    if (guid == 0) { lua_pushnil(L); return 1; }
     const std::string name = gh->lookupName(guid);
-    if (name.empty()) { lua_pushboolean(L, 0); return 1; }
+    if (name.empty()) { lua_pushnil(L); return 1; }
 
     // Room for the global-string lookups the Beast Lore and faction loops
     // make: each pops what it pushed, but the lines are counted by data.
@@ -7139,6 +7166,8 @@ int lua_Button_IsEnabled(lua_State* L) {
     // The six truth tests then see 0 as true, which is a real flaw, but it is
     // retail's flaw: FrameXML was authored against a client that answers a
     // number here, and matching it is what keeps the other twenty-two right.
+    // A slider answers 1 or nil (0x00972050); a button 1 or 0 (0x00977170).
+    if (w && sameWord(w->objectType.c_str(), "Slider")) { luaPushOneOrNil(L, w->enabled); return 1; }
     lua_pushnumber(L, w && w->enabled ? 1 : 0);
     return 1;
 }
@@ -9479,16 +9508,24 @@ int lua_EditBox_Insert(lua_State* L) {
     return 0;
 }
 int lua_MessageFrame_SetPadding(lua_State* L) {
-    // WoW takes a horizontal and a vertical padding; only the vertical one
-    // changes anything here, because message lines are drawn from the frame's
-    // left edge rather than inset.
+    // A tooltip's is one value (0x0061d150). Elsewhere WoW takes a
+    // horizontal and a vertical padding; only the vertical one changes
+    // anything here, because message lines are drawn from the frame's left
+    // edge rather than inset.
     if (auto* w = widgetOf(L, 1)) {
-        w->messagePadding = static_cast<float>(luaL_optnumber(L, 3, 0.0));
+        if (w->isTooltip || sameWord(w->objectType.c_str(), "GameTooltip"))
+            w->tooltipPadding = static_cast<float>(luaL_optnumber(L, 2, 0.0));
+        else
+            w->messagePadding = static_cast<float>(luaL_optnumber(L, 3, 0.0));
     }
     return 0;
 }
 int lua_MessageFrame_GetPadding(lua_State* L) {
     const auto* w = widgetOf(L, 1);
+    if (w && (w->isTooltip || sameWord(w->objectType.c_str(), "GameTooltip"))) {
+        lua_pushnumber(L, w->tooltipPadding);   // 0x0061d1c0
+        return 1;
+    }
     lua_pushnumber(L, 0.0);
     lua_pushnumber(L, w ? w->messagePadding : 0.0);
     return 2;
@@ -9730,6 +9767,17 @@ int lua_Slider_GetValueStep(lua_State* L) {
 static int setColorRole(lua_State* L, wowee::ui::Widget::ColorRole role) {
     auto* tree = wowee::addons::getWidgetTree(L);
     if (!tree) return 0;
+    // A path for a thumb is a texture made with it (0x0096e560, 0x0096e610).
+    if (lua_type(L, 2) == LUA_TSTRING) {
+        lua_getfield(L, 1, "CreateTexture");
+        lua_pushvalue(L, 1);
+        if (lua_pcall(L, 1, 1, 0) != 0 || !lua_istable(L, -1)) { lua_pop(L, 1); return 0; }
+        lua_getfield(L, -1, "SetTexture");
+        lua_pushvalue(L, -2);
+        lua_pushvalue(L, 2);
+        if (lua_pcall(L, 2, 0, 0) != 0) lua_pop(L, 1);
+        lua_replace(L, 2);
+    }
     const uint32_t rid = widgetIdOf(L, 2);
     if (auto* region = tree->get(rid)) region->colorRole = role;
     if (auto* picker = widgetOf(L, 1)) picker->pickerRegion[static_cast<int>(role)] = rid;
@@ -10501,6 +10549,48 @@ static int lua_CreateFrame(lua_State* L) {
     if (const int t = lua_type(L, 3);
         !lua_isstring(L, 1) || (t != LUA_TNONE && t != LUA_TNIL && t != LUA_TTABLE))
         return luaL_error(L, "Usage: CreateFrame(\"frameType\" [, \"name\"] [, parent] [, \"template\"] [, id])");
+    // A parent table must be a frame: one with no object behind it, or a
+    // region, is refused (0x0081bb20).
+    if (lua_istable(L, 3)) {
+        const auto* parentWidget = widgetOf(L, 3);
+        if (!parentWidget) return luaL_error(L, "CreateFrame: Couldn't find 'this' in parent object");
+        if (sameWord(parentWidget->objectType.c_str(), "Texture") ||
+            sameWord(parentWidget->objectType.c_str(), "FontString"))
+            return luaL_error(L, "CreateFrame: Wrong parent object type, expected frame");
+    }
+    // Every template named must exist, split on spaces and commas.
+    if (lua_isstring(L, 4)) {
+        const std::string list(lua_tostring(L, 4));
+        size_t at = 0;
+        while (at < list.size()) {
+            const size_t b = list.find_first_not_of(" ,", at);
+            if (b == std::string::npos) break;
+            const size_t e = list.find_first_of(" ,", b);
+            const std::string one = list.substr(b, e == std::string::npos ? std::string::npos : e - b);
+            lua_getglobal(L, "__WoweeTemplates");
+            bool known = false;
+            if (lua_istable(L, -1)) {
+                lua_getfield(L, -1, one.c_str());
+                known = !lua_isnil(L, -1);
+                lua_pop(L, 1);
+            }
+            lua_pop(L, 1);
+            if (!known) return luaL_error(L, "CreateFrame(): Couldn't find inherited node \"%s\"", one.c_str());
+            at = e == std::string::npos ? list.size() : e;
+        }
+    }
+    // The types the client can make; any other is refused.
+    {
+        static const char* const kTypes[] = {
+            "Frame", "Button", "CheckButton", "ColorSelect", "EditBox", "MessageFrame", "Model",
+            "MovieFrame", "ScrollFrame", "ScrollingMessageFrame", "SimpleHTML", "Slider", "StatusBar",
+            "WorldFrame", "GameTooltip", "Cooldown", "Minimap", "PlayerModel", "DressUpModel",
+            "TabardModel", "QuestPOIFrame"};
+        const char* asked = lua_tostring(L, 1);
+        bool known = false;
+        for (const char* t : kTypes) known = known || sameWord(asked, t);
+        if (!known) return luaL_error(L, "CreateFrame: Unknown frame type '%s'", asked);
+    }
     const char* frameType = luaL_optstring(L, 1, "Frame");
     const char* name = luaL_optstring(L, 2, nullptr);
     // Which of the per-type methods go on this frame; see where they are set,
@@ -11413,7 +11503,6 @@ void LuaEngine::registerCoreAPI() {
     // name 5.1 dropped is a name nothing here can be shadowing.
     bootstrap(
         "function getglobal(name) return _G[name] end\n"
-        "function setglobal(name, value) _G[name] = value end\n"
         "string.gfind = string.gfind or string.gmatch\n"
         "gfind = string.gfind\n");
 
@@ -11423,14 +11512,6 @@ void LuaEngine::registerCoreAPI() {
     lua_getfield(L_, -1, "pi");
     lua_setglobal(L_, "PI");
     lua_pop(L_, 1);
-
-    // WoW-specific and not derivable from a standard library.
-    bootstrap(
-        "function strtrim(s, chars)\n"
-        "  chars = chars or ' \\t\\r\\n'\n"
-        "  local p = '[' .. chars:gsub('(%W)', '%%%1') .. ']'\n"
-        "  return (s:gsub('^' .. p .. '*', ''):gsub(p .. '*$', ''))\n"
-        "end\n");
 
     // SlashCmdList table - addons register slash commands here
     lua_newtable(L_);
@@ -11590,6 +11671,7 @@ void LuaEngine::registerCoreAPI() {
         {"_WoweeAppendEquippedEnchants", lua_Tooltip_AppendEquippedEnchants},
         {"SetTradeSkillItem", lua_Tooltip_SetTradeSkillItem},
         {"SetUnit",         lua_Tooltip_SetUnit},
+        {"GetUnit",         lua_Tooltip_GetUnit},
         {"IsUnit",          lua_Tooltip_IsUnit},
         {"AddDoubleLine",   lua_Tooltip_AddDoubleLine},
         {"ClearLines",      lua_Tooltip_ClearLines},
@@ -12810,6 +12892,17 @@ void LuaEngine::registerCoreAPI() {
         "        if select('#', ...) == 0 or (t ~= 'table' and t ~= 'string' and t ~= 'number' and t ~= 'nil') then\n"
         "            __WoweeUsageError(self, usage)\n"
         "        end\n"
+        // A table has to be a texture (0x00977a70, which the normal, pushed
+        // and disabled setters share): one that is no object at all, and an
+        // object of another type, each raise their own line.
+        "        if t == 'table' and (slot == 'NormalTexture' or slot == 'PushedTexture' or slot == 'DisabledTexture') then\n"
+        "            local name = self.GetName and self:GetName() or '<unnamed>'\n"
+        "            if rawget(tex, '__wid') == nil then\n"
+        "                error((\"%s:Set%s(): Couldn't find 'this' in texture\"):format(name, slot), 0)\n"
+        "            elseif not (tex.IsObjectType and tex:IsObjectType('Texture')) then\n"
+        "                error(('%s:Set%s(): Wrong object type, expected texture'):format(name, slot), 0)\n"
+        "            end\n"
+        "        end\n"
         "        if type(tex) == 'string' then\n"
         "            local existing = self[key]\n"
         "            if type(existing) == 'table' then existing:SetTexture(tex) return end\n"
@@ -13037,7 +13130,7 @@ void LuaEngine::registerCoreAPI() {
         "GetVerticalScroll=1,GetVerticalScrollRange=1,GetWidth=1,\n"
         "GetZoom=1,GetZoomLevels=1,HasFocus=1,HasScript=1,Hide=1,HideUIPanel=1,\n"
         "HighlightText=1,HookScript=1,IgnoreDepth=1,Insert=1,\n"
-        "IsEnabled=1,IsEquippedItem=1,IsEventRegistered=1,IsMouseEnabled=1,\n"
+        "IsEnabled=1,IsEventRegistered=1,IsMouseEnabled=1,\n"
         "IsObjectType=1,IsShown=1,IsUnderMouse=1,\n"
         "IsUnit=1,IsVisible=1,LockHighlight=1,Lower=1,MoveUIPanel=1,\n"
         "New=1,NumLines=1,OnFinished=1,OnUpdate=1,PageDown=1,PageUp=1,\n"
@@ -13578,7 +13671,7 @@ void LuaEngine::registerCoreAPI() {
         // missing, and FrameXML calls both.
         // Positional format specifiers, which this Lua does not have.
         //
-        // The client's format accepts "%2$s" - argument two, whatever its
+        // The client's format (0x00818070) accepts "%2$s" - argument two, whatever its
         // place in the string - and the interface leans on it hard: 189 uses
         // of %2$s, 184 of %4$s, 154 of %1$s, nearly all of them combat log
         // lines in GlobalStrings. Stock Lua 5.1 answers "invalid option '%$'
@@ -13837,22 +13930,31 @@ void LuaEngine::registerCoreAPI() {
         "    self:Show()\n"
         "    return true\n"
         "end\n"
+        // 0x0061ef10 / 0x0061f0f0: nothing when the tooltip shows none;
+        // a spell is its name, rank and id.
         "function __WoweeFrameMT:GetItem()\n"
         "    if self.__itemId and self.__itemId > 0 then\n"
-        "        local name = GetItemInfo(self.__itemId)\n"
-        "        local _, itemLink = GetItemInfo(self.__itemId)\n"
-        "        return name, itemLink or ('|cffffffff|Hitem:'..self.__itemId..':0|h['..tostring(name)..']|h|r')\n"
+        "        local name, itemLink = GetItemInfo(self.__itemId)\n"
+        "        if not name then return end\n"
+        "        return name, itemLink\n"
         "    end\n"
-        "    return nil\n"
         "end\n"
         "function __WoweeFrameMT:GetSpell()\n"
         "    if self.__spellId and self.__spellId > 0 then\n"
-        "        local name = GetSpellInfo(self.__spellId)\n"
-        "        return name, nil, self.__spellId\n"
+        "        local name, rank = GetSpellInfo(self.__spellId)\n"
+        "        if not name then return end\n"
+        "        return name, rank, self.__spellId\n"
+        "    end\n"
+        "end\n"
+        // 0x0061f1f0: 1 when the tooltip's item is one the player wears.
+        "function __WoweeFrameMT:IsEquippedItem()\n"
+        "    local id = self.__itemId\n"
+        "    if not id or id <= 0 then return nil end\n"
+        "    for slot = 1, 19 do\n"
+        "        if GetInventoryItemID('player', slot) == id then return 1 end\n"
         "    end\n"
         "    return nil\n"
         "end\n"
-        "function __WoweeFrameMT:GetUnit() return nil end\n"
         // NumLines and GetText come from the widget itself, which is where
         // the lines now live.
         "function __WoweeFrameMT:SetUnitBuff(unit, index, filter)\n"
@@ -14768,7 +14870,7 @@ void LuaEngine::registerCoreAPI() {
         // 0x0061d210: anything but a table is the usage line.
         "function __WoweeFrameMT:IsOwned(f)\n"
         "    if type(f) ~= 'table' then __WoweeUsageError(self, 'Usage: %s:IsOwned(frame)') end\n"
-        "    return rawget(self, '__owner') == f\n"
+        "    if rawget(self, '__owner') == f then return 1 end\n"
         "end\n"
         // ShoppingTooltip: used by comparison tooltips
         "ShoppingTooltip1 = CreateFrame('Frame', 'ShoppingTooltip1')\n"
@@ -14784,7 +14886,6 @@ void LuaEngine::registerCoreAPI() {
         // Blizzard_DebugTools calls getglobal at file scope and failed to load
         // whole without it.
         "function getglobal(n) return _G[n] end\n"
-        "function setglobal(n, v) _G[n] = v end\n"
         // scrub keeps what can cross the secure boundary and drops the rest:
         // strings, numbers and booleans pass, everything else becomes nil.
         // The count has to survive, because securehandlers.lua returns it
@@ -15223,9 +15324,6 @@ void LuaEngine::registerCoreAPI() {
         "strrev = string.reverse\n"
         "gsub = string.gsub\n"
         "gmatch = string.gmatch\n"
-        "strjoin = function(delim, ...)\n"
-        "    return table.concat({...}, delim)\n"
-        "end\n"
     );
     // Bit operations (WoW provides these; Lua 5.1 doesn't): kBitLibLua.
     executeString(kBitLibLua);

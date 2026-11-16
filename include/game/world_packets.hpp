@@ -3418,6 +3418,9 @@ struct QuestQueryRewardsData {
     /// Same caveat as the start item: WotLK only, because that is the layout
     /// counted off a serializer here.
     uint32_t rewardSpellId = 0;
+    /// RewSpellCast, the word after it (+0x40 of the client's record): the
+    /// spell actually cast on completion.
+    uint32_t rewardSpellCastId = 0;
     /// The quest's XP-difficulty index (GetXPId), which selects a column of
     /// QuestXP.dbc; the reward experience is that column read at the quest's
     /// level. Zero on the layouts not counted off a serializer here (classic,

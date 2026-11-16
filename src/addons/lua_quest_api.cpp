@@ -22,6 +22,7 @@
 #include "game/interface_text.hpp"
 #include "game/spell_mods.hpp"
 #include "game/trainer_service_list.hpp"
+#include "game/spell_description_eval.hpp"
 #include "ui/chat/chat_utils.hpp"
 #include "ui/cursor_art.hpp"
 #include "ui/framexml_takeover.hpp"
@@ -195,6 +196,88 @@ void openInterfaceQuestLog(game::GameHandler& gh, uint32_t questId) {
 
 namespace {
 
+/// 0x005b0d50: the achievement's category exists and is neither the
+/// Statistics root (category 1) nor under it.
+bool achievementOutsideStatistics(game::GameHandler* gh, uint32_t achievementId) {
+    int32_t c = static_cast<int32_t>(gh->getAchievementCategory(achievementId));
+    const auto* info = gh->getAchievementCategoryInfo(static_cast<uint32_t>(c));
+    if (!info) return false;
+    for (int guard = 0; info && guard < 16; ++guard) {
+        if (c == 1) return false;
+        c = info->parentId;
+        if (c < 0) return true;
+        info = gh->getAchievementCategoryInfo(static_cast<uint32_t>(c));
+    }
+    return true;
+}
+
+/// GetStatistic's text (0x005b5620 -> 0x005b0ea0) for the paths this client
+/// carries: the achievement's flags pick a sum (0x8), the largest counter
+/// (0x10, with the criterion's name when the achievement has flag 0x1), how
+/// many criteria reached their quantity (0x20), or the last counted
+/// criterion's counter. (0x40, a per-day average from the criterion's own
+/// date, and the money and date formats are not carried: the progress
+/// dates are not kept here.) With
+/// nothing counted the answer is "--" for a flag-0x1 achievement and "0"
+/// otherwise, and a progress-bar criterion appends " / quantity".
+std::string statisticText(game::GameHandler* gh, uint32_t id) {
+    const auto& list = gh->getAchievementCriteria(id);
+    const auto& progress = gh->getCriteriaProgress();
+    const uint32_t aflags = gh->getAchievementFlags(id);
+    uint64_t sum = 0, best = 0, reached = 0, last = 0;
+    const game::GameHandler::AchievementCriterion* bestCriterion = nullptr;
+    const game::GameHandler::AchievementCriterion* lastCriterion = nullptr;
+    bool tie = false, any = false;
+    for (const auto& c : list) {
+        const auto it = progress.find(c.id);
+        if (it == progress.end()) continue;
+        any = true;
+        const uint64_t v = it->second;
+        sum += v;
+        if (v > best || !bestCriterion) { best = v; bestCriterion = &c; tie = false; }
+        else if (v == best) tie = true;
+        if (v >= c.quantity) ++reached;
+        last = v;
+        lastCriterion = &c;
+    }
+    char buf[256];
+    if (aflags & 0x8) {
+        std::snprintf(buf, sizeof(buf), "%llu", static_cast<unsigned long long>(sum));
+        return buf;
+    }
+    if (aflags & 0x10) {
+        if (!any) return (aflags & 0x1) ? "--" : "0";
+        // A tie for the largest names no criterion on a flag-0x400 row.
+        if ((aflags & 0x1) && bestCriterion && !(tie && (aflags & 0x400)))
+            std::snprintf(buf, sizeof(buf), "%llu (%s)", static_cast<unsigned long long>(best),
+                          bestCriterion->description.c_str());
+        else
+            std::snprintf(buf, sizeof(buf), "%llu", static_cast<unsigned long long>(best));
+        return buf;
+    }
+    if (aflags & 0x20) {
+        if (reached == 0) return (aflags & 0x1) ? "--" : "0";
+        std::snprintf(buf, sizeof(buf), "%llu", static_cast<unsigned long long>(reached));
+        return buf;
+    }
+    if (!any || last == 0) return (aflags & 0x1) ? "--" : "0";
+    uint64_t value = last;
+    // Capped at the criterion's quantity unless the achievement has flag 0x1.
+    if (!(aflags & 0x1) && lastCriterion && lastCriterion->quantity != 0 && lastCriterion->quantity <= value)
+        value = lastCriterion->quantity;
+    std::snprintf(buf, sizeof(buf), "%llu", static_cast<unsigned long long>(value));
+    std::string out = buf;
+    if (lastCriterion && (lastCriterion->flags & 0x1)) {
+        std::snprintf(buf, sizeof(buf), "%s / %u", out.c_str(), lastCriterion->quantity);
+        out = buf;
+    }
+    return out;
+}
+
+}  // namespace
+
+namespace {
+
 /// The quest at a display index, or null when that row is a header or the index
 /// is off either end. This is what every "…(questLogIndex)" binding needs: a
 /// header row genuinely has no quest, and answering with the wrong one is how a
@@ -244,10 +327,10 @@ static int lua_GetNumQuestLogEntries(lua_State* L) {
 static int lua_GetQuestLogTimeLeft(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return luaReturnNil(L);
-    const int sel = gh->getSelectedQuestLogIndex();
-    const auto& ql = gh->getQuestLog();
-    if (sel < 1 || sel > static_cast<int>(ql.size())) return luaReturnNil(L);
-    const uint32_t questId = ql[static_cast<size_t>(sel) - 1].questId;
+    // The selection is a displayed row (0x005e4320).
+    const auto* q = questAtLogRow(gh, gh->getSelectedQuestLogIndex());
+    if (!q) return luaReturnNil(L);
+    const uint32_t questId = q->questId;
     for (const auto& t : gh->getQuestTimers()) {
         if (t.first == questId) { lua_pushnumber(L, t.second); return 1; }
     }
@@ -311,10 +394,8 @@ static int lua_GetQuestRewardTitle(lua_State* L) {
     if (gh->isQuestOfferRewardOpen()) {
         titleId = gh->getQuestOfferReward().rewardTitleId;
     } else {
-        const int index = gh->getSelectedQuestLogIndex();
-        const auto& log = gh->getQuestLog();
-        if (index >= 1 && index <= static_cast<int>(log.size()))
-            titleId = log[static_cast<size_t>(index - 1)].rewardTitleId;
+        // The selection is a displayed row (0x005e4c10).
+        if (const auto* q = questAtLogRow(gh, gh->getSelectedQuestLogIndex())) titleId = q->rewardTitleId;
     }
     if (titleId == 0) { return luaReturnNil(L); }
     const std::string name = gh->getFormattedTitleById(titleId);
@@ -333,10 +414,8 @@ static int lua_GetQuestRewardTitle(lua_State* L) {
 /// panels and one for everything else - which is one function.
 static const game::QuestHandler::QuestLogEntry* selectedQuest(game::GameHandler* gh) {
     if (!gh) return nullptr;
-    const int index = gh->getSelectedQuestLogIndex();
-    const auto& log = gh->getQuestLog();
-    if (index < 1 || index > static_cast<int>(log.size())) return nullptr;
-    return &log[static_cast<size_t>(index - 1)];
+    // The selection is a displayed row, headers included.
+    return questAtLogRow(gh, gh->getSelectedQuestLogIndex());
 }
 // The reputation lines of the reward panel, as 0x0058d050 works them out for
 // ProcessQuestLogRewardFactions (0x005df8a0) and as GetNumQuestLogRewardFactions
@@ -535,18 +614,15 @@ static int lua_GetQuestWatchIndex(lua_State* L) {
     if (!lua_isnumber(L, 1))
         return luaL_error(L, "Usage: GetQuestWatchIndex(index)");
     auto* gh = getGameHandler(L);
-    const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
-    if (!gh || idx < 1) return luaReturnNil(L);
-    const auto& ql = gh->getQuestLog();
-    if (idx > static_cast<int>(ql.size())) return luaReturnNil(L);
-    const uint32_t wanted = ql[static_cast<size_t>(idx) - 1].questId;
-    int position = 0;
-    for (const auto& q : ql) {
-        if (!gh->isQuestTracked(q.questId)) continue;
-        ++position;
-        if (q.questId == wanted) { lua_pushnumber(L, position); return 1; }
+    // The argument is a displayed row (a header answers nothing); the answer
+    // is the quest's place in the watch list's own order.
+    const auto* q = gh ? questAtLogRow(gh, static_cast<int>(std::lround(lua_tonumber(L, 1)))) : nullptr;
+    if (!q) return 0;
+    const auto& order = gh->getQuestWatchOrder();
+    for (size_t i = 0; i < order.size(); ++i) {
+        if (order[i] == q->questId) { lua_pushnumber(L, static_cast<double>(i + 1)); return 1; }
     }
-    return luaReturnNil(L);   // not watched
+    return 0;   // not watched
 }
 
 // Defined with the POI list further down: the proximity order weighs each
@@ -712,10 +788,7 @@ static int lua_GetQuestLogSpecialItemCooldown(lua_State* L) {
     const auto item = questSpecialItemAt(gh, index);
     // Its use spell's, cast from it (0x00809030).
     if (item.itemId) return pushHistoryCooldown(L, gh->itemCooldown(item.itemId));
-    lua_pushnumber(L, 0);
-    lua_pushnumber(L, 0);
-    lua_pushnumber(L, 1);
-    return 3;
+    return 0;   // none: nothing (0x005e53d0)
 }
 
 // GetQuestTimers() - the seconds left on each timed quest, as separate values.
@@ -847,8 +920,11 @@ static int lua_GetQuestLogTitle(lua_State* L) {
     // The level is tracked - the query response carries it - and was being
     // answered as a flat zero beside a comment saying it was not.
     lua_pushnumber(L, q.level);          // 2: level
-    lua_pushnil(L);                      // 3: questTag ("Elite", "PvP", …)
-    lua_pushnumber(L, 0);                // 4: suggestedGroup
+    // 3: questTag, the quest's QuestInfo name (0x005e0070); 4: its
+    // suggested group (0x005ded30).
+    if (const std::string& tag = gh->questTagName(q.questId); !tag.empty()) lua_pushstring(L, tag.c_str());
+    else lua_pushnil(L);
+    lua_pushnumber(L, gh->questSuggestedPlayers(q.questId));
     luaPushOneOrNil(L, 0);               // 5: isHeader
     luaPushOneOrNil(L, 0);               // 6: isCollapsed
     // A number, not a boolean: 1 for complete, -1 for failed, nil otherwise.
@@ -862,7 +938,7 @@ static int lua_GetQuestLogTitle(lua_State* L) {
     if (q.failed)        lua_pushnumber(L, -1);
     else if (q.complete) lua_pushnumber(L, 1);
     else                 lua_pushnil(L);                        // 7: isComplete
-    luaPushOneOrNil(L, 0);               // 8: isDaily
+    luaPushOneOrNil(L, (q.questFlags & 0x1000) != 0);   // 8: isDaily (0x005decc0)
     lua_pushnumber(L, q.questId);        // 9: questID
     // Not the id again: this is the developer switch that asks for the id to
     // be *shown*, and the quest log writes "26102 - Wolves Across the Border"
@@ -942,7 +1018,14 @@ static int lua_GetQuestLogSelection(lua_State* L) {
 // never offering it at all. The button is disabled without this, and sharing
 // works, so silence would be the more misleading answer of the two.
 static int lua_GetQuestLogPushable(lua_State* L) {
-    luaPushOneOrNil(L, selectedQuest(getGameHandler(L)) != nullptr ? 1 : 0);
+    // 0x005df520: the row named, else the selected one; 1 for a sharable quest
+    // (flag 0x8), nothing otherwise.
+    auto* gh = getGameHandler(L);
+    const auto* q = !gh ? nullptr
+                  : lua_isnumber(L, 1) ? questAtRow(gh, static_cast<int>(std::lround(lua_tonumber(L, 1))))
+                                       : selectedQuest(gh);
+    if (!q || !(q->questFlags & 0x8)) return 0;
+    lua_pushnumber(L, 1);
     return 1;
 }
 
@@ -1081,12 +1164,13 @@ static int lua_AddQuestWatch(lua_State* L) {
 
 // RemoveQuestWatch(questLogIndex) - remove a quest from the watch list
 static int lua_RemoveQuestWatch(lua_State* L) {
+    // A row, or the selected quest when the argument is not a number
+    // (0x005df700).
     auto* gh = getGameHandler(L);
-    int index = static_cast<int>(luaL_checknumber(L, 1));
-    if (!gh || index < 1) return 0;
-    if (const auto* q = questAtRow(gh, index)) {
-        gh->setQuestTracked(q->questId, false);
-    }
+    if (!gh) return 0;
+    const auto* q = lua_isnumber(L, 1) ? questAtRow(gh, static_cast<int>(std::lround(lua_tonumber(L, 1))))
+                                       : selectedLogEntry(gh);
+    if (q) gh->setQuestTracked(q->questId, false);
     return 0;
 }
 
@@ -1710,18 +1794,17 @@ static int lua_GetQuestLogLeaderBoard(lua_State* L) {
     int objIdx = static_cast<int>(luaL_checknumber(L, 1));
     int questIdx = static_cast<int>(luaL_optnumber(L, 2,
         gh ? gh->getSelectedQuestLogIndex() : 0));
-    if (!gh || questIdx < 1 || objIdx < 1) { return luaReturnNil(L); }
+    // Out of range: three nils; finished is 1 or nil (0x005e5f60).
+    const auto none = [L]() { lua_pushnil(L); lua_pushnil(L); lua_pushnil(L); return 3; };
+    if (!gh || questIdx < 1 || objIdx < 1) { return none(); }
     const auto* qp = questAtRow(gh, questIdx);
-    if (!qp) { return luaReturnNil(L); }
+    if (!qp) { return none(); }
     const std::vector<game::QuestObjective> lines = game::questObjectives(*gh, *qp);
-    if (objIdx > static_cast<int>(lines.size())) {
-        lua_pushnil(L);
-        return 1;
-    }
+    if (objIdx > static_cast<int>(lines.size())) return none();
     const game::QuestObjective& line = lines[objIdx - 1];
     lua_pushstring(L, line.text.c_str());
     lua_pushstring(L, line.type);
-    lua_pushboolean(L, line.finished ? 1 : 0);
+    luaPushOneOrNil(L, line.finished);
     return 3;
 }
 
@@ -1870,13 +1953,13 @@ static int lua_GetQuestLogSpecialItemInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
     const QuestSpecialItem item = questSpecialItemAt(gh, index);
-    if (!item.itemId) { return luaReturnNil(L); }
+    if (!item.itemId) { return 0; }   // none: nothing (0x005e52d0)
 
     const auto* info = gh->getItemInfo(item.itemId);
     // The name is what goes in the link, and without it there is no link to
     // return. The query was sent when the quest was read; until it answers,
     // there is honestly nothing to draw.
-    if (!info || info->name.empty()) { return luaReturnNil(L); }
+    if (!info || info->name.empty()) { return 0; }
 
     const uint32_t quality = info->quality < 8 ? info->quality : 1u;
     const std::string link = game::itemChatLink(item.itemId, quality, info->name, {}, gh->getPlayerLevel());
@@ -2745,20 +2828,28 @@ static int lua_GetTalentTabInfo(lua_State* L) {
     if (!lua_isnumber(L, 1))
         return luaL_error(L, "Usage: GetTalentTabInfo(tabIndex[, isInspect[, isPet[, groupIndex]]])");
     auto* gh = getGameHandler(L);
-    int tabIndex = static_cast<int>(luaL_checknumber(L, 1)); // 1-indexed
-    if (!gh || tabIndex < 1) {
-        return luaReturnNil(L);
-    }
+    int tabIndex = static_cast<int>(std::lround(lua_tonumber(L, 1))); // 1-indexed
+    // No such tab: nil, nil, 0, nil, 0 (0x005c6150).
+    const auto none = [L]() {
+        lua_pushnil(L); lua_pushnil(L); lua_pushinteger(L, 0); lua_pushnil(L); lua_pushinteger(L, 0);
+        return 5;
+    };
+    const auto pushIcon = [L, gh](const game::TalentTabEntry& t) {
+        const std::string icon = t.spellIconId ? gh->getIconPath(t.spellIconId) : std::string();
+        if (icon.empty()) lua_pushnil(L);
+        else lua_pushstring(L, icon.c_str());
+    };
+    if (!gh || tabIndex < 1) return none();
     if (wantsPetTalents(L, 3)) {
         const auto* tab = tabIndex == 1 ? petTalentTab(gh, lua_toboolean(L, 2) != 0) : nullptr;
-        if (!tab) return luaReturnNil(L);
+        if (!tab) return none();
         int spent = 0;
         for (const auto& [talentId, rank] : gh->getPetTalents()) {
             const auto* entry = gh->getTalentEntry(talentId);
             if (entry && entry->tabId == tab->tabId) spent += rank;
         }
         lua_pushstring(L, tab->name.c_str());
-        lua_pushnil(L);
+        pushIcon(*tab);
         lua_pushnumber(L, spent);
         lua_pushstring(L, tab->backgroundFile.c_str());
         lua_pushnumber(L, petPreviewTotal());
@@ -2768,9 +2859,7 @@ static int lua_GetTalentTabInfo(lua_State* L) {
     const int group = talentGroupArg(L, 4, gh);
     uint8_t classId = talentClassId(gh, inspect);
     const auto classTabs = classTalentTabs(gh, classId);
-    if (tabIndex > static_cast<int>(classTabs.size())) {
-        return luaReturnNil(L);
-    }
+    if (tabIndex > static_cast<int>(classTabs.size())) return none();
     const auto* tab = classTabs[tabIndex - 1];
     // Count points spent in this tab, out of the asked-for group's list
     int pointsSpent = 0;
@@ -2796,7 +2885,7 @@ static int lua_GetTalentTabInfo(lua_State* L) {
     }
 
     lua_pushstring(L, tab->name.c_str());              // 1: name
-    lua_pushnil(L);                                     // 2: iconTexture (not resolved)
+    pushIcon(*tab);                                     // 2: iconTexture
     lua_pushnumber(L, pointsSpent);                     // 3: pointsSpent
     lua_pushstring(L, tab->backgroundFile.c_str());     // 4: background
     lua_pushnumber(L, previewSpent);                    // 5: previewPointsSpent
@@ -3127,6 +3216,17 @@ static bool& tradeSkillOnlySkillUps() {
 /// call sites - the copy is the list, not an extra one.
 /// The item a recipe makes, or null while its details are still being asked
 /// for. The spell cache carries createdItemId; the item query fills the rest.
+/// Whether a recipe's first effect makes an item (24, 157, 59) - what
+/// 0x005db550 and 0x005dba70 test.
+static bool tradeSkillMakesItem(game::GameHandler* gh, uint32_t spellId) {
+    if (!gh || spellId == 0) return false;
+    gh->getSpellName(spellId);
+    const auto it = gh->spellNameCacheRef().find(spellId);
+    if (it == gh->spellNameCacheRef().end()) return false;
+    const uint32_t e = it->second.effectIds[0];
+    return e == 24 || e == 157 || e == 59;
+}
+
 static const game::ItemQueryResponseData* craftedItem(game::GameHandler* gh,
                                                       uint32_t spellId) {
     if (!gh || spellId == 0) return nullptr;
@@ -4359,19 +4459,31 @@ static const game::GameHandler::QuestLogEntry* selectedLogEntry(game::GameHandle
 // REWARD_TRADESKILL_SPELL for a recipe, REWARD_AURA for something not yet
 // known, REWARD_SPELL otherwise.
 static int lua_GetQuestLogRewardSpell(lua_State* L) {
+    // 0x005e4d10: icon (nil when none), name, 1 for a trade spell (Attributes
+    // 0x20), and 1 when the spell cast on completion teaches one (effect 36 or
+    // 57); four nils with no reward spell.
+    const auto none = [L]() { for (int i = 0; i < 4; ++i) lua_pushnil(L); return 4; };
     auto* gh = getGameHandler(L);
-    if (!gh) return luaReturnNil(L);
+    if (!gh) return none();
     const auto* q = selectedLogEntry(gh);
     const uint32_t spellId = q ? q->rewardSpellId : 0u;
-    if (spellId == 0) return luaReturnNil(L);
+    if (spellId == 0) return none();
     const std::string name = gh->getSpellName(spellId);
-    if (name.empty()) return luaReturnNil(L);
-    std::string icon = gh->getSpellIconPath(spellId);
-    lua_pushstring(L, icon.empty() ? "Interface\\Icons\\INV_Misc_QuestionMark"
-                                   : icon.c_str());
+    if (name.empty()) return none();
+    const std::string icon = gh->getSpellIconPath(spellId);
+    if (icon.empty()) lua_pushnil(L); else lua_pushstring(L, icon.c_str());
     lua_pushstring(L, name.c_str());
-    luaPushOneOrNil(L, gh->isProfessionSpell(spellId) ? 1 : 0);
-    luaPushOneOrNil(L, gh->getKnownSpells().count(spellId) > 0 ? 1 : 0);
+    const auto& cache = gh->spellNameCacheRef();
+    const auto it = cache.find(spellId);
+    luaPushOneOrNil(L, it != cache.end() && (it->second.attr & 0x20u));
+    bool teaches = false;
+    if (q->rewardSpellCastId) {
+        gh->getSpellName(q->rewardSpellCastId);
+        const auto c = cache.find(q->rewardSpellCastId);
+        if (c != cache.end())
+            for (uint32_t e : c->second.effectIds) teaches = teaches || e == 36 || e == 57;
+    }
+    luaPushOneOrNil(L, teaches);
     return 4;
 }
 
@@ -4442,7 +4554,10 @@ static int lua_GetSuggestedGroupNum(lua_State* L) {
 }
 
 static int lua_GetQuestLogGroupNum(lua_State* L) {
-    lua_pushnumber(L, 0);
+    // The selected quest's suggested group (0x005df870).
+    auto* gh = getGameHandler(L);
+    const auto* q = gh ? selectedLogEntry(gh) : nullptr;
+    lua_pushnumber(L, q ? gh->questSuggestedPlayers(q->questId) : 0);
     return 1;
 }
 
@@ -4513,7 +4628,14 @@ static int lua_GetQuestLogItemLink(lua_State* L) {
 // Nil for the same reason GetQuestSpellLink is: nothing this client parses
 // says a quest gives a spell, so there is no spell to name.
 static int lua_GetQuestLogSpellLink(lua_State* L) {
-    return luaReturnNil(L);
+    // The selected quest's reward spell as a link, nil without one (0x005e4840).
+    auto* gh = getGameHandler(L);
+    const auto* q = gh ? selectedLogEntry(gh) : nullptr;
+    if (!q || q->rewardSpellId == 0) return luaReturnNil(L);
+    const std::string& name = gh->getSpellName(q->rewardSpellId);
+    if (name.empty()) return luaReturnNil(L);
+    lua_pushstring(L, game::spellChatLink(q->rewardSpellId, name).c_str());
+    return 1;
 }
 
 // The server sends one field for both, and its sign says which: AzerothCore's
@@ -4717,6 +4839,15 @@ static int lua_IsQuestCompletable(lua_State* L) {
 static int lua_GetQuestReward(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
+    // 0x0058d620 / 0x0058cfa0: on the reward page of a quest that offers a
+    // choice, the choice (zero-based; a non-number counts as -1) has to be
+    // one of them. A quest without choices takes any value.
+    if (gh->isQuestOfferRewardOpen()) {
+        const int numChoices = static_cast<int>(countRewards(&gh->getQuestOfferReward().choiceRewards));
+        const int pick = lua_isnumber(L, 1) ? static_cast<int>(lua_tonumber(L, 1)) - 1 : -1;
+        if (numChoices > 0 && (pick < 0 || pick >= numChoices))
+            return luaL_error(L, "Invalid reward choice in GetQuestReward([choice])");
+    }
     // One-based, and zero means the quest offered nothing to choose between.
     const int choice = static_cast<int>(luaL_optnumber(L, 1, 0));
     gh->chooseQuestReward(choice > 0 ? static_cast<uint32_t>(choice - 1) : 0);
@@ -4742,6 +4873,8 @@ static int lua_CloseQuest(lua_State* L) {
 // type is "choice" for the rewards a player picks between and "reward" for the
 // ones always given.
 static int lua_GetQuestItemInfo(lua_State* L) {
+    if (!lua_isstring(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Invalid quest item in GetQuestItemInfo(\"type\", index)");   // 0x0058d980
     auto* gh = getGameHandler(L);
     const char* type = luaL_optstring(L, 1, "reward");
     const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
@@ -4881,13 +5014,23 @@ void registerQuestLuaAPI(lua_State* L) {
             // 0x005e4070
             if (!lua_isnumber(L, 1) || !lua_isstring(L, 2))
                 return luaL_error(L, "Usage: IsUnitOnQuest(index, \"unit\")");
+            // The row's quest, looked for in the unit's own 25 quest log
+            // slots (PLAYER_QUEST_LOG, five words each) - the player's, or a
+            // party member's, whose slots the server sends to the group.
             auto* gh = getGameHandler(L);
-            const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
-            const char* uid = luaL_optstring(L, 2, "player");
-            std::string u(uid);
+            const int index = static_cast<int>(std::lround(lua_tonumber(L, 1)));
+            std::string u(lua_tostring(L, 2));
             for (char& c : u) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            if (!gh || u != "player" || index < 1) { luaPushOneOrNil(L, 0); return 1; }
-            luaPushOneOrNil(L, questAtRow(gh, index) != nullptr ? 1 : 0);
+            const auto* q = gh ? questAtRow(gh, index) : nullptr;
+            const uint64_t guid = (gh && q) ? resolveUnitGuid(gh, u) : 0;
+            const auto unit = guid ? gh->getEntityManager().getEntity(guid) : nullptr;
+            const uint16_t base = game::fieldIndex(game::UF::PLAYER_QUEST_LOG_START);
+            bool on = false;
+            if (unit && unit->getType() == game::ObjectType::PLAYER && base != 0xFFFF) {
+                for (uint16_t slot = 0; slot < 25 && !on; ++slot)
+                    on = unit->getField(static_cast<uint16_t>(base + slot * 5)) == q->questId;
+            }
+            luaPushOneOrNil(L, on);
             return 1;
         }},
                 {"GetQuestLogQuestText",    lua_GetQuestLogQuestText},
@@ -4928,7 +5071,7 @@ void registerQuestLuaAPI(lua_State* L) {
             } else {
                 q = selectedLogEntry(gh);
             }
-            if (!q) { lua_pushstring(L, ""); return 1; }
+            if (!q) return 0;   // 0x005e06d0: no quest, nothing
             if (!q->completionText.empty()) {
                 lua_pushstring(L, q->completionText.c_str());
                 return 1;
@@ -5364,11 +5507,9 @@ void registerQuestLuaAPI(lua_State* L) {
                 lua_pushnumber(L, countRewards(v));
                 return 1;
             }
-            int idx = gh->getSelectedQuestLogIndex();
-            if (idx < 1) { return luaReturnZero(L); }
-            const auto& ql = gh->getQuestLog();
-            if (idx > static_cast<int>(ql.size())) { return luaReturnZero(L); }
-            lua_pushnumber(L, countRewards(&ql[idx-1].rewardItems));
+            const auto* q = questAtLogRow(gh, gh->getSelectedQuestLogIndex());
+            if (!q) { return luaReturnZero(L); }
+            lua_pushnumber(L, countRewards(&q->rewardItems));
             return 1;
         }},
                 {"GetNumQuestChoices", [](lua_State* L) -> int {
@@ -5378,11 +5519,9 @@ void registerQuestLuaAPI(lua_State* L) {
                 lua_pushnumber(L, countRewards(v));
                 return 1;
             }
-            int idx = gh->getSelectedQuestLogIndex();
-            if (idx < 1) { return luaReturnZero(L); }
-            const auto& ql = gh->getQuestLog();
-            if (idx > static_cast<int>(ql.size())) { return luaReturnZero(L); }
-            lua_pushnumber(L, countRewards(&ql[idx-1].rewardChoiceItems));
+            const auto* q = questAtLogRow(gh, gh->getSelectedQuestLogIndex());
+            if (!q) { return luaReturnZero(L); }
+            lua_pushnumber(L, countRewards(&q->rewardChoiceItems));
             return 1;
         }},
                 {"GetSuggestedGroupNum", lua_GetSuggestedGroupNum},
@@ -5725,19 +5864,16 @@ void registerQuestLuaAPI(lua_State* L) {
             if (!gh) return luaReturnNil(L);
             const auto* rec = tradeSkillRecipeAt(tradeSkillRows(gh), i);
             if (!rec) return luaReturnNil(L);
-            // What the recipe makes, which is what this returns in WoW. A
-            // recipe spell carries its profession's icon rather than its
-            // product's - every tailoring spell in the shipped Spell.dbc is
-            // Ability_Ensnare - so the pane showed the same picture beside
-            // every recipe. The spell's icon is the fallback for a recipe
-            // whose item has not been answered for yet.
+            // A recipe that makes an item shows the item's icon; any other
+            // its spell's. Nothing known yet: nil (0x005db550).
             std::string icon;
             if (const auto* made = craftedItem(gh, rec->spellId)) {
                 if (made->displayInfoId) icon = gh->getItemIconPath(made->displayInfoId);
+            } else if (!tradeSkillMakesItem(gh, rec->spellId)) {
+                icon = gh->getSpellIconPath(rec->spellId);
             }
-            if (icon.empty()) icon = gh->getSpellIconPath(rec->spellId);
-            lua_pushstring(L, icon.empty()
-                ? "Interface\\Icons\\INV_Misc_QuestionMark" : icon.c_str());
+            if (icon.empty()) return luaReturnNil(L);
+            lua_pushstring(L, icon.c_str());
             return 1;
         }},
                 {"GetTradeSkillDescription", [](lua_State* L) -> int {
@@ -5816,6 +5952,8 @@ void registerQuestLuaAPI(lua_State* L) {
                 return luaL_error(L, "Usage: GetTradeSkillNumMade(index)");
             auto* gh = getGameHandler(L);
             const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
+            // The first effect's least and most (0x008016c0 over 0x007ff770),
+            // each at least one.
             int lo = 1, hi = 1;
             if (gh) {
                 const auto* rec = tradeSkillRecipeAt(tradeSkillRows(gh), i);
@@ -5842,14 +5980,14 @@ void registerQuestLuaAPI(lua_State* L) {
                 // there raises and takes the rest of the update with it -
                 // including the re-selection that is the only thing which
                 // re-enables the Create buttons after the Disable at the top.
-                lua_pushstring(L, "Trade Skill");
+                lua_pushstring(L, "UNKNOWN");
                 lua_pushnumber(L, 0);
                 lua_pushnumber(L, 0);
                 return 3;
             }
             const uint32_t line = gh->getCraftingSkillLine();
             std::string name = gh->getSkillLineName(line);
-            if (name.empty()) name = "Trade Skill";
+            if (name.empty()) name = "UNKNOWN";   // 0x005db810
             uint32_t rank = 0, maxRank = 0;
             auto it = gh->getPlayerSkills().find(line);
             if (it != gh->getPlayerSkills().end()) {
@@ -5927,7 +6065,7 @@ void registerQuestLuaAPI(lua_State* L) {
             for (size_t n = 0; n < rows.size(); ++n) {
                 if (!rows[n].isHeader) { lua_pushnumber(L, static_cast<double>(n + 1)); return 1; }
             }
-            lua_pushnumber(L, 1);
+            lua_pushnumber(L, 0);   // no recipe row
             return 1;
         }},
                 // GetTradeSkillCooldown(index) → seconds left, or nil.
@@ -6014,18 +6152,22 @@ void registerQuestLuaAPI(lua_State* L) {
             if (!lua_isnumber(L, 1))
                 return luaL_error(L, "Usage: GetTradeSkillItemLink(index)");
             auto* gh = getGameHandler(L);
+            // The made item's link; a recipe that makes no item (or one not
+            // yet known) links as an enchant; no row, nothing (0x005dba70).
             const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
-            if (!gh || i < 1) return luaReturnNil(L);
+            if (!gh || i < 1) return 0;
             const auto* rec = tradeSkillRecipeAt(tradeSkillRows(gh), i);
-            if (!rec) return luaReturnNil(L);
-            auto it = gh->spellNameCacheRef().find(rec->spellId);
-            if (it == gh->spellNameCacheRef().end()) return luaReturnNil(L);
-            const uint32_t made = it->second.createdItemId;
-            if (made == 0) return luaReturnNil(L);
-            gh->ensureItemInfo(made);
-            const auto* info = gh->getItemInfo(made);
-            if (!info || !info->valid) return luaReturnNil(L);
-            lua_pushstring(L, game::buildItemLink(made, info->quality, info->name, gh->getPlayerLevel()).c_str());
+            if (!rec) return 0;
+            const std::string& spellName = gh->getSpellName(rec->spellId);
+            if (const auto* info = craftedItem(gh, rec->spellId)) {
+                const auto it = gh->spellNameCacheRef().find(rec->spellId);
+                const uint32_t made = it != gh->spellNameCacheRef().end() ? it->second.createdItemId : 0;
+                lua_pushstring(L, game::buildItemLink(made, info->quality, info->name, gh->getPlayerLevel()).c_str());
+                return 1;
+            }
+            char buf[512];
+            std::snprintf(buf, sizeof(buf), "|cffffd000|Henchant:%u|h[%s]|h|r", rec->spellId, spellName.c_str());
+            lua_pushstring(L, buf);
             return 1;
         }},
                 // GetTradeSkillRecipeLink(index) (0x005db920): a recipe whose
@@ -7113,12 +7255,29 @@ void registerQuestLuaAPI(lua_State* L) {
             // The name cache is one entry per achievement in the DBC, which is
             // the only count of "all of them" this client has. Asking for it
             // is what loads it.
+            // 0x005b3ca0: rows in a category that is not under Statistics,
+            // not statistics themselves (flag 0x2), for either side or the
+            // player's, and not Feats of Strength (category 81); a row with
+            // flag 0x800 counts only once earned.
             gh->ensureAchievementNamesLoaded();
-            const size_t total = gh->achievementNameCacheRef().size();
-            const size_t earned = gh->getEarnedAchievements().size();
-            // Never fewer total than earned: if the DBC did not load, saying
-            // "3 of 0" is worse than saying the total is what we have seen.
-            lua_pushnumber(L, static_cast<lua_Number>(total ? total : earned));
+            gh->ensureAchievementCategoriesLoaded();
+            const int32_t side = gh->isPlayerAlliance() ? 1 : 0;
+            const auto& earnedSet = gh->getEarnedAchievements();
+            uint32_t total = 0, earned = 0;
+            for (const auto& [id, name] : gh->achievementNameCacheRef()) {
+                (void)name;
+                if (!achievementOutsideStatistics(gh, id)) continue;
+                const uint32_t flags = gh->getAchievementFlags(id);
+                if (flags & 0x2) continue;
+                const int32_t faction = gh->getAchievementFaction(id);
+                if (faction != -1 && faction != side) continue;
+                if (gh->getAchievementCategory(id) == 81) continue;
+                const bool done = earnedSet.count(id) > 0;
+                if (!done && (flags & 0x800)) continue;
+                ++total;
+                if (done) ++earned;
+            }
+            lua_pushnumber(L, static_cast<lua_Number>(total));
             lua_pushnumber(L, static_cast<lua_Number>(earned));
             return 2;
         }},
@@ -7165,12 +7324,14 @@ void registerQuestLuaAPI(lua_State* L) {
                 return luaL_error(L, "Usage: GetCategoryInfo(categoryID)");
             auto* gh = getGameHandler(L);
             const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-            if (!gh) return luaReturnNil(L);
+            // An unknown id answers nothing; a parent of 1, the Statistics
+            // root, reads as -1 (0x005b15c0).
+            if (!gh) return 0;
             gh->ensureAchievementCategoriesLoaded();
             const auto* info = gh->getAchievementCategoryInfo(id);
-            if (!info) return luaReturnNil(L);
+            if (!info) return 0;
             lua_pushstring(L, info->name.c_str());
-            lua_pushnumber(L, info->parentId);
+            lua_pushnumber(L, static_cast<int32_t>(info->parentId) == 1 ? -1.0 : static_cast<double>(static_cast<int32_t>(info->parentId)));
             lua_pushnumber(L, 0);
             return 3;
         }},
@@ -7213,9 +7374,13 @@ void registerQuestLuaAPI(lua_State* L) {
                 return luaL_error(L, "Usage: GetAchievementCategory(achievementID)");
             auto* gh = getGameHandler(L);
             const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-            if (!gh) return luaReturnNil(L);
+            // Nothing for an unknown achievement, category 0, or a
+            // statistic (flag 0x2) (0x005b18e0).
+            if (!gh) return 0;
             gh->ensureAchievementCategoriesLoaded();
-            lua_pushnumber(L, gh->getAchievementCategory(id));
+            const uint32_t category = gh->getAchievementCategory(id);
+            if (category == 0 || (gh->getAchievementFlags(id) & 0x2)) return 0;
+            lua_pushnumber(L, category);
             return 1;
         }},
                 {"GetAchievementNumCriteria", [](lua_State* L) -> int {
@@ -7224,9 +7389,21 @@ void registerQuestLuaAPI(lua_State* L) {
                 return luaL_error(L, "Usage: GetAchievementNumCriteria(achievementID)");
             auto* gh = getGameHandler(L);
             const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-            if (!gh) { lua_pushnumber(L, 0); return 1; }
+            // 0x005b5530: nothing for an unknown achievement, 0 for a
+            // statistic (flag 0x2), else the criteria without flag 0x2 plus
+            // one when the achievement has any of 0xb0.
+            if (!gh) return 0;
             gh->ensureAchievementCriteriaLoaded();
-            lua_pushnumber(L, static_cast<lua_Number>(gh->getAchievementCriteria(id).size()));
+            gh->ensureAchievementNamesLoaded();
+            if (gh->getAchievementName(id).empty()) return 0;
+            const uint32_t aflags = gh->getAchievementFlags(id);
+            uint32_t count = 0;
+            if (!(aflags & 0x2)) {
+                count = (aflags & 0xb0) ? 1u : 0u;
+                for (const auto& c : gh->getAchievementCriteria(id))
+                    if (!(c.flags & 0x2)) ++count;
+            }
+            lua_pushnumber(L, count);
             return 1;
         }},
                 // GetAchievementCriteriaInfo(achievementID, index) →
@@ -7238,13 +7415,28 @@ void registerQuestLuaAPI(lua_State* L) {
             if (!lua_isnumber(L, 1))
                 return luaL_error(L, "Usage: GetAchievementCrieriaInfo(achievementID, criteriaIndex)");
             auto* gh = getGameHandler(L);
-            const auto id  = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-            const int  idx = static_cast<int>(luaL_optnumber(L, 2, 0));
-            if (!gh || idx < 1) return luaReturnNil(L);
+            if (!gh) return 0;
             gh->ensureAchievementCriteriaLoaded();
-            const auto& list = gh->getAchievementCriteria(id);
-            if (idx > static_cast<int>(list.size())) return luaReturnNil(L);
-            const auto& c = list[static_cast<size_t>(idx) - 1];
+            // Without a number second, the first is a criteria id (0x005b58b0);
+            // anything not found answers nothing.
+            uint32_t id = static_cast<uint32_t>(luaToClientInt(L, 1));
+            const game::GameHandler::AchievementCriterion* found = nullptr;
+            if (lua_isnumber(L, 2)) {
+                const int idx = luaToClientInt(L, 2);
+                const auto& list = gh->getAchievementCriteria(id);
+                if (idx < 1 || idx > static_cast<int>(list.size())) return 0;
+                found = &list[static_cast<size_t>(idx) - 1];
+            } else {
+                const uint32_t criteriaId = id;
+                id = 0;
+                for (const auto& [achId, list] : gh->getAchievementCriteriaMap()) {
+                    for (const auto& c : list)
+                        if (c.id == criteriaId) { found = &c; id = achId; break; }
+                    if (found) break;
+                }
+                if (!found) return 0;
+            }
+            const auto& c = *found;
             // Per-criterion progress is tracked after all: SMSG_ALL_ACHIEVEMENT_DATA
             // carries a counter per criterion id, and this reported all-or-none
             // from the achievement's earned flag while that sat unread beside
@@ -7343,10 +7535,11 @@ void registerQuestLuaAPI(lua_State* L) {
                 return luaL_error(L, "Usage: GetPreviousAchievement(achievementID)");
             auto* gh = getGameHandler(L);
             const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-            if (!gh || id == 0) return luaReturnNil(L);
+            // None: nothing (0x005b1690).
+            if (!gh || id == 0) return 0;
             gh->ensureAchievementCategoriesLoaded();
             const uint32_t prev = gh->getAchievementSupercedes(id);
-            if (prev == 0) return luaReturnNil(L);
+            if (prev == 0) return 0;
             lua_pushnumber(L, prev);
             return 1;
         }},
@@ -7360,12 +7553,15 @@ void registerQuestLuaAPI(lua_State* L) {
                 return luaL_error(L, "Usage: GetNextAchievement(achievementID)");
             auto* gh = getGameHandler(L);
             const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-            if (!gh || id == 0) return luaReturnNil(L);
+            // The next id, with true after it when it is earned; nothing for
+            // none (0x005b3ef0).
+            if (!gh || id == 0) return 0;
             gh->ensureAchievementCategoriesLoaded();
             const uint32_t next = gh->getAchievementSupercededBy(id);
-            if (next == 0) return luaReturnNil(L);
+            if (next == 0) return 0;
             lua_pushnumber(L, next);
-            lua_pushboolean(L, gh->getEarnedAchievements().count(next) > 0 ? 1 : 0);
+            if (gh->getEarnedAchievements().count(next) == 0) return 1;
+            lua_pushboolean(L, 1);
             return 2;
         }},
                 // GetStatistic(id) → the statistic's value, as a string.
@@ -7387,15 +7583,12 @@ void registerQuestLuaAPI(lua_State* L) {
                 return luaL_error(L, "Usage: GetStatistic(achievementID)");
             auto* gh = getGameHandler(L);
             const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-            if (!gh || id == 0) { lua_pushstring(L, "--"); return 1; }
+            // An unknown achievement answers nothing.
+            if (!gh || id == 0) return 0;
             gh->ensureAchievementCriteriaLoaded();
-            const auto& list = gh->getAchievementCriteria(id);
-            if (list.empty()) { lua_pushstring(L, "--"); return 1; }
-            const auto& progress = gh->getCriteriaProgress();
-            const auto pit = progress.find(list[0].id);
-            if (pit == progress.end()) { lua_pushstring(L, "--"); return 1; }
-            lua_pushstring(L, std::to_string(
-                static_cast<uint64_t>(pit->second)).c_str());
+            gh->ensureAchievementNamesLoaded();
+            if (gh->getAchievementName(id).empty()) return 0;
+            lua_pushstring(L, statisticText(gh, id).c_str());
             return 1;
         }},
                 // The comparison tab, which used to say the server is never
@@ -7408,13 +7601,17 @@ void registerQuestLuaAPI(lua_State* L) {
             // 0x005b1ab0
             if (!lua_isstring(L, 1))
                 return luaL_error(L, "Usage: AddAchievementComparisonUnit(unitToken)");
+            // A unit that resolves becomes the comparison, its achievements
+            // are asked for, and the answer is 1; otherwise nothing.
             auto* gh = getGameHandler(L);
-            const char* uid = luaL_optstring(L, 1, "");
-            if (!gh || !uid || !*uid) return 0;
-            std::string unit(uid);
+            std::string unit(lua_tostring(L, 1));
             toLowerInPlace(unit);
-            gh->setAchievementComparisonGuid(resolveUnitGuid(gh, unit));
-            return 0;
+            const uint64_t guid = gh ? resolveUnitGuid(gh, unit) : 0;
+            if (guid == 0) return 0;
+            gh->setAchievementComparisonGuid(guid);
+            gh->queryInspectAchievements(guid);
+            lua_pushnumber(L, 1);
+            return 1;
         }},
                 {"ClearAchievementComparisonUnit", [](lua_State* L) -> int {
             if (auto* gh = getGameHandler(L)) {

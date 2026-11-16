@@ -2026,6 +2026,10 @@ const GameHandler::InspectResult* GameHandler::getInspectResult() const {
     return socialHandler_ ? socialHandler_->getInspectResult() : nullptr;
 }
 
+const ArenaTeamQueryData* GameHandler::knownArenaTeam(uint32_t teamId) const {
+    return socialHandler_ ? socialHandler_->knownArenaTeam(teamId) : nullptr;
+}
+
 const ArenaTeamQueryData* GameHandler::arenaTeamQuery(uint32_t teamId) {
     return socialHandler_ ? socialHandler_->arenaTeamQuery(teamId) : nullptr;
 }
@@ -3712,6 +3716,10 @@ const std::string& GameHandler::lookupGuildName(uint32_t guildId) {
     static const std::string kEmpty;
     if (socialHandler_) return socialHandler_->lookupGuildName(guildId);
     return kEmpty;
+}
+
+std::string GameHandler::guildRankNameById(uint32_t guildId, uint32_t rank) const {
+    return socialHandler_ ? socialHandler_->guildRankNameById(guildId, rank) : std::string();
 }
 
 uint32_t GameHandler::getEntityGuildId(uint64_t guid) const {

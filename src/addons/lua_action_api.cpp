@@ -75,6 +75,9 @@ static int        s_cursorSlot = 0;    // source slot for placement
 /// kCursorNoSource the action bar. See cursorSourceIsInventory.
 static int        s_cursorBag  = -1;
 static uint64_t   s_cursorMoney = 0;   // copper, when the cursor carries money
+/// The money came out of the guild bank (0x005208f0's source 0xc), not the
+/// player's purse: a trade or a letter does not take it.
+static bool       s_cursorMoneyGuildBank = false;
 /// How much of a guild bank stack the cursor took, or zero for all of it. The
 /// wire carries the split on the *withdrawal*, not on the pickup, so the amount
 /// has to wait on the cursor until the drop says where it is going.
@@ -114,7 +117,7 @@ void clearCursor(lua_State* L) { clearCursorItem(L); }
 void dropCursorMoneyOnTrade(lua_State* L) {
     auto* gh = getGameHandler(L);
     const uint64_t held = cursorMoney();
-    if (!gh || held == 0) return;
+    if (!gh || held == 0 || cursorMoneyFromGuildBank()) return;
     const uint64_t total = gh->getMyTradeGold() + held;
     if (total > gh->getMoneyCopper()) return;
     gh->setTradeGold(total);
@@ -126,6 +129,7 @@ void setCursorMoney(lua_State* L, uint64_t copper) {
     // CURSOR_UPDATE and what shows the action bars' empty slots. Setting the
     // type by hand would put money on the cursor with nothing told about it.
     s_cursorMoney = copper;
+    s_cursorMoneyGuildBank = false;
     if (copper == 0) {
         if (s_cursorType == CursorType::MONEY) setCursorType(L, CursorType::NONE);
         return;
@@ -134,6 +138,15 @@ void setCursorMoney(lua_State* L, uint64_t copper) {
     s_cursorSlot = 0;
     s_cursorBag = -1;
     setCursorType(L, CursorType::MONEY);
+}
+
+void setCursorGuildBankMoney(lua_State* L, uint64_t copper) {
+    setCursorMoney(L, copper);
+    s_cursorMoneyGuildBank = copper != 0;
+}
+
+bool cursorMoneyFromGuildBank() {
+    return s_cursorType == CursorType::MONEY && s_cursorMoneyGuildBank;
 }
 
 uint32_t cursorItemId() {
@@ -1177,10 +1190,45 @@ static int lua_IsUsableAction(lua_State* L) {
 }
 
 // IsActionInRange(slot) → 1 if in range, 0 if out, nil if no range check applicable
+/// 0x005a95e0: the slot's spell and whether SpellRange gives it a range.
+static bool actionHasRange(lua_State* L, int slot) {
+    auto* gh = getGameHandler(L);
+    if (!gh || slot < 0 || slot >= 0x90) return false;
+    uint32_t spell = 0;
+    if (const auto ref = petActionRef(gh, slot)) {
+        spell = petSlotSpell(ref->packed);
+    } else {
+        const auto& bar = gh->getActionBar();
+        if (slot >= static_cast<int>(bar.size())) return false;
+        const auto& action = bar[static_cast<size_t>(slot)];
+        uint32_t item = 0;
+        if (action.type == game::ActionBarSlot::SPELL) {
+            spell = action.id;
+        } else if (action.type == game::ActionBarSlot::ITEM) {
+            item = action.id;
+        } else if (action.type == game::ActionBarSlot::MACRO) {
+            if (const MacroShown* m = macroShown(L, gh, action.id)) {
+                if (m->result.spell > 0) spell = static_cast<uint32_t>(m->result.spell);
+                else item = m->result.item;
+            }
+        }
+        if (item != 0) {
+            if (const auto* info = gh->getItemInfo(item)) {
+                for (const auto& s : info->spells)
+                    if (s.spellId != 0 && s.spellTrigger == 0) { spell = s.spellId; break; }
+            }
+        }
+    }
+    if (spell == 0) return false;
+    const auto data = gh->getSpellData(spell);
+    return data.minRange != 0.0f || data.maxRange > 0.0f;
+}
+
 static int lua_IsActionInRange(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnNil(L); }
-    int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
+    // A slot that is not a number answers nil (0x005a9d50).
+    if (!gh || !lua_isnumber(L, 1)) { return luaReturnNil(L); }
+    int slot = static_cast<int>(lua_tonumber(L, 1)) - 1;
     // The pet casts a pet slot's spell, from where it is (0x005a9e20 ->
     // 0x005d3390): its range is measured from the pet.
     if (const auto ref = petActionRef(gh, slot)) {
@@ -3988,17 +4036,26 @@ void registerActionLuaAPI(lua_State* L) {
             const auto& bar = gh->getActionBar();
             if (slot >= static_cast<int>(bar.size())) { lua_pushnil(L); return 1; }
             const auto& action = bar[static_cast<size_t>(slot)];
+            // An equipment set's slot shows the set's name (0x005ae5c0 +0x114).
+            if (action.type == game::ActionBarSlot::EQUIPMENT_SET) {
+                for (const auto& set : gh->getEquipmentSets()) {
+                    if (set.setId == action.id) { lua_pushstring(L, set.name.c_str()); return 1; }
+                }
+                lua_pushnil(L);
+                return 1;
+            }
             if (action.type != game::ActionBarSlot::MACRO) { lua_pushnil(L); return 1; }
             const std::string name = gh->getMacroName(action.id);
             if (name.empty()) { lua_pushnil(L); return 1; }
             lua_pushstring(L, name.c_str());
             return 1;
         }},
-                // Whether the action has a range to be in or out of. Nothing
-                // here tracks that yet, and false is what "no range check"
-                // looks like - the button simply never dims for distance.
+                // ActionHasRange(slot) (0x005a9cf0 -> 0x005a95e0): 1 when the
+                // spell the slot casts - its own, a pet's, an item's use
+                // spell or what a macro shows - has a minimum or maximum
+                // range, nil otherwise.
                 {"ActionHasRange",      [](lua_State* L) -> int {
-                    luaPushOneOrNil(L, 0);
+                    luaPushOneOrNil(L, lua_isnumber(L, 1) && actionHasRange(L, luaToClientInt(L, 1) - 1));
                     return 1;
                 }},
                 {"GetActionTexture",    lua_GetActionTexture},
@@ -4584,8 +4641,14 @@ void registerActionLuaAPI(lua_State* L) {
         }},
                 // Only referenced from commented-out code in 3.3.5, but a
                 // temporary pet's timer is nil when there is no timer.
+                // GetPetTimeRemaining() (0x005d3180): ms until a timed pet
+                // runs out, nil for a permanent one or none.
                 {"GetPetTimeRemaining", [](lua_State* L) -> int {
-            lua_pushnil(L);
+            auto* gh = getGameHandler(L);
+            const auto end = gh ? gh->petExpiry() : std::chrono::steady_clock::time_point{};
+            if (!gh || !gh->hasPet() || end == std::chrono::steady_clock::time_point{}) return luaReturnNil(L);
+            const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(end - std::chrono::steady_clock::now()).count();
+            lua_pushnumber(L, left > 0 ? static_cast<double>(left) : 0.0);
             return 1;
         }},
                 // GetPetActionSlotUsable(index) → whether the pet can use it
@@ -4668,11 +4731,11 @@ void registerActionLuaAPI(lua_State* L) {
                 return luaL_error(L, "Usage: GetPetActionInfo(index)");
             auto* gh = getGameHandler(L);
             int index = static_cast<int>(luaL_checknumber(L, 1));
-            if (!gh || index < 1 || index > game::GameHandler::PET_ACTION_BAR_SLOTS) {
-                return luaReturnNil(L);
-            }
+            // Empty or invalid: seven nils (0x005d4ec0).
+            const auto none = [L]() { for (int i = 0; i < 7; ++i) lua_pushnil(L); return 7; };
+            if (!gh || index < 1 || index > game::GameHandler::PET_ACTION_BAR_SLOTS) return none();
             const uint32_t packed = gh->getPetActionSlot(index - 1);
-            if (packed == 0) { return luaReturnNil(L); }
+            if (packed == 0) return none();
 
             const uint32_t action = game::pet::petActionId(packed);
             const auto type = game::pet::petActionType(packed);
@@ -4785,12 +4848,29 @@ void registerActionLuaAPI(lua_State* L) {
         }},
                 {"PetAttack", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            // Through CGPetInfo::SendPetAction (0x005d4210), kind 2.
+            // Through CGPetInfo::SendPetAction (0x005d4210), kind 2. A unit
+            // token or name in the first argument names the victim
+            // (0x005d55b0); without one, the target.
             if (gh && gh->hasPet() && !taint::allowed(L, 2)) return 0;
-            if (gh && gh->hasPet() && gh->hasTarget())
+            if (!gh || !gh->hasPet()) return 0;
+            uint64_t victim = gh->getTargetGuid();
+            if (const char* named = lua_tostring(L, 1); named && *named) {
+                std::string u(named);
+                toLowerInPlace(u);
+                victim = resolveUnitGuid(gh, u);
+                // Not a token: a unit in view by that name (0x00520190).
+                for (const auto& [guid, e] : gh->getEntityManager().getEntities()) {
+                    if (victim) break;
+                    if (!e || !e->isUnit()) continue;
+                    const auto* unit = static_cast<const game::Unit*>(e.get());
+                    std::string n = unit->getName();
+                    toLowerInPlace(n);
+                    if (!n.empty() && n == u) victim = guid;
+                }
+            }
+            if (victim)
                 gh->sendPetAction(
-                    game::pet::packPetAction(game::pet::ActionType::Command, game::pet::kAttack),
-                    gh->getTargetGuid());
+                    game::pet::packPetAction(game::pet::ActionType::Command, game::pet::kAttack), victim);
             return 0;
         }},
                 // PetStopAttack() (0x005d5640 -> 0x005d4650): only while the

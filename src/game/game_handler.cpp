@@ -2238,8 +2238,11 @@ float GameHandler::critPercentFromGameTable(std::vector<float>& baseCache,
     const size_t baseIdx  = static_cast<size_t>(pclass - 1);
     const size_t ratioIdx = static_cast<size_t>(pclass - 1) * kGtMaxLevel + (level - 1);
     if (baseIdx >= baseCache.size() || ratioIdx >= ratioCache.size()) return 0.0f;
+    // A zero ratio is no crit from the stat at all, the base included
+    // (0x0071bae0, 0x0071bb70).
+    if (ratioCache[ratioIdx] == 0.0f) return 0.0f;
     const float stat = static_cast<float>(std::max(0, getPlayerStat(statIdx)));
-    return (baseCache[baseIdx] + stat * ratioCache[ratioIdx]) * 100.0f;  // the sheet reads a percent
+    return (ratioCache[ratioIdx] * stat + baseCache[baseIdx]) * 100.0f;  // the sheet reads a percent
 }
 
 float GameHandler::getMeleeCritFromAgility() const {
@@ -2281,7 +2284,8 @@ float GameHandler::getHealthRegenFromSpirit() const {
     const float spirit = static_cast<float>(std::max(0, getPlayerStat(4 /* SPIRIT */)));
     const float baseSpirit = std::min(spirit, 50.0f);
     const float moreSpirit = spirit - baseSpirit;
-    return (baseSpirit * gtOctRegenHp_[idx] + moreSpirit * gtRegenHpPerSpt_[idx]) * 2.0f;
+    // 0x0071ba60: the first 50 by gtOCTRegenHP, the rest by gtRegenHPPerSpt.
+    return baseSpirit * gtOctRegenHp_[idx] + moreSpirit * gtRegenHpPerSpt_[idx];
 }
 
 float GameHandler::getManaRegenFromSpirit() const {
@@ -2293,8 +2297,10 @@ float GameHandler::getManaRegenFromSpirit() const {
     if (!gtRegenLoaded_) { getHealthRegenFromSpirit(); }  // shares the same lazy load
     const size_t idx = static_cast<size_t>(pclass - 1) * kGtMaxLevel + (level - 1);
     if (idx >= gtRegenMpPerSpt_.size()) return 0.0f;
+    // 0x0071b9f0: sqrt(intellect) x spirit x gtRegenMPPerSpt.
     const float spirit = static_cast<float>(std::max(0, getPlayerStat(4 /* SPIRIT */)));
-    return spirit * gtRegenMpPerSpt_[idx];
+    const float intellect = static_cast<float>(std::max(0, getPlayerStat(3 /* INTELLECT */)));
+    return std::sqrt(intellect) * spirit * gtRegenMpPerSpt_[idx];
 }
 
 float GameHandler::getCombatRatingBonus(int cr) const {
@@ -2833,6 +2839,11 @@ void GameHandler::ensureAchievementCriteriaLoaded() {
 }
 
 // ---------------------------------------------------------------------------
+void GameHandler::queryInspectAchievements(uint64_t guid) {
+    if (guid == 0 || !isInWorld() || !socket) return;
+    socket->send(QueryInspectAchievementsPacket::build(guid));
+}
+
 // SMSG_ALL_ACHIEVEMENT_DATA (WotLK 3.3.5a)
 //   Achievement records: repeated { uint32 id, uint32 packedDate } until 0xFFFFFFFF sentinel
 //   Criteria records:    repeated { uint32 id, uint64 counter, uint32 packedDate, ... } until 0xFFFFFFFF
@@ -2865,6 +2876,7 @@ void GameHandler::handleAllAchievementData(network::Packet& packet) {
         noteCriteriaForLatestStats(id, rec.flags);
     }
 
+    achievementDataReceived_ = true;
     LOG_INFO("SMSG_ALL_ACHIEVEMENT_DATA: loaded ", earnedAchievements_.size(),
              " achievements, ", criteriaProgress_.size(), " criteria");
     // The panel builds its whole tree on this, and it arrives once at login -
@@ -5217,6 +5229,7 @@ void GameHandler::setArenaRosterShowOffline(bool show) {
 }
 
 void GameHandler::requestItemRefundInfo(uint64_t itemGuid) {
+    // 0x007089e0: asked once per item (the item's flag 0x4), CMSG_ITEM_REFUND_INFO(guid).
     if (itemGuid == 0) return;
     if (getState() != WorldState::IN_WORLD || !getSocket()) return;
     if (!itemRefundAsked_.insert(itemGuid).second) return;   // asked already
@@ -6365,6 +6378,15 @@ void GameHandler::reconcileQuestItemObjectives(
     const std::unordered_map<uint32_t, uint32_t>& carriedCounts) {
     if (questHandler_) questHandler_->reconcileItemObjectivesFromInventory(carriedCounts);
 }
+const std::string& GameHandler::questTagName(uint32_t questId) const {
+    static const std::string empty;
+    return questHandler_ ? questHandler_->questTagName(questId) : empty;
+}
+
+uint32_t GameHandler::questSuggestedPlayers(uint32_t questId) const {
+    return questHandler_ ? questHandler_->questSuggestedPlayers(questId) : 0u;
+}
+
 const std::string& GameHandler::getQuestSortName(uint32_t sortId) const {
     static const std::string empty;
     return questHandler_ ? questHandler_->getQuestSortName(sortId) : empty;

@@ -185,6 +185,22 @@ GameErrorText petNameError(uint32_t reason) {
 
 } // end anonymous namespace
 
+void GameHandler::reportLag(uint32_t type) {
+    if (!isInWorld() || !socket) return;
+    network::Packet pkt(wireOpcode(Opcode::CMSG_GM_REPORT_LAG));
+    pkt.writeUInt32(type);
+    pkt.writeUInt32(currentMapId_);
+    pkt.writeFloat(movementInfo.y);  // the wire's x, as the ticket writes it
+    pkt.writeFloat(movementInfo.x);
+    pkt.writeFloat(movementInfo.z);
+    socket->send(pkt);
+}
+
+void GameHandler::showNameError(uint32_t reason) {
+    const GameErrorText err = petNameError(reason);
+    addUIError(interfaceString(err.key, err.enUS));
+}
+
 // 0x005199a0.
 std::string GameHandler::mirrorTimerLabel(uint32_t type, uint32_t spellId) {
     if (spellId != 0) {

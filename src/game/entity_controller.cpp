@@ -2296,6 +2296,14 @@ void EntityController::trackItemOnCreate(const UpdateBlock& block, bool& newItem
         if (maxDurIt   != block.fields.end()) info.maxDurability         = maxDurIt->second;
         if (permEnchIt != block.fields.end()) info.permanentEnchantId    = permEnchIt->second;
         if (tempEnchIt != block.fields.end()) info.temporaryEnchantId    = tempEnchIt->second;
+        if (enchBase != 0xFFFF) {
+            if (auto t = block.fields.find(enchBase + 4u); t != block.fields.end()) {
+                info.temporaryEnchantMs = t->second;
+                info.temporaryEnchantSetAt = std::chrono::steady_clock::now();
+            }
+            if (auto c = block.fields.find(enchBase + 5u); c != block.fields.end())
+                info.temporaryEnchantCharges = c->second;
+        }
         if (sock1EnchIt != block.fields.end()) info.socketEnchantIds[0]  = sock1EnchIt->second;
         if (sock2EnchIt != block.fields.end()) info.socketEnchantIds[1]  = sock2EnchIt->second;
         if (sock3EnchIt != block.fields.end()) info.socketEnchantIds[2]  = sock3EnchIt->second;
@@ -2415,6 +2423,15 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
         } else if (isItemInInventory && itemTempEnchField != 0xFFFF && key == itemTempEnchField) {
             if (it->second.temporaryEnchantId != val) {
                 it->second.temporaryEnchantId = val;
+                inventoryChanged = true;
+            }
+        } else if (isItemInInventory && itemTempEnchField != 0xFFFF && key == itemTempEnchField + 1u) {
+            it->second.temporaryEnchantMs = val;
+            it->second.temporaryEnchantSetAt = std::chrono::steady_clock::now();
+            inventoryChanged = true;
+        } else if (isItemInInventory && itemTempEnchField != 0xFFFF && key == itemTempEnchField + 2u) {
+            if (it->second.temporaryEnchantCharges != val) {
+                it->second.temporaryEnchantCharges = val;
                 inventoryChanged = true;
             }
         } else if (isItemInInventory && itemSock1EnchField != 0xFFFF && key == itemSock1EnchField) {

@@ -763,6 +763,10 @@ private:
     void handleTalentsInfo(network::Packet& packet);
     void handleAchievementEarned(network::Packet& packet);
 
+public:
+    /// The cast count of the running cast (UnitCastingInfo's castID).
+    [[nodiscard]] uint8_t runningCastCount() const { return runningCastCount_; }
+private:
     GameHandler& owner_;
 
     // --- Spell state ---

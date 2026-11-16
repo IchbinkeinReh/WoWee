@@ -183,7 +183,9 @@ enum class Mouseover : uint8_t { Never, Always, Highlight, Bobber, Usable };
 }
 
 /// The type handler's reach and the error a locked object refuses with
-/// (the constructors 0x00714250 picks: 0x007124b0 and those built on it).
+/// (the constructors 0x00714250 picks: 0x007124b0 and those built on it -
+/// 0x00712520..0x00712ac0, 0x0070c4e0 binder, 0x0070c510/0x0070c9a0, 0x0070c6a0
+/// chair and 0x0070c7f0 barber chair at 3.0, 0x00713250 and 0x007141d0).
 struct Handler {
     float reach = 5.0f;
     uint16_t lockedError = err::kUseLocked;

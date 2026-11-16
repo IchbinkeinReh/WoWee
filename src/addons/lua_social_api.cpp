@@ -2,6 +2,10 @@
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "addons/unit_or_name.hpp"
 #include "game/gossip_quest_status.hpp"
+#include "game/name_rules.hpp"
+#include "game/spell_mods.hpp"
+#include "pipeline/dbc_layout.hpp"
+#include "pipeline/asset_manager.hpp"
 #include "game/grey_triviality.hpp"
 #include "game/interface_text.hpp"
 #include <algorithm>
@@ -765,11 +769,16 @@ std::vector<const game::WhoEntry*> whoResultsView(game::GameHandler* gh) {
 
 // Declared in lua_api_helpers.hpp: the system API asks the same question and
 // had its own copy under another name.
+//
+// The index is the player's arena team slot (PLAYER_FIELD_ARENA_TEAM_INFO,
+// seven fields each, the team id first), as every client function that takes
+// a team index reads it (0x005a3860 and its neighbours).
 uint32_t arenaTeamIdAtIndex(game::GameHandler* gh, int index) {
-    if (!gh || index < 1) return 0;
-    const auto& teams = gh->getArenaTeamStats();
-    if (index > static_cast<int>(teams.size())) return 0;
-    return teams[static_cast<size_t>(index) - 1].teamId;
+    if (!gh || index < 1 || index > 3) return 0;
+    const uint16_t base = game::fieldIndex(game::UF::PLAYER_FIELD_ARENA_TEAM_INFO_1_1);
+    const auto me = gh->getEntityManager().getEntity(gh->getPlayerGuid());
+    if (!me || base == 0xFFFF) return 0;
+    return me->getField(static_cast<uint16_t>(base + (index - 1) * 7));
 }
 
 /// The arena team commands that take a team row and a name (0x00515cc0 and
@@ -815,26 +824,28 @@ static int lua_IsInGuild(lua_State* L) {
 
 // GetGuildInfo("player") → guildName, guildRankName, guildRankIndex
 static int lua_GetGuildInfoFunc(lua_State* L) {
-    // 0x005eaaf0
+    // 0x005eaaf0: for any unit that is a player in a guild whose record is
+    // known - its name, the unit's rank name and rank index; else nil, nil, 0.
     if (!lua_isstring(L, 1))
         return luaL_error(L, "Usage: GetGuildInfo(\"unit\")");
     auto* gh = getGameHandler(L);
-    if (!gh || !gh->isInGuild()) { return luaReturnNil(L); }
-    lua_pushstring(L, gh->getGuildName().c_str());
-    // Get rank name for the player
-    const auto& roster = gh->getGuildRoster();
-    std::string rankName;
-    uint32_t rankIndex = 0;
-    for (const auto& m : roster.members) {
-        if (m.guid == gh->getPlayerGuid()) {
-            rankIndex = m.rankIndex;
-            const auto& rankNames = gh->getGuildRankNames();
-            if (rankIndex < rankNames.size()) rankName = rankNames[rankIndex];
-            break;
-        }
+    std::string unit(lua_tostring(L, 1));
+    toLowerInPlace(unit);
+    const uint64_t guid = gh ? resolveUnitGuid(gh, unit) : 0;
+    const auto entity = guid ? gh->getEntityManager().getEntity(guid) : nullptr;
+    // PLAYER_GUILDRANK, the word after PLAYER_GUILDID (UNIT_END + 3).
+    const uint16_t unitEnd = game::fieldIndex(game::UF::UNIT_END);
+    const uint16_t rankField = unitEnd != 0xFFFF ? static_cast<uint16_t>(unitEnd + 4) : 0xFFFF;
+    const uint32_t guildId = (entity && entity->getType() == game::ObjectType::PLAYER) ? gh->getEntityGuildId(guid) : 0;
+    const std::string name = guildId ? gh->lookupGuildName(guildId) : std::string();
+    if (name.empty()) {
+        lua_pushnil(L); lua_pushnil(L); lua_pushnumber(L, 0);
+        return 3;
     }
-    lua_pushstring(L, rankName.c_str());
-    lua_pushnumber(L, rankIndex);
+    const uint32_t rank = rankField != 0xFFFF ? entity->getField(rankField) : 0;
+    lua_pushstring(L, name.c_str());
+    lua_pushstring(L, gh->guildRankNameById(guildId, rank).c_str());
+    lua_pushnumber(L, rank);
     return 3;
 }
 
@@ -1221,8 +1232,29 @@ static int lua_GetAutoCompleteResults(lua_State* L) {
 
 /// Which row the friends and ignore lists have selected. The client has no
 /// opinion about either; they are what the player last clicked.
-static int& selectedFriend() { static int v = 0; return v; }
-static int& selectedIgnore() { static int v = 0; return v; }
+/// The selected friend and ignore, by guid so the selection follows the entry
+/// when the list reorders (0x006b4400, 0x006b48a0).
+static uint64_t& selectedFriendGuid() { static uint64_t v = 0; return v; }
+static uint64_t& selectedIgnoreGuid() { static uint64_t v = 0; return v; }
+/// The n-th contact (from 1) with that flag, or null.
+static const game::ContactEntry* contactAt(game::GameHandler* gh, uint32_t flag, int index) {
+    if (!gh || index < 1) return nullptr;
+    int n = 0;
+    for (const auto& c : gh->getContacts())
+        if ((c.flags & flag) && ++n == index) return &c;
+    return nullptr;
+}
+/// Where a guid sits in that list, from 1; 0 for nowhere.
+static int contactIndexOf(game::GameHandler* gh, uint32_t flag, uint64_t guid) {
+    if (!gh || guid == 0) return 0;
+    int n = 0;
+    for (const auto& c : gh->getContacts()) {
+        if (!(c.flags & flag)) continue;
+        ++n;
+        if (c.guid == guid) return n;
+    }
+    return 0;
+}
 
 // SendSystemMessage(text) - put a line in the chat as the client itself would
 /// SendSystemMessage("message") (0x0050d8a0): a string or the usage error,
@@ -1620,9 +1652,7 @@ static int lua_GetNumMacroIcons(lua_State* L) {
 }
 
 // GetMacroIconInfo(index) → a texture path, or nil past the end
-static int lua_GetMacroIconInfo(lua_State* L) {
-    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetMacroItemIconInfo(index)");   // 0x00564f60
-    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetMacroIconInfo(index)");   // 0x00564e90
+static int macroIconAt(lua_State* L) {
     const auto* icons = iconList(L);
     const int index = static_cast<int>(luaL_checknumber(L, 1));
     if (!icons || index < 1 || index > static_cast<int>(icons->size())) {
@@ -1631,6 +1661,14 @@ static int lua_GetMacroIconInfo(lua_State* L) {
     }
     lua_pushstring(L, (*icons)[static_cast<size_t>(index - 1)].c_str());
     return 1;
+}
+static int lua_GetMacroIconInfo(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetMacroIconInfo(index)");   // 0x00564e90
+    return macroIconAt(L);
+}
+static int lua_GetMacroItemIconInfo(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetMacroItemIconInfo(index)");   // 0x00564f60
+    return macroIconAt(L);
 }
 
 // ── Guild and arena charters ──────────────────────────────────────────
@@ -1824,18 +1862,31 @@ static int lua_GetGuildEventInfo(lua_State* L) {
         return luaL_error(L, "Usage: GetGuildEventInfo(index)");
     auto* gh = getGameHandler(L);
     const int index = static_cast<int>(luaL_checknumber(L, 1));
-    if (!gh) return luaReturnNil(L);
+    // Out of range: four nils and four zeros. An unknown type is "none", a
+    // player not known nil, and the fourth value the rank's name (0x005ccd90).
+    const auto none = [L]() {
+        for (int i = 0; i < 4; ++i) lua_pushnil(L);
+        for (int i = 0; i < 4; ++i) lua_pushnumber(L, 0);
+        return 8;
+    };
+    if (!gh) return none();
     const auto& log = gh->getGuildEventLog();
-    if (index < 1 || index > static_cast<int>(log.size())) return luaReturnNil(L);
+    if (index < 1 || index > static_cast<int>(log.size())) return none();
     const auto& e = log[static_cast<size_t>(index - 1)];
 
     static const char* kTypes[] = {
-        "", "invite", "join", "promote", "demote", "remove", "quit"
+        "none", "invite", "join", "promote", "demote", "remove", "quit"
     };
-    lua_pushstring(L, (e.type < 7) ? kTypes[e.type] : "");
-    lua_pushstring(L, gh->lookupName(e.playerGuid).c_str());
-    lua_pushstring(L, e.otherGuid ? gh->lookupName(e.otherGuid).c_str() : "");
-    lua_pushnumber(L, e.newRank);
+    lua_pushstring(L, (e.type < 7) ? kTypes[e.type] : "none");
+    const auto pushName = [L, gh](uint64_t guid) {
+        const std::string& n = guid ? gh->lookupName(guid) : std::string();
+        if (n.empty()) lua_pushnil(L); else lua_pushstring(L, n.c_str());
+    };
+    pushName(e.playerGuid);
+    pushName(e.otherGuid);
+    const auto& ranks = gh->getGuildRankNames();
+    if (e.newRank < ranks.size()) lua_pushstring(L, ranks[e.newRank].c_str());
+    else lua_pushnil(L);
 
     // Whole units of age, largest first, each within its parent.
     const uint32_t secs = e.secondsAgo;
@@ -2086,10 +2137,12 @@ void registerSocialLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 1)) - 1;
             uint32_t itemId = 0, displayId = 0, cost = 0;
-            if (!gh || !gh->getPetitionCharter(index, itemId, displayId, cost)) return 0;
+            // An unknown row or an item not yet known: nil, nil, 0.
+            const auto none = [L]() { lua_pushnil(L); lua_pushnil(L); lua_pushnumber(L, 0); return 3; };
+            if (!gh || !gh->getPetitionCharter(index, itemId, displayId, cost)) return none();
             const auto* info = gh->getItemInfo(itemId);
             // Asked for; the answer raises PETITION_VENDOR_UPDATE (0x005a1f30).
-            if (!info || !info->valid) { askItemForEvent(gh, itemId, "PETITION_VENDOR_UPDATE"); return 0; }
+            if (!info || !info->valid) { askItemForEvent(gh, itemId, "PETITION_VENDOR_UPDATE"); return none(); }
             lua_pushstring(L, info->name.c_str());
             lua_pushstring(L, gh->getItemIconPath(
                 displayId ? displayId : info->displayInfoId).c_str());
@@ -2143,6 +2196,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 // BuyGuildCharter takes the name typed into the frame; the
                 // vendor is whichever one this client is standing at.
                 {"BuyGuildCharter", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: BuyGuildCharter(guildName)");   // 0x0059a130
             auto* gh = getGameHandler(L);
             const char* name = luaL_optstring(L, 1, "");
             if (gh && name && *name && gh->getPetitionNpcGuid() != 0 && guildCharterPurchaseAllowed(gh))
@@ -2158,13 +2212,19 @@ void registerSocialLuaAPI(lua_State* L) {
             if (!lua_isnumber(L, 1) || !lua_isstring(L, 2))
                 return luaL_error(L, "Usage: BuyPetition(index, name)");
             auto* gh = getGameHandler(L);
-            const int index = static_cast<int>(luaL_optnumber(L, 1, 1));
-            const char* name = luaL_optstring(L, 2, "");
-            if (gh && name && *name && index >= 1 && gh->getPetitionNpcGuid() != 0 &&
-                petitionPurchaseAllowed(gh, index - 1))
-                gh->buyPetition(gh->getPetitionNpcGuid(), name,
-                                static_cast<uint32_t>(index));
-            return 0;
+            const int index = static_cast<int>(std::lround(lua_tonumber(L, 1)));
+            const char* name = lua_tostring(L, 2);
+            // The team name passes the client's name rules first (0x007e1f60);
+            // a refused one is worded on the error line and answers nil.
+            if (const uint32_t reason = game::name_rules::checkCharterName(name)) {
+                if (gh) gh->showNameError(reason);
+                lua_pushnil(L);
+                return 1;
+            }
+            if (gh && index >= 1 && gh->getPetitionNpcGuid() != 0 && petitionPurchaseAllowed(gh, index - 1))
+                gh->buyPetition(gh->getPetitionNpcGuid(), name, static_cast<uint32_t>(index));
+            lua_pushnumber(L, 1);
+            return 1;
         }},
                 {"CloseGuildRegistrar", [](lua_State* L) -> int {
             if (auto* gh = getGameHandler(L)) gh->closePetitionVendor();
@@ -2320,7 +2380,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 // The guild bank tab dialog picks from the same icons under a
                 // name of its own.
                 {"GetNumMacroItemIcons", lua_GetNumMacroIcons},
-                {"GetMacroItemIconInfo", lua_GetMacroIconInfo},
+                {"GetMacroItemIconInfo", lua_GetMacroItemIconInfo},
                 {"NewGMTicket",         lua_NewGMTicket},
                 {"DeleteGMTicket",      lua_DeleteGMTicket},
                 // The long-form guild information, which is a different field
@@ -2350,7 +2410,8 @@ void registerSocialLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"SetGuildRosterShowOffline", [](lua_State* L) -> int {
-            guildShowOffline() = lua_toboolean(L, 1) != 0;
+            // No argument shows them; 0 and "0" hide (0x005ca1b0).
+            guildShowOffline() = luaClientSwitchArg(L, 1, true);
             return 0;
         }},
                 // SortWho(field) - name, zone, guild, race, level, class or
@@ -2358,9 +2419,15 @@ void registerSocialLuaAPI(lua_State* L) {
                 // contract as SortGuildRoster: the same field twice reverses.
                 {"SortWho", [](lua_State* L) -> int {
             if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: SortWho(\"type\")");   // 0x006b4eb0
-            const std::string field = luaL_optstring(L, 1, "name");
+            // The key without case, an unknown one as "name"; the list redraws
+            // at once (WHO_LIST_UPDATE).
+            std::string field = lua_tostring(L, 1);
+            toLowerInPlace(field);
+            static const char* const kKeys[] = {"name", "zone", "guild", "race", "level", "class", "group"};
+            if (std::find(std::begin(kKeys), std::end(kKeys), field) == std::end(kKeys)) field = "name";
             if (field == whoSortField()) whoSortReverse() = !whoSortReverse();
             else { whoSortField() = field; whoSortReverse() = false; }
+            if (auto* gh = getGameHandler(L)) gh->fireAddonEvent("WHO_LIST_UPDATE", {});
             return 0;
         }},
                 // Voice again: nothing can be muted, so nothing is added to the
@@ -2372,7 +2439,14 @@ void registerSocialLuaAPI(lua_State* L) {
                     if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetAutoCompletePresenceID(\"name\")");   // 0x0057b500
                     return luaReturnNil(L);
                 }},
-                {"SetActiveVoiceChannelBySessionID", [](lua_State* L) -> int { (void)L; return 0; }},
+                // SetActiveVoiceChannelBySessionID(id) (0x007db280): an id
+                // under 1 leaves the active voice channel and answers 1; with
+                // no voice sessions any other is nil.
+                {"SetActiveVoiceChannelBySessionID", [](lua_State* L) -> int {
+            if (lua_isnumber(L, 1) && luaToClientInt(L, 1) < 1) { lua_pushnumber(L, 1); return 1; }
+            lua_pushnil(L);
+            return 1;
+        }},
                 // AddMute(name) - 0x006b6c30, which hands the argument to
                 // 0x006b62c0. That walks the client's mute array and asks the
                 // realm by NAME (CMSG_ADD_VOICE_IGNORE, 0x3db) only for a name
@@ -2429,9 +2503,12 @@ void registerSocialLuaAPI(lua_State* L) {
                 return luaL_error(L, "Usage: GetGuildRosterLastOnline(index)");
             auto* gh = getGameHandler(L);
             const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
-            if (!gh || idx < 1) return luaReturnNil(L);
+            // Out of range, or a member online now: four nils (0x005cabb0).
+            const auto none = [L]() { for (int i = 0; i < 4; ++i) lua_pushnil(L); return 4; };
+            if (!gh || idx < 1) return none();
             const auto view = guildRosterView(gh);
-            if (idx > static_cast<int>(view.size())) return luaReturnNil(L);
+            if (idx > static_cast<int>(view.size())) return none();
+            if (view[static_cast<size_t>(idx) - 1]->online) return none();
             // The roster reports it in days, fractionally.
             const float days = view[static_cast<size_t>(idx) - 1]->lastOnline;
             const int totalDays = static_cast<int>(days);
@@ -2628,7 +2705,7 @@ void registerSocialLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             const int tab  = static_cast<int>(luaL_optnumber(L, 1, 0));
             const int perm = static_cast<int>(luaL_optnumber(L, 2, 0));
-            const bool on  = lua_toboolean(L, 3) != 0;
+            const bool on  = luaClientSwitchArg(L, 3, false);   // 0 is off
             if (!gh || tab < 1 || tab > 6 || perm < 1 || perm > 3) return 0;
             const uint32_t bit = 1u << (perm - 1);
             auto& p = gh->pendingGuildRankRef();
@@ -2642,7 +2719,8 @@ void registerSocialLuaAPI(lua_State* L) {
                 return luaL_error(L, "Usage: SetGuildBankTabWithdraw(tab, amount)");
             auto* gh = getGameHandler(L);
             const int tab = static_cast<int>(luaL_optnumber(L, 1, 0));
-            const auto n  = static_cast<uint32_t>(luaL_optnumber(L, 2, 0));
+            // At most 100000 (0x005cb760).
+            const auto n  = std::min<uint32_t>(static_cast<uint32_t>(luaL_optnumber(L, 2, 0)), 100000u);
             if (!gh || tab < 1 || tab > 6) return 0;
             gh->pendingGuildRankRef().tabSlots[static_cast<size_t>(tab) - 1] = n;
             return 0;
@@ -2888,34 +2966,15 @@ void registerSocialLuaAPI(lua_State* L) {
             if (gh) gh->castSpell(7355);
             return 0;
         }},
-                // GMReportLag(type) - the help frame's /lagro (helpframe.lua:455),
-                // and the client really does send it. 0x005acf30 casts the local
-                // player's own object (the assert-cast names Player_C.h, size 0x10),
-                // thiscalls that object's vtable slot 0x2c with one out-pointer, and
-                // that fills **three** floats on the stack at ebp-0xc/-0x8/-0x4. The
-                // packet it then writes is CMSG_GM_REPORT_LAG (0x502) as a dword of
-                // the type one below what Lua passes, a dword read at +0xcc off the
-                // object the connection handle reaches (0x004d37e0: handle table
-                // entry, +8, +0xcc - a field of a heap object, not a TLS slot, which
-                // is what an earlier reading of that `fs:0x2c` had it as), then those
-                // three floats: each is loaded with flds and stored with fstps before
-                // the writer (0x0047b160, four bytes at a time) takes it, so 24 bytes
-                // in all. The send call follows at 0x005acfe4.
-                //
-                // That +0xcc dword reaches this site from a `jmp 0x004d37e0` thunk at
-                // 0x006ceaf0, one of the stubs that live in the int3 runs between
-                // blocks - the decompile shows it as `thunk_FUN_004d37e0`, but a grep
-                // for the target address finds no call here.
-                //
-                // Not reproduced, and the layout is written down instead: what the
-                // two floats measure is still unnamed - Player_C's vtable is not
-                // reachable from the static tables - and there is no reader for the
-                // opcode here either, so sending numbers whose meaning is guessed
-                // would only buy a log line nobody can read.
+                // GMReportLag(type) - the help frame's /lagro (helpframe.lua:455).
+                // 0x005acf30 sends CMSG_GM_REPORT_LAG (0x502): the type one
+                // below what Lua passes, the map (+0xcc), then the position
+                // the player object's vtable slot 0x2c gives.
                 {"GMReportLag", [](lua_State* L) -> int {
             // 0x005ad020
             if (!lua_isnumber(L, 1))
                 return luaL_error(L, "Usage: GMReportLag(number)");
+            if (auto* gh = getGameHandler(L)) gh->reportLag(static_cast<uint32_t>(luaToClientInt(L, 1) - 1));
             return 0;
         }},
                 // GMResponseNeedMoreHelp(ticketDescription) - the button under
@@ -2991,9 +3050,10 @@ void registerSocialLuaAPI(lua_State* L) {
                 return luaL_error(L, "Usage: GuildControlGetRankName(index)");
             auto* gh = getGameHandler(L);
             const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
-            if (!gh || idx < 1) return luaReturnNil(L);
+            // A bad index answers "" (0x005ccc90).
+            if (!gh || idx < 1) { lua_pushstring(L, ""); return 1; }
             const auto& ranks = gh->getGuildRankNames();
-            if (idx > static_cast<int>(ranks.size())) return luaReturnNil(L);
+            if (idx > static_cast<int>(ranks.size())) { lua_pushstring(L, ""); return 1; }
             lua_pushstring(L, ranks[static_cast<size_t>(idx) - 1].c_str());
             return 1;
         }},
@@ -3021,12 +3081,11 @@ void registerSocialLuaAPI(lua_State* L) {
                 // itself off their checked state. Stopping short does not leave
                 // those two clear, it leaves them showing the previous rank's.
                 {"GuildControlGetRankFlags", [](lua_State* L) -> int {
+            // Always the full set, all nil without a rank (0x005cc3e0).
             auto* gh = getGameHandler(L);
-            if (!gh) return 0;
-            const int sel = gh->getSelectedGuildRank();
-            const auto* rank = sel >= 1 ? gh->getGuildRankRow(static_cast<uint32_t>(sel) - 1) : nullptr;
-            if (!rank) return 0;
-            const uint32_t rights = rank->rights;
+            const int sel = gh ? gh->getSelectedGuildRank() : 0;
+            const auto* rank = (gh && sel >= 1) ? gh->getGuildRankRow(static_cast<uint32_t>(sel) - 1) : nullptr;
+            const uint32_t rights = rank ? rank->rights : 0u;
             for (uint32_t bit : kGuildRankFlagBits) luaPushOneOrNil(L, (rights & bit) ? 1 : 0);
             return static_cast<int>(kGuildRankFlagCount);
         }},
@@ -3070,7 +3129,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 return luaL_error(L, "Usage: GuildControlSetRankFlag(index, enabled)");
             auto* gh = getGameHandler(L);
             const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
-            const bool on = lua_toboolean(L, 2) != 0;
+            const bool on = luaClientSwitchArg(L, 2, false);   // 0 is off
             if (!gh || idx < 1 || idx > static_cast<int>(kGuildRankFlagCount)) return 0;
             const uint32_t bit = kGuildRankFlagBits[static_cast<size_t>(idx) - 1];
             // Slot 14 has no bit to set. Nothing calls it - the checkbox that
@@ -3626,7 +3685,18 @@ void registerSocialLuaAPI(lua_State* L) {
             return channelSilenceVoice(L, game::Opcode::CMSG_CHANNEL_UNSILENCE_VOICE, "ChannelUnSilenceVoice");
         }},
                 // Vehicles are not modelled in the raid frames.
-                {"UnitTargetsVehicleInRaidUI", luaReturnNil},
+                // UnitTargetsVehicleInRaidUI(unit) (0x00613780): the unit's
+                // seat has VehicleSeat flagsB 0x8; false without one.
+                {"UnitTargetsVehicleInRaidUI", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            const char* uid = lua_tostring(L, 1);
+            std::string u(uid ? uid : "");
+            toLowerInPlace(u);
+            const uint64_t guid = gh ? resolveUnitGuid(gh, u) : 0;
+            const auto* seat = guid ? gh->vehicleRoster().seatOf(guid) : nullptr;
+            lua_pushboolean(L, seat && (seat->flagsB & 0x8u) ? 1 : 0);
+            return 1;
+        }},
                 {"GetNumLanguages",   lua_GetNumLanguages},
                 // The 1.12 client's own spelling, and not a typo on this side:
                 // stock ChatFrame.lua opens LanguageMenu_LoadLanguages with
@@ -3875,31 +3945,41 @@ void registerSocialLuaAPI(lua_State* L) {
             }
             return 0;
         }},
+                // AddFriend / AddIgnore / DelIgnore do nothing for an
+                // argument that is not a string (0x006b6af0, 0x006b6c00,
+                // 0x006b7d70).
                 {"AddFriend", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const char* name = luaL_checkstring(L, 1);
-            const char* note = luaL_optstring(L, 2, "");
-            if (gh) gh->addFriend(name, note);
+            const char* name = lua_tostring(L, 1);
+            const char* note = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
+            if (gh && name) gh->addFriend(name, note);
             return 0;
         }},
                 {"RemoveFriend", [](lua_State* L) -> int {
             // 0x006b7bd0: an index or a name - a number is also a string to that test.
             if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: RemoveFriend([\"name\"] or [index])");
             auto* gh = getGameHandler(L);
-            const char* name = luaL_checkstring(L, 1);
-            if (gh) gh->removeFriend(name);
+            if (!gh) return 0;
+            // A number is a friend's index (rounded, 1..100), removed by its
+            // entry; anything else a name.
+            if (lua_isnumber(L, 1)) {
+                if (const auto* c = contactAt(gh, 0x1, static_cast<int>(std::lround(lua_tonumber(L, 1)))))
+                    gh->removeFriend(c->name);
+                return 0;
+            }
+            gh->removeFriend(lua_tostring(L, 1));
             return 0;
         }},
                 {"AddIgnore", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const char* name = luaL_checkstring(L, 1);
-            if (gh) gh->addIgnore(name);
+            const char* name = lua_tostring(L, 1);
+            if (gh && name) gh->addIgnore(name);
             return 0;
         }},
                 {"DelIgnore", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const char* name = luaL_checkstring(L, 1);
-            if (gh) gh->removeIgnore(name);
+            const char* name = lua_tostring(L, 1);
+            if (gh && name) gh->removeIgnore(name);
             return 0;
         }},
                 // ShowFriends() - not a panel verb despite the name: it asks
@@ -3928,10 +4008,16 @@ void registerSocialLuaAPI(lua_State* L) {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetWhoInfo(index)");   // 0x006b4a80
             // GetWhoInfo(index) → name, guild, level, race, class, zone, classFileName
             auto* gh = getGameHandler(L);
-            int index = static_cast<int>(luaL_checknumber(L, 1));
-            if (!gh || index < 1) { return luaReturnNil(L); }
+            // Rounded; out of range: nil, nil, 0 and four nils (0x006b4a80).
+            const auto none = [L]() {
+                lua_pushnil(L); lua_pushnil(L); lua_pushnumber(L, 0);
+                for (int i = 0; i < 4; ++i) lua_pushnil(L);
+                return 7;
+            };
+            int index = static_cast<int>(std::lround(lua_tonumber(L, 1)));
+            if (!gh || index < 1) { return none(); }
             const auto view = whoResultsView(gh);
-            if (index > static_cast<int>(view.size())) { return luaReturnNil(L); }
+            if (index > static_cast<int>(view.size())) { return none(); }
             const auto& w = *view[static_cast<size_t>(index) - 1];
 
 
@@ -3973,7 +4059,7 @@ void registerSocialLuaAPI(lua_State* L) {
             // true in Lua, so lua_toboolean would read "off" as "on" and this
             // would be a no-op with extra steps.
             if (auto* gh = getGameHandler(L)) {
-                gh->setWhoToUI(luaOptNumberText(L, 1, 0.0) != 0.0);
+                gh->setWhoToUI(luaClientSwitchArg(L, 1, false));   // 0x006b3430
             }
             return 0;
         }},
@@ -4112,15 +4198,20 @@ void registerSocialLuaAPI(lua_State* L) {
         }},
                 {"SendSystemMessage",   lua_SendSystemMessage},
                 {"GetSelectedFriend", [](lua_State* L) -> int {
-            lua_pushnumber(L, selectedFriend()); return 1; }},
+            lua_pushnumber(L, contactIndexOf(getGameHandler(L), 0x1, selectedFriendGuid())); return 1; }},
                 {"SetSelectedFriend", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetSelectedFriend(index)");   // 0x006b4400
-            selectedFriend() = static_cast<int>(luaL_optnumber(L, 1, 0)); return 0; }},
+            // Rounded; outside 1..101 clears the selection.
+            const auto* c = contactAt(getGameHandler(L), 0x1, static_cast<int>(std::lround(lua_tonumber(L, 1))));
+            selectedFriendGuid() = c ? c->guid : 0;
+            return 0; }},
                 {"GetSelectedIgnore", [](lua_State* L) -> int {
-            lua_pushnumber(L, selectedIgnore()); return 1; }},
+            lua_pushnumber(L, contactIndexOf(getGameHandler(L), 0x2, selectedIgnoreGuid())); return 1; }},
                 {"SetSelectedIgnore", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetSelectedIgnore(index)");   // 0x006b48a0
-            selectedIgnore() = static_cast<int>(luaL_optnumber(L, 1, 0)); return 0; }},
+            const auto* c = contactAt(getGameHandler(L), 0x2, static_cast<int>(std::lround(lua_tonumber(L, 1))));
+            selectedIgnoreGuid() = c ? c->guid : 0;
+            return 0; }},
                 {"AddOrRemoveFriend",   lua_AddOrRemoveFriend},
                 {"AddOrDelIgnore",      lua_AddOrDelIgnore},
                 // DoReadyCheck() - what /readycheck does
@@ -4201,13 +4292,44 @@ void registerSocialLuaAPI(lua_State* L) {
                 // nil is what "none" looks like here, and it picks the
                 // no-sickness wording rather than printing "0 min".
                 {"GetResSicknessDuration", [](lua_State* L) -> int {
+            // 0x006118c0: the player's race's sickness spell (ChrRaces
+            // field 9, else 15007), its SpellDuration at the player's level
+            // (base + per level, at most the maximum) through the player's
+            // duration modifiers; a second or more as INT_GENERAL_DURATION,
+            // else nil.
             auto* gh = getGameHandler(L);
-            const uint32_t level = gh ? gh->getPlayerLevel() : 0;
-            constexpr uint32_t kSicknessLevel = 11;
-            if (level < kSicknessLevel) { lua_pushnil(L); return 1; }
-            const uint32_t minutes = level >= kSicknessLevel + 9
-                ? 10u : (level - kSicknessLevel + 1u);
-            lua_pushstring(L, (std::to_string(minutes) + " min").c_str());
+            if (!gh) { lua_pushnil(L); return 1; }
+            uint32_t spell = 15007;
+            const auto me = gh->getEntityManager().getEntity(gh->getPlayerGuid());
+            if (me) {
+                const uint32_t race = me->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0)) & 0xFFu;
+                auto* am = gh->services().assetManager;
+                const auto* layouts = pipeline::getActiveDBCLayout();
+                const auto* layout = layouts ? layouts->getLayout("ChrRaces") : nullptr;
+                const uint32_t f = layout ? layout->tryField("ResSicknessSpellID") : 0xFFFFFFFFu;
+                auto dbc = am && am->isInitialized() ? am->loadDBCOptional("ChrRaces.dbc") : nullptr;
+                if (dbc && dbc->isLoaded() && f < dbc->getFieldCount())
+                    for (uint32_t r = 0; r < dbc->getRecordCount(); ++r)
+                        if (dbc->getUInt32(r, 0) == race) { if (const uint32_t s = dbc->getUInt32(r, f)) spell = s; break; }
+            }
+            gh->getSpellName(spell);
+            const auto& cache = gh->spellNameCacheRef();
+            const auto it = cache.find(spell);
+            if (it == cache.end() || (it->second.durationBaseMs == 0 && it->second.durationMaxMs == 0)) { lua_pushnil(L); return 1; }
+            const auto& e = it->second;
+            int32_t ms = e.durationBaseMs + e.durationPerLevelMs * static_cast<int32_t>(gh->getPlayerLevel());
+            if (e.durationMaxMs <= ms) ms = e.durationMaxMs;
+            ms = static_cast<int32_t>(game::spell_mods::apply(static_cast<float>(ms),
+                gh->getSpellModifiers(spell, game::GameHandler::SpellModOp::Duration)));
+            if (ms <= 999) { lua_pushnil(L); return 1; }
+            const game::difficulty_change::Duration d = game::difficulty_change::intDuration(static_cast<uint32_t>(ms));
+            const std::string key = std::string("INT_GENERAL_DURATION") + d.suffix;
+            lua_getglobal(L, key.c_str());
+            const std::string fmt = lua_isstring(L, -1) ? lua_tostring(L, -1) : "%d";
+            lua_pop(L, 1);
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), fmt.c_str(), static_cast<int>(d.value));
+            lua_pushstring(L, buf);
             return 1;
         }},
                 {"DeclineResurrect",    lua_DeclineResurrect},

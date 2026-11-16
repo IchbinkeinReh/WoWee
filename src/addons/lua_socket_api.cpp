@@ -37,17 +37,6 @@ namespace wowee::addons {
 
 namespace {
 
-/// The four socket colours FrameXML knows, keyed by the mask an item carries.
-/// GEM_TYPE_INFO in blizzard_itemsocketingui.lua is indexed by exactly these
-/// strings, and an unknown one indexes nothing and takes the panel down.
-const char* socketColorName(uint32_t mask) {
-    if (mask & 0x1) return "Meta";
-    if (mask & 0x2) return "Red";
-    if (mask & 0x4) return "Yellow";
-    if (mask & 0x8) return "Blue";
-    return "";
-}
-
 /// A gem's own colour mask, from GemProperties.dbc.
 ///
 /// An item's socket has a colour; a gem does not. What a gem has is a
@@ -198,10 +187,19 @@ int lua_GetSocketTypes(lua_State* L) {
     // 0x005c4550
     if (!lua_isnumber(L, 1))
         return luaL_error(L, "Usage: GetSocketType(index)");
+    // Every colour the socket's mask holds - Meta, Red, Yellow, Blue
+    // (0x00ad6704) - or "Socket" with none; nothing with no socketing open.
     auto* gh = getGameHandler(L);
-    const int index = static_cast<int>(luaL_optnumber(L, 1, 1)) - 1;
-    lua_pushstring(L, socketColorName(socketMaskAt(gh, index)));
-    return 1;
+    if (!gh || !gh->isSocketingOpen()) return 0;
+    const int index = static_cast<int>(std::lround(lua_tonumber(L, 1))) - 1;
+    static constexpr const char* kColours[4] = {"Meta", "Red", "Yellow", "Blue"};
+    const uint32_t mask = socketMaskAt(gh, index);
+    int n = 0;
+    for (int bit = 0; bit < 4; ++bit) {
+        if (mask & (1u << bit)) { lua_pushstring(L, kColours[bit]); ++n; }
+    }
+    if (n == 0) { lua_pushstring(L, "Socket"); n = 1; }
+    return n;
 }
 
 /// GetExistingSocketInfo(index) → the gem already in the socket.
@@ -241,7 +239,8 @@ int lua_GetNewSocketInfo(lua_State* L) {
 int lua_GetSocketItemInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
     const auto* info = socketItemInfo(gh);
-    if (!info) { lua_pushnil(L); lua_pushnil(L); lua_pushnil(L); return 3; }
+    // No item: nil, nil, 0 (0x005c49d0).
+    if (!info) { lua_pushnil(L); lua_pushnil(L); lua_pushnumber(L, 0); return 3; }
     lua_pushstring(L, info->name.c_str());
     lua_pushstring(L, gh->getItemIconPath(info->displayInfoId).c_str());
     lua_pushnumber(L, info->quality);

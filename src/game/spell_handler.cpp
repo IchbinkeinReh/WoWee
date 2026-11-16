@@ -3782,6 +3782,7 @@ void SpellHandler::loadTalentDbc() {
         const uint32_t ttBgField    = ttL ? (*ttL)["BackgroundFile"] : 23;
         // Named only in a layout that has it: before 3.x there are no pet trees.
         const uint32_t ttPetField   = ttL ? ttL->tryField("PetTalentMask") : 0xFFFFFFFFu;
+        const uint32_t ttIconField  = ttL ? ttL->tryField("SpellIconID") : 0xFFFFFFFFu;
 
         uint32_t count = tabDbc->getRecordCount();
         for (uint32_t i = 0; i < count; ++i) {
@@ -3794,6 +3795,7 @@ void SpellHandler::loadTalentDbc() {
             entry.petTalentMask = ttPetField != 0xFFFFFFFFu ? tabDbc->getUInt32(i, ttPetField) : 0;
             entry.orderIndex = static_cast<uint8_t>(tabDbc->getUInt32(i, ttOrderField));
             entry.backgroundFile = tabDbc->getString(i, ttBgField);
+            entry.spellIconId = ttIconField != 0xFFFFFFFFu ? tabDbc->getUInt32(i, ttIconField) : 0;
 
             talentTabCache_[entry.tabId] = entry;
 
@@ -5498,7 +5500,13 @@ void SpellHandler::handlePetSpells(network::Packet& packet) {
             packet.readUInt16();  // creature family
         }
         if (!packet.hasRemaining(4)) break;
-        packet.readUInt32();      // duration in ms; zero for a permanent pet
+        // Duration in ms, zero for a permanent pet: kept as the time it runs
+        // out, which GetPetTimeRemaining counts down to (0x00c234cc).
+        {
+            const uint32_t ms = packet.readUInt32();
+            owner_.setPetExpiry(ms ? std::chrono::steady_clock::now() + std::chrono::milliseconds(ms)
+                                   : std::chrono::steady_clock::time_point{});
+        }
 
         if (!packet.hasRemaining(4)) break;
         owner_.petReactRef()   = packet.readUInt8();
@@ -8375,7 +8383,7 @@ void SpellHandler::handleItemEnchantTimeUpdate(network::Packet& packet) {
                            [enchSlot](const GameHandler::TempEnchantTimer& t) { return t.slot == enchSlot; }),
             owner_.tempEnchantTimersRef().end());
     } else {
-        uint64_t expireMs = nowMs + static_cast<uint64_t>(durationSec) * 1000u;
+        uint64_t expireMs = nowMs + static_cast<uint64_t>(durationSec) * 1000u;   // 0x007070e0
         bool found = false;
         for (auto& t : owner_.tempEnchantTimersRef()) {
             if (t.slot == enchSlot) { t.expireMs = expireMs; found = true; break; }
