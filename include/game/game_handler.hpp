@@ -5782,9 +5782,10 @@ public:
     /// UNIT_COMBAT for every token of the unit (0x005132c0).
     void fireUnitCombat(uint64_t guid, const char* action, int32_t amount, int32_t school, uint32_t hitInfo);
     /// A spell missile has landed for a unit its cast missed (0x00702fc0,
-    /// 0x00700e20 -> 0x00513410): UNIT_COMBAT with the miss reason, when the
-    /// spell's log is not hidden and the client still knows the unit.
-    void fireSpellMissileMiss(uint32_t spellId, uint64_t unitGuid, uint32_t missReason);
+    /// 0x00700e20), when the client still knows the unit: its combat text
+    /// (0x0071f990) and UNIT_COMBAT with the miss reason (0x00513410) when the
+    /// spell's log is not hidden, and the combat log's line (0x00751b80).
+    void fireSpellMissileMiss(uint32_t spellId, uint64_t casterGuid, uint64_t unitGuid, uint32_t missReason);
     Unit* getUnitByGuid(uint64_t guid);
     uint64_t resolveOnlineItemGuid(uint32_t itemId) const;
     void rebuildOnlineInventory();

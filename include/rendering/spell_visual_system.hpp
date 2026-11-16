@@ -184,9 +184,12 @@ public:
 
     /// A missile has landed for a unit its cast missed (0x00702fc0 for the
     /// unit it reached, 0x00700e20 for each on a place missile's list, the
-    /// first of its copies only): the game raises UNIT_COMBAT for it then
-    /// (0x00513410), not at SMSG_SPELL_GO.
-    using MissileMissSink = std::function<void(uint32_t spellId, uint64_t unitGuid, uint32_t missReason)>;
+    /// first of its copies only): the game shows its combat text
+    /// (0x0071f990), raises UNIT_COMBAT (0x00513410) and writes its combat
+    /// log line (0x00751b80, from the missile's caster) then, not at
+    /// SMSG_SPELL_GO.
+    using MissileMissSink =
+        std::function<void(uint32_t spellId, uint64_t casterGuid, uint64_t unitGuid, uint32_t missReason)>;
     void setMissileMissSink(MissileMissSink sink) { missileMissSink_ = std::move(sink); }
     /// A spell with AttributesEx4 0x40000 (missile flag 0x200, 0x00732ff0):
     /// one missile to the first of `hops`, relaunched on each arrival from

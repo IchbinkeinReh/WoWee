@@ -7,8 +7,6 @@
 #include <ctime>
 #include <filesystem>
 
-#include <glm/glm.hpp>
-
 #include "addons/lua_api_helpers.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "core/app_clock.hpp"
@@ -18,7 +16,6 @@
 #include "game/game_handler.hpp"
 #include "game/interface_text.hpp"
 #include "game/spell_handler.hpp"
-#include "game/spell_missiles_in_flight.hpp"
 #include "game/world_packets.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_layout.hpp"
@@ -139,7 +136,6 @@ CombatLogFeed::CombatLogFeed(GameHandler& owner) : owner_(owner) {
 
 void CombatLogFeed::enterWorld() {
     log_.reset(clientNowMs(), static_cast<int64_t>(std::time(nullptr)));
-    pendingMisses_.clear();
     replayDelay_ = 0;
 }
 
@@ -1076,49 +1072,19 @@ void CombatLogFeed::castGo(const SpellGoData& go) {
     if (const auto first = em.getEntity(go.casterGuid);
         first && (first->isUnit() || first->getType() == ObjectType::GAMEOBJECT))
         src = go.casterGuid;
-    // At once for a spell with no missile; otherwise as each one lands
-    // (0x00700e20, 0x00702fc0).
-    const bool atOnce = rec && rec->speed == 0.0f && (rec->attrEx2 & 0x80u) == 0;
-    const auto from = em.getEntity(go.casterUnit);
+    // At once only for a spell with no Speed whose AttributesEx2 lacks 0x80
+    // (0x0080e1b0 -> 0x00751b80); any other's are written as its missile
+    // lands, for the unit it lands on (0x00702fc0, 0x00700e20 -> 0x00751b80,
+    // GameHandler::fireSpellMissileMiss), with no reflected result - and
+    // never where no missile flies.
+    if (!rec || rec->speed != 0.0f || (rec->attrEx2 & 0x80u) != 0) return;
     for (const SpellGoMissEntry& m : go.missTargets) {
-        std::vector<PendingMiss> misses = {{.landsAt = 0, .src = src, .dst = m.targetGuid, .spellId = go.spellId,
-                                            .missInfo = m.missType}};
-        // A reflected spell that missed its caster on the way back.
+        spellMissed(src, m.targetGuid, go.spellId, m.missType, false, false);
+        // A reflected spell that missed its caster on the way back: to the
+        // cast's unit (0x0080eb2a).
         if (m.missType == cl::miss::kReflect && m.reflectResult != 0)
-            misses.push_back({.landsAt = 0, .src = src, .dst = go.casterUnit, .spellId = go.spellId,
-                              .missInfo = m.reflectResult});
-        int64_t flight = 0;
-        if (!atOnce && rec && rec->speed > 0.0f && from) {
-            if (const auto to = em.getEntity(m.targetGuid)) {
-                const glm::vec3 a(from->getX(), from->getY(), from->getZ());
-                const glm::vec3 b(to->getX(), to->getY(), to->getZ());
-                flight = spell_missiles::flightMs(glm::length(b - a), rec->speed);
-            }
-        }
-        for (PendingMiss& p : misses) {
-            if (flight <= 0) {
-                spellMissed(p.src, p.dst, p.spellId, p.missInfo, false, false);
-            } else {
-                p.landsAt = clientNowMs() + flight;
-                pendingMisses_.push_back(p);
-            }
-        }
+            spellMissed(src, go.casterUnit, go.spellId, m.reflectResult, false, false);
     }
-}
-
-void CombatLogFeed::update() {
-    if (pendingMisses_.empty()) return;
-    const int64_t now = clientNowMs();
-    std::vector<PendingMiss> landed;
-    for (auto it = pendingMisses_.begin(); it != pendingMisses_.end();) {
-        if (now - it->landsAt >= 0) {
-            landed.push_back(*it);
-            it = pendingMisses_.erase(it);
-        } else {
-            ++it;
-        }
-    }
-    for (const PendingMiss& p : landed) spellMissed(p.src, p.dst, p.spellId, p.missInfo, false, false);
 }
 
 void CombatLogFeed::castFailed(uint32_t spellId, const std::string& text) {

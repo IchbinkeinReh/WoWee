@@ -355,7 +355,7 @@ std::string castFailureMessage(const GameHandler& owner, uint32_t spellId,
 
 } // namespace
 
-static CombatTextEntry::Type combatTextTypeFromSpellMissInfo(uint8_t missInfo) {
+CombatTextEntry::Type combatTextTypeFromSpellMissInfo(uint8_t missInfo) {
     switch (missInfo) {
         case SpellMissInfo::MISS:    return CombatTextEntry::MISS;
         case SpellMissInfo::DODGE:   return CombatTextEntry::DODGE;
@@ -657,7 +657,9 @@ std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data,
     // The miss run: no impact on any of them; each missed unit's UNIT_COMBAT
     // when its missile lands on it (0x00702fc0), or, for a missile to the
     // place carrying the list with its reasons, when that one lands
-    // (0x00700e20).
+    // (0x00700e20). That one still plays the point's impact where it lands
+    // (0x00700e20's loop over the points, which no miss reason skips), so a
+    // cast at a place with hits and misses plays it once for each missile.
     if (!data.missTargets.empty()) {
         switch (targetingFor(data.missTargets.size())) {
         case sm::Targeting::EachTarget:
@@ -673,7 +675,7 @@ std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data,
             if (!havePlace) break;
             std::vector<MissedUnit> misses;
             for (const auto& miss : data.missTargets) misses.push_back({miss.targetGuid, miss.missType});
-            svs->launchSpellMissile(visualId, speed, placeFrom, place, {}, trajectory, data.spellId,
+            svs->launchSpellMissile(visualId, speed, placeFrom, place, {place}, trajectory, data.spellId,
                                     data.casterUnit, data.castCount, std::move(misses));
             break;
         }
@@ -4733,56 +4735,60 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
     // Clear unit cast bar
     unitCastStates_.erase(data.casterUnit);
 
-    // Each target missed, on the target (0x00755850): its parry and block
-    // sounds (rendering/melee_sound.hpp). The caster is the cast's where
-    // that is a unit or game object, else its unit (0x0080e1b0).
-    if (!data.missTargets.empty() && owner_.spellMissCallbackRef()) {
-        uint64_t missCaster = data.casterUnit;
-        if (auto casterEntity = owner_.getEntityManager().getEntity(data.casterGuid);
-            casterEntity && (casterEntity->isUnit() || casterEntity->getType() == ObjectType::GAMEOBJECT)) {
-            missCaster = data.casterGuid;
-        }
-        for (const auto& m : data.missTargets)
-            owner_.spellMissCallbackRef()(missCaster, m.targetGuid, m.missType, data.spellId);
-    }
-
-    // UNIT_COMBAT for each target missed, and for the caster where a
-    // reflected spell came back with a result of its own (0x0080e1b0 ->
-    // 0x00513410). Here only for a spell with no Speed whose AttributesEx2
-    // lacks 0x80; any other's are raised where its missile lands, for the
-    // unit it lands on (0x00702fc0, 0x00700e20 - SpellVisualSystem's miss
-    // sink), with no reflected result for the caster. The reflected result
-    // goes to the cast's unit, the packet's second guid (0x0080eb84 pushes
-    // -0x38(%ebp), loaded from the packet's +0x10 at 0x0080e1d5), whatever
-    // it is.
+    // A spell with no Speed whose AttributesEx2 lacks 0x80 settles its misses
+    // here (0x0080e1b0's loop at 0x0080ea84); any other's settle where its
+    // missile lands (0x00702fc0, 0x00700e20 - SpellVisualSystem's miss sink,
+    // GameHandler::fireSpellMissileMiss) - their combat text, UNIT_COMBAT
+    // and log line - and never play the parry and block sounds, which only
+    // this loop plays.
     const float missSpeed = [&] {
         owner_.loadSpellNameCache();
         const auto it = owner_.spellNameCacheRef().find(data.spellId);
         return it != owner_.spellNameCacheRef().end() ? it->second.missileSpeed : 0.0f;
     }();
-    if (!data.missTargets.empty() && unit_combat::spellRaises(owner_.getSpellAttributes(data.spellId)) &&
-        unit_combat::missesRaisedAtCast(missSpeed, owner_.getSpellAttributesEx2(data.spellId))) {
-        const uint64_t reflectVictim = data.casterUnit;
-        for (const auto& m : data.missTargets) {
-            owner_.fireUnitCombat(m.targetGuid, unit_combat::missAction(m.missType), 0,
-                                  unit_combat::kPhysicalSchoolMask, 0);
-            if (m.missType == 11 && m.reflectResult != 0)
-                owner_.fireUnitCombat(reflectVictim, unit_combat::missAction(m.reflectResult), 0,
-                                      unit_combat::kPhysicalSchoolMask, 0);
+    const bool missesAtCast =
+        unit_combat::missesRaisedAtCast(missSpeed, owner_.getSpellAttributesEx2(data.spellId));
+    if (missesAtCast && !data.missTargets.empty()) {
+        // The misses' caster: the cast's first guid where that is a unit or
+        // a game object, else its unit (0x0080e9ba).
+        uint64_t missCaster = data.casterUnit;
+        if (auto casterEntity = owner_.getEntityManager().getEntity(data.casterGuid);
+            casterEntity && (casterEntity->isUnit() || casterEntity->getType() == ObjectType::GAMEOBJECT)) {
+            missCaster = data.casterGuid;
         }
-    }
-
-    // Miss combat text
-    if (!data.missTargets.empty()) {
+        const bool raises = unit_combat::spellRaises(owner_.getSpellAttributes(data.spellId));
         const uint64_t spellCasterGuid = data.casterUnit != 0 ? data.casterUnit : data.casterGuid;
         const bool playerIsCaster = (spellCasterGuid == owner_.getPlayerGuid());
-
+        const auto unitKnown = [&](uint64_t guid) {
+            if (guid == owner_.getPlayerGuid() && guid != 0) return true;
+            const auto e = owner_.getEntityManager().getEntity(guid);
+            return e && e->isUnit();
+        };
         for (const auto& m : data.missTargets) {
-            if (!playerIsCaster && m.targetGuid != owner_.getPlayerGuid()) {
-                continue;
+            // Its combat text (0x0071f990, on a unit the client knows) and
+            // UNIT_COMBAT (0x00513410), for a spell its log does not hide.
+            if (raises) {
+                if (unitKnown(m.targetGuid) && (playerIsCaster || m.targetGuid == owner_.getPlayerGuid()))
+                    owner_.addCombatText(combatTextTypeFromSpellMissInfo(m.missType), 0, data.spellId,
+                                         playerIsCaster, 0, spellCasterGuid, m.targetGuid);
+                owner_.fireUnitCombat(m.targetGuid, unit_combat::missAction(m.missType), 0,
+                                      unit_combat::kPhysicalSchoolMask, 0);
             }
-            CombatTextEntry::Type ct = combatTextTypeFromSpellMissInfo(m.missType);
-            owner_.addCombatText(ct, 0, data.spellId, playerIsCaster, 0, spellCasterGuid, m.targetGuid);
+            // A reflected spell that came back with a result of its own: the
+            // same for the cast's unit, the packet's second guid (0x0080eb84
+            // pushes -0x38(%ebp), loaded from the packet's +0x10 at
+            // 0x0080e1d5), whatever it is.
+            if (m.missType == 11 && m.reflectResult != 0 && raises) {
+                if (unitKnown(data.casterUnit) && (playerIsCaster || data.casterUnit == owner_.getPlayerGuid()))
+                    owner_.addCombatText(combatTextTypeFromSpellMissInfo(m.reflectResult), 0, data.spellId,
+                                         playerIsCaster, 0, spellCasterGuid, data.casterUnit);
+                owner_.fireUnitCombat(data.casterUnit, unit_combat::missAction(m.reflectResult), 0,
+                                      unit_combat::kPhysicalSchoolMask, 0);
+            }
+            // On a target the client knows, its parry and block sounds
+            // (0x00755850; rendering/melee_sound.hpp).
+            if (owner_.spellMissCallbackRef() && unitKnown(m.targetGuid))
+                owner_.spellMissCallbackRef()(missCaster, m.targetGuid, m.missType, data.spellId);
         }
     }
 

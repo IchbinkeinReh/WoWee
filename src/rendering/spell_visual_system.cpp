@@ -1432,11 +1432,12 @@ void SpellVisualSystem::updateMissiles(float deltaTime) {
                 if (!it->hasStop && it->hopIndex < it->hops.size()) {
                     const BounceHop& hop = it->hops[it->hopIndex];
                     if (!hop.hit && hop.guid != 0 && hop.missReason != 0)
-                        missileMissSink_(it->spellId, hop.guid, hop.missReason);
+                        missileMissSink_(it->spellId, it->casterGuid, hop.guid, hop.missReason);
                 }
             } else if (!(it->missesAtUnit && it->hasStop)) {
                 for (const MissedUnit& miss : it->misses)
-                    if (miss.guid != 0 && miss.reason != 0) missileMissSink_(it->spellId, miss.guid, miss.reason);
+                    if (miss.guid != 0 && miss.reason != 0)
+                        missileMissSink_(it->spellId, it->casterGuid, miss.guid, miss.reason);
             }
         }
         // 0x00702a60: a bouncing missile (flag 0x200) that has not been

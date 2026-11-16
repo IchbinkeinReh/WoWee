@@ -664,8 +664,6 @@ size_t GameHandler::expireQuestWatches() {
 
 void GameHandler::updateTimers(float deltaTime) {
     if (spellHandler_) spellHandler_->updateTimers(deltaTime);
-    // Misses whose missile has landed (0x00700e20).
-    if (combatLogFeed_) combatLogFeed_->update();
 
     // Periodically clear stale pending item queries so they can be retried.
     // Without this, a lost/malformed response leaves the entry stuck forever.
