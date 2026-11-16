@@ -186,30 +186,30 @@ struct UnitKind {
     const glm::vec2 c(s.centre);
     const float ex = p.end.x - c.x;
     const float ey = p.end.y - c.y;
-    float near;
+    float closest;
     if (p.speed <= maxSpeed) {
-        near = -1.0f;
+        closest = -1.0f;
     } else {
         const float off = std::abs(p.side.x * ex + p.side.y * ey);
         const float along =
             ((p.side.y * off + c.y) - p.start.y) * p.dir.y + p.dir.x * ((p.side.x * off + c.x) - p.start.x);
         if (along >= 0.0001f) {
             if (p.length <= along) {
-                near = -1.0f;
+                closest = -1.0f;
             } else {
                 const float reach = (along / p.length) * p.time * maxSpeed + r;
-                near = (reach * reach - off * off) / along;
+                closest = (reach * reach - off * off) / along;
             }
         } else {
             const float sx = p.start.x - c.x;
             const float sy = p.start.y - c.y;
-            near = (r * r - (sy * sy + sx * sx)) * 10000.0f;
+            closest = (r * r - (sy * sy + sx * sx)) * 10000.0f;
         }
     }
     const float reach = p.time * maxSpeed + r;
     const float last = (reach * reach - (ey * ey + ex * ex)) / p.length;
-    if (last > 0.0f && near < last) return last;
-    if (near > 0.0f) return near;
+    if (last > 0.0f && closest < last) return last;
+    if (closest > 0.0f) return closest;
     return -1.0f;
 }
 
