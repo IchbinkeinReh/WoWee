@@ -320,7 +320,6 @@ ACCOUNTED = {
     "ChatBubbleManager::render":                  "no FrameXML bubbles; engine-drawn in 3.3.5",
     "CombatUI::renderCooldownTracker":            "no counterpart",
     "CombatUI::renderThreatWindow":               "no counterpart; FrameXML's threat is on the unit frame",
-    "DialogManager::renderDuelCountdown":         "no counterpart; FrameXML has the request popup only",
     "GameScreen::renderEntityList":               "debug window",
     "GameScreen::renderNameplates":               "no FrameXML nameplates in 3.3.5",
     "GameScreen::renderPlayerInfo":               "debug window",

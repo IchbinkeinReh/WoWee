@@ -762,6 +762,10 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
             uint32_t ms = packet.readUInt32();
             duelCountdownMs_ = (ms > 0 && ms <= 30000) ? ms : 3000;
             duelCountdownStartedAt_ = std::chrono::steady_clock::now();
+            // 0x005cfa50: the whole seconds, said at once and then once a
+            // second (0x005cf870, the "ProcessCountdown" timer).
+            duelCountdownSecondsLeft_ = static_cast<int32_t>(ms / 1000);
+            sayDuelCountdown();
         }
     };
     table[Opcode::SMSG_PARTYKILLLOG] = [this](network::Packet& packet) {
@@ -2342,6 +2346,8 @@ void SocialHandler::handleDuelComplete(network::Packet& packet) {
     uint8_t started = packet.readUInt8();
     pendingDuelRequest_ = false;
     duelCountdownMs_ = 0;
+    // The countdown's timer is cancelled with the duel (0x005cfa90).
+    duelCountdownNextAt_.reset();
     duelOpponentGuid_ = 0;
     // ERR_DUEL_CANCELLED for a duel that never began, in yellow on screen as
     // the table routes it (0x005cfa90). This was an English chat line.
@@ -6442,6 +6448,23 @@ void SocialHandler::handlePvpLogData(network::Packet& packet) {
                            });
     }
     if (bgScorePending_ == 0) announce();
+}
+
+// 0x005cf870: DUEL_COUNTDOWN with the seconds left as a system line, then one
+// second fewer, and again in a second until none are left. (The client's own
+// counter goes on below zero for a countdown under a second; this stops.)
+void SocialHandler::sayDuelCountdown() {
+    owner_.addSystemChatMessage(interfaceFormat("DUEL_COUNTDOWN", "Duel starting: %d",
+                                                {std::to_string(duelCountdownSecondsLeft_)}));
+    --duelCountdownSecondsLeft_;
+    if (duelCountdownSecondsLeft_ > 0)
+        duelCountdownNextAt_ = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    else
+        duelCountdownNextAt_.reset();
+}
+
+void SocialHandler::updateDuelCountdown() {
+    if (duelCountdownNextAt_ && std::chrono::steady_clock::now() >= *duelCountdownNextAt_) sayDuelCountdown();
 }
 
 void SocialHandler::updateReadyCheckTimer() {

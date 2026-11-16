@@ -547,6 +547,8 @@ public:
     void updateLogoutCountdown(float deltaTime);
     /// 0x00573390: the ready check's timer, for the one who started it.
     void updateReadyCheckTimer();
+    /// The duel countdown's next line, once its second is up.
+    void updateDuelCountdown();
     void resetTransferState();
     GroupListData& mutablePartyData() { return partyData; }
     /// The player's own group as it stands outside a battleground - the "real"
@@ -974,6 +976,11 @@ private:
     std::string duelChallengerName_;
     uint32_t duelCountdownMs_   = 0;
     std::chrono::steady_clock::time_point duelCountdownStartedAt_{};
+    /// The DUEL_COUNTDOWN lines still to say (0x00c22b68) and when the next
+    /// is due (the 0x00c22b6c timer).
+    int32_t duelCountdownSecondsLeft_ = 0;
+    std::optional<std::chrono::steady_clock::time_point> duelCountdownNextAt_;
+    void sayDuelCountdown();
 
     // Guild
     std::string guildName_;
