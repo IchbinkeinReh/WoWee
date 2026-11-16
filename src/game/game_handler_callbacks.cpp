@@ -8,6 +8,7 @@
 #include "game/vehicle_mover.hpp"
 #include "game/unit_name_rules.hpp"
 #include "rendering/mount_transition.hpp"
+#include "rendering/animation_controller.hpp"
 #include "game/game_handler.hpp"
 #include "game/chat_profanity.hpp"
 #include "game/inventory_alerts.hpp"
@@ -1137,6 +1138,42 @@ bool GameHandler::onMoveSpline(uint64_t guid) {
 
 std::optional<uint32_t> GameHandler::moveSplineFlags(uint64_t guid) {
     return movementHandler_ ? movementHandler_->moveSplineFlags(guid) : std::nullopt;
+}
+
+namespace {
+// The client's millisecond clock as 0x0086ae20 reads it.
+uint32_t dialogClockMs() { return static_cast<uint32_t>(core::appTimeSeconds() * 1000.0); }
+}  // namespace
+
+void GameHandler::queueDialogEmotes(uint64_t guid, const std::vector<DialogEmote>& pairs) {
+    if (guid == 0) return;
+    // Only one-shot rows (EmoteSpecProc 0) are queued; a row this client
+    // has no animation for is read as one it does not have.
+    dialogEmotes_[guid].start(pairs, dialogClockMs(), [](uint32_t emote) {
+        return rendering::AnimationController::getEmoteAnimByEmotesId(emote) != 0 &&
+               !rendering::AnimationController::isStateEmoteById(emote);
+    });
+    if (!dialogEmotes_[guid].active()) dialogEmotes_.erase(guid);
+}
+
+void GameHandler::updateDialogEmotes() {
+    if (dialogEmotes_.empty()) return;
+    const uint32_t now = dialogClockMs();
+    for (auto it = dialogEmotes_.begin(); it != dialogEmotes_.end();) {
+        const uint64_t guid = it->first;
+        // Its AnimID played as any animation asked of the unit (0x007385c0),
+        // the next one waiting out this one's length (0x0082ced0) and half
+        // a second.
+        const auto played = it->second.take(now, [&](uint32_t emote) -> uint32_t {
+            const uint32_t anim = rendering::AnimationController::getEmoteAnimByEmotesId(emote);
+            return unitAnimationLengthResolver_ ? unitAnimationLengthResolver_(guid, anim) : 0u;
+        });
+        if (played && emoteAnimCallback_ && getEntityManager().getEntity(guid)) {
+            emoteAnimCallback_(guid, rendering::AnimationController::getEmoteAnimByEmotesId(*played), false);
+        }
+        if (!it->second.active()) it = dialogEmotes_.erase(it);
+        else ++it;
+    }
 }
 
 std::optional<uint32_t> GameHandler::keptMoveSplineFlags(uint64_t guid) const {

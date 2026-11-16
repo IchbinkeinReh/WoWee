@@ -44,6 +44,18 @@ void AnimationCallbackHandler::setupCallbacks() {
         if (instanceId == 0) instanceId = entitySpawner_.getPlayerInstanceId(guid);
         return instanceId;
     });
+    // An animation's length on a unit's model (0x0082ced0): its first
+    // variation's sequence, for the NPC dialog emotes' spacing.
+    gameHandler_.setUnitAnimationLengthResolver([this](uint64_t guid, uint32_t animId) -> uint32_t {
+        auto* cr = renderer_.getCharacterRenderer();
+        const uint32_t instanceId = gameHandler_.resolveUnitRenderInstance(guid);
+        std::vector<pipeline::M2Sequence> sequences;
+        if (!cr || instanceId == 0 || !cr->getAnimationSequences(instanceId, sequences)) return 0;
+        for (const auto& s : sequences) {
+            if (s.id == animId && s.variationIndex == 0) return s.duration;
+        }
+        return 0;
+    });
 
     // NPC/player death callback (online mode) - play death animation
     // What it says as it dies, before anything else - the same branch of
