@@ -359,8 +359,51 @@ public:
     void setSitDownCallback(SitDownCallback cb) { sitDownCallback_ = std::move(cb); }
 
     // Callback invoked when auto-follow is cancelled by user movement input.
-    using AutoFollowCancelCallback = std::function<void()>;
-    void setAutoFollowCancelCallback(AutoFollowCancelCallback cb) { autoFollowCancelCallback_ = std::move(cb); }
+
+    /// Click-to-move (0x007317a0, run for the player each frame by
+    /// 0x00734390): asked with the facing, the frame's time and whether the
+    /// mouse steers, it answers a facing to take and whether to start or stop
+    /// moving forward; not active once it is over. Its turns and steps go out
+    /// as the keys' do.
+    struct ClickToMoveSteer {
+        bool active = false;
+        std::optional<float> facingYawDeg;
+        std::optional<bool> forward;
+        /// 0x0071aee0: a mover going forward or back stops and lets its
+        /// autorun go (input control 0x1000).
+        bool stopForward = false;
+        /// Its Track read as Move (a follow with autoInteract off).
+        bool trackAsMove = false;
+        /// A swimmer's or flyer's pitch to take (0x0072ead0), radians up.
+        std::optional<float> pitchRad;
+        /// One that can fly takes to the air (0x006ef230(t, 1)).
+        bool takeOff = false;
+    };
+    /// The mover as the camera has it: its pitch, the liquid's surface over
+    /// its feet where it is in one, and the depth a swimmer floats at.
+    struct ClickToMoveMoverIn {
+        float pitchRad = 0.0f;
+        std::optional<float> liquidAbove;
+        float swimDepth = 0.0f;
+    };
+    using ClickToMoveSteerFn = std::function<ClickToMoveSteer(float facingYawDeg, float dt, bool mouseSteering,
+                                                              const ClickToMoveMoverIn& mover)>;
+    /// Click-to-move is steering the mover.
+    [[nodiscard]] bool isClickToMoveSteering() const { return clickToMoveActive_; }
+    /// A swimmer's pitch, radians up.
+    [[nodiscard]] float getSwimPitchRad() const { return glm::radians(swimPitchDeg_); }
+    void setClickToMoveSteer(ClickToMoveSteerFn fn) { clickToMoveSteer_ = std::move(fn); }
+    /// Told when a key starts a move of its own, which ends click-to-move
+    /// (0x0072e5d0 and the other starts -> 0x007272c0).
+    void setClickToMoveCancel(std::function<void()> fn) { clickToMoveCancel_ = std::move(fn); }
+    /// 0x0071aee0, as 0x007272c0 ends a click-to-move with its stop: what it
+    /// had going ends, and a mover going forward or back stops and lets its
+    /// autorun go (0x005f95f0) - whoever ended it.
+    void stopClickToMoveMover() {
+        clickToMoveActive_ = false;
+        clickToMoveForward_ = false;
+        if (wasMovingForward || wasMovingBackward) autoRunning = false;
+    }
 
     void setUseWoWSpeed(bool use) { useWoWSpeed = use; }
     void setRunSpeedOverride(float speed) { runSpeedOverride_ = speed; }
@@ -567,13 +610,6 @@ public:
     /// press is a press, where a key still held from before is not.
     void suppressHeldMovementFor(float seconds) { movementSuppressTimer_ = seconds; }
     void suspendGravityFor(float seconds) { gravitySuspendTimer_ = seconds; }
-
-    // Auto-follow: walk toward a target position each frame (WoW /follow).
-    // The caller updates *targetPos every frame with the followed entity's render position.
-    // Stops within FOLLOW_STOP_DIST; cancels on manual WASD input.
-    void setAutoFollow(const glm::vec3* targetPos) { autoFollowTarget_ = targetPos; }
-    void cancelAutoFollow() { autoFollowTarget_ = nullptr; }
-    [[nodiscard]] bool isAutoFollowing() const { return autoFollowTarget_ != nullptr; }
 
     // Trigger mount jump (applies vertical velocity for physics hop)
     void triggerMountJump();
@@ -825,7 +861,18 @@ private:
     /// The button whose release last let go of the camera was the left one.
     bool releasedByLeft_ = false;
     /// Start (or stop) the follow smoothing for the controls' state.
-    void startFollowSmoothing(camera_smooth::State state, bool pitchFree);
+    /// `trackOrFear`: click-to-move's Track or a spline's Fear among the
+    /// controls, which picks cameraSmoothTrackingStyle (0x00602760).
+    void startFollowSmoothing(camera_smooth::State state, bool pitchFree, bool trackOrFear = false);
+public:
+    /// cameraSmoothStyle and cameraSmoothTrackingStyle, as the CVars stand.
+    void setSmoothStyles(int smoothStyle, int trackingStyle) {
+        smoothStyle_ = smoothStyle;
+        smoothTrackingStyle_ = trackingStyle;
+    }
+private:
+    int smoothStyle_ = camera_smooth::kDefaultStyle;
+    int smoothTrackingStyle_ = camera_smooth::kDefaultStyle;
     /// The Fear state's ease, planned for a character carried by a server
     /// spline: afresh whenever the way it faces changes.
     void followServerSpline();
@@ -1184,10 +1231,13 @@ private:
     bool bindingSitStand_ = false;
     bool tildeWasDown = false;
 
-    // Auto-follow target position (WoW /follow). Non-null when following.
-    const glm::vec3* autoFollowTarget_ = nullptr;
-    static constexpr float FOLLOW_STOP_DIST = 3.0f;   // Stop within 3 units of target
-    static constexpr float FOLLOW_MAX_DIST  = 40.0f;  // Cancel if > 40 units away
+    // Click-to-move: the steer, its cancel, and what it has the mover doing.
+    ClickToMoveSteerFn clickToMoveSteer_;
+    std::function<void()> clickToMoveCancel_;
+    bool clickToMoveActive_ = false;
+    bool clickToMoveForward_ = false;
+    bool clickToMoveKeysHeld_ = false;
+    bool clickToMoveTrackAsMove_ = false;
 
     // Movement state tracking (for sending opcodes on state change)
     bool wasMovingForward = false;
@@ -1235,7 +1285,6 @@ private:
     MovementCallback movementCallback;
     StandUpCallback standUpCallback_;
     SitDownCallback sitDownCallback_;
-    AutoFollowCancelCallback autoFollowCancelCallback_;
 
     // Movement speeds
     bool useWoWSpeed = false;

@@ -16,6 +16,7 @@
 #include "game/cast_interrupt.hpp"
 #include "game/cast_failure_error.hpp"
 #include "game/spell_unit_target.hpp"
+#include "game/spell_book_records.hpp"
 #include "game/handler_types.hpp"
 #include "network/packet.hpp"
 #include <glm/glm.hpp>
@@ -238,6 +239,10 @@ public:
 
     // Known spells
     [[nodiscard]] const std::unordered_set<uint32_t>& getKnownSpells() const { return knownSpells_; }
+    /// The spells the book notes down as they are learned and forgotten
+    /// (0x00542030, 0x0053fad0, 0x0053ec40): the ranged attack (0x00be5d84),
+    /// the skinning spells (0x00be5d6c..0x00be5d7c).
+    [[nodiscard]] const spell_book::Records& spellBookRecords() const;
 
     // Cast state
     [[nodiscard]] bool isCasting() const { return casting_ || restorationActive_; }
@@ -372,6 +377,7 @@ public:
         knownSpells_.insert(spellId);
         noteLearnOrder(spellId);
         interruptMasksDirty_ = true;
+        noteBookLearned(spellId);
     }
     /// Where a known spell stands in the order it was learned - the order
     /// the client's spell list keeps (0x00542030 appends) - for a spell this
@@ -504,6 +510,10 @@ public:
     [[nodiscard]] std::optional<bool> reachAnswer(uint32_t spellId, uint64_t caster, uint64_t unit) const;
     /// 0x00801650 with no unit: the spell's reach from the caster.
     [[nodiscard]] std::optional<unit_target::Range> spellRange(uint32_t spellId, uint64_t caster) const;
+    /// 0x00802c30 -> 0x00801650 at a unit: the reach from the caster, the
+    /// friendly row where the caster may help the unit (0x007293d0), else by
+    /// the spell (0x007fe1b0). Zero both for a spell with no row or no caster.
+    [[nodiscard]] unit_target::Range spellReachAt(uint32_t spellId, uint64_t caster, uint64_t unit) const;
     /// The reach a spell's tooltip states (0x006238a0): none where
     /// Attributes 0x404 or AttributesEx3 0x40000000 keep it off; "melee"
     /// for a melee row (Flags 1) no Range modifier touches; else 0x007ff480
@@ -874,7 +884,15 @@ private:
     std::unordered_set<uint32_t> knownSpells_;
     std::unordered_map<uint32_t, uint64_t> learnOrder_;
     uint64_t nextLearnOrder_ = 0;
-    uint8_t castCount_ = 0;  ///< the count last sent (0x00805010)
+    /// 0x00542030 / 0x0053fad0: what the book notes down. Stale when a spell
+    /// was learned before Spell.dbc could be read; then worked out again
+    /// from the book in the order it was learned.
+    mutable spell_book::Records bookRecords_;
+    mutable bool bookRecordsStale_ = false;
+    void noteBookLearned(uint32_t spellId);
+    void noteBookRemoved(uint32_t spellId);
+    void clearBookRecords();
+    uint8_t castCount_ = 0;
     AttackStreak attackStreak_;  ///< 0x0080cce0's tutorial counter
     /// The cast count of the player's cast the server last started: the
     /// running cast a cancel ends (0x00806200).

@@ -1572,6 +1572,7 @@ bool SpellStartParser::parse(network::Packet& packet, SpellStartData& data) {
     SpellCastTargetsData targets;
     const bool targetsWhole = readSpellCastTargets(packet, targets);  // best effort: a short tail is kept
     data.targetGuid = targets.objectGuid;
+    data.targetFlags = targets.flags;
     // 0x800: the caster's power.
     if (targetsWhole && (data.castFlags & 0x800u) != 0 && packet.hasRemaining(4)) {
         data.hasPower = true;

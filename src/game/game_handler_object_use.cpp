@@ -360,17 +360,22 @@ bool GameHandler::gameObjectAllowsMounted(const GameObjectFacts& f) const {
     return gameObjectData(f, go_use::Field::Mounted) != 0;
 }
 
-bool GameHandler::gameObjectInReach(const GameObject& go, const GameObjectFacts& f) {
-    // 0x0070fa70: the handler's reach, or the opening spell's; a box round
-    // the object's model widened by it, which the player has to stand in.
+float GameHandler::gameObjectUseReach(const GameObjectFacts& f) {
+    // 0x0070fa70: the handler's reach, or the opening spell's.
     float reach = go_use::handlerFor(f.type).reach;
     if (const auto o = gameObjectOpening(f); !o.locked && o.spell != 0) {
         if (spellHandler_) {
             if (const auto r = spellHandler_->spellRange(o.spell, getPlayerGuid())) reach = r->max;
         }
-    } else if (f.state == 2) {
-        return false;
     }
+    return reach;
+}
+
+bool GameHandler::gameObjectInReach(const GameObject& go, const GameObjectFacts& f) {
+    // 0x0070fa70: the handler's reach, or the opening spell's; a box round
+    // the object's model widened by it, which the player has to stand in.
+    const float reach = gameObjectUseReach(f);
+    if (const auto o = gameObjectOpening(f); (o.locked || o.spell == 0) && f.state == 2) return false;
     // The player where it moves now (the mover's own position).
     const glm::vec3 offset = core::coords::canonicalToServer(
         glm::vec3(movementInfo.x - go.getX(), movementInfo.y - go.getY(), movementInfo.z - go.getZ()));

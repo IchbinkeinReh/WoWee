@@ -3703,6 +3703,57 @@ std::vector<rendering::SpellVisualSystem::CollisionUnit> missileCollisionUnits(
 }
 }  // namespace
 
+void Application::connectClickToMoveHooks() {
+    auto* cc = renderer ? renderer->getCameraController() : nullptr;
+    if (cc) {
+        // Click-to-move, steered by the game's state and moved by the camera
+        // with the keys' own packets (0x007317a0).
+        cc->setClickToMoveSteer([this](float facingYawDeg, float dt, bool mouseSteering,
+                                       const rendering::CameraController::ClickToMoveMoverIn& mover) {
+            rendering::CameraController::ClickToMoveSteer out;
+            if (!gameHandler) return out;
+            game::GameHandler::ClickToMoveMoverIn in;
+            in.pitchRad = mover.pitchRad;
+            in.liquidAbove = mover.liquidAbove;
+            in.swimDepth = mover.swimDepth;
+            const auto st = gameHandler->stepClickToMove(facingYawDeg, dt, mouseSteering, in);
+            out.active = st.active;
+            out.facingYawDeg = st.facingYawDeg;
+            out.forward = st.forward;
+            out.stopForward = st.stopForward;
+            out.trackAsMove = st.trackAsMove;
+            out.pitchRad = st.pitchRad;
+            out.takeOff = st.takeOff;
+            return out;
+        });
+        cc->setClickToMoveCancel([this]() {
+            if (gameHandler) gameHandler->stopClickToMove();
+        });
+        // 0x007272c0(.., 1) -> 0x0071aee0, whoever ends it.
+        if (gameHandler) {
+            gameHandler->setClickToMoveStopMover([this]() {
+                if (renderer && renderer->getCameraController()) renderer->getCameraController()->stopClickToMoveMover();
+            });
+        }
+    }
+    if (gameHandler) {
+        // The surface at a place, for an enemy's place walked to (0x0072ee20
+        // -> 0x00783a40): the facets of the ground, the buildings and the
+        // doodads (flags 0x100111) a box of no size at the place reaches -
+        // those not wholly beyond one side of it - and the first one's plane
+        // read at the place's x and y.
+        gameHandler->setGroundHeightQuery([this](const glm::vec3& canonical) -> std::optional<float> {
+            if (!renderer) return std::nullopt;
+            const glm::vec3 at = core::coords::canonicalToRender(canonical);
+            std::vector<rendering::collision::Facet> facets;
+            if (auto* terrain = renderer->getTerrainManager()) terrain->gatherCollisionFacets(at, at, facets);
+            if (auto* wmo = renderer->getWMORenderer()) wmo->gatherCollisionFacets(at, at, facets);
+            if (auto* m2 = renderer->getM2Renderer()) m2->gatherCollisionFacets(at, at, facets);
+            return rendering::collision::firstFacetHeight(facets, at.x, at.y);
+        });
+    }
+}
+
 void Application::connectWorldHooks() {
     // Wire up movement opcodes from camera controller
     if (renderer && renderer->getCameraController()) {
@@ -3780,13 +3831,9 @@ void Application::connectWorldHooks() {
         // owns the one callback slot for it. A second registration here
         // replaced or was replaced by that one depending on which was
         // built last, which is how the seated flag stopped arriving.
-        cc->setAutoFollowCancelCallback([this]() {
-            if (gameHandler) {
-                gameHandler->cancelFollow();
-            }
-        });
         cc->setUseWoWSpeed(true);
     }
+    connectClickToMoveHooks();
     if (gameHandler) {
         gameHandler->setFaceCameraProvider([this]() -> float {
             // Turn the character to the camera's look direction and report it in
@@ -4208,15 +4255,6 @@ void Application::connectWorldHooks() {
             auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
             if (svs) svs->playOwnSoundAt(soundId, renderer->getCharacterPosition());
         });
-        gameHandler->setAutoFollowCallback([this](const glm::vec3* renderPos) {
-            if (renderer && renderer->getCameraController()) {
-                if (renderPos) {
-                    renderer->getCameraController()->setAutoFollow(renderPos);
-                } else {
-                    renderer->getCameraController()->cancelAutoFollow();
-                }
-            }
-        });
         // Barber shop and other live appearance changes rebuild the model.
         gameHandler->setPlayerModelRebuildCallback([this]() {
             refreshPlayerCharacterModel();
@@ -4612,6 +4650,10 @@ void Application::applyServerMovementState(float deltaTime) {
         // last frame: take-off and landing are decided where the floor is.
         gameHandler->setFlightAirborne(renderer->getCameraController()->isFlightAirborne());
         renderer->getCameraController()->setHoverActive(gameHandler->isHovering());
+        // The follow smoothing's styles (0x00602760 reads both CVars).
+        renderer->getCameraController()->setSmoothStyles(
+            std::atoi(addons::storedCVarValue("cameraSmoothStyle", "4").c_str()),
+            std::atoi(addons::storedCVarValue("cameraSmoothTrackingStyle", "4").c_str()));
 
         // Sync camera forward pitch to movement packets during flight / swimming.
         // The server writes the pitch field when FLYING or SWIMMING flags are set;
@@ -4628,6 +4670,9 @@ void Application::applyServerMovementState(float deltaTime) {
             if (gameHandler->isMounted()) {
                 if (auto* ac = renderer->getAnimationController()) ac->setMountPitchRoll(pitchRad, 0.0f);
             }
+        } else if (gameHandler->isSwimming() && renderer->getCameraController()->isClickToMoveSteering()) {
+            // Click-to-move pitches a swimmer itself (0x0072f1f0).
+            gameHandler->setMovementPitch(renderer->getCameraController()->getSwimPitchRad());
         } else if (gameHandler->isSwimming()) {
             // A swimmer goes where the camera looks, so its pitch is the camera's.
             if (auto* cam = renderer->getCamera()) {

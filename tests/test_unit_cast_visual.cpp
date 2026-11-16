@@ -106,3 +106,17 @@ TEST_CASE("an auto-repeat visual animates once until auto-repeat stops", "[cast_
     r.forget(1);
     CHECK(r.state(1) == nullptr);
 }
+
+TEST_CASE("a cast ending says whether it was the one shown", "[cast_visual]") {
+    using namespace wowee::game::cast_visual;
+    Roster r;
+    Begin b;
+    b.castCount = 2;
+    b.spellId = 116;
+    b.castTimeMs = 2500;
+    b.casterIsActivePlayer = true;
+    r.started(1, b);
+    CHECK_FALSE(r.ended(1, 3, 116));
+    CHECK(r.ended(1, 2, 116));
+    CHECK_FALSE(r.ended(1, 2, 116));
+}

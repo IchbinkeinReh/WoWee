@@ -123,3 +123,19 @@ TEST_CASE("a box stands in for a doodad not yet loaded, facing out", "[collision
         for (const auto& v : f.v) CHECK(glm::dot(f.n, v) + f.d == Approx(0.0f).margin(1e-5f));
     }
 }
+
+TEST_CASE("A place is put on the first facet's plane", "[collision_facets]") {
+    std::vector<Facet> none;
+    CHECK_FALSE(firstFacetHeight(none, 0.0f, 0.0f).has_value());
+    // A slope rising one in two along x through z = 3 at the origin, then a
+    // flat floor at z = 10 that comes second and is not read.
+    const glm::vec3 n = glm::normalize(glm::vec3(-0.5f, 0.0f, 1.0f));
+    std::vector<Facet> f{makeFacet(n, {0.0f, 0.0f, 3.0f}, {1.0f, 0.0f, 3.5f}, {0.0f, 1.0f, 3.0f}),
+                         makeFacet({0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 10.0f}, {1.0f, 0.0f, 10.0f},
+                                   {0.0f, 1.0f, 10.0f})};
+    CHECK(*firstFacetHeight(f, 4.0f, 7.0f) == Approx(5.0f));
+    // An upright facet has no height to read.
+    std::vector<Facet> wall{makeFacet({1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f},
+                                      {0.0f, 0.0f, 1.0f})};
+    CHECK_FALSE(firstFacetHeight(wall, 0.0f, 0.0f).has_value());
+}

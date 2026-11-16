@@ -1608,6 +1608,13 @@ void MovementHandler::handleMoveSetCollisionHeight(network::Packet& packet) {
 
 void MovementHandler::moverEvent(Opcode op, uint32_t flagsBefore, bool launchedBefore) {
     if (owner_.moverEventCallbackRef()) owner_.moverEventCallbackRef()(op, flagsBefore, launchedBefore);
+    // 0x007413f0: the player's stop, a strafe's stop or a root (or unroot)
+    // acknowledged, with the player at rest (none of 0xc010ff), takes what a
+    // click-to-move left for its arrival (0x0071b1e0).
+    if ((op == Opcode::MSG_MOVE_STOP || op == Opcode::MSG_MOVE_STOP_STRAFE ||
+         op == Opcode::CMSG_FORCE_MOVE_ROOT_ACK || op == Opcode::CMSG_FORCE_MOVE_UNROOT_ACK) &&
+        (movementInfo.flags & 0xc010ffu) == 0)
+        owner_.clickToMoveMoverStopped();
 }
 
 void MovementHandler::handleMoveKnockBack(network::Packet& packet) {
@@ -2670,6 +2677,9 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
 
     glm::vec3 canonical = core::coords::serverToCanonical(glm::vec3(serverX, serverY, serverZ));
 
+    // Put somewhere else: a click-to-move is over (0x0072d1b0 -> 0x007272c0).
+    owner_.stopClickToMove();
+
     // A destination that is the map origin itself, which is a server-side
     // area-trigger misfire rather than anywhere anyone goes.
     //
@@ -2841,6 +2851,8 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
     float serverY = packet.readFloat();
     float serverZ = packet.readFloat();
     float orientation = packet.readFloat();
+    // Leaving the world ends a click-to-move (0x00528f00 -> 0x007272c0).
+    owner_.stopClickToMove();
     // A ride to another map is one the server said goes with the transport
     // (SMSG_TRANSFER_PENDING). Anything else - a GM teleport, a hearthstone,
     // a portal from a tram car - is a world position, and the player is
@@ -4607,128 +4619,22 @@ void MovementHandler::followGuid(uint64_t guid) {
             return;
         }
     }
-    // ...and the follow is started only within thirty yards: 0x00715c70's
-    // table gives the follow move (kind 3) 900, the square of the distance.
-    {
-        const float dx = target->getX() - owner_.movementInfoRef().x;
-        const float dy = target->getY() - owner_.movementInfoRef().y;
-        const float dz = target->getZ() - owner_.movementInfoRef().z;
-        constexpr float kFollowStartRangeSq = 900.0f;
-        if (dx * dx + dy * dy + dz * dz >= kFollowStartRangeSq) {
-            refuse("ERR_AUTOFOLLOW_TOO_FAR", "Target is too far away.");
-            return;
-        }
-    }
-
-    // Set follow target
-    owner_.followTargetGuidRef() = guid;
-
-    // Initialize render-space position from entity's canonical coords
-    owner_.followRenderPosRef() = core::coords::canonicalToRender(glm::vec3(target->getX(), target->getY(), target->getZ()));
-
-    // Tell camera controller to start auto-following
-    if (owner_.autoFollowCallbackRef()) {
-        owner_.autoFollowCallbackRef()(&owner_.followRenderPosRef());
-    }
-
-    // Get target name
-    std::string targetName = "Target";
-    if (target->getType() == ObjectType::PLAYER) {
-        auto player = std::static_pointer_cast<Player>(target);
-        if (!player->getName().empty()) {
-            targetName = player->getName();
-        }
-    } else if (target->getType() == ObjectType::UNIT) {
-        auto unit = std::static_pointer_cast<Unit>(target);
-        targetName = unit->getName();
-    }
-
-    // No chat line: AUTOFOLLOW_BEGIN below is what says so, through
-    // FrameXML's AutoFollowStatus and AUTOFOLLOWSTART. This printed "Now
-    // following X." in English as well.
-    LOG_INFO("Following target: ", targetName, " (GUID: 0x", std::hex, guid, std::dec, ")");
-    // The name goes with it: the status text is formatted from this argument,
-    // and without one it formats a nil.
-    owner_.fireAddonEvent("AUTOFOLLOW_BEGIN", {targetName});
+    // The follow is click-to-move's kind 3 (0x00727400): any other ends
+    // first, it is not started thirty yards or more away (0x00715c70, which
+    // says ERR_AUTOFOLLOW_TOO_FAR), and from then on 0x007317a0 steers it -
+    // stopping within three yards, setting off again past four and a half
+    // (scaled by the run or walk speed over 7), and giving up at thirty.
+    // No chat line: AUTOFOLLOW_BEGIN, fired by the start with the name
+    // followed, is what says so (FrameXML's AutoFollowStatus).
+    owner_.clickToMoveApproach(guid, click_to_move::Kind::Follow);
 }
 
 void MovementHandler::cancelFollow() {
-    if (owner_.followTargetGuidRef() == 0) {
-        return;
-    }
-    owner_.followTargetGuidRef() = 0;
-    if (followMoveMoving_) {
-        sendMovement(Opcode::MSG_MOVE_STOP);
-        followMoveMoving_ = false;
-    }
-    if (owner_.autoFollowCallbackRef()) {
-        owner_.autoFollowCallbackRef()(nullptr);
-    }
-    // No chat line: AUTOFOLLOW_END is what says so (AUTOFOLLOWSTOP). This
-    // printed "You stop following." in English as well.
-    owner_.fireAddonEvent("AUTOFOLLOW_END", {});
+    // A follow is click-to-move's kind 3: ended as 0x007272c0(0, 1) ends it,
+    // with AUTOFOLLOW_END - and no chat line, AUTOFOLLOW_END being what says
+    // so (AUTOFOLLOWSTOP).
+    owner_.stopClickToMoveFollow();
 }
-
-// Same straight-line step used by the headless client's single-shot
-// /movement/goto (updateMovementTask() in tools/headless_client/main.cpp),
-// but the target position is read fresh from the live entity every call
-// instead of a stored waypoint, and stops at kFollowStopDistance rather
-// than snapping onto the target.
-void MovementHandler::updateFollowMovement(float deltaTime) {
-    const uint64_t guid = owner_.followTargetGuidRef();
-    if (guid == 0) {
-        return;
-    }
-    if (owner_.getState() != WorldState::IN_WORLD) {
-        return;
-    }
-    if (isPlayerRooted() || !isServerMovementAllowed() || isOnTaxiFlight()) {
-        if (followMoveMoving_) {
-            sendMovement(Opcode::MSG_MOVE_STOP);
-            followMoveMoving_ = false;
-        }
-        return;
-    }
-
-    auto target = owner_.getEntityManager().getEntity(guid);
-    if (!target) {
-        // cancelFollow() (called from GameHandler::update()'s
-        // followRenderPos_ refresh) handles the disappeared-target case;
-        // just stay quiet here rather than duplicate that check.
-        return;
-    }
-
-    constexpr float kFollowStopDistance = 1.0f;
-    const float dx = target->getX() - movementInfo.x;
-    const float dy = target->getY() - movementInfo.y;
-    const float dz = target->getZ() - movementInfo.z;
-    const float horizontalDist = std::sqrt(dx * dx + dy * dy);
-    const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
-
-    if (distance <= kFollowStopDistance) {
-        if (followMoveMoving_) {
-            sendMovement(Opcode::MSG_MOVE_STOP);
-            followMoveMoving_ = false;
-        }
-        return;
-    }
-
-    if (horizontalDist > 0.001f) {
-        setOrientation(std::atan2(-dy, dx));
-        sendMovement(Opcode::MSG_MOVE_SET_FACING);
-    }
-    if (!followMoveMoving_) {
-        sendMovement(Opcode::MSG_MOVE_START_FORWARD);
-        followMoveMoving_ = true;
-    }
-
-    const float speed = std::max(0.1f, getServerRunSpeed());
-    const float step = std::min(distance - kFollowStopDistance, speed * std::max(0.0f, deltaTime));
-    const float t = distance > 0.001f ? (step / distance) : 0.0f;
-    setPosition(movementInfo.x + dx * t, movementInfo.y + dy * t, movementInfo.z + dz * t);
-    sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
-}
-
 
 // ============================================================
 // The active mover
@@ -5124,6 +5030,14 @@ void MovementHandler::requestMoverPitch(float pitch) {
     pitchingToTarget_ = true;
     pitchStopMs_ = movementClockMs() + way.durationMs;
     startMoverPitch(way.up);
+}
+
+void MovementHandler::setMoverPitchNow(float pitch) {
+    const vehicle::VehicleRecord* row = owner_.vehicleRowOf(activeMover());
+    if (row && (row->flags & vehicle::kVehicleFlagPitchLimits)) pitch = vehicle::clampAim(row, pitch);
+    pitchingToTarget_ = false;
+    movementInfo.pitch = pitch;
+    sendMovement(Opcode::MSG_MOVE_SET_PITCH);
 }
 
 void MovementHandler::setAimKey(bool up, bool held) {

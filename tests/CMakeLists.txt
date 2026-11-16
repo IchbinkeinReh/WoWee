@@ -1703,6 +1703,10 @@ wowee_add_test(test_shadow_sun
 wowee_add_test(test_sound_entry
     SOURCES test_sound_entry.cpp)
 
+# -- test_click_to_move: the reach per kind, the turn and the frame step of click-to-move.
+wowee_add_test(test_click_to_move
+    SOURCES test_click_to_move.cpp)
+
 # -- test_camera_smooth: the camera swinging back behind as the character moves.
 wowee_add_test(test_camera_smooth
     SOURCES test_camera_smooth.cpp)

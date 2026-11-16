@@ -28,6 +28,7 @@
 #include "game/update_field_table.hpp"
 #include "game/go_interaction_anim.hpp"
 #include "game/game_object_use.hpp"
+#include "game/click_to_move.hpp"
 #include "game/inventory.hpp"
 #include "game/spell_defines.hpp"
 #include "game/group_defines.hpp"
@@ -2303,8 +2304,6 @@ public:
     void setPlayerSoundCallback(PlayerSoundCallback cb) { playerSoundCallback_ = std::move(cb); }
 
     // Auto-follow callback: pass render-space position pointer to start, nullptr to cancel.
-    using AutoFollowCallback = std::function<void(const glm::vec3* renderPos)>;
-    void setAutoFollowCallback(AutoFollowCallback cb) { autoFollowCallback_ = std::move(cb); }
 
     // Unstuck callback (resets player Z to floor height)
     using UnstuckCallback = std::function<void()>;
@@ -3150,8 +3149,9 @@ public:
     // ---- Loot ----
     void lootTarget(uint64_t guid);
     /// A dead unit right-clicked (0x006dad90): nothing while moving, the
-    /// mount left first, else lootTarget.
-    void lootCorpse(uint64_t guid);
+    /// mount left first, else lootTarget. `clickToMove` (0x00721f50 asked by
+    /// the caller): out of reach, walked to first and looted on arrival.
+    void lootCorpse(uint64_t guid, bool clickToMove = false);
     void lootItem(uint8_t slotIndex, bool confirmed = false);
     void confirmPendingLoot();
     void confirmBindOnUse();
@@ -3241,7 +3241,8 @@ public:
     void deleteEquipmentSet(uint64_t setGuid);
 
     // NPC Gossip
-    void interactWithNpc(uint64_t guid);
+    /// 0x006ddbb0. `clickToMove`: out of reach, walked to first (kind 5).
+    void interactWithNpc(uint64_t guid, bool clickToMove = false);
     /// What 0x006ddbb0 does past the NPC hellos: a spell click
     /// (CMSG_SPELLCLICK) or a group member's vehicle entered
     /// (CMSG_PLAYER_VEHICLE_ENTER). False when it is neither.
@@ -3260,6 +3261,109 @@ public:
     /// progress step after sends one once that time has come.
     void loadingKeepAlive(bool starting);
     void interactWithGameObject(uint64_t guid);
+
+    // ---- Click-to-move (autoInteract) ----
+    /// The CVar autoInteract, default on only for koKR (0x0051d990).
+    bool autoInteractOn() const;
+    /// 0x00721f50: the player alive, the active mover, and autoInteract on.
+    bool clickToMoveAllowed() const;
+    /// 0x00721f90: a click-to-move under way for the player.
+    bool isClickToMoving() const;
+    /// 0x007272c0: given up or done; the mover stops moving forward. With
+    /// `stopMoving`, for a kind that goes anywhere (0x00adaab8), 0x0071aee0:
+    /// the mover's own moving stopped (MSG_MOVE_STOP) and its autorun let go
+    /// - whatever ended it: a key, a teleport, a facing set.
+    void stopClickToMove(bool faceSubject = false, bool stopMoving = true);
+    /// Who carries 0x0071aee0 out: the camera, which moves the mover.
+    using ClickToMoveStopMover = std::function<void()>;
+    void setClickToMoveStopMover(ClickToMoveStopMover hook) { ctmStopMover_ = std::move(hook); }
+    /// A follow (kind 3) under way ended as 0x007272c0 ends it.
+    void stopClickToMoveFollow();
+    /// 0x0072b4a0: toward a unit or corpse for kind 3 (/follow), 5, 6 or 9.
+    bool clickToMoveApproach(uint64_t guid, click_to_move::Kind kind,
+                             std::optional<float> spellRange = std::nullopt);
+    /// 0x0072b6d0: to a place on the ground (canonical).
+    void clickToMoveTo(const glm::vec3& canonicalAt);
+    /// 0x0072b660: turn to a facing (server yaw).
+    void clickToMoveFace(float facing);
+    /// 0x0072f040: turn toward a direction clicked into nothing, and go.
+    void clickToMoveFaceDirection(const glm::vec3& canonicalDir);
+    /// 0x0072ee20: into melee reach of a unit just attacked, or face it;
+    /// with autoRangedCombat and a ranged attack, into nine tenths of its
+    /// reach instead (kind 11).
+    void clickToMoveAttack(uint64_t guid);
+    /// 0x006d71e0: with autoRangedCombat on, the ranged attack the spell
+    /// book noted (0x00be5d84); else 0.
+    uint32_t autoRangedAttackSpell() const;
+    /// 0x0053bce0: the spell the book noted for what this corpse gives - a
+    /// player's or a corpse object's insignia (0x00be5d7c), a creature's
+    /// skin, herbs, ore or parts by its type flags (0x00715e50); 0 for none.
+    uint32_t skinSpellFor(uint64_t guid) const;
+    /// 0x00731260 for a dead unit right-clicked by the player as the mover:
+    /// looted where it may be (0x00717b60), else skinned where it is
+    /// skinnable (UNIT_FLAG 0x4000000) and the player's skill is enough -
+    /// a player's corpse only where the player may not help them - else
+    /// nothing. `clickToMove` is 0x00721f50.
+    void clickDeadUnit(uint64_t guid, bool clickToMove);
+    /// 0x006d6f40: the skinning spell cast at the corpse, or, out of its
+    /// reach with click-to-move, walked to first (kind 9); `setAutoLoot`
+    /// sets whether its loot is taken at once (0x00513700).
+    void skinCorpse(uint64_t guid, bool clickToMove, bool setAutoLoot);
+    /// 0x0072b730: to an object out of reach, `reach` being its use reach.
+    bool clickToMoveToObject(uint64_t guid, float reach);
+    /// What the camera is to do this frame (0x007317a0): a facing to take,
+    /// and to start or stop moving forward. Not active once over.
+    struct ClickToMoveSteer {
+        bool active = false;
+        std::optional<float> facingYawDeg;
+        std::optional<bool> forward;
+        /// 0x0071aee0 ran: a mover going forward or back is stopped, and its
+        /// autorun (input control 0x1000) is let go.
+        bool stopForward = false;
+        /// A follow with autoInteract off: the camera reads its Track as
+        /// Move (0x00602760, camera +0x9c bit 1 from 0x005fe6a0).
+        bool trackAsMove = false;
+        /// A swimmer's or flyer's pitch set (0x0072ead0), radians up.
+        std::optional<float> pitchRad;
+        /// One that can fly takes to the air (0x006ef230(t, 1)).
+        bool takeOff = false;
+    };
+    /// What the camera knows of the mover that the step needs.
+    struct ClickToMoveMoverIn {
+        float pitchRad = 0.0f;                 ///< its pitch now
+        std::optional<float> liquidAbove;      ///< a liquid's surface over its feet
+        float swimDepth = 0.0f;                ///< three quarters of its height
+    };
+    ClickToMoveSteer stepClickToMove(float facingYawDeg, float dtSeconds, bool mouseSteering,
+                                     const ClickToMoveMoverIn& mover);
+    /// 0x0071b1e0: the player stopped at rest; an arrival's action is taken.
+    void clickToMoveMoverStopped();
+    /// 0x00806700 for the active player's cast the server started: a spell
+    /// with Attributes 0x400000 (it tracks its target) turns the player to
+    /// the unit it is cast at, else the target, all through the cast (kind 0).
+    void clickToMoveCastStarted(uint32_t spellId, std::optional<uint32_t> targetFlags, uint64_t targetGuid);
+    /// A cast ending on its caster (0x007fecc0): castVisuals().ended, and
+    /// where that was the cast shown, 0x0072e430 - the caster not
+    /// channeling and the active mover, a kind 0 left turns to face its
+    /// unit once and stops (kind 2).
+    void castVisualEnded(uint64_t caster, uint8_t castCount, uint32_t spellId);
+    /// 0x0072bc70 and 0x0073a520 for the active player: channeling a spell
+    /// with AttributesEx 0x4000 (it tracks its target) at a unit turns the
+    /// player to that unit throughout (kind 1). Asked every frame.
+    void clickToMoveWatchChannel();
+    /// 0x007fa2e0 as the player's own cast is made (0x00805330): a spell with
+    /// Attributes 0x400000 at a unit faces it (0x0072b4a0 kind 0) - with
+    /// FacingCasterFlags 0x1 only when the unit is already before the player
+    /// (0x0071bce0).
+    void clickToMoveCastSent(uint32_t spellId, uint64_t targetGuid);
+    /// 0x007275c0: where the ring goes (canonical) and its radius.
+    std::optional<std::pair<glm::vec3, float>> clickToMoveMarker() const;
+    /// The world's surface at a place (canonical in, canonical height out):
+    /// what 0x0072ee20 asks of 0x00783a40 to put an enemy's place on the
+    /// ground - the plane of the first facet a box of no size there reaches.
+    /// None where there is nothing there.
+    using GroundHeightQuery = std::function<std::optional<float>(const glm::vec3& canonical)>;
+    void setGroundHeightQuery(GroundHeightQuery q) { groundHeightQuery_ = std::move(q); }
     uint64_t getHookedFishingBobberGuid() const { return hookedFishingBobberGuid_; }
     void selectGossipOption(uint32_t optionId, const std::string& code = "");
     void selectGossipQuest(uint32_t questId);
@@ -5517,8 +5621,6 @@ public:
     auto& dndStatusRef() { return dndStatus_; }
 
     // ── Movement & Transport ─────────────────────────────────────────
-    auto& followRenderPosRef() { return followRenderPos_; }
-    auto& followTargetGuidRef() { return followTargetGuid_; }
     auto& onTaxiFlightRef() { return onTaxiFlight_; }
     auto& taxiLandingCooldownRef() { return taxiLandingCooldown_; }
     auto& taxiMountActiveRef() { return taxiMountActive_; }
@@ -5771,7 +5873,6 @@ public:
     auto& combatLogEventCallbackRef() { return combatLogEventCallback_; }
     auto& appearanceChangedCallbackRef() { return appearanceChangedCallback_; }
     auto& playerModelRebuildCallbackRef() { return playerModelRebuildCallback_; }
-    auto& autoFollowCallbackRef() { return autoFollowCallback_; }
     auto& chatBubbleCallbackRef() { return chatBubbleCallback_; }
     auto& creatureDespawnCallbackRef() { return creatureDespawnCallback_; }
     auto& creatureMoveCallbackRef() { return creatureMoveCallback_; }
@@ -6035,6 +6136,9 @@ public:
         uint32_t spellFamilyFlags[3] = {0, 0, 0};
         // Spell.dbc Targets bitmask (SpellCastTargetFlags) - 0x10 = TARGET_FLAG_ITEM
         uint32_t targetFlags = 0;
+        /// FacingCasterFlags (Spell.dbc +0x4c): 0x1, the caster must face
+        /// the target.
+        uint32_t facingCasterFlags = 0;
         // Spell.dbc RangeIndex resolved against SpellRange.dbc. A max range of 0
         // means "Self Only" (shouts, self-buffs); negative means SpellRange.dbc
         // was unavailable, so callers should not infer anything from it.
@@ -6665,9 +6769,22 @@ private:
     bool cloakVisible_ = true;
     uint8_t standState_ = 0;  // 0=stand, 1=sit, ..., 7=dead, 8=kneel (server-confirmed)
 
+    // ---- Click-to-move (Unit_C statics 0x00ca11a8..0x00ca1270) ----
+    click_to_move::State ctm_;
+    click_to_move::Pending ctmPending_;
+    float ctmObjectReach_ = 0.0f;               // 0x00ca11e8
+    GroundHeightQuery groundHeightQuery_;
+    ClickToMoveStopMover ctmStopMover_;
+    std::optional<float> ctmPitchOnce_;         // 0x0072f040's pitch, for the next steer
+    uint32_t ctmChannelSpellSeen_ = 0;          // UNIT_CHANNEL_SPELL as last seen
+    uint64_t ctmChannelObjectSeen_ = 0;         // UNIT_FIELD_CHANNEL_OBJECT as last seen
+    std::optional<float> ctmFaceOnStop_;        // 0x00ca11d8 for 0x007272c0's turn
+    std::optional<glm::vec3> clickToMoveSubject(uint64_t guid) const;
+    bool playerAliveAsMover() const;
+    bool startClickToMove(click_to_move::Kind kind, uint64_t guid, const glm::vec3& canonicalAt, float facing,
+                          std::optional<float> spellRange = std::nullopt);
+
     // ---- Follow state ----
-    uint64_t followTargetGuid_ = 0;
-    glm::vec3 followRenderPos_{0.0f};  // Render-space position of followed entity (updated each frame)
 
     // ---- AFK/DND status ----
     bool afkStatus_ = false;
@@ -6776,7 +6893,6 @@ private:
     MoverStopCallback moverStopCallback_;
     CameraShakeCallback cameraShakeCallback_;
     PlayerSoundCallback playerSoundCallback_;
-    AutoFollowCallback autoFollowCallback_;
     UnstuckCallback unstuckCallback_;
     UnstuckCallback unstuckGyCallback_;
     UnstuckCallback unstuckHearthCallback_;
@@ -7065,6 +7181,8 @@ private:
     int32_t openLockEffectValue(uint32_t spellId, int k) const;
     bool gameObjectAllowsMounted(const GameObjectFacts& f) const;
     bool gameObjectInReach(const GameObject& go, const GameObjectFacts& f);
+    /// 0x0070fa70's reach: the handler's, or the opening spell's range.
+    float gameObjectUseReach(const GameObjectFacts& f);
     uint16_t gameObjectRefusal(const GameObject& go, const GameObjectFacts& f, std::string& arg);
     uint16_t gameObjectGenericRefusal(const GameObject& go, const GameObjectFacts& f, std::string& arg);
     float gameObjectScale(const GameObject& go) const;

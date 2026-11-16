@@ -2294,54 +2294,85 @@ void CameraController::update(float deltaTime) {
     // Tilde or NumLock toggles auto-run; any forward/backward key cancels it
     bool tildeDown = !uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_GRAVE) ||
                                            input.isKeyPressed(SDL_SCANCODE_NUMLOCKCLEAR));
-    if (tildeDown && !tildeWasDown) {
+    const bool autorunPressed = tildeDown && !tildeWasDown;
+    if (autorunPressed) {
         autoRunning = !autoRunning;
     }
     tildeWasDown = tildeDown;
-    // Helper: cancel auto-follow and notify game handler
-    auto doCancelAutoFollow = [&]() {
-        if (autoFollowTarget_) {
-            autoFollowTarget_ = nullptr;
-            if (autoFollowCancelCallback_) autoFollowCancelCallback_();
-        }
-    };
 
     if (keyW || keyS) {
         autoRunning = false;
-        doCancelAutoFollow();
     }
 
     bool mouseAutorun = !uiWantsKeyboard && !sitting && leftMouseDown && rightMouseDown;
     if (mouseAutorun) {
         autoRunning = false;
-        doCancelAutoFollow();
     }
 
-    // Auto-follow: face target and run toward them when within range
-    bool autoFollowMove = false;
-    if (autoFollowTarget_ && followTarget && !movementRooted_) {
-        glm::vec3 myPos = *followTarget;
-        glm::vec3 tgtPos = *autoFollowTarget_;
-        float dx = tgtPos.x - myPos.x;
-        float dy = tgtPos.y - myPos.y;
-        float distSq2D = dx * dx + dy * dy;
-
-        if (distSq2D > FOLLOW_MAX_DIST * FOLLOW_MAX_DIST) {
-            doCancelAutoFollow();
-        } else if (distSq2D > FOLLOW_STOP_DIST * FOLLOW_STOP_DIST) {
-            // Face target (render-space yaw: atan2(-dx, -dy) -> degrees)
-            float targetYawRad = std::atan2(-dx, -dy);
-            float targetYawDeg = targetYawRad * 180.0f / core::coords::PI;
-            facingYaw = targetYawDeg;
-            yaw = targetYawDeg;
-            autoFollowMove = true;
+    // Click-to-move. A key that starts a move of its own ends it first
+    // (0x0072e5d0 and the other starts call 0x007272c0 unless click-to-move
+    // is the one starting it, 0x00ca1200 & 1): a mover it had going is
+    // stopped (0x0071aee0, MSG_MOVE_STOP), then the key's start goes out.
+    // Otherwise it turns the mover (0x00731650 -> 0x00731600) and starts or
+    // stops it (0x0072ecf0, 0x0071aee0) as it steers.
+    {
+        const bool keysHeld = keyW || keyS || keyA || keyD || keyQ || keyE || mouseAutorun;
+        const bool keysStart = (keysHeld && !clickToMoveKeysHeld_) || nowJump || (autorunPressed && autoRunning);
+        clickToMoveKeysHeld_ = keysHeld;
+        if (keysStart && clickToMoveActive_) {
+            clickToMoveActive_ = false;
+            // The stop lets autorun go (stopClickToMoveMover); the autorun
+            // key that is the start sets it again after.
+            const bool autorunStart = autorunPressed && autoRunning;
+            const bool ctmForward = clickToMoveForward_;
+            if (clickToMoveCancel_) clickToMoveCancel_();
+            if (autorunStart) autoRunning = true;
+            if (ctmForward && wasMovingForward && movementCallback) {
+                movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_STOP));
+                wasMovingForward = false;
+            }
+            clickToMoveForward_ = false;
         }
-        // else: within stop distance, stay put
-
-        // Cancel on strafe/turn keys
-        if (keyA || keyD || keyQ || keyE) {
-            doCancelAutoFollow();
-            autoFollowMove = false;
+        if (clickToMoveSteer_ && thirdPerson && followTarget && !keysStart && !introActive) {
+            ClickToMoveMoverIn mover;
+            mover.pitchRad = glm::radians(swimming ? swimPitchDeg_ : isFlightAirborne() ? flightPitchDeg_ : 0.0f);
+            if (waterRenderer) {
+                if (const auto waterH = waterRenderer->getWaterHeightAt(followTarget->x, followTarget->y))
+                    mover.liquidAbove = *waterH - followTarget->z;
+            }
+            mover.swimDepth = swimFloatDepth();
+            const ClickToMoveSteer st = clickToMoveSteer_(facingYaw, deltaTime, rightMouseDown, mover);
+            // The pitch it set (0x0072ead0): where a swimmer or a flyer goes.
+            if (st.pitchRad) {
+                const float deg = glm::clamp(glm::degrees(*st.pitchRad), -90.0f, 90.0f);
+                if (swimming) swimPitchDeg_ = deg;
+                if (isFlightAirborne()) flightPitchDeg_ = deg;
+            }
+            // Taking to the air (0x006ef230), as the jump key does.
+            if (st.takeOff && flyingActive_ && !flightAirborne_) {
+                flightAirborne_ = true;
+                portFlyMs_ = 0;
+            }
+            if (st.facingYawDeg) {
+                float delta = std::fmod(*st.facingYawDeg - facingYaw, 360.0f);
+                if (delta > 180.0f) delta -= 360.0f;
+                if (delta < -180.0f) delta += 360.0f;
+                facingYaw += delta;
+                // The camera turns with the mover as it does for the turn
+                // keys, unless a mouse button holds it.
+                if (!leftMouseDown && !rightMouseDown) yaw += delta;
+                camera->setRotation(yaw, pitch);
+            }
+            if (st.forward) clickToMoveForward_ = *st.forward;
+            if (!st.active) clickToMoveForward_ = false;
+            clickToMoveTrackAsMove_ = st.trackAsMove;
+            // 0x0071aee0 -> 0x005f95f0: stopping a mover that goes forward
+            // or back lets its autorun go too.
+            if (st.stopForward && (wasMovingForward || wasMovingBackward)) {
+                autoRunning = false;
+                clickToMoveForward_ = false;
+            }
+            clickToMoveActive_ = st.active;
         }
     }
 
@@ -2350,12 +2381,10 @@ void CameraController::update(float deltaTime) {
     if (moverHeld_) autoRunning = false;
     // When the server has rooted the player, suppress all horizontal movement input.
     const bool movBlocked = movementRooted_ || moverHeld_;
-    // Auto-follow uses run speed (same as auto-run), not walk speed
-    if (autoFollowMove) autoRunning = true;
     // A mover stopped by a cast (0x0071ae10) stays stopped while its keys
     // are held as they were (0x005fae70), counted as it counts them.
-    const bool forwardKeys = keyW || mouseAutorun || autoRunning;
-    const int forwardCount = int(keyW) + int(mouseAutorun) + int(autoRunning);
+    const bool forwardKeys = keyW || mouseAutorun || autoRunning || clickToMoveForward_;
+    const int forwardCount = int(keyW) + int(mouseAutorun) + int(autoRunning) + int(clickToMoveForward_);
     forwardBackStopped_ =
         game::vehicle::forwardBackStopHolds(forwardBackStopped_, forwardCount, int(keyS), moverHeld_);
     bool nowForward = !movBlocked && !forwardBackStopped_ && forwardKeys;
@@ -2504,8 +2533,9 @@ void CameraController::update(float deltaTime) {
     // On a phone that is what the right mouse button is on a desktop: the
     // character turns to face where the player is looking, so that walking
     // forward goes where the screen points.
+    // Not a swimmer click-to-move steers: it turns the mover itself.
     bool cameraDrivesFacing = rightMouseDown || mouseAutorun || steering_ ||
-                              (swimming && hasMoveInput);
+                              (swimming && hasMoveInput && !clickToMoveActive_);
     // During taxi flights, orientation is controlled by the flight path, not player input
     if (cameraDrivesFacing && !externalFollow_) {
         facingYaw = yaw;
@@ -2514,16 +2544,23 @@ void CameraController::update(float deltaTime) {
     // 0x005fa170 / 0x005fa450): moving, strafing or turning swings the
     // camera back behind the character, standing still leaves it be.
     {
-        const bool move = nowForward || nowBackward || autoRunning || mouseAutorun;
+        // Click-to-move's own going is not the keys' Move: its controls
+        // (0x1e00000) make the Track state (0x00602dc0 sets +0x98 0x100).
+        // 0x00602760 reads Track as Move for a follow (kind 3) with
+        // autoInteract off.
+        const bool keyedForward = nowForward && (keyW || mouseAutorun || autoRunning);
+        const bool followMove = clickToMoveActive_ && clickToMoveTrackAsMove_;
+        const bool move = keyedForward || nowBackward || autoRunning || mouseAutorun || followMove;
         const bool strafe = nowStrafeLeft || nowStrafeRight;
         const bool turnKeys = nowTurnLeft || nowTurnRight;
+        const bool track = clickToMoveActive_ && !clickToMoveTrackAsMove_;
         const uint32_t controls = (move ? 1u : 0u) | (strafe ? 2u : 0u) | (turnKeys ? 4u : 0u) |
-                                  (leftMouseDown ? 8u : 0u) | (rightMouseDown ? 16u : 0u);
+                                  (leftMouseDown ? 8u : 0u) | (rightMouseDown ? 16u : 0u) | (track ? 32u : 0u);
         if (controls != followSmoothControls_) {
             followSmoothControls_ = controls;
             if (thirdPerson && !externalFollow_ && !yawFollowsVehicleCamera_)
-                startFollowSmoothing(camera_smooth::stateFor(move, strafe, turnKeys, rightMouseDown),
-                                     swimming || isFlightAirborne());
+                startFollowSmoothing(camera_smooth::stateFor(move, strafe, turnKeys, rightMouseDown, track),
+                                     swimming || isFlightAirborne(), track);
         }
         // Carried by a server spline, the Fear state (followServerSpline).
         // When the spline lets go, the controls' state is planned again
@@ -2534,8 +2571,8 @@ void CameraController::update(float deltaTime) {
         } else if (fearPlanned_) {
             fearPlanned_ = false;
             if (thirdPerson)
-                startFollowSmoothing(camera_smooth::stateFor(move, strafe, turnKeys, rightMouseDown),
-                                     swimming || isFlightAirborne());
+                startFollowSmoothing(camera_smooth::stateFor(move, strafe, turnKeys, rightMouseDown, track),
+                                     swimming || isFlightAirborne(), track);
         }
     }
     float moveYaw = cameraDrivesFacing ? yaw : facingYaw;
@@ -2629,7 +2666,9 @@ void CameraController::update(float deltaTime) {
         // on the interface wanting the mouse either: both flags are already
         // cleared at the press when it did.
         const bool mouseWalk = leftMouseDown && rightMouseDown;
-        if (anyMoveKey || mouseWalk) sitting = false;
+        // A click-to-move stands the player as it starts (0x00727400 ->
+        // 0x006dcb40(0)).
+        if (anyMoveKey || mouseWalk || clickToMoveActive_) sitting = false;
     }
 
     // Notify server when the player stands up via local input
@@ -3043,19 +3082,21 @@ void CameraController::followServerSpline() {
     fearFacing_ = facingYaw;
     fearPlanned_ = true;
     viewYaw_.startMs = viewYaw_.endMs;
-    startFollowSmoothing(camera_smooth::State::Fear, swimming || isFlightAirborne());
+    startFollowSmoothing(camera_smooth::State::Fear, swimming || isFlightAirborne(), true);
 }
 
-void CameraController::startFollowSmoothing(camera_smooth::State state, bool pitchFree) {
+void CameraController::startFollowSmoothing(camera_smooth::State state, bool pitchFree, bool trackOrFear) {
     // Not with the camera let go sticky, nor on a view saved away from its
     // default (0x005fff40): 0x00602760 then sets nothing going.
     if (stickyCamera_ || !viewAllowsFollowSmoothing_) return;
-    // Under cameraSmoothStyle's default, Smarter (camera_smooth.hpp). The
-    // eases are the view's own (+0x25c..+0x26c yaw, +0x22c..+0x23c pitch), as
-    // in the client, where a view blend and this share them.
+    // Under cameraSmoothStyle, or cameraSmoothTrackingStyle while
+    // click-to-move tracks or a spline carries (0x00602760). The eases are
+    // the view's own (+0x25c..+0x26c yaw, +0x22c..+0x23c pitch), as in the
+    // client, where a view blend and this share them.
     const float fromFacing = std::remainder(yaw - facingYaw, 360.0f);
+    const int style = camera_smooth::styleFor(trackOrFear, smoothStyle_, smoothTrackingStyle_);
     const camera_smooth::Plan plan =
-        camera_smooth::plan(state, fromFacing, -pitch, leftMouseDown || rightMouseDown, pitchFree);
+        camera_smooth::plan(state, fromFacing, -pitch, leftMouseDown || rightMouseDown, pitchFree, style);
     // A factor of 0 stops an ease where it is (0x005fef40, 0x005feee0).
     if (plan.stopYaw) viewYaw_.startMs = viewYaw_.endMs;
     if (plan.stopPitch) viewPitch_.startMs = viewPitch_.endMs;

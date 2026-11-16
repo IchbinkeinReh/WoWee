@@ -2755,9 +2755,14 @@ void SpellHandler::sendPlayerCast(uint32_t spellId, uint64_t target, uint64_t it
         : CastSpellPacket::build(spellId, target, nextCastCount());
     LOG_DEBUG("CMSG_CAST_SPELL: spellId=", spellId, " target=0x", std::hex, target, std::dec,
               " castCount=", static_cast<int>(castCount_), " packetSize=", packet.getSize());
+    // 0x0080ac90 -> 0x00805330: with no cast of the player's going (+0xa60)
+    // and the cast not aimed (+0x139), 0x007fa2e0 as the cast is made.
+    const bool castGoing = casting_;
     owner_.getSocket()->send(packet);
     LOG_INFO("Casting spell: ", spellId, " on 0x", std::hex, item != 0 ? item : target, std::dec);
     castSent(spellId, owner_.getPlayerGuid(), target);
+    if (!castGoing && how != TrajectoryCast::Built && item == 0 && target != 0)
+        owner_.clickToMoveCastSent(spellId, target);
 
     // The cast routine (0x0080ac90) ends a cast with UNIT_SPELLCAST_SENT (323),
     // and its shape is four strings: the literal "player", the spell's name, its
@@ -3142,6 +3147,17 @@ unit_target::Range SpellHandler::spellReach(uint32_t spellId, const Entity& cast
     return unit_target::unitRange(in, [&](float m) {
         return spell_mods::apply(m, spellModifiers(spellId, spell_mods::kOpRange));
     });
+}
+
+unit_target::Range SpellHandler::spellReachAt(uint32_t spellId, uint64_t casterGuid, uint64_t unitGuid) const {
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    const auto caster = owner_.getEntityManager().getEntity(casterGuid);
+    if (it == owner_.spellNameCacheRef().end() || !caster) return {};
+    const auto unit = unitGuid != 0 ? owner_.getEntityManager().getEntity(unitGuid) : nullptr;
+    const bool friendly = unit && unit->isUnit() ? owner_.unitMayAssist(casterGuid, unitGuid)
+                                                 : owner_.getSpellTargetKind(spellId) == 1;
+    return spellReach(spellId, *caster, unit.get(), friendly);
 }
 
 std::optional<unit_target::Range> SpellHandler::spellRange(uint32_t spellId, uint64_t casterGuid) const {
@@ -3937,7 +3953,7 @@ void SpellHandler::cancelCast() {
     }
     // 0x00806200 on the running cast: it ends (0x007fecc0).
     if (currentCastSpellId_ != 0)
-        owner_.castVisuals().ended(owner_.getPlayerGuid(), runningCastCount_, currentCastSpellId_);
+        owner_.castVisualEnded(owner_.getPlayerGuid(), runningCastCount_, currentCastSpellId_);
     const uint8_t cancelledCount = runningCastCount_;
     if (currentCastSpellId_ != 0) castEnded(owner_.getPlayerGuid(), runningCastCount_, currentCastSpellId_);
     if (currentCastSpellId_ != 0) dropHeldMissile(owner_.getPlayerGuid(), runningCastCount_);
@@ -3986,7 +4002,7 @@ void SpellHandler::cancelPendingCasts(uint32_t attributeMask) {
             auto packet = CancelCastPacket::build(swing.spellId, swing.castCount, !isPreWotlk());
             owner_.getSocket()->send(packet);
         }
-        owner_.castVisuals().ended(owner_.getPlayerGuid(), swing.castCount, swing.spellId);
+        owner_.castVisualEnded(owner_.getPlayerGuid(), swing.castCount, swing.spellId);
     }
     // The running cast, which has a cast time; a channel is not in the list.
     if (casting_ && !castIsChannel_ && !restorationActive_ && currentCastSpellId_ != 0 &&
@@ -4640,6 +4656,10 @@ void SpellHandler::handleInitialSpells(network::Packet& packet) {
     learnOrder_.clear();
     nextLearnOrder_ = 0;
     for (const uint32_t id : data.spellIds) noteLearnOrder(id);
+    // The book emptied (0x0053ec40) and each spell learned in the list's
+    // order (0x00542030).
+    clearBookRecords();
+    for (const uint32_t id : data.spellIds) noteBookLearned(id);
 
     LOG_DEBUG("Initial spells include: 527=", knownSpells_.count(527u),
               " 988=", knownSpells_.count(988u), " 1180=", knownSpells_.count(1180u));
@@ -4718,7 +4738,7 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     // (0x007fecc0); auto-repeating, its auto-repeat bit goes for any result
     // but 0x1b (0x00807560, only while 0x00d397d0 - the player's
     // auto-repeat target - is set).
-    owner_.castVisuals().ended(owner_.getPlayerGuid(), data.castCount, data.spellId);
+    owner_.castVisualEnded(owner_.getPlayerGuid(), data.castCount, data.spellId);
     forgetPendingSwing(data.spellId);
     castEnded(owner_.getPlayerGuid(), data.castCount, data.spellId);
     dropHeldMissile(owner_.getPlayerGuid(), data.castCount);
@@ -4928,6 +4948,9 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
         lock.schoolImmunity = data.schoolImmunity;
         lock.mechanicImmunity = data.mechanicImmunity;
     }
+    // 0x00806700: the active player's cast turns it to its unit (kind 0).
+    if (data.casterUnit == owner_.getPlayerGuid())
+        owner_.clickToMoveCastStarted(data.spellId, data.targetFlags, data.targetGuid);
 
     // Track cast bar for any non-player caster
     if (data.casterUnit != owner_.getPlayerGuid() && data.castTime > 0 && !rangedWeaponAttack) {
@@ -5038,7 +5061,7 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
     if ((data.castFlags & 0x1u) == 0) failureHold_.forget();
     // 0x0080e1b0 -> 0x007fecc0 for a cast not pending: the caster's shown
     // cast ends where it is this one.
-    if ((data.castFlags & 0x1u) == 0) owner_.castVisuals().ended(data.casterUnit, data.castCount, data.spellId);
+    if ((data.castFlags & 0x1u) == 0) owner_.castVisualEnded(data.casterUnit, data.castCount, data.spellId);
     if (data.casterUnit == owner_.getPlayerGuid() && (data.castFlags & 0x1u) == 0) forgetPendingSwing(data.spellId);
     // 0x0080e1b0 -> 0x008054f0 at its close, for the player's pending cast
     // (not a pending go): its modalNextSpell follows.
@@ -5935,6 +5958,7 @@ void SpellHandler::handleLearnedSpell(network::Packet& packet) {
     knownSpells_.insert(spellId);
     markInterruptMasksDirty();
     noteLearnOrder(spellId);
+    noteBookLearned(spellId);  // 0x00542030
     LOG_INFO("Learned spell: ", spellId, alreadyKnown ? " (already known)" : "");
     if (isPreWotlk()) {
         loadTalentDbc();
@@ -6056,6 +6080,7 @@ void SpellHandler::handleRemovedSpell(network::Packet& packet) {
     uint32_t spellId = classicSpellId ? packet.readUInt16() : packet.readUInt32();
     knownSpells_.erase(spellId);
     markInterruptMasksDirty();
+    noteBookRemoved(spellId);  // 0x0053fad0
     syncPreWotlkTalentsFromKnownSpells();
     LOG_INFO("Removed spell: ", spellId);
     // Braced. The two lines below were indented as though they sat inside the
@@ -6123,6 +6148,10 @@ void SpellHandler::handleSupercededSpell(network::Packet& packet) {
     uint32_t newSpellId = classicSpellId ? packet.readUInt16() : packet.readUInt32();
 
     knownSpells_.erase(oldSpellId);
+    // 0x006e7e00: the old rank forgotten (0x0053fad0), the new one learned
+    // (0x00542030).
+    noteBookRemoved(oldSpellId);
+    noteBookLearned(newSpellId);
     // The new rank takes the old one's place in the list.
     if (const auto old = learnOrder_.find(oldSpellId); old != learnOrder_.end()) {
         learnOrder_[newSpellId] = old->second;
@@ -6172,6 +6201,7 @@ void SpellHandler::handleUnlearnSpells(network::Packet& packet) {
         uint32_t spellId = packet.readUInt32();
         knownSpells_.erase(spellId);
         markInterruptMasksDirty();
+        noteBookRemoved(spellId);  // 0x0053fad0
         LOG_INFO("  Unlearned spell: ", spellId);
         for (auto& slot : owner_.actionBarRef()) {
             if (slot.type == ActionBarSlot::SPELL && slot.id == spellId) {
@@ -6700,6 +6730,7 @@ void SpellHandler::resetAllState() {
     markInterruptMasksDirty();
     learnOrder_.clear();
     nextLearnOrder_ = 0;
+    clearBookRecords();
     playerHistory_.clear();  // 0x00802a50
     petHistory_.clear();
     playerAuras_.clear();
@@ -6892,6 +6923,62 @@ uint32_t SpellHandler::difficultySpell(uint32_t spellId) const {
     if (pick == 0 && difficulty == 3) pick = v[1];
     if (pick == 0) pick = v[0];
     return pick != 0 ? pick : spellId;
+}
+
+namespace {
+template <class Entry>
+spell_book::Row bookRow(const Entry& e) {
+    spell_book::Row row;
+    row.attrEx4 = e.attrEx4;
+    row.effect0 = e.effectIds[0];
+    row.misc0 = static_cast<int32_t>(e.effectMiscValues[0]);
+    return row;
+}
+}  // namespace
+
+void SpellHandler::noteBookLearned(uint32_t spellId) {
+    // 0x00542030: the spell's row (0x004cfd20); none, nothing noted.
+    loadSpellNameCache();
+    const auto& cache = owner_.spellNameCacheRef();
+    if (cache.empty()) {
+        bookRecordsStale_ = true;
+        return;
+    }
+    const auto it = cache.find(spellId);
+    if (it == cache.end()) return;
+    bookRecords_.learned(spellId, bookRow(it->second));
+}
+
+void SpellHandler::noteBookRemoved(uint32_t spellId) {
+    // 0x0053fad0.
+    bookRecords_.removed(spellId);
+}
+
+void SpellHandler::clearBookRecords() {
+    // 0x0053ec40.
+    bookRecords_.clear();
+    bookRecordsStale_ = false;
+}
+
+const spell_book::Records& SpellHandler::spellBookRecords() const {
+    // Spells learned before Spell.dbc could be read: the book again, in the
+    // order it was learned, once it can.
+    if (bookRecordsStale_) {
+        loadSpellNameCache();
+        const auto& cache = owner_.spellNameCacheRef();
+        if (!cache.empty()) {
+            std::vector<uint32_t> book(knownSpells_.begin(), knownSpells_.end());
+            std::sort(book.begin(), book.end(),
+                      [this](uint32_t a, uint32_t b) { return learnOrder(a) < learnOrder(b); });
+            bookRecords_.clear();
+            for (const uint32_t id : book) {
+                const auto it = cache.find(id);
+                if (it != cache.end()) bookRecords_.learned(id, bookRow(it->second));
+            }
+            bookRecordsStale_ = false;
+        }
+    }
+    return bookRecords_;
 }
 
 void SpellHandler::loadSpellNameCache() const {
@@ -7136,6 +7223,7 @@ void SpellHandler::loadSpellNameCache() const {
     // Only the WotLK layout names Speed: it is what gates spell missiles.
     const uint32_t speedField = spellL ? spellL->tryField("Speed") : 0xFFFFFFFF;
     const uint32_t spellMissileField = spellL ? spellL->tryField("SpellMissileID") : 0xFFFFFFFF;
+    const uint32_t facingCasterField = spellL ? spellL->tryField("FacingCasterFlags") : 0xFFFFFFFF;
     const uint32_t powerDisplayField = spellL ? spellL->tryField("PowerDisplayId") : 0xFFFFFFFF;
     const uint32_t multipleValueField = columnOr("EffectMultipleValue0", amplitude0Field, 3);
     const uint32_t chainTargetField = columnOr("EffectChainTarget0", amplitude0Field, 6);
@@ -7294,6 +7382,8 @@ void SpellHandler::loadSpellNameCache() const {
                 entry.missileSpeed = dbc->getFloat(i, speedField);
             if (spellMissileField != 0xFFFFFFFF && spellMissileField < fieldCount)
                 entry.spellMissileId = dbc->getUInt32(i, spellMissileField);
+            if (facingCasterField != 0xFFFFFFFF && facingCasterField < fieldCount)
+                entry.facingCasterFlags = dbc->getUInt32(i, facingCasterField);
             if (powerDisplayField != 0xFFFFFFFF && powerDisplayField < fieldCount)
                 entry.powerDisplayId = dbc->getUInt32(i, powerDisplayField);
             if (recoveryField != 0xFFFFFFFF && recoveryField < fieldCount)
@@ -8342,7 +8432,7 @@ void SpellHandler::handleSpellFailedOther(network::Packet& packet) {
         const uint32_t spellId = packet.readUInt32();
         if (packet.hasRemaining(1)) failOtherResult = packet.readUInt8();
         packet.setReadPos(at);
-        owner_.castVisuals().ended(failOtherGuid, castCount, spellId);
+        owner_.castVisualEnded(failOtherGuid, castCount, spellId);
         castEnded(failOtherGuid, castCount, spellId);
         dropHeldMissile(failOtherGuid, castCount);
     }
@@ -8605,7 +8695,7 @@ void SpellHandler::handleSpellFailure(network::Packet& packet) {
                 // told (0x00807560(1)).
                 owner_.stopAutoRepeat(true);
             }
-            owner_.castVisuals().ended(caster, failCastCount, failSpellId);
+            owner_.castVisualEnded(caster, failCastCount, failSpellId);
             // 0x00809c70 -> 0x008054f0 for the player's pending cast.
             if (caster == owner_.getPlayerGuid() && hasCastCount) pendingCastEnded(failCastCount);
             castEnded(caster, failCastCount, failSpellId);

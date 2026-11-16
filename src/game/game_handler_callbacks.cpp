@@ -2156,6 +2156,8 @@ void GameHandler::removeVoiceIgnore(const std::string& playerName) {
 }
 
 void GameHandler::faceCanonicalYaw(float canonicalYaw) {
+    // A facing set by anything but click-to-move ends it (0x0072ea50).
+    stopClickToMove();
     movementInfo.orientation = canonicalYaw;
 
     // One-shot check that the renderer's facing round-trips to the same
@@ -3869,8 +3871,28 @@ void GameHandler::lootTarget(uint64_t guid) {
     if (inventoryHandler_) inventoryHandler_->lootTarget(guid);
 }
 
-void GameHandler::lootCorpse(uint64_t guid) {
+void GameHandler::lootCorpse(uint64_t guid, bool clickToMove) {
     if (!isInWorld()) return;
+    // 0x006dad90 asks 0x00717b60 of the unit first: dead, its loot not held
+    // back (+0xac0) and lootable.
+    if (auto unit = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(guid));
+        unit && !click_to_move::lootableNow(static_cast<int32_t>(unit->getHealth()), 0, 0, unit->getDynamicFlags()))
+        return;
+    // 0x006dad90 with click-to-move: a corpse further than the two units'
+    // melee reach (0x004f5f40) is walked to (kind 6), and looted there.
+    if (clickToMove) {
+        auto corpse = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(guid));
+        auto me = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(getPlayerGuid()));
+        if (corpse && me) {
+            const float reach = click_to_move::meleeReach(corpse->getCombatReach(), me->getCombatReach());
+            const float dx = movementInfo.x - corpse->getX();
+            const float dy = movementInfo.y - corpse->getY();
+            const float dz = movementInfo.z - corpse->getZ();
+            if (reach * reach < dx * dx + dy * dy + dz * dz &&
+                clickToMoveApproach(guid, click_to_move::Kind::Loot))
+                return;
+        }
+    }
     // 0x006dad90: a corpse is looted standing still - while the player moves
     // (any of the movement flags 0xc010ff) the click does nothing at all.
     if ((movementInfo.flags & 0xc010ffu) != 0) return;
@@ -3925,7 +3947,7 @@ void GameHandler::lootMasterGive(uint8_t lootSlot, uint64_t targetGuid) {
     if (inventoryHandler_) inventoryHandler_->lootMasterGive(lootSlot, targetGuid);
 }
 
-void GameHandler::interactWithNpc(uint64_t guid) {
+void GameHandler::interactWithNpc(uint64_t guid, bool clickToMove) {
     if (!isInWorld()) return;
     // 0x006ddbb0 first: in a form that takes no items (0x00721ca0) whose row
     // is missing or lacks flag 8, the player leaves it where autoUnshift lets
@@ -3945,14 +3967,18 @@ void GameHandler::interactWithNpc(uint64_t guid) {
     }
     // 0x006ddbb0: nothing past the NPC's combat reach plus four yards (a
     // straight-line distance, height included) is spoken to. With
-    // click-to-move interaction the client walks there instead; without it -
-    // and there is none here - it says so and sends nothing.
+    // click-to-move interaction (autoInteract) the client walks there
+    // instead (kind 5) and speaks on arrival; without it, or when the walk
+    // does not start, it says so and sends nothing.
     if (auto entity = getEntityManager().getEntity(guid)) {
         if (auto* unit = dynamic_cast<Unit*>(entity.get())) {
             const float dx = movementInfo.x - entity->getX();
             const float dy = movementInfo.y - entity->getY();
             const float dz = movementInfo.z - entity->getZ();
             const float reach = unit->getCombatReach() + 4.0f;
+            if (clickToMove && dx * dx + dy * dy + dz * dz > reach * reach &&
+                clickToMoveApproach(guid, click_to_move::Kind::NpcInteract))
+                return;
             if (dx * dx + dy * dy + dz * dz > reach * reach) {
                 playGameErrorSound("ERR_TOO_FAR_TO_INTERACT");
                 raiseUiError(interfaceString("ERR_TOO_FAR_TO_INTERACT",
@@ -4459,6 +4485,11 @@ void GameHandler::performGameObjectInteractionNow(uint64_t guid) {
     {
         std::string arg;
         if (const uint16_t refusal = gameObjectRefusal(*go, facts, arg); refusal != 0) {
+            // Out of reach, and not a fishing hole: with autoInteract the
+            // player walks to it (0x0072b730, kind 7) and uses it there.
+            if (refusal == go_use::err::kTooFar && goType != 17 &&
+                clickToMoveToObject(guid, gameObjectUseReach(facts)))
+                return;
             if (refusal != go_use::kRefusedSilently)
                 sayGameObjectError(refusal, arg.empty() ? std::vector<std::string>{} : std::vector<std::string>{arg});
             return;

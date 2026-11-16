@@ -940,6 +940,11 @@ void GameScreen::render(game::GameHandler& gameHandler) {
             renderer->setPetPulse(pulse->first, pulse->second);
         else
             renderer->setPetPulse(0, 0);
+        // The ring on where a click-to-move is going (0x007275c0).
+        if (const auto marker = gameHandler.clickToMoveMarker())
+            renderer->setMoveMarker(std::make_pair(core::coords::canonicalToRender(marker->first), marker->second));
+        else
+            renderer->setMoveMarker(std::nullopt);
         if (gameHandler.hasTarget()) {
             auto target = gameHandler.getTarget();
             if (target) {
@@ -2455,24 +2460,9 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
             }
         }
 
-        // If a gameobject is already targeted, prioritize interacting with that target
-        // instead of re-picking under cursor (which can hit nearby decorative GOs).
-        // Exclude chair-type GOs (type 7): otherwise any right-click (including the
-        // start of a camera rotate) auto-sits the player whenever a chair is targeted.
-        if (gameHandler.hasTarget()) {
-            auto target = gameHandler.getTarget();
-            if (target && target->getType() == game::ObjectType::GAMEOBJECT) {
-                auto go = std::static_pointer_cast<game::GameObject>(target);
-                auto* goInfo = gameHandler.getCachedGameObjectInfo(go->getEntry());
-                if (!goInfo || goInfo->type != 7) {
-                    LOG_DEBUG("[GO-DIAG] Right-click: re-interacting with targeted GO 0x",
-                                std::hex, target->getGuid(), std::dec);
-                    gameHandler.targetUnit(target->getGuid());
-                    gameHandler.interactWithGameObject(target->getGuid());
-                    return;
-                }
-            }
-        }
+        // A targeted object is not used again ahead of the pick: the right
+        // click is whatever is under the pointer (0x004f7880), an object
+        // there, the ground (walked to with autoInteract) or nothing.
 
         // If no target or right-clicking in world, try to pick one under cursor
         {
@@ -2566,6 +2556,21 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                         return;
                     }
                     gameHandler.targetUnit(closestGuid);
+                } else if (!tapInteract) {
+                    // A right click on no object (0x004f7880) is the
+                    // ground's or nothing's, never the target's: with
+                    // autoInteract the ground under the pointer is walked to
+                    // (0x00527830 -> 0x00527360 -> 0x0072b6d0, kind 4), and
+                    // a click on nothing turns the player that way and runs
+                    // on (0x005278c0 -> 0x0072f040, kind 8). Without it the
+                    // click does nothing.
+                    uint32_t building = 0;
+                    if (auto ground = renderer->pickGround(ray.origin, ray.direction, kGroundPickDistance, &building)) {
+                        gameHandler.clickToMoveTo(groundPlaceAt(gameHandler, *ground, building).canonical);
+                    } else {
+                        gameHandler.clickToMoveFaceDirection(core::coords::renderToCanonical(ray.direction));
+                    }
+                    return;
                 }
             }
         }
@@ -2583,8 +2588,17 @@ void GameScreen::interactWithTarget(game::GameHandler& gameHandler) {
             if (target->getType() == game::ObjectType::UNIT) {
                 // Check if unit is dead (health == 0) → loot, otherwise interact/attack
                 auto unit = std::static_pointer_cast<game::Unit>(target);
-                if (unit->getHealth() == 0 && unit->getMaxHealth() > 0) {
-                    gameHandler.lootCorpse(target->getGuid());
+                // With autoInteract each of these walks to it first when it
+                // is out of reach (0x00721f50 handed down).
+                const bool clickToMove = gameHandler.clickToMoveAllowed();
+                // 0x00731260: a dead unit (not one shown as dead, dynamic
+                // flag 0x20) clicked by the player as the mover is looted,
+                // skinned or left; anything else is spoken to or attacked.
+                const bool dead = unit->getHealth() == 0 && unit->getMaxHealth() > 0 &&
+                                  (unit->getDynamicFlags() & game::UNIT_DYNFLAG_DEAD) == 0 &&
+                                  gameHandler.activeMover() == gameHandler.getPlayerGuid();
+                if (dead) {
+                    gameHandler.clickDeadUnit(target->getGuid(), clickToMove);
                 } else {
                     // Interact with service NPCs; otherwise treat non-interactable living units
                     // as attackable fallback (covers bad faction-template classification).
@@ -2616,9 +2630,11 @@ void GameScreen::interactWithTarget(game::GameHandler& gameHandler) {
                           gameHandler.unitReaction(*unit, *me) > 2) ||
                          (flags2 & 0x4000u) != 0);
                     if (mayInteract) {
-                        gameHandler.interactWithNpc(target->getGuid());
+                        gameHandler.interactWithNpc(target->getGuid(), clickToMove);
                     } else if (gameHandler.unitMayAttack(gameHandler.getPlayerGuid(), target->getGuid())) {
                         gameHandler.startAutoAttack(target->getGuid());
+                        // Then closed in on, or turned to (0x0072ee20).
+                        gameHandler.clickToMoveAttack(target->getGuid());
                     }
                 }
             } else if (target->getType() == game::ObjectType::GAMEOBJECT) {
@@ -2633,11 +2649,18 @@ void GameScreen::interactWithTarget(game::GameHandler& gameHandler) {
                 // 0x00731260 for another player: nothing to talk to, so
                 // attacked when the player may attack them.
                 auto other = std::static_pointer_cast<game::Unit>(target);
+                // Dead, their insignia to take (0x00731260's dead unit).
+                if (other->getHealth() == 0 && other->getMaxHealth() > 0 &&
+                    (other->getDynamicFlags() & game::UNIT_DYNFLAG_DEAD) == 0 && gameHandler.activeMover() == gameHandler.getPlayerGuid()) {
+                    gameHandler.clickDeadUnit(target->getGuid(), gameHandler.clickToMoveAllowed());
+                    return;
+                }
                 // 0x006ddbb0 for a group member: their vehicle, if it has a
                 // free seat (CMSG_PLAYER_VEHICLE_ENTER).
                 if (other->getHealth() > 0 && gameHandler.clickUnitBeyondHellos(target->getGuid())) return;
                 if (other->getHealth() > 0 && playerMayAttackPlayer(gameHandler, *other)) {
                     gameHandler.startAutoAttack(target->getGuid());
+                    gameHandler.clickToMoveAttack(target->getGuid());
                 }
             }
         }

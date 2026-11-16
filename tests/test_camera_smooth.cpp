@@ -110,3 +110,29 @@ TEST_CASE("the Fear ease starts again for a new direction, not for each step of 
     CHECK_FALSE(fearPlansAgain(true, -176.0f, 175.0f));  // 9 degrees across the wrap
     CHECK(fearPlansAgain(true, -170.0f, 170.0f));
 }
+
+TEST_CASE("the tracking style is read while click-to-move tracks", "[camera][smooth]") {
+    CHECK(styleFor(false, 2, 0) == 2);
+    CHECK(styleFor(true, 2, 0) == 0);
+    // Never eases nothing and stops what there is.
+    const Plan never = plan(State::Track, 90.0f, 60.0f, false, false, kNever);
+    CHECK_FALSE(never.easeYaw);
+    CHECK(never.stopYaw);
+    CHECK(never.stopPitch);
+    // Smart turns the yaw but stops the pitch.
+    const Plan smart = plan(State::Track, 90.0f, 60.0f, false, false, kSmart);
+    CHECK(smart.easeYaw);
+    CHECK(smart.stopPitch);
+    CHECK_THAT(smart.delay, WithinAbs(0.4, 1e-6));
+    // Always eases even standing still, at once.
+    const Plan always = plan(State::Idle, 90.0f, 20.0f, false, false, kAlways);
+    CHECK(always.easeYaw);
+    CHECK_THAT(always.seconds, WithinAbs(0.5, 1e-5));
+    // Spline tracks four times slower than it moves.
+    CHECK_THAT(plan(State::Track, 90.0f, 20.0f, false, false, kSpline).seconds, WithinAbs(2.0, 1e-5));
+    CHECK_THAT(plan(State::Move, 90.0f, 20.0f, false, false, kSpline).seconds, WithinAbs(0.5, 1e-5));
+    // A style with no row sets nothing going.
+    const Plan none = plan(State::Move, 90.0f, 60.0f, false, false, 7);
+    CHECK_FALSE(none.easeYaw);
+    CHECK_FALSE(none.stopYaw);
+}
