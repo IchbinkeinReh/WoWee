@@ -1000,15 +1000,32 @@ void GameHandler::update(float deltaTime) {
             if (!windowOpen || npcGuid == 0) return;
             auto npc = entityController_->getEntityManager().getEntity(npcGuid);
             if (!npc) return;
+            // 0x0051fde0 against the limit 0x0051fce0 sets: for a creature its
+            // bounding radius + 4 yards, for a player 123.4568 squared (about
+            // 11.1 yards), both against the squared 3D distance (0x004f61d0).
+            // Game objects keep the flat limit: the client asks each type's
+            // own interaction radius there (0x0070bad0).
+            float limit = game::NPC_INTERACT_MAX_DISTANCE;
+            float limitSq = limit * limit;
             float dx = movementInfo.x - npc->getX();
             float dy = movementInfo.y - npc->getY();
-            const float distance = std::sqrt(dx * dx + dy * dy);
-            if (distance > game::NPC_INTERACT_MAX_DISTANCE) {
+            float distSq = dx * dx + dy * dy;
+            if (npc->getType() == ObjectType::PLAYER) {
+                limitSq = 123.45678f;
+                const float dz = movementInfo.z - npc->getZ();
+                distSq += dz * dz;
+            } else if (npc->getType() == ObjectType::UNIT) {
+                limit = static_cast<const Unit&>(*npc).getBoundingRadius() + 4.0f;
+                limitSq = limit * limit;
+                const float dz = movementInfo.z - npc->getZ();
+                distSq += dz * dz;
+            }
+            if (distSq > limitSq) {
                 closeFn();
                 // Warning: a window closing by itself is a report waiting to
                 // happen, and the client is the one deciding.
-                LOG_WARNING(label, " closed: ", distance, " yards from the NPC, past ",
-                            game::NPC_INTERACT_MAX_DISTANCE);
+                LOG_WARNING(label, " closed: ", std::sqrt(distSq), " yards from the NPC, past ",
+                            std::sqrt(limitSq));
             }
         };
         // A hello the server never answered. It says nothing when it refuses,
