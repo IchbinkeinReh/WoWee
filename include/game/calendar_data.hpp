@@ -377,6 +377,15 @@ inline bool calendarInviteThrottled(uint32_t lastInviteMs, uint32_t nowMs) {
     return lastInviteMs != 0 && static_cast<int32_t>(nowMs - lastInviteMs) < 2000;
 }
 
+/// The name an invitation is made for, as 0x007e2040 writes it into the
+/// 0x30-byte buffer CalendarEventInvite (0x005f2070) checks, shows and sends:
+/// the first character upper case and every other one lower case, for ASCII,
+/// Latin-1 (0xE0-0xFE / 0xC0-0xDE, the multiplication and division signs
+/// included, as the client's ranges have them), Œ/œ and Cyrillic А-я with Ё/ё;
+/// anything else as typed. Cut, at a character, to the 47 bytes the buffer
+/// holds before its terminator.
+std::string calendarInviteName(const std::string& typed);
+
 /// Whether an event added at `lastAddMs` (0: none yet) still holds the next
 /// back at `nowMs`: five seconds, CALENDAR_ERROR_EVENT_THROTTLED, as
 /// CalendarAddEvent (0x005bbd60) and CalendarCanAddEvent (0x005b8ba0) measure

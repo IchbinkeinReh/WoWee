@@ -4772,8 +4772,8 @@ void GameHandler::calendarEventInvite(const std::string& name) {
         return;
     }
     // 0x005f2070, on the open event: none to a guild announcement, none past
-    // a hundred, none to a name already on the list - the name cut to what
-    // its 0x30-byte buffer holds, against each invitee whose name is known.
+    // a hundred, none to a name already on the list - the name normalised and
+    // cut to what its 0x30-byte buffer holds, against each invitee whose name is known.
     // A new event's list is its maker and whoever has been pre-invited since
     // (0x005f2a20, 0x005f32b0).
     const uint32_t flags = open.flags;
@@ -4786,7 +4786,9 @@ void GameHandler::calendarEventInvite(const std::string& name) {
                             "You cannot invite more than %d players to this event.", {"100"});
         return;
     }
-    const std::string who = name.substr(0, 0x2F);
+    // 0x007e2040: the name as the client writes it - first letter upper
+    // case, the rest lower case - is what is checked, shown and sent.
+    const std::string who = calendarInviteName(name);
     bool already = false;
     for (const auto& inv : open.invitees) {
         const std::string known = lookupName(inv.guid);

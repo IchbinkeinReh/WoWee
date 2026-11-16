@@ -1035,6 +1035,32 @@ TEST_CASE("Invitations are two seconds apart", "[calendar]") {
     CHECK_FALSE(calendarInviteThrottled(0xFFFFFF00u, 0x00000800u));
 }
 
+TEST_CASE("An invited name is written as the client writes it", "[calendar]") {
+    // 0x007e2040: first character upper case, the rest lower case.
+    CHECK(calendarInviteName("tHRALL") == "Thrall");
+    CHECK(calendarInviteName("thrall") == "Thrall");
+    CHECK(calendarInviteName("") == "");
+    // Latin-1: \u00e9 -> \u00c9 first, \u00c9 -> \u00e9 after.
+    CHECK(calendarInviteName("\xC3\xA9MILE") == "\xC3\x89mile");
+    CHECK(calendarInviteName("Z\xC3\x89") == "Z\xC3\xA9");
+    // The client's ranges take the multiplication / division signs too.
+    CHECK(calendarInviteName("\xC3\xB7") == "\xC3\x97");
+    CHECK(calendarInviteName("a\xC3\x97") == "A\xC3\xB7");
+    // \u0153 -> \u0152 first; \u0152 -> \u0153 after.
+    CHECK(calendarInviteName("\xC5\x93\xC5\x92") == "\xC5\x92\xC5\x93");
+    // Cyrillic, with \u0451 / \u0401: "\u0451\u0416" -> "\u0401\u0436".
+    CHECK(calendarInviteName("\xD1\x91\xD0\x96") == "\xD0\x81\xD0\xB6");
+    // "\u0430\u0401" -> "\u0410\u0451".
+    CHECK(calendarInviteName("\xD0\xB0\xD0\x81") == "\xD0\x90\xD1\x91");
+    // Other characters stay as typed.
+    CHECK(calendarInviteName("1x-") == "1x-");
+    // Cut at a character to the 47 bytes before the buffer's terminator.
+    CHECK(calendarInviteName(std::string(60, 'a')).size() == 47);
+    std::string cyr;
+    for (int k = 0; k < 30; ++k) cyr += "\xD0\xB0";
+    CHECK(calendarInviteName(cyr).size() == 46);
+}
+
 TEST_CASE("Events added are five seconds apart", "[calendar]") {
     // 0x005bbd60 / 0x005b8ba0 against 0x00c207fc.
     CHECK_FALSE(calendarAddThrottled(0, 500));
