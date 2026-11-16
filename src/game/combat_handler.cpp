@@ -725,10 +725,9 @@ void CombatHandler::addCombatText(CombatTextEntry::Type type, int32_t amount, ui
     entry.powerType = powerType;
     entry.srcGuid = srcGuid;
     entry.dstGuid = dstGuid;
-    // Random horizontal stagger so simultaneous hits don't stack vertically
-    static std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
-    entry.xSeed = dist(rng);
+    // Drawn as its kind (0x0071f990, 0x00722340, 0x00722440); the client
+    // staggers nothing.
+    entry.kind = floaterKindOf(type);
     if (floater) combatText_.push_back(entry);
 
     // UNIT_COMBAT is not raised from here: the client raises it from each
@@ -783,7 +782,7 @@ int CombatHandler::floaterSourceOf(uint64_t src, bool isPlayerSource) const {
     return static_cast<int>(FloaterSource::Other);
 }
 
-void CombatHandler::addWorldText(uint64_t unit, uint8_t kind, const std::string& text, bool replace) {
+void CombatHandler::addWorldText(uint64_t unit, uint8_t kind, const std::string& text, bool replace, uint32_t rank) {
     if (unit == 0 || text.empty()) return;
     if (replace) {
         combatText_.erase(std::remove_if(combatText_.begin(), combatText_.end(),
@@ -798,6 +797,8 @@ void CombatHandler::addWorldText(uint64_t unit, uint8_t kind, const std::string&
     entry.dstGuid = unit;
     entry.text = text;
     entry.worldKind = kind;
+    entry.kind = kind;
+    entry.rank = rank;
     combatText_.push_back(std::move(entry));
 }
 
@@ -1496,7 +1497,10 @@ void CombatHandler::handlePvpCredit(network::Packet& packet) {
                 }
                 std::string hk = interfaceString("HK", nullptr);
                 if (hk.empty()) hk = "HK";
-                addWorldText(victimGuid, static_cast<uint8_t>(FloaterKind::Honor), hk + ": " + title);
+                // The victim's rank goes with it, for its badge (0x007155d0
+                // hands 0x007e6030 the rank; 0x007e7390 draws it).
+                addWorldText(victimGuid, static_cast<uint8_t>(FloaterKind::Honor), hk + ": " + title, false,
+                             static_cast<uint32_t>(rank));
             }
         }
         if (owner_.pvpHonorCallbackRef()) owner_.pvpHonorCallbackRef()(honor, victimGuid, rank);

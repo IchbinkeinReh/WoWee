@@ -92,7 +92,8 @@ public:
     // Combat text creation (used by other handlers, e.g. spell handler for periodic damage)
     /// A line of world text over `unit` (0x007e6030), of `kind`; with
     /// `replace`, the unit's earlier line of that kind goes first (0x007e5100).
-    void addWorldText(uint64_t unit, uint8_t kind, const std::string& text, bool replace = false);
+    void addWorldText(uint64_t unit, uint8_t kind, const std::string& text, bool replace = false,
+                      uint32_t rank = 0);
     /// The spell-mechanic floaters an aura landing or refreshed raises over
     /// its unit (0x0074db80 -> 0x0074da70).
     void addMechanicFloaters(uint64_t unit, uint64_t caster, uint32_t spellId);

@@ -63,6 +63,23 @@ inline bool worldFloaterShown(CombatTextEntry::Type type, FloaterSource source, 
     }
 }
 
+/// The world-text kind a floater is drawn as: damage 0 and a crit 2
+/// (0x00722340), a heal 6 and a crit heal 7 (0x00722440), and for a miss
+/// and its kin the table at 0x00a34c20 - absorb 1, the rest 3 (0x0071f990).
+inline uint8_t floaterKindOf(CombatTextEntry::Type type) {
+    using T = CombatTextEntry;
+    switch (type) {
+        case T::CRIT_DAMAGE: return static_cast<uint8_t>(FloaterKind::Crit);
+        case T::HEAL: case T::PERIODIC_HEAL: return static_cast<uint8_t>(FloaterKind::Heal);
+        case T::CRIT_HEAL: return static_cast<uint8_t>(FloaterKind::CritHeal);
+        case T::ABSORB: return static_cast<uint8_t>(FloaterKind::Absorb);
+        case T::MISS: case T::RESIST: case T::DODGE: case T::PARRY: case T::BLOCK:
+        case T::EVADE: case T::IMMUNE: case T::DEFLECT: case T::REFLECT:
+            return static_cast<uint8_t>(FloaterKind::Miss);
+        default: return 0;
+    }
+}
+
 /// The global string 0x0071f990 shows for a miss and its kin - the table at
 /// 0x00adbfdc - or nullptr for a line that is not one.
 inline const char* missFloaterKey(CombatTextEntry::Type type) {

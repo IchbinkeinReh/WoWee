@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/world_text.hpp"
 #include <cstdint>
 #include <ctime>
 #include <string>
@@ -64,12 +65,22 @@ struct CombatTextEntry {
     uint8_t powerType = 0;      // For ENERGIZE/POWER_DRAIN: 0=mana,1=rage,2=focus,3=energy,6=runicpower
     uint64_t srcGuid = 0;       // Source entity (attacker/caster)
     uint64_t dstGuid = 0;       // Destination entity (victim/target) - used for world-space positioning
-    float xSeed = 0.0f;         // Random horizontal offset seed (-1..1) to stagger overlapping text
     std::string text;           // WORLD_TEXT: the line itself
     uint8_t worldKind = 0;      // WORLD_TEXT: 0x007e6030's kind (FloaterKind)
+    /// The kind it is drawn as (0x007e6030's second argument, the row of the
+    /// table at 0x00af4748): how it rises, fades, is sized and how long it
+    /// lives (game/world_text.hpp).
+    uint8_t kind = 0;
+    /// An honourable kill's victim's rank, for its badge (0x007e7390).
+    uint32_t rank = 0;
+    /// Where it stands, fixed as it is first drawn (0x007e5c30): render
+    /// coordinates. A line the client would not have made - over the camera's
+    /// unit in first person, or a fifth over one unit - is `dropped` then.
+    mutable bool anchored = false;
+    mutable bool dropped = false;
+    mutable float anchor[3] = {0.0f, 0.0f, 0.0f};
 
-    static constexpr float LIFETIME = 2.5f;
-    [[nodiscard]] bool isExpired() const { return age >= LIFETIME; }
+    [[nodiscard]] bool isExpired() const { return world_text::expired(kind, static_cast<uint32_t>(age * 1000.0f)); }
 };
 
 /**

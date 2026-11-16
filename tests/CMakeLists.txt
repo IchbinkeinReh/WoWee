@@ -2521,6 +2521,12 @@ wowee_add_test(test_dispel_check
 wowee_add_test(test_destructible_state
     SOURCES test_destructible_state.cpp)
 
+# ── test_world_text ─────────────────────────────────────────
+# The floating text over units: the kinds at 0x00af4748, their fade, pop,
+# rise and size, the screen clamp and the rank badge.
+wowee_add_test(test_world_text
+    SOURCES test_world_text.cpp)
+
 # ── test_chat_profanity ─────────────────────────────────────
 add_executable(test_chat_profanity
     test_chat_profanity.cpp

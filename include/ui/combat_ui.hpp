@@ -7,6 +7,7 @@
 #include <vector>
 #include <cstdint>
 #include <functional>
+#include <unordered_map>
 
 namespace wowee {
 namespace game { class GameHandler; }
@@ -53,6 +54,10 @@ public:
 
 private:
     UIServices services_;
+    /// The PvP rank badges an honourable kill's line carries, by path.
+    VkDescriptorSet rankBadgeTexture(const char* path);
+    std::unordered_map<std::string, VkDescriptorSet> rankBadges_;
+    uint32_t rankBadgeGenerationSeen_ = 0;  ///< see uiTexturesReplaced
 };
 
 } // namespace ui

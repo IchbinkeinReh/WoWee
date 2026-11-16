@@ -473,6 +473,8 @@ public:
     /// 0x005ffa60: the way over the time, whatever the zoom speed).
     void zoomOverTime(float distance, float seconds);
     [[nodiscard]] float getUserTargetDistance() const { return userTargetDistance; }
+    /// How far the camera stands from its unit now (the camera's +0x118).
+    [[nodiscard]] float getCurrentDistance() const { return currentDistance; }
     /// A camera view (camera +0xb8, one of eight): its distance, its pitch
     /// in degrees with up positive, and its yaw in degrees from where the
     /// character faces.
