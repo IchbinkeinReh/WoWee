@@ -80,6 +80,25 @@ inline uint8_t floaterKindOf(CombatTextEntry::Type type) {
     }
 }
 
+/// The colour a damage or miss floater's maker gives it (0x00722340,
+/// 0x0071f990): a swing (no spell, or AttributesEx3 0x8000) the player's own
+/// none - its kind's (world_text::colourOf) - and one of the player's unit's
+/// 0xffff8400; anything a spell did 0xffffde00. A heal gives none
+/// (0x00722440). Zero for none.
+inline uint32_t floaterColour(CombatTextEntry::Type type, FloaterSource source, bool meleeLike) {
+    using T = CombatTextEntry;
+    switch (type) {
+        case T::MISS: case T::RESIST: case T::DODGE: case T::PARRY: case T::BLOCK:
+        case T::EVADE: case T::IMMUNE: case T::DEFLECT: case T::ABSORB: case T::REFLECT:
+        case T::MELEE_DAMAGE: case T::SPELL_DAMAGE: case T::CRIT_DAMAGE: case T::PERIODIC_DAMAGE:
+        case T::GLANCING: case T::CRUSHING:
+            if (!meleeLike) return world_text::kSpellColour;
+            return source == FloaterSource::PlayersUnit ? world_text::kPetSwingColour : 0u;
+        default:
+            return 0u;
+    }
+}
+
 /// The global string 0x0071f990 shows for a miss and its kin - the table at
 /// 0x00adbfdc - or nullptr for a line that is not one.
 inline const char* missFloaterKey(CombatTextEntry::Type type) {

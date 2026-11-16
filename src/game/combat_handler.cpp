@@ -698,6 +698,7 @@ void CombatHandler::addCombatText(CombatTextEntry::Type type, int32_t amount, ui
     // happens to the character - is Blizzard_CombatText's, and the log and
     // UNIT_COMBAT below are not filtered by these.
     bool floater = false;
+    uint32_t floaterArgb = 0;
     if (dstGuid != 0) {
         const auto on = [](const char* cvar) { return addons::storedCVarValue(cvar, "1") != "0"; };
         FloaterSettings settings;
@@ -712,8 +713,9 @@ void CombatHandler::addCombatText(CombatTextEntry::Type type, int32_t amount, ui
             const auto it = owner_.spellNameCacheRef().find(spellId);
             meleeLike = it != owner_.spellNameCacheRef().end() && (it->second.attrEx3 & 0x8000u) != 0;
         }
-        floater = worldFloaterShown(type, static_cast<FloaterSource>(floaterSourceOf(srcGuid, isPlayerSource)),
-                                    dstGuid == owner_.getPlayerGuid(), false, meleeLike, settings);
+        const auto source = static_cast<FloaterSource>(floaterSourceOf(srcGuid, isPlayerSource));
+        floater = worldFloaterShown(type, source, dstGuid == owner_.getPlayerGuid(), false, meleeLike, settings);
+        floaterArgb = floaterColour(type, source, meleeLike);
     }
 
     CombatTextEntry entry;
@@ -728,6 +730,7 @@ void CombatHandler::addCombatText(CombatTextEntry::Type type, int32_t amount, ui
     // Drawn as its kind (0x0071f990, 0x00722340, 0x00722440); the client
     // staggers nothing.
     entry.kind = floaterKindOf(type);
+    entry.colour = floaterArgb;
     if (floater) combatText_.push_back(entry);
 
     // UNIT_COMBAT is not raised from here: the client raises it from each
@@ -799,6 +802,9 @@ void CombatHandler::addWorldText(uint64_t unit, uint8_t kind, const std::string&
     entry.worldKind = kind;
     entry.kind = kind;
     entry.rank = rank;
+    // A spell mechanic's line is the spell colour (0x0074da70 hands
+    // 0x00adb93c); the rest take their kind's.
+    if (kind == static_cast<uint8_t>(FloaterKind::Mechanic)) entry.colour = world_text::kSpellColour;
     combatText_.push_back(std::move(entry));
 }
 

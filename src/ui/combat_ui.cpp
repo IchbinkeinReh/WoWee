@@ -13,6 +13,7 @@
 #include "ui/spellbook_screen.hpp"
 #include "ui/inventory_screen.hpp"
 #include "ui/ui_colors.hpp"
+#include "game/transport_manager.hpp"
 #include "ui/ui_helpers.hpp"
 #include "core/application.hpp"
 #include "core/logger.hpp"
@@ -126,6 +127,17 @@ void CombatUI::renderCombatText(game::GameHandler& gameHandler) {
     // number to stand over, and the client has no screen-space fallback.
     if (!camera) return;
     const glm::mat4 viewProj = camera->getProjectionMatrix() * camera->getViewMatrix();
+    // The view's top plane, inside where a x + b y + c z + d >= 0: clip y is
+    // down on the screen here, so the top edge is y >= -w (row 4 plus row 2).
+    const float topPlane[4] = {viewProj[0][3] + viewProj[0][1], viewProj[1][3] + viewProj[1][1],
+                               viewProj[2][3] + viewProj[2][1], viewProj[3][3] + viewProj[3][1]};
+    // The transport the player stands on (the camera's, +0xa0, a game
+    // object): lines are kept in its frame and drawn in it (0x007e5c30,
+    // 0x007e70d0).
+    const glm::mat4* transportFrame = nullptr;
+    if (auto* transports = gameHandler.getTransportManager(); transports && gameHandler.isOnTransport()) {
+        if (const auto* t = transports->getTransport(gameHandler.getPlayerTransportGuid())) transportFrame = &t->transform;
+    }
 
     ImDrawList* drawList = ImGui::GetForegroundDrawList();
     ImFont* font = ImGui::GetFont();
@@ -168,6 +180,10 @@ void CombatUI::renderCombatText(game::GameHandler& gameHandler) {
                 continue;
             }
             at.z -= wt::kBelowName;
+            // Under the top of the view, room left for its rise; then into
+            // the transport's frame.
+            at.z = wt::zUnderTopOfView(topPlane, at.x, at.y, at.z, entry.kind);
+            if (transportFrame) at = glm::vec3(glm::inverse(*transportFrame) * glm::vec4(at, 1.0f));
             entry.anchor[0] = at.x;
             entry.anchor[1] = at.y;
             entry.anchor[2] = at.z;
@@ -182,36 +198,26 @@ void CombatUI::renderCombatText(game::GameHandler& gameHandler) {
         // The text as the client builds it: damage "%d" (0x00722340), healing
         // "+%d" (0x00722440), a miss and its kin the global string of the
         // table at 0x00adbfdc (0x0071f990), world text as given.
-        ImVec4 color;
+        // Its maker's colour, else its kind's (0x007e6dc0, the table at
+        // 0x00af4760); the fade sets the alpha (0x007e6850).
+        const uint32_t argb = entry.colour != 0 ? entry.colour : wt::colourOf(entry.kind);
+        const ImVec4 color(static_cast<float>((argb >> 16) & 0xffu) / 255.0f,
+                           static_cast<float>((argb >> 8) & 0xffu) / 255.0f,
+                           static_cast<float>(argb & 0xffu) / 255.0f, a);
         std::string text;
         switch (entry.type) {
             case T::MELEE_DAMAGE: case T::SPELL_DAMAGE: case T::PERIODIC_DAMAGE:
-            case T::GLANCING: case T::CRUSHING:
+            case T::GLANCING: case T::CRUSHING: case T::CRIT_DAMAGE:
                 text = std::to_string(entry.amount);
-                color = ImVec4(1.0f, 1.0f, 0.3f, a);
-                break;
-            case T::CRIT_DAMAGE:
-                text = std::to_string(entry.amount);
-                color = ImVec4(1.0f, 0.8f, 0.0f, a);
                 break;
             case T::HEAL: case T::CRIT_HEAL: case T::PERIODIC_HEAL:
                 text = "+" + std::to_string(entry.amount);
-                color = ImVec4(0.3f, 1.0f, 0.3f, a);
                 break;
             case T::WORLD_TEXT:
                 text = entry.text;
-                switch (static_cast<game::FloaterKind>(entry.worldKind)) {
-                    case game::FloaterKind::Experience: color = ImVec4(0.7f, 0.3f, 1.0f, a); break;
-                    case game::FloaterKind::Honor:      color = ImVec4(1.0f, 0.85f, 0.0f, a); break;
-                    case game::FloaterKind::Threat:     color = ImVec4(1.0f, 0.3f, 0.3f, a); break;
-                    default:                            color = ImVec4(1.0f, 1.0f, 1.0f, a); break;
-                }
                 break;
             default:
-                if (const char* key = game::missFloaterKey(entry.type)) {
-                    text = game::interfaceString(key, nullptr);
-                    color = ImVec4(0.7f, 0.7f, 0.7f, a);
-                }
+                if (const char* key = game::missFloaterKey(entry.type)) text = game::interfaceString(key, nullptr);
                 break;
         }
         if (text.empty()) continue;
@@ -221,7 +227,11 @@ void CombatUI::renderCombatText(game::GameHandler& gameHandler) {
         const float fontPx = wt::pixels(wt::scaleAt(entry.kind, ms), screenW, screenH);
         // Straight up from where it was put by its kind's rise (0x007e6590),
         // then onto the screen and kept inside it, centred (0x007e70d0).
-        const glm::vec3 at(entry.anchor[0], entry.anchor[1], entry.anchor[2] + wt::riseAt(entry.kind, ms));
+        // Out of the transport's frame, whichever the player is on now, then
+        // up by its rise.
+        glm::vec3 at(entry.anchor[0], entry.anchor[1], entry.anchor[2]);
+        if (transportFrame) at = glm::vec3(*transportFrame * glm::vec4(at, 1.0f));
+        at.z += wt::riseAt(entry.kind, ms);
         const glm::vec4 clip = viewProj * glm::vec4(at, 1.0f);
         if (clip.w <= 0.01f) continue;
         const glm::vec3 ndc = glm::vec3(clip) / clip.w;

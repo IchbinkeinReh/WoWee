@@ -40,6 +40,31 @@ inline constexpr std::array<Kind, 11> kKinds{{
     {2.0f, 150, 760, 1500, kSmall, kSmall},
 }};
 
+/// Each kind's colour, 0xAARRGGBB, where its maker gives none (+0x18 of the
+/// entry: 0x00af4760 + kind * 0x1c, filled at start-up by 0x009d04f0). The
+/// alpha byte is not used: the fade writes its own (0x007e6850 -> +0x23).
+inline constexpr std::array<uint32_t, 11> kColours{{
+    0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu,  // damage, absorb, crit, miss
+    0x8094008bu,                                          // experience
+    0xffe0ca0au,                                          // honour
+    0xff00ff00u, 0xff00ff00u,                             // heal, crit heal
+    0xffffffffu, 0xff00ff00u,                             // 8, 9
+    0xffff9900u,                                          // threat
+}};
+[[nodiscard]] constexpr uint32_t colourOf(uint8_t kind) { return kColours[kind < kColours.size() ? kind : 0]; }
+/// The colours the makers hand 0x007e6dc0 instead: a spell's damage or miss,
+/// or a spell mechanic's line (0x00adaa6c, 0x00adb93c), and a player's
+/// unit's swing (0x00adaa70, 0x00ada974).
+inline constexpr uint32_t kSpellColour = 0xffffde00u;
+inline constexpr uint32_t kPetSwingColour = 0xffff8400u;
+
+/// Where a line is put as it is made, kept under the top of the view
+/// (0x007e5c30): with `plane` the view's top plane (a, b, c, d; inside
+/// where a x + b y + c z + d >= 0), a point above it is lowered to the
+/// plane's height there less the kind's whole rise, so it stays in view as
+/// it climbs. Z is up; a plane standing upright leaves it alone.
+[[nodiscard]] inline float zUnderTopOfView(const float plane[4], float x, float y, float z, uint8_t kind);
+
 [[nodiscard]] constexpr const Kind& kindOf(uint8_t kind) {
     return kKinds[kind < kKinds.size() ? kind : 0];
 }
@@ -102,6 +127,14 @@ struct Alpha {
     const float t = static_cast<float>(ms) / static_cast<float>(k.lifeMs);
     const float s = (kind == 2 || kind == 7) ? critPop(t) * k.scaleEnd : (k.scaleEnd - k.scaleStart) * t + k.scaleStart;
     return s <= 0.001f ? 0.001f : s;
+}
+
+inline float zUnderTopOfView(const float plane[4], float x, float y, float z, uint8_t kind) {
+    const float a = plane[0], b = plane[1], c = plane[2], d = plane[3];
+    if (std::fabs(c) < 1e-6f) return z;
+    // 0x007e5c30: (-1 / c) * (b y + a x + d), the plane's height over x, y.
+    const float top = (-1.0f / c) * (b * y + a * x + d);
+    return top < z ? top - kindOf(kind).rise : z;
 }
 
 /// Yards risen at `ms` (0x007e6590).

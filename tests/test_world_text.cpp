@@ -75,3 +75,34 @@ TEST_CASE("each floater is drawn as the client's kind for it", "[world_text]") {
     CHECK(floaterKindOf(CombatTextEntry::ABSORB) == 1);
     CHECK(floaterKindOf(CombatTextEntry::DODGE) == 3);
 }
+
+TEST_CASE("Each kind has the client's colour where its maker gives none", "[world_text]") {
+    // 0x009d04f0 fills +0x18 of each entry.
+    CHECK(wt::colourOf(0) == 0xffffffffu);
+    CHECK(wt::colourOf(4) == 0x8094008bu);
+    CHECK(wt::colourOf(5) == 0xffe0ca0au);
+    CHECK(wt::colourOf(6) == 0xff00ff00u);
+    CHECK(wt::colourOf(7) == 0xff00ff00u);
+    CHECK(wt::colourOf(10) == 0xffff9900u);
+}
+
+TEST_CASE("A swing's colour is its kind's, a pet's swing orange, any spell yellow", "[world_text]") {
+    using wowee::game::FloaterSource;
+    using wowee::game::floaterColour;
+    CHECK(floaterColour(CombatTextEntry::MELEE_DAMAGE, FloaterSource::Player, true) == 0u);
+    CHECK(floaterColour(CombatTextEntry::CRIT_DAMAGE, FloaterSource::PlayersUnit, true) == wt::kPetSwingColour);
+    CHECK(floaterColour(CombatTextEntry::SPELL_DAMAGE, FloaterSource::Player, false) == wt::kSpellColour);
+    CHECK(floaterColour(CombatTextEntry::DODGE, FloaterSource::PlayersUnit, false) == wt::kSpellColour);
+    CHECK(floaterColour(CombatTextEntry::HEAL, FloaterSource::Player, false) == 0u);
+}
+
+TEST_CASE("A line made above the top of the view is lowered under it by its rise", "[world_text]") {
+    // A top plane sloping down away from the viewer: inside below z = 10 - x/10.
+    const float plane[4] = {-0.1f, 0.0f, -1.0f, 10.0f};
+    CHECK(wt::zUnderTopOfView(plane, 0.0f, 0.0f, 5.0f, 0) == Catch::Approx(5.0f));
+    // Above it: to the plane's height less kind 0's two yards.
+    CHECK(wt::zUnderTopOfView(plane, 0.0f, 0.0f, 12.0f, 0) == Catch::Approx(8.0f));
+    CHECK(wt::zUnderTopOfView(plane, 20.0f, 0.0f, 12.0f, 4) == Catch::Approx(8.0f));  // kind 4 does not rise
+    const float upright[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+    CHECK(wt::zUnderTopOfView(upright, 0.0f, 0.0f, 50.0f, 0) == Catch::Approx(50.0f));
+}

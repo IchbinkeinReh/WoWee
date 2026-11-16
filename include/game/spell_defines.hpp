@@ -73,8 +73,12 @@ struct CombatTextEntry {
     uint8_t kind = 0;
     /// An honourable kill's victim's rank, for its badge (0x007e7390).
     uint32_t rank = 0;
+    /// The colour its maker gave it, 0xAARRGGBB; zero for its kind's own
+    /// (0x007e6dc0, world_text::colourOf).
+    uint32_t colour = 0;
     /// Where it stands, fixed as it is first drawn (0x007e5c30): render
-    /// coordinates. A line the client would not have made - over the camera's
+    /// coordinates, in the frame of the player's transport when it stands on
+    /// one then (drawn in the frame of whichever it is on, 0x007e70d0). A line the client would not have made - over the camera's
     /// unit in first person, or a fifth over one unit - is `dropped` then.
     mutable bool anchored = false;
     mutable bool dropped = false;
