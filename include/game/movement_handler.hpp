@@ -40,6 +40,10 @@ public:
     /// 0x006eae70 -> 0x0071f210: the active mover's spline run to its end
     /// sends CMSG_MOVE_SPLINE_DONE with its spline id, once.
     void updateMoverSplineDone();
+    /// 0x006f1490 -> 0x00717d90: while the ground under the active mover has
+    /// not streamed in (its movement held), each frame's time goes out as
+    /// CMSG_MOVE_TIME_SKIPPED and is left out of its movement times.
+    void updateMoverTimeSkip(float deltaTime);
     void setPosition(float x, float y, float z);
     void setOrientation(float orientation);
     void setMovementPitch(float radians) { movementInfo.pitch = radians; }
@@ -418,6 +422,7 @@ private:
     // Reference to GameHandler's movementInfo to avoid desync
     MovementInfo& movementInfo;
     std::chrono::steady_clock::time_point movementClockStart_ = std::chrono::steady_clock::now();
+    float timeSkipCarryMs_ = 0.0f;  ///< a frame's part of a millisecond, carried
     uint32_t lastMovementTimestampMs_ = 0;
     bool serverMovementAllowed_ = true;
     uint32_t monsterMovePacketsThisTick_ = 0;

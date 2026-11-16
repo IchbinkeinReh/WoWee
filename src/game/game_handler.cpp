@@ -938,6 +938,8 @@ void GameHandler::update(float deltaTime) {
         if (movementHandler_) movementHandler_->updateMoverSplineDone();
         // NPC dialog emotes as they come due (0x0073adc0).
         updateDialogEmotes();
+        // The mover held over ground not yet loaded (0x006f1490).
+        if (movementHandler_) movementHandler_->updateMoverTimeSkip(deltaTime);
 
         const float currentPingInterval =
             (isPreWotlk()) ? game::CLASSIC_PING_INTERVAL_SEC : pingInterval;
