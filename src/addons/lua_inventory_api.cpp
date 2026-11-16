@@ -1265,17 +1265,18 @@ static int lua_AddTradeMoney(lua_State* L) {
     return 0;
 }
 
-/// The pick-up half: take money back off the trade onto the cursor. Without an
-/// amount, all of it - which is what the money frame passes when the whole
-/// figure is dragged.
+/// The pick-up half: take money back off the trade onto the cursor
+/// (0x00586810 -> 0x00704320): only an amount above nothing and no more than
+/// is offered; the trade is left at the rest and the amount goes on the
+/// cursor. Any other amount does nothing at all.
 static int lua_PickupTradeMoney(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: PickupTradeMoney(amount)");   // 0x00586810
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     const uint64_t offered = gh->getMyTradeGold();
-    if (offered == 0) return 0;
-    uint64_t take = static_cast<uint64_t>(luaL_optnumber(L, 1, 0));
-    if (take == 0 || take > offered) take = offered;
+    const int32_t amount = luaToClientInt(L, 1);
+    if (amount <= 0 || static_cast<uint64_t>(amount) > offered) return 0;
+    const uint64_t take = static_cast<uint64_t>(amount);
     gh->setTradeGold(offered - take);
     setCursorMoney(L, take);
     return 0;
@@ -5904,8 +5905,14 @@ static int lua_GiveMasterLoot(lua_State* L) {
 
     const auto& candidates = gh->getMasterLootCandidates();
     if (candidate > static_cast<int>(candidates.size())) return 0;
-    gh->lootMasterGive(static_cast<uint8_t>(slot - 1),
-                       candidates[static_cast<size_t>(candidate - 1)]);
+    // 0x005893a0: only a slot holding an item, one of the first eighteen
+    // after the coin, whose loot slot type is 2 - the master looter's to
+    // hand out - and by the server's own slot number, not the display's.
+    const game::LootItem* item = lootItemAtSlot(gh, slot);
+    const int itemRow = lootHasCoin(gh) ? slot - 2 : slot - 1;
+    if (!item || itemRow >= 0x12 || item->itemId == 0 || item->lootSlotType != 2) return 0;
+    if (gh->getCurrentLoot().lootGuid == 0) return 0;
+    gh->lootMasterGive(item->slotIndex, candidates[static_cast<size_t>(candidate - 1)]);
     return 0;
 }
 

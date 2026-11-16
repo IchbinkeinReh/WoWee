@@ -3372,12 +3372,25 @@ void GameHandler::setWatchedFactionId(uint32_t factionId) {
 }
 
 void GameHandler::setFactionAtWar(uint32_t repListId, bool atWar) {
-    if (repListId >= initialFactions_.size()) return;
-    // The server forbids declaring war on some factions; don't fight the flag.
-    if (atWar && isFactionPeaceForced(repListId)) return;
-    // Optimistic local update; the server echoes SMSG_SET_FACTION_ATWAR to confirm.
-    if (atWar) initialFactions_[repListId].flags |=  FACTION_FLAG_AT_WAR;
-    else       initialFactions_[repListId].flags &= ~FACTION_FLAG_AT_WAR;
+    // 0x005d0a10. A faction the reputation list has a row for (its index
+    // under 0x80), and making peace only above -3001 standing (Hated stays
+    // at war).
+    if (repListId >= initialFactions_.size() || repListId >= 0x80) return;
+    if (!atWar && getFactionStanding(getFactionIdByRepListId(repListId)) <= -3001) return;
+    // Making peace mid-fight is refused with ERR_NOT_IN_COMBAT.
+    if (!atWar) {
+        const uint16_t flagsIdx = fieldIndex(UF::UNIT_FIELD_FLAGS);
+        const auto player = getEntityManager().getEntity(getPlayerGuid());
+        if (player && flagsIdx != 0xFFFF && (player->getField(flagsIdx) & UNIT_FLAG_IN_COMBAT) != 0) {
+            sayGameError(server_notice::kNotInCombat);
+            return;
+        }
+    }
+    // The local at-war bit is set only where the faction's flags allow it -
+    // a peace-forced faction (0x10) keeps it clear - but the request goes to
+    // the realm either way.
+    if (atWar && !isFactionPeaceForced(repListId)) initialFactions_[repListId].flags |= FACTION_FLAG_AT_WAR;
+    else initialFactions_[repListId].flags &= ~FACTION_FLAG_AT_WAR;
     if (!isInWorld() || !socket) return;
     // CMSG_SET_FACTION_ATWAR: uint32 repListId + uint8 flag
     network::Packet pkt(wireOpcode(Opcode::CMSG_SET_FACTION_ATWAR));

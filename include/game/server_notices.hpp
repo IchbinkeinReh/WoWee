@@ -185,6 +185,11 @@ inline constexpr GameError kInternalBagError{
 inline constexpr GameError kNotEquippable{
     0x15, "ERR_NOT_EQUIPPABLE", "", Line::Error};
 
+// Making peace with a faction while in combat (0x005d0a10, UNIT_FLAG_IN_COMBAT
+// on the player): row 0x1c2.
+inline constexpr GameError kNotInCombat{
+    0x1c2, "ERR_NOT_IN_COMBAT", "You can't do that while in combat", Line::Error};
+
 // The attach half of ClickSendMailItemButton (0x0056fff0) ends with this row
 // when the square it was handed is not one of the letter's twelve, and with the
 // same row when it was handed "anywhere" and every row is filled already.  Row

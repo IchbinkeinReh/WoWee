@@ -4880,6 +4880,13 @@ void SocialHandler::reportPvpAfk(uint64_t playerGuid) {
     network::Packet pkt(wireOpcode(Opcode::CMSG_REPORT_PVP_AFK));
     pkt.writeUInt64(playerGuid);
     owner_.getSocket()->send(pkt);
+    // 0x006d74b0: then, when the name cache knows the player, a system line
+    // saying so.
+    const std::string& name = owner_.lookupName(playerGuid);
+    if (!name.empty()) {
+        owner_.addSystemChatMessage(
+            interfaceFormat("REPORT_PVP_AFK_SENT", "You have reported %s as AFK.", {name}));
+    }
 }
 
 void SocialHandler::leaveBattlefield() {
