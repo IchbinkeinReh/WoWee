@@ -426,6 +426,21 @@ static int lua_Frame_UnregisterEvent(lua_State* L) {
         lua_pop(L, 1);
     }
     lua_pop(L, 1);
+
+    // While this event is going out, the frame is not called for the rest of
+    // it (0x0081a8c0 puts it on the pending-removal list, which 0x0081aa00
+    // checks before each listener). The set exists only during a dispatch.
+    lua_getfield(L, LUA_REGISTRYINDEX, "wowee_event_dropped");
+    if (lua_istable(L, -1)) {
+        lua_getfield(L, -1, eventName);
+        if (lua_istable(L, -1)) {
+            lua_pushvalue(L, 1);
+            lua_pushboolean(L, 1);
+            lua_rawset(L, -3);
+        }
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
     return 0;
 }
 
@@ -15954,9 +15969,39 @@ void LuaEngine::fireEventWith(const std::string& eventName, int nargs,
                 lua_rawseti(L_, -2, i);
             }
             lua_remove(L_, -2);   // drop the live list; the copy stands in
+            const int copyIdx = lua_gettop(L_);
+            // A frame unregistered while the event is going out is passed over
+            // for the rest of it (0x0081aa00 skips every listener on the
+            // pending-removal list 0x0081a8c0 keeps while the event fires) -
+            // whoever unregistered it, an earlier handler or the frame itself.
+            // One set per event name, made by the outermost dispatch of it;
+            // UnregisterEvent marks the frame in it.
+            lua_getfield(L_, LUA_REGISTRYINDEX, "wowee_event_dropped");
+            if (!lua_istable(L_, -1)) {
+                lua_pop(L_, 1);
+                lua_newtable(L_);
+                lua_pushvalue(L_, -1);
+                lua_setfield(L_, LUA_REGISTRYINDEX, "wowee_event_dropped");
+            }
+            const int droppedRootIdx = lua_gettop(L_);
+            lua_getfield(L_, droppedRootIdx, eventName.c_str());
+            bool outermost = false;
+            if (!lua_istable(L_, -1)) {
+                lua_pop(L_, 1);
+                lua_newtable(L_);
+                lua_pushvalue(L_, -1);
+                lua_setfield(L_, droppedRootIdx, eventName.c_str());
+                outermost = true;
+            }
+            const int droppedIdx = lua_gettop(L_);
             for (int i = 1; i <= frameCount; i++) {
-                lua_rawgeti(L_, -1, i);
+                lua_rawgeti(L_, copyIdx, i);
                 if (!lua_istable(L_, -1)) { lua_pop(L_, 1); continue; }
+                lua_pushvalue(L_, -1);
+                lua_rawget(L_, droppedIdx);
+                const bool dropped = lua_toboolean(L_, -1) != 0;
+                lua_pop(L_, 1);
+                if (dropped) { lua_pop(L_, 1); continue; }
 
                 // Get the frame's OnEvent script
                 lua_getfield(L_, -1, "__scripts");
@@ -15980,6 +16025,11 @@ void LuaEngine::fireEventWith(const std::string& eventName, int nargs,
                 }
                 lua_pop(L_, 2); // pop __scripts + frame
             }
+            if (outermost) {
+                lua_pushnil(L_);
+                lua_setfield(L_, droppedRootIdx, eventName.c_str());
+            }
+            lua_settop(L_, copyIdx);   // the copy stays for the pop below
         } else if (traced.count(eventName)) {
             LOG_WARNING("EventTrace: ", eventName, " (",
                         traceArg,
