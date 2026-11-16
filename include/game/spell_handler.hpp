@@ -314,6 +314,10 @@ public:
     /// Hand the spell visual system every aura it should be showing again -
     /// the player's and every unit's still in view - after it was reset.
     void replayAuraStateKits();
+    /// The player's aura vision (PLAYER_FIELD_BYTES2's high byte) as it now
+    /// is: where a bit changed, each unit's aura asking for it has its state
+    /// kit shown or taken away again (0x006d7030 -> 0x00727a70).
+    void onPlayerAuraVision(uint8_t vision);
 
     // Known spells mutation (formerly accessed via friend)
     void addKnownSpell(uint32_t spellId) {
@@ -1010,6 +1014,8 @@ private:
     std::vector<AuraSlot> playerAuras_;
     std::vector<AuraSlot> targetAuras_;
     std::unordered_map<uint64_t, std::vector<AuraSlot>> unitAurasCache_;
+    /// The player's aura vision last seen, none before the first.
+    std::optional<uint8_t> auraVisionSeen_;
 
     // Spell book tabs
     std::vector<SpellBookTab> spellBookTabs_;
