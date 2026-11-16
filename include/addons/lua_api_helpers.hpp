@@ -1274,7 +1274,7 @@ inline uint32_t spellIdForCall(lua_State* L, game::GameHandler* gh) {
             return *b == '\0' && *want == '\0';
         };
         if (book && isPet(book)) {
-            const auto& pet = gh->getPetSpells();
+            const auto pet = gh->getPetBookSpells();
             if (slot < 1 || slot > static_cast<int>(pet.size())) return 0;
             return pet[static_cast<size_t>(slot - 1)];
         }

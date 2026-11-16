@@ -10568,7 +10568,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"HasPetSpells", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) { lua_pushnil(L); return 1; }
-            const auto& spells = gh->getPetSpells();
+            const auto spells = gh->getPetBookSpells();
             if (spells.empty()) { lua_pushnil(L); return 1; }
             lua_pushnumber(L, static_cast<lua_Number>(spells.size()));
             constexpr uint8_t kWarlock = 9;

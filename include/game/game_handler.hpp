@@ -1667,6 +1667,11 @@ public:
 
     // Spells the pet knows (from SMSG_PET_SPELLS spell list)
     const std::vector<uint32_t>& getPetSpells() const { return petSpellList_; }
+    /// The pet's spellbook (0x00542ee0, sorted by 0x0053c8b0): its spells
+    /// without the hidden ones - Attributes 0x80 or AttributesEx4 0x8000, the
+    /// scaling and "(DND)" passives - in name then rank order. What the pet
+    /// book's slots count, HasPetSpells and GetSpellName(i, "pet") read.
+    [[nodiscard]] std::vector<uint32_t> getPetBookSpells() const;
     // Pet autocast set (spellIds that have autocast enabled)
     bool isPetSpellAutocast(uint32_t spellId) const {
         return petAutocastSpells_.count(spellId) != 0;
@@ -1681,8 +1686,18 @@ public:
     /// The pet bar's slot used (0x005d4210) at a unit, or none for the
     /// target's place.
     void usePetSlot(uint32_t packed, uint64_t targetGuid);
-    // Toggle autocast for a pet spell via CMSG_PET_SPELL_AUTOCAST
+    /// A pet spell's autocast turned over by the spell (0x005d5e10): only
+    /// one the pet may cast by itself, every bar slot holding it along, then
+    /// CMSG_PET_SPELL_AUTOCAST and PET_BAR_UPDATE.
     void togglePetSpellAutocast(uint32_t spellId);
+    /// The same by a bar slot, 0-based (0x005d5d20): only a slot whose
+    /// action carries the autocastable bit (0x80000000) - its autocast bit
+    /// (0x40000000) turned over in the slot and in the pet's spell list,
+    /// CMSG_PET_SET_ACTION for the slot, then PET_BAR_UPDATE.
+    void togglePetSlotAutocast(int idx);
+    /// Whether a pet spell is in effect on the pet, so that its button takes
+    /// it off rather than casting it and shows its ActiveIconID (0x00802cb0).
+    [[nodiscard]] bool petSpellInEffect(uint32_t spellId);
     const std::unordered_set<uint32_t>& getKnownSpells() const {
         static const std::unordered_set<uint32_t> empty;
         return spellHandler_ ? spellHandler_->getKnownSpells() : empty;

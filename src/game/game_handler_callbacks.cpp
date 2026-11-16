@@ -3,6 +3,7 @@
 #include <array>
 #include <string_view>
 #include "game/interface_text.hpp"
+#include "game/spell_rank.hpp"
 #include "game/pet_action.hpp"
 #include "game/unit_combat.hpp"
 #include "game/vehicle_mover.hpp"
@@ -3161,6 +3162,48 @@ void GameHandler::updatePossessSpell() {
     if (const auto spell = pet::possessBarSpell(auras, ridesItsCharm)) setPossessSpell(*spell);
 }
 
+bool GameHandler::petSpellInEffect(uint32_t spell) {
+    // 0x00802cb0 on the pet: its toggle spells, companions and mounts.
+    if (spell == 0 || petGuid_ == 0) return false;
+    loadSpellNameCache();
+    const auto it = spellNameCache_.find(spell);
+    if (it == spellNameCache_.end()) return false;
+    auto petUnit = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(petGuid_));
+    if (!petUnit) return false;
+    pet::ToggleSpell toggle;
+    toggle.id = spell;
+    toggle.activeIconId = it->second.activeIconId;
+    for (int k = 0; k < 3; ++k) {
+        toggle.effects[k] = it->second.effectIds[k];
+        toggle.auras[k] = it->second.effectAuraIds[k];
+        toggle.misc[k] = it->second.effectMiscValues[k];
+    }
+    toggle.miscB0 = it->second.effectMiscValuesB[0];
+    pet::ToggleUnit unit;
+    const uint64_t critter = guidFieldOf(*petUnit, UF::UNIT_FIELD_CRITTER);
+    unit.critterEntry = static_cast<uint32_t>((critter >> 24) & 0xFFFFFFFu);  // its entry bits
+    if (const auto p = vehicleRoster_.passenger(petGuid_)) {
+        if (auto v = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(p->vehicleGuid))) {
+            unit.vehicleEntry = v->getEntry();
+            unit.vehicleMadeByPlayer = guidFieldOf(*v, UF::UNIT_FIELD_CREATEDBY) == playerGuid;
+        }
+    }
+    auto* am = services_.assetManager;
+    auto props = am && am->isInitialized() ? am->loadDBCOptional("SummonProperties.dbc") : nullptr;
+    const auto slotOf = [&](uint32_t row) -> uint32_t {
+        const int32_t r = props && props->getFieldCount() > 4 ? props->findRecordById(row) : -1;
+        return r >= 0 ? props->getUInt32(static_cast<uint32_t>(r), 4) : 0u;
+    };
+    const auto mountOf = [&](uint32_t auraSpell) -> std::pair<uint32_t, uint32_t> {
+        const auto m = spellNameCache_.find(auraSpell);
+        if (m == spellNameCache_.end()) return {0u, 0u};
+        return {m->second.effectAuraIds[0], m->second.effectMiscValues[0]};
+    };
+    static const std::vector<AuraSlot> kNoAuras;
+    const auto* auras = getUnitAuras(petGuid_);
+    return pet::spellInEffectOn(toggle, unit, slotOf, auras ? *auras : kNoAuras, mountOf);
+}
+
 void GameHandler::usePetSlot(uint32_t packed, uint64_t targetGuid) {
     // 0x005d4210: a spell the pet casts itself - AttributesEx4 0x20, or the
     // pet is the active mover (0x006dd060) - goes as the player's casts do
@@ -3176,42 +3219,11 @@ void GameHandler::usePetSlot(uint32_t packed, uint64_t targetGuid) {
         // A spell in effect on the pet is taken off it (0x00802cb0 ->
         // 0x00802f80).
         if (it != spellNameCache_.end()) {
-            pet::ToggleSpell toggle;
-            toggle.id = spell;
-            toggle.activeIconId = it->second.activeIconId;
-            for (int k = 0; k < 3; ++k) {
-                toggle.effects[k] = it->second.effectIds[k];
-                toggle.auras[k] = it->second.effectAuraIds[k];
-                toggle.misc[k] = it->second.effectMiscValues[k];
-            }
-            toggle.miscB0 = it->second.effectMiscValuesB[0];
-            pet::ToggleUnit unit;
-            const uint64_t critter = guidFieldOf(*petUnit, UF::UNIT_FIELD_CRITTER);
-            unit.critterEntry = static_cast<uint32_t>((critter >> 24) & 0xFFFFFFFu);  // its entry bits
-            if (const auto p = vehicleRoster_.passenger(petGuid_)) {
-                if (auto v = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(p->vehicleGuid))) {
-                    unit.vehicleEntry = v->getEntry();
-                    unit.vehicleMadeByPlayer = guidFieldOf(*v, UF::UNIT_FIELD_CREATEDBY) == playerGuid;
-                }
-            }
-            auto* am = services_.assetManager;
-            auto props = am && am->isInitialized() ? am->loadDBCOptional("SummonProperties.dbc") : nullptr;
-            const auto slotOf = [&](uint32_t row) -> uint32_t {
-                const int32_t r = props && props->getFieldCount() > 4 ? props->findRecordById(row) : -1;
-                return r >= 0 ? props->getUInt32(static_cast<uint32_t>(r), 4) : 0u;
-            };
-            const auto mountOf = [&](uint32_t auraSpell) -> std::pair<uint32_t, uint32_t> {
-                const auto m = spellNameCache_.find(auraSpell);
-                if (m == spellNameCache_.end()) return {0u, 0u};
-                return {m->second.effectAuraIds[0], m->second.effectMiscValues[0]};
-            };
-            static const std::vector<AuraSlot> kNoAuras;
-            const auto* auras = getUnitAuras(petGuid_);
-            if (pet::spellInEffectOn(toggle, unit, slotOf, auras ? *auras : kNoAuras, mountOf)) {
+            if (petSpellInEffect(spell)) {
                 // Not within 1.5 s of its cooldown beginning, with
                 // secureAbilityToggle (0x00809100 on the pet's history).
                 if (spellHandler_ && spellHandler_->petToggleHeld(spell)) return;
-                if (pet::spellAppliesAura(toggle.effects) && socket) {
+                if (pet::spellAppliesAura(it->second.effectIds) && socket) {
                     if (const uint16_t wire = wireOpcode(Opcode::CMSG_PET_CANCEL_AURA); wire != 0xFFFF) {
                         network::Packet pkt(wire);
                         pkt.writeUInt64(petGuid_);
@@ -4439,6 +4451,26 @@ uint32_t GameHandler::placePetAction(int idx, uint32_t action) {
     return placed.displaced;
 }
 
+void GameHandler::togglePetSlotAutocast(int idx) {
+    // 0x005d5d20: a slot whose action may be cast by itself (its top bit)
+    // gets the autocast bit turned over, the pet's spell list along with it
+    // for a spell (0x005d3450: state 1, the entry naming the same spell),
+    // and the slot is sent back (CMSG_PET_SET_ACTION). PET_BAR_UPDATE
+    // either way.
+    if (idx < 0 || idx >= PET_ACTION_BAR_SLOTS || !hasPet()) return;
+    uint32_t& slot = petActionSlots_[idx];
+    if (pet::petSlotAutocastAllowed(slot)) {
+        slot = pet::petSlotToggledAutocast(slot);
+        const uint32_t spell = slot & 0x00FFFFFFu;
+        if ((slot & 0x3F000000u) == 0x01000000u && spell != 0 && petAutocastableSpells_.count(spell) != 0) {
+            if ((slot & 0x40000000u) != 0) petAutocastSpells_.insert(spell);
+            else petAutocastSpells_.erase(spell);
+        }
+        if (state == WorldState::IN_WORLD) sendPetSetAction(socket.get(), petGuid_, -1, 0, idx, slot);
+    }
+    fireAddonEvent("PET_BAR_UPDATE", {});
+}
+
 void GameHandler::clearPetActionSlot(int idx) {
     namespace pab = pet_action_bar;
     if (idx < 0 || idx >= pab::kSlots) return;
@@ -5614,6 +5646,21 @@ bool GameHandler::isSpellInterruptible(uint32_t spellId) const {
 bool GameHandler::isSpellPassive(uint32_t spellId) const {
     if (spellHandler_) return spellHandler_->isSpellPassive(spellId);
     return false;
+}
+
+std::vector<uint32_t> GameHandler::getPetBookSpells() const {
+    loadSpellNameCache();
+    std::vector<uint32_t> book;
+    book.reserve(petSpellList_.size());
+    for (uint32_t id : petSpellList_) {
+        const auto it = spellNameCache_.find(id);
+        if (it != spellNameCache_.end() && !pet::petSpellInBook(it->second.attr, it->second.attrEx4)) continue;
+        book.push_back(id);
+    }
+    std::stable_sort(book.begin(), book.end(), [this](uint32_t a, uint32_t b) {
+        return spell_rank::bookBefore(getSpellName(a), getSpellRank(a), 0, getSpellName(b), getSpellRank(b), 0);
+    });
+    return book;
 }
 
 std::optional<uint32_t> GameHandler::getSpellAttributes(uint32_t spellId) const {
