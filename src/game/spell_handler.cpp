@@ -3364,7 +3364,7 @@ void SpellHandler::cancelCast() {
     if (!casting_) return;
     if (owner_.getState() == WorldState::IN_WORLD && owner_.getSocket() &&
         currentCastSpellId_ != 0) {
-        auto packet = CancelCastPacket::build(currentCastSpellId_);
+        auto packet = CancelCastPacket::build(currentCastSpellId_, runningCastCount_, !isPreWotlk());
         owner_.getSocket()->send(packet);
     }
     // 0x00806200 on the running cast: it ends (0x007fecc0).
@@ -5818,7 +5818,7 @@ void SpellHandler::stopCasting() {
     }
 
     if (currentCastSpellId_ != 0) {
-        auto packet = CancelCastPacket::build(currentCastSpellId_);
+        auto packet = CancelCastPacket::build(currentCastSpellId_, runningCastCount_, !isPreWotlk());
         owner_.getSocket()->send(packet);
     }
 
