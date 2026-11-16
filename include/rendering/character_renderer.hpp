@@ -426,6 +426,11 @@ public:
     /// where it usually is, which is not the same for a race whose hair is
     /// half the distance from its chin to the top of the box.
     bool getInstanceKeyBonePivotZ(uint32_t instanceId, int32_t keyBoneId, float& outZ) const;
+    /// Where the camera pivots on this model, above its feet, as the client
+    /// works it out for the unit it follows (0x00604e00, standing): the
+    /// Breath attachment's (17) bind height plus 3.5/36, or nine tenths of
+    /// the collision box where the model has none - at the instance's scale.
+    bool getInstanceCameraPivotZ(uint32_t instanceId, float& outZ) const;
     bool getInstancePosition(uint32_t instanceId, glm::vec3& outPos) const;
     /// The instance's world matrix - position, facing and scale - which an
     /// effect parented to the unit rides on.

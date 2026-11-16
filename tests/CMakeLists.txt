@@ -3564,6 +3564,12 @@ wowee_add_test(test_vehicle_ui
 wowee_add_test(test_vehicle_mover
     SOURCES test_vehicle_mover.cpp)
 
+# ── test_possess_camera ──────────────────────────────
+# A possessed unit moves without its master, the camera's pivot on the model
+# it follows (0x00604e00, 0x00718080).
+wowee_add_test(test_possess_camera
+    SOURCES test_possess_camera.cpp)
+
 # ── test_vehicle_packets ─────────────────────────────
 # The seat requests and the eject (0x0074ca90, 0x00757200).
 wowee_add_packet_test(test_vehicle_packets)

@@ -96,6 +96,12 @@ public:
     /// CMSG_MOVE_NOT_ACTIVE_MOVER - then CMSG_SET_ACTIVE_MOVER for the new
     /// one, whose movement movementInfo takes over.
     void setActiveMover(uint64_t guid);
+    /// Whether the active mover is a unit the player possesses rather than
+    /// rides (vehicle::moverIsPossessed, decided as it became the mover):
+    /// the player then stays where it stood.
+    [[nodiscard]] bool moverPossessed() const;
+    /// The player's own movement, wherever another unit moves in its stead.
+    [[nodiscard]] const MovementInfo& playerMovement() const;
     /// Whether the client controls a unit (its +0xa30 0x400, 0x0071c930).
     [[nodiscard]] bool unitHasClientControl(uint64_t guid) const;
     /// The player's PLAYER_FARSIGHT changed (0x006e4fd0 -> 0x006e2880).
@@ -542,6 +548,7 @@ private:
     // --- The active mover ---
     std::optional<uint64_t> activeMover_;  ///< DAT_00ca1238; none set: the player
     uint64_t moverInfoOwner_ = 0;          ///< whose movement movementInfo is; 0 the player's
+    bool moverPossessed_ = false;          ///< the mover other than the player is possessed, not ridden
     std::unordered_map<uint64_t, vehicle::MoveSpline> moveSplines_;
         MovementInfo heldPlayerMovement_;      ///< the player's while another unit moves
     std::unordered_map<uint64_t, bool> unitControl_;  ///< +0xa30 0x400 of units but the player

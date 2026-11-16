@@ -573,6 +573,7 @@ private:
     /// The unit the camera's movement drives in the player's stead - a
     /// vehicle it drives - last frame; 0 for the player itself.
     uint64_t drivenUnitLastFrame_ = 0;
+    bool drivenPossessedLastFrame_ = false;  ///< the unit driven last frame was possessed, not ridden
     /// A server move spline carried the player last frame (0x0073c8e0).
     bool playerSplineLastFrame_ = false;
     std::optional<float> seatZoomRemembered_;

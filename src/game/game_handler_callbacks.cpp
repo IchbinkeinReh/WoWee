@@ -1129,6 +1129,13 @@ uint64_t GameHandler::activeMover() const {
     return movementHandler_ ? movementHandler_->activeMover() : playerGuid;
 }
 
+bool GameHandler::moverPossessed() const { return movementHandler_ && movementHandler_->moverPossessed(); }
+
+const MovementInfo& GameHandler::playerMovementInfo() const {
+    static const MovementInfo kNone{};
+    return movementHandler_ ? movementHandler_->playerMovement() : kNone;
+}
+
 uint64_t GameHandler::cameraTarget() const {
     return movementHandler_ ? movementHandler_->cameraTarget() : playerGuid;
 }

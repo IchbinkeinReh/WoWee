@@ -4564,6 +4564,12 @@ public:
     /// The unit the client moves (DAT_00ca1238): the player, a vehicle it
     /// drives, or none.
     uint64_t activeMover() const;
+    /// Whether the active mover is a unit the player possesses (an Eye of
+    /// Kilrogg, a mind-controlled unit) rather than a vehicle it rides: the
+    /// keys move that unit while the player stays where it stood.
+    bool moverPossessed() const;
+    /// The player's own movement, kept aside while another unit moves.
+    const MovementInfo& playerMovementInfo() const;
     /// The unit the camera looks at: the player, or its PLAYER_FARSIGHT
     /// object where that is in view.
     uint64_t cameraTarget() const;

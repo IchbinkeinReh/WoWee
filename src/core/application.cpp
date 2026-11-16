@@ -4618,6 +4618,7 @@ void Application::applyServerMovementState(float deltaTime) {
     const bool noMover = activeMover == 0;
     {
         auto* cc = renderer->getCameraController();
+        const bool possessing = drivenUnit != 0 && gameHandler->moverPossessed();
         if (drivenUnit != drivenUnitLastFrame_) {
             // A new mover's keys start let go (0x00729010 -> 0x005fbbc0); the
             // camera's character is the driven unit where it stands and
@@ -4629,9 +4630,41 @@ void Application::applyServerMovementState(float deltaTime) {
                 const float facing = core::coords::canonicalToCharacterYawDeg(drivenEntity->getOrientation());
                 cc->turnWithVehicle(facing - cc->getFacingYaw());
                 cc->setFacingYaw(facing);
+                renderer->setCharacterYaw(facing);
             }
             drivenUnitLastFrame_ = drivenUnit;
         }
+        if (drivenPossessedLastFrame_ && activeMover == gameHandler->getPlayerGuid()) {
+            // Back from a unit it possessed: the camera's character is the
+            // player again, where it stood and as it faced - the camera
+            // target goes back to the player (0x006e2880 -> 0x005186a0) and
+            // the keys move it from there.
+            cc->clearMovementInputs();
+            const auto& own = gameHandler->getMovementInfo();
+            renderer->getCharacterPosition() = core::coords::canonicalToRender(glm::vec3(own.x, own.y, own.z));
+            const float facing = core::coords::canonicalToCharacterYawDeg(own.orientation);
+            cc->turnWithVehicle(facing - cc->getFacingYaw());
+            cc->setFacingYaw(facing);
+            renderer->setCharacterYaw(facing);
+        }
+        // Held while the possessed unit is the mover, and while the mover is
+        // between it and the player (none, or its unit gone from view).
+        const bool holdPlayer = gameHandler->moverPossessed() ||
+                                (drivenPossessedLastFrame_ && activeMover != gameHandler->getPlayerGuid());
+        if (drivenUnit != 0 || activeMover == gameHandler->getPlayerGuid()) drivenPossessedLastFrame_ = possessing;
+        // The player's own model stays where it stood while the camera looks
+        // through the unit it possesses (the camera's +0x88 is the farsight
+        // object, 0x006e2880 -> 0x004f6f50), and the camera measures that
+        // unit's model for its pivot.
+        if (holdPlayer) {
+            const auto& own = gameHandler->playerMovementInfo();
+            renderer->setHeldCharacter(rendering::Renderer::HeldCharacter{
+                .position = core::coords::canonicalToRender(glm::vec3(own.x, own.y, own.z)),
+                .yawDeg = core::coords::canonicalToCharacterYawDeg(own.orientation)});
+        } else {
+            renderer->setHeldCharacter(std::nullopt);
+        }
+        cc->setFollowedUnitInstance(possessing ? gameHandler->resolveUnitRenderInstance(drivenUnit) : 0);
         const int stateNow = seatState ? static_cast<int>(*seatState) : 0;
         if (stateNow != localSeatStateLastFrame_ &&
             (stateNow == static_cast<int>(game::vehicle::SeatState::Seated) || stateNow == 0)) {
@@ -5369,8 +5402,10 @@ rendering::upper_body::Unit Application::playerAnimationState(const game::Unit& 
     // Its own movement flags, the ones it sends (+0x7cc). In the air as
     // 0x00723350 has it: falling with a jump's vertical speed, or falling
     // far - which a drop off a ledge is here once it has lasted as long as a
-    // fall the landing is told of.
-    const auto& movement = gameHandler->getMovementInfo();
+    // fall the landing is told of. Its own while a unit it possesses moves
+    // in its stead: the keys move that one, not the player.
+    const auto& movement =
+        gameHandler->moverPossessed() ? gameHandler->playerMovementInfo() : gameHandler->getMovementInfo();
     u.moveFlags = movement.flags;
     const bool launched = (u.moveFlags & ub::kMoveFalling) != 0 && movement.jumpVelocity != 0.0f;
     if (!launched && playerFallsFar()) u.moveFlags |= ub::kMoveFalling | kMoveFallingFar;
@@ -5557,13 +5592,17 @@ void Application::animatePlayerMovement(game::Opcode op, uint32_t flagsBefore, b
     auto* cr = renderer ? renderer->getCharacterRenderer() : nullptr;
     const uint32_t instanceId = renderer ? renderer->getCharacterInstanceId() : 0;
     if (!cr || instanceId == 0 || !gameHandler) return;
+    // The events of a unit the player possesses are that unit's, not the
+    // player's own (the mover is the unit the event is for).
+    if (gameHandler->moverPossessed()) return;
     auto self = gameHandler->getEntityManager().getEntity(gameHandler->getPlayerGuid());
     if (!self || !self->isUnit()) return;
     // A mount takes what its rider is asked (its own driver).
     if (auto* ac = renderer->getAnimationController(); ac && ac->isMounted()) return;
     // The state the event leaves it in, and the speed its flags move it at
     // (CMovement::GetCurrentSpeed).
-    const uint32_t flags = gameHandler->getMovementInfo().flags;
+    const uint32_t flags = (gameHandler->moverPossessed() ? gameHandler->playerMovementInfo()
+                                                          : gameHandler->getMovementInfo()).flags;
     game::MovementSpeeds speeds;
     speeds.walk = gameHandler->getServerWalkSpeed();
     speeds.run = gameHandler->getServerRunSpeed();
