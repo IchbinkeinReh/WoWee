@@ -2113,6 +2113,12 @@ public:
     void setPlacedFallCallback(PlacedFallCallback cb) { placedFallCallback_ = std::move(cb); }
     /// A vehicle unit went away (0x007576e0): its riders let go of it.
     void vehicleGone(uint64_t vehicleGuid);
+    /// The camera's unit taken off its transport: the camera lets go of the
+    /// transport's frame (0x00604a70(0, 0)), with the transport it held.
+    using CameraTransportClearedCallback = std::function<void(uint64_t transportGuid)>;
+    void setCameraTransportClearedCallback(CameraTransportClearedCallback cb) {
+        cameraTransportClearedCallback_ = std::move(cb);
+    }
     void setOverrideLightCallback(OverrideLightCallback cb) { overrideLightCallback_ = std::move(cb); }
     void setVehicleMoveHoldCallback(VehicleMoveHoldCallback cb) { vehicleMoveHoldCallback_ = std::move(cb); }
     [[nodiscard]] const VehicleMoveHoldCallback& vehicleMoveHoldCallback() const { return vehicleMoveHoldCallback_; }
@@ -7109,6 +7115,7 @@ private:
     VehicleMoveHoldCallback vehicleMoveHoldCallback_;
     OverrideLightCallback overrideLightCallback_;
     PlacedFallCallback placedFallCallback_;
+    CameraTransportClearedCallback cameraTransportClearedCallback_;
     bool petActionsOnBonusBar_ = false;
     bool overrideBarActive_ = false;
     uint32_t overrideSpellsId_ = 0;

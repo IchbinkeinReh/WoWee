@@ -4111,8 +4111,13 @@ void GameHandler::vehicleGone(uint64_t vehicleGuid) {
     for (const auto& [guid, seat] : vehicleRoster_.passengers())
         if (seat.vehicleGuid == vehicleGuid) riders.push_back(guid);
     const uint64_t mover = activeMover();
+    // The unit the camera looks at (camera +0x88): the mover, else the player.
+    const uint64_t cameraUnit = mover != 0 ? mover : playerGuid;
     for (const uint64_t rider : riders) {
         const bool own = rider == mover;
+        // The camera's unit first lets the camera off the vehicle's frame
+        // (0x00604a70(0, 0)): its view from then on is the world's.
+        if (rider == cameraUnit && cameraTransportClearedCallback_) cameraTransportClearedCallback_(vehicleGuid);
         if (own && placedFallCallback_) placedFallCallback_();
         vehicleRoster_.leave(rider);
         clearTransportAttachment(rider);

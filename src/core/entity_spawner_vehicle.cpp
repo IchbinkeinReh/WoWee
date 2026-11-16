@@ -587,6 +587,18 @@ glm::vec3 EntitySpawner::framePosition(uint64_t guid) const {
     return pos;
 }
 
+void EntitySpawner::localCameraLeavesTransport(uint64_t transportGuid) {
+    // 0x00604a70 with no transport: what was kept in the transport's frame
+    // is put in the world's, where the transport stands now.
+    auto& vc = localVehicleCamera_;
+    if (transportGuid == 0 || vc.startFrame != transportGuid) return;
+    // Where it stood when last seen: its model may already be gone.
+    const glm::vec3 at = vc.startFramePos;
+    vc.start += at;
+    vc.spring += at;
+    vc.startFrame = 0;
+}
+
 std::optional<EntitySpawner::VehicleCameraView> EntitySpawner::localVehicleCameraView(bool keysTurn, bool freeLook) {
     using game::vehicle::CameraMode;
     auto& vc = localVehicleCamera_;
@@ -681,6 +693,7 @@ std::optional<EntitySpawner::VehicleCameraView> EntitySpawner::localVehicleCamer
     // point by how far along it is - evenly, or sprung with FlagsB 0x20000
     // in and 0x40000 out.
     const glm::vec3 framePos = framePosition(vc.startFrame);
+    vc.startFramePos = framePos;
     const glm::vec3 from = vc.start + framePos;
     float t = 1.0f;
     if (mode != CameraMode::Seated) {

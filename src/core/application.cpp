@@ -1280,6 +1280,10 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
             return entitySpawner_ && entitySpawner_->holdVehicleMove(mover, transport, seat);
         });
         // The player's placed fall (0x006eccf0), into the camera controller.
+        // The camera off a vehicle's frame as it goes (0x00604a70(0, 0)).
+        gameHandler->setCameraTransportClearedCallback([this](uint64_t transportGuid) {
+            if (entitySpawner_) entitySpawner_->localCameraLeavesTransport(transportGuid);
+        });
         gameHandler->setPlacedFallCallback([this] {
             if (renderer && renderer->getCameraController()) renderer->getCameraController()->queuePlacedFall();
         });

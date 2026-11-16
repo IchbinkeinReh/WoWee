@@ -535,6 +535,11 @@ public:
         std::optional<glm::vec3> collisionOrigin;
     };
     [[nodiscard]] std::optional<VehicleCameraView> localVehicleCameraView(bool keysTurn, bool freeLook);
+    /// The camera let go of a transport's frame (0x00604a70(0, 0), as the
+    /// vehicle under its unit goes, 0x007576e0): whatever of its way it held
+    /// on that transport is held in the world from where it is now, so the
+    /// view does not jump when the transport's model is gone.
+    void localCameraLeavesTransport(uint64_t transportGuid);
     /// The vehicle model the camera's closeness fades for the local player
     /// - the one it sits in or drives (0x004f8660) - and its row's fade
     /// scalars where Flags 0x80000 gives them (0x00606f90).
@@ -775,6 +780,7 @@ private:
         glm::vec3 point{0.0f};             ///< +0x2c: what it looks at
         glm::vec3 start{0.0f};             ///< +0x20: `point` at the change, on startFrame
         uint64_t startFrame = 0;           ///< the transport it is held on, 0 for the world
+        glm::vec3 startFramePos{0.0f};     ///< where that transport was at the last update
         glm::vec3 spring{0.0f};            ///< +0x4c: on its way, on startFrame
         glm::vec3 springVelocity{0.0f};    ///< +0x58
     };
