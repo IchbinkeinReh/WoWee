@@ -5890,6 +5890,9 @@ public:
         /// (0x0080ac90).
         uint32_t attrEx4 = 0;
         uint32_t attrEx7 = 0;
+        /// Spell.dbc modalNextSpell (field 48, +0xc0): what follows the
+        /// player's cast when it ends (0x008054f0).
+        uint32_t modalNextSpell = 0;
         /// AttributesEx2 (+0x18) and TargetCreatureType (+0x44): a spell at
         /// the dead (0x1), and the creature types it may be cast at
         /// (0x0080bc80).

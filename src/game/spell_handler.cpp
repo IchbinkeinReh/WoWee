@@ -1772,7 +1772,10 @@ void SpellHandler::notePetCastFailed(uint32_t spellId) {
         owner_.addonEventCallbackRef()("PET_BAR_UPDATE_COOLDOWN", {});
 }
 
-void SpellHandler::castSent(uint32_t spellId, uint64_t caster) {
+void SpellHandler::castSent(uint32_t spellId, uint64_t caster, uint64_t target) {
+    // 0x0080cce0 -> 0x00805010: the player's pending cast, its count, spell
+    // and target (+0x30), until it goes, fails or is cancelled.
+    if (caster == owner_.getPlayerGuid()) sentCasts_[castCount_] = SentCast{spellId, target};
     // 0x0080ac90: AttributesEx7 0x80 from the active mover - the player's
     // seat change is asked (0x00747fa0, the player seated), then the mover
     // stops, its keys as they are (0x0071ae10).
@@ -1797,6 +1800,36 @@ void SpellHandler::castSent(uint32_t spellId, uint64_t caster) {
     if (caster == owner_.getPlayerGuid()) {
         noteGlobalCooldown(spellId, caster, playerHistory_);
         playerCooldownsChanged();
+    }
+}
+
+void SpellHandler::pendingCastEnded(uint8_t castCount) {
+    // 0x008054f0: the player's pending cast of this count has ended. Its
+    // spell's modalNextSpell follows: the attack started again where it is
+    // the auto-repeat spell already running (Auto Shot after Aimed, Arcane,
+    // Steady or Multi-Shot), else that spell cast at the same target.
+    const auto sent = sentCasts_.find(castCount);
+    if (sent == sentCasts_.end()) return;
+    const SentCast cast = sent->second;
+    sentCasts_.erase(sent);
+    loadSpellNameCache();
+    const auto it = owner_.spellNameCacheRef().find(cast.spellId);
+    if (it == owner_.spellNameCacheRef().end()) return;
+    const uint32_t next = it->second.modalNextSpell;
+    if (next == 0) return;
+    // The player's unit descriptor +0x18: UNIT_FIELD_CHARMEDBY.
+    bool charmed = false;
+    if (auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid()))
+        charmed = entityGuidField(*player, UF::UNIT_FIELD_CHARMEDBY) != 0;
+    switch (cast_check::modalNextAction(next, owner_.autoRepeatSpellId(), owner_.isAutoAttacking(), charmed)) {
+    case cast_check::ModalNext::RestartAttack:
+        owner_.attackTarget();
+        break;
+    case cast_check::ModalNext::Cast:
+        castSpell(next, cast.target);
+        break;
+    case cast_check::ModalNext::None:
+        break;
     }
 }
 
@@ -2190,7 +2223,7 @@ void SpellHandler::sendPlayerCast(uint32_t spellId, uint64_t target, uint64_t it
               " castCount=", static_cast<int>(castCount_), " packetSize=", packet.getSize());
     owner_.getSocket()->send(packet);
     LOG_INFO("Casting spell: ", spellId, " on 0x", std::hex, item != 0 ? item : target, std::dec);
-    castSent(spellId, owner_.getPlayerGuid());
+    castSent(spellId, owner_.getPlayerGuid(), target);
 
     // The cast routine (0x0080ac90) ends a cast with UNIT_SPELLCAST_SENT (323),
     // and its shape is four strings: the literal "player", the spell's name, its
@@ -3371,6 +3404,7 @@ void SpellHandler::cancelCast() {
     // 0x00806200 on the running cast: it ends (0x007fecc0).
     if (currentCastSpellId_ != 0)
         owner_.castVisuals().ended(owner_.getPlayerGuid(), runningCastCount_, currentCastSpellId_);
+    const uint8_t cancelledCount = runningCastCount_;
     casting_ = false;
     castIsChannel_ = false;
     currentCastSpellId_ = 0;
@@ -3384,6 +3418,8 @@ void SpellHandler::cancelCast() {
         if (auto* svs = renderer->getSpellVisualSystem())
             svs->cancelAllPrecastVisuals();
     }
+    // 0x00806200 -> 0x008054f0.
+    pendingCastEnded(cancelledCount);
 }
 
 void SpellHandler::startCraftQueue(uint32_t spellId, int count) {
@@ -4143,6 +4179,11 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     owner_.castVisuals().ended(owner_.getPlayerGuid(), data.castCount, data.spellId);
     if (owner_.isAutoRepeating() && data.result != 0x1b)
         owner_.castVisuals().autoRepeatStopped(owner_.getPlayerGuid());
+    // ...and 0x00808200 -> 0x008054f0 once the failure is shown (below).
+    struct EndPending {
+        SpellHandler& h; uint8_t count; bool wotlk;
+        ~EndPending() { if (wotlk) h.pendingCastEnded(count); }
+    } endPending{*this, data.castCount, isActiveExpansion("wotlk")};
     // The repeating spell itself refused: the repeat ends and the server is
     // told (0x00808200 -> 0x00807560(1)).
     if (owner_.isAutoRepeating() && data.result != 0x1b && data.spellId == owner_.autoRepeatSpellId())
@@ -4436,6 +4477,14 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
     // 0x0080e1b0 -> 0x007fecc0 for a cast not pending: the caster's shown
     // cast ends where it is this one.
     if ((data.castFlags & 0x1u) == 0) owner_.castVisuals().ended(data.casterUnit, data.castCount, data.spellId);
+    // 0x0080e1b0 -> 0x008054f0 at its close, for the player's pending cast
+    // (not a pending go): its modalNextSpell follows.
+    struct EndPending {
+        SpellHandler& h; uint8_t count; bool ends;
+        ~EndPending() { if (ends) h.pendingCastEnded(count); }
+    } endPending{*this, data.castCount,
+                 (data.castFlags & 0x1u) == 0 && data.casterUnit == owner_.getPlayerGuid() &&
+                     isActiveExpansion("wotlk")};
     if (data.hasPower) castPowerSaid(data.casterUnit, data.spellId, data.power, true);
     // 0x00805330 for a cast that had no start (instant), as for one that had.
     if (owner_.spellCastBeginCallbackRef()) owner_.spellCastBeginCallbackRef()(data.casterUnit, data.spellId);
@@ -6108,6 +6157,7 @@ void SpellHandler::loadSpellNameCache() const {
     const uint32_t dmgClassField = spellL ? spellL->tryField("DmgClass") : 0xFFFFFFFF;
     const uint32_t attrEx4Field = spellL ? spellL->tryField("AttributesEx4") : 0xFFFFFFFF;
     const uint32_t attrEx7Field = spellL ? spellL->tryField("AttributesEx7") : 0xFFFFFFFF;
+    const uint32_t modalNextField = spellL ? spellL->tryField("ModalNextSpell") : 0xFFFFFFFF;
     const uint32_t stackAmountField = spellL ? spellL->tryField("StackAmount") : 0xFFFFFFFF;
     const uint32_t attrEx5Field = spellL ? spellL->tryField("AttributesEx5") : 0xFFFFFFFF;
     const uint32_t attrEx6Field = spellL ? spellL->tryField("AttributesEx6") : 0xFFFFFFFF;
@@ -6356,6 +6406,7 @@ void SpellHandler::loadSpellNameCache() const {
             }
             if (attrEx4Field < fieldCount) entry.attrEx4 = dbc->getUInt32(i, attrEx4Field);
             if (attrEx7Field < fieldCount) entry.attrEx7 = dbc->getUInt32(i, attrEx7Field);
+            if (modalNextField < fieldCount) entry.modalNextSpell = dbc->getUInt32(i, modalNextField);
             if (stackAmountField < fieldCount) entry.stackAmount = dbc->getUInt32(i, stackAmountField);
             if (attrEx5Field < fieldCount) entry.attrEx5 = dbc->getUInt32(i, attrEx5Field);
             if (attrEx6Field < fieldCount) entry.attrEx6 = dbc->getUInt32(i, attrEx6Field);
@@ -7628,6 +7679,8 @@ void SpellHandler::handleSpellFailure(network::Packet& packet) {
                 owner_.stopAutoRepeat(true);
             }
             owner_.castVisuals().ended(caster, failCastCount, failSpellId);
+            // 0x00809c70 -> 0x008054f0 for the player's pending cast.
+            if (caster == owner_.getPlayerGuid() && hasCastCount) pendingCastEnded(failCastCount);
         }
         // Classic result enum starts at 0=AFFECTING_COMBAT; shift +1 for WotLK table
         uint8_t failReason = isClassic ? static_cast<uint8_t>(rawFailReason + 1) : rawFailReason;

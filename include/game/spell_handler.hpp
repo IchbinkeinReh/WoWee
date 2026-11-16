@@ -46,6 +46,10 @@ public:
     /// before it was cached (0x00808de0).
     void itemTemplateArrived(uint32_t itemEntry);
 
+    /// The player's pending cast of this count went, failed or was
+    /// cancelled: its modalNextSpell follows (0x008054f0).
+    void pendingCastEnded(uint8_t castCount);
+
     void registerOpcodes(DispatchTable& table);
 
     // Talent data structures (aliased from handler_types.hpp)
@@ -826,6 +830,13 @@ private:
         bool onHold = false;
     };
     std::unordered_map<uint32_t, LateItemCooldown> lateItemCooldowns_;
+    /// The player's casts sent and not yet ended, by cast count: the spell
+    /// and the unit it was aimed at (the pending cast's +0x30).
+    struct SentCast {
+        uint32_t spellId = 0;
+        uint64_t target = 0;
+    };
+    std::unordered_map<uint8_t, SentCast> sentCasts_;
     /// The last failure 0x00808200 reported, held three seconds. Mutable:
     /// the const reach test reports through it.
     mutable cast_failure::RepeatHold failureHold_;
@@ -954,7 +965,7 @@ private:
     /// where it wants none.
     bool armGroundTarget(uint32_t spellId, uint64_t caster);
     /// What SendCast does once the cast is out (0x0080ac90).
-    void castSent(uint32_t spellId, uint64_t caster);
+    void castSent(uint32_t spellId, uint64_t caster, uint64_t target = 0);
     bool casting_ = false;
     bool castIsChannel_ = false;
     uint32_t currentCastSpellId_ = 0;

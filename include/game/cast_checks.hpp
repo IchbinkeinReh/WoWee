@@ -462,4 +462,24 @@ struct Usable {
     return last;
 }
 
+/// 0x008054f0, run as each of the player's pending casts ends - its SPELL_GO
+/// (0x0080e1b0, not a pending go), its failure (0x00808200, 0x00806ad0,
+/// 0x00809c70) or its cancel (0x00806200) - for a spell with a
+/// modalNextSpell (Spell.dbc field 48).
+enum class ModalNext : uint8_t {
+    None,
+    RestartAttack,  ///< 0x0072c2b0(0, 0, 0): the attack at the target
+    Cast,           ///< 0x0080cce0: modalNextSpell at the cast's target
+};
+
+/// `runningRepeatSpell` is the auto-repeat spell while it runs (0x006d71e0),
+/// `swinging` the player's swing or melee target (+0x1858 0x2, +0xa20) and
+/// `charmed` its UNIT_FIELD_CHARMEDBY.
+[[nodiscard]] constexpr ModalNext modalNextAction(uint32_t modalNextSpell, uint32_t runningRepeatSpell,
+                                                  bool swinging, bool charmed) {
+    if (modalNextSpell == 0) return ModalNext::None;
+    if (modalNextSpell != runningRepeatSpell) return ModalNext::Cast;
+    return swinging || charmed ? ModalNext::None : ModalNext::RestartAttack;
+}
+
 }  // namespace wowee::game::cast_check

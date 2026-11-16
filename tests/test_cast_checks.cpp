@@ -365,3 +365,17 @@ TEST_CASE("cast count runs 1..255 and never sends 0 (0x00805010)", "[cast_checks
     for (int i = 0; i < 1000; ++i) seen0 |= nextCastCount(last) == 0;
     REQUIRE(seen0 == 0);
 }
+
+TEST_CASE("a cast's modalNextSpell follows it as 0x008054f0 says", "[cast_checks]") {
+    constexpr uint32_t kAutoShot = 75;
+    // Nothing follows a spell without one.
+    REQUIRE(modalNextAction(0, kAutoShot, false, false) == ModalNext::None);
+    // Auto Shot already repeating: the attack is started again...
+    REQUIRE(modalNextAction(kAutoShot, kAutoShot, false, false) == ModalNext::RestartAttack);
+    // ...unless one runs or the player is charmed.
+    REQUIRE(modalNextAction(kAutoShot, kAutoShot, true, false) == ModalNext::None);
+    REQUIRE(modalNextAction(kAutoShot, kAutoShot, false, true) == ModalNext::None);
+    // Not repeating: the follow-up is cast.
+    REQUIRE(modalNextAction(kAutoShot, 0, false, false) == ModalNext::Cast);
+    REQUIRE(modalNextAction(kAutoShot, 5019, true, true) == ModalNext::Cast);
+}
