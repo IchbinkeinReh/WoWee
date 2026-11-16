@@ -2134,7 +2134,8 @@ void CameraController::update(float deltaTime) {
     // Tilde or NumLock toggles auto-run; any forward/backward key cancels it
     bool tildeDown = !uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_GRAVE) ||
                                            input.isKeyPressed(SDL_SCANCODE_NUMLOCKCLEAR));
-    if (tildeDown && !tildeWasDown) {
+    const bool autorunPressed = tildeDown && !tildeWasDown;
+    if (autorunPressed) {
         autoRunning = !autoRunning;
     }
     tildeWasDown = tildeDown;
@@ -2185,6 +2186,43 @@ void CameraController::update(float deltaTime) {
         }
     }
 
+    // Click-to-move. A key that starts a move of its own ends it first
+    // (0x0072e5d0 and the other starts call 0x007272c0 unless click-to-move
+    // is the one starting it, 0x00ca1200 & 1): a mover it had going is
+    // stopped (0x0071aee0, MSG_MOVE_STOP), then the key's start goes out.
+    // Otherwise it turns the mover (0x00731650 -> 0x00731600) and starts or
+    // stops it (0x0072ecf0, 0x0071aee0) as it steers.
+    {
+        const bool keysHeld = keyW || keyS || keyA || keyD || keyQ || keyE || mouseAutorun;
+        const bool keysStart = (keysHeld && !clickToMoveKeysHeld_) || nowJump || (autorunPressed && autoRunning);
+        clickToMoveKeysHeld_ = keysHeld;
+        if (keysStart && clickToMoveActive_) {
+            clickToMoveActive_ = false;
+            if (clickToMoveCancel_) clickToMoveCancel_();
+            if (clickToMoveForward_ && wasMovingForward && movementCallback) {
+                movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_STOP));
+                wasMovingForward = false;
+            }
+            clickToMoveForward_ = false;
+        }
+        if (clickToMoveSteer_ && thirdPerson && followTarget && !keysStart && !introActive) {
+            const ClickToMoveSteer st = clickToMoveSteer_(facingYaw, deltaTime, rightMouseDown);
+            if (st.facingYawDeg) {
+                float delta = std::fmod(*st.facingYawDeg - facingYaw, 360.0f);
+                if (delta > 180.0f) delta -= 360.0f;
+                if (delta < -180.0f) delta += 360.0f;
+                facingYaw += delta;
+                // The camera turns with the mover as it does for the turn
+                // keys, unless a mouse button holds it.
+                if (!leftMouseDown && !rightMouseDown) yaw += delta;
+                camera->setRotation(yaw, pitch);
+            }
+            if (st.forward) clickToMoveForward_ = *st.forward;
+            if (!st.active) clickToMoveForward_ = false;
+            clickToMoveActive_ = st.active;
+        }
+    }
+
     // A mover that may not move (0x005fbbc0 with 0x005fac90 false) stops its
     // autorun, and its keys start nothing.
     if (moverHeld_) autoRunning = false;
@@ -2194,8 +2232,8 @@ void CameraController::update(float deltaTime) {
     if (autoFollowMove) autoRunning = true;
     // A mover stopped by a cast (0x0071ae10) stays stopped while its keys
     // are held as they were (0x005fae70), counted as it counts them.
-    const bool forwardKeys = keyW || mouseAutorun || autoRunning;
-    const int forwardCount = int(keyW) + int(mouseAutorun) + int(autoRunning);
+    const bool forwardKeys = keyW || mouseAutorun || autoRunning || clickToMoveForward_;
+    const int forwardCount = int(keyW) + int(mouseAutorun) + int(autoRunning) + int(clickToMoveForward_);
     forwardBackStopped_ =
         game::vehicle::forwardBackStopHolds(forwardBackStopped_, forwardCount, int(keyS), moverHeld_);
     bool nowForward = !movBlocked && !forwardBackStopped_ && forwardKeys;
@@ -2344,8 +2382,9 @@ void CameraController::update(float deltaTime) {
     // On a phone that is what the right mouse button is on a desktop: the
     // character turns to face where the player is looking, so that walking
     // forward goes where the screen points.
+    // Not a swimmer click-to-move steers: it turns the mover itself.
     bool cameraDrivesFacing = rightMouseDown || mouseAutorun || steering_ ||
-                              (swimming && hasMoveInput);
+                              (swimming && hasMoveInput && !clickToMoveActive_);
     // During taxi flights, orientation is controlled by the flight path, not player input
     if (cameraDrivesFacing && !externalFollow_) {
         facingYaw = yaw;
@@ -2354,15 +2393,21 @@ void CameraController::update(float deltaTime) {
     // 0x005fa170 / 0x005fa450): moving, strafing or turning swings the
     // camera back behind the character, standing still leaves it be.
     {
-        const bool move = nowForward || nowBackward || autoRunning || mouseAutorun;
+        // Click-to-move's own going is not the keys' Move: its controls
+        // (0x1e00000) make the Track state (0x00602dc0 sets +0x98 0x100).
+        // 0x00602760 reads Track as Move only for a follow (kind 3) with
+        // autoInteract off, and this client's follow is not click-to-move.
+        const bool keyedForward = nowForward && (keyW || mouseAutorun || autoRunning);
+        const bool move = keyedForward || nowBackward || autoRunning || mouseAutorun;
         const bool strafe = nowStrafeLeft || nowStrafeRight;
         const bool turnKeys = nowTurnLeft || nowTurnRight;
+        const bool track = clickToMoveActive_;
         const uint32_t controls = (move ? 1u : 0u) | (strafe ? 2u : 0u) | (turnKeys ? 4u : 0u) |
-                                  (leftMouseDown ? 8u : 0u) | (rightMouseDown ? 16u : 0u);
+                                  (leftMouseDown ? 8u : 0u) | (rightMouseDown ? 16u : 0u) | (track ? 32u : 0u);
         if (controls != followSmoothControls_) {
             followSmoothControls_ = controls;
             if (thirdPerson && !externalFollow_ && !yawFollowsVehicleCamera_)
-                startFollowSmoothing(camera_smooth::stateFor(move, strafe, turnKeys, rightMouseDown),
+                startFollowSmoothing(camera_smooth::stateFor(move, strafe, turnKeys, rightMouseDown, track),
                                      swimming || isFlightAirborne());
         }
         // Carried by a server spline, the Fear state (followServerSpline).
@@ -2374,7 +2419,7 @@ void CameraController::update(float deltaTime) {
         } else if (fearPlanned_) {
             fearPlanned_ = false;
             if (thirdPerson)
-                startFollowSmoothing(camera_smooth::stateFor(move, strafe, turnKeys, rightMouseDown),
+                startFollowSmoothing(camera_smooth::stateFor(move, strafe, turnKeys, rightMouseDown, track),
                                      swimming || isFlightAirborne());
         }
     }
@@ -2469,7 +2514,9 @@ void CameraController::update(float deltaTime) {
         // on the interface wanting the mouse either: both flags are already
         // cleared at the press when it did.
         const bool mouseWalk = leftMouseDown && rightMouseDown;
-        if (anyMoveKey || mouseWalk) sitting = false;
+        // A click-to-move stands the player as it starts (0x00727400 ->
+        // 0x006dcb40(0)).
+        if (anyMoveKey || mouseWalk || clickToMoveActive_) sitting = false;
     }
 
     // Notify server when the player stands up via local input

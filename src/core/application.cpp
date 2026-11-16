@@ -3709,6 +3709,20 @@ void Application::connectWorldHooks() {
                 gameHandler->cancelFollow();
             }
         });
+        // Click-to-move, steered by the game's state and moved by the camera
+        // with the keys' own packets (0x007317a0).
+        cc->setClickToMoveSteer([this](float facingYawDeg, float dt, bool mouseSteering) {
+            rendering::CameraController::ClickToMoveSteer out;
+            if (!gameHandler) return out;
+            const auto st = gameHandler->stepClickToMove(facingYawDeg, dt, mouseSteering);
+            out.active = st.active;
+            out.facingYawDeg = st.facingYawDeg;
+            out.forward = st.forward;
+            return out;
+        });
+        cc->setClickToMoveCancel([this]() {
+            if (gameHandler) gameHandler->stopClickToMove();
+        });
         cc->setUseWoWSpeed(true);
     }
     if (gameHandler) {

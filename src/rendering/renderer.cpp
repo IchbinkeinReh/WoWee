@@ -3667,6 +3667,17 @@ void Renderer::update(float deltaTime) {
         blobShadowRenderer->preparePetPulse(pulseCircle, pulseColor,
                                             camera ? camera->getViewProjectionMatrix() : glm::mat4(1.0f),
                                             terrainManager.get(), wmoRenderer.get(), m2Renderer.get());
+        // A click-to-move's place (0x007275c0): the selection texture, white,
+        // laid square to the world (an identity turn, so the "camera" for the
+        // bearing is put a yard south of it).
+        std::optional<blob_shadow::Projection> markerCircle;
+        if (moveMarker_) {
+            markerCircle = selection_circle::project(moveMarker_->first, moveMarker_->second,
+                                                     moveMarker_->first - glm::vec3(0.0f, 1.0f, 0.0f));
+        }
+        blobShadowRenderer->prepareMoveMarker(markerCircle, glm::vec4(1.0f),
+                                              camera ? camera->getViewProjectionMatrix() : glm::mat4(1.0f),
+                                              terrainManager.get(), wmoRenderer.get(), m2Renderer.get());
         // A spell's circle on the place under the cursor (0x004f8a40).
         std::optional<blob_shadow::Projection> spellCircle;
         if (spellTargetCircle_) {

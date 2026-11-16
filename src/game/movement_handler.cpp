@@ -1561,6 +1561,13 @@ void MovementHandler::handleMoveSetCollisionHeight(network::Packet& packet) {
 
 void MovementHandler::moverEvent(Opcode op, uint32_t flagsBefore, bool launchedBefore) {
     if (owner_.moverEventCallbackRef()) owner_.moverEventCallbackRef()(op, flagsBefore, launchedBefore);
+    // 0x007413f0: the player's stop, a strafe's stop or a root (or unroot)
+    // acknowledged, with the player at rest (none of 0xc010ff), takes what a
+    // click-to-move left for its arrival (0x0071b1e0).
+    if ((op == Opcode::MSG_MOVE_STOP || op == Opcode::MSG_MOVE_STOP_STRAFE ||
+         op == Opcode::CMSG_FORCE_MOVE_ROOT_ACK || op == Opcode::CMSG_FORCE_MOVE_UNROOT_ACK) &&
+        (movementInfo.flags & 0xc010ffu) == 0)
+        owner_.clickToMoveMoverStopped();
 }
 
 void MovementHandler::handleMoveKnockBack(network::Packet& packet) {
@@ -2623,6 +2630,9 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
 
     glm::vec3 canonical = core::coords::serverToCanonical(glm::vec3(serverX, serverY, serverZ));
 
+    // Put somewhere else: a click-to-move is over (0x0072d1b0 -> 0x007272c0).
+    owner_.stopClickToMove();
+
     // A destination that is the map origin itself, which is a server-side
     // area-trigger misfire rather than anywhere anyone goes.
     //
@@ -2794,6 +2804,8 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
     float serverY = packet.readFloat();
     float serverZ = packet.readFloat();
     float orientation = packet.readFloat();
+    // Leaving the world ends a click-to-move (0x00528f00 -> 0x007272c0).
+    owner_.stopClickToMove();
     // A ride to another map is one the server said goes with the transport
     // (SMSG_TRANSFER_PENDING). Anything else - a GM teleport, a hearthstone,
     // a portal from a tram car - is a world position, and the player is
@@ -4573,7 +4585,9 @@ void MovementHandler::followGuid(uint64_t guid) {
         }
     }
 
-    // Set follow target
+    // Set follow target. The client's follow is click-to-move's kind 3, so
+    // starting it ends any other (0x00727400).
+    owner_.stopClickToMove();
     owner_.followTargetGuidRef() = guid;
 
     // Initialize render-space position from entity's canonical coords

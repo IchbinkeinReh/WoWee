@@ -344,6 +344,22 @@ public:
     using AutoFollowCancelCallback = std::function<void()>;
     void setAutoFollowCancelCallback(AutoFollowCancelCallback cb) { autoFollowCancelCallback_ = std::move(cb); }
 
+    /// Click-to-move (0x007317a0, run for the player each frame by
+    /// 0x00734390): asked with the facing, the frame's time and whether the
+    /// mouse steers, it answers a facing to take and whether to start or stop
+    /// moving forward; not active once it is over. Its turns and steps go out
+    /// as the keys' do.
+    struct ClickToMoveSteer {
+        bool active = false;
+        std::optional<float> facingYawDeg;
+        std::optional<bool> forward;
+    };
+    using ClickToMoveSteerFn = std::function<ClickToMoveSteer(float facingYawDeg, float dt, bool mouseSteering)>;
+    void setClickToMoveSteer(ClickToMoveSteerFn fn) { clickToMoveSteer_ = std::move(fn); }
+    /// Told when a key starts a move of its own, which ends click-to-move
+    /// (0x0072e5d0 and the other starts -> 0x007272c0).
+    void setClickToMoveCancel(std::function<void()> fn) { clickToMoveCancel_ = std::move(fn); }
+
     void setUseWoWSpeed(bool use) { useWoWSpeed = use; }
     void setRunSpeedOverride(float speed) { runSpeedOverride_ = speed; }
     void setWalkSpeedOverride(float speed) { walkSpeedOverride_ = speed; }
@@ -1081,6 +1097,13 @@ private:
     uint32_t bindingControls_ = 0;
     bool bindingSitStand_ = false;
     bool tildeWasDown = false;
+
+    // Click-to-move: the steer, its cancel, and what it has the mover doing.
+    ClickToMoveSteerFn clickToMoveSteer_;
+    std::function<void()> clickToMoveCancel_;
+    bool clickToMoveActive_ = false;
+    bool clickToMoveForward_ = false;
+    bool clickToMoveKeysHeld_ = false;
 
     // Auto-follow target position (WoW /follow). Non-null when following.
     const glm::vec3* autoFollowTarget_ = nullptr;

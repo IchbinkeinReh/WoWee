@@ -940,6 +940,11 @@ void GameScreen::render(game::GameHandler& gameHandler) {
             renderer->setPetPulse(pulse->first, pulse->second);
         else
             renderer->setPetPulse(0, 0);
+        // The ring on where a click-to-move is going (0x007275c0).
+        if (const auto marker = gameHandler.clickToMoveMarker())
+            renderer->setMoveMarker(std::make_pair(core::coords::canonicalToRender(marker->first), marker->second));
+        else
+            renderer->setMoveMarker(std::nullopt);
         if (gameHandler.hasTarget()) {
             auto target = gameHandler.getTarget();
             if (target) {
@@ -2542,6 +2547,21 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                         return;
                     }
                     gameHandler.targetUnit(closestGuid);
+                } else if (!tapInteract) {
+                    // A right click on no object (0x004f7880) is the
+                    // ground's or nothing's, never the target's: with
+                    // autoInteract the ground under the pointer is walked to
+                    // (0x00527830 -> 0x00527360 -> 0x0072b6d0, kind 4), and
+                    // a click on nothing turns the player that way and runs
+                    // on (0x005278c0 -> 0x0072f040, kind 8). Without it the
+                    // click does nothing.
+                    uint32_t building = 0;
+                    if (auto ground = renderer->pickGround(ray.origin, ray.direction, kGroundPickDistance, &building)) {
+                        gameHandler.clickToMoveTo(groundPlaceAt(gameHandler, *ground, building).canonical);
+                    } else {
+                        gameHandler.clickToMoveFaceDirection(core::coords::renderToCanonical(ray.direction));
+                    }
+                    return;
                 }
             }
         }
@@ -2559,8 +2579,11 @@ void GameScreen::interactWithTarget(game::GameHandler& gameHandler) {
             if (target->getType() == game::ObjectType::UNIT) {
                 // Check if unit is dead (health == 0) → loot, otherwise interact/attack
                 auto unit = std::static_pointer_cast<game::Unit>(target);
+                // With autoInteract each of these walks to it first when it
+                // is out of reach (0x00721f50 handed down).
+                const bool clickToMove = gameHandler.clickToMoveAllowed();
                 if (unit->getHealth() == 0 && unit->getMaxHealth() > 0) {
-                    gameHandler.lootCorpse(target->getGuid());
+                    gameHandler.lootCorpse(target->getGuid(), clickToMove);
                 } else {
                     // Interact with service NPCs; otherwise treat non-interactable living units
                     // as attackable fallback (covers bad faction-template classification).
@@ -2592,9 +2615,11 @@ void GameScreen::interactWithTarget(game::GameHandler& gameHandler) {
                           gameHandler.unitReaction(*unit, *me) > 2) ||
                          (flags2 & 0x4000u) != 0);
                     if (mayInteract) {
-                        gameHandler.interactWithNpc(target->getGuid());
+                        gameHandler.interactWithNpc(target->getGuid(), clickToMove);
                     } else if (gameHandler.unitMayAttack(gameHandler.getPlayerGuid(), target->getGuid())) {
                         gameHandler.startAutoAttack(target->getGuid());
+                        // Then closed in on, or turned to (0x0072ee20).
+                        gameHandler.clickToMoveAttack(target->getGuid());
                     }
                 }
             } else if (target->getType() == game::ObjectType::GAMEOBJECT) {
@@ -2614,6 +2639,7 @@ void GameScreen::interactWithTarget(game::GameHandler& gameHandler) {
                 if (other->getHealth() > 0 && gameHandler.clickUnitBeyondHellos(target->getGuid())) return;
                 if (other->getHealth() > 0 && playerMayAttackPlayer(gameHandler, *other)) {
                     gameHandler.startAutoAttack(target->getGuid());
+                    gameHandler.clickToMoveAttack(target->getGuid());
                 }
             }
         }

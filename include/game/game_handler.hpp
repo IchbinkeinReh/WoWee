@@ -28,6 +28,7 @@
 #include "game/update_field_table.hpp"
 #include "game/go_interaction_anim.hpp"
 #include "game/game_object_use.hpp"
+#include "game/click_to_move.hpp"
 #include "game/inventory.hpp"
 #include "game/spell_defines.hpp"
 #include "game/group_defines.hpp"
@@ -3077,8 +3078,9 @@ public:
     // ---- Loot ----
     void lootTarget(uint64_t guid);
     /// A dead unit right-clicked (0x006dad90): nothing while moving, the
-    /// mount left first, else lootTarget.
-    void lootCorpse(uint64_t guid);
+    /// mount left first, else lootTarget. `clickToMove` (0x00721f50 asked by
+    /// the caller): out of reach, walked to first and looted on arrival.
+    void lootCorpse(uint64_t guid, bool clickToMove = false);
     void lootItem(uint8_t slotIndex, bool confirmed = false);
     void confirmPendingLoot();
     void confirmBindOnUse();
@@ -3168,7 +3170,8 @@ public:
     void deleteEquipmentSet(uint64_t setGuid);
 
     // NPC Gossip
-    void interactWithNpc(uint64_t guid);
+    /// 0x006ddbb0. `clickToMove`: out of reach, walked to first (kind 5).
+    void interactWithNpc(uint64_t guid, bool clickToMove = false);
     /// What 0x006ddbb0 does past the NPC hellos: a spell click
     /// (CMSG_SPELLCLICK) or a group member's vehicle entered
     /// (CMSG_PLAYER_VEHICLE_ENTER). False when it is neither.
@@ -3180,6 +3183,41 @@ public:
     /// progress step after sends one once that time has come.
     void loadingKeepAlive(bool starting);
     void interactWithGameObject(uint64_t guid);
+
+    // ---- Click-to-move (autoInteract) ----
+    /// The CVar autoInteract, default on only for koKR (0x0051d990).
+    bool autoInteractOn() const;
+    /// 0x00721f50: the player alive, the active mover, and autoInteract on.
+    bool clickToMoveAllowed() const;
+    /// 0x00721f90: a click-to-move under way for the player.
+    bool isClickToMoving() const;
+    /// 0x007272c0: given up or done; the mover stops moving forward.
+    void stopClickToMove(bool faceSubject = false, bool stopMoving = true);
+    /// 0x0072b4a0: toward a unit or corpse for kind 5, 6 or 9.
+    bool clickToMoveApproach(uint64_t guid, click_to_move::Kind kind,
+                             std::optional<float> spellRange = std::nullopt);
+    /// 0x0072b6d0: to a place on the ground (canonical).
+    void clickToMoveTo(const glm::vec3& canonicalAt);
+    /// 0x0072b660: turn to a facing (server yaw).
+    void clickToMoveFace(float facing);
+    /// 0x0072f040: turn toward a direction clicked into nothing, and go.
+    void clickToMoveFaceDirection(const glm::vec3& canonicalDir);
+    /// 0x0072ee20: into melee reach of a unit just attacked, or face it.
+    void clickToMoveAttack(uint64_t guid);
+    /// 0x0072b730: to an object out of reach, `reach` being its use reach.
+    bool clickToMoveToObject(uint64_t guid, float reach);
+    /// What the camera is to do this frame (0x007317a0): a facing to take,
+    /// and to start or stop moving forward. Not active once over.
+    struct ClickToMoveSteer {
+        bool active = false;
+        std::optional<float> facingYawDeg;
+        std::optional<bool> forward;
+    };
+    ClickToMoveSteer stepClickToMove(float facingYawDeg, float dtSeconds, bool mouseSteering);
+    /// 0x0071b1e0: the player stopped at rest; an arrival's action is taken.
+    void clickToMoveMoverStopped();
+    /// 0x007275c0: where the ring goes (canonical) and its radius.
+    std::optional<std::pair<glm::vec3, float>> clickToMoveMarker() const;
     uint64_t getHookedFishingBobberGuid() const { return hookedFishingBobberGuid_; }
     void selectGossipOption(uint32_t optionId, const std::string& code = "");
     void selectGossipQuest(uint32_t questId);
@@ -6538,6 +6576,16 @@ private:
     bool cloakVisible_ = true;
     uint8_t standState_ = 0;  // 0=stand, 1=sit, ..., 7=dead, 8=kneel (server-confirmed)
 
+    // ---- Click-to-move (Unit_C statics 0x00ca11a8..0x00ca1270) ----
+    click_to_move::State ctm_;
+    click_to_move::Pending ctmPending_;
+    float ctmObjectReach_ = 0.0f;               // 0x00ca11e8
+    std::optional<float> ctmFaceOnStop_;        // 0x00ca11d8 for 0x007272c0's turn
+    std::optional<glm::vec3> clickToMoveSubject(uint64_t guid) const;
+    bool playerAliveAsMover() const;
+    bool startClickToMove(click_to_move::Kind kind, uint64_t guid, const glm::vec3& canonicalAt, float facing,
+                          std::optional<float> spellRange = std::nullopt);
+
     // ---- Follow state ----
     uint64_t followTargetGuid_ = 0;
     glm::vec3 followRenderPos_{0.0f};  // Render-space position of followed entity (updated each frame)
@@ -6938,6 +6986,8 @@ private:
     int32_t openLockEffectValue(uint32_t spellId, int k) const;
     bool gameObjectAllowsMounted(const GameObjectFacts& f) const;
     bool gameObjectInReach(const GameObject& go, const GameObjectFacts& f);
+    /// 0x0070fa70's reach: the handler's, or the opening spell's range.
+    float gameObjectUseReach(const GameObjectFacts& f);
     uint16_t gameObjectRefusal(const GameObject& go, const GameObjectFacts& f, std::string& arg);
     uint16_t gameObjectGenericRefusal(const GameObject& go, const GameObjectFacts& f, std::string& arg);
     float gameObjectScale(const GameObject& go) const;

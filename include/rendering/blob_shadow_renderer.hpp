@@ -57,6 +57,11 @@ public:
     void preparePetPulse(const std::optional<blob_shadow::Projection>& circle, const glm::vec4& color,
                          const glm::mat4& viewProj, const TerrainManager* terrain,
                          const WMORenderer* wmo, const M2Renderer* m2);
+    /// The ring on a click-to-move's place (0x007275c0), gathered and drawn
+    /// as the pet's ring is.
+    void prepareMoveMarker(const std::optional<blob_shadow::Projection>& circle, const glm::vec4& color,
+                           const glm::mat4& viewProj, const TerrainManager* terrain,
+                           const WMORenderer* wmo, const M2Renderer* m2);
 
     /// Gather the ground under the circle of a spell waiting for a place
     /// (0x004f8a40), `unacceptable` choosing Spell-Shadow-Unacceptable. After
@@ -101,6 +106,7 @@ private:
     VkPipeline selectionPipeline_ = VK_NULL_HANDLE;
     std::optional<Draw> selectionDraw_;
     std::optional<Draw> petPulseDraw_;
+    std::optional<Draw> moveMarkerDraw_;
     // The spell's circle: its two textures, their sets, and the pipeline
     // (blend mode 2).
     VkTexture spellTargetTextures_[2];

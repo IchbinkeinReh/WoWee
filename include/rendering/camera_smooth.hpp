@@ -35,9 +35,9 @@ enum class State { Idle = 0, Stop = 1, Track = 2, Move = 3, Strafe = 4, Turn = 5
 /// spline - fear, charm, a charge, a jump - other than a flight path's
 /// (the unit's flag 0x100000) and one flagged 0x400. It outranks the rest.
 /// Track is +0x98 0x100, which the click-to-move controls set (0x00602dc0
-/// from 0x005fa170 / 0x005fa450 on their bits 0x1e00000); this client has
-/// no click-to-move, so nothing sets it, but it ranks where the client has
-/// it: under every control of the player's own.
+/// from 0x005fa170 / 0x005fa450 on their bits 0x1e00000) while they steer
+/// the player; it ranks where the client has it: under every control of
+/// the player's own.
 inline State stateFor(bool move, bool strafe, bool turnKeys, bool mouselook, bool track = false,
                       bool fear = false) {
     if (fear) return State::Fear;
