@@ -17,6 +17,7 @@
 #include "game/game_utils.hpp"
 #include "game/stationery.hpp"
 #include "game/auction_filters.hpp"
+#include "game/auction_deposit.hpp"
 #include "ui/framexml_takeover.hpp"
 #include "core/logger.hpp"
 #include "core/config_paths.hpp"
@@ -7592,53 +7593,30 @@ void registerInventoryLuaAPI(lua_State* L) {
             lua_pushnumber(L, (inv ? inv->auctionSelectedRow(list) : -1) + 1);
             return 1;
         }},
-                // CalculateAuctionDeposit(minutes [, count]) → copper
-                //
-                // AuctionHouseMgr::GetAuctionDeposit, which is what the server
-                // will actually charge:
-                //
-                //   deposit = depositPercent * 3 / 100 * sellPrice * count
-                //             * (minutes / 720)
-                //
-                // floored at a hundred copper. depositPercent comes from
-                // AuctionHouse.dbc - five for a faction house, twenty-five for
-                // the neutral one - and the twelve-hour block is the unit, so
-                // the three durations multiply by one, two and four.
-                //
-                // It reported zero before, which was honest while the sell slot
-                // could not hold anything. It can now.
+                // CalculateAuctionDeposit(runTime [, count]) → copper, as
+                // 0x0059d270 works it: 0 without the open house's
+                // AuctionHouse.dbc row, an item in the sell slot or its
+                // template; else 0x0076dde0 over the row's DepositRate, the
+                // template's sell price times the count (the slot's stack
+                // when none is given) and the run time's minutes.
                 {"CalculateAuctionDeposit", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: CalculateAuctionDeposit(runTime)");   // 0x0059d270
             auto* gh = getGameHandler(L);
-            // The same duration the dropdown hands StartAuction, and in the
-            // same 1..3 shape: read as minutes it made `blocks` zero below, so
-            // every deposit was the one-silver floor whatever the item or the
-            // length.
-            const double minutes = static_cast<double>(game::auctionDurationMinutes(
-                static_cast<uint32_t>(luaL_optnumber(L, 1, 1))));
-            const auto* held = auctionSellItemSlot(gh);
-            if (!held || minutes <= 0) {
-                lua_pushnumber(L, 0);
-                return 1;
+            double result = 0.0;
+            auto* am = gh ? gh->services().assetManager : nullptr;
+            auto dbc = am && am->isInitialized() ? am->loadDBC("AuctionHouse.dbc") : nullptr;
+            const int32_t row = dbc && dbc->isLoaded() ? dbc->findRecordById(gh->getAuctionHouseId()) : -1;
+            const auto* held = row >= 0 ? auctionSellItemSlot(gh) : nullptr;
+            const auto* info = held ? gh->getItemInfo(held->item.itemId) : nullptr;
+            if (info && info->valid) {
+                const uint32_t minutes = game::auction_deposit::minutesForRunTime(lua_tonumber(L, 1));
+                const uint32_t count = lua_isnumber(L, 2)
+                    ? static_cast<uint32_t>(static_cast<int64_t>(std::nearbyint(lua_tonumber(L, 2))))
+                    : held->item.stackCount;
+                const uint32_t depositRate = dbc->getUInt32(static_cast<uint32_t>(row), 2);
+                result = game::auction_deposit::deposit(depositRate, info->sellPrice * count, minutes);
             }
-            const auto& s = *held;
-            const auto* info = gh->getItemInfo(s.item.itemId);
-            const double sellPrice = (info && info->valid) ? info->sellPrice : 0.0;
-            constexpr double kMinimumDeposit = 100.0;
-            if (sellPrice <= 0.0) {
-                lua_pushnumber(L, kMinimumDeposit);
-                return 1;
-            }
-            const double count = luaL_optnumber(L, 2, s.item.stackCount ? s.item.stackCount : 1);
-            // Faction houses take five percent, the neutral one twenty-five.
-            // Which one this is is not tracked, so the cheaper is assumed -
-            // understating a deposit is the kinder way to be wrong, and it is
-            // right at every auctioneer but Booty Bay's.
-            constexpr double kDepositPercent = 5.0;
-            const double blocks = std::floor(minutes / 720.0);
-            const double deposit = (kDepositPercent * 3.0 / 100.0) * sellPrice
-                                   * count * blocks;
-            lua_pushnumber(L, deposit < kMinimumDeposit ? kMinimumDeposit : deposit);
+            lua_pushnumber(L, result);
             return 1;
         }},
                 // Sorting is the panel's own, applied to what the server sent.
