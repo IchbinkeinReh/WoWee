@@ -431,6 +431,10 @@ public:
     /// Breath attachment's (17) bind height plus 3.5/36, or nine tenths of
     /// the collision box where the model has none - at the instance's scale.
     bool getInstanceCameraPivotZ(uint32_t instanceId, float& outZ) const;
+    /// The top of an animation's bounds (its first sequence's box, as
+    /// 0x0082ced0 reads it) at the instance's scale; false where the model
+    /// has no such sequence.
+    bool getInstanceSequenceTopZ(uint32_t instanceId, uint32_t animId, float& outZ) const;
     bool getInstancePosition(uint32_t instanceId, glm::vec3& outPos) const;
     /// The instance's world matrix - position, facing and scale - which an
     /// effect parented to the unit rides on.

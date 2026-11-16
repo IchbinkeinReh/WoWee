@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <glm/gtc/constants.hpp>
 #include <optional>
 
 namespace wowee::game::vehicle {
@@ -249,7 +250,9 @@ struct CameraModeChange {
 
 /// How far the camera's own model shows as the camera closes on it
 /// (Camera.cpp 0x00606f90 -> 0x004f8660): opaque from `farDistance` out,
-/// gone at `nearDistance` and in, evenly between (0x008ca080 over 0..255).
+/// gone at `nearDistance` and in, and between them along half a cosine
+/// (0x008ca080: (1 - cos(pi t)) / 2 of the way from 0 to 255), rounded to
+/// the byte the unit keeps its alpha in (+0xcb, 0x00737390).
 /// `distance` is the camera's from its unit less its near clip. The
 /// ordinary bounds are 0.0027778 and 1.8315 yards; a vehicle row with
 /// Flags 0x80000 gives its own, CameraFadeDistScalarMin/Max times its
@@ -260,7 +263,9 @@ inline constexpr uint32_t kVehicleFlagCameraFade = 0x80000;
 [[nodiscard]] inline float cameraFadeAlpha(float distance, float nearDistance, float farDistance) {
     if (distance >= farDistance) return 1.0f;
     if (distance <= nearDistance) return 0.0f;
-    return (distance - nearDistance) / (farDistance - nearDistance);
+    const float t = (distance - nearDistance) / (farDistance - nearDistance);
+    const float eased = (1.0f - std::cos(t * glm::pi<float>())) * 0.5f * 255.0f;
+    return std::nearbyint(eased) / 255.0f;
 }
 
 /// The fade's far bound as the camera holds it (0x00606f90): a third of it

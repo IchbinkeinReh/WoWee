@@ -3570,6 +3570,14 @@ wowee_add_test(test_vehicle_mover
 wowee_add_test(test_possess_camera
     SOURCES test_possess_camera.cpp)
 
+# ── test_camera_mount ────────────────────────────────
+# The camera's height on a mount and in water (0x00604e00, 0x00604640,
+# 0x006d7720), its eases (0x006010e0, 0x00603d30), the pivot's line up and
+# the pull-in after a hit (0x00605d60, 0x00606f90), the model's fade curve
+# (0x008ca080).
+wowee_add_test(test_camera_mount
+    SOURCES test_camera_mount.cpp)
+
 # ── test_vehicle_packets ─────────────────────────────
 # The seat requests and the eject (0x0074ca90, 0x00757200).
 wowee_add_packet_test(test_vehicle_packets)

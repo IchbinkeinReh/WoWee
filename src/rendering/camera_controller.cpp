@@ -968,8 +968,10 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
 void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
                                          const glm::vec3& targetPos) {
     // ===== WoW-style orbit camera =====
-    // Pivot point at upper chest/neck.
-    float mountedOffset = mounted_ ? mountHeightOffset_ : 0.0f;
+    // The pivot's height: the target the client eases to (0x00603230), drawn
+    // down by whatever is over the unit (0x00605d60) - the mount's seat and
+    // the rider's pose in it (0x00604e00) are in the target.
+    const float pivotHeightNow = collideFollowedPivot(targetPos, deltaTime);
     float pivotLift = 0.0f;
     if (terrainManager && !externalFollow_ && !cachedInsideInteriorWMO) {
         float plx = targetPos.x - lastPivotLiftQueryPos_.x;
@@ -1008,7 +1010,7 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
                 // That is why zooming in on a gnome put them at the bottom of
                 // the frame: the camera was aiming at a point nearly twice
                 // their height, on level ground, with no hill in sight.
-                const float basePivotZ = targetPos.z + followedPivotHeight() + mountedOffset;
+                const float basePivotZ = targetPos.z + pivotHeightNow;
                 // The camera sits behind the character along the look
                 // direction, which carries the pitch with it.
                 desiredLift = terrainPivotLift(basePivotZ, (-f.forward3D).z,
@@ -1027,7 +1029,7 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
                 pivotLiftActive_ = lifting;
                 LOG_WARNING("Camera pivot: terrain lift ",
                             lifting ? "on, raising the pivot by " : "off, was ",
-                            desiredLift, " (pivot ", followedPivotHeight(),
+                            desiredLift, " (pivot ", pivotHeightNow,
                             " above the feet, ground at the camera ",
                             terrainAtCam ? *terrainAtCam - targetPos.z : 0.0f,
                             " relative to them)");
@@ -1040,7 +1042,7 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
         // are not relevant for camera pivoting.
         cachedPivotLift_ = 0.0f;
     }
-    glm::vec3 pivot = targetPos + glm::vec3(0.0f, 0.0f, followedPivotHeight() + mountedOffset + pivotLift);
+    glm::vec3 pivot = targetPos + glm::vec3(0.0f, 0.0f, pivotHeightNow + pivotLift);
 
     // Camera direction from yaw/pitch (already computed as forward3D)
     glm::vec3 camDir = -f.forward3D;  // Camera looks at pivot, so it's behind
@@ -1053,9 +1055,17 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
         camDir = glm::vec3(camDir.x * c - camDir.y * sn, camDir.x * sn + camDir.y * c, camDir.z);
     }
 
-    // Smooth zoom toward user target
-    float zoomLerp = 1.0f - std::exp(-ZOOM_SMOOTH_SPEED * deltaTime);
-    currentDistance += (userTargetDistance - currentDistance) * zoomLerp;
+    // Smooth zoom toward user target - or, after a collision drew the
+    // camera in, back out to it along the client's ease: two seconds, half
+    // a cosine (0x00606f90 -> 0x00603d30). A new zoom takes over from it.
+    if (pullInEase_.running && std::abs(pullInEase_.to - userTargetDistance) >= 0.001f) pullInEase_.running = false;
+    if (pullInEase_.running) {
+        pullInEase_.step(deltaTime);
+        currentDistance = pullInEase_.value;
+    } else {
+        float zoomLerp = 1.0f - std::exp(-ZOOM_SMOOTH_SPEED * deltaTime);
+        currentDistance += (userTargetDistance - currentDistance) * zoomLerp;
+    }
 
     // The active WMO group for the collision below.
     // Throttle: only recheck every 10 frames or when position changes >2 units.
@@ -1207,6 +1217,15 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
         smoothedCollisionDist_ = rawLimit;
 
         collisionDistance = std::min(collisionDistance, smoothedCollisionDist_);
+        // More than a ninth short of where the camera stood, the distance
+        // itself is drawn in to just past the hit, and eases back out from
+        // there (0x00606f90: +0x118 = hit + 0.111112, over 2 s to +0x1e8).
+        if (auto held = camera_pivot::pulledIn(currentDistance, collisionDistance)) {
+            currentDistance = *held;
+            pullInEase_.pullIn(*held);
+            pullInEase_.to = userTargetDistance;
+            pullInEase_.placed = true;
+        }
 
         // A collision takes the zoom in with it.
         //
@@ -1486,6 +1505,7 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
                         " below collision height ", followedCollisionHeight());
             followedModelPivot_ = modelPivot;
         }
+        measureFollowedPoses();
         // How tall whoever is being followed actually is, so the pivot lands
         // on them rather than at a fixed distance above their feet. Measured
         // here because it changes with the model: a race change, a mount, a
@@ -1854,6 +1874,100 @@ glm::vec3 CameraController::vehiclePulledIn(const glm::vec3& point, float deltaT
     return game::vehicle::vehicleCameraPulledIn(origin, point, share, vehiclePullIn_);
 }
 
+void CameraController::measureFollowedPoses() {
+    // 0x00604e00 measures the poses on the model it follows - the Stand,
+    // Mount and Swim sequences' boxes (0x0082ced0) - and the seat on the
+    // mount's (its attachment 0, 0x00827460); on a flight path the mount's
+    // sequence 135 against its Stand (0x00825ee0(0x87)).
+    if (!characterRenderer) return;
+    const uint32_t followed = followedInstance();
+    auto top = [&](uint32_t inst, uint32_t anim) -> std::optional<float> {
+        float z = 0.0f;
+        if (inst != 0 && characterRenderer->getInstanceSequenceTopZ(inst, anim, z)) return z;
+        return std::nullopt;
+    };
+    const auto stand = top(followed, camera_pivot::kAnimStand);
+    // Already at the instance's scale: the drop's scale is 1 here.
+    const float mountDrop = camera_pivot::poseDrop(stand, top(followed, camera_pivot::kAnimMount), 1.0f);
+    const float swimDrop = camera_pivot::poseDrop(stand, top(followed, camera_pivot::kAnimSwim), 1.0f);
+    float lift = 0.0f;
+    if (mountPivot_) {
+        float taxiDrop = 0.0f;
+        if (externalFollow_) {
+            taxiDrop = camera_pivot::poseDrop(top(mountPivot_->mountInstance, camera_pivot::kAnimStand),
+                                              top(mountPivot_->mountInstance, camera_pivot::kAnimTaxiSeat), 1.0f);
+        }
+        lift = camera_pivot::seatLift(mountPivot_->seatZ, mountPivot_->mountScale, taxiDrop);
+    }
+    if (std::abs(mountDrop - followedMountPoseDrop_) > 0.001f || std::abs(swimDrop - followedSwimPoseDrop_) > 0.001f ||
+        std::abs(lift - followedSeatLift_) > 0.001f) {
+        followedMountPoseDrop_ = mountDrop;
+        followedSwimPoseDrop_ = swimDrop;
+        followedSeatLift_ = lift;
+        const auto h = followedTargetHeights();
+        LOG_WARNING("Camera pivot: Mount pose drop ", mountDrop, ", Swim pose drop ", swimDrop, ", seat lift ", lift,
+                    followingMount() ? " (riding)" : "", " -> heights ground ", h.ground, " swim ", h.swim,
+                    " (collision height ",
+                    followingMount() && mountPivot_->collisionHeight > 0.0f ? mountPivot_->collisionHeight
+                                                                             : followedCollisionHeight(),
+                    ")");
+    }
+}
+
+float CameraController::collideFollowedPivot(const glm::vec3& feet, float deltaTime) {
+    // The target, eased to at cameraHeightSmoothSpeed (0x00604640 ->
+    // 0x00603230); the first one taken at once.
+    pivotEase_.setTargetAtSpeed(followedPivotHeight(), camera_pivot::kHeightSmoothSpeed);
+    pivotEase_.step(deltaTime);
+    // 0x00605d60: straight up from 0.8333 over the feet to the larger of the
+    // eased height and its target, against the world's built geometry and
+    // its doodads (the camera's trace, 0x100171).
+    const float wanted = std::max(pivotEase_.value, pivotEase_.to);
+    const float reach = std::max(wanted - camera_pivot::kMinPivot, camera_pivot::kNinth);
+    const glm::vec3 from = feet + glm::vec3(0.0f, 0.0f, camera_pivot::kMinPivot);
+    const glm::vec3 up(0.0f, 0.0f, 1.0f);
+    float hit = reach;
+    if (wmoRenderer) hit = std::min(hit, wmoRenderer->raycastBoundingBoxes(from, up, reach));
+    if (m2Renderer) {
+        static thread_local std::vector<glm::vec3> tris;
+        tris.clear();
+        const glm::vec3 pad(0.25f, 0.25f, 0.0f);
+        m2Renderer->gatherCollisionTriangles(from - pad, from + up * reach + pad, tris, false,
+                                             /*includeGameObjects=*/true);
+        for (size_t i = 0; i + 2 < tris.size(); i += 3) {
+            const float t = rayTriangleIntersect(from, up, tris[i], tris[i + 1], tris[i + 2]);
+            if (t > 0.0f && t < hit) hit = t;
+        }
+    }
+    const std::optional<float> share = hit < reach ? std::optional<float>(hit / reach) : std::nullopt;
+    // Not under three quarters of the unit's collision height (+0x854 x
+    // 0.75), the mounted one on a mount.
+    const float height = followingMount() && mountPivot_->collisionHeight > 0.0f ? mountPivot_->collisionHeight
+                                                                                 : followedCollisionHeight();
+    const float h = camera_pivot::collidedHeight(wanted, pivotEase_.value, share,
+                                                 camera_pivot::unitHeightFloor(height));
+    // More than a ninth under the eased height, the height itself is drawn
+    // in and eases back over two seconds (0x00606f90, +0x128).
+    if (auto held = camera_pivot::pulledIn(pivotEase_.value, h)) pivotEase_.pullIn(*held);
+    static const bool kPivotDiag = std::getenv("WOWEE_CAMPIVOT_DIAG") != nullptr;
+    if (kPivotDiag) {
+        static float diagT = 0.0f;
+        static glm::vec4 last(-1.0f);
+        diagT += deltaTime;
+        const glm::vec4 now(pivotEase_.to, h, currentDistance, userTargetDistance);
+        const glm::vec4 d = glm::abs(now - last);
+        if (diagT >= 0.1f && (std::max(std::max(d.x, d.y), std::max(d.z, d.w)) > 0.01f || diagT >= 5.0f)) {
+            diagT = 0.0f;
+            last = now;
+            LOG_WARNING("CAMPIVOT target=", pivotEase_.to, " eased=", pivotEase_.value, " collided=", h,
+                        " overhead=", share ? hit : -1.0f, " mounted=", followingMount() ? 1 : 0,
+                        " swim=", swimming ? 1 : 0, " dist=", currentDistance, " zoom=", userTargetDistance);
+        }
+    }
+    pivotCollided_ = h;
+    return h;
+}
+
 void CameraController::applyCameraFade(const glm::vec3& cameraPos, float distance, float pivotHeight) {
     // 0x00606f90: the camera's distance from its unit, less its near clip,
     // between the fade's bounds; the alpha goes to the unit, or the vehicle
@@ -1875,11 +1989,25 @@ void CameraController::applyCameraFade(const glm::vec3& cameraPos, float distanc
                                                     glm::radians(pitch));
     const float nearClip = camera ? camera->getNearPlane() : 0.0f;
     const float alpha = game::vehicle::cameraFadeAlpha(distance - nearClip, nearDistance, farDistance);
+    static const bool kFadeDiag = std::getenv("WOWEE_CAMPIVOT_DIAG") != nullptr;
+    if (kFadeDiag) {
+        static float lastAlpha = -1.0f;
+        if (std::abs(alpha - lastAlpha) > 0.02f || (alpha != lastAlpha && (alpha == 0.0f || alpha == 1.0f))) {
+            lastAlpha = alpha;
+            LOG_WARNING("CAMFADE distance=", distance, " nearClip=", nearClip, " far=", farDistance, " alpha=", alpha,
+                        " instance=", target);
+        }
+    }
     // The vehicle's alpha goes to every passenger on it, and to theirs
     // (0x00737390 down its seats).
-    static const std::vector<uint32_t> kNone;
-    const std::vector<uint32_t>& riders =
-        cameraFadeTarget_ && cameraFadeTarget_->instanceId != 0 ? cameraFadeTarget_->riders : kNone;
+    static thread_local std::vector<uint32_t> riders;
+    riders.clear();
+    if (cameraFadeTarget_ && cameraFadeTarget_->instanceId != 0) {
+        riders = cameraFadeTarget_->riders;
+    } else if (followingMount() && mountPivot_->mountInstance != 0) {
+        // The unit's alpha (+0xcb, 0x00737390) is its mount model's as well.
+        riders.push_back(mountPivot_->mountInstance);
+    }
     auto fades = [&](uint32_t id) {
         return id == target || std::find(riders.begin(), riders.end(), id) != riders.end();
     };
@@ -1999,9 +2127,9 @@ void CameraController::update(float deltaTime) {
             glm::vec3 targetPos = vehiclePivot_ ? vehiclePulledIn(*vehiclePivot_, deltaTime) : *followTarget;
             glm::vec3 forward3D = camera->getForward();
 
-            // Pivot point at upper chest/neck
-            float mountedOffset = mounted_ ? mountHeightOffset_ : 0.0f;
-            glm::vec3 pivot = targetPos + glm::vec3(0.0f, 0.0f, followedPivotHeight() + mountedOffset);
+            // The pivot's height, eased and drawn down as on foot (0x00606f90:
+            // the same update on a flight path).
+            glm::vec3 pivot = targetPos + glm::vec3(0.0f, 0.0f, collideFollowedPivot(targetPos, deltaTime));
 
             // Camera direction from yaw/pitch, turned about what it looks
             // at by the vehicle's yaw offset (0x00601d60 -> 0x00600730) -
@@ -3134,8 +3262,11 @@ void CameraController::reset() {
             *followTarget = spawnPos;
             currentDistance = userTargetDistance;
             collisionDistance = currentDistance;
-            float mountedOffset = mounted_ ? mountHeightOffset_ : 0.0f;
-            glm::vec3 pivot = spawnPos + glm::vec3(0.0f, 0.0f, followedPivotHeight() + mountedOffset);
+            // Placed anew: the next height is taken at once, as the client's
+            // new target takes its first (0x006066e0 -> 0x006010e0).
+            pivotEase_.placed = false;
+            pullInEase_.running = false;
+            glm::vec3 pivot = spawnPos + glm::vec3(0.0f, 0.0f, currentPivotHeight());
             glm::vec3 camDir = -forward3D;
             glm::vec3 camPos = pivot + camDir * currentDistance;
             camera->setPosition(camPos);
@@ -3273,9 +3404,12 @@ void CameraController::reset() {
 
         currentDistance = userTargetDistance;
         collisionDistance = currentDistance;
+        // Placed anew: the next height is taken at once, as the client's
+        // new target takes its first (0x006066e0 -> 0x006010e0).
+        pivotEase_.placed = false;
+        pullInEase_.running = false;
 
-        float mountedOffset = mounted_ ? mountHeightOffset_ : 0.0f;
-        glm::vec3 pivot = spawnPos + glm::vec3(0.0f, 0.0f, followedPivotHeight() + mountedOffset);
+        glm::vec3 pivot = spawnPos + glm::vec3(0.0f, 0.0f, currentPivotHeight());
         glm::vec3 camDir = -forward3D;
         glm::vec3 camPos = pivot + camDir * currentDistance;
         camera->setPosition(camPos);
@@ -3331,8 +3465,11 @@ void CameraController::teleportTo(const glm::vec3& pos, bool onTransport) {
         *followTarget = pos;
         camera->setRotation(yaw, pitch);
         glm::vec3 forward3D = camera->getForward();
-        float mountedOffset = mounted_ ? mountHeightOffset_ : 0.0f;
-        glm::vec3 pivot = pos + glm::vec3(0.0f, 0.0f, followedPivotHeight() + mountedOffset);
+        // Placed anew: the next height is taken at once, as the client's
+        // new target takes its first (0x006066e0 -> 0x006010e0).
+        pivotEase_.placed = false;
+        pullInEase_.running = false;
+        glm::vec3 pivot = pos + glm::vec3(0.0f, 0.0f, currentPivotHeight());
         glm::vec3 camDir = -forward3D;
         glm::vec3 camPos = pivot + camDir * currentDistance;
         camera->setPosition(camPos);
@@ -3351,8 +3488,7 @@ bool CameraController::groundNotStreamedYet(float x, float y) const {
 std::optional<glm::vec3> CameraController::eyePoint() const {
     if (!followTarget) return std::nullopt;
     const glm::vec3 base = vehiclePivot_ ? *vehiclePivot_ : *followTarget;
-    const float mountedOffset = mounted_ ? mountHeightOffset_ : 0.0f;
-    return base + glm::vec3(0.0f, 0.0f, followedPivotHeight() + mountedOffset);
+    return base + glm::vec3(0.0f, 0.0f, currentPivotHeight());
 }
 
 void CameraController::applyLookDelta(float dxPixels, float dyPixels) {
@@ -3463,6 +3599,7 @@ void CameraController::goToViewPose(const ViewPose& pose, float seconds) {
         collisionDistance = distance;
         collisionZoomDebt_ = 0.0f;
         collisionClearSeconds_ = 0.0f;
+        pullInEase_.running = false;
         pitch = toPitch;
         yaw += pose.yaw - fromYaw;
         if (camera) camera->setRotation(yaw, pitch);

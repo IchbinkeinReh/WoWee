@@ -483,9 +483,15 @@ TEST_CASE("the camera's closeness fades its model between the bounds (0x00606f90
     CHECK(cameraFadeAlpha(5.0f, kCameraFadeNear, kCameraFadeFar) == 1.0f);
     CHECK(cameraFadeAlpha(kCameraFadeFar, kCameraFadeNear, kCameraFadeFar) == 1.0f);
     CHECK(cameraFadeAlpha(0.0f, kCameraFadeNear, kCameraFadeFar) == 0.0f);
-    CHECK(cameraFadeAlpha(1.0f, 0.0f, 2.0f) == Catch::Approx(0.5f));
+    // Half a cosine between (0x008ca080), in the unit's alpha byte: half
+    // way is 127.5, which the FPU rounds to the even 128.
+    CHECK(cameraFadeAlpha(1.0f, 0.0f, 2.0f) == Catch::Approx(128.0f / 255.0f));
+    // A quarter of the way is (1 - cos 45 deg) / 2 = 0.1464: byte 37, not
+    // the quarter (64) an even fade gives.
+    CHECK(cameraFadeAlpha(0.5f, 0.0f, 2.0f) == Catch::Approx(37.0f / 255.0f));
+    CHECK(cameraFadeAlpha(1.5f, 0.0f, 2.0f) == Catch::Approx(218.0f / 255.0f));
     // A vehicle's own: its scalars times its model's radius.
-    CHECK(cameraFadeAlpha(3.0f, 0.5f * 4.0f, 1.0f * 4.0f) == Catch::Approx(0.5f));
+    CHECK(cameraFadeAlpha(3.0f, 0.5f * 4.0f, 1.0f * 4.0f) == Catch::Approx(128.0f / 255.0f));
 }
 
 TEST_CASE("the vehicle camera is pulled in where the world is in the way and eases out (0x00759580)", "[vehicle]") {
