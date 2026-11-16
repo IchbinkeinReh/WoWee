@@ -4120,7 +4120,6 @@ void GameHandler::registerRemainingOpcodes() {
         Opcode::SMSG_LFG_UPDATE_LFM,
         Opcode::SMSG_LFG_UPDATE_QUEUED,
         Opcode::SMSG_MOVE_CHARACTER_CHEAT,
-        Opcode::SMSG_NOTIFY_DANCE,
         Opcode::SMSG_PETGODMODE,
         Opcode::SMSG_PLAY_DANCE,
         Opcode::SMSG_PROFILEDATA_RESPONSE,
@@ -4144,6 +4143,30 @@ void GameHandler::registerRemainingOpcodes() {
         Opcode::SMSG_VOICE_SESSION_ROSTER_UPDATE,
         Opcode::SMSG_VOICE_SET_TALKER_MUTED
     }) { registerSkipHandler(op); }
+
+    // SMSG_NOTIFY_DANCE (0x00576730): a flags word, then for flags without 8
+    // a dance id, its name and a value - adding (1), replacing (2) or
+    // removing (4) the dance in a list nothing in the interface reads - and
+    // for flag 8 a result instead, which the client reports as a game error:
+    // 0 ERR_DANCE_CREATE_DUPLICATE, 1 ERR_DANCE_SAVE_FAILED,
+    // 2 ERR_DANCE_DELETE_FAILED.
+    dispatchTable_[Opcode::SMSG_NOTIFY_DANCE] = [this](network::Packet& packet) {
+        if (!packet.hasRemaining(4)) { packet.skipAll(); return; }
+        const uint32_t flags = packet.readUInt32();
+        if ((flags & 8) != 0 && packet.hasRemaining(4)) {
+            const uint32_t result = packet.readUInt32();
+            static constexpr struct { const char* key; const char* enUS; } kErrors[3] = {
+                {"ERR_DANCE_CREATE_DUPLICATE", "A dance with that name already exists."},
+                {"ERR_DANCE_SAVE_FAILED", "Failed to save the dance."},
+                {"ERR_DANCE_DELETE_FAILED", "Failed to delete the dance."},
+            };
+            if (result < 3) {
+                addUIError(interfaceString(kErrors[result].key, kErrors[result].enUS));
+                playGameErrorSound(kErrors[result].key);
+            }
+        }
+        packet.skipAll();
+    };
 
 }
 
