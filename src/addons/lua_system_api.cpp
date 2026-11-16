@@ -44,6 +44,7 @@
 #include "addons/chat_color_table.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/chat_window_background.hpp"
+#include "addons/camera_cvar_ranges.hpp"
 #include "addons/client_cvar_registry.hpp"
 #include "ui/display_modes.hpp"
 #include "ui/fullscreen_scale.hpp"
@@ -2659,6 +2660,18 @@ static bool cVarStatedDefault(lua_State* L, const std::string& lower, std::strin
     return answered;
 }
 
+/// A camera CVar's range check (0x005fd630-0x005fd8c0): false, with the
+/// console told, when the value is outside it and must not be written.
+static bool cvarValueInRange(const std::string& lower, const std::string& value) {
+    if (cameraCVarAccepts(lower, value)) return true;
+    const auto range = cameraCVarRange(lower);
+    char line[96];
+    std::snprintf(line, sizeof(line), "Value out of range (%f - %f)",
+                  static_cast<double>(range->min), static_cast<double>(range->max));
+    LOG_INFO("Console: ", line);
+    return false;
+}
+
 /// The console commands' write: the store, the file, and back into whatever
 /// reads the CVar - and nothing else. No CVAR_UPDATE, because the client's
 /// reset path assigns the CVar's own string (0x0047cf80) and raises no event;
@@ -2679,6 +2692,7 @@ static void writeCVarFromConsole(lua_State* L, const std::string& lower,
     toLowerInPlace(current);
     toLowerInPlace(wanted);
     if (current == wanted) return;
+    if (!cvarValueInRange(lower, target)) return;
     cvarStore()[lower] = target;
     saveStoredCVars();
     applyCVarSideEffects(L, lower, target);
@@ -2820,13 +2834,18 @@ static int lua_SetCVar(lua_State* L) {
     // would be invisible to a read of "uiscale".
     std::string key(name);
     toLowerInPlace(key);
-    const auto existing = cvarStore().find(key);
-    const bool changed = (existing == cvarStore().end() || existing->second != value);
-    cvarStore()[key] = value;
-    // Only on a real change. A slider drag calls SetCVar on every frame it
-    // moves, and most of those calls set the value it already has.
-    if (changed) saveStoredCVars();
-    applyCVarSideEffects(L, key, value);
+    // A camera CVar refuses a value outside its range and keeps the one it
+    // had (0x007668c0 asks the CVar's check first); CVAR_UPDATE below goes
+    // out all the same, as 0x00514c10 raises it whatever the write did.
+    if (cvarValueInRange(key, value)) {
+        const auto existing = cvarStore().find(key);
+        const bool changed = (existing == cvarStore().end() || existing->second != value);
+        cvarStore()[key] = value;
+        // Only on a real change. A slider drag calls SetCVar on every frame it
+        // moves, and most of those calls set the value it already has.
+        if (changed) saveStoredCVars();
+        applyCVarSideEffects(L, key, value);
+    }
     // What is announced is the caller's *third argument*, not a spelling of the
     // name. SetCVar's binding in the binary (FUN_00514c10, and the fire at
     // 0x00514cff) tests that argument for being a string or a number

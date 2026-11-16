@@ -2020,6 +2020,9 @@ wowee_add_test(test_quest_text SOURCES test_quest_text.cpp)
 # The tracked-achievement list and the trackedAchievements CVar it is saved in.
 wowee_add_test(test_achievement_tracking SOURCES test_achievement_tracking.cpp)
 
+# The camera CVars' registered ranges, which SetCVar and the console enforce.
+wowee_add_test(test_camera_cvar_ranges SOURCES test_camera_cvar_ranges.cpp)
+
 # ── test_interface_text_lines ────────────────────────────────
 # How many lines a label takes, measured on demand rather than read off the
 # last frame. The quest tracker sizes every row from that answer, and a stale
