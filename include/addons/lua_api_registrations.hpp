@@ -168,6 +168,13 @@ void setCVarFromConsole(lua_State* L, const std::string& name, const std::string
 /// the key reads as dead. Consulted before running a binding.
 bool clientActsOnBinding(const std::string& command);
 
+/// Whether the client's cursor has been turned off by a TOGGLEMOUSE binding
+/// (0x00562d60): once the account's key bindings have been read, a key bound
+/// to TOGGLEMOUSE clears the input control's cursor bit (+0x58 0x2) and the
+/// cursor goes (0x005fa890). Nothing sets the bit again; no script runs for
+/// the command, which Bindings.xml does not define.
+bool cursorTurnedOffByBinding();
+
 /// The ImGui key the client listens on for a binding command, when it is one
 /// of the panels KeybindingManager answers; 0 (ImGuiKey_None) otherwise.
 ///

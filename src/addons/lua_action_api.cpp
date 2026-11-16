@@ -3372,6 +3372,12 @@ BindingKeyMap& bindingKeys() {
     return keys;
 }
 
+/// The input control's cursor bit +0x58 0x2, cleared (0x00562d60).
+bool& cursorBitCleared() {
+    static bool cleared = false;
+    return cleared;
+}
+
 std::string bindingsFilePath() {
     return core::getConfigRoot() + "/bindings.cfg";
 }
@@ -3560,6 +3566,8 @@ std::string bindingAt(lua_State* L, int index) {
 }
 
 }  // namespace
+
+bool cursorTurnedOffByBinding() { return cursorBitCleared(); }
 
 bool clientActsOnBinding(const std::string& command) {
     // The nine the client really performs, asked of the same list that keeps
@@ -3848,6 +3856,11 @@ void applyAccountBindingsText(lua_State* L, const std::string& text) {
     bindingKeys() = std::move(keys);
     for (const auto& [command, k] : bindingKeys()) pushBindingToClient(command, k[0].empty() ? k[1] : k[0]);
     writeBindingsFile();
+    // 0x00564310 -> 0x00562d60 once the bindings are in: a key bound to
+    // TOGGLEMOUSE (0x0055e750) turns the cursor off.
+    if (const auto it = bindingKeys().find("TOGGLEMOUSE");
+        it != bindingKeys().end() && (!it->second[0].empty() || !it->second[1].empty()))
+        cursorBitCleared() = true;
     if (auto* gh = getGameHandler(L)) gh->fireAddonEvent("UPDATE_BINDINGS", {});
 }
 
