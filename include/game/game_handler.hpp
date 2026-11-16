@@ -40,6 +40,7 @@
 #include "game/movement_handler.hpp"
 #include "game/entity_controller.hpp"
 #include "game/skill_ups.hpp"
+#include "game/dialog_emotes.hpp"
 #include "game/game_services.hpp"
 #include "network/packet.hpp"
 #include "core/logger.hpp"
@@ -1956,6 +1957,15 @@ public:
     uint32_t resolveUnitRenderInstance(uint64_t guid) const {
         return unitRenderInstanceResolver_ ? unitRenderInstanceResolver_(guid) : 0;
     }
+    /// The length in ms of an animation on a unit's model (0x0082ced0's
+    /// sequence), 0 where it has none. Wired by AnimationCallbackHandler.
+    using UnitAnimationLengthResolver = std::function<uint32_t(uint64_t guid, uint32_t animId)>;
+    void setUnitAnimationLengthResolver(UnitAnimationLengthResolver cb) {
+        unitAnimationLengthResolver_ = std::move(cb);
+    }
+    /// 0x0071a260: the (delay, emote) pairs an NPC's dialog carries, queued
+    /// on it to play one after another (0x0073adc0, updateDialogEmotes).
+    void queueDialogEmotes(uint64_t guid, const std::vector<DialogEmote>& pairs);
 
     // NPC respawn callback (health 0 → >0, resets animation to idle)
     using NpcRespawnCallback = std::function<void(uint64_t guid)>;
@@ -7396,6 +7406,11 @@ private:
     NpcDeathCallback npcDeathCallback_;
     NpcDeathCallback unitDiedCallback_;
     UnitRenderInstanceResolver unitRenderInstanceResolver_;
+    UnitAnimationLengthResolver unitAnimationLengthResolver_;
+    /// Each unit's dialog emotes waiting to play (+0x9fc).
+    std::unordered_map<uint64_t, DialogEmoteQueue> dialogEmotes_;
+    /// 0x0073adc0 for each unit with dialog emotes queued, once a frame.
+    void updateDialogEmotes();
     NpcRespawnCallback npcRespawnCallback_;
     StandStateCallback standStateCallback_;
     LogoutCompleteCallback logoutCompleteCallback_;

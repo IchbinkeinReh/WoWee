@@ -2448,9 +2448,13 @@ void QuestHandler::handleQuestgiverQuestList(network::Packet& packet) {
     // GetGreetingText had nothing to answer with and the greeting panel was
     // blank over a list that was otherwise correct.
     questGreeting_ = normalizeWowTextTokens(packet.readString());
+    // The giver's (delay, emote) pair (0x006d0240 -> 0x0071a260).
+    std::vector<DialogEmote> listEmotes;
     if (packet.hasRemaining(8)) {
-        (void)packet.readUInt32(); // emoteDelay / unk
-        (void)packet.readUInt32(); // emote / unk
+        DialogEmote e;
+        e.delayMs = packet.readUInt32();
+        e.emote = packet.readUInt32();
+        listEmotes.push_back(e);
     }
 
     // questCount is uint8 in all WoW versions for SMSG_QUESTGIVER_QUEST_LIST.
@@ -2498,6 +2502,8 @@ void QuestHandler::handleQuestgiverQuestList(network::Packet& packet) {
     owner_.closeVendor();
 
     classifyGossipQuests(false);
+    // The giver's emote (0x006d0240 -> 0x0071a260).
+    queueGiverEmotes(currentGossip_.npcGuid, listEmotes, true);
 
     LOG_INFO("Questgiver quest list: npc=0x", std::hex, currentGossip_.npcGuid, std::dec,
              " quests=", currentGossip_.quests.size());
@@ -2622,7 +2628,10 @@ void QuestHandler::handleNpcTextUpdate(network::Packet& packet) {
         option.text[1] = packet.readString();
         if (!packet.hasRemaining(28)) break; // lang(4) + 6×emote(4) = 28
         option.language = packet.readUInt32();
-        packet.setReadPos(packet.getReadPos() + 24);
+        for (auto& e : option.emotes) {
+            e.delayMs = packet.readUInt32();
+            e.emote = packet.readUInt32();
+        }
     }
     npcTextCache_[textId] = std::move(text);
     LOG_DEBUG("NPC text update: id=", textId);
@@ -2662,7 +2671,20 @@ void QuestHandler::chooseGossipText() {
         LOG_WARNING("Missing gossip text! (", currentGossip_.titleTextId, ")");
         return;
     }
-    gossipText_ = it->second.options[static_cast<size_t>(chosen)].text[static_cast<size_t>(col)];
+    const auto& option = it->second.options[static_cast<size_t>(chosen)];
+    gossipText_ = option.text[static_cast<size_t>(col)];
+    // The option's emotes, played by the unit spoken to (0x0058ac30 ->
+    // 0x007207c0 -> 0x0071a260).
+    if (isUnit) owner_.queueDialogEmotes(currentGossip_.npcGuid, npc_text::optionEmotes(option));
+}
+
+void QuestHandler::queueGiverEmotes(uint64_t guid, const std::vector<DialogEmote>& emotes, bool playersToo) {
+    // 0x0071a260 on the giver, where it is a unit (Player_C.cpp asks for
+    // type 8) - and, for a quest's details, not a player sharing it.
+    const auto giver = owner_.getEntityManager().getEntity(guid);
+    if (!giver || !giver->isUnit()) return;
+    if (!playersToo && giver->getType() == ObjectType::PLAYER) return;
+    owner_.queueDialogEmotes(guid, emotes);
 }
 
 const std::string& QuestHandler::getNpcText(uint32_t textId) const {
@@ -2861,6 +2883,8 @@ void QuestHandler::handleQuestDetails(network::Packet& packet) {
     gossipWindowOpen_ = false;
     owner_.setQuestInteractionObject(currentQuestDetails_.npcGuid);
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("QUEST_DETAIL", {});
+    // 0x006d0460: the giver's emotes, unless a player shares the quest.
+    queueGiverEmotes(data.npcGuid, data.emotes, false);
 }
 
 void QuestHandler::handleQuestRequestItems(network::Packet& packet) {
@@ -2884,6 +2908,8 @@ void QuestHandler::handleQuestRequestItems(network::Packet& packet) {
     // QUEST_COMPLETE were both fired and this one was not, so the original
     // interface had the text for this step and no event to draw it on.
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("QUEST_PROGRESS", {});
+    // 0x006d08f0: the giver's emote.
+    queueGiverEmotes(data.npcGuid, data.emotes, true);
 
     // Query item names for required items
     for (const auto& item : data.requiredItems) {
@@ -2941,6 +2967,8 @@ void QuestHandler::handleQuestOfferReward(network::Packet& packet) {
     questDetailsOpenTime_ = std::chrono::steady_clock::time_point{};
     owner_.setQuestInteractionObject(data.npcGuid);
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("QUEST_COMPLETE", {});
+    // 0x006d0ab0: the giver's emotes.
+    queueGiverEmotes(data.npcGuid, data.emotes, true);
 
     // Query item names for reward items
     for (const auto& item : data.choiceRewards)

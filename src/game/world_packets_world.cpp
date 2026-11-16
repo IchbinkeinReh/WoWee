@@ -935,6 +935,21 @@ bool QuestDetailsParser::parse(network::Packet& packet, QuestDetailsData& data) 
     if (packet.hasRemaining(4)) /*honorMultiplier*/  packet.readFloat();
     if (packet.hasRemaining(4))
         data.rewardSpellId = packet.readUInt32();
+    // 0x006d0460 goes on: the cast spell, title, talents, arena points and
+    // a word; the five reputation factions, their values and overrides; then
+    // the emote count and as many (emote, delay) pairs, which the giver plays
+    // (0x0071a260).
+    constexpr size_t kAfterSpell = 5 * 4 + 15 * 4;
+    if (packet.hasRemaining(kAfterSpell + 4)) {
+        packet.setReadPos(packet.getReadPos() + kAfterSpell);
+        const uint32_t emoteCount = packet.readUInt32();
+        for (uint32_t i = 0; i < emoteCount && i < 32 && packet.hasRemaining(8); ++i) {
+            DialogEmote e;
+            e.emote = packet.readUInt32();
+            e.delayMs = packet.readUInt32();
+            data.emotes.push_back(e);
+        }
+    }
 
     LOG_DEBUG("Quest details: id=", data.questId, " title='", data.title,
               "' rewardSpell=", data.rewardSpellId);
@@ -1129,8 +1144,10 @@ bool QuestRequestItemsParser::parse(network::Packet& packet, QuestRequestItemsDa
     // only when all four are non-zero (the cores send 3 or 0, then 4, 8, 16).
     if (wotlkLayout) {
         if (!packet.hasRemaining(28)) return true;
-        packet.readUInt32();  // emote delay
-        packet.readUInt32();  // emote
+        DialogEmote e;
+        e.delayMs = packet.readUInt32();
+        e.emote = packet.readUInt32();
+        data.emotes.push_back(e);
         packet.readUInt32();  // closeOnCancel
         data.questFlags = packet.readUInt32();
         packet.readUInt32();  // suggested players
@@ -1291,8 +1308,10 @@ bool QuestOfferRewardParser::parse(network::Packet& packet, QuestOfferRewardData
         if (emoteCount > 32) return true;
         for (uint32_t i = 0; i < emoteCount; ++i) {
             if (!packet.hasRemaining(8)) return true;
-            packet.readUInt32(); // delay
-            packet.readUInt32(); // emote
+            DialogEmote e;
+            e.delayMs = packet.readUInt32();
+            e.emote = packet.readUInt32();
+            data.emotes.push_back(e);
         }
 
         if (!packet.hasRemaining(4)) return true;

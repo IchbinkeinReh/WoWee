@@ -936,6 +936,8 @@ void GameHandler::update(float deltaTime) {
         if (movementHandler_) movementHandler_->updateMoverPitch(deltaTime);
         // The mover's server-driven spline run out (0x006eae70).
         if (movementHandler_) movementHandler_->updateMoverSplineDone();
+        // NPC dialog emotes as they come due (0x0073adc0).
+        updateDialogEmotes();
 
         const float currentPingInterval =
             (isPreWotlk()) ? game::CLASSIC_PING_INTERVAL_SEC : pingInterval;
