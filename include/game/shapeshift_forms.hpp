@@ -77,7 +77,40 @@ struct ShapeshiftFormRow {
     /// CombatRoundTime (+0x18): the form's swing, which a power cost of
     /// Attributes 0x400 adds a hundredth of (0x008012f0).
     uint32_t combatRoundTime = 0;
+    /// CreatureDisplayID[4] (+0x1c): the displays the form shows its unit
+    /// as, 0 for none (0x00726f30).
+    std::array<uint32_t, 4> displays{};
 };
+
+/// CreatureModelData Flags 0x80: a model the player may ride from
+/// (0x00721da0, 0x00726f30).
+inline constexpr uint32_t kModelFlagMountable = 0x80;
+/// ChrRaces Flags 0x4: a race whose character model the player may ride
+/// from (0x00721da0).
+inline constexpr uint32_t kRaceFlagMountable = 0x4;
+
+/// What 0x00721da0 reads of the player's display.
+struct MountShownInput {
+    bool inForm = false;       ///< 0x00721ca0
+    bool nativeShown = true;   ///< UNIT_FIELD_DISPLAYID is NATIVEDISPLAYID
+    /// The display's CreatureDisplayInfoExtra row (ExtendedDisplayInfoID),
+    /// its CreatureModelData Flags and its race's ChrRaces Flags.
+    bool hasExtra = false;
+    uint32_t modelFlags = 0;
+    uint32_t raceFlags = 0;
+};
+
+/// 0x00721da0: whether the player may mount as it is shown - not in a form,
+/// and shown as itself, or as a character display (one with an extra row)
+/// whose model is flagged 0x80 or whose race is flagged 4. A mount spell or
+/// item (aura 78) cast where this fails leaves the form first where
+/// autoUnshift lets it (0x00726f30).
+[[nodiscard]] constexpr bool mayMountAsShown(const MountShownInput& in) {
+    if (in.inForm) return false;
+    if (in.nativeShown) return true;
+    if (!in.hasExtra) return false;
+    return (in.modelFlags & kModelFlagMountable) != 0 || (in.raceFlags & kRaceFlagMountable) != 0;
+}
 
 /// SPELL_AURA_MOD_SHAPESHIFT, the aura a form's spell applies (0x24).
 inline constexpr uint32_t kAuraModShapeshift = 36;

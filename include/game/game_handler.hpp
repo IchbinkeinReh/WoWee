@@ -3453,6 +3453,20 @@ public:
     /// 0x00726ce0: cancel each positive aura (0x10) whose shapeshift effect
     /// (aura 36) names the form in effect.
     void leaveShapeshiftForm();
+    /// 0x00721da0: whether the player may mount as it is shown now.
+    bool mayMountAsShown() const;
+    /// 0x00726f30: before a mount spell or item where 0x00721da0 fails and
+    /// autoUnshift lets it - the form left (0x00726ce0), and, shown as
+    /// another display, each positive aura cancelled that shapeshifts into a
+    /// form one of whose displays' models is not flagged 0x80.
+    void leaveFormForMount();
+    /// A spell about to be cast or used from an item: one applying aura 78
+    /// leaves the form first where 0x00721da0 fails and 0x0071b130 lets it
+    /// (0x0080ac90, 0x00708c20).
+    void unshiftForMountSpell(uint32_t spellId);
+    /// CreatureModelData Flags of a display's model, none where a table or
+    /// row is missing.
+    std::optional<uint32_t> displayModelFlags(uint32_t displayId) const;
     /// The player's UNIT_FIELD_BYTES_2 byte 3 changed (0x006da130): the
     /// form, its preset spells, and the events to fire, in order.
     std::vector<const char*> setPlayerShapeshiftForm(uint8_t form);

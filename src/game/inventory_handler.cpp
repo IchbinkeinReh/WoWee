@@ -2617,7 +2617,7 @@ void InventoryHandler::dispatchUseItem(uint8_t wowBag, uint8_t wowSlot, uint64_t
     LOG_DEBUG("useItem: bag=", (int)wowBag, " slot=", (int)wowSlot, " entry=", item.itemId,
               " spellId=", useSpellId);
     if (useSpellId != 0 && itemInfo && itemInfo->valid &&
-        !itemUseAllowed(wowBag, wowSlot, itemGuid, *itemInfo))
+        !itemUseAllowed(wowBag, wowSlot, itemGuid, *itemInfo, useSpellId))
         return;
 
     // Pre-WotLK mounts are items, so the same rule applies to them: using the
@@ -4961,7 +4961,7 @@ uint64_t InventoryHandler::itemGuidAtWire(uint8_t bag, uint8_t slot) const {
 }
 
 bool InventoryHandler::itemUseAllowed(uint8_t wowBag, uint8_t wowSlot, uint64_t itemGuid,
-                                      const ItemQueryResponseData& info) {
+                                      const ItemQueryResponseData& info, uint32_t spellId) {
     auto refuse = [this](const char* key, const char* enUS) {
         owner_.playGameErrorSound(key);
         owner_.addUIError(interfaceString(key, enUS));
@@ -4995,6 +4995,10 @@ bool InventoryHandler::itemUseAllowed(uint8_t wowBag, uint8_t wowSlot, uint64_t 
         if ((wowSlot == 15 && mainDisarmed) || (wowSlot == 16 && offDisarmed))
             return refuse("ERR_CANT_USE_DISARMED", "You can't use that item while disarmed.");
     }
+    // 0x00708c20: an item whose spell applies aura 78 (Mounted) where the
+    // player may not mount as it is shown (0x00721da0) leaves the form
+    // first, where autoUnshift lets it (0x0071b130, 0x00726f30).
+    owner_.unshiftForMountSpell(spellId);
     // A form that takes no items (0x00721ca0: a form whose row lacks flag 1,
     // no cancel pending): unless its row is flagged 0x80, or 0x40 for
     // something worn, or the item is usable shapeshifted (ItemFlags

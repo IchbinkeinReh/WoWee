@@ -5913,6 +5913,95 @@ bool GameHandler::wouldAutoUnshift() const {
     return !row || (row->flags & 0x100u) == 0;
 }
 
+std::optional<uint32_t> GameHandler::displayModelFlags(uint32_t displayId) const {
+    auto* am = services_.assetManager;
+    if (!am || !am->isInitialized() || displayId == 0) return std::nullopt;
+    const auto displays = am->loadDBCOptional("CreatureDisplayInfo.dbc");
+    const auto models = am->loadDBCOptional("CreatureModelData.dbc");
+    if (!displays || !models) return std::nullopt;
+    const int32_t drow = displays->findRecordById(displayId);
+    if (drow < 0 || displays->getFieldCount() <= 1) return std::nullopt;
+    const int32_t mrow = models->findRecordById(displays->getUInt32(static_cast<uint32_t>(drow), 1));
+    if (mrow < 0 || models->getFieldCount() <= 1) return std::nullopt;
+    return models->getUInt32(static_cast<uint32_t>(mrow), 1);
+}
+
+bool GameHandler::mayMountAsShown() const {
+    MountShownInput in;
+    const uint8_t form = getShapeshiftFormId();
+    in.inForm = inShapeshiftForm(form, shapeshiftFormRow(form));
+    const auto me = getEntityManager().getEntity(playerGuid);
+    if (me && !in.inForm) {
+        const auto field = [&](UF f) {
+            const uint16_t i = fieldIndex(f);
+            return i != 0xFFFF ? me->getField(i) : 0u;
+        };
+        const uint32_t display = field(UF::UNIT_FIELD_DISPLAYID);
+        in.nativeShown = display == field(UF::UNIT_FIELD_NATIVEDISPLAYID);
+        auto* am = services_.assetManager;
+        if (!in.nativeShown && am && am->isInitialized()) {
+            // CreatureDisplayInfo ExtendedDisplayInfoID (+0xc) to its extra
+            // row, whose race (+4) is a ChrRaces row.
+            const auto displays = am->loadDBCOptional("CreatureDisplayInfo.dbc");
+            const auto extras = am->loadDBCOptional("CreatureDisplayInfoExtra.dbc");
+            const auto races = am->loadDBCOptional("ChrRaces.dbc");
+            const int32_t drow = displays ? displays->findRecordById(display) : -1;
+            if (drow >= 0 && extras && displays->getFieldCount() > 3) {
+                const int32_t erow = extras->findRecordById(displays->getUInt32(static_cast<uint32_t>(drow), 3));
+                if (erow >= 0) {
+                    in.hasExtra = true;
+                    in.modelFlags = displayModelFlags(display).value_or(0);
+                    const int32_t rrow = races && extras->getFieldCount() > 1
+                                             ? races->findRecordById(extras->getUInt32(static_cast<uint32_t>(erow), 1))
+                                             : -1;
+                    if (rrow >= 0 && races->getFieldCount() > 1)
+                        in.raceFlags = races->getUInt32(static_cast<uint32_t>(rrow), 1);
+                }
+            }
+        }
+    }
+    return game::mayMountAsShown(in);
+}
+
+void GameHandler::leaveFormForMount() {
+    const uint8_t form = getShapeshiftFormId();
+    if (inShapeshiftForm(form, shapeshiftFormRow(form))) leaveShapeshiftForm();
+    const auto me = getEntityManager().getEntity(playerGuid);
+    if (!me) return;
+    const uint16_t displayField = fieldIndex(UF::UNIT_FIELD_DISPLAYID);
+    const uint16_t nativeField = fieldIndex(UF::UNIT_FIELD_NATIVEDISPLAYID);
+    if (displayField == 0xFFFF || nativeField == 0xFFFF || me->getField(displayField) == me->getField(nativeField))
+        return;
+    loadSpellNameCache();
+    std::vector<uint32_t> cancel;
+    for (const auto& aura : getPlayerAuras()) {
+        if ((aura.flags & 0x10) == 0 || aura.spellId == 0) continue;
+        const auto it = spellNameCache_.find(aura.spellId);
+        if (it == spellNameCache_.end()) continue;
+        bool hit = false;
+        for (int k = 0; k < 3 && !hit; ++k) {
+            if (it->second.effectAuraIds[k] != kAuraModShapeshift) continue;
+            const auto* row = shapeshiftFormRow(static_cast<uint8_t>(it->second.effectMiscValues[k]));
+            if (!row) continue;
+            for (uint32_t display : row->displays) {
+                if (display == 0) continue;
+                const auto flags = displayModelFlags(display);
+                if (flags && (*flags & kModelFlagMountable) == 0) {
+                    hit = true;
+                    break;
+                }
+            }
+        }
+        if (hit) cancel.push_back(aura.spellId);
+    }
+    for (uint32_t spellId : cancel) cancelAura(spellId);
+}
+
+void GameHandler::unshiftForMountSpell(uint32_t spellId) {
+    if (spellId == 0 || !spellAppliesAura(spellId, 78)) return;
+    if (!mayMountAsShown() && wouldAutoUnshift()) leaveFormForMount();
+}
+
 void GameHandler::leaveShapeshiftForm() {
     if (getShapeshiftFormId() == 0) return;
     std::vector<uint32_t> spells;
