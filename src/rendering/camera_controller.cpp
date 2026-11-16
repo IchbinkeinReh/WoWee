@@ -2414,7 +2414,7 @@ void CameraController::update(float deltaTime) {
             followSmoothControls_ = controls;
             if (thirdPerson && !externalFollow_ && !yawFollowsVehicleCamera_)
                 startFollowSmoothing(camera_smooth::stateFor(move, strafe, turnKeys, rightMouseDown, track),
-                                     swimming || isFlightAirborne());
+                                     swimming || isFlightAirborne(), track);
         }
         // Carried by a server spline, the Fear state (followServerSpline).
         // When the spline lets go, the controls' state is planned again
@@ -2426,7 +2426,7 @@ void CameraController::update(float deltaTime) {
             fearPlanned_ = false;
             if (thirdPerson)
                 startFollowSmoothing(camera_smooth::stateFor(move, strafe, turnKeys, rightMouseDown, track),
-                                     swimming || isFlightAirborne());
+                                     swimming || isFlightAirborne(), track);
         }
     }
     float moveYaw = cameraDrivesFacing ? yaw : facingYaw;
@@ -2936,19 +2936,21 @@ void CameraController::followServerSpline() {
     fearFacing_ = facingYaw;
     fearPlanned_ = true;
     viewYaw_.startMs = viewYaw_.endMs;
-    startFollowSmoothing(camera_smooth::State::Fear, swimming || isFlightAirborne());
+    startFollowSmoothing(camera_smooth::State::Fear, swimming || isFlightAirborne(), true);
 }
 
-void CameraController::startFollowSmoothing(camera_smooth::State state, bool pitchFree) {
+void CameraController::startFollowSmoothing(camera_smooth::State state, bool pitchFree, bool trackOrFear) {
     // Not with the camera let go sticky, nor on a view saved away from its
     // default (0x005fff40): 0x00602760 then sets nothing going.
     if (stickyCamera_ || !viewAllowsFollowSmoothing_) return;
-    // Under cameraSmoothStyle's default, Smarter (camera_smooth.hpp). The
-    // eases are the view's own (+0x25c..+0x26c yaw, +0x22c..+0x23c pitch), as
-    // in the client, where a view blend and this share them.
+    // Under cameraSmoothStyle, or cameraSmoothTrackingStyle while
+    // click-to-move tracks or a spline carries (0x00602760). The eases are
+    // the view's own (+0x25c..+0x26c yaw, +0x22c..+0x23c pitch), as in the
+    // client, where a view blend and this share them.
     const float fromFacing = std::remainder(yaw - facingYaw, 360.0f);
+    const int style = camera_smooth::styleFor(trackOrFear, smoothStyle_, smoothTrackingStyle_);
     const camera_smooth::Plan plan =
-        camera_smooth::plan(state, fromFacing, -pitch, leftMouseDown || rightMouseDown, pitchFree);
+        camera_smooth::plan(state, fromFacing, -pitch, leftMouseDown || rightMouseDown, pitchFree, style);
     // A factor of 0 stops an ease where it is (0x005fef40, 0x005feee0).
     if (plan.stopYaw) viewYaw_.startMs = viewYaw_.endMs;
     if (plan.stopPitch) viewPitch_.startMs = viewPitch_.endMs;

@@ -812,7 +812,18 @@ private:
     /// The button whose release last let go of the camera was the left one.
     bool releasedByLeft_ = false;
     /// Start (or stop) the follow smoothing for the controls' state.
-    void startFollowSmoothing(camera_smooth::State state, bool pitchFree);
+    /// `trackOrFear`: click-to-move's Track or a spline's Fear among the
+    /// controls, which picks cameraSmoothTrackingStyle (0x00602760).
+    void startFollowSmoothing(camera_smooth::State state, bool pitchFree, bool trackOrFear = false);
+public:
+    /// cameraSmoothStyle and cameraSmoothTrackingStyle, as the CVars stand.
+    void setSmoothStyles(int smoothStyle, int trackingStyle) {
+        smoothStyle_ = smoothStyle;
+        smoothTrackingStyle_ = trackingStyle;
+    }
+private:
+    int smoothStyle_ = camera_smooth::kDefaultStyle;
+    int smoothTrackingStyle_ = camera_smooth::kDefaultStyle;
     /// The Fear state's ease, planned for a character carried by a server
     /// spline: afresh whenever the way it faces changes.
     void followServerSpline();

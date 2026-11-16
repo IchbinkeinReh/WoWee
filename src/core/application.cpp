@@ -4511,6 +4511,10 @@ void Application::applyServerMovementState(float deltaTime) {
         // last frame: take-off and landing are decided where the floor is.
         gameHandler->setFlightAirborne(renderer->getCameraController()->isFlightAirborne());
         renderer->getCameraController()->setHoverActive(gameHandler->isHovering());
+        // The follow smoothing's styles (0x00602760 reads both CVars).
+        renderer->getCameraController()->setSmoothStyles(
+            std::atoi(addons::storedCVarValue("cameraSmoothStyle", "4").c_str()),
+            std::atoi(addons::storedCVarValue("cameraSmoothTrackingStyle", "4").c_str()));
 
         // Sync camera forward pitch to movement packets during flight / swimming.
         // The server writes the pitch field when FLYING or SWIMMING flags are set;

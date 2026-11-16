@@ -48,20 +48,50 @@ inline State stateFor(bool move, bool strafe, bool turnKeys, bool mouselook, boo
     return State::Idle;
 }
 
-/// cameraSmoothSmarter<State>Delay / Factor's defaults (0x005fd910).
+/// The styles (cameraSmoothStyle, cameraSmoothTrackingStyle; 0x00ad1b94).
+enum Style : int { kNever = 0, kSmart = 1, kAlways = 2, kSpline = 3, kSmarter = 4 };
+/// Both CVars' default (0x00ad1c2c).
+inline constexpr int kDefaultStyle = kSmarter;
+
+/// cameraSmooth<Style><State>Delay / Factor's defaults (0x005fd910, the
+/// table at 0x00ad1c30).
 struct DelayFactor {
     float delay = 0.0f;
     float factor = 0.0f;
 };
-inline DelayFactor smarter(State s) {
-    switch (s) {
-        case State::Track:
-        case State::Fear: return {0.4f, 10.0f};
-        case State::Move:
-        case State::Strafe:
-        case State::Turn: return {0.0f, 1.0f};
+inline DelayFactor stateDelayFactor(int style, State s) {
+    const int i = static_cast<int>(s);
+    switch (style) {
+        case kNever: return {0.0f, 0.0f};
+        case kSmart:
+        case kSmarter:
+            if (s == State::Track || s == State::Fear) return {0.4f, 10.0f};
+            if (s == State::Move || s == State::Strafe || s == State::Turn) return {0.0f, 1.0f};
+            return {0.0f, 0.0f};
+        case kAlways: return {0.0f, 1.0f};
+        case kSpline: return (i >= 3 && i <= 5) ? DelayFactor{0.0f, 1.0f} : DelayFactor{0.0f, 4.0f};
         default: return {0.0f, 0.0f};
     }
+}
+inline DelayFactor smarter(State s) { return stateDelayFactor(kSmarter, s); }
+
+/// cameraSmoothViewData<Style><Part>Delay / Factor's defaults (0x00ad1d48):
+/// the distance is eased by none; the pitch by all but Never and Smart; the
+/// yaw by all but Never. The delays are all 0.
+enum class Part { Distance = 0, Pitch = 1, Yaw = 2 };
+inline DelayFactor viewData(int style, Part p) {
+    if (p == Part::Distance || style == kNever) return {0.0f, 0.0f};
+    if (p == Part::Pitch && style == kSmart) return {0.0f, 0.0f};
+    return {0.0f, 1.0f};
+}
+
+/// 0x00602760's style: cameraSmoothTrackingStyle while click-to-move's
+/// Track (+0x98 0x100, unless it reads as Move) or a server spline's Fear
+/// (+0x98 0x1000) is among the controls, whichever state wins; else
+/// cameraSmoothStyle. (A camera view of its own, +0x2fc 1 or 2, would
+/// force Never or Spline; this client's camera has none.)
+inline int styleFor(bool trackOrFear, int smoothStyle, int trackingStyle) {
+    return trackOrFear ? trackingStyle : smoothStyle;
 }
 
 // The rest of the defaults: cameraSmoothViewDataSmarterPitch and Yaw are
@@ -111,12 +141,18 @@ struct Plan {
 /// (0x00602680, 0x005ffeb0 on +0x98 1). `pitchFree`: swimming or flying,
 /// where the pitch is the mover's and is left alone (0x005ffeb0 on
 /// 0x2200000).
-inline Plan plan(State state, float yawFromFacing, float pitch, bool freelook, bool pitchFree) {
+/// `style` the one 0x00602760 picked (styleFor); one past the five has no
+/// row and sets nothing going.
+inline Plan plan(State state, float yawFromFacing, float pitch, bool freelook, bool pitchFree,
+                 int style = kDefaultStyle) {
     Plan p;
-    if (freelook) return p;
-    const float factor = smarter(state).factor;
-    // The views' own delays (cameraSmoothViewDataSmarterYaw/Pitch) are 0.
-    p.delay = smarter(state).delay;
+    if (freelook || style < kNever || style > kSmarter) return p;
+    // Each part's factor is its view's times the state's, its delay the
+    // two added (the views' own delays are 0).
+    const DelayFactor st = stateDelayFactor(style, state);
+    const float pitchFactor = viewData(style, Part::Pitch).factor * st.factor;
+    const float yawFactor = viewData(style, Part::Yaw).factor * st.factor;
+    p.delay = st.delay;
     // The pitch is smoothed only outside its band, and to the edge it left.
     const bool pitchOut = !pitchFree && (pitch < kPitchMin || pitch > kPitchMax);
     // The yaw's band is 0..0: anything off straight behind is smoothed.
@@ -124,21 +160,21 @@ inline Plan plan(State state, float yawFromFacing, float pitch, bool freelook, b
     const bool yawOut = std::fabs(yaw) >= kAtRest;
     float longest = 0.0f;
     if (pitchOut) {
-        if (factor == 0.0f) {
+        if (pitchFactor == 0.0f) {
             p.stopPitch = true;
         } else {
             p.pitchTo = std::clamp(pitch, kPitchMin, kPitchMax);
             p.easePitch = true;
-            longest = std::max(longest, std::fabs(p.pitchTo - pitch) / kPitchSpeed * factor);
+            longest = std::max(longest, std::fabs(p.pitchTo - pitch) / kPitchSpeed * pitchFactor);
         }
     }
     if (yawOut) {
-        if (factor == 0.0f) {
+        if (yawFactor == 0.0f) {
             p.stopYaw = true;
         } else {
             p.yawTo = 0.0f;
             p.easeYaw = true;
-            longest = std::max(longest, std::fabs(yaw) / kYawSpeed * factor);
+            longest = std::max(longest, std::fabs(yaw) / kYawSpeed * yawFactor);
         }
     }
     p.seconds = std::clamp(longest, kTimeMin, kTimeMax);
