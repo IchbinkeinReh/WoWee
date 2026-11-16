@@ -161,6 +161,20 @@ public:
                             const MissileTrajectory* trajectory = nullptr, uint32_t spellId = 0,
                             uint64_t casterGuid = 0, uint8_t castCount = 0);
 
+    /// One target of a bouncing missile: where it goes and whether the cast
+    /// hit it there (its miss reason 0, 0x006fefb0).
+    struct BounceHop {
+        MissileEnd end;
+        bool hit = false;
+    };
+    /// A spell with AttributesEx4 0x40000 (missile flag 0x200, 0x00732ff0):
+    /// one missile to the first of `hops`, relaunched on each arrival from
+    /// where it is to the next in turn (0x00702a60), each hit's impact played
+    /// as it lands there. False when nothing was launched.
+    bool launchBouncingSpellMissile(uint32_t visualId, float speed, const MissileEnd& from,
+                                    std::vector<BounceHop> hops, const MissileTrajectory* trajectory = nullptr,
+                                    uint32_t spellId = 0, uint64_t casterGuid = 0, uint8_t castCount = 0);
+
     /// SMSG_SET_PROJECTILE_POSITION (0x008005a0): the missiles of this
     /// caster's cast stop at `point` - each lands where it is once a step
     /// would take it further from there than it is (0x006ff2c0, 0x006fc290,
@@ -1029,7 +1043,24 @@ private:
         // 0x100000): a move under 0.01 is blended with it.
         bool hasDrawnDelta = false;
         glm::vec3 drawnDelta{0.0f};
+        // A bouncing missile's targets with whether each was hit (flag 0x200;
+        // +0xa4/+0xa8 and the miss reasons +0xc4/+0xc8), which it flies to
+        // (+0xf0), and the speed and ADJUST_MISSILE flight it is relaunched
+        // with.
+        std::vector<BounceHop> hops;
+        size_t hopIndex = 0;
+        float launchSpeed = 0.0f;
+        bool hasTrajectory = false;
+        MissileTrajectory trajectory;
     };
+    /// Point a missile at `to` from where it is and plan its flight, as
+    /// 0x007022d0 does at a launch and at each relaunch.
+    void aimMissile(ActiveMissile& missile, const MissileVisual& visual, const MissileEnd& to);
+    /// Launch the visual's missile (launchSpellMissile's body) with `hops`
+    /// for it to bounce along after `to`.
+    bool launchMissile(uint32_t visualId, float speed, const MissileEnd& from, const MissileEnd& to,
+                       std::vector<MissileEnd> impacts, const MissileTrajectory* trajectory, uint32_t spellId,
+                       uint64_t casterGuid, uint8_t castCount, std::vector<BounceHop> hops);
     /// One frame of a missile's motion script (0x00700350, 0x00700550,
     /// 0x006feb20): where it is drawn and how its model is turned, its speed
     /// changed; the drawn place is its own where it has no script.

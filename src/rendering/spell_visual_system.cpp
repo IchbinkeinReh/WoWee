@@ -989,6 +989,86 @@ bool SpellVisualSystem::launchSpellMissile(uint32_t visualId, float speed, const
                                            const MissileEnd& to, std::vector<MissileEnd> impacts,
                                            const MissileTrajectory* trajectory, uint32_t spellId,
                                            uint64_t casterGuid, uint8_t castCount) {
+    return launchMissile(visualId, speed, from, to, std::move(impacts), trajectory, spellId, casterGuid, castCount,
+                         {});
+}
+
+// 0x00732ff0 for AttributesEx4 0x40000: the missile goes to the first of
+// its targets, carrying the list (0x00700c80) and flag 0x200.
+bool SpellVisualSystem::launchBouncingSpellMissile(uint32_t visualId, float speed, const MissileEnd& from,
+                                                   std::vector<BounceHop> hops,
+                                                   const MissileTrajectory* trajectory, uint32_t spellId,
+                                                   uint64_t casterGuid, uint8_t castCount) {
+    if (hops.empty()) return false;   // 0x00703730: none to fly to
+    const MissileEnd to = hops.front().end;
+    std::vector<MissileEnd> impacts;
+    if (hops.front().hit) impacts.push_back(to);
+    return launchMissile(visualId, speed, from, to, std::move(impacts), trajectory, spellId, casterGuid, castCount,
+                         std::move(hops));
+}
+
+void SpellVisualSystem::aimMissile(ActiveMissile& missile, const MissileVisual& visual, const MissileEnd& to) {
+    missile.lastTarget = to.position;
+    missile.targetInstanceId = 0;
+    missile.targetAttachment = -1;
+    missile.speed = missile.launchSpeed;
+    missile.elapsed = 0.0f;
+    missile.progress = 0.0f;
+    // The attachment is settled once, at launch, as FUN_007022d0 settles it:
+    // the one the visual names if the target's model has it, else the first
+    // fallback it has, else none - the target's origin.
+    CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    glm::mat4 probe;
+    if (charRenderer && to.renderInstanceId != 0 && charRenderer->getInstanceFrame(to.renderInstanceId, probe)) {
+        missile.targetInstanceId = to.renderInstanceId;
+        if (visual.destinationAttachment >= 0 &&
+            charRenderer->getAttachmentTransform(to.renderInstanceId,
+                                                 static_cast<uint32_t>(visual.destinationAttachment), probe)) {
+            missile.targetAttachment = visual.destinationAttachment;
+        } else {
+            for (int32_t fallback : spell_missile::kDestinationFallbacks) {
+                if (charRenderer->getAttachmentTransform(to.renderInstanceId,
+                                                         static_cast<uint32_t>(fallback), probe)) {
+                    missile.targetAttachment = fallback;
+                    break;
+                }
+            }
+        }
+    }
+    const glm::vec3 target = missileTargetPoint(missile);
+    float flight = spell_missile::flightTime(glm::length(target - missile.position), missile.speed);
+    // ADJUST_MISSILE (0x007022d0 hands it to 0x00700880): one flight to where
+    // the target is now, timed by the server. Off the arc it flies straight,
+    // homing, at the speed that lands it then.
+    if (missile.hasTrajectory) {
+        const MissileTrajectory& trajectory = missile.trajectory;
+        missile.adjusted = true;
+        missile.facesDrawnMotion = true;
+        missile.arcStart = missile.position;
+        missile.arc = spell_missile::planMissileArc(trajectory.elevation, trajectory.castSpeed,
+                                                    target - missile.position,
+                                                    spellMissileRow(trajectory.spellMissileId),
+                                                    trajectory.flightSeconds);
+        if (!missile.arc.onArc) missile.speed = missile.arc.straightSpeed;
+        flight = missile.arc.flightSeconds;
+    }
+    // A missile chasing a unit that runs from it takes longer than this, so
+    // the cap is generous; it only stops one that can never arrive.
+    missile.maxLifetime = flight * 3.0f + 5.0f;
+    // 0x007022d0: the place it is let go, the distance from there and the
+    // speed it starts at; a point as far behind it as the target is ahead
+    // as where it was last drawn, so it first faces the target.
+    missile.firePos = missile.position;
+    missile.startDistance = glm::length(target - missile.position);
+    missile.baseSpeed = missile.speed;
+    missile.lastDrawn = missile.position - (target - missile.position);
+    missile.hasDrawnDelta = false;
+}
+
+bool SpellVisualSystem::launchMissile(uint32_t visualId, float speed, const MissileEnd& from, const MissileEnd& to,
+                                      std::vector<MissileEnd> impacts, const MissileTrajectory* trajectory,
+                                      uint32_t spellId, uint64_t casterGuid, uint8_t castCount,
+                                      std::vector<BounceHop> hops) {
     if (!m2Renderer_ || visualId == 0 || !(speed > 0.0f)) return false;
     const SyncEffectLoadScope syncLoads(syncEffectLoads_,
                                         involvesPlayer(from.renderInstanceId, to.renderInstanceId));
@@ -1011,31 +1091,12 @@ bool SpellVisualSystem::launchSpellMissile(uint32_t visualId, float speed, const
     missile.spellId = spellId;
     missile.casterGuid = casterGuid;
     missile.castCount = castCount;
-    missile.lastTarget = to.position;
-
-    // The attachment is settled once, at launch, as FUN_007022d0 settles it:
-    // the one the visual names if the target's model has it, else the first
-    // fallback it has, else none - the target's origin.
-    CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
-    glm::mat4 probe;
-    if (charRenderer && to.renderInstanceId != 0 && charRenderer->getInstanceFrame(to.renderInstanceId, probe)) {
-        missile.targetInstanceId = to.renderInstanceId;
-        if (visual->destinationAttachment >= 0 &&
-            charRenderer->getAttachmentTransform(to.renderInstanceId,
-                                                 static_cast<uint32_t>(visual->destinationAttachment), probe)) {
-            missile.targetAttachment = visual->destinationAttachment;
-        } else {
-            for (int32_t fallback : spell_missile::kDestinationFallbacks) {
-                if (charRenderer->getAttachmentTransform(to.renderInstanceId,
-                                                         static_cast<uint32_t>(fallback), probe)) {
-                    missile.targetAttachment = fallback;
-                    break;
-                }
-            }
-        }
+    missile.launchSpeed = speed;
+    missile.hops = std::move(hops);
+    if (trajectory) {
+        missile.hasTrajectory = true;
+        missile.trajectory = *trajectory;
     }
-    const glm::vec3 target = missileTargetPoint(missile);
-    float flight = spell_missile::flightTime(glm::length(target - missile.position), speed);
     // A visual with a MissileMotion (0x00733xxx): flags 0x3800, its script
     // (0x006ff0a0) and the row's MissileCount of copies, each its index.
     int32_t copies = 1;
@@ -1055,30 +1116,10 @@ bool SpellVisualSystem::launchSpellMissile(uint32_t visualId, float speed, const
         }
     }
     missile.missileCount = copies;
-    // ADJUST_MISSILE (0x007022d0 hands it to 0x00700880): one flight to where
-    // the target is now, timed by the server. Off the arc it flies straight,
-    // homing, at the speed that lands it then.
-    if (trajectory) {
-        missile.adjusted = true;
-        missile.facesDrawnMotion = true;
-        missile.arcStart = missile.position;
-        missile.arc = spell_missile::planMissileArc(trajectory->elevation, trajectory->castSpeed,
-                                                    target - missile.position,
-                                                    spellMissileRow(trajectory->spellMissileId),
-                                                    trajectory->flightSeconds);
-        if (!missile.arc.onArc) missile.speed = missile.arc.straightSpeed;
-        flight = missile.arc.flightSeconds;
-    }
-    // A missile chasing a unit that runs from it takes longer than this, so
-    // the cap is generous; it only stops one that can never arrive.
-    missile.maxLifetime = flight * 3.0f + 5.0f;
-    // 0x007022d0: the place it is let go, the distance from there and the
-    // speed it starts at; a point as far behind it as the target is ahead
-    // as where it was last drawn, so it first faces the target.
-    missile.firePos = missile.position;
-    missile.startDistance = glm::length(target - missile.position);
-    missile.baseSpeed = missile.speed;
-    missile.lastDrawn = missile.position - (target - missile.position);
+    aimMissile(missile, *visual, to);
+    const glm::vec3 target = missileTargetPoint(missile);
+    const float flight = missile.adjusted ? missile.arc.flightSeconds
+                                          : spell_missile::flightTime(missile.startDistance, missile.speed);
 
     bool launched = false;
     std::uniform_real_distribution<float> unit(0.0f, 1.0f);
@@ -1321,15 +1362,44 @@ void SpellVisualSystem::updateMissiles(float deltaTime) {
             ++it;
             continue;
         }
-        m2Renderer_->removeInstance(it->instanceId);
-        audio::AudioEngine::instance().stopSoundWithFade(it->soundHandle, spell_missile::kMissileSoundFadeSeconds);
         const uint32_t visualId = it->visualId;
         const uint32_t casterInstance = it->casterInstanceId;
         const uint32_t missileSpell = it->spellId;
         const glm::vec3 landedAt = it->position;
         const uint32_t reachedUnit = it->targetInstanceId;
         std::vector<MissileEnd> impacts = std::move(it->impacts);
-        it = activeMissiles_.erase(it);
+        // 0x00702a60: a bouncing missile (flag 0x200) that has not been
+        // stopped goes on from where it is to its next target, the same
+        // missile relaunched (0x007022d0); only past the last is it gone.
+        bool relaunched = false;
+        if (!it->hops.empty() && !it->hasStop) {
+            const MissileVisual* visual = findMissileVisual(visualId);
+            while (visual && ++it->hopIndex < it->hops.size()) {
+                const BounceHop& hop = it->hops[it->hopIndex];
+                // A target that has gone is passed over at once (0x007022d0
+                // finding no unit relaunches to the next).
+                glm::mat4 hopFrame;
+                if (hop.end.renderInstanceId != 0 &&
+                    !(charRenderer && charRenderer->getInstanceFrame(hop.end.renderInstanceId, hopFrame)))
+                    continue;
+                it->impacts.clear();
+                if (hop.hit) it->impacts.push_back(hop.end);
+                // From the point it reached (0x00703410 puts it there).
+                it->position = target;
+                aimMissile(*it, *visual, hop.end);
+                for (float& r : it->rands) r = std::uniform_real_distribution<float>(0.0f, 1.0f)(missileRng_);
+                relaunched = true;
+                break;
+            }
+        }
+        if (relaunched) {
+            ++it;
+        } else {
+            m2Renderer_->removeInstance(it->instanceId);
+            audio::AudioEngine::instance().stopSoundWithFade(it->soundHandle,
+                                                             spell_missile::kMissileSoundFadeSeconds);
+            it = activeMissiles_.erase(it);
+        }
         // 0x00702db0: a missile that hits the unit it reached (0x00703410,
         // 0x006fefb0) first has it react: a living unit takes the wound a
         // blow gives (0x00736640(0), not critical) unless the SpellVisual's

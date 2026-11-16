@@ -544,7 +544,47 @@ std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data,
     };
 
     const size_t targetCount = data.hitTargets.size() + data.missTargets.size();
-    switch (sm::chooseTargeting(data.targetFlags, targetCount, missile->flags)) {
+    const bool hasLocation =
+        (data.targetFlags & (sm::kTargetFlagSourceLocation | sm::kTargetFlagDestLocation)) != 0;
+    // AttributesEx4 0x40000 (0x0080f4d7 -> 0x00800180): never a missile per
+    // target. At a location the one missile flies to the point; otherwise it
+    // goes to the first target and, carrying the list (flag 0x200), is
+    // relaunched on each arrival to the next (0x00702a60). The list is the
+    // hit targets then the missed ones, or the missed first with cast flag
+    // 0x400; a missed one is flown to but takes no impact (0x006fefb0).
+    const bool bouncy = (spellIt->second.attrEx4 & 0x40000u) != 0;
+    if (bouncy && !hasLocation) {
+        std::vector<rendering::SpellVisualSystem::BounceHop> hops;
+        std::vector<uint64_t> hitsFlownTo;
+        const auto addHits = [&] {
+            for (uint64_t guid : data.hitTargets) {
+                MissileEnd end;
+                if (!unitEnd(guid, end)) continue;
+                hops.push_back({end, true});
+                hitsFlownTo.push_back(guid);
+            }
+        };
+        const auto addMisses = [&] {
+            for (const auto& miss : data.missTargets) {
+                MissileEnd end;
+                if (unitEnd(miss.targetGuid, end)) hops.push_back({end, false});
+            }
+        };
+        if (data.castFlags & 0x400u) {
+            addMisses();
+            addHits();
+        } else {
+            addHits();
+            addMisses();
+        }
+        if (svs->launchBouncingSpellMissile(visualId, speed, from, std::move(hops), trajectory, data.spellId,
+                                            data.casterUnit, data.castCount))
+            carried = std::move(hitsFlownTo);
+        return carried;
+    }
+    auto targeting = sm::chooseTargeting(data.targetFlags, targetCount, missile->flags);
+    if (bouncy) targeting = sm::Targeting::Location;
+    switch (targeting) {
     case sm::Targeting::EachTarget: {
         for (uint64_t guid : data.hitTargets) {
             MissileEnd to;
