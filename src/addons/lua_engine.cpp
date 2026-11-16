@@ -12520,10 +12520,12 @@ void LuaEngine::registerCoreAPI() {
         "end\n"
         "function animMeta:GetOrigin() return self.originPoint or 'CENTER', self.originX or 0, self.originY or 0 end\n"
         "function animMeta:GetEndDelay() return self.endDelay or 0 end\n"
-        // The state the client keeps at +0x34: 0 stopped, 2 paused
-        // (0x004a5100, 0x004a50b0).
-        "function animMeta:IsStopped() return not (self.group and self.group.isPlaying) end\n"
-        "function animMeta:IsPaused() return (self.group and self.group.isPlaying and self.group.paused) and true or false end\n"
+        // The state the client keeps at +0x34: 0 stopped, 1 playing, 2 paused
+        // (0x004a5100, 0x004a50b0). An animation has a state of its own,
+        // apart from its group's: it is set as its order starts, by its own
+        // Play, Pause and Stop, and cleared when it finishes.
+        "function animMeta:IsStopped() return (self.state or 0) == 0 end\n"
+        "function animMeta:IsPaused() return self.state == 2 end\n"
         // SetSmoothProgress (0x004a5430 -> 0x00497670) writes the value
         // GetSmoothProgress answers until the next tick works it out again.
         "function animMeta:SetSmoothProgress(v)\n"
@@ -12618,16 +12620,47 @@ void LuaEngine::registerCoreAPI() {
         "function animMeta:GetRegionParent() return self.group and self.group.parent end\n"
         "function animMeta:SetTarget(t) self.target = t end\n"
         "function animMeta:IsDelaying() return (self.elapsed or 0) < (self.startDelay or 0) end\n"
-        "function animMeta:IsPlaying() return self.group and self.group:IsPlaying() end\n"
+        "function animMeta:IsPlaying() return self.state == 1 end\n"
         // An animation answers Play, Pause, Stop and Finish as well as its
-        // group does, and acts on the group when it does. Leaving these off
-        // was worse than having no animations at all: an undefined
-        // TutorialFrameCallOutPulser was a harmless fallback object that
-        // swallowed :Stop(), and a real table without the method is a hard
-        // error that took the whole file down with it.
-        "function animMeta:Play()   if self.group then self.group:Play()   end end\n"
-        "function animMeta:Stop()   if self.group then self.group:Stop()   end end\n"
-        "function animMeta:Pause()  if self.group then self.group:Pause()  end end\n"
+        // group does. Leaving these off was worse than having no animations
+        // at all: an undefined TutorialFrameCallOutPulser was a harmless
+        // fallback object that swallowed :Stop(), and a real table without
+        // the method is a hard error that took the whole file down with it.
+        // Play (0x004a4f40 -> 0x0049ad80): the group plays first - started if
+        // stopped, resumed if paused, left alone if playing - and then this
+        // animation is set playing, with its OnPlay if it was not already.
+        "function animMeta:Play()\n"
+        "    local g = self.group\n"
+        "    if not g then return end\n"
+        "    g:Play()\n"
+        "    if self.state ~= 1 then\n"
+        "        self.state = 1\n"
+        "        __WoweeRunScriptSlot(self, 'OnPlay')\n"
+        "    end\n"
+        "end\n"
+        // Pause (0x004a4f80 -> 0x00497e60): the group pauses (and with it the
+        // animations of its current order), then this animation, if playing,
+        // is paused with its OnPause.
+        "function animMeta:Pause()\n"
+        "    local g = self.group\n"
+        "    if not g then return end\n"
+        "    g:Pause()\n"
+        "    if self.state == 1 then\n"
+        "        self.state = 2\n"
+        "        __WoweeRunScriptSlot(self, 'OnPause')\n"
+        "    end\n"
+        "end\n"
+        // Stop (0x004a4fc0 -> 0x0049adc0(1)): only an animation that is not
+        // stopped does anything. It stops with OnStop(true); then its group
+        // stops the rest of the current order and itself, each with
+        // OnStop(false), as the group was not the one asked (0x0049ab60).
+        "function animMeta:Stop()\n"
+        "    if (self.state or 0) == 0 then return end\n"
+        "    self.state = 0\n"
+        "    self.elapsed, self.progress = 0, 0\n"
+        "    __WoweeRunScriptSlot(self, 'OnStop', true)\n"
+        "    if self.group then self.group:Stop(false, self) end\n"
+        "end\n"
         "function animMeta:Resume() if self.group then self.group:Resume() end end\n"
         "function animMeta:Finish() if self.group then self.group:Finish() end end\n"
         // GetSmoothing (0x004a5810): always a name, NONE when none was set.
@@ -12636,6 +12669,24 @@ void LuaEngine::registerCoreAPI() {
 
         "local groupMeta = {}\n"
         "groupMeta.__index = groupMeta\n"
+        // The animations of one order set playing as that order starts, each
+        // with its OnPlay (0x0049a8f0 calls 0x0049ad80 on each): the given
+        // order, or the group's first (its last when playing in reverse).
+        "function __WoweeAnimStartOrder(g, order)\n"
+        "    if order == nil then\n"
+        "        for _, a in ipairs(g.animations) do\n"
+        "            local o = a.order or 1\n"
+        "            if order == nil or (g.reversed and o > order) or (not g.reversed and o < order) then order = o end\n"
+        "        end\n"
+        "    end\n"
+        "    if order == nil then return end\n"
+        "    for _, a in ipairs(g.animations) do\n"
+        "        if (a.order or 1) == order and a.state ~= 1 then\n"
+        "            a.state = 1\n"
+        "            __WoweeRunScriptSlot(a, 'OnPlay')\n"
+        "        end\n"
+        "    end\n"
+        "end\n"
         // SetParent(parent [, order]) of an animation (0x004a5880) and of a
         // control point (0x004a6790): the parent object, or the name of one,
         // which must be an AnimationGroup or a Path; the object moves into it,
@@ -12843,7 +12894,20 @@ void LuaEngine::registerCoreAPI() {
         // animation's change is relative to. Captured here rather than at
         // creation, because a group replayed later starts from wherever the
         // frame is then.
+        // Play (0x004a6ea0 -> 0x0049a8f0): a group already playing is left as
+        // it is; a paused one carries on from where it was, its current
+        // order's animations playing again; a stopped one starts from its
+        // first order. Each animation set playing gets its OnPlay, and the
+        // group its own.
         "function groupMeta:Play()\n"
+        "    if self.isPlaying then\n"
+        "        if not self.paused then return end\n"
+        "        self.paused = nil\n"
+        "        __WoweeAnimStartOrder(self, self.curOrder)\n"
+        "        __WoweeRunScriptSlot(self, 'OnPlay')\n"
+        "        return\n"
+        "    end\n"
+        "    self.paused = nil\n"
         "    self.isPlaying = true\n"
         "    self.pendingFinish = nil\n"
         "    self.reversed = false\n"
@@ -12851,12 +12915,29 @@ void LuaEngine::registerCoreAPI() {
         "    self.elapsed = 0\n"
         "    self.done = nil\n"
         "    self.baseAlpha = self.parent and self.parent:GetAlpha() or 1\n"
-        "    for _, a in ipairs(self.animations) do a.elapsed = 0 a.progress = 0 a.finished = nil end\n"
+        "    for _, a in ipairs(self.animations) do a.elapsed = 0 a.progress = 0 a.finished = nil a.state = 0 end\n"
         "    playing[self] = true\n"
+        "    __WoweeAnimStartOrder(self, nil)\n"
         "    __WoweeRunScriptSlot(self, 'OnPlay')\n"
         "end\n"
-        "function groupMeta:Stop()\n"
+        // Stop (0x004a6f20 -> 0x0049b0f0(1)): only a playing group stops. The
+        // animations of its current order stop with OnStop(requested), then
+        // the group's OnStop(requested). Called by the script, requested is
+        // true; an animation's own Stop passes false and itself as the one
+        // already stopped (0x0049ab60).
+        "function groupMeta:Stop(requested, except)\n"
+        "    if not self.isPlaying then return end\n"
+        "    if requested == nil then requested = true end\n"
+        "    local cur = self.curOrder\n"
+        "    for _, a in ipairs(self.animations) do\n"
+        "        if a ~= except and (a.state or 0) ~= 0 and (cur == nil or (a.order or 1) == cur) then\n"
+        "            a.state = 0\n"
+        "            __WoweeRunScriptSlot(a, 'OnStop', requested and true or false)\n"
+        "        end\n"
+        "        a.state = 0\n"
+        "    end\n"
         "    self.isPlaying = false\n"
+        "    self.paused = nil\n"
         "    self.done = nil\n"
         "    self.pendingFinish = nil\n"
         "    playing[self] = nil\n"
@@ -12867,7 +12948,7 @@ void LuaEngine::registerCoreAPI() {
         "        __WoweeSetAnimOffset(self.parent, 0, 0)\n"
         "        __WoweeSetAnimRotation(self.parent, 0)\n"
         "    end\n"
-        "    __WoweeRunScriptSlot(self, 'OnStop')\n"
+        "    __WoweeRunScriptSlot(self, 'OnStop', requested and true or false)\n"
         "end\n"
         // Finish asks a playing group to stop at the end of the loop it is
         // in (the pending-finish flag, +0x88 bit 2, 0x004a7090); a group
@@ -12880,6 +12961,8 @@ void LuaEngine::registerCoreAPI() {
         "    g.isPlaying = false\n"
         "    g.done = true\n"
         "    g.pendingFinish = nil\n"
+        "    g.paused = nil\n"
+        "    for _, a in ipairs(g.animations) do a.state = 0 end\n"
         "    playing[g] = nil\n"
         "    __WoweeRunScriptSlot(g, 'OnFinished')\n"
         "end\n"
@@ -12898,7 +12981,20 @@ void LuaEngine::registerCoreAPI() {
         "    self.initialX, self.initialY = x, y\n"
         "end\n"
         "function groupMeta:GetInitialOffset() return self.initialX or 0, self.initialY or 0 end\n"
-        "function groupMeta:Pause() self.paused = true end\n"
+        // Pause (0x004a6ee0 -> 0x0049aab0): a playing group not yet paused
+        // pauses; each animation of its current order that is playing is
+        // paused with its OnPause, then the group gets its OnPause.
+        "function groupMeta:Pause()\n"
+        "    if not self.isPlaying or self.paused then return end\n"
+        "    self.paused = true\n"
+        "    for _, a in ipairs(self.animations) do\n"
+        "        if a.state == 1 and (self.curOrder == nil or (a.order or 1) == self.curOrder) then\n"
+        "            a.state = 2\n"
+        "            __WoweeRunScriptSlot(a, 'OnPause')\n"
+        "        end\n"
+        "    end\n"
+        "    __WoweeRunScriptSlot(self, 'OnPause')\n"
+        "end\n"
         "function groupMeta:Resume() self.paused = nil end\n"
 
         // Stop every group on this frame at once. A frame method rather than a
@@ -13070,6 +13166,7 @@ void LuaEngine::registerCoreAPI() {
         "                    end\n"
         "                    if done and not a.finished then\n"
         "                        a.finished = true\n"
+        "                        a.state = 0\n"
         "                        __WoweeRunScriptSlot(a, 'OnFinished')\n"
         "                    end\n"
         "                end\n"
@@ -13108,6 +13205,7 @@ void LuaEngine::registerCoreAPI() {
         "                local nxt = nextOrder(orders, cur, g.reversed)\n"
         "                if nxt then\n"
         "                    g.curOrder = nxt\n"
+        "                    __WoweeAnimStartOrder(g, nxt)\n"
         "                else\n"
         "                    local mode = g.looping or 'NONE'\n"
         "                    if (mode == 'REPEAT' or mode == 'BOUNCE') and not g.pendingFinish then\n"
@@ -13115,6 +13213,7 @@ void LuaEngine::registerCoreAPI() {
         "                        for _, a in ipairs(g.animations) do a.elapsed = 0 a.finished = nil a.lastP = nil end\n"
         "                        g.curOrder = nil\n"
         "                        g.elapsed = 0\n"
+        "                        __WoweeAnimStartOrder(g, nil)\n"
         // OnLoop(self, loopState) (0x00497800): the way it plays now.
         "                        __WoweeRunScriptSlot(g, 'OnLoop', g:GetLoopState())\n"
         "                    else\n"
