@@ -2334,6 +2334,8 @@ struct MonsterMoveData {
     float facingSpotX = 0, facingSpotY = 0;  // FacingSpot, server coords; its height is not needed
     uint32_t splineFlags = 0;
     uint32_t duration = 0;
+    /// The move's spline id (WotLK), which CMSG_MOVE_SPLINE_DONE hands back.
+    uint32_t splineId = 0;
     // Destination (final point of the spline, server coords)
     float destX = 0, destY = 0, destZ = 0;
     bool hasDest = false;

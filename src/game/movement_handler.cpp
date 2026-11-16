@@ -639,7 +639,7 @@ void MovementHandler::setFlightAirborne(bool airborne) {
     sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
 }
 
-void MovementHandler::sendMovement(Opcode opcode) {
+void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> trailer) {
     if (owner_.getState() != WorldState::IN_WORLD) {
         LOG_WARNING("Cannot send movement in state: ", (int)owner_.getState());
         return;
@@ -1170,6 +1170,7 @@ void MovementHandler::sendMovement(Opcode opcode) {
     auto packet = owner_.getPacketParsers()
         ? owner_.getPacketParsers()->buildMovementPacket(opcode, wireInfo, mover)
         : MovementPacket::build(opcode, wireInfo, mover);
+    if (trailer) packet.writeUInt32(*trailer);
     owner_.getSocket()->send(packet);
     // What went out (0x0071f0c0): the facing, the pitch where it can pitch,
     // and whether a pitch is under way since (+0xa30 0x8000000).
@@ -2138,7 +2139,7 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
     const uint32_t moveFlagsBefore = entity->getReportedMoveFlags();
     const uint32_t moveSplineFlags = isPreWotlk() ? 0u : data.splineFlags;
     // Its move spline (+0xbc, 0x0098c770): a path to run, or a stop.
-    noteMoveSpline(data.guid, data.hasDest, moveSplineFlags, data.duration);
+    noteMoveSpline(data.guid, data.hasDest, moveSplineFlags, data.duration, data.splineId);
 
     // Classic/TBC creature patrols encode ground locomotion in the spline:
     // RUNMODE set means Run, while a clear bit means Walk. Publish it before
@@ -2378,7 +2379,7 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
         return;
     }
 
-    /*uint32_t splineId =*/ packet.readUInt32();
+    const uint32_t transportSplineId = packet.readUInt32();
     uint8_t moveType = packet.readUInt8();
 
     if (moveType == 1) {
@@ -2474,7 +2475,7 @@ void MovementHandler::handleMonsterMoveTransport(network::Packet& packet) {
     const bool wasOnSpline = onMoveSpline(moverGuid);
     const uint32_t moveFlagsBefore = entity->getReportedMoveFlags();
     const uint32_t moveSplineFlags = isPreWotlk() ? 0u : splineFlags;
-    noteMoveSpline(moverGuid, hasDest && duration > 0, moveSplineFlags, duration);
+    noteMoveSpline(moverGuid, hasDest && duration > 0, moveSplineFlags, duration, transportSplineId);
 
     if (hasDest && duration > 0) {
         glm::vec3 destLocalCanonical = owner_.getTransportManager()->serverToTransportLocal(
@@ -4672,12 +4673,15 @@ bool MovementHandler::unitHasClientControl(uint64_t guid) const {
     return it != unitControl_.end() && it->second;
 }
 
-void MovementHandler::noteMoveSpline(uint64_t guid, bool hasPath, uint32_t splineFlags, uint32_t durationMs) {
+void MovementHandler::noteMoveSpline(uint64_t guid, bool hasPath, uint32_t splineFlags, uint32_t durationMs,
+                                     uint32_t splineId) {
     const uint32_t now = movementClockMs();
-    if (auto spline = vehicle::moveSplineFrom(hasPath, splineFlags, durationMs, now))
+    if (auto spline = vehicle::moveSplineFrom(hasPath, splineFlags, durationMs, now)) {
+        spline->splineId = splineId;
         moveSplines_[guid] = *spline;
-    else
+    } else {
         moveSplines_.erase(guid);
+    }
     // Those that ran out are of no more use.
     if (moveSplines_.size() > 256)
         std::erase_if(moveSplines_, [now](const auto& kv) { return !vehicle::moveSplineRunning(kv.second, now); });
@@ -4687,8 +4691,20 @@ bool MovementHandler::onMoveSpline(uint64_t guid) {
     const auto it = moveSplines_.find(guid);
     if (it == moveSplines_.end()) return false;
     if (vehicle::moveSplineRunning(it->second, movementClockMs())) return true;
-    moveSplines_.erase(it);
+    // The active mover's is kept for updateMoverSplineDone to report.
+    if (guid != activeMover()) moveSplines_.erase(it);
     return false;
+}
+
+void MovementHandler::updateMoverSplineDone() {
+    if (isPreWotlk()) return;
+    const uint64_t mover = activeMover();
+    const auto it = moveSplines_.find(mover);
+    if (it == moveSplines_.end() || vehicle::moveSplineRunning(it->second, movementClockMs())) return;
+    const uint32_t splineId = it->second.splineId;
+    moveSplines_.erase(it);
+    // 0x0071f210: the mover's movement block and the spline's id.
+    if (owner_.getSocket()) sendMovement(Opcode::CMSG_MOVE_SPLINE_DONE, splineId);
 }
 
 std::optional<uint32_t> MovementHandler::moveSplineFlags(uint64_t guid) {

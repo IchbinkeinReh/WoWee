@@ -97,6 +97,9 @@ struct MoveSpline {
     /// Its MoveSplineFlags: Falling 0x200, Parabolic 0x800, Flying 0x2000
     /// (+0xbc +0x20, read by 0x004f5290, 0x006e9a70, 0x006e9aa0).
     uint32_t flags = 0;
+    /// The SMSG_MONSTER_MOVE's spline id (+0xbc +0x30), which
+    /// CMSG_MOVE_SPLINE_DONE carries when the mover's spline ends.
+    uint32_t splineId = 0;
 };
 [[nodiscard]] inline std::optional<MoveSpline> moveSplineFrom(bool hasPath, uint32_t splineFlags, uint32_t durationMs,
                                                               uint32_t nowMs) {

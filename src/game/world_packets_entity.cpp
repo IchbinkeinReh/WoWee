@@ -660,7 +660,7 @@ bool MonsterMoveParser::parse(network::Packet& packet, MonsterMoveData& data) {
 
     // uint32 splineId
     if (!packet.hasRemaining(4)) return false;
-    packet.readUInt32();
+    data.splineId = packet.readUInt32();
 
     // uint8 moveType
     {

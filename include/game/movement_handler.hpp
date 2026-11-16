@@ -33,7 +33,12 @@ public:
 
     // --- Public API (delegated from GameHandler) ---
 
-    void sendMovement(Opcode opcode);
+    /// `trailer`: a uint32 written after the movement block, as
+    /// CMSG_MOVE_SPLINE_DONE's spline id is (0x0071f210).
+    void sendMovement(Opcode opcode, std::optional<uint32_t> trailer = std::nullopt);
+    /// 0x006eae70 -> 0x0071f210: the active mover's spline run to its end
+    /// sends CMSG_MOVE_SPLINE_DONE with its spline id, once.
+    void updateMoverSplineDone();
     void setPosition(float x, float y, float z);
     void setOrientation(float orientation);
     void setMovementPitch(float radians) { movementInfo.pitch = radians; }
@@ -355,7 +360,8 @@ private:
     [[nodiscard]] uint64_t playerFarsight() const;
     /// A unit's move spline from its monster move (+0xbc, 0x0098c770), and
     /// whether it still runs: not let go (+0x20 0x400) nor run out.
-    void noteMoveSpline(uint64_t guid, bool hasPath, uint32_t splineFlags, uint32_t durationMs);
+    void noteMoveSpline(uint64_t guid, bool hasPath, uint32_t splineFlags, uint32_t durationMs,
+                        uint32_t splineId = 0);
     /// The movement of `guid` as the client keeps it: movementInfo for the
     /// mover, the player's held one while another unit moves.
     [[nodiscard]] const MovementInfo& movementOf(uint64_t guid) const;

@@ -934,6 +934,8 @@ void GameHandler::update(float deltaTime) {
         if (movementHandler_) movementHandler_->timeSinceLastMoveHeartbeatRef() += deltaTime;
         // The mover's pitch over time and a full-speed pitcher's held start.
         if (movementHandler_) movementHandler_->updateMoverPitch(deltaTime);
+        // The mover's server-driven spline run out (0x006eae70).
+        if (movementHandler_) movementHandler_->updateMoverSplineDone();
 
         const float currentPingInterval =
             (isPreWotlk()) ? game::CLASSIC_PING_INTERVAL_SEC : pingInterval;
