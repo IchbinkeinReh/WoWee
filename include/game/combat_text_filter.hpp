@@ -80,6 +80,16 @@ inline uint8_t floaterKindOf(CombatTextEntry::Type type) {
     }
 }
 
+/// Whether 0x00722340 takes a damage line for a swing: its maker's input
+/// flag (the low byte of its last argument) clear, and no spell record or
+/// one with AttributesEx3 0x8000. Only SMSG_SPELLDAMAGESHIELD's line
+/// (0x006d3750) sets the flag, and passes no record: a spell's line. A
+/// swing is gated and coloured as one (PetMeleeDamage, the pet's orange);
+/// anything else as a spell (PetSpellDamage, the spell's yellow).
+[[nodiscard]] inline bool floaterIsSwing(bool spellFlag, bool hasSpell, uint32_t attrEx3) {
+    return !spellFlag && (!hasSpell || (attrEx3 & 0x8000u) != 0);
+}
+
 /// The colour a damage or miss floater's maker gives it (0x00722340,
 /// 0x0071f990): a swing (no spell, or AttributesEx3 0x8000) the player's own
 /// none - its kind's (world_text::colourOf) - and one of the player's unit's

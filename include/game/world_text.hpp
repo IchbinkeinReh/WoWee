@@ -65,6 +65,20 @@ inline constexpr uint32_t kPetSwingColour = 0xffff8400u;
 /// it climbs. Z is up; a plane standing upright leaves it alone.
 [[nodiscard]] inline float zUnderTopOfView(const float plane[4], float x, float y, float z, uint8_t kind);
 
+/// The top of the view a line is kept under (0x007e5c30): not the view's
+/// own top but a plane a tenth of its height lower. The client takes the
+/// camera's eight frustum corners (0x0077f320, from 0x00cdb108) and moves
+/// each top corner 0.9 / 0.1 towards the bottom corner under it before it
+/// makes the frustum's planes (0x00983fe0 -> 0x00983e70, plane 0 through the
+/// near top-left and far top corners): normalised height 0.8 of 1.
+inline constexpr float kTopOfViewHeight = 0.9f * 1.0f + 0.1f * -1.0f;
+/// That plane from a projection's rows: `rowUp` the clip row that grows
+/// towards the top of the view, `rowW` the w row. Inside where
+/// rowUp . p <= kTopOfViewHeight * rowW . p.
+inline void topOfViewPlane(const float rowUp[4], const float rowW[4], float out[4]) {
+    for (int i = 0; i < 4; ++i) out[i] = kTopOfViewHeight * rowW[i] - rowUp[i];
+}
+
 [[nodiscard]] constexpr const Kind& kindOf(uint8_t kind) {
     return kKinds[kind < kKinds.size() ? kind : 0];
 }

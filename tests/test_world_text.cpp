@@ -86,6 +86,14 @@ TEST_CASE("Each kind has the client's colour where its maker gives none", "[worl
     CHECK(wt::colourOf(10) == 0xffff9900u);
 }
 
+TEST_CASE("A damage line is a swing only without the maker's spell flag", "[world_text]") {
+    using wowee::game::floaterIsSwing;
+    CHECK(floaterIsSwing(false, false, 0));          // a melee swing
+    CHECK(floaterIsSwing(false, true, 0x8000u));     // a weapon spell
+    CHECK_FALSE(floaterIsSwing(false, true, 0));     // a spell
+    CHECK_FALSE(floaterIsSwing(true, false, 0));     // a damage shield: no record, the flag
+}
+
 TEST_CASE("A swing's colour is its kind's, a pet's swing orange, any spell yellow", "[world_text]") {
     using wowee::game::FloaterSource;
     using wowee::game::floaterColour;
@@ -105,4 +113,16 @@ TEST_CASE("A line made above the top of the view is lowered under it by its rise
     CHECK(wt::zUnderTopOfView(plane, 20.0f, 0.0f, 12.0f, 4) == Catch::Approx(8.0f));  // kind 4 does not rise
     const float upright[4] = {1.0f, 0.0f, 0.0f, 0.0f};
     CHECK(wt::zUnderTopOfView(upright, 0.0f, 0.0f, 50.0f, 0) == Catch::Approx(50.0f));
+}
+
+TEST_CASE("The top of the view a line is kept under is a tenth of its height low", "[world_text]") {
+    CHECK(wt::kTopOfViewHeight == Catch::Approx(0.8f));
+    // An orthographic view looking along x with z up: clip up = z / 10, w = 1.
+    const float up[4] = {0.0f, 0.0f, 0.1f, 0.0f};
+    const float w[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    float plane[4];
+    wt::topOfViewPlane(up, w, plane);
+    // The view's top is z = 10; the plane kept under is z = 8.
+    CHECK(wt::zUnderTopOfView(plane, 0.0f, 0.0f, 7.0f, 4) == Catch::Approx(7.0f));
+    CHECK(wt::zUnderTopOfView(plane, 0.0f, 0.0f, 9.0f, 4) == Catch::Approx(8.0f));
 }

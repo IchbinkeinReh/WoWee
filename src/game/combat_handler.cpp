@@ -685,7 +685,7 @@ bool combatTextIsDamage(CombatTextEntry::Type type) {
 }  // namespace
 
 void CombatHandler::addCombatText(CombatTextEntry::Type type, int32_t amount, uint32_t spellId, bool isPlayerSource, uint8_t powerType,
-                                  uint64_t srcGuid, uint64_t dstGuid) {
+                                  uint64_t srcGuid, uint64_t dstGuid, bool spellFlag) {
     // A hit that did the player damage (playerDamageHits), before the
     // filters: the player is its target (by guid, or by no target given and
     // the player not its source), and it took health.
@@ -707,11 +707,16 @@ void CombatHandler::addCombatText(CombatTextEntry::Type type, int32_t amount, ui
         settings.petMeleeDamage = on("PetMeleeDamage");
         settings.petSpellDamage = on("PetSpellDamage");
         settings.combatHealing = on("CombatHealing");
-        bool meleeLike = spellId == 0;
-        if (!meleeLike) {
-            owner_.getSpellName(spellId);  // loads the cache
-            const auto it = owner_.spellNameCacheRef().find(spellId);
-            meleeLike = it != owner_.spellNameCacheRef().end() && (it->second.attrEx3 & 0x8000u) != 0;
+        // A swing (0x00722340): no maker's flag, and no spell or a weapon one.
+        bool meleeLike = false;
+        if (!spellFlag) {
+            meleeLike = spellId == 0;
+            if (!meleeLike) {
+                owner_.getSpellName(spellId);  // loads the cache
+                const auto it = owner_.spellNameCacheRef().find(spellId);
+                meleeLike = it != owner_.spellNameCacheRef().end() &&
+                            floaterIsSwing(false, true, it->second.attrEx3);
+            }
         }
         const auto source = static_cast<FloaterSource>(floaterSourceOf(srcGuid, isPlayerSource));
         floater = worldFloaterShown(type, source, dstGuid == owner_.getPlayerGuid(), false, meleeLike, settings);
@@ -1565,10 +1570,13 @@ void CombatHandler::handleSpellDamageShield(network::Packet& packet) {
         // UNIT_COMBAT for the one it struck (0x006d3750 -> 0x00513380).
         owner_.fireUnitCombat(d.casterGuid, "WOUND", static_cast<int32_t>(d.damage),
                               static_cast<int32_t>(d.schoolMask), 0);
-        if (d.casterGuid == owner_.getPlayerGuid())
-            addCombatText(CombatTextEntry::SPELL_DAMAGE, static_cast<int32_t>(d.damage), d.spellId, true, 0, d.casterGuid, d.victimGuid);
-        else if (d.victimGuid == owner_.getPlayerGuid())
-            addCombatText(CombatTextEntry::SPELL_DAMAGE, static_cast<int32_t>(d.damage), d.spellId, false, 0, d.casterGuid, d.victimGuid);
+        // The number over the one it struck, from the shield's owner, with
+        // 0x00722340's input flag set and no spell record: a spell's line,
+        // gated and coloured as one, whatever the shield's spell.
+        if (d.casterGuid == owner_.getPlayerGuid() || d.victimGuid == owner_.getPlayerGuid())
+            addCombatText(CombatTextEntry::SPELL_DAMAGE, static_cast<int32_t>(d.damage), d.spellId,
+                          d.victimGuid == owner_.getPlayerGuid(), 0, d.victimGuid, d.casterGuid,
+                          /*spellFlag=*/true);
         return;
     }
     const bool shieldTbc = isActiveExpansion("tbc");

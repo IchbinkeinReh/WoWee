@@ -127,10 +127,13 @@ void CombatUI::renderCombatText(game::GameHandler& gameHandler) {
     // number to stand over, and the client has no screen-space fallback.
     if (!camera) return;
     const glm::mat4 viewProj = camera->getProjectionMatrix() * camera->getViewMatrix();
-    // The view's top plane, inside where a x + b y + c z + d >= 0: clip y is
-    // down on the screen here, so the top edge is y >= -w (row 4 plus row 2).
-    const float topPlane[4] = {viewProj[0][3] + viewProj[0][1], viewProj[1][3] + viewProj[1][1],
-                               viewProj[2][3] + viewProj[2][1], viewProj[3][3] + viewProj[3][1]};
+    // The plane a tenth of the view's height under its top (0x007e5c30,
+    // wt::topOfViewPlane), inside where a x + b y + c z + d >= 0: clip y is
+    // down on the screen here, so up is -y.
+    const float rowUp[4] = {-viewProj[0][1], -viewProj[1][1], -viewProj[2][1], -viewProj[3][1]};
+    const float rowW[4] = {viewProj[0][3], viewProj[1][3], viewProj[2][3], viewProj[3][3]};
+    float topPlane[4];
+    wt::topOfViewPlane(rowUp, rowW, topPlane);
     // The transport the player stands on (the camera's, +0xa0, a game
     // object): lines are kept in its frame and drawn in it (0x007e5c30,
     // 0x007e70d0).

@@ -5742,7 +5742,7 @@ public:
     // ── Methods moved from private (domain handler use) ──────────────
     void addCombatText(CombatTextEntry::Type type, int32_t amount, uint32_t spellId,
                        bool isPlayerSource, uint8_t powerType = 0,
-                       uint64_t srcGuid = 0, uint64_t dstGuid = 0);
+                       uint64_t srcGuid = 0, uint64_t dstGuid = 0, bool spellFlag = false);
     bool shouldLogSpellstealAura(uint64_t casterGuid, uint64_t victimGuid, uint32_t spellId);
     void addSystemChatMessage(const std::string& message);
     /// A chat line of a given kind - money looted, experience gained, a
