@@ -118,6 +118,14 @@ public:
     /// caster's items rather than from the visual).
     const MissileVisual* findMissileVisual(uint32_t visualId);
 
+    /// 0x007fa2e0 -> 0x00722950: for a visual with Flags 0x20 the caster
+    /// holds its missile model at the visual's MissileAttachment from the
+    /// cast's start; the missile of that cast then flies from it (0x0072df00).
+    void holdMissile(uint32_t visualId, uint32_t casterInstanceId, uint8_t castCount);
+    /// 0x0071bff0, from a cast's end (0x007fecc0): the held missile goes, for
+    /// that cast's count or for any (0).
+    void dropHeldMissile(uint32_t casterInstanceId, uint8_t castCount);
+
     /// One end of a missile's flight. A unit end names its CharacterRenderer
     /// instance so the missile can leave from and home on its attachments;
     /// `position` is where it stands, used when it has no instance and for a
@@ -1185,6 +1193,19 @@ private:
     std::vector<PhysicalProjectile> physicalProjectiles_;
     std::vector<ActiveMissile> activeMissiles_;
     std::unordered_map<uint32_t, MissileVisual> missileVisuals_;      // visualId → missile
+    /// A missile model held on its caster until it flies (Unit_C +0xfa8,
+    /// +0xfac the cast count).
+    struct HeldMissile {
+        uint32_t instanceId = 0;
+        uint32_t casterInstanceId = 0;
+        uint32_t attachment = 0;
+        float scale = 1.0f;
+        uint8_t castCount = 0;
+    };
+    std::unordered_map<uint32_t, HeldMissile> heldMissiles_;  // caster render instance → held
+    bool heldMissileTransform(const HeldMissile& held, glm::mat4& out) const;
+    bool heldMissilePosition(const HeldMissile& held, glm::vec3& out) const;
+    void updateHeldMissiles();
     struct LoadedSound {
         std::vector<uint8_t> data;
         float volume = 1.0f;

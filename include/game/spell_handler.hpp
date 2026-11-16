@@ -744,7 +744,10 @@ private:
     /// `frameGuid`, or as it came where that is 0 or not known (0x009ab810).
     glm::vec3 targetPointInWorld(uint64_t frameGuid, float x, float y, float z);
     // Play the cast/precast visual effect at the caster's position.
-    void triggerCastVisual(uint32_t spellId, uint64_t casterGuid, uint32_t castTimeMs = 0);
+    void triggerCastVisual(uint32_t spellId, uint64_t casterGuid, uint32_t castTimeMs = 0, uint8_t castCount = 0);
+    /// 0x007fecc0 -> 0x0071bff0: the missile model the caster holds for this
+    /// cast (SpellVisual Flags 0x20) goes.
+    void dropHeldMissile(uint64_t casterGuid, uint8_t castCount);
     // Play the impact visual effect at the target's position.
     void triggerImpactVisual(uint32_t spellId, uint64_t targetGuid, uint64_t casterGuid);
     void launchRangedWeaponProjectile(uint32_t spellId, uint64_t targetGuid);
