@@ -231,8 +231,7 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
         // UNIT_COMBAT when it is the player's own (0x00755270): a WOUND in the
         // school the damage type names (table 0x00a2d394).
         if (victimGuid == owner_.getPlayerGuid() && (dmg != 0 || envAbs != 0 || envRes != 0)) {
-            static constexpr uint8_t kEnvSchool[] = {0, 0, 0, 2, 3, 2, 5};
-            const int32_t school = envType < 7 ? (1 << kEnvSchool[envType]) : 1;
+            const auto school = static_cast<int32_t>(unit_combat::environmentSchoolMask(envType));
             owner_.fireUnitCombat(victimGuid, "WOUND", static_cast<int32_t>(dmg), school,
                                   unit_combat::hitInfoFromLog(envAbs, envRes, 0, false));
         }

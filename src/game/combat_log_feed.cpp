@@ -1,4 +1,5 @@
 #include "game/combat_log_feed.hpp"
+#include "game/unit_combat.hpp"
 
 #include <array>
 #include <chrono>
@@ -80,11 +81,7 @@ const char* powerToken(uint32_t powerType) {
     return powerType < 7 ? addons::kLuaPowerNames[powerType] : "";
 }
 
-/// 0x00a2d394: the school each environmental type's damage is of.
-uint32_t environmentalSchool(uint32_t type) {
-    static constexpr uint32_t kSchoolBit[7] = {0, 0, 0, 2, 3, 2, 5};
-    return 1u << (type < 7 ? kSchoolBit[type] : 0u);
-}
+uint32_t environmentalSchool(uint32_t type) { return unit_combat::environmentSchoolMask(type); }
 
 /// 0x00577370: to the nearest, halves away from zero.
 int32_t roundHalfAway(float v) { return static_cast<int32_t>(std::lround(v)); }

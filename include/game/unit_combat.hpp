@@ -48,6 +48,14 @@ inline const char* missAction(uint32_t missInfo) {
 /// flagged physical (0x006337b0, index set at 0x00633330), which is row 0.
 inline constexpr int32_t kPhysicalSchoolMask = 1;
 
+/// The school mask of each environmental damage type (table 0x00a2d394,
+/// read by 0x00755270): fatigue, drowning and falling physical, lava and
+/// fire fire, slime nature, the void shadow.
+inline uint32_t environmentSchoolMask(uint32_t type) {
+    static constexpr uint32_t kSchoolBit[7] = {0, 0, 0, 2, 3, 2, 5};
+    return 1u << (type < 7 ? kSchoolBit[type] : 0u);
+}
+
 /// Whether a spell's log raises UNIT_COMBAT: the client has its record and
 /// its Attributes lack 0x100, the hidden-from-log bit (0x006d3840,
 /// 0x006d3c30, 0x007531f0, 0x006d3090 test the record they looked up).

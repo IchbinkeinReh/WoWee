@@ -46,3 +46,11 @@ TEST_CASE("Spell logs build their hit flags and hide what the log hides", "[unit
     CHECK_FALSE(uc::spellRaises(0x100u));
     CHECK_FALSE(uc::spellRaises(std::nullopt));
 }
+
+TEST_CASE("Environmental damage has its type's school", "[unit_combat]") {
+    CHECK(uc::environmentSchoolMask(0) == 1u);    // fatigue
+    CHECK(uc::environmentSchoolMask(3) == 4u);    // lava: fire
+    CHECK(uc::environmentSchoolMask(4) == 8u);    // slime: nature
+    CHECK(uc::environmentSchoolMask(6) == 32u);   // the void: shadow
+    CHECK(uc::environmentSchoolMask(9) == 1u);
+}
