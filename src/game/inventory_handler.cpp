@@ -6420,6 +6420,8 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
 
     if (data.valid) {
         owner_.itemInfoCacheRef()[data.entry] = data;
+        // 0x0070aa40 for the items that were waiting on this template.
+        owner_.itemTemplateArrivedForRefund(data.entry);
         rebuildOnlineInventory();
         maybeDetectVisibleItemLayout();
         // The bar's buttons holding this item, re-read now that it has an

@@ -4987,6 +4987,13 @@ public:
     /// Ask the server what an item cost. The answer arrives asynchronously and
     /// lands in the map below.
     void requestItemRefundInfo(uint64_t itemGuid);
+    /// An item object of the player's created (0x0070aa40): one whose
+    /// template carries flag 0x1000 (refundable) asks for its refund record
+    /// at once, or as soon as the template arrives.
+    void noteItemObjectCreated(uint64_t itemGuid, uint32_t entry, uint64_t ownerGuid);
+    /// The item template `entry` arrived: the items created while it was
+    /// unknown are looked at now.
+    void itemTemplateArrivedForRefund(uint32_t entry);
     /// Hand an item back for what was paid for it.
     void refundItem(uint64_t itemGuid);
     const ItemRefundInfo* getItemRefundInfo(uint64_t itemGuid) const {
@@ -6537,6 +6544,8 @@ private:
     std::unordered_map<uint64_t, OnlineItemInfo> onlineItems_;
     std::unordered_map<uint64_t, ItemRefundInfo> itemRefundInfo_;
     std::set<uint64_t> itemRefundAsked_;
+    /// Items created before their template was known, by template entry.
+    std::unordered_map<uint32_t, std::vector<uint64_t>> refundCheckAwaitingTemplate_;
     std::unordered_map<uint32_t, ItemQueryResponseData> itemInfoCache_;
     std::unordered_set<uint32_t> pendingItemQueries_;
     std::unordered_set<uint32_t> trainerDescriptionItems_;

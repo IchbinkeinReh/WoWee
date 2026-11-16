@@ -5286,6 +5286,32 @@ void GameHandler::requestItemRefundInfo(uint64_t itemGuid) {
     getSocket()->send(packet);
 }
 
+void GameHandler::noteItemObjectCreated(uint64_t itemGuid, uint32_t entry, uint64_t ownerGuid) {
+    // 0x0070aa40: only for an item the active player owns.
+    if (itemGuid == 0 || entry == 0 || ownerGuid != getPlayerGuid()) return;
+    const auto it = itemInfoCache_.find(entry);
+    if (it == itemInfoCache_.end()) {
+        refundCheckAwaitingTemplate_[entry].push_back(itemGuid);
+        return;
+    }
+    // ItemTemplate Flags 0x1000, refundable: CMSG_ITEM_REFUND_INFO (0x007089e0),
+    // which asks only once per item.
+    constexpr uint32_t kItemFlagRefundable = 0x1000u;
+    if ((it->second.itemFlags & kItemFlagRefundable) != 0 && !itemRefundInfo_.count(itemGuid))
+        requestItemRefundInfo(itemGuid);
+}
+
+void GameHandler::itemTemplateArrivedForRefund(uint32_t entry) {
+    const auto waiting = refundCheckAwaitingTemplate_.find(entry);
+    if (waiting == refundCheckAwaitingTemplate_.end()) return;
+    const std::vector<uint64_t> guids = std::move(waiting->second);
+    refundCheckAwaitingTemplate_.erase(waiting);
+    for (const uint64_t guid : guids) {
+        // Only items still held: one gone since has nothing to ask about.
+        if (onlineItems_.count(guid)) noteItemObjectCreated(guid, entry, getPlayerGuid());
+    }
+}
+
 void GameHandler::refundItem(uint64_t itemGuid) {
     if (itemGuid == 0) return;
     if (getState() != WorldState::IN_WORLD || !getSocket()) return;

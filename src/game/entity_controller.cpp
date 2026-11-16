@@ -2344,6 +2344,17 @@ void EntityController::trackItemOnCreate(const UpdateBlock& block, bool& newItem
             info.socketEnchantIds  != prev.socketEnchantIds;
         if (itemChanged) newItemCreated = true;
         owner_.queryItemInfo(info.entry, block.guid);
+        // 0x0070aa40, as the item object is made: a refundable item of the
+        // player's asks for its refund record. ITEM_FIELD_OWNER is the pair
+        // four fields before ITEM_FIELD_CREATOR in every layout.
+        if (isNew && creatorField != 0xFFFF && creatorField >= 4) {
+            const auto ownerLo = block.fields.find(static_cast<uint16_t>(creatorField - 4u));
+            const auto ownerHi = block.fields.find(static_cast<uint16_t>(creatorField - 3u));
+            if (ownerLo != block.fields.end() && ownerHi != block.fields.end()) {
+                const uint64_t ownerGuid = ownerLo->second | (static_cast<uint64_t>(ownerHi->second) << 32);
+                owner_.noteItemObjectCreated(block.guid, info.entry, ownerGuid);
+            }
+        }
     }
     // Extract container slot GUIDs for bags
     if (block.objectType == ObjectType::CONTAINER) {
