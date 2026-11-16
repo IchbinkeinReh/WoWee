@@ -2744,11 +2744,30 @@ void Renderer::updatePlayerArea() {
     if (!next) return;
     // The event (0x005204c0). The first texts on a map are a new area, as the
     // client's first are against the zero it starts from.
+    const bool firstOnMap = !zoneTextsKnown_;
     const za::Event e = zoneTextsKnown_ ? za::event(zoneTexts_, *next, playerLinkIndoors_)
                                         : za::Event::ZoneChangedNewArea;
     zoneTexts_ = *next;
     zoneTextsKnown_ = true;
+    // The first area on a map sets the world map to the player's zone
+    // (0x005204c0 -> 0x00547170) before the event, whether or not the map is
+    // ever opened: GetPlayerMapPosition and GetCurrentMapAreaID answer from
+    // it, and were 0,0 and 0 until the map was first shown.
+    if (firstOnMap) syncWorldMapToPlayer();
     if (const char* name = za::eventName(e)) gh->fireAddonEvent(name, {});
+}
+
+void Renderer::syncWorldMapToPlayer() {
+    if (!worldMap) return;
+    auto* gh = core::Application::getInstance().getGameHandler();
+    // Out of a browsed-to world or cosmic view first, which holds the map's
+    // name back.
+    worldMap->showPlayerZone();
+    if (minimap) worldMap->setMapName(minimap->getMapName());
+    const uint32_t liveZone = getCurrentZoneId();
+    worldMap->setPlayerZoneId(liveZone != 0 ? liveZone : (gh ? gh->getWorldStateZoneId() : 0u));
+    worldMap->setPlayerWmoId(getPlayerAreaWmoId());
+    worldMap->syncToPlayer(characterPosition);
 }
 
 float Renderer::sampleSunOcclusion(const glm::vec3& sunDir, std::string* why) const {

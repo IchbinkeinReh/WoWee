@@ -619,9 +619,9 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
             skippedSkinNotFound++;
         }
 
-        if (!m2Model.isValid()) {
+        if (!m2Model.hasDrawableContent()) {
             skippedInvalid++;
-            LOG_DEBUG("M2 model invalid (no verts/indices): ", m2Path);
+            LOG_DEBUG("M2 model invalid (no verts/indices, no emitters): ", m2Path);
             return false;
         }
 
@@ -1020,7 +1020,7 @@ bool TerrainManager::prepareWmoDoodadModels(
         if (!skinData.empty() && m2Model.version >= 264) {
             pipeline::M2Loader::loadSkin(skinData, m2Model);
         }
-        if (!m2Model.isValid()) return;
+        if (!m2Model.hasDrawableContent()) return;
 
         // Pre-decode doodad M2 textures on background thread
         Parsed& out = parsed[i];

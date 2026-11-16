@@ -1578,8 +1578,10 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
             auto* wmap = r ? r->getWorldMap() : nullptr;
             return wmap && wmap->canZoomOut();
         };
+        // At once, shown or not (0x00547170): an addon calls this and reads
+        // GetPlayerMapPosition on the next line.
         luaSvc.showPlayerMapZone = [r = renderer.get()]() {
-            if (auto* wmap = r ? r->getWorldMap() : nullptr) wmap->showPlayerZone();
+            if (r) r->syncWorldMapToPlayer();
         };
         luaSvc.getMapWorldAreaId = [r = renderer.get()]() -> uint32_t {
             auto* wmap = r ? r->getWorldMap() : nullptr;

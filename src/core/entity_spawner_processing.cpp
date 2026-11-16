@@ -1556,7 +1556,7 @@ void EntitySpawner::processPendingTransportDoodads() {
                             m2Model.version, " and its skin '", skinPath,
                             "' did not resolve - it has no indices and will be skipped");
             }
-            if (!m2Model.isValid()) {
+            if (!m2Model.hasDrawableContent()) {
                 LOG_WARNING("Transport doodad unusable: ", doodadTemplate.m2Path,
                             " version=", m2Model.version,
                             " verts=", m2Model.vertices.size(),

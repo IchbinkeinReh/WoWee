@@ -3891,6 +3891,12 @@ wowee_add_test(test_player_facing
 wowee_add_test(test_doodad_model_plan
     SOURCES test_doodad_model_plan.cpp)
 
+# ── test_m2_drawable_content ─────────────────────────────────
+# Emitter-only doodad models (smoke, steam, bubbles) are kept, not dropped as
+# meshless.
+wowee_add_test(test_m2_drawable_content
+    SOURCES test_m2_drawable_content.cpp)
+
 # ── test_binding_command ─────────────────────────────────────
 # The SPELL, ITEM, MACRO and CLICK binding commands the key dispatch carries
 # out itself (0x00563150), as SetBindingSpell and its siblings write them.

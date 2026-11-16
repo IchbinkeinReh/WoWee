@@ -553,6 +553,14 @@ struct M2Model {
     [[nodiscard]] bool isValid() const {
         return !vertices.empty() && !indices.empty();
     }
+    /// Something a placed doodad draws: geometry, or emitters alone. The
+    /// client keeps a doodad whose model has no vertices at all - the
+    /// smoke and steam columns (BLACKSMITH_SMOKE, STEAM02-04,
+    /// BUBBLESB_BIGEMITTER) are nothing but emitters - and draws its
+    /// particles; isValid() asks for a mesh.
+    [[nodiscard]] bool hasDrawableContent() const {
+        return isValid() || !particleEmitters.empty() || !ribbonEmitters.empty();
+    }
 };
 
 class M2Loader {
