@@ -398,22 +398,19 @@ bool parseWotlkMoveUpdateSpline(
     // Save position before WotLK spline header for fallback
     size_t beforeSplineHeader = packet.getReadPos();
 
-    // Try 1: WotLK format (durationMod+durationModNext+[ANIMATION]+vertAccel+effectStart+points)
-    // Some servers (ChromieCraft) always write vertAccel+effectStart unconditionally.
+    // Try 1: the client's own layout (0x004f4a50, which steps over this
+    // block): durationMod, durationModNext, vertAccel and effectStart always,
+    // 0x1c bytes with the three before them, then the nodes, each 12 bytes,
+    // the mode byte and the end point. Nothing for ANIMATION (0x00200000):
+    // the animation's type and start time are SMSG_MONSTER_MOVE's, not this
+    // block's. Read here for an animated spline, they put the node count four
+    // bytes late, and every creature flying one (a 0x202000 spline) was a
+    // lost update block: never spawned, or spawned from misread fields.
     bool splineParsed = false;
     if (bytesAvailable(8)) {
         /*float durationMod =*/ packet.readFloat();
         /*float durationModNext =*/ packet.readFloat();
         bool wotlkOk = true;
-        if (out.splineFlags & SplineFlagWotlk::ANIMATION) {
-            if (!bytesAvailable(5)) { wotlkOk = false; }
-            else {
-                out.hasAnimation = true;
-                out.animationType = packet.readUInt8();
-                out.animationStartTime = packet.readUInt32();
-            }
-        }
-        // Unconditional vertAccel+effectStart (ChromieCraft/some AzerothCore builds)
         if (wotlkOk) {
             if (!bytesAvailable(8)) { wotlkOk = false; }
             else {

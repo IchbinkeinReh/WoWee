@@ -60,6 +60,38 @@ TEST_CASE("WotLK AzerothCore zero-node spline still consumes trailer", "[spline]
     REQUIRE(packet.readUInt32() == 0x11223344);
 }
 
+TEST_CASE("WotLK animated flying create spline has no animation fields", "[spline][packet]") {
+    // A flying creature's create block (flags 0x202000, Flying | Animation),
+    // laid out as the client steps over it (0x004f4a50): no animation type or
+    // start time - those belong to SMSG_MONSTER_MOVE - so the node count
+    // follows effectStart directly.
+    wowee::network::Packet packet;
+    packet.writeUInt32(0x00202000u); // Flying | Animation
+    packet.writeUInt32(25);          // time passed
+    packet.writeUInt32(30000);       // duration
+    packet.writeUInt32(7);           // spline id
+    packet.writeFloat(1.0f);         // duration mod
+    packet.writeFloat(1.0f);         // duration mod next
+    packet.writeFloat(0.0f);         // vertical acceleration
+    packet.writeUInt32(0);           // effect start time
+    packet.writeUInt32(20);          // nodes
+    for (int i = 0; i < 20; ++i) {
+        packet.writeFloat(1900.0f + static_cast<float>(i));
+        packet.writeFloat(-4800.0f - static_cast<float>(i));
+        packet.writeFloat(220.0f);
+    }
+    packet.writeUInt8(1);            // spline mode (catmullrom)
+    packet.writeFloat(1919.0f); packet.writeFloat(-4819.0f); packet.writeFloat(220.0f);
+    packet.writeUInt32(0x0BADF00D);  // next block sentinel
+
+    wowee::game::SplineBlockData data;
+    REQUIRE(wowee::game::parseWotlkMoveUpdateSpline(packet, data, glm::vec3(1905.0f, -4805.0f, 220.0f)));
+    REQUIRE(packet.getRemainingSize() == 4);
+    REQUIRE(packet.readUInt32() == 0x0BADF00Du);
+    REQUIRE(data.endPoint.x == Catch::Approx(1919.0f));
+    REQUIRE_FALSE(data.hasAnimation);
+}
+
 TEST_CASE("WotLK compressed create spline remains supported as fallback", "[spline][packet]") {
     wowee::network::Packet packet;
     writeWotlkCreateSplineHeader(packet, 2);
