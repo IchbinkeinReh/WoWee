@@ -409,3 +409,60 @@ TEST_CASE("$d of a periodic spell haste shortens is hasted, as 0x00800a70 does",
     // Until cancelled stays until cancelled.
     CHECK(hastedSpellDurationMs(-1, true, true, 0, hasted) == -1);
 }
+
+TEST_CASE("an aura's tokens are worked at the aura's level (0x00579e50)", "[spell_desc]") {
+    // The spell's own: the aura's level, not held to MaxLevel.
+    auto t = auraTokenLevel(false, 70, 80, 0);
+    CHECK(t.level == 70);
+    CHECK_FALSE(t.heldToMaxLevel);
+    // Another spell's: the aura's level held to that spell's MaxLevel...
+    t = auraTokenLevel(true, 70, 80, 0);
+    CHECK(t.level == 70);
+    CHECK(t.heldToMaxLevel);
+    // ... or the player's, where it has AttributesEx2 0x1000000.
+    t = auraTokenLevel(true, 70, 80, 0x1000000u);
+    CHECK(t.level == 80);
+    CHECK(t.heldToMaxLevel);
+    // Worked through: Frostbolt rank 1 (17 + 3 dice, 0.5 a level from 4 to 8)
+    // at level 20 reads 26 to 28 for its own token, 20 to 22 held.
+    const auto own = spellEffectPoints(17, 3, 0.5f, 20, 4, 0);
+    CHECK(own.min == Catch::Approx(26.0f));
+    CHECK(own.max == Catch::Approx(28.0f));
+    const auto held = spellEffectPoints(17, 3, 0.5f, 20, 4, 8);
+    CHECK(held.min == Catch::Approx(20.0f));
+    CHECK(held.max == Catch::Approx(22.0f));
+}
+
+TEST_CASE("a choice in the sentence picks its branch (0x00579ba0)", "[spell_desc]") {
+    const auto knows = [](char letter, uint32_t id) { return (letter == 's' && id == 58079) || (letter == 'a' && id == 7); };
+    // Unending Breath: "$?s58079[ und erhoeht ...][.]"
+    std::string raw = "Wasser$?s58079[ und schneller.][.] Ende";
+    auto b = pickDescriptionBranch(raw, 8, knows);
+    REQUIRE(b.ok);
+    CHECK(b.body == " und schneller.");
+    CHECK(raw.substr(b.end) == " Ende");
+    raw = "x$?s1[A][B]y";
+    b = pickDescriptionBranch(raw, 3, knows);
+    REQUIRE(b.ok);
+    CHECK(b.body == "B");
+    CHECK(raw.substr(b.end) == "y");
+    // A chain: the else part another condition.
+    raw = "$?s1[A]?a7[B][C]z";
+    b = pickDescriptionBranch(raw, 2, knows);
+    REQUIRE(b.ok);
+    CHECK(b.body == "B");
+    CHECK(raw.substr(b.end) == "z");
+    raw = "$?s58079[A]?a7[B][C]z";
+    b = pickDescriptionBranch(raw, 2, knows);
+    CHECK(b.body == "A");
+    CHECK(raw.substr(b.end) == "z");
+    raw = "$?s1[A]?a8[B][C]z";
+    CHECK(pickDescriptionBranch(raw, 2, knows).body == "C");
+    // Negation, and, or, parentheses.
+    CHECK(pickDescriptionBranch("$?!s1[T][F]", 2, knows).body == "T");
+    CHECK(pickDescriptionBranch("$?s58079&a8[T][F]", 2, knows).body == "F");
+    CHECK(pickDescriptionBranch("$?s1|a7[T][F]", 2, knows).body == "T");
+    CHECK(pickDescriptionBranch("$?!(s1|a8)[T][F]", 2, knows).body == "T");
+    // Malformed: no else.
+    CHECK_FALSE(pickDescriptionBranch("$?s1[T] rest", 2, knows).ok);
+}

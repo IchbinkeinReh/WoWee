@@ -269,6 +269,10 @@ struct RangeInput {
     /// its walk speed (0x00716fa0).
     bool casterMoving = false;
     bool unitMoving = false;
+    /// The player's own cast only: the RangedModRange (item +0xfc) of the
+    /// weapon in the ranged slot, a percentage of a ranged spell's
+    /// (Attributes 0x2) maximum; negative with no such weapon cached.
+    float rangedModRange = -1.0f;
 };
 struct Range {
     float min = 0.0f;
@@ -300,6 +304,9 @@ template <typename MaxMods>
         if (in.hasUnit && in.casterMoving && in.unitMoving && ((in.rowFlags & 1u) != 0 || in.unitIsPlayer))
             extra += 8.0f / 3.0f;
     }
+    // A ranged spell reaches as far as the weapon in the ranged slot lets
+    // it, before the Range modifiers.
+    if ((in.attr & 0x2u) != 0 && in.rangedModRange >= 0.0f) r.max = in.rangedModRange * 0.01f * r.max;
     r.max = maxMods(r.max) + extra;
     return r;
 }

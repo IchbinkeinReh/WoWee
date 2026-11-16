@@ -4888,6 +4888,12 @@ public:
     SpellDescriptionContext descriptionContext(uint32_t spellId,
                                                const std::string* declarations) const;
     std::string formatSpellDescription(uint32_t selfSpellId, const std::string& raw) const;
+    /// An aura's description as 0x00625350 has it written (0x0057abc0 with
+    /// the aura's level and stack count): $s, $m, $M and $o at the level the
+    /// aura was cast at - for the spell's own tokens not held to its
+    /// MaxLevel - and times `stacks`.
+    std::string formatAuraDescription(uint32_t selfSpellId, const std::string& raw, int auraLevel,
+                                      int stacks) const;
     // SpellFocusObject.dbc name ("Anvil", "Cooking Fire", ...) for
     // requires-spell-focus cast failures; empty if unknown.
     const std::string& getSpellFocusName(uint32_t focusId) const;

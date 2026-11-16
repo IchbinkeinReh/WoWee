@@ -157,6 +157,36 @@ inline SpellEffectPoints scaledSpellPoints(const SpellEffectPoints& p, float fac
     return {p.min * factor, p.max * factor};
 }
 
+/// The level a token of an aura's description is worked at (0x00579e50 with
+/// the aura's level, 0x007ff770 then taking it as given): the spell's own
+/// tokens at the aura's level, not held to MaxLevel; another spell's
+/// ("$12345s1") at the player's level where that spell has AttributesEx2
+/// 0x1000000, else the aura's - and those held to its MaxLevel.
+struct AuraTokenLevel {
+    int level;
+    bool heldToMaxLevel;
+};
+constexpr AuraTokenLevel auraTokenLevel(bool reference, int auraLevel, int playerLevel, uint32_t refAttrEx2) {
+    if (!reference) return {auraLevel, false};
+    return {(refAttrEx2 & 0x1000000u) != 0 ? playerLevel : auraLevel, true};
+}
+
+/// A "$?" in the sentence itself (0x00579ba0): "cond[then][else]", the else
+/// part another "?cond[then]..." where the chain goes on. Brackets close at
+/// the first ']' after them, as the client's strchr finds it. A condition
+/// (0x005797f0) is s<id> (a spell the player knows) or a<id> (an aura on the
+/// player), each optionally behind '!', joined left to right by '&' and '|'
+/// with parentheses. `at` is just past "$?"; `holds(letter, id)` answers one
+/// term. On success `body` is the chosen branch's raw text and `end` the
+/// index after the chain's last ']'.
+struct DescriptionBranch {
+    bool ok = false;
+    std::size_t end = 0;
+    std::string body;
+};
+DescriptionBranch pickDescriptionBranch(const std::string& raw, std::size_t at,
+                                        const std::function<bool(char, uint32_t)>& holds);
+
 /// Evaluate one expression - a whole declaration, or the body of a ${}.
 /// False when any part of it is something this does not model.
 bool evaluateSpellExpression(const std::string& text,

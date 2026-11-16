@@ -455,3 +455,27 @@ TEST_CASE("a temporary enchantment asking for a weapon class passes over what is
     REQUIRE(enchantHand(2, 0x2a5f3, 5, bow, HandWeapon{}) == Hand::None);
     REQUIRE(enchantHand(2, 0x2a5f3, 5, axe, shield) == Hand::Main);
 }
+
+TEST_CASE("a ranged spell reaches as far as the ranged weapon lets it (0x007ff480)", "[unit_target]") {
+    const auto none = [](float m) { return m; };
+    const auto plusFive = [](float m) { return m + 5.0f; };
+    RangeInput in;
+    in.attr = 0x2;
+    in.hasRow = true;
+    in.rowFlags = 2;
+    in.rowMin = 5.0f;
+    in.rowMax = 35.0f;
+    in.casterReach = 1.5f;
+    // No weapon cached: the row's.
+    REQUIRE(unitRange(in, none).max == Catch::Approx(35.0f));
+    // A weapon of RangedModRange 100: the same.
+    in.rangedModRange = 100.0f;
+    REQUIRE(unitRange(in, none).max == Catch::Approx(35.0f));
+    // Of 50: half - and the Range modifiers on top of that.
+    in.rangedModRange = 50.0f;
+    REQUIRE(unitRange(in, none).max == Catch::Approx(17.5f));
+    REQUIRE(unitRange(in, plusFive).max == Catch::Approx(22.5f));
+    // Not a ranged spell (Attributes 0x2 clear): the weapon is not asked.
+    in.attr = 0;
+    REQUIRE(unitRange(in, none).max == Catch::Approx(35.0f));
+}

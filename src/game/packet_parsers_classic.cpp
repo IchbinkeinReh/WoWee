@@ -1575,8 +1575,8 @@ bool parseItemQueryPreWotlk(network::Packet& packet, ItemQueryResponseData& data
 
     // AmmoType + RangedModRange (2 fields, 8 bytes)
     if (packet.hasRemaining(8)) {
-        packet.readUInt32(); // AmmoType
-        packet.readFloat();  // RangedModRange
+        data.ammoType = packet.readUInt32();
+        data.rangedModRange = packet.readFloat();
     }
 
     // 2 item spells in Vanilla (3 fields each: SpellId, Trigger, Charges)

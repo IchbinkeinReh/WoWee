@@ -4773,9 +4773,20 @@ const std::string& GameHandler::getSpellDescription(uint32_t spellId) const {
 }
 
 namespace {
+/// How an aura's tooltip has its description worked out (0x00625350): the
+/// aura's level - zero for the player's own, as every other tooltip has it -
+/// and the stack count its points are multiplied by.
+struct AuraScale {
+    int level = 0;
+    int stacks = 1;
+};
+
 /// The least and the most effect `index` of a spell does at the player's
-/// level (0x007ff770). False for an unknown spell or index.
-bool spellEffectPointsOf(const GameHandler& gh, uint32_t spellId, int index, SpellEffectPoints& out) {
+/// level (0x007ff770) - or, for an aura, at the level `scale` gives
+/// (auraTokenLevel; `reference` for another spell's token). False for an
+/// unknown spell or index.
+bool spellEffectPointsOf(const GameHandler& gh, uint32_t spellId, int index, SpellEffectPoints& out,
+                         const AuraScale& scale = {}, bool reference = false) {
     if (spellId == 0 || index < 0 || index > 2) return false;
     if (!gh.getSpellEffectBasePoints(spellId)) return false;  // also loads the cache
     const auto& cache = gh.spellNameCacheRef();
@@ -4783,8 +4794,17 @@ bool spellEffectPointsOf(const GameHandler& gh, uint32_t spellId, int index, Spe
     if (it == cache.end()) return false;
     const auto& e = it->second;
     const std::size_t k = static_cast<std::size_t>(index);
+    int level = static_cast<int>(gh.getPlayerLevel());
+    int maxLevel = e.maxLevel;
+    if (scale.level > 0) {
+        const AuraTokenLevel at = auraTokenLevel(reference, scale.level, level, e.attrEx2);
+        level = at.level;
+        if (!at.heldToMaxLevel) maxLevel = 0;
+    }
     out = spellEffectPoints(e.effectBasePoints[k], e.effectDieSides[k], e.effectPointsPerLevel[k],
-                            static_cast<int>(gh.getPlayerLevel()), e.baseLevel, e.maxLevel);
+                            level, e.baseLevel, maxLevel);
+    out.min *= static_cast<float>(scale.stacks);
+    out.max *= static_cast<float>(scale.stacks);
     return true;
 }
 
@@ -4843,8 +4863,9 @@ int spellPeriodFor(const GameHandler& gh, uint32_t spellId, int index) {
 }
 
 /// $o: the effect's least and most over the whole duration (0x00579e50).
-bool spellPeriodicPointsOf(const GameHandler& gh, uint32_t spellId, int index, SpellEffectPoints& out) {
-    if (!spellEffectPointsOf(gh, spellId, index, out)) return false;
+bool spellPeriodicPointsOf(const GameHandler& gh, uint32_t spellId, int index, SpellEffectPoints& out,
+                           const AuraScale& scale = {}, bool reference = false) {
+    if (!spellEffectPointsOf(gh, spellId, index, out, scale, reference)) return false;
     const auto* e = spellEntryOf(gh, spellId);
     if (!e) return false;
     constexpr uint32_t kAttrEx5TickOnApply = 0x200;
@@ -4899,7 +4920,13 @@ SpellDescriptionContext GameHandler::descriptionContext(
 
 std::string GameHandler::formatSpellDescription(uint32_t selfSpellId,
                                                 const std::string& raw) const {
+    return formatAuraDescription(selfSpellId, raw, 0, 1);
+}
+
+std::string GameHandler::formatAuraDescription(uint32_t selfSpellId, const std::string& raw,
+                                               int auraLevel, int stacks) const {
     if (raw.empty()) return raw;
+    const AuraScale scale{auraLevel, stacks};
 
     std::string out;
     out.reserve(raw.size());
@@ -4935,6 +4962,24 @@ std::string GameHandler::formatSpellDescription(uint32_t selfSpellId,
                 bool plural = (next == 'l' || next == 'L') ? (lastValue != 1) : false;
                 out += plural ? b : a;
                 i = semi + 1;
+                continue;
+            }
+        }
+
+        // A choice in the sentence itself, "$?s58079[ und ...][.]" (0x00579ba0):
+        // the branch the player's spells and auras pick, written out as any
+        // other text. Only "${...}" handled these, so a bare one lost its
+        // "$?" and left "s58079[ und ...][.]" in Unending Breath's tooltip.
+        if (next == '?') {
+            const DescriptionBranch branch = pickDescriptionBranch(raw, i + 2, [this](char letter, uint32_t id) {
+                if (letter == 's') return spellHandler_ && spellHandler_->hasKnownSpell(id);
+                for (const auto& a : getPlayerAuras())
+                    if (!a.isEmpty() && a.spellId == id) return true;
+                return false;
+            });
+            if (branch.ok) {
+                out += formatAuraDescription(selfSpellId, branch.body, auraLevel, stacks);
+                i = branch.end;
                 continue;
             }
         }
@@ -5036,7 +5081,7 @@ std::string GameHandler::formatSpellDescription(uint32_t selfSpellId,
                 // $m the least, $M the most, $s both - "least to most" - when
                 // the dice can vary the effect (0x00579e50).
                 SpellEffectPoints points;
-                if (spellEffectPointsOf(*this, target, idx, points)) {
+                if (spellEffectPointsOf(*this, target, idx, points, scale, hasRef)) {
                     const SpellPointsText shown = formatSpellPoints(
                         code, scaledSpellPoints(points, factor),
                         spreadText("INT_SPELL_POINTS_SPREAD_TEMPLATE", "%d to %d"),
@@ -5051,7 +5096,7 @@ std::string GameHandler::formatSpellDescription(uint32_t selfSpellId,
                 // What a periodic effect does in all: each tick times the
                 // duration over the period, written as $s writes its points.
                 SpellEffectPoints total;
-                if (spellPeriodicPointsOf(*this, target, idx, total)) {
+                if (spellPeriodicPointsOf(*this, target, idx, total, scale, hasRef)) {
                     const SpellPointsText shown = formatSpellPoints(
                         's', scaledSpellPoints(total, factor),
                         spreadText("INT_SPELL_POINTS_SPREAD_TEMPLATE", "%d to %d"),
