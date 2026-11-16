@@ -4880,20 +4880,31 @@ public:
     const std::string& getSpellRank(uint32_t spellId) const;
     /// Returns the tooltip/description text from Spell.dbc (empty if unknown or has no text).
     const std::string& getSpellDescription(uint32_t spellId) const;
-    /// Substitute WoW description tokens in `raw` using live spell data: $s/$o/$m/$M base
-    /// points and $d durations (incl. cross-spell $<spellId> references), plus $l/$g
-    /// plural/gender forms. Unresolvable tokens ($h proc chance, $t period) are stripped
-    /// cleanly. `selfSpellId` supplies the default source for index-only tokens like $s1.
+    /// Fill the $-tokens of a description as 0x00579e50 does, for the player:
+    /// every letter of its switch, "$/N;" and "$*N;", another spell's number,
+    /// "${...}" (0x00579980), "$<name>" and "$?" choices. What it cannot use
+    /// is left behind a "$", as 0x0057aaf0 leaves it. `selfSpellId` supplies
+    /// the spell an index-only token like $s1 means.
     /// The evaluator's window onto this client, for $<name> and ${}.
     SpellDescriptionContext descriptionContext(uint32_t spellId,
                                                const std::string* declarations) const;
+    /// The same for a description worked out with `stacks` and, for an aura's
+    /// tooltip (`aura`), without the talents' modifiers on its values.
+    SpellDescriptionContext descriptionContext(uint32_t spellId, const std::string* declarations,
+                                               int stacks, bool aura) const;
+    /// A variable of 0x005782d0's table other than the magnitudes, $d and
+    /// $t ("a1", "h", "AP", "SPH", "MWS" ...) for a spell of the player's.
+    bool descriptionVariable(uint32_t spellId, const std::string& name, int stacks, bool aura,
+                             double& out) const;
     std::string formatSpellDescription(uint32_t selfSpellId, const std::string& raw) const;
     /// An aura's description as 0x00625350 has it written (0x0057abc0 with
     /// the aura's level and stack count): $s, $m, $M and $o at the level the
     /// aura was cast at - for the spell's own tokens not held to its
     /// MaxLevel - and times `stacks`.
+    /// `aura` false is the spell tooltip's own (formatSpellDescription), which
+    /// the talents' modifiers reach.
     std::string formatAuraDescription(uint32_t selfSpellId, const std::string& raw, int auraLevel,
-                                      int stacks) const;
+                                      int stacks, bool aura = true) const;
     // SpellFocusObject.dbc name ("Anvil", "Cooking Fire", ...) for
     // requires-spell-focus cast failures; empty if unknown.
     const std::string& getSpellFocusName(uint32_t focusId) const;
@@ -5976,6 +5987,21 @@ public:
         uint32_t totemCategories[2] = {0, 0};
         /// RequiresSpellFocus: the SpellFocusObject the spell needs nearby.
         uint32_t requiresSpellFocus = 0;
+        /// What the description's tokens read besides (0x00579e50,
+        /// 0x005782d0): ProcChance (+0x8c, $h), ProcCharges (+0x90, $n),
+        /// EffectMultipleValue (+0x194, $e), EffectChainTarget (+0x1a0, $x),
+        /// EffectPointsPerComboPoint (+0x1dc, $b), MaxTargetLevel (+0x23c,
+        /// $v), MaxAffectedTargets (+0x250, $i), EffectDamageMultiplier
+        /// (+0x260, $f) and EffectBonusMultiplier (+0x294, $bc).
+        uint32_t procChance = 0;
+        uint32_t procCharges = 0;
+        float effectMultipleValue[3] = {0.0f, 0.0f, 0.0f};
+        uint32_t effectChainTarget[3] = {0, 0, 0};
+        float effectPointsPerComboPoint[3] = {0.0f, 0.0f, 0.0f};
+        uint32_t maxTargetLevel = 0;
+        uint32_t maxAffectedTargets = 0;
+        float effectDamageMultiplier[3] = {0.0f, 0.0f, 0.0f};
+        float effectBonusMultiplier[3] = {0.0f, 0.0f, 0.0f};
     };
     static constexpr size_t PLAYER_EXPLORED_ZONES_COUNT = 128;
     std::string getAreaName(uint32_t areaId) const;

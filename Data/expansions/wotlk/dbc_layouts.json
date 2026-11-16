@@ -422,6 +422,8 @@
     "AuraInterruptFlags": 32,
     "ChannelInterruptFlags": 33,
     "ProcFlags": 34,
+    "ProcChance": 35,
+    "ProcCharges": 36,
     "MaxLevel": 37,
     "BaseLevel": 38,
     "ManaCostPerLevel": 43,
