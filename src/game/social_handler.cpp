@@ -12,6 +12,7 @@
 #include "game/entity.hpp"
 #include "game/packet_parsers.hpp"
 #include "game/power_prediction.hpp"
+#include "game/reputation_standing.hpp"
 #include "game/update_field_table.hpp"
 #include "game/opcode_table.hpp"
 #include "audio/audio_coordinator.hpp"
@@ -6718,6 +6719,21 @@ void SocialHandler::handleSetFactionStanding(network::Packet& packet) {
         standing += owner_.factionBaseReputation(factionId);
 
         int32_t  oldStanding = 0;
+        // The faction's flags as the list keeps them (+4 of the entry,
+        // 0x00c22b74), for the lines below and the ones this changes.
+        uint8_t* flagsAt = repListId < owner_.initialFactionsRef().size()
+            ? &owner_.initialFactionsRef()[repListId].flags : nullptr;
+        uint8_t flags = flagsAt ? *flagsAt : 0;
+        // Which gain line 0x0050b8c0 prints (0x005d20a0): only the packet's
+        // first faction, and only one not hidden - the others, spilled over
+        // from it, are silent - unless the faction carries 0x40, whose gain
+        // is always told: in the generic, amountless form when hidden.
+        int gainLine = 0;
+        if ((flags & 0x40) == 0) {
+            if (i == 0 && (flags & GameHandler::FACTION_FLAG_HIDDEN) == 0) gainLine = 1;
+        } else {
+            gainLine = (flags & GameHandler::FACTION_FLAG_HIDDEN) ? 2 : 1;
+        }
         // SMSG_INITIALIZE_FACTIONS is indexed by ReputationListID and supplies the
         // standing before incremental updates. Without using it, the first message
         // reports the character's entire accumulated reputation as the gained amount.
@@ -6738,7 +6754,11 @@ void SocialHandler::handleSetFactionStanding(network::Packet& packet) {
             // This was English, said twice - once as a system line besides.
             std::string line;
             const std::string amount = std::to_string(std::abs(delta));
-            if (delta < 0) {
+            if (gainLine == 2) {
+                line = delta < 0
+                    ? interfaceFormat("FACTION_STANDING_DECREASED_GENERIC", "Reputation with %s decreased.", {name})
+                    : interfaceFormat("FACTION_STANDING_INCREASED_GENERIC", "Reputation with %s increased.", {name});
+            } else if (delta < 0) {
                 line = interfaceFormat("FACTION_STANDING_DECREASED",
                     "Your %s reputation has decreased by %d.", {name, amount});
             } else if (rafBonus > 0.0f) {
@@ -6761,7 +6781,46 @@ void SocialHandler::handleSetFactionStanding(network::Packet& packet) {
             if (owner_.repChangeCallbackRef()) owner_.repChangeCallbackRef()(name, delta, standing);
             // These events fire unconditionally on any rep change (not gated by callback).
             owner_.fireAddonEvent("UPDATE_FACTION", {});
-            owner_.addLocalChatLine(ChatType::COMBAT_FACTION_CHANGE, line);
+            if (gainLine != 0) owner_.addLocalChatLine(ChatType::COMBAT_FACTION_CHANGE, line);
+        }
+        // The standing's rank, before and after (0x005d0600), and what it
+        // does to the flags and the list (0x005d20a0).
+        const int oldRank = reputationStandingFor(oldStanding).id - 1;
+        const int newRank = reputationStandingFor(standing).id - 1;
+        // FACTION_STANDING_CHANGED, a system line (0x0050ba10): the rank's
+        // label in the player's gender, and the faction.
+        auto standingChanged = [&](int rank) {
+            const std::string key = "FACTION_STANDING_LABEL" + std::to_string(rank + 1);
+            std::string label;
+            if (owner_.lookupPlayerGender(owner_.getPlayerGuid()) == 1)
+                label = interfaceString((key + "_FEMALE").c_str(), nullptr);
+            if (label.empty()) label = interfaceString(key.c_str(), reputationRankName(static_cast<uint32_t>(rank)));
+            owner_.addLocalChatLine(ChatType::SYSTEM,
+                interfaceFormat("FACTION_STANDING_CHANGED", "You are now %s with %s.",
+                                {label, owner_.getFactionName(factionId)}));
+        };
+        // A faction neither shown nor hidden is shown from now on, and joins
+        // the list with its standing told (0x005d08d0 with 1).
+        bool joined = false;
+        if (flagsAt && (flags & (GameHandler::FACTION_FLAG_VISIBLE | GameHandler::FACTION_FLAG_HIDDEN)) == 0) {
+            flags |= GameHandler::FACTION_FLAG_VISIBLE;
+            joined = true;
+            standingChanged(newRank);
+        }
+        // Below Unfriendly is war; a rise to Unfriendly or better ends it.
+        if (newRank < 2) flags |= GameHandler::FACTION_FLAG_AT_WAR;
+        else if (oldRank < newRank) flags &= static_cast<uint8_t>(~GameHandler::FACTION_FLAG_AT_WAR);
+        // A new rank is told for a faction not hidden, and not forced
+        // invisible unless flag 0x80 says otherwise - but not twice for one
+        // that has just joined the list.
+        if (newRank != oldRank && (flags & GameHandler::FACTION_FLAG_HIDDEN) == 0 &&
+            ((flags & GameHandler::FACTION_FLAG_INVISIBLE_FORCED) == 0 || (flags & 0x80) != 0) && !joined) {
+            standingChanged(newRank);
+        }
+        if (flagsAt && *flagsAt != flags) {
+            const bool warChanged = ((*flagsAt ^ flags) & GameHandler::FACTION_FLAG_AT_WAR) != 0;
+            *flagsAt = flags;
+            if (warChanged) owner_.refreshUnitHostility();
         }
     }
     // 0x005d20a0: reputation's tutorial, past level 9.
@@ -6782,15 +6841,29 @@ void SocialHandler::handleSetFactionAtWar(network::Packet& packet) {
 }
 
 void SocialHandler::handleSetFactionVisible(network::Packet& packet) {
-    if (!packet.hasRemaining(5)) { packet.skipAll(); return; }
-    uint32_t repListId = packet.readUInt32();
-    uint8_t  visible   = packet.readUInt8();
-    if (repListId < owner_.initialFactionsRef().size()) {
-        if (visible)
-            owner_.initialFactionsRef()[repListId].flags |=  GameHandler::FACTION_FLAG_VISIBLE;
-        else
-            owner_.initialFactionsRef()[repListId].flags &= ~GameHandler::FACTION_FLAG_VISIBLE;
-    }
+    // 0x005d2050: the packet is the ReputationListID alone. A faction not yet
+    // shown is shown from now on and joins the list with its standing told
+    // (0x005d08d0 with 1: FACTION_STANDING_CHANGED). This read a visibility
+    // byte after it that the packet does not carry, so it took nothing.
+    if (!packet.hasRemaining(4)) { packet.skipAll(); return; }
+    const uint32_t repListId = packet.readUInt32();
+    packet.skipAll();
+    if (repListId >= owner_.initialFactionsRef().size()) return;
+    auto& flags = owner_.initialFactionsRef()[repListId].flags;
+    if (flags & GameHandler::FACTION_FLAG_VISIBLE) return;
+    flags |= GameHandler::FACTION_FLAG_VISIBLE;
+    const uint32_t factionId = owner_.getFactionIdByRepListId(repListId);
+    if (factionId == 0) return;
+    const int rank = reputationStandingFor(owner_.initialFactionsRef()[repListId].standing).id - 1;
+    const std::string key = "FACTION_STANDING_LABEL" + std::to_string(rank + 1);
+    std::string label;
+    if (owner_.lookupPlayerGender(owner_.getPlayerGuid()) == 1)
+        label = interfaceString((key + "_FEMALE").c_str(), nullptr);
+    if (label.empty()) label = interfaceString(key.c_str(), reputationRankName(static_cast<uint32_t>(rank)));
+    owner_.addLocalChatLine(ChatType::SYSTEM,
+        interfaceFormat("FACTION_STANDING_CHANGED", "You are now %s with %s.",
+                        {label, owner_.getFactionName(factionId)}));
+    owner_.fireAddonEvent("UPDATE_FACTION", {});
 }
 
 void SocialHandler::handleGroupSetLeader(network::Packet& packet) {
