@@ -1,31 +1,25 @@
 // auction_filters.hpp - the auction house's category tree, in one place.
 //
-// Both interfaces ask the same question of the same server field, so they ask
-// it from the same table. This client's own auction window had these three
-// arrays inside the function that drew them; FrameXML needs the identical
-// lists, because GetAuctionItemClasses is what fills its filter column and the
-// index it hands back to QueryAuctionItems has to mean the same thing on the
-// way in as it did on the way out. Two copies of a list whose *positions* are
-// the protocol is the shape that goes wrong quietly: the second category would
-// search for the first one's items and nothing would say so.
+// GetAuctionItemClasses, GetAuctionItemSubClasses and GetAuctionInvTypes fill
+// the browse tab's filter tree, and the *positions* they answer are handed
+// back to QueryAuctionItems - so the lists and the lookup have to be the same
+// walk, or a category searches another one's items and nothing says so.
 //
-// Row zero of every list is "All", and that is load-bearing rather than
-// decorative. FrameXML's filter indices are 1-based and it passes nil when
-// nothing is picked, which arrives as zero - so an unselected filter lands on
-// row zero and reads as "any" without a special case. Before this, nil arrived
-// as zero and went to the wire as zero, which is a real item class: searching
-// the auction house by name alone returned consumables and nothing else.
+// Every index FrameXML hands back is 1-based and nil when nothing is picked,
+// which arrives as zero - so zero reads as "any" without a special case.
+// Before this, nil went to the wire as zero, which is a real item class:
+// searching the auction house by name alone returned consumables only.
 //
-// The labels are English literals, as they were in the window. ItemClass.dbc
-// field 3 and ItemSubClass.dbc field 10 carry the localised names for the same
-// ids (verified: class 0 is Consumable, class 1 subclass 2 is Herb Bag), and
-// are where a localisation pass should read them from.
+// The three tiers follow the real client (0x0059c420, 0x0059c480, 0x0059c590,
+// QueryAuctionItems 0x0059bcf0): twelve classes, every visible ItemSubClass.dbc
+// row of a class in record order, and a fourteen-row slot tier under armour.
+// The English labels here are only for a client without the DBC files.
 #pragma once
 
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
-#include <string_view>
+#include <vector>
 
 namespace wowee {
 namespace game {
@@ -35,66 +29,182 @@ namespace game {
 /// else, so any other value is a filter - including zero.
 inline constexpr uint32_t kAuctionAny = 0xFFFFFFFFu;
 
-struct AuctionClassFilter { const char* label; uint32_t classId; };
-struct AuctionSubFilter   { const char* label; uint32_t subId; };
-/// A slot filter. `token` is the name of the global string FrameXML shows for
-/// it - GetAuctionInvTypes hands back the name and the interface resolves it,
-/// so the two sides agree on the wording without either spelling it out twice.
-struct AuctionSlotFilter  { const char* label; uint32_t invType; const char* token; };
+/// One of the twelve categories, as the client's own table at 0x00a14f70
+/// holds it (eight bytes a row): an item class id and whether the class is
+/// divided further. GetAuctionItemSubClasses (0x0059c480) answers nothing for
+/// a class whose flag is clear, which is Quest alone.
+struct AuctionClassFilter { const char* label; uint32_t classId; bool hasSubClasses; };
 
 // WoW 3.3.5a item class ids: 0=Consumable, 1=Container, 2=Weapon, 3=Gem,
 // 4=Armor, 6=Projectile, 7=Trade Goods, 9=Recipe, 11=Quiver, 12=Quest,
 // 15=Miscellaneous, 16=Glyph.
 //
-// Twelve categories in the real client's order, and both facts matter to
-// something outside this file. GetAuctionItemClasses hands this list to Lua
-// positionally, and addons read positions out of it rather than names -
-// Bagnon's item component opens with
+// Twelve categories in the real client's order, and the order matters outside
+// this file: GetAuctionItemClasses hands the list to Lua positionally, and
+// addons read positions out of it rather than names - Bagnon's item component
+// opens with `select(12, GetAuctionItemClasses())` to get "Quest".
 //
-//     select(12, GetAuctionItemClasses())
-//
-// to get "Quest" for its quest-item search, and a list of nine ending in
-// Miscellaneous answered nothing there. format() was then handed a nil, which
-// took down the file that builds every item slot it draws, so the addon loaded
-// and displayed nothing.
-//
-// Glyph, Projectile and Quest were the three missing. Reordering the rest to
-// match is safe because the position *is* the protocol only between this table
-// and itself: FrameXML and this client's own window both read the categories
-// from here and send back an index into the same array.
+// Row zero is "All" and is not the client's; it is what a nil index lands on.
 inline constexpr AuctionClassFilter kAuctionClasses[] = {
-    {.label = "All",           .classId = kAuctionAny},
-    {.label = "Weapon",        .classId = 2},
-    {.label = "Armor",         .classId = 4},
-    {.label = "Container",     .classId = 1},
-    {.label = "Consumable",    .classId = 0},
-    {.label = "Glyph",         .classId = 16},
-    {.label = "Trade Goods",   .classId = 7},
-    {.label = "Projectile",    .classId = 6},
-    {.label = "Quiver",        .classId = 11},
-    {.label = "Recipe",        .classId = 9},
-    {.label = "Gem",           .classId = 3},
-    {.label = "Miscellaneous", .classId = 15},
-    {.label = "Quest",         .classId = 12},
+    {.label = "All",           .classId = kAuctionAny, .hasSubClasses = false},
+    {.label = "Weapon",        .classId = 2,  .hasSubClasses = true},
+    {.label = "Armor",         .classId = 4,  .hasSubClasses = true},
+    {.label = "Container",     .classId = 1,  .hasSubClasses = true},
+    {.label = "Consumable",    .classId = 0,  .hasSubClasses = true},
+    {.label = "Glyph",         .classId = 16, .hasSubClasses = true},
+    {.label = "Trade Goods",   .classId = 7,  .hasSubClasses = true},
+    {.label = "Projectile",    .classId = 6,  .hasSubClasses = true},
+    {.label = "Quiver",        .classId = 11, .hasSubClasses = true},
+    {.label = "Recipe",        .classId = 9,  .hasSubClasses = true},
+    {.label = "Gem",           .classId = 3,  .hasSubClasses = true},
+    {.label = "Miscellaneous", .classId = 15, .hasSubClasses = true},
+    {.label = "Quest",         .classId = 12, .hasSubClasses = false},
 };
 inline constexpr int kNumAuctionClasses = 13;
 
-inline constexpr AuctionSubFilter kAuctionWeaponSubs[] = {
-    {.label = "All", .subId = kAuctionAny}, {.label = "Axe (1H)", .subId = 0}, {.label = "Axe (2H)", .subId = 1}, {.label = "Bow", .subId = 2},
-    {.label = "Gun", .subId = 3}, {.label = "Mace (1H)", .subId = 4}, {.label = "Mace (2H)", .subId = 5}, {.label = "Polearm", .subId = 6},
-    {.label = "Sword (1H)", .subId = 7}, {.label = "Sword (2H)", .subId = 8}, {.label = "Staff", .subId = 10},
-    {.label = "Fist Weapon", .subId = 13}, {.label = "Dagger", .subId = 15}, {.label = "Thrown", .subId = 16},
-    {.label = "Crossbow", .subId = 18}, {.label = "Wand", .subId = 19},
-};
-inline constexpr int kNumAuctionWeaponSubs = 16;
+/// The class a 1-based category index stands for, or null outside the twelve
+/// (0x0059c480 and 0x0059bcf0 both test `index - 1 < 12`).
+inline const AuctionClassFilter* auctionClassAt(int classIndex) {
+    if (classIndex < 1 || classIndex >= kNumAuctionClasses) return nullptr;
+    return &kAuctionClasses[classIndex];
+}
 
-inline constexpr AuctionSubFilter kAuctionArmorSubs[] = {
-    {.label = "All", .subId = kAuctionAny}, {.label = "Cloth", .subId = 1}, {.label = "Leather", .subId = 2}, {.label = "Mail", .subId = 3},
-    {.label = "Plate", .subId = 4}, {.label = "Shield", .subId = 6}, {.label = "Miscellaneous", .subId = 0},
+/// One row of ItemSubClass.dbc, as far as the auction house reads it: class
+/// and subclass ids (fields 0 and 1), flags (field 4; 0x200 means the
+/// subclass has a slot tier) and display flags (field 5; 0x2 hides the row).
+/// `label` is what the row is listed as: the VerboseName, else the
+/// DisplayName (0x0059c480).
+struct AuctionSubClassRow {
+    uint32_t classId;
+    uint32_t subId;
+    uint32_t flags;
+    uint32_t displayFlags;
+    const char* label;
 };
-inline constexpr int kNumAuctionArmorSubs = 7;
 
-/// Equipment-slot ids, carried in the auctionSlotID field of the same request.
+inline constexpr uint32_t kAuctionSubClassHidden   = 0x2;    // displayFlags
+inline constexpr uint32_t kAuctionSubClassHasSlots = 0x200;  // flags
+
+/// ItemSubClass.dbc of 3.3.5a 12340 in its own record order, for the classes
+/// the auction house lists. Only a fallback for a client without the file:
+/// the interface reads the file, because the subclass a row stands for is its
+/// *position* among the class's visible rows in record order, not its id.
+/// Consumables run 5, 1, 2, 3, 7, 6, 4, 8 in the file and Trade Goods
+/// 10, 5, 6, 7, ... - a list sorted by id would search Potions for the row
+/// that says Food & Drink.
+inline constexpr AuctionSubClassRow kItemSubClassFallback[] = {
+    {0, 0, 0, 3, "Consumable"}, {0, 5, 0, 1, "Food & Drink"}, {0, 1, 0, 1, "Potion"},
+    {0, 2, 0, 1, "Elixir"}, {0, 3, 0, 1, "Flask"}, {0, 7, 0, 1, "Bandage"},
+    {0, 6, 0, 1, "Item Enhancement"}, {0, 4, 0, 1, "Scroll"}, {0, 8, 0, 1, "Other"},
+    {1, 0, 0, 0, "Bag"}, {1, 1, 0, 4, "Soul Bag"}, {1, 2, 0, 0, "Herb Bag"},
+    {1, 3, 0, 0, "Enchanting Bag"}, {1, 4, 0, 0, "Engineering Bag"}, {1, 5, 0, 0, "Gem Bag"},
+    {1, 6, 0, 0, "Mining Bag"}, {1, 7, 0, 0, "Leatherworking Bag"}, {1, 8, 0, 0, "Inscription Bag"},
+    {2, 0, 0x3, 0, "One-Handed Axes"}, {2, 1, 0x3, 0, "Two-Handed Axes"}, {2, 2, 0x80, 0, "Bows"},
+    {2, 3, 0xa8, 0, "Guns"}, {2, 4, 0x3, 0, "One-Handed Maces"}, {2, 5, 0x3, 0, "Two-Handed Maces"},
+    {2, 6, 0x3, 0, "Polearms"}, {2, 7, 0x3, 0, "One-Handed Swords"}, {2, 8, 0x3, 0, "Two-Handed Swords"},
+    {2, 9, 0, 3, "Obsolete"}, {2, 10, 0x3, 0, "Staves"}, {2, 11, 0, 3, "One-Handed Exotics"},
+    {2, 12, 0, 3, "Two-Handed Exotics"}, {2, 13, 0x5, 0, "Fist Weapons"}, {2, 14, 0x2, 1, "Miscellaneous"},
+    {2, 15, 0x3, 0, "Daggers"}, {2, 16, 0x10, 0, "Thrown"}, {2, 17, 0x3, 2, "Spears"},
+    {2, 18, 0xa0, 0, "Crossbows"}, {2, 19, 0x100, 0, "Wands"}, {2, 20, 0, 0, "Fishing Poles"},
+    {3, 0, 0, 1, "Red"}, {3, 1, 0, 1, "Blue"}, {3, 2, 0, 1, "Yellow"}, {3, 3, 0, 1, "Purple"},
+    {3, 4, 0, 1, "Green"}, {3, 5, 0, 1, "Orange"}, {3, 6, 0, 1, "Meta"}, {3, 7, 0, 1, "Simple"},
+    {3, 8, 0, 1, "Prismatic"},
+    {4, 0, 0x200, 1, "Miscellaneous"}, {4, 1, 0x200, 0, "Cloth"}, {4, 2, 0x200, 0, "Leather"},
+    {4, 3, 0x200, 0, "Mail"}, {4, 4, 0x200, 0, "Plate"}, {4, 5, 0, 2, "Bucklers"},
+    {4, 6, 0, 0, "Shields"}, {4, 7, 0, 0, "Librams"}, {4, 8, 0, 0, "Idols"},
+    {4, 9, 0, 0, "Totems"}, {4, 10, 0, 0, "Sigils"},
+    {6, 0, 0, 3, "Wand"}, {6, 1, 0, 2, "Bolt"}, {6, 2, 0, 0, "Arrow"}, {6, 3, 0, 0, "Bullet"},
+    {6, 4, 0x40, 2, "Thrown"},
+    {7, 0, 0, 3, "Trade Goods"}, {7, 10, 0, 1, "Elemental"}, {7, 5, 0, 1, "Cloth"},
+    {7, 6, 0, 1, "Leather"}, {7, 7, 0, 1, "Metal & Stone"}, {7, 8, 0, 1, "Meat"},
+    {7, 9, 0, 1, "Herb"}, {7, 12, 0, 1, "Enchanting"}, {7, 4, 0, 1, "Jewelcrafting"},
+    {7, 1, 0, 1, "Parts"}, {7, 3, 0, 1, "Devices"}, {7, 2, 0, 1, "Explosives"},
+    {7, 13, 0, 1, "Materials"}, {7, 11, 0, 1, "Other"}, {7, 14, 0, 1, "Armor Enchantment"},
+    {7, 15, 0, 1, "Weapon Enchantment"},
+    {9, 0, 0, 1, "Book"}, {9, 1, 0, 1, "Leatherworking"}, {9, 2, 0, 1, "Tailoring"},
+    {9, 3, 0, 1, "Engineering"}, {9, 4, 0, 1, "Blacksmithing"}, {9, 5, 0, 1, "Cooking"},
+    {9, 6, 0, 1, "Alchemy"}, {9, 7, 0, 1, "First Aid"}, {9, 8, 0, 1, "Enchanting"},
+    {9, 9, 0, 1, "Fishing"}, {9, 10, 0, 1, "Jewelcrafting"}, {9, 11, 0, 1, "Inscription"},
+    {11, 0, 0, 7, "Quiver"}, {11, 1, 0, 7, "Quiver"}, {11, 2, 0, 4, "Quiver"},
+    {11, 3, 0, 4, "Ammo Pouch"},
+    {12, 0, 0, 1, "Quest"},
+    {15, 0, 0, 1, "Junk"}, {15, 1, 0, 1, "Reagent"}, {15, 2, 0, 1, "Pet"},
+    {15, 3, 0, 1, "Holiday"}, {15, 4, 0, 1, "Other"}, {15, 5, 0, 0, "Mount"},
+    {16, 1, 0, 0, "Warrior"}, {16, 2, 0, 0, "Paladin"}, {16, 3, 0, 0, "Hunter"},
+    {16, 4, 0, 0, "Rogue"}, {16, 5, 0, 0, "Priest"}, {16, 6, 0, 0, "Death Knight"},
+    {16, 7, 0, 0, "Shaman"}, {16, 8, 0, 0, "Mage"}, {16, 9, 0, 0, "Warlock"},
+    {16, 11, 0, 0, "Druid"},
+};
+
+/// The subclass rows listed under a class, in listing order: the class's rows
+/// in record order, less those whose display flags hide them (0x0059c480).
+/// Element n is the subclass index n + 1 that FrameXML hands back, and
+/// QueryAuctionItems resolves that index by the same walk (0x0059bcf0).
+template <typename Row>
+inline std::vector<const Row*> auctionSubClassRows(const Row* rows, size_t n, uint32_t classId) {
+    std::vector<const Row*> out;
+    for (size_t i = 0; i < n; ++i) {
+        if (rows[i].classId == classId && (rows[i].displayFlags & kAuctionSubClassHidden) == 0) {
+            out.push_back(&rows[i]);
+        }
+    }
+    return out;
+}
+
+/// The auction house's slot tier: fourteen rows (0x00a14fd0, 0x2c bytes a
+/// row: the inventory type, a 32-byte global string name, two flags). It has
+/// no weapon slots - the tier exists only under a subclass flagged 0x200,
+/// which in 3.3.5a is armour's first five.
+///
+/// `misc` offers the row under armour's first listed subclass (Miscellaneous);
+/// `jewellery` hides it under every other one, except that the second (Cloth)
+/// offers the back - which is how 0x0059c590 reads the two flags.
+struct AuctionInvTypeFilter { uint32_t invType; const char* token; bool misc; bool jewellery; };
+inline constexpr AuctionInvTypeFilter kAuctionInvTypes[] = {
+    {1,  "INVTYPE_HEAD",     true,  false},
+    {2,  "INVTYPE_NECK",     true,  true},
+    {3,  "INVTYPE_SHOULDER", false, false},
+    {4,  "INVTYPE_BODY",     true,  true},
+    {5,  "INVTYPE_CHEST",    false, false},
+    {6,  "INVTYPE_WAIST",    false, false},
+    {7,  "INVTYPE_LEGS",     false, false},
+    {8,  "INVTYPE_FEET",     false, false},
+    {9,  "INVTYPE_WRIST",    false, false},
+    {10, "INVTYPE_HAND",     false, false},
+    {11, "INVTYPE_FINGER",   true,  true},
+    {12, "INVTYPE_TRINKET",  true,  true},
+    {16, "INVTYPE_CLOAK",    false, true},
+    {23, "INVTYPE_HOLDABLE", true,  true},
+};
+inline constexpr int kNumAuctionInvTypes = 14;
+
+/// Whether GetAuctionInvTypes offers slot row `row` (0-based) under a class
+/// and the 0-based position of its listed subclass (0x0059c590): under armour
+/// the first subclass offers the misc rows and the others every row that is
+/// not jewellery, the second one the back as well; under any other class
+/// every row.
+inline bool auctionInvTypeOffered(uint32_t classId, int subPosition, int row) {
+    if (row < 0 || row >= kNumAuctionInvTypes) return false;
+    const auto& t = kAuctionInvTypes[row];
+    if (classId != 4) return true;
+    if (subPosition == 0) return t.misc;
+    if (subPosition == 1 && t.invType == 16) return true;
+    return !t.jewellery;
+}
+
+/// The inventory type QueryAuctionItems sends for the slot index FrameXML
+/// hands back: a 1-based row of all fourteen, whatever the class
+/// (0x0059bcf0 reads `table[index - 1]` for `index - 1 < 14`). FrameXML
+/// numbers the rows by their pair position in GetAuctionInvTypes' answer,
+/// hidden rows included, so the two agree without a subset to re-map.
+inline uint32_t auctionInvTypeIdAt(int index) {
+    if (index < 1 || index > kNumAuctionInvTypes) return kAuctionAny;
+    return kAuctionInvTypes[index - 1].invType;
+}
+
+/// Equipment-slot labels by inventory type, for the trade skill window's slot
+/// filter (not the auction house's slot tier, which is kAuctionInvTypes).
+struct AuctionSlotFilter { const char* label; uint32_t invType; const char* token; };
 inline constexpr AuctionSlotFilter kAuctionSlots[] = {
     {.label = "All Slots",     .invType = kAuctionAny, .token = ""},
     {.label = "Head",          .invType = 1,  .token = "INVTYPE_HEAD"},
@@ -119,170 +229,6 @@ inline constexpr AuctionSlotFilter kAuctionSlots[] = {
     {.label = "Relic",         .invType = 28, .token = "INVTYPE_RELIC"},
 };
 inline constexpr int kNumAuctionSlots = 21;
-
-/// Where a slot sits in kAuctionSlots, found by its inventory-type token.
-///
-/// The lists below used to be written as bare positions with the slot names in
-/// a comment beside them, and the two drifted apart: the Miscellaneous list
-/// said "Neck, Finger, Trinket, Back" and held the positions of Neck, Trinket,
-/// Back and Relic. So Armor > Miscellaneous - the category every ring in the
-/// game is in - offered every slot except the one for rings, and searching for
-/// one found nothing. Nothing could have noticed: every number in it was a
-/// valid row, just not the row the comment named.
-///
-/// Looked up by name, the list is the comment.
-inline constexpr uint8_t auctionSlotPos(std::string_view token) {
-    for (int i = 0; i < kNumAuctionSlots; ++i) {
-        if (std::string_view(kAuctionSlots[i].token) == token) {
-            return static_cast<uint8_t>(i);
-        }
-    }
-    // Out of range on purpose: the static_asserts below fail on it, and
-    // auctionSlotIdAt treats it as no slot rather than as some other one.
-    return static_cast<uint8_t>(kNumAuctionSlots);
-}
-
-inline constexpr uint8_t kSlotHead        = auctionSlotPos("INVTYPE_HEAD");
-inline constexpr uint8_t kSlotNeck        = auctionSlotPos("INVTYPE_NECK");
-inline constexpr uint8_t kSlotShoulder    = auctionSlotPos("INVTYPE_SHOULDER");
-inline constexpr uint8_t kSlotChest       = auctionSlotPos("INVTYPE_CHEST");
-inline constexpr uint8_t kSlotWaist       = auctionSlotPos("INVTYPE_WAIST");
-inline constexpr uint8_t kSlotLegs        = auctionSlotPos("INVTYPE_LEGS");
-inline constexpr uint8_t kSlotFeet        = auctionSlotPos("INVTYPE_FEET");
-inline constexpr uint8_t kSlotWrist       = auctionSlotPos("INVTYPE_WRIST");
-inline constexpr uint8_t kSlotHands       = auctionSlotPos("INVTYPE_HAND");
-inline constexpr uint8_t kSlotFinger      = auctionSlotPos("INVTYPE_FINGER");
-inline constexpr uint8_t kSlotTrinket     = auctionSlotPos("INVTYPE_TRINKET");
-inline constexpr uint8_t kSlotBack        = auctionSlotPos("INVTYPE_CLOAK");
-inline constexpr uint8_t kSlotOneHand     = auctionSlotPos("INVTYPE_WEAPON");
-inline constexpr uint8_t kSlotTwoHand     = auctionSlotPos("INVTYPE_2HWEAPON");
-inline constexpr uint8_t kSlotMainHand    = auctionSlotPos("INVTYPE_WEAPONMAINHAND");
-inline constexpr uint8_t kSlotOffHand     = auctionSlotPos("INVTYPE_WEAPONOFFHAND");
-inline constexpr uint8_t kSlotRanged      = auctionSlotPos("INVTYPE_RANGED");
-inline constexpr uint8_t kSlotShield      = auctionSlotPos("INVTYPE_SHIELD");
-inline constexpr uint8_t kSlotHeldOffHand = auctionSlotPos("INVTYPE_HOLDABLE");
-inline constexpr uint8_t kSlotRelic       = auctionSlotPos("INVTYPE_RELIC");
-
-/// Every position in a list names a row. False is a token above that names
-/// nothing, which is the one way the lookup can go wrong.
-inline constexpr bool auctionSlotsKnown(const uint8_t* list, size_t n) {
-    for (size_t i = 0; i < n; ++i) {
-        if (list[i] >= kNumAuctionSlots) return false;
-    }
-    return true;
-}
-
-/// The subclass list for a class id, or null when that class has none offered.
-/// Only weapons and armour are divided here, which is what the window has
-/// always shown; every other class searches whole.
-inline const AuctionSubFilter* auctionSubsFor(uint32_t classId, int& count) {
-    if (classId == 2) { count = kNumAuctionWeaponSubs; return kAuctionWeaponSubs; }
-    if (classId == 4) { count = kNumAuctionArmorSubs;  return kAuctionArmorSubs;  }
-    count = 0;
-    return nullptr;
-}
-
-/// Which slots the interface offers under a class, as positions in
-/// kAuctionSlots.
-///
-/// The position is the protocol: FrameXML sends the index it was given back
-/// through QueryAuctionItems, which reads kAuctionSlots at that index. So this
-/// answers indices rather than a rebuilt list - a subset renumbered from one
-/// would search a different slot than the one that was clicked, and nothing
-/// would say so.
-///
-/// Only weapons and armour have a slot to speak of; every other class searches
-/// whole, which is what the real client does too.
-inline const uint8_t* auctionSlotsFor(uint32_t classId, int subIndex, int& count) {
-    // Positions in kAuctionSlots. A subclass narrows the list the way the real
-    // client does: a shield is only ever worn in one place, and a bow is only
-    // ever ranged, so offering every slot under each of them is a tree the
-    // player has to read past rather than one that helps.
-    static constexpr uint8_t kOneHand[] = {
-        kSlotOneHand, kSlotMainHand, kSlotOffHand};
-    static constexpr uint8_t kTwoHand[] = {kSlotTwoHand};
-    static constexpr uint8_t kRanged[]  = {kSlotRanged};
-    static constexpr uint8_t kAnyWeapon[] = {
-        kSlotOneHand, kSlotTwoHand, kSlotMainHand, kSlotOffHand, kSlotRanged,
-        kSlotHeldOffHand, kSlotRelic};
-    // What a suit of armour is worn in. Not the neck or the fingers: a ring is
-    // Miscellaneous armour, never cloth or plate, so those two rows searched a
-    // combination no item has. The back is here instead, because a cloak is
-    // cloth - it was in neither list, and could not be searched for at all.
-    static constexpr uint8_t kWorn[] = {
-        kSlotHead, kSlotShoulder, kSlotChest, kSlotWaist, kSlotLegs,
-        kSlotFeet, kSlotWrist, kSlotHands, kSlotBack};
-    static constexpr uint8_t kShield[] = {kSlotShield};
-    // Miscellaneous armour: the jewellery, and the things held in the off hand
-    // that are not weapons.
-    static constexpr uint8_t kTrinketry[] = {
-        kSlotNeck, kSlotFinger, kSlotTrinket, kSlotHeldOffHand};
-    static constexpr uint8_t kAnyArmor[] = {
-        kSlotHead, kSlotNeck, kSlotShoulder, kSlotChest, kSlotWaist, kSlotLegs,
-        kSlotFeet, kSlotWrist, kSlotHands, kSlotFinger, kSlotTrinket, kSlotBack,
-        kSlotShield, kSlotHeldOffHand, kSlotRelic};
-
-    static_assert(auctionSlotsKnown(kOneHand, std::size(kOneHand)));
-    static_assert(auctionSlotsKnown(kTwoHand, std::size(kTwoHand)));
-    static_assert(auctionSlotsKnown(kRanged, std::size(kRanged)));
-    static_assert(auctionSlotsKnown(kAnyWeapon, std::size(kAnyWeapon)));
-    static_assert(auctionSlotsKnown(kWorn, std::size(kWorn)));
-    static_assert(auctionSlotsKnown(kShield, std::size(kShield)));
-    static_assert(auctionSlotsKnown(kTrinketry, std::size(kTrinketry)));
-    static_assert(auctionSlotsKnown(kAnyArmor, std::size(kAnyArmor)));
-
-    const auto give = [&count](const uint8_t* list, size_t n) {
-        count = static_cast<int>(n);
-        return list;
-    };
-
-    if (classId == 2) {
-        // Positions in kAuctionWeaponSubs, which is what FrameXML hands back.
-        switch (subIndex) {
-            case 1: case 5: case 8: case 11: case 12:   // Axe/Mace/Sword 1H, Fist, Dagger
-                return give(kOneHand, sizeof(kOneHand));
-            case 2: case 6: case 7: case 9: case 10:    // Axe/Mace/Sword 2H, Polearm, Staff
-                return give(kTwoHand, sizeof(kTwoHand));
-            case 3: case 4: case 13: case 14: case 15:  // Bow, Gun, Thrown, Crossbow, Wand
-                return give(kRanged, sizeof(kRanged));
-            default:
-                return give(kAnyWeapon, sizeof(kAnyWeapon));
-        }
-    }
-    if (classId == 4) {
-        // Positions in kAuctionArmorSubs.
-        switch (subIndex) {
-            case 1: case 2: case 3: case 4:   // Cloth, Leather, Mail, Plate
-                return give(kWorn, sizeof(kWorn));
-            case 5:                           // Shield
-                return give(kShield, sizeof(kShield));
-            case 6:                           // Miscellaneous
-                return give(kTrinketry, sizeof(kTrinketry));
-            default:
-                return give(kAnyArmor, sizeof(kAnyArmor));
-        }
-    }
-    count = 0;
-    return nullptr;
-}
-
-/// The slot id for the position FrameXML hands back, under a given class.
-///
-/// FrameXML numbers the rows it was given from one - GetAuctionInvTypes
-/// returns pairs and the row's index is its pair position - so the number that
-/// comes back is a position in the offered subset, not in kAuctionSlots. The
-/// two are only the same when the subset is the whole table, which it never
-/// is. Reading kAuctionSlots at the raw position searched Head for a
-/// one-handed weapon and said nothing.
-inline uint32_t auctionSlotIdAt(uint32_t classId, int subIndex, int position) {
-    if (position <= 0) return kAuctionAny;
-    int count = 0;
-    const uint8_t* slots = auctionSlotsFor(classId, subIndex, count);
-    if (!slots || position > count) return kAuctionAny;
-    const uint8_t at = slots[position - 1];
-    if (at >= kNumAuctionSlots) return kAuctionAny;
-    return kAuctionSlots[at].invType;
-}
 
 /// The three lengths an auction may run for, in minutes, which is what the
 /// wire field carries: AzerothCore multiplies it by sixty and then accepts

@@ -5120,6 +5120,11 @@ void InventoryHandler::auctionSearch(const std::string& name, uint8_t levelMin, 
                           .invTypeMask = invTypeMask, .usableOnly = usableOnly, .offset = offset, .sort = sort};
     hasAuctionSearch_ = true;
     pendingAuctionTarget_ = AuctionResultTarget::BROWSE;
+    LOG_INFO("CMSG_AUCTION_LIST_ITEMS: offset=", offset, " class=", static_cast<int32_t>(itemClass),
+             " subclass=", static_cast<int32_t>(itemSubClass), " invType=",
+             static_cast<int32_t>(invTypeMask), " quality=", static_cast<int32_t>(quality),
+             " levels=", static_cast<int>(levelMin), "-", static_cast<int>(levelMax),
+             " usable=", static_cast<int>(usableOnly));
     auto packet = AuctionListItemsPacket::build(auctioneerGuid_, offset, name,
                                                   levelMin, levelMax, invTypeMask,
                                                   itemClass, itemSubClass, quality, usableOnly, 0,
