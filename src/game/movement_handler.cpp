@@ -4572,54 +4572,20 @@ void MovementHandler::followGuid(uint64_t guid) {
             return;
         }
     }
-    // ...and the follow is started only within thirty yards: 0x00715c70's
-    // table gives the follow move (kind 3) 900, the square of the distance.
-    {
-        const float dx = target->getX() - owner_.movementInfoRef().x;
-        const float dy = target->getY() - owner_.movementInfoRef().y;
-        const float dz = target->getZ() - owner_.movementInfoRef().z;
-        constexpr float kFollowStartRangeSq = 900.0f;
-        if (dx * dx + dy * dy + dz * dz >= kFollowStartRangeSq) {
-            refuse("ERR_AUTOFOLLOW_TOO_FAR", "Target is too far away.");
-            return;
-        }
-    }
-
-    // Set follow target. The client's follow is click-to-move's kind 3, so
-    // starting it ends any other (0x00727400).
-    owner_.stopClickToMove();
-    owner_.followTargetGuidRef() = guid;
-
-    // Initialize render-space position from entity's canonical coords
-    owner_.followRenderPosRef() = core::coords::canonicalToRender(glm::vec3(target->getX(), target->getY(), target->getZ()));
-
-    // Tell camera controller to start auto-following
-    if (owner_.autoFollowCallbackRef()) {
-        owner_.autoFollowCallbackRef()(&owner_.followRenderPosRef());
-    }
-
-    // Get target name
-    std::string targetName = "Target";
-    if (target->getType() == ObjectType::PLAYER) {
-        auto player = std::static_pointer_cast<Player>(target);
-        if (!player->getName().empty()) {
-            targetName = player->getName();
-        }
-    } else if (target->getType() == ObjectType::UNIT) {
-        auto unit = std::static_pointer_cast<Unit>(target);
-        targetName = unit->getName();
-    }
-
-    // No chat line: AUTOFOLLOW_BEGIN below is what says so, through
-    // FrameXML's AutoFollowStatus and AUTOFOLLOWSTART. This printed "Now
-    // following X." in English as well.
-    LOG_INFO("Following target: ", targetName, " (GUID: 0x", std::hex, guid, std::dec, ")");
-    // The name goes with it: the status text is formatted from this argument,
-    // and without one it formats a nil.
-    owner_.fireAddonEvent("AUTOFOLLOW_BEGIN", {targetName});
+    // The follow is click-to-move's kind 3 (0x00727400): any other ends
+    // first, it is not started thirty yards or more away (0x00715c70, which
+    // says ERR_AUTOFOLLOW_TOO_FAR), and from then on 0x007317a0 steers it -
+    // stopping within three yards, setting off again past four and a half
+    // (scaled by the run or walk speed over 7), and giving up at thirty.
+    // No chat line: AUTOFOLLOW_BEGIN, fired by the start with the name
+    // followed, is what says so (FrameXML's AutoFollowStatus).
+    owner_.clickToMoveApproach(guid, click_to_move::Kind::Follow);
 }
 
 void MovementHandler::cancelFollow() {
+    // A follow is click-to-move's kind 3: ended as 0x007272c0(0, 1) ends it,
+    // with AUTOFOLLOW_END.
+    owner_.stopClickToMoveFollow();
     if (owner_.followTargetGuidRef() == 0) {
         return;
     }

@@ -2219,6 +2219,7 @@ void CameraController::update(float deltaTime) {
             }
             if (st.forward) clickToMoveForward_ = *st.forward;
             if (!st.active) clickToMoveForward_ = false;
+            clickToMoveTrackAsMove_ = st.trackAsMove;
             // 0x0071aee0 -> 0x005f95f0: stopping a mover that goes forward
             // or back lets its autorun go too.
             if (st.stopForward && (wasMovingForward || wasMovingBackward)) {
@@ -2401,13 +2402,14 @@ void CameraController::update(float deltaTime) {
     {
         // Click-to-move's own going is not the keys' Move: its controls
         // (0x1e00000) make the Track state (0x00602dc0 sets +0x98 0x100).
-        // 0x00602760 reads Track as Move only for a follow (kind 3) with
-        // autoInteract off, and this client's follow is not click-to-move.
+        // 0x00602760 reads Track as Move for a follow (kind 3) with
+        // autoInteract off.
         const bool keyedForward = nowForward && (keyW || mouseAutorun || autoRunning);
-        const bool move = keyedForward || nowBackward || autoRunning || mouseAutorun;
+        const bool followMove = clickToMoveActive_ && clickToMoveTrackAsMove_;
+        const bool move = keyedForward || nowBackward || autoRunning || mouseAutorun || followMove;
         const bool strafe = nowStrafeLeft || nowStrafeRight;
         const bool turnKeys = nowTurnLeft || nowTurnRight;
-        const bool track = clickToMoveActive_;
+        const bool track = clickToMoveActive_ && !clickToMoveTrackAsMove_;
         const uint32_t controls = (move ? 1u : 0u) | (strafe ? 2u : 0u) | (turnKeys ? 4u : 0u) |
                                   (leftMouseDown ? 8u : 0u) | (rightMouseDown ? 16u : 0u) | (track ? 32u : 0u);
         if (controls != followSmoothControls_) {

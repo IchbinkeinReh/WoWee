@@ -356,6 +356,8 @@ public:
         /// 0x0071aee0: a mover going forward or back stops and lets its
         /// autorun go (input control 0x1000).
         bool stopForward = false;
+        /// Its Track read as Move (a follow with autoInteract off).
+        bool trackAsMove = false;
     };
     using ClickToMoveSteerFn = std::function<ClickToMoveSteer(float facingYawDeg, float dt, bool mouseSteering)>;
     void setClickToMoveSteer(ClickToMoveSteerFn fn) { clickToMoveSteer_ = std::move(fn); }
@@ -1118,6 +1120,7 @@ private:
     bool clickToMoveActive_ = false;
     bool clickToMoveForward_ = false;
     bool clickToMoveKeysHeld_ = false;
+    bool clickToMoveTrackAsMove_ = false;
 
     // Auto-follow target position (WoW /follow). Non-null when following.
     const glm::vec3* autoFollowTarget_ = nullptr;

@@ -12,6 +12,7 @@
 #include "game/update_field_table.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "core/coordinates.hpp"
+#include "core/logger.hpp"
 #include <cmath>
 
 namespace wowee {
@@ -74,7 +75,8 @@ bool GameHandler::startClickToMove(ctm::Kind kind, uint64_t guid, const glm::vec
     // 0x00727400. Whatever the mover was doing ends first, a follow with
     // AUTOFOLLOW_END (0x0081b530(0x166)) - here WoWee's own follow, which is
     // the client's kind 3.
-    if (kind != ctm::Kind::Follow && followTargetGuid_ != 0) cancelFollow();
+    if (followTargetGuid_ != 0) cancelFollow();
+    if (isClickToMoving() && ctm_.kind == ctm::Kind::Follow) fireAddonEvent("AUTOFOLLOW_END", {});
     if (ctm_.kind != ctm::Kind::None) ctm_ = ctm::State{};
     if (!movementHandler_) return false;
     const glm::vec3 mover = toServer(glm::vec3(movementInfo.x, movementInfo.y, movementInfo.z));
@@ -118,6 +120,10 @@ void GameHandler::stopClickToMove(bool faceSubject, bool stopMoving) {
     ctm_ = ctm::State{};
 }
 
+void GameHandler::stopClickToMoveFollow() {
+    if (isClickToMoving() && ctm_.kind == ctm::Kind::Follow) stopClickToMove(false, true);
+}
+
 bool GameHandler::clickToMoveApproach(uint64_t guid, ctm::Kind kind, std::optional<float> spellRange) {
     // 0x0072b4a0: toward a unit or a corpse, by the player as the mover.
     if (guid == playerGuid || !movementHandler_ || movementHandler_->activeMover() != playerGuid) return false;
@@ -135,12 +141,27 @@ bool GameHandler::clickToMoveApproach(uint64_t guid, ctm::Kind kind, std::option
         if (subject->getType() != ObjectType::CORPSE && (!unit || static_cast<int32_t>(unit->getHealth()) > 0))
             return false;
         break;
+    case ctm::Kind::Follow:
+        // Its checks - a player on the player's side, the player alive, not
+        // stunned, not channeling - are made by the caller with their lines
+        // (MovementHandler::followGuid).
+        break;
     default:
         return false;
     }
     if (!playerAliveAsMover()) return false;
-    return startClickToMove(kind, guid, glm::vec3(subject->getX(), subject->getY(), subject->getZ()), 0.0f,
-                            spellRange);
+    if (!startClickToMove(kind, guid, glm::vec3(subject->getX(), subject->getY(), subject->getZ()), 0.0f,
+                          spellRange))
+        return false;
+    if (kind == ctm::Kind::Follow) {
+        // AUTOFOLLOW_BEGIN with the name followed (0x0072a000(0, 1)).
+        std::string name;
+        if (const auto* p = dynamic_cast<const Player*>(subject.get())) name = p->getName();
+        else if (unit) name = unit->getName();
+        LOG_INFO("Following ", name, " (GUID: 0x", std::hex, guid, std::dec, ")");
+        fireAddonEvent("AUTOFOLLOW_BEGIN", {name});
+    }
+    return true;
 }
 
 void GameHandler::clickToMoveTo(const glm::vec3& canonicalAt) {
@@ -350,6 +371,7 @@ GameHandler::ClickToMoveSteer GameHandler::stepClickToMove(float facingYawDeg, f
     // kind that goes anywhere (0x00adaab8).
     steer.stopForward = (out.forward && !*out.forward) ||
                         (out.outcome != ctm::Outcome::Continue && ctm::row(kindNow).used);
+    steer.trackAsMove = kindNow == ctm::Kind::Follow && !autoInteractOn();
     switch (out.outcome) {
     case ctm::Outcome::Continue:
         break;

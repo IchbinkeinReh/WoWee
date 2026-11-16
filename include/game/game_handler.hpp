@@ -3193,7 +3193,9 @@ public:
     bool isClickToMoving() const;
     /// 0x007272c0: given up or done; the mover stops moving forward.
     void stopClickToMove(bool faceSubject = false, bool stopMoving = true);
-    /// 0x0072b4a0: toward a unit or corpse for kind 5, 6 or 9.
+    /// A follow (kind 3) under way ended as 0x007272c0 ends it.
+    void stopClickToMoveFollow();
+    /// 0x0072b4a0: toward a unit or corpse for kind 3 (/follow), 5, 6 or 9.
     bool clickToMoveApproach(uint64_t guid, click_to_move::Kind kind,
                              std::optional<float> spellRange = std::nullopt);
     /// 0x0072b6d0: to a place on the ground (canonical).
@@ -3234,6 +3236,9 @@ public:
         /// 0x0071aee0 ran: a mover going forward or back is stopped, and its
         /// autorun (input control 0x1000) is let go.
         bool stopForward = false;
+        /// A follow with autoInteract off: the camera reads its Track as
+        /// Move (0x00602760, camera +0x9c bit 1 from 0x005fe6a0).
+        bool trackAsMove = false;
     };
     ClickToMoveSteer stepClickToMove(float facingYawDeg, float dtSeconds, bool mouseSteering);
     /// 0x0071b1e0: the player stopped at rest; an arrival's action is taken.

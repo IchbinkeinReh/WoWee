@@ -298,3 +298,18 @@ TEST_CASE("the spell book notes a skinning spell per kind of corpse", "[click_to
     CHECK(r.skinPlayerCorpse == 0);
     CHECK(r.skin[0] == 8613);
 }
+
+TEST_CASE("a follow gives up thirty yards out, flat on the ground", "[click_to_move]") {
+    State s = start(Kind::Follow, 7, glm::vec3(0.0f), 0.0f, 9.0f, glm::vec3(0.0f), false, kPi, 0);
+    StepIn in = standingAt(glm::vec3(0.0f), 0.0f);
+    // Twenty-nine yards along and twenty up is within it on foot...
+    in.subject = glm::vec3(29.0f, 0.0f, 20.0f);
+    CHECK(step(s, in).outcome == Outcome::Continue);
+    // ...not for a swimmer, whose distance counts the height.
+    in.swimOrFly = true;
+    CHECK(step(s, in).outcome == Outcome::Stop);
+    State t = start(Kind::Follow, 7, glm::vec3(0.0f), 0.0f, 9.0f, glm::vec3(0.0f), false, kPi, 0);
+    StepIn flat = standingAt(glm::vec3(0.0f), 0.0f);
+    flat.subject = glm::vec3(30.0f, 0.0f, 0.0f);
+    CHECK(step(t, flat).outcome == Outcome::Stop);
+}

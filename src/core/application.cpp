@@ -3719,6 +3719,7 @@ void Application::connectWorldHooks() {
             out.facingYawDeg = st.facingYawDeg;
             out.forward = st.forward;
             out.stopForward = st.stopForward;
+            out.trackAsMove = st.trackAsMove;
             return out;
         });
         cc->setClickToMoveCancel([this]() {
