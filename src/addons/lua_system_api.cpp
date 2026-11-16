@@ -1194,6 +1194,8 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     else if (n == "uiscale") lua_pushstring(L, "1");
     // The tracking menu's own entry, by name; none (0x0057e070).
     else if (n == "minimaptrackedinfo") lua_pushstring(L, "");
+    // The tracked achievements, none (0x005b1fa0 writes the list at logout).
+    else if (n == "trackedachievements") lua_pushstring(L, "");
     // Off, as registered (0x00520000 "0", setter FUN_005237e0): the scale the
     // interface uses is the one its own code picks for the resolution, and the
     // "Use UI Scale" checkbox is what makes uiscale override that.

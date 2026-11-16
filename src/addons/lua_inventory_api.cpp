@@ -1275,7 +1275,11 @@ static int lua_PickupTradeMoney(lua_State* L) {
     if (!gh) return 0;
     const uint64_t offered = gh->getMyTradeGold();
     const int32_t amount = luaToClientInt(L, 1);
-    if (amount <= 0 || static_cast<uint64_t>(amount) > offered) return 0;
+    if (amount <= 0 || static_cast<uint64_t>(amount) > offered) {
+        LOG_WARNING("PickupTradeMoney(", amount, "): not between 1 and the ", offered,
+                    " offered, ignored as the client ignores it");
+        return 0;
+    }
     const uint64_t take = static_cast<uint64_t>(amount);
     gh->setTradeGold(offered - take);
     setCursorMoney(L, take);
@@ -5910,8 +5914,11 @@ static int lua_GiveMasterLoot(lua_State* L) {
     // hand out - and by the server's own slot number, not the display's.
     const game::LootItem* item = lootItemAtSlot(gh, slot);
     const int itemRow = lootHasCoin(gh) ? slot - 2 : slot - 1;
-    if (!item || itemRow >= 0x12 || item->itemId == 0 || item->lootSlotType != 2) return 0;
-    if (gh->getCurrentLoot().lootGuid == 0) return 0;
+    if (!item || itemRow >= 0x12 || item->itemId == 0 || item->lootSlotType != 2 ||
+        gh->getCurrentLoot().lootGuid == 0) {
+        LOG_WARNING("GiveMasterLoot(", slot, "): not an item the master looter hands out, ignored");
+        return 0;
+    }
     gh->lootMasterGive(item->slotIndex, candidates[static_cast<size_t>(candidate - 1)]);
     return 0;
 }
