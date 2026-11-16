@@ -2083,7 +2083,8 @@ wowee_add_test(test_pet_action_bar SOURCES test_pet_action_bar.cpp)
 # ── test_missile_trajectory ──────────────────────────────────
 # The aimed trajectory cast's solver (0x006fcd60): the pitch, speed and facing
 # a vehicle's shot leaves with, and where its stepped path meets the world.
-wowee_add_test(test_missile_trajectory SOURCES test_missile_trajectory.cpp)
+wowee_add_test(test_missile_trajectory SOURCES test_missile_trajectory.cpp
+               ${CMAKE_SOURCE_DIR}/src/game/chat_language.cpp)
 
 # ── test_missile_collision ───────────────────────────────────
 # A siege missile meeting a unit on its way: the path from above

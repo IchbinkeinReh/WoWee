@@ -11,10 +11,14 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <optional>
+#include <string_view>
 
 #include <glm/glm.hpp>
+
+#include "game/chat_language.hpp"
 
 namespace wowee::game::missile_trajectory {
 
@@ -212,6 +216,78 @@ struct AimState {
     const float padded = static_cast<float>(latencyMs) * 0.001f * 0.5f + seconds + 0.2f;
     const float cap = seconds * 1.3f;
     return cap < padded ? cap : padded;
+}
+
+/// The bits 0x007fe520 sets in an aimed shot's figures before they are
+/// sent: a hash of some of their bits and a running count (0x00d3f4ec,
+/// which the active player's object starts at its guid's low half,
+/// 0x006e6b40 -> 0x007fe510, and each stamp moves on by one) is spread over
+/// their lowest bits, then each takes one bit by 0x28d7's parity table.
+/// The change is far below a millimetre.
+struct Stamped {
+    float pitch = 0.0f;
+    float speed = 0.0f;
+    glm::vec3 launch{0.0f};
+    glm::vec3 impact{0.0f};
+};
+[[nodiscard]] inline uint32_t floatBits(float f) {
+    uint32_t u;
+    std::memcpy(&u, &f, sizeof u);
+    return u;
+}
+[[nodiscard]] inline float bitsFloat(uint32_t u) {
+    float f;
+    std::memcpy(&f, &u, sizeof f);
+    return f;
+}
+[[nodiscard]] inline Stamped stamp(uint32_t& counter, float pitch, float speed, const glm::vec3& launch,
+                                   const glm::vec3& impact) {
+    uint32_t p1 = floatBits(pitch);
+    uint32_t p2 = floatBits(speed);
+    uint32_t p3[3] = {floatBits(launch.x), floatBits(launch.y), floatBits(launch.z)};
+    uint32_t p4[3] = {floatBits(impact.x), floatBits(impact.y), floatBits(impact.z)};
+    const uint32_t key = ((((p3[2] & 0xf000u) ^ p3[0]) & 0x2f000u) ^ (p3[1] & 0x300ee630u) ^ (p1 & 0x6000cf0u) ^
+                          (p4[1] & 0x60e0400u) ^ (p2 & 0x240e00u) ^ (p4[0] & 0xa9070f01u) ^ counter) |
+                         0x1010101u;
+    ++counter;
+    // 0x0076f340(key's four bytes, 1, 0): none of them is 0.
+    const char text[4] = {static_cast<char>(key), static_cast<char>(key >> 8), static_cast<char>(key >> 16),
+                          static_cast<char>(key >> 24)};
+    const uint32_t h = chat_language::stringHash(std::string_view(text, 4), false);
+    p1 = (h >> 0x1b & 2u) | (h >> 10 & 1u) | (p1 & 0xfffffffcu);
+    p2 = (h >> 0x13 & 8u) | (h >> 1 & 1u) | (p2 & 0xfffffff6u);
+    p3[0] = (((h >> 9 & 0x10000u) | (h & 0x8000u)) >> 0xe) | (p3[0] & 0xfffffff9u);
+    p3[1] = p3[1] ^ ((p3[1] ^ h >> 1) & 2u);
+    p3[1] = p3[1] ^ ((h >> 0xb ^ p3[1]) & 8u);
+    p3[2] = p3[2] ^ ((p3[2] ^ h >> 6) & 8u);
+    p3[2] = p3[2] ^ ((h >> 0x1c ^ p3[2]) & 4u);
+    p4[0] = (h >> 3 & 4u) | (h >> 6 & 2u) | (p4[0] & 0xfffffff9u);
+    p4[1] = p4[1] ^ ((h >> 0x1d ^ p4[1]) & 1u);
+    p4[1] = p4[1] ^ ((p4[1] ^ h >> 3) & 8u);
+    p4[2] = p4[2] ^ ((h >> 0x14 ^ p4[2]) & 1u);
+    p4[2] = p4[2] ^ ((p4[2] ^ h >> 10) & 4u);
+    // Each value's parity bit, by 0x28d7 over the folded value without it.
+    const auto parity = [](uint32_t& v, uint32_t bit) {
+        const uint32_t kept = v & ~bit;
+        uint32_t x = kept ^ (v >> 0x10);
+        x = x ^ (x >> 8);
+        const uint32_t index = (static_cast<uint8_t>(x >> 4) ^ static_cast<uint8_t>(x)) & 0xfu;
+        v = ((0x28d7u >> index) & 1u ? bit : 0u) | kept;
+    };
+    parity(p1, 8u);
+    parity(p2, 2u);
+    parity(p3[0], 8u);
+    parity(p3[1], 4u);
+    parity(p3[2], 1u);
+    parity(p4[0], 1u);
+    parity(p4[1], 4u);
+    parity(p4[2], 2u);
+    Stamped out;
+    out.pitch = bitsFloat(p1);
+    out.speed = bitsFloat(p2);
+    out.launch = glm::vec3(bitsFloat(p3[0]), bitsFloat(p3[1]), bitsFloat(p3[2]));
+    out.impact = glm::vec3(bitsFloat(p4[0]), bitsFloat(p4[1]), bitsFloat(p4[2]));
+    return out;
 }
 
 }  // namespace wowee::game::missile_trajectory

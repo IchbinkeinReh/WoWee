@@ -161,3 +161,33 @@ TEST_CASE("the shot flies half the latency and a fifth more, at most 1.3 times",
     CHECK(mt::flightWithLatency(0.5f, 100) == Approx(0.65f));
     CHECK(mt::flightWithLatency(0.0f, 0) == 0.0f);
 }
+
+
+TEST_CASE("the stamp touches only the lowest bits and moves its count on", "[trajectory]") {
+    uint32_t count = 0x12345678u;
+    const glm::vec3 launch(1234.5f, -567.25f, 88.0f);
+    const glm::vec3 impact(1300.0f, -500.0f, 70.5f);
+    const auto a = mt::stamp(count, 0.8f, 35.0f, launch, impact);
+    CHECK(count == 0x12345679u);
+    const auto low = [](float x, float y) { return (mt::floatBits(x) ^ mt::floatBits(y)) & ~0xfu; };
+    CHECK(low(a.pitch, 0.8f) == 0u);
+    CHECK(low(a.speed, 35.0f) == 0u);
+    CHECK(low(a.launch.x, launch.x) == 0u);
+    CHECK(low(a.launch.y, launch.y) == 0u);
+    CHECK(low(a.launch.z, launch.z) == 0u);
+    CHECK(low(a.impact.x, impact.x) == 0u);
+    CHECK(low(a.impact.y, impact.y) == 0u);
+    CHECK(low(a.impact.z, impact.z) == 0u);
+    // The same figures at the same count stamp the same.
+    uint32_t again = 0x12345678u;
+    const auto b = mt::stamp(again, 0.8f, 35.0f, launch, impact);
+    CHECK(mt::floatBits(a.pitch) == mt::floatBits(b.pitch));
+    CHECK(mt::floatBits(a.impact.z) == mt::floatBits(b.impact.z));
+}
+
+TEST_CASE("the stamp's hash takes the key's bytes as they are", "[trajectory]") {
+    namespace cl = wowee::game::chat_language;
+    CHECK(cl::stringHash("", false) == 0x7fed7fedu);
+    CHECK(cl::stringHash("ab", false) != cl::stringHash("ab"));
+    CHECK(cl::stringHash("AB", false) == cl::stringHash("ab"));
+}

@@ -1496,8 +1496,11 @@ SpellHandler::TrajectoryCast SpellHandler::buildTrajectoryCast(uint32_t spellId,
         reportLocalCastFailure(spellId, 0x69);
         return TrajectoryCast::Refused;
     }
-    out = CastSpellPacket::buildTrajectory(spellId, ++castCount_, target, shot.aim.launch, shot.flight.impact,
-                                           shot.aim.pitch, shot.aim.speed, caster, shot.wire);
+    // 0x0080ac90: the figures stamped (0x007fe520) before they are written.
+    const mt::Stamped sent = mt::stamp(trajectoryStampCount_, shot.aim.pitch, shot.aim.speed, shot.aim.launch,
+                                       shot.flight.impact);
+    out = CastSpellPacket::buildTrajectory(spellId, ++castCount_, target, sent.launch, sent.impact, sent.pitch,
+                                           sent.speed, caster, shot.wire);
     // 0x0080ac90 once it is sent: the mover's aimed cast is this spell, sent
     // now (0x006fbe30).
     aimState_.sent(spellId, clientMs());
@@ -1531,10 +1534,8 @@ void SpellHandler::updateMissileTrajectory() {
         aimState_.clear(spellId);
         return;
     }
-    const struct {
-        float pitch, speed;
-        glm::vec3 launch, impact;
-    } sent{shot.aim.pitch, shot.aim.speed, shot.aim.launch, shot.flight.impact};
+    const mt::Stamped sent = mt::stamp(trajectoryStampCount_, shot.aim.pitch, shot.aim.speed, shot.aim.launch,
+                                       shot.flight.impact);
     owner_.getSocket()->send(UpdateMissileTrajectoryPacket::build(mover, spellId, sent.pitch, sent.speed,
                                                                   sent.launch, sent.impact, mover, shot.wire));
     LOG_INFO("Aimed cast ", spellId, " updated: pitch ", sent.pitch, " speed ", sent.speed, " lands in ",

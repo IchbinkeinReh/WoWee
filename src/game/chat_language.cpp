@@ -104,14 +104,16 @@ void appendInCaseOfBytes(std::string& out, const std::string& word, std::string_
 
 }  // namespace
 
-uint32_t stringHash(std::string_view s) {
+uint32_t stringHash(std::string_view s, bool foldCase) {
     uint32_t seed = 0x7fed7fedu;
     uint32_t shift = 0xeeeeeeeeu;
     for (char ch : s) {
         uint32_t c = static_cast<uint8_t>(ch);
         if (c == 0) break;
-        if (c - 0x61u < 0x1a) c -= 0x20;
-        if (c == 0x2f) c = 0x5c;
+        if (foldCase) {
+            if (c - 0x61u < 0x1a) c -= 0x20;
+            if (c == 0x2f) c = 0x5c;
+        }
         seed = (seed + shift) ^ (kHashTable[c >> 4] - kHashTable[c & 0xf]);
         shift = shift * 33 + c + 3 + seed;
     }

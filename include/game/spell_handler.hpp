@@ -780,6 +780,9 @@ public:
     /// active mover's current cast, the aimed cast of that spell is let go
     /// (0x006fbe80).
     void castEnded(uint64_t caster, uint8_t castCount, uint32_t spellId);
+    /// 0x006e6b40 -> 0x007fe510: the active player's object made, its
+    /// guid's low half starts the aimed shot's stamp count.
+    void seedTrajectoryStamp(uint32_t guidLow) { trajectoryStampCount_ = guidLow; }
     /// CMSG_UPDATE_PROJECTILE_POSITION (0x00703640), point in wire
     /// coordinates.
     void sendProjectilePosition(uint64_t casterGuid, uint32_t spellId, uint8_t castCount, const glm::vec3& point);
@@ -896,6 +899,8 @@ private:
     void updateMissileTrajectory();
     /// The aimed cast the active mover has going (+0xf68..+0xf78).
     missile_trajectory::AimState aimState_;
+    /// 0x00d3f4ec.
+    uint32_t trajectoryStampCount_ = 0;
     /// The active mover's current cast as SMSG_SPELL_START set it (+0xa5c,
     /// +0xa60), which 0x00805180 finds the cast object by.
     struct MoverCast {
