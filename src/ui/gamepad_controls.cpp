@@ -165,6 +165,10 @@ void GamepadControls::holdMouseButton(int button, bool held) {
     ImGui::GetIO().AddMouseButtonEvent(button == SDL_BUTTON_RIGHT ? 1 : 0, held);
 }
 
+bool GamepadControls::cursorTurnedOff() const {
+    return enabled_ && inWorld_ && !pointerMode_ && core::gamepad().isConnected();
+}
+
 void GamepadControls::setPointerMode(bool on) {
     if (pointerMode_ == on) return;
     pointerMode_ = on;

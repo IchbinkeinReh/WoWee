@@ -239,6 +239,11 @@ wowee_add_test(test_npc_text
 wowee_add_test(test_arena_opponents
     SOURCES test_arena_opponents.cpp)
 
+# The mouseover picked while the cursor is off (0x005220b0, 0x00519e80).
+# Header-only.
+wowee_add_test(test_soft_interact
+    SOURCES test_soft_interact.cpp)
+
 # UNIT_COMBAT's flag and action words (0x005132c0). Header-only.
 wowee_add_test(test_unit_combat
     SOURCES test_unit_combat.cpp)

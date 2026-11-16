@@ -245,6 +245,12 @@ public:
     /// button means on a desktop and a dragging finger means on a phone.
     [[nodiscard]] bool isSteering() const { return steering_; }
 
+    /// The pad drives the world with its pointer put away (Back): the
+    /// client's cursor turned off, as its TOGGLEMOUSE binding turns it off
+    /// (the input control's +0x58 bit 0 clear), when the mouseover is the
+    /// object ahead rather than the one under a pointer (0x005220b0).
+    [[nodiscard]] bool cursorTurnedOff() const;
+
     /// Whether a connected pad is allowed to drive anything.
     void setEnabled(bool enabled);
     [[nodiscard]] bool isEnabled() const { return enabled_; }
