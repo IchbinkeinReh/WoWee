@@ -166,6 +166,21 @@ const go_use::LockRow* GameHandler::gameObjectLock(const GameObjectFacts& f) con
     return it != rows.end() ? &it->second : nullptr;
 }
 
+std::pair<std::string, uint32_t> GameHandler::chestLockCursor(const GameObject& go,
+                                                              const GameObjectQueryResponseData* info) const {
+    const auto* lock = gameObjectLock(gameObjectFacts(go, info));
+    if (!lock || lock->index[0] == 0) return {};
+    auto* am = services_.assetManager;
+    auto dbc = am && am->isInitialized() ? am->loadDBC("LockType.dbc") : nullptr;
+    if (!dbc || !dbc->isLoaded()) return {};
+    const int32_t row = dbc->findRecordById(lock->index[0]);
+    // id, Name, ResourceName and Verb (seventeen fields each), then
+    // CursorName - the record's fifth field once loaded (+0x10).
+    constexpr uint32_t kCursorNameField = 52;
+    if (row < 0 || dbc->getFieldCount() <= kCursorNameField) return {};
+    return {dbc->getString(static_cast<uint32_t>(row), kCursorNameField), lock->index[0]};
+}
+
 std::optional<GameHandler::CarriedItem> GameHandler::findCarriedItem(uint32_t itemId) const {
     // 0x00754a20: the item anywhere the player carries it.
     const Inventory& inv = getInventory();

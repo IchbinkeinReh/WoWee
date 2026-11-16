@@ -125,6 +125,20 @@ inline const char* cursorArtForKind(int kind) {
     return kArt[kind];
 }
 
+/// 0x00616280: the kind whose art is `name`, compared without case, among
+/// kinds 1 to 0x34; none for a name the table lacks.
+inline int cursorKindForArt(const std::string& name) {
+    const auto lower = [](char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; };
+    for (int kind = 1; kind < kCursorKindCustom; ++kind) {
+        const char* art = cursorArtForKind(kind);
+        size_t i = 0;
+        for (; art[i] && i < name.size(); ++i)
+            if (lower(art[i]) != lower(name[i])) break;
+        if (art[i] == '\0' && i == name.size()) return kind;
+    }
+    return kCursorKindNone;
+}
+
 /// The path of a kind's art, in the form the rest of this client loads cursors
 /// by - the same string the reference formats at load time. Empty for a kind
 /// with no art of its own.

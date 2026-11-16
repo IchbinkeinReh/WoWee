@@ -90,6 +90,9 @@ TEST_CASE("the WotLK gameobject query reads three strings before the data",
     CHECK(data.type == 3);
     CHECK(data.displayId == 0xD15);
     CHECK(data.name == "Copper Vein");
+    // The first of the three is IconName, the cursor the object wears
+    // (0x0070ce10).
+    CHECK(data.iconName == "Attack");
     REQUIRE(data.hasData);
     // The whole point of the count: data[0] is the first field after the
     // strings, and one string too few or too many puts something else there.

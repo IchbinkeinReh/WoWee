@@ -2057,6 +2057,9 @@ struct GameObjectQueryResponseData {
     std::string name;
     uint32_t type = 0;       // GameObjectType (e.g. 3=chest, 2=questgiver, 15=MO_TRANSPORT)
     uint32_t displayId = 0;
+    /// The template's IconName (+8 of the client's cache record): the cursor
+    /// the object wears (0x0070ce10). Empty on vanilla, which has none.
+    std::string iconName;
     uint32_t data[24] = {};  // Type-specific data fields (e.g. data[0]=taxiPathId for MO_TRANSPORT)
     bool hasData = false;    // Whether data[] was parsed
     /// The template's size, after the data fields (+0x74 in the client's

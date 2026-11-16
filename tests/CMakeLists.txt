@@ -4157,3 +4157,6 @@ wowee_add_test(test_predicted_health SOURCES test_predicted_health.cpp)
 
 # CalculateAuctionDeposit's arithmetic (auction_deposit.hpp).
 wowee_add_test(test_auction_deposit SOURCES test_auction_deposit.cpp)
+
+# The cursor table looked up by art name (ui/cursor_art.hpp).
+wowee_add_test(test_cursor_art SOURCES test_cursor_art.cpp)

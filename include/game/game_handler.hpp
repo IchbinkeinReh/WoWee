@@ -1552,6 +1552,11 @@ public:
     std::optional<GroundTargetAim> aimGroundTarget(std::optional<ground_target::Place> place);
     void cancelAura(uint32_t spellId);
     void cancelOpenStableAuras();
+    /// A chest's cursor from its lock (0x0070f9b0): the LockType.dbc row its
+    /// Lock.dbc row's first Index names, that row's CursorName and its id.
+    /// Empty when the lock has no such row or the row no cursor.
+    std::pair<std::string, uint32_t> chestLockCursor(const GameObject& go,
+                                                     const GameObjectQueryResponseData* info) const;
     /// 0x00725bf0's ring: the player's charm, else its summon, and the
     /// milliseconds since its UNIT_FIELD_TARGET was written, while that is
     /// under a second.
