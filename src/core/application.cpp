@@ -3754,6 +3754,292 @@ void Application::connectClickToMoveHooks() {
     }
 }
 
+void Application::connectSpellVisualHooks() {
+    // Which units hold a kit's weapon effects, and at what scale
+    // (0x0073a6c0, 0x006f8c50), and the rest of the spell visual system's
+    // view of the game.
+    if (!gameHandler) return;
+    if (auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr) {
+        svs->setWeaponEffectHolder([this](uint32_t renderInstanceId) -> std::optional<float> {
+            if (!entitySpawner_) return 1.0f;
+            return entitySpawner_->kitWeaponEffectHolder(renderInstanceId);
+        });
+        // The aura state kits: the unit's model, its spell's
+        // visual, its kits' scale, and whether it shows its
+        // Flags 8 kits (0x00720400).
+        svs->setCameraShakeSink([this](const rendering::camera_shake::Shake& shake, const glm::vec3& at) {
+            if (renderer && renderer->getCameraController())
+                renderer->getCameraController()->addCameraShake(shake, at);
+        });
+        svs->setAttachedEffectScale([this](uint32_t renderInstanceId) {
+            return entitySpawner_ ? entitySpawner_->kitAttachedEffectScale(renderInstanceId) : 1.0f;
+        });
+        svs->setWorldEffectScale([this](uint32_t renderInstanceId) {
+            return entitySpawner_ ? entitySpawner_->kitWorldEffectScale(renderInstanceId) : 1.0f;
+        });
+        // What a kit's CharProc procedures read: its spell's cast
+        // time and aim, the unit's creature type flags, and the
+        // light the tint goes to.
+        svs->setKitSpellResolver([this](uint32_t spellId) {
+            rendering::SpellVisualSystem::KitSpellInfo info;
+            if (!gameHandler) return info;
+            info.castTimeMs = gameHandler->getSpellData(spellId).castTimeMs;
+            info.targetKind = gameHandler->getSpellTargetKind(spellId);
+            info.mounts = gameHandler->spellAppliesMountedAura(spellId);
+            info.requiredVision = gameHandler->spellRequiredVision(spellId);
+            return info;
+        });
+        svs->setPlayerVisionResolver([this]() -> uint32_t {
+            return gameHandler ? gameHandler->playerAuraVision() : 0u;
+        });
+        // A kit's animation on the unit it is played on (0x0073b140), the
+        // player's as any unit's.
+        svs->setKitAnimationSink([this](const rendering::SpellVisualSystem::KitAnimationPlay& play) {
+            auto* cr = renderer ? renderer->getCharacterRenderer() : nullptr;
+            if (!cr) return;
+            cr->playKitAnimation(play.renderInstanceId,
+                                 {.type = play.type,
+                                  .startAnim = play.startAnim,
+                                  .anim = play.anim,
+                                  .kitFlags = play.kitFlags,
+                                  .castTime = play.castTime,
+                                  .castKitAnim = play.castKitAnim});
+        });
+        svs->setUnitTypeFlags([this](uint32_t renderInstanceId) {
+            return entitySpawner_ ? entitySpawner_->creatureTypeFlags(renderInstanceId) : 0u;
+        });
+        svs->setLightTintSink([this](const glm::vec3& colour, uint32_t amount) {
+            if (renderer && renderer->getLightingManager())
+                renderer->getLightingManager()->setSpellLightTint(colour, amount);
+        });
+        svs->setUnitInstanceResolver([this](uint64_t guid) -> uint32_t {
+            return gameHandler ? gameHandler->resolveUnitRenderInstance(guid) : 0;
+        });
+        svs->setUnitMountInstanceResolver([this](uint64_t guid) -> uint32_t {
+            if (!entitySpawner_ || !gameHandler) return 0;
+            if (guid == gameHandler->getPlayerGuid()) return entitySpawner_->getMountInstanceId();
+            return entitySpawner_->remotePlayerMountInstance(guid);
+        });
+        // CharProc 16's mount transition (0x006f9670): the
+        // spell's mount, its model, whether the unit rides, and
+        // where it is handed over.
+        svs->setActivePlayerResolver([this]() -> uint64_t {
+            return gameHandler ? gameHandler->getPlayerGuid() : 0;
+        });
+        svs->setMountDisplayResolver([this](uint32_t spellId) -> std::optional<uint32_t> {
+            if (!gameHandler) return std::nullopt;
+            const uint32_t entry = gameHandler->getSpellMountCreature(spellId);
+            if (entry == 0) return std::nullopt;
+            const auto& cache = gameHandler->getCreatureInfoCache();
+            auto it = cache.find(entry);
+            if (it == cache.end()) {
+                gameHandler->queryCreatureInfo(entry, 0);
+                return 0u;
+            }
+            if (it->second.displayId[0] == 0) return std::nullopt;
+            return it->second.displayId[0];
+        });
+        svs->setMountModelLoader([this](uint32_t displayId) -> uint32_t {
+            return entitySpawner_ ? entitySpawner_->loadMountModel(displayId) : 0u;
+        });
+        svs->setUnitScaleResolver([this](uint64_t guid) -> float {
+            return entitySpawner_ ? entitySpawner_->unitModelScale(guid) : 1.0f;
+        });
+        auto mountField = [this](uint64_t guid) -> uint32_t {
+            if (!gameHandler) return 0;
+            if (guid == gameHandler->getPlayerGuid()) return gameHandler->isMounted() ? 1u : 0u;
+            auto entity = gameHandler->getEntityManager().getEntity(guid);
+            if (!entity || !entity->isUnit()) return 0;
+            return static_cast<const game::Unit&>(*entity).getMountDisplayId();
+        };
+        svs->setUnitMountedQuery([mountField](uint64_t guid) { return mountField(guid) != 0; });
+        svs->setUnitMountFieldQuery([this](uint64_t guid) -> uint32_t {
+            if (!gameHandler) return 0;
+            if (guid == gameHandler->getPlayerGuid()) return gameHandler->currentMountDisplayIdRef();
+            auto entity = gameHandler->getEntityManager().getEntity(guid);
+            if (!entity || !entity->isUnit()) return 0;
+            return static_cast<const game::Unit&>(*entity).getMountDisplayId();
+        });
+        svs->setMountSink([this](uint64_t guid, uint32_t displayId) {
+            if (!entitySpawner_ || !gameHandler) return;
+            // Any unit: a creature's transition hands it over
+            // as a player's does (0x007412b0, 0x00740450).
+            const bool player = guid == gameHandler->getPlayerGuid();
+            if (player || entitySpawner_->isPlayerSpawned(guid) ||
+                entitySpawner_->getCreatureInstanceId(guid) != 0)
+                entitySpawner_->mountUnitNow(guid, displayId, player);
+        });
+        svs->setGroundQuery([this](const glm::vec3& top, const glm::vec3& bottom)
+                                -> std::optional<rendering::mount_transition::GroundHit> {
+            if (!renderer) return std::nullopt;
+            std::optional<float> best;
+            glm::vec3 normal(0.0f, 0.0f, 1.0f);
+            auto consider = [&](std::optional<float> z, const glm::vec3& n) {
+                if (z && *z <= top.z && *z >= bottom.z && (!best || *z > *best)) {
+                    best = z;
+                    normal = n;
+                }
+            };
+            if (auto* terrain = renderer->getTerrainManager()) {
+                const auto z = terrain->getHeightAt(top.x, top.y);
+                const auto zx = terrain->getHeightAt(top.x + 0.5f, top.y);
+                const auto zy = terrain->getHeightAt(top.x, top.y + 0.5f);
+                glm::vec3 n(0.0f, 0.0f, 1.0f);
+                if (z && zx && zy) n = glm::normalize(glm::vec3((*z - *zx) * 2.0f, (*z - *zy) * 2.0f, 1.0f));
+                consider(z, n);
+            }
+            if (auto* wmo = renderer->getWMORenderer()) consider(wmo->getFloorHeight(top.x, top.y, top.z), glm::vec3(0.0f, 0.0f, 1.0f));
+            if (auto* m2 = renderer->getM2Renderer()) consider(m2->getFloorHeight(top.x, top.y, top.z), glm::vec3(0.0f, 0.0f, 1.0f));
+            if (!best) return std::nullopt;
+            const float span = top.z - bottom.z;
+            return rendering::mount_transition::GroundHit{
+                .fraction = span > 0.0f ? (top.z - *best) / span : 0.0f, .normal = normal};
+        });
+        // A transport's matrix, for a dynamic object riding it
+        // (0x007132e0 -> 0x00704910).
+        svs->setTransportFrameQuery([this](uint64_t transportGuid) -> std::optional<glm::mat4> {
+            auto* transports = gameHandler ? gameHandler->getTransportManager() : nullptr;
+            return transports ? transports->passengerRenderFrame(transportGuid) : std::nullopt;
+        });
+        svs->setSegmentQuery([this](const glm::vec3& from, const glm::vec3& to) -> std::optional<float> {
+            return renderer ? renderer->intersectSegment(from, to) : std::nullopt;
+        });
+        // A siege missile's collision (0x006fcaa0, 0x006fc4a0, 0x006fbff0):
+        // each unit's place, scale, CreatureModelData collision columns,
+        // kind, the most of its run, swim and flight speeds, and the
+        // vehicle it rides or is.
+        svs->setCollisionUnitsQuery([this](const std::vector<uint64_t>* only) {
+            return missileCollisionUnits(gameHandler.get(), assetManager.get(), entitySpawner_.get(),
+                                         renderer.get(), only);
+        });
+        // CMSG_UPDATE_PROJECTILE_POSITION (0x00703640).
+        svs->setProjectilePositionSink(
+            [this](uint64_t casterGuid, uint32_t spellId, uint8_t castCount, const glm::vec3& point) {
+                if (auto* spells = gameHandler ? gameHandler->getSpellHandler() : nullptr)
+                    spells->sendProjectilePosition(casterGuid, spellId, castCount, point);
+            });
+        svs->setSpellVisualResolver([this](uint32_t spellId) -> uint32_t {
+            return gameHandler ? gameHandler->getSpellVisualId(spellId) : 0;
+        });
+        // Whose spell sounds keep their voice: the active mover's and the
+        // listener object's (0x007022d0, 0x006f9840, 0x006f7e40).
+        svs->setActiveUnitsQuery([this]() {
+            rendering::SpellVisualSystem::ActiveUnits units;
+            if (gameHandler) {
+                units.mover = gameHandler->activeMover();
+                units.listener = gameHandler->listenerObject();
+            }
+            return units;
+        });
+        // 0x004fa5f0: the sound listener at the listener object
+        // (0x007450b0) while Sound_ListenerAtCharacter is on - a unit
+        // facing its own way (0x004f6a90), anything else the camera's.
+        renderer->setSoundListenerAnchorQuery([this]() -> std::optional<audio::sound_listener::Anchor> {
+            if (!gameHandler || !renderer) return std::nullopt;
+            if (addons::storedCVarValue("Sound_ListenerAtCharacter", "1") == "0") return std::nullopt;
+            const uint64_t guid = gameHandler->listenerObject();
+            const auto entity = guid != 0 ? gameHandler->getEntityManager().getEntity(guid) : nullptr;
+            if (!entity) return std::nullopt;
+            audio::sound_listener::Anchor anchor;
+            if (guid == gameHandler->getPlayerGuid()) {
+                // The renderer's own character is where the player is drawn.
+                anchor.position = renderer->getCharacterPosition();
+                anchor.facing = audio::sound_listener::levelFacing(glm::radians(renderer->getCharacterYaw()));
+            } else {
+                anchor.position = core::coords::canonicalToRender(
+                    glm::vec3(entity->getX(), entity->getY(), entity->getZ()));
+                if (entity->isUnit()) {
+                    // Render yaw is canonical yaw plus a quarter turn.
+                    anchor.facing = audio::sound_listener::levelFacing(
+                        glm::radians(core::coords::canonicalToCharacterYawDeg(entity->getOrientation())));
+                }
+            }
+            return anchor;
+        });
+        // 0x006f7b00: a spell effect's $SND on the active mover's unit.
+        renderer->getM2EventSounds().setMoverInstanceQuery([this]() -> uint32_t {
+            return gameHandler ? gameHandler->resolveUnitRenderInstance(gameHandler->activeMover()) : 0;
+        });
+        // 0x00804cc0: a dynamic object waits on its cast's missile.
+        svs->setMissileInFlightQuery([this](uint64_t caster, uint32_t spellId, uint32_t castTime) {
+            return gameHandler && gameHandler->isSpellMissileInFlight(caster, spellId, castTime);
+        });
+        // A chain's ends (0x007fae90): the unit an instance
+        // draws, its height, and a game object's place.
+        svs->setInstanceUnitResolver([this](uint32_t renderInstanceId) -> uint64_t {
+            return entitySpawner_ ? entitySpawner_->unitGuidForInstance(renderInstanceId) : 0;
+        });
+        svs->setUnitHeight([this](uint32_t renderInstanceId) {
+            return entitySpawner_ ? entitySpawner_->unitGeoBoxHeight(renderInstanceId) : 0.0f;
+        });
+        svs->setMeleeDrawnQuery([this](uint64_t guid) {
+            if (gameHandler && guid == gameHandler->getPlayerGuid())
+                return appearanceComposer_ && appearanceComposer_->sheathState() == core::SheathState::Melee;
+            return entitySpawner_ && entitySpawner_->unitMeleeDrawn(guid);
+        });
+        // A kit's worn item (CharProc 17): the player's own
+        // drawing, or another player's equipment.
+        svs->setWornItemSink([this](uint64_t guid, int equipSlot, uint32_t displayId,
+                                    uint8_t inventoryType) {
+            if (!gameHandler) return;
+            if (guid == gameHandler->getPlayerGuid()) {
+                if (appearanceComposer_)
+                    appearanceComposer_->setItemOverride(equipSlot, displayId, inventoryType);
+                gameHandler->markOnlineEquipmentDirty();
+                return;
+            }
+            if (!entitySpawner_) return;
+            if (entitySpawner_->isPlayerSpawned(guid)) {
+                entitySpawner_->setPlayerItemOverride(guid, equipSlot, displayId, inventoryType);
+            } else if (equipSlot == rendering::spell_kit::equipSlotForComponentSlot(0)) {
+                // Any other unit's head only (0x006f82d0).
+                entitySpawner_->setNpcHeadItem(guid, displayId);
+            }
+        });
+        svs->setObjectFrameResolver([this](uint64_t guid, glm::mat4& frame) {
+            auto entity = gameHandler ? gameHandler->getEntityManager().getEntity(guid) : nullptr;
+            if (!entity || entity->getType() != game::ObjectType::GAMEOBJECT) return false;
+            const glm::vec3 at = core::coords::canonicalToRender(
+                glm::vec3(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ()));
+            frame = glm::rotate(glm::translate(glm::mat4(1.0f), at),
+                                entity->getOrientation() + glm::half_pi<float>(), glm::vec3(0.0f, 0.0f, 1.0f));
+            return true;
+        });
+        svs->setUnarmedKitsQuery([this](uint64_t guid) {
+            if (gameHandler && guid == gameHandler->getPlayerGuid())
+                return appearanceComposer_ && appearanceComposer_->unarmedKitsShown();
+            return entitySpawner_ && entitySpawner_->unarmedKitsShown(guid);
+        });
+        // 0x00702db0: a unit whose health is below 1 takes no wound
+        // from a missile.
+        // A bouncing missile's next target (0x007022d0): the unit the
+        // client knows by that guid (0x004d4db0, mask 8), where it is.
+        svs->setUnitEndResolver([this](uint64_t guid, rendering::SpellVisualSystem::MissileEnd& end) {
+            if (!gameHandler) return false;
+            if (guid == gameHandler->getPlayerGuid() && renderer) {
+                end.position = renderer->getCharacterPosition();
+            } else {
+                auto entity = gameHandler->getEntityManager().getEntity(guid);
+                if (!entity || !entity->isUnit()) return false;
+                end.position = core::coords::canonicalToRender(
+                    glm::vec3(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ()));
+            }
+            end.renderInstanceId = gameHandler->resolveUnitRenderInstance(guid);
+            return true;
+        });
+        // UNIT_COMBAT for a missed unit as the missile lands
+        // (0x00702fc0, 0x00700e20).
+        svs->setMissileMissSink([this](uint32_t spellId, uint64_t caster, uint64_t guid, uint32_t reason) {
+            if (gameHandler) gameHandler->fireSpellMissileMiss(spellId, caster, guid, reason);
+        });
+        svs->setUnitDeadQuery([this](uint64_t guid) {
+            auto entity = gameHandler ? gameHandler->getEntityManager().getEntity(guid) : nullptr;
+            const auto* unit = dynamic_cast<const game::Unit*>(entity.get());
+            return unit && unit->getHealth() < 1;
+        });
+    }
+}
+
 void Application::connectWorldHooks() {
     // Wire up movement opcodes from camera controller
     if (renderer && renderer->getCameraController()) {
@@ -3921,287 +4207,7 @@ void Application::connectWorldHooks() {
         gameHandler->setSpellMissCallback([this](uint64_t caster, uint64_t target, uint8_t missType, uint32_t spellId) {
             if (entitySpawner_) entitySpawner_->onSpellMiss(caster, target, missType, spellId);
         });
-        // Which units hold a kit's weapon effects, and at what scale
-        // (0x0073a6c0, 0x006f8c50).
-        if (auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr) {
-            svs->setWeaponEffectHolder([this](uint32_t renderInstanceId) -> std::optional<float> {
-                if (!entitySpawner_) return 1.0f;
-                return entitySpawner_->kitWeaponEffectHolder(renderInstanceId);
-            });
-            // The aura state kits: the unit's model, its spell's
-            // visual, its kits' scale, and whether it shows its
-            // Flags 8 kits (0x00720400).
-            svs->setCameraShakeSink([this](const rendering::camera_shake::Shake& shake, const glm::vec3& at) {
-                if (renderer && renderer->getCameraController())
-                    renderer->getCameraController()->addCameraShake(shake, at);
-            });
-            svs->setAttachedEffectScale([this](uint32_t renderInstanceId) {
-                return entitySpawner_ ? entitySpawner_->kitAttachedEffectScale(renderInstanceId) : 1.0f;
-            });
-            svs->setWorldEffectScale([this](uint32_t renderInstanceId) {
-                return entitySpawner_ ? entitySpawner_->kitWorldEffectScale(renderInstanceId) : 1.0f;
-            });
-            // What a kit's CharProc procedures read: its spell's cast
-            // time and aim, the unit's creature type flags, and the
-            // light the tint goes to.
-            svs->setKitSpellResolver([this](uint32_t spellId) {
-                rendering::SpellVisualSystem::KitSpellInfo info;
-                if (!gameHandler) return info;
-                info.castTimeMs = gameHandler->getSpellData(spellId).castTimeMs;
-                info.targetKind = gameHandler->getSpellTargetKind(spellId);
-                info.mounts = gameHandler->spellAppliesMountedAura(spellId);
-                info.requiredVision = gameHandler->spellRequiredVision(spellId);
-                return info;
-            });
-            svs->setPlayerVisionResolver([this]() -> uint32_t {
-                return gameHandler ? gameHandler->playerAuraVision() : 0u;
-            });
-            // A kit's animation on the unit it is played on (0x0073b140), the
-            // player's as any unit's.
-            svs->setKitAnimationSink([this](const rendering::SpellVisualSystem::KitAnimationPlay& play) {
-                auto* cr = renderer ? renderer->getCharacterRenderer() : nullptr;
-                if (!cr) return;
-                cr->playKitAnimation(play.renderInstanceId,
-                                     {.type = play.type,
-                                      .startAnim = play.startAnim,
-                                      .anim = play.anim,
-                                      .kitFlags = play.kitFlags,
-                                      .castTime = play.castTime,
-                                      .castKitAnim = play.castKitAnim});
-            });
-            svs->setUnitTypeFlags([this](uint32_t renderInstanceId) {
-                return entitySpawner_ ? entitySpawner_->creatureTypeFlags(renderInstanceId) : 0u;
-            });
-            svs->setLightTintSink([this](const glm::vec3& colour, uint32_t amount) {
-                if (renderer && renderer->getLightingManager())
-                    renderer->getLightingManager()->setSpellLightTint(colour, amount);
-            });
-            svs->setUnitInstanceResolver([this](uint64_t guid) -> uint32_t {
-                return gameHandler ? gameHandler->resolveUnitRenderInstance(guid) : 0;
-            });
-            svs->setUnitMountInstanceResolver([this](uint64_t guid) -> uint32_t {
-                if (!entitySpawner_ || !gameHandler) return 0;
-                if (guid == gameHandler->getPlayerGuid()) return entitySpawner_->getMountInstanceId();
-                return entitySpawner_->remotePlayerMountInstance(guid);
-            });
-            // CharProc 16's mount transition (0x006f9670): the
-            // spell's mount, its model, whether the unit rides, and
-            // where it is handed over.
-            svs->setActivePlayerResolver([this]() -> uint64_t {
-                return gameHandler ? gameHandler->getPlayerGuid() : 0;
-            });
-            svs->setMountDisplayResolver([this](uint32_t spellId) -> std::optional<uint32_t> {
-                if (!gameHandler) return std::nullopt;
-                const uint32_t entry = gameHandler->getSpellMountCreature(spellId);
-                if (entry == 0) return std::nullopt;
-                const auto& cache = gameHandler->getCreatureInfoCache();
-                auto it = cache.find(entry);
-                if (it == cache.end()) {
-                    gameHandler->queryCreatureInfo(entry, 0);
-                    return 0u;
-                }
-                if (it->second.displayId[0] == 0) return std::nullopt;
-                return it->second.displayId[0];
-            });
-            svs->setMountModelLoader([this](uint32_t displayId) -> uint32_t {
-                return entitySpawner_ ? entitySpawner_->loadMountModel(displayId) : 0u;
-            });
-            svs->setUnitScaleResolver([this](uint64_t guid) -> float {
-                return entitySpawner_ ? entitySpawner_->unitModelScale(guid) : 1.0f;
-            });
-            auto mountField = [this](uint64_t guid) -> uint32_t {
-                if (!gameHandler) return 0;
-                if (guid == gameHandler->getPlayerGuid()) return gameHandler->isMounted() ? 1u : 0u;
-                auto entity = gameHandler->getEntityManager().getEntity(guid);
-                if (!entity || !entity->isUnit()) return 0;
-                return static_cast<const game::Unit&>(*entity).getMountDisplayId();
-            };
-            svs->setUnitMountedQuery([mountField](uint64_t guid) { return mountField(guid) != 0; });
-            svs->setUnitMountFieldQuery([this](uint64_t guid) -> uint32_t {
-                if (!gameHandler) return 0;
-                if (guid == gameHandler->getPlayerGuid()) return gameHandler->currentMountDisplayIdRef();
-                auto entity = gameHandler->getEntityManager().getEntity(guid);
-                if (!entity || !entity->isUnit()) return 0;
-                return static_cast<const game::Unit&>(*entity).getMountDisplayId();
-            });
-            svs->setMountSink([this](uint64_t guid, uint32_t displayId) {
-                if (!entitySpawner_ || !gameHandler) return;
-                // Any unit: a creature's transition hands it over
-                // as a player's does (0x007412b0, 0x00740450).
-                const bool player = guid == gameHandler->getPlayerGuid();
-                if (player || entitySpawner_->isPlayerSpawned(guid) ||
-                    entitySpawner_->getCreatureInstanceId(guid) != 0)
-                    entitySpawner_->mountUnitNow(guid, displayId, player);
-            });
-            svs->setGroundQuery([this](const glm::vec3& top, const glm::vec3& bottom)
-                                    -> std::optional<rendering::mount_transition::GroundHit> {
-                if (!renderer) return std::nullopt;
-                std::optional<float> best;
-                glm::vec3 normal(0.0f, 0.0f, 1.0f);
-                auto consider = [&](std::optional<float> z, const glm::vec3& n) {
-                    if (z && *z <= top.z && *z >= bottom.z && (!best || *z > *best)) {
-                        best = z;
-                        normal = n;
-                    }
-                };
-                if (auto* terrain = renderer->getTerrainManager()) {
-                    const auto z = terrain->getHeightAt(top.x, top.y);
-                    const auto zx = terrain->getHeightAt(top.x + 0.5f, top.y);
-                    const auto zy = terrain->getHeightAt(top.x, top.y + 0.5f);
-                    glm::vec3 n(0.0f, 0.0f, 1.0f);
-                    if (z && zx && zy) n = glm::normalize(glm::vec3((*z - *zx) * 2.0f, (*z - *zy) * 2.0f, 1.0f));
-                    consider(z, n);
-                }
-                if (auto* wmo = renderer->getWMORenderer()) consider(wmo->getFloorHeight(top.x, top.y, top.z), glm::vec3(0.0f, 0.0f, 1.0f));
-                if (auto* m2 = renderer->getM2Renderer()) consider(m2->getFloorHeight(top.x, top.y, top.z), glm::vec3(0.0f, 0.0f, 1.0f));
-                if (!best) return std::nullopt;
-                const float span = top.z - bottom.z;
-                return rendering::mount_transition::GroundHit{
-                    .fraction = span > 0.0f ? (top.z - *best) / span : 0.0f, .normal = normal};
-            });
-            // A transport's matrix, for a dynamic object riding it
-            // (0x007132e0 -> 0x00704910).
-            svs->setTransportFrameQuery([this](uint64_t transportGuid) -> std::optional<glm::mat4> {
-                auto* transports = gameHandler ? gameHandler->getTransportManager() : nullptr;
-                return transports ? transports->passengerRenderFrame(transportGuid) : std::nullopt;
-            });
-            svs->setSegmentQuery([this](const glm::vec3& from, const glm::vec3& to) -> std::optional<float> {
-                return renderer ? renderer->intersectSegment(from, to) : std::nullopt;
-            });
-            // A siege missile's collision (0x006fcaa0, 0x006fc4a0, 0x006fbff0):
-            // each unit's place, scale, CreatureModelData collision columns,
-            // kind, the most of its run, swim and flight speeds, and the
-            // vehicle it rides or is.
-            svs->setCollisionUnitsQuery([this](const std::vector<uint64_t>* only) {
-                return missileCollisionUnits(gameHandler.get(), assetManager.get(), entitySpawner_.get(),
-                                             renderer.get(), only);
-            });
-            // CMSG_UPDATE_PROJECTILE_POSITION (0x00703640).
-            svs->setProjectilePositionSink(
-                [this](uint64_t casterGuid, uint32_t spellId, uint8_t castCount, const glm::vec3& point) {
-                    if (auto* spells = gameHandler ? gameHandler->getSpellHandler() : nullptr)
-                        spells->sendProjectilePosition(casterGuid, spellId, castCount, point);
-                });
-            svs->setSpellVisualResolver([this](uint32_t spellId) -> uint32_t {
-                return gameHandler ? gameHandler->getSpellVisualId(spellId) : 0;
-            });
-            // Whose spell sounds keep their voice: the active mover's and the
-            // listener object's (0x007022d0, 0x006f9840, 0x006f7e40).
-            svs->setActiveUnitsQuery([this]() {
-                rendering::SpellVisualSystem::ActiveUnits units;
-                if (gameHandler) {
-                    units.mover = gameHandler->activeMover();
-                    units.listener = gameHandler->listenerObject();
-                }
-                return units;
-            });
-            // 0x004fa5f0: the sound listener at the listener object
-            // (0x007450b0) while Sound_ListenerAtCharacter is on - a unit
-            // facing its own way (0x004f6a90), anything else the camera's.
-            renderer->setSoundListenerAnchorQuery([this]() -> std::optional<audio::sound_listener::Anchor> {
-                if (!gameHandler || !renderer) return std::nullopt;
-                if (addons::storedCVarValue("Sound_ListenerAtCharacter", "1") == "0") return std::nullopt;
-                const uint64_t guid = gameHandler->listenerObject();
-                const auto entity = guid != 0 ? gameHandler->getEntityManager().getEntity(guid) : nullptr;
-                if (!entity) return std::nullopt;
-                audio::sound_listener::Anchor anchor;
-                if (guid == gameHandler->getPlayerGuid()) {
-                    // The renderer's own character is where the player is drawn.
-                    anchor.position = renderer->getCharacterPosition();
-                    anchor.facing = audio::sound_listener::levelFacing(glm::radians(renderer->getCharacterYaw()));
-                } else {
-                    anchor.position = core::coords::canonicalToRender(
-                        glm::vec3(entity->getX(), entity->getY(), entity->getZ()));
-                    if (entity->isUnit()) {
-                        // Render yaw is canonical yaw plus a quarter turn.
-                        anchor.facing = audio::sound_listener::levelFacing(
-                            glm::radians(core::coords::canonicalToCharacterYawDeg(entity->getOrientation())));
-                    }
-                }
-                return anchor;
-            });
-            // 0x006f7b00: a spell effect's $SND on the active mover's unit.
-            renderer->getM2EventSounds().setMoverInstanceQuery([this]() -> uint32_t {
-                return gameHandler ? gameHandler->resolveUnitRenderInstance(gameHandler->activeMover()) : 0;
-            });
-            // 0x00804cc0: a dynamic object waits on its cast's missile.
-            svs->setMissileInFlightQuery([this](uint64_t caster, uint32_t spellId, uint32_t castTime) {
-                return gameHandler && gameHandler->isSpellMissileInFlight(caster, spellId, castTime);
-            });
-            // A chain's ends (0x007fae90): the unit an instance
-            // draws, its height, and a game object's place.
-            svs->setInstanceUnitResolver([this](uint32_t renderInstanceId) -> uint64_t {
-                return entitySpawner_ ? entitySpawner_->unitGuidForInstance(renderInstanceId) : 0;
-            });
-            svs->setUnitHeight([this](uint32_t renderInstanceId) {
-                return entitySpawner_ ? entitySpawner_->unitGeoBoxHeight(renderInstanceId) : 0.0f;
-            });
-            svs->setMeleeDrawnQuery([this](uint64_t guid) {
-                if (gameHandler && guid == gameHandler->getPlayerGuid())
-                    return appearanceComposer_ && appearanceComposer_->sheathState() == core::SheathState::Melee;
-                return entitySpawner_ && entitySpawner_->unitMeleeDrawn(guid);
-            });
-            // A kit's worn item (CharProc 17): the player's own
-            // drawing, or another player's equipment.
-            svs->setWornItemSink([this](uint64_t guid, int equipSlot, uint32_t displayId,
-                                        uint8_t inventoryType) {
-                if (!gameHandler) return;
-                if (guid == gameHandler->getPlayerGuid()) {
-                    if (appearanceComposer_)
-                        appearanceComposer_->setItemOverride(equipSlot, displayId, inventoryType);
-                    gameHandler->markOnlineEquipmentDirty();
-                    return;
-                }
-                if (!entitySpawner_) return;
-                if (entitySpawner_->isPlayerSpawned(guid)) {
-                    entitySpawner_->setPlayerItemOverride(guid, equipSlot, displayId, inventoryType);
-                } else if (equipSlot == rendering::spell_kit::equipSlotForComponentSlot(0)) {
-                    // Any other unit's head only (0x006f82d0).
-                    entitySpawner_->setNpcHeadItem(guid, displayId);
-                }
-            });
-            svs->setObjectFrameResolver([this](uint64_t guid, glm::mat4& frame) {
-                auto entity = gameHandler ? gameHandler->getEntityManager().getEntity(guid) : nullptr;
-                if (!entity || entity->getType() != game::ObjectType::GAMEOBJECT) return false;
-                const glm::vec3 at = core::coords::canonicalToRender(
-                    glm::vec3(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ()));
-                frame = glm::rotate(glm::translate(glm::mat4(1.0f), at),
-                                    entity->getOrientation() + glm::half_pi<float>(), glm::vec3(0.0f, 0.0f, 1.0f));
-                return true;
-            });
-            svs->setUnarmedKitsQuery([this](uint64_t guid) {
-                if (gameHandler && guid == gameHandler->getPlayerGuid())
-                    return appearanceComposer_ && appearanceComposer_->unarmedKitsShown();
-                return entitySpawner_ && entitySpawner_->unarmedKitsShown(guid);
-            });
-            // 0x00702db0: a unit whose health is below 1 takes no wound
-            // from a missile.
-            // A bouncing missile's next target (0x007022d0): the unit the
-            // client knows by that guid (0x004d4db0, mask 8), where it is.
-            svs->setUnitEndResolver([this](uint64_t guid, rendering::SpellVisualSystem::MissileEnd& end) {
-                if (!gameHandler) return false;
-                if (guid == gameHandler->getPlayerGuid() && renderer) {
-                    end.position = renderer->getCharacterPosition();
-                } else {
-                    auto entity = gameHandler->getEntityManager().getEntity(guid);
-                    if (!entity || !entity->isUnit()) return false;
-                    end.position = core::coords::canonicalToRender(
-                        glm::vec3(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ()));
-                }
-                end.renderInstanceId = gameHandler->resolveUnitRenderInstance(guid);
-                return true;
-            });
-            // UNIT_COMBAT for a missed unit as the missile lands
-            // (0x00702fc0, 0x00700e20).
-            svs->setMissileMissSink([this](uint32_t spellId, uint64_t caster, uint64_t guid, uint32_t reason) {
-                if (gameHandler) gameHandler->fireSpellMissileMiss(spellId, caster, guid, reason);
-            });
-            svs->setUnitDeadQuery([this](uint64_t guid) {
-                auto entity = gameHandler ? gameHandler->getEntityManager().getEntity(guid) : nullptr;
-                const auto* unit = dynamic_cast<const game::Unit*>(entity.get());
-                return unit && unit->getHealth() < 1;
-            });
-        }
+        connectSpellVisualHooks();
         // Whether a text emote is sent, and the player's weapons put
         // away when it is (0x006dd9e0).
         gameHandler->setTextEmoteGateCallback([this](uint32_t textEmoteId) {

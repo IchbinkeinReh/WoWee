@@ -785,9 +785,15 @@ CHECKS = [
     # factionReactionToPlayer, which is a question rather than a verb - how a
     # game object's faction regards the player, for the pointer over it
     # (0x0070edd0). UnitReaction answers it for units; FrameXML has nothing
-    # that asks it of a game object. The thirty-eighth is the one to look at.
+    # that asks it of a game object. Forty since 2026-11-16: the world
+    # frame's own input - click to move (clickToMoveTo and its kin, clickDeadUnit,
+    # 0x004f7880 / 0x00731260), the world pick (worldPickFlags, worldPickTakes,
+    # 0x004f9930 / 0x004f7650) and the cursor-off pick of the object ahead
+    # (softInteractTarget, npcServiceOffered, 0x00519e80 / 0x00729620). The
+    # client answers these in WorldFrame's input handler, which FrameXML does
+    # not reach either. The forty-first is the one to look at.
     ("framexml_unreachable_verbs.py",
-     r"^(\d+) verbs this client's own windows can reach", 37,
+     r"^(\d+) verbs this client's own windows can reach", 40,
      "verbs only this client's own windows could reach"),
     # Emote tokens FrameXML can hand DoEmote that it cannot answer. One,
     # named "unused", which is a placeholder in FrameXML's own list. It was

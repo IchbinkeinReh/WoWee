@@ -249,6 +249,7 @@ private:
     /// Click-to-move's part of it: the camera's steer and cancel, and the
     /// ground under a place.
     void connectClickToMoveHooks();
+    void connectSpellVisualHooks();
     /// Every portrait and model view the interface draws, let go of with
     /// their offscreen targets.
     void shutdownPortraits();
