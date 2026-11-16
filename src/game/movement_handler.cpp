@@ -4,6 +4,7 @@
 #include "game/game_utils.hpp"
 #include "game/inventory_handler.hpp"
 #include "rendering/renderer.hpp"
+#include "rendering/camera_controller.hpp"
 #include "game/packet_parsers.hpp"
 #include "game/spline_packet.hpp"
 #include "game/vehicle.hpp"
@@ -4705,6 +4706,37 @@ void MovementHandler::updateMoverSplineDone() {
     moveSplines_.erase(it);
     // 0x0071f210: the mover's movement block and the spline's id.
     if (owner_.getSocket()) sendMovement(Opcode::CMSG_MOVE_SPLINE_DONE, splineId);
+}
+
+void MovementHandler::updateMoverTimeSkip(float deltaTime) {
+    // 0x006f1490, each frame (the idle event, slot 6) -> 0x006f13e0: a mover
+    // whose movement is suspended because the world under it is not loaded
+    // (flag 0x8000000, set by 0x00711ab0) does not move; for the active
+    // mover the frame's time is sent as skipped (0x00717d90) and added to
+    // the base its movement times count from, so the next move's time
+    // leaves the stall out. Not while it rides a transport (0x00717d90).
+    if (isPreWotlk() || owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) {
+        timeSkipCarryMs_ = 0.0f;
+        return;
+    }
+    auto* renderer = owner_.services().renderer;
+    auto* camera = renderer ? renderer->getCameraController() : nullptr;
+    if (!camera || camera->isOnTaxi() || movementInfo.transportGuid != 0 ||
+        !camera->followTargetOverUnstreamedGround()) {
+        timeSkipCarryMs_ = 0.0f;
+        return;
+    }
+    timeSkipCarryMs_ += deltaTime * 1000.0f;
+    const auto skipped = static_cast<uint32_t>(timeSkipCarryMs_);
+    if (skipped == 0) return;
+    timeSkipCarryMs_ -= static_cast<float>(skipped);
+    const uint64_t mover = activeMover();
+    if (mover == 0) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_MOVE_TIME_SKIPPED));
+    packet.writePackedGuid(mover);
+    packet.writeUInt32(skipped);
+    owner_.getSocket()->send(packet);
+    movementClockStart_ += std::chrono::milliseconds(skipped);
 }
 
 std::optional<uint32_t> MovementHandler::moveSplineFlags(uint64_t guid) {

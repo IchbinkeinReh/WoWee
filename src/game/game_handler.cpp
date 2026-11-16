@@ -936,6 +936,8 @@ void GameHandler::update(float deltaTime) {
         if (movementHandler_) movementHandler_->updateMoverPitch(deltaTime);
         // The mover's server-driven spline run out (0x006eae70).
         if (movementHandler_) movementHandler_->updateMoverSplineDone();
+        // The mover held over ground not yet loaded (0x006f1490).
+        if (movementHandler_) movementHandler_->updateMoverTimeSkip(deltaTime);
 
         const float currentPingInterval =
             (isPreWotlk()) ? game::CLASSIC_PING_INTERVAL_SEC : pingInterval;

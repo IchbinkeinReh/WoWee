@@ -310,6 +310,11 @@ public:
     [[nodiscard]] bool isBarberShopView() const { return barberView_; }
     [[nodiscard]] bool isOnTaxi() const { return externalFollow_; }
     [[nodiscard]] const glm::vec3* getFollowTarget() const { return followTarget; }
+    /// The followed unit stands over ground that has not streamed in, so it is
+    /// held where it is (the movement the client suspends, 0x00711ab0).
+    [[nodiscard]] bool followTargetOverUnstreamedGround() const {
+        return followTarget && groundNotStreamedYet(followTarget->x, followTarget->y);
+    }
     /// The character's eyes for a view that is not this rig's - a headset's:
     /// where it stands, raised by the pivot height and a mount's offset, and
     /// nothing else. None of the third-person camera's terrain lift, wall
