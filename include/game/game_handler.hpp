@@ -2063,6 +2063,11 @@ public:
     /// SMSG_OVERRIDE_LIGHT (0x00526530): the area light, its override (0 to
     /// fade the override back out) and the transition in milliseconds.
     using OverrideLightCallback = std::function<void(uint32_t areaLight, uint32_t overrideLight, uint32_t ms)>;
+    /// The placed fall queued for the player (0x006eccf0, event 9).
+    using PlacedFallCallback = std::function<void()>;
+    void setPlacedFallCallback(PlacedFallCallback cb) { placedFallCallback_ = std::move(cb); }
+    /// A vehicle unit went away (0x007576e0): its riders let go of it.
+    void vehicleGone(uint64_t vehicleGuid);
     void setOverrideLightCallback(OverrideLightCallback cb) { overrideLightCallback_ = std::move(cb); }
     void setVehicleMoveHoldCallback(VehicleMoveHoldCallback cb) { vehicleMoveHoldCallback_ = std::move(cb); }
     [[nodiscard]] const VehicleMoveHoldCallback& vehicleMoveHoldCallback() const { return vehicleMoveHoldCallback_; }
@@ -7030,6 +7035,7 @@ private:
     std::array<int, 12> inventoryAlerts_{};  ///< DAT_00c24238
     VehicleMoveHoldCallback vehicleMoveHoldCallback_;
     OverrideLightCallback overrideLightCallback_;
+    PlacedFallCallback placedFallCallback_;
     bool petActionsOnBonusBar_ = false;
     bool overrideBarActive_ = false;
     uint32_t overrideSpellsId_ = 0;

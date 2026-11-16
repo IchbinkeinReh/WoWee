@@ -1279,6 +1279,10 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
         gameHandler->setVehicleMoveHoldCallback([this](uint64_t mover, uint64_t transport, uint8_t seat) {
             return entitySpawner_ && entitySpawner_->holdVehicleMove(mover, transport, seat);
         });
+        // The player's placed fall (0x006eccf0), into the camera controller.
+        gameHandler->setPlacedFallCallback([this] {
+            if (renderer && renderer->getCameraController()) renderer->getCameraController()->queuePlacedFall();
+        });
         // SMSG_OVERRIDE_LIGHT into the lighting (0x007f10a0, 0x007f11a0).
         gameHandler->setOverrideLightCallback([this](uint32_t areaLight, uint32_t overrideLight, uint32_t ms) {
             if (renderer && renderer->getLightingManager())

@@ -180,6 +180,10 @@ public:
     [[nodiscard]] bool isFalling() const { return !grounded && !swimming && verticalVelocity <= 0.0f; }
     /// How long it has been off the ground: zero on it.
     [[nodiscard]] float airborneSeconds() const { return airborneSeconds_; }
+    /// The placed fall queued for the active mover (0x006eccf0, event 9):
+    /// on its next step it starts to fall from where it is unless it stands
+    /// on ground, swims, flies or is rooted.
+    void queuePlacedFall() { portPlacedFall_ = true; }
 
     // Call every frame while riding a transport that forces Z to a locked value
     // externally (e.g. the Deeprun Tram, which has no real floor mid-tunnel).
