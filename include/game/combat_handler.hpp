@@ -90,6 +90,14 @@ public:
     bool& autoAttackRetryPendingRef() { return autoAttackRetryPending_; }
 
     // Combat text creation (used by other handlers, e.g. spell handler for periodic damage)
+    /// A line of world text over `unit` (0x007e6030), of `kind`; with
+    /// `replace`, the unit's earlier line of that kind goes first (0x007e5100).
+    void addWorldText(uint64_t unit, uint8_t kind, const std::string& text, bool replace = false);
+    /// The spell-mechanic floaters an aura landing or refreshed raises over
+    /// its unit (0x0074db80 -> 0x0074da70).
+    void addMechanicFloaters(uint64_t unit, uint64_t caster, uint32_t spellId);
+    /// The interrupted floater (0x007523d0: SpellMechanic 26).
+    void addInterruptFloater(uint64_t unit, uint64_t caster, uint32_t spellId);
     void addCombatText(CombatTextEntry::Type type, int32_t amount, uint32_t spellId,
                        bool isPlayerSource, uint8_t powerType = 0,
                        uint64_t srcGuid = 0, uint64_t dstGuid = 0);
@@ -263,6 +271,14 @@ private:
     /// aggro warning sounds on becoming that rather than on every update that
     /// says they still are. See the threat update handler.
     std::unordered_set<uint64_t> playerTopThreatOn_;
+    /// The player's threat status on each unit's list, as the client keeps
+    /// it (combat_text_filter.hpp clientThreatStatus), for the threat floater.
+    std::unordered_map<uint64_t, int> playerThreatStatus_;
+    /// 0x00719220 for the player's status on `unit` moving to `now`.
+    void notePlayerThreatStatus(uint64_t unit, int now);
+    /// 0x007190a0: whose a line is.
+    [[nodiscard]] int floaterSourceOf(uint64_t src, bool isPlayerSource) const;
+    void addMechanicFloater(uint64_t unit, uint64_t caster, uint32_t spellAttrEx6, uint32_t mechanicId);
     /// Whether an aggro warning applies at all where the player is - the same
     /// question IsThreatWarningEnabled answers for the indicator, asked from
     /// C++ so the sound and the picture agree about when they are wanted.

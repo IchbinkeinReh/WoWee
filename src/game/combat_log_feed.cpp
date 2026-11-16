@@ -14,6 +14,7 @@
 #include "core/app_clock.hpp"
 #include "core/config_paths.hpp"
 #include "core/local_time.hpp"
+#include "game/combat_handler.hpp"
 #include "game/game_handler.hpp"
 #include "game/interface_text.hpp"
 #include "game/spell_handler.hpp"
@@ -888,6 +889,8 @@ void CombatLogFeed::interrupt(uint64_t src, uint64_t dst, uint32_t spellId, uint
     e.suffix |= cl::suffix::kExtraSpell;
     e.extraSpellId = interrupted;
     commit();
+    // 0x007523d0: SpellMechanic 26's floater over the one interrupted.
+    if (auto* combat = owner_.getCombatHandler()) combat->addInterruptFloater(dst, src, spellId);
 }
 
 void CombatLogFeed::extraAttacks(uint64_t src, uint64_t dst, uint32_t spellId, int32_t count) {
@@ -927,6 +930,9 @@ void CombatLogFeed::aura(uint64_t unit, uint64_t caster, uint32_t spellId, bool 
     e.suffix |= cl::suffix::kAuraType;
     e.auraDebuff = debuff;
     commit();
+    // 0x00752710 -> 0x0074db80 as it lands: the spell's mechanic floaters.
+    if (applied)
+        if (auto* combat = owner_.getCombatHandler()) combat->addMechanicFloaters(unit, caster, spellId);
 }
 
 void CombatLogFeed::auraDose(uint64_t unit, uint64_t caster, uint32_t spellId, uint32_t before, uint32_t after,
@@ -948,6 +954,8 @@ void CombatLogFeed::auraRefresh(uint64_t unit, uint64_t caster, uint32_t spellId
     e.suffix |= cl::suffix::kAuraType;
     e.auraDebuff = debuff;
     commit();
+    // 0x00752ba0 -> 0x0074db80.
+    if (auto* combat = owner_.getCombatHandler()) combat->addMechanicFloaters(unit, caster, spellId);
 }
 
 void CombatLogFeed::dispel(uint64_t src, uint64_t dst, uint32_t spellId, uint32_t auraSpell, bool debuff,

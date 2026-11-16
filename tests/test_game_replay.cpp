@@ -180,7 +180,6 @@ std::vector<wowee::game::CombatTextEntry::Type> spellMissText(uint64_t caster, u
                                                                uint8_t missInfo) {
     Session s;
     huntMob(s);
-    // Resists and immunities show only on the target (fctSpellMechanics).
     s.handler().setTarget(kMob);
     s.receive(spellMiss(caster, victim, kArcaneShot, missInfo));
     std::vector<wowee::game::CombatTextEntry::Type> types;
@@ -192,10 +191,8 @@ std::vector<wowee::game::CombatTextEntry::Type> spellMissText(uint64_t caster, u
 
 namespace {
 
-// SpellMissInfo, as every server family numbers it. Only the kinds shown
-// whatever the panel says: resists, immunities, deflects and absorbs sit
-// behind fctSpellMechanics, which is "0" by default as in the client
-// (combat_text_filter.hpp), so upstream's cases for 2 and 7-10 are left out.
+// SpellMissInfo, as every server family numbers it: the plain misses, each a
+// floater over the mob the player's spell missed (0x0071f990).
 const std::vector<std::pair<uint8_t, wowee::game::CombatTextEntry::Type>>& missTypes() {
     using T = wowee::game::CombatTextEntry;
     static const std::vector<std::pair<uint8_t, T::Type>> table = {

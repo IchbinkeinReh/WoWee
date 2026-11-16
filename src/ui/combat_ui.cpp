@@ -21,6 +21,8 @@
 #include "rendering/camera.hpp"
 #include "game/game_handler.hpp"
 #include "game/bg_score_defs.hpp"
+#include "game/combat_text_filter.hpp"
+#include "game/interface_text.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "audio/audio_engine.hpp"
@@ -126,237 +128,49 @@ void CombatUI::renderCombatText(game::GameHandler& gameHandler) {
     // number to stand over, and the client has no screen-space fallback.
     if (!camera) return;
 
-    const uint64_t playerGuid = gameHandler.getPlayerGuid();
-    const uint64_t petGuid = gameHandler.getPetGuid();
-    // Over another unit, and caused by the player or the pet: the engine's.
-    // Anything else - on the character, or with no unit to stand over (an
-    // honour or experience line, a proc) - belongs to the column.
-    const auto wanted = [&](const game::CombatTextEntry& e) {
-        if (e.dstGuid == 0 || e.dstGuid == playerGuid) return false;
-        return e.isPlayerSource || (petGuid != 0 && e.srcGuid == petGuid);
-    };
-    using MissT = game::CombatTextEntry;
-    // A miss and its kin are 0x0071f990's, under CombatDamage alone; the
-    // handler's filter leaves them unfiltered.
-    const bool showMisses = addons::storedCVarValue("CombatDamage", "1") != "0";
-    const auto isMissKind = [](game::CombatTextEntry::Type t) {
-        switch (t) {
-            case MissT::MISS: case MissT::DODGE: case MissT::PARRY: case MissT::BLOCK:
-            case MissT::EVADE: case MissT::DEFLECT:
-                return true;
-            default:
-                return false;
-        }
-    };
-
+    // Only the floaters are kept (CombatHandler::addCombatText gates them as
+    // 0x0071f990, 0x00722340 and 0x00722440 do; addWorldText adds the
+    // client's own lines), so each is drawn over the unit it names.
     for (const auto& entry : entries) {
-        if (!wanted(entry)) continue;
-        if (isMissKind(entry.type) && !showMisses) continue;
         const float alpha = 1.0f - (entry.age / game::CombatTextEntry::LIFETIME);
-        const bool outgoing = entry.isPlayerSource;
+        using T = game::CombatTextEntry;
 
-        // --- Format text and color (identical logic for both world and HUD paths) ---
+        // The text as the client builds it: damage "%d" (0x00722340), healing
+        // "+%d" (0x00722440), a miss and its kin the global string of the
+        // table at 0x00adbfdc (0x0071f990), world text as given.
         ImVec4 color;
-        char text[128];
+        std::string text;
         switch (entry.type) {
-            case game::CombatTextEntry::MELEE_DAMAGE:
-            case game::CombatTextEntry::SPELL_DAMAGE:
-                snprintf(text, sizeof(text), "-%d", entry.amount);
-                color = outgoing ?
-                    ImVec4(1.0f, 1.0f, 0.3f, alpha) :
-                    ImVec4(1.0f, 0.3f, 0.3f, alpha);
+            case T::MELEE_DAMAGE: case T::SPELL_DAMAGE: case T::PERIODIC_DAMAGE:
+            case T::GLANCING: case T::CRUSHING:
+                text = std::to_string(entry.amount);
+                color = ImVec4(1.0f, 1.0f, 0.3f, alpha);
                 break;
-            case game::CombatTextEntry::CRIT_DAMAGE:
-                snprintf(text, sizeof(text), "-%d!", entry.amount);
-                color = outgoing ?
-                    ImVec4(1.0f, 0.8f, 0.0f, alpha) :
-                    ImVec4(1.0f, 0.5f, 0.0f, alpha);
+            case T::CRIT_DAMAGE:
+                text = std::to_string(entry.amount);
+                color = ImVec4(1.0f, 0.8f, 0.0f, alpha);
                 break;
-            case game::CombatTextEntry::HEAL:
-                snprintf(text, sizeof(text), "+%d", entry.amount);
+            case T::HEAL: case T::CRIT_HEAL: case T::PERIODIC_HEAL:
+                text = "+" + std::to_string(entry.amount);
                 color = ImVec4(0.3f, 1.0f, 0.3f, alpha);
                 break;
-            case game::CombatTextEntry::CRIT_HEAL:
-                snprintf(text, sizeof(text), "+%d!", entry.amount);
-                color = ImVec4(0.3f, 1.0f, 0.3f, alpha);
-                break;
-            case game::CombatTextEntry::MISS:
-                snprintf(text, sizeof(text), "Miss");
-                color = ImVec4(0.7f, 0.7f, 0.7f, alpha);
-                break;
-            case game::CombatTextEntry::DODGE:
-                snprintf(text, sizeof(text), outgoing ? "Dodge" : "You Dodge");
-                color = outgoing ? ImVec4(0.6f, 0.6f, 0.6f, alpha)
-                                 : ImVec4(0.4f, 0.9f, 1.0f, alpha);
-                break;
-            case game::CombatTextEntry::PARRY:
-                snprintf(text, sizeof(text), outgoing ? "Parry" : "You Parry");
-                color = outgoing ? ImVec4(0.6f, 0.6f, 0.6f, alpha)
-                                 : ImVec4(0.4f, 0.9f, 1.0f, alpha);
-                break;
-            case game::CombatTextEntry::BLOCK:
-                if (entry.amount > 0)
-                    snprintf(text, sizeof(text), outgoing ? "Block %d" : "You Block %d", entry.amount);
-                else
-                    snprintf(text, sizeof(text), outgoing ? "Block" : "You Block");
-                color = outgoing ? ImVec4(0.6f, 0.6f, 0.6f, alpha)
-                                 : ImVec4(0.4f, 0.9f, 1.0f, alpha);
-                break;
-            case game::CombatTextEntry::EVADE:
-                snprintf(text, sizeof(text), outgoing ? "Evade" : "You Evade");
-                color = outgoing ? ImVec4(0.6f, 0.6f, 0.6f, alpha)
-                                 : ImVec4(0.4f, 0.9f, 1.0f, alpha);
-                break;
-            case game::CombatTextEntry::PERIODIC_DAMAGE:
-                snprintf(text, sizeof(text), "-%d", entry.amount);
-                color = outgoing ?
-                    ImVec4(1.0f, 0.9f, 0.3f, alpha) :
-                    ImVec4(1.0f, 0.4f, 0.4f, alpha);
-                break;
-            case game::CombatTextEntry::PERIODIC_HEAL:
-                snprintf(text, sizeof(text), "+%d", entry.amount);
-                color = ImVec4(0.4f, 1.0f, 0.5f, alpha);
-                break;
-            case game::CombatTextEntry::ENVIRONMENTAL: {
-                const char* envLabel = "";
-                switch (entry.powerType) {
-                    case 0: envLabel = "Fatigue "; break;
-                    case 1: envLabel = "Drowning "; break;
-                    case 2: envLabel = ""; break;
-                    case 3: envLabel = "Lava "; break;
-                    case 4: envLabel = "Slime "; break;
-                    case 5: envLabel = "Fire "; break;
-                    default: envLabel = ""; break;
+            case T::WORLD_TEXT:
+                text = entry.text;
+                switch (static_cast<game::FloaterKind>(entry.worldKind)) {
+                    case game::FloaterKind::Experience: color = ImVec4(0.7f, 0.3f, 1.0f, alpha); break;
+                    case game::FloaterKind::Honor:      color = ImVec4(1.0f, 0.85f, 0.0f, alpha); break;
+                    case game::FloaterKind::Threat:     color = ImVec4(1.0f, 0.3f, 0.3f, alpha); break;
+                    default:                            color = ImVec4(1.0f, 1.0f, 1.0f, alpha); break;
                 }
-                snprintf(text, sizeof(text), "%s-%d", envLabel, entry.amount);
-                color = ImVec4(0.9f, 0.5f, 0.2f, alpha);
-                break;
-            }
-            case game::CombatTextEntry::ENERGIZE:
-                snprintf(text, sizeof(text), "+%d", entry.amount);
-                switch (entry.powerType) {
-                    case 1:  color = ImVec4(1.0f, 0.2f, 0.2f, alpha); break;
-                    case 2:  color = ImVec4(1.0f, 0.6f, 0.1f, alpha); break;
-                    case 3:  color = ImVec4(1.0f, 0.9f, 0.2f, alpha); break;
-                    case 6:  color = ImVec4(0.3f, 0.9f, 0.8f, alpha); break;
-                    default: color = ImVec4(0.3f, 0.6f, 1.0f, alpha); break;
-                }
-                break;
-            case game::CombatTextEntry::POWER_DRAIN:
-                snprintf(text, sizeof(text), "-%d", entry.amount);
-                switch (entry.powerType) {
-                    case 1:  color = ImVec4(1.0f, 0.35f, 0.35f, alpha); break;
-                    case 2:  color = ImVec4(1.0f, 0.7f, 0.2f, alpha); break;
-                    case 3:  color = ImVec4(1.0f, 0.95f, 0.35f, alpha); break;
-                    case 6:  color = ImVec4(0.45f, 0.95f, 0.85f, alpha); break;
-                    default: color = ImVec4(0.45f, 0.75f, 1.0f, alpha); break;
-                }
-                break;
-            case game::CombatTextEntry::XP_GAIN:
-                snprintf(text, sizeof(text), "+%d XP", entry.amount);
-                color = ImVec4(0.7f, 0.3f, 1.0f, alpha);
-                break;
-            case game::CombatTextEntry::IMMUNE:
-                snprintf(text, sizeof(text), "Immune!");
-                color = ImVec4(0.9f, 0.9f, 0.9f, alpha);
-                break;
-            case game::CombatTextEntry::ABSORB:
-                if (entry.amount > 0)
-                    snprintf(text, sizeof(text), "Absorbed %d", entry.amount);
-                else
-                    snprintf(text, sizeof(text), "Absorbed");
-                color = ImVec4(0.5f, 0.8f, 1.0f, alpha);
-                break;
-            case game::CombatTextEntry::RESIST:
-                if (entry.amount > 0)
-                    snprintf(text, sizeof(text), "Resisted %d", entry.amount);
-                else
-                    snprintf(text, sizeof(text), "Resisted");
-                color = ImVec4(0.7f, 0.7f, 0.7f, alpha);
-                break;
-            case game::CombatTextEntry::DEFLECT:
-                snprintf(text, sizeof(text), outgoing ? "Deflect" : "You Deflect");
-                color = outgoing ? ImVec4(0.7f, 0.7f, 0.7f, alpha)
-                                 : ImVec4(0.5f, 0.9f, 1.0f, alpha);
-                break;
-            case game::CombatTextEntry::REFLECT: {
-                const std::string& reflectName = entry.spellId ? gameHandler.getSpellName(entry.spellId) : "";
-                if (!reflectName.empty())
-                    snprintf(text, sizeof(text), outgoing ? "Reflected: %s" : "Reflect: %s", reflectName.c_str());
-                else
-                    snprintf(text, sizeof(text), outgoing ? "Reflected" : "You Reflect");
-                color = outgoing ? ImVec4(0.85f, 0.75f, 1.0f, alpha)
-                                 : ImVec4(0.75f, 0.85f, 1.0f, alpha);
-                break;
-            }
-            case game::CombatTextEntry::PROC_TRIGGER: {
-                const std::string& procName = entry.spellId ? gameHandler.getSpellName(entry.spellId) : "";
-                if (!procName.empty())
-                    snprintf(text, sizeof(text), "%s!", procName.c_str());
-                else
-                    snprintf(text, sizeof(text), "PROC!");
-                color = ImVec4(1.0f, 0.85f, 0.0f, alpha);
-                break;
-            }
-            case game::CombatTextEntry::DISPEL:
-                if (entry.spellId != 0) {
-                    const std::string& dispelledName = gameHandler.getSpellName(entry.spellId);
-                    if (!dispelledName.empty())
-                        snprintf(text, sizeof(text), "Dispel %s", dispelledName.c_str());
-                    else
-                        snprintf(text, sizeof(text), "Dispel");
-                } else {
-                    snprintf(text, sizeof(text), "Dispel");
-                }
-                color = ImVec4(0.6f, 0.9f, 1.0f, alpha);
-                break;
-            case game::CombatTextEntry::STEAL:
-                if (entry.spellId != 0) {
-                    const std::string& stolenName = gameHandler.getSpellName(entry.spellId);
-                    if (!stolenName.empty())
-                        snprintf(text, sizeof(text), "Spellsteal %s", stolenName.c_str());
-                    else
-                        snprintf(text, sizeof(text), "Spellsteal");
-                } else {
-                    snprintf(text, sizeof(text), "Spellsteal");
-                }
-                color = ImVec4(0.8f, 0.7f, 1.0f, alpha);
-                break;
-            case game::CombatTextEntry::INTERRUPT: {
-                const std::string& interruptedName = entry.spellId ? gameHandler.getSpellName(entry.spellId) : "";
-                if (!interruptedName.empty())
-                    snprintf(text, sizeof(text), "Interrupt %s", interruptedName.c_str());
-                else
-                    snprintf(text, sizeof(text), "Interrupt");
-                color = ImVec4(1.0f, 0.6f, 0.9f, alpha);
-                break;
-            }
-            case game::CombatTextEntry::INSTAKILL:
-                snprintf(text, sizeof(text), outgoing ? "Kill!" : "Killed!");
-                color = outgoing ? ImVec4(1.0f, 0.25f, 0.25f, alpha)
-                                 : ImVec4(1.0f, 0.1f, 0.1f, alpha);
-                break;
-            case game::CombatTextEntry::HONOR_GAIN:
-                snprintf(text, sizeof(text), "+%d Honor", entry.amount);
-                color = ImVec4(1.0f, 0.85f, 0.0f, alpha);
-                break;
-            case game::CombatTextEntry::GLANCING:
-                snprintf(text, sizeof(text), "~%d", entry.amount);
-                color = outgoing ?
-                    ImVec4(0.75f, 0.75f, 0.5f, alpha) :
-                    ImVec4(0.75f, 0.35f, 0.35f, alpha);
-                break;
-            case game::CombatTextEntry::CRUSHING:
-                snprintf(text, sizeof(text), "%d!", entry.amount);
-                color = outgoing ?
-                    ImVec4(1.0f, 0.55f, 0.1f, alpha) :
-                    ImVec4(1.0f, 0.15f, 0.15f, alpha);
                 break;
             default:
-                snprintf(text, sizeof(text), "%d", entry.amount);
-                color = ImVec4(1.0f, 1.0f, 1.0f, alpha);
+                if (const char* key = game::missFloaterKey(entry.type)) {
+                    text = game::interfaceString(key, nullptr);
+                    color = ImVec4(0.7f, 0.7f, 0.7f, alpha);
+                }
                 break;
         }
+        if (text.empty()) continue;
 
         // --- Rendering style ---
         bool isCrit = (entry.type == game::CombatTextEntry::CRIT_DAMAGE ||
@@ -400,16 +214,16 @@ void CombatUI::renderCombatText(game::GameHandler& gameHandler) {
                         sx += entry.xSeed * 40.0f;
 
                         // Center the text horizontally on the projected point
-                        ImVec2 ts = font->CalcTextSizeA(renderFontSize, FLT_MAX, 0.0f, text);
+                        ImVec2 ts = font->CalcTextSizeA(renderFontSize, FLT_MAX, 0.0f, text.c_str());
                         sx -= ts.x * 0.5f;
 
                         // Clamp to screen bounds
                         sx = std::max(2.0f, std::min(sx, screenW - ts.x - 2.0f));
 
                         drawList->AddText(font, renderFontSize,
-                                          ImVec2(sx + 1.0f, sy + 1.0f), shadowCol, text);
+                                          ImVec2(sx + 1.0f, sy + 1.0f), shadowCol, text.c_str());
                         drawList->AddText(font, renderFontSize,
-                                          ImVec2(sx, sy), textCol, text);
+                                          ImVec2(sx, sy), textCol, text.c_str());
                     }
                 }
             }
