@@ -9,6 +9,7 @@
 #include "game/inventory_slots.hpp"
 #include "game/packet_parsers.hpp"
 #include "game/spell_handler.hpp"
+#include "game/spell_description_eval.hpp"
 #include "game/spell_mods.hpp"
 #include "game/spell_unit_target.hpp"
 #include "game/update_field_table.hpp"
@@ -231,8 +232,9 @@ go_use::Opening GameHandler::gameObjectOpening(const GameObjectFacts& f) {
 
 int32_t GameHandler::openLockEffectValue(uint32_t spellId, int k) const {
     // 0x008016c0 for the player: the skill in the spell's line stands for
-    // its level (0x006dc330), then the spell's modifiers - all effects (8)
-    // and this effect's own (3, 12, 23) - and rounded to the nearest.
+    // its level (0x006dc330), then the rest of 0x007ff770 - the spell's
+    // modifiers and the rounding (finishSpellEffectPoints) - and the least
+    // made whole as 0x008016c0 makes it.
     const auto it = spellNameCache_.find(spellId);
     if (it == spellNameCache_.end() || !spellHandler_ || k < 0 || k > 2) return 0;
     const auto& e = it->second;
@@ -241,12 +243,12 @@ int32_t GameHandler::openLockEffectValue(uint32_t spellId, int k) const {
         if (const auto sk = playerSkills_.find(line->second); sk != playerSkills_.end())
             skill = sk->second.effectiveValue();
     }
-    float v = go_use::effectValue(e.effectBasePoints[k], e.effectPointsPerLevel[k], skill, e.baseLevel,
-                                  e.maxLevel);
-    static constexpr uint8_t kEffectOp[3] = {3, 12, 23};
-    v = spell_mods::apply(v, spellHandler_->spellModifiers(spellId, 8));
-    v = spell_mods::apply(v, spellHandler_->spellModifiers(spellId, kEffectOp[k]));
-    return static_cast<int32_t>(std::lround(v));
+    const float v = go_use::effectValue(e.effectBasePoints[k], e.effectPointsPerLevel[k], skill, e.baseLevel,
+                                        e.maxLevel);
+    const SpellEffectPoints p = finishSpellEffectPoints(
+        {v, v}, k, e.effectIds[k], e.effectAuraIds[k],
+        [this, spellId](uint8_t op) { return spellHandler_->spellModifiers(spellId, op); });
+    return spell_mods::wholeEffectPoints(p.min);
 }
 
 std::optional<GameHandler::ItemLockShown> GameHandler::itemLockShown(uint32_t lockId, int32_t itemLevel) {

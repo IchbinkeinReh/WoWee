@@ -5819,19 +5819,14 @@ void registerQuestLuaAPI(lua_State* L) {
             int lo = 1, hi = 1;
             if (gh) {
                 const auto* rec = tradeSkillRecipeAt(tradeSkillRows(gh), i);
-                if (rec) {
-                    auto it = gh->spellNameCacheRef().find(rec->spellId);
-                    if (it != gh->spellNameCacheRef().end()) {
-                        // The first effect's least and most (0x008016c0 over
-                        // 0x007ff770) - the counts SetTradeSkillItem prices
-                        // the made item for.
-                        const auto& sp = it->second;
-                        const auto made = game::spellEffectPoints(
-                            sp.effectBasePoints[0], sp.effectDieSides[0], sp.effectPointsPerLevel[0],
-                            static_cast<int>(gh->getPlayerLevel()), sp.baseLevel, sp.maxLevel);
-                        lo = tooltip_rules::craftedCount(made.min);
-                        hi = tooltip_rules::craftedCount(made.max);
-                    }
+                float made[2] = {};
+                // The first effect's least and most (0x008016c0 over the
+                // whole of 0x007ff770, the talents included), each at least
+                // one (0x005db6e0) - the counts SetTradeSkillItem prices the
+                // made item for.
+                if (rec && gh->playerSpellEffectRange(rec->spellId, 0, made[0], made[1])) {
+                    lo = std::max(1, tooltip_rules::craftedCount(made[0]));
+                    hi = std::max(1, tooltip_rules::craftedCount(made[1]));
                 }
             }
             lua_pushnumber(L, lo);
@@ -6681,27 +6676,25 @@ void registerQuestLuaAPI(lua_State* L) {
             for (int i = 0; i < 3 && step < 0; ++i)
                 if (e->effectIds[i] == 44) step = i;
             if (step < 0 || r->state == 2) return luaReturnNil(L);
-            // 0x008016c0's maximum (0x007ff770): base points and die sides,
-            // then the player's modifiers for every effect (op 8) and for
-            // this one (3, 12, 23), each (value + flat) x pct. The value per
-            // level is not added: every SKILL_STEP effect in 3.3.5's
-            // Spell.dbc has none (and no SpellFamilyName, so no modifier
-            // reaches one either).
+            // 0x008016c0's maximum over the whole of 0x007ff770: base points
+            // and die sides, then the player's modifiers and the rounding
+            // (finishSpellEffectPoints). The value per level is not added:
+            // every SKILL_STEP effect in 3.3.5's Spell.dbc has none (and no
+            // SpellFamilyName, so no modifier reaches one either).
             uint32_t dieSides = 0;
             if (!trainerSpellColumn(gh, static_cast<uint32_t>(r->spellId), "Effect0",
                                     3 + static_cast<uint32_t>(step), dieSides))
                 return luaReturnNil(L);
-            float value = static_cast<float>(e->effectBasePoints[step] + static_cast<int32_t>(dieSides));
-            if (const auto* sh = gh->getSpellHandler()) {
-                static constexpr uint8_t kEffectOp[3] = {3, 12, 23};
-                const auto spellId = static_cast<uint32_t>(r->spellId);
-                value = game::spell_mods::apply(value, sh->spellModifiers(spellId, 8));
-                value = game::spell_mods::apply(value, sh->spellModifiers(spellId, kEffectOp[step]));
-            }
-            // 0x008016c0's rounding of a positive value: (round(2v - 0.5)) / 2.
-            const int32_t rise = value > 0.0f
-                ? static_cast<int32_t>(std::nearbyint(value + value - 0.5f)) >> 1
-                : static_cast<int32_t>(std::nearbyint(value + value + 0.5f)) >> 1;
+            game::SpellEffectPoints points;
+            points.min = static_cast<float>(e->effectBasePoints[step] + 1);
+            points.max = static_cast<float>(e->effectBasePoints[step] + static_cast<int32_t>(dieSides));
+            const auto spellId = static_cast<uint32_t>(r->spellId);
+            points = game::finishSpellEffectPoints(
+                points, step, e->effectIds[step], e->effectAuraIds[step],
+                [gh, spellId](uint8_t op) {
+                    return gh->getSpellModifiers(spellId, static_cast<game::GameHandler::SpellModOp>(op));
+                });
+            const int32_t rise = game::spell_mods::wholeEffectPoints(points.max);
             const std::string& skill = gh->getSkillLineName(e->effectMiscValues[step]);
             if (rise == 0 || skill.empty()) return luaReturnNil(L);
             lua_getglobal(L, "string");

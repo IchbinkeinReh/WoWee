@@ -4945,6 +4945,14 @@ float playerFloatField(const GameHandler& gh, UF f, uint32_t offset = 0) {
 }
 }  // namespace
 
+bool GameHandler::playerSpellEffectRange(uint32_t spellId, int index, float& min, float& max) const {
+    SpellEffectPoints p;
+    if (!spellEffectPointsOf(*this, spellId, index, p)) return false;
+    min = p.min;
+    max = p.max;
+    return true;
+}
+
 /// The variables of 0x005782d0 beyond the spell's magnitudes, duration and
 /// period: the spell record's (radius, cost, chain targets, proc chance ...)
 /// and the player's (stats, attack and spell power, weapon damage ...).

@@ -5063,10 +5063,10 @@ int lua_Tooltip_SetTradeSkillItem(lua_State* L) {
 
     namespace rules = wowee::addons::tooltip_rules;
     const int reagent = lua_isnumber(L, 3) ? static_cast<int>(lua_tonumber(L, 3)) : 0;
-    const auto made = wowee::game::spellEffectPoints(sp.effectBasePoints[0], sp.effectDieSides[0],
-                                                     sp.effectPointsPerLevel[0],
-                                                     static_cast<int>(gh->getPlayerLevel()),
-                                                     sp.baseLevel, sp.maxLevel);
+    // The first effect's least and most as 0x008016c0 asks 0x007ff770 for
+    // them, the talents included.
+    wowee::game::SpellEffectPoints made;
+    gh->playerSpellEffectRange(spellId, 0, made.min, made.max);
     rules::Reagent slots[8];
     for (int i = 0; i < 8; ++i) slots[i] = {sp.reagents[i].itemId, sp.reagents[i].count};
     const auto what = rules::tradeSkillTooltip(sp.effectIds[0], sp.effectItemType0, made.min, made.max,

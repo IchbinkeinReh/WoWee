@@ -27,6 +27,8 @@
  * starts with (0x0061c620).
  */
 
+#include "game/spell_mods.hpp"
+
 #include <cctype>
 #include <cmath>
 #include <cstddef>
@@ -102,12 +104,9 @@ inline int32_t rangedCastTimeMs(int32_t castMs, uint32_t rangedAttackTime, uint3
 }
 
 /// How many of an item an effect makes, its least or its most
-/// (0x008016c0 over 0x007ff770's two values): doubled, a half added away
-/// from zero, rounded to nearest by the x87 store and halved by a shift.
+/// (0x008016c0 over 0x007ff770's two values).
 inline int craftedCount(float value) {
-    const float twice = value + value;
-    const float biased = twice > 0.0f ? twice + 0.5f : twice - 0.5f;
-    return static_cast<int>(std::nearbyint(biased)) >> 1;
+    return wowee::game::spell_mods::wholeEffectPoints(value);
 }
 
 /// What SetTradeSkillItem(index [, reagent]) describes (0x0062eae0).
