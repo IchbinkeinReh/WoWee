@@ -2187,6 +2187,9 @@ void GameHandler::requestGuildInfo() {
 void GameHandler::requestGuildRoster() {
     if (socialHandler_) socialHandler_->requestGuildRoster();
 }
+void GameHandler::requestGuildRosterThrottled() {
+    if (socialHandler_) socialHandler_->requestGuildRosterThrottled();
+}
 
 void GameHandler::setGuildMotd(const std::string& motd) {
     if (socialHandler_) socialHandler_->setGuildMotd(motd);

@@ -1945,10 +1945,20 @@ void SocialHandler::requestGuildInfo() {
     owner_.getSocket()->send(packet);
 }
 
+// GuildRoster() (0x005ca9b0): sent only when ten seconds have passed since
+// the last roster request, whoever made it.
+void SocialHandler::requestGuildRosterThrottled() {
+    if (std::chrono::steady_clock::now() < guildRosterAllowedAt_) return;
+    requestGuildRoster();
+}
+
 void SocialHandler::requestGuildRoster() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     auto packet = GuildRosterPacket::build();
     owner_.getSocket()->send(packet);
+    // Every request restarts the ten seconds GuildRoster() waits out
+    // (0x00c22ac8 = now + 10000, set by 0x005ca9b0 and 0x005caaf0 alike).
+    guildRosterAllowedAt_ = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     // Said in the log, not to the player. This is asked for far more often
     // than a person would ask for it: eight places here request a roster after
     // a guild change, and the interface asks whenever the mail frame or the

@@ -983,6 +983,7 @@ public:
     // Guild commands
     void requestGuildInfo();
     void requestGuildRoster();
+    void requestGuildRosterThrottled();
     void setGuildInfoText(const std::string& text);
     void takeInboxTextItem(uint32_t mailId);
     void setGuildMotd(const std::string& motd);

@@ -172,6 +172,8 @@ public:
     // Guild
     void requestGuildInfo();
     void requestGuildRoster();
+    /// GuildRoster() from the interface: at most one request in ten seconds.
+    void requestGuildRosterThrottled();
     /// MSG_GUILD_PERMISSIONS, empty: the rights of the player's rank, asked
     /// for by 0x005caa40.
     void requestGuildPermissions();
@@ -983,6 +985,8 @@ private:
     /// rank it names (0x005cb9f0). Every reader of a rank's rights reads it.
     std::array<GuildRankInfo, 10> guildRankTable_{};
     GuildInfoData guildInfoData_;
+    /// When GuildRoster() may ask again (0x00c22ac8).
+    std::chrono::steady_clock::time_point guildRosterAllowedAt_{};
     GuildQueryResponseData guildQueryData_;
     bool hasGuildRoster_ = false;
     std::unordered_map<uint32_t, std::string> guildNameCache_;
