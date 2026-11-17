@@ -1654,6 +1654,12 @@ target_precompile_headers(wowee PRIVATE
     <glm/glm.hpp>
     ${CMAKE_CURRENT_SOURCE_DIR}/include/core/logger.hpp
 )
+# Clang writes the build time into a precompiled header, so every object that
+# uses it looks new to ccache and none is ever reused: 553 of 1378 compiles
+# missed on the macOS CI with a warm cache. ccache asks Clang users for this.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(wowee PRIVATE "SHELL:-Xclang -fno-pch-timestamp")
+endif()
 # Vendored headers as SYSTEM to suppress third-party warnings
 target_include_directories(wowee SYSTEM PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/extern
