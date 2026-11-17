@@ -200,6 +200,13 @@ constexpr SettingGerman kGerman[] = {
      "wo das Wasser flacher wird, und brechen in weißer Gischt, wo es sie nicht mehr tragen "
      "kann, bei Sturm mehr davon. Nicht im ursprünglichen Client.",
      nullptr, nullptr, nullptr},
+    {"ridewaves",
+     "Auf den Wellen reiten",
+     "Auf dem Wasser mit Raytracing: Schwimmer, schwimmende Schiffe und die Kamera heben und "
+     "senken sich mit den Wellen, statt auf der flachen Wasserhöhe zu bleiben. Nur die "
+     "Darstellung: wo Spiel und Server sie haben, bleibt unverändert. Nicht im ursprünglichen "
+     "Client.",
+     nullptr, nullptr, nullptr},
     {"physwind",
      "Windstärke (m/s)",
      "Der Wind, der die physikalischen Wellen aufwirft: eine Brise von 3 lässt Kräuselungen, "

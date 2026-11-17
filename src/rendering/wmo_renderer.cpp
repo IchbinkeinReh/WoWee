@@ -1253,6 +1253,27 @@ void WMORenderer::clearInstanceHighlights() {
     for (auto& inst : instances) inst.highlighted = false;
 }
 
+void WMORenderer::setInstanceVisualDelta(uint32_t instanceId, const glm::mat4& delta) {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return;
+    for (int c = 0; c < 4; c++)
+        for (int r = 0; r < 4; r++)
+            if (!std::isfinite(delta[c][r])) return;
+    auto& inst = instances[idxIt->second];
+    const bool any = delta != glm::mat4(1.0f);
+    if (inst.hasVisualDelta == any && (!any || inst.visualDelta == delta)) return;
+    inst.hasVisualDelta = any;
+    inst.visualDelta = any ? delta : glm::mat4(1.0f);
+    // Its doodads ride with it, drawn only: their own transforms, which
+    // their collision reads, stay the hull's.
+    if (m2Renderer_) {
+        for (const auto& doodad : inst.doodads) {
+            if (any) m2Renderer_->setInstanceVisualDelta(doodad.m2InstanceId, delta);
+            else m2Renderer_->clearInstanceVisualDelta(doodad.m2InstanceId);
+        }
+    }
+}
+
 void WMORenderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& transform) {
     auto idxIt = instanceIndexById.find(instanceId);
     if (idxIt == instanceIndexById.end()) return;
@@ -1320,6 +1341,8 @@ void WMORenderer::addDoodadToInstance(uint32_t instanceId, uint32_t m2InstanceId
     // indefinitely if the parent is static.
     if (m2Renderer_) {
         m2Renderer_->setInstanceTransform(m2InstanceId, it->modelMatrix * localTransform);
+        // And riding with its hull, if the hull rides the waves.
+        if (it->hasVisualDelta) m2Renderer_->setInstanceVisualDelta(m2InstanceId, it->visualDelta);
     }
 }
 
@@ -1820,7 +1843,7 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
 
         // Push model matrix
         WMOInstancePush push{};
-        push.model = instance.modelMatrix;
+        push.model = instance.drawMatrix();
         vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
                             0, sizeof(WMOInstancePush), &push);
 
@@ -1921,7 +1944,7 @@ void WMORenderer::renderBlended(VkCommandBuffer cmd, VkDescriptorSet perFrameSet
         if (d.instanceIndex != boundInstance) {
             const auto& instance = instances[d.instanceIndex];
             WMOInstancePush push{};
-            push.model = instance.modelMatrix;
+            push.model = instance.drawMatrix();
             vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
                                0, sizeof(WMOInstancePush), &push);
             boundInstance = d.instanceIndex;
@@ -2029,7 +2052,7 @@ void WMORenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceM
         const ModelData& model = modelIt->second;
 
         // A building does not move, so the unused slots stay zero.
-        ShadowPush push{.lightSpaceModel = lightSpaceMatrix * instance.modelMatrix};
+        ShadowPush push{.lightSpaceModel = lightSpaceMatrix * instance.drawMatrix()};
         vkCmdPushConstants(cmd, shadowPipelineLayout_,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,  // as the layout declares
                            0, sizeof(ShadowPush), &push);
@@ -5623,30 +5646,32 @@ void WMORenderer::syncRtScene() {
         auto mesh = rtModelMeshes_.find(inst.modelId);
         if (mesh == rtModelMeshes_.end()) continue;
         auto rec = rtInstances_.find(inst.id);
+        // As it is drawn: a ship riding the waves (setInstanceVisualDelta).
+        const glm::mat4 drawn = inst.drawMatrix();
         if (rec == rtInstances_.end()) {
             // A ship or a lift moves every frame: the dynamic top level's,
             // so the static one is not rebuilt for it.
-            const uint32_t rtId = inst.isTransport ? rtScene_->addDynamicInstance(mesh->second, inst.modelMatrix)
-                                                   : rtScene_->addInstance(mesh->second, inst.modelMatrix);
+            const uint32_t rtId = inst.isTransport ? rtScene_->addDynamicInstance(mesh->second, drawn)
+                                                   : rtScene_->addInstance(mesh->second, drawn);
             if (rtId != RtScene::kInvalid) {
-                rtInstances_.emplace(inst.id, RtInstanceRecord{rtId, inst.modelId, inst.modelMatrix, gen});
+                rtInstances_.emplace(inst.id, RtInstanceRecord{rtId, inst.modelId, drawn, gen});
             }
             continue;
         }
-        if (rec->second.matrix != inst.modelMatrix) {
+        if (rec->second.matrix != drawn) {
             if (RtScene::isDynamic(rec->second.rtId)) {
-                rtScene_->setInstanceTransform(rec->second.rtId, inst.modelMatrix);
+                rtScene_->setInstanceTransform(rec->second.rtId, drawn);
             } else {
                 // Moved without being a transport; from now on it is one.
-                const uint32_t rtId = rtScene_->addDynamicInstance(mesh->second, inst.modelMatrix);
+                const uint32_t rtId = rtScene_->addDynamicInstance(mesh->second, drawn);
                 if (rtId != RtScene::kInvalid) {
                     rtScene_->removeInstance(rec->second.rtId);
                     rec->second.rtId = rtId;
                 } else {
-                    rtScene_->setInstanceTransform(rec->second.rtId, inst.modelMatrix);
+                    rtScene_->setInstanceTransform(rec->second.rtId, drawn);
                 }
             }
-            rec->second.matrix = inst.modelMatrix;
+            rec->second.matrix = drawn;
         }
         rec->second.seen = gen;
     }

@@ -5532,8 +5532,20 @@ void CharacterRenderer::collectAttachedInstances(std::vector<AttachedInstance>& 
 glm::mat4 CharacterRenderer::getModelMatrix(const CharacterInstance& instance) const {
     glm::mat4 model = glm::mat4(1.0f);
 
+    // Riding the waves (setInstanceWaveRide): raised and leant about where it
+    // stands, then carried by a ship's ride - drawn only.
+    glm::mat4 placed = glm::mat4(1.0f);
+    if (instance.waveRide) {
+        placed = instance.waveWorld *
+                 glm::translate(glm::mat4(1.0f), instance.position + instance.renderOffset +
+                                                     glm::vec3(0.0f, 0.0f, instance.waveHeave)) *
+                 glm::mat4_cast(instance.waveTilt);
+    } else {
+        placed = glm::translate(glm::mat4(1.0f), instance.position + instance.renderOffset);
+    }
+
     // Apply transformations: T * R * S
-    model = glm::translate(model, instance.position + instance.renderOffset);
+    model = placed;
 
     // Rotation as the client composes a unit's (0x004c56d0): yaw about Z,
     // then about Y - the pitch of a model facing +X, nose up negative - then
@@ -5545,7 +5557,7 @@ glm::mat4 CharacterRenderer::getModelMatrix(const CharacterInstance& instance) c
     if (instance.tiltBlendWeight > 0.0f) {
         // 0x0082dd80: the matrix and the fully tilted one, weighted and
         // summed element by element (0x004c2120, 0x004c1e60).
-        glm::mat4 full = glm::translate(glm::mat4(1.0f), instance.position + instance.renderOffset);
+        glm::mat4 full = placed;
         full = glm::rotate(full, instance.tiltBlendRotation.z, glm::vec3(0.0f, 0.0f, 1.0f));
         full = glm::rotate(full, instance.tiltBlendRotation.y, glm::vec3(0.0f, 1.0f, 0.0f));
         full = glm::rotate(full, instance.tiltBlendRotation.x, glm::vec3(1.0f, 0.0f, 0.0f));
@@ -6468,6 +6480,25 @@ std::optional<uint32_t> CharacterRenderer::getAnimationEventTime(uint32_t instan
 void CharacterRenderer::setInstanceRenderOffset(uint32_t instanceId, const glm::vec3& offset) {
     auto it = instances.find(instanceId);
     if (it != instances.end()) it->second.renderOffset = offset;
+}
+
+void CharacterRenderer::setInstanceWaveRide(uint32_t instanceId, float heave, const glm::quat& tilt,
+                                            const glm::mat4& world) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return;
+    it->second.waveRide = true;
+    it->second.waveHeave = heave;
+    it->second.waveTilt = tilt;
+    it->second.waveWorld = world;
+}
+
+void CharacterRenderer::clearInstanceWaveRide(uint32_t instanceId) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return;
+    it->second.waveRide = false;
+    it->second.waveHeave = 0.0f;
+    it->second.waveTilt = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    it->second.waveWorld = glm::mat4(1.0f);
 }
 
 bool CharacterRenderer::getEventPosition(uint32_t instanceId, uint32_t eventId, glm::vec3& out) const {

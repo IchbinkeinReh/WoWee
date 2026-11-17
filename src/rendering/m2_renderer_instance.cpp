@@ -636,6 +636,31 @@ std::optional<glm::mat4> M2Renderer::getInstanceModelMatrix(uint32_t instanceId)
     return instances[idxIt->second].modelMatrix;
 }
 
+void M2Renderer::setInstanceVisualDelta(uint32_t instanceId, const glm::mat4& delta) {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return;
+    for (int c = 0; c < 4; c++)
+        for (int r = 0; r < 4; r++)
+            if (!std::isfinite(delta[c][r])) return;
+    auto& inst = instances[idxIt->second];
+    const bool any = delta != glm::mat4(1.0f);
+    if (inst.hasVisualDelta == any && (!any || inst.visualDelta == delta)) return;
+    inst.hasVisualDelta = any;
+    inst.visualDelta = any ? delta : glm::mat4(1.0f);
+    // The traced scene takes the drawn matrix (syncRtScene).
+    markRtUnsettled(inst);
+}
+
+void M2Renderer::clearInstanceVisualDelta(uint32_t instanceId) {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return;
+    auto& inst = instances[idxIt->second];
+    if (!inst.hasVisualDelta) return;
+    inst.hasVisualDelta = false;
+    inst.visualDelta = glm::mat4(1.0f);
+    markRtUnsettled(inst);
+}
+
 void M2Renderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& transform) {
     auto idxIt = instanceIndexById.find(instanceId);
     if (idxIt == instanceIndexById.end()) return;

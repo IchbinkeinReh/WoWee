@@ -2052,7 +2052,7 @@ struct M2ModelGPU::RtSkin {
 static glm::mat4 rtSteadyCarried(const M2ModelGPU& model, const M2Instance& inst, uint32_t bone) {
     const uint32_t owner = bone < model.billboardOwner.size() ? model.billboardOwner[bone] : ~0u;
     const glm::vec3 pivot = owner < model.bones.size() ? model.bones[owner].pivot : glm::vec3(0.0f);
-    return rt_lights::steadyBoneCarried(inst.modelMatrix, inst.boneMatrices, bone, owner, pivot);
+    return rt_lights::steadyBoneCarried(inst.drawMatrix(), inst.boneMatrices, bone, owner, pivot);
 }
 
 namespace {
@@ -2713,10 +2713,10 @@ void M2Renderer::syncRtScene() {
         return it != models.end() ? &it->second : nullptr;
     };
     auto add = [&](M2Instance& inst, uint32_t mesh, bool dynamic) {
-        inst.rtInstance = dynamic ? rtScene_->addDynamicInstance(mesh, inst.modelMatrix)
-                                  : rtScene_->addInstance(mesh, inst.modelMatrix);
+        const glm::mat4 drawn = inst.drawMatrix();
+        inst.rtInstance = dynamic ? rtScene_->addDynamicInstance(mesh, drawn) : rtScene_->addInstance(mesh, drawn);
         if (inst.rtInstance == RtScene::kInvalid) return;
-        inst.rtMatrix = inst.modelMatrix;
+        inst.rtMatrix = drawn;
         trackRtSlot(inst.rtInstance, mesh, inst.id);
         if (dynamic) rtDynamicOwnerIds_.push_back(inst.id);
     };
@@ -2744,10 +2744,10 @@ void M2Renderer::syncRtScene() {
             add(inst, mesh, false);
             return inst.rtInstance != RtScene::kInvalid;
         }
-        if (inst.rtMatrix != inst.modelMatrix) {
+        if (inst.rtMatrix != inst.drawMatrix()) {
             if (RtScene::isDynamic(inst.rtInstance)) {
-                rtScene_->setInstanceTransform(inst.rtInstance, inst.modelMatrix);
-                inst.rtMatrix = inst.modelMatrix;
+                rtScene_->setInstanceTransform(inst.rtInstance, inst.drawMatrix());
+                inst.rtMatrix = inst.drawMatrix();
             } else {
                 // It moves: a transport, or a doodad riding one. Moved in the
                 // static set it would rebuild the whole city's top level
@@ -2882,7 +2882,7 @@ void M2Renderer::syncRtSkinned() {
         }
         const uint32_t mesh = rtScene_->addMesh(std::move(src), /*urgent=*/true);
         if (mesh == RtScene::kInvalid) continue;
-        const uint32_t instance = rtScene_->addDynamicInstance(mesh, inst.modelMatrix);
+        const uint32_t instance = rtScene_->addDynamicInstance(mesh, inst.drawMatrix());
         if (instance == RtScene::kInvalid) {
             rtScene_->removeMesh(mesh);
             continue;

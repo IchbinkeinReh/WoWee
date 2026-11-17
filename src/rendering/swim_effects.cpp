@@ -409,6 +409,9 @@ void SwimEffects::spawnInsect(const glm::vec3& vegPos) {
 void SwimEffects::update(const Camera& camera, const CameraController& cc,
                          const WaterRenderer& water, float deltaTime) {
     glm::vec3 camPos = camera.getPosition();
+    // Where the camera would be without riding the waves (Renderer::
+    // updateWaveRide): the bubbles start under the flat surface, as ever.
+    const glm::vec3 camAt = camPos - cameraRideOffset_;
 
     // Use character position for ripples in third-person mode
     glm::vec3 charPos = camPos;
@@ -430,7 +433,7 @@ void SwimEffects::update(const Camera& camera, const CameraController& cc,
     const std::optional<float> charWaterH =
         charInMagma ? std::nullopt : water.getWaterHeightAt(charPos.x, charPos.y);
     const std::optional<float> camWaterH =
-        camInMagma ? std::nullopt : water.getWaterHeightAt(camPos.x, camPos.y);
+        camInMagma ? std::nullopt : water.getWaterHeightAt(camAt.x, camAt.y);
 
     bool swimming = cc.isSwimming();
     bool moving = cc.isMoving();
@@ -492,7 +495,7 @@ void SwimEffects::update(const Camera& camera, const CameraController& cc,
     // --- Bubble spawning ---
     // Require swimming state to prevent spurious bubbles on login/teleport
     // when camera may briefly appear below a water surface before grounding.
-    bool underwater = swimming && camWaterH && camPos.z < *camWaterH;
+    bool underwater = swimming && camWaterH && camAt.z < *camWaterH;
     if (underwater) {
         float bubbleRate = 20.0f;
         bubbleSpawnAccum += bubbleRate * deltaTime;

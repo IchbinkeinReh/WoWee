@@ -1468,7 +1468,7 @@ void M2Renderer::renderOpaque(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, 
                 if (instanceDataCount_ >= MAX_INSTANCE_DATA) break;
                 auto& inst = instances[p.instanceIdx];
                 auto& e = instSSBO[instanceDataCount_];
-                e.model = inst.modelMatrix;
+                e.model = inst.drawMatrix();
                 e.uvOffset = glm::vec2(0.0f);
                 e.uvLinear = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
                 e.uvOffset2 = glm::vec4(0.0f);
@@ -1620,7 +1620,7 @@ void M2Renderer::renderOpaque(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, 
                             // upload memory: writing it is cheap, but reading it back is
                             // uncached and costs microseconds per instance.
                             auto& e = instSSBO[instanceDataCount_];
-                            e.model = inst.modelMatrix;
+                            e.model = inst.drawMatrix();
                             e.uvOffset = uvOffset;
                             e.uvLinear = uvLinear;
                             e.uvOffset2 = glm::vec4(uvOffset2, 0.0f, 0.0f);
@@ -2073,7 +2073,7 @@ void M2Renderer::renderBlended(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             if (instanceDataCount_ >= MAX_INSTANCE_DATA) continue;
             uint32_t drawOffset = instanceDataCount_;
             auto& e = instSSBO[instanceDataCount_];
-            e.model = instance.modelMatrix;
+            e.model = instance.drawMatrix();
             e.uvOffset = uvOffset;
             e.uvLinear = uvLinear;
             e.uvOffset2 = glm::vec4(uvOffset2, 0.0f, 0.0f);
@@ -2586,7 +2586,7 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
             const uint32_t firstShadowSlot = shadowInstanceCount;
             if (instanced) {
                 for (std::size_t k = g; k < groupEnd; ++k) {
-                    shadowModels[shadowInstanceCount++] = instances[casters[k].second].modelMatrix;
+                    shadowModels[shadowInstanceCount++] = instances[casters[k].second].drawMatrix();
                 }
             }
             usePipeline(instanced);
@@ -2642,7 +2642,7 @@ void M2Renderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMa
                 for (std::size_t k = g; k < groupEnd; ++k) {
                     const auto& instance = instances[casters[k].second];
                     ShadowPush push{
-                        .lightSpaceModel = lightSpaceMatrix * instance.modelMatrix,
+                        .lightSpaceModel = lightSpaceMatrix * instance.drawMatrix(),
                         .flags = passFlags};
                     vkCmdPushConstants(cmd, shadowPipelineLayout_,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,  // as the layout declares

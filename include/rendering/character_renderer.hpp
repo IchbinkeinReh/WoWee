@@ -19,6 +19,7 @@
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <memory>
 #include <vector>
 #include <optional>
@@ -460,6 +461,13 @@ public:
     /// Where the instance is drawn is moved by this, on top of its position
     /// (a mount transition carrying its rider, 0x007193f0); zero for none.
     void setInstanceRenderOffset(uint32_t instanceId, const glm::vec3& offset);
+    /// Riding the traced water's waves ("Ride the waves", Renderer::
+    /// updateWaveRide): the instance is drawn raised by `heave` and leant by
+    /// `tilt` about where it stands, and then moved by `world` (a ship's own
+    /// ride, carrying what stands on its deck). Drawn only: its position,
+    /// and every query of it, stay where the game puts it.
+    void setInstanceWaveRide(uint32_t instanceId, float heave, const glm::quat& tilt, const glm::mat4& world);
+    void clearInstanceWaveRide(uint32_t instanceId);
 
     /** Debug: Log all available animations for an instance */
     void dumpAnimations(uint32_t instanceId) const;
@@ -673,6 +681,11 @@ private:
 
         glm::vec3 position;
         glm::vec3 renderOffset{0.0f};  ///< setInstanceRenderOffset
+        /// setInstanceWaveRide; none while waveRide is false.
+        bool waveRide = false;
+        float waveHeave = 0.0f;
+        glm::quat waveTilt{1.0f, 0.0f, 0.0f, 0.0f};
+        glm::mat4 waveWorld{1.0f};
         glm::vec3 rotation;
         float scale;
         bool visible = true;  // For first-person camera hiding

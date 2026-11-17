@@ -1,6 +1,7 @@
 #pragma once
 
 #include "rendering/swim_wave.hpp"
+#include "rendering/wave_surface.hpp"
 #include "audio/sound_listener.hpp"
 #include "rendering/water_unit_share.hpp"
 #include "rendering/rt_normal_blend.hpp"
@@ -375,6 +376,18 @@ public:
                        bool swimming) {
         rtWaterUnits_.push_back({guid, instanceId, feet, waterZ, moving, swimming});
     }
+
+    /// Another unit this frame, for riding the traced water's waves ("Ride
+    /// the waves", updateWaveRide): swimming, it rides the waves at `feet`;
+    /// aboard the transport `transportGuid` (0 none), it rides with that ship
+    /// if the ship rides them. `mountInstanceId` its mount's model, 0 none.
+    /// Drawn only: the unit's position is left as the game has it.
+    void rideWavesUnit(uint64_t guid, uint32_t instanceId, uint32_t mountInstanceId, const glm::vec3& feet,
+                       bool swimming, uint64_t transportGuid);
+    /// What the camera was moved by this frame to ride the waves with what it
+    /// follows (updateWaveRide). The underwater checks take it off: they
+    /// decide on the flat surface as ever, from where the camera would be.
+    [[nodiscard]] const glm::vec3& getCameraRideOffset() const { return cameraRideOffset_; }
 
     // Selection circle for targeted entity
     /// The target's circle (0x00725980): the unit and its selection colour.
@@ -1336,6 +1349,39 @@ private:
     float physicsWind_ = 7.0f;
     bool waterTessellation_ = true;
     bool shoreWaves_ = true;
+    // Riding the traced water's waves (wave_surface.hpp): the setting, and
+    // each rider's eased pose. Drawn only, through the renderers' own ride
+    // (CharacterRenderer::setInstanceWaveRide, the WMO and M2 renderers'
+    // setInstanceVisualDelta) and the camera's offset; no position the game
+    // keeps is touched.
+    bool rideWaves_ = true;
+    struct UnitWaveRide {
+        uint32_t instanceId = 0;
+        uint32_t mountInstanceId = 0;
+        glm::vec3 feet{0.0f};
+        bool swimming = false;
+        uint64_t transportGuid = 0;
+        bool seen = false;
+        wave_surface::RidePose pose;
+    };
+    std::unordered_map<uint64_t, UnitWaveRide> unitWaveRides_;
+    struct BoatWaveRide {
+        uint32_t instanceId = 0;
+        bool isM2 = false;
+        bool seen = false;
+        bool riding = false;
+        glm::mat4 delta{1.0f};
+        wave_surface::RidePose pose;
+    };
+    std::unordered_map<uint64_t, BoatWaveRide> boatWaveRides_;
+    wave_surface::RidePose playerWaveRide_;
+    uint32_t playerRideInstance_ = 0;
+    uint32_t playerRideMount_ = 0;
+    glm::vec3 cameraRideOffset_{0.0f};
+    void updateWaveRide(float deltaTime);
+    void clearWaveRide();
+    void setUnitRide(uint32_t instanceId, uint32_t mountInstanceId, bool riding, float heave, const glm::vec2& slopes,
+                     const glm::mat4& world);
     bool rtListenerAdded_ = false;
     // The memory guard (rt_memory_guard.hpp): run each frame before the ray
     // tracing's prepare, and before the loading screen's warm-up.
@@ -1381,6 +1427,9 @@ public:
     void setWaterTessellation(bool on) { waterTessellation_ = on; }
     /// The shore waves and their surf on the traced water (shallow_water.hpp).
     void setShoreWaves(bool on) { shoreWaves_ = on; }
+    /// Swimmers, boats and the camera ride the traced water's waves, drawn
+    /// only (wave_surface.hpp, updateWaveRide).
+    void setRideWaves(bool on) { rideWaves_ = on; }
 private:
     int rtMinBrightnessPercent_ = 0;
     int rtNormalKeepDeg_ = kNormalBlendKeepDefault;

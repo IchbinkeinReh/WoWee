@@ -99,6 +99,7 @@ public:
     int pendingPhysWind = 7;          ///< their wind, m/s
     bool pendingWaterTess = true;     ///< tessellated water (water_tessellation.hpp)
     bool pendingShoreWaves = true;    ///< shore surf and whitewater (shallow_water.hpp)
+    bool pendingRideWaves = true;     ///< swimmers, boats and the camera ride the waves (wave_surface.hpp)
     int pendingWeatherWaves = 100;    ///< how much rain and storms roughen it, %
     int pendingRtNormalKeep = rendering::kNormalBlendKeepDefault;     ///< the normal blend's angles, degrees (rt_normal_blend.hpp)
     int pendingRtNormalFace = rendering::kNormalBlendFaceDefault;

@@ -433,6 +433,27 @@ void playRiderMountAnimation(rendering::CharacterRenderer& cr, rendering::SpellV
     cr.playAnimation(mountInstance, kit ? *kit : locomotion, true);
 }
 
+// A unit on the traced water's waves ("Ride the waves", Renderer::
+// updateWaveRide), drawn only: swimming, it rides them where it swims; aboard
+// a ship that rides them, it rides with the ship. `drawnAt` is where the sync
+// placed its model (on a mount, the rider up on the saddle); nothing is
+// written back.
+void feedUnitWaveRide(rendering::Renderer& renderer, EntitySpawner& spawner, uint64_t guid, uint32_t instanceId,
+                      const game::Unit& unit, const glm::vec3& drawnAt, bool dead) {
+    auto* gh = Application::getInstance().getGameHandler();
+    if (dead || !gh) return;
+    constexpr uint32_t kSwimming = static_cast<uint32_t>(game::MovementFlags::SWIMMING);
+    const bool swimming =
+        (unit.getReportedMoveFlags() & kSwimming) != 0 || spawner.getCreatureSwimmingState().count(guid) > 0;
+    const auto& attachments = gh->transportAttachmentsRef();
+    const auto attached = attachments.find(guid);
+    const uint64_t transportGuid = attached != attachments.end() ? attached->second.transportGuid : 0;
+    // A rider's mount stands under it, where the water's depth is taken.
+    const auto* mount = spawner.getRemotePlayerMount(guid);
+    const glm::vec3 ground = mount ? drawnAt - glm::vec3(0.0f, 0.0f, mount->riderHeight) : drawnAt;
+    renderer.rideWavesUnit(guid, instanceId, mount ? mount->instanceId : 0u, ground, swimming, transportGuid);
+}
+
 // Another unit's animation tier and what 0x007385c0 reads of it, onto its
 // instance, from what the sync has worked out of how it moves.
 // A unit's ripples, within reach of the character: the client's every unit in
@@ -443,6 +464,9 @@ void playRiderMountAnimation(rendering::CharacterRenderer& cr, rendering::SpellV
 // character does there (Renderer::unitInRtWater), to the same range.
 void feedUnitRipple(rendering::Renderer& renderer, EntitySpawner& spawner, uint64_t guid, uint32_t instanceId,
                     const game::Unit& unit, const glm::vec3& feet, bool moving, bool dead, float deltaTime) {
+    // The ride on the waves first: it wants every unit in the sync, not only
+    // those in the water within the ripples' reach.
+    feedUnitWaveRide(renderer, spawner, guid, instanceId, unit, feet, dead);
     auto* swim = renderer.getSwimEffects();
     auto* water = renderer.getWaterRenderer();
     if (dead || !swim || !water) return;

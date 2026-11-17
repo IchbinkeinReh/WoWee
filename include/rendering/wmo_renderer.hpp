@@ -174,6 +174,11 @@ public:
      * @param transform World transform matrix
      */
     void setInstanceTransform(uint32_t instanceId, const glm::mat4& transform);
+    /// Drawn moved by `delta` (world space) on top of its transform, its
+    /// doodads too - a ship's ride on the waves (Renderer::updateWaveRide) -
+    /// and nothing else: its collision, the floor it gives and every query
+    /// stay where the transform puts it. Identity for none.
+    void setInstanceVisualDelta(uint32_t instanceId, const glm::mat4& delta);
 
     /// Mark an instance as a moving transport. Its collision still answers the
     /// static-world floor query (you walk onto a hull, you stand on a lift), but
@@ -973,6 +978,13 @@ private:
         float scale;
         glm::mat4 modelMatrix;
         glm::mat4 invModelMatrix;  // Cached inverse for collision
+        /// A ship riding the traced water's waves (setInstanceVisualDelta):
+        /// drawn, shadowed and traced by visualDelta * modelMatrix, its
+        /// doodads with it. Collision, bounds and every query keep
+        /// modelMatrix.
+        bool hasVisualDelta = false;
+        glm::mat4 visualDelta{1.0f};
+        [[nodiscard]] glm::mat4 drawMatrix() const { return hasVisualDelta ? visualDelta * modelMatrix : modelMatrix; }
         glm::vec3 worldBoundsMin;
         glm::vec3 worldBoundsMax;
         std::vector<std::pair<glm::vec3, glm::vec3>> worldGroupBounds;

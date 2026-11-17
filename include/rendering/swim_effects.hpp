@@ -63,6 +63,10 @@ public:
     }
     void update(const Camera& camera, const CameraController& cc,
                 const WaterRenderer& water, float deltaTime);
+    /// What the camera was moved by to ride the waves (Renderer::
+    /// updateWaveRide): whether it is under water, for the bubbles, is
+    /// decided without it, on the flat surface.
+    void setCameraRideOffset(const glm::vec3& offset) { cameraRideOffset_ = offset; }
     void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet);
     void spawnFootSplash(const glm::vec3& footPos, float waterH);
     void setM2Renderer(M2Renderer* renderer) { m2Renderer = renderer; }
@@ -77,6 +81,7 @@ public:
                      float scale, float height, float deltaTime);
 
 private:
+    glm::vec3 cameraRideOffset_{0.0f};  ///< setCameraRideOffset
     struct Particle {
         glm::vec3 position;
         glm::vec3 velocity;

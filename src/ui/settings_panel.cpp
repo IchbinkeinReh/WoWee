@@ -990,7 +990,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "animatedportraits",
     "fogskyblend", "fogstrength", "sharpstars", "lightshafts", "mistdensity", "sunshafts",
     "lensflare",
-    "screenglow", "raytracedlighting", "rtfullres", "rtsoftlamps", "rtrealisticfalloff", "rtpointselfshadow", "rtunitselfshadow", "rtroomsun", "rtunitshadowreach", "rtminbrightness", "rtwater", "rtswimwaves", "interactivewater", "rtwaveamp", "rtwavefreq", "physwaves", "physwind", "weatherwaves", "watertess", "shorewaves", "rtnormalkeep", "rtnormalface", "rteyebrighten", "rteyeseconds",
+    "screenglow", "raytracedlighting", "rtfullres", "rtsoftlamps", "rtrealisticfalloff", "rtpointselfshadow", "rtunitselfshadow", "rtroomsun", "rtunitshadowreach", "rtminbrightness", "rtwater", "rtswimwaves", "interactivewater", "rtwaveamp", "rtwavefreq", "physwaves", "physwind", "weatherwaves", "watertess", "shorewaves", "ridewaves", "rtnormalkeep", "rtnormalface", "rteyebrighten", "rteyeseconds",
     "rteyesensitivity",
     "rtsunrays", "rtaorays", "rtpointrays", "rtbouncerays",
     // The Debug Graphics settings: each applies all of them.
@@ -1242,6 +1242,7 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "physwind", .asInt = &SettingsPanel::pendingPhysWind},
     {.key = "watertess", .asBool = &SettingsPanel::pendingWaterTess},
     {.key = "shorewaves", .asBool = &SettingsPanel::pendingShoreWaves},
+    {.key = "ridewaves", .asBool = &SettingsPanel::pendingRideWaves},
     {.key = "weatherwaves", .asInt = &SettingsPanel::pendingWeatherWaves},
     {.key = "rtnormalkeep", .asInt = &SettingsPanel::pendingRtNormalKeep},
     {.key = "rtnormalface", .asInt = &SettingsPanel::pendingRtNormalFace},
@@ -1784,6 +1785,8 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         if (renderer) renderer->setWaterTessellation(pendingWaterTess);
     } else if (key == "shorewaves") {
         if (renderer) renderer->setShoreWaves(pendingShoreWaves);
+    } else if (key == "ridewaves") {
+        if (renderer) renderer->setRideWaves(pendingRideWaves);
     } else if (key == "rtnormalkeep" || key == "rtnormalface") {
         // Held apart at use (normalBlendCosines): a face angle under the
         // keep angle is taken as the keep angle.

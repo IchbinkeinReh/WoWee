@@ -1974,6 +1974,7 @@ void GameScreen::saveSettings() {
     out << "phys_wind=" << settingsPanel_.pendingPhysWind << "\n";
     out << "water_tess=" << (settingsPanel_.pendingWaterTess ? 1 : 0) << "\n";
     out << "shore_waves=" << (settingsPanel_.pendingShoreWaves ? 1 : 0) << "\n";
+    out << "ride_waves=" << (settingsPanel_.pendingRideWaves ? 1 : 0) << "\n";
     out << "weather_waves=" << settingsPanel_.pendingWeatherWaves << "\n";
     out << "rt_normal_keep=" << settingsPanel_.pendingRtNormalKeep << "\n";
     out << "rt_normal_face=" << settingsPanel_.pendingRtNormalFace << "\n";
@@ -2337,6 +2338,7 @@ void GameScreen::loadSettings() {
             else if (key == "phys_wind") settingsPanel_.pendingPhysWind = std::clamp(std::stoi(val), 1, 20);
             else if (key == "water_tess") settingsPanel_.pendingWaterTess = (std::stoi(val) != 0);
             else if (key == "shore_waves") settingsPanel_.pendingShoreWaves = (std::stoi(val) != 0);
+            else if (key == "ride_waves") settingsPanel_.pendingRideWaves = (std::stoi(val) != 0);
             else if (key == "weather_waves") settingsPanel_.pendingWeatherWaves = std::clamp(std::stoi(val), 0, 200);
             else if (key == "rt_min_brightness")
                 settingsPanel_.pendingRtMinBrightness =

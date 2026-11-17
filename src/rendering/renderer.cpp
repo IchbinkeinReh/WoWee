@@ -2919,6 +2919,10 @@ void Renderer::update(float deltaTime) {
             camera->setPosition(cinematicView_->position);
             camera->setLookDirection(cinematicView_->forward, cinematicView_->up);
         }
+        // Swimmers, floating ships and the camera on the traced water's waves,
+        // drawn only (renderer_wave_ride.cpp): after the controller has moved
+        // the character and placed the camera, before anything looks at it.
+        updateWaveRide(deltaTime);
         auto cameraEnd = std::chrono::steady_clock::now();
         lastCameraUpdateMs = std::chrono::duration<double, std::milli>(cameraEnd - cameraStart).count();
         if (lastCameraUpdateMs > 50.0) {
@@ -3028,7 +3032,9 @@ void Renderer::update(float deltaTime) {
         // with depth or names a light of its own (0x007f3230).
         LightingManager::CameraLiquid cameraLiquid;
         if (waterRenderer && camera) {
-            const glm::vec3 eye = camera->getPosition();
+            // Where the camera would be without riding the waves: whether it
+            // is under is the flat surface's to say, as ever.
+            const glm::vec3 eye = camera->getPosition() - cameraRideOffset_;
             const auto surface = waterRenderer->getNearestWaterHeightAt(eye.x, eye.y, eye.z);
             if (surface && eye.z < *surface) {
                 cameraLiquid.submerged = true;
@@ -3388,6 +3394,7 @@ void Renderer::update(float deltaTime) {
     if (swimEffects && camera && cameraController && waterRenderer) {
         WOWEE_PROFILE_SCOPE("swim effects", Cpu);
         swimEffects->setSurfaceRipplesShown(!waterRenderer->rtWaterDrawn());
+        swimEffects->setCameraRideOffset(cameraRideOffset_);
         swimEffects->update(*camera, *cameraController, *waterRenderer, deltaTime);
     }
 
@@ -5486,7 +5493,9 @@ void Renderer::renderUnderwaterOverlay(VkCommandBuffer cmd) {
     // player got, and on the fallback path crossing the surface showed a
     // bare line with no water either side of it.
 if (overlaySystem_ && waterRenderer && camera) {
-        glm::vec3 camPos = camera->getPosition();
+        // Without the camera's ride on the waves (updateWaveRide): under the
+        // flat surface or not, as the lighting decides it.
+        glm::vec3 camPos = camera->getPosition() - cameraRideOffset_;
         // The default vertical reach of this query is 15 units, meant to
         // stop water on a cliff above being mistaken for water the camera
         // is in. For the underwater tint that cap is the wrong end of the

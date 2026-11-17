@@ -321,6 +321,13 @@ struct M2Instance {
     float scale;
     glm::mat4 modelMatrix;
     glm::mat4 invModelMatrix;
+    // A ship riding the traced water's waves, and what is fixed to it
+    // (M2Renderer::setInstanceVisualDelta): drawn, shadowed and traced by
+    // visualDelta * modelMatrix. Collision, bounds and every query keep
+    // modelMatrix.
+    bool hasVisualDelta = false;
+    glm::mat4 visualDelta{1.0f};
+    [[nodiscard]] glm::mat4 drawMatrix() const { return hasVisualDelta ? visualDelta * modelMatrix : modelMatrix; }
     // Its RtScene instance and the matrix last given to it; see syncRtScene.
     uint32_t rtInstance = ~0u;
     // A fixture seen to move (syncRtScene): carried, and out of the scene.
@@ -732,6 +739,12 @@ public:
     void censusInstance(const M2Instance& instance);
 
     void setInstanceTransform(uint32_t instanceId, const glm::mat4& transform);
+    /// Drawn moved by `delta` (world space) on top of its transform - a ship's
+    /// ride on the waves (Renderer::updateWaveRide) - and nothing else: its
+    /// collision and queries stay where the transform puts it. Identity, or
+    /// clearInstanceVisualDelta, for none.
+    void setInstanceVisualDelta(uint32_t instanceId, const glm::mat4& delta);
+    void clearInstanceVisualDelta(uint32_t instanceId);
     [[nodiscard]] std::optional<glm::mat4> getInstanceModelMatrix(uint32_t instanceId) const;
     void setInstanceAnimationFrozen(uint32_t instanceId, bool frozen);
     /// Hold the current sequence at `fraction` (0..1) of its length instead of

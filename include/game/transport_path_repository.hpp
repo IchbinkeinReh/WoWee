@@ -65,6 +65,24 @@ constexpr bool isOceanGoingTransportDisplay(uint32_t displayId) {
     }
 }
 
+/// Vehicles that fly - the zeppelins, Naxxramas, and Icecrown's gunships and
+/// airships - as against those that sail; of isVehicleTransportDisplay's
+/// list. A flier never rides the water's waves (Renderer::updateWaveRide),
+/// whatever it passes over.
+constexpr bool isAirTransportDisplay(uint32_t displayId) {
+    switch (displayId) {
+        case 3031:  // zeppelin
+        case 6637:  // Naxxramas
+        case 7546:  // horde zeppelin
+        case 8253: case 8254:   // Orgrim's Hammer / The Skybreaker
+        case 9001: case 9002:   // gunships
+        case 9150: case 9151:   // Icecrown airships
+            return true;
+        default:
+            return false;
+    }
+}
+
 /// Metadata + CatmullRomSpline for a transport path.
 struct PathEntry {
     math::CatmullRomSpline spline;
