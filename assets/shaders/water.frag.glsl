@@ -85,7 +85,7 @@ layout(set = 2, binding = 3) uniform WaterFrameData {
     vec4 rtSkyTop;      // the sky a reflection that leaves the scene meets: overhead
     vec4 rtSkyHorizon;  // and at the horizon
     vec4 rtSunRay;      // xyz toward the sun the traced lighting's shadows follow
-    vec4 swimWaveInfo;                 // x = how many
+    vec4 swimWaveInfo;                 // x = how many, z = 1: physics waves (impulseRingTilt)
     vec4 swimWaves[MAX_SWIM_WAVES];    // xy = where, z = age in seconds, w = strength
     // The lamps nearest the camera: xyz where, w reach; rgb colour, a where it
     // starts to fall off. swimWaveInfo.y says how many.
@@ -370,9 +370,54 @@ vec2 rainRippleTilt(vec2 p, float t, float strength) {
     return tilt;
 }
 
+// Physics waves' interaction (pad2 > 0): the deep-water rings of an impulse
+// at the surface, `t` seconds ago, `r` yards away (Cauchy-Poisson). Deep
+// water's dispersion (omega^2 = g k) puts the wave of wavenumber
+// k = g t^2 / (4 r^2) at distance r, with phase g t^2 / (4 r): the long
+// waves run out ahead and the short ones follow, the rings tightening inward.
+// The source's size `sigma` sets which lengths it raises (exp(-(k sigma)^2));
+// spread over the ring the slope falls as 1/sqrt(r). A wake is these summed
+// over every point of a trail, which gives Kelvin's wedge with the
+// wavelength the speed sets (2 pi U^2 / g) - no shape is drawn.
+vec2 impulseRingTilt(vec2 from, float t, float sigma, float strength) {
+    if (t <= 0.0) return vec2(0.0);
+    float r = max(length(from), 0.05);
+    float gt2 = PW_G * t * t;
+    float k = gt2 / (4.0 * r * r);
+    float phase = gt2 / (4.0 * r);
+    float ks = k * sigma;
+    float spectrum = exp(-ks * ks);
+    float spread = sqrt(sigma / (sigma + r));
+    float fade = 1.0 - smoothstep(1.2, 2.2, t);
+    float slope = strength * 0.6 * spectrum * ks * sin(phase) * spread * fade;
+    return -(from / r) * slope;
+}
+
 // Interactive water: the bow wave and the Kelvin wake of every trail near
 // the pixel (see main), as a surface slope.
 vec2 kelvinWake(vec2 at) {
+    // Physics waves (swimWaveInfo.z = 1, the points' z their age in
+    // seconds): every point of every trail an impulse (impulseRingTilt),
+    // summed.
+    if (swimWaveInfo.z > 0.5) {
+        const float PHYS_REACH = 12.0;
+        vec2 physTilt = vec2(0.0);
+        int pcount = clamp(int(wakeBounds.w), 0, MAX_WAKE_POINTS);
+        int pgroups = clamp(int(wakeBounds.x), 0, MAX_WATER_GROUPS);
+        for (int g = 0; g < pgroups; ++g) {
+            vec2 toGroup = at - wakeGroups[g].xy;
+            if (dot(toGroup, toGroup) >= wakeGroups[g].z * wakeGroups[g].z) continue;
+            int first = clamp(int(wakeGroups[g].w), 0, pcount);
+            int end = g + 1 < pgroups ? clamp(int(wakeGroups[g + 1].w), first, pcount) : pcount;
+            for (int i = first; i < end; ++i) {
+                vec4 wp = wakePoints[i];
+                vec2 from = at - wp.xy;
+                if (dot(from, from) >= PHYS_REACH * PHYS_REACH) continue;
+                physTilt += impulseRingTilt(from, wp.z, 0.45, wp.w * 0.5);
+            }
+        }
+        return physTilt;
+    }
     const float KELVIN_REACH = 7.0;
     vec2 tilt = vec2(0.0);
     int count = clamp(int(wakeBounds.w), 0, MAX_WAKE_POINTS);
@@ -511,6 +556,12 @@ void main() {
         for (int i = first; i < end; ++i) {
             vec4 w = swimWaves[i];
             vec2 fromWave = FragPos.xy - w.xy;
+            // Physics waves: a stroke's deep-water rings (impulseRingTilt),
+            // a hand's a quarter yard across.
+            if (swimWaveInfo.z > 0.5) {
+                swimTilt += impulseRingTilt(fromWave, w.z, 0.25, w.w);
+                continue;
+            }
             float d = length(fromWave);
             float along = (d - (0.15 + w.z * 1.7)) / (0.28 + w.z * 0.25);
             float crest = exp(-along * along) * sin(along * 4.0);

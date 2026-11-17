@@ -120,6 +120,14 @@ inline std::array<Wave, kWaveCount> sample(float windMps, float fetch, float win
     return waves;
 }
 
+/// A disturbance's rings on deep water (Cauchy-Poisson; water.frag's
+/// impulseRingTilt): `t` seconds after an impulse, the wave found `r` yards
+/// away is the one whose group velocity (half its phase speed) has carried it
+/// there, k = g t^2 / (4 r^2), at phase g t^2 / (4 r).
+inline float impulseWavenumber(float r, float t) { return kGravity * t * t / (4.0f * r * r); }
+inline float impulsePhase(float r, float t) { return kGravity * t * t / (4.0f * r); }
+inline float groupSpeed(float k) { return 0.5f * std::sqrt(kGravity / k); }
+
 /// The significant wave height (4 sigma) of the sampled waves, in yards.
 inline float significantHeight(const std::array<Wave, kWaveCount>& waves) {
     float variance = 0.0f;

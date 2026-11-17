@@ -2102,12 +2102,18 @@ void WaterRenderer::updateWake(float deltaTime, const glm::vec2& pos,
     for (int i = 0; i < count; ++i) {
         const WakePoint& p = wakePoints_[i];
         const float age01 = std::min(1.0f, p.age / p.life);
-        frameUBO_.wakePoints[i] = glm::vec4(p.pos.x, p.pos.y, age01, p.strength);
+        // Physics waves: the age in seconds, which the shader's deep-water
+        // rings are timed by (water.frag impulseRingTilt).
+        const float age = rtFrame_.physicsWaves ? p.age : age01;
+        frameUBO_.wakePoints[i] = glm::vec4(p.pos.x, p.pos.y, age, p.strength);
     }
-    // Must cover a point's own spread, or froth is clipped mid-patch.
+    // Must cover a point's own spread, or froth is clipped mid-patch. The
+    // physics waves' rings carry further: after a trail point's 1.9 s, the
+    // longest waves it raises are some 4 yards out.
     constexpr float kMaxPatchRadius = 1.45f;
+    constexpr float kPhysicsPatchRadius = 5.0f;
     const auto groups = water_share::groupByOwner(
-        static_cast<size_t>(count), kMaxWaterGroups, kMaxPatchRadius,
+        static_cast<size_t>(count), kMaxWaterGroups, rtFrame_.physicsWaves ? kPhysicsPatchRadius : kMaxPatchRadius,
         [&](size_t i) { return wakePoints_[i].key; }, [&](size_t i) { return wakePoints_[i].pos; });
     for (size_t g = 0; g < groups.size(); ++g) {
         frameUBO_.wakeGroups[g] = glm::vec4(groups[g].x, groups[g].y, groups[g].radius,
@@ -2131,6 +2137,9 @@ void WaterRenderer::setSwimWaves(const std::vector<swim_wave::Wave>& waves) {
                      [](const swim_wave::Wave* a, const swim_wave::Wave* b) { return a->owner < b->owner; });
     const size_t n = std::min(sorted.size(), swim_wave::kMaxWaves);
     frameUBO_.swimWaveInfo.x = static_cast<float>(n);
+    // The swimmers' rings and the trails' wakes as the physics waves' deep
+    // water has them (water.frag impulseRingTilt), with physics waves on.
+    frameUBO_.swimWaveInfo.z = rtFrame_.physicsWaves ? 1.0f : 0.0f;
     for (size_t i = 0; i < n; ++i) {
         frameUBO_.swimWaves[i] = glm::vec4(sorted[i]->position, sorted[i]->age, sorted[i]->strength);
     }

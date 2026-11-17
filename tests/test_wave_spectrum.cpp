@@ -60,3 +60,15 @@ TEST_CASE("the amplitude scale scales every wave", "[wave_spectrum]") {
     for (std::size_t i = 0; i < one.size(); ++i) CHECK(half[i].amplitude == Catch::Approx(0.5f * one[i].amplitude));
     CHECK(ws::significantHeight(ws::sample(7.0f, ws::kOceanFetch, 0.0f, 0.0f)) == 0.0f);
 }
+
+TEST_CASE("a disturbance's rings: each length where its group velocity has carried it", "[wave_spectrum]") {
+    for (float t : {0.3f, 1.0f, 1.9f}) {
+        for (float r : {0.5f, 2.0f, 6.0f}) {
+            const float k = ws::impulseWavenumber(r, t);
+            CHECK(ws::groupSpeed(k) * t == Catch::Approx(r).epsilon(1e-4));
+            CHECK(ws::impulsePhase(r, t) == Catch::Approx(k * r).epsilon(1e-4));
+        }
+    }
+    // Long waves lead: farther out, the waves are longer (smaller k).
+    CHECK(ws::impulseWavenumber(6.0f, 1.0f) < ws::impulseWavenumber(2.0f, 1.0f));
+}
