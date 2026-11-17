@@ -33,6 +33,64 @@ option(WOWEE_BUILD_TESTS "Build tests" ON)
 option(WOWEE_STATIC_RUNTIME "Link the runtime and the libraries statically (drop-in executable)" OFF)
 option(WOWEE_ENABLE_ASAN "Enable AddressSanitizer + UBSan (applied to all build configs; pairs well with Debug)" OFF)
 option(WOWEE_ENABLE_TRACY "Enable Tracy profiler instrumentation" OFF)
+
+# ── Faster local builds: ccache, LLD and its ThinLTO cache ──────────────
+# ccache, when it is installed and no launcher was given (CI sets its own
+# through CMAKE_<LANG>_COMPILER_LAUNCHER): a branch switch or a clean rebuild
+# recompiles only what changed.
+option(WOWEE_USE_CCACHE "Compile through ccache when it is installed" ON)
+if(WOWEE_USE_CCACHE AND NOT CMAKE_CXX_COMPILER_LAUNCHER AND NOT CMAKE_C_COMPILER_LAUNCHER)
+    find_program(WOWEE_CCACHE_PROGRAM ccache)
+    if(WOWEE_CCACHE_PROGRAM)
+        set(CMAKE_C_COMPILER_LAUNCHER "${WOWEE_CCACHE_PROGRAM}")
+        set(CMAKE_CXX_COMPILER_LAUNCHER "${WOWEE_CCACHE_PROGRAM}")
+        message(STATUS "ccache: ${WOWEE_CCACHE_PROGRAM}")
+    endif()
+endif()
+
+# Release builds link wowee with ThinLTO, which re-optimises the whole program
+# on every link: ~105 s with GNU ld's plugin. LLD keeps a ThinLTO cache, so a
+# relink re-optimises only the modules that changed and their importers (1 s
+# with nothing changed). With Clang (not Apple's, whose ld64 has a cache of its
+# own) and ld.lld found, and no linker chosen already, LLD is used and its
+# cache kept in the build directory, at most 2 GB, entries dropped after a week.
+option(WOWEE_FAST_LINK "Link with LLD and keep a ThinLTO cache when Clang and LLD are available" ON)
+set(WOWEE_THINLTO_CACHE_DIR "${CMAKE_BINARY_DIR}/thinlto-cache")
+if(WOWEE_FAST_LINK AND NOT MSVC)
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        set(_wowee_ld_chosen FALSE)
+        if(CMAKE_EXE_LINKER_FLAGS MATCHES "-fuse-ld=" OR CMAKE_LINKER_TYPE)
+            set(_wowee_ld_chosen TRUE)
+        endif()
+        if(NOT _wowee_ld_chosen)
+            get_filename_component(_wowee_cxx_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+            string(REGEX MATCH "[0-9]+$" _wowee_cxx_ver "${CMAKE_CXX_COMPILER}")
+            find_program(WOWEE_LLD_PROGRAM NAMES ld.lld ld.lld-${_wowee_cxx_ver}
+                         HINTS "${_wowee_cxx_dir}")
+            if(WOWEE_LLD_PROGRAM)
+                include(CheckLinkerFlag)
+                check_linker_flag(CXX "-fuse-ld=lld" WOWEE_HAS_FUSE_LD_LLD)
+                if(WOWEE_HAS_FUSE_LD_LLD)
+                    string(APPEND CMAKE_EXE_LINKER_FLAGS " -fuse-ld=lld")
+                    string(APPEND CMAKE_SHARED_LINKER_FLAGS " -fuse-ld=lld")
+                    string(APPEND CMAKE_MODULE_LINKER_FLAGS " -fuse-ld=lld")
+                    set(_wowee_ld_chosen TRUE)
+                    message(STATUS "Linker: LLD (${WOWEE_LLD_PROGRAM})")
+                endif()
+            endif()
+        endif()
+        if(CMAKE_EXE_LINKER_FLAGS MATCHES "-fuse-ld=lld" OR CMAKE_LINKER_TYPE STREQUAL "LLD")
+            add_link_options(
+                "LINKER:--thinlto-cache-dir=${WOWEE_THINLTO_CACHE_DIR}"
+                "LINKER:--thinlto-cache-policy=cache_size_bytes=2g:prune_after=604800s")
+            message(STATUS "ThinLTO cache: ${WOWEE_THINLTO_CACHE_DIR}")
+        endif()
+    elseif(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+        # ld64's own: -cache_path_lto (ThinLTO incremental cache).
+        add_link_options("LINKER:-cache_path_lto,${WOWEE_THINLTO_CACHE_DIR}")
+        message(STATUS "ThinLTO cache: ${WOWEE_THINLTO_CACHE_DIR}")
+    endif()
+endif()
 # AMD's FidelityFX SDK backends, off by default.
 #
 # They give neither a performance nor a quality gain here today, and FSR3 frame
