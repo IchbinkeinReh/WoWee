@@ -3,6 +3,7 @@
 #include "rendering/water_surface_grid.hpp"
 #include "rendering/water_mask.hpp"
 #include "rendering/water_renderer.hpp"
+#include "rendering/wave_spectrum.hpp"
 #include "rendering/collision_liquid.hpp"
 #include "rendering/collision_facets.hpp"
 #include <array>
@@ -1289,6 +1290,17 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
         push.waveAmp = waveAmp * kRtWaveAmpScale * rtFrame_.waveAmp;
         push.waveFreq = waveFreq * rtFrame_.waveFreq;
         push.waveSpeed = waveSpeed;
+        // Physics waves (water_waves.glsli, wave_spectrum.hpp): the wind's
+        // spectrum, with the open sea's fetch for an ocean and a lake's for
+        // the rest. waveAmp is the amplitude slider alone (100% the spectrum's
+        // own height), waveFreq the fetch, waveSpeed the wind's direction and
+        // pad2 the wind. A building's water stays still, as above.
+        if (rtFrame_.physicsWaves && !isWmoWater) {
+            push.waveAmp = rtFrame_.waveAmp;
+            push.waveFreq = basicType == 1 ? wave_spectrum::kOceanFetch : wave_spectrum::kInlandFetch;
+            push.waveSpeed = wave_spectrum::kWindDirection;
+            push.pad2 = std::max(rtFrame_.windSpeed, 0.5f);
+        }
         push.liquidBasicType = static_cast<float>(basicType);
         push.screenSize = glm::vec2(static_cast<float>(renderExtent_.width),
                                     static_cast<float>(renderExtent_.height));

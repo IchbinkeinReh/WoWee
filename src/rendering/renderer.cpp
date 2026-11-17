@@ -765,6 +765,8 @@ void Renderer::updatePerFrameUBO() {
                                                                  : 0;
             wf.waveAmp = rtWaveAmp_;
             wf.waveFreq = rtWaveFreq_;
+            wf.physicsWaves = physicsWaves_;
+            wf.windSpeed = physicsWind_;
             wf.reflectReach = hw ? 400.0f : 150.0f;
             wf.refractReach = hw ? 80.0f : 40.0f;
             if (lightingManager) {

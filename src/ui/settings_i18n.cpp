@@ -174,6 +174,18 @@ constexpr SettingGerman kGerman[] = {
      "Wie hoch die Wellen des Wassers mit Raytracing stehen: 0 ist ein stiller Spiegel, 200 das "
      "Doppelte des Standards.",
      nullptr, nullptr, nullptr},
+    {"physwaves",
+     "Physikalische Wellen",
+     "Auf dem Wasser mit Raytracing: Wellen von einem Wind, der darüber weht, wie das Spektrum "
+     "eines echten Meeres sie hat - lange Dünung, die kurzem Wellengang davonläuft, das offene "
+     "Meer höher als ein See. Der Höhenregler skaliert sie; die Windgeschwindigkeit darunter "
+     "bestimmt ihre Größe. Nicht im ursprünglichen Client.",
+     nullptr, nullptr, nullptr},
+    {"physwind",
+     "Windstärke (m/s)",
+     "Der Wind, der die physikalischen Wellen aufwirft: eine Brise von 3 lässt Kräuselungen, "
+     "7 ist mäßige See, ab 15 grobe See.",
+     nullptr, nullptr, nullptr},
     {"rtwavefreq",
      "Wellenfrequenz (%)",
      "Wie dicht die Wellen des Wassers mit Raytracing aufeinander folgen: niedriger sind lange "

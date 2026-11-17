@@ -165,6 +165,10 @@ struct RtWaterFrame {
     int view = 0;               ///< 1 the reflection alone, 2 what comes through
     float waveAmp = 1.0f;       ///< the waves' height, 1 the default
     float waveFreq = 1.0f;      ///< and their frequency
+    /// Physics waves (wave_spectrum.hpp): the waves of a wind-sea spectrum,
+    /// each at the speed of its length, instead of the hand-made set.
+    bool physicsWaves = false;
+    float windSpeed = 7.0f;     ///< m/s, the physics waves' wind
     float reflectReach = 400.0f;
     float refractReach = 80.0f;
     glm::vec3 skyTop{0.5f, 0.7f, 1.0f};

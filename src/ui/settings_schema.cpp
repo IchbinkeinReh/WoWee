@@ -276,6 +276,22 @@ constexpr SettingDesc kSchema[] = {
      "Water", "",
      "How close together the ray traced water's waves run: lower is\n"
      "long swells, higher short chop.", "", 100, "raytracedlighting&rtwater"},
+    // Physics waves (wave_spectrum.hpp, water_waves.glsli): the waves of a
+    // wind-sea spectrum (JONSWAP), each running at the speed deep water gives
+    // its length, the open sea's fetch for an ocean and a lake's for the rest.
+    // The amplitude slider scales them; the frequency slider does not apply,
+    // the spectrum sets their lengths. Not in the original client.
+    {"physwaves", "Physics-based waves", SettingKind::Bool, 0, 0, 0,
+     "Water", "",
+     "On the ray traced water: waves from a wind blowing over it, as a real\n"
+     "sea's spectrum has them - long swells outrunning short chop, the open\n"
+     "sea higher than a lake. The amplitude slider scales them; the wind\n"
+     "speed below sets their size. Not in the original client.", "", 0, "raytracedlighting&rtwater"},
+    {"physwind", "Wind speed (m/s)", SettingKind::Int, 1, 20, 1,
+     "Water", "",
+     "The wind the physics-based waves are raised by: a breeze of 3 leaves\n"
+     "ripples, 7 a moderate sea, 15 and more a rough one.", "", 7,
+     "raytracedlighting&rtwater&physwaves"},
     // The client's own 'specular' option, not an extra: its cvar registered
     // at 0x0078e1a0, default "0" (0x009e14a0), whose handler 0x0078de60 sets
     // world flag 0x8000000 "on restart". Off in every preset: the exe has
@@ -1466,7 +1482,7 @@ bool settingNeedsRayTracing(const std::string& key) {
     // the rows whose labels or tooltips say ray traced.
     static constexpr const char* kTraced[] = {
         "dbgview",          "dbgsplitrt",         "dbgpointlights",     "dbgbounce",       "dbginteriorbase",
-        "dbginteriorfullat", "dbgshadowdarkness", "rtnormalkeep", "rtnormalface", "rtwater", "rtwaveamp", "rtwavefreq", "dbgtracedsunshadow", "dbgpointshadow",
+        "dbginteriorfullat", "dbgshadowdarkness", "rtnormalkeep", "rtnormalface", "rtwater", "rtwaveamp", "rtwavefreq", "physwaves", "physwind", "dbgtracedsunshadow", "dbgpointshadow",
         "dbgbakedlampshadow", "dbgocclusion",
     };
     for (const char* k : kTraced) {

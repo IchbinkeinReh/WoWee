@@ -13,6 +13,81 @@ struct GerstnerResult {
     float waveHeight; // raw wave height for foam
 };
 
+// --- Physically based waves (wave_spectrum.hpp is the C++ twin) ---
+// A JONSWAP wind-sea spectrum sampled into 12 Gerstner waves, each at the
+// speed deep-water dispersion gives its length (omega^2 = g k). Yards and
+// seconds; the wind in metres per second. `minWavelength`: waves shorter than
+// this are left out of the displacement (the vertex grid cannot carry them)
+// and kept in the normal (the fragment stage passes 0).
+const float PW_G = 9.80665 * 1.0936133;
+const int PW_COUNT = 12;
+
+GerstnerResult evaluatePhysicalWaves(vec2 pos, float time, float ampScale, float fetch, float windMps,
+                                     float windDir, float minWavelength) {
+    GerstnerResult r;
+    r.displacement = vec3(0.0);
+    r.tangent = vec3(1.0, 0.0, 0.0);
+    r.binormal = vec3(0.0, 1.0, 0.0);
+    r.waveHeight = 0.0;
+
+    float u = max(windMps * 1.0936133, 0.1);
+    float f = max(fetch, 1.0);
+    float wp = max(22.0 * pow(PW_G * PW_G / (u * f), 1.0 / 3.0), 0.855 * PW_G / u);
+    float alpha = 0.076 * pow(u * u / (f * PW_G), 0.22);
+    float lo = 0.70 * wp;
+    float stepRatio = pow(4.0 / 0.70, 1.0 / float(PW_COUNT));
+
+    float amps[PW_COUNT];
+    float ks[PW_COUNT];
+    float ws[PW_COUNT];
+    float kaSum = 0.0;
+    for (int i = 0; i < PW_COUNT; i++) {
+        float w0 = lo * pow(stepRatio, float(i));
+        float w1 = w0 * stepRatio;
+        float w = sqrt(w0 * w1);
+        float sigma = w <= wp ? 0.07 : 0.09;
+        float d = (w - wp) / (sigma * wp);
+        float ratio = wp / w;
+        float S = alpha * PW_G * PW_G / pow(w, 5.0) * exp(-1.25 * ratio * ratio * ratio * ratio)
+                * pow(3.3, exp(-0.5 * d * d));
+        ws[i] = w;
+        ks[i] = w * w / PW_G;
+        amps[i] = sqrt(2.0 * S * (w1 - w0)) * ampScale;
+        kaSum += ks[i] * amps[i];
+    }
+    float Q = kaSum > 0.0 ? min(1.0, 0.75 / kaSum) : 0.0;
+
+    float totalWave = 0.0;
+    for (int i = 0; i < PW_COUNT; i++) {
+        float spread = (fract(float(i) * 0.6180340) - 0.5) * 3.14159265 * 0.8;
+        float angle = windDir + spread;
+        vec2 dir = vec2(cos(angle), sin(angle));
+        float k = ks[i];
+        float A = amps[i];
+        // Too short for the vertex grid: in the normal only.
+        float keep = 6.2831853 / k >= minWavelength ? 1.0 : 0.0;
+        float phase = k * dot(dir, pos) - ws[i] * time + float(i) * 2.399963;
+        float s = sin(phase);
+        float c = cos(phase);
+
+        r.displacement.x += keep * Q * A * dir.x * c;
+        r.displacement.y += keep * Q * A * dir.y * c;
+        r.displacement.z += keep * A * s;
+
+        float WA = k * A;
+        r.tangent.x -= Q * dir.x * dir.x * WA * s;
+        r.tangent.y -= Q * dir.x * dir.y * WA * s;
+        r.tangent.z += dir.x * WA * c;
+        r.binormal.x -= Q * dir.x * dir.y * WA * s;
+        r.binormal.y -= Q * dir.y * dir.y * WA * s;
+        r.binormal.z += dir.y * WA * c;
+
+        totalWave += keep * A * s;
+    }
+    r.waveHeight = totalWave;
+    return r;
+}
+
 GerstnerResult evaluateGerstnerWaves(vec2 pos, float time, float amp, float freq, float spd, float basicType) {
     GerstnerResult r;
     r.displacement = vec3(0.0);

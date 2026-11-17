@@ -4292,6 +4292,10 @@ wowee_add_test(test_auction_deposit SOURCES test_auction_deposit.cpp)
 # The cursor table looked up by art name (ui/cursor_art.hpp).
 wowee_add_test(test_cursor_art SOURCES test_cursor_art.cpp)
 
+# The physics waves' JONSWAP spectrum and dispersion (wave_spectrum.hpp).
+# Header-only.
+wowee_add_test(test_wave_spectrum SOURCES test_wave_spectrum.cpp)
+
 # ── Shared objects for the sources tests compile from the game ────────────
 # This must stay the last thing in this file: it walks every registered test.
 #

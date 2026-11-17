@@ -33,7 +33,8 @@ layout(push_constant) uniform Push {
     vec2 depthRange;
     float sceneValid;
     float lightColors;
-    float pad1, pad2;
+    float pad1;
+    float pad2;  // > 0: physics waves, the wind in m/s (water_waves.glsli)
 } push;
 
 layout(location = 0) in vec3 aPos;
@@ -54,11 +55,16 @@ void main() {
     float time = fogParams.z;
     vec4 worldPos = vec4(aPos, 1.0);
 
-    // Evaluate Gerstner waves using X,Y horizontal plane
-    GerstnerResult waves = evaluateGerstnerWaves(
-        vec2(worldPos.x, worldPos.y), time,
-        push.waveAmp, push.waveFreq, push.waveSpeed, push.liquidBasicType
-    );
+    // Evaluate Gerstner waves using X,Y horizontal plane. With physics waves
+    // on (pad2 = the wind in m/s) the waves come from the wind's spectrum
+    // (water_waves.glsli): waveAmp scales them, waveFreq is the fetch in
+    // yards and waveSpeed the wind's direction. Waves under 9 yards, shorter
+    // than the liquid grid can carry, stay in the fragment stage's normal.
+    GerstnerResult waves = push.pad2 > 0.0
+        ? evaluatePhysicalWaves(vec2(worldPos.x, worldPos.y), time,
+                                push.waveAmp, push.waveFreq, push.pad2, push.waveSpeed, 9.0)
+        : evaluateGerstnerWaves(vec2(worldPos.x, worldPos.y), time,
+                                push.waveAmp, push.waveFreq, push.waveSpeed, push.liquidBasicType);
 
     // Apply displacement: xy = horizontal, z = vertical (up)
     worldPos.x += waves.displacement.x;

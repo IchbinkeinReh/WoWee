@@ -1327,6 +1327,8 @@ private:
     float rtWaterDiagClock_ = 0.0f;
     size_t rtWaterUnitsPeak_ = 0;
     float rtWaveFreq_ = 1.0f;
+    bool physicsWaves_ = false;
+    float physicsWind_ = 7.0f;
     bool rtListenerAdded_ = false;
     // The memory guard (rt_memory_guard.hpp): run each frame before the ray
     // tracing's prepare, and before the loading screen's warm-up.
@@ -1357,6 +1359,11 @@ public:
     void setRtWaterWaves(float amplitude, float frequency) {
         rtWaveAmp_ = amplitude;
         rtWaveFreq_ = frequency;
+    }
+    /// Physics waves (wave_spectrum.hpp) and their wind, in m/s.
+    void setPhysicsWaves(bool on, float windSpeed) {
+        physicsWaves_ = on;
+        physicsWind_ = windSpeed;
     }
 private:
     int rtMinBrightnessPercent_ = 0;

@@ -43,7 +43,7 @@ layout(push_constant) uniform Push {
     float sceneValid; // 1 once the refraction capture holds a frame, 0 before it
     float lightColors; // 1: closeColor and farColor hold the light's ramp
     float interiorFog; // 1: a building's interior liquid, fogged as its rooms are
-    float pad2;
+    float pad2;        // > 0: physics waves, the wind in m/s (water_waves.glsli)
 } push;
 
 layout(set = 1, binding = 0) uniform WaterMaterial {
@@ -478,8 +478,12 @@ void main() {
     // triangle's edge - a straight crease the sun's or the moon's glint was
     // cut along, which crept over the lake as the waves ran (Stonebull
     // Lake at 22:00). The same waves, so the same normal at the vertices.
-    GerstnerResult pixelWaves = evaluateGerstnerWaves(WaveBase, time, push.waveAmp, push.waveFreq,
-                                                      push.waveSpeed, push.liquidBasicType);
+    // The physics waves (pad2 = the wind) give the normal every wave of the
+    // spectrum, the short ones the vertex stage leaves out included.
+    GerstnerResult pixelWaves = push.pad2 > 0.0
+        ? evaluatePhysicalWaves(WaveBase, time, push.waveAmp, push.waveFreq, push.pad2, push.waveSpeed, 0.0)
+        : evaluateGerstnerWaves(WaveBase, time, push.waveAmp, push.waveFreq,
+                                push.waveSpeed, push.liquidBasicType);
     vec3 meshNorm = normalize(cross(pixelWaves.binormal, pixelWaves.tangent));
     // The vertex stage's (Normal) is the same at the vertices.
     vec3 detailNorm = dualScrollWaveNormal(FragPos.xy, time, rtWater2.z, rtWater2.w);

@@ -95,6 +95,8 @@ public:
     bool pendingRtWater = true;       ///< "Ray traced water" (water_rt.glsli)
     int pendingRtWaveAmp = 100;       ///< its waves' height, % of the default
     int pendingRtWaveFreq = 100;      ///< and their frequency, %
+    bool pendingPhysWaves = false;    ///< physics-based waves (wave_spectrum.hpp)
+    int pendingPhysWind = 7;          ///< their wind, m/s
     int pendingRtNormalKeep = rendering::kNormalBlendKeepDefault;     ///< the normal blend's angles, degrees (rt_normal_blend.hpp)
     int pendingRtNormalFace = rendering::kNormalBlendFaceDefault;
     /// The eye adaptation (Ray Tracing; eye_adaptation::paramsFor).
