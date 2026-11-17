@@ -29,6 +29,16 @@ PipelineBuilder& PipelineBuilder::setVertexInput(
     vertexAttributes_ = attributes;
     return *this;
 }
+PipelineBuilder& PipelineBuilder::setTessellation(
+    VkPipelineShaderStageCreateInfo control, VkPipelineShaderStageCreateInfo evaluation,
+    uint32_t controlPoints)
+{
+    tessellationStages_ = {control, evaluation};
+    patchControlPoints_ = controlPoints;
+    topology_ = VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
+    return *this;
+}
+
 PipelineBuilder& PipelineBuilder::setTopology(VkPrimitiveTopology topology,
     VkBool32 primitiveRestart)
 {
@@ -217,6 +227,11 @@ VkPipeline PipelineBuilder::build(VkDevice device, VkPipelineCache cache) const 
     const VkSpecializationMapEntry gbufferEntry{0, 0, sizeof(VkBool32)};
     VkSpecializationInfo gbufferSpec{1, &gbufferEntry, sizeof(VkBool32), &gbufferConstant};
     std::vector<VkPipelineShaderStageCreateInfo> stages = shaderStages_;
+    stages.insert(stages.end(), tessellationStages_.begin(), tessellationStages_.end());
+    // How many vertices make a patch, for a pipeline with tessellation stages.
+    VkPipelineTessellationStateCreateInfo tessellation{};
+    tessellation.sType = VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO;
+    tessellation.patchControlPoints = patchControlPoints_;
     if (gbufferOutputs_) {
         for (auto& stage : stages) {
             if (stage.stage == VK_SHADER_STAGE_FRAGMENT_BIT) stage.pSpecializationInfo = &gbufferSpec;
@@ -236,6 +251,7 @@ VkPipeline PipelineBuilder::build(VkDevice device, VkPipelineCache cache) const 
     pipelineInfo.pStages = stages.data();
     pipelineInfo.pVertexInputState = &vertexInput;
     pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pTessellationState = patchControlPoints_ > 0 ? &tessellation : nullptr;
     pipelineInfo.pViewportState = &viewportState;
     pipelineInfo.pRasterizationState = &rasterizer;
     pipelineInfo.pMultisampleState = &multisampling;

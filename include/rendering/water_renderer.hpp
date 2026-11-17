@@ -117,7 +117,7 @@ struct WaterSurface {
  * on the traced water with Gerstner waves,
  * GGX specular, shoreline foam, and subsurface scattering.
  */
-// Matches set 2 binding 3 in water.frag.glsl. Keep kMaxWakePoints,
+// Matches set 2 binding 3 in water_frame.glsli. Keep kMaxWakePoints,
 // kOwnWakePoints' place and kMaxWaterGroups in step with MAX_WAKE_POINTS and
 // MAX_WATER_GROUPS there. The character keeps kOwnWakePoints of the trail's
 // points; the other units share the rest (water_unit_share.hpp), enough for a
@@ -169,6 +169,9 @@ struct RtWaterFrame {
     /// each at the speed of its length, instead of the hand-made set.
     bool physicsWaves = false;
     float windSpeed = 7.0f;     ///< m/s, the physics waves' wind
+    /// Tessellated water (water.tesc, water.tese): the grid cut finer near
+    /// the camera; used where the device has tessellation shaders.
+    bool tessellation = true;
     float reflectReach = 400.0f;
     float refractReach = 80.0f;
     glm::vec3 skyTop{0.5f, 0.7f, 1.0f};
@@ -483,9 +486,20 @@ private:
     VkPipelineLayout rtPipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline rtPipeline_ = VK_NULL_HANDLE;
     VkPipeline rt1xPipeline_ = VK_NULL_HANDLE;
+    // The same, tessellated near the camera (water_tess.vert, water.tesc,
+    // water.tese), on a device with tessellation shaders and with the
+    // setting on (RtWaterFrame::tessellation).
+    VkPipeline rtTessPipeline_ = VK_NULL_HANDLE;
+    VkPipeline rt1xTessPipeline_ = VK_NULL_HANDLE;
+    /// Set once the device is found without tessellation shaders, or their
+    /// pipeline failed to build: the grid is drawn as it is from then on.
+    bool tessellationOff_ = false;
+    // The stages the water's push constants reach: the tessellation stages
+    // as well where the device has them.
+    VkShaderStageFlags pushStages_ = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     RtWaterFrame rtFrame_;
     VkPipeline buildWaterPipeline(VkRenderPass pass, VkSampleCountFlagBits samples, const char* fragPath,
-                                  VkPipelineLayout layout);
+                                  VkPipelineLayout layout, bool tessellated);
     void destroyRtPipelines();
     VkDescriptorSetLayout materialSetLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout perFrameLayout_ = VK_NULL_HANDLE;  ///< the renderer's set 0, kept for the traced water's layout

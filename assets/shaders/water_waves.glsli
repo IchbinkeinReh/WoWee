@@ -1,5 +1,6 @@
-// The water's Gerstner waves (water.vert displaces the surface by them;
-// water.frag takes its normal from them at every pixel).
+// The water's Gerstner waves (water.vert, or water.tese on tessellated water,
+// displaces the surface by them; water.frag takes its normal from them at
+// every pixel).
 #ifndef WATER_WAVES_GLSLI
 #define WATER_WAVES_GLSLI
 
@@ -18,12 +19,16 @@ struct GerstnerResult {
 // speed deep-water dispersion gives its length (omega^2 = g k). Yards and
 // seconds; the wind in metres per second. `minWavelength`: waves shorter than
 // this are left out of the displacement (the vertex grid cannot carry them)
-// and kept in the normal (the fragment stage passes 0).
+// and kept in the normal (the fragment stage passes 0). `fullWavelength`,
+// when longer than that, fades the waves in between the two rather than
+// cutting them off: the tessellated water (water.tese) moves its cut-off
+// with the distance from the camera, and a wave switched on at a fixed
+// distance would leave a step in the surface there.
 const float PW_G = 9.80665 * 1.0936133;
 const int PW_COUNT = 12;
 
-GerstnerResult evaluatePhysicalWaves(vec2 pos, float time, float ampScale, float fetch, float windMps,
-                                     float windDir, float minWavelength) {
+GerstnerResult evaluatePhysicalWavesFaded(vec2 pos, float time, float ampScale, float fetch, float windMps,
+                                          float windDir, float minWavelength, float fullWavelength) {
     GerstnerResult r;
     r.displacement = vec3(0.0);
     r.tangent = vec3(1.0, 0.0, 0.0);
@@ -65,7 +70,10 @@ GerstnerResult evaluatePhysicalWaves(vec2 pos, float time, float ampScale, float
         float k = ks[i];
         float A = amps[i];
         // Too short for the vertex grid: in the normal only.
-        float keep = 6.2831853 / k >= minWavelength ? 1.0 : 0.0;
+        float wavelength = 6.2831853 / k;
+        float keep = fullWavelength > minWavelength
+            ? clamp((wavelength - minWavelength) / (fullWavelength - minWavelength), 0.0, 1.0)
+            : (wavelength >= minWavelength ? 1.0 : 0.0);
         float phase = k * dot(dir, pos) - ws[i] * time + float(i) * 2.399963;
         float s = sin(phase);
         float c = cos(phase);
@@ -86,6 +94,12 @@ GerstnerResult evaluatePhysicalWaves(vec2 pos, float time, float ampScale, float
     }
     r.waveHeight = totalWave;
     return r;
+}
+
+// The waves with a hard cut-off at `minWavelength` (water.vert, water.frag).
+GerstnerResult evaluatePhysicalWaves(vec2 pos, float time, float ampScale, float fetch, float windMps,
+                                     float windDir, float minWavelength) {
+    return evaluatePhysicalWavesFaded(pos, time, ampScale, fetch, windMps, windDir, minWavelength, minWavelength);
 }
 
 GerstnerResult evaluateGerstnerWaves(vec2 pos, float time, float amp, float freq, float spd, float basicType) {

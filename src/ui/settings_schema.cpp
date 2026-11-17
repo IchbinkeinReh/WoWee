@@ -292,6 +292,18 @@ constexpr SettingDesc kSchema[] = {
      "The wind the physics-based waves are raised by: a breeze of 3 leaves\n"
      "ripples, 7 a moderate sea, 15 and more a rough one.", "", 7,
      "raytracedlighting&rtwater&physwaves"},
+    // Tessellated water (water.tesc, water.tese; water_tessellation.hpp): the
+    // traced water's liquid grid, a vertex every 4 yards, cut by the GPU into
+    // pieces of 0.3 yards within 20 yards of the camera, easing back to the
+    // grid by 90. The short waves and the swimmers' rings and units' wakes
+    // then move the surface there, not only its shading. No effect on a
+    // device without tessellation shaders. Not in the original client.
+    {"watertess", "Tessellated water", SettingKind::Bool, 0, 0, 0,
+     "Water", "",
+     "On the ray traced water: the surface near the camera cut finer by\n"
+     "the GPU, so short waves, swimmers' rings and the wakes of units\n"
+     "raise and lower it, not only its shading. Not on every GPU.\n"
+     "Not in the original client.", "", 1, "raytracedlighting&rtwater"},
     // The client's own 'specular' option, not an extra: its cvar registered
     // at 0x0078e1a0, default "0" (0x009e14a0), whose handler 0x0078de60 sets
     // world flag 0x8000000 "on restart". Off in every preset: the exe has
@@ -1482,7 +1494,7 @@ bool settingNeedsRayTracing(const std::string& key) {
     // the rows whose labels or tooltips say ray traced.
     static constexpr const char* kTraced[] = {
         "dbgview",          "dbgsplitrt",         "dbgpointlights",     "dbgbounce",       "dbginteriorbase",
-        "dbginteriorfullat", "dbgshadowdarkness", "rtnormalkeep", "rtnormalface", "rtwater", "rtwaveamp", "rtwavefreq", "physwaves", "physwind", "dbgtracedsunshadow", "dbgpointshadow",
+        "dbginteriorfullat", "dbgshadowdarkness", "rtnormalkeep", "rtnormalface", "rtwater", "rtwaveamp", "rtwavefreq", "physwaves", "physwind", "watertess", "dbgtracedsunshadow", "dbgpointshadow",
         "dbgbakedlampshadow", "dbgocclusion",
     };
     for (const char* k : kTraced) {

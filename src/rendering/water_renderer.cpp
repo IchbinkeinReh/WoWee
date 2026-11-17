@@ -77,6 +77,13 @@ bool WaterRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLay
 
     LOG_INFO("Initializing water renderer (Vulkan)");
     VkDevice device = vkCtx->getDevice();
+    // The tessellated water's control and evaluation stages read the push
+    // constants too, where the device has them (buildWaterPipeline).
+    const bool tessellation = vkCtx->isTessellationSupported();
+    pushStages_ = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    if (tessellation) {
+        pushStages_ |= VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
+    }
 
     // --- Material descriptor set layout (set 1) ---
     // binding 0: WaterMaterial UBO
@@ -129,6 +136,8 @@ bool WaterRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLay
     frameUBOBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     frameUBOBinding.descriptorCount = 1;
     frameUBOBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // The tessellated water raises the rings and wakes it holds (water.tese).
+    if (tessellation) frameUBOBinding.stageFlags |= VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
 
     sceneSetLayout = createDescriptorSetLayout(device,
         {sceneColorBinding, sceneDepthBinding, frameUBOBinding});
@@ -155,7 +164,7 @@ bool WaterRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLay
 
     // --- Pipeline layout ---
     VkPushConstantRange pushRange{};
-    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushRange.stageFlags = pushStages_;
     pushRange.offset = 0;
     pushRange.size = sizeof(WaterPushConstants);
 
@@ -216,7 +225,7 @@ glm::vec3 WaterRenderer::interiorLiquidAverage(uint32_t liquidType) {
 void WaterRenderer::setRtWaterScene(VkDescriptorSetLayout sceneLayout, bool hardware) {
     if (!vkCtx || !sceneLayout || rtPipelineLayout_) return;
     VkPushConstantRange pushRange{};
-    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushRange.stageFlags = pushStages_;
     pushRange.size = sizeof(WaterPushConstants);
     rtPipelineLayout_ = createPipelineLayout(vkCtx->getDevice(),
                                              {perFrameLayout_, materialSetLayout, sceneSetLayout, sceneLayout},
@@ -230,6 +239,8 @@ void WaterRenderer::destroyRtPipelines() {
     VkDevice device = vkCtx->getDevice();
     destroy(device, rtPipeline_);
     destroy(device, rt1xPipeline_);
+    destroy(device, rtTessPipeline_);
+    destroy(device, rt1xTessPipeline_);
 }
 
 void WaterRenderer::recreatePipelines() {
@@ -251,13 +262,24 @@ void WaterRenderer::recreatePipelines() {
 }
 
 VkPipeline WaterRenderer::buildWaterPipeline(VkRenderPass pass, VkSampleCountFlagBits samples,
-                                             const char* fragPath, VkPipelineLayout layout) {
+                                             const char* fragPath, VkPipelineLayout layout, bool tessellated) {
     if (!vkCtx || !pass || !layout) return VK_NULL_HANDLE;
     VkDevice device = vkCtx->getDevice();
-    VkShaderModule vertShader, fragShader;
-    if (!vertShader.loadFromFile(device, "assets/shaders/water.vert.spv")) return VK_NULL_HANDLE;
-    if (!fragShader.loadFromFile(device, fragPath)) {
+    // Tessellated, the vertex stage hands the grid's corners on as they are
+    // (water_tess.vert) and the evaluation stage does what water.vert does,
+    // on the finer surface water.tesc cuts near the camera.
+    VkShaderModule vertShader, fragShader, controlShader, evalShader;
+    auto release = [&] {
         vertShader.destroy();
+        fragShader.destroy();
+        controlShader.destroy();
+        evalShader.destroy();
+    };
+    const char* vertPath = tessellated ? "assets/shaders/water_tess.vert.spv" : "assets/shaders/water.vert.spv";
+    if (!vertShader.loadFromFile(device, vertPath) || !fragShader.loadFromFile(device, fragPath) ||
+        (tessellated && (!controlShader.loadFromFile(device, "assets/shaders/water.tesc.spv") ||
+                         !evalShader.loadFromFile(device, "assets/shaders/water.tese.spv")))) {
+        release();
         return VK_NULL_HANDLE;
     }
     VkVertexInputBindingDescription vertBinding{};
@@ -268,9 +290,9 @@ VkPipeline WaterRenderer::buildWaterPipeline(VkRenderPass pass, VkSampleCountFla
         { .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 0 },
         { .location = 1, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = 6 * sizeof(float) },
     };
-    VkPipeline p = PipelineBuilder()
-        .setShaders(vertShader.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
-                    fragShader.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT))
+    PipelineBuilder builder;
+    builder.setShaders(vertShader.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
+                       fragShader.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT))
         .setVertexInput({ vertBinding }, vertAttribs)
         .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
         .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
@@ -279,10 +301,16 @@ VkPipeline WaterRenderer::buildWaterPipeline(VkRenderPass pass, VkSampleCountFla
         .setMultisample(samples)
         .setLayout(layout)
         .setRenderPass(pass)
-        .setDynamicStates(viewportAndScissorDynamic())
-        .build(device, vkCtx->getPipelineCache());
-    vertShader.destroy();
-    fragShader.destroy();
+        .setDynamicStates(viewportAndScissorDynamic());
+    // The same index buffers, read three corners to a patch: each of the
+    // grid's triangles is one.
+    if (tessellated) {
+        builder.setTessellation(controlShader.stageInfo(VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT),
+                                evalShader.stageInfo(VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT), 3)
+            .setTopology(VK_PRIMITIVE_TOPOLOGY_PATCH_LIST);
+    }
+    VkPipeline p = builder.build(device, vkCtx->getPipelineCache());
+    release();
     return p;
 }
 
@@ -1169,17 +1197,34 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
     bool traced = rtWaterDrawn();
     if (traced) {
         const char* frag = rtHardware_ ? "assets/shaders/water_rt_hw.frag.spv" : "assets/shaders/water.frag.spv";
-        VkPipeline& rtPipe = (use1x && water1xRenderPass) ? rt1xPipeline_ : rtPipeline_;
-        if (!rtPipe) {
-            rtPipe = (use1x && water1xRenderPass)
-                         ? buildWaterPipeline(water1xRenderPass, VK_SAMPLE_COUNT_1_BIT, frag, rtPipelineLayout_)
-                         : buildWaterPipeline(vkCtx->getImGuiRenderPass(), vkCtx->getMsaaSamples(), frag,
-                                              rtPipelineLayout_);
-            if (!rtPipe) LOG_ERROR("WaterRenderer: could not build the ray traced water's pipeline");
+        const bool onePass = use1x && water1xRenderPass;
+        auto pipelineFor = [&](VkPipeline& pipe, bool tessellated) {
+            if (!pipe) {
+                pipe = onePass ? buildWaterPipeline(water1xRenderPass, VK_SAMPLE_COUNT_1_BIT, frag, rtPipelineLayout_,
+                                                    tessellated)
+                               : buildWaterPipeline(vkCtx->getImGuiRenderPass(), vkCtx->getMsaaSamples(), frag,
+                                                    rtPipelineLayout_, tessellated);
+            }
+            return pipe;
+        };
+        // Tessellated near the camera when asked for and the device can; where
+        // it cannot, or its pipeline will not build, the grid as it is, said
+        // once and not tried again every frame.
+        if (rtFrame_.tessellation && !tessellationOff_) {
+            if (!vkCtx->isTessellationSupported()) {
+                LOG_INFO("WaterRenderer: no tessellation shaders on this device; 'Tessellated water' has no effect");
+                tessellationOff_ = true;
+            } else {
+                pipeline = pipelineFor(onePass ? rt1xTessPipeline_ : rtTessPipeline_, true);
+                if (!pipeline) {
+                    LOG_WARNING("WaterRenderer: the tessellated water's pipeline did not build; drawing the grid");
+                    tessellationOff_ = true;
+                }
+            }
         }
-        if (rtPipe) {
-            pipeline = rtPipe;
-        } else {
+        if (!pipeline) pipeline = pipelineFor(onePass ? rt1xPipeline_ : rtPipeline_, false);
+        if (!pipeline) {
+            LOG_ERROR("WaterRenderer: could not build the ray traced water's pipeline");
             traced = false;
         }
     }
@@ -1326,9 +1371,7 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             }
         }
 
-        vkCmdPushConstants(cmd, layout,
-                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                            0, sizeof(WaterPushConstants), &push);
+        vkCmdPushConstants(cmd, layout, pushStages_, 0, sizeof(WaterPushConstants), &push);
 
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout,
                                  1, 1, &surface.materialSet, 0, nullptr);
@@ -2263,6 +2306,7 @@ void WaterRenderer::destroyWater1xResources() {
     }
     water1xFramebuffers.clear();
     destroy(device, rt1xPipeline_);
+    destroy(device, rt1xTessPipeline_);
     destroy(device, clientWater1xPipeline_);
     destroy(device, clientMagma1xPipeline_);
     destroy(device, clientProc1xPipeline_);

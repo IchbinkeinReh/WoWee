@@ -451,6 +451,10 @@ public:
     /// pipeline cannot be built and the wireframe views are unavailable.
     [[nodiscard]] bool isWireframeSupported() const { return fillModeNonSolidSupported_; }
     [[nodiscard]] bool isMultiDrawIndirectSupported() const { return multiDrawIndirectSupported_; }
+    /// Whether the device has (and was given) tessellation shaders: the
+    /// tessellated water's (WaterRenderer). Without, the water is drawn from
+    /// its grid as it is.
+    [[nodiscard]] bool isTessellationSupported() const { return tessellationShaderSupported_; }
     /// Whether an occlusion query may be asked for an exact sample count.
     [[nodiscard]] bool isOcclusionQueryPreciseSupported() const { return occlusionQueryPreciseSupported_; }
     [[nodiscard]] uint32_t getMaxDrawIndirectCount() const { return maxDrawIndirectCount_; }
@@ -852,6 +856,7 @@ private:
     bool fillModeNonSolidSupported_ = false;
     bool multiDrawIndirectSupported_ = false;
     bool occlusionQueryPreciseSupported_ = false;
+    bool tessellationShaderSupported_ = false;
     uint32_t maxDrawIndirectCount_ = 1;
     bool fsr2ComputeFeaturesSupported_ = false;
     bool blockCompressionSupported_ = false;

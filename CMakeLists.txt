@@ -664,6 +664,12 @@ function(compile_shaders TARGET_NAME)
             set(SHADER_STAGE compute)
         elseif(FILE_NAME MATCHES "\\.geom\\.glsl$")
             set(SHADER_STAGE geometry)
+        # The tessellated water's control and evaluation stages (water.tesc,
+        # water.tese).
+        elseif(FILE_NAME MATCHES "\\.tesc\\.glsl$")
+            set(SHADER_STAGE tesscontrol)
+        elseif(FILE_NAME MATCHES "\\.tese\\.glsl$")
+            set(SHADER_STAGE tesseval)
         else()
             message(WARNING "Cannot determine shader stage for: ${FILE_NAME}")
             continue()

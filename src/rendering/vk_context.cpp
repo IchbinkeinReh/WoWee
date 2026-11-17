@@ -715,6 +715,10 @@ bool VkContext::selectPhysicalDevice() {
     dualSrcBlendSupported_ = enableIfPresent(&VkPhysicalDeviceFeatures::dualSrcBlend);
     independentBlendSupported_ = enableIfPresent(&VkPhysicalDeviceFeatures::independentBlend);
     sampleRateShadingSupported_ = enableIfPresent(&VkPhysicalDeviceFeatures::sampleRateShading);
+    // The tessellated water (water.tesc, water.tese): the ray traced water's
+    // grid cut finer near the camera. Without it (MoltenVK on some Macs,
+    // mobile parts) the water is drawn from its grid as it is.
+    tessellationShaderSupported_ = enableIfPresent(&VkPhysicalDeviceFeatures::tessellationShader);
     // The world's vertex programs clip at the far clip (far_clip.glsli).
     if (!enableIfPresent(&VkPhysicalDeviceFeatures::shaderClipDistance)) {
         LOG_WARNING("Vulkan: shaderClipDistance not supported; the world is not clipped at the far clip");
@@ -770,6 +774,7 @@ bool VkContext::selectPhysicalDevice() {
     LOG_INFO("Sampler anisotropy supported: ", samplerAnisotropySupported_ ? "YES" : "NO");
     LOG_INFO("Wireframe views supported: ", fillModeNonSolidSupported_ ? "YES" : "NO");
     LOG_INFO("Multi-draw indirect supported: ", multiDrawIndirectSupported_ ? "YES" : "NO");
+    LOG_INFO("Tessellation shaders supported: ", tessellationShaderSupported_ ? "YES" : "NO");
     LOG_INFO("FSR2 compute features supported: ",
              fsr2ComputeFeaturesSupported_ ? "YES" : "NO");
     LOG_INFO("Block compressed textures (BC1/2/3) supported: ",

@@ -1,0 +1,105 @@
+// The interaction on the traced water - the swimmers' rings and the trails'
+// wakes - as a slope, which water.frag adds to the normal at every pixel,
+// and as a height, which the tessellated water (water.tese) raises its
+// surface by near the camera. Each height is the slope integrated in from
+// where the rings have not reached (the height there 0), so its gradient is
+// the slope the shading uses and the surface stands where the shading says.
+// water_tessellation.hpp is the C++ twin (tests/test_water_tessellation.cpp).
+// The including shader includes water_waves.glsli (PW_G) first.
+#ifndef WATER_INTERACTION_GLSLI
+#define WATER_INTERACTION_GLSLI
+
+// Physics waves' interaction (pad2 > 0): the deep-water rings of an impulse
+// at the surface, `t` seconds ago, `r` yards away (Cauchy-Poisson). Deep
+// water's dispersion (omega^2 = g k) puts the wave of wavenumber
+// k = g t^2 / (4 r^2) at distance r, with phase g t^2 / (4 r): the long
+// waves run out ahead and the short ones follow, the rings tightening inward.
+// The source's size `sigma` sets which lengths it raises (exp(-(k sigma)^2));
+// spread over the ring the slope falls as 1/sqrt(r). A wake is these summed
+// over every point of a trail, which gives Kelvin's wedge with the
+// wavelength the speed sets (2 pi U^2 / g) - no shape is drawn.
+vec2 impulseRingTilt(vec2 from, float t, float sigma, float strength) {
+    if (t <= 0.0) return vec2(0.0);
+    float r = max(length(from), 0.05);
+    float gt2 = PW_G * t * t;
+    float k = gt2 / (4.0 * r * r);
+    float phase = gt2 / (4.0 * r);
+    float ks = k * sigma;
+    float spectrum = exp(-ks * ks);
+    float spread = sqrt(sigma / (sigma + r));
+    float fade = 1.0 - smoothstep(1.2, 2.2, t);
+    float slope = strength * 0.6 * spectrum * ks * sin(phase) * spread * fade;
+    return -(from / r) * slope;
+}
+
+// The height of those rings: the slope above integrated along the radius from
+// far outside, where the water is still, in to `r`. Taken over the phase u
+// (r = g t^2 / (4 u)) the slope's k and dr/du cancel, leaving
+//   h = -0.6 strength sigma fade * integral over [0, phase] of
+//       exp(-(u^2 / beta)^2) sqrt(sigma / (sigma + r(u))) sin(u) du,
+// beta = g t^2 / (4 sigma). The spectrum's exp shuts the integrand off past
+// 1.65 sqrt(beta), so the integral ends there at the latest. It is taken in
+// eight pieces, the smooth part straight across each and the sin(u) exactly
+// (a linear Filon rule), within a few percent of the exact height. The
+// simpler A cos(phase) has the slope's sin(phase) term as its derivative but
+// stands as a broad hump ahead of the rings, where the water is flat; this
+// is 0 there, and keeps the trough the impulse digs behind them.
+float impulseRingHeight(vec2 from, float t, float sigma, float strength) {
+    if (t <= 0.0) return 0.0;
+    float r = max(length(from), 0.05);
+    float gt2 = PW_G * t * t;
+    float beta = gt2 / (4.0 * sigma);
+    float top = min(gt2 / (4.0 * r), 1.65 * sqrt(beta));
+    const int PIECES = 8;
+    float du = top / float(PIECES);
+    // The smooth part is 0 at u = 0 (r far off), so the rule's term at that
+    // end drops out.
+    float fa = 0.0;
+    float sa = 0.0;
+    float sum = 0.0;
+    for (int i = 1; i <= PIECES; ++i) {
+        float u = du * float(i);
+        float q = u * u / beta;
+        float fb = exp(-q * q) * sqrt(sigma * u / (sigma * u + 0.25 * gt2));
+        float sb = sin(u);
+        sum += (fb - fa) / du * (sb - sa);
+        fa = fb;
+        sa = sb;
+    }
+    float integral = sum - fa * cos(top);
+    float fade = 1.0 - smoothstep(1.2, 2.2, t);
+    return -0.6 * strength * sigma * fade * integral;
+}
+
+// The classic rings and wakes (physics waves off) are a crest of slope
+// amp exp(-a^2) sin(b a) along the ring's radius, a = (d - radius) / width.
+// Their height is amp width times the integral of exp(-x^2) sin(b x) from
+// x = -3 (inside the crest, where it has died away) to a. The integrand is
+// odd, so over [-3, 3] it comes to 0 - the height is 0 on both sides of the
+// crest - and the integral to a is the integral to -|a|. The same eight-piece
+// rule, the Gaussian straight across each piece and the sine exact, within
+// about 3% of the exact height.
+float ringCrestHeight(float a, float b, float width, float amp) {
+    float lo = -3.0;
+    float hi = -min(abs(a), 3.0);
+    if (hi <= lo) return 0.0;
+    const int PIECES = 8;
+    float dx = (hi - lo) / float(PIECES);
+    float fa = exp(-lo * lo);
+    float sa = sin(b * lo);
+    float cb = cos(b * lo);
+    float sum = fa * cb / b;
+    for (int i = 1; i <= PIECES; ++i) {
+        float x = lo + dx * float(i);
+        float fb = exp(-x * x);
+        float sb = sin(b * x);
+        cb = cos(b * x);
+        sum += (fb - fa) / dx * (sb - sa) / (b * b);
+        fa = fb;
+        sa = sb;
+    }
+    sum -= fa * cb / b;
+    return amp * width * sum;
+}
+
+#endif

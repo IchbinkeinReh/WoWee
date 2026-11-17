@@ -38,6 +38,12 @@ public:
         const std::vector<VkVertexInputAttributeDescription>& attributes);
 
 
+    /// Tessellation control and evaluation stages, drawn from patches of
+    /// `controlPoints` vertices (the topology is then a patch list). Kept
+    /// apart from setShaders, which may be called before or after.
+    PipelineBuilder& setTessellation(VkPipelineShaderStageCreateInfo control,
+        VkPipelineShaderStageCreateInfo evaluation, uint32_t controlPoints);
+
     // Input assembly
     PipelineBuilder& setTopology(VkPrimitiveTopology topology,
         VkBool32 primitiveRestart = VK_FALSE);
@@ -116,6 +122,8 @@ public:
 
 private:
     std::vector<VkPipelineShaderStageCreateInfo> shaderStages_;
+    std::vector<VkPipelineShaderStageCreateInfo> tessellationStages_;
+    uint32_t patchControlPoints_ = 0;  ///< 0: no tessellation
     std::vector<VkVertexInputBindingDescription> vertexBindings_;
     std::vector<VkVertexInputAttributeDescription> vertexAttributes_;
     VkPrimitiveTopology topology_ = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;

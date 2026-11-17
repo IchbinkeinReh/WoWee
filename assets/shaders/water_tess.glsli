@@ -1,0 +1,44 @@
+// How finely the tessellated water (water.tesc, water.tese) cuts the liquid
+// grid near the camera, and what the finer surface carries there.
+// water_tessellation.hpp is the C++ twin (tests/test_water_tessellation.cpp).
+#ifndef WATER_TESS_GLSLI
+#define WATER_TESS_GLSLI
+
+// The liquid grid's cell, yards (WaterRenderer's TILE_SIZE).
+const float WT_GRID_EDGE = 33.33333 / 8.0;
+// Near the camera an edge is cut into pieces this long, at most WT_MAX_LEVEL
+// of them; from WT_NEAR yards the cutting eases off, and from WT_FAR the
+// edge is drawn whole, as the untessellated water draws it.
+const float WT_TARGET_EDGE = 0.3;
+const float WT_MAX_LEVEL = 16.0;
+const float WT_NEAR = 20.0;
+const float WT_FAR = 90.0;
+// The shortest wave the whole grid carries as height (water.vert's 9 yards),
+// and the shortest a finely cut one is given.
+const float WT_GRID_WAVELENGTH = 9.0;
+const float WT_MIN_WAVELENGTH = 0.5;
+
+// How many pieces an edge `edgeLength` yards long is cut into, `dist` yards
+// from the camera. Taken from the edge alone, so the two triangles sharing
+// it cut it alike and no crack opens between them.
+float waterTessLevel(float edgeLength, float dist) {
+    float full = clamp(edgeLength / WT_TARGET_EDGE, 1.0, WT_MAX_LEVEL);
+    return 1.0 + (full - 1.0) * (1.0 - smoothstep(WT_NEAR, WT_FAR, dist));
+}
+
+// The shortest wave moved as height at `dist` yards: about twice the cut
+// grid's piece there, the 9 yards of the whole grid where it is not cut.
+// Waves shorter than it stay in the per-pixel normal (water.frag).
+float waterTessMinWavelength(float dist) {
+    return max(WT_MIN_WAVELENGTH, WT_GRID_WAVELENGTH / waterTessLevel(WT_GRID_EDGE, dist));
+}
+
+// How much of the rings' and wakes' height is raised at `dist` yards: all of
+// it where the grid is cut finely enough to carry a ring's crest (a piece of
+// half a yard or less), none where it is drawn whole, so the coarse far
+// surface never jumps as the camera comes nearer.
+float waterTessInteraction(float dist) {
+    return smoothstep(2.0, 8.0, waterTessLevel(WT_GRID_EDGE, dist));
+}
+
+#endif

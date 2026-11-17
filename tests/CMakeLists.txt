@@ -4296,6 +4296,10 @@ wowee_add_test(test_cursor_art SOURCES test_cursor_art.cpp)
 # Header-only.
 wowee_add_test(test_wave_spectrum SOURCES test_wave_spectrum.cpp)
 
+# The tessellated water's curve and the rings' and wakes' heights against the
+# slopes the water shades with (water_tessellation.hpp). Header-only.
+wowee_add_test(test_water_tessellation SOURCES test_water_tessellation.cpp)
+
 # ── Shared objects for the sources tests compile from the game ────────────
 # This must stay the last thing in this file: it walks every registered test.
 #

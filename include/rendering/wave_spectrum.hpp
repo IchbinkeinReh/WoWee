@@ -120,7 +120,7 @@ inline std::array<Wave, kWaveCount> sample(float windMps, float fetch, float win
     return waves;
 }
 
-/// A disturbance's rings on deep water (Cauchy-Poisson; water.frag's
+/// A disturbance's rings on deep water (Cauchy-Poisson; water_interaction.glsli's
 /// impulseRingTilt): `t` seconds after an impulse, the wave found `r` yards
 /// away is the one whose group velocity (half its phase speed) has carried it
 /// there, k = g t^2 / (4 r^2), at phase g t^2 / (4 r).

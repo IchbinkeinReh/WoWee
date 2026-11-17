@@ -57,15 +57,7 @@ layout(set = 1, binding = 0) uniform WaterMaterial {
 layout(set = 2, binding = 0) uniform sampler2D SceneColor;
 layout(set = 2, binding = 1) uniform sampler2D SceneDepth;
 // Binding 2 was the planar reflection, gone with the enhanced water.
-// Wake points are laid down behind anything wading through the shallows. Each
-// is a churn site that spreads and dies, so a running character leaves a trail
-// of froth rather than a disc stuck under its feet.
-// The character's and a crowd's out to 150 yards (water_unit_share.hpp),
-// grouped by who made them: a group's circle says where its points reach.
-const int MAX_WAKE_POINTS = 512;
-const int MAX_SWIM_WAVES = 256;
-const int MAX_WATER_GROUPS = 64;
-const int MAX_WATER_LAMPS = 8;
+#include "water_frame.glsli"
 // An interior liquid (the end of main): how fast its colour takes over with the
 // depth along the view, per yard (the underwater fade's above); how far over the
 // shore it fades in, yards; how much a wave's slope shades it; the most it mirrors.
@@ -73,27 +65,6 @@ const float RT_INTERIOR_ABSORB = 0.35;
 const float RT_INTERIOR_SHORE = 0.4;
 const float RT_INTERIOR_SLOPE = 1.0;
 const float RT_INTERIOR_MIRROR = 0.6;
-
-layout(set = 2, binding = 3) uniform WaterFrameData {
-    vec4 wakeBounds;                  // x = trail groups, y = ring groups, z = interactive water, w = trail points
-    vec4 wakePoints[MAX_WAKE_POINTS]; // xy = world pos, z = age 0..1, w = strength
-    // The ray traced water (water_rt.glsli): x on, y the view (0 the water,
-    // 1 its reflection alone, 2 what comes up through it alone), z how far
-    // a reflected ray goes, w 1 while the traced scene holds anything.
-    vec4 rtWater;
-    vec4 rtWater2;      // x how far a refracted ray goes, y the rain on it (rain_ripple.hpp), z the waves' height, w their frequency (1 default)
-    vec4 rtSkyTop;      // the sky a reflection that leaves the scene meets: overhead
-    vec4 rtSkyHorizon;  // and at the horizon
-    vec4 rtSunRay;      // xyz toward the sun the traced lighting's shadows follow
-    vec4 swimWaveInfo;                 // x = how many, z = 1: physics waves (impulseRingTilt)
-    vec4 swimWaves[MAX_SWIM_WAVES];    // xy = where, z = age in seconds, w = strength
-    // The lamps nearest the camera: xyz where, w reach; rgb colour, a where it
-    // starts to fall off. swimWaveInfo.y says how many.
-    vec4 waterLampAt[MAX_WATER_LAMPS];
-    vec4 waterLampColour[MAX_WATER_LAMPS];
-    vec4 wakeGroups[MAX_WATER_GROUPS];     // xy = centre, z = reach, w = first point
-    vec4 swimWaveGroups[MAX_WATER_GROUPS]; // xy = centre, z = reach, w = first ring
-};
 
 layout(location = 0) in vec3 FragPos;
 layout(location = 1) in vec3 Normal;
@@ -370,28 +341,7 @@ vec2 rainRippleTilt(vec2 p, float t, float strength) {
     return tilt;
 }
 
-// Physics waves' interaction (pad2 > 0): the deep-water rings of an impulse
-// at the surface, `t` seconds ago, `r` yards away (Cauchy-Poisson). Deep
-// water's dispersion (omega^2 = g k) puts the wave of wavenumber
-// k = g t^2 / (4 r^2) at distance r, with phase g t^2 / (4 r): the long
-// waves run out ahead and the short ones follow, the rings tightening inward.
-// The source's size `sigma` sets which lengths it raises (exp(-(k sigma)^2));
-// spread over the ring the slope falls as 1/sqrt(r). A wake is these summed
-// over every point of a trail, which gives Kelvin's wedge with the
-// wavelength the speed sets (2 pi U^2 / g) - no shape is drawn.
-vec2 impulseRingTilt(vec2 from, float t, float sigma, float strength) {
-    if (t <= 0.0) return vec2(0.0);
-    float r = max(length(from), 0.05);
-    float gt2 = PW_G * t * t;
-    float k = gt2 / (4.0 * r * r);
-    float phase = gt2 / (4.0 * r);
-    float ks = k * sigma;
-    float spectrum = exp(-ks * ks);
-    float spread = sqrt(sigma / (sigma + r));
-    float fade = 1.0 - smoothstep(1.2, 2.2, t);
-    float slope = strength * 0.6 * spectrum * ks * sin(phase) * spread * fade;
-    return -(from / r) * slope;
-}
+#include "water_interaction.glsli"
 
 // Interactive water: the bow wave and the Kelvin wake of every trail near
 // the pixel (see main), as a surface slope.

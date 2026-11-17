@@ -1329,6 +1329,7 @@ private:
     float rtWaveFreq_ = 1.0f;
     bool physicsWaves_ = false;
     float physicsWind_ = 7.0f;
+    bool waterTessellation_ = true;
     bool rtListenerAdded_ = false;
     // The memory guard (rt_memory_guard.hpp): run each frame before the ray
     // tracing's prepare, and before the loading screen's warm-up.
@@ -1365,6 +1366,10 @@ public:
         physicsWaves_ = on;
         physicsWind_ = windSpeed;
     }
+    /// Tessellated water (WaterRenderer): the traced water's grid cut finer
+    /// near the camera, so short waves, rings and wakes move its surface.
+    /// No effect on a device without tessellation shaders.
+    void setWaterTessellation(bool on) { waterTessellation_ = on; }
 private:
     int rtMinBrightnessPercent_ = 0;
     int rtNormalKeepDeg_ = kNormalBlendKeepDefault;

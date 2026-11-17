@@ -181,6 +181,13 @@ constexpr SettingGerman kGerman[] = {
      "Meer höher als ein See. Der Höhenregler skaliert sie; die Windgeschwindigkeit darunter "
      "bestimmt ihre Größe. Nicht im ursprünglichen Client.",
      nullptr, nullptr, nullptr},
+    {"watertess",
+     "Tesselliertes Wasser",
+     "Auf dem Wasser mit Raytracing: die Oberfläche nahe der Kamera von der GPU feiner "
+     "unterteilt, sodass kurze Wellen, die Ringe von Schwimmern und die Kielwellen von "
+     "Einheiten sie heben und senken, nicht nur ihre Schattierung. Nicht auf jeder GPU. "
+     "Nicht im ursprünglichen Client.",
+     nullptr, nullptr, nullptr},
     {"physwind",
      "Windstärke (m/s)",
      "Der Wind, der die physikalischen Wellen aufwirft: eine Brise von 3 lässt Kräuselungen, "
