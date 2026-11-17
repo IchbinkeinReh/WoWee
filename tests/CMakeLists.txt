@@ -4291,3 +4291,111 @@ wowee_add_test(test_auction_deposit SOURCES test_auction_deposit.cpp)
 
 # The cursor table looked up by art name (ui/cursor_art.hpp).
 wowee_add_test(test_cursor_art SOURCES test_cursor_art.cpp)
+
+# ── Shared objects for the sources tests compile from the game ────────────
+# This must stay the last thing in this file: it walks every registered test.
+#
+# Tests list the game's own sources they need (src/network/packet.cpp,
+# src/pipeline/adt_loader.cpp, the Lua interpreter's C files, ...) and each
+# executable used to compile its own copy: 261 such copies, 13 of packet.cpp
+# alone, two thirds of a clean build's objects on CI. Here every such source is
+# compiled once per build flavour - the include directories, definitions,
+# options, features and libraries of the test that asks for it - as an OBJECT
+# library, and the test links that object instead. Tests that ask for the same
+# source with the same flavour share one object; a test with a flavour of its
+# own still gets its own, so nothing is compiled differently than before.
+#
+# Targets whose build properties are generator expressions (test_game_replay,
+# which takes wowee's own) are left as they are.
+function(wowee_share_test_sources)
+    get_property(_targets GLOBAL PROPERTY WOWEE_ALL_TEST_TARGETS)
+    list(REMOVE_DUPLICATES _targets)
+    set(_shared 0)
+    set(_libraries 0)
+    foreach(_t IN LISTS _targets)
+        if(NOT TARGET ${_t})
+            continue()
+        endif()
+        get_target_property(_type ${_t} TYPE)
+        if(NOT _type STREQUAL "EXECUTABLE")
+            continue()
+        endif()
+        set(_flavour "")
+        set(_skip FALSE)
+        foreach(_p INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE_OPTIONS COMPILE_FEATURES LINK_LIBRARIES
+                   C_STANDARD CXX_STANDARD INTERPROCEDURAL_OPTIMIZATION_RELEASE)
+            get_target_property(_v ${_t} ${_p})
+            if(NOT _v)
+                set(_v "")
+            endif()
+            if(_v MATCHES "\\$<")
+                set(_skip TRUE)
+            endif()
+            string(APPEND _flavour "${_p}=${_v};")
+        endforeach()
+        if(_skip)
+            continue()
+        endif()
+        string(MD5 _hash "${_flavour}")
+        string(SUBSTRING "${_hash}" 0 10 _hash)
+        get_target_property(_sources ${_t} SOURCES)
+        set(_kept "")
+        set(_objects "")
+        foreach(_s IN LISTS _sources)
+            if(_s MATCHES "\\$<" OR NOT IS_ABSOLUTE "${_s}"
+               OR NOT _s MATCHES "^${CMAKE_SOURCE_DIR}/(src|extern)/"
+               OR NOT _s MATCHES "\\.(c|cc|cpp|cxx|mm)$"
+               OR _s MATCHES "/catch2/")
+                list(APPEND _kept "${_s}")
+                continue()
+            endif()
+            file(RELATIVE_PATH _rel "${CMAKE_SOURCE_DIR}" "${_s}")
+            string(MAKE_C_IDENTIFIER "${_rel}" _id)
+            set(_lib "wtobj_${_hash}_${_id}")
+            if(NOT TARGET ${_lib})
+                add_library(${_lib} OBJECT "${_s}")
+                foreach(_p COMPILE_DEFINITIONS COMPILE_OPTIONS COMPILE_FEATURES
+                           C_STANDARD CXX_STANDARD INTERPROCEDURAL_OPTIMIZATION_RELEASE)
+                    get_target_property(_v ${_t} ${_p})
+                    if(_v)
+                        set_property(TARGET ${_lib} PROPERTY ${_p} "${_v}")
+                    endif()
+                endforeach()
+                # The test's include directories: its own tree's as they are,
+                # the rest (extern, packages) as system ones, as the tests mark
+                # them, so a vendored header's warnings stay out of -Werror.
+                get_target_property(_dirs ${_t} INCLUDE_DIRECTORIES)
+                if(_dirs)
+                    foreach(_d IN LISTS _dirs)
+                        if(_d MATCHES "^${CMAKE_SOURCE_DIR}/(include|src|tests)(/|$)")
+                            target_include_directories(${_lib} PRIVATE "${_d}")
+                        else()
+                            target_include_directories(${_lib} SYSTEM PRIVATE "${_d}")
+                        endif()
+                    endforeach()
+                endif()
+                # The libraries only for their usage requirements (includes,
+                # definitions); an object library links nothing.
+                get_target_property(_libs ${_t} LINK_LIBRARIES)
+                if(_libs)
+                    foreach(_l IN LISTS _libs)
+                        if(TARGET ${_l})
+                            target_link_libraries(${_lib} PRIVATE ${_l})
+                        endif()
+                    endforeach()
+                endif()
+                if(WOWEE_ENABLE_ASAN AND NOT MSVC)
+                    target_compile_options(${_lib} PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+                endif()
+                math(EXPR _libraries "${_libraries} + 1")
+            endif()
+            list(APPEND _objects "$<TARGET_OBJECTS:${_lib}>")
+            math(EXPR _shared "${_shared} + 1")
+        endforeach()
+        if(_objects)
+            set_property(TARGET ${_t} PROPERTY SOURCES ${_kept} ${_objects})
+        endif()
+    endforeach()
+    message(STATUS "Test sources shared: ${_shared} uses compiled as ${_libraries} objects")
+endfunction()
+wowee_share_test_sources()
