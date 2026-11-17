@@ -32,7 +32,7 @@ jobs:
     name: Build (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     env:
-      CCACHE_DIR: ${{ runner.temp }}/ccache
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
       CMAKE_C_COMPILER_LAUNCHER: ccache
       CMAKE_CXX_COMPILER_LAUNCHER: ccache
     strategy:
@@ -111,7 +111,7 @@ jobs:
     - name: Restore compiler cache
       uses: actions/cache/restore@v6
       with:
-        path: ${{ runner.temp }}/ccache
+        path: ${{ github.workspace }}/.ccache
         key: ccache-linux-${{ matrix.arch }}-${{ github.sha }}
         restore-keys: ccache-linux-${{ matrix.arch }}-
 
@@ -166,7 +166,7 @@ jobs:
       if: always() && !cancelled()
       uses: actions/cache/save@v6
       with:
-        path: ${{ runner.temp }}/ccache
+        path: ${{ github.workspace }}/.ccache
         key: ccache-linux-${{ matrix.arch }}-${{ github.sha }}
 
     # cpack builds `all` again before packaging (its preinstall target), and
@@ -191,7 +191,7 @@ jobs:
     # result on its own.
     continue-on-error: ${{ matrix.arch == 'arm64' }}
     env:
-      CCACHE_DIR: ${{ runner.temp }}/ccache
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
       CMAKE_C_COMPILER_LAUNCHER: ccache
       CMAKE_CXX_COMPILER_LAUNCHER: ccache
     strategy:
@@ -226,7 +226,7 @@ jobs:
     - name: Restore compiler cache
       uses: actions/cache/restore@v6
       with:
-        path: ${{ runner.temp }}/ccache
+        path: ${{ github.workspace }}/.ccache
         key: ccache-macos-${{ matrix.arch }}-${{ github.sha }}
         restore-keys: ccache-macos-${{ matrix.arch }}-
 
@@ -279,7 +279,7 @@ jobs:
       if: always() && !cancelled()
       uses: actions/cache/save@v6
       with:
-        path: ${{ runner.temp }}/ccache
+        path: ${{ github.workspace }}/.ccache
         key: ccache-macos-${{ matrix.arch }}-${{ github.sha }}
 
     - name: Configure Developer ID signing
@@ -543,7 +543,7 @@ jobs:
     name: Build (windows-arm64)
     runs-on: windows-11-arm
     env:
-      CCACHE_DIR: ${{ runner.temp }}/ccache
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
       CMAKE_C_COMPILER_LAUNCHER: ccache
       CMAKE_CXX_COMPILER_LAUNCHER: ccache
     steps:
@@ -614,7 +614,7 @@ jobs:
     - name: Restore compiler cache
       uses: actions/cache/restore@v6
       with:
-        path: ${{ runner.temp }}/ccache
+        path: ${{ github.workspace }}/.ccache
         key: ccache-windows-arm64-${{ github.sha }}
         restore-keys: ccache-windows-arm64-
 
@@ -664,7 +664,7 @@ jobs:
       if: always() && !cancelled()
       uses: actions/cache/save@v6
       with:
-        path: ${{ runner.temp }}/ccache
+        path: ${{ github.workspace }}/.ccache
         key: ccache-windows-arm64-${{ github.sha }}
 
     - name: Bundle DLLs
@@ -702,7 +702,7 @@ jobs:
     name: Build (windows-x86-64)
     runs-on: windows-latest
     env:
-      CCACHE_DIR: ${{ runner.temp }}/ccache
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
       CMAKE_C_COMPILER_LAUNCHER: ccache
       CMAKE_CXX_COMPILER_LAUNCHER: ccache
       # Clang and LLD rather than GCC and GNU ld: the Release links of wowee
@@ -783,7 +783,7 @@ jobs:
     - name: Restore compiler cache
       uses: actions/cache/restore@v6
       with:
-        path: ${{ runner.temp }}/ccache
+        path: ${{ github.workspace }}/.ccache
         key: ccache-windows-x86-64-clang-${{ github.sha }}
         restore-keys: ccache-windows-x86-64-clang-
 
@@ -839,7 +839,7 @@ jobs:
       if: always() && !cancelled()
       uses: actions/cache/save@v6
       with:
-        path: ${{ runner.temp }}/ccache
+        path: ${{ github.workspace }}/.ccache
         key: ccache-windows-x86-64-clang-${{ github.sha }}
 
     - name: Bundle DLLs
@@ -884,7 +884,7 @@ jobs:
     name: Build (windows-x86-64 drop-in)
     runs-on: windows-latest
     env:
-      CCACHE_DIR: ${{ runner.temp }}/ccache
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
       CMAKE_C_COMPILER_LAUNCHER: ccache
       CMAKE_CXX_COMPILER_LAUNCHER: ccache
     steps:
@@ -943,7 +943,7 @@ jobs:
     - name: Restore compiler cache
       uses: actions/cache/restore@v6
       with:
-        path: ${{ runner.temp }}/ccache
+        path: ${{ github.workspace }}/.ccache
         key: ccache-windows-dropin-${{ github.sha }}
         restore-keys: ccache-windows-dropin-
 
@@ -972,7 +972,7 @@ jobs:
       if: always() && !cancelled()
       uses: actions/cache/save@v6
       with:
-        path: ${{ runner.temp }}/ccache
+        path: ${{ github.workspace }}/.ccache
         key: ccache-windows-dropin-${{ github.sha }}
 
     - name: Upload drop-in executables

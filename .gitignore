@@ -179,3 +179,4 @@ android/local.properties
 # installation; it does not belong in this repository. See
 # docs/upgraded-assets.md.
 asset_packs/
+.ccache/
