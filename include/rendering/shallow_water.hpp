@@ -81,6 +81,10 @@ inline constexpr float kBreakingAt = 1.0f;
 inline constexpr float kBreakingSteepness = 0.95f;
 /// The most a breaking wave's crest leans forward, as a share of its Q.
 inline constexpr float kMaxLean = 0.6f;
+/// A shore wave shorter than this, yards, stays in the deep part: its crests,
+/// laid by the depth's contours, would come closer than the pixels on a
+/// steep bank (water_waves.glsli's SW_MIN_SHORE_WAVELENGTH).
+inline constexpr float kMinShoreWavelength = 1.0f;
 /// The longest shoreward step the smoothed shore direction is taken over, in
 /// grid cells either side.
 inline constexpr int kSmoothCells = 2;

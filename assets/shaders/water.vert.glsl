@@ -65,21 +65,24 @@ void main() {
     // Evaluate Gerstner waves using X,Y horizontal plane. With physics waves
     // on (pad2 = the wind in m/s) the waves come from the wind's spectrum
     // (water_waves.glsli): waveAmp scales them, waveFreq is the fetch in
-    // yards and waveSpeed the wind's direction. Waves under 9 yards, shorter
-    // than the liquid grid can carry, stay in the fragment stage's normal.
+    // yards and waveSpeed the wind's direction. Waves under 9 yards
+    // (PW_VERTEX_MIN_WAVELENGTH), shorter than the liquid grid can carry,
+    // stay in the fragment stage's normal. The swimmers and boats that ride
+    // the waves take this same surface on the CPU (wave_surface.hpp).
     // With the shore waves on (push.shore.x) the same waves over the bed:
     // slowed, raised, turned and broken as the water shallows.
     GerstnerResult waves;
     if (push.shore.x > 0.5) {
         waves = push.pad2 > 0.0
             ? evaluatePhysicalWavesShore(worldPos.xy, time, push.waveAmp, push.waveFreq, push.pad2,
-                                         push.waveSpeed, 9.0, 9.0, aBed)
+                                         push.waveSpeed, PW_VERTEX_MIN_WAVELENGTH,
+                                         PW_VERTEX_MIN_WAVELENGTH, aBed)
             : evaluateGerstnerWavesShore(worldPos.xy, time, push.waveAmp, push.waveFreq, push.waveSpeed,
                                          push.liquidBasicType, aBed);
     } else {
         waves = push.pad2 > 0.0
-            ? evaluatePhysicalWaves(vec2(worldPos.x, worldPos.y), time,
-                                    push.waveAmp, push.waveFreq, push.pad2, push.waveSpeed, 9.0)
+            ? evaluatePhysicalWaves(vec2(worldPos.x, worldPos.y), time, push.waveAmp, push.waveFreq, push.pad2,
+                                    push.waveSpeed, PW_VERTEX_MIN_WAVELENGTH)
             : evaluateGerstnerWaves(vec2(worldPos.x, worldPos.y), time,
                                     push.waveAmp, push.waveFreq, push.waveSpeed, push.liquidBasicType);
     }

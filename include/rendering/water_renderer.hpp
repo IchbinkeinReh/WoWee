@@ -3,6 +3,7 @@
 #include <vector>
 #include "rendering/collision_facets.hpp"
 #include "rendering/wave_spectrum.hpp"
+#include "rendering/wave_surface.hpp"
 #include <memory>
 #include <optional>
 #include <cstdint>
@@ -136,10 +137,8 @@ constexpr int kOwnWakePoints = 64;
 /// through, for the trail and for the rings each.
 constexpr int kMaxWaterGroups = 64;
 
-/// The traced water's waves at their default (rtwaveamp 100%): half the
-/// height they were first made with, which in the traced mirror read as a
-/// choppy sea on a still pond.
-inline constexpr float kRtWaveAmpScale = 0.5f;
+// kRtWaveAmpScale, the traced waves' height at their default, is in
+// wave_surface.hpp with the rest of what the waves are drawn with.
 
 inline constexpr size_t kMaxWaterLamps = 8;
 
@@ -332,6 +331,21 @@ public:
                                                  float glX, float glY) const;
 
     std::optional<float> getWaterHeightAt(float glX, float glY) const;
+    /// The surface the traced water draws over a point, for what rides its
+    /// waves (Renderer::updateWaveRide): the flat level getWaterHeightAt
+    /// answers, and the waves' height over it and normal there at the
+    /// shader's `time` (wave_surface::sample, the twin of water.vert). No
+    /// waves - a height of 0 - where the traced water has none: while it is
+    /// not drawn, on magma, slime and a building's water, and with `rideOn`
+    /// false. Nothing where there is no water. Visual only: the movement,
+    /// collision and the server keep the flat level.
+    struct WaveSurfaceSample {
+        float flatLevel = 0.0f;
+        wave_surface::SurfaceSample surface;
+    };
+    std::optional<WaveSurfaceSample> waveSurfaceAt(float glX, float glY, float time, bool rideOn) const;
+    /// The waves' settings this frame, as the traced water draws them.
+    [[nodiscard]] wave_surface::WaveSettings waveSettings() const;
     /// Like getWaterHeightAt but only returns water surfaces whose height is
     /// close to the query Z (within maxAbove units above). Avoids false
     /// underwater detection from elevated WMO water far above the camera.

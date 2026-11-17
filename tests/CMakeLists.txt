@@ -4300,6 +4300,11 @@ wowee_add_test(test_wave_spectrum SOURCES test_wave_spectrum.cpp)
 # refraction and McCowan's breaking limit (shallow_water.hpp). Header-only.
 wowee_add_test(test_shallow_water SOURCES test_shallow_water.cpp)
 
+# The traced water's waves on the CPU, which swimmers, boats and the camera
+# ride (wave_surface.hpp): the surface over a point found by inverting the
+# Gerstner displacement, none where the water has no waves. Header-only.
+wowee_add_test(test_wave_surface SOURCES test_wave_surface.cpp)
+
 # The tessellated water's curve and the rings' and wakes' heights against the
 # slopes the water shades with (water_tessellation.hpp). Header-only.
 wowee_add_test(test_water_tessellation SOURCES test_water_tessellation.cpp)

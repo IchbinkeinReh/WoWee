@@ -1396,14 +1396,12 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
         }
 
         bool isWmoWater = (surface.wmoId != 0);
-        bool canalProfile = isWmoWater || (surface.liquidType == 5);
-        uint8_t basicType = (surface.liquidType == 0) ? 0 : ((surface.liquidType - 1) % 4);
-        if (basicType >= 2) continue;  // magma and slime: the client's (renderClient)
-        // WMO water gets no wave displacement - prevents visible slosh at
-        // geometry edges (bridges, docks) where water is far below the surface.
-        float waveAmp = isWmoWater ? 0.0f : (basicType == 1 ? 0.35f : 0.08f);
-        float waveFreq = canalProfile ? 0.35f : (basicType == 1 ? 0.20f : 0.30f);
-        float waveSpeed = canalProfile ? 1.00f : (basicType == 1 ? 1.20f : 1.40f);
+        uint8_t basicType = wave_surface::basicTypeOf(surface.liquidType);
+        // The waves' push constants (wave_surface::paramsFor, which the
+        // swimmers and boats riding them read as well, so the two agree).
+        // None for magma and slime: the client's (renderClient).
+        const auto waves = wave_surface::paramsFor(surface.liquidType, isWmoWater, waveSettings());
+        if (!waves) continue;
 
         WaterPushConstants push{};
         // Ocean or river, from the light (0x008a2bf0); magma and slime are
@@ -1424,29 +1422,15 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             }
             push.lightColors = 1.0f;
         }
-        // Rain and storms roughen the water (wave_spectrum::weatherWaves): the
-        // hand-made waves higher and quicker, the physics waves' wind stronger.
-        const wave_spectrum::WeatherWaves& weather = rtFrame_.weather;
-        push.waveAmp = waveAmp * kRtWaveAmpScale * rtFrame_.waveAmp * weather.amplitudeScale;
-        push.waveFreq = waveFreq * rtFrame_.waveFreq;
-        push.waveSpeed = waveSpeed * weather.speedScale;
-        // Physics waves (water_waves.glsli, wave_spectrum.hpp): the wind's
-        // spectrum, with the open sea's fetch for an ocean and a lake's for
-        // the rest. waveAmp is the amplitude slider alone (100% the spectrum's
-        // own height), waveFreq the fetch, waveSpeed the wind's direction and
-        // pad2 the wind. A building's water stays still, as above.
-        if (rtFrame_.physicsWaves && !isWmoWater) {
-            push.waveAmp = rtFrame_.waveAmp;
-            push.waveFreq = basicType == 1 ? wave_spectrum::kOceanFetch : wave_spectrum::kInlandFetch;
-            push.waveSpeed = wave_spectrum::kWindDirection;
-            push.pad2 = std::max(rtFrame_.windSpeed * weather.windScale, 0.5f);
-        }
-        // The shore waves (water_waves.glsli) on the ground's water, which
-        // alone knows its bed; their surf whitens more in a storm.
-        if (rtFrame_.shoreWaves && !isWmoWater) {
-            push.shore = glm::vec4(1.0f, weather.amplitudeScale, 0.0f, 0.0f);
-        }
-        push.liquidBasicType = static_cast<float>(basicType);
+        // The hand-made waves' height, frequency and pace, or the physics
+        // waves' slider, fetch, wind direction and wind (pad2); the shore
+        // waves and how much a storm whitens their surf.
+        push.waveAmp = waves->amp;
+        push.waveFreq = waves->freq;
+        push.waveSpeed = waves->speed;
+        push.pad2 = waves->wind;
+        if (waves->shore) push.shore = glm::vec4(1.0f, waves->surf, 0.0f, 0.0f);
+        push.liquidBasicType = waves->basicType;
         push.screenSize = glm::vec2(static_cast<float>(renderExtent_.width),
                                     static_cast<float>(renderExtent_.height));
         // Asked of the camera rather than written out in the shader, which is
@@ -1823,6 +1807,71 @@ std::optional<float> WaterRenderer::getWaterHeightAt(float glX, float glY) const
     }
 
     return best;
+}
+
+wave_surface::WaveSettings WaterRenderer::waveSettings() const {
+    wave_surface::WaveSettings s;
+    s.waveAmp = rtFrame_.waveAmp;
+    s.waveFreq = rtFrame_.waveFreq;
+    s.physicsWaves = rtFrame_.physicsWaves;
+    s.windSpeed = rtFrame_.windSpeed;
+    s.weather = rtFrame_.weather;
+    s.shoreWaves = rtFrame_.shoreWaves;
+    return s;
+}
+
+std::optional<WaterRenderer::WaveSurfaceSample> WaterRenderer::waveSurfaceAt(float glX, float glY, float time,
+                                                                             bool rideOn) const {
+    // The surface getWaterHeightAt answers with: the highest with water here.
+    const WaterSurface* best = nullptr;
+    float bestHeight = 0.0f;
+    for (const auto& surface : surfaces) {
+        const auto grid = wateredGridPosition(surface, glX, glY);
+        if (!grid) continue;
+        const auto sampled = sampleGridHeight(surface.heights, surface.width, surface.height, grid->x, grid->y);
+        if (!sampled) continue;
+        if (!best || *sampled > bestHeight) {
+            best = &surface;
+            bestHeight = *sampled;
+        }
+    }
+    if (!best) return std::nullopt;
+    WaveSurfaceSample out;
+    out.flatLevel = bestHeight;
+    const auto waves = wave_surface::rideParams(rideOn, rtWaterDrawn(), best->liquidType, best->wmoId != 0,
+                                                waveSettings());
+    if (!waves) return out;
+    // The bed under a point of this surface, as the shader has it between
+    // the grid's vertices (interpolated, the tessellated water's way; the
+    // grid's own triangles take each vertex's as it is). A point the waves
+    // carry in from past the surface's edge takes the edge's.
+    const WaterSurface& surface = *best;
+    auto bedAt = [&surface](glm::vec2 at) -> glm::vec4 {
+        const glm::vec4 deep(shallow_water::kNoBedDepth, 0.0f, 0.0f, 0.0f);
+        const int gridWidth = surface.width + 1;
+        const int gridHeight = surface.height + 1;
+        if (surface.bed.size() < static_cast<size_t>(gridWidth) * gridHeight) return deep;
+        const glm::vec2 rel(at.x - surface.origin.x, at.y - surface.origin.y);
+        const glm::vec2 ax(surface.stepX.x, surface.stepX.y);
+        const glm::vec2 ay(surface.stepY.x, surface.stepY.y);
+        const float lx = glm::dot(ax, ax);
+        const float ly = glm::dot(ay, ay);
+        if (lx < 1e-6f || ly < 1e-6f) return deep;
+        const float gx = std::clamp(glm::dot(rel, ax) / lx, 0.0f, static_cast<float>(surface.width));
+        const float gy = std::clamp(glm::dot(rel, ay) / ly, 0.0f, static_cast<float>(surface.height));
+        const int ix = std::min(static_cast<int>(gx), std::max(static_cast<int>(surface.width) - 1, 0));
+        const int iy = std::min(static_cast<int>(gy), std::max(static_cast<int>(surface.height) - 1, 0));
+        const float fx = gx - static_cast<float>(ix);
+        const float fy = gy - static_cast<float>(iy);
+        auto at2 = [&](int x, int y) {
+            return surface.bed[static_cast<size_t>(std::min(y, gridHeight - 1)) * gridWidth +
+                               static_cast<size_t>(std::min(x, gridWidth - 1))];
+        };
+        return at2(ix, iy) * (1.0f - fx) * (1.0f - fy) + at2(ix + 1, iy) * fx * (1.0f - fy) +
+               at2(ix, iy + 1) * (1.0f - fx) * fy + at2(ix + 1, iy + 1) * fx * fy;
+    };
+    out.surface = wave_surface::sample(*waves, glm::vec2(glX, glY), time, bedAt);
+    return out;
 }
 
 std::optional<float> WaterRenderer::getNearestWaterHeightAt(float glX, float glY, float queryZ, float maxAbove) const {

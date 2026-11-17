@@ -1,8 +1,18 @@
 // The water's Gerstner waves (water.vert, or water.tese on tessellated water,
 // displaces the surface by them; water.frag takes its normal from them at
 // every pixel).
+//
+// What water.vert moves the grid by is worked out again on the CPU, for the
+// swimmers, boats and camera that ride the waves (include/rendering/
+// wave_surface.hpp: gerstner, physical, physicalShore, gerstnerShore, and
+// paramsFor for the push constants). Change a wave here, change it there.
 #ifndef WATER_WAVES_GLSLI
 #define WATER_WAVES_GLSLI
+
+// The shortest wave the liquid grid's vertices move as height, yards: shorter
+// than the grid (a vertex every 4 yards) can carry. water.vert's cut-off, and
+// wave_surface.hpp's kVertexMinWavelength.
+#define PW_VERTEX_MIN_WAVELENGTH 9.0
 
 // --- Gerstner wave ---
 // Coordinate system: X,Y = horizontal plane, Z = up (height)
