@@ -6,11 +6,14 @@
 
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec2 aTexCoord;
+layout(location = 2) in vec4 aBed;  // the bed under the corner (water.vert)
 
 layout(location = 0) out vec3 vWorldPos;
 layout(location = 1) out vec2 vTexCoord;
+layout(location = 2) out vec4 vBed;
 
 void main() {
     vWorldPos = aPos;
     vTexCoord = aTexCoord;
+    vBed = aBed;
 }

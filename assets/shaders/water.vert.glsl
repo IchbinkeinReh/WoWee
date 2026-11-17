@@ -35,10 +35,16 @@ layout(push_constant) uniform Push {
     float lightColors;
     float pad1;
     float pad2;  // > 0: physics waves, the wind in m/s (water_waves.glsli)
+    // x 1: the shore waves (water_waves.glsli's evaluatePhysicalWavesShore),
+    // y how much rough weather whips up their surf (water.frag).
+    vec4 shore;
 } push;
 
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec2 aTexCoord;
+// The bed under the vertex (WaterRenderer::createWaterMesh): x its depth,
+// yz the way to the shallows, w its slope (water_waves.glsli).
+layout(location = 2) in vec4 aBed;
 
 layout(location = 0) out vec3 FragPos;
 layout(location = 1) out vec3 Normal;
@@ -48,6 +54,7 @@ layout(location = 4) out vec2 ScreenUV;
 // Where the vertex stood before the waves moved it: the fragment stage
 // takes the waves' normal there (water.frag).
 layout(location = 5) out vec2 WaveBase;
+layout(location = 6) out vec4 BedInfo;
 
 #include "water_waves.glsli"
 
@@ -60,11 +67,22 @@ void main() {
     // (water_waves.glsli): waveAmp scales them, waveFreq is the fetch in
     // yards and waveSpeed the wind's direction. Waves under 9 yards, shorter
     // than the liquid grid can carry, stay in the fragment stage's normal.
-    GerstnerResult waves = push.pad2 > 0.0
-        ? evaluatePhysicalWaves(vec2(worldPos.x, worldPos.y), time,
-                                push.waveAmp, push.waveFreq, push.pad2, push.waveSpeed, 9.0)
-        : evaluateGerstnerWaves(vec2(worldPos.x, worldPos.y), time,
-                                push.waveAmp, push.waveFreq, push.waveSpeed, push.liquidBasicType);
+    // With the shore waves on (push.shore.x) the same waves over the bed:
+    // slowed, raised, turned and broken as the water shallows.
+    GerstnerResult waves;
+    if (push.shore.x > 0.5) {
+        waves = push.pad2 > 0.0
+            ? evaluatePhysicalWavesShore(worldPos.xy, time, push.waveAmp, push.waveFreq, push.pad2,
+                                         push.waveSpeed, 9.0, 9.0, aBed)
+            : evaluateGerstnerWavesShore(worldPos.xy, time, push.waveAmp, push.waveFreq, push.waveSpeed,
+                                         push.liquidBasicType, aBed);
+    } else {
+        waves = push.pad2 > 0.0
+            ? evaluatePhysicalWaves(vec2(worldPos.x, worldPos.y), time,
+                                    push.waveAmp, push.waveFreq, push.pad2, push.waveSpeed, 9.0)
+            : evaluateGerstnerWaves(vec2(worldPos.x, worldPos.y), time,
+                                    push.waveAmp, push.waveFreq, push.waveSpeed, push.liquidBasicType);
+    }
 
     // Apply displacement: xy = horizontal, z = vertical (up)
     worldPos.x += waves.displacement.x;
@@ -76,6 +94,7 @@ void main() {
     Normal = normalize(cross(waves.binormal, waves.tangent));
 
     WaveBase = aPos.xy;
+    BedInfo = aBed;
     FragPos = worldPos.xyz;
     TexCoord = aTexCoord;
     farClip(view * worldPos);

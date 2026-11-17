@@ -1335,6 +1335,7 @@ private:
     float waterStorm_ = 0.0f;
     float physicsWind_ = 7.0f;
     bool waterTessellation_ = true;
+    bool shoreWaves_ = true;
     bool rtListenerAdded_ = false;
     // The memory guard (rt_memory_guard.hpp): run each frame before the ray
     // tracing's prepare, and before the loading screen's warm-up.
@@ -1378,6 +1379,8 @@ public:
     /// near the camera, so short waves, rings and wakes move its surface.
     /// No effect on a device without tessellation shaders.
     void setWaterTessellation(bool on) { waterTessellation_ = on; }
+    /// The shore waves and their surf on the traced water (shallow_water.hpp).
+    void setShoreWaves(bool on) { shoreWaves_ = on; }
 private:
     int rtMinBrightnessPercent_ = 0;
     int rtNormalKeepDeg_ = kNormalBlendKeepDefault;

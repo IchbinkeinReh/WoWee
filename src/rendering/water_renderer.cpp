@@ -4,6 +4,7 @@
 #include "rendering/water_mask.hpp"
 #include "rendering/water_renderer.hpp"
 #include "rendering/wave_spectrum.hpp"
+#include "rendering/shallow_water.hpp"
 #include "rendering/collision_liquid.hpp"
 #include "rendering/collision_facets.hpp"
 #include <array>
@@ -43,6 +44,10 @@ struct WaterMaterialUBO {
     float bodyFloor;   // least the water's own colour shows, however shallow
 };
 
+// A water vertex (createWaterMesh, buildWaterPipeline): position (3 floats),
+// the bed under it (4, WaterSurface::bed), texture coordinate (2).
+constexpr uint32_t kWaterVertexFloats = 9;
+
 // Push constants matching water.vert.glsl
 struct WaterPushConstants {
     // The light's ramp for this liquid: the shallows' colour and alpha, then
@@ -59,8 +64,11 @@ struct WaterPushConstants {
     float lightColors = 0.0f; // 1: water and ocean take the light's colours above
     float interiorFog = 0.0f; // 1: an interior WMO liquid, fogged with the camera's fog
     float pad2 = 0.0f;
+    // x 1: the shore waves and their surf (water_waves.glsli, water.frag's
+    // surfFoam); y how rough the weather makes the sea, 1 calm.
+    glm::vec4 shore{0.0f};
 };
-static_assert(sizeof(WaterPushConstants) == 80, "the two shader declarations of this range are laid out for 80 bytes");
+static_assert(sizeof(WaterPushConstants) == 96, "the shaders' declarations of this range are laid out for 96 bytes");
 
 
 
@@ -284,11 +292,14 @@ VkPipeline WaterRenderer::buildWaterPipeline(VkRenderPass pass, VkSampleCountFla
     }
     VkVertexInputBindingDescription vertBinding{};
     vertBinding.binding = 0;
-    vertBinding.stride = 8 * sizeof(float);
+    // Position, the bed under the vertex (WaterSurface::bed), texture
+    // coordinate (createWaterMesh).
+    vertBinding.stride = kWaterVertexFloats * sizeof(float);
     vertBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
     std::vector<VkVertexInputAttributeDescription> vertAttribs = {
         { .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 0 },
-        { .location = 1, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = 6 * sizeof(float) },
+        { .location = 1, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = 7 * sizeof(float) },
+        { .location = 2, .binding = 0, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 3 * sizeof(float) },
     };
     PipelineBuilder builder;
     builder.setShaders(vertShader.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
@@ -704,6 +715,84 @@ glm::vec2 layerStoredUV(const pipeline::ADTTerrain::WaterLayer& layer, size_t ve
     return client_liquid::chunkStoredCoord(layer.uvs[vertex * 2], layer.uvs[vertex * 2 + 1]);
 }
 
+/// The ground under a tile's water, for the shore waves (WaterSurface::bed).
+/// The liquid grid's corners are the terrain chunks' outer height samples
+/// (MCVT's 9 x 9 a chunk), so the ground under every corner is known exactly:
+/// a grid of 129 x 129 over the tile, node (i, j) `i` cells along render -X
+/// and `j` along render -Y from chunk (0, 0)'s corner, with the ground's
+/// smoothed uphill slope at each (shallow_water::uphillField).
+struct TileBed {
+    static constexpr int kNodes = 129;
+    float originX = 0.0f;
+    float originY = 0.0f;
+    float cell = 1.0f;
+    std::vector<float> ground;  ///< index j * kNodes + i; NaN where a chunk has no heights
+    std::vector<shallow_water::Uphill> uphill;
+};
+
+TileBed tileBed(const pipeline::ADTTerrain& terrain, float cell) {
+    TileBed bed;
+    constexpr int kChunkCells = 8;
+    constexpr int kMcvtRow = 17;  // 9 outer + 8 inner samples a row
+    const auto& corner = terrain.getChunk(0, 0);
+    bed.originX = corner.position[0];
+    bed.originY = corner.position[1];
+    bed.cell = cell;
+    bed.ground.assign(static_cast<size_t>(TileBed::kNodes) * TileBed::kNodes, std::numeric_limits<float>::quiet_NaN());
+    for (int j = 0; j < TileBed::kNodes; ++j) {
+        // Render -Y walks the chunks' columns, -X their rows (terrain_mesh.cpp);
+        // the tile's last line of nodes is the last chunk's far edge.
+        const int chunkCol = std::min(j / kChunkCells, 15);
+        const int c = j - chunkCol * kChunkCells;
+        for (int i = 0; i < TileBed::kNodes; ++i) {
+            const int chunkRow = std::min(i / kChunkCells, 15);
+            const int r = i - chunkRow * kChunkCells;
+            const auto& chunk = terrain.getChunk(chunkCol, chunkRow);
+            if (!chunk.hasHeightMap()) continue;
+            const float z = chunk.position[2] + chunk.heightMap.heights[r * kMcvtRow + c];
+            if (std::isfinite(z)) bed.ground[static_cast<size_t>(j) * TileBed::kNodes + i] = z;
+        }
+    }
+    bed.uphill = shallow_water::uphillField(bed.ground, TileBed::kNodes, cell);
+    return bed;
+}
+
+/// Each of the surface's vertices' bed (WaterSurface::bed) from the ground
+/// under it: the depth from the water to the ground, and the way up the
+/// ground's slope - toward the shallows, the water lying flat - and the slope.
+/// A vertex that is not on a node of the tile's grid, or over a chunk with no
+/// heights, is left deep.
+void fillBed(WaterSurface& surface, const TileBed& tile) {
+    const int gridWidth = surface.width + 1;
+    const int gridHeight = surface.height + 1;
+    surface.bed.assign(static_cast<size_t>(gridWidth) * gridHeight,
+                       glm::vec4(shallow_water::kNoBedDepth, 0.0f, 0.0f, 0.0f));
+    for (int y = 0; y < gridHeight; ++y) {
+        for (int x = 0; x < gridWidth; ++x) {
+            const glm::vec3 pos = surface.origin + surface.stepX * static_cast<float>(x) +
+                                  surface.stepY * static_cast<float>(y);
+            const float fi = (tile.originX - pos.x) / tile.cell;
+            const float fj = (tile.originY - pos.y) / tile.cell;
+            const float i = std::round(fi);
+            const float j = std::round(fj);
+            if (std::abs(fi - i) > 0.05f || std::abs(fj - j) > 0.05f) continue;
+            if (i < 0.0f || j < 0.0f || i >= TileBed::kNodes || j >= TileBed::kNodes) continue;
+            const size_t node = static_cast<size_t>(j) * TileBed::kNodes + static_cast<size_t>(i);
+            const float ground = tile.ground[node];
+            if (!std::isfinite(ground)) continue;
+            const size_t index = static_cast<size_t>(y) * gridWidth + x;
+            const float water = index < surface.heights.size() ? surface.heights[index] : surface.minHeight;
+            // Uphill along +i and +j is along -X and -Y.
+            const glm::vec2 up(-tile.uphill[node].gx, -tile.uphill[node].gy);
+            const float slope = glm::length(up);
+            const glm::vec2 toShallows =
+                slope > 0.0f ? up / slope * shallow_water::slopeWeight(slope) : glm::vec2(0.0f);
+            surface.bed[index] = glm::vec4(std::max(water - ground, -shallow_water::kMaxDryHeight), toShallows.x,
+                                           toShallows.y, slope);
+        }
+    }
+}
+
 }  // namespace
 
 void WaterRenderer::loadFromTerrain(const pipeline::ADTTerrain& terrain, bool append,
@@ -753,6 +842,8 @@ void WaterRenderer::loadFromTerrain(const pipeline::ADTTerrain& terrain, bool ap
 
     // Tile origin = NW corner = chunk(0,0) position
     const auto& chunk00 = terrain.getChunk(0, 0);
+    // The ground under the tile's water, for the shore waves.
+    const TileBed groundUnder = mergeGroups.empty() ? TileBed{} : tileBed(terrain, TILE_SIZE);
 
     int totalSurfaces = 0;
 
@@ -820,6 +911,7 @@ void WaterRenderer::loadFromTerrain(const pipeline::ADTTerrain& terrain, bool ap
                 }
                 surface.tileX = tileX;
                 surface.tileY = tileY;
+                fillBed(surface, groundUnder);
 
                 createWaterMesh(surface);
                 if (surface.indexCount > 0 && vkCtx) {
@@ -951,7 +1043,7 @@ void WaterRenderer::loadFromTerrain(const pipeline::ADTTerrain& terrain, bool ap
             }
         }
 
-
+        fillBed(surface, groundUnder);
         createWaterMesh(surface);
         if (surface.indexCount > 0 && vkCtx) {
             updateMaterialUBO(surface);
@@ -1349,6 +1441,11 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             push.waveSpeed = wave_spectrum::kWindDirection;
             push.pad2 = std::max(rtFrame_.windSpeed * weather.windScale, 0.5f);
         }
+        // The shore waves (water_waves.glsli) on the ground's water, which
+        // alone knows its bed; their surf whitens more in a storm.
+        if (rtFrame_.shoreWaves && !isWmoWater) {
+            push.shore = glm::vec4(1.0f, weather.amplitudeScale, 0.0f, 0.0f);
+        }
         push.liquidBasicType = static_cast<float>(basicType);
         push.screenSize = glm::vec2(static_cast<float>(renderExtent_.width),
                                     static_cast<float>(renderExtent_.height));
@@ -1553,6 +1650,7 @@ void WaterRenderer::createWaterMesh(WaterSurface& surface) {
 
     std::vector<float> vertices;
     std::vector<uint32_t> indices;
+    vertices.reserve(static_cast<size_t>(gridWidth) * gridHeight * kWaterVertexFloats);
 
     for (int y = 0; y < gridHeight; y++) {
         for (int x = 0; x < gridWidth; x++) {
@@ -1569,10 +1667,14 @@ void WaterRenderer::createWaterMesh(WaterSurface& surface) {
             vertices.push_back(pos.x);
             vertices.push_back(pos.y);
             vertices.push_back(pos.z);
-            // normal (3 floats) - up
-            vertices.push_back(0.0f);
-            vertices.push_back(0.0f);
-            vertices.push_back(1.0f);
+            // The bed under it (4 floats): deep water where it is not known.
+            const glm::vec4 bed = index < static_cast<int>(surface.bed.size())
+                                      ? surface.bed[index]
+                                      : glm::vec4(shallow_water::kNoBedDepth, 0.0f, 0.0f, 0.0f);
+            vertices.push_back(bed.x);
+            vertices.push_back(bed.y);
+            vertices.push_back(bed.z);
+            vertices.push_back(bed.w);
             // texcoord (2 floats)
             vertices.push_back(static_cast<float>(x) / std::max(1, gridWidth - 1));
             vertices.push_back(static_cast<float>(y) / std::max(1, gridHeight - 1));

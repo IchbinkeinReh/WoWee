@@ -44,6 +44,10 @@ layout(push_constant) uniform Push {
     float lightColors; // 1: closeColor and farColor hold the light's ramp
     float interiorFog; // 1: a building's interior liquid, fogged as its rooms are
     float pad2;        // > 0: physics waves, the wind in m/s (water_waves.glsli)
+    // x 1: the shore waves (water_waves.glsli's evaluatePhysicalWavesShore)
+    // and their surf (surfFoam), y how rough the weather makes the sea
+    // (wave_spectrum::WeatherWaves' amplitudeScale, 1 calm).
+    vec4 shore;
 } push;
 
 layout(set = 1, binding = 0) uniform WaterMaterial {
@@ -72,6 +76,9 @@ layout(location = 2) in vec2 TexCoord;
 layout(location = 3) in float WaveOffset;
 layout(location = 4) in vec2 ScreenUV;
 layout(location = 5) in vec2 WaveBase;
+// The bed under this point (water.vert): x its depth, yz the way to the
+// shallows, w its slope.
+layout(location = 6) in vec4 BedInfo;
 
 layout(location = 0) out vec4 outColor;
 
@@ -407,6 +414,90 @@ vec2 kelvinWake(vec2 at) {
     return tilt;
 }
 
+// ============================================================
+// Surf - the white water where the shore waves break
+// ============================================================
+// Out to SURF_FADE_NEAR yards the surf is drawn whole, fading out by
+// SURF_FADE_FAR, as the wave detail does.
+const float SURF_FADE_NEAR = 300.0;
+const float SURF_FADE_FAR = 1200.0;
+// The foam's colour: white, a little blue.
+const vec3 SURF_ALBEDO = vec3(0.90, 0.95, 1.0);
+
+// How white the water is at `at` (0-1), from the shore waves there (`waves`,
+// evaluatePhysicalWavesShore or evaluateGerstnerWavesShore), the bed under it
+// (`bed`), the screen's depth there and the swash's front (main's
+// shoreDepth, swashDepth), and how rough the weather is (`storm`, 1 calm).
+// Three kinds: the breaking crests, white where the breaker index passes 1;
+// the foam they leave behind, which thins to a lace and is gone before the
+// next wave comes in, and thins out toward the beach; and the swash's line
+// where the run-up turns. The foam left moves with the waves' shore phase,
+// each wave's a pattern of its own.
+float surfFoam(GerstnerResult waves, vec4 bed, vec2 at, float shoreDepth, float swashDepth, float time,
+               float storm) {
+    // A pond's ripples make no surf; the open sea's swell a great deal. A
+    // storm breaks the waves sooner and whitens more of the water.
+    float sea = smoothstep(0.03, 0.40, waves.seaHeight);
+    if (sea <= 0.0) return 0.0;
+    float rough = clamp(storm - 1.0, 0.0, 2.0);
+    float breaker = waves.breaking * (1.0 + 0.15 * rough);
+    float breaking = smoothstep(0.70, 1.0, breaker);
+    float depth = bed.x;
+    // The swash's line, where the screen's depth meets the run-up's front;
+    // only on a shallow bed (not at a bridge's pier over deep water).
+    float swashOff = (shoreDepth - swashDepth) / 0.05;
+    float swash = exp(-swashOff * swashOff) * (1.0 - smoothstep(0.8, 1.6, depth));
+    if (breaking <= 0.0 && swash <= 0.001) return 0.0;
+
+    // Where this point is in the passing of the waves: the shore part's
+    // phase in cycles since the last crest went by (0 as one passes, rising
+    // toward 1 as the next comes in). Without a shore part (the hand-made
+    // waves, a flat bed) there are no crests to follow, and the foam left
+    // behind is kept, thinner, as a field that drifts.
+    float shoreness = smoothstep(0.10, 0.40, waves.shoreWeight);
+    float cycles = (1.5707963 - waves.shorePhase) / 6.2831853;
+    float lag = fract(cycles);
+    // The crests' and the swash's foam drift slowly with the water; it is
+    // only the crests' place that the waves move.
+    vec2 drift = at + vec2(time * 0.11, -time * 0.07);
+    // The foam a wave leaves is a pattern of its own (one per wave, changed
+    // as the last one's has all but gone, at lag 0.9), carried a yard and a
+    // half shoreward over the wave's passing.
+    float waveId = floor(cycles + 0.1);
+    vec2 seed = vec2(hash21(vec2(waveId, 7.0)), hash22x(vec2(waveId, 3.0))) * 37.0;
+    vec2 carried = at + bed.yz * (lag * 1.5) + seed;
+
+    // The crests: high on the surface for the height the depth holds.
+    float held = SW_GAMMA * max(depth, 0.05) * min(breaker, 1.0);
+    float crest = smoothstep(0.10, 0.45, waves.waveHeight / max(held, 0.02));
+    // The foam left behind: fresh as the crest passes, gone by the time the
+    // next one comes, less of it toward the beach where the bore has spent
+    // itself.
+    float fresh = exp(-3.5 * lag) * (1.0 - smoothstep(0.60, 0.88, lag));
+    float inner = mix(1.0, 0.35, smoothstep(1.3, 3.5, breaker));
+
+    vec2 warp = vec2(noiseValue(drift * 0.6) - 0.5, noiseValue(drift * 0.6 + vec2(19.0)) - 0.5) * 1.4;
+    float cells = cellularFoam((drift + warp) * 1.7);
+    float fine = cellularFoam((drift - warp) * 4.3);
+    float streaks = fbmNoise(drift * 0.21, time * 0.15);
+
+    // The breaking crest is thick white, broken at its edges.
+    float crestFoam = crest * breaking * (1.0 - smoothstep(0.35, 0.75, cells)) * smoothstep(0.20, 0.55, streaks);
+    // The foam left: most of the water while fresh, thinning to the cells'
+    // borders (a lace) as it goes.
+    float leftCells = cellularFoam(carried * 1.7 + warp);
+    float lace = smoothstep(0.55 - 0.45 * fresh, 0.70 - 0.45 * fresh, leftCells);
+    float leftFoam = fresh * shoreness * lace;
+    // Where there are no crests to follow, a thinner field that stays.
+    float stayFoam = (1.0 - shoreness) * 0.35 * smoothstep(0.55, 0.70, cells);
+    leftFoam = (leftFoam + stayFoam) * inner * breaking;
+    // The swash's line: a fine, broken rim.
+    float swashFoam = swash * (1.0 - smoothstep(0.10, 0.35, fine)) * (0.6 + 0.4 * streaks);
+
+    float foam = max(max(crestFoam, leftFoam * 0.8), swashFoam * 0.75) * sea * (1.0 + 0.4 * rough);
+    return clamp(foam, 0.0, 0.95);
+}
+
 void main() {
     float time = fogParams.z;
     float basicType = push.liquidBasicType;
@@ -475,10 +566,22 @@ void main() {
     // Lake at 22:00). The same waves, so the same normal at the vertices.
     // The physics waves (pad2 = the wind) give the normal every wave of the
     // spectrum, the short ones the vertex stage leaves out included.
-    GerstnerResult pixelWaves = push.pad2 > 0.0
-        ? evaluatePhysicalWaves(WaveBase, time, push.waveAmp, push.waveFreq, push.pad2, push.waveSpeed, 0.0)
-        : evaluateGerstnerWaves(WaveBase, time, push.waveAmp, push.waveFreq,
-                                push.waveSpeed, push.liquidBasicType);
+    // With the shore waves on, the waves over the bed, as the vertex stage
+    // has them.
+    bool shoreWaves = push.shore.x > 0.5;
+    GerstnerResult pixelWaves;
+    if (shoreWaves) {
+        pixelWaves = push.pad2 > 0.0
+            ? evaluatePhysicalWavesShore(WaveBase, time, push.waveAmp, push.waveFreq, push.pad2, push.waveSpeed,
+                                         0.0, 0.0, BedInfo)
+            : evaluateGerstnerWavesShore(WaveBase, time, push.waveAmp, push.waveFreq, push.waveSpeed,
+                                         push.liquidBasicType, BedInfo);
+    } else {
+        pixelWaves = push.pad2 > 0.0
+            ? evaluatePhysicalWaves(WaveBase, time, push.waveAmp, push.waveFreq, push.pad2, push.waveSpeed, 0.0)
+            : evaluateGerstnerWaves(WaveBase, time, push.waveAmp, push.waveFreq,
+                                    push.waveSpeed, push.liquidBasicType);
+    }
     vec3 meshNorm = normalize(cross(pixelWaves.binormal, pixelWaves.tangent));
     // The vertex stage's (Normal) is the same at the vertices.
     vec3 detailNorm = dualScrollWaveNormal(FragPos.xy, time, rtWater2.z, rtWater2.w);
@@ -793,10 +896,19 @@ void main() {
     }
 
 
+    // The surf where the shore waves break (surfFoam): it whitens the water
+    // over what comes through and what it mirrors, roughens the glint and
+    // hides what lies under it. Water and ocean on the ground's water only.
+    float surf = 0.0;
+    if (shoreWaves && basicType < 1.5 && push.interiorFog < 0.5 && dist < SURF_FADE_FAR) {
+        surf = surfFoam(pixelWaves, BedInfo, WaveBase, shoreDepth, swashDepth, time, push.shore.y) *
+               (1.0 - smoothstep(SURF_FADE_NEAR, SURF_FADE_FAR, dist));
+    }
+
     // ============================================================
     // GGX Specular
     // ============================================================
-    float roughness = 0.18;
+    float roughness = surf > 0.0 ? mix(0.18, 0.6, surf) : 0.18;
     vec3 halfDir = normalize(ldir + viewDir);
     float D = DistributionGGX(norm, halfDir, roughness);
     float G = GeometrySmith(NdotV, NdotL, roughness);
@@ -846,6 +958,14 @@ void main() {
 
     float crest = smoothstep(0.5, 1.0, WaveOffset) * 0.04;
     color += vec3(crest);
+
+    // The surf, lit as a rough white surface: by the sky and by the sun where
+    // it reaches the water (sunOnWater).
+    if (surf > 0.0) {
+        float foamSun = max(ldir.z, 0.0) * mix(0.4, 1.0, sunOnWater);
+        vec3 foamLit = SURF_ALBEDO * (ambientColor.rgb * 0.85 + lightColor.rgb * (0.25 + 0.75 * foamSun) * 0.75);
+        color = mix(color, foamLit, surf);
+    }
 
     // ============================================================
     // Wake froth - water churned up by something moving through it
@@ -943,6 +1063,7 @@ void main() {
     // presence to darken what is under it.
     alpha = max(alpha, wetBand * 0.42 * smoothstep(0.0, 0.05, shoreDepth));
     alpha = max(alpha, wakeFoam * 0.55);
+    alpha = max(alpha, surf * 0.9);
     // Dissolve the sheet before the water geometry runs out, so the ocean fades
     // into the horizon haze instead of ending on a hard line. This has to come
     // after the clamp - clamping afterwards restored the 0.15 floor and put the

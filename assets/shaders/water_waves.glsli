@@ -12,7 +12,31 @@ struct GerstnerResult {
     vec3 tangent;   // along X
     vec3 binormal;  // along Y
     float waveHeight; // raw wave height for foam
+    // The shore waves (evaluatePhysicalWavesShore, evaluateGerstnerWavesShore;
+    // 0 from the others): the breaker index (the waves' significant height
+    // over McCowan's limit for the depth, before they are held to it: 1 and
+    // over, breaking), the shore part's phase of the wave carrying most of it
+    // (its crest where the sine is 1), the share of the waves' height running
+    // shoreward, and the open sea's significant height there, yards.
+    float breaking;
+    float shorePhase;
+    float shoreWeight;
+    float seaHeight;
 };
+
+// Nothing moved: the flat surface.
+GerstnerResult flatWaves() {
+    GerstnerResult r;
+    r.displacement = vec3(0.0);
+    r.tangent = vec3(1.0, 0.0, 0.0);
+    r.binormal = vec3(0.0, 1.0, 0.0);
+    r.waveHeight = 0.0;
+    r.breaking = 0.0;
+    r.shorePhase = 0.0;
+    r.shoreWeight = 0.0;
+    r.seaHeight = 0.0;
+    return r;
+}
 
 // --- Physically based waves (wave_spectrum.hpp is the C++ twin) ---
 // A JONSWAP wind-sea spectrum sampled into 12 Gerstner waves, each at the
@@ -27,14 +51,18 @@ struct GerstnerResult {
 const float PW_G = 9.80665 * 1.0936133;
 const int PW_COUNT = 12;
 
-GerstnerResult evaluatePhysicalWavesFaded(vec2 pos, float time, float ampScale, float fetch, float windMps,
-                                          float windDir, float minWavelength, float fullWavelength) {
-    GerstnerResult r;
-    r.displacement = vec3(0.0);
-    r.tangent = vec3(1.0, 0.0, 0.0);
-    r.binormal = vec3(0.0, 1.0, 0.0);
-    r.waveHeight = 0.0;
+// The spectrum sampled: each wave's amplitude (yd), deep-water wavenumber
+// (rad/yd) and angular frequency (rad/s), and the steepness Q they share so
+// that sum(Q k a) is 0.75 at most.
+struct PWSpectrum {
+    float amps[PW_COUNT];
+    float ks[PW_COUNT];
+    float ws[PW_COUNT];
+    float q;
+};
 
+PWSpectrum pwSample(float ampScale, float fetch, float windMps) {
+    PWSpectrum sp;
     float u = max(windMps * 1.0936133, 0.1);
     float f = max(fetch, 1.0);
     float wp = max(22.0 * pow(PW_G * PW_G / (u * f), 1.0 / 3.0), 0.855 * PW_G / u);
@@ -42,9 +70,6 @@ GerstnerResult evaluatePhysicalWavesFaded(vec2 pos, float time, float ampScale, 
     float lo = 0.70 * wp;
     float stepRatio = pow(4.0 / 0.70, 1.0 / float(PW_COUNT));
 
-    float amps[PW_COUNT];
-    float ks[PW_COUNT];
-    float ws[PW_COUNT];
     float kaSum = 0.0;
     for (int i = 0; i < PW_COUNT; i++) {
         float w0 = lo * pow(stepRatio, float(i));
@@ -55,26 +80,46 @@ GerstnerResult evaluatePhysicalWavesFaded(vec2 pos, float time, float ampScale, 
         float ratio = wp / w;
         float S = alpha * PW_G * PW_G / pow(w, 5.0) * exp(-1.25 * ratio * ratio * ratio * ratio)
                 * pow(3.3, exp(-0.5 * d * d));
-        ws[i] = w;
-        ks[i] = w * w / PW_G;
-        amps[i] = sqrt(2.0 * S * (w1 - w0)) * ampScale;
-        kaSum += ks[i] * amps[i];
+        sp.ws[i] = w;
+        sp.ks[i] = w * w / PW_G;
+        sp.amps[i] = sqrt(2.0 * S * (w1 - w0)) * ampScale;
+        kaSum += sp.ks[i] * sp.amps[i];
     }
-    float Q = kaSum > 0.0 ? min(1.0, 0.75 / kaSum) : 0.0;
+    sp.q = kaSum > 0.0 ? min(1.0, 0.75 / kaSum) : 0.0;
+    return sp;
+}
+
+// Wave i's direction: spread about the wind at fixed angles a golden-ratio
+// step apart, the longest waves nearest the wind.
+vec2 pwDirection(int i, float windDir) {
+    float spread = (fract(float(i) * 0.6180340) - 0.5) * 3.14159265 * 0.8;
+    float angle = windDir + spread;
+    return vec2(cos(angle), sin(angle));
+}
+
+// How much of a wave `wavelength` yards long is moved as height: none under
+// `minWavelength`, all over `fullWavelength`, faded in between (all or none
+// at `minWavelength` when the two are the same).
+float pwKeep(float wavelength, float minWavelength, float fullWavelength) {
+    return fullWavelength > minWavelength
+        ? clamp((wavelength - minWavelength) / (fullWavelength - minWavelength), 0.0, 1.0)
+        : (wavelength >= minWavelength ? 1.0 : 0.0);
+}
+
+// The sampled spectrum's waves in deep water at `pos`.
+GerstnerResult pwWaves(PWSpectrum sp, vec2 pos, float time, float windDir, float minWavelength,
+                       float fullWavelength) {
+    GerstnerResult r = flatWaves();
+    float Q = sp.q;
 
     float totalWave = 0.0;
     for (int i = 0; i < PW_COUNT; i++) {
-        float spread = (fract(float(i) * 0.6180340) - 0.5) * 3.14159265 * 0.8;
-        float angle = windDir + spread;
-        vec2 dir = vec2(cos(angle), sin(angle));
-        float k = ks[i];
-        float A = amps[i];
+        vec2 dir = pwDirection(i, windDir);
+        float k = sp.ks[i];
+        float A = sp.amps[i];
         // Too short for the vertex grid: in the normal only.
-        float wavelength = 6.2831853 / k;
-        float keep = fullWavelength > minWavelength
-            ? clamp((wavelength - minWavelength) / (fullWavelength - minWavelength), 0.0, 1.0)
-            : (wavelength >= minWavelength ? 1.0 : 0.0);
-        float phase = k * dot(dir, pos) - ws[i] * time + float(i) * 2.399963;
+        float keep = pwKeep(6.2831853 / k, minWavelength, fullWavelength);
+        float phase = k * dot(dir, pos) - sp.ws[i] * time + float(i) * 2.399963;
         float s = sin(phase);
         float c = cos(phase);
 
@@ -96,6 +141,11 @@ GerstnerResult evaluatePhysicalWavesFaded(vec2 pos, float time, float ampScale, 
     return r;
 }
 
+GerstnerResult evaluatePhysicalWavesFaded(vec2 pos, float time, float ampScale, float fetch, float windMps,
+                                          float windDir, float minWavelength, float fullWavelength) {
+    return pwWaves(pwSample(ampScale, fetch, windMps), pos, time, windDir, minWavelength, fullWavelength);
+}
+
 // The waves with a hard cut-off at `minWavelength` (water.vert, water.frag).
 GerstnerResult evaluatePhysicalWaves(vec2 pos, float time, float ampScale, float fetch, float windMps,
                                      float windDir, float minWavelength) {
@@ -103,11 +153,7 @@ GerstnerResult evaluatePhysicalWaves(vec2 pos, float time, float ampScale, float
 }
 
 GerstnerResult evaluateGerstnerWaves(vec2 pos, float time, float amp, float freq, float spd, float basicType) {
-    GerstnerResult r;
-    r.displacement = vec3(0.0);
-    r.tangent = vec3(1.0, 0.0, 0.0);
-    r.binormal = vec3(0.0, 1.0, 0.0);
-    r.waveHeight = 0.0;
+    GerstnerResult r = flatWaves();
 
     // Magma/slime: simple slow undulation
     if (basicType >= 1.5) {
@@ -190,6 +236,241 @@ GerstnerResult evaluateGerstnerWaves(vec2 pos, float time, float amp, float freq
     }
 
     r.waveHeight = totalWave;
+    return r;
+}
+
+// --- Waves coming into shallow water (shallow_water.hpp is the C++ twin) ---
+// The shore waves setting (push.shore.x) on terrain water. Each vertex knows
+// the bed under it (WaterRenderer::loadFromTerrain): `bed` x is the depth to
+// the ground, yards (negative over dry land), yz the way to the shallows
+// (a unit vector where the bed slopes, shrinking to nothing where it is
+// flat), w the bed's slope (rise over run).
+//
+// The phase, which must stay whole: each wave is split in two. The deep part
+// keeps the deep-water phase k0 dir . x - omega t, whole everywhere, and only
+// changes height. The shore part runs up the bed's slope with a phase that is
+// a function of the depth alone (swShorePhase): the phase a long wave builds
+// up running in over a beach of SW_REFERENCE_SLOPE. Its crests are the
+// depth's contours, so they lie along the beach, and they close up and slow
+// as the water shallows, as finite-depth dispersion has them; its wavelength
+// is right on a beach of the reference slope only (longer on a gentler one,
+// shorter on a steeper). Neither part takes a wavenumber that varies with
+// the depth times the position, which is what tears the crests apart. The
+// deep part hands its height to the shore part as the water shallows by
+// Snell's law (swRefraction: 1 - c / c0 of the turn done). Both are raised
+// by shoaling, held under McCowan's limit for the depth, steepened and leant
+// shoreward as they break, and die away over the last half yard of depth.
+const float SW_GAMMA = 0.78;            // McCowan: a wave breaks at 0.78 of the depth
+const float SW_MAX_SHOALING = 2.5;
+const float SW_FADE_DEPTH = 0.5;        // yards over which the waves die away at the waterline
+const float SW_LIMIT_SHARPNESS = 6.0;
+const float SW_HS_FACTOR = 2.8284271;   // significant height of waves with sum(a^2) = 1
+const float SW_REFERENCE_SLOPE = 0.15;
+const float SW_SHORE_PHASE_DEPTH = 0.15;
+const float SW_SHORE_REACH_KH = 3.0;
+// Past this k h for the longest wave the bed is not felt at all (deep water).
+const float SW_DEEP_KH = 5.0;
+const float SW_STEEPEN_FROM = 0.5;      // breaker index the steepening starts at
+const float SW_BREAKING_AT = 1.0;
+const float SW_BREAKING_STEEPNESS = 0.95;
+const float SW_MAX_LEAN = 0.6;
+// A shore wave shorter than this, yards, stays in the deep part: its crests,
+// laid by the depth's contours, would come closer than the pixels on a steep
+// bank.
+const float SW_MIN_SHORE_WAVELENGTH = 1.0;
+
+// tanh that does not overflow for a large argument (exp(x) / exp(x) is not a
+// number on every driver).
+float swTanh(float x) {
+    float e = exp(-2.0 * abs(x));
+    return sign(x) * (1.0 - e) / (1.0 + e);
+}
+
+// The wavenumber at depth h: omega^2 = g k tanh(k h), by Fenton and McKee's
+// explicit approximation and one Newton step.
+float swWavenumber(float omega, float h) {
+    float k0 = omega * omega / PW_G;
+    float hh = max(h, 1e-3);
+    float k = k0 / pow(swTanh(pow(k0 * hh, 0.75)), 2.0 / 3.0);
+    float th = swTanh(k * hh);
+    float f = PW_G * k * th - omega * omega;
+    float df = PW_G * (th + k * hh * (1.0 - th * th));
+    return k - f / df;
+}
+
+// Shoaling, sqrt(cg_deep / cg), held at SW_MAX_SHOALING.
+float swShoaling(float omega, float k, float h) {
+    if (h <= 0.0) return SW_MAX_SHOALING;
+    float x = 2.0 * k * h;
+    // n = 1/2 (1 + 2kh / sinh 2kh), sinh by its exponentials.
+    float e = exp(-x);
+    float ratio = x > 20.0 ? 0.0 : (x > 1e-4 ? 2.0 * x * e / (1.0 - e * e) : 1.0);
+    float cg = 0.5 * (1.0 + ratio) * omega / k;
+    return min(sqrt(0.5 * PW_G / omega / cg), SW_MAX_SHOALING);
+}
+
+float swLimitScale(float breaker) {
+    return breaker <= 0.0 ? 1.0 : 1.0 / pow(1.0 + pow(breaker, SW_LIMIT_SHARPNESS), 1.0 / SW_LIMIT_SHARPNESS);
+}
+
+float swFade(float h) { return smoothstep(0.0, SW_FADE_DEPTH, h); }
+
+float swRefraction(float kh) {
+    return (1.0 - swTanh(kh)) * (1.0 - smoothstep(0.66 * SW_SHORE_REACH_KH, SW_SHORE_REACH_KH, kh));
+}
+
+float swShoreReachDepth(float omega) {
+    float r = SW_SHORE_REACH_KH / omega;
+    return PW_G * r * r;
+}
+
+float swShorePhase(float omega, float h) {
+    float d = clamp(h, 0.0, swShoreReachDepth(omega)) + SW_SHORE_PHASE_DEPTH;
+    return 2.0 * omega / SW_REFERENCE_SLOPE * sqrt(d / PW_G);
+}
+
+float swShoreWavenumber(float omega, float h, float slope) {
+    if (h > swShoreReachDepth(omega)) return 0.0;
+    return omega / sqrt(PW_G * (max(h, 0.0) + SW_SHORE_PHASE_DEPTH)) * slope / SW_REFERENCE_SLOPE;
+}
+
+// One Gerstner wave added to `r`: running along `dir`, wavenumber `k`,
+// height `A`, steepness `Q`, its crest leant forward by `lean` (that share of
+// the height moved along `dir` with the crest: the front steepens and the
+// back eases), `keep` of it moved as height.
+void swAddWave(inout GerstnerResult r, vec2 dir, float k, float A, float Q, float lean, float phase,
+               float keep) {
+    float s = sin(phase);
+    float c = cos(phase);
+    float horizontal = Q * c + lean * s;
+    r.displacement.x += keep * A * dir.x * horizontal;
+    r.displacement.y += keep * A * dir.y * horizontal;
+    r.displacement.z += keep * A * s;
+
+    float WA = k * A;
+    float slope = lean * c - Q * s;
+    r.tangent.x += dir.x * dir.x * WA * slope;
+    r.tangent.y += dir.x * dir.y * WA * slope;
+    r.tangent.z += dir.x * WA * c;
+    r.binormal.x += dir.x * dir.y * WA * slope;
+    r.binormal.y += dir.y * dir.y * WA * slope;
+    r.binormal.z += dir.y * WA * c;
+
+    r.waveHeight += keep * A * s;
+}
+
+// The physics waves over the bed `bed` (above). Called with the same
+// arguments from water.vert, water.tese and water.frag, so the surface and
+// its shading agree.
+GerstnerResult evaluatePhysicalWavesShore(vec2 pos, float time, float ampScale, float fetch, float windMps,
+                                          float windDir, float minWavelength, float fullWavelength, vec4 bed) {
+    PWSpectrum sp = pwSample(ampScale, fetch, windMps);
+    float h = bed.x;
+    float seaA2 = 0.0;
+    for (int i = 0; i < PW_COUNT; i++) seaA2 += sp.amps[i] * sp.amps[i];
+    // Deep enough that even the longest wave hardly feels the bed (shoaling
+    // within a part in a thousand of 1, no turn, far from breaking): the deep
+    // waves as they are, at a deep wave's cost.
+    if (h * sp.ks[0] > SW_DEEP_KH) {
+        GerstnerResult deep = pwWaves(sp, pos, time, windDir, minWavelength, fullWavelength);
+        deep.seaHeight = SW_HS_FACTOR * sqrt(seaA2);
+        deep.breaking = deep.seaHeight / (SW_GAMMA * h);
+        return deep;
+    }
+    GerstnerResult r = flatWaves();
+    float sloped = min(length(bed.yz), 1.0);
+    vec2 toShore = sloped > 1e-4 ? normalize(bed.yz) : vec2(0.0);
+    float bedSlope = max(bed.w, 0.0);
+    float fade = swFade(h);
+
+    // Each wave's height in this depth and how much of it has turned to run
+    // up the beach.
+    float amps[PW_COUNT];
+    float shares[PW_COUNT];
+    float kShore[PW_COUNT];
+    float sumA2 = 0.0;
+    for (int i = 0; i < PW_COUNT; i++) {
+        float w = sp.ws[i];
+        float k = swWavenumber(w, h);
+        amps[i] = sp.amps[i] * swShoaling(w, k, h) * fade;
+        kShore[i] = swShoreWavenumber(w, h, bedSlope);
+        // Only a wave running in toward the shore turns to it; one running
+        // out to sea dies away in the shallows with its deep part.
+        float toward = smoothstep(-0.2, 0.4, dot(pwDirection(i, windDir), toShore));
+        float longEnough = smoothstep(SW_MIN_SHORE_WAVELENGTH, 2.0 * SW_MIN_SHORE_WAVELENGTH,
+                                      6.2831853 / max(kShore[i], 1e-4));
+        shares[i] = swRefraction(k * max(h, 0.0)) * sloped * toward * longEnough;
+        sumA2 += amps[i] * amps[i];
+    }
+
+    // Held under the depth's limit, smoothly, and steepened and leant
+    // shoreward as they come to break, with sum(k a) sqrt(Q^2 + lean^2)
+    // kept under 1 so the surface never folds.
+    float breaker = SW_HS_FACTOR * sqrt(sumA2) / (SW_GAMMA * max(h, 1e-3));
+    float limit = swLimitScale(breaker);
+    float kaSum = 0.0;
+    for (int i = 0; i < PW_COUNT; i++) {
+        amps[i] *= limit;
+        kaSum += amps[i] * mix(sp.ks[i], kShore[i], shares[i]);
+    }
+    float b = smoothstep(SW_STEEPEN_FROM, SW_BREAKING_AT, breaker);
+    float budget = mix(0.75, SW_BREAKING_STEEPNESS, b);
+    float leanShare = SW_MAX_LEAN * b;
+    float Q = kaSum > 0.0 ? min(1.0, budget / (kaSum * sqrt(1.0 + leanShare * leanShare))) : 0.0;
+    float lean = leanShare * Q;
+
+    float shoreA = 0.0;
+    float totalA = 0.0;
+    float strongest = 0.0;
+    for (int i = 0; i < PW_COUNT; i++) {
+        vec2 dir = pwDirection(i, windDir);
+        float w = sp.ws[i];
+        float k = sp.ks[i];
+        float A = amps[i];
+        float offset = float(i) * 2.399963;
+        // The deep part, at its deep phase.
+        float deepA = A * (1.0 - shares[i]);
+        swAddWave(r, dir, k, deepA, Q, lean, k * dot(dir, pos) - w * time + offset,
+                  pwKeep(6.2831853 / k, minWavelength, fullWavelength));
+        // The shore part, at the phase the depth gives it.
+        float shoreAmp = A * shares[i];
+        if (shoreAmp > 0.0) {
+            float phase = -swShorePhase(w, h) - w * time + offset;
+            swAddWave(r, toShore, kShore[i], shoreAmp, Q, lean, phase,
+                      pwKeep(6.2831853 / max(kShore[i], 1e-4), minWavelength, fullWavelength));
+            if (shoreAmp > strongest) {
+                strongest = shoreAmp;
+                r.shorePhase = phase;
+            }
+        }
+        shoreA += shoreAmp;
+        totalA += A;
+    }
+    r.breaking = breaker;
+    r.shoreWeight = totalA > 0.0 ? shoreA / totalA : 0.0;
+    r.seaHeight = SW_HS_FACTOR * sqrt(seaA2);
+    return r;
+}
+
+// The hand-made waves over the bed: only held under the depth's limit and
+// died away at the waterline, the whole set scaled alike (they have no
+// dispersion to shoal or turn by).
+GerstnerResult evaluateGerstnerWavesShore(vec2 pos, float time, float amp, float freq, float spd, float basicType,
+                                          vec4 bed) {
+    GerstnerResult r = evaluateGerstnerWaves(pos, time, amp, freq, spd, basicType);
+    if (basicType >= 1.5) return r;
+    // The six waves' sum of squared heights over amp^2 (evaluateGerstnerWaves'
+    // ocean and inland sets).
+    float sumA2 = amp * amp * (basicType > 0.5 ? 1.4385 : 0.3448);
+    float h = bed.x;
+    float fade = swFade(h);
+    r.seaHeight = SW_HS_FACTOR * sqrt(sumA2);
+    r.breaking = r.seaHeight * fade / (SW_GAMMA * max(h, 1e-3));
+    float scale = fade * swLimitScale(r.breaking);
+    r.displacement *= scale;
+    r.tangent = vec3(1.0, 0.0, 0.0) + (r.tangent - vec3(1.0, 0.0, 0.0)) * scale;
+    r.binormal = vec3(0.0, 1.0, 0.0) + (r.binormal - vec3(0.0, 1.0, 0.0)) * scale;
+    r.waveHeight *= scale;
     return r;
 }
 

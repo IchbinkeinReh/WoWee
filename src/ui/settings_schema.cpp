@@ -313,6 +313,18 @@ constexpr SettingDesc kSchema[] = {
      "the GPU, so short waves, swimmers' rings and the wakes of units\n"
      "raise and lower it, not only its shading. Not on every GPU.\n"
      "Not in the original client.", "", 1, "raytracedlighting&rtwater"},
+    // Shore waves (shallow_water.hpp, water_waves.glsli): the ground's water
+    // knows the depth to the bed under it, and the waves feel it - slower and
+    // shorter as it shallows, higher (shoaling), turned to come in square to
+    // the beach (refraction), breaking at 0.78 of the depth (McCowan), dying
+    // away at the waterline - with white surf where they break, the foam they
+    // leave, and a rim where the run-up turns. Not in the original client.
+    {"shorewaves", "Shore surf & whitewater", SettingKind::Bool, 0, 0, 0,
+     "Water", "",
+     "On the ray traced water: waves slow, steepen and turn to the beach\n"
+     "as the water shallows, and break in white surf where it is too\n"
+     "shallow to hold them, more of it in a storm.\n"
+     "Not in the original client.", "", 1, "raytracedlighting&rtwater"},
     // The client's own 'specular' option, not an extra: its cvar registered
     // at 0x0078e1a0, default "0" (0x009e14a0), whose handler 0x0078de60 sets
     // world flag 0x8000000 "on restart". Off in every preset: the exe has
@@ -1503,7 +1515,7 @@ bool settingNeedsRayTracing(const std::string& key) {
     // the rows whose labels or tooltips say ray traced.
     static constexpr const char* kTraced[] = {
         "dbgview",          "dbgsplitrt",         "dbgpointlights",     "dbgbounce",       "dbginteriorbase",
-        "dbginteriorfullat", "dbgshadowdarkness", "rtnormalkeep", "rtnormalface", "rtwater", "rtwaveamp", "rtwavefreq", "physwaves", "physwind", "weatherwaves", "watertess", "dbgtracedsunshadow", "dbgpointshadow",
+        "dbginteriorfullat", "dbgshadowdarkness", "rtnormalkeep", "rtnormalface", "rtwater", "rtwaveamp", "rtwavefreq", "physwaves", "physwind", "weatherwaves", "watertess", "shorewaves", "dbgtracedsunshadow", "dbgpointshadow",
         "dbgbakedlampshadow", "dbgocclusion",
     };
     for (const char* k : kTraced) {

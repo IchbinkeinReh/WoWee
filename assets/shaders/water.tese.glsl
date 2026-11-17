@@ -42,10 +42,14 @@ layout(push_constant) uniform Push {
     float lightColors;
     float pad1;
     float pad2;  // > 0: physics waves, the wind in m/s (water_waves.glsli)
+    // x 1: the shore waves (water_waves.glsli's evaluatePhysicalWavesShore),
+    // y how much rough weather whips up their surf (water.frag).
+    vec4 shore;
 } push;
 
 layout(location = 0) in vec3 tcWorldPos[];
 layout(location = 1) in vec2 tcTexCoord[];
+layout(location = 2) in vec4 tcBed[];
 
 layout(location = 0) out vec3 FragPos;
 layout(location = 1) out vec3 Normal;
@@ -53,6 +57,7 @@ layout(location = 2) out vec2 TexCoord;
 layout(location = 3) out float WaveOffset;
 layout(location = 4) out vec2 ScreenUV;
 layout(location = 5) out vec2 WaveBase;
+layout(location = 6) out vec4 BedInfo;
 
 #include "water_waves.glsli"
 #include "water_interaction.glsli"
@@ -143,6 +148,7 @@ void main() {
                         gl_TessCoord.z * tcWorldPos[2];
     vec2 texCoord = gl_TessCoord.x * tcTexCoord[0] + gl_TessCoord.y * tcTexCoord[1] +
                     gl_TessCoord.z * tcTexCoord[2];
+    vec4 bed = gl_TessCoord.x * tcBed[0] + gl_TessCoord.y * tcBed[1] + gl_TessCoord.z * tcBed[2];
     float time = fogParams.z;
     // From the point itself, not its triangle: a point on a shared edge is
     // moved alike by both triangles.
@@ -154,10 +160,21 @@ void main() {
     // fades in over half again its cut-off, so none appears at a set
     // distance as a step.
     float minWavelength = waterTessMinWavelength(dist);
-    GerstnerResult waves = push.pad2 > 0.0
-        ? evaluatePhysicalWavesFaded(base.xy, time, push.waveAmp, push.waveFreq, push.pad2, push.waveSpeed,
-                                     minWavelength, minWavelength * 1.5)
-        : evaluateGerstnerWaves(base.xy, time, push.waveAmp, push.waveFreq, push.waveSpeed, push.liquidBasicType);
+    // With the shore waves on, over the bed as water.vert has them.
+    GerstnerResult waves;
+    if (push.shore.x > 0.5) {
+        waves = push.pad2 > 0.0
+            ? evaluatePhysicalWavesShore(base.xy, time, push.waveAmp, push.waveFreq, push.pad2, push.waveSpeed,
+                                         minWavelength, minWavelength * 1.5, bed)
+            : evaluateGerstnerWavesShore(base.xy, time, push.waveAmp, push.waveFreq, push.waveSpeed,
+                                         push.liquidBasicType, bed);
+    } else {
+        waves = push.pad2 > 0.0
+            ? evaluatePhysicalWavesFaded(base.xy, time, push.waveAmp, push.waveFreq, push.pad2, push.waveSpeed,
+                                         minWavelength, minWavelength * 1.5)
+            : evaluateGerstnerWaves(base.xy, time, push.waveAmp, push.waveFreq, push.waveSpeed,
+                                    push.liquidBasicType);
+    }
 
     vec4 worldPos = vec4(base + waves.displacement, 1.0);
     WaveOffset = waves.waveHeight;
@@ -170,6 +187,7 @@ void main() {
     if (interaction > 0.0) worldPos.z += interaction * interactionHeight(worldPos.xy);
 
     WaveBase = base.xy;
+    BedInfo = bed;
     FragPos = worldPos.xyz;
     TexCoord = texCoord;
     farClip(view * worldPos);

@@ -98,6 +98,13 @@ struct WaterSurface {
     /// texture coordinate a vertex-format-1 liquid carries. Empty when absent.
     std::vector<uint8_t> depths;
     std::vector<glm::vec2> storedUVs;
+    /// Per vertex, laid out as `heights`: the bed under it, as the traced
+    /// water's shore waves take it (water_waves.glsli): x the depth from the
+    /// water down to the ground, yards (negative over dry land), yz the way
+    /// to the shallows (a unit vector where the bed slopes, less where it is
+    /// flat), w the bed's slope. Terrain water only (loadFromTerrain); empty,
+    /// the water is taken as deep (shallow_water::kNoBedDepth).
+    std::vector<glm::vec4> bed;
     /// A WMO liquid's vertices where the file has them, each with its own
     /// height (0x007a7cc0); this client draws its own surface flat.
     std::vector<glm::vec3> clientPositions;
@@ -177,6 +184,9 @@ struct RtWaterFrame {
     /// Tessellated water (water.tesc, water.tese): the grid cut finer near
     /// the camera; used where the device has tessellation shaders.
     bool tessellation = true;
+    /// The shore waves (shallow_water.hpp): the waves slowed, raised, turned
+    /// and broken as the ground's water shallows, and their surf.
+    bool shoreWaves = true;
     float reflectReach = 400.0f;
     float refractReach = 80.0f;
     glm::vec3 skyTop{0.5f, 0.7f, 1.0f};

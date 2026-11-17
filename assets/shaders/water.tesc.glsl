@@ -19,9 +19,11 @@ layout(set = 0, binding = 0) uniform PerFrame {
 
 layout(location = 0) in vec3 vWorldPos[];
 layout(location = 1) in vec2 vTexCoord[];
+layout(location = 2) in vec4 vBed[];
 
 layout(location = 0) out vec3 tcWorldPos[];
 layout(location = 1) out vec2 tcTexCoord[];
+layout(location = 2) out vec4 tcBed[];
 
 #include "water_tess.glsli"
 
@@ -39,6 +41,7 @@ float edgeLevel(vec3 a, vec3 b) {
 void main() {
     tcWorldPos[gl_InvocationID] = vWorldPos[gl_InvocationID];
     tcTexCoord[gl_InvocationID] = vTexCoord[gl_InvocationID];
+    tcBed[gl_InvocationID] = vBed[gl_InvocationID];
     if (gl_InvocationID != 0) return;
 
     vec3 p0 = vWorldPos[0];

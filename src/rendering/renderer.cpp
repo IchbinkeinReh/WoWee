@@ -776,6 +776,7 @@ void Renderer::updatePerFrameUBO() {
             wf.windSpeed = physicsWind_;
             wf.weather = wave_spectrum::weatherWaves(waterRain_, waterStorm_, weatherWaveStrength_);
             wf.tessellation = waterTessellation_;
+            wf.shoreWaves = shoreWaves_;
             wf.reflectReach = hw ? 400.0f : 150.0f;
             wf.refractReach = hw ? 80.0f : 40.0f;
             if (lightingManager) {
