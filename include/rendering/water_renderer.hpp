@@ -2,6 +2,7 @@
 
 #include <vector>
 #include "rendering/collision_facets.hpp"
+#include "rendering/wave_spectrum.hpp"
 #include <memory>
 #include <optional>
 #include <cstdint>
@@ -169,6 +170,10 @@ struct RtWaterFrame {
     /// each at the speed of its length, instead of the hand-made set.
     bool physicsWaves = false;
     float windSpeed = 7.0f;     ///< m/s, the physics waves' wind
+    /// Rain's and storms' roughening (wave_spectrum::weatherWaves), already
+    /// eased in and out: the physics waves' wind, and the hand-made waves'
+    /// height and pace, times these.
+    wave_spectrum::WeatherWaves weather{};
     /// Tessellated water (water.tesc, water.tese): the grid cut finer near
     /// the camera; used where the device has tessellation shaders.
     bool tessellation = true;

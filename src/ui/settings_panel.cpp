@@ -990,7 +990,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "animatedportraits",
     "fogskyblend", "fogstrength", "sharpstars", "lightshafts", "mistdensity", "sunshafts",
     "lensflare",
-    "screenglow", "raytracedlighting", "rtfullres", "rtsoftlamps", "rtrealisticfalloff", "rtpointselfshadow", "rtunitselfshadow", "rtroomsun", "rtunitshadowreach", "rtminbrightness", "rtwater", "rtswimwaves", "interactivewater", "rtwaveamp", "rtwavefreq", "physwaves", "physwind", "watertess", "rtnormalkeep", "rtnormalface", "rteyebrighten", "rteyeseconds",
+    "screenglow", "raytracedlighting", "rtfullres", "rtsoftlamps", "rtrealisticfalloff", "rtpointselfshadow", "rtunitselfshadow", "rtroomsun", "rtunitshadowreach", "rtminbrightness", "rtwater", "rtswimwaves", "interactivewater", "rtwaveamp", "rtwavefreq", "physwaves", "physwind", "weatherwaves", "watertess", "rtnormalkeep", "rtnormalface", "rteyebrighten", "rteyeseconds",
     "rteyesensitivity",
     "rtsunrays", "rtaorays", "rtpointrays", "rtbouncerays",
     // The Debug Graphics settings: each applies all of them.
@@ -1241,6 +1241,7 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "physwaves", .asBool = &SettingsPanel::pendingPhysWaves},
     {.key = "physwind", .asInt = &SettingsPanel::pendingPhysWind},
     {.key = "watertess", .asBool = &SettingsPanel::pendingWaterTess},
+    {.key = "weatherwaves", .asInt = &SettingsPanel::pendingWeatherWaves},
     {.key = "rtnormalkeep", .asInt = &SettingsPanel::pendingRtNormalKeep},
     {.key = "rtnormalface", .asInt = &SettingsPanel::pendingRtNormalFace},
     {.key = "rteyebrighten", .asInt = &SettingsPanel::pendingRtEyeBrighten},
@@ -1776,6 +1777,8 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         if (renderer) renderer->setRtWaterWaves(pendingRtWaveAmp / 100.0f, pendingRtWaveFreq / 100.0f);
     } else if (key == "physwaves" || key == "physwind") {
         if (renderer) renderer->setPhysicsWaves(pendingPhysWaves, static_cast<float>(pendingPhysWind));
+    } else if (key == "weatherwaves") {
+        if (renderer) renderer->setWeatherWaveStrength(pendingWeatherWaves / 100.0f);
     } else if (key == "watertess") {
         if (renderer) renderer->setWaterTessellation(pendingWaterTess);
     } else if (key == "rtnormalkeep" || key == "rtnormalface") {

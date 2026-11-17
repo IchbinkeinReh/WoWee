@@ -72,3 +72,30 @@ TEST_CASE("a disturbance's rings: each length where its group velocity has carri
     // Long waves lead: farther out, the waves are longer (smaller k).
     CHECK(ws::impulseWavenumber(6.0f, 1.0f) < ws::impulseWavenumber(2.0f, 1.0f));
 }
+
+TEST_CASE("rain roughens the water a little, a storm a lot", "[wave_spectrum]") {
+    const auto calm = ws::weatherWaves(0.0f, 0.0f, 1.0f);
+    CHECK(calm.windScale == 1.0f);
+    CHECK(calm.amplitudeScale == 1.0f);
+    CHECK(calm.speedScale == 1.0f);
+    const auto rain = ws::weatherWaves(1.0f, 0.0f, 1.0f);
+    const auto storm = ws::weatherWaves(1.0f, 1.0f, 1.0f);
+    CHECK(rain.windScale > 1.0f);
+    CHECK(rain.amplitudeScale > 1.0f);
+    CHECK(storm.windScale - 1.0f > 3.0f * (rain.windScale - 1.0f));
+    CHECK(storm.amplitudeScale - 1.0f > 3.0f * (rain.amplitudeScale - 1.0f));
+    CHECK(storm.speedScale > 1.0f);
+    // The slider: 0 none, 2 twice the default's effect.
+    CHECK(ws::weatherWaves(1.0f, 1.0f, 0.0f).windScale == 1.0f);
+    CHECK(ws::weatherWaves(1.0f, 1.0f, 2.0f).windScale - 1.0f ==
+          Catch::Approx(2.0f * (storm.windScale - 1.0f)));
+    // 7 m/s under a full thunderstorm at the default: a rough sea.
+    CHECK(7.0f * storm.windScale > 15.0f);
+}
+
+TEST_CASE("how stormy the weather is", "[wave_spectrum]") {
+    CHECK(ws::storminess(false, 0, 1.0f) == 0.0f);
+    CHECK(ws::storminess(true, 3, 0.4f) == 0.0f);          // light rain: none
+    CHECK(ws::storminess(true, 5, 1.0f) == Catch::Approx(0.5f));  // a downpour: half
+    CHECK(ws::storminess(true, ws::kThunderstormWeather, 0.8f) == Catch::Approx(0.8f));
+}

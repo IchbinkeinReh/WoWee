@@ -1328,6 +1328,11 @@ private:
     size_t rtWaterUnitsPeak_ = 0;
     float rtWaveFreq_ = 1.0f;
     bool physicsWaves_ = false;
+    float weatherWaveStrength_ = 1.0f;
+    /// The rain and storm the water answers, eased so the sea builds up and
+    /// calms over some seconds rather than at once.
+    float waterRain_ = 0.0f;
+    float waterStorm_ = 0.0f;
     float physicsWind_ = 7.0f;
     bool waterTessellation_ = true;
     bool rtListenerAdded_ = false;
@@ -1361,6 +1366,9 @@ public:
         rtWaveAmp_ = amplitude;
         rtWaveFreq_ = frequency;
     }
+    /// How much rain and storms roughen the water, 1 the default
+    /// (wave_spectrum::weatherWaves), 0 not at all.
+    void setWeatherWaveStrength(float strength) { weatherWaveStrength_ = strength; }
     /// Physics waves (wave_spectrum.hpp) and their wind, in m/s.
     void setPhysicsWaves(bool on, float windSpeed) {
         physicsWaves_ = on;

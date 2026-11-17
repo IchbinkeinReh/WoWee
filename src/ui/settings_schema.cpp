@@ -292,6 +292,15 @@ constexpr SettingDesc kSchema[] = {
      "The wind the physics-based waves are raised by: a breeze of 3 leaves\n"
      "ripples, 7 a moderate sea, 15 and more a rough one.", "", 7,
      "raytracedlighting&rtwater&physwaves"},
+    // Rain and storms roughen the water (wave_spectrum::weatherWaves): the
+    // physics waves' wind up, the hand-made waves higher and quicker, a
+    // thunderstorm far more than rain, eased in over some seconds. Not in
+    // the original client.
+    {"weatherwaves", "Weather wave strength (%)", SettingKind::Int, 0, 200, 5,
+     "Water", "",
+     "How much rough weather stirs the ray traced water up: rain a little,\n"
+     "a storm a lot. 0 leaves the waves as they are, 200 twice the default.\n"
+     "Not in the original client.", "", 100, "raytracedlighting&rtwater"},
     // Tessellated water (water.tesc, water.tese; water_tessellation.hpp): the
     // traced water's liquid grid, a vertex every 4 yards, cut by the GPU into
     // pieces of 0.3 yards within 20 yards of the camera, easing back to the
@@ -1494,7 +1503,7 @@ bool settingNeedsRayTracing(const std::string& key) {
     // the rows whose labels or tooltips say ray traced.
     static constexpr const char* kTraced[] = {
         "dbgview",          "dbgsplitrt",         "dbgpointlights",     "dbgbounce",       "dbginteriorbase",
-        "dbginteriorfullat", "dbgshadowdarkness", "rtnormalkeep", "rtnormalface", "rtwater", "rtwaveamp", "rtwavefreq", "physwaves", "physwind", "watertess", "dbgtracedsunshadow", "dbgpointshadow",
+        "dbginteriorfullat", "dbgshadowdarkness", "rtnormalkeep", "rtnormalface", "rtwater", "rtwaveamp", "rtwavefreq", "physwaves", "physwind", "weatherwaves", "watertess", "dbgtracedsunshadow", "dbgpointshadow",
         "dbgbakedlampshadow", "dbgocclusion",
     };
     for (const char* k : kTraced) {

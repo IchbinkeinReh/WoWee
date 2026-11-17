@@ -80,6 +80,8 @@ public:
     [[nodiscard]] Type getWeatherType() const;
     /// The intensity as it stands, eased toward the server's.
     [[nodiscard]] float getIntensity() const { return current_; }
+    /// The Weather.dbc row SMSG_WEATHER named last (0 for none).
+    [[nodiscard]] uint32_t weatherId() const { return weatherId_; }
     /// What the weather hands the day's light now: the eased intensity, held
     /// to 0.25, times the row's Weather.dbc +0xc (0x00784850). The storm
     /// light sets blend in by min(1, 4 x this) (0x007f3920).

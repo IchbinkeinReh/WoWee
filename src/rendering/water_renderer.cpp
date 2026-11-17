@@ -1332,9 +1332,12 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             }
             push.lightColors = 1.0f;
         }
-        push.waveAmp = waveAmp * kRtWaveAmpScale * rtFrame_.waveAmp;
+        // Rain and storms roughen the water (wave_spectrum::weatherWaves): the
+        // hand-made waves higher and quicker, the physics waves' wind stronger.
+        const wave_spectrum::WeatherWaves& weather = rtFrame_.weather;
+        push.waveAmp = waveAmp * kRtWaveAmpScale * rtFrame_.waveAmp * weather.amplitudeScale;
         push.waveFreq = waveFreq * rtFrame_.waveFreq;
-        push.waveSpeed = waveSpeed;
+        push.waveSpeed = waveSpeed * weather.speedScale;
         // Physics waves (water_waves.glsli, wave_spectrum.hpp): the wind's
         // spectrum, with the open sea's fetch for an ocean and a lake's for
         // the rest. waveAmp is the amplitude slider alone (100% the spectrum's
@@ -1344,7 +1347,7 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             push.waveAmp = rtFrame_.waveAmp;
             push.waveFreq = basicType == 1 ? wave_spectrum::kOceanFetch : wave_spectrum::kInlandFetch;
             push.waveSpeed = wave_spectrum::kWindDirection;
-            push.pad2 = std::max(rtFrame_.windSpeed, 0.5f);
+            push.pad2 = std::max(rtFrame_.windSpeed * weather.windScale, 0.5f);
         }
         push.liquidBasicType = static_cast<float>(basicType);
         push.screenSize = glm::vec2(static_cast<float>(renderExtent_.width),

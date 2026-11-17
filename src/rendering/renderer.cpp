@@ -39,6 +39,7 @@
 #include "rendering/clouds.hpp"
 #include "rendering/lens_flare.hpp"
 #include "rendering/weather.hpp"
+#include "rendering/wave_spectrum.hpp"
 #include "rendering/rain_ripple.hpp"
 #include "rendering/lightning.hpp"
 #include "rendering/lighting_manager.hpp"
@@ -773,6 +774,7 @@ void Renderer::updatePerFrameUBO() {
             wf.waveFreq = rtWaveFreq_;
             wf.physicsWaves = physicsWaves_;
             wf.windSpeed = physicsWind_;
+            wf.weather = wave_spectrum::weatherWaves(waterRain_, waterStorm_, weatherWaveStrength_);
             wf.tessellation = waterTessellation_;
             wf.reflectReach = hw ? 400.0f : 150.0f;
             wf.refractReach = hw ? 80.0f : 40.0f;
@@ -3357,6 +3359,23 @@ void Renderer::update(float deltaTime) {
             weatherIndoors_ = indoors;
             LOG_WARNING("Weather: ", indoors ? "hidden, the camera is indoors" : "shown, the camera is outdoors");
         }
+    }
+
+    // The rain and storm the water answers (wave_spectrum::weatherWaves),
+    // eased with a time constant of six seconds so the sea builds up as the
+    // weather comes in and calms after it, not in a step.
+    {
+        float rain = 0.0f;
+        float storm = 0.0f;
+        if (weather) {
+            const bool raining = weather->getWeatherType() == Weather::Type::RAIN;
+            const float intensity = weather->getIntensity();
+            rain = raining ? intensity : 0.0f;
+            storm = wave_spectrum::storminess(raining, weather->weatherId(), intensity);
+        }
+        const float ease = 1.0f - std::exp(-std::max(deltaTime, 0.0f) / 6.0f);
+        waterRain_ += (rain - waterRain_) * ease;
+        waterStorm_ += (storm - waterStorm_) * ease;
     }
 
     // Update lightning (storm / heavy rain)

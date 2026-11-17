@@ -128,6 +128,47 @@ inline float impulseWavenumber(float r, float t) { return kGravity * t * t / (4.
 inline float impulsePhase(float r, float t) { return kGravity * t * t / (4.0f * r); }
 inline float groupSpeed(float k) { return 0.5f * std::sqrt(kGravity / k); }
 
+/// How much rougher the water is in rain and in a storm. `rain` is how hard it
+/// rains (0-1, the weather's eased intensity), `storm` how stormy (0-1: a
+/// thunderstorm's intensity, and part of a downpour's), `strength` the
+/// slider (1 the default, 0 none, 2 twice). The physics waves take the wind
+/// up by `windScale`; the hand-made waves their height by `amplitudeScale`
+/// and their pace by `speedScale`. A storm counts far more than rain: at the
+/// default, a full downpour raises the wind a third, a full thunderstorm
+/// more than doubles it.
+struct WeatherWaves {
+    float windScale = 1.0f;
+    float amplitudeScale = 1.0f;
+    float speedScale = 1.0f;
+};
+inline constexpr float kRainWind = 0.35f;
+inline constexpr float kStormWind = 1.25f;
+inline constexpr float kRainAmplitude = 0.5f;
+inline constexpr float kStormAmplitude = 1.8f;
+inline constexpr float kStormSpeed = 0.35f;
+inline WeatherWaves weatherWaves(float rain, float storm, float strength) {
+    const float r = std::clamp(rain, 0.0f, 1.0f);
+    const float s = std::clamp(storm, 0.0f, 1.0f);
+    const float k = std::max(strength, 0.0f);
+    WeatherWaves w;
+    w.windScale = 1.0f + k * (kRainWind * r + kStormWind * s);
+    w.amplitudeScale = 1.0f + k * (kRainAmplitude * r + kStormAmplitude * s);
+    w.speedScale = 1.0f + k * kStormSpeed * s;
+    return w;
+}
+
+/// How stormy a rainy weather is: a thunderstorm (Weather.dbc row 86, the
+/// server's WEATHER_STATE_THUNDERS) wholly, by its intensity; a downpour
+/// (intensity over two thirds) half at most.
+inline constexpr unsigned kThunderstormWeather = 86;
+inline float storminess(bool raining, unsigned weatherId, float intensity) {
+    const float i = std::clamp(intensity, 0.0f, 1.0f);
+    if (weatherId == kThunderstormWeather) return i;
+    if (!raining) return 0.0f;
+    const float t = std::clamp((i - 0.66f) / 0.34f, 0.0f, 1.0f);
+    return 0.5f * t * t * (3.0f - 2.0f * t);
+}
+
 /// The significant wave height (4 sigma) of the sampled waves, in yards.
 inline float significantHeight(const std::array<Wave, kWaveCount>& waves) {
     float variance = 0.0f;
