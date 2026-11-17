@@ -4296,6 +4296,10 @@ wowee_add_test(test_cursor_art SOURCES test_cursor_art.cpp)
 # Header-only.
 wowee_add_test(test_wave_spectrum SOURCES test_wave_spectrum.cpp)
 
+# Waves coming into shallow water: finite-depth dispersion, shoaling,
+# refraction and McCowan's breaking limit (shallow_water.hpp). Header-only.
+wowee_add_test(test_shallow_water SOURCES test_shallow_water.cpp)
+
 # The tessellated water's curve and the rings' and wakes' heights against the
 # slopes the water shades with (water_tessellation.hpp). Header-only.
 wowee_add_test(test_water_tessellation SOURCES test_water_tessellation.cpp)
