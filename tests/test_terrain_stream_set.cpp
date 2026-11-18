@@ -156,7 +156,9 @@ TEST_CASE("nothing in sight is left to neither the ground nor the horizon", "[te
             for (const Sight& s : pointsInView(eye, yaw, pitch, farClip)) {
                 if (s.depth < 2.0f) continue;
                 const bool ground = loaded.count(tileOf(s.at)) == 1;
-                if (ground) continue;  // the ground draws it, out to the far clip
+                // Its ground in, the ground draws it within its cube and the
+                // horizon past that (test_horizon_coverage.cpp).
+                if (ground) continue;
                 ++heldByHorizon;
                 CHECK(s.depth >= wowee::pipeline::wdl::tileNear(false, farClip));
                 if (s.depth < wowee::pipeline::wdl::horizonNear(farClip)) ++holesOld;

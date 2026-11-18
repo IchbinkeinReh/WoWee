@@ -28,7 +28,11 @@ class VkContext;
 ///   far the scale x the far clip; the near plane takes away what the ground
 ///   already covers. A tile whose ground is not in is drawn from just in
 ///   front of the camera (pipeline::wdl::tileNear), so no hole opens where
-///   the ground has yet to load or is not loaded.
+///   the ground has yet to load or is not loaded; one reaching out of the
+///   far clip's square the ground's chunks are drawn in is drawn from there
+///   too and gives way to the ground inside that square
+///   (pipeline::wdl::tileDraw), so none opens where the square's side comes
+///   in front of the far clip at the corners of a wide or diagonal view.
 /// - At depths behind the whole world and before the sky's (the client's
 ///   viewport depth range 0.998..0.999 against the world's 0..0.94): the
 ///   world always stands in front of it, it in front of the sky.
@@ -60,7 +64,8 @@ public:
     [[nodiscard]] uint32_t tilesDrawn() const { return tilesDrawn_; }
     /// The tiles the last frame drew, as row * 64 + column; those drawn from
     /// in front of the camera for want of their ground (wdl::tileNear) have
-    /// 0x8000 set.
+    /// 0x8000 set; those standing in for the ground past the side of the
+    /// square its chunks are drawn in (wdl::tileDraw) 0x4000.
     [[nodiscard]] const std::vector<uint16_t>& drawnTiles() const { return drawnTiles_; }
 
 private:

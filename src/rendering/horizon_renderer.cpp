@@ -24,6 +24,10 @@ struct HorizonPush {
     /// x: near (far clip - 50), y: far (scale x far clip), z, w: the depths
     /// the near and the far plane land at in the scene's reversed depth.
     glm::vec4 planes;
+    /// x, y: the camera, z: the far clip - the square the ground's chunks
+    /// are drawn in; w: the view depth before which the tile gives way to
+    /// the ground inside it, 0 for none (pipeline::wdl::tileDraw).
+    glm::vec4 ground;
 };
 
 /// The client puts the horizon at 0.998..0.999 of its depth range, the world
@@ -41,7 +45,7 @@ bool HorizonRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameL
     slot_.fill(-1);
     VkDevice device = vkCtx_->getDevice();
     VkPushConstantRange range{};
-    range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     range.size = sizeof(HorizonPush);
     pipelineLayout_ = createPipelineLayout(device, {perFrameLayout}, {range});
     if (pipelineLayout_ == VK_NULL_HANDLE) return false;
@@ -160,7 +164,7 @@ void HorizonRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, c
     const auto range = pipeline::wdl::visibleTiles(eye.x, eye.y, farClip, scale);
 
     bool bound = false;
-    float pushedNear = -1.0f;
+    pipeline::wdl::TileDraw pushed{-1.0f, -1.0f};
     for (int row = range.rowMin; row <= range.rowMax; ++row) {
         for (int col = range.colMin; col <= range.colMax; ++col) {
             const int32_t t = slot_[row * 64 + col];
@@ -172,11 +176,14 @@ void HorizonRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, c
             const glm::vec3 lo(maxX - pipeline::wdl::kTileSize, maxY - pipeline::wdl::kTileSize, tile.minZ);
             const glm::vec3 hi(maxX, maxY, tile.maxZ);
             if (!frustum.intersectsAABB(lo, hi)) continue;
-            // Its ground in, the tile is the horizon past the far clip; not
-            // in, it stands in for the ground from in front of the camera, so
-            // no hole opens where a tile has yet to load.
+            // Its ground in, the tile is the horizon past the far clip, and
+            // stands in for the ground past the side of the square the
+            // ground's chunks are drawn in; not in, it stands in for the
+            // ground from in front of the camera, so no hole opens where a
+            // tile has yet to load.
             const bool ground = !groundIn || groundIn(row, col);
-            const float tileNear = pipeline::wdl::tileNear(ground, farClip);
+            const pipeline::wdl::TileDraw draw =
+                pipeline::wdl::tileDraw(ground, lo.x, lo.y, hi.x, hi.y, eye.x, eye.y, farClip);
             if (!bound) {
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &perFrameSet,
@@ -186,14 +193,17 @@ void HorizonRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, c
                 vkCmdBindIndexBuffer(cmd, indices_.buffer, 0, VK_INDEX_TYPE_UINT16);
                 bound = true;
             }
-            if (tileNear != pushedNear) {
-                const HorizonPush push{glm::vec4(tileNear, farZ, kDepthAtNear, kDepthAtFar)};
-                vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
-                pushedNear = tileNear;
+            if (draw.fromDepth != pushed.fromDepth || draw.groundNear != pushed.groundNear) {
+                const HorizonPush push{glm::vec4(draw.fromDepth, farZ, kDepthAtNear, kDepthAtFar),
+                                       glm::vec4(eye.x, eye.y, farClip, draw.groundNear)};
+                vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   0, sizeof(push), &push);
+                pushed = draw;
             }
             vkCmdDrawIndexed(cmd, pipeline::wdl::kIndices, 1, 0, t * pipeline::wdl::kVertices, 0);
             ++tilesDrawn_;
-            drawnTiles_.push_back(static_cast<uint16_t>((row * 64 + col) | (ground ? 0 : 0x8000)));
+            drawnTiles_.push_back(static_cast<uint16_t>((row * 64 + col) | (ground ? 0 : 0x8000) |
+                                                        (draw.groundNear > 0.0f ? 0x4000 : 0)));
         }
     }
 }
