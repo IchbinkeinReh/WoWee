@@ -702,63 +702,6 @@ wowee::ui::Widget* widgetOf(lua_State* L, int index) {
     return tree->get(widgetIdOf(L, index));
 }
 
-/// The handler's own spelling when this kind of frame has it, matched in any
-/// case as the client's lookups do (0x0076e780), or nullptr.
-const char* frameTypeScriptName(const std::string& type, const std::string& handler) {
-    using List = std::initializer_list<const char*>;
-    static const List kFrame = {
-        "OnEvent", "OnLoad", "OnSizeChanged", "OnUpdate", "OnShow", "OnHide",
-        "OnEnter", "OnLeave", "OnMouseDown", "OnMouseUp", "OnMouseWheel",
-        "OnDragStart", "OnDragStop", "OnReceiveDrag", "OnChar", "OnKeyDown",
-        "OnKeyUp", "OnAttributeChanged", "OnEnable", "OnDisable"};
-    static const List kButton = {"PreClick", "OnClick", "PostClick", "OnDoubleClick"};   // 0x0096f200
-    static const List kEditBox = {                                                        // 0x009628f0
-        "OnEnterPressed", "OnEscapePressed", "OnSpacePressed", "OnTabPressed",
-        "OnTextChanged", "OnTextSet", "OnCursorChanged", "OnInputLanguageChanged",
-        "OnEditFocusGained", "OnEditFocusLost", "OnCharComposition"};
-    static const List kValue = {"OnValueChanged", "OnMinMaxChanged"};                     // 0x00961630, 0x0096bca0
-    static const List kScroll = {"OnHorizontalScroll", "OnVerticalScroll", "OnScrollRangeChanged"};  // 0x0096b0b0
-    static const List kTooltip = {                                                        // 0x0061a280
-        "OnTooltipSetDefaultAnchor", "OnTooltipCleared", "OnTooltipAddMoney",
-        "OnTooltipSetUnit", "OnTooltipSetItem", "OnTooltipSetSpell", "OnTooltipSetQuest",
-        "OnTooltipSetAchievement", "OnTooltipSetEquipmentSet", "OnTooltipSetFrameStack"};
-    static const List kModel = {"OnUpdateModel", "OnAnimFinished"};                       // 0x0095f420
-    static const List kMovie = {"OnMovieFinished", "OnMovieShowSubtitle", "OnMovieHideSubtitle"};  // 0x0095db80
-    static const List kHyperlink = {"OnHyperlinkEnter", "OnHyperlinkLeave", "OnHyperlinkClick"};  // 0x00978610
-    static const List kColor = {"OnColorSelect"};                                         // 0x0096dc50
-    static const List kScrollMsg = {"OnMessageScrollChanged"};                            // 0x00969040
-    auto find = [&](const List& list) -> const char* {
-        for (const char* n : list)
-            if (sameTypeName(n, handler.c_str())) return n;
-        return nullptr;
-    };
-    if (const char* n = find(kFrame)) return n;
-    if (type == "Button" || type == "CheckButton") return find(kButton);
-    if (type == "EditBox") return find(kEditBox);
-    if (type == "Slider" || type == "StatusBar") return find(kValue);
-    if (type == "ScrollFrame") return find(kScroll);
-    if (type == "GameTooltip") return find(kTooltip);
-    if (type == "ColorSelect") return find(kColor);
-    if (type == "MovieFrame") return find(kMovie);
-    if (type == "Model" || type == "PlayerModel" || type == "DressUpModel" ||
-        type == "TabardModel" || type == "CinematicModel")
-        return find(kModel);
-    if (type == "ScrollingMessageFrame") {
-        if (const char* n = find(kScrollMsg)) return n;
-        return find(kHyperlink);
-    }
-    if (type == "MessageFrame" || type == "SimpleHTML") return find(kHyperlink);
-    return nullptr;
-}
-
-/// HasScript("handler") (0x0049eab0): whether this kind of frame has the
-/// handler at all, set or not - the class's own name lookup (vtable slot 0xc),
-/// each falling back to its parent's: the frame's (0x0048e680, OnEvent from
-/// 0x00816830) under every one.
-bool frameTypeHasScript(const std::string& type, const std::string& handler) {
-    return frameTypeScriptName(type, handler) != nullptr;
-}
-
 /// The script name a frame method was handed, as the frame keeps it: its own
 /// spelling for a handler this kind of frame has, or the client's error
 /// "%s doesn't have a \"%s\" script" (0x0049ec80, 0x0049eb70, 0x0049edb0).
@@ -10893,22 +10836,20 @@ static int lua_CreateFrame(lua_State* L) {
             at = e == std::string::npos ? list.size() : e;
         }
     }
-    // The types the client can make; any other is refused.
+    // The types the client can make; any other is refused. The frame keeps
+    // the class's own spelling of the type (creatableFrameType), not the
+    // caller's: FrameXML asks for "BUTTON" and "FRAME".
+    const char* canonicalType = nullptr;
     {
-        static const char* const kTypes[] = {
-            "Frame", "Button", "CheckButton", "ColorSelect", "EditBox", "MessageFrame", "Model",
-            "MovieFrame", "ScrollFrame", "ScrollingMessageFrame", "SimpleHTML", "Slider", "StatusBar",
-            "WorldFrame", "GameTooltip", "Cooldown", "Minimap", "PlayerModel", "DressUpModel",
-            "TabardModel", "QuestPOIFrame"};
         const char* asked = lua_tostring(L, 1);
-        bool known = false;
-        for (const char* t : kTypes) known = known || sameWord(asked, t);
+        canonicalType = creatableFrameType(asked);
+        bool known = canonicalType != nullptr;
         // WorldFrame is registered as a one-off type (0x00813d20 with its
         // third argument set): the first frame made of it - FrameXML's own
         // WorldFrame.xml - takes the type out of the factory list (0x00812fa0),
         // and any later one is an unknown type. A new interface registers it
         // again, which is a new state here.
-        if (known && sameWord(asked, "WorldFrame")) {
+        if (known && sameWord(canonicalType, "WorldFrame")) {
             lua_getfield(L, LUA_REGISTRYINDEX, "wowee_worldframe_made");
             const bool made = lua_toboolean(L, -1) != 0;
             lua_pop(L, 1);
@@ -10920,7 +10861,7 @@ static int lua_CreateFrame(lua_State* L) {
         }
         if (!known) return luaL_error(L, "CreateFrame: Unknown frame type '%s'", asked);
     }
-    const char* frameType = luaL_optstring(L, 1, "Frame");
+    const char* frameType = canonicalType;
     const char* name = luaL_optstring(L, 2, nullptr);
     // Which of the per-type methods go on this frame; see where they are set,
     // below the metatable.

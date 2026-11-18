@@ -2184,6 +2184,29 @@ if(WOWEE_BUILD_FRAMEXML_RUN)
         set_tests_properties(framexml_taint_play PROPERTIES
             SKIP_RETURN_CODE 77
             ENVIRONMENT "WOWEE_CONFIG_ROOT=${_taint_play_dir}/config;WOWEE_LOG_FILE=${_taint_play_dir}/framexml_run.log")
+        # The game menu's three options windows, their category lists clicked
+        # through: the first by the pointer, then every visible one in each
+        # window, each having to put its panel up and become the selection
+        # (tools/options_tabs/check.lua). Every category in all three once lit
+        # up under the pointer and opened nothing - their buttons are made by
+        # CreateFrame("BUTTON", ...) and kept that spelling as their type, so
+        # their template's OnClick was refused - with nothing raised and every
+        # other test passing.
+        add_test(NAME framexml_options_tabs
+            COMMAND framexml_run ${_tp_data}
+                "--skip-unless:VideoOptionsFrame ~= nil and OptionsList_DisplayPanel ~= nil"
+                --chunk:${CMAKE_CURRENT_SOURCE_DIR}/tools/options_tabs/check.lua
+                "--lua:VideoOptionsFrame:Show()" --tick:2
+                --click:VideoOptionsFrameCategoryFrameButton2 --tick:1
+                "--expect:OptionsTabs_Shows('VideoOptionsFrame', 2)"
+                "--lua:VideoOptionsFrame:Hide()"
+                "--expect:OptionsTabs_ClickEach('VideoOptionsFrame')"
+                "--expect:OptionsTabs_ClickEach('AudioOptionsFrame')"
+                "--expect:OptionsTabs_ClickEach('InterfaceOptionsFrame', 'InterfaceOptionsFrameCategories')"
+            WORKING_DIRECTORY ${_taint_play_dir})
+        set_tests_properties(framexml_options_tabs PROPERTIES
+            SKIP_RETURN_CODE 77
+            ENVIRONMENT "WOWEE_CONFIG_ROOT=${_taint_play_dir}/config_options;WOWEE_LOG_FILE=${_taint_play_dir}/framexml_options_tabs.log")
     endif()
 endif()
 
