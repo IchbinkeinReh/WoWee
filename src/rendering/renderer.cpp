@@ -3329,6 +3329,14 @@ void Renderer::update(float deltaTime) {
 
     // Update terrain streaming
     if (terrainManager && camera) {
+        // About what the camera turns about - the character or a possessed
+        // unit - not the eye orbiting it, so a turn of the camera loads and
+        // unloads nothing; a cinematic's camera flies free and is its own.
+        std::optional<glm::vec3> focus;
+        if (!cinematicView_ && cameraController) {
+            if (const glm::vec3* target = cameraController->getFollowTarget()) focus = *target;
+        }
+        terrainManager->setStreamFocus(focus);
         auto terrStart = std::chrono::steady_clock::now();
         terrainManager->update(*camera, deltaTime);
         float terrMs = std::chrono::duration<float, std::milli>(
@@ -4904,7 +4912,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             // then kept off by, as the client draws it over its sky.
             if (horizon_ && camera && drawTerrain) {
                 horizon_->update(cachedAssetManager);
-                horizon_->render(cmd, perFrameSet, *camera, farClip_, horizonScale_);
+                horizon_->render(cmd, perFrameSet, *camera, farClip_, horizonScale_, horizonGroundIn());
             }
             if (skySystem && camera && !skipSky) {
                 const rendering::SkyParams skyParams =
@@ -5105,7 +5113,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         // Sky after the ground, for the reason given on the parallel path.
         if (horizon_ && camera && terrainRenderer && terrainEnabled && !skipTerrain) {
             horizon_->update(cachedAssetManager);
-            horizon_->render(currentCmd, perFrameSet, *camera, farClip_, horizonScale_);
+            horizon_->render(currentCmd, perFrameSet, *camera, farClip_, horizonScale_, horizonGroundIn());
         }
         if (skySystem && camera && !skipSky) {
             const rendering::SkyParams skyParams =
@@ -6084,9 +6092,7 @@ void Renderer::logViewDistanceDiag() {
                 ", far clip ", static_cast<int>(farClip_),
                 ": terrain drew to ", static_cast<int>(terrainFurthest),
                 ", doodads to ", static_cast<int>(m2Furthest),
-                ", tiles loaded to ", getTerrainLoadRadius(),
-                " (", static_cast<int>(getTerrainLoadRadius() *
-                                       core::coords::TILE_SIZE), ")");
+                ", tiles loaded to ", static_cast<int>(getTerrainLoadReach()), " yd about the focus");
 }
 
 void Renderer::setWmoSurfaceDetail(bool normalMaps, float strength) {
@@ -6127,15 +6133,21 @@ void Renderer::applyFarClip(uint32_t mapId) {
     if (wmoRenderer) wmoRenderer->setViewDistance(farClip_);
     if (m2Renderer) m2Renderer->setViewDistance(farClip_);
     if (terrainManager) {
-        terrainManager->setLoadRadius(getTerrainLoadRadius());
-        terrainManager->setUnloadRadius(getTerrainUnloadRadius());
+        terrainManager->setLoadReach(getTerrainLoadReach());
+        terrainManager->setUnloadReach(getTerrainUnloadReach());
     }
 }
 
-int Renderer::getTerrainLoadRadius() const {
-    constexpr float kAdtTileSize = core::coords::TILE_SIZE;
-    return glm::clamp(static_cast<int>(std::ceil(farClip_ / kAdtTileSize)) + 1, 2, 6);
+HorizonRenderer::GroundIn Renderer::horizonGroundIn() const {
+    // A .wdl tile at (row, column) is ADT tile (column, row): the row runs
+    // along render X, which the ADT's y index counts (core/coordinates.hpp).
+    const TerrainManager* tm = terrainManager.get();
+    if (!tm) return {};
+    return [tm](int row, int col) { return tm->isTileLoaded(col, row); };
 }
+
+float Renderer::getTerrainLoadReach() const { return terrain_stream::loadReach(farClip_); }
+float Renderer::getTerrainUnloadReach() const { return terrain_stream::unloadReach(getTerrainLoadReach()); }
 void Renderer::setCinematicView(const std::optional<CinematicView>& view) {
     cinematicView_ = view;
     if (cameraController) cameraController->setCinematicKeysHeld(view.has_value());

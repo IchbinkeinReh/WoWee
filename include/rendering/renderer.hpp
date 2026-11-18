@@ -992,8 +992,12 @@ public:
         screenEffectAmbience_ = 0;
         screenEffectZoneMusic_ = 0;
     }
-    int getTerrainLoadRadius() const;
-    int getTerrainUnloadRadius() const { return getTerrainLoadRadius() + 3; }
+    /// Yards about the stream focus whose tiles are loaded for the far
+    /// clip, and kept (rendering/terrain_stream_set.hpp).
+    float getTerrainLoadReach() const;
+    float getTerrainUnloadReach() const;
+    /// Which .wdl horizon tiles have their ground in (HorizonRenderer::render).
+    std::function<bool(int, int)> horizonGroundIn() const;
     void setMsaaSamples(VkSampleCountFlagBits samples);
 
     // Post-process pipeline API - delegates to PostProcessPipeline (§4.3)

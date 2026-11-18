@@ -200,8 +200,8 @@ bool TerrainManager::initialize(pipeline::AssetManager* assets, TerrainRenderer*
 
     LOG_INFO("Terrain manager initialized (async loading enabled)");
     LOG_INFO("  Map: ", mapName);
-    LOG_INFO("  Load radius: ", loadRadius, " tiles");
-    LOG_INFO("  Unload radius: ", unloadRadius, " tiles");
+    LOG_INFO("  Load reach: ", loadReach_, " yd");
+    LOG_INFO("  Unload reach: ", unloadReach_, " yd");
     LOG_INFO("  Workers: ", workerCount);
 
     return true;
@@ -254,6 +254,20 @@ void TerrainManager::update(const Camera& camera, float deltaTime) {
         }
     }
 
+    // Streamed about the focus the camera turns about, else the eye: the
+    // camera's yaw and pitch move nothing in or out (terrain_stream_set.hpp).
+    // A focus further from the eye than the camera can orbit is stale - a
+    // teleport's loading screen moves the camera before the character - and
+    // the eye is used.
+    const glm::vec3 eye = camera.getPosition();
+    glm::vec3 focus = eye;
+    if (streamFocus_ && glm::length(glm::vec2(streamFocus_->x - eye.x, streamFocus_->y - eye.y)) <=
+                            terrain_stream::kMaxEyeOffset + 10.0f) {
+        focus = *streamFocus_;
+    }
+    streamCentre_ = glm::vec2(focus.x, focus.y);
+    haveStreamCentre_ = true;
+
     // Always process ready tiles each frame (GPU uploads from background thread)
     // Time-budgeted internally to prevent frame spikes.
     const auto tReconcile = clock::now();
@@ -268,7 +282,7 @@ void TerrainManager::update(const Camera& camera, float deltaTime) {
     unloadMs = elapsedMs(tUnloadStart, clock::now());
 
     // The ground clutter of the chunks in range (0x007d3fe0).
-    updateDetailDoodads(camera.getPosition(), camera.getForward());
+    updateDetailDoodads(focus);
 
     timeSinceLastUpdate += deltaTime;
 
@@ -279,25 +293,25 @@ void TerrainManager::update(const Camera& camera, float deltaTime) {
 
     timeSinceLastUpdate = 0.0f;
 
-    // Get current tile from camera position.
-    glm::vec3 camPos = camera.getPosition();
-    TileCoord newTile = worldToTile(camPos.x, camPos.y);
+    TileCoord newTile = worldToTile(focus.x, focus.y);
 
     // Check if we've moved to a different tile
     if (newTile.x != currentTile.x || newTile.y != currentTile.y) {
-        LOG_DEBUG("Camera moved to tile [", newTile.x, ",", newTile.y, "]");
+        LOG_DEBUG("Stream focus moved to tile [", newTile.x, ",", newTile.y, "]");
         currentTile = newTile;
     }
 
-    // Stream tiles when player crosses a tile boundary
-    if (newTile.x != lastStreamTile.x || newTile.y != lastStreamTile.y) {
-        LOG_DEBUG("Streaming: cam=(", camPos.x, ",", camPos.y, ",", camPos.z,
+    // Stream when a tile comes into (or leaves) the load square.
+    const terrain_stream::TileRect loadRect = terrain_stream::tilesWithin(focus.x, focus.y, loadReach_);
+    if (!haveLoadRect_ || !(loadRect == lastLoadRect_)) {
+        LOG_DEBUG("Streaming: focus=(", focus.x, ",", focus.y, ",", focus.z,
                  ") tile=[", newTile.x, ",", newTile.y,
                  "] loaded=", loadedTiles.size());
         const auto tStream = clock::now();
         streamTiles();
         streamMs = elapsedMs(tStream, clock::now());
-        lastStreamTile = newTile;
+        lastLoadRect_ = loadRect;
+        haveLoadRect_ = true;
     } else {
         // Proactive loading: when workers are idle, periodically re-check for
         // unloaded tiles within range. Throttled to avoid hitching right after
@@ -1628,9 +1642,7 @@ void TerrainManager::processReadyTiles() {
             // Read for a place the player has since left: finalizing it would
             // upload a tile only to queue its unload. Forgotten instead, and
             // read again should the player come back.
-            const int dx = pending->coord.x - currentTile.x;
-            const int dy = pending->coord.y - currentTile.y;
-            if (currentTile.x >= 0 && dx * dx + dy * dy > unloadRadius * unloadRadius) {
+            if (!withinKeepReach(pending->coord)) {
                 pendingTiles.erase(pending->coord);
                 continue;
             }
@@ -1739,9 +1751,7 @@ void TerrainManager::processPendingUnloads() {
         // Skip stale entries: the player may have reversed course since this
         // tile was queued, bringing it back within range. Unloading it now
         // would pop visible terrain out from under them.
-        int dx = coord.x - currentTile.x;
-        int dy = coord.y - currentTile.y;
-        if (dx*dx + dy*dy <= unloadRadius*unloadRadius) continue;
+        if (withinKeepReach(coord)) continue;
 
         unloadTile(coord.x, coord.y);
         unloaded++;
@@ -1954,7 +1964,8 @@ void TerrainManager::softReset() {
     failedTiles.clear();
 
     currentTile = {.x = -1, .y = -1};
-    lastStreamTile = {.x = -1, .y = -1};
+    haveLoadRect_ = false;
+    haveStreamCentre_ = false;
 
     if (terrainRenderer) {
         terrainRenderer->clear();
@@ -2222,24 +2233,31 @@ void TerrainManager::generateGroundClutterPlacements(std::shared_ptr<PendingTile
               modelMissing, " models missing");
 }
 
-void TerrainManager::updateDetailDoodads(const glm::vec3& camPos, const glm::vec3& viewDir) {
+void TerrainManager::updateDetailDoodads(const glm::vec3& focus) {
     if (!m2Renderer) return;
-    // groundEffectDist (0x0078db10; 0 to 140 yards). A chunk is built once its
-    // +0x88 is in range (0x007d3fe0): the view depth of its box's corner
-    // nearest along the view (0x007c3e70, 0x00790650). Releasing it is
-    // wowee's own, by distance a few yards past the range, so standing on the
-    // line or turning round does not rebuild it; DetailDoodad's fade has the
-    // doodads gone by the range's depth anyway.
+    // groundEffectDist (0x0078db10; 0 to 140 yards). The client builds a
+    // chunk's ground clutter once its +0x88 is in range (0x007d3fe0): the
+    // view depth of its box's corner nearest along the view (0x007c3e70,
+    // 0x00790650) - which way the camera looks decides what is built, and a
+    // turn left the chunks behind the camera bare until the 2 ms budget got
+    // round to them. Here a chunk is built once its box is within a few yards
+    // past the range on the ground, whichever way the camera looks - all
+    // that was built before (in view depth range and that close) and the
+    // rest of the circle - and what is drawn of them is still decided each
+    // frame by the view depth (M2Renderer's clutter cull and DetailDoodad's
+    // fade). Released a few yards further out, so standing on the line does
+    // not rebuild it.
     float range = m2Renderer->groundDetailDistance();
     if (range <= 0.0f) range = 140.0f;
-    const float releaseRange = range + 16.0f;
+    const float buildRange = range + 16.0f;
+    const float releaseRange = buildRange + 8.0f;
     constexpr float kBudgetMs = 2.0f;
     const auto start = std::chrono::steady_clock::now();
     bool outOfTime = false;
 
     auto distanceTo = [&](float minX, float minY, float maxX, float maxY) {
-        const float dx = std::max({minX - camPos.x, 0.0f, camPos.x - maxX});
-        const float dy = std::max({minY - camPos.y, 0.0f, camPos.y - maxY});
+        const float dx = std::max({minX - focus.x, 0.0f, focus.x - maxX});
+        const float dy = std::max({minY - focus.y, 0.0f, focus.y - maxY});
         return std::sqrt(dx * dx + dy * dy);
     };
 
@@ -2249,17 +2267,15 @@ void TerrainManager::updateDetailDoodads(const glm::vec3& camPos, const glm::vec
 
     for (auto& [coord, tile] : loadedTiles) {
         if (!tile || tile->detailChunks.empty()) continue;
-        const bool tileNear = distanceTo(tile->minX, tile->minY, tile->maxX, tile->maxY) < releaseRange;
+        const bool tileNear = distanceTo(tile->minX, tile->minY, tile->maxX, tile->maxY) <= buildRange;
         for (auto& dc : tile->detailChunks) {
             if (!tileNear && !dc.instanced) continue;
             const float d = distanceTo(dc.minX, dc.minY, dc.maxX, dc.maxY);
-            const float depth = m2ChunkViewDepth(glm::vec3(dc.minX, dc.minY, dc.minZ),
-                                                 glm::vec3(dc.maxX, dc.maxY, dc.maxZ), camPos, viewDir);
             if (dc.instanced && d > releaseRange) {
                 releasedIds.insert(releasedIds.end(), dc.instanceIds.begin(), dc.instanceIds.end());
                 dc.instanceIds.clear();
                 dc.instanced = false;
-            } else if (!dc.instanced && depth < range && d <= releaseRange && !outOfTime) {
+            } else if (!dc.instanced && d <= buildRange && !outOfTime) {
                 dc.instanceIds.reserve(dc.doodads.size());
                 for (const auto& doodad : dc.doodads) {
                     if (!m2Renderer->hasModel(doodad.modelId)) continue;
@@ -2699,6 +2715,11 @@ std::optional<uint32_t> TerrainManager::getGroundEffectIdAt(float glX, float glY
     return chunk->layers[layer].effectId;
 }
 
+bool TerrainManager::withinKeepReach(const TileCoord& coord) const {
+    if (!haveStreamCentre_) return true;
+    return terrain_stream::tilesWithin(streamCentre_.x, streamCentre_.y, unloadReach_).contains(coord.x, coord.y);
+}
+
 void TerrainManager::streamTiles() {
     auto shouldSkipMissingAdt = [this](const TileCoord& coord) -> bool {
         if (!assetManager) return false;
@@ -2712,58 +2733,40 @@ void TerrainManager::streamTiles() {
         return false;
     };
 
-    // Enqueue tiles in radius around current tile for async loading.
-    // Collect all newly-needed tiles, then sort by distance so the closest
-    // (most visible) tiles get loaded first.  This is critical during taxi
-    // flight where new tiles enter the radius faster than they can load.
+    if (!haveStreamCentre_) return;
+    const float cx = streamCentre_.x, cy = streamCentre_.y;
+
+    // The square of tiles within the load reach of the focus, nearest first
+    // (0x007b5950 sorts its areas by distance) - so the closest tiles load
+    // first, which matters on a taxi where tiles come into reach faster than
+    // they load. Nothing in it asks which way the camera looks.
     {
         std::lock_guard<std::mutex> lock(queueMutex);
 
-        struct PendingEntry { TileCoord coord; int distSq; };
-        std::vector<PendingEntry> newTiles;
+        std::vector<TileCoord> newTiles;
+        for (const auto& [tileX, tileY] : terrain_stream::loadOrder(cx, cy, loadReach_)) {
+            TileCoord coord = {.x = tileX, .y = tileY};
 
-        for (int dy = -loadRadius; dy <= loadRadius; dy++) {
-            for (int dx = -loadRadius; dx <= loadRadius; dx++) {
-                int tileX = currentTile.x + dx;
-                int tileY = currentTile.y + dy;
+            // Skip if already loaded, pending, or failed
+            if (loadedTiles.find(coord) != loadedTiles.end()) continue;
+            if (pendingTiles.find(coord) != pendingTiles.end()) continue;
+            if (failedTiles.find(coord) != failedTiles.end()) continue;
+            if (shouldSkipMissingAdt(coord)) continue;
 
-                // Check valid range
-                if (tileX < 0 || tileX > 63 || tileY < 0 || tileY > 63) {
-                    continue;
-                }
-
-                // Circular pattern: skip corner tiles beyond radius (Euclidean distance)
-                if (dx*dx + dy*dy > loadRadius*loadRadius) {
-                    continue;
-                }
-
-                TileCoord coord = {.x = tileX, .y = tileY};
-
-                // Skip if already loaded, pending, or failed
-                if (loadedTiles.find(coord) != loadedTiles.end()) continue;
-                if (pendingTiles.find(coord) != pendingTiles.end()) continue;
-                if (failedTiles.find(coord) != failedTiles.end()) continue;
-                if (shouldSkipMissingAdt(coord)) continue;
-
-                newTiles.push_back({.coord = coord, .distSq = dx*dx + dy*dy});
-                pendingTiles[coord] = true;
-            }
+            newTiles.push_back(coord);
+            pendingTiles[coord] = true;
         }
-
-        // Sort nearest tiles first so workers service the most visible tiles
-        std::sort(newTiles.begin(), newTiles.end(),
-                  [](const PendingEntry& a, const PendingEntry& b) { return a.distSq < b.distSq; });
 
         // Insert at front so new close tiles preempt any distant tiles already queued
         for (auto it = newTiles.rbegin(); it != newTiles.rend(); ++it) {
-            loadQueue.push_front(it->coord);
+            loadQueue.push_front(*it);
         }
     }
 
     // Notify workers that there's work
     queueCV.notify_all();
 
-    // Unload tiles beyond unload radius (well past the camera far clip).
+    // Unload tiles past the unload reach (a tile past the load square).
     // Queue them rather than unloading synchronously here - processPendingUnloads()
     // drains a time-budgeted batch per frame instead (see pendingUnloadQueue_'s comment).
     std::unordered_set<TileCoord, TileCoord::Hash> alreadyQueued(
@@ -2772,12 +2775,7 @@ void TerrainManager::streamTiles() {
 
     for (const auto& pair : loadedTiles) {
         const TileCoord& coord = pair.first;
-
-        int dx = coord.x - currentTile.x;
-        int dy = coord.y - currentTile.y;
-
-        // Circular pattern: unload beyond radius (Euclidean distance)
-        if (dx*dx + dy*dy > unloadRadius*unloadRadius && !alreadyQueued.count(coord)) {
+        if (!withinKeepReach(coord) && !alreadyQueued.count(coord)) {
             pendingUnloadQueue_.push_back(coord);
             queuedNow++;
         }

@@ -5091,12 +5091,13 @@ void Application::applyServerMovementState(float deltaTime) {
     // Taxi flights move fast (32 u/s) - load further ahead so terrain is ready
     // before the camera arrives.  Keep updates frequent to spot new tiles early.
     renderer->getTerrainManager()->setUpdateInterval(onTaxi ? 0.033f : 0.033f);
-    const int configuredLoadRadius = renderer->getTerrainLoadRadius();
-    const int configuredUnloadRadius = renderer->getTerrainUnloadRadius();
-    renderer->getTerrainManager()->setLoadRadius(
-        onTaxi ? std::max(8, configuredLoadRadius) : configuredLoadRadius);
-    renderer->getTerrainManager()->setUnloadRadius(
-        onTaxi ? std::max(12, configuredUnloadRadius) : configuredUnloadRadius);
+    constexpr float kTile = core::coords::TILE_SIZE;
+    const float configuredLoadReach = renderer->getTerrainLoadReach();
+    const float configuredUnloadReach = renderer->getTerrainUnloadReach();
+    renderer->getTerrainManager()->setLoadReach(
+        onTaxi ? std::max(8.0f * kTile, configuredLoadReach) : configuredLoadReach);
+    renderer->getTerrainManager()->setUnloadReach(
+        onTaxi ? std::max(12.0f * kTile, configuredUnloadReach) : configuredUnloadReach);
     renderer->getTerrainManager()->setTaxiStreamingMode(onTaxi);
     }
     if (worldEntryCallbacks_) worldEntryCallbacks_->setLastTaxiFlight(actuallyFlying);

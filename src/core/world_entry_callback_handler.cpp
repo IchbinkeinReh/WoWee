@@ -132,27 +132,20 @@ void WorldEntryCallbackHandler::forceServerTeleportCommand(const glm::vec3& rend
 
 // Precache tiles in a radius around a position (eliminates repeated tile-loop code)
 //
-// No further than the terrain manager streams, and in the same circle: a
-// teleport asked for a 17x17 square, three times the tiles the load radius
-// keeps, and the workers then read, and the main thread finalized at 8 ms a
-// frame, a few hundred tiles nobody would see - minutes of it after every
-// teleport. Nearest last, as precacheTiles puts each at the front of the queue.
+// No further than the terrain manager streams, and the same square of tiles
+// (terrain_stream_set.hpp): a teleport asked for a 17x17 square, three times
+// the tiles the load reach keeps, and the workers then read, and the main
+// thread finalized at 8 ms a frame, a few hundred tiles nobody would see -
+// minutes of it after every teleport. Nearest last, as precacheTiles puts
+// each at the front of the queue.
 static void precacheNearbyTiles(rendering::TerrainManager* terrainMgr,
                                 const glm::vec3& renderPos, int radius) {
     if (!terrainMgr) return;
-    radius = std::min(radius, terrainMgr->getLoadRadius());
-    auto [tileX, tileY] = core::coords::worldToTile(renderPos.x, renderPos.y);
-    struct Offset { int dx, dy; };
-    std::vector<Offset> offsets;
-    for (int dy = -radius; dy <= radius; dy++)
-        for (int dx = -radius; dx <= radius; dx++)
-            if (dx * dx + dy * dy <= radius * radius) offsets.push_back({dx, dy});
-    std::sort(offsets.begin(), offsets.end(), [](const Offset& a, const Offset& b) {
-        return a.dx * a.dx + a.dy * a.dy > b.dx * b.dx + b.dy * b.dy;
-    });
-    std::vector<std::pair<int,int>> tiles;
-    tiles.reserve(offsets.size());
-    for (const Offset& o : offsets) tiles.emplace_back(tileX + o.dx, tileY + o.dy);
+    const float reach = std::min(static_cast<float>(radius) * core::coords::TILE_SIZE,
+                                 terrainMgr->getLoadReach());
+    std::vector<std::pair<int, int>> tiles =
+        rendering::terrain_stream::loadOrder(renderPos.x, renderPos.y, reach);
+    std::reverse(tiles.begin(), tiles.end());
     terrainMgr->precacheTiles(tiles);
 }
 

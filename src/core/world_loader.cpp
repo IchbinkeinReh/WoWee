@@ -559,12 +559,11 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
             auto* terrainMgr = renderer_->getTerrainManager();
             auto* camera = renderer_->getCamera();
 
-            // Use a small radius for the initial load (just immediate tiles),
-            // then restore the full radius after entering the game.
-            // This matches WoW's behavior: load quickly, stream the rest in-game.
-            const int savedLoadRadius = 6;
-            terrainMgr->setLoadRadius(4);   // 9x9=81 tiles - prevents hitches on spawn
-            terrainMgr->setUnloadRadius(9);
+            // What the far clip reaches about the spawn, whichever way the
+            // camera will look (terrain_stream_set.hpp) - the rest streams
+            // in-game as the player moves.
+            terrainMgr->setLoadReach(renderer_->getTerrainLoadReach());
+            terrainMgr->setUnloadReach(renderer_->getTerrainUnloadReach());
 
             // Trigger tile streaming for surrounding area
             (void)terrainMgr->takeWorkerReport();  // counted from here
@@ -685,8 +684,8 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
                         workers.prepareSec, " s together and waited ", workers.readyFullWaits,
                         " times on a full ready queue");
 
-            // Restore full load radius - remaining tiles stream in-game
-            terrainMgr->setLoadRadius(savedLoadRadius);
+            // The load reach is kept to the far clip's from here on
+            // (Application's per-frame streaming settings).
 
             // No floor grid is computed here. One was, over every building on
             // the map from ten yards above its top - which is outside the

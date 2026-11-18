@@ -5,6 +5,7 @@
 #include <vulkan/vulkan.h>
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -25,7 +26,9 @@ class VkContext;
 ///   tile is a silhouette in the fog colour (render states 8, 9, 10, 12).
 /// - In a projection of its own (0x00791170): near the far clip less 50,
 ///   far the scale x the far clip; the near plane takes away what the ground
-///   already covers.
+///   already covers. A tile whose ground is not in is drawn from just in
+///   front of the camera (pipeline::wdl::tileNear), so no hole opens where
+///   the ground has yet to load or is not loaded.
 /// - At depths behind the whole world and before the sky's (the client's
 ///   viewport depth range 0.998..0.999 against the world's 0..0.94): the
 ///   world always stands in front of it, it in front of the sky.
@@ -45,13 +48,19 @@ public:
     /// Main thread, before the frame is recorded: loads a new map's .wdl.
     void update(pipeline::AssetManager* assets);
 
+    /// Whether the ground of the tile at (row, column) - ADT file index
+    /// (column, row) - is drawn.
+    using GroundIn = std::function<bool(int row, int col)>;
+
     /// Draws the tiles in reach. farClip: the client's far clip; scale:
-    /// horizonFarclipScale.
+    /// horizonFarclipScale; groundIn: which tiles' ground is in (none: all).
     void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera, float farClip,
-                float scale);
+                float scale, const GroundIn& groundIn = {});
 
     [[nodiscard]] uint32_t tilesDrawn() const { return tilesDrawn_; }
-    /// The tiles the last frame drew, as row * 64 + column.
+    /// The tiles the last frame drew, as row * 64 + column; those drawn from
+    /// in front of the camera for want of their ground (wdl::tileNear) have
+    /// 0x8000 set.
     [[nodiscard]] const std::vector<uint16_t>& drawnTiles() const { return drawnTiles_; }
 
 private:

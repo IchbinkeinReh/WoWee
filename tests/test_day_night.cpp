@@ -286,7 +286,8 @@ TEST_CASE("the fog follows the map's far clip", "[daynight][farclip][fog]") {
     const std::string renderer = wowee::test::slurp("src/rendering/renderer.cpp");
     CHECK(renderer.find("daynight::clientFarClip(viewDistance_, mapId") != std::string::npos);
     CHECK(renderer.find("lightingManager->setFarClip(farClip_)") != std::string::npos);
-    CHECK(renderer.find("ceil(farClip_ / kAdtTileSize)") != std::string::npos);
+    // And the ground is streamed in to the far clip's square (terrain_stream_set.hpp).
+    CHECK(renderer.find("terrain_stream::loadReach(farClip_)") != std::string::npos);
 }
 
 TEST_CASE("with no light the fog runs to the far clip with an exponent of 4", "[daynight][fog]") {

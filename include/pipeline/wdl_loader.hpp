@@ -68,6 +68,23 @@ float clampHorizonScale(float scale);
 inline float horizonNear(float farClip) { return farClip - 50.0f; }
 inline float horizonFar(float farClip, float scale) { return scale * farClip; }
 
+/// How close in front of the camera a tile whose ground is not in is drawn
+/// from.
+inline constexpr float kNearWithoutGround = 1.0f;
+
+/// The near plane a tile is drawn from: the far clip less 50 where its
+/// ground (the ADT tile) is in, as the client draws it (0x00791170). Where
+/// it is not - still streaming after a teleport, failed, or past the square
+/// the ground is loaded in, which the corners of a wide view reach before
+/// the far clip - the near plane would cut away what nothing else draws and
+/// leave the sky showing through the land; such a tile is drawn from just in
+/// front of the camera instead, the silhouette in the fog colour it is past
+/// the far clip.
+inline float tileNear(bool groundIn, float farClip) {
+    const float n = horizonNear(farClip);
+    return groundIn ? n : (n < kNearWithoutGround ? n : kNearWithoutGround);
+}
+
 }  // namespace wdl
 
 }  // namespace pipeline

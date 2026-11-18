@@ -11538,7 +11538,8 @@ void LuaEngine::registerCoreAPI() {
         // __WoweeTestStreamState(): what the world holds this frame, as one
         // line - the camera's eye, yaw and pitch, the far clip, the terrain
         // tiles loaded / queued / being finalized, the ground chunks drawn
-        // and the .wdl horizon tiles drawn (row_col). For scripted runs that
+        // and the .wdl horizon tiles drawn (row_col, a * for one drawn from in
+        // front of the camera for want of its ground). For scripted runs that
         // show what a turn of the camera does to it.
         lua_pushcfunction(L_, [](lua_State* L) -> int {
             auto* renderer = core::Application::getInstance().getRenderer();
@@ -11567,7 +11568,9 @@ void LuaEngine::registerCoreAPI() {
                 s += " wdl=" + std::to_string(d.size()) + "[";
                 for (size_t i = 0; i < d.size(); ++i) {
                     if (i) s += ' ';
-                    s += std::to_string(d[i] / 64) + "_" + std::to_string(d[i] % 64);
+                    const unsigned slot = d[i] & 0x7fffu;
+                    s += std::to_string(slot / 64) + "_" + std::to_string(slot % 64);
+                    if (d[i] & 0x8000u) s += "*";
                 }
                 s += "]";
             }

@@ -5,6 +5,7 @@
 
 #include "core/coordinates.hpp"
 #include "core/work_batch.hpp"
+#include "rendering/terrain_stream_set.hpp"
 #include "pipeline/adt_loader.hpp"
 #include "pipeline/terrain_mesh.hpp"
 #include "pipeline/m2_loader.hpp"
@@ -261,10 +262,24 @@ public:
 
     /**
      * Set streaming parameters
+     *
+     * What is loaded is the square of tiles within the load reach (yards)
+     * of the stream focus, and a loaded tile is kept while it is within the
+     * unload reach (terrain_stream_set.hpp): by position alone, the same
+     * whichever way the camera looks. The radius setters give the reach in
+     * whole tiles.
      */
-    void setLoadRadius(int radius) { loadRadius = radius; }
-    [[nodiscard]] int getLoadRadius() const { return loadRadius; }
-    void setUnloadRadius(int radius) { unloadRadius = radius; }
+    void setLoadReach(float yards) { loadReach_ = yards; }
+    [[nodiscard]] float getLoadReach() const { return loadReach_; }
+    void setUnloadReach(float yards) { unloadReach_ = yards; }
+    void setLoadRadius(int radius) { loadReach_ = static_cast<float>(radius) * terrain_stream::kTileSize; }
+    void setUnloadRadius(int radius) { unloadReach_ = static_cast<float>(radius) * terrain_stream::kTileSize; }
+    /// The point streamed about: the one the camera turns about (the
+    /// character, a possessed unit), so turning the camera moves nothing in
+    /// or out. None, or one further from the eye than the camera can orbit
+    /// (a teleport's loading screen has moved the camera, not yet the
+    /// character): the camera's eye.
+    void setStreamFocus(const std::optional<glm::vec3>& focus) { streamFocus_ = focus; }
     void setStreamingEnabled(bool enabled) { streamingEnabled = enabled; }
     void setUpdateInterval(float seconds) { updateInterval = seconds; }
     void setTaxiStreamingMode(bool enabled) { taxiStreamingMode_ = enabled; }
@@ -562,14 +577,25 @@ private:
     // Tiles that failed to load (don't retry)
     std::unordered_map<TileCoord, bool, TileCoord::Hash> failedTiles;
 
-    // Current tile (where camera is)
+    // Current tile (where the stream focus is)
     TileCoord currentTile = {.x = -1, .y = -1};
-    TileCoord lastStreamTile = {.x = -1, .y = -1};
+    // The load square the last stream pass was made for; a new one (the
+    // focus moved far enough for a tile to enter it) streams again.
+    terrain_stream::TileRect lastLoadRect_{};
+    bool haveLoadRect_ = false;
+    // Where streaming is centred (render x, y) and the square kept loaded.
+    glm::vec2 streamCentre_{0.0f};
+    bool haveStreamCentre_ = false;
+    std::optional<glm::vec3> streamFocus_;
+    /// Whether a loaded or arriving tile is still within the unload reach.
+    [[nodiscard]] bool withinKeepReach(const TileCoord& coord) const;
 
     // Streaming parameters
     bool streamingEnabled = true;
-    int loadRadius = 6;      // Load tiles within this radius (13x13 grid = 169 tiles)
-    int unloadRadius = 9;    // Unload tiles beyond this radius
+    // Yards about the focus loaded, and kept (terrain_stream::loadReach for
+    // the far clip, set by the renderer; six and nine tiles until it is).
+    float loadReach_ = 6.0f * terrain_stream::kTileSize;
+    float unloadReach_ = 9.0f * terrain_stream::kTileSize;
     float updateInterval = 0.033f;  // Check streaming every 33ms (~30 fps)
     float timeSinceLastUpdate = 0.0f;
     float proactiveStreamTimer_ = 0.0f;
@@ -692,7 +718,7 @@ private:
     std::mutex detailModelSizesMutex_;
     std::unordered_map<std::string, pipeline::DetailModelSize> detailModelSizes_;
     /// Instances the ground clutter of chunks in range, releases the rest.
-    void updateDetailDoodads(const glm::vec3& camPos, const glm::vec3& viewDir);
+    void updateDetailDoodads(const glm::vec3& focus);
     std::unordered_map<std::string, TerrainTextureTones> terrainTextureTones_;
 };
 

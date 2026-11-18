@@ -3815,6 +3815,12 @@ wowee_add_test(test_wdl_loader
     SOURCES test_wdl_loader.cpp
             ${CMAKE_SOURCE_DIR}/src/pipeline/wdl_loader.cpp)
 
+# ── test_terrain_stream_set ─────────────────────────────────
+# Which terrain tiles are streamed about a place: by position alone, a square
+# holding all the far clip reaches (rendering/terrain_stream_set.hpp).
+wowee_add_test(test_terrain_stream_set
+    SOURCES test_terrain_stream_set.cpp)
+
 # ── test_fishing_line ────────────────────────────────────────
 # The line from a fishing pole to its bobber (rendering/fishing_line_geometry.hpp).
 wowee_add_test(test_fishing_line
