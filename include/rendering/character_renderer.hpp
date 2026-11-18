@@ -252,8 +252,18 @@ public:
     /// slot's texture sets and marks a new frame for the bone copies.
     /// renderShadow is then called once per shadow cascade.
     void beginShadowFrame(uint32_t frameIndex);
+    /// The units' own tile of the atlas (shadow_unit_tile.hpp), as one pass
+    /// of renderShadow sorts the units by it: the tile's own pass draws only
+    /// those that reach into it (`intoTile`), a cascade's only those it does
+    /// not hold whole.
+    struct ShadowTileFilter {
+        glm::mat4 lightSpace{0.0f};
+        float halfExtent = 0.0f;
+        bool intoTile = false;
+    };
     void renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMatrix,
-                      const glm::vec3& shadowCenter = glm::vec3(0), float shadowRadius = 1e9f);
+                      const glm::vec3& shadowCenter = glm::vec3(0), float shadowRadius = 1e9f,
+                      const ShadowTileFilter* tileFilter = nullptr);
 
     void setInstancePosition(uint32_t instanceId, const glm::vec3& position);
     void setInstanceRotation(uint32_t instanceId, const glm::vec3& rotation);

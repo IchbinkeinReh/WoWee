@@ -12,6 +12,7 @@
 #include "rendering/rt_rays.hpp"
 #include "rendering/day_night.hpp"
 #include "rendering/blob_shadow.hpp"
+#include "rendering/shadow_unit_tile.hpp"
 #include "rendering/animation/body_yaw.hpp"
 #include <chrono>
 #include <functional>
@@ -644,17 +645,39 @@ private:
     bool shadowAtlasInRow(int cascades, uint32_t tile) const {
         return static_cast<uint64_t>(tile) * static_cast<uint32_t>(cascades) <= shadowAtlasMaxWidth_;
     }
-    uint32_t shadowAtlasWidth(int cascades, uint32_t tile) const {
+    uint32_t shadowCascadeBlockWidth(int cascades, uint32_t tile) const {
         if (shadowAtlasInRow(cascades, tile)) return tile * static_cast<uint32_t>(cascades);
         return cascades > 1 ? tile * 2 : tile;
     }
-    uint32_t shadowAtlasHeight(int cascades, uint32_t tile) const {
+    uint32_t shadowCascadeBlockHeight(int cascades, uint32_t tile) const {
         if (shadowAtlasInRow(cascades, tile)) return tile;
         return cascades > 2 ? tile * 2 : tile;
     }
+    /// The units' tile (shadow_unit_tile.hpp) beside the cascades' block, with
+    /// shadowUnitSide_ for its side: where it goes and the atlas both make.
+    shadow_unit_tile::Placement shadowUnitPlacement(int cascades, uint32_t tile) const {
+        return shadow_unit_tile::place(shadowCascadeBlockWidth(cascades, tile),
+                                       shadowCascadeBlockHeight(cascades, tile), tile, cascades,
+                                       shadowAtlasInRow(cascades, tile), shadowUnitSide_,
+                                       shadowAtlasMaxWidth_, shadowAtlasMaxHeight_);
+    }
+    uint32_t shadowAtlasWidth(int cascades, uint32_t tile) const {
+        return shadowUnitPlacement(cascades, tile).atlasW;
+    }
+    uint32_t shadowAtlasHeight(int cascades, uint32_t tile) const {
+        return shadowUnitPlacement(cascades, tile).atlasH;
+    }
+    /// The units' tile's side for this many cascades of this tile at the
+    /// shadow distance now: 0 where the finest cascade is fine enough alone.
+    uint32_t shadowUnitSideFor(int cascades, uint32_t tile) const;
+    /// The units' tile's side the atlas is built (or about to be built) with;
+    /// 0 for none.
+    uint32_t shadowUnitSide_ = 0;
     /// The widest atlas the device draws into: image, framebuffer and
     /// viewport limits, read at initialisation.
     uint32_t shadowAtlasMaxWidth_ = 4096;
+    /// And the tallest.
+    uint32_t shadowAtlasMaxHeight_ = 4096;
     /// The largest tile allowed with two or more cascades: an 8192 tile is
     /// already a 16384 by 8192 atlas, 512 MB, twice over for the frames in
     /// flight.
@@ -672,6 +695,11 @@ private:
     /// How many of shadowCascades_ this frame filled; 0 before the player has
     /// a position, when the shadow pass is skipped.
     int activeShadowCascades_ = 0;
+    /// The units' own tile this frame (shadow_unit_tile.hpp): the cascades'
+    /// light, kHalfExtent about the player. Read only while
+    /// shadowUnitTileActive_.
+    ShadowCascade shadowUnitTile_{};
+    bool shadowUnitTileActive_ = false;
     /// Works out the tile for the wanted cascade count and resolution step
     /// and leaves it for the next frame to build.
     void requestShadowAtlas();
@@ -772,7 +800,9 @@ public:
     /// the path that lost the device - and only the shaders stop applying it.
     void setShadowsEnabled(bool enabled) { shadowsEnabled = enabled; }
     bool areShadowsEnabled() const { return shadowsEnabled; }
-    void setShadowDistance(float dist) { shadowDistance_ = glm::clamp(dist, 40.0f, 500.0f); }
+    /// Rebuilds the atlas next frame where the distance gives the units a
+    /// tile of their own, or takes it away (shadowUnitSideFor).
+    void setShadowDistance(float dist);
     float getShadowDistance() const { return shadowDistance_; }
     /// The shadow map's side as a step above the quality level's: 0 is that
     /// size, 1 twice it and 2 four times it, held to maxShadowMapSize().
@@ -1058,7 +1088,11 @@ private:
         bool dynamicRendering = false;
         int cascadeCount = 0;
         ShadowCascade cascades[kMaxShadowCascades]{};
-        /// kMaxShadowCascades + 1 timestamp indices, one per cascade in the
+        /// The units' tile, drawn after the cascades when there is one.
+        bool unitTileActive = false;
+        ShadowCascade unitTile{};
+        /// kMaxShadowCascades + 2 timestamp indices, one per cascade and the
+        /// units' tile in the
         /// order they are drawn and the pass end last, reserved in beginFrame
         /// right after the frame's first mark, which is where the prologue
         /// executes. kNoGpuMark when nothing is timed.

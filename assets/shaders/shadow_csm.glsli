@@ -14,6 +14,10 @@
 //     vec4 cascadeTexel[4];   // x one texel in yards, yz one atlas texel in u, v
 //     vec4 cascadeInfo;       // x count (0 = no map), y 1 for the cheap filter, z fade start
 //
+// The last slot, 3, is not a cascade: it is the units' own tile
+// (shadow_unit_tile.hpp), with cascadeTexel[3].w 1 while there is one -
+// csmUnitShadow.
+//
 // cascadeInfo.x is 0 in the character preview, whose block is zeroed, and
 // before the player has a position; everything then reads as lit.
 
@@ -76,8 +80,8 @@ float csmSampleCascade(sampler2DShadow smap, int c, vec3 worldPos, vec3 n, float
 // hard line. The last cascade is read wherever no finer one holds the point,
 // untested, and its shadow fades out to fully lit from 90% of its half-width
 // to 99% of it: saturate(11 - 11.111111 * max(|x|, |y|)).
-float csmShadow(sampler2DShadow smap, vec3 worldPos, vec3 n, float nl, float depthBias) {
-    const int count = min(int(cascadeInfo.x + 0.5), 4);
+float csmCascadeShadow(sampler2DShadow smap, vec3 worldPos, vec3 n, float nl, float depthBias) {
+    const int count = min(int(cascadeInfo.x + 0.5), 3);
     for (int c = 0; c < count; ++c) {
         const vec4 ls = cascadeMatrix[c] * vec4(worldPos, 1.0);
         const float d = csmTileDistance(c, ls.xy / ls.w);
@@ -91,4 +95,27 @@ float csmShadow(sampler2DShadow smap, vec3 worldPos, vec3 n, float nl, float dep
         return mix(csmSampleCascade(smap, c, worldPos, n, nl, depthBias), 1.0, fade);
     }
     return 1.0;
+}
+
+// The units' own tile (shadow_unit_tile.hpp, Renderer::computeLightSpaceMatrix):
+// the units near the player drawn alone, a few hundredths of a yard a texel,
+// which the cascades leave out. With one cascade over 500 yards a character
+// was a handful of a quarter-yard's texels, and its shadow blocks
+// (Stonebull Lake at 14:00, user180). Whether the tile holds worldPos.
+bool csmUnitTileHolds(vec3 worldPos) {
+    if (cascadeInfo.x < 0.5 || cascadeTexel[3].w < 0.5) return false;
+    const vec4 ls = cascadeMatrix[3] * vec4(worldPos, 1.0);
+    return csmTileDistance(3, ls.xy / ls.w) < 1.0;
+}
+// The light the units in the tile let through at worldPos, filtered as a
+// cascade is; 1 off the tile, or with no tile.
+float csmUnitShadow(sampler2DShadow smap, vec3 worldPos, vec3 n, float nl, float depthBias) {
+    if (!csmUnitTileHolds(worldPos)) return 1.0;
+    return csmSampleCascade(smap, 3, worldPos, n, nl, depthBias);
+}
+
+// The sun's shadow map at worldPos: the cascades' light times the units'
+// tile's.
+float csmShadow(sampler2DShadow smap, vec3 worldPos, vec3 n, float nl, float depthBias) {
+    return csmCascadeShadow(smap, worldPos, n, nl, depthBias) * csmUnitShadow(smap, worldPos, n, nl, depthBias);
 }

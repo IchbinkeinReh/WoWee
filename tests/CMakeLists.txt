@@ -1699,6 +1699,14 @@ wowee_add_test(test_rt_glow
 wowee_add_test(test_shadow_sun
     SOURCES test_shadow_sun.cpp)
 
+# ── test_shadow_unit_tile ────────────────────────────────────
+# The units' own tile of the shadow atlas: when, where, which units, and the
+# shaders that read it.
+wowee_add_test(test_shadow_unit_tile
+    SOURCES test_shadow_unit_tile.cpp)
+target_compile_definitions(test_shadow_unit_tile PRIVATE
+    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
 # -- test_sound_entry: a SoundEntries row's file path and the swings its flags ask.
 wowee_add_test(test_sound_entry
     SOURCES test_sound_entry.cpp)
