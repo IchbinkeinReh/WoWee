@@ -325,8 +325,12 @@ bool Renderer::createPerFrameResources() {
         shadowAtlasMaxWidth_ = std::min({props.limits.maxImageDimension2D,
                                          props.limits.maxFramebufferWidth,
                                          props.limits.maxViewportDimensions[0]});
+        shadowAtlasMaxHeight_ = std::min({props.limits.maxImageDimension2D,
+                                          props.limits.maxFramebufferHeight,
+                                          props.limits.maxViewportDimensions[1]});
     }
     SHADOW_MAP_SIZE = std::min(SHADOW_MAP_SIZE, maxShadowMapSize(shadowCascadeCount_));
+    shadowUnitSide_ = shadowUnitSideFor(shadowCascadeCount_, SHADOW_MAP_SIZE);
     if (!createShadowMapImages()) return false;
 
     // The fog's sampler and neutral volume come first: the layout below bakes
@@ -676,6 +680,23 @@ void Renderer::updatePerFrameUBO() {
                 currentFrameData.cascadeRect[c] = glm::vec4(0.0f);
                 currentFrameData.cascadeTexel[c] = glm::vec4(0.0f);
             }
+        }
+        // The units' tile in the last slot (shadow_csm.glsli's csmUnitShadow),
+        // its texel's w 1 while there is one.
+        if (cascades > 0 && shadowUnitTileActive_) {
+            constexpr int u = GPUPerFrameData::kMaxShadowCascades - 1;
+            static_assert(u >= kMaxShadowCascades, "the units' tile needs a slot of its own");
+            const ShadowCascade& ut = shadowUnitTile_;
+            currentFrameData.cascadeMatrix[u] = ut.atlas;
+            currentFrameData.cascadeRect[u] = glm::vec4(
+                static_cast<float>(ut.tile.offset.x) / static_cast<float>(atlasW),
+                static_cast<float>(ut.tile.offset.y) / static_cast<float>(atlasH),
+                static_cast<float>(ut.tile.offset.x + static_cast<int32_t>(ut.tile.extent.width)) /
+                    static_cast<float>(atlasW),
+                static_cast<float>(ut.tile.offset.y + static_cast<int32_t>(ut.tile.extent.height)) /
+                    static_cast<float>(atlasH));
+            currentFrameData.cascadeTexel[u] = glm::vec4(
+                ut.texelWorld, 1.0f / static_cast<float>(atlasW), 1.0f / static_cast<float>(atlasH), 1.0f);
         }
         // y: 1 for the four-tap filter (setLowCostShading), 0 for the nine -
         // the cascades switch with no blend either way, as the client's do;
@@ -6212,6 +6233,7 @@ float shadowCascadeSplit(int i, int count, float distance) {
 // a position.
 glm::mat4 Renderer::computeLightSpaceMatrix() {
     activeShadowCascades_ = 0;
+    shadowUnitTileActive_ = false;
     const float kShadowLightDistance = shadowDistance_ * 3.0f;
     const float kShadowFarPlane = shadowFarPlane(shadowDistance_);
 
@@ -6303,7 +6325,57 @@ glm::mat4 Renderer::computeLightSpaceMatrix() {
     }
     activeShadowCascades_ = cascades;
     shadowCenter = shadowCascades_[cascades - 1].center;
+
+    // The units' own tile (shadow_unit_tile.hpp): the same light and depth
+    // range, kHalfExtent about the player, snapped to its own texels - where
+    // the atlas was built with room for it.
+    const shadow_unit_tile::Placement unitAt = shadowUnitPlacement(cascades, tileSide);
+    if (unitAt.placed) {
+        ShadowCascade& ut = shadowUnitTile_;
+        const float halfExtent = shadow_unit_tile::kHalfExtent;
+        const uint32_t side = shadowUnitSide_;
+        const float texelWorld = shadow_unit_tile::texelWorld(side);
+        glm::vec3 center = desiredCenter;
+        const float dotR = std::floor(glm::dot(center, lightRight) / texelWorld) * texelWorld;
+        const float dotU = std::floor(glm::dot(center, lightUp) / texelWorld) * texelWorld;
+        center = lightRight * dotR + lightUp * dotU + sunDir * glm::dot(center, sunDir);
+        glm::mat4 lightView = glm::lookAt(center - sunDir * kShadowLightDistance, center, up);
+        glm::mat4 lightProj = glm::ortho(-halfExtent, halfExtent, -halfExtent, halfExtent,
+                                         kShadowNearPlane, kShadowFarPlane);
+        lightProj[1][1] *= -1.0f;
+        glm::mat4 toTile(1.0f);
+        toTile[0][0] = 0.5f * static_cast<float>(side) / atlasW;
+        toTile[1][1] = 0.5f * static_cast<float>(side) / atlasH;
+        toTile[3][0] = (static_cast<float>(unitAt.x) + 0.5f * static_cast<float>(side)) / atlasW;
+        toTile[3][1] = (static_cast<float>(unitAt.y) + 0.5f * static_cast<float>(side)) / atlasH;
+        ut.lightSpace = lightProj * lightView;
+        ut.atlas = toTile * ut.lightSpace;
+        ut.center = center;
+        ut.halfExtent = halfExtent;
+        ut.texelWorld = texelWorld;
+        ut.tile = VkRect2D{.offset = {.x = static_cast<int32_t>(unitAt.x), .y = static_cast<int32_t>(unitAt.y)},
+                           .extent = {.width = side, .height = side}};
+        shadowUnitTileActive_ = true;
+    }
     return shadowCascades_[cascades - 1].lightSpace;
+}
+
+uint32_t Renderer::shadowUnitSideFor(int cascades, uint32_t tile) const {
+    const int count = std::clamp(cascades, 1, kMaxShadowCascades);
+    const float finest = shadowCascadeSplit(0, count, shadowDistance_);
+    return shadow_unit_tile::wanted(finest, tile) ? shadow_unit_tile::side(tile) : 0u;
+}
+
+void Renderer::setShadowDistance(float dist) {
+    shadowDistance_ = glm::clamp(dist, 40.0f, 500.0f);
+    // The finest cascade grows with the distance: past a point the units want
+    // a tile of their own, and short of it no longer do. The atlas is made
+    // again for that next frame (applyPendingShadowMapSize), as it is.
+    if (pendingShadowCascades_ == 0 &&
+        shadowUnitSideFor(shadowCascadeCount_, SHADOW_MAP_SIZE) != shadowUnitSide_) {
+        pendingShadowMapSize_ = SHADOW_MAP_SIZE;
+        pendingShadowCascades_ = shadowCascadeCount_;
+    }
 }
 
 void Renderer::setupWater1xPass() {
@@ -6611,14 +6683,17 @@ void Renderer::planShadowPass() {
     if (drawCasters) {
         plan.cascadeCount = std::min(activeShadowCascades_, kMaxShadowCascades);
         for (int c = 0; c < plan.cascadeCount; ++c) plan.cascades[c] = shadowCascades_[c];
+        plan.unitTileActive = shadowUnitTileActive_ && plan.cascadeCount > 0;
+        plan.unitTile = shadowUnitTile_;
         plan.terrain = terrainRenderer.get();
         plan.wmo = wmoRenderer.get();
         plan.m2 = m2Renderer.get();
         plan.characters = characterRenderer.get();
-        plan.marks = vkCtx->gpuReserveMarks(kMaxShadowCascades + 1);
+        plan.marks = vkCtx->gpuReserveMarks(kMaxShadowCascades + 2);
     } else {
         // The empty pass: no cascades, no casters, no marks in /perf.
         plan.cascadeCount = 0;
+        plan.unitTileActive = false;
         plan.marks = VkContext::kNoGpuMark;
     }
 
@@ -6814,7 +6889,13 @@ void Renderer::recordShadowPass(const ShadowPlan& plan, bool onWorker) {
         }
         if (plan.characters) {
             const core::ProfileScope scope("shadow: characters", kind);
-            plan.characters->renderShadow(cmd, cascade.lightSpace, cascade.center, cullRadius);
+            // Not the units the units' tile holds whole: their shadow is that
+            // tile's, finer than any cascade's.
+            const CharacterRenderer::ShadowTileFilter leaveOut{.lightSpace = plan.unitTile.lightSpace,
+                                                              .halfExtent = plan.unitTile.halfExtent,
+                                                              .intoTile = false};
+            plan.characters->renderShadow(cmd, cascade.lightSpace, cascade.center, cullRadius,
+                                          plan.unitTileActive ? &leaveOut : nullptr);
         }
         // One mark per cascade: the far one covers the most ground and is
         // usually the expensive one, which a single shadow total cannot say.
@@ -6822,6 +6903,24 @@ void Renderer::recordShadowPass(const ShadowPlan& plan, bool onWorker) {
         static constexpr const char* kCascadeLabels[kMaxShadowCascades] = {
             "shadow cascade 0 (near)", "shadow cascade 1", "shadow cascade 2 (far)"};
         mark(markIndex++, kCascadeLabels[c]);
+    }
+    // The units' tile: the units alone, each one that reaches into it.
+    if (plan.unitTileActive && plan.characters) {
+        const ShadowCascade& ut = plan.unitTile;
+        VkViewport vp{.x = static_cast<float>(ut.tile.offset.x),
+                      .y = static_cast<float>(ut.tile.offset.y),
+                      .width = static_cast<float>(ut.tile.extent.width),
+                      .height = static_cast<float>(ut.tile.extent.height),
+                      .minDepth = 0.0f, .maxDepth = 1.0f};
+        vkCmdSetViewport(cmd, 0, 1, &vp);
+        vkCmdSetScissor(cmd, 0, 1, &ut.tile);
+        const core::ProfileScope scope("shadow: units' tile", kind);
+        const CharacterRenderer::ShadowTileFilter into{.lightSpace = ut.lightSpace,
+                                                       .halfExtent = ut.halfExtent, .intoTile = true};
+        // The distance cull only roughly: which units the tile takes is the
+        // filter's to say, and three half-widths is past any that can reach in.
+        plan.characters->renderShadow(cmd, ut.lightSpace, ut.center, ut.halfExtent * 3.0f, &into);
+        mark(markIndex++, "shadow units' tile");
     }
 
     if (plan.dynamicRendering) {
@@ -6851,7 +6950,7 @@ void Renderer::recordShadowPass(const ShadowPlan& plan, bool onWorker) {
     cmdPipelineBarrier2(cmd, b2Dep);
     // The end of the pass, outside it: what the cascades add up to even on a
     // driver that will not split a render pass between its marks.
-    mark(kMaxShadowCascades, "shadows (pass end)");
+    mark(kMaxShadowCascades + 1, "shadows (pass end)");
 }
 
 VkImageView Renderer::getNeutralRtLightingView() const {
@@ -7630,11 +7729,15 @@ void Renderer::applyPendingShadowMapSize() {
     pendingShadowMapSize_ = 0;
     pendingShadowCascades_ = 0;
     // Nothing to remake when the atlas is already this.
-    if (wanted == SHADOW_MAP_SIZE && wantedCascades == shadowCascadeCount_) return;
+    if (wanted == SHADOW_MAP_SIZE && wantedCascades == shadowCascadeCount_ &&
+        shadowUnitSideFor(wantedCascades, wanted) == shadowUnitSide_) {
+        return;
+    }
     // Nor before the per-frame resources exist: they are built from these.
     if (shadowRenderPass == VK_NULL_HANDLE) {
         SHADOW_MAP_SIZE = wanted;
         shadowCascadeCount_ = wantedCascades;
+        shadowUnitSide_ = shadowUnitSideFor(wantedCascades, wanted);
         return;
     }
 
@@ -7656,6 +7759,7 @@ void Renderer::applyPendingShadowMapSize() {
     for (;;) {
         SHADOW_MAP_SIZE = side;
         shadowCascadeCount_ = cascades;
+        shadowUnitSide_ = shadowUnitSideFor(cascades, side);
         if (createShadowMapImages()) { built = true; break; }
         destroyShadowMapImages();
         if (side > previous) side = std::min(previous, maxShadowMapSize(cascades));

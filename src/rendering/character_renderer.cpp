@@ -24,6 +24,7 @@
 #include "pipeline/bc_encode.hpp"
 #include <cstdio>
 #include "rendering/shadow_params.hpp"
+#include "rendering/shadow_unit_tile.hpp"
 #include "rendering/normal_map.hpp"
 #include "rendering/m2_track_sampler.hpp"
 #include "rendering/m2_texture_combiner.hpp"
@@ -5213,7 +5214,8 @@ void CharacterRenderer::beginShadowFrame(uint32_t frameIndex) {
 }
 
 void CharacterRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceMatrix,
-                                     const glm::vec3& shadowCenter, float shadowRadius) {
+                                     const glm::vec3& shadowCenter, float shadowRadius,
+                                     const ShadowTileFilter* tileFilter) {
     if (!shadowPipeline_ || !shadowParams_.set) return;
     if (instances.empty() || models.empty()) return;
     if (boneDescPool_ == VK_NULL_HANDLE || boneSetLayout_ == VK_NULL_HANDLE) return;
@@ -5246,6 +5248,21 @@ void CharacterRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& light
         glm::mat4 modelMat = inst.hasOverrideModelMatrix
             ? inst.overrideModelMatrix
             : getModelMatrix(inst);
+
+        // The units' tile: in it a unit that reaches into it, in a cascade one
+        // the tile does not hold whole. Measured from where the model is drawn,
+        // out to the farthest corner of its box, half as far again for a pose
+        // past it (a swing, a mount's stride) and half a yard over.
+        if (tileFilter) {
+            const float reach = shadow_unit_tile::reach(gpuModel.data.boundMin, gpuModel.data.boundMax,
+                                                        glm::length(glm::vec3(modelMat[0]))) * 1.5f + 0.5f;
+            const shadow_unit_tile::Cover c = shadow_unit_tile::cover(
+                tileFilter->lightSpace, glm::vec3(modelMat[3]), reach, tileFilter->halfExtent);
+            if (tileFilter->intoTile ? c == shadow_unit_tile::Cover::Outside
+                                     : c == shadow_unit_tile::Cover::Whole) {
+                continue;
+            }
+        }
 
         // This frame's pose into the bone ring, as the main pass has it (or
         // will: whichever draws first writes it). The ring is allocated by

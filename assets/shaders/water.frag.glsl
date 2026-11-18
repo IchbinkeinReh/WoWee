@@ -23,9 +23,22 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 volumetricParams;  // x = on, y = near, z = 1 / ln(far / near), w = slices
     vec4 rtParams;          // z, w: the Debug Graphics split (rt_lighting.glsli's rtSplitOff)
     vec4 cameraFogColor;    // the camera's fog, its interior's blended in
+    // Unread here; declared so the cascades below land where the renderer writes them.
+    vec4 averagedDirectColor;
+    vec4 averagedAmbientColor;
+    vec4 windowLight;
+    vec4 specularColor;
+    // The shadow cascades (shadow_csm.glsli): the traced sun reads the units'
+    // tile of them (rtwUnitsLit).
+    mat4 cascadeMatrix[4];
+    vec4 cascadeRect[4];
+    vec4 cascadeTexel[4];
+    vec4 cascadeInfo;
 };
 
+layout(set = 0, binding = 1) uniform sampler2DShadow uShadowMap;
 layout(set = 0, binding = 2) uniform sampler3D uFogVolume;
+#include "shadow_csm.glsli"
 
 layout(push_constant) uniform Push {
     // The light's ramp for this liquid (Wow.exe 3.3.5a 0x008a2bf0): rgb and
@@ -858,7 +871,7 @@ void main() {
         // and Thunder Bluff's pond lost its glint to them in hard-edged shards.
         vec3 sunRay = normalize(rtSunRay.xyz);
         if (!below && sunRay.z > 0.0) {
-            sunOnWater = rtOccluded(FragPos + vec3(0.0, 0.0, 0.1), sunRay, 400.0, rng) ? 0.0 : 1.0;
+            sunOnWater = rtwSunThroughAir(FragPos, sunRay, false, rng);
         }
         // The shore's masks and the refraction's start by the bed straight
         // under this point (rtwDepthBelow), out to where they reach: the
