@@ -506,5 +506,72 @@ BodyOnWaves bodyOnWaves(glm::vec2 centre, glm::vec2 forward, float halfLength, f
     return b;
 }
 
+/// The short waves' variety (water_waves.glsli's pwVarietyAt, pwShortness,
+/// pwDirection): waves shorter than the vertex grid carries come and go in
+/// drifting patches, their crests bend, and they spread over more headings.
+/// Only waves under kVertexMinWavelength are touched, so what this file rides
+/// is the same with it or without. For the tests: the shader alone draws it.
+namespace variety {
+inline constexpr float kCalm = 0.85f;
+inline constexpr float kStorm = 0.35f;
+inline constexpr float kPatchScale = 1.0f / 26.0f;
+inline constexpr float kPatchDrift = 0.8f;
+inline constexpr float kBendScale = 1.0f / 11.0f;
+inline constexpr float kBend = 2.2f;
+inline constexpr float kShortSpread = 1.6f;
+inline float fromDetail(float detailShare) {
+    const float calm = std::clamp((1.0f - detailShare) / 0.75f, 0.0f, 1.0f);
+    return kStorm + (kCalm - kStorm) * calm;
+}
+inline float shortness(float k) {
+    const float wavelength = 6.2831853f / std::max(k, 1e-4f);
+    const float x = std::clamp((wavelength - 0.75f * kVertexMinWavelength) / (0.25f * kVertexMinWavelength), 0.0f, 1.0f);
+    return 1.0f - x * x * (3.0f - 2.0f * x);
+}
+inline float hash(glm::vec2 p) {
+    p = glm::fract(p * glm::vec2(0.1031f, 0.1030f));
+    p += glm::dot(p, glm::vec2(p.y, p.x) + 33.33f);
+    return glm::fract((p.x + p.y) * p.x);
+}
+inline float noise(const glm::vec2& p) {
+    const glm::vec2 i = glm::floor(p);
+    glm::vec2 f = p - i;
+    f = f * f * (3.0f - 2.0f * f);
+    const float a = hash(i), b = hash(i + glm::vec2(1, 0)), c = hash(i + glm::vec2(0, 1)), d = hash(i + glm::vec2(1, 1));
+    return glm::mix(glm::mix(a, b, f.x), glm::mix(c, d, f.x), f.y);
+}
+/// Group j's (0-2) bend (phase, radians) and patch height at `pos`.
+inline glm::vec2 field(int j, const glm::vec2& pos, float time, float windDir, float v) {
+    const glm::vec2 wind(std::cos(windDir), std::sin(windDir));
+    const glm::vec2 o(static_cast<float>(j) * 37.17f, static_cast<float>(j) * 59.83f);
+    const float bend = (noise(pos * kBendScale + o) - 0.5f) * 2.0f * kBend;
+    float t = std::clamp((noise((pos - wind * (time * kPatchDrift)) * kPatchScale + o * 1.7f) - 0.2f) / 0.6f, 0.0f, 1.0f);
+    t = t * t * (3.0f - 2.0f * t);
+    return {bend, 1.0f - v + 2.0f * v * t};
+}
+/// The slope (d height / d x, d / d y) of the sampled waves at `pos`, the
+/// short ones with the variety `v` (0: none), as water.frag's normal has it.
+inline glm::vec2 slope(const wave_spectrum::Spectrum& sp, const glm::vec2& pos, float time, float windDir, float v) {
+    glm::vec2 g(0.0f);
+    for (std::size_t i = 0; i < sp.count; ++i) {
+        const auto& w = sp.waves[i];
+        const float sh = shortness(w.k);
+        float spread = (std::fmod(static_cast<float>(i % wave_spectrum::kWaveCount) * 0.6180340f, 1.0f) - 0.5f) *
+                       wave_spectrum::kPi * 0.8f;
+        float A = w.amplitude, bend = 0.0f;
+        if (v > 0.0f) {
+            spread *= 1.0f + (kShortSpread - 1.0f) * sh;
+            const glm::vec2 f = field(static_cast<int>(i % 3), pos, time, windDir, v);
+            A *= 1.0f + (f.y - 1.0f) * sh;
+            bend = f.x * sh;
+        }
+        const glm::vec2 dir(std::cos(windDir + spread), std::sin(windDir + spread));
+        const float phase = w.k * glm::dot(dir, pos) - w.omega * time + w.phase + bend;
+        g += dir * (w.k * A * std::cos(phase));
+    }
+    return g;
+}
+}  // namespace variety
+
 }  // namespace wave_surface
 }  // namespace wowee::rendering

@@ -18,11 +18,27 @@ const float WT_FAR = 90.0;
 const float WT_GRID_WAVELENGTH = 9.0;
 const float WT_MIN_WAVELENGTH = 0.5;
 
+// No piece is cut shorter than WT_MIN_PIXELS of the screen: past a dozen
+// yards 0.3-yard pieces were a few pixels across, and every pixel of water
+// was shaded for two or three of them - the GPU shades a triangle's pixels in
+// 2 x 2 blocks, and a triangle a few pixels wide fills few of the blocks it
+// touches. With the traced water's rays at every one of them, the finely cut
+// water cost twice the grid's (5.7 ms more at Stonebull Lake). The waves
+// shorter than a piece stay in the normal, as everywhere past the cut.
+// wtYardsPerPixel: a pixel's width in yards one yard from the camera, which
+// each stage sets from the projection and the target's height (0: none).
+const float WT_MIN_PIXELS = 20.0;
+float wtYardsPerPixel = 0.0;
+float wtYardsPerPixelFor(mat4 projection, float screenHeight) {
+    return 2.0 / max(abs(projection[1][1]) * screenHeight, 1.0);
+}
+
 // How many pieces an edge `edgeLength` yards long is cut into, `dist` yards
 // from the camera. Taken from the edge alone, so the two triangles sharing
 // it cut it alike and no crack opens between them.
 float waterTessLevel(float edgeLength, float dist) {
-    float full = clamp(edgeLength / WT_TARGET_EDGE, 1.0, WT_MAX_LEVEL);
+    float target = max(WT_TARGET_EDGE, dist * wtYardsPerPixel * WT_MIN_PIXELS);
+    float full = clamp(edgeLength / target, 1.0, WT_MAX_LEVEL);
     return 1.0 + (full - 1.0) * (1.0 - smoothstep(WT_NEAR, WT_FAR, dist));
 }
 

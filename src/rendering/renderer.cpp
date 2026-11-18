@@ -65,6 +65,7 @@
 #include "rendering/eye_adaptation_pass.hpp"
 #include "rendering/screen_effects.hpp"
 #include "rendering/rt_lighting.hpp"
+#include "rendering/rt_water.hpp"
 #include "rendering/rt_point_lights.hpp"
 #include "rendering/rt_scene.hpp"
 #include <cstdio>
@@ -787,6 +788,9 @@ void Renderer::updatePerFrameUBO() {
                 wf.skyTop = sky.skyTopColor;
                 wf.skyHorizon = sky.skySmogColor;
                 wf.sunDir = shadow_sun::towardSun(-sky.directionalDir, sky.sunDir, kShadowSunMinHeight);
+                const auto glint = rt_water::glintBody(sky.sunDir, sky.moonDir);
+                wf.glintDir = glint.dir;
+                wf.glintStrength = glint.strength;
             }
             // Rain's rings on the water, under the swimmer's waves' setting:
             // while it rains and the weather is drawn (rain_ripple.hpp).

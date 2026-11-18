@@ -32,6 +32,11 @@ struct GerstnerResult {
     float shorePhase;
     float shoreWeight;
     float seaHeight;
+    // The mean square slope (both ways) of the waves left out of the normal
+    // (pwSlopeKeep): too short for the pixel, or for the calm. They are still
+    // there, under the pixel, and roughen what it mirrors - water.frag widens
+    // the glint by it rather than drawing a mirror too smooth for its waves.
+    float hiddenSlope2;
 };
 
 // Nothing moved: the flat surface.
@@ -45,6 +50,7 @@ GerstnerResult flatWaves() {
     r.shorePhase = 0.0;
     r.shoreWeight = 0.0;
     r.seaHeight = 0.0;
+    r.hiddenSlope2 = 0.0;
     return r;
 }
 
@@ -115,6 +121,26 @@ void pwSampleSet(inout PWSpectrum sp, int base, float ampScale, float fetch, flo
 
 PWSpectrum pwSample(float ampScale, float fetch, float windMps) {
     PWSpectrum sp;
+#ifdef WATER_FRAME_GLSLI
+    // The frame's own sampling of the same spectrum, where it was made for
+    // these very arguments (water_frame.glsli's pwSpecKey).
+    for (int s = 0; s < 2; ++s) {
+        vec4 a = pwSpecKey[2 * s];
+        vec4 b = pwSpecKey[2 * s + 1];
+        if (b.w > 0.5 && a.x == fetch && a.y == windMps && a.z == ampScale && a.w == pwWindBlend.x &&
+            b.x == pwWindBlend.y) {
+            sp.count = int(b.y);
+            sp.q = b.z;
+            for (int i = 0; i < PW_MAX; ++i) {
+                vec4 w = pwSpecWaves[s * PW_MAX + i];
+                sp.ks[i] = w.x;
+                sp.ws[i] = w.y;
+                sp.amps[i] = w.z;
+            }
+            return sp;
+        }
+    }
+#endif
     float kaSum = 0.0;
     float f = clamp(pwWindBlend.x, 0.0, 1.0);
     if (f > 0.0 && pwWindBlend.y > 0.0) {
@@ -129,11 +155,84 @@ PWSpectrum pwSample(float ampScale, float fetch, float windMps) {
     return sp;
 }
 
+// --- The short waves' variety ---
+// Twelve waves, each a set of straight crests at one length and heading,
+// sum to a pattern that repeats: on a calm lake the short ones (the only ones
+// a light wind raises) laid one fine regular weave over all of it, the same
+// a few yards on as here. A light wind does not blow alike everywhere, and
+// short waves are not so ordered: they come and go in patches (cat's paws)
+// that drift downwind, their crests bend, and they run about more headings
+// than the long ones. Waves shorter than the liquid grid carries
+// (PW_VERTEX_MIN_WAVELENGTH, all of them on a lake in a light wind) are
+// given that here, alike in every stage; the longer ones, which the vertex
+// grid moves and the CPU rides (wave_surface.hpp), are left as they are.
+// wave_surface.hpp's shortWaveVariety is the C++ twin.
+//
+// How strongly: pwVariety, from PW_VARIETY_STORM in a storm to
+// PW_VARIETY_CALM in calm weather (each stage sets it from push.shore.w, the
+// weather's calm: pwVarietyFromDetail).
+const float PW_VARIETY_CALM = 0.85;
+const float PW_VARIETY_STORM = 0.35;
+// The patches' size and drift (yards, yards a second), and the crests'
+// bending: how far, in radians of phase, over what distance.
+const float PW_PATCH_SCALE = 1.0 / 26.0;
+const float PW_PATCH_DRIFT = 0.8;
+const float PW_BEND_SCALE = 1.0 / 11.0;
+const float PW_BEND = 2.2;
+// How much wider the short waves' headings spread than the long ones'.
+const float PW_SHORT_SPREAD = 1.6;
+float pwVariety = 0.0;
+float pwVarietyFromDetail(float detailShare) {
+    // detailShare is 1 - 0.75 calm (wave_spectrum::weatherWaves).
+    float calm = clamp((1.0 - detailShare) / 0.75, 0.0, 1.0);
+    return mix(PW_VARIETY_STORM, PW_VARIETY_CALM, calm);
+}
+
+// How short a wave of wavenumber k is: 1 well under the grid's shortest, 0
+// at and over it.
+float pwShortness(float k) {
+    float wavelength = 6.2831853 / max(k, 1e-4);
+    return 1.0 - smoothstep(0.75 * PW_VERTEX_MIN_WAVELENGTH, PW_VERTEX_MIN_WAVELENGTH, wavelength);
+}
+
+float pwHash(vec2 p) {
+    p = fract(p * vec2(0.1031, 0.1030));
+    p += dot(p, p.yx + 33.33);
+    return fract((p.x + p.y) * p.x);
+}
+float pwNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(pwHash(i), pwHash(i + vec2(1.0, 0.0)), f.x),
+               mix(pwHash(i + vec2(0.0, 1.0)), pwHash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+
+// The three fields at `pos`, one per group of waves (wave i takes group
+// i % 3): x the crests' bend (phase, radians), y the patches' height
+// (1 - v to 1 + v, about 1 on average).
+struct PWVarietyField {
+    vec2 g[3];
+};
+PWVarietyField pwVarietyAt(vec2 pos, float time, float windDir) {
+    PWVarietyField f;
+    vec2 wind = vec2(cos(windDir), sin(windDir));
+    for (int j = 0; j < 3; ++j) {
+        vec2 o = vec2(float(j) * 37.17, float(j) * 59.83);
+        float bend = (pwNoise(pos * PW_BEND_SCALE + o) - 0.5) * 2.0 * PW_BEND;
+        float patchy = smoothstep(0.2, 0.8, pwNoise((pos - wind * (time * PW_PATCH_DRIFT)) * PW_PATCH_SCALE + o * 1.7));
+        f.g[j] = vec2(bend, 1.0 - pwVariety + 2.0 * pwVariety * patchy);
+    }
+    return f;
+}
+
 // Wave i's direction: spread about the wind at fixed angles a golden-ratio
-// step apart, the longest waves nearest the wind.
-vec2 pwDirection(int i, float windDir) {
+// step apart, the longest waves nearest the wind; the short ones (pwShortness)
+// spread wider (PW_SHORT_SPREAD) when the variety is on.
+vec2 pwDirection(int i, float windDir, float shortness) {
     // The upper rung's wave i + 12 runs as the lower's i.
     float spread = (fract(float(i % PW_COUNT) * 0.6180340) - 0.5) * 3.14159265 * 0.8;
+    if (pwVariety > 0.0) spread *= 1.0 + (PW_SHORT_SPREAD - 1.0) * shortness;
     float angle = windDir + spread;
     return vec2(cos(angle), sin(angle));
 }
@@ -164,16 +263,28 @@ float pwSlopeKeep(float k) {
 GerstnerResult pwWaves(PWSpectrum sp, vec2 pos, float time, float windDir, float minWavelength,
                        float fullWavelength) {
     GerstnerResult r = flatWaves();
-    float Q = sp.q;
+    PWVarietyField vf;
+    if (pwVariety > 0.0) vf = pwVarietyAt(pos, time, windDir);
 
     float totalWave = 0.0;
     for (int i = 0; i < sp.count; i++) {
-        vec2 dir = pwDirection(i, windDir);
         float k = sp.ks[i];
+        float shortness = pwShortness(k);
+        vec2 dir = pwDirection(i, windDir, shortness);
         float A = sp.amps[i];
+        float Q = sp.q;
+        float bend = 0.0;
+        if (pwVariety > 0.0 && shortness > 0.0) {
+            vec2 v = vf.g[i % 3];
+            A *= mix(1.0, v.y, shortness);
+            // Never steeper than the spectrum's own: the patches raise a
+            // wave by up to 1 + pwVariety.
+            Q /= 1.0 + pwVariety * shortness;
+            bend = v.x * shortness;
+        }
         // Too short for the vertex grid: in the normal only.
         float keep = pwKeep(6.2831853 / k, minWavelength, fullWavelength);
-        float phase = k * dot(dir, pos) - sp.ws[i] * time + pwPhaseOffset(i);
+        float phase = k * dot(dir, pos) - sp.ws[i] * time + pwPhaseOffset(i) + bend;
         float s = sin(phase);
         float c = cos(phase);
 
@@ -181,7 +292,9 @@ GerstnerResult pwWaves(PWSpectrum sp, vec2 pos, float time, float windDir, float
         r.displacement.y += keep * Q * A * dir.y * c;
         r.displacement.z += keep * A * s;
 
-        float WA = k * A * pwSlopeKeep(k);
+        float slopeKeep = pwSlopeKeep(k);
+        float WA = k * A * slopeKeep;
+        r.hiddenSlope2 += 0.5 * k * A * k * A * (1.0 - slopeKeep * slopeKeep);
         r.tangent.x -= Q * dir.x * dir.x * WA * s;
         r.tangent.y -= Q * dir.x * dir.y * WA * s;
         r.tangent.z += dir.x * WA * c;
@@ -401,7 +514,9 @@ void swAddWave(inout GerstnerResult r, vec2 dir, float k, float A, float Q, floa
     r.displacement.y += keep * A * dir.y * horizontal;
     r.displacement.z += keep * A * s;
 
-    float WA = k * A * pwSlopeKeep(k);
+    float slopeKeep = pwSlopeKeep(k);
+    float WA = k * A * slopeKeep;
+    r.hiddenSlope2 += 0.5 * k * A * k * A * (1.0 - slopeKeep * slopeKeep);
     float slope = lean * c - Q * s;
     r.tangent.x += dir.x * dir.x * WA * slope;
     r.tangent.y += dir.x * dir.y * WA * slope;
@@ -434,6 +549,8 @@ GerstnerResult evaluatePhysicalWavesShore(vec2 pos, float time, float ampScale, 
         return deep;
     }
     GerstnerResult r = flatWaves();
+    PWVarietyField vf;
+    if (pwVariety > 0.0) vf = pwVarietyAt(pos, time, windDir);
     float sloped = min(length(bed.yz), 1.0);
     vec2 toShore = sloped > 1e-4 ? normalize(bed.yz) : vec2(0.0);
     float bedSlope = max(bed.w, 0.0);
@@ -444,18 +561,25 @@ GerstnerResult evaluatePhysicalWavesShore(vec2 pos, float time, float ampScale, 
     float amps[PW_MAX];
     float shares[PW_MAX];
     float kShore[PW_MAX];
+    // Each wave's heading and shortness, taken once for both passes below.
+    vec2 dirs[PW_MAX];
+    float shorts[PW_MAX];
     float sumA2 = 0.0;
     float shoaledA2 = 0.0;
     for (int i = 0; i < sp.count; i++) {
         float w = sp.ws[i];
         float k = swWavenumber(w, h);
-        float shoaled = sp.amps[i] * swShoaling(w, k, h);
+        shorts[i] = pwShortness(sp.ks[i]);
+        dirs[i] = pwDirection(i, windDir, shorts[i]);
+        // The short waves' patches (pwVarietyAt), as on deep water.
+        float patchA = pwVariety > 0.0 ? mix(1.0, vf.g[i % 3].y, shorts[i]) : 1.0;
+        float shoaled = sp.amps[i] * patchA * swShoaling(w, k, h);
         shoaledA2 += shoaled * shoaled;
         amps[i] = shoaled * fade;
         kShore[i] = swShoreWavenumber(w, h, bedSlope);
         // Only a wave running in toward the shore turns to it; one running
         // out to sea dies away in the shallows with its deep part.
-        float toward = smoothstep(-0.2, 0.4, dot(pwDirection(i, windDir), toShore));
+        float toward = smoothstep(-0.2, 0.4, dot(dirs[i], toShore));
         float longEnough = smoothstep(SW_MIN_SHORE_WAVELENGTH, 2.0 * SW_MIN_SHORE_WAVELENGTH,
                                       6.2831853 / max(kShore[i], 1e-4));
         shares[i] = swRefraction(k * max(h, 0.0)) * sloped * toward * longEnough;
@@ -482,14 +606,18 @@ GerstnerResult evaluatePhysicalWavesShore(vec2 pos, float time, float ampScale, 
     float totalA = 0.0;
     float strongest = 0.0;
     for (int i = 0; i < sp.count; i++) {
-        vec2 dir = pwDirection(i, windDir);
-        float w = sp.ws[i];
         float k = sp.ks[i];
+        float shortness = shorts[i];
+        vec2 dir = dirs[i];
+        float w = sp.ws[i];
         float A = amps[i];
         float offset = pwPhaseOffset(i);
+        // The short waves' crests bent on deep water (pwVarietyAt); the
+        // shore part's crests are the depth's contours and stay so.
+        float bend = pwVariety > 0.0 ? vf.g[i % 3].x * shortness : 0.0;
         // The deep part, at its deep phase.
         float deepA = A * (1.0 - shares[i]);
-        swAddWave(r, dir, k, deepA, Q, lean, k * dot(dir, pos) - w * time + offset,
+        swAddWave(r, dir, k, deepA, Q, lean, k * dot(dir, pos) - w * time + offset + bend,
                   pwKeep(6.2831853 / k, minWavelength, fullWavelength));
         // The shore part, at the phase the depth gives it.
         float shoreAmp = A * shares[i];

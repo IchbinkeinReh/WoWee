@@ -41,10 +41,16 @@ inline float smoothstep(float e0, float e1, float x) {
     return t * t * (3.0f - 2.0f * t);
 }
 
+/// No piece shorter than kMinPixels of the screen (WT_MIN_PIXELS): a
+/// triangle a few pixels wide has its pixels shaded two or three times over.
+inline constexpr float kMinPixels = 20.0f;
+
 /// How many pieces an edge `edgeLength` yards long is cut into when its
-/// midpoint is `dist` yards from the camera (water.tesc's edgeLevel).
-inline float level(float edgeLength, float dist) {
-    const float full = std::clamp(edgeLength / kTargetEdge, 1.0f, kMaxLevel);
+/// midpoint is `dist` yards from the camera (water.tesc's edgeLevel), a pixel
+/// being `yardsPerPixel` yards wide a yard from the camera (0: no pixel floor).
+inline float level(float edgeLength, float dist, float yardsPerPixel = 0.0f) {
+    const float target = std::max(kTargetEdge, dist * yardsPerPixel * kMinPixels);
+    const float full = std::clamp(edgeLength / target, 1.0f, kMaxLevel);
     return 1.0f + (full - 1.0f) * (1.0f - smoothstep(kNear, kFar, dist));
 }
 
@@ -67,8 +73,7 @@ inline float impulseRingSlope(float r, float t, float sigma, float strength) {
     r = std::max(r, 0.05f);
     const float ks = wave_spectrum::impulseWavenumber(r, t) * sigma;
     const float spread = std::sqrt(sigma / (sigma + r));
-    const float fade = 1.0f - smoothstep(1.2f, 2.2f, t);
-    return strength * 0.6f * std::exp(-ks * ks) * ks * std::sin(wave_spectrum::impulsePhase(r, t)) * spread * fade;
+    return strength * 0.6f * std::exp(-ks * ks) * ks * std::sin(wave_spectrum::impulsePhase(r, t)) * spread;
 }
 
 /// Their height (impulseRingHeight): the slope integrated in from the still
@@ -91,8 +96,26 @@ inline float impulseRingHeight(float r, float t, float sigma, float strength) {
         sa = sb;
     }
     const float integral = sum - fa * std::cos(top);
-    const float fade = 1.0f - smoothstep(1.2f, 2.2f, t);
-    return -0.6f * strength * sigma * fade * integral;
+    return -0.6f * strength * sigma * integral;
+}
+
+/// The rings above are unfaded; their strength is faded by their age.
+/// A swimmer's stroke's over its 1.6 s (water_interaction.glsli's
+/// swimRingFade).
+inline float swimRingFade(float t) { return 1.0f - smoothstep(1.2f, 2.2f, t); }
+
+/// A trail point's (the wake with the physics waves; wakeRingFade and
+/// WAKE_RING_* there): kWakeRingStrength of the point's strength, dying away
+/// by e every kWakeRingDecay seconds and gone by kWakeRingLife, which the
+/// renderer keeps the point for (WaterRenderer::updateWake). At half the
+/// strength and gone in 2.2 s, a run of a few yards through the shallows
+/// heaved the water by three quarters of a yard and was still a second after
+/// the runner stopped.
+inline constexpr float kWakeRingStrength = 0.15f;
+inline constexpr float kWakeRingDecay = 2.0f;
+inline constexpr float kWakeRingLife = 5.0f;
+inline float wakeRingFade(float t) {
+    return std::exp(-t / kWakeRingDecay) * (1.0f - smoothstep(0.6f * kWakeRingLife, kWakeRingLife, t));
 }
 
 /// The classic rings' crest (physics waves off): slope amp exp(-a^2) sin(b a)

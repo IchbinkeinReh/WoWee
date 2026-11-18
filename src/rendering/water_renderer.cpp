@@ -3,6 +3,7 @@
 #include "rendering/water_surface_grid.hpp"
 #include "rendering/water_mask.hpp"
 #include "rendering/water_renderer.hpp"
+#include "rendering/water_tessellation.hpp"
 #include "rendering/wave_spectrum.hpp"
 #include "rendering/shallow_water.hpp"
 #include "rendering/collision_liquid.hpp"
@@ -1339,6 +1340,8 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
     frameUBO_.rtSkyTop = glm::vec4(rtFrame_.skyTop, 1.0f);
     frameUBO_.rtSkyHorizon = glm::vec4(rtFrame_.skyHorizon, 1.0f);
     frameUBO_.rtSunRay = glm::vec4(rtFrame_.sunDir, 0.0f);
+    frameUBO_.rtGlint = glm::vec4(rtFrame_.glintDir, rtFrame_.glintStrength);
+    fillWaveSpectra();
     // The wake as it stands, into this frame's slot - safe now, the frame has
     // waited for the GPU to finish with it.
     uploadFrameUBO();
@@ -1816,6 +1819,31 @@ std::optional<float> WaterRenderer::getWaterHeightAt(float glX, float glY) const
     return best;
 }
 
+void WaterRenderer::fillWaveSpectra() {
+    const wave_surface::WaveSettings settings = waveSettings();
+    // A lake's (liquid type 1, water) and the open sea's (2, ocean).
+    const uint16_t liquidTypes[2] = {1, 2};
+    for (int slot = 0; slot < 2; ++slot) {
+        frameUBO_.pwSpecKey[2 * slot] = glm::vec4(0.0f);
+        frameUBO_.pwSpecKey[2 * slot + 1] = glm::vec4(0.0f);
+        const auto p = wave_surface::paramsFor(liquidTypes[slot], false, settings);
+        if (!p || p->wind <= 0.0f) continue;
+        const auto sp =
+            wave_spectrum::sampleBlend(p->wind, p->freq, p->speed, p->amp, p->windUpperShare, p->windUpper, p->windRung);
+        const std::size_t base = static_cast<std::size_t>(slot) * 2 * wave_spectrum::kWaveCount;
+        for (std::size_t i = 0; i < 2 * wave_spectrum::kWaveCount; ++i) {
+            const auto& w = sp.waves[i];
+            frameUBO_.pwSpecWaves[base + i] =
+                i < sp.count ? glm::vec4(w.k, w.omega, w.amplitude, 0.0f) : glm::vec4(0.0f);
+        }
+        // The key is what the shader is pushed (push.waveFreq, pad2, waveAmp,
+        // windBlend.x and .y): the spectrum is used only where they match.
+        frameUBO_.pwSpecKey[2 * slot] = glm::vec4(p->freq, p->wind, p->amp, p->windUpperShare);
+        frameUBO_.pwSpecKey[2 * slot + 1] = glm::vec4(p->windUpper, static_cast<float>(sp.count),
+                                                      sp.count > 0 ? sp.waves[0].steepness : 0.0f, 1.0f);
+    }
+}
+
 wave_surface::WaveSettings WaterRenderer::waveSettings() const {
     wave_surface::WaveSettings s;
     s.waveAmp = rtFrame_.waveAmp;
@@ -2183,6 +2211,13 @@ void WaterRenderer::emitWake(WakeEmitter& emitter, const glm::vec2& pos, const g
         // Close enough together that the patches overlap into a continuous
         // trail. Spaced out, each one reads as its own blob.
         float spacing = wading ? 0.40f : 0.60f;
+        // With the physics waves each point is an impulse whose rings live
+        // for seconds (water_tessellation::kWakeRingLife): laid as closely,
+        // a run kept five times the points, each summed at every pixel and
+        // every tessellated vertex near it. Their rings are long enough (a
+        // runner's Kelvin wave some 2 pi U^2 / g, yards) for half again the
+        // spacing.
+        if (rtFrame_.physicsWaves) spacing *= 1.5f;
         // Another unit with a share smaller than its natural trail (wading,
         // 1.5 s of points every 0.4 yd; swimming, a pair for 1.9 s every
         // 0.6 yd; at 7 yd/s, as a creature following runs) lays its points
@@ -2281,8 +2316,11 @@ void WaterRenderer::updateWake(float deltaTime, const glm::vec2& pos,
         // two arms back onto each other and the V read as a single line.
         p.drift *= std::max(0.0f, 1.0f - 0.25f * deltaTime);
     }
+    // With the physics waves a point stays while its rings do
+    // (water_tessellation::kWakeRingLife); its froth is gone by its own life.
+    const float ringLife = rtFrame_.physicsWaves ? water_tess::kWakeRingLife : 0.0f;
     wakePoints_.erase(std::remove_if(wakePoints_.begin(), wakePoints_.end(),
-                                     [](const WakePoint& p) { return p.age >= p.life; }),
+                                     [&](const WakePoint& p) { return p.age >= std::max(p.life, ringLife); }),
                       wakePoints_.end());
 
     emitWake(ownWake_, pos, travelDir, intensity, wading, 0, 0);
@@ -2306,16 +2344,18 @@ void WaterRenderer::updateWake(float deltaTime, const glm::vec2& pos,
     for (int i = 0; i < count; ++i) {
         const WakePoint& p = wakePoints_[i];
         const float age01 = std::min(1.0f, p.age / p.life);
+        // (The froth goes by the seconds as well then: water.frag's
+        // WAKE_FROTH_LIFE.)
         // Physics waves: the age in seconds, which the shader's deep-water
         // rings are timed by (water.frag impulseRingTilt).
         const float age = rtFrame_.physicsWaves ? p.age : age01;
         frameUBO_.wakePoints[i] = glm::vec4(p.pos.x, p.pos.y, age, p.strength);
     }
     // Must cover a point's own spread, or froth is clipped mid-patch. The
-    // physics waves' rings carry further: after a trail point's 1.9 s, the
-    // longest waves it raises are some 4 yards out.
+    // physics waves' rings carry further: over a trail point's five seconds
+    // (kWakeRingLife) its strongest rings go some 6 yards out.
     constexpr float kMaxPatchRadius = 1.45f;
-    constexpr float kPhysicsPatchRadius = 5.0f;
+    constexpr float kPhysicsPatchRadius = 8.0f;
     const auto groups = water_share::groupByOwner(
         static_cast<size_t>(count), kMaxWaterGroups, rtFrame_.physicsWaves ? kPhysicsPatchRadius : kMaxPatchRadius,
         [&](size_t i) { return wakePoints_[i].key; }, [&](size_t i) { return wakePoints_[i].pos; });

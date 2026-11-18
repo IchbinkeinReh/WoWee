@@ -36,6 +36,19 @@ layout(set = 2, binding = 3) uniform WaterFrameData {
     vec4 waterLampColour[MAX_WATER_LAMPS];
     vec4 wakeGroups[MAX_WATER_GROUPS];     // xy = centre, z = reach, w = first point
     vec4 swimWaveGroups[MAX_WATER_GROUPS]; // xy = centre, z = reach, w = first ring
+    // The body whose disc the waves mirror as the glint (rt_water::glintBody):
+    // xyz toward the sun by day, the moon by night, w how much of it is up.
+    vec4 rtGlint;
+    // The physics waves' spectrum, sampled once a frame on the CPU
+    // (wave_spectrum::sampleBlend; WaterRenderer::fillWaveSpectra) for the
+    // lakes' fetch (slot 0) and the open sea's (slot 1), which every pixel
+    // and every tessellated vertex sampled again for itself (water_waves.glsli's
+    // pwSample, two dozen pow and exp each). Slot s's key: pwSpecKey[2 s] =
+    // (fetch, lower wind, amplitude scale, upper rung's share), pwSpecKey[2 s + 1]
+    // = (upper wind, wave count, steepness Q, 1 when filled); its waves
+    // pwSpecWaves[24 s + i] = (k, omega, amplitude, 0).
+    vec4 pwSpecKey[4];
+    vec4 pwSpecWaves[48];
 };
 
 #endif

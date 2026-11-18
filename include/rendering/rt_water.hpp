@@ -70,4 +70,59 @@ inline constexpr float kF0 = 0.02f;
     return depthUnder * viewSlope / (viewSlope - bedSlope);
 }
 
+/// The waves' normal from their tangent and binormal (water.frag's meshNorm):
+/// cross(binormal, tangent) faces down - (0, 0, -1) on still water - so it is
+/// turned over. Left facing down and mixed with the detail normal, which
+/// faces up, the shaded normal pointed down wherever the detail had less than
+/// half the say, and the glint, which needs it toward the sky, was gone.
+[[nodiscard]] inline glm::vec3 waveNormalUp(const glm::vec3& tangent, const glm::vec3& binormal) {
+    const glm::vec3 n = glm::normalize(glm::cross(binormal, tangent));
+    return n.z < 0.0f ? -n : n;
+}
+
+/// The normal the water is shaded with (water.frag's norm): the waves' with
+/// `detailShare` of the hand-made detail normal (0.55 by its fade, times the
+/// weather's share on the physics waves).
+[[nodiscard]] inline glm::vec3 shadedNormal(const glm::vec3& wavesUp, const glm::vec3& detail, float detailShare) {
+    return glm::normalize(glm::mix(wavesUp, detail, detailShare));
+}
+
+/// The body whose disc the waves mirror as their glint (water.frag's rtGlint):
+/// the sun while it is up, the moon by night while she is (Wow.exe's sky
+/// bodies, LightingParams::sunDir and moonDir), each faded in over its rise
+/// from just under the horizon. `strength` 0: neither is up.
+struct GlintBody {
+    glm::vec3 dir{0.0f, 0.0f, 1.0f};
+    float strength = 0.0f;
+};
+inline constexpr float kGlintRiseFrom = -0.01f;  ///< sine of the body's height where its glint starts
+inline constexpr float kGlintRiseTo = 0.04f;     ///< and where it is whole
+[[nodiscard]] inline GlintBody glintBody(const glm::vec3& sunDir, const glm::vec3& moonDir) {
+    auto up = [](float z) {
+        const float t = std::clamp((z - kGlintRiseFrom) / (kGlintRiseTo - kGlintRiseFrom), 0.0f, 1.0f);
+        return t * t * (3.0f - 2.0f * t);
+    };
+    GlintBody g;
+    if (glm::dot(sunDir, sunDir) > 1e-12f) {
+        const glm::vec3 sun = glm::normalize(sunDir);
+        g.dir = sun;
+        g.strength = up(sun.z);
+    }
+    if (g.strength <= 0.0f && glm::dot(moonDir, moonDir) > 1e-12f) {
+        const glm::vec3 moon = glm::normalize(moonDir);
+        g.dir = moon;
+        g.strength = up(moon.z);
+    }
+    return g;
+}
+
+/// GGX's distribution (water.frag's DistributionGGX), for the glint's peak.
+[[nodiscard]] inline float ggx(const glm::vec3& n, const glm::vec3& h, float roughness) {
+    const float a = roughness * roughness;
+    const float a2 = a * a;
+    const float nh = std::max(glm::dot(n, h), 0.0f);
+    const float d = nh * nh * (a2 - 1.0f) + 1.0f;
+    return a2 / (3.14159265f * d * d + 1e-7f);
+}
+
 }  // namespace wowee::rendering::rt_water

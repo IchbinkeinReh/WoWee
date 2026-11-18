@@ -250,12 +250,14 @@ TEST_CASE("the physics waves' normal leaves out what the pixel cannot show", "[s
     const std::string waves = wowee::test::slurp("assets/shaders/water_waves.glsli");
     const std::string frag = wowee::test::slurp("assets/shaders/water.frag.glsl");
     CHECK(waves.find("float pwSlopeCutoff = 0.0;") != std::string::npos);
-    // Both the deep waves and the shore waves' slopes.
+    // Both the deep waves and the shore waves' slopes; what is left out
+    // goes to the glint's roughness (hiddenSlope2).
     size_t uses = 0;
-    for (size_t at = waves.find("* pwSlopeKeep(k);"); at != std::string::npos;
-         at = waves.find("* pwSlopeKeep(k);", at + 1))
+    for (size_t at = waves.find("float slopeKeep = pwSlopeKeep(k);"); at != std::string::npos;
+         at = waves.find("float slopeKeep = pwSlopeKeep(k);", at + 1))
         ++uses;
     CHECK(uses == 2);
+    CHECK(waves.find("float WA = k * A * slopeKeep;") != std::string::npos);
     CHECK(frag.find("pwSlopeCutoff = max(3.0 * footprint, push.shore.z);") != std::string::npos);
     CHECK(frag.find("if (push.pad2 > 0.0) detailFade *= push.shore.w;") != std::string::npos);
     for (const char* stage : {"assets/shaders/water.vert.glsl", "assets/shaders/water.tese.glsl"}) {

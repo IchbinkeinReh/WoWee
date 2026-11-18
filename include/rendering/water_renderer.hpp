@@ -161,6 +161,12 @@ struct WaterFrameUBOData {
     glm::vec4 waterLampColour[kMaxWaterLamps]{};        // rgb, a = where it starts to fall off
     glm::vec4 wakeGroups[kMaxWaterGroups]{};            // xy = centre, z = reach, w = first point
     glm::vec4 swimWaveGroups[kMaxWaterGroups]{};        // xy = centre, z = reach, w = first ring
+    // The glint's body (rt_water::glintBody): xyz toward it, w how much is up.
+    glm::vec4 rtGlint{0.0f, 0.0f, 1.0f, 0.0f};
+    // The physics waves' spectrum for the lakes' fetch and the sea's
+    // (water_frame.glsli's pwSpecKey, pwSpecWaves; fillWaveSpectra).
+    glm::vec4 pwSpecKey[4]{};
+    glm::vec4 pwSpecWaves[2 * 2 * wave_spectrum::kWaveCount]{};
 };
 static_assert(sizeof(WaterFrameUBOData) <= 16384, "the water's uniform block must fit 16 KB");
 
@@ -191,6 +197,9 @@ struct RtWaterFrame {
     glm::vec3 skyTop{0.5f, 0.7f, 1.0f};
     glm::vec3 skyHorizon{0.7f, 0.75f, 0.8f};
     glm::vec3 sunDir{0.0f, 0.0f, 1.0f};  ///< toward the sun the traced lighting's shadows follow
+    /// The body the waves mirror as their glint (rt_water::glintBody).
+    glm::vec3 glintDir{0.0f, 0.0f, 1.0f};
+    float glintStrength = 0.0f;
     float rain = 0.0f;          ///< how hard it rains on the water, 0 none (rain_ripple.hpp)
 };
 
@@ -346,6 +355,11 @@ public:
     std::optional<WaveSurfaceSample> waveSurfaceAt(float glX, float glY, float time, bool rideOn) const;
     /// The waves' settings this frame, as the traced water draws them.
     [[nodiscard]] wave_surface::WaveSettings waveSettings() const;
+    /// The physics waves' spectrum for this frame into frameUBO_ (pwSpecKey,
+    /// pwSpecWaves): sampled here once for a lake and for the sea with the
+    /// very push constants the surfaces are drawn with, rather than at every
+    /// pixel and tessellated vertex.
+    void fillWaveSpectra();
     /// Like getWaterHeightAt but only returns water surfaces whose height is
     /// close to the query Z (within maxAbove units above). Avoids false
     /// underwater detection from elevated WMO water far above the camera.

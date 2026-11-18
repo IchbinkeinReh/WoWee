@@ -406,3 +406,69 @@ TEST_CASE("the shader blends the rungs as the CPU does", "[wave_surface][weather
         CHECK(src.find("vec4 windBlend;") != std::string::npos);
     }
 }
+
+TEST_CASE("the short waves' variety breaks the calm lake's repeating weave", "[wave_surface][variety]") {
+    namespace v = wsf::variety;
+    // The user's light wind on a lake, calm weather.
+    const auto sp = ws::sampleBlend(3.0f, ws::kInlandFetch, ws::kWindDirection, 0.6f, 0.0f, 0.0f);
+    // Every wave a light wind raises on a lake is short of the grid's 9 yards.
+    for (std::size_t i = 0; i < sp.count; ++i) CHECK(v::shortness(sp.waves[i].k) == Catch::Approx(1.0f));
+    CHECK(v::shortness(2.0f * ws::kPi / 9.0f) == Catch::Approx(0.0f));
+    CHECK(v::fromDetail(0.25f) == Catch::Approx(v::kCalm));
+    CHECK(v::fromDetail(1.0f) == Catch::Approx(v::kStorm));
+    // The slope along a line across the wind, sampled every 0.1 yard over
+    // 400 yards: how alike the pattern is to itself shifted 15 to 150 yards
+    // (the best match), with and without the variety.
+    auto worstRepeat = [&](float var) {
+        std::vector<float> s;
+        for (int i = 0; i < 4000; ++i) {
+            const glm::vec2 at(0.1f * static_cast<float>(i) * -std::sin(ws::kWindDirection),
+                               0.1f * static_cast<float>(i) * std::cos(ws::kWindDirection));
+            s.push_back(v::slope(sp, at, 12.0f, ws::kWindDirection, var).x);
+        }
+        double best = 0.0;
+        for (int lag = 150; lag <= 1500; lag += 3) {
+            double ab = 0, aa = 0, bb = 0;
+            for (int i = 0; i + lag < static_cast<int>(s.size()); ++i) {
+                ab += s[i] * s[i + lag];
+                aa += s[i] * s[i];
+                bb += s[i + lag] * s[i + lag];
+            }
+            best = std::max(best, ab / std::sqrt(aa * bb));
+        }
+        return best;
+    };
+    const double without = worstRepeat(0.0f);
+    const double with = worstRepeat(v::kCalm);
+    INFO("best self-match without " << without << " with " << with);
+    CHECK(with < without * 0.7);
+    CHECK(with < 0.45);
+    // The patches: on average the waves' own height, from 1 - v to 1 + v.
+    double sum = 0.0;
+    float lo = 10.0f, hi = 0.0f;
+    for (int i = 0; i < 200; ++i) {
+        for (int j = 0; j < 200; ++j) {
+            const float h = v::field(1, glm::vec2(i * 1.3f, j * 1.7f), 0.0f, 0.6f, v::kCalm).y;
+            sum += h;
+            lo = std::min(lo, h);
+            hi = std::max(hi, h);
+        }
+    }
+    CHECK(sum / 40000.0 == Catch::Approx(1.0).margin(0.12));
+    CHECK(lo >= 1.0f - v::kCalm - 1e-4f);
+    CHECK(hi <= 1.0f + v::kCalm + 1e-4f);
+    CHECK(hi - lo > v::kCalm);
+}
+
+TEST_CASE("the shader gives the short waves their variety in every stage", "[wave_surface][variety]") {
+    const std::string waves = slurpShader("water_waves.glsli");
+    CHECK(waves.find("PWVarietyField pwVarietyAt(vec2 pos, float time, float windDir)") != std::string::npos);
+    CHECK(waves.find("const float PW_VARIETY_CALM = 0.85;") != std::string::npos);
+    CHECK(waves.find("const float PW_VARIETY_STORM = 0.35;") != std::string::npos);
+    for (const char* stage : {"water.vert.glsl", "water.tese.glsl",
+                              "water.frag.glsl"}) {
+        INFO(stage);
+        CHECK(slurpShader(stage).find("pwVariety = push.pad2 > 0.0 ? pwVarietyFromDetail(push.shore.w) : 0.0;") !=
+              std::string::npos);
+    }
+}

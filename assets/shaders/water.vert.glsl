@@ -65,6 +65,8 @@ layout(location = 6) out vec4 BedInfo;
 void main() {
     float time = fogParams.z;
     pwWindBlend = push.windBlend.xyz;
+    // The short waves' variety for the weather (water_waves.glsli).
+    pwVariety = push.pad2 > 0.0 ? pwVarietyFromDetail(push.shore.w) : 0.0;
     vec4 worldPos = vec4(aPos, 1.0);
 
     // Evaluate Gerstner waves using X,Y horizontal plane. With physics waves

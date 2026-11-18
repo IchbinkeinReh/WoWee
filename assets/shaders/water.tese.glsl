@@ -86,7 +86,7 @@ float interactionHeight(vec2 at) {
             vec4 w = swimWaves[i];
             vec2 fromWave = at - w.xy;
             if (physics) {
-                h += impulseRingHeight(fromWave, w.z, 0.25, w.w);
+                h += impulseRingHeight(fromWave, w.z, 0.25, w.w * swimRingFade(w.z));
                 continue;
             }
             float width = 0.28 + w.z * 0.25;
@@ -109,7 +109,9 @@ float interactionHeight(vec2 at) {
                 vec4 wp = wakePoints[i];
                 vec2 from = at - wp.xy;
                 if (dot(from, from) >= PHYS_REACH * PHYS_REACH) continue;
-                h += impulseRingHeight(from, wp.z, 0.45, wp.w * 0.5);
+                float s = wp.w * WAKE_RING_STRENGTH * wakeRingFade(wp.z);
+                if (s < 1e-4) continue;
+                h += impulseRingHeight(from, wp.z, 0.45, s);
             }
         }
         return h;
@@ -147,6 +149,10 @@ float interactionHeight(vec2 at) {
 
 void main() {
     pwWindBlend = push.windBlend.xyz;
+    // As water.tesc cut it (water_tess.glsli).
+    wtYardsPerPixel = wtYardsPerPixelFor(projection, push.screenSize.y);
+    // The short waves' variety for the weather (water_waves.glsli).
+    pwVariety = push.pad2 > 0.0 ? pwVarietyFromDetail(push.shore.w) : 0.0;
     // Weighed the same way on both triangles that share an edge, so the
     // points along it land in the same places for both.
     precise vec3 base = gl_TessCoord.x * tcWorldPos[0] + gl_TessCoord.y * tcWorldPos[1] +

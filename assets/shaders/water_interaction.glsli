@@ -18,6 +18,8 @@
 // spread over the ring the slope falls as 1/sqrt(r). A wake is these summed
 // over every point of a trail, which gives Kelvin's wedge with the
 // wavelength the speed sets (2 pi U^2 / g) - no shape is drawn.
+// Unfaded: the caller fades `strength` by the rings' age (swimRingFade,
+// wakeRingFade).
 vec2 impulseRingTilt(vec2 from, float t, float sigma, float strength) {
     if (t <= 0.0) return vec2(0.0);
     float r = max(length(from), 0.05);
@@ -27,8 +29,7 @@ vec2 impulseRingTilt(vec2 from, float t, float sigma, float strength) {
     float ks = k * sigma;
     float spectrum = exp(-ks * ks);
     float spread = sqrt(sigma / (sigma + r));
-    float fade = 1.0 - smoothstep(1.2, 2.2, t);
-    float slope = strength * 0.6 * spectrum * ks * sin(phase) * spread * fade;
+    float slope = strength * 0.6 * spectrum * ks * sin(phase) * spread;
     return -(from / r) * slope;
 }
 
@@ -67,8 +68,25 @@ float impulseRingHeight(vec2 from, float t, float sigma, float strength) {
         sa = sb;
     }
     float integral = sum - fa * cos(top);
-    float fade = 1.0 - smoothstep(1.2, 2.2, t);
-    return -0.6 * strength * sigma * fade * integral;
+    return -0.6 * strength * sigma * integral;
+}
+
+// A swimmer's stroke's rings over their 1.6 s (swim_wave::kLife).
+float swimRingFade(float t) { return 1.0 - smoothstep(1.2, 2.2, t); }
+
+// A trail point's rings (the wake, physics waves; water_tessellation.hpp's
+// wakeRingFade and kWakeRing*): a wader's or a swimmer's push on the water
+// is a small one, WAKE_RING_STRENGTH of a point's strength, and its rings
+// die away as the water's own friction and their spreading take them, over
+// seconds - by e every WAKE_RING_DECAY, gone by WAKE_RING_LIFE. At half of
+// a point's strength and gone in 2.2 s, a run of a few yards through the
+// shallows heaved the water by three quarters of a yard and was flat again
+// a second after the runner stopped.
+const float WAKE_RING_STRENGTH = 0.15;
+const float WAKE_RING_DECAY = 2.0;
+const float WAKE_RING_LIFE = 5.0;
+float wakeRingFade(float t) {
+    return exp(-t / WAKE_RING_DECAY) * (1.0 - smoothstep(0.6 * WAKE_RING_LIFE, WAKE_RING_LIFE, t));
 }
 
 // The classic rings and wakes (physics waves off) are a crest of slope

@@ -380,7 +380,9 @@ vec2 kelvinWake(vec2 at) {
                 vec4 wp = wakePoints[i];
                 vec2 from = at - wp.xy;
                 if (dot(from, from) >= PHYS_REACH * PHYS_REACH) continue;
-                physTilt += impulseRingTilt(from, wp.z, 0.45, wp.w * 0.5);
+                float s = wp.w * WAKE_RING_STRENGTH * wakeRingFade(wp.z);
+                if (s < 1e-4) continue;
+                physTilt += impulseRingTilt(from, wp.z, 0.45, s);
             }
         }
         return physTilt;
@@ -522,6 +524,8 @@ float surfFoam(GerstnerResult waves, vec4 bed, vec2 at, float shoreDepth, float 
 void main() {
     float time = fogParams.z;
     pwWindBlend = push.windBlend.xyz;
+    // The short waves' variety for the weather (water_waves.glsli).
+    pwVariety = push.pad2 > 0.0 ? pwVarietyFromDetail(push.shore.w) : 0.0;
     float basicType = push.liquidBasicType;
 
     // ============================================================
@@ -611,7 +615,17 @@ void main() {
             : evaluateGerstnerWaves(WaveBase, time, push.waveAmp, push.waveFreq,
                                     push.waveSpeed, push.liquidBasicType);
     }
+    // cross(binormal, tangent) faces down (flat: (0, 1, 0) x (1, 0, 0) is
+    // (0, 0, -1)); turned over here, before anything is laid on it. Mixed as
+    // it was with the detail normal, which faces up, the two all but cancelled:
+    // the normal pointed down wherever the detail had less than half the say
+    // - the physics waves in calm weather (a quarter of 0.55 of it), and every
+    // water past the detail's fade - and the sun's and the moon's glint, which
+    // needs the normal toward the light, was gone; where the detail had more,
+    // the waves' tilt was reversed and the glint a blob by the shore. The
+    // reflection's (waveN below) was turned over already.
     vec3 meshNorm = normalize(cross(pixelWaves.binormal, pixelWaves.tangent));
+    if (meshNorm.z < 0.0) meshNorm = -meshNorm;
     // The vertex stage's (Normal) is the same at the vertices.
     vec3 detailNorm = dualScrollWaveNormal(FragPos.xy, time, rtWater2.z, rtWater2.w);
     // Wave detail is a scrolling pattern with a finite period. Held at full
@@ -645,7 +659,7 @@ void main() {
             // Physics waves: a stroke's deep-water rings (impulseRingTilt),
             // a hand's a quarter yard across.
             if (swimWaveInfo.z > 0.5) {
-                swimTilt += impulseRingTilt(fromWave, w.z, 0.25, w.w);
+                swimTilt += impulseRingTilt(fromWave, w.z, 0.25, w.w * swimRingFade(w.z));
                 continue;
             }
             float d = length(fromWave);
@@ -824,11 +838,9 @@ void main() {
         // hold water (rtwMirrorSeen), and is the body past that.
         rtwScreenReuse = rtWater.y < 2.5 && push.interiorFog < 0.5;
         uint rng = uint(gl_FragCoord.x) * 1973u + uint(gl_FragCoord.y) * 9277u + uint(time * 60.0);
-        // The wave normal, facing up: the mesh's faces down (water.vert
-        // crosses binormal into tangent), so it is turned over before the
-        // detail and the ripples go on it as above.
-        vec3 waveN = normalize(mix(meshNorm.z < 0.0 ? -meshNorm : meshNorm, detailNorm, 0.55 * detailFade));
-        waveN = normalize(waveN + vec3(swimTilt, 0.0));
+        // The wave normal, facing up (meshNorm is turned over above), with
+        // the detail and the ripples on it: the shading's own.
+        vec3 waveN = norm;
         // Under the water's plane, looking up at it.
         bool below = viewPos.z < FragPos.z;
         vec3 n = below ? -waveN : waveN;
@@ -951,13 +963,37 @@ void main() {
     // ============================================================
     // GGX Specular
     // ============================================================
-    float roughness = surf > 0.0 ? mix(0.18, 0.6, surf) : 0.18;
-    vec3 halfDir = normalize(ldir + viewDir);
+    // The glint is the sun's disc, or by night the moon's, mirrored in the
+    // waves (rtGlint: toward the one in the sky, w how much of it is above
+    // the horizon), not the zone's light direction: by night that is the
+    // night's light, and the moon stood elsewhere. Where the traced scene
+    // stands between the water and the body, none (one ray toward it, the
+    // sun's own above when it is the sun).
+    // The surface's own roughness (0.18), widened by the slopes of the waves
+    // the normal leaves out (pixelWaves.hiddenSlope2: too short for the pixel,
+    // or for the calm), which are under the pixel all the same: a mean square
+    // slope adds to GGX's alpha squared. Dropped instead, the waves the glint
+    // is made of were gone with them and the calm lake mirrored the sun as a
+    // pane of glass, a point that showed nowhere the camera looked.
+    float glintAlpha = sqrt(0.18 * 0.18 * 0.18 * 0.18 + pixelWaves.hiddenSlope2);
+    float roughness = min(sqrt(glintAlpha), 0.6);
+    if (surf > 0.0) roughness = mix(roughness, 0.6, surf);
+    vec3 glintDir = normalize(rtGlint.xyz);
+    float glintNdotL = max(dot(norm, glintDir), 0.0);
+    vec3 halfDir = normalize(glintDir + viewDir);
     float D = DistributionGGX(norm, halfDir, roughness);
-    float G = GeometrySmith(NdotV, NdotL, roughness);
+    float G = GeometrySmith(NdotV, glintNdotL, roughness);
     vec3 F = fresnelSchlickRoughness(max(dot(halfDir, viewDir), 0.0), F0, roughness);
-    vec3 specular = (D * G * F) / (4.0 * NdotV * NdotL + 0.001) * lightColor.rgb * NdotL;
-    specular = min(specular, vec3(2.0)) * sunOnWater;
+    vec3 specular = (D * G * F) / (4.0 * NdotV * glintNdotL + 0.001) * lightColor.rgb * glintNdotL;
+    specular = min(specular, vec3(2.0)) * rtGlint.w;
+    if (rtOn && max(specular.r, max(specular.g, specular.b)) > 1.0 / 1024.0 && viewPos.z > FragPos.z) {
+        float glintSeen = sunOnWater;
+        if (dot(glintDir, normalize(rtSunRay.xyz)) < 0.9999) {
+            uint glintRng = uint(gl_FragCoord.x) * 4721u + uint(gl_FragCoord.y) * 7537u;
+            glintSeen = rtOccluded(FragPos + vec3(0.0, 0.0, 0.1), glintDir, 400.0, glintRng) ? 0.0 : 1.0;
+        }
+        specular *= glintSeen;
+    }
 
     // Noise-based sparkle. Its features are far smaller than the wave detail, so
     // it aliases sooner - fade it out over the near half of the detail range,
@@ -1016,6 +1052,7 @@ void main() {
     // enough to stand in, which is not only at the beach.
     // ============================================================
     float wakeFoam = 0.0;
+    const float WAKE_FROTH_LIFE = 1.5;
     if (wakeBounds.w > 0.5) {
         // One cheap reject per trail keeps this off every other water pixel
         // on screen - a trail covers a few yards, the sheet covers miles.
@@ -1033,13 +1070,18 @@ void main() {
             int end = g + 1 < wakeGroupCount ? clamp(int(wakeGroups[g + 1].w), first, wakeCount) : wakeCount;
             for (int i = first; i < end; ++i) {
                 vec4 wp = wakePoints[i];
+                // The point's age as a share of the froth's life: with the
+                // physics waves z is its age in seconds (the rings' clock),
+                // the froth's being a wader's 1.5 s. Read as a share, the
+                // froth grew past its reach and went negative after a second.
+                float age = swimWaveInfo.z > 0.5 ? clamp(wp.z / WAKE_FROTH_LIFE, 0.0, 1.0) : wp.z;
                 // Churn spreads as it dies, the way a disturbed patch does.
-                float radius = mix(0.40, 1.45, wp.z);
+                float radius = mix(0.40, 1.45, age);
                 float d = length(FragPos.xy - wp.xy);
                 // Falls off from the centre out, with no plateau. A flat middle
                 // is what made these read as painted discs rather than froth.
                 float disc = 1.0 - smoothstep(0.0, radius, d);
-                wakeFoam += disc * disc * wp.w * (1.0 - wp.z);
+                wakeFoam += disc * disc * wp.w * (1.0 - age);
             }
         }
         if (nearWake) {

@@ -17,6 +17,17 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 fogParams;
 };
 
+// The traced water's push constants (water.frag's), for the target's size.
+layout(push_constant) uniform Push {
+    vec4 closeColor;
+    vec4 farColor;
+    float waveAmp;
+    float waveFreq;
+    float waveSpeed;
+    float liquidBasicType;
+    vec2 screenSize;
+} push;
+
 layout(location = 0) in vec3 vWorldPos[];
 layout(location = 1) in vec2 vTexCoord[];
 layout(location = 2) in vec4 vBed[];
@@ -43,6 +54,7 @@ void main() {
     tcTexCoord[gl_InvocationID] = vTexCoord[gl_InvocationID];
     tcBed[gl_InvocationID] = vBed[gl_InvocationID];
     if (gl_InvocationID != 0) return;
+    wtYardsPerPixel = wtYardsPerPixelFor(projection, push.screenSize.y);
 
     vec3 p0 = vWorldPos[0];
     vec3 p1 = vWorldPos[1];

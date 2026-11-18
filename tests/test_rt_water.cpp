@@ -103,3 +103,68 @@ TEST_CASE("RT water: the shore's masks go by the bed straight down", "[rt][water
     CHECK(asked < refraction);
     CHECK(frag.find("if (!depthBelowKnown) shoreDepth = max(shoreDepth, rtwBedDepth);") != std::string::npos);
 }
+
+TEST_CASE("RT water: the shaded normal faces up, whatever the detail's share", "[rt][water][glint]") {
+    // Still water: the waves' tangent and binormal along X and Y.
+    const glm::vec3 tangent(1.0f, 0.0f, 0.0f);
+    const glm::vec3 binormal(0.0f, 1.0f, 0.0f);
+    const glm::vec3 up = waveNormalUp(tangent, binormal);
+    CHECK(up.z == Catch::Approx(1.0f));
+    // A wave sloping up along +X: its normal leans back toward -X.
+    const glm::vec3 slope = waveNormalUp(glm::vec3(1.0f, 0.0f, 0.2f), binormal);
+    CHECK(slope.x < -0.1f);
+    CHECK(slope.z > 0.9f);
+    // The detail normal at the physics waves' calm share (0.55 x 0.25) and at
+    // none (past its fade): the normal still faces up. Left facing down, the
+    // cross product mixed with an upward detail at less than half its say
+    // came out facing down (z < 0), and NdotL killed the glint.
+    const glm::vec3 detail = glm::normalize(glm::vec3(0.05f, -0.03f, 1.0f));
+    for (float share : {0.0f, 0.55f * 0.25f, 0.55f}) {
+        CHECK(shadedNormal(up, detail, share).z > 0.99f);
+    }
+    const glm::vec3 down = glm::normalize(glm::cross(binormal, tangent));
+    CHECK(glm::normalize(glm::mix(down, detail, 0.55f * 0.25f)).z < 0.0f);
+}
+
+TEST_CASE("RT water: the sun's glint on calm physics waves, at the mirror angle", "[rt][water][glint]") {
+    // The sun 40 degrees up; the view from the mirror direction.
+    const glm::vec3 toSun = glm::normalize(glm::vec3(std::cos(glm::radians(40.0f)), 0.0f, std::sin(glm::radians(40.0f))));
+    const glm::vec3 toEye(-toSun.x, -toSun.y, toSun.z);
+    const glm::vec3 n = shadedNormal(waveNormalUp(glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f)),
+                                     glm::vec3(0.0f, 0.0f, 1.0f), 0.55f * 0.25f);
+    const glm::vec3 h = glm::normalize(toSun + toEye);
+    CHECK(glm::dot(n, toSun) > 0.6f);
+    CHECK(ggx(n, h, 0.18f) > 100.0f);
+}
+
+TEST_CASE("RT water: the glint is the sun's by day and the moon's by night", "[rt][water][glint]") {
+    const glm::vec3 sunHigh = glm::normalize(glm::vec3(0.3f, 0.2f, 0.9f));
+    const glm::vec3 sunDown = glm::normalize(glm::vec3(0.3f, 0.2f, -0.6f));
+    const glm::vec3 moonUp = glm::normalize(glm::vec3(-0.5f, 0.4f, 0.5f));
+    const glm::vec3 moonDown = glm::normalize(glm::vec3(-0.5f, 0.4f, -0.5f));
+    const GlintBody day = glintBody(sunHigh, moonDown);
+    CHECK(day.strength == Catch::Approx(1.0f));
+    CHECK(glm::dot(day.dir, sunHigh) == Catch::Approx(1.0f));
+    const GlintBody night = glintBody(sunDown, moonUp);
+    CHECK(night.strength == Catch::Approx(1.0f));
+    CHECK(glm::dot(night.dir, moonUp) == Catch::Approx(1.0f));
+    CHECK(glintBody(sunDown, moonDown).strength == 0.0f);
+    // Rising: in by degrees, not switched on.
+    const float rising = glintBody(glm::normalize(glm::vec3(1.0f, 0.0f, 0.015f)), moonDown).strength;
+    CHECK(rising > 0.0f);
+    CHECK(rising < 1.0f);
+}
+
+TEST_CASE("RT water: the shader turns the waves' normal up and mirrors the glint's body", "[rt][water][glint]") {
+    const std::string frag = wowee::test::slurp("assets/shaders/water.frag.glsl");
+    const std::string frame = wowee::test::slurp("assets/shaders/water_frame.glsli");
+    REQUIRE(frag.size() > 1000);
+    const size_t turned = frag.find("if (meshNorm.z < 0.0) meshNorm = -meshNorm;");
+    const size_t mixed = frag.find("vec3 norm = normalize(mix(meshNorm, detailNorm");
+    REQUIRE(turned != std::string::npos);
+    REQUIRE(mixed != std::string::npos);
+    CHECK(turned < mixed);
+    CHECK(frag.find("vec3 glintDir = normalize(rtGlint.xyz);") != std::string::npos);
+    CHECK(frag.find("specular = min(specular, vec3(2.0)) * rtGlint.w;") != std::string::npos);
+    CHECK(frame.find("vec4 rtGlint;") != std::string::npos);
+}
