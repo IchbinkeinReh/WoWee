@@ -30,6 +30,8 @@ struct MaskPush {
     int32_t frameWidth;
     int32_t frameHeight;
     int32_t cell;
+    /// 0: the clip mask from the frame; 1: the mask blurred (eye_highlight_mask.comp.glsl).
+    int32_t mode;
 };
 
 struct CompositePush {
@@ -132,11 +134,14 @@ bool EyeAdaptationPass::initialize(VkContext* ctx) {
                                          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT};
     maskSetLayout_ = createDescriptorSetLayout(device, {maskFrame, maskOut});
     VkDescriptorPoolSize poolSizes[2] = {
-        {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = MAX_FRAMES * 3},
-        {.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = MAX_FRAMES},
+        // A slot's composite reads the frame and the blurred mask, its mask
+        // pass the frame and its blur pass the mask; the two passes each
+        // write one image.
+        {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = MAX_FRAMES * (2 + 1 + 1)},
+        {.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = MAX_FRAMES * (1 + 1)},
     };
     VkDescriptorPoolCreateInfo poolCI{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    poolCI.maxSets = MAX_FRAMES * 2;
+    poolCI.maxSets = MAX_FRAMES * 3;
     poolCI.poolSizeCount = 2;
     poolCI.pPoolSizes = poolSizes;
     if (sampler_ == VK_NULL_HANDLE || linearSampler_ == VK_NULL_HANDLE || compositeSetLayout_ == VK_NULL_HANDLE ||
@@ -152,6 +157,7 @@ bool EyeAdaptationPass::initialize(VkContext* ctx) {
         if (vkAllocateDescriptorSets(device, &alloc, &compositeSets_[i]) != VK_SUCCESS) return false;
         alloc.pSetLayouts = &maskSetLayout_;
         if (vkAllocateDescriptorSets(device, &alloc, &maskSets_[i]) != VK_SUCCESS) return false;
+        if (vkAllocateDescriptorSets(device, &alloc, &blurSets_[i]) != VK_SUCCESS) return false;
     }
 
     const VkPushConstantRange maskPush{.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT, .offset = 0,
@@ -352,6 +358,7 @@ void EyeAdaptationPass::destroyCopies() {
     for (uint32_t i = 0; i < MAX_FRAMES; i++) {
         destroyScreenTarget(*ctx_, frameCopy_[i]);
         destroyScreenTarget(*ctx_, mask_[i]);
+        destroyScreenTarget(*ctx_, blur_[i]);
     }
     copyExtent_ = {};
     maskExtent_ = {};
@@ -374,6 +381,8 @@ bool EyeAdaptationPass::ensureCopies(VkExtent2D extent) {
         if (!createScreenTarget(*ctx_, frameCopy_[i], extent, format,
                                 VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT) ||
             !createScreenTarget(*ctx_, mask_[i], maskExtent, kMaskFormat,
+                                VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT) ||
+            !createScreenTarget(*ctx_, blur_[i], maskExtent, kMaskFormat,
                                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)) {
             LOG_WARNING("EyeAdaptation: could not allocate the ", extent.width, "x", extent.height,
                         " frame copy - the exposure is left off");
@@ -382,11 +391,17 @@ bool EyeAdaptationPass::ensureCopies(VkExtent2D extent) {
         }
         VkDescriptorImageInfo frameIn{.sampler = sampler_, .imageView = frameCopy_[i].view,
                                       .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        VkDescriptorImageInfo maskIn{.sampler = linearSampler_, .imageView = mask_[i].view,
+        // The composite reads the blurred mask, filtered; the blur reads the
+        // mask texel for texel.
+        VkDescriptorImageInfo maskIn{.sampler = linearSampler_, .imageView = blur_[i].view,
                                      .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
         VkDescriptorImageInfo maskOut{.sampler = VK_NULL_HANDLE, .imageView = mask_[i].view,
                                       .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
-        VkWriteDescriptorSet w[4]{};
+        VkDescriptorImageInfo blurIn{.sampler = sampler_, .imageView = mask_[i].view,
+                                     .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
+        VkDescriptorImageInfo blurOut{.sampler = VK_NULL_HANDLE, .imageView = blur_[i].view,
+                                      .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
+        VkWriteDescriptorSet w[6]{};
         for (auto& write : w) {
             write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             write.descriptorCount = 1;
@@ -405,7 +420,14 @@ bool EyeAdaptationPass::ensureCopies(VkExtent2D extent) {
         w[3].dstBinding = 1;
         w[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         w[3].pImageInfo = &maskOut;
-        vkUpdateDescriptorSets(ctx_->getDevice(), 4, w, 0, nullptr);
+        w[4].dstSet = blurSets_[i];
+        w[4].dstBinding = 0;
+        w[4].pImageInfo = &blurIn;
+        w[5].dstSet = blurSets_[i];
+        w[5].dstBinding = 1;
+        w[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        w[5].pImageInfo = &blurOut;
+        vkUpdateDescriptorSets(ctx_->getDevice(), 6, w, 0, nullptr);
     }
     copyExtent_ = extent;
     maskExtent_ = maskExtent;
@@ -417,6 +439,7 @@ bool EyeAdaptationPass::prepareComposite(VkCommandBuffer cmd, uint32_t frame, Vk
                                          VkExtent2D extent) {
     if (frame >= MAX_FRAMES || cmd == VK_NULL_HANDLE || swapchainImage == VK_NULL_HANDLE || !wantsComposite() ||
         compositeSets_[frame] == VK_NULL_HANDLE || maskSets_[frame] == VK_NULL_HANDLE ||
+        blurSets_[frame] == VK_NULL_HANDLE ||
         maskPipeline_ == VK_NULL_HANDLE || extent.width == 0 || extent.height == 0 || !ensureCopies(extent)) {
         return false;
     }
@@ -471,14 +494,28 @@ bool EyeAdaptationPass::prepareComposite(VkCommandBuffer cmd, uint32_t frame, Vk
     barrier(mask_[frame].image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, 0, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
             VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-    const MaskPush maskPush{.frameWidth = static_cast<int32_t>(extent.width),
-                            .frameHeight = static_cast<int32_t>(extent.height),
-                            .cell = static_cast<int32_t>(cell_)};
+    MaskPush maskPush{.frameWidth = static_cast<int32_t>(extent.width),
+                      .frameHeight = static_cast<int32_t>(extent.height),
+                      .cell = static_cast<int32_t>(cell_), .mode = 0};
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, maskPipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, maskLayout_, 0, 1, &maskSets_[frame], 0, nullptr);
     vkCmdPushConstants(cmd, maskLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(maskPush), &maskPush);
     vkCmdDispatch(cmd, (maskExtent_.width + 7) / 8, (maskExtent_.height + 7) / 8, 1);
     barrier(mask_[frame].image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    // The mask blurred wide, beside the mask itself, at the mask's own size
+    // (eye_adaptation::blurMask): the composite reads both through one
+    // smooth filter, four taps a pixel. Its last contents were read by this
+    // slot's composite two frames ago.
+    barrier(blur_[frame].image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, 0, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+    maskPush.mode = 1;
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, maskLayout_, 0, 1, &blurSets_[frame], 0, nullptr);
+    vkCmdPushConstants(cmd, maskLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(maskPush), &maskPush);
+    vkCmdDispatch(cmd, (maskExtent_.width + 7) / 8, (maskExtent_.height + 7) / 8, 1);
+    barrier(blur_[frame].image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
     return true;
@@ -486,7 +523,7 @@ bool EyeAdaptationPass::prepareComposite(VkCommandBuffer cmd, uint32_t frame, Vk
 
 void EyeAdaptationPass::composite(VkCommandBuffer cmd, uint32_t frame) {
     if (frame >= MAX_FRAMES || !wantsComposite() || frameCopy_[frame].view == VK_NULL_HANDLE ||
-        mask_[frame].view == VK_NULL_HANDLE || cell_ == 0) {
+        blur_[frame].view == VK_NULL_HANDLE || cell_ == 0) {
         return;
     }
     const CompositePush push{.exposure = exposure_, .cell = static_cast<float>(cell_)};
@@ -508,6 +545,7 @@ void EyeAdaptationPass::shutdown() {
         measured_[i] = false;
         compositeSets_[i] = VK_NULL_HANDLE;
         maskSets_[i] = VK_NULL_HANDLE;
+        blurSets_[i] = VK_NULL_HANDLE;
     }
     destroyCopies();
     destroy(device, descPool_);

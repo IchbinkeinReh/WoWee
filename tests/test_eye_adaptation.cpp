@@ -306,3 +306,43 @@ TEST_CASE("a small clipped disc on its own is brought up with a soft halo", "[ey
     CHECK(f.at(20, 20)[1] == Catch::Approx(orig.at(20, 20)[1] * e).margin(1e-4));
     for (uint32_t x = 154; x < 300; ++x) CHECK(f.at(x - 1, 90)[1] - f.at(x, 90)[1] < 0.05f);
 }
+
+TEST_CASE("the glare round a burnt-out sun has no lattice of the mask's cells", "[eye]") {
+    // The exposure let go round clipped white is read from a mask one texel a
+    // cell of pixels. Read bilinearly its slope broke at every texel's centre
+    // and the glare showed the cells as a grid of light and dark lines (the
+    // sun glare, 30 px apart at 1001 high). Across the glare the scale must
+    // bend as smoothly at the texels' centres as between them.
+    const float e = 0.6f;
+    Frame f;
+    for (uint32_t y = 0; y < Frame::H; ++y) {
+        for (uint32_t x = 0; x < Frame::W; ++x) {
+            float* p = f.at(x, y);
+            p[0] = 0.7f; p[1] = 0.75f; p[2] = 0.8f;
+            if (std::hypot(float(x) - 110.0f, float(y) - 90.0f) < 30.0f) p[0] = p[1] = p[2] = 1.0f;
+        }
+    }
+    const Frame orig = f;
+    exposeFrame(f.px.data(), Frame::W, Frame::H, e);
+    const uint32_t cell = glareCell(Frame::H);
+    REQUIRE(cell >= 4);
+    for (uint32_t row : {70u, 90u, 103u}) {
+        std::vector<double> s(Frame::W);
+        for (uint32_t x = 0; x < Frame::W; ++x) s[x] = double(f.at(x, row)[1]) / double(orig.at(x, row)[1]);
+        double atCentre = 0.0, between = 0.0;
+        int nC = 0, nB = 0;
+        // Out from the disc's edge through the glare's fall-off.
+        for (uint32_t x = 145; x < 200; ++x) {
+            const double d2 = std::abs(s[x - 1] - 2.0 * s[x] + s[x + 1]);
+            // Pixel x's centre is the texel centre when x + 0.5 = (k + 0.5) cell.
+            if ((x % cell) == cell / 2) { atCentre += d2; ++nC; }
+            else { between += d2; ++nB; }
+        }
+        REQUIRE(nC > 0);
+        REQUIRE(nB > 0);
+        atCentre /= nC;
+        between /= nB;
+        INFO("row " << row << " |d2| at texel centres " << atCentre << ", between " << between);
+        CHECK(atCentre < 2.0 * between + 1e-6);
+    }
+}

@@ -132,7 +132,7 @@ inline float initialAdaptation(float measuredLog2, const Params& p = {}) {
 ///
 /// Per cell of the frame (eye_highlight_mask.comp.glsl) the share of pixels
 /// clipped white (clipShare); that blurred wide - a 5 x 5 Gaussian over the
-/// cells, kGlareSpread cells apart - gives the glare weight (glareWeight,
+/// cells, kGlareSpread cells apart (blurMask) - gives the glare weight (glareWeight,
 /// with a tighter blur for a small core on its own),
 /// and the pixel's colour is scaled by the exposure mixed toward one by it
 /// (glareScale; eye_adaptation.frag.glsl). Only ever a scale, so a pale
@@ -145,12 +145,12 @@ constexpr float kClipHigh = 0.995f;
 constexpr float kGlareGain = 2.5f;
 constexpr float kGlareSpread = 2.0f;
 /// A small clipped core on its own - the sun's disc low over a ridge - is
-/// too small to count in the wide blur: a tighter one (kCoreSpread cells
-/// apart) brings it up too, but only where the wide one sees next to nothing
-/// (below kIsolatedLow..kIsolatedHigh), so a large burnt-out sky keeps the
-/// wide blur's soft edge.
+/// too small to count in the wide blur: the smooth mask itself (maskSmooth,
+/// about as wide as a half-cell Gaussian over the bilinear mask was) brings
+/// it up too, but only where the wide one sees next to nothing (below
+/// kIsolatedLow..kIsolatedHigh), so a large burnt-out sky keeps the wide
+/// blur's soft edge.
 constexpr float kCoreGain = 3.0f;
-constexpr float kCoreSpread = 0.5f;
 constexpr float kIsolatedLow = 0.02f;
 constexpr float kIsolatedHigh = 0.15f;
 
@@ -172,7 +172,7 @@ inline float clipShare(float r, float g, float b) {
 }
 
 /// The glare weight from the share of clipped white round a pixel, blurred
-/// wide (kGlareSpread) and tight (kCoreSpread).
+/// wide (kGlareSpread) and tight (the smooth mask alone).
 inline float glareWeight(float wideShare, float coreShare) {
     const float wide = smoothstep01(0.0f, 1.0f, std::clamp(wideShare * kGlareGain, 0.0f, 1.0f));
     const float core = smoothstep01(0.0f, 1.0f, std::clamp(coreShare * kCoreGain, 0.0f, 1.0f));
@@ -183,6 +183,31 @@ inline float glareWeight(float wideShare, float coreShare) {
 inline float glareScale(float exposure, float weight) {
     if (!(exposure < 1.0f)) return exposure;
     return exposure + (1.0f - exposure) * std::clamp(weight, 0.0f, 1.0f);
+}
+
+/// The clipped share blurred wide, at the mask's own size: each texel a
+/// 5 x 5 Gaussian of the mask kGlareSpread texels apart, clamped to the edge
+/// (eye_highlight_mask.comp.glsl mode 1). The composite reads it, and the
+/// mask beside it, through one smooth filter.
+inline std::vector<float> blurMask(const std::vector<float>& mask, uint32_t mw, uint32_t mh) {
+    std::vector<float> out(mask.size(), 0.0f);
+    const int step = static_cast<int>(kGlareSpread);
+    for (int my = 0; my < int(mh); ++my) {
+        for (int mx = 0; mx < int(mw); ++mx) {
+            float sum = 0.0f, weights = 0.0f;
+            for (int dy = -2; dy <= 2; ++dy) {
+                for (int dx = -2; dx <= 2; ++dx) {
+                    const float w = std::exp(-float(dx * dx + dy * dy) / 4.5f);
+                    const int x = std::clamp(mx + step * dx, 0, int(mw) - 1);
+                    const int y = std::clamp(my + step * dy, 0, int(mh) - 1);
+                    sum += w * mask[size_t(y) * mw + size_t(x)];
+                    weights += w;
+                }
+            }
+            out[size_t(my) * mw + size_t(mx)] = sum / weights;
+        }
+    }
+    return out;
 }
 
 /// The whole of it on the CPU, for the tests: `rgb` is `width` x `height`
@@ -206,33 +231,41 @@ inline void exposeFrame(float* rgb, uint32_t width, uint32_t height, float expos
             mask[size_t(my) * mw + mx] = count > 0.0f ? sum / count : 0.0f;
         }
     }
-    // A linear, clamped-to-edge fetch of the mask at mask texel coordinates.
-    const auto fetch = [&](float u, float v) {
-        u = std::clamp(u - 0.5f, 0.0f, float(mw - 1));
-        v = std::clamp(v - 0.5f, 0.0f, float(mh - 1));
-        const uint32_t x0 = uint32_t(u), y0 = uint32_t(v);
-        const uint32_t x1 = std::min(x0 + 1, mw - 1), y1 = std::min(y0 + 1, mh - 1);
-        const float fx = u - float(x0), fy = v - float(y0);
-        const auto m = [&](uint32_t x, uint32_t y) { return mask[size_t(y) * mw + x]; };
-        return (m(x0, y0) * (1 - fx) + m(x1, y0) * fx) * (1 - fy) + (m(x0, y1) * (1 - fx) + m(x1, y1) * fx) * fy;
+    // The mask at mask texel coordinates through a cubic B-spline over its
+    // texels, clamped to the edge - what the shader's four filtered taps
+    // (maskSmooth) add up to. A bilinear fetch broke its slope at every
+    // texel's centre, a cell of pixels apart, and the glare drew those
+    // breaks as a lattice of lines.
+    const auto bspline = [](float t, float w[4]) {
+        const float t2 = t * t, t3 = t2 * t;
+        w[0] = (1.0f - 3.0f * t + 3.0f * t2 - t3) / 6.0f;
+        w[1] = (4.0f - 6.0f * t2 + 3.0f * t3) / 6.0f;
+        w[2] = (1.0f + 3.0f * t + 3.0f * t2 - 3.0f * t3) / 6.0f;
+        w[3] = t3 / 6.0f;
     };
+    const auto fetch = [&](const std::vector<float>& grid, float u, float v) {
+        const float su = u - 0.5f, sv = v - 0.5f;
+        const float iu = std::floor(su), iv = std::floor(sv);
+        float wu[4], wv[4];
+        bspline(su - iu, wu);
+        bspline(sv - iv, wv);
+        float sum = 0.0f;
+        for (int j = 0; j < 4; ++j) {
+            const int y = std::clamp(int(iv) - 1 + j, 0, int(mh) - 1);
+            for (int i = 0; i < 4; ++i) {
+                const int x = std::clamp(int(iu) - 1 + i, 0, int(mw) - 1);
+                sum += wu[i] * wv[j] * grid[size_t(y) * mw + size_t(x)];
+            }
+        }
+        return sum;
+    };
+    const std::vector<float> wide = blurMask(mask, mw, mh);
     for (uint32_t y = 0; y < height; ++y) {
         for (uint32_t x = 0; x < width; ++x) {
             float scale = exposure;
             if (exposure < 1.0f) {
                 const float u = (float(x) + 0.5f) / float(cell), v = (float(y) + 0.5f) / float(cell);
-                const auto share = [&](float spread) {
-                    float sum = 0.0f, weights = 0.0f;
-                    for (int dy = -2; dy <= 2; ++dy) {
-                        for (int dx = -2; dx <= 2; ++dx) {
-                            const float w = std::exp(-float(dx * dx + dy * dy) / 4.5f);
-                            sum += w * fetch(u + dx * spread, v + dy * spread);
-                            weights += w;
-                        }
-                    }
-                    return sum / weights;
-                };
-                scale = glareScale(exposure, glareWeight(share(kGlareSpread), share(kCoreSpread)));
+                scale = glareScale(exposure, glareWeight(fetch(wide, u, v), fetch(mask, u, v)));
             }
             float* p = rgb + (size_t(y) * width + x) * 3;
             for (int c = 0; c < 3; ++c) p[c] = std::clamp(p[c] * scale, 0.0f, 1.0f);

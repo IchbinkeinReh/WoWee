@@ -109,6 +109,9 @@ private:
     /// is clipped white, one texel per cell_ x cell_ pixels.
     ScreenTarget frameCopy_[MAX_FRAMES];
     ScreenTarget mask_[MAX_FRAMES];
+    /// The mask blurred wide (r) beside the mask itself (g), at its size,
+    /// which the composite reads (eye_adaptation::blurMask).
+    ScreenTarget blur_[MAX_FRAMES];
     VkExtent2D copyExtent_{};
     VkExtent2D maskExtent_{};
     uint32_t cell_ = 0;
@@ -119,6 +122,7 @@ private:
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
     VkDescriptorSet compositeSets_[MAX_FRAMES] = {};
     VkDescriptorSet maskSets_[MAX_FRAMES] = {};
+    VkDescriptorSet blurSets_[MAX_FRAMES] = {};
     VkPipelineLayout maskLayout_ = VK_NULL_HANDLE;
     VkPipeline maskPipeline_ = VK_NULL_HANDLE;
 
