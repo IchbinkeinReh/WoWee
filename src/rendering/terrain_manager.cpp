@@ -2238,9 +2238,10 @@ void TerrainManager::updateDetailDoodads(const glm::vec3& focus) {
     // groundEffectDist (0x0078db10; 0 to 140 yards). The client builds a
     // chunk's ground clutter once its +0x88 is in range (0x007d3fe0): the
     // view depth of its box's corner nearest along the view (0x007c3e70,
-    // 0x00790650) - which way the camera looks decides what is built, and a
-    // turn left the chunks behind the camera bare until the 2 ms budget got
-    // round to them. Here a chunk is built once its box is within a few yards
+    // 0x00790650) - so which way the camera looks decides what is built:
+    // behind the camera every chunk's depth is in range, ahead one whose
+    // nearest corner is past the range's depth is not built until the camera
+    // turns from it. Here a chunk is built once its box is within a few yards
     // past the range on the ground, whichever way the camera looks - all
     // that was built before (in view depth range and that close) and the
     // rest of the circle - and what is drawn of them is still decided each
