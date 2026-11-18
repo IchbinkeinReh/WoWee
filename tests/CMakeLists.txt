@@ -3821,6 +3821,12 @@ wowee_add_test(test_wdl_loader
 wowee_add_test(test_terrain_stream_set
     SOURCES test_terrain_stream_set.cpp)
 
+# ── test_horizon_coverage ───────────────────────────────────
+# The ground's far-clip cube and the .wdl horizon together cover the view out
+# to the far clip at any field of view, turn and pitch (pipeline::wdl::tileDraw).
+wowee_add_test(test_horizon_coverage
+    SOURCES test_horizon_coverage.cpp)
+
 # ── test_fishing_line ────────────────────────────────────────
 # The line from a fishing pole to its bobber (rendering/fishing_line_geometry.hpp).
 wowee_add_test(test_fishing_line

@@ -11568,9 +11568,10 @@ void LuaEngine::registerCoreAPI() {
                 s += " wdl=" + std::to_string(d.size()) + "[";
                 for (size_t i = 0; i < d.size(); ++i) {
                     if (i) s += ' ';
-                    const unsigned slot = d[i] & 0x7fffu;
+                    const unsigned slot = d[i] & 0x3fffu;
                     s += std::to_string(slot / 64) + "_" + std::to_string(slot % 64);
                     if (d[i] & 0x8000u) s += "*";
+                    if (d[i] & 0x4000u) s += "+";  // stands in past the ground's square
                 }
                 s += "]";
             }

@@ -15,6 +15,7 @@
 #include "rendering/frustum.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/blp_loader.hpp"
+#include "pipeline/wdl_loader.hpp"
 #include "core/logger.hpp"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -1112,11 +1113,13 @@ void TerrainRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, c
         // clip the vertex program clips at the far clip's depth, as the
         // client's far plane does (far_clip.glsli), so the ground reaches
         // as far as the buildings standing on it at every edge of the view.
+        // Where the cube's side comes in front of the far clip (a diagonal
+        // view, a wide one) the horizon stands in for what it leaves out
+        // (pipeline::wdl::tileDraw), which counts on this very test.
         float dx = chunk.boundingSphereCenter.x - camPos.x;
         float dy = chunk.boundingSphereCenter.y - camPos.y;
         float distSq = dx * dx + dy * dy;
-        const float reach = maxViewDistance_ + chunk.boundingSphereRadius;
-        if (std::abs(dx) > reach || std::abs(dy) > reach) {
+        if (!pipeline::wdl::groundChunkInReach(dx, dy, chunk.boundingSphereRadius, maxViewDistance_)) {
             culledChunks++;
             continue;
         }

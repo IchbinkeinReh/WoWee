@@ -11,6 +11,13 @@
 // applyFog) and the sky (skybox.frag) both take all of it; without it here
 // the horizon stood as a cold band of bare fog colour between the two.
 // Not in the original client, which has no such mist.
+//
+// Where its tile reaches out of the far clip's square about the camera that
+// the ground's chunks are drawn in (pipeline::wdl::tileDraw), the tile is
+// drawn from in front of the camera, and inside that square it gives way to
+// the ground before the far clip less 50 (ground.w): the client's horizon
+// where the ground is, the ground's stand-in past the square's side, which
+// the far clip's depth reaches at the corners of a wide or diagonal view.
 
 layout(set = 0, binding = 0) uniform PerFrame {
     mat4 view;
@@ -30,11 +37,20 @@ layout(set = 0, binding = 0) uniform PerFrame {
 
 layout(set = 0, binding = 2) uniform sampler3D uFogVolume;
 
+layout(push_constant) uniform Horizon {
+    vec4 planes;
+    vec4 ground;  // x, y the camera, z the far clip, w the depth it yields to the ground before (0: never)
+} horizon;
+
 layout(location = 0) in vec3 vWorldPos;
+layout(location = 1) in float vDepth;
 
 layout(location = 0) out vec4 outColor;
 
 void main() {
+    // pipeline::wdl::horizonYieldsAt.
+    vec2 off = abs(vWorldPos.xy - horizon.ground.xy);
+    if (vDepth < horizon.ground.w && max(off.x, off.y) <= horizon.ground.z) discard;
     vec3 color = fogColor.rgb;
     if (volumetricParams.x > 0.5) {
         // The whole depth of the volume at this point of the screen: the

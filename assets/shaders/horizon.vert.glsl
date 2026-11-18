@@ -23,12 +23,16 @@ layout(set = 0, binding = 0) uniform PerFrame {
 
 layout(push_constant) uniform Horizon {
     vec4 planes;  // x near, y far, z depth at near, w depth at far
+    vec4 ground;  // horizon.frag: x, y the camera, z the far clip, w the depth it yields to the ground before
 } horizon;
 
 layout(location = 0) in vec3 aPos;
 
-// Where on screen it lies, for the fog volume (horizon.frag).
+// Where on screen it lies, for the fog volume (horizon.frag), and where in
+// the world, for whether the ground stands there (horizon.frag).
 layout(location = 0) out vec3 vWorldPos;
+// Its view depth.
+layout(location = 1) out float vDepth;
 
 out float gl_ClipDistance[2];
 
@@ -47,4 +51,5 @@ void main() {
     clip.z = horizon.planes.w * w + k * (f - w);
     gl_Position = clip;
     vWorldPos = aPos;
+    vDepth = w;
 }
