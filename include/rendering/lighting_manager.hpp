@@ -94,6 +94,13 @@ struct LightingParams {
     float waterDeepAlpha = 1.0f;     ///< field 6
     float oceanShallowAlpha = 0.75f; ///< field 7
     float oceanDeepAlpha = 1.0f;     ///< field 8
+
+    /// The part of ambientColor (and averagedAmbientColor) a thunderstorm's
+    /// lightning added this frame (lightning_flash.hpp); 0 between strikes.
+    /// What the ray traced probes take as the open sky leaves it out: they
+    /// ease over frames and would read a flash as the sky darkening around
+    /// it, and the flat ambient carries it through their ratio as it is.
+    glm::vec3 lightningAmbient{0.0f};
 };
 
 /// `a` moved `w` of the way toward `b`, as the client applies one light over
@@ -404,6 +411,11 @@ public:
     };
     void setInteriorFog(const std::optional<InteriorFog>& fog) { interiorFog_ = fog; }
 
+    /// A thunderstorm's lightning this frame, 0-1 (lightning_flash::Scheduler):
+    /// the next update() lights the ambient, the sky, the clouds and the fog
+    /// with it, less the further the camera is inside a building.
+    void setLightningFlash(float flash) { lightningFlash_ = flash; }
+
     /**
      * Get current time of day (0.0-1.0)
      */
@@ -582,6 +594,7 @@ private:
     /// This map draws the later fog (daynight::mapUsesFogExponent).
     bool fogExponent_ = false;
     std::optional<InteriorFog> interiorFog_;
+    float lightningFlash_ = 0.0f;
 
     // Last values the sky diagnostic reported, so it prints on a change
     // rather than every frame. See LightingManager::update.

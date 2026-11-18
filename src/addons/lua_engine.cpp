@@ -11530,6 +11530,19 @@ void LuaEngine::registerCoreAPI() {
             return 0;
         });
         lua_setglobal(L_, "__WoweeTestWeatherLayers");
+        // __WoweeTestLightning(t): the reference strike held t seconds after
+        // it began (t >= 0, for frame strips through one), let go (t = -1),
+        // or started now and left to run (t = -2). Returns the flash the
+        // last frame's lighting took, 0-1, whatever the argument (nil asks
+        // only that).
+        lua_pushcfunction(L_, [](lua_State* L) -> int {
+            auto* renderer = core::Application::getInstance().getRenderer();
+            if (!renderer) return 0;
+            if (lua_isnumber(L, 1)) renderer->testLightning(static_cast<float>(lua_tonumber(L, 1)));
+            lua_pushnumber(L, renderer->lightningFlash());
+            return 1;
+        });
+        lua_setglobal(L_, "__WoweeTestLightning");
         lua_pushcfunction(L_, [](lua_State* L) -> int {
             wowee::core::testFrameShotPath = luaL_checkstring(L, 1);
             return 0;

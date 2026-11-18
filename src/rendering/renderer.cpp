@@ -42,6 +42,7 @@
 #include "rendering/wave_spectrum.hpp"
 #include "rendering/rain_ripple.hpp"
 #include "rendering/lightning.hpp"
+#include "rendering/lightning_flash.hpp"
 #include "rendering/lighting_manager.hpp"
 #include "core/profiler.hpp"
 #include "core/frame_profiler.hpp"
@@ -631,6 +632,9 @@ void Renderer::updatePerFrameUBO() {
         const float ambientScale = std::max(lightingTune_.ambient, 0.0f);
         currentFrameData.ambientColor = glm::vec4(lp.ambientColor * glareDim * ambientScale,
                                                   std::max(lightingTune_.bakedTerrainShadow, 0.0f));
+        // The lightning's share of it, which the ray traced probes' open sky
+        // leaves out (LightingParams::lightningAmbient).
+        lightningAmbientFrame_ = lp.lightningAmbient * glareDim * ambientScale;
         // The zone's fog colour for the world, the camera's own - its
         // interior's blended in - for interior groups and what stands in
         // them (0x007f16f0, 0x007a8440). w: the power the fog is drawn
@@ -3062,6 +3066,22 @@ void Renderer::update(float deltaTime) {
         // intensity.
         weatherLight_ = weather ? weather->lightValue() : 0.0f;
         const float weatherIntensity = weatherLight_;
+        // A thunderstorm's lightning (lightning_flash.hpp - WoWee's own; the
+        // client's storm is rain, its light sets and thunder heard): the
+        // strike under way lights the sky's light for this frame's lighting.
+        // None reaches the camera inside a building or a cave (the interior
+        // groups the weather is not drawn in), asked here for this frame.
+        {
+            lightningFlash_.update(deltaTime, weather ? weather->weatherId() : 0u,
+                                   weather ? weather->getIntensity() : 0.0f);
+            float flash = lightningFlash_.value();
+            if (flash > 0.0f && camera && wmoRenderer) {
+                const glm::vec3 eye = camera->getPosition();
+                if (wmoRenderer->isInsideInteriorWMO(eye.x, eye.y, eye.z)) flash = 0.0f;
+            }
+            lightningFlashValue_ = flash;
+            lightingManager->setLightningFlash(flash);
+        }
         // The underwater sets are for the camera in liquid (0x007f3230 asks
         // 0x00780620 at the camera), not the player swimming.
         // How far under, and in what: the LiquidType row darkens the light
@@ -7199,7 +7219,12 @@ void Renderer::recordRtLighting() {
                                              kShadowSunMinHeight);
     }
     in.sunColor = glm::vec3(currentFrameData.lightColor);
-    in.skyColor = glm::vec3(currentFrameData.ambientColor);
+    // The open sky the probes are lit by and measured against: the zone's
+    // ambient without a lightning flash. The probes ease over frames and the
+    // reference does not, so with the flash in both the ratio between them
+    // dipped through every strike and rose after it; the flat ambient the
+    // surfaces take carries the flash through the ratio unchanged.
+    in.skyColor = glm::max(glm::vec3(currentFrameData.ambientColor) - lightningAmbientFrame_, glm::vec3(0.0f));
     in.sunUp = in.sunDir.z > -0.05f;
     // The shadow map's reach, short of where its last cascade fades out:
     // within it the units' sun shadows are the map's (rt_trace.comp).
@@ -8208,6 +8233,11 @@ void Renderer::recordSunShafts() {
                        vkCtx->getSwapchainExtent(), in);
 }
 
+void Renderer::testLightning(float pinAt) {
+    if (pinAt < -1.5f) lightningFlash_.start(lightning_flash::referenceStrike());
+    else lightningFlash_.pin(lightning_flash::referenceStrike(), pinAt);
+}
+
 void Renderer::setEyeAdaptation(int brighteningPercent, float seconds, int sensitivityPercent) {
     eyeBrighteningPercent_ = brighteningPercent;
     eyeAdaptSeconds_ = seconds;
@@ -8229,9 +8259,15 @@ void Renderer::recordEyeAdaptation() {
         return;
     }
     if (!worldDrawnThisFrame_) return;
+    // Held through a lightning strike (lightning_flash.hpp): the eye reads
+    // the picture two frames late and follows into the light five times
+    // faster than out of it, so it closed down on each flash and the world
+    // sank below its own light for seconds after it - a strike darkened the
+    // storm. A flash is too short to adapt to.
+    const float eyeDt = lightningFlash_.active() ? 0.0f : lastDeltaTime_;
     eyeAdaptation_->record(currentCmd, vkCtx->getCurrentFrame(),
                            currentImageIndex < images.size() ? images[currentImageIndex] : VK_NULL_HANDLE,
-                           vkCtx->getSwapchainExtent(), true, lastDeltaTime_);
+                           vkCtx->getSwapchainExtent(), true, eyeDt);
     vkCtx->gpuMark(currentCmd, "eye adaptation");
 }
 

@@ -11,6 +11,7 @@
 #include <optional>
 #include "rendering/rt_rays.hpp"
 #include "rendering/day_night.hpp"
+#include "rendering/lightning_flash.hpp"
 #include "rendering/blob_shadow.hpp"
 #include "rendering/shadow_unit_tile.hpp"
 #include "rendering/animation/body_yaw.hpp"
@@ -242,6 +243,12 @@ public:
     LensFlare* getLensFlare() const { return skySystem ? skySystem->getLensFlare() : nullptr; }
     Weather* getWeather() const { return weather.get(); }
     Lightning* getLightning() const { return lightning.get(); }
+    /// For scripted runs (__WoweeTestLightning): a strike started now (pinAt
+    /// < -1.5), the reference strike held pinAt seconds after its start
+    /// (pinAt >= 0), or let go (otherwise).
+    void testLightning(float pinAt);
+    /// The lightning flash this frame's lighting took, 0-1.
+    [[nodiscard]] float lightningFlash() const { return lightningFlashValue_; }
     CharacterRenderer* getCharacterRenderer() const { syncWorldRecording(); return characterRenderer.get(); }
     WMORenderer* getWMORenderer() const { syncShadowRecording(); return wmoRenderer.get(); }
     M2Renderer* getM2Renderer() const { syncWorldRecording(); return m2Renderer.get(); }
@@ -774,6 +781,11 @@ private:
     bool weatherIndoors_ = false;
     /// Weather::lightValue as this frame's lighting took it.
     float weatherLight_ = 0.0f;
+    /// A thunderstorm's strikes (lightning_flash.hpp), the flash this frame's
+    /// lighting took (0 indoors), and its share of the per-frame ambient.
+    lightning_flash::Scheduler lightningFlash_;
+    float lightningFlashValue_ = 0.0f;
+    glm::vec3 lightningAmbientFrame_{0.0f};
     void applyFarClip(uint32_t mapId);
     bool sharpStars_ = false;
     struct WmoSurfaceDetail {

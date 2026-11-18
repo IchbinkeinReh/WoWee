@@ -1,5 +1,6 @@
 #include "core/local_time.hpp"
 #include "rendering/lighting_manager.hpp"
+#include "rendering/lightning_flash.hpp"
 #include "rendering/light_coords.hpp"
 #include "rendering/light_band_block.hpp"
 #include "rendering/day_night.hpp"
@@ -698,6 +699,28 @@ void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
             diagSecondVolume_ = secondVolume;
             diagHours_ = hours;
             diagSkyLuma_ = skyLuma;
+        }
+    }
+
+    // A thunderstorm's lightning (lightning_flash.hpp; the client has none):
+    // the sky's light, on top of everything above, and less of it the further
+    // the camera is inside a building with fog of its own.
+    {
+        float flash = std::clamp(lightningFlash_, 0.0f, 1.0f);
+        if (interiorFog_) flash *= 1.0f - daynight::wmoFogBlend(interiorFog_->distanceInside);
+        if (flash > 0.0f) {
+            namespace lf = lightning_flash;
+            const glm::vec3 add = lf::ambientAdd(flash);
+            newParams.ambientColor += add;
+            newParams.averagedAmbientColor += add;
+            newParams.lightningAmbient = add;
+            for (glm::vec3* band : {&newParams.skyTopColor, &newParams.skyMiddleColor, &newParams.skyBand1Color,
+                                    &newParams.skyBand2Color, &newParams.skySmogColor})
+                *band = lf::skyBand(*band, flash);
+            for (glm::vec3* c : {&newParams.cloudSunColor, &newParams.cloudShadeColor, &newParams.cloudBaseColor})
+                *c = lf::cloud(*c, flash);
+            newParams.fogColor = lf::fog(newParams.fogColor, flash);
+            newParams.zoneFogColor = lf::fog(newParams.zoneFogColor, flash);
         }
     }
 
