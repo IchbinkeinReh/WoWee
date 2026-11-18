@@ -45,6 +45,10 @@
 #include "rendering/renderer.hpp"
 #include "rendering/weather.hpp"
 #include "rendering/camera.hpp"
+#include "rendering/camera_controller.hpp"
+#include "rendering/horizon_renderer.hpp"
+#include "rendering/terrain_manager.hpp"
+#include "rendering/terrain_renderer.hpp"
 #include "game/entity.hpp"
 #include <cmath>
 #include "addons/lua_handler_globals.hpp"
@@ -11531,6 +11535,46 @@ void LuaEngine::registerCoreAPI() {
             return 0;
         });
         lua_setglobal(L_, "__WoweeTestFrameShot");
+        // __WoweeTestStreamState(): what the world holds this frame, as one
+        // line - the camera's eye, yaw and pitch, the far clip, the terrain
+        // tiles loaded / queued / being finalized, the ground chunks drawn
+        // and the .wdl horizon tiles drawn (row_col). For scripted runs that
+        // show what a turn of the camera does to it.
+        lua_pushcfunction(L_, [](lua_State* L) -> int {
+            auto* renderer = core::Application::getInstance().getRenderer();
+            if (!renderer) return 0;
+            std::string s;
+            char buf[256];
+            if (const auto* cam = renderer->getCamera()) {
+                const glm::vec3 p = cam->getPosition();
+                const glm::vec3 f = cam->getForward();
+                std::snprintf(buf, sizeof(buf), "eye=%.2f,%.2f,%.2f fwd=%.3f,%.3f,%.3f", p.x, p.y, p.z, f.x, f.y,
+                              f.z);
+                s += buf;
+            }
+            if (auto* cc = renderer->getCameraController()) {
+                std::snprintf(buf, sizeof(buf), " yaw=%.2f pitch=%.2f", cc->getYaw(), cc->getPitch());
+                s += buf;
+            }
+            std::snprintf(buf, sizeof(buf), " far=%.1f", renderer->getFarClip());
+            s += buf;
+            if (auto* tm = renderer->getTerrainManager()) s += " " + tm->describeStreamState();
+            if (auto* tr = renderer->getTerrainRenderer())
+                s += " chunksDrawn=" + std::to_string(tr->getRenderedChunkCount());
+            if (const auto* hz = renderer->getHorizon()) {
+                std::vector<uint16_t> d = hz->drawnTiles();
+                std::sort(d.begin(), d.end());
+                s += " wdl=" + std::to_string(d.size()) + "[";
+                for (size_t i = 0; i < d.size(); ++i) {
+                    if (i) s += ' ';
+                    s += std::to_string(d[i] / 64) + "_" + std::to_string(d[i] % 64);
+                }
+                s += "]";
+            }
+            lua_pushstring(L, s.c_str());
+            return 1;
+        });
+        lua_setglobal(L_, "__WoweeTestStreamState");
         // __WoweeTestNearestTransport([entry]): for a scripted ride, the nearest
         // transport on this map: its horizontal distance from the player,
         // its height over the player, its entry, and whether the player is

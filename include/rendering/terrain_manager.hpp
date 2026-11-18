@@ -432,6 +432,14 @@ public:
     /** Total unfinished tiles (worker threads + ready queue + finalizing) */
     [[nodiscard]] int getRemainingTileCount() const { return static_cast<int>(pendingTiles.size() + readyQueue.size() + finalizingTiles_.size()); }
     [[nodiscard]] TileCoord getCurrentTile() const { return currentTile; }
+    /// For scripted runs (__WoweeTestStreamState): the tile streamed about,
+    /// and the tiles loaded, queued or being finalized, as "x_y" lists in
+    /// index order - so a log line says what the world holds this frame.
+    [[nodiscard]] std::string describeStreamState();
+    /// Whether tile (x, y)'s ground is in: committed to the loaded tiles.
+    [[nodiscard]] bool isTileLoaded(int x, int y) const {
+        return loadedTiles.count(TileCoord{.x = x, .y = y}) != 0;
+    }
 
     /** Process one ready tile (for loading screens with per-tile progress updates) */
     /// The loading screen's: finalizes one ready tile whole; 1 if it did.

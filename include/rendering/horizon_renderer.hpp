@@ -51,6 +51,8 @@ public:
                 float scale);
 
     [[nodiscard]] uint32_t tilesDrawn() const { return tilesDrawn_; }
+    /// The tiles the last frame drew, as row * 64 + column.
+    [[nodiscard]] const std::vector<uint16_t>& drawnTiles() const { return drawnTiles_; }
 
 private:
     void buildPipeline();
@@ -73,6 +75,7 @@ private:
     /// MAOF slot -> index into tiles_ (and the vertex buffer), -1 for none.
     std::array<int32_t, 64 * 64> slot_{};
     uint32_t tilesDrawn_ = 0;
+    std::vector<uint16_t> drawnTiles_;
 };
 
 }  // namespace rendering

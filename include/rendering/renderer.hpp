@@ -844,6 +844,8 @@ public:
     /// What the world is actually drawn to on this map: the view distance
     /// held to 791 yards before map 530 and 1583 from it (0x00780770).
     float getFarClip() const { return farClip_; }
+    /// The .wdl horizon (nullptr before the renderer is up).
+    const HorizonRenderer* getHorizon() const { return horizon_.get(); }
     /// Draw the client's own point stars in place of the sky model's baked
     /// star layer, which is a 256x256 compressed texture stretched across the
     /// whole dome. See Renderer::setSharpStars.

@@ -150,6 +150,7 @@ void HorizonRenderer::update(pipeline::AssetManager* assets) {
 void HorizonRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
                              float farClip, float scale) {
     tilesDrawn_ = 0;
+    drawnTiles_.clear();
     if (pipeline_ == VK_NULL_HANDLE || tiles_.empty() || farClip <= 50.0f) return;
     const float nearZ = pipeline::wdl::horizonNear(farClip);
     const float farZ = pipeline::wdl::horizonFar(farClip, scale);
@@ -184,6 +185,7 @@ void HorizonRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, c
             }
             vkCmdDrawIndexed(cmd, pipeline::wdl::kIndices, 1, 0, t * pipeline::wdl::kVertices, 0);
             ++tilesDrawn_;
+            drawnTiles_.push_back(static_cast<uint16_t>(row * 64 + col));
         }
     }
 }

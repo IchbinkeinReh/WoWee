@@ -1964,6 +1964,34 @@ void TerrainManager::softReset() {
     }
 }
 
+std::string TerrainManager::describeStreamState() {
+    auto list = [](std::vector<TileCoord> v) {
+        std::sort(v.begin(), v.end(), [](const TileCoord& a, const TileCoord& b) {
+            return a.y != b.y ? a.y < b.y : a.x < b.x;
+        });
+        std::string s = std::to_string(v.size()) + "[";
+        for (size_t i = 0; i < v.size(); ++i) {
+            if (i) s += ' ';
+            s += std::to_string(v[i].x) + "_" + std::to_string(v[i].y);
+        }
+        return s + "]";
+    };
+    std::vector<TileCoord> loaded, pending, finalizing;
+    loaded.reserve(loadedTiles.size());
+    for (const auto& [c, t] : loadedTiles) loaded.push_back(c);
+    {
+        std::lock_guard<std::mutex> lock(queueMutex);
+        for (const auto& [c, b] : pendingTiles) {
+            if (!loadedTiles.count(c)) pending.push_back(c);
+        }
+    }
+    for (const auto& ft : finalizingTiles_) finalizing.push_back(ft.pending ? ft.pending->coord : TileCoord{-1, -1});
+    return "cur=" + std::to_string(currentTile.x) + "_" + std::to_string(currentTile.y) +
+           " loaded=" + list(std::move(loaded)) + " pending=" + list(std::move(pending)) +
+           " finalizing=" + list(std::move(finalizing)) + " unloadQueue=" +
+           std::to_string(pendingUnloadQueue_.size());
+}
+
 TileCoord TerrainManager::worldToTile(float glX, float glY) const {
     auto [tileX, tileY] = core::coords::worldToTile(glX, glY);
     return {.x = tileX, .y = tileY};
