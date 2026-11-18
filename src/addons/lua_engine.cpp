@@ -43,6 +43,7 @@
 #include "core/input.hpp"
 #include "core/coordinates.hpp"
 #include "rendering/renderer.hpp"
+#include "rendering/weather.hpp"
 #include "rendering/camera.hpp"
 #include "game/entity.hpp"
 #include <cmath>
@@ -11507,6 +11508,24 @@ void LuaEngine::registerCoreAPI() {
             return 0;
         });
         lua_setglobal(L_, "__WoweeTestCloseSocket");
+        // __WoweeTestWeather(row, intensity[, abrupt]): a Weather.dbc row
+        // made the weather here only, as SMSG_WEATHER would (the server's
+        // next one replaces it) - rain to look at without asking the zone.
+        lua_pushcfunction(L_, [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) {
+                gh->setWeatherForTest(static_cast<uint32_t>(luaL_checkinteger(L, 1)),
+                                      static_cast<float>(luaL_checknumber(L, 2)), lua_toboolean(L, 3) != 0);
+            }
+            return 0;
+        });
+        lua_setglobal(L_, "__WoweeTestWeather");
+        // __WoweeTestWeatherLayers(mask): which of the weather's layers are
+        // drawn, 1 drops, 2 splashes, 4 mist (7, all, by default).
+        lua_pushcfunction(L_, [](lua_State* L) -> int {
+            wowee::rendering::Weather::testLayers = static_cast<int>(luaL_checkinteger(L, 1)) & 7;
+            return 0;
+        });
+        lua_setglobal(L_, "__WoweeTestWeatherLayers");
         lua_pushcfunction(L_, [](lua_State* L) -> int {
             wowee::core::testFrameShotPath = luaL_checkstring(L, 1);
             return 0;

@@ -73,6 +73,11 @@ public:
     void update(const FrameInput& frame);
     void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet);
 
+    /// For comparing the layers in a scripted run (__WoweeTestWeatherLayers):
+    /// which are drawn, 1 the drops, 2 the splashes, 4 the mist. All of
+    /// them unless a test says otherwise.
+    static inline int testLayers = 7;
+
     /// The weatherDensity setting, 0-3 (0x00784040).
     void setDensityLevel(int level);
     [[nodiscard]] int densityLevel() const { return densityLevel_; }

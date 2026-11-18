@@ -5990,6 +5990,14 @@ public:
     /// packet from now on is dropped as it arrives, which is what a link
     /// that died in the background looks like from this side.
     void setDeafForTest(bool deaf) { deafForTest_ = deaf; }
+    /// For a scripted run (__WoweeTestWeather): the weather as if SMSG_WEATHER
+    /// had named it, here only - the server's next one replaces it.
+    void setWeatherForTest(uint32_t row, float intensity, bool abrupt) {
+        weatherType_ = row;
+        weatherIntensity_ = intensity;
+        weatherAbrupt_ = abrupt;
+        ++weatherSerial_;
+    }
     void setTransportAttachment(uint64_t childGuid, ObjectType type,
                                 uint64_t transportGuid, const glm::vec3& localOffset,
                                 bool hasLocalOrientation, float localOrientation,

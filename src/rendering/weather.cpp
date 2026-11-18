@@ -628,8 +628,8 @@ void Weather::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet) {
     switch (effect) {
         case Effect::Rain:
             // 0x0078ae20: the drops (0x0078a640), then the splashes (0x0078a030).
-            drawPackets(streakPipeline_, loadedSet(texture_), false);
-            drawPackets(splashPipeline_, loadedSet(cw::kSplashTexture), true);
+            if (testLayers & 1) drawPackets(streakPipeline_, loadedSet(texture_), false);
+            if (testLayers & 2) drawPackets(splashPipeline_, loadedSet(cw::kSplashTexture), true);
             break;
         case Effect::Snow:
             push.params.y = 0.0f;
@@ -649,7 +649,7 @@ void Weather::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet) {
     // The mist, after the particles (0x0078ae20 and its siblings end with
     // 0x00786e10): a quad a sheet facing the camera, in the fog's colour.
     const VkDescriptorSet mistSet = loadedSet(cw::mistSpec(effect).texture);
-    if (!mistPipeline_ || !mistSet) return;
+    if (!mistPipeline_ || !mistSet || !(testLayers & 4)) return;
     mistFrame_ = (mistFrame_ + 1) % kMistFrames;
     auto* out = static_cast<GpuMistVertex*>(mistMapped_[mistFrame_]);
     if (!out) return;
