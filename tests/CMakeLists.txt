@@ -1730,6 +1730,8 @@ wowee_add_test(test_rt_memory_guard
 # -- test_rt_water: the ray traced water's optics.
 wowee_add_test(test_rt_water
     SOURCES test_rt_water.cpp)
+target_compile_definitions(test_rt_water PRIVATE
+    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # -- test_rt_detail: the textures traced hits are coloured by, and their store.
 wowee_add_test(test_rt_detail
@@ -4299,11 +4301,15 @@ wowee_add_test(test_wave_spectrum SOURCES test_wave_spectrum.cpp)
 # Waves coming into shallow water: finite-depth dispersion, shoaling,
 # refraction and McCowan's breaking limit (shallow_water.hpp). Header-only.
 wowee_add_test(test_shallow_water SOURCES test_shallow_water.cpp)
+target_compile_definitions(test_shallow_water PRIVATE
+    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # The traced water's waves on the CPU, which swimmers, boats and the camera
 # ride (wave_surface.hpp): the surface over a point found by inverting the
 # Gerstner displacement, none where the water has no waves. Header-only.
 wowee_add_test(test_wave_surface SOURCES test_wave_surface.cpp)
+target_compile_definitions(test_wave_surface PRIVATE
+    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # The tessellated water's curve and the rings' and wakes' heights against the
 # slopes the water shades with (water_tessellation.hpp). Header-only.

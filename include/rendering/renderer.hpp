@@ -1346,6 +1346,11 @@ private:
     /// calms over some seconds rather than at once.
     float waterRain_ = 0.0f;
     float waterStorm_ = 0.0f;
+    // The hand-made waves' own clock: the seconds of globalTime each run at
+    // the weather's pace (wave_spectrum::WeatherWaves::speedScale), summed.
+    // Their phase is the pace times the clock; the pace times globalTime raced
+    // the crests while the weather eased (see where it is kept).
+    double waterWaveClock_ = 0.0;
     float physicsWind_ = 7.0f;
     bool waterTessellation_ = true;
     bool shoreWaves_ = true;

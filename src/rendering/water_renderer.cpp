@@ -65,10 +65,15 @@ struct WaterPushConstants {
     float interiorFog = 0.0f; // 1: an interior WMO liquid, fogged with the camera's fog
     float pad2 = 0.0f;
     // x 1: the shore waves and their surf (water_waves.glsli, water.frag's
-    // surfFoam); y how rough the weather makes the sea, 1 calm.
+    // surfFoam); y how rough the weather makes the sea, 1 calm; z, w the
+    // physics waves' normal in calm weather (wave_surface::WaveParams'
+    // normalMinWavelength and detail).
     glm::vec4 shore{0.0f};
+    // x the physics waves' upper rung's share, y its wind, z the lower rung's
+    // place (wave_spectrum::windRungs; water_waves.glsli's pwWindBlend).
+    glm::vec4 windBlend{0.0f};
 };
-static_assert(sizeof(WaterPushConstants) == 96, "the shaders' declarations of this range are laid out for 96 bytes");
+static_assert(sizeof(WaterPushConstants) == 112, "the shaders' declarations of this range are laid out for 112 bytes");
 
 
 
@@ -1429,7 +1434,9 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
         push.waveFreq = waves->freq;
         push.waveSpeed = waves->speed;
         push.pad2 = waves->wind;
-        if (waves->shore) push.shore = glm::vec4(1.0f, waves->surf, 0.0f, 0.0f);
+        push.shore = glm::vec4(waves->shore ? 1.0f : 0.0f, waves->shore ? waves->surf : 0.0f,
+                               waves->normalMinWavelength, waves->detail);
+        push.windBlend = glm::vec4(waves->windUpperShare, waves->windUpper, waves->windRung, 0.0f);
         push.liquidBasicType = waves->basicType;
         push.screenSize = glm::vec2(static_cast<float>(renderExtent_.width),
                                     static_cast<float>(renderExtent_.height));

@@ -45,6 +45,10 @@ layout(push_constant) uniform Push {
     // x 1: the shore waves (water_waves.glsli's evaluatePhysicalWavesShore),
     // y how much rough weather whips up their surf (water.frag).
     vec4 shore;
+    // x the physics waves' upper rung's share, y its wind, z the lower rung's
+    // place (water_waves.glsli's pwWindBlend, wave_surface::WaveParams'
+    // windUpperShare, windUpper and windRung).
+    vec4 windBlend;
 } push;
 
 layout(location = 0) in vec3 tcWorldPos[];
@@ -142,6 +146,7 @@ float interactionHeight(vec2 at) {
 }
 
 void main() {
+    pwWindBlend = push.windBlend.xyz;
     // Weighed the same way on both triangles that share an edge, so the
     // points along it land in the same places for both.
     precise vec3 base = gl_TessCoord.x * tcWorldPos[0] + gl_TessCoord.y * tcWorldPos[1] +

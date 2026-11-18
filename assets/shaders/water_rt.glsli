@@ -204,6 +204,29 @@ vec3 rtwReflection(vec3 origin, vec3 dir, vec3 toSun, inout uint rng) {
     return mix(mix(c, fogColor.rgb, haze), shown, onScreen);
 }
 
+// How deep the ground (or a building's floor) lies straight under the surface
+// point `p`, by one ray down: -1 where nothing is met within `reach`, 0 where
+// the ray starts in the ground. The shore's masks go by this (water.frag): the
+// depth read off the screen is the depth where the view's ray meets the bed,
+// which on a beach rising toward a low camera lies yards further out and is
+// several times deeper than the water under the pixel - the shallows' wet band,
+// their surf line and the shore's fade were squeezed into a few pixels at the
+// waterline, and in front of the camera the shallows were drawn as deep water
+// over a bed shown as if through clear glass (Stonebull Lake, the camera at
+// 20 degrees). Units are not met: a swimmer is not the bed.
+float rtwDepthBelow(vec3 p, float reach, inout uint rng) {
+    const float LIFT = 0.02;
+    float t;
+    vec3 hn;
+    vec4 hs;
+    bool below;
+    rtStructureOnly = true;
+    bool met = rtClosestEx(p + vec3(0.0, 0.0, LIFT), vec3(0.0, 0.0, -1.0), reach + LIFT, rng, t, hn, hs, below);
+    rtStructureOnly = false;
+    if (!met) return -1.0;
+    return below ? 0.0 : max(t - LIFT, 0.0);
+}
+
 // How deep under the surface the bed the last refracted ray met lies, when it
 // met the bed or anything else standing in the water but a unit: -1 for none
 // (water.frag: the water's own colour over the path and the shore's masks).

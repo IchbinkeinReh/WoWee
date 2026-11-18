@@ -10,6 +10,8 @@
 
 #include <glm/glm.hpp>
 
+#include <limits>
+
 namespace wowee::rendering::rt_water {
 
 inline constexpr float kIor = 1.333f;
@@ -52,6 +54,20 @@ inline constexpr float kF0 = 0.02f;
 [[nodiscard]] inline glm::vec3 sky(const glm::vec3& dir, const glm::vec3& horizon, const glm::vec3& top) {
     const float up = std::clamp(dir.z, 0.0f, 1.0f);
     return glm::mix(horizon, top, std::sqrt(up));
+}
+
+/// The depth the screen reports under a surface point `depthUnder` yards
+/// deep (water.frag's shoreDepth before rtwDepthBelow): the depth buffer's
+/// distance past the surface along the view, times the view's slope, is the
+/// depth where the view's ray meets the bed. Over a bed that falls away from
+/// the camera at `bedSlope` (rise over run) seen at `viewSlope` (the view's
+/// descent over its run, more than the bed's), that is further out and deeper:
+/// depthUnder * viewSlope / (viewSlope - bedSlope). Exact on a flat bed or
+/// looking straight down; on a beach under a low camera, several times the
+/// depth, which squeezed the shore's masks into the waterline.
+[[nodiscard]] inline float screenShoreDepth(float depthUnder, float viewSlope, float bedSlope) {
+    if (viewSlope <= bedSlope) return std::numeric_limits<float>::infinity();
+    return depthUnder * viewSlope / (viewSlope - bedSlope);
 }
 
 }  // namespace wowee::rendering::rt_water

@@ -38,6 +38,10 @@ layout(push_constant) uniform Push {
     // x 1: the shore waves (water_waves.glsli's evaluatePhysicalWavesShore),
     // y how much rough weather whips up their surf (water.frag).
     vec4 shore;
+    // x the physics waves' upper rung's share, y its wind, z the lower rung's
+    // place (water_waves.glsli's pwWindBlend, wave_surface::WaveParams'
+    // windUpperShare, windUpper and windRung).
+    vec4 windBlend;
 } push;
 
 layout(location = 0) in vec3 aPos;
@@ -60,6 +64,7 @@ layout(location = 6) out vec4 BedInfo;
 
 void main() {
     float time = fogParams.z;
+    pwWindBlend = push.windBlend.xyz;
     vec4 worldPos = vec4(aPos, 1.0);
 
     // Evaluate Gerstner waves using X,Y horizontal plane. With physics waves

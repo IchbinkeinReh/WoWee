@@ -60,19 +60,36 @@ GerstnerResult flatWaves() {
 // distance would leave a step in the surface there.
 const float PW_G = 9.80665 * 1.0936133;
 const int PW_COUNT = 12;
+// Two rungs' waves at most (pwWindBlend).
+const int PW_MAX = 2 * PW_COUNT;
+
+// The physics waves between two rungs of the ladder of winds
+// (wave_spectrum::windRungs, sampleBlend): x the upper rung's share, y its
+// wind in m/s (0 on a rung), z the lower rung's place on the ladder, whose
+// waves' phases each rung's are. Each stage sets it from push.windBlend before it
+// evaluates the waves. The two rungs' waves are each whole, only their
+// heights shared: a spectrum resampled for an easing wind raced its crests.
+vec3 pwWindBlend = vec3(0.0);
 
 // The spectrum sampled: each wave's amplitude (yd), deep-water wavenumber
 // (rad/yd) and angular frequency (rad/s), and the steepness Q they share so
 // that sum(Q k a) is 0.75 at most.
 struct PWSpectrum {
-    float amps[PW_COUNT];
-    float ks[PW_COUNT];
-    float ws[PW_COUNT];
+    float amps[PW_MAX];
+    float ks[PW_MAX];
+    float ws[PW_MAX];
     float q;
+    int count;
 };
 
-PWSpectrum pwSample(float ampScale, float fetch, float windMps) {
-    PWSpectrum sp;
+// Wave i's fixed phase: the golden angle a wave, counted on from the rung
+// under the lower one (wave_spectrum::sampleBlend).
+float pwPhaseOffset(int i) {
+    return (pwWindBlend.z * float(PW_COUNT) + float(i)) * 2.399963;
+}
+
+// One rung's 12 waves into sp from `base`, their sum of k a added to kaSum.
+void pwSampleSet(inout PWSpectrum sp, int base, float ampScale, float fetch, float windMps, inout float kaSum) {
     float u = max(windMps * 1.0936133, 0.1);
     float f = max(fetch, 1.0);
     float wp = max(22.0 * pow(PW_G * PW_G / (u * f), 1.0 / 3.0), 0.855 * PW_G / u);
@@ -80,7 +97,6 @@ PWSpectrum pwSample(float ampScale, float fetch, float windMps) {
     float lo = 0.70 * wp;
     float stepRatio = pow(4.0 / 0.70, 1.0 / float(PW_COUNT));
 
-    float kaSum = 0.0;
     for (int i = 0; i < PW_COUNT; i++) {
         float w0 = lo * pow(stepRatio, float(i));
         float w1 = w0 * stepRatio;
@@ -90,10 +106,24 @@ PWSpectrum pwSample(float ampScale, float fetch, float windMps) {
         float ratio = wp / w;
         float S = alpha * PW_G * PW_G / pow(w, 5.0) * exp(-1.25 * ratio * ratio * ratio * ratio)
                 * pow(3.3, exp(-0.5 * d * d));
-        sp.ws[i] = w;
-        sp.ks[i] = w * w / PW_G;
-        sp.amps[i] = sqrt(2.0 * S * (w1 - w0)) * ampScale;
-        kaSum += sp.ks[i] * sp.amps[i];
+        sp.ws[base + i] = w;
+        sp.ks[base + i] = w * w / PW_G;
+        sp.amps[base + i] = sqrt(2.0 * S * (w1 - w0)) * ampScale;
+        kaSum += sp.ks[base + i] * sp.amps[base + i];
+    }
+}
+
+PWSpectrum pwSample(float ampScale, float fetch, float windMps) {
+    PWSpectrum sp;
+    float kaSum = 0.0;
+    float f = clamp(pwWindBlend.x, 0.0, 1.0);
+    if (f > 0.0 && pwWindBlend.y > 0.0) {
+        pwSampleSet(sp, 0, ampScale * sqrt(1.0 - f), fetch, windMps, kaSum);
+        pwSampleSet(sp, PW_COUNT, ampScale * sqrt(f), fetch, pwWindBlend.y, kaSum);
+        sp.count = PW_MAX;
+    } else {
+        pwSampleSet(sp, 0, ampScale, fetch, windMps, kaSum);
+        sp.count = PW_COUNT;
     }
     sp.q = kaSum > 0.0 ? min(1.0, 0.75 / kaSum) : 0.0;
     return sp;
@@ -102,7 +132,8 @@ PWSpectrum pwSample(float ampScale, float fetch, float windMps) {
 // Wave i's direction: spread about the wind at fixed angles a golden-ratio
 // step apart, the longest waves nearest the wind.
 vec2 pwDirection(int i, float windDir) {
-    float spread = (fract(float(i) * 0.6180340) - 0.5) * 3.14159265 * 0.8;
+    // The upper rung's wave i + 12 runs as the lower's i.
+    float spread = (fract(float(i % PW_COUNT) * 0.6180340) - 0.5) * 3.14159265 * 0.8;
     float angle = windDir + spread;
     return vec2(cos(angle), sin(angle));
 }
@@ -116,6 +147,19 @@ float pwKeep(float wavelength, float minWavelength, float fullWavelength) {
         : (wavelength >= minWavelength ? 1.0 : 0.0);
 }
 
+// Waves shorter than this, yards, are left out of the slope (the normal)
+// as well, faded out over the next doubling of length: 0, as water.vert and
+// water.tese leave it, keeps every wave in the normal. water.frag sets it to
+// a few of the pixel's own widths on the water, so a wave shorter than the
+// pixel can show is not sampled into a grid of glints that crawls as the
+// camera moves (aliasing: the twelve waves' crests, each a set of straight
+// lines, beat against the pixels' rows), and to more in calm weather, when
+// the wind's short chop is what made a still lake look busy.
+float pwSlopeCutoff = 0.0;
+float pwSlopeKeep(float k) {
+    return pwSlopeCutoff > 0.0 ? pwKeep(6.2831853 / max(k, 1e-4), pwSlopeCutoff, 2.0 * pwSlopeCutoff) : 1.0;
+}
+
 // The sampled spectrum's waves in deep water at `pos`.
 GerstnerResult pwWaves(PWSpectrum sp, vec2 pos, float time, float windDir, float minWavelength,
                        float fullWavelength) {
@@ -123,13 +167,13 @@ GerstnerResult pwWaves(PWSpectrum sp, vec2 pos, float time, float windDir, float
     float Q = sp.q;
 
     float totalWave = 0.0;
-    for (int i = 0; i < PW_COUNT; i++) {
+    for (int i = 0; i < sp.count; i++) {
         vec2 dir = pwDirection(i, windDir);
         float k = sp.ks[i];
         float A = sp.amps[i];
         // Too short for the vertex grid: in the normal only.
         float keep = pwKeep(6.2831853 / k, minWavelength, fullWavelength);
-        float phase = k * dot(dir, pos) - sp.ws[i] * time + float(i) * 2.399963;
+        float phase = k * dot(dir, pos) - sp.ws[i] * time + pwPhaseOffset(i);
         float s = sin(phase);
         float c = cos(phase);
 
@@ -137,7 +181,7 @@ GerstnerResult pwWaves(PWSpectrum sp, vec2 pos, float time, float windDir, float
         r.displacement.y += keep * Q * A * dir.y * c;
         r.displacement.z += keep * A * s;
 
-        float WA = k * A;
+        float WA = k * A * pwSlopeKeep(k);
         r.tangent.x -= Q * dir.x * dir.x * WA * s;
         r.tangent.y -= Q * dir.x * dir.y * WA * s;
         r.tangent.z += dir.x * WA * c;
@@ -357,7 +401,7 @@ void swAddWave(inout GerstnerResult r, vec2 dir, float k, float A, float Q, floa
     r.displacement.y += keep * A * dir.y * horizontal;
     r.displacement.z += keep * A * s;
 
-    float WA = k * A;
+    float WA = k * A * pwSlopeKeep(k);
     float slope = lean * c - Q * s;
     r.tangent.x += dir.x * dir.x * WA * slope;
     r.tangent.y += dir.x * dir.y * WA * slope;
@@ -377,11 +421,13 @@ GerstnerResult evaluatePhysicalWavesShore(vec2 pos, float time, float ampScale, 
     PWSpectrum sp = pwSample(ampScale, fetch, windMps);
     float h = bed.x;
     float seaA2 = 0.0;
-    for (int i = 0; i < PW_COUNT; i++) seaA2 += sp.amps[i] * sp.amps[i];
+    for (int i = 0; i < sp.count; i++) seaA2 += sp.amps[i] * sp.amps[i];
     // Deep enough that even the longest wave hardly feels the bed (shoaling
     // within a part in a thousand of 1, no turn, far from breaking): the deep
     // waves as they are, at a deep wave's cost.
-    if (h * sp.ks[0] > SW_DEEP_KH) {
+    // Either rung's first wave is its longest.
+    float longestK = sp.count > PW_COUNT ? min(sp.ks[0], sp.ks[PW_COUNT]) : sp.ks[0];
+    if (h * longestK > SW_DEEP_KH) {
         GerstnerResult deep = pwWaves(sp, pos, time, windDir, minWavelength, fullWavelength);
         deep.seaHeight = SW_HS_FACTOR * sqrt(seaA2);
         deep.breaking = deep.seaHeight / (SW_GAMMA * h);
@@ -395,14 +441,17 @@ GerstnerResult evaluatePhysicalWavesShore(vec2 pos, float time, float ampScale, 
 
     // Each wave's height in this depth and how much of it has turned to run
     // up the beach.
-    float amps[PW_COUNT];
-    float shares[PW_COUNT];
-    float kShore[PW_COUNT];
+    float amps[PW_MAX];
+    float shares[PW_MAX];
+    float kShore[PW_MAX];
     float sumA2 = 0.0;
-    for (int i = 0; i < PW_COUNT; i++) {
+    float shoaledA2 = 0.0;
+    for (int i = 0; i < sp.count; i++) {
         float w = sp.ws[i];
         float k = swWavenumber(w, h);
-        amps[i] = sp.amps[i] * swShoaling(w, k, h) * fade;
+        float shoaled = sp.amps[i] * swShoaling(w, k, h);
+        shoaledA2 += shoaled * shoaled;
+        amps[i] = shoaled * fade;
         kShore[i] = swShoreWavenumber(w, h, bedSlope);
         // Only a wave running in toward the shore turns to it; one running
         // out to sea dies away in the shallows with its deep part.
@@ -419,7 +468,7 @@ GerstnerResult evaluatePhysicalWavesShore(vec2 pos, float time, float ampScale, 
     float breaker = SW_HS_FACTOR * sqrt(sumA2) / (SW_GAMMA * max(h, 1e-3));
     float limit = swLimitScale(breaker);
     float kaSum = 0.0;
-    for (int i = 0; i < PW_COUNT; i++) {
+    for (int i = 0; i < sp.count; i++) {
         amps[i] *= limit;
         kaSum += amps[i] * mix(sp.ks[i], kShore[i], shares[i]);
     }
@@ -432,12 +481,12 @@ GerstnerResult evaluatePhysicalWavesShore(vec2 pos, float time, float ampScale, 
     float shoreA = 0.0;
     float totalA = 0.0;
     float strongest = 0.0;
-    for (int i = 0; i < PW_COUNT; i++) {
+    for (int i = 0; i < sp.count; i++) {
         vec2 dir = pwDirection(i, windDir);
         float w = sp.ws[i];
         float k = sp.ks[i];
         float A = amps[i];
-        float offset = float(i) * 2.399963;
+        float offset = pwPhaseOffset(i);
         // The deep part, at its deep phase.
         float deepA = A * (1.0 - shares[i]);
         swAddWave(r, dir, k, deepA, Q, lean, k * dot(dir, pos) - w * time + offset,
@@ -456,7 +505,13 @@ GerstnerResult evaluatePhysicalWavesShore(vec2 pos, float time, float ampScale, 
         shoreA += shoreAmp;
         totalA += A;
     }
-    r.breaking = breaker;
+    // The surf's breaker index (water.frag's surfFoam) is the waves' before
+    // they die away at the waterline (swFade): a wave that comes in breaks
+    // there, it does not fade out unbroken. Taken after the fade, the index
+    // fell to nothing toward the waterline faster than the depth did, and on
+    // a lake no wave ever reached 1 anywhere - no surf at any shore but the
+    // open sea's. The surface itself is still held by the faded one above.
+    r.breaking = SW_HS_FACTOR * sqrt(shoaledA2) / (SW_GAMMA * max(h, 1e-3));
     r.shoreWeight = totalA > 0.0 ? shoreA / totalA : 0.0;
     r.seaHeight = SW_HS_FACTOR * sqrt(seaA2);
     return r;
@@ -475,8 +530,10 @@ GerstnerResult evaluateGerstnerWavesShore(vec2 pos, float time, float amp, float
     float h = bed.x;
     float fade = swFade(h);
     r.seaHeight = SW_HS_FACTOR * sqrt(sumA2);
-    r.breaking = r.seaHeight * fade / (SW_GAMMA * max(h, 1e-3));
-    float scale = fade * swLimitScale(r.breaking);
+    // The surface is held by the faded heights; the surf's breaker index
+    // (r.breaking) by the waves' own, as evaluatePhysicalWavesShore has it.
+    float scale = fade * swLimitScale(r.seaHeight * fade / (SW_GAMMA * max(h, 1e-3)));
+    r.breaking = r.seaHeight / (SW_GAMMA * max(h, 1e-3));
     r.displacement *= scale;
     r.tangent = vec3(1.0, 0.0, 0.0) + (r.tangent - vec3(1.0, 0.0, 0.0)) * scale;
     r.binormal = vec3(0.0, 1.0, 0.0) + (r.binormal - vec3(0.0, 1.0, 0.0)) * scale;

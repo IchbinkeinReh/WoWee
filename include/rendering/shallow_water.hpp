@@ -171,6 +171,28 @@ inline float limitScale(float breaker) {
 /// waterline and over dry land.
 inline float shallowFade(float h) { return smoothstep(0.0f, kFadeDepth, h); }
 
+/// The surf's breaker index (water_waves.glsli's GerstnerResult.breaking,
+/// which water.frag's surfFoam whitens the water by): the waves' significant
+/// height as shoaled, before shallowFade, over the depth's limit. The fade is
+/// how a wave that has broken dies at the waterline; counted in, it took the
+/// index to nothing there faster than the depth, and a lake's waves never
+/// broke at any shore.
+inline float surfBreakerIndex(float shoaledSignificantHeight, float h) {
+    return breakerIndex(shoaledSignificantHeight, h);
+}
+
+/// How much surf the waters' size makes (water.frag's surfFoam `sea`), from
+/// the open water's significant height, yards: next to none for a still
+/// pond's ripples, a thin rim for a lake's chop, all of it from a lake in a
+/// gale and the sea's swell up.
+inline constexpr float kSurfSeaFrom = 0.01f;
+inline constexpr float kSurfSeaFull = 0.16f;
+inline float surfSeaShare(float seaHeight) { return smoothstep(kSurfSeaFrom, kSurfSeaFull, seaHeight); }
+/// The swash's rim - the line where the run-up turns - keeps this much of the
+/// surf however still the water: it laps at every shore (surfFoam).
+inline constexpr float kSurfRimFloor = 0.6f;
+inline float surfRimShare(float seaHeight) { return std::max(surfSeaShare(seaHeight), kSurfRimFloor); }
+
 /// How much of a wave has turned to run straight up the beach (Snell:
 /// sin(theta) / c held, so 1 - c / c0 = 1 - tanh(k h) of the turn is done),
 /// left out past kShoreReachKh.

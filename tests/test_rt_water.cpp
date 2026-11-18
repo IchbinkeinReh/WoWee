@@ -1,6 +1,10 @@
 // The ray traced water's optics (rt_water.hpp, water_rt.glsli).
 #include <catch_amalgamated.hpp>
 #include "rendering/rt_water.hpp"
+#include "test_support.hpp"
+
+#include <cmath>
+#include <string>
 
 using namespace wowee::rendering::rt_water;
 
@@ -65,4 +69,37 @@ TEST_CASE("RT water: the sun's path to the bed stays short however low it stands
     // 48.6 degrees from the vertical: 2 / cos(48.6).
     const glm::vec3 low = glm::normalize(glm::vec3(1.0f, 0.0f, 0.01f));
     CHECK(sunPathInWater(2.0f, low) == Catch::Approx(3.02f).margin(0.03f));
+}
+
+// Stonebull Lake, the camera 5.5 yards back at 20.76 degrees: the shallows in
+// front of the character were drawn as deep water over a bed shown bare, and
+// the shore's wet band and fade were squeezed into the waterline, with a dark
+// line along it where the refraction started under the bed. The shore's masks
+// went by the screen's depth, which is the bed's depth where the view's ray
+// meets it.
+TEST_CASE("RT water: the screen's depth overstates a beach seen from a low camera", "[rt][water][shore]") {
+    // Looking down at about 22 degrees over a beach falling at 0.3.
+    const float viewSlope = std::tan(glm::radians(22.0f));
+    CHECK(screenShoreDepth(0.1f, viewSlope, 0.3f) > 0.35f);
+    // Exact over a flat bed, and close looking almost straight down.
+    CHECK(screenShoreDepth(0.3f, viewSlope, 0.0f) == Catch::Approx(0.3f));
+    CHECK(screenShoreDepth(0.3f, std::tan(glm::radians(80.0f)), 0.25f) < 0.32f);
+}
+
+TEST_CASE("RT water: the shore's masks go by the bed straight down", "[rt][water][shore]") {
+    const std::string frag = wowee::test::slurp("assets/shaders/water.frag.glsl");
+    const std::string rt = wowee::test::slurp("assets/shaders/water_rt.glsli");
+    REQUIRE(frag.size() > 1000);
+    REQUIRE(rt.size() > 1000);
+    // One ray down, the ground and buildings only.
+    CHECK(rt.find("float rtwDepthBelow(vec3 p, float reach, inout uint rng)") != std::string::npos);
+    CHECK(rt.find("vec3(0.0, 0.0, -1.0)") != std::string::npos);
+    // Asked before the refraction starts half of it under the surface, and
+    // not overruled by the refracted hit's depth, which is deeper on a beach.
+    const size_t asked = frag.find("float under = rtwDepthBelow(FragPos, RTW_SHORE_DEPTH_REACH, rng);");
+    const size_t refraction = frag.find("rtwRefraction(FragPos - n * min(0.05, 0.5 * shoreDepth)");
+    REQUIRE(asked != std::string::npos);
+    REQUIRE(refraction != std::string::npos);
+    CHECK(asked < refraction);
+    CHECK(frag.find("if (!depthBelowKnown) shoreDepth = max(shoreDepth, rtwBedDepth);") != std::string::npos);
 }

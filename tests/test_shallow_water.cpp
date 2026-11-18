@@ -3,9 +3,12 @@
 #include <catch_amalgamated.hpp>
 
 #include "rendering/shallow_water.hpp"
+#include "test_support.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
+#include <string>
 
 namespace sw = wowee::rendering::shallow_water;
 namespace ws = wowee::rendering::wave_spectrum;
@@ -182,4 +185,81 @@ TEST_CASE("the shore field points up the bed, smoothed", "[shallow_water]") {
     }
     CHECK(sw::slopeWeight(0.0f) == 0.0f);
     CHECK(sw::slopeWeight(0.1f) == 1.0f);
+}
+
+// Stonebull Lake at the default 7 m/s on a calm night: no foam at its shore.
+// The surf's breaker index was taken after the waves' fade at the waterline,
+// which takes their height to nothing faster than the depth: a lake's waves
+// never reached 0.7 anywhere and surfFoam drew no crest or foam behind it,
+// and its `sea` share (0.03 to 0.40 yards) left a lake's chop a fifth of the
+// little that was left.
+TEST_CASE("a lake's waves break at its shore and leave surf", "[shallow_water][surf]") {
+    const auto calm = ws::weatherWaves(0.0f, 0.0f, 1.0f);
+    const auto lake = ws::sample(7.0f, ws::kInlandFetch, ws::kWindDirection, calm.physicsAmplitudeScale);
+    const float seaHeight = ws::significantHeight(lake);
+    REQUIRE(seaHeight > 0.05f);
+    float fadedMost = 0.0f;
+    float surfMost = 0.0f;
+    for (float h = 0.01f; h < 1.5f; h += 0.01f) {
+        float shoaledA2 = 0.0f;
+        for (const auto& w : lake) {
+            const float a = w.amplitude * sw::shoalingCoefficient(w.omega, sw::wavenumber(w.omega, h), h);
+            shoaledA2 += a * a;
+        }
+        const float shoaled = sw::kSignificantHeightFactor * std::sqrt(shoaledA2);
+        fadedMost = std::max(fadedMost, sw::breakerIndex(shoaled * sw::shallowFade(h), h));
+        surfMost = std::max(surfMost, sw::surfBreakerIndex(shoaled, h));
+    }
+    // Before: never near breaking (surfFoam's breaking starts at 0.7).
+    CHECK(fadedMost < 0.7f);
+    // Now: they break in the shallows.
+    CHECK(surfMost > 1.0f);
+    // And how much surf a water's size makes: a lake's chop a fair share of
+    // it, a still pond's ripples none, the open sea's swell all.
+    CHECK(sw::surfSeaShare(seaHeight) > 0.3f);
+    CHECK(sw::surfSeaShare(0.005f) == 0.0f);
+    const auto sea = ws::sample(7.0f, ws::kOceanFetch, ws::kWindDirection);
+    CHECK(sw::surfSeaShare(ws::significantHeight(sea)) == Catch::Approx(1.0f));
+}
+
+TEST_CASE("the shader's surf is the one tested here", "[shallow_water][surf]") {
+    const std::string waves = wowee::test::slurp("assets/shaders/water_waves.glsli");
+    const std::string frag = wowee::test::slurp("assets/shaders/water.frag.glsl");
+    REQUIRE(waves.size() > 1000);
+    REQUIRE(frag.size() > 1000);
+    // The breaker index the surf whitens by, from the heights before the fade.
+    CHECK(waves.find("r.breaking = SW_HS_FACTOR * sqrt(shoaledA2) / (SW_GAMMA * max(h, 1e-3));") !=
+          std::string::npos);
+    CHECK(waves.find("r.breaking = r.seaHeight / (SW_GAMMA * max(h, 1e-3));") != std::string::npos);
+    CHECK(waves.find("r.breaking = breaker;") == std::string::npos);
+    CHECK(frag.find("float sea = smoothstep(0.01, 0.16, waves.seaHeight);") != std::string::npos);
+    CHECK(sw::kSurfSeaFrom == 0.01f);
+    CHECK(sw::kSurfSeaFull == 0.16f);
+    // The swash's rim at every shore, however still the water - at the wave
+    // slider's 50% (the user's) a lake's rim had a tenth of itself.
+    CHECK(frag.find("swashFoam * 0.9 * max(sea, SURF_RIM_FLOOR)") != std::string::npos);
+    CHECK(frag.find("const float SURF_RIM_FLOOR = 0.6;") != std::string::npos);
+    CHECK(sw::kSurfRimFloor == 0.6f);
+    CHECK(sw::surfRimShare(0.0f) == Catch::Approx(0.6f));
+    CHECK(sw::surfRimShare(1.0f) == Catch::Approx(1.0f));
+}
+
+// The physics waves' normal down to the wave a pixel can show and, calm, to
+// the weather's shortest; the vertex stages keep every wave (cut-off 0).
+TEST_CASE("the physics waves' normal leaves out what the pixel cannot show", "[shallow_water][normal]") {
+    const std::string waves = wowee::test::slurp("assets/shaders/water_waves.glsli");
+    const std::string frag = wowee::test::slurp("assets/shaders/water.frag.glsl");
+    CHECK(waves.find("float pwSlopeCutoff = 0.0;") != std::string::npos);
+    // Both the deep waves and the shore waves' slopes.
+    size_t uses = 0;
+    for (size_t at = waves.find("* pwSlopeKeep(k);"); at != std::string::npos;
+         at = waves.find("* pwSlopeKeep(k);", at + 1))
+        ++uses;
+    CHECK(uses == 2);
+    CHECK(frag.find("pwSlopeCutoff = max(3.0 * footprint, push.shore.z);") != std::string::npos);
+    CHECK(frag.find("if (push.pad2 > 0.0) detailFade *= push.shore.w;") != std::string::npos);
+    for (const char* stage : {"assets/shaders/water.vert.glsl", "assets/shaders/water.tese.glsl"}) {
+        INFO(stage);
+        CHECK(wowee::test::slurp(stage).find("pwSlopeCutoff") == std::string::npos);
+    }
 }

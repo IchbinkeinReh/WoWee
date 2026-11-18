@@ -775,6 +775,9 @@ void Renderer::updatePerFrameUBO() {
             wf.physicsWaves = physicsWaves_;
             wf.windSpeed = physicsWind_;
             wf.weather = wave_spectrum::weatherWaves(waterRain_, waterStorm_, weatherWaveStrength_);
+            // The pace as the clock it has run (waterWaveClock_): times
+            // globalTime in the shader, the summed pace, whole as it eases.
+            wf.weather.speedScale = wave_spectrum::paceOverClock(waterWaveClock_, globalTime);
             wf.tessellation = waterTessellation_;
             wf.shoreWaves = shoreWaves_;
             wf.reflectReach = hw ? 400.0f : 150.0f;
@@ -2858,6 +2861,14 @@ M2EventSounds& Renderer::getM2EventSounds() {
 void Renderer::update(float deltaTime) {
     ZoneScopedN("Renderer::update");
     globalTime += deltaTime;
+    // The hand-made waves' phase is their pace times the shader's clock
+    // (globalTime). Their pace follows the weather; multiplied by a clock
+    // a thousand seconds on, a pace easing up by a third over the six
+    // seconds the weather's ease takes swept the crests along some fifty times as fast as
+    // either weather's while it changed. The pace is summed over the time
+    // instead, and handed on as this clock over globalTime.
+    waterWaveClock_ += static_cast<double>(std::max(deltaTime, 0.0f)) *
+                       wave_spectrum::weatherWaves(waterRain_, waterStorm_, weatherWaveStrength_).speedScale;
     runDeferredWorldInitStep(deltaTime);
 
     // Ease toward it rather than taking it. The sample is a yes or a no, and

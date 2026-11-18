@@ -120,6 +120,89 @@ inline std::array<Wave, kWaveCount> sample(float windMps, float fetch, float win
     return waves;
 }
 
+/// The waves for a wind between two rungs of a ladder (windRungs): the lower
+/// rung's waves and the upper's, each set whole - its wavelengths and its
+/// pace - and only their heights shared, by sqrt(1 - upperShare) and
+/// sqrt(upperShare), so the sea's energy moves from one to the other in
+/// step with the share. Each rung's waves have phases of their own, the
+/// golden angle on from the rung under it (rung `lowerRung` and the one over
+/// it), so a rung's sea is the same whichever side of the blend it is on as
+/// the wind crosses it; and all take one steepness, kept so
+/// that sum(Q k a) is kTotalSteepness at most. Without an upper share, the
+/// lower rung's waves alone, as sample() gives them.
+struct Spectrum {
+    std::array<Wave, 2 * kWaveCount> waves{};
+    std::size_t count = 0;
+};
+inline Spectrum sampleBlend(float windMps, float fetch, float windDir, float amplitudeScale, float upperShare,
+                            float upperWind, float lowerRung = 0.0f) {
+    Spectrum sp;
+    const float f = std::clamp(upperShare, 0.0f, 1.0f);
+    const bool blend = f > 0.0f && upperWind > 0.0f;
+    const auto lower = sample(windMps, fetch, windDir, amplitudeScale * (blend ? std::sqrt(1.0f - f) : 1.0f));
+    const float rungPhase = lowerRung * static_cast<float>(kWaveCount) * 2.399963f;
+    for (std::size_t i = 0; i < kWaveCount; ++i) {
+        sp.waves[i] = lower[i];
+        sp.waves[i].phase += rungPhase;
+    }
+    sp.count = kWaveCount;
+    if (blend) {
+        const auto upper = sample(upperWind, fetch, windDir, amplitudeScale * std::sqrt(f));
+        for (std::size_t i = 0; i < kWaveCount; ++i) {
+            sp.waves[kWaveCount + i] = upper[i];
+            sp.waves[kWaveCount + i].phase = rungPhase + static_cast<float>(kWaveCount + i) * 2.399963f;
+        }
+        sp.count = 2 * kWaveCount;
+    }
+    float kaSum = 0.0f;
+    for (std::size_t i = 0; i < sp.count; ++i) kaSum += sp.waves[i].k * sp.waves[i].amplitude;
+    const float q = kaSum > 0.0f ? std::min(1.0f, kTotalSteepness / kaSum) : 0.0f;
+    for (std::size_t i = 0; i < sp.count; ++i) sp.waves[i].steepness = q;
+    return sp;
+}
+
+/// The weather's wind (the slider's `baseWind` times the weather's
+/// `windScale`) on a ladder of winds a factor kWindRung apart, from the
+/// slider's: the rung under it, the one over it, and how far up between the
+/// two it stands (by the logarithm). The waves are the two rungs' spectra,
+/// crossfaded (sampleBlend), never one spectrum resampled for the wind of
+/// the moment: a wave's phase is k x - omega t on the shader's clock, which
+/// runs from the start of the session, and with k and omega following an
+/// easing wind the crests raced - their speed is omega + t d(omega)/dt, a
+/// thousand seconds in some thirty times their own, and as fast across the
+/// world's thousands of yards by x dk/dt - so while the weather came in or
+/// went the water looked as in a gale far stronger than either. On a rung
+/// (the slider's own wind, and a full thunderstorm's 2.25 times it at the
+/// default) one spectrum only.
+/// sqrt(1 + kRainWind + kStormWind): a full thunderstorm is two rungs up.
+inline constexpr float kWindRung = 1.6124515f;
+struct WindRungs {
+    float lower = 0.0f;       ///< m/s
+    float upper = 0.0f;       ///< m/s, 0 when on a rung
+    float upperShare = 0.0f;  ///< 0-1
+    float lowerRung = 0.0f;   ///< the lower rung's place on the ladder, 0 the slider's wind
+};
+inline WindRungs windRungs(float baseWind, float windScale) {
+    WindRungs r;
+    r.lower = baseWind * windScale;
+    if (!(windScale > 1.0f) || !(baseWind > 0.0f)) return r;
+    float steps = std::log(windScale) / std::log(kWindRung);
+    float n = std::floor(steps);
+    float f = steps - n;
+    if (f > 1.0f - 1e-4f) {
+        n += 1.0f;
+        f = 0.0f;
+    }
+    if (f < 1e-4f) f = 0.0f;
+    r.lower = baseWind * std::pow(kWindRung, n);
+    r.lowerRung = n;
+    if (f > 0.0f) {
+        r.upper = r.lower * kWindRung;
+        r.upperShare = f;
+    }
+    return r;
+}
+
 /// A disturbance's rings on deep water (Cauchy-Poisson; water_interaction.glsli's
 /// impulseRingTilt): `t` seconds after an impulse, the wave found `r` yards
 /// away is the one whose group velocity (half its phase speed) has carried it
@@ -136,16 +219,32 @@ inline float groupSpeed(float k) { return 0.5f * std::sqrt(kGravity / k); }
 /// and their pace by `speedScale`. A storm counts far more than rain: at the
 /// default, a full downpour raises the wind a third, a full thunderstorm
 /// more than doubles it.
+///
+/// Calm weather - no rain, no storm - calms the physics waves the other way:
+/// their height by `physicsAmplitudeScale`, the shortest wave left in the
+/// surface's normal raised to `calmMinWavelength` yards, and the hand-made
+/// detail normal laid over them by `detailScale`. At the default 7 m/s the
+/// wind's full spectrum (its short chop, a slope sum of 0.8 on a lake) drew a
+/// still, clear night's lake as a busy field of glints with a regular pattern;
+/// as the rain and the storm come up these go back to 1, 0 and 1, so the
+/// waves in a storm are what they were. The slider scales the calm as it
+/// scales the rest: 0, the weather does nothing.
 struct WeatherWaves {
     float windScale = 1.0f;
     float amplitudeScale = 1.0f;
     float speedScale = 1.0f;
+    float physicsAmplitudeScale = 1.0f;
+    float calmMinWavelength = 0.0f;
+    float detailScale = 1.0f;
 };
 inline constexpr float kRainWind = 0.35f;
 inline constexpr float kStormWind = 1.25f;
 inline constexpr float kRainAmplitude = 0.5f;
 inline constexpr float kStormAmplitude = 1.8f;
 inline constexpr float kStormSpeed = 0.35f;
+inline constexpr float kCalmAmplitude = 0.4f;      ///< 1 - physicsAmplitudeScale, wholly calm
+inline constexpr float kCalmMinWavelength = 0.75f; ///< yards, wholly calm
+inline constexpr float kCalmDetail = 0.75f;        ///< 1 - detailScale, wholly calm
 inline WeatherWaves weatherWaves(float rain, float storm, float strength) {
     const float r = std::clamp(rain, 0.0f, 1.0f);
     const float s = std::clamp(storm, 0.0f, 1.0f);
@@ -154,7 +253,22 @@ inline WeatherWaves weatherWaves(float rain, float storm, float strength) {
     w.windScale = 1.0f + k * (kRainWind * r + kStormWind * s);
     w.amplitudeScale = 1.0f + k * (kRainAmplitude * r + kStormAmplitude * s);
     w.speedScale = 1.0f + k * kStormSpeed * s;
+    // How calm: wholly without rain or storm, not at all once either is full.
+    const float calm = std::min(k, 1.0f) * (1.0f - std::min(r + s, 1.0f));
+    w.physicsAmplitudeScale = 1.0f - kCalmAmplitude * calm;
+    w.calmMinWavelength = kCalmMinWavelength * calm;
+    w.detailScale = 1.0f - kCalmDetail * calm;
     return w;
+}
+
+/// The hand-made waves' pace handed to the shader, whose phase is the pace
+/// times its clock (`clock`, globalTime): the pace summed over the time
+/// (`summedPace`, the seconds of the clock each at its weather's speedScale)
+/// over that clock, so that the product is the sum and the phase moves on at
+/// the pace of the moment, however the weather eases. 1 before the clock has
+/// run.
+inline float paceOverClock(double summedPace, double clock) {
+    return clock > 1e-3 ? static_cast<float>(summedPace / clock) : 1.0f;
 }
 
 /// How stormy a rainy weather is: a thunderstorm (Weather.dbc row 86, the

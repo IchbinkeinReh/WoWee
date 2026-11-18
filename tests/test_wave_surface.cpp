@@ -6,7 +6,11 @@
 
 #include "rendering/wave_surface.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <fstream>
+#include <sstream>
+#include <string>
 #include <vector>
 
 namespace wsf = wowee::rendering::wave_surface;
@@ -177,12 +181,29 @@ TEST_CASE("the push constants are the ones the water was drawn with", "[wave_sur
     s.windSpeed = 8.0f;
     p = wsf::paramsFor(1, false, s);
     REQUIRE(p);
-    CHECK(p->amp == 1.5f);
+    CHECK(p->amp == Catch::Approx(1.5f * s.weather.physicsAmplitudeScale));
     CHECK(p->freq == ws::kInlandFetch);
     CHECK(p->speed == ws::kWindDirection);
-    CHECK(p->wind == Catch::Approx(8.0f * s.weather.windScale));
+    // The weather's wind as two rungs of the ladder (wave_spectrum::windRungs).
+    CHECK(p->wind * std::pow(ws::kWindRung, p->windUpperShare) == Catch::Approx(8.0f * s.weather.windScale));
+    CHECK(p->windUpper == Catch::Approx(p->windUpperShare > 0.0f ? p->wind * ws::kWindRung : 0.0f));
     CHECK(p->shore);
     CHECK(p->surf == Catch::Approx(s.weather.amplitudeScale));
+    // The weather's calm for the normal (push.shore.z, w).
+    CHECK(p->normalMinWavelength == Catch::Approx(s.weather.calmMinWavelength));
+    CHECK(p->detail == Catch::Approx(s.weather.detailScale));
+    // A clear sky calms them; the hand-made waves keep their detail.
+    s.weather = ws::weatherWaves(0.0f, 0.0f, 1.0f);
+    p = wsf::paramsFor(1, false, s);
+    REQUIRE(p);
+    CHECK(p->amp < 1.5f);
+    CHECK(p->normalMinWavelength > 0.0f);
+    CHECK(p->detail < 1.0f);
+    s.physicsWaves = false;
+    p = wsf::paramsFor(1, false, s);
+    REQUIRE(p);
+    CHECK(p->normalMinWavelength == 0.0f);
+    CHECK(p->detail == 1.0f);
 }
 
 TEST_CASE("the riders follow smoothly and settle where they are put", "[wave_surface]") {
@@ -240,4 +261,148 @@ TEST_CASE("a hull takes the mean of the waves along it and leans with them", "[w
     auto hullWave = [](glm::vec2 at) { return std::sin(at.x * 2.0f * 3.14159265f / 40.0f); };
     const auto c = wsf::bodyOnWaves(glm::vec2(10.0f, 0.0f), glm::vec2(1.0f, 0.0f), 20.0f, 6.0f, hullWave);
     CHECK(std::abs(c.heave) < 0.5f);
+}
+
+namespace {
+
+// A weather change as the renderer has it: rain and storm eased toward the
+// new weather's with a six-second time constant, a frame every 1/60 s, the
+// session's clock already `t0` seconds on. Returns the fastest the surface
+// rises or falls at `at` (yards a second), over 0.25 s steps so that it is
+// the waves' own motion, while the weather goes from `from` to `to`.
+struct Weather {
+    float rain = 0.0f;
+    float storm = 0.0f;
+};
+float fastestRise(Weather from, Weather to, bool physics, bool resampleEachFrame, float t0, float seconds,
+                  glm::vec2 at) {
+    float rain = from.rain, storm = from.storm;
+    // The hand-made waves' summed pace (Renderer::waterWaveClock_), at the
+    // first weather's pace up to t0.
+    double clock = static_cast<double>(t0) * ws::weatherWaves(rain, storm, 1.0f).speedScale;
+    const float dt = 1.0f / 60.0f;
+    float t = t0;
+    float last = 0.0f, lastT = t0;
+    bool have = false;
+    float fastest = 0.0f;
+    for (int frame = 0; frame < static_cast<int>(seconds / dt); ++frame) {
+        t += dt;
+        const float ease = 1.0f - std::exp(-dt / 6.0f);
+        rain += (to.rain - rain) * ease;
+        storm += (to.storm - storm) * ease;
+        wsf::WaveSettings s = settings(physics, false, 7.0f);
+        s.weather = ws::weatherWaves(rain, storm, 1.0f);
+        clock += static_cast<double>(dt) * s.weather.speedScale;
+        if (!resampleEachFrame) s.weather.speedScale = ws::paceOverClock(clock, t);
+        auto p = wsf::paramsFor(2, false, s);
+        REQUIRE(p);
+        if (resampleEachFrame && physics) {
+            // The wind of the moment, one spectrum: what the water did.
+            p->wind = 7.0f * s.weather.windScale;
+            p->windUpper = 0.0f;
+            p->windUpperShare = 0.0f;
+        }
+        if (frame % 15 != 0) continue;
+        const float h = wsf::evaluate(*p, at, t, deepBed(at)).displacement.z;
+        if (have) fastest = std::max(fastest, std::abs(h - last) / (t - lastT));
+        last = h;
+        lastT = t;
+        have = true;
+    }
+    return fastest;
+}
+
+std::string slurpShader(const char* name) {
+    std::ifstream in(std::string(WOWEE_SOURCE_DIR) + "/assets/shaders/" + name);
+    std::stringstream src;
+    src << in.rdbuf();
+    return src.str();
+}
+
+}  // namespace
+
+// The user: switching the weather, the water looked as in an enormous wind
+// while it blended. The waves' phase is k x - omega t on a clock that runs
+// from the start of the session; with the spectrum resampled for the easing
+// wind (and the hand-made waves' pace times that clock) the crests raced.
+TEST_CASE("the water does not race while the weather changes", "[wave_surface][weather]") {
+    const glm::vec2 at(-2179.8f, -732.2f);  // Stonebull Lake, far from the origin
+    const float t0 = 1500.0f;
+    const Weather clear{0.0f, 0.0f}, storm{1.0f, 1.0f};
+    for (bool physics : {true, false}) {
+        INFO((physics ? "physics waves" : "hand-made waves"));
+        // The steady seas either side: the most the surface moves in each.
+        const float calmRate = fastestRise(clear, clear, physics, false, t0, 40.0f, at);
+        const float stormRate = fastestRise(storm, storm, physics, false, t0, 40.0f, at);
+        const float steady = std::max(calmRate, stormRate);
+        REQUIRE(steady > 0.0f);
+        // Coming in and going: never faster than the faster of the two, but
+        // for the sampling's margin.
+        CHECK(fastestRise(clear, storm, physics, false, t0, 40.0f, at) < 1.25f * steady);
+        CHECK(fastestRise(storm, clear, physics, false, t0, 40.0f, at) < 1.25f * steady);
+        // What it did: the wind of the moment resampled (the pace times the
+        // clock), several times the faster sea's motion.
+        CHECK(fastestRise(clear, storm, physics, true, t0, 40.0f, at) > 3.0f * steady);
+    }
+}
+
+TEST_CASE("the wind's rungs and the blend between them", "[wave_spectrum][weather]") {
+    // On a rung: the slider's wind, and a full thunderstorm's at the default.
+    auto r = ws::windRungs(7.0f, 1.0f);
+    CHECK(r.lower == 7.0f);
+    CHECK(r.upperShare == 0.0f);
+    r = ws::windRungs(7.0f, ws::weatherWaves(1.0f, 1.0f, 1.0f).windScale);
+    CHECK(r.lower == Catch::Approx(7.0f * (1.0f + ws::kRainWind + ws::kStormWind)));
+    CHECK(r.upperShare == 0.0f);
+    CHECK(r.lowerRung == 2.0f);
+    CHECK(ws::kWindRung * ws::kWindRung == Catch::Approx(1.0f + ws::kRainWind + ws::kStormWind));
+    // Between: the geometric place, the sea's height monotonic in the wind,
+    // never folding.
+    float lastHs = 0.0f;
+    for (float scale = 1.0f; scale <= 2.6f; scale += 0.05f) {
+        r = ws::windRungs(7.0f, scale);
+        CHECK(r.lower * std::pow(ws::kWindRung, r.upperShare) == Catch::Approx(7.0f * scale).epsilon(1e-3));
+        const auto sp =
+            ws::sampleBlend(r.lower, ws::kInlandFetch, ws::kWindDirection, 1.0f, r.upperShare, r.upper, r.lowerRung);
+        float variance = 0.0f, qka = 0.0f;
+        for (size_t i = 0; i < sp.count; ++i) {
+            variance += 0.5f * sp.waves[i].amplitude * sp.waves[i].amplitude;
+            qka += sp.waves[i].steepness * sp.waves[i].k * sp.waves[i].amplitude;
+        }
+        const float hs = 4.0f * std::sqrt(variance);
+        CHECK(hs >= lastHs - 1e-5f);
+        CHECK(qka <= ws::kTotalSteepness + 1e-4f);
+        lastHs = hs;
+    }
+    // Each end of a blend is that rung's sea.
+    const float upperWind = 7.0f * ws::kWindRung;
+    const auto lowerOnly = ws::sampleBlend(7.0f, ws::kInlandFetch, ws::kWindDirection, 1.0f, 0.0f, upperWind);
+    const auto upperAll = ws::sampleBlend(7.0f, ws::kInlandFetch, ws::kWindDirection, 1.0f, 1.0f, upperWind);
+    const auto upperRung = ws::sample(upperWind, ws::kInlandFetch, ws::kWindDirection);
+    // The upper rung seen from below, all of it, is that rung seen as the
+    // lower one: the same waves, in the same phases, as the wind crosses it.
+    const auto onRung = ws::sampleBlend(upperWind, ws::kInlandFetch, ws::kWindDirection, 1.0f, 0.0f, 0.0f, 1.0f);
+    for (size_t i = 0; i < ws::kWaveCount; ++i) {
+        CHECK(std::remainder(upperAll.waves[ws::kWaveCount + i].phase - onRung.waves[i].phase, 6.2831853f) ==
+              Catch::Approx(0.0f).margin(1e-3));
+    }
+    CHECK(lowerOnly.count == ws::kWaveCount);
+    REQUIRE(upperAll.count == 2 * ws::kWaveCount);
+    for (size_t i = 0; i < ws::kWaveCount; ++i) {
+        CHECK(upperAll.waves[i].amplitude == Catch::Approx(0.0f).margin(1e-6));
+        CHECK(upperAll.waves[ws::kWaveCount + i].amplitude == Catch::Approx(upperRung[i].amplitude));
+        CHECK(upperAll.waves[ws::kWaveCount + i].omega == Catch::Approx(upperRung[i].omega));
+    }
+}
+
+TEST_CASE("the shader blends the rungs as the CPU does", "[wave_surface][weather]") {
+    CHECK(slurpShader("water_waves.glsli")
+              .find("pwSampleSet(sp, PW_COUNT, ampScale * sqrt(f), fetch, pwWindBlend.y, kaSum);") !=
+          std::string::npos);
+    for (const char* stage : {"water.vert.glsl", "water.tese.glsl", "water.frag.glsl"}) {
+        INFO(stage);
+        const std::string src = slurpShader(stage);
+        CHECK(src.find("pwWindBlend = push.windBlend.xyz;") != std::string::npos);
+        CHECK(src.find("vec4 windBlend;") != std::string::npos);
+    }
 }

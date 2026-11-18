@@ -61,6 +61,17 @@ struct WaveParams {
     float wind = 0.0f;       ///< push.pad2, m/s; 0 the hand-made waves
     bool shore = false;      ///< push.shore.x
     float surf = 1.0f;       ///< push.shore.y, the fragment stage's
+    /// push.shore.z, the fragment stage's: the shortest physics wave kept in
+    /// the normal for the weather, yards (WeatherWaves::calmMinWavelength).
+    float normalMinWavelength = 0.0f;
+    /// push.shore.w, the fragment stage's: the share of the hand-made detail
+    /// normal laid over the physics waves (WeatherWaves::detailScale).
+    float detail = 1.0f;
+    /// push.windBlend: the physics waves' upper rung's wind, m/s, and its
+    /// share (wave_spectrum::windRungs); `wind` is then the lower rung's.
+    float windUpper = 0.0f;
+    float windUpperShare = 0.0f;
+    float windRung = 0.0f;  ///< push.windBlend.z, the lower rung's place (its waves' phases)
 };
 
 /// The waves' settings this frame, as the renderer holds them (RtWaterFrame).
@@ -104,10 +115,19 @@ inline std::optional<WaveParams> paramsFor(uint16_t liquidType, bool wmoWater, c
     // rest. amp is the amplitude slider alone (100% the spectrum's own
     // height), freq the fetch, speed the wind's direction and wind the wind.
     if (s.physicsWaves && !wmoWater) {
-        p.amp = s.waveAmp;
+        // Calm weather calms them (WeatherWaves::physicsAmplitudeScale).
+        p.amp = s.waveAmp * s.weather.physicsAmplitudeScale;
         p.freq = basicType == 1 ? wave_spectrum::kOceanFetch : wave_spectrum::kInlandFetch;
         p.speed = wave_spectrum::kWindDirection;
-        p.wind = std::max(s.windSpeed * s.weather.windScale, 0.5f);
+        // Two rungs of a ladder of winds, crossfaded (windRungs), never the
+        // wind of the moment: the waves' phases race as the weather eases.
+        const auto rungs = wave_spectrum::windRungs(s.windSpeed, s.weather.windScale);
+        p.wind = std::max(rungs.lower, 0.5f);
+        p.windUpper = rungs.upper;
+        p.windUpperShare = rungs.upperShare;
+        p.windRung = rungs.lowerRung;
+        p.normalMinWavelength = s.weather.calmMinWavelength;
+        p.detail = s.weather.detailScale;
     }
     // The shore waves on the ground's water, which alone knows its bed; their
     // surf whitens more in a storm.
@@ -209,10 +229,10 @@ inline Waves gerstner(glm::vec2 pos, float time, float amp, float freq, float sp
 }
 
 /// pwWaves: the sampled spectrum's waves in deep water.
-inline Waves physicalDeep(const std::array<wave_spectrum::Wave, wave_spectrum::kWaveCount>& sp, glm::vec2 pos,
-                          float time, float minWavelength) {
+inline Waves physicalDeep(const wave_spectrum::Spectrum& sp, glm::vec2 pos, float time, float minWavelength) {
     Waves r;
-    for (const auto& w : sp) {
+    for (size_t i = 0; i < sp.count; ++i) {
+        const auto& w = sp.waves[i];
         const float keep = detail::keep(2.0f * wave_spectrum::kPi / w.k, minWavelength);
         const glm::vec2 dir = detail::direction(w);
         detail::addWave(r, dir, w.k, w.amplitude, w.steepness, 0.0f,
@@ -224,29 +244,35 @@ inline Waves physicalDeep(const std::array<wave_spectrum::Wave, wave_spectrum::k
 /// evaluatePhysicalWaves (`fetch` push.waveFreq, `windMps` push.pad2,
 /// `windDir` push.waveSpeed).
 inline Waves physical(glm::vec2 pos, float time, float ampScale, float fetch, float windMps, float windDir,
-                      float minWavelength) {
-    return physicalDeep(wave_spectrum::sample(windMps, fetch, windDir, ampScale), pos, time, minWavelength);
+                      float minWavelength, float upperShare = 0.0f, float upperWind = 0.0f, float rung = 0.0f) {
+    return physicalDeep(wave_spectrum::sampleBlend(windMps, fetch, windDir, ampScale, upperShare, upperWind, rung),
+                        pos, time, minWavelength);
 }
 
 /// evaluatePhysicalWavesShore: the physics waves over the bed (x the depth,
 /// yz the way to the shallows, w the slope; WaterSurface::bed).
 inline Waves physicalShore(glm::vec2 pos, float time, float ampScale, float fetch, float windMps, float windDir,
-                           float minWavelength, const glm::vec4& bed) {
+                           float minWavelength, const glm::vec4& bed, float upperShare = 0.0f,
+                           float upperWind = 0.0f, float rung = 0.0f) {
     namespace sw = shallow_water;
-    constexpr size_t N = wave_spectrum::kWaveCount;
-    const auto sp = wave_spectrum::sample(windMps, fetch, windDir, ampScale);
+    constexpr size_t kMax = 2 * wave_spectrum::kWaveCount;
+    const auto spectrum = wave_spectrum::sampleBlend(windMps, fetch, windDir, ampScale, upperShare, upperWind, rung);
+    const auto& sp = spectrum.waves;
+    const size_t N = spectrum.count;
     const float h = bed.x;
-    // Deep enough that even the longest wave hardly feels the bed.
-    if (h * sp[0].k > sw::kDeepKh) return physicalDeep(sp, pos, time, minWavelength);
+    // Deep enough that even the longest wave (either rung's first) hardly
+    // feels the bed.
+    const float longestK = N > wave_spectrum::kWaveCount ? std::min(sp[0].k, sp[wave_spectrum::kWaveCount].k) : sp[0].k;
+    if (h * longestK > sw::kDeepKh) return physicalDeep(spectrum, pos, time, minWavelength);
 
     const float sloped = std::min(glm::length(glm::vec2(bed.y, bed.z)), 1.0f);
     const glm::vec2 toShore = sloped > 1e-4f ? glm::normalize(glm::vec2(bed.y, bed.z)) : glm::vec2(0.0f);
     const float bedSlope = std::max(bed.w, 0.0f);
     const float fade = sw::shallowFade(h);
 
-    std::array<float, N> amps{};
-    std::array<float, N> shares{};
-    std::array<float, N> kShore{};
+    std::array<float, kMax> amps{};
+    std::array<float, kMax> shares{};
+    std::array<float, kMax> kShore{};
     float sumA2 = 0.0f;
     for (size_t i = 0; i < N; ++i) {
         const float w = sp[i].omega;
@@ -314,10 +340,12 @@ inline Waves gerstnerShore(glm::vec2 pos, float time, float amp, float freq, flo
 inline Waves evaluate(const WaveParams& p, glm::vec2 pos, float time, const glm::vec4& bed,
                       float minWavelength = kVertexMinWavelength) {
     if (p.shore) {
-        return p.wind > 0.0f ? physicalShore(pos, time, p.amp, p.freq, p.wind, p.speed, minWavelength, bed)
+        return p.wind > 0.0f ? physicalShore(pos, time, p.amp, p.freq, p.wind, p.speed, minWavelength, bed,
+                                             p.windUpperShare, p.windUpper, p.windRung)
                              : gerstnerShore(pos, time, p.amp, p.freq, p.speed, p.basicType, bed);
     }
-    return p.wind > 0.0f ? physical(pos, time, p.amp, p.freq, p.wind, p.speed, minWavelength)
+    return p.wind > 0.0f ? physical(pos, time, p.amp, p.freq, p.wind, p.speed, minWavelength, p.windUpperShare,
+                                    p.windUpper, p.windRung)
                          : gerstner(pos, time, p.amp, p.freq, p.speed, p.basicType);
 }
 

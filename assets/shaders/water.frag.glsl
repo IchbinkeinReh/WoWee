@@ -46,8 +46,15 @@ layout(push_constant) uniform Push {
     float pad2;        // > 0: physics waves, the wind in m/s (water_waves.glsli)
     // x 1: the shore waves (water_waves.glsli's evaluatePhysicalWavesShore)
     // and their surf (surfFoam), y how rough the weather makes the sea
-    // (wave_spectrum::WeatherWaves' amplitudeScale, 1 calm).
+    // (wave_spectrum::WeatherWaves' amplitudeScale, 1 calm); z the shortest
+    // wave the physics waves keep in the normal for the weather, yards (0
+    // in rain and storm), w how much of the hand-made detail normal goes on
+    // them (wave_surface::WaveParams' normalMinWavelength and detail).
     vec4 shore;
+    // x the physics waves' upper rung's share, y its wind, z the lower rung's
+    // place (water_waves.glsli's pwWindBlend, wave_surface::WaveParams'
+    // windUpperShare, windUpper and windRung).
+    vec4 windBlend;
 } push;
 
 layout(set = 1, binding = 0) uniform WaterMaterial {
@@ -150,6 +157,9 @@ vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
 }
 
 #define RT_SCENE_SET 3
+// How deep the bed straight under the water is asked for (rtwDepthBelow),
+// yards: past the shore's widest mask (shallowBand's 2.2).
+const float RTW_SHORE_DEPTH_REACH = 3.0;
 #define RT_SCENE_HAS_CONTENT (rtWater.w > 0.5)
 
 // ============================================================
@@ -423,6 +433,9 @@ const float SURF_FADE_NEAR = 300.0;
 const float SURF_FADE_FAR = 1200.0;
 // The foam's colour: white, a little blue.
 const vec3 SURF_ALBEDO = vec3(0.90, 0.95, 1.0);
+// The least of the swash's rim surfFoam keeps, as a share of the sea's
+// (shallow_water.hpp's kSurfRimFloor).
+const float SURF_RIM_FLOOR = 0.6;
 
 // How white the water is at `at` (0-1), from the shore waves there (`waves`,
 // evaluatePhysicalWavesShore or evaluateGerstnerWavesShore), the bed under it
@@ -435,9 +448,12 @@ const vec3 SURF_ALBEDO = vec3(0.90, 0.95, 1.0);
 // each wave's a pattern of its own.
 float surfFoam(GerstnerResult waves, vec4 bed, vec2 at, float shoreDepth, float swashDepth, float time,
                float storm) {
-    // A pond's ripples make no surf; the open sea's swell a great deal. A
-    // storm breaks the waves sooner and whitens more of the water.
-    float sea = smoothstep(0.03, 0.40, waves.seaHeight);
+    // A still pond's ripples make little surf; a lake's chop a thin rim of it,
+    // the open sea's swell a great deal. A storm breaks the waves sooner and
+    // whitens more of the water. (From 0.03 to 0.40 yards this left a lake
+    // at the default 7 m/s - 0.13 yards - a fifth of its foam, which the
+    // night took the rest of: no foam at any lake's shore.)
+    float sea = smoothstep(0.01, 0.16, waves.seaHeight);
     if (sea <= 0.0) return 0.0;
     float rough = clamp(storm - 1.0, 0.0, 2.0);
     float breaker = waves.breaking * (1.0 + 0.15 * rough);
@@ -445,7 +461,7 @@ float surfFoam(GerstnerResult waves, vec4 bed, vec2 at, float shoreDepth, float 
     float depth = bed.x;
     // The swash's line, where the screen's depth meets the run-up's front;
     // only on a shallow bed (not at a bridge's pier over deep water).
-    float swashOff = (shoreDepth - swashDepth) / 0.05;
+    float swashOff = (shoreDepth - swashDepth) / 0.07;
     float swash = exp(-swashOff * swashOff) * (1.0 - smoothstep(0.8, 1.6, depth));
     if (breaking <= 0.0 && swash <= 0.001) return 0.0;
 
@@ -492,14 +508,20 @@ float surfFoam(GerstnerResult waves, vec4 bed, vec2 at, float shoreDepth, float 
     float stayFoam = (1.0 - shoreness) * 0.35 * smoothstep(0.55, 0.70, cells);
     leftFoam = (leftFoam + stayFoam) * inner * breaking;
     // The swash's line: a fine, broken rim.
-    float swashFoam = swash * (1.0 - smoothstep(0.10, 0.35, fine)) * (0.6 + 0.4 * streaks);
+    float swashFoam = swash * (1.0 - smoothstep(0.18, 0.42, fine)) * (0.6 + 0.4 * streaks);
 
-    float foam = max(max(crestFoam, leftFoam * 0.8), swashFoam * 0.75) * sea * (1.0 + 0.4 * rough);
+    // The swash's rim is there on any open water, however small its waves
+    // (SURF_RIM_FLOOR of it on a still pond): the water laps at every shore.
+    // Held to the sea's share it went with it - at the wave slider's 50% a
+    // lake's rim was a tenth of itself and no foam showed at any lake.
+    float foam = max(max(crestFoam, leftFoam * 0.8) * sea, swashFoam * 0.9 * max(sea, SURF_RIM_FLOOR)) *
+                 (1.0 + 0.4 * rough);
     return clamp(foam, 0.0, 0.95);
 }
 
 void main() {
     float time = fogParams.z;
+    pwWindBlend = push.windBlend.xyz;
     float basicType = push.liquidBasicType;
 
     // ============================================================
@@ -569,6 +591,13 @@ void main() {
     // With the shore waves on, the waves over the bed, as the vertex stage
     // has them.
     bool shoreWaves = push.shore.x > 0.5;
+    // The physics waves' slope only down to the wave this pixel can show - a
+    // few of its widths on the water - and, in calm weather, down to the
+    // weather's shortest (push.shore.z): pwSlopeCutoff.
+    if (push.pad2 > 0.0) {
+        float footprint = max(length(dFdx(WaveBase)), length(dFdy(WaveBase)));
+        pwSlopeCutoff = max(3.0 * footprint, push.shore.z);
+    }
     GerstnerResult pixelWaves;
     if (shoreWaves) {
         pixelWaves = push.pad2 > 0.0
@@ -592,6 +621,10 @@ void main() {
     // normal with distance so what is left far away is a smooth sheet for the
     // fog to take, which is also where the specular sparkle goes quiet.
     float detailFade = 1.0 - smoothstep(250.0, 1400.0, dist);
+    // On the physics waves, whose normal has the short waves already, only
+    // the weather's share of it (push.shore.w): in calm weather its three
+    // fixed crossing ripples were a second, regular chop over the wind's.
+    if (push.pad2 > 0.0) detailFade *= push.shore.w;
     vec3 norm = normalize(mix(meshNorm, detailNorm, 0.55 * detailFade));
 
     // The swimmer's small waves (swim_wave.hpp): a ring going out from where
@@ -815,6 +848,16 @@ void main() {
         if (!below && sunRay.z > 0.0) {
             sunOnWater = rtOccluded(FragPos + vec3(0.0, 0.0, 0.1), sunRay, 400.0, rng) ? 0.0 : 1.0;
         }
+        // The shore's masks and the refraction's start by the bed straight
+        // under this point (rtwDepthBelow), out to where they reach: the
+        // screen's depth only says how deep the bed is where the view's ray
+        // meets it. Not on a building's interior water, which has no shore.
+        bool depthBelowKnown = false;
+        if (!below && push.interiorFog < 0.5 && shoreDepth < RTW_SHORE_DEPTH_REACH) {
+            float under = rtwDepthBelow(FragPos, RTW_SHORE_DEPTH_REACH, rng);
+            shoreDepth = under >= 0.0 ? under : RTW_SHORE_DEPTH_REACH;
+            depthBelowKnown = true;
+        }
         if (!below) {
             // Not under the water's own plane: a wave can tip the mirror
             // past it.
@@ -842,7 +885,7 @@ void main() {
                     bodyBase = mix(shallowColor, deepColor, bedFade) *
                                (ambientColor.rgb * 0.7 + NdotL * lightColor.rgb * 0.5);
                     refractedColor += (bodyBase - litBase) * (1.0 - exp(-absorptionCoeff * traced.a));
-                    shoreDepth = max(shoreDepth, rtwBedDepth);
+                    if (!depthBelowKnown) shoreDepth = max(shoreDepth, rtwBedDepth);
                     absorbed = exp(-absorptionCoeff * rtwBedDepth);
                 }
                 // A canal's or a building's water keeps the floor of its own

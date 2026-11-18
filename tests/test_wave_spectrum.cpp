@@ -93,6 +93,39 @@ TEST_CASE("rain roughens the water a little, a storm a lot", "[wave_spectrum]") 
     CHECK(7.0f * storm.windScale > 15.0f);
 }
 
+// Physics waves on, a clear night at Stonebull Lake: the default 7 m/s drew the
+// lake as a busy field of glints with a regular pattern. Calm weather calms
+// them; a storm leaves them as they were.
+TEST_CASE("calm weather calms the physics waves, a storm leaves them be", "[wave_spectrum]") {
+    const auto calm = ws::weatherWaves(0.0f, 0.0f, 1.0f);
+    CHECK(calm.physicsAmplitudeScale == Catch::Approx(1.0f - ws::kCalmAmplitude));
+    CHECK(calm.calmMinWavelength == Catch::Approx(ws::kCalmMinWavelength));
+    CHECK(calm.detailScale == Catch::Approx(1.0f - ws::kCalmDetail));
+    CHECK(calm.physicsAmplitudeScale < 0.75f);
+    CHECK(calm.detailScale < 0.5f);
+    // A lake's significant height at 7 m/s, calm: well under what the wind's
+    // full spectrum gives.
+    const float full = ws::significantHeight(ws::sample(7.0f, ws::kInlandFetch, ws::kWindDirection));
+    const float calmed =
+        ws::significantHeight(ws::sample(7.0f, ws::kInlandFetch, ws::kWindDirection, calm.physicsAmplitudeScale));
+    CHECK(calmed < 0.7f * full);
+    // Rain or a storm, all of it back.
+    for (const auto& w : {ws::weatherWaves(1.0f, 0.0f, 1.0f), ws::weatherWaves(1.0f, 1.0f, 1.0f),
+                          ws::weatherWaves(0.0f, 1.0f, 1.0f)}) {
+        CHECK(w.physicsAmplitudeScale == 1.0f);
+        CHECK(w.calmMinWavelength == 0.0f);
+        CHECK(w.detailScale == 1.0f);
+    }
+    // Half the rain, half the calm.
+    const auto light = ws::weatherWaves(0.5f, 0.0f, 1.0f);
+    CHECK(light.physicsAmplitudeScale == Catch::Approx(1.0f - 0.5f * ws::kCalmAmplitude));
+    // The slider at 0: the weather does nothing, calm included.
+    const auto off = ws::weatherWaves(0.0f, 0.0f, 0.0f);
+    CHECK(off.physicsAmplitudeScale == 1.0f);
+    CHECK(off.calmMinWavelength == 0.0f);
+    CHECK(off.detailScale == 1.0f);
+}
+
 TEST_CASE("how stormy the weather is", "[wave_spectrum]") {
     CHECK(ws::storminess(false, 0, 1.0f) == 0.0f);
     CHECK(ws::storminess(true, 3, 0.4f) == 0.0f);          // light rain: none
