@@ -479,7 +479,6 @@ private:
     uint32_t ghostOpacityLastInstanceId_ = 0;
 
 
-    void renderWeatherOverlay(game::GameHandler& gameHandler);
 
 public:
     /// The server asking for the window (SMSG_OPEN_LFG_DUNGEON_FINDER).

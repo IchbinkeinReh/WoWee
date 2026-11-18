@@ -4416,3 +4416,10 @@ function(wowee_share_test_sources)
     message(STATUS "Test sources shared: ${_shared} uses compiled as ${_libraries} objects")
 endfunction()
 wowee_share_test_sources()
+
+# No weather drawn on the screen by the interface: the world's rain is the
+# only rain (test_no_screen_weather.cpp). Reads the sources.
+wowee_add_test(test_no_screen_weather
+    SOURCES test_no_screen_weather.cpp)
+target_compile_definitions(test_no_screen_weather PRIVATE
+    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

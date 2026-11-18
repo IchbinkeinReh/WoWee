@@ -776,7 +776,12 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     // setting in it the moment the menu was handed over.
     settingsPanel_.renderSettingsWindow(chatPanel_, [this]() { saveSettings(); });
     toastManager_.renderLateToasts(gameHandler);
-    renderWeatherOverlay(gameHandler);
+    // No weather is drawn here. An ImGui overlay used to paint rain lines
+    // (and snow dots, and a storm vignette) across the screen whenever the
+    // server named a weather: the same lines sliding down the glass, with no
+    // depth, over the world's own rain. The client draws its weather only in
+    // the world (Weather, 0x0078ae20: drops, splashes, mist), and so does
+    // WoWee now (test_no_screen_weather).
 
     // Always, because this is the only thing that feeds the map its data and
     // the only thing that draws it. Skipping it when FrameXML owns the map
