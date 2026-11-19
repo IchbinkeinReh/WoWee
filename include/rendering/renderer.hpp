@@ -1398,6 +1398,9 @@ private:
     /// calms over some seconds rather than at once.
     float waterRain_ = 0.0f;
     float waterStorm_ = 0.0f;
+    /// The physics waves' wind's place on the ladder of winds, eased toward
+    /// the weather's (wave_spectrum::easeRung); its wind scale is handed on.
+    float waterWindRung_ = 0.0f;
     // The hand-made waves' own clock: the seconds of globalTime each run at
     // the weather's pace (wave_spectrum::WeatherWaves::speedScale), summed.
     // Their phase is the pace times the clock; the pace times globalTime raced

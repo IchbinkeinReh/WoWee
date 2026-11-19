@@ -203,6 +203,43 @@ inline WindRungs windRungs(float baseWind, float windScale) {
     return r;
 }
 
+/// The place on the ladder of winds (windRungs' steps: 0 the slider's wind,
+/// 1 a rung up) a weather's wind scale stands at.
+inline float rungPosition(float windScale) {
+    return windScale > 1.0f ? std::log(windScale) / std::log(kWindRung) : 0.0f;
+}
+/// And back: the wind scale at a place on the ladder.
+inline float windScaleAtRung(float position) {
+    return position > 0.0f ? std::pow(kWindRung, position) : 1.0f;
+}
+
+/// The physics waves' place on the ladder, eased toward the weather's
+/// (`target`, rungPosition of its wind scale) by `dt` seconds: as the
+/// weather's own ease, a time constant of kRungEaseTime, but never slower
+/// than kRungMinPace rungs a second, so that it arrives. Between two rungs
+/// every pixel and vertex sums both rungs' waves (24, not 12), and the
+/// weather's exponential ease, which the place followed before, came within
+/// a part in ten thousand of a rung only a minute after any change: for that
+/// minute the water cost half as much again (21 ms at Ratchet's sea in a
+/// storm's first seconds, 14 steady). With the floor the ease is done in
+/// under 8 seconds from clear to a full thunderstorm (two rungs) and back. In
+/// its last stretch the place moves at the floor's pace, which the
+/// exponential's has slowed to there: no step, no kink. It moves one way
+/// only toward the target, so the waves' strength, which grows with it (the
+/// energy moves from the lower rung's waves to the upper's in step with the
+/// share), only rises or only falls, and never past either weather's.
+inline constexpr float kRungEaseTime = 6.0f;  ///< seconds, as the weather's (Renderer: waterStorm_)
+inline constexpr float kRungMinPace = 0.25f;  ///< rungs a second
+inline float easeRung(float position, float target, float dt) {
+    const float gap = target - position;
+    const float distance = std::abs(gap);
+    if (!(distance > 0.0f)) return target;
+    const float t = std::max(dt, 0.0f);
+    const float step = std::max(distance * (1.0f - std::exp(-t / kRungEaseTime)), kRungMinPace * t);
+    if (step >= distance) return target;
+    return position + (gap > 0.0f ? step : -step);
+}
+
 /// A disturbance's rings on deep water (Cauchy-Poisson; water_interaction.glsli's
 /// impulseRingTilt): `t` seconds after an impulse, the wave found `r` yards
 /// away is the one whose group velocity (half its phase speed) has carried it

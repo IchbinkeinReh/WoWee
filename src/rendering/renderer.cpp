@@ -804,6 +804,8 @@ void Renderer::updatePerFrameUBO() {
             // The pace as the clock it has run (waterWaveClock_): times
             // globalTime in the shader, the summed pace, whole as it eases.
             wf.weather.speedScale = wave_spectrum::paceOverClock(waterWaveClock_, globalTime);
+            // The physics waves' wind where its own ease has it (easeRung).
+            wf.weather.windScale = wave_spectrum::windScaleAtRung(waterWindRung_);
             wf.tessellation = waterTessellation_;
             wf.tessDensity = waterTessDensity_;
             wf.shoreWaves = shoreWaves_;
@@ -3448,6 +3450,13 @@ void Renderer::update(float deltaTime) {
         const float ease = 1.0f - std::exp(-std::max(deltaTime, 0.0f) / 6.0f);
         waterRain_ += (rain - waterRain_) * ease;
         waterStorm_ += (storm - waterStorm_) * ease;
+        // The physics waves' wind takes its own way there, on the ladder of
+        // winds (wave_spectrum::easeRung): the same start, but done in
+        // seconds rather than a minute, the stretch where two rungs' waves
+        // are summed.
+        const float targetRung =
+            wave_spectrum::rungPosition(wave_spectrum::weatherWaves(rain, storm, weatherWaveStrength_).windScale);
+        waterWindRung_ = wave_spectrum::easeRung(waterWindRung_, targetRung, deltaTime);
     }
 
     // Update lightning (storm / heavy rain)

@@ -4,7 +4,10 @@
 
 #include "rendering/wave_spectrum.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <utility>
+#include <vector>
 
 namespace ws = wowee::rendering::wave_spectrum;
 
@@ -131,4 +134,135 @@ TEST_CASE("how stormy the weather is", "[wave_spectrum]") {
     CHECK(ws::storminess(true, 3, 0.4f) == 0.0f);          // light rain: none
     CHECK(ws::storminess(true, 5, 1.0f) == Catch::Approx(0.5f));  // a downpour: half
     CHECK(ws::storminess(true, ws::kThunderstormWeather, 0.8f) == Catch::Approx(0.8f));
+}
+
+namespace {
+// The physics waves' strength (their significant height) at a lake for a
+// place on the ladder and the eased weather, as the renderer hands them on
+// (Renderer: waterWindRung_, waterRain_, waterStorm_; wave_surface::paramsFor).
+float waveStrength(float rungPos, float rain, float storm) {
+    const auto rungs = ws::windRungs(7.0f, ws::windScaleAtRung(rungPos));
+    const float amp = ws::weatherWaves(rain, storm, 1.0f).physicsAmplitudeScale;
+    const auto sp = ws::sampleBlend(rungs.lower, ws::kInlandFetch, ws::kWindDirection, amp, rungs.upperShare,
+                                    rungs.upper, rungs.lowerRung);
+    float variance = 0.0f;
+    for (std::size_t i = 0; i < sp.count; ++i) variance += 0.5f * sp.waves[i].amplitude * sp.waves[i].amplitude;
+    return 4.0f * std::sqrt(variance);
+}
+
+struct WeatherRun {
+    float blendSeconds = 0.0f;     // frames with two rungs summed
+    float lastBlendAt = 0.0f;      // when the last of them was
+    float maxRungStep = 0.0f;      // the most the place moved in a frame
+    bool monotonic = true;         // the place and the strength one way only
+    float maxStrengthStep = 0.0f;  // the most the strength moved in a frame, of the whole change
+    float strengthLo = 1e9f, strengthHi = -1e9f;
+    float startStrength = 0.0f, endStrength = 0.0f;
+};
+
+// From `from` to `to` (thunderstorm intensity, Weather.dbc row 86), the
+// weather's intensity eased over `rampSeconds` (0 abrupt), 90 s at 60 fps.
+// `oldEase`: the place as the weather's exponential ease had it before.
+WeatherRun runWeather(float from, float to, float rampSeconds, bool oldEase) {
+    const float dt = 1.0f / 60.0f;
+    auto target = [](float i) {
+        return std::pair<float, float>(i, ws::storminess(true, ws::kThunderstormWeather, i));
+    };
+    auto [rain, storm] = target(from);
+    float place = ws::rungPosition(ws::weatherWaves(rain, storm, 1.0f).windScale);
+    WeatherRun run;
+    run.startStrength = waveStrength(place, rain, storm);
+    const float rising = to > from ? 1.0f : -1.0f;
+    float lastPlace = place, lastStrength = run.startStrength;
+    std::vector<float> strengths;
+    for (int frame = 1; frame <= 90 * 60; ++frame) {
+        const float t = frame * dt;
+        const float intensity =
+            rampSeconds > 0.0f ? from + (to - from) * std::min(t / rampSeconds, 1.0f) : to;
+        const auto [r, s] = target(intensity);
+        const float ease = 1.0f - std::exp(-dt / 6.0f);
+        rain += (r - rain) * ease;
+        storm += (s - storm) * ease;
+        if (oldEase) {
+            place = ws::rungPosition(ws::weatherWaves(rain, storm, 1.0f).windScale);
+        } else {
+            place = ws::easeRung(place, ws::rungPosition(ws::weatherWaves(r, s, 1.0f).windScale), dt);
+        }
+        const auto rungs = ws::windRungs(7.0f, ws::windScaleAtRung(place));
+        if (rungs.upperShare > 0.0f) {
+            run.blendSeconds += dt;
+            run.lastBlendAt = t;
+        }
+        const float strength = waveStrength(place, rain, storm);
+        run.maxRungStep = std::max(run.maxRungStep, std::abs(place - lastPlace));
+        if ((place - lastPlace) * rising < 0.0f) run.monotonic = false;
+        if ((strength - lastStrength) * rising < -1e-6f * std::max(strength, 1e-3f)) run.monotonic = false;
+        strengths.push_back(strength);
+        run.strengthLo = std::min(run.strengthLo, strength);
+        run.strengthHi = std::max(run.strengthHi, strength);
+        lastPlace = place;
+        lastStrength = strength;
+    }
+    run.endStrength = lastStrength;
+    float prev = run.startStrength;
+    const float whole = std::max(std::abs(run.endStrength - run.startStrength), 1e-6f);
+    for (float s : strengths) {
+        run.maxStrengthStep = std::max(run.maxStrengthStep, std::abs(s - prev) / whole);
+        prev = s;
+    }
+    return run;
+}
+}  // namespace
+
+TEST_CASE("the ladder's place eases toward the weather's and arrives", "[wave_spectrum][weather]") {
+    CHECK(ws::rungPosition(1.0f) == 0.0f);
+    CHECK(ws::rungPosition(ws::kWindRung * ws::kWindRung) == Catch::Approx(2.0f));
+    CHECK(ws::windScaleAtRung(ws::rungPosition(1.9f)) == Catch::Approx(1.9f));
+    CHECK(ws::windScaleAtRung(0.0f) == 1.0f);
+    // On the target: stays. Never past it, either way.
+    CHECK(ws::easeRung(1.0f, 1.0f, 0.016f) == 1.0f);
+    CHECK(ws::easeRung(0.0f, 2.0f, 100.0f) == 2.0f);
+    CHECK(ws::easeRung(2.0f, 0.0f, 100.0f) == 0.0f);
+    // Far off: the weather's exponential (time constant kRungEaseTime).
+    CHECK(ws::easeRung(0.0f, 2.0f, 0.1f) == Catch::Approx(2.0f * (1.0f - std::exp(-0.1f / ws::kRungEaseTime))));
+    // Near: never slower than the floor's pace.
+    CHECK(ws::easeRung(1.9f, 2.0f, 0.1f) == Catch::Approx(1.9f + ws::kRungMinPace * 0.1f));
+    CHECK(ws::easeRung(0.1f, 0.0f, 0.1f) == Catch::Approx(0.1f - ws::kRungMinPace * 0.1f));
+    // No time, no move.
+    CHECK(ws::easeRung(0.5f, 2.0f, 0.0f) == 0.5f);
+    CHECK(ws::easeRung(0.5f, 2.0f, -1.0f) == 0.5f);
+}
+
+TEST_CASE("a weather change sums two rungs' waves for seconds, not a minute", "[wave_spectrum][weather]") {
+    // Clear to a full thunderstorm and back, abrupt and as the client eases
+    // the intensity (ten seconds for the whole range), and to half a storm
+    // (between two rungs to stay).
+    struct Case { float from, to, ramp; };
+    for (const Case c : {Case{0.0f, 1.0f, 0.0f}, Case{1.0f, 0.0f, 0.0f}, Case{0.0f, 1.0f, 10.0f},
+                         Case{1.0f, 0.0f, 10.0f}, Case{0.0f, 0.5f, 5.0f}, Case{0.5f, 1.0f, 5.0f}}) {
+        CAPTURE(c.from, c.to, c.ramp);
+        const WeatherRun now = runWeather(c.from, c.to, c.ramp, false);
+        const WeatherRun before = runWeather(c.from, c.to, c.ramp, true);
+        // Arrives: the last frame with two rungs summed is soon after the
+        // weather's own ramp (none past it when it ends between two).
+        const bool endsOnRung = c.to == 0.0f || c.to == 1.0f;
+        if (endsOnRung) {
+            CHECK(now.lastBlendAt <= c.ramp + 8.0f);
+            CHECK(now.blendSeconds <= c.ramp + 8.0f);
+            // Before: the exponential's tail, most of a minute.
+            CHECK(before.lastBlendAt > 40.0f);
+        }
+        // Smooth: the place moves at most the exponential's first pace a
+        // frame, and the strength in small steps, one way only.
+        CHECK(now.maxRungStep <= 2.0f / ws::kRungEaseTime / 60.0f * 1.01f + 1e-6f);
+        CHECK(now.monotonic);
+        CHECK(now.maxStrengthStep < 0.02f);
+        // Never rougher (or calmer) than either weather: no "enormous wind".
+        const float lo = std::min(now.startStrength, now.endStrength);
+        const float hi = std::max(now.startStrength, now.endStrength);
+        CHECK(now.strengthLo >= lo * 0.9999f);
+        CHECK(now.strengthHi <= hi * 1.0001f);
+        // And it ends where the old ease ended.
+        CHECK(now.endStrength == Catch::Approx(before.endStrength).epsilon(1e-3));
+    }
 }
