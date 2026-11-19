@@ -1828,14 +1828,23 @@ void WaterRenderer::fillWaveSpectra() {
         frameUBO_.pwSpecKey[2 * slot] = glm::vec4(0.0f);
         frameUBO_.pwSpecKey[2 * slot + 1] = glm::vec4(0.0f);
         const auto p = wave_surface::paramsFor(liquidTypes[slot], false, settings);
+        // What else of each wave stays the same all frame, for every pixel
+        // and vertex (water_waves.glsli's pwWaveAt, pwVarianceAt): its
+        // shortness and its share of the slope variance before the patches.
         if (!p || p->wind <= 0.0f) continue;
         const auto sp =
             wave_spectrum::sampleBlend(p->wind, p->freq, p->speed, p->amp, p->windUpperShare, p->windUpper, p->windRung);
         const std::size_t base = static_cast<std::size_t>(slot) * 2 * wave_spectrum::kWaveCount;
         for (std::size_t i = 0; i < 2 * wave_spectrum::kWaveCount; ++i) {
             const auto& w = sp.waves[i];
-            frameUBO_.pwSpecWaves[base + i] =
-                i < sp.count ? glm::vec4(w.k, w.omega, w.amplitude, 0.0f) : glm::vec4(0.0f);
+            const std::size_t n = base + i;
+            if (i >= sp.count) {
+                frameUBO_.pwSpecWaves[n] = glm::vec4(0.0f);
+                frameUBO_.pwSpecVariance[n / 4][n % 4] = 0.0f;
+                continue;
+            }
+            frameUBO_.pwSpecWaves[n] = glm::vec4(w.k, w.omega, w.amplitude, wave_surface::variety::shortness(w.k));
+            frameUBO_.pwSpecVariance[n / 4][n % 4] = 0.5f * w.k * w.amplitude * w.k * w.amplitude;
         }
         // The key is what the shader is pushed (push.waveFreq, pad2, waveAmp,
         // windBlend.x and .y): the spectrum is used only where they match.

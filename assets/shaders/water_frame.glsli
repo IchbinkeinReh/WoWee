@@ -46,9 +46,12 @@ layout(set = 2, binding = 3) uniform WaterFrameData {
     // pwSample, two dozen pow and exp each). Slot s's key: pwSpecKey[2 s] =
     // (fetch, lower wind, amplitude scale, upper rung's share), pwSpecKey[2 s + 1]
     // = (upper wind, wave count, steepness Q, 1 when filled); its waves
-    // pwSpecWaves[24 s + i] = (k, omega, amplitude, 0).
+    // pwSpecWaves[24 s + i] = (k, omega, amplitude, shortness: pwShortness),
+    // and its share of the slope variance before the patches, (k a)^2 / 2
+    // (pwWaves' hiddenSlope2), component (24 s + i) of pwSpecVariance.
     vec4 pwSpecKey[4];
     vec4 pwSpecWaves[48];
+    vec4 pwSpecVariance[12];
 };
 
 #endif

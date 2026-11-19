@@ -276,6 +276,13 @@ inline Waves physicalShore(glm::vec2 pos, float time, float ampScale, float fetc
     float sumA2 = 0.0f;
     for (size_t i = 0; i < N; ++i) {
         const float w = sp[i].omega;
+        // A wave that does not feel the bed here (k h past kDeepKh): its
+        // deep self, not shoaled or turned (evaluatePhysicalWavesShore).
+        if (sp[i].k * h > sw::kDeepKh) {
+            amps[i] = sp[i].amplitude * fade;
+            sumA2 += amps[i] * amps[i];
+            continue;
+        }
         const float k = sw::wavenumber(w, h);
         amps[i] = sp[i].amplitude * sw::shoalingCoefficient(w, k, h) * fade;
         kShore[i] = sw::shoreWavenumber(w, h, bedSlope);

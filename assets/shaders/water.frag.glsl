@@ -539,6 +539,9 @@ void main() {
     pwWindBlend = push.windBlend.xyz;
     // The short waves' variety for the weather (water_waves.glsli).
     pwVariety = push.pad2 > 0.0 ? pwVarietyFromDetail(push.shore.w) : 0.0;
+    // Only the waves' slope is read here (the normal, the glint's hidden
+    // slopes), and their height only by the surf where they break.
+    pwHeightUnused = true;
     float basicType = push.liquidBasicType;
 
     // ============================================================

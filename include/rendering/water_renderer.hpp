@@ -166,7 +166,9 @@ struct WaterFrameUBOData {
     // The physics waves' spectrum for the lakes' fetch and the sea's
     // (water_frame.glsli's pwSpecKey, pwSpecWaves; fillWaveSpectra).
     glm::vec4 pwSpecKey[4]{};
-    glm::vec4 pwSpecWaves[2 * 2 * wave_spectrum::kWaveCount]{};
+    glm::vec4 pwSpecWaves[2 * 2 * wave_spectrum::kWaveCount]{};  // k, omega, amplitude, shortness
+    // Each wave's (k a)^2 / 2, four to a vec4 (water_frame.glsli's pwSpecVariance).
+    glm::vec4 pwSpecVariance[2 * 2 * wave_spectrum::kWaveCount / 4]{};
 };
 static_assert(sizeof(WaterFrameUBOData) <= 16384, "the water's uniform block must fit 16 KB");
 
