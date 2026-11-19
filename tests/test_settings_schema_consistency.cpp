@@ -23,6 +23,7 @@
 
 #include "test_support.hpp"
 #include "ui/settings_schema.hpp"
+#include "rendering/water_tessellation.hpp"
 
 using namespace wowee::ui;
 
@@ -555,4 +556,22 @@ TEST_CASE("the ray traced water and its waves' sliders", "[settings][schema]") {
     v["rtwater"] = "1";
     v["raytracedlighting"] = "0";
     CHECK_FALSE(settingEnabled(*freq, read));
+}
+
+TEST_CASE("the water tessellation slider's row is the renderer's range", "[settings][schema]") {
+    // The slider writes percent; water_tess::densityFromPercent clamps to the
+    // same ends and takes the same default as the cut before the slider.
+    namespace wt = wowee::rendering::water_tess;
+    const std::vector<SettingDesc> rows = schema();
+    const SettingDesc* row = nullptr;
+    for (const auto& d : rows) {
+        if (std::string(d.key) == "watertessdensity") row = &d;
+    }
+    REQUIRE(row != nullptr);
+    CHECK(row->kind == SettingKind::Int);
+    CHECK(row->minValue == static_cast<float>(wt::kDensityMinPercent));
+    CHECK(row->maxValue == static_cast<float>(wt::kDensityMaxPercent));
+    CHECK(row->defaultValue == static_cast<float>(wt::kDensityDefaultPercent));
+    CHECK(std::string(row->category) == "Water");
+    CHECK(std::string(row->enabledWhen).find("watertess") != std::string::npos);
 }

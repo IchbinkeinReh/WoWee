@@ -189,6 +189,9 @@ struct RtWaterFrame {
     /// Tessellated water (water.tesc, water.tese): the grid cut finer near
     /// the camera; used where the device has tessellation shaders.
     bool tessellation = true;
+    /// How finely it is cut, 1 the default ("Water tessellation" slider;
+    /// water_tessellation.hpp's densityFromPercent).
+    float tessDensity = 1.0f;
     /// The shore waves (shallow_water.hpp): the waves slowed, raised, turned
     /// and broken as the ground's water shallows, and their surf.
     bool shoreWaves = true;

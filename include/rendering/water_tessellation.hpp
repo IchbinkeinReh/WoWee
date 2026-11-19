@@ -45,22 +45,41 @@ inline float smoothstep(float e0, float e1, float x) {
 /// triangle a few pixels wide has its pixels shaded two or three times over.
 inline constexpr float kMinPixels = 20.0f;
 
+/// The "Water tessellation" slider (Graphics, Water page, watertessdensity):
+/// how finely the grid is cut, in percent of the default. 100 is the cut
+/// above exactly; 50 pieces twice as long (half as many along an edge), 200
+/// half as long - the 0.3 yards near the camera and the 20-pixel floor alike,
+/// the cap raised with it above 100 so the nearest edges are cut finer too.
+/// Its "Tessellated water" switch turns the cutting off altogether.
+inline constexpr int kDensityMinPercent = 25;
+inline constexpr int kDensityMaxPercent = 200;
+inline constexpr int kDensityDefaultPercent = 100;
+/// The slider's percent as the factor the shaders take (push windBlend.w).
+inline float densityFromPercent(int percent) {
+    return static_cast<float>(std::clamp(percent, kDensityMinPercent, kDensityMaxPercent)) / 100.0f;
+}
+/// The most pieces an edge is cut into at `density` (WT_MAX_LEVEL x it above 1).
+inline float maxLevel(float density) { return kMaxLevel * std::max(density, 1.0f); }
+
 /// How many pieces an edge `edgeLength` yards long is cut into when its
 /// midpoint is `dist` yards from the camera (water.tesc's edgeLevel), a pixel
-/// being `yardsPerPixel` yards wide a yard from the camera (0: no pixel floor).
-inline float level(float edgeLength, float dist, float yardsPerPixel = 0.0f) {
-    const float target = std::max(kTargetEdge, dist * yardsPerPixel * kMinPixels);
-    const float full = std::clamp(edgeLength / target, 1.0f, kMaxLevel);
+/// being `yardsPerPixel` yards wide a yard from the camera (0: no pixel floor),
+/// at the slider's `density` (densityFromPercent).
+inline float level(float edgeLength, float dist, float yardsPerPixel = 0.0f, float density = 1.0f) {
+    const float target = std::max(kTargetEdge, dist * yardsPerPixel * kMinPixels) / density;
+    const float full = std::clamp(edgeLength / target, 1.0f, maxLevel(density));
     return 1.0f + (full - 1.0f) * (1.0f - smoothstep(kNear, kFar, dist));
 }
 
 /// The shortest wave moved as height `dist` yards from the camera.
-inline float minWavelength(float dist) {
-    return std::max(kMinWavelength, kGridWavelength / level(kGridEdge, dist));
+inline float minWavelength(float dist, float density = 1.0f) {
+    return std::max(kMinWavelength, kGridWavelength / level(kGridEdge, dist, 0.0f, density));
 }
 
 /// How much of the rings' and wakes' height is raised `dist` yards away.
-inline float interaction(float dist) { return smoothstep(2.0f, 8.0f, level(kGridEdge, dist)); }
+inline float interaction(float dist, float density = 1.0f) {
+    return smoothstep(2.0f, 8.0f, level(kGridEdge, dist, 0.0f, density));
+}
 
 /// The pieces the heights' integrals are taken in (the shader's PIECES).
 inline constexpr int kHeightPieces = 8;

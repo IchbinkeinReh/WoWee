@@ -26,6 +26,14 @@ layout(push_constant) uniform Push {
     float waveSpeed;
     float liquidBasicType;
     vec2 screenSize;
+    vec2 depthRange;
+    float sceneValid;
+    float lightColors;
+    float pad1;
+    float pad2;
+    vec4 shore;
+    // w the "Water tessellation" slider's density (water_tess.glsli's wtDensity).
+    vec4 windBlend;
 } push;
 
 layout(location = 0) in vec3 vWorldPos[];
@@ -55,6 +63,7 @@ void main() {
     tcBed[gl_InvocationID] = vBed[gl_InvocationID];
     if (gl_InvocationID != 0) return;
     wtYardsPerPixel = wtYardsPerPixelFor(projection, push.screenSize.y);
+    wtDensity = wtDensityFor(push.windBlend.w);
 
     vec3 p0 = vWorldPos[0];
     vec3 p1 = vWorldPos[1];

@@ -1,6 +1,7 @@
 #include "game/interface_text.hpp"
 #include "rendering/minimap_art.hpp"
 #include "rendering/rt_rays.hpp"
+#include "rendering/water_tessellation.hpp"
 #include "core/platform.hpp"
 #include "rendering/rt_min_brightness.hpp"
 #include "rendering/rt_normal_blend.hpp"
@@ -1973,6 +1974,7 @@ void GameScreen::saveSettings() {
     out << "phys_waves=" << (settingsPanel_.pendingPhysWaves ? 1 : 0) << "\n";
     out << "phys_wind=" << settingsPanel_.pendingPhysWind << "\n";
     out << "water_tess=" << (settingsPanel_.pendingWaterTess ? 1 : 0) << "\n";
+    out << "water_tess_density=" << settingsPanel_.pendingWaterTessDensity << "\n";
     out << "shore_waves=" << (settingsPanel_.pendingShoreWaves ? 1 : 0) << "\n";
     out << "ride_waves=" << (settingsPanel_.pendingRideWaves ? 1 : 0) << "\n";
     out << "weather_waves=" << settingsPanel_.pendingWeatherWaves << "\n";
@@ -2337,6 +2339,10 @@ void GameScreen::loadSettings() {
             else if (key == "phys_waves") settingsPanel_.pendingPhysWaves = (std::stoi(val) != 0);
             else if (key == "phys_wind") settingsPanel_.pendingPhysWind = std::clamp(std::stoi(val), 1, 20);
             else if (key == "water_tess") settingsPanel_.pendingWaterTess = (std::stoi(val) != 0);
+            else if (key == "water_tess_density")
+                settingsPanel_.pendingWaterTessDensity =
+                    std::clamp(std::stoi(val), rendering::water_tess::kDensityMinPercent,
+                               rendering::water_tess::kDensityMaxPercent);
             else if (key == "shore_waves") settingsPanel_.pendingShoreWaves = (std::stoi(val) != 0);
             else if (key == "ride_waves") settingsPanel_.pendingRideWaves = (std::stoi(val) != 0);
             else if (key == "weather_waves") settingsPanel_.pendingWeatherWaves = std::clamp(std::stoi(val), 0, 200);

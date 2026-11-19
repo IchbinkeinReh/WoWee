@@ -575,6 +575,8 @@ target_include_directories(test_settings_schema_consistency SYSTEM PRIVATE ${TES
 target_compile_definitions(test_settings_schema_consistency PRIVATE
     WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_settings_schema_consistency PRIVATE catch2_main)
+# Its water tessellation row check includes water_tessellation.hpp, which reaches glm.
+wowee_test_link_glm(test_settings_schema_consistency)
 add_test(NAME settings_schema_consistency COMMAND test_settings_schema_consistency)
 register_test_target(test_settings_schema_consistency)
 

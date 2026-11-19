@@ -805,6 +805,7 @@ void Renderer::updatePerFrameUBO() {
             // globalTime in the shader, the summed pace, whole as it eases.
             wf.weather.speedScale = wave_spectrum::paceOverClock(waterWaveClock_, globalTime);
             wf.tessellation = waterTessellation_;
+            wf.tessDensity = waterTessDensity_;
             wf.shoreWaves = shoreWaves_;
             wf.reflectReach = hw ? 400.0f : 150.0f;
             wf.refractReach = hw ? 80.0f : 40.0f;

@@ -1405,6 +1405,7 @@ private:
     double waterWaveClock_ = 0.0;
     float physicsWind_ = 7.0f;
     bool waterTessellation_ = true;
+    float waterTessDensity_ = 1.0f;
     bool shoreWaves_ = true;
     // Riding the traced water's waves (wave_surface.hpp): the setting, and
     // each rider's eased pose. Drawn only, through the renderers' own ride
@@ -1482,6 +1483,9 @@ public:
     /// near the camera, so short waves, rings and wakes move its surface.
     /// No effect on a device without tessellation shaders.
     void setWaterTessellation(bool on) { waterTessellation_ = on; }
+    /// The "Water tessellation" slider: how finely, 1 the default
+    /// (water_tess::densityFromPercent).
+    void setWaterTessDensity(float density) { waterTessDensity_ = density; }
     /// The shore waves and their surf on the traced water (shallow_water.hpp).
     void setShoreWaves(bool on) { shoreWaves_ = on; }
     /// Swimmers, boats and the camera ride the traced water's waves, drawn

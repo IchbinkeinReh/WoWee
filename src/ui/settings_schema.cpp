@@ -313,6 +313,14 @@ constexpr SettingDesc kSchema[] = {
      "the GPU, so short waves, swimmers' rings and the wakes of units\n"
      "raise and lower it, not only its shading. Not on every GPU.\n"
      "Not in the original client.", "", 1, "raytracedlighting&rtwater"},
+    // How finely (water_tessellation.hpp's densityFromPercent): 100 the cut
+    // above, lower pieces proportionally longer, higher shorter.
+    {"watertessdensity", "Water tessellation (%)", SettingKind::Int, 25, 200, 5,
+     "Water", "",
+     "How finely the tessellated water is cut: 100 is the default, 50\n"
+     "pieces twice as long (cheaper, the short waves flatter), 200 half\n"
+     "as long (dearer). Not in the original client.", "", 100,
+     "raytracedlighting&rtwater&watertess"},
     // Shore waves (shallow_water.hpp, water_waves.glsli): the ground's water
     // knows the depth to the bed under it, and the waves feel it - slower and
     // shorter as it shallows, higher (shoaling), turned to come in square to
@@ -1530,7 +1538,7 @@ bool settingNeedsRayTracing(const std::string& key) {
     // the rows whose labels or tooltips say ray traced.
     static constexpr const char* kTraced[] = {
         "dbgview",          "dbgsplitrt",         "dbgpointlights",     "dbgbounce",       "dbginteriorbase",
-        "dbginteriorfullat", "dbgshadowdarkness", "rtnormalkeep", "rtnormalface", "rtwater", "rtwaveamp", "rtwavefreq", "physwaves", "physwind", "weatherwaves", "watertess", "shorewaves", "ridewaves", "dbgtracedsunshadow", "dbgpointshadow",
+        "dbginteriorfullat", "dbgshadowdarkness", "rtnormalkeep", "rtnormalface", "rtwater", "rtwaveamp", "rtwavefreq", "physwaves", "physwind", "weatherwaves", "watertess", "watertessdensity", "shorewaves", "ridewaves", "dbgtracedsunshadow", "dbgpointshadow",
         "dbgbakedlampshadow", "dbgocclusion",
     };
     for (const char* k : kTraced) {

@@ -71,7 +71,8 @@ struct WaterPushConstants {
     // normalMinWavelength and detail).
     glm::vec4 shore{0.0f};
     // x the physics waves' upper rung's share, y its wind, z the lower rung's
-    // place (wave_spectrum::windRungs; water_waves.glsli's pwWindBlend).
+    // place (wave_spectrum::windRungs; water_waves.glsli's pwWindBlend); w
+    // the tessellation's density (RtWaterFrame::tessDensity, water_tess.glsli).
     glm::vec4 windBlend{0.0f};
 };
 static_assert(sizeof(WaterPushConstants) == 112, "the shaders' declarations of this range are laid out for 112 bytes");
@@ -1439,7 +1440,7 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
         push.pad2 = waves->wind;
         push.shore = glm::vec4(waves->shore ? 1.0f : 0.0f, waves->shore ? waves->surf : 0.0f,
                                waves->normalMinWavelength, waves->detail);
-        push.windBlend = glm::vec4(waves->windUpperShare, waves->windUpper, waves->windRung, 0.0f);
+        push.windBlend = glm::vec4(waves->windUpperShare, waves->windUpper, waves->windRung, rtFrame_.tessDensity);
         push.liquidBasicType = waves->basicType;
         push.screenSize = glm::vec2(static_cast<float>(renderExtent_.width),
                                     static_cast<float>(renderExtent_.height));

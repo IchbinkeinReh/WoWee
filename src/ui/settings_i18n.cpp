@@ -194,6 +194,12 @@ constexpr SettingGerman kGerman[] = {
      "Einheiten sie heben und senken, nicht nur ihre Schattierung. Nicht auf jeder GPU. "
      "Nicht im ursprünglichen Client.",
      nullptr, nullptr, nullptr},
+    {"watertessdensity",
+     "Wasser-Tessellation (%)",
+     "Wie fein das tessellierte Wasser unterteilt wird: 100 ist der Standard, 50 doppelt so "
+     "lange Stücke (günstiger, kurze Wellen flacher), 200 halb so lange (teurer). Nicht im "
+     "ursprünglichen Client.",
+     nullptr, nullptr, nullptr},
     {"shorewaves",
      "Brandung und Gischt",
      "Auf dem Wasser mit Raytracing: Wellen werden langsamer, steiler und drehen zum Strand, "

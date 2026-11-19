@@ -47,7 +47,8 @@ layout(push_constant) uniform Push {
     vec4 shore;
     // x the physics waves' upper rung's share, y its wind, z the lower rung's
     // place (water_waves.glsli's pwWindBlend, wave_surface::WaveParams'
-    // windUpperShare, windUpper and windRung).
+    // windUpperShare, windUpper and windRung); w the "Water tessellation"
+    // slider's density (water_tess.glsli's wtDensity).
     vec4 windBlend;
 } push;
 
@@ -151,6 +152,7 @@ void main() {
     pwWindBlend = push.windBlend.xyz;
     // As water.tesc cut it (water_tess.glsli).
     wtYardsPerPixel = wtYardsPerPixelFor(projection, push.screenSize.y);
+    wtDensity = wtDensityFor(push.windBlend.w);
     // The short waves' variety for the weather (water_waves.glsli).
     pwVariety = push.pad2 > 0.0 ? pwVarietyFromDetail(push.shore.w) : 0.0;
     // Weighed the same way on both triangles that share an edge, so the

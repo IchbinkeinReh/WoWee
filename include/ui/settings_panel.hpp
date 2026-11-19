@@ -98,6 +98,7 @@ public:
     bool pendingPhysWaves = false;    ///< physics-based waves (wave_spectrum.hpp)
     int pendingPhysWind = 7;          ///< their wind, m/s
     bool pendingWaterTess = true;     ///< tessellated water (water_tessellation.hpp)
+    int pendingWaterTessDensity = 100; ///< how finely, % (water_tess::densityFromPercent)
     bool pendingShoreWaves = true;    ///< shore surf and whitewater (shallow_water.hpp)
     bool pendingRideWaves = true;     ///< swimmers, boats and the camera ride the waves (wave_surface.hpp)
     int pendingWeatherWaves = 100;    ///< how much rain and storms roughen it, %
