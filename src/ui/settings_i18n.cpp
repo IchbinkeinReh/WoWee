@@ -204,7 +204,8 @@ constexpr SettingGerman kGerman[] = {
      "Brandung und Gischt",
      "Auf dem Wasser mit Raytracing: Wellen werden langsamer, steiler und drehen zum Strand, "
      "wo das Wasser flacher wird, und brechen in weißer Gischt, wo es sie nicht mehr tragen "
-     "kann, bei Sturm mehr davon. Nicht im ursprünglichen Client.",
+     "kann, bei Sturm mehr davon. Die Wasserlinie läuft mit den ankommenden Wellen den "
+     "Strand hinauf und wieder zurück. Nicht im ursprünglichen Client.",
      nullptr, nullptr, nullptr},
     {"ridewaves",
      "Auf den Wellen reiten",

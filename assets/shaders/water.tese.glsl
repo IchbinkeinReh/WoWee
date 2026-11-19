@@ -63,6 +63,7 @@ layout(location = 3) out float WaveOffset;
 layout(location = 4) out vec2 ScreenUV;
 layout(location = 5) out vec2 WaveBase;
 layout(location = 6) out vec4 BedInfo;
+layout(location = 7) out vec2 SwashInfo;  // as water.vert's
 
 #include "water_waves.glsli"
 #include "water_interaction.glsli"
@@ -92,7 +93,7 @@ float interactionHeight(vec2 at) {
             }
             float width = 0.28 + w.z * 0.25;
             float along = (length(fromWave) - (0.15 + w.z * 1.7)) / width;
-            h += ringCrestHeight(along, 4.0, width, w.w * 0.22 * (1.0 - w.z / 1.6));
+            h += ringCrestHeight(along, 4.0, width, w.w * 0.22 * swimRingFade(w.z));
         }
     }
 
@@ -123,14 +124,15 @@ float interactionHeight(vec2 at) {
         int end = g + 1 < groups ? clamp(int(wakeGroups[g + 1].w), first, count) : count;
         if (end - first < 1) continue;
         vec2 head = wakePoints[end - 1].xy;
+        float headAge = wakePoints[end - 1].z;
         vec2 toHead = at - head;
         if (dot(toHead, toHead) >= KELVIN_REACH * KELVIN_REACH) continue;
         for (int i = first; i < end; ++i) {
             vec4 wp = wakePoints[i];
-            float radius = 0.2 + length(head - wp.xy) / 3.0;
+            float radius = 0.2 + length(head - wp.xy) / 3.0 + WAKE_CLASSIC_SPREAD * headAge;
             float along = (length(at - wp.xy) - radius) / 0.32;
             if (abs(along) > 3.0) continue;
-            h += ringCrestHeight(along, 3.2, 0.32, wp.w * (1.0 - wp.z) * 0.14 / (1.0 + 0.6 * radius));
+            h += ringCrestHeight(along, 3.2, 0.32, wp.w * wakeClassicFade(wp.z) * 0.14 / (1.0 + 0.6 * radius));
         }
         // The bow wave: its crest's height, on the side the trail moves to.
         if (end - first >= 3) {
@@ -141,7 +143,8 @@ float interactionHeight(vec2 at) {
                 float d = length(toHead);
                 float ahead = dot(toHead / max(d, 0.01), fwd);
                 float along = (d - 0.55) / 0.22;
-                h += ringCrestHeight(along, 3.2, 0.22, 0.2 * wakePoints[end - 1].w * smoothstep(-0.3, 0.7, ahead));
+                h += ringCrestHeight(along, 3.2, 0.22,
+                                     0.2 * wakePoints[end - 1].w * bowFade(headAge) * smoothstep(-0.3, 0.7, ahead));
             }
         }
     }
@@ -201,6 +204,7 @@ void main() {
 
     WaveBase = base.xy;
     BedInfo = bed;
+    SwashInfo = vec2(waves.swashLevel, waves.swashRate);
     FragPos = worldPos.xyz;
     TexCoord = texCoord;
     farClip(view * worldPos);

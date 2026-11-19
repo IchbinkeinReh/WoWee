@@ -57,8 +57,10 @@ TEST_CASE("another unit's limb makes rings within its share", "[swim_wave]") {
     unitLimbMoved(waves, limb, glm::vec3(x, 0.0f, 10.0f), 10.0f, 0.1f, 9, 4, 1);
     size_t made = 0, over = 0;
     // A limb alone with a share of 4 waits kLife / 4 between rings, so it
-    // keeps to the share, all but rarely without being turned away.
-    for (int i = 0; i < 100; ++i) {
+    // keeps to the share, all but rarely without being turned away. Over
+    // three of its rings' lives: a dozen rings.
+    const int steps = static_cast<int>(3.0f * kLife / 0.05f) + 1;
+    for (int i = 0; i < steps; ++i) {
         const Made m = unitLimbMoved(waves, limb, glm::vec3(x += 0.2f, 0.0f, 10.0f), 10.0f, 0.05f, 9, 4, 1);
         made += m == Made::Ring ? 1u : 0u;
         over += m == Made::OverShare ? 1u : 0u;

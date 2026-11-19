@@ -37,6 +37,12 @@ struct GerstnerResult {
     // there, under the pixel, and roughen what it mirrors - water.frag widens
     // the glint by it rather than drawing a mirror too smooth for its waves.
     float hiddenSlope2;
+    // The swash (swPhysicalSwash, swGerstnerSwash: the shore waves on the
+    // vertex stages only, pwHeightUnused off): the level the waterline is
+    // raised by near the shore, yards, already in displacement.z, and how
+    // fast it changes, yards a second.
+    float swashLevel;
+    float swashRate;
 };
 
 // Nothing moved: the flat surface.
@@ -51,6 +57,8 @@ GerstnerResult flatWaves() {
     r.shoreWeight = 0.0;
     r.seaHeight = 0.0;
     r.hiddenSlope2 = 0.0;
+    r.swashLevel = 0.0;
+    r.swashRate = 0.0;
     return r;
 }
 
@@ -557,6 +565,115 @@ float swShoreWavenumber(float omega, float h, float slope) {
     return omega / sqrt(PW_G * (max(h, 0.0) + SW_SHORE_PHASE_DEPTH)) * slope / SW_REFERENCE_SLOPE;
 }
 
+// --- The swash: the waterline running up the beach and back ---
+// (shallow_water.hpp's SwashSum and kSwash*, wave_surface.hpp's
+// physicalSwash and gerstnerSwash are the C++ twin; the reasoning is there.)
+// Near the shore the level rises as a group of higher waves comes in and
+// falls in the lull after it (their beat, a_i a_i+1 cos(phi_i - phi_i+1)),
+// and with each long wave's own run-up (a_i sat sin(phi_i)); every wave's
+// phase its shore phase at the waterline. The level moves the whole sheet
+// out to swashFullDepth, fading out over SW_SWASH_FADE_OVER more, so the
+// waterline creeps up the beach and back with the waves - on the coarse
+// grid as on the tessellated surface - and the shore's masks, the surf's rim
+// and the wet sand, which go by the depth under the moved surface, with it.
+const float SW_SWASH_GAIN = 0.5;
+const float SW_SWASH_MIN_RMS = 0.025;
+const float SW_SWASH_MAX_RMS = 0.3;
+const float SW_SWASH_FULL_FROM = 0.5;
+const float SW_SWASH_FADE_OVER = 2.0;
+const float SW_SWASH_SATURATION = 1.5;
+const float SW_SWASH_GROUP_SHARE = 0.8;
+const float SW_SWASH_DIRECT_SHARE = 0.8;
+const float SW_SWASH_GROUP_DELAY = 4.0;
+const float SW_SWASH_DELAY_CELL = 60.0;
+const float SW_SWASH_SPATIAL_SPREAD = 0.35;
+// A wave running away from the shore still laps at it this much.
+const float SW_SWASH_LEE_SHARE = 0.15;
+// The deepest water any swash reaches (at SW_SWASH_MAX_RMS).
+const float SW_SWASH_REACH = max(SW_SWASH_FULL_FROM, 3.0 * SW_SWASH_MAX_RMS) + SW_SWASH_FADE_OVER;
+
+struct SwashSum {
+    float energy;
+    float inward;
+    float direct;
+    float directRate;
+    float groups;
+    float groupsRate;
+    float groupsNorm;
+    float lastA;
+    float lastSin;
+    float lastCos;
+    float lastOmega;
+    int lastRung;
+};
+
+SwashSum swSwashBegin() {
+    SwashSum s;
+    s.energy = 0.0;
+    s.inward = 0.0;
+    s.direct = 0.0;
+    s.directRate = 0.0;
+    s.groups = 0.0;
+    s.groupsRate = 0.0;
+    s.groupsNorm = 0.0;
+    s.lastA = 0.0;
+    s.lastSin = 0.0;
+    s.lastCos = 0.0;
+    s.lastOmega = 0.0;
+    s.lastRung = -1;
+    return s;
+}
+
+// A wave of height `a`, running `toward` (0-1) the shore, of angular
+// frequency `omega`, at `phase` (its - omega t in it), in `rung`; `delay`
+// the groups' arrival delay here, seconds.
+void swSwashAdd(inout SwashSum s, float a, float toward, float omega, float phase, int rung, float delay) {
+    float at = a * toward;
+    s.energy += a * a;
+    s.inward += at * at;
+    float sn = sin(phase);
+    float cs = cos(phase);
+    float x = omega / SW_SWASH_SATURATION;
+    float sat = 1.0 / (1.0 + x * x);
+    s.direct += at * sat * sn;
+    s.directRate -= at * sat * omega * cs;
+    if (rung == s.lastRung) {
+        float p = s.lastA * at;
+        float dw = omega - s.lastOmega;
+        float cb = s.lastCos * cs + s.lastSin * sn;
+        float sb = s.lastSin * cs - s.lastCos * sn;
+        float cd = cos(dw * delay);
+        float sd = sin(dw * delay);
+        float cpsi = cb * cd - sb * sd;
+        float spsi = sb * cd + cb * sd;
+        s.groups += p * cpsi;
+        s.groupsRate -= p * spsi * dw;
+        s.groupsNorm += p * p;
+    }
+    s.lastA = at;
+    s.lastSin = sn;
+    s.lastCos = cs;
+    s.lastOmega = omega;
+    s.lastRung = rung;
+}
+
+// The level (x) and its rate (y) at a point `h` yards deep, for the open
+// water's significant height.
+vec2 swSwashEnd(SwashSum s, float seaHeight, float h) {
+    if (s.energy <= 1e-12 || s.inward <= 1e-12) return vec2(0.0);
+    float rms = clamp(SW_SWASH_GAIN * seaHeight * sqrt(s.inward / s.energy), SW_SWASH_MIN_RMS, SW_SWASH_MAX_RMS);
+    float d = SW_SWASH_DIRECT_SHARE / sqrt(0.5 * s.inward);
+    float g = s.groupsNorm > 1e-16 ? SW_SWASH_GROUP_SHARE / sqrt(0.5 * s.groupsNorm) : 0.0;
+    float full = max(SW_SWASH_FULL_FROM, 3.0 * rms);
+    float weight = 1.0 - smoothstep(full, full + SW_SWASH_FADE_OVER, h);
+    return rms * weight * vec2(s.groups * g + s.direct * d, s.groupsRate * g + s.directRate * d);
+}
+
+// When the wave groups reach the shore here, seconds later than elsewhere.
+float swSwashDelay(vec2 pos) {
+    return SW_SWASH_GROUP_DELAY * pwNoise(pos / SW_SWASH_DELAY_CELL + vec2(17.31, 5.77));
+}
+
 // One Gerstner wave added to `r`: running along `dir`, wavenumber `k`,
 // height `A`, steepness `Q`, its crest leant forward by `lean` (that share of
 // the height moved along `dir` with the crest: the front steepens and the
@@ -612,9 +729,30 @@ vec3 swShoreHere(PWSpectrum sp, int i, vec4 wave, float patchA, float h, float f
     return vec3(shoaled * fade, swRefraction(k * max(h, 0.0)) * sloped * toward * longEnough, kShore);
 }
 
+// The physics waves' swash at `pos` over the bed `bed` (wave_surface.hpp's
+// physicalSwash): every wave, each heading as the spectrum's own (the short
+// waves' wider spread left out, as the C++ twin has them), at its shore phase
+// at the waterline.
+vec2 swPhysicalSwash(PWSpectrum sp, vec2 pos, float time, float windDir, vec4 bed, float seaHeight) {
+    float sloped = min(length(bed.yz), 1.0);
+    vec2 toShore = sloped > 1e-4 ? normalize(bed.yz) : vec2(0.0);
+    float delay = swSwashDelay(pos);
+    SwashSum sum = swSwashBegin();
+    for (int i = 0; i < sp.count; i++) {
+        vec4 wave = pwWaveAt(sp, i);
+        float angle = windDir + (fract(float(i % PW_COUNT) * 0.6180340) - 0.5) * 3.14159265 * 0.8;
+        float toward = smoothstep(-0.2, 0.4, dot(vec2(cos(angle), sin(angle)), toShore));
+        toward = max(SW_SWASH_LEE_SHARE, 0.5 + (toward - 0.5) * sloped);
+        swSwashAdd(sum, wave.z, toward, wave.y, -swShorePhase(wave.y, 0.0) - wave.y * time + pwPhaseOffset(i),
+                   i / PW_COUNT, delay);
+    }
+    return swSwashEnd(sum, seaHeight, bed.x);
+}
+
 // The physics waves over the bed `bed` (above). Called with the same
 // arguments from water.vert, water.tese and water.frag, so the surface and
-// its shading agree.
+// its shading agree. The vertex stages (pwHeightUnused off) add the swash's
+// level near the shore (swPhysicalSwash) to the displacement.
 GerstnerResult evaluatePhysicalWavesShore(vec2 pos, float time, float ampScale, float fetch, float windMps,
                                           float windDir, float minWavelength, float fullWavelength, vec4 bed) {
     PWSpectrum sp = pwSample(ampScale, fetch, windMps);
@@ -639,6 +777,12 @@ GerstnerResult evaluatePhysicalWavesShore(vec2 pos, float time, float ampScale, 
         GerstnerResult deep = pwWaves(sp, pos, time, windDir, minWavelength, fullWavelength, slopeOnly);
         deep.seaHeight = seaHeight;
         deep.breaking = breaking;
+        if (!pwHeightUnused && h < SW_SWASH_REACH) {
+            vec2 swash = swPhysicalSwash(sp, pos, time, windDir, bed, seaHeight);
+            deep.displacement.z += swash.x;
+            deep.swashLevel = swash.x;
+            deep.swashRate = swash.y;
+        }
         return deep;
     }
     GerstnerResult r = flatWaves();
@@ -725,7 +869,49 @@ GerstnerResult evaluatePhysicalWavesShore(vec2 pos, float time, float ampScale, 
     r.breaking = SW_HS_FACTOR * sqrt(shoaledA2) / (SW_GAMMA * max(h, 1e-3));
     r.shoreWeight = totalA > 0.0 ? shoreA / totalA : 0.0;
     r.seaHeight = SW_HS_FACTOR * sqrt(seaA2);
+    if (!pwHeightUnused && h < SW_SWASH_REACH) {
+        vec2 swash = swPhysicalSwash(sp, pos, time, windDir, bed, r.seaHeight);
+        r.displacement.z += swash.x;
+        r.swashLevel = swash.x;
+        r.swashRate = swash.y;
+    }
     return r;
+}
+
+// The hand-made waves' swash (wave_surface.hpp's gerstnerSwash): the six
+// waves as evaluateGerstnerWaves has them, each at its phase here spread
+// wider (SW_SWASH_SPATIAL_SPREAD, so the coarse grid carries it), all
+// running in.
+vec2 swGerstnerSwash(vec2 pos, float time, float amp, float freq, float spd, float basicType, vec4 bed,
+                     float seaHeight) {
+    vec2 dirs[6] = vec2[6](
+        normalize(vec2(0.86, 0.51)),
+        normalize(vec2(-0.47, 0.88)),
+        normalize(vec2(0.32, -0.95)),
+        normalize(vec2(-0.93, -0.37)),
+        normalize(vec2(0.67, -0.29)),
+        normalize(vec2(-0.15, 0.74))
+    );
+    float amps[6];
+    float freqs[6];
+    float spds[6];
+    if (basicType > 0.5) {
+        amps = float[6](1.0, 0.55, 0.30, 0.18, 0.10, 0.06);
+        freqs = float[6](0.7, 1.3, 2.1, 3.4, 5.0, 7.5);
+        spds = float[6](0.8, 1.0, 1.3, 1.6, 2.0, 2.5);
+    } else {
+        amps = float[6](0.5, 0.25, 0.15, 0.08, 0.05, 0.03);
+        freqs = float[6](1.0, 1.8, 3.0, 4.5, 7.0, 10.0);
+        spds = float[6](0.6, 0.9, 1.2, 1.5, 1.9, 2.3);
+    }
+    SwashSum sum = swSwashBegin();
+    for (int i = 0; i < 6; i++) {
+        float w = freq * freqs[i];
+        float omega = spd * spds[i] * w;
+        swSwashAdd(sum, amp * amps[i], 1.0, omega, -(SW_SWASH_SPATIAL_SPREAD * w * dot(dirs[i], pos) + omega * time),
+                   0, 0.0);
+    }
+    return swSwashEnd(sum, seaHeight, bed.x);
 }
 
 // The hand-made waves over the bed: only held under the depth's limit and
@@ -749,6 +935,13 @@ GerstnerResult evaluateGerstnerWavesShore(vec2 pos, float time, float amp, float
     r.tangent = vec3(1.0, 0.0, 0.0) + (r.tangent - vec3(1.0, 0.0, 0.0)) * scale;
     r.binormal = vec3(0.0, 1.0, 0.0) + (r.binormal - vec3(0.0, 1.0, 0.0)) * scale;
     r.waveHeight *= scale;
+    // The vertex stages raise the level near the shore by the swash.
+    if (!pwHeightUnused && h < SW_SWASH_REACH) {
+        vec2 swash = swGerstnerSwash(pos, time, amp, freq, spd, basicType, bed, r.seaHeight);
+        r.displacement.z += swash.x;
+        r.swashLevel = swash.x;
+        r.swashRate = swash.y;
+    }
     return r;
 }
 

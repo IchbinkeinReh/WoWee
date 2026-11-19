@@ -326,12 +326,16 @@ constexpr SettingDesc kSchema[] = {
     // shorter as it shallows, higher (shoaling), turned to come in square to
     // the beach (refraction), breaking at 0.78 of the depth (McCowan), dying
     // away at the waterline - with white surf where they break, the foam they
-    // leave, and a rim where the run-up turns. Not in the original client.
+    // leave, and a rim where the run-up turns; and the swash, the level at the
+    // shore rising and falling with the wave groups, so the waterline creeps
+    // up the beach and back (shallow_water.hpp's SwashSum). Not in the
+    // original client.
     {"shorewaves", "Shore surf & whitewater", SettingKind::Bool, 0, 0, 0,
      "Water", "",
      "On the ray traced water: waves slow, steepen and turn to the beach\n"
      "as the water shallows, and break in white surf where it is too\n"
-     "shallow to hold them, more of it in a storm.\n"
+     "shallow to hold them, more of it in a storm. The waterline creeps\n"
+     "up the beach and back as the waves come in.\n"
      "Not in the original client.", "", 1, "raytracedlighting&rtwater"},
     // Riding the waves (wave_surface.hpp, Renderer::updateWaveRide): the
     // traced water's waves are the GPU's alone, so what swims or floats on

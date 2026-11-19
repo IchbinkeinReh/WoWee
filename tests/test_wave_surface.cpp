@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -151,11 +152,19 @@ TEST_CASE("there are no waves to ride where the traced water has none", "[wave_s
     CHECK_FALSE(wsf::rideParams(false, true, 2, false, on));
     CHECK_FALSE(wsf::rideParams(true, false, 2, false, on));
     CHECK(wsf::rideParams(true, true, 2, false, on));
-    // Dry land past the waterline: the shore waves die away to nothing.
+    // Dry land past the waterline: the shore waves die away to nothing; the
+    // sheet under the beach moves only with the swash's level, which carries
+    // the waterline up the beach and back.
     const auto p = wsf::paramsFor(2, false, settings(true, true, 15.0f));
     REQUIRE(p);
-    const auto dry = wsf::evaluate(*p, glm::vec2(100.0f, 0.0f), 3.0f, beachBed(glm::vec2(100.0f, 0.0f)));
-    CHECK(dry.displacement.z == Catch::Approx(0.0f).margin(1e-6));
+    const glm::vec4 dryBed = beachBed(glm::vec2(100.0f, 0.0f));
+    const auto dry = wsf::evaluate(*p, glm::vec2(100.0f, 0.0f), 3.0f, dryBed);
+    const auto sp = ws::sampleBlend(p->wind, p->freq, p->speed, p->amp, p->windUpperShare, p->windUpper, p->windRung);
+    CHECK(dry.displacement.x == Catch::Approx(0.0f).margin(1e-6));
+    CHECK(dry.displacement.y == Catch::Approx(0.0f).margin(1e-6));
+    CHECK(dry.displacement.z ==
+          Catch::Approx(wsf::physicalSwash(sp, glm::vec2(100.0f, 0.0f), 3.0f, dryBed).level).margin(1e-6));
+    CHECK(std::abs(dry.displacement.z) < 4.0f * wowee::rendering::shallow_water::kSwashMaxRms);
 }
 
 TEST_CASE("the push constants are the ones the water was drawn with", "[wave_surface]") {
@@ -471,4 +480,239 @@ TEST_CASE("the shader gives the short waves their variety in every stage", "[wav
         CHECK(slurpShader(stage).find("pwVariety = push.pad2 > 0.0 ? pwVarietyFromDetail(push.shore.w) : 0.0;") !=
               std::string::npos);
     }
+}
+
+// --- The swash: the waterline running up the beach and back ---
+
+namespace {
+namespace sw = wowee::rendering::shallow_water;
+
+// The swash's level over `seconds` at 10 Hz at a point of the shore, the
+// waves the given settings draw, the shore lying along `toShore` (bed slope
+// 0.1), `h` deep: its root mean square, its lowest and highest, and the mean
+// time between its upward crossings of its mean (its pace).
+struct SwashStats {
+    float rms = 0.0f, lo = 0.0f, hi = 0.0f, period = 0.0f;
+    float rateError = 0.0f;  ///< the rate against the level's own change, rms over rms
+};
+SwashStats swashOver(const wsf::WaveParams& p, glm::vec2 at, glm::vec2 toShore, float h, float seconds = 240.0f) {
+    const glm::vec4 bed(h, toShore.x, toShore.y, 0.1f);
+    auto levelAt = [&](float t) {
+        if (p.wind > 0.0f) {
+            const auto sp = ws::sampleBlend(p.wind, p.freq, p.speed, p.amp, p.windUpperShare, p.windUpper, p.windRung);
+            return wsf::physicalSwash(sp, at, t, bed);
+        }
+        return wsf::gerstnerSwash(at, t, p.amp, p.freq, p.speed, p.basicType, bed);
+    };
+    std::vector<float> v;
+    double rateErr = 0.0, rateRef = 0.0;
+    const float dt = 0.1f;
+    for (float t = 1000.0f; t < 1000.0f + seconds; t += dt) {
+        const auto s = levelAt(t);
+        v.push_back(s.level);
+        const float numeric = (levelAt(t + 1e-2f).level - levelAt(t - 1e-2f).level) / 2e-2f;
+        rateErr += (numeric - s.rate) * (numeric - s.rate);
+        rateRef += s.rate * s.rate;
+    }
+    SwashStats st;
+    double mean = 0.0;
+    for (float x : v) mean += x;
+    mean /= static_cast<double>(v.size());
+    double var = 0.0;
+    st.lo = st.hi = v[0];
+    int ups = 0;
+    for (size_t i = 0; i < v.size(); ++i) {
+        var += (v[i] - mean) * (v[i] - mean);
+        st.lo = std::min(st.lo, v[i]);
+        st.hi = std::max(st.hi, v[i]);
+        if (i > 0 && v[i - 1] < mean && v[i] >= mean) ++ups;
+    }
+    st.rms = static_cast<float>(std::sqrt(var / static_cast<double>(v.size())));
+    st.period = ups > 0 ? seconds / static_cast<float>(ups) : seconds;
+    st.rateError = rateRef > 0.0 ? static_cast<float>(std::sqrt(rateErr / rateRef)) : 0.0f;
+    return st;
+}
+
+// The settings the user plays with: the wave slider at 50%, physics waves
+// in a 3 m/s wind; clear (0), rain (1) or a storm (2).
+wsf::WaveSettings userSettings(bool physics, int weather) {
+    wsf::WaveSettings s;
+    s.waveAmp = 0.5f;
+    s.physicsWaves = physics;
+    s.windSpeed = 3.0f;
+    s.shoreWaves = true;
+    s.weather = ws::weatherWaves(weather >= 1 ? 1.0f : 0.0f, weather == 2 ? 1.0f : 0.0f, 1.0f);
+    return s;
+}
+glm::vec2 windward() { return glm::vec2(std::cos(ws::kWindDirection), std::sin(ws::kWindDirection)); }
+}  // namespace
+
+TEST_CASE("the waterline rises and falls with the waves, a few hundredths on a lake, more at sea and in a storm",
+          "[wave_surface][swash]") {
+    for (bool physics : {true, false}) {
+        INFO("physics waves " << physics);
+        const auto lake = wsf::paramsFor(1, false, userSettings(physics, 0));
+        const auto sea = wsf::paramsFor(2, false, userSettings(physics, 0));
+        const auto lakeStorm = wsf::paramsFor(1, false, userSettings(physics, 2));
+        const auto seaStorm = wsf::paramsFor(2, false, userSettings(physics, 2));
+        REQUIRE(lake);
+        REQUIRE(seaStorm);
+        const glm::vec2 at(-2178.0f, -726.0f);
+        const auto a = swashOver(*lake, at, windward(), 0.0f);
+        const auto b = swashOver(*sea, at, windward(), 0.0f);
+        const auto c = swashOver(*lakeStorm, at, windward(), 0.0f);
+        const auto d = swashOver(*seaStorm, at, windward(), 0.0f);
+        INFO("lake rms " << a.rms << " [" << a.lo << ", " << a.hi << "] every " << a.period << " s");
+        INFO("sea rms " << b.rms << " [" << b.lo << ", " << b.hi << "] every " << b.period << " s");
+        INFO("lake storm rms " << c.rms << ", sea storm rms " << d.rms << " [" << d.lo << ", " << d.hi << "] every "
+                               << d.period << " s");
+        // A lake: a few hundredths of a yard up and down, at most a fifth of
+        // a yard from its lowest to its highest.
+        CHECK(a.rms > 0.01f);
+        CHECK(a.rms < 0.035f);
+        CHECK(a.hi - a.lo > 0.04f);
+        CHECK(a.hi - a.lo < 0.2f);
+        // More at sea, more in a storm, most on the open sea in a storm - but
+        // held (kSwashMaxRms).
+        CHECK(b.rms >= a.rms);
+        CHECK(c.rms >= a.rms);
+        CHECK(d.rms > 2.0f * b.rms);
+        CHECK(d.rms < 1.3f * sw::kSwashMaxRms);
+        // It creeps rather than jitters: seconds from one rise to the next.
+        CHECK(a.period > 1.5f);
+        CHECK(d.period > 3.0f);
+        // The rate the rim's foam reads is the level's own.
+        CHECK(a.rateError < 0.05f);
+        CHECK(d.rateError < 0.05f);
+    }
+}
+
+TEST_CASE("a lee shore laps less than one the waves run into", "[wave_surface][swash]") {
+    const auto sea = wsf::paramsFor(2, false, userSettings(true, 2));
+    REQUIRE(sea);
+    const glm::vec2 at(100.0f, 50.0f);
+    const auto into = swashOver(*sea, at, windward(), 0.0f);
+    const auto lee = swashOver(*sea, at, -windward(), 0.0f);
+    INFO("into the waves " << into.rms << ", lee " << lee.rms);
+    CHECK(lee.rms < 0.6f * into.rms);
+    CHECK(lee.rms >= sw::kSwashMinRms * 0.5f);
+}
+
+TEST_CASE("the swash moves the whole sheet near the shore and none of the deep water", "[wave_surface][swash]") {
+    for (float rms : {sw::kSwashMinRms, 0.1f, sw::kSwashMaxRms}) {
+        INFO("rms " << rms);
+        // Whole on the beach under the sheet and out to the full depth.
+        CHECK(sw::swashWeight(-3.0f, rms) == 1.0f);
+        CHECK(sw::swashWeight(0.0f, rms) == 1.0f);
+        CHECK(sw::swashWeight(sw::swashFullDepth(rms), rms) == 1.0f);
+        CHECK(sw::swashFullDepth(rms) >= 3.0f * rms);
+        // None past its reach, smoothly in between.
+        CHECK(sw::swashWeight(sw::swashReach(rms), rms) == 0.0f);
+        float last = 1.0f;
+        for (float h = 0.0f; h <= sw::swashReach(rms); h += 0.01f) {
+            const float w = sw::swashWeight(h, rms);
+            CHECK(w <= last + 1e-6f);
+            CHECK(last - w < 0.02f);
+            last = w;
+        }
+        CHECK(sw::swashReach(rms) <= sw::swashReach(sw::kSwashMaxRms));
+    }
+}
+
+TEST_CASE("the swash is in the surface the vertex stages move and the riders ride", "[wave_surface][swash]") {
+    const auto lake = wsf::paramsFor(1, false, userSettings(true, 0));
+    const auto calm = wsf::paramsFor(1, false, userSettings(false, 0));
+    REQUIRE(lake);
+    REQUIRE(calm);
+    for (const auto* p : {&*lake, &*calm}) {
+        // At the waterline the waves have died away: what is left of the
+        // surface's height is the swash's level.
+        for (float t : {3.0f, 77.7f, 1234.5f}) {
+            const glm::vec4 bed(0.0f, windward().x, windward().y, 0.1f);
+            const glm::vec2 at(12.0f, -4.0f);
+            const auto waves = wsf::evaluate(*p, at, t, bed);
+            float level;
+            if (p->wind > 0.0f) {
+                const auto sp =
+                    ws::sampleBlend(p->wind, p->freq, p->speed, p->amp, p->windUpperShare, p->windUpper, p->windRung);
+                level = wsf::physicalSwash(sp, at, t, bed).level;
+            } else {
+                level = wsf::gerstnerSwash(at, t, p->amp, p->freq, p->speed, p->basicType, bed).level;
+            }
+            CHECK(level != 0.0f);
+            CHECK(waves.displacement.z == Catch::Approx(level).margin(1e-6));
+        }
+        // And none in deep water.
+        const glm::vec4 deep(40.0f, windward().x, windward().y, 0.1f);
+        const auto still = wsf::evaluate(*p, glm::vec2(5.0f, 5.0f), 10.0f, deep);
+        const wsf::WaveParams noShore = [&] {
+            wsf::WaveParams q = *p;
+            q.shore = false;
+            return q;
+        }();
+        const auto plain = wsf::evaluate(noShore, glm::vec2(5.0f, 5.0f), 10.0f, deep);
+        CHECK(still.displacement.z == Catch::Approx(plain.displacement.z).margin(1e-5));
+    }
+    // Smooth along the shore: the coarse grid (a vertex every 4 yards) carries
+    // it. Neighbouring vertices differ by little of its range.
+    const auto sp = ws::sampleBlend(lake->wind, lake->freq, lake->speed, lake->amp, 0.0f, 0.0f, 0.0f);
+    const glm::vec4 bed(0.0f, windward().x, windward().y, 0.1f);
+    float worst = 0.0f;
+    for (float t = 0.0f; t < 30.0f; t += 0.37f) {
+        for (float x = -100.0f; x < 100.0f; x += 4.17f) {
+            const float a = wsf::physicalSwash(sp, glm::vec2(x, 0.0f), t, bed).level;
+            const float b = wsf::physicalSwash(sp, glm::vec2(x + 4.17f, 0.0f), t, bed).level;
+            worst = std::max(worst, std::abs(a - b));
+        }
+    }
+    INFO("worst step between neighbouring vertices " << worst);
+    CHECK(worst < 0.5f * 6.0f * sw::swashRms(0.0f, 1.0f));
+}
+
+TEST_CASE("the shader's swash is the one tested here", "[wave_surface][swash]") {
+    const std::string waves = slurpShader("water_waves.glsli");
+    const std::string vert = slurpShader("water.vert.glsl");
+    const std::string tese = slurpShader("water.tese.glsl");
+    const std::string frag = slurpShader("water.frag.glsl");
+    REQUIRE(waves.size() > 1000);
+    auto has = [](const std::string& text, const std::string& what) { return text.find(what) != std::string::npos; };
+    auto constant = [&](const char* name, float value) {
+        char line[96];
+        // As the shader writes it: 2.0, 0.015.
+        const double v = static_cast<double>(value);
+        std::snprintf(line, sizeof(line), v == std::floor(v) ? "const float %s = %.1f;" : "const float %s = %g;", name,
+                      v);
+        INFO(line);
+        CHECK(has(waves, line));
+    };
+    constant("SW_SWASH_MIN_RMS", sw::kSwashMinRms);
+    constant("SW_SWASH_MAX_RMS", sw::kSwashMaxRms);
+    constant("SW_SWASH_FADE_OVER", sw::kSwashFadeOver);
+    constant("SW_SWASH_SATURATION", sw::kSwashSaturation);
+    constant("SW_SWASH_GROUP_DELAY", sw::kSwashGroupDelay);
+    constant("SW_SWASH_SPATIAL_SPREAD", sw::kSwashSpatialSpread);
+    constant("SW_SWASH_LEE_SHARE", sw::kSwashLeeShare);
+    CHECK(has(waves, "const float SW_SWASH_GAIN = 0.5;"));
+    CHECK(sw::kSwashGain == 0.5f);
+    CHECK(has(waves, "const float SW_SWASH_FULL_FROM = 0.5;"));
+    CHECK(sw::kSwashFullFrom == 0.5f);
+    CHECK(has(waves, "const float SW_SWASH_GROUP_SHARE = 0.8;"));
+    CHECK(has(waves, "const float SW_SWASH_DIRECT_SHARE = 0.8;"));
+    CHECK(sw::kSwashGroupShare == 0.8f);
+    CHECK(sw::kSwashDirectShare == 0.8f);
+    CHECK(has(waves, "const float SW_SWASH_DELAY_CELL = 60.0;"));
+    CHECK(sw::kSwashDelayCell == 60.0f);
+    // Both kinds of waves add it on the vertex stages only (the fragment
+    // stage, pwHeightUnused, reads it from them), deep shore water too.
+    size_t adds = 0;
+    for (size_t at = waves.find("if (!pwHeightUnused && h < SW_SWASH_REACH) {"); at != std::string::npos;
+         at = waves.find("if (!pwHeightUnused && h < SW_SWASH_REACH) {", at + 1))
+        ++adds;
+    CHECK(adds == 3);
+    for (const std::string* stage : {&vert, &tese}) {
+        CHECK(has(*stage, "SwashInfo = vec2(waves.swashLevel, waves.swashRate);"));
+        CHECK(has(*stage, "layout(location = 7) out vec2 SwashInfo;"));
+    }
+    CHECK(has(frag, "layout(location = 7) in vec2 SwashInfo;"));
+    CHECK(has(frag, "pwHeightUnused = true;"));
 }

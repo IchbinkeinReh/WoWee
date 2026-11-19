@@ -11543,6 +11543,26 @@ void LuaEngine::registerCoreAPI() {
             return 1;
         });
         lua_setglobal(L_, "__WoweeTestLightning");
+        // __WoweeTestWaterProbe(x, y, dx, dy[, radius]): the traced water at
+        // the shader's clock, as one line - the waterline along the line from
+        // .gps's (x, y) toward (dx, dy) still and with the swash
+        // (yards out), the swash's level and rate there, and the trail
+        // points and swimmers' rings within `radius` (12) of the character
+        // (x, y, age, strength). For scripted runs: the run-up over time, and
+        // a wake's settling worked out from what the shader is handed.
+        lua_pushcfunction(L_, [](lua_State* L) -> int {
+            auto* renderer = core::Application::getInstance().getRenderer();
+            if (!renderer) return 0;
+            // .gps's X and Y, which are the renderer's x and y.
+            const float x = static_cast<float>(luaL_checknumber(L, 1));
+            const float y = static_cast<float>(luaL_checknumber(L, 2));
+            const float dx = static_cast<float>(luaL_checknumber(L, 3));
+            const float dy = static_cast<float>(luaL_checknumber(L, 4));
+            const float radius = static_cast<float>(luaL_optnumber(L, 5, 12.0));
+            lua_pushstring(L, renderer->testWaterProbe(x, y, dx, dy, radius).c_str());
+            return 1;
+        });
+        lua_setglobal(L_, "__WoweeTestWaterProbe");
         lua_pushcfunction(L_, [](lua_State* L) -> int {
             wowee::core::testFrameShotPath = luaL_checkstring(L, 1);
             return 0;

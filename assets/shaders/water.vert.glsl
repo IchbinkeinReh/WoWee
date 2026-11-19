@@ -59,6 +59,10 @@ layout(location = 4) out vec2 ScreenUV;
 // takes the waves' normal there (water.frag).
 layout(location = 5) out vec2 WaveBase;
 layout(location = 6) out vec4 BedInfo;
+// The swash near the shore (water_waves.glsli): x the level the waterline is
+// raised by, in the displacement already, y how fast it changes (yards a
+// second) - the surf's rim and the wet sand follow it (water.frag).
+layout(location = 7) out vec2 SwashInfo;
 
 #include "water_waves.glsli"
 
@@ -105,6 +109,7 @@ void main() {
 
     WaveBase = aPos.xy;
     BedInfo = aBed;
+    SwashInfo = vec2(waves.swashLevel, waves.swashRate);
     FragPos = worldPos.xyz;
     TexCoord = aTexCoord;
     farClip(view * worldPos);

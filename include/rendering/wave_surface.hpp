@@ -249,6 +249,87 @@ inline Waves physical(glm::vec2 pos, float time, float ampScale, float fetch, fl
                         pos, time, minWavelength);
 }
 
+// --- The swash (shallow_water.hpp's SwashSum; water_waves.glsli's
+// swPhysicalSwash and swGerstnerSwash) ---
+
+/// When the wave groups reach the shore at `pos`, seconds later than
+/// elsewhere (water_waves.glsli's swSwashDelay): a smooth noise over
+/// shallow_water::kSwashDelayCell yards.
+inline float swashDelay(glm::vec2 pos) {
+    const glm::vec2 p = pos / shallow_water::kSwashDelayCell + glm::vec2(17.31f, 5.77f);
+    auto hash = [](glm::vec2 q) {
+        q = glm::fract(q * glm::vec2(0.1031f, 0.1030f));
+        q += glm::dot(q, glm::vec2(q.y, q.x) + 33.33f);
+        return glm::fract((q.x + q.y) * q.x);
+    };
+    const glm::vec2 i = glm::floor(p);
+    glm::vec2 f = p - i;
+    f = f * f * (3.0f - 2.0f * f);
+    const float n = glm::mix(glm::mix(hash(i), hash(i + glm::vec2(1, 0)), f.x),
+                             glm::mix(hash(i + glm::vec2(0, 1)), hash(i + glm::vec2(1, 1)), f.x), f.y);
+    return shallow_water::kSwashGroupDelay * n;
+}
+
+/// The physics waves' swash at `pos` over the bed `bed`: the level the
+/// waterline is raised by there (weighted by the depth, swashWeight) and how
+/// fast it changes. Every wave of the spectrum counts, the short ones too:
+/// the level moves the whole sheet near the shore, not as a wave.
+inline shallow_water::SwashLevel physicalSwash(const wave_spectrum::Spectrum& spectrum, glm::vec2 pos, float time,
+                                               const glm::vec4& bed) {
+    namespace sw = shallow_water;
+    const float sloped = std::min(glm::length(glm::vec2(bed.y, bed.z)), 1.0f);
+    const glm::vec2 toShore = sloped > 1e-4f ? glm::normalize(glm::vec2(bed.y, bed.z)) : glm::vec2(0.0f);
+    const float delay = swashDelay(pos);
+    sw::SwashSum sum;
+    for (size_t i = 0; i < spectrum.count; ++i) {
+        const auto& w = spectrum.waves[i];
+        const float toward = sw::swashToward(glm::dot(detail::direction(w), toShore), sloped);
+        sum.add(w.amplitude, toward, w.omega, -sw::shorePhase(w.omega, 0.0f) - w.omega * time + w.phase,
+                static_cast<int>(i / wave_spectrum::kWaveCount), delay);
+    }
+    sw::SwashLevel s = sum.end(sw::kSignificantHeightFactor * std::sqrt(sum.energy));
+    const float weight = sw::swashWeight(bed.x, s.rms);
+    s.level *= weight;
+    s.rate *= weight;
+    return s;
+}
+
+/// The hand-made waves' swash (physics waves off): the six waves' groups
+/// and run-up as above, each at its own phase here - spread wider
+/// (kSwashSpatialSpread), so that the coarse grid carries it - all running in.
+inline shallow_water::SwashLevel gerstnerSwash(glm::vec2 pos, float time, float amp, float freq, float spd,
+                                               float basicType, const glm::vec4& bed) {
+    namespace sw = shallow_water;
+    if (basicType >= 1.5f) return {};
+    static const std::array<glm::vec2, 6> dirs = {
+        glm::normalize(glm::vec2(0.86f, 0.51f)),  glm::normalize(glm::vec2(-0.47f, 0.88f)),
+        glm::normalize(glm::vec2(0.32f, -0.95f)), glm::normalize(glm::vec2(-0.93f, -0.37f)),
+        glm::normalize(glm::vec2(0.67f, -0.29f)), glm::normalize(glm::vec2(-0.15f, 0.74f)),
+    };
+    static constexpr std::array<float, 6> kOceanAmp = {1.0f, 0.55f, 0.30f, 0.18f, 0.10f, 0.06f};
+    static constexpr std::array<float, 6> kOceanFreq = {0.7f, 1.3f, 2.1f, 3.4f, 5.0f, 7.5f};
+    static constexpr std::array<float, 6> kOceanSpeed = {0.8f, 1.0f, 1.3f, 1.6f, 2.0f, 2.5f};
+    static constexpr std::array<float, 6> kInlandAmp = {0.5f, 0.25f, 0.15f, 0.08f, 0.05f, 0.03f};
+    static constexpr std::array<float, 6> kInlandFreq = {1.0f, 1.8f, 3.0f, 4.5f, 7.0f, 10.0f};
+    static constexpr std::array<float, 6> kInlandSpeed = {0.6f, 0.9f, 1.2f, 1.5f, 1.9f, 2.3f};
+    const bool ocean = basicType > 0.5f;
+    sw::SwashSum sum;
+    for (size_t i = 0; i < 6; ++i) {
+        const float w = freq * (ocean ? kOceanFreq[i] : kInlandFreq[i]);
+        const float A = amp * (ocean ? kOceanAmp[i] : kInlandAmp[i]);
+        const float omega = spd * (ocean ? kOceanSpeed[i] : kInlandSpeed[i]) * w;
+        // The wave's phase runs w x + omega t; turned over, it runs - omega t
+        // as add() takes it.
+        sum.add(A, 1.0f, omega, -(sw::kSwashSpatialSpread * w * glm::dot(dirs[i], pos) + omega * time), 0, 0.0f);
+    }
+    const float sumA2 = amp * amp * (ocean ? 1.4385f : 0.3448f);
+    sw::SwashLevel s = sum.end(sw::kSignificantHeightFactor * std::sqrt(sumA2));
+    const float weight = sw::swashWeight(bed.x, s.rms);
+    s.level *= weight;
+    s.rate *= weight;
+    return s;
+}
+
 /// evaluatePhysicalWavesShore: the physics waves over the bed (x the depth,
 /// yz the way to the shallows, w the slope; WaterSurface::bed).
 inline Waves physicalShore(glm::vec2 pos, float time, float ampScale, float fetch, float windMps, float windDir,
@@ -263,7 +344,13 @@ inline Waves physicalShore(glm::vec2 pos, float time, float ampScale, float fetc
     // Deep enough that even the longest wave (either rung's first) hardly
     // feels the bed.
     const float longestK = N > wave_spectrum::kWaveCount ? std::min(sp[0].k, sp[wave_spectrum::kWaveCount].k) : sp[0].k;
-    if (h * longestK > sw::kDeepKh) return physicalDeep(spectrum, pos, time, minWavelength);
+    // The swash's level near the shore (physicalSwash), on top of the waves.
+    const bool swash = h < sw::swashReach(sw::kSwashMaxRms);
+    if (h * longestK > sw::kDeepKh) {
+        Waves deep = physicalDeep(spectrum, pos, time, minWavelength);
+        if (swash) deep.displacement.z += physicalSwash(spectrum, pos, time, bed).level;
+        return deep;
+    }
 
     const float sloped = std::min(glm::length(glm::vec2(bed.y, bed.z)), 1.0f);
     const glm::vec2 toShore = sloped > 1e-4f ? glm::normalize(glm::vec2(bed.y, bed.z)) : glm::vec2(0.0f);
@@ -320,6 +407,7 @@ inline Waves physicalShore(glm::vec2 pos, float time, float ampScale, float fetc
                             detail::keep(2.0f * wave_spectrum::kPi / std::max(kShore[i], 1e-4f), minWavelength));
         }
     }
+    if (swash) r.displacement.z += physicalSwash(spectrum, pos, time, bed).level;
     return r;
 }
 
@@ -340,6 +428,8 @@ inline Waves gerstnerShore(glm::vec2 pos, float time, float amp, float freq, flo
     r.displacement *= scale;
     r.tangent = glm::vec3(1.0f, 0.0f, 0.0f) + (r.tangent - glm::vec3(1.0f, 0.0f, 0.0f)) * scale;
     r.binormal = glm::vec3(0.0f, 1.0f, 0.0f) + (r.binormal - glm::vec3(0.0f, 1.0f, 0.0f)) * scale;
+    // The swash's level near the shore (gerstnerSwash).
+    if (h < sw::swashReach(sw::kSwashMaxRms)) r.displacement.z += gerstnerSwash(pos, time, amp, freq, spd, basicType, bed).level;
     return r;
 }
 

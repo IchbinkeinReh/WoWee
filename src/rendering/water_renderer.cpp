@@ -4,6 +4,7 @@
 #include "rendering/water_mask.hpp"
 #include "rendering/water_renderer.hpp"
 #include "rendering/water_tessellation.hpp"
+#include "rendering/swim_wave.hpp"
 #include "rendering/wave_spectrum.hpp"
 #include "rendering/shallow_water.hpp"
 #include "rendering/collision_liquid.hpp"
@@ -1919,6 +1920,115 @@ std::optional<WaterRenderer::WaveSurfaceSample> WaterRenderer::waveSurfaceAt(flo
     return out;
 }
 
+std::string WaterRenderer::testWaterProbe(glm::vec2 from, glm::vec2 dir, float time, glm::vec2 centre,
+                                          float radius) const {
+    std::string out;
+    char buf[160];
+    // The waterline along the line: the first point out from `from` where
+    // the ground stands over the water (the bed's depth under 0), and the
+    // first where it stands over the water raised by the swash.
+    const WaterSurface* best = nullptr;
+    float bestHeight = 0.0f;
+    for (const auto& surface : surfaces) {
+        const auto grid = wateredGridPosition(surface, from.x, from.y);
+        if (!grid) continue;
+        const auto sampled = sampleGridHeight(surface.heights, surface.width, surface.height, grid->x, grid->y);
+        if (sampled && (!best || *sampled > bestHeight)) {
+            best = &surface;
+            bestHeight = *sampled;
+        }
+    }
+    if (best) {
+        const WaterSurface& surface = *best;
+        const auto params = wave_surface::paramsFor(best->liquidType, best->wmoId != 0, waveSettings());
+        const int gridWidth = surface.width + 1;
+        const int gridHeight = surface.height + 1;
+        auto bedAt = [&](glm::vec2 at) -> std::optional<glm::vec4> {
+            if (surface.bed.size() < static_cast<size_t>(gridWidth) * gridHeight) return std::nullopt;
+            const glm::vec2 rel(at.x - surface.origin.x, at.y - surface.origin.y);
+            const glm::vec2 ax(surface.stepX.x, surface.stepX.y);
+            const glm::vec2 ay(surface.stepY.x, surface.stepY.y);
+            const float lx = glm::dot(ax, ax), ly = glm::dot(ay, ay);
+            if (lx < 1e-6f || ly < 1e-6f) return std::nullopt;
+            const float gx = glm::dot(rel, ax) / lx, gy = glm::dot(rel, ay) / ly;
+            if (gx < 0.0f || gy < 0.0f || gx > surface.width || gy > surface.height) return std::nullopt;
+            const int ix = std::min(static_cast<int>(gx), std::max(static_cast<int>(surface.width) - 1, 0));
+            const int iy = std::min(static_cast<int>(gy), std::max(static_cast<int>(surface.height) - 1, 0));
+            const float fx = gx - static_cast<float>(ix), fy = gy - static_cast<float>(iy);
+            auto at2 = [&](int x, int y) {
+                return surface.bed[static_cast<size_t>(std::min(y, gridHeight - 1)) * gridWidth +
+                                   static_cast<size_t>(std::min(x, gridWidth - 1))];
+            };
+            return at2(ix, iy) * (1.0f - fx) * (1.0f - fy) + at2(ix + 1, iy) * fx * (1.0f - fy) +
+                   at2(ix, iy + 1) * (1.0f - fx) * fy + at2(ix + 1, iy + 1) * fx * fy;
+        };
+        auto swashAt = [&](glm::vec2 at, const glm::vec4& bed) -> shallow_water::SwashLevel {
+            if (!params || !params->shore || !rtWaterDrawn()) return {};
+            if (params->wind > 0.0f) {
+                const auto sp = wave_spectrum::sampleBlend(params->wind, params->freq, params->speed, params->amp,
+                                                           params->windUpperShare, params->windUpper,
+                                                           params->windRung);
+                return wave_surface::physicalSwash(sp, at, time, bed);
+            }
+            return wave_surface::gerstnerSwash(at, time, params->amp, params->freq, params->speed,
+                                               params->basicType, bed);
+        };
+        const glm::vec2 d = glm::length(dir) > 1e-6f ? glm::normalize(dir) : glm::vec2(1.0f, 0.0f);
+        // The still waterline first, the bed alone; then the moved one near it.
+        float still = -1.0f, moved = -1.0f, depthBefore = -1.0f;
+        for (float t = 0.0f; t <= 150.0f; t += 0.02f) {
+            const auto bed = bedAt(from + d * t);
+            if (!bed) break;
+            if (bed->x <= 0.0f) {
+                still = t;
+                break;
+            }
+        }
+        shallow_water::SwashLevel atLine;
+        if (still >= 0.0f) {
+            if (const auto bed = bedAt(from + d * std::max(still - 2.0f, 0.0f))) depthBefore = bed->x;
+            for (float t = std::max(still - 5.0f, 0.0f); t <= still + 5.0f; t += 0.02f) {
+                const glm::vec2 p = from + d * t;
+                const auto bed = bedAt(p);
+                if (!bed) break;
+                const auto sw = swashAt(p, *bed);
+                if (bed->x + sw.level <= 0.0f) {
+                    moved = t;
+                    atLine = sw;
+                    break;
+                }
+            }
+        }
+        std::snprintf(buf, sizeof(buf),
+                      "line still=%.3f swash=%.3f level=%.4f rate=%.4f rms=%.4f flat=%.3f d2=%.3f", still, moved,
+                      atLine.level, atLine.rate, atLine.rms, bestHeight, depthBefore);
+        out += buf;
+    } else {
+        out += "line none";
+    }
+    std::snprintf(buf, sizeof(buf), " t=%.3f phys=%d", time, rtFrame_.physicsWaves ? 1 : 0);
+    out += buf;
+    // The trail's points and the rings near the centre, as the shader has them.
+    const int points = std::clamp(static_cast<int>(frameUBO_.wakeBounds.w), 0, kMaxWakePoints);
+    out += " wake[";
+    for (int i = 0; i < points; ++i) {
+        const glm::vec4& p = frameUBO_.wakePoints[i];
+        if (glm::length(glm::vec2(p) - centre) > radius) continue;
+        std::snprintf(buf, sizeof(buf), "%.2f,%.2f,%.3f,%.3f;", p.x, p.y, p.z, p.w);
+        out += buf;
+    }
+    const int rings = std::clamp(static_cast<int>(frameUBO_.swimWaveInfo.x), 0, static_cast<int>(swim_wave::kMaxWaves));
+    out += "] rings[";
+    for (int i = 0; i < rings; ++i) {
+        const glm::vec4& w = frameUBO_.swimWaves[i];
+        if (glm::length(glm::vec2(w) - centre) > radius) continue;
+        std::snprintf(buf, sizeof(buf), "%.2f,%.2f,%.3f,%.3f;", w.x, w.y, w.z, w.w);
+        out += buf;
+    }
+    out += "]";
+    return out;
+}
+
 std::optional<float> WaterRenderer::getNearestWaterHeightAt(float glX, float glY, float queryZ, float maxAbove) const {
     std::optional<float> best;
     float bestDist = 1e9f;
@@ -2233,7 +2343,9 @@ void WaterRenderer::emitWake(WakeEmitter& emitter, const glm::vec2& pos, const g
         // 0.6 yd; at 7 yd/s, as a creature following runs) lays its points
         // farther apart, so its share holds a trail of the same length.
         if (unit && share > 0) {
-            const float natural = wading ? 1.5f * 7.0f / 0.40f : 2.0f * 1.9f * 7.0f / 0.60f;
+            // Its points stay as long as their rings settle (updateWake).
+            const float kept = rtFrame_.physicsWaves ? water_tess::kWakeRingLife : water_tess::kWakeClassicLife;
+            const float natural = wading ? kept * 7.0f / 0.40f : 2.0f * kept * 7.0f / 0.60f;
             spacing *= std::max(1.0f, natural / static_cast<float>(share));
         }
         bool emit = !emitter.has;
@@ -2326,9 +2438,10 @@ void WaterRenderer::updateWake(float deltaTime, const glm::vec2& pos,
         // two arms back onto each other and the V read as a single line.
         p.drift *= std::max(0.0f, 1.0f - 0.25f * deltaTime);
     }
-    // With the physics waves a point stays while its rings do
-    // (water_tessellation::kWakeRingLife); its froth is gone by its own life.
-    const float ringLife = rtFrame_.physicsWaves ? water_tess::kWakeRingLife : 0.0f;
+    // A point stays while its rings settle (water_tessellation's
+    // kWakeRingLife with the physics waves, kWakeClassicLife without); its
+    // froth is gone sooner (kWakeFrothLife).
+    const float ringLife = rtFrame_.physicsWaves ? water_tess::kWakeRingLife : water_tess::kWakeClassicLife;
     wakePoints_.erase(std::remove_if(wakePoints_.begin(), wakePoints_.end(),
                                      [&](const WakePoint& p) { return p.age >= std::max(p.life, ringLife); }),
                       wakePoints_.end());
@@ -2353,17 +2466,16 @@ void WaterRenderer::updateWake(float deltaTime, const glm::vec2& pos,
     const int count = std::min(static_cast<int>(wakePoints_.size()), kMaxWakePoints);
     for (int i = 0; i < count; ++i) {
         const WakePoint& p = wakePoints_[i];
-        const float age01 = std::min(1.0f, p.age / p.life);
-        // (The froth goes by the seconds as well then: water.frag's
-        // WAKE_FROTH_LIFE.)
-        // Physics waves: the age in seconds, which the shader's deep-water
-        // rings are timed by (water.frag impulseRingTilt).
-        const float age = rtFrame_.physicsWaves ? p.age : age01;
-        frameUBO_.wakePoints[i] = glm::vec4(p.pos.x, p.pos.y, age, p.strength);
+        // The age in seconds, which the rings (water_interaction.glsli's
+        // ring fades) and the froth (water.frag's WAKE_FROTH_LIFE) are timed
+        // by.
+        frameUBO_.wakePoints[i] = glm::vec4(p.pos.x, p.pos.y, p.age, p.strength);
     }
     // Must cover a point's own spread, or froth is clipped mid-patch. The
-    // physics waves' rings carry further: over a trail point's five seconds
-    // (kWakeRingLife) its strongest rings go some 6 yards out.
+    // physics waves' rings carry further: in a trail point's first five
+    // seconds its strongest rings go some 6 yards out; what has gone further
+    // by the end of its kWakeRingLife has settled to a few thousandths of a
+    // yard (wakeRingFade).
     constexpr float kMaxPatchRadius = 1.45f;
     constexpr float kPhysicsPatchRadius = 8.0f;
     const auto groups = water_share::groupByOwner(
@@ -2381,6 +2493,9 @@ void WaterRenderer::updateWake(float deltaTime, const glm::vec2& pos,
     // by the frame the GPU is drawing.
     
 }
+
+// A stroke's ring is kept as long as it takes to settle away.
+static_assert(swim_wave::kLife == water_tess::kSwimRingLife);
 
 void WaterRenderer::setSwimWaves(const std::vector<swim_wave::Wave>& waves) {
     // By owner, the character's first, each owner's oldest first.

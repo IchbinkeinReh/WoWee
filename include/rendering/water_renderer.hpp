@@ -146,7 +146,7 @@ inline constexpr size_t kMaxWaterLamps = 8;
 // device gives a uniform block (maxUniformBufferRange's least is 16384).
 struct WaterFrameUBOData {
     glm::vec4 wakeBounds{0.0f};              // x = trail groups, y = ring groups, z = interactive water on, w = trail points
-    glm::vec4 wakePoints[kMaxWakePoints]{};  // xy = pos, z = age 0..1, w = strength
+    glm::vec4 wakePoints[kMaxWakePoints]{};  // xy = pos, z = age in seconds, w = strength
     // The ray traced water (water_rt.glsli): x on, y the view (1 the
     // reflection alone, 2 what comes through alone), z how far a reflected
     // ray goes, w 1 while the traced scene holds anything.
@@ -358,6 +358,13 @@ public:
         wave_surface::SurfaceSample surface;
     };
     std::optional<WaveSurfaceSample> waveSurfaceAt(float glX, float glY, float time, bool rideOn) const;
+    /// For scripted runs (__WoweeTestWaterProbe): the waterline along the
+    /// line from `from` toward `dir` (yards out to the first dry point, still
+    /// and with the swash at the shader's `time`), the swash's level and
+    /// rate there; and this frame's trail points and swimmers' rings near
+    /// `centre` (x, y, age, strength each), as the shader is handed them.
+    [[nodiscard]] std::string testWaterProbe(glm::vec2 from, glm::vec2 dir, float time, glm::vec2 centre,
+                                             float radius) const;
     /// The waves' settings this frame, as the traced water draws them.
     [[nodiscard]] wave_surface::WaveSettings waveSettings() const;
     /// The physics waves' spectrum for this frame into frameUBO_ (pwSpecKey,

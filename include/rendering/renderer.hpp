@@ -247,6 +247,11 @@ public:
     /// < -1.5), the reference strike held pinAt seconds after its start
     /// (pinAt >= 0), or let go (otherwise).
     void testLightning(float pinAt);
+    /// For scripted runs (__WoweeTestWaterProbe): WaterRenderer::testWaterProbe
+    /// along the line from (x, y) toward (dx, dy), render coordinates, at the
+    /// shader's clock, with the trails and rings within `radius` of the
+    /// character.
+    [[nodiscard]] std::string testWaterProbe(float x, float y, float dx, float dy, float radius) const;
     /// The lightning flash this frame's lighting took, 0-1.
     [[nodiscard]] float lightningFlash() const { return lightningFlashValue_; }
     CharacterRenderer* getCharacterRenderer() const { syncWorldRecording(); return characterRenderer.get(); }

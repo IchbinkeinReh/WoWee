@@ -4340,8 +4340,11 @@ target_compile_definitions(test_wave_surface PRIVATE
     WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # The tessellated water's curve and the rings' and wakes' heights against the
-# slopes the water shades with (water_tessellation.hpp). Header-only.
+# slopes the water shades with, and how they settle (water_tessellation.hpp,
+# water_interaction.glsli). Header-only.
 wowee_add_test(test_water_tessellation SOURCES test_water_tessellation.cpp)
+target_compile_definitions(test_water_tessellation PRIVATE
+    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # ── Shared objects for the sources tests compile from the game ────────────
 # This must stay the last thing in this file: it walks every registered test.

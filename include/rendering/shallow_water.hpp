@@ -193,6 +193,149 @@ inline float surfSeaShare(float seaHeight) { return smoothstep(kSurfSeaFrom, kSu
 inline constexpr float kSurfRimFloor = 0.6f;
 inline float surfRimShare(float seaHeight) { return std::max(surfSeaShare(seaHeight), kSurfRimFloor); }
 
+// --- The swash: the waterline running up the beach and back ---
+//
+// The waves die away over the last kFadeDepth of depth; what is left at the
+// waterline is the swash, the water's level there rising as the waves come
+// in and falling as they draw back, which carries the waterline up the beach
+// and down again. The level near the shore (all of it out to swashFullDepth,
+// fading out over kSwashFadeOver more, the dry land under the sheet with it)
+// is raised by
+//   eta = rms * (kSwashGroupShare * groups + kSwashDirectShare * direct),
+// each term scaled to an rms of 1 for waves that all run in:
+//  - groups: the run-up follows the wave groups (surf beat). A group of
+//    higher waves pushes the water further up the beach, the lull between
+//    groups lets it fall back: over neighbouring waves i, i+1 of a rung's
+//    spectrum (ordered by frequency) a_i a_i+1 cos(phi_i - phi_i+1), their
+//    beat, at the slow difference of their frequencies (some 3 s on a lake
+//    in a light wind, 8 s at sea, 20 s in a storm). The groups come in a
+//    little sooner or later along the shore (up to kSwashGroupDelay seconds,
+//    a noise field kSwashDelayCell yards across: wave_surface::swashDelay),
+//    so a lake's whole shore does not rise and fall as one.
+//  - direct: each wave's own run-up - a long wave rides up and down the
+//    beach with every crest, short ones, broken well out, hardly do
+//    (saturation): a_i sat(omega_i) sin(phi_i).
+// phi_i is the wave's phase at the waterline as its shore part comes in
+// (shorePhase at depth 0, - omega t), a_i its height times how much it runs
+// toward the shore. The rms is kSwashGain of the open water's significant
+// height times the share of the waves' energy that runs in (a lee shore
+// laps less), between kSwashMinRms (a still lake still laps a few
+// hundredths of a yard) and kSwashMaxRms (a storm on the open sea).
+// water_waves.glsli's sw*Swash* are the shader's twin: change one, change
+// both. Not in the original client.
+inline constexpr float kSwashGain = 0.5f;
+inline constexpr float kSwashMinRms = 0.025f;
+inline constexpr float kSwashMaxRms = 0.3f;
+/// The depth to which the level moves whole: at least this, and three rms.
+inline constexpr float kSwashFullFrom = 0.5f;
+inline constexpr float kSwashFadeOver = 2.0f;
+/// The waves' own run-up is held down for those quicker than this, rad/s.
+inline constexpr float kSwashSaturation = 1.5f;
+inline constexpr float kSwashGroupShare = 0.8f;
+inline constexpr float kSwashDirectShare = 0.8f;
+inline constexpr float kSwashGroupDelay = 4.0f;
+inline constexpr float kSwashDelayCell = 60.0f;
+/// The hand-made waves' swash takes each wave's phase over the world at
+/// this share of its wavenumber (their beats' patterns some 30 yards long,
+/// which the liquid grid's 4-yard cells carry).
+inline constexpr float kSwashSpatialSpread = 0.35f;
+
+/// The run-up's rms, yards, for the open water's significant height and the
+/// share of its energy that runs toward this shore (`exposure`, 0-1).
+inline float swashRms(float seaHeight, float exposure) {
+    return std::clamp(kSwashGain * seaHeight * exposure, kSwashMinRms, kSwashMaxRms);
+}
+inline float swashFullDepth(float rms) { return std::max(kSwashFullFrom, 3.0f * rms); }
+/// How much of the swash's level a point `h` yards deep (negative: dry land
+/// under the sheet) is raised by: all of it near the shore, none in deep
+/// water.
+inline float swashWeight(float h, float rms) {
+    const float full = swashFullDepth(rms);
+    return 1.0f - smoothstep(full, full + kSwashFadeOver, h);
+}
+/// The deepest water the swash moves at all.
+inline float swashReach(float rms) { return swashFullDepth(rms) + kSwashFadeOver; }
+inline float swashSaturation(float omega) {
+    const float x = omega / kSwashSaturation;
+    return 1.0f / (1.0f + x * x);
+}
+/// How much a wave runs toward the shore: `along` the dot of its heading and
+/// the way to the shore (a unit vector), `sloped` (0-1) how surely the shore
+/// lies that way - on a flat bed, where there is no telling, every wave half.
+/// A wave running away from it still laps at it a little (kSwashLeeShare),
+/// turned and bent round: a lee shore laps, less.
+inline constexpr float kSwashLeeShare = 0.15f;
+inline float swashToward(float along, float sloped) {
+    const float t = smoothstep(-0.2f, 0.4f, along);
+    return std::max(kSwashLeeShare, 0.5f + (t - 0.5f) * std::clamp(sloped, 0.0f, 1.0f));
+}
+
+/// The swash's level (yards over the flat surface, before swashWeight) and
+/// how fast it is changing (yards a second).
+struct SwashLevel {
+    float level = 0.0f;
+    float rate = 0.0f;
+    float rms = kSwashMinRms;
+};
+
+/// The swash summed wave by wave (the shader's swSwashAdd and swSwashEnd):
+/// add() each wave in the spectrum's order, `rung` telling the two rungs'
+/// sets apart (waves are paired within one only).
+struct SwashSum {
+    float energy = 0.0f;  ///< sum a^2, every wave
+    float inward = 0.0f;  ///< sum (a toward)^2
+    float direct = 0.0f, directRate = 0.0f;
+    float groups = 0.0f, groupsRate = 0.0f, groupsNorm = 0.0f;
+    float lastA = 0.0f, lastSin = 0.0f, lastCos = 0.0f, lastOmega = 0.0f;
+    int lastRung = -1;
+
+    /// A wave of height `a` running `toward` (swashToward) the shore, of
+    /// angular frequency `omega`, at `phase` (its shore phase at the
+    /// waterline: - shorePhase(omega, 0) - omega t + its offset), in `rung`;
+    /// `delay` the groups' arrival delay here, seconds.
+    void add(float a, float toward, float omega, float phase, int rung, float delay) {
+        const float at = a * toward;
+        energy += a * a;
+        inward += at * at;
+        const float s = std::sin(phase);
+        const float c = std::cos(phase);
+        const float sat = swashSaturation(omega);
+        direct += at * sat * s;
+        directRate -= at * sat * omega * c;
+        if (rung == lastRung) {
+            // The beat psi = phi_last - phi (d psi / dt = omega - omega_last),
+            // come in `delay` seconds later here.
+            const float p = lastA * at;
+            const float dw = omega - lastOmega;
+            const float cb = lastCos * c + lastSin * s;
+            const float sb = lastSin * c - lastCos * s;
+            const float cs = std::cos(dw * delay);
+            const float sn = std::sin(dw * delay);
+            const float cpsi = cb * cs - sb * sn;
+            const float spsi = sb * cs + cb * sn;
+            groups += p * cpsi;
+            groupsRate -= p * spsi * dw;
+            groupsNorm += p * p;
+        }
+        lastA = at;
+        lastSin = s;
+        lastCos = c;
+        lastOmega = omega;
+        lastRung = rung;
+    }
+    /// The swash, for the open water's significant height `seaHeight`.
+    SwashLevel end(float seaHeight) const {
+        SwashLevel out;
+        if (energy <= 1e-12f || inward <= 1e-12f) return out;
+        out.rms = swashRms(seaHeight, std::sqrt(inward / energy));
+        const float d = kSwashDirectShare / std::sqrt(0.5f * inward);
+        const float g = groupsNorm > 1e-16f ? kSwashGroupShare / std::sqrt(0.5f * groupsNorm) : 0.0f;
+        out.level = out.rms * (groups * g + direct * d);
+        out.rate = out.rms * (groupsRate * g + directRate * d);
+        return out;
+    }
+};
+
 /// How much of a wave has turned to run straight up the beach (Snell:
 /// sin(theta) / c held, so 1 - c / c0 = 1 - tanh(k h) of the turn is done),
 /// left out past kShoreReachKh.

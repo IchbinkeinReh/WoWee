@@ -118,24 +118,42 @@ inline float impulseRingHeight(float r, float t, float sigma, float strength) {
     return -0.6f * strength * sigma * integral;
 }
 
-/// The rings above are unfaded; their strength is faded by their age.
-/// A swimmer's stroke's over its 1.6 s (water_interaction.glsli's
-/// swimRingFade).
-inline float swimRingFade(float t) { return 1.0f - smoothstep(1.2f, 2.2f, t); }
+/// The rings above are unfaded; their strength is faded by their age
+/// (water_interaction.glsli's ringSettle and the fades on it): by e every
+/// `decay` seconds, and over the last 60% of `life` the rest smoothly to
+/// nothing at the end - the water settles over seconds after whatever
+/// stirred it has stopped, with no step. A stroke's rings were cut off at
+/// 1.6 s with 0.65 of them standing, a trail point's by 5 s.
+inline float ringSettle(float t, float decay, float life) {
+    return std::exp(-t / decay) * (1.0f - smoothstep(0.4f * life, life, t));
+}
+/// A swimmer's stroke's (swim_wave::kLife, which the renderer keeps it for).
+inline constexpr float kSwimRingDecay = 2.0f;
+inline constexpr float kSwimRingLife = 6.0f;
+inline float swimRingFade(float t) { return ringSettle(t, kSwimRingDecay, kSwimRingLife); }
 
 /// A trail point's (the wake with the physics waves; wakeRingFade and
 /// WAKE_RING_* there): kWakeRingStrength of the point's strength, dying away
 /// by e every kWakeRingDecay seconds and gone by kWakeRingLife, which the
 /// renderer keeps the point for (WaterRenderer::updateWake). At half the
 /// strength and gone in 2.2 s, a run of a few yards through the shallows
-/// heaved the water by three quarters of a yard and was still a second after
-/// the runner stopped.
+/// heaved the water by three quarters of a yard; at e every 2 s and gone by
+/// 5 s it still went flat too soon after the runner stopped.
 inline constexpr float kWakeRingStrength = 0.15f;
-inline constexpr float kWakeRingDecay = 2.0f;
-inline constexpr float kWakeRingLife = 5.0f;
-inline float wakeRingFade(float t) {
-    return std::exp(-t / kWakeRingDecay) * (1.0f - smoothstep(0.6f * kWakeRingLife, kWakeRingLife, t));
-}
+inline constexpr float kWakeRingDecay = 4.0f;
+inline constexpr float kWakeRingLife = 10.0f;
+inline float wakeRingFade(float t) { return ringSettle(t, kWakeRingDecay, kWakeRingLife); }
+
+/// The classic wake's (physics waves off: wakeClassicFade, WAKE_CLASSIC_*):
+/// quicker, and its rings spread on at kWakeClassicSpread yards a second
+/// once the trail has stopped; its bow dies with the newest point's age.
+inline constexpr float kWakeClassicDecay = 1.2f;
+inline constexpr float kWakeClassicLife = 4.0f;
+inline constexpr float kWakeClassicSpread = 0.5f;
+inline float wakeClassicFade(float t) { return ringSettle(t, kWakeClassicDecay, kWakeClassicLife); }
+inline float bowFade(float headAge) { return std::exp(-headAge / 0.6f); }
+/// The froth's life (water.frag's WAKE_FROTH_LIFE), seconds.
+inline constexpr float kWakeFrothLife = 2.5f;
 
 /// The classic rings' crest (physics waves off): slope amp exp(-a^2) sin(b a)
 /// along the ring's radius, a = (d - radius) / width...

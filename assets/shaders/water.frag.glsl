@@ -99,6 +99,9 @@ layout(location = 5) in vec2 WaveBase;
 // The bed under this point (water.vert): x its depth, yz the way to the
 // shallows, w its slope.
 layout(location = 6) in vec4 BedInfo;
+// The swash (water.vert, water.tese): x the level the waterline is raised
+// by here, y how fast it changes, yards a second; 0 with the shore waves off.
+layout(location = 7) in vec2 SwashInfo;
 
 layout(location = 0) out vec4 outColor;
 
@@ -409,17 +412,20 @@ vec2 kelvinWake(vec2 at) {
         int end = g + 1 < groups ? clamp(int(wakeGroups[g + 1].w), first, count) : count;
         if (end - first < 1) continue;
         vec2 head = wakePoints[end - 1].xy;
+        // The points' z is their age in seconds; the newest's, how long ago
+        // the trail last moved on (wakeClassicFade, WAKE_CLASSIC_SPREAD).
+        float headAge = wakePoints[end - 1].z;
         vec2 toHead = at - head;
         if (dot(toHead, toHead) >= KELVIN_REACH * KELVIN_REACH) continue;
         for (int i = first; i < end; ++i) {
             vec4 wp = wakePoints[i];
-            float radius = 0.2 + length(head - wp.xy) / 3.0;
+            float radius = 0.2 + length(head - wp.xy) / 3.0 + WAKE_CLASSIC_SPREAD * headAge;
             vec2 from = at - wp.xy;
             float d = length(from);
             float along = (d - radius) / 0.32;
             if (abs(along) > 3.0) continue;
             float crest = exp(-along * along) * sin(along * 3.2);
-            float amp = wp.w * (1.0 - wp.z) * 0.14 / (1.0 + 0.6 * radius);
+            float amp = wp.w * wakeClassicFade(wp.z) * 0.14 / (1.0 + 0.6 * radius);
             tilt -= (from / max(d, 0.01)) * crest * amp;
         }
         // The bow: a crest round the head, on the side it moves to.
@@ -432,7 +438,8 @@ vec2 kelvinWake(vec2 at) {
                 float ahead = dot(toHead / max(d, 0.01), fwd);
                 float along = (d - 0.55) / 0.22;
                 float crest = exp(-along * along) * sin(along * 3.2);
-                tilt -= (toHead / max(d, 0.01)) * crest * 0.2 * wakePoints[end - 1].w * smoothstep(-0.3, 0.7, ahead);
+                tilt -= (toHead / max(d, 0.01)) * crest * 0.2 * wakePoints[end - 1].w * bowFade(headAge) *
+                        smoothstep(-0.3, 0.7, ahead);
             }
         }
     }
@@ -461,7 +468,7 @@ const float SURF_RIM_FLOOR = 0.6;
 // next wave comes in, and thins out toward the beach; and the swash's line
 // where the run-up turns. The foam left moves with the waves' shore phase,
 // each wave's a pattern of its own.
-float surfFoam(GerstnerResult waves, vec4 bed, vec2 at, float shoreDepth, float swashDepth, float time,
+float surfFoam(GerstnerResult waves, vec4 bed, vec2 at, float shoreDepth, float swashDepth, float rim, float time,
                float storm) {
     // A still pond's ripples make little surf; a lake's chop a thin rim of it,
     // the open sea's swell a great deal. A storm breaks the waves sooner and
@@ -523,7 +530,7 @@ float surfFoam(GerstnerResult waves, vec4 bed, vec2 at, float shoreDepth, float 
     float stayFoam = (1.0 - shoreness) * 0.35 * smoothstep(0.55, 0.70, cells);
     leftFoam = (leftFoam + stayFoam) * inner * breaking;
     // The swash's line: a fine, broken rim.
-    float swashFoam = swash * (1.0 - smoothstep(0.18, 0.42, fine)) * (0.6 + 0.4 * streaks);
+    float swashFoam = swash * rim * (1.0 - smoothstep(0.18, 0.42, fine)) * (0.6 + 0.4 * streaks);
 
     // The swash's rim is there on any open water, however small its waves
     // (SURF_RIM_FLOOR of it on a still pond): the water laps at every shore.
@@ -681,7 +688,7 @@ void main() {
             float d = length(fromWave);
             float along = (d - (0.15 + w.z * 1.7)) / (0.28 + w.z * 0.25);
             float crest = exp(-along * along) * sin(along * 4.0);
-            float slope = crest * w.w * 0.22 * (1.0 - w.z / 1.6);
+            float slope = crest * w.w * 0.22 * swimRingFade(w.z);
             swimTilt -= (fromWave / max(d, 0.01)) * slope;
         }
     }
@@ -946,6 +953,17 @@ void main() {
     // another rather than the whole shoreline pulsing as a ring.
     float swashPhase = sin(time * 0.55 + noiseValue(FragPos.xy * 0.12) * 6.28);
     float swashDepth = 0.30 + 0.18 * swashPhase;
+    float swashRim = 1.0;
+    // With the shore waves the water's edge itself runs up the beach and
+    // back (the swash, SwashInfo: the surface is raised there, and the depth
+    // under it is the moved surface's), so the rim rides at the edge: a
+    // little wider and whiter while the water rushes up, a thin line as it
+    // draws back, and the sand just left bare drains lighter under the film.
+    if (push.shore.x > 0.5) {
+        float uprush = 0.5 + 0.5 * SwashInfo.y / (abs(SwashInfo.y) + 0.03);
+        swashDepth = mix(0.04, 0.16, uprush);
+        swashRim = mix(0.55, 1.0, uprush);
+    }
 
     float wetBand = 1.0 - smoothstep(0.0, 0.70, shoreDepth);
     float shallowBand = 1.0 - smoothstep(0.0, 2.20, shoreDepth);
@@ -972,7 +990,7 @@ void main() {
     // hides what lies under it. Water and ocean on the ground's water only.
     float surf = 0.0;
     if (shoreWaves && basicType < 1.5 && push.interiorFog < 0.5 && dist < SURF_FADE_FAR) {
-        surf = surfFoam(pixelWaves, BedInfo, WaveBase, shoreDepth, swashDepth, time, push.shore.y) *
+        surf = surfFoam(pixelWaves, BedInfo, WaveBase, shoreDepth, swashDepth, swashRim, time, push.shore.y) *
                (1.0 - smoothstep(SURF_FADE_NEAR, SURF_FADE_FAR, dist));
     }
 
@@ -1068,7 +1086,7 @@ void main() {
     // enough to stand in, which is not only at the beach.
     // ============================================================
     float wakeFoam = 0.0;
-    const float WAKE_FROTH_LIFE = 1.5;
+    const float WAKE_FROTH_LIFE = 2.5;
     if (wakeBounds.w > 0.5) {
         // One cheap reject per trail keeps this off every other water pixel
         // on screen - a trail covers a few yards, the sheet covers miles.
@@ -1086,18 +1104,19 @@ void main() {
             int end = g + 1 < wakeGroupCount ? clamp(int(wakeGroups[g + 1].w), first, wakeCount) : wakeCount;
             for (int i = first; i < end; ++i) {
                 vec4 wp = wakePoints[i];
-                // The point's age as a share of the froth's life: with the
-                // physics waves z is its age in seconds (the rings' clock),
-                // the froth's being a wader's 1.5 s. Read as a share, the
-                // froth grew past its reach and went negative after a second.
-                float age = swimWaveInfo.z > 0.5 ? clamp(wp.z / WAKE_FROTH_LIFE, 0.0, 1.0) : wp.z;
+                // The point's age (z, seconds) as a share of the froth's
+                // life. Read as a share itself, the froth grew past its reach
+                // and went negative after a second.
+                float age = clamp(wp.z / WAKE_FROTH_LIFE, 0.0, 1.0);
                 // Churn spreads as it dies, the way a disturbed patch does.
                 float radius = mix(0.40, 1.45, age);
                 float d = length(FragPos.xy - wp.xy);
                 // Falls off from the centre out, with no plateau. A flat middle
                 // is what made these read as painted discs rather than froth.
                 float disc = 1.0 - smoothstep(0.0, radius, d);
-                wakeFoam += disc * disc * wp.w * (1.0 - age);
+                // Thinning away to nothing, with no edge in time: (1 - age)
+                // squared, over WAKE_FROTH_LIFE.
+                wakeFoam += disc * disc * wp.w * (1.0 - age) * (1.0 - age);
             }
         }
         if (nearWake) {

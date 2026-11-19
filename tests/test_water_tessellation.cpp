@@ -3,13 +3,18 @@
 // water_interaction.glsli).
 #include <catch_amalgamated.hpp>
 
+#include "rendering/swim_wave.hpp"
 #include "rendering/water_tessellation.hpp"
+#include "test_support.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <string>
 #include <utility>
 #include <vector>
 
 namespace wt = wowee::rendering::water_tess;
+namespace swim_wave = wowee::rendering::swim_wave;
 
 namespace {
 
@@ -90,7 +95,8 @@ TEST_CASE("an impulse's rings stand at the height whose slope the shading uses",
     CHECK(std::abs(wt::impulseRingHeight(40.0f, 0.5f, 0.45f, 1.0f)) < 1e-3f);
     // Before the impulse, and once its rings have faded, nothing.
     CHECK(wt::impulseRingHeight(1.0f, 0.0f, 0.45f, 1.0f) == 0.0f);
-    CHECK(wt::impulseRingHeight(1.0f, 2.5f, 0.45f, wt::swimRingFade(2.5f)) == Catch::Approx(0.0f).margin(1e-6));
+    CHECK(wt::impulseRingHeight(1.0f, swim_wave::kLife, 0.25f, wt::swimRingFade(swim_wave::kLife)) ==
+          Catch::Approx(0.0f).margin(1e-6));
     CHECK(wt::impulseRingHeight(1.0f, wt::kWakeRingLife, 0.45f, wt::wakeRingFade(wt::kWakeRingLife)) ==
           Catch::Approx(0.0f).margin(1e-6));
 }
@@ -155,6 +161,150 @@ TEST_CASE("a run through the shallows heaves the water a little, and it settles 
     for (float t = 0.0f; t <= wt::kWakeRingLife; t += 0.05f) {
         CHECK(wt::wakeRingFade(t) <= lastFade);
         lastFade = wt::wakeRingFade(t);
+    }
+}
+
+namespace {
+// A wader's run through the shallows and then standing still, with the
+// physics waves (WaterRenderer::emitWake, the Renderer's swim_wave limbs,
+// water.tese's interactionHeight): for `runFor` seconds at 7 yards a second
+// a trail point every 0.6 yards a quarter yard ahead of the feet, at full
+// strength, and with the hands at the surface a stroke's ring from each
+// every swim_wave::kCooldown, at full strength; each kept as long as the
+// renderer keeps it (swim_wave::kLife, kWakeRingLife).
+struct Stir {
+    float x, laid, sigma, strength;
+    bool ring;
+};
+std::vector<Stir> wadeAndStop(float runFor) {
+    std::vector<Stir> out;
+    float last = -1e9f, nextRing = 0.0f;
+    for (float t = 0.0f; t < runFor; t += 1.0f / 60.0f) {
+        const float x = 7.0f * t;
+        if (x - last >= 0.6f) {
+            out.push_back({x + 0.25f, t, 0.45f, wt::kWakeRingStrength, false});
+            last = x;
+        }
+        if (t >= nextRing) {
+            out.push_back({x, t, 0.25f, 1.0f, true});
+            out.push_back({x + 0.1f, t, 0.25f, 1.0f, true});
+            nextRing = t + swim_wave::kCooldown;
+        }
+    }
+    return out;
+}
+// The most the water stands off its rest within a few yards of the path,
+// `at` seconds after the start.
+float heaveAt(const std::vector<Stir>& stirs, float runFor, float at) {
+    float most = 0.0f;
+    for (float gx = -2.0f; gx <= 7.0f * runFor + 3.0f; gx += 0.35f) {
+        for (float gy = 0.25f; gy <= 3.0f; gy += 0.35f) {
+            float h = 0.0f;
+            for (const Stir& s : stirs) {
+                const float age = at - s.laid;
+                const float life = s.ring ? swim_wave::kLife : wt::kWakeRingLife;
+                if (age <= 0.0f || age >= life) continue;
+                const float fade = s.ring ? wt::swimRingFade(age) : wt::wakeRingFade(age);
+                h += wt::impulseRingHeight(std::hypot(gx - s.x, gy), age, s.sigma, s.strength * fade);
+            }
+            most = std::max(most, std::abs(h));
+        }
+    }
+    return most;
+}
+}  // namespace
+
+TEST_CASE("the water settles over seconds after a wader stops, with no snap", "[water_tess][wake][settle]") {
+    // Every fade ends at nothing, without a step: what the renderer drops at
+    // the end of a ring's or a point's life has already gone.
+    struct Fade {
+        float (*f)(float);
+        float life;
+    };
+    for (const Fade& fade : {Fade{wt::swimRingFade, swim_wave::kLife}, Fade{wt::wakeRingFade, wt::kWakeRingLife}}) {
+        INFO("life " << fade.life);
+        CHECK(fade.f(fade.life) == Catch::Approx(0.0f).margin(1e-6f));
+        CHECK(fade.f(fade.life - 1.0f / 60.0f) < 1e-3f);
+        float last = fade.f(0.0f);
+        float steepest = 0.0f;
+        for (float t = 1.0f / 60.0f; t <= fade.life; t += 1.0f / 60.0f) {
+            const float now = fade.f(t);
+            CHECK(now <= last + 1e-6f);
+            steepest = std::max(steepest, last - now);
+            last = now;
+        }
+        // Never more than a hundredth or so of the whole in a frame.
+        CHECK(steepest < 0.015f);
+    }
+    // A run of three quarters of a second, then standing: the heave left
+    // falls away gently - never by a fifth from one frame (30 Hz) to the
+    // next while it is more than a few thousandths of a yard - and is still
+    // there, smaller, seconds later. The stroke's rings were cut off at
+    // 1.6 s two-thirds high: the water went flat in a frame.
+    const float runFor = 0.75f;
+    const auto stirs = wadeAndStop(runFor);
+    float peak = 0.0f;
+    float prev = heaveAt(stirs, runFor, runFor);
+    float worstDrop = 1.0f;
+    float at3 = 0.0f;
+    for (float t = runFor + 1.0f / 30.0f; t <= runFor + 9.0f; t += 1.0f / 30.0f) {
+        const float now = heaveAt(stirs, runFor, t);
+        peak = std::max(peak, now);
+        if (prev > 0.003f) worstDrop = std::min(worstDrop, now / prev);
+        if (std::abs(t - (runFor + 3.0f)) < 0.5f / 30.0f) at3 = now;
+        prev = now;
+    }
+    INFO("peak " << peak << " worst frame-to-frame share " << worstDrop << " at 3 s " << at3);
+    CHECK(worstDrop > 0.8f);
+    CHECK(at3 > 0.04f * peak);
+    CHECK(at3 < 0.6f * peak);
+    CHECK(heaveAt(stirs, runFor, runFor + wt::kWakeRingLife + 0.5f) == 0.0f);
+}
+
+TEST_CASE("the classic wake and its bow settle away too", "[water_tess][wake][settle]") {
+    CHECK(wt::wakeClassicFade(0.0f) == Catch::Approx(1.0f));
+    CHECK(wt::wakeClassicFade(wt::kWakeClassicLife) == Catch::Approx(0.0f).margin(1e-6f));
+    CHECK(wt::wakeClassicFade(wt::kWakeClassicLife - 1.0f / 60.0f) < 1e-3f);
+    // The froth outlasts no point (the renderer keeps a point for its rings'
+    // life, longer than the froth's).
+    CHECK(wt::kWakeFrothLife < wt::kWakeClassicLife);
+    CHECK(wt::kWakeFrothLife < wt::kWakeRingLife);
+    // The bow: whole while the trail goes on (a new point every tenth of a
+    // second or so), gone within a few seconds of its stopping.
+    CHECK(wt::bowFade(0.1f) > 0.8f);
+    CHECK(wt::bowFade(3.0f) < 0.01f);
+}
+
+TEST_CASE("the shaders settle the rings as the C++ does", "[water_tess][wake][settle]") {
+    const std::string glsl = wowee::test::slurp("assets/shaders/water_interaction.glsli");
+    const std::string frag = wowee::test::slurp("assets/shaders/water.frag.glsl");
+    const std::string tese = wowee::test::slurp("assets/shaders/water.tese.glsl");
+    REQUIRE(glsl.size() > 1000);
+    auto has = [](const std::string& text, const std::string& what) { return text.find(what) != std::string::npos; };
+    CHECK(has(glsl, "return exp(-t / decay) * (1.0 - smoothstep(0.4 * life, life, t));"));
+    CHECK(has(glsl, "const float SWIM_RING_DECAY = 2.0;"));
+    CHECK(has(glsl, "const float SWIM_RING_LIFE = 6.0;"));
+    CHECK(has(glsl, "const float WAKE_RING_DECAY = 4.0;"));
+    CHECK(has(glsl, "const float WAKE_RING_LIFE = 10.0;"));
+    CHECK(has(glsl, "const float WAKE_CLASSIC_DECAY = 1.2;"));
+    CHECK(has(glsl, "const float WAKE_CLASSIC_LIFE = 4.0;"));
+    CHECK(has(glsl, "const float WAKE_CLASSIC_SPREAD = 0.5;"));
+    CHECK(has(glsl, "float bowFade(float headAge) { return exp(-headAge / 0.6); }"));
+    CHECK(wt::kSwimRingDecay == 2.0f);
+    CHECK(wt::kSwimRingLife == 6.0f);
+    CHECK(wt::kWakeRingDecay == 4.0f);
+    CHECK(wt::kWakeRingLife == 10.0f);
+    CHECK(wt::kWakeClassicDecay == 1.2f);
+    CHECK(wt::kWakeClassicLife == 4.0f);
+    CHECK(wt::kWakeClassicSpread == 0.5f);
+    CHECK(has(frag, "const float WAKE_FROTH_LIFE = 2.5;"));
+    CHECK(wt::kWakeFrothLife == 2.5f);
+    // No fade by the old linear shares or cut-offs left in either stage.
+    for (const std::string* stage : {&frag, &tese}) {
+        CHECK_FALSE(has(*stage, "1.0 - w.z / 1.6"));
+        CHECK_FALSE(has(*stage, "(1.0 - wp.z)"));
+        CHECK(has(*stage, "bowFade(headAge)"));
+        CHECK(has(*stage, "WAKE_CLASSIC_SPREAD * headAge"));
     }
 }
 

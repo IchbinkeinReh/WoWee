@@ -8243,6 +8243,15 @@ void Renderer::recordSunShafts() {
                        vkCtx->getSwapchainExtent(), in);
 }
 
+std::string Renderer::testWaterProbe(float x, float y, float dx, float dy, float radius) const {
+    if (!waterRenderer) return "no water";
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "me=%.2f,%.2f,%.3f ", characterPosition.x, characterPosition.y,
+                  characterPosition.z);
+    return buf + waterRenderer->testWaterProbe(glm::vec2(x, y), glm::vec2(dx, dy), globalTime,
+                                               glm::vec2(characterPosition), radius);
+}
+
 void Renderer::testLightning(float pinAt) {
     if (pinAt < -1.5f) lightningFlash_.start(lightning_flash::referenceStrike());
     else lightningFlash_.pin(lightning_flash::referenceStrike(), pinAt);
