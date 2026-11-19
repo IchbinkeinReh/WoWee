@@ -154,6 +154,24 @@ float rtwSunThroughAir(vec3 surface, vec3 sunRay, bool filtered, inout uint rng)
 // (Interior water's mirror reads the capture by its own rules: rtwMirrorSeen.)
 const float RTW_MIRROR_EDGE = 0.12;   // of the screen, the fade at its edge
 const float RTW_MIRROR_REACH = 0.02;  // of its height, how far round a point the depth is asked
+// What the frame shows at `uv`, as a point of the world: along the camera's
+// ray through `p` (which projects there, `pw` its view depth), at the frame's
+// own depth there.
+vec3 rtwFramePoint(vec3 p, float pw, vec2 uv) {
+    float scene = linearizeDepth(texture(SceneDepth, uv).r, push.depthRange.x, push.depthRange.y);
+    return viewPos.xyz + (p - viewPos.xyz) * (scene / pw);
+}
+
+// The frame at the traced hit, when that is what the frame shows there.
+// Within the depth's tolerance (half a yard near the camera) is not enough:
+// under a swimmer the robe and the legs hang down to within that of the bed
+// behind them, and the bed's hits took the body's colour - the submerged
+// body a second time, where the frame has it, unbent, beside and below the
+// bent one the traced rays meet (Stonebull Lake at 19:30 in the rain, toward
+// the low sun). What the frame shows must also not stand out in front of
+// the hit's own face (RTW_FRAME_IN_FRONT, along its normal): a body, a
+// weed's frond over the bed are the traced scene's to show there.
+const float RTW_FRAME_IN_FRONT = 0.12;
 float rtwOnScreen(vec3 hit, vec3 hitNormal, out vec3 color) {
     color = vec3(0.0);
     if (!rtwScreenReuse || push.sceneValid < 0.5) return 0.0;
@@ -166,6 +184,8 @@ float rtwOnScreen(vec3 hit, vec3 hitNormal, out vec3 color) {
     if (w <= 0.0) return 0.0;
     float scene = linearizeDepth(texture(SceneDepth, uv).r, push.depthRange.x, push.depthRange.y);
     if (abs(scene - clip.w) >= max(0.5, 0.03 * clip.w)) return 0.0;
+    vec3 shown = rtwFramePoint(hit, clip.w, uv);
+    if (dot(shown - hit, hitNormal) > max(RTW_FRAME_IN_FRONT, 0.01 * clip.w)) return 0.0;
     color = texture(SceneColor, uv).rgb;
     return w;
 }
@@ -207,7 +227,12 @@ float rtwMirrorSeen(vec3 hit, vec3 hitNormal, float surfaceZ, out vec3 color) {
 // What the frame drawn under the water shows at the surface point `p`'s own
 // pixel, when that is something below the surface - the bed seen straight
 // down, rather than something in front of the water there.
-bool rtwBehindSurface(vec3 p, out vec3 color) {
+// Only where what the frame shows there lies about as deep as the bed the
+// traced ray met (`bedDepth` under the surface, RTW_BEHIND_BED_SHARE of it at
+// least): over a swimmer, straight under the pixel is its own body, a hand
+// under the surface, and it was drawn there a second time, unbent.
+const float RTW_BEHIND_BED_SHARE = 0.7;
+bool rtwBehindSurface(vec3 p, float bedDepth, out vec3 color) {
     color = vec3(0.0);
     if (push.sceneValid < 0.5) return false;
     vec4 clip = projection * view * vec4(p, 1.0);
@@ -216,6 +241,7 @@ bool rtwBehindSurface(vec3 p, out vec3 color) {
     if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return false;
     float scene = linearizeDepth(texture(SceneDepth, uv).r, push.depthRange.x, push.depthRange.y);
     if (scene < clip.w + 0.1) return false;
+    if (p.z - rtwFramePoint(p, clip.w, uv).z < RTW_BEHIND_BED_SHARE * bedDepth) return false;
     color = texture(SceneColor, uv).rgb;
     return true;
 }
@@ -409,7 +435,7 @@ vec4 rtwRefraction(vec3 origin, vec3 dir, vec3 toSun, vec3 sigma, vec3 scatterCo
             // the bed, a body length beyond it. What the frame shows straight
             // under this pixel is the same bed, without the bend.
             vec3 under;
-            bed = mix(rtwBehindSurface(origin, under) ? under : traced, shown, onScreen);
+            bed = mix(rtwBehindSurface(origin, depth, under) ? under : traced, shown, onScreen);
         }
         bed = mix(bed, traced, tracedShare);
         bedFromScreen = onScreen >= 1.0;

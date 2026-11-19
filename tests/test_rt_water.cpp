@@ -168,3 +168,33 @@ TEST_CASE("RT water: the shader turns the waves' normal up and mirrors the glint
     CHECK(frag.find("specular = min(specular, vec3(2.0)) * rtGlint.w;") != std::string::npos);
     CHECK(frame.find("vec4 rtGlint;") != std::string::npos);
 }
+
+// A swimmer's submerged body drawn a second time, unbent, under the bent one
+// (Stonebull Lake at 19:30 in the rain): the bed's hits reused the frame
+// where it showed the robe hanging within the depth's tolerance of the bed,
+// and the hidden bed took the frame straight under the pixel - the body.
+// Every reuse of the frame for the bed asks that what it shows is the bed
+// (not in front of the hit's face, as deep as the bed straight under); the
+// water's colour and the shore's masks go by depths no unit is in.
+TEST_CASE("RT water: the frame is reused for the bed only where it shows the bed, not a swimmer",
+          "[rt][water][swimmer]") {
+    const std::string frag = wowee::test::slurp("assets/shaders/water.frag.glsl");
+    const std::string rt = wowee::test::slurp("assets/shaders/water_rt.glsli");
+    REQUIRE(rt.size() > 1000);
+    auto has = [](const std::string& text, const char* what) { return text.find(what) != std::string::npos; };
+    CHECK(has(rt, "if (dot(shown - hit, hitNormal) > max(RTW_FRAME_IN_FRONT, 0.01 * clip.w)) return 0.0;"));
+    CHECK(has(rt, "if (p.z - rtwFramePoint(p, clip.w, uv).z < RTW_BEHIND_BED_SHARE * bedDepth) return false;"));
+    CHECK(has(rt, "rtwBehindSurface(origin, depth, under)"));
+    CHECK_FALSE(has(rt, "rtwBehindSurface(origin, under)"));
+    // The bed's depth for the colours: any hit but a unit's (120dd2e5e).
+    CHECK(has(rt, "if (rtInstances[rtHitInstance].group == 0u) rtwBedDepth = depth;"));
+    // The shore's depth straight down: the ground and the buildings only.
+    const size_t below = rt.find("float rtwDepthBelow(");
+    REQUIRE(below != std::string::npos);
+    CHECK(rt.find("rtStructureOnly = true;", below) < rt.find("}", rt.find("rtClosestEx", below)));
+    // The swash keys on the bed under the vertex, never a screen depth.
+    CHECK(has(frag, "float uprush = 0.5 + 0.5 * SwashInfo.y / (abs(SwashInfo.y) + 0.03);"));
+    const std::string waves = wowee::test::slurp("assets/shaders/water_waves.glsli");
+    CHECK(has(waves, "return swSwashEnd(sum, seaHeight, bed.x);"));
+    CHECK_FALSE(has(waves, "SceneDepth"));
+}
