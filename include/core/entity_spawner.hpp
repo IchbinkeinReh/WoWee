@@ -418,6 +418,9 @@ public:
     /// changed from `oldScale`, no longer fits where it stands, so that
     /// CMSG_CANCEL_GROWTH_AURA is due (0x0072a560, collision_fit.hpp).
     bool growthNoLongerFits(uint64_t guid, float oldScale);
+    /// Whether the world is in the way of the player raised onto a mount of
+    /// this display (0x0073d5d0 -> 0x006d7720 -> 0x0075e480).
+    [[nodiscard]] bool noRoomToMount(uint32_t mountDisplay) const;
     /// A unit's object scale and collision height, for its ripples.
     std::pair<float, float> unitRippleSize(const game::Unit& unit);
     /// A unit's jump's own sound, asked of it outright as its movement

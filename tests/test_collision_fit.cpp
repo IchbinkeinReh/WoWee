@@ -100,6 +100,16 @@ TEST_CASE("a rider taller than its seat height is not tested", "[collision_fit]"
 TEST_CASE("a face is in the mounted box only where some of it is inside", "[collision_fit]") {
     const glm::vec3 lo(-0.5f, -0.5f, 2.0f), hi(0.5f, 0.5f, 3.0f);
     CHECK(boxOverlapsFacets(lo, hi, levelAt(2.5f)));
+    // Mounting under a ceiling: between the head on foot and the raised one.
+    {
+        const auto mounting = mountingBox(glm::vec3(0.0f), 0.3f, 2.0f, 1.8f, 1.0f, 1.0f);
+        REQUIRE(mounting);
+        CHECK(mounting->lo.z == Approx(2.0f));
+        CHECK(mounting->hi.z == Approx(2.8f));
+        CHECK(boxOverlapsFacets(mounting->lo, mounting->hi, levelAt(2.6f)));
+        CHECK_FALSE(boxOverlapsFacets(mounting->lo, mounting->hi, levelAt(3.0f)));
+        CHECK_FALSE(mountingBox(glm::vec3(0.0f), 0.3f, 4.0f, 1.0f, 1.0f, 1.0f));
+    }
     CHECK_FALSE(boxOverlapsFacets(lo, hi, levelAt(3.5f)));
     CHECK_FALSE(boxOverlapsFacets(lo, hi, levelAt(1.0f)));
     CHECK(boxOverlapsFacets(lo, hi, {tri({-0.1f, -0.1f, 2.5f}, {0.1f, -0.1f, 2.5f}, {0, 0.1f, 2.5f})}));

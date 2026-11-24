@@ -3937,6 +3937,11 @@ void GameHandler::cancelTempEnchantment(uint8_t handIndex) {
     if (inventoryHandler_) inventoryHandler_->cancelTempEnchantment(handIndex);
 }
 
+void GameHandler::checkMountRoom(uint32_t mountDisplay) {
+    if (mountDisplay == 0 || isTaxiMountActive() || !mountRoomCallback_ || !mountRoomCallback_(mountDisplay)) return;
+    dismount();
+}
+
 void GameHandler::mountSpecial() {
     if (mountSpecialCallback_) mountSpecialCallback_(playerGuid);
     if (isInWorld()) socket->send(network::Packet(wireOpcode(Opcode::CMSG_MOUNTSPECIAL_ANIM)));

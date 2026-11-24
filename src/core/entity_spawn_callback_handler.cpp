@@ -129,6 +129,8 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
 
     // A player's scale changed: whether it grew past the room it stands in
     // (0x0072a560), for CMSG_CANCEL_GROWTH_AURA.
+    gameHandler_.setMountRoomCallback(
+        [this](uint32_t mountDisplay) { return entitySpawner_.noRoomToMount(mountDisplay); });
     gameHandler_.setGrowthFitCallback([this](uint64_t guid, float oldScale) {
         return entitySpawner_.growthNoLongerFits(guid, oldScale);
     });

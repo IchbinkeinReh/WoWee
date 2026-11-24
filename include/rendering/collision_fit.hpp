@@ -152,6 +152,15 @@ inline std::optional<Box> mountedGrowthBox(const glm::vec3& feet, float halfWidt
     return b;
 }
 
+/// The box a player's mounting is tested in (0x0073d5d0 -> 0x006d7720): the
+/// body's half-width round the feet, from the top of the body on foot to the
+/// height it is raised to. Nothing where the rider stands taller than that.
+inline std::optional<Box> mountingBox(const glm::vec3& feet, float halfWidth, float riderModelHeight,
+                                      float mountHeight, float mountDisplayScale, float scale) {
+    return mountedGrowthBox(feet, halfWidth, riderModelHeight * scale, riderModelHeight, mountHeight,
+                            mountDisplayScale, scale);
+}
+
 /// 0x007a5f20: the gather answers nothing for a box not wholly inside the
 /// map.
 inline bool boxInsideMap(const glm::vec3& lo, const glm::vec3& hi) {

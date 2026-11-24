@@ -1512,7 +1512,10 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
             }
         } else if (key == ufi.mountDisplayId) {
             if (block.guid == owner_.getPlayerGuid()) {
+                const uint32_t mountedBefore = owner_.currentMountDisplayIdRef();
                 detectPlayerMountChange(val, block.fields);
+                if (owner_.currentMountDisplayIdRef() != mountedBefore)
+                    owner_.checkMountRoom(owner_.currentMountDisplayIdRef());
             } else if ((entity->getType() == ObjectType::PLAYER || entity->getType() == ObjectType::UNIT) &&
                        val != unit->getMountDisplayId() &&
                        owner_.otherPlayerMountCallbackRef()) {

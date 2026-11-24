@@ -4606,6 +4606,12 @@ public:
     // CMSG_CANCEL_GROWTH_AURA is due (0x0072a560). See collision_fit.hpp.
     using GrowthFitCallback = std::function<bool(uint64_t guid, float oldScale)>;
     void setGrowthFitCallback(GrowthFitCallback cb) { growthFitCallback_ = std::move(cb); }
+    /// Whether there is no room over the player for a mount of this display.
+    using MountRoomCallback = std::function<bool(uint32_t mountDisplay)>;
+    void setMountRoomCallback(MountRoomCallback cb) { mountRoomCallback_ = std::move(cb); }
+    /// A mount come onto the player in the world, not with its creation: with
+    /// no room over it, it gets down again (0x0073d5d0 -> 0x007412e0).
+    void checkMountRoom(uint32_t mountDisplay);
 
     // Taxi terrain precaching callback
     using TaxiPrecacheCallback = std::function<void(const std::vector<glm::vec3>&)>;
@@ -7708,6 +7714,7 @@ private:
     OtherPlayerLevelUpCallback otherPlayerLevelUpCallback_;
     OtherPlayerMountCallback otherPlayerMountCallback_;
     GrowthFitCallback growthFitCallback_;
+    MountRoomCallback mountRoomCallback_;
     AchievementEarnedCallback achievementEarnedCallback_;
     AreaDiscoveryCallback areaDiscoveryCallback_;
     QuestProgressCallback questProgressCallback_;

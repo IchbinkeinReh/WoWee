@@ -760,6 +760,46 @@ float EntitySpawner::playerMountedCollisionHeight(uint32_t mountDisplayId) {
         models->getFloat(static_cast<uint32_t>(mountModel), kModelMountHeightColumn), mountScale, scale);
 }
 
+bool EntitySpawner::noRoomToMount(uint32_t mountDisplay) const {
+    namespace us = rendering::unit_splash;
+    namespace col = rendering::collision;
+    constexpr uint32_t kModelMountHeightColumn = 16;  // CreatureModelData MountHeight (+0x40)
+    auto* cc = renderer_ ? renderer_->getCameraController() : nullptr;
+    if (!gameHandler_ || !assetManager_ || !cc) return false;
+    const auto unit =
+        std::dynamic_pointer_cast<game::Unit>(gameHandler_->getEntityManager().getEntity(gameHandler_->getPlayerGuid()));
+    auto displays = assetManager_->loadDBCOptional("CreatureDisplayInfo.dbc");
+    auto models = assetManager_->loadDBCOptional("CreatureModelData.dbc");
+    if (!unit || !displays || !models || models->getFieldCount() <= kModelMountHeightColumn) return false;
+    const auto field = [&](game::UF f) -> uint32_t {
+        const uint16_t i = game::fieldIndex(f);
+        return i != 0xFFFF ? unit->getField(i) : 0u;
+    };
+    // The native display's body (+0xf8), and the mount's.
+    const int32_t display = displays->findRecordById(field(game::UF::UNIT_FIELD_NATIVEDISPLAYID));
+    const int32_t mount = displays->findRecordById(mountDisplay);
+    if (display < 0 || mount < 0) return false;
+    const auto drow = static_cast<uint32_t>(display);
+    const auto mdrow = static_cast<uint32_t>(mount);
+    const int32_t model = models->findRecordById(displays->getUInt32(drow, 1));
+    const int32_t mountModel = models->findRecordById(displays->getUInt32(mdrow, 1));
+    if (model < 0 || mountModel < 0) return false;
+    const auto mrow = static_cast<uint32_t>(model);
+    // 0x006cf350.
+    const float scale = us::collisionHeight(1.0f, std::bit_cast<float>(field(game::UF::OBJECT_FIELD_SCALE_X)),
+                                            displays->getFloat(drow, us::kDisplayScaleColumn),
+                                            models->getFloat(mrow, us::kModelScaleColumn));
+    const auto box = col::mountingBox(renderer_->getCharacterPosition(),
+                                      models->getFloat(mrow, us::kModelCollisionWidthColumn) * scale * 0.5f,
+                                      models->getFloat(mrow, us::kModelCollisionHeightColumn),
+                                      models->getFloat(static_cast<uint32_t>(mountModel), kModelMountHeightColumn),
+                                      displays->getFloat(mdrow, us::kDisplayScaleColumn), scale);
+    if (!box) return false;
+    // 0x0075e480: a gather that fails is no room.
+    const auto facets = cc->gatherWorldFacets(box->lo, box->hi);
+    return !facets || col::boxOverlapsFacets(box->lo, box->hi, *facets);
+}
+
 bool EntitySpawner::growthNoLongerFits(uint64_t guid, float oldScale) {
     namespace us = rendering::unit_splash;
     namespace col = rendering::collision;
