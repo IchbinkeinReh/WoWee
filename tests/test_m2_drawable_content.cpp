@@ -70,6 +70,16 @@ TEST_CASE("an emitter-only model is drawable, an empty one is not", "[m2][doodad
     trail.ribbonEmitters.resize(1);
     CHECK(trail.hasDrawableContent());
 
+    // In the way alone (playtest T86): not drawn, and there.
+    M2Model wall{};
+    wall.collisionVertices.resize(3);
+    wall.collisionIndices = {0, 1, 2};
+    CHECK_FALSE(wall.hasDrawableContent());
+    CHECK(wall.hasWorldContent());
+    CHECK(wall.hasContent());
+    CHECK_FALSE(empty.hasWorldContent());
+    CHECK(smoke.hasWorldContent());
+
     // Asked before its skin is read: a spell's model of ribbons alone was turned down there.
     CHECK_FALSE(empty.hasContent());
     CHECK(smoke.hasContent());

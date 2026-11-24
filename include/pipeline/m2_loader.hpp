@@ -567,8 +567,12 @@ struct M2Model {
     [[nodiscard]] bool hasDrawableContent() const {
         return isValid() || !particleEmitters.empty() || !ribbonEmitters.empty();
     }
+    /// Something a placed model is in the world: drawn, or in the way alone - a
+    /// doodad's and a game object's collision is its bounding triangles whatever
+    /// is drawn (0x0070f550 -> +0x20c, 0x0082ec30).
+    [[nodiscard]] bool hasWorldContent() const { return hasDrawableContent() || !collisionIndices.empty(); }
     /// The same of a file whose skin is not read yet.
-    [[nodiscard]] bool hasContent() const { return !vertices.empty() || hasDrawableContent(); }
+    [[nodiscard]] bool hasContent() const { return !vertices.empty() || hasWorldContent(); }
 };
 
 class M2Loader {
