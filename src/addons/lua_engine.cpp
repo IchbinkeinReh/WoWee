@@ -11251,6 +11251,7 @@ void LuaEngine::shutdown() {
         widgets_.reset();
         editBoxes_.clear();
         attributesAllowed_.clear();
+        changedTooltipUnits_.clear();
         toldOnce_ = false;
         hoverWid_ = 0;
         focusedWid_ = 0;
@@ -19310,6 +19311,25 @@ void LuaEngine::settleTextChanged(uint32_t wid) {
     if (const auto userInput = textChanges_.takeOf(wid)) fireTextChanged(wid, *userInput);
 }
 
+void LuaEngine::refreshUnitTooltip() {
+    // 0x00512ab0: while it shows one of them and is not fading.
+    const auto changed = std::exchange(changedTooltipUnits_, {});
+    if (changed.empty() || !L_) return;
+    auto* gh = wowee::addons::getGameHandler(L_);
+    taint::Scope secure(0);
+    lua_getglobal(L_, "GameTooltip");
+    const int tip = lua_gettop(L_);
+    const auto* w = lua_istable(L_, tip) ? widgets_.get(widgetIdOf(L_, tip)) : nullptr;
+    if (gh && w && w->shown && w->tooltipFadeLeft <= 0.0f && !w->tooltipUnit.empty() &&
+        changed.count(wowee::addons::resolveUnitGuid(gh, w->tooltipUnit)) != 0) {
+        lua_getfield(L_, tip, "SetUnit");
+        lua_pushvalue(L_, tip);
+        lua_pushstring(L_, w->tooltipUnit.c_str());
+        if (taint::callProtected(L_, 2, 0, 0) != 0) recordScriptError(L_, "GameTooltip:SetUnit");
+    }
+    lua_settop(L_, tip - 1);
+}
+
 void LuaEngine::noteAttributesAllowed(uint32_t wid) { attributesAllowed_.push_back(wid); }
 
 void LuaEngine::dispatchOnUpdate(float elapsed) {
@@ -19317,6 +19337,7 @@ void LuaEngine::dispatchOnUpdate(float elapsed) {
     // any more.
     for (const uint32_t id : std::exchange(attributesAllowed_, {}))
         if (auto* w = widgets_.get(id)) w->attributesAllowed = false;
+    refreshUnitTooltip();
 
     // Asked for by the check, and answered here because only this side can ask
     // the interface anything.

@@ -1872,6 +1872,10 @@ void Application::openGameData(const std::string& dataPath, bool atStartup) {
             //
             // What it did better, the channel's index, moved into the handler's
             // own firing.
+            gameHandler->setUnitTooltipCallback([this](uint64_t guid) {
+                if (addonManager_ && addonsLoaded_)
+                    if (auto* engine = addonManager_->getLuaEngine()) engine->unitTooltipChanged(guid);
+            });
             gameHandler->setQuestLogRowLookup([handler = gameHandler.get()](uint32_t questId) {
                 return addons::questLogRowForQuest(handler, questId);
             });

@@ -1306,6 +1306,8 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
                     pendingEvents_.emit((val & 0x800u) ? "PET_ATTACK_START" : "PET_ATTACK_STOP", {});
                 }
             }
+            // Skinnable, or no longer.
+            if (((oldFlags ^ val) & 0x4000000u) != 0) owner_.noteUnitTooltip(block.guid);
         }
         else if (ufi.auraState != 0xFFFF && key == ufi.auraState) {
             const uint32_t oldAuraState = unit->getAuraState();
@@ -4635,6 +4637,7 @@ void EntityController::handleNameQueryResponse(network::Packet& packet) {
             owner_.ignoreCacheRef()[data.name] = data.guid;
         }
 
+        owner_.noteUnitTooltip(data.guid);
         // UNIT_NAME_UPDATE once for every token that names the unit
         // (0x00512b00 -> 0x0060bf10): a party or raid member's frame, the
         // pet's, mouseover and the arena and boss frames as well as target,
@@ -4710,8 +4713,10 @@ void EntityController::handleCreatureQueryResponse(network::Packet& packet) {
                     // anything else, and most of a zone is neither targeted nor
                     // focused.
                     //
-                    // 0x0072cde0: the name first, then the classification,
-                    // each to every token the unit has (0x0060bf10).
+                    // 0x0072cde0: the name first (and its tooltip, 0x00512b00),
+                    // then the classification, each to every token the unit
+                    // has (0x0060bf10).
+                    owner_.noteUnitTooltip(guid);
                     for (const auto& unitId : owner_.unitTokensForGuid(guid)) {
                         owner_.fireAddonEvent("UNIT_NAME_UPDATE", {unitId});
                     }

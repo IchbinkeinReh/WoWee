@@ -10,6 +10,7 @@
 #include <array>
 #include <string>
 #include <utility>
+#include <set>
 #include <vector>
 
 struct lua_State;
@@ -441,9 +442,14 @@ public:
     void takeKeyboard();
     /// A frame whose attributes anybody may change until the next update.
     void noteAttributesAllowed(uint32_t wid);
+    /// GameTooltip is to be filled anew, with the next update, where it shows
+    /// the unit (0x00512ab0).
+    void unitTooltipChanged(uint64_t guid) { changedTooltipUnits_.insert(guid); }
     /// An edit box made.
     void noteEditBox(uint32_t wid) { editBoxes_.push_back(wid); }
 private:
+    void refreshUnitTooltip();
+    std::set<uint64_t> changedTooltipUnits_;
     std::vector<uint32_t> editBoxes_;
     std::vector<uint32_t> attributesAllowed_;
     bool toldOnce_ = false;

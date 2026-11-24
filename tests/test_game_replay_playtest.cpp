@@ -1337,3 +1337,36 @@ TEST_CASE("the minimap hears of a tracking spell's aura", "[replay][tracking]") 
     CHECK(s.handler().minimapOtherTracking() == 1);
     s.handler().setAddonEventCallback(nullptr);
 }
+
+// 0x00512ab0: what a unit's tooltip tells of it.
+TEST_CASE("a unit's tooltip hears of its name and of its skin", "[replay][tooltip]") {
+    constexpr uint64_t kWolf = 0xF130000ABC000001ull;
+    std::vector<uint64_t> told;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    s.receive(UpdateObject().create(kWolf, wowee::game::ObjectType::UNIT,
+                                    {{UF::OBJECT_FIELD_ENTRY, 2748},
+                                     {UF::UNIT_FIELD_HEALTH, 50}, {UF::UNIT_FIELD_MAXHEALTH, 50},
+                                     {UF::UNIT_FIELD_FACTIONTEMPLATE, 32}, {UF::UNIT_FIELD_FLAGS, 0}}));
+    s.handler().setUnitTooltipCallback([&](uint64_t guid) { told.push_back(guid); });
+    s.receive(UpdateObject().values(kWolf, {{UF::UNIT_FIELD_HEALTH, 20}}));
+    s.receive(UpdateObject().values(kWolf, {{UF::UNIT_FIELD_FACTIONTEMPLATE, 35}}));
+    s.receive(UpdateObject().values(kWolf, {{UF::UNIT_FIELD_FLAGS, 0x80000}}));
+    CHECK(told.empty());
+    s.receive(UpdateObject().values(kWolf, {{UF::UNIT_FIELD_FLAGS, 0x4080000}}));
+    CHECK(told == std::vector<uint64_t>{kWolf});
+    // 0x0072cde0, 0x00728ca0: named.
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_CREATURE_QUERY_RESPONSE));
+    p.writeUInt32(2748);
+    p.writeString("Archaedas");
+    for (int i = 0; i < 5; ++i) p.writeString("");
+    for (uint32_t v : {0u, 5u, 0u, 1u}) p.writeUInt32(v);
+    for (uint32_t v : {0u, 0u, 5988u, 0u, 0u, 0u}) p.writeUInt32(v);
+    p.writeFloat(1.0f);
+    p.writeFloat(1.0f);
+    p.writeUInt8(0);
+    for (int i = 0; i < 7; ++i) p.writeUInt32(0);
+    s.receive(p);
+    CHECK(told == std::vector<uint64_t>{kWolf, kWolf});
+    s.handler().setUnitTooltipCallback(nullptr);
+}

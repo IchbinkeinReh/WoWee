@@ -507,6 +507,13 @@ public:
     using AddonEventCallback = std::function<void(const std::string&, const std::vector<std::string>&)>;
     void setAddonEventCallback(AddonEventCallback cb) { addonEventCallback_ = std::move(cb); }
 
+    /// Something of a unit a tooltip tells has changed (0x00512ab0).
+    using UnitTooltipCallback = std::function<void(uint64_t guid)>;
+    void setUnitTooltipCallback(UnitTooltipCallback cb) { unitTooltipCallback_ = std::move(cb); }
+    void noteUnitTooltip(uint64_t guid) const {
+        if (unitTooltipCallback_ && guid != 0) unitTooltipCallback_(guid);
+    }
+
     /// Where a quest stands in the interface's list of the log, headers counted
     /// with it, from one; 0 for one that is not in it (0x005deeb0).
     using QuestLogRowLookup = std::function<int(uint32_t questId)>;
@@ -6734,6 +6741,7 @@ private:
     ChatBubbleCallback chatBubbleCallback_;
     AddonEventCallback addonEventCallback_;
     QuestLogRowLookup questLogRowLookup_;
+    UnitTooltipCallback unitTooltipCallback_;
     /// A server's movie is playing (DAT_00bd0800).
     bool moviePlaying_ = false;
     AddonEventValuesCallback addonEventValuesCallback_;

@@ -156,7 +156,10 @@ void CombatHandler::raiseUnitEvents() {
 /// What a change of `unit`'s threat list calls for (threat_table.hpp).
 void CombatHandler::applyThreatChanges(uint64_t unit, const ThreatTable::Changes& c) {
     for (const uint64_t guid : c.situations) queueUnitEvent("UNIT_THREAT_SITUATION_UPDATE", guid);
-    if (c.list) queueUnitEvent("UNIT_THREAT_LIST_UPDATE", unit);
+    if (c.list) {
+        queueUnitEvent("UNIT_THREAT_LIST_UPDATE", unit);
+        owner_.noteUnitTooltip(unit);   // 0x0071c3b0, 0x007345c0, 0x00737620, 0x00737750
+    }
     for (const auto& [before, now] : c.floaters) raiseThreatFloater(unit, before, now);
     if (!c.sounds.empty() && addons::storedCVarValue("threatPlaySounds", "1") != "0") {
         if (auto* ac = owner_.services().audioCoordinator)
