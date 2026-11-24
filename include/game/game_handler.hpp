@@ -5542,9 +5542,9 @@ public:
     void updateNetworking();
     void updateTimers(float deltaTime);
     void updateEntityInterpolation(float deltaTime);
-    /// The frame's real length, uncapped, for the next update's units on
-    /// their moves (updateEntityInterpolation). The client runs a unit's
-    /// spline by the clock - its elapsed time is now less the time it started
+    /// The frame's real length, uncapped, for the next update - its timers,
+    /// the taxi, the units on their moves. The client runs a unit's spline by
+    /// the clock - its elapsed time is now less the time it started
     /// (FUN_0098ca00: spline +0x28 = now - +0x24, +0x24 set to the world time
     /// by FUN_0098c770) - so a long frame moves it as far as the time that
     /// passed. Without it, the update's own delta is used.

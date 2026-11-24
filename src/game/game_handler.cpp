@@ -616,17 +616,15 @@ void GameHandler::updateEntityInterpolation(float deltaTime) {
 // creature then put it on the unconditional path and made it snap forward.
 // Entity interpolation is inexpensive; rendering retains its own distance
 // culling and remains the correct place to skip costly visual work.
-// By the frame's real length (setUnitClockSeconds), not the capped delta: a
-// stall of a few seconds left every moving unit that far behind where the
-// server had it, and its next move's start - the server's position - put it
-// right in one frame, 13 to 35 yards at a run.
-const float unitDelta = unitClockSeconds_.value_or(deltaTime);
-unitClockSeconds_.reset();
+// By the frame's real length (update), not the capped delta: a stall of a few
+// seconds left every moving unit that far behind where the server had it, and
+// its next move's start - the server's position - put it right in one frame,
+// 13 to 35 yards at a run.
 for (const auto& [guid, entity] : entityController_->getEntityManager().getEntities()) {
     (void)guid;
     if (entity && entity->isUnit()) {
         entity->setFacingChaseRate(facingChaseRate(*entity));
-        entity->updateMovement(unitDelta);
+        entity->updateMovement(deltaTime);
     }
 }
 }
@@ -826,6 +824,12 @@ void GameHandler::update(float deltaTime) {
     if (!socket) {
         return;
     }
+    // Everything here goes by the frame's real length (setUnitClockSeconds), not
+    // the capped one: the server's clock ran on through a slow frame. A taxi
+    // flew a third slower than its 32 yards a second at ten frames, and the
+    // server set the player down 1100 yards behind it.
+    deltaTime = unitClockSeconds_.value_or(deltaTime);
+    unitClockSeconds_.reset();
 
     updateNetworking();
     if (!socket) return;  // disconnect() may have been called

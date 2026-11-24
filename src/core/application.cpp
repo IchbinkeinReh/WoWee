@@ -2463,6 +2463,9 @@ void Application::run() {
         // splines do (GameHandler::setUnitClockSeconds); capped only where
         // a float of seconds stays exact enough.
         if (gameHandler) gameHandler->setUnitClockSeconds(FramePacer::toSeconds(deltaNs, 3600.0f));
+        // And the player's own steps, up to a second of them.
+        if (auto* cc = renderer ? renderer->getCameraController() : nullptr)
+            cc->setFrameSeconds(FramePacer::toSeconds(deltaNs, 1.0f));
 
         // A lost GPU device, from the loss until it is rebuilt: the session
         // kept up, nothing drawn or uploaded, and the rebuild tried when

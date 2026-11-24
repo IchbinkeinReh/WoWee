@@ -344,8 +344,13 @@ public:
         /// The jump key on the ground or in the air, with the liquid this far
         /// over the feet: whether it jumps (0x0072eb80).
         std::function<bool(float liquidOverFeet)> jumpPressed;
+        /// The part of its turn and pitch rates the mover's keys turn it at.
+        std::function<float()> turnShare, pitchShare;
     };
     void setMoverStateHooks(MoverStateHooks hooks) { moverState_ = std::move(hooks); }
+    /// The frame's real length, which the next update goes by: the delta it is
+    /// given is cut at a tenth of a second.
+    void setFrameSeconds(float seconds) { frameSeconds_ = seconds; }
     /// How far the fall that landed last dropped from its highest point
     /// (0x00986fb0), in yards.
     [[nodiscard]] float lastFallDrop() const { return lastFallDrop_; }
@@ -1260,6 +1265,7 @@ private:
     // Movement callback
     MovementCallback movementCallback;
     MoverStateHooks moverState_;
+    std::optional<float> frameSeconds_;
     /// What the step left the mover doing, against what its flags say.
     [[nodiscard]] MoverStep moverStep() const;
     /// FALLING made to say what the step did.

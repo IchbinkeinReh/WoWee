@@ -1514,8 +1514,9 @@ void CameraController::updateThirdPersonCamera(float deltaTime, FrameInput& f) {
     // the frames come. This used to run once with the frame clamped to
     // 1/30 s, which at 20 fps spent two thirds of the frame and dropped the
     // rest: the jump took half as long again and looked like slow motion,
-    // and running lost ground the same way. The frame is already capped at
-    // 0.1 s (FramePacer::toSeconds), so this is at most three steps.
+    // and running lost ground the same way. The frame is the real one, up to a
+    // second of it (setFrameSeconds): cut at 0.1 s, the player ran slower than
+    // the server had it below ten frames a second.
     int steps = 1;
     if (deltaTime > kMaxPhysicsDelta) {
         // Less a hair, so a frame of exactly n steps' length is not n + 1.
@@ -1986,6 +1987,8 @@ void CameraController::releaseVehicleCameraOffsets() {
 }
 
 void CameraController::update(float deltaTime) {
+    deltaTime = frameSeconds_.value_or(deltaTime);
+    frameSeconds_.reset();
     cameraClockMs_ += static_cast<uint32_t>(std::max(0.0f, deltaTime) * 1000.0f);
     vehicleYawOffset_.step(cameraClockMs_);
     vehiclePitchOffset_.step(cameraClockMs_);
@@ -3193,11 +3196,11 @@ void CameraController::reset() {
         if (terrainManager) terrainH = terrainManager->getHeightAt(spawnPos.x, spawnPos.y);
         if (wmoRenderer) wmoH = wmoRenderer->getFloorHeight(spawnPos.x, spawnPos.y, probeZ, nullptr, serverZ);
         if (m2Renderer && !externalFollow_) m2H = m2Renderer->getFloorHeight(spawnPos.x, spawnPos.y, probeZ);
-        if (auto h = movement::teleportLandingFloor({terrainH, wmoH, m2H}, serverZ)) {
-            spawnPos.z = *h + 0.05f;
-        }
+        // On it: over it by a hair, the player fell to it from there, and a
+        // heartbeat with FALLING and a landing went out after every arrival.
+        if (auto h = movement::teleportLandingFloor({terrainH, wmoH, m2H}, serverZ)) spawnPos.z = *h;
         // else: keep server Z as-is
-        lastGroundZ = spawnPos.z - 0.05f;
+        lastGroundZ = spawnPos.z;
 
         camera->setRotation(yaw, pitch);
         glm::vec3 forward3D = camera->getForward();
