@@ -105,7 +105,6 @@
 #include "audio/ambient_sound_manager.hpp"
 #include "audio/ui_sound_manager.hpp"
 #include "audio/combat_sound_manager.hpp"
-#include "audio/movement_sound_manager.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/vk_frame_data.hpp"
 #include "rendering/vk_shader.hpp"
@@ -3947,7 +3946,6 @@ void Renderer::runDeferredWorldInitStep(float deltaTime) {
             // Nothing left at this stage; the later ones keep their numbers.
             break;
         case 4:
-            if (audioCoordinator_->getMovementSoundManager()) audioCoordinator_->getMovementSoundManager()->initialize(cachedAssetManager);
             break;
         case kDeferredWorldTexturesStage:
             loadDeferredWorldTextures();
@@ -6003,9 +6001,6 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
             }
             if (audioCoordinator_->getCombatSoundManager()) {
                 audioCoordinator_->getCombatSoundManager()->initialize(assetManager);
-            }
-            if (audioCoordinator_->getMovementSoundManager()) {
-                audioCoordinator_->getMovementSoundManager()->initialize(assetManager);
             }
             if (skySystem) skySystem->loadTextures(assetManager);
             if (swimEffects) swimEffects->loadRippleTextures(assetManager);

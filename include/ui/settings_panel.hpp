@@ -196,7 +196,6 @@ public:
     int pendingUiVolume = 100;
     int pendingCombatVolume = 100;
     int pendingSpellVolume = 100;
-    int pendingMovementVolume = 100;
     int pendingFootstepVolume = 100;
     int pendingNpcVoiceVolume = 100;
     bool pendingCharacterSpeech = true;

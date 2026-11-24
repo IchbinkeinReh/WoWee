@@ -24,7 +24,6 @@
 #include "audio/audio_engine.hpp"
 #include "audio/footstep_manager.hpp"
 #include "audio/music_manager.hpp"
-#include "audio/movement_sound_manager.hpp"
 #include "rendering/swim_effects.hpp"
 #include <algorithm>
 #include <cstdlib>

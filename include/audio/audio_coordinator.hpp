@@ -22,7 +22,6 @@ class PlayerVoiceManager;
 class AmbientSoundManager;
 class UiSoundManager;
 class CombatSoundManager;
-class MovementSoundManager;
 
 /// Flat context passed from Renderer into updateZoneAudio() each frame.
 /// All values are pre-queried so AudioCoordinator needs no rendering pointers.
@@ -117,7 +116,6 @@ public:
     AmbientSoundManager* getAmbientSoundManager() { return ambientSoundManager_.get(); }
     UiSoundManager* getUiSoundManager() { return uiSoundManager_.get(); }
     CombatSoundManager* getCombatSoundManager() { return combatSoundManager_.get(); }
-    MovementSoundManager* getMovementSoundManager() { return movementSoundManager_.get(); }
 
 private:
     /// The slots from the place, the world states, the weather, the camera's
@@ -140,7 +138,6 @@ private:
     std::unique_ptr<AmbientSoundManager> ambientSoundManager_;
     std::unique_ptr<UiSoundManager> uiSoundManager_;
     std::unique_ptr<CombatSoundManager> combatSoundManager_;
-    std::unique_ptr<MovementSoundManager> movementSoundManager_;
 
     bool audioAvailable_ = false;
 

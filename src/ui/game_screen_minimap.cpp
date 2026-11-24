@@ -44,7 +44,6 @@
 #include "audio/ambient_sound_manager.hpp"
 #include "audio/ui_sound_manager.hpp"
 #include "audio/combat_sound_manager.hpp"
-#include "audio/movement_sound_manager.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/dbc_layout.hpp"
@@ -1907,7 +1906,6 @@ void GameScreen::saveSettings() {
     out << "ui_volume=" << settingsPanel_.pendingUiVolume << "\n";
     out << "combat_volume=" << settingsPanel_.pendingCombatVolume << "\n";
     out << "spell_volume=" << settingsPanel_.pendingSpellVolume << "\n";
-    out << "movement_volume=" << settingsPanel_.pendingMovementVolume << "\n";
     out << "footstep_volume=" << settingsPanel_.pendingFootstepVolume << "\n";
     out << "npc_voice_volume=" << settingsPanel_.pendingNpcVoiceVolume << "\n";
     out << "character_speech=" << (settingsPanel_.pendingCharacterSpeech ? 1 : 0) << "\n";
@@ -2256,7 +2254,6 @@ void GameScreen::loadSettings() {
             else if (key == "ui_volume") settingsPanel_.pendingUiVolume = std::clamp(std::stoi(val), 0, 100);
             else if (key == "combat_volume") settingsPanel_.pendingCombatVolume = std::clamp(std::stoi(val), 0, 100);
             else if (key == "spell_volume") settingsPanel_.pendingSpellVolume = std::clamp(std::stoi(val), 0, 100);
-            else if (key == "movement_volume") settingsPanel_.pendingMovementVolume = std::clamp(std::stoi(val), 0, 100);
             else if (key == "footstep_volume") settingsPanel_.pendingFootstepVolume = std::clamp(std::stoi(val), 0, 100);
             else if (key == "npc_voice_volume") settingsPanel_.pendingNpcVoiceVolume = std::clamp(std::stoi(val), 0, 100);
             else if (key == "character_speech") settingsPanel_.pendingCharacterSpeech = (std::stoi(val) != 0);

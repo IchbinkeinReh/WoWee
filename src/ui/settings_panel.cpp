@@ -51,7 +51,6 @@
 #include "audio/ui_sound_manager.hpp"
 #include "audio/combat_sound_manager.hpp"
 #include "rendering/spell_visual_system.hpp"
-#include "audio/movement_sound_manager.hpp"
 #include "audio/footstep_manager.hpp"
 #include "audio/npc_voice_manager.hpp"
 #include "audio/player_voice_manager.hpp"
@@ -1413,7 +1412,6 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "uivolume",        .asInt  = &SettingsPanel::pendingUiVolume},
     {.key = "combatvolume",    .asInt  = &SettingsPanel::pendingCombatVolume},
     {.key = "spellvolume",     .asInt  = &SettingsPanel::pendingSpellVolume},
-    {.key = "movementvolume",  .asInt  = &SettingsPanel::pendingMovementVolume},
     {.key = "footstepvolume",  .asInt  = &SettingsPanel::pendingFootstepVolume},
     {.key = "npcvoicevolume",  .asInt  = &SettingsPanel::pendingNpcVoiceVolume},
     {.key = "characterspeech", .asBool = &SettingsPanel::pendingCharacterSpeech},
@@ -1471,12 +1469,12 @@ const FieldBinding* findFieldBinding(const std::string& key) {
 ///
 /// Every one of them does, including the two that are not volumes: character
 /// speech switches the player voice manager on and off inside the same call,
-/// and the effects slider scales six of the others.
+/// and the effects slider scales five of the others.
 bool isVolumeKey(const std::string& key) {
     return key == "mastervolume" || key == "mutesound" ||
            key == "effectsvolume" || key == "musicvolume" || key == "ambientvolume" ||
            key == "uivolume" || key == "combatvolume" ||
-           key == "spellvolume" || key == "movementvolume" || key == "footstepvolume" ||
+           key == "spellvolume" || key == "footstepvolume" ||
            key == "npcvoicevolume" ||
            key == "characterspeech";
 }
@@ -2049,8 +2047,6 @@ void SettingsPanel::applyAudioVolumes(audio::AudioCoordinator* ac) {
     // spell sounds at its square (a quarter at half).
     if (auto* svs = services_.renderer ? services_.renderer->getSpellVisualSystem() : nullptr)
         svs->setKitSoundVolumeScale(static_cast<float>(pendingSpellVolume) / 100.0f);
-    if (auto* movement = ac->getMovementSoundManager())
-        movement->setVolumeScale(fx * pendingMovementVolume / 100.0f);
     if (auto* footstep = ac->getFootstepManager())
         footstep->setVolumeScale(fx * pendingFootstepVolume / 100.0f);
     if (auto* npcVoice = ac->getNpcVoiceManager())

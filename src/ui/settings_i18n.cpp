@@ -1192,7 +1192,7 @@ constexpr SettingGerman kGerman[] = {
      nullptr, "ENABLE_SOUNDFX", nullptr},
     {"effectsvolume",
      "Alle Effekte",
-     "Ein Regler über den fünf darunter. Dies ist der Regler, den das eigene Soundfenster des "
+     "Ein Regler über den vier darunter. Dies ist der Regler, den das eigene Soundfenster des "
      "Spiels Soundeffekte nannte.",
      nullptr, nullptr, nullptr},
     {"uivolume",
@@ -1206,10 +1206,6 @@ constexpr SettingGerman kGerman[] = {
     {"spellvolume",
      "Zauber",
      "Zauberwirken, Einschläge und landende Stärkungen.",
-     nullptr, nullptr, nullptr},
-    {"movementvolume",
-     "Bewegung",
-     "Springen, Landen, Schwimmen und Rüstungsrascheln.",
      nullptr, nullptr, nullptr},
     {"footstepvolume",
      "Schritte",
