@@ -400,9 +400,7 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
         return;
     }
 
-    const ImVec2 measured =
-        runFont->CalcTextSizeA(size, FLT_MAX, 0.0f, strippedText(w->text).c_str());
-    w->width = measured.x;
+    w->width = markupWidth(parseMarkup(w->text), size, measureRun);
     // As tall as the lines it holds. A label sized by its own text can
     // still be several lines: |n breaks one at any width, and giving it a
     // single line's height put whatever anchors below it over the top of
@@ -488,28 +486,9 @@ void WidgetRenderer::sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree
     // until a newline, or a colour change on the second line would be
     // measured as sitting at the end of the first.
     const auto measure = [&](const std::string& text) {
-        float widestLine = 0.0f;
-        float total = 0.0f;
-        for (const auto& run : parseMarkup(text)) {
-            if (!run.texture.empty()) {
-                total += run.texWidth > 0.0f    ? run.texWidth
-                       : run.texHeight > 0.0f   ? run.texHeight
-                                                : size;
-                continue;
-            }
-            std::size_t at = 0;
-            while (true) {
-                const std::size_t brk = run.text.find('\n', at);
-                const std::string piece = run.text.substr(
-                    at, brk == std::string::npos ? std::string::npos : brk - at);
-                total += font->CalcTextSizeA(size, FLT_MAX, 0.0f, piece.c_str()).x;
-                if (brk == std::string::npos) break;
-                widestLine = std::max(widestLine, total);
-                total = 0.0f;
-                at = brk + 1;
-            }
-        }
-        return std::max(widestLine, total);
+        return markupWidth(parseMarkup(text), size, [&](const std::string& piece) {
+            return font->CalcTextSizeA(size, FLT_MAX, 0.0f, piece.c_str()).x;
+        });
     };
     for (const auto& line : w->tooltipLines) {
         // A wrapping line does not set the width - that is what the comment
@@ -750,11 +729,7 @@ float WidgetRenderer::drawMarkupText(ImDrawList* dl, ImFont* font, float size,
         // A picture contributes its own width, not its (empty) text's, or a
         // centred line of coins would be justified as if it were blank.
         const auto runWidth = [&](const TextRun& run) {
-            if (!run.texture.empty()) {
-                return run.texWidth > 0.0f    ? run.texWidth
-                     : run.texHeight > 0.0f   ? run.texHeight
-                                              : size;
-            }
+            if (!run.texture.empty()) return pictureWidth(run, size);
             return font->CalcTextSizeA(size, FLT_MAX, 0.0f, run.text.c_str()).x;
         };
         float lineW = 0.0f;
@@ -2788,8 +2763,9 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     }
                     if (!line.right.empty() && line.rightVisible()) {
                         float rc[4] = {line.rc[0], line.rc[1], line.rc[2], line.rc[3]};
-                        const float rw = font->CalcTextSizeA(
-                            size, FLT_MAX, 0.0f, strippedText(line.right).c_str()).x;
+                        const float rw = markupWidth(parseMarkup(line.right), size, [&](const std::string& piece) {
+                            return font->CalcTextSizeA(size, FLT_MAX, 0.0f, piece.c_str()).x;
+                        });
                         drawMarkupText(dl, font, size, ImVec2(x1 - pad - rw, y),
                                        packColor(rc, w->alpha), w->alpha, line.right);
                     }
@@ -3458,6 +3434,12 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             ImVec2 extent =
                 font ? font->CalcTextSizeA(size, FLT_MAX, 0.0f, measured.c_str())
                      : ImGui::CalcTextSize(measured.c_str());
+            // With its pictures, as it is sized and drawn.
+            if (font && w->text.find("|T") != std::string::npos) {
+                extent.x = markupWidth(parseMarkup(w->text), size, [&](const std::string& piece) {
+                    return font->CalcTextSizeA(size, FLT_MAX, 0.0f, piece.c_str()).x;
+                });
+            }
             // Counted even when nothing wraps: |n is a line break at any
             // width, so a label with one in it is two lines tall whether or
             // not it is also being broken to fit.

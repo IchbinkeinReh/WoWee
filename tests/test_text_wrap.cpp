@@ -276,3 +276,23 @@ TEST_CASE("a box with no width has nothing to justify in", "[wrap][justify]") {
     CHECK(justifyOffset("CENTER", 0.0f, 112.0f) == 0.0f);
     CHECK(justifyOffset("RIGHT", 0.0f, 112.0f) == 0.0f);
 }
+
+// P53: "10 Gold" with its coin is as wide as its glyphs and its coin; a label
+// set to the right by its glyphs alone ran out of its box by the coins.
+TEST_CASE("a text's width counts its pictures", "[wrap][picture]") {
+    using wowee::ui::markupWidth;
+    WrapRun coin;
+    coin.texture = "UI-GoldIcon";
+    WrapRun wide = coin;
+    wide.texHeight = 20.0f;
+    wide.texWidth = 30.0f;
+    WrapRun tall = coin;
+    tall.texHeight = 7.0f;
+    const auto text = [](const std::string& s) { return plain(s).front(); };
+    CHECK(markupWidth({text("10"), coin, text(" 47"), coin}, 12.0f, charWidth) == 2.0f + 12.0f + 3.0f + 12.0f);
+    CHECK(markupWidth({wide, tall}, 12.0f, charWidth) == 37.0f);
+    // The widest of its lines, a picture on the line it stands on.
+    CHECK(markupWidth({text("abc\nde"), coin, text("\nf")}, 12.0f, charWidth) == 14.0f);
+    CHECK(markupWidth({text("abcdefghijklmnop\nde"), coin}, 12.0f, charWidth) == 16.0f);
+    CHECK(markupWidth({}, 12.0f, charWidth) == 0.0f);
+}

@@ -60,6 +60,37 @@ inline bool sameStyle(const WrapRun& a, const WrapRun& b) {
     return std::equal(std::begin(a.rgba), std::end(a.rgba), std::begin(b.rgba));
 }
 
+/// A picture's width in a line of text of height `size`: its own, else its
+/// height, else the line's.
+inline float pictureWidth(const WrapRun& run, float size) {
+    return run.texWidth > 0.0f ? run.texWidth : run.texHeight > 0.0f ? run.texHeight : size;
+}
+
+/// How wide a text is drawn: the widest of its lines, its pictures counted -
+/// a price measured by its digits alone is placed as though its coins were
+/// not there.
+template <typename Measure>
+float markupWidth(const std::vector<WrapRun>& runs, float size, Measure measure) {
+    float widest = 0.0f;
+    float line = 0.0f;
+    for (const WrapRun& run : runs) {
+        if (!run.texture.empty()) {
+            line += pictureWidth(run, size);
+            continue;
+        }
+        size_t at = 0;
+        while (true) {
+            const size_t brk = run.text.find('\n', at);
+            line += measure(run.text.substr(at, brk == std::string::npos ? std::string::npos : brk - at));
+            if (brk == std::string::npos) break;
+            widest = std::max(widest, line);
+            line = 0.0f;
+            at = brk + 1;
+        }
+    }
+    return std::max(widest, line);
+}
+
 /// Break runs into lines no wider than wrapWidth.
 ///
 /// `measure` answers the width of a string. A wrapWidth of zero means no soft
