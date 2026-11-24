@@ -2548,8 +2548,11 @@ void GameHandler::registerRemainingOpcodes() {
     };
     // A plain guid: Unit::SendMountSpecialAnim writes GetGUID(), not the
     // packed form, so reading it packed consumed the wrong number of bytes.
-    dispatchTable_[Opcode::SMSG_MOUNTSPECIAL_ANIM] = [](network::Packet& packet) {
-        if (packet.hasRemaining(8)) (void)packet.readUInt64();
+    dispatchTable_[Opcode::SMSG_MOUNTSPECIAL_ANIM] = [this](network::Packet& packet) {
+        // 0x0071cb30: anyone's but the player's, who has seen it already.
+        if (!packet.hasRemaining(8)) return;
+        const uint64_t guid = packet.readUInt64();
+        if (guid != playerGuid && mountSpecialCallback_) mountSpecialCallback_(guid);
     };
     // Both are character-screen answers (0x004d9190, 0x004d92d0): the list is
     // updated, or CHAR_CUSTOMIZE_FAILED / the faction change's failure goes to

@@ -342,6 +342,24 @@ void AnimationCallbackHandler::setupCallbacks() {
         }
     });
 
+    // A mount rearing (0x0073ad60: animation 94 of its rider's unit, which is
+    // its mount's) - not one that stands deep in water (0x00718a20).
+    gameHandler_.setMountSpecialCallback([this](uint64_t guid) {
+        auto* cr = renderer_.getCharacterRenderer();
+        if (!cr) return;
+        uint32_t instanceId = 0;
+        if (guid == gameHandler_.getPlayerGuid()) {
+            instanceId = renderer_.getCharacterInstanceId();
+        } else {
+            const auto entity = gameHandler_.getEntityManager().getEntity(guid);
+            if (!entity || !entity->isUnit()) return;
+            if (entitySpawner_.deepInLiquid(static_cast<const game::Unit&>(*entity))) return;
+            instanceId = entitySpawner_.getPlayerInstanceId(guid);
+            if (instanceId == 0) instanceId = entitySpawner_.getCreatureInstanceId(guid);
+        }
+        if (instanceId != 0) cr->playAnimation(instanceId, rendering::anim::MOUNT_SPECIAL, false);
+    });
+
     // An emote's voice line. The client asks it of the unit the emote shows
     // on - 0x00746d60's emote-flagged branch, which is also where both emote
     // CVars are read - so what reaches the spawner is the narrated emote's

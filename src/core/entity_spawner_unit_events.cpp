@@ -1,6 +1,7 @@
 // The sounds a unit's model events play through the unit (0x00732650): its
 // CreatureSoundData's fidgets, wings and the rest (unit_model_events.hpp).
 #include "core/entity_spawner.hpp"
+#include "game/mount_special.hpp"
 
 #include "addons/lua_api_registrations.hpp"
 #include "game/entity.hpp"
@@ -876,14 +877,45 @@ std::pair<float, float> EntitySpawner::unitRippleSize(const game::Unit& unit) {
     return {scale, height};
 }
 
+float EntitySpawner::modelCollisionHeight(const game::Unit& unit) const {
+    namespace us = rendering::unit_splash;
+    auto displays = assetManager_ ? assetManager_->loadDBCOptional("CreatureDisplayInfo.dbc") : nullptr;
+    auto models = assetManager_ ? assetManager_->loadDBCOptional("CreatureModelData.dbc") : nullptr;
+    const int32_t display = displays ? displays->findRecordById(unit.getDisplayId()) : -1;
+    if (display < 0 || !models || models->getFieldCount() <= us::kModelCollisionHeightColumn)
+        return us::kDefaultCollisionHeight;
+    const auto drow = static_cast<uint32_t>(display);
+    const int32_t model = models->findRecordById(displays->getUInt32(drow, 1));
+    if (model < 0) return us::kDefaultCollisionHeight;
+    const auto mrow = static_cast<uint32_t>(model);
+    const uint16_t scaleField = game::fieldIndex(game::UF::OBJECT_FIELD_SCALE_X);
+    const float objectScale = scaleField != 0xFFFF ? std::bit_cast<float>(unit.getField(scaleField)) : 1.0f;
+    return us::collisionHeight(models->getFloat(mrow, us::kModelCollisionHeightColumn), objectScale,
+                               displays->getFloat(drow, us::kDisplayScaleColumn),
+                               models->getFloat(mrow, us::kModelScaleColumn));
+}
+
+bool EntitySpawner::deepInLiquid(const game::Unit& unit) const {
+    auto* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    auto* water = renderer_ ? renderer_->getWaterRenderer() : nullptr;
+    if (!cr || !water) return false;
+    const uint64_t guid = unit.getGuid();
+    uint32_t drawn = getPlayerInstanceId(guid);
+    if (drawn == 0) drawn = getCreatureInstanceId(guid);
+    if (const RemotePlayerMount* mount = getRemotePlayerMount(guid); mount && mount->instanceId != 0)
+        drawn = mount->instanceId;
+    glm::vec3 at;
+    if (drawn == 0 || !cr->getInstancePosition(drawn, at)) return false;
+    const auto level = water->getWaterHeightAt(at.x, at.y);
+    return level && game::deepInLiquid(*level - at.z, modelCollisionHeight(unit));
+}
+
 void EntitySpawner::playUnitSplashes(uint32_t localPlayerInstance) {
     namespace us = rendering::unit_splash;
     rendering::CharacterRenderer* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
     if (!cr || !gameHandler_ || !assetManager_) return;
     auto races = assetManager_->loadDBCOptional("ChrRaces.dbc");
     if (!races || races->getFieldCount() <= us::kChrRacesSplashSoundColumn) return;
-    auto displays = assetManager_->loadDBCOptional("CreatureDisplayInfo.dbc");
-    auto models = assetManager_->loadDBCOptional("CreatureModelData.dbc");
     rendering::WaterRenderer* water = renderer_->getWaterRenderer();
     const auto& entities = gameHandler_->getEntityManager();
     const auto& creatureInfo = gameHandler_->getCreatureInfoCache();
@@ -891,24 +923,7 @@ void EntitySpawner::playUnitSplashes(uint32_t localPlayerInstance) {
     const uint64_t mover = gameHandler_->activeMover();
     const bool listenerAtCharacter = addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0";
     const uint16_t bytes0 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0);
-    const uint16_t scaleField = game::fieldIndex(game::UF::OBJECT_FIELD_SCALE_X);
     rendering::M2EventSounds& player = renderer_->getM2EventSounds();
-
-    // The display's CreatureModelData CollisionHeight at its scale.
-    const auto modelHeight = [&](const game::Unit& unit) -> float {
-        const int32_t display = displays ? displays->findRecordById(unit.getDisplayId()) : -1;
-        if (display < 0 || !models || models->getFieldCount() <= us::kModelCollisionHeightColumn)
-            return us::kDefaultCollisionHeight;
-        const auto drow = static_cast<uint32_t>(display);
-        const int32_t model = models->findRecordById(displays->getUInt32(drow, 1));
-        if (model < 0) return us::kDefaultCollisionHeight;
-        const auto mrow = static_cast<uint32_t>(model);
-        const float objectScale =
-            scaleField != 0xFFFF ? std::bit_cast<float>(unit.getField(scaleField)) : 1.0f;
-        return us::collisionHeight(models->getFloat(mrow, us::kModelCollisionHeightColumn), objectScale,
-                                   displays->getFloat(drow, us::kDisplayScaleColumn),
-                                   models->getFloat(mrow, us::kModelScaleColumn));
-    };
 
     std::unordered_map<uint64_t, float> kept;
     const auto check = [&](uint64_t guid, uint32_t instanceId) {
@@ -951,7 +966,7 @@ void EntitySpawner::playUnitSplashes(uint32_t localPlayerInstance) {
             if (auto it = creatureInfo.find(unit.getEntry()); it != creatureInfo.end())
                 byModel = (it->second.typeFlags & us::kTypeFlagModelCollision) != 0;
         }
-        float height = byModel ? modelHeight(unit) : us::kDefaultCollisionHeight;
+        float height = byModel ? modelCollisionHeight(unit) : us::kDefaultCollisionHeight;
         if (guid == self && renderer_->getCameraController()) height = renderer_->getCameraController()->collisionHeight();
         if (!us::crossed(height, depth, lastDepth)) return;
         if (guid == mover && listenerAtCharacter) {

@@ -10,6 +10,7 @@
 #include "core/config_paths.hpp"
 #include "core/world_settle.hpp"
 #include "core/cinematic_player.hpp"
+#include "game/mount_special.hpp"
 #include "game/vehicle_camera.hpp"
 #include "game/vehicle_mover.hpp"
 #include "core/frame_pacer.hpp"
@@ -4172,6 +4173,26 @@ void Application::connectWorldHooks() {
         };
         state.fallOver = [this]() {
             if (auto* mh = gameHandler ? gameHandler->getMovementHandler() : nullptr) mh->endFallUnsaid();
+        };
+        state.jumpPressed = [this, cc](float liquidOverFeet) {
+            if (!gameHandler) return true;
+            const uint64_t self = gameHandler->getPlayerGuid();
+            if (gameHandler->activeMover() != self) return true;
+            // 0x0072eb80: the loot let go of, and what the key does.
+            gameHandler->closeLootByMoving();
+            const auto me = std::dynamic_pointer_cast<game::Unit>(gameHandler->getEntityManager().getEntity(self));
+            if (!me) return true;
+            const auto& move = gameHandler->getMovementInfo();
+            game::JumpKeyInput in;
+            in.mounted = me->getMountDisplayId() != 0;
+            if (in.mounted && entitySpawner_)
+                in.mountFlags = entitySpawner_->creatureModelFlags(me->getMountDisplayId()).value_or(0);
+            in.moveFlags = move.flags;
+            in.floating = move.hasFlag(game::MovementFlags::LEVITATING) || (move.flags2 & 0x4u) != 0;
+            in.deep = game::deepInLiquid(liquidOverFeet, cc->collisionHeight());
+            const game::JumpKey does = game::jumpKey(in);
+            if (does == game::JumpKey::MountSpecial) gameHandler->mountSpecial();
+            return does == game::JumpKey::Jump;
         };
         cc->setMoverStateHooks(std::move(state));
         // The player sitting down or getting up: the request to the server,

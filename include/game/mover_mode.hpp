@@ -148,5 +148,28 @@ inline void startFlying(MovementInfo& m, std::optional<uint32_t> fellMs) {
     endFall(m, fellMs);
 }
 
+/// What lets go of the loot the player has open as it is asked for: every
+/// start of a way to move or turn, the end of a pitch and a facing set; no
+/// stop, and no packet the server's word brings (0x0071b6b0's callers).
+inline bool releasesLoot(Opcode opcode) {
+    switch (opcode) {
+        case Opcode::MSG_MOVE_START_FORWARD:
+        case Opcode::MSG_MOVE_START_BACKWARD:
+        case Opcode::MSG_MOVE_START_STRAFE_LEFT:
+        case Opcode::MSG_MOVE_START_STRAFE_RIGHT:
+        case Opcode::MSG_MOVE_START_ASCEND:
+        case Opcode::MSG_MOVE_START_DESCEND:
+        case Opcode::MSG_MOVE_START_TURN_LEFT:
+        case Opcode::MSG_MOVE_START_TURN_RIGHT:
+        case Opcode::MSG_MOVE_START_PITCH_UP:
+        case Opcode::MSG_MOVE_START_PITCH_DOWN:
+        case Opcode::MSG_MOVE_STOP_PITCH:
+        case Opcode::MSG_MOVE_SET_FACING:
+            return true;
+        default:
+            return false;
+    }
+}
+
 }  // namespace game
 }  // namespace wowee

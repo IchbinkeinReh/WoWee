@@ -397,6 +397,8 @@ public:
     /// it lives and is not feigning death, faded out over half a second
     /// otherwise (0x007467f0).
     void updateUnitLoopSounds();
+    /// Whether a unit stands in liquid to its middle (0x00718a20).
+    [[nodiscard]] bool deepInLiquid(const game::Unit& unit) const;
     /// The race splash of each unit wading across four tenths of its height
     /// into or out of water (rendering/unit_splash.hpp).
     void playUnitSplashes(uint32_t localPlayerInstance);
@@ -1645,6 +1647,8 @@ private:
     /// Each unit's depth below the water at its last check while not
     /// swimming (+0x784), by guid.
     std::unordered_map<uint64_t, float> splashDepth_;
+    /// Its display's CreatureModelData CollisionHeight at its scale.
+    [[nodiscard]] float modelCollisionHeight(const game::Unit& unit) const;
     /// playerCollisionHeight's last answer, and the display and scale it was for.
     uint32_t collisionHeightDisplay_ = 0;
     uint32_t collisionHeightScaleBits_ = 0;

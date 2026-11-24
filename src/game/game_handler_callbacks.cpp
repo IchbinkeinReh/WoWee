@@ -3937,6 +3937,18 @@ void GameHandler::cancelTempEnchantment(uint8_t handIndex) {
     if (inventoryHandler_) inventoryHandler_->cancelTempEnchantment(handIndex);
 }
 
+void GameHandler::mountSpecial() {
+    if (mountSpecialCallback_) mountSpecialCallback_(playerGuid);
+    if (isInWorld()) socket->send(network::Packet(wireOpcode(Opcode::CMSG_MOUNTSPECIAL_ANIM)));
+}
+
+void GameHandler::closeLootByMoving() {
+    if (!inventoryHandler_ || !inventoryHandler_->isLootWindowOpen()) return;
+    constexpr uint64_t kHighItem = 0x4000;
+    if ((inventoryHandler_->getCurrentLoot().lootGuid >> 48) == kHighItem) return;
+    inventoryHandler_->closeLoot();
+}
+
 void GameHandler::closeLoot() {
     if (inventoryHandler_) inventoryHandler_->closeLoot();
 }

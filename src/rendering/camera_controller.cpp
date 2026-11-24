@@ -2316,6 +2316,10 @@ void CameraController::update(float deltaTime) {
     // Nor a turn or a jump for a held mover (0x005fa0d0, 0x005fbf80 ->
     // 0x0074ba40).
     if (moverHeld_) nowTurnLeft = nowTurnRight = nowJump = false;
+    if (nowJump && thirdPerson && followTarget && moverState_.jumpPressed) {
+        const auto liquid = portLiquidLevelAt(*followTarget);
+        nowJump = moverState_.jumpPressed(liquid ? *liquid - followTarget->z : 0.0f);
+    }
 
     // Keyboard turning updates camera yaw (character follows yaw in renderer).
     // Use server turn rate (rad/s) when set; otherwise fall back to WOW_TURN_SPEED (deg/s).

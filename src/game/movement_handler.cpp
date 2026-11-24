@@ -762,6 +762,10 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
         }
     }
 
+    // Starting to move or turn lets go of the loot (0x0072e5d0, 0x0072e680,
+    // 0x0072e730, 0x0072e7e0, 0x0072e900, 0x0072e9b0, 0x0072ead0).
+    if (moverIsPlayer && releasesLoot(opcode)) owner_.closeLootByMoving();
+
     // The state before this message. There is no event for the player starting
     // or stopping: PLAYER_STARTED_MOVING and PLAYER_STOPPED_MOVING are names from
     // a much later client, and this one's event-id table holds no movement name

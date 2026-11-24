@@ -341,6 +341,9 @@ public:
         std::function<void(uint32_t sinceMs)> fallBegan;
         std::function<void()> fallsFar;  ///< 0x2000 (isFallingFar)
         std::function<void()> fallOver;  ///< FallChange::Over
+        /// The jump key on the ground or in the air, with the liquid this far
+        /// over the feet: whether it jumps (0x0072eb80).
+        std::function<bool(float liquidOverFeet)> jumpPressed;
     };
     void setMoverStateHooks(MoverStateHooks hooks) { moverState_ = std::move(hooks); }
     /// How far the fall that landed last dropped from its highest point

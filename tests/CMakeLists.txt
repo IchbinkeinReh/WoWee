@@ -3417,6 +3417,12 @@ wowee_add_test(test_swim_motion
     SOURCES test_swim_motion.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_mount_special ───────────────────────────────────────
+# What the jump key does on a mount: one that stands rears. Header-only.
+wowee_add_test(test_mount_special
+    SOURCES test_mount_special.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_auto_attack ─────────────────────────────────────────
 # The player's own attack: asked for at any distance, said too far by the
 # server alone. Header-only.

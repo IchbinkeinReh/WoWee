@@ -631,6 +631,13 @@ public:
     using EmoteAnimCallback = std::function<void(uint64_t, uint32_t, bool)>;
     void setEmoteAnimCallback(EmoteAnimCallback cb) { emoteAnimCallback_ = std::move(cb); }
 
+    /// A unit's mount rears: animation 94 of the unit (0x0073ad60), the
+    /// player's own or another's (SMSG_MOUNTSPECIAL_ANIM).
+    using MountSpecialCallback = std::function<void(uint64_t guid)>;
+    void setMountSpecialCallback(MountSpecialCallback cb) { mountSpecialCallback_ = std::move(cb); }
+    /// The player's, and the server told (CMSG_MOUNTSPECIAL_ANIM).
+    void mountSpecial();
+
     // An emote's voice line (SMSG_TEXT_EMOTE): (senderGuid, EmotesText id).
     // Which clip, if any, the emote asks for is EmotesTextSound's answer, and
     // it is asked of the unit - which is why this only hands the ask along.
@@ -3174,6 +3181,10 @@ public:
     GameObjectPointer gameObjectPointer(uint64_t guid);
     void activateSpiritHealer(uint64_t npcGuid);
     bool isLootWindowOpen() const;
+    /// Starting to move, turning or jumping lets go of the loot (0x0072e5d0
+    /// and its like -> 0x00523640(1, 1, 0)) - not of an item's, which comes
+    /// along.
+    void closeLootByMoving();
     const LootResponseData& getCurrentLoot() const;
     void setAutoLoot(bool enabled);
     /// 0x00513700: whether a click auto loots - autoLootDefault, the other
@@ -6703,6 +6714,7 @@ private:
     RandomPropertyNameResolver randomPropertyNameResolver_;
     RandomStatResolver randomStatResolver_;
     EmoteAnimCallback emoteAnimCallback_;
+    MountSpecialCallback mountSpecialCallback_;
     EmoteSoundCallback emoteSoundCallback_;
     UnitReactionSoundCallback unitReactionSoundCallback_;
     PetActionSoundCallback petActionSoundCallback_;
