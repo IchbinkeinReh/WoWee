@@ -7599,6 +7599,14 @@ std::vector<std::string> Renderer::memoryReport(const std::vector<MemoryEntry>& 
     std::snprintf(buf, sizeof(buf), "Process: resident %.0f MB, private %.0f MB; system %.0f of %.0f MB available",
                   mb(pm.residentBytes), mb(pm.privateBytes), mb(mon.getAvailableRAM()), mb(mon.getTotalRAM()));
     lines.emplace_back(buf);
+    if (const auto heap = core::MemoryMonitor::heapUse(); heap.heaps != 0) {
+        std::snprintf(buf, sizeof(buf),
+                      "Heaps (%u): %.0f MB given out, %.0f MB held; address space: private %.0f MB, mapped %.0f MB, "
+                      "write-combined %.0f MB of them",
+                      heap.heaps, mb(heap.allocatedBytes), mb(heap.committedBytes), mb(heap.privateBytes),
+                      mb(heap.mappedBytes), mb(heap.writeCombinedBytes));
+        lines.emplace_back(buf);
+    }
     if (vkCtx && vkCtx->getAllocator()) {
         const VkPhysicalDeviceMemoryProperties* props = nullptr;
         vmaGetMemoryProperties(vkCtx->getAllocator(), &props);

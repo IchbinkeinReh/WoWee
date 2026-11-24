@@ -55,6 +55,19 @@ public:
     };
     [[nodiscard]] static ProcessMemory processMemory();
 
+    /// Where the process's own memory is, on Windows (0 elsewhere): what the
+    /// heaps have given out and what they hold for it - the difference is
+    /// free, kept by the heap - and the committed address space by kind.
+    struct HeapUse {
+        uint32_t heaps = 0;
+        uint64_t allocatedBytes = 0;
+        uint64_t committedBytes = 0;
+        uint64_t privateBytes = 0;        ///< MEM_PRIVATE, the heaps' too
+        uint64_t writeCombinedBytes = 0;  ///< of those and the mapped ones: memory the GPU reads
+        uint64_t mappedBytes = 0;
+    };
+    [[nodiscard]] static HeapUse heapUse();
+
 private:
     MemoryMonitor() = default;
     size_t totalRAM_ = 0;

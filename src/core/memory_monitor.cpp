@@ -1,5 +1,6 @@
 #include "core/memory_monitor.hpp"
 #include "core/logger.hpp"
+#include <algorithm>
 #include <fstream>
 #include <string>
 #include <sstream>
@@ -84,6 +85,31 @@ void MemoryMonitor::initialize() {
         LOG_WARNING("Could not detect system RAM, assuming 16GB");
     }
 #endif
+}
+
+MemoryMonitor::HeapUse MemoryMonitor::heapUse() {
+    HeapUse use;
+#ifdef _WIN32
+    HANDLE heaps[256]{};
+    const DWORD count = std::min<DWORD>(GetProcessHeaps(256, heaps), 256);
+    for (DWORD i = 0; i < count; ++i) {
+        HEAP_SUMMARY s{};
+        s.cb = sizeof(s);
+        if (!HeapSummary(heaps[i], 0, &s)) continue;
+        ++use.heaps;
+        use.allocatedBytes += s.cbAllocated;
+        use.committedBytes += s.cbCommitted;
+    }
+    MEMORY_BASIC_INFORMATION m{};
+    for (const char* at = nullptr; VirtualQuery(at, &m, sizeof(m)) == sizeof(m);
+         at = static_cast<const char*>(m.BaseAddress) + m.RegionSize) {
+        if (m.State != MEM_COMMIT) continue;
+        if (m.Type == MEM_PRIVATE) use.privateBytes += m.RegionSize;
+        else if (m.Type == MEM_MAPPED) use.mappedBytes += m.RegionSize;
+        if (m.Type != MEM_IMAGE && (m.Protect & PAGE_WRITECOMBINE) != 0) use.writeCombinedBytes += m.RegionSize;
+    }
+#endif
+    return use;
 }
 
 MemoryMonitor::ProcessMemory MemoryMonitor::processMemory() {
