@@ -8686,6 +8686,16 @@ void Application::refreshPlayerCharacterModel() {
 
     if (renderer) renderer->getCharacterPosition() = savedPos;
 
+    // As it sat: the client changes the seated model, the new one stood up on
+    // the chair.
+    if (gameHandler && renderer) {
+        const uint8_t stand = gameHandler->getStandState();
+        if (auto* cc = renderer->getCameraController()) cc->applyServerStandState(stand);
+        auto* cr = renderer->getCharacterRenderer();
+        if (cr && renderer->getCharacterInstanceId() != 0)
+            cr->standStateChanged(renderer->getCharacterInstanceId(), stand);
+    }
+
     // Force equipment geosets/textures to be re-composited onto the fresh model
     // next frame - the respawn only builds the base body, and equipment isn't
     // "dirty" (nothing was equipped), so without this the model loses its armor.
