@@ -1635,6 +1635,14 @@ private:
     /// A unit's sound slot (0x00747310): by its chance unless `always`, at
     /// `at` or where the unit is.
     void playUnitSlot(const game::Unit& unit, uint32_t slot, bool always, const glm::vec3* at);
+    /// What a unit breathes (0x0071fa90), kept for ten seconds.
+    struct UnitAir {
+        bool underwater = false;
+        bool cold = false;
+        uint32_t askedMs = 0;
+    };
+    std::unordered_map<uint64_t, UnitAir> unitAir_;
+    void unitBreathes(const game::Unit& unit, const glm::vec3& at);
     /// A unit's voice line of some kind (0x007474b0): the column its kind reads
     /// from the CreatureSoundData row its display gives it.
     void playUnitVoiceKind(const game::Unit& unit, uint32_t kind);

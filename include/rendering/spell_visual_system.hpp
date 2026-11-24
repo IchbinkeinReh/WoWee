@@ -75,10 +75,10 @@ public:
     /// One SpellVisualEffectName model on a unit's attachment, played once as
     /// a kit's impact model is (0x006f94c0 with 0x00744870) - a blood spurt.
     /// Nothing where the unit's model has no such attachment.
-    void playEffectModelOnUnit(uint32_t effectNameId, uint32_t renderInstanceId, int32_t attachment);
-    /// The SpellVisualEffectName row of this name on a unit's base (attachment 19), as
-    /// 0x006f9260 puts one of the client's own on it.
-    void playNamedEffectOnUnit(const std::string& name, uint32_t renderInstanceId);
+    bool playEffectModelOnUnit(uint32_t effectNameId, uint32_t renderInstanceId, int32_t attachment);
+    /// The SpellVisualEffectName row of this name on a unit, as 0x006f9260 puts one of
+    /// the client's own on it: at the attachment where its model has it, else its base (19).
+    void playNamedEffectOnUnit(const std::string& name, uint32_t renderInstanceId, int32_t attachment = 19);
 
     /// A ground-aimed cast's area kits at its destination (0x0080e1b0): the
     /// InstantAreaKit (+0x5c), and the ImpactAreaKit (+0x60) unless a

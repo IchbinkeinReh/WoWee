@@ -1899,30 +1899,34 @@ std::vector<SpellVisualSystem::KitModelInstance> SpellVisualSystem::playKitModel
     return shown;
 }
 
-void SpellVisualSystem::playEffectModelOnUnit(uint32_t effectNameId, uint32_t renderInstanceId, int32_t attachment) {
+bool SpellVisualSystem::playEffectModelOnUnit(uint32_t effectNameId, uint32_t renderInstanceId, int32_t attachment) {
     loadSpellVisualDbc();
-    if (!m2Renderer_ || renderInstanceId == 0) return;
+    if (!m2Renderer_ || renderInstanceId == 0) return false;
     const auto path = effectNamePaths_.find(effectNameId);
-    if (path == effectNamePaths_.end()) return;
+    if (path == effectNamePaths_.end()) return false;
     glm::mat4 transform(1.0f);
     float scale = 1.0f;
     if (!kitModelTransform(renderInstanceId, attachment, glm::mat4(1.0f), 1.0f, 0.0f, 1e30f, transform, scale))
-        return;
+        return false;
     const uint32_t modelId = acquireEffectModel(path->second);
-    if (modelId == 0) return;
+    if (modelId == 0) return false;
     const uint32_t instanceId = m2Renderer_->createInstance(modelId, glm::vec3(transform[3]), glm::vec3(0.0f), 1.0f);
-    if (instanceId == 0) return;
+    if (instanceId == 0) return false;
     m2Renderer_->restartInstanceAnimation(instanceId);
     setEffectEventOwner(instanceId, renderInstanceId);
     m2Renderer_->setInstanceTransform(instanceId, transform);
     addKitModel(instanceId, spell_kit::KitModelLife::Once, false, 0, true,
                 static_cast<uint32_t>(attachment), renderInstanceId, scale, glm::mat4(1.0f));
+    return true;
 }
 
-void SpellVisualSystem::playNamedEffectOnUnit(const std::string& name, uint32_t renderInstanceId) {
+void SpellVisualSystem::playNamedEffectOnUnit(const std::string& name, uint32_t renderInstanceId,
+                                              int32_t attachment) {
     loadSpellVisualDbc();
     constexpr int32_t kBase = 19;
-    if (const auto id = effectIdsByName_.find(name); id != effectIdsByName_.end())
+    const auto id = effectIdsByName_.find(name);
+    if (id == effectIdsByName_.end()) return;
+    if (!playEffectModelOnUnit(id->second, renderInstanceId, attachment) && attachment != kBase)
         playEffectModelOnUnit(id->second, renderInstanceId, kBase);
 }
 
