@@ -282,7 +282,6 @@ public:
     void setStreamFocus(const std::optional<glm::vec3>& focus) { streamFocus_ = focus; }
     void setStreamingEnabled(bool enabled) { streamingEnabled = enabled; }
     void setUpdateInterval(float seconds) { updateInterval = seconds; }
-    void setTaxiStreamingMode(bool enabled) { taxiStreamingMode_ = enabled; }
     void setGroundClutterDensityScale(float scale) { groundClutterDensityScale_ = glm::clamp(scale, 0.0f, 1.5f); }
     [[nodiscard]] float getGroundClutterDensityScale() const { return groundClutterDensityScale_; }
 
@@ -606,7 +605,6 @@ private:
     float updateInterval = 0.033f;  // Check streaming every 33ms (~30 fps)
     float timeSinceLastUpdate = 0.0f;
     float proactiveStreamTimer_ = 0.0f;
-    bool taxiStreamingMode_ = false;
     bool isCustomZone_ = false;
 
     // Collision data for custom zones (loaded from WOC files)
@@ -630,7 +628,7 @@ private:
     int workerCount = 0;
     // THREAD-SAFE: guards loadQueue, readyQueue, and pendingTiles.
     // Workers wait on queueCV; main thread signals when new tiles are enqueued
-    // or when readyQueue drains below maxReadyQueueSize_.
+    // or when readyQueue drains below terrain_stream::kReadyTiles.
     std::mutex queueMutex;
     std::condition_variable queueCV;
     std::deque<TileCoord> loadQueue;              // THREAD-SAFE: protected by queueMutex
@@ -639,11 +637,14 @@ private:
     // A worker with no tile to take helps with the front one. Protected by
     // queueMutex.
     std::deque<std::shared_ptr<core::WorkBatch>> helpBatches_;
-    // Maximum number of prepared-but-not-finalized tiles in readyQueue.
-    // Each prepared tile can hold 100–500 MB of decoded textures in RAM.
-    // Workers sleep when this limit is reached, letting the main thread
-    // finalize (GPU-upload + free) before more tiles are prepared.
-    static constexpr size_t maxReadyQueueSize_ = 3;
+    // Few prepared tiles wait in readyQueue (terrain_stream::mayPrepare): each
+    // can hold 100-500 MB of decoded textures in RAM. Workers wait when it is
+    // full, letting the main thread finalize (GPU-upload + free) before more
+    // tiles are prepared.
+    /// The next tile read into finalizingTiles_, where none is there
+    /// (terrain_stream::takesReady); `keepReach` drops those the player has
+    /// left behind. Wakes the workers where it made room.
+    void takeReadyTile(bool keepReach);
     std::atomic<long long> prepareNs_{0};      // takeWorkerReport
     std::atomic<long long> readyFullWaits_{0};
 

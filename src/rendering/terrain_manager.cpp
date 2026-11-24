@@ -1562,12 +1562,14 @@ void TerrainManager::workerLoop() {
                 continue;
             }
             if (!pressure) memoryWaitReported_ = false;
-            if (readyQueue.size() >= maxReadyQueueSize_) {
-                // Finalization is behind - sleep briefly to let the main
-                // thread catch up.
+            if (!terrain_stream::mayPrepare(readyQueue.size())) {
+                // Finalization is behind - wait for the main thread to take
+                // one (takeReadyTile).
                 ++readyFullWaits_;
-                lock.unlock();
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                queueCV.wait_for(lock, std::chrono::milliseconds(50), [this]() {
+                    return terrain_stream::mayPrepare(readyQueue.size()) || !helpBatches_.empty() ||
+                           !workerRunning.load();
+                });
                 continue;
             }
 
@@ -1631,26 +1633,8 @@ void TerrainManager::processReadyTiles() {
         vk && vk->isDeviceLost()) {
         return;
     }
-    // Move newly ready tiles into the finalizing deque.
-    // Keep them in pendingTiles so streamTiles() won't re-enqueue them.
-    {
-        std::lock_guard<std::mutex> lock(queueMutex);
-        while (!readyQueue.empty()) {
-            auto pending = readyQueue.front();
-            readyQueue.pop();
-            if (!pending) continue;
-            // Read for a place the player has since left: finalizing it would
-            // upload a tile only to queue its unload. Forgotten instead, and
-            // read again should the player come back.
-            if (!withinKeepReach(pending->coord)) {
-                pendingTiles.erase(pending->coord);
-                continue;
-            }
-            FinalizingTile ft;
-            ft.pending = std::move(pending);
-            finalizingTiles_.push_back(std::move(ft));
-        }
-    }
+    // Kept in pendingTiles meanwhile, so streamTiles() won't re-enqueue them.
+    takeReadyTile(/*keepReach=*/true);
 
     VkContext* vkCtx = terrainRenderer ? terrainRenderer->getVkContext() : nullptr;
 
@@ -1669,7 +1653,7 @@ void TerrainManager::processReadyTiles() {
     // and M2 model loads can occasionally spike. The budget ensures we
     // spread heavy tiles across multiple frames instead of blocking.
     const auto budgetStart = std::chrono::steady_clock::now();
-    const float budgetMs = taxiStreamingMode_ ? 16.0f : 8.0f;
+    const float budgetMs = 8.0f;
 
     if (vkCtx) vkCtx->beginUploadBatch();
 
@@ -1721,6 +1705,7 @@ void TerrainManager::processReadyTiles() {
         }
         if (done) {
             finalizingTiles_.pop_front();
+            takeReadyTile(/*keepReach=*/true);
         }
         float elapsed = std::chrono::duration<float, std::milli>(
             std::chrono::steady_clock::now() - budgetStart).count();
@@ -1738,10 +1723,9 @@ void TerrainManager::processPendingUnloads() {
     // Time-budgeted rather than count-capped (see pendingUnloadQueue_'s comment) so
     // throughput scales with whatever time is actually available this frame instead
     // of a fixed tile count that can't keep pace when frame rate drops or the queue
-    // is unusually large (e.g. after a long, fast taxi flight). Taxi mode gets a
-    // larger budget, matching processReadyTiles()'s existing taxi-aware budget.
+    // is unusually large (e.g. after a long, fast taxi flight).
     const auto budgetStart = std::chrono::steady_clock::now();
-    const float budgetMs = taxiStreamingMode_ ? 16.0f : 8.0f;
+    const float budgetMs = 8.0f;
 
     size_t unloaded = 0;
     while (!pendingUnloadQueue_.empty()) {
@@ -1767,20 +1751,32 @@ void TerrainManager::processPendingUnloads() {
     }
 }
 
-int TerrainManager::processOneReadyTile() {
-    // Move ready tiles into finalizing deque
+void TerrainManager::takeReadyTile(bool keepReach) {
+    bool room = false;
     {
         std::lock_guard<std::mutex> lock(queueMutex);
-        while (!readyQueue.empty()) {
+        while (terrain_stream::takesReady(finalizingTiles_.size()) && !readyQueue.empty()) {
             auto pending = readyQueue.front();
             readyQueue.pop();
-            if (pending) {
-                FinalizingTile ft;
-                ft.pending = std::move(pending);
-                finalizingTiles_.push_back(std::move(ft));
+            room = true;
+            if (!pending) continue;
+            // Read for a place the player has since left: finalizing it would
+            // upload a tile only to queue its unload. Forgotten instead, and
+            // read again should the player come back.
+            if (keepReach && !withinKeepReach(pending->coord)) {
+                pendingTiles.erase(pending->coord);
+                continue;
             }
+            FinalizingTile ft;
+            ft.pending = std::move(pending);
+            finalizingTiles_.push_back(std::move(ft));
         }
     }
+    if (room) queueCV.notify_all();
+}
+
+int TerrainManager::processOneReadyTile() {
+    takeReadyTile(/*keepReach=*/false);
     // Finalize ONE tile completely, then return so caller can update the screen
     if (!finalizingTiles_.empty()) {
         VkContext* vkCtx = terrainRenderer ? terrainRenderer->getVkContext() : nullptr;
@@ -2093,7 +2089,6 @@ void TerrainManager::ensureGroundEffectTablesLoaded() {
 
 void TerrainManager::generateGroundClutterPlacements(std::shared_ptr<PendingTile>& pending,
                                                      std::unordered_set<uint32_t>& preparedModelIds) {
-    if (taxiStreamingMode_) return;  // Skip clutter while on taxi flights.
     if (!pending || groundEffectById_.empty() || groundDoodadModelById_.empty()) return;
 
     // The client's groundEffectDensity: how many cells of a chunk it picks

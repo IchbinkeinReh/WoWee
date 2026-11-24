@@ -9,10 +9,13 @@
 
 #include <glm/glm.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <set>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 using namespace wowee::rendering::terrain_stream;
 
@@ -220,4 +223,38 @@ TEST_CASE("a unit is held only over a tile that is still to come", "[terrain_str
     // None there: open sea, or a map of one building.
     CHECK_FALSE(tileComing(true, false, true));
     CHECK_FALSE(tileComing(false, false, false));
+}
+
+// On a flight path at ten frames a second the workers read the whole square of
+// tiles ahead of the main thread, and all of them were in memory at once.
+TEST_CASE("few tiles are read ahead of a slow main thread", "[terrain_stream]") {
+    constexpr size_t kWorkers = 8;
+    size_t toRead = 300, waiting = 0, puttingIn = 0, done = 0, mostHeld = 0;
+    std::vector<int> reading;  // ticks left of each worker's tile
+    int putTicks = 0;
+    for (int tick = 0; tick < 100000 && done < 300; ++tick) {
+        for (int& left : reading) --left;
+        for (size_t i = reading.size(); i-- > 0;)
+            if (reading[i] <= 0) {
+                reading.erase(reading.begin() + static_cast<std::ptrdiff_t>(i));
+                ++waiting;
+            }
+        while (reading.size() < kWorkers && toRead > 0 && mayPrepare(waiting)) {
+            reading.push_back(3);
+            --toRead;
+        }
+        // The main thread, every tick a frame: what it takes, then its work.
+        while (takesReady(puttingIn) && waiting > 0) {
+            --waiting;
+            ++puttingIn;
+        }
+        if (puttingIn > 0 && ++putTicks >= 20) {
+            putTicks = 0;
+            --puttingIn;
+            ++done;
+        }
+        mostHeld = std::max(mostHeld, waiting + puttingIn + reading.size());
+    }
+    CHECK(done == 300);
+    CHECK(mostHeld <= kReadyTiles + kWorkers);
 }

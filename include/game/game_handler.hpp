@@ -4614,8 +4614,6 @@ public:
     void checkMountRoom(uint32_t mountDisplay);
 
     // Taxi terrain precaching callback
-    using TaxiPrecacheCallback = std::function<void(const std::vector<glm::vec3>&)>;
-    void setTaxiPrecacheCallback(TaxiPrecacheCallback cb) { taxiPrecacheCallback_ = std::move(cb); }
 
     // Taxi orientation callback (for mount rotation: yaw, pitch, roll in radians)
     using TaxiOrientationCallback = std::function<void(float yaw, float pitch, float roll)>;
@@ -5963,7 +5961,6 @@ public:
     auto& taxiFlightStartCallbackRef() { return taxiFlightStartCallback_; }
     auto& taxiOrientationCallbackRef() { return taxiOrientationCallback_; }
     auto& playerPositionCorrectionCallbackRef() { return playerPositionCorrectionCallback_; }
-    auto& taxiPrecacheCallbackRef() { return taxiPrecacheCallback_; }
     auto& transportMoveCallbackRef() { return transportMoveCallback_; }
     auto& unitJumpCallbackRef() { return unitJumpCallback_; }
     auto& unitMoveFlagsCallbackRef() { return unitMoveFlagsCallback_; }
@@ -7719,7 +7716,6 @@ private:
     AreaDiscoveryCallback areaDiscoveryCallback_;
     QuestProgressCallback questProgressCallback_;
     MountCallback mountCallback_;
-    TaxiPrecacheCallback taxiPrecacheCallback_;
     TaxiOrientationCallback taxiOrientationCallback_;
     PlayerPositionCorrectionCallback playerPositionCorrectionCallback_;
     TaxiFlightStartCallback taxiFlightStartCallback_;

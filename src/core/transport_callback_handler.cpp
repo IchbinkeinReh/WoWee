@@ -45,59 +45,6 @@ void TransportCallbackHandler::setupCallbacks() {
 
     });
 
-    // Taxi precache callback - preload terrain tiles along flight path
-    gameHandler_.setTaxiPrecacheCallback([this](const std::vector<glm::vec3>& path) {
-        if (!renderer_.getTerrainManager()) return;
-
-        std::set<std::pair<int, int>> uniqueTiles;
-
-        // Sample waypoints along path and gather tiles.
-        // Denser sampling + neighbor coverage reduces in-flight stream spikes.
-        const size_t stride = 2;
-        for (size_t i = 0; i < path.size(); i += stride) {
-            const auto& waypoint = path[i];
-            glm::vec3 renderPos = core::coords::canonicalToRender(waypoint);
-            int tileX = static_cast<int>(32 - (renderPos.x / core::coords::TILE_SIZE));
-            int tileY = static_cast<int>(32 - (renderPos.y / core::coords::TILE_SIZE));
-
-            if (tileX >= 0 && tileX <= 63 && tileY >= 0 && tileY <= 63) {
-                for (int dx = -1; dx <= 1; ++dx) {
-                    for (int dy = -1; dy <= 1; ++dy) {
-                        int nx = tileX + dx;
-                        int ny = tileY + dy;
-                        if (nx >= 0 && nx <= 63 && ny >= 0 && ny <= 63) {
-                            uniqueTiles.insert({nx, ny});
-                        }
-                    }
-                }
-            }
-        }
-        // Ensure final destination tile is included.
-        if (!path.empty()) {
-            glm::vec3 renderPos = core::coords::canonicalToRender(path.back());
-            int tileX = static_cast<int>(32 - (renderPos.x / core::coords::TILE_SIZE));
-            int tileY = static_cast<int>(32 - (renderPos.y / core::coords::TILE_SIZE));
-            if (tileX >= 0 && tileX <= 63 && tileY >= 0 && tileY <= 63) {
-                for (int dx = -1; dx <= 1; ++dx) {
-                    for (int dy = -1; dy <= 1; ++dy) {
-                        int nx = tileX + dx;
-                        int ny = tileY + dy;
-                        if (nx >= 0 && nx <= 63 && ny >= 0 && ny <= 63) {
-                            uniqueTiles.insert({nx, ny});
-                        }
-                    }
-                }
-            }
-        }
-
-        std::vector<std::pair<int, int>> tilesToLoad(uniqueTiles.begin(), uniqueTiles.end());
-        if (tilesToLoad.size() > 512) {
-            tilesToLoad.resize(512);
-        }
-        LOG_INFO("Precaching ", tilesToLoad.size(), " tiles for taxi route");
-        renderer_.getTerrainManager()->precacheTiles(tilesToLoad);
-    });
-
     // Taxi orientation callback - update mount rotation during flight
     gameHandler_.setTaxiOrientationCallback([this](float yaw, float pitch, float roll) {
         if (renderer_.getCameraController()) {

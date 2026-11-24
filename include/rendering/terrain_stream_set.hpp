@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <utility>
 #include <vector>
 
@@ -62,6 +63,17 @@ inline float loadReach(float farClip) {
 inline constexpr bool tileComing(bool streaming, bool loaded, bool missing) {
     return streaming && !loaded && !missing;
 }
+
+/// How many tiles read may wait to be put in the world. Each holds its models
+/// and textures decoded, a few hundred megabytes in a city.
+inline constexpr size_t kReadyTiles = 3;
+/// Whether a worker reads another with this many waiting.
+inline constexpr bool mayPrepare(size_t waiting) { return waiting < kReadyTiles; }
+/// Whether the main thread takes the next of them: as it is done with the one
+/// it is putting in, and not before. It took all there were, every frame, and
+/// none ever waited: the workers read the whole square ahead of it - every
+/// tile of it in memory at once, where the frames are few.
+inline constexpr bool takesReady(size_t puttingIn) { return puttingIn == 0; }
 
 /// The reach a loaded tile is kept to.
 inline float unloadReach(float loadReachYards) { return loadReachYards + kUnloadHysteresis; }

@@ -4024,33 +4024,6 @@ void MovementHandler::activateTaxi(uint32_t destNodeId) {
         sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
     }
 
-    if (owner_.taxiPrecacheCallbackRef()) {
-        std::vector<glm::vec3> previewPath;
-        for (size_t i = 0; i + 1 < path.size(); i++) {
-            uint32_t fromNode = path[i];
-            uint32_t toNode = path[i + 1];
-            uint32_t pathId = 0;
-            for (const auto& edge : taxiPathEdges_) {
-                if (edge.fromNode == fromNode && edge.toNode == toNode) {
-                    pathId = edge.pathId;
-                    break;
-                }
-            }
-            if (pathId == 0) continue;
-            auto pathIt = taxiPathNodes_.find(pathId);
-            if (pathIt != taxiPathNodes_.end()) {
-                for (const auto& wpNode : pathIt->second) {
-                    glm::vec3 serverPos(wpNode.x, wpNode.y, wpNode.z);
-                    glm::vec3 canonical = core::coords::serverToCanonical(serverPos);
-                    previewPath.push_back(canonical);
-                }
-            }
-        }
-        if (previewPath.size() >= 2) {
-            owner_.taxiPrecacheCallbackRef()(previewPath);
-        }
-    }
-
     if (owner_.taxiFlightStartCallbackRef()) {
         owner_.taxiFlightStartCallbackRef()();
     }

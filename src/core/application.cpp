@@ -5179,17 +5179,13 @@ void Application::applyServerMovementState(float deltaTime) {
     }
     if (renderer && renderer->getTerrainManager()) {
     renderer->getTerrainManager()->setStreamingEnabled(true);
-    // Taxi flights move fast (32 u/s) - load further ahead so terrain is ready
-    // before the camera arrives.  Keep updates frequent to spot new tiles early.
-    renderer->getTerrainManager()->setUpdateInterval(onTaxi ? 0.033f : 0.033f);
-    constexpr float kTile = core::coords::TILE_SIZE;
-    const float configuredLoadReach = renderer->getTerrainLoadReach();
-    const float configuredUnloadReach = renderer->getTerrainUnloadReach();
-    renderer->getTerrainManager()->setLoadReach(
-        onTaxi ? std::max(8.0f * kTile, configuredLoadReach) : configuredLoadReach);
-    renderer->getTerrainManager()->setUnloadReach(
-        onTaxi ? std::max(12.0f * kTile, configuredUnloadReach) : configuredUnloadReach);
-    renderer->getTerrainManager()->setTaxiStreamingMode(onTaxi);
+    renderer->getTerrainManager()->setUpdateInterval(0.033f);
+    // The same square about the camera in flight as on foot (0x00780860 asks
+    // the far clip and nothing else). It was eight tiles each way and twelve
+    // to keep on a flight path, and the route besides: 450 tiles in by
+    // Orgrimmar, 100000 terrain meshes for the rays, and 16 GB in all.
+    renderer->getTerrainManager()->setLoadReach(renderer->getTerrainLoadReach());
+    renderer->getTerrainManager()->setUnloadReach(renderer->getTerrainUnloadReach());
     }
     if (worldEntryCallbacks_) worldEntryCallbacks_->setLastTaxiFlight(actuallyFlying);
 
