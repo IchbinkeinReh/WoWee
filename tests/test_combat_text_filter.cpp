@@ -100,3 +100,21 @@ TEST_CASE("mechanic floaters follow the fct settings", "[combattext]") {
     CHECK(mechanicFloaterShown(false, true, true, false));
     CHECK_FALSE(mechanicFloaterShown(false, false, true, true));
 }
+
+// A spell's number came with a text for what was absorbed or resisted of it.
+TEST_CASE("a spell's damage or heal is one text", "[combat_text]") {
+    CHECK(spellDamageText(100, 20, 10, 30, false) == T::SPELL_DAMAGE);
+    CHECK(spellDamageText(100, 0, 0, 0, true) == T::CRIT_DAMAGE);
+    CHECK(spellDamageText(100, 0, 0, 0, false, true) == T::PERIODIC_DAMAGE);
+    CHECK(spellDamageText(0, 20, 10, 30, false) == T::ABSORB);
+    CHECK(spellDamageText(0, 0, 10, 30, false) == T::BLOCK);
+    CHECK(spellDamageText(0, 0, 0, 30, true) == T::RESIST);
+    CHECK_FALSE(spellDamageText(0, 0, 0, 0, false).has_value());
+    CHECK(healTextShown(0u, false, 0));
+    CHECK_FALSE(healTextShown(0x80u, false, 0));
+    CHECK_FALSE(healTextShown(0x100u, false, 0));
+    CHECK_FALSE(healTextShown(std::nullopt, false, 0));
+    CHECK(healTextShown(0u, true, 15000));
+    CHECK(healTextShown(0u, true, -1));
+    CHECK_FALSE(healTextShown(0u, true, 60000));
+}

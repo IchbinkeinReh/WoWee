@@ -103,7 +103,7 @@ public:
     /// its spell (floaterIsSwing).
     void addCombatText(CombatTextEntry::Type type, int32_t amount, uint32_t spellId,
                        bool isPlayerSource, uint8_t powerType = 0,
-                       uint64_t srcGuid = 0, uint64_t dstGuid = 0, bool spellFlag = false);
+                       uint64_t srcGuid = 0, uint64_t dstGuid = 0, bool spellFlag = false, bool periodic = false);
 
     // Spellsteal dedup (used by aura update handler)
     bool shouldLogSpellstealAura(uint64_t casterGuid, uint64_t victimGuid, uint32_t spellId);

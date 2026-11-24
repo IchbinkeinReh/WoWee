@@ -819,3 +819,29 @@ TEST_CASE("a blow shows what it did as it is settled", "[replay][playtest]") {
     s.handler().setBloodSpurtCallback({});
     s.handler().setAddonEventValuesCallback({});
 }
+
+// A spell's number came with a word for what was absorbed or resisted of it, a share
+// of split damage and a hidden spell's as well, and a pet's never.
+TEST_CASE("a spell's damage is one text", "[replay][playtest]") {
+    using T = wowee::game::CombatTextEntry;
+    using Types = std::vector<T::Type>;
+    Session s;
+    spawnFoes(s);
+    s.handler().spellNameCacheRef()[kFireball].name = "Fireball";
+    s.handler().spellNameCacheRef()[kProc].name = "Proc";
+    s.handler().spellNameCacheRef()[kProc].attr = 0x100;
+    const auto hit = [&](uint64_t caster, uint32_t spell, uint32_t damage, uint32_t absorbed, uint32_t resisted,
+                         uint32_t blocked, uint32_t flags) {
+        s.receive(spellHit(caster, kWolf, spell, damage, absorbed, resisted, blocked, flags));
+        return floaters(s);
+    };
+    CHECK(hit(Session::kPlayerGuid, kFireball, 100, 20, 30, 0, 0) == Types{T::SPELL_DAMAGE});
+    CHECK(hit(Session::kPlayerGuid, kFireball, 100, 0, 0, 0, 2) == Types{T::CRIT_DAMAGE});
+    CHECK(hit(Session::kPlayerGuid, kFireball, 0, 20, 30, 0, 0) == Types{T::ABSORB});
+    CHECK(hit(Session::kPlayerGuid, kFireball, 0, 0, 30, 10, 0) == Types{T::BLOCK});
+    CHECK(hit(Session::kPlayerGuid, kFireball, 0, 0, 30, 0, 0) == Types{T::RESIST});
+    CHECK(hit(Session::kPlayerGuid, kFireball, 100, 0, 0, 0, 8).empty());
+    CHECK(hit(Session::kPlayerGuid, kProc, 100, 0, 0, 0, 0).empty());
+    CHECK(hit(kPet, kFireball, 100, 0, 0, 0, 0) == Types{T::SPELL_DAMAGE});
+    CHECK(hit(0xF130000BEC001599ull, kFireball, 100, 0, 0, 0, 0).empty());
+}

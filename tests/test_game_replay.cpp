@@ -181,6 +181,8 @@ std::vector<wowee::game::CombatTextEntry::Type> spellMissText(uint64_t caster, u
                                                                uint8_t missInfo) {
     Session s;
     huntMob(s);
+    // The client has the spell's record (0x006d3090 reads its Attributes 0x100).
+    s.handler().spellNameCacheRef()[kArcaneShot].name = "Arcane Shot";
     s.handler().setTarget(kMob);
     s.receive(spellMiss(caster, victim, kArcaneShot, missInfo));
     std::vector<wowee::game::CombatTextEntry::Type> types;

@@ -668,7 +668,7 @@ bool combatTextIsDamage(CombatTextEntry::Type type) {
 }  // namespace
 
 void CombatHandler::addCombatText(CombatTextEntry::Type type, int32_t amount, uint32_t spellId, bool isPlayerSource, uint8_t powerType,
-                                  uint64_t srcGuid, uint64_t dstGuid, bool spellFlag) {
+                                  uint64_t srcGuid, uint64_t dstGuid, bool spellFlag, bool periodic) {
     // A hit that did the player damage (playerDamageHits), before the
     // filters: the player is its target (by guid, or by no target given and
     // the player not its source), and it took health.
@@ -702,7 +702,7 @@ void CombatHandler::addCombatText(CombatTextEntry::Type type, int32_t amount, ui
             }
         }
         const auto source = static_cast<FloaterSource>(floaterSourceOf(srcGuid, isPlayerSource));
-        floater = worldFloaterShown(type, source, dstGuid == owner_.getPlayerGuid(), false, meleeLike, settings);
+        floater = worldFloaterShown(type, source, dstGuid == owner_.getPlayerGuid(), periodic, meleeLike, settings);
         floaterArgb = floaterColour(type, source, meleeLike);
     }
 
@@ -1051,6 +1051,7 @@ void CombatHandler::handleAttackerStateUpdate(network::Packet& packet) {
         hostileAttackers_.insert(data.attackerGuid);
         autoTargetAttacker(data.attackerGuid);
     }
+}
 
 bool CombatHandler::combatTextOurs(uint64_t src, uint64_t dst) const {
     const uint64_t player = owner_.getPlayerGuid();
@@ -1104,20 +1105,18 @@ void CombatHandler::handleSpellDamageLog(network::Packet& packet) {
 
     bool isPlayerSource = (data.attackerGuid == owner_.getPlayerGuid());
     bool isPlayerTarget = (data.targetGuid == owner_.getPlayerGuid());
-    if (!isPlayerSource && !isPlayerTarget) return;  // Not our combat
-
     if (isPlayerTarget && data.attackerGuid != 0) {
         hostileAttackers_.insert(data.attackerGuid);
         autoTargetAttacker(data.attackerGuid);
     }
 
-    auto type = data.isCrit ? CombatTextEntry::CRIT_DAMAGE : CombatTextEntry::SPELL_DAMAGE;
-    if (data.damage > 0)
-        addCombatText(type, static_cast<int32_t>(data.damage), data.spellId, isPlayerSource, 0, data.attackerGuid, data.targetGuid);
-    if (data.absorbed > 0)
-        addCombatText(CombatTextEntry::ABSORB, static_cast<int32_t>(data.absorbed), data.spellId, isPlayerSource, 0, data.attackerGuid, data.targetGuid);
-    if (data.resisted > 0)
-        addCombatText(CombatTextEntry::RESIST, static_cast<int32_t>(data.resisted), data.spellId, isPlayerSource, 0, data.attackerGuid, data.targetGuid);
+    // One text over the target, the damage or why there was none; none of a
+    // share of split damage, nor of a spell the log hides (0x006d3840).
+    if ((data.hitFlags & 0x8u) != 0 || !unit_combat::spellRaises(owner_.getSpellAttributes(data.spellId))) return;
+    if (!combatTextOurs(data.attackerGuid, data.targetGuid)) return;
+    if (const auto type = spellDamageText(data.damage, data.absorbed, data.blocked, data.resisted, data.isCrit))
+        addCombatText(*type, static_cast<int32_t>(data.damage), data.spellId, isPlayerSource, 0, data.attackerGuid,
+                      data.targetGuid);
 }
 
 void CombatHandler::handleSpellHealLog(network::Packet& packet) {
@@ -1138,12 +1137,16 @@ void CombatHandler::handleSpellHealLog(network::Packet& packet) {
                               unit_combat::kPhysicalSchoolMask, data.isCrit ? 0x200u : 0u);
 
     bool isPlayerSource = (data.casterGuid == owner_.getPlayerGuid());
-    bool isPlayerTarget = (data.targetGuid == owner_.getPlayerGuid());
-    if (!isPlayerSource && !isPlayerTarget) return;  // Not our combat
+    if (!combatTextOurs(data.casterGuid, data.targetGuid)) return;
 
-    auto type = data.isCrit ? CombatTextEntry::CRIT_HEAL : CombatTextEntry::HEAL;
-    addCombatText(type, static_cast<int32_t>(data.heal), data.spellId, isPlayerSource, 0, data.casterGuid, data.targetGuid);
-    if (data.absorbed > 0)
+    // The amount (0x00722440), or an absorb that left none (0x006d3c30).
+    const auto attributes = owner_.getSpellAttributes(data.spellId);
+    if (data.heal > 0) {
+        if (healTextShown(attributes, false, 0))
+            addCombatText(data.isCrit ? CombatTextEntry::CRIT_HEAL : CombatTextEntry::HEAL,
+                          static_cast<int32_t>(data.heal), data.spellId, isPlayerSource, 0, data.casterGuid,
+                          data.targetGuid);
+    } else if (data.absorbed > 0 && unit_combat::spellRaises(attributes))
         addCombatText(CombatTextEntry::ABSORB, static_cast<int32_t>(data.absorbed), data.spellId, isPlayerSource, 0, data.casterGuid, data.targetGuid);
 }
 
@@ -1393,10 +1396,6 @@ void CombatHandler::handleProcResist(network::Packet& packet) {
         SpellLogGuidsData d;
         if (SpellLogGuidsParser::parse(packet, d, true)) {
             owner_.combatLogFeed().procResist(d.casterGuid, d.victimGuid, d.spellId);
-            if (d.victimGuid == owner_.getPlayerGuid())
-                addCombatText(CombatTextEntry::RESIST, 0, d.spellId, false, 0, d.casterGuid, d.victimGuid);
-            else if (d.casterGuid == owner_.getPlayerGuid())
-                addCombatText(CombatTextEntry::RESIST, 0, d.spellId, true, 0, d.casterGuid, d.victimGuid);
         }
         packet.skipAll();
         return;
@@ -1442,7 +1441,7 @@ void CombatHandler::handleSpellDamageShield(network::Packet& packet) {
         // The number over the one it struck, from the shield's owner, with
         // 0x00722340's input flag set and no spell record: a spell's line,
         // gated and coloured as one, whatever the shield's spell.
-        if (d.casterGuid == owner_.getPlayerGuid() || d.victimGuid == owner_.getPlayerGuid())
+        if (combatTextOurs(d.victimGuid, d.casterGuid))
             addCombatText(CombatTextEntry::SPELL_DAMAGE, static_cast<int32_t>(d.damage), d.spellId,
                           d.victimGuid == owner_.getPlayerGuid(), 0, d.victimGuid, d.casterGuid,
                           /*spellFlag=*/true);
@@ -1496,9 +1495,6 @@ void CombatHandler::handleSpellOrDamageImmune(network::Packet& packet) {
         if (parsed)
             owner_.combatLogFeed().spellMissed(d.casterGuid, d.victimGuid, d.spellId, combat_log::miss::kImmune,
                                                d.debug == 0, d.debug != 0);
-        if (parsed && (d.casterGuid == owner_.getPlayerGuid() || d.victimGuid == owner_.getPlayerGuid()))
-            addCombatText(CombatTextEntry::IMMUNE, 0, d.spellId, d.casterGuid == owner_.getPlayerGuid(), 0,
-                          d.casterGuid, d.victimGuid);
         packet.skipAll();
         return;
     }

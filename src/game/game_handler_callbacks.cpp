@@ -2635,9 +2635,9 @@ void GameHandler::stopAutoAttack() {
 }
 
 void GameHandler::addCombatText(CombatTextEntry::Type type, int32_t amount, uint32_t spellId, bool isPlayerSource, uint8_t powerType,
-                                uint64_t srcGuid, uint64_t dstGuid, bool spellFlag) {
+                                uint64_t srcGuid, uint64_t dstGuid, bool spellFlag, bool periodic) {
     if (combatHandler_)
-        combatHandler_->addCombatText(type, amount, spellId, isPlayerSource, powerType, srcGuid, dstGuid, spellFlag);
+        combatHandler_->addCombatText(type, amount, spellId, isPlayerSource, powerType, srcGuid, dstGuid, spellFlag, periodic);
 }
 
 bool GameHandler::shouldLogSpellstealAura(uint64_t casterGuid, uint64_t victimGuid, uint32_t spellId) {
@@ -2674,6 +2674,10 @@ uint64_t GameHandler::getLastMeleeSwingMs() const {
 
 uint32_t GameHandler::numPlayerDamageHits() const {
     return combatHandler_ ? combatHandler_->playerDamageHits() : 0u;
+}
+
+bool GameHandler::combatTextOurs(uint64_t src, uint64_t dst) const {
+    return combatHandler_ && combatHandler_->combatTextOurs(src, dst);
 }
 
 const std::vector<CombatTextEntry>& GameHandler::getCombatText() const {
@@ -4660,7 +4664,7 @@ void GameHandler::fireSpellMissileMiss(uint32_t spellId, uint64_t casterGuid, ui
     // and UNIT_COMBAT (0x00513410).
     if (unit_combat::spellRaises(getSpellAttributes(spellId))) {
         const bool playerIsCaster = casterGuid != 0 && casterGuid == playerGuid;
-        if (playerIsCaster || unitGuid == playerGuid)
+        if (combatTextOurs(casterGuid, unitGuid))
             addCombatText(combatTextTypeFromSpellMissInfo(missReason), 0, spellId, playerIsCaster, 0, casterGuid,
                           unitGuid);
         if (const char* action = unit_combat::missAction(missReason))
