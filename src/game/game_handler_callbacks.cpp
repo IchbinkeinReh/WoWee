@@ -3191,11 +3191,17 @@ void GameHandler::setPossessSpell(uint32_t spellId) {
     fireAddonEvent("UPDATE_BONUS_ACTIONBAR", {});  // event 0xb4
 }
 
-std::optional<std::pair<uint64_t, int>> GameHandler::petPulse() const {
+uint64_t GameHandler::petUnitGuid() const {
+    // The older expansions' tables name neither.
+    if (fieldIndex(UF::UNIT_FIELD_CHARM) == 0xFFFF && fieldIndex(UF::UNIT_FIELD_SUMMON) == 0xFFFF) return petGuid_;
     const auto player = getEntityManager().getEntity(playerGuid);
-    if (!player) return std::nullopt;
-    uint64_t pet = guidFieldOf(*player, UF::UNIT_FIELD_CHARM);
-    if (pet == 0) pet = guidFieldOf(*player, UF::UNIT_FIELD_SUMMON);
+    if (!player) return 0;
+    const uint64_t charm = guidFieldOf(*player, UF::UNIT_FIELD_CHARM);
+    return charm != 0 ? charm : guidFieldOf(*player, UF::UNIT_FIELD_SUMMON);
+}
+
+std::optional<std::pair<uint64_t, int>> GameHandler::petPulse() const {
+    const uint64_t pet = petUnitGuid();
     const auto entity = pet != 0 ? getEntityManager().getEntity(pet) : nullptr;
     const auto* unit = entity ? dynamic_cast<const Unit*>(entity.get()) : nullptr;
     if (!unit || !unit->targetChangedAt()) return std::nullopt;
@@ -4602,7 +4608,7 @@ std::vector<std::string> GameHandler::unitTokensForGuid(uint64_t guid) const {
         if (const auto p = vehicleRoster_.passenger(playerGuid); p && p->vehicleGuid == guid)
             out.emplace_back("vehicle");
     }
-    if (guid == petGuid_) out.emplace_back("pet");
+    if (guid == petUnitGuid()) out.emplace_back("pet");
     if (isInGroup()) {
         const auto& group = getPartyData();
         for (int slot = 1; slot <= 4; ++slot) {

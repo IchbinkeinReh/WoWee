@@ -17,7 +17,7 @@ GameStateAdapter::GameStateAdapter(game::GameHandler& gameHandler,
 uint64_t GameStateAdapter::getPlayerGuid() const { return gameHandler_.getPlayerGuid(); }
 uint64_t GameStateAdapter::getTargetGuid() const { return gameHandler_.getTargetGuid(); }
 uint64_t GameStateAdapter::getFocusGuid() const  { return gameHandler_.getFocusGuid(); }
-uint64_t GameStateAdapter::getPetGuid() const    { return gameHandler_.getPetGuid(); }
+uint64_t GameStateAdapter::getPetGuid() const    { return gameHandler_.petUnitGuid(); }
 uint64_t GameStateAdapter::getMouseoverGuid() const { return gameHandler_.getMouseoverGuid(); }
 
 // --- Player state ---

@@ -705,7 +705,7 @@ inline uint64_t resolveUnitGuid(game::GameHandler* gh, const std::string& uid) {
     if (uid == "target")      return gh->getTargetGuid();
     if (uid == "focus")       return gh->getFocusGuid();
     if (uid == "mouseover")   return gh->getMouseoverGuid();
-    if (uid == "pet")         return gh->getPetGuid();
+    if (uid == "pet")         return gh->petUnitGuid();
     // The player's vehicle: its transport while it sits (state 3), else none
     // (0x0060abf0 -> 0x004f6250).
     if (uid == "vehicle") {
@@ -721,7 +721,7 @@ inline uint64_t resolveUnitGuid(game::GameHandler* gh, const std::string& uid) {
     // Compound unit IDs: targettarget, focustarget, pettarget, mouseovertarget
     if (uid == "targettarget")    return getEntityTargetGuid(gh, gh->getTargetGuid());
     if (uid == "focustarget")     return getEntityTargetGuid(gh, gh->getFocusGuid());
-    if (uid == "pettarget")       return getEntityTargetGuid(gh, gh->getPetGuid());
+    if (uid == "pettarget")       return getEntityTargetGuid(gh, gh->petUnitGuid());
     if (uid == "mouseovertarget") return getEntityTargetGuid(gh, gh->getMouseoverGuid());
     // partypet1-partypet4 and raidpet1-raidpet40, tested before party and
     // raid as 0x0060abf0 does: the member's pet (0x0052c6e0, 0x00518ce0).

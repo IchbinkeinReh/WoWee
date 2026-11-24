@@ -593,7 +593,7 @@ static int lua_UnitAura(lua_State* L, int forced) {
                     lua_pushstring(L, "target");
                 else if (aura.casterGuid == gh->getFocusGuid())
                     lua_pushstring(L, "focus");
-                else if (aura.casterGuid == gh->getPetGuid())
+                else if (aura.casterGuid == gh->petUnitGuid())
                     lua_pushstring(L, "pet");
                 else
                     lua_pushnil(L);

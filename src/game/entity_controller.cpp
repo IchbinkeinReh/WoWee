@@ -4076,6 +4076,19 @@ void EntityController::handleCreateObject(const UpdateBlock& block, bool& newIte
     auto* handler = getTypeHandler(block.objectType);
     if (handler) handler->onCreate(block, entity, newItemCreated);
 
+    // UNIT_PET for whoever charmed the unit, and for who summoned it
+    // (0x0073fcc0): its owner's fields may have come before it.
+    if (block.objectType == ObjectType::UNIT || block.objectType == ObjectType::PLAYER) {
+        const uint16_t charmedBy = fieldIndex(UF::UNIT_FIELD_CHARMEDBY);
+        const uint64_t owners[2] = {
+            charmedBy == 0xFFFF ? 0
+                                : entity->getField(charmedBy) |
+                                      (static_cast<uint64_t>(entity->getField(static_cast<uint16_t>(charmedBy + 1))) << 32),
+            unitSummonedByGuid(*entity)};
+        for (const uint64_t who : owners)
+            for (const auto& uid : owner_.unitTokensForGuid(who)) pendingEvents_.emit("UNIT_PET", {uid});
+    }
+
     // A control update that waited for the unit (0x007402b0 -> 0x0072cca0).
     if (block.objectType == ObjectType::UNIT || block.objectType == ObjectType::PLAYER) {
         if (auto* movement = owner_.getMovementHandler()) movement->onUnitCreated(block.guid);
@@ -4130,6 +4143,21 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
                                (block.fields.find(targetLo) != block.fields.end() ||
                                 block.fields.find(targetHi) != block.fields.end());
     const uint64_t oldTarget = watchesTarget ? unitTargetGuid(*entity) : 0;
+    // UNIT_PET, the same way: events 0 and 2 are UNIT_FIELD_CHARM and
+    // UNIT_FIELD_SUMMON, eight bytes each.
+    const uint16_t petLo[2] = {fieldIndex(UF::UNIT_FIELD_CHARM), fieldIndex(UF::UNIT_FIELD_SUMMON)};
+    const bool isUnit = entity->getType() == ObjectType::UNIT || entity->getType() == ObjectType::PLAYER;
+    const auto guidAt = [&entity](uint16_t low) -> uint64_t {
+        return entity->getField(low) | (static_cast<uint64_t>(entity->getField(static_cast<uint16_t>(low + 1))) << 32);
+    };
+    bool watchesPet[2] = {false, false};
+    uint64_t oldPet[2] = {0, 0};
+    for (int i = 0; i < 2 && isUnit; ++i) {
+        watchesPet[i] = petLo[i] != 0xFFFF &&
+                        (block.fields.find(petLo[i]) != block.fields.end() ||
+                         block.fields.find(static_cast<uint16_t>(petLo[i] + 1)) != block.fields.end());
+        if (watchesPet[i]) oldPet[i] = guidAt(petLo[i]);
+    }
     // The pet's name timestamp, which moves when it is renamed. The client
     // watches the field (0x00741d00 registers 0x0072cf70 on it) and says so
     // when the unit is the player's - its summoner, or its creator when it has
@@ -4177,6 +4205,10 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
     if (watchesCharmer && charmerOf() != oldCharmer && owner_.getSpellHandler())
         owner_.getSpellHandler()->onUnitCharmedByChanged(block.guid, oldCharmer);
 
+    for (int i = 0; i < 2; ++i) {
+        if (!watchesPet[i] || guidAt(petLo[i]) == oldPet[i]) continue;
+        for (const auto& uid : owner_.unitTokensForGuid(block.guid)) pendingEvents_.emit("UNIT_PET", {uid});
+    }
     if (watchesTarget && unitTargetGuid(*entity) != oldTarget) {
         // 0x00716900: the time it moved, which the pet's ring reads.
         if (auto* unit = dynamic_cast<Unit*>(entity.get())) unit->noteTargetChanged(core::appTimeSeconds());

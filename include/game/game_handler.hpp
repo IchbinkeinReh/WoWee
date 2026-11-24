@@ -1637,6 +1637,10 @@ public:
     /// answer this client's own naming dialog is waiting for.
     bool isPetRenameable() const { return petRenameablePending_; }
     uint64_t getPetGuid() const { return petGuid_; }
+    /// Who "pet" is: the player's charm, else its summon (UNIT_FIELD_CHARM,
+    /// UNIT_FIELD_SUMMON: 0x0060abf0, 0x0060bb70) - not the pet of
+    /// SMSG_PET_SPELLS, which comes before those fields.
+    [[nodiscard]] uint64_t petUnitGuid() const;
 
     // ---- Pet state (populated by SMSG_PET_SPELLS / SMSG_PET_MODE) ----
     // 10 action bar slots; each entry is a packed uint32:
