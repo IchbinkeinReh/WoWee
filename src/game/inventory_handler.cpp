@@ -2529,7 +2529,6 @@ void InventoryHandler::dispatchUseItem(uint8_t wowBag, uint8_t wowSlot, uint64_t
                                        const ItemDef& item, bool confirmed,
                                        uint64_t unitTarget) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    if (owner_.isRestoring()) owner_.cancelCast();
 
     // Bind-on-use, and not yet bound. Same warning as the equip prompt, one
     // step earlier: using the item is what binds it.

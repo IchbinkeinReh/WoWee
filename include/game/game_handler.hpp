@@ -1819,7 +1819,6 @@ public:
 
     bool isCasting() const { return spellHandler_ ? spellHandler_->isCasting() : false; }
     bool isChanneling() const { return spellHandler_ ? spellHandler_->isChanneling() : false; }
-    bool isRestoring() const { return spellHandler_ ? spellHandler_->isRestoring() : false; }
     uint32_t getCurrentCastSpellId() const { return spellHandler_ ? spellHandler_->getCurrentCastSpellId() : 0; }
     float getCastProgress() const { return spellHandler_ ? spellHandler_->getCastProgress() : 0.0f; }
     float getCastTimeRemaining() const { return spellHandler_ ? spellHandler_->getCastTimeRemaining() : 0.0f; }

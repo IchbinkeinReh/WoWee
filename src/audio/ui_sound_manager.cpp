@@ -115,13 +115,6 @@ bool UiSoundManager::initialize(pipeline::AssetManager* assets) {
 
 
 
-    // Load eating/drinking sounds
-    eatingSounds_.resize(1);
-    bool eatingLoaded = loadSound("Sound\\Interface\\iEating1.wav", eatingSounds_[0], assets);
-
-    drinkingSounds_.resize(1);
-    bool drinkingLoaded = loadSound("Sound\\Interface\\iDrinking1.wav", drinkingSounds_[0], assets);
-
     // Load level up sound
     levelUpSounds_.resize(1);
     bool levelUpLoaded = loadSound("Sound\\Interface\\LevelUp.wav", levelUpSounds_[0], assets);
@@ -180,9 +173,7 @@ bool UiSoundManager::initialize(pipeline::AssetManager* assets) {
              ", Items: ", lootItemLoaded ? "YES" : "NO");
     LOG_INFO("UISoundManager: Item sounds - Pickup: ", (pickupBagLoaded && pickupBookLoaded) ? "YES" : "NO",
              ", Drop: ", dropLoaded ? "YES" : "NO");
-    LOG_INFO("UISoundManager: Misc sounds - Eating: ", eatingLoaded ? "YES" : "NO",
-             ", Drinking: ", drinkingLoaded ? "YES" : "NO",
-             ", LevelUp: ", levelUpLoaded ? "YES" : "NO");
+    LOG_INFO("UISoundManager: Misc sounds - LevelUp: ", levelUpLoaded ? "YES" : "NO");
 
     initialized_ = true;
     LOG_INFO("UISoundManager: Initialization complete");
@@ -457,8 +448,6 @@ void UiSoundManager::playDropOnGround() { playSound(dropSounds_); }
 void UiSoundManager::playPickupBag() { playSound(pickupBagSounds_); }
 void UiSoundManager::playPickupBook() { playSound(pickupBookSounds_); }
 // Eating/drinking
-void UiSoundManager::playEating() { playSound(eatingSounds_); }
-void UiSoundManager::playDrinking() { playSound(drinkingSounds_); }
 
 // Level up
 void UiSoundManager::playLevelUp() { playSound(levelUpSounds_); }

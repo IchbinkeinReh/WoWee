@@ -382,20 +382,6 @@ void AnimationCallbackHandler::setupCallbacks() {
                 spell = cast->spellId;
             }
             castSpells_[guid] = spell;
-            // A potion or a drink taken standing: one swig's sound.
-            if (isLocalPlayer && spell != 0) {
-                gameHandler_.loadSpellNameCache();
-                const auto it = gameHandler_.spellNameCacheRef().find(spell);
-                const auto rest = it != gameHandler_.spellNameCacheRef().end()
-                                      ? game::spellclass::classifyRestChannel(it->second.name)
-                                      : game::spellclass::RestChannelKind::NONE;
-                if (rest == game::spellclass::RestChannelKind::POTION ||
-                    rest == game::spellclass::RestChannelKind::ALCOHOL) {
-                    if (auto* audio = gameHandler_.services().audioCoordinator) {
-                        if (auto* ui = audio->getUiSoundManager()) ui->playDrinking();
-                    }
-                }
-            }
             return;
         }
         const uint32_t spell = castSpells_.count(guid) ? castSpells_[guid] : 0u;

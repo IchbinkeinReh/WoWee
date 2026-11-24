@@ -262,26 +262,17 @@ public:
     [[nodiscard]] const spell_book::Records& spellBookRecords() const;
 
     // Cast state
-    [[nodiscard]] bool isCasting() const { return casting_ || restorationActive_; }
-    [[nodiscard]] bool isChanneling() const { return casting_ ? castIsChannel_ : restorationActive_; }
-    [[nodiscard]] bool isRestoring() const { return restorationActive_; }
-    /// A cast or a channel, eating and drinking - which are neither - aside.
+    [[nodiscard]] bool isCasting() const { return casting_; }
+    [[nodiscard]] bool isChanneling() const { return casting_ && castIsChannel_; }
+    /// A cast or a channel.
     [[nodiscard]] bool hasCastOrChannel() const { return casting_; }
     [[nodiscard]] bool hasChannel() const { return casting_ && castIsChannel_; }
-    [[nodiscard]] uint32_t getCurrentCastSpellId() const {
-        return casting_ ? currentCastSpellId_ : restorationSpellId_;
-    }
+    [[nodiscard]] uint32_t getCurrentCastSpellId() const { return casting_ ? currentCastSpellId_ : 0; }
     [[nodiscard]] float getCastProgress() const {
-        const float total = casting_ ? castTimeTotal_ : restorationTimeTotal_;
-        const float remaining = casting_ ? castTimeRemaining_ : restorationTimeRemaining_;
-        return total > 0.0f ? (total - remaining) / total : 0.0f;
+        return casting_ && castTimeTotal_ > 0.0f ? (castTimeTotal_ - castTimeRemaining_) / castTimeTotal_ : 0.0f;
     }
-    [[nodiscard]] float getCastTimeRemaining() const {
-        return casting_ ? castTimeRemaining_ : restorationTimeRemaining_;
-    }
-    [[nodiscard]] float getCastTimeTotal() const {
-        return casting_ ? castTimeTotal_ : restorationTimeTotal_;
-    }
+    [[nodiscard]] float getCastTimeRemaining() const { return casting_ ? castTimeRemaining_ : 0.0f; }
+    [[nodiscard]] float getCastTimeTotal() const { return casting_ ? castTimeTotal_ : 0.0f; }
 
     // Repeat-craft queue
     void startCraftQueue(uint32_t spellId, int count);
@@ -683,7 +674,6 @@ public:
 
     // Update per-frame timers (call from GameHandler::update)
     void updateTimers(float dt);
-    void refreshRestorationState() { refreshRestorationFromPlayerAuras(); }
 
     // Packet handlers dispatched from GameHandler's opcode table
     void handlePetSpells(network::Packet& packet);
@@ -847,8 +837,6 @@ private:
     /// flewToPlace: set when a missile flies to the cast's place.
     std::vector<uint64_t> launchSpellMissiles(const SpellGoData& data, uint32_t visualId,
                                               bool* flewToPlace = nullptr);
-    void refreshRestorationFromPlayerAuras();
-    void stopRestorationPresentation();
 
     // --- handleSpellLogExecute, per effect logged (extracted to reduce nesting) ---
     void logExecuteEntry(const SpellLogExecuteEntry& entry, uint64_t caster, uint32_t spellId);
@@ -1184,12 +1172,6 @@ private:
     uint32_t currentCastSpellId_ = 0;
     float castTimeRemaining_ = 0.0f;
     float castTimeTotal_ = 0.0f;
-    bool restorationActive_ = false;
-    uint32_t restorationSpellId_ = 0;
-    bool restorationIsFood_ = false;
-    float restorationTimeRemaining_ = 0.0f;
-    float restorationTimeTotal_ = 0.0f;
-    float restorationSoundTimer_ = 0.0f; // repeats the consume sound while active
 
     // Repeat-craft queue
     uint32_t craftQueueSpellId_ = 0;

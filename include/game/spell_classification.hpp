@@ -127,44 +127,6 @@ inline bool isFishingCast(uint32_t spellId) {
            spellId == 51294;    // Fishing (Grand Master)
 }
 
-/// Restoration food/water and instant potions use the dedicated consumption
-/// animation. Match canonical Food/Drink names and actual potion-use suffixes
-/// without classifying recipe spells that create potions.
-enum class RestChannelKind {
-    NONE,
-    FOOD,
-    DRINK,
-    POTION,
-    ALCOHOL,
-    /// The undead racial. Grouped here because it is the same kind of thing -
-    /// a channel whose whole visible content is the eating animation - but it
-    /// is neither seated nor a single swig: the character stays standing over
-    /// the corpse and eats for the length of the channel.
-    CANNIBALIZE
-};
-
-inline RestChannelKind classifyRestChannel(const std::string& spellName) {
-    if (spellName == "Food") return RestChannelKind::FOOD;
-    if (spellName == "Drink") return RestChannelKind::DRINK;
-    if (spellName == "Cannibalize") return RestChannelKind::CANNIBALIZE;
-    constexpr const char* potionSuffix = "Potion";
-    if (spellName.size() >= 6 &&
-        spellName.compare(spellName.size() - 6, 6, potionSuffix) == 0 &&
-        spellName.rfind("Create ", 0) != 0) {
-        return RestChannelKind::POTION;
-    }
-    return RestChannelKind::NONE;
-}
-
-inline bool hasInebriateEffect(const uint32_t* effectIds, size_t count) {
-    constexpr uint32_t kSpellEffectInebriate = 100;
-    if (!effectIds) return false;
-    for (size_t i = 0; i < count; ++i) {
-        if (effectIds[i] == kSpellEffectInebriate) return true;
-    }
-    return false;
-}
-
 /// Whether a spell takes apart the item it is cast on rather than changing it.
 ///
 /// Disenchant, prospecting and milling give materials back and consume what

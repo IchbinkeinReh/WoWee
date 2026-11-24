@@ -94,8 +94,6 @@ public:
     void playPickupBook();
 
     // Eating/drinking
-    void playEating();
-    void playDrinking();
 
     // Level up
     void playLevelUp();
@@ -166,8 +164,6 @@ private:
     std::vector<UISample> pickupBagSounds_;
     std::vector<UISample> pickupBookSounds_;
 
-    std::vector<UISample> eatingSounds_;
-    std::vector<UISample> drinkingSounds_;
 
     std::vector<UISample> levelUpSounds_;
     std::vector<UISample> achievementSounds_;

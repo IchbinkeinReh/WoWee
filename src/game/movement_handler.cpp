@@ -776,8 +776,7 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
             opcode == Opcode::MSG_MOVE_START_STRAFE_RIGHT ||
             opcode == Opcode::MSG_MOVE_JUMP;
         if (isPositionalMove) {
-            if (owner_.isRestoring()) owner_.cancelCast();
-            else owner_.getSpellHandler()->cancelCastsOnMove();  // 0x00806620
+            owner_.getSpellHandler()->cancelCastsOnMove();  // 0x00806620
         }
     }
     // A move key, autorun, both mouse buttons or a jump (0x005fbe10,

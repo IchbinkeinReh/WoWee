@@ -610,7 +610,6 @@ void EntityController::syncPreWotlkAurasFromFields(const std::shared_ptr<Entity>
         }
     }
     LOG_DEBUG("[pre-WotLK] Rebuilt playerAuras from UNIT_FIELD_AURAS");
-    owner_.getSpellHandler()->refreshRestorationState();
     // How many the player actually has, said once. "BuffButton1 - NOT BUILT"
     // means the interface asked UnitAura for the first buff and got nothing,
     // and a character with no buffs is the correct reason for that - this

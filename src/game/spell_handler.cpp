@@ -2384,10 +2384,6 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
         owner_.addonEventCallbackRef()("START_AUTOREPEAT_SPELL", {});
     }
 
-    // Food and water are server auras, but using any action interrupts them.
-    // Cancel the aura and stand first, then allow the requested action to proceed.
-    if (restorationActive_) cancelCast();
-
     // Attack routes to auto-attack instead of cast
     if (spellId == SPELL_ID_ATTACK) {
         uint64_t target = targetGuid != 0 ? targetGuid : owner_.getTargetGuid();
@@ -2606,7 +2602,6 @@ bool SpellHandler::castAtGameObject(uint32_t spellId, uint64_t gameObjectGuid, u
             (rit->second.equippedItemSubClassMask & 0x80000u) != 0)
             owner_.stopAutoRepeat(true);
     }
-    if (restorationActive_) cancelCast();
     cancelGroundTargeting();
     if (!castChecksPass(spellId, 0)) return false;
     playCastActivateSound(spellId, itemGuid);
@@ -3992,14 +3987,6 @@ void SpellHandler::cancelChannelOnTurn() {
 }
 
 void SpellHandler::cancelCast(uint8_t reason) {
-    if (restorationActive_) {
-        const uint32_t auraSpell = restorationSpellId_;
-        cancelAura(auraSpell);
-        owner_.setStandState(0);
-        stopRestorationPresentation();
-        LOG_INFO("Cancelled restoration aura: spellId=", auraSpell);
-        return;
-    }
     if (!casting_) {
         // Sent and not started yet.
         const auto* sent = owner_.castVisuals().state(owner_.getPlayerGuid());
@@ -4052,7 +4039,7 @@ void SpellHandler::cancelPendingCasts(uint32_t attributeMask) {
         endOwnCast(swing.castCount, swing.spellId, kCancelDontReport);
     }
     // The running cast, which has a cast time; a channel is not in the list.
-    if (casting_ && !castIsChannel_ && !restorationActive_ && currentCastSpellId_ != 0 &&
+    if (casting_ && !castIsChannel_ && currentCastSpellId_ != 0 &&
         (attributesOf(currentCastSpellId_) & attributeMask) != 0)
         cancelCast();
 }
@@ -4575,23 +4562,6 @@ void SpellHandler::updateTimers(float dt) {
         castTimeRemaining_ -= dt;
         if (castTimeRemaining_ < 0.0f) castTimeRemaining_ = 0.0f;
     }
-    // Eating/drinking munch-gulp repeats for the whole restoration aura,
-    // matching the real client's looping consume sound.
-    if (restorationActive_) {
-        if (restorationTimeRemaining_ > 0.0f) {
-            restorationTimeRemaining_ = std::max(0.0f, restorationTimeRemaining_ - dt);
-        }
-        restorationSoundTimer_ -= dt;
-        if (restorationSoundTimer_ <= 0.0f) {
-            restorationSoundTimer_ = 1.0f;
-            if (auto* ac = owner_.services().audioCoordinator) {
-                if (auto* sfx = ac->getUiSoundManager()) {
-                    if (restorationIsFood_) sfx->playEating();
-                    else                    sfx->playDrinking();
-                }
-            }
-        }
-    }
     // Tick down unit cast states
     for (auto it = unitCastStates_.begin(); it != unitCastStates_.end(); ) {
         if (it->second.casting && it->second.timeRemaining > 0.0f) {
@@ -4604,80 +4574,6 @@ void SpellHandler::updateTimers(float dt) {
             }
         }
         ++it;
-    }
-}
-
-void SpellHandler::stopRestorationPresentation() {
-    if (!restorationActive_) return;
-    if (owner_.spellCastAnimCallbackRef()) {
-        owner_.spellCastAnimCallbackRef()(owner_.getPlayerGuid(), false, true,
-                                          SpellCastType::OMNI);
-    }
-    restorationActive_ = false;
-    restorationSpellId_ = 0;
-    restorationTimeRemaining_ = 0.0f;
-    restorationTimeTotal_ = 0.0f;
-}
-
-void SpellHandler::refreshRestorationFromPlayerAuras() {
-    owner_.loadSpellNameCache();
-    const uint64_t nowMs = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count());
-
-    const AuraSlot* restorationAura = nullptr;
-    bool restorationIsFood = false;
-    for (const auto& aura : playerAuras_) {
-        if (aura.isEmpty()) continue;
-        auto nameIt = owner_.spellNameCacheRef().find(aura.spellId);
-        if (nameIt == owner_.spellNameCacheRef().end()) continue;
-        const auto kind = spellclass::classifyRestChannel(nameIt->second.name);
-        if (kind == spellclass::RestChannelKind::FOOD ||
-            kind == spellclass::RestChannelKind::DRINK) {
-            restorationAura = &aura;
-            restorationIsFood = kind == spellclass::RestChannelKind::FOOD;
-            break;
-        }
-    }
-
-    if (!restorationAura) {
-        stopRestorationPresentation();
-        return;
-    }
-
-    const uint32_t spellId = restorationAura->spellId;
-    const bool newlyActive = !restorationActive_ || restorationSpellId_ != spellId;
-    if (restorationActive_ && restorationSpellId_ != spellId) {
-        stopRestorationPresentation();
-    }
-
-    int32_t totalMs = restorationAura->maxDurationMs;
-    if (totalMs <= 0) totalMs = restorationAura->durationMs;
-    if (totalMs <= 0) {
-        const float dbcSeconds = getSpellDuration(spellId);
-        totalMs = dbcSeconds > 0.0f ? static_cast<int32_t>(dbcSeconds * 1000.0f) : 30000;
-    }
-    int32_t remainingMs = restorationAura->getRemainingMs(nowMs);
-    if (remainingMs < 0) {
-        remainingMs = (!newlyActive && restorationTimeRemaining_ > 0.0f)
-            ? static_cast<int32_t>(restorationTimeRemaining_ * 1000.0f)
-            : totalMs;
-    }
-
-    restorationActive_ = true;
-    restorationSpellId_ = spellId;
-    restorationIsFood_ = restorationIsFood;
-    restorationTimeTotal_ = static_cast<float>(totalMs) / 1000.0f;
-    restorationTimeRemaining_ = static_cast<float>(remainingMs) / 1000.0f;
-
-    if (newlyActive) {
-        restorationSoundTimer_ = 0.0f;
-        LOG_INFO("Restoration aura started: spellId=", spellId,
-                 " durationMs=", totalMs);
-        if (owner_.spellCastAnimCallbackRef()) {
-            owner_.spellCastAnimCallbackRef()(owner_.getPlayerGuid(), true, true,
-                                              SpellCastType::OMNI);
-        }
     }
 }
 
@@ -5231,23 +5127,6 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
 
     if (data.casterUnit == owner_.getPlayerGuid()) {
         owner_.loadSpellNameCache();
-        spellclass::RestChannelKind restKind = spellclass::RestChannelKind::NONE;
-        auto spellNameIt = owner_.spellNameCacheRef().find(data.spellId);
-        if (spellNameIt != owner_.spellNameCacheRef().end()) {
-            restKind = spellclass::classifyRestChannel(spellNameIt->second.name);
-            if (spellclass::hasInebriateEffect(spellNameIt->second.effectIds, 3)) {
-                restKind = spellclass::RestChannelKind::ALCOHOL;
-            }
-        }
-        const bool restorationLoop = restKind == spellclass::RestChannelKind::FOOD ||
-                                     restKind == spellclass::RestChannelKind::DRINK;
-        // The real client sits itself when consuming food/water. Servers apply
-        // the regen aura with AURA_INTERRUPT_FLAG_NOT_SEATED and remove it
-        // immediately unless the client sends CMSG_STANDSTATECHANGE(SIT) -
-        // without this the whole eat/drink presentation never starts.
-        if (restorationLoop) {
-            owner_.setStandState(1); // UNIT_STAND_STATE_SIT
-        }
         // 0x0080e1b0: a spell that ends in loot - pick pocket (71), skinning
         // (95, 116), and disenchanting, prospecting and milling (99, 127,
         // 158) while a click would auto loot (0x00513700) - has its loot
@@ -5263,25 +5142,6 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
                 }
             }
         }
-        const bool wasInTimedCast = casting_ && (data.spellId == currentCastSpellId_);
-
-        if (!wasInTimedCast && !otherCastRuns && !rangedWeaponAttack && !restorationLoop &&
-            !owner_.isProfessionSpell(data.spellId)) {
-            // Classify instant spell from SPELL_GO packet target info
-            SpellCastType goType = SpellCastType::OMNI;
-            if (data.targetGuid != 0 && data.targetGuid != data.casterUnit)
-                goType = SpellCastType::DIRECTED;
-            else if (data.targetGuid == 0 && data.hitCount > 1)
-                goType = SpellCastType::AREA;
-            if (owner_.spellCastAnimCallbackRef()) {
-                // Instant item spells have no SMSG_SPELL_START, so publish the
-                // SPELL_GO id just long enough for the animation callback to
-                // distinguish potions from generic instant magic.
-                currentCastSpellId_ = data.spellId;
-                owner_.spellCastAnimCallbackRef()(owner_.getPlayerGuid(), true, false, goType);
-            }
-        }
-
         if (!otherCastRuns) {
             casting_ = false;
             castIsChannel_ = false;
@@ -5289,7 +5149,7 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
             castTimeRemaining_ = 0.0f;
             castTimeTotal_ = 0.0f;
 
-            if (owner_.spellCastAnimCallbackRef() && !rangedWeaponAttack && !restorationLoop) {
+            if (owner_.spellCastAnimCallbackRef() && !rangedWeaponAttack) {
                 owner_.spellCastAnimCallbackRef()(owner_.getPlayerGuid(), false, false, SpellCastType::OMNI);
             }
         }
@@ -5943,10 +5803,6 @@ void SpellHandler::handleAuraUpdate(network::Packet& packet, bool isAll) {
                     LOG_INFO("Mount aura detected from aura update: spellId=", aura.spellId);
                 }
             }
-        }
-
-        if (data.guid == owner_.getPlayerGuid()) {
-            refreshRestorationFromPlayerAuras();
         }
     }
 }
@@ -6708,10 +6564,6 @@ void SpellHandler::stopCasting() {
 
 void SpellHandler::resetCastState() {
     pendingSwing_ = PendingSwing{};
-    restorationActive_ = false;
-    restorationSpellId_ = 0;
-    restorationTimeRemaining_ = 0.0f;
-    restorationTimeTotal_ = 0.0f;
     casting_ = false;
     castIsChannel_ = false;
     currentCastSpellId_ = 0;
@@ -6786,7 +6638,6 @@ void SpellHandler::handleUpdateAuraDuration(uint8_t slot, uint32_t durationMs) {
     playerAuras_[slot].receivedAtMs = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
-    refreshRestorationFromPlayerAuras();
 }
 
 // ============================================================
@@ -9016,9 +8867,6 @@ void SpellHandler::handleExtraAuraInfo(network::Packet& packet, bool isInit) {
         // "active" mark moves with one.
         if (unitId == "player") owner_.announceCompanionChange();
     }
-    if (auraTargetGuid == owner_.getPlayerGuid()) {
-        refreshRestorationFromPlayerAuras();
-    }
     packet.skipAll();
 }
 
@@ -9544,9 +9392,6 @@ void SpellHandler::handleClearExtraAuraInfo(network::Packet& packet) {
             // The 1.12 name, which carries no unit. See the note at the
             // site that fires it with a comment in full.
             if (unitId == "player") owner_.addonEventCallbackRef()("PLAYER_AURAS_CHANGED", {});
-        }
-        if (clearGuid == owner_.getPlayerGuid()) {
-            refreshRestorationFromPlayerAuras();
         }
     }
     packet.skipAll();
