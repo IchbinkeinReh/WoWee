@@ -1251,16 +1251,11 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
                 }
             } else if (oldHealth == 0 && val > 0) {
                 if (block.guid == owner_.getPlayerGuid()) {
-                    bool wasGhost = owner_.releasedSpiritRef();
+                    // 0x0073d530: health come back, a ghost's included - the
+                    // ghost itself is PLAYER_FLAGS' to tell of.
                     owner_.playerDeadRef() = false;
-                    if (!wasGhost) {
-                        LOG_INFO("Player resurrected!");
-                        pendingEvents_.emit("PLAYER_ALIVE", {});
-                    } else {
-                        LOG_INFO("Player entered ghost form");
-                        owner_.releasedSpiritRef() = false;
-                        pendingEvents_.emit("PLAYER_UNGHOST", {});
-                    }
+                    LOG_INFO("Player has health again");
+                    pendingEvents_.emit("PLAYER_ALIVE", {});
                 }
                 if ((entity->getType() == ObjectType::UNIT || entity->getType() == ObjectType::PLAYER) && owner_.npcRespawnCallbackRef()) {
                     owner_.npcRespawnCallbackRef()(block.guid);
@@ -2026,7 +2021,8 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
                 owner_.corpseGuidRef() = 0;
                 owner_.corpseReclaimAvailableMsRef() = 0;
                 LOG_INFO("Player resurrected (PLAYER_FLAGS ghost cleared)");
-                pendingEvents_.emit("PLAYER_ALIVE", {});
+                // 0x006df710, event 0x188.
+                if (!isCreate) pendingEvents_.emit("PLAYER_UNGHOST", {});
                 if (owner_.ghostStateCallbackRef()) owner_.ghostStateCallbackRef()(false);
             }
             // Which unit's flags, because that is the only thing the

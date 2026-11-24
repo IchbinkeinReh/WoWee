@@ -296,3 +296,18 @@ TEST_CASE("an attack is asked for at any distance and said too far by the server
     CHECK_FALSE(s.handler().isAutoAttacking());
     s.handler().setAddonEventCallback({});
 }
+
+// The ghost flag going raised PLAYER_ALIVE again, and PLAYER_UNGHOST never came.
+TEST_CASE("a ghost's return to life is told of as one", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    std::vector<std::string> events;
+    s.handler().setAddonEventCallback([&](const std::string& event, const std::vector<std::string>&) {
+        if (event == "PLAYER_DEAD" || event == "PLAYER_ALIVE" || event == "PLAYER_UNGHOST") events.push_back(event);
+    });
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_FIELD_HEALTH, 0}}));
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_FIELD_HEALTH, 1}, {UF::PLAYER_FLAGS, 0x10}}));
+    s.receive(UpdateObject().values(Session::kPlayerGuid, {{UF::UNIT_FIELD_HEALTH, 90}, {UF::PLAYER_FLAGS, 0}}));
+    CHECK(events == std::vector<std::string>{"PLAYER_DEAD", "PLAYER_ALIVE", "PLAYER_UNGHOST"});
+    s.handler().setAddonEventCallback({});
+}
