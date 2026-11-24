@@ -186,12 +186,9 @@ public:
     /// after the request, and taking that at face value re-mounts them.
     [[nodiscard]] bool isDismountPending() const { return dismountGraceRemaining_ > 0.0f; }
     void clearDismountPending() { dismountGraceRemaining_ = 0.0f; }
-    [[nodiscard]] bool isTaxiMountActive() const { return taxiMountActive_; }
+    [[nodiscard]] bool isTaxiMountActive() const { return taxiMountActive_ || onTaxiFlight_; }
     [[nodiscard]] bool isTaxiActivationPending() const { return taxiActivatePending_; }
     void forceClearTaxiAndMovementState();
-    /// The flight under way is over where it is: the world is left or the
-    /// server has put the player somewhere else.
-    void dropTaxiFlight();
     [[nodiscard]] const std::string& getTaxiDestName() const { return taxiDestName_; }
     [[nodiscard]] const ShowTaxiNodesData& getTaxiData() const { return currentTaxiData_; }
     [[nodiscard]] uint32_t getTaxiCurrentNode() const { return currentTaxiData_.nearestNode; }
@@ -259,6 +256,11 @@ public:
     }
 
     void updateClientTaxi(float deltaTime);
+    /// Off any flight and off any route of one, as a login or another map
+    /// finds the player; the server says again when it has them fly.
+    void forgetTaxi();
+    /// The splines of a world left: their clock and their units are gone.
+    void forgetMoveSplines() { moveSplines_.clear(); }
     // Ends the active client-simulated taxi flight. See the definition in
     // movement_handler.cpp for what snapToFinalWaypoint means - callers outside
     // MovementHandler (SMSG_DISMOUNT / UNIT_FIELD_MOUNTDISPLAYID handlers reacting
@@ -452,11 +454,14 @@ private:
     // to the path start and sets taxiClientActive_. Only called once
     // SMSG_ACTIVATETAXIREPLY confirms success - see activateTaxi()'s comment.
     void beginTaxiFlightMotion();
-    /// The arc length of every segment of taxiClientPath_.
-    void measureTaxiWay();
-    /// The flight on along a spline the server sent the player in the air
-    /// (0x0073c8e0 runs any spline of the player's).
-    void resumeTaxiFlight();
+    /// A 3.3.5 flight is the server's: UNIT_FLAG_TAXI_FLIGHT says the player
+    /// is on one, and the splines of SMSG_MONSTER_MOVE carry them along it
+    /// (0x0073c8e0), each reported with CMSG_MOVE_SPLINE_DONE as it ends. A
+    /// flight to another map is two of them: the server moves the player over
+    /// on the first one's report. The route in the tables is never flown.
+    void updateServerTaxi(float deltaTime);
+    void endServerTaxi();
+    [[nodiscard]] bool playerTaxiFlag() const;
     bool restoreWorldTransferFallbackIfNearOrigin(const char* context);
 
     GameHandler& owner_;
@@ -539,6 +544,10 @@ private:
     ShowTaxiNodesData currentTaxiData_;
     uint64_t taxiNpcGuid_ = 0;
     bool onTaxiFlight_ = false;
+    /// The flight's UNIT_FLAG_TAXI_FLIGHT has been there (updateServerTaxi);
+    /// until then the accepted request stands for it, for so long.
+    bool taxiFlagSeen_ = false;
+    float taxiFlagWait_ = 0.0f;
     std::string taxiDestName_;
     // Set in activateTaxi(); used by finishClientTaxiFlight() to snap to the
     // destination TaxiNodes.dbc entry's own registered position rather than
@@ -553,13 +562,6 @@ private:
     // How long to wait for SMSG_ACTIVATETAXIREPLY before giving up - see
     // updateClientTaxi()'s comment on why a dropped reply needs this now.
     static constexpr float kTaxiActivateReplyTimeoutSeconds = 8.0f;
-    /// The way goes on on another map: at its end here the flight waits for the
-    /// server to take the player there.
-    bool taxiWayGoesOn_ = false;
-    /// Crossing to it, or put into the world in flight: the next spline of the
-    /// player's is the way to fly.
-    bool taxiResumeExpected_ = false;
-    std::vector<glm::vec3> taxiResumeWay_;
     bool taxiClientActive_ = false;
     float taxiLandingCooldown_ = 0.0f;
     float taxiStartGrace_ = 0.0f;

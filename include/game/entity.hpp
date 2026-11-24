@@ -710,6 +710,30 @@ public:
         return way * (moveSpeed_ / length);
     }
 
+    /// How long the path under way takes, as the client's own spline does
+    /// (0x0098c770 takes the length over the capped speed, not the packet's
+    /// duration); none where no path runs.
+    [[nodiscard]] std::optional<uint32_t> pathDurationMs() const {
+        if (!isMoving_ || !usePathMode_ || !activeSpline_) return std::nullopt;
+        return splineDurationMs_;
+    }
+
+    /// The path's direction now and to the place it has the unit a second on
+    /// (0x0098ca00, which banks a unit on a flying spline by the two); none
+    /// where no path runs.
+    struct PathHeading {
+        glm::vec3 tangent;
+        glm::vec3 ahead;
+    };
+    [[nodiscard]] std::optional<PathHeading> pathHeading() const {
+        if (!isMoving_ || !usePathMode_ || !activeSpline_ || splineDurationMs_ == 0 || moveElapsed_ >= moveDuration_)
+            return std::nullopt;
+        const uint32_t now = std::min(static_cast<uint32_t>(moveElapsed_ * 1000.0f), splineDurationMs_ - 1);
+        const math::SplineEvalResult at = pathEval(now);
+        const math::SplineEvalResult next = pathEval(std::min(now + 1000u, splineDurationMs_));
+        return PathHeading{.tangent = at.tangent, .ahead = next.position - at.position};
+    }
+
     void updateMovement(float deltaTime) {
         if (turnRate_ != 0.0f) {
             turnElapsed_ += deltaTime;

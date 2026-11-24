@@ -654,7 +654,11 @@ void EntityController::detectPlayerMountChange(uint32_t newMountDisplayId,
     // same as the SMSG_DISMOUNT guard: still set means premature (ignore,
     // let the client spline finish naturally); already cleared means the
     // server considers the flight over (honor it now).
-    const bool onRealTaxiFlight = owner_.getMovementHandler() && owner_.getMovementHandler()->isOnTaxiFlight();
+    //
+    // A 3.3.5 flight runs on the server's own spline and the mount field is
+    // taken as it comes, as the client takes it.
+    const bool onRealTaxiFlight = isPreWotlk() && owner_.getMovementHandler() &&
+                                  owner_.getMovementHandler()->isOnTaxiFlight();
     if (onRealTaxiFlight && newMountDisplayId == 0) {
         bool serverStillTaxiing = false;
         auto playerEntity = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
@@ -701,7 +705,15 @@ void EntityController::detectPlayerMountChange(uint32_t newMountDisplayId,
     if (newMountDisplayId != old && owner_.mountCallbackRef()) owner_.mountCallbackRef()(newMountDisplayId);
     if (newMountDisplayId != old)
         pendingEvents_.emit("UNIT_MODEL_CHANGED", {"player"});
-    if (old == 0 && newMountDisplayId != 0) {
+    // A flight's mount is no aura's: there is none to look for, nor one to take
+    // off the player when the flight is over.
+    const uint16_t flagsField = fieldIndex(UF::UNIT_FIELD_FLAGS);
+    const auto self = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    const bool flightMount =
+        (mh && mh->isOnTaxiFlight()) ||
+        (self && flagsField != 0xFFFF && (self->getField(flagsField) & UNIT_FLAG_TAXI_FLIGHT) != 0);
+    if (old == 0 && newMountDisplayId != 0 && flightMount) owner_.mountAuraSpellIdRef() = 0;
+    if (old == 0 && newMountDisplayId != 0 && !flightMount) {
         // Just mounted - find the mount aura (indefinite duration, self-cast).
         // Prefer the spell the player just cast: the blind scan below keeps the
         // last matching aura, which is as likely to be a racial or a tracking
@@ -2735,7 +2747,7 @@ void EntityController::onCreatePlayer(const UpdateBlock& block, std::shared_ptr<
         if ((unit->getUnitFlags() & UNIT_FLAG_TAXI_FLIGHT) != 0 && owner_.taxiLandingCooldownRef() <= 0.0f) {
             owner_.taxiStartGraceRef() = std::max(owner_.taxiStartGraceRef(), 2.0f);
             owner_.sanitizeMovementForTaxi();
-            if (owner_.getMovementHandler()) owner_.getMovementHandler()->applyTaxiMountForCurrentNode();
+            if (isPreWotlk() && owner_.getMovementHandler()) owner_.getMovementHandler()->applyTaxiMountForCurrentNode();
         }
     }
     if (block.guid == owner_.getPlayerGuid()) {

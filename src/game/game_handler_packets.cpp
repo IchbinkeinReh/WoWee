@@ -1227,7 +1227,9 @@ void GameHandler::registerCoreOpcodes() {
         // premature-estimate quirk (ignore, let updateClientTaxi() finish
         // naturally); already cleared means the server considers the flight
         // genuinely over (honor it now instead of waiting on our own spline).
-        const bool onTaxiFlight = movementHandler_ && movementHandler_->isOnTaxiFlight();
+        // Neither is asked of a 3.3.5 flight, which runs on the server's own
+        // spline and is over when its flag is (updateServerTaxi).
+        const bool onTaxiFlight = isPreWotlk() && movementHandler_ && movementHandler_->isOnTaxiFlight();
         bool serverStillTaxiing = false;
         if (onTaxiFlight) {
             auto playerEntity = entityController_->getEntityManager().getEntity(playerGuid);

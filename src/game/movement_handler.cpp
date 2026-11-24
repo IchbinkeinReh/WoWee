@@ -42,6 +42,19 @@ namespace game {
 
 namespace {
 
+/// The bank of a unit on a flying spline (0x0098ca00, spline flag 0x2000):
+/// twice the level angle from the way it goes to the place it is in a second,
+/// at most a quarter turn, into the turn. In the renderer's axes, where a
+/// positive roll tilts to the right.
+float flightBank(const glm::vec3& tangent, const glm::vec3& ahead) {
+    const glm::vec2 a(tangent.x, tangent.y), b(ahead.x, ahead.y);
+    const float la = glm::length(a), lb = glm::length(b);
+    if (la < 4.8828125e-4f || lb < 4.8828125e-4f) return 0.0f;
+    const float angle = std::acos(std::clamp(glm::dot(a, b) / (la * lb), -1.0f, 1.0f));
+    const float cross = a.x * b.y - a.y * b.x;
+    return std::clamp(2.0f * (cross < 0.0f ? angle : -angle), -1.5707964f, 1.5707964f);
+}
+
 /// A taxi refusal as the original shows it: its ERR_TAXI* string, through
 /// UI_ERROR_MESSAGE or UI_INFO_MESSAGE as the game error table at 0x00ac8af0
 /// files that one (NOSUCHPATH, NOTENOUGHMONEY, TOOFARAWAY, NOVENDORNEARBY,
@@ -694,10 +707,7 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
 
     // Block manual movement while taxi is active/mounted, but always allow
     // stop/heartbeat opcodes so stuck states can be recovered.
-    // So does a spline's end (0x0071f210): at the border of a map the server
-    // waits for it to take the flight over.
     bool taxiAllowed =
-        (opcode == Opcode::CMSG_MOVE_SPLINE_DONE) ||
         (opcode == Opcode::MSG_MOVE_HEARTBEAT) ||
         (opcode == Opcode::MSG_MOVE_STOP) ||
         (opcode == Opcode::MSG_MOVE_STOP_STRAFE) ||
@@ -716,7 +726,15 @@ void MovementHandler::sendMovement(Opcode opcode, std::optional<uint32_t> traile
         heldReason = "no unit is the active mover";
     } else if (!moverIsPlayer) {
         if (!unitHasClientControl(mover)) heldReason = "the server has not given control of the unit";
-    } else if (!taxiAllowed) {
+    } else if (onTaxiFlight_ && !isPreWotlk()) {
+        // 0x0071ef20: while a spline carries the mover nothing of its own
+        // movement goes out (0x009904e0 lets a swim's start and stop and
+        // CMSG_MOVE_SET_FLY by, which a flight has no use for), and what ends
+        // it, CMSG_MOVE_SPLINE_DONE, is asked after the spline is marked over
+        // (0x006eae70). Held back with the rest, the server never heard that
+        // the player had come to the border of a map and left them there.
+        if (opcode != Opcode::CMSG_MOVE_SPLINE_DONE) heldReason = "a taxi flight is in progress";
+    } else if (!taxiAllowed && opcode != Opcode::CMSG_MOVE_SPLINE_DONE) {
         if (!serverMovementAllowed_) heldReason = "the server has not given control of the character";
         else if (onTaxiFlight_) heldReason = "a taxi flight is in progress";
         else if (taxiMountActive_) heldReason = "a taxi mount is on";
@@ -1245,26 +1263,6 @@ void MovementHandler::sanitizeMovementForTaxi() {
 // ============================================================
 // forceClearTaxiAndMovementState
 // ============================================================
-
-void MovementHandler::dropTaxiFlight() {
-    taxiActivatePending_ = false;
-    taxiActivateTimer_ = 0.0f;
-    taxiClientActive_ = false;
-    taxiClientPath_.clear();
-    taxiClientSegmentArcLengths_.clear();
-    taxiClientIndex_ = 0;
-    taxiClientSegmentProgress_ = 0.0f;
-    taxiWayGoesOn_ = false;
-    taxiResumeExpected_ = false;
-    taxiResumeWay_.clear();
-    taxiServerCompletionPending_ = false;
-    taxiRecoverPending_ = false;
-    taxiStartGrace_ = 0.0f;
-    taxiDestNodeId_ = 0;
-    onTaxiFlight_ = false;
-    if (taxiMountActive_ && owner_.mountCallbackRef()) owner_.mountCallbackRef()(0);
-    taxiMountActive_ = false;
-}
 
 void MovementHandler::forceClearTaxiAndMovementState() {
     taxiActivatePending_ = false;
@@ -2182,24 +2180,6 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
     }
 
     auto entity = owner_.getEntityManager().getEntity(data.guid);
-    // The player's own, in the air with no way of its own to fly: over the
-    // border of a map, or into the world, a flight goes on along it.
-    if (data.guid == owner_.getPlayerGuid() && data.hasDest && !taxiClientActive_ && !taxiActivatePending_) {
-        const bool inFlight = entity && entity->isUnit() &&
-                              (static_cast<const Unit&>(*entity).getUnitFlags() & UNIT_FLAG_TAXI_FLIGHT) != 0;
-        // Through the air, which the move of a fighter's charge is not.
-        const bool flown = isPreWotlk() ||
-                           (data.splineFlags & (SplineFlagWotlk::FLYING | SplineFlagWotlk::CATMULLROM)) != 0;
-        if (flown && (taxiResumeExpected_ || inFlight)) {
-            taxiResumeWay_.clear();
-            const auto add = [this](float x, float y, float z) {
-                taxiResumeWay_.push_back(core::coords::serverToCanonical(glm::vec3(x, y, z)));
-            };
-            add(data.x, data.y, data.z);
-            for (const auto& wp : data.waypoints) add(wp.x, wp.y, wp.z);
-            add(data.destX, data.destY, data.destZ);
-        }
-    }
     if (!entity) {
         return;
     }
@@ -2311,6 +2291,15 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
             entity->startMoveTo(destCanonical.x, destCanonical.y, destCanonical.z,
                                 orientation, data.duration / 1000.0f);
         }
+        // The spline takes what the client's own does, at its capped speed
+        // (0x0073c8e0 hands 0x006eb680 that time, not the packet's); one too
+        // short to start is over at once (0x006f11b0).
+        if (clientRoute) {
+            if (const auto it = moveSplines_.find(data.guid); it != moveSplines_.end()) {
+                if (const auto ms = entity->pathDurationMs()) it->second.durationMs = *ms;
+                else if (pathLength <= monster_move::kMinSplineLength) it->second.durationMs = 0;
+            }
+        }
         entity->faceAlongMove(finalFacing,
                               keepsFacing ? std::optional<float>(facingBefore) : std::nullopt,
                               inverted);
@@ -2354,6 +2343,22 @@ void MovementHandler::handleMonsterMove(network::Packet& packet) {
                 float orientation = std::atan2(-dy, dx);
                 entity->setOrientation(orientation);
             }
+        }
+    }
+    // The mover's stop is reported as its spline's end is, with the stop's
+    // own id (0x006f11b0 -> 0x006eae70 -> 0x0071f210) - a flight the server
+    // breaks off among them - and the player is where it says.
+    if (!data.hasDest && !isPreWotlk() && data.guid == activeMover()) {
+        moveSplines_[data.guid] =
+            vehicle::MoveSpline{.startMs = movementClockMs(), .durationMs = 0, .splineId = data.splineId};
+        if (data.moveType == 1 && data.guid == owner_.getPlayerGuid()) {
+            const glm::vec3 at(entity->getX(), entity->getY(), entity->getZ());
+            const glm::vec3 here(movementInfo.x, movementInfo.y, movementInfo.z);
+            movementInfo.x = at.x;
+            movementInfo.y = at.y;
+            movementInfo.z = at.z;
+            if (glm::length(at - here) > 0.1f && owner_.playerPositionCorrectionCallbackRef())
+                owner_.playerPositionCorrectionCallbackRef()(at.x, at.y, at.z);
         }
     }
     // A stop, or no path: every way it moved stops (0x006f11b0 ->
@@ -2693,10 +2698,8 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
 
     glm::vec3 canonical = core::coords::serverToCanonical(glm::vec3(serverX, serverY, serverZ));
 
-    // Put somewhere else: a click-to-move is over (0x0072d1b0 -> 0x007272c0),
-    // and a flight with it - the way flown goes with the spline the move ends.
+    // Put somewhere else: a click-to-move is over (0x0072d1b0 -> 0x007272c0).
     owner_.stopClickToMove();
-    if (onTaxiFlight_ || taxiClientActive_) dropTaxiFlight();
 
     // A destination that is the map origin itself, which is a server-side
     // area-trigger misfire rather than anywhere anyone goes.
@@ -2750,6 +2753,13 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
         // send them again, and water walking went at every .go with the buff
         // still on.
         placeMover(movementInfo, endFallTimer());
+        // Off the spline that carried it (0x0098b730 lets it go, unreported),
+        // and a flight's camera follows the unit: it is here now as well.
+        moveSplines_.erase(guid);
+        forgetTaxi();
+        if (auto self = owner_.getEntityManager().getEntity(guid)) {
+            self->setPosition(canonical.x, canonical.y, canonical.z, movementInfo.orientation);
+        }
         // Off whatever transport it was on, or onto the one the teleport
         // names. Kept, the old one went on placing the player by its offset
         // on it, so a .go away from a lift left them riding it.
@@ -3053,17 +3063,11 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
     serverMovementAllowed_ = true;
     owner_.resurrectPendingRef() = false;
     owner_.resurrectRequestPendingRef() = false;
-    taxiResumeExpected_ = taxiClientActive_ && taxiWayGoesOn_;
-    onTaxiFlight_ = false;
-    taxiMountActive_ = false;
-    taxiActivatePending_ = false;
-    taxiClientActive_ = false;
-    taxiClientPath_.clear();
-    taxiWayGoesOn_ = false;
-    taxiResumeWay_.clear();
-    taxiServerCompletionPending_ = false;
-    taxiRecoverPending_ = false;
-    taxiStartGrace_ = 0.0f;
+    // A flight on the map left behind is over here; one that goes on has its
+    // flag on the player made anew and its own spline on this map. The splines
+    // went with the objects they moved (0x004d6750).
+    forgetTaxi();
+    moveSplines_.clear();
     owner_.currentMountDisplayIdRef() = 0;
     if (owner_.mountCallbackRef()) {
         owner_.mountCallbackRef()(0);
@@ -3411,7 +3415,6 @@ void MovementHandler::startClientTaxiPath(const std::vector<uint32_t>& pathNodes
     taxiClientIndex_ = 0;
     taxiClientActive_ = false;
     taxiClientSegmentProgress_ = 0.0f;
-    std::vector<std::pair<uint32_t, glm::vec3>> way;
 
     for (size_t i = 0; i + 1 < pathNodes.size(); i++) {
         uint32_t fromNode = pathNodes[i];
@@ -3432,41 +3435,28 @@ void MovementHandler::startClientTaxiPath(const std::vector<uint32_t>& pathNodes
             for (const auto& wpNode : pathIt->second) {
                 glm::vec3 serverPos(wpNode.x, wpNode.y, wpNode.z);
                 glm::vec3 canonical = core::coords::serverToCanonical(serverPos);
-                way.emplace_back(wpNode.mapId, canonical);
+                taxiClientPath_.push_back(canonical);
             }
         } else {
             LOG_WARNING("No spline waypoints found for taxi pathId ", pathId);
         }
     }
 
-    if (way.size() < 2) {
-        way.clear();
+    if (taxiClientPath_.size() < 2) {
+        taxiClientPath_.clear();
         for (uint32_t nodeId : pathNodes) {
             auto nodeIt = taxiNodes_.find(nodeId);
             if (nodeIt == taxiNodes_.end()) continue;
             glm::vec3 serverPos(nodeIt->second.x, nodeIt->second.y, nodeIt->second.z);
-            way.emplace_back(nodeIt->second.mapId, core::coords::serverToCanonical(serverPos));
+            taxiClientPath_.push_back(core::coords::serverToCanonical(serverPos));
         }
     }
-    // The server's spline is the part of it on this map; the rest is another,
-    // sent once the player is on the other map.
-    taxiClientPath_ = taxiWayOnOneMap(way, taxiWayGoesOn_);
 
     if (taxiClientPath_.size() < 2) {
         LOG_WARNING("Taxi path too short: ", taxiClientPath_.size(), " waypoints");
         return;
     }
 
-    measureTaxiWay();
-
-    // NOTE: this only builds taxiClientPath_ as pending data - it deliberately does
-    // NOT snap the player to the path start or set taxiClientActive_. CMSG_ACTIVATETAXI
-    // can still be rejected by the server at this point; see activateTaxi()'s comment
-    // and beginTaxiFlightMotion(), which does the actual activation once
-    // SMSG_ACTIVATETAXIREPLY confirms success.
-}
-
-void MovementHandler::measureTaxiWay() {
     // Precompute each segment's real curve arc length (see taxiClientSegmentArcLengths_'s
     // comment for why - pacing must use this, not the straight-line chord length, to keep
     // total flight duration in line with the server's own identical-speed spline). Sampled
@@ -3491,24 +3481,12 @@ void MovementHandler::measureTaxiWay() {
         }
         taxiClientSegmentArcLengths_.push_back(arcLength);
     }
-}
 
-void MovementHandler::resumeTaxiFlight() {
-    if (taxiResumeWay_.size() < 2 || !owner_.isInWorld()) return;
-    const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
-    if (!player) return;
-    taxiResumeExpected_ = false;
-    taxiClientPath_ = std::move(taxiResumeWay_);
-    taxiResumeWay_.clear();
-    taxiClientIndex_ = 0;
-    taxiClientSegmentProgress_ = 0.0f;
-    taxiWayGoesOn_ = false;
-    measureTaxiWay();
-    onTaxiFlight_ = true;
-    taxiStartGrace_ = std::max(taxiStartGrace_, 2.0f);
-    applyTaxiMountForCurrentNode();
-    LOG_INFO("Taxi flight on along the server's spline, ", taxiClientPath_.size(), " points");
-    beginTaxiFlightMotion();
+    // NOTE: this only builds taxiClientPath_ as pending data - it deliberately does
+    // NOT snap the player to the path start or set taxiClientActive_. CMSG_ACTIVATETAXI
+    // can still be rejected by the server at this point; see activateTaxi()'s comment
+    // and beginTaxiFlightMotion(), which does the actual activation once
+    // SMSG_ACTIVATETAXIREPLY confirms success.
 }
 
 void MovementHandler::beginTaxiFlightMotion() {
@@ -3708,12 +3686,14 @@ void MovementHandler::updateClientTaxi(float deltaTime) {
         }
     }
 
-    if (!taxiResumeWay_.empty()) resumeTaxiFlight();
+    if (!isPreWotlk()) {
+        updateServerTaxi(deltaTime);
+        return;
+    }
     if (!taxiClientActive_ || taxiClientPath_.size() < 2) return;
     auto playerEntity = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
 
     if (taxiClientIndex_ + 1 >= taxiClientPath_.size()) {
-        if (taxiWayGoesOn_) return;   // the server takes the player over the border
         finishClientTaxiFlight(/*snapToFinalWaypoint=*/true);
         return;
     }
@@ -3727,7 +3707,6 @@ void MovementHandler::updateClientTaxi(float deltaTime) {
 
     while (true) {
         if (taxiClientIndex_ + 1 >= taxiClientPath_.size()) {
-            if (taxiWayGoesOn_) return;
             finishClientTaxiFlight(/*snapToFinalWaypoint=*/true);
             return;
         }
@@ -3823,6 +3802,90 @@ void MovementHandler::updateClientTaxi(float deltaTime) {
     }
 }
 
+void MovementHandler::forgetTaxi() {
+    onTaxiFlight_ = false;
+    taxiFlagSeen_ = false;
+    taxiFlagWait_ = 0.0f;
+    taxiMountActive_ = false;
+    taxiActivatePending_ = false;
+    taxiActivateTimer_ = 0.0f;
+    taxiClientActive_ = false;
+    taxiClientPath_.clear();
+    taxiServerCompletionPending_ = false;
+    taxiRecoverPending_ = false;
+    taxiStartGrace_ = 0.0f;
+}
+
+bool MovementHandler::playerTaxiFlag() const {
+    const auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    return player && player->isUnit() &&
+           (static_cast<const Unit&>(*player).getUnitFlags() & UNIT_FLAG_TAXI_FLIGHT) != 0;
+}
+
+void MovementHandler::updateServerTaxi(float deltaTime) {
+    const bool flagged = playerTaxiFlag();
+    if (flagged && !onTaxiFlight_) {
+        // Taken up here as well where no request was made from here: a login
+        // in flight, and the far side of a map's border.
+        onTaxiFlight_ = true;
+        sanitizeMovementForTaxi();
+        LOG_INFO("Taxi flight under way");
+    }
+    if (!onTaxiFlight_) return;
+    if (flagged) taxiFlagSeen_ = true;
+
+    const uint64_t guid = owner_.getPlayerGuid();
+    const auto player = owner_.getEntityManager().getEntity(guid);
+    const bool carried = onMoveSpline(guid);
+    if (player) {
+        // The movement kept goes with the unit; the unit is not set, which
+        // would end its spline.
+        movementInfo.x = player->getX();
+        movementInfo.y = player->getY();
+        movementInfo.z = player->getZ();
+        movementInfo.orientation = player->getOrientation();
+        if (const auto heading = player->pathHeading(); heading && owner_.taxiOrientationCallbackRef()) {
+            const glm::vec3 tangent = core::coords::canonicalToRender(heading->tangent);
+            if (glm::dot(tangent, tangent) > 1e-8f) {
+                const glm::vec3 ahead = core::coords::canonicalToRender(heading->ahead);
+                const float pitch = std::asin(std::clamp(tangent.z / glm::length(tangent), -1.0f, 1.0f));
+                owner_.taxiOrientationCallbackRef()(std::atan2(tangent.y, tangent.x), pitch,
+                                                    flightBank(tangent, ahead));
+            }
+        }
+    }
+    if (flagged || carried) return;
+    // Over once the server has taken the flag back and the last spline has
+    // run out - or where a flight it accepted never came.
+    if (!taxiFlagSeen_) {
+        taxiFlagWait_ -= deltaTime;
+        if (taxiFlagWait_ > 0.0f) return;
+    }
+    endServerTaxi();
+}
+
+void MovementHandler::endServerTaxi() {
+    onTaxiFlight_ = false;
+    taxiFlagSeen_ = false;
+    taxiDestNodeId_ = 0;
+    taxiLandingCooldown_ = 2.0f;
+    sanitizeMovementForTaxi();
+    // Some servers carry the taxi mount in the vehicle data.
+    owner_.vehicleIdRef() = 0;
+    // Where the last spline ended; nothing puts the player on the flight
+    // master's place.
+    if (auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
+        player->setPosition(player->getLatestX(), player->getLatestY(), player->getLatestZ(),
+                            player->getOrientation());
+        movementInfo.x = player->getX();
+        movementInfo.y = player->getY();
+        movementInfo.z = player->getZ();
+        if (owner_.playerPositionCorrectionCallbackRef())
+            owner_.playerPositionCorrectionCallbackRef()(movementInfo.x, movementInfo.y, movementInfo.z);
+    }
+    LOG_INFO("Taxi flight over");
+}
+
 void MovementHandler::handleActivateTaxiReply(network::Packet& packet) {
     ActivateTaxiReplyData data;
     if (!ActivateTaxiReplyParser::parse(packet, data)) {
@@ -3858,6 +3921,15 @@ void MovementHandler::handleActivateTaxiReply(network::Packet& packet) {
         }
         taxiActivatePending_ = false;
         taxiActivateTimer_ = 0.0f;
+        if (!isPreWotlk()) {
+            // The answer only lets the flight map go (0x006cee90 ->
+            // 0x00590ba0). The mount, the flag and the spline are the
+            // server's to send.
+            taxiFlagSeen_ = false;
+            taxiFlagWait_ = 5.0f;
+            LOG_INFO("Taxi flight accepted");
+            return;
+        }
         applyTaxiMountForCurrentNode();
         // Now that the server has confirmed, actually move the player to the path
         // start and start advancing the spline (see activateTaxi()'s comment).
@@ -4093,7 +4165,7 @@ void MovementHandler::activateTaxi(uint32_t destNodeId) {
     if (owner_.taxiFlightStartCallbackRef()) {
         owner_.taxiFlightStartCallbackRef()();
     }
-    startClientTaxiPath(path);
+    if (isPreWotlk()) startClientTaxiPath(path);
 }
 
 // ============================================================
@@ -4455,6 +4527,18 @@ void MovementHandler::updateMoverSplineDone() {
     if (it == moveSplines_.end() || vehicle::moveSplineRunning(it->second, movementClockMs())) return;
     const uint32_t splineId = it->second.splineId;
     moveSplines_.erase(it);
+    // Where it ended (0x006e9470): the player's own movement is the last
+    // frame's. On a flight the unit stays there, and does not drift on, until
+    // the server moves it.
+    if (mover == owner_.getPlayerGuid()) {
+        if (auto player = owner_.getEntityManager().getEntity(mover)) {
+            const glm::vec3 end(player->getLatestX(), player->getLatestY(), player->getLatestZ());
+            if (onTaxiFlight_) player->setPosition(end.x, end.y, end.z, player->getOrientation());
+            movementInfo.x = end.x;
+            movementInfo.y = end.y;
+            movementInfo.z = end.z;
+        }
+    }
     // 0x0071f210: the mover's movement block and the spline's id.
     if (owner_.getSocket()) sendMovement(Opcode::CMSG_MOVE_SPLINE_DONE, splineId);
 }

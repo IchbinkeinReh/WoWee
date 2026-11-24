@@ -218,9 +218,12 @@ void GameHandler::leaveWorldState(bool wasInWorld, const char* why) {
     // The combat and chat log files closed and their logging off (0x005072b0).
     if (combatLogFeed_) combatLogFeed_->closeLogFile();
     if (chatHandler_) chatHandler_->closeChatLog();
-    // A flight is the world's it was in. Left to itself, the next character in
-    // glided on along it, and past every teleport.
-    if (movementHandler_) movementHandler_->dropTaxiFlight();
+    // A flight is of the world it was in, and so are the splines of its units.
+    // The next character in glided on along the last one's way.
+    if (movementHandler_) {
+        movementHandler_->forgetTaxi();
+        movementHandler_->forgetMoveSplines();
+    }
     if (wasInWorld) {
         closeCraftingWindow();
         onLeaveWorld(/*worldport=*/false);

@@ -739,6 +739,8 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
     movementInfo.flags2 = 0;
     if (movementHandler_) {
         movementHandler_->resetMovementClock();
+        movementHandler_->forgetMoveSplines();
+        movementHandler_->forgetTaxi();
         movementHandler_->dropTeleportAck();
         movementHandler_->forgetCollisionHeight();
     }

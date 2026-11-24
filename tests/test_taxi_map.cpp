@@ -156,15 +156,3 @@ TEST_CASE("a node of the other side's beasts only is refused", "[taxi][route]") 
     CHECK_FALSE(taxiNodeRefused(false, 2224, 541));
     CHECK_FALSE(taxiNodeRefused(true, 18345, 18345));
 }
-
-TEST_CASE("a flight goes to the border of its map, and then on", "[taxi][border]") {
-    using Way = std::vector<std::pair<uint32_t, int>>;
-    bool goesOn = true;
-    CHECK(taxiWayOnOneMap(Way{{0, 1}, {0, 2}, {0, 3}}, goesOn) == std::vector<int>{1, 2, 3});
-    CHECK_FALSE(goesOn);
-    // Light's Hope to Silvermoon: the Eastern Kingdoms, then Outland's map.
-    CHECK(taxiWayOnOneMap(Way{{0, 1}, {0, 2}, {530, 3}, {530, 4}}, goesOn) == std::vector<int>{1, 2});
-    CHECK(goesOn);
-    CHECK(taxiWayOnOneMap(Way{}, goesOn).empty());
-    CHECK_FALSE(goesOn);
-}
