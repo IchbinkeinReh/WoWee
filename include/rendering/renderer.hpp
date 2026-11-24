@@ -1154,7 +1154,7 @@ private:
     // Post-process pipeline - owns all FSR/FXAA/FSR2 state (extracted §4.3)
     std::unique_ptr<PostProcessPipeline> postProcessPipeline_;
 
-    bool playerIndoors_ = false;  // Cached WMO inside state for macro conditionals
+    bool playerIndoors_ = false;  ///< Where the player stands (updatePlayerArea), as IsIndoors has it
     bool deferredWorldInitEnabled_ = true;
     bool deferredWorldInitPending_ = false;
     uint8_t deferredWorldInitStage_ = 0;

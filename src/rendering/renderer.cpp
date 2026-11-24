@@ -2629,6 +2629,7 @@ void Renderer::updatePlayerArea() {
     playerLinks_.clear();
     playerLinkedArea_ = 0;
     playerLinkIndoors_ = false;
+    playerIndoors_ = false;
     playerPlace_ = {};
     // Out of the world the texts go back to nothing, as leaving it clears the
     // client's (0x00529160, from 0x00406510) - so the first area after
@@ -2707,6 +2708,9 @@ void Renderer::updatePlayerArea() {
             }
         }
     }
+    // IsIndoors (0x00612300 -> 0x0071b7f0 -> 0x0077fbf0). It was whether the
+    // camera stood in a building's bounding box, which beside a house it does.
+    playerIndoors_ = !game::outdoors::outdoors(playerPlace_, gh->getAreaFlags(groundArea));
     // A moving building's group names nothing (0x00782560 and 0x007a13e0
     // pass over map objects with 0x400).
     const bool linkedStill = linked && !linked->dynamic;
@@ -3035,14 +3039,6 @@ void Renderer::update(float deltaTime) {
         }
     }
 
-    // Resolve WMO containment before the ambience consumes it.
-    const bool canQueryWmo = (camera && wmoRenderer);
-    const glm::vec3 camPos = camera ? camera->getPosition() : glm::vec3(0.0f);
-    const bool insideWmo = [&] {
-        WOWEE_PROFILE_SCOPE("camera inside a WMO", Cpu);
-        return canQueryWmo && wmoRenderer->isInsideWMO(camPos.x, camPos.y, camPos.z);
-    }();
-    playerIndoors_ = insideWmo;
     // Where the player is, and the zone events when that changes: on the
     // texts changing, as the client raises them (0x005204c0), rather than on
     // the camera entering a building's box - Dalaran's streets are inside a
