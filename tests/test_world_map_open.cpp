@@ -3,6 +3,7 @@
 // of a 1002x668 map, the zone a position falls in, the Map.dbc name column and
 // the full-screen scale.
 #include <catch_amalgamated.hpp>
+#include "rendering/world_map/data_repository.hpp"
 #include "rendering/world_map/map_resolver.hpp"
 #include "rendering/world_map/coordinate_projection.hpp"
 #include "rendering/world_map/world_map_types.hpp"
@@ -178,4 +179,33 @@ TEST_CASE("fullscreenFrameScale: narrower than 4:3 fits the width, as the client
     // 5:4 at interface scale 1: the client's min(1, aspect * 0.75).
     REQUIRE(fullscreenFrameScale(960.0f, 768.0f) == Catch::Approx(1.25f * 0.75f));
     REQUIRE(fullscreenFrameScale(0.0f, 768.0f) == Catch::Approx(1.0f));
+}
+
+// ── Where an instance without a map of its own opens ─────────
+
+TEST_CASE("an instance opens where its entrance is shown", "[world_map][open]") {
+    using Entrance = DataRepository::Entrance;
+    // WorldMapTransforms.dbc rows 2 and 3.
+    const std::vector<wowee::game::WorldMapTransform> transforms = {
+        {530, 4800.0f, -10133.33f, 16000.0f, -2666.67f, 0, -2400.0f, 2400.0f},
+        {530, -6933.33f, -16000.0f, 533.33f, -8000.0f, 1, 10133.33f, 17600.0f},
+    };
+    const auto entrance = [](uint32_t mapId, float x, float y) {
+        Entrance e;
+        e.valid = true;
+        e.mapId = mapId;
+        e.x = x;
+        e.y = y;
+        return e;
+    };
+    // Magisters' Terrace (585): Quel'Danas, on the Eastern Kingdoms' map.
+    const Entrance terrace = DataRepository::entranceShown(transforms, entrance(530, 12881.9f, -7343.1f));
+    CHECK(terrace.valid);
+    CHECK(terrace.mapId == 0);
+    CHECK(terrace.x == Catch::Approx(10481.9f));
+    CHECK(terrace.y == Catch::Approx(-4943.1f));
+    // Shadow Labyrinth's is Outland's own, the Deadmines' nobody's to move.
+    CHECK(DataRepository::entranceShown(transforms, entrance(530, -3640.0f, 4943.0f)).mapId == 530);
+    CHECK(DataRepository::entranceShown(transforms, entrance(0, -11208.0f, 1672.0f)).x == Catch::Approx(-11208.0f));
+    CHECK_FALSE(DataRepository::entranceShown(transforms, Entrance{}).valid);
 }

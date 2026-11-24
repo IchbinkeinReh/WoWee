@@ -106,6 +106,21 @@ public:
         float x = 0.0f, y = 0.0f;
     };
     [[nodiscard]] const Entrance& entrance() const { return entrance_; }
+    /// The entrance Map.dbc gives, where it is shown: the client takes it
+    /// through 0x00543920 before it looks for the continent (0x00547170,
+    /// an instance without a map of its own). The Magisters' Terrace is
+    /// entered from Quel'Danas, on Outland's map and shown on the Eastern
+    /// Kingdoms'.
+    [[nodiscard]] static Entrance entranceShown(const std::vector<game::WorldMapTransform>& transforms,
+                                                const Entrance& entrance) {
+        if (!entrance.valid) return entrance;
+        const game::ShownPlace at = game::shownPlace(transforms, entrance.mapId, entrance.x, entrance.y);
+        Entrance out = entrance;
+        out.mapId = at.mapId;
+        out.x = at.x;
+        out.y = at.y;
+        return out;
+    }
     /// 0x005439e0: the DungeonMap row a map's building gives a height - of
     /// the DungeonMapChunk rows for the map and the WMO group id, the last whose MinZ
     /// the height reaches - or -1 for none.

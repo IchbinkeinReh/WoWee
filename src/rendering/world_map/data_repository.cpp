@@ -153,6 +153,7 @@ void DataRepository::loadZones(const std::string& mapName,
     // onto Kalimdor (map 1) with a +10133.333/+17600 coordinate offset.
     const auto transformsDbc = assetManager.loadDBC("WorldMapTransforms.dbc");
     mapTransforms_ = game::readWorldMapTransforms(transformsDbc.get());
+    entrance_ = entranceShown(mapTransforms_, entrance_);
 
     // Use expansion-aware DBC layout when available; fall back to WotLK stock field
     // indices (ID=0, ParentAreaNum=2, ExploreFlag=3) when layout metadata is missing.
