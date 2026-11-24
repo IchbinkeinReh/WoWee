@@ -1586,7 +1586,7 @@ void GameScreen::renderMinimapReadouts(const MinimapFrame& frame, game::GameHand
     const auto banner = game::difficulty_change::instanceBanner(instance.type, instance.difficulty + 1,
                                                                 instance.maxPlayers, instance.playerDifficulty,
                                                                 instance.dynamic);
-    if (instance.known && banner.shown) {
+    if (game::difficulty_change::ownDifficultyLabel(instance.known, banner, frameXmlOwns(UiElement::Minimap))) {
         const std::string sized = std::to_string(instance.maxPlayers);
         const char* label = !instance.difficultyName.empty() ? instance.difficultyName.c_str() : sized.c_str();
 
