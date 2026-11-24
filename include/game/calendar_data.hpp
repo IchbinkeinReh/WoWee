@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -559,6 +560,25 @@ struct CalendarDayEntry {
     uint32_t sequenceIndex = 0;
     uint32_t numSequenceDays = 1;
 };
+
+/// The row the interface has open (0x00c20f78..): an event by its id, or a
+/// holiday or a lockout by its day, its row's id (+0x94) and - a lockout -
+/// its difficulty (+0x90). Nothing open with neither.
+struct CalendarOpenRow {
+    uint64_t eventId = 0;
+    int year = 0, month = 0, day = 0;
+    CalendarEntryKind kind = CalendarEntryKind::Event;
+    uint32_t id = 0;
+    uint32_t difficulty = 0;
+};
+/// A day's row as the open one, and its kind as CALENDAR_OPEN_EVENT names it
+/// (0x005b9310, 0x005b7fd0). Not for a row the server is asked about
+/// (flags 0x543): that one is opened by the answer, and is none here.
+std::optional<std::pair<CalendarOpenRow, const char*>> calendarOpenedRow(const CalendarData& data,
+                                                                         const CalendarDayEntry& row, int year,
+                                                                         int month, int day);
+/// Whether a day's row is the open one (0x005b9000, the day aside).
+bool calendarIsOpenRow(const CalendarData& data, const CalendarDayEntry& row, const CalendarOpenRow& open);
 
 /**
  * The rows for one day, holidays first and then events by time.

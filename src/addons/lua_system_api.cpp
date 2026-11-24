@@ -12060,12 +12060,20 @@ void registerSystemLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             if (!gh || index < 1 || static_cast<size_t>(index) > rows.size()) return 0;
             const auto& row = rows[static_cast<size_t>(index) - 1];
-            if (row.kind != wowee::game::CalendarEntryKind::Event) return 0;
+            // A holiday, a lockout or a reset is opened as it stands (0x005b9310).
+            const auto viewed = calendarViewedMonth();
+            const auto info = wowee::game::calendarMonthAt(viewed.first, viewed.second,
+                                                           static_cast<int>(luaL_optnumber(L, 1, 0)));
+            if (const auto opened = wowee::game::calendarOpenedRow(gh->getCalendarData(), row, info.year, info.month,
+                                                                   static_cast<int>(luaL_optnumber(L, 2, 0)))) {
+                gh->openCalendarRow(opened->first, opened->second);
+                return 0;
+            }
             gh->requestCalendarEvent(gh->getCalendarData().events[row.index].eventId);
             return 0;
         }},
                 {"CalendarCloseEvent", [](lua_State* L) -> int {
-            (void)L;
+            if (auto* gh = getGameHandler(L)) gh->closeCalendarRow();
             return 0;
         }},
                 // Twenty-five values, in the order the view frame unpacks
@@ -13014,16 +13022,18 @@ void registerSystemLuaAPI(lua_State* L) {
         }},
                 {"CalendarGetEventIndex", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (gh && gh->isCalendarEventOpen()) {
-                const uint64_t open = gh->getCalendarEventDetail().eventId;
+            const auto open = gh ? gh->getCalendarOpenRow() : wowee::game::CalendarOpenRow{};
+            if (open.eventId != 0 || open.day != 0) {
                 const auto viewed = calendarViewedMonth();
-                for (int offset = -1; offset <= 1 && open; ++offset) {
+                for (int offset = -1; offset <= 1; ++offset) {
                     const auto info = wowee::game::calendarMonthAt(viewed.first, viewed.second, offset);
+                    // A holiday's or a lockout's day is its own.
+                    if (open.day != 0 && (info.month != open.month || info.year != open.year)) continue;
                     for (int day = 1; day <= info.numDays; ++day) {
+                        if (open.day != 0 && day != open.day) continue;
                         const auto rows = calendarRowsFor(*gh, offset, day);
                         for (size_t i = 0; i < rows.size(); ++i) {
-                            if (rows[i].kind != wowee::game::CalendarEntryKind::Event) continue;
-                            if (gh->getCalendarData().events[rows[i].index].eventId != open) continue;
+                            if (!wowee::game::calendarIsOpenRow(gh->getCalendarData(), rows[i], open)) continue;
                             lua_pushinteger(L, offset);
                             lua_pushinteger(L, day);
                             lua_pushinteger(L, static_cast<lua_Integer>(i + 1));

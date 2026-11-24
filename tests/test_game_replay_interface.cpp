@@ -37,6 +37,46 @@ struct Interface {
 
 }  // namespace
 
+// P50: 0x005b9310 asks the server of a row with 0x543 only; a holiday is
+// opened as it stands.
+TEST_CASE("a holiday opens without asking the server", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    wowee::game::Character self;
+    self.guid = Session::kPlayerGuid;
+    self.race = wowee::game::Race::BLOOD_ELF;
+    s.handler().charactersRef().push_back(self);
+    s.handler().setActiveCharacterGuid(self.guid);
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_CALENDAR_SEND_CALENDAR));
+    const uint32_t november22 = (10u << 24) | (10u << 20) | (21u << 14);
+    for (uint32_t v : {0u, 0u, 1290000000u, november22, 0u, 0u, 0u, 1u}) p.writeUInt32(v);
+    for (uint32_t v : {404u, 0u, 0u, 7u, 3u}) p.writeUInt32(v);
+    for (int i = 0; i < 26; ++i) p.writeUInt32(i == 0 ? november22 : 0u);
+    for (int i = 0; i < 10; ++i) p.writeUInt32(i == 0 ? 24u : 0u);
+    for (int i = 0; i < 10; ++i) p.writeUInt32(i == 0 ? 3u : 0u);
+    p.writeString("Calendar_HarvestFestival");
+    s.receive(p);
+    ui.run("CalendarSetAbsMonth(11, 2010) seen = {} "
+           "local f = CreateFrame('Frame') f:RegisterEvent('CALENDAR_OPEN_EVENT') "
+           "f:SetScript('OnEvent', function(self, event, kind) seen[#seen + 1] = kind end) "
+           "for i = 1, CalendarGetNumDayEvents(0, 22) do "
+           "  local _, _, _, kind = CalendarGetDayEvent(0, 22, i) if kind == 'HOLIDAY' then row = i end end");
+    REQUIRE(ui.is("row ~= nil"));
+    const size_t sent = s.sent().all().size();
+    ui.run("CalendarOpenEvent(0, 22, row)");
+    CHECK(s.sent().all().size() == sent);
+    CHECK(ui.is("#seen == 1 and seen[1] == 'HOLIDAY'"));
+    CHECK(ui.is("(function() local o, d, i = CalendarGetEventIndex() return o == 0 and d == 22 and i == row end)()"));
+    // Kept while another month is shown, whose days it is not among.
+    ui.run("CalendarSetMonth(6)");
+    CHECK(ui.is("(function() local o, d, i = CalendarGetEventIndex() return o == 0 and d == 0 and i == 0 end)()"));
+    ui.run("CalendarSetMonth(-6)");
+    CHECK(ui.is("(function() local o, d, i = CalendarGetEventIndex() return o == 0 and d == 22 and i == row end)()"));
+    ui.run("CalendarCloseEvent()");
+    CHECK(ui.is("(function() local o, d, i = CalendarGetEventIndex() return o == 0 and d == 0 and i == 0 end)()"));
+}
+
 // P51: the wheel goes down the frames that take the wheel (0x00494890), to
 // one with the script (0x0048fdb0): a button over the list covers nothing.
 // P52: and a scroll bar that is not shown is the handler's to leave alone.

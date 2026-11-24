@@ -4945,6 +4945,12 @@ std::vector<GameHandler::CalendarEventTexture> GameHandler::calendarEventTexture
     return out;
 }
 
+void GameHandler::openCalendarRow(const CalendarOpenRow& row, const char* type) {
+    if (calendarActionPending_) return;
+    calendarOpenRow_ = row;
+    fireAddonEvent("CALENDAR_OPEN_EVENT", {type});
+}
+
 bool GameHandler::openCalendarNewEvent(CalendarNewKind kind) {
     if (!isInWorld() || !entityController_->getEntityManager().getEntity(playerGuid)) return false;
     if (kind != CalendarNewKind::Player && getEntityGuildId(playerGuid) == 0) {
@@ -4956,6 +4962,7 @@ bool GameHandler::openCalendarNewEvent(CalendarNewKind kind) {
     calendarEventDetail_ = calendarNewEvent(kind, playerGuid,
                                             static_cast<uint8_t>(serverPlayerLevel_));
     calendarDraftOpen_ = true;
+    calendarOpenRow_ = {};
     if (kind == CalendarNewKind::Player)
         fireAddonEvent("CALENDAR_UPDATE_INVITE_LIST", {"1"});
     return true;

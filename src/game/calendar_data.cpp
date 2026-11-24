@@ -463,6 +463,47 @@ const char* calendarTypeForFlags(uint32_t flags) {
     return "PLAYER";
 }
 
+std::optional<std::pair<CalendarOpenRow, const char*>> calendarOpenedRow(const CalendarData& data,
+                                                                         const CalendarDayEntry& row, int year,
+                                                                         int month, int day) {
+    CalendarOpenRow open;
+    open.year = year;
+    open.month = month;
+    open.day = day;
+    open.kind = row.kind;
+    uint32_t flags = 0;
+    switch (row.kind) {
+    case CalendarEntryKind::Holiday:
+        open.id = data.holidays[row.index].id;
+        flags = calendar_flag::kHoliday;
+        break;
+    case CalendarEntryKind::RaidLockout:
+        open.id = data.lockouts[row.index].mapId;
+        open.difficulty = data.lockouts[row.index].difficulty;
+        flags = calendar_flag::kRaidLockout;
+        break;
+    case CalendarEntryKind::Event:
+        open.eventId = data.events[row.index].eventId;
+        flags = data.events[row.index].flags;
+        break;
+    }
+    constexpr uint32_t kAsksServer = 0x543;
+    if ((flags & kAsksServer) != 0) return std::nullopt;
+    return std::pair{open, calendarTypeForFlags(flags)};
+}
+
+bool calendarIsOpenRow(const CalendarData& data, const CalendarDayEntry& row, const CalendarOpenRow& open) {
+    if (row.kind != open.kind) return false;
+    switch (row.kind) {
+    case CalendarEntryKind::Holiday: return open.id != 0 && data.holidays[row.index].id == open.id;
+    case CalendarEntryKind::RaidLockout:
+        return open.id != 0 && data.lockouts[row.index].mapId == open.id &&
+               data.lockouts[row.index].difficulty == open.difficulty;
+    case CalendarEntryKind::Event: return open.eventId != 0 && data.events[row.index].eventId == open.eventId;
+    }
+    return false;
+}
+
 /// Minutes since an arbitrary epoch, for ordering two dates. Whole minutes, so
 /// two dates inside the same minute compare equal - which is what the
 /// fifteen-minute reminder leans on.

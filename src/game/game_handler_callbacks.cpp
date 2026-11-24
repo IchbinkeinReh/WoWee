@@ -6334,6 +6334,15 @@ void GameHandler::handleCalendarPacket(CalendarPacket which, network::Packet& pa
         packet.skipAll();
         return;
     }
+    // An event opened - not one just made - is the open row (0x005bed20), and
+    // one taken away is no more (0x005c0ae0, 0x005c0cf0).
+    if (which == CalendarPacket::SendEvent && calendarEventDetail_.sendType != 1 && calendarEventDetail_.sendType != 2) {
+        calendarOpenRow_ = {};
+        calendarOpenRow_.eventId = calendarEventDetail_.eventId;
+    } else if (calendarOpenRow_.eventId != 0 && calendarEventDetail_.eventId == 0 &&
+               (which == CalendarPacket::EventRemovedAlert || which == CalendarPacket::InviteRemovedAlert)) {
+        calendarOpenRow_ = {};
+    }
     // The server sends the holidays it has changed; the rest are the table's.
     if (which == CalendarPacket::SendCalendar)
         calendarData_.holidays = calendarMergedHolidays(holidayTable(), calendarData_.holidays);

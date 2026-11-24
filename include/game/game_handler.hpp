@@ -1159,6 +1159,12 @@ public:
     /// A player's name has arrived: an open event may have been waiting on
     /// it (0x005f1b10).
     void onCalendarNameKnown(uint64_t guid);
+    /// CalendarOpenEvent (0x005b9310) of a row the server is not asked about:
+    /// the open one from now on, and said so; nothing while a request is out.
+    void openCalendarRow(const CalendarOpenRow& row, const char* type);
+    /// CalendarCloseEvent (0x005b84a0): no row is the open one.
+    void closeCalendarRow() { calendarOpenRow_ = {}; }
+    const CalendarOpenRow& getCalendarOpenRow() const { return calendarOpenRow_; }
     void requestCalendar(); ///< Send CMSG_CALENDAR_GET_CALENDAR to the server
     /// The calendar the server last sent, empty until it has answered one.
     const CalendarData& getCalendarData() const { return calendarData_; }
@@ -8010,6 +8016,7 @@ private:
     void sayCalendarAlarms(const WowDate& now);
     /// One event in full, as of the last one opened.
     CalendarEventDetail calendarEventDetail_;
+    CalendarOpenRow calendarOpenRow_;  // 0x00c20f78
 
     // ---- Spell modifiers (SMSG_SET_FLAT_SPELL_MODIFIER / SMSG_SET_PCT_SPELL_MODIFIER) ----
     // Keyed by (SpellModOp, groupIndex); cleared on logout/character change.
