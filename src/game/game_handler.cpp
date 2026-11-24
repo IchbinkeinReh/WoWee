@@ -6459,6 +6459,14 @@ const std::vector<GossipPoi>& GameHandler::getGossipPois() const {
     return empty;
 }
 
+const GossipPoi* GameHandler::gossipPoint() const {
+    return questHandler_ ? questHandler_->gossipPoint() : nullptr;
+}
+
+void GameHandler::dropGossipPoint() {
+    if (questHandler_) questHandler_->dropGossipPoint();
+}
+
 void GameHandler::clearGossipPois() {
     if (questHandler_) questHandler_->clearGossipPois();
 }

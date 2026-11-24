@@ -4,9 +4,22 @@
 // list must not undo what the log knows.
 #include <catch_amalgamated.hpp>
 
+#include "game/gossip_icon.hpp"
 #include "game/gossip_quest_status.hpp"
 
+#include <string>
+
 using namespace wowee::game::gossip_quest;
+
+// The table at 0x00acef20, by the words GossipFrame_Update puts in front of
+// "GossipIcon": an innkeeper's option is the binder's, a spirit healer's the
+// healer's.
+TEST_CASE("an option's icon is the client's word for it", "[gossip_quest]") {
+    const char* const kWords[] = {"gossip", "vendor",   "taxi",   "trainer",      "healer",    "binder",
+                                  "banker", "petition", "tabard", "battlemaster", "auctioneer"};
+    for (uint32_t i = 0; i < 11; ++i) CHECK(std::string(wowee::game::gossipIconName(i)) == kWords[i]);
+    for (uint32_t i : {11u, 16u, 20u, 99u}) CHECK(std::string(wowee::game::gossipIconName(i)) == "gossip");
+}
 
 TEST_CASE("the server's icons sort quests into offered and taken", "[gossip_quest]") {
     CHECK(iconIsAvailable(2));

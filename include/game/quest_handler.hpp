@@ -95,6 +95,8 @@ public:
     // Gossip / quest map POI markers (aliased from handler_types.hpp)
     using GossipPoi = game::GossipPoi;
     [[nodiscard]] const std::vector<GossipPoi>& getGossipPois() const { return gossipPois_; }
+    [[nodiscard]] const GossipPoi* gossipPoint() const;
+    void dropGossipPoint();
     void clearGossipPois() { gossipPois_.clear(); }
     /// The console's UpdatePOI (0x005e7170 -> 0x005e70d0): every quest's
     /// points of interest dropped and asked for again, the whole log in one
@@ -366,7 +368,12 @@ private:
 
     // --- State ---
     // Gossip
+    uint64_t gossipPointDropped_ = 0;
     bool gossipWindowOpen_ = false;
+    /// A gossip is held (0x00c016f0), from SMSG_GOSSIP_MESSAGE to the
+    /// GOSSIP_CLOSED that lets it go.
+    bool gossipHeld_ = false;
+    void endGossip();
     /// GOSSIP_SHOW held back until the greeting's text has arrived.
     bool gossipShowAwaitingText_ = false;
     /// The gossip window is the quest giver's greeting list (0x0058c5a0),

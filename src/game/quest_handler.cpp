@@ -33,6 +33,7 @@
 #include <set>
 #include <sstream>
 #include <unordered_map>
+#include <utility>
 
 namespace wowee {
 namespace game {
@@ -1687,11 +1688,34 @@ void QuestHandler::declineQuest(bool announce) {
     dismissQuestDetails(announce);
 }
 
+const GossipPoi* QuestHandler::gossipPoint() const {
+    const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+    for (auto it = gossipPois_.rbegin(); it != gossipPois_.rend(); ++it) {
+        if (it->questObjectiveIndex != -2) continue;
+        if (nowMs - it->receivedMs >= 480000u || it->receivedMs == gossipPointDropped_) return nullptr;
+        return &*it;
+    }
+    return nullptr;
+}
+
+void QuestHandler::dropGossipPoint() {
+    if (const GossipPoi* p = gossipPoint()) gossipPointDropped_ = p->receivedMs;
+}
+
 void QuestHandler::closeGossip() {
     gossipWindowOpen_ = false;
-    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("GOSSIP_CLOSED", {});
+    endGossip();
     currentGossip_ = GossipMessageData{};
     questGreeting_.clear();
+}
+
+// 0x0058a550: GOSSIP_CLOSED (0x11c) where a gossip is let go, and not where
+// none is held - the window closing on the event calls CloseGossip itself
+// (GossipFrame_OnHide).
+void QuestHandler::endGossip() {
+    if (!std::exchange(gossipHeld_, false)) return;
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("GOSSIP_CLOSED", {});
 }
 
 void QuestHandler::offerQuestFromItem(uint64_t itemGuid, uint32_t questId) {
@@ -2387,6 +2411,7 @@ void QuestHandler::handleGossipMessage(network::Packet& packet) {
     if (!ok) return;
     if (questDetailsOpen_) return; // Don't reopen gossip while viewing quest
     gossipWindowOpen_ = true;
+    gossipHeld_ = true;
     gossipIsQuestGreeting_ = false;
     // 0x0058a550: a gossip window with another object sets it.
     if (currentGossip_.npcGuid != gossipBefore) owner_.setInteractionObject(currentGossip_.npcGuid, go_interaction::Window::Gossip);
@@ -2613,7 +2638,7 @@ void QuestHandler::handleGossipComplete(network::Packet& packet) {
     // The creature's farewell is the interaction object's, said as it is let
     // go with the window (0x0058a550 -> 0x00518d50 -> 0x00720860).
     gossipWindowOpen_ = false;
-    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("GOSSIP_CLOSED", {});
+    endGossip();
     currentGossip_ = GossipMessageData{};
     questGreeting_.clear();
 }

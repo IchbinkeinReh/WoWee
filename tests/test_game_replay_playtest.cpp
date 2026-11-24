@@ -64,6 +64,32 @@ TEST_CASE("an accept that runs out asks its giver nothing", "[replay][playtest]"
     CHECK(s.sent().of(Opcode::CMSG_QUESTGIVER_QUERY_QUEST).empty());
 }
 
+// The vendor a gossip option leads to: the server says the gossip is over, and
+// the frame MERCHANT_SHOW puts in its place calls CloseGossip as it hides.
+TEST_CASE("a gossip is closed once", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    int closed = 0;
+    s.handler().addonEventCallbackRef() = [&](const std::string& event, const std::vector<std::string>&) {
+        if (event == "GOSSIP_CLOSED") ++closed;
+    };
+    // PlayerMenu::SendGossipMenu with no option and no quest.
+    wowee::network::Packet gossip(wowee::game::wireOpcode(Opcode::SMSG_GOSSIP_MESSAGE));
+    gossip.writeUInt64(kGiver);
+    for (int i = 0; i < 4; ++i) gossip.writeUInt32(0);
+    s.receive(gossip);
+    CHECK(closed == 0);
+    s.receive(wowee::network::Packet(wowee::game::wireOpcode(Opcode::SMSG_GOSSIP_COMPLETE)));
+    CHECK(closed == 1);
+    s.handler().closeGossip();
+    CHECK(closed == 1);
+    // And again with the next one, closed by the player.
+    s.receive(gossip);
+    s.handler().closeGossip();
+    s.handler().closeGossip();
+    CHECK(closed == 2);
+}
+
 TEST_CASE("a landing clears FALLING whether or not its packet goes out", "[replay][playtest]") {
     Session s;
     spawnPlayer(s);

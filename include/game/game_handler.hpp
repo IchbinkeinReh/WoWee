@@ -5780,6 +5780,10 @@ public:
     /// This handed out a reference to a list of its own. getGossipPois
     /// forwards to QuestHandler, so clearing through the reference left
     /// the markers the map draws exactly where they were.
+    /// The point SMSG_GOSSIP_POI named last, for the eight minutes the client
+    /// keeps it (0x007f4870) and until it is reached (dropGossipPoint).
+    [[nodiscard]] const GossipPoi* gossipPoint() const;
+    void dropGossipPoint();
     void clearGossipPois();
     auto& playerExploredZonesRef() { return playerExploredZones_; }
     auto& hasPlayerExploredZonesRef() { return hasPlayerExploredZones_; }

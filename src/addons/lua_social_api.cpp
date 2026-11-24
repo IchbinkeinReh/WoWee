@@ -1,6 +1,7 @@
 // lua_social_api.cpp - Chat, guild, friends, ignore, gossip, party management, and emotes Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "addons/unit_or_name.hpp"
+#include "game/gossip_icon.hpp"
 #include "game/gossip_quest_status.hpp"
 #include "game/name_rules.hpp"
 #include "game/spell_mods.hpp"
@@ -4534,10 +4535,9 @@ void registerSocialLuaAPI(lua_State* L) {
             // than raising.
             if (!lua_checkstack(L, static_cast<int>(opts.size()) * 2 + 1)) return 0;
             int n = 0;
-            static constexpr const char* kIcons[] = {"gossip","vendor","taxi","trainer","spiritguide","innkeeper","banker","petition","tabard","battlemaster","auctioneer"};
             for (const auto& o : opts) {
                 lua_pushstring(L, o.text.c_str());
-                lua_pushstring(L, o.icon < 11 ? kIcons[o.icon] : "gossip");
+                lua_pushstring(L, game::gossipIconName(o.icon));
                 n += 2;
             }
             return n;
