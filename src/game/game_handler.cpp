@@ -572,8 +572,8 @@ if (taxiActivatePending_) {
 }
 }
 
-void GameHandler::updateAutoAttack(float deltaTime) {
-    if (combatHandler_) combatHandler_->updateAutoAttack(deltaTime);
+void GameHandler::updateAutoAttack() {
+    if (combatHandler_) combatHandler_->updateAutoAttack();
 
 // Close NPC windows if player walks too far (15 units)
 }
@@ -744,7 +744,6 @@ void GameHandler::updateTimers(float deltaTime) {
             pendingMoneyDelta_ = 0;
         }
     }
-    // autoAttackRangeWarnCooldown_ decrement moved into CombatHandler::updateAutoAttack()
 
     if (pendingLoginQuestResync_) {
         pendingLoginQuestResyncTimeout_ -= deltaTime;
@@ -909,7 +908,7 @@ void GameHandler::update(float deltaTime) {
     // Both places used to fire it, so every fight announced itself twice: the
     // combat text showed "Entering Combat" and then "Entering Combat" again,
     // and the same on the way out. The two do not even agree on the question.
-    // This one asked isInCombat(), which is `autoAttacking_ ||
+    // This one asked isInCombat(), which is `attacking ||
     // !hostileAttackers_.empty()` - the client's own inference from what it has
     // seen swing - while the other reads the flag the *server* sets, which is
     // what PLAYER_REGEN_DISABLED means in WoW and what decides whether a panel
@@ -1006,7 +1005,7 @@ void GameHandler::update(float deltaTime) {
             updateAttachedTransportChildren(deltaTime);
         }
 
-        updateAutoAttack(deltaTime);
+        updateAutoAttack();
         auto closeIfTooFar = [&](bool windowOpen, uint64_t npcGuid, auto closeFn, const char* label) {
             if (!windowOpen || npcGuid == 0) return;
             auto npc = entityController_->getEntityManager().getEntity(npcGuid);
@@ -3990,8 +3989,8 @@ bool GameHandler::isCurrentSpell(uint32_t spellId) const {
     // Effect 0 ATTACK (0x4e): while the player swings (Player_C +0xa20/+0xa24,
     // the auto-attack target).
     // The target is set when the swing is asked for, ahead of the server's
-    // SMSG_ATTACKSTART: the request counts.
-    if (spell.effectIds[0] == 0x4e) return hasAutoAttackIntent() || isAutoAttacking();
+    // SMSG_ATTACKSTART.
+    if (spell.effectIds[0] == 0x4e) return isAutoAttacking();
     // Effect 0 TRADE_SKILL (0x2f): while its profession's window is open
     // (0x0071a670, DAT_00c235a4), and not a linked one (DAT_00c235e4).
     if (spell.effectIds[0] == 0x2f) {

@@ -10,13 +10,13 @@
 #include "game/game_utils.hpp"
 #include "game/packet_parsers.hpp"
 #include "game/entity.hpp"
+#include "game/click_to_move.hpp"
 #include "game/nearest_enemy_filter.hpp"
 #include "game/update_field_table.hpp"
 #include "game/spell_unit_target.hpp"
 #include "game/opcode_table.hpp"
 #include "rendering/renderer.hpp"
 #include "audio/audio_coordinator.hpp"
-#include "audio/activity_sound_manager.hpp"
 #include "audio/npc_voice_manager.hpp"
 #include "core/application.hpp"
 #include "core/coordinates.hpp"
@@ -34,6 +34,20 @@ namespace wowee {
 namespace game {
 
 namespace {
+
+/// The client's clock (0x00cd76ac).
+int64_t steadyMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+float distanceSqTo(const MovementInfo& from, const Entity& to) {
+    const float dx = from.x - to.getLatestX();
+    const float dy = from.y - to.getLatestY();
+    const float dz = from.z - to.getLatestZ();
+    return dx * dx + dy * dy + dz * dz;
+}
 
 /// The on-screen line for the pet's failed cast, as 0x00805610 words it: its
 /// own ERR_PET_SPELL_* lines for the results it has one for, the cooldown and
@@ -134,10 +148,8 @@ bool CombatHandler::threatWarningWanted() const {
 
 void CombatHandler::registerOpcodes(DispatchTable& table) {
     // ---- Combat clearing ----
-    table[Opcode::SMSG_ATTACKSWING_DEADTARGET] = [this](network::Packet& /*packet*/) {
-        autoAttacking_ = false;
-        autoAttackTarget_ = 0;
-    };
+    // 0x00756800 hands both of these to 0x006e1660.
+    table[Opcode::SMSG_ATTACKSWING_DEADTARGET] = [this](network::Packet& /*packet*/) { stopAutoAttack(); };
     table[Opcode::SMSG_THREAT_CLEAR] = [this](network::Packet& packet) {
         // 0x00734b00 -> 0x007345c0: the unit's own list, and only while the
         // unit is in the world and its list has anyone on it. Each victim's
@@ -191,11 +203,9 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
         fireUnitEvent("UNIT_THREAT_SITUATION_UPDATE", victimGuid);
         fireUnitEvent("UNIT_THREAT_LIST_UPDATE", unitGuid);
     };
+    // The attack stopped as the player stops it (0x006e2210 -> 0x006e1660).
     table[Opcode::SMSG_CANCEL_COMBAT] = [this](network::Packet& /*packet*/) {
-        autoAttacking_ = false;
-        autoAttackTarget_ = 0;
-        autoAttackRequested_ = false;
-        autoAttackRetryPending_ = false;
+        stopAutoAttack();
         hostileAttackers_.clear();
     };
 
@@ -205,39 +215,18 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
     // The same packet under another opcode: 0x00756800 compares for 0x261 and
     // jumps into its SMSG_ATTACKSTOP case, so the two read and do alike.
     table[Opcode::SMSG_COMBAT_EVENT_FAILED] = [this](network::Packet& packet) { handleAttackStop(packet); };
+    // Kept, and said by updateAutoAttack (0x00756800 -> 0x006cee70).
     table[Opcode::SMSG_ATTACKSWING_NOTINRANGE] = [this](network::Packet& /*packet*/) {
-        autoAttackOutOfRange_ = true;
-        // ERR_BADATTACKPOS, at most every four seconds: 0x00756800 notes the
-        // refusal and 0x006d5eb0 reports it. This was English.
-        if (autoAttackRangeWarnCooldown_ <= 0.0f) {
-            owner_.raiseUiError(interfaceString("ERR_BADATTACKPOS", "You are too far away!"));
-            autoAttackRangeWarnCooldown_ = 4.0f;
-        }
+        swingRefusal_.refused(SwingRefusal::Why::Distance, steadyMs());
     };
+    // Reported, not corrected: the facing is the player's. Turned to the target
+    // here, the character running away from something with the attack still on
+    // was spun round to face it each time the server said so.
     table[Opcode::SMSG_ATTACKSWING_BADFACING] = [this](network::Packet& /*packet*/) {
-        // Reported, not corrected. This used to turn the character to face the
-        // target, which is not something the server may do to a player: the
-        // facing is the player's. Running away from something with auto-attack
-        // still on had the server say "not facing" every swing timer and the
-        // character spin round to face it each time, fighting the player for
-        // control of their own heading.
-        //
-        // The real client says so and leaves the heading alone - the swing
-        // simply does not land until the player turns back.
-        // ERR_BADATTACKFACING, by the same four-second rule (0x006d5eb0).
-        if (autoAttackRangeWarnCooldown_ <= 0.0f) {
-            owner_.raiseUiError(interfaceString("ERR_BADATTACKFACING", "You are facing the wrong way!"));
-            autoAttackRangeWarnCooldown_ = 4.0f;
-        }
+        swingRefusal_.refused(SwingRefusal::Why::Facing, steadyMs());
     };
-    table[Opcode::SMSG_ATTACKSWING_NOTSTANDING] = [this](network::Packet& /*packet*/) {
-        autoAttackOutOfRange_ = false;
-        autoAttackOutOfRangeTime_ = 0.0f;
-        if (autoAttackRangeWarnCooldown_ <= 0.0f) {
-            owner_.raiseUiError("You need to stand up to fight.");
-            autoAttackRangeWarnCooldown_ = 1.25f;
-        }
-    };
+    // Opcode 0x147, "not standing", has no case in 0x00756800.
+    table[Opcode::SMSG_ATTACKSWING_NOTSTANDING] = [](network::Packet& packet) { packet.skipAll(); };
     table[Opcode::SMSG_ATTACKSWING_CANT_ATTACK] = [this](network::Packet& /*packet*/) {
         // The swing stops and nothing is said: 0x00756800 hands this to
         // 0x006e1660, which ends the attack and only plays a voice line.
@@ -532,42 +521,14 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
         }
     }
 
-    // Client-side range gate to avoid starting "swing forever" loops when
-    // target is already clearly out of range.
-    if (auto target = owner_.getEntityManager().getEntity(targetGuid)) {
-        float dx = owner_.movementInfoRef().x - target->getLatestX();
-        float dy = owner_.movementInfoRef().y - target->getLatestY();
-        float dz = owner_.movementInfoRef().z - target->getLatestZ();
-        float dist3d = std::sqrt(dx * dx + dy * dy + dz * dz);
-        // Use longer range limit when a ranged weapon is equipped
-        const auto& rangedSlot = owner_.getInventory().getEquipSlot(game::EquipSlot::RANGED);
-        bool hasRangedWeapon = !rangedSlot.empty() &&
-            (rangedSlot.item.inventoryType == game::InvType::RANGED_BOW ||
-             rangedSlot.item.inventoryType == game::InvType::RANGED_GUN ||
-             rangedSlot.item.inventoryType == game::InvType::THROWN);
-        float maxRange = hasRangedWeapon ? 40.0f : 8.0f;
-        if (dist3d > maxRange) {
-            // The ERR_BADATTACKPOS the server's refusal would have brought
-            // (see SMSG_ATTACKSWING_NOTINRANGE); the original sends the swing
-            // and lets it be refused. This was English.
-            if (autoAttackRangeWarnCooldown_ <= 0.0f) {
-                owner_.raiseUiError(interfaceString("ERR_BADATTACKPOS", "You are too far away!"));
-                autoAttackRangeWarnCooldown_ = 4.0f;
-            }
-            return;
-        }
-    }
-
-    // Only dismount once this is a valid attack attempt. Doing it before the
-    // target/range gate knocked the player off a mount even though no combat
-    // request was sent.
+    // 0x006e4950 from a mount: out of the swing's reach it is refused, and the
+    // player stays mounted; in it, down they get. On foot it is asked for at
+    // any distance, and the server says where it is too far.
     //
     // Never in the air, unless Auto Dismount in Flight asks for it: a hostile
     // right-clicked from a flying mount dropped the player out of the sky.
-    //
-    // 0x006e2610 -> 0x00806550 first: the player's pending ranged casts
-    // (Attributes 0x2) are cancelled, the server told of one with a cast time.
-    if (auto* sh = owner_.getSpellHandler()) sh->cancelPendingCasts(0x2u);
+    const auto victim = std::dynamic_pointer_cast<Unit>(owner_.getEntityManager().getEntity(targetGuid));
+    const auto me = std::dynamic_pointer_cast<Unit>(owner_.getEntityManager().getEntity(owner_.getPlayerGuid()));
     if (owner_.isMounted()) {
         if (owner_.isPlayerFlying() && !owner_.isTaxiMountActive() &&
             addons::storedCVarValue("autoDismountFlying", "0") == "0") {
@@ -576,8 +537,34 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
             owner_.addUIError(interfaceString("ERR_ATTACK_MOUNTED", "Can't attack while mounted."));
             return;
         }
+        if (victim && me) {
+            const uint32_t ranged = owner_.autoRangedAttackSpell();
+            auto* sh = owner_.getSpellHandler();
+            const float reach = ranged != 0 && sh
+                                    ? sh->spellReachAt(ranged, owner_.getPlayerGuid(), targetGuid).max
+                                    : click_to_move::meleeReach(me->getCombatReach(), victim->getCombatReach());
+            if (reach * reach < distanceSqTo(owner_.movementInfoRef(), *victim)) {
+                owner_.raiseUiError(interfaceString("ERR_OUT_OF_RANGE", "Out of range."));
+                return;
+            }
+        }
         owner_.dismount();
     }
+    // 0x006e2610: one that may not be attacked now (0x00729a70) ends a running
+    // attack and starts none.
+    if (!victim || !me) return;
+    if (!unit_target::mayAttackNow(owner_.isPlayerDead(), owner_.isMounted(), true, victim->getHealth(),
+                                   victim->getDynamicFlags(),
+                                   owner_.unitMayAttack(owner_.getPlayerGuid(), targetGuid))) {
+        if (attack_.attacking()) stopAutoAttack();
+        return;
+    }
+    // 0x00806550: the player's pending ranged casts (Attributes 0x2) are
+    // cancelled, the server told of one with a cast time; then up from a seat
+    // (0x006dcb40), and the one attacked is the target (0x00524bf0).
+    if (auto* sh = owner_.getSpellHandler()) sh->cancelPendingCasts(0x2u);
+    if (owner_.getStandState() != 0) owner_.setStandState(0);
+    setTarget(targetGuid);
 
     // 0x008038f0: while one of the player's own casts in progress is one an
     // attack would interrupt (Spell.dbc InterruptFlags 0x8), the attack start
@@ -587,8 +574,7 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
     // player asks again. (The channel half of 0x008038f0, ChannelInterruptFlags
     // 0x1000, is covered by the channel refusal above, which stops every
     // attack while a channel runs.)
-    if (!autoAttacking_ && !autoAttackRequested_ && owner_.isCasting() &&
-        !owner_.isChanneling()) {
+    if (!attack_.attacking() && owner_.isCasting() && !owner_.isChanneling()) {
         owner_.loadSpellNameCache();
         const auto& cache = owner_.spellNameCacheRef();
         if (const auto it = cache.find(owner_.getCurrentCastSpellId());
@@ -596,15 +582,6 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
             return;
     }
 
-    autoAttackRequested_ = true;
-    autoAttackRetryPending_ = true;
-    // Keep combat animation/state server-authoritative. We only flip autoAttacking
-    // on SMSG_ATTACKSTART where attackerGuid == playerGuid.
-    autoAttacking_ = false;
-    autoAttackTarget_ = targetGuid;
-    autoAttackOutOfRange_ = false;
-    autoAttackOutOfRangeTime_ = 0.0f;
-    autoAttackResendTimer_ = 0.0f;
     // Face the target, once, on the command to attack it. This is the only
     // place combat turns the player: it used to be re-aimed every fifth of a
     // second for as long as the attack lasted.
@@ -624,9 +601,10 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
             }
         }
     }
-    if (owner_.getState() == WorldState::IN_WORLD && owner_.getSocket()) {
-        auto packet = AttackSwingPacket::build(targetGuid);
-        owner_.getSocket()->send(packet);
+    // None while one is on or asked for, unless its stop is (0x006e2610).
+    if (attack_.maySwing() && owner_.getState() == WorldState::IN_WORLD && owner_.getSocket()) {
+        owner_.getSocket()->send(AttackSwingPacket::build(targetGuid));
+        attack_.swingSent(targetGuid);
     }
     // 0x006e2610: swinging ends a repeating shot, the server told
     // (0x00807560(1)).
@@ -647,26 +625,24 @@ void CombatHandler::stopAutoAttack() {
             owner_.stopAutoRepeat(true);
         }
     }
-    if (!autoAttacking_ && !autoAttackRequested_) return;
-    autoAttackRequested_ = false;
-    autoAttacking_ = false;
-    autoAttackRetryPending_ = false;
-    autoAttackTarget_ = 0;
-    autoAttackOutOfRange_ = false;
-    autoAttackOutOfRangeTime_ = 0.0f;
-    autoAttackResendTimer_ = 0.0f;
-    if (owner_.getState() == WorldState::IN_WORLD && owner_.getSocket()) {
-        auto packet = AttackStopPacket::build();
-        owner_.getSocket()->send(packet);
-    }
+    if (!attack_.mayStop()) return;
+    sendAttackStop();
     // 0x006e1660 -> 0x00806480 after the stop goes out: a cast waiting on the
     // next swing (Attributes 0x404) is cancelled with CMSG_CANCEL_CAST.
     if (auto* sh = owner_.getSpellHandler()) sh->cancelPendingCasts(0x404u);
     LOG_INFO("Stopping auto-attack");
-    if (owner_.addonEventCallbackRef())
-        owner_.addonEventCallbackRef()("PLAYER_LEAVE_COMBAT", {});
     // 0x006e1660: the stop's tutorials.
     for (uint32_t id : attackStops_.note(owner_.getPlayerLevel(), owner_.tutorials())) owner_.triggerTutorial(id);
+}
+
+// The attack itself ends with the server's SMSG_ATTACKSTOP.
+void CombatHandler::sendAttackStop() {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) {
+        attack_.stopped();
+        return;
+    }
+    owner_.getSocket()->send(AttackStopPacket::build());
+    attack_.stopSent();
 }
 
 // ============================================================
@@ -933,7 +909,8 @@ void CombatHandler::autoTargetAttacker(uint64_t attackerGuid) {
     if (attackerGuid == 0 || attackerGuid == owner_.getPlayerGuid()) return;
     if (owner_.getTargetGuid() != 0) return;
     if (!owner_.getEntityManager().hasEntity(attackerGuid)) return;
-    // 0x00755020 from SMSG_ATTACKSTART (0x00756800).
+    // 0x00755020, at a swing at the player (0x00756800 case 0x14a) and a
+    // harmful spell's hit (0x008063a0).
     targetUnit(attackerGuid);
 }
 
@@ -968,19 +945,16 @@ void CombatHandler::handleAttackStart(network::Packet& packet) {
     if (data.attackerGuid != owner_.getPlayerGuid()) unitMeleeTargets_[data.attackerGuid] = data.victimGuid;
 
     if (data.attackerGuid == owner_.getPlayerGuid()) {
-        autoAttackRequested_ = true;
-        autoAttacking_ = true;
-        autoAttackRetryPending_ = false;
-        autoAttackTarget_ = data.victimGuid;
+        attack_.started(data.victimGuid);
         if (owner_.addonEventCallbackRef())
             owner_.addonEventCallbackRef()("PLAYER_ENTER_COMBAT", {});
     } else if (data.victimGuid == owner_.getPlayerGuid() && data.attackerGuid != 0) {
-        // The attacker is kept as a hostile one and auto-targeted. 0x00756800
-        // case 0x143 asks nothing to be said here - a unit reaching for the
-        // player says nothing about it; the line only a reaction change brings
-        // (SMSG_AI_REACTION) is where an angry unit speaks.
+        // The attacker is kept as a hostile one. 0x00756800 case 0x143 asks
+        // nothing to be said here - a unit reaching for the player says
+        // nothing about it; the line only a reaction change brings
+        // (SMSG_AI_REACTION) is where an angry unit speaks. Nor is it taken
+        // for the target before it has swung.
         hostileAttackers_.insert(data.attackerGuid);
-        autoTargetAttacker(data.attackerGuid);
     }
 
     // Force both participants to face each other at combat start.
@@ -1006,12 +980,9 @@ void CombatHandler::handleAttackStop(network::Packet& packet) {
     // kept settled.
     unitMeleeTargets_.erase(data.attackerGuid);
     if (owner_.attackStopCallbackRef()) owner_.attackStopCallbackRef()(data.attackerGuid);
-    // Keep intent, but clear server-confirmed active state until ATTACKSTART resumes.
     if (data.attackerGuid == owner_.getPlayerGuid()) {
-        autoAttacking_ = false;
-        autoAttackRetryPending_ = autoAttackRequested_;
-        autoAttackResendTimer_ = 0.0f;
-        LOG_DEBUG("SMSG_ATTACKSTOP received (keeping auto-attack intent)");
+        attack_.stopped();
+        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("PLAYER_LEAVE_COMBAT", {});
     } else if (data.victimGuid == owner_.getPlayerGuid()) {
         hostileAttackers_.erase(data.attackerGuid);
     }
@@ -1045,6 +1016,18 @@ void CombatHandler::handleAttackerStateUpdate(network::Packet& packet) {
     if (owner_.meleeHitCallbackRef()) owner_.meleeHitCallbackRef()(data);
     if (!isPlayerAttacker && !isPlayerTarget) return;  // Not our combat
 
+    // 0x006d4ad0: the player's swing came off.
+    if (isPlayerAttacker) {
+        const auto victim = std::dynamic_pointer_cast<Unit>(owner_.getEntityManager().getEntity(data.targetGuid));
+        const auto me = std::dynamic_pointer_cast<Unit>(owner_.getEntityManager().getEntity(data.attackerGuid));
+        if (victim && me) {
+            swingRefusal_.clear(steadyMs());
+            if (swingLeftBehind(distanceSqTo(owner_.movementInfoRef(), *victim), me->getCombatReach(),
+                                victim->getCombatReach())) {
+                sendAttackStop();
+            }
+        }
+    }
     if (isPlayerAttacker) {
         lastMeleeSwingMs_ = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1061,25 +1044,12 @@ void CombatHandler::handleAttackerStateUpdate(network::Packet& packet) {
     if (!isPlayerAttacker && owner_.npcSwingCallbackRef()) {
         owner_.npcSwingCallbackRef()(data.attackerGuid);
     }
-    // A creature's exertion as its hit arrives is its sound slot's, played
-    // with the swing's sounds (rendering/melee_sound.hpp).
+    // Its voice as the hit arrives, and its victim's as it lands, are their
+    // sound slots', played with the swing's sounds (rendering/melee_sound.hpp).
 
     if (isPlayerTarget && data.attackerGuid != 0) {
         hostileAttackers_.insert(data.attackerGuid);
         autoTargetAttacker(data.attackerGuid);
-    }
-
-    // Character vocalizations (the swing's whoosh and impact are its
-    // attacker's model's, above).
-    if (auto* ac = owner_.services().audioCoordinator) {
-        if (auto* asm_ = ac->getActivitySoundManager()) {
-            if (isPlayerAttacker && !data.isMiss() && data.victimState != 2 && data.victimState != 3) {
-                asm_->playAttackGrunt();
-            }
-            if (isPlayerTarget && !data.isMiss() && data.victimState != 2 && data.victimState != 3) {
-                asm_->playWound(data.isCrit());
-            }
-        }
     }
 
     // 0x007512b0's order: a hit (1) or a block (5) that did damage, then a
@@ -1248,79 +1218,20 @@ void CombatHandler::handleSetForcedReactions(network::Packet& packet) {
 // Per-frame update
 // ============================================================
 
-void CombatHandler::updateAutoAttack(float deltaTime) {
-    // Decrement range warn cooldown
-    if (autoAttackRangeWarnCooldown_ > 0.0f) {
-        autoAttackRangeWarnCooldown_ = std::max(0.0f, autoAttackRangeWarnCooldown_ - deltaTime);
-    }
-
-    // Leave combat if auto-attack target is too far away (leash range)
-    // and keep melee intent tightly synced while stationary.
-    if (autoAttackRequested_ && autoAttackTarget_ != 0) {
-        auto targetEntity = owner_.getEntityManager().getEntity(autoAttackTarget_);
-        if (targetEntity) {
-            const float targetX = targetEntity->getLatestX();
-            const float targetY = targetEntity->getLatestY();
-            const float targetZ = targetEntity->getLatestZ();
-            float dx = owner_.movementInfoRef().x - targetX;
-            float dy = owner_.movementInfoRef().y - targetY;
-            float dz = owner_.movementInfoRef().z - targetZ;
-            float dist = std::sqrt(dx * dx + dy * dy);
-            float dist3d = std::sqrt(dx * dx + dy * dy + dz * dz);
-            const bool classicLike = isPreWotlk();
-            if (dist > 40.0f) {
-                stopAutoAttack();
-                LOG_INFO("Left combat: target too far (", dist, " yards)");
-            } else if (owner_.isInWorld()) {
-                bool allowResync = true;
-                const float meleeRange = classicLike ? 5.25f : 5.75f;
-                if (dist3d > meleeRange) {
-                    autoAttackOutOfRange_ = true;
-                    autoAttackOutOfRangeTime_ += deltaTime;
-                    // ERR_BADATTACKPOS once, at most every four seconds, as
-                    // for the server's refusal. This raised an English line
-                    // twice over.
-                    if (autoAttackRangeWarnCooldown_ <= 0.0f) {
-                        owner_.raiseUiError(interfaceString("ERR_BADATTACKPOS", "You are too far away!"));
-                        autoAttackRangeWarnCooldown_ = 4.0f;
-                    }
-                    // Stop chasing stale swings when the target remains out of range.
-                    // Silently: the interface has no line for it.
-                    if (autoAttackOutOfRangeTime_ > 2.0f && dist3d > 9.0f) {
-                        stopAutoAttack();
-                        allowResync = false;
-                    }
-                } else {
-                    autoAttackOutOfRange_ = false;
-                    autoAttackOutOfRangeTime_ = 0.0f;
-                }
-
-                if (allowResync) {
-                    autoAttackResendTimer_ += deltaTime;
-
-                    // Classic/Turtle servers do not tolerate steady attack-start
-                    // reissues well. Only retry once after local start or an
-                    // explicit server-side attack stop while intent is still set.
-                    const float resendInterval = classicLike ? 1.0f : 0.50f;
-                    if (!autoAttacking_ && !autoAttackOutOfRange_ && autoAttackRetryPending_ &&
-                        autoAttackResendTimer_ >= resendInterval) {
-                        autoAttackResendTimer_ = 0.0f;
-                        autoAttackRetryPending_ = false;
-                        auto pkt = AttackSwingPacket::build(autoAttackTarget_);
-                        owner_.getSocket()->send(pkt);
-                    }
-
-                    // No periodic facing sync. The player is turned to face the
-                    // target once, where the attack is commanded, and after
-                    // that their facing is theirs: turning away mid-fight
-                    // means the swing misses, which is what it means in the
-                    // real client. Re-aiming them every fifth of a second so
-                    // the server would accept the swing fought the mouse for
-                    // the whole fight and made it impossible to back away from
-                    // something while attacked by it.
-                }
-            }
-        }
+void CombatHandler::updateAutoAttack() {
+    // 0x006d5eb0: ERR_BADATTACKPOS and ERR_BADATTACKFACING, from the server's
+    // refusal on. No reach of the client's own has a say: measured from centre
+    // to centre here, a large creature hit at its edge was "too far away"
+    // every four seconds, and a swing at one was never asked for.
+    switch (swingRefusal_.due(attack_.attacking(), steadyMs())) {
+        case SwingRefusal::Why::Distance:
+            owner_.raiseUiError(interfaceString("ERR_BADATTACKPOS", "You are too far away!"));
+            break;
+        case SwingRefusal::Why::Facing:
+            owner_.raiseUiError(interfaceString("ERR_BADATTACKFACING", "You are facing the wrong way!"));
+            break;
+        case SwingRefusal::Why::None:
+            break;
     }
 
     // Keep active melee attackers visually facing the player as positions change.
@@ -1340,18 +1251,16 @@ void CombatHandler::updateAutoAttack(float deltaTime) {
 // State management
 // ============================================================
 
+void CombatHandler::forgetAttack() {
+    attack_.stopped();
+    swingRefusal_.clear(steadyMs());
+}
+
 void CombatHandler::resetAllCombatState() {
     hostileAttackers_.clear();
     unitMeleeTargets_.clear();
     combatText_.clear();
-    autoAttacking_ = false;
-    autoAttackRequested_ = false;
-    autoAttackRetryPending_ = false;
-    autoAttackTarget_ = 0;
-    autoAttackOutOfRange_ = false;
-    autoAttackOutOfRangeTime_ = 0.0f;
-    autoAttackRangeWarnCooldown_ = 0.0f;
-    autoAttackResendTimer_ = 0.0f;
+    forgetAttack();
     lastMeleeSwingMs_ = 0;
 }
 
@@ -2035,23 +1944,14 @@ void CombatHandler::setTarget(uint64_t guid) {
         }
     }
 
-    // Stop Auto Attack On Target Change, which the panel offers and nothing
-    // read. Changing target left the swing running - correct for the setting's
-    // default, and the only behaviour available whatever it said.
-    //
-    // Only when the target actually changes, and only when something is being
-    // swung at: re-selecting the same unit is not a change, and stopping an
-    // attack nobody started would send a cancel for nothing.
-    if (guid != owner_.getTargetGuid() && autoAttacking_ &&
-        addons::storedCVarValue("stopAutoAttackOnTargetChange", "0") != "0") {
-        stopAutoAttack();
-    }
-    // The same setting stops a repeating shot too, and tells the server
-    // (0x00524bf0 -> 0x00807560(1)).
-    if (guid != owner_.getTargetGuid() &&
-        addons::storedCVarValue("stopAutoAttackOnTargetChange", "0") != "0") {
-        owner_.stopAutoRepeat(true);
-    }
+    // 0x00524bf0: the old target let go ends the attack on it (0x005241b0 ->
+    // 0x006e1660), and the new one is attacked in its stead, below - unless
+    // Stop Auto Attack On Target Change is on, which stops a repeating shot
+    // too, and tells the server (0x00807560(1)).
+    const bool wasAttacking = attack_.attacking();
+    if (wasAttacking && owner_.getTargetGuid() != 0) stopAutoAttack();
+    const bool stopsOnChange = addons::storedCVarValue("stopAutoAttackOnTargetChange", "0") != "0";
+    if (stopsOnChange) owner_.stopAutoRepeat(true);
 
     owner_.setTargetGuidRaw(guid);
 
@@ -2075,6 +1975,8 @@ void CombatHandler::setTarget(uint64_t guid) {
         LOG_INFO("Target set: 0x", std::hex, guid, std::dec);
     }
     owner_.fireAddonEvent("PLAYER_TARGET_CHANGED", {});
+    // 0x006e4950 at the new target.
+    if (wasAttacking && !stopsOnChange && guid != 0) startAutoAttack(guid);
 
     // Report the interface once, the first time there is a target to report it
     // against. A target frame is only right or wrong with something targeted,
@@ -2099,6 +2001,8 @@ void CombatHandler::setTarget(uint64_t guid) {
 }
 
 void CombatHandler::clearTarget() {
+    // 0x005241b0 -> 0x006e1660: nothing targeted is nothing attacked.
+    if (owner_.getTargetGuid() != 0) stopAutoAttack();
     // 0x00524bf0 with none: the target let go is the last target.
     owner_.lastTargetGuidRef() = unit_target::lastTargetAfter(owner_.getTargetGuid(), 0, owner_.lastTargetGuidRef());
     if (owner_.getTargetGuid() != 0) {

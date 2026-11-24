@@ -6538,9 +6538,7 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
     inGameStep = "auto-unsheathe";
     updateCheckpoint = "in_game: auto-unsheathe";
     if (gameHandler) {
-        // Pre-WotLK servers briefly send ATTACKSTOP while the client keeps
-        // its attack intent for a retry: that is no new attack.
-        const bool attackWeaponNeeded = gameHandler->isAutoAttacking() || gameHandler->hasAutoAttackIntent();
+        const bool attackWeaponNeeded = gameHandler->isAutoAttacking();
         // Starting an attack draws melee (0x006e2610, with no sheath
         // animation).
         if (attackWeaponNeeded && !wasAutoAttacking_ && appearanceComposer_) {

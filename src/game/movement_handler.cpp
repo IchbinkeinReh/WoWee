@@ -3126,6 +3126,7 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
     owner_.areaTriggerSuppressFirstRef() = true;
     owner_.areaTriggerCooldownRef() = deeprunTram ? 1.5f : 10.0f;
     owner_.stopAutoAttack();
+    if (auto* combat = owner_.getCombatHandler()) combat->forgetAttack();
     owner_.resetCastState();
 
     if (owner_.getSocket()) {

@@ -242,3 +242,57 @@ TEST_CASE("taking off and landing are said with CMSG_MOVE_SET_FLY", "[replay][pl
     CHECK_FALSE(has(s, MovementFlags::FLYING));
     CHECK(s.sent().of(Opcode::CMSG_MOVE_SET_FLY).size() == 2);
 }
+
+// The attack's own rules of distance kept a swing from being asked for beyond
+// eight yards and called a hit creature too far away (0x006e2610, 0x006d5eb0).
+TEST_CASE("an attack is asked for at any distance and said too far by the server", "[replay][playtest]") {
+    Session s;
+    // UNIT_FLAG_PLAYER_CONTROLLED, which a player may attack a creature by.
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}, {UF::UNIT_FIELD_FLAGS, 0x8}});
+    s.handler().setPosition(-356.4f, -2337.2f, -8.7f);
+    constexpr uint64_t kMammoth = 0xF130005D7C000001ull;
+    s.receive(UpdateObject().create(kMammoth, wowee::game::ObjectType::UNIT,
+                                    {{UF::UNIT_FIELD_HEALTH, 100},
+                                     {UF::UNIT_FIELD_MAXHEALTH, 100},
+                                     {UF::UNIT_FIELD_FACTIONTEMPLATE, 14}}));
+    REQUIRE(s.handler().unitMayAttack(Session::kPlayerGuid, kMammoth));
+    std::vector<std::string> events;
+    s.handler().setAddonEventCallback([&](const std::string& event, const std::vector<std::string>& args) {
+        if (event == "PLAYER_ENTER_COMBAT" || event == "PLAYER_LEAVE_COMBAT") events.push_back(event);
+        if (event == "UI_ERROR_MESSAGE" && !args.empty()) events.push_back(args[0]);
+    });
+    s.handler().startAutoAttack(kMammoth);
+    CHECK(s.sent().of(Opcode::CMSG_ATTACKSWING).size() == 1);
+    CHECK(s.handler().isAutoAttacking());
+    CHECK(events.empty());
+    // Asked for once.
+    s.handler().startAutoAttack(kMammoth);
+    CHECK(s.sent().of(Opcode::CMSG_ATTACKSWING).size() == 1);
+
+    wowee::network::Packet start(wowee::game::wireOpcode(Opcode::SMSG_ATTACKSTART));
+    start.writeUInt64(Session::kPlayerGuid);
+    start.writeUInt64(kMammoth);
+    s.receive(start);
+    CHECK(events == std::vector<std::string>{"PLAYER_ENTER_COMBAT"});
+    events.clear();
+
+    s.receive(wowee::network::Packet(wowee::game::wireOpcode(Opcode::SMSG_ATTACKSWING_NOTINRANGE)));
+    s.handler().getCombatHandler()->updateAutoAttack();
+    s.handler().getCombatHandler()->updateAutoAttack();
+    CHECK(events.size() == 1);
+    CHECK(s.handler().isAutoAttacking());
+    events.clear();
+
+    // Stopped when the server has stopped it.
+    s.handler().stopAutoAttack();
+    CHECK(s.sent().of(Opcode::CMSG_ATTACKSTOP).size() == 1);
+    CHECK(events.empty());
+    wowee::network::Packet stop(wowee::game::wireOpcode(Opcode::SMSG_ATTACKSTOP));
+    stop.writePackedGuid(Session::kPlayerGuid);
+    stop.writePackedGuid(kMammoth);
+    stop.writeUInt32(0);
+    s.receive(stop);
+    CHECK(events == std::vector<std::string>{"PLAYER_LEAVE_COMBAT"});
+    CHECK_FALSE(s.handler().isAutoAttacking());
+    s.handler().setAddonEventCallback({});
+}

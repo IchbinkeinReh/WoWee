@@ -3417,6 +3417,13 @@ wowee_add_test(test_swim_motion
     SOURCES test_swim_motion.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_auto_attack ─────────────────────────────────────────
+# The player's own attack: asked for at any distance, said too far by the
+# server alone. Header-only.
+wowee_add_test(test_auto_attack
+    SOURCES test_auto_attack.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_mover_report ────────────────────────────────────────
 # What the movement state is told of a step: a fall ended on ground however it
 # came there, a swim its flags do not say. Header-only.

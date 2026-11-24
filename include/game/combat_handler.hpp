@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/auto_attack.hpp"
 #include "game/tutorials.hpp"
 
 #include "game/world_packets.hpp"
@@ -34,15 +35,12 @@ public:
     // --- Public API (delegated from GameHandler) ---
     void startAutoAttack(uint64_t targetGuid);
     void stopAutoAttack();
-    [[nodiscard]] bool isAutoAttacking() const { return autoAttacking_; }
-    [[nodiscard]] bool hasAutoAttackIntent() const { return autoAttackRequested_; }
-    [[nodiscard]] bool isInCombat() const { return autoAttacking_ || !hostileAttackers_.empty(); }
+    [[nodiscard]] bool isAutoAttacking() const { return attack_.attacking(); }
+    [[nodiscard]] bool isInCombat() const { return attack_.attacking() || !hostileAttackers_.empty(); }
     [[nodiscard]] bool isInCombatWith(uint64_t guid) const {
-        return guid != 0 &&
-               ((autoAttacking_ && autoAttackTarget_ == guid) ||
-                (hostileAttackers_.count(guid) > 0));
+        return guid != 0 && (attack_.target == guid || hostileAttackers_.count(guid) > 0);
     }
-    [[nodiscard]] uint64_t getAutoAttackTargetGuid() const { return autoAttackTarget_; }
+    [[nodiscard]] uint64_t getAutoAttackTargetGuid() const { return attack_.target; }
     /// Another unit's melee target (CGUnit_C +0xa20): set by its
     /// SMSG_ATTACKSTART (0x00754ff0), cleared by its SMSG_ATTACKSTOP
     /// (0x00756770); 0 for none.
@@ -83,13 +81,6 @@ public:
     // Forced faction reactions
     [[nodiscard]] const std::unordered_map<uint32_t, uint8_t>& getForcedReactions() const { return forcedReactions_; }
 
-    // Auto-attack timing state (read by GameHandler::update for retry/resend logic)
-    bool& autoAttackOutOfRangeRef() { return autoAttackOutOfRange_; }
-    float& autoAttackOutOfRangeTimeRef() { return autoAttackOutOfRangeTime_; }
-    float& autoAttackRangeWarnCooldownRef() { return autoAttackRangeWarnCooldown_; }
-    float& autoAttackResendTimerRef() { return autoAttackResendTimer_; }
-    bool& autoAttackRetryPendingRef() { return autoAttackRetryPending_; }
-
     // Combat text creation (used by other handlers, e.g. spell handler for periodic damage)
     /// A line of world text over `unit` (0x007e6030), of `kind`; with
     /// `replace`, the unit's earlier line of that kind goes first (0x007e5100).
@@ -110,7 +101,10 @@ public:
     bool shouldLogSpellstealAura(uint64_t casterGuid, uint64_t victimGuid, uint32_t spellId);
 
     // Called from GameHandler::update() each frame
-    void updateAutoAttack(float deltaTime);
+    void updateAutoAttack();
+    /// The player object gone with the old world: its attack with it
+    /// (+0xa20, 0x00c9eaa8 at 0x006e45d0).
+    void forgetAttack();
 
     // --- Targeting ---
     /// False for creature corpses that are neither lootable nor skinnable -
@@ -243,19 +237,15 @@ private:
     void handleResurrectFailed(network::Packet& packet);
 
     void autoTargetAttacker(uint64_t attackerGuid);
+    /// CMSG_ATTACKSTOP (0x007559e0), where there is an attack to stop.
+    void sendAttackStop();
 
     GameHandler& owner_;
 
     // --- Combat state ---
-    bool autoAttacking_ = false;
+    AutoAttack attack_;
+    SwingRefusal swingRefusal_;
     AttackStopCounter attackStops_;  ///< 0x006e1660's tutorial counter
-    bool autoAttackRequested_ = false;
-    bool autoAttackRetryPending_ = false;
-    uint64_t autoAttackTarget_ = 0;
-    bool autoAttackOutOfRange_ = false;
-    float autoAttackOutOfRangeTime_ = 0.0f;
-    float autoAttackRangeWarnCooldown_ = 0.0f;
-    float autoAttackResendTimer_ = 0.0f;
     std::unordered_set<uint64_t> hostileAttackers_;
     std::unordered_map<uint64_t, uint64_t> unitMeleeTargets_;
     std::vector<CombatTextEntry> combatText_;

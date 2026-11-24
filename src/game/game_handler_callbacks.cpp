@@ -2665,10 +2665,6 @@ bool GameHandler::isAutoAttacking() const {
     return combatHandler_ ? combatHandler_->isAutoAttacking() : false;
 }
 
-bool GameHandler::hasAutoAttackIntent() const {
-    return combatHandler_ ? combatHandler_->hasAutoAttackIntent() : false;
-}
-
 bool GameHandler::isInCombat() const {
     return combatHandler_ ? combatHandler_->isInCombat() : false;
 }

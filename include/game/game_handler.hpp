@@ -1485,7 +1485,6 @@ public:
     void startAutoAttack(uint64_t targetGuid);
     void stopAutoAttack();
     bool isAutoAttacking() const;
-    bool hasAutoAttackIntent() const;
     bool isInCombat() const;
     bool isInCombatWith(uint64_t guid) const;
     uint64_t getAutoAttackTargetGuid() const;
@@ -5534,7 +5533,7 @@ public:
     /// passed. Without it, the update's own delta is used.
     void setUnitClockSeconds(float seconds) { unitClockSeconds_ = seconds; }
     void updateTaxiAndMountState(float deltaTime);
-    void updateAutoAttack(float deltaTime);
+    void updateAutoAttack();
 
     /**
      * Reset DBC-backed caches so they reload from new expansion data.
