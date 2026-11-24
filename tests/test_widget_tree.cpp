@@ -3704,4 +3704,7 @@ TEST_CASE("a frame without points has no rect, nor has what is placed by it", "[
     tree.get(tip)->isTooltip = true;
     CHECK(tree.placed(tip));
     CHECK(Widget().editAutoFocus);
+    CHECK(Widget().textInsetLeft == 0.0f);
+    CHECK(Widget().textInsetRight == 0.0f);
+    CHECK(Widget::kNewMessageLines == 8);
 }

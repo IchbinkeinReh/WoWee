@@ -10891,6 +10891,7 @@ static int lua_CreateFrame(lua_State* L) {
                 // still wins: both are applied after the frame is made.
                 w->justifyH = "LEFT";
             }
+            if (ft == "ScrollingMessageFrame") w->maxMessages = wowee::ui::Widget::kNewMessageLines;
             // An edit box is clicked into, so it takes the mouse as well.
             w->isEditBox = (ft == "EditBox");
             if (w->isEditBox) {

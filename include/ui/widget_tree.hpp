@@ -503,10 +503,9 @@ struct Widget {
     /// 0x00966b70): FrameXML tells nearly every box otherwise that is not the
     /// one thing to type in.
     bool  editAutoFocus = true;
-    /// Where an edit box's text starts inside its own frame. WoW's default is
-    /// nothing; the four units used here until now were a stand-in, and a box
-    /// whose art has a wide border drew its text on top of it.
-    float textInsetLeft = 4.0f, textInsetRight = 4.0f;
+    /// Where an edit box's text starts inside its own frame: at its edge
+    /// without <TextInsets> (0x00966b70).
+    float textInsetLeft = 0.0f, textInsetRight = 0.0f;
     float textInsetTop = 0.0f, textInsetBottom = 0.0f;
     std::string editText;
     size_t cursorPos = 0;
@@ -689,6 +688,8 @@ struct Widget {
     /// is none; the 15% used here is the leading a line already carries.
     float messagePadding = 0.0f;
     size_t maxMessages = 128;
+    /// A ScrollingMessageFrame's before anything is said of it (0x00812720).
+    static constexpr size_t kNewMessageLines = 8;
     /// Every display line the history holds, as the last draw measured them.
     mutable int messageLinesTotal = 0;
     /// How far back through the history the frame has been scrolled, in lines.
