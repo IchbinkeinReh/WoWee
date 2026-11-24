@@ -96,6 +96,23 @@ inline bool taxiNodeRefused(bool alliance, uint32_t mountA, uint32_t mountB) {
     return alliance ? (horde && !ally) : (ally && !horde);
 }
 
+/// The places of a way that are on the map its first place is on: what is flown
+/// before the server takes the player to the next map. `goesOn` is whether
+/// there is more of it.
+template <class Point>
+std::vector<Point> taxiWayOnOneMap(const std::vector<std::pair<uint32_t, Point>>& way, bool& goesOn) {
+    std::vector<Point> out;
+    goesOn = false;
+    for (const auto& [mapId, point] : way) {
+        if (mapId != way.front().first) {
+            goesOn = true;
+            break;
+        }
+        out.push_back(point);
+    }
+    return out;
+}
+
 struct TaxiLeg {
     uint32_t from = 0, to = 0;
     uint32_t cost = 0;

@@ -452,6 +452,11 @@ private:
     // to the path start and sets taxiClientActive_. Only called once
     // SMSG_ACTIVATETAXIREPLY confirms success - see activateTaxi()'s comment.
     void beginTaxiFlightMotion();
+    /// The arc length of every segment of taxiClientPath_.
+    void measureTaxiWay();
+    /// The flight on along a spline the server sent the player in the air
+    /// (0x0073c8e0 runs any spline of the player's).
+    void resumeTaxiFlight();
     bool restoreWorldTransferFallbackIfNearOrigin(const char* context);
 
     GameHandler& owner_;
@@ -548,6 +553,13 @@ private:
     // How long to wait for SMSG_ACTIVATETAXIREPLY before giving up - see
     // updateClientTaxi()'s comment on why a dropped reply needs this now.
     static constexpr float kTaxiActivateReplyTimeoutSeconds = 8.0f;
+    /// The way goes on on another map: at its end here the flight waits for the
+    /// server to take the player there.
+    bool taxiWayGoesOn_ = false;
+    /// Crossing to it, or put into the world in flight: the next spline of the
+    /// player's is the way to fly.
+    bool taxiResumeExpected_ = false;
+    std::vector<glm::vec3> taxiResumeWay_;
     bool taxiClientActive_ = false;
     float taxiLandingCooldown_ = 0.0f;
     float taxiStartGrace_ = 0.0f;
