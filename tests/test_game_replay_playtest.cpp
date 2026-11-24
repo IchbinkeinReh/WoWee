@@ -1285,3 +1285,55 @@ TEST_CASE("getting onto a mount puffs, as one in sight already does not", "[repl
     CHECK(puffed == std::vector<uint64_t>{kGiver, kGiver, Session::kPlayerGuid});
     gh.setUnitEffectCallback({});
 }
+
+namespace {
+// SMSG_AURA_UPDATE of one slot on the player, its own; spell 0 clears it.
+wowee::network::Packet playerAura(uint8_t slot, uint32_t spell) {
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_AURA_UPDATE));
+    p.writePackedGuid(Session::kPlayerGuid);
+    p.writeUInt8(slot);
+    p.writeUInt32(spell);
+    if (spell != 0) {
+        p.writeUInt8(0x01 | 0x08 | 0x10);
+        p.writeUInt8(80);
+        p.writeUInt8(0);
+    }
+    return p;
+}
+}  // namespace
+
+// 0x00727760 and 0x00722090 -> 0x0057ea30.
+TEST_CASE("the minimap hears of a tracking spell's aura", "[replay][tracking]") {
+    constexpr uint32_t kHerbs = 2383, kMinerals = 2580, kOther = 1243;
+    int updates = 0;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    for (const uint32_t spell : {kHerbs, kMinerals, kOther}) {
+        auto& e = s.handler().spellNameCacheRef()[spell];
+        e.name = "Spell";
+        e.effectAuraIds[0] = spell == kOther ? 22 : 45;
+        if (spell != kMinerals) s.handler().getSpellHandler()->addKnownSpell(spell);
+    }
+    s.handler().setAddonEventCallback([&](const std::string& name, const std::vector<std::string>&) {
+        if (name == "MINIMAP_UPDATE_TRACKING") ++updates;
+    });
+    s.handler().setMinimapOtherTracking(2);
+    s.receive(playerAura(0, kOther));
+    CHECK(updates == 0);
+    CHECK(s.handler().minimapOtherTracking() == 2);
+    // One the player does not have is none of its tracking.
+    s.receive(playerAura(1, kMinerals));
+    CHECK(updates == 0);
+    s.receive(playerAura(2, kHerbs));
+    CHECK(updates == 1);
+    CHECK(s.handler().minimapOtherTracking() == -1);
+    // Sent again as it is, nothing is new.
+    s.receive(playerAura(2, kHerbs));
+    CHECK(updates == 1);
+    // Gone, with the menu's entry chosen since left alone.
+    s.handler().setMinimapOtherTracking(1);
+    s.receive(playerAura(2, 0));
+    CHECK(updates == 2);
+    CHECK(s.handler().minimapOtherTracking() == 1);
+    s.handler().setAddonEventCallback(nullptr);
+}

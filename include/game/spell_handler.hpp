@@ -782,6 +782,8 @@ private:
     void handleCooldownEvent(network::Packet& packet);
     void handleResetRangedCombatTimer(network::Packet& packet);
     void handleAuraUpdate(network::Packet& packet, bool isAll);
+    /// The player's auras that came or went, for the tracking spells among them.
+    void noteTrackingAuras(const std::vector<uint32_t>& changed, const std::vector<AuraSlot>& auras);
     void handleLearnedSpell(network::Packet& packet);
 
     void handleCastResult(network::Packet& packet);

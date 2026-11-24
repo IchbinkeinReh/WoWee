@@ -5622,6 +5622,26 @@ void SpellHandler::logAuraChanges(uint64_t unit, const std::vector<AuraSlot>& be
     }
 }
 
+void SpellHandler::noteTrackingAuras(const std::vector<uint32_t>& changed, const std::vector<AuraSlot>& auras) {
+    // 0x00727760 and 0x00722090 -> 0x0057ea30: one of the player's tracking
+    // spells (0x0053bd10) came or went. One that came takes the place of the
+    // menu's own entry (0x0057e070), and the minimap hears of either.
+    constexpr uint32_t kAuraTrackCreatures = 44, kAuraTrackResources = 45;
+    bool any = false, came = false;
+    for (const uint32_t spell : changed) {
+        if (spell == 0 || !knownSpells_.count(spell) ||
+            !(owner_.spellAppliesAura(spell, kAuraTrackCreatures) || owner_.spellAppliesAura(spell, kAuraTrackResources)))
+            continue;
+        any = true;
+        came = came || std::any_of(auras.begin(), auras.end(), [spell](const AuraSlot& a) { return a.spellId == spell; });
+    }
+    if (came && owner_.minimapOtherTracking() >= 0) {
+        owner_.setMinimapOtherTracking(-1);
+        addons::setStoredCVar("minimapTrackedInfo", "");
+    }
+    if (any && owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("MINIMAP_UPDATE_TRACKING", {});
+}
+
 void SpellHandler::handleAuraUpdate(network::Packet& packet, bool isAll) {
     AuraUpdateData data;
     if (!owner_.getPacketParsers()->parseAuraUpdate(packet, data, isAll)) return;
@@ -5751,6 +5771,8 @@ void SpellHandler::handleAuraUpdate(network::Packet& packet, bool isAll) {
             });
             if (barSpellChanged) owner_.addonEventCallbackRef()("UPDATE_SHAPESHIFT_FORM", {});
         }
+
+        noteTrackingAuras(playerAuraChanges, *auraList);
 
         // The auras' state kits on the unit, as each slot changes
         // (0x00724820, 0x0071e930).
