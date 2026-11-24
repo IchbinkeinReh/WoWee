@@ -6812,9 +6812,20 @@ int lua_Tooltip_SetExistingSocketGem(lua_State* L) {
 /// SetSocketedItem() - the item whose sockets are on screen, which the panel
 /// keeps below the sockets as its description pane.
 int lua_Tooltip_SetSocketedItem(lua_State* L) {
+    auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
-    if (!widgetOf(L, 1) || !gh) { lua_pushboolean(L, 0); return 1; }
-    lua_pushboolean(L, fillItemTooltipById(L, gh, gh->getSocketItemId()) ? 1 : 0);
+    if (!w || !gh) { lua_pushboolean(L, 0); return 1; }
+    // The item itself and not its template (0x006301a0 gives 0x006277f0 the
+    // object's guid): bound or not, its durability, what it rolled, its
+    // enchantments.
+    const uint64_t guid = gh->getSocketItemGuid();
+    const game::ItemDef* item = guid != 0 ? gh->carriedItem(guid) : nullptr;
+    const bool filled = fillItemTooltipById(L, gh, gh->getSocketItemId(), item);
+    if (filled && item) {
+        appendRandomSuffix(w, gh, *item);
+        appendEnchantLines(w, gh, guid);
+    }
+    lua_pushboolean(L, filled ? 1 : 0);
     return 1;
 }
 

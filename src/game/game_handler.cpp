@@ -4945,6 +4945,24 @@ std::vector<GameHandler::CalendarEventTexture> GameHandler::calendarEventTexture
     return out;
 }
 
+const ItemDef* GameHandler::carriedItem(uint64_t guid) const {
+    if (guid == 0) return nullptr;
+    const Inventory& inv = getInventory();
+    const auto is = [guid](const ItemSlot& s) { return !s.empty() && s.item.guid == guid; };
+    for (int i = 0; i < static_cast<int>(EquipSlot::NUM_SLOTS); ++i) {
+        if (const ItemSlot& s = inv.getEquipSlot(static_cast<EquipSlot>(i)); is(s)) return &s.item;
+    }
+    for (int i = 0; i < inv.getBackpackSize(); ++i) {
+        if (const ItemSlot& s = inv.getBackpackSlot(i); is(s)) return &s.item;
+    }
+    for (int b = 0; b < Inventory::NUM_BAG_SLOTS; ++b) {
+        for (int i = 0; i < inv.getBagSize(b); ++i) {
+            if (const ItemSlot& s = inv.getBagSlot(b, i); is(s)) return &s.item;
+        }
+    }
+    return nullptr;
+}
+
 void GameHandler::openCalendarRow(const CalendarOpenRow& row, const char* type) {
     if (calendarActionPending_) return;
     calendarOpenRow_ = row;

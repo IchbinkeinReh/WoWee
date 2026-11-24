@@ -5050,6 +5050,8 @@ public:
     // forward-declared here, and a nested type cannot cross that.
     bool isSocketingOpen() const;
     uint64_t getSocketItemGuid() const;
+    /// The item by its guid where the character carries it, worn or in a bag.
+    const ItemDef* carriedItem(uint64_t guid) const;
     uint32_t getSocketItemId() const;
     uint32_t getSocketPendingGemItemId(int index) const;
     void openSocketing(uint64_t itemGuid);

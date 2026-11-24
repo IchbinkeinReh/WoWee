@@ -246,3 +246,35 @@ TEST_CASE("a model frame shows the creature it is given once that is known", "[r
     ui.run("model:SetCreature(4270) if SetPetStablePaperdoll then SetPetStablePaperdoll(model) end");
     CHECK(w->modelCreatureAsked == 0);
 }
+
+// P55: 0x006301a0 describes the item by its object, not by its template.
+TEST_CASE("the socketing window describes the item itself", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    rollsGorilla(s);
+    answerItem(s, 24021, "Light-Touched Breastplate");
+    constexpr uint64_t kPlate = 0x4000000000000777ull;
+    wowee::game::ItemDef item;
+    item.guid = kPlate;
+    item.itemId = 24021;
+    item.soulbound = true;
+    item.curDurability = 120;
+    item.maxDurability = 135;
+    item.randomPropertyId = -24;
+    s.handler().getInventory().setBackpackSlot(3, item);
+    s.handler().onlineItemsRef()[kPlate].entry = 24021;
+    s.handler().openSocketing(kPlate);
+    REQUIRE(s.handler().getSocketItemId() == 24021);
+    ui.run("ITEM_SOULBOUND = 'Soulbound' DURABILITY_TEMPLATE = 'Durability %d / %d' "
+           "tip = CreateFrame('GameTooltip', 'PlayTip', UIParent) "
+           "tip:SetOwner(UIParent, 'ANCHOR_NONE') tip:SetSocketedItem()");
+    std::string all;
+    const auto* w = ui.engine.widgets().findByName("PlayTip");
+    REQUIRE(w);
+    for (const auto& line : w->tooltipLines) all += line.left + "|";
+    INFO(all);
+    CHECK(all.find("Light-Touched Breastplate of the Gorilla|") == 0);
+    CHECK(all.find("Soulbound|") != std::string::npos);
+    CHECK(all.find("120") != std::string::npos);
+}
