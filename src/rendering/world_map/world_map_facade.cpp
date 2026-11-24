@@ -1050,10 +1050,8 @@ bool WorldMapFacade::mapUVForCanonical(float wowX, float wowY, float wowZ,
     const Zone& zone = zones[static_cast<size_t>(idx)];
     const bool isContinent = (zone.areaID == 0);
 
-    // The same bounds every marker layer projects against.
-    bool boundsAreContinent = false;
-    const ZoneBounds bounds = projectionBoundsFor(
-        zones, impl_->viewState.continentIdx(), boundsAreContinent);
+    const ZoneBounds bounds =
+        mapBounds(zones, idx, impl_->viewState.continentIdx(), impl_->shownFloorRow(zone));
     const glm::vec2 uv = renderPosToMapUV(
         core::coords::canonicalToRender(glm::vec3(wowX, wowY, wowZ)),
         bounds, isContinent);

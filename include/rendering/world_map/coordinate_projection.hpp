@@ -80,6 +80,15 @@ inline const ZoneBounds& shownBounds(const Zone& zone, int floorRowId) {
     return zone.bounds;
 }
 
+/// What the shown map spans (0x00544140): a zone's rectangle on a zone's map,
+/// the continent's on the continent's.
+inline ZoneBounds mapBounds(const std::vector<Zone>& zones, int shownIdx, int continentIdx, int floorRowId) {
+    const Zone& shown = zones[static_cast<size_t>(shownIdx)];
+    if (shown.areaID != 0) return shownBounds(shown, floorRowId);
+    bool isContinent = false;
+    return projectionBoundsFor(zones, continentIdx, isContinent);
+}
+
 /// Where one piece of an explored-area overlay goes on the 1024 by 768 map,
 /// and how much of its file it is.
 ///

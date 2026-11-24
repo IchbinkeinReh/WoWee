@@ -194,10 +194,13 @@ struct LuaServices {
     /// The WorldMapArea id being shown, and setting the map from one. Zero
     /// when a continent rather than a zone is shown, which is the branch the
     /// interface takes to ask about continents instead.
-    /// Where a canonical world position falls on the map now showing, 0..1
-    /// across the image. False when it is off this map. GetPlayerMapPosition
-    /// answers in this space - FrameXML multiplies it by the map frame's width.
+    /// Where a canonical position on the player's map falls on the map now
+    /// showing, 0..1 across the image (0x00544140). False when it is off this
+    /// map, or the map shows another. GetPlayerMapPosition answers in this
+    /// space - FrameXML multiplies it by the map frame's width.
     std::function<bool(float, float, float, float&, float&)> mapUVForWorldPos;
+    /// The same of a position on the map showing, wherever the player is.
+    std::function<bool(float, float, float, float&, float&)> mapUVForShownPos;
     /// The shown map's row as the quest POI icon list needs it: whether there
     /// is one, whether it is a zone or floor rather than a continent, whether
     /// it is a dungeon floor, its WorldMapArea id, map, floor and left and

@@ -1,5 +1,6 @@
 // Tests for the extracted world map coordinate projection module
 #include <catch_amalgamated.hpp>
+#include "core/coordinates.hpp"
 #include "rendering/world_map/coordinate_projection.hpp"
 #include "rendering/world_map/world_map_types.hpp"
 
@@ -109,6 +110,22 @@ TEST_CASE("a floor's map spans the floor", "[world_map][coordinate_projection]")
     CHECK(shownBounds(dalaran, 26).locLeft == 915.9f);
     CHECK(shownBounds(dalaran, 26).locBottom == 5599.9f);
     CHECK(shownBounds(dalaran, -1).locLeft == 1052.5f);
+}
+
+// On a zone's map the player, the party, a corpse and the quests' places were
+// at the continent's fraction of it.
+TEST_CASE("what is on a zone's map is placed by the zone's rectangle", "[world_map][coordinate_projection]") {
+    std::vector<Zone> zones;
+    zones.push_back(makeZone(13, 0, 17066.6f, -19733.21f, 12799.9f, -11733.3f, 1, 0, "Kalimdor"));
+    zones.push_back(makeZone(9, 215, 2047.917f, -3089.583f, -272.917f, -3697.917f, 1, 0, "Mulgore"));
+    const glm::vec3 place = wowee::core::coords::canonicalToRender(
+        wowee::core::coords::serverToCanonical(glm::vec3(-2200.0f, -900.0f, 0.0f)));
+    const glm::vec2 onZone = renderPosToMapUV(place, mapBounds(zones, 1, 0, 0), false);
+    CHECK(onZone.x == Catch::Approx(0.5738f).margin(0.001f));
+    CHECK(onZone.y == Catch::Approx(0.5626f).margin(0.001f));
+    const glm::vec2 onContinent = renderPosToMapUV(place, mapBounds(zones, 0, 0, 0), true);
+    CHECK(onContinent.x == Catch::Approx(0.4882f).margin(0.001f));
+    CHECK(onContinent.y == Catch::Approx(0.6114f).margin(0.001f));
 }
 
 TEST_CASE("zoneBelongsToContinent: out of bounds returns false", "[world_map][coordinate_projection]") {

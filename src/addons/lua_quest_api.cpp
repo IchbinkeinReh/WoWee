@@ -1269,7 +1269,7 @@ static game::QuestPoiIconList* questPoiList(game::GameHandler* gh) {
 static game::QuestPoiMapView questPoiMapView(lua_State* L) {
     game::QuestPoiMapView view;
     auto* svc = getLuaServices(L);
-    if (!svc || !svc->getMapPoiFrame || !svc->mapUVForWorldPos) return view;
+    if (!svc || !svc->getMapPoiFrame || !svc->mapUVForShownPos) return view;
     const auto frame = svc->getMapPoiFrame();
     if (!frame.valid) return view;
     view.valid = true;
@@ -1283,7 +1283,7 @@ static game::QuestPoiMapView questPoiMapView(lua_State* L) {
     // POI points are server coordinates; the map projects canonical ones,
     // which are the same two axes the other way round.
     view.project = [svc](float x, float y, float& u, float& v) {
-        return svc->mapUVForWorldPos(y, x, 0.0f, u, v);
+        return svc->mapUVForShownPos(y, x, 0.0f, u, v);
     };
     return view;
 }
