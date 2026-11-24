@@ -1044,17 +1044,6 @@ void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_
         // 0x0070cac0), which plays its display's sounds by them (0x0070c050).
         m2Renderer->setInstanceEventOwner(instanceId, rendering::m2_event::Owner::GameObject, displayId);
 
-        // Deeprun Tram cars: riding never used real mesh collision to begin with (Z is
-        // fully code-locked to the transport's simulated position while boarded, not
-        // derived from a floor query), so the solid SubwayCar.m2 body was only ever in
-        // the way - reported live as getting physically stuck walking back across a car
-        // after crossing it once. Skip collision so the model is purely visual/decorative
-        // for movement purposes, matching how the boarding logic already treats it (a
-        // proximity/footprint check, not a physical block).
-        if (displayId == 3831u) {
-            m2Renderer->setSkipCollision(instanceId, true);
-        }
-
         gameObjectInstances_[guid] = {.modelId = modelId, .instanceId = instanceId, .isWmo = false,
                                       .scale = scale};
         spawnDestructibleDoodads(guid, {});

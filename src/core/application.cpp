@@ -120,6 +120,7 @@
 #include "game/spell_handler.hpp"
 #include "game/chat_handler.hpp"
 #include "game/faction_hostility.hpp"
+#include "game/car_ride.hpp"
 #include "game/transport_manager.hpp"
 #include "game/world.hpp"
 #include "game/expansion_profile.hpp"
@@ -5498,90 +5499,47 @@ void Application::applyServerMovementState(float deltaTime) {
                 // position could never actually change due to the tram moving, so
                 // riding appeared to "float" in place no matter how far the tram
                 // traveled underneath.
-                const bool isDeeprunTram =
-                    game::TransportManager::isDeeprunTramTransport(*tr);
                 auto* transports = gameHandler->getTransportManager();
                 const uint64_t rideGuid = gameHandler->getPlayerTransportGuid();
                 // The offset is in the car's own frame; the walking below is
                 // in the world's, so it is done to the place the offset puts
                 // the rider and taken back into the car's frame after.
                 const glm::vec3 heldOffset = gameHandler->getPlayerTransportOffset();
-                glm::vec3 riderCanonical = transports->getPlayerWorldPosition(rideGuid, heldOffset);
                 // Where the offset alone puts the rider: if nothing below moves
                 // them from there, the offset is kept as it is.
-                const glm::vec3 carriedCanonical = riderCanonical;
-                glm::vec3 tentativeCanonical = core::coords::renderToCanonical(renderPos);
-                if (hasM2RideLock_) {
-                    glm::vec3 walkDelta = tentativeCanonical - lastM2RideLockedCanonical_;
-                    // Root cause found: the 60-unit clamp added last round was a backstop
-                    // that treated the symptom, not the cause - live data showed it
-                    // getting maxed out exactly (horizDist=60.0 at the eventual disembark),
-                    // meaning the runaway drift reaches whatever ceiling is set as long as
-                    // that ceiling is above the 18-unit disembark threshold, so it still
-                    // ended the ride ("I still got kicked off... but at least I didn't die
-                    // this time" reported live). The actual bug: there's no real floor
-                    // under a moving M2 car, so gravity keeps trying to pull the character
-                    // down every frame even while standing still; since Z is locked, that
-                    // shows up as horizontal render-position drift, and this code
-                    // previously couldn't tell that apart from real WASD input - it baked
-                    // ANY frame-to-frame position change into localOffset, compounding
-                    // forever. Gate on genuine movement input (the same signal driving the
-                    // walking animation) so gravity noise while stationary is ignored
-                    // instead of accumulated; only apply the delta when the player is
-                    // actually pressing a movement key.
-                    //
-                    // The camera's own locomotion this frame counts as well as
-                    // the keys: for two seconds after a teleport the keys are
-                    // let go every frame (the world-entry grace) while the
-                    // camera still walks the character on them, and a walk on
-                    // a lift's car then went nowhere - the car held its rider
-                    // at the middle while the character ran on the spot.
-                    const bool hasMovementInput = renderer->getCameraController() &&
-                        (renderer->getCameraController()->isMoving() ||
-                         renderer->getCameraController()->getLocomotionSpeed() > 0.0f);
-                    if (hasMovementInput) {
-                        riderCanonical.x += walkDelta.x;
-                        riderCanonical.y += walkDelta.y;
+                const glm::vec3 carriedCanonical = transports->getPlayerWorldPosition(rideGuid, heldOffset);
+                // A rider moves in the car's frame, as the client moves a
+                // passenger (its place on the transport is what it steps and
+                // falls by): the car carries it, and only its own movement
+                // this frame - the camera's, from where it was put last frame -
+                // is added. Taking the camera's world height instead read the
+                // car's own travel as a fall or a climb: a lift running down at
+                // 27 yd/s left its rider floating above the floor, one running
+                // up left it below, where the floor underfoot is the world's
+                // and the ride ended.
+                //
+                // The camera's own locomotion this frame counts as well as
+                // the keys: for two seconds after a teleport the keys are
+                // let go every frame (the world-entry grace) while the
+                // camera still walks the character on them, and a walk on
+                // a lift's car then went nowhere - the car held its rider
+                // at the middle while the character ran on the spot.
+                auto* rider = renderer->getCameraController();
+                game::car_ride::Step step;
+                step.carried = carriedCanonical;
+                step.boarding = !hasM2RideLock_;
+                if (rider) {
+                    step.grounded = rider->isGrounded();
+                    step.rising = rider->isJumping();
+                    if (hasM2RideLock_) {
+                        step.own = core::coords::renderToCanonical(renderPos) - lastM2RideLockedCanonical_;
+                        step.moves = rider->isMoving() || rider->getLocomotionSpeed() > 0.0f || !step.grounded;
                     }
                 }
-                // Thunder Bluff lifts have real floor at both ends of their travel,
-                // so letting Z track physics while airborne (jumping) is recoverable -
-                // the player lands back on the platform. The Deeprun Tram tunnel has
-                // no floor at all except at the two station platforms; if this ran for
-                // it, isGrounded() ever reporting false mid-tunnel (e.g. because M2
-                // collision for a moving instance isn't recognized as ground the same
-                // way static terrain is) would let gravity pull the player away from
-                // the tram with nothing to land on - reported live as falling through
-                // the tram/tunnel and dying. Keep Z fully locked for the tram; only
-                // lifts get the airborne exception.
-                auto* liftCamera = renderer->getCameraController();
-                if (!isDeeprunTram && liftCamera) {
-                    // A lift's rider moves in the car's frame, as the client
-                    // moves a passenger (its place on the transport is what
-                    // it steps and falls by): the car carries it, and only
-                    // its own rise or fall this frame - the camera's, from
-                    // where it was put last frame - is added. Taking the
-                    // camera's world height instead read the car's own
-                    // travel as a fall or a climb: a lift running down at
-                    // 27 yd/s left its rider floating above the floor, one
-                    // running up left it below, where the floor underfoot is
-                    // the world's and the ride ended.
-                    if (hasM2RideLock_ && !liftCamera->isGrounded()) {
-                        riderCanonical.z += tentativeCanonical.z - lastM2RideLockedCanonical_.z;
-                    }
-                    // And it stands on the car's floor: onto it from a step
-                    // above or below, unless a jump is still rising.
-                    if (!liftCamera->isJumping()) {
-                        if (const auto deck = transports->m2DeckFloorHeight(rideGuid, riderCanonical)) {
-                            const float above = riderCanonical.z - *deck;
-                            if (above <= rendering::movement::kMaxStepUp &&
-                                (liftCamera->isGrounded() || above <= 0.0f)) {
-                                riderCanonical.z = *deck;
-                                liftCamera->suppressVerticalPhysics();
-                            }
-                        }
-                    }
-                }
+                const game::car_ride::Place place = game::car_ride::place(
+                    step, [&](const glm::vec3& at) { return transports->m2DeckFloorHeight(rideGuid, at); });
+                const glm::vec3 riderCanonical = place.at;
+                if (rider && place.onFloor) rider->suppressVerticalPhysics();
                 // The offset is the passenger's place on the transport and the
                 // client changes it only by moving the passenger (0x004f47b0
                 // is boarding's). Taken back out of the world each frame
@@ -5592,31 +5550,6 @@ void Application::applyServerMovementState(float deltaTime) {
                 glm::vec3 localOffset = riderCanonical == carriedCanonical
                     ? heldOffset
                     : transports->worldToTransportLocal(rideGuid, riderCanonical).value_or(glm::vec3(0.0f));
-                if (hasM2RideLock_) {
-                    // Keep a generous distance clamp as a secondary backstop for any
-                    // other source of drift (e.g. knockback, server-forced movement)
-                    // this input gate doesn't cover.
-                    if (isDeeprunTram) {
-                        constexpr float kMaxRideOffsetDist = 60.0f;
-                        const float offsetLen = std::sqrt(localOffset.x * localOffset.x + localOffset.y * localOffset.y);
-                        if (offsetLen > kMaxRideOffsetDist) {
-                            const float scale = kMaxRideOffsetDist / offsetLen;
-                            localOffset.x *= scale;
-                            localOffset.y *= scale;
-                        }
-                    }
-                }
-                // Z is fully locked for the Deeprun tram (see below), so
-                // CameraController's own gravity integration never sees a
-                // grounded frame and silently accumulates fall velocity the
-                // entire ride - reported live as clipping through the world
-                // "at a weird angle" right after disembarking, and as being
-                // unable to jump while riding (a jump never has a
-                // grounded frame to key off). Suppress it every frame the
-                // lock is active so nothing is queued up to unleash later.
-                if (isDeeprunTram && renderer->getCameraController()) {
-                    renderer->getCameraController()->suppressVerticalPhysics();
-                }
                 gameHandler->setPlayerTransportOffset(localOffset);
 
                 glm::vec3 lockedCanonical = transports->getPlayerWorldPosition(rideGuid, localOffset);
