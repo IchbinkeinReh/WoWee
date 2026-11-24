@@ -9,7 +9,9 @@
 #include <string>
 #include <vector>
 
-using wowee::ui::placedHeight;
+using wowee::ui::fitText;
+using wowee::ui::linesThatFit;
+using wowee::ui::textHeight;
 using wowee::ui::WrapRun;
 using wowee::ui::wrapText;
 
@@ -73,14 +75,13 @@ TEST_CASE("the space a break replaces does not start the next line",
     }
 }
 
-TEST_CASE("a word wider than the box stands alone by default", "[text_wrap]") {
-    // Without nonspacewrap there is nowhere to break it, so it overflows on a
-    // line of its own rather than being cut.
+TEST_CASE("a word wider than the box ends the text by default", "[text_wrap]") {
+    // Without nonspacewrap there is nowhere to break it: the line has what fits
+    // of it, and there is no other after it (0x006c1d40).
     const auto out = lines("hi extraordinarily ok", 6.0f);
-    REQUIRE(out.size() == 3);
+    REQUIRE(out.size() == 2);
     REQUIRE(out[0] == "hi ");
-    REQUIRE(out[1] == "extraordinarily ");
-    REQUIRE(out[2] == "ok");
+    REQUIRE(out[1] == "extrao");
 }
 
 TEST_CASE("nonspacewrap breaks inside a word too long to fit", "[text_wrap]") {
@@ -203,37 +204,82 @@ TEST_CASE("an empty string produces one empty line", "[text_wrap]") {
 // out past the left of its box and lost its first characters to the clip, so
 // the video options' resolution read "920x1080 (Wide)".
 
-using wowee::ui::fitWithEllipsis;
+namespace {
+// What a box of so many lines shows (0x00483a40).
+std::string shown(const std::string& text, float width, int most, bool nonSpaceWrap = false) {
+    return fitText(text, [&](const std::string& t) {
+        bool stopped = false;
+        const auto lines = wrapText(plain(t), width, nonSpaceWrap, charWidth, 0.0f, &stopped);
+        return !stopped && (most == 0 || lines.size() <= static_cast<size_t>(most));
+    });
+}
+std::vector<std::string> linesOf(const std::string& text, float width, bool nonSpaceWrap = false, bool* stopped = nullptr) {
+    std::vector<std::string> out;
+    for (const auto& line : wrapText(plain(text), width, nonSpaceWrap, charWidth, 0.0f, stopped)) {
+        std::string t;
+        for (const auto& run : line) t += run.text;
+        out.push_back(t);
+    }
+    return out;
+}
+}  // namespace
 
 TEST_CASE("text that fits is left alone", "[wrap][ellipsis]") {
-    CHECK(fitWithEllipsis("1920x1080", 9.0f, charWidth) == "1920x1080");
-    CHECK(fitWithEllipsis("", 0.0f, charWidth).empty());
+    CHECK(shown("1920x1080", 9.0f, 1) == "1920x1080");
+    CHECK(shown("", 5.0f, 1).empty());
+    CHECK(shown("one two three", 5.0f, 0) == "one two three");
 }
 
 TEST_CASE("text that does not fit keeps its start and loses its end", "[wrap][ellipsis]") {
-    // Sixteen characters in fifteen: the dots take three, so twelve remain.
-    const std::string cut = fitWithEllipsis("1920x1080 (Wide)", 15.0f, charWidth);
-    CHECK(cut == "1920x1080 (W...");
-    CHECK(charWidth(cut) <= 15.0f);
-    CHECK(cut.rfind("1920", 0) == 0);
-}
-
-TEST_CASE("no space is left hanging before the dots", "[wrap][ellipsis]") {
-    // "Long " would be cut to fit six, and the space before the dots dropped.
-    CHECK(fitWithEllipsis("Long quest name", 8.0f, charWidth) == "Long...");
+    CHECK(shown("Sehr langer Name", 10.0f, 1) == "Sehr la...");
+    CHECK(shown("Eins zwei drei vier acht", 9.0f, 2) == "Eins zwei drei v...");
+    CHECK(shown("Eins zwei drei vier", 9.0f, 1) == "Eins z...");
+    // One letter more would not fit.
+    CHECK(shown("abcdefghij", 8.0f, 1) == "abcde...");
 }
 
 TEST_CASE("a character is never cut in half", "[wrap][ellipsis]") {
-    // "é" is two bytes. Measured in bytes here, so the cut has to back up over
-    // the continuation byte rather than land between the two.
-    const std::string cut = fitWithEllipsis("caf\xC3\xA9 au lait", 7.0f, charWidth);
-    CHECK(cut == "caf...");
-    const std::string whole = fitWithEllipsis("caf\xC3\xA9 au lait", 8.0f, charWidth);
-    CHECK(whole == "caf\xC3\xA9...");
+    // Measured in bytes here: the cut falls before the two of the e, or after.
+    CHECK(shown("caf\xC3\xA9" "aulait", 7.0f, 1) == "caf...");
+    CHECK(shown("caf\xC3\xA9" "aulait", 8.0f, 1) == "caf\xC3\xA9...");
 }
 
 TEST_CASE("a box too small for the dots gets the dots", "[wrap][ellipsis]") {
-    CHECK(fitWithEllipsis("Anything", 2.0f, charWidth) == "...");
+    CHECK(shown("Anything", 2.0f, 1) == "...");
+}
+
+// T101: "Anglerwettbewerb im Schlingendorntal" was drawn over three lines with
+// the rest of its first word gone.
+TEST_CASE("a word too long for its line ends the text", "[wrap][ellipsis]") {
+    bool stopped = false;
+    CHECK(linesOf("im Anglerwettbewerb und mehr", 8.0f, false, &stopped) ==
+          std::vector<std::string>{"im ", "Anglerwe"});
+    CHECK(stopped);
+    CHECK(linesOf("im Anglerwettbewerb und mehr", 8.0f, true, &stopped).size() > 3);
+    CHECK_FALSE(stopped);
+    CHECK(shown("Anglerwettbewerb im Tal", 8.0f, 2) == "Angle...");
+    CHECK(shown("im Anglerwettbewerb und mehr", 8.0f, 5) == "im Angle...");
+    CHECK(shown("im Anglerwettbewerb und mehr", 8.0f, 0) == "im Angle...");
+}
+
+TEST_CASE("the spaces after a word do not make it too wide", "[wrap]") {
+    CHECK(linesOf("abc def ghi", 7.0f) == std::vector<std::string>{"abc def ", "ghi"});
+    CHECK(linesOf("abcdefg hi", 7.0f) == std::vector<std::string>{"abcdefg ", "hi"});
+}
+
+// 0x006bd900, 0x006bd390.
+TEST_CASE("a line is as tall as its font, with the spacing between lines", "[wrap][height]") {
+    CHECK(textHeight(0, 12.0f, 2.0f) == 0.0f);
+    CHECK(textHeight(1, 12.0f, 2.0f) == 12.0f);
+    CHECK(textHeight(3, 12.0f, 2.0f) == 40.0f);
+    CHECK(textHeight(3, 10.0f, 0.0f) == 30.0f);
+    CHECK(linesThatFit(24.0f, 10.0f, 0.0f) == 2);
+    CHECK(linesThatFit(30.0f, 10.0f, 0.0f) == 3);
+    CHECK(linesThatFit(29.9f, 10.0f, 0.0f) == 2);
+    // One at least.
+    CHECK(linesThatFit(4.0f, 10.0f, 0.0f) == 1);
+    CHECK(linesThatFit(40.0f, 12.0f, 2.0f) == 3);
+    CHECK(linesThatFit(39.0f, 12.0f, 2.0f) == 2);
 }
 
 // ---------------------------------------------------------------------------
@@ -288,10 +334,6 @@ TEST_CASE("a break at the end is a line of the string's height", "[textwrap]") {
     };
     REQUIRE(lines("-\n") == 2);
     REQUIRE(lines("-") == 1);
-    // As tall as it is measured, 1.2 a line, whatever its letters come to.
-    CHECK(placedHeight(lines("-\n"), 14.4f, 12.0f, false) == Catch::Approx(28.8f));
-    CHECK(placedHeight(lines("-\n-\n"), 14.4f, 24.0f, false) == Catch::Approx(43.2f));
-    // A single line keeps the height of its letters, unless it is broken to fit.
-    CHECK(placedHeight(1, 14.4f, 12.0f, false) == Catch::Approx(12.0f));
-    CHECK(placedHeight(1, 14.4f, 12.0f, true) == Catch::Approx(14.4f));
+    CHECK(textHeight(lines("-\n"), 12.0f, 0.0f) == Catch::Approx(24.0f));
+    CHECK(textHeight(lines("-\n-\n"), 12.0f, 0.0f) == Catch::Approx(36.0f));
 }

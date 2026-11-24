@@ -974,6 +974,11 @@ struct Widget {
     std::string fontOutline;
     /// Extra space between wrapped lines, which FrameXML reads back.
     float lineSpacing = 0.0f;
+    /// What of the text its box shows (text_wrap.hpp fitText), and what that
+    /// was worked out from.
+    mutable std::string fittedText, fittedFrom, fittedFace;
+    mutable float fittedWidth = -1.0f, fittedSize = -1.0f;
+    mutable int fittedLines = -1;
     std::string justifyH = "CENTER";
     /// TOP, MIDDLE or BOTTOM. FrameXML declares it on 93 font strings - a
     /// multi-line label in a fixed box sits differently for each.

@@ -52,6 +52,14 @@ float interfaceTextWidth(const std::string& text, const std::string& fontFace,
 int interfaceTextLines(const std::string& text, const std::string& fontFace,
                        float fontHeight, float wrapWidth, bool nonSpaceWrap);
 
+/// What a box `width` wide shows of a text in at most `lines` lines, 0 for any
+/// number of them (text_wrap.hpp fitText). Without wordWrap it is one line of
+/// that width.
+std::string interfaceFittedText(const std::string& text, ImFont* font, float size, float width, int lines,
+                                bool wordWrap, bool nonSpaceWrap, float indent = 0.0f);
+std::string interfaceFittedText(const std::string& text, const std::string& fontFace, float fontHeight, float width,
+                                int lines, bool wordWrap, bool nonSpaceWrap);
+
 /// The face a widget draws in, resolved the way the renderer resolves it: its
 /// own, then the interface default, then whatever is current.
 ImFont* interfaceFaceOrDefault(const std::string& fontFace);

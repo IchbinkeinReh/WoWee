@@ -413,7 +413,7 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
                 .size());
         w->wrappedLines = rows > 0 ? rows : 1;
         if (w->height <= 0.0f || w->wrapsBetweenAnchors) {
-            w->height = size * 1.2f * static_cast<float>(w->wrappedLines);
+            w->height = textHeight(static_cast<size_t>(w->wrappedLines), size, w->lineSpacing);
             w->wrapsBetweenAnchors = true;
         }
         w->measuredText = w->text;
@@ -435,7 +435,7 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
                      w->indentedWordWrap && linkScale_ > 0.0f ? kIndentedWrapPixels / linkScale_ : 0.0f)
                 .size());
         w->wrappedLines = rows > 0 ? rows : 1;
-        w->height = size * 1.2f * static_cast<float>(w->wrappedLines);
+        w->height = textHeight(static_cast<size_t>(w->wrappedLines), size, w->lineSpacing);
         w->measuredText = w->text;
         w->measuredSize = size;
         w->measuredFace = w->fontFace;
@@ -453,7 +453,7 @@ void WidgetRenderer::sizeFontStringWidget(Widget* w, ImFont* font) {
         wrapText(parseMarkup(w->text), 0.0f, false, measureRun).size());
     w->wrappedLines = rows > 0 ? rows : 1;
     if (w->height <= 0.0f || w->autoSized) {
-        w->height = size * 1.2f * static_cast<float>(w->wrappedLines);
+        w->height = textHeight(static_cast<size_t>(w->wrappedLines), size, w->lineSpacing);
     }
     w->autoSized = true;
     w->measuredText = w->text;
@@ -513,7 +513,9 @@ void WidgetRenderer::sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree
     }
 
     const float size = interfaceFontSize(w->fontHeight);
-    const float lineH = size * 1.2f;
+    // Each line is as tall as its rows and stands two units below the one
+    // before it, as the template's TextLeft<n> are anchored.
+    constexpr float kLineGap = 2.0f;
     // Ten units of padding a side, which is what the tooltip backdrop's
     // own insets come to.
     constexpr float kPad = 10.0f;
@@ -627,7 +629,8 @@ void WidgetRenderer::sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree
     // widens the tooltip to hold it.
     w->width  = std::max(std::max(widest, wrapW) + kPad * 2.0f,
                          w->tooltipMinWidth);
-    w->height = lineH * static_cast<float>(rows) + kPad * 2.0f;
+    w->height = size * static_cast<float>(rows) +
+                kLineGap * static_cast<float>(w->tooltipLines.size() - 1) + kPad * 2.0f;
     if (std::getenv("WOWEE_TOOLTIP_DIAG") != nullptr) {
         // The arithmetic, printed rather than reasoned about: the caller was
         // reporting the same height whether this counted three rows or eight,
@@ -639,7 +642,7 @@ void WidgetRenderer::sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree
             saidAt = now;
             LOG_WARNING("  sizeTooltip '", w->name, "': rows=", rows,
                         " fontHeight=", w->fontHeight, " size=", size,
-                        " lineH=", lineH, " -> height=", w->height,
+                        " -> height=", w->height,
                         " width=", w->width, " (widest=", widest,
                         " wrapW=", wrapW, " minW=", w->tooltipMinWidth, ")");
         }
@@ -666,7 +669,7 @@ void WidgetRenderer::sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree
             w->tooltipLineAnchors.resize(w->tooltipLines.size(), 0);
         float top = kPad;
         for (size_t i = 0; i < w->tooltipLines.size(); ++i) {
-            const float rowH = lineH * static_cast<float>(w->tooltipLines[i].lines);
+            const float rowH = size * static_cast<float>(w->tooltipLines[i].lines);
             uint32_t& rid = w->tooltipLineAnchors[i];
             if (rid == 0) {
                 const std::string ln = w->name + "TextLeft" + std::to_string(i + 1);
@@ -684,7 +687,7 @@ void WidgetRenderer::sizeTooltipWidget(Widget* w, ImFont* font, WidgetTree& tree
                 tree.setWidth(rid, std::max(w->width - kPad * 2.0f, 1.0f));
                 tree.setHeight(rid, rowH);
             }
-            top += rowH;
+            top += rowH + kLineGap;
         }
     }
 }
@@ -774,7 +777,7 @@ float WidgetRenderer::drawMarkupText(ImDrawList* dl, ImFont* font, float size,
                                      const std::string& text, float wrapWidth,
                                      bool nonSpaceWrap, const char* justifyH,
                                      bool forceColor, WidgetTree* linkSink,
-                                     uint32_t linkOwner, float indent) {
+                                     uint32_t linkOwner, float indent, float spacing) {
     gradientGlyph_ = 0;
     const auto lines = wrapText(parseMarkup(text), wrapWidth, nonSpaceWrap,
                                 [&](const std::string& piece) {
@@ -786,7 +789,8 @@ float WidgetRenderer::drawMarkupText(ImDrawList* dl, ImFont* font, float size,
     const bool justRight = justifyH && std::strcmp(justifyH, "RIGHT") == 0;
     const bool justCenter = justifyH && std::strcmp(justifyH, "CENTER") == 0;
     bool firstLine = true;
-    const float lineH = size * 1.2f;
+    // 0x006c7b10: each line lower by the font's height and its spacing.
+    const float lineH = size + spacing;
     float y = at.y;
     for (const auto& line : lines) {
         // A picture contributes its own width, not its (empty) text's, or a
@@ -818,7 +822,7 @@ float WidgetRenderer::drawMarkupText(ImDrawList* dl, ImFont* font, float size,
                     if (tex != kMissing) {
                         // Sat on the baseline like a capital, which is where
                         // the interface's own money frames put a coin.
-                        const float top = y + (lineH - h) * 0.5f;
+                        const float top = y + (size - h) * 0.5f;
                         dl->AddImage(reinterpret_cast<ImTextureID>(tex),
                                      ImVec2(x, top), ImVec2(x + w, top + h),
                                      ImVec2(run.uv[0], run.uv[2]), ImVec2(run.uv[1], run.uv[3]),
@@ -885,7 +889,7 @@ float WidgetRenderer::drawMarkupText(ImDrawList* dl, ImFont* font, float size,
                 // Filing the pixels would have made the hit test miss by the
                 // scale factor and by the whole height of the screen.
                 linkSink->addLinkRect(linkRectFromDraw(
-                    linkOwner, run.link, run.text, x, y, runW, lineH,
+                    linkOwner, run.link, run.text, x, y, runW, size,
                     linkScreenH_, linkScale_));
             }
             x += runW;
@@ -900,6 +904,7 @@ void WidgetRenderer::drawSimpleHtml(ImDrawList* dl, WidgetTree& tree,
                                     float x0, float y0, float x1) {
     ImFont* font = interfaceFaceOrDefault(w.fontFace);
     const float size = interfaceFontSize(w.fontHeight) * ws;
+    const float spacing = w.lineSpacing * ws;
     const float boxW = x1 - x0;
     const float wrapW = boxW > size ? boxW : 0.0f;
     float y = y0;
@@ -949,7 +954,7 @@ void WidgetRenderer::drawSimpleHtml(ImDrawList* dl, WidgetTree& tree,
             drawMarkupText(dl, font, size,
                            ImVec2(x0 + w.shadowX * ws, y - w.shadowY * ws),
                            packColor(sc, w.alpha * w.shadowColor[3]), w.alpha,
-                           b.text, wrapW, false, align.c_str(), true);
+                           b.text, wrapW, false, align.c_str(), true, nullptr, 0, 0.0f, spacing);
         }
         // A heading in its own colour where one was set for it.
         const float* color = (b.element >= 1 && b.element <= 3 && w.htmlHeadingColorSet[b.element - 1])
@@ -957,11 +962,11 @@ void WidgetRenderer::drawSimpleHtml(ImDrawList* dl, WidgetTree& tree,
                                  : w.color;
         float h = drawMarkupText(dl, font, size, ImVec2(x0, y),
                                  packColor(color, w.alpha), w.alpha, b.text,
-                                 wrapW, false, align.c_str(), false, &tree, w.id);
+                                 wrapW, false, align.c_str(), false, &tree, w.id, 0.0f, spacing);
         // A break at the end of a block finishes its last line rather than
         // opening another: "text<BR/></P>" is one line, and a lone <BR/>
         // between paragraphs is one blank line, not two.
-        if (!b.text.empty() && b.text.back() == '\n') h -= size * 1.2f;
+        if (!b.text.empty() && b.text.back() == '\n') h -= size + spacing;
         y += h;
     }
 }
@@ -2721,13 +2726,13 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                                        w->objectType == "GameTooltip" &&
                                        !w->tooltipLines.empty();
             ImFont* tipFont = nullptr;
-            float tipSize = 0.0f, tipLineH = 0.0f, tipPad = 0.0f, tipTextW = 0.0f;
+            float tipSize = 0.0f, tipGap = 0.0f, tipPad = 0.0f, tipTextW = 0.0f;
             std::vector<int> tipRows;
             float tipHeight = 0.0f;
             if (isGameTooltip) {
                 tipFont = interfaceFaceOrDefault(w->fontFace);
                 tipSize = interfaceFontSize(w->fontHeight) * ws;
-                tipLineH = tipSize * 1.2f;
+                tipGap = 2.0f * ws;
                 tipPad = 10.0f * ws;
                 tipTextW = (x1 - x0) - tipPad * 2.0f;
                 tipRows.reserve(w->tooltipLines.size());
@@ -2749,7 +2754,8 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     tipRows.push_back(n);
                     rows += n;
                 }
-                tipHeight = tipLineH * static_cast<float>(rows) + tipPad * 2.0f;
+                tipHeight = tipSize * static_cast<float>(rows) +
+                            tipGap * static_cast<float>(w->tooltipLines.size() - 1) + tipPad * 2.0f;
             }
 
             // The box, grown to hold them and then moved up until it fits.
@@ -2790,7 +2796,6 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             if (isGameTooltip) {
                 ImFont* font = tipFont;
                 const float size = tipSize;
-                const float lineH = tipLineH;
                 const float pad = tipPad;
                 float y = boxY0 + pad;
                 const float textW = tipTextW;
@@ -2824,8 +2829,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     }
                     // As tall as the rows counted for it above, which were
                     // counted against this same width.
-                    y += lineH * static_cast<float>(
-                        rowIdx < tipRows.size() ? tipRows[rowIdx] : 1);
+                    y += size * static_cast<float>(rowIdx < tipRows.size() ? tipRows[rowIdx] : 1) + tipGap;
                     ++rowIdx;
                 }
             }
@@ -2837,7 +2841,9 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             if (w->isMessageFrame && !w->messages.empty()) {
                 ImFont* font = interfaceFaceOrDefault(w->fontFace);
                 const float size = interfaceFontSize(w->fontHeight) * ws;
-                const float lineH = size * 1.15f + w->messagePadding * ws;
+                // Font strings on each other, the font's spacing between them
+                // (0x00969fa0, 0x00968790).
+                const float lineH = size + w->lineSpacing * ws + w->messagePadding * ws;
                 // A chat line is wrapped to the frame, not run off the end of
                 // it. Every other label in the interface has wrapped for as
                 // long as there has been a wrapper; this surface drew each
@@ -2968,7 +2974,8 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                                        ImVec2(bx + shadowPx(w->shadowX * s), by - shadowPx(w->shadowY * s)),
                                        packColor(sc, w->alpha * w->shadowColor[3] * rgba[3]),
                                        w->alpha, m.text, wrapW, false,
-                                       w->justifyH.c_str(), true, nullptr, 0, (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f));
+                                       w->justifyH.c_str(), true, nullptr, 0,
+                                       (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f), lineH - size);
                     }
                     // Justified the way the frame's own font instance says,
                     // inside the frame's width - each line of a message on its
@@ -2980,8 +2987,8 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     // ChatFrameTemplate declares LEFT, so chat is unchanged.
                     drawMarkupText(dl, font, size, ImVec2(bx, by),
                                    packColor(rgba, w->alpha), w->alpha, m.text,
-                                   wrapW, false, w->justifyH.c_str(), false,
-                                   &tree, w->id, (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f));
+                                   wrapW, false, w->justifyH.c_str(), false, &tree, w->id,
+                                   (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f), lineH - size);
                     if (hiddenBelow > 0) dl->PopClipRect();
                     if (topDown) y += lineH * static_cast<float>(rows);
                     else         y -= lineH * static_cast<float>(shownRows);
@@ -3423,26 +3430,14 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             // the label a hundred lines tall - worse than the overflow this
             // exists to stop.
             const float boxWidth = x1 - x0;
-            // A region one line tall cannot show two. Wrapping there does not
-            // fit the text, it spills it over whatever is drawn beneath - and
-            // in a list of fixed-height rows that is the next row.
-            //
-            // The quest log is the case. QuestLogTitleButton_Resize measures the
-            // title, works out how much of it would overrun the (Complete) tag,
-            // and calls SetWidth with the room that is actually left. That is a
-            // request to CUT the title there, not to reflow it: the row is 16
-            // tall and the font string declares 10, one line. Reflowing put the
-            // tail of every long quest name - and of any zone header wider than
-            // its box - on top of the row below it.
-            //
-            // Measured in pixels on both sides. rectH is in the interface's own
-            // units and `size` is already scaled, so comparing the two directly
-            // would read as one line or many purely by the window's size.
-            const float boxHeightPx = y1 - y0;
-            const bool fitsOneLineOnly = (boxHeightPx > 0.0f && boxHeightPx < size * 1.8f);
-            const float wrapW =
-                (!w->autoSized && w->wordWrap && !fitsOneLineOnly && boxWidth > size)
-                ? boxWidth : 0.0f;
+            const float spacing = w->lineSpacing * ws;
+            // Where its box is what it was given - not one its own text made -
+            // the lines are broken at its sides, and as many of them shown as
+            // its height has room for (0x00483a40).
+            const bool boxed = !w->autoSized && boxWidth > size;
+            const float wrapW = boxed && w->wordWrap ? boxWidth : 0.0f;
+            const bool ownHeight = w->wrapsToWidth || w->wrapsBetweenAnchors;
+            const int most = boxed && !ownHeight && y1 - y0 > 0.0f ? linesThatFit(y1 - y0, size, spacing) : 0;
             // Held to its box when the box is what decides its width. A string
             // sized from its own text has no box to be held to and is left
             // alone; one given a width has been told how much room it gets, so
@@ -3483,7 +3478,19 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             // The glyphs themselves were never in question - drawMarkupText
             // parses the runs and draws only the visible ones, in their
             // colours. It was the width the placement is computed from.
-            const std::string measured = strippedText(w->text);
+            const float indent = w->indentedWordWrap ? kIndentedWrapPixels : 0.0f;
+            if (boxed && (w->fittedFrom != w->text || w->fittedWidth != boxWidth || w->fittedSize != size ||
+                          w->fittedLines != (w->wordWrap ? most : -most - 2) || w->fittedFace != w->fontFace)) {
+                w->fittedText = interfaceFittedText(w->text, font, size, boxWidth, w->wordWrap ? most : 1, w->wordWrap,
+                                                    w->nonSpaceWrap, indent);
+                w->fittedFrom = w->text;
+                w->fittedWidth = boxWidth;
+                w->fittedSize = size;
+                w->fittedLines = w->wordWrap ? most : -most - 2;
+                w->fittedFace = w->fontFace;
+            }
+            const std::string& shown = boxed ? w->fittedText : w->text;
+            const std::string measured = strippedText(shown);
             ImVec2 extent =
                 font ? font->CalcTextSizeA(size, FLT_MAX, 0.0f, measured.c_str())
                      : ImGui::CalcTextSize(measured.c_str());
@@ -3492,17 +3499,17 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             // not it is also being broken to fit.
             if (font) {
                 const auto lines = wrapText(
-                    parseMarkup(w->text), wrapW, w->nonSpaceWrap,
+                    parseMarkup(shown), wrapW, w->nonSpaceWrap,
                     [&](const std::string& piece) {
                         return font->CalcTextSizeA(size, FLT_MAX, 0.0f,
                                                    piece.c_str()).x;
-                    }, (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f));
+                    }, indent);
                 w->wrappedLines = static_cast<int>(lines.size());
                 if (wrapW > 0.0f) extent.x = wrapW;
-                // Measured by its letters alone, a string with a break at its
-                // end was one line shorter here than its box, and one set at
-                // the bottom a line too low (the world map's dashes).
-                extent.y = placedHeight(lines.size(), size * 1.2f, extent.y, wrapW > 0.0f);
+                // Its lines, the last one among them though it be empty: a
+                // string set at the bottom with a break at its end was a line
+                // too low (the world map's dashes).
+                extent.y = textHeight(std::max<size_t>(lines.size(), 1), size, spacing);
             } else {
                 w->wrappedLines = 1;
             }
@@ -3523,24 +3530,9 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 pushY = -owner->pushedTextOffsetY * s;
             }
             const float boxW = x1 - x0, boxH = y1 - y0;
-            // Too long, on one line, for the box it was given: cut at the end
-            // with "...", as WoW does, and set from the box's left edge
-            // whatever the justification. Justified as it was, a right-aligned
-            // label started out past the left of its box and lost its first
-            // characters to the clip - the video options' resolution read
-            // "920x1080 (Wide)", 90 units of text in an 85-unit box.
-            //
-            // Plain text only. A label with markup keeps its runs and is only
-            // moved, so it still loses its end rather than its start.
+            // One line too long even so - not a letter fits beside the dots - is
+            // set from the box's left edge whatever the justification.
             const bool overflows = clipToBox && wrapW <= 0.0f && extent.x > boxW + 0.5f;
-            std::string fitted;
-            if (overflows && font && measured == w->text &&
-                w->text.find('\n') == std::string::npos) {
-                fitted = fitWithEllipsis(w->text, boxW, [&](const std::string& piece) {
-                    return font->CalcTextSizeA(size, FLT_MAX, 0.0f, piece.c_str()).x;
-                });
-            }
-            const std::string& shown = fitted.empty() ? w->text : fitted;
             // The gradient, for every copy of the words drawn below - the
             // outline and the shadow fade with them.
             struct GradientScope {
@@ -3579,7 +3571,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                     drawMarkupText(dl, font, size, ImVec2(tx + o.x, ty + o.y),
                                    shadow, w->alpha, shown, wrapW,
                                    w->nonSpaceWrap, w->justifyH.c_str(), true,
-                                   nullptr, 0, (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f));
+                                   nullptr, 0, indent, spacing);
                 }
             }
             // The shadow sits under the text and over the outline: it is a
@@ -3593,7 +3585,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                                ImVec2(tx + w->shadowX * s, ty - w->shadowY * s),
                                packColor(sc, w->alpha * w->shadowColor[3]),
                                w->alpha, shown, wrapW, w->nonSpaceWrap,
-                               w->justifyH.c_str(), true, nullptr, 0, (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f));
+                               w->justifyH.c_str(), true, nullptr, 0, indent, spacing);
             }
             // A button's label takes its colour from the button's state. The
             // colour lives on the parent because that is where the template
@@ -3611,7 +3603,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             drawMarkupText(dl, font, size, ImVec2(tx, ty),
                            packColor(textColor, w->alpha), w->alpha, shown,
                            wrapW, w->nonSpaceWrap, w->justifyH.c_str(), false,
-                           &tree, w->id, (w->indentedWordWrap ? kIndentedWrapPixels : 0.0f));
+                           &tree, w->id, indent, spacing);
         }
     }
 }

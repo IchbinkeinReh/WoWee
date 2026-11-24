@@ -1811,10 +1811,12 @@ const wowee::ui::Widget* textWidgetOf(lua_State* L, int index) {
     return fs ? fs : w;
 }
 
+std::string fontStringShown(const wowee::ui::Widget& w);
 int lua_Region_GetTextWidth(lua_State* L) {
     syncTooltipLineStringOf(L, widgetOf(L, 1));
     const auto* w = textWidgetOf(L, 1);
-    lua_pushnumber(L, w ? measureTextWidth(w->text, w->fontFace, w->fontHeight) : 0.0);
+    // 0x00483e80: of what its box shows.
+    lua_pushnumber(L, w ? measureTextWidth(fontStringShown(*w), w->fontFace, w->fontHeight) : 0.0);
     return 1;
 }
 
@@ -1888,17 +1890,33 @@ int lua_Region_GetFieldSize(lua_State* L) {
 /// declared width with no height is a paragraph, and so is anything the
 /// interface has marked as wrapping or held by its two sides. A label sized by
 /// its own text wraps at nothing and is one line unless it carries a |n.
+/// What of its text a font string shows (0x00483a40): the box it was given is
+/// its width, and its height where that was given too.
+std::string fontStringShown(const wowee::ui::Widget& w) {
+    if (w.kind != wowee::ui::WidgetKind::FontString || w.autoSized || w.text.empty()) return w.text;
+    const float width = w.wordWrap ? wowee::ui::textWrapWidth(w) : w.width;
+    const bool given = w.width > 0.0f && w.height > 0.0f && !w.wrapsToWidth && !w.wrapsBetweenAnchors;
+    if (width <= 0.0f && !given) return w.text;
+    const float size = wowee::ui::interfaceFontSize(w.fontHeight);
+    return wowee::ui::interfaceFittedText(w.text, w.fontFace, w.fontHeight, given ? w.width : width,
+                                          !w.wordWrap ? 1
+                                          : given     ? wowee::ui::linesThatFit(w.height, size, w.lineSpacing)
+                                                      : 0,
+                                          w.wordWrap, w.nonSpaceWrap);
+}
+
 double fontStringTextHeight(const wowee::ui::Widget& w) {
     // The size it is actually drawn at, which is what interfaceFontSize
     // answers. Three places asked this question with three different
     // fallbacks - twelve here, twelve below, fourteen in the edit box - and a
     // label with no declared height is drawn at none of them.
     const float line = wowee::ui::interfaceFontSize(w.fontHeight);
-    const float wrapWidth = w.wordWrap ? wowee::ui::textWrapWidth(w) : 0.0f;
+    const bool given = !w.autoSized && w.width > 0.0f && w.height > 0.0f && !w.wrapsToWidth && !w.wrapsBetweenAnchors;
+    const float wrapWidth = !w.wordWrap ? 0.0f : given ? w.width : wowee::ui::textWrapWidth(w);
     const int lines = std::max(1, wowee::ui::interfaceTextLines(
-                                      w.text, w.fontFace, w.fontHeight,
+                                      fontStringShown(w), w.fontFace, w.fontHeight,
                                       wrapWidth, w.nonSpaceWrap));
-    return line * 1.2 * lines;
+    return wowee::ui::textHeight(static_cast<size_t>(lines), line, w.lineSpacing);
 }
 
 int lua_Region_GetTextHeight(lua_State* L) {

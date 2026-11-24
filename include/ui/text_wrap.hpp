@@ -10,6 +10,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -70,7 +71,9 @@ inline bool sameStyle(const WrapRun& a, const WrapRun& b) {
 ///
 /// Words, not characters, unless a single word is wider than the whole box and
 /// nonSpaceWrap says it may be broken. Thirty-six labels in FrameXML ask for
-/// that, all of them prose in a narrow column.
+/// that, all of them prose in a narrow column. Without it the text ends at the
+/// letter that does not fit (0x006c1d40: no break on the line and flag 0x40
+/// off), and `stopped` is set. The spaces after a word do not make it too wide.
 ///
 /// `indent` is SetIndentedWordWrap's: every line after the first is that much
 /// narrower (the client's text layout, 0x006bd390/0x006bdb10, takes 15 screen pixels
@@ -78,7 +81,9 @@ inline bool sameStyle(const WrapRun& a, const WrapRun& b) {
 template <typename Measure>
 std::vector<std::vector<WrapRun>> wrapText(const std::vector<WrapRun>& runs,
                                            float wrapWidth, bool nonSpaceWrap,
-                                           Measure measure, float indent = 0.0f) {
+                                           Measure measure, float indent = 0.0f,
+                                           bool* stopped = nullptr) {
+    if (stopped) *stopped = false;
     std::vector<std::vector<WrapRun>> lines;
     lines.emplace_back();
     float x = 0.0f;
@@ -150,16 +155,40 @@ std::vector<std::vector<WrapRun>> wrapText(const std::vector<WrapRun>& runs,
             std::string word = run.text.substr(at, end - at);
             at = end;
 
+            // What has to fit: the word, without the spaces it ends in.
+            const auto bare = [&] {
+                const size_t last = word.find_last_not_of(' ');
+                return last == std::string::npos ? 0.0f
+                       : last + 1 == word.size() ? measure(word)
+                                                 : measure(word.substr(0, last + 1));
+            };
             float w = measure(word);
-            if (x > 0.0f && x + w > widthNow()) {
+            float needs = bare();
+            if (x > 0.0f && x + needs > widthNow()) {
                 lines.emplace_back();
                 x = 0.0f;
                 // The break stands in for the space that separated them.
                 while (!word.empty() && word.front() == ' ') word.erase(0, 1);
                 w = measure(word);
+                needs = bare();
             }
 
-            if (w > widthNow() && nonSpaceWrap) {
+            if (needs > widthNow() && !nonSpaceWrap) {
+                std::string part;
+                for (size_t i = 0; i < word.size();) {
+                    size_t n = 1;
+                    while (i + n < word.size() && (static_cast<unsigned char>(word[i + n]) & 0xC0) == 0x80) ++n;
+                    const std::string more = part + word.substr(i, n);
+                    if (x + measure(more) > widthNow()) break;
+                    part = more;
+                    i += n;
+                }
+                if (!part.empty()) place(run, part);
+                if (stopped) *stopped = true;
+                return lines;
+            }
+
+            if (needs > widthNow() && nonSpaceWrap) {
                 // One word wider than the whole box. Broken by character,
                 // which is the only thing left and what the attribute asks for.
                 std::string part;
@@ -192,28 +221,40 @@ std::vector<std::vector<WrapRun>> wrapText(const std::vector<WrapRun>& runs,
 /// centred one not at all.
 inline constexpr float kIndentedWrapPixels = 15.0f;
 
-/// One line of plain text cut to fit a width, ending in "..." where it had to
-/// be cut - what WoW does with a label too long for the width it was given.
-///
-/// Text that fits comes back as it is. Otherwise the longest start of it that
-/// fits with the dots after it, cut between characters rather than inside one
-/// (UTF-8), and without a space left hanging before the dots. When not even
-/// the dots fit, the dots alone, and the clip takes what it must.
-template <typename Measure>
-std::string fitWithEllipsis(const std::string& text, float width, Measure measure) {
-    if (measure(text) <= width) return text;
+/// How tall so many lines are (0x006bd900): each as tall as the font, and the
+/// font's spacing between them.
+[[nodiscard]] inline float textHeight(std::size_t lines, float fontHeight, float spacing) {
+    return lines == 0 ? 0.0f
+                      : static_cast<float>(lines) * fontHeight + static_cast<float>(lines - 1) * spacing;
+}
+
+/// How many lines a box shows (0x00483a40, 0x006bd390): those that fit its
+/// height, and one at least.
+[[nodiscard]] inline int linesThatFit(float height, float fontHeight, float spacing) {
+    const float pitch = fontHeight + spacing;
+    if (pitch <= 0.0f) return 1;
+    return std::max(1, static_cast<int>(std::floor((height + spacing) / pitch + 1e-3f)));
+}
+
+/// The text a box shows of one (0x00483a40): all of it where it fits, else as
+/// many of its letters as fit with "..." after them, cut between characters
+/// (UTF-8). `fits` says of a text whether the box shows it whole; when not even
+/// the dots fit they are it.
+template <typename Fits>
+std::string fitText(const std::string& text, Fits&& fits) {
+    if (text.empty() || fits(text)) return text;
     static const std::string kDots = "...";
-    std::size_t cut = text.size();
-    while (cut > 0) {
-        do {
-            --cut;
-        } while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80);
-        std::string head = text.substr(0, cut);
-        while (!head.empty() && head.back() == ' ') head.pop_back();
-        if (head.empty()) break;
-        if (measure(head + kDots) <= width) return head + kDots;
+    std::vector<std::size_t> starts;   // of each character
+    for (std::size_t i = 0; i < text.size(); ++i)
+        if ((static_cast<unsigned char>(text[i]) & 0xC0) != 0x80) starts.push_back(i);
+    // The longest start that fits: less of it never needs more room.
+    std::size_t low = 0, high = starts.size();
+    while (low + 1 < high) {
+        const std::size_t mid = low + (high - low) / 2;
+        if (fits(text.substr(0, starts[mid]) + kDots)) low = mid;
+        else high = mid;
     }
-    return kDots;
+    return text.substr(0, starts[low]) + kDots;
 }
 
 /// Where a line starts inside its box, measured from the box's left edge.
@@ -235,14 +276,6 @@ inline float justifyOffset(const char* justifyH, float boxWidth, float lineWidth
     if (j == "CENTER") return (boxWidth - lineWidth) * 0.5f;
     if (j == "RIGHT")  return boxWidth - lineWidth;
     return 0.0f;
-}
-
-/// How tall a string is as it is placed in its box: its lines, the last one
-/// among them though it be empty - a break at the end begins a line, and the
-/// string is measured with it (WidgetRenderer::sizeFontStringWidget). One line
-/// that is not being broken to fit is as tall as its letters.
-[[nodiscard]] inline float placedHeight(std::size_t lines, float lineHeight, float letters, bool brokenToFit) {
-    return brokenToFit || lines > 1 ? lineHeight * static_cast<float>(lines) : letters;
 }
 
 }  // namespace wowee::ui

@@ -116,6 +116,37 @@ int interfaceTextLines(const std::string& text, const std::string& fontFace,
     return lines.empty() ? 1 : static_cast<int>(lines.size());
 }
 
+std::string interfaceFittedText(const std::string& text, ImFont* font, float size, float width, int lines,
+                                bool wordWrap, bool nonSpaceWrap, float indent) {
+    if (text.empty() || width <= 0.0f) return text;
+    const auto measure = [&](const std::string& piece) {
+        if (font) return font->CalcTextSizeA(size, FLT_MAX, 0.0f, piece.c_str()).x;
+        return static_cast<float>(piece.size()) * size * 0.5f;
+    };
+    return fitText(text, [&](const std::string& t) {
+        bool stopped = false;
+        const auto wrapped = wrapText(parseMarkup(t), wordWrap ? width : 0.0f, nonSpaceWrap, measure, indent, &stopped);
+        if (stopped || (lines > 0 && wrapped.size() > static_cast<size_t>(lines))) return false;
+        if (wordWrap) return true;
+        float wide = 0.0f;
+        if (!wrapped.empty()) {
+            for (const WrapRun& run : wrapped.front()) {
+                wide += run.texture.empty()      ? measure(run.text)
+                        : run.texWidth > 0.0f    ? run.texWidth
+                        : run.texHeight > 0.0f   ? run.texHeight
+                                                 : size;
+            }
+        }
+        return wide <= width + 0.5f;
+    });
+}
+
+std::string interfaceFittedText(const std::string& text, const std::string& fontFace, float fontHeight, float width,
+                                int lines, bool wordWrap, bool nonSpaceWrap) {
+    return interfaceFittedText(text, interfaceFaceOrDefault(fontFace), interfaceFontSize(fontHeight), width, lines,
+                               wordWrap, nonSpaceWrap);
+}
+
 float fontEmSizeScale(const void* ttfData, size_t byteCount) {
     // The OpenType offsets this reads, all big-endian.
     constexpr uint32_t kTagCollection = 0x74746366u;      // 'ttcf'
