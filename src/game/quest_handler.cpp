@@ -96,6 +96,11 @@ QuestGiverStatus QuestHandler::getQuestGiverStatus(uint64_t guid) const {
     return (it != npcQuestStatus_.end()) ? it->second : QuestGiverStatus::NONE;
 }
 
+void QuestHandler::questItemAnswered(uint32_t itemId) {
+    if (questItemsAwaited_.erase(itemId) == 0) return;
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("QUEST_ITEM_UPDATE", {});
+}
+
 QuestLogRows<QuestHandler::QuestLogEntry> QuestHandler::questLogRows() const {
     const auto titleOf = [this](int32_t group) {
         std::string name;

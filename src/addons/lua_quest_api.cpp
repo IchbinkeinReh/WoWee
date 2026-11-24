@@ -4937,6 +4937,10 @@ static int lua_GetQuestItemInfo(lua_State* L) {
         if (r.itemId == 0) continue;
         if (++seen != index) continue;
         const auto* info = gh->getItemInfo(r.itemId);
+        if (!info) {
+            gh->queryItemInfo(r.itemId, 0);
+            if (auto* quests = gh->getQuestHandler()) quests->awaitQuestItem(r.itemId);
+        }
         lua_pushstring(L, info ? info->name.c_str() : "");
         lua_pushstring(L, gh->getItemIconPath(
             info && info->displayInfoId ? info->displayInfoId : r.displayInfoId).c_str());

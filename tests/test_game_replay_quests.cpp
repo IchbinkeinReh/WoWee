@@ -225,3 +225,44 @@ TEST_CASE("a quest is named by its row in the log, headers counted", "[replay][q
     CHECK(quests->questLogIndexOf(9340) == 3);
     s.handler().setAddonEventCallback(nullptr);
 }
+
+// The reward chosen on the frame was let go by every item answer that came in
+// while a quest window was open.
+TEST_CASE("only an item the quest window waits for is its news", "[replay][quest]") {
+    int updates = 0;
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 181}, {UF::UNIT_FIELD_MAXHEALTH, 181}});
+    s.handler().setAddonEventCallback([&](const std::string& name, const std::vector<std::string>&) {
+        if (name == "QUEST_ITEM_UPDATE") ++updates;
+    });
+    // SMSG_ITEM_QUERY_SINGLE_RESPONSE as 0x0098d910 reads it, every number 0.
+    const auto answer = [&](uint32_t entry) {
+        wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_ITEM_QUERY_SINGLE_RESPONSE));
+        p.writeUInt32(entry);
+        for (int i = 0; i < 3; ++i) p.writeUInt32(0);
+        p.writeString("Item");
+        for (int i = 0; i < 3; ++i) p.writeString("");
+        for (int i = 0; i < 160; ++i) p.writeUInt32(0);
+        s.receive(p);
+    };
+    // A reward page, opened with a gossip behind it: any window will do.
+    wowee::network::Packet offer(wowee::game::wireOpcode(Opcode::SMSG_QUESTGIVER_OFFER_REWARD));
+    offer.writeUInt64(0xF130000BEC00150Eull);
+    offer.writeUInt32(9387);
+    offer.writeString("Title");
+    offer.writeString("Text");
+    offer.writeUInt8(0);
+    for (int i = 0; i < 60; ++i) offer.writeUInt32(0);
+    s.receive(offer);
+    REQUIRE(s.handler().isQuestOfferRewardOpen());
+
+    auto* quests = s.handler().getQuestHandler();
+    answer(25001);   // a comparison tooltip's
+    CHECK(updates == 0);
+    quests->awaitQuestItem(25002);
+    answer(25002);
+    CHECK(updates == 1);
+    answer(25002);
+    CHECK(updates == 1);
+    s.handler().setAddonEventCallback(nullptr);
+}

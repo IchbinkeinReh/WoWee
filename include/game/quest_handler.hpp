@@ -216,6 +216,12 @@ public:
     /// drawn without a running realm. Not used on the live path.
     std::vector<QuestLogEntry>& questLogRef() { return questLog_; }
 
+    /// GetQuestItemInfo asked for an item whose record is still out: its answer
+    /// raises QUEST_ITEM_UPDATE (0x0058d190 hands its lookup 0x0058b8f0 to call
+    /// back). Nobody else's answer does - the frame takes the event as a reason
+    /// to draw its rewards again, with none of them chosen.
+    void awaitQuestItem(uint32_t itemId) { questItemsAwaited_.insert(itemId); }
+    void questItemAnswered(uint32_t itemId);
     /// The log as the interface counts it, headers and all (quest_log_rows.hpp).
     [[nodiscard]] QuestLogRows<QuestLogEntry> questLogRows() const;
     /// The headers folded away, by zoneOrSort.
@@ -343,6 +349,7 @@ public:
         slotQuestStates_.fill(0);
         slotsSeen_ = false;
         questSlotWatch_.clear();
+        questItemsAwaited_.clear();
         pendingQuestAddedNotices_.clear();
         questLog_.clear();
         pendingQuestQueryIds_.clear();
@@ -424,6 +431,7 @@ private:
     std::array<uint32_t, 25> slotQuestStates_{};
     bool slotsSeen_ = false;
     QuestSlotWatch questSlotWatch_;
+    std::unordered_set<uint32_t> questItemsAwaited_;
     std::set<int32_t> collapsedQuestGroups_;
     /// What SMSG_QUEST_QUERY_RESPONSE told of a quest: its QuestInfo type
     /// (+0x14) and title.
