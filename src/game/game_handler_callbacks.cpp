@@ -12,6 +12,7 @@
 #include "rendering/mount_transition.hpp"
 #include "rendering/animation_controller.hpp"
 #include "game/game_handler.hpp"
+#include "game/mail_template.hpp"
 #include "game/chat_profanity.hpp"
 #include "game/inventory_alerts.hpp"
 #include "game/reputation_standing.hpp"
@@ -1626,10 +1627,11 @@ std::vector<MailMessage>& GameHandler::mailInboxRef() {
     return mailInbox_;
 }
 std::string GameHandler::getMailDisplaySubject(const MailMessage& mail) {
-    if (mail.messageType != 2) return mail.subject;
+    const std::string& subject = mailSubject(mail.subject, mailTemplate(services().assetManager, mail.mailTemplateId));
+    if (mail.messageType != 2) return subject;
 
     AuctionMailSubject auction;
-    if (!parseAuctionMailSubject(mail.subject, auction)) return mail.subject;
+    if (!parseAuctionMailSubject(subject, auction)) return subject;
 
     ensureItemInfo(auction.itemEntry);
     const auto* info = getItemInfo(auction.itemEntry);

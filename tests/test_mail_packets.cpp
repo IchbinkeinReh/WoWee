@@ -1,6 +1,7 @@
 #include <catch_amalgamated.hpp>
 
 #include "core/application.hpp"
+#include "game/mail_template.hpp"
 #include "game/packet_parsers.hpp"
 #include "game/world_packets.hpp"
 
@@ -494,4 +495,14 @@ TEST_CASE("A body that is not an invoice is refused", "[mail][auction][invoice]"
     CHECK_FALSE(parseAuctionMailBody("", invoice));
     // Decimal fields are decimal: hex only applies to the guid.
     CHECK_FALSE(parseAuctionMailBody("1a2b:5000:1f", invoice));
+}
+
+// A quest giver's letters had no subject in the inbox.
+TEST_CASE("a template letter's subject is its template's", "[mail]") {
+    using wowee::game::MailTemplateText;
+    using wowee::game::mailSubject;
+    const MailTemplateText text{"Man hat Euch wollig gemacht!", "..."};
+    CHECK(mailSubject("", &text) == text.subject);
+    CHECK(mailSubject("sent", &text) == text.subject);
+    CHECK(mailSubject("sent", nullptr) == "sent");
 }

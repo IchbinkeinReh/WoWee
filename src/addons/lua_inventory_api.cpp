@@ -1,5 +1,6 @@
 // lua_inventory_api.cpp - Items, containers, merchant, loot, equipment, trading, auction, and mail Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
+#include "game/mail_template.hpp"
 #include "game/item_text.hpp"
 #include "game/interface_text.hpp"
 #include "addons/lua_api_helpers.hpp"
@@ -166,24 +167,6 @@ static int lua_GetInventoryAlertStatus(lua_State* L) {
 // past the player's own count of bought slots (PLAYER_BYTES_2 byte 2) -
 // whatever is passed in, which the client reads not at all. 0 past the
 // table's end.
-/// MailTemplate.dbc's body for a templated letter (0x00570bd0 reads +8),
-/// nothing for a template it has no row for.
-static std::optional<std::string> mailTemplateBody(game::GameHandler* gh, uint32_t templateId) {
-    static std::unordered_map<uint32_t, std::string> bodies;
-    static bool loaded = false;
-    if (!loaded && gh) {
-        if (auto* am = gh->services().assetManager; am && am->isInitialized()) {
-            loaded = true;
-            if (auto dbc = am->loadDBC("MailTemplate.dbc"); dbc && dbc->isLoaded() && dbc->getFieldCount() >= 19)
-                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
-                    bodies[dbc->getUInt32(i, 0)] = dbc->getString(i, 18);
-        }
-    }
-    const auto it = bodies.find(templateId);
-    if (it == bodies.end()) return std::nullopt;
-    return it->second;
-}
-
 // BankBagSlotPrices.dbc's price for the next slot after those bought, 0
 // past the table (0x0057ba30).
 static uint32_t nextBankSlotPrice(game::GameHandler* gh) {
@@ -8140,8 +8123,8 @@ void registerInventoryLuaAPI(lua_State* L) {
             // its $-tokens filled for the player (0x00579590), or nothing at all
             // for a template with no row.
             if (mail->body.empty() && mail->mailTemplateId != 0) {
-                if (const auto body = mailTemplateBody(gh, mail->mailTemplateId))
-                    lua_pushstring(L, game::resolveTextTokens(*body, *gh).c_str());
+                if (const auto* text = game::mailTemplate(gh->services().assetManager, mail->mailTemplateId))
+                    lua_pushstring(L, game::resolveTextTokens(text->body, *gh).c_str());
                 else
                     lua_pushnil(L);
             } else {
