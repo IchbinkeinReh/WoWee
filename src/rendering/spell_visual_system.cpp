@@ -314,6 +314,7 @@ void SpellVisualSystem::loadSpellVisualDbc() {
                                      svColumn("ImpactAreaKit")};
     // The columns the cast's missile, kits and ends are read from, kept for
     // the visuals 0x00720f80 builds later (mergedVisual).
+    castColumns_.hasMissile = svColumn("HasMissile");
     castColumns_.missileModel = svMissileField < svFc ? svMissileField : 0xFFFFFFFFu;
     castColumns_.flags = svFlagsField;
     castColumns_.missileAttachment = svMissileAttField;
@@ -406,7 +407,10 @@ struct PreparedEffectModel {
 PreparedEffectModel prepareEffectModel(pipeline::AssetManager* assets, const std::string& modelPath,
                                        bool decodeTextures) {
     PreparedEffectModel prepared;
-    auto m2Data = assets->readFile(modelPath);
+    // "model|texture": the texture its item gives the model (item_missile.hpp).
+    const size_t bar = modelPath.find('|');
+    const std::string file = modelPath.substr(0, bar);
+    auto m2Data = assets->readFile(file);
     if (m2Data.empty()) {
         prepared.failure = "could not read model";
         return prepared;
@@ -419,9 +423,14 @@ PreparedEffectModel prepareEffectModel(pipeline::AssetManager* assets, const std
     }
     // Load skin file for WotLK-format M2s
     if (prepared.model.version >= 264) {
-        std::string skinPath = pipeline::skinPathForM2(modelPath);
+        std::string skinPath = pipeline::skinPathForM2(file);
         auto skinData = assets->readFile(skinPath);
         if (!skinData.empty()) pipeline::M2Loader::loadSkin(skinData, prepared.model);
+    }
+    if (bar != std::string::npos) {
+        constexpr uint32_t kObjectSkin = 2;
+        for (auto& tex : prepared.model.textures)
+            if (tex.type == kObjectSkin) tex.filename = modelPath.substr(bar + 1);
     }
     // The textures, decoded as the terrain worker decodes a doodad's and
     // under the key M2Renderer looks them up by.
@@ -892,59 +901,6 @@ void SpellVisualSystem::addKitModel(uint32_t instanceId, spell_kit::KitModelLife
     activeSpellVisuals_.push_back(shown);
 }
 
-void SpellVisualSystem::playPhysicalProjectile(const std::string& modelPath,
-                                                const std::string& texturePath,
-                                                const glm::vec3& start,
-                                                const glm::vec3& end,
-                                                float duration,
-                                                bool spin) {
-    if (!renderer_ || modelPath.empty()) return;
-    auto* characterRenderer = renderer_->getCharacterRenderer();
-    if (!characterRenderer) return;
-    if (!cachedAssetManager_)
-        cachedAssetManager_ = core::Application::getInstance().getAssetManager();
-    if (!cachedAssetManager_) return;
-
-    const std::string cacheKey = modelPath + "|" + texturePath;
-    uint32_t modelId = 0;
-    auto cached = projectileModelIds_.find(cacheKey);
-    if (cached != projectileModelIds_.end()) {
-        modelId = cached->second;
-    } else {
-        if (nextProjectileModelId_ >= 999000) return;
-        modelId = nextProjectileModelId_++;
-        projectileModelIds_[cacheKey] = modelId;
-    }
-
-    if (!characterRenderer->getModelData(modelId)) {
-        auto bytes = cachedAssetManager_->readFile(modelPath);
-        if (bytes.empty()) return;
-        pipeline::M2Model model = pipeline::M2Loader::load(bytes);
-        if (model.name.empty()) model.name = modelPath;
-        if (model.version >= 264) {
-            const std::string skinPath = pipeline::skinPathForM2(modelPath);
-            auto skin = cachedAssetManager_->readFile(skinPath);
-            if (!skin.empty()) pipeline::M2Loader::loadSkin(skin, model);
-        }
-        if (model.vertices.empty() || !characterRenderer->loadModel(model, modelId)) return;
-        if (!texturePath.empty()) {
-            if (auto* texture = characterRenderer->loadTexture(texturePath))
-                characterRenderer->setModelTexture(modelId, 0, texture);
-        }
-    }
-
-    const glm::vec3 delta = end - start;
-    const float horizontal = std::sqrt(delta.x * delta.x + delta.y * delta.y);
-    glm::vec3 rotation(0.0f);
-    rotation.z = std::atan2(delta.y, delta.x);
-    rotation.y = -std::atan2(delta.z, std::max(horizontal, 0.001f));
-
-    const uint32_t instanceId = characterRenderer->createInstance(modelId, start, rotation, 1.0f);
-    if (instanceId == 0) return;
-    physicalProjectiles_.push_back({.instanceId = instanceId, .start = start, .end = end, .rotation = rotation, .elapsed = 0.0f,
-                                    .duration = std::max(duration, 0.05f), .spin = spin});
-}
-
 void SpellVisualSystem::buildCastEntries(uint32_t vid, const spell_visual_merge::Row& row) {
     const CastColumns& c = castColumns_;
     auto at = [&](uint32_t field, int32_t fallback) {
@@ -959,7 +915,7 @@ void SpellVisualSystem::buildCastEntries(uint32_t vid, const spell_visual_merge:
     const auto flags = static_cast<uint32_t>(at(c.flags, 0));
     // Missile: MissileModel names a SpellVisualEffectName row. Negative
     // values are the caster's weapons and ammunition (FUN_00732ff0's -1
-    // to -5), which this does not fly.
+    // to -5), which itemMissileVisual gives a model.
     if (c.missileModel < row.size()) {
         const int32_t missileModel = row[c.missileModel];
         auto fxIt = missileModel > 0 ? effectNamePaths_.find(static_cast<uint32_t>(missileModel))
@@ -1018,13 +974,55 @@ uint32_t SpellVisualSystem::mergedVisual(uint32_t spellVisual, uint32_t weaponVi
     merged[0] = static_cast<int32_t>(id);
     buildCastEntries(id, merged);
     // What the merge leaves as the spell's own: its aura and area kits.
-    if (spellVisual != 0) {
-        if (auto it = visualAuraKits_.find(spellVisual); it != visualAuraKits_.end()) visualAuraKits_[id] = it->second;
-        if (auto it = visualStateKitAnim_.find(spellVisual); it != visualStateKitAnim_.end())
-            visualStateKitAnim_[id] = it->second;
-        if (auto it = persistentAreas_.find(spellVisual); it != persistentAreas_.end()) persistentAreas_[id] = it->second;
-    }
+    if (spellVisual != 0) copyOwnKits(spellVisual, id);
+    visualRows_[id] = std::move(merged);
     mergedVisualIds_[key] = id;
+    return id;
+}
+
+void SpellVisualSystem::copyOwnKits(uint32_t from, uint32_t to) {
+    if (auto it = visualAuraKits_.find(from); it != visualAuraKits_.end()) visualAuraKits_[to] = it->second;
+    if (auto it = visualStateKitAnim_.find(from); it != visualStateKitAnim_.end()) visualStateKitAnim_[to] = it->second;
+    if (auto it = persistentAreas_.find(from); it != persistentAreas_.end()) persistentAreas_[to] = it->second;
+}
+
+std::optional<SpellVisualSystem::MissileColumns> SpellVisualSystem::missileColumns(uint32_t visualId) {
+    if (!spellVisualDbcLoaded_) loadSpellVisualDbc();
+    const auto row = visualRows_.find(visualId);
+    const auto at = [&](uint32_t field) {
+        return row != visualRows_.end() && field < row->second.size() ? row->second[field] : 0;
+    };
+    if (row == visualRows_.end()) return std::nullopt;
+    return MissileColumns{at(castColumns_.hasMissile) != 0, at(castColumns_.missileModel)};
+}
+
+uint32_t SpellVisualSystem::itemMissileVisual(uint32_t visualId, const std::string& model) {
+    if (!spellVisualDbcLoaded_) loadSpellVisualDbc();
+    const auto row = visualRows_.find(visualId);
+    if (row == visualRows_.end() || model.empty()) return visualId;
+    const auto key = std::make_pair(visualId, model);
+    if (const auto it = itemMissileVisualIds_.find(key); it != itemMissileVisualIds_.end()) return it->second;
+    spell_visual_merge::Row own = row->second;
+    const uint32_t id = nextMergedVisualId_++;
+    own[0] = static_cast<int32_t>(id);
+    buildCastEntries(id, own);
+    const VisualEnds& ends = visualEnds_[id];
+    const auto at = [&](uint32_t field) {
+        return field < own.size() ? static_cast<uint32_t>(std::max(own[field], 0)) : 0u;
+    };
+    MissileVisual missile;
+    missile.modelPath = model;
+    missile.flags = ends.flags;
+    missile.sourceAttachment = ends.sourceAttachment;
+    missile.destinationAttachment = ends.destinationAttachment;
+    missile.castOffset = ends.castOffset;
+    missile.impactOffset = ends.impactOffset;
+    missile.soundId = at(castColumns_.missileSound);
+    missile.motionId = at(castColumns_.missileMotion);
+    missileVisuals_[id] = std::move(missile);
+    copyOwnKits(visualId, id);
+    visualRows_[id] = std::move(own);
+    itemMissileVisualIds_[key] = id;
     return id;
 }
 
@@ -3377,7 +3375,7 @@ void SpellVisualSystem::update(float deltaTime) {
     updateDynamicObjects(deltaTime);
     updateFallingModels(deltaTime);
     publishClientStrips();
-    if (activeSpellVisuals_.empty() && physicalProjectiles_.empty()) return;
+    if (activeSpellVisuals_.empty()) return;
 
     // Get character bone tracking context (once per frame)
     CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
@@ -3412,25 +3410,6 @@ void SpellVisualSystem::update(float deltaTime) {
         }
     }
 
-    if (charRenderer) {
-        for (auto it = physicalProjectiles_.begin(); it != physicalProjectiles_.end(); ) {
-            it->elapsed += deltaTime;
-            const float t = std::min(it->elapsed / it->duration, 1.0f);
-            charRenderer->setInstancePosition(
-                it->instanceId, glm::mix(it->start, it->end, t));
-            if (it->spin) {
-                glm::vec3 rotation = it->rotation;
-                rotation.x += t * glm::two_pi<float>() * 2.0f;
-                charRenderer->setInstanceRotation(it->instanceId, rotation);
-            }
-            if (t >= 1.0f) {
-                charRenderer->removeInstance(it->instanceId);
-                it = physicalProjectiles_.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    }
 }
 
 void SpellVisualSystem::addDynamicObject(uint64_t guid, uint32_t visualId, const DynamicObjectCast& cast,
@@ -3769,11 +3748,6 @@ void SpellVisualSystem::reset() {
     for (const auto& landed : landedMissiles_)
         if (m2Renderer_) m2Renderer_->removeInstance(landed.instanceId);
     landedMissiles_.clear();
-    if (renderer_ && renderer_->getCharacterRenderer()) {
-        for (const auto& projectile : physicalProjectiles_)
-            renderer_->getCharacterRenderer()->removeInstance(projectile.instanceId);
-    }
-    physicalProjectiles_.clear();
     // Reset the negative cache so models that failed during asset loading can retry.
     spellVisualFailedModels_.clear();
 }

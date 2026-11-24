@@ -2865,6 +2865,9 @@ struct SpellGoData {
     /// Cast flag 0x20000 (ADJUST_MISSILE): the missile's elevation, radians,
     /// and how long after SMSG_SPELL_GO it lands, milliseconds (0x0080e1b0).
     /// The client flies it on an arc between the two (0x00700880).
+    /// Cast flag 0x20: the ammunition's ItemDisplayInfo id and inventory type.
+    uint32_t ammoDisplayId = 0;
+    uint32_t ammoInventoryType = 0;
     bool hasMissileTrajectory = false;
     float missileElevation = 0.0f;
     uint32_t missileDelayMs = 0;

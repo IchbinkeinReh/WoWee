@@ -93,15 +93,6 @@ public:
     void playDestinationAreaKits(uint32_t visualId, const glm::vec3& place, bool missileCarriesImpact,
                                  uint32_t spellId, uint64_t casterGuid, uint32_t impactDelayMs);
 
-    // Launch a physical weapon projectile (arrow, bullet, or thrown item)
-    // without invoking the spell visual pipeline.
-    void playPhysicalProjectile(const std::string& modelPath,
-                                const std::string& texturePath,
-                                const glm::vec3& start,
-                                const glm::vec3& end,
-                                float duration,
-                                bool spin);
-
     /// The missile half of a SpellVisual.dbc row - see spell_missile.hpp for
     /// how the client flies it.
     struct MissileVisual {
@@ -120,6 +111,16 @@ public:
     /// one naming a weapon or ammunition, which the client takes from the
     /// caster's items rather than from the visual).
     const MissileVisual* findMissileVisual(uint32_t visualId);
+    /// A visual's HasMissile and MissileModel (item_missile::source); none for one
+    /// the table has not.
+    struct MissileColumns {
+        bool hasMissile = false;
+        int32_t model = 0;
+    };
+    [[nodiscard]] std::optional<MissileColumns> missileColumns(uint32_t visualId);
+    /// The visual with an item's model for its missile (item_missile::model), an id
+    /// of its own made once for each.
+    uint32_t itemMissileVisual(uint32_t visualId, const std::string& model);
 
     /// 0x007fa2e0 -> 0x00722950: for a visual with Flags 0x20 the caster
     /// holds its missile model at the visual's MissileAttachment from the
@@ -1071,8 +1072,12 @@ private:
     std::unordered_map<uint32_t, spell_visual_merge::Row> visualRows_;
     std::map<std::pair<uint32_t, uint32_t>, uint32_t> mergedVisualIds_;
     uint32_t nextMergedVisualId_ = 0x40000000u;  ///< above every SpellVisual id
+    std::map<std::pair<uint32_t, std::string>, uint32_t> itemMissileVisualIds_;
+    /// A visual's aura and area kits for one made out of it.
+    void copyOwnKits(uint32_t from, uint32_t to);
     /// The SpellVisual columns a cast reads (0xFFFFFFFF where the layout has none).
     struct CastColumns {
+        uint32_t hasMissile = 0xFFFFFFFFu;
         uint32_t missileModel = 0xFFFFFFFFu;
         uint32_t flags = 0xFFFFFFFFu;
         uint32_t missileAttachment = 0xFFFFFFFFu;
@@ -1090,16 +1095,6 @@ private:
     /// A unit's CreatureModelData WorldEffectScale (+0x5c), which sizes
     /// the kit models it places in the world (0x006f7950).
     AttachedEffectScale worldEffectScale_;
-
-    struct PhysicalProjectile {
-        uint32_t instanceId = 0;
-        glm::vec3 start{0.0f};
-        glm::vec3 end{0.0f};
-        glm::vec3 rotation{0.0f};
-        float elapsed = 0.0f;
-        float duration = 0.0f;
-        bool spin = false;
-    };
 
     // A missile in flight (CMissile).
     struct ActiveMissile {
@@ -1277,7 +1272,6 @@ private:
     pipeline::AssetManager* cachedAssetManager_ = nullptr;
 
     std::vector<SpellVisualInstance> activeSpellVisuals_;
-    std::vector<PhysicalProjectile> physicalProjectiles_;
     std::vector<ActiveMissile> activeMissiles_;
     std::unordered_map<uint32_t, MissileVisual> missileVisuals_;      // visualId → missile
     /// A missile model held on its caster until it flies (Unit_C +0xfa8,
@@ -1307,8 +1301,6 @@ private:
     std::unordered_map<std::string, uint32_t> spellVisualModelIds_;   // M2 path → M2Renderer modelId
     std::unordered_set<uint32_t> spellVisualFailedModels_;           // modelIds that failed to load (negative cache)
     uint32_t nextSpellVisualModelId_ = 999000; // Reserved range 999000-999799
-    uint32_t nextProjectileModelId_ = 998000;  // Reserved range 998000-998999
-    std::unordered_map<std::string, uint32_t> projectileModelIds_;
     bool spellVisualDbcLoaded_ = false;
     /// A one-shot model whose sequence has no length: what it is given.
     static constexpr float SPELL_VISUAL_DEFAULT_DURATION = 2.0f;

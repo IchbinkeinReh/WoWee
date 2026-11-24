@@ -6082,30 +6082,33 @@ uint32_t GameHandler::getSpellVisualId(uint32_t spellId) const {
                                                             std::to_string(spell_visual::kViolenceLevelLimit))));
 }
 
-uint32_t GameHandler::rangedWeaponDisplayId(uint64_t unitGuid) const {
-    // vfunc +0x134(2): a player's visible ranged item (Player_C +0x1008,
-    // record 17), a creature's third virtual item slot (Unit_C +0x998).
+GameHandler::HeldItemDisplay GameHandler::heldItemDisplay(uint64_t unitGuid, uint32_t hand) const {
+    // vfunc +0x134: a player's visible item (Player_C +0x1008, records 15 to
+    // 17), a creature's virtual item slot (Unit_C +0x998).
     const auto entity = entityController_->getEntityManager().getEntity(unitGuid);
-    if (!entity || !entity->isUnit()) return 0;
+    if (!entity || !entity->isUnit() || hand > 2) return {};
     uint32_t entry = 0;
     if (entity->getType() == ObjectType::PLAYER) {
-        constexpr int kSlotRanged = 17;
+        constexpr uint32_t kSlotMainHand = 15;
         if (visibleItemEntryBase_ >= 0)
-            entry = visibleItemEntryField(
-                entity->getField(static_cast<uint16_t>(visibleItemEntryBase_ + kSlotRanged * 2)));
+            entry = visibleItemEntryField(entity->getField(
+                static_cast<uint16_t>(visibleItemEntryBase_ + static_cast<int>((kSlotMainHand + hand) * 2))));
     } else {
         const uint16_t slots = fieldIndex(UF::UNIT_VIRTUAL_ITEM_SLOT_ID);
-        if (slots != 0xFFFF) entry = entity->getField(static_cast<uint16_t>(slots + 2));
+        if (slots != 0xFFFF) entry = entity->getField(static_cast<uint16_t>(slots + hand));
     }
-    if (entry == 0) return 0;
-    if (const auto* info = getItemInfo(entry); info && info->valid) return info->displayInfoId;
-    // Item.dbc's display (WotLK's eight columns: display at 5) while the
-    // item's query is out.
+    if (entry == 0) return {};
+    if (const auto* info = getItemInfo(entry); info && info->valid) return {info->displayInfoId, info->inventoryType};
+    // Item.dbc's (WotLK's eight columns: display at 5, inventory type at 6)
+    // while the item's query is out.
     auto* am = services_.assetManager;
     auto items = am && am->isInitialized() ? am->loadDBCOptional("Item.dbc") : nullptr;
     const int32_t row = items && items->getFieldCount() >= 8 ? items->findRecordById(entry) : -1;
-    return row >= 0 ? items->getUInt32(static_cast<uint32_t>(row), 5) : 0u;
+    if (row < 0) return {};
+    return {items->getUInt32(static_cast<uint32_t>(row), 5), items->getUInt32(static_cast<uint32_t>(row), 6)};
 }
+
+uint32_t GameHandler::rangedWeaponDisplayId(uint64_t unitGuid) const { return heldItemDisplay(unitGuid, 2).displayId; }
 
 uint32_t GameHandler::getUnitSpellVisualId(uint64_t casterGuid, uint32_t spellId) const {
     const uint32_t own = getSpellVisualId(spellId);

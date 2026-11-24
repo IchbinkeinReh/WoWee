@@ -838,7 +838,7 @@ private:
     void dropHeldMissile(uint64_t casterGuid, uint8_t castCount);
     // Play the impact visual effect at the target's position.
     void triggerImpactVisual(uint32_t spellId, uint64_t targetGuid, uint64_t casterGuid);
-    void launchRangedWeaponProjectile(uint32_t spellId, uint64_t targetGuid);
+    uint32_t withItemMissile(const SpellGoData& data, uint32_t visualId);
     // Send the spell's missiles, as the client does from SMSG_SPELL_GO.
     // Returns the hit targets whose impact now waits for a missile to land.
     /// flewToPlace: set when a missile flies to the cast's place.

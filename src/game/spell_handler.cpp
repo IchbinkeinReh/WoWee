@@ -34,6 +34,7 @@
 #include "rendering/camera_controller.hpp"
 #include "rendering/character_renderer.hpp"
 #include "rendering/spell_visual_system.hpp"
+#include "rendering/item_missile.hpp"
 #include "rendering/spell_missile.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "core/app_clock.hpp"
@@ -456,70 +457,34 @@ void SpellHandler::triggerImpactVisual(uint32_t spellId, uint64_t targetGuid, ui
                          owner_.resolveUnitRenderInstance(targetGuid), targetGuid == casterGuid, spellId);
 }
 
-void SpellHandler::launchRangedWeaponProjectile(uint32_t spellId, uint64_t targetGuid) {
-    if (targetGuid == 0) targetGuid = owner_.getTargetGuid();
+// The visual with the caster's item for its missile, where the visual has no model of
+// its own (item_missile.hpp): an arrow, a bullet, the weapon thrown.
+uint32_t SpellHandler::withItemMissile(const SpellGoData& data, uint32_t visualId) {
+    namespace im = rendering::item_missile;
     auto* renderer = owner_.services().renderer;
+    auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
     auto* assets = owner_.services().assetManager;
-    if (!renderer || !assets || targetGuid == 0) return;
-    auto* visuals = renderer->getSpellVisualSystem();
-    auto* characters = renderer->getCharacterRenderer();
-    if (!visuals || !characters) return;
-    // A weapon whose visual flies a missile of its own - a wand's bolt -
-    // has it flown with the cast's visual (0x00720f80); no second one here.
-    if (visuals->findMissileVisual(owner_.getUnitSpellVisualId(owner_.getPlayerGuid(), spellId))) return;
-
-    glm::vec3 start = renderer->getCharacterPosition() + glm::vec3(0.0f, 0.0f, 1.0f);
-    glm::mat4 handTransform(1.0f);
-    if (characters->getAttachmentTransform(renderer->getCharacterInstanceId(), 1, handTransform))
-        start = glm::vec3(handTransform[3]);
-
-    glm::vec3 end;
-    if (!resolveUnitPosition(targetGuid, end)) return;
-    end.z += 1.0f;
-
-    const auto& ranged = owner_.getInventory().getEquipSlot(EquipSlot::RANGED);
-    std::string modelPath;
-    std::string texturePath;
-    bool spin = false;
-
-    if (spellId == 2764 || (!ranged.empty() && ranged.item.inventoryType == InvType::THROWN)) {
-        spin = true;
-        if (!ranged.empty() && ranged.item.displayInfoId != 0) {
-            auto displayDbc = assets->loadDBC("ItemDisplayInfo.dbc");
-            if (displayDbc && displayDbc->isLoaded()) {
-                const int32_t row = displayDbc->findRecordById(ranged.item.displayInfoId);
-                if (row >= 0) {
-                    const auto* layout = pipeline::getActiveDBCLayout()
-                        ? pipeline::getActiveDBCLayout()->getLayout("ItemDisplayInfo") : nullptr;
-                    std::string model = displayDbc->getString(
-                        static_cast<uint32_t>(row), layout ? (*layout)["LeftModel"] : 1);
-                    std::string texture = displayDbc->getString(
-                        static_cast<uint32_t>(row), layout ? (*layout)["LeftModelTexture"] : 3);
-                    if (!model.empty()) {
-                        const size_t dot = model.rfind('.');
-                        if (dot != std::string::npos) model = model.substr(0, dot);
-                        modelPath = "Item\\ObjectComponents\\Weapon\\" + model + ".m2";
-                    }
-                    if (!texture.empty())
-                        texturePath = "Item\\ObjectComponents\\Weapon\\" + texture + ".blp";
-                }
-            }
-        }
-        if (modelPath.empty())
-            modelPath = "Item\\ObjectComponents\\Weapon\\Thrown_1H_Dagger_A_01.m2";
-    } else if (spellId == 75 || (!ranged.empty() &&
-               (ranged.item.inventoryType == InvType::RANGED_BOW ||
-                ranged.item.subclassName == "Bow" || ranged.item.subclassName == "Crossbow"))) {
-        modelPath = "Item\\ObjectComponents\\Ammo\\ArrowFlight_01.m2";
-    } else {
-        modelPath = "Item\\ObjectComponents\\Ammo\\BulletFlight_01.m2";
-    }
-
-    const float distance = glm::length(end - start);
-    const float duration = std::clamp(distance / 35.0f, 0.12f, 0.8f);
-    visuals->playPhysicalProjectile(modelPath, texturePath, start, end, duration, spin);
+    if (!svs || !assets || svs->findMissileVisual(visualId)) return visualId;
+    const auto columns = svs->missileColumns(visualId);
+    if (!columns) return visualId;
+    const im::Source from = im::source(columns->model, columns->hasMissile, data.ammoDisplayId);
+    GameHandler::HeldItemDisplay item{data.ammoDisplayId, data.ammoInventoryType};
+    if (from == im::Source::MainHand) item = owner_.heldItemDisplay(data.casterUnit, 0);
+    if (from == im::Source::OffHand) item = owner_.heldItemDisplay(data.casterUnit, 1);
+    if (from == im::Source::Ranged) item = owner_.heldItemDisplay(data.casterUnit, 2);
+    if (from == im::Source::None || item.displayId == 0) return visualId;
+    auto displays = assets->loadDBCOptional("ItemDisplayInfo.dbc");
+    const auto* layout = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("ItemDisplayInfo")
+                                                        : nullptr;
+    const int32_t row = displays ? displays->findRecordById(item.displayId) : -1;
+    if (row < 0) return visualId;
+    const auto text = [&](const char* column, uint32_t stock) {
+        return displays->getString(static_cast<uint32_t>(row), layout ? (*layout)[column] : stock);
+    };
+    const im::Display display{text("LeftModel", 1), text("RightModel", 2), text("LeftModelTexture", 3),
+                              text("RightModelTexture", 4)};
+    return svs->itemMissileVisual(visualId, im::model(from, display, item.inventoryType));
 }
-
 
 // FUN_007fffb0 and FUN_00732ff0: a spell with a speed flies its visual's
 // missile from the caster to each target it was cast at - hit or missed - or,
@@ -539,6 +504,7 @@ std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data,
     auto spellIt = owner_.spellNameCacheRef().find(data.spellId);
     const float speed = spellIt != owner_.spellNameCacheRef().end() ? spellIt->second.missileSpeed : 0.0f;
     if (!(speed > 0.0f)) return carried;
+    visualId = withItemMissile(data, visualId);
     const auto* missile = svs->findMissileVisual(visualId);
     if (!missile) return carried;
 
@@ -5285,41 +5251,9 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
                 }
             }
         }
-        // Ranged auto-attack spells (Auto Shot, Shoot, Throw) complete as timed
-        // casts and are NOT classified as instant melee abilities, so trigger the
-        // ranged shot animation explicitly here.
-        uint32_t sid = data.spellId;
-        if (spellclass::isRangedWeaponAutoAttack(sid)) {
-            if (owner_.meleeSwingCallbackRef()) owner_.meleeSwingCallbackRef()(sid);
-            owner_.suppressNextMeleeSwingAnim();
-            uint64_t projectileTarget = data.targetGuid;
-            if (projectileTarget == 0 && !data.hitTargets.empty())
-                projectileTarget = data.hitTargets.front();
-            if (projectileTarget == 0 && !data.missTargets.empty())
-                projectileTarget = data.missTargets.front().targetGuid;
-            launchRangedWeaponProjectile(sid, projectileTarget);
-        }
-
-        // Instant melee abilities → trigger attack animation. Range decides this, not
-        // school: physical abilities cast at range (Steady Shot, Taunt) would otherwise
-        // play a melee swing.
-        bool isMeleeAbility = false;
-        if (!owner_.isProfessionSpell(sid) && !spellclass::isRangedWeaponAutoAttack(sid)) {
-            if (spellclass::isMeleeRange(getSpellMaxRange(sid))) {
-                isMeleeAbility = (currentCastSpellId_ != sid);
-            }
-        }
-        // The ability's swing sounds by its animation's own events and the
-        // hit the server reports for it (rendering/melee_sound.hpp).
-        if (isMeleeAbility) {
-            if (owner_.meleeSwingCallbackRef()) owner_.meleeSwingCallbackRef()(sid);
-        }
-
         const bool wasInTimedCast = casting_ && (data.spellId == currentCastSpellId_);
 
-        // Instant spell cast animation - if this wasn't a timed cast and isn't a
-        // melee ability, play a brief spell cast animation (one-shot)
-        if (!wasInTimedCast && !otherCastRuns && !isMeleeAbility && !rangedWeaponAttack && !restorationLoop &&
+        if (!wasInTimedCast && !otherCastRuns && !rangedWeaponAttack && !restorationLoop &&
             !owner_.isProfessionSpell(data.spellId)) {
             // Classify instant spell from SPELL_GO packet target info
             SpellCastType goType = SpellCastType::OMNI;
