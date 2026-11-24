@@ -9,6 +9,7 @@
 #include "game/game_handler.hpp"
 #include "game/game_utils.hpp"
 #include "game/interface_text.hpp"
+#include "game/inventory_handler.hpp"
 #include "game/entity.hpp"
 #include "game/packet_parsers.hpp"
 #include "game/power_prediction.hpp"
@@ -2044,9 +2045,11 @@ void SocialHandler::setGuildInfoText(const std::string& text) {
 // Turn a letter into a readable item, which is what "take" does to a mail whose
 // body is the thing being kept.
 void SocialHandler::takeInboxTextItem(uint32_t mailId) {
-    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    const auto* inventory = owner_.getInventoryHandler();
+    const uint64_t mailbox = inventory ? inventory->getMailboxGuid() : 0;
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || mailbox == 0) return;
     network::Packet packet(wireOpcode(Opcode::CMSG_MAIL_CREATE_TEXT_ITEM));
-    packet.writeUInt64(0);            // mailbox guid - the server uses the open one
+    packet.writeUInt64(mailbox);
     packet.writeUInt32(mailId);
     owner_.getSocket()->send(packet);
 }

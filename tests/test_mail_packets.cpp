@@ -69,7 +69,7 @@ TEST_CASE("Auction mail invoice body decodes into a money breakdown", "[mail][au
     // Auction-won body: ownerGuid:bid:buyout, with the width-16 space padding
     // and trailing zero fields some cores append.
     REQUIRE(parseAuctionMailBody("           88a79:6000:6000:0:0:0:0", invoice));
-    CHECK(invoice.ownerGuidLow == 0x88a79);
+    CHECK(invoice.ownerGuid == 0x88a79);
     CHECK(invoice.bid == 6000);
     CHECK(invoice.buyout == 6000);
     CHECK(invoice.deposit == 0);
@@ -77,7 +77,7 @@ TEST_CASE("Auction mail invoice body decodes into a money breakdown", "[mail][au
 
     // Minimal three-field won body (legacy cores).
     REQUIRE(parseAuctionMailBody("1a2b:500:0", invoice));
-    CHECK(invoice.ownerGuidLow == 0x1a2b);
+    CHECK(invoice.ownerGuid == 0x1a2b);
     CHECK(invoice.bid == 500);
     CHECK(invoice.buyout == 0);
 
@@ -446,7 +446,7 @@ TEST_CASE("A won auction's invoice carries the guid and the two prices",
     AuctionMailInvoice invoice;
     // Field zero is the other party's guid low in hex; the rest are copper.
     REQUIRE(parseAuctionMailBody("1a2b:5000:12000", invoice));
-    CHECK(invoice.ownerGuidLow == 0x1a2b);
+    CHECK(invoice.ownerGuid == 0x1a2b);
     CHECK(invoice.bid == 5000);
     CHECK(invoice.buyout == 12000);
     // No deposit and no cut: this is what tells the buyer's panel from the
@@ -459,7 +459,7 @@ TEST_CASE("A completed sale adds the deposit and the house's cut",
           "[mail][auction][invoice]") {
     AuctionMailInvoice invoice;
     REQUIRE(parseAuctionMailBody("ff:9000:9000:250:450", invoice));
-    CHECK(invoice.ownerGuidLow == 0xff);
+    CHECK(invoice.ownerGuid == 0xff);
     CHECK(invoice.bid == 9000);
     CHECK(invoice.buyout == 9000);
     CHECK(invoice.deposit == 250);
@@ -471,7 +471,7 @@ TEST_CASE("The guid field is padded on the wire and read anyway",
     AuctionMailInvoice invoice;
     // AzerothCore writes that field to width sixteen, space padded.
     REQUIRE(parseAuctionMailBody("            1a2b:5000:12000", invoice));
-    CHECK(invoice.ownerGuidLow == 0x1a2b);
+    CHECK(invoice.ownerGuid == 0x1a2b);
 }
 
 TEST_CASE("Fields past the fifth are ignored rather than refused",

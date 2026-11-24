@@ -14673,20 +14673,14 @@ void LuaEngine::registerCoreAPI() {
         "    local name = GetBuybackItemInfo(index)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
         "end\n"
-        // With the attachment's count (0x0062f9e0); without its number the
-        // letter's first (0x0056d420).
+        // With the attachment's count (0x0062f9e0); without its place, the
+        // letter's first.
         "function __WoweeFrameMT:SetInboxItem(index, attachIndex)\n"
         "    if type(index) ~= 'number' and not tonumber(index) then\n"
         "        __WoweeUsageError(self, 'Usage: %s:SetInboxItem(messageIndex, attachmentIndex)')\n"
         "    end\n"
         "    self:ClearLines()\n"
-        "    attachIndex = tonumber(attachIndex) or 0\n"
-        "    for i = 1, 16 do\n"
-        "        if attachIndex ~= 0 then break end\n"
-        "        if GetInboxItem(index, i) then attachIndex = i end\n"
-        "    end\n"
-        "    if attachIndex == 0 then return end\n"
-        "    local link = GetInboxItemLink and GetInboxItemLink(index, attachIndex)\n"
+        "    local link = GetInboxItemLink(index, attachIndex)\n"
         "    if link then\n"
         "        __WoweeTooltipItemCount = select(3, GetInboxItem(index, attachIndex))\n"
         "        local ok, r1, r2 = pcall(self.SetHyperlink, self, link)\n"

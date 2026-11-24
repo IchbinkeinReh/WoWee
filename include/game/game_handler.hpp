@@ -5013,6 +5013,9 @@ public:
     bool isMailboxOpen() const;
     const std::vector<MailMessage>& getMailInbox() const;
     std::string getMailDisplaySubject(const MailMessage& mail);
+    /// The mature-language filter over a text that is no chat line
+    /// (0x00509a50): a letter's subject and text.
+    void filterMatureLanguage(std::string& text);
     int getSelectedMailIndex() const;
     void setSelectedMailIndex(int idx);
     bool isMailComposeOpen() const;

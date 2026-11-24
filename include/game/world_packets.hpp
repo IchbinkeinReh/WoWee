@@ -3886,11 +3886,13 @@ struct AuctionMailSubject {
 // Decoded auction-house mail body ("invoice"). The wire body is a colon-
 // separated string the retail client never prints verbatim.
 struct AuctionMailInvoice {
-    uint32_t ownerGuidLow = 0;  // seller/buyer low GUID (hex field)
+    uint64_t ownerGuid = 0;     // the other party's ("%16I64X", 0x0056e9b0)
     uint32_t bid = 0;           // copper
     uint32_t buyout = 0;        // copper
     uint32_t deposit = 0;       // copper (successful-sale mail only)
     uint32_t consignment = 0;   // copper - auction house cut (successful sale)
+    uint32_t moneyDelay = 0;    // a pending sale's (response 6)
+    uint32_t eta = 0;           // the same's packed time
 };
 
 bool parseAuctionMailSubject(const std::string& subject, AuctionMailSubject& result);

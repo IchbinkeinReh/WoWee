@@ -1489,6 +1489,10 @@ wowee_add_test(test_item_stat_names SOURCES test_item_stat_names.cpp)
 # ── test_mail_packets ───────────────────────────────────────
 wowee_add_packet_test(test_mail_packets)
 
+# ── test_mail_text ──────────────────────────────────────────
+# What a letter in the mailbox shows, and which attachment a call names.
+wowee_add_packet_test(test_mail_text)
+
 # ── test_raid_target_packets ────────────────────────────────
 wowee_add_packet_test(test_raid_target_packets)
 

@@ -30,6 +30,9 @@ struct TextSubject;
 
 class ChatHandler {
 public:
+    /// The mature-language filter over a text that is no chat line
+    /// (0x00509a50): a letter's.
+    void filterMatureLanguage(std::string& text);
     using PacketHandler = std::function<void(network::Packet&)>;
     using DispatchTable = std::unordered_map<LogicalOpcode, PacketHandler>;
 

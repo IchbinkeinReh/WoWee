@@ -1,4 +1,5 @@
 #include "core/app_clock.hpp"
+#include "game/mail_text.hpp"
 #include "game/ground_target.hpp"
 #include <array>
 #include <string_view>
@@ -1628,21 +1629,21 @@ std::vector<MailMessage>& GameHandler::mailInboxRef() {
     if (inventoryHandler_) return inventoryHandler_->mailInboxRef();
     return mailInbox_;
 }
+void GameHandler::filterMatureLanguage(std::string& text) {
+    if (chatHandler_) chatHandler_->filterMatureLanguage(text);
+}
+
 std::string GameHandler::getMailDisplaySubject(const MailMessage& mail) {
-    const std::string& subject = mailSubject(mail.subject, mailTemplate(services().assetManager, mail.mailTemplateId));
-    if (mail.messageType != 2) return subject;
-
-    AuctionMailSubject auction;
-    if (!parseAuctionMailSubject(subject, auction)) return subject;
-
-    ensureItemInfo(auction.itemEntry);
-    const auto* info = getItemInfo(auction.itemEntry);
-    const std::string itemName = info && !info->name.empty()
-        ? info->name
-        : "Item #" + std::to_string(auction.itemEntry);
-    return formatAuctionMailSubject(auction, itemName, [](const char* key, const char* enUS) {
-        return interfaceString(key, enUS);
-    });
+    std::string subject = mail_text::subject(
+        mail, mailTemplate(services_.assetManager, mail.mailTemplateId),
+        [this](const AuctionMailSubject& auction) {
+            ensureItemInfo(auction.itemEntry);
+            const auto* info = getItemInfo(auction.itemEntry);
+            return info ? info->name : std::string();
+        },
+        [](const char* key, const char* enUS) { return interfaceString(key, enUS); });
+    filterMatureLanguage(subject);   // 0x00509a50
+    return subject;
 }
 int GameHandler::getSelectedMailIndex() const {
     return inventoryHandler_ ? inventoryHandler_->getSelectedMailIndex() : selectedMailIndex_;

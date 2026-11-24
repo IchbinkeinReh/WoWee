@@ -1,3 +1,4 @@
+#include "game/mail_text.hpp"
 #include "game/world_packets.hpp"
 #include "game/packet_parsers.hpp"
 #include "game/opcodes.hpp"
@@ -69,12 +70,12 @@ std::string formatAuctionMailSubject(
 }
 
 // Auction-house mail carries a machine-readable invoice as its body:
-//   "<hex ownerGuidLow>:<bid>:<buyout>[:<deposit>:<consignment>...]"
+//   "<hex owner guid>:<bid>:<buyout>[:<deposit>:<consignment>...]"
 // The leading GUID field is right-justified to width 16, so it can arrive with
 // leading spaces (e.g. "           88a79:6000:6000:0:0:0:0"). The retail client
 // parses this into a formatted invoice rather than printing it verbatim.
 bool parseAuctionMailBody(const std::string& body, AuctionMailInvoice& result) {
-    std::array<uint32_t, 5> fields{};
+    std::array<uint64_t, 7> fields{};
     size_t fieldCount = 0;
     size_t start = 0;
     while (start <= body.size() && fieldCount < fields.size()) {
@@ -98,14 +99,16 @@ bool parseAuctionMailBody(const std::string& body, AuctionMailInvoice& result) {
     }
 
     // Minimum invoice is ownerGuid:bid:buyout (auction-won mail); a successful
-    // sale adds deposit and consignment. Any trailing fields (moneyDelay/eta on
-    // some cores) are ignored.
+    // sale adds deposit and consignment, a pending one moneyDelay and eta.
     if (fieldCount < 3) return false;
-    result.ownerGuidLow = fields[0];
-    result.bid = fields[1];
-    result.buyout = fields[2];
-    result.deposit = fieldCount > 3 ? fields[3] : 0;
-    result.consignment = fieldCount > 4 ? fields[4] : 0;
+    const auto copper = [&](size_t i) { return i < fieldCount ? static_cast<uint32_t>(fields[i]) : 0u; };
+    result.ownerGuid = fields[0];
+    result.bid = copper(1);
+    result.buyout = copper(2);
+    result.deposit = copper(3);
+    result.consignment = copper(4);
+    result.moneyDelay = copper(5);
+    result.eta = copper(6);
     return true;
 }
 
@@ -335,6 +338,7 @@ bool PacketParsers::parseMailList(network::Packet& packet, std::vector<MailMessa
 
         uint8_t attachCount = packet.readUInt8();
         msg.attachments.reserve(attachCount);
+        uint32_t placesTaken = 0;
         bool truncatedAttachment = false;
         for (uint8_t j = 0; j < attachCount; ++j) {
             if (!packet.hasRemaining(kAttachmentBytes)) {
@@ -364,7 +368,8 @@ bool PacketParsers::parseMailList(network::Packet& packet, std::vector<MailMessa
             att.maxDurability = packet.readUInt32();
             packet.readUInt32(); // durability/current durability
             packet.readUInt8();  // unknown WotLK trailing byte per attachment
-            msg.attachments.push_back(att);
+            att.slot = mail_text::attachmentPlace(att.slot, placesTaken);
+            if (att.slot < mail_text::kAttachments) msg.attachments.push_back(att);
         }
 
         msg.read = (msg.flags & 0x01) != 0;
