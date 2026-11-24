@@ -11,6 +11,7 @@
 #include "game/spell_target_kind.hpp"
 #include "rendering/spell_kit.hpp"
 #include "rendering/unit_alpha.hpp"
+#include "rendering/effect_wait.hpp"
 
 #include <glm/glm.hpp>
 
@@ -390,4 +391,29 @@ TEST_CASE("a unit's alpha is its display's, times a kit's", "[spell_kit]") {
     CHECK(ua::atOnce(0.5f, 0.5001f, 2.0f));
     CHECK(ua::atOnce(1.0f, 0.5f, 0.0f));
     CHECK_FALSE(ua::atOnce(1.0f, 0.5f, 0.5f));
+}
+
+// A unit's own effect was left out the first time, its model only then asked for (playtest T88).
+TEST_CASE("an effect waits for its model and starts with it", "[spell_kit]") {
+    using wowee::rendering::EffectModelState;
+    wowee::rendering::EffectWait<int> wait;
+    CHECK(wait.empty());
+    for (int e : {1, 2, 3, 4}) wait.add(e);
+    std::vector<int> played;
+    const auto play = [&](int e) { played.push_back(e); };
+    wait.step([](int) { return EffectModelState::Loading; }, play);
+    CHECK(played.empty());
+    wait.step([](int e) { return e == 2 ? EffectModelState::Failed : e == 3 ? EffectModelState::Loading : EffectModelState::Ready; }, play);
+    CHECK(played == std::vector<int>{1, 4});
+    wait.step([](int) { return EffectModelState::Ready; }, play);
+    CHECK(played == std::vector<int>{1, 4, 3});
+    CHECK(wait.empty());
+    // One put on again while played does not upset the rest.
+    wait.add(5);
+    wait.step([](int) { return EffectModelState::Ready; }, [&](int e) { wait.add(e + 1); });
+    CHECK_FALSE(wait.empty());
+    for (int i = 0; i < 200; ++i) wait.add(i);
+    played.clear();
+    wait.step([](int) { return EffectModelState::Ready; }, play);
+    CHECK(played.size() == wait.kMost);
 }

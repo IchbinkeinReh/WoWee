@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rendering/effect_wait.hpp"
 #include "rendering/spell_visual_merge.hpp"
 #include <map>
 
@@ -74,7 +75,8 @@ public:
     void playKit(uint32_t kitId, spell_kit::KitType type, const glm::vec3& worldPosition, uint32_t renderInstanceId);
     /// One SpellVisualEffectName model on a unit's attachment, played once as
     /// a kit's impact model is (0x006f94c0 with 0x00744870) - a blood spurt.
-    /// Nothing where the unit's model has no such attachment.
+    /// Nothing, and false, where the unit's model has no such attachment. One whose
+    /// model is still loading starts as it is there.
     bool playEffectModelOnUnit(uint32_t effectNameId, uint32_t renderInstanceId, int32_t attachment);
     /// The SpellVisualEffectName row of this name on a unit, as 0x006f9260 puts one of
     /// the client's own on it: at the attachment where its model has it, else its base (19).
@@ -1234,6 +1236,14 @@ private:
     uint32_t acquireEffectModel(const std::string& modelPath);
     /// Upload the effect models whose worker has finished, a few a frame.
     void finishEffectModelLoads();
+    /// The effects put on a unit whose model is still loading.
+    struct UnitEffectWaiting {
+        uint32_t effectNameId = 0;
+        uint32_t renderInstanceId = 0;
+        int32_t attachment = 0;
+    };
+    EffectWait<UnitEffectWaiting> unitEffectsWaiting_;
+    [[nodiscard]] EffectModelState effectModelState(const std::string& modelPath);
     /// Upload a prepared model (a PreparedEffectModel, private to the .cpp);
     /// false, and the model remembered as failed, when it cannot be.
     bool uploadEffectModel(uint32_t modelId, const std::string& modelPath, void* preparedModel);

@@ -550,6 +550,14 @@ bool SpellVisualSystem::uploadEffectModel(uint32_t modelId, const std::string& m
     return true;
 }
 
+EffectModelState SpellVisualSystem::effectModelState(const std::string& modelPath) {
+    const auto id = spellVisualModelIds_.find(modelPath);
+    if (id == spellVisualModelIds_.end() || spellVisualFailedModels_.count(id->second)) return EffectModelState::Failed;
+    if (m2Renderer_ && m2Renderer_->hasModel(id->second)) return EffectModelState::Ready;
+    // One turned away while a handful was in flight is asked for again.
+    return acquireEffectModel(modelPath) != 0 ? EffectModelState::Ready : EffectModelState::Loading;
+}
+
 void SpellVisualSystem::finishEffectModelLoads() {
     if (pendingEffectLoads_.empty() || !m2Renderer_) return;
     // A few a frame: each upload is a GPU copy of the mesh and its textures.
@@ -1909,9 +1917,13 @@ bool SpellVisualSystem::playEffectModelOnUnit(uint32_t effectNameId, uint32_t re
     if (!kitModelTransform(renderInstanceId, attachment, glm::mat4(1.0f), 1.0f, 0.0f, 1e30f, transform, scale))
         return false;
     const uint32_t modelId = acquireEffectModel(path->second);
-    if (modelId == 0) return false;
+    if (modelId == 0) {
+        if (effectModelState(path->second) == EffectModelState::Loading)
+            unitEffectsWaiting_.add({effectNameId, renderInstanceId, attachment});
+        return true;
+    }
     const uint32_t instanceId = m2Renderer_->createInstance(modelId, glm::vec3(transform[3]), glm::vec3(0.0f), 1.0f);
-    if (instanceId == 0) return false;
+    if (instanceId == 0) return true;
     m2Renderer_->restartInstanceAnimation(instanceId);
     setEffectEventOwner(instanceId, renderInstanceId);
     m2Renderer_->setInstanceTransform(instanceId, transform);
@@ -3371,6 +3383,16 @@ void SpellVisualSystem::updateAuraKits(float deltaTime) {
 
 void SpellVisualSystem::update(float deltaTime) {
     finishEffectModelLoads();
+    if (!unitEffectsWaiting_.empty()) {
+        unitEffectsWaiting_.step(
+            [this](const UnitEffectWaiting& e) {
+                const auto path = effectNamePaths_.find(e.effectNameId);
+                return path != effectNamePaths_.end() ? effectModelState(path->second) : EffectModelState::Failed;
+            },
+            [this](const UnitEffectWaiting& e) {
+                playEffectModelOnUnit(e.effectNameId, e.renderInstanceId, e.attachment);
+            });
+    }
     // First: an arrival plays its impact kit, which joins activeSpellVisuals_.
     colourClockMs_ += static_cast<uint32_t>(std::lround(deltaTime * 1000.0f));
     updateMissiles(deltaTime);
