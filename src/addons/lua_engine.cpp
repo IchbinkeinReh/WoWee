@@ -1986,9 +1986,22 @@ static float ownUnits(const wowee::ui::Widget* w, float v) {
     const float es = (w && w->effScale > 0.0f) ? w->effScale : 1.0f;
     return v / es;
 }
+/// The reach of a string's text where it has no width yet, which is the moment
+/// after SetWidth(0): QuestLogTitleButton_Resize reads GetRight then, to cut the
+/// title where the tag beside it begins. Its rect is a point until the next
+/// measure, and answering that point cut nothing.
+wowee::ui::FontStringReach unmeasuredReach(const wowee::ui::Widget* w) {
+    if (!w || w->kind != wowee::ui::WidgetKind::FontString || w->text.empty() || w->width > 0.0f ||
+        w->rectW > 0.0f || wowee::ui::anchorsSpanAxis(w->anchors, true)) {
+        return {};
+    }
+    return wowee::ui::fontStringReach(w->anchors,
+                                      static_cast<float>(measureTextWidth(w->text, w->fontFace, w->fontHeight)));
+}
+
 int lua_Region_GetLeft(lua_State* L) {
     const auto* w = measuredWidgetOf(L, 1);
-    lua_pushnumber(L, w ? ownUnits(w, w->left) : 0.0);
+    lua_pushnumber(L, w ? ownUnits(w, w->left) - unmeasuredReach(w).left : 0.0);
     return 1;
 }
 /// GetCenter() - the middle of the frame, in the same screen units GetLeft and
@@ -2077,7 +2090,7 @@ static int lua_Region_GetParent(lua_State* L) {
 
 int lua_Region_GetRight(lua_State* L) {
     const auto* w = measuredWidgetOf(L, 1);
-    lua_pushnumber(L, w ? ownUnits(w, w->left + w->rectW) : 0.0);
+    lua_pushnumber(L, w ? ownUnits(w, w->left + w->rectW) + unmeasuredReach(w).right : 0.0);
     return 1;
 }
 int lua_Region_GetBottom(lua_State* L) {

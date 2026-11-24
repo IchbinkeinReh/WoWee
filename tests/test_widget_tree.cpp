@@ -3472,3 +3472,17 @@ TEST_CASE("a string between two edges has their width to wrap in", "[widgets][fo
     CHECK(fontStringSizing(sized) == FontStringSizing::Measured);
     CHECK(fontStringWrapWidth(sized) == 0.0f);
 }
+
+TEST_CASE("a string without a width reaches as far as its text", "[widgets][fontstring]") {
+    using wowee::ui::fontStringReach;
+    Anchor a;
+    a.point = "LEFT";
+    CHECK(fontStringReach({a}, 120.0f).right == 120.0f);
+    CHECK(fontStringReach({a}, 120.0f).left == 0.0f);
+    a.point = "BOTTOMRIGHT";
+    CHECK(fontStringReach({a}, 120.0f).left == 120.0f);
+    CHECK(fontStringReach({a}, 120.0f).right == 0.0f);
+    a.point = "TOP";
+    CHECK(fontStringReach({a}, 120.0f).left == 60.0f);
+    CHECK(fontStringReach({}, 120.0f).right == 60.0f);
+}

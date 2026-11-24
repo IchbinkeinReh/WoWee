@@ -79,6 +79,14 @@ FontStringSizing fontStringSizing(const Widget& w) {
     return FontStringSizing::Measured;
 }
 
+FontStringReach fontStringReach(const std::vector<Anchor>& anchors, float textWidth) {
+    for (const Anchor& a : anchors) {
+        if (a.point.find("LEFT") != std::string::npos) return {0.0f, textWidth};
+        if (a.point.find("RIGHT") != std::string::npos) return {textWidth, 0.0f};
+    }
+    return {textWidth * 0.5f, textWidth * 0.5f};
+}
+
 float fontStringWrapWidth(const Widget& w) {
     if (w.wrapsToWidth) return w.width;
     if (w.autoSized) return 0.0f;

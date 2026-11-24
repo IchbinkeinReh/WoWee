@@ -106,6 +106,14 @@ FontStringSizing fontStringSizing(const Widget& w);
 /// a declared one (0x00486b20: the rect's, where it differs from +0x54).
 float fontStringWrapWidth(const Widget& w);
 
+/// How far left and right of the place its anchors give a font string without a
+/// width its text reaches, of a text this wide: all of it right of a left edge,
+/// left of a right one, half and half round a centre.
+struct FontStringReach {
+    float left = 0.0f, right = 0.0f;
+};
+FontStringReach fontStringReach(const std::vector<Anchor>& anchors, float textWidth);
+
 /// A set of widget ids, one bit each, read back in ascending order.
 ///
 /// What the per-frame passes keep instead of walking every widget. Of the
