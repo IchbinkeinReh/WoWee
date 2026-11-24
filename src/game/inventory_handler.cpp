@@ -570,8 +570,8 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         }
         uint32_t lootSlot = packet.readUInt32();
         uint32_t itemId   = packet.readUInt32();
-        /*uint32_t randSuffix =*/ packet.readUInt32();
-        (void)packet.readUInt32(); // random property
+        const uint32_t randomSuffix = packet.readUInt32();
+        const auto randomProperty = static_cast<int32_t>(packet.readUInt32());
         const uint32_t itemCount = hasItemCount ? packet.readUInt32() : 1;
         uint32_t countdown = packet.readUInt32();
         uint8_t  voteMask  = packet.readUInt8();
@@ -588,6 +588,8 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         LootRollEntry& roll = beginLootRoll(objectGuid, lootSlot);
         roll.itemId = itemId;
         roll.itemName = itemName;
+        roll.randomPropertyId = randomProperty;
+        roll.randomSuffix = randomSuffix;
         roll.itemQuality = quality;
         roll.rollCountdownMs = countdown;
         roll.voteMask = voteMask;

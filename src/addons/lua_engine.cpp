@@ -4602,6 +4602,9 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
     uint32_t enchantId = 0;
     std::array<uint32_t, 3> linkGems{};
     bool linkRolled = false;
+    // And the last two: what the item rolled, and its seed.
+    game::ItemDef rolled;
+    rolled.itemId = id;
     if (kind == "item") {
         size_t at = colon + 1;
         while (at < link.size() && link[at] >= '0' && link[at] <= '9') ++at;
@@ -4616,6 +4619,11 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
             if (f != std::string::npos && f < link.size()) {
                 const char* p = link.c_str() + f + 1;
                 linkRolled = *p != '\0' && *p != ':' && std::strtol(p, nullptr, 10) != 0;
+                // Signed, sixteen bits of it: a suffix is below nought, and
+                // some links have it written without its sign.
+                rolled.randomPropertyId = static_cast<int16_t>(std::strtol(p, nullptr, 10));
+                if (const size_t seed = link.find(':', f + 1); seed != std::string::npos)
+                    rolled.suffixFactor = static_cast<uint32_t>(std::strtoul(link.c_str() + seed + 1, nullptr, 10));
             }
         }
         for (int field = 0; field < 4 && at < link.size() && link[at] == ':'; ++field) {
@@ -4639,6 +4647,10 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
         lua_pushnil(L);
         lua_setfield(L, 1, "__linkRolled");
         if (filled) appendEnchantLineById(w, gh, enchantId);
+        // Its name and its stats with what it rolled: 0x006277f0 is given the
+        // property and the seed whatever names the item - a letter's
+        // attachment (0x0062f9e0, +0x498 and +0x49c), a roll, a link in chat.
+        if (filled) appendRandomSuffix(w, gh, rolled);
         // Asked for whether it was found or not: the answer is what turns a
         // name into a tooltip, and the miss is exactly when it is needed.
         gh->ensureItemInfo(id);
@@ -6976,6 +6988,13 @@ int lua_Tooltip_SetGuildBankItem(lua_State* L) {
         const bool filled = fillItemTooltipById(L, gh, it.itemEntry);
         lua_pushnil(L);
         lua_setglobal(L, "__WoweeTooltipItemCount");
+        // With what it rolled (+0x498).
+        if (filled) {
+            game::ItemDef rolled;
+            rolled.itemId = it.itemEntry;
+            rolled.randomPropertyId = static_cast<int32_t>(it.randomPropertyId);
+            appendRandomSuffix(w, gh, rolled);
+        }
         lua_pushboolean(L, filled ? 1 : 0);
         return 1;
     }

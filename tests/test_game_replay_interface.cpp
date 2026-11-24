@@ -119,6 +119,104 @@ TEST_CASE("the wheel reaches the list under its rows", "[replay][interface]") {
     CHECK(ui.is("turned == 2"));
 }
 
+namespace {
+
+// SMSG_ITEM_QUERY_SINGLE_RESPONSE as 0x0098d910 reads it, every number 0.
+void answerItem(Session& s, uint32_t entry, const char* name) {
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_ITEM_QUERY_SINGLE_RESPONSE));
+    p.writeUInt32(entry);
+    for (int i = 0; i < 3; ++i) p.writeUInt32(0);
+    p.writeString(name);
+    for (int i = 0; i < 3; ++i) p.writeString("");
+    for (int i = 0; i < 160; ++i) p.writeUInt32(0);
+    s.receive(p);
+}
+
+void rollsGorilla(Session& s) {
+    s.handler().setRandomPropertyNameResolver(
+        [](int32_t id) { return id == -24 ? std::string("of the Gorilla") : std::string(); });
+    s.handler().setRandomStatResolver([](int32_t id, uint32_t) {
+        std::vector<wowee::game::GameHandler::RandomStatBonus> out;
+        if (id == -24) out.push_back({4, 17});  // strength
+        return out;
+    });
+}
+
+}  // namespace
+
+// P56: 0x0062f9e0 gives the tooltip the attachment's property and seed, as
+// every tooltip of an item is given what it rolled (0x006277f0).
+TEST_CASE("a letter's attachment is named and read with what it rolled", "[replay][interface]") {
+    Session s;
+    s.spawnPlayer({{UF::UNIT_FIELD_HEALTH, 100}, {UF::UNIT_FIELD_MAXHEALTH, 100}});
+    Interface ui(s);
+    rollsGorilla(s);
+    answerItem(s, 12047, "Spectral Necklace");
+    // SMSG_MAIL_LIST_RESULT as WorldSession::HandleGetMailList writes it.
+    wowee::network::Packet p(wowee::game::wireOpcode(Opcode::SMSG_MAIL_LIST_RESULT));
+    p.writeUInt32(1);
+    p.writeUInt8(1);
+    wowee::network::Packet m;
+    m.writeUInt32(501);
+    m.writeUInt8(0);
+    m.writeUInt64(0x77);
+    for (uint32_t v : {0u, 0u, 41u, 0u, 0u}) m.writeUInt32(v);
+    m.writeFloat(29.0f);
+    m.writeUInt32(0);
+    m.writeString("[Spectral Necklace of the Gorilla]");
+    m.writeString("");
+    m.writeUInt8(1);
+    m.writeUInt8(0);
+    m.writeUInt32(9001);
+    m.writeUInt32(12047);
+    for (uint32_t e : {111u, 0u, 3001u, 3002u, 3003u, 0u, 0u}) {
+        m.writeUInt32(e);
+        m.writeUInt32(0);
+        m.writeUInt32(0);
+    }
+    m.writeUInt32(static_cast<uint32_t>(-24));
+    m.writeUInt32(35);
+    for (uint32_t v : {1u, 0u, 0u, 0u}) m.writeUInt32(v);
+    m.writeUInt8(0);
+    p.writeUInt16(static_cast<uint16_t>(m.getData().size() + 2));
+    p.writeBytes(m.getData().data(), m.getData().size());
+    s.receive(p);
+    REQUIRE(ui.is("GetInboxNumItems() == 1"));
+    CHECK(ui.is("GetInboxItem(1, 1) == 'Spectral Necklace of the Gorilla'"));
+    CHECK(ui.is("strfind(GetInboxItemLink(1, 1), 'item:12047:111:3001:3002:3003:0:%-24:35:') ~= nil"));
+    ui.run("tip = CreateFrame('GameTooltip', 'PlayTip', UIParent) "
+           "tip:SetOwner(UIParent, 'ANCHOR_NONE') tip:SetInboxItem(1, 1)");
+    const auto tip = [&] {
+        std::string out;
+        const auto* w = ui.engine.widgets().findByName("PlayTip");
+        REQUIRE(w);
+        for (const auto& line : w->tooltipLines) out += line.left + "|";
+        return out;
+    };
+    INFO(tip());
+    CHECK(tip().find("Spectral Necklace of the Gorilla|") == 0);
+    CHECK(tip().find("17") != std::string::npos);
+    // The same by a link in the chat, however its suffix is written.
+    for (const char* suffix : {"-24", "65512"}) {
+        ui.run(std::string("tip:ClearLines() tip:SetHyperlink('item:12047:0:0:0:0:0:") + suffix + ":35:80')");
+        CHECK(tip().find("Spectral Necklace of the Gorilla|") == 0);
+    }
+    ui.run("tip:ClearLines() tip:SetHyperlink('item:12047:0:0:0:0:0:0:0:80')");
+    CHECK(tip().find("Gorilla") == std::string::npos);
+    // And one rolled for (0x00588c00, 0x005889d0).
+    ui.run("local f = CreateFrame('Frame') f:RegisterEvent('START_LOOT_ROLL') "
+           "f:SetScript('OnEvent', function(self, event, id) rollId = tonumber(id) end)");
+    wowee::network::Packet roll(wowee::game::wireOpcode(Opcode::SMSG_LOOT_START_ROLL));
+    roll.writeUInt64(0xF130000BEC00150Eull);
+    for (uint32_t v : {s.handler().getCurrentMapId(), 0u, 12047u, 35u, static_cast<uint32_t>(-24), 1u, 60000u})
+        roll.writeUInt32(v);
+    roll.writeUInt8(0x07);
+    s.receive(roll);
+    REQUIRE(ui.is("rollId ~= nil"));
+    CHECK(ui.is("strfind(GetLootRollItemLink(rollId), ':%-24:35:.*Gorilla') ~= nil"));
+    CHECK(ui.is("select(2, GetLootRollItemInfo(rollId)) == 'Spectral Necklace of the Gorilla'"));
+}
+
 // P54: GetCompanionInfo answers the creature (0x0053e2c0), and SetCreature
 // shows it once its template is known (0x00597960).
 TEST_CASE("a model frame shows the creature it is given once that is known", "[replay][interface]") {

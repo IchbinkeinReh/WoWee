@@ -3861,6 +3861,8 @@ struct MailAttachment {
     uint32_t itemGuidLow = 0;
     uint32_t itemId = 0;
     uint32_t enchantId = 0;
+    /// The sockets' enchantments, the third to the fifth of the seven.
+    std::array<uint32_t, 3> gems{};
     uint32_t randomPropertyId = 0;
     uint32_t randomSuffix = 0;
     uint32_t stackCount = 1;

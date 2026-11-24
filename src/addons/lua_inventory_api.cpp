@@ -2008,6 +2008,7 @@ static int lua_GetInboxItemLink(lua_State* L) {
     }
     game::ItemLinkInstance inst;
     inst.enchantId = att->enchantId;
+    inst.gems = att->gems;
     inst.randomPropertyId = static_cast<int32_t>(att->randomPropertyId);
     inst.seed = att->randomSuffix;
     const std::string link = game::itemChatLink(att->itemId, static_cast<uint32_t>(info->quality),
@@ -5895,7 +5896,7 @@ static int lua_GetLootRollItemInfo(lua_State* L) {
     const auto* info = gh->getItemInfo(roll->itemId);
     if (!info || !info->valid) return 0;
     lua_pushstring(L, gh->getItemIconPath(info->displayInfoId).c_str());
-    lua_pushstring(L, roll->itemName.c_str());
+    lua_pushstring(L, gh->itemNameWithProperty(roll->itemName, roll->randomPropertyId).c_str());   // 0x00706d70
     lua_pushnumber(L, roll->itemCount);
     lua_pushnumber(L, info->quality);
     luaPushOneOrNil(L, info->bindType == 1);
@@ -5914,8 +5915,13 @@ static int lua_GetLootRollItemLink(lua_State* L) {
     auto* gh = getGameHandler(L);
     const auto* roll = rollFor(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
     if (!roll) { return luaReturnNil(L); }
-    lua_pushstring(L, game::buildItemLink(roll->itemId, roll->itemQuality,
-                                          roll->itemName, gh->getPlayerLevel()).c_str());
+    // 0x00588c00 -> 0x0061e360 with the roll's property and seed.
+    game::ItemLinkInstance inst;
+    inst.randomPropertyId = roll->randomPropertyId;
+    inst.seed = roll->randomSuffix;
+    lua_pushstring(L, game::itemChatLink(roll->itemId, roll->itemQuality,
+                                         gh->itemNameWithProperty(roll->itemName, roll->randomPropertyId), inst,
+                                         gh->getPlayerLevel()).c_str());
     return 1;
 }
 
@@ -7078,8 +7084,10 @@ void registerInventoryLuaAPI(lua_State* L) {
             // The same shape GetContainerItemLink builds, so a link from
             // the guild bank behaves like one from a bag everywhere it is
             // handed on to.
+            // Named with what it rolled (0x0061e290 -> 0x00706d70).
             const std::string link = game::itemChatLink(
-                it.itemEntry, info->quality, info->name, game::ItemLinkInstance{
+                it.itemEntry, info->quality,
+                gh->itemNameWithProperty(info->name, static_cast<int32_t>(it.randomPropertyId)), game::ItemLinkInstance{
                     it.enchantId, {}, static_cast<int32_t>(it.randomPropertyId), 0},
                 gh->getPlayerLevel());
             lua_pushstring(L, link.c_str());
