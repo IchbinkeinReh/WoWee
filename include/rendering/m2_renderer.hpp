@@ -488,6 +488,7 @@ struct M2Instance {
     // held to a doodad's size-class distance; drawn as far as the world is.
     // Set by the spawner.
     bool isGameObject = false;
+    uint8_t gameObjectType = 0xFF;  ///< its GAMEOBJECT_TYPE, where it is one
     // A terrain doodad with MDDF flag 0x1: the client's flag 0x800
     // (0x007becd0), which no distance culls or fades (0x00791cb0); only its
     // chunk's size-class walk bounds it (0x0078fb60).
@@ -898,7 +899,7 @@ public:
     void registerDetailChunk(const std::vector<uint32_t>& instanceIds);
     /// Mark an instance as a server game object, which the doodad size-class
     /// distances do not hold.
-    void setInstanceIsGameObject(uint32_t instanceId, bool isGameObject);
+    void setInstanceIsGameObject(uint32_t instanceId, bool isGameObject, uint8_t type = 0xFF);
     /// Mark a terrain doodad placed with MDDF flag 0x1, which the client
     /// does not cull or fade by its distance (0x007becd0, 0x00791cb0).
     void setInstanceNoDistanceCull(uint32_t instanceId, bool noDistanceCull);
@@ -973,9 +974,9 @@ public:
     /// The doodads' and game objects' faces for the movement sweep
     /// (0x007a50c0 -> 0x007a4af0 -> 0x0082ec30): each bounding triangle of
     /// an instance whose box meets the query's, with the file's normal for
-    /// it (collision_facets.hpp).
+    /// it (collision_facets.hpp). `ghost`: asked by a player's ghost.
     void gatherCollisionFacets(const glm::vec3& boxMin, const glm::vec3& boxMax,
-                               std::vector<collision::Facet>& out) const;
+                               std::vector<collision::Facet>& out, bool ghost) const;
 
     /// An instance's model name, for the collision port's debug line.
     [[nodiscard]] std::string debugInstanceName(uint32_t instanceId) const;

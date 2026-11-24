@@ -1,5 +1,6 @@
 #include <cstdlib>
 #include "rendering/m2_renderer.hpp"
+#include "game/go_interaction_anim.hpp"
 #include "rendering/collision_facets.hpp"
 #include "core/frame_profiler.hpp"
 #include "rendering/m2_renderer_internal.h"
@@ -760,12 +761,13 @@ void M2Renderer::removeInstance(uint32_t instanceId) {
     followSwapRemove(particleInstanceIndices_, idx, last);
 }
 
-void M2Renderer::setInstanceIsGameObject(uint32_t instanceId, bool isGameObject) {
+void M2Renderer::setInstanceIsGameObject(uint32_t instanceId, bool isGameObject, uint8_t type) {
     auto idxIt = instanceIndexById.find(instanceId);
     if (idxIt == instanceIndexById.end() || idxIt->second >= instances.size()) return;
     auto& inst = instances[idxIt->second];
     if (isGameObject && !inst.isGameObject) gameObjectInstanceIds_.push_back(instanceId);
     inst.isGameObject = isGameObject;
+    inst.gameObjectType = type;
 }
 
 void M2Renderer::setInstanceNoDistanceCull(uint32_t instanceId, bool noDistanceCull) {
@@ -1592,7 +1594,7 @@ std::string M2Renderer::debugInstanceName(uint32_t instanceId) const {
 }
 
 void M2Renderer::gatherCollisionFacets(const glm::vec3& boxMin, const glm::vec3& boxMax,
-                                       std::vector<collision::Facet>& out) const {
+                                       std::vector<collision::Facet>& out, bool ghost) const {
     std::vector<size_t> candidates;
     gatherCandidates(boxMin, boxMax, candidates);
     std::vector<uint32_t> tris, walls;
@@ -1602,6 +1604,7 @@ void M2Renderer::gatherCollisionFacets(const glm::vec3& boxMin, const glm::vec3&
         // out of collision (a closed door's open state, a corpse, the sky)
         // stands in for the client's +0x0C 0x100.
         if (!instance.cachedModel || instance.detailDoodad || instance.skipCollision) continue;
+        if (instance.isGameObject && !game::go_interaction::inTheWay(instance.gameObjectType, ghost)) continue;
         if (instance.scale <= 0.001f) continue;
         // The box test is closed (0x007a50c0).
         if (boxMax.x < instance.worldBoundsMin.x || boxMin.x > instance.worldBoundsMax.x ||

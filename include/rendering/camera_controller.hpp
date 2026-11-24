@@ -444,6 +444,8 @@ public:
     void setGravityDisabled(bool disabled) { gravityDisabled_ = disabled; }
     void setFeatherFallActive(bool active) { featherFallActive_ = active; }
     void setWaterWalkActive(bool active) { waterWalkActive_ = active; }
+    /// The mover is a player's ghost (0x0075e3d0's 0x8000).
+    void setMoverGhost(bool ghost) { moverGhost_ = ghost; }
     /// Permission to fly - a flying mount where flight is allowed, or .gm fly.
     /// Not the same as being in the air: see isFlightAirborne.
     void setFlyingActive(bool active);
@@ -1294,6 +1296,7 @@ private:
     bool featherFallActive_ = false;
     // Server-driven water walk: the liquid's surface is ground (portMove).
     bool waterWalkActive_ = false;
+    bool moverGhost_ = false;
     // Player-controlled flight (CAN_FLY + FLYING): 3D movement, no gravity.
     bool flyingActive_ = false;
     bool flightAirborne_ = false;

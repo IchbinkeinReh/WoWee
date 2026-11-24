@@ -48,7 +48,7 @@ void CameraController::gatherPortFacets(const glm::vec3& lo, const glm::vec3& hi
                                         std::vector<collision::Facet>& out) const {
     if (terrainManager) terrainManager->gatherCollisionFacets(lo, hi, out);
     if (wmoRenderer) wmoRenderer->gatherCollisionFacets(lo, hi, out);
-    if (m2Renderer) m2Renderer->gatherCollisionFacets(lo, hi, out);
+    if (m2Renderer) m2Renderer->gatherCollisionFacets(lo, hi, out, moverGhost_);
 }
 
 std::optional<std::vector<collision::Facet>> CameraController::gatherWorldFacets(const glm::vec3& lo,

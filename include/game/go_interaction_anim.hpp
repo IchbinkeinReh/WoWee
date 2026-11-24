@@ -141,6 +141,10 @@ struct Step {
     }
 }
 
+/// 0x0070f550: whether a game object of the type is in a mover's way at all -
+/// not a door to a player's ghost (0x0075e3d0 asks with 0x8000).
+[[nodiscard]] constexpr bool inTheWay(uint32_t goType, bool ghost) { return !ghost || goType != 0; }
+
 /// A door's (type 0) state entry, 0x0070d8d0 - its handler's slot 0xb0 -
 /// also sets whether it collides (GameObject_C +0x20c, which 0x0070f550
 /// gives the world's collision queries, 0x004f6560): only in Closed (1), so

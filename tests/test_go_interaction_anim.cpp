@@ -254,6 +254,11 @@ TEST_CASE("A trade request with a partner set, or within a second", "[go_interac
 
 TEST_CASE("A door collides only in Closed", "[go_interaction]") {
     // 0x0070d8d0, type 0's state entry: +0x20c = (state == Closed).
+    // A ghost walks through a door and nothing else (playtest T73).
+    CHECK(inTheWay(0, false));
+    CHECK_FALSE(inTheWay(0, true));
+    CHECK(inTheWay(1, true));
+    CHECK(inTheWay(0xFF, true));
     CHECK(collidesAfterEntering(0, 1) == std::optional<bool>(true));
     for (uint8_t s : {0, 2, 3, 4, 5, 6, 7}) CHECK(collidesAfterEntering(0, s) == std::optional<bool>(false));
     for (uint8_t s = kStateCustom0; s <= kStateDespawn; ++s)

@@ -1039,7 +1039,13 @@ void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_
 
         // Server game objects are not doodads: the client's doodad size-class
         // distances (0x00791cb0) do not hold them.
-        m2Renderer->setInstanceIsGameObject(instanceId, true);
+        {
+            const uint16_t bytes1 = game::fieldIndex(game::UF::GAMEOBJECT_BYTES_1);
+            const auto entity = gameHandler_ ? gameHandler_->getEntityManager().getEntity(guid) : nullptr;
+            m2Renderer->setInstanceIsGameObject(
+                instanceId, true,
+                entity && bytes1 != 0xFFFF ? static_cast<uint8_t>(entity->getField(bytes1) >> 8 & 0xFFu) : uint8_t{0xFF});
+        }
         // Its model's events go to the game object (0x00712f30 sets
         // 0x0070cac0), which plays its display's sounds by them (0x0070c050).
         m2Renderer->setInstanceEventOwner(instanceId, rendering::m2_event::Owner::GameObject, displayId);

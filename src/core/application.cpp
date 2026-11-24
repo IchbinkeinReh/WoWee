@@ -3854,7 +3854,7 @@ void Application::connectClickToMoveHooks() {
             std::vector<rendering::collision::Facet> facets;
             if (auto* terrain = renderer->getTerrainManager()) terrain->gatherCollisionFacets(at, at, facets);
             if (auto* wmo = renderer->getWMORenderer()) wmo->gatherCollisionFacets(at, at, facets);
-            if (auto* m2 = renderer->getM2Renderer()) m2->gatherCollisionFacets(at, at, facets);
+            if (auto* m2 = renderer->getM2Renderer()) m2->gatherCollisionFacets(at, at, facets, false);
             return rendering::collision::firstFacetHeight(facets, at.x, at.y);
         });
     }
@@ -4857,6 +4857,8 @@ void Application::applyServerMovementState(float deltaTime) {
         renderer->getCameraController()->setGravityDisabled(gameHandler->isGravityDisabled());
         renderer->getCameraController()->setFeatherFallActive(gameHandler->isFeatherFalling());
         renderer->getCameraController()->setWaterWalkActive(gameHandler->isWaterWalking());
+        renderer->getCameraController()->setMoverGhost(gameHandler->isPlayerGhost() &&
+                                                       gameHandler->activeMover() == gameHandler->getPlayerGuid());
         // Flight physics engage on the CAN_FLY ability (flying mount
         // or .gm fly), not isPlayerFlying() which also needs the
         // FLYING flag the client only sets once already airborne.
