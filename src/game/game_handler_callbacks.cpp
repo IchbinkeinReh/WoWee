@@ -1438,19 +1438,21 @@ bool GameHandler::supportsEquipmentSets() const {
     return inventoryHandler_ && inventoryHandler_->supportsEquipmentSets();
 }
 
-void GameHandler::useEquipmentSet(uint32_t setId) {
-    if (inventoryHandler_) inventoryHandler_->useEquipmentSet(setId);
+bool GameHandler::useEquipmentSet(const std::string& name, bool itemOnCursor) {
+    return inventoryHandler_ && inventoryHandler_->useEquipmentSet(name, itemOnCursor);
 }
 
-void GameHandler::saveEquipmentSet(const std::string& name, const std::string& iconName,
-                                    uint64_t existingGuid, uint32_t setIndex,
-                                    uint32_t ignoredSlotMask) {
-    if (inventoryHandler_)
-        inventoryHandler_->saveEquipmentSet(name, iconName, existingGuid, setIndex, ignoredSlotMask);
+void GameHandler::saveEquipmentSet(const std::string& name, const std::string& iconName, uint32_t ignoredSlotMask) {
+    if (inventoryHandler_) inventoryHandler_->saveEquipmentSet(name, iconName, ignoredSlotMask);
 }
 
-void GameHandler::deleteEquipmentSet(uint64_t setGuid) {
-    if (inventoryHandler_) inventoryHandler_->deleteEquipmentSet(setGuid);
+void GameHandler::renameEquipmentSet(const std::string& oldName, const std::string& newName,
+                                     uint32_t ignoredSlotMask) {
+    if (inventoryHandler_) inventoryHandler_->renameEquipmentSet(oldName, newName, ignoredSlotMask);
+}
+
+void GameHandler::deleteEquipmentSet(const std::string& name) {
+    if (inventoryHandler_) inventoryHandler_->deleteEquipmentSet(name);
 }
 
 // --- Inventory state delegation (canonical state lives in InventoryHandler) ---

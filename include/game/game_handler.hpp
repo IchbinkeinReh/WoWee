@@ -3252,12 +3252,11 @@ public:
         return it == onlineItems_.end() ? 0u : it->second.creatorGuid;
     }
     bool supportsEquipmentSets() const;
-    void useEquipmentSet(uint32_t setId);
+    bool useEquipmentSet(const std::string& name, bool itemOnCursor);
     /// ignoredSlotMask: bit i set leaves equipment slot i out of the set.
-    void saveEquipmentSet(const std::string& name, const std::string& iconName = "INV_Misc_QuestionMark",
-                          uint64_t existingGuid = 0, uint32_t setIndex = 0xFFFFFFFF,
-                          uint32_t ignoredSlotMask = 0);
-    void deleteEquipmentSet(uint64_t setGuid);
+    void saveEquipmentSet(const std::string& name, const std::string& iconName, uint32_t ignoredSlotMask);
+    void renameEquipmentSet(const std::string& oldName, const std::string& newName, uint32_t ignoredSlotMask);
+    void deleteEquipmentSet(const std::string& name);
 
     // NPC Gossip
     /// 0x006ddbb0. `clickToMove`: out of reach, walked to first (kind 5).
@@ -7824,16 +7823,6 @@ private:
 
     // ---- Completed quest IDs (SMSG_QUERY_QUESTS_COMPLETED_RESPONSE) ----
     std::unordered_set<uint32_t> completedQuests_;
-
-    // ---- Equipment sets (SMSG_EQUIPMENT_SET_LIST) ----
-    struct EquipmentSet {
-        uint64_t setGuid = 0;
-        uint32_t setId = 0;
-        std::string name;
-        std::string iconName;
-        uint32_t ignoreSlotMask = 0;
-        std::array<uint64_t, 19> itemGuids{};
-    };
 
     // forcedReactions_ moved to CombatHandler
 

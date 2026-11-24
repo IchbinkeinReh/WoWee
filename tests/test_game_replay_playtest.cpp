@@ -917,3 +917,55 @@ TEST_CASE("a logout without a connection leaves none", "[replay][playtest]") {
     CHECK_FALSE(s.handler().leaveWorldForCharacterList());
     CHECK(s.handler().getState() == wowee::game::WorldState::DISCONNECTED);
 }
+
+// The equipment manager draws its list on EQUIPMENT_SETS_CHANGED alone, which
+// the client raises as it saves, renames and deletes (0x005ade50, 0x005af400,
+// 0x005ae260): a deleted set stayed in the window, and a renamed or saved one
+// was the old one until the next login.
+TEST_CASE("the equipment manager hears of every change at once", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    wowee::network::Packet list(wowee::game::wireOpcode(Opcode::SMSG_EQUIPMENT_SET_LIST));
+    list.writeUInt32(2);
+    for (uint32_t i = 0; i < 2; ++i) {
+        list.writePackedGuid(0x70 + i);
+        list.writeUInt32(i);
+        list.writeString(i == 0 ? "Tank" : "Heal");
+        list.writeString("INV_Shield_06");
+        for (int slot = 0; slot < 19; ++slot) list.writePackedGuid(slot == 4 ? 1 : 0);
+    }
+    s.receive(list);
+    auto& gh = s.handler();
+    REQUIRE(gh.getEquipmentSets().size() == 2);
+    // The slot left alone is a 1, as GetEquipmentSetLocations answers it.
+    REQUIRE(gh.getEquipmentSetItems(0));
+    CHECK((*gh.getEquipmentSetItems(0))[4] == 1);
+    CHECK(gh.getEquipmentSetIgnoreMask(0) == 1u << 4);
+    gh.setActionBarSlot(5, wowee::game::ActionBarSlot::EQUIPMENT_SET, 0);
+
+    int changed = 0;
+    gh.setAddonEventCallback([&](const std::string& event, const std::vector<std::string>&) {
+        if (event == "EQUIPMENT_SETS_CHANGED") ++changed;
+    });
+    gh.renameEquipmentSet("Heal", "Mend", 0);
+    CHECK(changed >= 1);
+    CHECK(gh.getEquipmentSets()[1].name == "Mend");
+    changed = 0;
+    gh.saveEquipmentSet("New", "INV_Helmet_01", 0);
+    CHECK(changed == 1);
+    REQUIRE(gh.getEquipmentSets().size() == 3);
+    CHECK(gh.getEquipmentSets()[2].setId == 2);
+    changed = 0;
+    gh.deleteEquipmentSet("Tank");
+    CHECK(changed == 1);
+    CHECK(gh.getEquipmentSets().size() == 2);
+    CHECK(s.sent().of(Opcode::CMSG_DELETEEQUIPMENT_SET).size() == 1);
+    // And off the action bar (0x005aae20).
+    CHECK(gh.getActionBar()[5].isEmpty());
+    // Wearing a set leaves its ignored slot alone: the guid of one.
+    CHECK(gh.useEquipmentSet("Mend", false));
+    const auto used = s.sent().of(Opcode::CMSG_EQUIPMENT_SET_USE);
+    REQUIRE(used.size() == 1);
+    wowee::network::Packet p = used[0];
+    CHECK_FALSE(gh.useEquipmentSet("Mend", false));   // the first is not answered
+}

@@ -2494,12 +2494,11 @@ static int lua_GetNumEquipmentSets(lua_State* L) {
 // GetEquipmentSetInfo(index) → name, icon, setID (0x005af120): the icon as a
 // path SetTexture takes, under the directory every one of them lives in.
 static int lua_GetEquipmentSetInfo(lua_State* L) {
+    const int index = luaToClientInt(L, 1);
+    if (index < 1 || index > 10) return luaL_error(L, "Usage: GetEquipmentSetInfo(setIndex)");
     auto* gh = getGameHandler(L);
-    const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
-    if (!gh) { return luaReturnNil(L); }
-    const auto& sets = gh->getEquipmentSets();
-    if (index < 1 || index > static_cast<int>(sets.size())) { return luaReturnNil(L); }
-    const auto& set = sets[index - 1];
+    if (!gh || index > static_cast<int>(gh->getEquipmentSets().size())) return 0;
+    const auto& set = gh->getEquipmentSets()[static_cast<size_t>(index) - 1];
     lua_pushstring(L, set.name.c_str());
     if (set.iconName.empty()) lua_pushnil(L);
     else lua_pushstring(L, ("Interface\\Icons\\" + set.iconName).c_str());
@@ -2510,8 +2509,9 @@ static int lua_GetEquipmentSetInfo(lua_State* L) {
 // GetEquipmentSetInfoByName(name) → icon, setID (0x005af1d0): the icon as the
 // server named it, without the directory, and nothing for no such set.
 static int lua_GetEquipmentSetInfoByName(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetEquipmentSetInfoByName(\"setName\")");
     auto* gh = getGameHandler(L);
-    const auto* set = equipmentSetByName(gh, luaL_optstring(L, 1, ""));
+    const auto* set = equipmentSetByName(gh, lua_tostring(L, 1));
     if (!set) return 0;
     lua_pushstring(L, set->iconName.c_str());
     lua_pushnumber(L, set->setId);
@@ -2554,7 +2554,8 @@ static int lua_SaveEquipmentSet(lua_State* L) {
         return luaL_error(L, "Usage: SaveEquipmentSet(\"setName\", iconIndex)");
     auto* gh = getGameHandler(L);
     const std::string name = luaL_optstring(L, 1, "");
-    if (!gh || name.empty()) return 0;
+    if (!gh) return 0;
+    if (!equipmentSetNameValid(name)) return luaL_error(L, "Invalid string for setName");
 
     // The icon arrives as a position in the same list the macro picker shows,
     // and the server wants its name rather than its path.
@@ -2583,11 +2584,9 @@ static int lua_SaveEquipmentSet(lua_State* L) {
     // Overwriting one keeps its guid, which is how the server knows it is the
     // same set rather than a new one with the same name. A new one needs a
     // free place among the ten.
-    const auto* existing = equipmentSetByName(gh, name);
-    if (!existing && gh->getEquipmentSets().size() >= 10)
+    if (!equipmentSetByName(gh, name) && gh->getEquipmentSets().size() >= 10)
         return luaL_error(L, "Too many sets! You can only have %d sets", 10);
-    gh->saveEquipmentSet(name, iconName, existing ? existing->setGuid : 0,
-                         existing ? existing->setId : 0xFFFFFFFFu, pendingIgnoredSlotMask());
+    gh->saveEquipmentSet(name, iconName, pendingIgnoredSlotMask());
     return 0;
 }
 
@@ -2601,15 +2600,7 @@ static int lua_RenameEquipmentSet(lua_State* L) {
     }
     std::string newName = lua_tostring(L, 2);
     if (!equipmentSetNameValid(newName)) return luaL_error(L, "Invalid string for setName");
-    auto* gh = getGameHandler(L);
-    const auto* set = equipmentSetByName(gh, lua_tostring(L, 1));
-    if (!set) return 0;
-    for (const auto& other : gh->getEquipmentSets()) {
-        if (other.name == newName) return 0;
-    }
-    gh->saveEquipmentSet(newName, set->iconName, set->setGuid, set->setId,
-                         pendingIgnoredSlotMask());
-    gh->fireAddonEvent("EQUIPMENT_SETS_CHANGED", {});
+    if (auto* gh = getGameHandler(L)) gh->renameEquipmentSet(lua_tostring(L, 1), newName, pendingIgnoredSlotMask());
     return 0;
 }
 
@@ -2680,22 +2671,28 @@ static int lua_DeleteEquipmentSet(lua_State* L) {
     // 0x005ae800
     if (!lua_isstring(L, 1))
         return luaL_error(L, "Usage: DeleteEquipmentSet(\"setName\")");
-    auto* gh = getGameHandler(L);
-    if (const auto* set = equipmentSetByName(gh, luaL_optstring(L, 1, ""))) {
-        gh->deleteEquipmentSet(set->setGuid);
-    }
+    if (auto* gh = getGameHandler(L)) gh->deleteEquipmentSet(lua_tostring(L, 1));
     return 0;
 }
 
+// UseEquipmentSet("setName") (0x005af380 -> 0x005ada20): true when the set's
+// items were asked for, nil when that was refused, and nothing for a set there
+// is none of. EQUIPMENT_SWAP_PENDING goes out with the request and
+// EQUIPMENT_SWAP_FINISHED with the server's answer (0x005af710), which is when
+// the manager refreshes.
 static int lua_UseEquipmentSet(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UseEquipmentSet(\"setName\")");
     auto* gh = getGameHandler(L);
-    const auto* set = equipmentSetByName(gh, luaL_optstring(L, 1, ""));
-    if (!gh || !set) { lua_pushboolean(L, 0); return 1; }
-    // EQUIPMENT_SWAP_PENDING goes out with the request and
-    // EQUIPMENT_SWAP_FINISHED with the server's answer (0x005ada20,
-    // 0x005af710), which is when the manager refreshes.
-    gh->useEquipmentSet(set->setId);
-    lua_pushboolean(L, 1);
+    const auto* set = equipmentSetByName(gh, lua_tostring(L, 1));
+    if (!set) return 0;
+    if (storedCVarValue("equipmentManager", "0") == "0") {
+        gh->addUIError(game::interfaceString("EQUIPMENT_MANAGER_IS_DISABLED", "The equipment manager is disabled."));
+        lua_pushnil(L);
+        return 1;
+    }
+    const std::string name = set->name;
+    if (gh->useEquipmentSet(name, cursorItemCameFromInventory())) lua_pushboolean(L, 1);
+    else lua_pushnil(L);
     return 1;
 }
 

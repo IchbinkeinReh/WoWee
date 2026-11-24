@@ -4181,6 +4181,11 @@ wowee_add_test(test_quest_poi_icons
 wowee_add_test(test_glyph_socket
     SOURCES test_glyph_socket.cpp)
 
+# ── test_equipment_sets ──────────────────────────────────────
+# The equipment manager's own sets (0x005ade50, 0x005ada20). Header-only.
+wowee_add_test(test_equipment_sets
+    SOURCES test_equipment_sets.cpp)
+
 # ── test_macro_list ──────────────────────────────────────────
 # The macros as the interface numbers them (0x00566240). Header-only.
 wowee_add_test(test_macro_list

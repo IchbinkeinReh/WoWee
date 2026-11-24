@@ -406,7 +406,7 @@ public:
             }
         }
         if (found) {
-            ctx.gameHandler.useEquipmentSet(found->setId);
+            ctx.gameHandler.useEquipmentSet(std::string(found->name), false);
         } else {
             sysSay("[System] No equipment set matching '" + setName + "'.");
         }
