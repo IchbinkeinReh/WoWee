@@ -1,6 +1,8 @@
 // tests/test_transport_components.cpp
 // Unit tests for TransportClockSync and TransportAnimator (Phase 3 extractions).
 #include <catch_amalgamated.hpp>
+
+#include "game/transport_machinery.hpp"
 #include "game/transport_path_time.hpp"
 #include "game/transport_clock_sync.hpp"
 #include "game/transport_animator.hpp"
@@ -891,4 +893,30 @@ TEST_CASE("every TransportAnimation path runs on the server's time", "[transport
     CHECK_FALSE(runsOnServerTime(path(false, false, false), false));
     CHECK(runsOnServerTime(path(true, true, false), true));
     CHECK_FALSE(runsOnServerTime(path(false, true, false), true));
+}
+
+// Told again every frame while there was none to tell (playtest T75).
+TEST_CASE("a transport's machinery is told once", "[transport]") {
+    using wowee::game::transport_machinery::step;
+    constexpr int kMoving = 163, kStop = 164;
+    // First seen, with none and then with some.
+    CHECK(step(-1, 0, kMoving, 0).tell);
+    CHECK(step(-1, 0, kMoving, 0).steady);
+    CHECK_FALSE(step(kMoving, 0, kMoving, 0).tell);
+    auto s = step(kMoving, 0, kMoving, 3);
+    CHECK(s.tell);
+    CHECK(s.steady);
+    CHECK(s.from == 0);
+    CHECK_FALSE(step(kMoving, 3, kMoving, 3).tell);
+    // Those that come later, alone.
+    s = step(kMoving, 3, kMoving, 5);
+    CHECK(s.steady);
+    CHECK(s.from == 3);
+    CHECK(step(kMoving, 5, kMoving, 2).from == 0);
+    // Stopping is played by all, unless there was none to set off.
+    s = step(kMoving, 5, kStop, 5);
+    CHECK(s.tell);
+    CHECK_FALSE(s.steady);
+    CHECK(s.from == 0);
+    CHECK(step(kMoving, 0, kStop, 5).steady);
 }
