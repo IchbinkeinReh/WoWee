@@ -143,6 +143,15 @@ void slash(ToolContext& context, const json& args, Script& script) {
     script.then(finishWith(context, after, [&context] { return windowsNow(context); }));
 }
 
+/// Whether a command answers in chat lines, which the realm may take a second
+/// or two over.
+bool gmCommandAnswers(const std::string& command) {
+    for (const char* word : {".lookup", ".list", " info", " near", ".gps", ".server", ".guid", ".distance"}) {
+        if (command.find(word) != std::string::npos) return true;
+    }
+    return false;
+}
+
 void gm(ToolContext& context, const json& args, Script& script) {
     const Aftermath after(context);
     const std::string command = args["command"].get<std::string>();
@@ -178,7 +187,19 @@ void gm(ToolContext& context, const json& args, Script& script) {
         }
         return Script::Step::Next;
     });
-    script.then(Script::seconds(args.value("settle", 1.0)));
+    // At least `settle`, and for a command that answers in lines until they
+    // have come and stopped coming.
+    const double settle = args.value("settle", 1.0);
+    const double patience = std::max(settle, gmCommandAnswers(command) ? 4.0 : 0.0);
+    auto heard = std::make_shared<std::pair<uint64_t, double>>(after.chat, 0.0);
+    script.then([&context, settle, patience, heard, began = -1.0](Script& s) mutable {
+        if (began < 0.0) began = s.now();
+        if (const uint64_t last = context.chat.last(); last != heard->first) *heard = {last, s.now()};
+        const double passed = s.now() - began;
+        if (passed >= patience) return Script::Step::Next;
+        const bool answered = heard->second > 0.0 && s.now() - heard->second >= 0.4;
+        return passed >= settle && (answered || patience <= settle) ? Script::Step::Next : Script::Step::Again;
+    });
     script.then([&context, selected](Script&) {
         auto* gh = context.app.getGameHandler();
         // Back to what was selected, where it is still there and nothing else

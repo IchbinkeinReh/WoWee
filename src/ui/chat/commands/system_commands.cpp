@@ -3,6 +3,7 @@
 #include "ui/chat/i_chat_command.hpp"
 #include "ui/chat/macro_evaluator.hpp"
 #include "ui/chat_panel.hpp"
+#include "ui/ui_manager.hpp"
 #include "ui/ui_services.hpp"
 #include "game/game_handler.hpp"
 #include "addons/addon_manager.hpp"
@@ -371,18 +372,23 @@ public:
             say("Usage: /daytime <hours> | <hh:mm> | off, or a /gps Time: line");
             return {};
         }
-        char script[128];
-        if (arg->off) {
-            std::snprintf(script, sizeof(script), "WoweeSetSetting('dbgtimeoverride', false)");
-        } else {
-            std::snprintf(script, sizeof(script),
-                          "WoweeSetSetting('dbgtime', %.4f) WoweeSetSetting('dbgtimeoverride', true)",
-                          static_cast<double>(arg->hours));
-        }
-        if (auto* am = ctx.services.addonManager; am && am->isInitialized()) {
-            am->runScript(script);
+        // Through the settings themselves, not a script of theirs: a client
+        // another program drives may be running no Lua for it, and this said
+        // "off" over a time that stayed.
+        bool done = false;
+        if (auto* ui = core::Application::getInstance().getUIManager()) {
+            auto& screen = ui->getGameScreen();
+            auto& panel = screen.getSettingsPanel();
+            done = arg->off || panel.setSettingValue("dbgtime", std::to_string(arg->hours));
+            done = panel.setSettingValue("dbgtimeoverride", arg->off ? "0" : "1") && done;
+            if (done) screen.saveSettings();
         } else if (auto* renderer = ctx.services.renderer) {
             renderer->setGameTimeOverride(arg->off ? -1.0f : arg->hours);
+            done = true;
+        }
+        if (!done) {
+            say("Debug Time: not set.");
+            return {};
         }
         say(arg->off ? std::string("Debug Time: off - the server's time of day again.")
                      : "Debug Time: " + client_gps::clockText(arg->hours));

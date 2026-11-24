@@ -387,7 +387,11 @@ void target(ToolContext& context, const json& args, Script& script) {
 void interact(ToolContext& context, const json& args, Script& script) {
     const Aftermath after(context);
     std::string bad;
-    const uint64_t guid = guidMeant(context, args, bad);
+    // The one at hand: a corpse two yards off before a living namesake across
+    // the valley.
+    json meant = args;
+    meant["nearest"] = true;
+    const uint64_t guid = guidMeant(context, meant, bad);
     if (guid == 0) {
         script.then([bad](Script& s) { return s.fail(bad); });
         return;
@@ -491,6 +495,7 @@ void addPointTools(Toolbox& box) {
         "Target something: an entity by a click on it in the world, or nearest_enemy / nearest_friend / self / last / "
         "pet by the key bound to it (by a slash command where none is), or none.",
         object({optional("guid", guid("0x...")), optional("name", text("the nearest with this in its name", 64)),
+                optional("state", choice("of those with the name", {"alive", "dead", "lootable"})),
                 optional("unit", text("pet, mouseover, ...", 16)),
                 optional("which", choice("", {"nearest_enemy", "nearest_friend", "self", "last", "pet", "none"}))}),
         target));
@@ -498,6 +503,7 @@ void addPointTools(Toolbox& box) {
         "interact",
         "Right-click an entity in the world: talk to, loot, use, attack. Walks up to it first unless approach is false.",
         object({optional("guid", guid("0x...")), optional("name", text("the nearest with this in its name", 64)),
+                optional("state", choice("of those with the name", {"alive", "dead", "lootable"})),
                 optional("unit", text("target, npc, ...", 16)), optional("approach", flag("true by default")),
                 optional("within", number("yards to walk up to, 4 by default", 1, 40)), optional("button", button),
                 optional("modifiers", modifiers),

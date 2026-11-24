@@ -46,7 +46,12 @@ bool holds(ToolContext& context, const json& args, const Aftermath& since) {
                         return !l.args.empty() && lower(l.args[0]).find(part) != std::string::npos;
                     }).empty();
     }
-    if (args.contains("client")) return clientState(context) == args["client"].get<std::string>();
+    if (args.contains("client")) {
+        const std::string now = clientState(context);
+        const std::string wanted = args["client"].get<std::string>();
+        if (wanted == "in_game") return now == "in_world" || now == "dead" || now == "ghost";
+        return now == wanted;
+    }
     if (args.contains("window")) {
         const auto* w = widgetNamed(context, args["window"].get<std::string>());
         return w && w->visible;
@@ -136,7 +141,9 @@ void addWaitTools(Toolbox& box) {
              optional("window_closed", text("a frame that is to be gone", 96)),
              optional("text", text("part of a text on the screen", 96)),
              optional("chat", text("part of a chat line", 96)), optional("log", text("part of a line of the log", 96)),
-             optional("client", choice("", {"login", "char_select", "entering_world", "in_world", "dead", "ghost"})),
+             optional("client", choice("in_game: in_world, dead or ghost",
+                                       {"login", "char_select", "entering_world", "in_world", "dead", "ghost",
+                                        "in_game"})),
              optional("until", choice("", {"target_dead", "no_target", "in_combat", "out_of_combat", "not_casting",
                                            "standing", "grounded", "swimming", "mounted", "dismounted",
                                            "full_health", "loaded"}))}),

@@ -672,6 +672,9 @@ wowee_add_test(test_quest_log_rows SOURCES test_quest_log_rows.cpp)
 # Which targets the target keys go through, and in which order. Header-only.
 wowee_add_test(test_nearest_target_cycle SOURCES test_nearest_target_cycle.cpp)
 
+# Which entity a name means to the MCP tools. Header-only.
+wowee_add_test(test_mcp_pick SOURCES test_mcp_pick.cpp)
+
 # ── test_taxi_map ───────────────────────────────────────────
 # The flight map's nodes, their places and the routes over them. Header-only.
 wowee_add_test(test_taxi_map SOURCES test_taxi_map.cpp)

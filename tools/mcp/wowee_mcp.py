@@ -13,7 +13,8 @@ printed.
     wowee_mcp.py config                      the `claude mcp add` line for this client
                                              (its token is left for you to fill in)
 
-Pictures are saved beside --out (shot.jpg by default, numbered), and the path
+Pictures are saved beside --out (shot.jpg by default, numbered; with --overwrite
+the last one is written over), and the path
 is printed in their place.
 
 Standard library only.
@@ -131,14 +132,15 @@ class Client:
         return value, bool(result.get("isError")), pictures
 
 
-def save_pictures(pictures, out):
+def save_pictures(pictures, out, overwrite=False):
     saved = []
     for mime, data in pictures:
         path = pathlib.Path(out)
         suffix = ".png" if mime.endswith("png") else ".jpg"
         path = path.with_suffix(suffix)
         n = 1
-        while path.exists():
+        # The pictures of one call never over one another.
+        while str(path) in saved or (path.exists() and not overwrite):
             path = path.with_name(f"{pathlib.Path(out).stem}_{n}{suffix}")
             n += 1
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -147,8 +149,10 @@ def save_pictures(pictures, out):
     return saved
 
 
-def parse_arguments(words):
-    """One JSON object, or k=v words whose values are JSON where they parse."""
+def parse_arguments(words, schema=None):
+    """One JSON object, or k=v words: text where the tool takes text (ui
+    filter=25), else JSON where it parses."""
+    properties = (schema or {}).get("properties", {})
     if not words:
         return {}
     text = " ".join(words).strip()
@@ -159,6 +163,9 @@ def parse_arguments(words):
         key, sep, value = word.partition("=")
         if not sep:
             raise McpError(f"not key=value: {word}")
+        if properties.get(key, {}).get("type") == "string":
+            out[key] = value
+            continue
         try:
             out[key] = json.loads(value)
         except ValueError:
@@ -166,8 +173,16 @@ def parse_arguments(words):
     return out
 
 
+def schema_of(client, name):
+    """The tool's own, for the words that are to be read by it."""
+    for tool in client.tools():
+        if tool["name"] == name:
+            return tool["inputSchema"]
+    return None
+
+
 def show(value, failed, pictures, args):
-    for path in save_pictures(pictures, args.out):
+    for path in save_pictures(pictures, args.out, args.overwrite):
         print(f"[picture] {path}")
     if value is not None:
         text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False,
@@ -180,6 +195,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--file", help="mcp_server.json of the client")
     parser.add_argument("--out", default="shot.jpg", help="where pictures are saved")
+    parser.add_argument("--overwrite", action="store_true", help="the picture over the last one at --out")
     parser.add_argument("--compact", action="store_true", help="JSON on one line")
     parser.add_argument("--wait", type=float, default=0.0, help="seconds to wait for the server to be there")
     parser.add_argument("command", choices=["list", "call", "loop", "config"])
@@ -217,7 +233,9 @@ def main():
         elif args.command == "call":
             if not args.words:
                 parser.error("call TOOL [JSON]")
-            value, failed, pictures = client.call(args.words[0], parse_arguments(args.words[1:]))
+            plain = any("=" in w for w in args.words[1:]) and not " ".join(args.words[1:]).strip().startswith("{")
+            schema = schema_of(client, args.words[0]) if plain else None
+            value, failed, pictures = client.call(args.words[0], parse_arguments(args.words[1:], schema))
             show(value, failed, pictures, args)
             return 1 if failed else 0
         else:
