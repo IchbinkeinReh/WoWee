@@ -701,18 +701,9 @@ inline uint64_t resolveUnitGuid(game::GameHandler* gh, const std::string& uid) {
     // UnitExists() beside each is what decides whether the portrait model is
     // set at all.
     //
-    // Whichever window is actually open answers: the quest detail carries the
-    // giver it came from, the gossip its own npc, and a vendor or a banker
-    // theirs. The target is the last resort, and is usually the same NPC.
-    if (uid == "npc" || uid == "questnpc") {
-        if (uid == "questnpc" && gh->getQuestDetails().npcGuid != 0)
-            return gh->getQuestDetails().npcGuid;
-        if (gh->getCurrentGossip().npcGuid != 0) return gh->getCurrentGossip().npcGuid;
-        if (gh->getQuestDetails().npcGuid != 0)  return gh->getQuestDetails().npcGuid;
-        if (gh->getVendorGuid() != 0)            return gh->getVendorGuid();
-        if (gh->getBankerGuid() != 0)            return gh->getBankerGuid();
-        return gh->getTargetGuid();
-    }
+    // Whichever window is actually open answers (0x00bd07a8, which each sets
+    // as it opens, 0x0051fce0) - and nobody does with none open.
+    if (uid == "npc" || uid == "questnpc") return gh->getInteractNpcGuid();
     // Compound unit IDs: targettarget, focustarget, pettarget, mouseovertarget
     if (uid == "targettarget")    return getEntityTargetGuid(gh, gh->getTargetGuid());
     if (uid == "focustarget")     return getEntityTargetGuid(gh, gh->getFocusGuid());

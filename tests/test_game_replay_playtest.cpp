@@ -562,3 +562,26 @@ TEST_CASE("only a ghost has a corpse on the map", "[replay][playtest]") {
         CHECK(shown());
     }
 }
+
+// The bank and the auction house had a class icon for a face: "npc" was
+// nobody there.
+TEST_CASE("the npc is whoever the open window is of", "[replay][playtest]") {
+    Session s;
+    spawnPlayer(s);
+    constexpr uint64_t kBanker = 0xF130000C2E000010ull, kAuctioneer = 0xF130000C2F000011ull;
+    CHECK(s.handler().getInteractNpcGuid() == 0);
+    wowee::network::Packet bank(wowee::game::wireOpcode(Opcode::SMSG_SHOW_BANK));
+    bank.writeUInt64(kBanker);
+    s.receive(bank);
+    CHECK(s.handler().getInteractNpcGuid() == kBanker);
+    s.handler().closeBank();
+    CHECK(s.handler().getInteractNpcGuid() == 0);
+    wowee::network::Packet auction(wowee::game::wireOpcode(Opcode::MSG_AUCTION_HELLO));
+    auction.writeUInt64(kAuctioneer);
+    auction.writeUInt32(1);
+    auction.writeUInt8(1);
+    s.receive(auction);
+    CHECK(s.handler().getInteractNpcGuid() == kAuctioneer);
+    s.handler().closeAuctionHouse();
+    CHECK(s.handler().getInteractNpcGuid() == 0);
+}
